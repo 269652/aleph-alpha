@@ -1,0 +1,100 @@
+extends RefCounted
+
+## Identity/personality/stats data for a promoted creature marker, shown in
+## its HUD panel (see CreaturePanel/World._update_creature_panels) and
+## driving its behavior (see CreatureBehavior). health is a real damageable
+## stat (Phase 3 combat); temperament + is_predator decide how the creature
+## reacts to threats and prey around it. level is a deterministic
+## per-individual flavor stat derived from its spawn seed and scales up
+## max_health (see LEVEL_HEALTH_SCALE) so higher-level individuals are
+## visibly tougher, not just a cosmetic number; stamina/mana are flavor
+## stats for now (not yet consumed by any ability -- no stamina-cost
+## actions or spellcasting exist).
+##
+## boar and lynx are variety within the herbivore/predator roles rather than
+## new roles of their own (see CreatureRenderer's species pools): a boar is
+## a herbivore-role individual (is_predator false, so it doesn't hunt and
+## still counts toward EcosystemSimulation's herbivore population) that
+## fights back when threatened instead of always fleeing; a lynx is a
+## predator-role individual with its own stats/color. Both reuse
+## CreatureBehavior's existing temperament/is_predator-driven decision tree
+## unchanged.
+
+const MAX_HEALTH_BY_SPECIES := {
+	"herbivore": 20.0,
+	"boar": 28.0,
+	"predator": 35.0,
+	"lynx": 26.0,
+}
+const MAX_STAMINA_BY_SPECIES := {
+	"herbivore": 30.0,
+	"boar": 25.0,
+	"predator": 25.0,
+	"lynx": 30.0,
+}
+const MAX_MANA_BY_SPECIES := {
+	"herbivore": 5.0,
+	"boar": 5.0,
+	"predator": 10.0,
+	"lynx": 10.0,
+}
+const DIET_BY_SPECIES := {
+	"herbivore": "Grazer",
+	"boar": "Omnivore",
+	"predator": "Hunter",
+	"lynx": "Hunter",
+}
+## Herbivores are calm (always flee threats); boars/predators/lynx are
+## aggressive (fight when strong, flee when weak). See CreatureBehavior for
+## how this is used -- fighting back only needs "aggressive" temperament, not
+## is_predator, so a boar fights without hunting other creatures for food.
+const TEMPERAMENT_BY_SPECIES := {
+	"herbivore": "calm",
+	"boar": "aggressive",
+	"predator": "aggressive",
+	"lynx": "aggressive",
+}
+## Only true predators (hunt herbivores/boars for food) go here -- a boar is
+## aggressive but not a predator (see TEMPERAMENT_BY_SPECIES doc above).
+const PREDATOR_SPECIES := {
+	"predator": true,
+	"lynx": true,
+}
+
+## Levels roll in [1, LEVEL_RANGE] from the individual's seed -- a cheap,
+## deterministic source of "some creatures are tougher than others" variety
+## without a full leveling/XP system.
+const LEVEL_RANGE := 5
+
+## Each level above 1 adds this fraction of the species' base max_health --
+## e.g. 0.25 means a level-5 individual (the max) has double the base HP.
+const LEVEL_HEALTH_SCALE := 0.25
+
+var species: String
+var display_name: String
+var diet: String
+var temperament: String
+var is_predator: bool
+var level: int
+var max_health: float
+var health: float
+var max_stamina: float
+var stamina: float
+var max_mana: float
+var mana: float
+
+
+func _init(a_species: String, seed_value: int = 0) -> void:
+	species = a_species
+	display_name = a_species.capitalize()
+	diet = DIET_BY_SPECIES.get(a_species, "Unknown")
+	temperament = TEMPERAMENT_BY_SPECIES.get(a_species, "calm")
+	is_predator = PREDATOR_SPECIES.get(a_species, false)
+	level = 1 + (absi(seed_value) % LEVEL_RANGE)
+	var base_max_health: float = MAX_HEALTH_BY_SPECIES.get(a_species, 10.0)
+	max_health = base_max_health * (1.0 + (level - 1) * LEVEL_HEALTH_SCALE)
+	health = max_health
+	max_stamina = MAX_STAMINA_BY_SPECIES.get(a_species, 10.0)
+	stamina = max_stamina
+	max_mana = MAX_MANA_BY_SPECIES.get(a_species, 5.0)
+	mana = max_mana

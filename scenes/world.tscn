@@ -1,0 +1,93 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scenes/world.gd" id="1"]
+
+[node name="World" type="Node2D"]
+script = ExtResource("1")
+
+[node name="Terrain" type="TileMapLayer" parent="."]
+
+[node name="Entities" type="Node2D" parent="."]
+
+[node name="Creatures" type="Node2D" parent="."]
+
+[node name="GroundItems" type="Node2D" parent="."]
+
+[node name="DayNightTint" type="CanvasModulate" parent="."]
+
+[node name="Players" type="Node2D" parent="."]
+
+[node name="PlayerSpawner" type="MultiplayerSpawner" parent="."]
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="DebugLabel" type="Label" parent="UI"]
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 400.0
+offset_bottom = 40.0
+text = "Loading..."
+
+[node name="Minimap" type="TextureRect" parent="UI"]
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -170.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = 170.0
+
+[node name="PlayerDot" type="ColorRect" parent="UI/Minimap"]
+color = Color(1, 1, 0, 1)
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -3.0
+offset_top = -3.0
+offset_right = 3.0
+offset_bottom = 3.0
+
+[node name="PlayerHealthBar" type="Control" parent="UI"]
+offset_left = 8.0
+offset_top = 44.0
+offset_right = 158.0
+offset_bottom = 62.0
+
+[node name="Background" type="ColorRect" parent="UI/PlayerHealthBar"]
+color = Color(0.1, 0.1, 0.1, 0.85)
+offset_right = 150.0
+offset_bottom = 14.0
+
+[node name="Fill" type="ColorRect" parent="UI/PlayerHealthBar"]
+color = Color(0.15, 0.75, 0.2, 1)
+offset_right = 150.0
+offset_bottom = 14.0
+
+[node name="Label" type="Label" parent="UI/PlayerHealthBar"]
+offset_right = 150.0
+offset_bottom = 14.0
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Hotbar" type="HBoxContainer" parent="UI"]
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -160.0
+offset_top = -76.0
+offset_right = 160.0
+offset_bottom = -40.0
+theme_override_constants/separation = 4
+
+[node name="SpellBar" type="HBoxContainer" parent="UI"]
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -96.0
+offset_top = -36.0
+offset_right = 96.0
+offset_bottom = -8.0
+theme_override_constants/separation = 4
+

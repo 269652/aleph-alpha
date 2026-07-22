@@ -1,0 +1,51 @@
+extends RefCounted
+
+## Deterministic offline pixel-art for a tuft of tall grass -- a few green
+## blades on a transparent background, using the same shaded technique as
+## ProceduralTreeSprite (trees) and the other procedural sprite generators.
+## `seed_value` (typically hashed from the patch's cell) varies blade count,
+## lean, and height so neighbouring tufts aren't pixel-identical clones.
+
+const SIZE := Vector2i(16, 16)
+const BLADE_COUNT_MIN := 4
+const BLADE_COUNT_MAX := 6
+const BASE_COLOR := Color(0.3, 0.55, 0.18)
+const SHADE_DARKEN := 0.25
+const HIGHLIGHT_LIGHTEN := 0.25
+
+
+func generate_texture(seed_value: int) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_image(seed_value))
+
+
+func generate_image(seed_value: int) -> Image:
+	var image := Image.create(SIZE.x, SIZE.y, false, Image.FORMAT_RGBA8)
+	var blade_count := BLADE_COUNT_MIN + absi(hash("%d_blade_count" % seed_value)) % (BLADE_COUNT_MAX - BLADE_COUNT_MIN + 1)
+	for i in blade_count:
+		_paint_blade(image, seed_value, i)
+	return image
+
+
+## One blade: a 1px-wide column rising from the bottom edge, leaning left or
+## right as it climbs. Blades near the tuft's center get the highlight tint,
+## outer blades the shade tint, so the tuft reads as lit from above.
+func _paint_blade(image: Image, seed_value: int, index: int) -> void:
+	var h := absi(hash("%d_blade_%d" % [seed_value, index]))
+	var base_x := 3 + h % (SIZE.x - 6)
+	var height := 6 + (h / 31) % 8  # 6..13 px tall
+	var lean: int = [-1, 0, 1][(h / 977) % 3]
+
+	var color := BASE_COLOR
+	var center_distance := absf(base_x + 0.5 - SIZE.x / 2.0)
+	if center_distance < 3.0:
+		color = BASE_COLOR.lightened(HIGHLIGHT_LIGHTEN)
+	elif center_distance > 5.0:
+		color = BASE_COLOR.darkened(SHADE_DARKEN)
+
+	for step in height:
+		var y := SIZE.y - 1 - step
+		var x: int = base_x + lean * step / 4  # gentle lean: 1px sideways per 4px up
+		if x < 0 or x >= SIZE.x or y < 0:
+			break
+		# Tip pixel is slightly darker so blades end crisply instead of flat.
+		image.set_pixel(x, y, color.darkened(SHADE_DARKEN) if step == height - 1 else color)

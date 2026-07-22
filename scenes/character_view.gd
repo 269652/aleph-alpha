@@ -1,0 +1,215 @@
+extends Node2D
+class_name CharacterView
+
+const WeaponSwing = preload("res://src/gameplay/weapon_swing.gd")
+const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
+
+## Reusable placeholder character rendering: a body/head/legs/arms made of
+## flat colored shapes, a directional facing, walk and swim animations, and a
+## small set of equipment slots (visual only -- not tied to gameplay
+## inventory yet). Meant for both the player and, later, NPCs; swap the
+## placeholder textures for real art without touching the API.
+
+enum Facing { DOWN, UP, LEFT, RIGHT }
+enum MovementState { IDLE, WALKING, SWIMMING }
+
+const WALK_CYCLE_SPEED := 10.0
+const LEG_SWING_AMPLITUDE := 3.0
+const SWIM_CYCLE_SPEED := 6.0
+const ARM_STROKE_AMPLITUDE := 4.0
+const TOOL_SLOT_SIDE_OFFSET := 6.0
+
+const BODY_SIZE := Vector2i(10, 14)
+const HEAD_SIZE := Vector2i(8, 8)
+const LEG_SIZE := Vector2i(4, 6)
+const ARM_SIZE := Vector2i(3, 7)
+const SLOT_SIZE := Vector2i(6, 6)
+const EYE_COLOR := Color(0.1, 0.1, 0.1)
+
+var facing := Facing.DOWN
+var movement_state := MovementState.IDLE
+var leg_swing_offset := 0.0
+var arm_stroke_offset := 0.0
+
+var _cycle_time := 0.0
+var _equipped_slots: Dictionary = {}  # slot_name (String) -> bool
+
+var _weapon_swing := WeaponSwing.new()
+var _character_sprite := ProceduralCharacterSprite.new()
+var _swing_time_remaining := 0.0
+var _swing_duration := 0.0
+var _swing_facing := "down"
+
+@onready var _body: Sprite2D = $Body
+@onready var _head: Sprite2D = $Head
+@onready var _leg_left: Sprite2D = $LegLeft
+@onready var _leg_right: Sprite2D = $LegRight
+@onready var _arm_left: Sprite2D = $ArmLeft
+@onready var _arm_right: Sprite2D = $ArmRight
+@onready var _head_slot: Sprite2D = $HeadSlot
+@onready var _tool_slot: Sprite2D = $ToolSlot
+
+var _leg_left_base_position: Vector2
+var _leg_right_base_position: Vector2
+var _arm_left_base_position: Vector2
+var _arm_right_base_position: Vector2
+var _tool_slot_base_position: Vector2
+
+
+func _ready() -> void:
+	_leg_left_base_position = _leg_left.position
+	_leg_right_base_position = _leg_right.position
+	_arm_left_base_position = _arm_left.position
+	_arm_right_base_position = _arm_right.position
+	_tool_slot_base_position = _tool_slot.position
+
+	_body.texture = _character_sprite.generate_body_part_texture(BODY_SIZE, Color(0.2, 0.4, 0.8))
+	_head.texture = _character_sprite.generate_head_texture(HEAD_SIZE, Color(0.9, 0.75, 0.6), EYE_COLOR)
+	_leg_left.texture = _character_sprite.generate_body_part_texture(LEG_SIZE, Color(0.15, 0.3, 0.6))
+	_leg_right.texture = _character_sprite.generate_body_part_texture(LEG_SIZE, Color(0.15, 0.3, 0.6))
+	_arm_left.texture = _character_sprite.generate_body_part_texture(ARM_SIZE, Color(0.9, 0.75, 0.6))
+	_arm_right.texture = _character_sprite.generate_body_part_texture(ARM_SIZE, Color(0.9, 0.75, 0.6))
+
+	_arm_left.visible = false
+	_arm_right.visible = false
+	_head_slot.visible = false
+	_tool_slot.visible = false
+
+
+func _process(delta: float) -> void:
+	match movement_state:
+		MovementState.WALKING:
+			_cycle_time += delta * WALK_CYCLE_SPEED
+			leg_swing_offset = sin(_cycle_time) * LEG_SWING_AMPLITUDE
+			arm_stroke_offset = 0.0
+		MovementState.SWIMMING:
+			_cycle_time += delta * SWIM_CYCLE_SPEED
+			arm_stroke_offset = sin(_cycle_time) * ARM_STROKE_AMPLITUDE
+			leg_swing_offset = 0.0
+		_:
+			_cycle_time = 0.0
+			leg_swing_offset = 0.0
+			arm_stroke_offset = 0.0
+
+	_leg_left.visible = movement_state != MovementState.SWIMMING
+	_leg_right.visible = movement_state != MovementState.SWIMMING
+	_arm_left.visible = movement_state == MovementState.SWIMMING
+	_arm_right.visible = movement_state == MovementState.SWIMMING
+
+	_leg_left.position = _leg_left_base_position + Vector2(0, leg_swing_offset)
+	_leg_right.position = _leg_right_base_position + Vector2(0, -leg_swing_offset)
+	_arm_left.position = _arm_left_base_position + Vector2(0, arm_stroke_offset)
+	_arm_right.position = _arm_right_base_position + Vector2(0, -arm_stroke_offset)
+
+	if _swing_time_remaining > 0.0:
+		_swing_time_remaining = maxf(0.0, _swing_time_remaining - delta)
+		if _swing_time_remaining <= 0.0:
+			_tool_slot.rotation = 0.0  # swing just finished -- rest, not frozen at full extension
+		else:
+			var progress := 1.0 - _swing_time_remaining / _swing_duration
+			_tool_slot.rotation = _weapon_swing.rotation_at(progress, _swing_facing)
+	else:
+		_tool_slot.rotation = 0.0
+
+
+## Updates facing from a movement direction; a near-zero direction (idle)
+## leaves the previous facing unchanged rather than snapping to a default.
+func set_facing(direction: Vector2) -> void:
+	if direction.length() < 0.01:
+		return
+
+	if absf(direction.x) > absf(direction.y):
+		facing = Facing.RIGHT if direction.x > 0 else Facing.LEFT
+	else:
+		facing = Facing.DOWN if direction.y > 0 else Facing.UP
+
+	var tool_side := 0.0
+	if facing == Facing.RIGHT:
+		tool_side = 1.0
+	elif facing == Facing.LEFT:
+		tool_side = -1.0
+	_tool_slot.position = _tool_slot_base_position + Vector2(tool_side * TOOL_SLOT_SIDE_OFFSET, 0.0)
+	_tool_slot.z_index = -1 if facing == Facing.UP else 1
+
+
+func set_movement_state(state: MovementState) -> void:
+	movement_state = state
+	# You can't swing a sword while swimming: the weapon is stowed (hidden)
+	# in the water and re-drawn when back on land. _equipped_slots still
+	# remembers it's equipped -- this is purely visual stowing.
+	if _tool_slot != null and _equipped_slots.get("tool", false):
+		_tool_slot.visible = state != MovementState.SWIMMING
+
+
+func legs_visible() -> bool:
+	return _leg_left.visible
+
+
+func equip_slot(slot_name: String, color: Color) -> void:
+	var node := _slot_node(slot_name)
+	if node == null:
+		return
+	_set_solid_texture(node, SLOT_SIZE, color)
+	node.visible = true
+	_equipped_slots[slot_name] = true
+
+
+func unequip_slot(slot_name: String) -> void:
+	var node := _slot_node(slot_name)
+	if node == null:
+		return
+	node.visible = false
+	_equipped_slots.erase(slot_name)
+
+
+func is_slot_equipped(slot_name: String) -> bool:
+	return _equipped_slots.get(slot_name, false)
+
+
+## Shows the weapon's actual sprite in the tool slot (real item art, not the
+## flat-color placeholder equip_slot() uses). Shifts the sprite's rotation
+## pivot to the grip -- the bottom edge of the image, per ProceduralItemSprite's
+## convention for sword/axe art -- so play_attack_swing's rotation sweeps the
+## blade through an arc instead of spinning it in place around its own center.
+func equip_weapon(texture: Texture2D) -> void:
+	_tool_slot.texture = texture
+	_tool_slot.offset = Vector2(0, -texture.get_height() / 2.0)
+	_tool_slot.visible = true
+	_equipped_slots["tool"] = true
+
+
+## Starts a swing animation of the equipped weapon: a pendulum arc (see
+## WeaponSwing) oriented horizontally for left/right facing or vertically for
+## up/down, played out over `duration` seconds and reset to idle afterward.
+func play_attack_swing(facing: String, duration: float) -> void:
+	_swing_facing = facing
+	_swing_duration = duration
+	_swing_time_remaining = duration
+
+
+func tool_slot_rotation() -> float:
+	return _tool_slot.rotation
+
+
+func tool_slot_texture() -> Texture2D:
+	return _tool_slot.texture
+
+
+func tool_slot_offset() -> Vector2:
+	return _tool_slot.offset
+
+
+func _slot_node(slot_name: String) -> Sprite2D:
+	match slot_name:
+		"head":
+			return _head_slot
+		"tool":
+			return _tool_slot
+		_:
+			return null
+
+
+func _set_solid_texture(sprite: Sprite2D, size: Vector2i, color: Color) -> void:
+	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	image.fill(color)
+	sprite.texture = ImageTexture.create_from_image(image)

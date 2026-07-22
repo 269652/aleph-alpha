@@ -1,0 +1,75 @@
+extends RefCounted
+
+## Unloaded-chunk ecology catch-up integration (variable-fidelity LOD).
+##
+## Loaded chunks near the player run at individual-agent fidelity; unloaded
+## chunks are NOT ticked per frame. Instead each records the world-time it was
+## unloaded, and on reload this advances its aggregate state forward by the whole
+## elapsed unloaded duration in ONE deterministic, pure step -- so the region
+## reflects everything that "would have happened" while the player was away
+## (vegetation regrew, trees fruited, herds grew, predators tracked their prey).
+## See docs/concept/ecosystem_dynamics.md -- Population dynamics + Variable-fidelity.
+##
+## Reuses the SAME logistic/predator-prey models as the loaded per-chunk step
+## (HerbivorePopulationModel / PredatorPopulationModel) so loaded and unloaded
+## chunks share one model of truth -- no divergence beyond intended variation.
+
+const HerbivorePopulationModel = preload("res://src/world/herbivore_population_model.gd")
+const PredatorPopulationModel = preload("res://src/world/predator_population_model.gd")
+
+## Game seconds that make up one simulated ecological "day" (the model_s unit the
+## population models integrate in). One in-game hour of unloaded time is one
+## ecological day of catch-up growth. Pinned by the growth tests below.
+const SECONDS_PER_DAY := 3600.0
+
+## Vegetation regrows toward full density (1.0) at this exponential rate per day.
+## Gap-to-1.0 shrinks by (1 - e^(-rate*days)) each call, so vegetation approaches
+## 1.0 monotonically and never overshoots. Pinned by the vegetation tests.
+const VEGETATION_REGROWTH_PER_DAY := 0.2
+
+## Aggregate ripe-fruit stock a chunk's trees can hold before further ripening is
+## offset by abscission/decay -- fruit accumulates with elapsed time but is
+## bounded here. Pinned by test_fruit_stock_stays_bounded.
+const FRUIT_STOCK_MAX := 500.0
+
+var _herbivore_model := HerbivorePopulationModel.new()
+var _predator_model := PredatorPopulationModel.new()
+
+
+## Integrate a chunk's aggregate ecology forward by `elapsed_seconds` in one step.
+## `state`    -> {herbivores, predators, fruit_stock, vegetation}
+## `capacity` -> {herbivore_capacity, fruit_growth_rate}
+## Pure: does not mutate `state`; returns a fresh dictionary.
+func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) -> Dictionary:
+	var elapsed := maxf(0.0, elapsed_seconds)
+	var delta_days := elapsed / SECONDS_PER_DAY
+
+	var herbivores: float = state.get("herbivores", 0.0)
+	var predators: float = state.get("predators", 0.0)
+	var fruit_stock: float = state.get("fruit_stock", 0.0)
+	var vegetation: float = state.get("vegetation", 0.0)
+
+	var herbivore_capacity: float = capacity.get("herbivore_capacity", 0.0)
+	var fruit_growth_rate: float = capacity.get("fruit_growth_rate", 0.0)
+
+	# Vegetation regrows toward 1.0 (exponential approach, monotone, no overshoot).
+	var new_vegetation := 1.0 - (1.0 - vegetation) * exp(-VEGETATION_REGROWTH_PER_DAY * delta_days)
+
+	# Fruit stock accumulates linearly with elapsed time, bounded by chunk capacity.
+	var new_fruit_stock := minf(fruit_stock + fruit_growth_rate * elapsed, FRUIT_STOCK_MAX)
+
+	# Herbivores: shared logistic growth toward the region's carrying capacity.
+	var new_herbivores := _herbivore_model.step(herbivores, herbivore_capacity, delta_days)
+
+	# Predators: carrying capacity derived from prey (herbivores) via the trophic
+	# ratio, then the same logistic step -- rises with abundant prey, falls when
+	# prey is scarce. Uses the post-step (current) herbivore level as its prey base.
+	var predator_capacity := _predator_model.carrying_capacity(new_herbivores)
+	var new_predators := _predator_model.step(predators, predator_capacity, delta_days)
+
+	return {
+		"herbivores": new_herbivores,
+		"predators": new_predators,
+		"fruit_stock": new_fruit_stock,
+		"vegetation": new_vegetation,
+	}

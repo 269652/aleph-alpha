@@ -1,0 +1,111 @@
+extends GutTest
+
+## Unloaded-chunk ecology catch-up integration (variable-fidelity LOD).
+## See docs/concept/ecosystem_dynamics.md -- Population dynamics + Variable-fidelity.
+
+const ChunkEcologyCatchup = preload("res://src/world/chunk_ecology_catchup.gd")
+
+var catchup: ChunkEcologyCatchup
+
+
+func before_each():
+	catchup = ChunkEcologyCatchup.new()
+
+
+func _state(herbivores: float, predators: float, fruit_stock: float, vegetation: float) -> Dictionary:
+	return {
+		"herbivores": herbivores,
+		"predators": predators,
+		"fruit_stock": fruit_stock,
+		"vegetation": vegetation,
+	}
+
+
+func _capacity(herbivore_capacity: float, fruit_growth_rate: float) -> Dictionary:
+	return {
+		"herbivore_capacity": herbivore_capacity,
+		"fruit_growth_rate": fruit_growth_rate,
+	}
+
+
+func test_zero_elapsed_returns_unchanged_state():
+	var start := _state(5.0, 1.0, 2.0, 0.5)
+	var out := catchup.advance(start, 0.0, _capacity(20.0, 0.1))
+	assert_almost_eq(out["herbivores"], 5.0, 0.0001)
+	assert_almost_eq(out["predators"], 1.0, 0.0001)
+	assert_almost_eq(out["fruit_stock"], 2.0, 0.0001)
+	assert_almost_eq(out["vegetation"], 0.5, 0.0001)
+
+
+func test_is_pure_does_not_mutate_input():
+	var start := _state(5.0, 1.0, 2.0, 0.5)
+	catchup.advance(start, 100000.0, _capacity(20.0, 0.1))
+	assert_almost_eq(start["herbivores"], 5.0, 0.0001)
+	assert_almost_eq(start["vegetation"], 0.5, 0.0001)
+
+
+func test_deterministic():
+	var start := _state(5.0, 1.0, 2.0, 0.5)
+	var a := catchup.advance(start, 12345.0, _capacity(20.0, 0.1))
+	var b := catchup.advance(start, 12345.0, _capacity(20.0, 0.1))
+	assert_eq(a, b)
+
+
+func test_small_herbivore_pop_grows_toward_but_not_past_capacity():
+	var start := _state(1.0, 0.0, 0.0, 1.0)
+	var cap := _capacity(20.0, 0.0)
+	var out := catchup.advance(start, 100000.0, cap)
+	assert_gt(out["herbivores"], 1.0, "herbivores should grow")
+	assert_lte(out["herbivores"], 20.0, "logistic must not overshoot capacity")
+
+
+func test_herbivore_growth_is_logistic_no_overshoot_repeated():
+	var s := _state(1.0, 0.0, 0.0, 1.0)
+	var cap := _capacity(20.0, 0.0)
+	for i in 200:
+		s = catchup.advance(s, 100000.0, cap)
+		assert_lte(s["herbivores"], 20.0001, "never overshoots capacity")
+	assert_gt(s["herbivores"], 19.0, "eventually approaches capacity")
+
+
+func test_predators_rise_when_herbivores_abundant():
+	# Abundant prey -> predator capacity high -> predators grow.
+	var start := _state(1000.0, 1.0, 0.0, 1.0)
+	var out := catchup.advance(start, 100000.0, _capacity(2000.0, 0.0))
+	assert_gt(out["predators"], 1.0, "predators should rise with abundant prey")
+
+
+func test_predators_fall_when_herbivores_scarce():
+	# Predators above what scarce prey can sustain -> decline.
+	var start := _state(1.0, 50.0, 0.0, 1.0)
+	var out := catchup.advance(start, 100000.0, _capacity(20.0, 0.0))
+	assert_lt(out["predators"], 50.0, "predators should fall when prey is scarce")
+
+
+func test_fruit_stock_increases_with_elapsed():
+	var short := catchup.advance(_state(0.0, 0.0, 0.0, 1.0), 100.0, _capacity(20.0, 0.5))
+	var long := catchup.advance(_state(0.0, 0.0, 0.0, 1.0), 500.0, _capacity(20.0, 0.5))
+	assert_gt(short["fruit_stock"], 0.0)
+	assert_gt(long["fruit_stock"], short["fruit_stock"])
+
+
+func test_fruit_stock_stays_bounded():
+	var out := catchup.advance(_state(0.0, 0.0, 0.0, 1.0), 1.0e12, _capacity(20.0, 100.0))
+	assert_lte(out["fruit_stock"], ChunkEcologyCatchup.FRUIT_STOCK_MAX + 0.0001)
+
+
+func test_vegetation_monotonically_approaches_one():
+	var v := 0.1
+	var s := _state(0.0, 0.0, 0.0, v)
+	for i in 50:
+		var out := catchup.advance(s, 5000.0, _capacity(20.0, 0.0))
+		assert_gte(out["vegetation"], s["vegetation"] - 0.0001, "monotone non-decreasing")
+		assert_lte(out["vegetation"], 1.0001, "never exceeds 1.0")
+		s = out
+	assert_gt(s["vegetation"], 0.9, "eventually near full regrowth")
+
+
+func test_vegetation_does_not_overshoot_one():
+	var out := catchup.advance(_state(0.0, 0.0, 0.0, 0.99), 1.0e12, _capacity(20.0, 0.0))
+	assert_lte(out["vegetation"], 1.0001)
+	assert_gte(out["vegetation"], 0.99)

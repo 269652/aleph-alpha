@@ -1,0 +1,1 @@
+I want items like meat or other food to spoil when it's carried around for too long. Carrying spoiled food makes you stink and causes flies to fly above you; also NPCs become less friendly and tend to avoid you. It also causes a minor debuff

@@ -1,0 +1,101 @@
+extends GutTest
+
+const DroppedItem = preload("res://src/rendering/dropped_item.gd")
+const Item = preload("res://src/gameplay/item.gd")
+const ItemStack = preload("res://src/gameplay/item_stack.gd")
+const Inventory = preload("res://src/gameplay/inventory.gd")
+
+
+class StubPicker:
+	extends Node2D
+	var inventory
+
+
+var item: DroppedItem
+var _extra: Array = []
+
+
+func before_each():
+	item = DroppedItem.new()
+	item.item_stack = ItemStack.new(Item.new("hide", "Hide", "material", 40), 3)
+	item.position = Vector2(100, 100)
+	add_child(item)
+
+
+func after_each():
+	if is_instance_valid(item):
+		item.free()
+	for node in _extra:
+		if is_instance_valid(node):
+			node.free()
+	_extra = []
+
+
+func _make_picker(at: Vector2, slots: int = 10) -> StubPicker:
+	var picker := StubPicker.new()
+	picker.position = at
+	picker.inventory = Inventory.new(slots)
+	add_child(picker)
+	_extra.append(picker)
+	return picker
+
+
+func test_has_a_sprite_texture():
+	assert_not_null(item.texture, "a dropped item should render a sprite")
+
+
+func test_despawns_after_its_lifetime_elapses():
+	item._process(DroppedItem.LIFETIME + 1.0)
+	assert_true(item.is_queued_for_deletion(), "un-picked-up items should eventually despawn")
+
+
+func test_does_not_despawn_before_its_lifetime():
+	item._process(DroppedItem.LIFETIME * 0.5)
+	assert_false(item.is_queued_for_deletion())
+
+
+func test_click_pickup_adds_the_stack_to_the_picker_and_frees_the_node():
+	var picker := _make_picker(Vector2(500, 500))  # far away; a click grabs regardless
+
+	var picked := item.pick_up(picker)
+
+	assert_true(picked)
+	assert_eq(picker.inventory.count_of("hide"), 3)
+	assert_true(item.is_queued_for_deletion())
+
+
+func test_standing_next_to_an_item_does_not_auto_pick_it_up():
+	# Deliberately no proximity auto-pickup -- only an explicit click (see
+	# test_click_pickup_adds_the_stack_to_the_picker_and_frees_the_node)
+	# should ever move it into an inventory.
+	var picker := _make_picker(Vector2(101, 100))  # right on top of the item
+	for i in 30:
+		item._process(0.1)
+	assert_eq(picker.inventory.count_of("hide"), 0)
+	assert_false(item.is_queued_for_deletion())
+
+
+func test_shows_a_clickable_name_label():
+	assert_eq(item._name_label.text, "Hide x3")
+
+
+func test_name_label_shows_the_remaining_count_after_a_partial_pickup():
+	# Single slot, already 1/2 full of "hide" -- only 1 more can merge in, so
+	# 2 of the dropped stack's 3 stay behind on the ground.
+	var picker := _make_picker(Vector2(500, 500), 1)
+	picker.inventory.add(Item.new("hide", "Hide", "material", 2), 1)
+	item.pick_up(picker)
+	assert_eq(item._name_label.text, "Hide x2")
+
+
+func test_a_full_inventory_leaves_the_item_on_the_ground_with_the_remainder():
+	# 1-slot inventory already holding a different full-ish item -> no room.
+	var picker := _make_picker(Vector2(100, 100), 1)
+	picker.inventory.add(Item.new("rock", "Rock", "material", 1), 1)  # fills the only slot
+
+	var picked := item.pick_up(picker)
+
+	assert_false(picked, "nothing fit, so it's not a successful pickup")
+	assert_eq(picker.inventory.count_of("hide"), 0)
+	assert_eq(item.item_stack.count, 3, "the stack stays on the ground")
+	assert_false(item.is_queued_for_deletion())
