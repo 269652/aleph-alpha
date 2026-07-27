@@ -19,46 +19,109 @@ extends RefCounted
 ## predator-role individual with its own stats/color. Both reuse
 ## CreatureBehavior's existing temperament/is_predator-driven decision tree
 ## unchanged.
+##
+## 8 more species (camel/jackal/reindeer/arctic_fox/tapir/jaguar/goat/
+## mountain_lion) exist for the same reason, one per non-grassland/forest
+## biome (see CreatureRenderer's HERBIVORE_SPECIES_POOL_BY_BIOME/
+## PREDATOR_SPECIES_POOL_BY_BIOME) so different biomes actually look
+## ecologically distinct instead of drawing from the same global 4-species
+## pool. Each is its own species entry here (own stats/diet), independent of
+## which of the 4 hand-drawn shape families it happens to render with.
 
+## The 8 biome-specific species below (see CreatureRenderer's per-biome
+## species pools -- desert/tundra/rainforest/mountain each get their own
+## herbivore+predator pair) reuse one of the original 4's shape families for
+## art (ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY) but are independent
+## entries here: stats/diet/temperament/role are set per species, not
+## inherited from whichever shape they happen to look like.
 const MAX_HEALTH_BY_SPECIES := {
 	"herbivore": 20.0,
 	"boar": 28.0,
 	"predator": 35.0,
 	"lynx": 26.0,
+	"camel": 26.0,
+	"jackal": 27.0,
+	"reindeer": 24.0,
+	"arctic_fox": 24.0,
+	"tapir": 27.0,
+	"jaguar": 34.0,
+	"goat": 20.0,
+	"mountain_lion": 32.0,
 }
 const MAX_STAMINA_BY_SPECIES := {
 	"herbivore": 30.0,
 	"boar": 25.0,
 	"predator": 25.0,
 	"lynx": 30.0,
+	"camel": 30.0,
+	"jackal": 25.0,
+	"reindeer": 30.0,
+	"arctic_fox": 30.0,
+	"tapir": 25.0,
+	"jaguar": 25.0,
+	"goat": 30.0,
+	"mountain_lion": 25.0,
 }
 const MAX_MANA_BY_SPECIES := {
 	"herbivore": 5.0,
 	"boar": 5.0,
 	"predator": 10.0,
 	"lynx": 10.0,
+	"camel": 5.0,
+	"jackal": 10.0,
+	"reindeer": 5.0,
+	"arctic_fox": 10.0,
+	"tapir": 5.0,
+	"jaguar": 10.0,
+	"goat": 5.0,
+	"mountain_lion": 10.0,
 }
 const DIET_BY_SPECIES := {
 	"herbivore": "Grazer",
 	"boar": "Omnivore",
 	"predator": "Hunter",
 	"lynx": "Hunter",
+	"camel": "Grazer",
+	"jackal": "Hunter",
+	"reindeer": "Grazer",
+	"arctic_fox": "Hunter",
+	"tapir": "Grazer",
+	"jaguar": "Hunter",
+	"goat": "Grazer",
+	"mountain_lion": "Hunter",
 }
 ## Herbivores are calm (always flee threats); boars/predators/lynx are
 ## aggressive (fight when strong, flee when weak). See CreatureBehavior for
 ## how this is used -- fighting back only needs "aggressive" temperament, not
 ## is_predator, so a boar fights without hunting other creatures for food.
+## tapir deliberately stays "calm" despite sharing boar's shape family --
+## temperament is independent of shape and set directly per species.
 const TEMPERAMENT_BY_SPECIES := {
 	"herbivore": "calm",
 	"boar": "aggressive",
 	"predator": "aggressive",
 	"lynx": "aggressive",
+	"camel": "calm",
+	"jackal": "aggressive",
+	"reindeer": "calm",
+	"arctic_fox": "aggressive",
+	"tapir": "calm",
+	"jaguar": "aggressive",
+	"goat": "calm",
+	"mountain_lion": "aggressive",
 }
 ## Only true predators (hunt herbivores/boars for food) go here -- a boar is
 ## aggressive but not a predator (see TEMPERAMENT_BY_SPECIES doc above).
+## camel/tapir/etc are likewise herbivore-role even where calm/aggressive
+## temperament might suggest otherwise; only the 4 dedicated predator species
+## added alongside boar/lynx go here.
 const PREDATOR_SPECIES := {
 	"predator": true,
 	"lynx": true,
+	"jackal": true,
+	"arctic_fox": true,
+	"jaguar": true,
+	"mountain_lion": true,
 }
 
 ## Levels roll in [1, LEVEL_RANGE] from the individual's seed -- a cheap,
