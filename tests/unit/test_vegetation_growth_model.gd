@@ -12,9 +12,23 @@ func before_each():
 
 # -- carrying_capacity_for_biome ---------------------------------------------
 
-func test_non_vegetated_biomes_have_zero_carrying_capacity():
+func test_ocean_has_zero_carrying_capacity():
 	assert_eq(model.carrying_capacity_for_biome("ocean"), 0.0)
-	assert_eq(model.carrying_capacity_for_biome("mountain"), 0.0)
+
+
+## Mountain is no longer a hard zero -- real alpine terrain above the tree
+## line still sustains sparse vegetation, so a mountain goat pool (see
+## CreatureRenderer's biome species pools) has something to graze. Tuned
+## placeholder pinned exactly per CLAUDE.md's no-eyeballed-constants rule.
+func test_mountain_carrying_capacity_is_a_small_nonzero_placeholder():
+	assert_almost_eq(model.carrying_capacity_for_biome("mountain"), 0.12, 0.0001)
+
+
+func test_mountain_carrying_capacity_is_sparser_than_tundra():
+	var mountain := model.carrying_capacity_for_biome("mountain")
+	var tundra := model.carrying_capacity_for_biome("tundra")
+	assert_gt(mountain, 0.0, "mountain should sustain at least sparse vegetation")
+	assert_lt(mountain, tundra, "mountain should be sparser than tundra")
 
 
 func test_every_known_biome_has_a_defined_carrying_capacity():

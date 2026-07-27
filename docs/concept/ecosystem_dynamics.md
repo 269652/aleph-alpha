@@ -68,6 +68,28 @@ When those conditions are met near the player, the individual creature spawns an
 offspring beside it (individual-scale birth), paying an energy cost. Away from
 the player the same effect is captured by the aggregate logistic growth term.
 
+## Biome-specific species composition
+
+Pillar 1 ("boars live where boars thrive") extends beyond population *size* to
+population *composition*: which species show up at all should depend on the
+biome, not just how many individuals do. A promoted individual's species is
+chosen from a **per-biome species pool** (grassland/forest/desert/tundra/
+rainforest/mountain each have their own herbivore+predator pair; unmapped
+biomes fall back to a generic pool), keyed off the chunk's **dominant
+biome** — the most frequent biome among its cells, since a chunk can straddle
+more than one. Every species reuses one of 4 hand-drawn silhouette shapes
+(deer-shaped, boar-shaped, wolf-shaped, lynx-shaped) in its own color rather
+than needing bespoke pixel art per species, since the ecological point is
+biome-appropriate *variety*, not bespoke art for its own sake. Temperament/
+role stay independent of shape: a species can reuse a shape family and still
+have its own diet/temperament (e.g. tapir reuses boar's silhouette but is
+calm, not aggressive).
+
+Mountain's vegetation carrying capacity, previously a hard `0.0` (making
+mountain permanently uninhabitable regardless of species pool), is now a
+small nonzero placeholder reflecting real sparse alpine grazing above the
+tree line — see `vegetation_growth_model.gd`'s `CARRYING_CAPACITY_BY_BIOME`.
+
 ## Population dynamics (aggregate)
 
 At the aggregate (per-chunk) level we use the classic ecological equations:
@@ -112,6 +134,10 @@ than O(all-chunks-per-frame).
 
 - ✅ Logistic herbivore growth, predator–prey capacity coupling, per-loaded-chunk
   ecosystem step (pre-existing).
+- ✅ Biome-specific species composition (per-biome herbivore/predator species
+  pools keyed off a chunk's dominant biome) — `creature_renderer.gd`'s
+  `HERBIVORE_SPECIES_POOL_BY_BIOME`/`PREDATOR_SPECIES_POOL_BY_BIOME`,
+  `biome_classifier.gd`'s `dominant_biome`, wired in `EarthChunkManager`.
 - 🚧 Per-tree fruit phenology (growing/ripe/fallen) — `fruiting_model.gd`.
 - 🚧 Ripe fruit rendered as canopy pixel dots on near trees.
 - 🚧 Condition-gated individual reproduction — `animal_reproduction.gd`.

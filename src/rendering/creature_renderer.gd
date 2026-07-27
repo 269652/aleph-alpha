@@ -18,9 +18,40 @@ const LYNX_COLOR := Color(0.45, 0.48, 0.55)
 ## on boar/lynx): a promoted herbivore-role individual is usually a plain
 ## herbivore but sometimes a boar, deterministically per (chunk, index) --
 ## weighted by simple repetition, not a probability table. Same idea for
-## predator-role individuals and lynx.
+## predator-role individuals and lynx. This pair is also the fail-safe
+## default pool for any biome not present in the *_BY_BIOME maps below (see
+## spawn_creatures's biome_name doc), matching today's pre-biome behavior.
 const HERBIVORE_SPECIES_POOL := ["herbivore", "herbivore", "herbivore", "boar"]
 const PREDATOR_SPECIES_POOL := ["predator", "predator", "predator", "lynx"]
+
+## Per-biome species pools (Phase 1's "boars live where boars thrive" pillar,
+## realized): which species a promoted herbivore/predator-role individual is
+## drawn from now depends on the chunk's dominant biome (see
+## BiomeClassifier.dominant_biome), not one global pool -- so a desert and a
+## rainforest actually look like different ecosystems instead of drawing from
+## the same 4 species. grassland's entry is today's pre-biome pool unchanged
+## (deer-dominant herbivores, wolf-dominant predators), now made explicit as
+## grassland's own identity. Biomes with no entry here (currently just ocean,
+## whose vegetation carrying capacity stays 0 -- see
+## VegetationGrowthModel.CARRYING_CAPACITY_BY_BIOME -- so population always
+## rounds to 0 there regardless of pool) fall back to the generic
+## HERBIVORE_SPECIES_POOL/PREDATOR_SPECIES_POOL above.
+const HERBIVORE_SPECIES_POOL_BY_BIOME := {
+	"grassland": ["herbivore", "herbivore", "herbivore", "boar"],
+	"forest": ["boar", "boar", "boar", "herbivore"],
+	"desert": ["camel", "camel", "camel", "herbivore"],
+	"tundra": ["reindeer", "reindeer", "reindeer", "herbivore"],
+	"rainforest": ["tapir", "tapir", "tapir", "herbivore"],
+	"mountain": ["goat", "goat", "goat", "herbivore"],
+}
+const PREDATOR_SPECIES_POOL_BY_BIOME := {
+	"grassland": ["predator", "predator", "predator", "lynx"],
+	"forest": ["lynx", "lynx", "lynx", "predator"],
+	"desert": ["jackal", "jackal", "jackal", "predator"],
+	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "predator"],
+	"rainforest": ["jaguar", "jaguar", "jaguar", "predator"],
+	"mountain": ["mountain_lion", "mountain_lion", "mountain_lion", "predator"],
+}
 
 const SPECIES_COLORS := {
 	"herbivore": HERBIVORE_COLOR,
@@ -47,6 +78,11 @@ var _animal_sprite := ProceduralAnimalSprite.new()
 ## `world` (duck-typed biome_at_global) is handed to each marker so it can
 ## sense terrain/threats/prey and run full AI; pass null (default) for callers
 ## that only need static placeholders (e.g. isolated rendering tests).
+## `biome_name` (default "", appended last so every pre-existing call site
+## keeps compiling unchanged) picks this chunk's species pool from
+## HERBIVORE_SPECIES_POOL_BY_BIOME/PREDATOR_SPECIES_POOL_BY_BIOME; empty or
+## unmapped falls back to the generic HERBIVORE_SPECIES_POOL/
+## PREDATOR_SPECIES_POOL, i.e. today's pre-biome behavior.
 func spawn_creatures(
 	parent: Node2D,
 	chunk_coord: Vector2i,
@@ -55,19 +91,23 @@ func spawn_creatures(
 	tile_size: int,
 	herbivore_population: float,
 	predator_population: float,
-	world = null
+	world = null,
+	biome_name: String = ""
 ) -> Array[Node2D]:
+	var herbivore_pool: Array = HERBIVORE_SPECIES_POOL_BY_BIOME.get(biome_name, HERBIVORE_SPECIES_POOL)
+	var predator_pool: Array = PREDATOR_SPECIES_POOL_BY_BIOME.get(biome_name, PREDATOR_SPECIES_POOL)
+
 	var spawned: Array[Node2D] = []
 	spawned.append_array(
 		_spawn_species(
 			parent, chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
-			herbivore_population, HERBIVORE_SPECIES_POOL, 1, world
+			herbivore_population, herbivore_pool, 1, world
 		)
 	)
 	spawned.append_array(
 		_spawn_species(
 			parent, chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
-			predator_population, PREDATOR_SPECIES_POOL, 2, world
+			predator_population, predator_pool, 2, world
 		)
 	)
 	return spawned

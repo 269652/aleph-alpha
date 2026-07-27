@@ -88,3 +88,28 @@ func test_depth_meters_gives_a_small_realistic_value_for_shallow_coastal_water()
 	# calibration this method exists to get right for real bathymetry.
 	var depth := classifier.depth_meters_at(0.5556 - 0.0001, 0.5556, 8000.0)
 	assert_between(depth, 0.5, 3.0)
+
+
+# -- dominant_biome -----------------------------------------------------------
+
+
+func test_dominant_biome_of_an_empty_array_is_empty_string():
+	assert_eq(classifier.dominant_biome(PackedStringArray()), "")
+
+
+func test_dominant_biome_of_a_single_biome_chunk_is_that_biome():
+	var biome_array := PackedStringArray(["tundra", "tundra", "tundra"])
+	assert_eq(classifier.dominant_biome(biome_array), "tundra")
+
+
+func test_dominant_biome_returns_the_most_frequent_biome():
+	var biome_array := PackedStringArray(["forest", "forest", "grassland"])
+	assert_eq(classifier.dominant_biome(biome_array), "forest")
+
+
+func test_dominant_biome_breaks_ties_by_known_biomes_order():
+	# "forest" precedes "desert" in KNOWN_BIOMES, so an equal-count tie
+	# between them resolves to "forest" -- same tie-break style as
+	# TerrainRenderer._is_more_dominant.
+	var biome_array := PackedStringArray(["desert", "forest"])
+	assert_eq(classifier.dominant_biome(biome_array), "forest")

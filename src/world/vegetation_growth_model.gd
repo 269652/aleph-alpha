@@ -31,9 +31,14 @@ const GROWTH_PACE_PER_DAY := 0.5
 ## test_step_grid_never_exceeds_each_cells_effective_capacity.
 const SPREAD_RATE_PER_DAY := 0.1
 
+## Mountain's 0.12 is deliberately below tundra's 0.2 (sparser alpine
+## vegetation above the tree line) but nonzero -- real high-altitude terrain
+## still sustains some sparse grazing (e.g. mountain goats), unlike ocean's
+## genuine 0.0. Pinned by
+## test_mountain_carrying_capacity_is_a_small_nonzero_placeholder.
 const CARRYING_CAPACITY_BY_BIOME := {
 	"ocean": 0.0,
-	"mountain": 0.0,
+	"mountain": 0.12,
 	"tundra": 0.2,
 	"desert": 0.15,
 	"grassland": 0.6,

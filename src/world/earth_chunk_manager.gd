@@ -19,6 +19,7 @@ const TreeMaturity = preload("res://src/gameplay/tree_maturity.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const Chunk = preload("res://src/world/chunk.gd")
+const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 
 ## Where player-made tile modifications (Phase 3 building) are persisted,
 ## keyed per chunk -- terrain itself is deterministically regenerable (see
@@ -67,6 +68,7 @@ var _tree_renderer := TreeRenderer.new()
 var _stone_renderer := StoneRenderer.new()
 var _grass_sprite_generator := ProceduralGrassSprite.new()
 var _creature_renderer := CreatureRenderer.new()
+var _biome_classifier := BiomeClassifier.new()
 var _ecosystem := EcosystemSimulation.new()
 var _chunk_serializer := ChunkSerializer.new()
 var _forage_scheduler := ForageScheduler.new()
@@ -439,6 +441,7 @@ func _refresh_creatures() -> void:
 	for chunk_coord in _loaded_chunks.keys():
 		for creature in _loaded_creatures.get(chunk_coord, []):
 			creature.free()
+		var chunk: Chunk = _loaded_chunks[chunk_coord]
 		_loaded_creatures[chunk_coord] = _creature_renderer.spawn_creatures(
 			_creatures_parent,
 			chunk_coord,
@@ -447,7 +450,8 @@ func _refresh_creatures() -> void:
 			TerrainRenderer.TILE_SIZE,
 			_ecosystem.herbivore_population(chunk_coord),
 			_ecosystem.predator_population(chunk_coord),
-			self
+			self,
+			_biome_classifier.dominant_biome(chunk.biome)
 		)
 
 
@@ -544,7 +548,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		TerrainRenderer.TILE_SIZE,
 		_ecosystem.herbivore_population(chunk_coord),
 		_ecosystem.predator_population(chunk_coord),
-		self
+		self,
+		_biome_classifier.dominant_biome(chunk.biome)
 	)
 
 

@@ -6,6 +6,8 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
+const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
+const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -156,6 +158,54 @@ func test_step_ecosystem_refreshes_creature_markers_after_a_full_simulated_day()
 	manager.step_ecosystem(EarthChunkManager.SECONDS_PER_SIMULATED_DAY)
 
 	assert_ne(_child_instance_ids(creatures_parent), before_ids)
+
+
+## Computes a chunk's dominant biome the same way (sampling biome_at_global
+## over every cell) BiomeClassifier.dominant_biome would from the chunk's own
+## `biome` array -- used to verify EarthChunkManager actually threads that
+## biome into CreatureRenderer.spawn_creatures rather than always falling
+## back to the generic pool.
+func _dominant_biome_of_chunk(chunk_coord: Vector2i) -> String:
+	var biome_array := PackedStringArray()
+	for y in EarthChunkManager.CHUNK_SIZE:
+		for x in EarthChunkManager.CHUNK_SIZE:
+			var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+			var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+			biome_array.append(manager.biome_at_global(global_x, global_y))
+	return BiomeClassifier.new().dominant_biome(biome_array)
+
+
+func test_promoted_creatures_near_berlin_only_use_species_from_their_chunks_biome_pool():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var dominant := _dominant_biome_of_chunk(center_chunk)
+
+	var expected_species := {}
+	for species in CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME.get(
+		dominant, CreatureRenderer.HERBIVORE_SPECIES_POOL
+	):
+		expected_species[species] = true
+	for species in CreatureRenderer.PREDATOR_SPECIES_POOL_BY_BIOME.get(
+		dominant, CreatureRenderer.PREDATOR_SPECIES_POOL
+	):
+		expected_species[species] = true
+
+	var chunk_origin := center_chunk * EarthChunkManager.CHUNK_SIZE
+	var checked_any := false
+	for child in creatures_parent.get_children():
+		var tile_x := int(child.position.x / TerrainRenderer.TILE_SIZE)
+		var tile_y := int(child.position.y / TerrainRenderer.TILE_SIZE)
+		var in_center_chunk := (
+			tile_x >= chunk_origin.x and tile_x < chunk_origin.x + EarthChunkManager.CHUNK_SIZE
+			and tile_y >= chunk_origin.y and tile_y < chunk_origin.y + EarthChunkManager.CHUNK_SIZE
+		)
+		if in_center_chunk:
+			checked_any = true
+			assert_true(
+				expected_species.has(child.info.species),
+				"%s is not in the expected species pool for dominant biome '%s'" % [child.info.species, dominant]
+			)
+	assert_true(checked_any, "precondition: some creature should be promoted in Berlin's own chunk")
 
 
 # -- forage (central, throttled tree drops) -----------------------------------

@@ -162,3 +162,113 @@ func test_spawn_single_spawns_one_marker_of_the_given_species_at_the_given_posit
 func test_spawn_single_gives_the_marker_a_real_procedural_texture():
 	var marker := renderer.spawn_single(parent, "herbivore", Vector2.ZERO)
 	assert_not_null((marker as Sprite2D).texture)
+
+
+# -- per-biome species pools ---------------------------------------------------
+
+
+func _species_seen_across_chunks(
+	herbivore_population: float, predator_population: float, biome_name: String, chunk_count: int = 30
+) -> Dictionary:
+	var species_seen := {}
+	for coord_x in range(chunk_count):
+		var spawned := renderer.spawn_creatures(
+			parent, Vector2i(coord_x, 0), CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE,
+			herbivore_population, predator_population, null, biome_name
+		)
+		for creature in spawned:
+			species_seen[creature.info.species] = true
+			creature.free()
+	return species_seen
+
+
+func test_spawn_creatures_still_compiles_and_works_without_a_biome_argument():
+	# The default empty biome_name must keep every pre-existing call site
+	# (which never passes a biome) compiling and behaving exactly as before.
+	var spawned := renderer.spawn_creatures(
+		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 2.0, 1.0
+	)
+	assert_eq(spawned.size(), 3)
+
+
+func test_empty_biome_name_falls_back_to_the_generic_species_pools():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "")
+	var predator_species := _species_seen_across_chunks(0.0, 1.0, "")
+	for species in herbivore_species:
+		assert_true(species in ["herbivore", "boar"], "unexpected herbivore-role species: %s" % species)
+	for species in predator_species:
+		assert_true(species in ["predator", "lynx"], "unexpected predator-role species: %s" % species)
+
+
+func test_unmapped_biome_name_falls_back_to_the_generic_species_pools():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "ocean")
+	for species in herbivore_species:
+		assert_true(species in ["herbivore", "boar"], "unexpected herbivore-role species: %s" % species)
+
+
+func test_grassland_biome_matches_the_original_generic_pool_identity():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "grassland")
+	var predator_species := _species_seen_across_chunks(0.0, 1.0, "grassland")
+	assert_true(herbivore_species.has("herbivore"))
+	assert_true(herbivore_species.has("boar"))
+	for species in herbivore_species:
+		assert_true(species in ["herbivore", "boar"], "unexpected herbivore-role species: %s" % species)
+	assert_true(predator_species.has("predator"))
+	assert_true(predator_species.has("lynx"))
+	for species in predator_species:
+		assert_true(species in ["predator", "lynx"], "unexpected predator-role species: %s" % species)
+
+
+func test_forest_biome_is_boar_and_lynx_dominant():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "forest")
+	var predator_species := _species_seen_across_chunks(0.0, 1.0, "forest")
+	assert_true(herbivore_species.has("boar"), "forest should promote boars")
+	for species in herbivore_species:
+		assert_true(species in ["herbivore", "boar"], "unexpected herbivore-role species: %s" % species)
+	assert_true(predator_species.has("lynx"), "forest should promote lynx")
+	for species in predator_species:
+		assert_true(species in ["predator", "lynx"], "unexpected predator-role species: %s" % species)
+
+
+func test_desert_biome_promotes_camels_and_jackals():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "desert")
+	var predator_species := _species_seen_across_chunks(0.0, 1.0, "desert")
+	assert_true(herbivore_species.has("camel"), "desert should promote camels")
+	for species in herbivore_species:
+		assert_true(species in ["herbivore", "camel"], "unexpected herbivore-role species: %s" % species)
+	assert_true(predator_species.has("jackal"), "desert should promote jackals")
+	for species in predator_species:
+		assert_true(species in ["predator", "jackal"], "unexpected predator-role species: %s" % species)
+
+
+func test_tundra_biome_promotes_reindeer_and_arctic_foxes():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "tundra")
+	var predator_species := _species_seen_across_chunks(0.0, 1.0, "tundra")
+	assert_true(herbivore_species.has("reindeer"), "tundra should promote reindeer")
+	for species in herbivore_species:
+		assert_true(species in ["herbivore", "reindeer"], "unexpected herbivore-role species: %s" % species)
+	assert_true(predator_species.has("arctic_fox"), "tundra should promote arctic foxes")
+	for species in predator_species:
+		assert_true(species in ["predator", "arctic_fox"], "unexpected predator-role species: %s" % species)
+
+
+func test_rainforest_biome_promotes_tapirs_and_jaguars():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "rainforest")
+	var predator_species := _species_seen_across_chunks(0.0, 1.0, "rainforest")
+	assert_true(herbivore_species.has("tapir"), "rainforest should promote tapirs")
+	for species in herbivore_species:
+		assert_true(species in ["herbivore", "tapir"], "unexpected herbivore-role species: %s" % species)
+	assert_true(predator_species.has("jaguar"), "rainforest should promote jaguars")
+	for species in predator_species:
+		assert_true(species in ["predator", "jaguar"], "unexpected predator-role species: %s" % species)
+
+
+func test_mountain_biome_promotes_goats_and_mountain_lions():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "mountain")
+	var predator_species := _species_seen_across_chunks(0.0, 1.0, "mountain")
+	assert_true(herbivore_species.has("goat"), "mountain should promote goats")
+	for species in herbivore_species:
+		assert_true(species in ["herbivore", "goat"], "unexpected herbivore-role species: %s" % species)
+	assert_true(predator_species.has("mountain_lion"), "mountain should promote mountain lions")
+	for species in predator_species:
+		assert_true(species in ["predator", "mountain_lion"], "unexpected predator-role species: %s" % species)

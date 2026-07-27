@@ -90,3 +90,71 @@ func test_lynx_is_an_aggressive_predator():
 	var lynx_info := CreatureInfo.new("lynx")
 	assert_eq(lynx_info.temperament, "aggressive")
 	assert_true(lynx_info.is_predator)
+
+
+# -- biome-specific species (see CreatureRenderer's per-biome species pools) --
+
+const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat"]
+const NEW_PREDATOR_SPECIES := ["jackal", "arctic_fox", "jaguar", "mountain_lion"]
+
+
+func test_camel_is_a_calm_herbivore_that_is_not_a_predator():
+	var camel_info := CreatureInfo.new("camel")
+	assert_eq(camel_info.temperament, "calm")
+	assert_false(camel_info.is_predator)
+
+
+func test_reindeer_is_a_calm_herbivore_that_is_not_a_predator():
+	var reindeer_info := CreatureInfo.new("reindeer")
+	assert_eq(reindeer_info.temperament, "calm")
+	assert_false(reindeer_info.is_predator)
+
+
+func test_goat_is_a_calm_herbivore_that_is_not_a_predator():
+	var goat_info := CreatureInfo.new("goat")
+	assert_eq(goat_info.temperament, "calm")
+	assert_false(goat_info.is_predator)
+
+
+## Unlike boar (which shares tapir's shape family but is aggressive), tapir
+## should just flee like a plain herbivore -- temperament is independent of
+## shape family and set directly per species.
+func test_tapir_is_a_calm_herbivore_unlike_the_aggressive_boar_it_shares_a_shape_with():
+	var tapir_info := CreatureInfo.new("tapir")
+	var boar_info := CreatureInfo.new("boar")
+	assert_eq(tapir_info.temperament, "calm")
+	assert_false(tapir_info.is_predator)
+	assert_eq(boar_info.temperament, "aggressive")
+
+
+func test_jackal_is_an_aggressive_predator():
+	var jackal_info := CreatureInfo.new("jackal")
+	assert_eq(jackal_info.temperament, "aggressive")
+	assert_true(jackal_info.is_predator)
+
+
+func test_arctic_fox_is_an_aggressive_predator():
+	var arctic_fox_info := CreatureInfo.new("arctic_fox")
+	assert_eq(arctic_fox_info.temperament, "aggressive")
+	assert_true(arctic_fox_info.is_predator)
+
+
+func test_jaguar_is_an_aggressive_predator():
+	var jaguar_info := CreatureInfo.new("jaguar")
+	assert_eq(jaguar_info.temperament, "aggressive")
+	assert_true(jaguar_info.is_predator)
+
+
+func test_mountain_lion_is_an_aggressive_predator():
+	var mountain_lion_info := CreatureInfo.new("mountain_lion")
+	assert_eq(mountain_lion_info.temperament, "aggressive")
+	assert_true(mountain_lion_info.is_predator)
+
+
+func test_every_new_species_has_positive_health_stamina_and_mana_and_a_known_diet():
+	for species in NEW_HERBIVORE_SPECIES + NEW_PREDATOR_SPECIES:
+		var creature_info := CreatureInfo.new(species)
+		assert_gt(creature_info.max_health, 0.0, species)
+		assert_gt(creature_info.max_stamina, 0.0, species)
+		assert_gt(creature_info.max_mana, 0.0, species)
+		assert_ne(creature_info.diet, "Unknown", species)
