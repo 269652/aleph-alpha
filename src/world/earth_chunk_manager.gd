@@ -6,6 +6,10 @@ const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
 const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
 const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_sprite.gd")
+const DesertScrub = preload("res://src/world/desert_scrub.gd")
+const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_sprite.gd")
+const TundraLichen = preload("res://src/world/tundra_lichen.gd")
+const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -67,6 +71,8 @@ var _terrain_renderer := TerrainRenderer.new()
 var _tree_renderer := TreeRenderer.new()
 var _stone_renderer := StoneRenderer.new()
 var _grass_sprite_generator := ProceduralGrassSprite.new()
+var _scrub_sprite_generator := ProceduralScrubSprite.new()
+var _lichen_sprite_generator := ProceduralLichenSprite.new()
 var _creature_renderer := CreatureRenderer.new()
 var _biome_classifier := BiomeClassifier.new()
 var _ecosystem := EcosystemSimulation.new()
@@ -83,6 +89,12 @@ var _loaded_stones: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _grass_sims: Dictionary = {}  # Vector2i chunk_coord -> TallGrass
 var _grass_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
 var _grass_refresh_accumulator := 0.0
+var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
+var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
+var _scrub_refresh_accumulator := 0.0
+var _lichen_sims: Dictionary = {}  # Vector2i chunk_coord -> TundraLichen
+var _lichen_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
+var _lichen_refresh_accumulator := 0.0
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _ecosystem_time_accumulator := 0.0
 var _forage_accumulator := 0.0
@@ -418,6 +430,112 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 		sprites[cell].scale = Vector2.ONE * maxf(0.3, sim.get_growth(cell))
 
 
+## How often the desert-scrub sprite layer re-syncs to the simulation. The
+## sims themselves advance every call; only the node churn is throttled.
+## Mirrors GRASS_REFRESH_INTERVAL -- this is a node-churn throttle, not a
+## biome flavor tunable, so there's no reason for it to differ.
+const SCRUB_REFRESH_INTERVAL := 5.0
+
+## Central desert-scrub step (see DesertScrub): every loaded chunk's scrub sim
+## grows/spreads, and on a throttled interval the tuft sprites are re-synced
+## to the sim's patch set. Unlike tall grass, nothing grazes scrub yet --
+## wiring it into a harvest/forage action is a deliberate follow-up, not done
+## here (see docs/progress.md's Flora section).
+func step_desert_scrub(delta_seconds: float) -> void:
+	for sim in _scrub_sims.values():
+		sim.advance(delta_seconds)
+
+	_scrub_refresh_accumulator += delta_seconds
+	if _scrub_refresh_accumulator < SCRUB_REFRESH_INTERVAL:
+		return
+	_scrub_refresh_accumulator = 0.0
+
+	for chunk_coord in _scrub_sims.keys():
+		_sync_scrub_sprites(chunk_coord)
+
+
+## Adds/removes tuft sprites so the rendered layer matches the sim's patch
+## set; a growing patch is scaled by its growth so scrub visibly rises.
+func _sync_scrub_sprites(chunk_coord: Vector2i) -> void:
+	var sim: DesertScrub = _scrub_sims.get(chunk_coord)
+	var sprites: Dictionary = _scrub_sprites.get(chunk_coord, {})
+	if sim == null:
+		return
+
+	for cell in sprites.keys().duplicate():
+		if not sim.has_scrub(cell):
+			sprites[cell].free()
+			sprites.erase(cell)
+
+	var origin := chunk_coord * CHUNK_SIZE
+	for cell in sim.get_patch_cells():
+		if not sprites.has(cell):
+			var sprite := Sprite2D.new()
+			sprite.texture = _scrub_sprite_generator.generate_texture(
+				hash("%d_%d_scrub_tuft" % [origin.x + cell.x, origin.y + cell.y])
+			)
+			sprite.position = Vector2(
+				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			_entities_parent.add_child(sprite)
+			sprites[cell] = sprite
+		sprites[cell].scale = Vector2.ONE * maxf(0.3, sim.get_growth(cell))
+
+
+## How often the tundra-lichen sprite layer re-syncs to the simulation. The
+## sims themselves advance every call; only the node churn is throttled.
+## Mirrors GRASS_REFRESH_INTERVAL -- this is a node-churn throttle, not a
+## biome flavor tunable, so there's no reason for it to differ.
+const LICHEN_REFRESH_INTERVAL := 5.0
+
+## Central tundra-lichen step (see TundraLichen): every loaded chunk's lichen
+## sim grows/spreads, and on a throttled interval the patch sprites are
+## re-synced to the sim's patch set. Unlike tall grass, nothing grazes lichen
+## yet -- wiring it into a harvest/forage action is a deliberate follow-up,
+## not done here (see docs/progress.md's Flora section).
+func step_tundra_lichen(delta_seconds: float) -> void:
+	for sim in _lichen_sims.values():
+		sim.advance(delta_seconds)
+
+	_lichen_refresh_accumulator += delta_seconds
+	if _lichen_refresh_accumulator < LICHEN_REFRESH_INTERVAL:
+		return
+	_lichen_refresh_accumulator = 0.0
+
+	for chunk_coord in _lichen_sims.keys():
+		_sync_lichen_sprites(chunk_coord)
+
+
+## Adds/removes patch sprites so the rendered layer matches the sim's patch
+## set; a growing patch is scaled by its growth so lichen visibly spreads.
+func _sync_lichen_sprites(chunk_coord: Vector2i) -> void:
+	var sim: TundraLichen = _lichen_sims.get(chunk_coord)
+	var sprites: Dictionary = _lichen_sprites.get(chunk_coord, {})
+	if sim == null:
+		return
+
+	for cell in sprites.keys().duplicate():
+		if not sim.has_lichen(cell):
+			sprites[cell].free()
+			sprites.erase(cell)
+
+	var origin := chunk_coord * CHUNK_SIZE
+	for cell in sim.get_patch_cells():
+		if not sprites.has(cell):
+			var sprite := Sprite2D.new()
+			sprite.texture = _lichen_sprite_generator.generate_texture(
+				hash("%d_%d_lichen_tuft" % [origin.x + cell.x, origin.y + cell.y])
+			)
+			sprite.position = Vector2(
+				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+			)
+			_entities_parent.add_child(sprite)
+			sprites[cell] = sprite
+		sprites[cell].scale = Vector2.ONE * maxf(0.3, sim.get_growth(cell))
+
+
 func _world_tile_for_pixel(pixel_position: Vector2) -> Vector2i:
 	return Vector2i(floori(pixel_position.x / TerrainRenderer.TILE_SIZE), floori(pixel_position.y / TerrainRenderer.TILE_SIZE))
 
@@ -538,6 +656,18 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_grass_sprites[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
 
+	_scrub_sims[chunk_coord] = DesertScrub.new(
+		hash("%d_%d_desert_scrub" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+	)
+	_scrub_sprites[chunk_coord] = {}
+	_sync_scrub_sprites(chunk_coord)
+
+	_lichen_sims[chunk_coord] = TundraLichen.new(
+		hash("%d_%d_tundra_lichen" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+	)
+	_lichen_sprites[chunk_coord] = {}
+	_sync_lichen_sprites(chunk_coord)
+
 	_ecosystem.add_region(chunk_coord, chunk)
 	_apply_ecology_catchup(chunk_coord)
 	_loaded_creatures[chunk_coord] = _creature_renderer.spawn_creatures(
@@ -597,6 +727,16 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		sprite.free()
 	_grass_sprites.erase(chunk_coord)
 	_grass_sims.erase(chunk_coord)
+
+	for sprite in _scrub_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_scrub_sprites.erase(chunk_coord)
+	_scrub_sims.erase(chunk_coord)
+
+	for sprite in _lichen_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_lichen_sprites.erase(chunk_coord)
+	_lichen_sims.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see

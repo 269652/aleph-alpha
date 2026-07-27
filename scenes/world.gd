@@ -1068,6 +1068,8 @@ func _process(delta: float) -> void:
 		_chunk_manager.step_forage(delta)
 		_chunk_manager.step_tree_spread(delta)
 		_chunk_manager.step_tall_grass(delta)
+		_chunk_manager.step_desert_scrub(delta)
+		_chunk_manager.step_tundra_lichen(delta)
 		var focus_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
 		if focus_player != null:
 			_chunk_manager.step_fruiting(delta, focus_player.position)
