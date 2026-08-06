@@ -65,6 +65,13 @@ const PICKUP_RADIUS := 34.0
 const SWING_DURATION := 0.2
 const INVENTORY_SLOTS := 12
 
+## How close (in tiles, Chebyshev/square distance -- see
+## EarthChunkManager.has_structure_near) the player must stand to a placed
+## campfire/furnace to cook or smelt: "standing near the fire" range, not
+## room-scale -- a few tiles so you don't have to be pixel-perfect on top of
+## it, but you can't use one clear across a base either.
+const HEAT_SOURCE_RADIUS_TILES := 3
+
 ## How much a single eaten food item relieves hunger by (see eat_food()).
 const EAT_HUNGER_RELIEF := 0.4
 ## Thirst relief per second while standing in deep-enough water to be
@@ -109,6 +116,15 @@ var inventory := Inventory.new(INVENTORY_SLOTS)
 ## bare-handed), and mining power (only a pickaxe mines ore). Swapped by
 ## equip_item (from the hotbar or inventory). Null == bare hands.
 var equipped_item: Item
+## The placeable structure (campfire/furnace) armed for the next build-input
+## press (see activate_hotbar_slot/activate_item_id dispatching HotbarAction.
+## PLACE to _arm_placeable, and _build_step). Independent of equipped_item --
+## arming a structure doesn't change what's drawn in hand. Persists until a
+## different placeable is armed (mirrors equipped_item's own persist-until-
+## switched behavior); it does NOT auto-clear when the stack runs out, see
+## _build_step's doc comment. Null == nothing armed, i.e. build does today's
+## plain bare-earth terraforming.
+var _selected_placeable_item: Item
 var survival := SurvivalMeters.new()
 var wallet := Wallet.new()
 var experience := ExperienceTrack.new()
@@ -412,6 +428,8 @@ func activate_hotbar_slot(index: int) -> bool:
 			return equip_item(item)
 		HotbarAction.USE:
 			return _use_food(item.id)
+		HotbarAction.PLACE:
+			return _arm_placeable(item)
 		_:
 			return false
 
@@ -428,9 +446,21 @@ func activate_item_id(item_id: String) -> bool:
 					return equip_item(stack.item)
 				HotbarAction.USE:
 					return _use_food(stack.item.id)
+				HotbarAction.PLACE:
+					return _arm_placeable(stack.item)
 				_:
 					return false
 	return false
+
+
+## Arms `item` (a "placeable" kind -- campfire/furnace) so the next
+## build-input press places it into the world instead of doing plain
+## bare-earth terraforming (see _build_step). Always succeeds for a placeable
+## item -- HotbarAction.action_for already gated the caller to only reach here
+## for kind "placeable".
+func _arm_placeable(item) -> bool:
+	_selected_placeable_item = item
+	return true
 
 
 ## Equips an armor piece from the inventory into its slot (see Equipment):
@@ -459,9 +489,9 @@ func unequip_slot(slot: String) -> bool:
 
 
 ## Using a food item: if it's a raw item that can be cooked and the player is
-## carrying a campfire (their portable heat source), cook it instead of eating
-## it raw (see CampfireCooking) -- otherwise just eat it. So clicking raw meat
-## with a campfire in your pack turns it into cooked meat.
+## standing near a placed campfire (their heat source), cook it instead of
+## eating it raw (see CampfireCooking) -- otherwise just eat it. So clicking
+## raw meat next to a built campfire turns it into cooked meat.
 func _use_food(item_id: String) -> bool:
 	if cook(item_id):
 		return true
@@ -469,8 +499,8 @@ func _use_food(item_id: String) -> bool:
 
 
 ## Cooks one unit of a raw food item into its cooked form (see CampfireCooking)
-## if the player carries a campfire. Returns false (no-op) if the item can't be
-## cooked or there's no campfire.
+## if the player is near a placed campfire. Returns false (no-op) if the item
+## can't be cooked or there's no campfire nearby.
 func cook(item_id: String) -> bool:
 	if not _campfire_cooking.can_cook(item_id, _has_campfire()):
 		return false
@@ -483,15 +513,26 @@ func cook(item_id: String) -> bool:
 	return true
 
 
+## True while a placed campfire (see EarthChunkManager.has_structure_near) is
+## within HEAT_SOURCE_RADIUS_TILES of the player's current tile -- a real
+## world-proximity check, not an inventory count: carrying an unplaced
+## campfire in your pack no longer counts.
 func _has_campfire() -> bool:
-	return _inventory_counts().get("campfire", 0) > 0
+	return _has_structure_near_player("campfire")
 
 
-## A heat source for smelting/cooking: a campfire or the sturdier furnace (see
-## concept/smelting.md). Carried, for now -- placed heat sources come later.
+## A heat source for smelting/cooking: a placed campfire or the sturdier
+## placed furnace (see concept/smelting.md), within HEAT_SOURCE_RADIUS_TILES
+## of the player.
 func _has_heat_source() -> bool:
-	var counts := _inventory_counts()
-	return counts.get("campfire", 0) > 0 or counts.get("furnace", 0) > 0
+	return _has_structure_near_player("campfire") or _has_structure_near_player("furnace")
+
+
+func _has_structure_near_player(structure_id: String) -> bool:
+	if _chunk_manager == null:
+		return false
+	var tile := current_tile()
+	return _chunk_manager.has_structure_near(tile.x, tile.y, structure_id, HEAT_SOURCE_RADIUS_TILES)
 
 
 ## Equips a weapon or tool as the single held item (drawn in hand, and the
@@ -867,10 +908,12 @@ func _near_water() -> bool:
 	return false
 
 
-## Authority-only: turns the tile the player is facing into bare earth (see
-## TerrainRenderer.EARTH_TILE_ID) on the rising edge of the build input --
-## intentional (Terraria-style terraforming), not a bug: build always replaces
-## whatever biome tile is there, grass included.
+## Authority-only: on the rising edge of the build input, either places the
+## armed placeable structure (see _arm_placeable) or -- when nothing is armed
+## -- turns the tile the player is facing into bare earth (see
+## TerrainRenderer.EARTH_TILE_ID), exactly as before this structure-placement
+## feature existed: intentional (Terraria-style terraforming), not a bug,
+## build always replaces whatever biome tile is there, grass included.
 func _build_step() -> void:
 	var build_pressed := (
 		Input.is_action_pressed("build") if _controlled_locally() else _pending_build_pressed
@@ -878,13 +921,37 @@ func _build_step() -> void:
 	var just_pressed := build_pressed and not _last_build_input_state
 	_last_build_input_state = build_pressed
 
-	if just_pressed and _chunk_manager != null:
-		var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
-		_chunk_manager.build_at_global(target.x, target.y, TerrainRenderer.EARTH_TILE_ID)
+	if not just_pressed or _chunk_manager == null:
+		return
+
+	var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
+
+	if _selected_placeable_item != null:
+		# A placeable is armed: place it instead of doing bare-earth
+		# terraforming -- but only while the player still actually holds one.
+		# Running out doesn't silently fall back to terraforming (that would
+		# be a surprising bait-and-switch mid-build); it just does nothing
+		# until the player restocks or arms something else.
+		if _inventory_counts().get(_selected_placeable_item.id, 0) <= 0:
+			return
+		if _chunk_manager.build_at_global(target.x, target.y, _selected_placeable_item.id):
+			# Only consume on a successful placement -- build_at_global
+			# returns false if the target chunk isn't loaded or the tile is
+			# already occupied by another modification.
+			inventory.remove(_selected_placeable_item.id, 1)
+			inventory_changed.emit()
+		return
+
+	_chunk_manager.build_at_global(target.x, target.y, TerrainRenderer.EARTH_TILE_ID)
 
 
 ## Authority-only: removes a modification from the tile the player is facing,
-## on the rising edge of the destroy input.
+## on the rising edge of the destroy input. If that modification was a known
+## placeable structure (campfire/furnace -- see item_catalog.gd), one unit of
+## it is returned to the inventory -- the player is standing right there
+## breaking it, no need for a ground-drop node. Destroying plain bare earth
+## (today's existing behavior) stays exactly as-is: there's no "earth" item,
+## so nothing is given back.
 func _destroy_step() -> void:
 	var destroy_pressed := (
 		Input.is_action_pressed("destroy") if _controlled_locally() else _pending_destroy_pressed
@@ -892,9 +959,19 @@ func _destroy_step() -> void:
 	var just_pressed := destroy_pressed and not _last_destroy_input_state
 	_last_destroy_input_state = destroy_pressed
 
-	if just_pressed and _chunk_manager != null:
-		var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
-		_chunk_manager.destroy_at_global(target.x, target.y)
+	if not just_pressed or _chunk_manager == null:
+		return
+
+	var target := _tile_targeting.facing_tile(current_tile(), _last_facing_direction)
+	var tile_id := _chunk_manager.modification_at_global(target.x, target.y)
+	if not _chunk_manager.destroy_at_global(target.x, target.y):
+		return
+
+	if tile_id != "" and _item_catalog.has(tile_id):
+		var removed_item := _item_catalog.make(tile_id)
+		if removed_item.kind == "placeable":
+			inventory.add(removed_item, 1)
+			inventory_changed.emit()
 
 
 ## Runs on every non-authority peer's copy of a player (including a client's
