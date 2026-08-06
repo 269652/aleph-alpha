@@ -3,6 +3,7 @@ extends RefCounted
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
+const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
 
 const TILE_SIZE := 16
 
@@ -55,6 +56,7 @@ const _TILES_PER_PAIR := DIRECTION_MASK_COUNT * VARIANTS_PER_BIOME
 const ATLAS_COLUMNS := 64
 
 var _terrain_sprite_generator := ProceduralTerrainSprite.new()
+var _structure_sprite_generator := ProceduralStructureSprite.new()
 
 
 ## Returns the atlas coordinate for one biome's variant. Biome variants occupy
@@ -66,8 +68,15 @@ func atlas_coords_for_biome(biome_name: String, variant_index: int = 0) -> Vecto
 
 
 ## Returns the atlas coordinate for a player-placed modification tile,
-## positioned right after all biome variant tiles in the shared atlas.
-func atlas_coords_for_modification(_tile_id: String) -> Vector2i:
+## positioned right after all biome variant tiles in the shared atlas. Known
+## structure ids (see ProceduralStructureSprite.STRUCTURE_IDS -- campfire,
+## furnace) each get their own dedicated slot; EARTH_TILE_ID and any
+## unrecognized id fall back to the single plain-earth slot (fail-safe
+## default, matching this codebase's `.get(x, default)` convention -- never
+## crash on an unknown tile_id).
+func atlas_coords_for_modification(tile_id: String) -> Vector2i:
+	if ProceduralStructureSprite.STRUCTURE_IDS.has(tile_id):
+		return _grid_coords(_structure_linear(tile_id))
 	return _grid_coords(_earth_linear())
 
 
@@ -160,9 +169,24 @@ func _earth_linear() -> int:
 	return _biome_tile_count()
 
 
-## Linear atlas index where the blend tiles begin (right after the earth tile).
+## Linear atlas index where the per-structure tiles begin (right after the
+## earth tile) -- see ProceduralStructureSprite.STRUCTURE_IDS.
+func _structure_base_linear() -> int:
+	return _earth_linear() + 1
+
+
+## Linear atlas index of one known structure's tile (campfire, furnace, ...),
+## in ProceduralStructureSprite.STRUCTURE_IDS order. Callers must check
+## STRUCTURE_IDS.has(tile_id) first -- unrecognized ids aren't this function's
+## job to guard against (see atlas_coords_for_modification's fallback).
+func _structure_linear(tile_id: String) -> int:
+	return _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.find(tile_id)
+
+
+## Linear atlas index where the blend tiles begin (right after the earth tile
+## and every known structure's tile).
 func _blend_base_linear() -> int:
-	return _biome_tile_count() + 1
+	return _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.size()
 
 
 ## Linear atlas index of one blend tile. Pairs are ordered (near, far) with the
@@ -207,9 +231,11 @@ func _blit_tile(atlas_image: Image, tile_image: Image, linear_index: int) -> voi
 
 
 ## Builds a grid-laid-out TileSet: VARIANTS_PER_BIOME procedural tiles per known
-## biome, one player-placeable "earth" tile, then a directional blend tile for
-## every ordered pair of distinct biomes x every non-empty cardinal-direction
-## subset (DIRECTION_MASK_COUNT masks) x VARIANTS_PER_BIOME.
+## biome, one player-placeable "earth" tile, one dedicated tile per known
+## placed structure (ProceduralStructureSprite.STRUCTURE_IDS -- campfire,
+## furnace), then a directional blend tile for every ordered pair of distinct
+## biomes x every non-empty cardinal-direction subset (DIRECTION_MASK_COUNT
+## masks) x VARIANTS_PER_BIOME.
 func build_tile_set() -> TileSet:
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
 	var total_tiles := _blend_base_linear() + biome_count * (biome_count - 1) * _TILES_PER_PAIR
@@ -226,6 +252,10 @@ func build_tile_set() -> TileSet:
 	var earth_image := Image.create(TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
 	earth_image.fill(EARTH_COLOR)
 	_blit_tile(image, earth_image, _earth_linear())
+
+	for structure_id in ProceduralStructureSprite.STRUCTURE_IDS:
+		var structure_image := _structure_sprite_generator.generate_image(structure_id)
+		_blit_tile(image, structure_image, _structure_linear(structure_id))
 
 	for near_index in biome_count:
 		for far_index in biome_count:

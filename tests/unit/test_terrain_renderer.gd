@@ -3,6 +3,7 @@ extends GutTest
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const Chunk = preload("res://src/world/chunk.gd")
+const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
 
 var renderer: TerrainRenderer
 var tile_map_layer: TileMapLayer
@@ -17,19 +18,38 @@ func after_each():
 	tile_map_layer.free()
 
 
-func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_tile():
+func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles():
 	var tile_set := renderer.build_tile_set()
 	var source := tile_set.get_source(0) as TileSetAtlasSource
 	# +1: the player-placeable "earth" tile (see atlas_coords_for_modification).
+	# + ProceduralStructureSprite.STRUCTURE_IDS.size(): one dedicated tile per
+	# known placed structure (campfire, furnace), reserved right after earth.
 	# + blend tiles: every ordered pair of *distinct* biomes (n*(n-1)) x every
 	# non-empty subset of the 4 cardinal directions (DIRECTION_MASK_COUNT = 15)
 	# x VARIANTS_PER_BIOME -- the corner-aware directional border tiles.
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
 	var expected := (
-		n * TerrainRenderer.VARIANTS_PER_BIOME + 1
+		n * TerrainRenderer.VARIANTS_PER_BIOME + 1 + ProceduralStructureSprite.STRUCTURE_IDS.size()
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.VARIANTS_PER_BIOME
 	)
 	assert_eq(source.get_tiles_count(), expected)
+
+
+## Isolates the growth claim on its own: removing the structure tiles from
+## the total should land exactly on the pre-structure-tiles tile count (the
+## formula the test above used before campfire/furnace got their own art).
+func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structure_id():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var n := BiomeClassifier.KNOWN_BIOMES.size()
+	var tile_count_without_structures := (
+		n * TerrainRenderer.VARIANTS_PER_BIOME + 1
+		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.VARIANTS_PER_BIOME
+	)
+	assert_eq(
+		source.get_tiles_count() - tile_count_without_structures,
+		ProceduralStructureSprite.STRUCTURE_IDS.size()
+	)
 
 
 func test_atlas_coords_for_modification_is_distinct_from_every_biome_variant():
@@ -37,6 +57,42 @@ func test_atlas_coords_for_modification_is_distinct_from_every_biome_variant():
 	for biome_name in BiomeClassifier.KNOWN_BIOMES:
 		for variant in TerrainRenderer.VARIANTS_PER_BIOME:
 			assert_ne(modification_coords, renderer.atlas_coords_for_biome(biome_name, variant))
+
+
+## campfire/furnace (see item_catalog.gd's "placeable" kind) must each get
+## their own atlas slot -- distinct from earth, from every biome tile, and
+## from each other -- instead of all sharing the single earth slot.
+func test_atlas_coords_for_campfire_is_distinct_from_earth_and_every_biome_variant():
+	var campfire_coords := renderer.atlas_coords_for_modification("campfire")
+	assert_ne(campfire_coords, renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID))
+	for biome_name in BiomeClassifier.KNOWN_BIOMES:
+		for variant in TerrainRenderer.VARIANTS_PER_BIOME:
+			assert_ne(campfire_coords, renderer.atlas_coords_for_biome(biome_name, variant))
+
+
+func test_atlas_coords_for_furnace_is_distinct_from_earth_and_every_biome_variant():
+	var furnace_coords := renderer.atlas_coords_for_modification("furnace")
+	assert_ne(furnace_coords, renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID))
+	for biome_name in BiomeClassifier.KNOWN_BIOMES:
+		for variant in TerrainRenderer.VARIANTS_PER_BIOME:
+			assert_ne(furnace_coords, renderer.atlas_coords_for_biome(biome_name, variant))
+
+
+func test_atlas_coords_for_campfire_and_furnace_are_distinct_from_each_other():
+	assert_ne(
+		renderer.atlas_coords_for_modification("campfire"),
+		renderer.atlas_coords_for_modification("furnace")
+	)
+
+
+## Fail-safe default (matching this codebase's `.get(x, default)` convention):
+## an unrecognized modification tile_id must never crash -- it falls back to
+## the plain-earth slot, same as EARTH_TILE_ID itself.
+func test_atlas_coords_for_modification_falls_back_to_earth_for_an_unrecognized_tile_id():
+	assert_eq(
+		renderer.atlas_coords_for_modification("some_unknown_future_structure"),
+		renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID)
+	)
 
 
 func test_build_tile_set_uses_real_procedural_art_not_a_flat_color_fill():
@@ -55,6 +111,42 @@ func test_build_tile_set_uses_real_procedural_art_not_a_flat_color_fill():
 			if tile_image.get_pixel(x, y) != first_pixel:
 				all_same_color = false
 	assert_false(all_same_color, "grassland tile should use real procedural texture, not a flat color fill")
+
+
+func test_build_tile_set_uses_real_procedural_art_for_campfire_not_a_flat_color_fill():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+
+	var coords := renderer.atlas_coords_for_modification("campfire")
+	var origin := Vector2i(coords.x * TerrainRenderer.TILE_SIZE, coords.y * TerrainRenderer.TILE_SIZE)
+	var tile_image := image.get_region(Rect2i(origin, Vector2i(TerrainRenderer.TILE_SIZE, TerrainRenderer.TILE_SIZE)))
+
+	var first_pixel := tile_image.get_pixel(0, 0)
+	var all_same_color := true
+	for y in TerrainRenderer.TILE_SIZE:
+		for x in TerrainRenderer.TILE_SIZE:
+			if tile_image.get_pixel(x, y) != first_pixel:
+				all_same_color = false
+	assert_false(all_same_color, "campfire tile should use real procedural texture, not a flat color fill")
+
+
+func test_build_tile_set_uses_real_procedural_art_for_furnace_not_a_flat_color_fill():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+
+	var coords := renderer.atlas_coords_for_modification("furnace")
+	var origin := Vector2i(coords.x * TerrainRenderer.TILE_SIZE, coords.y * TerrainRenderer.TILE_SIZE)
+	var tile_image := image.get_region(Rect2i(origin, Vector2i(TerrainRenderer.TILE_SIZE, TerrainRenderer.TILE_SIZE)))
+
+	var first_pixel := tile_image.get_pixel(0, 0)
+	var all_same_color := true
+	for y in TerrainRenderer.TILE_SIZE:
+		for x in TerrainRenderer.TILE_SIZE:
+			if tile_image.get_pixel(x, y) != first_pixel:
+				all_same_color = false
+	assert_false(all_same_color, "furnace tile should use real procedural texture, not a flat color fill")
 
 
 func test_atlas_coords_are_unique_across_every_biome_and_variant():
