@@ -274,6 +274,64 @@ func test_destroy_at_global_fails_when_there_is_nothing_to_remove():
 	assert_false(success)
 
 
+# -- structure proximity (has_structure_near) ----------------------------------
+
+func test_has_structure_near_is_true_at_the_exact_tile():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "campfire")
+
+	assert_true(manager.has_structure_near(_berlin_tile.x, _berlin_tile.y, "campfire", 3))
+
+
+func test_has_structure_near_is_true_within_radius():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "campfire")
+
+	assert_true(manager.has_structure_near(_berlin_tile.x, _berlin_tile.y, "campfire", 3))
+
+
+func test_has_structure_near_is_false_beyond_radius():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 5, _berlin_tile.y, "campfire")
+
+	assert_false(manager.has_structure_near(_berlin_tile.x, _berlin_tile.y, "campfire", 3))
+
+
+func test_has_structure_near_is_false_for_a_different_structure_id():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "furnace")
+
+	assert_false(manager.has_structure_near(_berlin_tile.x, _berlin_tile.y, "campfire", 3))
+
+
+func test_has_structure_near_is_false_when_nothing_is_built():
+	manager.update(_berlin_tile)
+	assert_false(manager.has_structure_near(_berlin_tile.x, _berlin_tile.y, "campfire", 3))
+
+
+## Chebyshev (square) radius, not circular -- a structure diagonally offset by
+## (2, 2) is within radius 3 (max(2, 2) == 2 <= 3), matching the simple
+## chunk-radius style already used elsewhere in this manager (see
+## _chebyshev_distance / chunks_in_radius).
+func test_has_structure_near_uses_chebyshev_not_euclidean_distance():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y + 2, "campfire")
+
+	assert_true(manager.has_structure_near(_berlin_tile.x, _berlin_tile.y, "campfire", 3))
+
+
+## A structure built just across a chunk boundary from the query tile must
+## still be found -- has_structure_near checks the query tile's own chunk plus
+## its immediate neighbors (see its doc comment), not just the single chunk
+## the query tile itself falls in.
+func test_has_structure_near_detects_a_structure_across_a_chunk_boundary():
+	manager.update(Vector2i(0, 0))
+	var boundary_x := EarthChunkManager.CHUNK_SIZE - 1  # last column of chunk (0, 0)
+	manager.build_at_global(boundary_x + 1, 0, "campfire")  # first column of chunk (1, 0)
+
+	assert_true(manager.has_structure_near(boundary_x, 0, "campfire", 3))
+
+
 # -- persistence across unload/reload ------------------------------------------
 
 func test_a_built_modification_survives_unloading_and_reloading_its_chunk():

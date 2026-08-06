@@ -624,6 +624,36 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	return true
 
 
+## True if a modification tile matching `structure_id` (e.g. "campfire",
+## "furnace" -- see item_catalog.gd's placeable items) exists within `radius`
+## tiles of (global_x, global_y), Chebyshev/square distance (max(|dx|, |dy|)
+## <= radius) -- simplest metric, and fine for a "standing near it" proximity
+## check like heat-source range (see Player.HEAT_SOURCE_RADIUS_TILES).
+##
+## Simplification: only scans the query tile's own chunk plus its 8 immediate
+## neighbors (a chunk-Chebyshev-radius of 1), not however many chunks `radius`
+## tiles could theoretically span. This is exact for any `radius` up to
+## CHUNK_SIZE (32) -- comfortably more than any realistic proximity check (a
+## "standing near the fire" range is a handful of tiles) -- and simply won't
+## find a match past that. Unloaded chunks are skipped (nothing to query).
+func has_structure_near(global_x: int, global_y: int, structure_id: String, radius: int) -> bool:
+	var query_tile := Vector2i(global_x, global_y)
+	var center_chunk := _chunk_coord_for_tile(query_tile)
+
+	for chunk_coord in chunks_in_radius(center_chunk, 1):
+		var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+		if chunk == null:
+			continue
+		var origin := chunk_coord * CHUNK_SIZE
+		for local_coord in chunk.modifications:
+			if chunk.modifications[local_coord] != structure_id:
+				continue
+			var tile_global: Vector2i = origin + local_coord
+			if _chebyshev_distance(tile_global, query_tile) <= radius:
+				return true
+	return false
+
+
 ## All chunk coordinates within `radius` chunks of center (a square/Chebyshev
 ## radius, not circular -- simpler, and streaming radii don't need to be exact).
 func chunks_in_radius(center: Vector2i, radius: int) -> Array[Vector2i]:
