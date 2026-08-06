@@ -83,3 +83,10 @@ func test_catalog_has_smelting_items_and_iron_armor():
 func test_catalog_has_a_fishing_rod():
 	assert_true(catalog.has("fishing_rod"))
 	assert_eq(catalog.make("fishing_rod").kind, "tool")
+
+
+## Campfire/furnace are structures you build into the world, not inert
+## materials -- see HotbarAction.PLACE.
+func test_campfire_and_furnace_are_placeable():
+	assert_eq(catalog.make("campfire").kind, "placeable")
+	assert_eq(catalog.make("furnace").kind, "placeable")

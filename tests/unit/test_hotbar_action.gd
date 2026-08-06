@@ -26,3 +26,7 @@ func test_unknown_kinds_do_nothing():
 
 func test_armor_is_equipped():
 	assert_eq(action.action_for("armor"), HotbarAction.EQUIP)
+
+
+func test_placeable_items_are_placed():
+	assert_eq(action.action_for("placeable"), HotbarAction.PLACE)

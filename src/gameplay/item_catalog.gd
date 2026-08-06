@@ -22,7 +22,10 @@ const _ITEMS := {
 	"iron_sword": ["Iron Sword", "weapon", 1, 15.0],
 	"iron_axe": ["Iron Axe", "tool", 1, 0.0],
 	"torch": ["Torch", "material", 10, 0.0],
-	"campfire": ["Campfire", "material", 5, 0.0],
+	# Structures you build into the world (see HotbarAction.PLACE), not inert
+	# materials -- selecting one from the hotbar/inventory arms it for the next
+	# build-input press instead of equipping/using it.
+	"campfire": ["Campfire", "placeable", 5, 0.0],
 	"cooked_meat": ["Cooked Meat", "food", 20, 0.0],
 	# Primitive knapping-tech chain (see docs/concept/crafting.md's
 	# gather-craft loop): pick up rocks, smash rock-on-rock for sharp shards,
@@ -50,7 +53,7 @@ const _ITEMS := {
 	# heat source; ingots forge the iron tier that out-protects leather.
 	"iron_ingot": ["Iron Ingot", "material", 40, 0.0],
 	"copper_ingot": ["Copper Ingot", "material", 40, 0.0],
-	"furnace": ["Furnace", "material", 5, 0.0],
+	"furnace": ["Furnace", "placeable", 5, 0.0],
 	"iron_helm": ["Iron Helm", "armor", 1, 0.0, "head", 4.0],
 	"iron_chest": ["Iron Chest", "armor", 1, 0.0, "chest", 8.0],
 	"iron_legs": ["Iron Legs", "armor", 1, 0.0, "legs", 6.0],
