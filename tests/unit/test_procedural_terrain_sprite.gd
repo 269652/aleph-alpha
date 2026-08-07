@@ -291,6 +291,16 @@ func _is_foam(p: Color) -> bool:
 
 # -- round ripples on water + individually varied grass blades ----------------
 
+## Rain water (ripple rings) is a distinct look from the default windy chop --
+## rings only appear while it rains (see TerrainRenderer.rain_mode).
+func test_rain_water_differs_from_default_windy_water():
+	var windy := generator.generate_frame_image("ocean", 0, 0)
+	var rain := generator.generate_rain_water_image(0, 0)
+	assert_ne(windy.get_data(), rain.get_data())
+	var rain_again := generator.generate_rain_water_image(0, 0)
+	assert_eq(rain.get_data(), rain_again.get_data())
+
+
 ## Ripple rings expand outward frame by frame and the cycle wraps seamlessly:
 ## the testable core of "water ripples outward" (the painting samples this).
 func test_ripple_radius_grows_within_a_cycle_and_wraps():

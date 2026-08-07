@@ -262,6 +262,20 @@ func weather_speed_modifier(player_pixel: Vector2) -> float:
 ## The current weather at the player's region (see WeatherModel), derived from
 ## the world-age (as a day count) and the player's chunk as the region seed --
 ## for the HUD and, later, survival/combat weather effects.
+## Switches open-water tiles between windy chop (default) and raindrop
+## ripples (see TerrainRenderer.rain_mode), repainting every loaded chunk --
+## but only on an actual transition, so the per-frame weather poll is free.
+func set_rain(raining: bool) -> void:
+	if _terrain_renderer.rain_mode == raining:
+		return
+	_terrain_renderer.rain_mode = raining
+	for chunk_coord in _loaded_chunks:
+		_terrain_renderer.paint(
+			_tile_map_layer, _loaded_chunks[chunk_coord], chunk_coord * CHUNK_SIZE,
+			generator.biome_at_global
+		)
+
+
 func current_weather(player_pixel: Vector2) -> String:
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(player_pixel))
 	var day := int(_world_age_seconds / SeasonCycle.SECONDS_PER_YEAR * 48.0)  # ~48 weather-days/year
@@ -424,7 +438,7 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 				hash("%d_%d_grass_tuft" % [origin.x + cell.x, origin.y + cell.y])
 			)
 			# Blades sway in the wind (shared GPU shader, see WindSway).
-			sprite.material = _wind_sway.shared_material()
+			sprite.material = _wind_sway.tuft_material()
 			sprite.position = Vector2(
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
@@ -480,7 +494,7 @@ func _sync_scrub_sprites(chunk_coord: Vector2i) -> void:
 			)
 			# Scrub sways too (shared GPU shader, see WindSway). Lichen
 			# deliberately doesn't -- it's crusty ground cover, not foliage.
-			sprite.material = _wind_sway.shared_material()
+			sprite.material = _wind_sway.tuft_material()
 			sprite.position = Vector2(
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE

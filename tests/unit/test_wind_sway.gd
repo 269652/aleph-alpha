@@ -43,3 +43,16 @@ func test_shared_material_is_reused_not_rebuilt_per_call():
 	# Hundreds of tufts/trees share one material -- per-node materials would
 	# defeat batching for zero visual gain.
 	assert_eq(wind.shared_material(), wind.shared_material())
+
+
+## Tuft sprites keep their blade pixels in the LOWER half of the quad, where
+## the trees' squared falloff leaves sub-pixel motion (the reported
+## "streaks don't sway" bug) -- so tufts get a linear, stronger preset.
+func test_tuft_material_bends_linearly_and_harder_than_trees():
+	var tuft := wind.tuft_material()
+	assert_eq(tuft.get_shader_parameter("bend_exponent"), WindSway.TUFT_BEND_EXPONENT)
+	assert_eq(tuft.get_shader_parameter("amplitude_px"), WindSway.TUFT_AMPLITUDE_PX)
+	assert_eq(WindSway.TUFT_BEND_EXPONENT, 1.0)
+	assert_gt(WindSway.TUFT_AMPLITUDE_PX, WindSway.DEFAULT_AMPLITUDE_PX)
+	assert_eq(wind.tuft_material(), wind.tuft_material())
+	assert_ne(wind.tuft_material(), wind.shared_material())

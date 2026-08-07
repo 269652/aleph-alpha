@@ -119,15 +119,48 @@ func ripple_radius_for_frame(frame: int) -> float:
 	return RIPPLE_BASE_RADIUS + posmod(frame, FRAME_COUNT) * RIPPLE_GROWTH_PER_FRAME
 
 
+## Default (no-rain) water: a noisy two-tone surface with short diagonal wind
+## glints that DRIFT sideways one pixel per frame -- choppy, wind-blown water,
+## not raindrops. Glint drift wraps modulo SIZE, so the cycle loops
+## seamlessly. Rain water (ripple rings) is its own image family -- see
+## generate_rain_water_image and TerrainRenderer's rain mode.
+const WIND_GLINT_COUNT := 5
+
+
 func _paint_water(image: Image, base_color: Color, variant_seed: int, frame: int = 0) -> void:
 	for y in SIZE:
 		for x in SIZE:
-			var roll := _fraction(variant_seed, x, y, "ripple")
+			var roll := _fraction(variant_seed, x, y, "chop")
 			var color := base_color
-			if roll < SPECKLE_DENSITY * 0.3:
-				color = base_color.darkened(SPECKLE_DARKEN * 0.6)
+			if roll < SPECKLE_DENSITY * 0.55:
+				color = base_color.darkened(SPECKLE_DARKEN * 0.8)
+			elif roll > 1.0 - SPECKLE_DENSITY * 0.25:
+				color = base_color.lightened(SPECKLE_LIGHTEN * 0.7)
 			image.set_pixel(x, y, color)
 
+	var glint_color := base_color.lightened(0.28)
+	for i in WIND_GLINT_COUNT:
+		var h := absi(hash("%d_glint_%d" % [variant_seed, i]))
+		var gy := h % SIZE
+		var gx := (h / 37 + posmod(frame, FRAME_COUNT)) % SIZE
+		# A short 3px diagonal dash, drifting with the wind each frame.
+		for k in 3:
+			image.set_pixel((gx + k) % SIZE, clampi(gy - (k / 2), 0, SIZE - 1), glint_color)
+
+
+## Rain-weather water: the windy base plus expanding raindrop ripple rings
+## (see ripple_radius_for_frame). Swapped in by TerrainRenderer when the
+## weather model reports rain/storm.
+func generate_rain_water_image(variant_seed: int, frame: int) -> Image:
+	var wrapped_frame := posmod(frame, FRAME_COUNT)
+	var base_color: Color = BASE_COLORS["ocean"]
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	_paint_water(image, base_color, variant_seed, wrapped_frame)
+	_paint_ripple_rings(image, base_color, variant_seed, wrapped_frame)
+	return image
+
+
+func _paint_ripple_rings(image: Image, base_color: Color, variant_seed: int, frame: int) -> void:
 	for i in RIPPLE_COUNT:
 		var h := absi(hash("%d_ripple_%d" % [variant_seed, i]))
 		var center := Vector2(3 + h % (SIZE - 6), 3 + (h / 61) % (SIZE - 6))

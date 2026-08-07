@@ -1307,7 +1307,11 @@ func _client_process(delta: float) -> void:
 	_day_night.color = Color(0.2 + sunlight * 0.8, 0.2 + sunlight * 0.8, 0.3 + sunlight * 0.7)
 
 	var season := _chunk_manager.current_season().capitalize()
-	var weather := _chunk_manager.current_weather(local_player.position).capitalize()
+	var raw_weather := _chunk_manager.current_weather(local_player.position)
+	# Water tiles react to the weather: raindrop ripples while raining,
+	# windy chop otherwise (repaints only on an actual transition).
+	_chunk_manager.set_rain(raw_weather == "rain" or raw_weather == "storm")
+	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"Lat %.1f Lon %.1f   UTC %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"
 		% [

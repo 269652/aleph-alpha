@@ -68,6 +68,12 @@ const DIRECTION_MASK_COUNT := (1 << _DIRECTION_COUNT) - 1
 ## rather than hard blue blobs.
 const SHORE_VARIANTS := 2
 
+## When true (set from the live weather model -- rain/storm), open-water
+## cells paint the raindrop-ripple tile family instead of the default windy
+## chop (see atlas_coords_for_rain_water); the caller repaints loaded chunks
+## on weather transitions.
+var rain_mode := false
+
 ## Border/blend tiles keep fewer variants than base ground: they're
 ## transitional fringe noise, not the surface the eye rests on, and every
 ## extra blend variant costs n*(n-1)*15 more generated atlas images at
@@ -239,10 +245,19 @@ func _shore_linear(mask: int, variant: int) -> int:
 	return _shore_base_linear() + ((mask - 1) * SHORE_VARIANTS + variant) * FRAME_COUNT
 
 
-## Linear atlas index where the blend tiles begin (right after the shore
-## blocks).
-func _blend_base_linear() -> int:
+## Rain-water animation blocks (raindrop ripple rings), one per variant,
+## right after the shore blocks (both regions are FRAME_COUNT-aligned).
+func atlas_coords_for_rain_water(variant_index: int = 0) -> Vector2i:
+	return _grid_coords(_rain_water_base_linear() + variant_index * FRAME_COUNT)
+
+
+func _rain_water_base_linear() -> int:
 	return _shore_base_linear() + DIRECTION_MASK_COUNT * SHORE_VARIANTS * FRAME_COUNT
+
+
+## Linear atlas index where the blend tiles begin (after the rain blocks).
+func _blend_base_linear() -> int:
+	return _rain_water_base_linear() + VARIANTS_PER_BIOME * FRAME_COUNT
 
 
 ## Linear atlas index of one blend tile. Pairs are ordered (near, far) with the
@@ -333,6 +348,12 @@ func build_tile_set() -> TileSet:
 				)
 				_blit_tile(image, shore_image, _shore_linear(mask, variant) + frame)
 
+	# Rain-water blocks (ripple rings), swapped in while it rains.
+	for variant in VARIANTS_PER_BIOME:
+		for frame in FRAME_COUNT:
+			var rain_image := _terrain_sprite_generator.generate_rain_water_image(variant, frame)
+			_blit_tile(image, rain_image, _rain_water_base_linear() + variant * FRAME_COUNT + frame)
+
 	for near_index in biome_count:
 		for far_index in biome_count:
 			if far_index == near_index:
@@ -371,6 +392,14 @@ func build_tile_set() -> TileSet:
 			source.set_tile_animation_frames_count(first, FRAME_COUNT)
 			for frame in FRAME_COUNT:
 				source.set_tile_animation_frame_duration(first, frame, FRAME_DURATION_SECONDS)
+
+	# Rain-water tiles, same animation scheme.
+	for variant in VARIANTS_PER_BIOME:
+		var rain_first := atlas_coords_for_rain_water(variant)
+		source.create_tile(rain_first)
+		source.set_tile_animation_frames_count(rain_first, FRAME_COUNT)
+		for frame in FRAME_COUNT:
+			source.set_tile_animation_frame_duration(rain_first, frame, FRAME_DURATION_SECONDS)
 
 	# Earth, structures, and blend tiles stay static single-cell tiles.
 	source.create_tile(_grid_coords(_earth_linear()))
@@ -425,10 +454,12 @@ func paint(
 					for direction in neighbors:
 						if neighbors[direction] != "ocean":
 							land_directions.append(direction)
-					if land_directions.is_empty():
-						atlas_coords = atlas_coords_for_biome(biome_name, variant)
-					else:
+					if not land_directions.is_empty():
 						atlas_coords = atlas_coords_for_shore(land_directions, variant)
+					elif rain_mode:
+						atlas_coords = atlas_coords_for_rain_water(variant)
+					else:
+						atlas_coords = atlas_coords_for_biome(biome_name, variant)
 				else:
 					var blend := dominant_blend_for(biome_name, neighbors)
 					if blend.is_empty():

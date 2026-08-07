@@ -23,11 +23,12 @@ shader_type canvas_item;
 
 uniform float amplitude_px = 1.4;
 uniform float wind_speed = 1.8;
+uniform float bend_exponent = 2.0;
 
 void vertex() {
 	float phase = MODEL_MATRIX[3].x * 0.045 + MODEL_MATRIX[3].y * 0.031;
-	float top_weight = 1.0 - UV.y;
-	VERTEX.x += sin(TIME * wind_speed + phase) * amplitude_px * top_weight * top_weight;
+	float top_weight = pow(1.0 - UV.y, bend_exponent);
+	VERTEX.x += sin(TIME * wind_speed + phase) * amplitude_px * top_weight;
 }
 """
 
@@ -38,14 +39,26 @@ const DEFAULT_AMPLITUDE_PX := 1.4
 ## in a gale.
 const DEFAULT_SPEED := 1.8
 
+## Trees bend with a squared falloff (a canopy sways atop a stiff trunk).
+## Grass/scrub tuft sprites need the opposite: their blade pixels sit in the
+## LOWER half of the quad, where a squared falloff leaves under half a pixel
+## of motion -- visually static (the reported "streaks don't sway" bug). The
+## tuft preset bends linearly and harder, so blades visibly whip.
+const TUFT_AMPLITUDE_PX := 3.5
+const TUFT_SPEED := 2.2
+const TUFT_BEND_EXPONENT := 1.0
+
 var _shared_material: ShaderMaterial
+var _tuft_material: ShaderMaterial
 
 
 ## A fresh sway material with explicit parameters -- callers that want a
 ## distinct wind feel (e.g. stiffer trees vs. floppy grass) can build their
-## own; everything else should use shared_material().
+## own; everything else should use shared_material()/tuft_material().
 func make_material(
-	amplitude_px: float = DEFAULT_AMPLITUDE_PX, speed: float = DEFAULT_SPEED
+	amplitude_px: float = DEFAULT_AMPLITUDE_PX,
+	speed: float = DEFAULT_SPEED,
+	bend_exponent: float = 2.0
 ) -> ShaderMaterial:
 	var shader := Shader.new()
 	shader.code = SHADER_CODE
@@ -53,12 +66,19 @@ func make_material(
 	material.shader = shader
 	material.set_shader_parameter("amplitude_px", amplitude_px)
 	material.set_shader_parameter("wind_speed", speed)
+	material.set_shader_parameter("bend_exponent", bend_exponent)
 	return material
 
 
-## The default-parameter material, built once and reused across every caller
-## of this instance -- assign this to each swaying sprite.
+## The default-parameter material (trees), built once and shared.
 func shared_material() -> ShaderMaterial:
 	if _shared_material == null:
 		_shared_material = make_material()
 	return _shared_material
+
+
+## The grass/scrub tuft preset (see TUFT_* consts), built once and shared.
+func tuft_material() -> ShaderMaterial:
+	if _tuft_material == null:
+		_tuft_material = make_material(TUFT_AMPLITUDE_PX, TUFT_SPEED, TUFT_BEND_EXPONENT)
+	return _tuft_material

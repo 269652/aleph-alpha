@@ -32,10 +32,13 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 	# FRAME_COUNT cells hold frames, not tiles.
 	# + shore tiles: DIRECTION_MASK_COUNT land-edge masks x SHORE_VARIANTS
 	# animated foam-edge water tiles (see atlas_coords_for_shore).
+	# + rain-water tiles: VARIANTS_PER_BIOME ripple-ring variants swapped in
+	# while it rains (see atlas_coords_for_rain_water).
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
 	var expected := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1 + ProceduralStructureSprite.STRUCTURE_IDS.size()
 		+ TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.SHORE_VARIANTS
+		+ TerrainRenderer.VARIANTS_PER_BIOME
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(source.get_tiles_count(), expected)
@@ -51,6 +54,7 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 	var tile_count_without_structures := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1
 		+ TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.SHORE_VARIANTS
+		+ TerrainRenderer.VARIANTS_PER_BIOME
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(
@@ -164,6 +168,32 @@ func test_paint_gives_an_ocean_cell_bordering_land_a_shore_tile():
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
 		renderer.atlas_coords_for_shore([Vector2i(1, 0)], variant)
+	)
+
+
+## Weather-reactive water: while it rains, open-water cells swap to the
+## raindrop-ripple tile family; shorelines keep their foam either way.
+func test_rain_mode_swaps_open_water_to_the_rain_tile_family():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 2
+	chunk.height = 1
+	chunk.elevation = PackedFloat32Array([0.1, 0.1])
+	chunk.biome = PackedStringArray(["ocean", "ocean"])
+
+	renderer.rain_mode = true
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(0, 0)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_rain_water(variant)
+	)
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	assert_eq(
+		source.get_tile_animation_frames_count(renderer.atlas_coords_for_rain_water(0)),
+		TerrainRenderer.FRAME_COUNT
 	)
 
 
