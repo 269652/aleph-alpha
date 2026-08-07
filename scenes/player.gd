@@ -22,6 +22,7 @@ const MaterialDamage = preload("res://src/gameplay/material_damage.gd")
 const Block = preload("res://src/gameplay/block.gd")
 const HotbarAction = preload("res://src/gameplay/hotbar_action.gd")
 const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
+const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
@@ -360,6 +361,14 @@ func apply_class(class_name_value: String, stats: Dictionary) -> void:
 	max_health = maxf(20.0, 100.0 + float(stats.get("max_health", 0.0)))
 	health = max_health
 	class_attack_bonus = float(stats.get("attack_damage", 0.0))
+	# Dress the hero: class picks the outfit palette, the player's stable node
+	# name (the multiplayer peer id) stands in as the dna seed until a real
+	# player-DNA system exists -- deterministic per player, varied across
+	# players (see HeroAppearance).
+	if _character_view != null:
+		_character_view.apply_appearance(
+			HeroAppearance.new().appearance_for(class_name_value, name.hash())
+		)
 
 
 ## Awards XP (see ExperienceTrack); each level gained bumps max health and heals

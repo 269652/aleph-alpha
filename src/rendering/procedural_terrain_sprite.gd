@@ -65,7 +65,7 @@ func generate_frame_image(biome_name: String, variant_seed: int, frame: int) -> 
 			_paint_water(image, base_color, variant_seed, wrapped_frame)
 		"grassland":
 			_paint_speckled(image, base_color, variant_seed)
-			_paint_grass_tufts(image, base_color, variant_seed, wrapped_frame)
+			_paint_grass_blades(image, base_color, variant_seed, wrapped_frame)
 			_paint_flowers(image, variant_seed)
 		"forest", "rainforest":
 			_paint_speckled(image, base_color, variant_seed)
@@ -100,45 +100,91 @@ func _paint_speckled(image: Image, base_color: Color, variant_seed: int) -> void
 			image.set_pixel(x, y, color)
 
 
-## Water gets horizontal wave streaks (a lighter band every few rows, phase
-## offset by variant_seed) layered over a light speckle, instead of the
-## grainy land texture -- reads as light glinting on a surface. The streaks
-## scroll one row per animation frame: their spacing (4 rows) matches
-## FRAME_COUNT exactly, so the cycle loops seamlessly.
+## Water: a calm dark-speckled surface with ROUND expanding ripple rings --
+## flattened ellipses (wider than tall, top-down perspective) that grow
+## outward one step per animation frame and restart, like raindrops or fish
+## touching the surface. Each tile gets RIPPLE_COUNT ripple centers at
+## hash-derived positions with per-ripple phase offsets, so rings across a
+## lake expand out of step with each other. Replaces the old scrolling
+## horizontal streak rows, which read as scan lines rather than water.
+const RIPPLE_COUNT := 2
+const RIPPLE_BASE_RADIUS := 1.5
+const RIPPLE_GROWTH_PER_FRAME := 1.6
+
+
+## Ring radius at a given animation frame -- grows every frame, wraps back to
+## the start after FRAME_COUNT (seamless loop; pinned by
+## test_ripple_radius_grows_within_a_cycle_and_wraps).
+func ripple_radius_for_frame(frame: int) -> float:
+	return RIPPLE_BASE_RADIUS + posmod(frame, FRAME_COUNT) * RIPPLE_GROWTH_PER_FRAME
+
+
 func _paint_water(image: Image, base_color: Color, variant_seed: int, frame: int = 0) -> void:
-	var phase := absi(hash("%d_wave_phase" % variant_seed)) % SIZE
 	for y in SIZE:
 		for x in SIZE:
 			var roll := _fraction(variant_seed, x, y, "ripple")
 			var color := base_color
 			if roll < SPECKLE_DENSITY * 0.3:
 				color = base_color.darkened(SPECKLE_DARKEN * 0.6)
-			if (y + phase + frame) % 4 == 0:
-				color = color.lightened(SPECKLE_LIGHTEN)
 			image.set_pixel(x, y, color)
 
+	for i in RIPPLE_COUNT:
+		var h := absi(hash("%d_ripple_%d" % [variant_seed, i]))
+		var center := Vector2(3 + h % (SIZE - 6), 3 + (h / 61) % (SIZE - 6))
+		var phase := (h / 977) % FRAME_COUNT
+		var cycle_frame := posmod(frame + phase, FRAME_COUNT)
+		var radius := ripple_radius_for_frame(cycle_frame)
+		# A young ring is bright; it fades as it spreads and dissipates.
+		var progress := cycle_frame / float(FRAME_COUNT - 1)
+		var ring_color := base_color.lightened(0.3 * (1.0 - progress * 0.55))
+		for y in SIZE:
+			for x in SIZE:
+				var dx := x + 0.5 - center.x
+				var dy := (y + 0.5 - center.y) * 1.5  # flatten: rings wider than tall
+				if absf(sqrt(dx * dx + dy * dy) - radius) < 0.7:
+					image.set_pixel(x, y, ring_color)
 
-## Grass tufts: a few short vertical blade clusters whose top pixel leans with
-## the wind, cycling [0, 1, 0, -1] px across the animation frames (period
-## FRAME_COUNT -- seamless). Each tuft gets its own phase offset so the field
-## sways organically rather than in robotic lockstep.
-const _TUFT_COUNT := 4
+
+## Individual grass blades: BLADE_COUNT per tile, each with its own
+## hash-derived position, height (2-4px), color (3 green tones), and sway
+## phase (see blade_spec -- the pure, tested core). Blades bend progressively
+## in the wind: the root stays planted, the tip carries the full [0,1,0,-1]
+## lean cycle, mid pixels bend halfway -- so grass reads as living blades
+## rather than stamped tufts.
+const BLADE_COUNT := 6
 const _TUFT_SWAY := [0, 1, 0, -1]
 
 
-func _paint_grass_tufts(image: Image, base_color: Color, variant_seed: int, frame: int) -> void:
-	var stem_color := base_color.darkened(0.32)
-	var tip_color := base_color.lightened(0.2)
-	for i in _TUFT_COUNT:
-		var h := absi(hash("%d_tuft_%d" % [variant_seed, i]))
-		var tx := 1 + h % (SIZE - 2)
-		var ty := 4 + (h / 53) % (SIZE - 6)  # stem base row, kept inside the tile
-		var sway_phase := (h / 911) % FRAME_COUNT
-		var lean: int = _TUFT_SWAY[(frame + sway_phase) % FRAME_COUNT]
-		image.set_pixel(tx, ty, stem_color)
-		image.set_pixel(tx, ty - 1, stem_color)
-		var tip_x := clampi(tx + lean, 0, SIZE - 1)
-		image.set_pixel(tip_x, ty - 2, tip_color)
+func blade_spec(variant_seed: int, index: int) -> Dictionary:
+	var h := absi(hash("%d_blade_%d" % [variant_seed, index]))
+	return {
+		"x": 1 + h % (SIZE - 2),
+		"base_y": 5 + (h / 53) % (SIZE - 7),
+		"height": 2 + (h / 349) % 3,
+		"color_index": (h / 1117) % 3,
+		"phase": (h / 4111) % FRAME_COUNT,
+	}
+
+
+func _paint_grass_blades(image: Image, base_color: Color, variant_seed: int, frame: int) -> void:
+	var blade_colors := [
+		base_color.darkened(0.34),
+		base_color.darkened(0.18),
+		Color(base_color.r * 1.06, base_color.g * 0.92, base_color.b * 0.55),  # dry yellow-green
+	]
+	for i in BLADE_COUNT:
+		var spec := blade_spec(variant_seed, i)
+		var lean: int = _TUFT_SWAY[(frame + spec.phase) % FRAME_COUNT]
+		var color: Color = blade_colors[spec.color_index]
+		var height: int = spec.height
+		for k in height:
+			var y: int = spec.base_y - k
+			if y < 0:
+				break
+			var bend := float(k) / maxf(height - 1, 1.0)
+			var x := clampi(spec.x + int(round(lean * bend)), 0, SIZE - 1)
+			# Sun-lit tip so each blade ends crisply.
+			image.set_pixel(x, y, color.lightened(0.22) if k == height - 1 else color)
 
 
 ## Occasional flower accents (static -- flowers don't sway at 16px): roughly

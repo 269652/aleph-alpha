@@ -289,6 +289,35 @@ func _is_foam(p: Color) -> bool:
 	return p.r > 0.85 and p.g > 0.85 and p.b > 0.85
 
 
+# -- round ripples on water + individually varied grass blades ----------------
+
+## Ripple rings expand outward frame by frame and the cycle wraps seamlessly:
+## the testable core of "water ripples outward" (the painting samples this).
+func test_ripple_radius_grows_within_a_cycle_and_wraps():
+	var r0 := generator.ripple_radius_for_frame(0)
+	var r1 := generator.ripple_radius_for_frame(1)
+	var r3 := generator.ripple_radius_for_frame(ProceduralTerrainSprite.FRAME_COUNT - 1)
+	assert_gt(r1, r0, "a ripple ring should expand across frames")
+	assert_gt(r3, r1)
+	assert_eq(generator.ripple_radius_for_frame(ProceduralTerrainSprite.FRAME_COUNT), r0)
+
+
+## Grass blades are individuals: deterministic per (seed, index), with real
+## variety in height and color across a tile -- not six clones of one blade.
+func test_blade_specs_are_deterministic_and_varied():
+	var heights := {}
+	var colors := {}
+	for seed_value in 3:
+		for i in ProceduralTerrainSprite.BLADE_COUNT:
+			var spec := generator.blade_spec(seed_value, i)
+			assert_eq(spec, generator.blade_spec(seed_value, i))
+			assert_between(spec.height, 2, 4)
+			heights[spec.height] = true
+			colors[spec.color_index] = true
+	assert_gt(heights.size(), 1, "blades should vary in height")
+	assert_gt(colors.size(), 1, "blades should vary in color")
+
+
 func _rgb_distance(a: Color, b: Color) -> float:
 	return Vector3(a.r, a.g, a.b).distance_to(Vector3(b.r, b.g, b.b))
 

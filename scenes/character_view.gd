@@ -3,6 +3,7 @@ class_name CharacterView
 
 const WeaponSwing = preload("res://src/gameplay/weapon_swing.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
+const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 
 ## Reusable placeholder character rendering: a body/head/legs/arms made of
 ## flat colored shapes, a directional facing, walk and swim animations, and a
@@ -63,12 +64,10 @@ func _ready() -> void:
 	_arm_right_base_position = _arm_right.position
 	_tool_slot_base_position = _tool_slot.position
 
-	_body.texture = _character_sprite.generate_body_part_texture(BODY_SIZE, Color(0.2, 0.4, 0.8))
-	_head.texture = _character_sprite.generate_head_texture(HEAD_SIZE, Color(0.9, 0.75, 0.6), EYE_COLOR)
-	_leg_left.texture = _character_sprite.generate_body_part_texture(LEG_SIZE, Color(0.15, 0.3, 0.6))
-	_leg_right.texture = _character_sprite.generate_body_part_texture(LEG_SIZE, Color(0.15, 0.3, 0.6))
-	_arm_left.texture = _character_sprite.generate_body_part_texture(ARM_SIZE, Color(0.9, 0.75, 0.6))
-	_arm_right.texture = _character_sprite.generate_body_part_texture(ARM_SIZE, Color(0.9, 0.75, 0.6))
+	# Default look until the owner applies a real hero identity (see
+	# apply_appearance / HeroAppearance) -- e.g. a warrior in the fallback
+	# palette, so an unconfigured view still reads as a person.
+	apply_appearance(HeroAppearance.new().appearance_for("warrior", 0))
 
 	_arm_left.visible = false
 	_arm_right.visible = false
@@ -130,6 +129,18 @@ func set_facing(direction: Vector2) -> void:
 		tool_side = -1.0
 	_tool_slot.position = _tool_slot_base_position + Vector2(tool_side * TOOL_SLOT_SIDE_OFFSET, 0.0)
 	_tool_slot.z_index = -1 if facing == Facing.UP else 1
+
+
+## Dresses this character as the given hero (see HeroAppearance): class-
+## colored tunic with trim, DNA-picked skin/hair on the head, class leg
+## colors, skin-toned arms. Call any time -- textures regenerate in place.
+func apply_appearance(appearance: Dictionary) -> void:
+	_body.texture = _character_sprite.generate_hero_tunic_texture(BODY_SIZE, appearance)
+	_head.texture = _character_sprite.generate_hero_head_texture(HEAD_SIZE, appearance)
+	_leg_left.texture = _character_sprite.generate_body_part_texture(LEG_SIZE, appearance.legs)
+	_leg_right.texture = _character_sprite.generate_body_part_texture(LEG_SIZE, appearance.legs)
+	_arm_left.texture = _character_sprite.generate_body_part_texture(ARM_SIZE, appearance.skin)
+	_arm_right.texture = _character_sprite.generate_body_part_texture(ARM_SIZE, appearance.skin)
 
 
 func set_movement_state(state: MovementState) -> void:

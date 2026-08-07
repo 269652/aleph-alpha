@@ -68,3 +68,63 @@ func generate_head_image(size: Vector2i, skin_color: Color, eye_color: Color) ->
 	image.set_pixel(int(size.x * 0.3), eye_y, eye_color)
 	image.set_pixel(int(size.x * 0.7), eye_y, eye_color)
 	return image
+
+
+const _EYE_COLOR := Color(0.08, 0.08, 0.1)
+
+
+## A hero head (see HeroAppearance): the shaded skin ellipse crowned with a
+## real head of hair in the appearance's color and style -- 0: full fringe,
+## 1: fringe plus side locks, 2: short crop. What turns "a circle with eyes"
+## into a person.
+func generate_hero_head_texture(size: Vector2i, appearance: Dictionary) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_hero_head_image(size, appearance))
+
+
+func generate_hero_head_image(size: Vector2i, appearance: Dictionary) -> Image:
+	var image := generate_head_image(size, appearance.skin, _EYE_COLOR)
+	var hair: Color = appearance.hair
+	var center := Vector2(size.x / 2.0, size.y / 2.0)
+	var rx := size.x / 2.0
+	var ry := size.y / 2.0
+	for y in size.y:
+		for x in size.x:
+			if image.get_pixel(x, y).a == 0.0:
+				continue  # outside the head silhouette
+			var dy := (y + 0.5 - center.y) / ry
+			var dx := (x + 0.5 - center.x) / rx
+			var in_fringe := dy < -0.25
+			var in_crop := dy < -0.5
+			var in_side_lock := dy < 0.2 and absf(dx) > 0.6
+			var covered := false
+			match int(appearance.hair_style):
+				0:
+					covered = in_fringe
+				1:
+					covered = in_fringe or in_side_lock
+				2:
+					covered = in_crop
+			if covered:
+				# Keep the outline ring dark; shade hair like everything else.
+				var d := dx * dx + dy * dy
+				image.set_pixel(x, y, hair.darkened(0.35) if d > 0.75 else hair)
+	return image
+
+
+## A hero tunic (torso): the shaded/outlined block in the class tunic color,
+## with a trim belt row and matching collar accent -- the class reads at a
+## glance (see HeroAppearance.CLASS_PALETTES).
+func generate_hero_tunic_texture(size: Vector2i, appearance: Dictionary) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_hero_tunic_image(size, appearance))
+
+
+func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:
+	var image := generate_body_part_image(size, appearance.tunic)
+	var trim: Color = appearance.trim
+	var belt_y := int(size.y * 0.65)
+	for x in range(1, size.x - 1):
+		image.set_pixel(x, belt_y, trim)
+	# Collar accent pixels at the shoulders.
+	image.set_pixel(1, 1, trim)
+	image.set_pixel(size.x - 2, 1, trim)
+	return image
