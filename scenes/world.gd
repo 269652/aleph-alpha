@@ -90,6 +90,7 @@ const SURVIVAL_BAR_WIDTH := 150.0
 const SURVIVAL_BAR_HEIGHT := 14.0
 
 @onready var _terrain: TileMapLayer = $Terrain
+@onready var _water_fx: TileMapLayer = $WaterFx
 @onready var _entities: Node2D = $Entities
 @onready var _creatures: Node2D = $Creatures
 @onready var _ground_items: Node2D = $GroundItems
@@ -172,6 +173,9 @@ func _ready() -> void:
 	# GroundTint) -- soft lusher/drier patches spanning many tiles, so fields
 	# read as organic ground instead of a uniform printed carpet.
 	_terrain.material = GroundTint.new().shared_material()
+	# GPU water: continuous noise-driven waves over every ocean cell,
+	# translucent so shore foam and rain ripples show through (WaterShader).
+	_chunk_manager.set_water_layer(_water_fx)
 	_player_spawner.spawn_path = _players.get_path()
 	_player_spawner.add_spawnable_scene(PlayerScene.resource_path)
 	WorldItemBus.item_dropped.connect(_on_item_dropped)

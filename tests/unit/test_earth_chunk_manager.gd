@@ -40,6 +40,39 @@ func after_each():
 	creatures_parent.free()
 
 
+## The GPU water overlay (see WaterShader): every loaded ocean cell gets a
+## marker cell on the dedicated water layer (which carries the animated
+## water material); unloading erases them again.
+func test_water_overlay_marks_exactly_the_loaded_ocean_cells():
+	var water_layer := TileMapLayer.new()
+	manager.set_water_layer(water_layer)
+	manager.update(_berlin_tile)
+
+	var ocean_cells := 0
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		for y in EarthChunkManager.CHUNK_SIZE:
+			for x in EarthChunkManager.CHUNK_SIZE:
+				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+				if manager.biome_at_global(global_x, global_y) == "ocean":
+					ocean_cells += 1
+	assert_eq(water_layer.get_used_cells().size(), ocean_cells)
+	assert_true(water_layer.material is ShaderMaterial, "water layer should carry the animated water material")
+
+	# Moving far away unloads the original chunks -- their overlay cells go too.
+	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+	for cell in water_layer.get_used_cells():
+		var still_loaded_chunk := _chunk_coord_for_tile(cell)
+		var new_center := _chunk_coord_for_tile(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+		var delta := (still_loaded_chunk - new_center).abs()
+		assert_true(
+			maxi(delta.x, delta.y) <= EarthChunkManager.LOAD_RADIUS,
+			"overlay cells outside the loaded radius must be erased on unload"
+		)
+	water_layer.free()
+
+
 func _expected_tree_count_around(center_chunk: Vector2i) -> int:
 	var expected := 0
 	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):

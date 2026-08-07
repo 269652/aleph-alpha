@@ -12,6 +12,7 @@ const TundraLichen = preload("res://src/world/tundra_lichen.gd")
 const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const GrassBladeField = preload("res://src/rendering/grass_blade_field.gd")
+const WaterShader = preload("res://src/rendering/water_shader.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -78,6 +79,7 @@ var _lichen_sprite_generator := ProceduralLichenSprite.new()
 var _wind_sway := WindSway.new()
 var _grass_blade_field := GrassBladeField.new()
 var _blade_fields: Dictionary = {}  # Vector2i chunk_coord -> MultiMeshInstance2D
+var _water_layer: TileMapLayer  # optional GPU water overlay, see set_water_layer
 var _creature_renderer := CreatureRenderer.new()
 var _biome_classifier := BiomeClassifier.new()
 var _ecosystem := EcosystemSimulation.new()
@@ -265,6 +267,39 @@ func weather_speed_modifier(player_pixel: Vector2) -> float:
 ## The current weather at the player's region (see WeatherModel), derived from
 ## the world-age (as a day count) and the player's chunk as the region seed --
 ## for the HUD and, later, survival/combat weather effects.
+## Registers the GPU water overlay layer (see WaterShader): it gets a
+## minimal one-marker-tile TileSet plus the animated water material, and from
+## then on every loaded ocean cell is marked on it (see _paint_water_overlay).
+## Chunks already loaded before registration get marked immediately.
+func set_water_layer(water_layer: TileMapLayer) -> void:
+	_water_layer = water_layer
+	var marker := Image.create(TerrainRenderer.TILE_SIZE, TerrainRenderer.TILE_SIZE, false, Image.FORMAT_RGBA8)
+	marker.fill(Color.WHITE)
+	var source := TileSetAtlasSource.new()
+	source.texture = ImageTexture.create_from_image(marker)
+	source.texture_region_size = Vector2i(TerrainRenderer.TILE_SIZE, TerrainRenderer.TILE_SIZE)
+	source.create_tile(Vector2i.ZERO)
+	var tile_set := TileSet.new()
+	tile_set.tile_size = Vector2i(TerrainRenderer.TILE_SIZE, TerrainRenderer.TILE_SIZE)
+	tile_set.add_source(source, 0)
+	water_layer.tile_set = tile_set
+	water_layer.material = WaterShader.new().shared_material()
+	for chunk_coord in _loaded_chunks:
+		_paint_water_overlay(chunk_coord, _loaded_chunks[chunk_coord])
+
+
+## Marks every ocean cell of a loaded chunk on the water overlay layer -- the
+## shader draws procedural animated water there, ignoring the marker texture.
+func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if _water_layer == null:
+		return
+	var origin := chunk_coord * CHUNK_SIZE
+	for y in chunk.height:
+		for x in chunk.width:
+			if chunk.biome[y * chunk.width + x] == "ocean":
+				_water_layer.set_cell(origin + Vector2i(x, y), 0, Vector2i.ZERO)
+
+
 ## Switches open-water tiles between windy chop (default) and raindrop
 ## ripples (see TerrainRenderer.rain_mode), repainting every loaded chunk --
 ## but only on an actual transition, so the per-frame weather poll is free.
@@ -694,6 +729,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	chunk.planted_trees = _chunk_serializer.load_planted_trees(_planted_trees_path(chunk_coord))
 	_loaded_chunks[chunk_coord] = chunk
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
+	_paint_water_overlay(chunk_coord, chunk)
 	_loaded_trees[chunk_coord] = _tree_renderer.spawn_trees(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
@@ -778,6 +814,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_chunk_serializer.save_planted_trees(chunk.planted_trees, _planted_trees_path(chunk_coord))
 
 	_terrain_renderer.erase(_tile_map_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	if _water_layer != null:
+		_terrain_renderer.erase(_water_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	_loaded_chunks.erase(chunk_coord)
 
 	for tree in _loaded_trees.get(chunk_coord, []):

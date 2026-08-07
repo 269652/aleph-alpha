@@ -7,6 +7,8 @@ script = ExtResource("1")
 
 [node name="Terrain" type="TileMapLayer" parent="."]
 
+[node name="WaterFx" type="TileMapLayer" parent="."]
+
 [node name="Entities" type="Node2D" parent="."]
 
 [node name="Creatures" type="Node2D" parent="."]
