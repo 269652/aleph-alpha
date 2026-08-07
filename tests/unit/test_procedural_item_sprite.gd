@@ -157,3 +157,55 @@ func test_smelting_items_have_distinct_non_fallback_art():
 func test_fishing_rod_has_non_fallback_art():
 	var fallback: PackedByteArray = generator.generate_image("definitely_unknown_rod").get_data()
 	assert_ne(generator.generate_image("fishing_rod").get_data(), fallback)
+
+
+## Placeable structures (see item_catalog.gd's "placeable" kind) previously
+## reused the generic "oval"/"armor" blob shapes -- which only ever shade ONE
+## base hue (highlight/shadow of the same color), so a campfire was just an
+## orange blob (indistinguishable in SILHOUETTE from fruit/hide/any other oval
+## item) and a furnace was just a grey chestplate. They now get dedicated,
+## genuinely multi-toned shapes: a campfire needs a brown log color AND a
+## separate warm flame color; a furnace needs a grey stone color AND a
+## separate glowing firebox color -- something no single-hue blob/plate shade
+## can ever produce, so this can't accidentally pass against the old shapes.
+func _has_hue_family_pixel(image: Image, predicate: Callable) -> bool:
+	for y in ProceduralItemSprite.SIZE:
+		for x in ProceduralItemSprite.SIZE:
+			var p := image.get_pixel(x, y)
+			if p.a > 0.0 and predicate.call(p):
+				return true
+	return false
+
+
+func test_campfire_has_both_a_log_brown_pixel_and_a_separate_flame_colored_pixel():
+	var image := generator.generate_image("campfire")
+	var is_log_brown := func(p: Color) -> bool: return p.r > 0.25 and p.r < 0.6 and p.g < p.r and p.b < p.g + 0.05
+	var is_flame := func(p: Color) -> bool: return p.r > 0.7 and p.g > 0.25 and p.b < 0.3
+	assert_true(_has_hue_family_pixel(image, is_log_brown), "campfire should have a distinct log/wood-brown pixel")
+	assert_true(_has_hue_family_pixel(image, is_flame), "campfire should have a distinct warm flame pixel")
+
+
+func test_furnace_has_both_a_grey_stone_pixel_and_a_separate_glowing_firebox_pixel():
+	var image := generator.generate_image("furnace")
+	var is_grey_stone := func(p: Color) -> bool: return absf(p.r - p.g) < 0.08 and absf(p.g - p.b) < 0.08
+	var is_glow := func(p: Color) -> bool: return p.r > 0.6 and p.g > 0.2 and p.b < 0.35
+	assert_true(_has_hue_family_pixel(image, is_grey_stone), "furnace should have a distinct grey stone pixel")
+	assert_true(_has_hue_family_pixel(image, is_glow), "furnace should have a distinct glowing firebox pixel")
+
+
+func test_campfire_and_furnace_look_different_from_each_other_and_from_generic_shapes():
+	var campfire := generator.generate_image("campfire")
+	var furnace := generator.generate_image("furnace")
+	var fruit := generator.generate_image("fruit")
+	var armor := generator.generate_image("leather_chest")
+
+	var any_differs := func(a: Image, b: Image) -> bool:
+		for y in ProceduralItemSprite.SIZE:
+			for x in ProceduralItemSprite.SIZE:
+				if a.get_pixel(x, y) != b.get_pixel(x, y):
+					return true
+		return false
+
+	assert_true(any_differs.call(campfire, furnace), "campfire and furnace should look different from each other")
+	assert_true(any_differs.call(campfire, fruit), "campfire should no longer reuse the generic oval/fruit look")
+	assert_true(any_differs.call(furnace, armor), "furnace should no longer reuse the generic armor-plate look")

@@ -310,15 +310,18 @@ func _build_inventory_window() -> void:
 	_inventory_window = InventoryWindow.new()
 	_inventory_window.theme = _ui_theme
 	# Centered, and sized to match InventoryWindow's own custom_minimum_size
-	# (520x340) exactly -- the previous TOP_RIGHT box (300x200) was smaller
+	# (600x460) exactly -- the previous TOP_RIGHT box (300x200) was smaller
 	# than the window's real minimum size, pushing it off the 960x540
 	# viewport. Matches this file's other popup windows (dev console,
-	# settings overlay), which already anchor to PRESET_CENTER.
+	# settings overlay), which already anchor to PRESET_CENTER. Keep this in
+	# sync with InventoryWindow._ready()'s custom_minimum_size if that ever
+	# changes (e.g. SLOT_SIZE/ICON_SIZE tuning) -- undersizing this box
+	# reintroduces the off-screen bug.
 	_inventory_window.set_anchors_preset(Control.PRESET_CENTER)
-	_inventory_window.offset_left = -260.0
-	_inventory_window.offset_top = -170.0
-	_inventory_window.offset_right = 260.0
-	_inventory_window.offset_bottom = 170.0
+	_inventory_window.offset_left = -300.0
+	_inventory_window.offset_top = -230.0
+	_inventory_window.offset_right = 300.0
+	_inventory_window.offset_bottom = 230.0
 	_ui.add_child(_inventory_window)
 	_inventory_window.item_clicked.connect(_on_inventory_item_clicked)
 	_inventory_window.unequip_requested.connect(_on_inventory_unequip_requested)

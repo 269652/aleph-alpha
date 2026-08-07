@@ -15,13 +15,22 @@ const Equipment = preload("res://src/gameplay/equipment.gd")
 signal item_clicked(item_id: String)
 signal unequip_requested(slot: String)
 
-const SLOT_SIZE := 40.0
-const ICON_SIZE := 30.0
+const SLOT_SIZE := 52.0
+const ICON_SIZE := 40.0
 const GRID_COLUMNS := 6
 
 ## Display labels for the paperdoll slots.
 const SLOT_LABELS := {
 	"head": "Head", "chest": "Chest", "legs": "Legs", "feet": "Feet", "weapon": "Weapon",
+}
+
+## Human-readable label per Item.kind, shown as a tooltip's second line (see
+## _build_item_slot) -- "real game" tooltips show what an item IS, not just
+## its name, e.g. "Campfire / Placeable" makes it obvious at a glance that
+## it's something you build, not something you eat or wear.
+const KIND_LABELS := {
+	"weapon": "Weapon", "tool": "Tool", "armor": "Armor", "food": "Food",
+	"potion": "Potion", "placeable": "Placeable", "material": "Material",
 }
 
 var _item_sprite := ProceduralItemSprite.new()
@@ -34,7 +43,12 @@ var _armor_label: Label
 
 func _ready() -> void:
 	visible = false
-	custom_minimum_size = Vector2(520, 340)
+	# Bumped alongside SLOT_SIZE/ICON_SIZE (52/40, up from 40/30) for
+	# legibility -- keep this comfortably larger than the paperdoll (5 slots
+	# tall) + item grid actually need, matching World's _build_inventory_window
+	# offsets, which must stay >= this size or the window renders off-screen
+	# (see that function's own comment on the bug this caused before).
+	custom_minimum_size = Vector2(600, 460)
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 8)
@@ -160,7 +174,9 @@ func _build_item_slot(stack) -> Control:
 	box.custom_minimum_size = Vector2(SLOT_SIZE, SLOT_SIZE)
 	box.mouse_filter = Control.MOUSE_FILTER_STOP
 	box.gui_input.connect(_on_item_gui_input.bind(stack.item.id))
-	box.tooltip_text = stack.item.display_name
+	box.tooltip_text = _item_tooltip_text(stack)
+	box.mouse_entered.connect(func(): box.modulate = Color(1.15, 1.15, 1.15))
+	box.mouse_exited.connect(func(): box.modulate = Color(1, 1, 1))
 
 	var icon := TextureRect.new()
 	icon.texture = _item_sprite.generate_texture(stack.item.id)
@@ -177,6 +193,17 @@ func _build_item_slot(stack) -> Control:
 		count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		box.add_child(count)
 	return box
+
+
+## "Iron Sword" -> "Iron Sword\nWeapon" (name, then kind), and a stack count
+## line when there's more than one -- so hovering tells you what an item is,
+## not just its name, matching Diablo/Terraria-style tooltips rather than
+## Godot's plain default hover text.
+func _item_tooltip_text(stack) -> String:
+	var lines := [stack.item.display_name, KIND_LABELS.get(stack.item.kind, stack.item.kind.capitalize())]
+	if stack.count > 1:
+		lines.append("x%d" % stack.count)
+	return "\n".join(lines)
 
 
 func _on_item_gui_input(event: InputEvent, item_id: String) -> void:

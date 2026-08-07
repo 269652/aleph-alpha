@@ -29,7 +29,7 @@ const _ITEM_LOOKS := {
 	"iron_sword": {"color": Color(0.75, 0.78, 0.82), "shape": "sword"},
 	"iron_axe": {"color": Color(0.7, 0.73, 0.78), "shape": "axe"},
 	"torch": {"color": Color(0.65, 0.4, 0.15), "shape": "sword"},
-	"campfire": {"color": Color(0.85, 0.45, 0.1), "shape": "oval"},
+	"campfire": {"color": Color(0.85, 0.45, 0.1), "shape": "campfire"},
 	"cooked_meat": {"color": Color(0.45, 0.22, 0.12), "shape": "round"},
 	"rock": {"color": Color(0.55, 0.55, 0.58), "shape": "round"},
 	"stick": {"color": Color(0.45, 0.32, 0.18), "shape": "sword"},
@@ -49,7 +49,7 @@ const _ITEM_LOOKS := {
 	"leather_boots": {"color": Color(0.4, 0.27, 0.16), "shape": "boots"},
 	"iron_ingot": {"color": Color(0.72, 0.74, 0.8), "shape": "oval"},
 	"copper_ingot": {"color": Color(0.8, 0.5, 0.32), "shape": "oval"},
-	"furnace": {"color": Color(0.42, 0.4, 0.42), "shape": "armor"},
+	"furnace": {"color": Color(0.42, 0.4, 0.42), "shape": "furnace"},
 	"iron_helm": {"color": Color(0.72, 0.74, 0.8), "shape": "helm"},
 	"iron_chest": {"color": Color(0.68, 0.7, 0.77), "shape": "armor"},
 	"iron_legs": {"color": Color(0.64, 0.66, 0.73), "shape": "legs"},
@@ -85,6 +85,10 @@ func generate_image(item_id: String) -> Image:
 			_draw_plate(image, base, 4, 2, SIZE - 4, SIZE - 2)  # narrower greaves
 		"boots":
 			_draw_plate(image, base, 3, 8, SIZE - 3, SIZE - 2)  # short, low boots
+		"campfire":
+			_draw_campfire(image)
+		"furnace":
+			_draw_furnace(image, base)
 		_:
 			_draw_blob(image, base, 0.36, 0.36)
 
@@ -109,6 +113,62 @@ func _draw_plate(image: Image, base: Color, x0: int, y0: int, x1: int, y1: int) 
 			elif y >= y1 - 2:
 				color = shade
 			image.set_pixel(x, y, color)
+
+
+const LOG_COLOR := Color(0.4, 0.26, 0.14)
+const LOG_HIGHLIGHT := Color(0.52, 0.35, 0.2)
+const EMBER_COLOR := Color(0.25, 0.12, 0.08)
+const FLAME_BASE := Color(0.85, 0.15, 0.08)
+const FLAME_TIP := Color(0.98, 0.78, 0.18)
+const FURNACE_GLOW := Color(0.9, 0.35, 0.1)
+const FURNACE_OPENING := Color(0.15, 0.08, 0.05)
+
+
+## Two crossed logs on dark embers, with a tapering flame (color-graded red
+## at its base to yellow at its tip -- a real gradient, not one shaded hue
+## like the generic blob shapes) rising above them. The one item silhouette
+## that needs to read as "fire" at a glance, not just "some orange thing".
+func _draw_campfire(image: Image) -> void:
+	var log_row_start := int(SIZE * 0.65)
+	for y in range(log_row_start, SIZE - 1):
+		var t := float(y - log_row_start) / maxf(float(SIZE - 1 - log_row_start), 1.0)
+		var diag1_x := 2 + int(t * (SIZE - 5))
+		var diag2_x := SIZE - 3 - int(t * (SIZE - 5))
+		for x in SIZE:
+			var on_diag1 := absi(x - diag1_x) <= 1
+			var on_diag2 := absi(x - diag2_x) <= 1
+			if on_diag1 or on_diag2:
+				image.set_pixel(x, y, LOG_HIGHLIGHT if x <= diag1_x else LOG_COLOR)
+	for x in range(3, SIZE - 3):
+		image.set_pixel(x, SIZE - 1, EMBER_COLOR)
+
+	var flame_top := 1
+	var cx := SIZE / 2.0
+	for y in range(flame_top, log_row_start):
+		var t := float(y - flame_top) / maxf(float(log_row_start - flame_top), 1.0)  # 0 at tip, 1 at base
+		var half_width := lerpf(0.5, SIZE * 0.22, t)
+		var color := FLAME_TIP.lerp(FLAME_BASE, t)
+		for x in SIZE:
+			if absf(x + 0.5 - (cx + sin(t * PI) * 0.6)) <= half_width:
+				image.set_pixel(x, y, color)
+
+
+## A grey stone block (reusing the shaded-plate technique) with a dark
+## firebox opening glowing warm orange from within -- distinct in both
+## silhouette and color from the flat single-hue armor-plate shape it used to
+## share with leather/iron chest pieces.
+func _draw_furnace(image: Image, base: Color) -> void:
+	_draw_plate(image, base, 2, 3, SIZE - 2, SIZE - 1)
+	var opening_x0 := SIZE / 2 - 3
+	var opening_x1 := SIZE / 2 + 3
+	var opening_y0 := SIZE - 7
+	var opening_y1 := SIZE - 2
+	for y in range(opening_y0, opening_y1):
+		for x in range(opening_x0, opening_x1):
+			image.set_pixel(x, y, FURNACE_OPENING)
+	for y in range(opening_y0 + 1, opening_y1 - 1):
+		for x in range(opening_x0 + 1, opening_x1 - 1):
+			image.set_pixel(x, y, FURNACE_GLOW)
 
 
 ## A shaded, outlined ellipse centered in the sprite (round or oval).

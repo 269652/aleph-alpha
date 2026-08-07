@@ -44,6 +44,15 @@ func button_stylebox(state: String) -> StyleBoxFlat:
 	return _flat(color, BUTTON_MARGIN, PANEL_BORDER, BORDER_WIDTH)
 
 
+## The background for hover tooltips (e.g. InventoryWindow's item slots).
+## Deliberately near-black rather than PANEL_BG -- a tooltip floats *above*
+## everything else and needs to read as a distinct top layer, not blend into
+## whatever panel it's hovering over, with the gold ACCENT as a thin border
+## so it pops instead of looking like Godot's plain default engine tooltip.
+func tooltip_stylebox() -> StyleBoxFlat:
+	return _flat(Color(0.05, 0.05, 0.07, 0.98), 8.0, ACCENT, BORDER_WIDTH)
+
+
 ## Builds the Theme resource assigned to every UI root Control (menus, windows,
 ## HUD). Styles PanelContainer/Button/Label/LineEdit consistently.
 func build_theme() -> Theme:
@@ -67,6 +76,10 @@ func build_theme() -> Theme:
 	theme.set_stylebox("normal", "LineEdit", field)
 	theme.set_color("font_color", "LineEdit", TEXT)
 	theme.set_color("font_placeholder_color", "LineEdit", TEXT_MUTED)
+
+	theme.set_stylebox("panel", "TooltipPanel", tooltip_stylebox())
+	theme.set_color("font_color", "TooltipLabel", TEXT)
+	theme.set_font_size("font_size", "TooltipLabel", BASE_FONT_SIZE)
 
 	return theme
 

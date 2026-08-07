@@ -55,3 +55,16 @@ func test_build_theme_is_deterministic_shape():
 		(a.get_stylebox("panel", "PanelContainer") as StyleBoxFlat).bg_color,
 		(b.get_stylebox("panel", "PanelContainer") as StyleBoxFlat).bg_color
 	)
+
+
+## Item/slot hover tooltips (e.g. InventoryWindow's item grid) previously had
+## no theme entry at all, so Godot fell back to its plain default engine
+## tooltip -- easy to miss and visually inconsistent against this game's dark
+## custom theme. Tooltips now get real, on-brand styling.
+func test_build_theme_styles_tooltips_to_match_the_rest_of_the_ui():
+	var theme := ui.build_theme()
+	assert_true(theme.has_stylebox("panel", "TooltipPanel"))
+	var tooltip_sb := theme.get_stylebox("panel", "TooltipPanel") as StyleBoxFlat
+	assert_true(tooltip_sb is StyleBoxFlat)
+	assert_lt(tooltip_sb.bg_color.v, 0.35, "tooltip background should be dark, matching the rest of the UI")
+	assert_eq(theme.get_color("font_color", "TooltipLabel"), UiTheme.TEXT)
