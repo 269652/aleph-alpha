@@ -85,3 +85,42 @@ func test_set_rain_intensity_updates_the_shared_materials_uniform():
 	assert_eq(material.get_shader_parameter("rain_intensity"), 1.0)
 	water.set_rain_intensity(0.0)
 	assert_eq(material.get_shader_parameter("rain_intensity"), 0.0)
+
+
+# -- color balance (reported: "looks like a patch of cloudy sky") -------------
+#
+# The previous crest color was nearly white-cyan and the blend threshold let
+# most of the noise range trend toward it, so large areas of "water" read as
+# a pale wash instead of a cohesive body of water. Both are now real,
+# test-pinned uniforms.
+
+func test_crest_color_stays_clearly_blue_not_washed_out_toward_white():
+	assert_lt(
+		WaterShader.CREST_COLOR.r, WaterShader.CREST_COLOR.b,
+		"crest should read as light blue, not a neutral/cyan-white highlight"
+	)
+	var brightness_sum := WaterShader.CREST_COLOR.r + WaterShader.CREST_COLOR.g + WaterShader.CREST_COLOR.b
+	assert_lt(brightness_sum, 2.2, "crest shouldn't be close to white (sum 3.0)")
+
+
+func test_deep_color_is_darker_and_more_saturated_than_crest():
+	var deep_sum := WaterShader.DEEP_COLOR.r + WaterShader.DEEP_COLOR.g + WaterShader.DEEP_COLOR.b
+	var crest_sum := WaterShader.CREST_COLOR.r + WaterShader.CREST_COLOR.g + WaterShader.CREST_COLOR.b
+	assert_lt(deep_sum, crest_sum, "deep water should read darker than a wave crest")
+	assert_lt(WaterShader.DEEP_COLOR.r, WaterShader.DEEP_COLOR.b, "deep should read blue too")
+
+
+## Most of the noise range must stay near "deep" -- only genuine peaks reach
+## "crest" -- so the surface reads as a dominant blue body with modest
+## highlights, not a wide pale wash.
+func test_wave_blend_thresholds_keep_most_of_the_range_deep():
+	assert_gt(WaterShader.WAVE_LOW_THRESHOLD, 0.45)
+	assert_gt(WaterShader.WAVE_HIGH_THRESHOLD, WaterShader.WAVE_LOW_THRESHOLD)
+
+
+func test_make_material_sets_the_color_and_threshold_uniforms():
+	var material := water.make_material()
+	assert_eq(material.get_shader_parameter("deep_color"), WaterShader.DEEP_COLOR)
+	assert_eq(material.get_shader_parameter("crest_color"), WaterShader.CREST_COLOR)
+	assert_eq(material.get_shader_parameter("wave_low_threshold"), WaterShader.WAVE_LOW_THRESHOLD)
+	assert_eq(material.get_shader_parameter("wave_high_threshold"), WaterShader.WAVE_HIGH_THRESHOLD)

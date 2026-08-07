@@ -153,25 +153,31 @@ func test_variants_per_biome_is_at_least_six():
 # are now plain animated water tiles, same as every other biome (see
 # test_paint_keeps_open_water_as_plain_animated_ocean below).
 
-func test_water_overlay_tile_set_has_one_flat_tile_plus_one_per_direction_mask():
+func test_water_overlay_tile_set_has_one_flat_tile_plus_masks_plus_rings():
 	var overlay_set := renderer.build_water_overlay_tile_set()
 	var source := overlay_set.get_source(0) as TileSetAtlasSource
-	# 1 flat "deep water, no land neighbor" tile + one per non-empty cardinal
-	# direction-mask combination (DIRECTION_MASK_COUNT = 15).
-	assert_eq(source.get_tiles_count(), 1 + TerrainRenderer.DIRECTION_MASK_COUNT)
+	# 1 flat "deep water, no land within RING_MAX tiles" tile + one per
+	# non-empty cardinal direction-mask (ring 0, touching land directly,
+	# DIRECTION_MASK_COUNT = 15) + one flat tile per ring 1..RING_MAX-1 (see
+	# RING_MAX's doc comment on why shore influence needs to span multiple
+	# tiles, not just one).
+	assert_eq(
+		source.get_tiles_count(),
+		1 + TerrainRenderer.DIRECTION_MASK_COUNT + (TerrainRenderer.RING_MAX - 1)
+	)
 
 
-func test_atlas_coords_for_water_overlay_differs_by_land_direction_set():
+func test_atlas_coords_for_water_overlay_differs_by_land_direction_set_at_ring_zero():
 	var no_land := renderer.atlas_coords_for_water_overlay([])
-	var north := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1)])
-	var north_east := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1), Vector2i(1, 0)])
+	var north := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1)], 0)
+	var north_east := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1), Vector2i(1, 0)], 0)
 	assert_ne(no_land, north)
 	assert_ne(north, north_east)
 
 
 func test_atlas_coords_for_water_overlay_is_independent_of_direction_order():
-	var a := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1), Vector2i(1, 0)])
-	var b := renderer.atlas_coords_for_water_overlay([Vector2i(1, 0), Vector2i(0, -1)])
+	var a := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1), Vector2i(1, 0)], 0)
+	var b := renderer.atlas_coords_for_water_overlay([Vector2i(1, 0), Vector2i(0, -1)], 0)
 	assert_eq(a, b)
 
 
@@ -179,11 +185,40 @@ func test_water_overlay_tiles_are_real_shore_distance_data_not_a_flat_fill():
 	var overlay_set := renderer.build_water_overlay_tile_set()
 	var source := overlay_set.get_source(0) as TileSetAtlasSource
 	var image: Image = source.texture.get_image()
-	var coords := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1)])
+	var coords := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1)], 0)
 	var origin := Vector2i(coords.x * TerrainRenderer.TILE_SIZE, coords.y * TerrainRenderer.TILE_SIZE)
 	var edge_pixel := image.get_pixel(origin.x + 8, origin.y)
 	var far_pixel := image.get_pixel(origin.x + 8, origin.y + TerrainRenderer.TILE_SIZE - 1)
 	assert_lt(edge_pixel.r, far_pixel.r, "the land-facing edge should read closer to shore than the far side")
+
+
+# -- multi-tile shore rings (interference needs room to be visible) -----------
+
+func test_atlas_coords_for_water_overlay_differs_by_ring_distance():
+	var touching := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1)], 0)
+	var one_tile_out := renderer.atlas_coords_for_water_overlay([], 1)
+	var two_tiles_out := renderer.atlas_coords_for_water_overlay([], 2)
+	assert_ne(touching, one_tile_out)
+	assert_ne(one_tile_out, two_tiles_out)
+
+
+func test_atlas_coords_for_water_overlay_treats_ring_at_or_beyond_ring_max_as_open_water():
+	var at_max := renderer.atlas_coords_for_water_overlay([], TerrainRenderer.RING_MAX)
+	var past_max := renderer.atlas_coords_for_water_overlay([], TerrainRenderer.RING_MAX + 5)
+	var open_water := renderer.atlas_coords_for_water_overlay([])
+	assert_eq(at_max, open_water)
+	assert_eq(past_max, open_water)
+
+
+func test_ring_tiles_step_toward_the_open_water_value():
+	var overlay_set := renderer.build_water_overlay_tile_set()
+	var source := overlay_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	var ring1_coords := renderer.atlas_coords_for_water_overlay([], 1)
+	var ring2_coords := renderer.atlas_coords_for_water_overlay([], 2)
+	var ring1_value := image.get_pixel(ring1_coords.x * TerrainRenderer.TILE_SIZE, 0).r
+	var ring2_value := image.get_pixel(ring2_coords.x * TerrainRenderer.TILE_SIZE, 0).r
+	assert_lt(ring1_value, ring2_value, "farther rings should read closer to open water")
 
 
 func test_paint_keeps_open_water_as_plain_animated_ocean():
@@ -399,11 +434,11 @@ func test_erase_clears_a_previously_painted_region():
 # -- biome border blending (corner-aware, every differing pair) --------------
 
 func test_dominant_blend_for_returns_the_partner_and_all_of_its_directions():
-	# grassland cell with ocean to the north AND east -> blend ocean on both.
+	# grassland cell with desert to the north AND east -> blend desert on both.
 	var result := renderer.dominant_blend_for(
-		"grassland", {Vector2i(0, -1): "ocean", Vector2i(1, 0): "ocean", Vector2i(-1, 0): "grassland"}
+		"grassland", {Vector2i(0, -1): "desert", Vector2i(1, 0): "desert", Vector2i(-1, 0): "grassland"}
 	)
-	assert_eq(result.partner, "ocean")
+	assert_eq(result.partner, "desert")
 	assert_eq(result.directions.size(), 2)
 	assert_true(result.directions.has(Vector2i(0, -1)))
 	assert_true(result.directions.has(Vector2i(1, 0)))
@@ -414,20 +449,24 @@ func test_dominant_blend_for_returns_empty_when_no_neighbor_differs():
 	assert_true(result.is_empty())
 
 
-func test_dominant_blend_for_blends_any_differing_pair_including_water():
-	# Previously only forest<->grassland blended; ocean borders hard-cut. Now
-	# any differing neighbor blends.
+## Water is a special case: land is never allowed to blend toward ocean at
+## all (unlike every other biome pair), because the shoreline transition now
+## belongs entirely to the GPU WaterFx overlay (see water_shader.gd) -- a
+## land-side dithered fringe here would visually fight the overlay's own
+## shore-distance blending on the water side (the reported "shoreline is
+## backwards" bug: two independent transition treatments on opposite sides
+## of the same border).
+func test_dominant_blend_for_never_blends_land_toward_ocean():
 	var result := renderer.dominant_blend_for("grassland", {Vector2i(1, 0): "ocean"})
-	assert_eq(result.partner, "ocean")
-	assert_eq(result.directions, [Vector2i(1, 0)])
+	assert_true(result.is_empty(), "land must not blend toward ocean -- the GPU overlay owns the shoreline")
 
 
 func test_dominant_blend_for_picks_the_biome_covering_the_most_edges():
-	# ocean on two edges beats desert on one -> ocean dominates.
+	# desert on two edges beats tundra on one -> desert dominates.
 	var result := renderer.dominant_blend_for(
-		"grassland", {Vector2i(0, -1): "ocean", Vector2i(0, 1): "ocean", Vector2i(1, 0): "desert"}
+		"grassland", {Vector2i(0, -1): "desert", Vector2i(0, 1): "desert", Vector2i(1, 0): "tundra"}
 	)
-	assert_eq(result.partner, "ocean")
+	assert_eq(result.partner, "desert")
 	assert_eq(result.directions.size(), 2)
 
 
@@ -467,38 +506,42 @@ func test_atlas_coords_for_directional_blend_is_a_created_tile_in_the_atlas():
 	assert_true(source.has_tile(coords), "blend tile %s should exist in the atlas" % coords)
 
 
-func _make_ocean_corner_chunk() -> Chunk:
-	# 2x2 where the top-left cell is grassland with ocean to its east and
+func _make_desert_corner_chunk() -> Chunk:
+	# 2x2 where the top-left cell is grassland with desert to its east and
 	# south -- a corner that must blend toward both neighbors at once.
 	var chunk := Chunk.new()
 	chunk.width = 2
 	chunk.height = 2
-	chunk.elevation = PackedFloat32Array([0.4, 0.1, 0.1, 0.4])
-	chunk.biome = PackedStringArray(["grassland", "ocean", "ocean", "grassland"])
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4])
+	chunk.biome = PackedStringArray(["grassland", "desert", "desert", "grassland"])
 	return chunk
 
 
 func test_paint_blends_a_corner_toward_multiple_differing_neighbors():
 	var tile_set := renderer.build_tile_set()
 	tile_map_layer.tile_set = tile_set
-	var chunk := _make_ocean_corner_chunk()
+	var chunk := _make_desert_corner_chunk()
 
 	renderer.paint(tile_map_layer, chunk)
 
 	var variant := renderer.variant_index_for_position(0, 0)
-	# Cell (0,0) grassland: ocean east (1,0) and ocean south (0,1).
+	# Cell (0,0) grassland: desert east (1,0) and desert south (0,1).
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
-		renderer.atlas_coords_for_directional_blend("grassland", "ocean", [Vector2i(1, 0), Vector2i(0, 1)], variant)
+		renderer.atlas_coords_for_directional_blend("grassland", "desert", [Vector2i(1, 0), Vector2i(0, 1)], variant)
 	)
 
 
-## Only ONE side of a border renders a transition tile -- the higher-priority
-## ("outer") biome fringes over its neighbor, while the neighbor stays a pure
-## tile. Land overlaps water: the grassland cell dithers toward the ocean,
-## the ocean cell renders plain ocean. Both sides blending doubled the fringe
-## into a mushy two-tile band.
-func test_paint_blends_only_the_higher_priority_side_of_a_border():
+## Only ONE side of a border renders a transition tile in general -- the
+## higher-priority ("outer") biome fringes over its lower-priority neighbor,
+## which stays a pure tile (both sides blending doubles the fringe into a
+## mushy two-tile band). Ocean is the one exception: it never receives a
+## blend from EITHER side -- land no longer dithers toward it either (see
+## test_dominant_blend_for_never_blends_land_toward_ocean), because the
+## shoreline transition belongs entirely to the GPU WaterFx overlay now, not
+## the base Terrain layer. Both cells here must render as plain, unblended
+## biome tiles.
+func test_paint_never_blends_a_land_ocean_border_on_the_base_layer():
 	var tile_set := renderer.build_tile_set()
 	tile_map_layer.tile_set = tile_set
 	var chunk := Chunk.new()
@@ -511,11 +554,6 @@ func test_paint_blends_only_the_higher_priority_side_of_a_border():
 
 	var ocean_variant := renderer.variant_index_for_position(0, 0)
 	var grassland_variant := renderer.variant_index_for_position(1, 0)
-	# The ocean (lower-priority) side never fringes toward land -- it stays a
-	# plain animated water tile on the base layer; shore treatment lives
-	# entirely on the GPU WaterFx overlay now (see the water-overlay tests
-	# above), not as a second tile choice here. Only the grassland
-	# (higher-priority) side carries the land/water color transition.
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
 		renderer.atlas_coords_for_biome("ocean", ocean_variant),
@@ -523,8 +561,36 @@ func test_paint_blends_only_the_higher_priority_side_of_a_border():
 	)
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 0)),
-		renderer.atlas_coords_for_directional_blend("grassland", "ocean", [Vector2i(-1, 0)], grassland_variant),
-		"the grassland (higher-priority) side carries the transition"
+		renderer.atlas_coords_for_biome("grassland", grassland_variant),
+		"the grassland side stays plain too -- no land-side shore dithering anymore"
+	)
+
+
+## A non-water border still blends normally (only the higher-priority side
+## fringes) -- the ocean carve-out above is specific to water, not a general
+## regression in border blending.
+func test_paint_still_blends_normal_land_borders():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 2
+	chunk.height = 1
+	chunk.elevation = PackedFloat32Array([0.4, 0.4])
+	chunk.biome = PackedStringArray(["desert", "grassland"])
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var desert_variant := renderer.variant_index_for_position(0, 0)
+	var grassland_variant := renderer.variant_index_for_position(1, 0)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_biome("desert", desert_variant),
+		"desert (lower-priority) stays plain"
+	)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 0)),
+		renderer.atlas_coords_for_directional_blend("grassland", "desert", [Vector2i(-1, 0)], grassland_variant),
+		"grassland (higher-priority) carries the transition"
 	)
 
 
@@ -551,19 +617,23 @@ func _uniform_chunk(biome_name: String) -> Chunk:
 
 func test_paint_blends_a_chunk_edge_cell_toward_a_differing_out_of_chunk_neighbor():
 	# A uniform grassland chunk painted with a lookup that says everything
-	# outside the chunk is ocean: the top-left cell must blend toward its
-	# out-of-chunk north and west neighbors instead of hard-cutting at the seam.
+	# outside the chunk is desert: the top-left cell must blend toward its
+	# out-of-chunk north and west neighbors instead of hard-cutting at the
+	# seam. (Not ocean here -- land never blends toward ocean at all, see
+	# test_dominant_blend_for_never_blends_land_toward_ocean; this test is
+	# about the cross-chunk lookup mechanism itself, which any differing
+	# land biome exercises just as well.)
 	var tile_set := renderer.build_tile_set()
 	tile_map_layer.tile_set = tile_set
 	var chunk := _uniform_chunk("grassland")
 
-	renderer.paint(tile_map_layer, chunk, Vector2i.ZERO, func(_gx: int, _gy: int) -> String: return "ocean")
+	renderer.paint(tile_map_layer, chunk, Vector2i.ZERO, func(_gx: int, _gy: int) -> String: return "desert")
 
 	var variant := renderer.variant_index_for_position(0, 0)
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
 		renderer.atlas_coords_for_directional_blend(
-			"grassland", "ocean", [Vector2i(0, -1), Vector2i(-1, 0)], variant
+			"grassland", "desert", [Vector2i(0, -1), Vector2i(-1, 0)], variant
 		)
 	)
 
@@ -591,13 +661,13 @@ func test_paint_lookup_receives_global_not_local_coordinates():
 	var chunk := _uniform_chunk("grassland")
 
 	var lookup := func(gx: int, gy: int) -> String:
-		return "ocean" if Vector2i(gx, gy) == Vector2i(10, 9) else "grassland"
+		return "desert" if Vector2i(gx, gy) == Vector2i(10, 9) else "grassland"
 	renderer.paint(tile_map_layer, chunk, Vector2i(10, 10), lookup)
 
 	var variant := renderer.variant_index_for_position(10, 10)
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(10, 10)),
-		renderer.atlas_coords_for_directional_blend("grassland", "ocean", [Vector2i(0, -1)], variant)
+		renderer.atlas_coords_for_directional_blend("grassland", "desert", [Vector2i(0, -1)], variant)
 	)
 
 

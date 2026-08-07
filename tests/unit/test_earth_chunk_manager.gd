@@ -74,17 +74,21 @@ func test_water_overlay_marks_exactly_the_loaded_ocean_cells():
 
 
 ## Each ocean cell's overlay tile matches its OWN land-direction mask (the
-## GPU shore-distance data), not one flat marker for every cell -- shore
-## cells and open-water cells must get visibly different overlay tiles.
-func test_water_overlay_marks_shore_cells_differently_from_open_water():
+## GPU shore-distance data), not one flat marker for every cell -- a cell
+## touching land directly must get a visibly different overlay tile than one
+## that doesn't. (Whether this specific test region also has a cell a full
+## RING_MAX tiles from any shore is a geographic accident of Berlin's actual
+## lake sizes, not something this test should depend on -- see the dedicated
+## ring-distance test below for multi-tile variation instead.)
+func test_water_overlay_marks_shore_cells_differently_from_non_touching_cells():
 	var water_layer := TileMapLayer.new()
 	manager.set_water_layer(water_layer)
 	manager.update(_berlin_tile)
 
 	var terrain_renderer := TerrainRenderer.new()
 	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
-	var found_shore := false
-	var found_open := false
+	var found_touching := false
+	var found_non_touching := false
 	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
 		for y in EarthChunkManager.CHUNK_SIZE:
 			for x in EarthChunkManager.CHUNK_SIZE:
@@ -94,12 +98,45 @@ func test_water_overlay_marks_shore_cells_differently_from_open_water():
 					continue
 				var cell := Vector2i(global_x, global_y)
 				var coords := water_layer.get_cell_atlas_coords(cell)
-				if coords == terrain_renderer.atlas_coords_for_water_overlay([]):
-					found_open = true
+				# Ring-0 direction-mask tiles occupy atlas columns 1..
+				# DIRECTION_MASK_COUNT (see atlas_coords_for_water_overlay);
+				# column 0 is "not touching land directly" (open water or a
+				# ring tile), columns beyond DIRECTION_MASK_COUNT are rings.
+				var is_touching := coords.y == 0 and coords.x >= 1 and coords.x <= TerrainRenderer.DIRECTION_MASK_COUNT
+				if is_touching:
+					found_touching = true
 				else:
-					found_shore = true
-	assert_true(found_open, "expected at least one open-water overlay cell in this test region")
-	assert_true(found_shore, "expected at least one shore overlay cell (ocean bordering land) in this test region")
+					found_non_touching = true
+	assert_true(found_touching, "expected at least one shore overlay cell (ocean bordering land) in this test region")
+	assert_true(found_non_touching, "expected at least one overlay cell not directly touching land in this test region")
+	water_layer.free()
+
+
+## Shore influence now extends several tiles into open water (see
+## TerrainRenderer.RING_MAX), not just the single tile touching land -- gives
+## the water shader's wave-interference band room to actually be visible.
+## Real Earth data around the fixed Berlin test region should have at least
+## one water body wide enough to have cells a couple of tiles from shore.
+func test_water_overlay_uses_ring_tiles_for_cells_a_few_tiles_from_shore():
+	var water_layer := TileMapLayer.new()
+	manager.set_water_layer(water_layer)
+	manager.update(_berlin_tile)
+
+	var terrain_renderer := TerrainRenderer.new()
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var found_ring := false
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		for y in EarthChunkManager.CHUNK_SIZE:
+			for x in EarthChunkManager.CHUNK_SIZE:
+				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+				if manager.biome_at_global(global_x, global_y) != "ocean":
+					continue
+				var coords := water_layer.get_cell_atlas_coords(Vector2i(global_x, global_y))
+				for ring in range(1, TerrainRenderer.RING_MAX):
+					if coords == terrain_renderer.atlas_coords_for_water_overlay([], ring):
+						found_ring = true
+	assert_true(found_ring, "expected at least one ring-distance overlay cell in this test region")
 	water_layer.free()
 
 

@@ -303,8 +303,15 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			if chunk.biome[y * chunk.width + x] != "ocean":
 				continue
 			var global := origin + Vector2i(x, y)
+			var land_directions := _land_directions_at(global.x, global.y)
+			# Only search farther rings when nothing touches land directly --
+			# ring 0 already answers the common case for free.
+			var ring_distance := 0
+			if land_directions.is_empty():
+				ring_distance = _ring_distance_at(global.x, global.y, TerrainRenderer.RING_MAX)
 			_water_layer.set_cell(
-				global, 0, _terrain_renderer.atlas_coords_for_water_overlay(_land_directions_at(global.x, global.y))
+				global, 0,
+				_terrain_renderer.atlas_coords_for_water_overlay(land_directions, ring_distance)
 			)
 
 
@@ -319,6 +326,25 @@ func _land_directions_at(global_x: int, global_y: int) -> Array:
 		if neighbor_biome != "" and neighbor_biome != "ocean":
 			land_directions.append(direction)
 	return land_directions
+
+
+## Distance in tiles to the nearest non-ocean, currently-loaded cell, found
+## by checking each expanding Chebyshev ring (radius 1, then 2, ...) in
+## turn -- diagonals included, since flat ring tiles (see
+## TerrainRenderer.atlas_coords_for_water_overlay) don't need cardinal
+## precision the way the direct-touching ring-0 tile does. Only called when
+## _land_directions_at already found nothing at radius 0. Returns `max_ring`
+## (== "open water") if no land is found within that range.
+func _ring_distance_at(global_x: int, global_y: int, max_ring: int) -> int:
+	for radius in range(1, max_ring):
+		for dx in range(-radius, radius + 1):
+			for dy in range(-radius, radius + 1):
+				if maxi(absi(dx), absi(dy)) != radius:
+					continue  # only this ring's perimeter, smaller radii already checked
+				var neighbor_biome := biome_at_global(global_x + dx, global_y + dy)
+				if neighbor_biome != "" and neighbor_biome != "ocean":
+					return radius
+	return max_ring
 
 
 ## Sets how strongly raindrop ripples show on the water overlay (see

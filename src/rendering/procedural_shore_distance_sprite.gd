@@ -39,6 +39,20 @@ func generate_deep_water_image() -> Image:
 	return image
 
 
+## A flat tile for a cell `ring_index` tiles away from the nearest land
+## (1 <= ring_index < ring_max; ring_index 0 is the per-direction touching
+## tile from generate_image, ring_index >= ring_max is generate_deep_water_
+## image). Uniform within the tile -- one tile can only show ONE local
+## pattern, so multi-tile-wide shore influence has to step ring-to-ring
+## rather than gradient smoothly within a single tile; water_shader.gd's
+## own softening (sqrt) and the wave motion on top blur the seams.
+func generate_ring_image(ring_index: int, ring_max: int) -> Image:
+	var value := float(ring_index) / float(ring_max)
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	image.fill(Color(value, value, value, 1.0))
+	return image
+
+
 ## Normalized [0, 1] distance from (x, y) to the tile edge facing
 ## `direction` -- 0 right at that edge, 1 at the opposite edge. Unknown/non-
 ## cardinal directions fail safe to "far" (1.0) rather than crashing.

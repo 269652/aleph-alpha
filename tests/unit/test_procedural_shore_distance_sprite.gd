@@ -59,3 +59,29 @@ func test_image_is_fully_opaque():
 func test_generate_texture_returns_an_image_texture_of_the_right_size():
 	var texture := generator.generate_texture([Vector2i(0, -1)])
 	assert_eq(texture.get_width(), SIZE)
+
+
+# -- multi-tile shore rings ----------------------------------------------------
+#
+# A single tile's own local gradient (0..1 within its own 16px) confines any
+# shore-driven wave effect to a razor-thin band, too narrow to read as visible
+## interference at screen scale (reported: "waves don't produce interference").
+# Ring tiles extend shore influence out several tiles: ring 0 is the existing
+# per-direction touching-tile, rings 1..RING_MAX-1 are flat "this whole tile
+# is N tiles from shore" values, giving the wave pattern room to actually be
+# seen spreading across multiple tiles near a coast.
+
+func test_ring_image_is_flat_and_scaled_by_ring_index():
+	var ring1 := generator.generate_ring_image(1, 4)
+	var ring2 := generator.generate_ring_image(2, 4)
+	for y in SIZE:
+		for x in SIZE:
+			assert_almost_eq(ring1.get_pixel(x, y).r, 0.25, 0.01)
+			assert_almost_eq(ring2.get_pixel(x, y).r, 0.5, 0.01)
+
+
+func test_ring_image_is_deterministic_and_opaque():
+	var a := generator.generate_ring_image(2, 4)
+	var b := generator.generate_ring_image(2, 4)
+	assert_eq(a.get_data(), b.get_data())
+	assert_eq(a.get_pixel(0, 0).a, 1.0)

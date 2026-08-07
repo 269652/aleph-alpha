@@ -163,6 +163,15 @@ func dominant_blend_for(biome_name: String, neighbor_biomes: Dictionary) -> Dict
 		var neighbor: String = neighbor_biomes[direction]
 		if neighbor == biome_name:
 			continue
+		# Water is a special case, not just "lowest priority": land never
+		# blends toward ocean at all, on EITHER side. The shoreline
+		# transition belongs entirely to the GPU WaterFx overlay now (see
+		# water_shader.gd) -- a land-side dithered fringe here would fight
+		# the overlay's own shore-distance blending on the water side (the
+		# reported "shoreline renders backwards" bug: two independent
+		# transition treatments on opposite sides of the same border).
+		if neighbor == "ocean" and biome_name != "ocean":
+			continue
 		if BLEND_PRIORITY.get(neighbor, 0) >= own_priority:
 			continue
 		if not directions_by_biome.has(neighbor):
@@ -428,28 +437,48 @@ func erase(tile_map_layer: TileMapLayer, chunk_size: int, origin: Vector2i = Vec
 			tile_map_layer.erase_cell(origin + Vector2i(x, y))
 
 
-## The atlas coordinate of the WaterFx overlay tile for an ocean cell whose
-## land neighbors lie in `land_directions` (empty == open water, no land
-## neighbor). Order-independent (reduced to a mask, matching
-## atlas_coords_for_directional_blend's convention) -- callers can pass the
-## direction list in any order.
-func atlas_coords_for_water_overlay(land_directions: Array) -> Vector2i:
-	if land_directions.is_empty():
+## How far (in tiles) shore influence reaches into open water. A single
+## tile's own local gradient only spans 16px -- too thin a band for the
+## water shader's shore-reflection wave to be visible as real interference
+## at screen scale (reported: "waves don't produce interference"). Rings
+## 1..RING_MAX-1 extend that influence outward as flat per-ring tiles (see
+## ProceduralShoreDistanceSprite.generate_ring_image); ring_distance >=
+## RING_MAX reads as open water. 4 tiles (64px) gives the wave pattern real
+## room to read as bands spreading from the coast without making every small
+## pond's entire surface "shore".
+const RING_MAX := 4
+
+
+## The atlas coordinate of the WaterFx overlay tile for an ocean cell:
+## `ring_distance` tiles from the nearest land (0 == touches land directly,
+## using its own cardinal `land_directions` for a precise per-pixel edge
+## gradient; 1..RING_MAX-1 == a flat per-ring tile; >= RING_MAX == open
+## water). `land_directions` only matters at ring_distance 0 -- pass [] for
+## ring_distance >= 1. Order-independent at ring 0 (reduced to a mask,
+## matching atlas_coords_for_directional_blend's convention).
+func atlas_coords_for_water_overlay(land_directions: Array, ring_distance: int = 0) -> Vector2i:
+	if ring_distance >= RING_MAX:
 		return Vector2i(0, 0)
-	return Vector2i(_direction_mask(land_directions), 0)
+	if ring_distance == 0:
+		if land_directions.is_empty():
+			return Vector2i(0, 0)
+		return Vector2i(_direction_mask(land_directions), 0)
+	return Vector2i(DIRECTION_MASK_COUNT + ring_distance, 0)
 
 
 ## A small, separate TileSet for the GPU water overlay layer (see
-## EarthChunkManager.set_water_layer): one flat "deep water" tile plus one
-## per cardinal land-direction mask (DIRECTION_MASK_COUNT = 15), each holding
-## real shore-distance DATA (see ProceduralShoreDistanceSprite) rather than
-## art -- water_shader.gd samples it as a texture channel to blend and
-## animate everything continuously on the GPU. No animation-frame bookkeeping
-## needed here at all: unlike the old baked shore/rain tiles, every bit of
-## motion (waves, shore reflection, raindrop ripples) is computed in the
-## shader from TIME and world position, not by swapping tile frames.
+## EarthChunkManager.set_water_layer): one flat "deep water" tile, one per
+## cardinal land-direction mask at ring 0 (DIRECTION_MASK_COUNT = 15,
+## touching-land precision), and one flat tile per ring 1..RING_MAX-1 -- all
+## holding real shore-distance DATA (see ProceduralShoreDistanceSprite)
+## rather than art. water_shader.gd samples it as a texture channel to blend
+## and animate everything continuously on the GPU. No animation-frame
+## bookkeeping needed here at all: unlike the old baked shore/rain tiles,
+## every bit of motion (waves, shore reflection, raindrop ripples) is
+## computed in the shader from TIME and world position, not by swapping tile
+## frames.
 func build_water_overlay_tile_set() -> TileSet:
-	var total := 1 + DIRECTION_MASK_COUNT
+	var total := 1 + DIRECTION_MASK_COUNT + (RING_MAX - 1)
 	var image := Image.create(total * TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
 	image.blit_rect(
 		_shore_distance_generator.generate_deep_water_image(),
@@ -460,6 +489,12 @@ func build_water_overlay_tile_set() -> TileSet:
 		var distance_image := _shore_distance_generator.generate_image(land_directions)
 		image.blit_rect(
 			distance_image, Rect2i(Vector2i.ZERO, Vector2i(TILE_SIZE, TILE_SIZE)), Vector2i(mask * TILE_SIZE, 0)
+		)
+	for ring in range(1, RING_MAX):
+		var ring_image := _shore_distance_generator.generate_ring_image(ring, RING_MAX)
+		image.blit_rect(
+			ring_image, Rect2i(Vector2i.ZERO, Vector2i(TILE_SIZE, TILE_SIZE)),
+			Vector2i((DIRECTION_MASK_COUNT + ring) * TILE_SIZE, 0)
 		)
 
 	var source := TileSetAtlasSource.new()
