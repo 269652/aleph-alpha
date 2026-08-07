@@ -8,6 +8,7 @@ extends RefCounted
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const ProceduralAnimalSprite = preload("res://src/rendering/procedural_animal_sprite.gd")
 const CreatureInfo = preload("res://src/world/creature_info.gd")
+const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 
 const HERBIVORE_COLOR := Color(0.65, 0.5, 0.2)
 const BOAR_COLOR := Color(0.25, 0.18, 0.12)
@@ -66,6 +67,7 @@ const SPECIES_COLORS := {
 const MAX_MARKERS_PER_SPECIES := 12
 
 var _animal_sprite := ProceduralAnimalSprite.new()
+var _drop_shadow := DropShadow.new()
 
 
 ## Spawns placeholder marker nodes (as children of `parent`) for a region's
@@ -167,6 +169,12 @@ func _build_marker(
 	marker.wander_seed = wander_seed
 	marker.info = CreatureInfo.new(species_name, wander_seed)
 	marker.setup(world, tile_size)
+	# Contact shadow under the body (draws behind the marker's own sprite).
+	marker.add_child(
+		_drop_shadow.make_shadow(
+			int(ProceduralAnimalSprite.WIDTH * 0.7), ProceduralAnimalSprite.HEIGHT * 0.5 - 1.0
+		)
+	)
 	parent.add_child(marker)
 	return marker
 

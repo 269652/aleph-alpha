@@ -1,6 +1,7 @@
 extends Node2D
 
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
@@ -167,6 +168,10 @@ func _ready() -> void:
 	get_viewport().physics_object_picking = true
 
 	_chunk_manager = EarthChunkManager.new(_terrain, _entities, _creatures)
+	# World-space low-frequency color drift over the whole ground layer (see
+	# GroundTint) -- soft lusher/drier patches spanning many tiles, so fields
+	# read as organic ground instead of a uniform printed carpet.
+	_terrain.material = GroundTint.new().shared_material()
 	_player_spawner.spawn_path = _players.get_path()
 	_player_spawner.add_spawnable_scene(PlayerScene.resource_path)
 	WorldItemBus.item_dropped.connect(_on_item_dropped)

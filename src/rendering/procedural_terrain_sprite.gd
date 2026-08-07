@@ -192,6 +192,52 @@ func _paint_scatter(image: Image, color: Color, variant_seed: int, salt: String,
 		image.set_pixel(h % SIZE, (h / 43) % SIZE, color)
 
 
+## Foam color for shoreline water (near-white; test_procedural_terrain_sprite
+## detects foam as r/g/b all > 0.85).
+const FOAM_COLOR := Color(0.94, 0.97, 1.0)
+
+
+## A water tile that borders land on `land_directions` (Array of cardinal
+## Vector2i, matching the blend functions' convention): the ordinary animated
+## water base, plus a shimmering band of foam pixels along each land-facing
+## edge and a lightened lapping row just inside it. Foam pattern re-rolls per
+## frame (hash-salted with the wrapped frame), so the shoreline visibly
+## fizzes; the cycle loops seamlessly because the frame index wraps.
+func generate_shore_water_image(land_directions: Array, variant_seed: int, frame: int) -> Image:
+	var wrapped_frame := posmod(frame, FRAME_COUNT)
+	var base_color: Color = BASE_COLORS["ocean"]
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	_paint_water(image, base_color, variant_seed, wrapped_frame)
+	for direction in land_directions:
+		_paint_foam_edge(image, base_color, direction, variant_seed, wrapped_frame)
+	return image
+
+
+func _paint_foam_edge(
+	image: Image, base_color: Color, direction: Vector2i, variant_seed: int, frame: int
+) -> void:
+	var lap_color := base_color.lightened(0.3)
+	for i in SIZE:
+		# Outer edge pixel and the pixel just inside it, along this direction.
+		var outer := Vector2i(i, 0)
+		var inner := Vector2i(i, 1)
+		if direction == Vector2i(0, 1):
+			outer = Vector2i(i, SIZE - 1)
+			inner = Vector2i(i, SIZE - 2)
+		elif direction == Vector2i(-1, 0):
+			outer = Vector2i(0, i)
+			inner = Vector2i(1, i)
+		elif direction == Vector2i(1, 0):
+			outer = Vector2i(SIZE - 1, i)
+			inner = Vector2i(SIZE - 2, i)
+
+		var salt := "foam_%d_%d_%d" % [direction.x, direction.y, frame]
+		if _fraction(variant_seed, i, 0, salt) < 0.75:
+			image.set_pixel(outer.x, outer.y, FOAM_COLOR)
+		if _fraction(variant_seed, i, 1, salt) < 0.45:
+			image.set_pixel(inner.x, inner.y, lap_color)
+
+
 ## A jagged rock-face crack: a dark 1px line wandering down the tile.
 func _paint_cracks(image: Image, base_color: Color, variant_seed: int) -> void:
 	var crack_color := base_color.darkened(0.4)

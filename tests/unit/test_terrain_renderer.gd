@@ -30,9 +30,12 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 	# doesn't need six looks, and each extra costs 630 atlas images at build).
 	# Note: animated biome tiles still count once each here -- their extra
 	# FRAME_COUNT cells hold frames, not tiles.
+	# + shore tiles: DIRECTION_MASK_COUNT land-edge masks x SHORE_VARIANTS
+	# animated foam-edge water tiles (see atlas_coords_for_shore).
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
 	var expected := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1 + ProceduralStructureSprite.STRUCTURE_IDS.size()
+		+ TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.SHORE_VARIANTS
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(source.get_tiles_count(), expected)
@@ -47,6 +50,7 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
 	var tile_count_without_structures := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1
+		+ TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.SHORE_VARIANTS
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(
@@ -131,6 +135,54 @@ func test_atlas_columns_align_with_frame_blocks():
 ## ground cover, not a short repeating texture loop.
 func test_variants_per_biome_is_at_least_six():
 	assert_gte(TerrainRenderer.VARIANTS_PER_BIOME, 6)
+
+
+# -- animated shorelines (ocean cells bordering land get foam edges) ----------
+
+func test_shore_tiles_are_registered_animated_and_distinct_from_plain_water():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var coords := renderer.atlas_coords_for_shore([Vector2i(0, -1)], 0)
+	assert_true(source.has_tile(coords))
+	assert_eq(source.get_tile_animation_frames_count(coords), TerrainRenderer.FRAME_COUNT)
+	assert_ne(coords, renderer.atlas_coords_for_biome("ocean", 0))
+
+
+func test_paint_gives_an_ocean_cell_bordering_land_a_shore_tile():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 2
+	chunk.height = 1
+	chunk.elevation = PackedFloat32Array([0.1, 0.4])
+	chunk.biome = PackedStringArray(["ocean", "grassland"])
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(0, 0)
+	# The ocean cell at (0,0) has land to its east -> foam on that edge.
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_shore([Vector2i(1, 0)], variant)
+	)
+
+
+func test_paint_keeps_open_water_as_plain_animated_ocean():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 2
+	chunk.height = 1
+	chunk.elevation = PackedFloat32Array([0.1, 0.1])
+	chunk.biome = PackedStringArray(["ocean", "ocean"])
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(0, 0)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_biome("ocean", variant)
+	)
 
 
 ## Fail-safe default (matching this codebase's `.get(x, default)` convention):
@@ -440,10 +492,15 @@ func test_paint_blends_only_the_higher_priority_side_of_a_border():
 
 	var ocean_variant := renderer.variant_index_for_position(0, 0)
 	var grassland_variant := renderer.variant_index_for_position(1, 0)
+	# The ocean (lower-priority) side never fringes toward land -- but it's no
+	# longer a plain open-water tile either: water touching land renders an
+	# animated foam-edge shore tile (see atlas_coords_for_shore), foam facing
+	# its land neighbor. The one-sided fringe rule is intact -- only the
+	# grassland side carries the land/water color transition.
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
-		renderer.atlas_coords_for_biome("ocean", ocean_variant),
-		"the ocean (lower-priority) side must stay a pure ocean tile"
+		renderer.atlas_coords_for_shore([Vector2i(1, 0)], ocean_variant),
+		"the ocean side shows shoreline foam, not a land-colored fringe"
 	)
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 0)),

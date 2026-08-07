@@ -258,6 +258,37 @@ func test_grassland_tile_has_rich_color_variety():
 	assert_gte(distinct.size(), 5, "grassland should layer tufts/flowers over the base speckle")
 
 
+# -- shoreline foam (water tiles bordering land) ------------------------------
+
+## Foam gathers on the land-facing edge only: a shore tile with land to the
+## north has near-white foam pixels in its top rows and none along the bottom.
+func test_shore_water_has_foam_on_the_land_facing_edge_only():
+	var image := generator.generate_shore_water_image([Vector2i(0, -1)], 0, 0)
+	var top_foam := 0
+	var bottom_foam := 0
+	for x in ProceduralTerrainSprite.SIZE:
+		for y in 2:
+			if _is_foam(image.get_pixel(x, y)):
+				top_foam += 1
+		for y in range(ProceduralTerrainSprite.SIZE - 2, ProceduralTerrainSprite.SIZE):
+			if _is_foam(image.get_pixel(x, y)):
+				bottom_foam += 1
+	assert_gt(top_foam, 0, "land-facing edge should carry foam")
+	assert_eq(bottom_foam, 0, "open-water edge should carry none")
+
+
+func test_shore_water_frames_differ_and_are_deterministic():
+	var f0 := generator.generate_shore_water_image([Vector2i(0, -1)], 0, 0)
+	var f1 := generator.generate_shore_water_image([Vector2i(0, -1)], 0, 1)
+	var f0_again := generator.generate_shore_water_image([Vector2i(0, -1)], 0, 0)
+	assert_ne(f0.get_data(), f1.get_data(), "foam should shimmer across frames")
+	assert_eq(f0.get_data(), f0_again.get_data())
+
+
+func _is_foam(p: Color) -> bool:
+	return p.r > 0.85 and p.g > 0.85 and p.b > 0.85
+
+
 func _rgb_distance(a: Color, b: Color) -> float:
 	return Vector3(a.r, a.g, a.b).distance_to(Vector3(b.r, b.g, b.b))
 

@@ -11,6 +11,15 @@ var renderer: CreatureRenderer
 var parent: Node2D
 
 
+## Creatures cast contact shadows (see drop_shadow.gd), grounding them on the
+## terrain instead of floating over it.
+func test_spawned_creature_has_a_drop_shadow():
+	var marker := renderer.spawn_single(parent, "boar", Vector2(10, 10))
+	var shadow := marker.get_node_or_null("Shadow")
+	assert_not_null(shadow, "creature should have a Shadow child")
+	assert_true(shadow is Sprite2D and shadow.show_behind_parent)
+
+
 func before_each():
 	renderer = CreatureRenderer.new()
 	parent = Node2D.new()

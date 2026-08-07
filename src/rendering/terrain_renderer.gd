@@ -62,6 +62,12 @@ const _DIRECTION_COUNT := 4
 ## their shared corners) -- that's (2^4 - 1) = 15 masks.
 const DIRECTION_MASK_COUNT := (1 << _DIRECTION_COUNT) - 1
 
+## Animated shoreline variants: an ocean cell bordering land renders a foam-
+## edged water tile (one per land-direction mask, see atlas_coords_for_shore)
+## instead of plain open water, so lakes and coasts read as lapping water
+## rather than hard blue blobs.
+const SHORE_VARIANTS := 2
+
 ## Border/blend tiles keep fewer variants than base ground: they're
 ## transitional fringe noise, not the surface the eye rests on, and every
 ## extra blend variant costs n*(n-1)*15 more generated atlas images at
@@ -210,10 +216,33 @@ func _structure_linear(tile_id: String) -> int:
 	return _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.find(tile_id)
 
 
-## Linear atlas index where the blend tiles begin (right after the earth tile
-## and every known structure's tile).
+## Returns the atlas coordinate (first animation frame) for a shoreline water
+## tile whose land neighbors lie in `land_directions` -- foam on exactly
+## those edges. Order-independent (reduced to a mask), same convention as
+## atlas_coords_for_directional_blend. `variant_index` folds into
+## SHORE_VARIANTS, so callers can pass the ordinary per-position variant.
+func atlas_coords_for_shore(land_directions: Array, variant_index: int = 0) -> Vector2i:
+	var mask := _direction_mask(land_directions)
+	return _grid_coords(_shore_linear(mask, variant_index % SHORE_VARIANTS))
+
+
+## Linear atlas index where the animated shore-water blocks begin: after the
+## earth + structure tiles, rounded up to the next FRAME_COUNT boundary so
+## every shore block stays row-aligned (frames must never wrap a row -- same
+## invariant as the base biome blocks).
+func _shore_base_linear() -> int:
+	var raw := _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.size()
+	return int(ceil(raw / float(FRAME_COUNT))) * FRAME_COUNT
+
+
+func _shore_linear(mask: int, variant: int) -> int:
+	return _shore_base_linear() + ((mask - 1) * SHORE_VARIANTS + variant) * FRAME_COUNT
+
+
+## Linear atlas index where the blend tiles begin (right after the shore
+## blocks).
 func _blend_base_linear() -> int:
-	return _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.size()
+	return _shore_base_linear() + DIRECTION_MASK_COUNT * SHORE_VARIANTS * FRAME_COUNT
 
 
 ## Linear atlas index of one blend tile. Pairs are ordered (near, far) with the
@@ -294,6 +323,16 @@ func build_tile_set() -> TileSet:
 		var structure_image := _structure_sprite_generator.generate_image(structure_id)
 		_blit_tile(image, structure_image, _structure_linear(structure_id))
 
+	# Animated shoreline blocks: one per land-direction mask x variant.
+	for mask in range(1, DIRECTION_MASK_COUNT + 1):
+		var land_directions := _directions_from_mask(mask)
+		for variant in SHORE_VARIANTS:
+			for frame in FRAME_COUNT:
+				var shore_image := _terrain_sprite_generator.generate_shore_water_image(
+					land_directions, variant, frame
+				)
+				_blit_tile(image, shore_image, _shore_linear(mask, variant) + frame)
+
 	for near_index in biome_count:
 		for far_index in biome_count:
 			if far_index == near_index:
@@ -319,6 +358,15 @@ func build_tile_set() -> TileSet:
 	for i in biome_count:
 		for variant in VARIANTS_PER_BIOME:
 			var first := _grid_coords((i * VARIANTS_PER_BIOME + variant) * FRAME_COUNT)
+			source.create_tile(first)
+			source.set_tile_animation_frames_count(first, FRAME_COUNT)
+			for frame in FRAME_COUNT:
+				source.set_tile_animation_frame_duration(first, frame, FRAME_DURATION_SECONDS)
+
+	# Shore-water tiles animate exactly like base biome tiles.
+	for mask in range(1, DIRECTION_MASK_COUNT + 1):
+		for variant in SHORE_VARIANTS:
+			var first := _grid_coords(_shore_linear(mask, variant))
 			source.create_tile(first)
 			source.set_tile_animation_frames_count(first, FRAME_COUNT)
 			for frame in FRAME_COUNT:
@@ -368,15 +416,27 @@ func paint(
 			else:
 				var biome_name: String = chunk.biome[y * chunk.width + x]
 				var variant := variant_index_for_position(global.x, global.y)
-				var blend := dominant_blend_for(
-					biome_name, _neighbor_biomes(chunk, x, y, origin, global_biome_lookup)
-				)
-				if blend.is_empty():
-					atlas_coords = atlas_coords_for_biome(biome_name, variant)
+				var neighbors := _neighbor_biomes(chunk, x, y, origin, global_biome_lookup)
+				if biome_name == "ocean":
+					# Water never fringes over land (lowest BLEND_PRIORITY);
+					# instead, water touching land gets an animated foam-edge
+					# shore tile on exactly its land-facing edges.
+					var land_directions := []
+					for direction in neighbors:
+						if neighbors[direction] != "ocean":
+							land_directions.append(direction)
+					if land_directions.is_empty():
+						atlas_coords = atlas_coords_for_biome(biome_name, variant)
+					else:
+						atlas_coords = atlas_coords_for_shore(land_directions, variant)
 				else:
-					atlas_coords = atlas_coords_for_directional_blend(
-						biome_name, blend.partner, blend.directions, variant
-					)
+					var blend := dominant_blend_for(biome_name, neighbors)
+					if blend.is_empty():
+						atlas_coords = atlas_coords_for_biome(biome_name, variant)
+					else:
+						atlas_coords = atlas_coords_for_directional_blend(
+							biome_name, blend.partner, blend.directions, variant
+						)
 			tile_map_layer.set_cell(global, 0, atlas_coords)
 
 

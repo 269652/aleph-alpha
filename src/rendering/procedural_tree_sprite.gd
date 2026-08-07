@@ -11,7 +11,10 @@ extends RefCounted
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
-const SIZE := Vector2i(16, 20)
+## Bumped from 16x20: fuller canopies that overlap between adjacent forest
+## tiles, so a forest reads as a connected leafy mass instead of spaced
+## lollipops. Collision stays proportional (TreeRenderer.COLLISION_SCALE).
+const SIZE := Vector2i(20, 26)
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2

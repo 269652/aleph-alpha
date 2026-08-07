@@ -6,6 +6,7 @@ const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const TreeGenome = preload("res://src/gameplay/tree_genome.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
+const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 
 ## Tree sprite size in pixels (see ProceduralTreeSprite), and how much
 ## smaller than the sprite the actual collision box is (a little forgiving,
@@ -24,6 +25,7 @@ var _tree_placement := TreePlacement.new()
 var _tree_sprite_generator := ProceduralTreeSprite.new()
 var _texture_cache: Dictionary = {}  # bucket (float) -> ImageTexture
 var _wind_sway := WindSway.new()
+var _drop_shadow := DropShadow.new()
 
 
 ## Spawns a collidable tree node (as a child of `parent`) for every forested
@@ -71,6 +73,12 @@ func _build_tree_node(position: Vector2) -> ChoppableTree:
 	var genome := TreeGenome.new(hash("%d_%d" % [int(position.x), int(position.y)]))
 	body.species_bias = genome.species_bias
 	body.sprite_seed = hash("%d_%d" % [int(position.x), int(position.y)])
+
+	# Contact shadow at the trunk's base, added first so it draws under the
+	# canopy sprite (sibling order == draw order).
+	body.add_child(
+		_drop_shadow.make_shadow(int(TREE_SIZE.x * 0.85), TREE_SIZE.y * 0.5 - 2.0)
+	)
 
 	var sprite := Sprite2D.new()
 	sprite.texture = _texture_for(position)

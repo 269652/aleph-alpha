@@ -110,6 +110,18 @@ func test_spawn_tree_at_places_a_single_choppable_tree_at_the_given_position():
 	assert_eq(parent.get_child_count(), 1)
 
 
+## Every tree casts a soft contact shadow (see drop_shadow.gd) so it sits ON
+## the ground instead of floating over it.
+func test_spawned_trees_have_a_drop_shadow():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	assert_gt(spawned.size(), 0)
+	for tree in spawned:
+		var shadow := tree.get_node_or_null("Shadow")
+		assert_not_null(shadow, "tree should have a Shadow child")
+		assert_true(shadow is Sprite2D and shadow.show_behind_parent)
+
+
 ## Trees sway in the wind: every spawned tree's sprite carries the shared
 ## WindSway shader material (see wind_sway.gd), one material instance shared
 ## across all trees rather than one per node.
@@ -120,7 +132,9 @@ func test_spawned_tree_sprites_share_the_wind_sway_material():
 	var seen_material: Material = null
 	for tree in spawned:
 		for child in tree.get_children():
-			if child is Sprite2D:
+			# The contact shadow is deliberately NOT wind-swayed -- a shadow
+			# stays planted on the ground while the canopy above it moves.
+			if child is Sprite2D and child.name != "Shadow":
 				assert_true(child.material is ShaderMaterial, "tree sprite should sway via the wind shader")
 				if seen_material == null:
 					seen_material = child.material
