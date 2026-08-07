@@ -25,8 +25,24 @@ const BIOME_COLORS := {
 ## atlas -- picked per tile position (see variant_index_for_position) so the
 ## ground reads as naturally varied rather than one obviously-repeating
 ## texture, while staying deterministic (revisiting the same tile always
-## looks the same).
-const VARIANTS_PER_BIOME := 4
+## looks the same). Six (up from four) so ground cover reads as natural
+## variation, not a short texture loop -- pinned by
+## test_variants_per_biome_is_at_least_six.
+const VARIANTS_PER_BIOME := 6
+
+## Base biome tiles animate in real time (scrolling water, swaying grass --
+## see ProceduralTerrainSprite.generate_frame_image): each biome variant
+## reserves FRAME_COUNT consecutive atlas cells, its frames laid out
+## horizontally, registered via TileSetAtlasSource's tile animation so
+## TileMapLayer plays them with zero per-frame script cost. ATLAS_COLUMNS
+## must divide evenly by FRAME_COUNT so a frame row never wraps the atlas
+## (pinned by test_atlas_columns_align_with_frame_blocks).
+const FRAME_COUNT := ProceduralTerrainSprite.FRAME_COUNT
+
+## Seconds each animation frame holds -- a slow, ambient shimmer/sway pace,
+## not a strobing arcade loop. Pinned by
+## test_biome_tiles_are_registered_as_animated_with_the_pinned_frame_count.
+const FRAME_DURATION_SECONDS := 0.45
 
 ## Phase 3's Terraria-style build/destroy tile: pressing E turns the faced
 ## tile into bare earth (Q reverts it). A single placeable structure type
@@ -46,9 +62,18 @@ const _DIRECTION_COUNT := 4
 ## their shared corners) -- that's (2^4 - 1) = 15 masks.
 const DIRECTION_MASK_COUNT := (1 << _DIRECTION_COUNT) - 1
 
+## Border/blend tiles keep fewer variants than base ground: they're
+## transitional fringe noise, not the surface the eye rests on, and every
+## extra blend variant costs n*(n-1)*15 more generated atlas images at
+## startup. Three here (vs. six base variants) keeps the atlas build FASTER
+## than the original 4-variant scheme while the ground itself got richer.
+## atlas_coords_for_directional_blend folds the caller's 0..VARIANTS_PER_BIOME
+## variant into this range, so callers don't care about the difference.
+const BLEND_VARIANTS := 3
+
 ## Every ordered (near, far) biome pair reserves this many atlas tiles: one per
-## direction mask x VARIANTS_PER_BIOME.
-const _TILES_PER_PAIR := DIRECTION_MASK_COUNT * VARIANTS_PER_BIOME
+## direction mask x BLEND_VARIANTS.
+const _TILES_PER_PAIR := DIRECTION_MASK_COUNT * BLEND_VARIANTS
 
 ## The atlas is laid out as a grid this many tiles wide (rather than a single
 ## row) -- with every differing biome pair blended, the tile count runs into
@@ -59,12 +84,14 @@ var _terrain_sprite_generator := ProceduralTerrainSprite.new()
 var _structure_sprite_generator := ProceduralStructureSprite.new()
 
 
-## Returns the atlas coordinate for one biome's variant. Biome variants occupy
-## the first block of the atlas: each biome gets VARIANTS_PER_BIOME consecutive
-## cells, in BiomeClassifier.KNOWN_BIOMES order.
+## Returns the atlas coordinate for one biome's variant -- the FIRST frame of
+## its FRAME_COUNT-cell animation block. Biome variant blocks occupy the first
+## region of the atlas, in BiomeClassifier.KNOWN_BIOMES order; the cells after
+## each returned coordinate hold that tile's remaining animation frames (see
+## build_tile_set) and are never tiles of their own.
 func atlas_coords_for_biome(biome_name: String, variant_index: int = 0) -> Vector2i:
 	var biome_index := BiomeClassifier.KNOWN_BIOMES.find(biome_name)
-	return _grid_coords(biome_index * VARIANTS_PER_BIOME + variant_index)
+	return _grid_coords((biome_index * VARIANTS_PER_BIOME + variant_index) * FRAME_COUNT)
 
 
 ## Returns the atlas coordinate for a player-placed modification tile,
@@ -164,9 +191,9 @@ func _biome_tile_count() -> int:
 
 
 ## Linear atlas index of the single player-placeable "earth" tile: right after
-## all biome variant tiles.
+## all biome variant animation blocks (each biome tile spans FRAME_COUNT cells).
 func _earth_linear() -> int:
-	return _biome_tile_count()
+	return _biome_tile_count() * FRAME_COUNT
 
 
 ## Linear atlas index where the per-structure tiles begin (right after the
@@ -190,13 +217,18 @@ func _blend_base_linear() -> int:
 
 
 ## Linear atlas index of one blend tile. Pairs are ordered (near, far) with the
-## near==far slot skipped, so each of the N biomes has N-1 partners.
+## near==far slot skipped, so each of the N biomes has N-1 partners. The
+## caller's variant (0..VARIANTS_PER_BIOME) folds into the smaller
+## BLEND_VARIANTS range (see that constant's doc comment).
 func _blend_linear(near_biome: String, far_biome: String, mask: int, variant_index: int) -> int:
 	var near_index := BiomeClassifier.KNOWN_BIOMES.find(near_biome)
 	var far_index := BiomeClassifier.KNOWN_BIOMES.find(far_biome)
 	var far_ordinal := far_index if far_index < near_index else far_index - 1
 	var pair_ordinal := near_index * (BiomeClassifier.KNOWN_BIOMES.size() - 1) + far_ordinal
-	return _blend_base_linear() + pair_ordinal * _TILES_PER_PAIR + (mask - 1) * VARIANTS_PER_BIOME + variant_index
+	return (
+		_blend_base_linear() + pair_ordinal * _TILES_PER_PAIR
+		+ (mask - 1) * BLEND_VARIANTS + (variant_index % BLEND_VARIANTS)
+	)
 
 
 ## Converts a set of cardinal directions into a bitmask over _DIRECTIONS.
@@ -238,16 +270,21 @@ func _blit_tile(atlas_image: Image, tile_image: Image, linear_index: int) -> voi
 ## masks) x VARIANTS_PER_BIOME.
 func build_tile_set() -> TileSet:
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
-	var total_tiles := _blend_base_linear() + biome_count * (biome_count - 1) * _TILES_PER_PAIR
-	var rows := int(ceil(float(total_tiles) / ATLAS_COLUMNS))
+	var total_cells := _blend_base_linear() + biome_count * (biome_count - 1) * _TILES_PER_PAIR
+	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
 
 	var image := Image.create(ATLAS_COLUMNS * TILE_SIZE, rows * TILE_SIZE, false, Image.FORMAT_RGBA8)
 
+	# Base biome tiles: FRAME_COUNT animation frames each, blitted into
+	# consecutive cells (the block never wraps a row -- see FRAME_COUNT's doc
+	# comment on the ATLAS_COLUMNS alignment invariant).
 	for i in biome_count:
 		var biome_name: String = BiomeClassifier.KNOWN_BIOMES[i]
 		for variant in VARIANTS_PER_BIOME:
-			var tile_image := _terrain_sprite_generator.generate_image(biome_name, variant)
-			_blit_tile(image, tile_image, i * VARIANTS_PER_BIOME + variant)
+			var block_start := (i * VARIANTS_PER_BIOME + variant) * FRAME_COUNT
+			for frame in FRAME_COUNT:
+				var frame_image := _terrain_sprite_generator.generate_frame_image(biome_name, variant, frame)
+				_blit_tile(image, frame_image, block_start + frame)
 
 	var earth_image := Image.create(TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
 	earth_image.fill(EARTH_COLOR)
@@ -265,7 +302,7 @@ func build_tile_set() -> TileSet:
 			var far_biome: String = BiomeClassifier.KNOWN_BIOMES[far_index]
 			for mask in range(1, DIRECTION_MASK_COUNT + 1):
 				var directions := _directions_from_mask(mask)
-				for variant in VARIANTS_PER_BIOME:
+				for variant in BLEND_VARIANTS:
 					var blend_image := _terrain_sprite_generator.generate_multi_directional_blend_image(
 						near_biome, far_biome, directions, variant
 					)
@@ -274,7 +311,24 @@ func build_tile_set() -> TileSet:
 	var source := TileSetAtlasSource.new()
 	source.texture = ImageTexture.create_from_image(image)
 	source.texture_region_size = Vector2i(TILE_SIZE, TILE_SIZE)
-	for linear_index in total_tiles:
+
+	# Animated biome tiles: one created tile per block, at its first frame's
+	# cell; the remaining cells of the block are claimed as animation frames
+	# (never created as tiles of their own), and TileMapLayer plays them
+	# automatically -- zero per-frame script cost.
+	for i in biome_count:
+		for variant in VARIANTS_PER_BIOME:
+			var first := _grid_coords((i * VARIANTS_PER_BIOME + variant) * FRAME_COUNT)
+			source.create_tile(first)
+			source.set_tile_animation_frames_count(first, FRAME_COUNT)
+			for frame in FRAME_COUNT:
+				source.set_tile_animation_frame_duration(first, frame, FRAME_DURATION_SECONDS)
+
+	# Earth, structures, and blend tiles stay static single-cell tiles.
+	source.create_tile(_grid_coords(_earth_linear()))
+	for structure_id in ProceduralStructureSprite.STRUCTURE_IDS:
+		source.create_tile(_grid_coords(_structure_linear(structure_id)))
+	for linear_index in range(_blend_base_linear(), total_cells):
 		source.create_tile(_grid_coords(linear_index))
 
 	var tile_set := TileSet.new()

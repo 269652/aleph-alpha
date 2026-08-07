@@ -208,6 +208,56 @@ func _far_leaning_count_in_row(image: Image, y: int, far_biome: String, near_bio
 	return count
 
 
+# -- real-time tile animation frames (see TerrainRenderer's animated tiles) --
+
+func test_frame_zero_matches_the_plain_generate_image():
+	var plain := generator.generate_image("grassland", 2)
+	var frame_zero := generator.generate_frame_image("grassland", 2, 0)
+	assert_eq(plain.get_data(), frame_zero.get_data())
+
+
+## Water visibly moves: wave streaks scroll one row per frame, and the cycle
+## is seamless (frame FRAME_COUNT wraps back to frame 0's look).
+func test_ocean_frames_differ_and_loop_seamlessly():
+	var f0 := generator.generate_frame_image("ocean", 0, 0)
+	var f1 := generator.generate_frame_image("ocean", 0, 1)
+	var wrapped := generator.generate_frame_image("ocean", 0, ProceduralTerrainSprite.FRAME_COUNT)
+	assert_ne(f0.get_data(), f1.get_data(), "ocean frames should visibly differ (moving waves)")
+	assert_eq(f0.get_data(), wrapped.get_data(), "the animation cycle should loop seamlessly")
+
+
+## Grass is alive: tuft pixels sway across frames.
+func test_grassland_frames_differ():
+	var f0 := generator.generate_frame_image("grassland", 0, 0)
+	var f1 := generator.generate_frame_image("grassland", 0, 1)
+	assert_ne(f0.get_data(), f1.get_data(), "grassland tufts should sway across frames")
+
+
+## Arid/rocky biomes stay static -- identical frames, deliberately, so their
+## animation costs nothing visually or at build time to reason about.
+func test_desert_frames_are_identical():
+	var f0 := generator.generate_frame_image("desert", 0, 0)
+	var f1 := generator.generate_frame_image("desert", 0, 1)
+	assert_eq(f0.get_data(), f1.get_data())
+
+
+func test_frame_images_are_deterministic():
+	var a := generator.generate_frame_image("ocean", 3, 2)
+	var b := generator.generate_frame_image("ocean", 3, 2)
+	assert_eq(a.get_data(), b.get_data())
+
+
+## Richness pin: a grassland tile is no longer just base+speckle -- tufts and
+## flower accents push it past a handful of distinct colors.
+func test_grassland_tile_has_rich_color_variety():
+	var image := generator.generate_frame_image("grassland", 0, 0)
+	var distinct := {}
+	for y in ProceduralTerrainSprite.SIZE:
+		for x in ProceduralTerrainSprite.SIZE:
+			distinct[image.get_pixel(x, y)] = true
+	assert_gte(distinct.size(), 5, "grassland should layer tufts/flowers over the base speckle")
+
+
 func _rgb_distance(a: Color, b: Color) -> float:
 	return Vector3(a.r, a.g, a.b).distance_to(Vector3(b.r, b.g, b.b))
 

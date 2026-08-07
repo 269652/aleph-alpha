@@ -10,6 +10,13 @@ extends RefCounted
 
 const SIZE := 16
 
+## Frames per animated tile (see generate_frame_image and TerrainRenderer's
+## animated atlas blocks). Every animated pattern is designed to loop
+## seamlessly with exactly this period: water streaks scroll one row per frame
+## against their 4-row spacing, and grass tuft sway cycles [0, 1, 0, -1].
+## Static biomes return identical frames -- same pipeline, no visible churn.
+const FRAME_COUNT := 4
+
 ## Brighter, more saturated Zelda/Pokemon-overworld palette. Relationships are
 ## preserved -- grassland vivid green, forest a deeper green, ocean vivid blue,
 ## desert sandy, mountain/tundra neutral -- just pushed toward higher HSV
@@ -39,13 +46,41 @@ func generate_texture(biome_name: String, variant_seed: int) -> ImageTexture:
 
 
 func generate_image(biome_name: String, variant_seed: int) -> Image:
+	return generate_frame_image(biome_name, variant_seed, 0)
+
+
+## One frame of a biome tile's real-time animation cycle (see FRAME_COUNT).
+## Every biome layers detail over its base speckle -- grass tufts + flowers on
+## grassland, moss on forest floors, dune ripples on desert, stones on tundra,
+## cracks on mountain -- and the living biomes animate: water streaks scroll,
+## grass tufts sway. `frame` wraps, so frame FRAME_COUNT == frame 0 exactly
+## (seamless loop, pinned by test_ocean_frames_differ_and_loop_seamlessly).
+func generate_frame_image(biome_name: String, variant_seed: int, frame: int) -> Image:
+	var wrapped_frame := posmod(frame, FRAME_COUNT)
 	var base_color: Color = BASE_COLORS.get(biome_name, _FALLBACK_COLOR)
 	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
 
-	if biome_name == "ocean":
-		_paint_water(image, base_color, variant_seed)
-	else:
-		_paint_speckled(image, base_color, variant_seed)
+	match biome_name:
+		"ocean":
+			_paint_water(image, base_color, variant_seed, wrapped_frame)
+		"grassland":
+			_paint_speckled(image, base_color, variant_seed)
+			_paint_grass_tufts(image, base_color, variant_seed, wrapped_frame)
+			_paint_flowers(image, variant_seed)
+		"forest", "rainforest":
+			_paint_speckled(image, base_color, variant_seed)
+			_paint_moss(image, base_color, variant_seed)
+		"desert":
+			_paint_speckled(image, base_color, variant_seed)
+			_paint_dune_ripples(image, base_color, variant_seed)
+		"tundra":
+			_paint_speckled(image, base_color, variant_seed)
+			_paint_scatter(image, base_color.darkened(0.28), variant_seed, "stones", 3)
+		"mountain":
+			_paint_speckled(image, base_color, variant_seed)
+			_paint_cracks(image, base_color, variant_seed)
+		_:
+			_paint_speckled(image, base_color, variant_seed)
 
 	return image
 
@@ -67,8 +102,10 @@ func _paint_speckled(image: Image, base_color: Color, variant_seed: int) -> void
 
 ## Water gets horizontal wave streaks (a lighter band every few rows, phase
 ## offset by variant_seed) layered over a light speckle, instead of the
-## grainy land texture -- reads as light glinting on a surface.
-func _paint_water(image: Image, base_color: Color, variant_seed: int) -> void:
+## grainy land texture -- reads as light glinting on a surface. The streaks
+## scroll one row per animation frame: their spacing (4 rows) matches
+## FRAME_COUNT exactly, so the cycle loops seamlessly.
+func _paint_water(image: Image, base_color: Color, variant_seed: int, frame: int = 0) -> void:
 	var phase := absi(hash("%d_wave_phase" % variant_seed)) % SIZE
 	for y in SIZE:
 		for x in SIZE:
@@ -76,9 +113,93 @@ func _paint_water(image: Image, base_color: Color, variant_seed: int) -> void:
 			var color := base_color
 			if roll < SPECKLE_DENSITY * 0.3:
 				color = base_color.darkened(SPECKLE_DARKEN * 0.6)
-			if (y + phase) % 4 == 0:
+			if (y + phase + frame) % 4 == 0:
 				color = color.lightened(SPECKLE_LIGHTEN)
 			image.set_pixel(x, y, color)
+
+
+## Grass tufts: a few short vertical blade clusters whose top pixel leans with
+## the wind, cycling [0, 1, 0, -1] px across the animation frames (period
+## FRAME_COUNT -- seamless). Each tuft gets its own phase offset so the field
+## sways organically rather than in robotic lockstep.
+const _TUFT_COUNT := 4
+const _TUFT_SWAY := [0, 1, 0, -1]
+
+
+func _paint_grass_tufts(image: Image, base_color: Color, variant_seed: int, frame: int) -> void:
+	var stem_color := base_color.darkened(0.32)
+	var tip_color := base_color.lightened(0.2)
+	for i in _TUFT_COUNT:
+		var h := absi(hash("%d_tuft_%d" % [variant_seed, i]))
+		var tx := 1 + h % (SIZE - 2)
+		var ty := 4 + (h / 53) % (SIZE - 6)  # stem base row, kept inside the tile
+		var sway_phase := (h / 911) % FRAME_COUNT
+		var lean: int = _TUFT_SWAY[(frame + sway_phase) % FRAME_COUNT]
+		image.set_pixel(tx, ty, stem_color)
+		image.set_pixel(tx, ty - 1, stem_color)
+		var tip_x := clampi(tx + lean, 0, SIZE - 1)
+		image.set_pixel(tip_x, ty - 2, tip_color)
+
+
+## Occasional flower accents (static -- flowers don't sway at 16px): roughly
+## every third variant gets 1-2 bright petal pixels, so walking a meadow
+## passes little bursts of white/yellow/red among the green.
+const _FLOWER_COLORS := [Color(0.95, 0.95, 0.9), Color(0.98, 0.85, 0.25), Color(0.9, 0.3, 0.3)]
+
+
+func _paint_flowers(image: Image, variant_seed: int) -> void:
+	var h := absi(hash("%d_flowers" % variant_seed))
+	if h % 3 != 0:
+		return
+	var flower_count := 1 + (h / 7) % 2
+	for i in flower_count:
+		var fh := absi(hash("%d_flower_%d" % [variant_seed, i]))
+		var fx := 1 + fh % (SIZE - 2)
+		var fy := 1 + (fh / 61) % (SIZE - 2)
+		var color: Color = _FLOWER_COLORS[(fh / 397) % _FLOWER_COLORS.size()]
+		image.set_pixel(fx, fy, color)
+
+
+## Dark moss/undergrowth patches on forest-floor tiles: 2-3 small 2x2 blobs of
+## deepened green, so the floor reads as layered undergrowth rather than one
+## flat speckle field.
+func _paint_moss(image: Image, base_color: Color, variant_seed: int) -> void:
+	var moss_color := base_color.darkened(0.3)
+	for i in 3:
+		var h := absi(hash("%d_moss_%d" % [variant_seed, i]))
+		var mx := h % (SIZE - 1)
+		var my := (h / 47) % (SIZE - 1)
+		image.set_pixel(mx, my, moss_color)
+		image.set_pixel(mx + 1, my, moss_color)
+		image.set_pixel(mx, my + 1, moss_color)
+
+
+## Wind-blown dune ripples: two shallow diagonal shade lines across the sand.
+func _paint_dune_ripples(image: Image, base_color: Color, variant_seed: int) -> void:
+	var ripple_color := base_color.darkened(0.12)
+	var offset := absi(hash("%d_dune" % variant_seed)) % 8
+	for x in SIZE:
+		var y1 := (x / 2 + offset) % SIZE
+		var y2 := (x / 2 + offset + 8) % SIZE
+		image.set_pixel(x, y1, ripple_color)
+		image.set_pixel(x, y2, ripple_color)
+
+
+## A few scattered single-pixel accents (tundra stones etc.).
+func _paint_scatter(image: Image, color: Color, variant_seed: int, salt: String, count: int) -> void:
+	for i in count:
+		var h := absi(hash("%d_%s_%d" % [variant_seed, salt, i]))
+		image.set_pixel(h % SIZE, (h / 43) % SIZE, color)
+
+
+## A jagged rock-face crack: a dark 1px line wandering down the tile.
+func _paint_cracks(image: Image, base_color: Color, variant_seed: int) -> void:
+	var crack_color := base_color.darkened(0.4)
+	var h := absi(hash("%d_crack" % variant_seed))
+	var x := 2 + h % (SIZE - 4)
+	for y in range(2, SIZE - 2):
+		x = clampi(x + [-1, 0, 0, 1][(h / (y + 3)) % 4], 1, SIZE - 2)
+		image.set_pixel(x, y, crack_color)
 
 
 ## A deterministic pseudo-random fraction in [0, 1] for a pixel, derived from

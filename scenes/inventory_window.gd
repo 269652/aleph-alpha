@@ -17,6 +17,13 @@ signal unequip_requested(slot: String)
 
 const SLOT_SIZE := 52.0
 const ICON_SIZE := 40.0
+## Paperdoll equipment slots are deliberately smaller than item-grid slots:
+## five of them stack vertically next to the character preview, and at the
+## grid's 52px they overflow the window's anchor box (the reported
+## bottom-clipped-off-screen bug -- see test_inventory_window.gd's fits-the-
+## anchor-box test pinning this).
+const EQUIP_SLOT_SIZE := 40.0
+const EQUIP_ICON_SIZE := 30.0
 const GRID_COLUMNS := 6
 
 ## Display labels for the paperdoll slots.
@@ -36,19 +43,17 @@ const KIND_LABELS := {
 var _item_sprite := ProceduralItemSprite.new()
 var _char_sprite := ProceduralCharacterSprite.new()
 var _grid: GridContainer
-var _empty_label: Label
 var _paperdoll_icons: Dictionary = {}  # slot -> TextureRect
 var _armor_label: Label
 
 
 func _ready() -> void:
 	visible = false
-	# Bumped alongside SLOT_SIZE/ICON_SIZE (52/40, up from 40/30) for
-	# legibility -- keep this comfortably larger than the paperdoll (5 slots
-	# tall) + item grid actually need, matching World's _build_inventory_window
-	# offsets, which must stay >= this size or the window renders off-screen
-	# (see that function's own comment on the bug this caused before).
-	custom_minimum_size = Vector2(600, 460)
+	# Must stay <= World._build_inventory_window's anchor box (600x460) or the
+	# window's bottom clips off-screen -- pinned by test_inventory_window.gd's
+	# fits-the-anchor-box test, which measures the real combined minimum with a
+	# full paperdoll + full item grid, not just this declared floor.
+	custom_minimum_size = Vector2(600, 440)
 
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 8)
@@ -74,7 +79,7 @@ func toggle() -> void:
 
 func _build_paperdoll() -> Control:
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 6)
+	col.add_theme_constant_override("separation", 4)
 	col.custom_minimum_size = Vector2(200, 0)
 
 	var heading := Label.new()
@@ -82,17 +87,18 @@ func _build_paperdoll() -> Control:
 	col.add_child(heading)
 
 	# Character preview: head over torso, from the same procedural sprite used
-	# in the world.
+	# in the world. Compact (see EQUIP_SLOT_SIZE's doc comment) so the whole
+	# paperdoll column fits the window's anchor box.
 	var preview := VBoxContainer.new()
 	preview.alignment = BoxContainer.ALIGNMENT_CENTER
 	var head := TextureRect.new()
 	head.texture = _char_sprite.generate_head_texture(Vector2i(16, 16), Color(0.85, 0.68, 0.55), Color(0.1, 0.1, 0.12))
-	head.custom_minimum_size = Vector2(48, 48)
+	head.custom_minimum_size = Vector2(36, 36)
 	head.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	preview.add_child(head)
 	var body := TextureRect.new()
 	body.texture = _char_sprite.generate_body_part_texture(Vector2i(14, 20), Color(0.3, 0.45, 0.8))
-	body.custom_minimum_size = Vector2(48, 60)
+	body.custom_minimum_size = Vector2(36, 44)
 	body.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	preview.add_child(body)
 	col.add_child(preview)
@@ -111,12 +117,12 @@ func _build_slot_row(slot: String) -> Control:
 	row.add_theme_constant_override("separation", 8)
 
 	var box := PanelContainer.new()
-	box.custom_minimum_size = Vector2(SLOT_SIZE, SLOT_SIZE)
+	box.custom_minimum_size = Vector2(EQUIP_SLOT_SIZE, EQUIP_SLOT_SIZE)
 	box.mouse_filter = Control.MOUSE_FILTER_STOP
 	box.gui_input.connect(_on_slot_gui_input.bind(slot))
 	box.tooltip_text = "Click to unequip"
 	var icon := TextureRect.new()
-	icon.custom_minimum_size = Vector2(ICON_SIZE, ICON_SIZE)
+	icon.custom_minimum_size = Vector2(EQUIP_ICON_SIZE, EQUIP_ICON_SIZE)
 	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -139,11 +145,6 @@ func _build_inventory_column() -> Control:
 	heading.text = "Inventory  (click to use / equip)"
 	col.add_child(heading)
 
-	_empty_label = Label.new()
-	_empty_label.text = "(empty)"
-	_empty_label.modulate = Color(1, 1, 1, 0.5)
-	col.add_child(_empty_label)
-
 	_grid = GridContainer.new()
 	_grid.columns = GRID_COLUMNS
 	_grid.add_theme_constant_override("h_separation", 6)
@@ -153,20 +154,35 @@ func _build_inventory_column() -> Control:
 
 
 ## Rebuilds the item grid from `stacks` and the paperdoll from `equipped`
-## (slot -> Item) and `total_armor`. Cheap enough to redo each call; only runs
-## while the window is visible (see World._update_inventory_window).
-func refresh(stacks: Array, equipped: Dictionary, total_armor: float) -> void:
-	_empty_label.visible = stacks.is_empty()
+## (slot -> Item) and `total_armor`. The grid always shows `slot_count` slot
+## frames -- leading ones filled with items, the rest as dim empty frames --
+## so the inventory reads as a real fixed-capacity container (Diablo/Terraria
+## style) instead of a loose pile of icons floating in empty panel space.
+## Cheap enough to redo each call; only runs while the window is visible (see
+## World._update_inventory_window).
+func refresh(stacks: Array, equipped: Dictionary, total_armor: float, slot_count: int = 12) -> void:
 	for child in _grid.get_children():
 		child.free()
-	for stack in stacks:
-		_grid.add_child(_build_item_slot(stack))
+	for i in slot_count:
+		if i < stacks.size():
+			_grid.add_child(_build_item_slot(stacks[i]))
+		else:
+			_grid.add_child(_build_empty_slot())
 
 	for slot in _paperdoll_icons:
 		var icon: TextureRect = _paperdoll_icons[slot]
 		var item = equipped.get(slot)
 		icon.texture = _item_sprite.generate_texture(item.id) if item != null else null
 	_armor_label.text = "Armor: %d" % int(total_armor)
+
+
+## A dimmed, non-interactive slot frame marking unused inventory capacity.
+func _build_empty_slot() -> Control:
+	var box := PanelContainer.new()
+	box.custom_minimum_size = Vector2(SLOT_SIZE, SLOT_SIZE)
+	box.self_modulate = Color(1, 1, 1, 0.35)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return box
 
 
 func _build_item_slot(stack) -> Control:

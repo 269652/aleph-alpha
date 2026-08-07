@@ -108,3 +108,20 @@ func test_spawn_tree_at_places_a_single_choppable_tree_at_the_given_position():
 	assert_true(tree is ChoppableTree)
 	assert_eq(tree.position, Vector2(500, 500))
 	assert_eq(parent.get_child_count(), 1)
+
+
+## Trees sway in the wind: every spawned tree's sprite carries the shared
+## WindSway shader material (see wind_sway.gd), one material instance shared
+## across all trees rather than one per node.
+func test_spawned_tree_sprites_share_the_wind_sway_material():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	assert_gt(spawned.size(), 0)
+	var seen_material: Material = null
+	for tree in spawned:
+		for child in tree.get_children():
+			if child is Sprite2D:
+				assert_true(child.material is ShaderMaterial, "tree sprite should sway via the wind shader")
+				if seen_material == null:
+					seen_material = child.material
+				assert_eq(child.material, seen_material, "all trees should share one material instance")

@@ -5,6 +5,7 @@ const Chunk = preload("res://src/world/chunk.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const TreeGenome = preload("res://src/gameplay/tree_genome.gd")
+const WindSway = preload("res://src/rendering/wind_sway.gd")
 
 ## Tree sprite size in pixels (see ProceduralTreeSprite), and how much
 ## smaller than the sprite the actual collision box is (a little forgiving,
@@ -22,6 +23,7 @@ const SPECIES_BUCKETS := 4
 var _tree_placement := TreePlacement.new()
 var _tree_sprite_generator := ProceduralTreeSprite.new()
 var _texture_cache: Dictionary = {}  # bucket (float) -> ImageTexture
+var _wind_sway := WindSway.new()
 
 
 ## Spawns a collidable tree node (as a child of `parent`) for every forested
@@ -72,6 +74,9 @@ func _build_tree_node(position: Vector2) -> ChoppableTree:
 
 	var sprite := Sprite2D.new()
 	sprite.texture = _texture_for(position)
+	# Canopy sways in the wind (GPU-only, preserving this function's no-per-
+	# frame-script constraint) -- one shared material across all trees.
+	sprite.material = _wind_sway.shared_material()
 	body.add_child(sprite)
 	body.bind_canopy(sprite)
 

@@ -26,11 +26,14 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 	# known placed structure (campfire, furnace), reserved right after earth.
 	# + blend tiles: every ordered pair of *distinct* biomes (n*(n-1)) x every
 	# non-empty subset of the 4 cardinal directions (DIRECTION_MASK_COUNT = 15)
-	# x VARIANTS_PER_BIOME -- the corner-aware directional border tiles.
+	# x BLEND_VARIANTS (deliberately fewer than base variants -- border fringe
+	# doesn't need six looks, and each extra costs 630 atlas images at build).
+	# Note: animated biome tiles still count once each here -- their extra
+	# FRAME_COUNT cells hold frames, not tiles.
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
 	var expected := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1 + ProceduralStructureSprite.STRUCTURE_IDS.size()
-		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.VARIANTS_PER_BIOME
+		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -44,7 +47,7 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
 	var tile_count_without_structures := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1
-		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.VARIANTS_PER_BIOME
+		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures,
@@ -83,6 +86,51 @@ func test_atlas_coords_for_campfire_and_furnace_are_distinct_from_each_other():
 		renderer.atlas_coords_for_modification("campfire"),
 		renderer.atlas_coords_for_modification("furnace")
 	)
+
+
+# -- real-time tile animation (base biome tiles play FRAME_COUNT frames) ------
+
+func test_biome_tiles_are_registered_as_animated_with_the_pinned_frame_count():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var coords := renderer.atlas_coords_for_biome("ocean", 0)
+	assert_eq(source.get_tile_animation_frames_count(coords), TerrainRenderer.FRAME_COUNT)
+	# Frame duration is a tuned constant -- pinned here per the no-eyeballed-
+	# values rule. Almost-eq: Godot stores durations as 32-bit floats, so the
+	# 64-bit literal doesn't round-trip exactly.
+	assert_almost_eq(
+		source.get_tile_animation_frame_duration(coords, 0),
+		TerrainRenderer.FRAME_DURATION_SECONDS,
+		0.0001
+	)
+
+
+func test_animation_frame_cells_are_not_separate_tiles():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var first := renderer.atlas_coords_for_biome("ocean", 0)
+	# The cells to the right of an animated tile hold its frames, not tiles of
+	# their own -- creating tiles there would corrupt the animation layout.
+	assert_false(source.has_tile(first + Vector2i(1, 0)))
+
+
+func test_earth_and_structure_tiles_stay_static_single_frame():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	assert_eq(source.get_tile_animation_frames_count(renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID)), 1)
+	assert_eq(source.get_tile_animation_frames_count(renderer.atlas_coords_for_modification("campfire")), 1)
+
+
+## Frame blocks must never wrap an atlas row (frames lay out horizontally), so
+## the column count has to divide evenly into frame-sized blocks.
+func test_atlas_columns_align_with_frame_blocks():
+	assert_eq(TerrainRenderer.ATLAS_COLUMNS % TerrainRenderer.FRAME_COUNT, 0)
+
+
+## More variation per biome: bumped from 4 so the ground reads as natural
+## ground cover, not a short repeating texture loop.
+func test_variants_per_biome_is_at_least_six():
+	assert_gte(TerrainRenderer.VARIANTS_PER_BIOME, 6)
 
 
 ## Fail-safe default (matching this codebase's `.get(x, default)` convention):

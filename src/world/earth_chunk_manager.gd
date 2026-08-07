@@ -10,6 +10,7 @@ const DesertScrub = preload("res://src/world/desert_scrub.gd")
 const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_sprite.gd")
 const TundraLichen = preload("res://src/world/tundra_lichen.gd")
 const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
+const WindSway = preload("res://src/rendering/wind_sway.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -73,6 +74,7 @@ var _stone_renderer := StoneRenderer.new()
 var _grass_sprite_generator := ProceduralGrassSprite.new()
 var _scrub_sprite_generator := ProceduralScrubSprite.new()
 var _lichen_sprite_generator := ProceduralLichenSprite.new()
+var _wind_sway := WindSway.new()
 var _creature_renderer := CreatureRenderer.new()
 var _biome_classifier := BiomeClassifier.new()
 var _ecosystem := EcosystemSimulation.new()
@@ -421,6 +423,8 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 			sprite.texture = _grass_sprite_generator.generate_texture(
 				hash("%d_%d_grass_tuft" % [origin.x + cell.x, origin.y + cell.y])
 			)
+			# Blades sway in the wind (shared GPU shader, see WindSway).
+			sprite.material = _wind_sway.shared_material()
 			sprite.position = Vector2(
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
@@ -474,6 +478,9 @@ func _sync_scrub_sprites(chunk_coord: Vector2i) -> void:
 			sprite.texture = _scrub_sprite_generator.generate_texture(
 				hash("%d_%d_scrub_tuft" % [origin.x + cell.x, origin.y + cell.y])
 			)
+			# Scrub sways too (shared GPU shader, see WindSway). Lichen
+			# deliberately doesn't -- it's crusty ground cover, not foliage.
+			sprite.material = _wind_sway.shared_material()
 			sprite.position = Vector2(
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE

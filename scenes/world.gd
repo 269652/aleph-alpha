@@ -348,7 +348,8 @@ func _refresh_inventory_now(local_player: Player) -> void:
 	_inventory_window.refresh(
 		local_player.inventory.stacks(),
 		_equipped_map(local_player),
-		local_player.equipment.total_armor()
+		local_player.equipment.total_armor(),
+		local_player.inventory.slot_count
 	)
 
 
