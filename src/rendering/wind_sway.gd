@@ -28,7 +28,9 @@ uniform float bend_exponent = 2.0;
 void vertex() {
 	float phase = MODEL_MATRIX[3].x * 0.045 + MODEL_MATRIX[3].y * 0.031;
 	float top_weight = pow(1.0 - UV.y, bend_exponent);
-	VERTEX.x += sin(TIME * wind_speed + phase) * amplitude_px * top_weight;
+	float gust = sin(TIME * wind_speed + phase) * 0.7
+		+ sin(TIME * wind_speed * 2.7 + phase * 1.7) * 0.3;
+	VERTEX.x += gust * amplitude_px * top_weight;
 }
 """
 
@@ -37,15 +39,15 @@ void vertex() {
 const DEFAULT_AMPLITUDE_PX := 1.4
 ## Sway oscillation speed (radians/sec into sin) -- a lazy breeze, not a flag
 ## in a gale.
-const DEFAULT_SPEED := 1.8
+const DEFAULT_SPEED := 1.2
 
 ## Trees bend with a squared falloff (a canopy sways atop a stiff trunk).
 ## Grass/scrub tuft sprites need the opposite: their blade pixels sit in the
 ## LOWER half of the quad, where a squared falloff leaves under half a pixel
 ## of motion -- visually static (the reported "streaks don't sway" bug). The
 ## tuft preset bends linearly and harder, so blades visibly whip.
-const TUFT_AMPLITUDE_PX := 6.0
-const TUFT_SPEED := 3.0
+const TUFT_AMPLITUDE_PX := 3.0
+const TUFT_SPEED := 1.6
 const TUFT_BEND_EXPONENT := 1.0
 
 var _shared_material: ShaderMaterial

@@ -11,19 +11,21 @@ extends RefCounted
 const BLADES_PER_CELL := 2
 const BLADE_WIDTH_PX := 1.0
 const BLADE_HEIGHT_PX := 4.0
-const AMPLITUDE_PX := 1.6
-const WIND_SPEED := 3.0
+const AMPLITUDE_PX := 1.1
+const WIND_SPEED := 1.4
 
 const SHADER_CODE := """
 shader_type canvas_item;
 
-uniform float amplitude_px = 1.6;
-uniform float wind_speed = 3.0;
+uniform float amplitude_px = 1.1;
+uniform float wind_speed = 1.4;
 
 void vertex() {
 	float phase = INSTANCE_CUSTOM.x * 6.2831;
 	float top_weight = 1.0 - UV.y;
-	VERTEX.x += sin(TIME * wind_speed + phase) * amplitude_px * top_weight;
+	float gust = sin(TIME * wind_speed + phase) * 0.7
+		+ sin(TIME * wind_speed * 2.7 + phase * 1.7) * 0.3;
+	VERTEX.x += gust * amplitude_px * top_weight;
 }
 """
 

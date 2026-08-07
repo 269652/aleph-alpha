@@ -226,11 +226,14 @@ func test_ocean_frames_differ_and_loop_seamlessly():
 	assert_eq(f0.get_data(), wrapped.get_data(), "the animation cycle should loop seamlessly")
 
 
-## Grass is alive: tuft pixels sway across frames.
-func test_grassland_frames_differ():
+## Baked grassland tiles are deliberately STATIC: a 1px blade tip jumping
+## across 4 tile frames reads as flicker, never wind. Real blade motion is
+## owned by the GPU micro-blade field (grass_blade_field.gd), which sways
+## continuously at any frame rate.
+func test_grassland_frames_are_identical_motion_lives_in_the_gpu_field():
 	var f0 := generator.generate_frame_image("grassland", 0, 0)
 	var f1 := generator.generate_frame_image("grassland", 0, 1)
-	assert_ne(f0.get_data(), f1.get_data(), "grassland tufts should sway across frames")
+	assert_eq(f0.get_data(), f1.get_data(), "baked grassland frames must not flicker")
 
 
 ## Arid/rocky biomes stay static -- identical frames, deliberately, so their

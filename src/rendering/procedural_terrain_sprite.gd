@@ -65,7 +65,11 @@ func generate_frame_image(biome_name: String, variant_seed: int, frame: int) -> 
 			_paint_water(image, base_color, variant_seed, wrapped_frame)
 		"grassland":
 			_paint_speckled(image, base_color, variant_seed)
-			_paint_grass_blades(image, base_color, variant_seed, wrapped_frame)
+			# Baked blades are STATIC by design: 4 tile frames can only make a
+			# 1px tip jump, which reads as flicker, never as wind (reported
+			# twice). They freeze as varied windswept ground detail; all real
+			# blade motion lives in the GPU field (see GrassBladeField).
+			_paint_grass_blades(image, base_color, variant_seed, 0)
 			_paint_flowers(image, variant_seed)
 		"forest", "rainforest":
 			_paint_speckled(image, base_color, variant_seed)
@@ -228,7 +232,9 @@ func _paint_grass_blades(image: Image, base_color: Color, variant_seed: int, fra
 	]
 	for i in BLADE_COUNT:
 		var spec := blade_spec(variant_seed, i)
-		var lean: int = _TUFT_SWAY[(frame + spec.phase) % FRAME_COUNT]
+		# Frozen per-blade lean (frame is ignored -- see the grassland branch
+		# comment): each blade holds its own windswept posture.
+		var lean: int = _TUFT_SWAY[spec.phase % _TUFT_SWAY.size()]
 		var color: Color = blade_colors[spec.color_index]
 		var height: int = spec.height
 		for k in height:
