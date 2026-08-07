@@ -11,6 +11,7 @@ const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_spri
 const TundraLichen = preload("res://src/world/tundra_lichen.gd")
 const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
+const GrassBladeField = preload("res://src/rendering/grass_blade_field.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
@@ -75,6 +76,8 @@ var _grass_sprite_generator := ProceduralGrassSprite.new()
 var _scrub_sprite_generator := ProceduralScrubSprite.new()
 var _lichen_sprite_generator := ProceduralLichenSprite.new()
 var _wind_sway := WindSway.new()
+var _grass_blade_field := GrassBladeField.new()
+var _blade_fields: Dictionary = {}  # Vector2i chunk_coord -> MultiMeshInstance2D
 var _creature_renderer := CreatureRenderer.new()
 var _biome_classifier := BiomeClassifier.new()
 var _ecosystem := EcosystemSimulation.new()
@@ -707,6 +710,17 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_grass_sprites[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
 
+	# GPU micro-blade field: individually-swaying 1px blades over every
+	# grassland cell (one MultiMesh draw per chunk, see GrassBladeField).
+	var blade_field := _grass_blade_field.build_field(
+		chunk.biome, chunk.width, chunk.height, TerrainRenderer.TILE_SIZE,
+		hash("%d_%d_blades" % [chunk_coord.x, chunk_coord.y])
+	)
+	if blade_field != null:
+		blade_field.position = Vector2(chunk_coord * CHUNK_SIZE * TerrainRenderer.TILE_SIZE)
+		_entities_parent.add_child(blade_field)
+		_blade_fields[chunk_coord] = blade_field
+
 	_scrub_sims[chunk_coord] = DesertScrub.new(
 		hash("%d_%d_desert_scrub" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
@@ -778,6 +792,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		sprite.free()
 	_grass_sprites.erase(chunk_coord)
 	_grass_sims.erase(chunk_coord)
+
+	if _blade_fields.has(chunk_coord):
+		_blade_fields[chunk_coord].free()
+		_blade_fields.erase(chunk_coord)
 
 	for sprite in _scrub_sprites.get(chunk_coord, {}).values():
 		sprite.free()
