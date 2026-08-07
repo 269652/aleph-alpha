@@ -206,7 +206,7 @@ func _paint_ripple_rings(image: Image, base_color: Color, variant_seed: int, fra
 ## in the wind: the root stays planted, the tip carries the full [0,1,0,-1]
 ## lean cycle, mid pixels bend halfway -- so grass reads as living blades
 ## rather than stamped tufts.
-const BLADE_COUNT := 6
+const BLADE_COUNT := 4
 ## Tip lean per animation frame, in px. Was [0,1,0,-1] -- a 1px shuffle that
 ## read as static at screen scale; the wider asymmetric cycle is an obvious,
 ## organic whip (and still wraps seamlessly over FRAME_COUNT).
@@ -226,8 +226,8 @@ func blade_spec(variant_seed: int, index: int) -> Dictionary:
 
 func _paint_grass_blades(image: Image, base_color: Color, variant_seed: int, frame: int) -> void:
 	var blade_colors := [
-		base_color.darkened(0.34),
-		base_color.darkened(0.18),
+		base_color.darkened(0.2),
+		base_color.darkened(0.1),
 		Color(base_color.r * 1.06, base_color.g * 0.92, base_color.b * 0.55),  # dry yellow-green
 	]
 	for i in BLADE_COUNT:
@@ -300,7 +300,7 @@ func _paint_scatter(image: Image, color: Color, variant_seed: int, salt: String,
 
 ## Foam color for shoreline water (near-white; test_procedural_terrain_sprite
 ## detects foam as r/g/b all > 0.85).
-const FOAM_COLOR := Color(0.94, 0.97, 1.0)
+const FOAM_COLOR := Color(0.55, 0.74, 0.97)
 
 
 ## A water tile that borders land on `land_directions` (Array of cardinal
@@ -338,9 +338,9 @@ func _paint_foam_edge(
 			inner = Vector2i(SIZE - 2, i)
 
 		var salt := "foam_%d_%d_%d" % [direction.x, direction.y, frame]
-		if _fraction(variant_seed, i, 0, salt) < 0.75:
+		if _fraction(variant_seed, i, 0, salt) < 0.92:
 			image.set_pixel(outer.x, outer.y, FOAM_COLOR)
-		if _fraction(variant_seed, i, 1, salt) < 0.45:
+		if _fraction(variant_seed, i, 1, salt) < 0.35:
 			image.set_pixel(inner.x, inner.y, lap_color)
 
 

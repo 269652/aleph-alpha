@@ -8,9 +8,9 @@ extends RefCounted
 ## its root with a per-blade phase (INSTANCE_CUSTOM), so the meadow rolls
 ## organically instead of bobbing in lockstep.
 
-const BLADES_PER_CELL := 2
+const BLADES_PER_CELL := 3
 const BLADE_WIDTH_PX := 1.0
-const BLADE_HEIGHT_PX := 4.0
+const BLADE_HEIGHT_PX := 7.0
 const AMPLITUDE_PX := 1.1
 const WIND_SPEED := 1.4
 
@@ -30,7 +30,7 @@ void vertex() {
 """
 
 const _BLADE_GREENS := [
-	Color(0.24, 0.5, 0.15), Color(0.3, 0.6, 0.18), Color(0.45, 0.62, 0.2),
+	Color(0.3, 0.62, 0.2), Color(0.36, 0.7, 0.22), Color(0.5, 0.72, 0.26),
 ]
 
 var _material: ShaderMaterial
@@ -49,9 +49,16 @@ func build_field(chunk_biome: PackedStringArray, width: int, height: int, tile_s
 				continue
 			for i in BLADES_PER_CELL:
 				var h := absi(hash("%d_%d_%d_blade_%d" % [seed_value, x, y, i]))
-				var px := x * tile_size + 1 + h % (tile_size - 2)
-				var py := y * tile_size + 2 + (h / 97) % (tile_size - 3)
-				placements.append(Transform2D(0.0, Vector2(px, py - BLADE_HEIGHT_PX / 2.0)))
+				# Blades cluster around a per-cell center (real grass grows in
+				# tufts, not uniform confetti), with per-blade height variation
+				# via y-scale so the cluster reads organic.
+				var ch := absi(hash("%d_%d_%d_cluster" % [seed_value, x, y]))
+				var cx := x * tile_size + 3 + ch % (tile_size - 6)
+				var cy := y * tile_size + 4 + (ch / 89) % (tile_size - 6)
+				var px := cx + (h % 5) - 2
+				var py := cy + ((h / 97) % 4) - 1
+				var height_scale := 0.7 + float((h / 401) % 7) / 10.0
+				placements.append(Transform2D(0.0, Vector2(1.0, height_scale), 0.0, Vector2(px, py - BLADE_HEIGHT_PX * height_scale / 2.0)))
 				phases.append(float((h / 811) % 100) / 100.0)
 				colors.append(_BLADE_GREENS[(h / 3271) % _BLADE_GREENS.size()])
 	if placements.is_empty():

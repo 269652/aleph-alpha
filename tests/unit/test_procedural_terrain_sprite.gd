@@ -289,7 +289,9 @@ func test_shore_water_frames_differ_and_are_deterministic():
 
 
 func _is_foam(p: Color) -> bool:
-	return p.r > 0.85 and p.g > 0.85 and p.b > 0.85
+	# Soft lightened-water band (see FOAM_COLOR) -- deliberately NOT near-white:
+	# bright dashes on every tile edge read as selection outlines, not water.
+	return p.b > 0.9 and p.g > 0.6 and p.g < 0.85
 
 
 # -- round ripples on water + individually varied grass blades ----------------
