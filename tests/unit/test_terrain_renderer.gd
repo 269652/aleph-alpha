@@ -111,6 +111,12 @@ func test_biome_tiles_are_registered_as_animated_with_the_pinned_frame_count():
 		TerrainRenderer.FRAME_DURATION_SECONDS,
 		0.0001
 	)
+	# Grassland runs on its faster blade-sway clock.
+	assert_almost_eq(
+		source.get_tile_animation_frame_duration(renderer.atlas_coords_for_biome("grassland", 0), 0),
+		TerrainRenderer.GRASS_FRAME_DURATION_SECONDS,
+		0.0001
+	)
 
 
 func test_animation_frame_cells_are_not_separate_tiles():

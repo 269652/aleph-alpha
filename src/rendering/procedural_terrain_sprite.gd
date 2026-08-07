@@ -138,14 +138,32 @@ func _paint_water(image: Image, base_color: Color, variant_seed: int, frame: int
 				color = base_color.lightened(SPECKLE_LIGHTEN * 0.7)
 			image.set_pixel(x, y, color)
 
-	var glint_color := base_color.lightened(0.28)
+	# Wind-on-water reads as three layered motions, all seamless over the
+	# wrapped frame cycle: bright wave crests drifting with the wind (varied
+	# lengths, occasionally twinkling out as a crest collapses), each with a
+	# dimmer trailing pixel so it reads as a crescent rather than a bar, and
+	# dark troughs counter-drifting beneath -- the surface shears instead of
+	# sliding as one sheet.
+	var wrapped := posmod(frame, FRAME_COUNT)
+	var glint_color := base_color.lightened(0.3)
+	var glint_soft := base_color.lightened(0.15)
 	for i in WIND_GLINT_COUNT:
 		var h := absi(hash("%d_glint_%d" % [variant_seed, i]))
+		if (h / 501 + wrapped) % 5 == 0:
+			continue  # this crest collapses for one frame -- twinkle
 		var gy := h % SIZE
-		var gx := (h / 37 + posmod(frame, FRAME_COUNT)) % SIZE
-		# A short 3px diagonal dash, drifting with the wind each frame.
-		for k in 3:
+		var gx := (h / 37 + wrapped) % SIZE
+		var length := 2 + (h / 211) % 3
+		for k in length:
 			image.set_pixel((gx + k) % SIZE, clampi(gy - (k / 2), 0, SIZE - 1), glint_color)
+		image.set_pixel(gx, clampi(gy + 1, 0, SIZE - 1), glint_soft)
+	var trough_color := base_color.darkened(0.22)
+	for i in 4:
+		var h := absi(hash("%d_trough_%d" % [variant_seed, i]))
+		var ty := h % SIZE
+		var tx := posmod(h / 41 - wrapped, SIZE)
+		for k in 3:
+			image.set_pixel((tx + k) % SIZE, ty, trough_color)
 
 
 ## Rain-weather water: the windy base plus expanding raindrop ripple rings
@@ -185,7 +203,10 @@ func _paint_ripple_rings(image: Image, base_color: Color, variant_seed: int, fra
 ## lean cycle, mid pixels bend halfway -- so grass reads as living blades
 ## rather than stamped tufts.
 const BLADE_COUNT := 6
-const _TUFT_SWAY := [0, 1, 0, -1]
+## Tip lean per animation frame, in px. Was [0,1,0,-1] -- a 1px shuffle that
+## read as static at screen scale; the wider asymmetric cycle is an obvious,
+## organic whip (and still wraps seamlessly over FRAME_COUNT).
+const _TUFT_SWAY := [0, 2, 1, -2]
 
 
 func blade_spec(variant_seed: int, index: int) -> Dictionary:

@@ -44,6 +44,11 @@ const FRAME_COUNT := ProceduralTerrainSprite.FRAME_COUNT
 ## test_biome_tiles_are_registered_as_animated_with_the_pinned_frame_count.
 const FRAME_DURATION_SECONDS := 0.45
 
+## Grassland ticks faster than the ambient default: the baked blade-sway
+## cycle needs a livelier clock to read as wind at screen scale (pinned by
+## test_biome_tiles_are_registered_as_animated_with_the_pinned_frame_count).
+const GRASS_FRAME_DURATION_SECONDS := 0.28
+
 ## Phase 3's Terraria-style build/destroy tile: pressing E turns the faced
 ## tile into bare earth (Q reverts it). A single placeable structure type
 ## for now -- Chunk.modifications maps a local tile coord to this id when
@@ -377,12 +382,17 @@ func build_tile_set() -> TileSet:
 	# (never created as tiles of their own), and TileMapLayer plays them
 	# automatically -- zero per-frame script cost.
 	for i in biome_count:
+		var duration := (
+			GRASS_FRAME_DURATION_SECONDS
+			if BiomeClassifier.KNOWN_BIOMES[i] == "grassland"
+			else FRAME_DURATION_SECONDS
+		)
 		for variant in VARIANTS_PER_BIOME:
 			var first := _grid_coords((i * VARIANTS_PER_BIOME + variant) * FRAME_COUNT)
 			source.create_tile(first)
 			source.set_tile_animation_frames_count(first, FRAME_COUNT)
 			for frame in FRAME_COUNT:
-				source.set_tile_animation_frame_duration(first, frame, FRAME_DURATION_SECONDS)
+				source.set_tile_animation_frame_duration(first, frame, duration)
 
 	# Shore-water tiles animate exactly like base biome tiles.
 	for mask in range(1, DIRECTION_MASK_COUNT + 1):

@@ -44,8 +44,8 @@ const DEFAULT_SPEED := 1.8
 ## LOWER half of the quad, where a squared falloff leaves under half a pixel
 ## of motion -- visually static (the reported "streaks don't sway" bug). The
 ## tuft preset bends linearly and harder, so blades visibly whip.
-const TUFT_AMPLITUDE_PX := 3.5
-const TUFT_SPEED := 2.2
+const TUFT_AMPLITUDE_PX := 6.0
+const TUFT_SPEED := 3.0
 const TUFT_BEND_EXPONENT := 1.0
 
 var _shared_material: ShaderMaterial
