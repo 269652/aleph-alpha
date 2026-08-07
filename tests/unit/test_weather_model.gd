@@ -89,3 +89,24 @@ func test_warmth_factor_is_colder_in_wet_weather():
 
 func test_warmth_factor_unknown_state_is_neutral():
 	assert_eq(weather.warmth_factor("not_a_weather"), 1.0)
+
+
+## Drives water-shader pacing (see WaterShader wind_strength uniform): calm
+## water on a clear day, progressively more energetic chop as weather worsens.
+func test_wind_strength_increases_with_weather_severity():
+	var clear := weather.wind_strength_for("clear")
+	var cloudy := weather.wind_strength_for("cloudy")
+	var rain := weather.wind_strength_for("rain")
+	var storm := weather.wind_strength_for("storm")
+	assert_lt(clear, cloudy)
+	assert_lt(cloudy, rain)
+	assert_lt(rain, storm)
+
+
+func test_wind_strength_stays_within_a_sane_unit_ish_range():
+	for w in KNOWN_STATES:
+		assert_between(weather.wind_strength_for(w), 0.0, 2.0)
+
+
+func test_wind_strength_unrecognized_state_falls_back_to_calm():
+	assert_eq(weather.wind_strength_for("blizzard"), weather.wind_strength_for("clear"))

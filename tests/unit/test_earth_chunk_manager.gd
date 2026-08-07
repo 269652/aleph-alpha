@@ -155,6 +155,72 @@ func test_set_rain_updates_the_water_materials_rain_intensity_uniform():
 	water_layer.free()
 
 
+## Wind-driven pacing: set_wind_strength drives a continuous shader uniform on
+## the shared water material (see WaterShader.set_wind_strength), the same
+## pattern as set_rain above.
+func test_set_wind_strength_updates_the_water_materials_wind_strength_uniform():
+	var water_layer := TileMapLayer.new()
+	manager.set_water_layer(water_layer)
+	manager.update(_berlin_tile)
+
+	manager.set_wind_strength(1.4)
+	assert_eq((water_layer.material as ShaderMaterial).get_shader_parameter("wind_strength"), 1.4)
+
+	manager.set_wind_strength(0.3)
+	assert_eq((water_layer.material as ShaderMaterial).get_shader_parameter("wind_strength"), 0.3)
+	water_layer.free()
+
+
+# -- fish: visible, catchable entities on ocean cells (see FishRenderer) -----
+
+const FishMarker = preload("res://src/rendering/fish_marker.gd")
+
+
+func _loaded_fish_markers() -> Array:
+	var markers := []
+	for child in creatures_parent.get_children():
+		if child is FishMarker:
+			markers.append(child)
+	return markers
+
+
+func test_update_spawns_fish_markers_near_berlins_water():
+	manager.update(_berlin_tile)
+	assert_gt(_loaded_fish_markers().size(), 0)
+
+
+func test_evicting_old_chunks_frees_their_fish_markers():
+	manager.update(_berlin_tile)
+	var fish_near_berlin := _loaded_fish_markers()
+	assert_gt(fish_near_berlin.size(), 0)
+
+	# Moving far away can spawn its own new fish (unrelated ocean cells) --
+	# what matters is that BERLIN's own markers specifically got freed, not
+	# that the fish count happens to hit zero globally.
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+	for fish in fish_near_berlin:
+		assert_false(is_instance_valid(fish), "Berlin's fish markers should be freed once out of range")
+
+
+func test_catch_nearest_fish_removes_it_and_returns_its_species():
+	manager.update(_berlin_tile)
+	var fish: Array = _loaded_fish_markers()
+	assert_gt(fish.size(), 0)
+	var target = fish[0]
+	var target_position: Vector2 = target.position
+
+	var species := manager.catch_nearest_fish(target_position, 1.0)
+	assert_ne(species, "")
+	assert_false(is_instance_valid(target), "the caught fish should be freed")
+
+
+func test_catch_nearest_fish_returns_empty_string_when_none_in_range():
+	manager.update(_berlin_tile)
+	var far_from_everything := Vector2(-999999.0, -999999.0)
+	assert_eq(manager.catch_nearest_fish(far_from_everything, 5.0), "")
+
+
 func _expected_tree_count_around(center_chunk: Vector2i) -> int:
 	var expected := 0
 	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
@@ -308,6 +374,8 @@ func test_promoted_creatures_near_berlin_only_use_species_from_their_chunks_biom
 	var chunk_origin := center_chunk * EarthChunkManager.CHUNK_SIZE
 	var checked_any := false
 	for child in creatures_parent.get_children():
+		if child is FishMarker:
+			continue  # fish share this parent but have no CreatureInfo/species pool
 		var tile_x := int(child.position.x / TerrainRenderer.TILE_SIZE)
 		var tile_y := int(child.position.y / TerrainRenderer.TILE_SIZE)
 		var in_center_chunk := (

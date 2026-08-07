@@ -24,6 +24,23 @@ rather than building an unrelated bolt-on minigame.
   aquatic mount)? Open question, but consistent with
   [pets.md](pets.md)'s species-sets-category/DNA-sets-quality model if so.
 
+### Current implementation status (divergence note)
+
+What exists today (see `docs/progress.md`'s Fishing section for the full
+breakdown) is a first **visual/gameplay layer**, not yet the aquatic
+ecosystem sim this doc specs: ocean tiles spawn deterministic, capped,
+idle-swimming `FishMarker` entities in one of 4 hand-authored species
+(`ProceduralFishSprite`), catchable via the existing active minigame
+(`fishing_session.gd`/`fishing_minigame.gd`). Species is a per-tile
+deterministic pick, not DNA/phenotype-driven, and there's no aquatic
+population sim (reproduction/migration/death) behind it yet — closer to
+`CreatureRenderer`'s decorative promotion layer than to
+`EcosystemSimulation`. The reward itself is still one generic `fish` item
+scaled by rolled rarity; catching a real nearby fish only removes it visually
+and names its species in the message. Everything else this doc specs (full
+DNA/evolution reuse, sexual selection, rare-phenotype desirability,
+bait-driven targeting, taming/companion fish) is still open, unstarted work.
+
 ### Open questions
 
 - Does the aquatic sim run at the same fidelity as land (full regional

@@ -27,6 +27,7 @@ const SettingsOverlay = preload("res://scenes/settings_overlay.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
+const WeatherModel = preload("res://src/world/weather_model.gd")
 
 const HOTBAR_SLOT_COUNT := 5
 const SPELL_BAR_SLOT_COUNT := 4
@@ -115,6 +116,7 @@ var _last_scar_step_tile := Vector2i(-2147483648, -2147483648)
 var _scar_refresh_accumulator := 0.0
 var _geo_coordinates := GeoCoordinates.new()
 var _solar_position := SolarPosition.new()
+var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
 var _minimap_refresh_accumulator := MINIMAP_REFRESH_INTERVAL  # refresh immediately on first update
@@ -1313,8 +1315,10 @@ func _client_process(delta: float) -> void:
 	var season := _chunk_manager.current_season().capitalize()
 	var raw_weather := _chunk_manager.current_weather(local_player.position)
 	# Water tiles react to the weather: raindrop ripples while raining,
-	# windy chop otherwise (repaints only on an actual transition).
+	# windy chop otherwise, and the whole surface paces faster/slower with
+	# how energetic the weather is (calm on a clear day, hectic in a storm).
 	_chunk_manager.set_rain(raw_weather == "rain" or raw_weather == "storm")
+	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"Lat %.1f Lon %.1f   UTC %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"

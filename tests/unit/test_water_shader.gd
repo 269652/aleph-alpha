@@ -124,3 +124,29 @@ func test_make_material_sets_the_color_and_threshold_uniforms():
 	assert_eq(material.get_shader_parameter("crest_color"), WaterShader.CREST_COLOR)
 	assert_eq(material.get_shader_parameter("wave_low_threshold"), WaterShader.WAVE_LOW_THRESHOLD)
 	assert_eq(material.get_shader_parameter("wave_high_threshold"), WaterShader.WAVE_HIGH_THRESHOLD)
+
+
+# -- wind-driven pacing (calmer on a clear day, more hectic in a storm) -------
+
+## wind_strength scales the ambient wave's effective time-rate -- water idles
+## gently on a clear day and churns faster/choppier as weather worsens (see
+## WeatherModel.wind_strength_for, EarthChunkManager.set_wind_strength).
+func test_shader_has_a_wind_strength_uniform_with_a_calm_default():
+	var material := water.make_material()
+	assert_eq(material.get_shader_parameter("wind_strength"), WaterShader.DEFAULT_WIND_STRENGTH)
+	assert_string_contains(WaterShader.SHADER_CODE, "uniform float wind_strength")
+
+
+## wind_strength must actually reach the scrolling ambient-wave time term, not
+## just exist as an inert uniform.
+func test_wind_strength_scales_the_ambient_wave_scroll_rate():
+	var code: String = WaterShader.SHADER_CODE
+	assert_string_contains(code, "scroll_speed * wind_strength")
+
+
+func test_set_wind_strength_updates_the_shared_materials_uniform():
+	var material := water.shared_material()
+	water.set_wind_strength(1.4)
+	assert_eq(material.get_shader_parameter("wind_strength"), 1.4)
+	water.set_wind_strength(WaterShader.DEFAULT_WIND_STRENGTH)
+	assert_eq(material.get_shader_parameter("wind_strength"), WaterShader.DEFAULT_WIND_STRENGTH)

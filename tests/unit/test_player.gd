@@ -233,5 +233,48 @@ func test_cook_fails_when_a_campfire_is_only_carried_not_placed():
 	player.inventory.add(_item_catalog.make("meat"), 1)
 
 	var cooked := player.cook("meat")
-
 	assert_false(cooked)
+	assert_eq(player.inventory_counts().get("cooked_meat", 0), 0)
+
+
+# -- catching a real, visible fish flavors the catch message ------------------
+#
+# The abstract fishing minigame (see FishingSession/FishingMinigame) already
+# decides success/rarity/reward on its own; this only covers the NEW piece --
+# when a real FishMarker happens to be nearby, catching removes it and names
+## its species in the message, without changing what's actually rewarded.
+
+const FishMarker = preload("res://src/rendering/fish_marker.gd")
+
+
+## Drives the real FishingSession to CAUGHT deterministically (bait_quality 1.0
+## biases toward the minimum bite delay; a bounded advance loop reaches BITING
+## well within FishingMinigame.MAX_BITE_DELAY).
+func _land_a_fish() -> void:
+	player._fishing.cast(1, 1.0)
+	for i in 40:
+		if player._fishing.phase() == "biting":
+			break
+		player._fishing.advance(0.5)
+	player._fishing.react()
+
+
+func test_catching_a_fish_near_a_real_fish_marker_removes_it_and_names_it_in_the_message():
+	var fish := FishMarker.new()
+	fish.species = "goldfish"
+	fish.position = player.position
+	creatures_parent.add_child(fish)
+	chunk_manager._loaded_fish[Vector2i(0, 0)] = [fish]
+
+	_land_a_fish()
+	player._fishing_step(0.0)
+
+	assert_false(is_instance_valid(fish), "the nearby fish marker should be freed on catch")
+	assert_string_contains(player.fishing_message, "goldfish")
+
+
+func test_catching_a_fish_with_no_marker_nearby_still_shows_a_generic_message():
+	_land_a_fish()
+	player._fishing_step(0.0)
+
+	assert_string_contains(player.fishing_message, "Caught")

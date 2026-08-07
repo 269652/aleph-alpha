@@ -166,6 +166,10 @@ var fishing_message := ""
 const FISH_MESSAGE_DURATION := 2.5
 ## Fish granted per catch, scaled by the rolled rarity (see FishingMinigame).
 const FISH_REWARD_BY_RARITY := {"common": 1, "uncommon": 1, "rare": 2, "legendary": 3}
+## How far a real, visible FishMarker (see FishRenderer) can be from the
+## player and still be the one that "was" caught -- generous enough to cover
+## a pond fish a few tiles out while standing at the shore.
+const FISH_CATCH_RADIUS := 64.0
 var _item_catalog := ItemCatalog.new()
 
 var _chunk_manager: EarthChunkManager
@@ -295,6 +299,7 @@ func _bind_wasd_movement() -> void:
 	_bind_key_action("attack", KEY_SPACE)
 	_bind_key_action("block", KEY_SHIFT)
 	_bind_key_action("pickup", KEY_E)
+	_bind_key_action("fish", KEY_F)
 	_bind_key_action("build", KEY_B)
 	_bind_key_action("destroy", KEY_Q)
 
@@ -868,7 +873,16 @@ func _fishing_step(delta: float) -> void:
 		var count: int = FISH_REWARD_BY_RARITY.get(rarity, 1)
 		inventory.add(_item_catalog.make("fish"), count)
 		inventory_changed.emit()
-		_fishing_result_message = "Caught a %s fish! (x%d)" % [rarity, count]
+		# If a real, visible fish (see FishRenderer) happens to be nearby,
+		# make it disappear and name its species -- purely cosmetic, doesn't
+		# change what's rewarded (still the generic "fish" item/count above).
+		var species := ""
+		if _chunk_manager != null:
+			species = _chunk_manager.catch_nearest_fish(position, FISH_CATCH_RADIUS)
+		if species != "":
+			_fishing_result_message = "Caught a %s %s! (x%d)" % [rarity, species, count]
+		else:
+			_fishing_result_message = "Caught a %s fish! (x%d)" % [rarity, count]
 		_fishing_result_timer = FISH_MESSAGE_DURATION
 		_fishing = FishingSession.new()
 	elif _fishing.phase() == FishingSession.MISSED:

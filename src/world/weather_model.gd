@@ -54,3 +54,21 @@ func warmth_factor(weather: String) -> float:
 			return 0.4
 		_:
 			return 1.0
+
+
+## How energetic the water's GPU wave motion should feel for a weather state,
+## [0,2]-ish -- scales WaterShader's effective wave speed (see
+## EarthChunkManager.set_wind_strength). Calm on a clear day, progressively
+## more hectic as weather worsens, so the same shore that idles gently under
+## sun churns visibly during a storm. Unrecognized states fall back to calm
+## (same value as "clear") rather than erroring.
+func wind_strength_for(weather: String) -> float:
+	match weather:
+		"cloudy":
+			return 0.55
+		"rain":
+			return 0.85
+		"storm":
+			return 1.4
+		_:
+			return 0.3

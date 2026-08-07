@@ -14,7 +14,11 @@ extends RefCounted
 ## per-pixel, on the GPU:
 ##
 ## - Ambient wind chop: two octaves of value noise scrolling at different
-##   speeds/directions, so the surface shears rather than sliding as one sheet.
+##   speeds/directions, so the surface shears rather than sliding as one
+##   sheet. Its scroll rate is paced by wind_strength (driven by the live
+##   weather model via set_wind_strength/WeatherModel.wind_strength_for), so
+##   the same shore idles calmly on a clear day and churns faster/choppier
+##   during a storm.
 ## - Shore "bounce": an incident wave (traveling toward the coast) and its
 ##   reflection (traveling away) are summed near the shore -- real standing-
 ##   wave interference at a boundary, spanning the first couple of shore
@@ -43,6 +47,7 @@ shader_type canvas_item;
 uniform float alpha_strength = 0.6;
 uniform float noise_scale = 0.045;
 uniform float scroll_speed = 0.55;
+uniform float wind_strength = 0.3;
 uniform float rain_intensity : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 deep_color : source_color = vec3(0.04, 0.22, 0.5);
 uniform vec3 crest_color : source_color = vec3(0.16, 0.42, 0.72);
@@ -100,8 +105,12 @@ float raindrop_ripples(vec2 pos) {
 
 void fragment() {
 	vec2 p = world_pos * noise_scale;
-	float swell = value_noise(p + vec2(TIME * scroll_speed, TIME * scroll_speed * 0.35));
-	float chop = value_noise(p * 2.3 - vec2(TIME * scroll_speed * 0.7, TIME * scroll_speed * 0.2));
+	// wind_strength paces the whole ambient surface: calm and slow-scrolling
+	// on a clear day, faster and choppier as weather worsens (see
+	// WeatherModel.wind_strength_for / EarthChunkManager.set_wind_strength).
+	float wind_rate = scroll_speed * wind_strength;
+	float swell = value_noise(p + vec2(TIME * wind_rate, TIME * wind_rate * 0.35));
+	float chop = value_noise(p * 2.3 - vec2(TIME * wind_rate * 0.7, TIME * wind_rate * 0.2));
 	float ambient_wave = swell * 0.65 + chop * 0.35;
 
 	// Shore distance: baked into this tile's own texture as a DATA channel
@@ -165,6 +174,10 @@ const CREST_COLOR := Color(0.16, 0.42, 0.72)
 const WAVE_LOW_THRESHOLD := 0.55
 const WAVE_HIGH_THRESHOLD := 0.95
 
+## Calm baseline pacing -- matches WeatherModel.wind_strength_for("clear"), so
+## an unconfigured/default material already looks like a still, clear day.
+const DEFAULT_WIND_STRENGTH := 0.3
+
 var _shared_material: ShaderMaterial
 
 
@@ -174,6 +187,7 @@ func make_material() -> ShaderMaterial:
 	var material := ShaderMaterial.new()
 	material.shader = shader
 	material.set_shader_parameter("alpha_strength", WATER_ALPHA)
+	material.set_shader_parameter("wind_strength", DEFAULT_WIND_STRENGTH)
 	material.set_shader_parameter("rain_intensity", 0.0)
 	material.set_shader_parameter("deep_color", DEEP_COLOR)
 	material.set_shader_parameter("crest_color", CREST_COLOR)
@@ -194,3 +208,12 @@ func shared_material() -> ShaderMaterial:
 ## even a hard 0/1 flip is just a ripple-strength change, not a visual swap.
 func set_rain_intensity(intensity: float) -> void:
 	shared_material().set_shader_parameter("rain_intensity", intensity)
+
+
+## Sets how energetic the ambient wave motion is on the shared material --
+## see WeatherModel.wind_strength_for, driven from the live weather model
+## (EarthChunkManager.set_wind_strength). Scales the ambient wave's effective
+## time-rate, so water idles gently on a clear day and churns faster/choppier
+## as weather worsens.
+func set_wind_strength(strength: float) -> void:
+	shared_material().set_shader_parameter("wind_strength", strength)

@@ -14,6 +14,7 @@ const WindSway = preload("res://src/rendering/wind_sway.gd")
 const GrassBladeField = preload("res://src/rendering/grass_blade_field.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
+const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
 const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
@@ -82,6 +83,7 @@ var _blade_fields: Dictionary = {}  # Vector2i chunk_coord -> MultiMeshInstance2
 var _water_layer: TileMapLayer  # optional GPU water overlay, see set_water_layer
 var _water_material: ShaderMaterial  # the water overlay's shared shader material, see set_rain
 var _creature_renderer := CreatureRenderer.new()
+var _fish_renderer := FishRenderer.new()
 var _biome_classifier := BiomeClassifier.new()
 var _ecosystem := EcosystemSimulation.new()
 var _chunk_serializer := ChunkSerializer.new()
@@ -104,6 +106,7 @@ var _lichen_sims: Dictionary = {}  # Vector2i chunk_coord -> TundraLichen
 var _lichen_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
 var _lichen_refresh_accumulator := 0.0
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
+var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _ecosystem_time_accumulator := 0.0
 var _forage_accumulator := 0.0
 var _forage_tick := 0
@@ -354,6 +357,15 @@ func _ring_distance_at(global_x: int, global_y: int, max_ring: int) -> int:
 func set_rain(raining: bool) -> void:
 	if _water_material != null:
 		_water_material.set_shader_parameter("rain_intensity", 1.0 if raining else 0.0)
+
+
+## Sets how energetic the water overlay's ambient wave motion is (see
+## WaterShader.set_wind_strength) -- pass WeatherModel.wind_strength_for(the
+## current weather) so the same shore idles calmly on a clear day and churns
+## faster/choppier during a storm.
+func set_wind_strength(strength: float) -> void:
+	if _water_material != null:
+		_water_material.set_shader_parameter("wind_strength", strength)
 
 
 func current_weather(player_pixel: Vector2) -> String:
@@ -688,6 +700,31 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 	return chunk.biome[_local_index(global_x, global_y)]
 
 
+## Finds the nearest loaded FishMarker within max_distance pixels of
+## `pixel_position`, frees it, and returns its species -- or "" if none is in
+## range. Used to give the abstract fishing minigame (see FishingSession,
+## Player._fishing_step) a real visible fish to make disappear and flavor the
+## catch message with, without coupling the catch's success/rarity to whether
+## a fish happens to be rendered nearby (that stays purely
+## FishingMinigame.attempt_catch's call, unaffected by this).
+func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> String:
+	var nearest: Node2D = null
+	var nearest_distance := max_distance
+	for fish_list in _loaded_fish.values():
+		for fish in fish_list:
+			var distance: float = pixel_position.distance_to(fish.position)
+			if distance <= nearest_distance:
+				nearest = fish
+				nearest_distance = distance
+	if nearest == null:
+		return ""
+	var species: String = nearest.species
+	for chunk_coord in _loaded_fish.keys():
+		_loaded_fish[chunk_coord].erase(nearest)
+	nearest.free()
+	return species
+
+
 func modification_at_global(global_x: int, global_y: int) -> String:
 	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
 	if chunk == null:
@@ -824,6 +861,9 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		self,
 		_biome_classifier.dominant_biome(chunk.biome)
 	)
+	_loaded_fish[chunk_coord] = _fish_renderer.spawn_fish(
+		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
+	)
 
 
 ## If this chunk was visited before, advance its aggregate ecology over the
@@ -905,6 +945,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for creature in _loaded_creatures.get(chunk_coord, []):
 		creature.free()
 	_loaded_creatures.erase(chunk_coord)
+
+	for fish in _loaded_fish.get(chunk_coord, []):
+		fish.free()
+	_loaded_fish.erase(chunk_coord)
 
 
 func _modifications_path(chunk_coord: Vector2i) -> String:
