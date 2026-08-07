@@ -104,30 +104,15 @@ func _paint_speckled(image: Image, base_color: Color, variant_seed: int) -> void
 			image.set_pixel(x, y, color)
 
 
-## Water: a calm dark-speckled surface with ROUND expanding ripple rings --
-## flattened ellipses (wider than tall, top-down perspective) that grow
-## outward one step per animation frame and restart, like raindrops or fish
-## touching the surface. Each tile gets RIPPLE_COUNT ripple centers at
-## hash-derived positions with per-ripple phase offsets, so rings across a
-## lake expand out of step with each other. Replaces the old scrolling
-## horizontal streak rows, which read as scan lines rather than water.
-const RIPPLE_COUNT := 2
-const RIPPLE_BASE_RADIUS := 1.5
-const RIPPLE_GROWTH_PER_FRAME := 1.6
-
-
-## Ring radius at a given animation frame -- grows every frame, wraps back to
-## the start after FRAME_COUNT (seamless loop; pinned by
-## test_ripple_radius_grows_within_a_cycle_and_wraps).
-func ripple_radius_for_frame(frame: int) -> float:
-	return RIPPLE_BASE_RADIUS + posmod(frame, FRAME_COUNT) * RIPPLE_GROWTH_PER_FRAME
-
-
-## Default (no-rain) water: a noisy two-tone surface with short diagonal wind
+## Base (baked-tile) water: a noisy two-tone surface with short diagonal wind
 ## glints that DRIFT sideways one pixel per frame -- choppy, wind-blown water,
 ## not raindrops. Glint drift wraps modulo SIZE, so the cycle loops
-## seamlessly. Rain water (ripple rings) is its own image family -- see
-## generate_rain_water_image and TerrainRenderer's rain mode.
+## seamlessly. This is only the STATIC layer now: the GPU WaterFx overlay
+## (water_shader.gd) draws the continuous waves, shore reflection, and
+## raindrop ripples on top at partial alpha, so this tile's job is just to
+## give the water a believable base tint/texture underneath -- shore
+## blending and rain both moved entirely to the overlay (see
+## TerrainRenderer.build_water_overlay_tile_set).
 const WIND_GLINT_COUNT := 5
 
 
@@ -168,36 +153,6 @@ func _paint_water(image: Image, base_color: Color, variant_seed: int, frame: int
 		var tx := posmod(h / 41 - wrapped, SIZE)
 		for k in 3:
 			image.set_pixel((tx + k) % SIZE, ty, trough_color)
-
-
-## Rain-weather water: the windy base plus expanding raindrop ripple rings
-## (see ripple_radius_for_frame). Swapped in by TerrainRenderer when the
-## weather model reports rain/storm.
-func generate_rain_water_image(variant_seed: int, frame: int) -> Image:
-	var wrapped_frame := posmod(frame, FRAME_COUNT)
-	var base_color: Color = BASE_COLORS["ocean"]
-	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
-	_paint_water(image, base_color, variant_seed, wrapped_frame)
-	_paint_ripple_rings(image, base_color, variant_seed, wrapped_frame)
-	return image
-
-
-func _paint_ripple_rings(image: Image, base_color: Color, variant_seed: int, frame: int) -> void:
-	for i in RIPPLE_COUNT:
-		var h := absi(hash("%d_ripple_%d" % [variant_seed, i]))
-		var center := Vector2(3 + h % (SIZE - 6), 3 + (h / 61) % (SIZE - 6))
-		var phase := (h / 977) % FRAME_COUNT
-		var cycle_frame := posmod(frame + phase, FRAME_COUNT)
-		var radius := ripple_radius_for_frame(cycle_frame)
-		# A young ring is bright; it fades as it spreads and dissipates.
-		var progress := cycle_frame / float(FRAME_COUNT - 1)
-		var ring_color := base_color.lightened(0.3 * (1.0 - progress * 0.55))
-		for y in SIZE:
-			for x in SIZE:
-				var dx := x + 0.5 - center.x
-				var dy := (y + 0.5 - center.y) * 1.5  # flatten: rings wider than tall
-				if absf(sqrt(dx * dx + dy * dy) - radius) < 0.7:
-					image.set_pixel(x, y, ring_color)
 
 
 ## Individual grass blades: BLADE_COUNT per tile, each with its own

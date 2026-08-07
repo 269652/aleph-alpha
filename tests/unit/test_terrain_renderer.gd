@@ -30,15 +30,14 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 	# doesn't need six looks, and each extra costs 630 atlas images at build).
 	# Note: animated biome tiles still count once each here -- their extra
 	# FRAME_COUNT cells hold frames, not tiles.
-	# + shore tiles: DIRECTION_MASK_COUNT land-edge masks x SHORE_VARIANTS
-	# animated foam-edge water tiles (see atlas_coords_for_shore).
-	# + rain-water tiles: VARIANTS_PER_BIOME ripple-ring variants swapped in
-	# while it rains (see atlas_coords_for_rain_water).
+	# Shorelines and rain are no longer baked tiles at all -- both moved to
+	# the GPU WaterFx overlay (see build_water_overlay_tile_set,
+	# water_shader.gd), which reads shore-distance as DATA instead of
+	# swapping discrete art. Ocean is a plain animated biome tile like any
+	# other, so this atlas has no water-specific terms anymore.
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
 	var expected := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1 + ProceduralStructureSprite.STRUCTURE_IDS.size()
-		+ TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.SHORE_VARIANTS
-		+ TerrainRenderer.VARIANTS_PER_BIOME
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(source.get_tiles_count(), expected)
@@ -53,8 +52,6 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
 	var tile_count_without_structures := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1
-		+ TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.SHORE_VARIANTS
-		+ TerrainRenderer.VARIANTS_PER_BIOME
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(
@@ -147,60 +144,46 @@ func test_variants_per_biome_is_at_least_six():
 	assert_gte(TerrainRenderer.VARIANTS_PER_BIOME, 6)
 
 
-# -- animated shorelines (ocean cells bordering land get foam edges) ----------
+# -- water overlay tile set (shore-distance DATA for the GPU water shader) ---
+#
+# Shorelines and rain no longer live as discrete baked tiles at all -- both
+# moved to the GPU WaterFx overlay layer (see water_shader.gd), which reads
+# a small "shore distance" tile family as per-pixel data (not art) to blend
+# and animate everything continuously. The base Terrain layer's ocean cells
+# are now plain animated water tiles, same as every other biome (see
+# test_paint_keeps_open_water_as_plain_animated_ocean below).
 
-func test_shore_tiles_are_registered_animated_and_distinct_from_plain_water():
-	var tile_set := renderer.build_tile_set()
-	var source := tile_set.get_source(0) as TileSetAtlasSource
-	var coords := renderer.atlas_coords_for_shore([Vector2i(0, -1)], 0)
-	assert_true(source.has_tile(coords))
-	assert_eq(source.get_tile_animation_frames_count(coords), TerrainRenderer.FRAME_COUNT)
-	assert_ne(coords, renderer.atlas_coords_for_biome("ocean", 0))
-
-
-func test_paint_gives_an_ocean_cell_bordering_land_a_shore_tile():
-	var tile_set := renderer.build_tile_set()
-	tile_map_layer.tile_set = tile_set
-	var chunk := Chunk.new()
-	chunk.width = 2
-	chunk.height = 1
-	chunk.elevation = PackedFloat32Array([0.1, 0.4])
-	chunk.biome = PackedStringArray(["ocean", "grassland"])
-
-	renderer.paint(tile_map_layer, chunk)
-
-	var variant := renderer.variant_index_for_position(0, 0)
-	# The ocean cell at (0,0) has land to its east -> foam on that edge.
-	assert_eq(
-		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
-		renderer.atlas_coords_for_shore([Vector2i(1, 0)], variant)
-	)
+func test_water_overlay_tile_set_has_one_flat_tile_plus_one_per_direction_mask():
+	var overlay_set := renderer.build_water_overlay_tile_set()
+	var source := overlay_set.get_source(0) as TileSetAtlasSource
+	# 1 flat "deep water, no land neighbor" tile + one per non-empty cardinal
+	# direction-mask combination (DIRECTION_MASK_COUNT = 15).
+	assert_eq(source.get_tiles_count(), 1 + TerrainRenderer.DIRECTION_MASK_COUNT)
 
 
-## Weather-reactive water: while it rains, open-water cells swap to the
-## raindrop-ripple tile family; shorelines keep their foam either way.
-func test_rain_mode_swaps_open_water_to_the_rain_tile_family():
-	var tile_set := renderer.build_tile_set()
-	tile_map_layer.tile_set = tile_set
-	var chunk := Chunk.new()
-	chunk.width = 2
-	chunk.height = 1
-	chunk.elevation = PackedFloat32Array([0.1, 0.1])
-	chunk.biome = PackedStringArray(["ocean", "ocean"])
+func test_atlas_coords_for_water_overlay_differs_by_land_direction_set():
+	var no_land := renderer.atlas_coords_for_water_overlay([])
+	var north := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1)])
+	var north_east := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1), Vector2i(1, 0)])
+	assert_ne(no_land, north)
+	assert_ne(north, north_east)
 
-	renderer.rain_mode = true
-	renderer.paint(tile_map_layer, chunk)
 
-	var variant := renderer.variant_index_for_position(0, 0)
-	assert_eq(
-		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
-		renderer.atlas_coords_for_rain_water(variant)
-	)
-	var source := tile_set.get_source(0) as TileSetAtlasSource
-	assert_eq(
-		source.get_tile_animation_frames_count(renderer.atlas_coords_for_rain_water(0)),
-		TerrainRenderer.FRAME_COUNT
-	)
+func test_atlas_coords_for_water_overlay_is_independent_of_direction_order():
+	var a := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1), Vector2i(1, 0)])
+	var b := renderer.atlas_coords_for_water_overlay([Vector2i(1, 0), Vector2i(0, -1)])
+	assert_eq(a, b)
+
+
+func test_water_overlay_tiles_are_real_shore_distance_data_not_a_flat_fill():
+	var overlay_set := renderer.build_water_overlay_tile_set()
+	var source := overlay_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	var coords := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1)])
+	var origin := Vector2i(coords.x * TerrainRenderer.TILE_SIZE, coords.y * TerrainRenderer.TILE_SIZE)
+	var edge_pixel := image.get_pixel(origin.x + 8, origin.y)
+	var far_pixel := image.get_pixel(origin.x + 8, origin.y + TerrainRenderer.TILE_SIZE - 1)
+	assert_lt(edge_pixel.r, far_pixel.r, "the land-facing edge should read closer to shore than the far side")
 
 
 func test_paint_keeps_open_water_as_plain_animated_ocean():
@@ -528,15 +511,15 @@ func test_paint_blends_only_the_higher_priority_side_of_a_border():
 
 	var ocean_variant := renderer.variant_index_for_position(0, 0)
 	var grassland_variant := renderer.variant_index_for_position(1, 0)
-	# The ocean (lower-priority) side never fringes toward land -- but it's no
-	# longer a plain open-water tile either: water touching land renders an
-	# animated foam-edge shore tile (see atlas_coords_for_shore), foam facing
-	# its land neighbor. The one-sided fringe rule is intact -- only the
-	# grassland side carries the land/water color transition.
+	# The ocean (lower-priority) side never fringes toward land -- it stays a
+	# plain animated water tile on the base layer; shore treatment lives
+	# entirely on the GPU WaterFx overlay now (see the water-overlay tests
+	# above), not as a second tile choice here. Only the grassland
+	# (higher-priority) side carries the land/water color transition.
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
-		renderer.atlas_coords_for_shore([Vector2i(1, 0)], ocean_variant),
-		"the ocean side shows shoreline foam, not a land-colored fringe"
+		renderer.atlas_coords_for_biome("ocean", ocean_variant),
+		"the ocean side stays plain animated water on the base layer"
 	)
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 0)),

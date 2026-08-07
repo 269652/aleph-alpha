@@ -73,6 +73,51 @@ func test_water_overlay_marks_exactly_the_loaded_ocean_cells():
 	water_layer.free()
 
 
+## Each ocean cell's overlay tile matches its OWN land-direction mask (the
+## GPU shore-distance data), not one flat marker for every cell -- shore
+## cells and open-water cells must get visibly different overlay tiles.
+func test_water_overlay_marks_shore_cells_differently_from_open_water():
+	var water_layer := TileMapLayer.new()
+	manager.set_water_layer(water_layer)
+	manager.update(_berlin_tile)
+
+	var terrain_renderer := TerrainRenderer.new()
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var found_shore := false
+	var found_open := false
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		for y in EarthChunkManager.CHUNK_SIZE:
+			for x in EarthChunkManager.CHUNK_SIZE:
+				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+				if manager.biome_at_global(global_x, global_y) != "ocean":
+					continue
+				var cell := Vector2i(global_x, global_y)
+				var coords := water_layer.get_cell_atlas_coords(cell)
+				if coords == terrain_renderer.atlas_coords_for_water_overlay([]):
+					found_open = true
+				else:
+					found_shore = true
+	assert_true(found_open, "expected at least one open-water overlay cell in this test region")
+	assert_true(found_shore, "expected at least one shore overlay cell (ocean bordering land) in this test region")
+	water_layer.free()
+
+
+## Weather-reactive water: set_rain now drives a continuous shader uniform on
+## the shared water material instead of repainting any tiles.
+func test_set_rain_updates_the_water_materials_rain_intensity_uniform():
+	var water_layer := TileMapLayer.new()
+	manager.set_water_layer(water_layer)
+	manager.update(_berlin_tile)
+
+	manager.set_rain(true)
+	assert_eq((water_layer.material as ShaderMaterial).get_shader_parameter("rain_intensity"), 1.0)
+
+	manager.set_rain(false)
+	assert_eq((water_layer.material as ShaderMaterial).get_shader_parameter("rain_intensity"), 0.0)
+	water_layer.free()
+
+
 func _expected_tree_count_around(center_chunk: Vector2i) -> int:
 	var expected := 0
 	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):

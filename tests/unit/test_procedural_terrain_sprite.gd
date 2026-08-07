@@ -261,61 +261,12 @@ func test_grassland_tile_has_rich_color_variety():
 	assert_gte(distinct.size(), 5, "grassland should layer tufts/flowers over the base speckle")
 
 
-# -- shoreline foam (water tiles bordering land) ------------------------------
-
-## Foam gathers on the land-facing edge only: a shore tile with land to the
-## north has near-white foam pixels in its top rows and none along the bottom.
-func test_shore_water_has_foam_on_the_land_facing_edge_only():
-	var image := generator.generate_shore_water_image([Vector2i(0, -1)], 0, 0)
-	var top_foam := 0
-	var bottom_foam := 0
-	for x in ProceduralTerrainSprite.SIZE:
-		for y in 2:
-			if _is_foam(image.get_pixel(x, y)):
-				top_foam += 1
-		for y in range(ProceduralTerrainSprite.SIZE - 2, ProceduralTerrainSprite.SIZE):
-			if _is_foam(image.get_pixel(x, y)):
-				bottom_foam += 1
-	assert_gt(top_foam, 0, "land-facing edge should carry foam")
-	assert_eq(bottom_foam, 0, "open-water edge should carry none")
-
-
-func test_shore_water_frames_differ_and_are_deterministic():
-	var f0 := generator.generate_shore_water_image([Vector2i(0, -1)], 0, 0)
-	var f1 := generator.generate_shore_water_image([Vector2i(0, -1)], 0, 1)
-	var f0_again := generator.generate_shore_water_image([Vector2i(0, -1)], 0, 0)
-	assert_ne(f0.get_data(), f1.get_data(), "foam should shimmer across frames")
-	assert_eq(f0.get_data(), f0_again.get_data())
-
-
-func _is_foam(p: Color) -> bool:
-	# Soft lightened-water band (see FOAM_COLOR) -- deliberately NOT near-white:
-	# bright dashes on every tile edge read as selection outlines, not water.
-	return p.b > 0.9 and p.g > 0.6 and p.g < 0.85
-
-
-# -- round ripples on water + individually varied grass blades ----------------
-
-## Rain water (ripple rings) is a distinct look from the default windy chop --
-## rings only appear while it rains (see TerrainRenderer.rain_mode).
-func test_rain_water_differs_from_default_windy_water():
-	var windy := generator.generate_frame_image("ocean", 0, 0)
-	var rain := generator.generate_rain_water_image(0, 0)
-	assert_ne(windy.get_data(), rain.get_data())
-	var rain_again := generator.generate_rain_water_image(0, 0)
-	assert_eq(rain.get_data(), rain_again.get_data())
-
-
-## Ripple rings expand outward frame by frame and the cycle wraps seamlessly:
-## the testable core of "water ripples outward" (the painting samples this).
-func test_ripple_radius_grows_within_a_cycle_and_wraps():
-	var r0 := generator.ripple_radius_for_frame(0)
-	var r1 := generator.ripple_radius_for_frame(1)
-	var r3 := generator.ripple_radius_for_frame(ProceduralTerrainSprite.FRAME_COUNT - 1)
-	assert_gt(r1, r0, "a ripple ring should expand across frames")
-	assert_gt(r3, r1)
-	assert_eq(generator.ripple_radius_for_frame(ProceduralTerrainSprite.FRAME_COUNT), r0)
-
+# -- individually varied grass blades -----------------------------------------
+#
+# Shoreline foam and rain-ripple rings used to be baked-tile tests here; both
+# moved to the GPU WaterFx overlay (see test_water_shader.gd and
+# test_procedural_shore_distance_sprite.gd) -- shore/rain are now continuous
+# per-pixel GPU effects, not discrete tile art this generator produces.
 
 ## Grass blades are individuals: deterministic per (seed, index), with real
 ## variety in height and color across a tile -- not six clones of one blade.

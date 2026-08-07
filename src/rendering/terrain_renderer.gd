@@ -4,6 +4,7 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
+const ProceduralShoreDistanceSprite = preload("res://src/rendering/procedural_shore_distance_sprite.gd")
 
 const TILE_SIZE := 16
 
@@ -67,18 +68,6 @@ const _DIRECTION_COUNT := 4
 ## their shared corners) -- that's (2^4 - 1) = 15 masks.
 const DIRECTION_MASK_COUNT := (1 << _DIRECTION_COUNT) - 1
 
-## Animated shoreline variants: an ocean cell bordering land renders a foam-
-## edged water tile (one per land-direction mask, see atlas_coords_for_shore)
-## instead of plain open water, so lakes and coasts read as lapping water
-## rather than hard blue blobs.
-const SHORE_VARIANTS := 2
-
-## When true (set from the live weather model -- rain/storm), open-water
-## cells paint the raindrop-ripple tile family instead of the default windy
-## chop (see atlas_coords_for_rain_water); the caller repaints loaded chunks
-## on weather transitions.
-var rain_mode := false
-
 ## Border/blend tiles keep fewer variants than base ground: they're
 ## transitional fringe noise, not the surface the eye rests on, and every
 ## extra blend variant costs n*(n-1)*15 more generated atlas images at
@@ -99,6 +88,7 @@ const ATLAS_COLUMNS := 64
 
 var _terrain_sprite_generator := ProceduralTerrainSprite.new()
 var _structure_sprite_generator := ProceduralStructureSprite.new()
+var _shore_distance_generator := ProceduralShoreDistanceSprite.new()
 
 
 ## Returns the atlas coordinate for one biome's variant -- the FIRST frame of
@@ -227,42 +217,10 @@ func _structure_linear(tile_id: String) -> int:
 	return _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.find(tile_id)
 
 
-## Returns the atlas coordinate (first animation frame) for a shoreline water
-## tile whose land neighbors lie in `land_directions` -- foam on exactly
-## those edges. Order-independent (reduced to a mask), same convention as
-## atlas_coords_for_directional_blend. `variant_index` folds into
-## SHORE_VARIANTS, so callers can pass the ordinary per-position variant.
-func atlas_coords_for_shore(land_directions: Array, variant_index: int = 0) -> Vector2i:
-	var mask := _direction_mask(land_directions)
-	return _grid_coords(_shore_linear(mask, variant_index % SHORE_VARIANTS))
-
-
-## Linear atlas index where the animated shore-water blocks begin: after the
-## earth + structure tiles, rounded up to the next FRAME_COUNT boundary so
-## every shore block stays row-aligned (frames must never wrap a row -- same
-## invariant as the base biome blocks).
-func _shore_base_linear() -> int:
-	var raw := _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.size()
-	return int(ceil(raw / float(FRAME_COUNT))) * FRAME_COUNT
-
-
-func _shore_linear(mask: int, variant: int) -> int:
-	return _shore_base_linear() + ((mask - 1) * SHORE_VARIANTS + variant) * FRAME_COUNT
-
-
-## Rain-water animation blocks (raindrop ripple rings), one per variant,
-## right after the shore blocks (both regions are FRAME_COUNT-aligned).
-func atlas_coords_for_rain_water(variant_index: int = 0) -> Vector2i:
-	return _grid_coords(_rain_water_base_linear() + variant_index * FRAME_COUNT)
-
-
-func _rain_water_base_linear() -> int:
-	return _shore_base_linear() + DIRECTION_MASK_COUNT * SHORE_VARIANTS * FRAME_COUNT
-
-
-## Linear atlas index where the blend tiles begin (after the rain blocks).
+## Linear atlas index where the blend tiles begin (right after the earth and
+## structure tiles).
 func _blend_base_linear() -> int:
-	return _rain_water_base_linear() + VARIANTS_PER_BIOME * FRAME_COUNT
+	return _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.size()
 
 
 ## Linear atlas index of one blend tile. Pairs are ordered (near, far) with the
@@ -343,22 +301,6 @@ func build_tile_set() -> TileSet:
 		var structure_image := _structure_sprite_generator.generate_image(structure_id)
 		_blit_tile(image, structure_image, _structure_linear(structure_id))
 
-	# Animated shoreline blocks: one per land-direction mask x variant.
-	for mask in range(1, DIRECTION_MASK_COUNT + 1):
-		var land_directions := _directions_from_mask(mask)
-		for variant in SHORE_VARIANTS:
-			for frame in FRAME_COUNT:
-				var shore_image := _terrain_sprite_generator.generate_shore_water_image(
-					land_directions, variant, frame
-				)
-				_blit_tile(image, shore_image, _shore_linear(mask, variant) + frame)
-
-	# Rain-water blocks (ripple rings), swapped in while it rains.
-	for variant in VARIANTS_PER_BIOME:
-		for frame in FRAME_COUNT:
-			var rain_image := _terrain_sprite_generator.generate_rain_water_image(variant, frame)
-			_blit_tile(image, rain_image, _rain_water_base_linear() + variant * FRAME_COUNT + frame)
-
 	for near_index in biome_count:
 		for far_index in biome_count:
 			if far_index == near_index:
@@ -393,23 +335,6 @@ func build_tile_set() -> TileSet:
 			source.set_tile_animation_frames_count(first, FRAME_COUNT)
 			for frame in FRAME_COUNT:
 				source.set_tile_animation_frame_duration(first, frame, duration)
-
-	# Shore-water tiles animate exactly like base biome tiles.
-	for mask in range(1, DIRECTION_MASK_COUNT + 1):
-		for variant in SHORE_VARIANTS:
-			var first := _grid_coords(_shore_linear(mask, variant))
-			source.create_tile(first)
-			source.set_tile_animation_frames_count(first, FRAME_COUNT)
-			for frame in FRAME_COUNT:
-				source.set_tile_animation_frame_duration(first, frame, FRAME_DURATION_SECONDS)
-
-	# Rain-water tiles, same animation scheme.
-	for variant in VARIANTS_PER_BIOME:
-		var rain_first := atlas_coords_for_rain_water(variant)
-		source.create_tile(rain_first)
-		source.set_tile_animation_frames_count(rain_first, FRAME_COUNT)
-		for frame in FRAME_COUNT:
-			source.set_tile_animation_frame_duration(rain_first, frame, FRAME_DURATION_SECONDS)
 
 	# Earth, structures, and blend tiles stay static single-cell tiles.
 	source.create_tile(_grid_coords(_earth_linear()))
@@ -456,28 +381,21 @@ func paint(
 				var biome_name: String = chunk.biome[y * chunk.width + x]
 				var variant := variant_index_for_position(global.x, global.y)
 				var neighbors := _neighbor_biomes(chunk, x, y, origin, global_biome_lookup)
-				if biome_name == "ocean":
-					# Water never fringes over land (lowest BLEND_PRIORITY);
-					# instead, water touching land gets an animated foam-edge
-					# shore tile on exactly its land-facing edges.
-					var land_directions := []
-					for direction in neighbors:
-						if neighbors[direction] != "ocean":
-							land_directions.append(direction)
-					if not land_directions.is_empty():
-						atlas_coords = atlas_coords_for_shore(land_directions, variant)
-					elif rain_mode:
-						atlas_coords = atlas_coords_for_rain_water(variant)
-					else:
-						atlas_coords = atlas_coords_for_biome(biome_name, variant)
+				# Water never fringes over land (lowest BLEND_PRIORITY), so
+				# ocean cells always fall through to the plain animated tile
+				# here -- shore blending and rain now live entirely on the
+				# GPU WaterFx overlay (see build_water_overlay_tile_set,
+				# EarthChunkManager.set_water_layer, water_shader.gd), which
+				# reads land-proximity as continuous per-pixel data instead
+				# of swapping discrete baked tiles at the 16px tile grid
+				# (the old approach's jagged shore-staircase look).
+				var blend := dominant_blend_for(biome_name, neighbors)
+				if blend.is_empty():
+					atlas_coords = atlas_coords_for_biome(biome_name, variant)
 				else:
-					var blend := dominant_blend_for(biome_name, neighbors)
-					if blend.is_empty():
-						atlas_coords = atlas_coords_for_biome(biome_name, variant)
-					else:
-						atlas_coords = atlas_coords_for_directional_blend(
-							biome_name, blend.partner, blend.directions, variant
-						)
+					atlas_coords = atlas_coords_for_directional_blend(
+						biome_name, blend.partner, blend.directions, variant
+					)
 			tile_map_layer.set_cell(global, 0, atlas_coords)
 
 
@@ -508,3 +426,49 @@ func erase(tile_map_layer: TileMapLayer, chunk_size: int, origin: Vector2i = Vec
 	for y in chunk_size:
 		for x in chunk_size:
 			tile_map_layer.erase_cell(origin + Vector2i(x, y))
+
+
+## The atlas coordinate of the WaterFx overlay tile for an ocean cell whose
+## land neighbors lie in `land_directions` (empty == open water, no land
+## neighbor). Order-independent (reduced to a mask, matching
+## atlas_coords_for_directional_blend's convention) -- callers can pass the
+## direction list in any order.
+func atlas_coords_for_water_overlay(land_directions: Array) -> Vector2i:
+	if land_directions.is_empty():
+		return Vector2i(0, 0)
+	return Vector2i(_direction_mask(land_directions), 0)
+
+
+## A small, separate TileSet for the GPU water overlay layer (see
+## EarthChunkManager.set_water_layer): one flat "deep water" tile plus one
+## per cardinal land-direction mask (DIRECTION_MASK_COUNT = 15), each holding
+## real shore-distance DATA (see ProceduralShoreDistanceSprite) rather than
+## art -- water_shader.gd samples it as a texture channel to blend and
+## animate everything continuously on the GPU. No animation-frame bookkeeping
+## needed here at all: unlike the old baked shore/rain tiles, every bit of
+## motion (waves, shore reflection, raindrop ripples) is computed in the
+## shader from TIME and world position, not by swapping tile frames.
+func build_water_overlay_tile_set() -> TileSet:
+	var total := 1 + DIRECTION_MASK_COUNT
+	var image := Image.create(total * TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
+	image.blit_rect(
+		_shore_distance_generator.generate_deep_water_image(),
+		Rect2i(Vector2i.ZERO, Vector2i(TILE_SIZE, TILE_SIZE)), Vector2i.ZERO
+	)
+	for mask in range(1, DIRECTION_MASK_COUNT + 1):
+		var land_directions := _directions_from_mask(mask)
+		var distance_image := _shore_distance_generator.generate_image(land_directions)
+		image.blit_rect(
+			distance_image, Rect2i(Vector2i.ZERO, Vector2i(TILE_SIZE, TILE_SIZE)), Vector2i(mask * TILE_SIZE, 0)
+		)
+
+	var source := TileSetAtlasSource.new()
+	source.texture = ImageTexture.create_from_image(image)
+	source.texture_region_size = Vector2i(TILE_SIZE, TILE_SIZE)
+	for i in total:
+		source.create_tile(Vector2i(i, 0))
+
+	var tile_set := TileSet.new()
+	tile_set.tile_size = Vector2i(TILE_SIZE, TILE_SIZE)
+	tile_set.add_source(source, 0)
+	return tile_set

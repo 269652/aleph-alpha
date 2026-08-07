@@ -80,6 +80,7 @@ var _wind_sway := WindSway.new()
 var _grass_blade_field := GrassBladeField.new()
 var _blade_fields: Dictionary = {}  # Vector2i chunk_coord -> MultiMeshInstance2D
 var _water_layer: TileMapLayer  # optional GPU water overlay, see set_water_layer
+var _water_material: ShaderMaterial  # the water overlay's shared shader material, see set_rain
 var _creature_renderer := CreatureRenderer.new()
 var _biome_classifier := BiomeClassifier.new()
 var _ecosystem := EcosystemSimulation.new()
@@ -267,51 +268,66 @@ func weather_speed_modifier(player_pixel: Vector2) -> float:
 ## The current weather at the player's region (see WeatherModel), derived from
 ## the world-age (as a day count) and the player's chunk as the region seed --
 ## for the HUD and, later, survival/combat weather effects.
-## Registers the GPU water overlay layer (see WaterShader): it gets a
-## minimal one-marker-tile TileSet plus the animated water material, and from
-## then on every loaded ocean cell is marked on it (see _paint_water_overlay).
-## Chunks already loaded before registration get marked immediately.
+## The 4 cardinal directions checked for land neighbors, matching
+## TerrainRenderer's own _DIRECTIONS convention (kept as a small local
+## duplicate -- TerrainRenderer's is private, and this is 4 well-known
+## constant vectors, not worth threading an accessor through for).
+const _DIRECTIONS: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+
+
+## Registers the GPU water overlay layer (see WaterShader/
+## TerrainRenderer.build_water_overlay_tile_set): it gets the small shore-
+## distance tile set plus the animated water material, and from then on
+## every loaded ocean cell is marked with the tile matching its OWN land
+## neighbors (see _paint_water_overlay). Chunks already loaded before
+## registration get marked immediately.
 func set_water_layer(water_layer: TileMapLayer) -> void:
 	_water_layer = water_layer
-	var marker := Image.create(TerrainRenderer.TILE_SIZE, TerrainRenderer.TILE_SIZE, false, Image.FORMAT_RGBA8)
-	marker.fill(Color.WHITE)
-	var source := TileSetAtlasSource.new()
-	source.texture = ImageTexture.create_from_image(marker)
-	source.texture_region_size = Vector2i(TerrainRenderer.TILE_SIZE, TerrainRenderer.TILE_SIZE)
-	source.create_tile(Vector2i.ZERO)
-	var tile_set := TileSet.new()
-	tile_set.tile_size = Vector2i(TerrainRenderer.TILE_SIZE, TerrainRenderer.TILE_SIZE)
-	tile_set.add_source(source, 0)
-	water_layer.tile_set = tile_set
-	water_layer.material = WaterShader.new().shared_material()
+	water_layer.tile_set = _terrain_renderer.build_water_overlay_tile_set()
+	_water_material = WaterShader.new().shared_material()
+	water_layer.material = _water_material
 	for chunk_coord in _loaded_chunks:
 		_paint_water_overlay(chunk_coord, _loaded_chunks[chunk_coord])
 
 
-## Marks every ocean cell of a loaded chunk on the water overlay layer -- the
-## shader draws procedural animated water there, ignoring the marker texture.
+## Marks every ocean cell of a loaded chunk on the water overlay layer with
+## the shore-distance tile matching its own cardinal land neighbors (empty ==
+## open water) -- the shader reads that tile as per-pixel proximity data to
+## blend and animate the shore continuously, not as art.
 func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _water_layer == null:
 		return
 	var origin := chunk_coord * CHUNK_SIZE
 	for y in chunk.height:
 		for x in chunk.width:
-			if chunk.biome[y * chunk.width + x] == "ocean":
-				_water_layer.set_cell(origin + Vector2i(x, y), 0, Vector2i.ZERO)
+			if chunk.biome[y * chunk.width + x] != "ocean":
+				continue
+			var global := origin + Vector2i(x, y)
+			_water_layer.set_cell(
+				global, 0, _terrain_renderer.atlas_coords_for_water_overlay(_land_directions_at(global.x, global.y))
+			)
 
 
-## Switches open-water tiles between windy chop (default) and raindrop
-## ripples (see TerrainRenderer.rain_mode), repainting every loaded chunk --
-## but only on an actual transition, so the per-frame weather poll is free.
+## Cardinal directions from (global_x, global_y) that hold a non-ocean,
+## currently-loaded neighbor. A neighbor in an unloaded chunk (streaming
+## edge) is treated as unknown, not land -- avoids false shore-marking right
+## at the load radius boundary.
+func _land_directions_at(global_x: int, global_y: int) -> Array:
+	var land_directions := []
+	for direction in _DIRECTIONS:
+		var neighbor_biome := biome_at_global(global_x + direction.x, global_y + direction.y)
+		if neighbor_biome != "" and neighbor_biome != "ocean":
+			land_directions.append(direction)
+	return land_directions
+
+
+## Sets how strongly raindrop ripples show on the water overlay (see
+## WaterShader.set_rain_intensity), driven from the live weather model.
+## Purely a continuous shader-uniform update now -- no tile repainting, since
+## rain moved entirely off the baked tile system onto the GPU shader.
 func set_rain(raining: bool) -> void:
-	if _terrain_renderer.rain_mode == raining:
-		return
-	_terrain_renderer.rain_mode = raining
-	for chunk_coord in _loaded_chunks:
-		_terrain_renderer.paint(
-			_tile_map_layer, _loaded_chunks[chunk_coord], chunk_coord * CHUNK_SIZE,
-			generator.biome_at_global
-		)
+	if _water_material != null:
+		_water_material.set_shader_parameter("rain_intensity", 1.0 if raining else 0.0)
 
 
 func current_weather(player_pixel: Vector2) -> String:
