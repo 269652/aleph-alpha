@@ -35,11 +35,16 @@ idle-swimming `FishMarker` entities in one of 4 hand-authored species
 deterministic pick, not DNA/phenotype-driven, and there's no aquatic
 population sim (reproduction/migration/death) behind it yet — closer to
 `CreatureRenderer`'s decorative promotion layer than to
-`EcosystemSimulation`. The reward itself is still one generic `fish` item
-scaled by rolled rarity; catching a real nearby fish only removes it visually
-and names its species in the message. Everything else this doc specs (full
-DNA/evolution reuse, sexual selection, rare-phenotype desirability,
-bait-driven targeting, taming/companion fish) is still open, unstarted work.
+`EcosystemSimulation`. A rare/legendary catch now becomes its own item
+(`rare_fish`/`legendary_fish`, not just the generic `fish`) and grants a real
+timed buff on eating (extra stamina regen / melee damage, see
+`FoodConsumption.FISH_BUFFS`) — the rarity roll finally survives past the
+catch instead of only affecting reward quantity, though it's still a
+per-tile deterministic pick, not DNA/phenotype-driven. Catching a real
+nearby fish also removes it visually and names its species in the message.
+Everything else this doc specs (full DNA/evolution reuse, sexual selection,
+rare-phenotype desirability, bait-driven targeting, taming/companion fish)
+is still open, unstarted work.
 
 ### Open questions
 

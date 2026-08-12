@@ -59,6 +59,15 @@ func test_catalog_knows_mining_and_cooking_items():
 		assert_true(catalog.has(item_id), "missing %s" % item_id)
 
 
+## Rare/legendary catches (see FishingMinigame.fish_rarity) are their own food
+## items -- not just the generic "fish" -- so a rare catch's rarity survives
+## into the inventory instead of being lost after the reward is granted.
+func test_catalog_has_rare_and_legendary_fish_as_distinct_food_items():
+	for item_id in ["rare_fish", "legendary_fish"]:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+		assert_eq(catalog.make(item_id).kind, "food")
+
+
 func test_stone_pickaxe_is_a_tool():
 	assert_eq(catalog.make("stone_pickaxe").kind, "tool")
 

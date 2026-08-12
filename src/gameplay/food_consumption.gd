@@ -27,6 +27,17 @@ static func nearest_food_index(creature_position: Vector2, food_positions: Array
 
 const _EMPTY_FOOD_BUFF := {"dish_id": "", "category": "", "buff": "", "time_remaining": 0.0}
 
+## Eating a raw rare/legendary catch (see ItemCatalog's "rare_fish"/
+## "legendary_fish", FishingMinigame.fish_rarity) grants a buff directly --
+## no cooking/recipe required, a distinct trigger path from
+## CookingRecipeBook's multi-ingredient dishes, but the same dish shape
+## apply_food_buff already accepts. Legendary's buff lasts longer than
+## rare's -- the rarer catch is the more special one.
+const FISH_BUFFS := {
+	"rare_fish": {"dish_id": "rare_fish_catch", "category": "sustenance", "buff": "stamina_regen", "buff_duration": 200.0},
+	"legendary_fish": {"dish_id": "legendary_fish_catch", "category": "combat", "buff": "damage_boost", "buff_duration": 300.0},
+}
+
 
 ## Applies dish (as returned by CookingRecipeBook.cook) to active: replaces
 ## whichever entry already occupies dish's category, or appends a fresh

@@ -43,6 +43,12 @@ const _ITEM_LOOKS := {
 	"coal": {"color": Color(0.18, 0.17, 0.2), "shape": "round"},
 	"fish": {"color": Color(0.5, 0.65, 0.8), "shape": "oval"},
 	"cooked_fish": {"color": Color(0.72, 0.55, 0.35), "shape": "oval"},
+	# Rare/legendary catches (see FishingMinigame.fish_rarity) get a
+	# visibly special color -- a cool blue-violet vs. a vivid gold -- so
+	# they read as valuable at a glance in the inventory grid, distinct
+	# from the plain blue-gray common "fish".
+	"rare_fish": {"color": Color(0.55, 0.4, 0.85), "shape": "oval"},
+	"legendary_fish": {"color": Color(0.95, 0.72, 0.15), "shape": "oval"},
 	"leather_helm": {"color": Color(0.55, 0.38, 0.22), "shape": "helm"},
 	"leather_chest": {"color": Color(0.5, 0.34, 0.2), "shape": "armor"},
 	"leather_legs": {"color": Color(0.46, 0.31, 0.18), "shape": "legs"},

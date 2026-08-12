@@ -649,10 +649,10 @@ No pets/taming system is wired into live gameplay, but two of its core math piec
 No cooking system is wired into live gameplay, but its recipe math now exists as tested pure logic:
 
 - **Cooking System (core loop)** (medium) — 🚧 Partial — a live single-item heat transform now exists: `src/gameplay/campfire_cooking.gd` (meat→cooked_meat, fish→cooked_fish) is wired into `Player._use_food` — clicking/using a raw cookable food while carrying a **campfire** item (craftable from 8 wood) cooks it instead of eating it raw. The richer multi-ingredient `cooking_recipe_book.gd` dish system is still unwired, and the campfire is a carried "portable heat source" rather than a placed world object yet.
-- **Dish Buffs** (medium) — 🚧 Partial — `cooking_recipe_book.gd` models buff type/duration/**category** data per dish (sustenance/combat/resistance), and `food_consumption.gd`'s `apply_food_buff`/`buff_in_category`/`advance_food_buffs` now track a player's active food buffs as fixed per-category slots; tested, but nothing in live gameplay calls `apply_food_buff` yet — eating a cooked dish doesn't grant a buff in practice.
+- **Dish Buffs** (medium) — 🚧 Partial — `cooking_recipe_book.gd` models buff type/duration/**category** data per dish (sustenance/combat/resistance), and `food_consumption.gd`'s `apply_food_buff`/`buff_in_category`/`advance_food_buffs` track a player's active food buffs as fixed per-category slots. **Now live for one trigger**: eating a rare/legendary fish catch (`FoodConsumption.FISH_BUFFS`, `Player.eat_food`/`_food_buff_step`) grants a real timed buff — extra stamina regen (sustenance) or +30% melee damage (combat), see `Player._damage_buff_multiplier`. The multi-ingredient `cooking_recipe_book.gd` dish path is still unwired — eating a cooked dish (as opposed to a raw rare fish) doesn't grant its buff in practice yet.
 - **Ingredient Quality Propagation** (medium)
 - **Recipe Discovery/Composition (Blueprint-DSL reuse)** (large)
-- **Buff Stacking/Duration Rules (open question)** (medium) — 🚧 Partial — resolved by the 2026-07-16 brainstorm in `concept/cooking.md` ("Buff slots: fixed, and typed by category") and implemented as pure logic: `food_consumption.gd`'s `apply_food_buff` replaces same-category entries instead of stacking, `advance_food_buffs` ticks down and expires them, tested. Not wired to live gameplay.
+- **Buff Stacking/Duration Rules (open question)** (medium) — 🚧 Partial — resolved by the 2026-07-16 brainstorm in `concept/cooking.md` ("Buff slots: fixed, and typed by category") and implemented as pure logic: `food_consumption.gd`'s `apply_food_buff` replaces same-category entries instead of stacking, `advance_food_buffs` ticks down and expires them, tested. Live and exercised by the rare-fish buff trigger above; the cooking-recipe dish path still doesn't call it.
 - **Recipe/Buff-Type Space Sizing (open question)** (small)
 - **Class Specialization Hook (Herbalist/Artisan)** (small)
 - **Festival/Visitor Food Hook** (small)
@@ -747,7 +747,7 @@ Core survival meters are now real and wired into live gameplay; the sickness/wou
 - **Herbalist Class** (large)
 - **Herbalist Skill Nodes** (medium)
 - **Preventative Treatments** (small)
-- **Cooking Buffs System** (medium) — 🚧 Partial — same `food_consumption.gd` fixed-category-slot buff tracker as the Cooking section's "Dish Buffs" row above; tested pure logic, not wired to the live eat/cook flow.
+- **Cooking Buffs System** (medium) — 🚧 Partial — same `food_consumption.gd` fixed-category-slot buff tracker as the Cooking section's "Dish Buffs" row above; now wired to the live eat flow for rare/legendary fish specifically (see Fishing section), the cooked-dish path from `cooking_recipe_book.gd` is still not.
 - **Contagion/Epidemic System (proposed, undecided)** (huge)
 - **Debuff Curve Tuning (open question)** (small)
 - **Sickness Roster & Symptom Design (open question)** (small)
@@ -786,7 +786,7 @@ loop, no memory log, no LLM integration whatsoever). All ⬜ Not started:
 - **DNA/phenotype/sexual-selection system (aquatic)** (huge) — ⬜ Not started
 - **Sexual selection / mate choice reproduction** (large) — ⬜ Not started
 - **Rare-phenotype catch desirability** (small) — ⬜ Not started
-- **Fishing catching minigame** (medium) — ✅ Done (basic) — a **playable fishing loop** now exists: `src/gameplay/fishing_session.gd` (tested state machine: cast → wait → bite → react → caught/missed) drives the pre-existing `fishing_minigame.gd` timing/rarity math. A craftable **fishing rod** (stick + plant fibre; player starts with one), a `fish` action (default F) that casts when next to open water and reels on the second press, a HUD prompt ("Casting…" → "! BITE — press the fish key!" → "Caught a … fish!"), and rarity-scaled fish rewards into the inventory (cooked over a campfire, eaten for hunger). Bait depth, species/location availability, and the aquatic population sim are still ⬜.
+- **Fishing catching minigame** (medium) — ✅ Done (basic) — a **playable fishing loop** now exists: `src/gameplay/fishing_session.gd` (tested state machine: cast → wait → bite → react → caught/missed) drives the pre-existing `fishing_minigame.gd` timing/rarity math. A craftable **fishing rod** (stick + plant fibre; player starts with one), a `fish` action (default F) that casts when next to open water and reels on the second press, a HUD prompt ("Casting…" → "! BITE — press the fish key!" → "Caught a … fish!"), and rarity-scaled fish rewards into the inventory (cooked over a campfire, eaten for hunger). A rare/legendary catch is now its own item (`rare_fish`/`legendary_fish`) that grants a real timed buff on eating (extra stamina regen / +30% melee damage) instead of the rarity vanishing after reward-quantity math — see Cooking section's "Dish Buffs". Bait depth, species/location availability, and the aquatic population sim are still ⬜.
 - **Bait/lure system** (medium) — ⬜ Not started
 - **Location-based fish availability** (medium) — ⬜ Not started
 - **Cooking ingredient integration** (small) — ⬜ Not started

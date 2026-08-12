@@ -44,6 +44,11 @@ const _ITEMS := {
 	# Cooking chain: fish caught/dropped, cooked over a campfire.
 	"fish": ["Fish", "food", 20, 0.0],
 	"cooked_fish": ["Cooked Fish", "food", 20, 0.0],
+	# Rare/legendary catches (see FishingMinigame.fish_rarity) are their own
+	# item ids, not just "fish" -- so the rarity survives into the
+	# inventory and grants a buff on eating (see FoodConsumption.FISH_BUFFS).
+	"rare_fish": ["Rare Fish", "food", 20, 0.0],
+	"legendary_fish": ["Legendary Fish", "food", 20, 0.0],
 	# Wearable armor (see Equipment / concept/items.md's equipment slots).
 	"leather_helm": ["Leather Helm", "armor", 1, 0.0, "head", 2.0],
 	"leather_chest": ["Leather Chest", "armor", 1, 0.0, "chest", 4.0],

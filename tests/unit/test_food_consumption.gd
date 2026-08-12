@@ -114,3 +114,37 @@ func test_advance_food_buffs_does_not_mutate_callers_original_array() -> void:
 	var advanced := FoodConsumption.advance_food_buffs(original, 100.0)
 	assert_eq(original[0].time_remaining, 300.0)
 	assert_eq(advanced[0].time_remaining, 200.0)
+
+
+## -- Rare catch buffs: eating a raw rare/legendary fish (see
+## ItemCatalog's "rare_fish"/"legendary_fish") grants a buff directly, no
+## cooking/recipe required -- a distinct trigger path from CookingRecipeBook's
+## multi-ingredient dishes above, but the same apply_food_buff/category-slot
+## machinery.
+
+func test_fish_buffs_table_has_an_entry_for_rare_and_legendary_fish():
+	for item_id in ["rare_fish", "legendary_fish"]:
+		assert_true(FoodConsumption.FISH_BUFFS.has(item_id), "missing a buff entry for %s" % item_id)
+
+
+func test_rare_fish_buff_is_a_valid_dish_shape_apply_food_buff_accepts():
+	var active := FoodConsumption.apply_food_buff([], FoodConsumption.FISH_BUFFS["rare_fish"])
+	assert_eq(active.size(), 1)
+	assert_gt(active[0].time_remaining, 0.0)
+	assert_ne(active[0].buff, "")
+
+
+func test_legendary_fish_buff_is_a_valid_dish_shape_apply_food_buff_accepts():
+	var active := FoodConsumption.apply_food_buff([], FoodConsumption.FISH_BUFFS["legendary_fish"])
+	assert_eq(active.size(), 1)
+	assert_gt(active[0].time_remaining, 0.0)
+	assert_ne(active[0].buff, "")
+
+
+## Legendary is the rarer, more special catch -- its buff should outlast the
+## rare one's, not just differ arbitrarily.
+func test_legendary_fish_buff_lasts_longer_than_rare_fish_buff():
+	assert_gt(
+		FoodConsumption.FISH_BUFFS["legendary_fish"].buff_duration,
+		FoodConsumption.FISH_BUFFS["rare_fish"].buff_duration
+	)

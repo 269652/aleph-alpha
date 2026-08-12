@@ -22,6 +22,7 @@ const MaterialDamage = preload("res://src/gameplay/material_damage.gd")
 const Block = preload("res://src/gameplay/block.gd")
 const HotbarAction = preload("res://src/gameplay/hotbar_action.gd")
 const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
+const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
@@ -127,6 +128,10 @@ var equipped_item: Item
 ## plain bare-earth terraforming.
 var _selected_placeable_item: Item
 var survival := SurvivalMeters.new()
+## Active timed buffs from eating rare/legendary fish (see
+## FoodConsumption.FISH_BUFFS) -- category-slotted, ticked down in
+## _food_buff_step. Empty means no active buff in any category.
+var active_food_buffs: Array = []
 var wallet := Wallet.new()
 var experience := ExperienceTrack.new()
 var skill_tree := SkillTree.new()
@@ -166,6 +171,10 @@ var fishing_message := ""
 const FISH_MESSAGE_DURATION := 2.5
 ## Fish granted per catch, scaled by the rolled rarity (see FishingMinigame).
 const FISH_REWARD_BY_RARITY := {"common": 1, "uncommon": 1, "rare": 2, "legendary": 3}
+## Which catalog item a catch's rarity becomes -- rare/legendary get their own
+## buff-granting item (see FoodConsumption.FISH_BUFFS); common/uncommon stay
+## the plain "fish" everyone already knows.
+const FISH_ITEM_ID_BY_RARITY := {"rare": "rare_fish", "legendary": "legendary_fish"}
 ## How far a real, visible FishMarker (see FishRenderer) can be from the
 ## player and still be the one that "was" caught -- generous enough to cover
 ## a pond fish a few tiles out while standing at the shore.
@@ -542,6 +551,34 @@ func _has_heat_source() -> bool:
 	return _has_structure_near_player("campfire") or _has_structure_near_player("furnace")
 
 
+## How much faster stamina regenerates each second while a "sustenance"
+## category buff (rare fish -- see FoodConsumption.FISH_BUFFS) is active, on
+## top of SurvivalMeters.advance's own passive regen.
+const STAMINA_BUFF_REGEN_PER_SECOND := 0.1
+## Melee damage multiplier while a "combat" category buff (legendary fish) is
+## active.
+const DAMAGE_BOOST_MULTIPLIER := 1.3
+
+
+## Authority-only: ticks down active_food_buffs and applies whatever ongoing
+## effect the currently-active buffs grant (currently: extra stamina regen
+## while a "sustenance" buff is up). The "combat" damage-boost buff instead
+## reads live at attack time -- see _damage_buff_multiplier.
+func _food_buff_step(delta: float) -> void:
+	active_food_buffs = FoodConsumption.advance_food_buffs(active_food_buffs, delta)
+	var sustenance := FoodConsumption.buff_in_category(active_food_buffs, "sustenance")
+	if sustenance.buff == "stamina_regen":
+		survival.rest(STAMINA_BUFF_REGEN_PER_SECOND * delta)
+
+
+## Melee damage multiplier from an active "combat" category food buff (see
+## FoodConsumption.FISH_BUFFS's legendary_fish entry) -- 1.0 (no change) when
+## none is active.
+func _damage_buff_multiplier() -> float:
+	var combat := FoodConsumption.buff_in_category(active_food_buffs, "combat")
+	return DAMAGE_BOOST_MULTIPLIER if combat.buff == "damage_boost" else 1.0
+
+
 func _has_structure_near_player(structure_id: String) -> bool:
 	if _chunk_manager == null:
 		return false
@@ -571,6 +608,12 @@ func eat_food(item_id: String) -> bool:
 		if stack.item.id == item_id and stack.item.kind == "food":
 			inventory.remove(item_id, 1)
 			survival.eat(EAT_HUNGER_RELIEF)
+			# Rare/legendary catches (see FoodConsumption.FISH_BUFFS) grant a
+			# timed buff directly on eating -- no cooking/recipe required.
+			if FoodConsumption.FISH_BUFFS.has(item_id):
+				active_food_buffs = FoodConsumption.apply_food_buff(
+					active_food_buffs, FoodConsumption.FISH_BUFFS[item_id]
+				)
 			return true
 	return false
 
@@ -688,6 +731,7 @@ func _authority_step(delta: float) -> void:
 	_build_step()
 	_destroy_step()
 	_fishing_step(delta)
+	_food_buff_step(delta)
 
 
 ## Combined weather + exposure movement penalty (see WeatherModel /
@@ -730,7 +774,7 @@ func _perform_attack() -> void:
 		positions.append(creature.position)
 
 	var base_damage := _melee_attack.attack_damage(_held_weapon(), UNARMED_DAMAGE) + class_attack_bonus + _skill_attack_bonus
-	var damage := _material_damage.effective_damage(base_damage, _held_kind(), "flesh")
+	var damage := _material_damage.effective_damage(base_damage, _held_kind(), "flesh") * _damage_buff_multiplier()
 	var hit_indices := _melee_attack.targets_in_range(position, positions, ATTACK_RANGE)
 	for index in hit_indices:
 		var creature: CreatureMarker = creatures[index]
@@ -871,11 +915,15 @@ func _fishing_step(delta: float) -> void:
 	if _fishing.phase() == FishingSession.CAUGHT:
 		var rarity := _fishing.rarity()
 		var count: int = FISH_REWARD_BY_RARITY.get(rarity, 1)
-		inventory.add(_item_catalog.make("fish"), count)
+		# Rare/legendary catches become their own buff-granting item (see
+		# FoodConsumption.FISH_BUFFS) so the rarity survives into the
+		# inventory instead of being lost the moment the reward is granted.
+		var fish_item_id: String = FISH_ITEM_ID_BY_RARITY.get(rarity, "fish")
+		inventory.add(_item_catalog.make(fish_item_id), count)
 		inventory_changed.emit()
 		# If a real, visible fish (see FishRenderer) happens to be nearby,
 		# make it disappear and name its species -- purely cosmetic, doesn't
-		# change what's rewarded (still the generic "fish" item/count above).
+		# change what's rewarded (still the rarity-scaled item/count above).
 		var species := ""
 		if _chunk_manager != null:
 			species = _chunk_manager.catch_nearest_fish(position, FISH_CATCH_RADIUS)

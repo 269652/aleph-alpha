@@ -278,3 +278,69 @@ func test_catching_a_fish_with_no_marker_nearby_still_shows_a_generic_message():
 	player._fishing_step(0.0)
 
 	assert_string_contains(player.fishing_message, "Caught")
+
+
+# -- rare/legendary fish grant a real buff on eating --------------------------
+
+const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
+
+
+func test_eating_a_rare_fish_grants_a_sustenance_buff():
+	player.inventory.add(_item_catalog.make("rare_fish"), 1)
+	assert_true(player.eat_food("rare_fish"))
+
+	var buff := FoodConsumption.buff_in_category(player.active_food_buffs, "sustenance")
+	assert_eq(buff.buff, "stamina_regen")
+	assert_gt(buff.time_remaining, 0.0)
+
+
+func test_eating_a_legendary_fish_grants_a_combat_buff():
+	player.inventory.add(_item_catalog.make("legendary_fish"), 1)
+	assert_true(player.eat_food("legendary_fish"))
+
+	var buff := FoodConsumption.buff_in_category(player.active_food_buffs, "combat")
+	assert_eq(buff.buff, "damage_boost")
+	assert_gt(buff.time_remaining, 0.0)
+
+
+func test_eating_a_plain_fish_grants_no_buff():
+	player.inventory.add(_item_catalog.make("fish"), 1)
+	assert_true(player.eat_food("fish"))
+
+	assert_eq(player.active_food_buffs.size(), 0)
+
+
+func test_damage_buff_multiplier_is_higher_after_eating_a_legendary_fish():
+	var before := player._damage_buff_multiplier()
+
+	player.inventory.add(_item_catalog.make("legendary_fish"), 1)
+	player.eat_food("legendary_fish")
+
+	assert_gt(player._damage_buff_multiplier(), before)
+
+
+func test_food_buff_step_boosts_stamina_regen_while_the_sustenance_buff_is_active():
+	player.survival.stamina = 0.0
+	player.inventory.add(_item_catalog.make("rare_fish"), 1)
+	player.eat_food("rare_fish")
+
+	player._food_buff_step(1.0)
+
+	assert_gt(player.survival.stamina, 0.0)
+
+
+func test_food_buff_step_does_nothing_extra_without_an_active_sustenance_buff():
+	player.survival.stamina = 0.0
+
+	player._food_buff_step(1.0)
+
+	assert_eq(player.survival.stamina, 0.0)
+
+
+func test_food_buff_step_expires_the_buff_after_its_duration():
+	player.inventory.add(_item_catalog.make("rare_fish"), 1)
+	player.eat_food("rare_fish")
+
+	player._food_buff_step(10000.0)  # comfortably longer than any buff duration
+
+	assert_eq(player.active_food_buffs.size(), 0)
