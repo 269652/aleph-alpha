@@ -62,7 +62,17 @@ func is_open() -> bool:
 func refresh(unspent_points: int, allocated: Dictionary, unlocked: Dictionary) -> void:
 	_points_label.text = "Unspent points: %d" % unspent_points
 	for child in _list.get_children():
-		child.free()
+		# refresh() can run synchronously from inside a row's OWN gui_input
+		# handler (click -> node_allocated/keystone_unlocked -> World ->
+		# refresh, all on the same call stack -- see _row's gui_input
+		# connection): that row's Control is still "locked"
+		# (mid-signal-emission on itself), and Object.free() refuses to free
+		# a locked object. remove_child() detaches it immediately (safe even
+		# while locked) without erroring; queue_free() defers the actual
+		# deletion until after the call stack unwinds. Same fix as
+		# InventoryWindow.refresh.
+		_list.remove_child(child)
+		child.queue_free()
 
 	_list.add_child(_heading("Stat Nodes"))
 	for node_id in _skill_tree.node_ids():

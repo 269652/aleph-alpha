@@ -57,7 +57,17 @@ func is_open() -> bool:
 ## the window is visible (see World._client_process).
 func refresh(inventory_counts: Dictionary) -> void:
 	for child in _list.get_children():
-		child.free()
+		# refresh() can run synchronously from inside a row's OWN gui_input
+		# handler (click -> craft_requested -> World -> refresh, all on the
+		# same call stack -- see _on_row_gui_input): that row's Control is
+		# still "locked" (mid-signal-emission on itself), and Object.free()
+		# refuses to free a locked object ("Attempted to free a locked
+		# object"). remove_child() detaches it immediately (safe even while
+		# locked) without erroring; queue_free() defers the actual deletion
+		# until after the call stack unwinds. Same fix as
+		# InventoryWindow.refresh.
+		_list.remove_child(child)
+		child.queue_free()
 	for recipe_id in _recipe_book.recipe_ids():
 		_list.add_child(_build_row(recipe_id, inventory_counts))
 
