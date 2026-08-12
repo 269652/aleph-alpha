@@ -53,6 +53,7 @@ func after_each():
 	creatures_parent.free()
 	Input.action_release("build")
 	Input.action_release("destroy")
+	Input.action_release("trade")
 
 
 ## The tile the player is facing (see TileTargeting.facing_tile), matching
@@ -68,6 +69,13 @@ func _tap_build() -> void:
 	player._build_step()
 	Input.action_release("build")
 	player._build_step()
+
+
+func _tap_trade() -> void:
+	Input.action_press("trade")
+	player._shop_step(0.0)
+	Input.action_release("trade")
+	player._shop_step(0.0)
 
 
 func _tap_destroy() -> void:
@@ -273,11 +281,116 @@ func test_catching_a_fish_near_a_real_fish_marker_removes_it_and_names_it_in_the
 	assert_string_contains(player.fishing_message, "goldfish")
 
 
+# -- equipping a weapon/tool updates the paperdoll, not just the in-hand sprite -----
+#
+# Previously equip_item only set Player.equipped_item and the in-hand sprite;
+# Player.equipment (what the inventory window's Character screen paperdoll
+# actually reads, see World._equipped_map) was never touched for
+# weapons/tools -- only equip_armor updated it. Clicking a weapon/tool in the
+# inventory produced no visible feedback on the Character screen at all.
+
+func test_equipping_a_tool_updates_the_paperdolls_weapon_slot():
+	var rod := _item_catalog.make("fishing_rod")
+	player.inventory.add(rod, 1)
+
+	assert_true(player.equip_item(rod))
+
+	assert_eq(player.equipment.equipped_in("weapon"), rod)
+
+
+func test_equipping_a_weapon_via_activate_item_id_updates_the_paperdoll():
+	player.inventory.add(_item_catalog.make("iron_sword"), 1)
+
+	assert_true(player.activate_item_id("iron_sword"))
+
+	assert_eq(player.equipment.equipped_in("weapon").id, "iron_sword")
+
+
+## activate_hotbar_slot didn't special-case armor before calling equip_item
+## (which rejects non-weapon/tool kinds outright) -- armor from the numbered
+## hotbar always silently failed, even though the same item worked fine via
+## the inventory window's click handler (activate_item_id).
+func test_activate_hotbar_slot_equips_armor_via_the_armor_path():
+	player.inventory.add(_item_catalog.make("leather_helm"), 1)
+
+	assert_true(player.activate_hotbar_slot(_stack_index_of("leather_helm")))
+
+	assert_eq(player.equipment.equipped_in("head").id, "leather_helm")
+
+
 func test_catching_a_fish_with_no_marker_nearby_still_shows_a_generic_message():
 	_land_a_fish()
 	player._fishing_step(0.0)
 
 	assert_string_contains(player.fishing_message, "Caught")
+
+
+# -- shopping at a merchant villager (see VillageRenderer, Shop) --------------
+
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const Shop = preload("res://src/gameplay/shop.gd")
+
+
+func _add_fake_merchant_near_player() -> NpcMarker:
+	var merchant := NpcMarker.new()
+	merchant.identity = NpcIdentity.new(1)
+	merchant.identity.occupation = "merchant"
+	merchant.position = player.position
+	creatures_parent.add_child(merchant)
+	chunk_manager._loaded_villages[Vector2i(0, 0)] = [merchant]
+	return merchant
+
+
+func test_trading_with_no_merchant_nearby_shows_a_no_merchant_message():
+	_tap_trade()
+	assert_string_contains(player.trade_message, "No merchant")
+
+
+func test_trading_near_a_merchant_buys_an_item_and_shows_a_message():
+	var merchant := _add_fake_merchant_near_player()
+	var shop := Shop.new()
+	# Some catalog items (e.g. fishing_rod) may already be in the player's
+	# starting inventory -- compare before/after rather than assuming 0.
+	var item_id: String = shop.known_item_ids()[0]
+	var before: int = player.inventory_counts().get(item_id, 0)
+	player.wallet.add(shop.price_of(item_id))
+
+	_tap_trade()
+
+	assert_eq(player.wallet.balance, 0)
+	assert_eq(player.inventory_counts().get(item_id, 0), before + 1)
+	assert_string_contains(player.trade_message, "Bought")
+	merchant.free()
+
+
+func test_trading_without_enough_gold_shows_a_not_enough_gold_message():
+	var merchant := _add_fake_merchant_near_player()
+	player.wallet.balance = 0
+
+	_tap_trade()
+
+	assert_string_contains(player.trade_message, "Not enough gold")
+	merchant.free()
+
+
+func test_repeated_purchases_cycle_through_different_items():
+	var merchant := _add_fake_merchant_near_player()
+	var shop := Shop.new()
+	var total_cost := 0
+	for item_id in shop.known_item_ids():
+		total_cost += shop.price_of(item_id)
+	player.wallet.add(total_cost)
+
+	var bought := {}
+	for i in shop.known_item_ids().size():
+		_tap_trade()
+		for item_id in shop.known_item_ids():
+			if player.inventory_counts().get(item_id, 0) > 0:
+				bought[item_id] = true
+
+	assert_gt(bought.size(), 1, "repeated purchases should buy more than one distinct item")
+	merchant.free()
 
 
 # -- rare/legendary fish grant a real buff on eating --------------------------

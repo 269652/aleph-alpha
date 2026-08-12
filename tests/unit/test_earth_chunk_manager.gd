@@ -8,6 +8,7 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
+const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -221,6 +222,48 @@ func test_catch_nearest_fish_returns_empty_string_when_none_in_range():
 	assert_eq(manager.catch_nearest_fish(far_from_everything, 5.0), "")
 
 
+# -- has_merchant_near (see VillageRenderer, Shop) ----------------------------
+#
+# Real settlements are sparse (~1-in-30 habitable chunks, see
+# SettlementGenerator) -- Berlin's loaded chunks aren't guaranteed to have
+# one, so this injects a fake merchant marker directly (same technique as the
+# fishing-catch tests above) instead of depending on that roll landing.
+
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
+
+
+func _add_fake_merchant(position: Vector2) -> NpcMarker:
+	var merchant := NpcMarker.new()
+	merchant.identity = NpcIdentity.new(1)
+	merchant.identity.occupation = "merchant"
+	merchant.position = position
+	creatures_parent.add_child(merchant)
+	manager._loaded_villages[Vector2i(0, 0)] = [merchant]
+	return merchant
+
+
+func test_has_merchant_near_true_when_a_merchant_is_within_range():
+	manager.update(_berlin_tile)
+	var merchant := _add_fake_merchant(Vector2(100, 100))
+	assert_true(manager.has_merchant_near(Vector2(105, 100), 10.0))
+	merchant.free()
+
+
+func test_has_merchant_near_false_when_out_of_range():
+	manager.update(_berlin_tile)
+	var merchant := _add_fake_merchant(Vector2(100, 100))
+	assert_false(manager.has_merchant_near(Vector2(500, 500), 10.0))
+	merchant.free()
+
+
+## Before any chunk is even loaded, _loaded_villages is genuinely empty --
+## unlike a real loaded region, which has some (small, non-zero) chance of
+## containing an actual settlement/merchant, this can't flake.
+func test_has_merchant_near_false_when_no_settlement_loaded():
+	assert_false(manager.has_merchant_near(Vector2(100, 100), 10000.0))
+
+
 func _expected_tree_count_around(center_chunk: Vector2i) -> int:
 	var expected := 0
 	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
@@ -374,8 +417,8 @@ func test_promoted_creatures_near_berlin_only_use_species_from_their_chunks_biom
 	var chunk_origin := center_chunk * EarthChunkManager.CHUNK_SIZE
 	var checked_any := false
 	for child in creatures_parent.get_children():
-		if child is FishMarker:
-			continue  # fish share this parent but have no CreatureInfo/species pool
+		if not (child is CreatureMarker):
+			continue  # fish/NPCs/village houses share this parent but have no CreatureInfo/species pool
 		var tile_x := int(child.position.x / TerrainRenderer.TILE_SIZE)
 		var tile_y := int(child.position.y / TerrainRenderer.TILE_SIZE)
 		var in_center_chunk := (

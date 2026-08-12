@@ -86,6 +86,22 @@ not, depending on how that child's own traits/relationships develop.
   conditions make it viable, and that can shift over time" philosophy,
   applied to people instead of wildlife.
 
+### Current implementation status (divergence note)
+
+A first real slice exists (see `docs/progress.md`'s NPC section for the full
+breakdown): procedural village placement (`settlement_generator.gd`,
+sparse/deterministic per chunk), villager identity (`npc_identity.gd`: name/
+occupation/personality/need, no relationships yet), and the planning
+architecture's cheap-local-FSM half fully working (`npc_marker.gd` walks a
+daily schedule) -- but the "one LLM call plans the day" half is a
+deterministic stand-in (`npc_planner.gd`'s `Planner`/`FakeNpcPlanner`, same
+split as [worldbosses.md](worldbosses.md)'s `PhaseGenerator`), not a real
+LLM call yet. No dialogue, no instruction DSL, no memory log, no self-
+determination/role drift, no lifecycle (aging/reproduction/death), no
+faction/festival wiring. Villagers can be bought from at a fixed shared
+price list (`shop.gd`) -- the "shopping" half of villages works, "hiring"
+does not.
+
 ### Open questions
 
 - Aging pace — real-time-days-per-life-stage vs. some faster abstracted

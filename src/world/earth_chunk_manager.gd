@@ -15,6 +15,8 @@ const GrassBladeField = preload("res://src/rendering/grass_blade_field.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
+const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
 const ChunkSerializer = preload("res://src/world/chunk_serializer.gd")
 const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
@@ -84,6 +86,7 @@ var _water_layer: TileMapLayer  # optional GPU water overlay, see set_water_laye
 var _water_material: ShaderMaterial  # the water overlay's shared shader material, see set_rain
 var _creature_renderer := CreatureRenderer.new()
 var _fish_renderer := FishRenderer.new()
+var _village_renderer := VillageRenderer.new()
 var _biome_classifier := BiomeClassifier.new()
 var _ecosystem := EcosystemSimulation.new()
 var _chunk_serializer := ChunkSerializer.new()
@@ -107,6 +110,7 @@ var _lichen_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vect
 var _lichen_refresh_accumulator := 0.0
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
+var _loaded_villages: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _ecosystem_time_accumulator := 0.0
 var _forage_accumulator := 0.0
 var _forage_tick := 0
@@ -725,6 +729,21 @@ func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> String:
 	return species
 
 
+## True if a merchant villager (see VillageRenderer, NpcIdentity.OCCUPATIONS)
+## is within max_distance pixels of pixel_position -- gates Player's shop
+## interaction (see Shop).
+func has_merchant_near(pixel_position: Vector2, max_distance: float) -> bool:
+	for node_list in _loaded_villages.values():
+		for node in node_list:
+			if not (node is NpcMarker):
+				continue
+			if node.identity.occupation != "merchant":
+				continue
+			if pixel_position.distance_to(node.position) <= max_distance:
+				return true
+	return false
+
+
 func modification_at_global(global_x: int, global_y: int) -> String:
 	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
 	if chunk == null:
@@ -864,6 +883,15 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_loaded_fish[chunk_coord] = _fish_renderer.spawn_fish(
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
+	_loaded_villages[chunk_coord] = _village_renderer.spawn_village(
+		_creatures_parent,
+		chunk_coord,
+		chunk_coord * CHUNK_SIZE,
+		CHUNK_SIZE,
+		TerrainRenderer.TILE_SIZE,
+		_biome_classifier.dominant_biome(chunk.biome),
+		self
+	)
 
 
 ## If this chunk was visited before, advance its aggregate ecology over the
@@ -949,6 +977,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for fish in _loaded_fish.get(chunk_coord, []):
 		fish.free()
 	_loaded_fish.erase(chunk_coord)
+
+	for node in _loaded_villages.get(chunk_coord, []):
+		node.free()
+	_loaded_villages.erase(chunk_coord)
 
 
 func _modifications_path(chunk_coord: Vector2i) -> String:

@@ -39,12 +39,14 @@ func is_weapon() -> bool:
 	return kind == "weapon"
 
 
-## The equipment slot this item fills: its declared slot (armor), else "weapon"
-## for a weapon, else "" (not equippable).
+## The equipment slot this item fills: its declared slot (armor), else
+## "weapon" for anything held in the hand -- a weapon or a tool (axe,
+## pickaxe, fishing rod: see Player.equip_item, which puts both kinds in the
+## same single equipped_item field) -- else "" (not equippable).
 func equip_slot_name() -> String:
 	if equip_slot != "":
 		return equip_slot
-	return "weapon" if is_weapon() else ""
+	return "weapon" if (is_weapon() or kind == "tool") else ""
 
 
 func is_equippable() -> bool:

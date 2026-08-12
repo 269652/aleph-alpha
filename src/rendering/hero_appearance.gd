@@ -12,7 +12,11 @@ extends RefCounted
 ## pillar (dna.md's "DNA-Driven Phenotype/Body Generation") applied to the
 ## player character: appearance derives from identity data, never hand-picked.
 
-## Per-class outfit palettes: tunic (torso), trim (belt/accents), legs.
+## Per-class/occupation outfit palettes: tunic (torso), trim (belt/accents),
+## legs. Player classes (warrior/mage/ranger) and villager occupations (see
+## NpcIdentity.OCCUPATIONS, worn by VillageRenderer's NPC markers) share this
+## one table -- both are "what role determines the outfit", the same idea
+## this engine already models.
 const CLASS_PALETTES := {
 	"warrior": {
 		"tunic": Color(0.68, 0.2, 0.16), "trim": Color(0.88, 0.72, 0.28), "legs": Color(0.32, 0.3, 0.34),
@@ -22,6 +26,24 @@ const CLASS_PALETTES := {
 	},
 	"ranger": {
 		"tunic": Color(0.24, 0.44, 0.2), "trim": Color(0.66, 0.46, 0.2), "legs": Color(0.34, 0.26, 0.16),
+	},
+	"farmer": {
+		"tunic": Color(0.62, 0.5, 0.24), "trim": Color(0.4, 0.3, 0.14), "legs": Color(0.36, 0.28, 0.18),
+	},
+	"blacksmith": {
+		"tunic": Color(0.32, 0.3, 0.32), "trim": Color(0.7, 0.36, 0.14), "legs": Color(0.2, 0.19, 0.2),
+	},
+	"merchant": {
+		"tunic": Color(0.5, 0.24, 0.56), "trim": Color(0.86, 0.7, 0.24), "legs": Color(0.3, 0.24, 0.34),
+	},
+	"guard": {
+		"tunic": Color(0.28, 0.34, 0.46), "trim": Color(0.72, 0.74, 0.78), "legs": Color(0.22, 0.24, 0.28),
+	},
+	"fisher": {
+		"tunic": Color(0.22, 0.5, 0.52), "trim": Color(0.8, 0.72, 0.5), "legs": Color(0.24, 0.3, 0.32),
+	},
+	"herbalist": {
+		"tunic": Color(0.36, 0.52, 0.28), "trim": Color(0.68, 0.5, 0.7), "legs": Color(0.26, 0.32, 0.22),
 	},
 }
 const _FALLBACK_CLASS := "warrior"

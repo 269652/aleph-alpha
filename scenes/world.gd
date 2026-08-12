@@ -156,6 +156,7 @@ var _warmth_label: Label
 var _xp_fill: ColorRect
 var _xp_label: Label
 var _fishing_label: Label
+var _trade_label: Label
 var _wallet_label: Label
 var _creature_panels_accumulator := CREATURE_PANELS_REFRESH_INTERVAL  # refresh immediately
 ## Set true by the /day console command -- forces daytime lighting for the
@@ -202,6 +203,7 @@ func _ready() -> void:
 	_build_survival_bar()
 	_build_xp_bar()
 	_build_fishing_label()
+	_build_trade_label()
 
 	var args := OS.get_cmdline_user_args()
 	if "--server" in args:
@@ -626,6 +628,24 @@ func _build_fishing_label() -> void:
 func _update_fishing_label(local_player: Player) -> void:
 	_fishing_label.text = local_player.fishing_message
 	_fishing_label.visible = local_player.fishing_message != ""
+
+
+## A centered shopping prompt/result banner (see Player._shop_step), same
+## shape as the fishing banner just below it.
+func _build_trade_label() -> void:
+	_trade_label = Label.new()
+	_trade_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_trade_label.offset_top = 144.0
+	_trade_label.offset_left = -160.0
+	_trade_label.offset_right = 160.0
+	_trade_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_trade_label.add_theme_font_size_override("font_size", 16)
+	_ui.add_child(_trade_label)
+
+
+func _update_trade_label(local_player: Player) -> void:
+	_trade_label.text = local_player.trade_message
+	_trade_label.visible = local_player.trade_message != ""
 
 
 func _update_xp_bar(local_player: Player) -> void:
@@ -1294,6 +1314,7 @@ func _client_process(delta: float) -> void:
 	_update_survival_bar(local_player)
 	_update_xp_bar(local_player)
 	_update_fishing_label(local_player)
+	_update_trade_label(local_player)
 	_refresh_skill_window(local_player)
 	var latitude := _geo_coordinates.latitude_for_tile(player_tile.y, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	var longitude := _geo_coordinates.longitude_for_tile(player_tile.x, EarthChunkGenerator.WORLD_WIDTH_TILES)

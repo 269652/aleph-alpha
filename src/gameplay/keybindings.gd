@@ -19,6 +19,7 @@ const ACTIONS := [
 	{"action": "block", "label": "Block", "default": KEY_SHIFT},
 	{"action": "pickup", "label": "Pick Up Nearby Items", "default": KEY_E},
 	{"action": "fish", "label": "Fish / Reel", "default": KEY_F},
+	{"action": "trade", "label": "Trade with Merchant", "default": KEY_T},
 	{"action": "build", "label": "Place Earth", "default": KEY_B},
 	{"action": "destroy", "label": "Remove Tile", "default": KEY_Q},
 	{"action": "hotbar_1", "label": "Hotbar Slot 1", "default": KEY_1},

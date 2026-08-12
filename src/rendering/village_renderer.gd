@@ -1,0 +1,107 @@
+extends RefCounted
+
+## Chunk-based spawn/despawn of a procedurally generated village (see
+## SettlementGenerator, docs/concept/npc.md) -- houses (ProceduralHouseSprite)
+## plus walking NpcMarker villagers, wearing the same hero-appearance engine
+## the player uses (HeroAppearance/ProceduralCharacterSprite), keyed by
+## occupation instead of class. Same "one call per chunk load, deterministic,
+## returns spawned nodes for the caller to free" shape as
+## TreeRenderer/CreatureRenderer/FishRenderer.
+
+const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
+const NpcMarker = preload("res://src/rendering/npc_marker.gd")
+const ProceduralHouseSprite = preload("res://src/rendering/procedural_house_sprite.gd")
+const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
+const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
+const DropShadow = preload("res://src/rendering/drop_shadow.gd")
+
+## Villager body/head sizes -- same as CharacterView uses for the player, so
+## an NPC reads as visually consistent with the hero rather than a different
+## art style.
+const BODY_SIZE := Vector2i(10, 14)
+const HEAD_SIZE := Vector2i(8, 8)
+const HEAD_OFFSET_Y := -9.0
+
+var _settlement_generator := SettlementGenerator.new()
+var _house_sprite := ProceduralHouseSprite.new()
+var _character_sprite := ProceduralCharacterSprite.new()
+var _appearance := HeroAppearance.new()
+var _drop_shadow := DropShadow.new()
+
+
+## Spawns this chunk's village (houses + NPC markers, as children of
+## `parent`) if SettlementGenerator places one here, given the chunk's
+## dominant_biome (see BiomeClassifier.dominant_biome -- ocean/mountain never
+## qualify). Returns [] on a chunk with no settlement. `world` (duck-typed
+## biome_at_global, same contract as CreatureRenderer/FishRenderer) is handed
+## to... nothing yet (NpcMarker doesn't sense terrain), accepted for
+## signature symmetry with the other renderers and future use.
+func spawn_village(
+	parent: Node2D,
+	chunk_coord: Vector2i,
+	chunk_origin_tiles: Vector2i,
+	chunk_size: int,
+	tile_size: int,
+	dominant_biome: String,
+	_world = null
+) -> Array[Node2D]:
+	if not _settlement_generator.has_settlement_at(chunk_coord, dominant_biome):
+		return []
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_origin_tiles, chunk_size, tile_size
+	)
+
+	var spawned: Array[Node2D] = []
+	var house_positions: Array = settlement.house_positions
+	for i in house_positions.size():
+		spawned.append(_build_house(chunk_coord, i, house_positions[i], parent))
+	var npcs: Array = settlement.npcs
+	for i in npcs.size():
+		spawned.append(_build_npc(settlement, i, tile_size, parent))
+	return spawned
+
+
+func _build_house(chunk_coord: Vector2i, index: int, position: Vector2, parent: Node2D) -> Sprite2D:
+	var house := Sprite2D.new()
+	var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, index])
+	house.texture = _house_sprite.generate_texture(seed_value)
+	house.position = position
+	house.add_child(
+		_drop_shadow.make_shadow(
+			int(ProceduralHouseSprite.SIZE.x * 0.8), ProceduralHouseSprite.SIZE.y * 0.5 - 1.0
+		)
+	)
+	parent.add_child(house)
+	return house
+
+
+## Each villager gets a personal workspot a couple tiles south of their own
+## house, for occupations whose work tag isn't one of the settlement's 3
+## shared landmarks (see NpcMarker._resolve_location, SettlementGenerator's
+## scope note on not modeling per-occupation buildings yet).
+const _WORKSPOT_OFFSET_TILES := 2.5
+
+
+func _build_npc(settlement: Dictionary, index: int, tile_size: int, parent: Node2D) -> NpcMarker:
+	var identity = settlement.npcs[index]
+	var home_position: Vector2 = settlement.house_positions[index]
+
+	var marker := NpcMarker.new()
+	marker.identity = identity
+	marker.home_position = home_position
+	marker.workspot_position = home_position + Vector2(0, _WORKSPOT_OFFSET_TILES * tile_size)
+	marker.landmarks = settlement.landmarks
+	marker.position = home_position
+
+	var appearance := _appearance.appearance_for(identity.occupation, identity.seed_value)
+	marker.texture = _character_sprite.generate_hero_tunic_texture(BODY_SIZE, appearance)
+
+	var head := Sprite2D.new()
+	head.texture = _character_sprite.generate_hero_head_texture(HEAD_SIZE, appearance)
+	head.position = Vector2(0, HEAD_OFFSET_Y)
+	marker.add_child(head)
+
+	marker.add_child(_drop_shadow.make_shadow(int(BODY_SIZE.x * 0.9), BODY_SIZE.y * 0.5 - 1.0))
+
+	parent.add_child(marker)
+	return marker

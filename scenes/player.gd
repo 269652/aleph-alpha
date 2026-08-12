@@ -23,6 +23,7 @@ const Block = preload("res://src/gameplay/block.gd")
 const HotbarAction = preload("res://src/gameplay/hotbar_action.gd")
 const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
+const Shop = preload("res://src/gameplay/shop.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
@@ -179,6 +180,24 @@ const FISH_ITEM_ID_BY_RARITY := {"rare": "rare_fish", "legendary": "legendary_fi
 ## player and still be the one that "was" caught -- generous enough to cover
 ## a pond fish a few tiles out while standing at the shore.
 const FISH_CATCH_RADIUS := 64.0
+
+## -- Shopping at a merchant villager (see VillageRenderer, Shop) --
+## Phase 1 simplification: press the trade key near any merchant NPC to buy
+## one item, cycling through Shop.CATALOG so repeated presses don't just buy
+## the same cheapest thing forever -- no dedicated shop UI yet (that, and
+## selling the player's own goods, are open follow-ups; see
+## docs/progress.md's NPC section).
+var _shop := Shop.new()
+var _last_trade_input := false
+var _pending_trade_pressed := false
+var _trade_attempt_count := 0
+var _trade_result_message := ""
+var _trade_result_timer := 0.0
+## The current shopping prompt/result, read by the HUD ("" == nothing to show).
+var trade_message := ""
+const TRADE_MESSAGE_DURATION := 2.5
+## How close a merchant villager must be to trade with.
+const TRADE_RADIUS := 48.0
 var _item_catalog := ItemCatalog.new()
 
 var _chunk_manager: EarthChunkManager
@@ -309,6 +328,7 @@ func _bind_wasd_movement() -> void:
 	_bind_key_action("block", KEY_SHIFT)
 	_bind_key_action("pickup", KEY_E)
 	_bind_key_action("fish", KEY_F)
+	_bind_key_action("trade", KEY_T)
 	_bind_key_action("build", KEY_B)
 	_bind_key_action("destroy", KEY_Q)
 
@@ -448,6 +468,8 @@ func activate_hotbar_slot(index: int) -> bool:
 	var item = stacks[index].item
 	match _hotbar_action.action_for(item.kind):
 		HotbarAction.EQUIP:
+			if item.kind == "armor":
+				return equip_armor(item)
 			return equip_item(item)
 		HotbarAction.USE:
 			return _use_food(item.id)
@@ -590,12 +612,18 @@ func _has_structure_near_player(structure_id: String) -> bool:
 ## sole driver of attack/chop/mine effectiveness). The item stays in the
 ## inventory -- equipping just makes it active and updates the drawn sprite,
 ## so switching from sword to axe visibly puts the axe in hand and makes trees
-## fell fast. Non-equippable kinds (materials/food) are a no-op.
+## fell fast. Also updates the paperdoll's "weapon" slot (see equipment,
+## Item.equip_slot_name) so the inventory window's Character screen actually
+## shows what's equipped instead of staying permanently empty for
+## weapons/tools (only equip_armor used to touch `equipment`). Non-equippable
+## kinds (materials/food) are a no-op.
 func equip_item(item) -> bool:
 	if item.kind != "weapon" and item.kind != "tool":
 		return false
 	equipped_item = item
+	equipment.equip(item)
 	_character_view.equip_weapon(_item_sprite_generator.generate_texture(item.id))
+	inventory_changed.emit()
 	return true
 
 
@@ -732,6 +760,7 @@ func _authority_step(delta: float) -> void:
 	_destroy_step()
 	_fishing_step(delta)
 	_food_buff_step(delta)
+	_shop_step(delta)
 
 
 ## Combined weather + exposure movement penalty (see WeatherModel /
@@ -977,6 +1006,45 @@ func _near_water() -> bool:
 		if _chunk_manager.biome_at_global(tile.x + offset.x, tile.y + offset.y) == "ocean":
 			return true
 	return false
+
+
+## Authority-only: press the trade key next to a merchant villager (see
+## EarthChunkManager.has_merchant_near) to buy one item from Shop.CATALOG,
+## cycling through it each successful purchase so repeated presses don't just
+## buy the same cheapest thing forever. The HUD reads trade_message.
+func _shop_step(delta: float) -> void:
+	var trade_pressed := (
+		Input.is_action_pressed("trade") if _controlled_locally() else _pending_trade_pressed
+	)
+	var just_pressed := trade_pressed and not _last_trade_input
+	_last_trade_input = trade_pressed
+	if just_pressed:
+		if _chunk_manager == null or not _chunk_manager.has_merchant_near(position, TRADE_RADIUS):
+			_trade_result_message = "No merchant nearby."
+		else:
+			_attempt_a_purchase()
+		_trade_result_timer = TRADE_MESSAGE_DURATION
+
+	_trade_result_timer = maxf(0.0, _trade_result_timer - delta)
+	trade_message = _trade_result_message if _trade_result_timer > 0.0 else ""
+
+
+## Tries each item in Shop.CATALOG in turn, starting from _trade_attempt_count
+## (so repeated purchases cycle through the catalog rather than always
+## re-buying the first affordable item), and buys the first one the wallet
+## can afford.
+func _attempt_a_purchase() -> void:
+	var item_ids := _shop.known_item_ids()
+	for offset in item_ids.size():
+		var item_id: String = item_ids[(_trade_attempt_count + offset) % item_ids.size()]
+		if _shop.buy(wallet, inventory, _item_catalog, item_id):
+			_trade_attempt_count += 1
+			inventory_changed.emit()
+			_trade_result_message = "Bought %s for %d gold." % [
+				_item_catalog.make(item_id).display_name, _shop.price_of(item_id)
+			]
+			return
+	_trade_result_message = "Not enough gold."
 
 
 ## Authority-only: on the rising edge of the build input, either places the

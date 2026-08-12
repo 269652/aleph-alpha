@@ -86,6 +86,14 @@ func test_a_weapon_equips_to_the_weapon_slot():
 	assert_eq(Item.new("iron_sword", "Iron Sword", "weapon", 1, 15.0).equip_slot_name(), "weapon")
 
 
+## Tools (fishing rod, axe, pickaxe) share the same single held-item slot as
+## weapons -- Player.equip_item puts both kinds in one equipped_item field,
+## so the paperdoll needs them in the same "weapon" slot too.
+func test_a_tool_equips_to_the_weapon_slot():
+	assert_eq(Item.new("fishing_rod", "Fishing Rod", "tool", 1).equip_slot_name(), "weapon")
+	assert_true(Item.new("fishing_rod", "Fishing Rod", "tool", 1).is_equippable())
+
+
 func test_armor_equips_to_its_declared_slot_and_carries_armor_value():
 	var helm := Item.new("leather_helm", "Leather Helm", "armor", 1, 0.0, "head", 2.0)
 	assert_eq(helm.equip_slot_name(), "head")

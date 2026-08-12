@@ -438,9 +438,9 @@ new rows below.
 
 A first real currency now exists and is wired into live gameplay; everything else in this doc remains unbuilt:
 
-- **Regular Currency System** (medium) — 🚧 Partial — `src/gameplay/wallet.gd` (`Wallet`): a real gold balance on the player, shown in the HUD (`world.gd`'s `_wallet_label`) and adjustable via the dev console's `/gold <amount>` command. No way to actually earn gold through play yet (no market, no quest rewards, no selling) — it's a functioning ledger with no sink or faucet beyond the debug command.
-- **Premium Currency System** (large)
-- **Market (NPC & Player Selling)** (large)
+- **Regular Currency System** (medium) — 🚧 Partial — `src/gameplay/wallet.gd` (`Wallet`): a real gold balance on the player, shown in the HUD (`world.gd`'s `_wallet_label`) and adjustable via the dev console's `/gold <amount>` command, now also spendable at a village merchant (see below). Still no way to actually earn gold through play (no quest rewards, no selling anything) — a functioning ledger with a real sink now, but no faucet beyond the debug command.
+- **Premium Currency System** (large) — ⬜ Not started
+- **Market (NPC & Player Selling)** (large) — 🚧 Partial — `src/gameplay/shop.gd`: buying from a village merchant NPC now works (see NPC section's "Basic Merchant Shopping"), spending the real `Wallet` above. Fixed shared catalog/pricing (not per-NPC), no shop browsing UI, and no selling the player's own goods yet.
 - **Crafting System (external)** (large)
 - **Resource Gathering System (external)** (medium)
 - **Taming/Breeding System (external)** (huge)
@@ -754,27 +754,36 @@ Core survival meters are now real and wired into live gameplay; the sickness/wou
 
 ### NPC (`concept/npc.md`)
 
-No NPCs of any kind exist (no AI-driven NPCs, no NPC DSL, no daily planning
-loop, no memory log, no LLM integration whatsoever). All ⬜ Not started:
+A first real slice of the "AI-native NPC" pillar is now live and playable --
+procedurally placed villages, walking villagers running a deterministic
+daily plan, and basic shopping. Still nothing LLM-driven yet: the planning
+architecture is built and wired end-to-end, but behind a deterministic stand-
+in, exactly like `worldbosses.md`'s `PhaseGenerator`/`FakePhaseGenerator`
+split -- so a real local-LLM planner (the design brainstorm settled on
+Ollama + a local model, e.g. `qwen2.5-coder:14b`, called via `HTTPRequest`,
+never live during normal ticks) is a drop-in swap, not a rearchitect. No
+dialogue, no instruction DSL, no memory, no lifecycle/aging, no faction/
+festival wiring yet.
 
-- **Procedural NPC Population Generation** (large)
-- **NPC Identity System** (small)
-- **Organic Backstory Growth** (small)
-- **NPC Behaviour DSL** (huge)
-- **Daily Planning (LLM Scheduler)** (large)
-- **Local FSM/Pathfinder Plan Execution** (large)
-- **Interrupt System** (medium)
-- **Live Dialogue System** (large)
-- **Persistent Memory Log** (medium)
-- **Self-Determination / Role Drift** (medium)
-- **Dynamic Quest Generation** (large)
-- **Instruction DSL** (huge)
-- **Instruction Complexity Budget** (small)
-- **Hiring/Wage System** (medium)
-- **Relationship/Trust Gate for Hiring** (medium)
-- **Child-NPC Trust Exception** (small)
-- **Faction/Settlement Reputation Aggregation** (medium)
-- **Emergent Village Festivals** (large)
+- **Procedural NPC Population Generation** (large) — ✅ Done (basic) — `src/world/settlement_generator.gd` places a sparse (~1-in-30 habitable chunks, never on ocean/mountain), deterministic 5-villager settlement per qualifying chunk, wired into `EarthChunkManager`'s chunk load/unload (same regenerates-identically-on-revisit philosophy as trees/creatures). `src/rendering/village_renderer.gd` spawns a `ProceduralHouseSprite` cottage per villager plus a walking `NpcMarker`, wearing the same hero-appearance engine the player uses (`HeroAppearance`/`ProceduralCharacterSprite`), now extended with 6 occupation outfit palettes. Single-tile house sprites, not multi-tile `BuildingBlueprint` footprints -- a deliberate Phase 1 simplification.
+- **NPC Identity System** (small) — ✅ Done — `src/world/npc_identity.gd`: deterministic per-seed name (two-part syllable generator), occupation (farmer/blacksmith/merchant/guard/fisher/herbalist), personality trait, and driving need, tested. Relationships to other NPCs (also part of npc.md's Identity) are NOT modeled yet.
+- **Organic Backstory Growth** (small) — ⬜ Not started
+- **NPC Behaviour DSL** (huge) — ⬜ Not started
+- **Daily Planning (LLM Scheduler)** (large) — 🚧 Partial — `src/world/npc_planner.gd`'s `Planner`/`FakeNpcPlanner` split (mirroring `WorldBossFitness`'s `PhaseGenerator` convention exactly): `FakeNpcPlanner` deterministically produces an occupation-keyed `{time_block, location_tag, activity}` day (work by day, home to sleep by night, a guard stays on watch through the evening instead of socializing) with zero LLM calls. The real LLM-backed planner (see intro above) isn't built yet.
+- **Local FSM/Pathfinder Plan Execution** (large) — ✅ Done (basic) — `src/rendering/npc_marker.gd`: a lightweight per-frame FSM (deliberately much lighter than `CreatureMarker`'s full sense/perceive/act AI) reads the current schedule entry for the in-game hour (`src/world/npc_schedule.gd`, paced by the same `SECONDS_PER_SIMULATED_DAY` clock as the rest of the world sim) and walks toward wherever it resolves to -- "home", a settlement's 3 shared landmarks (well/stall/gate), or a personal workspot for occupations without a dedicated building yet (field/forge/dock/garden). No real pathfinding (straight-line `move_toward`, no obstacle avoidance).
+- **Interrupt System** (medium) — ⬜ Not started
+- **Live Dialogue System** (large) — ⬜ Not started
+- **Persistent Memory Log** (medium) — ⬜ Not started
+- **Self-Determination / Role Drift** (medium) — ⬜ Not started
+- **Dynamic Quest Generation** (large) — ⬜ Not started (each `NpcIdentity` already carries a `need`, but nothing turns it into a request yet)
+- **Instruction DSL** (huge) — ⬜ Not started
+- **Instruction Complexity Budget** (small) — ⬜ Not started
+- **Hiring/Wage System** (medium) — ⬜ Not started
+- **Relationship/Trust Gate for Hiring** (medium) — ⬜ Not started
+- **Child-NPC Trust Exception** (small) — ⬜ Not started
+- **Faction/Settlement Reputation Aggregation** (medium) — ⬜ Not started
+- **Emergent Village Festivals** (large) — ⬜ Not started
+- **Basic Merchant Shopping** (medium) — ✅ Done (basic) — `src/gameplay/shop.gd`: a fixed gold-priced catalog (tool/weapon/armor/food), spent from the player's existing (previously unwired) `Wallet`. `EarthChunkManager.has_merchant_near` finds a nearby villager with occupation "merchant"; `Player._shop_step` (trade key, default T) buys the first affordable catalog item, cycling through the list on repeat presses so it doesn't just rebuy the same thing. No shop UI browsing, no selling the player's own goods, no per-NPC stock/pricing -- open follow-ups.
 
 ### Fishing (`concept/fishing.md`)
 

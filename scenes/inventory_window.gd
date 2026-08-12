@@ -45,6 +45,13 @@ var _char_sprite := ProceduralCharacterSprite.new()
 var _grid: GridContainer
 var _paperdoll_icons: Dictionary = {}  # slot -> TextureRect
 var _armor_label: Label
+## A cheap signature of the last refresh() call's inputs -- see refresh's doc
+## comment: World calls refresh() every frame while the window is visible
+## (not just on an actual inventory change), so without this every item
+## slot's Control is destroyed and recreated every frame, which starves
+## Godot's native hover-tooltip timer (it needs the SAME Control instance
+## under the mouse continuously) -- the reported "no info on hover" bug.
+var _last_refresh_signature := ""
 
 
 func _ready() -> void:
@@ -158,11 +165,28 @@ func _build_inventory_column() -> Control:
 ## frames -- leading ones filled with items, the rest as dim empty frames --
 ## so the inventory reads as a real fixed-capacity container (Diablo/Terraria
 ## style) instead of a loose pile of icons floating in empty panel space.
-## Cheap enough to redo each call; only runs while the window is visible (see
-## World._update_inventory_window).
+## World calls this every frame while the window is visible, not just on an
+## actual change -- a no-op early-out when nothing changed since the last
+## call keeps that cheap AND keeps each slot's Control instance stable across
+## frames, which real hover tooltips need (see _last_refresh_signature).
 func refresh(stacks: Array, equipped: Dictionary, total_armor: float, slot_count: int = 12) -> void:
+	var signature := _signature_for(stacks, equipped, total_armor, slot_count)
+	if signature == _last_refresh_signature:
+		return
+	_last_refresh_signature = signature
+
 	for child in _grid.get_children():
-		child.free()
+		# refresh() can run synchronously from inside a slot's OWN gui_input
+		# handler (click -> item_clicked -> World -> Player -> refresh, all
+		# on the same call stack -- see _on_item_gui_input): that slot's
+		# Control is still "locked" (mid-signal-emission on itself), and
+		# Object.free() refuses to free a locked object ("Attempted to free
+		# a locked object"). remove_child() detaches it immediately (safe
+		# even while locked) without erroring, so the grid rebuild below
+		# still completes correctly; queue_free() defers the actual
+		# deletion until after the call stack unwinds.
+		_grid.remove_child(child)
+		child.queue_free()
 	for i in slot_count:
 		if i < stacks.size():
 			_grid.add_child(_build_item_slot(stacks[i]))
@@ -174,6 +198,25 @@ func refresh(stacks: Array, equipped: Dictionary, total_armor: float, slot_count
 		var item = equipped.get(slot)
 		icon.texture = _item_sprite.generate_texture(item.id) if item != null else null
 	_armor_label.text = "Armor: %d" % int(total_armor)
+
+
+## A cheap string fingerprint of everything refresh()'s output depends on --
+## two calls with an identical signature would rebuild an identical grid, so
+## the second one can just be skipped.
+func _signature_for(stacks: Array, equipped: Dictionary, total_armor: float, slot_count: int) -> String:
+	var stack_parts: Array = []
+	for stack in stacks:
+		stack_parts.append("%s:%d" % [stack.item.id, stack.count])
+
+	var equipped_slots := equipped.keys()
+	equipped_slots.sort()
+	var equipped_parts: Array = []
+	for slot in equipped_slots:
+		equipped_parts.append("%s=%s" % [slot, equipped[slot].id])
+
+	return "%s|%s|%.2f|%d" % [
+		"|".join(stack_parts), "|".join(equipped_parts), total_armor, slot_count
+	]
 
 
 ## A dimmed, non-interactive slot frame marking unused inventory capacity.

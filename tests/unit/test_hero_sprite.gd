@@ -45,6 +45,18 @@ func test_appearance_values_come_from_the_pinned_pools():
 	assert_between(a.hair_style, 0, HeroAppearance.HAIR_STYLE_COUNT - 1)
 
 
+## Villager occupations (see VillageRenderer) share this same engine -- every
+## NpcIdentity.OCCUPATIONS entry should resolve to its own outfit rather than
+## silently falling back to the warrior palette.
+func test_every_npc_occupation_has_its_own_tunic_palette():
+	const NpcIdentity = preload("res://src/world/npc_identity.gd")
+	var seen_tunics := {}
+	for occupation in NpcIdentity.OCCUPATIONS:
+		assert_true(HeroAppearance.CLASS_PALETTES.has(occupation), "missing outfit palette for %s" % occupation)
+		seen_tunics[appearance_maker.appearance_for(occupation, 1).tunic] = true
+	assert_eq(seen_tunics.size(), NpcIdentity.OCCUPATIONS.size(), "every occupation should dress differently")
+
+
 func test_unknown_class_falls_back_to_a_valid_appearance():
 	var a := appearance_maker.appearance_for("not_a_class", 0)
 	assert_has(HeroAppearance.SKIN_TONES, a.skin)
