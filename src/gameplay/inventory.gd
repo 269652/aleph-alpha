@@ -70,3 +70,29 @@ func is_full() -> bool:
 
 func stacks() -> Array:
 	return _stacks
+
+
+## Swaps the stacks at two slot positions -- what dragging one inventory item
+## onto another does (see InventoryWindow's drag-and-drop). Out-of-range or
+## equal indices are a no-op rather than an error. Note _stacks is dense
+## (empty slots are trailing, see remove's filter), so this only reorders
+## occupied slots; dropping onto an empty trailing slot moves the stack to
+## the end instead (see move_to_end).
+func swap_slots(a: int, b: int) -> void:
+	if a == b:
+		return
+	if a < 0 or b < 0 or a >= _stacks.size() or b >= _stacks.size():
+		return
+	var temp = _stacks[a]
+	_stacks[a] = _stacks[b]
+	_stacks[b] = temp
+
+
+## Moves the stack at `index` to the end of the (dense) stack list -- what
+## dragging an item onto an empty inventory slot does.
+func move_to_end(index: int) -> void:
+	if index < 0 or index >= _stacks.size():
+		return
+	var stack = _stacks[index]
+	_stacks.remove_at(index)
+	_stacks.append(stack)

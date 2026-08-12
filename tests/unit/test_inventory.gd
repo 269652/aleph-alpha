@@ -93,3 +93,53 @@ func test_stacks_lists_current_contents():
 		ids.append(stack.item.id)
 	assert_true(ids.has("meat"))
 	assert_true(ids.has("hide"))
+
+
+# -- reordering (dragging one item onto another in the inventory grid) -------
+
+func test_swap_slots_exchanges_two_stacks():
+	inventory.add(_meat(), 3)
+	inventory.add(_hide(), 2)
+
+	inventory.swap_slots(0, 1)
+
+	assert_eq(inventory.stacks()[0].item.id, "hide")
+	assert_eq(inventory.stacks()[1].item.id, "meat")
+
+
+func test_swap_slots_with_itself_changes_nothing():
+	inventory.add(_meat(), 3)
+	inventory.swap_slots(0, 0)
+	assert_eq(inventory.stacks()[0].item.id, "meat")
+
+
+func test_swap_slots_out_of_range_is_a_no_op():
+	inventory.add(_meat(), 3)
+	inventory.swap_slots(0, 99)
+	inventory.swap_slots(-1, 0)
+	assert_eq(inventory.stacks()[0].item.id, "meat")
+
+
+func test_swap_slots_preserves_stack_counts():
+	inventory.add(_meat(), 3)
+	inventory.add(_hide(), 2)
+
+	inventory.swap_slots(0, 1)
+
+	assert_eq(inventory.stacks()[0].count, 2)
+	assert_eq(inventory.stacks()[1].count, 3)
+
+
+func test_move_to_end_puts_a_stack_last():
+	inventory.add(_meat(), 3)
+	inventory.add(_hide(), 2)
+
+	inventory.move_to_end(0)
+
+	assert_eq(inventory.stacks()[1].item.id, "meat")
+
+
+func test_move_to_end_out_of_range_is_a_no_op():
+	inventory.add(_meat(), 3)
+	inventory.move_to_end(99)
+	assert_eq(inventory.stacks()[0].item.id, "meat")

@@ -118,6 +118,61 @@ func test_refresh_survives_being_called_from_within_a_slots_own_click_handler():
 	assert_eq(window._grid.get_child_count(), 12, "the grid should still show every slot, not just the one clicked")
 
 
+# -- drag and drop (reorder within the grid / drag out to the hotbar) --------
+
+func test_item_slots_carry_a_drag_payload_naming_their_item_and_index():
+	window.refresh([
+		ItemStack.new(catalog.make("iron_sword"), 1),
+		ItemStack.new(catalog.make("fishing_rod"), 1),
+	], {}, 0.0, 12)
+
+	var payload = window._grid.get_child(1).drag_payload
+	assert_eq(payload["item_id"], "fishing_rod")
+	assert_eq(payload["index"], 1)
+	assert_eq(payload["source"], InventoryWindow.DRAG_SOURCE_INVENTORY)
+
+
+func test_item_slots_accept_an_inventory_drag_but_not_a_foreign_one():
+	window.refresh([ItemStack.new(catalog.make("iron_sword"), 1)], {}, 0.0, 12)
+	var slot = window._grid.get_child(0)
+
+	assert_true(slot._can_drop_data(Vector2.ZERO, {"source": InventoryWindow.DRAG_SOURCE_INVENTORY, "index": 1}))
+	assert_false(slot._can_drop_data(Vector2.ZERO, {"source": "somewhere_else"}))
+
+
+func test_dropping_one_item_onto_another_emits_items_reordered():
+	window.refresh([
+		ItemStack.new(catalog.make("iron_sword"), 1),
+		ItemStack.new(catalog.make("fishing_rod"), 1),
+	], {}, 0.0, 12)
+
+	var received := []
+	window.items_reordered.connect(func(from_index, to_index): received.append([from_index, to_index]))
+
+	# Drag slot 1 (rod) onto slot 0 (sword).
+	window._grid.get_child(0)._drop_data(Vector2.ZERO, window._grid.get_child(1).drag_payload)
+
+	assert_eq(received, [[1, 0]])
+
+
+## Empty trailing slots take drops too (drag an item into empty space), so a
+## reorder isn't limited to swapping with another occupied slot.
+func test_dropping_onto_an_empty_slot_also_emits_items_reordered():
+	window.refresh([ItemStack.new(catalog.make("iron_sword"), 1)], {}, 0.0, 12)
+
+	var received := []
+	window.items_reordered.connect(func(from_index, to_index): received.append([from_index, to_index]))
+
+	window._grid.get_child(5)._drop_data(Vector2.ZERO, window._grid.get_child(0).drag_payload)
+
+	assert_eq(received, [[0, 5]])
+
+
+func test_empty_slots_are_not_themselves_draggable():
+	window.refresh([], {}, 0.0, 12)
+	assert_null(window._grid.get_child(0)._get_drag_data(Vector2.ZERO))
+
+
 func test_refresh_rebuilds_when_only_the_equipped_paperdoll_changes():
 	var sword := catalog.make("iron_sword")
 	window.refresh([], {}, 0.0, 12)

@@ -24,6 +24,7 @@ const HotbarAction = preload("res://src/gameplay/hotbar_action.gd")
 const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
+const Hotbar = preload("res://src/gameplay/hotbar.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
@@ -134,6 +135,14 @@ var survival := SurvivalMeters.new()
 ## _food_buff_step. Empty means no active buff in any category.
 var active_food_buffs: Array = []
 var wallet := Wallet.new()
+## How many number-key hotbar slots exist. World derives its HUD row's slot
+## count from this (see World.HOTBAR_SLOT_COUNT), so the two can't drift.
+const HOTBAR_SLOT_COUNT := 5
+## Which item id sits on each hotbar key (see Hotbar). Explicitly assignable
+## by dragging an item onto a slot, with empty slots auto-filled from the
+## inventory -- so an item buried past the first few stacks can still be put
+## on a key, which the old mirror-the-first-5-stacks hotbar made impossible.
+var hotbar := Hotbar.new(HOTBAR_SLOT_COUNT)
 var experience := ExperienceTrack.new()
 var skill_tree := SkillTree.new()
 var keystones := KeystonePassive.new()
@@ -261,6 +270,10 @@ func _ready() -> void:
 	# Demo equipment until a real inventory system exists (Phase 3), so the
 	# slot rendering/facing behavior is visibly provable, not just unit-tested.
 	_character_view.equip_slot("head", Color(0.8, 0.1, 0.1))
+
+	# Keep the hotbar reconciled with what's actually carried (see
+	# sync_hotbar) from one place, rather than at every inventory mutation.
+	inventory_changed.connect(sync_hotbar)
 
 	# Start carrying a sword AND an axe; the sword is what's held at first (so
 	# attacks land harder than fists and it looks like a weapon). The axe sits
@@ -455,28 +468,33 @@ func _apply_skill_stat(stat_name: String, amount: float) -> void:
 		_skill_attack_bonus += amount
 
 
-## Activates hotbar slot `index` (0-based) against the item currently shown
-## there -- the index-th inventory stack (see World._update_hotbar, which
-## fills the hotbar from the first stacks). Weapons/tools get equipped;
-## food/potions get used; raw materials do nothing (see HotbarAction).
-## Returns true if something happened. Called from World on a number-key
-## press or a hotbar click.
+## Activates hotbar slot `index` (0-based) against whatever item id is
+## assigned to it (see Hotbar) -- weapons/tools get equipped, food/potions get
+## used, raw materials do nothing (see HotbarAction). Returns true if
+## something happened; false for an empty slot or an item no longer held.
+## Called from World on a number-key press or a hotbar click.
 func activate_hotbar_slot(index: int) -> bool:
-	var stacks := inventory.stacks()
-	if index < 0 or index >= stacks.size():
+	var item_id := hotbar.item_id_at(index)
+	if item_id == "":
 		return false
-	var item = stacks[index].item
-	match _hotbar_action.action_for(item.kind):
-		HotbarAction.EQUIP:
-			if item.kind == "armor":
-				return equip_armor(item)
-			return equip_item(item)
-		HotbarAction.USE:
-			return _use_food(item.id)
-		HotbarAction.PLACE:
-			return _arm_placeable(item)
-		_:
-			return false
+	return activate_item_id(item_id)
+
+
+## Puts `item_id` on hotbar slot `index` -- what dropping an inventory item
+## onto a hotbar slot does (see InventoryWindow/World's drag-and-drop).
+func assign_hotbar_slot(index: int, item_id: String) -> void:
+	hotbar.assign(index, item_id)
+
+
+## Reconciles the hotbar against what's actually held: drops slots for items
+## no longer carried, then auto-fills empty slots from the inventory (never
+## overwriting an explicit assignment). Called whenever the inventory changes.
+func sync_hotbar() -> void:
+	var held_ids: Array = []
+	for stack in inventory.stacks():
+		held_ids.append(stack.item.id)
+	hotbar.prune_missing(held_ids)
+	hotbar.auto_fill(held_ids)
 
 
 ## Activates the held item with this id (see HotbarAction) -- used by the

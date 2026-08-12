@@ -106,9 +106,11 @@ func test_activate_item_id_arms_a_placeable_item():
 
 func test_activate_hotbar_slot_arms_a_placeable_item():
 	player.inventory.add(_item_catalog.make("furnace"), 1)
-	var index := _stack_index_of("furnace")
+	# Hotbar slots hold an explicitly assigned item id now (see Hotbar), not
+	# whatever happens to sit at that inventory index.
+	player.assign_hotbar_slot(0, "furnace")
 
-	var handled := player.activate_hotbar_slot(index)
+	var handled := player.activate_hotbar_slot(0)
 
 	assert_true(handled)
 	assert_eq(player._selected_placeable_item.id, "furnace")
@@ -312,10 +314,85 @@ func test_equipping_a_weapon_via_activate_item_id_updates_the_paperdoll():
 ## the inventory window's click handler (activate_item_id).
 func test_activate_hotbar_slot_equips_armor_via_the_armor_path():
 	player.inventory.add(_item_catalog.make("leather_helm"), 1)
+	player.assign_hotbar_slot(0, "leather_helm")
 
-	assert_true(player.activate_hotbar_slot(_stack_index_of("leather_helm")))
+	assert_true(player.activate_hotbar_slot(0))
 
 	assert_eq(player.equipment.equipped_in("head").id, "leather_helm")
+
+
+# -- assignable hotbar (drag an item onto a slot) -----------------------------
+#
+# The hotbar used to just mirror the first 5 inventory stacks, so an item
+# further down the pack could never be put on a number key at all -- the
+# reported "can't drag the rod into the hotbar / can't equip it by any other
+# means". Slots are now explicitly assignable.
+
+func test_assigning_an_item_to_a_hotbar_slot_makes_that_slot_activate_it():
+	player.inventory.add(_item_catalog.make("fishing_rod"), 1)
+
+	player.assign_hotbar_slot(4, "fishing_rod")
+
+	assert_eq(player.hotbar.item_id_at(4), "fishing_rod")
+	assert_true(player.activate_hotbar_slot(4))
+	assert_eq(player.equipment.equipped_in("weapon").id, "fishing_rod")
+
+
+## The whole point of the fix: the player starts with 5 stacks, which used to
+## fill every hotbar slot -- so a 6th item could never reach a key at all.
+## It must still be assignable.
+func test_an_item_past_the_hotbars_capacity_can_still_be_assigned_and_equipped():
+	player.inventory.add(_item_catalog.make("stone_pickaxe"), 1)
+	assert_gt(
+		_stack_index_of("stone_pickaxe"), player.hotbar.slot_count - 1,
+		"precondition: pickaxe should sit past the hotbar's slot count"
+	)
+
+	player.assign_hotbar_slot(0, "stone_pickaxe")
+
+	assert_true(player.activate_hotbar_slot(0))
+	assert_eq(player.equipment.equipped_in("weapon").id, "stone_pickaxe")
+
+
+func test_activating_an_empty_hotbar_slot_is_a_no_op():
+	player.hotbar.clear_slot(3)
+	assert_false(player.activate_hotbar_slot(3))
+
+
+## Newly picked-up items should still reach the bar on their own while slots
+## remain free, so the assignable hotbar doesn't make early play worse.
+func test_hotbar_auto_fills_free_slots_from_the_inventory():
+	for i in player.hotbar.slot_count:
+		player.hotbar.clear_slot(i)
+	player.inventory.add(_item_catalog.make("wood"), 1)
+
+	player.sync_hotbar()
+
+	var filled := 0
+	for i in player.hotbar.slot_count:
+		if player.hotbar.item_id_at(i) != "":
+			filled += 1
+	assert_gt(filled, 0, "sync_hotbar should auto-fill free slots from what's held")
+
+
+func test_sync_hotbar_never_overwrites_an_explicit_assignment():
+	player.inventory.add(_item_catalog.make("stone_pickaxe"), 1)
+	player.assign_hotbar_slot(0, "stone_pickaxe")
+
+	player.sync_hotbar()
+
+	assert_eq(player.hotbar.item_id_at(0), "stone_pickaxe")
+
+
+## An item you've used up shouldn't keep occupying a key.
+func test_sync_hotbar_clears_slots_for_items_no_longer_held():
+	player.inventory.add(_item_catalog.make("stone_pickaxe"), 1)
+	player.assign_hotbar_slot(0, "stone_pickaxe")
+	player.inventory.remove("stone_pickaxe", 1)
+
+	player.sync_hotbar()
+
+	assert_ne(player.hotbar.item_id_at(0), "stone_pickaxe")
 
 
 func test_catching_a_fish_with_no_marker_nearby_still_shows_a_generic_message():

@@ -28,8 +28,12 @@ const MainMenu = preload("res://scenes/main_menu.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
+const DragSlot = preload("res://src/ui/drag_slot.gd")
 
-const HOTBAR_SLOT_COUNT := 5
+## How many hotbar slots the HUD row draws. Derived from Player's own
+## hotbar size (see Player.HOTBAR_SLOT_COUNT / Hotbar) rather than duplicated,
+## so the drawn row can never silently disagree with the bindable slots.
+const HOTBAR_SLOT_COUNT := Player.HOTBAR_SLOT_COUNT
 const SPELL_BAR_SLOT_COUNT := 4
 const HUD_SLOT_SIZE := 32.0
 const HUD_SLOT_BG_COLOR := Color(0.15, 0.15, 0.15, 0.85)
@@ -338,6 +342,7 @@ func _build_inventory_window() -> void:
 	_ui.add_child(_inventory_window)
 	_inventory_window.item_clicked.connect(_on_inventory_item_clicked)
 	_inventory_window.unequip_requested.connect(_on_inventory_unequip_requested)
+	_inventory_window.items_reordered.connect(_on_inventory_items_reordered)
 
 
 ## Clicking an inventory row activates that item (see Player.activate_item_id):
@@ -347,6 +352,21 @@ func _on_inventory_item_clicked(item_id: String) -> void:
 	if local_player != null:
 		local_player.activate_item_id(item_id)
 		_refresh_inventory_now(local_player)
+
+
+## Dragging one inventory item onto another slot reorders it (see
+## Inventory.swap_slots / move_to_end). A drop past the last occupied stack
+## moves the item to the end rather than swapping with nothing.
+func _on_inventory_items_reordered(from_index: int, to_index: int) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	var used := local_player.inventory.used_slots()
+	if to_index >= used:
+		local_player.inventory.move_to_end(from_index)
+	else:
+		local_player.inventory.swap_slots(from_index, to_index)
+	_refresh_inventory_now(local_player)
 
 
 ## Clicking a worn paperdoll slot unequips it back into the inventory.
@@ -947,10 +967,15 @@ func _update_survival_bar(local_player: Player) -> void:
 ## in icons/counts from the current inventory each frame.
 func _build_hotbar_slots() -> void:
 	for i in HOTBAR_SLOT_COUNT:
-		var slot := _make_hud_slot(HUD_SLOT_BG_COLOR)
+		var slot := _make_hud_slot(HUD_SLOT_BG_COLOR, true)
 		# Clicking a slot activates it, same as its number hotkey.
 		slot.mouse_filter = Control.MOUSE_FILTER_STOP
 		slot.gui_input.connect(_on_hotbar_slot_gui_input.bind(i))
+		# Dropping an inventory item here binds it to this number key (see
+		# Hotbar / InventoryWindow's drag source).
+		slot.can_accept = func(payload):
+			return payload is Dictionary and payload.get("source", "") == InventoryWindow.DRAG_SOURCE_INVENTORY
+		slot.dropped = func(payload): _on_hotbar_slot_dropped(i, payload)
 
 		var index_label := Label.new()
 		index_label.text = str(i + 1)
@@ -989,6 +1014,14 @@ func _on_hotbar_slot_gui_input(event: InputEvent, index: int) -> void:
 			local_player.activate_hotbar_slot(index)
 
 
+## Dropping an inventory item onto hotbar slot `index` binds that item to the
+## slot's number key (see Player.assign_hotbar_slot / Hotbar).
+func _on_hotbar_slot_dropped(index: int, payload: Dictionary) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player != null:
+		local_player.assign_hotbar_slot(index, String(payload.get("item_id", "")))
+
+
 ## A fixed row of locked placeholder slots for future abilities -- there is no
 ## spell/ability system yet (see docs/progress.md), so these are an honest
 ## stub, not fake functionality.
@@ -997,8 +1030,11 @@ func _build_spell_bar() -> void:
 		_spell_bar.add_child(_make_hud_slot(HUD_SLOT_LOCKED_COLOR))
 
 
-func _make_hud_slot(color: Color) -> PanelContainer:
-	var slot := PanelContainer.new()
+## A HUD slot frame. `droppable` makes it a DragSlot (see drag_slot.gd) so
+## the caller can wire can_accept/dropped -- the hotbar accepts inventory
+## drags, the spell-bar placeholders don't.
+func _make_hud_slot(color: Color, droppable: bool = false) -> PanelContainer:
+	var slot: PanelContainer = DragSlot.new() if droppable else PanelContainer.new()
 	slot.custom_minimum_size = Vector2(HUD_SLOT_SIZE, HUD_SLOT_SIZE)
 	var style := StyleBoxFlat.new()
 	style.bg_color = color
@@ -1008,15 +1044,17 @@ func _make_hud_slot(color: Color) -> PanelContainer:
 	return slot
 
 
-## Fills the hotbar's slot icons/counts from the first HOTBAR_SLOT_COUNT
-## inventory stacks; empty slots are left blank.
+## Fills the hotbar's slot icons/counts from whatever item id each slot is
+## bound to (see Player.hotbar / Hotbar) -- an explicit assignment made by
+## dragging an item onto the slot, or an auto-filled one. Empty slots are
+## left blank.
 func _update_hotbar(local_player: Player) -> void:
-	var stacks: Array = local_player.inventory.stacks()
 	for i in HOTBAR_SLOT_COUNT:
-		if i < stacks.size():
-			var stack = stacks[i]
-			_hotbar_slots[i].texture = _item_sprite_generator.generate_texture(stack.item.id)
-			_hotbar_counts[i].text = str(stack.count) if stack.count > 1 else ""
+		var item_id := local_player.hotbar.item_id_at(i)
+		var count := local_player.inventory.count_of(item_id) if item_id != "" else 0
+		if item_id != "" and count > 0:
+			_hotbar_slots[i].texture = _item_sprite_generator.generate_texture(item_id)
+			_hotbar_counts[i].text = str(count) if count > 1 else ""
 		else:
 			_hotbar_slots[i].texture = null
 			_hotbar_counts[i].text = ""

@@ -10,10 +10,20 @@ extends PanelContainer
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const Equipment = preload("res://src/gameplay/equipment.gd")
+const DragSlot = preload("res://src/ui/drag_slot.gd")
 
 ## Clicking an inventory item (equip/eat) vs. clicking a worn slot (unequip).
 signal item_clicked(item_id: String)
 signal unequip_requested(slot: String)
+## Dragging one inventory item onto another slot (reorder). `to_index` is a
+## grid position; World applies it to the real Inventory (see
+## Inventory.swap_slots/move_to_end).
+signal items_reordered(from_index: int, to_index: int)
+
+## Payload "source" tag for a drag that started in the inventory grid -- the
+## HUD hotbar checks this so it only accepts inventory drags (see
+## World._build_hotbar_slots).
+const DRAG_SOURCE_INVENTORY := "inventory"
 
 const SLOT_SIZE := 52.0
 const ICON_SIZE := 40.0
@@ -189,9 +199,9 @@ func refresh(stacks: Array, equipped: Dictionary, total_armor: float, slot_count
 		child.queue_free()
 	for i in slot_count:
 		if i < stacks.size():
-			_grid.add_child(_build_item_slot(stacks[i]))
+			_grid.add_child(_build_item_slot(stacks[i], i))
 		else:
-			_grid.add_child(_build_empty_slot())
+			_grid.add_child(_build_empty_slot(i))
 
 	for slot in _paperdoll_icons:
 		var icon: TextureRect = _paperdoll_icons[slot]
@@ -219,23 +229,35 @@ func _signature_for(stacks: Array, equipped: Dictionary, total_armor: float, slo
 	]
 
 
-## A dimmed, non-interactive slot frame marking unused inventory capacity.
-func _build_empty_slot() -> Control:
-	var box := PanelContainer.new()
+## A dimmed slot frame marking unused inventory capacity. Accepts drops (so
+## you can drag an item into empty space to move it to the end) but is never
+## itself a drag source.
+func _build_empty_slot(grid_index: int) -> Control:
+	var box := DragSlot.new()
 	box.custom_minimum_size = Vector2(SLOT_SIZE, SLOT_SIZE)
 	box.self_modulate = Color(1, 1, 1, 0.35)
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.mouse_filter = Control.MOUSE_FILTER_STOP
+	box.can_accept = func(payload): return _is_inventory_payload(payload)
+	box.dropped = func(payload): items_reordered.emit(int(payload["index"]), grid_index)
 	return box
 
 
-func _build_item_slot(stack) -> Control:
-	var box := PanelContainer.new()
+func _build_item_slot(stack, grid_index: int) -> Control:
+	var box := DragSlot.new()
 	box.custom_minimum_size = Vector2(SLOT_SIZE, SLOT_SIZE)
 	box.mouse_filter = Control.MOUSE_FILTER_STOP
 	box.gui_input.connect(_on_item_gui_input.bind(stack.item.id))
 	box.tooltip_text = _item_tooltip_text(stack)
 	box.mouse_entered.connect(func(): box.modulate = Color(1.15, 1.15, 1.15))
 	box.mouse_exited.connect(func(): box.modulate = Color(1, 1, 1))
+
+	# Drag this item out (onto another inventory slot to reorder, or onto a
+	# HUD hotbar slot to bind it to a number key -- see World).
+	var item_id: String = stack.item.id
+	box.drag_payload = {"source": DRAG_SOURCE_INVENTORY, "index": grid_index, "item_id": item_id}
+	box.make_preview = func(): return _drag_preview_for(item_id)
+	box.can_accept = func(payload): return _is_inventory_payload(payload)
+	box.dropped = func(payload): items_reordered.emit(int(payload["index"]), grid_index)
 
 	var icon := TextureRect.new()
 	icon.texture = _item_sprite.generate_texture(stack.item.id)
@@ -252,6 +274,23 @@ func _build_item_slot(stack) -> Control:
 		count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		box.add_child(count)
 	return box
+
+
+## True for a drag that started in this window's item grid (see
+## _build_item_slot's payload) -- guards against accepting unrelated drags.
+func _is_inventory_payload(payload) -> bool:
+	return payload is Dictionary and payload.get("source", "") == DRAG_SOURCE_INVENTORY
+
+
+## The little icon that follows the cursor while dragging.
+func _drag_preview_for(item_id: String) -> Control:
+	var preview := TextureRect.new()
+	preview.texture = _item_sprite.generate_texture(item_id)
+	preview.custom_minimum_size = Vector2(ICON_SIZE, ICON_SIZE)
+	preview.size = Vector2(ICON_SIZE, ICON_SIZE)
+	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	preview.modulate = Color(1, 1, 1, 0.8)
+	return preview
 
 
 ## "Iron Sword" -> "Iron Sword\nWeapon" (name, then kind), and a stack count
