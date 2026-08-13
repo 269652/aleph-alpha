@@ -36,7 +36,13 @@ its subject rather than about shading maths.
 3. **Deterministic, always.** Same inputs, same pixels, forever: sprites
    are generated at load and must not shimmer between sessions. No
    `RandomNumberGenerator` anywhere.
-4. **Tested by property, not by pixel.** Tests assert *qualities* -- "the
+4. **Pixel art, not rendering.** Every technique here serves a limited
+   palette with hard edges. Smooth gradients, soft noise texture, and
+   anything that reads as photographic are explicitly out of scope no
+   matter how physically correct the maths behind them is -- this is a
+   16-bit-styled game, and correct lighting rendered continuously still
+   looks wrong in it.
+5. **Tested by property, not by pixel.** Tests assert *qualities* -- "the
    lit side is brighter than the shadowed side", "consecutive samples
    scatter", "the ramp spans a wide value range" -- so art can be improved
    without rewriting a snapshot every time.
@@ -61,6 +67,13 @@ color, where along the ramp:
 
 Callers shade by a 0..1 fraction (`sample`), never by stop index, so their
 maths doesn't need to know how many stops exist.
+
+**`sample` SNAPS to a discrete stop and never interpolates between them.**
+This is the property that makes output read as 16-bit pixel art rather than
+a soft 3D render: real sprite work uses a handful of hard-edged colors per
+material with visible banding between them, not a continuous gradient. The
+first version of this module returned the continuous value, and the art
+came out looking airbrushed -- correct lighting maths, wrong medium.
 
 ### `pixel_noise.gd` -- deterministic randomness
 

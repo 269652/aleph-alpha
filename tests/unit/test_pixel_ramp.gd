@@ -78,6 +78,28 @@ func test_sample_maps_a_unit_fraction_across_the_whole_ramp():
 	assert_eq(ramp.sample(BASE, 1.0), stops[PixelRamp.STOPS - 1])
 
 
+## THE defining property of this being pixel art rather than a rendered
+## gradient: sampling anywhere along the ramp returns one of its STOPS
+## discrete colors, never a blend between them. A continuous ramp produces
+## smooth airbrushed shading -- which is what a first version of this
+## module did, and it made the art look like soft 3D renders instead of
+## 16-bit sprites.
+func test_sample_only_ever_returns_one_of_the_discrete_stops():
+	var stops := ramp.build(BASE)
+	for i in 200:
+		var color := ramp.sample(BASE, float(i) / 199.0)
+		assert_true(stops.has(color), "sample returned a blend, not a palette stop")
+
+
+## The colour count a sprite can use per material is therefore bounded --
+## the palette discipline that makes pixel art read as pixel art.
+func test_a_full_sweep_uses_exactly_the_ramp_size_of_colors():
+	var seen := {}
+	for i in 500:
+		seen[ramp.sample(BASE, float(i) / 499.0)] = true
+	assert_eq(seen.size(), PixelRamp.STOPS)
+
+
 func test_sample_clamps_out_of_range_fractions():
 	assert_eq(ramp.sample(BASE, -5.0), ramp.sample(BASE, 0.0))
 	assert_eq(ramp.sample(BASE, 5.0), ramp.sample(BASE, 1.0))

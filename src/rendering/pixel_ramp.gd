@@ -71,7 +71,14 @@ func build(base: Color) -> Array:
 ## to know how many stops exist.
 func sample(base: Color, lightness: float) -> Color:
 	var t := clampf(lightness, 0.0, 1.0)
-	return _stop(base, t)
+	# SNAPPED to a discrete stop, never interpolated between them. This is
+	# what makes the output read as 16-bit pixel art instead of a soft 3D
+	# render: real sprite work uses a handful of hard-edged colors per
+	# material, with banding between them, not a continuous gradient. A
+	# first version of this module returned the continuous value and the
+	# art came out looking airbrushed.
+	var index := int(round(t * float(STOPS - 1)))
+	return _stop(base, float(index) / float(STOPS - 1))
 
 
 ## Signed shortest hue distance from `from` to `to`, in turns: positive

@@ -16,15 +16,9 @@ const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2
 
 var _palette := PixelPalette.new()
-## Cloth-fold noise: stretched vertically (folds run down the garment) and
-## shallow enough to read as fabric rather than as dents.
 ## Where the head's dark rim begins, as squared normalized distance from
 ## its center -- keeps the silhouette crisp against the world behind it.
 const _HEAD_OUTLINE_START := 0.86
-
-const _FOLD_FREQUENCY_X := 0.42
-const _FOLD_FREQUENCY_Y := 0.06
-const _FOLD_DEPTH := 0.34
 
 var _ramp := PixelRamp.new()
 var _form := PixelForm.new()
@@ -291,7 +285,6 @@ func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:
 	# darker right edge, which read as a plain colored rectangle.
 	var outline := _palette.outline_color()
 	var center_x := float(size.x) / 2.0
-	var seed_value := int(tunic.r * 977.0) + int(tunic.g * 1361.0) + int(tunic.b * 2129.0)
 	for y in size.y:
 		# The torso is a SHAPE, not a rectangle: wide at the shoulders,
 		# pinched at the waist, flaring at the hem. Silhouette is the
@@ -311,11 +304,6 @@ func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:
 				image.set_pixel(x, y, outline)
 				continue
 			var lightness := _form.cylinder_lightness(left, half * 2.0, px)
-			# Vertical cloth folds: a slow noise field along the torso's
-			# width dents the shading, so the fabric drapes instead of
-			# reading as a smooth painted tube.
-			var fold := PixelNoise.smooth(seed_value, float(x) * _FOLD_FREQUENCY_X, float(y) * _FOLD_FREQUENCY_Y)
-			lightness = clampf(lightness + (fold - 0.5) * _FOLD_DEPTH, 0.0, 1.0)
 			image.set_pixel(x, y, _ramp.sample(tunic, lightness))
 
 	# Collar: a trim V just under the shoulders.
