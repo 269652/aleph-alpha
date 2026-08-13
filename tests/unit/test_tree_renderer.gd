@@ -237,3 +237,50 @@ func test_trees_sort_by_depth():
 	var far := renderer.spawn_tree_at(parent, Vector2(0, 20))
 	assert_gt(near.position.y, far.position.y)
 	assert_true(parent.y_sort_enabled, "the entity container must Y-sort its trees")
+
+
+# -- collision sits at the trunk, not under it ------------------------------
+#
+# Anchoring the sprite at the trunk's foot (for Y-sorting) moved the node's
+# origin without moving the collision box, which stayed centred on that
+# origin and sized to the whole canopy. The result: the square BELOW a tree
+# was blocked while the trunk itself was walkable.
+
+func _collision_of(tree: Node2D) -> CollisionShape2D:
+	for child in tree.get_children():
+		if child is CollisionShape2D:
+			return child
+	return null
+
+
+func test_collision_is_a_trunk_sized_box_not_a_canopy_sized_one():
+	var tree := renderer.spawn_tree_at(parent, Vector2(48, 48))
+	var shape: RectangleShape2D = _collision_of(tree).shape
+	assert_lt(
+		shape.size.x, TreeRenderer.TREE_SIZE.x * 0.5,
+		"you should be able to walk under the canopy -- only the trunk is solid"
+	)
+	assert_gte(
+		shape.size.x, ProceduralTreeSprite.trunk_world_width() * 0.8,
+		"the solid box must actually cover the trunk"
+	)
+
+
+## The blocked cell is the one the trunk stands in -- the node's own origin.
+func test_collision_is_centred_on_the_trunks_foot():
+	var tree := renderer.spawn_tree_at(parent, Vector2(48, 48))
+	var collision := _collision_of(tree)
+	var shape: RectangleShape2D = collision.shape
+	assert_almost_eq(collision.position.x, 0.0, 0.01)
+	# Centred vertically on the origin (within its own small height), so the
+	# tile below the tree is NOT blocked.
+	assert_lte(
+		absf(collision.position.y), shape.size.y,
+		"the solid box should sit at the trunk's foot, not a canopy-height below it"
+	)
+
+
+func test_collision_is_short_so_it_blocks_only_the_trunks_own_tile():
+	var tree := renderer.spawn_tree_at(parent, Vector2(48, 48))
+	var shape: RectangleShape2D = _collision_of(tree).shape
+	assert_lt(shape.size.y, TreeRenderer.TREE_SIZE.y * 0.4)

@@ -16,9 +16,11 @@ const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 ## back down (see docs/concept/art_resolution.md). Shadow and collision size
 ## off this, so they stay matched to the tree's actual world presence.
 const TREE_SIZE := Vector2(ProceduralTreeSprite.WORLD_SIZE)
-## How much smaller than the sprite the actual collision box is (a little
-## forgiving, not a hard rectangle edge).
-const COLLISION_SCALE := 0.6
+## The trunk's solid box, in world units: a little wider than the drawn
+## trunk so brushing past feels forgiving, and shallow so it blocks only
+## the trunk's own tile rather than a column of them.
+const TRUNK_COLLISION_WIDTH_SCALE := 1.15
+const TRUNK_COLLISION_DEPTH := 5.0
 
 ## How many distinct species_bias buckets get their own generated texture.
 ## Bounded and cached (see _texture_for) rather than one unique texture per
@@ -116,10 +118,20 @@ func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableT
 	body.add_child(sprite)
 	body.bind_canopy(sprite)
 
+	# Only the TRUNK is solid, and it sits at the node's origin -- which the
+	# Y-sort anchor put at the foot of the trunk. Sizing this to the whole
+	# canopy (as it was) blocked the tile below the tree while leaving the
+	# trunk itself walkable, because the box stayed centred on an origin
+	# that had moved. You should be able to walk under a canopy; you should
+	# not be able to walk through a trunk.
 	var collision := CollisionShape2D.new()
 	var shape := RectangleShape2D.new()
-	shape.size = TREE_SIZE * COLLISION_SCALE
+	shape.size = Vector2(
+		ProceduralTreeSprite.trunk_world_width() * TRUNK_COLLISION_WIDTH_SCALE,
+		TRUNK_COLLISION_DEPTH
+	)
 	collision.shape = shape
+	collision.position = Vector2.ZERO
 	body.add_child(collision)
 
 	return body

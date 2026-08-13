@@ -7,6 +7,10 @@ const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
 const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+
+## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
+## Well under 1: a clump of grass sits ON the ground, it is not the ground.
+const TUFT_WORLD_SCALE := 0.5
 const DesertScrub = preload("res://src/world/desert_scrub.gd")
 const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_sprite.gd")
 const TundraLichen = preload("res://src/world/tundra_lichen.gd")
@@ -587,10 +591,10 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 			sprite.texture = _grass_sprite_generator.generate_texture(
 				hash("%d_%d_grass_tuft" % [origin.x + cell.x, origin.y + cell.y])
 			)
-			# Tuft art is authored DETAIL_MULTIPLIER times oversized;
-			# scaling it back keeps ground cover the same size as before
-			# (see docs/concept/art_resolution.md).
-			sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+			# Art is DETAIL_MULTIPLIER times oversized, and a tuft is a
+			# CLUMP standing on a tile rather than a tile-sized carpet --
+			# at full tile width the ground cover read as giant plants.
+			sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * TUFT_WORLD_SCALE
 			# Blades sway in the wind (shared GPU shader, see WindSway).
 			sprite.material = _wind_sway.tuft_material()
 			sprite.position = Vector2(
@@ -646,10 +650,10 @@ func _sync_scrub_sprites(chunk_coord: Vector2i) -> void:
 			sprite.texture = _scrub_sprite_generator.generate_texture(
 				hash("%d_%d_scrub_tuft" % [origin.x + cell.x, origin.y + cell.y])
 			)
-			# Tuft art is authored DETAIL_MULTIPLIER times oversized;
-			# scaling it back keeps ground cover the same size as before
-			# (see docs/concept/art_resolution.md).
-			sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+			# Art is DETAIL_MULTIPLIER times oversized, and a tuft is a
+			# CLUMP standing on a tile rather than a tile-sized carpet --
+			# at full tile width the ground cover read as giant plants.
+			sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * TUFT_WORLD_SCALE
 			# Scrub sways too (shared GPU shader, see WindSway). Lichen
 			# deliberately doesn't -- it's crusty ground cover, not foliage.
 			sprite.material = _wind_sway.tuft_material()
@@ -706,10 +710,10 @@ func _sync_lichen_sprites(chunk_coord: Vector2i) -> void:
 			sprite.texture = _lichen_sprite_generator.generate_texture(
 				hash("%d_%d_lichen_tuft" % [origin.x + cell.x, origin.y + cell.y])
 			)
-			# Tuft art is authored DETAIL_MULTIPLIER times oversized;
-			# scaling it back keeps ground cover the same size as before
-			# (see docs/concept/art_resolution.md).
-			sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+			# Art is DETAIL_MULTIPLIER times oversized, and a tuft is a
+			# CLUMP standing on a tile rather than a tile-sized carpet --
+			# at full tile width the ground cover read as giant plants.
+			sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * TUFT_WORLD_SCALE
 			sprite.position = Vector2(
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
