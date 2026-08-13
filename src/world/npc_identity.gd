@@ -56,5 +56,9 @@ func _init(a_seed_value: int) -> void:
 	need = NEEDS[_index(seed_value, "need", NEEDS.size())]
 
 
+## Seeded pick, routed through a % 10000 reduction first -- Godot's String
+## hash can freeze `% count` to one bucket for counts divisible by 3 when
+## the salted strings share a suffix (see ProceduralHouseSprite._index's
+## fuller note; the 24-entry name pool here is divisible by 3).
 func _index(seed_value: int, salt: String, count: int) -> int:
-	return absi(hash("%d_%s" % [seed_value, salt])) % count
+	return (absi(hash("%d_%s" % [seed_value, salt])) % 10000) % count

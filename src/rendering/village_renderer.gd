@@ -11,6 +11,7 @@ extends RefCounted
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const ProceduralHouseSprite = preload("res://src/rendering/procedural_house_sprite.gd")
+const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
@@ -24,6 +25,7 @@ const HEAD_OFFSET_Y := -9.0
 
 var _settlement_generator := SettlementGenerator.new()
 var _house_sprite := ProceduralHouseSprite.new()
+var _landmark_sprite := ProceduralLandmarkSprite.new()
 var _character_sprite := ProceduralCharacterSprite.new()
 var _appearance := HeroAppearance.new()
 var _drop_shadow := DropShadow.new()
@@ -55,6 +57,8 @@ func spawn_village(
 	var house_positions: Array = settlement.house_positions
 	for i in house_positions.size():
 		spawned.append(_build_house(chunk_coord, i, house_positions[i], parent))
+	for landmark_id in settlement.landmarks:
+		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	var npcs: Array = settlement.npcs
 	for i in npcs.size():
 		spawned.append(_build_npc(settlement, i, tile_size, parent))
@@ -66,20 +70,33 @@ func _build_house(chunk_coord: Vector2i, index: int, position: Vector2, parent: 
 	var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, index])
 	house.texture = _house_sprite.generate_texture(seed_value)
 	house.position = position
-	house.add_child(
-		_drop_shadow.make_shadow(
-			int(ProceduralHouseSprite.SIZE.x * 0.8), ProceduralHouseSprite.SIZE.y * 0.5 - 1.0
-		)
-	)
+	# Shadow sized from THIS house's rolled size (see
+	# ProceduralHouseSprite.size_for) -- houses come in 3 sizes now.
+	var size := _house_sprite.size_for(seed_value)
+	house.add_child(_drop_shadow.make_shadow(int(size.x * 0.8), size.y * 0.5 - 1.0))
 	parent.add_child(house)
 	return house
 
 
-## Each villager gets a personal workspot a couple tiles south of their own
-## house, for occupations whose work tag isn't one of the settlement's 3
-## shared landmarks (see NpcMarker._resolve_location, SettlementGenerator's
-## scope note on not modeling per-occupation buildings yet).
-const _WORKSPOT_OFFSET_TILES := 2.5
+## The settlement's shared well/stall/gate, previously invisible positions
+## NPC schedules walked to -- now real, visible props of the village square.
+func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D) -> Sprite2D:
+	var landmark := Sprite2D.new()
+	landmark.texture = _landmark_sprite.generate_texture(landmark_id)
+	landmark.position = position
+	var size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
+	landmark.add_child(_drop_shadow.make_shadow(int(size.x * 0.8), size.y * 0.5 - 1.0))
+	parent.add_child(landmark)
+	return landmark
+
+
+## Each villager gets a personal workspot south of their own house, for
+## occupations whose work tag isn't one of the settlement's 3 shared
+## landmarks (see NpcMarker._resolve_location, SettlementGenerator's scope
+## note on not modeling per-occupation buildings yet). Far enough out that
+## the villager stands clear of the bigger house sprites (up to ~3 tiles
+## tall, see ProceduralHouseSprite.SIZES).
+const _WORKSPOT_OFFSET_TILES := 4.0
 
 
 func _build_npc(settlement: Dictionary, index: int, tile_size: int, parent: Node2D) -> NpcMarker:

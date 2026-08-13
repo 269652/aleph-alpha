@@ -28,13 +28,22 @@ const SETTLEMENT_CHANCE_DENOMINATOR := 30
 ## Villages need dry, walkable land -- never afloat or on a cliff face.
 const _UNINHABITABLE_BIOMES := {"ocean": true, "mountain": true}
 
-## Houses ring the village center at this radius; the 3 shared landmarks sit
-## closer in, at the center itself.
-const _HOUSE_RING_RADIUS_TILES := 6
+## Houses ring the village center at roughly this radius -- wide enough that
+## the bigger multi-size houses (see ProceduralHouseSprite.SIZES, up to
+## ~3.5x3 tiles) sit apart as a settlement rather than a huddle. Each house
+## also gets a small seeded radius/angle jitter so the ring reads as grown,
+## not compass-drawn.
+const _HOUSE_RING_RADIUS_TILES := 9
+const _HOUSE_RADIUS_JITTER_TILES := 1.5
+const _HOUSE_ANGLE_JITTER := 0.22
+
+## The 3 shared landmarks: the well anchors the village square, the market
+## stall sits just off it, and the gate stands at the settlement's edge
+## between the square and the house ring's northern gap.
 const _LANDMARK_OFFSETS_TILES := {
 	"well": Vector2i(0, 0),
-	"stall": Vector2i(2, 0),
-	"gate": Vector2i(-2, 0),
+	"stall": Vector2i(3, 1),
+	"gate": Vector2i(0, -6),
 }
 
 
@@ -69,12 +78,20 @@ func generate_settlement(
 	for i in POPULATION:
 		var seed_value := hash("%d_%d_villager_%d" % [chunk_coord.x, chunk_coord.y, i])
 		npcs.append(NpcIdentity.new(seed_value))
-		house_positions.append(_house_position(center_pos, tile_size, i))
+		house_positions.append(_house_position(chunk_coord, center_pos, tile_size, i))
 
 	return {"house_positions": house_positions, "landmarks": landmarks, "npcs": npcs}
 
 
-func _house_position(center_pos: Vector2, tile_size: int, index: int) -> Vector2:
-	var angle := float(index) / float(POPULATION) * TAU
-	var radius_px := _HOUSE_RING_RADIUS_TILES * tile_size
-	return center_pos + Vector2(cos(angle), sin(angle)) * radius_px
+## A ring position with a small deterministic per-house radius/angle jitter
+## (seeded per chunk+index) so the layout reads organic while staying exactly
+## reproducible on revisit.
+func _house_position(chunk_coord: Vector2i, center_pos: Vector2, tile_size: int, index: int) -> Vector2:
+	var base_angle := float(index) / float(POPULATION) * TAU
+	var angle := base_angle + (_unit_float(chunk_coord, index, "angle") - 0.5) * 2.0 * _HOUSE_ANGLE_JITTER
+	var radius_tiles := _HOUSE_RING_RADIUS_TILES + (_unit_float(chunk_coord, index, "radius") - 0.5) * 2.0 * _HOUSE_RADIUS_JITTER_TILES
+	return center_pos + Vector2(cos(angle), sin(angle)) * radius_tiles * tile_size
+
+
+func _unit_float(chunk_coord: Vector2i, index: int, salt: String) -> float:
+	return float(absi(hash("%d_%d_house_%d_%s" % [chunk_coord.x, chunk_coord.y, index, salt])) % 10000) / 10000.0

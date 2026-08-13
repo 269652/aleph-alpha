@@ -60,7 +60,7 @@ func test_spawns_nothing_on_an_uninhabitable_biome_even_if_the_chunk_would_other
 	assert_eq(spawned.size(), 0)
 
 
-func test_spawns_houses_and_npc_markers_on_a_settlement_chunk():
+func test_spawns_houses_landmarks_and_npc_markers_on_a_settlement_chunk():
 	var chunk_coord := _find_settlement_chunk("grassland")
 	var spawned := renderer.spawn_village(
 		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
@@ -68,14 +68,35 @@ func test_spawns_houses_and_npc_markers_on_a_settlement_chunk():
 	assert_eq(spawned.size(), parent.get_child_count())
 
 	var npc_markers := 0
-	var houses := 0
+	var props := 0
 	for node in spawned:
 		if node is NpcMarker:
 			npc_markers += 1
 		else:
-			houses += 1
+			props += 1
 	assert_eq(npc_markers, SettlementGenerator.POPULATION)
-	assert_eq(houses, SettlementGenerator.POPULATION)
+	# One house per villager plus the 3 shared landmarks (well/stall/gate).
+	assert_eq(props, SettlementGenerator.POPULATION + 3)
+
+
+## The well/stall/gate must be real visible sprites at the settlement's
+## landmark positions -- not just invisible walk targets.
+func test_landmarks_are_rendered_as_sprites_at_their_positions():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var settlement := SettlementGenerator.new().generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE
+	)
+	var spawned := renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
+	)
+	for landmark_id in ["well", "stall", "gate"]:
+		var found := false
+		for node in spawned:
+			if node is NpcMarker:
+				continue
+			if node.position == settlement.landmarks[landmark_id] and node.texture != null:
+				found = true
+		assert_true(found, "no rendered sprite at the %s's position" % landmark_id)
 
 
 func test_spawned_npc_markers_have_an_identity_and_a_schedule_source():

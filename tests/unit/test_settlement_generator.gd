@@ -99,6 +99,18 @@ func test_generate_settlement_is_deterministic_for_the_same_chunk():
 		assert_eq(first.npcs[i].npc_name, second.npcs[i].npc_name)
 
 
+## The bigger multi-size houses (see ProceduralHouseSprite.SIZES) need real
+## breathing room: every house must stand well clear of the village square
+## (the well), even at its jittered innermost radius.
+func test_houses_stand_clear_of_the_village_square():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var settlement := generator.generate_settlement(chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE)
+	var well: Vector2 = settlement.landmarks["well"]
+	var min_distance := (SettlementGenerator._HOUSE_RING_RADIUS_TILES - SettlementGenerator._HOUSE_RADIUS_JITTER_TILES) * TILE_SIZE
+	for house in settlement.house_positions:
+		assert_gte(house.distance_to(well), min_distance - 0.01, "house %s crowds the village square" % house)
+
+
 func test_generate_settlement_positions_are_within_the_chunk_bounds():
 	var chunk_coord := _find_settlement_chunk("grassland")
 	var origin := chunk_coord * CHUNK_SIZE

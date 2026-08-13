@@ -94,6 +94,38 @@ func test_spawned_fish_are_fish_markers_with_a_texture():
 		assert_not_null(fish.texture)
 
 
+## The stranding fix's spawn half: fish must only spawn on INTERIOR water
+## cells (all four cardinal neighbors also water), never on a cell touching
+## the shore -- a shore-adjacent spawn starts life half-beached and, with the
+## clearance rule (see FishMarker.CLEARANCE_PX), barely able to move.
+func test_fish_never_spawn_on_water_cells_touching_land():
+	var chunk := _make_chunk("ocean")
+	# Carve a land column through the middle -- its water neighbors become
+	# shore cells no fish may spawn on.
+	var land_x := CHUNK_SIZE / 2
+	for y in CHUNK_SIZE:
+		chunk.biome[y * CHUNK_SIZE + land_x] = "grassland"
+
+	var spawned := renderer.spawn_fish(parent, Vector2i(1, 1), chunk, CHUNK_ORIGIN, TILE_SIZE)
+	for fish in spawned:
+		var tile_x := int(fish.position.x / TILE_SIZE) - CHUNK_ORIGIN.x
+		assert_ne(tile_x, land_x - 1, "fish spawned on the shore cell west of the land column")
+		assert_ne(tile_x, land_x + 1, "fish spawned on the shore cell east of the land column")
+		assert_ne(tile_x, land_x, "fish spawned on land itself")
+
+
+func test_fish_never_spawn_on_the_chunks_edge_cells():
+	var chunk := _make_chunk("ocean")
+	var spawned := renderer.spawn_fish(parent, Vector2i(1, 1), chunk, CHUNK_ORIGIN, TILE_SIZE)
+	assert_gt(spawned.size(), 0)
+	for fish in spawned:
+		var tile := Vector2i(int(fish.position.x / TILE_SIZE), int(fish.position.y / TILE_SIZE)) - CHUNK_ORIGIN
+		assert_gt(tile.x, 0)
+		assert_gt(tile.y, 0)
+		assert_lt(tile.x, CHUNK_SIZE - 1)
+		assert_lt(tile.y, CHUNK_SIZE - 1)
+
+
 ## Colorful and multiple varieties, in practice: across a large enough ocean
 ## chunk, more than one species should show up.
 func test_a_large_ocean_chunk_spawns_a_mix_of_species():

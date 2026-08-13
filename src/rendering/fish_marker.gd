@@ -9,6 +9,29 @@ extends Sprite2D
 
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 
+## How much open water the fish keeps around its center on every side --
+## roughly the sprite's half-extent, so no part of the fish visually overlaps
+## the beach regardless of which way it's pointing (the reported "stranded at
+## the shoreline" look was its flank/nose hanging over land while the center
+## was still on the last water pixel). Pinned by
+## test_fish_clearance_keeps_it_clear_of_the_waterline.
+const CLEARANCE_PX := 6.0
+
+## The compass points around a candidate position that must all be water for
+## the move to count (see CLEARANCE_PX).
+const _CLEARANCE_PROBES: Array[Vector2] = [
+	Vector2(CLEARANCE_PX, 0), Vector2(-CLEARANCE_PX, 0),
+	Vector2(0, CLEARANCE_PX), Vector2(0, -CLEARANCE_PX),
+]
+
+## Headings tried in order when the wander direction would beach the fish:
+## straight first, then increasingly sharp deflections to either side, then a
+## full reversal -- so a fish meeting the shore slides along it (or turns
+## back) instead of freezing in place for the whole direction interval.
+const _DEFLECTION_TURNS: Array[float] = [
+	0.0, PI / 4.0, -PI / 4.0, PI / 2.0, -PI / 2.0, 3.0 * PI / 4.0, -3.0 * PI / 4.0, PI
+]
+
 var home := Vector2.ZERO
 var wander_seed := 0
 var species := "goldfish"
@@ -30,10 +53,31 @@ func setup(world, tile_size: int) -> void:
 
 func _process(delta: float) -> void:
 	_elapsed_time += delta
-	var candidate := _wander.step_position(home, position, _elapsed_time, delta, wander_seed)
-	if _world != null and not _is_water(candidate):
-		return  # would beach itself -- stay put this frame instead
-	position = candidate
+	if _world == null:
+		position = _wander.step_position(home, position, _elapsed_time, delta, wander_seed)
+		return
+
+	# Try the wander heading first; if any part of the fish would end up over
+	# land there, deflect through _DEFLECTION_TURNS until a heading keeps the
+	# whole sprite wet. Only a fully-enclosed fish (a 1-tile pond) holds still.
+	var direction := _wander.direction_at(home, position, _elapsed_time, wander_seed)
+	for turn in _DEFLECTION_TURNS:
+		var heading := direction.rotated(turn)
+		var candidate := position + heading * CreatureWander.WANDER_SPEED * delta
+		if _has_water_clearance(candidate):
+			position = candidate
+			return
+
+
+## True when `center` and every CLEARANCE_PX compass probe around it are over
+## water -- i.e. the whole sprite would sit visibly in the water there.
+func _has_water_clearance(center: Vector2) -> bool:
+	if not _is_water(center):
+		return false
+	for probe in _CLEARANCE_PROBES:
+		if not _is_water(center + probe):
+			return false
+	return true
 
 
 func _is_water(pixel_position: Vector2) -> bool:

@@ -27,6 +27,15 @@ class SinglePondWorld:
 		return "ocean" if Vector2i(x, y) == home_tile else "grassland"
 
 
+## Water fills every tile column up to (and including) max_water_tile_x --
+## a straight north-south shoreline, for asserting a fish slides along it
+## rather than beaching or freezing against it.
+class ShorelineWorld:
+	var max_water_tile_x := 6
+	func biome_at_global(x: int, _y: int) -> String:
+		return "ocean" if x <= max_water_tile_x else "grassland"
+
+
 var marker: FishMarker
 
 
@@ -99,3 +108,41 @@ func test_swims_around_within_a_larger_water_body():
 	for i in 60:
 		marker._process(0.3)
 	assert_ne(marker.position, marker.home)
+
+
+## The reported stranding bug: a fish whose wander heading pointed at the
+## shore used to just stop dead for the whole direction interval, piling
+## fish up motionless along the waterline. It must instead deflect and keep
+## swimming (any turn that stays in water), every single frame.
+func test_fish_keeps_moving_along_a_shoreline_instead_of_freezing():
+	var world := ShorelineWorld.new()
+	marker.home = Vector2(6.5 * TILE_SIZE, 6.5 * TILE_SIZE)  # water tile right at the shore
+	marker.position = marker.home
+	marker.setup(world, TILE_SIZE)
+
+	var moved := 0
+	for i in 150:
+		var before := marker.position
+		marker._process(0.25)
+		if marker.position != before:
+			moved += 1
+	assert_eq(moved, 150, "a fish beside a shoreline should deflect and keep swimming every frame, never freeze")
+
+
+## The other half of "stranded at the shoreline": moving is gated on the
+## fish keeping CLEARANCE_PX of open water on every side of its center --
+## roughly the sprite's half-extent -- so no part of the fish ever visually
+## overlaps the beach, whichever way it's pointing.
+func test_fish_clearance_keeps_it_clear_of_the_waterline():
+	var world := ShorelineWorld.new()
+	marker.home = Vector2(6.0 * TILE_SIZE, 6.5 * TILE_SIZE)  # inside the shore tile, clear of the edge
+	marker.position = marker.home
+	marker.setup(world, TILE_SIZE)
+
+	var water_edge_x := (world.max_water_tile_x + 1) * TILE_SIZE
+	for i in 200:
+		marker._process(0.25)
+		assert_lt(
+			marker.position.x, water_edge_x - FishMarker.CLEARANCE_PX + 0.01,
+			"the fish's center must stay at least CLEARANCE_PX clear of the waterline (step %d)" % i
+		)

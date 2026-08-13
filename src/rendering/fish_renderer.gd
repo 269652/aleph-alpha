@@ -41,7 +41,12 @@ func spawn_fish(
 		var global_y := chunk_origin_tiles.y + y
 		for x in chunk.width:
 			var global_x := chunk_origin_tiles.x + x
-			if chunk.biome[y * chunk.width + x] != "ocean":
+			# Interior water only: a shore-adjacent spawn starts life
+			# half-beached (see FishMarker.CLEARANCE_PX) -- the reported
+			# "fish all strand at the shoreline" look. Chunk-edge cells are
+			# excluded too (their neighbors aren't knowable from this chunk
+			# alone), erring toward open water.
+			if not _is_interior_water(chunk, x, y):
 				continue
 			if spawned.size() >= MAX_FISH_PER_CHUNK:
 				continue
@@ -56,6 +61,20 @@ func spawn_fish(
 			spawned.append(_build_fish(parent, species, position, seed_value, world, tile_size))
 
 	return spawned
+
+
+## True when (x, y) is an ocean cell whose 4 cardinal neighbors are all ocean
+## too -- and not on the chunk's edge (cross-chunk neighbors aren't knowable
+## from this chunk alone, so edge cells conservatively don't qualify).
+func _is_interior_water(chunk: Chunk, x: int, y: int) -> bool:
+	if x <= 0 or y <= 0 or x >= chunk.width - 1 or y >= chunk.height - 1:
+		return false
+	if chunk.biome[y * chunk.width + x] != "ocean":
+		return false
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if chunk.biome[(y + offset.y) * chunk.width + (x + offset.x)] != "ocean":
+			return false
+	return true
 
 
 func _build_fish(
