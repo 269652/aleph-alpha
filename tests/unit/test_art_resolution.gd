@@ -11,8 +11,11 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 
-func test_detail_multiplier_is_the_4x_pass_factor():
-	assert_eq(ArtResolution.DETAIL_MULTIPLIER, 4)
+## Pinned exactly, because both directions matter: raising it collapses art
+## pixels onto single screen pixels (see the chunky-pixel test below),
+## lowering it loses the detail the pass exists for.
+func test_detail_multiplier_is_the_pinned_pass_factor():
+	assert_eq(ArtResolution.DETAIL_MULTIPLIER, 2)
 
 
 ## The invariant every caller depends on: scaling art by SPRITE_SCALE
@@ -22,11 +25,13 @@ func test_sprite_scale_exactly_undoes_the_detail_multiplier():
 
 
 func test_art_size_scales_a_world_size_up_by_the_multiplier():
-	assert_eq(ArtResolution.art_size(Vector2i(20, 26)), Vector2i(80, 104))
+	var world := Vector2i(20, 26)
+	assert_eq(ArtResolution.art_size(world), world * ArtResolution.DETAIL_MULTIPLIER)
 
 
 func test_world_size_scales_an_art_size_back_down():
-	assert_eq(ArtResolution.world_size(Vector2i(80, 104)), Vector2(20, 26))
+	var world := Vector2i(20, 26)
+	assert_eq(ArtResolution.world_size(world * ArtResolution.DETAIL_MULTIPLIER), Vector2(world))
 
 
 func test_art_and_world_size_round_trip():
@@ -40,3 +45,31 @@ func test_art_and_world_size_round_trip():
 func test_terrain_uses_the_same_multiplier_as_sprites():
 	assert_eq(TerrainRenderer.ART_TILE_SIZE, TerrainRenderer.TILE_SIZE * ArtResolution.DETAIL_MULTIPLIER)
 	assert_almost_eq(TerrainRenderer.LAYER_SCALE, ArtResolution.SPRITE_SCALE, 0.0001)
+
+
+# -- chunky pixels (docs/concept/pixel_art_engine.md) ------------------------
+#
+# The point that a first version of this pass missed: authoring art at 4x
+# and scaling it back down made ONE ART PIXEL land on ONE SCREEN PIXEL, so
+# nothing looked pixelated at all -- reported as "the char doesn't look like
+# pixel art". 16-bit art has CHUNKY pixels: each art pixel must cover
+# several screen pixels.
+
+const Player = preload("res://scenes/player.gd")
+
+
+## How many screen pixels one art pixel covers, at the game's own camera
+## zoom. Must be >= 2 or the art stops reading as pixel art.
+func test_one_art_pixel_covers_several_screen_pixels():
+	var world_units_per_art_pixel := ArtResolution.SPRITE_SCALE
+	var screen_px_per_art_pixel := world_units_per_art_pixel * Player.CAMERA_ZOOM.x
+	assert_gte(
+		screen_px_per_art_pixel, 2.0,
+		"art pixels must stay visibly chunky, not collapse to single screen pixels"
+	)
+
+
+## ...but still finer than the pre-pass art, which is the whole reason for
+## the resolution bump.
+func test_art_is_still_more_detailed_than_before_the_pass():
+	assert_gt(ArtResolution.DETAIL_MULTIPLIER, 1)

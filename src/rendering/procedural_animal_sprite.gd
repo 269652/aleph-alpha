@@ -22,8 +22,8 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 ## docs/concept/art_resolution.md). CreatureRenderer draws it at
 ## ArtResolution.SPRITE_SCALE, so animals gain real detail (a muzzle, ears,
 ## antlers, separate legs) without growing in the world.
-const WIDTH := 96
-const HEIGHT := 64
+const WIDTH := 48
+const HEIGHT := 32
 
 const EYE_COLOR := Color(0.05, 0.05, 0.05)
 const TUSK_COLOR := Color(0.92, 0.9, 0.8)

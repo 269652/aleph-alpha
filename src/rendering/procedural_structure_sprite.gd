@@ -15,14 +15,15 @@ extends RefCounted
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
-## 4x the original 16px tile (see docs/concept/art_resolution.md), matched to
+## DETAIL_MULTIPLIER times the original 16px tile (see
+## docs/concept/art_resolution.md), matched to
 ## TerrainRenderer.ART_TILE_SIZE. Every hand-placed pixel constant below (log
 ## endpoints, flame span, brick spacing, firebox bounds) is scaled by the
 ## same 4x factor so each structure's composition stays identical, just at
 ## higher fidelity -- except mortar/outline LINE width, which deliberately
 ## stays 1px: a thin line against 4x-bigger bricks reads as finer masonry,
 ## not coarser (scaling the line's width too would have made it chunkier).
-const SIZE := 64
+const SIZE := 32
 
 ## Every structure id this generator knows how to draw, in the fixed order
 ## TerrainRenderer reserves their atlas slots (see
@@ -42,34 +43,34 @@ const _FLAME_INNER := Color(0.98, 0.68, 0.18)
 
 ## Logs cross near the tile's base; each is a shallow staircase diagonal this
 ## many pixels thick.
-const _LOG_THICKNESS := 8
+const _LOG_THICKNESS := 4
 const _LOG_JITTER_RANGE := 0.2
 
 ## The flame silhouette spans these rows (1-indexed from the top), narrow at
 ## the tip and wide at its base where it meets the logs.
-const _FLAME_TOP_ROW := 4
-const _FLAME_BASE_ROW := 36
-const _FLAME_TIP_HALF_WIDTH := 2.0
-const _FLAME_BASE_HALF_WIDTH := 16.0
+const _FLAME_TOP_ROW := 2
+const _FLAME_BASE_ROW := 18
+const _FLAME_TIP_HALF_WIDTH := 1.0
+const _FLAME_BASE_HALF_WIDTH := 8.0
 const _FLAME_INNER_CORE_FRACTION := 0.45
-const _FLAME_CENTER_JITTER_PX := 6.0
-const _FLAME_SWAY_PX := 3.2
+const _FLAME_CENTER_JITTER_PX := 3.0
+const _FLAME_SWAY_PX := 1.6
 
 # -- furnace: cool stone/brick block with a glowing firebox ------------------
 
 const _STONE_COLOR := Color(0.52, 0.52, 0.57)
 const _MORTAR_COLOR := Color(0.36, 0.36, 0.4)
 const _FIREBOX_COLOR := Color(0.55, 0.18, 0.05)
-const _BRICK_ROW_HEIGHT := 16
-const _BRICK_JOINT_SPACING := 24
-const _BRICK_JOINT_OFFSET := 12
+const _BRICK_ROW_HEIGHT := 8
+const _BRICK_JOINT_SPACING := 12
+const _BRICK_JOINT_OFFSET := 6
 
 ## The firebox opening's bounds (exclusive end), where fuel burns -- the
 ## detail that reads "furnace" rather than "brick wall".
-const _FIREBOX_LEFT := 20
-const _FIREBOX_RIGHT := 44
-const _FIREBOX_TOP := 36
-const _FIREBOX_BOTTOM := 56
+const _FIREBOX_LEFT := 10
+const _FIREBOX_RIGHT := 22
+const _FIREBOX_TOP := 18
+const _FIREBOX_BOTTOM := 28
 
 var _palette := PixelPalette.new()
 
@@ -93,8 +94,8 @@ func _campfire_image(variant_seed: int) -> Image:
 	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
 	image.fill(_EMBER_GROUND)
 
-	_paint_log(image, 8, 52, 52, 40, variant_seed, 0)
-	_paint_log(image, 8, 40, 52, 52, variant_seed, 1)
+	_paint_log(image, 4, 26, 26, 20, variant_seed, 0)
+	_paint_log(image, 4, 20, 26, 26, variant_seed, 1)
 	_paint_flame(image, variant_seed)
 	_outline_against_background(image, _EMBER_GROUND)
 	return image

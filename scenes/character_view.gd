@@ -40,11 +40,11 @@ const EYE_COLOR := Color(0.1, 0.1, 0.1)
 ## suggestive pixels -- while staying exactly the same size in the world
 ## and keeping character_view.tscn's part positions (which are in world
 ## units) valid unchanged.
-const ART_BODY_SIZE := Vector2i(52, 76)
-const ART_HEAD_SIZE := Vector2i(48, 48)
-const ART_LEG_SIZE := Vector2i(20, 32)
-const ART_ARM_SIZE := Vector2i(16, 36)
-const ART_SLOT_SIZE := Vector2i(28, 28)
+const ART_BODY_SIZE := Vector2i(26, 38)
+const ART_HEAD_SIZE := Vector2i(24, 24)
+const ART_LEG_SIZE := Vector2i(10, 16)
+const ART_ARM_SIZE := Vector2i(8, 18)
+const ART_SLOT_SIZE := Vector2i(14, 14)
 
 var facing := Facing.DOWN
 var movement_state := MovementState.IDLE

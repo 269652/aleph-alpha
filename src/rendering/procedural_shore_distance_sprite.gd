@@ -12,7 +12,7 @@ extends RefCounted
 ## the resolution bump is a free quality improvement: 4x as many distinct
 ## distance samples per tile, no other changes needed.
 
-const SIZE := 64
+const SIZE := 32
 
 
 func generate_texture(land_directions: Array) -> ImageTexture:

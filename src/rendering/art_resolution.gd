@@ -17,9 +17,20 @@ extends RefCounted
 ## the same multiplier so terrain and the things standing on it never
 ## disagree about how much detail a world unit carries.
 
-## How many art pixels are painted per world unit -- the "4x" of the 4x
-## resolution pass.
-const DETAIL_MULTIPLIER := 4
+## How many art pixels are painted per world unit.
+##
+## 2, not 4. A first version used 4, which quadrupled the pixel COUNT but
+## also made one art pixel land on exactly one SCREEN pixel at the game's
+## camera zoom -- so nothing looked pixelated at all, reported as "the char
+## doesn't look like pixel art". More pixels literally means LESS
+## pixelated: 16-bit art needs each art pixel to cover several screen
+## pixels so the grid stays visible and chunky.
+##
+## 2 is the balance: 4x the pixel count of the original art (2x linear),
+## while each art pixel still covers 2 screen pixels. Pinned from both
+## sides by test_one_art_pixel_covers_several_screen_pixels and
+## test_art_is_still_more_detailed_than_before_the_pass.
+const DETAIL_MULTIPLIER := 2
 
 ## What a sprite drawn with DETAIL_MULTIPLIER-times-oversized art must be
 ## scaled by so it occupies its intended world size.

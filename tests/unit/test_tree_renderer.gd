@@ -155,7 +155,7 @@ func test_tree_world_size_is_unchanged_by_the_art_resolution_pass():
 
 
 func test_tree_art_is_authored_at_the_shared_detail_multiplier():
-	assert_eq(ProceduralTreeSprite.SIZE, ArtResolution.art_size(Vector2i(20, 26)))
+	assert_eq(ProceduralTreeSprite.SIZE, ArtResolution.art_size(ProceduralTreeSprite.WORLD_SIZE))
 
 
 ## The sprite must be scaled back down, or the oversized art would render a

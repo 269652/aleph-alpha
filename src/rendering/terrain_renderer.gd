@@ -119,7 +119,7 @@ const ATLAS_COLUMNS := 64
 ## art_resolution.md#boot-performance). Manual, not content-hashed: matches
 ## this codebase's existing "bump a version const" conventions elsewhere
 ## rather than adding hash-computation machinery for a one-developer project.
-const ATLAS_VERSION := "4x_art_resolution_v3_grass_blades"
+const ATLAS_VERSION := "art_resolution_v4_chunky_pixels"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets

@@ -23,7 +23,7 @@ const WORLD_SIZE := Vector2i(20, 26)
 ## docs/concept/art_resolution.md) -- TreeRenderer draws it at
 ## ArtResolution.SPRITE_SCALE so the tree gains real pixel detail without
 ## growing in the world.
-const SIZE := Vector2i(80, 104)
+const SIZE := Vector2i(40, 52)
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2
