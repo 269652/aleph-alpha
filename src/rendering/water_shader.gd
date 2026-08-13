@@ -174,9 +174,11 @@ const CREST_COLOR := Color(0.16, 0.42, 0.72)
 const WAVE_LOW_THRESHOLD := 0.55
 const WAVE_HIGH_THRESHOLD := 0.95
 
-## Calm baseline pacing -- matches WeatherModel.wind_strength_for("clear"), so
-## an unconfigured/default material already looks like a still, clear day.
-const DEFAULT_WIND_STRENGTH := 0.3
+## Baseline pacing -- matches WeatherModel.wind_strength_for("clear") (the
+## water's original always-on pace, from before per-weather scaling existed),
+## so an unconfigured/default material already looks like a normal clear day
+## rather than an artificially calmed one.
+const DEFAULT_WIND_STRENGTH := 1.0
 
 var _shared_material: ShaderMaterial
 

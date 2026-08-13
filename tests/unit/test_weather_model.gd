@@ -110,3 +110,14 @@ func test_wind_strength_stays_within_a_sane_unit_ish_range():
 
 func test_wind_strength_unrecognized_state_falls_back_to_calm():
 	assert_eq(weather.wind_strength_for("blizzard"), weather.wind_strength_for("clear"))
+
+
+## Regression: "clear" is by far the most common weather (50% of rolls, see
+## CLEAR_THRESHOLD), so it must reproduce WaterShader's original always-on
+## pace (its old fixed scroll_speed, before this per-weather scaling existed
+## at all) rather than throttle the common case down -- worse weather should
+## ADD energy on top of that baseline, not have calm weather subtract from
+## it. A too-low "clear" value previously made most water read as static
+## (reported: "the water ripples are gone").
+func test_clear_weather_matches_the_waters_original_always_on_pace():
+	assert_almost_eq(weather.wind_strength_for("clear"), 1.0, 0.01)
