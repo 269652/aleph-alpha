@@ -67,3 +67,21 @@ func _resolve_location(tag: String) -> Vector2:
 	if landmarks.has(tag):
 		return landmarks[tag]
 	return workspot_position
+
+
+## The CharacterView rendering this villager (see VillageRenderer._build_npc).
+## The marker itself is a Sprite2D for historical reasons but no longer draws
+## its own texture -- the view owns the visuals, so body proportions and the
+## walk animation are shared with the player rather than duplicated.
+var _character_view: Node2D
+
+
+func bind_character_view(view: Node2D) -> void:
+	_character_view = view
+
+
+## Points the villager the way it is walking, so NPCs face their direction
+## of travel like the player does.
+func face_movement(direction: Vector2) -> void:
+	if _character_view != null:
+		_character_view.set_facing(direction)

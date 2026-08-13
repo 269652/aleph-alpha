@@ -16,14 +16,14 @@ const ProceduralHouseSprite = preload("res://src/rendering/procedural_house_spri
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
+const CharacterViewScene = preload("res://scenes/character_view.tscn")
+const CharacterView = preload("res://scenes/character_view.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 
-## Villager body/head sizes -- same as CharacterView uses for the player, so
-## an NPC reads as visually consistent with the hero rather than a different
-## art style.
-const BODY_SIZE := Vector2i(10, 14)
-const HEAD_SIZE := Vector2i(8, 8)
-const HEAD_OFFSET_Y := -9.0
+## Villagers are rendered with the player's own CharacterView (see
+## _build_npc), so there are deliberately no villager-specific body size
+## constants here -- the previous ones drifted out of sync with
+## CharacterView and left NPCs legless.
 
 var _settlement_generator := SettlementGenerator.new()
 var _house_sprite := ProceduralHouseSprite.new()
@@ -120,15 +120,23 @@ func _build_npc(settlement: Dictionary, index: int, tile_size: int, parent: Node
 	marker.landmarks = settlement.landmarks
 	marker.position = home_position
 
-	var appearance := _appearance.appearance_for(identity.occupation, identity.seed_value)
-	marker.texture = _character_sprite.generate_hero_tunic_texture(BODY_SIZE, appearance)
-
-	var head := Sprite2D.new()
-	head.texture = _character_sprite.generate_hero_head_texture(HEAD_SIZE, appearance)
-	head.position = Vector2(0, HEAD_OFFSET_Y)
-	marker.add_child(head)
-
-	marker.add_child(_drop_shadow.make_shadow(int(BODY_SIZE.x * 0.9), BODY_SIZE.y * 0.5 - 1.0))
-
+	# Villagers use the SAME CharacterView the player does, rather than a
+	# hand-assembled torso-plus-head. The old version had neither legs nor
+	# arms (reported: "npcs have no legs") and carried its own size
+	# constants, which had silently fallen out of sync with CharacterView's
+	# and missed the art-resolution pass entirely. Sharing the view means
+	# body proportions, resolution and walk animation can only ever come
+	# from one place.
+	marker.add_child(_drop_shadow.make_shadow(
+		int(CharacterView.BODY_SIZE.x * 0.9), CharacterView.BODY_SIZE.y * 0.5 - 1.0
+	))
+	# The marker must be in the tree BEFORE the view is dressed: CharacterView
+	# reaches its part sprites through @onready refs, which stay null until
+	# the node enters the tree.
 	parent.add_child(marker)
+
+	var view := CharacterViewScene.instantiate()
+	marker.add_child(view)
+	view.apply_appearance(_appearance.appearance_for(identity.occupation, identity.seed_value))
+	marker.bind_character_view(view)
 	return marker

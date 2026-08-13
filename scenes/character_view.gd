@@ -59,6 +59,9 @@ var _character_sprite := ProceduralCharacterSprite.new()
 var _swing_time_remaining := 0.0
 var _swing_duration := 0.0
 var _swing_facing := "down"
+## A look requested before this view entered the tree (see
+## apply_appearance), applied in _ready.
+var _pending_appearance: Dictionary = {}
 
 @onready var _body: Sprite2D = $Body
 @onready var _head: Sprite2D = $Head
@@ -90,10 +93,13 @@ func _ready() -> void:
 	_arm_right_base_position = _arm_right.position
 	_tool_slot_base_position = _tool_slot.position
 
-	# Default look until the owner applies a real hero identity (see
-	# apply_appearance / HeroAppearance) -- e.g. a warrior in the fallback
-	# palette, so an unconfigured view still reads as a person.
-	apply_appearance(HeroAppearance.new().appearance_for("warrior", 0))
+	# A look requested before this view was in the tree wins; otherwise a
+	# default identity, so an unconfigured view still reads as a person
+	# (see apply_appearance / HeroAppearance).
+	if _pending_appearance.is_empty():
+		apply_appearance(HeroAppearance.new().appearance_for("warrior", 0))
+	else:
+		apply_appearance(_pending_appearance)
 
 	_arm_left.visible = false
 	_arm_right.visible = false
@@ -161,6 +167,13 @@ func set_facing(direction: Vector2) -> void:
 ## colored tunic with trim, DNA-picked skin/hair on the head, class leg
 ## colors, skin-toned arms. Call any time -- textures regenerate in place.
 func apply_appearance(appearance: Dictionary) -> void:
+	# Callers can dress a view before it has entered the scene tree (a
+	# villager is built and dressed by VillageRenderer, whose parent node
+	# may not itself be in the tree yet). @onready part refs are null until
+	# then, so remember the look and apply it once _ready runs.
+	if _body == null:
+		_pending_appearance = appearance
+		return
 	_body.texture = _character_sprite.generate_hero_tunic_texture(ART_BODY_SIZE, appearance)
 	_head.texture = _character_sprite.generate_hero_head_texture(ART_HEAD_SIZE, appearance)
 	_leg_left.texture = _character_sprite.generate_body_part_texture(ART_LEG_SIZE, appearance.legs)

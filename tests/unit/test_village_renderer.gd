@@ -137,3 +137,48 @@ func test_positions_are_deterministic_for_the_same_chunk():
 	other_parent.free()
 
 	assert_eq(first_positions, second_positions)
+
+
+# -- NPCs are whole people, not a torso and a head -------------------------
+#
+# Villagers were assembled from just a tunic sprite plus a head sprite, with
+# their own stale size constants (10x14 / 8x8, left behind when CharacterView
+# grew) and no limbs at all -- reported as "npcs have no legs". They now use
+# the same CharacterView the player does, so body proportions, art
+# resolution and animation come from one place.
+
+const CharacterView = preload("res://scenes/character_view.gd")
+
+
+func _first_npc(spawned: Array) -> Node2D:
+	for node in spawned:
+		if node is NpcMarker:
+			return node
+	return null
+
+
+func _character_view_of(npc: Node2D) -> Node2D:
+	for child in npc.get_children():
+		if child is CharacterView:
+			return child
+	return null
+
+
+func test_villagers_are_built_from_the_same_character_view_as_the_player():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var spawned := renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
+	)
+	var npc := _first_npc(spawned)
+	assert_not_null(npc, "the fixture should spawn at least one villager")
+	assert_not_null(_character_view_of(npc), "a villager should own a CharacterView")
+
+
+func test_villagers_have_legs_and_arms():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var spawned := renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
+	)
+	var view := _character_view_of(_first_npc(spawned))
+	for part_name in ["LegLeft", "LegRight", "ArmLeft", "ArmRight", "Body", "Head"]:
+		assert_not_null(view.get_node_or_null(part_name), "villager should have a %s" % part_name)
