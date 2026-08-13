@@ -1,5 +1,7 @@
 extends RefCounted
 
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+
 ## GPU micro-blade field: the individual 1px grass blades the baked tile
 ## frames could never truly animate (4 frames of a 1px pixel reads as
 ## flicker, not wind). Each grassland cell gets BLADES_PER_CELL tiny quad
@@ -48,11 +50,16 @@ func build_field(chunk_biome: PackedStringArray, width: int, height: int, tile_s
 			if chunk_biome[y * width + x] != "grassland":
 				continue
 			for i in BLADES_PER_CELL:
-				var h := absi(hash("%d_%d_%d_blade_%d" % [seed_value, x, y, i]))
+				# PixelNoise, not Godot's string hash: hashing "..._0",
+				# "..._1", "..._2" correlates, so consecutive blades in a
+				# cell landed on top of each other instead of scattering.
+				# The third place this project has hit that clustering
+				# (village house sizes, tree leaf angles, tuft blades).
+				var h := PixelNoise.value(seed_value + i * 7919, x, y)
 				# Blades cluster around a per-cell center (real grass grows in
 				# tufts, not uniform confetti), with per-blade height variation
 				# via y-scale so the cluster reads organic.
-				var ch := absi(hash("%d_%d_%d_cluster" % [seed_value, x, y]))
+				var ch := PixelNoise.value(seed_value + 31337, x, y)
 				var cx := x * tile_size + 3 + ch % (tile_size - 6)
 				var cy := y * tile_size + 4 + (ch / 89) % (tile_size - 6)
 				var px := cx + (h % 5) - 2
