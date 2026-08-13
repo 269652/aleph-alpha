@@ -1,5 +1,7 @@
 extends RefCounted
 
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+
 ## Frame-set generator for animated creature pixel art. Builds short
 ## per-action animations by post-processing the single 24x16 base image
 ## produced by ProceduralAnimalSprite (shifting pixel regions rather than
@@ -20,8 +22,18 @@ const FRAME_COUNTS := {
 
 const WATER_COLOR := Color(0.2, 0.4, 0.85)
 const WATER_SURFACE_COLOR := Color(0.35, 0.55, 0.95)
-const WATER_TOP_ROW := 10
-const LEG_TOP_ROW := 13
+## Where the waterline and the legs sit, as FRACTIONS of the sprite's
+## height. These were fixed pixel rows tuned for the original 16px-tall
+## canvas; at the 4x art resolution (see docs/concept/art_resolution.md) a
+## literal row 10 sat near the animal's shoulder, so the swim frame flooded
+## most of the body and both frames came out identical.
+const WATER_TOP_FRACTION := 0.62
+const LEG_TOP_FRACTION := 0.81
+
+## How far parts move between animation frames, in art pixels. Scaled with
+## the resolution so a step still reads as a step rather than as a
+## sub-pixel twitch.
+const FRAME_SHIFT := 2 * ArtResolution.DETAIL_MULTIPLIER
 
 
 func generate_frames(species: String, action: String, seed_value: int) -> Array[Image]:
@@ -64,13 +76,14 @@ func _walk_frame(base: Image, frame_index: int) -> Image:
 	var frame := _copy(base)
 	var w := base.get_width()
 	var h := base.get_height()
-	_clear_rows(frame, LEG_TOP_ROW, h)
-	for y in range(LEG_TOP_ROW, h):
+	var leg_top := int(float(h) * LEG_TOP_FRACTION)
+	_clear_rows(frame, leg_top, h)
+	for y in range(leg_top, h):
 		for x in w:
 			var c := base.get_pixel(x, y)
 			if c.a == 0.0:
 				continue
-			var dx := 1 if x < w / 2 else -1
+			var dx := FRAME_SHIFT if x < w / 2 else -FRAME_SHIFT
 			var nx := x + dx
 			if nx >= 0 and nx < w:
 				frame.set_pixel(nx, y, c)
@@ -81,7 +94,7 @@ func _walk_frame(base: Image, frame_index: int) -> Image:
 func _attack_frame(base: Image, frame_index: int) -> Image:
 	if frame_index == 0:
 		return _copy(base)
-	return _shifted(base, 2, 0)
+	return _shifted(base, FRAME_SHIFT, 0)
 
 
 ## Head dips down: the top half of the sprite shifts down one row.
@@ -103,12 +116,13 @@ func _eat_frame(base: Image, frame_index: int) -> Image:
 ## Only the upper body shows over a water-blue band; the creature bobs
 ## down one pixel on the off frame.
 func _swim_frame(base: Image, frame_index: int) -> Image:
-	var frame := _shifted(base, 0, 1 if frame_index != 0 else 0)
+	var frame := _shifted(base, 0, FRAME_SHIFT if frame_index != 0 else 0)
 	var w := base.get_width()
 	var h := base.get_height()
-	for y in range(WATER_TOP_ROW, h):
+	var water_top := int(float(h) * WATER_TOP_FRACTION)
+	for y in range(water_top, h):
 		for x in w:
-			frame.set_pixel(x, y, WATER_SURFACE_COLOR if y == WATER_TOP_ROW else WATER_COLOR)
+			frame.set_pixel(x, y, WATER_SURFACE_COLOR if y == water_top else WATER_COLOR)
 	return frame
 
 

@@ -9,20 +9,31 @@ const SPECIES := ["boar", "lynx", "herbivore", "predator"]
 ## one of the 4 hand-drawn shape families (see SHAPE_MATE below) with its own
 ## color, per CreatureRenderer's per-biome species pools.
 const NEW_SPECIES := [
-	"camel", "jackal", "reindeer", "arctic_fox", "tapir", "jaguar", "goat", "mountain_lion"
+	"camel", "jackal", "reindeer", "arctic_fox", "tapir", "jaguar", "goat", "mountain_lion", "horse",
+	"deer", "bear", "lion"
 ]
 
 ## Maps each new species to the one of the original 4 species it should share
-## a silhouette (shape family) with.
+## a silhouette (shape family) with. Horse/deer join this group: real horses
+## and deer are both slender-legged ungulates, so both reuse deer_shape
+## rather than needing new art -- the same reasoning as camel/reindeer/goat.
+## Bear reuses boar_shape (both heavy-bodied, low-slung quadrupeds). Lion
+## reuses lynx_shape -- lions are cats, anatomically closer to the lynx
+## silhouette than the wolf one (see
+## docs/concept/ecosystem_dynamics.md's Species roster section).
 const SHAPE_MATE := {
 	"camel": "herbivore",
 	"reindeer": "herbivore",
 	"goat": "herbivore",
+	"horse": "herbivore",
+	"deer": "herbivore",
 	"jackal": "predator",
 	"mountain_lion": "predator",
 	"arctic_fox": "lynx",
 	"jaguar": "lynx",
+	"lion": "lynx",
 	"tapir": "boar",
+	"bear": "boar",
 }
 
 
@@ -152,16 +163,23 @@ func test_boar_is_browner_and_darker_than_lynx():
 func test_lynx_has_ear_tufts_reaching_the_top_rows_unlike_boar():
 	var lynx: Image = generator.generate_image("lynx", 5)
 	var boar: Image = generator.generate_image("boar", 5)
-	var lynx_top_opaque := 0
-	var boar_top_opaque := 0
-	for y in 3:
-		for x in ProceduralAnimalSprite.WIDTH:
-			if lynx.get_pixel(x, y).a > 0.0:
-				lynx_top_opaque += 1
-			if boar.get_pixel(x, y).a > 0.0:
-				boar_top_opaque += 1
-	assert_gt(lynx_top_opaque, 0, "lynx ears should reach the top rows")
-	assert_eq(boar_top_opaque, 0, "stocky boar should stay low in the frame")
+	# Compares each animal's TOPMOST occupied row rather than counting
+	# pixels in the first three: the old hand-drawn bitmaps happened to put
+	# lynx ears on row 0, but anatomy-built animals are framed by their own
+	# proportions and neither reaches the very top. The real claim is that
+	# an upright-eared cat carries its head higher than a stocky boar.
+	assert_lt(
+		_topmost_opaque_row(lynx), _topmost_opaque_row(boar),
+		"an upright lynx should reach higher than a stocky boar"
+	)
+
+
+func _topmost_opaque_row(image: Image) -> int:
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.0:
+				return y
+	return image.get_height()
 
 
 func test_unknown_species_falls_back_to_herbivore_shape():
@@ -242,15 +260,22 @@ func test_new_species_are_ringed_with_the_shared_dark_outline():
 		assert_true(_has_pixel(image, PixelPalette.OUTLINE), "%s should use the shared outline" % species)
 
 
-func test_new_species_reuse_their_shape_mates_silhouette():
+## This used to assert the OPPOSITE -- that each new species reused its
+## shape-mate's silhouette pixel for pixel. That design is exactly what was
+## reported as broken ("herbivore, deer and horse look exactly the same"),
+## so species now differ by real anatomy (see AnimalAnatomy) and the test
+## pins the distinctness instead of the sharing.
+func test_new_species_do_not_share_a_silhouette_with_their_shape_mate():
 	for species in NEW_SPECIES:
 		var mate: String = SHAPE_MATE[species]
+		if mate == species:
+			continue
 		var species_image: Image = generator.generate_image(species, 3)
 		var mate_image: Image = generator.generate_image(mate, 3)
-		assert_eq(
+		assert_gt(
 			_opacity_diff_count(species_image, mate_image),
 			0,
-			"%s should reuse %s's silhouette" % [species, mate]
+			"%s should have its own silhouette, not %s's" % [species, mate]
 		)
 
 
@@ -269,7 +294,7 @@ func test_new_species_have_a_base_color_distinct_from_their_shape_mate():
 
 
 func test_every_species_has_a_visually_distinct_base_color_from_every_other():
-	var all_species: Array = SPECIES + NEW_SPECIES
+	var all_species: Array = SPECIES + NEW_SPECIES + ["mouse", "venomous_snake", "nonvenomous_snake"]
 	for i in all_species.size():
 		for j in range(i + 1, all_species.size()):
 			var a: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[all_species[i]]
@@ -311,3 +336,197 @@ func test_jaguar_has_speckle_spots_that_other_lynx_shaped_species_lack():
 	var arctic_fox: Image = generator.generate_image("arctic_fox", 3)
 	assert_gt(_spot_pixel_count(jaguar), 0, "jaguar should have speckle spots")
 	assert_eq(_spot_pixel_count(arctic_fox), 0, "arctic_fox should not have jaguar's speckle spots")
+
+
+# -- mouse: a genuinely new (5th) shape family, not a reuse of the original 4 --
+#
+# Unlike every other species so far, mice don't read as any existing
+# silhouette at any scale (short legs, round body, long tail) -- see
+# docs/concept/ecosystem_dynamics.md's Species roster section -- so mouse
+# gets its own hand-authored "mouse_shape" family instead of a SHAPE_MATE.
+
+func test_mouse_gets_its_own_shape_family_not_one_of_the_original_four():
+	var family: String = ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY.get("mouse", "")
+	assert_eq(family, "mouse_shape")
+	assert_false(
+		["deer_shape", "boar_shape", "wolf_shape", "lynx_shape"].has(family),
+		"mouse should not reuse one of the original 4 silhouettes"
+	)
+
+
+func test_mouse_generated_image_has_the_expected_size():
+	var image: Image = generator.generate_image("mouse", 1)
+	assert_eq(image.get_width(), ProceduralAnimalSprite.WIDTH)
+	assert_eq(image.get_height(), ProceduralAnimalSprite.HEIGHT)
+
+
+func test_mouse_generated_image_has_transparent_corners():
+	var image: Image = generator.generate_image("mouse", 1)
+	assert_eq(image.get_pixel(0, 0).a, 0.0)
+	assert_eq(image.get_pixel(ProceduralAnimalSprite.WIDTH - 1, ProceduralAnimalSprite.HEIGHT - 1).a, 0.0)
+
+
+func test_mouse_generated_image_has_a_body():
+	var image: Image = generator.generate_image("mouse", 1)
+	assert_gt(_opaque_count(image), 15, "mouse should have a visible body")
+
+
+func test_mouse_generated_image_is_not_a_single_flat_color():
+	var image: Image = generator.generate_image("mouse", 1)
+	var distinct := {}
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			if pixel.a > 0.0:
+				distinct[pixel] = true
+	assert_gt(distinct.size(), 3, "mouse should be shaded and outlined")
+
+
+func test_mouse_generated_image_is_deterministic_per_seed():
+	var first: Image = generator.generate_image("mouse", 42)
+	var second: Image = generator.generate_image("mouse", 42)
+	assert_eq(_pixel_diff_count(first, second), 0)
+
+
+func test_mouse_is_ringed_with_the_shared_dark_outline():
+	var image: Image = generator.generate_image("mouse", 1)
+	assert_true(_has_pixel(image, PixelPalette.OUTLINE))
+
+
+## Mouse is meant to be the visually simplest/smallest of the five families
+## (it renders small on screen) -- smaller opaque footprint than every one of
+## the four original quadruped silhouettes.
+func test_mouse_has_a_smaller_silhouette_than_every_original_species():
+	var mouse_count := _opaque_count(generator.generate_image("mouse", 1))
+	for species in SPECIES:
+		var count := _opaque_count(generator.generate_image(species, 1))
+		assert_lt(mouse_count, count, "mouse should be smaller than %s" % species)
+
+
+# -- snakes: another genuinely new (6th) shape family, low and long ---------
+#
+# Real venomous snakes often carry a real, visible warning pattern (see
+# docs/concept/ecosystem_dynamics.md's Species roster) -- venomous_snake
+# gets diamond/warning speckle marks (same technique as jaguar's rosettes)
+# that nonvenomous_snake lacks, so the visual distinction is grounded, not
+## just an arbitrary recolor.
+
+const SNAKE_SPECIES := ["venomous_snake", "nonvenomous_snake"]
+
+
+func test_snakes_get_their_own_shape_family_not_one_of_the_original_four():
+	for species in SNAKE_SPECIES:
+		var family: String = ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY.get(species, "")
+		assert_eq(family, "snake_shape", species)
+		assert_false(
+			["deer_shape", "boar_shape", "wolf_shape", "lynx_shape"].has(family),
+			"%s should not reuse one of the original 4 silhouettes" % species
+		)
+
+
+func test_snake_generated_images_have_the_expected_size():
+	for species in SNAKE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_eq(image.get_width(), ProceduralAnimalSprite.WIDTH, species)
+		assert_eq(image.get_height(), ProceduralAnimalSprite.HEIGHT, species)
+
+
+func test_snake_generated_images_have_transparent_corners():
+	for species in SNAKE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_eq(image.get_pixel(0, 0).a, 0.0, species)
+
+
+func test_snake_generated_images_have_a_body():
+	for species in SNAKE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_gt(_opaque_count(image), 15, "%s should have a visible body" % species)
+
+
+func test_snake_generated_images_are_deterministic_per_seed():
+	for species in SNAKE_SPECIES:
+		var first: Image = generator.generate_image(species, 42)
+		var second: Image = generator.generate_image(species, 42)
+		assert_eq(_pixel_diff_count(first, second), 0, species)
+
+
+func test_venomous_snake_has_warning_pattern_marks_that_nonvenomous_lacks():
+	var venomous: Image = generator.generate_image("venomous_snake", 3)
+	var nonvenomous: Image = generator.generate_image("nonvenomous_snake", 3)
+	assert_gt(_spot_pixel_count(venomous), 0, "venomous_snake should have warning-pattern marks")
+	assert_eq(_spot_pixel_count(nonvenomous), 0, "nonvenomous_snake should not have warning-pattern marks")
+
+
+# -- anatomy-driven silhouettes (docs/concept/pixel_art_engine.md) ----------
+#
+# Species used to share four hand-drawn bitmaps -- horse, deer and the
+# generic herbivore were literally the same sprite in different colours.
+# They are now assembled from AnimalAnatomy proportions.
+
+const AnimalAnatomy = preload("res://src/rendering/animal_anatomy.gd")
+
+
+func _silhouette(species: String) -> Array:
+	## Per-row opaque pixel counts: the animal's shape, ignoring colour.
+	var image: Image = generator.generate_image(species, 3)
+	var rows := []
+	for y in image.get_height():
+		var count := 0
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.0:
+				count += 1
+		rows.append(count)
+	return rows
+
+
+## The reported bug, pinned: these are different ANIMALS, not recolours.
+func test_horse_deer_and_herbivore_have_different_silhouettes():
+	var horse := _silhouette("horse")
+	var deer := _silhouette("deer")
+	var herbivore := _silhouette("herbivore")
+	assert_ne(horse, deer, "a horse and a deer must not share a silhouette")
+	assert_ne(horse, herbivore, "a horse and a herbivore must not share a silhouette")
+	assert_ne(deer, herbivore, "a deer and a herbivore must not share a silhouette")
+
+
+func test_every_profiled_species_renders_a_non_empty_animal():
+	for species in AnimalAnatomy.SPECIES:
+		var rows := _silhouette(species)
+		var total := 0
+		for count in rows:
+			total += count
+		assert_gt(total, 20, "%s should render a real body" % species)
+
+
+## A horse stands taller than a boar: its topmost opaque row is higher up.
+func test_a_horse_stands_taller_than_a_boar():
+	var horse := _silhouette("horse")
+	var boar := _silhouette("boar")
+	var horse_top := 0
+	while horse_top < horse.size() and horse[horse_top] == 0:
+		horse_top += 1
+	var boar_top := 0
+	while boar_top < boar.size() and boar[boar_top] == 0:
+		boar_top += 1
+	assert_lt(horse_top, boar_top, "the horse's head should reach higher than the boar's")
+
+
+## Antlers put pixels ABOVE the head that a hornless animal of the same
+## build doesn't have.
+func test_antlered_species_are_taller_than_their_hornless_equivalent():
+	var deer := _silhouette("deer")
+	var herbivore := _silhouette("herbivore")
+	var deer_top := 0
+	while deer_top < deer.size() and deer[deer_top] == 0:
+		deer_top += 1
+	var herb_top := 0
+	while herb_top < herbivore.size() and herbivore[herb_top] == 0:
+		herb_top += 1
+	assert_lt(deer_top, herb_top, "antlers should reach above a hornless herbivore's head")
+
+
+func test_generated_animals_stay_deterministic():
+	assert_eq(
+		generator.generate_image("horse", 5).get_data(),
+		generator.generate_image("horse", 5).get_data()
+	)

@@ -6,9 +6,11 @@ extends RefCounted
 ## no real AI/pathfinding/behavior yet.
 
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const ProceduralAnimalSprite = preload("res://src/rendering/procedural_animal_sprite.gd")
 const CreatureInfo = preload("res://src/world/creature_info.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
+const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 
 const HERBIVORE_COLOR := Color(0.65, 0.5, 0.2)
 const BOAR_COLOR := Color(0.25, 0.18, 0.12)
@@ -37,21 +39,44 @@ const PREDATOR_SPECIES_POOL := ["predator", "predator", "predator", "lynx"]
 ## VegetationGrowthModel.CARRYING_CAPACITY_BY_BIOME -- so population always
 ## rounds to 0 there regardless of pool) fall back to the generic
 ## HERBIVORE_SPECIES_POOL/PREDATOR_SPECIES_POOL above.
+## Mouse joins every non-ocean biome's pool (real mice are near-ubiquitous
+## generalists, not a biome specialist like the others); horse joins only
+## grassland and desert (real wild/feral horses are a grassland/dry-steppe
+## grazer) -- see docs/concept/ecosystem_dynamics.md's Species roster section.
+## Deer/nonvenomous_snake join alongside the existing specialists (ordinary,
+## ungated roster additions -- real deer are a common temperate grazer, real
+## non-venomous snakes are widespread). Bear/lion/venomous_snake also join
+## here, but are gated by MIN_DIFFICULTY_TIER_BY_SPECIES below -- being
+## listed in a biome's pool means "ecologically plausible there", not
+## "always spawns there" for the dangerous three (see
+## docs/concept/ecosystem_dynamics.md's Region difficulty section).
 const HERBIVORE_SPECIES_POOL_BY_BIOME := {
-	"grassland": ["herbivore", "herbivore", "herbivore", "boar"],
-	"forest": ["boar", "boar", "boar", "herbivore"],
-	"desert": ["camel", "camel", "camel", "herbivore"],
-	"tundra": ["reindeer", "reindeer", "reindeer", "herbivore"],
-	"rainforest": ["tapir", "tapir", "tapir", "herbivore"],
-	"mountain": ["goat", "goat", "goat", "herbivore"],
+	"grassland": ["herbivore", "herbivore", "herbivore", "boar", "horse", "mouse", "mouse", "deer", "nonvenomous_snake"],
+	"forest": ["boar", "boar", "boar", "herbivore", "mouse", "mouse", "deer", "nonvenomous_snake"],
+	"desert": ["camel", "camel", "camel", "herbivore", "horse", "mouse", "nonvenomous_snake"],
+	"tundra": ["reindeer", "reindeer", "reindeer", "herbivore", "mouse", "deer"],
+	"rainforest": ["tapir", "tapir", "tapir", "herbivore", "mouse", "mouse", "nonvenomous_snake"],
+	"mountain": ["goat", "goat", "goat", "herbivore", "mouse"],
 }
 const PREDATOR_SPECIES_POOL_BY_BIOME := {
-	"grassland": ["predator", "predator", "predator", "lynx"],
-	"forest": ["lynx", "lynx", "lynx", "predator"],
-	"desert": ["jackal", "jackal", "jackal", "predator"],
-	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "predator"],
-	"rainforest": ["jaguar", "jaguar", "jaguar", "predator"],
+	"grassland": ["predator", "predator", "predator", "lynx", "lion"],
+	"forest": ["lynx", "lynx", "lynx", "predator", "bear"],
+	"desert": ["jackal", "jackal", "jackal", "predator", "lion", "venomous_snake"],
+	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "predator", "bear"],
+	"rainforest": ["jaguar", "jaguar", "jaguar", "predator", "venomous_snake"],
 	"mountain": ["mountain_lion", "mountain_lion", "mountain_lion", "predator"],
+}
+
+## The three genuinely dangerous new additions -- everything else in the
+## roster (including the original 12 species, mice, horses, deer,
+## nonvenomous_snake) has no entry here and defaults to Tier.EASY (always
+## available wherever its biome already allows), so this is additive to the
+## existing roster, not a retrofit/rebalance of it. See
+## docs/concept/ecosystem_dynamics.md#region-difficulty-gating-the-roster-by-player-readiness.
+const MIN_DIFFICULTY_TIER_BY_SPECIES := {
+	"bear": RegionDifficulty.Tier.HARD,
+	"lion": RegionDifficulty.Tier.HARD,
+	"venomous_snake": RegionDifficulty.Tier.HARD,
 }
 
 const SPECIES_COLORS := {
@@ -80,11 +105,16 @@ var _drop_shadow := DropShadow.new()
 ## `world` (duck-typed biome_at_global) is handed to each marker so it can
 ## sense terrain/threats/prey and run full AI; pass null (default) for callers
 ## that only need static placeholders (e.g. isolated rendering tests).
-## `biome_name` (default "", appended last so every pre-existing call site
-## keeps compiling unchanged) picks this chunk's species pool from
+## `biome_name` (default "", appended so every pre-existing call site keeps
+## compiling unchanged) picks this chunk's species pool from
 ## HERBIVORE_SPECIES_POOL_BY_BIOME/PREDATOR_SPECIES_POOL_BY_BIOME; empty or
 ## unmapped falls back to the generic HERBIVORE_SPECIES_POOL/
 ## PREDATOR_SPECIES_POOL, i.e. today's pre-biome behavior.
+## `difficulty_tier` (default RegionDifficulty.Tier.HARD, the most
+## permissive tier, so every pre-existing call site keeps behaving exactly
+## as before) filters out any species whose MIN_DIFFICULTY_TIER_BY_SPECIES
+## exceeds it -- see docs/concept/ecosystem_dynamics.md's Region difficulty
+## section.
 func spawn_creatures(
 	parent: Node2D,
 	chunk_coord: Vector2i,
@@ -94,10 +124,15 @@ func spawn_creatures(
 	herbivore_population: float,
 	predator_population: float,
 	world = null,
-	biome_name: String = ""
+	biome_name: String = "",
+	difficulty_tier: int = RegionDifficulty.Tier.HARD
 ) -> Array[Node2D]:
-	var herbivore_pool: Array = HERBIVORE_SPECIES_POOL_BY_BIOME.get(biome_name, HERBIVORE_SPECIES_POOL)
-	var predator_pool: Array = PREDATOR_SPECIES_POOL_BY_BIOME.get(biome_name, PREDATOR_SPECIES_POOL)
+	var herbivore_pool := _allowed_pool(
+		HERBIVORE_SPECIES_POOL_BY_BIOME.get(biome_name, HERBIVORE_SPECIES_POOL), difficulty_tier
+	)
+	var predator_pool := _allowed_pool(
+		PREDATOR_SPECIES_POOL_BY_BIOME.get(biome_name, PREDATOR_SPECIES_POOL), difficulty_tier
+	)
 
 	var spawned: Array[Node2D] = []
 	spawned.append_array(
@@ -113,6 +148,18 @@ func spawn_creatures(
 		)
 	)
 	return spawned
+
+
+## Drops any pool entry whose own minimum difficulty tier exceeds the
+## region's current tier -- e.g. "bear" is filtered out of forest's pool
+## below Tier.HARD. Species with no MIN_DIFFICULTY_TIER_BY_SPECIES entry
+## default to Tier.EASY (0), so they're never filtered.
+func _allowed_pool(pool: Array, difficulty_tier: int) -> Array:
+	var allowed: Array = []
+	for species in pool:
+		if MIN_DIFFICULTY_TIER_BY_SPECIES.get(species, RegionDifficulty.Tier.EASY) <= difficulty_tier:
+			allowed.append(species)
+	return allowed
 
 
 func _spawn_species(
@@ -164,6 +211,10 @@ func _build_marker(
 ) -> CreatureMarker:
 	var marker := CreatureMarker.new()
 	marker.texture = _animal_sprite.generate_texture(species_name, wander_seed)
+	# The animal art is authored DETAIL_MULTIPLIER times oversized for pixel
+	# detail; scaling it back down keeps the creature's world footprint
+	# unchanged (see docs/concept/art_resolution.md).
+	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	marker.position = position
 	marker.home = position
 	marker.wander_seed = wander_seed
