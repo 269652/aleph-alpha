@@ -139,6 +139,7 @@ var _skill_window: SkillTreeWindow
 var _settings_overlay: SettingsOverlay
 var _main_menu: MainMenu
 var _menu_backdrop: ColorRect
+var _menu_background: TextureRect
 ## Shared dark/rounded UI theme (see UiTheme), assigned to every window/menu so
 ## the whole UI reads as one styled system rather than raw grey boxes.
 var _ui_theme := UiTheme.new().build_theme()
@@ -227,13 +228,36 @@ func _ready() -> void:
 		_show_main_menu()
 
 
+## Path to the menu's painted backdrop (see concept art prompt in the commit
+## this was added in). Optional -- MENU_BACKGROUND_PATH missing just means
+## the plain dim ColorRect (below) is all that shows, so dropping the asset
+## in later works with no code change.
+const MENU_BACKGROUND_PATH := "res://assets/backgrounds/main.png"
+
+
 ## Builds the start-up main menu (see MainMenu). The world is paused behind it
 ## (the menu itself keeps running via PROCESS_MODE_ALWAYS) until a choice is made.
 func _show_main_menu() -> void:
-	# A full-screen dim backdrop so the game world/HUD doesn't bleed through
-	# behind the menu (it did before this pass).
+	# The painted backdrop, if present -- covers the full screen, cropped
+	# (not stretched/squashed) to whatever aspect ratio the viewport is.
+	if ResourceLoader.exists(MENU_BACKGROUND_PATH):
+		_menu_background = TextureRect.new()
+		_menu_background.texture = load(MENU_BACKGROUND_PATH)
+		_menu_background.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_menu_background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_menu_background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		_menu_background.process_mode = Node.PROCESS_MODE_ALWAYS
+		_ui.add_child(_menu_background)
+
+	# A dim overlay so the game world/HUD doesn't bleed through behind the
+	# menu (it did before this pass) and the panel stays readable over the
+	# backdrop art -- much lighter than before now there's real art to show
+	# through it; falls back to a near-opaque dim on its own if the art is
+	# missing.
 	_menu_backdrop = ColorRect.new()
-	_menu_backdrop.color = Color(0.04, 0.05, 0.07, 0.94)
+	_menu_backdrop.color = (
+		Color(0.02, 0.02, 0.04, 0.45) if _menu_background != null else Color(0.04, 0.05, 0.07, 0.94)
+	)
 	_menu_backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_menu_backdrop.process_mode = Node.PROCESS_MODE_ALWAYS
 	_ui.add_child(_menu_backdrop)
@@ -269,6 +293,9 @@ func _dismiss_main_menu() -> void:
 	if _menu_backdrop != null:
 		_menu_backdrop.queue_free()
 		_menu_backdrop = null
+	if _menu_background != null:
+		_menu_background.queue_free()
+		_menu_background = null
 
 
 func _start_server() -> void:
