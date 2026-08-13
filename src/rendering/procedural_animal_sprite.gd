@@ -371,7 +371,11 @@ func _paint_body(image: Image, profile: Dictionary, coat: Color, center: Vector2
 			var lift := hump * sin(along * PI) * (0.6 + 0.4 * along)
 			var shifted := Vector2(point.x, point.y + lift * 0.5)
 			var shifted_half := Vector2(half.x, half.y + lift * 0.5)
-			if _form.ellipse_depth(center, shifted_half, shifted) <= 0.0:
+			# A superellipse rather than a plain oval: `barrel_squareness`
+			# flattens the top and bottom into a slab-sided barrel with a
+			# level topline. A pure ellipse reads as a dog no matter how the
+			# legs and neck are proportioned.
+			if _barrel_depth(center, shifted_half, shifted, profile.barrel_squareness) <= 0.0:
 				continue
 			image.set_pixel(x, y, _form.shade(_ramp, coat, center, shifted_half, shifted))
 
@@ -537,3 +541,14 @@ func _outline_silhouette(image: Image) -> void:
 					break
 	for cell in to_outline:
 		image.set_pixel(cell.x, cell.y, outline)
+
+
+## How deep inside the body barrel a point is, as a superellipse: exponent 2
+## is a plain oval, higher exponents square it off into the deep slab-sided
+## chest a horse or an ox actually has.
+func _barrel_depth(center: Vector2, half: Vector2, point: Vector2, squareness: float) -> float:
+	var nx := absf(point.x - center.x) / maxf(half.x, 0.001)
+	var ny := absf(point.y - center.y) / maxf(half.y, 0.001)
+	var exponent: float = lerp(2.0, 5.0, clampf(squareness, 0.0, 1.0))
+	var d := pow(nx, exponent) + pow(ny, exponent)
+	return 0.0 if d >= 1.0 else 1.0 - pow(d, 1.0 / exponent)

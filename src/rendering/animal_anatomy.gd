@@ -70,6 +70,11 @@ static func has_profile(species: String) -> bool:
 ##   ear_size                 relative to the head
 ##   leg_length/leg_thickness
 ##   tail/tail_length, headgear, has_mane
+##   barrel_squareness        0 = a plain oval, 1 = a deep slab-sided barrel
+##                            with a level topline. Horses and cattle are
+##                            slab-sided; an oval body reads as a dog
+##                            (reported: "horses shouldn't have an oval
+##                            body... looks more like a dog").
 ##   world_scale              how big this species is in the WORLD, relative
 ##                            to a mid-sized grazer at 1.0. Every species is
 ##                            drawn on one shared canvas, so without this a
@@ -81,6 +86,7 @@ const _PROFILES := {
 	# The generic herbivore: a compact, unremarkable grazer. Deliberately
 	# plainer than the named species so they read as distinct FROM it.
 	"herbivore": {
+		"barrel_squareness": 0.45,
 		"world_scale": 1.0,
 		"body_length": 0.52, "body_height": 0.26, "body_y": 0.50, "shoulder_hump": 0.02,
 		"neck_length": 0.16, "neck_thickness": 0.10, "neck_carriage": NECK_UPRIGHT,
@@ -91,6 +97,7 @@ const _PROFILES := {
 	},
 	# Slender, fine-boned, antlered, with a short upright scut.
 	"deer": {
+		"barrel_squareness": 0.4,
 		"world_scale": 1.15,
 		"body_length": 0.50, "body_height": 0.22, "body_y": 0.46, "shoulder_hump": 0.03,
 		"neck_length": 0.20, "neck_thickness": 0.085, "neck_carriage": NECK_UPRIGHT,
@@ -101,6 +108,7 @@ const _PROFILES := {
 	},
 	# The tall one: long neck, deep chest, long legs, mane and flowing tail.
 	"horse": {
+		"barrel_squareness": 0.8,
 		"world_scale": 1.6,
 		"body_length": 0.58, "body_height": 0.27, "body_y": 0.42, "shoulder_hump": 0.04,
 		"neck_length": 0.26, "neck_thickness": 0.12, "neck_carriage": NECK_UPRIGHT,
@@ -111,6 +119,7 @@ const _PROFILES := {
 	},
 	# Compact and stocky, with backswept horns and a beard.
 	"goat": {
+		"barrel_squareness": 0.5,
 		"world_scale": 0.85,
 		"body_length": 0.46, "body_height": 0.24, "body_y": 0.50, "shoulder_hump": 0.02,
 		"neck_length": 0.14, "neck_thickness": 0.10, "neck_carriage": NECK_UPRIGHT,
@@ -121,6 +130,7 @@ const _PROFILES := {
 	},
 	# Defined by the hump and a long neck on long legs.
 	"camel": {
+		"barrel_squareness": 0.6,
 		"world_scale": 1.5,
 		"body_length": 0.54, "body_height": 0.26, "body_y": 0.44, "shoulder_hump": 0.16,
 		"neck_length": 0.28, "neck_thickness": 0.10, "neck_carriage": NECK_UPRIGHT,
@@ -131,6 +141,7 @@ const _PROFILES := {
 	},
 	# A heavier deer with a fuller neck and bigger antlers.
 	"reindeer": {
+		"barrel_squareness": 0.55,
 		"world_scale": 1.25,
 		"body_length": 0.54, "body_height": 0.25, "body_y": 0.47, "shoulder_hump": 0.06,
 		"neck_length": 0.18, "neck_thickness": 0.115, "neck_carriage": NECK_UPRIGHT,
@@ -143,6 +154,7 @@ const _PROFILES := {
 	# -- low, bulky rooters -------------------------------------------------
 	# Wedge-shaped: massive humped shoulders, head carried low, short legs.
 	"boar": {
+		"barrel_squareness": 0.55,
 		"world_scale": 1.25,
 		"body_length": 0.56, "body_height": 0.30, "body_y": 0.56, "shoulder_hump": 0.10,
 		"neck_length": 0.07, "neck_thickness": 0.17, "neck_carriage": NECK_LOW,
@@ -152,6 +164,7 @@ const _PROFILES := {
 		"headgear": HEADGEAR_TUSKS, "has_mane": false,
 	},
 	"tapir": {
+		"barrel_squareness": 0.5,
 		"world_scale": 1.2,
 		"body_length": 0.58, "body_height": 0.29, "body_y": 0.54, "shoulder_hump": 0.05,
 		"neck_length": 0.08, "neck_thickness": 0.15, "neck_carriage": NECK_LOW,
@@ -161,6 +174,7 @@ const _PROFILES := {
 		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 	"bear": {
+		"barrel_squareness": 0.45,
 		"world_scale": 1.5,
 		"body_length": 0.58, "body_height": 0.32, "body_y": 0.52, "shoulder_hump": 0.09,
 		"neck_length": 0.08, "neck_thickness": 0.18, "neck_carriage": NECK_LOW,
@@ -172,6 +186,7 @@ const _PROFILES := {
 
 	# -- level-backed predators ---------------------------------------------
 	"wolf": {
+		"barrel_squareness": 0.3,
 		"world_scale": 1.0,
 		"body_length": 0.54, "body_height": 0.22, "body_y": 0.50, "shoulder_hump": 0.04,
 		"neck_length": 0.13, "neck_thickness": 0.115, "neck_carriage": NECK_LEVEL,
@@ -181,6 +196,7 @@ const _PROFILES := {
 		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 	"lynx": {
+		"barrel_squareness": 0.25,
 		"world_scale": 0.8,
 		"body_length": 0.46, "body_height": 0.21, "body_y": 0.51, "shoulder_hump": 0.03,
 		"neck_length": 0.09, "neck_thickness": 0.11, "neck_carriage": NECK_LEVEL,
@@ -190,6 +206,7 @@ const _PROFILES := {
 		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 	"jaguar": {
+		"barrel_squareness": 0.3,
 		"world_scale": 1.15,
 		"body_length": 0.56, "body_height": 0.23, "body_y": 0.52, "shoulder_hump": 0.05,
 		"neck_length": 0.10, "neck_thickness": 0.13, "neck_carriage": NECK_LEVEL,
@@ -199,6 +216,7 @@ const _PROFILES := {
 		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 	"predator": {
+		"barrel_squareness": 0.3,
 		"world_scale": 1.0,
 		"body_length": 0.52, "body_height": 0.22, "body_y": 0.51, "shoulder_hump": 0.04,
 		"neck_length": 0.11, "neck_thickness": 0.115, "neck_carriage": NECK_LEVEL,
@@ -212,6 +230,7 @@ const _PROFILES := {
 	# No legs, no neck, no ears: a long low body and a very long tapering
 	# tail. Nothing else in the roster shares this build.
 	"venomous_snake": {
+		"barrel_squareness": 0.15,
 		"world_scale": 0.7,
 		"body_length": 0.44, "body_height": 0.10, "body_y": 0.70, "shoulder_hump": 0.0,
 		"neck_length": 0.0, "neck_thickness": 0.07, "neck_carriage": NECK_LEVEL,
@@ -221,6 +240,7 @@ const _PROFILES := {
 		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 	"nonvenomous_snake": {
+		"barrel_squareness": 0.15,
 		"world_scale": 0.7,
 		"body_length": 0.42, "body_height": 0.09, "body_y": 0.72, "shoulder_hump": 0.0,
 		"neck_length": 0.0, "neck_thickness": 0.065, "neck_carriage": NECK_LEVEL,
@@ -233,6 +253,7 @@ const _PROFILES := {
 	# -- the small exception ------------------------------------------------
 	# Tiny body, oversized ears, long bare tail -- nothing like the others.
 	"mouse": {
+		"barrel_squareness": 0.2,
 		"world_scale": 0.35,
 		"body_length": 0.30, "body_height": 0.16, "body_y": 0.62, "shoulder_hump": 0.01,
 		"neck_length": 0.03, "neck_thickness": 0.09, "neck_carriage": NECK_LEVEL,

@@ -53,7 +53,14 @@ func test_faces_the_direction_it_is_moving():
 	var before := marker.position
 	marker._process(1.0)
 	var moved := marker.position - before
+	# Facing lags travel on purpose (see FACING_TURN_DELAY): a real bird
+	# banks slowly while its wings beat fast, and mirroring the instant the
+	# wander's horizontal component crosses zero made the sprite strobe and
+	# read as two overlapping birds. So the facing is asserted only after
+	# the flyer has held that heading past the turn delay.
 	if absf(moved.x) >= marker.FACING_DEADZONE:
+		for i in 30:
+			marker.face_travel(moved, 0.1)
 		assert_eq(marker.flip_h, moved.x < 0.0)
 	assert_almost_eq(marker.rotation, 0.0, 0.0001, "a flyer must never spin")
 

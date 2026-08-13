@@ -9,6 +9,7 @@ const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -220,6 +221,185 @@ func test_catch_nearest_fish_returns_empty_string_when_none_in_range():
 	manager.update(_berlin_tile)
 	var far_from_everything := Vector2(-999999.0, -999999.0)
 	assert_eq(manager.catch_nearest_fish(far_from_everything, 5.0), "")
+
+
+# -- ambient flyers: decorative butterflies/songbirds (see AmbientFlyerRenderer) --
+
+const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
+
+
+func _loaded_ambient_flyer_markers() -> Array:
+	var markers := []
+	for child in creatures_parent.get_children():
+		if child is AmbientFlyerMarker:
+			markers.append(child)
+	return markers
+
+
+func test_update_spawns_ambient_flyers_near_berlin():
+	manager.update(_berlin_tile)
+	assert_gt(_loaded_ambient_flyer_markers().size(), 0)
+
+
+func test_evicting_old_chunks_frees_their_ambient_flyers():
+	manager.update(_berlin_tile)
+	var flyers_near_berlin := _loaded_ambient_flyer_markers()
+	assert_gt(flyers_near_berlin.size(), 0)
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	for flyer in flyers_near_berlin:
+		assert_false(is_instance_valid(flyer), "Berlin's ambient flyers should be freed once out of range")
+
+
+# -- piscivore birds: kingfishers dive for fish (see PiscivoreBirdRenderer,
+# PiscivoreBirdMarker) and actually decrement the aquatic population --------
+
+const PiscivoreBirdMarker = preload("res://src/rendering/piscivore_bird_marker.gd")
+
+
+func _loaded_piscivore_bird_markers() -> Array:
+	var markers := []
+	for child in creatures_parent.get_children():
+		if child is PiscivoreBirdMarker:
+			markers.append(child)
+	return markers
+
+
+func test_fish_population_near_matches_fish_population_at_chunk():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		(center_chunk.x * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE,
+		(center_chunk.y * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE
+	)
+	assert_almost_eq(
+		manager.fish_population_near(pixel), manager.fish_population_at_chunk(center_chunk), 0.001
+	)
+
+
+func test_record_fish_catch_near_decrements_the_right_chunk():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		(center_chunk.x * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE,
+		(center_chunk.y * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE
+	)
+	var before := manager.fish_population_near(pixel)
+	manager.record_fish_catch_near(pixel, 1.0)
+	assert_almost_eq(manager.fish_population_near(pixel), maxf(0.0, before - 1.0), 0.001)
+
+
+func test_update_may_spawn_a_kingfisher_near_berlins_water():
+	manager.update(_berlin_tile)
+	assert_gt(_loaded_piscivore_bird_markers().size(), 0)
+
+
+func test_evicting_old_chunks_frees_their_kingfishers():
+	manager.update(_berlin_tile)
+	var birds_near_berlin := _loaded_piscivore_bird_markers()
+	assert_gt(birds_near_berlin.size(), 0)
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	for bird in birds_near_berlin:
+		assert_false(is_instance_valid(bird), "Berlin's kingfishers should be freed once out of range")
+
+
+## See docs/concept/fishing.md#aquatic-population-model.
+
+func test_update_seeds_fish_population_for_loaded_water_regions_around_berlin():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var found_water_chunk := false
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		if manager.fish_population_at_chunk(chunk_coord) > 0.0:
+			found_water_chunk = true
+	assert_true(
+		found_water_chunk,
+		"expected at least one loaded chunk near Berlin to have a seeded fish population"
+	)
+
+
+## Fishes out EVERY loaded water chunk (not just one) so there's no
+## untouched neighbor left to migrate fish back in from -- migration
+## restocking a single fished-out chunk from an adjacent healthy one is
+## correct, intended behavior (see docs/concept/fishing.md's "gradually
+## restocks from adjacent untouched water"), not something this test should
+## fight; a region with nothing left anywhere nearby is the real zero case.
+func test_step_ecosystem_shows_no_fish_markers_once_the_whole_loaded_region_is_fished_out():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var any_water := false
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		var population := manager.fish_population_at_chunk(chunk_coord)
+		if population > 0.0:
+			any_water = true
+			manager._ecosystem.record_catch(chunk_coord, population)
+	assert_true(any_water, "precondition: some loaded chunk near Berlin has fish")
+
+	manager.step_ecosystem(EarthChunkManager.SECONDS_PER_SIMULATED_DAY)
+
+	assert_eq(
+		_loaded_fish_markers().size(), 0,
+		"an entirely fished-out region should show no fish markers after the next ecosystem refresh"
+	)
+
+
+func test_catch_nearest_fish_decrements_the_chunks_aggregate_fish_population():
+	manager.update(_berlin_tile)
+	var fish: Array = _loaded_fish_markers()
+	assert_gt(fish.size(), 0)
+	var target = fish[0]
+	var target_position: Vector2 = target.position
+	var target_tile := Vector2i(
+		floori(target_position.x / TerrainRenderer.TILE_SIZE),
+		floori(target_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	var target_chunk := _chunk_coord_for_tile(target_tile)
+	var before := manager.fish_population_at_chunk(target_chunk)
+
+	manager.catch_nearest_fish(target_position, 1.0)
+
+	assert_lt(manager.fish_population_at_chunk(target_chunk), before)
+
+
+## A real app restart has no in-memory _unloaded_ecology at all -- only disk
+## persistence survives it. Rather than actually constructing a second
+## EarthChunkManager (which re-triggers a harmless-but-noisy engine resource
+## warning mid-test that GUT's error capture misattributes as a failure of
+## THIS test, since it fires outside before_each), this drops the in-session
+## catch-up record directly -- the exact condition `_load_chunk`'s
+## `had_in_session_catchup` check is testing for -- so the same disk-read
+## branch is exercised precisely, with the same manager instance.
+func test_fish_population_survives_being_forgotten_from_in_session_memory():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var target_chunk := Vector2i.ZERO
+	var found := false
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		if manager.fish_population_at_chunk(chunk_coord) > 0.0:
+			target_chunk = chunk_coord
+			found = true
+			break
+	assert_true(found, "precondition: some loaded chunk near Berlin has fish")
+
+	manager._ecosystem.record_catch(target_chunk, manager.fish_population_at_chunk(target_chunk))
+	assert_eq(manager.fish_population_at_chunk(target_chunk), 0.0)
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)  # evicts Berlin's chunks, writing fish population to disk
+	manager._unloaded_ecology.erase(target_chunk)  # simulate a fresh session's empty memory
+
+	manager.update(_berlin_tile)  # reload
+
+	assert_eq(manager.fish_population_at_chunk(target_chunk), 0.0)
+
+	var path := "user://chunk_fish_population/%d_%d.bin" % [target_chunk.x, target_chunk.y]
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 
 
 # -- set_attraction_point / clear_attraction_point (see Player._fishing_step) --
@@ -435,6 +615,38 @@ func _dominant_biome_of_chunk(chunk_coord: Vector2i) -> String:
 			var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
 			biome_array.append(manager.biome_at_global(global_x, global_y))
 	return BiomeClassifier.new().dominant_biome(biome_array)
+
+
+# -- region difficulty (see docs/concept/ecosystem_dynamics.md's Region
+# difficulty section) -- dangerous species (bear/lion/venomous_snake) are
+# gated behind HARD difficulty, itself a distance-from-spawn gradient.
+
+func test_set_spawn_tile_makes_nearby_regions_use_easy_difficulty():
+	manager.set_spawn_tile(_berlin_tile)
+	manager.update(_berlin_tile)
+
+	for child in creatures_parent.get_children():
+		if child is CreatureMarker and child.info != null:
+			assert_false(
+				child.info.species in ["bear", "lion", "venomous_snake"],
+				"dangerous species should not appear at EASY difficulty near the configured spawn"
+			)
+
+
+## Without set_spawn_tile ever being called (e.g. a manager constructed
+## directly, as most of this test file's tests do), difficulty defaults to
+## HARD -- fails open to "nothing is gated" rather than silently changing
+## every other test in this file's existing species-pool behavior.
+func test_without_a_configured_spawn_difficulty_defaults_to_unrestricted():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	assert_eq(manager._difficulty_tier_at(center_chunk), RegionDifficulty.Tier.HARD)
+
+
+func test_a_configured_spawns_own_chunk_is_easy_difficulty():
+	manager.set_spawn_tile(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	assert_eq(manager._difficulty_tier_at(center_chunk), RegionDifficulty.Tier.EASY)
 
 
 func test_promoted_creatures_near_berlin_only_use_species_from_their_chunks_biome_pool():
@@ -673,3 +885,28 @@ func _child_instance_ids(parent: Node2D) -> Array[int]:
 	for child in parent.get_children():
 		ids.append(child.get_instance_id())
 	return ids
+
+
+# -- a bird's catch must take a real fish -----------------------------------
+#
+# record_fish_catch_near only decremented a float, so a successful dive
+# removed nothing visible: no fish disappeared, nothing to see. The player's
+# own catch has always removed the actual FishMarker; a bird's now does too.
+
+func test_a_bird_catch_removes_an_actual_fish_from_the_water():
+	var fish_scene := preload("res://src/rendering/fish_marker.gd")
+	var fish = fish_scene.new()
+	fish.position = Vector2(40, 40)
+	fish.species = "trout"
+	creatures_parent.add_child(fish)
+	manager._loaded_fish[Vector2i(0, 0)] = [fish]
+
+	var taken: bool = manager.record_fish_catch_near(Vector2(42, 42), 1.0)
+
+	assert_true(taken, "a catch within reach should take a fish")
+	assert_eq(manager._loaded_fish[Vector2i(0, 0)].size(), 0, "the fish should leave the water")
+
+
+func test_a_bird_catch_with_no_fish_in_reach_takes_nothing():
+	manager._loaded_fish[Vector2i(0, 0)] = []
+	assert_false(manager.record_fish_catch_near(Vector2(40, 40), 1.0))

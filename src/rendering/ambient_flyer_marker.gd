@@ -45,13 +45,26 @@ func _process(delta: float) -> void:
 	position = _movement.step_position(home, position, _elapsed_time, delta, wander_seed)
 	var moved := position - before
 	if moved.length() > 0.001:
-		face_travel(moved)
+		face_travel(moved, delta)
 
 
 ## How much horizontal travel is needed before the sprite mirrors. Without
 ## a deadzone, a near-vertical drift jitters either side of zero and the
 ## bird strobes between facings.
 const FACING_DEADZONE := 0.05
+
+## The bird must want to turn for this long before it actually does.
+##
+## A deadzone alone was not enough: the wander's horizontal component
+## crosses zero constantly, so the sprite still mirrored several times a
+## second and read as two overlapping birds. A real bird BANKS slowly and
+## flaps fast -- the wings are the quick part, the heading is not. Holding
+## a facing until the flyer has genuinely been travelling the other way for
+## this long separates those two rates.
+const FACING_TURN_DELAY := 1.4
+
+## How long the flyer has continuously wanted to face the other way.
+var _contrary_travel_time := 0.0
 
 
 ## Points the flyer the way it is travelling by MIRRORING it, never by
@@ -60,7 +73,15 @@ const FACING_DEADZONE := 0.05
 ## bird upside-down -- reported as "birds appear doubled as they rotate 180
 ## degree with every wing flap". The art is drawn facing right, so facing
 ## left is a horizontal flip.
-func face_travel(direction: Vector2) -> void:
+func face_travel(direction: Vector2, delta: float = 0.0) -> void:
 	if absf(direction.x) < FACING_DEADZONE:
 		return  # too vertical to imply a facing -- keep the current one
-	flip_h = direction.x < 0.0
+	var wants_flip := direction.x < 0.0
+	if wants_flip == flip_h:
+		_contrary_travel_time = 0.0
+		return
+	# Only commit to the turn once the flyer has meant it for a while.
+	_contrary_travel_time += delta
+	if _contrary_travel_time >= FACING_TURN_DELAY or delta <= 0.0:
+		flip_h = wants_flip
+		_contrary_travel_time = 0.0

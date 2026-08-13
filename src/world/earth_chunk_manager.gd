@@ -835,9 +835,39 @@ func fish_population_near(pixel_position: Vector2) -> float:
 ## the duck-typed hook a piscivore bird's successful grab calls (see
 ## PiscivoreBirdMarker), the same EcosystemSimulation.record_catch
 ## catch_nearest_fish above uses for the player's own catch.
-func record_fish_catch_near(pixel_position: Vector2, count: float) -> void:
+## Returns true if a fish was actually taken.
+##
+## This used to only decrement the chunk's aggregate float, so a bird's
+## successful dive removed NOTHING the player could see -- no fish vanished
+## from the water, no feedback of any kind, which is why the mechanic was
+## invisible despite being fully wired. It now removes a real FishMarker
+## within BIRD_CATCH_RADIUS as well, exactly as the player's own catch does
+## (see catch_nearest_fish), so a hunting bird visibly thins the shoal.
+func record_fish_catch_near(pixel_position: Vector2, count: float) -> bool:
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
 	_ecosystem.record_catch(chunk_coord, count)
+
+	var nearest: Node2D = null
+	var nearest_distance := BIRD_CATCH_RADIUS
+	for fish_list in _loaded_fish.values():
+		for fish in fish_list:
+			var distance: float = pixel_position.distance_to(fish.position)
+			if distance <= nearest_distance:
+				nearest = fish
+				nearest_distance = distance
+	if nearest == null:
+		return false
+
+	for chunk_key in _loaded_fish.keys():
+		_loaded_fish[chunk_key].erase(nearest)
+	nearest.queue_free()
+	return true
+
+
+## How close a diving bird must be to a fish to actually take it. Generous
+## relative to the dive animation, since the bird aims at the shoal's
+## aggregate population rather than at one tracked target.
+const BIRD_CATCH_RADIUS := 48.0
 
 
 ## True if a merchant villager (see VillageRenderer, NpcIdentity.OCCUPATIONS)

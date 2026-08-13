@@ -2,6 +2,17 @@ extends RefCounted
 
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
+## How big each flyer is in the world, relative to its drawn art. A
+## butterfly is a thumbnail; a kingfisher is a proper bird.
+const FLYER_WORLD_SCALE := {
+	"sparrow": 0.34,
+	"robin": 0.38,
+	"kingfisher": 0.46,
+	"monarch": 0.22,
+	"swallowtail": 0.24,
+	"blue_morpho": 0.26,
+}
+
 ## Chunk-based spawn/despawn of ambient wildlife (butterflies, songbirds) --
 ## same "one node per qualifying cell, deterministic per global coordinate,
 ## capped" shape as FishRenderer/CreatureRenderer, but deliberately
@@ -152,7 +163,9 @@ func _build_marker(
 	# Art is authored DETAIL_MULTIPLIER times oversized; scaling it back
 	# keeps the flyer the same size in the world (see
 	# docs/concept/art_resolution.md).
-	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	# Scaled by the species' real size too: a butterfly is a fraction of a
+	# bird, and both were rendering at one shared size.
+	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FLYER_WORLD_SCALE.get(species, 0.5)
 	marker.position = position
 	marker.home = position
 	marker.wander_seed = seed_value
