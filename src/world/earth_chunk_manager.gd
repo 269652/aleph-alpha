@@ -491,7 +491,10 @@ func step_tree_spread(delta_seconds: float) -> void:
 			continue
 
 		chunk.planted_trees.append({"position": position, "planted_at": _world_age_seconds})
-		var tree := _tree_renderer.spawn_tree_at(_entities_parent, position)
+		# Just planted: it comes up as a seedling and thickens over the
+		# following stages (see TreeGrowth), so spread is something you can
+		# watch happen rather than trees popping in full-grown.
+		var tree := _tree_renderer.spawn_tree_at(_entities_parent, position, 0.0)
 		_loaded_trees[chunk_coord].append(tree)
 	_spread_tick += 1
 
@@ -996,7 +999,13 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
 	)
 	for record in chunk.planted_trees:
-		_loaded_trees[chunk_coord].append(_tree_renderer.spawn_tree_at(_entities_parent, record.position))
+		# A sapling reloaded with its chunk resumes at the size its age
+		# earns it, rather than restarting as a seedling every time the
+		# player walks away and back.
+		var sapling_age: float = _world_age_seconds - float(record.get("planted_at", 0.0))
+		_loaded_trees[chunk_coord].append(
+			_tree_renderer.spawn_tree_at(_entities_parent, record.position, sapling_age)
+		)
 
 	_loaded_stones[chunk_coord] = _stone_renderer.spawn_stones(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE

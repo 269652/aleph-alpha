@@ -71,3 +71,11 @@ func test_only_mature_stages_are_productive():
 
 func test_is_deterministic():
 	assert_eq(growth.stage_at(123.4), growth.stage_at(123.4))
+
+
+## Callers pass INF to mean "this has always been here" (map-generated
+## forest). int(INF) collapses rather than clamping, which silently turned
+## every mature forest tree into a seedling.
+func test_an_infinite_age_is_fully_mature():
+	assert_eq(growth.stage_at(INF), TreeGrowth.STAGE_COUNT - 1)
+	assert_almost_eq(growth.scale_at(INF), 1.0, 0.001)

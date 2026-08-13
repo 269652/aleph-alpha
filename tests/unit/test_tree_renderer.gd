@@ -201,3 +201,38 @@ func test_the_trunk_is_close_to_a_tile_wide():
 	var trunk_world_width := ProceduralTreeSprite.trunk_world_width()
 	assert_gte(trunk_world_width, float(TerrainRenderer2.TILE_SIZE) * 0.6)
 	assert_lte(trunk_world_width, float(TerrainRenderer2.TILE_SIZE) * 1.2)
+
+
+# -- saplings actually start small ------------------------------------------
+#
+# TreeGrowth was plumbed in but every spawn path defaulted to "mature", so
+# a freshly spread sapling appeared as a full-grown tree and the growth
+# stages were never seen.
+
+const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
+
+
+func test_a_freshly_planted_tree_spawns_as_a_seedling():
+	var tree := renderer.spawn_tree_at(parent, Vector2(32, 32), 0.0)
+	assert_almost_eq(tree.growth_scale, TreeGrowth.SEEDLING_SCALE, 0.001)
+
+
+func test_a_long_established_tree_spawns_full_grown():
+	var tree := renderer.spawn_tree_at(parent, Vector2(64, 64), TreeGrowth.MATURITY_SECONDS * 2.0)
+	assert_almost_eq(tree.growth_scale, 1.0, 0.001)
+
+
+## A half-grown sapling is visibly between the two, which is the whole point
+## of having stages.
+func test_a_half_grown_tree_is_between_seedling_and_full():
+	var tree := renderer.spawn_tree_at(parent, Vector2(96, 96), TreeGrowth.MATURITY_SECONDS * 0.5)
+	assert_gt(tree.growth_scale, TreeGrowth.SEEDLING_SCALE)
+	assert_lt(tree.growth_scale, 1.0)
+
+
+## Map-generated forest predates the session, so it stands mature.
+func test_original_forest_trees_spawn_mature():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	assert_gt(spawned.size(), 0)
+	assert_almost_eq(spawned[0].growth_scale, 1.0, 0.001)

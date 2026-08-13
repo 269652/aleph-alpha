@@ -61,8 +61,11 @@ func spawn_trees(
 ## Spawns a single collidable tree node at an explicit position -- for a
 ## seed-spread sapling (see TreeSpread/EarthChunkManager.step_tree_spread)
 ## planted outside the original map-generated forest.
-func spawn_tree_at(parent: Node2D, position: Vector2) -> ChoppableTree:
-	var tree := _build_tree_node(position)
+## `age_seconds` is how long the tree has stood (see TreeGrowth). Defaults
+## to INF -- fully grown -- for callers that mean "a tree that was always
+## here"; a freshly spread sapling passes 0.0 and starts as a seedling.
+func spawn_tree_at(parent: Node2D, position: Vector2, age_seconds: float = INF) -> ChoppableTree:
+	var tree := _build_tree_node(position, age_seconds)
 	tree.position = position
 	parent.add_child(tree)
 	return tree

@@ -37,6 +37,12 @@ const PRODUCTIVE_STAGE := 4
 func stage_at(age_seconds: float) -> int:
 	if age_seconds <= 0.0:
 		return 0
+	# Guard the mature end BEFORE converting to int: callers pass INF to mean
+	# "this has always been here" (map-generated forest), and int(INF) does
+	# not clamp to a large value -- it collapses, which silently turned every
+	# mature forest tree into a seedling.
+	if age_seconds >= MATURITY_SECONDS:
+		return STAGE_COUNT - 1
 	var fraction := age_seconds / MATURITY_SECONDS
 	return clampi(int(fraction * float(STAGE_COUNT)), 0, STAGE_COUNT - 1)
 
