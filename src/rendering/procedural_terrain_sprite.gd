@@ -8,7 +8,13 @@ extends RefCounted
 ## TerrainRenderer picks a variant per tile position so the ground doesn't
 ## read as one obviously-repeating texture.
 
-const SIZE := 16
+## 4x the original 16px tile (see docs/concept/art_resolution.md) -- every
+## feature-level constant below (blade height, moss blob size, foam band
+## width, ...) scales in step so the tile's composition stays the same,
+## just genuinely more detailed: independent per-pixel speckle noise across
+## 4x the pixels, not the old 16x16 art stretched larger (pinned by
+## test_speckled_texture_has_genuine_per_pixel_detail_not_upscaled_blocks).
+const SIZE := 64
 
 ## Frames per animated tile (see generate_frame_image and TerrainRenderer's
 ## animated atlas blocks). Every animated pattern is designed to loop
@@ -79,7 +85,7 @@ func generate_frame_image(biome_name: String, variant_seed: int, frame: int) -> 
 			_paint_dune_ripples(image, base_color, variant_seed)
 		"tundra":
 			_paint_speckled(image, base_color, variant_seed)
-			_paint_scatter(image, base_color.darkened(0.28), variant_seed, "stones", 3)
+			_paint_scatter(image, base_color.darkened(0.28), variant_seed, "stones", 5)
 		"mountain":
 			_paint_speckled(image, base_color, variant_seed)
 			_paint_cracks(image, base_color, variant_seed)
@@ -112,8 +118,10 @@ func _paint_speckled(image: Image, base_color: Color, variant_seed: int) -> void
 ## raindrop ripples on top at partial alpha, so this tile's job is just to
 ## give the water a believable base tint/texture underneath -- shore
 ## blending and rain both moved entirely to the overlay (see
-## TerrainRenderer.build_water_overlay_tile_set).
-const WIND_GLINT_COUNT := 5
+## TerrainRenderer.build_water_overlay_tile_set). Scaled 4x in step with
+## SIZE (see docs/concept/art_resolution.md) so glint density per visible
+## tile area stays the same as before the resolution pass.
+const WIND_GLINT_COUNT := 20
 
 
 func _paint_water(image: Image, base_color: Color, variant_seed: int, frame: int = 0) -> void:
@@ -142,47 +150,83 @@ func _paint_water(image: Image, base_color: Color, variant_seed: int, frame: int
 			continue  # this crest collapses for one frame -- twinkle
 		var gy := h % SIZE
 		var gx := (h / 37 + wrapped) % SIZE
-		var length := 2 + (h / 211) % 3
+		var length := 8 + (h / 211) % 9
 		for k in length:
 			image.set_pixel((gx + k) % SIZE, clampi(gy - (k / 2), 0, SIZE - 1), glint_color)
 		image.set_pixel(gx, clampi(gy + 1, 0, SIZE - 1), glint_soft)
 	var trough_color := base_color.darkened(0.22)
-	for i in 4:
+	for i in 16:
 		var h := absi(hash("%d_trough_%d" % [variant_seed, i]))
 		var ty := h % SIZE
 		var tx := posmod(h / 41 - wrapped, SIZE)
-		for k in 3:
+		for k in 12:
 			image.set_pixel((tx + k) % SIZE, ty, trough_color)
 
 
 ## Individual grass blades: BLADE_COUNT per tile, each with its own
-## hash-derived position, height (2-4px), color (3 green tones), and sway
-## phase (see blade_spec -- the pure, tested core). Blades bend progressively
-## in the wind: the root stays planted, the tip carries the full [0,1,0,-1]
-## lean cycle, mid pixels bend halfway -- so grass reads as living blades
-## rather than stamped tufts.
-const BLADE_COUNT := 4
-## Tip lean per animation frame, in px. Was [0,1,0,-1] -- a 1px shuffle that
-## read as static at screen scale; the wider asymmetric cycle is an obvious,
-## organic whip (and still wraps seamlessly over FRAME_COUNT).
-const _TUFT_SWAY := [0, 2, 1, -2]
+## hash-derived position, height (8-16px -- 4x the original 2-4px, see
+## docs/concept/art_resolution.md), color (3 green tones), and sway phase
+## (see blade_spec -- the pure, tested core). Blades bend progressively in
+## the wind: the root stays planted, the tip carries the full lean cycle,
+## mid pixels bend halfway -- so grass reads as living blades rather than
+## stamped tufts. BLADE_COUNT scales with the tile's linear resolution (4x),
+## not its area, so blades stay individually legible instead of crowding.
+## Enough blades that a tile reads as a dense meadow rather than a few
+## strokes on a flat field (reported: "the grass tiles don't look nice
+## anymore... make it look more like real grass blades"). A 64px tile has
+## the room for a real population -- pinned by
+## test_grassland_is_densely_covered_in_blades.
+const BLADE_COUNT := 52
+## Tip lean per animation frame, in px -- 4x the original [0,2,1,-2] so the
+## sway stays proportional to the taller blade (still wraps seamlessly over
+## FRAME_COUNT).
+const _TUFT_SWAY := [0, 8, 4, -8]
+## A blade's width at its root, tapering to 1px at the tip (see
+## blade_width_at). A uniform-width stroke reads as a painted stripe; real
+## grass is widest where it leaves the ground.
+const BLADE_ROOT_WIDTH := 3
+## How sharply a blade curves: the lean grows with this power of the
+## root->tip fraction, so the root stays planted and the bend accelerates
+## toward the tip (a curve, not a straight diagonal -- see
+## blade_curve_fraction).
+const BLADE_CURVE_POWER := 2.0
+
+
+## How many pixels wide a blade is at `t` along its length (0 = root,
+## 1 = tip) -- linear taper from BLADE_ROOT_WIDTH down to a 1px tip.
+func blade_width_at(t: float) -> int:
+	return maxi(1, int(round(lerp(float(BLADE_ROOT_WIDTH), 1.0, clampf(t, 0.0, 1.0)))))
+
+
+## How much of a blade's full tip-lean applies at `t` along its length
+## (0 = root, 1 = tip). Non-linear so the blade curves out of the ground
+## instead of leaning as a straight line.
+func blade_curve_fraction(t: float) -> float:
+	return pow(clampf(t, 0.0, 1.0), BLADE_CURVE_POWER)
 
 
 func blade_spec(variant_seed: int, index: int) -> Dictionary:
 	var h := absi(hash("%d_blade_%d" % [variant_seed, index]))
 	return {
 		"x": 1 + h % (SIZE - 2),
-		"base_y": 5 + (h / 53) % (SIZE - 7),
-		"height": 2 + (h / 349) % 3,
-		"color_index": (h / 1117) % 3,
+		# Roots spread over the whole tile (not just its lower band) so the
+		# meadow covers the ground evenly rather than banding.
+		"base_y": 10 + (h / 53) % (SIZE - 12),
+		"height": 8 + (h / 349) % 19,
+		"color_index": (h / 1117) % 5,
 		"phase": (h / 4111) % FRAME_COUNT,
 	}
 
 
 func _paint_grass_blades(image: Image, base_color: Color, variant_seed: int, frame: int) -> void:
+	# Five tones rather than three: deep shade through sunlit highlight plus
+	# a dry yellow-green, so overlapping blades read as depth in a meadow
+	# instead of one flat green mass.
 	var blade_colors := [
-		base_color.darkened(0.2),
+		base_color.darkened(0.34),
+		base_color.darkened(0.22),
 		base_color.darkened(0.1),
+		base_color.lightened(0.1),
 		Color(base_color.r * 1.06, base_color.g * 0.92, base_color.b * 0.55),  # dry yellow-green
 	]
 	for i in BLADE_COUNT:
@@ -196,16 +240,23 @@ func _paint_grass_blades(image: Image, base_color: Color, variant_seed: int, fra
 			var y: int = spec.base_y - k
 			if y < 0:
 				break
-			var bend := float(k) / maxf(height - 1, 1.0)
-			var x := clampi(spec.x + int(round(lean * bend)), 0, SIZE - 1)
-			# Sun-lit tip so each blade ends crisply.
-			image.set_pixel(x, y, color.lightened(0.22) if k == height - 1 else color)
+			var t := float(k) / maxf(height - 1, 1.0)
+			var x := clampi(spec.x + int(round(lean * blade_curve_fraction(t))), 0, SIZE - 1)
+			# Sun-lit tip so each blade ends crisply, and a tapered width so
+			# it reads as a blade rather than a stripe.
+			var stroke_color := color.lightened(0.24) if k >= height - 2 else color
+			for w in blade_width_at(t):
+				var px := clampi(x + w, 0, SIZE - 1)
+				image.set_pixel(px, y, stroke_color)
 
 
-## Occasional flower accents (static -- flowers don't sway at 16px): roughly
-## every third variant gets 1-2 bright petal pixels, so walking a meadow
-## passes little bursts of white/yellow/red among the green.
+## Occasional flower accents (static -- flowers don't sway): roughly every
+## third variant gets 1-2 bright petal clusters, so walking a meadow passes
+## little bursts of white/yellow/red among the green. Each petal is a
+## _FLOWER_SIZE px square (was a single hairline pixel) so it reads as an
+## actual bloom at the new tile resolution instead of a stray fleck.
 const _FLOWER_COLORS := [Color(0.95, 0.95, 0.9), Color(0.98, 0.85, 0.25), Color(0.9, 0.3, 0.3)]
+const _FLOWER_SIZE := 3
 
 
 func _paint_flowers(image: Image, variant_seed: int) -> void:
@@ -215,42 +266,59 @@ func _paint_flowers(image: Image, variant_seed: int) -> void:
 	var flower_count := 1 + (h / 7) % 2
 	for i in flower_count:
 		var fh := absi(hash("%d_flower_%d" % [variant_seed, i]))
-		var fx := 1 + fh % (SIZE - 2)
-		var fy := 1 + (fh / 61) % (SIZE - 2)
+		var fx := 1 + fh % (SIZE - 2 - _FLOWER_SIZE)
+		var fy := 1 + (fh / 61) % (SIZE - 2 - _FLOWER_SIZE)
 		var color: Color = _FLOWER_COLORS[(fh / 397) % _FLOWER_COLORS.size()]
-		image.set_pixel(fx, fy, color)
+		for dy in _FLOWER_SIZE:
+			for dx in _FLOWER_SIZE:
+				image.set_pixel(fx + dx, fy + dy, color)
 
 
-## Dark moss/undergrowth patches on forest-floor tiles: 2-3 small 2x2 blobs of
-## deepened green, so the floor reads as layered undergrowth rather than one
-## flat speckle field.
+## Dark moss/undergrowth patches on forest-floor tiles: a few small filled
+## blobs of deepened green (_MOSS_BLOB_SIZE px square, 4x the original 2x2 --
+## see docs/concept/art_resolution.md), so the floor reads as layered
+## undergrowth rather than one flat speckle field.
+const _MOSS_BLOB_SIZE := 8
+
+
 func _paint_moss(image: Image, base_color: Color, variant_seed: int) -> void:
 	var moss_color := base_color.darkened(0.3)
 	for i in 3:
 		var h := absi(hash("%d_moss_%d" % [variant_seed, i]))
-		var mx := h % (SIZE - 1)
-		var my := (h / 47) % (SIZE - 1)
-		image.set_pixel(mx, my, moss_color)
-		image.set_pixel(mx + 1, my, moss_color)
-		image.set_pixel(mx, my + 1, moss_color)
+		var mx := h % (SIZE - _MOSS_BLOB_SIZE)
+		var my := (h / 47) % (SIZE - _MOSS_BLOB_SIZE)
+		for dy in _MOSS_BLOB_SIZE:
+			for dx in _MOSS_BLOB_SIZE:
+				image.set_pixel(mx + dx, my + dy, moss_color)
 
 
-## Wind-blown dune ripples: two shallow diagonal shade lines across the sand.
+## Wind-blown dune ripples: two shallow diagonal shade lines across the sand,
+## evenly spaced (SIZE / 2 apart) regardless of tile resolution.
 func _paint_dune_ripples(image: Image, base_color: Color, variant_seed: int) -> void:
 	var ripple_color := base_color.darkened(0.12)
-	var offset := absi(hash("%d_dune" % variant_seed)) % 8
+	var offset := absi(hash("%d_dune" % variant_seed)) % SIZE
+	var half := SIZE / 2
 	for x in SIZE:
 		var y1 := (x / 2 + offset) % SIZE
-		var y2 := (x / 2 + offset + 8) % SIZE
+		var y2 := (x / 2 + offset + half) % SIZE
 		image.set_pixel(x, y1, ripple_color)
 		image.set_pixel(x, y2, ripple_color)
 
 
-## A few scattered single-pixel accents (tundra stones etc.).
+## A few scattered small stone accents (tundra etc.): _SCATTER_SIZE px
+## squares (was a single hairline pixel, see docs/concept/art_resolution.md)
+## so each reads as an actual stone rather than a stray fleck.
+const _SCATTER_SIZE := 3
+
+
 func _paint_scatter(image: Image, color: Color, variant_seed: int, salt: String, count: int) -> void:
 	for i in count:
 		var h := absi(hash("%d_%s_%d" % [variant_seed, salt, i]))
-		image.set_pixel(h % SIZE, (h / 43) % SIZE, color)
+		var sx := h % (SIZE - _SCATTER_SIZE)
+		var sy := (h / 43) % (SIZE - _SCATTER_SIZE)
+		for dy in _SCATTER_SIZE:
+			for dx in _SCATTER_SIZE:
+				image.set_pixel(sx + dx, sy + dy, color)
 
 
 ## Foam color for shoreline water (near-white; test_procedural_terrain_sprite
@@ -299,14 +367,31 @@ func _paint_foam_edge(
 			image.set_pixel(inner.x, inner.y, lap_color)
 
 
-## A jagged rock-face crack: a dark 1px line wandering down the tile.
+## A jagged rock-face crack: a dark 1px line wandering down the tile, plus a
+## shorter branch fork partway down -- real branching detail that only
+## became legible once a mountain tile got real vertical room (64px vs the
+## original 16px, see docs/concept/art_resolution.md); a fork at 16px would
+## have had nowhere to go.
 func _paint_cracks(image: Image, base_color: Color, variant_seed: int) -> void:
 	var crack_color := base_color.darkened(0.4)
 	var h := absi(hash("%d_crack" % variant_seed))
 	var x := 2 + h % (SIZE - 4)
+	var branch_start_y := SIZE / 2 + (h / 17) % maxi(SIZE / 4, 1)
+	var branch_x := x
 	for y in range(2, SIZE - 2):
 		x = clampi(x + [-1, 0, 0, 1][(h / (y + 3)) % 4], 1, SIZE - 2)
 		image.set_pixel(x, y, crack_color)
+		if y == branch_start_y:
+			branch_x = x
+
+	var branch_dir := 1 if (h / 29) % 2 == 0 else -1
+	var branch_length := SIZE / 4
+	for k in branch_length:
+		var y := branch_start_y + k
+		if y >= SIZE - 2:
+			break
+		branch_x = clampi(branch_x + branch_dir * ([0, 0, 1][(h / (y + 11)) % 3]), 1, SIZE - 2)
+		image.set_pixel(branch_x, y, crack_color)
 
 
 ## A deterministic pseudo-random fraction in [0, 1] for a pixel, derived from

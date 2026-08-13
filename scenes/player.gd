@@ -23,6 +23,8 @@ const Block = preload("res://src/gameplay/block.gd")
 const HotbarAction = preload("res://src/gameplay/hotbar_action.gd")
 const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
+const VenomModel = preload("res://src/gameplay/venom_model.gd")
+const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const Hotbar = preload("res://src/gameplay/hotbar.gd")
 const FishingCast = preload("res://src/gameplay/fishing_cast.gd")
@@ -43,12 +45,25 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 
 const BASE_SPEED := 80.0
 const PLAYER_SIZE := 12
-## Camera2D zoom -- bumped from the original 3x so pixel art (sprites,
-## terrain, water) reads clearly across a full 1280x720+ window instead of
-## only a small slice of it. Applied in _ready() rather than left as a bare
-## number in player.tscn, so it's a tested constant (see test_player_camera.gd)
-## rather than an eyeballed scene property.
-const CAMERA_ZOOM := Vector2(4, 4)
+## How big one world tile should read on screen once camera-zoomed, in
+## pixels -- the actual tuned/eyeballed value (CLAUDE.md: tuned constants
+## must be pinned, not eyeballed comments). CAMERA_ZOOM below is DERIVED
+## from this divided by TerrainRenderer.TILE_SIZE rather than a bare zoom
+## number, so the framing is stated as an intent ("a tile should read this
+## big") that stays correct on its own terms.
+##
+## The art-resolution pass (docs/concept/art_resolution.md) deliberately
+## does NOT change this: it raises how many art PIXELS are painted per tile
+## (TerrainRenderer.ART_TILE_SIZE), not how much WORLD a tile covers
+## (TerrainRenderer.TILE_SIZE). Conflating those two -- the pass's first
+## attempt bumped TILE_SIZE itself -- made every tile occupy 4x the world
+## footprint, reported as "water squares are gigantic compared to the
+## player".
+const TARGET_TILE_SCREEN_PX := 64.0
+## Applied in _ready() rather than left as a bare number in player.tscn, so
+## it's a tested constant (see test_player_camera.gd) rather than an
+## eyeballed scene property.
+const CAMERA_ZOOM := Vector2.ONE * (TARGET_TILE_SCREEN_PX / TerrainRenderer.TILE_SIZE)
 ## How far (in pixels) position must change between frames for a non-authority
 ## proxy to consider itself "moving" for animation purposes, vs. jitter.
 const PROXY_MOVEMENT_EPSILON := 0.5
@@ -142,6 +157,10 @@ var survival := SurvivalMeters.new()
 ## FoodConsumption.FISH_BUFFS) -- category-slotted, ticked down in
 ## _food_buff_step. Empty means no active buff in any category.
 var active_food_buffs: Array = []
+## Active venom stacks from a venomous snake's bite (see VenomModel,
+## CreatureMarker._try_attack) -- DebuffStack-shaped, ticked down and
+## dealing damage in _venom_step. Empty means not currently poisoned.
+var active_venom_debuffs: Array = []
 var wallet := Wallet.new()
 ## How many number-key hotbar slots exist. World derives its HUD row's slot
 ## count from this (see World.HOTBAR_SLOT_COUNT), so the two can't drift.
@@ -736,6 +755,29 @@ func _food_buff_step(delta: float) -> void:
 		survival.rest(STAMINA_BUFF_REGEN_PER_SECOND * delta)
 
 
+var _debuff_stack := DebuffStack.new()
+var _venom_model := VenomModel.new()
+
+
+## Called by a venomous snake's bite (see CreatureMarker._try_attack):
+## refreshes the venom debuff's duration and adds a stack (capped at
+## VenomModel.MAX_STACKS) -- repeated bites hurt more, not just longer.
+func apply_venom() -> void:
+	active_venom_debuffs = _debuff_stack.apply(
+		active_venom_debuffs, VenomModel.DEBUFF_ID, VenomModel.DURATION_SECONDS, VenomModel.MAX_STACKS
+	)
+
+
+## Authority-only: deals venom's real damage-over-time (see
+## VenomModel.damage_per_second) for however many stacks are active, then
+## ticks the debuff's remaining duration down (expiring it once it runs out).
+func _venom_step(delta: float) -> void:
+	var stacks := _debuff_stack.stacks_of(active_venom_debuffs, VenomModel.DEBUFF_ID)
+	if stacks > 0:
+		take_damage(_venom_model.damage_per_second(stacks) * delta)
+	active_venom_debuffs = _debuff_stack.advance(active_venom_debuffs, delta)
+
+
 ## Melee damage multiplier from an active "combat" category food buff (see
 ## FoodConsumption.FISH_BUFFS's legendary_fish entry) -- 1.0 (no change) when
 ## none is active.
@@ -903,6 +945,7 @@ func _authority_step(delta: float) -> void:
 	_destroy_step()
 	_fishing_step(delta)
 	_food_buff_step(delta)
+	_venom_step(delta)
 	_shop_step(delta)
 
 

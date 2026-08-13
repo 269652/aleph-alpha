@@ -5,8 +5,31 @@ const Chunk = preload("res://src/world/chunk.gd")
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
 const ProceduralShoreDistanceSprite = preload("res://src/rendering/procedural_shore_distance_sprite.gd")
+const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 
+## How many WORLD UNITS one tile occupies. Every gameplay system is built on
+## this -- player movement/collision, spawn placement, chunk streaming,
+## creature/fish positioning, structure proximity -- and the player's own
+## 12-unit body is proportioned against it. It is NOT an art resolution and
+## must not change when art detail changes (see ART_TILE_SIZE): the
+## art-resolution pass's first attempt bumped this to 64, which made every
+## tile cover 4x the world area and was reported as "water squares are
+## gigantic compared to the player".
 const TILE_SIZE := 16
+
+## How many PIXELS OF ART are painted per tile -- 4x TILE_SIZE, so a tile
+## carries 16x the pixel detail of the original 1px-per-world-unit art (see
+## docs/concept/art_resolution.md). Every generator's own SIZE constant is
+## matched to this, and every atlas image/blit/region below is sized in
+## these art pixels.
+const ART_TILE_SIZE := 64
+
+## What a tile LAYER (the TileMapLayer nodes drawing these tiles -- see
+## EarthChunkManager) must be scaled by so ART_TILE_SIZE pixels of art span
+## exactly TILE_SIZE world units. This is the whole mechanism that keeps art
+## resolution and world footprint independent: raise ART_TILE_SIZE for more
+## detail, LAYER_SCALE shrinks to compensate, and the world is unchanged.
+const LAYER_SCALE := float(TILE_SIZE) / float(ART_TILE_SIZE)
 
 ## Representative flat color per biome -- NOT used for actual tile art
 ## anymore (see ProceduralTerrainSprite for that); MinimapRenderer keeps
@@ -86,9 +109,25 @@ const _TILES_PER_PAIR := DIRECTION_MASK_COUNT * BLEND_VARIANTS
 ## the thousands and a single row would exceed the max texture width.
 const ATLAS_COLUMNS := 64
 
+## Bump whenever build_tile_set's pixel-generation logic changes (a new
+## detail pass, a resolution change, a new biome...) -- TerrainAtlasCache
+## keys its cached image to this string, so a stale cache from an older
+## build is never silently reused (see docs/concept/
+## art_resolution.md#boot-performance). Manual, not content-hashed: matches
+## this codebase's existing "bump a version const" conventions elsewhere
+## rather than adding hash-computation machinery for a one-developer project.
+const ATLAS_VERSION := "4x_art_resolution_v3_grass_blades"
+
+## Overridable so tests never touch the real user:// cache (see
+## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
+## these, so it always gets the real cache.
+var atlas_cache_path := TerrainAtlasCache.CACHE_PATH
+var atlas_version_path := TerrainAtlasCache.VERSION_PATH
+
 var _terrain_sprite_generator := ProceduralTerrainSprite.new()
 var _structure_sprite_generator := ProceduralStructureSprite.new()
 var _shore_distance_generator := ProceduralShoreDistanceSprite.new()
+var _atlas_cache := TerrainAtlasCache.new()
 
 
 ## Returns the atlas coordinate for one biome's variant -- the FIRST frame of
@@ -274,22 +313,19 @@ func _grid_coords(linear_index: int) -> Vector2i:
 func _blit_tile(atlas_image: Image, tile_image: Image, linear_index: int) -> void:
 	var coords := _grid_coords(linear_index)
 	atlas_image.blit_rect(
-		tile_image, Rect2i(Vector2i.ZERO, Vector2i(TILE_SIZE, TILE_SIZE)), coords * TILE_SIZE
+		tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)), coords * ART_TILE_SIZE
 	)
 
 
-## Builds a grid-laid-out TileSet: VARIANTS_PER_BIOME procedural tiles per known
-## biome, one player-placeable "earth" tile, one dedicated tile per known
-## placed structure (ProceduralStructureSprite.STRUCTURE_IDS -- campfire,
-## furnace), then a directional blend tile for every ordered pair of distinct
-## biomes x every non-empty cardinal-direction subset (DIRECTION_MASK_COUNT
-## masks) x VARIANTS_PER_BIOME.
-func build_tile_set() -> TileSet:
-	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
-	var total_cells := _blend_base_linear() + biome_count * (biome_count - 1) * _TILES_PER_PAIR
-	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
-
-	var image := Image.create(ATLAS_COLUMNS * TILE_SIZE, rows * TILE_SIZE, false, Image.FORMAT_RGBA8)
+## The expensive part of build_tile_set: paints every biome/structure/blend
+## tile's real pixels into one shared atlas Image. Fully deterministic (same
+## inputs always produce the same pixels), so it's the part cached to disk
+## (see ATLAS_VERSION/atlas_cache_path and build_tile_set's cache check) --
+## ~13.5s measured at the 4x resolution (docs/concept/
+## art_resolution.md#boot-performance) for thousands of tiles at TILE_SIZE^2
+## pixels each, far too slow to pay on every boot.
+func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
+	var image := Image.create(ATLAS_COLUMNS * ART_TILE_SIZE, rows * ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
 
 	# Base biome tiles: FRAME_COUNT animation frames each, blitted into
 	# consecutive cells (the block never wraps a row -- see FRAME_COUNT's doc
@@ -302,7 +338,7 @@ func build_tile_set() -> TileSet:
 				var frame_image := _terrain_sprite_generator.generate_frame_image(biome_name, variant, frame)
 				_blit_tile(image, frame_image, block_start + frame)
 
-	var earth_image := Image.create(TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
+	var earth_image := Image.create(ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
 	earth_image.fill(EARTH_COLOR)
 	_blit_tile(image, earth_image, _earth_linear())
 
@@ -324,9 +360,33 @@ func build_tile_set() -> TileSet:
 					)
 					_blit_tile(image, blend_image, _blend_linear(near_biome, far_biome, mask, variant))
 
+	return image
+
+
+## Builds a grid-laid-out TileSet: VARIANTS_PER_BIOME procedural tiles per known
+## biome, one player-placeable "earth" tile, one dedicated tile per known
+## placed structure (ProceduralStructureSprite.STRUCTURE_IDS -- campfire,
+## furnace), then a directional blend tile for every ordered pair of distinct
+## biomes x every non-empty cardinal-direction subset (DIRECTION_MASK_COUNT
+## masks) x VARIANTS_PER_BIOME. The atlas image itself is cached to disk
+## after the first build (see ATLAS_VERSION/_build_atlas_pixels) -- only the
+## TileSet/TileSetAtlasSource metadata below (cheap, no pixel work) runs on
+## every call regardless of cache state.
+func build_tile_set() -> TileSet:
+	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
+	var total_cells := _blend_base_linear() + biome_count * (biome_count - 1) * _TILES_PER_PAIR
+	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
+
+	var image: Image = null
+	if _atlas_cache.has_valid_cache(ATLAS_VERSION, atlas_cache_path, atlas_version_path):
+		image = _atlas_cache.load_image(atlas_cache_path)
+	if image == null:
+		image = _build_atlas_pixels(biome_count, rows)
+		_atlas_cache.save(image, ATLAS_VERSION, atlas_cache_path, atlas_version_path)
+
 	var source := TileSetAtlasSource.new()
 	source.texture = ImageTexture.create_from_image(image)
-	source.texture_region_size = Vector2i(TILE_SIZE, TILE_SIZE)
+	source.texture_region_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
 
 	# Animated biome tiles: one created tile per block, at its first frame's
 	# cell; the remaining cells of the block are claimed as animation frames
@@ -353,7 +413,7 @@ func build_tile_set() -> TileSet:
 		source.create_tile(_grid_coords(linear_index))
 
 	var tile_set := TileSet.new()
-	tile_set.tile_size = Vector2i(TILE_SIZE, TILE_SIZE)
+	tile_set.tile_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
 	tile_set.add_source(source, 0)
 	return tile_set
 
@@ -479,31 +539,31 @@ func atlas_coords_for_water_overlay(land_directions: Array, ring_distance: int =
 ## frames.
 func build_water_overlay_tile_set() -> TileSet:
 	var total := 1 + DIRECTION_MASK_COUNT + (RING_MAX - 1)
-	var image := Image.create(total * TILE_SIZE, TILE_SIZE, false, Image.FORMAT_RGBA8)
+	var image := Image.create(total * ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
 	image.blit_rect(
 		_shore_distance_generator.generate_deep_water_image(),
-		Rect2i(Vector2i.ZERO, Vector2i(TILE_SIZE, TILE_SIZE)), Vector2i.ZERO
+		Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)), Vector2i.ZERO
 	)
 	for mask in range(1, DIRECTION_MASK_COUNT + 1):
 		var land_directions := _directions_from_mask(mask)
 		var distance_image := _shore_distance_generator.generate_image(land_directions)
 		image.blit_rect(
-			distance_image, Rect2i(Vector2i.ZERO, Vector2i(TILE_SIZE, TILE_SIZE)), Vector2i(mask * TILE_SIZE, 0)
+			distance_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)), Vector2i(mask * ART_TILE_SIZE, 0)
 		)
 	for ring in range(1, RING_MAX):
 		var ring_image := _shore_distance_generator.generate_ring_image(ring, RING_MAX)
 		image.blit_rect(
-			ring_image, Rect2i(Vector2i.ZERO, Vector2i(TILE_SIZE, TILE_SIZE)),
-			Vector2i((DIRECTION_MASK_COUNT + ring) * TILE_SIZE, 0)
+			ring_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),
+			Vector2i((DIRECTION_MASK_COUNT + ring) * ART_TILE_SIZE, 0)
 		)
 
 	var source := TileSetAtlasSource.new()
 	source.texture = ImageTexture.create_from_image(image)
-	source.texture_region_size = Vector2i(TILE_SIZE, TILE_SIZE)
+	source.texture_region_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
 	for i in total:
 		source.create_tile(Vector2i(i, 0))
 
 	var tile_set := TileSet.new()
-	tile_set.tile_size = Vector2i(TILE_SIZE, TILE_SIZE)
+	tile_set.tile_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
 	tile_set.add_source(source, 0)
 	return tile_set

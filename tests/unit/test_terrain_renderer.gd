@@ -4,6 +4,17 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
+const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
+
+## Shared across every test in this file (see docs/concept/
+## art_resolution.md#boot-performance): the first build_tile_set() call
+## populates this cache, and every later call/test in the same run hits it --
+## a real speedup for the suite, not just test isolation from the actual
+## user:// cache. Cache-behavior-specific tests below use their own separate
+## path so they can freely write fake/stale content without corrupting this
+## shared one for every other test.
+const SHARED_TEST_CACHE_PATH := "user://test_terrain_renderer_shared_cache.png"
+const SHARED_TEST_VERSION_PATH := "user://test_terrain_renderer_shared_version.txt"
 
 var renderer: TerrainRenderer
 var tile_map_layer: TileMapLayer
@@ -11,11 +22,141 @@ var tile_map_layer: TileMapLayer
 
 func before_each():
 	renderer = TerrainRenderer.new()
+	renderer.atlas_cache_path = SHARED_TEST_CACHE_PATH
+	renderer.atlas_version_path = SHARED_TEST_VERSION_PATH
 	tile_map_layer = TileMapLayer.new()
 
 
 func after_each():
 	tile_map_layer.free()
+
+
+func after_all():
+	var cache := TerrainAtlasCache.new()
+	cache.wipe(SHARED_TEST_CACHE_PATH, SHARED_TEST_VERSION_PATH)
+
+
+# -- world tile size vs art resolution (docs/concept/art_resolution.md) ------
+# TILE_SIZE is how many WORLD UNITS one tile occupies -- every gameplay
+# system (player movement, spawn math, fish/creature positioning, chunk
+# streaming) is built on it, and the player's own 12-unit body is
+# proportioned against it. ART_TILE_SIZE is how many PIXELS of art are
+# painted per tile. Conflating them (the resolution pass's first attempt
+# simply bumped TILE_SIZE 16->64) made every tile occupy 4x the world
+# footprint: "water squares are gigantic compared to the player". The tile
+# LAYERS render scaled by LAYER_SCALE instead, so a tile's on-screen/world
+# footprint stays exactly what it always was while carrying 16x the art.
+
+func test_world_tile_size_is_unchanged_by_the_art_resolution_pass():
+	assert_eq(TerrainRenderer.TILE_SIZE, 16)
+
+
+func test_art_tile_size_is_4x_the_world_tile_size():
+	assert_eq(TerrainRenderer.ART_TILE_SIZE, 64)
+
+
+## The invariant that keeps art resolution and world footprint independent:
+## a layer drawing ART_TILE_SIZE-pixel tiles, scaled by LAYER_SCALE, spans
+## exactly TILE_SIZE world units per tile.
+func test_layer_scale_maps_art_pixels_back_onto_the_world_tile_footprint():
+	assert_almost_eq(TerrainRenderer.LAYER_SCALE * TerrainRenderer.ART_TILE_SIZE, float(TerrainRenderer.TILE_SIZE), 0.0001)
+
+
+func test_tile_set_texture_cells_are_art_resolution_sized():
+	var tile_set := renderer.build_tile_set()
+	assert_eq(tile_set.tile_size, Vector2i(TerrainRenderer.ART_TILE_SIZE, TerrainRenderer.ART_TILE_SIZE))
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	assert_eq(source.texture_region_size, Vector2i(TerrainRenderer.ART_TILE_SIZE, TerrainRenderer.ART_TILE_SIZE))
+
+
+# -- atlas disk cache (see docs/concept/art_resolution.md#boot-performance) --
+# build_tile_set()'s pixel-painting is fully deterministic and expensive
+# (thousands of tiles at the 4x resolution -- ~13.5s measured), so it's
+# cached to disk after the first build and reloaded on every later call
+# instead of regenerating. These tests use their own dedicated path,
+# separate from SHARED_TEST_CACHE_PATH, so they can freely write fake/stale
+# content without corrupting the cache every other test in this file relies
+# on for speed.
+
+const CACHE_BEHAVIOR_PATH := "user://test_terrain_renderer_cache_behavior.png"
+const CACHE_BEHAVIOR_VERSION_PATH := "user://test_terrain_renderer_cache_behavior_version.txt"
+
+
+func _wipe_cache_behavior_files():
+	TerrainAtlasCache.new().wipe(CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH)
+
+
+## build_tile_set() still creates every biome/structure/blend tile's
+## TileSetAtlasSource entry regardless of cache state (only the pixel
+## painting is skipped) -- so a fake cached image must be the SAME full
+## atlas size real generation would have produced, or Godot logs
+## "room_for_tile" errors for every grid cell beyond the fake image's
+## bounds. Mirrors build_tile_set()'s own size math exactly.
+func _full_atlas_size() -> Vector2i:
+	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
+	var total_cells: int = (
+		renderer._blend_base_linear() + biome_count * (biome_count - 1) * TerrainRenderer._TILES_PER_PAIR
+	)
+	var rows := int(ceil(float(total_cells) / TerrainRenderer.ATLAS_COLUMNS))
+	var art := TerrainRenderer.ART_TILE_SIZE
+	return Vector2i(TerrainRenderer.ATLAS_COLUMNS * art, rows * art)
+
+
+## Proves a valid cache is actually READ (not just present): a fake, easily
+## identifiable image saved under the renderer's own current ATLAS_VERSION
+## should be exactly what build_tile_set()'s resulting texture shows --
+## real generated content is never a uniform solid color.
+func test_build_tile_set_uses_a_valid_cache_instead_of_regenerating():
+	_wipe_cache_behavior_files()
+	renderer.atlas_cache_path = CACHE_BEHAVIOR_PATH
+	renderer.atlas_version_path = CACHE_BEHAVIOR_VERSION_PATH
+
+	var size := _full_atlas_size()
+	var fake := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	fake.fill(Color(1.0, 0.0, 1.0, 1.0))  # solid magenta -- never produced by real generation
+	TerrainAtlasCache.new().save(fake, TerrainRenderer.ATLAS_VERSION, CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH)
+
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var image := source.texture.get_image()
+	assert_eq(image.get_pixel(0, 0), Color(1.0, 0.0, 1.0, 1.0))
+	_wipe_cache_behavior_files()
+
+
+## No cache present -> build_tile_set() must generate fresh AND leave a
+## valid cache behind for next time.
+func test_build_tile_set_writes_a_fresh_cache_when_none_exists():
+	_wipe_cache_behavior_files()
+	renderer.atlas_cache_path = CACHE_BEHAVIOR_PATH
+	renderer.atlas_version_path = CACHE_BEHAVIOR_VERSION_PATH
+
+	renderer.build_tile_set()
+
+	assert_true(
+		TerrainAtlasCache.new().has_valid_cache(
+			TerrainRenderer.ATLAS_VERSION, CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH
+		)
+	)
+	_wipe_cache_behavior_files()
+
+
+## A cache saved under an older/different version must never be reused --
+## the whole point of versioning it at all (see TerrainAtlasCache).
+func test_build_tile_set_ignores_a_stale_version_cache():
+	_wipe_cache_behavior_files()
+	renderer.atlas_cache_path = CACHE_BEHAVIOR_PATH
+	renderer.atlas_version_path = CACHE_BEHAVIOR_VERSION_PATH
+
+	var size := _full_atlas_size()
+	var fake := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	fake.fill(Color(1.0, 0.0, 1.0, 1.0))
+	TerrainAtlasCache.new().save(fake, "a_stale_version_string", CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH)
+
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var image := source.texture.get_image()
+	assert_ne(image.get_pixel(0, 0), Color(1.0, 0.0, 1.0, 1.0))
+	_wipe_cache_behavior_files()
 
 
 func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles():
@@ -186,9 +327,13 @@ func test_water_overlay_tiles_are_real_shore_distance_data_not_a_flat_fill():
 	var source := overlay_set.get_source(0) as TileSetAtlasSource
 	var image: Image = source.texture.get_image()
 	var coords := renderer.atlas_coords_for_water_overlay([Vector2i(0, -1)], 0)
-	var origin := Vector2i(coords.x * TerrainRenderer.TILE_SIZE, coords.y * TerrainRenderer.TILE_SIZE)
-	var edge_pixel := image.get_pixel(origin.x + 8, origin.y)
-	var far_pixel := image.get_pixel(origin.x + 8, origin.y + TerrainRenderer.TILE_SIZE - 1)
+	# Atlas pixel math is in ART pixels, not world units (see
+	# TerrainRenderer.ART_TILE_SIZE) -- sampling with TILE_SIZE landed inside
+	# the wrong atlas cell entirely once the two diverged.
+	var art := TerrainRenderer.ART_TILE_SIZE
+	var origin := Vector2i(coords.x * art, coords.y * art)
+	var edge_pixel := image.get_pixel(origin.x + art / 2, origin.y)
+	var far_pixel := image.get_pixel(origin.x + art / 2, origin.y + art - 1)
 	assert_lt(edge_pixel.r, far_pixel.r, "the land-facing edge should read closer to shore than the far side")
 
 

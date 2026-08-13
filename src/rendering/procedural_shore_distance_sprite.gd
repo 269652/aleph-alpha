@@ -1,14 +1,18 @@
 extends RefCounted
 
-## Per-pixel land-proximity DATA, not art: a 16x16 image whose red channel
-## encodes normalized distance to the nearest land-facing edge (0 right at
-## the edge touching land, 1 at the tile's far side). Consumed by
-## water_shader.gd as a texture sample (never rendered directly) to drive a
-## smooth, continuous alpha fade and shore-wave band on the GPU -- replacing
-## the old baked foam/dash shore tiles, whose fixed 16px tile boundaries read
-## as a jagged staircase around every lake.
+## Per-pixel land-proximity DATA, not art: a 64x64 image (4x the original
+## 16x16, see docs/concept/art_resolution.md -- matched to TerrainRenderer.
+## TILE_SIZE) whose red channel encodes normalized distance to the nearest
+## land-facing edge (0 right at the edge touching land, 1 at the tile's far
+## side). Consumed by water_shader.gd as a texture sample (never rendered
+## directly) to drive a smooth, continuous alpha fade and shore-wave band on
+## the GPU -- replacing the old baked foam/dash shore tiles, whose fixed
+## tile boundaries read as a jagged staircase around every lake. This
+## generator's math is already fully SIZE-relative (see _distance_along), so
+## the resolution bump is a free quality improvement: 4x as many distinct
+## distance samples per tile, no other changes needed.
 
-const SIZE := 16
+const SIZE := 64
 
 
 func generate_texture(land_directions: Array) -> ImageTexture:

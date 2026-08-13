@@ -11,6 +11,7 @@ const MinimapRenderer = preload("res://src/rendering/minimap_renderer.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const PlayerScene = preload("res://scenes/player.tscn")
 const HealthBar = preload("res://src/gameplay/health_bar.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
@@ -173,6 +174,8 @@ var _graphics_fullscreen := false
 var _graphics_vsync := true
 var _death_label: Label
 var _creature_panels_container: VBoxContainer
+var _hover_tooltip: Label
+var _hover_target_finder := HoverTargetFinder.new()
 var _hunger_fill: ColorRect
 var _hunger_label: Label
 var _thirst_fill: ColorRect
@@ -227,6 +230,7 @@ func _ready() -> void:
 	_build_skill_window()
 	_build_settings_overlay()
 	_build_creature_panels_container()
+	_build_hover_tooltip()
 	_build_death_label()
 	_build_survival_bar()
 	_build_xp_bar()
@@ -788,6 +792,37 @@ func _build_creature_panels_container() -> void:
 	_ui.add_child(_creature_panels_container)
 
 
+## A small floating label that follows the mouse cursor, showing whichever
+## animal marker (land creature, fish, ambient flyer, or piscivore bird --
+## see CreatureMarker.HOVERABLE_GROUP) is nearest the cursor, or hidden if
+## nothing is close enough (see HoverTargetFinder).
+func _build_hover_tooltip() -> void:
+	_hover_tooltip = Label.new()
+	_hover_tooltip.add_theme_font_size_override("font_size", 12)
+	_hover_tooltip.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	_hover_tooltip.add_theme_constant_override("shadow_offset_x", 1)
+	_hover_tooltip.add_theme_constant_override("shadow_offset_y", 1)
+	_hover_tooltip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hover_tooltip.visible = false
+	_ui.add_child(_hover_tooltip)
+
+
+## Every frame: finds whichever hoverable animal marker is nearest the mouse
+## cursor (world-space, so it tracks correctly regardless of camera zoom/pan)
+## and shows/hides+positions the tooltip label near the cursor accordingly.
+func _update_hover_tooltip() -> void:
+	var mouse_world := get_global_mouse_position()
+	var candidates: Array = []
+	for marker in get_tree().get_nodes_in_group(CreatureMarker.HOVERABLE_GROUP):
+		candidates.append({"position": marker.position, "name": marker.get_display_name()})
+
+	var found_name := _hover_target_finder.name_under(mouse_world, candidates)
+	_hover_tooltip.visible = found_name != ""
+	if _hover_tooltip.visible:
+		_hover_tooltip.text = found_name
+		_hover_tooltip.position = get_viewport().get_mouse_position() + Vector2(14, -8)
+
+
 ## Big centered "You Died / Respawning in N..." text, hidden until the local
 ## player's is_dead flag flips (see _update_player_health_bar) -- the actual
 ## countdown/respawn happens on Player itself (see Player.RESPAWN_DELAY),
@@ -1190,7 +1225,7 @@ func _update_minimap(player_tile: Vector2i, delta: float) -> void:
 func _on_peer_connected(peer_id: int) -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(peer_id)
-	player.position = Vector2(_compute_dry_land_spawn_tile() * TerrainRenderer.TILE_SIZE)
+	player.position = _spawn_position_for_tile(_compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	_players.add_child(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
@@ -1212,7 +1247,7 @@ func _on_connected_to_server() -> void:
 func _spawn_local_singleplayer() -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(multiplayer.get_unique_id())
-	player.position = Vector2(_compute_dry_land_spawn_tile() * TerrainRenderer.TILE_SIZE)
+	player.position = _spawn_position_for_tile(_compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	player.apply_class(
 		_pending_class, _class_archetypes.stats_for(_pending_class), _pending_appearance
@@ -1246,6 +1281,16 @@ func _spawn_local_singleplayer_from_save() -> void:
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 	_chunk_manager.update(_tile_for_position(saved_position))
 	player.apply_save_dict(save_data)
+
+
+## The world position a player spawning on `tile` should take: the tile's
+## CENTER, matching the `(cell + 0.5) * TILE_SIZE` convention every other
+## placed entity uses (trees/creatures/structures -- see EarthChunkManager).
+## Spawning at the tile's raw corner instead put the hero's sprite (drawn
+## centered on its position) straddling four tiles -- reported as "the
+## player is offset by half a tile".
+func _spawn_position_for_tile(tile: Vector2i) -> Vector2:
+	return (Vector2(tile) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
 
 
 ## Same pixel-position -> wrapped-tile conversion Player.current_tile() uses,
@@ -1311,7 +1356,13 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 		_geo_coordinates.tile_for_latitude(SPAWN_LATITUDE, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	)
 	_chunk_manager.update(spawn_tile)
-	return _find_dry_land_spawn(spawn_tile)
+	var dry_land_tile := _find_dry_land_spawn(spawn_tile)
+	# The real dry-land spawn tile is also the center of the EASY-difficulty
+	# region (see RegionDifficulty / docs/concept/ecosystem_dynamics.md's
+	# Region difficulty section) -- dangerous species (bear/lion/venomous
+	# snake) won't spawn near a fresh character.
+	_chunk_manager.set_spawn_tile(dry_land_tile)
+	return dry_land_tile
 
 
 ## Safety cap so ground items can't accumulate without bound (they'd leak CPU
@@ -1528,6 +1579,7 @@ func _client_process(delta: float) -> void:
 	_update_player_health_bar(local_player)
 	_update_hotbar(local_player)
 	_update_creature_panels(local_player, delta)
+	_update_hover_tooltip()
 	_update_survival_bar(local_player)
 	_update_xp_bar(local_player)
 	_update_fishing_label(local_player)

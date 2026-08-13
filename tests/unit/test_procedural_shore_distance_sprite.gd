@@ -38,7 +38,11 @@ func test_each_cardinal_direction_faces_its_own_edge():
 func test_two_land_directions_take_the_nearer_edge_at_each_pixel():
 	var combo := generator.generate_image([Vector2i(0, -1), Vector2i(1, 0)])  # land north AND east
 	var north_only := generator.generate_image([Vector2i(0, -1)])
-	var point := Vector2i(12, 10)  # close to the east edge, far from the north edge
+	# Close to the east edge, far from the north edge -- expressed as
+	# SIZE-relative fractions (not an absolute pixel pair) so the "which
+	# edge is nearer" relationship this test depends on holds at any tile
+	# resolution (see docs/concept/art_resolution.md).
+	var point := Vector2i(int(SIZE * 0.75), int(SIZE * 0.625))
 	assert_lt(
 		combo.get_pixel(point.x, point.y).r, north_only.get_pixel(point.x, point.y).r,
 		"combining directions should take whichever edge is actually nearer"

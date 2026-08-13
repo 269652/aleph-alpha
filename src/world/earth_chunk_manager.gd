@@ -15,6 +15,8 @@ const GrassBladeField = preload("res://src/rendering/grass_blade_field.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
+const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
+const PiscivoreBirdRenderer = preload("res://src/rendering/piscivore_bird_renderer.gd")
 const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const EcosystemSimulation = preload("res://src/world/ecosystem_simulation.gd")
@@ -30,6 +32,7 @@ const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
+const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 
 ## Where player-made tile modifications (Phase 3 building) are persisted,
 ## keyed per chunk -- terrain itself is deterministically regenerable (see
@@ -40,6 +43,12 @@ const MODIFICATIONS_DIR := "user://chunk_modifications"
 ## step_tree_spread) are persisted -- the original forest is deterministically
 ## regenerable like terrain, so only spread-in trees need saving.
 const PLANTED_TREES_DIR := "user://chunk_planted_trees"
+
+## Where each water chunk's aggregate fish population is persisted -- unlike
+## herbivore/predator/vegetation state (in-memory only, see _unloaded_ecology),
+## this is meant to survive a real game restart (see
+## docs/concept/fishing.md#persistence-a-gap-shared-with-land-ecology-worth-closing-here-first).
+const FISH_POPULATION_DIR := "user://chunk_fish_population"
 
 const CHUNK_SIZE := 32
 ## Chunks within this many chunks of the player are generated/painted.
@@ -86,8 +95,17 @@ var _water_layer: TileMapLayer  # optional GPU water overlay, see set_water_laye
 var _water_material: ShaderMaterial  # the water overlay's shared shader material, see set_rain
 var _creature_renderer := CreatureRenderer.new()
 var _fish_renderer := FishRenderer.new()
+var _ambient_flyer_renderer := AmbientFlyerRenderer.new()
+var _piscivore_bird_renderer := PiscivoreBirdRenderer.new()
 var _village_renderer := VillageRenderer.new()
 var _biome_classifier := BiomeClassifier.new()
+var _region_difficulty := RegionDifficulty.new()
+var _spawn_chunk_coord := Vector2i.ZERO
+## True once set_spawn_tile has actually been called -- distinguishes "spawn
+## is genuinely at the world origin" from "no spawn configured yet", so the
+## latter can safely default to Tier.HARD (unrestricted) instead of
+## silently treating the origin as always-EASY.
+var _spawn_configured := false
 var _ecosystem := EcosystemSimulation.new()
 var _chunk_serializer := ChunkSerializer.new()
 var _forage_scheduler := ForageScheduler.new()
@@ -110,6 +128,8 @@ var _lichen_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vect
 var _lichen_refresh_accumulator := 0.0
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
+var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
+var _loaded_piscivore_birds: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_villages: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _ecosystem_time_accumulator := 0.0
 var _forage_accumulator := 0.0
@@ -126,6 +146,10 @@ var _world_age_seconds := 0.0
 func _init(tile_map_layer: TileMapLayer, entities_parent: Node2D, creatures_parent: Node2D) -> void:
 	_tile_map_layer = tile_map_layer
 	_tile_map_layer.tile_set = _terrain_renderer.build_tile_set()
+	# Tiles are painted at ART_TILE_SIZE pixels but must span only TILE_SIZE
+	# world units -- scaling the layer down is what keeps art resolution and
+	# world footprint independent (see TerrainRenderer.LAYER_SCALE).
+	_tile_map_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
 	_entities_parent = entities_parent
 	_creatures_parent = creatures_parent
 
@@ -157,12 +181,34 @@ func has_ecosystem_region(chunk_coord: Vector2i) -> bool:
 	return _ecosystem.has_region(chunk_coord)
 
 
+## Sets the world's spawn point (its chunk becomes the center of the
+## EASY-difficulty region -- see RegionDifficulty and
+## docs/concept/ecosystem_dynamics.md's Region difficulty section). Callers
+## (World._compute_dry_land_spawn_tile) should call this once, with the
+## real computed dry-land spawn tile, before the first update() -- if never
+## called, difficulty defaults to Tier.HARD everywhere (unrestricted, not
+## gated), the same safe-default philosophy `biome_name`'s "" default uses.
+func set_spawn_tile(spawn_tile: Vector2i) -> void:
+	_spawn_chunk_coord = _chunk_coord_for_tile(spawn_tile)
+	_spawn_configured = true
+
+
+func _difficulty_tier_at(chunk_coord: Vector2i) -> int:
+	if not _spawn_configured:
+		return RegionDifficulty.Tier.HARD
+	return _region_difficulty.tier_at(chunk_coord, _spawn_chunk_coord)
+
+
 func herbivore_population_at_chunk(chunk_coord: Vector2i) -> float:
 	return _ecosystem.herbivore_population(chunk_coord)
 
 
 func predator_population_at_chunk(chunk_coord: Vector2i) -> float:
 	return _ecosystem.predator_population(chunk_coord)
+
+
+func fish_population_at_chunk(chunk_coord: Vector2i) -> float:
+	return _ecosystem.fish_population(chunk_coord)
 
 
 ## Central, throttled tree forage: every FORAGE_INTERVAL of real time, a small
@@ -291,6 +337,10 @@ const _DIRECTIONS: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(
 func set_water_layer(water_layer: TileMapLayer) -> void:
 	_water_layer = water_layer
 	water_layer.tile_set = _terrain_renderer.build_water_overlay_tile_set()
+	# Must match the base terrain layer's scale exactly or the overlay would
+	# drift out of alignment with the ground it shades (see
+	# TerrainRenderer.LAYER_SCALE).
+	water_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
 	_water_material = WaterShader.new().shared_material()
 	water_layer.material = _water_material
 	for chunk_coord in _loaded_chunks:
@@ -672,6 +722,9 @@ func step_ecosystem(delta_seconds: float) -> void:
 	_refresh_creatures()
 
 
+## Refreshes both creature and fish markers to match the ecosystem's current
+## aggregate populations -- a fished-down or recovering water chunk visibly
+## shows fewer/more fish on the next periodic refresh, not just on reload.
 func _refresh_creatures() -> void:
 	for chunk_coord in _loaded_chunks.keys():
 		for creature in _loaded_creatures.get(chunk_coord, []):
@@ -686,8 +739,31 @@ func _refresh_creatures() -> void:
 			_ecosystem.herbivore_population(chunk_coord),
 			_ecosystem.predator_population(chunk_coord),
 			self,
-			_biome_classifier.dominant_biome(chunk.biome)
+			_biome_classifier.dominant_biome(chunk.biome),
+			_difficulty_tier_at(chunk_coord)
 		)
+
+		for fish in _loaded_fish.get(chunk_coord, []):
+			fish.free()
+		_loaded_fish[chunk_coord] = _fish_renderer.spawn_fish(
+			_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,
+			_fish_target_count(chunk_coord)
+		)
+
+
+## How many fish markers a chunk should visibly show right now: its aggregate
+## fish population as a fraction of its capacity, scaled onto
+## FishRenderer.MAX_FISH_PER_CHUNK -- see
+## docs/concept/fishing.md#individual-fidelity-promotion. A capacity-less
+## chunk (no water) always shows zero, never divides by zero.
+func _fish_target_count(chunk_coord: Vector2i) -> int:
+	var capacity := _ecosystem.fish_capacity_at(chunk_coord)
+	if capacity <= 0.0:
+		return 0
+	var population := _ecosystem.fish_population(chunk_coord)
+	return clampi(
+		roundi(population / capacity * FishRenderer.MAX_FISH_PER_CHUNK), 0, FishRenderer.MAX_FISH_PER_CHUNK
+	)
 
 
 func elevation_at_global(global_x: int, global_y: int) -> float:
@@ -710,7 +786,10 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 ## Player._fishing_step) a real visible fish to make disappear and flavor the
 ## catch message with, without coupling the catch's success/rarity to whether
 ## a fish happens to be rendered nearby (that stays purely
-## FishingMinigame.attempt_catch's call, unaffected by this).
+## FishingMinigame.attempt_catch's call, unaffected by this). Also records the
+## harvest against the fish's own chunk's aggregate population (see
+## docs/concept/fishing.md#harvest-fishing-as-the-mortality-term) -- unlike
+## land hunting, a caught fish now actually depletes the region it came from.
 func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> String:
 	var nearest: Node2D = null
 	var nearest_distance := max_distance
@@ -723,10 +802,29 @@ func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> String:
 	if nearest == null:
 		return ""
 	var species: String = nearest.species
-	for chunk_coord in _loaded_fish.keys():
-		_loaded_fish[chunk_coord].erase(nearest)
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(nearest.position))
+	for chunk_key in _loaded_fish.keys():
+		_loaded_fish[chunk_key].erase(nearest)
 	nearest.free()
+	_ecosystem.record_catch(chunk_coord, 1.0)
 	return species
+
+
+## This pixel's chunk's aggregate fish population -- the duck-typed hook
+## PiscivoreBirdMarker uses to decide whether to dive, so a kingfisher and
+## the player's own rod read the exact same live number.
+func fish_population_near(pixel_position: Vector2) -> float:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	return _ecosystem.fish_population(chunk_coord)
+
+
+## Records a harvest against this pixel's chunk's aggregate fish population --
+## the duck-typed hook a piscivore bird's successful grab calls (see
+## PiscivoreBirdMarker), the same EcosystemSimulation.record_catch
+## catch_nearest_fish above uses for the player's own catch.
+func record_fish_catch_near(pixel_position: Vector2, count: float) -> void:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	_ecosystem.record_catch(chunk_coord, count)
 
 
 ## True if a merchant villager (see VillageRenderer, NpcIdentity.OCCUPATIONS)
@@ -891,7 +989,20 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_sync_lichen_sprites(chunk_coord)
 
 	_ecosystem.add_region(chunk_coord, chunk)
+	# In-session catch-up (elapsed time since this chunk was last unloaded,
+	# still tracked in memory) takes precedence over the disk-persisted fish
+	# population below -- it's the more accurate figure (it accounts for
+	# regrowth since unload; the disk snapshot doesn't). Disk is only
+	# consulted when there's no in-session record at all, i.e. this is a
+	# revisit from a previous game session.
+	var had_in_session_catchup := _unloaded_ecology.has(chunk_coord)
 	_apply_ecology_catchup(chunk_coord)
+	if not had_in_session_catchup:
+		var fish_population_path := _fish_population_path(chunk_coord)
+		if FileAccess.file_exists(fish_population_path):
+			_ecosystem.seed_fish_population(
+				chunk_coord, _chunk_serializer.load_fish_population(fish_population_path)
+			)
 	_loaded_creatures[chunk_coord] = _creature_renderer.spawn_creatures(
 		_creatures_parent,
 		chunk_coord,
@@ -901,10 +1012,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_ecosystem.herbivore_population(chunk_coord),
 		_ecosystem.predator_population(chunk_coord),
 		self,
-		_biome_classifier.dominant_biome(chunk.biome)
+		_biome_classifier.dominant_biome(chunk.biome),
+		_difficulty_tier_at(chunk_coord)
 	)
 	_loaded_fish[chunk_coord] = _fish_renderer.spawn_fish(
-		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
+		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,
+		_fish_target_count(chunk_coord)
 	)
 	_loaded_villages[chunk_coord] = _village_renderer.spawn_village(
 		_creatures_parent,
@@ -914,6 +1027,13 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		TerrainRenderer.TILE_SIZE,
 		_biome_classifier.dominant_biome(chunk.biome),
 		self
+	)
+	_loaded_ambient_flyers[chunk_coord] = _ambient_flyer_renderer.spawn_ambient_flyers(
+		_creatures_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+		_biome_classifier.dominant_biome(chunk.biome)
+	)
+	_loaded_piscivore_birds[chunk_coord] = _piscivore_bird_renderer.spawn_piscivore_birds(
+		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
 
 
@@ -932,9 +1052,11 @@ func _apply_ecology_catchup(chunk_coord: Vector2i) -> void:
 	var capacity := {
 		"herbivore_capacity": _ecosystem.herbivore_capacity_at(chunk_coord),
 		"fruit_growth_rate": 0.0,  # fruit stock is cosmetic here; populations are what matters
+		"fish_capacity": _ecosystem.fish_capacity_at(chunk_coord),
 	}
 	var advanced: Dictionary = _ecology_catchup.advance(record["state"], elapsed, capacity)
 	_ecosystem.seed_populations(chunk_coord, advanced["herbivores"], advanced["predators"])
+	_ecosystem.seed_fish_population(chunk_coord, advanced["fish"])
 
 
 func _unload_chunk(chunk_coord: Vector2i) -> void:
@@ -982,6 +1104,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	# this chunk catch-up integrates from where it left off (see
 	# _apply_ecology_catchup).
 	if _ecosystem.has_region(chunk_coord):
+		var fish_population := _ecosystem.fish_population(chunk_coord)
 		_unloaded_ecology[chunk_coord] = {
 			"unloaded_at": _world_age_seconds,
 			"state": {
@@ -989,8 +1112,11 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 				"predators": _ecosystem.predator_population(chunk_coord),
 				"fruit_stock": 0.0,
 				"vegetation": _ecosystem.average_vegetation_density(chunk_coord),
+				"fish": fish_population,
 			},
 		}
+		DirAccess.make_dir_recursive_absolute(FISH_POPULATION_DIR)
+		_chunk_serializer.save_fish_population(fish_population, _fish_population_path(chunk_coord))
 
 	_ecosystem.remove_region(chunk_coord)
 	for creature in _loaded_creatures.get(chunk_coord, []):
@@ -1005,6 +1131,14 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		node.free()
 	_loaded_villages.erase(chunk_coord)
 
+	for flyer in _loaded_ambient_flyers.get(chunk_coord, []):
+		flyer.free()
+	_loaded_ambient_flyers.erase(chunk_coord)
+
+	for bird in _loaded_piscivore_birds.get(chunk_coord, []):
+		bird.free()
+	_loaded_piscivore_birds.erase(chunk_coord)
+
 
 func _modifications_path(chunk_coord: Vector2i) -> String:
 	return "%s/%d_%d.bin" % [MODIFICATIONS_DIR, chunk_coord.x, chunk_coord.y]
@@ -1012,6 +1146,10 @@ func _modifications_path(chunk_coord: Vector2i) -> String:
 
 func _planted_trees_path(chunk_coord: Vector2i) -> String:
 	return "%s/%d_%d.bin" % [PLANTED_TREES_DIR, chunk_coord.x, chunk_coord.y]
+
+
+func _fish_population_path(chunk_coord: Vector2i) -> String:
+	return "%s/%d_%d.bin" % [FISH_POPULATION_DIR, chunk_coord.x, chunk_coord.y]
 
 
 func _chunk_coord_for_tile(global_tile: Vector2i) -> Vector2i:

@@ -36,8 +36,8 @@ func _average_color(image: Image) -> Color:
 func test_generated_image_has_the_expected_size():
 	for structure_id in STRUCTURE_IDS:
 		var image: Image = generator.generate_image(structure_id)
-		assert_eq(image.get_width(), TerrainRenderer.TILE_SIZE, structure_id)
-		assert_eq(image.get_height(), TerrainRenderer.TILE_SIZE, structure_id)
+		assert_eq(image.get_width(), TerrainRenderer.ART_TILE_SIZE, structure_id)
+		assert_eq(image.get_height(), TerrainRenderer.ART_TILE_SIZE, structure_id)
 
 
 ## Mirrors test_terrain_renderer.gd's
@@ -75,7 +75,7 @@ func test_campfire_and_furnace_are_visually_distinct_from_each_other():
 	var furnace: Image = generator.generate_image("furnace", 3)
 	assert_gt(
 		_pixel_diff_count(campfire, furnace),
-		TerrainRenderer.TILE_SIZE,
+		TerrainRenderer.ART_TILE_SIZE,
 		"campfire and furnace should look clearly different"
 	)
 
@@ -105,8 +105,8 @@ func test_campfire_reads_warm_and_furnace_reads_cool():
 
 func test_generate_texture_returns_an_image_texture_of_matching_size():
 	var texture: ImageTexture = generator.generate_texture("campfire", 1)
-	assert_eq(texture.get_width(), TerrainRenderer.TILE_SIZE)
-	assert_eq(texture.get_height(), TerrainRenderer.TILE_SIZE)
+	assert_eq(texture.get_width(), TerrainRenderer.ART_TILE_SIZE)
+	assert_eq(texture.get_height(), TerrainRenderer.ART_TILE_SIZE)
 
 
 ## Fail-safe default -- an id this generator doesn't recognize still returns
@@ -114,8 +114,8 @@ func test_generate_texture_returns_an_image_texture_of_matching_size():
 ## TerrainRenderer.atlas_coords_for_modification's fallback to plain earth).
 func test_unknown_structure_id_falls_back_without_crashing():
 	var image: Image = generator.generate_image("mystery_structure", 1)
-	assert_eq(image.get_width(), TerrainRenderer.TILE_SIZE)
-	assert_eq(image.get_height(), TerrainRenderer.TILE_SIZE)
+	assert_eq(image.get_width(), TerrainRenderer.ART_TILE_SIZE)
+	assert_eq(image.get_height(), TerrainRenderer.ART_TILE_SIZE)
 
 
 func test_structure_ids_constant_contains_campfire_and_furnace():

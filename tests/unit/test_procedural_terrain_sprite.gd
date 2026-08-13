@@ -162,20 +162,33 @@ func test_multi_directional_blend_leans_toward_far_on_every_active_edge():
 
 
 ## The transition must read as a coherent gradient, not random static: for a
-## north-facing blend, each row's count of far-leaning pixels may never drop
-## (beyond a 1-pixel jitter allowance) as rows approach the far edge. A
-## per-pixel random dither violates this constantly; an ordered dither holds it.
+## north-facing blend, the far-leaning pixel count may never grow (beyond a
+## small jitter allowance) as rows move away from the far edge. A per-pixel
+## random dither violates this constantly; an ordered dither holds it -- but
+## only once aggregated over one full Bayer cycle (4 rows, the matrix's own
+## fixed period, independent of tile SIZE): within a cycle, individual rows
+## can jump as different threshold-sharing columns (SIZE / 4 of them, one
+## quartet of Bayer thresholds per row) flip together, so comparing raw
+## per-row counts with a fixed pixel-count tolerance only worked by
+## coincidence at the original 16px tile and stopped generalizing once SIZE
+## grew (see docs/concept/art_resolution.md) -- block-level comparison is the
+## actual guarantee ordered dithering provides.
 func test_directional_blend_far_fraction_grows_monotonically_toward_the_far_edge():
 	var image := generator.generate_directional_blend_image("forest", "grassland", Vector2i(0, -1), 0)
 	var size := ProceduralTerrainSprite.SIZE
-	var previous_count := size + 1  # top row is nearest the far (north) neighbor
-	for y in size:
-		var count := _far_leaning_count_in_row(image, y, "grassland", "forest")
+	const BAYER_CYCLE := 4
+	var previous_total := size * BAYER_CYCLE + 1  # first block is nearest the far (north) neighbor
+	var y := 0
+	while y < size:
+		var total := 0
+		for row in range(y, mini(y + BAYER_CYCLE, size)):
+			total += _far_leaning_count_in_row(image, row, "grassland", "forest")
 		assert_true(
-			count <= previous_count + 1,
-			"row %d has %d far pixels, more than the row above it (%d) -- transition should fade, not flicker" % [y, count, previous_count]
+			total <= previous_total + BAYER_CYCLE,
+			"rows %d..%d have %d far pixels total, more than the block above (%d) -- transition should fade, not flicker" % [y, y + BAYER_CYCLE - 1, total, previous_total]
 		)
-		previous_count = count
+		previous_total = total
+		y += BAYER_CYCLE
 
 
 ## The blend band must be tight: the quarter of the tile nearest its own
@@ -277,11 +290,65 @@ func test_blade_specs_are_deterministic_and_varied():
 		for i in ProceduralTerrainSprite.BLADE_COUNT:
 			var spec := generator.blade_spec(seed_value, i)
 			assert_eq(spec, generator.blade_spec(seed_value, i))
-			assert_between(spec.height, 2, 4)
+			assert_between(spec.height, 8, 26)
 			heights[spec.height] = true
 			colors[spec.color_index] = true
 	assert_gt(heights.size(), 1, "blades should vary in height")
 	assert_gt(colors.size(), 1, "blades should vary in color")
+
+
+## Grass must read as a dense MEADOW of individual blades, not a handful of
+## strokes on a flat field -- reported as "the grass tiles don't look nice
+## anymore, make it look more like real grass blades". A 64px tile has room
+## for a real blade population; pinning the count stops it silently
+## regressing to the sparse look.
+func test_grassland_is_densely_covered_in_blades():
+	assert_gte(ProceduralTerrainSprite.BLADE_COUNT, 40, "a 64px tile needs a real blade population to read as meadow")
+
+
+## Real blades taper: wide at the root, single-pixel at the tip. A uniform
+## 2px-wide stroke reads as a painted stripe, not a blade.
+func test_blades_taper_from_root_to_tip():
+	assert_eq(generator.blade_width_at(0.0), ProceduralTerrainSprite.BLADE_ROOT_WIDTH, "root is the widest point")
+	assert_eq(generator.blade_width_at(1.0), 1, "the tip narrows to a single pixel")
+	assert_gt(ProceduralTerrainSprite.BLADE_ROOT_WIDTH, 1, "a blade must actually taper, not be uniform")
+
+
+## Blades curve rather than standing as straight lines -- the lean grows
+## non-linearly from a planted root, so a tuft reads as bending grass.
+func test_blade_curve_accelerates_toward_the_tip():
+	var lower := generator.blade_curve_fraction(0.5)
+	assert_almost_eq(generator.blade_curve_fraction(0.0), 0.0, 0.0001, "the root stays planted")
+	assert_almost_eq(generator.blade_curve_fraction(1.0), 1.0, 0.0001, "the tip carries the full lean")
+	assert_lt(lower, 0.5, "mid-blade should lag a straight line -- a curve, not a diagonal")
+
+
+## Regression for the 4x resolution pass (docs/concept/art_resolution.md):
+## a naive nearest-neighbour upscale of the old 16x16 art would repeat each
+## source pixel across a 4x4 block, so every pixel in that block would be
+## identical. This generator paints per-pixel at the tile's real (now 64x64)
+## resolution instead, so at least some 4x4 block somewhere on a speckled
+## tile must contain genuine internal variation -- proof the extra
+## resolution carries real information, not just a blown-up copy of the
+## smaller tile.
+func test_speckled_texture_has_genuine_per_pixel_detail_not_upscaled_blocks():
+	var image := generator.generate_image("mountain", 0)
+	var size := ProceduralTerrainSprite.SIZE
+	var found_internal_variation := false
+	var block := 0
+	while block * 4 + 3 < size and not found_internal_variation:
+		var bx := block * 4
+		var by := block * 4
+		var first := image.get_pixel(bx, by)
+		for dy in 4:
+			for dx in 4:
+				if image.get_pixel(bx + dx, by + dy) != first:
+					found_internal_variation = true
+		block += 1
+	assert_true(
+		found_internal_variation,
+		"expected at least one 4x4 block with internal pixel variation -- texture reads as upscaled, not native-resolution"
+	)
 
 
 func _rgb_distance(a: Color, b: Color) -> float:
