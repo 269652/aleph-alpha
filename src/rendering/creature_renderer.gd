@@ -7,6 +7,7 @@ extends RefCounted
 
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const AnimalAnatomy = preload("res://src/rendering/animal_anatomy.gd")
 const ProceduralAnimalSprite = preload("res://src/rendering/procedural_animal_sprite.gd")
 const CreatureInfo = preload("res://src/world/creature_info.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
@@ -214,7 +215,11 @@ func _build_marker(
 	# The animal art is authored DETAIL_MULTIPLIER times oversized for pixel
 	# detail; scaling it back down keeps the creature's world footprint
 	# unchanged (see docs/concept/art_resolution.md).
-	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	# Scaled by the species' real relative size as well as the art
+	# resolution -- a horse must tower over a mouse even though both are
+	# drawn on the same canvas (see AnimalAnatomy.world_scale).
+	var species_scale: float = AnimalAnatomy.profile_for(species_name).world_scale
+	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * species_scale
 	marker.position = position
 	marker.home = position
 	marker.wander_seed = wander_seed

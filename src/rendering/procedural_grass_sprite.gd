@@ -10,8 +10,8 @@ extends RefCounted
 ## docs/concept/art_resolution.md) -- drawn at ArtResolution.SPRITE_SCALE
 ## so it gains pixel detail without growing in the world.
 const SIZE := Vector2i(32, 32)
-const BLADE_COUNT_MIN := 9
-const BLADE_COUNT_MAX := 14
+const BLADE_COUNT_MIN := 4
+const BLADE_COUNT_MAX := 6
 const BASE_COLOR := Color(0.3, 0.55, 0.18)
 const SHADE_DARKEN := 0.25
 const HIGHLIGHT_LIGHTEN := 0.25
@@ -35,7 +35,7 @@ func generate_image(seed_value: int) -> Image:
 func _paint_blade(image: Image, seed_value: int, index: int) -> void:
 	var h := absi(hash("%d_blade_%d" % [seed_value, index]))
 	var base_x := 3 + h % (SIZE.x - 6)
-	var height := 12 + (h / 31) % 16  # 12..27 px tall (scaled with the canvas)
+	var height := 8 + (h / 31) % 11  # 8..18 px, the original 6..13 of a 16px tile
 	var lean: int = [-1, 0, 1][(h / 977) % 3]
 
 	var color := BASE_COLOR

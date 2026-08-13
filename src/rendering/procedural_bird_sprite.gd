@@ -70,9 +70,9 @@ const SIZE := Vector2i(32, 20)
 ##   beak_length/beak_depth  bill size -- the kingfisher's giveaway
 ##   tail_length             tail projection behind the body
 const SPECIES_BODY := {
-	"sparrow": {"body_length": 0.46, "body_depth": 0.52, "head_size": 0.62, "beak_length": 0.10, "beak_depth": 0.14, "tail_length": 0.30},
-	"robin": {"body_length": 0.48, "body_depth": 0.62, "head_size": 0.60, "beak_length": 0.09, "beak_depth": 0.12, "tail_length": 0.26},
-	"kingfisher": {"body_length": 0.50, "body_depth": 0.50, "head_size": 0.70, "beak_length": 0.30, "beak_depth": 0.12, "tail_length": 0.16},
+	"sparrow": {"body_length": 0.30, "body_depth": 0.34, "head_size": 0.62, "beak_length": 0.10, "beak_depth": 0.14, "tail_length": 0.30},
+	"robin": {"body_length": 0.32, "body_depth": 0.40, "head_size": 0.60, "beak_length": 0.09, "beak_depth": 0.12, "tail_length": 0.26},
+	"kingfisher": {"body_length": 0.33, "body_depth": 0.33, "head_size": 0.70, "beak_length": 0.30, "beak_depth": 0.12, "tail_length": 0.16},
 }
 
 ## Which ramp stops the belly and the wing use.

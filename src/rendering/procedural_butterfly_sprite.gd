@@ -61,9 +61,9 @@ const SIZE := Vector2i(28, 20)
 ##   tail_length              hindwing tail projection (swallowtail only)
 ##   border                   whether a dark wing border is drawn
 const SPECIES_WINGS := {
-	"monarch": {"forewing": Vector2(0.26, 0.30), "hindwing": Vector2(0.19, 0.20), "tail_length": 0.0, "border": true},
-	"swallowtail": {"forewing": Vector2(0.24, 0.28), "hindwing": Vector2(0.18, 0.19), "tail_length": 0.22, "border": true},
-	"blue_morpho": {"forewing": Vector2(0.30, 0.34), "hindwing": Vector2(0.22, 0.22), "tail_length": 0.0, "border": false},
+	"monarch": {"forewing": Vector2(0.17, 0.20), "hindwing": Vector2(0.13, 0.14), "tail_length": 0.0, "border": true},
+	"swallowtail": {"forewing": Vector2(0.16, 0.19), "hindwing": Vector2(0.12, 0.13), "tail_length": 0.22, "border": true},
+	"blue_morpho": {"forewing": Vector2(0.20, 0.23), "hindwing": Vector2(0.15, 0.15), "tail_length": 0.0, "border": false},
 }
 
 ## Ramp stops for the hindwing and the dark wing border.

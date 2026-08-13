@@ -2,6 +2,10 @@ extends RefCounted
 
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
+## How big a fish is relative to its drawn art -- a pond fish is a
+## fraction of a land animal's bulk.
+const FISH_WORLD_SCALE := 0.55
+
 ## Chunk-based spawn/despawn of visible, catchable fish on ocean cells -- same
 ## shape as TreeRenderer/CreatureRenderer: one node per qualifying tile,
 ## deterministic per global coordinate (so revisiting a pond looks stable),
@@ -131,7 +135,9 @@ func _build_fish(
 	# Fish art is authored DETAIL_MULTIPLIER times oversized; scaling it
 	# back keeps the fish the same size in the water (see
 	# docs/concept/art_resolution.md).
-	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	# Fish are SMALL. Drawn at the art scale alone they came out the size
+	# of a boar, so their world size is knocked down further.
+	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FISH_WORLD_SCALE
 	marker.position = position
 	marker.home = position
 	marker.wander_seed = seed_value
