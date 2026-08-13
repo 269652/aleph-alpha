@@ -6,13 +6,18 @@ const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 ## How big each flyer is in the world, expressed as a MULTIPLE OF A FISH.
 ## Sizing these against a concrete, visible reference rather than in the
 ## abstract is what finally made them read correctly: a butterfly is half a
-## fish, a sparrow is about one fish, a robin only SLIGHTLY bigger, and the
-## kingfisher the largest of them. These are small birds -- the range from
-## smallest to largest is deliberately narrow.
+## fish, a sparrow about one fish, a robin about one and a half, and the
+## kingfisher the largest.
+##
+## Worth knowing before tuning these: for a long stretch these numbers had
+## NO effect at all, because _build_marker overwrote the computed scale a
+## few lines after calculating it. Several rounds of "still too big/small"
+## were spent adjusting a table that never reached the screen. If a change
+## here appears to do nothing, suspect the wiring before the value.
 const FLYER_WORLD_SCALE := {
 	"sparrow": 1.0,
-	"robin": 0.92,
-	"kingfisher": 1.25,
+	"robin": 1.5,
+	"kingfisher": 1.7,
 	"monarch": 0.5,
 	"swallowtail": 0.55,
 	"blue_morpho": 0.6,

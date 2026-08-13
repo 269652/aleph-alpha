@@ -154,8 +154,6 @@ func test_butterflies_are_about_half_a_fish():
 		assert_between(AmbientFlyerRenderer.FLYER_WORLD_SCALE[species], 0.45, 0.65, species)
 
 
-## The kingfisher is the big one; the robin was repeatedly reported as too
-## large and has been brought below the sparrow.
 func test_the_kingfisher_is_the_largest_of_the_birds():
 	var sparrow: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"]
 	assert_gt(AmbientFlyerRenderer.FLYER_WORLD_SCALE["kingfisher"], sparrow)
@@ -173,7 +171,16 @@ func test_every_butterfly_is_smaller_than_every_bird():
 
 ## "A robin should only be slightly bigger than a fish" -- the birds here
 ## are all SMALL birds, so the whole range stays narrow.
-## A robin sits close to fish-sized, trimmed 15% after repeatedly reading
-## too large in game.
-func test_a_robin_is_about_fish_sized():
-	assert_between(AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"], 0.85, 1.0)
+## A robin is about one and a half fish -- noticeably bigger than a
+## sparrow, well short of the kingfisher.
+func test_a_robin_is_about_one_and_a_half_fish():
+	assert_between(AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"], 1.4, 1.6)
+
+
+## The birds run smallest to largest: sparrow, robin, kingfisher.
+func test_the_birds_run_smallest_to_largest():
+	var sparrow: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"]
+	var robin: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"]
+	var kingfisher: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["kingfisher"]
+	assert_lt(sparrow, robin)
+	assert_lt(robin, kingfisher)
