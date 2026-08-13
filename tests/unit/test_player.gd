@@ -395,6 +395,84 @@ func test_sync_hotbar_clears_slots_for_items_no_longer_held():
 	assert_ne(player.hotbar.item_id_at(0), "stone_pickaxe")
 
 
+# -- fishing visuals: cast, bobber, attraction (see FishingCast) -------------
+#
+# Reported gap: casting had no rod-throw motion, no landing point shown, and
+# no reaction from nearby fish or when a bite starts. Exercises
+# _start_cast_visuals/_end_cast_visuals directly (same "bypass the near-water
+# input gate" approach _land_a_fish already uses above) rather than through
+# the full input flow, since whether the test's fixed real-terrain spawn tile
+# happens to be near water isn't something a test should depend on.
+
+func test_start_cast_visuals_shows_the_bobber_at_the_cast_point():
+	assert_false(player._bobber.visible)
+
+	player._start_cast_visuals()
+
+	assert_true(player._bobber.visible)
+	var expected := player._fishing_cast.cast_point(player.position, player._last_facing_direction)
+	assert_almost_eq(player._bobber.global_position.x, expected.x, 0.01)
+	assert_almost_eq(player._bobber.global_position.y, expected.y, 0.01)
+
+
+func test_start_cast_visuals_plays_the_rod_throw_swing():
+	player._start_cast_visuals()
+	# play_attack_swing arms a countdown consumed over SWING_DURATION --
+	# still mid-swing immediately after casting.
+	assert_gt(player._character_view._swing_time_remaining, 0.0)
+
+
+func test_start_cast_visuals_attracts_nearby_fish():
+	var fish := preload("res://src/rendering/fish_marker.gd").new()
+	fish.position = player.position + Vector2(10, 0)
+	creatures_parent.add_child(fish)
+	chunk_manager._loaded_fish[Vector2i(0, 0)] = [fish]
+
+	player._start_cast_visuals()
+
+	assert_not_null(fish.attract_target)
+	fish.free()
+
+
+## _end_cast_visuals in isolation, separate from a real catch resolution
+## below -- catch_nearest_fish would otherwise free this same nearby test
+## fish as an unrelated side effect (ATTRACTION_RADIUS < FISH_CATCH_RADIUS,
+## so anything close enough to be attracted is also close enough to be
+## "caught"), touching a freed object.
+func test_end_cast_visuals_hides_the_bobber_and_releases_attraction():
+	var fish := preload("res://src/rendering/fish_marker.gd").new()
+	fish.position = player.position + Vector2(10, 0)
+	creatures_parent.add_child(fish)
+	chunk_manager._loaded_fish[Vector2i(0, 0)] = [fish]
+	player._start_cast_visuals()
+	assert_not_null(fish.attract_target, "precondition: the cast should have attracted it")
+
+	player._end_cast_visuals()
+
+	assert_false(player._bobber.visible)
+	assert_null(fish.attract_target)
+	fish.free()
+
+
+func test_resolving_a_catch_hides_the_bobber():
+	player._start_cast_visuals()
+	assert_true(player._bobber.visible)
+
+	_land_a_fish()
+	player._fishing_step(0.0)
+
+	assert_false(player._bobber.visible)
+
+
+## Regression: _ready() used to leave a solid red placeholder square
+## permanently equipped in the head slot ("demo equipment until a real
+## inventory system exists") -- reported as "a red square on its head", with
+## no relation to any actually-worn armor (equip_armor never touches
+## CharacterView at all). A fresh spawn should show no head-slot decoration.
+func test_spawning_does_not_leave_a_placeholder_head_slot_equipped():
+	assert_false(player._character_view.is_slot_equipped("head"))
+
+
 func test_catching_a_fish_with_no_marker_nearby_still_shows_a_generic_message():
 	_land_a_fish()
 	player._fishing_step(0.0)

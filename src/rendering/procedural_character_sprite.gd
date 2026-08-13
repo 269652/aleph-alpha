@@ -73,58 +73,263 @@ func generate_head_image(size: Vector2i, skin_color: Color, eye_color: Color) ->
 const _EYE_COLOR := Color(0.08, 0.08, 0.1)
 
 
-## A hero head (see HeroAppearance): the shaded skin ellipse crowned with a
-## real head of hair in the appearance's color and style -- 0: full fringe,
-## 1: fringe plus side locks, 2: short crop. What turns "a circle with eyes"
-## into a person.
+## A hero head (see HeroAppearance): a shaded skin ellipse with a real
+## hairline in the appearance's color and style, brows, colored eyes with a
+## catchlight, a mouth line, and optional facial hair. What turns "a circle
+## with two dots" into a face.
+##
+## Hair styles (HeroAppearance.HAIR_STYLES, by index): 0 short, 1 swept
+## (asymmetric fringe), 2 long (falls past the jaw both sides), 3 ponytail
+## (long plus a tail out to one side), 4 topknot (crop plus a bun above),
+## 5 bald. Beards (HeroAppearance.BEARD_STYLES): 0 none, 1 stubble (sparse,
+## along the jaw), 2 goatee (chin + upper lip), 3 full (jaw + chin).
 func generate_hero_head_texture(size: Vector2i, appearance: Dictionary) -> ImageTexture:
 	return ImageTexture.create_from_image(generate_hero_head_image(size, appearance))
 
 
 func generate_hero_head_image(size: Vector2i, appearance: Dictionary) -> Image:
-	var image := generate_head_image(size, appearance.skin, _EYE_COLOR)
-	var hair: Color = appearance.hair
+	var skin: Color = appearance.skin
+	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
 	var center := Vector2(size.x / 2.0, size.y / 2.0)
 	var rx := size.x / 2.0
 	var ry := size.y / 2.0
+
+	# Face: a shaded ellipse, lit from the top-left like every other generator.
 	for y in size.y:
 		for x in size.x:
-			if image.get_pixel(x, y).a == 0.0:
-				continue  # outside the head silhouette
-			var dy := (y + 0.5 - center.y) / ry
 			var dx := (x + 0.5 - center.x) / rx
-			var in_fringe := dy < -0.25
-			var in_crop := dy < -0.5
-			var in_side_lock := dy < 0.2 and absf(dx) > 0.6
-			var covered := false
-			match int(appearance.hair_style):
-				0:
-					covered = in_fringe
-				1:
-					covered = in_fringe or in_side_lock
-				2:
-					covered = in_crop
-			if covered:
-				# Keep the outline ring dark; shade hair like everything else.
-				var d := dx * dx + dy * dy
-				image.set_pixel(x, y, hair.darkened(0.35) if d > 0.75 else hair)
+			var dy := (y + 0.5 - center.y) / ry
+			var d := dx * dx + dy * dy
+			if d > 1.0:
+				continue
+			var color := skin
+			if d > 0.82:
+				color = _palette.outline_color()
+			elif dx + dy < -0.5:
+				color = _palette.highlight(skin)
+			elif dy > 0.45:
+				color = _palette.shade(skin)
+			image.set_pixel(x, y, color)
+
+	_paint_facial_hair(image, size, appearance, center, rx, ry)
+	_paint_face_features(image, size, appearance, center, rx, ry)
+	_paint_hair(image, size, appearance, center, rx, ry)
 	return image
 
 
-## A hero tunic (torso): the shaded/outlined block in the class tunic color,
-## with a trim belt row and matching collar accent -- the class reads at a
-## glance (see HeroAppearance.CLASS_PALETTES).
+## Brows, eyes (iris + dark pupil + a single catchlight pixel) and a soft
+## mouth line, all placed proportionally so they land correctly at any head
+## size.
+func _paint_face_features(
+	image: Image, size: Vector2i, appearance: Dictionary, center: Vector2, rx: float, ry: float
+) -> void:
+	var eye_color: Color = appearance.get("eyes", Color(0.22, 0.16, 0.10))
+	var eye_y := int(center.y + ry * 0.02)
+	var brow_y := eye_y - maxi(1, int(ry * 0.26))
+	var eye_dx := maxi(1, int(rx * 0.42))
+	var left_x := int(center.x) - eye_dx
+	var right_x := int(center.x) + eye_dx - 1
+
+	var brow: Color = (appearance.hair as Color).darkened(0.2)
+	for x_offset in range(-1, 2):
+		_set_if_inside(image, size, left_x + x_offset, brow_y, brow)
+		_set_if_inside(image, size, right_x + x_offset, brow_y, brow)
+
+	for eye_x in [left_x, right_x]:
+		_set_if_inside(image, size, eye_x, eye_y, eye_color)
+		# Pupil directly below the iris pixel on larger heads, plus a
+		# highlight above it -- reads as a real eye rather than a dot.
+		if ry >= 5.0:
+			_set_if_inside(image, size, eye_x, eye_y + 1, _EYE_COLOR)
+			_set_if_inside(image, size, eye_x, eye_y - 1, _palette.highlight(eye_color))
+
+	var mouth_y := int(center.y + ry * 0.52)
+	var mouth_color: Color = (appearance.skin as Color).darkened(0.35)
+	for x_offset in range(-1, 2):
+		_set_if_inside(image, size, int(center.x) + x_offset, mouth_y, mouth_color)
+
+
+## Facial hair over the lower face, under the eyes/mouth pass so a beard
+## never paints over them.
+func _paint_facial_hair(
+	image: Image, size: Vector2i, appearance: Dictionary, center: Vector2, rx: float, ry: float
+) -> void:
+	var beard := int(appearance.get("beard", 0))
+	if beard == 0:
+		return
+	var hair: Color = appearance.hair
+	var beard_color := hair.darkened(0.15) if beard != 1 else hair.darkened(0.05)
+
+	for y in size.y:
+		for x in size.x:
+			if image.get_pixel(x, y).a == 0.0:
+				continue
+			var dx := (x + 0.5 - center.x) / rx
+			var dy := (y + 0.5 - center.y) / ry
+			if dx * dx + dy * dy > 0.82:
+				continue  # keep the outline ring
+			var covered := false
+			match beard:
+				1:  # stubble: a sparse dither along the jaw
+					covered = dy > 0.28 and (x + y) % 2 == 0
+				2:  # goatee: chin column plus a moustache line
+					covered = (dy > 0.3 and absf(dx) < 0.32) or (dy > 0.28 and dy < 0.45 and absf(dx) < 0.5)
+				3:  # full: the whole jaw and chin
+					covered = dy > 0.18 or (absf(dx) > 0.55 and dy > -0.1)
+			if covered:
+				image.set_pixel(x, y, beard_color)
+
+
+## The hairline: a per-style silhouette painted over the top of the face,
+## with the lower/outer strands shaded so the head reads as rounded.
+func _paint_hair(
+	image: Image, size: Vector2i, appearance: Dictionary, center: Vector2, rx: float, ry: float
+) -> void:
+	var style := int(appearance.get("hair_style", 0))
+	if style == 5:  # bald
+		return
+	var hair: Color = appearance.hair
+
+	for y in size.y:
+		for x in size.x:
+			if image.get_pixel(x, y).a == 0.0:
+				continue
+			var dx := (x + 0.5 - center.x) / rx
+			var dy := (y + 0.5 - center.y) / ry
+			var d := dx * dx + dy * dy
+			var covered := false
+			match style:
+				0:  # short: a neat cap above the brows
+					covered = dy < -0.32
+				1:  # swept: fringe angled across the forehead
+					covered = dy < -0.22 or (dy < 0.0 and dx < -0.25 + dy * 0.5)
+				2:  # long: cap plus curtains falling past the jaw
+					covered = dy < -0.28 or absf(dx) > 0.62
+				3:  # ponytail: long-ish, gathered to the right
+					covered = dy < -0.3 or (absf(dx) > 0.66 and dy < 0.2) or (dx > 0.5 and dy < 0.55)
+				4:  # topknot: crop plus a bun crowning the head
+					covered = dy < -0.46 or (dy < -0.3 and absf(dx) < 0.3)
+			if not covered:
+				continue
+			image.set_pixel(x, y, hair.darkened(0.35) if d > 0.7 else hair)
+
+
+func _set_if_inside(image: Image, size: Vector2i, x: int, y: int, color: Color) -> void:
+	if x < 0 or y < 0 or x >= size.x or y >= size.y:
+		return
+	if image.get_pixel(x, y).a == 0.0:
+		return  # outside the head silhouette
+	image.set_pixel(x, y, color)
+
+
+## A hero tunic (torso): the class-colored body with shaped shoulders, a
+## contrasting collar, a trim belt with a buckle, and shaded sleeve edges --
+## the class reads at a glance (see HeroAppearance.CLASS_PALETTES).
 func generate_hero_tunic_texture(size: Vector2i, appearance: Dictionary) -> ImageTexture:
 	return ImageTexture.create_from_image(generate_hero_tunic_image(size, appearance))
 
 
 func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:
-	var image := generate_body_part_image(size, appearance.tunic)
+	var tunic: Color = appearance.tunic
 	var trim: Color = appearance.trim
-	var belt_y := int(size.y * 0.65)
+	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+
+	# Body with chamfered top corners, so shoulders slope instead of sitting
+	# as a hard rectangle.
+	for y in size.y:
+		for x in size.x:
+			if y == 0 and (x == 0 or x == size.x - 1):
+				continue  # chamfer
+			var is_edge := x == 0 or y == 0 or x == size.x - 1 or y == size.y - 1
+			var color := tunic
+			if is_edge:
+				color = _palette.outline_color()
+			elif x <= 1 or y <= 1:
+				color = _palette.highlight(tunic)
+			elif x >= size.x - 2 or y >= size.y - 2:
+				color = _palette.shade(tunic)
+			image.set_pixel(x, y, color)
+
+	# Collar: a trim V just under the shoulders.
+	var collar_y := maxi(1, int(size.y * 0.12))
+	for x in range(2, size.x - 2):
+		image.set_pixel(x, collar_y, trim)
+	_set_opaque(image, size, int(size.x / 2.0), collar_y + 1, trim)
+
+	# Belt across the waist, with a darker buckle at its center.
+	var belt_y := int(size.y * 0.66)
 	for x in range(1, size.x - 1):
 		image.set_pixel(x, belt_y, trim)
-	# Collar accent pixels at the shoulders.
-	image.set_pixel(1, 1, trim)
-	image.set_pixel(size.x - 2, 1, trim)
+		if belt_y + 1 < size.y - 1:
+			image.set_pixel(x, belt_y + 1, trim.darkened(0.25))
+	_set_opaque(image, size, int(size.x / 2.0), belt_y, trim.darkened(0.5))
+
 	return image
+
+
+func _set_opaque(image: Image, size: Vector2i, x: int, y: int, color: Color) -> void:
+	if x < 0 or y < 0 or x >= size.x or y >= size.y:
+		return
+	image.set_pixel(x, y, color)
+
+
+## -- Full-body portrait (character creator preview) -------------------------
+
+## The portrait's fixed proportions, in pixels. Composed at this size and
+## scaled up by the UI (nearest-neighbour) so it stays crisp pixel art.
+const PORTRAIT_SIZE := Vector2i(26, 40)
+const _PORTRAIT_HEAD := Vector2i(14, 14)
+const _PORTRAIT_TORSO := Vector2i(16, 16)
+const _PORTRAIT_LEG := Vector2i(5, 9)
+const _PORTRAIT_ARM := Vector2i(4, 12)
+
+
+## One cohesive standing figure -- head, torso, arms, legs, boots -- for the
+## character creator's live preview (see MainMenu). Replaces the old preview,
+## which was a disembodied head floating above a flat colored rectangle.
+func generate_hero_portrait_texture(appearance: Dictionary) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_hero_portrait_image(appearance))
+
+
+func generate_hero_portrait_image(appearance: Dictionary) -> Image:
+	var image := Image.create(PORTRAIT_SIZE.x, PORTRAIT_SIZE.y, false, Image.FORMAT_RGBA8)
+	var center_x := PORTRAIT_SIZE.x / 2
+
+	var torso_y := _PORTRAIT_HEAD.y - 2
+	var legs_y := torso_y + _PORTRAIT_TORSO.y - 1
+
+	# Arms first, so the torso's outline overlaps them at the shoulder rather
+	# than the other way around.
+	var arm := generate_body_part_image(_PORTRAIT_ARM, appearance.skin)
+	var arm_y := torso_y + 3
+	_blend(image, arm, Vector2i(center_x - _PORTRAIT_TORSO.x / 2 - _PORTRAIT_ARM.x + 1, arm_y))
+	_blend(image, arm, Vector2i(center_x + _PORTRAIT_TORSO.x / 2 - 1, arm_y))
+
+	# Legs (trousers) with darker boots at the bottom.
+	var leg := generate_body_part_image(_PORTRAIT_LEG, appearance.legs)
+	_paint_boots(leg, _PORTRAIT_LEG, appearance)
+	_blend(image, leg, Vector2i(center_x - _PORTRAIT_LEG.x - 1, legs_y))
+	_blend(image, leg, Vector2i(center_x + 1, legs_y))
+
+	_blend(image, generate_hero_tunic_image(_PORTRAIT_TORSO, appearance),
+		Vector2i(center_x - _PORTRAIT_TORSO.x / 2, torso_y))
+	_blend(image, generate_hero_head_image(_PORTRAIT_HEAD, appearance),
+		Vector2i(center_x - _PORTRAIT_HEAD.x / 2, 0))
+	return image
+
+
+## Darkens the bottom rows of a leg into a boot, so legs read as clothed
+## limbs rather than plain colored bars.
+func _paint_boots(leg: Image, size: Vector2i, appearance: Dictionary) -> void:
+	var boot: Color = (appearance.legs as Color).darkened(0.4)
+	for y in range(size.y - 3, size.y):
+		for x in size.x:
+			if leg.get_pixel(x, y).a == 0.0:
+				continue
+			var is_edge := x == 0 or x == size.x - 1 or y == size.y - 1
+			leg.set_pixel(x, y, _palette.outline_color() if is_edge else boot)
+
+
+## Alpha-composites `src` onto `dst` at `at`, clipped to dst's bounds.
+func _blend(dst: Image, src: Image, at: Vector2i) -> void:
+	dst.blend_rect(src, Rect2i(Vector2i.ZERO, Vector2i(src.get_width(), src.get_height())), at)

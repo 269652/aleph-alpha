@@ -79,6 +79,11 @@ func _on_text_submitted(text: String) -> void:
 	command_submitted.emit(parsed.command, parsed.args)
 
 
+## Escape closes the console while its input field has focus. accept_event()
+## stops the same press falling through to World._unhandled_input, which
+## would otherwise ALSO see it as the settings-menu toggle and pop the paused
+## settings menu open behind the just-closed console.
 func _on_input_gui_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		toggle()
+		accept_event()

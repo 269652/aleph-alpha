@@ -58,6 +58,31 @@ func test_bite_timing_is_deterministic_per_seed():
 	assert_eq(a.phase(), b.phase())
 
 
+# -- phase_elapsed_seconds (drives the bobber's bite-dip animation) ----------
+
+func test_phase_elapsed_seconds_is_zero_right_after_a_bite_starts():
+	session.cast(1, 0.0)
+	session.advance(20.0)  # now biting
+	assert_eq(session.phase(), FishingSession.BITING)
+	assert_eq(session.phase_elapsed_seconds(), 0.0)
+
+
+func test_phase_elapsed_seconds_grows_while_biting():
+	session.cast(1, 0.0)
+	session.advance(20.0)
+	session.advance(0.4)
+	assert_almost_eq(session.phase_elapsed_seconds(), 0.4, 0.001)
+
+
+func test_phase_elapsed_seconds_resets_on_a_fresh_cast():
+	session.cast(1, 0.0)
+	session.advance(0.5)
+	assert_gt(session.phase_elapsed_seconds(), 0.0)
+
+	session.cast(2, 0.0)
+	assert_eq(session.phase_elapsed_seconds(), 0.0)
+
+
 func test_is_active_only_while_a_line_is_out():
 	assert_false(session.is_active())
 	session.cast(1, 0.0)

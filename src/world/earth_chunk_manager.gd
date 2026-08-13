@@ -744,6 +744,29 @@ func has_merchant_near(pixel_position: Vector2, max_distance: float) -> bool:
 	return false
 
 
+## Draws every loaded fish within `radius` of `position` toward it instead of
+## their normal wander target (see FishMarker.set_attraction) -- a cast
+## fishing line nearby (Player._fishing_step/FishingCast). Call every frame
+## while a line is out, since fish (and the player) can move in/out of
+## range; fish now outside the radius are un-attracted in the same pass, not
+## left stuck steering at a stale target.
+func set_attraction_point(pixel_position: Vector2, radius: float) -> void:
+	for fish_list in _loaded_fish.values():
+		for fish in fish_list:
+			if fish.position.distance_to(pixel_position) <= radius:
+				fish.set_attraction(pixel_position)
+			else:
+				fish.clear_attraction()
+
+
+## Releases every loaded fish back to normal wandering -- call once a line is
+## reeled in or the catch is resolved.
+func clear_attraction_point() -> void:
+	for fish_list in _loaded_fish.values():
+		for fish in fish_list:
+			fish.clear_attraction()
+
+
 func modification_at_global(global_x: int, global_y: int) -> String:
 	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
 	if chunk == null:

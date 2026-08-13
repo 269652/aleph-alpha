@@ -18,13 +18,18 @@ const WALK_CYCLE_SPEED := 10.0
 const LEG_SWING_AMPLITUDE := 3.0
 const SWIM_CYCLE_SPEED := 6.0
 const ARM_STROKE_AMPLITUDE := 4.0
-const TOOL_SLOT_SIDE_OFFSET := 6.0
+const TOOL_SLOT_SIDE_OFFSET := 8.0
 
-const BODY_SIZE := Vector2i(10, 14)
-const HEAD_SIZE := Vector2i(8, 8)
-const LEG_SIZE := Vector2i(4, 6)
-const ARM_SIZE := Vector2i(3, 7)
-const SLOT_SIZE := Vector2i(6, 6)
+## Bumped from the original 10x14/8x8 (see the character sprite engine's
+## hero head/tunic detail -- hairstyles, brows, eyes, belt/collar trim): at
+## the old resolution none of that detail had enough pixels to read at all,
+## just a flat colored blob under a smaller blob (reported "the in game char
+## looks horrible"). These proportions match the tscn's part positions below.
+const BODY_SIZE := Vector2i(13, 19)
+const HEAD_SIZE := Vector2i(12, 12)
+const LEG_SIZE := Vector2i(5, 8)
+const ARM_SIZE := Vector2i(4, 9)
+const SLOT_SIZE := Vector2i(7, 7)
 const EYE_COLOR := Color(0.1, 0.1, 0.1)
 
 var facing := Facing.DOWN

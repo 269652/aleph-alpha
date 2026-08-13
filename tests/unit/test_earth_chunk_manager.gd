@@ -222,6 +222,44 @@ func test_catch_nearest_fish_returns_empty_string_when_none_in_range():
 	assert_eq(manager.catch_nearest_fish(far_from_everything, 5.0), "")
 
 
+# -- set_attraction_point / clear_attraction_point (see Player._fishing_step) --
+
+func test_set_attraction_point_attracts_fish_within_radius():
+	manager.update(_berlin_tile)
+	var fish: Array = _loaded_fish_markers()
+	assert_gt(fish.size(), 0)
+	var target: FishMarker = fish[0]
+	var bobber_position: Vector2 = target.position
+
+	manager.set_attraction_point(bobber_position, 5.0)
+
+	assert_eq(target.attract_target, bobber_position)
+
+
+func test_set_attraction_point_leaves_fish_outside_radius_unattracted():
+	manager.update(_berlin_tile)
+	var fish: Array = _loaded_fish_markers()
+	assert_gt(fish.size(), 0)
+	var target: FishMarker = fish[0]
+
+	manager.set_attraction_point(Vector2(-999999.0, -999999.0), 5.0)
+
+	assert_null(target.attract_target)
+
+
+func test_clear_attraction_point_releases_every_fish():
+	manager.update(_berlin_tile)
+	var fish: Array = _loaded_fish_markers()
+	assert_gt(fish.size(), 0)
+	manager.set_attraction_point(fish[0].position, 100000.0)
+	assert_not_null(fish[0].attract_target)
+
+	manager.clear_attraction_point()
+
+	for f in fish:
+		assert_null(f.attract_target)
+
+
 # -- has_merchant_near (see VillageRenderer, Shop) ----------------------------
 #
 # Real settlements are sparse (~1-in-30 habitable chunks, see

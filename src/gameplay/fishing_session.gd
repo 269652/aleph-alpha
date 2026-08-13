@@ -39,6 +39,19 @@ func is_active() -> bool:
 	return _phase == WAITING or _phase == BITING
 
 
+## How long the current phase has run -- lets a caller animate a live phase
+## (e.g. the bobber dipping while BITING) without tracking its own timer.
+## 0.0 outside WAITING/BITING (idle or already resolved).
+func phase_elapsed_seconds() -> float:
+	match _phase:
+		WAITING:
+			return _elapsed
+		BITING:
+			return _bite_elapsed
+		_:
+			return 0.0
+
+
 ## Casts a line. `bait_quality` (0..1) biases toward a quicker bite.
 func cast(seed_value: int, bait_quality: float) -> void:
 	_seed = seed_value

@@ -102,6 +102,83 @@ func test_never_swims_onto_land_when_confined_to_a_single_water_tile():
 		assert_eq(world.biome_at_global(tile_x, tile_y), "ocean", "fish left the water on step %d" % i)
 
 
+## The core of "still don't move naturally": a fish must turn gradually
+## toward its new heading, never snap instantly to it -- bounded by
+## TURN_RATE, provable without depending on CreatureWander's exact target.
+func test_heading_turn_rate_is_bounded_per_frame():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker._current_heading = Vector2.LEFT
+	var before_angle := marker._current_heading.angle()
+
+	marker._process(0.1)
+
+	var turned := absf(angle_difference(before_angle, marker._current_heading.angle()))
+	assert_lte(turned, FishMarker.TURN_RATE * 0.1 + 0.01, "heading should turn gradually, not snap")
+
+
+## The sprite's rotation must track its actual swim heading, so the fish
+## visibly points the way it's swimming rather than always facing however
+## its base art was drawn.
+func test_sprite_rotation_tracks_the_swim_heading():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker._process(0.3)
+	assert_almost_eq(marker.rotation, marker._current_heading.angle(), 0.01)
+
+
+## Even with gradual turning, a fish must actually reach a materially
+## different heading over many steps -- smoothing shouldn't mean it never
+## turns, just that it doesn't teleport.
+func test_heading_eventually_changes_over_many_steps():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var start_angle := marker._current_heading.angle()
+	for i in 200:
+		marker._process(0.1)
+	assert_gt(absf(angle_difference(start_angle, marker._current_heading.angle())), 0.05)
+
+
+# -- attraction to a cast fishing line (see EarthChunkManager.set_attraction_point) --
+
+## An attracted fish must steer toward the target instead of wandering --
+## "no attraction to nearby fish" was the reported gap.
+func test_attraction_target_pulls_the_fish_toward_it():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(1000, 1000)
+	var target := Vector2(1000, 1300)  # straight down
+	marker.set_attraction(target)
+
+	var before_distance := marker.position.distance_to(target)
+	for i in 60:
+		marker._process(0.2)
+	assert_lt(marker.position.distance_to(target), before_distance, "an attracted fish should close in on the target")
+
+
+func test_clear_attraction_returns_the_fish_to_normal_wander():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.set_attraction(Vector2(2000, 2000))
+	marker.clear_attraction()
+	assert_null(marker.attract_target)
+
+
+## Attraction must still respect the shore -- a fish drawn toward a bobber
+## just past the beach should not follow it onto land.
+func test_attraction_still_respects_water_clearance():
+	var world := ShorelineWorld.new()
+	marker.home = Vector2(6.0 * TILE_SIZE, 6.5 * TILE_SIZE)
+	marker.position = marker.home
+	marker.setup(world, TILE_SIZE)
+	marker.set_attraction(Vector2(20.0 * TILE_SIZE, 6.5 * TILE_SIZE))  # well onto land
+
+	var water_edge_x := (world.max_water_tile_x + 1) * TILE_SIZE
+	for i in 200:
+		marker._process(0.25)
+		assert_lt(marker.position.x, water_edge_x - FishMarker.CLEARANCE_PX + 0.01)
+
+
 func test_swims_around_within_a_larger_water_body():
 	var world := StubWorld.new()
 	marker.setup(world, TILE_SIZE)

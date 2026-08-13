@@ -29,6 +29,7 @@ const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const DragSlot = preload("res://src/ui/drag_slot.gd")
+const EscapeAction = preload("res://src/ui/escape_action.gd")
 
 ## How many hotbar slots the HUD row draws. Derived from Player's own
 ## hotbar size (see Player.HOTBAR_SLOT_COUNT / Hotbar) rather than duplicated,
@@ -144,6 +145,10 @@ var _ui_theme := UiTheme.new().build_theme()
 var _class_archetypes := ClassArchetype.new()
 ## Class chosen at the main menu, applied to the local player on spawn.
 var _pending_class := "warrior"
+## The look authored in the character creator (see MainMenu), applied to the
+## spawned player. Empty for non-interactive launches (dedicated server,
+## --connect), which fall back to a seed-rolled appearance.
+var _pending_appearance: Dictionary = {}
 var _keybindings := Keybindings.new()
 var _graphics_fullscreen := false
 var _graphics_vsync := true
@@ -242,8 +247,9 @@ func _show_main_menu() -> void:
 	get_tree().paused = true
 
 
-func _on_menu_start_requested(mode: String, chosen_class: String) -> void:
+func _on_menu_start_requested(mode: String, chosen_class: String, appearance: Dictionary) -> void:
 	_pending_class = chosen_class
+	_pending_appearance = appearance
 	if mode == "host":
 		_start_server()
 	_spawn_local_singleplayer()
@@ -773,9 +779,43 @@ func _unhandled_input(event: InputEvent) -> void:
 		if lp != null:
 			_refresh_skill_window(lp)
 	elif event.is_action_pressed(SETTINGS_TOGGLE_ACTION):
-		_toggle_settings_menu()
+		_handle_escape()
 	else:
 		_handle_hotbar_hotkeys(event)
+
+
+## Escape closes whatever is open, innermost first, and only opens the
+## pause/settings menu when the screen is clear (see EscapeAction for the
+## priority order). Marks the event handled so one press can't both close a
+## surface AND re-open settings -- Escape fires both Godot's built-in
+## `ui_cancel` and this project's runtime-bound `toggle_settings`.
+func _handle_escape() -> void:
+	var action := EscapeAction.action_for(
+		_dev_console.visible, _any_gameplay_window_open(), _settings_overlay.is_open()
+	)
+	match action:
+		EscapeAction.CLOSE_CONSOLE:
+			# Via toggle(), never `visible = false` -- it also clears
+			# ConsoleFocus/keyboard focus, which Player reads to suppress WASD.
+			_dev_console.toggle()
+		EscapeAction.CLOSE_WINDOWS:
+			_close_gameplay_windows()
+		EscapeAction.CLOSE_SETTINGS, EscapeAction.OPEN_SETTINGS:
+			# Via the wrapper, which also syncs the paused state.
+			_toggle_settings_menu()
+	get_viewport().set_input_as_handled()
+
+
+func _any_gameplay_window_open() -> bool:
+	return _inventory_window.visible or _crafting_window.is_open() or _skill_window.is_open()
+
+
+## Closes every open gameplay window at once -- Escape clears the screen
+## rather than needing one press per open window.
+func _close_gameplay_windows() -> void:
+	_inventory_window.visible = false
+	_crafting_window.visible = false
+	_skill_window.visible = false
 
 
 ## Number keys 1..HOTBAR_SLOT_COUNT (rebindable hotbar_N actions) activate the
@@ -1105,7 +1145,9 @@ func _spawn_local_singleplayer() -> void:
 	player.name = str(multiplayer.get_unique_id())
 	player.position = Vector2(_compute_dry_land_spawn_tile() * TerrainRenderer.TILE_SIZE)
 	player.respawn_position = player.position
-	player.apply_class(_pending_class, _class_archetypes.stats_for(_pending_class))
+	player.apply_class(
+		_pending_class, _class_archetypes.stats_for(_pending_class), _pending_appearance
+	)
 	_players.add_child(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 

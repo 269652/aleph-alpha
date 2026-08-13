@@ -25,6 +25,8 @@ const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const Hotbar = preload("res://src/gameplay/hotbar.gd")
+const FishingCast = preload("res://src/gameplay/fishing_cast.gd")
+const ProceduralBobberSprite = preload("res://src/rendering/procedural_bobber_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
@@ -190,6 +192,24 @@ const FISH_ITEM_ID_BY_RARITY := {"rare": "rare_fish", "legendary": "legendary_fi
 ## a pond fish a few tiles out while standing at the shore.
 const FISH_CATCH_RADIUS := 64.0
 
+## -- Fishing visuals: a real cast, a bobber, and nearby fish reacting --
+## Previously casting was invisible (no rod-throw motion, no landing point
+## shown, no reaction from nearby fish, no signal when a bite starts) --
+## reported as "no animation of the rod being thrown into water and also
+## doesn't attract near fish and also no animation when fish bites".
+var _fishing_cast := FishingCast.new()
+var _bobber: Sprite2D
+## Where the line landed for the current cast -- fixed at cast time, not
+## re-derived from a possibly-changed facing while the line is out.
+var _bobber_target := Vector2.ZERO
+## How far around the bobber fish start steering toward it (see
+## EarthChunkManager.set_attraction_point).
+const ATTRACTION_RADIUS := 48.0
+## The bobber's dip while a fish is biting -- the visible "something's
+## pulling on the line" cue, on top of the HUD text prompt.
+const BITE_BOB_AMPLITUDE_PX := 2.5
+const BITE_BOB_SPEED := 14.0
+
 ## -- Shopping at a merchant villager (see VillageRenderer, Shop) --
 ## Phase 1 simplification: press the trade key near any merchant NPC to buy
 ## one item, cycling through Shop.CATALOG so repeated presses don't just buy
@@ -267,9 +287,12 @@ func _ready() -> void:
 	shape.size = Vector2(PLAYER_SIZE, PLAYER_SIZE)
 	_collision_shape.shape = shape
 
-	# Demo equipment until a real inventory system exists (Phase 3), so the
-	# slot rendering/facing behavior is visibly provable, not just unit-tested.
-	_character_view.equip_slot("head", Color(0.8, 0.1, 0.1))
+	# The fishing bobber (see _fishing_step) -- hidden until a line is cast.
+	_bobber = Sprite2D.new()
+	_bobber.texture = ProceduralBobberSprite.new().generate_texture()
+	_bobber.visible = false
+	_bobber.top_level = true  # world position, independent of the player's own transform
+	add_child(_bobber)
 
 	# Keep the hotbar reconciled with what's actually carried (see
 	# sync_hotbar) from one place, rather than at every inventory mutation.
@@ -403,19 +426,20 @@ func is_set_up() -> bool:
 ## Applies a class archetype's stat lens at character creation (see
 ## ClassArchetype / concept/progression.md): a max-health offset (bumping the
 ## bar) and an attack-damage bonus. A starting bias, not a lock.
-func apply_class(class_name_value: String, stats: Dictionary) -> void:
+## `appearance` is the look authored in the character creator (see MainMenu /
+## HeroAppearance). Empty (the default) rolls one from the player's stable
+## node name -- the multiplayer peer id -- as a stand-in dna seed, which is
+## what non-interactive spawns (dedicated server, --connect) and tests get.
+func apply_class(class_name_value: String, stats: Dictionary, appearance: Dictionary = {}) -> void:
 	character_class = class_name_value
 	max_health = maxf(20.0, 100.0 + float(stats.get("max_health", 0.0)))
 	health = max_health
 	class_attack_bonus = float(stats.get("attack_damage", 0.0))
-	# Dress the hero: class picks the outfit palette, the player's stable node
-	# name (the multiplayer peer id) stands in as the dna seed until a real
-	# player-DNA system exists -- deterministic per player, varied across
-	# players (see HeroAppearance).
 	if _character_view != null:
-		_character_view.apply_appearance(
-			HeroAppearance.new().appearance_for(class_name_value, name.hash())
-		)
+		var look := appearance
+		if look.is_empty():
+			look = HeroAppearance.new().appearance_for(class_name_value, name.hash())
+		_character_view.apply_appearance(look)
 
 
 ## Awards XP (see ExperienceTrack); each level gained bumps max health and heals
@@ -954,9 +978,12 @@ func pickup_nearby() -> int:
 
 
 ## Authority-only: the fishing minigame (see FishingSession / concept/fishing.md).
-## Press the fish key next to water with a rod to cast; wait for a bite, then
-## press it again within the reaction window to land a fish (rarer catches yield
-## more). Reeling too early or too late loses it. The HUD reads fishing_message.
+## Press the fish key next to water with a rod to cast -- a visible rod-throw
+## swing and a bobber landing at the cast point (see FishingCast), drawing
+## nearby fish toward it (EarthChunkManager.set_attraction_point). Wait for a
+## bite (the bobber dips), then press the fish key again within the reaction
+## window to land it (rarer catches yield more). Reeling too early or too
+## late loses it. The HUD reads fishing_message.
 func _fishing_step(delta: float) -> void:
 	_fishing.advance(delta)
 	if _fishing.phase() == FishingSession.CAUGHT:
@@ -980,10 +1007,12 @@ func _fishing_step(delta: float) -> void:
 			_fishing_result_message = "Caught a %s fish! (x%d)" % [rarity, count]
 		_fishing_result_timer = FISH_MESSAGE_DURATION
 		_fishing = FishingSession.new()
+		_end_cast_visuals()
 	elif _fishing.phase() == FishingSession.MISSED:
 		_fishing_result_message = "The fish got away…"
 		_fishing_result_timer = FISH_MESSAGE_DURATION
 		_fishing = FishingSession.new()
+		_end_cast_visuals()
 
 	var fish_pressed := (
 		Input.is_action_pressed("fish") if _controlled_locally() else _pending_fish_pressed
@@ -998,6 +1027,15 @@ func _fishing_step(delta: float) -> void:
 			_fishing.cast(
 				hash("%d_%d_%d" % [int(position.x), int(position.y), _fishing_cast_count]), 0.0
 			)
+			_start_cast_visuals()
+
+	if _fishing.is_active() and _bobber != null:
+		# A visible dip while a fish is on the line, on top of the HUD text.
+		var bob := sin(_fishing.phase_elapsed_seconds() * BITE_BOB_SPEED) * BITE_BOB_AMPLITUDE_PX \
+			if _fishing.phase() == FishingSession.BITING else 0.0
+		_bobber.global_position = _bobber_target + Vector2(0, bob)
+		if _chunk_manager != null:
+			_chunk_manager.set_attraction_point(_bobber_target, ATTRACTION_RADIUS)
 
 	_fishing_result_timer = maxf(0.0, _fishing_result_timer - delta)
 	if _fishing.phase() == FishingSession.BITING:
@@ -1008,6 +1046,26 @@ func _fishing_step(delta: float) -> void:
 		fishing_message = _fishing_result_message
 	else:
 		fishing_message = ""
+
+
+## Casting: a quick rod-throw swing (reusing the same swing animation as a
+## melee attack) and the bobber landing at the cast point, drawing nearby
+## fish in.
+func _start_cast_visuals() -> void:
+	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
+	_bobber_target = _fishing_cast.cast_point(position, _last_facing_direction)
+	if _bobber != null:
+		_bobber.global_position = _bobber_target
+		_bobber.visible = true
+	if _chunk_manager != null:
+		_chunk_manager.set_attraction_point(_bobber_target, ATTRACTION_RADIUS)
+
+
+func _end_cast_visuals() -> void:
+	if _bobber != null:
+		_bobber.visible = false
+	if _chunk_manager != null:
+		_chunk_manager.clear_attraction_point()
 
 
 func _has_fishing_rod() -> bool:
