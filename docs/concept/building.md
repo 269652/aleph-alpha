@@ -130,13 +130,17 @@ modification like any other.
 
 ### Status / mechanisms
 
-- ⬜ `building_piece.gd` — the piece catalog (category, material, cost,
-  passability, durability).
-- ⬜ `building_placement.gd` — placement/removal validity over a grid.
-- ⬜ `room_detector.gd` — enclosure flood fill; rooms, and whether a given
-  cell is indoors.
-- ⬜ `house_blueprint.gd` — seed + footprint → piece list, shared by the
-  player's prefabs and the village generator.
+- ✅ `building_piece.gd` — the piece catalog (category, material, cost,
+  passability, durability), tested.
+- ✅ `building_placement.gd` — placement/removal validity over a grid, with
+  a refusal *reason* so a build cursor can explain itself, tested.
+- ✅ `room_detector.gd` — enclosure flood fill; rooms, and whether a given
+  cell is indoors, tested. Doors block the fill while staying walkable,
+  which is what makes a house enterable without ceasing to be enclosed.
+- ✅ `house_blueprint.gd` — seed + footprint → piece list, shared by the
+  player's prefabs and the village generator, tested. A generated house is
+  verified to enclose a real room, so village houses cannot silently
+  degrade back into scenery.
 - ⬜ Wiring: build cursor and piece selection, wall collision, door
   passability, roof hide-on-enter.
 - ⬜ Village houses rebuilt from blueprints, replacing the decorative
