@@ -70,7 +70,6 @@ var _axis_value_labels: Dictionary = {}  # axis -> Label
 
 
 func _ready() -> void:
-	set_anchors_preset(Control.PRESET_CENTER)
 	custom_minimum_size = PANEL_SIZE
 	_choices = _appearance_maker.choices_from_appearance(
 		_appearance_maker.appearance_for(_selected_class, 0)
@@ -93,6 +92,16 @@ func _ready() -> void:
 		s.set_anchors_preset(Control.PRESET_FULL_RECT)
 		stack.add_child(s)
 	_show(_root_screen)
+
+	# Centering must happen AFTER custom_minimum_size/children are set --
+	# set_anchors_preset computes its offsets from the control's size at the
+	# moment it's called, and a freshly-instantiated PanelContainer is still
+	# (0, 0) at that point -- calling it first (as this used to) froze
+	# "centered" against a zero-size rect, which read as pinned toward a
+	# corner once the real 760x520 content grew in. Forcing `size` first
+	# guarantees the offsets are computed against the true final size.
+	size = PANEL_SIZE
+	set_anchors_preset(Control.PRESET_CENTER)
 
 
 # -- root ---------------------------------------------------------------------
