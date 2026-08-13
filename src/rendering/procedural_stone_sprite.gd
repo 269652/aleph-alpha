@@ -9,7 +9,10 @@ extends RefCounted
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
-const SIZE := Vector2i(16, 16)
+## DETAIL_MULTIPLIER times the world footprint (see
+## docs/concept/art_resolution.md) -- drawn at ArtResolution.SPRITE_SCALE
+## so it gains pixel detail without growing in the world.
+const SIZE := Vector2i(32, 32)
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.25
 const HIGHLIGHT_LIGHTEN := 0.2

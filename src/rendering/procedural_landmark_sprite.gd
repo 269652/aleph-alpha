@@ -13,9 +13,9 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const LANDMARK_IDS: Array[String] = ["well", "stall", "gate"]
 
 const SIZES := {
-	"well": Vector2i(20, 22),
-	"stall": Vector2i(26, 22),
-	"gate": Vector2i(24, 26),
+	"well": Vector2i(40, 44),
+	"stall": Vector2i(52, 44),
+	"gate": Vector2i(48, 52),
 }
 
 const STONE_COLOR := Color(0.58, 0.58, 0.62)

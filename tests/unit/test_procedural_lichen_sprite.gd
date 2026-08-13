@@ -5,16 +5,16 @@ const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sp
 var sprite := ProceduralLichenSprite.new()
 
 
-func test_image_is_16_by_16():
+func test_image_matches_the_generators_canvas_size():
 	var image := sprite.generate_image(1)
-	assert_eq(image.get_width(), 16)
-	assert_eq(image.get_height(), 16)
+	assert_eq(image.get_width(), ProceduralLichenSprite.SIZE.x)
+	assert_eq(image.get_height(), ProceduralLichenSprite.SIZE.y)
 
 
 func test_background_corners_are_transparent():
 	var image := sprite.generate_image(1)
 	assert_eq(image.get_pixel(0, 0).a, 0.0)
-	assert_eq(image.get_pixel(15, 0).a, 0.0)
+	assert_eq(image.get_pixel(ProceduralLichenSprite.SIZE.x - 1, 0).a, 0.0)
 
 
 ## Lichen should read as pale grey-green/mossy, not vibrant -- opaque pixels
@@ -23,8 +23,8 @@ func test_background_corners_are_transparent():
 func test_contains_muted_grey_green_dominant_blade_pixels():
 	var image := sprite.generate_image(1)
 	var muted_pixels := 0
-	for y in 16:
-		for x in 16:
+	for y in ProceduralLichenSprite.SIZE.y:
+		for x in ProceduralLichenSprite.SIZE.x:
 			var c := image.get_pixel(x, y)
 			if c.a > 0.0 and c.g >= c.r and c.g >= c.b and (c.g - c.b) < 0.2:
 				muted_pixels += 1

@@ -5,16 +5,16 @@ const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_spri
 var sprite := ProceduralScrubSprite.new()
 
 
-func test_image_is_16_by_16():
+func test_image_matches_the_generators_canvas_size():
 	var image := sprite.generate_image(1)
-	assert_eq(image.get_width(), 16)
-	assert_eq(image.get_height(), 16)
+	assert_eq(image.get_width(), ProceduralScrubSprite.SIZE.x)
+	assert_eq(image.get_height(), ProceduralScrubSprite.SIZE.y)
 
 
 func test_background_corners_are_transparent():
 	var image := sprite.generate_image(1)
 	assert_eq(image.get_pixel(0, 0).a, 0.0)
-	assert_eq(image.get_pixel(15, 0).a, 0.0)
+	assert_eq(image.get_pixel(ProceduralScrubSprite.SIZE.x - 1, 0).a, 0.0)
 
 
 ## Scrub should read as dusty sage/olive, not the lush saturated green of
@@ -23,8 +23,8 @@ func test_background_corners_are_transparent():
 func test_contains_sage_olive_dominant_blade_pixels():
 	var image := sprite.generate_image(1)
 	var sage_pixels := 0
-	for y in 16:
-		for x in 16:
+	for y in ProceduralScrubSprite.SIZE.y:
+		for x in ProceduralScrubSprite.SIZE.x:
 			var c := image.get_pixel(x, y)
 			if c.a > 0.0 and c.g > c.b and c.r > c.b:
 				sage_pixels += 1

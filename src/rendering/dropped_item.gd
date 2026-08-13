@@ -9,6 +9,7 @@ extends Sprite2D
 ## room the node stays (with whatever didn't fit).
 
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 const GROUP_NAME := "dropped_item"
 ## Un-picked-up items despawn after this many seconds so the ground doesn't
@@ -33,6 +34,10 @@ func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	if item_stack != null and texture == null:
 		texture = _sprite_generator.generate_texture(item_stack.item.id)
+		# Item art is authored DETAIL_MULTIPLIER times oversized; scaling it
+		# back keeps a dropped item the same size on the ground as before
+		# (see docs/concept/art_resolution.md).
+		scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 
 	var click_area := Area2D.new()
 	var collision_shape := CollisionShape2D.new()

@@ -7,7 +7,10 @@ extends RefCounted
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
-const SIZE := 10
+## DETAIL_MULTIPLIER times the world footprint (see
+## docs/concept/art_resolution.md) -- drawn at ArtResolution.SPRITE_SCALE
+## so it gains pixel detail without growing in the world.
+const SIZE := 20
 
 const TOP_COLOR := Color(0.85, 0.15, 0.1)
 const BOTTOM_COLOR := Color(0.95, 0.95, 0.92)

@@ -1,5 +1,7 @@
 extends RefCounted
 
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+
 ## Chunk-based spawn/despawn of a procedurally generated village (see
 ## SettlementGenerator, docs/concept/npc.md) -- houses (ProceduralHouseSprite)
 ## plus walking NpcMarker villagers, wearing the same hero-appearance engine
@@ -69,6 +71,10 @@ func _build_house(chunk_coord: Vector2i, index: int, position: Vector2, parent: 
 	var house := Sprite2D.new()
 	var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, index])
 	house.texture = _house_sprite.generate_texture(seed_value)
+	# Art is authored DETAIL_MULTIPLIER times oversized for pixel detail;
+	# scaling it back keeps the world footprint unchanged (see
+	# docs/concept/art_resolution.md).
+	house.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	house.position = position
 	# Shadow sized from THIS house's rolled size (see
 	# ProceduralHouseSprite.size_for) -- houses come in 3 sizes now.
@@ -83,6 +89,10 @@ func _build_house(chunk_coord: Vector2i, index: int, position: Vector2, parent: 
 func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D) -> Sprite2D:
 	var landmark := Sprite2D.new()
 	landmark.texture = _landmark_sprite.generate_texture(landmark_id)
+	# Art is authored DETAIL_MULTIPLIER times oversized for pixel detail;
+	# scaling it back keeps the world footprint unchanged (see
+	# docs/concept/art_resolution.md).
+	landmark.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	landmark.position = position
 	var size: Vector2i = ProceduralLandmarkSprite.SIZES.get(landmark_id, Vector2i(20, 20))
 	landmark.add_child(_drop_shadow.make_shadow(int(size.x * 0.8), size.y * 0.5 - 1.0))

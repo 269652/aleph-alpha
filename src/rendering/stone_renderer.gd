@@ -11,11 +11,16 @@ const StonePlacement = preload("res://src/world/stone_placement.gd")
 const OrePlacement = preload("res://src/world/ore_placement.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const ProceduralStoneSprite = preload("res://src/rendering/procedural_stone_sprite.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const ProceduralOreSprite = preload("res://src/rendering/procedural_ore_sprite.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
 const MinableOre = preload("res://src/rendering/minable_ore.gd")
 
-const STONE_SIZE := Vector2(ProceduralStoneSprite.SIZE)
+## The boulder's WORLD footprint -- derived from its art size, which is
+## authored DETAIL_MULTIPLIER times oversized (see
+## docs/concept/art_resolution.md). Collision sizes off this, so it stays
+## matched to what the player actually sees.
+const STONE_SIZE := Vector2(ProceduralStoneSprite.SIZE) * ArtResolution.SPRITE_SCALE
 const COLLISION_SCALE := 0.6
 
 ## Bounded texture variety (same reasoning as TreeRenderer.SPECIES_BUCKETS):
@@ -80,6 +85,7 @@ func _build_ore_node(global_x: int, global_y: int) -> StaticBody2D:
 func _attach_body_parts(body: StaticBody2D, texture: Texture2D) -> void:
 	var sprite := Sprite2D.new()
 	sprite.texture = texture
+	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	body.add_child(sprite)
 
 	var collision := CollisionShape2D.new()

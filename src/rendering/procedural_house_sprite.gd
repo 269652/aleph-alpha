@@ -19,7 +19,10 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
 ## The 3 house sizes a seed can roll -- cottage, house, homestead. All wider
 ## and taller than a full villager sprite (body + head).
-const SIZES: Array[Vector2i] = [Vector2i(36, 32), Vector2i(46, 40), Vector2i(56, 46)]
+## DETAIL_MULTIPLIER times the world footprint (see
+## docs/concept/art_resolution.md) -- drawn at ArtResolution.SPRITE_SCALE
+## so it gains pixel detail without growing in the world.
+const SIZES: Array[Vector2i] = [Vector2i(72, 64), Vector2i(92, 80), Vector2i(112, 92)]
 
 ## Seeded wall palettes: cream plaster, timber brown, field-stone grey,
 ## warm clay.

@@ -5,11 +5,17 @@ extends RefCounted
 ## flecks of the ore's signature colour so each ore type reads at a glance
 ## (iron = orange-brown, copper = teal-green, coal = near-black).
 
-const SIZE := Vector2i(16, 16)
+## DETAIL_MULTIPLIER times the world footprint (see
+## docs/concept/art_resolution.md) -- drawn at ArtResolution.SPRITE_SCALE
+## so it gains pixel detail without growing in the world.
+const SIZE := Vector2i(32, 32)
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.25
 const HIGHLIGHT_LIGHTEN := 0.2
-const FLECK_COUNT := 10
+## Scaled with the canvas AREA so fleck density per drawn boulder is
+## unchanged at the higher art resolution -- a fixed count read as a
+## nearly-bare rock (see docs/concept/art_resolution.md).
+const FLECK_COUNT := 40
 
 const STONE_COLOR := Color(0.52, 0.52, 0.55)
 

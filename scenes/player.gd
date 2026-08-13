@@ -29,6 +29,7 @@ const Shop = preload("res://src/gameplay/shop.gd")
 const Hotbar = preload("res://src/gameplay/hotbar.gd")
 const FishingCast = preload("res://src/gameplay/fishing_cast.gd")
 const ProceduralBobberSprite = preload("res://src/rendering/procedural_bobber_sprite.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
@@ -322,6 +323,9 @@ func _ready() -> void:
 	# The fishing bobber (see _fishing_step) -- hidden until a line is cast.
 	_bobber = Sprite2D.new()
 	_bobber.texture = ProceduralBobberSprite.new().generate_texture()
+	# Oversized art scaled back to its world size (see
+	# docs/concept/art_resolution.md).
+	_bobber.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	_bobber.visible = false
 	_bobber.top_level = true  # world position, independent of the player's own transform
 	add_child(_bobber)

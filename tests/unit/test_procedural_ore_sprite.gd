@@ -9,10 +9,10 @@ func before_each():
 	generator = ProceduralOreSprite.new()
 
 
-func test_image_is_16_by_16():
+func test_image_matches_the_generators_canvas_size():
 	var image := generator.generate_image("iron", 42)
-	assert_eq(image.get_width(), 16)
-	assert_eq(image.get_height(), 16)
+	assert_eq(image.get_width(), ProceduralOreSprite.SIZE.x)
+	assert_eq(image.get_height(), ProceduralOreSprite.SIZE.y)
 
 
 func test_image_has_transparent_background_and_opaque_boulder():
@@ -91,4 +91,4 @@ func test_copper_flecks_are_teal_green():
 func test_generate_texture_wraps_image():
 	var texture := generator.generate_texture("iron", 42)
 	assert_not_null(texture)
-	assert_eq(texture.get_width(), 16)
+	assert_eq(texture.get_width(), ProceduralOreSprite.SIZE.x)

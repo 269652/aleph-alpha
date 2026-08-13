@@ -10,6 +10,13 @@ extends RefCounted
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
+## NOT yet on the resolution pass: this generator stamps hand-authored
+## ASCII bitmaps (see the SPECIES/SHAPE tables below), which are
+## written for exactly this canvas. Doubling the canvas would need the
+## bitmaps redrawn -- upscaling them adds pixels but no information,
+## the trap docs/concept/art_resolution.md warns about. Converting
+## these to anatomy-built sprites (as ProceduralAnimalSprite now is)
+## is the real fix and is deferred.
 const SIZE := Vector2i(16, 10)
 
 const EYE_COLOR := Color(0.05, 0.05, 0.05)
