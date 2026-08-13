@@ -254,3 +254,44 @@ func test_portraits_of_different_heroes_differ():
 
 func _close(a: Color, b: Color) -> bool:
 	return a.a > 0.0 and Vector3(a.r, a.g, a.b).distance_to(Vector3(b.r, b.g, b.b)) < 0.02
+
+
+# -- torso silhouette -------------------------------------------------------
+#
+# Silhouette is the strongest readability cue in pixel art. The tunic used
+# to be a plain rectangle, so the hero read as a colored box with a head on
+# it regardless of how well the interior was shaded.
+
+## Shoulders are the widest point, the waist is pinched in, and the hem
+## flares back out -- a body shape, not a box.
+func test_torso_is_widest_at_the_shoulders_and_pinched_at_the_waist():
+	var size := Vector2i(52, 76)
+	var shoulder := sprite.torso_half_width(size, int(size.y * 0.12))
+	var waist := sprite.torso_half_width(size, int(size.y * 0.55))
+	var hem := sprite.torso_half_width(size, size.y - 2)
+	assert_gt(shoulder, waist, "shoulders should be wider than the waist")
+	assert_gt(hem, waist, "the hem should flare back out below the waist")
+
+
+func test_torso_half_width_never_exceeds_the_canvas():
+	var size := Vector2i(52, 76)
+	for y in size.y:
+		var half := sprite.torso_half_width(size, y)
+		assert_between(half, 1.0, size.x / 2.0)
+
+
+## The shaped silhouette must actually reach the image: some rows must have
+## transparent pixels at the edges where the body narrows.
+func test_tunic_image_has_a_shaped_not_rectangular_silhouette():
+	var size := Vector2i(52, 76)
+	var image := sprite.generate_hero_tunic_image(size, appearance_maker.appearance_for("warrior", 2))
+	var widths := []
+	for y in size.y:
+		var w := 0
+		for x in size.x:
+			if image.get_pixel(x, y).a > 0.0:
+				w += 1
+		widths.append(w)
+	var narrowest: int = widths.min()
+	var widest: int = widths.max()
+	assert_lt(narrowest, widest, "the torso should vary in width, not be a rectangle")

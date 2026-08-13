@@ -18,6 +18,10 @@ const HIGHLIGHT_LIGHTEN := 0.2
 var _palette := PixelPalette.new()
 ## Cloth-fold noise: stretched vertically (folds run down the garment) and
 ## shallow enough to read as fabric rather than as dents.
+## Where the head's dark rim begins, as squared normalized distance from
+## its center -- keeps the silhouette crisp against the world behind it.
+const _HEAD_OUTLINE_START := 0.86
+
 const _FOLD_FREQUENCY_X := 0.42
 const _FOLD_FREQUENCY_Y := 0.06
 const _FOLD_DEPTH := 0.34
@@ -109,22 +113,25 @@ func generate_hero_head_image(size: Vector2i, appearance: Dictionary) -> Image:
 	var rx := size.x / 2.0
 	var ry := size.y / 2.0
 
-	# Face: a shaded ellipse, lit from the top-left like every other generator.
+	# The head is shaded as a real SPHEROID through the shared engine (see
+	# docs/concept/pixel_art_engine.md) rather than with hard "top-left is
+	# lighter, bottom is darker" cutoffs, which read as two flat patches
+	# stuck on a disc. A skin ramp also warms the highlights and cools the
+	# shadows, which is most of what makes skin look like skin.
+	var radius := Vector2(rx, ry)
+	var outline := _palette.outline_color()
 	for y in size.y:
 		for x in size.x:
-			var dx := (x + 0.5 - center.x) / rx
-			var dy := (y + 0.5 - center.y) / ry
+			var point := Vector2(x + 0.5, y + 0.5)
+			var dx := (point.x - center.x) / rx
+			var dy := (point.y - center.y) / ry
 			var d := dx * dx + dy * dy
 			if d > 1.0:
 				continue
-			var color := skin
-			if d > 0.82:
-				color = _palette.outline_color()
-			elif dx + dy < -0.5:
-				color = _palette.highlight(skin)
-			elif dy > 0.45:
-				color = _palette.shade(skin)
-			image.set_pixel(x, y, color)
+			if d > _HEAD_OUTLINE_START:
+				image.set_pixel(x, y, outline)
+				continue
+			image.set_pixel(x, y, _form.shade(_ramp, skin, center, radius, point))
 
 	_paint_facial_hair(image, size, appearance, center, rx, ry)
 	_paint_face_features(image, size, appearance, center, rx, ry)
@@ -244,6 +251,35 @@ func generate_hero_tunic_texture(size: Vector2i, appearance: Dictionary) -> Imag
 	return ImageTexture.create_from_image(generate_hero_tunic_image(size, appearance))
 
 
+## Half the torso's width at row `y`, in pixels -- the body's silhouette.
+## Proportions are expressed as fractions of the canvas so they hold at any
+## art resolution: a narrow neck/shoulder line at the very top, the widest
+## point across the chest, a pinched waist, then a flare to the hem.
+func torso_half_width(size: Vector2i, y: int) -> float:
+	var t := clampf(float(y) / maxf(float(size.y - 1), 1.0), 0.0, 1.0)
+	var widest := float(size.x) / 2.0
+	var fraction: float
+	if t < _SHOULDER_T:
+		# Shoulders rise quickly from the neck to the chest's full width.
+		fraction = lerp(_NECK_FRACTION, 1.0, t / _SHOULDER_T)
+	elif t < _WAIST_T:
+		# Chest tapers in toward the waist.
+		fraction = lerp(1.0, _WAIST_FRACTION, (t - _SHOULDER_T) / (_WAIST_T - _SHOULDER_T))
+	else:
+		# Hem flares back out below the waist.
+		fraction = lerp(_WAIST_FRACTION, _HEM_FRACTION, (t - _WAIST_T) / maxf(1.0 - _WAIST_T, 0.0001))
+	return clampf(widest * fraction, 1.0, widest)
+
+
+## Torso proportions, as fractions of the canvas height (where the landmark
+## sits) and of its half-width (how wide it is there).
+const _SHOULDER_T := 0.16
+const _WAIST_T := 0.62
+const _NECK_FRACTION := 0.62
+const _WAIST_FRACTION := 0.82
+const _HEM_FRACTION := 0.96
+
+
 func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:
 	var tunic: Color = appearance.tunic
 	var trim: Color = appearance.trim
@@ -254,16 +290,27 @@ func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:
 	# it -- previously it was a flat fill with a 1px lighter left edge and
 	# darker right edge, which read as a plain colored rectangle.
 	var outline := _palette.outline_color()
+	var center_x := float(size.x) / 2.0
 	var seed_value := int(tunic.r * 977.0) + int(tunic.g * 1361.0) + int(tunic.b * 2129.0)
 	for y in size.y:
+		# The torso is a SHAPE, not a rectangle: wide at the shoulders,
+		# pinched at the waist, flaring at the hem. Silhouette is the
+		# strongest readability cue in pixel art -- a well-shaded box still
+		# reads as a box.
+		var half := torso_half_width(size, y)
+		var left := center_x - half
+		var right := center_x + half
 		for x in size.x:
-			if y == 0 and (x == 0 or x == size.x - 1):
-				continue  # chamfer -- sloped shoulders, not a hard rectangle
-			var is_edge := x == 0 or y == 0 or x == size.x - 1 or y == size.y - 1
+			var px := float(x) + 0.5
+			if px < left or px > right:
+				continue  # outside the body -- left transparent
+			var is_edge := (
+				px < left + 1.0 or px > right - 1.0 or y == 0 or y == size.y - 1
+			)
 			if is_edge:
 				image.set_pixel(x, y, outline)
 				continue
-			var lightness := _form.cylinder_lightness(0.0, float(size.x), float(x) + 0.5)
+			var lightness := _form.cylinder_lightness(left, half * 2.0, px)
 			# Vertical cloth folds: a slow noise field along the torso's
 			# width dents the shading, so the fabric drapes instead of
 			# reading as a smooth painted tube.
