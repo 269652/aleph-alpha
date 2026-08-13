@@ -59,6 +59,27 @@ func test_cycling_wraps_around_the_pool():
 	assert_has(HeroAppearance.SKIN_TONES, menu.current_appearance().skin)
 
 
+## Regression: the panel must actually be centered, not pinned to the parent's
+## top-left corner. PRESET_CENTER alone only re-anchors the reference point --
+## Godot's set_anchor recomputes offsets to PRESERVE the control's current
+## on-screen rect under the new anchor fraction, it does not center a rect of
+## the control's size (verified against control.cpp's set_anchor/
+## set_anchors_preset). Centering also requires the four offsets to form a
+## symmetric half-size box around that 0.5/0.5 anchor point -- the same
+## pattern every other centered popup in this codebase uses (SettingsOverlay,
+## InventoryWindow, DevConsole, wired in world.gd) rather than relying on
+## set_anchors_preset by itself.
+func test_panel_is_actually_centered_not_pinned_to_a_corner():
+	assert_eq(menu.anchor_left, 0.5)
+	assert_eq(menu.anchor_top, 0.5)
+	assert_eq(menu.anchor_right, 0.5)
+	assert_eq(menu.anchor_bottom, 0.5)
+	assert_almost_eq(menu.offset_left, -MainMenu.PANEL_SIZE.x / 2.0, 0.5)
+	assert_almost_eq(menu.offset_top, -MainMenu.PANEL_SIZE.y / 2.0, 0.5)
+	assert_almost_eq(menu.offset_right, MainMenu.PANEL_SIZE.x / 2.0, 0.5)
+	assert_almost_eq(menu.offset_bottom, MainMenu.PANEL_SIZE.y / 2.0, 0.5)
+
+
 func test_every_axis_is_cyclable_and_stays_in_its_pool():
 	for axis in HeroAppearance.AXES:
 		menu._cycle_axis(axis, 1)

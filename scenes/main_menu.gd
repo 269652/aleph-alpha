@@ -93,15 +93,22 @@ func _ready() -> void:
 		stack.add_child(s)
 	_show(_root_screen)
 
-	# Centering must happen AFTER custom_minimum_size/children are set --
-	# set_anchors_preset computes its offsets from the control's size at the
-	# moment it's called, and a freshly-instantiated PanelContainer is still
-	# (0, 0) at that point -- calling it first (as this used to) froze
-	# "centered" against a zero-size rect, which read as pinned toward a
-	# corner once the real 760x520 content grew in. Forcing `size` first
-	# guarantees the offsets are computed against the true final size.
-	size = PANEL_SIZE
+	# PRESET_CENTER alone only re-anchors the reference point to 0.5/0.5/0.5/
+	# 0.5 -- Godot's set_anchor recomputes offsets to PRESERVE the control's
+	# CURRENT on-screen rect under the new anchor fraction, it does not derive
+	# offsets from size (verified against control.cpp). Since MainMenu is
+	# never otherwise positioned, that left it pinned to the parent's
+	# top-left corner regardless of when size was set. Centering needs the
+	# four offsets explicitly set to a symmetric half-size box around the
+	# anchor point -- the same pattern every other centered popup in this
+	# codebase uses (SettingsOverlay/InventoryWindow/DevConsole, wired in
+	# world.gd) -- pinned by
+	# test_panel_is_actually_centered_not_pinned_to_a_corner.
 	set_anchors_preset(Control.PRESET_CENTER)
+	offset_left = -PANEL_SIZE.x / 2.0
+	offset_top = -PANEL_SIZE.y / 2.0
+	offset_right = PANEL_SIZE.x / 2.0
+	offset_bottom = PANEL_SIZE.y / 2.0
 
 
 # -- root ---------------------------------------------------------------------

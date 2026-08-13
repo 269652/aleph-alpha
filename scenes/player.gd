@@ -43,6 +43,12 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 
 const BASE_SPEED := 80.0
 const PLAYER_SIZE := 12
+## Camera2D zoom -- bumped from the original 3x so pixel art (sprites,
+## terrain, water) reads clearly across a full 1280x720+ window instead of
+## only a small slice of it. Applied in _ready() rather than left as a bare
+## number in player.tscn, so it's a tested constant (see test_player_camera.gd)
+## rather than an eyeballed scene property.
+const CAMERA_ZOOM := Vector2(4, 4)
 ## How far (in pixels) position must change between frames for a non-authority
 ## proxy to consider itself "moving" for animation purposes, vs. jitter.
 const PROXY_MOVEMENT_EPSILON := 0.5
@@ -264,11 +270,13 @@ var _last_facing_direction := Vector2.DOWN
 
 @onready var _character_view: CharacterView = $CharacterView
 @onready var _collision_shape: CollisionShape2D = $CollisionShape2D
+@onready var _camera: Camera2D = $Camera2D
 
 
 func _ready() -> void:
 	motion_mode = CharacterBody2D.MOTION_MODE_FLOATING
 	_last_position = position
+	_camera.zoom = CAMERA_ZOOM
 	# So creature AI (CreatureMarker) can sense the player as a threat/target.
 	add_to_group("player")
 	_setup_replication()
