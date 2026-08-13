@@ -17,13 +17,17 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 ## resolution pass) so canopies overlap between adjacent forest tiles and a
 ## forest reads as a connected leafy mass instead of spaced lollipops.
 ## Collision stays proportional (TreeRenderer.COLLISION_SCALE).
-const WORLD_SIZE := Vector2i(20, 26)
+## A mature tree DOMINATES its tile: canopy wider than one tile and more
+## than twice the hero's height, with a trunk you could not step over.
+## It used to be 20x26 against a 16-unit tile and a 13x19 hero, so a
+## 'tree' barely out-stood the person under it.
+const WORLD_SIZE := Vector2i(40, 56)
 
 ## The ART canvas, DETAIL_MULTIPLIER times the world footprint (see
 ## docs/concept/art_resolution.md) -- TreeRenderer draws it at
 ## ArtResolution.SPRITE_SCALE so the tree gains real pixel detail without
 ## growing in the world.
-const SIZE := Vector2i(40, 52)
+const SIZE := Vector2i(80, 112)
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2
@@ -110,11 +114,16 @@ func _paint_fruit_dots(image: Image, seed_value: int, ripe_count: int) -> void:
 ## only became legible once the trunk was wider than a few pixels (see
 ## docs/concept/art_resolution.md); at the old resolution the trunk was
 ## barely wider than its own outline.
-const _BARK_STRIATIONS := 14
+## How wide the trunk is as a fraction of the canvas -- tuned so the trunk
+## lands close to a full tile in the world (see
+## test_the_trunk_is_close_to_a_tile_wide).
+const TRUNK_WIDTH_FRACTION := 0.26
+
+const _BARK_STRIATIONS := 22
 
 
 func _paint_trunk(image: Image, seed_value: int = 0) -> void:
-	var trunk_width := maxi(2, SIZE.x / 5)
+	var trunk_width := maxi(2, int(SIZE.x * TRUNK_WIDTH_FRACTION))
 	var trunk_left := (SIZE.x - trunk_width) / 2
 	var trunk_top := int(SIZE.y * CANOPY_HEIGHT_FRAC) - 1
 
@@ -345,3 +354,9 @@ func _paint_speckles(
 		var dy := (speckle_y + 0.5 - center.y) / radius_y
 		if dx * dx + dy * dy <= 0.8:  # keep speckles off the outline ring
 			image.set_pixel(speckle_x, speckle_y, speckle_color)
+
+
+## The trunk's width in WORLD units -- what a collision box or a "can I walk
+## past this" question actually cares about.
+static func trunk_world_width() -> float:
+	return float(SIZE.x) * TRUNK_WIDTH_FRACTION * ArtResolution.SPRITE_SCALE

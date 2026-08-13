@@ -1,9 +1,12 @@
 extends RefCounted
 
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 
-## How big the bird is in the world, relative to its drawn art.
-const BIRD_WORLD_SCALE := 0.46
+## A kingfisher against the same fish reference the ambient flyers use
+## (see AmbientFlyerRenderer.FLYER_WORLD_SCALE) -- a proper bird, larger
+## than the fish it hunts.
+const BIRD_WORLD_SCALE := 1.3
 
 ## Chunk-based spawn/despawn of fish-eating birds (kingfishers) -- gated by
 ## water presence (not a land biome pool, unlike AmbientFlyerRenderer),
@@ -68,7 +71,7 @@ func spawn_piscivore_birds(
 	# docs/concept/art_resolution.md).
 	# A kingfisher is a small bird, not a gull (see
 	# AmbientFlyerRenderer.FLYER_WORLD_SCALE for the same reasoning).
-	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * BIRD_WORLD_SCALE
+	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * BIRD_WORLD_SCALE
 	marker.position = position
 	marker.home = position
 	marker.wander_seed = seed_value

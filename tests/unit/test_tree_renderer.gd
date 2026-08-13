@@ -150,8 +150,10 @@ func test_spawned_tree_sprites_share_the_wind_sway_material():
 # growing in the world. Phase 1's mistake on the ground plane -- raising art
 # size and world footprint together -- is exactly what these pin against.
 
-func test_tree_world_size_is_unchanged_by_the_art_resolution_pass():
-	assert_eq(TreeRenderer.TREE_SIZE, Vector2(20, 26))
+## The world size follows the sprite's declared footprint rather than a
+## literal, so growing the tree (see WORLD_SIZE) does not need this edited.
+func test_tree_world_size_follows_the_sprites_declared_footprint():
+	assert_eq(TreeRenderer.TREE_SIZE, Vector2(ProceduralTreeSprite.WORLD_SIZE))
 
 
 func test_tree_art_is_authored_at_the_shared_detail_multiplier():
@@ -174,3 +176,28 @@ func test_tree_sprite_is_scaled_back_to_its_world_footprint():
 	var drawn := Vector2(sprite.texture.get_size()) * sprite.scale
 	assert_almost_eq(drawn.x, TreeRenderer.TREE_SIZE.x, 0.01)
 	assert_almost_eq(drawn.y, TreeRenderer.TREE_SIZE.y, 0.01)
+
+
+# -- a mature tree towers over the hero -------------------------------------
+#
+# Trees were 20x26 world units against a 16-unit tile and a hero 13x19, so a
+# "tree" was barely taller than the person standing under it and its trunk
+# was a quarter of a tile. A grown tree should dominate its tile.
+
+const CharacterView = preload("res://scenes/character_view.gd")
+const TerrainRenderer2 = preload("res://src/rendering/terrain_renderer.gd")
+
+
+func test_a_mature_tree_is_taller_than_the_hero():
+	assert_gt(
+		float(ProceduralTreeSprite.WORLD_SIZE.y), float(CharacterView.BODY_SIZE.y) * 2.0,
+		"a full-grown tree should tower over the hero, not match them"
+	)
+
+
+## The trunk should read as a real trunk you could not step over -- close to
+## a full tile wide rather than a twig.
+func test_the_trunk_is_close_to_a_tile_wide():
+	var trunk_world_width := ProceduralTreeSprite.trunk_world_width()
+	assert_gte(trunk_world_width, float(TerrainRenderer2.TILE_SIZE) * 0.6)
+	assert_lte(trunk_world_width, float(TerrainRenderer2.TILE_SIZE) * 1.2)

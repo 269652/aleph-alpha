@@ -63,3 +63,12 @@ func take_damage(amount: float) -> void:
 		var sticks := ItemStack.new(Item.new("stick", "Stick", "material", 40), STICK_DROP_COUNT)
 		WorldItemBus.item_dropped.emit(sticks, position + Vector2(8, 4))
 		queue_free()
+
+
+## How far grown this tree is, 0..1 (see TreeGrowth). Applied to the whole
+## node so canopy, trunk, shadow and collision shrink together -- a seedling
+## is a small tree, not a full tree drawn small.
+var growth_scale: float = 1.0:
+	set(value):
+		growth_scale = clampf(value, 0.05, 1.0)
+		scale = Vector2.ONE * growth_scale

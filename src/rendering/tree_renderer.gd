@@ -8,6 +8,7 @@ const TreeGenome = preload("res://src/gameplay/tree_genome.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 
 ## A tree's WORLD footprint (see ProceduralTreeSprite.WORLD_SIZE) -- derived
 ## from the art size through ArtResolution rather than equal to it, since
@@ -72,7 +73,7 @@ func spawn_tree_at(parent: Node2D, position: Vector2) -> ChoppableTree:
 ## per-frame script: there are thousands loaded at once, so forage dropping is
 ## handled centrally and throttled by EarthChunkManager (see ForageScheduler)
 ## instead; take_damage() only runs on demand when an axe hits one.
-func _build_tree_node(position: Vector2) -> ChoppableTree:
+func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableTree:
 	var body := ChoppableTree.new()
 
 	var genome := TreeGenome.new(hash("%d_%d" % [int(position.x), int(position.y)]))
@@ -87,6 +88,11 @@ func _build_tree_node(position: Vector2) -> ChoppableTree:
 
 	var sprite := Sprite2D.new()
 	sprite.texture = _texture_for(position)
+	# Growth stage: a tree spread in mid-session starts as a seedling and
+	# thickens over time (see TreeGrowth), so a forest shows an age
+	# structure instead of every trunk arriving full-grown. Original forest
+	# trees are already mature -- they predate the session.
+	body.growth_scale = TreeGrowth.new().scale_at(age_seconds)
 	# The canopy art is authored DETAIL_MULTIPLIER times oversized for pixel
 	# detail; scaling it back down is what keeps the tree's world footprint
 	# unchanged (see docs/concept/art_resolution.md).
