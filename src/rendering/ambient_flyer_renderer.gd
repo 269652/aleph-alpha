@@ -11,7 +11,7 @@ const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 ## smallest to largest is deliberately narrow.
 const FLYER_WORLD_SCALE := {
 	"sparrow": 1.0,
-	"robin": 1.08,
+	"robin": 0.92,
 	"kingfisher": 1.25,
 	"monarch": 0.5,
 	"swallowtail": 0.55,
@@ -90,7 +90,7 @@ func spawn_ambient_flyers(
 				parent, chunk, chunk_origin_tiles, tile_size, "butterfly_spawn",
 				BUTTERFLY_SPECIES_POOL, MIN_BUTTERFLIES_PER_CHUNK, MAX_BUTTERFLIES_PER_CHUNK,
 				AmbientFlyerMovement.new(BUTTERFLY_SPEED, BUTTERFLY_RADIUS, BUTTERFLY_INTERVAL),
-				_butterfly_sprite, BUTTERFLY_SCALE
+				_butterfly_sprite
 			)
 		)
 	if BIRD_BIOMES.has(biome_name):
@@ -99,7 +99,7 @@ func spawn_ambient_flyers(
 				parent, chunk, chunk_origin_tiles, tile_size, "bird_spawn",
 				BIRD_SPECIES_POOL, MIN_BIRDS_PER_CHUNK, MAX_BIRDS_PER_CHUNK,
 				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
-				_bird_sprite, BIRD_SCALE
+				_bird_sprite
 			)
 		)
 	return spawned
@@ -122,7 +122,6 @@ func _spawn_species(
 	max_count: int,
 	movement: AmbientFlyerMovement,
 	sprite_generator,
-	sprite_scale: float
 ) -> Array[Node2D]:
 	var candidates: Array[Vector2i] = []
 	for y in chunk.height:
@@ -145,7 +144,7 @@ func _spawn_species(
 		var species: String = species_pool[seed_value % species_pool.size()]
 		var position := Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size)
 		spawned.append(
-			_build_marker(parent, species, position, seed_value, movement, sprite_generator, sprite_scale)
+			_build_marker(parent, species, position, seed_value, movement, sprite_generator)
 		)
 	return spawned
 
@@ -160,8 +159,7 @@ func _build_marker(
 	position: Vector2,
 	seed_value: int,
 	movement: AmbientFlyerMovement,
-	sprite_generator,
-	sprite_scale: float
+	sprite_generator
 ) -> AmbientFlyerMarker:
 	var marker := AmbientFlyerMarker.new()
 	marker.texture = sprite_generator.generate_texture(species, seed_value)
@@ -169,17 +167,18 @@ func _build_marker(
 	# frozen wings (see AmbientFlyerMarker._animate_wings).
 	if sprite_generator.has_method("generate_flap_textures"):
 		marker.flap_frames = sprite_generator.generate_flap_textures(species, seed_value)
-	# Art is authored DETAIL_MULTIPLIER times oversized; scaling it back
-	# keeps the flyer the same size in the world (see
-	# docs/concept/art_resolution.md).
-	# Scaled by the species' real size too: a butterfly is a fraction of a
-	# bird, and both were rendering at one shared size.
+	if sprite_generator.has_method("generate_perched_texture"):
+		marker.perched_frame = sprite_generator.generate_perched_texture(species, seed_value)
+	# Size comes from two factors only: the art resolution, and the species'
+	# own size relative to a fish (see FLYER_WORLD_SCALE). This used to also
+	# take a `sprite_scale` argument from the caller, which is now dead --
+	# leaving it would be a third, silent input to a number that has already
+	# been hard to get right.
 	marker.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * FishRenderer.FISH_WORLD_SCALE * FLYER_WORLD_SCALE.get(species, 1.0)
 	marker.position = position
 	marker.home = position
 	marker.wander_seed = seed_value
 	marker.species = species
-	marker.scale = Vector2.ONE * sprite_scale
 	marker.setup(movement)
 	parent.add_child(marker)
 	return marker

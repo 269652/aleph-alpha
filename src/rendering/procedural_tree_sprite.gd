@@ -17,17 +17,17 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 ## resolution pass) so canopies overlap between adjacent forest tiles and a
 ## forest reads as a connected leafy mass instead of spaced lollipops.
 ## Collision stays proportional (TreeRenderer.COLLISION_SCALE).
-## A mature tree DOMINATES its tile: canopy wider than one tile and more
-## than twice the hero's height, with a trunk you could not step over.
-## It used to be 20x26 against a 16-unit tile and a 13x19 hero, so a
-## 'tree' barely out-stood the person under it.
-const WORLD_SIZE := Vector2i(40, 56)
+## A tree's WORLD footprint. Briefly grown to 40x56 to tower over the hero,
+## then reverted: at that size forests crowded and read worse than they had
+## at this one. Height relative to the hero is better solved by draw order
+## (a tree now occludes someone walking behind it) than by sheer bulk.
+const WORLD_SIZE := Vector2i(20, 26)
 
 ## The ART canvas, DETAIL_MULTIPLIER times the world footprint (see
 ## docs/concept/art_resolution.md) -- TreeRenderer draws it at
 ## ArtResolution.SPRITE_SCALE so the tree gains real pixel detail without
 ## growing in the world.
-const SIZE := Vector2i(80, 112)
+const SIZE := Vector2i(40, 52)
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2
@@ -117,9 +117,9 @@ func _paint_fruit_dots(image: Image, seed_value: int, ripe_count: int) -> void:
 ## How wide the trunk is as a fraction of the canvas -- tuned so the trunk
 ## lands close to a full tile in the world (see
 ## test_the_trunk_is_close_to_a_tile_wide).
-const TRUNK_WIDTH_FRACTION := 0.26
+const TRUNK_WIDTH_FRACTION := 0.22
 
-const _BARK_STRIATIONS := 22
+const _BARK_STRIATIONS := 14
 
 
 func _paint_trunk(image: Image, seed_value: int = 0) -> void:

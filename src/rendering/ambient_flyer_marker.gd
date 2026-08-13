@@ -41,6 +41,10 @@ func _process(delta: float) -> void:
 	_elapsed_time += delta
 	if _movement == null:
 		return
+	if perched:
+		_animate_wings()
+		return  # sitting still: no drift, no beat
+
 	var before := position
 	position = _movement.step_position(home, position, _elapsed_time, delta, wander_seed)
 	var moved := position - before
@@ -93,12 +97,23 @@ func face_travel(direction: Vector2, delta: float = 0.0) -> void:
 ## DELAY. The two rates are deliberately far apart: "they should change
 ## direction slowly, only their wings should flap fast".
 var flap_frames: Array = []
+## The folded-wing sprite shown while perched (see ProceduralBirdSprite.
+## generate_perched_texture).
+var perched_frame: Texture2D = null
+## True while the flyer is sitting rather than flying.
+var perched := false
 const FLAP_SECONDS_PER_FRAME := 0.09
 
 
 ## Advances the wing-beat. Separate from the movement step so a flyer
 ## animates even while hovering.
 func _animate_wings() -> void:
+	# A perched bird holds still. Flapping while sitting on a branch reads
+	# as a glitch, not as a bird.
+	if perched:
+		if perched_frame != null:
+			texture = perched_frame
+		return
 	if flap_frames.is_empty():
 		return
 	var index := int(_elapsed_time / FLAP_SECONDS_PER_FRAME) % flap_frames.size()

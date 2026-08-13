@@ -40,6 +40,10 @@ var _drop_shadow := DropShadow.new()
 func spawn_trees(
 	parent: Node2D, chunk: Chunk, chunk_origin_tiles: Vector2i, tile_size: int
 ) -> Array[Node2D]:
+	# Trees must sort against each other and against whoever walks among
+	# them (see _build_tree_node's anchor comment).
+	parent.y_sort_enabled = true
+
 	var spawned: Array[Node2D] = []
 	for y in chunk.height:
 		var global_y := chunk_origin_tiles.y + y
@@ -65,6 +69,7 @@ func spawn_trees(
 ## to INF -- fully grown -- for callers that mean "a tree that was always
 ## here"; a freshly spread sapling passes 0.0 and starts as a seedling.
 func spawn_tree_at(parent: Node2D, position: Vector2, age_seconds: float = INF) -> ChoppableTree:
+	parent.y_sort_enabled = true
 	var tree := _build_tree_node(position, age_seconds)
 	tree.position = position
 	parent.add_child(tree)
@@ -100,6 +105,11 @@ func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableT
 	# detail; scaling it back down is what keeps the tree's world footprint
 	# unchanged (see docs/concept/art_resolution.md).
 	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	# Anchor the tree at the FOOT of its trunk rather than its middle, by
+	# drawing the canopy above the node's origin. Y-sorting compares node
+	# origins, so a centre-anchored tree sorts as though it stood where its
+	# crown is -- and a player walking behind it would draw in front.
+	sprite.offset.y = -float(ProceduralTreeSprite.SIZE.y) * 0.5
 	# Canopy sways in the wind (GPU-only, preserving this function's no-per-
 	# frame-script constraint) -- one shared material across all trees.
 	sprite.material = _wind_sway.shared_material()

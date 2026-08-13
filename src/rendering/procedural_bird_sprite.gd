@@ -136,6 +136,22 @@ func generate_flap_images(species: String, seed_value: int) -> Array:
 	return frames
 
 
+## A PERCHED bird: wings folded tight against the body, no beat. A bird at
+## rest on a branch should look at rest -- flapping in place reads as a
+## glitch rather than as a bird.
+func generate_perched_image(species: String, seed_value: int) -> Image:
+	return _bird_image(species, seed_value, _PERCHED_WING_PHASE)
+
+
+func generate_perched_texture(species: String, seed_value: int) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_perched_image(species, seed_value))
+
+
+## Wings tucked slightly BELOW the flight-neutral position, which reads as
+## folded along the flank rather than mid-stroke.
+const _PERCHED_WING_PHASE := -0.35
+
+
 func generate_flap_textures(species: String, seed_value: int) -> Array:
 	var textures := []
 	for frame in generate_flap_images(species, seed_value):

@@ -117,16 +117,15 @@ func test_positions_are_deterministic_for_the_same_inputs():
 ## Butterflies render at half size (a real-world scale difference from
 ## songbirds, and easier to read against tall grass/trees at this pixel
 ## density than the full 14x10 source art).
-func test_butterflies_render_at_half_scale_but_birds_render_at_full_scale():
-	var chunk := _make_chunk("grassland")
-	var spawned := renderer.spawn_ambient_flyers(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland")
-	assert_gt(spawned.size(), 0)
-	for flyer in spawned:
-		if AmbientFlyerRenderer.BUTTERFLY_SPECIES_POOL.has(flyer.species):
-			assert_eq(flyer.scale, Vector2.ONE * AmbientFlyerRenderer.BUTTERFLY_SCALE, flyer.species)
-		else:
-			assert_eq(flyer.scale, Vector2.ONE, flyer.species)
-
+## Butterflies render at half a bird's size. Asserted as a RATIO, not as
+## absolute scale values: the previous version pinned literal numbers, which
+## is exactly what let a stray `marker.scale = ...` overwrite -- applied
+## AFTER the real calculation -- sit unnoticed while every per-species size
+## was silently discarded.
+func test_a_butterfly_renders_at_half_a_sparrows_size():
+	var butterfly := AmbientFlyerRenderer.FLYER_WORLD_SCALE["monarch"]
+	var sparrow := AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"]
+	assert_almost_eq(butterfly / sparrow, 0.5, 0.06)
 
 func test_spawned_flyers_are_ambient_flyer_markers_with_a_texture():
 	var chunk := _make_chunk("grassland")
@@ -155,9 +154,10 @@ func test_butterflies_are_about_half_a_fish():
 		assert_between(AmbientFlyerRenderer.FLYER_WORLD_SCALE[species], 0.45, 0.65, species)
 
 
-func test_the_larger_birds_outsize_a_sparrow():
+## The kingfisher is the big one; the robin was repeatedly reported as too
+## large and has been brought below the sparrow.
+func test_the_kingfisher_is_the_largest_of_the_birds():
 	var sparrow: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["sparrow"]
-	assert_gt(AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"], sparrow)
 	assert_gt(AmbientFlyerRenderer.FLYER_WORLD_SCALE["kingfisher"], sparrow)
 
 
@@ -173,5 +173,7 @@ func test_every_butterfly_is_smaller_than_every_bird():
 
 ## "A robin should only be slightly bigger than a fish" -- the birds here
 ## are all SMALL birds, so the whole range stays narrow.
-func test_a_robin_is_only_slightly_bigger_than_a_fish():
-	assert_between(AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"], 1.0, 1.15)
+## A robin sits close to fish-sized, trimmed 15% after repeatedly reading
+## too large in game.
+func test_a_robin_is_about_fish_sized():
+	assert_between(AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"], 0.85, 1.0)

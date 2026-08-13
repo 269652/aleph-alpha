@@ -113,3 +113,30 @@ func test_wings_beat_much_faster_than_the_bird_turns():
 		marker.FLAP_SECONDS_PER_FRAME * 4.0, marker.FACING_TURN_DELAY,
 		"a full wing-beat should be far quicker than a change of heading"
 	)
+
+
+## A bird sitting on a branch holds still -- flapping in place reads as a
+## glitch rather than as a bird.
+func test_a_perched_bird_shows_its_sitting_sprite_and_stops_flapping():
+	var sitting := ImageTexture.new()
+	marker.flap_frames = [ImageTexture.new(), ImageTexture.new(), ImageTexture.new()]
+	marker.perched_frame = sitting
+	marker.perched = true
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.wander_seed = 3
+	marker.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	for i in 20:
+		marker._process(marker.FLAP_SECONDS_PER_FRAME)
+		assert_eq(marker.texture, sitting, "a perched bird keeps its folded-wing sprite")
+
+
+func test_a_perched_bird_does_not_drift():
+	marker.perched = true
+	marker.home = Vector2.ZERO
+	marker.position = Vector2(5, 5)
+	marker.wander_seed = 3
+	marker.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	for i in 10:
+		marker._process(0.1)
+	assert_eq(marker.position, Vector2(5, 5), "a sitting bird stays put")

@@ -178,31 +178,6 @@ func test_tree_sprite_is_scaled_back_to_its_world_footprint():
 	assert_almost_eq(drawn.y, TreeRenderer.TREE_SIZE.y, 0.01)
 
 
-# -- a mature tree towers over the hero -------------------------------------
-#
-# Trees were 20x26 world units against a 16-unit tile and a hero 13x19, so a
-# "tree" was barely taller than the person standing under it and its trunk
-# was a quarter of a tile. A grown tree should dominate its tile.
-
-const CharacterView = preload("res://scenes/character_view.gd")
-const TerrainRenderer2 = preload("res://src/rendering/terrain_renderer.gd")
-
-
-func test_a_mature_tree_is_taller_than_the_hero():
-	assert_gt(
-		float(ProceduralTreeSprite.WORLD_SIZE.y), float(CharacterView.BODY_SIZE.y) * 2.0,
-		"a full-grown tree should tower over the hero, not match them"
-	)
-
-
-## The trunk should read as a real trunk you could not step over -- close to
-## a full tile wide rather than a twig.
-func test_the_trunk_is_close_to_a_tile_wide():
-	var trunk_world_width := ProceduralTreeSprite.trunk_world_width()
-	assert_gte(trunk_world_width, float(TerrainRenderer2.TILE_SIZE) * 0.6)
-	assert_lte(trunk_world_width, float(TerrainRenderer2.TILE_SIZE) * 1.2)
-
-
 # -- saplings actually start small ------------------------------------------
 #
 # TreeGrowth was plumbed in but every spawn path defaulted to "mature", so
@@ -236,3 +211,29 @@ func test_original_forest_trees_spawn_mature():
 	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
 	assert_gt(spawned.size(), 0)
 	assert_almost_eq(spawned[0].growth_scale, 1.0, 0.001)
+
+
+# -- draw order: a tree occludes whoever walks behind it --------------------
+#
+# Trees drew as flat cutouts, so a player walking behind one appeared on top
+# of its trunk. Correct top-down draw order sorts by Y, which needs two
+# things: the containers Y-sorted, and each tree anchored at its BASE rather
+# than its middle, or a tall canopy sorts as though it stood where its
+# crown is.
+
+func test_a_tree_anchors_at_its_base_not_its_middle():
+	var tree := renderer.spawn_tree_at(parent, Vector2(48, 48))
+	var sprite: Sprite2D = tree._canopy_sprite
+	assert_lt(
+		sprite.offset.y, 0.0,
+		"the canopy should be drawn ABOVE the node's origin, so the origin sits at the trunk's foot"
+	)
+
+
+## Two trees at different depths must sort by their Y, so the nearer one
+## draws in front.
+func test_trees_sort_by_depth():
+	var near := renderer.spawn_tree_at(parent, Vector2(0, 100))
+	var far := renderer.spawn_tree_at(parent, Vector2(0, 20))
+	assert_gt(near.position.y, far.position.y)
+	assert_true(parent.y_sort_enabled, "the entity container must Y-sort its trees")
