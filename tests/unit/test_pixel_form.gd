@@ -87,3 +87,34 @@ func test_is_deterministic():
 		form.lightness(Vector2.ZERO, radius, Vector2(3, -2)),
 		form.lightness(Vector2.ZERO, radius, Vector2(3, -2))
 	)
+
+
+# -- cylinders (limbs, trunks, barrels, towers) -----------------------------
+#
+# A limb is not a sphere: it's a tube, shaded across its width but even
+# along its length. Rectangular parts (arms, legs, a torso) shade through
+# this rather than the spheroid term, which would darken their ends.
+
+func test_cylinder_is_brightest_toward_the_light_side():
+	var lit := form.cylinder_lightness(0.0, 10.0, 2.0)
+	var shadowed := form.cylinder_lightness(0.0, 10.0, 8.0)
+	assert_gt(lit, shadowed, "the side facing the light should be brighter")
+
+
+## The defining property vs. a sphere: lightness depends on position ACROSS
+## the tube only, never along it.
+func test_cylinder_lightness_is_even_along_its_length():
+	assert_eq(form.cylinder_lightness(0.0, 10.0, 3.0), form.cylinder_lightness(0.0, 10.0, 3.0))
+
+
+func test_cylinder_lightness_stays_in_unit_range():
+	for x in range(0, 21):
+		assert_between(form.cylinder_lightness(0.0, 20.0, float(x)), 0.0, 1.0)
+
+
+## Same bounce-light reasoning as the spheroid: the far edge lifts, so the
+## tube reads as round rather than fading flat into its outline.
+func test_cylinder_shadow_edge_lifts_above_the_deepest_shadow():
+	var deep := form.cylinder_lightness(0.0, 10.0, 7.5)
+	var edge := form.cylinder_lightness(0.0, 10.0, 9.7)
+	assert_gt(edge, deep, "a bounce rim should lift the shadowed edge")

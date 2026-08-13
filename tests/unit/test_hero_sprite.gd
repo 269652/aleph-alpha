@@ -216,13 +216,24 @@ func test_portrait_has_a_head_a_torso_and_legs():
 		assert_gt(opaque, 0, "portrait band %s should contain the figure" % [band])
 
 
+## Class identity is checked by HUE, not by an exact RGB match: the torso
+## is shaded through PixelRamp (see docs/concept/pixel_art_engine.md),
+## which deliberately shifts hue and value along the ramp, so the flat base
+## color no longer appears literally anywhere. Matching it exactly would
+## only pin the old flat-fill technique back in place.
 func test_portrait_shows_the_class_tunic_color():
 	var appearance := appearance_maker.appearance_for("mage", 1)
 	var image := sprite.generate_hero_portrait_image(appearance)
+	var tunic: Color = appearance.tunic
 	var found := false
 	for y in ProceduralCharacterSprite.PORTRAIT_SIZE.y:
 		for x in ProceduralCharacterSprite.PORTRAIT_SIZE.x:
-			if _close(image.get_pixel(x, y), appearance.tunic):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a <= 0.0 or pixel.s < 0.15:
+				continue
+			var hue_gap: float = absf(pixel.h - tunic.h)
+			hue_gap = minf(hue_gap, 1.0 - hue_gap)  # hue is a wheel
+			if hue_gap < 0.06:
 				found = true
 	assert_true(found, "the portrait should wear the class tunic color")
 

@@ -7,12 +7,23 @@ extends RefCounted
 ## whole game.
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
+const PixelRamp = preload("res://src/rendering/pixel_ramp.gd")
+const PixelForm = preload("res://src/rendering/pixel_form.gd")
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2
 
 var _palette := PixelPalette.new()
+## Cloth-fold noise: stretched vertically (folds run down the garment) and
+## shallow enough to read as fabric rather than as dents.
+const _FOLD_FREQUENCY_X := 0.42
+const _FOLD_FREQUENCY_Y := 0.06
+const _FOLD_DEPTH := 0.34
+
+var _ramp := PixelRamp.new()
+var _form := PixelForm.new()
 
 
 ## A rectangular body part (torso/limb): outlined edge, lighter top, darker
@@ -21,19 +32,23 @@ func generate_body_part_texture(size: Vector2i, base_color: Color) -> ImageTextu
 	return ImageTexture.create_from_image(generate_body_part_image(size, base_color))
 
 
+## A limb (arm or leg) shaded as a CYLINDER through the shared pixel art
+## engine (see docs/concept/pixel_art_engine.md): lightness varies across
+## the limb's width and stays even along its length, coloured through a
+## hue-shifted ramp. The previous version banded it by height -- lighter
+## top third, darker bottom third -- which read as a flat strip cut into
+## three, not as a rounded arm.
 func generate_body_part_image(size: Vector2i, base_color: Color) -> Image:
 	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	var outline := _palette.outline_color()
 	for y in size.y:
 		for x in size.x:
 			var is_edge := x == 0 or y == 0 or x == size.x - 1 or y == size.y - 1
-			var color := base_color
 			if is_edge:
-				color = _palette.outline_color()
-			elif y < size.y * 0.35:
-				color = _palette.highlight(base_color)
-			elif y > size.y * 0.7:
-				color = _palette.shade(base_color)
-			image.set_pixel(x, y, color)
+				image.set_pixel(x, y, outline)
+				continue
+			var lightness := _form.cylinder_lightness(0.0, float(size.x), float(x) + 0.5)
+			image.set_pixel(x, y, _ramp.sample(base_color, lightness))
 	return image
 
 
@@ -234,21 +249,27 @@ func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:
 	var trim: Color = appearance.trim
 	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
 
-	# Body with chamfered top corners, so shoulders slope instead of sitting
-	# as a hard rectangle.
+	# The torso is shaded as a CYLINDER through the shared pixel art engine
+	# (see docs/concept/pixel_art_engine.md), with cloth folds broken into
+	# it -- previously it was a flat fill with a 1px lighter left edge and
+	# darker right edge, which read as a plain colored rectangle.
+	var outline := _palette.outline_color()
+	var seed_value := int(tunic.r * 977.0) + int(tunic.g * 1361.0) + int(tunic.b * 2129.0)
 	for y in size.y:
 		for x in size.x:
 			if y == 0 and (x == 0 or x == size.x - 1):
-				continue  # chamfer
+				continue  # chamfer -- sloped shoulders, not a hard rectangle
 			var is_edge := x == 0 or y == 0 or x == size.x - 1 or y == size.y - 1
-			var color := tunic
 			if is_edge:
-				color = _palette.outline_color()
-			elif x <= 1 or y <= 1:
-				color = _palette.highlight(tunic)
-			elif x >= size.x - 2 or y >= size.y - 2:
-				color = _palette.shade(tunic)
-			image.set_pixel(x, y, color)
+				image.set_pixel(x, y, outline)
+				continue
+			var lightness := _form.cylinder_lightness(0.0, float(size.x), float(x) + 0.5)
+			# Vertical cloth folds: a slow noise field along the torso's
+			# width dents the shading, so the fabric drapes instead of
+			# reading as a smooth painted tube.
+			var fold := PixelNoise.smooth(seed_value, float(x) * _FOLD_FREQUENCY_X, float(y) * _FOLD_FREQUENCY_Y)
+			lightness = clampf(lightness + (fold - 0.5) * _FOLD_DEPTH, 0.0, 1.0)
+			image.set_pixel(x, y, _ramp.sample(tunic, lightness))
 
 	# Collar: a trim V just under the shoulders.
 	var collar_y := maxi(1, int(size.y * 0.12))

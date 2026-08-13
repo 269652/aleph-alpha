@@ -65,6 +65,27 @@ func lightness(center: Vector2, radius: Vector2, point: Vector2, light: Vector3 
 	return clampf(AMBIENT + diffuse * (1.0 - AMBIENT) + rim, 0.0, 1.0)
 
 
+## The 0..1 lightness across a CYLINDER (a limb, a trunk, a barrel, a
+## tower): `across` is the coordinate perpendicular to the tube's axis,
+## spanning `left`..`left + width`. Unlike the spheroid term this is even
+## along the tube's length -- shading an arm as a sphere would wrongly
+## darken its wrist and shoulder.
+func cylinder_lightness(left: float, width: float, across: float, light: Vector3 = LIGHT_DIRECTION) -> float:
+	var radius := maxf(width, 0.0001) / 2.0
+	var normalized := clampf((across - (left + radius)) / radius, -1.0, 1.0)
+	# Surface normal of a vertical tube: sideways component from the
+	# position across it, bulging toward the viewer in the middle.
+	var normal := Vector3(normalized, 0.0, sqrt(maxf(1.0 - normalized * normalized, 0.0)))
+	var diffuse := maxf(normal.normalized().dot(light.normalized()), 0.0)
+
+	var edge := absf(normalized)
+	var rim := 0.0
+	if edge > RIM_START and diffuse < 0.35:
+		rim = smoothstep(RIM_START, 1.0, edge) * RIM_STRENGTH
+
+	return clampf(AMBIENT + diffuse * (1.0 - AMBIENT) + rim, 0.0, 1.0)
+
+
 ## Convenience: the ramp color for a point on a lit spheroid of `base`
 ## color -- the one call most generators actually want.
 func shade(ramp: PixelRamp, base: Color, center: Vector2, radius: Vector2, point: Vector2) -> Color:
