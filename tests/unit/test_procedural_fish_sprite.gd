@@ -61,3 +61,53 @@ func test_different_seeds_of_the_same_species_vary_slightly():
 	var a := generator.generate_image("trout", 1)
 	var b := generator.generate_image("trout", 2)
 	assert_ne(a.get_data(), b.get_data())
+
+
+# -- engine-built anatomy (docs/concept/pixel_art_engine.md) ----------------
+#
+# Fish used to stamp ONE hand-authored ASCII bitmap, so every species was
+# the same silhouette in a different colour -- the same flaw the land
+# animals had. They are now built from a body/tail/fin plan at the shared
+# art resolution.
+
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+
+
+func _fish_silhouette(species: String) -> Array:
+	var image: Image = generator.generate_image(species, 3)
+	var rows := []
+	for y in image.get_height():
+		var count := 0
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.0:
+				count += 1
+		rows.append(count)
+	return rows
+
+
+func test_fish_art_is_authored_at_the_shared_detail_multiplier():
+	assert_eq(ProceduralFishSprite.SIZE, ArtResolution.art_size(ProceduralFishSprite.WORLD_SIZE))
+
+
+## Species differ in body shape, not only colour -- a slim trout should not
+## have the same outline as a deep-bodied koi.
+func test_species_have_different_body_shapes():
+	var trout := _fish_silhouette("trout")
+	var koi := _fish_silhouette("koi")
+	assert_ne(trout, koi, "a trout and a koi should not share a silhouette")
+
+
+func test_every_species_renders_a_real_fish():
+	for species in ProceduralFishSprite.SPECIES_IDS:
+		var rows := _fish_silhouette(species)
+		var total := 0
+		for count in rows:
+			total += count
+		assert_gt(total, 30, "%s should render a real body" % species)
+
+
+func test_fish_stay_deterministic():
+	assert_eq(
+		generator.generate_image("koi", 5).get_data(),
+		generator.generate_image("koi", 5).get_data()
+	)

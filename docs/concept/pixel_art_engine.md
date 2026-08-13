@@ -119,9 +119,16 @@ bodies, trunks, barrels).
   string-hash clustering failures.
 - ✅ `pixel_form.gd` -- spheroid normal/diffuse shading with ambient and
   bounce rim, tested (`test_pixel_form.gd`).
-- 🚧 Adoption across generators. The engine only pays off where generators
-  actually call it; each one converts as its art-resolution phase lands
-  (see [art_resolution.md](art_resolution.md)'s phase list).
+- ✅ Adoption across the creature generators. `ProceduralAnimalSprite`
+  (via `animal_anatomy.gd`), `ProceduralFishSprite`, `ProceduralBirdSprite`
+  and `ProceduralButterflySprite` all build from per-species proportions
+  through the engine, replacing hand-authored ASCII bitmaps that every
+  species of a family shared. That sharing is what made "herbivore, deer
+  and horse look exactly the same", and the same flaw applied to fish,
+  birds and butterflies.
+- 🚧 Adoption elsewhere. Terrain, houses, landmarks, stone/ore, tufts and
+  items are at the shared art resolution but still shade with
+  `pixel_palette.gd`'s flat `shade`/`highlight` pair rather than ramps.
 - ⬜ `pixel_texture.gd` -- reusable material overlays (fur, bark, cloth
   weave, stone grain, metal sheen) so surface character isn't re-derived
   per generator.
