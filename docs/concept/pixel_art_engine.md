@@ -102,6 +102,15 @@ art already assumed). Adds:
 
 Feed the result to `PixelRamp.sample()` and any shape becomes a lit volume.
 
+**Use it sparingly on characters and other flat-styled sprites.** 16-bit
+character art is FLAT colour regions -- the garment's colour, one shadow
+side, an outline -- plus hand-placed detail (eyes, mouth, belt, collar).
+Per-pixel volumetric shading reads as a soft 3D render however correct the
+lighting maths is. The hero shades flat and uses the ramp only to *pick* its
+two tones, so the shadow still shifts cooler rather than merely darker.
+`PixelForm` is for cases where roundness is genuinely the subject (animal
+bodies, trunks, barrels).
+
 ## Status / mechanisms
 
 - ✅ `pixel_ramp.gd` -- hue-shifted ramps, tested (`test_pixel_ramp.gd`).

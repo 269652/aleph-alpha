@@ -20,6 +20,13 @@ var _palette := PixelPalette.new()
 ## its center -- keeps the silhouette crisp against the world behind it.
 const _HEAD_OUTLINE_START := 0.86
 
+## Where a flat sprite's shadow side begins, as a fraction in from the
+## unlit edge, and which ramp stop that shadow uses. Two flat tones per
+## material -- base and shadow -- is the 16-bit convention; the ramp is
+## still what picks a shadow that shifts cooler rather than just darker.
+const _SHADOW_SIDE_FRACTION := 0.34
+const _SHADOW_STOP := 0.25
+
 var _ramp := PixelRamp.new()
 var _form := PixelForm.new()
 
@@ -39,14 +46,17 @@ func generate_body_part_texture(size: Vector2i, base_color: Color) -> ImageTextu
 func generate_body_part_image(size: Vector2i, base_color: Color) -> Image:
 	var image := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
 	var outline := _palette.outline_color()
+	var shadow := _ramp.sample(base_color, _SHADOW_STOP)
 	for y in size.y:
 		for x in size.x:
 			var is_edge := x == 0 or y == 0 or x == size.x - 1 or y == size.y - 1
 			if is_edge:
 				image.set_pixel(x, y, outline)
 				continue
-			var lightness := _form.cylinder_lightness(0.0, float(size.x), float(x) + 0.5)
-			image.set_pixel(x, y, _ramp.sample(base_color, lightness))
+			# Flat, with one shadow column down the unlit side (see the
+			# tunic above -- same 16-bit convention).
+			var shaded := float(x) + 0.5 > float(size.x) * (1.0 - _SHADOW_SIDE_FRACTION * 0.5)
+			image.set_pixel(x, y, shadow if shaded else base_color)
 	return image
 
 
@@ -112,8 +122,8 @@ func generate_hero_head_image(size: Vector2i, appearance: Dictionary) -> Image:
 	# lighter, bottom is darker" cutoffs, which read as two flat patches
 	# stuck on a disc. A skin ramp also warms the highlights and cools the
 	# shadows, which is most of what makes skin look like skin.
-	var radius := Vector2(rx, ry)
 	var outline := _palette.outline_color()
+	var skin_shadow := _ramp.sample(skin, _SHADOW_STOP)
 	for y in size.y:
 		for x in size.x:
 			var point := Vector2(x + 0.5, y + 0.5)
@@ -125,7 +135,10 @@ func generate_hero_head_image(size: Vector2i, appearance: Dictionary) -> Image:
 			if d > _HEAD_OUTLINE_START:
 				image.set_pixel(x, y, outline)
 				continue
-			image.set_pixel(x, y, _form.shade(_ramp, skin, center, radius, point))
+			# Flat skin with one shadow side; the face's real detail comes
+			# from the features painted over it below, not from shading.
+			var shaded := dx > _SHADOW_SIDE_FRACTION or dy > 0.55
+			image.set_pixel(x, y, skin_shadow if shaded else skin)
 
 	_paint_facial_hair(image, size, appearance, center, rx, ry)
 	_paint_face_features(image, size, appearance, center, rx, ry)
@@ -284,6 +297,7 @@ func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:
 	# it -- previously it was a flat fill with a 1px lighter left edge and
 	# darker right edge, which read as a plain colored rectangle.
 	var outline := _palette.outline_color()
+	var tunic_shadow := _ramp.sample(tunic, _SHADOW_STOP)
 	var center_x := float(size.x) / 2.0
 	for y in size.y:
 		# The torso is a SHAPE, not a rectangle: wide at the shoulders,
@@ -303,8 +317,11 @@ func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:
 			if is_edge:
 				image.set_pixel(x, y, outline)
 				continue
-			var lightness := _form.cylinder_lightness(left, half * 2.0, px)
-			image.set_pixel(x, y, _ramp.sample(tunic, lightness))
+			# FLAT colour with a single shadow side. 16-bit garments are
+			# flat regions plus hand-placed detail, not lit volumes -- a
+			# per-pixel ramp across the body read as a soft 3D render.
+			var shaded := px > right - half * _SHADOW_SIDE_FRACTION
+			image.set_pixel(x, y, tunic_shadow if shaded else tunic)
 
 	# Collar: a trim V just under the shoulders.
 	var collar_y := maxi(1, int(size.y * 0.12))

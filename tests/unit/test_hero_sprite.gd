@@ -295,3 +295,44 @@ func test_tunic_image_has_a_shaped_not_rectangular_silhouette():
 	var narrowest: int = widths.min()
 	var widest: int = widths.max()
 	assert_lt(narrowest, widest, "the torso should vary in width, not be a rectangle")
+
+
+# -- flat 16-bit colour, not volumetric shading -----------------------------
+#
+# 16-bit character sprites are FLAT colour regions plus hand-placed detail
+# (eyes, mouth, belt, collar) -- not per-pixel lit volumes. An earlier pass
+# shaded the hero as lit cylinders and spheroids, which read as a soft 3D
+# render however correct the lighting maths was.
+
+func _distinct_colors(image: Image) -> int:
+	var seen := {}
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			if pixel.a > 0.0:
+				seen[pixel] = true
+	return seen.size()
+
+
+## The garment is flat: its own colour, one shadow side, an outline, and
+## trim. A per-pixel ramp across the body would blow far past this.
+func test_tunic_uses_a_small_flat_palette():
+	var image := sprite.generate_hero_tunic_image(
+		Vector2i(26, 38), appearance_maker.appearance_for("warrior", 2)
+	)
+	assert_lte(_distinct_colors(image), 6, "the tunic should be flat colour, not a shaded gradient")
+
+
+func test_limbs_use_a_small_flat_palette():
+	var image := sprite.generate_body_part_image(Vector2i(8, 18), Color(0.7, 0.55, 0.4))
+	assert_lte(_distinct_colors(image), 4, "a limb should be flat colour with one shadow side")
+
+
+## Flat does NOT mean featureless -- the resolution exists to carry detail,
+## so the face must still have its own distinct marks (eyes, brows, mouth)
+## beyond the skin and outline.
+func test_the_head_still_carries_real_facial_detail():
+	var image := sprite.generate_hero_head_image(
+		Vector2i(24, 24), appearance_maker.appearance_for("ranger", 4)
+	)
+	assert_gte(_distinct_colors(image), 6, "the face should carry eyes, brows and mouth detail")
