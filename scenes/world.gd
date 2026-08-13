@@ -30,6 +30,9 @@ const UiTheme = preload("res://src/ui/ui_theme.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const DragSlot = preload("res://src/ui/drag_slot.gd")
 const EscapeAction = preload("res://src/ui/escape_action.gd")
+const PlayerSave = preload("res://src/gameplay/player_save.gd")
+const WorldReset = preload("res://src/world/world_reset.gd")
+const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
 
 ## How many hotbar slots the HUD row draws. Derived from Player's own
 ## hotbar size (see Player.HOTBAR_SLOT_COUNT / Hotbar) rather than duplicated,
@@ -44,6 +47,15 @@ const HUD_SLOT_LOCKED_COLOR := Color(0.08, 0.08, 0.08, 0.6)
 ## tiles every frame would be wasteful; the player doesn't need pixel-perfect
 ## real-time minimap updates.
 const MINIMAP_REFRESH_INTERVAL := 1.0
+
+## Real seconds between player-state autosaves (see docs/concept/
+## persistence.md) -- mirrors the world's own "persist eagerly, not on an
+## explicit save action" philosophy (EarthChunkManager saves on chunk
+## unload). Frequent enough that a crash never costs more than a short
+## interval of progress; infrequent enough that writing a whole save
+## Dictionary to disk every frame would be wasteful (same reasoning as
+## MINIMAP_REFRESH_INTERVAL above).
+const AUTOSAVE_INTERVAL := 60.0
 
 ## How far (px) a creature counts as "nearby" for its own HUD panel -- wider
 ## than melee range, meant to cover what's visibly on screen around the
@@ -125,6 +137,7 @@ var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
 var _minimap_refresh_accumulator := MINIMAP_REFRESH_INTERVAL  # refresh immediately on first update
+var _autosave_accumulator := 0.0
 var _health_bar := HealthBar.new()
 var _item_sprite_generator := ProceduralItemSprite.new()
 var _hotbar_slots: Array[TextureRect] = []
@@ -150,6 +163,11 @@ var _pending_class := "warrior"
 ## spawned player. Empty for non-interactive launches (dedicated server,
 ## --connect), which fall back to a seed-rolled appearance.
 var _pending_appearance: Dictionary = {}
+## Player-state persistence (see docs/concept/persistence.md) -- PlayerSave
+## is pure I/O, WorldReset wipes EarthChunkManager's own persistence dirs.
+var _player_save := PlayerSave.new()
+var _world_reset := WorldReset.new()
+var _world_coordinates := WorldCoordinates.new()
 var _keybindings := Keybindings.new()
 var _graphics_fullscreen := false
 var _graphics_vsync := true
@@ -268,15 +286,39 @@ func _show_main_menu() -> void:
 	_ui.add_child(_main_menu)
 	_main_menu.start_requested.connect(_on_menu_start_requested)
 	_main_menu.join_requested.connect(_on_menu_join_requested)
+	_main_menu.load_requested.connect(_on_menu_load_requested)
 	get_tree().paused = true
 
 
+## New Game and Host Game both author a brand new character via the creator
+## -- neither is "load", so both wipe any previous run's persisted world and
+## player save first (see docs/concept/persistence.md: "New Game means new").
+## Safe to wipe unconditionally here: EarthChunkManager hasn't loaded any
+## chunks yet at this point (chunk loading is lazy, first triggered by
+## spawn), so every chunk simply finds nothing left to layer on top of its
+## deterministic base.
 func _on_menu_start_requested(mode: String, chosen_class: String, appearance: Dictionary) -> void:
 	_pending_class = chosen_class
 	_pending_appearance = appearance
+	_wipe_persisted_world()
 	if mode == "host":
 		_start_server()
 	_spawn_local_singleplayer()
+	_dismiss_main_menu()
+
+
+func _wipe_persisted_world() -> void:
+	_world_reset.wipe_directory(EarthChunkManager.MODIFICATIONS_DIR)
+	_world_reset.wipe_directory(EarthChunkManager.PLANTED_TREES_DIR)
+	_world_reset.wipe_directory(EarthChunkManager.FISH_POPULATION_DIR)
+	_player_save.wipe()
+
+
+## Restores a previously saved character exactly where they left off (see
+## docs/concept/persistence.md) -- bypasses the character creator entirely,
+## unlike _on_menu_start_requested. Deliberately does NOT wipe anything.
+func _on_menu_load_requested() -> void:
+	_spawn_local_singleplayer_from_save()
 	_dismiss_main_menu()
 
 
@@ -1179,6 +1221,74 @@ func _spawn_local_singleplayer() -> void:
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 
 
+## Restores a previously saved character (see docs/concept/persistence.md):
+## spawns at the saved position instead of running the dry-land search (a
+## saved position is already valid ground), applies the saved class/
+## appearance via apply_class for the character-view wiring (setup below
+## still runs after, mirroring _spawn_local_singleplayer's own ordering), then
+## restores everything apply_class doesn't cover (health, inventory,
+## equipment, wallet, hotbar, skill progress) via apply_save_dict LAST --
+## apply_class alone always fully heals/starts with default gear, which is
+## only correct for a genuinely new character.
+func _spawn_local_singleplayer_from_save() -> void:
+	var save_data := _player_save.load_data()
+	var player := PlayerScene.instantiate()
+	player.name = str(multiplayer.get_unique_id())
+	var saved_position: Vector2 = save_data.get("position", Vector2.ZERO)
+	player.position = saved_position
+	player.respawn_position = save_data.get("respawn_position", saved_position)
+	player.apply_class(
+		save_data.get("character_class", _pending_class),
+		_class_archetypes.stats_for(save_data.get("character_class", _pending_class)),
+		save_data.get("appearance", {})
+	)
+	_players.add_child(player)
+	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
+	_chunk_manager.update(_tile_for_position(saved_position))
+	player.apply_save_dict(save_data)
+
+
+## Same pixel-position -> wrapped-tile conversion Player.current_tile() uses,
+## needed here before a Player exists yet to load chunks around a saved spot.
+func _tile_for_position(pixel_position: Vector2) -> Vector2i:
+	var raw := Vector2i(
+		floori(pixel_position.x / TerrainRenderer.TILE_SIZE),
+		floori(pixel_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	var world_size := Vector2i(EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	return _world_coordinates.wrap(raw, world_size)
+
+
+## Periodic player-state autosave (see docs/concept/persistence.md and
+## AUTOSAVE_INTERVAL) -- mirrors the world's own eager-persistence
+## philosophy so progress is never more than one short interval old. Only
+## reached from _client_process, which already only runs for a real local
+## client (not a dedicated server).
+func _autosave_step(local_player: Player, delta: float) -> void:
+	_autosave_accumulator += delta
+	if _autosave_accumulator < AUTOSAVE_INTERVAL:
+		return
+	_autosave_accumulator = 0.0
+	_save_local_player(local_player)
+
+
+func _save_local_player(player: Player) -> void:
+	_player_save.save(player.to_save_dict())
+
+
+## Also saves once right before the window actually closes (OS close button/
+## Alt+F4), so quitting never loses the last AUTOSAVE_INTERVAL of progress.
+## A no-op if no local player has spawned yet (e.g. quitting from the main
+## menu) or on a dedicated server (no single "local" player to speak of).
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_CLOSE_REQUEST:
+		return
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player != null:
+		_save_local_player(local_player)
+	get_tree().quit()
+
+
 ## Connects to a host at an explicit address (from the Join menu), rather than
 ## from a --connect cmdline arg. Live connectivity on this dev machine is
 ## blocked by CrowdStrike (see progress.md Multiplayer notes); the flow is the
@@ -1423,6 +1533,7 @@ func _client_process(delta: float) -> void:
 	_update_fishing_label(local_player)
 	_update_trade_label(local_player)
 	_refresh_skill_window(local_player)
+	_autosave_step(local_player, delta)
 	var latitude := _geo_coordinates.latitude_for_tile(player_tile.y, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	var longitude := _geo_coordinates.longitude_for_tile(player_tile.x, EarthChunkGenerator.WORLD_WIDTH_TILES)
 

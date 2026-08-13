@@ -16,6 +16,7 @@ extends PanelContainer
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
+const PlayerSave = preload("res://src/gameplay/player_save.gd")
 
 ## Human-readable blurbs for the archetypes (ClassArchetype has the stats).
 const CLASS_BLURBS := {
@@ -49,10 +50,19 @@ const PANEL_SIZE := Vector2(760, 520)
 signal start_requested(mode: String, chosen_class: String, appearance: Dictionary)
 ## Emitted to join a remote host at `address`.
 signal join_requested(address: String)
+## Emitted from the root screen's Load Game button (only shown when a save
+## exists -- see docs/concept/persistence.md). Bypasses the character
+## creator entirely; World restores the saved class/appearance/state itself.
+signal load_requested()
+
+## Path PlayerSave checks for "does a save exist" when deciding whether to
+## offer Load Game -- overridable so tests never touch the real save file.
+var save_path := PlayerSave.SAVE_PATH
 
 var _archetypes := ClassArchetype.new()
 var _appearance_maker := HeroAppearance.new()
 var _char_sprite := ProceduralCharacterSprite.new()
+var _player_save := PlayerSave.new()
 
 var _root_screen: Control
 var _create_screen: Control
@@ -136,6 +146,11 @@ func _build_root_screen() -> Control:
 		_pending_mode = "host"
 		_show(_create_screen)))
 	buttons.add_child(_menu_button("Join Game", func(): _show(_join_screen)))
+	# Only offered when there's actually something to load -- no disabled
+	# button pointing nowhere (see docs/concept/persistence.md). Bypasses the
+	# character creator: a load restores a character, it doesn't author one.
+	if _player_save.has_save(save_path):
+		buttons.add_child(_menu_button("Load Game", func(): load_requested.emit()))
 	buttons.add_child(_menu_button("Quit", func(): get_tree().quit()))
 	return box
 

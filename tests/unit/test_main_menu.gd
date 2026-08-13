@@ -7,16 +7,31 @@ extends GutTest
 const MainMenu = preload("res://scenes/main_menu.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 
+## Isolates the Load Game button's save-detection from the real save file
+## (see docs/concept/persistence.md) -- MainMenu.save_path is overridable for
+## exactly this reason, set before add_child() triggers _ready().
+const TEST_SAVE_PATH := "user://test_main_menu_save.bin"
+
 var menu: MainMenu
 
 
 func before_each():
 	menu = MainMenu.new()
+	menu.save_path = TEST_SAVE_PATH
 	add_child(menu)
 
 
 func after_each():
 	menu.free()
+	if FileAccess.file_exists(TEST_SAVE_PATH):
+		DirAccess.remove_absolute(TEST_SAVE_PATH)
+
+
+func _root_load_button() -> Button:
+	for b in menu._root_screen.find_children("*", "Button", true, false):
+		if b.text == "Load Game":
+			return b
+	return null
 
 
 func test_starts_with_a_valid_default_appearance():
@@ -78,6 +93,41 @@ func test_panel_is_actually_centered_not_pinned_to_a_corner():
 	assert_almost_eq(menu.offset_top, -MainMenu.PANEL_SIZE.y / 2.0, 0.5)
 	assert_almost_eq(menu.offset_right, MainMenu.PANEL_SIZE.x / 2.0, 0.5)
 	assert_almost_eq(menu.offset_bottom, MainMenu.PANEL_SIZE.y / 2.0, 0.5)
+
+
+## No save on disk -- the root screen shouldn't offer a choice that goes
+## nowhere (see docs/concept/persistence.md: "the choice simply isn't offered
+## when there's nothing to load").
+func test_root_screen_has_no_load_game_button_when_there_is_no_save():
+	assert_null(_root_load_button())
+
+
+func test_root_screen_offers_load_game_when_a_save_exists():
+	var file := FileAccess.open(TEST_SAVE_PATH, FileAccess.WRITE)
+	file.store_var({"health": 80.0})
+	file.close()
+
+	menu.free()
+	menu = MainMenu.new()
+	menu.save_path = TEST_SAVE_PATH
+	add_child(menu)
+
+	assert_not_null(_root_load_button())
+
+
+func test_pressing_load_game_emits_load_requested():
+	var file := FileAccess.open(TEST_SAVE_PATH, FileAccess.WRITE)
+	file.store_var({"health": 80.0})
+	file.close()
+
+	menu.free()
+	menu = MainMenu.new()
+	menu.save_path = TEST_SAVE_PATH
+	add_child(menu)
+
+	watch_signals(menu)
+	_root_load_button().pressed.emit()
+	assert_signal_emitted(menu, "load_requested")
 
 
 func test_every_axis_is_cyclable_and_stays_in_its_pool():

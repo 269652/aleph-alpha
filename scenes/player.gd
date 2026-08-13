@@ -168,6 +168,11 @@ const KEYSTONE_POINT_COST := 2
 ## grants -- applied by apply_class at character creation.
 var character_class := "warrior"
 var class_attack_bonus := 0.0
+## The authored look from the character creator (see HeroAppearance), kept
+## around (not just applied-and-forgotten) so a save can restore the same
+## face/hair/outfit instead of re-rolling one from the peer id -- see
+## to_save_dict/apply_save_dict and docs/concept/persistence.md.
+var appearance: Dictionary = {}
 ## Health gained per level (see ExperienceTrack / concept/progression.md).
 const HEALTH_PER_LEVEL := 8.0
 ## XP awarded per level of a defeated creature.
@@ -438,16 +443,104 @@ func is_set_up() -> bool:
 ## HeroAppearance). Empty (the default) rolls one from the player's stable
 ## node name -- the multiplayer peer id -- as a stand-in dna seed, which is
 ## what non-interactive spawns (dedicated server, --connect) and tests get.
-func apply_class(class_name_value: String, stats: Dictionary, appearance: Dictionary = {}) -> void:
+func apply_class(class_name_value: String, stats: Dictionary, chosen_appearance: Dictionary = {}) -> void:
 	character_class = class_name_value
 	max_health = maxf(20.0, 100.0 + float(stats.get("max_health", 0.0)))
 	health = max_health
 	class_attack_bonus = float(stats.get("attack_damage", 0.0))
+	var look := chosen_appearance
+	if look.is_empty():
+		look = HeroAppearance.new().appearance_for(class_name_value, name.hash())
+	appearance = look
 	if _character_view != null:
-		var look := appearance
-		if look.is_empty():
-			look = HeroAppearance.new().appearance_for(class_name_value, name.hash())
 		_character_view.apply_appearance(look)
+
+
+## Snapshots exactly the state docs/concept/persistence.md defines as worth
+## remembering across a restart -- see that doc for the full field-by-field
+## rationale of what's included/excluded. Plain-Variant-only (Vector2/String/
+## int/float/Dictionary/Array), so PlayerSave can store_var it as-is; PlayerSave
+## itself is pure I/O with no knowledge of what these keys mean.
+func to_save_dict() -> Dictionary:
+	var inventory_data := []
+	for stack in inventory.stacks():
+		inventory_data.append({"id": stack.item.id, "count": stack.count})
+
+	var equipment_data := {}
+	for slot in Equipment.SLOTS:
+		var worn = equipment.equipped_in(slot)
+		if worn != null:
+			equipment_data[slot] = worn.id
+
+	var hotbar_data := []
+	for i in range(hotbar.slot_count):
+		hotbar_data.append(hotbar.item_id_at(i))
+
+	return {
+		"position": position,
+		"respawn_position": respawn_position,
+		"character_class": character_class,
+		"appearance": appearance,
+		"health": health,
+		"max_health": max_health,
+		"class_attack_bonus": class_attack_bonus,
+		"skill_attack_bonus": _skill_attack_bonus,
+		"wallet_balance": wallet.balance,
+		"experience_total_xp": experience.total_xp,
+		"experience_level": experience.level,
+		"experience_unspent_points": experience.unspent_points,
+		"allocated_nodes": allocated_nodes.duplicate(),
+		"unlocked_keystones": unlocked_keystones.duplicate(),
+		"inventory": inventory_data,
+		"equipment": equipment_data,
+		"hotbar": hotbar_data,
+	}
+
+
+## Restores state saved by to_save_dict onto this (already-_ready, already-
+## setup) player, overwriting whatever apply_class/_ready's starter grants
+## put there. Deliberately NOT part of apply_class -- apply_class always
+## fully heals (health = max_health), correct for a brand new character but
+## wrong for a loaded one, so callers must run this AFTER apply_class/_ready
+## rather than folding it in (see World's load-game spawn path).
+func apply_save_dict(data: Dictionary) -> void:
+	position = data.get("position", position)
+	respawn_position = data.get("respawn_position", respawn_position)
+	character_class = data.get("character_class", character_class)
+	appearance = data.get("appearance", appearance)
+	health = data.get("health", health)
+	max_health = data.get("max_health", max_health)
+	class_attack_bonus = data.get("class_attack_bonus", class_attack_bonus)
+	_skill_attack_bonus = data.get("skill_attack_bonus", _skill_attack_bonus)
+	wallet.balance = data.get("wallet_balance", wallet.balance)
+	experience.total_xp = data.get("experience_total_xp", experience.total_xp)
+	experience.level = data.get("experience_level", experience.level)
+	experience.unspent_points = data.get("experience_unspent_points", experience.unspent_points)
+	allocated_nodes = (data.get("allocated_nodes", allocated_nodes) as Dictionary).duplicate()
+	unlocked_keystones = (data.get("unlocked_keystones", unlocked_keystones) as Dictionary).duplicate()
+
+	inventory = Inventory.new(inventory.slot_count)
+	for entry in data.get("inventory", []):
+		if _item_catalog.has(entry.id):
+			inventory.add(_item_catalog.make(entry.id), entry.count)
+
+	equipment = Equipment.new()
+	equipped_item = null
+	for slot in data.get("equipment", {}):
+		var item_id: String = data["equipment"][slot]
+		if not _item_catalog.has(item_id):
+			continue
+		var item := _item_catalog.make(item_id)
+		if slot == "weapon":
+			equip_item(item)
+		else:
+			equipment.equip(item)
+
+	var hotbar_data: Array = data.get("hotbar", [])
+	for i in range(hotbar_data.size()):
+		hotbar.assign(i, hotbar_data[i])
+
+	inventory_changed.emit()
 
 
 ## Awards XP (see ExperienceTrack); each level gained bumps max health and heals
