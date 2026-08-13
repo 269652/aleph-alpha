@@ -4,6 +4,8 @@ const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
 const TreePlacement = preload("res://src/world/tree_placement.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
+const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 var renderer: TreeRenderer
 var parent: Node2D
@@ -139,3 +141,36 @@ func test_spawned_tree_sprites_share_the_wind_sway_material():
 				if seen_material == null:
 					seen_material = child.material
 				assert_eq(child.material, seen_material, "all trees should share one material instance")
+
+
+# -- art resolution (docs/concept/art_resolution.md phase 2) -----------------
+#
+# Trees are authored at ArtResolution.DETAIL_MULTIPLIER times their world
+# size and drawn scaled back down, so a tree gains real pixel detail without
+# growing in the world. Phase 1's mistake on the ground plane -- raising art
+# size and world footprint together -- is exactly what these pin against.
+
+func test_tree_world_size_is_unchanged_by_the_art_resolution_pass():
+	assert_eq(TreeRenderer.TREE_SIZE, Vector2(20, 26))
+
+
+func test_tree_art_is_authored_at_the_shared_detail_multiplier():
+	assert_eq(ProceduralTreeSprite.SIZE, ArtResolution.art_size(Vector2i(20, 26)))
+
+
+## The sprite must be scaled back down, or the oversized art would render a
+## tree 4x its world footprint.
+func test_tree_sprite_is_scaled_back_to_its_world_footprint():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	assert_gt(spawned.size(), 0, "fixture should spawn at least one tree")
+	# The canopy sprite, not the drop shadow -- the shadow is added first and
+	# is also a Sprite2D, so take the one TreeRenderer bound as the canopy.
+	var sprite: Sprite2D = spawned[0]._canopy_sprite
+	assert_not_null(sprite, "a tree should have a bound canopy sprite")
+	assert_almost_eq(sprite.scale.x, ArtResolution.SPRITE_SCALE, 0.0001)
+	assert_almost_eq(sprite.scale.y, ArtResolution.SPRITE_SCALE, 0.0001)
+	# The drawn size is the art size times the scale -- i.e. the world size.
+	var drawn := Vector2(sprite.texture.get_size()) * sprite.scale
+	assert_almost_eq(drawn.x, TreeRenderer.TREE_SIZE.x, 0.01)
+	assert_almost_eq(drawn.y, TreeRenderer.TREE_SIZE.y, 0.01)

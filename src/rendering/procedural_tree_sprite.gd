@@ -11,14 +11,26 @@ extends RefCounted
 
 const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 
-## Bumped from 16x20: fuller canopies that overlap between adjacent forest
-## tiles, so a forest reads as a connected leafy mass instead of spaced
-## lollipops. Collision stays proportional (TreeRenderer.COLLISION_SCALE).
-const SIZE := Vector2i(20, 26)
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+
+## The tree's WORLD footprint, in world units. Bumped from 16x20 (before the
+## resolution pass) so canopies overlap between adjacent forest tiles and a
+## forest reads as a connected leafy mass instead of spaced lollipops.
+## Collision stays proportional (TreeRenderer.COLLISION_SCALE).
+const WORLD_SIZE := Vector2i(20, 26)
+
+## The ART canvas, DETAIL_MULTIPLIER times the world footprint (see
+## docs/concept/art_resolution.md) -- TreeRenderer draws it at
+## ArtResolution.SPRITE_SCALE so the tree gains real pixel detail without
+## growing in the world.
+const SIZE := Vector2i(80, 104)
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2
 const HIGHLIGHT_LIGHTEN := 0.2
-const SPECKLE_COUNT := 5
+## Scaled with the canvas area so leaf speckle density per drawn area is
+## unchanged -- a fixed count would read as a nearly-bare canopy at 16x the
+## pixels.
+const SPECKLE_COUNT := 80
 
 ## Push canopy toward a saturated Zelda-canopy green before shading.
 const CANOPY_SATURATE := 0.16

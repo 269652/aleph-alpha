@@ -6,6 +6,7 @@ const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
 const ProceduralShoreDistanceSprite = preload("res://src/rendering/procedural_shore_distance_sprite.gd")
 const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 ## How many WORLD UNITS one tile occupies. Every gameplay system is built on
 ## this -- player movement/collision, spawn placement, chunk streaming,
@@ -17,12 +18,14 @@ const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 ## gigantic compared to the player".
 const TILE_SIZE := 16
 
-## How many PIXELS OF ART are painted per tile -- 4x TILE_SIZE, so a tile
-## carries 16x the pixel detail of the original 1px-per-world-unit art (see
-## docs/concept/art_resolution.md). Every generator's own SIZE constant is
-## matched to this, and every atlas image/blit/region below is sized in
-## these art pixels.
-const ART_TILE_SIZE := 64
+## How many PIXELS OF ART are painted per tile -- TILE_SIZE times the
+## shared 4x detail factor, so a tile carries 16x the pixel detail of the
+## original 1px-per-world-unit art (see docs/concept/art_resolution.md).
+## Every generator's own SIZE constant is matched to this, and every atlas
+## image/blit/region below is sized in these art pixels. Derived from
+## ArtResolution rather than restated, so terrain and entity sprites can
+## never drift to different detail densities.
+const ART_TILE_SIZE := TILE_SIZE * ArtResolution.DETAIL_MULTIPLIER
 
 ## What a tile LAYER (the TileMapLayer nodes drawing these tiles -- see
 ## EarthChunkManager) must be scaled by so ART_TILE_SIZE pixels of art span

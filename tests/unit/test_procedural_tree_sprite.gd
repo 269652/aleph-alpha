@@ -30,7 +30,12 @@ func test_generates_an_image_of_the_expected_size():
 
 func test_canopy_area_is_greenish_and_opaque():
 	var image := generator.generate_image(0.5, 1)
-	var canopy_pixel := image.get_pixel(ProceduralTreeSprite.SIZE.x / 2, 2)
+	# Sampled proportionally, not at a fixed row: row 2 sat mid-canopy on the
+	# old 26px-tall tree but lands on the outlined apex once the art is
+	# authored 4x taller (see docs/concept/art_resolution.md).
+	var canopy_pixel := image.get_pixel(
+		ProceduralTreeSprite.SIZE.x / 2, int(ProceduralTreeSprite.SIZE.y * 0.25)
+	)
 	assert_gt(canopy_pixel.a, 0.0)
 	assert_gt(canopy_pixel.g, canopy_pixel.r)
 	assert_gt(canopy_pixel.g, canopy_pixel.b)

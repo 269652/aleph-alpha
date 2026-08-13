@@ -7,11 +7,16 @@ const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite
 const TreeGenome = preload("res://src/gameplay/tree_genome.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
-## Tree sprite size in pixels (see ProceduralTreeSprite), and how much
-## smaller than the sprite the actual collision box is (a little forgiving,
-## not a hard rectangle edge).
-const TREE_SIZE := Vector2(ProceduralTreeSprite.SIZE)
+## A tree's WORLD footprint (see ProceduralTreeSprite.WORLD_SIZE) -- derived
+## from the art size through ArtResolution rather than equal to it, since
+## the art is authored DETAIL_MULTIPLIER times oversized and drawn scaled
+## back down (see docs/concept/art_resolution.md). Shadow and collision size
+## off this, so they stay matched to the tree's actual world presence.
+const TREE_SIZE := Vector2(ProceduralTreeSprite.WORLD_SIZE)
+## How much smaller than the sprite the actual collision box is (a little
+## forgiving, not a hard rectangle edge).
 const COLLISION_SCALE := 0.6
 
 ## How many distinct species_bias buckets get their own generated texture.
@@ -82,6 +87,10 @@ func _build_tree_node(position: Vector2) -> ChoppableTree:
 
 	var sprite := Sprite2D.new()
 	sprite.texture = _texture_for(position)
+	# The canopy art is authored DETAIL_MULTIPLIER times oversized for pixel
+	# detail; scaling it back down is what keeps the tree's world footprint
+	# unchanged (see docs/concept/art_resolution.md).
+	sprite.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 	# Canopy sways in the wind (GPU-only, preserving this function's no-per-
 	# frame-script constraint) -- one shared material across all trees.
 	sprite.material = _wind_sway.shared_material()

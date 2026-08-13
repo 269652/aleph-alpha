@@ -4,6 +4,7 @@ class_name CharacterView
 const WeaponSwing = preload("res://src/gameplay/weapon_swing.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 ## Reusable placeholder character rendering: a body/head/legs/arms made of
 ## flat colored shapes, a directional facing, walk and swim animations, and a
@@ -31,6 +32,19 @@ const LEG_SIZE := Vector2i(5, 8)
 const ARM_SIZE := Vector2i(4, 9)
 const SLOT_SIZE := Vector2i(7, 7)
 const EYE_COLOR := Color(0.1, 0.1, 0.1)
+
+## The ART canvases each part is actually painted on: DETAIL_MULTIPLIER
+## times the world sizes above (see docs/concept/art_resolution.md). Every
+## part sprite is drawn at ArtResolution.SPRITE_SCALE, so the hero gains
+## real pixel detail -- a face with actual features rather than a few
+## suggestive pixels -- while staying exactly the same size in the world
+## and keeping character_view.tscn's part positions (which are in world
+## units) valid unchanged.
+const ART_BODY_SIZE := Vector2i(52, 76)
+const ART_HEAD_SIZE := Vector2i(48, 48)
+const ART_LEG_SIZE := Vector2i(20, 32)
+const ART_ARM_SIZE := Vector2i(16, 36)
+const ART_SLOT_SIZE := Vector2i(28, 28)
 
 var facing := Facing.DOWN
 var movement_state := MovementState.IDLE
@@ -63,6 +77,13 @@ var _tool_slot_base_position: Vector2
 
 
 func _ready() -> void:
+	# Every part's art is authored DETAIL_MULTIPLIER times oversized for
+	# pixel detail; scaling the sprites back down is what keeps the hero at
+	# their world size and keeps this scene's part positions (in world
+	# units) correct (see docs/concept/art_resolution.md).
+	for part in [_body, _head, _leg_left, _leg_right, _arm_left, _arm_right, _head_slot, _tool_slot]:
+		part.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+
 	_leg_left_base_position = _leg_left.position
 	_leg_right_base_position = _leg_right.position
 	_arm_left_base_position = _arm_left.position
@@ -140,12 +161,12 @@ func set_facing(direction: Vector2) -> void:
 ## colored tunic with trim, DNA-picked skin/hair on the head, class leg
 ## colors, skin-toned arms. Call any time -- textures regenerate in place.
 func apply_appearance(appearance: Dictionary) -> void:
-	_body.texture = _character_sprite.generate_hero_tunic_texture(BODY_SIZE, appearance)
-	_head.texture = _character_sprite.generate_hero_head_texture(HEAD_SIZE, appearance)
-	_leg_left.texture = _character_sprite.generate_body_part_texture(LEG_SIZE, appearance.legs)
-	_leg_right.texture = _character_sprite.generate_body_part_texture(LEG_SIZE, appearance.legs)
-	_arm_left.texture = _character_sprite.generate_body_part_texture(ARM_SIZE, appearance.skin)
-	_arm_right.texture = _character_sprite.generate_body_part_texture(ARM_SIZE, appearance.skin)
+	_body.texture = _character_sprite.generate_hero_tunic_texture(ART_BODY_SIZE, appearance)
+	_head.texture = _character_sprite.generate_hero_head_texture(ART_HEAD_SIZE, appearance)
+	_leg_left.texture = _character_sprite.generate_body_part_texture(ART_LEG_SIZE, appearance.legs)
+	_leg_right.texture = _character_sprite.generate_body_part_texture(ART_LEG_SIZE, appearance.legs)
+	_arm_left.texture = _character_sprite.generate_body_part_texture(ART_ARM_SIZE, appearance.skin)
+	_arm_right.texture = _character_sprite.generate_body_part_texture(ART_ARM_SIZE, appearance.skin)
 
 
 func set_movement_state(state: MovementState) -> void:
@@ -165,7 +186,7 @@ func equip_slot(slot_name: String, color: Color) -> void:
 	var node := _slot_node(slot_name)
 	if node == null:
 		return
-	_set_solid_texture(node, SLOT_SIZE, color)
+	_set_solid_texture(node, ART_SLOT_SIZE, color)
 	node.visible = true
 	_equipped_slots[slot_name] = true
 
