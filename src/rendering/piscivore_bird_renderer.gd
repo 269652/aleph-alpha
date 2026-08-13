@@ -6,7 +6,7 @@ const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 ## A kingfisher against the same fish reference the ambient flyers use
 ## (see AmbientFlyerRenderer.FLYER_WORLD_SCALE) -- a proper bird, larger
 ## than the fish it hunts.
-const BIRD_WORLD_SCALE := 1.3
+const BIRD_WORLD_SCALE := 1.25
 
 ## Chunk-based spawn/despawn of fish-eating birds (kingfishers) -- gated by
 ## water presence (not a land biome pool, unlike AmbientFlyerRenderer),

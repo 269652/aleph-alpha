@@ -81,7 +81,7 @@ func generate_image(species: String, seed_value: int) -> Image:
 	)
 
 	var image := Image.create(SIZE.x, SIZE.y, false, Image.FORMAT_RGBA8)
-	_paint_butterfly(image, SPECIES_WINGS.get(key, SPECIES_WINGS["monarch"]), wing)
+	_paint_butterfly(image, SPECIES_WINGS.get(key, SPECIES_WINGS["monarch"]), wing, 1.0)
 	_outline_silhouette(image)
 	return image
 
@@ -89,15 +89,55 @@ func generate_image(species: String, seed_value: int) -> Image:
 ## Seen from above: a thin body down the middle with a mirrored pair of
 ## forewings and hindwings either side. Flat colours per the codebase's
 ## 16-bit convention (see docs/concept/pixel_art_engine.md).
-func _paint_butterfly(image: Image, plan: Dictionary, wing: Color) -> void:
+## Frames in a wing-beat. A butterfly's beat is the most visible of any
+## flyer: the wings swing from fully spread to nearly closed.
+const FLAP_FRAME_COUNT := 4
+
+## How far the wings close at the tightest point of the beat, as a fraction
+## of their spread width. Butterflies nearly fold shut, which is what makes
+## the flutter read at this size.
+const _WING_CLOSE := 0.35
+
+
+## One full wing-beat cycle, as images.
+func generate_flap_images(species: String, seed_value: int) -> Array:
+	var frames := []
+	for i in FLAP_FRAME_COUNT:
+		# Spread swings between fully open and nearly folded.
+		var openness: float = lerp(_WING_CLOSE, 1.0, 0.5 + 0.5 * cos(TAU * float(i) / float(FLAP_FRAME_COUNT)))
+		frames.append(_butterfly_image(species, seed_value, openness))
+	return frames
+
+
+func generate_flap_textures(species: String, seed_value: int) -> Array:
+	var textures := []
+	for frame in generate_flap_images(species, seed_value):
+		textures.append(ImageTexture.create_from_image(frame))
+	return textures
+
+
+func _butterfly_image(species: String, seed_value: int, openness: float) -> Image:
+	var key: String = species if SPECIES_BASE_COLORS.has(species) else "monarch"
+	var base_color: Color = SPECIES_BASE_COLORS[key]
+	var jitter := PixelNoise.unit(seed_value, key.length(), 0) - 0.5
+	var wing := base_color.lightened(maxf(jitter * JITTER_RANGE, 0.0)).darkened(
+		maxf(-jitter * JITTER_RANGE, 0.0)
+	)
+	var image := Image.create(SIZE.x, SIZE.y, false, Image.FORMAT_RGBA8)
+	_paint_butterfly(image, SPECIES_WINGS.get(key, SPECIES_WINGS["monarch"]), wing, openness)
+	_outline_silhouette(image)
+	return image
+
+
+func _paint_butterfly(image: Image, plan: Dictionary, wing: Color, openness: float) -> void:
 	var w := float(SIZE.x)
 	var h := float(SIZE.y)
 	var center := Vector2(w * 0.5, h * 0.5)
 	var hind := _ramp.sample(wing, _HINDWING_STOP)
 	var border := _ramp.sample(wing, _BORDER_STOP)
 
-	var forewing: Vector2 = Vector2(plan.forewing.x * w, plan.forewing.y * h)
-	var hindwing: Vector2 = Vector2(plan.hindwing.x * w, plan.hindwing.y * h)
+	var forewing: Vector2 = Vector2(plan.forewing.x * w * openness, plan.forewing.y * h)
+	var hindwing: Vector2 = Vector2(plan.hindwing.x * w * openness, plan.hindwing.y * h)
 
 	for side in [-1.0, 1.0]:
 		# Forewings sit forward and above the body's midline.

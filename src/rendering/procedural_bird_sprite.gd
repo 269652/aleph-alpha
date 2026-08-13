@@ -89,8 +89,24 @@ func generate_image(species: String, seed_value: int) -> Image:
 		maxf(-jitter * JITTER_RANGE, 0.0)
 	)
 
+	return _paint_into_new_image(key, body, 0.0)
+
+
+## Builds one bird image at a given wing phase (-1 fully down .. +1 fully
+## up); phase 0 is the resting pose generate_image returns.
+func _bird_image(species: String, seed_value: int, wing_phase: float) -> Image:
+	var key: String = species if SPECIES_BASE_COLORS.has(species) else "sparrow"
+	var base_color: Color = SPECIES_BASE_COLORS[key]
+	var jitter := PixelNoise.unit(seed_value, key.length(), 0) - 0.5
+	var body := base_color.lightened(maxf(jitter * JITTER_RANGE, 0.0)).darkened(
+		maxf(-jitter * JITTER_RANGE, 0.0)
+	)
+	return _paint_into_new_image(key, body, wing_phase)
+
+
+func _paint_into_new_image(key: String, body: Color, wing_phase: float) -> Image:
 	var image := Image.create(SIZE.x, SIZE.y, false, Image.FORMAT_RGBA8)
-	_paint_bird(image, SPECIES_BODY.get(key, SPECIES_BODY["sparrow"]), body)
+	_paint_bird(image, SPECIES_BODY.get(key, SPECIES_BODY["sparrow"]), body, wing_phase)
 	_outline_silhouette(image)
 	return image
 
@@ -98,7 +114,36 @@ func generate_image(species: String, seed_value: int) -> Image:
 ## The bird faces right: torso, round head, bill, a folded wing panel and a
 ## tail projecting back. Flat colours with one belly shadow, per the
 ## codebase's 16-bit convention (see docs/concept/pixel_art_engine.md).
-func _paint_bird(image: Image, plan: Dictionary, body: Color) -> void:
+## How many frames a full wing-beat cycle has. Few, because the flap should
+## read as a fast beat rather than a smooth animation -- the pixel-art
+## convention, and cheap enough to bake per species.
+const FLAP_FRAME_COUNT := 4
+
+## How far the wingtip travels above and below the body, as a fraction of
+## the body's half-depth.
+const _WING_TRAVEL := 1.5
+
+
+## One full wing-beat cycle for a species, as images. A bird banks slowly
+## (see AmbientFlyerMarker.FACING_TURN_DELAY) but flaps fast; these are the
+## fast part.
+func generate_flap_images(species: String, seed_value: int) -> Array:
+	var frames := []
+	for i in FLAP_FRAME_COUNT:
+		# A sine over the cycle: wings sweep up, through, down and back.
+		var phase := sin(TAU * float(i) / float(FLAP_FRAME_COUNT))
+		frames.append(_bird_image(species, seed_value, phase))
+	return frames
+
+
+func generate_flap_textures(species: String, seed_value: int) -> Array:
+	var textures := []
+	for frame in generate_flap_images(species, seed_value):
+		textures.append(ImageTexture.create_from_image(frame))
+	return textures
+
+
+func _paint_bird(image: Image, plan: Dictionary, body: Color, wing_phase: float) -> void:
 	var w := float(SIZE.x)
 	var h := float(SIZE.y)
 	var half := Vector2(plan.body_length * w * 0.5, plan.body_depth * h * 0.5)
@@ -126,8 +171,12 @@ func _paint_bird(image: Image, plan: Dictionary, body: Color) -> void:
 			image.set_pixel(x, y, belly if point.y > center.y + half.y * 0.2 else body)
 
 	# Folded wing: a darker panel across the flank.
+	# The wing sweeps above and below the body across the beat -- this is
+	# the whole flap.
 	var wing_half := Vector2(half.x * 0.62, half.y * 0.42)
-	var wing_center := center + Vector2(-half.x * 0.12, -half.y * 0.05)
+	var wing_center := center + Vector2(
+		-half.x * 0.12, -half.y * 0.05 + wing_phase * half.y * _WING_TRAVEL
+	)
 	for y in SIZE.y:
 		for x in SIZE.x:
 			var point := Vector2(x + 0.5, y + 0.5)

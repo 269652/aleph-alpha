@@ -6,11 +6,13 @@ const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 ## How big each flyer is in the world, expressed as a MULTIPLE OF A FISH.
 ## Sizing these against a concrete, visible reference rather than in the
 ## abstract is what finally made them read correctly: a butterfly is half a
-## fish, a sparrow is about one fish, and the larger birds go up from there.
+## fish, a sparrow is about one fish, a robin only SLIGHTLY bigger, and the
+## kingfisher the largest of them. These are small birds -- the range from
+## smallest to largest is deliberately narrow.
 const FLYER_WORLD_SCALE := {
 	"sparrow": 1.0,
-	"robin": 1.05,
-	"kingfisher": 1.3,
+	"robin": 1.08,
+	"kingfisher": 1.25,
 	"monarch": 0.5,
 	"swallowtail": 0.55,
 	"blue_morpho": 0.6,
@@ -163,6 +165,10 @@ func _build_marker(
 ) -> AmbientFlyerMarker:
 	var marker := AmbientFlyerMarker.new()
 	marker.texture = sprite_generator.generate_texture(species, seed_value)
+	# Wing-beat frames, so the flyer actually flaps rather than gliding with
+	# frozen wings (see AmbientFlyerMarker._animate_wings).
+	if sprite_generator.has_method("generate_flap_textures"):
+		marker.flap_frames = sprite_generator.generate_flap_textures(species, seed_value)
 	# Art is authored DETAIL_MULTIPLIER times oversized; scaling it back
 	# keeps the flyer the same size in the world (see
 	# docs/concept/art_resolution.md).

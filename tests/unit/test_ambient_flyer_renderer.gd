@@ -169,3 +169,9 @@ func test_every_butterfly_is_smaller_than_every_bird():
 				AmbientFlyerRenderer.FLYER_WORLD_SCALE[bird],
 				"%s should be smaller than %s" % [butterfly, bird]
 			)
+
+
+## "A robin should only be slightly bigger than a fish" -- the birds here
+## are all SMALL birds, so the whole range stays narrow.
+func test_a_robin_is_only_slightly_bigger_than_a_fish():
+	assert_between(AmbientFlyerRenderer.FLYER_WORLD_SCALE["robin"], 1.0, 1.15)

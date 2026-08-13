@@ -92,3 +92,24 @@ func test_near_vertical_travel_keeps_the_current_facing():
 	marker.face_travel(Vector2(-1, 0))
 	marker.face_travel(Vector2(0.001, 1.0))
 	assert_true(marker.flip_h, "a hair of horizontal drift should not flip the bird")
+
+
+## The wings must actually beat -- and far faster than the bird turns.
+func test_wings_cycle_through_their_frames_while_flying():
+	marker.flap_frames = [ImageTexture.new(), ImageTexture.new(), ImageTexture.new()]
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.wander_seed = 3
+	marker.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	var seen := {}
+	for i in 20:
+		marker._process(marker.FLAP_SECONDS_PER_FRAME)
+		seen[marker.texture] = true
+	assert_gt(seen.size(), 1, "the wing frames should cycle")
+
+
+func test_wings_beat_much_faster_than_the_bird_turns():
+	assert_lt(
+		marker.FLAP_SECONDS_PER_FRAME * 4.0, marker.FACING_TURN_DELAY,
+		"a full wing-beat should be far quicker than a change of heading"
+	)

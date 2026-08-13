@@ -46,6 +46,7 @@ func _process(delta: float) -> void:
 	var moved := position - before
 	if moved.length() > 0.001:
 		face_travel(moved, delta)
+	_animate_wings()
 
 
 ## How much horizontal travel is needed before the sprite mirrors. Without
@@ -85,3 +86,20 @@ func face_travel(direction: Vector2, delta: float = 0.0) -> void:
 	if _contrary_travel_time >= FACING_TURN_DELAY or delta <= 0.0:
 		flip_h = wants_flip
 		_contrary_travel_time = 0.0
+
+
+## Wing-beat frames for this flyer, and how fast they cycle. Birds beat
+## several times a second -- fast, unlike the slow banking of FACING_TURN_
+## DELAY. The two rates are deliberately far apart: "they should change
+## direction slowly, only their wings should flap fast".
+var flap_frames: Array = []
+const FLAP_SECONDS_PER_FRAME := 0.09
+
+
+## Advances the wing-beat. Separate from the movement step so a flyer
+## animates even while hovering.
+func _animate_wings() -> void:
+	if flap_frames.is_empty():
+		return
+	var index := int(_elapsed_time / FLAP_SECONDS_PER_FRAME) % flap_frames.size()
+	texture = flap_frames[index]
