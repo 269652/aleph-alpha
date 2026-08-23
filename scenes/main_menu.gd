@@ -17,6 +17,15 @@ const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
+const HeroDna = preload("res://src/gameplay/hero_dna.gd")
+
+## Friendly labels for a rolled genome's rarity (see HeroDna) -- purely
+## presentational, the mechanics live in HeroDna itself.
+const RARITY_LABELS := {
+	HeroDna.RARITY_COMMON: "Common",
+	HeroDna.RARITY_RARE: "Rare",
+	HeroDna.RARITY_LEGENDARY: "★ Legendary ★",
+}
 
 ## Human-readable blurbs for the archetypes (ClassArchetype has the stats).
 const CLASS_BLURBS := {
@@ -46,8 +55,12 @@ const PANEL_SIZE := Vector2(760, 520)
 
 ## Emitted once the player has committed to a start mode + class.
 ## mode is "single" or "host"; chosen_class is a ClassArchetype name.
-## `appearance` is the authored look (see HeroAppearance).
-signal start_requested(mode: String, chosen_class: String, appearance: Dictionary)
+## `appearance` is the authored look (see HeroAppearance). `dna_stat_
+## modifiers` is the rolled genome's stat swing (see HeroDna) -- World adds
+## it on top of the class's own base stats before spawning.
+signal start_requested(
+	mode: String, chosen_class: String, appearance: Dictionary, dna_stat_modifiers: Dictionary
+)
 ## Emitted to join a remote host at `address`.
 signal join_requested(address: String)
 ## Emitted from the root screen's Load Game button (only shown when a save
@@ -58,11 +71,17 @@ signal load_requested()
 ## Path PlayerSave checks for "does a save exist" when deciding whether to
 ## offer Load Game -- overridable so tests never touch the real save file.
 var save_path := PlayerSave.SAVE_PATH
+## Where the DNA reroll budget (rerolls used + when it last reset) persists
+## across menu sessions -- reused PlayerSave's generic path-taking I/O
+## rather than a whole second file-format module for one small Dictionary.
+## Overridable, same reason as save_path.
+var reroll_save_path := "user://hero_dna_rerolls.bin"
 
 var _archetypes := ClassArchetype.new()
 var _appearance_maker := HeroAppearance.new()
 var _char_sprite := ProceduralCharacterSprite.new()
 var _player_save := PlayerSave.new()
+var _dna := HeroDna.new()
 
 var _root_screen: Control
 var _create_screen: Control
@@ -73,10 +92,28 @@ var _selected_class := "warrior"
 ## axis name -> chosen option index (see HeroAppearance.appearance_from_choices).
 var _choices: Dictionary = {}
 
+## The genotype -- appearance is DERIVED from this same seed (see
+## _reroll_dna), never rolled independently, so genotype really does define
+## phenotype rather than visuals and DNA being two unrelated random draws.
+## Starts at a fixed seed (0) rather than a fresh random one so a menu that's
+## never touched Randomise still shows a stable, reproducible default look
+## (matching HeroAppearance's own existing seed-0 default in _ready).
+var _dna_seed := 0
+## How many DNA rerolls have been spent since the last daily reset (see
+## HeroDna.can_reroll/MAX_FREE_REROLLS) -- persisted to reroll_save_path
+## (see _load_reroll_state), NOT reset just by reopening the menu: the whole
+## point of a real-world 24h gate is that it survives quitting the game.
+var _rerolls_used := 0
+## Unix timestamp (real-world, Time.get_unix_time_from_system) the reroll
+## budget last refreshed -- persisted alongside _rerolls_used.
+var _last_reset_unix := 0
+
 var _class_detail: Label
 var _class_buttons: Dictionary = {}  # archetype -> Button
 var _portrait: TextureRect
 var _axis_value_labels: Dictionary = {}  # axis -> Label
+var _dna_detail: Label
+var _reroll_button: Button
 
 
 func _ready() -> void:
@@ -84,6 +121,7 @@ func _ready() -> void:
 	_choices = _appearance_maker.choices_from_appearance(
 		_appearance_maker.appearance_for(_selected_class, 0)
 	)
+	_load_reroll_state()
 
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:
@@ -179,7 +217,9 @@ func _build_create_screen() -> Control:
 	row.alignment = BoxContainer.ALIGNMENT_END
 	row.add_child(_menu_button("Back", func(): _show(_root_screen)))
 	row.add_child(_menu_button("Begin", func():
-		start_requested.emit(_pending_mode, _selected_class, current_appearance()), true))
+		start_requested.emit(
+			_pending_mode, _selected_class, current_appearance(), current_dna().stat_modifiers
+		), true))
 	box.add_child(row)
 
 	_select_class(_selected_class)
@@ -235,7 +275,17 @@ func _build_portrait_column() -> Control:
 	frame.add_child(_portrait)
 	col.add_child(frame)
 
-	col.add_child(_menu_button("Randomise", func(): _randomise_appearance()))
+	# The DNA moment (see HeroDna/docs/concept/dna.md): rarity + trait name +
+	# best-fit class, so a rare/legendary roll is visibly an event, not a
+	# number buried in a stat sheet.
+	_dna_detail = _muted_label("")
+	_dna_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_dna_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_dna_detail.custom_minimum_size = Vector2(0, 48)
+	col.add_child(_dna_detail)
+
+	_reroll_button = _menu_button("Reroll DNA", func(): _reroll_dna())
+	col.add_child(_reroll_button)
 	return col
 
 
@@ -282,9 +332,61 @@ func _cycle_axis(axis: String, step: int) -> void:
 	_refresh_appearance()
 
 
-func _randomise_appearance() -> void:
+## Reads the persisted reroll budget (rerolls used + when it last reset --
+## see reroll_save_path) and immediately applies a daily refresh if a full
+## real-world day has already passed since then. A brand-new player (no save
+## file yet) starts the clock now rather than at unix epoch, which would
+## otherwise read as "a reset is overdue" on their very first visit.
+func _load_reroll_state() -> void:
+	var data := _player_save.load_data(reroll_save_path)
+	_rerolls_used = int(data.get("rerolls_used", 0))
+	_last_reset_unix = int(data.get("last_reset_unix", 0))
+	if _last_reset_unix == 0:
+		_last_reset_unix = int(Time.get_unix_time_from_system())
+		_persist_reroll_state()
+	_maybe_reset_rerolls()
+
+
+func _seconds_since_last_reset() -> float:
+	return float(Time.get_unix_time_from_system()) - float(_last_reset_unix)
+
+
+## If a full real-world day has passed, refreshes the budget and re-stamps
+## the reset time to now -- called on load and before every reroll attempt,
+## so the very reroll that crosses the day boundary is itself allowed.
+func _maybe_reset_rerolls() -> void:
+	if not _dna.reroll_budget_has_reset(_seconds_since_last_reset()):
+		return
+	_rerolls_used = 0
+	_last_reset_unix = int(Time.get_unix_time_from_system())
+	_persist_reroll_state()
+
+
+func _persist_reroll_state() -> void:
+	_player_save.save(
+		{"rerolls_used": _rerolls_used, "last_reset_unix": _last_reset_unix}, reroll_save_path
+	)
+
+
+## Rolls a fresh DNA seed (see HeroDna) -- appearance is then DERIVED from
+## that SAME seed below, so this is genuinely "reroll the genotype", not two
+## independent random draws for looks vs. stats. Gated on HeroDna.
+## can_reroll: "rerolls should reset every 24h real world hours so you have
+## to wait a whole day if your rerolls are empty forcing the player to make
+## wise choices" -- the free budget is real-world-time gated (see
+## _maybe_reset_rerolls), not just session-scoped. `has_premium` stays a
+## hook for wherever a real payment flow eventually plugs in (dna.md's
+## original premium-credits idea) -- no such system exists in this project
+## yet, so it's always false here.
+func _reroll_dna() -> void:
+	_maybe_reset_rerolls()
+	if not _dna.can_reroll(_rerolls_used, _seconds_since_last_reset(), false):
+		return
+	_rerolls_used += 1
+	_persist_reroll_state()
+	_dna_seed = randi()
 	_choices = _appearance_maker.choices_from_appearance(
-		_appearance_maker.appearance_for(_selected_class, randi())
+		_appearance_maker.appearance_for(_selected_class, _dna_seed)
 	)
 	_refresh_appearance()
 
@@ -294,6 +396,13 @@ func current_appearance() -> Dictionary:
 	return _appearance_maker.appearance_from_choices(_selected_class, _choices)
 
 
+## The rolled genome for the creator's current DNA seed (see HeroDna.roll) --
+## handed to World on Begin alongside the appearance it was also derived
+## from.
+func current_dna() -> Dictionary:
+	return _dna.roll(_dna_seed)
+
+
 func _refresh_appearance() -> void:
 	var appearance := current_appearance()
 	if _portrait != null:
@@ -301,6 +410,55 @@ func _refresh_appearance() -> void:
 	for axis in _axis_value_labels:
 		var label: Label = _axis_value_labels[axis]
 		label.text = "%s: %s" % [AXIS_LABELS.get(axis, axis), _axis_value_text(axis, appearance)]
+	_refresh_dna()
+
+
+## The rarity/trait "moment" plus a reroll-budget readout, and which stat
+## this genome swings up vs. down -- so a player can actually see "excellent
+## magic attack but no defense" before committing.
+func _refresh_dna() -> void:
+	if _dna_detail == null:
+		return
+	var genome := current_dna()
+	var lines: Array[String] = [RARITY_LABELS.get(genome.rarity, genome.rarity)]
+	if genome.trait_name != "":
+		lines.append(genome.trait_name)
+	var swing := _stat_swing_text(genome.stat_modifiers)
+	if swing != "":
+		lines.append(swing)
+	var rerolls_left := maxi(0, HeroDna.MAX_FREE_REROLLS - _rerolls_used)
+	if rerolls_left > 0:
+		lines.append("Rerolls left: %d" % rerolls_left)
+	else:
+		lines.append("Rerolls left: 0 (resets in %s)" % _time_until_reset_text())
+	_dna_detail.text = "\n".join(lines)
+	_reroll_button.disabled = not _dna.can_reroll(_rerolls_used, _seconds_since_last_reset(), false)
+
+
+## "Xh Ym" style countdown to the next daily reroll refresh -- purely
+## presentational.
+func _time_until_reset_text() -> String:
+	var remaining := maxf(0.0, HeroDna.RESET_INTERVAL_SECONDS - _seconds_since_last_reset())
+	var hours := int(remaining) / 3600
+	var minutes := (int(remaining) % 3600) / 60
+	return "%dh %dm" % [hours, minutes]
+
+
+## "ATK +14 / DEF -14" style readout of a genome's buffed/deficit stats --
+## empty for a common roll with no material swing worth calling out.
+func _stat_swing_text(stat_modifiers: Dictionary) -> String:
+	var parts: Array[String] = []
+	for key in stat_modifiers:
+		var value: float = stat_modifiers[key]
+		if absf(value) < 0.5:
+			continue
+		parts.append("%s %+d" % [_STAT_ABBREVIATIONS.get(key, key), int(value)])
+	return " / ".join(parts)
+
+
+const _STAT_ABBREVIATIONS := {
+	"max_health": "HP", "attack_damage": "ATK", "max_mana": "Mana", "max_stamina": "Stam",
+}
 
 
 ## What a given axis currently reads as -- a name where one exists (hair/

@@ -4,9 +4,13 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
+const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
+const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const ProceduralShoreDistanceSprite = preload("res://src/rendering/procedural_shore_distance_sprite.gd")
 const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrain_sprite.gd")
 
 ## How many WORLD UNITS one tile occupies. Every gameplay system is built on
 ## this -- player movement/collision, spawn placement, chunk streaming,
@@ -55,7 +59,25 @@ const BIOME_COLORS := {
 ## looks the same). Six (up from four) so ground cover reads as natural
 ## variation, not a short texture loop -- pinned by
 ## test_variants_per_biome_is_at_least_six.
-const VARIANTS_PER_BIOME := 6
+## Doubled from 6: base biome tiles cost only biomes x variants x frames,
+## a small fraction of the blend-tile count that dominates atlas build
+## time, so more ground variety is nearly free. With variant SELECTION
+## also decorrelated (see variant_index_for_position) this is what stops
+## the ground reading as a short repeating texture.
+##
+## Raised 12 -> 25, then settled at 9: the terrain art pipeline originally
+## targeted a full 5x5/25-variant illustrated sheet per biome, but real
+## generation only reliably held a square-cell grid at 3x3 (a 5x5 attempt
+## came back as uneven tall strips -- see IllustratedTerrainSprite's own doc
+## comment). Every LAND biome now has a real 3x3/9-variant sheet registered,
+## so 9 lets every baked atlas slot map to a genuinely distinct illustrated
+## tile with none wasted on duplicates a higher cap would have produced.
+## Ocean (the one biome still procedural) still gets real per-position
+## variety from 9 -- comfortably above the original test_variants_per_biome
+## floor of 6. Still cheap for the same reason as the earlier bumps -- base
+## tiles are a small fraction of atlas build cost next to the blend/corner
+## tile families, which this constant does not affect (see BLEND_VARIANTS).
+const VARIANTS_PER_BIOME := 9
 
 ## Base biome tiles animate in real time (scrolling water, swaying grass --
 ## see ProceduralTerrainSprite.generate_frame_image): each biome variant
@@ -119,7 +141,11 @@ const ATLAS_COLUMNS := 64
 ## art_resolution.md#boot-performance). Manual, not content-hashed: matches
 ## this codebase's existing "bump a version const" conventions elsewhere
 ## rather than adding hash-computation machinery for a one-developer project.
-const ATLAS_VERSION := "art_resolution_v4_chunky_pixels"
+## Arbitrary fixed salt so variant selection is stable across runs while
+## still being decorrelated between neighbouring tiles.
+const _VARIANT_SALT := 90210
+
+const ATLAS_VERSION := "art_resolution_v19_illustrated_blend_and_corner_tiles"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -129,8 +155,10 @@ var atlas_version_path := TerrainAtlasCache.VERSION_PATH
 
 var _terrain_sprite_generator := ProceduralTerrainSprite.new()
 var _structure_sprite_generator := ProceduralStructureSprite.new()
+var _building_piece_sprite_generator := ProceduralBuildingPieceSprite.new()
 var _shore_distance_generator := ProceduralShoreDistanceSprite.new()
 var _atlas_cache := TerrainAtlasCache.new()
+var _illustrated_terrain = IllustratedTerrainSprite.new()
 
 
 ## Returns the atlas coordinate for one biome's variant -- the FIRST frame of
@@ -146,13 +174,16 @@ func atlas_coords_for_biome(biome_name: String, variant_index: int = 0) -> Vecto
 ## Returns the atlas coordinate for a player-placed modification tile,
 ## positioned right after all biome variant tiles in the shared atlas. Known
 ## structure ids (see ProceduralStructureSprite.STRUCTURE_IDS -- campfire,
-## furnace) each get their own dedicated slot; EARTH_TILE_ID and any
-## unrecognized id fall back to the single plain-earth slot (fail-safe
-## default, matching this codebase's `.get(x, default)` convention -- never
-## crash on an unknown tile_id).
+## furnace) and known building piece ids (see BuildingPiece.PIECE_IDS --
+## floor/wall/door/window/roof x wood/stone) each get their own dedicated
+## slot; EARTH_TILE_ID and any unrecognized id fall back to the single plain-
+## earth slot (fail-safe default, matching this codebase's `.get(x, default)`
+## convention -- never crash on an unknown tile_id).
 func atlas_coords_for_modification(tile_id: String) -> Vector2i:
 	if ProceduralStructureSprite.STRUCTURE_IDS.has(tile_id):
 		return _grid_coords(_structure_linear(tile_id))
+	if BuildingPiece.has_piece(tile_id):
+		return _grid_coords(_building_piece_linear(tile_id))
 	return _grid_coords(_earth_linear())
 
 
@@ -161,7 +192,14 @@ func atlas_coords_for_modification(tile_id: String) -> Vector2i:
 ## across sessions/reloads) but varies from position to position so the
 ## ground doesn't read as one repeating texture.
 func variant_index_for_position(global_x: int, global_y: int) -> int:
-	return absi(hash("%d_%d_terrain_variant" % [global_x, global_y])) % VARIANTS_PER_BIOME
+	# PixelNoise, not Godot's string hash. Hashing adjacent coordinates
+	# correlates, so neighbouring tiles kept drawing the SAME variant and the
+	# ground broke into patches of repeated tile -- exactly the "tiled
+	# repeating pattern" look, despite there being several variants
+	# available. This is the sixth site of that clustering bug in this
+	# project, after village house sizes, tree leaf angles, grass tuft
+	# blades, the GPU blade field and the baked terrain blades.
+	return PixelNoise.range_index(_VARIANT_SALT, global_x, global_y, VARIANTS_PER_BIOME)
 
 
 ## Returns the atlas coordinate for a directional blended border tile:
@@ -244,6 +282,134 @@ func _is_more_dominant(candidate: String, candidate_directions: Array, best_biom
 	return BiomeClassifier.KNOWN_BIOMES.find(candidate) < BiomeClassifier.KNOWN_BIOMES.find(best_biome)
 
 
+## Which of `biome_name`'s geometric tile CORNERS (see
+## ProceduralTerrainSprite.CORNER_DIRECTIONS) should be carved toward a
+## different biome -- {"partner": <biome>, "directions": Array of diagonal
+## Vector2i toward it}, or an empty Dictionary if this cell has no corner
+## case at all.
+##
+## Scoped to water/land corners (mirrors dominant_blend_for's own water
+## special case, which never blends land toward ocean or vice versa on the
+## dithered layer -- this is the carved-corner equivalent instead). Covers
+## BOTH real shoreline corner shapes an irregular coastline actually
+## produces, not just a clean rectangle's:
+##   - CONVEX (this cell is ocean, land pokes into it on two perpendicular
+##     cardinal sides -- a peninsula tip narrowing the water).
+##   - CONCAVE (this cell is land, water pokes into it on two perpendicular
+##     cardinal sides -- a bay/inlet tip narrowing the land).
+## A cell can qualify on MORE THAN ONE of its four corners at once -- a
+## single-tile-wide spit/peninsula (land with water on three sides) has TWO
+## simultaneous qualifying corners, and a lone one-tile pond/island has all
+## FOUR. Measured directly against real generated chunks: of 3355 real cells
+## with at least one qualifying corner, 859 qualified on more than one
+## simultaneously (4522 total qualifying corner-instances). An earlier
+## version of this function returned only the FIRST direction found and
+## silently dropped the rest, which is exactly why some corners on a real
+## coastline carved while others on the very same tile stayed hard right
+## angles (reported: "still not giving every corner a border radius"). Now
+## every qualifying direction is collected and grouped by partner biome, the
+## same "most edges wins, ties broken by KNOWN_BIOMES order" dominance
+## picked as dominant_blend_for already uses -- so a lone pond's four
+## corners (nearly always the same partner) all round together, and a mixed
+## spit only drops a direction if it genuinely disagrees on which biome it's
+## carving toward.
+## The two flanking neighbors no longer need to be the SAME biome, either:
+## an ocean corner flanked by two DIFFERENT land biomes (e.g. grassland
+## north, desert east -- routine on a real coastline where land-biome edges
+## rarely line up with shore corners) now still carves, toward whichever
+## neighbor wins BLEND_PRIORITY (deterministic tie-break, same convention as
+## dominant_blend_for). A land cell corner always carves toward "ocean" --
+## there's only one water biome, so no such ambiguity exists there.
+## Land/land diagonal-only corners (no shared cardinal edge, two different
+## LAND biomes only touching from a "T"-junction where just one side is
+## ocean) remain deliberately out of scope for this pass (see
+## docs/progress.md).
+func corner_direction_for(biome_name: String, neighbor_biomes: Dictionary) -> Dictionary:
+	var directions_by_partner := {}
+	for direction in ProceduralTerrainSprite.CORNER_DIRECTIONS:
+		var horizontal: String = neighbor_biomes.get(Vector2i(direction.x, 0), "")
+		var vertical: String = neighbor_biomes.get(Vector2i(0, direction.y), "")
+		if horizontal == "" or vertical == "" or horizontal == biome_name or vertical == biome_name:
+			continue
+		var partner := ""
+		if horizontal == vertical:
+			partner = horizontal
+		elif biome_name == "ocean" and horizontal != "ocean" and vertical != "ocean":
+			# Mixed land biomes flanking an ocean corner: still a real
+			# corner, just carved toward whichever neighbor dominates.
+			partner = _dominant_corner_partner(horizontal, vertical)
+		if partner == "":
+			continue
+		if not directions_by_partner.has(partner):
+			directions_by_partner[partner] = []
+		directions_by_partner[partner].append(direction)
+
+	if directions_by_partner.is_empty():
+		return {}
+
+	var best_partner := ""
+	var best_directions: Array = []
+	for candidate in directions_by_partner:
+		var candidate_directions: Array = directions_by_partner[candidate]
+		if _is_more_dominant(candidate, candidate_directions, best_partner, best_directions):
+			best_partner = candidate
+			best_directions = candidate_directions
+	return {"partner": best_partner, "directions": best_directions}
+
+
+## Deterministic tie-break for a mixed-biome ocean corner (see
+## corner_direction_for): higher BLEND_PRIORITY wins, ties broken toward the
+## earlier KNOWN_BIOMES entry -- the same convention _is_more_dominant uses
+## for land/land blending.
+func _dominant_corner_partner(a: String, b: String) -> String:
+	var priority_a: int = BLEND_PRIORITY.get(a, 0)
+	var priority_b: int = BLEND_PRIORITY.get(b, 0)
+	if priority_a != priority_b:
+		return a if priority_a > priority_b else b
+	return a if BiomeClassifier.KNOWN_BIOMES.find(a) < BiomeClassifier.KNOWN_BIOMES.find(b) else b
+
+
+## Returns the atlas coordinate for one corner-carve tile (see
+## corner_direction_for/ProceduralTerrainSprite.generate_corner_image):
+## `own_biome` is the cell's own biome (whichever tile is being carved --
+## ocean for a convex corner, a land biome for a concave one), `other_biome`
+## is what gets carved into its corner geometry, `corner_directions` is every
+## diagonal corner being carved at once (a cell can qualify on more than one
+## simultaneously -- see corner_direction_for), and `variant` folds into
+## BLEND_VARIANTS the same way atlas_coords_for_directional_blend does.
+## Order within `corner_directions` doesn't matter -- reduced to a bitmask,
+## same convention as atlas_coords_for_directional_blend's `directions`.
+func atlas_coords_for_corner(own_biome: String, other_biome: String, corner_directions: Array, variant: int = 0) -> Vector2i:
+	return _grid_coords(_corner_linear(own_biome, other_biome, corner_directions, variant))
+
+
+## Converts a set of diagonal corner directions into a bitmask over
+## ProceduralTerrainSprite.CORNER_DIRECTIONS -- the corner-carve equivalent
+## of _direction_mask.
+func _corner_direction_mask(directions: Array) -> int:
+	var mask := 0
+	for direction in directions:
+		mask |= 1 << ProceduralTerrainSprite.CORNER_DIRECTIONS.find(direction)
+	return mask
+
+
+## The diagonal corner directions set in a bitmask, in CORNER_DIRECTIONS
+## order -- the corner-carve equivalent of _directions_from_mask.
+func _corner_directions_from_mask(mask: int) -> Array:
+	var directions := []
+	for bit in ProceduralTerrainSprite.CORNER_DIRECTIONS.size():
+		if mask & (1 << bit):
+			directions.append(ProceduralTerrainSprite.CORNER_DIRECTIONS[bit])
+	return directions
+
+
+## Every non-empty subset of a tile's 4 diagonal corners gets its own carved
+## tile, mirroring DIRECTION_MASK_COUNT's role for the blend system -- a cell
+## can qualify on more than one corner at once (see corner_direction_for),
+## so a single fixed direction slot per tile isn't enough.
+const CORNER_MASK_COUNT := (1 << 4) - 1
+
+
 func _biome_tile_count() -> int:
 	return BiomeClassifier.KNOWN_BIOMES.size() * VARIANTS_PER_BIOME
 
@@ -268,10 +434,23 @@ func _structure_linear(tile_id: String) -> int:
 	return _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.find(tile_id)
 
 
-## Linear atlas index where the blend tiles begin (right after the earth and
-## structure tiles).
-func _blend_base_linear() -> int:
+## Linear atlas index where the building-piece tiles begin (right after
+## earth and structures).
+func _building_piece_base_linear() -> int:
 	return _structure_base_linear() + ProceduralStructureSprite.STRUCTURE_IDS.size()
+
+
+## Linear atlas index of one known building piece's tile (see
+## BuildingPiece.PIECE_IDS), in PIECE_IDS order. Callers must check
+## BuildingPiece.has_piece(tile_id) first, mirroring _structure_linear.
+func _building_piece_linear(piece_id: String) -> int:
+	return _building_piece_base_linear() + BuildingPiece.PIECE_IDS.find(piece_id)
+
+
+## Linear atlas index where the blend tiles begin (right after earth,
+## structure, and building-piece tiles).
+func _blend_base_linear() -> int:
+	return _building_piece_base_linear() + BuildingPiece.PIECE_IDS.size()
 
 
 ## Linear atlas index of one blend tile. Pairs are ordered (near, far) with the
@@ -286,6 +465,57 @@ func _blend_linear(near_biome: String, far_biome: String, mask: int, variant_ind
 	return (
 		_blend_base_linear() + pair_ordinal * _TILES_PER_PAIR
 		+ (mask - 1) * BLEND_VARIANTS + (variant_index % BLEND_VARIANTS)
+	)
+
+
+## How many atlas cells one "corner family" (every land-biome ordinal slot,
+## including ocean's own never-referenced one, x every non-empty subset of
+## the 4 diagonal corners (CORNER_MASK_COUNT) x BLEND_VARIANTS) reserves.
+## Two such families exist (see _corner_linear): ocean-owning (convex
+## corners) and land-owning (concave corners). A cell can qualify on more
+## than one corner simultaneously (see corner_direction_for), so every mask
+## -- not just a single direction slot -- needs its own tile, mirroring
+## _TILES_PER_PAIR's role for the blend system.
+func _corner_family_size() -> int:
+	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
+	return biome_count * CORNER_MASK_COUNT * BLEND_VARIANTS
+
+
+## Linear atlas index where corner-carve tiles begin (right after all blend
+## tiles) -- the ocean-owning family (convex corners: an ocean cell carved
+## toward a land neighbor) starts here.
+func _corner_base_linear() -> int:
+	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
+	return _blend_base_linear() + biome_count * (biome_count - 1) * _TILES_PER_PAIR
+
+
+## Linear atlas index where the land-owning corner family begins (concave
+## corners: a land cell carved toward ocean) -- right after the whole
+## ocean-owning family.
+func _land_corner_base_linear() -> int:
+	return _corner_base_linear() + _corner_family_size()
+
+
+## Linear atlas index of one corner-carve tile. Only ever called with one of
+## `own_biome`/`other_biome` equal to "ocean" (see corner_direction_for) --
+## routes to whichever of the two corner families actually owns the tile:
+## ocean-owning (own_biome == "ocean", indexed by other_biome's ordinal) or
+## land-owning (own_biome != "ocean", indexed by own_biome's ordinal,
+## other_biome always "ocean"). Ocean's own ordinal slot in either family is
+## never referenced (corner_direction_for never returns a same-biome
+## partner) -- a small, cheap amount of unused atlas space rather than a
+## fragile re-indexing scheme.
+func _corner_linear(own_biome: String, other_biome: String, corner_directions: Array, variant: int) -> int:
+	var mask := _corner_direction_mask(corner_directions)
+	var base := _corner_base_linear()
+	var biome_index := BiomeClassifier.KNOWN_BIOMES.find(other_biome)
+	if own_biome != "ocean":
+		base = _land_corner_base_linear()
+		biome_index = BiomeClassifier.KNOWN_BIOMES.find(own_biome)
+	return (
+		base
+		+ biome_index * CORNER_MASK_COUNT * BLEND_VARIANTS
+		+ (mask - 1) * BLEND_VARIANTS + (variant % BLEND_VARIANTS)
 	)
 
 
@@ -311,12 +541,36 @@ func _grid_coords(linear_index: int) -> Vector2i:
 	return Vector2i(linear_index % ATLAS_COLUMNS, linear_index / ATLAS_COLUMNS)
 
 
-## Blits a 16x16 tile image into the shared atlas image at the grid cell for
-## `linear_index`.
+## Blits one generated tile image into the shared atlas image at the grid
+## cell for `linear_index`, scaling it down first if the generator authored
+## it larger than ART_TILE_SIZE.
+##
+## That rescale is load-bearing, not a nicety. This used to blit a
+## Rect2i(0, 0, ART_TILE_SIZE, ART_TILE_SIZE) SOURCE region, which silently
+## CROPPED every oversized tile to its top-left quadrant instead of scaling
+## it: ProceduralTerrainSprite authors at its own SIZE (64), while
+## ART_TILE_SIZE is TILE_SIZE * ArtResolution.DETAIL_MULTIPLIER and so
+## follows whatever that shared multiplier currently is (32 at a 2x factor).
+## Three of any corner-carved tile's four rounded corners were thrown away
+## before ever reaching the atlas -- which is exactly why an isolated
+## one-tile pond still rendered as a hard square in game no matter how
+## correct the carve logic was (reported: isolated ponds "rendering as
+## perfect hard squares"), and it quietly degraded every other terrain tile
+## too (blend gradients, grass blades, moss all showing only their top-left
+## quarter). Nearest-neighbour, never bilinear -- this is pixel art.
+## Pinned by test_baked_tiles_represent_the_whole_generated_tile_not_a_
+## cropped_corner.
 func _blit_tile(atlas_image: Image, tile_image: Image, linear_index: int) -> void:
 	var coords := _grid_coords(linear_index)
+	var source := tile_image
+	if source.get_width() != ART_TILE_SIZE or source.get_height() != ART_TILE_SIZE:
+		source = Image.create_from_data(
+			tile_image.get_width(), tile_image.get_height(), false,
+			tile_image.get_format(), tile_image.get_data()
+		)
+		source.resize(ART_TILE_SIZE, ART_TILE_SIZE, Image.INTERPOLATE_NEAREST)
 	atlas_image.blit_rect(
-		tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)), coords * ART_TILE_SIZE
+		source, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)), coords * ART_TILE_SIZE
 	)
 
 
@@ -327,6 +581,77 @@ func _blit_tile(atlas_image: Image, tile_image: Image, linear_index: int) -> voi
 ## ~13.5s measured at the 4x resolution (docs/concept/
 ## art_resolution.md#boot-performance) for thousands of tiles at TILE_SIZE^2
 ## pixels each, far too slow to pay on every boot.
+## One base biome tile's pixels for (biome_name, variant, frame). Illustrated
+## art (see IllustratedTerrainSprite) wins when this biome has a real sheet
+## registered; otherwise this is exactly the per-(biome, variant, frame)
+## procedural image it always was. The same has_X()-gated fallback seam
+## StoneRenderer._texture_for uses for illustrated stone art.
+##
+## An illustrated tile has no real animation of its own (a single hand/AI-
+## illustrated frame, not FRAME_COUNT seamlessly looping ones) -- `frame` is
+## ignored and the SAME illustrated image is reused for every one of a
+## biome/variant's animation cells, matching generate_frame_image's own
+## "static biomes return identical frames" convention rather than needing a
+## separate no-animation code path.
+func _biome_frame_image(biome_name: String, variant: int, frame: int) -> Image:
+	if _illustrated_terrain.has_variants(biome_name):
+		return _illustrated_terrain.frame_for(biome_name, variant)
+	return _terrain_sprite_generator.generate_frame_image(biome_name, variant, frame)
+
+
+## A directional-blend border between near_biome/far_biome, dithering their
+## REAL images together (illustrated where registered, procedural
+## otherwise -- see _biome_frame_image) via ProceduralTerrainSprite's dither
+## mask, instead of a flat-color-plus-speckle blend synthesized from a bare
+## biome name (reported: illustrated ground next to a flat/procedural-
+## looking border read as visibly inconsistent). Every land biome is
+## illustrated today, so a land-land blend composites two same-size (32px)
+## illustrated images directly; only ocean (still procedural, 64px) would
+## ever mismatch, and directional blends never involve it (land never
+## blends toward/from ocean -- see dominant_blend_for's own doc comment) --
+## the size-normalizing seam exists for _corner_image below, which does.
+func _blend_image(near_biome: String, far_biome: String, directions: Array, variant: int) -> Image:
+	var near_image := _normalized_for_compositing(_biome_frame_image(near_biome, variant, 0))
+	var far_image := _normalized_for_compositing(_biome_frame_image(far_biome, variant, 0))
+	return _terrain_sprite_generator.generate_multi_directional_blend_image_from(near_image, far_image, directions)
+
+
+## Corner-carve counterpart of _blend_image -- see its own doc comment.
+## Unlike directional blends, a corner ALWAYS involves ocean on one side
+## (see corner_direction_for), so own_image/other_image routinely mismatch
+## in size (illustrated land at 32px vs still-procedural ocean at
+## ProceduralTerrainSprite.SIZE, 64px) -- _normalized_for_compositing is
+## what keeps that from crashing or silently cropping.
+func _corner_image(own_biome: String, other_biome: String, corner_directions: Array, variant: int) -> Image:
+	var own_image := _normalized_for_compositing(_biome_frame_image(own_biome, variant, 0))
+	var other_image := _normalized_for_compositing(_biome_frame_image(other_biome, variant, 0))
+	return _terrain_sprite_generator.generate_corner_image_from(own_image, other_image, corner_directions)
+
+
+## Resizes `image` to ART_TILE_SIZE if it isn't already that size --
+## nearest-neighbour when upscaling (keeps pixel art crisp, matches
+## _blit_tile's own convention for a generator smaller than the atlas
+## slot), Lanczos when downscaling. Nearest-neighbour aliases fine
+## per-pixel detail into visible noise when shrinking -- the exact bug
+## IllustratedTerrainSprite.CANVAS_SIZE's own doc comment describes fixing
+## for base tiles; compositing at the real final size here (rather than
+## leaving _blit_tile to rescale the COMPOSITE afterward) means that lesson
+## carries over to blend/corner tiles instead of quietly regressing on them.
+func _normalized_for_compositing(image: Image) -> Image:
+	if image.get_width() == ART_TILE_SIZE and image.get_height() == ART_TILE_SIZE:
+		return image
+	var resized := Image.create_from_data(
+		image.get_width(), image.get_height(), false, image.get_format(), image.get_data()
+	)
+	var interpolation := (
+		Image.INTERPOLATE_LANCZOS
+		if image.get_width() > ART_TILE_SIZE or image.get_height() > ART_TILE_SIZE
+		else Image.INTERPOLATE_NEAREST
+	)
+	resized.resize(ART_TILE_SIZE, ART_TILE_SIZE, interpolation)
+	return resized
+
+
 func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 	var image := Image.create(ATLAS_COLUMNS * ART_TILE_SIZE, rows * ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
 
@@ -338,7 +663,7 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 		for variant in VARIANTS_PER_BIOME:
 			var block_start := (i * VARIANTS_PER_BIOME + variant) * FRAME_COUNT
 			for frame in FRAME_COUNT:
-				var frame_image := _terrain_sprite_generator.generate_frame_image(biome_name, variant, frame)
+				var frame_image := _biome_frame_image(biome_name, variant, frame)
 				_blit_tile(image, frame_image, block_start + frame)
 
 	var earth_image := Image.create(ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
@@ -349,6 +674,10 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 		var structure_image := _structure_sprite_generator.generate_image(structure_id)
 		_blit_tile(image, structure_image, _structure_linear(structure_id))
 
+	for piece_id in BuildingPiece.PIECE_IDS:
+		var piece_image := _building_piece_sprite_generator.generate_image(piece_id)
+		_blit_tile(image, piece_image, _building_piece_linear(piece_id))
+
 	for near_index in biome_count:
 		for far_index in biome_count:
 			if far_index == near_index:
@@ -358,10 +687,29 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 			for mask in range(1, DIRECTION_MASK_COUNT + 1):
 				var directions := _directions_from_mask(mask)
 				for variant in BLEND_VARIANTS:
-					var blend_image := _terrain_sprite_generator.generate_multi_directional_blend_image(
-						near_biome, far_biome, directions, variant
-					)
+					var blend_image := _blend_image(near_biome, far_biome, directions, variant)
 					_blit_tile(image, blend_image, _blend_linear(near_biome, far_biome, mask, variant))
+
+		# Corner-carve tiles (see corner_direction_for), two families for the
+		# two real shoreline corner shapes:
+		#   - ocean-owning (CONVEX corner: an ocean cell carved toward a land
+		#     neighbor poking into it).
+		#   - land-owning (CONCAVE corner: a land cell carved toward the
+		#     ocean poking into it) -- the case a hard square notch was
+		#     still showing up for before this pass.
+		# near_index == ocean's own index is skipped for both -- ocean never
+		# carves toward/from itself, and corner_direction_for never asks
+		# for it.
+		var corner_biome: String = BiomeClassifier.KNOWN_BIOMES[near_index]
+		if corner_biome != "ocean":
+			for corner_mask in range(1, CORNER_MASK_COUNT + 1):
+				var corner_directions := _corner_directions_from_mask(corner_mask)
+				for variant in BLEND_VARIANTS:
+					var convex_image := _corner_image("ocean", corner_biome, corner_directions, variant)
+					_blit_tile(image, convex_image, _corner_linear("ocean", corner_biome, corner_directions, variant))
+
+					var concave_image := _corner_image(corner_biome, "ocean", corner_directions, variant)
+					_blit_tile(image, concave_image, _corner_linear(corner_biome, "ocean", corner_directions, variant))
 
 	return image
 
@@ -377,7 +725,7 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 ## every call regardless of cache state.
 func build_tile_set() -> TileSet:
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
-	var total_cells := _blend_base_linear() + biome_count * (biome_count - 1) * _TILES_PER_PAIR
+	var total_cells := _land_corner_base_linear() + _corner_family_size()
 	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
 
 	var image: Image = null
@@ -408,10 +756,13 @@ func build_tile_set() -> TileSet:
 			for frame in FRAME_COUNT:
 				source.set_tile_animation_frame_duration(first, frame, duration)
 
-	# Earth, structures, and blend tiles stay static single-cell tiles.
+	# Earth, structures, building pieces, and blend tiles stay static
+	# single-cell tiles.
 	source.create_tile(_grid_coords(_earth_linear()))
 	for structure_id in ProceduralStructureSprite.STRUCTURE_IDS:
 		source.create_tile(_grid_coords(_structure_linear(structure_id)))
+	for piece_id in BuildingPiece.PIECE_IDS:
+		source.create_tile(_grid_coords(_building_piece_linear(piece_id)))
 	for linear_index in range(_blend_base_linear(), total_cells):
 		source.create_tile(_grid_coords(linear_index))
 
@@ -462,13 +813,47 @@ func paint(
 				# of swapping discrete baked tiles at the 16px tile grid
 				# (the old approach's jagged shore-staircase look).
 				var blend := dominant_blend_for(biome_name, neighbors)
-				if blend.is_empty():
-					atlas_coords = atlas_coords_for_biome(biome_name, variant)
-				else:
+				if not blend.is_empty():
 					atlas_coords = atlas_coords_for_directional_blend(
 						biome_name, blend.partner, blend.directions, variant
 					)
+				else:
+					# Water/land is never dither-blended (see above), but a
+					# cell whose tile-grid corner is a real right-angle
+					# (land on BOTH cardinal sides of one diagonal, from
+					# either the water side OR the land side -- see
+					# corner_direction_for) still gets an actual
+					# carved-corner tile on this same opaque base layer,
+					# instead of a hard square notch.
+					var corner := corner_direction_for(biome_name, neighbors)
+					if corner.is_empty():
+						atlas_coords = atlas_coords_for_biome(biome_name, variant)
+					else:
+						atlas_coords = atlas_coords_for_corner(biome_name, corner.partner, corner.directions, variant)
 			tile_map_layer.set_cell(global, 0, atlas_coords)
+
+
+## Paints a chunk's ROOF layer -- a separate TileMapLayer from `paint()`'s
+## floor/wall layer, since a roof piece shares its cell with the floor
+## beneath it (see Chunk.roof_modifications). Only touches cells that
+## actually have a roof modification; everything else on this layer is left
+## alone.
+##
+## `hidden_cells` (local cell -> true) is what makes roof hide-on-enter
+## possible: a cell listed there is ERASED instead of painted, so the player
+## can see inside while standing under it, and calling this again with a
+## smaller/empty `hidden_cells` repaints whatever is no longer hidden. The
+## caller (EarthChunkManager) is expected to pass the current room's cells
+## while the player is indoors, and {} otherwise.
+func paint_roofs(
+	tile_map_layer: TileMapLayer, chunk: Chunk, origin: Vector2i = Vector2i.ZERO, hidden_cells: Dictionary = {}
+) -> void:
+	for local in chunk.roof_modifications:
+		var global: Vector2i = origin + local
+		if hidden_cells.has(local):
+			tile_map_layer.erase_cell(global)
+		else:
+			tile_map_layer.set_cell(global, 0, atlas_coords_for_modification(chunk.roof_modifications[local]))
 
 
 ## The cardinal neighbor biomes of a local chunk cell, keyed by direction

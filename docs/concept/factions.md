@@ -27,8 +27,16 @@ its own.
 
 ### Open questions
 
-- Aggregation function — simple average of relationship scores, weighted by
-  the NPC's social influence/role in the settlement (the blacksmith's
-  opinion matters more than a random farmer's?), or something else?
+- ~~Aggregation function — simple average of relationship scores, weighted
+  by the NPC's social influence/role in the settlement (the blacksmith's
+  opinion matters more than a random farmer's?), or something else?~~
+  Partially resolved (2026-08-13): [quests.md](quests.md#individual-vs-settlement-level-quests)
+  needed this exact weighting to pick a settlement's quest-giving
+  representative, and reuses it here rather than defining a second score —
+  the highest social-influence NPC is both the settlement's legible
+  "mayor" and its heaviest-weighted voice in this aggregate. Still open:
+  the precise weighting formula itself (how much more a blacksmith's
+  opinion counts than a farmer's) needs real numbers once NPCs carry real
+  social-influence values.
 - Does reputation ever propagate *between* settlements (word travels), or
   is every settlement's opinion of you independently earned?

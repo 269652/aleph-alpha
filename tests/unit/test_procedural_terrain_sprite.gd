@@ -210,15 +210,106 @@ func test_directional_blend_keeps_the_outer_quarters_essentially_pure():
 		assert_lt(far_count, 2, "row %d near the near edge should be almost entirely forest" % y)
 
 
+## Counts pixels in row `y` that read as far_biome rather than near_biome --
+## compared against each biome's own REAL generated pixel at that exact
+## position (seed 0, matching every caller here), not a flat BASE_COLORS
+## reference. A blend tile now sources real per-pixel texture (grass
+## blades, speckle, ...) rather than a flat color plus a synthesized
+## speckle roll (see generate_multi_directional_blend_image_from's own doc
+## comment) -- comparing against the real textured pixel is what "reads as
+## that biome at this exact spot" actually means once the source is real
+## art, not an approximation that happens to coincide with a flat color.
 func _far_leaning_count_in_row(image: Image, y: int, far_biome: String, near_biome: String) -> int:
-	var far_base: Color = ProceduralTerrainSprite.BASE_COLORS[far_biome]
-	var near_base: Color = ProceduralTerrainSprite.BASE_COLORS[near_biome]
+	var far_image := generator.generate_image(far_biome, 0)
+	var near_image := generator.generate_image(near_biome, 0)
 	var count := 0
 	for x in ProceduralTerrainSprite.SIZE:
 		var pixel := image.get_pixel(x, y)
-		if _rgb_distance(pixel, far_base) < _rgb_distance(pixel, near_base):
+		if _rgb_distance(pixel, far_image.get_pixel(x, y)) < _rgb_distance(pixel, near_image.get_pixel(x, y)):
 			count += 1
 	return count
+
+
+# -- blending real source images together, not flat synthesized color -------
+#
+# TerrainRenderer needs a border between two ILLUSTRATED biomes to dither
+# their real art together (reported: illustrated ground next to a flat
+# procedural-looking border read as visibly inconsistent). The *_from
+# variants take pre-resolved images (illustrated or procedural, caller's
+# choice) instead of biome names, so the same dither-mask/wedge-mask math
+# works regardless of where the pixels came from. No variant_seed: the
+# mask itself is purely positional (Bayer dither / wedge geometry), and any
+# per-pixel texture now comes from the real source images, not a
+# synthesized speckle layered on top of a flat color.
+
+func _solid_image(color: Color) -> Image:
+	var image := Image.create(ProceduralTerrainSprite.SIZE, ProceduralTerrainSprite.SIZE, false, Image.FORMAT_RGBA8)
+	image.fill(color)
+	return image
+
+
+func test_multi_directional_blend_from_sources_the_real_given_pixels():
+	var near_image := _solid_image(Color(1, 0, 0, 1))
+	var far_image := _solid_image(Color(0, 0, 1, 1))
+	var image := generator.generate_multi_directional_blend_image_from(near_image, far_image, [Vector2i(0, -1)])
+	assert_eq(image.get_width(), near_image.get_width())
+	assert_eq(image.get_height(), near_image.get_height())
+
+	var size := near_image.get_width()
+	var top_far_leaning := 0
+	var bottom_near_leaning := 0
+	for x in size:
+		var top_pixel := image.get_pixel(x, 0)
+		if _rgb_distance(top_pixel, Color(0, 0, 1)) < _rgb_distance(top_pixel, Color(1, 0, 0)):
+			top_far_leaning += 1
+		var bottom_pixel := image.get_pixel(x, size - 1)
+		if _rgb_distance(bottom_pixel, Color(1, 0, 0)) < _rgb_distance(bottom_pixel, Color(0, 0, 1)):
+			bottom_near_leaning += 1
+	assert_gt(top_far_leaning, size / 2, "top edge (toward far) should mostly read the far image's color")
+	assert_gt(bottom_near_leaning, size / 2, "bottom edge (away from far) should mostly read the near image's color")
+
+	# Every output pixel must be EXACTLY one of the two source colors --
+	# proves real pixels are sourced verbatim, with no synthesized speckle
+	# blended in on top (unlike the biome-name-based wrapper's source
+	# images, which already carry their own real texture before this ever
+	# runs).
+	for x in size:
+		var p := image.get_pixel(x, 0)
+		assert_true(
+			p.is_equal_approx(Color(1, 0, 0, 1)) or p.is_equal_approx(Color(0, 0, 1, 1)),
+			"pixel (%d, 0) should be exactly one of the two source colors, got %s" % [x, p]
+		)
+
+
+func test_generate_multi_directional_blend_image_matches_the_from_variant_given_its_own_sources():
+	var near_image := generator.generate_image("forest", 3)
+	var far_image := generator.generate_image("grassland", 3)
+	var via_biomes := generator.generate_multi_directional_blend_image("forest", "grassland", [Vector2i(0, -1)], 3)
+	var via_from := generator.generate_multi_directional_blend_image_from(near_image, far_image, [Vector2i(0, -1)])
+	assert_eq(via_biomes.get_data(), via_from.get_data(), "the biome-name wrapper should just be generate_image + _from")
+
+
+func test_corner_image_from_sources_the_real_given_pixels():
+	var own_image := _solid_image(Color(1, 0, 0, 1))
+	var other_image := _solid_image(Color(0, 0, 1, 1))
+	var image := generator.generate_corner_image_from(own_image, other_image, [Vector2i(1, -1)])
+	var size := own_image.get_width()
+	assert_true(
+		image.get_pixel(size - 1, 0).is_equal_approx(Color(0, 0, 1, 1)),
+		"the named (NE) corner should be carved to other_image's real pixel"
+	)
+	assert_true(
+		image.get_pixel(0, size - 1).is_equal_approx(Color(1, 0, 0, 1)),
+		"the opposite (SW) corner should stay own_image's real pixel"
+	)
+
+
+func test_generate_corner_image_matches_the_from_variant_given_its_own_sources():
+	var own_image := generator.generate_image("mountain", 4)
+	var other_image := generator.generate_image("ocean", 4)
+	var via_biomes := generator.generate_corner_image("mountain", "ocean", [Vector2i(1, -1)], 4)
+	var via_from := generator.generate_corner_image_from(own_image, other_image, [Vector2i(1, -1)])
+	assert_eq(via_biomes.get_data(), via_from.get_data(), "the biome-name wrapper should just be generate_image + _from")
 
 
 # -- real-time tile animation frames (see TerrainRenderer's animated tiles) --
@@ -240,10 +331,11 @@ func test_ocean_frames_differ_and_loop_seamlessly():
 
 
 ## Baked grassland tiles are deliberately STATIC: a 1px blade tip jumping
-## across 4 tile frames reads as flicker, never wind. Real blade motion is
-## owned by the GPU micro-blade field (grass_blade_field.gd), which sways
-## continuously at any frame rate.
-func test_grassland_frames_are_identical_motion_lives_in_the_gpu_field():
+## across 4 tile frames reads as flicker, never wind. The GPU micro-blade
+## field that used to carry real motion was removed (flat, non-interactive
+## rectangles) -- decorative grass motion is expected to return via a real
+## illustrated grass layer, not by animating the baked tile itself.
+func test_grassland_frames_are_identical_no_baked_flicker():
 	var f0 := generator.generate_frame_image("grassland", 0, 0)
 	var f1 := generator.generate_frame_image("grassland", 0, 1)
 	assert_eq(f0.get_data(), f1.get_data(), "baked grassland frames must not flicker")
@@ -272,6 +364,153 @@ func test_grassland_tile_has_rich_color_variety():
 		for x in ProceduralTerrainSprite.SIZE:
 			distinct[image.get_pixel(x, y)] = true
 	assert_gte(distinct.size(), 5, "grassland should layer tufts/flowers over the base speckle")
+
+
+# -- rounded tile corners (real pixel-art geometry, not an alpha overlay) -----
+#
+# Where a biome only touches a different one at a single tile's actual
+# geometric corner (e.g. an ocean cell with land to both its north AND east),
+# a plain per-cell tile grid reads as a hard right-angle notch cut into the
+# shape -- reported directly: tile borders look "square" instead of rounded.
+# generate_corner_image paints own_biome's own tile as normal, except for a
+# quarter-circle wedge right at the named corner (radius
+# CORNER_RADIUS_PIXELS, 8px at this generator's SIZE resolution), which is
+# replaced pixel-for-pixel with other_biome's own tile texture -- a real
+# carved shape in the opaque BASE tile layer
+# (TerrainRenderer.paint()'s TileMapLayer), not a translucent GPU overlay
+# effect (see the earlier, rejected attempt at shore-distance alpha
+# rounding: that overlay sits on top of this fully-opaque base tile and can
+# never change the base tile's own square silhouette).
+
+func test_corner_image_is_the_expected_size_and_opaque():
+	var image := generator.generate_corner_image("ocean", "grassland", [Vector2i(1, -1)], 0)
+	assert_eq(image.get_width(), ProceduralTerrainSprite.SIZE)
+	assert_eq(image.get_height(), ProceduralTerrainSprite.SIZE)
+	assert_eq(image.get_pixel(0, 0).a, 1.0)
+
+
+## The tile's own true corner pixel (in the direction being rounded, here
+## north-east) sits inside the carved wedge, so it must read as EXACTLY the
+## other biome's texture at that pixel -- not a blend, a real replacement.
+func test_the_named_corners_own_pixel_is_replaced_by_the_other_biome():
+	var corner := generator.generate_corner_image("ocean", "grassland", [Vector2i(1, -1)], 0)
+	var other := generator.generate_image("grassland", 0)
+	var size := ProceduralTerrainSprite.SIZE
+	assert_eq(
+		corner.get_pixel(size - 1, 0), other.get_pixel(size - 1, 0),
+		"the NE tile corner pixel should be carved out to the other biome's own texture"
+	)
+
+
+## Far from the named corner -- either along the straight edges nearest the
+## OTHER three (untouched) corners, or deep in the tile's own interior --
+## the tile must render pixel-identical to its own plain, uncarved image.
+func test_pixels_far_from_the_named_corner_are_untouched():
+	var corner := generator.generate_corner_image("ocean", "grassland", [Vector2i(1, -1)], 0)
+	var own := generator.generate_image("ocean", 0)
+	var size := ProceduralTerrainSprite.SIZE
+	# The other three tile corners (SW, SE, NW) -- none of these should be
+	# touched by an NE-only carve.
+	for point in [Vector2i(0, 0), Vector2i(0, size - 1), Vector2i(size - 1, size - 1)]:
+		assert_eq(
+			corner.get_pixel(point.x, point.y), own.get_pixel(point.x, point.y),
+			"corner %s must be untouched by an NE-only carve" % point
+		)
+	# Near the tile's own center, well outside the carve radius.
+	assert_eq(corner.get_pixel(size / 2, size / 2), own.get_pixel(size / 2, size / 2))
+
+
+func test_generate_corner_image_is_deterministic():
+	var a := generator.generate_corner_image("ocean", "grassland", [Vector2i(1, -1)], 2)
+	var b := generator.generate_corner_image("ocean", "grassland", [Vector2i(1, -1)], 2)
+	assert_eq(a.get_data(), b.get_data())
+
+
+## Rounding a different named corner carves a DIFFERENT quadrant -- proof the
+## carve genuinely follows `corner_direction` rather than always cutting the
+## same fixed corner.
+func test_a_different_corner_direction_carves_a_different_quadrant():
+	var size := ProceduralTerrainSprite.SIZE
+	var ne := generator.generate_corner_image("ocean", "grassland", [Vector2i(1, -1)], 0)
+	var sw := generator.generate_corner_image("ocean", "grassland", [Vector2i(-1, 1)], 0)
+	var own := generator.generate_image("ocean", 0)
+	# NE corner pixel is carved by the NE image but not by the SW image.
+	assert_ne(ne.get_pixel(size - 1, 0), sw.get_pixel(size - 1, 0))
+	assert_eq(sw.get_pixel(size - 1, 0), own.get_pixel(size - 1, 0))
+	# SW corner pixel is carved by the SW image but not by the NE image.
+	assert_ne(sw.get_pixel(0, size - 1), ne.get_pixel(0, size - 1))
+	assert_eq(ne.get_pixel(0, size - 1), own.get_pixel(0, size - 1))
+
+
+## A cell can qualify on more than one corner at once -- a single-tile spit
+## with water on three sides, or a lone one-tile pond surrounded on all four
+## (measured directly against real generated chunks: 859 of 3355 real corner
+## cells qualify on more than one corner simultaneously). Passing multiple
+## directions must carve EVERY one of them, not just the first -- silently
+## dropping the rest is exactly why some corners on a real coastline carved
+## while others on the same tile stayed hard right angles (reported: "still
+## not giving every corner a border radius").
+func test_multiple_corner_directions_all_carve_on_the_same_tile():
+	var size := ProceduralTerrainSprite.SIZE
+	var multi := generator.generate_corner_image("ocean", "grassland", [Vector2i(1, -1), Vector2i(-1, 1)], 0)
+	var other := generator.generate_image("grassland", 0)
+	var own := generator.generate_image("ocean", 0)
+	# Both the NE and SW true corner pixels must be carved...
+	assert_eq(
+		multi.get_pixel(size - 1, 0), other.get_pixel(size - 1, 0),
+		"the NE corner should be carved when NE is one of several requested directions"
+	)
+	assert_eq(
+		multi.get_pixel(0, size - 1), other.get_pixel(0, size - 1),
+		"the SW corner should be carved when SW is one of several requested directions"
+	)
+	# ...while the two UNREQUESTED corners (SE, NW) stay untouched.
+	assert_eq(multi.get_pixel(size - 1, size - 1), own.get_pixel(size - 1, size - 1))
+	assert_eq(multi.get_pixel(0, 0), own.get_pixel(0, 0))
+
+
+## All four corners at once (a lone one-tile pond/island) must carve all
+## four -- the maximal real case found in real generated chunk data.
+func test_all_four_corner_directions_carve_simultaneously():
+	var size := ProceduralTerrainSprite.SIZE
+	var all_four := generator.generate_corner_image(
+		"ocean", "grassland", ProceduralTerrainSprite.CORNER_DIRECTIONS, 0
+	)
+	var other := generator.generate_image("grassland", 0)
+	for point in [Vector2i(size - 1, 0), Vector2i(size - 1, size - 1), Vector2i(0, size - 1), Vector2i(0, 0)]:
+		assert_eq(
+			all_four.get_pixel(point.x, point.y), other.get_pixel(point.x, point.y),
+			"corner %s should be carved when every direction is requested" % point
+		)
+
+
+## Named/tested per CLAUDE.md's "no eyeballed tuning" rule: the radius is
+## tuned in ART-PIXEL units (the unit a human actually picks a border-radius
+## in), pinned to exactly 8px at this generator's SIZE (== TerrainRenderer.
+## ART_TILE_SIZE) resolution -- not just "some fraction".
+func test_corner_radius_is_exactly_8_pixels_at_art_tile_size_resolution():
+	assert_eq(ProceduralTerrainSprite.CORNER_RADIUS_PIXELS, 8.0)
+	assert_eq(ProceduralTerrainSprite.SIZE, 64, "the 8px figure is calibrated against this exact tile resolution")
+
+
+func test_corner_radius_fraction_is_derived_from_the_pixel_constant_and_stays_reasonable():
+	assert_eq(
+		ProceduralTerrainSprite.CORNER_RADIUS_FRACTION,
+		ProceduralTerrainSprite.CORNER_RADIUS_PIXELS / ProceduralTerrainSprite.SIZE,
+		"the fraction generate_corner_image uses must be derived from the tested pixel constant, not a separate literal"
+	)
+	# Bounded well below half the tile (a radius at/above 0.5 would consume
+	# the entire tile edge-to-edge, no longer reading as a corner carve).
+	assert_gt(ProceduralTerrainSprite.CORNER_RADIUS_FRACTION, 0.0)
+	assert_lt(ProceduralTerrainSprite.CORNER_RADIUS_FRACTION, 0.5)
+
+
+func test_corner_directions_are_exactly_the_four_diagonals():
+	var directions: Array = ProceduralTerrainSprite.CORNER_DIRECTIONS
+	assert_eq(directions.size(), 4)
+	for direction in directions:
+		assert_eq(absi(direction.x), 1, "every corner direction must be a true diagonal")
+		assert_eq(absi(direction.y), 1, "every corner direction must be a true diagonal")
 
 
 # -- individually varied grass blades -----------------------------------------
@@ -363,3 +602,192 @@ func _average_color(image: Image) -> Color:
 			total += image.get_pixel(x, y)
 			count += 1
 	return total / count
+
+
+# -- moss patches must be organic, not stamped squares -----------------------
+#
+# _paint_moss filled a perfect axis-aligned _MOSS_BLOB_SIZE square of flat
+# colour, three times per forest tile. Across a forest that read as a litter
+# of hard green rectangles lying on the ground (reported: "there are these
+# green square patches which look horrible"). A patch is now a ragged blob
+# whose rim wanders per direction.
+
+func test_a_moss_patch_is_not_a_filled_rectangle():
+	var offsets := ProceduralTerrainSprite.moss_patch_offsets(4242, 0)
+	assert_gt(offsets.size(), 0, "a patch should cover some ground")
+
+	var min_x := 9999
+	var max_x := -9999
+	var min_y := 9999
+	var max_y := -9999
+	for offset in offsets:
+		min_x = mini(min_x, offset.x)
+		max_x = maxi(max_x, offset.x)
+		min_y = mini(min_y, offset.y)
+		max_y = maxi(max_y, offset.y)
+	var bounding_area := (max_x - min_x + 1) * (max_y - min_y + 1)
+	assert_lt(
+		float(offsets.size()), float(bounding_area) * 0.92,
+		"a moss patch must not fill its own bounding box -- that is a rectangle"
+	)
+
+
+## A ragged rim means the patch's width genuinely varies row to row. A disc
+## would also pass the bounding-box test above, so this pins the wobble.
+func test_a_moss_patchs_outline_is_ragged_not_a_clean_disc():
+	var widths := {}
+	for index in 4:
+		var rows := {}
+		for offset in ProceduralTerrainSprite.moss_patch_offsets(99, index):
+			rows[offset.y] = int(rows.get(offset.y, 0)) + 1
+		for row in rows:
+			widths[rows[row]] = true
+	assert_gt(widths.size(), 3, "patch rows should vary in width, not step like a circle")
+
+
+func test_moss_patches_are_deterministic_and_vary_by_seed():
+	assert_eq(
+		ProceduralTerrainSprite.moss_patch_offsets(7, 1),
+		ProceduralTerrainSprite.moss_patch_offsets(7, 1)
+	)
+	assert_ne(
+		ProceduralTerrainSprite.moss_patch_offsets(7, 1),
+		ProceduralTerrainSprite.moss_patch_offsets(8, 1)
+	)
+
+
+## Neighbouring patches on the same tile must differ too -- three identical
+## blobs at three positions is still a stamped look.
+func test_patches_on_the_same_tile_differ_from_each_other():
+	assert_ne(
+		ProceduralTerrainSprite.moss_patch_offsets(31, 0),
+		ProceduralTerrainSprite.moss_patch_offsets(31, 1)
+	)
+
+
+# -- ground texture reads as texture, not as static --------------------------
+#
+# Every tile was filled with INDEPENDENT per-pixel noise at 35% density: a
+# third of all pixels randomly darkened or lightened, each one on its own.
+# That is the definition of grain, and under the old non-pixel-perfect
+# fullscreen upscale it shimmered as well (reported: "the graphics look coarse
+# and grainy"). Real pixel-art ground is made of deliberate MARKS -- clumps,
+# dashes, patches -- with clean ground showing between them.
+
+## How often the tile CHANGES appearance from one pixel to the next, along a
+## row. This is the direct measure of graininess: independent per-pixel noise
+## changes at nearly every step (~0.5 for 35%-density static), while texture
+## made of real marks holds the same value for a run of pixels and changes
+## only at a mark's edge.
+func _horizontal_transition_rate(image: Image) -> float:
+	var size := ProceduralTerrainSprite.SIZE
+	var changes := 0
+	var pairs := 0
+	for y in size:
+		for x in range(size - 1):
+			pairs += 1
+			if image.get_pixel(x, y) != image.get_pixel(x + 1, y):
+				changes += 1
+	if pairs == 0:
+		return 0.0
+	return float(changes) / float(pairs)
+
+
+func test_ground_marks_clump_together_instead_of_speckling_at_random():
+	var image := generator.generate_image("mountain", 7)
+	assert_lt(
+		_horizontal_transition_rate(image), 0.3,
+		"the tile must not change appearance at nearly every pixel -- that IS the grain"
+	)
+
+
+## Neatness: clean ground has to show between the marks, or the tile is just
+## noise of a different shape.
+func test_clean_ground_shows_between_the_marks():
+	var base: Color = ProceduralTerrainSprite.BASE_COLORS["mountain"]
+	var image := generator.generate_image("mountain", 3)
+	var size := ProceduralTerrainSprite.SIZE
+	var clean := 0
+	for y in size:
+		for x in size:
+			if _rgb_distance(image.get_pixel(x, y), base) < 0.01:
+				clean += 1
+	var fraction := float(clean) / float(size * size)
+	assert_gt(fraction, 0.72, "the ground should read as ground with marks on it")
+	assert_lt(fraction, 0.95, "...but not as a flat untextured slab")
+
+
+## The calm must not come from painting in blocks -- that would be the
+## upscaled look the resolution pass exists to avoid. Marks keep ragged,
+## per-pixel edges.
+func test_marks_still_have_per_pixel_ragged_edges():
+	var base: Color = ProceduralTerrainSprite.BASE_COLORS["mountain"]
+	var image := generator.generate_image("mountain", 11)
+	var size := ProceduralTerrainSprite.SIZE
+	var odd_edges := 0
+	for y in range(1, size - 1):
+		for x in range(1, size - 1):
+			# A mark edge landing on an ODD x cannot be a 2x2 block boundary,
+			# so counting those proves the marks are not block-aligned.
+			var here_is_mark := _rgb_distance(image.get_pixel(x, y), base) >= 0.01
+			var right_is_clean := _rgb_distance(image.get_pixel(x + 1, y), base) < 0.01
+			if x % 2 == 1 and here_is_mark and right_is_clean:
+				odd_edges += 1
+	assert_gt(odd_edges, 15, "mark edges must be genuinely per-pixel, not block-aligned")
+
+
+## Transition rate measured along an arbitrary direction, so the texture can
+## be checked for GRAIN as well as for noisiness.
+func _transition_rate_along(image: Image, dx: int, dy: int) -> float:
+	var size := ProceduralTerrainSprite.SIZE
+	var changes := 0
+	var pairs := 0
+	for y in range(1, size - 1):
+		for x in range(1, size - 1):
+			pairs += 1
+			if image.get_pixel(x, y) != image.get_pixel(x + dx, y + dy):
+				changes += 1
+	if pairs == 0:
+		return 0.0
+	return float(changes) / float(pairs)
+
+
+## Ground must have no DIRECTION to it.
+##
+## The first attempt at clustering marks took its cell roll from Godot's
+## string hash, which correlates across near-identical inputs -- the exact
+## trap PixelNoise exists to avoid, and which this file was already bitten by
+## twice (village houses all one size, whole rows of leaves at one angle).
+## The result was ground visibly striped along one diagonal: not static any
+## more, but combed. The transition-rate test could not see it, because
+## banding lowers the horizontal rate exactly as clean marks do -- it only
+## showed up on looking at the pixels.
+func test_the_ground_texture_has_no_directional_grain():
+	for biome in ["mountain", "tundra", "forest"]:
+		var image := generator.generate_image(biome, 5)
+		var rates := [
+			_transition_rate_along(image, 1, 0),
+			_transition_rate_along(image, 0, 1),
+			_transition_rate_along(image, 1, 1),
+			_transition_rate_along(image, 1, -1),
+		]
+		var lowest: float = rates[0]
+		var highest: float = rates[0]
+		for rate in rates:
+			lowest = minf(lowest, float(rate))
+			highest = maxf(highest, float(rate))
+		assert_lt(
+			highest - lowest, 0.1,
+			"%s is combed: transition rates by direction were %s" % [biome, str(rates)]
+		)
+
+
+func test_the_texture_is_still_deterministic():
+	assert_eq(
+		generator.generate_image("grassland", 5).get_data(),
+		generator.generate_image("grassland", 5).get_data()
+	)
+	assert_ne(
+		generator.generate_image("grassland", 5).get_data(),
+		generator.generate_image("grassland", 6).get_data()
+	)

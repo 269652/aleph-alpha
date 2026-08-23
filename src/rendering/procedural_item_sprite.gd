@@ -12,6 +12,53 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 ## docs/concept/art_resolution.md) -- drawn at ArtResolution.SPRITE_SCALE
 ## so it gains pixel detail without growing in the world.
 const SIZE := 32
+
+## Tile size in world pixels, so a target size can be expressed in the units
+## the world actually uses.
+const TILE_SIZE := 16.0
+
+## How wide a dropped item should be ON THE GROUND, in world pixels.
+##
+## Everything used to render at SIZE * ArtResolution.SPRITE_SCALE -- a full
+## 16px tile -- so a fallen cherry was as wide as the tile it lay on
+## (reported: "they are gigantic"). Fruit is now sized against a real
+## reference the player can see next to it: a butterfly is 7 world px across
+## (ProceduralButterflySprite.WORLD_SIZE at BUTTERFLY_SCALE), and a walnut is
+## HALF that -- butterfly-wide fruit still read as too chunky lying next to a
+## creature. Cherry is 0.8x a walnut and an apple about 2x, close to the real
+## proportions of the three; the generic "nut" an ambient tree drops is the
+## smallest of the family at 0.8x a cherry (a hazelnut, not a walnut).
+##
+## Only WALNUT_WORLD_WIDTH is a free number -- everything else is a ratio off
+## it, so re-sizing the family stays a one-line change.
+const BUTTERFLY_WORLD_WIDTH := 7.0
+const WALNUT_WORLD_WIDTH := BUTTERFLY_WORLD_WIDTH * 0.5
+const CHERRY_WORLD_WIDTH := WALNUT_WORLD_WIDTH * 0.8
+const WORLD_WIDTH_BY_ID := {
+	"walnut": WALNUT_WORLD_WIDTH,
+	"cherry": CHERRY_WORLD_WIDTH,
+	"apple": WALNUT_WORLD_WIDTH * 2.0,
+	"nut": CHERRY_WORLD_WIDTH * 0.8,
+	# Sized against the cherry the same way the walnut is: an acorn and a
+	# hazelnut are both smaller than a walnut, a pine nut smaller again.
+	"acorn": CHERRY_WORLD_WIDTH,
+	"hazelnut": CHERRY_WORLD_WIDTH * 0.9,
+	"pine": CHERRY_WORLD_WIDTH * 0.6,
+	# The ambient forage tier drops generic "fruit"/"nut" where the named
+	# species tier drops cherry/apple/walnut -- it stands in for a round
+	# fruit, so it takes the cherry's size.
+	"fruit": CHERRY_WORLD_WIDTH,
+}
+
+
+## The scale a dropped `item_id` should be drawn at. Items with no entry keep
+## the historical whole-tile size -- this deliberately only re-sizes the
+## things that were wrong (tree fruit), rather than silently changing every
+## tool and resource on the ground.
+static func world_scale_for(item_id: String) -> float:
+	if not WORLD_WIDTH_BY_ID.has(item_id):
+		return 1.0 / 2.0  # ArtResolution.SPRITE_SCALE, the previous behaviour
+	return float(WORLD_WIDTH_BY_ID[item_id]) / float(SIZE)
 const OUTLINE_DARKEN := 0.55
 const SHADE_DARKEN := 0.25
 const HIGHLIGHT_LIGHTEN := 0.25
@@ -28,6 +75,15 @@ const _ITEM_LOOKS := {
 	"fang": {"color": Color(0.9, 0.9, 0.85), "shape": "fang"},
 	"fruit": {"color": Color(0.85, 0.2, 0.2), "shape": "round"},
 	"nut": {"color": Color(0.5, 0.35, 0.18), "shape": "oval"},
+	# Named fruit tree species (see TreeSpecies) -- these colors deliberately
+	# match TreeSpecies.fruit_color_for so a fallen cherry/apple/walnut on the
+	# ground reads as the same colour its canopy's ripe-fruit dots do.
+	"cherry": {"color": Color(0.75, 0.08, 0.18), "shape": "round"},
+	"apple": {"color": Color(0.85, 0.15, 0.1), "shape": "round"},
+	"walnut": {"color": Color(0.42, 0.34, 0.16), "shape": "oval"},
+	"acorn": {"color": Color(0.55, 0.35, 0.15), "shape": "oval"},
+	"hazelnut": {"color": Color(0.52, 0.30, 0.13), "shape": "round"},
+	"pine": {"color": Color(0.42, 0.28, 0.14), "shape": "oval"},
 	"wooden_club": {"color": Color(0.5, 0.35, 0.2), "shape": "sword"},
 	"iron_sword": {"color": Color(0.75, 0.78, 0.82), "shape": "sword"},
 	"iron_axe": {"color": Color(0.7, 0.73, 0.78), "shape": "axe"},
@@ -38,6 +94,11 @@ const _ITEM_LOOKS := {
 	"stick": {"color": Color(0.45, 0.32, 0.18), "shape": "sword"},
 	"sharp_shard": {"color": Color(0.7, 0.7, 0.74), "shape": "fang"},
 	"plant_fibre": {"color": Color(0.55, 0.7, 0.3), "shape": "oval"},
+	# Taming gear (see docs/concept/taming.md). The lasso is braided grass
+	# gone pale and dry -- rope, not the green fibre it came from, so the two
+	# never read as the same thing sitting side by side in the inventory.
+	"lasso": {"color": Color(0.78, 0.68, 0.42), "shape": "oval"},
+	"carrot": {"color": Color(0.9, 0.5, 0.14), "shape": "fang"},
 	"crude_blade": {"color": Color(0.6, 0.55, 0.5), "shape": "sword"},
 	"stone": {"color": Color(0.5, 0.5, 0.53), "shape": "round"},
 	"stone_pickaxe": {"color": Color(0.55, 0.5, 0.45), "shape": "axe"},
@@ -70,6 +131,27 @@ const _FALLBACK := {"color": Color(0.6, 0.6, 0.6), "shape": "round"}
 
 func generate_texture(item_id: String) -> ImageTexture:
 	return ImageTexture.create_from_image(generate_image(item_id))
+
+
+## Item art is a pure function of the id, so every dropped apple in the world
+## can share one texture. Each DroppedItem used to rebuild its own 32x32
+## image pixel by pixel on _ready, which is fine for a few items on the
+## ground and not fine once the world sheds windfall continuously.
+static var _texture_cache: Dictionary = {}
+
+
+## Instance method over a STATIC cache: the art depends only on the id, so
+## every generator instance and every dropped item shares one texture per id.
+func texture_for(item_id: String) -> ImageTexture:
+	if not _texture_cache.has(item_id):
+		_texture_cache[item_id] = ImageTexture.create_from_image(generate_image(item_id))
+	return _texture_cache[item_id]
+
+
+## The base colour an item is drawn in, before shading. Exposed so the
+## palette can be asserted directly rather than by eye.
+static func color_for(item_id: String) -> Color:
+	return _ITEM_LOOKS.get(item_id, _FALLBACK)["color"]
 
 
 func generate_image(item_id: String) -> Image:

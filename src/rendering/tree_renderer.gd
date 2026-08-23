@@ -1,6 +1,7 @@
 extends RefCounted
 
 const TreePlacement = preload("res://src/world/tree_placement.gd")
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
@@ -9,6 +10,7 @@ const WindSway = preload("res://src/rendering/wind_sway.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
 
 ## A tree's WORLD footprint (see ProceduralTreeSprite.WORLD_SIZE) -- derived
 ## from the art size through ArtResolution rather than equal to it, since
@@ -20,18 +22,27 @@ const TREE_SIZE := Vector2(ProceduralTreeSprite.WORLD_SIZE)
 ## trunk so brushing past feels forgiving, and shallow so it blocks only
 ## the trunk's own tile rather than a column of them.
 const TRUNK_COLLISION_WIDTH_SCALE := 1.15
+## NOTE: was bumped to 10.0 to try to keep an approaching player's head
+## clear of the canopy (see git history / test_tree_renderer.gd), but that
+## made the collision box reach far enough south to start blocking the tile
+## BELOW the trunk again -- the exact regression this box was shrunk to
+## fix in the first place. Reverted to 5.0 pending a real fix: the root
+## cause is that the player is center-anchored while the tree is
+## foot-anchored, so no amount of trunk-depth tuning alone can satisfy both
+## "don't block the tile below" and "keep the player's head clear of the
+## canopy" at once. Reported as still broken, and affecting stones too, not
+## just trees -- needs a proper architectural pass, not another number.
 const TRUNK_COLLISION_DEPTH := 5.0
 
-## How many distinct species_bias buckets get their own generated texture.
-## Bounded and cached (see _texture_for) rather than one unique texture per
+## Cached and bounded (see _texture_for) rather than one unique texture per
 ## tree -- thousands of trees can be loaded at once, so per-instance pixel
-## generation would be wasteful; a genome-tinted canopy only needs a handful
-## of visibly distinct looks, not one per tree.
-const SPECIES_BUCKETS := 4
+## generation would be wasteful. Textures are keyed by NAMED species (see
+## TreeSpecies) -- exactly TreeSpecies.IDS.size() (3) distinct looks, not one
+## per tree and not one per continuously-rounded species_bias value.
 
 var _tree_placement := TreePlacement.new()
 var _tree_sprite_generator := ProceduralTreeSprite.new()
-var _texture_cache: Dictionary = {}  # bucket (float) -> ImageTexture
+var _texture_cache: Dictionary = {}  # species id (String) -> ImageTexture
 var _wind_sway := WindSway.new()
 var _drop_shadow := DropShadow.new()
 
@@ -55,7 +66,7 @@ func spawn_trees(
 			if not _tree_placement.has_tree_at(global_x, global_y, biome_name):
 				continue
 
-			var position := Vector2((global_x + 0.5) * tile_size, (global_y + 0.5) * tile_size)
+			var position := _stand_position(global_x, global_y, tile_size)
 			var tree := _build_tree_node(position)
 			tree.position = position
 			parent.add_child(tree)
@@ -83,6 +94,30 @@ func spawn_tree_at(parent: Node2D, position: Vector2, age_seconds: float = INF) 
 ## per-frame script: there are thousands loaded at once, so forage dropping is
 ## handled centrally and throttled by EarthChunkManager (see ForageScheduler)
 ## instead; take_damage() only runs on demand when an axe hits one.
+## How far a tree may stand from the middle of its own tile, as a fraction of
+## the tile.
+##
+## Trees stood at exact tile centres, so an original forest read as a lattice
+## -- every trunk on a perfect grid, which no wood has ever looked like. Kept
+## under half a tile so a tree never leaves the tile that has it: the tile with
+## a tree still has that tree, it simply is not standing in the middle of it.
+const STAND_OFFSET_FRACTION := 0.34
+
+
+## Where the tree on this tile actually stands.
+##
+## Deterministic from the tile, like everything else about it, so a wood does
+## not rearrange itself every time a chunk reloads.
+func _stand_position(global_x: int, global_y: int, tile_size: int) -> Vector2:
+	var span := float(tile_size) * STAND_OFFSET_FRACTION
+	var across := float(PixelNoise.range_index(global_x * 7919 + global_y, 211, 0, 1001)) / 500.0 - 1.0
+	var down := float(PixelNoise.range_index(global_x * 104729 + global_y, 223, 0, 1001)) / 500.0 - 1.0
+	return Vector2(
+		(float(global_x) + 0.5) * float(tile_size) + across * span,
+		(float(global_y) + 0.5) * float(tile_size) + down * span
+	)
+
+
 func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableTree:
 	var body := ChoppableTree.new()
 
@@ -91,9 +126,14 @@ func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableT
 	body.sprite_seed = hash("%d_%d" % [int(position.x), int(position.y)])
 
 	# Contact shadow at the trunk's base, added first so it draws under the
-	# canopy sprite (sibling order == draw order).
+	# canopy sprite (sibling order == draw order). The body's origin IS the
+	# trunk's foot (see the sprite anchor comment below), NOT the sprite's
+	# center -- so unlike village_renderer's center-anchored shadows, this
+	# one belongs almost AT the origin, not half the tree's height south of
+	# it. Getting this wrong once stranded the shadow ~11 units into the
+	# tile below, nowhere near the visible trunk (reported: "trees float").
 	body.add_child(
-		_drop_shadow.make_shadow(int(TREE_SIZE.x * 0.85), TREE_SIZE.y * 0.5 - 2.0)
+		_drop_shadow.make_shadow(int(TREE_SIZE.x * 0.85), TRUNK_COLLISION_DEPTH * 0.5)
 	)
 
 	var sprite := Sprite2D.new()
@@ -137,14 +177,32 @@ func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableT
 	return body
 
 
+## The season new trees are drawn in. Set by the caller (EarthChunkManager)
+## before spawning, so a chunk loading in winter loads bare trees rather than
+## summer ones that correct themselves a moment later.
+var season := ""
+
+## The season new trees are turning INTO, and how far along, so a tree that
+## loads mid-turn arrives part-turned like its neighbours rather than snapping
+## to whichever season it was built in.
+var turning_into := ""
+var turn_progress := 0.0
+
+
 ## The genome-tinted tree texture for a tree at `position` -- the same genome
 ## a tree at this position drops forage under (see ForageScheduler.genome_for),
-## so a visibly fruit-leaning canopy actually drops more fruit. Textures are
-## cached per species_bias bucket (not per tree) to keep the total generated
-## texture count bounded regardless of how many trees are loaded.
+## so a visibly fruit-leaning canopy actually drops more fruit.
+##
+## Cached per NAMED SPECIES AND SEASON (see TreeSpecies, IllustratedTree), not
+## per tree, so the generated texture count stays bounded at species x seasons
+## however many trees are loaded. The season belongs in the key: without it a
+## forest would keep wearing whatever season it first loaded in.
 func _texture_for(position: Vector2) -> ImageTexture:
 	var genome := TreeGenome.new(hash("%d_%d" % [int(position.x), int(position.y)]))
-	var bucket := roundf(genome.species_bias * SPECIES_BUCKETS) / float(SPECIES_BUCKETS)
-	if not _texture_cache.has(bucket):
-		_texture_cache[bucket] = _tree_sprite_generator.generate_texture(bucket, hash(bucket))
-	return _texture_cache[bucket]
+	var species_id := TreeSpecies.species_for_bias(genome.species_bias)
+	var key := "%s_%s_%s_%.2f" % [species_id, season, turning_into, turn_progress]
+	if not _texture_cache.has(key):
+		_texture_cache[key] = _tree_sprite_generator.generate_texture_with_fruit(
+			genome.species_bias, hash(species_id), 0, season, turning_into, turn_progress
+		)
+	return _texture_cache[key]

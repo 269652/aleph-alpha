@@ -11,6 +11,8 @@ extends Sprite2D
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const NpcPlanner = preload("res://src/world/npc_planner.gd")
 const NpcSchedule = preload("res://src/world/npc_schedule.gd")
+const CharacterView = preload("res://scenes/character_view.gd")
+const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 
 ## Walking pace -- similar order to CreatureWander.WANDER_SPEED, unhurried.
 const WALK_SPEED := 20.0
@@ -35,11 +37,26 @@ var _elapsed_time := 0.0
 var _day_index := 0
 var _planner: NpcPlanner.Planner = NpcPlanner.FakeNpcPlanner.new()
 
+## Duck-typed world (biome_at_global) and tile size, mirroring
+## CreatureMarker.setup -- lets an NPC tell whether it's standing in water so
+## its walk cycle can switch to swimming, same as the player/creatures.
+## Without it (fail-open, see _is_in_water), an NPC just never swims.
+var _world = null
+var _tile_size := 16
+var _perception := CreaturePerception.new()
+
 
 ## Swaps in a different planner (e.g. a future real LLM-backed one) -- see
 ## NpcPlanner.Planner. Defaults to the deterministic FakeNpcPlanner.
 func set_planner(planner: NpcPlanner.Planner) -> void:
 	_planner = planner
+
+
+## Gives the NPC the world it senses, enabling water-awareness. See
+## CreatureMarker.setup, which this mirrors exactly.
+func setup(world, tile_size: int) -> void:
+	_world = world
+	_tile_size = tile_size
 
 
 func _process(delta: float) -> void:
@@ -49,7 +66,38 @@ func _process(delta: float) -> void:
 
 	var entry := NpcSchedule.current_entry(schedule, _current_hour())
 	var target := _resolve_location(entry.get("location_tag", "home"))
+	var before := position
 	position = position.move_toward(target, WALK_SPEED * delta)
+	_update_animation(position - before)
+
+
+## Drives the bound CharacterView's walk cycle from the actual movement this
+## frame -- previously nothing called set_facing/is_moving/set_movement_state
+## after the marker moved, so every villager's walk animation sat frozen in
+## IDLE despite visibly walking (reported: "NPCs don't have walk or swim
+## animation").
+func _update_animation(moved: Vector2) -> void:
+	if _character_view == null:
+		return
+	var is_moving := moved.length() > 0.01
+	if is_moving:
+		face_movement(moved)
+	_character_view.is_moving = is_moving
+	if _is_in_water():
+		_character_view.set_movement_state(CharacterView.MovementState.SWIMMING)
+	elif is_moving:
+		_character_view.set_movement_state(CharacterView.MovementState.WALKING)
+	else:
+		_character_view.set_movement_state(CharacterView.MovementState.IDLE)
+
+
+## Fails open (never swimming) without a world -- same shape as
+## CreatureMarker's water checks, which all guard on _world != null.
+func _is_in_water() -> bool:
+	if _world == null:
+		return false
+	var tile := Vector2i(floori(position.x / _tile_size), floori(position.y / _tile_size))
+	return _perception.is_on(_world, tile, "water")
 
 
 func _current_hour() -> int:

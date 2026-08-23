@@ -19,11 +19,9 @@ shader_type canvas_item;
 uniform float tint_strength = 0.09;
 uniform float noise_scale = 0.006;
 
-varying vec2 world_pos;
-
-void vertex() {
-	world_pos = (MODEL_MATRIX * vec4(VERTEX, 0.0, 1.0)).xy;
-}
+// The finished multiplier, computed ONCE PER VERTEX and interpolated across
+// the tile (see the note in ground_tint.gd on why that is safe here).
+varying float tint;
 
 float value_hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -40,10 +38,15 @@ float value_noise(vec2 p) {
 	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-void fragment() {
+void vertex() {
+	vec2 world_pos = (MODEL_MATRIX * vec4(VERTEX, 0.0, 1.0)).xy;
 	float n = value_noise(world_pos * noise_scale) * 0.65
 		+ value_noise(world_pos * noise_scale * 3.7) * 0.35;
-	COLOR.rgb *= (1.0 - tint_strength) + n * tint_strength * 2.0;
+	tint = (1.0 - tint_strength) + n * tint_strength * 2.0;
+}
+
+void fragment() {
+	COLOR.rgb *= tint;
 }
 """
 
@@ -55,6 +58,19 @@ const TINT_STRENGTH := 0.09
 ## spanning ~10 tiles -- variation BIGGER than any tile, which is exactly
 ## what per-tile art can never provide. Pinned to span >= 4 tiles by
 ## test_noise_wavelength_spans_multiple_tiles.
+## Why the noise is evaluated per VERTEX rather than per pixel.
+##
+## Both octaves used to run in the fragment shader: eight sin-based hashes for
+## every pixel of ground on screen, which at 1920x1080 is roughly 16 million
+## sin operations per frame. On integrated graphics that was one of the three
+## most expensive things in the frame -- removing the tint entirely measured
+## +81% fps.
+##
+## It does not need to be per-pixel. This is a broad, slowly-varying wash: at
+## NOISE_SCALE 0.006 one world tile spans about a tenth of a noise cell, so
+## sampling at tile corners and letting the hardware interpolate between them
+## is very nearly the same field, for a ninth-strength tint nobody is looking
+## at directly. The cost drops by roughly the number of pixels in a tile.
 const NOISE_SCALE := 0.006
 
 var _shared_material: ShaderMaterial

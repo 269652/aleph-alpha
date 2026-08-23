@@ -34,6 +34,10 @@ extends RefCounted
 ## art (ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY) but are independent
 ## entries here: stats/diet/temperament/role are set per species, not
 ## inherited from whichever shape they happen to look like.
+## Mouse is deliberately the smallest/frailest species (it's a mouse); horse
+## the highest-stamina herbivore-role species (real horses are known for
+## endurance) -- both real-world-grounded, not arbitrary, see
+## docs/concept/ecosystem_dynamics.md's Species roster section.
 const MAX_HEALTH_BY_SPECIES := {
 	"herbivore": 20.0,
 	"boar": 28.0,
@@ -47,6 +51,13 @@ const MAX_HEALTH_BY_SPECIES := {
 	"jaguar": 34.0,
 	"goat": 20.0,
 	"mountain_lion": 32.0,
+	"horse": 32.0,
+	"mouse": 6.0,
+	"deer": 24.0,
+	"bear": 50.0,
+	"lion": 45.0,
+	"nonvenomous_snake": 10.0,
+	"venomous_snake": 14.0,
 }
 const MAX_STAMINA_BY_SPECIES := {
 	"herbivore": 30.0,
@@ -61,6 +72,13 @@ const MAX_STAMINA_BY_SPECIES := {
 	"jaguar": 25.0,
 	"goat": 30.0,
 	"mountain_lion": 25.0,
+	"horse": 40.0,
+	"mouse": 20.0,
+	"deer": 32.0,
+	"bear": 28.0,
+	"lion": 30.0,
+	"nonvenomous_snake": 15.0,
+	"venomous_snake": 15.0,
 }
 const MAX_MANA_BY_SPECIES := {
 	"herbivore": 5.0,
@@ -75,6 +93,13 @@ const MAX_MANA_BY_SPECIES := {
 	"jaguar": 10.0,
 	"goat": 5.0,
 	"mountain_lion": 10.0,
+	"horse": 5.0,
+	"mouse": 5.0,
+	"deer": 5.0,
+	"bear": 5.0,
+	"lion": 10.0,
+	"nonvenomous_snake": 5.0,
+	"venomous_snake": 5.0,
 }
 const DIET_BY_SPECIES := {
 	"herbivore": "Grazer",
@@ -89,6 +114,13 @@ const DIET_BY_SPECIES := {
 	"jaguar": "Hunter",
 	"goat": "Grazer",
 	"mountain_lion": "Hunter",
+	"horse": "Grazer",
+	"mouse": "Forager",
+	"deer": "Grazer",
+	"bear": "Omnivore",
+	"lion": "Hunter",
+	"nonvenomous_snake": "Small-Prey Hunter",
+	"venomous_snake": "Venomous Hunter",
 }
 ## Herbivores are calm (always flee threats); boars/predators/lynx are
 ## aggressive (fight when strong, flee when weak). See CreatureBehavior for
@@ -109,6 +141,13 @@ const TEMPERAMENT_BY_SPECIES := {
 	"jaguar": "aggressive",
 	"goat": "calm",
 	"mountain_lion": "aggressive",
+	"horse": "calm",
+	"mouse": "calm",
+	"deer": "calm",
+	"bear": "aggressive",
+	"lion": "aggressive",
+	"nonvenomous_snake": "calm",
+	"venomous_snake": "aggressive",
 }
 ## Only true predators (hunt herbivores/boars for food) go here -- a boar is
 ## aggressive but not a predator (see TEMPERAMENT_BY_SPECIES doc above).
@@ -122,6 +161,9 @@ const PREDATOR_SPECIES := {
 	"arctic_fox": true,
 	"jaguar": true,
 	"mountain_lion": true,
+	"bear": true,
+	"lion": true,
+	"venomous_snake": true,
 }
 
 ## Levels roll in [1, LEVEL_RANGE] from the individual's seed -- a cheap,

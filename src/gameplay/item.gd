@@ -16,6 +16,14 @@ var weapon_damage: float
 var equip_slot: String
 var armor: float
 
+## Real mass in kilograms (see MaterialProperties.mass_kg_for, docs/concept/
+## materials.md's momentum = mass * velocity model). 0.0 for anything with no
+## mass modeled yet -- today that's every weapon-kind item (see
+## ItemCatalog._ITEMS' own doc comment on which items carry a real material +
+## volume estimate). A weapon's mass feeds a real swing's knockback the same
+## way Throwable.impact_knockback already reads mass for a thrown item.
+var mass_kg: float
+
 
 func _init(
 	a_id: String,
@@ -24,7 +32,8 @@ func _init(
 	a_max_stack: int,
 	a_weapon_damage: float = 0.0,
 	a_equip_slot: String = "",
-	a_armor: float = 0.0
+	a_armor: float = 0.0,
+	a_mass_kg: float = 0.0
 ) -> void:
 	id = a_id
 	display_name = a_display_name
@@ -33,6 +42,7 @@ func _init(
 	weapon_damage = a_weapon_damage
 	equip_slot = a_equip_slot
 	armor = a_armor
+	mass_kg = a_mass_kg
 
 
 func is_weapon() -> bool:

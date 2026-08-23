@@ -13,6 +13,9 @@ const TILE_SIZE := 16
 const CHUNK_SIZE := 32
 const CHUNK_ORIGIN := Vector2i(64, 128)
 
+const ProceduralBirdSprite = preload("res://src/rendering/procedural_bird_sprite.gd")
+const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
+
 var renderer: AmbientFlyerRenderer
 var parent: Node2D
 
@@ -184,3 +187,68 @@ func test_the_birds_run_smallest_to_largest():
 	var kingfisher: float = AmbientFlyerRenderer.FLYER_WORLD_SCALE["kingfisher"]
 	assert_lt(sparrow, robin)
 	assert_lt(robin, kingfisher)
+
+
+# -- offspring are born of their own kind ------------------------------------
+#
+# spawn_offspring hardcoded the butterfly sprite and butterfly movement for
+# every species, on an assumption written into its own comment -- "courtship
+# only applies to the pollinators" -- that nothing enforced. Sparrows court
+# sparrows, so a sparrow chick came out with monarch wings: it flew like a
+# butterfly and looked like one, while the hover panel said "sparrow" and it
+# went off to eat seeds.
+
+func test_a_bird_chick_is_a_bird_not_a_butterfly():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var chick := renderer.spawn_offspring(parent, "sparrow", Vector2.ZERO, 7)
+	assert_eq(chick.species, "sparrow")
+	assert_eq(
+		chick.texture.get_image().get_data(),
+		ProceduralBirdSprite.new().generate_texture("sparrow", 7).get_image().get_data(),
+		"a sparrow must be drawn as a sparrow"
+	)
+
+
+func test_a_butterfly_chick_is_still_a_butterfly():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var chick := renderer.spawn_offspring(parent, "monarch", Vector2.ZERO, 7)
+	assert_eq(chick.species, "monarch")
+	assert_eq(
+		chick.texture.get_image().get_data(),
+		ProceduralButterflySprite.new().generate_texture("monarch", 7).get_image().get_data()
+	)
+
+
+## A bird flies like a bird: the movement profile has to match the species
+## too, or a sparrow flutters about like a monarch.
+func test_a_bird_chick_flies_like_a_bird():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := renderer.spawn_offspring(parent, "sparrow", Vector2.ZERO, 3)
+	var butterfly := renderer.spawn_offspring(parent, "monarch", Vector2.ZERO, 3)
+	assert_ne(
+		bird._movement.speed, butterfly._movement.speed,
+		"a sparrow and a monarch should not share a flight profile"
+	)
+
+
+# -- flying things are ABOVE the ground --------------------------------------
+#
+# Flowers, grass and flyers all sort by Y in one tree, and a flower sprite is
+# anchored at its stem FOOT so it can sort against the player like a tree
+# does. A butterfly hovering at the blossom is therefore higher on screen --
+# a SMALLER y -- than the flower it is visiting, so it sorted behind it and
+# vanished into the bloom (reported: "butterflies and bees render behind the
+# flowers").
+#
+# Y-sorting cannot fix this, because the two are answering different
+# questions: the flower's sort position is where it is rooted, and the
+# butterfly's is where it is flying. A flyer is simply above the ground plane.
+
+func test_a_flyer_draws_above_ground_clutter():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var flyer := renderer.spawn_offspring(parent, "monarch", Vector2.ZERO, 1)
+	assert_gt(flyer.z_index, 0, "a flying thing must draw over the flowers it visits")

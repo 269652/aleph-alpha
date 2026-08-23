@@ -1,5 +1,7 @@
 extends RefCounted
 
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+
 ## A tree's heritable traits, deterministic from a seed -- the "DNA" driving
 ## how it grows and reproduces (Phase 1/Flora-adjacent: individual-tree
 ## genetics, not just the aggregate vegetation density model). mutate()
@@ -9,8 +11,16 @@ extends RefCounted
 
 const MIN_SPREAD_RADIUS := 2.0
 const MAX_SPREAD_RADIUS := 8.0
-const MIN_MATURITY_TIME := 20.0
-const MAX_MATURITY_TIME := 60.0
+## When a tree can first bear and seed, in world seconds.
+##
+## Was 20-60 SECONDS against a year of 691,200, so a sapling could seed the
+## moment it was planted -- a second maturation clock disagreeing with
+## TreeGrowth's by four orders of magnitude. Measured against the same season
+## cycle now: a tree bears from about its third year, which is when TreeGrowth
+## calls it mature, with a spread either side so an early variety is a real
+## thing rather than every tree bearing on the same day.
+const MIN_MATURITY_TIME := SeasonCycle.SECONDS_PER_YEAR * 2.5
+const MAX_MATURITY_TIME := SeasonCycle.SECONDS_PER_YEAR * 4.0
 
 ## How far (as a fraction of each trait's own range) a mutation can nudge a
 ## trait from its parent's value.

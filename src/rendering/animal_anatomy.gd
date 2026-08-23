@@ -50,6 +50,12 @@ const SPECIES := [
 	"venomous_snake", "nonvenomous_snake",
 ]
 
+## Legless species (see the "serpents" profiles below): zero leg_length, so
+## ProceduralAnimalAnimation's generic leg-shift walk cycle has nothing to
+## move and must give these a whole-body slither instead (see
+## SERPENT_SPECIES's use in procedural_animal_animation.gd).
+const SERPENT_SPECIES: Array[String] = ["venomous_snake", "nonvenomous_snake"]
+
 
 ## The proportions for `species`, or a safe generic build for an unknown
 ## one (matching this codebase's never-crash-on-an-odd-id convention).
@@ -98,7 +104,11 @@ const _PROFILES := {
 	# Slender, fine-boned, antlered, with a short upright scut.
 	"deer": {
 		"barrel_squareness": 0.4,
-		"world_scale": 1.15,
+		# 0.8x the horse (see the horse profile's own world_scale) -- a deer
+		# reads as clearly smaller than a horse but still a large grazer.
+		# Expressed against the horse by test rather than as a free number,
+		# so re-sizing the horse keeps the pair in proportion.
+		"world_scale": 0.96,
 		"body_length": 0.50, "body_height": 0.22, "body_y": 0.46, "shoulder_hump": 0.03,
 		"neck_length": 0.20, "neck_thickness": 0.085, "neck_carriage": NECK_UPRIGHT,
 		"head_length": 0.16, "head_height": 0.11, "muzzle": 0.6, "ear_size": 0.34,
@@ -109,11 +119,41 @@ const _PROFILES := {
 	# The tall one: long neck, deep chest, long legs, mane and flowing tail.
 	"horse": {
 		"barrel_squareness": 0.8,
-		"world_scale": 1.6,
-		"body_length": 0.58, "body_height": 0.27, "body_y": 0.42, "shoulder_hump": 0.04,
-		"neck_length": 0.26, "neck_thickness": 0.12, "neck_carriage": NECK_UPRIGHT,
-		"head_length": 0.20, "head_height": 0.11, "muzzle": 0.85, "ear_size": 0.22,
-		"leg_length": 0.38, "leg_thickness": 0.055,
+		# 1.6 * 0.75 -- reported "make the horse ~25% smaller" (it was
+		# reading oversized next to everything else once the illustrated
+		# sprite replaced the procedural one). world_scale is the single
+		# point of control for BOTH the illustrated sprite's on-screen size
+		# (IllustratedAnimalSprite.marker_scale multiplies it directly) and
+		# the procedural fallback horse still uses for swim/drink/attack --
+		# scaling it here keeps every one of a horse's actions the same
+		# size as each other, rather than shrinking only what happens to be
+		# illustrated and leaving the rest oversized by comparison.
+		"world_scale": 1.2, "body_center_x": 0.36,
+		# shoulder_hump 0.0 (not the small rise every other grazer gets):
+		# unlike the humped rooters below, a horse's topline reads as
+		# level -- reported "the horse should have a straighter back". So is
+			# neck_attach_height (see ProceduralAnimalSprite._paint_animal):
+			# attached near the very top of the back rather than the
+			# 0.45-of-the-way-up every other species gets, since a horse's
+			# long neck made that lower attachment read as a notch cut into
+			# the topline instead of one continuous slope from withers to poll.
+		"body_length": 0.52, "body_height": 0.31, "body_y": 0.46, "shoulder_hump": 0.0,
+		"neck_length": 0.25, "neck_thickness": 0.13, "neck_carriage": NECK_UPRIGHT, "neck_attach_height": 0.70, "neck_attach_x": 0.90, "neck_direction_override": Vector2(0.72, -0.69),
+		# head_length elongated and head_height pulled back in proportion
+			# (was 0.20/0.15) for a real equine profile -- long and narrow,
+			# not a short round blob -- while staying deeper than the other
+		# grazers' (0.11-0.12) so it still has forehead-to-jaw depth, not a
+		# flat plank with a muzzle tacked on -- reported "less flat head" /
+			# "more horsish".
+		"head_length": 0.24, "head_height": 0.13, "muzzle": 0.85, "muzzle_depth": 0.75, "ear_size": 0.18,
+		# leg_length shortened (was 0.38, the tallest of any species by a wide
+			# margin) -- reported "slightly smaller legs" and, on a first pass
+			# that thinned leg_thickness instead, corrected to "shorter legs,
+			# not thinner": thickness is unchanged (0.055, same as the
+			# original), only the length comes down, and only modestly --
+			# still above deer's 0.32, since a horse should still read as
+			# leggy, just not to its former exaggerated degree.
+			"leg_length": 0.33, "leg_thickness": 0.055, "has_hooves": true,
 		"tail": TAIL_FLOWING, "tail_length": 0.26,
 		"headgear": HEADGEAR_NONE, "has_mane": true,
 	},

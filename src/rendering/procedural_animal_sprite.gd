@@ -17,6 +17,7 @@ const PixelForm = preload("res://src/rendering/pixel_form.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const AnimalAnatomy = preload("res://src/rendering/animal_anatomy.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const QuadrupedGait = preload("res://src/rendering/quadruped_gait.gd")
 
 ## The ART canvas -- 4x the original 24x16 (see
 ## docs/concept/art_resolution.md). CreatureRenderer draws it at
@@ -242,8 +243,11 @@ const SPECIES_BITMAPS := {
 }
 
 
-func generate_texture(species: String, seed_value: int) -> ImageTexture:
-	return ImageTexture.create_from_image(generate_image(species, seed_value))
+## `gait_phase` (0..1, wraps) poses the legs mid-stride (see QuadrupedGait) --
+## 0.0 is the neutral standing pose every existing caller still gets by
+## default, so nothing that doesn't ask for a walk cycle changes.
+func generate_texture(species: String, seed_value: int, gait_phase: float = 0.0) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_image(species, seed_value, gait_phase))
 
 
 ## Looks up the shape family for `species` (falling back to the deer-shaped
@@ -252,7 +256,7 @@ func generate_texture(species: String, seed_value: int) -> ImageTexture:
 ## style) and renders that family's hand-authored bitmap in the species' own
 ## color. `key` (not the raw `species`) drives color/jitter/bitmap lookups so
 ## an unrecognized species resolves fully to "herbivore", not just its shape.
-func generate_image(species: String, seed_value: int) -> Image:
+func generate_image(species: String, seed_value: int, gait_phase: float = 0.0) -> Image:
 	var key: String = species if SPECIES_BASE_COLORS.has(species) else "herbivore"
 	var profile := AnimalAnatomy.profile_for(key)
 	var base_color: Color = _palette.saturate(SPECIES_BASE_COLORS[key], BASE_SATURATE)
@@ -263,7 +267,7 @@ func generate_image(species: String, seed_value: int) -> Image:
 	)
 
 	var image := Image.create(WIDTH, HEIGHT, false, Image.FORMAT_RGBA8)
-	_paint_animal(image, profile, coat)
+	_paint_animal(image, profile, coat, gait_phase)
 	if SPOTTED_SPECIES.has(key):
 		_paint_body_spots(image, seed_value)
 	_outline_silhouette(image)
@@ -321,21 +325,44 @@ const _HEAD_SIDE := 1.0
 const _FAR_LEG_DARKEN := 0.28
 
 
-func _paint_animal(image: Image, profile: Dictionary, coat: Color) -> void:
+func _paint_animal(image: Image, profile: Dictionary, coat: Color, gait_phase: float = 0.0) -> void:
 	var w := float(WIDTH)
 	var h := float(HEIGHT)
 	var body_half := Vector2(profile.body_length * w * 0.5, profile.body_height * h * 0.5)
-	var body_center := Vector2(w * 0.46, profile.body_y * h)
+	# body_center_x (default 0.46, see AnimalAnatomy) shifts the whole body
+	# left on the canvas for a species whose long neck+head need more room on
+	# the head side (_HEAD_SIDE, the right/+x end) than the shared default
+	# leaves -- otherwise the only way to fit an elongated neck/head is to
+	# shrink it back down, defeating the point.
+	var body_center := Vector2(w * profile.get("body_center_x", 0.46), profile.body_y * h)
 	var ground: float = body_center.y + body_half.y + profile.leg_length * h
 
 	# Legs first, so the body overlaps them at the shoulder and hip.
-	_paint_legs(image, profile, coat, body_center, body_half, ground)
+	_paint_legs(image, profile, coat, body_center, body_half, ground, gait_phase)
 	_paint_tail(image, profile, coat, body_center, body_half)
 	_paint_body(image, profile, coat, body_center, body_half)
 
-	# Neck and head, carried at the profile's angle.
-	var neck_dir := _neck_direction(profile.neck_carriage)
-	var neck_start := body_center + Vector2(body_half.x * 0.72 * _HEAD_SIDE, -body_half.y * 0.45)
+	# Neck and head, carried at the profile's angle. Attached partway down the
+	# body's side by default (x 0.72 of the way to the front edge, y 0.45 of
+	# the way up), which most species' shorter necks hide; a horse's long
+	# neck made that attachment point read as a notch cut into an otherwise
+	# straight topline (reported: "the horse should have a straighter back").
+	# neck_attach_height/neck_attach_x let a species attach its neck right at
+	# the front-top corner of the barrel instead -- exactly where the
+	# superellipse silhouette (see _barrel_depth/barrel_squareness) is
+	# already curving upward toward the chest, so the neck capsule continues
+	# that curve rather than erupting out of the flat mid-back. Optional (see
+	# AnimalAnatomy): any profile without them keeps today's 0.72/0.45.
+	# neck_direction_override lets a species arch its neck at its own angle
+	# instead of sharing NECK_UPRIGHT's steep, near-vertical default -- a
+	# horse's real neck arches forward and down from the withers (grazing/
+	# alert posture), not straight up like the generic grazers share
+	# (reported: "does not look like a horse at all" against a reference
+	# with a much shallower, forward-arching neck).
+	var neck_dir: Vector2 = profile.get("neck_direction_override", _neck_direction(profile.neck_carriage))
+	var neck_attach_x: float = profile.get("neck_attach_x", 0.72)
+	var neck_attach: float = profile.get("neck_attach_height", 0.45)
+	var neck_start := body_center + Vector2(body_half.x * neck_attach_x * _HEAD_SIDE, -body_half.y * neck_attach)
 	var neck_end: Vector2 = neck_start + neck_dir * (profile.neck_length * h)
 	_paint_limb(image, neck_start, neck_end, profile.neck_thickness * h, coat)
 
@@ -384,10 +411,19 @@ func _paint_head(image: Image, profile: Dictionary, coat: Color, center: Vector2
 	_paint_ellipse_shaded(image, center, half, coat)
 	# Muzzle: a tapered snout reaching forward -- long on horses and boars,
 	# blunt on cats -- one of the strongest species cues at this size.
+	# muzzle_depth (default 0.42, see AnimalAnatomy) is how much shallower
+	# the muzzle sits than the head itself -- a cat's/dog's snout really is
+	# a thin taper stuck on a round skull, but that same ratio on a much
+	# LONGER muzzle (a horse's) read as a ball with a thin cone taped to the
+	# front instead of one continuous face (reported: "the head does not
+	# look like a horse at all"). A species with a long muzzle wants a much
+	# shallower taper -- nearly as deep as the head itself -- so the two
+	# ellipses read as one wedge-shaped face.
 	var muzzle_length: float = profile.muzzle * half.x * 1.4
 	if muzzle_length > 0.5:
+		var muzzle_depth: float = profile.get("muzzle_depth", 0.42)
 		var muzzle_center := center + Vector2((half.x * 0.55 + muzzle_length * 0.5) * _HEAD_SIDE, half.y * 0.25)
-		_paint_ellipse_shaded(image, muzzle_center, Vector2(muzzle_length * 0.5, half.y * 0.42), coat.darkened(0.08))
+		_paint_ellipse_shaded(image, muzzle_center, Vector2(muzzle_length * 0.5, half.y * muzzle_depth), coat.darkened(0.08))
 
 	_paint_ears(image, profile, coat, center, half)
 	_paint_headgear(image, profile, center, half)
@@ -430,8 +466,15 @@ func _paint_headgear(image: Image, profile: Dictionary, center: Vector2, half: V
 			_paint_limb(image, tusk_base, tusk_base + Vector2(half.x * 0.3, -half.y * 0.85), maxf(half.y * 0.15, 1.0), TUSK_COLOR)
 
 
+## Fraction of a leg's total length given to the upper segment (hip->knee);
+## the rest is the lower segment (knee->foot). Kept even so neither segment
+## reads as a stub at this canvas size.
+const _UPPER_LEG_FRACTION := 0.5
+
+
 func _paint_legs(
-	image: Image, profile: Dictionary, coat: Color, body_center: Vector2, body_half: Vector2, ground: float
+	image: Image, profile: Dictionary, coat: Color, body_center: Vector2, body_half: Vector2, ground: float,
+	gait_phase: float = 0.0
 ) -> void:
 	if profile.leg_length <= 0.001:
 		return  # legless (snakes) -- no limbs to draw at all
@@ -439,15 +482,58 @@ func _paint_legs(
 	var shoulder_x := body_center.x + body_half.x * 0.58
 	var hip_x := body_center.x - body_half.x * 0.62
 	var top := body_center.y + body_half.y * 0.35
+	var leg_length := ground - top
 	# The far pair is drawn first and darker, so the body reads as solid.
+	# "far"/"near" (an offset for visual depth, not real anatomy) is what
+	# assigns each of the 4 legs to a QuadrupedGait identity below -- far+
+	# front = front_left, near+back = back_right, and so on, which is what
+	# makes the two DRAWN pairs also the two diagonal GAIT pairs.
 	var pairs := [
-		{"offset": -thickness * 0.95, "color": coat.darkened(_FAR_LEG_DARKEN)},
-		{"offset": thickness * 0.6, "color": coat},
+		{"offset": -thickness * 0.95, "color": coat.darkened(_FAR_LEG_DARKEN), "side": "left"},
+		{"offset": thickness * 0.6, "color": coat, "side": "right"},
 	]
+	# has_hooves (default false, see AnimalAnatomy) caps each foot with a
+	# small dark hoof -- a real, visually distinct anatomical feature on
+	# hoofed grazers, not just a leg tapering to the same coat color as the
+	# rest of the body (reported against a reference horse with clearly
+	# darker hooves).
+	var hoof_color = coat.darkened(0.55) if profile.get("has_hooves", false) else null
 	for pair in pairs:
-		for x_base in [shoulder_x, hip_x]:
-			var x: float = x_base + pair.offset
-			_paint_limb(image, Vector2(x, top), Vector2(x, ground), thickness, pair.color)
+		for leg_pos in [{"x": shoulder_x, "role": "front"}, {"x": hip_x, "role": "back"}]:
+			var x: float = leg_pos.x + pair.offset
+			var leg_id := "%s_%s" % [leg_pos.role, pair.side]
+			_paint_articulated_leg(
+				image, Vector2(x, top), leg_length, thickness, pair.color, leg_id, gait_phase, hoof_color
+			)
+
+
+## One leg as two rotating segments (hip->knee->foot) instead of a straight
+## vertical capsule -- see QuadrupedGait for the angles. At gait_phase 0.0
+## both angles are exactly zero, reproducing the original straight-leg
+## silhouette for every caller that isn't mid-stride.
+func _paint_articulated_leg(
+	image: Image, hip: Vector2, leg_length: float, thickness: float, color: Color, leg_id: String, gait_phase: float,
+	hoof_color = null
+) -> void:
+	var upper_length := leg_length * _UPPER_LEG_FRACTION
+	var lower_length := leg_length - upper_length
+
+	var hip_swing := QuadrupedGait.hip_angle(leg_id, gait_phase)
+	var knee_fold := QuadrupedGait.knee_bend(leg_id, gait_phase)
+
+	# 0 radians is straight down; positive swings toward the head end (+x).
+	var upper_dir := Vector2(sin(hip_swing), cos(hip_swing))
+	var knee: Vector2 = hip + upper_dir * upper_length
+	# The lower leg folds BACK relative to the upper leg while lifting, the
+	# way a horse's fetlock tucks up under it mid-swing rather than swinging
+	# forward in a straight line.
+	var lower_dir := Vector2(sin(hip_swing - knee_fold), cos(hip_swing - knee_fold))
+	var foot: Vector2 = knee + lower_dir * lower_length
+
+	_paint_limb(image, hip, knee, thickness, color)
+	_paint_limb(image, knee, foot, thickness * 0.88, color)
+	if hoof_color != null:
+		_paint_ellipse(image, foot, Vector2(thickness * 0.44, thickness * 0.34), hoof_color)
 
 
 func _paint_tail(

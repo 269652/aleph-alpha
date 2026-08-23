@@ -125,3 +125,188 @@ func test_seed_populations_overrides_the_equilibrium_from_add_region():
 func test_herbivore_capacity_at_is_zero_for_an_unknown_region():
 	var sim = EcosystemSimulation.new()
 	assert_eq(sim.herbivore_capacity_at(Vector2i(9, 9)), 0.0)
+
+
+## See docs/concept/fishing.md#aquatic-population-model.
+
+func test_add_region_seeds_fish_population_for_a_chunk_with_water():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("ocean", 0.55, 0.5))
+	assert_gt(simulation.fish_population(Vector2i(0, 0)), 0.0)
+
+
+func test_add_region_stays_fish_free_for_a_land_only_chunk():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.55, 0.5))
+	assert_eq(simulation.fish_population(Vector2i(0, 0)), 0.0)
+
+
+func test_step_keeps_fish_population_within_capacity_over_many_days():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("ocean", 0.55, 0.5))
+	var capacity := simulation.fish_capacity_at(Vector2i(0, 0))
+	for i in 50:
+		simulation.step(1.0)
+	assert_between(simulation.fish_population(Vector2i(0, 0)), 0.0, capacity + 0.01)
+
+
+func test_fish_capacity_at_is_zero_for_an_unknown_region():
+	var sim = EcosystemSimulation.new()
+	assert_eq(sim.fish_capacity_at(Vector2i(9, 9)), 0.0)
+
+
+func test_record_catch_decrements_fish_population():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("ocean", 0.55, 0.5))
+	var before := simulation.fish_population(Vector2i(0, 0))
+	simulation.record_catch(Vector2i(0, 0), 1.0)
+	assert_almost_eq(simulation.fish_population(Vector2i(0, 0)), before - 1.0, 0.001)
+
+
+func test_record_catch_does_not_go_negative():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("ocean", 0.55, 0.5))
+	simulation.record_catch(Vector2i(0, 0), 100000.0)
+	assert_eq(simulation.fish_population(Vector2i(0, 0)), 0.0)
+
+
+func test_seed_fish_population_overrides_add_regions_equilibrium():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("ocean", 0.55, 0.5))
+	simulation.seed_fish_population(Vector2i(0, 0), 3.0)
+	assert_almost_eq(simulation.fish_population(Vector2i(0, 0)), 3.0, 0.001)
+
+
+func test_fish_migration_moves_surplus_population_to_an_adjacent_spare_capacity_region():
+	var crowded_coord := Vector2i(0, 0)
+	var spare_coord := Vector2i(1, 0)
+	simulation.add_region(crowded_coord, _make_chunk("ocean", 0.55, 0.5))
+	simulation.add_region(spare_coord, _make_chunk("ocean", 0.55, 0.5))
+
+	# Crashing the crowded region's water temperature far from the aquatic
+	# model's optimum collapses its fish capacity toward zero, leaving its
+	# already-seeded population overcrowded relative to its OWN new
+	# capacity -- exactly what a real cold-water event does.
+	simulation.update_environment(crowded_coord, _make_chunk("ocean", 0.0, 0.0))
+
+	var spare_population_before := simulation.fish_population(spare_coord)
+	for i in 5:
+		simulation.step(1.0)
+
+	assert_gt(simulation.fish_population(spare_coord), spare_population_before)
+
+
+# -- individual births feed back into the aggregate --------------------------
+#
+# The world runs at two fidelities (see the LOD section of
+# concept/ecosystem_dynamics.md): away from the player, populations are a
+# number that grows logistically; near the player, actual animals court, mate
+# and produce actual offspring. Those two have to be the SAME population, or
+# watching a meadow would be a way of creating animals that vanish the moment
+# you look away -- and the herd you built up would evaporate on a chunk
+# reload.
+#
+# record_catch already does this for fishing (an individual act moving the
+# aggregate). This is its counterpart for birth.
+
+func test_a_birth_near_the_player_raises_the_regions_population():
+	var sim = EcosystemSimulation.new()
+	sim.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	# A region seeded BELOW its ceiling -- a recovering population is where
+	# births actually matter; regions start at capacity, where they cannot.
+	# Well below this region's ceiling (about 1.3 here), so the birth has
+	# room to land and the assertion is about the birth, not the cap.
+	sim.seed_populations(Vector2i.ZERO, 0.2, 0.0)
+	sim.record_birth(Vector2i.ZERO, 0.5)
+	assert_almost_eq(sim.herbivore_population(Vector2i.ZERO), 0.7, 0.001)
+
+
+## The aggregate model is still the authority on what the land can support: a
+## birth cannot push a region past its own carrying capacity, or watching a
+## meadow long enough would overrun it in a way the off-screen model never
+## would.
+func test_births_cannot_push_a_region_past_what_it_can_support():
+	var sim = EcosystemSimulation.new()
+	sim.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	sim.seed_populations(Vector2i.ZERO, 1.0, 0.0)
+	for _i in 500:
+		sim.record_birth(Vector2i.ZERO, 1.0)
+	assert_lte(
+		sim.herbivore_population(Vector2i.ZERO),
+		sim.herbivore_capacity_at(Vector2i.ZERO) + 0.001,
+		"the land decides the ceiling, not how long the player watched"
+	)
+
+
+## A birth in a region that is not loaded is a silent no-op, matching
+## record_catch: there is no aggregate there to move.
+func test_a_birth_in_an_unknown_region_is_harmless():
+	var sim = EcosystemSimulation.new()
+	sim.record_birth(Vector2i(999, 999), 1.0)
+	assert_eq(sim.herbivore_population(Vector2i(999, 999)), 0.0)
+
+
+# -- animals spread between neighbouring regions -----------------------------
+#
+# Every chunk used to be a sealed jar: it grew to its own capacity and
+# stopped, and an emptied region refilled only from its own survivors. So a
+# valley the player hunted out stayed empty forever regardless of the herds
+# next door.
+
+func _two_neighbours() -> EcosystemSimulation:
+	var sim = EcosystemSimulation.new()
+	sim.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.6, 0.6))
+	sim.add_region(Vector2i(1, 0), _make_chunk("grassland", 0.6, 0.6))
+	return sim
+
+
+func test_a_hunted_out_region_refills_from_its_neighbour():
+	var sim := _two_neighbours()
+	var full: float = sim.herbivore_capacity_at(Vector2i(0, 0))
+	sim.seed_populations(Vector2i(0, 0), full, 0.0)
+	sim.seed_populations(Vector2i(1, 0), 0.0, 0.0)
+	for _day in 40:
+		sim.step(1.0)
+	assert_gt(
+		sim.herbivore_population(Vector2i(1, 0)), 0.0,
+		"an emptied region beside a full one should repopulate"
+	)
+
+
+## Migration must not conjure animals -- it moves them. Growth is a separate
+## term, so this checks the emptied region gains while the full one is not
+## simply left untouched.
+func test_the_region_they_come_from_actually_loses_them():
+	var sim := _two_neighbours()
+	var full: float = sim.herbivore_capacity_at(Vector2i(0, 0))
+	sim.seed_populations(Vector2i(0, 0), full, 0.0)
+	sim.seed_populations(Vector2i(1, 0), 0.0, 0.0)
+	sim.step(1.0)
+	assert_lt(
+		sim.herbivore_population(Vector2i(0, 0)), full,
+		"the animals that arrived next door came from somewhere"
+	)
+
+
+## Capped, always: migration cannot push a region past what its land supports.
+func test_migration_never_overfills_a_region():
+	var sim := _two_neighbours()
+	sim.seed_populations(Vector2i(0, 0), sim.herbivore_capacity_at(Vector2i(0, 0)), 0.0)
+	sim.seed_populations(Vector2i(1, 0), sim.herbivore_capacity_at(Vector2i(1, 0)), 0.0)
+	for _day in 100:
+		sim.step(1.0)
+	for coord in [Vector2i(0, 0), Vector2i(1, 0)]:
+		assert_lte(
+			sim.herbivore_population(coord),
+			sim.herbivore_capacity_at(coord) + 0.001,
+			"the land decides the ceiling, migration or not"
+		)
+
+
+## Regions that are not neighbours do not exchange animals: this is a
+## diffusion across a grid, not a teleport.
+func test_animals_do_not_jump_to_a_region_that_is_not_adjacent():
+	var sim = EcosystemSimulation.new()
+	sim.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.6, 0.6))
+	sim.add_region(Vector2i(9, 9), _make_chunk("grassland", 0.6, 0.6))
+	sim.seed_populations(Vector2i(0, 0), sim.herbivore_capacity_at(Vector2i(0, 0)), 0.0)
+	sim.seed_populations(Vector2i(9, 9), 0.0, 0.0)
+	sim.step(1.0)
+	assert_almost_eq(
+		sim.herbivore_population(Vector2i(9, 9)), 0.0, 0.0001,
+		"a distant region is not a neighbour"
+	)

@@ -99,3 +99,53 @@ func test_catalog_has_a_fishing_rod():
 func test_campfire_and_furnace_are_placeable():
 	assert_eq(catalog.make("campfire").kind, "placeable")
 	assert_eq(catalog.make("furnace").kind, "placeable")
+
+
+## Named fruit tree species (see docs/concept/flora.md#named-fruit-and-nut-tree-species)
+## drop their OWN item id -- cherry/apple/walnut -- rather than the generic
+## "fruit"/"nut" every tree used to drop regardless of species.
+func test_catalog_knows_the_named_tree_fruit_items():
+	for item_id in ["cherry", "apple", "walnut"]:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+		assert_eq(catalog.make(item_id).kind, "food")
+
+
+# -- taming gear (see docs/concept/taming.md) --------------------------------
+
+func test_a_lasso_is_a_tool_you_hold():
+	var lasso = catalog.make("lasso")
+	assert_not_null(lasso, "the lasso has to exist to be crafted")
+	assert_eq(lasso.kind, "tool", "it is held in hand, like the fishing rod")
+
+
+## Carrots are the taming reward -- high-sugar roots are the traditional
+## horse treat for a reason -- so they have to be food the animal wants.
+func test_a_carrot_is_food():
+	var carrot = catalog.make("carrot")
+	assert_not_null(carrot)
+	assert_eq(carrot.kind, "food")
+
+
+# -- real weapon mass (see MaterialProperties.mass_kg_for, docs/concept/ -----
+# -- materials.md's momentum = mass * velocity model) ------------------------
+
+## Real one-handed swords are typically ~1-1.5kg -- the sanity check the
+## user explicitly asked for on whatever volume estimate backs this.
+func test_iron_sword_has_a_plausible_real_sword_mass():
+	assert_between(catalog.make("iron_sword").mass_kg, 1.0, 1.5)
+
+
+## Every weapon-kind item should carry a real, positive mass -- not just the
+## sword the user named explicitly (see item_catalog.gd's own doc comment on
+## why tools are a documented, separate follow-up rather than guessed at
+## here).
+func test_every_weapon_kind_item_has_a_positive_mass():
+	for item_id in ["iron_sword", "wooden_club", "crude_blade"]:
+		assert_gt(catalog.make(item_id).mass_kg, 0.0, "%s should have a real mass" % item_id)
+
+
+## A denser material (iron) should mass more than a less dense one (wood) at
+## a comparable real-world item scale -- not a coincidence of the specific
+## volumes chosen, a real consequence of the shared density table.
+func test_the_iron_sword_masses_more_than_the_wooden_club():
+	assert_gt(catalog.make("iron_sword").mass_kg, catalog.make("wooden_club").mass_kg)

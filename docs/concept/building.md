@@ -120,6 +120,21 @@ true of a player's house is true of a villager's.
 generator stamps blueprints; the player places pieces by hand. Neither
 knows about the other.
 
+This means the village generator's stamping bypasses `BuildingPlacement.
+can_place` entirely (it writes chunk modifications directly, not through the
+placement-validity check above) — a real gap: a house's ring-layout anchor
+could land on a water pocket (a chunk's dominant biome only gates the whole
+chunk, not every individual cell, so a grassland-dominant chunk can still
+have a pond/river cutting through it) and get stamped straight into it.
+`VillageRenderer._find_dry_origin` closes the most visible instance of this
+by mirroring `can_place`'s own "not water" rule before stamping, nudging to
+nearby dry ground (or skipping the house if none is found) — but it is its
+own bespoke check, not a call into `BuildingPlacement` itself, so other
+placement rules (not overlapping an existing piece, walls needing an
+adjacent floor) still aren't enforced for village generation. Full
+unification — the village generator asking `BuildingPlacement` the same
+question the player's build cursor does — remains a follow-up.
+
 ### Persistence
 
 Pieces persist through the existing per-chunk modification system (see
@@ -141,9 +156,46 @@ modification like any other.
   player's prefabs and the village generator, tested. A generated house is
   verified to enclose a real room, so village houses cannot silently
   degrade back into scenery.
-- ⬜ Wiring: build cursor and piece selection, wall collision, door
-  passability, roof hide-on-enter.
-- ⬜ Village houses rebuilt from blueprints, replacing the decorative
-  `ProceduralHouseSprite`.
+- ✅ Piece rendering, wall/window collision, door passability, roof
+  hide-on-enter. `ProceduralBuildingPieceSprite` gives all 10 piece ids
+  (floor/wall/door/window/roof × wood/stone) their own atlas tile, alongside
+  campfire/furnace in the same shared atlas `TerrainRenderer` already
+  builds. `EarthChunkManager.build_at_global`/`destroy_at_global` spawn/free
+  a StaticBody2D+CollisionShape2D for any wall/window piece (the same
+  mechanism trunks/boulders/ore already use to block movement -- this
+  project has no generic tile-solidity check), and restore it for
+  disk-persisted pieces on chunk reload. A roof piece paints onto its own
+  `TileMapLayer` (`EarthChunkManager.set_roof_layer`, `Chunk.
+  roof_modifications` -- separate from `modifications` since a roof shares
+  its cell with the floor beneath it) and is erased over exactly the room
+  (`RoomDetector.room_containing`) the player is currently standing inside,
+  restored the moment they leave it; recomputed every `update()` call
+  rather than throttled by "has the player's tile changed", since a
+  structure can be built/destroyed while the player stands still (a real
+  bug this caught in testing -- a throttle keyed only on player movement
+  never re-checked room membership after a hut was stamped around a
+  stationary player). `EarthChunkManager.stamp_structure_at_global` writes
+  a whole structure's pieces in one call + one repaint (used by the village
+  generator, see below) rather than one `build_at_global` call per cell,
+  which would repaint the owning chunk once per cell.
+- ✅ Village houses rebuilt from blueprints, replacing the decorative
+  `ProceduralHouseSprite`. `VillageRenderer._stamp_house` builds a real
+  5x4 `HouseBlueprint` structure (seeded wood/stone material) centred on
+  each villager's ring-layout anchor and stamps it via
+  `stamp_structure_at_global`; a house is a chunk modification now, not a
+  spawned node. A villager's `home_position` resolves to the house's own
+  DOOR cell (found by scanning the stamped pieces for `CATEGORY_DOOR`), not
+  the raw anchor point, so a villager standing "at home" is standing
+  somewhere it could actually have walked to rather than the middle of a
+  wall or floor cell. Verified end-to-end against a real loaded chunk
+  (real walls, exactly one door, real floor, a roof all present), not just
+  the unit-level piece/placement/room logic. `VillageRenderer._find_dry_origin`
+  nudges a house's origin off a water pocket before stamping (see "One
+  system, two builders" above), and every merchant villager gets a second,
+  personal trading stand next to their own door (the same "stall" sprite as
+  the shared village-square one), not just the one shared landmark.
+- ⬜ Player-facing build cursor/piece selection UI (placing pieces by hand is
+  currently only reachable via `stamp_structure_at_global`/`build_at_global`
+  directly, not through the hotbar/inventory the way campfire/furnace are).
 - ⬜ Shelter effects (warmth, safety) for being in an enclosed room, tying
   building into [survival.md](survival.md).

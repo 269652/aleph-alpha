@@ -18,16 +18,23 @@ const Chunk = preload("res://src/world/chunk.gd")
 const VegetationGrowthModel = preload("res://src/world/vegetation_growth_model.gd")
 const HerbivorePopulationModel = preload("res://src/world/herbivore_population_model.gd")
 const PredatorPopulationModel = preload("res://src/world/predator_population_model.gd")
+const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
+const WaterAreaSurvey = preload("res://src/world/water_area_survey.gd")
 
 var _vegetation_model := VegetationGrowthModel.new()
 var _herbivore_model := HerbivorePopulationModel.new()
 var _predator_model := PredatorPopulationModel.new()
+var _aquatic_model := AquaticPopulationModel.new()
+var _water_survey := WaterAreaSurvey.new()
 
 var _chunks: Dictionary = {}  # Vector2i chunk_coord -> Chunk
 var _vegetation_density: Dictionary = {}  # Vector2i chunk_coord -> PackedFloat32Array
 var _water_access: Dictionary = {}  # Vector2i chunk_coord -> float
 var _herbivore_population: Dictionary = {}  # Vector2i chunk_coord -> float
 var _predator_population: Dictionary = {}  # Vector2i chunk_coord -> float
+var _water_area_cells: Dictionary = {}  # Vector2i chunk_coord -> float (see fish_capacity_at)
+var _water_temperature: Dictionary = {}  # Vector2i chunk_coord -> float
+var _fish_population: Dictionary = {}  # Vector2i chunk_coord -> float
 
 
 ## Starts simulating a newly-loaded region, seeded at ecosystem equilibrium
@@ -53,6 +60,12 @@ func add_region(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	_herbivore_population[chunk_coord] = herbivore_capacity
 	_predator_population[chunk_coord] = _predator_model.carrying_capacity(herbivore_capacity)
 
+	_water_area_cells[chunk_coord] = _water_survey.interior_water_cell_count(chunk)
+	_water_temperature[chunk_coord] = _water_survey.mean_interior_water_temperature(chunk)
+	_fish_population[chunk_coord] = _aquatic_model.carrying_capacity(
+		_water_area_cells[chunk_coord], _water_temperature[chunk_coord]
+	)
+
 
 ## Stops simulating a region (its unloaded chunk's terrain is regenerated
 ## deterministically on revisit -- see EarthChunkManager -- so this state is
@@ -63,6 +76,9 @@ func remove_region(chunk_coord: Vector2i) -> void:
 	_water_access.erase(chunk_coord)
 	_herbivore_population.erase(chunk_coord)
 	_predator_population.erase(chunk_coord)
+	_water_area_cells.erase(chunk_coord)
+	_water_temperature.erase(chunk_coord)
+	_fish_population.erase(chunk_coord)
 
 
 func has_region(chunk_coord: Vector2i) -> bool:
@@ -76,6 +92,8 @@ func update_environment(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _chunks.has(chunk_coord):
 		_chunks[chunk_coord] = chunk
 		_water_access[chunk_coord] = _water_access_fraction(chunk)
+		_water_area_cells[chunk_coord] = _water_survey.interior_water_cell_count(chunk)
+		_water_temperature[chunk_coord] = _water_survey.mean_interior_water_temperature(chunk)
 
 
 ## Advances every currently-loaded region by delta_days simulated days:
@@ -128,6 +146,22 @@ func step(delta_days: float) -> void:
 			_predator_population[chunk_coord], predator_capacities.get(chunk_coord, 0.0), delta_days
 		)
 
+	# Fish: same logistic-growth-plus-migration shape as herbivores, but
+	# capacity comes from water area/temperature instead of vegetation (see
+	# docs/concept/fishing.md#aquatic-population-model) -- an independent
+	# population, not derived from the land trophic chain.
+	var fish_capacities: Dictionary = {}
+	for chunk_coord in _fish_population.keys():
+		fish_capacities[chunk_coord] = _aquatic_model.carrying_capacity(
+			_water_area_cells.get(chunk_coord, 0.0), _water_temperature.get(chunk_coord, 0.5)
+		)
+	if not _fish_population.is_empty():
+		_fish_population = _aquatic_model.migrate(_fish_population, fish_capacities, delta_days)
+	for chunk_coord in _fish_population.keys():
+		_fish_population[chunk_coord] = _aquatic_model.step(
+			_fish_population[chunk_coord], fish_capacities.get(chunk_coord, 0.0), delta_days
+		)
+
 
 func average_vegetation_density(chunk_coord: Vector2i) -> float:
 	return _average(_vegetation_density.get(chunk_coord, PackedFloat32Array()))
@@ -159,6 +193,66 @@ func seed_populations(chunk_coord: Vector2i, herbivores: float, predators: float
 
 func predator_population(chunk_coord: Vector2i) -> float:
 	return _predator_population.get(chunk_coord, 0.0)
+
+
+func fish_population(chunk_coord: Vector2i) -> float:
+	return _fish_population.get(chunk_coord, 0.0)
+
+
+## This region's fish carrying capacity K (from water area + temperature) --
+## the target the unloaded-chunk catch-up integrates toward, same role as
+## herbivore_capacity_at (see ChunkEcologyCatchup / EarthChunkManager). 0.0
+## for an unknown region.
+func fish_capacity_at(chunk_coord: Vector2i) -> float:
+	if not _water_area_cells.has(chunk_coord):
+		return 0.0
+	return _aquatic_model.carrying_capacity(
+		_water_area_cells[chunk_coord], _water_temperature.get(chunk_coord, 0.5)
+	)
+
+
+## Overrides a region's fish population -- used on chunk reload to install
+## the caught-up count from ChunkEcologyCatchup, instead of add_region's
+## fresh-equilibrium seeding (see seed_populations's identical role for
+## herbivores/predators).
+func seed_fish_population(chunk_coord: Vector2i, fish: float) -> void:
+	if _fish_population.has(chunk_coord):
+		_fish_population[chunk_coord] = maxf(0.0, fish)
+
+
+## Subtracts a harvest (player rod or piscivore bird catch, see
+## docs/concept/fishing.md#harvest-fishing-as-the-mortality-term) directly
+## from this region's aggregate fish population -- the explicit mortality
+## term the land herbivore/predator population still lacks (killing one
+## today doesn't touch EcosystemSimulation at all). Never goes negative; a
+## catch against an unknown region is a silent no-op (nothing to subtract
+## from).
+func record_catch(chunk_coord: Vector2i, count: float) -> void:
+	if _fish_population.has(chunk_coord):
+		_fish_population[chunk_coord] = maxf(0.0, _fish_population[chunk_coord] - count)
+
+
+## An animal was BORN near the player -- an individual event, watched
+## happening -- so the region's aggregate population goes up to match.
+##
+## This is the counterpart of record_catch, and it exists because the world
+## runs at two fidelities (see concept/ecosystem_dynamics.md). Away from the
+## player a population is a number that grows logistically; near the player,
+## actual animals court, mate and produce actual offspring. If those two never
+## spoke, watching a meadow would create animals that evaporated as soon as
+## the chunk unloaded, and the aggregate would keep breeding a herd that had
+## already outgrown its range.
+##
+## Capped at the region's carrying capacity: the land decides the ceiling, not
+## how long the player stood and watched. An unknown region is a silent no-op,
+## the same as record_catch -- there is no aggregate there to move.
+func record_birth(chunk_coord: Vector2i, count: float) -> void:
+	if not _herbivore_population.has(chunk_coord):
+		return
+	_herbivore_population[chunk_coord] = minf(
+		herbivore_capacity_at(chunk_coord),
+		_herbivore_population[chunk_coord] + count
+	)
 
 
 func _average(values: PackedFloat32Array) -> float:

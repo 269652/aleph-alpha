@@ -193,6 +193,28 @@ func test_furnace_has_both_a_grey_stone_pixel_and_a_separate_glowing_firebox_pix
 	assert_true(_has_hue_family_pixel(image, is_glow), "furnace should have a distinct glowing firebox pixel")
 
 
+# -- named fruit tree items (see TreeSpecies) --------------------------------
+#
+# Cherry/apple/walnut each need their own distinct look -- fallen fruit is a
+# rendered, visible ground entity per docs/concept/flora.md, and the whole
+## point of a named species is that it reads as a DIFFERENT thing lying on
+## the ground, not just another red "fruit" blob.
+
+func test_named_tree_fruit_items_have_distinct_non_fallback_art():
+	var fallback: PackedByteArray = generator.generate_image("definitely_unknown_tree_fruit").get_data()
+	for item_id in ["cherry", "apple", "walnut"]:
+		assert_ne(generator.generate_image(item_id).get_data(), fallback, "%s needs its own art" % item_id)
+
+
+func test_named_tree_fruit_items_look_different_from_each_other():
+	var cherry := generator.generate_image("cherry")
+	var apple := generator.generate_image("apple")
+	var walnut := generator.generate_image("walnut")
+	assert_ne(cherry.get_data(), apple.get_data())
+	assert_ne(apple.get_data(), walnut.get_data())
+	assert_ne(cherry.get_data(), walnut.get_data())
+
+
 func test_campfire_and_furnace_look_different_from_each_other_and_from_generic_shapes():
 	var campfire := generator.generate_image("campfire")
 	var furnace := generator.generate_image("furnace")
@@ -209,3 +231,108 @@ func test_campfire_and_furnace_look_different_from_each_other_and_from_generic_s
 	assert_true(any_differs.call(campfire, furnace), "campfire and furnace should look different from each other")
 	assert_true(any_differs.call(campfire, fruit), "campfire should no longer reuse the generic oval/fruit look")
 	assert_true(any_differs.call(furnace, armor), "furnace should no longer reuse the generic armor-plate look")
+
+
+# -- ground size: fruit against a reference the player can see --------------
+#
+# Every dropped item rendered at a full 16px tile, so a fallen cherry was as
+# wide as the ground square under it (reported: "they are gigantic").
+
+## A butterfly-wide walnut still read as too chunky next to a creature in the
+## world, so the whole fruit family halved again -- a walnut is now half a
+## butterfly across, and the ratios below carry cherry, apple and nut with it.
+func test_a_walnut_is_half_the_width_of_a_butterfly():
+	var walnut := ProceduralItemSprite.world_scale_for("walnut") * ProceduralItemSprite.SIZE
+	assert_almost_eq(walnut, ProceduralItemSprite.BUTTERFLY_WORLD_WIDTH * 0.5, 0.01)
+
+
+## The three fruit keep real proportions relative to each other -- asserted
+## as RATIOS so re-sizing the walnut carries the other two with it.
+func test_fruit_keep_their_proportions_to_each_other():
+	var walnut := ProceduralItemSprite.world_scale_for("walnut")
+	var cherry := ProceduralItemSprite.world_scale_for("cherry")
+	var apple := ProceduralItemSprite.world_scale_for("apple")
+	assert_almost_eq(cherry / walnut, 0.8, 0.01, "a cherry is smaller than a walnut")
+	assert_almost_eq(apple / walnut, 2.0, 0.01, "an apple is a good deal bigger")
+
+
+## The generic "nut" an ambient (unnamed) tree drops is the smallest of the
+## family -- a hazelnut-ish thing rather than a walnut.
+func test_a_generic_nut_is_smaller_than_a_cherry():
+	var cherry := ProceduralItemSprite.world_scale_for("cherry")
+	var nut := ProceduralItemSprite.world_scale_for("nut")
+	assert_almost_eq(nut / cherry, 0.8, 0.01, "a nut is 0.8 of a cherry")
+
+
+## The ambient (far-from-player) forage tier drops the generic "fruit"/"nut"
+## pair; sizing only the nut would leave a tile-wide fruit lying next to a
+## speck of a nut, which is the same bug that started this.
+func test_the_generic_fruit_matches_the_named_fruit_it_stands_in_for():
+	assert_almost_eq(
+		ProceduralItemSprite.world_scale_for("fruit"),
+		ProceduralItemSprite.world_scale_for("cherry"),
+		0.001
+	)
+
+
+func test_every_fruit_is_well_under_a_tile_wide():
+	for fruit in ["walnut", "cherry", "apple", "nut", "fruit"]:
+		var width := ProceduralItemSprite.world_scale_for(fruit) * ProceduralItemSprite.SIZE
+		assert_lt(width, ProceduralItemSprite.TILE_SIZE, "%s must not fill its own tile" % fruit)
+
+
+## Only fruit was wrong; tools and resources keep the size they always had.
+func test_a_non_fruit_item_keeps_its_previous_size():
+	assert_almost_eq(ProceduralItemSprite.world_scale_for("stone"), 0.5, 0.001)
+
+
+# -- texture reuse ------------------------------------------------------------
+#
+# Item art is a pure function of the item id, but every DroppedItem that
+# entered the scene rebuilt its own 32x32 image pixel by pixel and wrapped it
+# in a fresh ImageTexture. That was invisible while a handful of items lay
+# around and expensive once the world was dropping windfall continuously (see
+# FruitingModel.BEARING_CYCLE_SECONDS).
+
+## The cache is shared across generator INSTANCES, since two DroppedItems
+## each holding their own generator is exactly the case that was rebuilding
+## the same apple over and over.
+func test_the_same_item_hands_back_the_same_texture():
+	var first = ProceduralItemSprite.new().texture_for("apple")
+	var second = ProceduralItemSprite.new().texture_for("apple")
+	assert_same(first, second, "one apple texture, however many apples are on the ground")
+
+
+func test_different_items_still_get_their_own_texture():
+	var g = ProceduralItemSprite.new()
+	assert_not_same(g.texture_for("apple"), g.texture_for("walnut"))
+
+
+func test_a_cached_texture_still_matches_the_generated_art():
+	var g = ProceduralItemSprite.new()
+	assert_eq(g.texture_for("cherry").get_image().get_data(), g.generate_image("cherry").get_data())
+
+
+# -- taming gear art (see docs/concept/taming.md) -----------------------------
+#
+# An item with no entry falls back to a generic grey pebble, which is fine as
+# a crash-guard for an unknown id and wrong for an item the player crafts on
+# purpose and carries in hand.
+
+func test_the_lasso_and_carrot_do_not_render_as_the_fallback_pebble():
+	var generator = ProceduralItemSprite.new()
+	var pebble := generator.generate_image("a_totally_unknown_item").get_data()
+	for item_id in ["lasso", "carrot"]:
+		assert_ne(generator.generate_image(item_id).get_data(), pebble, "%s needs its own look" % item_id)
+
+
+func test_a_carrot_reads_orange():
+	var carrot: Color = ProceduralItemSprite.color_for("carrot")
+	assert_gt(carrot.r, carrot.g, "warmer than it is green")
+	assert_gt(carrot.g, carrot.b, "and orange rather than red")
+
+
+## Rope, not vegetation: the lasso must not read as a bundle of plant fibre
+## sitting next to plant fibre in the inventory.
+func test_the_lasso_does_not_read_as_the_fibre_it_is_braided_from():
+	assert_ne(ProceduralItemSprite.color_for("lasso"), ProceduralItemSprite.color_for("plant_fibre"))

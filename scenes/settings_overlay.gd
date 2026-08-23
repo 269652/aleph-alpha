@@ -9,10 +9,13 @@ extends PanelContainer
 ## settings.
 
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
+const RenderResolution = preload("res://src/rendering/render_resolution.gd")
 
 signal binding_changed(action_name: String, keycode: int)
 signal reset_requested()
 signal graphics_changed(setting: String, enabled: bool)
+## Settings that are a CHOICE rather than on/off (render resolution).
+signal graphics_option_changed(setting: String, value: String)
 signal resume_requested()
 
 var _bindings: Keybindings
@@ -25,9 +28,9 @@ var _listening_button: Button
 
 ## World hands in its live Keybindings + the current graphics state so the
 ## menu renders from the same source of truth World applies.
-func setup(bindings: Keybindings, fullscreen: bool, vsync: bool) -> void:
+func setup(bindings: Keybindings, fullscreen: bool, vsync: bool, resolution: String = "") -> void:
 	_bindings = bindings
-	_build(fullscreen, vsync)
+	_build(fullscreen, vsync, resolution)
 
 
 func _ready() -> void:
@@ -45,7 +48,7 @@ func is_open() -> bool:
 	return visible
 
 
-func _build(fullscreen: bool, vsync: bool) -> void:
+func _build(fullscreen: bool, vsync: bool, resolution: String = "") -> void:
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 6)
 	add_child(root)
@@ -69,7 +72,7 @@ func _build(fullscreen: bool, vsync: bool) -> void:
 
 	_key_section = _build_key_section()
 	root.add_child(_key_section)
-	_graphics_section = _build_graphics_section(fullscreen, vsync)
+	_graphics_section = _build_graphics_section(fullscreen, vsync, resolution)
 	root.add_child(_graphics_section)
 
 	var resume := Button.new()
@@ -125,7 +128,7 @@ func _build_key_section() -> VBoxContainer:
 	return section
 
 
-func _build_graphics_section(fullscreen: bool, vsync: bool) -> VBoxContainer:
+func _build_graphics_section(fullscreen: bool, vsync: bool, resolution: String = "") -> VBoxContainer:
 	var section := VBoxContainer.new()
 	section.add_theme_constant_override("separation", 6)
 
@@ -140,6 +143,34 @@ func _build_graphics_section(fullscreen: bool, vsync: bool) -> VBoxContainer:
 	vs.button_pressed = vsync
 	vs.toggled.connect(func(on): graphics_changed.emit("vsync", on))
 	section.add_child(vs)
+
+	# Render resolution: the one lever that scales the whole frame at once
+	# (see RenderResolution). A choice rather than a toggle, so it gets an
+	# OptionButton and its own signal.
+	var row := HBoxContainer.new()
+	var caption := Label.new()
+	caption.text = "Render resolution"
+	row.add_child(caption)
+
+	var picker := OptionButton.new()
+	var chosen := RenderResolution.sanitize(resolution)
+	for i in RenderResolution.OPTIONS.size():
+		var option: String = RenderResolution.OPTIONS[i]
+		picker.add_item(RenderResolution.label_for(option), i)
+		if option == chosen:
+			picker.select(i)
+	picker.item_selected.connect(
+		func(index): graphics_option_changed.emit(
+			"render_resolution", RenderResolution.OPTIONS[index]
+		)
+	)
+	row.add_child(picker)
+	section.add_child(row)
+
+	var hint := Label.new()
+	hint.text = "Lower renders fewer pixels and scales up -- softer, but much faster."
+	hint.add_theme_font_size_override("font_size", 12)
+	section.add_child(hint)
 	return section
 
 

@@ -59,6 +59,39 @@ func test_direction_biases_back_toward_home_once_far_enough_away():
 	assert_lt(direction.x, 0.0)
 
 
+## Hard-switching from "roam freely" to "head straight home" the instant the
+## creature crosses WANDER_RADIUS made the returned heading DISCONTINUOUS at
+## that boundary: a creature sitting on it got a wildly different direction
+## from one frame to the next as it stepped a fraction of a pixel back and
+## forth across the line. Downstream that reads as a legged animal flipping
+## its facing every few frames, since CreatureMarker flips immediately off
+## the requested direction's own x sign (reported: "now it constantly flips
+## back and forth"). The heading must instead ease from roam toward home as
+## the creature drifts further out, so crossing the radius changes nothing
+## abruptly.
+func test_direction_is_continuous_across_the_home_radius_boundary():
+	var home := Vector2.ZERO
+	var inside := wander.direction_at(home, Vector2(CreatureWander.WANDER_RADIUS - 0.5, 0), 0.0, 7)
+	var outside := wander.direction_at(home, Vector2(CreatureWander.WANDER_RADIUS + 0.5, 0), 0.0, 7)
+	assert_gt(
+		inside.dot(outside),
+		0.9,
+		"a hair either side of the radius should give nearly the same heading, not a hard reversal"
+	)
+
+
+## The other half of the same property: the ease has to actually complete,
+## or a creature far from home would keep half-roaming outward forever. Full
+## home pull is reached by HOME_PULL_FULL_RADIUS_FACTOR x the radius, which
+## is what keeps the wander genuinely bounded (see
+## test_step_position_never_strands_far_beyond_the_wander_radius).
+func test_direction_points_fully_home_once_well_past_the_radius():
+	var home := Vector2.ZERO
+	var distance: float = CreatureWander.WANDER_RADIUS * CreatureWander.HOME_PULL_FULL_RADIUS_FACTOR
+	var direction := wander.direction_at(home, Vector2(distance, 0), 0.0, 7)
+	assert_almost_eq(direction.x, -1.0, 0.01, "should be heading straight home, with no roam left in it")
+
+
 func test_step_position_moves_by_speed_times_delta():
 	var home := Vector2.ZERO
 	var current := Vector2.ZERO
@@ -75,3 +108,35 @@ func test_step_position_never_strands_far_beyond_the_wander_radius():
 		elapsed += 0.5
 	# The home-bias should keep it roughly bounded, not drifting away forever.
 	assert_lt(current.distance_to(home), CreatureWander.WANDER_RADIUS * 2.0)
+
+
+# -- is_pausing: grazing pauses within ordinary wander ------------------------
+#
+# Continuous, never-resting drift reads as mechanical (reported: "it doesn't
+# look like natural wandering or foraging") -- real animals stop, look
+# around, and graze between short walks. Some direction-change intervals are
+# therefore PAUSES: the creature stands idle for that interval instead of
+# picking a heading. Deterministic per (seed, interval), like every other
+# wander decision, so the same creature pauses at the same moments on
+# revisit.
+
+func test_is_pausing_is_deterministic_for_the_same_seed_and_time():
+	assert_eq(wander.is_pausing(3.7, 42), wander.is_pausing(3.7, 42))
+
+
+func test_is_pausing_is_stable_within_one_direction_change_interval():
+	var early := wander.is_pausing(0.1, 7)
+	var late := wander.is_pausing(CreatureWander.DIRECTION_CHANGE_INTERVAL - 0.1, 7)
+	assert_eq(early, late, "a pause covers a whole interval, not a flickering sub-window")
+
+
+## PAUSE_FRACTION is a tested constant, not an eyeballed comment: across many
+## intervals the realized pause share must actually track it.
+func test_roughly_the_pause_fraction_of_intervals_are_pauses():
+	var pauses := 0
+	var total := 400
+	for i in total:
+		if wander.is_pausing((float(i) + 0.5) * CreatureWander.DIRECTION_CHANGE_INTERVAL, 11):
+			pauses += 1
+	var share := float(pauses) / float(total)
+	assert_between(share, CreatureWander.PAUSE_FRACTION - 0.1, CreatureWander.PAUSE_FRACTION + 0.1)

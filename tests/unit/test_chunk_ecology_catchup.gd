@@ -12,19 +12,25 @@ func before_each():
 	catchup = ChunkEcologyCatchup.new()
 
 
-func _state(herbivores: float, predators: float, fruit_stock: float, vegetation: float) -> Dictionary:
+func _state(
+	herbivores: float, predators: float, fruit_stock: float, vegetation: float, fish: float = 0.0
+) -> Dictionary:
 	return {
 		"herbivores": herbivores,
 		"predators": predators,
 		"fruit_stock": fruit_stock,
 		"vegetation": vegetation,
+		"fish": fish,
 	}
 
 
-func _capacity(herbivore_capacity: float, fruit_growth_rate: float) -> Dictionary:
+func _capacity(
+	herbivore_capacity: float, fruit_growth_rate: float, fish_capacity: float = 0.0
+) -> Dictionary:
 	return {
 		"herbivore_capacity": herbivore_capacity,
 		"fruit_growth_rate": fruit_growth_rate,
+		"fish_capacity": fish_capacity,
 	}
 
 
@@ -109,3 +115,28 @@ func test_vegetation_does_not_overshoot_one():
 	var out := catchup.advance(_state(0.0, 0.0, 0.0, 0.99), 1.0e12, _capacity(20.0, 0.0))
 	assert_lte(out["vegetation"], 1.0001)
 	assert_gte(out["vegetation"], 0.99)
+
+
+## See docs/concept/fishing.md#unloaded-chunk-catch-up.
+
+func test_fish_population_included_in_zero_elapsed_unchanged_state():
+	var start := _state(5.0, 1.0, 2.0, 0.5, 3.0)
+	var out := catchup.advance(start, 0.0, _capacity(20.0, 0.1, 20.0))
+	assert_almost_eq(out["fish"], 3.0, 0.0001)
+
+
+func test_small_fish_pop_grows_toward_but_not_past_capacity():
+	var start := _state(1.0, 0.0, 0.0, 1.0, 1.0)
+	var cap := _capacity(20.0, 0.0, 20.0)
+	var out := catchup.advance(start, 100000.0, cap)
+	assert_gt(out["fish"], 1.0, "fish should grow")
+	assert_lte(out["fish"], 20.0, "logistic must not overshoot capacity")
+
+
+func test_fish_growth_is_logistic_no_overshoot_repeated():
+	var s := _state(1.0, 0.0, 0.0, 1.0, 1.0)
+	var cap := _capacity(20.0, 0.0, 20.0)
+	for i in 200:
+		s = catchup.advance(s, 100000.0, cap)
+		assert_lte(s["fish"], 20.0001, "never overshoots capacity")
+	assert_gt(s["fish"], 19.0, "eventually approaches capacity")

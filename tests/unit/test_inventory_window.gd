@@ -111,9 +111,9 @@ func test_refresh_survives_being_called_from_within_a_slots_own_click_handler():
 
 	var fishing_rod_slot: Control = window._grid.get_child(1)
 	var event := InputEventMouseButton.new()
-	event.button_index = MOUSE_BUTTON_LEFT
+	event.button_index = MOUSE_BUTTON_RIGHT
 	event.pressed = true
-	fishing_rod_slot.gui_input.emit(event)  # what a real click ultimately does
+	fishing_rod_slot.gui_input.emit(event)  # what a real right-click ultimately does
 
 	assert_eq(window._grid.get_child_count(), 12, "the grid should still show every slot, not just the one clicked")
 
@@ -182,3 +182,65 @@ func test_refresh_rebuilds_when_only_the_equipped_paperdoll_changes():
 	window.refresh([], {"weapon": sword}, 0.0, 12)
 
 	assert_not_null(icon.texture)
+
+
+# -- right-click to use/equip/unequip, left reserved for dragging -----------
+#
+# Reported live bug: "a click on a carrot makes it vanish". Left-click was
+# wired to BOTH start-a-drag (DragSlot/Godot's built-in drag-and-drop, which
+# only ever triggers off the left button) AND fire item_clicked immediately
+# on press -- so simply pressing down to pick an item up for a drag also
+# instantly used/equipped/ate it, before the drag even had a chance to
+# happen. The fix separates the two gestures onto different buttons
+# entirely: left drags, right uses.
+
+func _left_click_event() -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.pressed = true
+	return event
+
+
+func _right_click_event() -> InputEventMouseButton:
+	var event := InputEventMouseButton.new()
+	event.button_index = MOUSE_BUTTON_RIGHT
+	event.pressed = true
+	return event
+
+
+func test_left_click_on_an_item_does_not_use_or_equip_it():
+	window.refresh([ItemStack.new(catalog.make("iron_sword"), 1)], {}, 0.0, 12)
+	watch_signals(window)
+
+	window._grid.get_child(0).gui_input.emit(_left_click_event())
+
+	assert_signal_not_emitted(window, "item_clicked")
+
+
+func test_right_click_on_an_item_uses_or_equips_it():
+	window.refresh([ItemStack.new(catalog.make("iron_sword"), 1)], {}, 0.0, 12)
+	watch_signals(window)
+
+	window._grid.get_child(0).gui_input.emit(_right_click_event())
+
+	assert_signal_emitted_with_parameters(window, "item_clicked", ["iron_sword"])
+
+
+func test_left_click_on_a_worn_slot_does_not_unequip_it():
+	window.refresh([], {"weapon": catalog.make("iron_sword")}, 0.0, 12)
+	watch_signals(window)
+
+	var weapon_row: Control = window._paperdoll_icons["weapon"].get_parent()
+	weapon_row.gui_input.emit(_left_click_event())
+
+	assert_signal_not_emitted(window, "unequip_requested")
+
+
+func test_right_click_on_a_worn_slot_unequips_it():
+	window.refresh([], {"weapon": catalog.make("iron_sword")}, 0.0, 12)
+	watch_signals(window)
+
+	var weapon_row: Control = window._paperdoll_icons["weapon"].get_parent()
+	weapon_row.gui_input.emit(_right_click_event())
+
+	assert_signal_emitted_with_parameters(window, "unequip_requested", ["weapon"])

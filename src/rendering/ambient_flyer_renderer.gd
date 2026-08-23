@@ -21,6 +21,9 @@ const FLYER_WORLD_SCALE := {
 	"monarch": 0.5,
 	"swallowtail": 0.55,
 	"blue_morpho": 0.6,
+	"bee": 0.3,
+	# The smallest thing in the air. A fly is a speck with wings.
+	"fly": 0.2,
 }
 
 ## Chunk-based spawn/despawn of ambient wildlife (butterflies, songbirds) --
@@ -38,6 +41,8 @@ const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement
 const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
 const ProceduralBirdSprite = preload("res://src/rendering/procedural_bird_sprite.gd")
 const Chunk = preload("res://src/world/chunk.gd")
+const FlyerDiet = preload("res://src/gameplay/flyer_diet.gd")
+const GroundForageBehavior = preload("res://src/gameplay/ground_forage_behavior.gd")
 
 ## Butterflies flutter: fast-ish direction changes, small radius, slow speed.
 ## (Interval bumped from an earlier 0.4s -- fast enough to feel jittery
@@ -53,7 +58,20 @@ const BIRD_INTERVAL := 1.8
 
 ## kingfisher is deliberately excluded -- it's the piscivore, spawned near
 ## water by piscivore_bird_renderer.gd instead, not an ambient land presence.
-const BUTTERFLY_SPECIES_POOL: Array[String] = ["monarch", "swallowtail", "blue_morpho"]
+##
+## Bees are a SEPARATE pool from the true butterflies, each with their own
+## guaranteed per-chunk minimum (see MIN_BEES_PER_CHUNK below) -- they used
+## to ride the same shared pool as butterflies, which meant every bee that
+## rolled was one fewer butterfly out of the same fixed MIN..MAX budget,
+## silently halving true butterfly sightings once bees joined (reported:
+## "there are much less butterflies and bees"). Splitting the pools makes
+## bees a genuine ADDITION to the meadow's pollinator presence instead of a
+## slice out of it.
+const TRUE_BUTTERFLY_SPECIES_POOL: Array[String] = ["monarch", "swallowtail", "blue_morpho"]
+const BEE_SPECIES_POOL: Array[String] = ["bee"]
+## Kept for callers that only care "is this species a pollinator flyer"
+## (spawn-count bookkeeping, tests) -- the union of both pools above.
+const BUTTERFLY_SPECIES_POOL: Array[String] = ["monarch", "swallowtail", "blue_morpho", "bee"]
 const BIRD_SPECIES_POOL: Array[String] = ["sparrow", "robin"]
 
 ## Real butterflies/songbirds are a warm/flowering-habitat presence --
@@ -72,6 +90,10 @@ const BIRD_BIOMES := {"grassland": true, "forest": true, "rainforest": true}
 ## always be there.
 const MIN_BUTTERFLIES_PER_CHUNK := 2
 const MAX_BUTTERFLIES_PER_CHUNK := 4
+## Bees' own budget, additive to the butterfly one above -- deliberately
+## smaller (bees read as a background buzz, not the headline presence).
+const MIN_BEES_PER_CHUNK := 1
+const MAX_BEES_PER_CHUNK := 2
 const MIN_BIRDS_PER_CHUNK := 1
 const MAX_BIRDS_PER_CHUNK := 3
 
@@ -86,25 +108,62 @@ var _bird_sprite := ProceduralBirdSprite.new()
 
 
 func spawn_ambient_flyers(
-	parent: Node2D, chunk: Chunk, chunk_origin_tiles: Vector2i, tile_size: int, biome_name: String
+	parent: Node2D,
+	chunk: Chunk,
+	chunk_origin_tiles: Vector2i,
+	tile_size: int,
+	biome_name: String,
+	scent_multiplier: float = 1.0,
+	scent_world = null
 ) -> Array[Node2D]:
 	var spawned: Array[Node2D] = []
 	if BUTTERFLY_BIOMES.has(biome_name):
+		# Pollinators are drawn to flowers: a chunk thick with blooms hatches
+		# proportionally more pollinators than bare grass (see
+		# ScentField.pollinator_spawn_multiplier, which saturates so a big
+		# meadow can never spawn an unbounded swarm). Birds below are
+		# deliberately NOT scaled -- they aren't pollinators.
+		#
+		# Butterflies and bees are spawned from separate pools/budgets (see
+		# TRUE_BUTTERFLY_SPECIES_POOL/BEE_SPECIES_POOL) -- a bee is an
+		# ADDITION to a meadow's pollinator presence, not drawn out of the
+		# butterfly count.
+		var scented_butterfly_min := int(round(float(MIN_BUTTERFLIES_PER_CHUNK) * scent_multiplier))
+		var scented_butterfly_max := int(round(float(MAX_BUTTERFLIES_PER_CHUNK) * scent_multiplier))
 		spawned.append_array(
 			_spawn_species(
 				parent, chunk, chunk_origin_tiles, tile_size, "butterfly_spawn",
-				BUTTERFLY_SPECIES_POOL, MIN_BUTTERFLIES_PER_CHUNK, MAX_BUTTERFLIES_PER_CHUNK,
+				TRUE_BUTTERFLY_SPECIES_POOL, scented_butterfly_min, scented_butterfly_max,
 				AmbientFlyerMovement.new(BUTTERFLY_SPEED, BUTTERFLY_RADIUS, BUTTERFLY_INTERVAL),
-				_butterfly_sprite
+				_butterfly_sprite,
+				scent_world
+			)
+		)
+		var scented_bee_min := int(round(float(MIN_BEES_PER_CHUNK) * scent_multiplier))
+		var scented_bee_max := int(round(float(MAX_BEES_PER_CHUNK) * scent_multiplier))
+		spawned.append_array(
+			_spawn_species(
+				parent, chunk, chunk_origin_tiles, tile_size, "bee_spawn",
+				BEE_SPECIES_POOL, scented_bee_min, scented_bee_max,
+				AmbientFlyerMovement.new(BUTTERFLY_SPEED, BUTTERFLY_RADIUS, BUTTERFLY_INTERVAL),
+				_butterfly_sprite,
+				scent_world
 			)
 		)
 	if BIRD_BIOMES.has(biome_name):
+		# Birds are passed the same world the pollinators get. It is NOT a
+		# scent world for them -- _build_marker gates that on the diet table,
+		# and no bird drinks nectar -- it is what a robin queries for
+		# earthworms (see FlyerDiet / docs/concept/soil_fauna.md). Songbirds
+		# used to be handed nothing at all, which is why they had literally no
+		# behaviour beyond home-tethered drift.
 		spawned.append_array(
 			_spawn_species(
 				parent, chunk, chunk_origin_tiles, tile_size, "bird_spawn",
 				BIRD_SPECIES_POOL, MIN_BIRDS_PER_CHUNK, MAX_BIRDS_PER_CHUNK,
 				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
-				_bird_sprite
+				_bird_sprite,
+				scent_world
 			)
 		)
 	return spawned
@@ -127,6 +186,7 @@ func _spawn_species(
 	max_count: int,
 	movement: AmbientFlyerMovement,
 	sprite_generator,
+	scent_world = null,
 ) -> Array[Node2D]:
 	var candidates: Array[Vector2i] = []
 	for y in chunk.height:
@@ -149,7 +209,7 @@ func _spawn_species(
 		var species: String = species_pool[seed_value % species_pool.size()]
 		var position := Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size)
 		spawned.append(
-			_build_marker(parent, species, position, seed_value, movement, sprite_generator)
+			_build_marker(parent, species, position, seed_value, movement, sprite_generator, scent_world)
 		)
 	return spawned
 
@@ -158,13 +218,75 @@ func _spawn_rank(global_x: int, global_y: int, salt: String) -> float:
 	return float(absi(hash("%d_%d_%s" % [global_x, global_y, salt])) % 10000) / 10000.0
 
 
+## Spawns ONE flyer -- the offspring of a courting pair (see Courtship).
+##
+## Goes through the same `_build_marker` every other flyer does, so a
+## butterfly born in front of the player is in every respect an ordinary
+## butterfly: same art, same movement, same diet wiring, and it can court in
+## its turn.
+## The most flyers one chunk is ever meant to carry.
+##
+## The spawn pass fills a chunk to somewhere between its MIN and MAX per
+## species; courtship can then add more (see Courtship), and without a
+## ceiling that is a population with births and no bound -- measured climbing
+## steadily in a single session, which is precisely how the deer explosion
+## started. A meadow supports what it supports.
+static func max_flyers_per_chunk() -> int:
+	return MAX_BUTTERFLIES_PER_CHUNK + MAX_BEES_PER_CHUNK + MAX_BIRDS_PER_CHUNK
+
+
+func spawn_offspring(
+	parent: Node2D, species: String, position: Vector2, seed_value: int, scent_world = null
+) -> AmbientFlyerMarker:
+	# Art and flight come from the SPECIES, never from an assumption about
+	# who courts. This hardcoded the butterfly pair on the reasoning that
+	# "courtship only applies to pollinators" -- which nothing enforced, and
+	# sparrows court sparrows, so a sparrow chick came out with monarch wings:
+	# it flew like a butterfly and looked like one while the hover panel said
+	# "sparrow" and it went off to eat seeds (reported exactly that way).
+	var is_bird := BIRD_SPECIES_POOL.has(species)
+	var movement := (
+		AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL)
+		if is_bird
+		else AmbientFlyerMovement.new(BUTTERFLY_SPEED, BUTTERFLY_RADIUS, BUTTERFLY_INTERVAL)
+	)
+	var offspring := _build_marker(
+		parent, species, position, seed_value, movement,
+		_bird_sprite if is_bird else _butterfly_sprite,
+		scent_world
+	)
+	# Born, not spawned: it starts at the beginning of its life and takes the
+	# full week to grow up (see LifeCycle), unlike the adults the world seeds
+	# a meadow with.
+	offspring.begin_life()
+	return offspring
+
+
+## Builds one flyer at a position, for callers that place their own rather
+## than spawning a chunk's worth.
+##
+## Flies are the case this exists for: they belong to a rotting thing rather
+## than to a chunk, so they are spawned where the rot is (see
+## EarthChunkManager.step_flies) instead of scattered over a cell.
+func build_flyer(parent: Node2D, species: String, position: Vector2, seed_value: int) -> AmbientFlyerMarker:
+	return _build_marker(
+		parent,
+		species,
+		position,
+		seed_value,
+		AmbientFlyerMovement.new(BUTTERFLY_SPEED, BUTTERFLY_RADIUS, BUTTERFLY_INTERVAL),
+		_butterfly_sprite
+	)
+
+
 func _build_marker(
 	parent: Node2D,
 	species: String,
 	position: Vector2,
 	seed_value: int,
 	movement: AmbientFlyerMovement,
-	sprite_generator
+	sprite_generator,
+	scent_world = null
 ) -> AmbientFlyerMarker:
 	var marker := AmbientFlyerMarker.new()
 	marker.texture = sprite_generator.generate_texture(species, seed_value)
@@ -184,6 +306,56 @@ func _build_marker(
 	marker.home = position
 	marker.wander_seed = seed_value
 	marker.species = species
+	# Who to tell when a courting pair produces young (see Courtship). Every
+	# caller passes the chunk manager as `scent_world`; courtship needs the
+	# same object, but for spawning rather than for smelling, so it is named
+	# for what it is used for.
+	marker.courtship_world = scent_world
+	# Remembered before anything shrinks it, so a juvenile grows toward this
+	# species' own adult size (see AmbientFlyerMarker._step_growing).
+	marker.set_adult_scale(marker.scale)
 	marker.setup(movement)
+	# What this flyer is wired to feed on comes from the DIET TABLE, not from
+	# which spawn call it came out of (see FlyerDiet /
+	# docs/concept/soil_fauna.md). Every caller now passes the same world; the
+	# table decides which parts of it a given species can even see, which is
+	# what makes "sparrows don't hunt worms" structural rather than a branch
+	# somewhere inside the shared marker.
+	#
+	# Nectar: pollinators only. Birds get null here and keep flying blind past
+	# every flower, exactly as before.
+	if FlyerDiet.eats(species, FlyerDiet.FOOD_NECTAR):
+		marker.scent_world = scent_world
+	# Seed: sparrows. Flowers whose bloom is over have gone to seed (see
+	# FlowerPatch.seed_cells / concept/flora.md), so the same meadow that
+	# feeds pollinators in season feeds granivores out of it. This is the
+	# "parallel seed_world line" the worm wiring below anticipated -- and
+	# nothing else had to move, exactly as predicted.
+	if FlyerDiet.eats(species, FlyerDiet.FOOD_SEEDS) and scent_world != null:
+		marker.seed_world = scent_world
+		if marker.ground_forage == null:
+			marker.ground_forage = GroundForageBehavior.new()
+		if sprite_generator.has_method("generate_pecking_texture"):
+			marker.peck_frame = sprite_generator.generate_pecking_texture(species, seed_value)
+	# Worms: robins only.
+	if FlyerDiet.eats(species, FlyerDiet.FOOD_WORMS) and scent_world != null:
+		marker.worm_world = scent_world
+		marker.ground_forage = GroundForageBehavior.new()
+		if sprite_generator.has_method("generate_pecking_texture"):
+			marker.peck_frame = sprite_generator.generate_pecking_texture(species, seed_value)
+	# Fallen tree fruit: robins again (see FlyerDiet -- a second diet entry,
+	# not a new species), bird endozoochory (see SeedEndozoochory /
+	# docs/concept/flora.md#bird-endozoochory). Shares ground_forage with
+	# worm-hunting above rather than needing a second state machine -- a bird
+	# only ever pursues one prey at a time regardless of how many foods are
+	# on its diet.
+	# Sparrows qualify here too now (walnuts), not just robins -- which fruit
+	# each takes is decided per species in FlyerDiet.eats_fruit_species.
+	if FlyerDiet.eats(species, FlyerDiet.FOOD_FRUIT) and scent_world != null:
+		marker.fruit_world = scent_world
+		if marker.ground_forage == null:
+			marker.ground_forage = GroundForageBehavior.new()
+		if marker.peck_frame == null and sprite_generator.has_method("generate_pecking_texture"):
+			marker.peck_frame = sprite_generator.generate_pecking_texture(species, seed_value)
 	parent.add_child(marker)
 	return marker

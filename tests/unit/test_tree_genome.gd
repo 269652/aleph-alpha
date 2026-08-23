@@ -55,3 +55,29 @@ func test_mutated_traits_still_stay_within_valid_ranges():
 		assert_between(child.species_bias, 0.0, 1.0)
 		assert_between(child.spread_radius, TreeGenome.MIN_SPREAD_RADIUS, TreeGenome.MAX_SPREAD_RADIUS)
 		assert_between(child.maturity_time, TreeGenome.MIN_MATURITY_TIME, TreeGenome.MAX_MATURITY_TIME)
+
+
+## Bearing waits years, not seconds.
+##
+## maturity_time was 20-60 SECONDS against a year of 691,200 -- a second
+## maturation clock disagreeing with TreeGrowth's by four orders of magnitude,
+## so a sapling could seed the instant it was planted. Both are measured
+## against the season cycle now.
+func test_a_tree_cannot_bear_until_it_is_years_old():
+	var SeasonCycle := load("res://src/world/season_cycle.gd")
+	for seed_value in 200:
+		var genome := TreeGenome.new(seed_value)
+		assert_gt(
+			genome.maturity_time, SeasonCycle.SECONDS_PER_YEAR,
+			"a tree should not bear in its first year"
+		)
+
+
+## ...and roughly when TreeGrowth calls it grown, rather than on a clock of its
+## own.
+func test_bearing_age_agrees_with_the_growth_model():
+	var TreeGrowth := load("res://src/gameplay/tree_growth.gd")
+	var earliest := TreeGenome.MIN_MATURITY_TIME
+	var latest := TreeGenome.MAX_MATURITY_TIME
+	assert_lte(earliest, TreeGrowth.MATURITY_SECONDS * 1.5)
+	assert_gte(latest, TreeGrowth.MATURITY_SECONDS * 0.8)

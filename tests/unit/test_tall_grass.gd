@@ -125,3 +125,37 @@ func test_grazing_twice_on_the_same_cell_only_succeeds_once():
 	var cell: Vector2i = grass.get_patch_cells()[0]
 	assert_true(grass.graze(cell))
 	assert_false(grass.graze(cell))
+
+
+# -- growth in one throttled batch -------------------------------------------
+#
+# EarthChunkManager used to advance every loaded chunk's sim EVERY FRAME --
+# roughly 25 chunks x up to MAX_PATCHES cells of dictionary writes 60 times a
+# second, measured at ~5ms per frame of the budget. Grass grows at
+# GROWTH_RATE 0.01 per second; resolving that sixty times a second buys
+# nothing. Growth is linear in delta and spread carries its own accumulator,
+# so one batched call has to land in exactly the same state as many small ones.
+
+func test_growth_lands_in_the_same_place_whether_batched_or_per_frame():
+	var stepped := TallGrass.new(4242, 8, 8, _grassland(8, 8))
+	var batched := TallGrass.new(4242, 8, 8, _grassland(8, 8))
+	for _i in 300:
+		stepped.advance(1.0 / 60.0)
+	batched.advance(300.0 / 60.0)
+	assert_eq(stepped.get_patch_cells().size(), batched.get_patch_cells().size())
+	for cell in batched.get_patch_cells():
+		assert_almost_eq(stepped.get_growth(cell), batched.get_growth(cell), 0.0001)
+
+
+func test_spread_still_happens_across_a_batched_advance():
+	var batched := TallGrass.new(99, 12, 12, _grassland(12, 12))
+	var before := batched.get_patch_cells().size()
+	batched.advance(TallGrass.SPREAD_INTERVAL * 3.0)
+	assert_gt(batched.get_patch_cells().size(), before, "a batched step still spreads")
+
+
+func _grassland(width: int, height: int) -> PackedStringArray:
+	var biome := PackedStringArray()
+	biome.resize(width * height)
+	biome.fill("grassland")
+	return biome

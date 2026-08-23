@@ -33,8 +33,24 @@ NPCs are individuals, not quest dispensers.
   stop smithing and do something else — the simulation doesn't forbid it.
 - **Quests**: NPCs generate requests from their actual current needs (get me
   resource X, protect me from Y, deliver a message to Z) rather than a fixed
-  quest-giver script. Exact quest-template design is deferred — see
-  [overview.md](overview.md#open-questions-to-resolve-during-mvp-work-not-blocking-day-1).
+  quest-giver script. See [quests.md](quests.md) for the full mechanism,
+  including when several NPCs' matching needs promote into one
+  settlement-level quest offered by a representative.
+
+### Minimal talk interaction (placeholder for live dialogue)
+
+The full "live dialogue exchange" above needs the real LLM-backed planner
+(see the divergence note below) and doesn't exist yet. Until it does, a
+villager isn't mute: standing near one shows a proximity prompt (whatever
+key is actually bound to "talk," rendered dynamically so a rebind never goes
+stale) and pressing it produces one deterministic, personality/need-flavored
+greeting line built from that NPC's own `NpcIdentity` — a "hello" the game
+can render honestly today, not a branching conversation. This is explicitly
+a stand-in for the real system, not a scaled-down version of it: no memory
+of the exchange, no quest hooks, no branching, nothing persisted. It exists
+so an NPC feels like *someone* to approach even before the Live Dialogue
+System (`docs/progress.md`) is built, the same relationship Basic Merchant
+Shopping has to a real shop UI.
 
 ## Hiring & instruction
 
@@ -86,6 +102,24 @@ not, depending on how that child's own traits/relationships develop.
   conditions make it viable, and that can shift over time" philosophy,
   applied to people instead of wildlife.
 
+## Settlement growth: migration toward player-built structures
+
+The dwindling side of the lifecycle above has a growth counterpart: a
+player-built structure cluster (see [building.md](building.md)) is itself a
+habitability signal — free shelter and, for specialty infrastructure like a
+forge or dock, a specific pull for a specific occupation-need. An NPC's
+existing replan-interrupt (a need crossing a critical threshold triggers an
+out-of-cycle plan, per above) gets one more possible resolution: relocate,
+not just cope in place. A settlement that loses population from disaster or
+[village-endangerment](quests.md#village-endangerment-the-attractor-mechanism)
+is the preferred migration source when one exists nearby; a generic
+wandering-NPC pool covers the rest. A player-grown settlement that crosses
+the same population/infrastructure thresholds a procedurally-seeded one
+would is, mechanically, a real settlement — same representative/quorum
+quest machinery, same wealth-driven risk exposure, same ruin fate on
+failure. Full mechanism, including the migration floor and the active-invite
+option, in [quests.md](quests.md#settlement-growth-migration-and-player-founded-villages).
+
 ### Current implementation status (divergence note)
 
 A first real slice exists (see `docs/progress.md`'s NPC section for the full
@@ -93,14 +127,29 @@ breakdown): procedural village placement (`settlement_generator.gd`,
 sparse/deterministic per chunk), villager identity (`npc_identity.gd`: name/
 occupation/personality/need, no relationships yet), and the planning
 architecture's cheap-local-FSM half fully working (`npc_marker.gd` walks a
-daily schedule) -- but the "one LLM call plans the day" half is a
+daily schedule, sharing the player's own `CharacterView` walk cycle --
+`NpcMarker.setup(world, tile_size)` gives it the same water-awareness
+`CreatureMarker` has, so a villager's animation switches to swimming while
+crossing water and to idle while stationary, not just a frozen walk pose)
+-- but the "one LLM call plans the day" half is a
 deterministic stand-in (`npc_planner.gd`'s `Planner`/`FakeNpcPlanner`, same
 split as [worldbosses.md](worldbosses.md)'s `PhaseGenerator`), not a real
-LLM call yet. No dialogue, no instruction DSL, no memory log, no self-
-determination/role drift, no lifecycle (aging/reproduction/death), no
-faction/festival wiring. Villagers can be bought from at a fixed shared
-price list (`shop.gd`) -- the "shopping" half of villages works, "hiring"
-does not.
+LLM call yet. No *live* dialogue yet (see "Minimal talk interaction" above
+for the one-line placeholder that exists today), no instruction DSL, no
+memory log, no self-determination/role drift, no lifecycle (aging/
+reproduction/death), no faction/festival wiring. Villagers can be bought
+from at a fixed shared price list (`shop.gd`) -- the "shopping" half of
+villages works, "hiring" does not. Every merchant villager also gets a
+personal trading stand next to their own house door now (`VillageRenderer`,
+same sprite as the shared village-square stall), not just the one shared
+landmark every merchant used to route to -- so a multi-merchant village
+reads as several villagers who each trade, not one central shop. A house's
+placement is also now water-aware (`VillageRenderer._find_dry_origin`, see
+[building.md](building.md#one-system-two-builders)): a chunk's dominant
+biome only gates the whole chunk, not every individual cell, so a
+grassland-dominant chunk can still have a pond cutting through it, and a
+house whose ring-layout anchor would land there is nudged to nearby dry
+ground instead of stamped into the water.
 
 ### Open questions
 
@@ -110,4 +159,6 @@ does not.
 - Does village population have any equilibrium/growth-cap mechanic (so a
   thriving village doesn't grow unboundedly and become a performance
   problem), similar to carrying capacity in [world.md](world.md)'s
-  wildlife model?
+  wildlife model? Now also covers player-grown settlements — migration
+  ([quests.md](quests.md#settlement-growth-migration-and-player-founded-villages))
+  is one more growth vector into this same unresolved number.

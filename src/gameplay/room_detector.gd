@@ -54,10 +54,19 @@ func find_rooms(grid: Dictionary) -> Array:
 ## Is `cell` inside some enclosed room? Used for shelter effects and for
 ## hiding a roof while the player is under it.
 func is_indoors(cell: Vector2i, grid: Dictionary) -> bool:
+	return not room_containing(cell, grid).is_empty()
+
+
+## The specific room containing `cell`, as its Array of interior cells -- the
+## same room find_rooms would return, or an empty Array if `cell` isn't
+## indoors at all. Useful when a caller needs to ACT on exactly the room a
+## position is inside (e.g. hiding a roof over exactly the cells the player
+## is standing under), not just get a yes/no answer.
+func room_containing(cell: Vector2i, grid: Dictionary) -> Array:
 	for room in find_rooms(grid):
 		if room.has(cell):
-			return true
-	return false
+			return room
+	return []
 
 
 ## Flood outward from `start` through non-enclosing cells. Returns the

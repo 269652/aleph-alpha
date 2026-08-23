@@ -12,6 +12,9 @@ z_index = -2
 [node name="WaterFx" type="TileMapLayer" parent="."]
 z_index = -1
 
+[node name="SnowFx" type="TileMapLayer" parent="."]
+z_index = -1
+
 [node name="Entities" type="Node2D" parent="."]
 y_sort_enabled = true
 
@@ -21,10 +24,10 @@ y_sort_enabled = true
 [node name="GroundItems" type="Node2D" parent="."]
 y_sort_enabled = true
 
-[node name="DayNightTint" type="CanvasModulate" parent="."]
+[node name="Roof" type="TileMapLayer" parent="."]
+z_index = 1
 
-[node name="Players" type="Node2D" parent="."]
-y_sort_enabled = true
+[node name="DayNightTint" type="CanvasModulate" parent="."]
 
 [node name="PlayerSpawner" type="MultiplayerSpawner" parent="."]
 

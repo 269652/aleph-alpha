@@ -71,3 +71,29 @@ func test_obsidian_is_not_viable_grapple_rope_material() -> void:
 
 func test_unknown_tool_type_is_never_viable() -> void:
 	assert_false(mp.is_viable_for_tool("wood", "spaceship"))
+
+
+# -- real mass, for the shared momentum model (docs/concept/materials.md's --
+# -- momentum = mass * velocity, see impact_resolver.gd/throwable.gd) -------
+#
+# mass_kg_for(material, volume_cm3) = density (already real g/cm^3, since
+# it's expressed relative to water == 1.0 g/cm^3) x volume, generalizing
+# StoneSize.mass_kg_for's "density x volume" shape to an arbitrary item
+# rather than a sphere specifically -- so a sword/axe/club can get a real
+## mass from the SAME shared density table stone already uses.
+
+func test_mass_kg_for_matches_density_times_volume() -> void:
+	# iron's density (7.8) x a 100cm^3 volume = 780g = 0.78kg.
+	assert_almost_eq(mp.mass_kg_for("iron", 100.0), 0.78, 0.0001)
+
+
+func test_mass_kg_for_scales_with_volume() -> void:
+	assert_almost_eq(mp.mass_kg_for("iron", 200.0), mp.mass_kg_for("iron", 100.0) * 2.0, 0.0001)
+
+
+func test_mass_kg_for_a_denser_material_masses_more_at_the_same_volume() -> void:
+	assert_gt(mp.mass_kg_for("iron", 100.0), mp.mass_kg_for("wood", 100.0))
+
+
+func test_mass_kg_for_zero_volume_is_zero_mass() -> void:
+	assert_almost_eq(mp.mass_kg_for("iron", 0.0), 0.0, 0.0001)

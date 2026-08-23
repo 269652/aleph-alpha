@@ -8,6 +8,7 @@ extends GutTest
 ## than only read about in a population count.
 
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 var growth: TreeGrowth
 
@@ -79,3 +80,82 @@ func test_is_deterministic():
 func test_an_infinite_age_is_fully_mature():
 	assert_eq(growth.stage_at(INF), TreeGrowth.STAGE_COUNT - 1)
 	assert_almost_eq(growth.scale_at(INF), 1.0, 0.001)
+
+
+# -- a tree takes years ------------------------------------------------------
+
+## A sapling becomes a young tree in a YEAR, and takes two more to mature.
+##
+## MATURITY_SECONDS was 600 simulated seconds against a year of 691,200 -- less
+## than a tenth of a percent of a year -- so a tree went from nothing to
+## full-grown inside a single season, which is exactly what was reported once
+## /ecotest made a year watchable. The comment justified it as "roughly ten
+## simulated ecosystem days", a different clock from the one the seasons run
+## on.
+func test_a_sapling_takes_a_year_to_become_a_young_tree():
+	var growth := TreeGrowth.new()
+	assert_almost_eq(
+		TreeGrowth.YOUNG_SECONDS / SeasonCycle.SECONDS_PER_YEAR, 1.0, 0.05,
+		"a sapling should take about a year to become a young tree"
+	)
+	assert_false(growth.is_productive(growth.stage_at(TreeGrowth.YOUNG_SECONDS * 0.5)))
+
+
+func test_a_young_tree_takes_two_more_years_to_mature():
+	assert_almost_eq(
+		(TreeGrowth.MATURITY_SECONDS - TreeGrowth.YOUNG_SECONDS)
+			/ SeasonCycle.SECONDS_PER_YEAR,
+		2.0,
+		0.05,
+		"a young tree should take about two more years to mature"
+	)
+
+
+func test_a_tree_is_not_mature_within_one_season():
+	var growth := TreeGrowth.new()
+	var one_season := SeasonCycle.SECONDS_PER_YEAR / float(SeasonCycle.SEASONS.size())
+	assert_lt(
+		growth.scale_at(one_season), 1.0,
+		"a tree should not be full-grown after a single season"
+	)
+
+
+# -- it grows the whole way --------------------------------------------------
+
+## The stem thickens and the crown fills out GRADUALLY, rather than the tree
+## popping between a few sizes.
+func test_a_tree_grows_smoothly_rather_than_in_jumps():
+	var growth := TreeGrowth.new()
+	var sizes := {}
+	for step in 60:
+		sizes[snappedf(growth.scale_at(float(step) / 59.0 * TreeGrowth.MATURITY_SECONDS), 0.01)] = true
+	assert_gt(sizes.size(), 10, "growth reads as %d jumps, not a curve" % sizes.size())
+
+
+func test_a_tree_never_shrinks_as_it_ages():
+	var growth := TreeGrowth.new()
+	var previous := 0.0
+	for step in 100:
+		var scale := growth.scale_at(float(step) / 99.0 * TreeGrowth.MATURITY_SECONDS)
+		assert_gte(scale, previous)
+		previous = scale
+
+
+## It is a seedling for a good while, not for an instant.
+func test_a_seedling_stays_small_for_a_real_stretch():
+	var growth := TreeGrowth.new()
+	var a_month := SeasonCycle.SECONDS_PER_YEAR / 12.0
+	assert_lt(
+		growth.scale_at(a_month), 0.5,
+		"a month-old seedling should still be visibly a seedling"
+	)
+
+
+## Bearing fruit waits until the tree is actually a tree -- a sapling is not a
+## harvest.
+func test_a_tree_does_not_bear_in_its_first_year():
+	var growth := TreeGrowth.new()
+	assert_false(
+		growth.is_productive(growth.stage_at(SeasonCycle.SECONDS_PER_YEAR * 0.9)),
+		"a tree under a year old should not be bearing"
+	)

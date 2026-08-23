@@ -36,6 +36,29 @@ class ShorelineWorld:
 		return "ocean" if x <= max_water_tile_x else "grassland"
 
 
+## Ocean everywhere (like StubWorld), but also records every
+## record_water_disturbance call so ripple-burst tests can inspect exactly
+## when/how many rings actually fired.
+class RippleTrackingWorld:
+	var positions: Array[Vector2] = []
+	func biome_at_global(_x: int, _y: int) -> String:
+		return "ocean"
+	func record_water_disturbance(world_pos: Vector2) -> void:
+		positions.append(world_pos)
+
+
+## Single-water-tile confinement (like SinglePondWorld) that ALSO tracks
+## ripple calls, so "a fish that cannot move never ripples" can assert on
+## the actual call count instead of only on position.
+class ConfinedRippleTrackingWorld:
+	var home_tile: Vector2i
+	var positions: Array[Vector2] = []
+	func biome_at_global(x: int, y: int) -> String:
+		return "ocean" if Vector2i(x, y) == home_tile else "grassland"
+	func record_water_disturbance(world_pos: Vector2) -> void:
+		positions.append(world_pos)
+
+
 var marker: FishMarker
 
 
@@ -51,6 +74,12 @@ func before_each():
 func after_each():
 	remove_child(marker)
 	marker.free()
+
+
+## See World's mouse-hover animal-name tooltip (docs feature request).
+func test_get_display_name_capitalizes_the_species():
+	marker.species = "goldfish"
+	assert_eq(marker.get_display_name(), "Goldfish")
 
 
 func test_position_changes_after_processing():
@@ -223,3 +252,189 @@ func test_fish_clearance_keeps_it_clear_of_the_waterline():
 			marker.position.x, water_edge_x - FishMarker.CLEARANCE_PX + 0.01,
 			"the fish's center must stay at least CLEARANCE_PX clear of the waterline (step %d)" % i
 		)
+
+
+# -- water-ripple bursts: "wagging the tail", not one poke at a time --------
+##
+## A real fish's stroke is several quick tail beats in a row, which push a
+## short STREAK of rings across the surface -- not one isolated ring, and not
+## a continuous churn either (see FishMarker.RIPPLE_INTERVAL_MIN's own doc
+## comment on staying unhurried against the shared disturbance buffer).
+## Reported directly: "It should produce a streak of rings but only when
+## wagging the tail, so that the interference creates a forward pattern,
+## just like when the player walks through water."
+
+## _step_water_ripple's movement gate needs one PRIOR position sample before
+## it can tell "did it move" -- so the very first call is always a silent
+## warm-up (see _last_ripple_check_position), never a trigger. Every test
+## below accounts for that one warm-up frame before the forced 0.01s interval
+## can actually fire.
+func test_a_ripple_trigger_fires_a_burst_of_several_rings_not_just_one():
+	var world := RippleTrackingWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker._water_ripple_interval = 0.01  # force the next tick to trigger a burst
+
+	marker._process(0.02)  # warm-up: establishes the prior-position sample
+	for i in FishMarker.TAIL_WAG_RING_COUNT:
+		marker._process(FishMarker.TAIL_WAG_RING_SPACING + 0.01)
+
+	assert_eq(world.positions.size(), FishMarker.TAIL_WAG_RING_COUNT)
+
+
+## The rings of one burst land at DIFFERENT moments (and therefore different
+## positions, since the fish keeps swimming) rather than all at once on the
+## triggering frame -- that's what makes it read as a streak/wake instead of
+## a single fat blob.
+func test_burst_rings_are_spaced_out_over_multiple_frames_not_fired_at_once():
+	var world := RippleTrackingWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker._water_ripple_interval = 0.01
+
+	marker._process(0.02)  # warm-up frame: no ring yet
+	assert_eq(world.positions.size(), 0, "the warm-up frame must not itself fire a ring")
+
+	marker._process(0.02)  # crosses the interval: first ring of the burst
+	assert_eq(world.positions.size(), 1, "only the burst's first ring should fire on the triggering frame")
+
+	marker._process(FishMarker.TAIL_WAG_RING_SPACING + 0.01)
+	assert_eq(world.positions.size(), 2, "the second ring should wait a full TAIL_WAG_RING_SPACING")
+
+
+## After a burst finishes, the fish goes back to gliding silently for a full
+## (unhurried) ripple_interval before the next wag -- it must not keep
+## streaming rings continuously.
+func test_no_further_rings_fire_immediately_after_a_burst_completes():
+	var world := RippleTrackingWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker._water_ripple_interval = 0.01
+
+	marker._process(0.02)  # warm-up
+	for i in FishMarker.TAIL_WAG_RING_COUNT:
+		marker._process(FishMarker.TAIL_WAG_RING_SPACING + 0.01)
+	assert_eq(world.positions.size(), FishMarker.TAIL_WAG_RING_COUNT, "precondition: burst finished")
+
+	marker._process(0.05)  # far short of another full ripple_interval
+	assert_eq(
+		world.positions.size(), FishMarker.TAIL_WAG_RING_COUNT,
+		"no new ring should fire until the next unhurried interval elapses"
+	)
+
+
+## The movement half of "only when wagging the tail": a fish that genuinely
+## cannot move (boxed into a single water tile) never fires a ripple at all,
+## no matter how long it sits there -- mirrors Player._step_water_ripples'
+## own gate on actually moving through the water.
+func test_a_fish_that_cannot_move_at_all_never_ripples():
+	var world := ConfinedRippleTrackingWorld.new()
+	world.home_tile = Vector2i(6, 6)
+	marker.home = Vector2(6.5 * TILE_SIZE, 6.5 * TILE_SIZE)
+	marker.position = marker.home
+	marker.setup(world, TILE_SIZE)
+	marker._water_ripple_interval = 0.01
+
+	for i in 50:
+		marker._process(0.3)
+
+	assert_eq(world.positions.size(), 0, "a fish that never actually moves should never ripple")
+
+
+# -- flap speed & shore-anticipation follow-up ------------------------------
+
+## Follow-up request: "also only when they flap tail fast" -- a burst isn't
+## just faster rings, the fish itself swims faster while it lasts.
+func test_fish_swims_faster_during_a_wag_burst_than_while_gliding():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker._water_ripple_interval = 0.01
+	marker._current_heading = Vector2.RIGHT
+
+	marker._process(0.02)  # warm-up: no burst yet
+	var before_trigger := marker.position
+	marker._process(0.02)  # triggers the burst -- flapping this frame
+	var flap_distance := before_trigger.distance_to(marker.position)
+
+	for i in FishMarker.TAIL_WAG_RING_COUNT:  # let the burst finish
+		marker._process(FishMarker.TAIL_WAG_RING_SPACING + 0.01)
+	var before_glide := marker.position
+	marker._process(0.02)  # an ordinary glide frame, same delta as above
+	var glide_distance := before_glide.distance_to(marker.position)
+
+	assert_gt(flap_distance, glide_distance, "a flapping fish should swim faster than a gliding one")
+
+
+## Follow-up request: "avoid trying to turn into the border of the water so
+## that the fish doesn't flicker when repelled from the edge" -- once the
+## heading has turned away from a shore a steering target keeps pointing at,
+## it must not keep swinging back toward land every other frame.
+func test_heading_does_not_flicker_back_toward_land_near_a_shore():
+	var world := ShorelineWorld.new()
+	marker.home = Vector2(6.0 * TILE_SIZE, 6.5 * TILE_SIZE)
+	marker.position = marker.home
+	marker.setup(world, TILE_SIZE)
+	marker.set_attraction(Vector2(20.0 * TILE_SIZE, 6.5 * TILE_SIZE))  # straight into land
+
+	# An occasional slow correction as the fish drifts along the shore is
+	# expected and fine (real "sliding along the shore" behavior); genuine
+	## "flicker" is the heading swinging back and forth EVERY frame, which
+	# used to happen because the smoothing target restarted its deflection
+	# search from scratch (toward the always-blocked raw attraction target)
+	# every single frame. Bounding total sign changes over the whole run
+	# distinguishes the two: dozens of transitions across 100 frames would
+	# be the old every-frame flicker; a small handful is just occasional
+	# drift-correction along the wall.
+	var transitions := 0
+	var was_facing_away := false
+	for i in 100:
+		marker._process(0.1)
+		var facing_away: bool = marker._current_heading.x <= 0.01
+		if i > 0 and facing_away != was_facing_away:
+			transitions += 1
+		was_facing_away = facing_away
+
+	assert_lte(transitions, 3, "the heading should not swing back and forth toward/away from the shore every frame")
+
+
+# -- a startled fish still cannot leave the water ----------------------------
+#
+# The first version of the escape moved the fish directly and returned before
+# the shore-clearance machinery ran, so a fish dodging a kingfisher shot
+# straight out of the water and flopped across the grass -- with the bird then
+# calmly following it onto land to eat it (reported exactly that way).
+
+## A pond with a real shore: water above tile row 8, land below it, so a fish
+## bolting "south" is bolting straight at the bank.
+class ShoreWorld:
+	func biome_at_global(_x: int, y: int) -> String:
+		return "ocean" if y < 8 else "grassland"
+
+
+func test_a_bolting_fish_stays_in_the_water():
+	var world := ShoreWorld.new()
+	var fish := FishMarker.new()
+	add_child_autofree(fish)
+	fish.home = Vector2(64.0, 64.0)  # tile row 4, well inside the water
+	fish.position = fish.home
+	fish.wander_seed = 5
+	fish.setup(world, TILE_SIZE)
+	# Startled from BELOW, so the escape heading points straight at the bank.
+	fish.bolt_from(fish.position + Vector2(0.0, 40.0))
+	for _i in 120:
+		fish._process(1.0 / 60.0)
+		var tile_y := int(floor(fish.position.y / float(TILE_SIZE)))
+		assert_lt(
+			tile_y, 8,
+			"a panicking fish must not flop onto the bank (ended at %s)" % str(fish.position)
+		)
+
+
+func test_a_bolt_is_faster_than_an_ordinary_swim():
+	assert_gt(FishMarker.BOLT_SPEED, CreatureWander.WANDER_SPEED * 2.0)
+
+
+func test_a_bolt_wears_off():
+	var fish := FishMarker.new()
+	add_child_autofree(fish)
+	fish.bolt_from(Vector2(10, 10))
+	assert_true(fish.is_bolting())
+	fish._process(FishMarker.BOLT_SECONDS + 0.1)
+	assert_false(fish.is_bolting(), "a fish calms down again")

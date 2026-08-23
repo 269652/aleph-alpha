@@ -44,3 +44,20 @@ func test_noise_wavelength_spans_multiple_tiles():
 
 func test_shared_material_is_reused():
 	assert_eq(tint.shared_material(), tint.shared_material())
+
+
+## The tint is a broad wash, not a per-pixel effect: evaluating its two noise
+## octaves per FRAGMENT cost eight sin-based hashes on every pixel of ground
+## on screen (~16M sin ops per frame at 1080p, measured as one of the three
+## biggest costs in the frame). A world tile spans about a tenth of a noise
+## cell, so per-vertex sampling is very nearly the same field for a fraction
+## of the work.
+func test_the_tint_noise_is_computed_per_vertex_not_per_pixel():
+	var code: String = GroundTint.SHADER_CODE
+	var vertex_body := code.substr(code.find("void vertex()"), code.find("void fragment()") - code.find("void vertex()"))
+	var fragment_body := code.substr(code.find("void fragment()"))
+	assert_string_contains(vertex_body, "value_noise", "the noise belongs in the vertex stage")
+	assert_false(
+		fragment_body.contains("value_noise"),
+		"no per-pixel noise: the fragment stage should only apply the interpolated tint"
+	)

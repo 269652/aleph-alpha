@@ -6,69 +6,295 @@ extends RefCounted
 ## edible) -> abscise (fall to the ground) -> the tree re-enters growing.
 ## Deterministic: purely a function of the genome and time, no RNG.
 
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
+
 ## Peak crop a maximally fruitful tree (fruit_yield == 1) can bear at once.
 const MAX_CROP := 12
 
-## Fraction of a bearing cycle spent growing immature fruit before any is ripe.
-const GROW_FRAC := 0.5
-## Fraction of a cycle at which ripe fruit begins to abscise (fall). Ripe fruit
-## hangs on the canopy from GROW_FRAC until here, then drops by cycle end.
-const ABSCISSION_START := 0.8
-## How much warmth (growing-degree-day analogue) speeds ripening: at warmth 1
-## the bearing cycle is this-many times shorter, so fruit ripens sooner.
-const WARMTH_SPEEDUP := 1.0
+## ## The crop follows the calendar
+##
+## A bearing cycle is a year, and the year is four seasons, so the phases are
+## expressed as the season boundaries they actually mean rather than as loose
+## fractions. Spring 0.00-0.25, summer 0.25-0.50, autumn 0.50-0.75, winter
+## 0.75-1.00 (see SeasonCycle).
+##
+## These were 0.5 and 0.8, which put the start of ripening at the start of
+## autumn and abscission at four fifths of the year -- MIDWINTER. Fruit hung on
+## bare branches through the cold and a good part of a crop never came down at
+## all, because the window ran off the end of the year (reported: fruit staying
+## on the tree until winter, and not all of it dropping).
+
+## ## Each species ripens at its own time
+##
+## Cherries ripen in early summer and apples in autumn; the nuts come down with
+## the leaves. One fixed ripening date for every tree in the world meant
+## nothing bore fruit through most of summer and a cherry tree never carried a
+## cherry when it should have (reported).
+##
+## Phases are year fractions: spring 0.00-0.25, summer 0.25-0.50, autumn
+## 0.50-0.75, winter 0.75-1.00 (see SeasonCycle). `ripe` is when the crop is
+## first ready, `fallen` when the last of it is down.
+const RIPENING_BY_SPECIES := {
+	# Early summer, and over before the apples are ready.
+	"cherry": {"ripe": 0.32, "fallen": 0.50},
+	# The classic autumn harvest.
+	"apple": {"ripe": 0.55, "fallen": 0.74},
+	# Nuts come down with the leaves.
+	"walnut": {"ripe": 0.58, "fallen": 0.74},
+	"hazelnut": {"ripe": 0.56, "fallen": 0.74},
+	"acorn": {"ripe": 0.60, "fallen": 0.74},
+	# Cones open late and hang on longest.
+	"pine": {"ripe": 0.62, "fallen": 0.74},
+}
+
+## Nothing ripens before the end of spring, however warm it is: a tree in
+## spring is still in blossom, and fruit cannot precede the flower.
+const EARLIEST_RIPE_PHASE := 0.25
+
+## What an unlisted species does: a plain autumn crop.
+const _DEFAULT_RIPENING := {"ripe": 0.55, "fallen": 0.74}
+
+## How far into its ripe window a crop starts dropping.
+##
+## Three points, not two: the fruit BECOMES ripe, hangs there a while, and then
+## abscises until none is left. Collapsing "becomes ripe" and "starts falling"
+## into one number made the whole stretch before ripening read as ripe --
+## a cherry tree carrying ripe fruit in early spring, before it had blossomed.
+const ABSCISSION_FRACTION := 0.4
 
 
-## Crop potential (max simultaneous ripe fruit) for a genome.
-func crop_potential(genome) -> int:
-	return int(round(genome.fruit_yield * MAX_CROP))
+static func _ripening_for(species: String) -> Dictionary:
+	return RIPENING_BY_SPECIES.get(species, _DEFAULT_RIPENING)
 
 
-## Length in seconds of one full grow->ripen->fall cycle, shortened by warmth.
-func _cycle_length(genome, warmth: float) -> float:
-	return genome.maturity_time / (1.0 + clampf(warmth, 0.0, 1.0) * WARMTH_SPEEDUP)
+## When this species' crop is first ripe, as a fraction of the year.
+static func ripe_phase_for(species: String) -> float:
+	return float(_ripening_for(species)["ripe"])
+
+
+## When the last of this species' crop is down.
+static func fallen_phase_for(species: String) -> float:
+	return float(_ripening_for(species)["fallen"])
+## How much warmth (growing-degree-day analogue) brings the harvest FORWARD,
+## as a fraction of the year.
+##
+## It used to shorten the whole bearing CYCLE, by up to half. That put the
+## crop on its own clock, drifting against the calendar: at full warmth a tree
+## bore twice a year, so half its harvests landed in winter and the phases
+## stopped meaning the seasons they are named after. A warm climate ripening
+## its fruit early is real; a tree that does not know when winter is, is not.
+##
+## The cycle is a year, always. Warmth moves the ripening window earlier
+## within it -- an early variety in a warm valley picks sooner -- and the crop
+## is still down before the frost.
+const WARMTH_EARLINESS := 0.08
+
+## Length of one bearing cycle at neutral warmth: a YEAR. A tree flowers,
+## sets fruit, ripens it and sheds it once through the seasons, which is what
+## the abscission window below is a window OF.
+##
+## This used to be genome.maturity_time -- 20 to 60 SECONDS. That is how long
+## a sapling takes to grow up (TreeMaturity), an entirely different quantity,
+## and borrowing it meant every mature tree shed its whole crop twice a
+## minute: a measured 1524 fruit per minute from a 40-tree stand against a
+## ground-item budget of 80, so the world churned a hundred-odd labelled,
+## clickable nodes a second and the ground under every tree carried stacks of
+## a hundred apples (reported: "way too much fruit are being dropped", and
+## the lag that came with it).
+##
+## It survived unnoticed for exactly the same reason the 30-second
+## reproduction cooldown did -- the ecology simulation was never actually
+## stepping (see World.owns_ecosystem_simulation_for), so nothing that
+## depended on real elapsed world time had ever been observed running.
+const BEARING_CYCLE_SECONDS := SeasonCycle.SECONDS_PER_YEAR
+
+
+## Crop potential (max simultaneous ripe fruit) for a genome, scaled by a
+## named species' own yield character (see TreeSpecies.yield_multiplier_for)
+## -- defaults to 1.0, reproducing the un-species'd behaviour exactly for any
+## caller that doesn't know about species yet.
+func crop_potential(genome, yield_multiplier: float = 1.0) -> int:
+	return int(round(genome.fruit_yield * MAX_CROP * yield_multiplier))
+
+
+## Length in seconds of one full grow->ripen->fall cycle: ONE YEAR, for every
+## species, always.
+##
+## Neither the genome nor the species scales this, and both were tried. The
+## species' ripening_multiplier used to scale it, which meant a cherry (0.65)
+## ran a bearing cycle two thirds of a year long and a pine (1.8) one nearly
+## two years long. The per-species phases below are fractions OF A YEAR --
+## cherry ripens at 0.32, early summer -- so applying them to a cycle that is
+## not a year put the fruit somewhere new every year. Measured before the fix:
+## a cherry shed 24 fruit a year in two windows, the second in the middle of
+## WINTER, while a pine shed NOTHING in a year at all (reported: fruit not
+## accumulating).
+##
+## That is the same conflation BEARING_CYCLE_SECONDS was introduced to kill,
+## coming back in through a different door. How fast a species ripens is WHEN
+## in the year it bears, which ripe_phase_for/fallen_phase_for already say. It
+## is not how OFTEN it bears: an apple tree and a pine both fruit once a year,
+## in different months.
+##
+## `genome`, `warmth` and `ripening_multiplier` are all accepted and unread.
+## Kept in the signature because per-genome bearing character (an early vs late
+## variety) is a plausible thing to reintroduce here deliberately -- but it
+## would belong in the PHASES, not in this length.
+func _cycle_length(_genome, _warmth: float, _ripening_multiplier: float = 1.0) -> float:
+	return BEARING_CYCLE_SECONDS
+
+
+## How far forward warmth brings the ripening window, as a phase offset.
+##
+## Only the two ripening phases move; the end of abscission stays pinned to the
+## end of autumn, because that boundary is the one thing the calendar decides
+## rather than the weather.
+static func _earliness(warmth: float) -> float:
+	return clampf(warmth, 0.0, 1.0) * WARMTH_EARLINESS
 
 
 ## {growing:int, ripe:int} at a point in time: immature and ripe-hanging counts.
-func state_at(genome, elapsed_seconds: float, warmth: float) -> Dictionary:
-	var crop := crop_potential(genome)
+func state_at(
+	genome, elapsed_seconds: float, warmth: float,
+	yield_multiplier: float = 1.0, ripening_multiplier: float = 1.0
+) -> Dictionary:
+	var crop := crop_potential(genome, yield_multiplier)
 	if crop <= 0:
 		return {"growing": 0, "ripe": 0}
-	var length := _cycle_length(genome, warmth)
-	var phase := fposmod(elapsed_seconds, length) / length
+	var phase := _phase_at(elapsed_seconds, genome, warmth, ripening_multiplier)
+	var window := _window_for(genome, warmth)
 	var growing := 0
-	var ripe := 0
-	if phase < GROW_FRAC:
-		growing = int(round(crop * (phase / GROW_FRAC)))
-	elif phase < ABSCISSION_START:
-		ripe = crop
-	else:
-		var remaining := 1.0 - (phase - ABSCISSION_START) / (1.0 - ABSCISSION_START)
-		ripe = int(round(crop * remaining))
-	return {"growing": growing, "ripe": ripe}
+	if phase < window.grow_end:
+		growing = int(round(crop * (phase / maxf(window.grow_end, 0.0001))))
+	# The ripe count IS the hanging count -- not a second opinion about it.
+	return {
+		"growing": growing,
+		"ripe": hanging_at(genome, elapsed_seconds, warmth, yield_multiplier, ripening_multiplier),
+	}
 
 
-## Ripe fruits abscised (fell) during (t0, t1]. Driven by the abscission window
-## of each bearing cycle; accumulates across repeated cycles.
-func fallen_between(genome, t0: float, t1: float, warmth: float) -> int:
-	if t1 <= t0:
-		return 0
-	var crop := crop_potential(genome)
+## How many of this tree's crop are still ON the tree at this moment.
+##
+## The single source of truth for a crop. What the canopy draws is this number,
+## and what falls between two moments is the DECREASE in it (see
+## fallen_between) -- so a fruit cannot hit the ground without leaving the tree,
+## because falling is leaving the tree.
+##
+## They used to be computed separately, from windows that disagreed about
+## warmth: the displayed window was shifted earlier by `_earliness` and the
+## falling window was not, so a tree ripened up to four days before its fruit
+## was willing to drop, and cherries hit the ground under a canopy drawn bare
+## (reported).
+func hanging_at(
+	genome, elapsed_seconds: float, warmth: float,
+	yield_multiplier: float = 1.0, ripening_multiplier: float = 1.0
+) -> int:
+	var crop := crop_potential(genome, yield_multiplier)
 	if crop <= 0:
 		return 0
-	var length := _cycle_length(genome, warmth)
-	return int(round(_cumulative_fallen(crop, length, t1) - _cumulative_fallen(crop, length, t0)))
+	var phase := _phase_at(elapsed_seconds, genome, warmth, ripening_multiplier)
+	return _hanging_at_phase(crop, phase, _window_for(genome, warmth))
 
 
-## Continuous count of fruits fallen from time 0 up to t (monotonic in t):
-## a full `crop` per completed cycle, ramping linearly through the abscission
-## window of the in-progress cycle.
-func _cumulative_fallen(crop: int, length: float, t: float) -> float:
+## Whole fruit still hanging at `phase` of the bearing cycle.
+##
+## Floored rather than rounded, and that matters: the fallen count is the
+## difference between two of these, so rounding would let a fruit appear to
+## fall and un-fall as the count rounded up and back down.
+func _hanging_at_phase(crop: int, phase: float, window: Dictionary) -> int:
+	if phase < window.grow_end:
+		return 0
+	if phase < window.fall_start:
+		return crop
+	if phase >= window.fall_end:
+		return 0
+	var remaining: float = 1.0 - (phase - window.fall_start) / maxf(
+		window.fall_end - window.fall_start, 0.0001
+	)
+	return clampi(int(floorf(crop * remaining)), 0, crop)
+
+
+## The three points of a bearing cycle: ripe, then dropping, then bare.
+##
+## Warmth can bring the harvest forward, but never before the blossom: a tree
+## cannot carry ripe fruit in spring, because in spring it is still flowering.
+## Without the clamp a warm-climate cherry ripened at 0.24 -- the last sliver of
+## spring -- which is a tree fruiting before it bloomed.
+func _window_for(genome, warmth: float) -> Dictionary:
+	var species := TreeSpecies.species_for_bias(genome.species_bias)
+	var grow_end := maxf(ripe_phase_for(species) - _earliness(warmth), EARLIEST_RIPE_PHASE)
+	var fall_end := maxf(fallen_phase_for(species), grow_end + 0.01)
+	return {
+		"grow_end": grow_end,
+		"fall_end": fall_end,
+		"fall_start": grow_end + (fall_end - grow_end) * ABSCISSION_FRACTION,
+	}
+
+
+func _phase_at(
+	elapsed_seconds: float, genome, warmth: float, ripening_multiplier: float
+) -> float:
+	var length := _cycle_length(genome, warmth, ripening_multiplier)
+	return fposmod(elapsed_seconds, length) / length
+
+
+## Which fruit of a crop of `crop` left the tree, given that `count` of them
+## did.
+##
+## From the TOP of the order down. Each fruit's position in the canopy comes
+## from its index and never moves, so a crop empties one fruit at a time from
+## its own scattered positions rather than thinning uniformly -- and the fruit
+## that leaves index k is the one that lands under where index k hung, which is
+## what makes it the same cherry rather than a new one.
+func fallen_indices(crop: int, count: int) -> Array:
+	var indices: Array = []
+	var taken := clampi(count, 0, maxi(crop, 0))
+	for step in taken:
+		indices.append(crop - 1 - step)
+	return indices
+
+
+## Ripe fruits that left the tree during (t0, t1].
+##
+## The DECREASE in the hanging count, not a separate integral over a separate
+## window. Computing the two independently is what let a tree drop cherries
+## while drawn bare: the windows disagreed about warmth (see hanging_at).
+##
+## Whole cycles in between are counted in full, so a span longer than a year
+## still yields a crop per year rather than only the part-cycle at each end.
+func fallen_between(
+	genome, t0: float, t1: float, warmth: float,
+	yield_multiplier: float = 1.0, ripening_multiplier: float = 1.0
+) -> int:
+	if t1 <= t0:
+		return 0
+	var crop := crop_potential(genome, yield_multiplier)
+	if crop <= 0:
+		return 0
+	var length := _cycle_length(genome, warmth, ripening_multiplier)
+	var window := _window_for(genome, warmth)
+
+	# Everything shed from time zero up to each end, differenced. Expressed as
+	# a cumulative count so that stepping the world in seconds and stepping it
+	# in years give the same answer: rounding each step's own increment instead
+	# is why nothing ever fell (fruiting steps once a second, and one second of
+	# a crop is a ten-thousandth of a fruit, which rounds to zero forever).
+	return _shed_by(crop, length, t1, window) - _shed_by(crop, length, t0, window)
+
+
+## Whole fruit shed from time 0 up to `t` -- a full crop per completed cycle,
+## plus however much of the current cycle's crop has already left the tree.
+func _shed_by(crop: int, length: float, t: float, window: Dictionary) -> int:
 	if t <= 0.0:
-		return 0.0
-	var full_cycles := floorf(t / length)
+		return 0
+	var full_cycles := int(floorf(t / length))
 	var phase := fposmod(t, length) / length
-	var partial := 0.0
-	if phase > ABSCISSION_START:
-		partial = (phase - ABSCISSION_START) / (1.0 - ABSCISSION_START)
-	return crop * (full_cycles + partial)
+	# Before it ripens nothing has been shed THIS cycle; the crop that is not
+	# hanging yet has not fallen, it has not grown.
+	var shed_this_cycle := 0
+	if phase >= window.grow_end:
+		shed_this_cycle = crop - _hanging_at_phase(crop, phase, window)
+	return full_cycles * crop + shed_this_cycle
+
+

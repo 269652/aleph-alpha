@@ -1,6 +1,27 @@
 extends GutTest
 
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
+const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
+
+
+## A tree of an illustrated species, which is what the branch-by-branch growth
+## applies to. TreeSpecies keys off a bias FLOAT rather than an id, so a test
+## that wants a particular species has to search for a bias that lands on it.
+func _tree() -> ChoppableTree:
+	var grown := ChoppableTree.new()
+	for step in 201:
+		var bias := float(step) / 200.0
+		if TreeSpecies.species_for_bias(bias) == "cherry":
+			grown.species_bias = bias
+			break
+	add_child_autofree(grown)
+	# The canopy sprite is TreeRenderer's in the real world; a test that wants
+	# to see what was drawn has to supply one.
+	var canopy := Sprite2D.new()
+	grown.add_child(canopy)
+	grown.bind_canopy(canopy)
+	return grown
 
 var tree: ChoppableTree
 
@@ -27,19 +48,23 @@ func test_take_damage_reduces_health():
 	assert_eq(tree.health, before - 5.0)
 
 
-func test_felling_drops_wood_and_sticks_via_the_world_item_bus():
+## Felling is now the FIRST half of the job: the tree goes over and lies there,
+## still holding its wood. Working it up is what drops anything.
+##
+## Both of these asserted the old behaviour -- that a killing blow sprayed
+## items and deleted the node -- which is the tree evaporating rather than
+## being cut down (reported). The drop itself is tested in
+## test_felled_tree.gd, against the fallen trunk that now produces it.
+func test_felling_does_not_drop_anything_yet():
 	watch_signals(WorldItemBus)
 	tree.take_damage(tree.health)
-	# Two stacks: the wood drop and a stick drop (crafting the crude blade
-	# needs sticks, and a felled tree is the natural stick source).
-	assert_signal_emit_count(WorldItemBus, "item_dropped", 2)
-	var second_stack = get_signal_parameters(WorldItemBus, "item_dropped", 1)[0]
-	assert_eq(second_stack.item.id, "stick")
+	assert_signal_emit_count(WorldItemBus, "item_dropped", 0)
 
 
-func test_felling_frees_the_node():
+func test_felling_leaves_the_trunk_lying_there():
 	tree.take_damage(tree.health)
-	assert_true(tree.is_queued_for_deletion())
+	assert_false(tree.is_queued_for_deletion(), "a felled tree should still be there")
+	assert_true(tree.is_felled())
 
 
 func test_a_non_lethal_hit_does_not_drop_wood_or_free_the_tree():
@@ -47,3 +72,85 @@ func test_a_non_lethal_hit_does_not_drop_wood_or_free_the_tree():
 	tree.take_damage(1.0)
 	assert_signal_emit_count(WorldItemBus, "item_dropped", 0)
 	assert_false(tree.is_queued_for_deletion())
+
+
+# -- a sapling has to actually grow ------------------------------------------
+
+## A planted sapling grew only when its chunk was unloaded and reloaded.
+##
+## `growth_scale` was set once, at spawn, from the tree's age at that moment,
+## and nothing ever touched it again -- so a sapling you watched stayed a
+## seedling forever, and the only way to see a tree mature was to walk away and
+## come back. Reported as newborn trees not maturing properly.
+func test_a_sapling_grows_as_it_ages():
+	var tree := ChoppableTree.new()
+	add_child_autofree(tree)
+	tree.planted_at = 0.0
+	tree.set_age(0.0)
+	var seedling := tree.growth_scale
+	tree.set_age(TreeGrowth.MATURITY_SECONDS)
+	assert_gt(tree.growth_scale, seedling, "the sapling never grew")
+
+
+func test_a_grown_tree_stops_growing():
+	var tree := ChoppableTree.new()
+	add_child_autofree(tree)
+	tree.set_age(TreeGrowth.MATURITY_SECONDS)
+	var grown := tree.growth_scale
+	tree.set_age(TreeGrowth.MATURITY_SECONDS * 10.0)
+	assert_almost_eq(tree.growth_scale, grown, 0.001)
+
+
+## Growth is monotonic -- a tree never shrinks.
+func test_a_tree_never_shrinks():
+	var tree := ChoppableTree.new()
+	add_child_autofree(tree)
+	var previous := 0.0
+	for step in 20:
+		tree.set_age(float(step) / 19.0 * TreeGrowth.MATURITY_SECONDS)
+		assert_gte(tree.growth_scale, previous)
+		previous = tree.growth_scale
+
+
+# -- a growing tree redraws its branches -------------------------------------
+
+## A young tree has FEWER BRANCHES, not a smaller picture. The node scale alone
+## drew a sapling as a full-grown tree in miniature -- every bough and twig, just
+## small -- which is what looked wrong. Growth now reaches the CANOPY as well, so
+## the crown fills in branch by branch as the tree ages.
+func test_ageing_a_tree_redraws_its_canopy():
+	var tree := _tree()
+	tree.set_age(0.0)
+	tree.set_ripe_fruit(0, "summer")
+	var sapling: Texture2D = tree._canopy_sprite.texture
+	tree.set_age(TreeGrowth.MATURITY_SECONDS * 2.0)
+	assert_ne(
+		tree._canopy_sprite.texture.get_image().get_data(),
+		sapling.get_image().get_data(),
+		"a grown tree should not carry a sapling's canopy"
+	)
+
+
+## Growing must not be mistaken for "nothing changed" by the redraw guard --
+## the guard compares crop and season, and age is neither.
+func test_growing_beats_the_redraw_guard():
+	var tree := _tree()
+	tree.set_ripe_fruit(0, "summer")
+	tree.set_age(0.0)
+	var sapling: Texture2D = tree._canopy_sprite.texture
+	tree.set_age(TreeGrowth.MATURITY_SECONDS * 2.0)
+	tree.set_ripe_fruit(0, "summer")
+	assert_ne(
+		tree._canopy_sprite.texture.get_image().get_data(),
+		sapling.get_image().get_data()
+	)
+
+
+## The node still shrinks -- a young tree really is shorter, and the trunk has
+## to come up with it. Fewer branches is IN ADDITION to that, not instead.
+func test_a_sapling_is_still_a_smaller_node():
+	var tree := _tree()
+	tree.set_age(0.0)
+	assert_lt(tree.scale.x, 1.0)
+	tree.set_age(TreeGrowth.MATURITY_SECONDS * 2.0)
+	assert_almost_eq(tree.scale.x, 1.0, 0.01)

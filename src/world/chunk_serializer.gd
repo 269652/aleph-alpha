@@ -75,3 +75,76 @@ func load_planted_trees(path: String) -> Array:
 	var data: Array = file.get_var()
 	file.close()
 	return data
+
+
+## Saves a chunk's aggregate fish population -- a single scalar, one file per
+## chunk like modifications/planted_trees (see
+## docs/concept/fishing.md#persistence-a-gap-shared-with-land-ecology-worth-closing-here-first).
+## Unlike herbivore/predator/vegetation state, this is meant to survive a
+## real game restart, not just an in-session unload/reload, so "fish a hole
+## out, come back tomorrow and it's still down" actually holds.
+func save_fish_population(fish_population: float, path: String) -> void:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_float(fish_population)
+	file.close()
+
+
+## Saves a chunk's land-ecology state so it survives a real game restart, not
+## just an in-session unload/reload.
+##
+## This was the gap save_fish_population's own comment named: fish persisted,
+## but herbivores, predators and vegetation lived only in EarthChunkManager's
+## in-memory `_unloaded_ecology`, so quitting the game reset every region to a
+## freshly-seeded population at full carrying capacity. A herd the player had
+## hunted down, or one they had watched grow, was back to default next time
+## they launched.
+##
+## `saved_at_unix` is WALL-CLOCK time, deliberately: the world is meant to
+## have moved on when the player comes back tomorrow, and the in-game clock
+## restarts with the session (see LifeCycle, which puts the whole growth
+## timescale on real days for the same reason).
+func save_ecology(state: Dictionary, path: String) -> void:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		return
+	file.store_float(float(state.get("herbivores", 0.0)))
+	file.store_float(float(state.get("predators", 0.0)))
+	file.store_float(float(state.get("vegetation", 0.0)))
+	file.store_double(float(state.get("saved_at_unix", 0.0)))
+	file.close()
+
+
+## Loads land-ecology state written by save_ecology. Returns an EMPTY
+## dictionary when there is no file, so callers can tell "never persisted"
+## from "persisted as zero" -- a region really can be hunted down to nothing,
+## and that is a fact worth keeping rather than silently re-seeding.
+func load_ecology(path: String) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {}
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var state := {
+		"herbivores": file.get_float(),
+		"predators": file.get_float(),
+		"vegetation": file.get_float(),
+		"saved_at_unix": file.get_double(),
+	}
+	file.close()
+	return state
+
+
+## Loads fish population previously written by save_fish_population, or 0.0
+## if the file doesn't exist. 0.0 is ALSO a legitimate persisted value (a
+## fished-out chunk) -- callers that need to distinguish "never persisted"
+## from "persisted as zero" must check FileAccess.file_exists themselves
+## (see EarthChunkManager), the same way load_modifications's empty-dict
+## default can't distinguish "never modified" from "modified back to empty".
+func load_fish_population(path: String) -> float:
+	if not FileAccess.file_exists(path):
+		return 0.0
+
+	var file := FileAccess.open(path, FileAccess.READ)
+	var data := file.get_float()
+	file.close()
+	return data

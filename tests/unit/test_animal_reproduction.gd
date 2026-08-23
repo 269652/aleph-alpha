@@ -100,3 +100,21 @@ func test_energy_after_birth_drops_below_threshold_from_max() -> void:
 
 func test_energy_after_birth_clamps_at_zero() -> void:
 	assert_eq(Repro.energy_after_birth(0.0), 0.0, "energy never goes negative after birth")
+
+
+## Requested: "reproduction should take at least 1 real day (24h)". At the
+## previous 30 seconds a fed animal bred twice a minute -- which only ever
+## looked acceptable because the ecology simulation was never running (see
+## World.owns_ecosystem_simulation_for); once it did, a clearing filled with
+## deer within a minute of play.
+func test_an_animal_cannot_breed_twice_within_a_real_day():
+	assert_gte(Repro.REPRO_COOLDOWN, 24.0 * 60.0 * 60.0)
+
+
+func test_a_well_fed_healthy_animal_still_waits_out_the_cooldown():
+	var almost: float = Repro.REPRO_COOLDOWN - 1.0
+	assert_false(
+		Repro.can_reproduce(1.0, 1.0, almost),
+		"perfect condition does not shorten the wait"
+	)
+	assert_true(Repro.can_reproduce(1.0, 1.0, Repro.REPRO_COOLDOWN))

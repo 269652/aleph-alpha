@@ -1,10 +1,13 @@
 extends GutTest
 
 ## WaterShader: the GPU water overlay (see water_shader.gd) -- continuous,
-## physically-inspired waves rendered in world space over ocean cells:
-## ambient wind chop, a shore reflection band, and raindrop ripples, all
-## summed into one interfering wave field. Contract tests only; the visual
-## result can't be asserted headless.
+## physically-inspired waves rendered in world space over ocean cells: a
+## shore reflection band, raindrop ripples, and movement-disturbance ripples
+## (fish/players/animals in water -- see EarthChunkManager.
+## record_water_disturbance), all summed into one interfering wave field.
+## Deliberately NOT wind-driven: undisturbed water with nothing moving in or
+## over it stays flat. Contract tests only; the visual result can't be
+## asserted headless.
 
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 
@@ -50,14 +53,29 @@ func test_shader_samples_the_tile_texture_as_shore_distance():
 	assert_string_contains(code, "shore_dist")
 
 
-## Incident + reflected wave components summed near the coast -- a real
-## standing-wave interference pattern at a boundary ("waves bounce off the
-## shore"), confined near shore and fading in open water.
-func test_shader_sums_an_incident_and_reflected_wave_near_shore():
+## The shore-reflection standing wave is GONE, and must stay gone.
+##
+## It was `sin(shore_dist * k) * cos(TIME * omega)` -- a standing wave whose
+## amplitude pulsed the ENTIRE body of water in lockstep, every pixel rising
+## and falling together. Invisible while an ambient wind term dominated the
+## field; once ambient was removed and the crest thresholds corrected, it
+## became the loudest thing on screen (reported: "it cascades over the whole
+## body of water causing chain reactions and not only a ripple at the point
+## where moving is"). It is also unphysical here: with no ambient waves,
+## there is nothing arriving at the shore to reflect.
+## Checks the identifiers the standing wave was actually built from, rather
+## than prose words like "reflected" that legitimately appear in the comment
+## explaining why it was removed.
+func test_shader_has_no_pond_wide_standing_wave():
 	var code: String = WaterShader.SHADER_CODE
-	assert_string_contains(code, "incident")
-	assert_string_contains(code, "reflected")
-	assert_string_contains(code, "shore_band")
+	for identifier in ["shore_bounce", "shore_band"]:
+		assert_false(code.contains(identifier), "%s would pulse the whole pond in sync" % identifier)
+
+
+## Shore distance is still read -- it drives the alpha fade into the
+## coastline, which is a static edge blend, not a moving wave.
+func test_shore_distance_still_drives_the_coastline_alpha_fade():
+	assert_string_contains(WaterShader.SHADER_CODE, "edge_alpha")
 
 
 # -- raindrop ripples --------------------------------------------------------
@@ -110,12 +128,123 @@ func test_deep_color_is_darker_and_more_saturated_than_crest():
 	assert_lt(WaterShader.DEEP_COLOR.r, WaterShader.DEEP_COLOR.b, "deep should read blue too")
 
 
-## Most of the noise range must stay near "deep" -- only genuine peaks reach
-## "crest" -- so the surface reads as a dominant blue body with modest
-## highlights, not a wide pale wash.
-func test_wave_blend_thresholds_keep_most_of_the_range_deep():
-	assert_gt(WaterShader.WAVE_LOW_THRESHOLD, 0.45)
+## Undisturbed water must stay deep-colored, so the surface reads as a
+## dominant blue body rather than a wide pale wash.
+##
+## This used to assert WAVE_LOW_THRESHOLD > 0.45, which made sense only while
+## an ambient wind-noise term held the wave field at a constant ~0.5
+## baseline. Once that ambient term was removed (ripples come from rain and
+## movement now, not wind), open water sits at 0.0 and a 0.55 floor meant a
+## ripple had to reach 0.61 before it tinted ANYTHING -- which no ripple did
+## except in its first fraction of a second at near-zero radius. That is the
+## "sometimes a mini ripple appears but nothing looks natural" report. The
+## intent is preserved; the ambient-era magic number is not.
+func test_wave_blend_thresholds_keep_undisturbed_water_deep():
+	assert_gt(WaterShader.WAVE_LOW_THRESHOLD, 0.0, "flat water must not already be tinted toward crest")
 	assert_gt(WaterShader.WAVE_HIGH_THRESHOLD, WaterShader.WAVE_LOW_THRESHOLD)
+
+
+# -- ripple shape + visibility over a full lifetime ---------------------------
+#
+# ripple_amplitude mirrors the shader's ripple_packet math on the CPU (the
+# shader itself can't be asserted headlessly), so the tuning that decides
+# whether a ripple is actually VISIBLE is a tested function rather than
+# eyeballed shader literals.
+
+## The peak of the first ring sits a quarter-wavelength behind the wave
+## front -- the distance at which a ripple is brightest for a given age.
+func _first_crest_distance(age: float) -> float:
+	return age * WaterShader.RIPPLE_SPEED - WaterShader.RIPPLE_WAVELENGTH * 0.25
+
+
+## The regression that made ripples effectively invisible: amplitude decayed
+## so fast (and the crest threshold sat so high) that only the first instant
+## cleared it. A ripple must stay above the crest threshold across its life,
+## not just at birth.
+func test_a_ripple_stays_visible_across_its_whole_lifetime():
+	for fraction in [0.25, 0.5, 0.75]:
+		var age: float = WaterShader.RIPPLE_LIFETIME * fraction
+		var amplitude := WaterShader.ripple_amplitude(_first_crest_distance(age), age)
+		assert_gt(
+			amplitude, WaterShader.WAVE_LOW_THRESHOLD,
+			"a ripple at %d%% of its life should still be visible" % int(fraction * 100.0)
+		)
+
+
+## A ripple fades as it goes -- a dying ring must not be as bright as a fresh
+## one, or it reads as a hard-edged expanding disc rather than water.
+func test_a_ripple_fades_as_it_ages():
+	var young: float = WaterShader.RIPPLE_LIFETIME * 0.25
+	var old: float = WaterShader.RIPPLE_LIFETIME * 0.75
+	assert_gt(
+		WaterShader.ripple_amplitude(_first_crest_distance(young), young),
+		WaterShader.ripple_amplitude(_first_crest_distance(old), old)
+	)
+
+
+## Real ripples are several concentric rings, not one lone circle -- the
+## packet has to be wide enough to hold more than one wavelength, and the
+## amplitude must actually change sign across it (crest, trough, crest).
+func test_a_ripple_is_several_concentric_rings_not_a_single_circle():
+	assert_gt(
+		WaterShader.RIPPLE_PACKET_WIDTH, WaterShader.RIPPLE_WAVELENGTH,
+		"the packet must span more than one wavelength to show multiple rings"
+	)
+	var age: float = WaterShader.RIPPLE_LIFETIME * 0.5
+	var front: float = age * WaterShader.RIPPLE_SPEED
+	var saw_crest := false
+	var saw_trough := false
+	for step in 40:
+		var dist: float = front - float(step) * WaterShader.RIPPLE_WAVELENGTH * 0.1
+		var amplitude := WaterShader.ripple_amplitude(dist, age)
+		if amplitude > 0.05:
+			saw_crest = true
+		if amplitude < -0.05:
+			saw_trough = true
+	assert_true(saw_crest and saw_trough, "a ripple should show both crests and troughs")
+
+
+## Nothing should appear ahead of the wave front -- water further out hasn't
+## been reached yet.
+func test_no_ripple_appears_ahead_of_the_wave_front():
+	var age: float = WaterShader.RIPPLE_LIFETIME * 0.5
+	var far_ahead: float = age * WaterShader.RIPPLE_SPEED + WaterShader.RIPPLE_PACKET_WIDTH * 6.0
+	assert_almost_eq(WaterShader.ripple_amplitude(far_ahead, age), 0.0, 0.01)
+
+
+func test_a_ripple_is_gone_once_past_its_lifetime():
+	var past: float = WaterShader.RIPPLE_LIFETIME + 0.1
+	assert_eq(WaterShader.ripple_amplitude(past * WaterShader.RIPPLE_SPEED, past), 0.0)
+
+
+## A wake has to cover enough water to read as a wake (a ripple dying inside
+## its own tile is the "mini ripple" symptom) -- but NOT so much that one
+## fish swamps a whole pond, which is what a 3+ tile radius did (reported:
+## "it cascades over the whole body of water"). Bounded on both sides.
+func test_a_wake_spreads_beyond_its_own_tile_but_does_not_swamp_a_pond():
+	var max_radius: float = WaterShader.RIPPLE_LIFETIME * WaterShader.RIPPLE_SPEED
+	assert_gt(max_radius, 1.5 * 16.0, "a wake should reach past the tile it started in")
+	assert_lt(max_radius, 2.5 * 16.0, "a single wake should not span a whole pond")
+
+
+## A raindrop is a small splash, not a swimmer's wake -- rain gets its own,
+## much tighter tuning. Sharing the wake's packet made every drop a
+## multi-tile bullseye (reported: "the ripples don't look as natural").
+func test_a_raindrop_splash_is_much_smaller_than_a_movement_wake():
+	var rain_radius: float = WaterShader.RAIN_RIPPLE_LIFETIME * WaterShader.RAIN_RIPPLE_SPEED
+	var wake_radius: float = WaterShader.RIPPLE_LIFETIME * WaterShader.RIPPLE_SPEED
+	assert_lt(rain_radius, wake_radius * 0.5, "a raindrop splash should be far smaller than a wake")
+	assert_lt(rain_radius, 16.0, "a raindrop splash should stay within about a tile")
+
+
+## The shader must actually be fed the same tuning the CPU mirror tests --
+## duplicated literals in the shader source would let the two drift apart.
+func test_make_material_pushes_the_ripple_tuning_uniforms():
+	var material := water.make_material()
+	assert_eq(material.get_shader_parameter("ripple_speed"), WaterShader.RIPPLE_SPEED)
+	assert_eq(material.get_shader_parameter("ripple_wavelength"), WaterShader.RIPPLE_WAVELENGTH)
+	assert_eq(material.get_shader_parameter("ripple_packet_width"), WaterShader.RIPPLE_PACKET_WIDTH)
+	assert_eq(material.get_shader_parameter("ripple_spread_decay"), WaterShader.RIPPLE_SPREAD_DECAY)
 
 
 func test_make_material_sets_the_color_and_threshold_uniforms():
@@ -126,22 +255,32 @@ func test_make_material_sets_the_color_and_threshold_uniforms():
 	assert_eq(material.get_shader_parameter("wave_high_threshold"), WaterShader.WAVE_HIGH_THRESHOLD)
 
 
-# -- wind-driven pacing (calmer on a clear day, more hectic in a storm) -------
+# -- wind animates the SURFACE, but never creates ripples --------------------
+#
+# Two different things got conflated. "Ripples" -- discrete expanding rings --
+# must come only from rain and from things moving through the water. But the
+# ambient wind-paced chop that gives the surface its living shimmer is
+# surface TEXTURE, not a ripple, and removing it outright left the water
+# looking dead (reported: "the wind animation on water is gone from the
+# shader"). Wind is back, as its own subtle term that never feeds the ripple
+# wave field.
 
-## wind_strength scales the ambient wave's effective time-rate -- water idles
-## gently on a clear day and churns faster/choppier as weather worsens (see
-## WeatherModel.wind_strength_for, EarthChunkManager.set_wind_strength).
-func test_shader_has_a_wind_strength_uniform_with_a_calm_default():
+func test_wind_still_animates_the_water_surface():
 	var material := water.make_material()
 	assert_eq(material.get_shader_parameter("wind_strength"), WaterShader.DEFAULT_WIND_STRENGTH)
-	assert_string_contains(WaterShader.SHADER_CODE, "uniform float wind_strength")
+	assert_string_contains(WaterShader.SHADER_CODE, "wind_chop")
 
 
-## wind_strength must actually reach the scrolling ambient-wave time term, not
-## just exist as an inert uniform.
-func test_wind_strength_scales_the_ambient_wave_scroll_rate():
+## The ripple wave field must be built from rain and movement ONLY -- if
+## wind fed into it, undisturbed water would ring by itself again.
+func test_the_ripple_wave_field_is_only_rain_and_movement():
 	var code: String = WaterShader.SHADER_CODE
-	assert_string_contains(code, "scroll_speed * wind_strength")
+	var line_start := code.find("float wave = ")
+	var wave_line := code.substr(line_start, code.find(";", line_start) - line_start)
+	assert_string_contains(wave_line, "rain")
+	assert_string_contains(wave_line, "movement")
+	assert_false(wave_line.contains("wind"), "wind must not feed the ripple field: %s" % wave_line)
+	assert_false(wave_line.contains("chop"), "chop must not feed the ripple field: %s" % wave_line)
 
 
 func test_set_wind_strength_updates_the_shared_materials_uniform():
@@ -150,3 +289,106 @@ func test_set_wind_strength_updates_the_shared_materials_uniform():
 	assert_eq(material.get_shader_parameter("wind_strength"), 1.4)
 	water.set_wind_strength(WaterShader.DEFAULT_WIND_STRENGTH)
 	assert_eq(material.get_shader_parameter("wind_strength"), WaterShader.DEFAULT_WIND_STRENGTH)
+
+
+## Every loaded fish emits a wake on a timer, including ones far off-screen.
+## With only 8 slots the buffer churned so fast that a ripple was evicted
+## almost the instant it appeared -- which is why rain (an independent hashed
+## grid) rendered fine while movement wakes stayed invisible.
+func test_there_are_enough_disturbance_slots_for_several_concurrent_wakes():
+	assert_gte(WaterShader.MAX_DISTURBANCES, 16)
+
+
+# -- movement-disturbance ripples (fish, players/animals in water) -----------
+#
+# The same expanding-ring technique as raindrop_ripples, anchored to
+# explicit recorded positions and a CPU-driven age instead of a hashed grid
+# (see EarthChunkManager.record_water_disturbance/step_water_disturbances).
+#
+# Age is pushed from GDScript every frame (advance_disturbances), NOT
+# computed in the shader from TIME minus a stored CPU timestamp: the
+# shader's TIME and Time.get_ticks_msec() are independent clocks with no
+# guaranteed epoch alignment, which silently made every ripple's age always
+# out of range and so always discarded -- ripples that updated their
+# uniforms correctly but never actually appeared (reported: "neither the
+# fish nor player or creature movement cause ripples").
+
+func test_shader_has_disturbance_uniforms_defaulting_to_none():
+	var material := water.make_material()
+	assert_eq(material.get_shader_parameter("disturbance_count"), 0)
+	# Sized from MAX_DISTURBANCES so the shader arrays and the GDScript
+	# buffer can never silently disagree about capacity.
+	var size := WaterShader.MAX_DISTURBANCES
+	assert_string_contains(WaterShader.SHADER_CODE, "uniform vec2 disturbance_pos[%d]" % size)
+	assert_string_contains(WaterShader.SHADER_CODE, "uniform float disturbance_age[%d]" % size)
+
+
+func test_shader_generates_movement_ripples_that_feed_the_combined_wave_field():
+	var code: String = WaterShader.SHADER_CODE
+	assert_string_contains(code, "movement_ripples")
+	assert_string_contains(code, "float wave = ")
+
+
+## The shader must NOT derive a disturbance's age from its own TIME uniform
+## minus a stored value -- see the section comment above.
+func test_movement_ripples_does_not_derive_age_from_shader_time():
+	var code: String = WaterShader.SHADER_CODE
+	var fn_start := code.find("float movement_ripples")
+	var fn_end := code.find("\n}", fn_start)
+	var fn_body := code.substr(fn_start, fn_end - fn_start)
+	assert_false(fn_body.contains("TIME"), "movement_ripples must use the pushed disturbance_age, not TIME")
+
+
+func test_set_disturbances_updates_the_shared_materials_uniforms():
+	var material := water.shared_material()
+	var positions := PackedVector2Array([Vector2(10, 20), Vector2(30, 40)])
+	var ages := PackedFloat32Array([0.3, 0.9])
+	water.set_disturbances(positions, ages, 2)
+	assert_eq(material.get_shader_parameter("disturbance_count"), 2)
+	assert_eq(material.get_shader_parameter("disturbance_pos"), positions)
+	assert_eq(material.get_shader_parameter("disturbance_age"), ages)
+
+
+## Positions/ages must always be padded to the fixed shader array size
+## (MAX_DISTURBANCES), or Godot has nothing to assign for the unused slots.
+func test_add_disturbance_pads_arrays_to_the_fixed_shader_size():
+	var material := water.shared_material()
+	water.add_disturbance(Vector2(5, 5))
+	var positions: PackedVector2Array = material.get_shader_parameter("disturbance_pos")
+	var ages: PackedFloat32Array = material.get_shader_parameter("disturbance_age")
+	assert_eq(positions.size(), WaterShader.MAX_DISTURBANCES)
+	assert_eq(ages.size(), WaterShader.MAX_DISTURBANCES)
+	assert_eq(material.get_shader_parameter("disturbance_count"), 1)
+
+
+func test_a_freshly_added_disturbance_starts_at_age_zero():
+	var material := water.shared_material()
+	water.add_disturbance(Vector2(5, 5))
+	var ages: PackedFloat32Array = material.get_shader_parameter("disturbance_age")
+	assert_eq(ages[0], 0.0)
+
+
+## The whole point: a ripple must actually expand/fade over real frames, not
+## sit frozen at age 0 forever.
+func test_advance_disturbances_ages_a_live_disturbance():
+	var material := water.shared_material()
+	water.add_disturbance(Vector2(5, 5))
+	water.advance_disturbances(0.5)
+	var ages: PackedFloat32Array = material.get_shader_parameter("disturbance_age")
+	assert_almost_eq(ages[0], 0.5, 0.001)
+
+
+func test_advance_disturbances_drops_a_disturbance_past_its_lifetime():
+	var material := water.shared_material()
+	water.add_disturbance(Vector2(5, 5))
+	water.advance_disturbances(WaterShader.DISTURBANCE_LIFETIME + 0.1)
+	assert_eq(material.get_shader_parameter("disturbance_count"), 0)
+
+
+## Oldest disturbance drops once the cap is exceeded, so the array never
+## silently grows unbounded.
+func test_add_disturbance_drops_the_oldest_once_past_the_cap():
+	var material := water.shared_material()
+	for i in WaterShader.MAX_DISTURBANCES + 3:
+		water.add_disturbance(Vector2(float(i), 0.0))
+	assert_eq(material.get_shader_parameter("disturbance_count"), WaterShader.MAX_DISTURBANCES)

@@ -94,8 +94,8 @@ func test_lynx_is_an_aggressive_predator():
 
 # -- biome-specific species (see CreatureRenderer's per-biome species pools) --
 
-const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat"]
-const NEW_PREDATOR_SPECIES := ["jackal", "arctic_fox", "jaguar", "mountain_lion"]
+const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat", "mouse", "horse", "deer", "nonvenomous_snake"]
+const NEW_PREDATOR_SPECIES := ["jackal", "arctic_fox", "jaguar", "mountain_lion", "bear", "lion", "venomous_snake"]
 
 
 func test_camel_is_a_calm_herbivore_that_is_not_a_predator():
@@ -149,6 +149,99 @@ func test_mountain_lion_is_an_aggressive_predator():
 	var mountain_lion_info := CreatureInfo.new("mountain_lion")
 	assert_eq(mountain_lion_info.temperament, "aggressive")
 	assert_true(mountain_lion_info.is_predator)
+
+
+# -- mice and horses (see docs/concept/ecosystem_dynamics.md's Species roster) --
+
+func test_mouse_is_a_calm_herbivore_that_is_not_a_predator():
+	var mouse_info := CreatureInfo.new("mouse")
+	assert_eq(mouse_info.temperament, "calm")
+	assert_false(mouse_info.is_predator)
+
+
+func test_horse_is_a_calm_herbivore_that_is_not_a_predator():
+	var horse_info := CreatureInfo.new("horse")
+	assert_eq(horse_info.temperament, "calm")
+	assert_false(horse_info.is_predator)
+
+
+## Mouse is the smallest/frailest creature in the roster -- a real-world-
+## grounded distinction (it's a mouse), not an arbitrary stat pick.
+func test_mouse_has_less_health_than_every_other_species():
+	var mouse_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["mouse"]
+	for species in CreatureInfo.MAX_HEALTH_BY_SPECIES:
+		if species == "mouse":
+			continue
+		assert_lt(
+			mouse_health, CreatureInfo.MAX_HEALTH_BY_SPECIES[species],
+			"mouse should be the smallest/frailest species"
+		)
+
+
+## Real horses are known for endurance -- higher stamina than any other
+## herbivore-role species, a real-world-grounded distinction.
+func test_horse_has_the_highest_stamina_among_herbivore_role_species():
+	var horse_stamina: float = CreatureInfo.MAX_STAMINA_BY_SPECIES["horse"]
+	for species in ["herbivore", "boar", "camel", "reindeer", "tapir", "goat", "mouse"]:
+		assert_gte(
+			horse_stamina, CreatureInfo.MAX_STAMINA_BY_SPECIES[species],
+			"horse should have real-world-grounded high stamina/endurance"
+		)
+
+
+# -- bear, deer, lion, and both snakes (see docs/concept/ecosystem_dynamics.md's
+# Region difficulty section) -------------------------------------------------
+
+func test_deer_is_a_calm_herbivore_that_is_not_a_predator():
+	var deer_info := CreatureInfo.new("deer")
+	assert_eq(deer_info.temperament, "calm")
+	assert_false(deer_info.is_predator)
+
+
+func test_bear_is_an_aggressive_predator():
+	var bear_info := CreatureInfo.new("bear")
+	assert_eq(bear_info.temperament, "aggressive")
+	assert_true(bear_info.is_predator)
+
+
+func test_lion_is_an_aggressive_predator():
+	var lion_info := CreatureInfo.new("lion")
+	assert_eq(lion_info.temperament, "aggressive")
+	assert_true(lion_info.is_predator)
+
+
+## Bear/lion are meant to be the new apex tier -- meaningfully tougher than
+## the existing predator roster, matching their HARD region-difficulty gate
+## (see region_difficulty.gd).
+func test_bear_and_lion_have_more_health_than_every_existing_predator():
+	var existing_predators := ["predator", "lynx", "jackal", "arctic_fox", "jaguar", "mountain_lion"]
+	for apex in ["bear", "lion"]:
+		var apex_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES[apex]
+		for species in existing_predators:
+			assert_gt(
+				apex_health, CreatureInfo.MAX_HEALTH_BY_SPECIES[species],
+				"%s should be tougher than %s" % [apex, species]
+			)
+
+
+func test_nonvenomous_snake_is_a_calm_herbivore_role_that_is_not_a_predator():
+	var info := CreatureInfo.new("nonvenomous_snake")
+	assert_eq(info.temperament, "calm")
+	assert_false(info.is_predator)
+
+
+func test_venomous_snake_is_an_aggressive_predator():
+	var info := CreatureInfo.new("venomous_snake")
+	assert_eq(info.temperament, "aggressive")
+	assert_true(info.is_predator)
+
+
+## Venom is the real danger, not raw combat stats -- venomous_snake should
+## be fragile in a straight fight, unlike bear/lion.
+func test_venomous_snake_is_frailer_than_bear_and_lion():
+	var snake_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["venomous_snake"]
+	assert_lt(snake_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["bear"])
+	assert_lt(snake_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["lion"])
 
 
 func test_every_new_species_has_positive_health_stamina_and_mana_and_a_known_diet():

@@ -42,8 +42,9 @@ post-MVP or open questions, not blocking the first playable build:
 
 ## Open questions (to resolve during MVP work, not blocking day 1)
 
-- Quest template design: what's the minimal set of need-driven quest shapes
-  (fetch/protect/deliver/...) that feels good and is hard to exploit?
+- ~~Quest template design: what's the minimal set of need-driven quest shapes
+  (fetch/protect/deliver/...) that feels good and is hard to exploit?~~
+  Resolved (2026-08-13) — see [quests.md](quests.md).
 - How much of an NPC's memory log actually needs to feed back into the daily
   planning prompt before cost/context size becomes a problem?
 - LLM backend choice for NPCs: hosted API (cost/latency at N NPCs) vs. local

@@ -1,6 +1,7 @@
 extends GutTest
 
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
 
 var stone: SmashableStone
 
@@ -11,13 +12,22 @@ func before_each():
 	add_child_autofree(stone)
 
 
+## How many strikes the default-sized stone needs to break -- boulders take
+## real work now (see docs/concept/stone.md), so a single smash() no longer
+## breaks one outright. Reading this from StoneSize rather than hardcoding a
+## hit count keeps the test honest against whatever that function decides.
+func _hits_to_break() -> int:
+	return StoneSize.hits_to_smash(stone.diameter_cm)
+
+
 func test_is_in_the_stone_group():
 	assert_true(stone.is_in_group(SmashableStone.GROUP_NAME))
 
 
 func test_smashing_bare_handed_yields_the_rock_itself():
 	watch_signals(WorldItemBus)
-	stone.smash(false)
+	for _i in _hits_to_break():
+		stone.smash(false)
 	assert_signal_emit_count(WorldItemBus, "item_dropped", 1)
 	var stack = get_signal_parameters(WorldItemBus, "item_dropped", 0)[0]
 	assert_eq(stack.item.id, "rock")
@@ -38,7 +48,10 @@ func test_smashing_with_a_rock_in_hand_can_also_yield_sharp_shards():
 
 	stone.stone_seed = lucky_seed
 	watch_signals(WorldItemBus)
-	stone.smash(true)
+	# Only the breaking strike carries the knapping roll (see smash()), so
+	# knapping the whole way through still yields exactly one shard stack.
+	for _i in _hits_to_break():
+		stone.smash(true)
 	assert_signal_emit_count(WorldItemBus, "item_dropped", 2)
 	var shard_stack = get_signal_parameters(WorldItemBus, "item_dropped", 1)[0]
 	assert_eq(shard_stack.item.id, "sharp_shard")
@@ -56,5 +69,6 @@ func test_a_failed_knapping_roll_still_yields_the_rock_but_no_shards():
 
 	stone.stone_seed = unlucky_seed
 	watch_signals(WorldItemBus)
-	stone.smash(true)
+	for _i in _hits_to_break():
+		stone.smash(true)
 	assert_signal_emit_count(WorldItemBus, "item_dropped", 1)

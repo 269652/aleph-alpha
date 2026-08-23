@@ -110,6 +110,20 @@ func property_value(material: String, property_name: String) -> float:
 	return vector.get(property_name, DEFAULT_PROPERTIES.get(property_name, 1.0))
 
 
+## Real mass in kilograms for `volume_cm3` of `material` -- density is
+## already expressed in real g/cm^3 (relative to water == 1.0 g/cm^3, see
+## DEFAULT_PROPERTIES' own doc comment), so this is exactly density x volume,
+## the same "density x volume" shape StoneSize.mass_kg_for uses for a stone's
+## sphere volume, generalized to an arbitrary item (see item_catalog.gd's
+## weapon mass wiring). Feeds the shared momentum model (docs/concept/
+## materials.md's momentum = mass * velocity, impact_resolver.gd/
+## throwable.gd) for weapons/tools the same way StoneSize.mass_kg_for feeds
+## it for loose stone.
+func mass_kg_for(material: String, volume_cm3: float) -> float:
+	var density_g_per_cm3 := property_value(material, "density")
+	return density_g_per_cm3 * volume_cm3 / 1000.0
+
+
 ## Traversal-tool viability per docs/concept/transportation.md's "Traversal
 ## tools" section: a raft needs a buoyant (low-density) material, a grapple
 ## rope needs a tough material. Unknown tool types are never viable.

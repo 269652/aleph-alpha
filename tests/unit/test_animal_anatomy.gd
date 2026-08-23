@@ -93,3 +93,81 @@ func test_all_proportions_are_canvas_fractions():
 
 func test_profiles_are_deterministic():
 	assert_eq(AnimalAnatomy.profile_for("wolf"), AnimalAnatomy.profile_for("wolf"))
+
+
+## Reported: "the horse should have a straighter back" -- a real horse's
+## topline reads as level, unlike the humped rooters (boar/camel/bear) that
+## carry extra rise over the shoulders on purpose.
+func test_a_horses_back_is_level_not_humped():
+	var horse := AnimalAnatomy.profile_for("horse")
+	var camel := AnimalAnatomy.profile_for("camel")
+	var boar := AnimalAnatomy.profile_for("boar")
+	assert_almost_eq(horse.shoulder_hump, 0.0, 0.001, "a horse's topline should read as level")
+	assert_lt(horse.shoulder_hump, camel.shoulder_hump)
+	assert_lt(horse.shoulder_hump, boar.shoulder_hump)
+
+
+## Reported: "less flat head" -- the horse's head should read as deep
+## (forehead-to-jaw), not a paper-thin plank with a long snout tacked on.
+func test_a_horses_head_is_not_flat():
+	var horse := AnimalAnatomy.profile_for("horse")
+	var deer := AnimalAnatomy.profile_for("deer")
+	assert_gt(horse.head_height, deer.head_height, "a horse's head should read as deep, not flat")
+
+
+## Reported again later, alongside "less flat head, more horsish" and
+## "slightly smaller legs" -- shoulder_hump alone (see the level-back test
+## above) wasn't enough: ProceduralAnimalSprite._paint_animal attaches every
+## species' neck partway down the body's side by default, and a horse's
+## unusually long neck made that fixed attachment point read as a notch cut
+## into an otherwise-level topline instead of one continuous slope from
+## withers to poll. neck_attach_height lets a species attach its neck closer
+## to the back's own top edge; only horse sets it today.
+func test_a_horses_neck_attaches_near_the_top_of_its_back_not_partway_down():
+	var horse := AnimalAnatomy.profile_for("horse")
+	var deer := AnimalAnatomy.profile_for("deer")
+	assert_gt(
+		horse.get("neck_attach_height", 0.45), 0.6,
+		"a horse's neck should attach near the top of the back, not partway down"
+	)
+	# Every other species keeps today's implicit 0.45 (see
+	# ProceduralAnimalSprite._paint_animal's own .get() fallback) -- this is
+	# an opt-in per-species override, not a default every animal now gets.
+	assert_false(deer.has("neck_attach_height"))
+
+
+## A real horse's head is long and narrow, not a short round blob -- the
+## same "more horsish" report as the flatness fix above, but about
+## elongation rather than depth. Compared proportionally (length ÷ height)
+## against a generic grazer rather than as a raw length, since a longer head
+## on a bigger animal alone wouldn't prove it reads as more ELONGATED.
+func test_a_horses_head_is_more_elongated_than_a_generic_grazers():
+	var horse := AnimalAnatomy.profile_for("horse")
+	var herbivore := AnimalAnatomy.profile_for("herbivore")
+	var horse_ratio: float = horse.head_length / horse.head_height
+	var herbivore_ratio: float = herbivore.head_length / herbivore.head_height
+	assert_gt(horse_ratio, herbivore_ratio, "a horse's head should read as elongated, not a short round blob")
+
+
+## Reported: "slightly smaller legs" -- clarified as "shorter legs, not
+## thinner" after a first pass thinned leg_thickness instead. leg_thickness
+## is intentionally left alone here; only length comes down, and only
+## partway -- a horse should still read as taller-legged than a deer, just
+## not to its former exaggerated degree.
+func test_a_horses_legs_are_shorter_than_before_but_still_taller_than_a_deers():
+	var horse := AnimalAnatomy.profile_for("horse")
+	var deer := AnimalAnatomy.profile_for("deer")
+	var herbivore := AnimalAnatomy.profile_for("herbivore")
+	assert_lt(horse.leg_length, 0.38, "a horse's legs should be shorter than the original exaggerated length")
+	assert_gt(horse.leg_length, deer.leg_length, "a horse should still stand taller-legged than a deer")
+	assert_eq(horse.leg_thickness, herbivore.leg_thickness, "leg thickness should be untouched -- shorter, not thinner")
+
+
+## A deer is 0.8x the size of a horse -- requested directly ("make deer 0.8
+## of horse size"). Pinned as a RATIO, not as a bare number on each: the two
+## are meant to stay in proportion, so re-sizing the horse without re-sizing
+## the deer should fail here rather than silently drift.
+func test_a_deer_is_four_fifths_the_size_of_a_horse():
+	var deer: float = AnimalAnatomy.profile_for("deer").world_scale
+	var horse: float = AnimalAnatomy.profile_for("horse").world_scale
+	assert_almost_eq(deer / horse, 0.8, 0.01)

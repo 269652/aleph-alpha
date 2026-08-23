@@ -96,3 +96,26 @@ func move_to_end(index: int) -> void:
 	var stack = _stacks[index]
 	_stacks.remove_at(index)
 	_stacks.append(stack)
+
+
+## Ages everything carried, so food goes off in the pack (see
+## ItemStack.age).
+##
+## On WORLD time, like rot on the ground: a player who fast-forwards a season
+## should not come out with a pack of pristine apples while every windfall in
+## the world has turned.
+func age_contents(delta_seconds: float) -> void:
+	for stack in _stacks:
+		if stack != null:
+			stack.age(delta_seconds)
+
+
+## What the carried food smells of, strongest first -- for anything that wants
+## to know whether this pack is worth following.
+func rot_freshness(season: String) -> float:
+	var worst := 1.0
+	for stack in _stacks:
+		if stack == null or stack.item.kind != "food":
+			continue
+		worst = minf(worst, stack.freshness(season))
+	return worst

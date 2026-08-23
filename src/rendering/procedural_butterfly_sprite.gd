@@ -19,12 +19,20 @@ const JITTER_RANGE := 0.1
 
 ## Real butterflies genuinely are this vivid -- unlike songbirds (see
 ## procedural_bird_sprite.gd), vividness here is real-world-grounded.
-const SPECIES_IDS: Array[String] = ["monarch", "swallowtail", "blue_morpho"]
+const SPECIES_IDS: Array[String] = ["monarch", "swallowtail", "blue_morpho", "bee", "fly"]
 
 const SPECIES_BASE_COLORS := {
 	"monarch": Color(0.92, 0.45, 0.05),
 	"swallowtail": Color(0.95, 0.85, 0.1),
 	"blue_morpho": Color(0.15, 0.35, 0.95),
+	# A bee is not a butterfly, but it shares this generator's body plan and
+	# is the other pollinator drawn to the scent field -- amber, and far
+	# stubbier than any of the butterflies (see SPECIES_WINGS).
+	"bee": Color(0.93, 0.74, 0.16),
+	# Dark and drab on purpose: a fly must read instantly as not-a-butterfly,
+	# because the player needs to tell "this windfall has gone over" from
+	# "this meadow has pollinators" at a glance.
+	"fly": Color(0.22, 0.22, 0.26),
 }
 
 ## Butterfly silhouette, facing up/forward: symmetric upper+lower wings
@@ -64,6 +72,12 @@ const SPECIES_WINGS := {
 	"monarch": {"forewing": Vector2(0.17, 0.20), "hindwing": Vector2(0.13, 0.14), "tail_length": 0.0, "border": true},
 	"swallowtail": {"forewing": Vector2(0.16, 0.19), "hindwing": Vector2(0.12, 0.13), "tail_length": 0.22, "border": true},
 	"blue_morpho": {"forewing": Vector2(0.20, 0.23), "hindwing": Vector2(0.15, 0.15), "tail_length": 0.0, "border": false},
+	# Short round wings and no tail: a bee reads as a compact buzzing dot
+	# rather than a drifting butterfly. Border on, so its dark banding shows.
+	"bee": {"forewing": Vector2(0.11, 0.10), "hindwing": Vector2(0.08, 0.07), "tail_length": 0.0, "border": true},
+	# Smaller and blunter than a bee, with no border -- a fly has no markings
+	# worth drawing at this size.
+	"fly": {"forewing": Vector2(0.09, 0.07), "hindwing": Vector2(0.06, 0.05), "tail_length": 0.0, "border": false},
 }
 
 ## Ramp stops for the hindwing and the dark wing border.

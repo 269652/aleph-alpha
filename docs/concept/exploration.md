@@ -10,7 +10,10 @@ reading the planet's past, not generic loot-piñata content.
   [disaster](weather.md) genuinely wiped out or displaced leaves real
   ruins behind — the buildings, and possibly logged fragments of what
   happened to its NPCs, are discoverable, not decorative dressing with no
-  underlying cause.
+  underlying cause. A settlement that lost an endangerment fight to a
+  [world boss](quests.md#village-endangerment-the-attractor-mechanism) is
+  one specific, legible cause among these — the unresolved quest itself
+  becomes the ruin's discoverable "what happened here" fragment.
 - **Monster lairs**: a den or territory tied to where a
   [world boss](worldbosses.md) emerged and lived, discoverable as a
   dangerous, loot-rich POI even after the boss itself is dealt with (or

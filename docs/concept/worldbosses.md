@@ -74,15 +74,31 @@ advance to the next technological age. This keeps era transitions from being
 a pure timer/milestone checklist — the last age's defining threat has to
 actually fall first.
 
+### Village endangerment: an attractor, not a spawner
+
+Resolves the "server-wide visibility/tracking" open question below
+(2026-08-13 design pass): a settlement's own net worth and population raise
+the local odds this promotion threshold gets crossed nearby in the first
+place — feeding as additional "opportunity biomass" into the same local
+carrying-capacity term `predator_population_model.gd` already derives from
+prey density, not a bespoke boss-seeks-village targeting system. Defender combat strength deliberately does not feed that
+likelihood, only the outcome once a threat exists — a well-guarded
+settlement isn't statistically punished for being well-guarded. Discovery
+itself is both signaled (a real-time rumor from an endangered NPC's
+need-threshold crossing, per [npc.md](npc.md)'s replan-interrupt
+architecture, while the settlement's chunk is loaded) and sometimes purely
+incidental (an unloaded settlement's whole threat-to-outcome arc can resolve
+via catch-up simulation with zero warning). Full mechanism, including how
+the quest itself is offered and what a settlement's success/failure
+actually changes, in [quests.md](quests.md#village-endangerment-the-attractor-mechanism).
+
 ### Open questions
 
 - Exact fitness-threshold/rarity math for when the sim promotes an
   individual to world-boss status — needs numeric design once the base
   fitness/rarity system ([evolution.md](evolution.md)) has real numbers.
-- Server-wide visibility/tracking — do other players get any signal a
-  world boss exists nearby (tracks, rumors from NPCs per
-  [npc.md](npc.md)'s need-driven requests), or is discovery purely
-  incidental?
+  The wealth→opportunity-biomass conversion above needs the same numeric
+  pass, as a further input to the same open question.
 - Exact cost/latency budget for the one-time promotion-triggered LLM call,
   and what the fallback behavior is if that call fails (a boss should never
   fail to spawn just because an API call did).

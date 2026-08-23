@@ -18,8 +18,12 @@ const ACTIONS := [
 	{"action": "attack", "label": "Attack / Use Tool", "default": KEY_SPACE},
 	{"action": "block", "label": "Block", "default": KEY_SHIFT},
 	{"action": "pickup", "label": "Pick Up Nearby Items", "default": KEY_E},
+	{"action": "kick", "label": "Kick Nearby Stone", "default": KEY_K},
 	{"action": "fish", "label": "Fish / Reel", "default": KEY_F},
+	{"action": "lasso", "label": "Throw / Release Lasso", "default": KEY_R},
+	{"action": "mount", "label": "Mount / Dismount", "default": KEY_V},
 	{"action": "trade", "label": "Trade with Merchant", "default": KEY_T},
+	{"action": "talk", "label": "Talk to Villager", "default": KEY_G},
 	{"action": "build", "label": "Place Earth", "default": KEY_B},
 	{"action": "destroy", "label": "Remove Tile", "default": KEY_Q},
 	{"action": "hotbar_1", "label": "Hotbar Slot 1", "default": KEY_1},
@@ -29,7 +33,9 @@ const ACTIONS := [
 	{"action": "hotbar_5", "label": "Hotbar Slot 5", "default": KEY_5},
 	{"action": "toggle_inventory", "label": "Toggle Inventory", "default": KEY_I},
 	{"action": "toggle_crafting", "label": "Toggle Crafting", "default": KEY_C},
-	{"action": "toggle_skills", "label": "Toggle Skill Tree", "default": KEY_K},
+	# Moved off K (the very next key over, an easy muscle-memory shift) to
+	# make room for "kick" -- see docs/concept/stone.md.
+	{"action": "toggle_skills", "label": "Toggle Skill Tree", "default": KEY_L},
 	{"action": "toggle_settings", "label": "Toggle Settings", "default": KEY_ESCAPE},
 	{"action": "toggle_console", "label": "Toggle Console", "default": KEY_QUOTELEFT},
 ]

@@ -75,14 +75,37 @@ func test_arm_stroke_is_zero_while_not_swimming():
 	assert_eq(view.arm_stroke_offset, 0.0)
 
 
-func test_arm_stroke_is_nonzero_partway_through_a_swim_cycle():
+## Stroking requires BOTH swimming and is_moving -- see is_moving's doc
+## comment. Not just "swimming": that was the bug (treading water in place
+## looked identical to actually swimming, reported: "the arms should only
+## animate when moving not when standing").
+func test_arm_stroke_is_nonzero_partway_through_a_swim_cycle_while_moving():
 	view.set_movement_state(view.MovementState.SWIMMING)
+	view.is_moving = true
 	view._process(0.1)
 	assert_ne(view.arm_stroke_offset, 0.0)
 
 
+## THE regression this exists to catch: swimming alone must not stroke.
+func test_arm_stroke_stays_zero_while_swimming_but_not_moving():
+	view.set_movement_state(view.MovementState.SWIMMING)
+	view.is_moving = false
+	view._process(0.1)
+	assert_eq(view.arm_stroke_offset, 0.0)
+
+
+## Treading water is still submerged -- legs stay hidden even though the
+## stroke has stopped. Only the ANIMATION should differ, not the pose.
+func test_treading_water_keeps_legs_hidden():
+	view.set_movement_state(view.MovementState.SWIMMING)
+	view.is_moving = false
+	view._process(0.1)
+	assert_false(view.legs_visible())
+
+
 func test_arm_stroke_resets_once_swimming_stops():
 	view.set_movement_state(view.MovementState.SWIMMING)
+	view.is_moving = true
 	view._process(0.1)
 	view.set_movement_state(view.MovementState.IDLE)
 	view._process(0.1)
@@ -195,3 +218,121 @@ func test_body_draws_at_its_world_size():
 	var drawn := Vector2(body.texture.get_size()) * body.scale
 	assert_almost_eq(drawn.x, float(CharacterView.BODY_SIZE.x), 0.01)
 	assert_almost_eq(drawn.y, float(CharacterView.BODY_SIZE.y), 0.01)
+
+
+# -- the character must be anchored at its FEET, not its center --------------
+#
+# CharacterView's origin is what player.gd's CharacterBody2D collision sits
+# at (see player.tscn: CollisionShape2D has no offset from the body). The
+# parts were drawn centered on that same origin, at the character's
+# midriff, so the collision box represented the character's WAIST while the
+# head reached 19 world units above it and the feet only 14 below -- any
+# solid object the player walked up against had the player's head visibly
+# poking past it (reported repeatedly as trees/stones "rendering one square
+# too high"/floating; see tree_renderer.gd's TRUNK_COLLISION_DEPTH history).
+# Trees and stones are already foot-anchored the same way world.gd spawns
+# characters -- the player's own art was the one part of this still
+# center-anchored.
+
+func test_the_characters_feet_sit_at_its_own_origin():
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	var feet_y: float = leg_left.position.y + CharacterView.LEG_SIZE.y / 2.0
+	assert_almost_eq(feet_y, 0.0, 0.5, "the character's origin should sit at its feet, not its waist")
+
+
+func test_no_part_hangs_below_the_characters_own_origin():
+	for part_name in ["Body", "Head", "LegLeft", "LegRight", "ArmLeft", "ArmRight"]:
+		var sprite: Sprite2D = view.get_node(part_name)
+		var world_size: Vector2i = {
+			"Body": CharacterView.BODY_SIZE, "Head": CharacterView.HEAD_SIZE,
+			"LegLeft": CharacterView.LEG_SIZE, "LegRight": CharacterView.LEG_SIZE,
+			"ArmLeft": CharacterView.ARM_SIZE, "ArmRight": CharacterView.ARM_SIZE,
+		}[part_name]
+		var bottom: float = sprite.position.y + world_size.y / 2.0
+		assert_lte(bottom, 0.5, "%s should not extend below the character's feet" % part_name)
+
+
+# -- torso submersion --------------------------------------------------------
+#
+# The player used to have NO visual for being partway underwater: legs just
+# vanished and the torso rendered exactly as it does on dry land (reported:
+# "half the torso should be under water"). The torso now carries a shared
+# world-space tint material (see SubmersionShader) whose waterline is driven
+# from movement_state.
+
+const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
+
+
+func test_the_torso_carries_the_shared_submersion_material():
+	var body: Sprite2D = view.get_node("Body")
+	assert_true(body.material is ShaderMaterial)
+	assert_string_contains((body.material as ShaderMaterial).shader.code, "water_world_y")
+
+
+func test_swimming_sets_the_waterline_at_the_torsos_own_centre():
+	view.set_movement_state(view.MovementState.SWIMMING)
+	view._process(0.1)
+	var body: Sprite2D = view.get_node("Body")
+	var material := body.material as ShaderMaterial
+	# _body.position.y IS the torso's own vertical centre (Sprite2D draws
+	# centred on its own position, and Body carries no extra offset) -- so
+	# "half the torso submerged" falls out of that existing constant.
+	assert_almost_eq(
+		float(material.get_shader_parameter("water_world_y")),
+		view.position.y + body.position.y,
+		0.01
+	)
+
+
+## Nothing should be tinted on dry land or mid-stride -- only while
+## genuinely in the water.
+func test_not_swimming_clears_the_waterline():
+	view.set_movement_state(view.MovementState.SWIMMING)
+	view._process(0.1)
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	var body: Sprite2D = view.get_node("Body")
+	var material := body.material as ShaderMaterial
+	assert_gt(float(material.get_shader_parameter("water_world_y")), 100000.0)
+
+
+# -- sized relative to a tree (reported: "shrink the character and npcs so --
+# -- they are 2/3 the height of a tree") -------------------------------------
+#
+# Trees used to tower unrealistically over the player (and every NPC, who
+# shares this same scene -- see VillageRenderer) with no size relationship
+# between them at all. The character is now scaled down so its own total
+# on-screen height (feet at the origin, see the feet-anchoring tests above,
+# to the top of the head) comes out to a fixed fraction of a tree's real
+# WORLD height (already resolution-corrected, see TreeRenderer.TREE_SIZE).
+
+const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
+
+
+## HEAD_TOP_Y is a script constant mirroring the .tscn's Head layout (so the
+## scale formula below doesn't need to inspect a live scene) -- pinned here
+## against the ACTUAL instantiated Head node so the two can't silently drift
+## apart.
+func test_head_top_y_matches_the_actual_head_nodes_top_edge():
+	var head: Sprite2D = view.get_node("Head")
+	var actual_top: float = head.position.y - CharacterView.HEAD_SIZE.y / 2.0
+	assert_almost_eq(CharacterView.HEAD_TOP_Y, actual_top, 0.01)
+
+
+## The formula itself: scaling the character's own total height (feet to
+## head-top) by CharacterView.SCALE must land it at exactly
+## TARGET_HEIGHT_FRACTION_OF_TREE of a real tree's world height -- not an
+## eyeballed constant.
+func test_scaled_character_height_is_two_thirds_a_trees_world_height():
+	var character_height := -CharacterView.HEAD_TOP_Y  # feet (y=0) to head-top
+	var scaled_height := character_height * CharacterView.SCALE
+	var expected := CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE * ProceduralTreeSprite.WORLD_SIZE.y
+	assert_almost_eq(scaled_height, expected, 0.01)
+
+
+## The scale must actually be applied to the instantiated view, not just
+## exist as an unused constant.
+func test_the_instantiated_view_is_scaled_down():
+	assert_almost_eq(view.scale.x, CharacterView.SCALE, 0.0001)
+	assert_almost_eq(view.scale.y, CharacterView.SCALE, 0.0001)
+	assert_lt(CharacterView.SCALE, 1.0, "the character should shrink, not grow, relative to its old size")

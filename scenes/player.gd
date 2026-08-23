@@ -26,6 +26,7 @@ const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const VenomModel = preload("res://src/gameplay/venom_model.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
+const NpcGreeting = preload("res://src/world/npc_greeting.gd")
 const Hotbar = preload("res://src/gameplay/hotbar.gd")
 const FishingCast = preload("res://src/gameplay/fishing_cast.gd")
 const ProceduralBobberSprite = preload("res://src/rendering/procedural_bobber_sprite.gd")
@@ -38,14 +39,32 @@ const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const Taming = preload("res://src/gameplay/taming.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
+const Kick = preload("res://src/gameplay/kick.gd")
+const Throwable = preload("res://src/gameplay/throwable.gd")
+const ChargeMeter = preload("res://src/gameplay/charge_meter.gd")
+const HeldItemThrow = preload("res://src/gameplay/held_item_throw.gd")
+const ImpactResolver = preload("res://src/gameplay/impact_resolver.gd")
+const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
 
 const BASE_SPEED := 80.0
 const PLAYER_SIZE := 12
+
+## Taming reach (see docs/concept/taming.md). The throw is deliberately short:
+## having to close with a wary animal first is the part that makes stalking a
+## horse feel like something. Feeding is closer still -- an arm's length, since
+## the animal has to take it from your hand -- and tying off needs the tree
+## within reach of where you are standing.
+const LASSO_RANGE := 72.0
+const FEED_RANGE := 28.0
+const TIE_RANGE := 40.0
+const TAMING_TREAT_ID := "carrot"
 ## How big one world tile should read on screen once camera-zoomed, in
 ## pixels -- the actual tuned/eyeballed value (CLAUDE.md: tuned constants
 ## must be pinned, not eyeballed comments). CAMERA_ZOOM below is DERIVED
@@ -77,6 +96,15 @@ const ATTACK_RANGE := 20.0
 const UNARMED_DAMAGE := 5.0
 const ATTACK_COOLDOWN := 0.5
 const KNOCKBACK_FORCE := 60.0
+
+## A moderate, controlled swing's contact speed -- not a blade-TIP speed
+## measurement (which runs much higher), but the speed at the point of
+## impact a real swing delivers, the same grounding shape as
+## Kick.KICK_SPEED_MPS. Feeds real weapon mass into knockback (see
+## _knockback_force_for) through the SAME momentum model
+## Throwable.impact_knockback already uses for thrown items
+## (docs/concept/materials.md).
+const SWING_IMPACT_SPEED_MPS := 5.0
 ## Base per-swing damage against wood before the material model's weapon-kind
 ## multiplier (see MaterialDamage/_chop_step): an axe lands 3x this (15.0, the
 ## historical AXE_DAMAGE tuning), a sword 0.5x, bare hands 0.25x.
@@ -137,6 +165,13 @@ const DEAD_MODULATE := Color(0.35, 0.35, 0.35, 1.0)
 var respawn_position := Vector2.ZERO
 const RESPAWN_DELAY := 3.0
 var _respawn_accumulator := 0.0
+
+## How often actively swimming spawns a water-ripple disturbance (see
+## EarthChunkManager.record_water_disturbance) -- once per stroke, not every
+## frame; the ring itself takes a couple of seconds to fade, so anything
+## faster would just stack redundant rings at the same spot.
+const WATER_RIPPLE_INTERVAL := 0.4
+var _water_ripple_accumulator := 0.0
 
 var inventory := Inventory.new(INVENTORY_SLOTS)
 ## The single item currently in hand. It alone decides attack damage (if it's
@@ -203,6 +238,24 @@ const MIN_ARMORED_DAMAGE := 1.0
 var _crafting_recipe_book := CraftingRecipeBook.new()
 var _smelting := Smelting.new()
 var _fishing := FishingSession.new()
+## Taming (see docs/concept/taming.md): the animal currently on the end of
+## this player's lasso, and the point the rope's loose end is tied to (a tree)
+## if it has been. A tied animal is held by the anchor rather than by the
+## player, which is what lets them walk away.
+var _lassoed: Node = null
+var _tie_anchor = null  # Vector2 once tied, null while led by hand
+## The tamed animal currently being ridden (see docs/concept/taming.md).
+## Riding moves the player at the mount's pace and carries the animal along
+## with them, rather than swapping which node the camera follows -- the rider
+## stays the thing the player controls, which keeps every other system
+## (inventory, combat, survival) working unchanged while mounted.
+var _mount: Node = null
+var _last_mount_input := false
+var _pending_mount_pressed := false
+var _last_lasso_input := false
+var _pending_lasso_pressed := false
+var lasso_message := ""
+
 var _last_fish_input := false
 var _pending_fish_pressed := false
 var _fishing_cast_count := 0
@@ -260,6 +313,23 @@ const TRADE_MESSAGE_DURATION := 2.5
 const TRADE_RADIUS := 48.0
 var _item_catalog := ItemCatalog.new()
 
+## -- Talking to any villager (see NpcGreeting, EarthChunkManager.
+## nearest_npc_near) -- a minimal stand-in for the real Live Dialogue System
+## (docs/concept/npc.md's "Minimal talk interaction"): press the talk key
+## near any villager to hear one deterministic, personality/need-flavored
+## greeting line. No branching, no memory, no quest hooks -- see the concept
+## doc for why that's an honest placeholder rather than a cut-down feature.
+var _npc_greeting := NpcGreeting.new()
+var _last_talk_input := false
+var _pending_talk_pressed := false
+var _talk_result_message := ""
+var _talk_result_timer := 0.0
+## The current talk prompt/result, read by the HUD ("" == nothing to show).
+var talk_message := ""
+const TALK_MESSAGE_DURATION := 3.0
+## How close a villager must be to talk to -- same reach as trading.
+const TALK_RADIUS := 48.0
+
 var _chunk_manager: EarthChunkManager
 var _tile_size: int
 var _wetness_tracker := WetnessTracker.new()
@@ -268,6 +338,30 @@ var _biome_classifier := BiomeClassifier.new()
 var _world_coordinates := WorldCoordinates.new()
 var _health := Health.new()
 var _melee_attack := MeleeAttack.new()
+var _throwable := Throwable.new()
+var _impact_resolver := ImpactResolver.new()
+var _stone_renderer := StoneRenderer.new()
+
+## The held-item concept (see docs/concept/stone.md): distinct from both
+## inventory and Equipment's worn "weapon" slot -- a small object carried
+## loose in hand, picked up from and thrown back into the world rather than
+## stacked or equipped. -1.0 means empty-handed; a real value is the held
+## stone's diameter_cm (its mass, for the throw's momentum, is derived from
+## THAT the same way every other stone's mass is -- see StoneSize.mass_kg_for).
+var _hand_stone_diameter_cm := -1.0
+
+## How long the pickup input has been continuously held THIS charge (reset
+## on a fresh press while already holding something -- see _pickup_step).
+## Fed to ChargeMeter.fraction_at every frame while charging.
+var _hand_charge_elapsed := 0.0
+
+## Whether the CURRENT press-and-hold is a genuine charge cycle rather than
+## the initial press that grabbed the stone into hand -- distinguishes "the
+## pickup press's own release" (nothing happens, still holding) from "a
+## later press-and-hold's release" (throws). Without this, releasing the
+## very same E press that just picked the stone up would immediately throw
+## it again.
+var _charging := false
 var _material_damage := MaterialDamage.new()
 var _block := Block.new()
 var _hotbar_action := HotbarAction.new()
@@ -279,6 +373,7 @@ var _last_attack_input_state := false
 var _last_build_input_state := false
 var _last_destroy_input_state := false
 var _last_pickup_input_state := false
+var _last_kick_input_state := false
 
 ## Authority-side: last input direction received from the owning client (or
 ## read directly from Input, in the no-networking singleplayer fallback).
@@ -288,6 +383,7 @@ var _pending_block_pressed := false
 var _pending_build_pressed := false
 var _pending_destroy_pressed := false
 var _pending_pickup_pressed := false
+var _pending_kick_pressed := false
 ## Non-authority proxy side: for inferring facing/animation from replicated
 ## position deltas, since only position itself is replicated.
 var _last_position := Vector2.ZERO
@@ -319,6 +415,8 @@ func _ready() -> void:
 	var shape := RectangleShape2D.new()
 	shape.size = Vector2(PLAYER_SIZE, PLAYER_SIZE)
 	_collision_shape.shape = shape
+
+	_build_rope_line()
 
 	# The fishing bobber (see _fishing_step) -- hidden until a line is cast.
 	_bobber = Sprite2D.new()
@@ -400,7 +498,10 @@ func _bind_wasd_movement() -> void:
 	_bind_key_action("block", KEY_SHIFT)
 	_bind_key_action("pickup", KEY_E)
 	_bind_key_action("fish", KEY_F)
+	_bind_key_action("lasso", KEY_R)
+	_bind_key_action("mount", KEY_V)
 	_bind_key_action("trade", KEY_T)
+	_bind_key_action("talk", KEY_G)
 	_bind_key_action("build", KEY_B)
 	_bind_key_action("destroy", KEY_Q)
 
@@ -927,12 +1028,13 @@ func _authority_step(delta: float) -> void:
 	current_speed_multiplier = water_result.speed_multiplier * _weather_speed_multiplier()
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
-	velocity = input_direction * BASE_SPEED * current_speed_multiplier
+	velocity = input_direction * current_speed() * current_speed_multiplier
 	move_and_slide()
 	_wrap_position()
 
 	_last_facing_direction = input_direction if input_direction.length() > 0.01 else _last_facing_direction
 	_update_character_view(input_direction)
+	_step_water_ripples(delta, input_direction)
 
 	survival.advance(delta)
 	# Standing in any water (wading in the shallows or swimming) lets you drink
@@ -944,13 +1046,16 @@ func _authority_step(delta: float) -> void:
 		survival.regulate_temperature(_chunk_manager.ambient_warmth(position), wetness, delta)
 
 	_attack_step(delta)
-	_pickup_step()
+	_pickup_step(delta)
+	_kick_step()
 	_build_step()
 	_destroy_step()
 	_fishing_step(delta)
+	_lasso_step(delta)
 	_food_buff_step(delta)
 	_venom_step(delta)
 	_shop_step(delta)
+	_talk_step(delta)
 
 
 ## Combined weather + exposure movement penalty (see WeatherModel /
@@ -997,7 +1102,9 @@ func _perform_attack() -> void:
 	var hit_indices := _melee_attack.targets_in_range(position, positions, ATTACK_RANGE)
 	for index in hit_indices:
 		var creature: CreatureMarker = creatures[index]
-		var knockback := _melee_attack.knockback_vector(position, creature.position, KNOCKBACK_FORCE)
+		var knockback := _melee_attack.knockback_vector(
+			position, creature.position, _knockback_force_for(_held_weapon())
+		)
 		creature.apply_knockback(knockback)
 		creature.take_damage(damage)
 		# A hit that kills the creature awards XP scaled by its level (see
@@ -1067,6 +1174,39 @@ func _held_weapon():
 	return equipped_item if equipped_item != null and equipped_item.is_weapon() else null
 
 
+## A swing's knockback force, fed by the held weapon's REAL mass through the
+## same momentum model Throwable.impact_knockback already uses for thrown
+## items (mass * velocity, docs/concept/materials.md), rather than the flat
+## KNOCKBACK_FORCE every weapon used to deal identically regardless of what
+## it actually was.
+##
+## Calibrated against an iron sword (this game's baseline melee weapon) so
+## the EXISTING tuned KNOCKBACK_FORCE (60px) is exactly what an iron sword
+## already delivers -- wiring in real mass does not silently retune every
+## already-tuned attack, only weapons lighter/heavier than an iron sword
+## diverge from that baseline. Bare hands, or a weapon with no mass modeled
+## yet (mass_kg 0.0), fall back to the original constant untouched -- there
+## is no invented "fist mass" standing in for a real one.
+func _knockback_force_for(weapon) -> float:
+	if weapon == null or weapon.mass_kg <= 0.0:
+		return KNOCKBACK_FORCE
+	var momentum := _throwable.impact_knockback(weapon.mass_kg, SWING_IMPACT_SPEED_MPS)
+	return _knockback_force_for_momentum(momentum)
+
+
+## Converts a real momentum value (kg * m/s) into the game's existing
+## knockback-force scale (world pixels of displacement, see Knockback.step),
+## calibrated so an iron sword's own momentum reproduces the original tuned
+## KNOCKBACK_FORCE exactly (see _knockback_force_for's own doc comment).
+## Shared by weapon swings (_knockback_force_for) and the held-item throw
+## (_resolve_thrown_stone_impact) so both real-momentum sources land on the
+## same pixel scale rather than each inventing their own conversion.
+func _knockback_force_for_momentum(momentum: float) -> float:
+	var reference_mass_kg: float = _item_catalog.make("iron_sword").mass_kg
+	var reference_momentum := _throwable.impact_knockback(reference_mass_kg, SWING_IMPACT_SPEED_MPS)
+	return KNOCKBACK_FORCE * (momentum / reference_momentum)
+
+
 ## True while the block input is held (and the player is alive): incoming
 ## damage is reduced weapon-dependently (see Block); blocking, like attacking,
 ## costs no stamina -- combat stays purely cooldown-based (see
@@ -1098,19 +1238,142 @@ func _chop_step() -> void:
 		tree.take_damage(damage)
 
 
-## Authority-only: turns the tile the player is facing into bare earth (see
-## Authority-only: on the rising edge of the pickup input (default E), sweeps
-## up every ground item within PICKUP_RADIUS into the inventory (see
-## DroppedItem.pick_up) -- a convenience gather alongside the existing
-## click-to-pick-up. Rising-edge so holding E doesn't spam-pick every frame.
-func _pickup_step() -> void:
+## Authority-only: E (pickup) is now CONTEXTUAL (see docs/concept/stone.md):
+## empty-handed near a liftable stone, E picks it into the HAND instead of
+## straight to inventory (_try_pick_stone_into_hand); empty-handed with no
+## stone nearby, E still does the ordinary ground-item sweep unchanged
+## (pickup_nearby). With something already in hand, a NEW press starts a
+## charge (ChargeMeter bounces while held -- see hand_charge_fraction), and
+## releasing throws it (_throw_held_stone). Rising-edge detection throughout
+## so holding E doesn't repeat the initial action every frame.
+func _pickup_step(delta: float) -> void:
 	var pickup_pressed := (
 		Input.is_action_pressed("pickup") if _controlled_locally() else _pending_pickup_pressed
 	)
 	var just_pressed := pickup_pressed and not _last_pickup_input_state
+	var just_released := _last_pickup_input_state and not pickup_pressed
 	_last_pickup_input_state = pickup_pressed
+
+	if not is_holding_stone():
+		if just_pressed and not _try_pick_stone_into_hand():
+			pickup_nearby()
+		return
+
 	if just_pressed:
-		pickup_nearby()
+		# A NEW press while already holding something starts a real charge
+		# cycle -- distinct from the press that grabbed the stone into hand
+		# in the first place (see _charging's own doc comment).
+		_charging = true
+		_hand_charge_elapsed = 0.0
+	elif _charging and pickup_pressed:
+		_hand_charge_elapsed += delta
+
+	if just_released and _charging:
+		_charging = false
+		_throw_held_stone()
+
+
+## Whether something is currently held in hand (see _hand_stone_diameter_cm's
+## own doc comment) -- distinct from both inventory and Equipment's worn
+## weapon slot.
+func is_holding_stone() -> bool:
+	return _hand_stone_diameter_cm >= 0.0
+
+
+## The charge meter's current reading in [0, 1] (see ChargeMeter) -- 0.0
+## whenever nothing is in hand, or the pickup input isn't currently held.
+## Read by World for the strengthometer UI.
+func hand_charge_fraction() -> float:
+	if not is_holding_stone() or not _charging:
+		return 0.0
+	return ChargeMeter.fraction_at(_hand_charge_elapsed)
+
+
+## Takes the nearest liftable stone in reach (same nearby-target-finding
+## convention as pickup_nearby/Kick -- EarthChunkManager.
+## nearest_liftable_stone_near, PICKUP_RADIUS) into the HAND rather than
+## straight to inventory. Returns whether anything was actually picked up,
+## so the caller can fall back to the ordinary sweep when there's no stone
+## nearby.
+func _try_pick_stone_into_hand() -> bool:
+	if _chunk_manager == null:
+		return false
+	var stone: Node2D = _chunk_manager.nearest_liftable_stone_near(position, PICKUP_RADIUS)
+	if stone == null:
+		return false
+	_hand_stone_diameter_cm = stone.diameter_cm
+	_hand_charge_elapsed = 0.0
+	_charging = false
+	stone.queue_free()
+	return true
+
+
+## Throws whatever is in hand: release power (wherever the ChargeMeter was
+## at release) sets a real throw speed (HeldItemThrow.release_speed_mps),
+## which feeds the SAME momentum model (Throwable.impact_knockback,
+## docs/concept/materials.md) as every other hit in this game -- not a
+## separate new physics path. The stone reappears in the world at its
+## landing spot (see _spawn_thrown_stone) whether or not it struck anything
+## on the way.
+func _throw_held_stone() -> void:
+	var diameter_cm := _hand_stone_diameter_cm
+	_hand_stone_diameter_cm = -1.0
+
+	var power := ChargeMeter.fraction_at(_hand_charge_elapsed)
+	var release_speed := HeldItemThrow.release_speed_mps(power)
+	var mass_kg := StoneSize.mass_kg_for(diameter_cm)
+	var momentum := _throwable.impact_knockback(mass_kg, release_speed)
+	var distance := HeldItemThrow.throw_distance_px(power)
+	var direction := _last_facing_direction if _last_facing_direction.length() > 0.01 else Vector2.DOWN
+	var landing_position := position + direction.normalized() * distance
+
+	_resolve_thrown_stone_impact(landing_position, momentum)
+	_spawn_thrown_stone(landing_position, diameter_cm)
+
+
+## How close a thrown stone's landing spot must be to a creature to count as
+## a hit -- the same order of magnitude as ATTACK_RANGE, since both are
+## "close enough to actually connect".
+const THROWN_STONE_IMPACT_RADIUS_PX := 20.0
+
+## Flat damage a thrown stone deals on a real (non-"bounce") impact.
+## Simplification, documented rather than guessed at silently:
+## ImpactResolver's outcome is read as a simple hit/no-hit here rather than
+## mapped to a full per-outcome damage table -- docs/concept/materials.md
+## itself lists per-outcome damage tuning as an open, project-wide design
+## question, not something to invent unilaterally for this one feature.
+const THROWN_STONE_BASE_DAMAGE := 4.0
+
+## A thrown stone's impact against any creature at the landing spot --
+## resolved through the SAME shared momentum model
+## (ImpactResolver.resolve_impact, MeleeAttack.knockback_vector) every other
+## hit in this game already uses.
+func _resolve_thrown_stone_impact(landing_position: Vector2, momentum: float) -> void:
+	var creatures := get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME)
+	var positions: Array = []
+	for creature in creatures:
+		positions.append(creature.position)
+	var hit_indices := _melee_attack.targets_in_range(landing_position, positions, THROWN_STONE_IMPACT_RADIUS_PX)
+	for index in hit_indices:
+		var creature: CreatureMarker = creatures[index]
+		var outcome := _impact_resolver.resolve_impact(momentum, "blunt", "flesh")
+		if outcome == "bounce":
+			continue
+		var knockback := _melee_attack.knockback_vector(
+			landing_position, creature.position, _knockback_force_for_momentum(momentum)
+		)
+		creature.apply_knockback(knockback)
+		creature.take_damage(THROWN_STONE_BASE_DAMAGE)
+
+
+## Materializes a real, correctly-rendered liftable stone (see
+## StoneRenderer.build_liftable_stone_node) at the throw's landing spot --
+## whether or not it struck anything on the way, a thrown stone still ends
+## up lying on the ground afterward, exactly like any other loose stone.
+func _spawn_thrown_stone(landing_position: Vector2, diameter_cm: float) -> void:
+	var stone := _stone_renderer.build_liftable_stone_node(randi(), diameter_cm)
+	stone.position = landing_position
+	get_parent().add_child(stone)
 
 
 ## Picks up every ground item within PICKUP_RADIUS. Returns the number of item
@@ -1123,6 +1386,33 @@ func pickup_nearby() -> int:
 		if position.distance_to(item.position) <= PICKUP_RADIUS and item.pick_up(self):
 			collected += 1
 	return collected
+
+
+## Authority-only: on the rising edge of the kick input (default K -- see
+## Keybindings), delivers a real one-time momentum (Kick.KICK_MOMENTUM_KG_M_S)
+## to the nearest liftable stone in reach (docs/concept/stone.md). Reuses
+## PICKUP_RADIUS and EarthChunkManager.nearest_liftable_stone_near -- the
+## SAME nearby-target-finding convention pickup/dispersion already use --
+## rather than a new proximity query. A stone at or above leg mass
+## (Kick.is_kickable) is too heavy for a kick to move at all; a lighter one
+## flies a distance that scales with the delivered momentum vs. its own
+## mass, exactly Throwable.impact_knockback's reasoning.
+func _kick_step() -> void:
+	var kick_pressed := (
+		Input.is_action_pressed("kick") if _controlled_locally() else _pending_kick_pressed
+	)
+	var just_pressed := kick_pressed and not _last_kick_input_state
+	_last_kick_input_state = kick_pressed
+	if not just_pressed or _chunk_manager == null:
+		return
+
+	var stone: Node2D = _chunk_manager.nearest_liftable_stone_near(position, PICKUP_RADIUS)
+	if stone == null:
+		return
+	var mass := StoneSize.mass_kg_for(stone.diameter_cm)
+	if not Kick.is_kickable(mass):
+		return
+	stone.position = Kick.landing_position(position, stone.position, mass)
 
 
 ## Authority-only: the fishing minigame (see FishingSession / concept/fishing.md).
@@ -1216,6 +1506,247 @@ func _end_cast_visuals() -> void:
 		_chunk_manager.clear_attraction_point()
 
 
+## Taming: throw the lasso, lead what it caught, tie it off, and feed it (see
+## docs/concept/taming.md). One key does the lot, because what it means is
+## unambiguous from what the player is currently holding:
+##
+##   nothing caught  -> throw at the nearest catchable animal in range
+##   caught, near a tree -> tie the loose end off there
+##   caught, tied    -> untie and take the rope back in hand
+##   caught, in hand -> let it go
+##
+## Feeding is separate and automatic on contact, since walking a carrot up to
+## a horse's mouth IS the interaction.
+func _lasso_step(delta: float) -> void:
+	if _lassoed != null and (not is_instance_valid(_lassoed) or not _lassoed.is_restrained()):
+		# It broke the rope, died, or its chunk unloaded.
+		_lassoed = null
+		_tie_anchor = null
+
+	var pressed := (
+		Input.is_action_pressed("lasso") if _controlled_locally() else _pending_lasso_pressed
+	)
+	var just_pressed := pressed and not _last_lasso_input
+	_last_lasso_input = pressed
+
+	if just_pressed and _holding_lasso():
+		if _lassoed == null and _nearest_tamed(LASSO_RANGE) != null:
+			# Already tamed: the rope has nothing left to do, so the key means
+			# "change your mind about what you're doing" instead.
+			_cycle_order()
+		elif _lassoed == null:
+			_throw_lasso()
+		elif _tie_anchor != null:
+			_tie_anchor = null
+		else:
+			var tree = _nearest_tie_point()
+			if tree != null:
+				_tie_anchor = tree
+			else:
+				_lassoed.release()
+				_lassoed = null
+
+	_hold_the_rope(delta)
+	_draw_rope()
+	_mount_input_step()
+	_step_mount_and_orders()
+	_update_lasso_message()
+
+
+## Keeps the rope attached: the anchor is pushed to the animal every frame, so
+## "leading" is nothing more than an anchor that walks with the player.
+func _hold_the_rope(_delta: float) -> void:
+	if _lassoed == null or not is_instance_valid(_lassoed):
+		return
+	# Tied vs led: a tied animal is one the player deliberately left somewhere,
+	# and is kept across a chunk unload on that basis (see KeptAnimals).
+	_lassoed.restrain_to(
+		_tie_anchor if _tie_anchor != null else position, _tie_anchor != null
+	)
+	_try_feed_lassoed()
+
+
+## A carrot in the inventory, offered whenever the animal is close enough to
+## take it and actually hungry. Consumed only when it counts (see
+## CreatureMarker.feed_treat), so a full animal never eats the player's stock.
+func _try_feed_lassoed() -> void:
+	if inventory == null or _lassoed == null:
+		return
+	if position.distance_to(_lassoed.position) > FEED_RANGE:
+		return
+	if inventory.count_of(TAMING_TREAT_ID) <= 0:
+		return
+	if _lassoed.feed_treat():
+		inventory.remove(TAMING_TREAT_ID, 1)
+
+
+func _throw_lasso() -> void:
+	var best: Node = null
+	var best_distance := LASSO_RANGE
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		if creature.info == null or creature.is_restrained():
+			continue
+		if not Taming.can_be_tamed(creature.info.species, creature.info.is_predator):
+			continue
+		var distance := position.distance_to(creature.position)
+		if distance <= best_distance:
+			best = creature
+			best_distance = distance
+	if best == null:
+		return
+	# The throw itself reuses the melee swing, the same way casting a rod does.
+	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
+	if best.restrain_to(position):
+		_lassoed = best
+
+
+## The nearest tree trunk worth tying off to. Trees are already solid bodies
+## in the world (ChoppableTree), so "tie it to that one" needs no new entity.
+func _nearest_tie_point():
+	if _chunk_manager == null or not _chunk_manager.has_method("solid_obstacles_near"):
+		return null
+	var nearest = null
+	var best := TIE_RANGE
+	for obstacle in _chunk_manager.solid_obstacles_near(position, TIE_RANGE):
+		var distance := position.distance_to(obstacle.position)
+		if distance <= best:
+			nearest = obstacle.position
+			best = distance
+	return nearest
+
+
+func _update_lasso_message() -> void:
+	if not _holding_lasso():
+		lasso_message = ""
+		return
+	if _lassoed == null:
+		lasso_message = "Lasso ready — press the lasso key near an animal."
+		return
+	var name_text: String = _lassoed.info.display_name if _lassoed.info != null else "Animal"
+	if _lassoed.is_tame():
+		lasso_message = "%s is tame." % name_text
+	elif _tie_anchor != null:
+		lasso_message = "%s tied up — trust %d%%" % [name_text, int(_lassoed.trust * 100.0)]
+	else:
+		lasso_message = "Leading %s — trust %d%%" % [name_text, int(_lassoed.trust * 100.0)]
+
+
+## The rope, drawn between whatever holds it and the animal. Without it,
+## "this animal is on a line" is something the player has to infer from
+## behaviour -- and flora.md's rule that what is visible must be what is real
+## cuts both ways: a real constraint should be visible.
+##
+## Deliberately `top_level`, so the line is drawn in world coordinates rather
+## than inheriting the player's own transform (the same reason the creature
+## health bars are).
+const ROPE_COLOR := Color(0.78, 0.68, 0.42)
+const ROPE_WIDTH := 1.5
+var _rope_line: Line2D
+
+
+func _build_rope_line() -> void:
+	_rope_line = Line2D.new()
+	_rope_line.top_level = true
+	_rope_line.width = ROPE_WIDTH
+	_rope_line.default_color = ROPE_COLOR
+	_rope_line.visible = false
+	_rope_line.z_index = 1
+	add_child(_rope_line)
+
+
+func _draw_rope() -> void:
+	if _rope_line == null:
+		return
+	if _lassoed == null or not is_instance_valid(_lassoed):
+		_rope_line.visible = false
+		return
+	var held_end: Vector2 = _tie_anchor if _tie_anchor != null else global_position
+	_rope_line.visible = true
+	_rope_line.points = PackedVector2Array([held_end, _lassoed.global_position])
+
+
+# -- orders and riding --------------------------------------------------------
+
+## How fast the player is moving right now: their own legs, or the mount's.
+func current_speed() -> float:
+	return Taming.MOUNTED_SPEED if is_mounted() else BASE_SPEED
+
+
+func is_mounted() -> bool:
+	return _mount != null and is_instance_valid(_mount)
+
+
+## Cycles the nearest tamed animal between following and staying put. A wild
+## animal ignores it (see CreatureMarker.set_order).
+func _cycle_order() -> void:
+	var animal = _nearest_tamed(LASSO_RANGE)
+	if animal == null:
+		return
+	animal.set_order(Taming.next_order(animal.order))
+
+
+func _try_mount() -> bool:
+	if is_mounted():
+		return false
+	var animal = _nearest_tamed(LASSO_RANGE)
+	if animal == null or animal.info == null:
+		return false
+	if not Taming.is_mountable(animal.info.species, animal.trust):
+		return false
+	_mount = animal
+	return true
+
+
+func _dismount() -> void:
+	_mount = null
+
+
+## The nearest fully tamed animal within `reach`. Tamed only: orders and
+## riding are things a tamed animal accepts, and a wild horse standing nearby
+## must not silently absorb the key press meant for the tamed one.
+func _nearest_tamed(reach: float):
+	var best = null
+	var best_distance := reach
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		if creature.info == null or not creature.is_tame():
+			continue
+		var distance := position.distance_to(creature.position)
+		if distance <= best_distance:
+			best = creature
+			best_distance = distance
+	return best
+
+
+## Keeps a mount under its rider, and tells a following animal where its owner
+## is. Both are "push the owner's position in each frame" rather than the
+## animal holding a reference back to the player, matching how the rope anchor
+## works.
+func _step_mount_and_orders() -> void:
+	if is_mounted():
+		_mount.position = position
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		if creature.info != null and creature.is_tame():
+			creature.follow_target = position
+
+
+func _mount_input_step() -> void:
+	var pressed := (
+		Input.is_action_pressed("mount") if _controlled_locally() else _pending_mount_pressed
+	)
+	var just_pressed := pressed and not _last_mount_input
+	_last_mount_input = pressed
+	if not just_pressed:
+		return
+	if is_mounted():
+		_dismount()
+	else:
+		_try_mount()
+
+
+func _holding_lasso() -> bool:
+	return equipped_item != null and equipped_item.id == "lasso"
+
+
 func _has_fishing_rod() -> bool:
 	return _inventory_counts().get("fishing_rod", 0) > 0
 
@@ -1269,6 +1800,27 @@ func _attempt_a_purchase() -> void:
 			]
 			return
 	_trade_result_message = "Not enough gold."
+
+
+## Authority-only: press the talk key next to any villager (see
+## EarthChunkManager.nearest_npc_near) to hear that NPC's own deterministic
+## greeting line (see NpcGreeting) -- the minimal talk-interaction stand-in,
+## not the real Live Dialogue System. The HUD reads talk_message.
+func _talk_step(delta: float) -> void:
+	var talk_pressed := (
+		Input.is_action_pressed("talk") if _controlled_locally() else _pending_talk_pressed
+	)
+	var just_pressed := talk_pressed and not _last_talk_input
+	_last_talk_input = talk_pressed
+	if just_pressed:
+		var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS) if _chunk_manager != null else null
+		_talk_result_message = (
+			_npc_greeting.greeting_for(npc.identity) if npc != null else "No one to talk to nearby."
+		)
+		_talk_result_timer = TALK_MESSAGE_DURATION
+
+	_talk_result_timer = maxf(0.0, _talk_result_timer - delta)
+	talk_message = _talk_result_message if _talk_result_timer > 0.0 else ""
 
 
 ## Authority-only: on the rising edge of the build input, either places the
@@ -1406,8 +1958,30 @@ func _resolve_water_state(tile: Vector2i, delta: float) -> Dictionary:
 	return _water_movement_model.resolve(water_depth, total_weight, max_swimmable_weight)
 
 
+## Modes in which the player is standing in enough water to disturb it (see
+## WaterMovementModel) -- wading counts, not just swimming: sloshing through
+## the shallows should ripple exactly as much as a stroke does.
+const WATER_RIPPLE_MODES := ["swimming", "wading"]
+
+
+## Records a water disturbance (see EarthChunkManager.record_water_disturbance)
+## while actually moving through water -- water ripples are caused by things
+## moving through it, not by wind, so an idle float shouldn't ripple, only
+## movement. Throttled to WATER_RIPPLE_INTERVAL rather than every physics tick.
+func _step_water_ripples(delta: float, input_direction: Vector2) -> void:
+	if not WATER_RIPPLE_MODES.has(current_mode) or input_direction.length() <= 0.01:
+		_water_ripple_accumulator = 0.0
+		return
+	_water_ripple_accumulator += delta
+	if _water_ripple_accumulator < WATER_RIPPLE_INTERVAL:
+		return
+	_water_ripple_accumulator = 0.0
+	_chunk_manager.record_water_disturbance(position)
+
+
 func _update_character_view(input_direction: Vector2) -> void:
 	_character_view.set_facing(input_direction)
+	_character_view.is_moving = input_direction.length() > 0.01
 	if current_mode == "swimming":
 		_character_view.set_movement_state(CharacterView.MovementState.SWIMMING)
 	elif input_direction.length() > 0.01 and current_mode != "drowning":

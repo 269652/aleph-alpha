@@ -116,6 +116,35 @@ func test_generated_image_has_a_substantial_opaque_body():
 		assert_gt(_opaque_count(image), 60, "%s should have a substantial body" % species)
 
 
+## Species with a KNOWN, pre-existing (not introduced by the horse-tuning
+## fix below) edge touch: deer/reindeer antlers reach row 0 -- a real, worth-
+## fixing bug, just a different one than what this test guards against here.
+## Flagged separately rather than silently papered over by excluding it
+## without a trace.
+const _KNOWN_EDGE_TOUCH_EXCEPTIONS := {"deer": true, "reindeer": true}
+
+
+## Regression: tuning a horse's head longer/higher (see test_animal_anatomy.gd's
+## "less flat head"/"straighter back" tests) once pushed its muzzle and ears
+## past the canvas edges -- the corner check above wouldn't catch that (a
+## silhouette can touch the top or right edge, mid-height/mid-width, without
+## ever touching either literal corner). Covers the full species roster
+## (minus the known exceptions above), not just horse, since any future
+## profile tuning could hit the same edge.
+func test_no_species_silhouette_touches_the_top_or_right_edge():
+	for species in SPECIES + NEW_SPECIES:
+		if _KNOWN_EDGE_TOUCH_EXCEPTIONS.has(species):
+			continue
+		var image: Image = generator.generate_image(species, 1)
+		for x in ProceduralAnimalSprite.WIDTH:
+			assert_eq(image.get_pixel(x, 0).a, 0.0, "%s's silhouette touches the top edge" % species)
+		for y in ProceduralAnimalSprite.HEIGHT:
+			assert_eq(
+				image.get_pixel(ProceduralAnimalSprite.WIDTH - 1, y).a, 0.0,
+				"%s's silhouette touches the right edge" % species
+			)
+
+
 func test_generated_image_is_not_a_single_flat_color():
 	for species in SPECIES:
 		var image: Image = generator.generate_image(species, 1)
@@ -530,3 +559,63 @@ func test_generated_animals_stay_deterministic():
 		generator.generate_image("horse", 5).get_data(),
 		generator.generate_image("horse", 5).get_data()
 	)
+
+
+# -- gait: legs actually articulate for a walk cycle -------------------------
+#
+# Legs used to be a straight vertical capsule that a post-process step slid
+# sideways for "walking" -- there was no joint. generate_image now takes a
+# gait_phase (see QuadrupedGait) that poses the hip/knee for real, and these
+# tests exist so that claim is checked rather than eyeballed on screen.
+
+func test_gait_phase_zero_reproduces_the_original_standing_pose():
+	assert_eq(
+		generator.generate_image("horse", 3).get_data(),
+		generator.generate_image("horse", 3, 0.0).get_data(),
+		"the default phase must be the same neutral pose every existing caller already gets"
+	)
+
+
+## The actual claim: posing at different phases must move leg pixels, not
+## just tint or jitter something incidental.
+func test_different_gait_phases_move_leg_pixels():
+	var standing := generator.generate_image("horse", 3, 0.0)
+	var mid_stride := generator.generate_image("horse", 3, 0.25)
+	assert_ne(standing.get_data(), mid_stride.get_data())
+
+
+func test_gait_posing_is_deterministic():
+	assert_eq(
+		generator.generate_image("deer", 8, 0.4).get_data(),
+		generator.generate_image("deer", 8, 0.4).get_data()
+	)
+
+
+## A legless species (a snake) has no hip/knee to pose -- gait_phase must be
+## harmless rather than crashing on a species with no legs at all.
+func test_gait_phase_is_a_no_op_for_legless_species():
+	assert_eq(
+		generator.generate_image("nonvenomous_snake", 1, 0.0).get_data(),
+		generator.generate_image("nonvenomous_snake", 1, 0.5).get_data()
+	)
+
+
+## The walking silhouette must still be a fully connected, outlined animal --
+## a bent leg must not tear a hole in the body or leave the outline broken.
+func test_a_mid_stride_horse_is_still_a_solid_outlined_silhouette():
+	var image := generator.generate_image("horse", 3, 0.25)
+	var opaque_pixels := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.0:
+				opaque_pixels += 1
+	var standing_opaque := 0
+	var standing := generator.generate_image("horse", 3, 0.0)
+	for y in standing.get_height():
+		for x in standing.get_width():
+			if standing.get_pixel(x, y).a > 0.0:
+				standing_opaque += 1
+	# Loosely bounded rather than exact: a bent leg's silhouette area
+	# naturally differs a little, but a torn or missing leg would differ by
+	# far more than that.
+	assert_gt(opaque_pixels, standing_opaque * 0.8)

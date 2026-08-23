@@ -1,5 +1,7 @@
 extends RefCounted
 
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+
 ## A tree's seven stages from seedling to full maturity.
 ##
 ## Trees previously popped into existence at full size, which made a forest
@@ -15,12 +17,21 @@ extends RefCounted
 ## Seedling, sprout, sapling, young, growing, near-mature, mature.
 const STAGE_COUNT := 7
 
-## How long a tree takes to reach the final stage, in simulated seconds.
-## Long enough that growth reads as a slow background process rather than a
-## timer the player watches, short enough to be witnessed across a few play
-## sessions -- roughly ten simulated ecosystem days at
-## EarthChunkManager.SECONDS_PER_SIMULATED_DAY.
-const MATURITY_SECONDS := 600.0
+## ## A tree takes YEARS
+##
+## A sapling becomes a young tree in a year, and takes two more to mature.
+##
+## This was 600 simulated seconds against a year of 691,200 -- under a tenth of
+## a percent of a year -- so a tree went from nothing to full-grown inside a
+## single season. It was justified as "roughly ten simulated ecosystem days",
+## which is a different clock from the one the seasons run on, and the mismatch
+## was invisible until /ecotest made a year watchable.
+##
+## Measured against the season cycle now, because that is the clock a player
+## experiences growth against: they remember the tree that was a stick last
+## autumn.
+const YOUNG_SECONDS := SeasonCycle.SECONDS_PER_YEAR
+const MATURITY_SECONDS := SeasonCycle.SECONDS_PER_YEAR * 3.0
 
 ## How big a seedling is relative to a full-grown tree. Small enough to read
 ## instantly as "not a tree yet" without becoming an invisible speck.
@@ -59,8 +70,26 @@ func scale_for_stage(stage: int) -> float:
 
 
 ## The render scale for a tree of this age -- the form the renderer wants.
+##
+## CONTINUOUS, not one of seven fixed sizes.
+##
+## This used to return scale_for_stage(stage_at(age)), so a tree held one size
+## for a seventh of its life and then jumped. Over ten simulated minutes that
+## was unnoticeable; over three years of watchable growth it reads as a tree
+## popping between sizes rather than a stem thickening.
+##
+## The STAGES still exist and still mean what they meant -- they gate bearing
+## and timber -- but size is a curve through them.
 func scale_at(age_seconds: float) -> float:
-	return scale_for_stage(stage_at(age_seconds))
+	if age_seconds <= 0.0:
+		return SEEDLING_SCALE
+	if age_seconds >= MATURITY_SECONDS:
+		return 1.0
+	var t := age_seconds / MATURITY_SECONDS
+	# The same ease-out the stage curve uses: quick early gains, tapering
+	# toward full size, which is how a real stem puts on height.
+	var eased := 1.0 - pow(1.0 - t, 1.8)
+	return lerp(SEEDLING_SCALE, 1.0, eased)
 
 
 ## Does a tree at this stage bear fruit and yield real wood?

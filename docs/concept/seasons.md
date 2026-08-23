@@ -50,3 +50,23 @@ seasons), pinned by tests, not eyeballed.
 - ⬜ Seasonal crop viability for farming (see [farming.md](farming.md)).
 - ⬜ Disaster events (drought/flood/wildfire) perturbing the season baseline
   (see [weather.md](weather.md)).
+
+## Skipping to a season (`/season`)
+
+**A season jump moves the clock FORWARD, never back.** Season is a pure
+function of elapsed world time, so the obvious way to honour `/season winter`
+is to set the clock to winter. But every other system measures itself against
+that same clock: a tree records the age it was planted at, fruiting records the
+time it last ran. Winding the clock back gives a tree a negative age and hands
+the fruit model a span that runs backwards. Forward is the only move that
+leaves every other clock consistent — so asking for the season you are already
+in waits for it to come round again rather than doing nothing. You asked to
+watch it start.
+
+**The skipped time is not replayed.** The jump is up to a whole year, and
+fruiting counts what fell between the last time it ran and now. Moving the
+clock without moving that mark would empty every nearby canopy onto the ground
+in a single step — a year's windfall at once. The fruiting mark moves with the
+clock. Trees are deliberately *not* caught up the same way: a sapling really
+has aged while you skipped past, and seeing it older is the point of the
+command.

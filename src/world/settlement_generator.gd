@@ -9,10 +9,11 @@ extends RefCounted
 ## every settlement always has (well/stall/gate), so an NpcPlanner schedule
 ## referencing any of those tags always resolves to a real place.
 ##
-## Scope note: house positions are single-tile anchors (rendered as one
-## structure sprite each, see VillageRenderer), not multi-tile footprints via
-## BuildingBlueprint -- a deliberate Phase 1 simplification, see
-## docs/progress.md's NPC section.
+## `house_positions` are ANCHOR points, one per villager -- VillageRenderer
+## is what turns each anchor into a real multi-tile HouseBlueprint structure
+## (walls, floor, door, roof, actually stamped into the chunk), centred
+## roughly on the anchor. This module only decides WHERE that anchor sits,
+## not what gets built there.
 
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 
@@ -29,10 +30,10 @@ const SETTLEMENT_CHANCE_DENOMINATOR := 30
 const _UNINHABITABLE_BIOMES := {"ocean": true, "mountain": true}
 
 ## Houses ring the village center at roughly this radius -- wide enough that
-## the bigger multi-size houses (see ProceduralHouseSprite.SIZES, up to
-## ~3.5x3 tiles) sit apart as a settlement rather than a huddle. Each house
-## also gets a small seeded radius/angle jitter so the ring reads as grown,
-## not compass-drawn.
+## each house's real footprint (see VillageRenderer._HOUSE_FOOTPRINT, 5x4
+## tiles) sits apart as a settlement rather than a huddle of overlapping
+## structures. Each house also gets a small seeded radius/angle jitter so the
+## ring reads as grown, not compass-drawn.
 const _HOUSE_RING_RADIUS_TILES := 9
 const _HOUSE_RADIUS_JITTER_TILES := 1.5
 const _HOUSE_ANGLE_JITTER := 0.22

@@ -98,3 +98,30 @@ func test_a_large_open_floor_is_not_a_room():
 func test_results_are_deterministic():
 	var grid := _hut(true)
 	assert_eq(detector.find_rooms(grid), detector.find_rooms(grid))
+
+
+# -- room_containing: the specific room a cell is inside -----------------
+#
+# is_indoors only answers yes/no; a caller that needs to actually ACT on the
+## room (e.g. hiding a roof over exactly the cells the player is standing
+## under) needs the room's own cell list, not just a boolean.
+
+func test_room_containing_returns_the_specific_rooms_cells():
+	var grid := _hut(true)
+	var room := detector.room_containing(Vector2i(2, 2), grid)
+	assert_eq(room, detector.find_rooms(grid)[0])
+
+
+func test_room_containing_is_empty_when_the_cell_is_not_indoors():
+	var grid := _hut(true)
+	assert_eq(detector.room_containing(Vector2i(2, 6), grid), [])
+	assert_eq(detector.room_containing(Vector2i(0, 0), grid), [])
+
+
+func test_room_containing_picks_the_right_room_among_several():
+	var grid := _hut(true)
+	for cell in _hut(true):
+		grid[cell + Vector2i(10, 0)] = _hut(true)[cell]
+	var second_room := detector.room_containing(Vector2i(12, 2), grid)
+	assert_true(second_room.has(Vector2i(12, 2)))
+	assert_false(second_room.has(Vector2i(2, 2)), "should not return the OTHER hut's room")

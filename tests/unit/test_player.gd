@@ -13,6 +13,10 @@ const PlayerScene = preload("res://scenes/player.tscn")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const CreatureInfo = preload("res://src/world/creature_info.gd")
+const RopeTether = preload("res://src/gameplay/rope_tether.gd")
+const Taming = preload("res://src/gameplay/taming.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -54,6 +58,7 @@ func after_each():
 	Input.action_release("build")
 	Input.action_release("destroy")
 	Input.action_release("trade")
+	Input.action_release("talk")
 
 
 ## The tile the player is facing (see TileTargeting.facing_tile), matching
@@ -548,6 +553,43 @@ func test_repeated_purchases_cycle_through_different_items():
 	merchant.free()
 
 
+# -- talking to a nearby villager (see NpcGreeting, EarthChunkManager.
+# nearest_npc_near) -----------------------------------------------------------
+
+const NpcGreeting = preload("res://src/world/npc_greeting.gd")
+
+
+func _add_fake_npc_near_player(seed_value: int = 1) -> NpcMarker:
+	var npc := NpcMarker.new()
+	npc.identity = NpcIdentity.new(seed_value)
+	npc.position = player.position
+	creatures_parent.add_child(npc)
+	chunk_manager._loaded_villages[Vector2i(0, 0)] = [npc]
+	return npc
+
+
+func _tap_talk() -> void:
+	Input.action_press("talk")
+	player._talk_step(0.0)
+	Input.action_release("talk")
+	player._talk_step(0.0)
+
+
+func test_talking_with_no_villager_nearby_shows_a_no_one_message():
+	_tap_talk()
+	assert_string_contains(player.talk_message, "No one")
+
+
+func test_talking_near_a_villager_shows_that_villagers_own_greeting():
+	var npc := _add_fake_npc_near_player(7)
+	var greeting := NpcGreeting.new()
+
+	_tap_talk()
+
+	assert_eq(player.talk_message, greeting.greeting_for(npc.identity))
+	npc.free()
+
+
 # -- rare/legendary fish grant a real buff on eating --------------------------
 
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
@@ -612,3 +654,240 @@ func test_food_buff_step_expires_the_buff_after_its_duration():
 	player._food_buff_step(10000.0)  # comfortably longer than any buff duration
 
 	assert_eq(player.active_food_buffs.size(), 0)
+
+
+# -- venomous snake bites (see docs/concept/ecosystem_dynamics.md's Species
+# roster and CreatureMarker._try_attack) -----------------------------------
+
+const VenomModel = preload("res://src/gameplay/venom_model.gd")
+
+
+func test_apply_venom_adds_an_active_venom_debuff():
+	player.apply_venom()
+	assert_eq(player.active_venom_debuffs.size(), 1)
+	assert_eq(player.active_venom_debuffs[0]["debuff_id"], VenomModel.DEBUFF_ID)
+
+
+func test_venom_step_deals_damage_over_time_while_active():
+	player.apply_venom()
+	var before := player.health
+
+	player._venom_step(1.0)
+
+	assert_lt(player.health, before)
+
+
+func test_venom_step_does_nothing_without_an_active_venom_debuff():
+	var before := player.health
+
+	player._venom_step(1.0)
+
+	assert_eq(player.health, before)
+
+
+func test_venom_step_expires_after_its_duration():
+	player.apply_venom()
+
+	player._venom_step(VenomModel.DURATION_SECONDS + 1.0)
+
+	assert_eq(player.active_venom_debuffs.size(), 0)
+
+
+func test_repeated_bites_stack_venom_up_to_the_cap():
+	for i in VenomModel.MAX_STACKS + 5:
+		player.apply_venom()
+	assert_eq(player.active_venom_debuffs[0]["stacks"], VenomModel.MAX_STACKS)
+
+
+# -- taming: throwing the lasso (see docs/concept/taming.md) ------------------
+
+func _horse_at(offset: Vector2) -> CreatureMarker:
+	var marker := CreatureMarker.new()
+	marker.info = CreatureInfo.new("horse", 1)
+	marker.wander_seed = 9
+	# Added to the TEST's own node, not the bare creatures_parent: that one is
+	# never inside the SceneTree, so a marker under it never joins the
+	# creature group the throw scans.
+	add_child_autofree(marker)
+	marker.setup(chunk_manager, TILE_SIZE)
+	marker.position = player.position + offset
+	return marker
+
+
+func _hold_lasso() -> void:
+	player.equipped_item = _item_catalog.make("lasso")
+
+
+func test_throwing_the_lasso_catches_a_horse_within_reach():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(Player.LASSO_RANGE * 0.5, 0))
+	player._throw_lasso()
+	assert_true(horse.is_restrained(), "a horse within reach should be caught")
+
+
+## The throw is short on purpose: closing with a wary animal first is the part
+## that makes stalking one feel like something.
+func test_a_horse_out_of_reach_is_not_caught():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(Player.LASSO_RANGE * 2.0, 0))
+	player._throw_lasso()
+	assert_false(horse.is_restrained())
+
+
+func test_the_throw_takes_the_nearest_animal():
+	_hold_lasso()
+	var far := _horse_at(Vector2(Player.LASSO_RANGE * 0.9, 0))
+	var near := _horse_at(Vector2(Player.LASSO_RANGE * 0.2, 0))
+	player._throw_lasso()
+	assert_true(near.is_restrained())
+	assert_false(far.is_restrained(), "the rope only goes round one neck")
+
+
+## Predators are not tameable with a rope and a carrot, so the throw must not
+## even land on one.
+func test_the_lasso_does_not_catch_a_predator():
+	_hold_lasso()
+	var lynx := CreatureMarker.new()
+	lynx.info = CreatureInfo.new("lynx", 1)
+	add_child_autofree(lynx)
+	lynx.setup(chunk_manager, TILE_SIZE)
+	lynx.position = player.position + Vector2(8, 0)
+	player._throw_lasso()
+	assert_false(lynx.is_restrained())
+
+
+## Leading is nothing more than an anchor that walks with the player: the
+## animal is pulled along and can never end up past the end of the rope.
+func test_a_led_horse_is_towed_along_behind_the_player():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(16, 0))
+	# Worn down on purpose, so it stays caught for the whole walk: a healthy
+	# horse would usually fight the rope off partway through (which is its
+	# right, and is tested elsewhere) and leave this test asserting nothing.
+	horse.info.health = horse.info.max_health * 0.05
+	player._throw_lasso()
+	assert_true(horse.is_restrained(), "precondition: the throw landed")
+	for step in 400:
+		player.position = Vector2(float(step) * 0.6, 0)
+		player._lasso_step(1.0 / 60.0)
+		horse._process(1.0 / 60.0)
+	assert_true(horse.is_restrained(), "an exhausted horse should still be on the rope")
+	assert_lte(
+		horse.position.distance_to(player.position), RopeTether.ROPE_LENGTH + 0.01,
+		"a led horse must stay within the rope"
+	)
+
+
+## A carrot only leaves the inventory when it actually bought something --
+## walking a full horse past your carrots must not eat them.
+func test_feeding_a_full_horse_costs_no_carrots():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_lasso()
+	player.inventory.add(_item_catalog.make("carrot"), 3)
+	horse._needs.hunger = 0.0
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(player.inventory.count_of("carrot"), 3)
+	assert_eq(horse.trust, 0.0)
+
+
+func test_feeding_a_hungry_horse_spends_a_carrot_and_earns_trust():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_lasso()
+	player.inventory.add(_item_catalog.make("carrot"), 3)
+	horse._needs.hunger = 1.0
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(player.inventory.count_of("carrot"), 2, "one carrot, one meal")
+	assert_gt(horse.trust, 0.0)
+
+
+# -- orders and riding (see docs/concept/taming.md) --------------------------
+
+func _tamed_horse_at(offset: Vector2) -> CreatureMarker:
+	var horse := _horse_at(offset)
+	horse.restrain_to(horse.position)
+	while not horse.is_tame():
+		horse._needs.hunger = 1.0
+		horse.feed_treat()
+	horse.release()
+	return horse
+
+
+func test_the_order_key_cycles_a_tamed_animal_between_follow_and_stay():
+	var horse := _tamed_horse_at(Vector2(12, 0))
+	var first: int = horse.order
+	player._cycle_order()
+	assert_ne(horse.order, first, "the order should have changed")
+	player._cycle_order()
+	assert_eq(horse.order, first, "and come back round")
+
+
+func test_a_wild_animal_ignores_the_order_key():
+	var horse := _horse_at(Vector2(12, 0))
+	player._cycle_order()
+	assert_false(horse.is_tame())
+
+
+## A following horse is told where its owner is every frame, so it can
+## actually come to them.
+func test_a_following_horse_is_told_where_its_owner_is():
+	var horse := _tamed_horse_at(Vector2(12, 0))
+	horse.set_order(Taming.ORDER_FOLLOW)
+	player.position = Vector2(300, 300)
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(horse.follow_target, player.position)
+
+
+# -- riding -------------------------------------------------------------------
+
+func test_mounting_a_tamed_horse_makes_the_player_faster():
+	var horse := _tamed_horse_at(Vector2(12, 0))
+	assert_eq(player.current_speed(), Player.BASE_SPEED, "on foot to begin with")
+	assert_true(player._try_mount())
+	assert_true(player.is_mounted())
+	assert_eq(player.current_speed(), Taming.MOUNTED_SPEED)
+	assert_not_null(horse)
+
+
+func test_an_untamed_horse_cannot_be_ridden():
+	var horse := _horse_at(Vector2(12, 0))
+	assert_false(player._try_mount())
+	assert_false(player.is_mounted())
+	assert_false(horse.is_tame())
+
+
+## A tamed boar follows and stays; it is not a horse.
+func test_a_species_that_cannot_carry_a_person_is_not_a_mount():
+	var boar := _horse_at(Vector2(12, 0))
+	boar.info = CreatureInfo.new("boar", 1)
+	boar.restrain_to(boar.position)
+	while not boar.is_tame():
+		boar._needs.hunger = 1.0
+		boar.feed_treat()
+	boar.release()
+	assert_false(player._try_mount())
+
+
+func test_a_horse_out_of_reach_cannot_be_mounted():
+	var horse := _tamed_horse_at(Vector2(Player.LASSO_RANGE * 4.0, 0))
+	assert_false(player._try_mount())
+	assert_not_null(horse)
+
+
+func test_dismounting_puts_the_player_back_on_foot():
+	var _horse := _tamed_horse_at(Vector2(12, 0))
+	player._try_mount()
+	player._dismount()
+	assert_false(player.is_mounted())
+	assert_eq(player.current_speed(), Player.BASE_SPEED)
+
+
+## The mount travels with the rider rather than being left behind -- riding a
+## horse that stayed put would be a very strange kind of riding.
+func test_the_mount_travels_with_its_rider():
+	var horse := _tamed_horse_at(Vector2(12, 0))
+	player._try_mount()
+	player.position = Vector2(600, -220)
+	player._lasso_step(1.0 / 60.0)
+	assert_almost_eq(horse.position.distance_to(player.position), 0.0, 1.0)

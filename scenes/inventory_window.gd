@@ -1,11 +1,24 @@
 extends PanelContainer
 
 ## The inventory + character screen (toggle I). Left: an equipment paperdoll --
-## a small rendered character flanked by armor/weapon slots you can click to
-## unequip. Right: a grid of item slots (icon + count); click an item to
-## equip/wear it (armor/weapon) or eat it (food). PoE/Valheim/Hammerwatch shape.
-## Purely glue: what an item does is decided by the tested Player.activate_item_id
-## / equip_armor; World routes the signals.
+## a small rendered character flanked by armor/weapon slots you can
+## right-click to unequip. Right: a grid of item slots (icon + count);
+## right-click an item to equip/wear it (armor/weapon) or eat it (food);
+## left-click and drag to reorder within the grid, drop onto a HUD hotbar
+## slot to bind it, or drop onto the world to throw it away.
+## PoE/Valheim/Hammerwatch shape. Purely glue: what an item does is decided
+## by the tested Player.activate_item_id/equip_armor; World routes the
+## signals.
+##
+## Deliberately RIGHT-click for the destructive "use it now" action, not
+## left: left is also the drag gesture (see DragSlot), and Godot's
+## _get_drag_data only ever triggers off the LEFT button. Wiring "use" to
+## left too meant a click that was actually the START of a drag (mouse-down
+## before it moved past the drag threshold) fired activate_item_id on press,
+## the same instant -- a food item you meant to pick up and move quietly ate
+## itself, and a weapon you meant to drag onto the hotbar re-equipped in
+## place first. Reported as "a click on a carrot makes it vanish". Right
+## never starts a drag in Godot, so it can't collide with one.
 
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
@@ -137,7 +150,7 @@ func _build_slot_row(slot: String) -> Control:
 	box.custom_minimum_size = Vector2(EQUIP_SLOT_SIZE, EQUIP_SLOT_SIZE)
 	box.mouse_filter = Control.MOUSE_FILTER_STOP
 	box.gui_input.connect(_on_slot_gui_input.bind(slot))
-	box.tooltip_text = "Click to unequip"
+	box.tooltip_text = "Right-click to unequip"
 	var icon := TextureRect.new()
 	icon.custom_minimum_size = Vector2(EQUIP_ICON_SIZE, EQUIP_ICON_SIZE)
 	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -159,7 +172,16 @@ func _build_inventory_column() -> Control:
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var heading := Label.new()
-	heading.text = "Inventory  (click to use / equip)"
+	heading.text = "Inventory  (right-click to use / equip · drag to move)"
+	# Wrap against a FIXED width rather than the label's own natural size --
+	# autowrap alone, with no minimum width set, collapses the label's
+	# horizontal minimum toward zero and wraps nearly character-by-character
+	# into an enormous height instead. 300px matches the grid column's own
+	# rough width, so this reads as a normal two-line hint (see
+	# test_window_minimum_size_fits_the_anchor_box_world_gives_it, which
+	# pins the window's overall min size against World's anchor box).
+	heading.custom_minimum_size = Vector2(300, 0)
+	heading.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(heading)
 
 	_grid = GridContainer.new()
@@ -304,11 +326,15 @@ func _item_tooltip_text(stack) -> String:
 	return "\n".join(lines)
 
 
+## Right-click (not left -- see the class doc comment on why) triggers
+## use/equip. `event.pressed` alone, not release: matches this window's
+## previous click semantics and Godot's right button never enters a drag
+## regardless, so there's no press/release ambiguity to resolve here.
 func _on_item_gui_input(event: InputEvent, item_id: String) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		item_clicked.emit(item_id)
 
 
 func _on_slot_gui_input(event: InputEvent, slot: String) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
 		unequip_requested.emit(slot)

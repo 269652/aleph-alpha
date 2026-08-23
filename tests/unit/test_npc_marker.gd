@@ -9,8 +9,22 @@ extends GutTest
 
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const CharacterViewScene = preload("res://scenes/character_view.tscn")
+const CharacterView = preload("res://scenes/character_view.gd")
+
+const TILE_SIZE := 16
+
+
+## Duck-typed world: every tile is the same biome unless overridden, same
+## shape as CreatureMarker's test stub.
+class StubWorld:
+	var biome := "grassland"
+	func biome_at_global(_x: int, _y: int) -> String:
+		return biome
+
 
 var marker: NpcMarker
+var _extra: Array = []
 
 
 func before_each():
@@ -26,6 +40,18 @@ func before_each():
 func after_each():
 	remove_child(marker)
 	marker.free()
+	for node in _extra:
+		if is_instance_valid(node):
+			node.free()
+	_extra = []
+
+
+func _bind_real_view() -> CharacterView:
+	var view: CharacterView = CharacterViewScene.instantiate()
+	add_child(view)
+	_extra.append(view)
+	marker.bind_character_view(view)
+	return view
 
 
 func test_lazily_generates_a_schedule_on_first_process():
@@ -78,3 +104,86 @@ func test_resolves_a_non_landmark_work_tag_to_the_personal_workspot():
 	for i in 200:
 		marker._process(1.0)
 	assert_lt(marker.position.distance_to(marker.workspot_position), 1.0)
+
+
+# -- walk/swim animation (bound CharacterView, see bind_character_view) -----
+#
+# The view was bound (VillageRenderer._build_npc) but nothing ever actually
+# drove it after that -- _process moved the marker every frame without ever
+# calling set_facing/is_moving/set_movement_state on the view, so every
+# villager's walk-cycle sat frozen in IDLE despite visibly moving (reported:
+# "NPCs don't have walk or swim animation").
+
+func test_moving_toward_a_target_sets_is_moving_and_faces_the_travel_direction():
+	var view := _bind_real_view()
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]
+	marker.position = Vector2(1000, 1200)  # far from home_position (1000, 1000) -- straight up
+
+	marker._process(0.1)
+
+	assert_true(view.is_moving)
+	assert_eq(view.movement_state, CharacterView.MovementState.WALKING)
+	assert_eq(view.facing, CharacterView.Facing.UP)
+
+
+func test_standing_still_at_the_target_leaves_the_view_idle():
+	var view := _bind_real_view()
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]
+	marker.position = marker.home_position  # already there -- nothing to walk toward
+
+	marker._process(0.1)
+
+	assert_false(view.is_moving)
+	assert_eq(view.movement_state, CharacterView.MovementState.IDLE)
+
+
+func test_standing_on_water_sets_the_view_to_swimming():
+	var view := _bind_real_view()
+	var world := StubWorld.new()
+	world.biome = "ocean"
+	marker.setup(world, TILE_SIZE)
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]
+	marker.position = marker.home_position
+
+	marker._process(0.1)
+
+	assert_eq(view.movement_state, CharacterView.MovementState.SWIMMING)
+
+
+## Without setup() (no world), an NPC has no way to check the tile it's
+## standing on -- must default to land behavior, not crash.
+func test_without_setup_never_crashes_and_defaults_to_land_behavior():
+	var view := _bind_real_view()
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "idle"},
+	]
+	marker.position = marker.home_position
+	marker._process(0.1)
+	assert_ne(view.movement_state, CharacterView.MovementState.SWIMMING)
+
+
+func test_no_bound_view_never_crashes():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+	]
+	marker.position = Vector2(1000, 1200)
+	marker._process(0.1)  # no bound CharacterView -- must not error
+	assert_ne(marker.position, Vector2(1000, 1200), "should still walk normally with no view bound")

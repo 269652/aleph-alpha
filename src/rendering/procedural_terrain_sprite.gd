@@ -14,6 +14,8 @@ extends RefCounted
 ## just genuinely more detailed: independent per-pixel speckle noise across
 ## 4x the pixels, not the old 16x16 art stretched larger (pinned by
 ## test_speckled_texture_has_genuine_per_pixel_detail_not_upscaled_blocks).
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+
 const SIZE := 64
 
 ## Frames per animated tile (see generate_frame_image and TerrainRenderer's
@@ -40,11 +42,37 @@ const BASE_COLORS := {
 const _FALLBACK_COLOR := Color(0.5, 0.5, 0.5)
 
 ## Terrain has no "shape" family the way items do -- every biome is textured
-## as an all-over speckled fill, with per-biome tuning of how coarse/bright
-## the speckle is. Water instead gets horizontal wave streaks.
-const SPECKLE_DENSITY := 0.35
+## as an all-over marked fill, with per-biome detail layered on top. Water
+## instead gets horizontal wave streaks.
+##
+## ## Marks, not static
+##
+## This was INDEPENDENT per-pixel noise at 35% density: a third of every
+## tile's pixels randomly darkened or lightened, each one rolled on its own.
+## Measured, the tile changed appearance at 65% of neighbouring pixel pairs --
+## worse than a coin flip, i.e. the tile was mostly high-frequency noise. That
+## is precisely what "coarse and grainy" is, and the old non-pixel-perfect
+## fullscreen upscale (see DisplayScaling) made it shimmer on top.
+##
+## Real pixel-art ground is made of deliberate MARKS -- small clumps and
+## dashes -- with clean ground showing between them. So the roll is taken
+## from a COARSER grid than the pixel: SPECKLE_CLUSTER-sized cells decide
+## most of the value, and a per-pixel roll contributes the rest, which ragged
+## the edges of each mark so nothing reads as painted in blocks. Density
+## drops too, because the point of texture is the clean ground it sits on.
+##
+## Pinned from three sides: the transition rate must stay low
+## (test_ground_marks_clump_together_instead_of_speckling_at_random), clean
+## ground must stay in the majority (test_clean_ground_shows_between_the_marks),
+## and mark edges must still land on odd pixels
+## (test_marks_still_have_per_pixel_ragged_edges).
+const SPECKLE_DENSITY := 0.24
 const SPECKLE_DARKEN := 0.18
 const SPECKLE_LIGHTEN := 0.12
+## How many pixels across one mark's cell is, and how much of the roll that
+## cell decides versus the per-pixel roll that frays its edge.
+const SPECKLE_CLUSTER := 2
+const SPECKLE_CLUSTER_WEIGHT := 0.8
 
 
 func generate_texture(biome_name: String, variant_seed: int) -> ImageTexture:
@@ -73,10 +101,15 @@ func generate_frame_image(biome_name: String, variant_seed: int, frame: int) -> 
 			_paint_speckled(image, base_color, variant_seed)
 			# Baked blades are STATIC by design: 4 tile frames can only make a
 			# 1px tip jump, which reads as flicker, never as wind (reported
-			# twice). They freeze as varied windswept ground detail; all real
-			# blade motion lives in the GPU field (see GrassBladeField).
+			# twice). They freeze as varied windswept ground detail. The GPU
+			# blade field that used to carry the real swaying motion was
+			# removed (flat, non-interactive 1px rectangles, no real shape) --
+			# a real, illustrated decorative grass layer is expected to
+			# replace it.
 			_paint_grass_blades(image, base_color, variant_seed, 0)
-			_paint_flowers(image, variant_seed)
+			# No baked flower dots: real flowers are entities now (see
+			# FlowerPatch/ProceduralFlowerSprite). The old painted specks read
+			# as flowers you could never pick or smell.
 		"forest", "rainforest":
 			_paint_speckled(image, base_color, variant_seed)
 			_paint_moss(image, base_color, variant_seed)
@@ -101,7 +134,7 @@ func generate_frame_image(biome_name: String, variant_seed: int, frame: int) -> 
 func _paint_speckled(image: Image, base_color: Color, variant_seed: int) -> void:
 	for y in SIZE:
 		for x in SIZE:
-			var roll := _fraction(variant_seed, x, y, "speckle")
+			var roll := _speckle_roll(variant_seed, x, y)
 			var color := base_color
 			if roll < SPECKLE_DENSITY * 0.5:
 				color = base_color.darkened(SPECKLE_DARKEN)
@@ -206,7 +239,15 @@ func blade_curve_fraction(t: float) -> float:
 
 
 func blade_spec(variant_seed: int, index: int) -> Dictionary:
-	var h := absi(hash("%d_blade_%d" % [variant_seed, index]))
+	# PixelNoise, not Godot's string hash: hashing "..._0", "..._1", "..._2"
+	# correlates badly, so consecutive blades landed beside each other at the
+	# same height and their (up to BLADE_ROOT_WIDTH wide, and darkly tinted)
+	# strokes merged into solid slabs -- a litter of flat dark-green blocks
+	# lying on the grass (reported repeatedly as "green square patches which
+	# look horrible"). This is the FIFTH site of that same clustering bug in
+	# this project, after village house sizes, tree leaf angles, grass tuft
+	# blades and the GPU blade field.
+	var h := PixelNoise.value(variant_seed, index, 0)
 	return {
 		"x": 1 + h % (SIZE - 2),
 		# Roots spread over the whole tile (not just its lower band) so the
@@ -274,22 +315,63 @@ func _paint_flowers(image: Image, variant_seed: int) -> void:
 				image.set_pixel(fx + dx, fy + dy, color)
 
 
-## Dark moss/undergrowth patches on forest-floor tiles: a few small filled
-## blobs of deepened green (_MOSS_BLOB_SIZE px square, 4x the original 2x2 --
-## see docs/concept/art_resolution.md), so the floor reads as layered
-## undergrowth rather than one flat speckle field.
-const _MOSS_BLOB_SIZE := 8
+## Dark moss/undergrowth patches on forest-floor tiles, so the floor reads as
+## layered undergrowth rather than one flat speckle field.
+##
+## These used to be perfect axis-aligned filled squares, three per tile.
+## Across a whole forest that read as a litter of hard green rectangles lying
+## on the ground (reported: "there are these green square patches which look
+## horrible"). A patch is now a ragged blob: a disc whose rim distance
+## wanders per DIRECTION, so the outline is coherently irregular rather than
+## either a clean circle or per-pixel static.
+const MOSS_PATCH_RADIUS := 5
+## How many rim sectors the wobble is sampled over. Few enough that the
+## outline reads as a handful of lobes rather than noise.
+const MOSS_RIM_SECTORS := 12
+## How much of the radius the rim can lose at its narrowest, as a fraction --
+## the remainder is the guaranteed solid core.
+const MOSS_RIM_JITTER := 0.45
+
+
+## The pixel offsets, relative to a patch's center, that one moss patch
+## covers. Pulled out of the painter so the SHAPE can be tested directly --
+## the thing that was wrong was never the colour, it was that the shape was a
+## rectangle.
+static func moss_patch_offsets(seed_value: int, index: int) -> Array[Vector2i]:
+	var offsets: Array[Vector2i] = []
+	var radius := float(MOSS_PATCH_RADIUS)
+	for dy in range(-MOSS_PATCH_RADIUS, MOSS_PATCH_RADIUS + 1):
+		for dx in range(-MOSS_PATCH_RADIUS, MOSS_PATCH_RADIUS + 1):
+			if dx == 0 and dy == 0:
+				offsets.append(Vector2i.ZERO)
+				continue
+			var distance := sqrt(float(dx * dx + dy * dy))
+			# Which rim sector this direction falls in. Sampling the wobble
+			# by angle (not per pixel) keeps neighbouring pixels agreeing, so
+			# the edge is a ragged outline instead of a dissolve.
+			var sector := int((atan2(float(dy), float(dx)) + PI) / TAU * float(MOSS_RIM_SECTORS))
+			# PixelNoise, not Godot's string hash: hashing near-identical
+			# inputs correlates, which this project has been bitten by four
+			# times (village house sizes, tree leaf angles, tuft blades,
+			# blade fields).
+			var wobble := PixelNoise.unit(seed_value + index * 7919, sector, 0)
+			var limit := radius * (1.0 - MOSS_RIM_JITTER + MOSS_RIM_JITTER * wobble)
+			if distance <= limit:
+				offsets.append(Vector2i(dx, dy))
+	return offsets
 
 
 func _paint_moss(image: Image, base_color: Color, variant_seed: int) -> void:
 	var moss_color := base_color.darkened(0.3)
 	for i in 3:
 		var h := absi(hash("%d_moss_%d" % [variant_seed, i]))
-		var mx := h % (SIZE - _MOSS_BLOB_SIZE)
-		var my := (h / 47) % (SIZE - _MOSS_BLOB_SIZE)
-		for dy in _MOSS_BLOB_SIZE:
-			for dx in _MOSS_BLOB_SIZE:
-				image.set_pixel(mx + dx, my + dy, moss_color)
+		var center_x := MOSS_PATCH_RADIUS + h % (SIZE - MOSS_PATCH_RADIUS * 2)
+		var center_y := MOSS_PATCH_RADIUS + (h / 47) % (SIZE - MOSS_PATCH_RADIUS * 2)
+		for offset in moss_patch_offsets(variant_seed, i):
+			var px := center_x + offset.x
+			var py := center_y + offset.y
+			if px >= 0 and px < SIZE and py >= 0 and py < SIZE:
+				image.set_pixel(px, py, moss_color)
 
 
 ## Wind-blown dune ripples: two shallow diagonal shade lines across the sand,
@@ -396,6 +478,18 @@ func _paint_cracks(image: Image, base_color: Color, variant_seed: int) -> void:
 
 ## A deterministic pseudo-random fraction in [0, 1] for a pixel, derived from
 ## the variant seed and its own coordinates.
+## One pixel's texture roll: mostly decided by the mark-sized cell it sits in,
+## with a per-pixel contribution that frays the mark's edge. Cell-first is what
+## turns static into texture; the per-pixel part is what keeps it from reading
+## as upscaled blocks.
+func _speckle_roll(variant_seed: int, x: int, y: int) -> float:
+	var coarse := _fraction(
+		variant_seed, x / SPECKLE_CLUSTER, y / SPECKLE_CLUSTER, "clump"
+	)
+	var fine := _fraction(variant_seed, x, y, "speckle")
+	return coarse * SPECKLE_CLUSTER_WEIGHT + fine * (1.0 - SPECKLE_CLUSTER_WEIGHT)
+
+
 func _fraction(variant_seed: int, x: int, y: int, salt: String) -> float:
 	return float(absi(hash("%d_%d_%d_%s" % [variant_seed, x, y, salt])) % 10000) / 10000.0
 
@@ -421,6 +515,99 @@ func generate_directional_blend_image(
 	near_biome: String, far_biome: String, direction: Vector2i, variant_seed: int
 ) -> Image:
 	return generate_multi_directional_blend_image(near_biome, far_biome, [direction], variant_seed)
+
+
+## The four diagonal tile corners a corner-carve can be cut into, in a fixed
+## order (NE, SE, SW, NW) -- TerrainRenderer's corner-detection and atlas
+## layout both iterate this exact list so their indexing stays in sync.
+const CORNER_DIRECTIONS: Array[Vector2i] = [
+	Vector2i(1, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(-1, -1)
+]
+
+## How large a corner carve's radius is, in ART-PIXEL units at this
+## generator's own SIZE (== TerrainRenderer.ART_TILE_SIZE) resolution -- the
+## actual unit a human picks a border-radius in, so this is the one number
+## that's tuned/tested, per CLAUDE.md's "no eyeballed tuning" rule. Small
+## enough that it only eats the corner -- not the whole straight edge on
+## either side of it. Pinned by
+## test_corner_radius_is_exactly_8_pixels_at_art_tile_size_resolution and
+## exercised by test_pixels_far_from_the_named_corner_are_untouched.
+const CORNER_RADIUS_PIXELS := 8.0
+
+## CORNER_RADIUS_PIXELS expressed as a fraction of SIZE -- what
+## generate_corner_image's own math actually needs (independent of tile
+## resolution, see docs/concept/art_resolution.md), derived from the tested
+## pixel constant above rather than a bare literal fraction.
+const CORNER_RADIUS_FRACTION := CORNER_RADIUS_PIXELS / SIZE
+
+
+## A tile carved at one or more of its four corners at once (see
+## CORNER_DIRECTIONS): `own_biome`'s own plain tile everywhere, except a
+## quarter-circle wedge at EACH of `corner_directions`' corners (radius
+## CORNER_RADIUS_FRACTION * SIZE, inset from that corner so the arc is
+## tangent to both edges it touches) which is replaced pixel-for-pixel with
+## `other_biome`'s own tile texture at the same coordinates. Multiple
+## directions carve independently -- a pixel counts as carved if it falls in
+## ANY of the requested wedges, so a cell that qualifies on more than one
+## corner at once (a single-tile spit with water on three sides, or a lone
+## one-tile pond surrounded on all four) gets every one of its real corners
+## rounded, not just the first (measured directly against real generated
+## chunks: 859 of 3355 real corner cells qualify on more than one corner
+## simultaneously -- silently dropping the rest is exactly why some corners
+## on a real coastline carved while others on the same tile stayed hard
+## right angles, reported: "still not giving every corner a border radius").
+## This is a real carved SHAPE in the opaque base tile -- not an alpha blend
+## -- so it actually changes the tile's painted silhouette (unlike the GPU
+## shore-distance overlay, which sits on top of this base tile and can never
+## change its shape).
+func generate_corner_image(
+	own_biome: String, other_biome: String, corner_directions: Array, variant_seed: int
+) -> Image:
+	return generate_corner_image_from(
+		generate_image(own_biome, variant_seed), generate_image(other_biome, variant_seed), corner_directions
+	)
+
+
+## Like generate_corner_image, but sources real pixels from the given
+## own_image/other_image instead of generating them from biome names --
+## lets a caller (see TerrainRenderer._corner_image) hand in each side's
+## REAL illustrated or procedural texture so a coastline corner carves
+## actual ground art together, not a texture resynthesized from a bare
+## biome name. Purely a compositing mask (wedge geometry): no variant_seed,
+## since which pixel wins at each position depends only on position, and
+## any real texture comes from the source images themselves. own_image and
+## other_image must be the same size; the output matches that size.
+func generate_corner_image_from(own_image: Image, other_image: Image, corner_directions: Array) -> Image:
+	var size := own_image.get_width()
+	var image := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var last := float(size - 1)
+	var radius := CORNER_RADIUS_FRACTION * size
+
+	# Precompute each requested corner's inset wedge-circle center once.
+	var centers: Array[Vector2] = []
+	for corner_direction in corner_directions:
+		var corner := Vector2(last if corner_direction.x > 0 else 0.0, last if corner_direction.y > 0 else 0.0)
+		centers.append(corner - Vector2(corner_direction.x, corner_direction.y) * radius)
+
+	for y in size:
+		for x in size:
+			var point := Vector2(x, y)
+			var carved := false
+			for i in corner_directions.size():
+				var corner_direction: Vector2i = corner_directions[i]
+				var center: Vector2 = centers[i]
+				var in_quadrant := (
+					(point.x - center.x) * corner_direction.x >= 0
+					and (point.y - center.y) * corner_direction.y >= 0
+				)
+				if in_quadrant and point.distance_to(center) > radius:
+					carved = true
+					break
+			if carved:
+				image.set_pixel(x, y, other_image.get_pixel(x, y))
+			else:
+				image.set_pixel(x, y, own_image.get_pixel(x, y))
+	return image
 
 
 ## 4x4 Bayer ordered-dither threshold matrix (values 0..15, normalized on
@@ -456,13 +643,32 @@ const _BLEND_BAND_END := 0.7
 func generate_multi_directional_blend_image(
 	near_biome: String, far_biome: String, directions: Array, variant_seed: int
 ) -> Image:
-	var near_color: Color = BASE_COLORS.get(near_biome, _FALLBACK_COLOR)
-	var far_color: Color = BASE_COLORS.get(far_biome, _FALLBACK_COLOR)
-	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
-	var last := float(SIZE - 1)
+	return generate_multi_directional_blend_image_from(
+		generate_image(near_biome, variant_seed), generate_image(far_biome, variant_seed), directions
+	)
 
-	for y in SIZE:
-		for x in SIZE:
+
+## Like generate_multi_directional_blend_image, but sources real pixels from
+## the given near_image/far_image instead of synthesizing flat BASE_COLORS
+## plus a speckle roll -- lets a caller (see TerrainRenderer._blend_image)
+## hand in each side's REAL illustrated or procedural texture, so a border
+## dithers actual ground art together instead of a flat-color stand-in
+## (reported: illustrated ground next to a flat/procedural-looking border
+## read as visibly inconsistent). Purely the dither MASK is computed here
+## (which image's pixel wins at each position, via the same directional
+## gradient + Bayer threshold as the biome-name form): no variant_seed and
+## no extra speckle layered on top, since the source images already carry
+## their own real texture (including, for the procedural wrapper above,
+## generate_image's own speckle -- adding a second speckle pass on top of
+## an already-textured image would just be noise on noise). near_image and
+## far_image must be the same size; the output matches that size.
+func generate_multi_directional_blend_image_from(near_image: Image, far_image: Image, directions: Array) -> Image:
+	var size := near_image.get_width()
+	var image := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var last := float(size - 1)
+
+	for y in size:
+		for x in size:
 			# Fraction toward far_biome (0 at a near edge, 1 at a far edge),
 			# taken as the strongest pull among all active directions.
 			var t := 0.0
@@ -480,14 +686,7 @@ func generate_multi_directional_blend_image(
 
 			var sharpened := smoothstep(_BLEND_BAND_START, _BLEND_BAND_END, t)
 			var threshold := (float(_BAYER_4X4[y % 4][x % 4]) + 0.5) / 16.0
-			var base_color := far_color if threshold < sharpened else near_color
-
-			var speckle_roll := _fraction(variant_seed, x, y, "blend_speckle")
-			var color := base_color
-			if speckle_roll < SPECKLE_DENSITY * 0.5:
-				color = base_color.darkened(SPECKLE_DARKEN)
-			elif speckle_roll < SPECKLE_DENSITY:
-				color = base_color.lightened(SPECKLE_LIGHTEN)
-			image.set_pixel(x, y, color)
+			var source := far_image if threshold < sharpened else near_image
+			image.set_pixel(x, y, source.get_pixel(x, y))
 
 	return image

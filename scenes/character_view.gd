@@ -5,6 +5,8 @@ const WeaponSwing = preload("res://src/gameplay/weapon_swing.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
+const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 
 ## Reusable placeholder character rendering: a body/head/legs/arms made of
 ## flat colored shapes, a directional facing, walk and swim animations, and a
@@ -46,8 +48,43 @@ const ART_LEG_SIZE := Vector2i(10, 16)
 const ART_ARM_SIZE := Vector2i(8, 18)
 const ART_SLOT_SIZE := Vector2i(14, 14)
 
+## The character's own origin sits at its feet (y=0, see the feet-anchoring
+## tests in test_character_view.gd) -- this is the top of the HEAD relative
+## to that, i.e. the character's own total height. Mirrors
+## character_view.tscn's Head position (-27) minus half HEAD_SIZE.y (6);
+## pinned against the live scene by test_head_top_y_matches_the_actual_head_
+## nodes_top_edge so a .tscn layout change can't silently drift out of sync
+## with the scale computed from it below.
+const HEAD_TOP_Y := -33.0
+
+## The character (and every NPC, who shares this same scene -- see
+## VillageRenderer) reads at this fraction of a full-grown tree's height,
+## rather than looming as tall as (or taller than) the trees around it
+## (reported: "shrink the character and npcs so they are 2/3 the height of
+## a tree").
+const TARGET_HEIGHT_FRACTION_OF_TREE := 2.0 / 3.0
+
+## Computed, not eyeballed (see CLAUDE.md): the character's own total
+## on-screen height (feet to head-top, -HEAD_TOP_Y) times this scale must
+## equal TARGET_HEIGHT_FRACTION_OF_TREE of a tree's real WORLD height
+## (already resolution-corrected -- see TreeRenderer.TREE_SIZE, itself
+## just ProceduralTreeSprite.WORLD_SIZE). Pinned by
+## test_scaled_character_height_is_two_thirds_a_trees_world_height.
+const SCALE := (
+	TARGET_HEIGHT_FRACTION_OF_TREE * float(ProceduralTreeSprite.WORLD_SIZE.y) / -HEAD_TOP_Y
+)
+
 var facing := Facing.DOWN
 var movement_state := MovementState.IDLE
+## Whether the character is actually being driven right now (nonzero input),
+## as opposed to just being in water. SWIMMING used to stroke the arms
+## unconditionally off a free-running clock, so treading water in place
+## looked identical to actually swimming (reported: "the arms should only
+## animate when moving not when standing"). Legs/arm visibility and tool
+## stowing stay keyed off movement_state alone -- you're still submerged
+## while treading water -- only the STROKE ANIMATION additionally checks
+## this.
+var is_moving := false
 var leg_swing_offset := 0.0
 var arm_stroke_offset := 0.0
 
@@ -56,6 +93,7 @@ var _equipped_slots: Dictionary = {}  # slot_name (String) -> bool
 
 var _weapon_swing := WeaponSwing.new()
 var _character_sprite := ProceduralCharacterSprite.new()
+var _submersion := SubmersionShader.new()
 var _swing_time_remaining := 0.0
 var _swing_duration := 0.0
 var _swing_facing := "down"
@@ -87,6 +125,20 @@ func _ready() -> void:
 	for part in [_body, _head, _leg_left, _leg_right, _arm_left, _arm_right, _head_slot, _tool_slot]:
 		part.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 
+	# Shrinks the whole rig (this node, not the individual parts above) down
+	# to SCALE's fraction of a tree's height -- see SCALE's own doc comment.
+	# Applied on the CharacterView node itself so it scales every part AND
+	# their .tscn positions uniformly, rather than needing every offset
+	# constant in this file re-tuned by hand.
+	scale = Vector2.ONE * SCALE
+
+	# Torso submersion (see SubmersionShader) -- the player used to have NO
+	# visual for being partway underwater at all: legs simply vanished and
+	# the torso rendered exactly as it does on dry land (reported: "half the
+	# torso should be under water"). Only the torso, not every part: that is
+	# what "half" means here, and it is what the ask specifically named.
+	_body.material = _submersion.shared_material()
+
 	_leg_left_base_position = _leg_left.position
 	_leg_right_base_position = _leg_right.position
 	_arm_left_base_position = _arm_left.position
@@ -114,9 +166,13 @@ func _process(delta: float) -> void:
 			leg_swing_offset = sin(_cycle_time) * LEG_SWING_AMPLITUDE
 			arm_stroke_offset = 0.0
 		MovementState.SWIMMING:
-			_cycle_time += delta * SWIM_CYCLE_SPEED
-			arm_stroke_offset = sin(_cycle_time) * ARM_STROKE_AMPLITUDE
 			leg_swing_offset = 0.0
+			if is_moving:
+				_cycle_time += delta * SWIM_CYCLE_SPEED
+				arm_stroke_offset = sin(_cycle_time) * ARM_STROKE_AMPLITUDE
+			else:
+				# Treading water: submerged, arms out, but not stroking.
+				arm_stroke_offset = 0.0
 		_:
 			_cycle_time = 0.0
 			leg_swing_offset = 0.0
@@ -131,6 +187,16 @@ func _process(delta: float) -> void:
 	_leg_right.position = _leg_right_base_position + Vector2(0, -leg_swing_offset)
 	_arm_left.position = _arm_left_base_position + Vector2(0, arm_stroke_offset)
 	_arm_right.position = _arm_right_base_position + Vector2(0, -arm_stroke_offset)
+
+	# The waterline sits at the torso's own vertical CENTER -- _body.position
+	# is already that centre (Sprite2D draws centred on its own position by
+	# default, and Body carries no extra offset), so "half the torso
+	# submerged" falls straight out of that existing constant rather than
+	# needing a new hand-tuned fraction.
+	if movement_state == MovementState.SWIMMING:
+		_submersion.set_waterline(global_position.y + _body.position.y)
+	else:
+		_submersion.clear_waterline()
 
 	if _swing_time_remaining > 0.0:
 		_swing_time_remaining = maxf(0.0, _swing_time_remaining - delta)

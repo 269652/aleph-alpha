@@ -144,3 +144,106 @@ correct tile positions once `TILE_SIZE` changes.
 - ⬜ Phase 5 (structures).
 - ⬜ Phase 6 (items / icons).
 - ⬜ Phase 7 (camera/viewport/HUD re-tune).
+- ✅ Illustrated ground tiles (separate track from the phases above, same
+  "hand/AI-illustrated sheet replaces procedural generation where art
+  exists" transition `IllustratedStoneSprite` already made for loose
+  stone). `IllustratedTerrainSprite` (`src/rendering/
+  illustrated_terrain_sprite.gd`) is wired into
+  `TerrainRenderer._biome_frame_image` with a `has_variants()`-gated
+  fallback to `ProceduralTerrainSprite`, and every LAND biome now has a
+  real, registered sheet: `assets/sprites/terrain/
+  {grass,forest,desert,mountain,tundra,jungle}.png`. Originally targeted as
+  5x5/25-variant sheets (`docs/art/ai_sprite_prompts.md` section 3), but
+  real generation only reliably held a square-cell grid at 3x3 — a 5x5
+  attempt came back as uneven tall strips, not a grid at all.
+  `TerrainRenderer.VARIANTS_PER_BIOME` settled at 9 to match (was briefly
+  raised to 25 in anticipation of 5x5), so every baked atlas slot maps to a
+  genuinely distinct illustrated tile rather than wasting slots on
+  duplicates. The sheets' divider lines carry a soft glow that a strict
+  near-pure-magenta chroma-key missed — `IllustratedTerrainSprite` uses a
+  looser red/blue-average-above-green threshold than
+  `IllustratedStoneSprite`'s, tuned specifically for these sheets. Two
+  deliberate scope limits, not gaps: ocean stays procedural (illustrated
+  tiles have no animation seam yet, and ocean's whole identity is the
+  animated scroll), and the directional-blend/corner-carve border tiles
+  stay procedural regardless of what's registered (illustrating that
+  combinatorial space by hand isn't practical — see
+  `IllustratedTerrainSprite`'s own doc comment).
+
+
+## Presentation: how an art pixel reaches a screen pixel
+
+Authoring art at DETAIL_MULTIPLIER times the world size is only half the
+problem. The other half is what happens between the framebuffer and the
+monitor, and it is where the coarse, grainy look actually came from.
+
+The game used `window/stretch/mode="viewport"`: everything rendered into a
+1280x720 framebuffer which was then blitted to the display. At 1080p that is a
+1.5x upscale, so one art pixel covered two screen pixels in some places and one
+in others. Uneven pixel sizes are what "grainy" is; nearest filtering was
+already on and cannot help, because the unevenness is in the blit, not the
+sampling.
+
+The mode is now **`canvas_items`**: the world and the HUD are rasterised at the
+window's real resolution. Text is drawn at its true size instead of being
+upscaled, which is the single most visible improvement, and sprite edges stay
+hard.
+
+### The art size is not a free parameter
+
+Screen pixels per art pixel is `(tile_screen_px / art_tile_px) * canvas_scale`,
+and it has to be a whole number at every resolution the game runs at. That
+constrains how detailed the art may be, because the canvas scales between
+common resolutions are not integer multiples of each other — 1080p to 1440p is
+4/3. Surviving that step requires the magnification at 1080p to be divisible by
+3, which at this game's framing means **32 art pixels per tile**
+(`DETAIL_MULTIPLIER` 2):
+
+| art px / tile | 720p | 1080p | 1440p | 4K |
+|---|---|---|---|---|
+| 32 (multiplier 2) | 2x | 3x | 4x | 6x |
+| 48 (multiplier 3) | 1.33x | 2x | 2.67x | 4x |
+
+Raising the multiplier to 3 buys finer art and gives back the uneven pixels at
+720p and 1440p — the exact fault this pass removed. `DisplayScaling.is_pixel_-
+perfect_for_art_size` exists so that trade is something a test states rather
+than something a later change discovers in a screenshot.
+
+Getting finer art *without* losing pixel-perfection means zooming in (fewer
+tiles on screen), not adding pixels at the same framing.
+
+### Ground texture is marks, not static
+
+The terrain fill was independent per-pixel noise at 35% density. Measured, the
+tile changed appearance at 65% of neighbouring pixel pairs — worse than a coin
+flip, which is to say it was mostly high-frequency noise, and the uneven
+upscale made it shimmer on top.
+
+Ground is now built from **marks**: the roll comes from a cell a couple of
+pixels across, with a smaller per-pixel contribution that frays each mark's
+edge so nothing reads as painted in blocks, at a lower density so clean ground
+shows between them. The per-biome features that were previously drowned in
+static — dune ripples, moss, cracks — now read as the deliberate details they
+were always meant to be.
+
+Three tests hold that shape: transition rate (not static), clean-ground
+fraction (not a flat slab), and odd-pixel mark edges (not upscaled blocks). A
+fourth checks the texture has no *direction* to it — the first attempt drew its
+cell roll from Godot's string `hash()`, which correlates across near-identical
+inputs, and produced ground visibly combed along one diagonal. That is what
+`PixelNoise` exists for, and it is the third time this project has been bitten
+by the same hash.
+
+## Scaling tree art keeps the pixels
+
+Pieces of tree art are resampled NEAREST-NEIGHBOUR, so scaling can only ever
+copy pixels: the result's palette is a subset of the source's, and every pixel
+is opaque or absent. They were resampled with Lanczos, which blends neighbours
+and therefore invents in-between colours and part-transparent edges. On a dense
+summer canopy that hides; on bare winter branches — thin high-contrast strokes
+on transparency — it reads as smeared, haloed twigs.
+
+The rest of the game is nearest-neighbour pixel art and the project sets
+`default_texture_filter` to nearest, so smooth resampling of the source art was
+contradicting the house style everywhere else honours. Pinned as a property of
+the scaler rather than by eye: any smooth filter fails "invents no new colours".

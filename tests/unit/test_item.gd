@@ -106,3 +106,14 @@ func test_a_material_is_not_equippable():
 	assert_false(wood.is_equippable())
 	assert_eq(wood.equip_slot_name(), "")
 	assert_eq(wood.armor, 0.0)
+
+
+# -- real mass, for the shared momentum model (see docs/concept/materials.md)-
+
+func test_mass_kg_defaults_to_zero_when_not_given():
+	assert_almost_eq(Item.new("hide", "Hide", "material", 40).mass_kg, 0.0, 0.0001)
+
+
+func test_a_weapon_item_can_carry_a_real_mass():
+	var sword := Item.new("iron_sword", "Iron Sword", "weapon", 1, 25.0, "", 0.0, 1.2)
+	assert_almost_eq(sword.mass_kg, 1.2, 0.0001)

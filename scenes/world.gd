@@ -1,6 +1,11 @@
 extends Node2D
 
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const RenderResolution = preload("res://src/rendering/render_resolution.gd")
+const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
+const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
+const Snowfall = preload("res://src/world/snowfall.gd")
+const ConsoleSpecies = preload("res://src/gameplay/console_species.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
@@ -22,6 +27,7 @@ const CraftingWindow = preload("res://scenes/crafting_window.gd")
 const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const CreaturePanel = preload("res://scenes/creature_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
+const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const SettingsOverlay = preload("res://scenes/settings_overlay.gd")
@@ -29,7 +35,11 @@ const MainMenu = preload("res://scenes/main_menu.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
 const DragSlot = preload("res://src/ui/drag_slot.gd")
+const TimeLapse = preload("res://src/gameplay/time_lapse.gd")
+const FruitSpoilage = preload("res://src/gameplay/fruit_spoilage.gd")
 const EscapeAction = preload("res://src/ui/escape_action.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const WorldReset = preload("res://src/world/world_reset.gd")
@@ -79,9 +89,10 @@ const PORT := 8910
 const MAX_CLIENTS := 32
 const DEFAULT_HOST := "127.0.0.1"
 
-## Debug/dev-console override: when this env var is "1", lighting is forced
-## to a fixed full-sun elevation instead of the real UTC-driven calculation --
-## useful for testing without waiting on real-world day/night.
+## Debug/dev-console override for the always-day lighting default. Day is the
+## DEFAULT in debug builds (see always_day_for) so development never waits on
+## real-world night; set this env var to "0" to opt a debug build back into
+## real UTC-driven day/night, or "1" to force day in an exported build.
 const DEBUG_ALWAYS_DAY_ENV := "AA_DEBUG_ALWAYS_DAY"
 ## Sun directly overhead -- sin(90 deg) = 1.0, i.e. maximum sunlight_intensity.
 const ALWAYS_DAY_ELEVATION := 90.0
@@ -108,12 +119,35 @@ const MAX_GOLD_COUNT := 9999
 const SURVIVAL_BAR_WIDTH := 150.0
 const SURVIVAL_BAR_HEIGHT := 14.0
 
+## How heavy the visible falling rain is per weather state (see
+## RainOverlay.set_intensity). A storm is a downpour; ordinary rain is
+## steady but lighter; everything else is dry. Anything not listed falls
+## back to 0.0, so a new weather state can never accidentally rain.
+const RAIN_INTENSITY_BY_WEATHER := {
+	"rain": 0.55,
+	"storm": 1.0,
+}
+
+var _rain_overlay := RainOverlay.new()
+
 @onready var _terrain: TileMapLayer = $Terrain
 @onready var _water_fx: TileMapLayer = $WaterFx
+## Snow lies here rather than as a tint on the ground, so footprints can be
+## carved out of it (see SnowLayer).
+@onready var _snow_fx: TileMapLayer = $SnowFx
 @onready var _entities: Node2D = $Entities
 @onready var _creatures: Node2D = $Creatures
 @onready var _ground_items: Node2D = $GroundItems
-@onready var _players: Node2D = $Players
+@onready var _roof: TileMapLayer = $Roof
+## Players are spawned directly into $Entities (not a separate sibling
+## container) so they Y-sort against trees/grass/stones -- tall grass or a
+## tree in front of the player must be able to draw over them, which two
+## independently-sorted containers can never do (each only sorts its own
+## direct children; reported as grass/trees "rendering one square too high"
+## while never actually occluding the player from the front). The
+## get_children() loops below already filter with `as Player`, so mixing in
+## non-player siblings is harmless.
+@onready var _players: Node2D = $Entities
 @onready var _player_spawner: MultiplayerSpawner = $PlayerSpawner
 @onready var _day_night: CanvasModulate = $DayNightTint
 @onready var _ui: CanvasLayer = $UI
@@ -143,6 +177,10 @@ var _health_bar := HealthBar.new()
 var _item_sprite_generator := ProceduralItemSprite.new()
 var _hotbar_slots: Array[TextureRect] = []
 var _hotbar_counts: Array[Label] = []
+## The slot frames themselves (icon/count's parent) -- kept separately so
+## _update_hotbar can set each slot's tooltip to what's actually bound there
+## (see _hotbar_tooltip_text), matching InventoryWindow's item tooltips.
+var _hotbar_slot_frames: Array[Control] = []
 var _creature_renderer := CreatureRenderer.new()
 var _item_catalog := ItemCatalog.new()
 var _crafting_recipe_book := CraftingRecipeBook.new()
@@ -164,6 +202,10 @@ var _pending_class := "warrior"
 ## spawned player. Empty for non-interactive launches (dedicated server,
 ## --connect), which fall back to a seed-rolled appearance.
 var _pending_appearance: Dictionary = {}
+## The rolled DNA genome's stat swing (see HeroDna/MainMenu.current_dna),
+## added on top of the chosen class's own base stats before spawning. Empty
+## (no-op) for non-interactive launches, same as _pending_appearance.
+var _pending_dna_stat_modifiers: Dictionary = {}
 ## Player-state persistence (see docs/concept/persistence.md) -- PlayerSave
 ## is pure I/O, WorldReset wipes EarthChunkManager's own persistence dirs.
 var _player_save := PlayerSave.new()
@@ -172,10 +214,30 @@ var _world_coordinates := WorldCoordinates.new()
 var _keybindings := Keybindings.new()
 var _graphics_fullscreen := false
 var _graphics_vsync := true
+## Render resolution (see RenderResolution): how many pixels the world is
+## drawn into before being scaled to the window. The one graphics lever that
+## scales the entire frame cost at once.
+var _graphics_resolution := RenderResolution.default_option()
 var _death_label: Label
 var _creature_panels_container: VBoxContainer
 var _hover_tooltip: Label
 var _hover_target_finder := HoverTargetFinder.new()
+var _talk_label: Label
+## Floating "Talk (<key>)" prompt shown above the nearest in-range villager
+## (see Player.TALK_RADIUS, EarthChunkManager.nearest_npc_near) -- the
+## available-interaction hint requested alongside the talk feature itself.
+var _interaction_prompt: Label
+
+## The "strengthometer" for the held-item charge/release throw (see
+## docs/concept/stone.md, ChargeMeter, Player.hand_charge_fraction) -- a
+## floating bar shown above the player's head only while holding + charging
+## something, same Background/Fill ColorRect shape as _player_health_fill,
+## positioned every frame the same world-to-screen way _interaction_prompt
+## is (see _build_charge_meter/_update_charge_meter).
+var _charge_meter: Control
+var _charge_meter_bg: ColorRect
+var _charge_meter_fill: ColorRect
+
 var _hunger_fill: ColorRect
 var _hunger_label: Label
 var _thirst_fill: ColorRect
@@ -187,9 +249,25 @@ var _warmth_label: Label
 var _xp_fill: ColorRect
 var _xp_label: Label
 var _fishing_label: Label
+## Taming state banner (see docs/concept/taming.md) -- sits just under the
+## fishing one, same shape.
+var _lasso_label: Label
 var _trade_label: Label
 var _wallet_label: Label
 var _creature_panels_accumulator := CREATURE_PANELS_REFRESH_INTERVAL  # refresh immediately
+## How much faster than real time the ECOLOGY runs, set by /ecotest.
+##
+## One means normal, and is the ordinary game: at that value the ecology takes
+## the frame's own delta through exactly the path it always did. Anything
+## higher hands it the same time in slices (see TimeLapse) so a year can be
+## watched in a minute -- seasons turning, canopies going bare and back into
+## leaf, fruit ripening and falling, saplings coming up.
+##
+## Deliberately only the ecology: the player still moves at normal speed, so
+## you can walk around and look at things while the year runs past.
+var _ecology_time_scale := 1.0
+
+
 ## Set true by the /day console command -- forces daytime lighting for the
 ## rest of the session, same effect as DEBUG_ALWAYS_DAY_ENV but toggled live
 ## rather than only at launch.
@@ -210,9 +288,25 @@ func _ready() -> void:
 	# GPU water: continuous noise-driven waves over every ocean cell,
 	# translucent so shore foam and rain ripples show through (WaterShader).
 	_chunk_manager.set_water_layer(_water_fx)
+	_chunk_manager.set_snow_layer(_snow_fx)
+	# Roof pieces (see docs/concept/building.md#what-enterable-means-in-a-top-down-game):
+	# a separate layer above the player/entities so a house reads as a real
+	# building from outside, hidden per-room while the player is inside it.
+	_chunk_manager.set_roof_layer(_roof)
+	# Lets fruit-eating birds (see AmbientFlyerMarker.fruit_world /
+	# docs/concept/flora.md#bird-endozoochory) see and eat the same real,
+	# already-rendered fallen-fruit ground items the player can click on --
+	# EarthChunkManager.fruit_near/take_fruit_at read this directly rather
+	# than needing a second, parallel ground-item model.
+	_chunk_manager.set_ground_items(_ground_items)
 	_player_spawner.spawn_path = _players.get_path()
 	_player_spawner.add_spawnable_scene(PlayerScene.resource_path)
 	WorldItemBus.item_dropped.connect(_on_item_dropped)
+
+	# Visible falling rain (see RainOverlay). Mounted once, always present,
+	# and invisible until the weather model turns it on -- the water was
+	# already rippling from rain that never appeared to be falling.
+	add_child(_rain_overlay.build_overlay())
 
 	# Bind every action to the InputMap up front (loading any saved overrides
 	# first), before Player spawns and starts polling -- Player's own
@@ -235,9 +329,23 @@ func _ready() -> void:
 	_build_survival_bar()
 	_build_xp_bar()
 	_build_fishing_label()
+	_build_lasso_label()
 	_build_trade_label()
+	_build_talk_label()
+	_build_interaction_prompt()
+	_build_charge_meter()
 
 	var args := OS.get_cmdline_user_args()
+	if "--solo" in args:
+		# Dev/instrumentation launch: skip the menu and drop straight into a
+		# solo session. The project's standard way of finding a bug that
+		# every unit test structurally cannot see is to instrument
+		# _process, launch the game, and read the log (see
+		# docs/progress.md) -- which needs the world actually RUNNING, and
+		# the menu holds it paused until someone clicks. Deliberately does
+		# NOT wipe the save the way New Game does.
+		_spawn_local_singleplayer()
+		return
 	if "--server" in args:
 		_is_dedicated_server = true
 		_start_server()
@@ -301,9 +409,12 @@ func _show_main_menu() -> void:
 ## chunks yet at this point (chunk loading is lazy, first triggered by
 ## spawn), so every chunk simply finds nothing left to layer on top of its
 ## deterministic base.
-func _on_menu_start_requested(mode: String, chosen_class: String, appearance: Dictionary) -> void:
+func _on_menu_start_requested(
+	mode: String, chosen_class: String, appearance: Dictionary, dna_stat_modifiers: Dictionary
+) -> void:
 	_pending_class = chosen_class
 	_pending_appearance = appearance
+	_pending_dna_stat_modifiers = dna_stat_modifiers
 	_wipe_persisted_world()
 	if mode == "host":
 		_start_server()
@@ -481,11 +592,17 @@ func _equipped_map(local_player: Player) -> Dictionary:
 func _build_crafting_window() -> void:
 	_crafting_window = CraftingWindow.new()
 	_crafting_window.theme = _ui_theme
-	_crafting_window.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	# Centered, like every other full menu (inventory, settings) -- it used to
+	# be pinned to the right edge as a narrow strip, which read as a
+	# secondary sidebar rather than the actual crafting screen.
+	_crafting_window.set_anchors_preset(Control.PRESET_CENTER)
+	# Keep in sync with CraftingWindow's own WORLD_ANCHOR_BOX test constant
+	# (600x520 window minimum + margin) -- test_crafting_window.gd pins that
+	# the window's real minimum size fits inside this box.
 	_crafting_window.offset_left = -320.0
-	_crafting_window.offset_top = -120.0
-	_crafting_window.offset_right = -8.0
-	_crafting_window.offset_bottom = 120.0
+	_crafting_window.offset_top = -280.0
+	_crafting_window.offset_right = 320.0
+	_crafting_window.offset_bottom = 280.0
 	_ui.add_child(_crafting_window)
 	_crafting_window.craft_requested.connect(_on_craft_requested)
 
@@ -543,7 +660,9 @@ func _build_settings_overlay() -> void:
 	# The menu must keep processing input while the game is paused (opening it
 	# pauses the world, see _toggle_settings_menu).
 	_settings_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
-	_settings_overlay.setup(_keybindings, _graphics_fullscreen, _graphics_vsync)
+	_settings_overlay.setup(
+		_keybindings, _graphics_fullscreen, _graphics_vsync, _graphics_resolution
+	)
 	_settings_overlay.set_anchors_preset(Control.PRESET_CENTER)
 	_settings_overlay.offset_left = -210.0
 	_settings_overlay.offset_top = -210.0
@@ -553,6 +672,7 @@ func _build_settings_overlay() -> void:
 	_settings_overlay.binding_changed.connect(_on_binding_changed)
 	_settings_overlay.reset_requested.connect(_on_bindings_reset)
 	_settings_overlay.graphics_changed.connect(_on_graphics_changed)
+	_settings_overlay.graphics_option_changed.connect(_on_graphics_option_changed)
 	_settings_overlay.resume_requested.connect(_toggle_settings_menu)
 
 
@@ -577,6 +697,37 @@ func _on_graphics_changed(setting: String, enabled: bool) -> void:
 	_save_graphics()
 
 
+## A graphics setting that is a CHOICE rather than on/off.
+func _on_graphics_option_changed(setting: String, value: String) -> void:
+	if setting == "render_resolution":
+		_graphics_resolution = RenderResolution.sanitize(value)
+		_apply_render_resolution()
+	_save_graphics()
+
+
+## Applies the render resolution by switching how the window scales its
+## content (see RenderResolution).
+##
+## NATIVE uses CANVAS_ITEMS: the world and HUD rasterise at the window's true
+## size, which is what makes text sharp. Anything else uses VIEWPORT: the
+## world is drawn into a smaller framebuffer and scaled up, which costs that
+## sharpness back but scales the whole frame's pixel cost with it. The design
+## size stays the layout reference either way, so the player never sees more
+## or less of the world for changing this.
+func _apply_render_resolution() -> void:
+	var window := get_window()
+	if window == null:
+		return
+	if RenderResolution.is_native(_graphics_resolution):
+		window.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+		window.content_scale_size = Vector2i.ZERO
+		return
+	window.content_scale_mode = Window.CONTENT_SCALE_MODE_VIEWPORT
+	window.content_scale_size = RenderResolution.render_size(
+		_graphics_resolution, window.size
+	)
+
+
 ## Graphics settings persist alongside key bindings in KEYBINDINGS_PATH (one
 ## small user config file). Applied at startup by _apply_graphics.
 func _load_graphics() -> void:
@@ -585,6 +736,9 @@ func _load_graphics() -> void:
 		return
 	_graphics_fullscreen = config.get_value("graphics", "fullscreen", _graphics_fullscreen)
 	_graphics_vsync = config.get_value("graphics", "vsync", _graphics_vsync)
+	_graphics_resolution = RenderResolution.sanitize(
+		str(config.get_value("graphics", "render_resolution", _graphics_resolution))
+	)
 
 
 func _apply_graphics() -> void:
@@ -594,6 +748,7 @@ func _apply_graphics() -> void:
 	DisplayServer.window_set_vsync_mode(
 		DisplayServer.VSYNC_ENABLED if _graphics_vsync else DisplayServer.VSYNC_DISABLED
 	)
+	_apply_render_resolution()
 
 
 func _save_graphics() -> void:
@@ -601,6 +756,7 @@ func _save_graphics() -> void:
 	config.load(KEYBINDINGS_PATH)  # preserve the [bindings] section
 	config.set_value("graphics", "fullscreen", _graphics_fullscreen)
 	config.set_value("graphics", "vsync", _graphics_vsync)
+	config.set_value("graphics", "render_resolution", _graphics_resolution)
 	config.save(KEYBINDINGS_PATH)
 
 
@@ -724,6 +880,22 @@ func _build_fishing_label() -> void:
 	_ui.add_child(_fishing_label)
 
 
+func _build_lasso_label() -> void:
+	_lasso_label = Label.new()
+	_lasso_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_lasso_label.offset_top = 144.0
+	_lasso_label.offset_left = -200.0
+	_lasso_label.offset_right = 200.0
+	_lasso_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_lasso_label.add_theme_font_size_override("font_size", 16)
+	_ui.add_child(_lasso_label)
+
+
+func _update_lasso_label(local_player: Player) -> void:
+	_lasso_label.text = local_player.lasso_message
+	_lasso_label.visible = local_player.lasso_message != ""
+
+
 func _update_fishing_label(local_player: Player) -> void:
 	_fishing_label.text = local_player.fishing_message
 	_fishing_label.visible = local_player.fishing_message != ""
@@ -745,6 +917,137 @@ func _build_trade_label() -> void:
 func _update_trade_label(local_player: Player) -> void:
 	_trade_label.text = local_player.trade_message
 	_trade_label.visible = local_player.trade_message != ""
+
+
+## A centered talk-result banner (see Player._talk_step/NpcGreeting), same
+## shape as the trade banner just above it.
+func _build_talk_label() -> void:
+	_talk_label = Label.new()
+	_talk_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_talk_label.offset_top = 168.0
+	_talk_label.offset_left = -220.0
+	_talk_label.offset_right = 220.0
+	_talk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_talk_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_talk_label.add_theme_font_size_override("font_size", 14)
+	_ui.add_child(_talk_label)
+
+
+func _update_talk_label(local_player: Player) -> void:
+	_talk_label.text = local_player.talk_message
+	_talk_label.visible = local_player.talk_message != ""
+
+
+## The floating "Talk (<key>)" prompt (see _interaction_prompt's own doc
+## comment) -- a plain Label parented under _ui like every other HUD text
+## (see _hover_tooltip), so its display position needs a manual world-to-
+## screen projection via the viewport's canvas transform (the inverse of
+## what get_global_mouse_position() does for the hover tooltip's screen-space
+## mouse position).
+func _build_interaction_prompt() -> void:
+	_interaction_prompt = Label.new()
+	_interaction_prompt.add_theme_font_size_override("font_size", 12)
+	_interaction_prompt.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	_interaction_prompt.add_theme_constant_override("shadow_offset_x", 1)
+	_interaction_prompt.add_theme_constant_override("shadow_offset_y", 1)
+	_interaction_prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_interaction_prompt.visible = false
+	_ui.add_child(_interaction_prompt)
+
+
+## How wide/tall the charge meter bar reads on screen -- small, since it
+## floats above the player's own head rather than sitting in a HUD corner
+## like PlayerHealthBar.
+const CHARGE_METER_SIZE := Vector2(40.0, 6.0)
+
+## The held-item charge "strengthometer" (see docs/concept/stone.md,
+## ChargeMeter, Player.hand_charge_fraction): same Background/Fill
+## ColorRect shape as PlayerHealthBar, built dynamically and positioned
+## every frame the same world-to-screen way _interaction_prompt is (it
+## floats above whichever player is charging, not a fixed HUD corner).
+func _build_charge_meter() -> void:
+	_charge_meter = Control.new()
+	_charge_meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_charge_meter.visible = false
+	_charge_meter.size = CHARGE_METER_SIZE
+
+	_charge_meter_bg = ColorRect.new()
+	_charge_meter_bg.color = Color(0.1, 0.1, 0.1, 0.85)
+	_charge_meter_bg.size = CHARGE_METER_SIZE
+	_charge_meter.add_child(_charge_meter_bg)
+
+	_charge_meter_fill = ColorRect.new()
+	_charge_meter_fill.color = Color(0.85, 0.65, 0.15, 1.0)
+	_charge_meter_fill.size = CHARGE_METER_SIZE
+	_charge_meter.add_child(_charge_meter_fill)
+
+	_ui.add_child(_charge_meter)
+
+
+## Every frame: visible only while the local player is actively charging a
+## held stone (Player.hand_charge_fraction is 0.0 whenever nothing is in
+## hand or the charge input isn't currently held), reusing the SAME
+## HealthBar.fill_width pure-logic every other bar in this HUD already
+## shares, just fed a [0,1] fraction against a max of 1.0 instead of
+## health/max_health.
+func _update_charge_meter(local_player: Player) -> void:
+	var fraction := local_player.hand_charge_fraction()
+	_charge_meter.visible = fraction > 0.0
+	if not _charge_meter.visible:
+		return
+	_charge_meter_fill.size.x = _health_bar.fill_width(fraction, 1.0, CHARGE_METER_SIZE.x)
+	var screen_position: Vector2 = (
+		get_viewport().get_canvas_transform() * (local_player.position + Vector2(0, -40))
+	)
+	_charge_meter.position = screen_position - Vector2(CHARGE_METER_SIZE.x / 2.0, 0)
+
+
+## Every frame: finds the nearest villager within talk range of the local
+## player (see EarthChunkManager.nearest_npc_near, Player.TALK_RADIUS) and
+## shows/hides+positions "Talk (<key>)" just above their head accordingly.
+## Failing that, finds the nearest liftable stone within pickup range (see
+## EarthChunkManager.nearest_liftable_stone_near, Player.PICKUP_RADIUS) and
+## shows "Pick (<key>)" instead -- a boulder never qualifies (see
+## StoneSize.is_liftable), only something the pickup key would actually
+## collect. An NPC to talk to takes precedence over a stone to pick up when
+## both are in range at once: talking is the rarer, more deliberate action,
+## and a pebble underfoot isn't going anywhere. Both bound keys are read
+## live from _keybindings so a rebind is reflected immediately, never a
+## stale hardcoded letter.
+func _update_interaction_prompt(local_player: Player) -> void:
+	if _chunk_manager == null:
+		_interaction_prompt.visible = false
+		return
+
+	var npc = _chunk_manager.nearest_npc_near(local_player.position, Player.TALK_RADIUS)
+	if npc != null:
+		_show_interaction_prompt("Talk (%s)" % OS.get_keycode_string(_keybindings.keycode_for("talk")), npc.position)
+		return
+
+	# Something already in hand: E is now dedicated to charge/release (see
+	# Player._pickup_step, the charge meter above the player's own head
+	# handles that hint) -- "Pick" would be misleading since pressing the
+	# key no longer sweeps a new stone into inventory while the hand is full.
+	if local_player.is_holding_stone():
+		_interaction_prompt.visible = false
+		return
+
+	var stone := _chunk_manager.nearest_liftable_stone_near(local_player.position, Player.PICKUP_RADIUS)
+	if stone != null:
+		_show_interaction_prompt("Pick (%s)" % OS.get_keycode_string(_keybindings.keycode_for("pickup")), stone.position)
+		return
+
+	_interaction_prompt.visible = false
+
+
+## Shows the interaction prompt with `text`, positioned just above
+## `world_position` -- shared by the "Talk"/"Pick" cases above so the
+## world-to-screen projection math lives in exactly one place.
+func _show_interaction_prompt(text: String, world_position: Vector2) -> void:
+	_interaction_prompt.visible = true
+	_interaction_prompt.text = text
+	var screen_position: Vector2 = get_viewport().get_canvas_transform() * (world_position + Vector2(0, -28))
+	_interaction_prompt.position = screen_position - Vector2(_interaction_prompt.size.x / 2.0, 0)
 
 
 func _update_xp_bar(local_player: Player) -> void:
@@ -910,6 +1213,61 @@ func _handle_escape() -> void:
 	get_viewport().set_input_as_handled()
 
 
+## ## The ecology runs at two cadences
+##
+## Measured, not assumed. With the world running fast, one frame's worth of
+## ecology broke down like this per 30-second slice:
+##
+##     ecosystem 500ms   flowers 20ms   grass 9ms   worms 2ms   fruiting 4ms
+##
+## The cheap ones are exactly the ones worth running often -- fruit ripening
+## and falling, worms surfacing -- and the expensive ones are periodic batch
+## jobs that reconcile or ADD world content: populations, spread, forage
+## drops, the vegetation layers. Those are written to run once every minute or
+## so of world time, which is invisible at normal speed and ruinous when a
+## frame contains several minutes.
+##
+## So the fine group runs per slice, and the batch group runs once a frame with
+## the WHOLE frame's simulated time -- which is what its accumulators want
+## anyway: one call that crosses the interval, rather than several that each
+## cross it.
+##
+## This is the same principle as before, sharpened by measurement: a lapse
+## accelerates phenology, not population.
+
+
+## Per slice: cheap, and the things the lapse exists to show.
+func _step_ecology_fine(delta: float, focus_player: Player) -> void:
+	# The clock first, and on EVERY slice: it is what seasons, ripening and
+	# growth all read.
+	_chunk_manager.advance_world_age(delta)
+	_chunk_manager.step_worms(delta)
+	if focus_player != null:
+		_chunk_manager.step_fruiting(delta, focus_player.position)
+
+
+## Once a frame, carrying the whole frame's simulated time: the heavy periodic
+## work, and everything that adds to the world.
+func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
+	_chunk_manager.step_ecosystem(delta)
+	_chunk_manager.step_forage(delta)
+	_chunk_manager.step_tree_spread(delta)
+	# Saplings age in place (see EarthChunkManager.step_tree_growth).
+	_chunk_manager.step_tree_growth()
+	# Ground food rots on world time (see EarthChunkManager.step_ground_food).
+	_chunk_manager.step_ground_food(delta)
+	# Flies breeding on whatever has gone over (see FlyColony).
+	_chunk_manager.step_flies(delta)
+	# Food goes off in the pack too, on the same clock (see ItemStack.age).
+	_chunk_manager.step_carried_food(delta)
+	_chunk_manager.step_tall_grass(delta)
+	_chunk_manager.step_flowers(delta)
+	_chunk_manager.step_desert_scrub(delta)
+	_chunk_manager.step_tundra_lichen(delta)
+	_step_herbivore_food_consumption(delta)
+	_step_reproduction(delta)
+
+
 func _any_gameplay_window_open() -> bool:
 	return _inventory_window.visible or _crafting_window.is_open() or _skill_window.is_open()
 
@@ -944,13 +1302,25 @@ func _on_console_command(command: String, args: Array) -> void:
 		"help":
 			_dev_console.log_line(
 				(
-					"Commands: /day  /spawn <herbivore|boar|predator|lynx> [count]  /give <item_id> [count]"
-					+ "  /craft <recipe_id>  /gold <amount>  /help"
+					"Commands: /day  /season [name]  /weather [state|off]"
+					+ "  /ecotest [seconds_per_year|off]"
+					+ "  /spawn <species> [count]  /give <item_id> [count]"
+					+ "  /craft <recipe_id>  /gold <amount>  /village  /species  /help"
 				)
 			)
+		"species":
+			# Discoverability: the roster is long enough now that /help
+			# listing it inline would drown the other commands.
+			_dev_console.log_line("Spawnable: %s" % ", ".join(ConsoleSpecies.spawnable()))
 		"day":
 			_force_day = true
 			_dev_console.log_line("Time forced to day.")
+		"season":
+			_handle_season_command(args)
+		"weather":
+			_handle_weather_command(args)
+		"ecotest":
+			_handle_ecotest_command(args)
 		"spawn":
 			_handle_spawn_command(args, local_player)
 		"give":
@@ -959,8 +1329,110 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_craft_command(args, local_player)
 		"gold":
 			_handle_gold_command(args, local_player)
+		"village":
+			_handle_village_command(local_player)
 		_:
 			_dev_console.log_line("Unknown command: /%s (try /help)" % command)
+
+
+## /season [name] -- reports the season, or skips the world FORWARD to the
+## start of the one you name.
+##
+## Forward only (see EarthChunkManager.jump_to_season): every other system
+## measures itself against this clock, so winding it back would give a tree a
+## negative age. Asking for the season you are already in therefore waits for
+## it to come round again -- you asked to watch it start.
+func _handle_season_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line(
+			"Season: %s. Try: %s"
+			% [_chunk_manager.current_season(), ", ".join(SeasonCycle.SEASONS)]
+		)
+		return
+
+	var wanted := str(args[0]).to_lower()
+	if not _chunk_manager.jump_to_season(wanted):
+		_dev_console.log_line(
+			"Unknown season '%s'. Try: %s" % [wanted, ", ".join(SeasonCycle.SEASONS)]
+		)
+		return
+	_dev_console.log_line("Skipped forward to %s." % _chunk_manager.current_season())
+	_dev_console.log_line(
+		"The world aged to get here -- trees are older, but the fruit you skipped is gone."
+	)
+
+
+## /weather [state|off] -- reports the sky, or pins it.
+##
+## Weather is a deterministic roll on the day and region, which is right for the
+## world and useless for looking at things: to watch snow settle you would
+## otherwise wait for a rainy day to come round in winter. Pinned on the model
+## itself so every reader agrees -- overlay, soil moisture, wind and snowfall
+## all read through the same call.
+func _handle_weather_command(args: Array) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	var here := (
+		_chunk_manager.current_weather(local_player.position) if local_player != null else "?"
+	)
+	if args.size() == 0:
+		var suffix := " (forced)" if _chunk_manager.is_weather_forced() else ""
+		_dev_console.log_line(
+			"Weather: %s%s. Try: %s, off"
+			% [here, suffix, ", ".join(WeatherModel.STATES)]
+		)
+		return
+
+	var wanted := str(args[0]).to_lower()
+	if wanted == "off":
+		_chunk_manager.clear_forced_weather()
+		_dev_console.log_line("Weather back to its own devices.")
+		return
+	if not _chunk_manager.force_weather(wanted):
+		_dev_console.log_line(
+			"Unknown weather '%s'. Try: %s, off" % [wanted, ", ".join(WeatherModel.STATES)]
+		)
+		return
+	_dev_console.log_line("Weather pinned to %s." % wanted)
+	# Snow is rain that falls cold (see Snowfall), so there is no "snow" state
+	# to ask for -- it is what rain IS in winter, and saying so here saves
+	# hunting for a state that does not exist.
+	if wanted == "rain" or wanted == "storm":
+		_dev_console.log_line("In winter this falls as snow -- try /season winter with it.")
+
+
+## /ecotest [seconds_per_year|off] -- runs the ECOLOGY fast so a whole year
+## can be watched: winter into spring into summer into autumn, canopies going
+## bare and back into leaf, fruit ripening and falling, saplings coming up and
+## growing.
+##
+## Only the ecology speeds up. The player still moves normally, so you can walk
+## around and look at things while the year runs past.
+func _handle_ecotest_command(args: Array) -> void:
+	if args.size() > 0 and str(args[0]) == "off":
+		_ecology_time_scale = 1.0
+		_dev_console.log_line("Ecology back to normal speed.")
+		return
+
+	var seconds_per_year := TimeLapse.DEFAULT_SECONDS_PER_YEAR
+	if args.size() > 0:
+		var asked := str(args[0]).to_float()
+		if asked > 0.0:
+			seconds_per_year = asked
+	_ecology_time_scale = TimeLapse.scale_for(seconds_per_year)
+	# Reported as a TARGET, not a promise. The rate the world actually reaches
+	# depends on how much ecology a frame can get through, which depends on the
+	# machine and on how much is loaded: measured on this one, a year asked for
+	# in 45 seconds arrives in about 90.
+	_dev_console.log_line(
+		(
+			"Ecology target: a year every %.0fs (%.0fx). Actual depends on framerate."
+			% [seconds_per_year, _ecology_time_scale]
+		)
+	)
+	_dev_console.log_line(
+		"Watch the canopies -- a season should turn every half minute or so."
+	)
+	_dev_console.log_line("Fruit ripens and falls, saplings grow. /ecotest off to stop.")
 
 
 func _handle_spawn_command(args: Array, local_player: Player) -> void:
@@ -968,12 +1440,14 @@ func _handle_spawn_command(args: Array, local_player: Player) -> void:
 		_dev_console.log_line("No local player to spawn near.")
 		return
 
-	var species := "herbivore"
-	if args.size() >= 1:
-		species = String(args[0]).to_lower()
-	if not CreatureRenderer.SPECIES_COLORS.has(species):
+	var typed := String(args[0]) if args.size() >= 1 else "herbivore"
+	# Resolved against the real anatomy roster (plus friendly aliases like
+	# "snake"), not the four-entry colour table this used to check -- most
+	# species existed in the world but could not be summoned to look at.
+	var species := ConsoleSpecies.resolve(typed)
+	if species == "":
 		_dev_console.log_line(
-			"Unknown species '%s' (try %s)." % [species, ", ".join(CreatureRenderer.SPECIES_COLORS.keys())]
+			"Unknown species '%s'. Try: %s" % [typed, ", ".join(ConsoleSpecies.spawnable())]
 		)
 		return
 
@@ -1047,6 +1521,25 @@ func _handle_gold_command(args: Array, local_player: Player) -> void:
 	_dev_console.log_line("Gave %d gold." % amount)
 
 
+## Teleports the local player to the nearest procedurally-placed settlement
+## (see SettlementGenerator/VillageFinder), searching outward chunk-by-chunk
+## from wherever they currently stand. Lands them at the village's well --
+## every settlement always has one (its central landmark) -- rather than an
+## arbitrary house edge.
+func _handle_village_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to teleport.")
+		return
+
+	var destination: Variant = _chunk_manager.find_nearest_village(local_player.current_tile())
+	if destination == null:
+		_dev_console.log_line("No village found nearby.")
+		return
+
+	local_player.position = destination
+	_dev_console.log_line("Teleported to the nearest village.")
+
+
 ## Spawns a clickable ground item where a creature died or a tree dropped
 ## forage. Only the simulation-owning side (server/singleplayer) holds the
 ## authoritative item layer for now -- ground items aren't replicated yet.
@@ -1056,6 +1549,14 @@ func _on_item_dropped(item_stack, world_position: Vector2) -> void:
 	var dropped := DroppedItem.new()
 	dropped.item_stack = item_stack
 	dropped.position = world_position
+	# Food rots on world time with a real shelf life; everything else keeps the
+	# flat despawn, which is a tidiness rule rather than a spoilage one (see
+	# FruitSpoilage and EarthChunkManager.step_ground_food).
+	if item_stack != null and item_stack.item.kind == "food":
+		dropped.ages_on_world_time = true
+		dropped.spoil_seconds = FruitSpoilage.edible_seconds(
+			item_stack.item.id, _chunk_manager.current_season()
+		)
 	_ground_items.add_child(dropped)
 
 
@@ -1112,9 +1613,17 @@ func _update_survival_bar(local_player: Player) -> void:
 func _build_hotbar_slots() -> void:
 	for i in HOTBAR_SLOT_COUNT:
 		var slot := _make_hud_slot(HUD_SLOT_BG_COLOR, true)
-		# Clicking a slot activates it, same as its number hotkey.
+		# Left-click activates a slot, same as its number hotkey; right-click
+		# clears its assignment (see _on_hotbar_slot_gui_input) -- previously
+		# the only way to change a bound slot was to drag a different item
+		# over it, with no way to just empty one out.
 		slot.mouse_filter = Control.MOUSE_FILTER_STOP
 		slot.gui_input.connect(_on_hotbar_slot_gui_input.bind(i))
+		# A hover brighten, matching InventoryWindow's own item slots -- the
+		# hotbar previously gave no feedback at all that a slot was
+		# interactive under the cursor.
+		slot.mouse_entered.connect(func(): slot.modulate = Color(1.15, 1.15, 1.15))
+		slot.mouse_exited.connect(func(): slot.modulate = Color(1, 1, 1))
 		# Dropping an inventory item here binds it to this number key (see
 		# Hotbar / InventoryWindow's drag source).
 		slot.can_accept = func(payload):
@@ -1147,15 +1656,24 @@ func _build_hotbar_slots() -> void:
 		_hotbar.add_child(slot)
 		_hotbar_slots.append(icon)
 		_hotbar_counts.append(count_label)
+		_hotbar_slot_frames.append(slot)
 
 
 ## A left-click on hotbar slot `index` activates it (equip/use), same as its
-## number hotkey.
+## number hotkey. A right-click instead CLEARS whatever's bound there --
+## previously the only way to change a slot was to drag a different item
+## over it, with no way to just empty one out (matching InventoryWindow's
+## own left-drags/right-uses split, see that scene's doc comment).
 func _on_hotbar_slot_gui_input(event: InputEvent, index: int) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
-		if local_player != null:
-			local_player.activate_hotbar_slot(index)
+	if not event is InputEventMouseButton or not event.pressed:
+		return
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player == null:
+		return
+	if event.button_index == MOUSE_BUTTON_LEFT:
+		local_player.activate_hotbar_slot(index)
+	elif event.button_index == MOUSE_BUTTON_RIGHT:
+		local_player.hotbar.clear_slot(index)
 
 
 ## Dropping an inventory item onto hotbar slot `index` binds that item to the
@@ -1199,9 +1717,22 @@ func _update_hotbar(local_player: Player) -> void:
 		if item_id != "" and count > 0:
 			_hotbar_slots[i].texture = _item_sprite_generator.generate_texture(item_id)
 			_hotbar_counts[i].text = str(count) if count > 1 else ""
+			_hotbar_slot_frames[i].tooltip_text = _hotbar_tooltip_text(item_id, count)
 		else:
 			_hotbar_slots[i].texture = null
 			_hotbar_counts[i].text = ""
+			_hotbar_slot_frames[i].tooltip_text = "Drag an item here to bind it"
+
+
+## "Iron Sword\nx3\nRight-click to clear" -- what's bound, how many, and how
+## to unbind it, matching InventoryWindow's own item tooltips instead of the
+## hotbar giving no hover feedback at all.
+func _hotbar_tooltip_text(item_id: String, count: int) -> String:
+	var lines := [_item_catalog.make(item_id).display_name if _item_catalog.has(item_id) else item_id]
+	if count > 1:
+		lines.append("x%d" % count)
+	lines.append("Right-click to clear")
+	return "\n".join(lines)
 
 
 ## The player is always the center sample of MinimapRenderer's image, so the
@@ -1228,6 +1759,9 @@ func _on_peer_connected(peer_id: int) -> void:
 	player.position = _spawn_position_for_tile(_compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	_players.add_child(player)
+	# So its pack ages and, once something in it turns, smells (see
+	# EarthChunkManager.register_scent_carrier).
+	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 	print("[server] peer %d connected, spawned player" % peer_id)
 
@@ -1243,6 +1777,17 @@ func _on_connected_to_server() -> void:
 	print("[client] connected, own peer id %d" % multiplayer.get_unique_id())
 
 
+## Layers a rolled DNA genome's stat swing (see HeroDna) on top of a class's
+## own base stats -- additive per key, never mutating `base` itself, so a
+## rare/legendary roll's "excellent magic attack but no defense" actually
+## shows up on the spawned character instead of being computed and dropped.
+func _stats_with_dna(base: Dictionary, dna_stat_modifiers: Dictionary) -> Dictionary:
+	var stats := base.duplicate()
+	for key in dna_stat_modifiers:
+		stats[key] = float(stats.get(key, 0.0)) + float(dna_stat_modifiers[key])
+	return stats
+
+
 ## Only used when running with no networking at all (quick local playtesting).
 func _spawn_local_singleplayer() -> void:
 	var player := PlayerScene.instantiate()
@@ -1250,9 +1795,14 @@ func _spawn_local_singleplayer() -> void:
 	player.position = _spawn_position_for_tile(_compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	player.apply_class(
-		_pending_class, _class_archetypes.stats_for(_pending_class), _pending_appearance
+		_pending_class,
+		_stats_with_dna(_class_archetypes.stats_for(_pending_class), _pending_dna_stat_modifiers),
+		_pending_appearance
 	)
 	_players.add_child(player)
+	# So its pack ages and, once something in it turns, smells (see
+	# EarthChunkManager.register_scent_carrier).
+	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 
 
@@ -1278,6 +1828,9 @@ func _spawn_local_singleplayer_from_save() -> void:
 		save_data.get("appearance", {})
 	)
 	_players.add_child(player)
+	# So its pack ages and, once something in it turns, smells (see
+	# EarthChunkManager.register_scent_carrier).
+	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 	_chunk_manager.update(_tile_for_position(saved_position))
 	player.apply_save_dict(save_data)
@@ -1370,20 +1923,93 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 const MAX_GROUND_ITEMS := 80
 
 
+var _diag_t := 0.0
+var _diag_n := 0
+var _diag_detail: Array = []
+
+func _diag(delta: float) -> void:
+	_diag_t += delta
+	if _diag_t < 3.0:
+		return
+	_diag_t = 0.0
+	if _ecology_time_scale <= 1.0:
+		_handle_ecotest_command([])
+	var fruit := 0
+	for item in _ground_items.get_children():
+		if item.item_stack != null and TreeSpecies.IDS.has(item.item_stack.item.id):
+			fruit += 1
+	var lp := _players.get_node_or_null(str(multiplayer.get_unique_id()))
+	var by_species := {}
+	var fruit_eaters := 0
+	var seeking_fruit := 0
+	var hungry := 0
+	for c in _creatures.get_children():
+		if not ("wander_seed" in c):
+			continue
+		if not ("info" in c):
+			continue  # flyers and fish are counted elsewhere; this is the land
+		var sp: String = "?"
+		if ("info" in c) and c.info != null:
+			sp = str(c.info.species)
+		elif ("species" in c):
+			sp = str(c.species)
+		by_species[sp] = int(by_species.get(sp, 0)) + 1
+		if c.has_method("_forage_kinds") and c._forage_kinds().has("fruit"):
+			fruit_eaters += 1
+		if ("_forage_kind" in c) and c._forage_kind == "fruit":
+			seeking_fruit += 1
+		if ("_needs" in c) and c._needs != null and c._needs.is_hungry():
+			hungry += 1
+		if lp != null and ("_needs" in c) and c._needs != null:
+			_diag_detail.append("%s d=%.0f hunger=%.2f world=%s" % [
+				sp, c.position.distance_to(lp.position), c._needs.hunger,
+				str(("_world" in c) and c._world != null)
+			])
+	var ptile: Vector2i = lp.current_tile() if lp != null else Vector2i.ZERO
+	var line := "DIAG chunks=%d ptile=%s age=%.0f yearfrac=%.3f scale=%.0f season=%s groundfruit=%d creatures=%s fruiteaters=%d hungry=%d seekingfruit=%d" % [
+		_chunk_manager.loaded_chunk_count(),
+		str(ptile),
+		_chunk_manager.world_age_seconds(),
+		_chunk_manager.world_age_seconds() / 691200.0,
+		_ecology_time_scale,
+		_chunk_manager.current_season(), fruit, str(by_species), fruit_eaters, hungry, seeking_fruit
+	]
+	if _diag_n % 8 == 0:
+		line += "
+   " + " | ".join(_diag_detail)
+	_diag_detail.clear()
+	var f := FileAccess.open("user://diag.log", FileAccess.READ_WRITE if FileAccess.file_exists("user://diag.log") else FileAccess.WRITE)
+	f.seek_end()
+	f.store_line(line)
+	f.close()
+	_diag_n += 1
+	if _diag_n >= 70:
+		get_tree().quit()
+
+
 func _process(delta: float) -> void:
+	_diag(delta)
+	# Ages every recorded water disturbance (fish/player/animal ripples) so
+	# its ring actually expands and fades -- every frame, every client, not
+	# gated behind _owns_ecosystem_simulation() like the simulation steps
+	# below (a visual effect, not shared world state).
+	_chunk_manager.step_water_disturbances(delta)
 	if _owns_ecosystem_simulation():
-		_chunk_manager.step_ecosystem(delta)
-		_chunk_manager.step_forage(delta)
-		_chunk_manager.step_tree_spread(delta)
-		_chunk_manager.step_tall_grass(delta)
-		_chunk_manager.step_desert_scrub(delta)
-		_chunk_manager.step_tundra_lichen(delta)
 		var focus_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
-		if focus_player != null:
-			_chunk_manager.step_fruiting(delta, focus_player.position)
+		# Normally one slice carrying the frame's own delta; several when
+		# /ecotest is running the year fast (see TimeLapse).
+		# Two groups, at two cadences -- see _step_ecology_fine and
+		# _step_ecology_batch.
+		var slices := TimeLapse.slices(delta, _ecology_time_scale)
+		var simulated := 0.0
+		for slice in slices:
+			simulated += slice
+			_step_ecology_fine(slice, focus_player)
+		if simulated > 0.0:
+			_step_ecology_batch(simulated, focus_player)
 		_step_path_scarring(delta)
-		_step_herbivore_food_consumption(delta)
-		_step_reproduction(delta)
+		if focus_player != null:
+			_step_pebble_dispersion(focus_player)
 
 	if _is_dedicated_server:
 		_server_process()
@@ -1431,6 +2057,21 @@ func _step_path_scarring(delta: float) -> void:
 		if not _path_scarring.is_worn(tile):
 			_chunk_manager.destroy_at_global(tile.x, tile.y)
 			_scarred_tiles.erase(tile)
+
+
+## Pebble dispersion (see PebbleDispersion, docs/concept/stone.md): walking
+## close enough to a loose stone kicks it a small, one-time distance out of
+## the way. PLAYER-ONLY for now -- the same scope PathScarring itself has
+## above (player position only, no creature wiring) -- extending this to
+## every creature too would mean an O(creatures x nearby stones) scan every
+## frame, and nothing today needs it enough to justify that cost; a
+## documented follow-up, not an oversight (see docs/progress.md).
+func _step_pebble_dispersion(local_player: Player) -> void:
+	if _chunk_manager == null or local_player.is_dead:
+		return
+	for stone in _chunk_manager.liftable_stones_near(local_player.position, PebbleDispersion.TRIGGER_RADIUS_PX):
+		if stone.has_method("try_disperse"):
+			stone.try_disperse(local_player.position)
 
 
 ## How often herbivores get a chance to eat dropped tree food -- cheap
@@ -1483,6 +2124,13 @@ func _step_herbivore_food_consumption(delta: float) -> void:
 ## crowd their range) and a safety bound so a fed herd can't spawn without limit.
 const REPRODUCTION_INTERVAL := 3.0
 const MAX_LIVE_CREATURES := 60
+
+## How close counts as "right here" for density dependence, and how many of
+## one species may share that space before they stop breeding. A herd is
+## believable; a wall of deer in one clearing is not, and the global cap
+## alone permitted exactly that (see _step_reproduction).
+const NEIGHBOUR_RADIUS_PX := 160.0
+const MAX_SAME_SPECIES_NEARBY := 4
 const OFFSPRING_SCATTER := 14.0
 var _reproduction_accumulator := 0.0
 
@@ -1508,6 +2156,20 @@ func _step_reproduction(delta: float) -> void:
 			break
 		if creature.info == null or not creature.has_method("can_reproduce") or not creature.can_reproduce():
 			continue
+		# Density dependence, not just a global node cap. The 60-creature cap
+		# alone is a SAFETY bound, not an ecological one: it says nothing
+		# about whether THIS clearing can feed another mouth, so well-fed
+		# animals bred straight up to it and piled into one spot (reported
+		# with a screenshot: "the fruit caused dozens of deer to spawn???").
+		# Two checks, both local: how many of its own kind are already right
+		# here, and whether the land itself can support another (the same
+		# carrying capacity the unseen aggregate simulation obeys -- "two
+		# fidelities, one truth", concept/ecosystem_dynamics.md).
+		var crowd := _same_species_within(creature, NEIGHBOUR_RADIUS_PX)
+		if crowd >= MAX_SAME_SPECIES_NEARBY:
+			continue
+		if not _chunk_manager.can_support_another_herbivore(creature.position, crowd):
+			continue
 		var offset := Vector2(
 			_offset_hash(creature.position, 1), _offset_hash(creature.position, 2)
 		) * OFFSPRING_SCATTER
@@ -1515,7 +2177,27 @@ func _step_reproduction(delta: float) -> void:
 			_creatures, creature.info.species, creature.position + offset, _chunk_manager
 		)
 		creature.on_reproduced()
+		# The aggregate population owns the long-term picture, so an
+		# individual birth in front of the player has to reach it -- otherwise
+		# a herd the player watched grow evaporates on the next chunk reload,
+		# and the off-screen model goes on breeding a range that is already
+		# full (see EcosystemSimulation.record_birth).
+		_chunk_manager.record_birth_at(creature.position)
 		births += 1
+
+
+## How many creatures of `creature`'s own species are within `radius` of it,
+## excluding itself -- the local crowding that gates breeding.
+func _same_species_within(creature, radius: float) -> int:
+	var count := 0
+	for other in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		if other == creature or other.info == null:
+			continue
+		if other.info.species != creature.info.species:
+			continue
+		if creature.position.distance_to(other.position) <= radius:
+			count += 1
+	return count
 
 
 ## A small deterministic-ish spread offset in [-1,1] for scattering offspring,
@@ -1532,12 +2214,61 @@ func _offset_hash(position: Vector2, salt: int) -> float:
 ## state. Known gap: creature markers aren't replicated to clients yet (see
 ## docs/progress.md), so a connected client currently sees no creatures at
 ## all rather than the server's authoritative ones.
+## Whether THIS process is the authority that advances the shared world
+## simulation (ecosystem, flowers, worms, fruiting, tree spread, and the
+## world clock itself -- see _process).
+##
+## The peer-is-null case alone was not enough, and the omission switched the
+## ENTIRE ecology off for the normal way the game is played: starting a world
+## from the menu HOSTS it (see _start_server), so `multiplayer_peer` is set,
+## `_is_dedicated_server` is false, and this returned false. Measured live:
+## `owns=false`, `age=0` -- meaning step_flowers/step_worms/step_fruiting/
+## step_tree_spread never ran at all, and because step_tree_spread is what
+## advances `_world_age_seconds`, the world clock was frozen at zero, so the
+## season and weather never changed either. That is why nothing ever grew,
+## no worm ever surfaced ("no worms in rain" -- it had never actually
+## rained), no fruit ever fell, and the robin had nothing to hunt. A player
+## hosting their own world IS the authority for it.
+static func owns_ecosystem_simulation_for(
+	is_dedicated_server: bool, has_peer: bool, is_server: bool
+) -> bool:
+	if is_dedicated_server:
+		return true
+	if not has_peer:
+		return true  # no networking at all: a plain solo session
+	return is_server  # hosting: this process owns the world
+
+
 func _owns_ecosystem_simulation() -> bool:
-	return _is_dedicated_server or multiplayer.multiplayer_peer == null
+	return owns_ecosystem_simulation_for(
+		_is_dedicated_server,
+		multiplayer.multiplayer_peer != null,
+		multiplayer.is_server()
+	)
+
+
+## Whether lighting should be pinned to full sun instead of following the real
+## UTC-driven solar elevation. Day is the DEFAULT during development: a debug
+## build that happens to be run after sunset otherwise renders a dark world
+## nothing can be evaluated in, and every dev launch would have to remember to
+## set an env var. Exported builds still follow real time, so the shipped
+## day/night cycle is unaffected. Precedence, highest first: the live console
+## toggle (/day), the env var, then the build type. Pinned by
+## test_world_daylight_default.gd.
+static func always_day_for(force_day: bool, env_value: String, is_debug: bool) -> bool:
+	if force_day:
+		return true
+	if env_value == "0":
+		return false
+	if env_value == "1":
+		return true
+	return is_debug
 
 
 func _always_day() -> bool:
-	return _force_day or OS.get_environment(DEBUG_ALWAYS_DAY_ENV) == "1"
+	return always_day_for(
+		_force_day, OS.get_environment(DEBUG_ALWAYS_DAY_ENV), OS.is_debug_build()
+	)
 
 
 ## Every connected player gets a working chunk_manager reference so its
@@ -1583,7 +2314,11 @@ func _client_process(delta: float) -> void:
 	_update_survival_bar(local_player)
 	_update_xp_bar(local_player)
 	_update_fishing_label(local_player)
+	_update_lasso_label(local_player)
 	_update_trade_label(local_player)
+	_update_talk_label(local_player)
+	_update_interaction_prompt(local_player)
+	_update_charge_meter(local_player)
 	_refresh_skill_window(local_player)
 	_autosave_step(local_player, delta)
 	var latitude := _geo_coordinates.latitude_for_tile(player_tile.y, EarthChunkGenerator.WORLD_HEIGHT_TILES)
@@ -1602,13 +2337,34 @@ func _client_process(delta: float) -> void:
 	)
 	var sunlight := _solar_position.sunlight_intensity(elevation)
 	_day_night.color = Color(0.2 + sunlight * 0.8, 0.2 + sunlight * 0.8, 0.3 + sunlight * 0.7)
+	# Drives every creature's silhouette shadow length (see DropShadow.
+	# stretch_for_elevation / CreatureMarker.sun_elevation_deg) with the same
+	# real sun position already computed for day/night lighting above.
+	CreatureMarker.sun_elevation_deg = elevation
 
 	var season := _chunk_manager.current_season().capitalize()
 	var raw_weather := _chunk_manager.current_weather(local_player.position)
 	# Water tiles react to the weather: raindrop ripples while raining,
 	# windy chop otherwise, and the whole surface paces faster/slower with
 	# how energetic the weather is (calm on a clear day, hectic in a storm).
-	_chunk_manager.set_rain(raw_weather == "rain" or raw_weather == "storm")
+	var raining := raw_weather == "rain" or raw_weather == "storm"
+	_chunk_manager.set_rain(raining)
+	# ... and the sky above them: rain you can actually see falling, heavier
+	# in a storm than in ordinary rain (see RainOverlay).
+	_rain_overlay.set_intensity(RAIN_INTENSITY_BY_WEATHER.get(raw_weather, 0.0))
+	# Snow rather than rain when it is cold enough, and snow lying on the
+	# ground afterwards (see Snowfall). Temperature decides, not the season
+	# name -- a cold snap in autumn snows and a mild winter rains.
+	var warmth := _chunk_manager.current_warmth()
+	var snowing := Snowfall.falls_as_snow(raw_weather, warmth)
+	_rain_overlay.set_snowing(snowing)
+	# Depth, tracks and repaint all live behind one call now, and it reads the
+	# WORLD clock rather than this frame's delta -- see step_snow. Accumulating
+	# here against `delta` put the snow on a different clock from the season, so
+	# a jump to summer left it lying in the sunshine.
+	_chunk_manager.step_snow(snowing, warmth)
+	# Walking packs the snow down, which is what leaves a trail.
+	_chunk_manager.tread_snow_at(local_player.position)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (

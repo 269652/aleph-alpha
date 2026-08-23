@@ -93,20 +93,25 @@ func generate_image(species: String, seed_value: int) -> Image:
 
 
 ## Builds one bird image at a given wing phase (-1 fully down .. +1 fully
-## up); phase 0 is the resting pose generate_image returns.
-func _bird_image(species: String, seed_value: int, wing_phase: float) -> Image:
+## up) and head dip (0 head up .. 1 bill in the grass); phase 0 / dip 0 is the
+## resting pose generate_image returns.
+func _bird_image(
+	species: String, seed_value: int, wing_phase: float, head_dip: float = 0.0
+) -> Image:
 	var key: String = species if SPECIES_BASE_COLORS.has(species) else "sparrow"
 	var base_color: Color = SPECIES_BASE_COLORS[key]
 	var jitter := PixelNoise.unit(seed_value, key.length(), 0) - 0.5
 	var body := base_color.lightened(maxf(jitter * JITTER_RANGE, 0.0)).darkened(
 		maxf(-jitter * JITTER_RANGE, 0.0)
 	)
-	return _paint_into_new_image(key, body, wing_phase)
+	return _paint_into_new_image(key, body, wing_phase, head_dip)
 
 
-func _paint_into_new_image(key: String, body: Color, wing_phase: float) -> Image:
+func _paint_into_new_image(
+	key: String, body: Color, wing_phase: float, head_dip: float = 0.0
+) -> Image:
 	var image := Image.create(SIZE.x, SIZE.y, false, Image.FORMAT_RGBA8)
-	_paint_bird(image, SPECIES_BODY.get(key, SPECIES_BODY["sparrow"]), body, wing_phase)
+	_paint_bird(image, SPECIES_BODY.get(key, SPECIES_BODY["sparrow"]), body, wing_phase, head_dip)
 	_outline_silhouette(image)
 	return image
 
@@ -151,6 +156,32 @@ func generate_perched_texture(species: String, seed_value: int) -> ImageTexture:
 ## folded along the flank rather than mid-stroke.
 const _PERCHED_WING_PHASE := -0.35
 
+## A PECKING bird: sitting exactly as the perched frame does -- wings folded,
+## not mid-flap, since a flapping bird on the ground reads as a glitch -- but
+## with its head and bill dipped down into the grass. This is the frame that
+## makes "the bird sits down and picks the worm up" visible at all; without it
+## a robin lands, holds perfectly still, and a worm silently disappears (see
+## docs/concept/soil_fauna.md and GroundForageBehavior.is_beak_down, which
+## alternates this frame against the perched one so the head dips PECK_COUNT
+## times).
+func generate_pecking_image(species: String, seed_value: int) -> Image:
+	return _bird_image(species, seed_value, _PERCHED_WING_PHASE, 1.0)
+
+
+func generate_pecking_texture(species: String, seed_value: int) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_pecking_image(species, seed_value))
+
+
+## How far the head drops when pecking, as a multiple of the body's
+## half-depth, and how far forward it reaches. A real peck is down AND
+## forward -- the bird stretches its neck at the ground rather than tucking
+## its chin. Sized so the bill clears the body but stays on the canvas for
+## every species (pinned by
+## test_the_pecking_frame_stays_inside_the_sprite_canvas, including the
+## kingfisher's oversized dagger bill).
+const _HEAD_DIP_TRAVEL := 1.35
+const _HEAD_DIP_REACH := 0.3
+
 
 func generate_flap_textures(species: String, seed_value: int) -> Array:
 	var textures := []
@@ -159,7 +190,9 @@ func generate_flap_textures(species: String, seed_value: int) -> Array:
 	return textures
 
 
-func _paint_bird(image: Image, plan: Dictionary, body: Color, wing_phase: float) -> void:
+func _paint_bird(
+	image: Image, plan: Dictionary, body: Color, wing_phase: float, head_dip: float = 0.0
+) -> void:
 	var w := float(SIZE.x)
 	var h := float(SIZE.y)
 	var half := Vector2(plan.body_length * w * 0.5, plan.body_depth * h * 0.5)
@@ -199,9 +232,14 @@ func _paint_bird(image: Image, plan: Dictionary, body: Color, wing_phase: float)
 			if _form.ellipse_depth(wing_center, wing_half, point) > 0.0:
 				image.set_pixel(x, y, wing)
 
-	# Head, sitting forward and above the torso.
+	# Head, sitting forward and above the torso -- swung down and forward when
+	# pecking (see _HEAD_DIP_TRAVEL). Painted after the torso/wing, so a
+	# dipped head reads as a neck bent over the ground rather than a hole.
 	var head_radius: float = half.y * plan.head_size
-	var head_center: Vector2 = center + Vector2(half.x * 0.78, -half.y * 0.72)
+	var head_center: Vector2 = center + Vector2(
+		half.x * (0.78 + _HEAD_DIP_REACH * head_dip),
+		-half.y * 0.72 + half.y * _HEAD_DIP_TRAVEL * head_dip
+	)
 	for y in SIZE.y:
 		for x in SIZE.x:
 			var point := Vector2(x + 0.5, y + 0.5)

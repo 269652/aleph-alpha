@@ -16,6 +16,23 @@ const GROUP_NAME := "dropped_item"
 ## fill up with forage over a long session.
 const LIFETIME := 90.0
 
+## How long THIS item lasts before it goes.
+##
+## Food overrides it with a real shelf life (see FruitSpoilage): a windfall
+## should be worth walking back for and then be gone, and a nut in its shell
+## should still be there long after the cherries beside it have rotted.
+## Anything that is not food keeps the flat despawn, which is a tidiness rule
+## rather than a spoilage one.
+var spoil_seconds := LIFETIME
+
+## Whether this item ages on WORLD time rather than wall-clock time.
+##
+## Food does. Rot is a thing the seasons do, so it has to run on the same clock
+## as the seasons -- otherwise a run of /ecotest sweeps a year past a windfall
+## that has aged ninety seconds, and fruit that should have rotted in autumn is
+## still sitting there in spring.
+var ages_on_world_time := false
+
 ## The clickable area covers both the icon and the name label above it, not
 ## just the icon -- "click the name to pick it up" needs the label itself to
 ## be a real click target.
@@ -33,11 +50,14 @@ var _name_label: Label
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
 	if item_stack != null and texture == null:
-		texture = _sprite_generator.generate_texture(item_stack.item.id)
+		texture = _sprite_generator.texture_for(item_stack.item.id)
 		# Item art is authored DETAIL_MULTIPLIER times oversized; scaling it
-		# back keeps a dropped item the same size on the ground as before
-		# (see docs/concept/art_resolution.md).
-		scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+		# back keeps a dropped item the right size on the ground (see
+		# docs/concept/art_resolution.md). Tree fruit additionally has its own
+		# per-species world width, because at the shared scale a fallen cherry
+		# was as wide as the tile it lay on -- see
+		# ProceduralItemSprite.world_scale_for.
+		scale = Vector2.ONE * _sprite_generator.world_scale_for(item_stack.item.id)
 
 	var click_area := Area2D.new()
 	var collision_shape := CollisionShape2D.new()
@@ -59,9 +79,25 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	# World-time items are aged by the ecology step instead (see advance).
+	if ages_on_world_time:
+		return
+	advance(delta)
+
+
+## Ages this item by `delta` seconds and removes it once it is past keeping.
+func advance(delta: float) -> void:
 	_age += delta
-	if _age >= LIFETIME:
+	if _age >= spoil_seconds:
 		queue_free()
+
+
+## How rotten this item is, 0 fresh to 1 gone -- for callers that want to show
+## it or refuse to eat it.
+func spoilage() -> float:
+	if spoil_seconds <= 0.0:
+		return 1.0
+	return clampf(_age / spoil_seconds, 0.0, 1.0)
 
 
 ## Merges this stack into the picker's inventory. Frees the node if it all fit;

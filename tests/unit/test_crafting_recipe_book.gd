@@ -17,9 +17,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	assert_true(ids.has("cooked_meat"))
 	assert_true(ids.has("crude_blade"))
 	assert_true(ids.has("stone_pickaxe"))
+	assert_true(ids.has("lasso"))
 	# + smelting/forge recipes: furnace, iron_ingot, copper_ingot,
-	# iron_helm/chest/legs/boots + fishing_rod.
-	assert_eq(ids.size(), 14)
+	# iron_helm/chest/legs/boots + fishing_rod + lasso.
+	assert_eq(ids.size(), 15)
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():
@@ -144,3 +145,15 @@ func test_smelting_and_forge_recipes_exist():
 	for i in chest_inputs:
 		ids.append(i["item_id"])
 	assert_true(ids.has("iron_ingot"))
+
+
+## The lasso is the entry point to taming (docs/concept/taming.md) and is
+## deliberately cheap: plant fibre comes from harvesting mature tall grass,
+## so the cost of starting is a walk through a meadow rather than a tech tree.
+func test_a_lasso_is_braided_from_plant_fibre():
+	assert_true(book.recipe_ids().has("lasso"), "the lasso must be craftable")
+	assert_eq(book.recipe_output("lasso")["item_id"], "lasso")
+	var inputs := book.recipe_inputs("lasso")
+	assert_eq(inputs.size(), 1, "fibre and nothing else")
+	assert_eq(inputs[0]["item_id"], "plant_fibre")
+	assert_eq(inputs[0]["count"], 4)

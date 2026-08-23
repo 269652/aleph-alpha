@@ -6,6 +6,7 @@ const Chunk = preload("res://src/world/chunk.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
 
 var renderer: TreeRenderer
 var parent: Node2D
@@ -105,6 +106,27 @@ func test_spawned_trees_are_choppable():
 		assert_true(tree is ChoppableTree)
 
 
+# -- named species (see TreeSpecies) ------------------------------------------
+#
+# Canopy textures used to be cached per continuously-rounded species_bias
+## bucket (5 possible values); they are cached per NAMED species instead, so
+## the count is bounded by the roster rather than by how many trees are loaded.
+
+## Bounded by the SPECIES ROSTER, not by the number of trees.
+##
+## This asserted a literal 3 -- walnut, cherry, apple -- and broke the moment
+## the roster grew to six. The bound that actually matters is that a wood of
+## two hundred trees does not produce two hundred textures, so it is expressed
+## against the roster itself and grows with it.
+func test_texture_cache_stays_bounded_to_the_species_roster():
+	for i in 200:
+		renderer._texture_for(Vector2(i * 37, i * 53))
+	assert_lte(
+		renderer._texture_cache.size(), TreeSpecies.IDS.size(),
+		"a wood should not cache a texture per tree"
+	)
+
+
 func test_spawn_tree_at_places_a_single_choppable_tree_at_the_given_position():
 	var tree := renderer.spawn_tree_at(parent, Vector2(500, 500))
 	assert_true(tree is ChoppableTree)
@@ -122,6 +144,25 @@ func test_spawned_trees_have_a_drop_shadow():
 		var shadow := tree.get_node_or_null("Shadow")
 		assert_not_null(shadow, "tree should have a Shadow child")
 		assert_true(shadow is Sprite2D and shadow.show_behind_parent)
+
+
+## The tree BODY's origin is anchored at the trunk's FOOT, not its center
+## (see _build_tree_node's anchor comment -- Y-sorting needs this). The
+## shadow's offset formula predates that change and still used the OLD
+## center-anchored convention (half the tree's total height below origin),
+## which put the shadow ~11 world units south of the actual trunk -- nearly
+## a tile away, nowhere near the visible trunk it was supposed to ground
+## (reported: "trees float"). The shadow must sit right at the foot.
+func test_the_drop_shadow_sits_at_the_trunk_foot_not_a_tile_south_of_it():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	assert_gt(spawned.size(), 0)
+	for tree in spawned:
+		var shadow: Sprite2D = tree.get_node("Shadow")
+		assert_between(
+			shadow.position.y, 0.0, TreeRenderer.TRUNK_COLLISION_DEPTH * 2.0,
+			"the shadow should sit at the trunk's foot, not drift toward the tile below it"
+		)
 
 
 ## Trees sway in the wind: every spawned tree's sprite carries the shared
@@ -284,3 +325,72 @@ func test_collision_is_short_so_it_blocks_only_the_trunks_own_tile():
 	var tree := renderer.spawn_tree_at(parent, Vector2(48, 48))
 	var shape: RectangleShape2D = _collision_of(tree).shape
 	assert_lt(shape.size.y, TreeRenderer.TREE_SIZE.y * 0.4)
+
+# NOTE: an attempt to fix "the canopy visually rests on an approaching
+# player's head" by deepening TRUNK_COLLISION_DEPTH was tried and reverted
+# (see tree_renderer.gd's TRUNK_COLLISION_DEPTH comment) -- it reintroduced
+# the tile-below-blocked regression this box was shrunk to fix. The player
+# being center-anchored while the tree is foot-anchored means no trunk-depth
+# number alone satisfies both constraints; still open, affects stones too.
+
+
+# -- a forest is not a grid --------------------------------------------------
+
+## Trees stood at exact tile centres, so an original forest read as a lattice:
+## every trunk on a perfect grid, which no wood has ever looked like.
+##
+## Offset within their own tile, deterministically, so a tree is still THE tree
+## for that tile -- it just is not standing in the middle of it.
+func test_trees_do_not_all_stand_at_tile_centres():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	if spawned.size() < 3:
+		pass_test("not enough trees rolled in this chunk")
+		return
+	var centred := 0
+	for tree in spawned:
+		var from_centre := Vector2(
+			fposmod(tree.position.x, float(TILE_SIZE)) - float(TILE_SIZE) * 0.5,
+			fposmod(tree.position.y, float(TILE_SIZE)) - float(TILE_SIZE) * 0.5
+		)
+		if from_centre.length() < 0.01:
+			centred += 1
+	assert_lt(
+		float(centred) / float(spawned.size()), 0.5,
+		"most trees are standing dead centre in their tile -- the wood is a grid"
+	)
+
+
+## ...but each stays on its OWN tile, so the tile that has a tree still has it
+## and nothing drifts into a neighbour.
+func test_a_tree_stays_within_its_own_tile():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	for tree in spawned:
+		var tile := Vector2i(
+			int(floor(tree.position.x / float(TILE_SIZE))),
+			int(floor(tree.position.y / float(TILE_SIZE)))
+		)
+		# The tile it stands on must actually be a tree tile: an offset that
+		# pushed a trunk into a neighbouring tile would put a tree where the
+		# placement rules say there is none.
+		var local := tile - CHUNK_ORIGIN
+		assert_true(
+			tree_placement.has_tree_at(tile.x, tile.y, chunk.biome[local.y * chunk.width + local.x]),
+			"a tree wandered onto a tile that should not have one"
+		)
+
+
+## The same tile always puts its tree in the same place, so a wood does not
+## rearrange itself when a chunk reloads.
+func test_a_tree_stands_in_the_same_spot_every_time():
+	var chunk := _make_forest_chunk()
+	var first := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	var places: Array[Vector2] = []
+	for tree in first:
+		places.append(tree.position)
+	for tree in first:
+		tree.free()
+	var second := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	for index in second.size():
+		assert_eq(second[index].position, places[index])

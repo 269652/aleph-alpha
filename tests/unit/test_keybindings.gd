@@ -89,3 +89,35 @@ func test_ui_toggle_defaults_match_the_requested_layout():
 func test_fish_action_defaults_to_f():
 	assert_eq(bindings.default_keycode_for("fish"), KEY_F)
 	assert_true(bindings.action_names().has("fish"))
+
+
+## "talk" needs its own key -- F/T are already fish/trade.
+func test_talk_action_defaults_to_g_and_does_not_collide_with_other_defaults():
+	assert_true(bindings.action_names().has("talk"))
+	assert_eq(bindings.default_keycode_for("talk"), KEY_G)
+	for action in bindings.action_names():
+		if action == "talk":
+			continue
+		assert_ne(
+			bindings.default_keycode_for("talk"), bindings.default_keycode_for(action),
+			"talk's default collides with %s" % action
+		)
+
+
+## Kick (see docs/concept/stone.md) gets K -- toggle_skills moves off K onto
+## L (the very next key over, an easy muscle-memory shift) to make room,
+## rather than colliding two actions on the same default.
+func test_kick_action_defaults_to_k_and_toggle_skills_moved_off_k():
+	assert_true(bindings.action_names().has("kick"))
+	assert_eq(bindings.default_keycode_for("kick"), KEY_K)
+	assert_eq(bindings.default_keycode_for("toggle_skills"), KEY_L)
+
+
+func test_kick_action_does_not_collide_with_any_other_default():
+	for action in bindings.action_names():
+		if action == "kick":
+			continue
+		assert_ne(
+			bindings.default_keycode_for("kick"), bindings.default_keycode_for(action),
+			"kick's default collides with %s" % action
+		)

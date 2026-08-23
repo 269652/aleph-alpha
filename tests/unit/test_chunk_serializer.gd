@@ -69,3 +69,71 @@ func test_save_then_load_planted_trees_round_trips():
 
 func test_loading_missing_planted_trees_returns_an_empty_array():
 	assert_eq(serializer.load_planted_trees("user://does_not_exist.bin"), [])
+
+
+## See docs/concept/fishing.md#persistence-a-gap-shared-with-land-ecology-worth-closing-here-first.
+## One file per chunk (like modifications/planted_trees) holding a single
+## scalar -- there's only ever one aggregate fish population per chunk, no
+## natural sub-key the way a chunk's many modifications/trees have.
+
+func test_save_then_load_fish_population_round_trips():
+	serializer.save_fish_population(4.5, TEST_PATH)
+	assert_almost_eq(serializer.load_fish_population(TEST_PATH), 4.5, 0.0001)
+
+
+func test_save_then_load_fish_population_round_trips_a_fished_out_zero():
+	# 0.0 is a legitimate persisted state (a fished-out chunk), distinct from
+	# "never persisted" -- callers must check file existence themselves
+	# (see EarthChunkManager) rather than treating this 0.0 default as
+	# "nothing to load".
+	serializer.save_fish_population(0.0, TEST_PATH)
+	assert_almost_eq(serializer.load_fish_population(TEST_PATH), 0.0, 0.0001)
+
+
+func test_loading_missing_fish_population_returns_zero():
+	assert_eq(serializer.load_fish_population("user://does_not_exist.bin"), 0.0)
+
+
+# -- land ecology survives a restart -----------------------------------------
+#
+# Fish already persisted; herbivores, predators and vegetation lived only in
+# EarthChunkManager's in-memory record, so quitting reset every region to a
+# freshly-seeded population at full capacity. A herd the player hunted down,
+# or watched grow, was back to default next launch.
+
+func test_land_ecology_round_trips_through_a_file():
+	var path := "user://test_ecology.bin"
+	var state := {
+		"herbivores": 3.25, "predators": 0.5, "vegetation": 0.75,
+		"saved_at_unix": 1700000000.0,
+	}
+	serializer.save_ecology(state, path)
+	var loaded := serializer.load_ecology(path)
+	assert_almost_eq(float(loaded["herbivores"]), 3.25, 0.001)
+	assert_almost_eq(float(loaded["predators"]), 0.5, 0.001)
+	assert_almost_eq(float(loaded["vegetation"]), 0.75, 0.001)
+	DirAccess.remove_absolute(path)
+
+
+## Wall-clock, and to full precision: the whole point is knowing how long the
+## player was away, and a float32 second-count near the current unix epoch
+## loses minutes to rounding.
+func test_the_saved_timestamp_keeps_its_precision():
+	var path := "user://test_ecology_time.bin"
+	var now := 1767225600.0  # a plausible present-day unix time
+	serializer.save_ecology({"saved_at_unix": now}, path)
+	assert_almost_eq(float(serializer.load_ecology(path)["saved_at_unix"]), now, 1.0)
+	DirAccess.remove_absolute(path)
+
+
+## "Never persisted" and "persisted as empty" are different facts: a region
+## really can be hunted down to nothing, and re-seeding it would quietly undo
+## the player's effect on the world.
+func test_a_region_that_was_never_saved_is_distinguishable_from_an_empty_one():
+	assert_true(serializer.load_ecology("user://nothing_here_at_all.bin").is_empty())
+	var path := "user://test_ecology_empty.bin"
+	serializer.save_ecology({"herbivores": 0.0, "predators": 0.0, "vegetation": 0.0}, path)
+	var loaded := serializer.load_ecology(path)
+	assert_false(loaded.is_empty(), "a hunted-out region is a real, saved state")
+	assert_almost_eq(float(loaded["herbivores"]), 0.0, 0.001)
+	DirAccess.remove_absolute(path)

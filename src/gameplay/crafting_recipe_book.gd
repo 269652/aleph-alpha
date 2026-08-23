@@ -30,6 +30,13 @@ const _RECIPES := {
 		],
 		"output": {"item_id": "crude_blade", "count": 1},
 	},
+	# Braided grass rope -- the entry point to taming (see
+	# docs/concept/taming.md). Cheap on purpose: plant fibre comes from
+	# harvesting mature tall grass, so starting costs a walk through a meadow.
+	"lasso": {
+		"inputs": [{"item_id": "plant_fibre", "count": 4}],
+		"output": {"item_id": "lasso", "count": 1},
+	},
 	"stone_pickaxe": {
 		"inputs": [
 			{"item_id": "stick", "count": 2},

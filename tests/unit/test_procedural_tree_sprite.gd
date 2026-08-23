@@ -102,6 +102,35 @@ func test_fruit_rendering_is_deterministic():
 	assert_eq(a.get_data(), b.get_data())
 
 
+# -- named species (see TreeSpecies) ------------------------------------------
+#
+# species_bias used to drive one continuous nut->fruit colour lerp; it now
+# resolves to one of three NAMED species (TreeSpecies.species_for_bias), each
+# with its own canopy AND fruit colour -- not just "more/less green".
+
+## Walnut's ripe "fruit" is a green-brown husk, not a bright warm red -- it
+## should not trip the same red-dot detector an apple/cherry's fruit does.
+func test_a_walnut_leaning_trees_fruit_is_not_the_same_bright_red_as_an_apples():
+	var walnut := generator.generate_image_with_fruit(0.1, 7, 6)  # walnut bucket
+	var apple := generator.generate_image_with_fruit(0.9, 7, 6)  # apple bucket
+	assert_eq(
+		_fruit_dot_pixel_count(walnut), 0,
+		"a walnut husk should not read as the same bright warm-red as apple/cherry fruit"
+	)
+	assert_gt(_fruit_dot_pixel_count(apple), 0)
+
+
+## All three named species buckets should look genuinely different, not just
+## the two old endpoints.
+func test_the_three_named_species_buckets_each_have_a_distinct_canopy():
+	var walnut := generator.generate_image(0.1, 3)
+	var cherry := generator.generate_image(0.5, 3)
+	var apple := generator.generate_image(0.9, 3)
+	assert_ne(walnut.get_data(), cherry.get_data())
+	assert_ne(cherry.get_data(), apple.get_data())
+	assert_ne(walnut.get_data(), apple.get_data())
+
+
 # -- painted detail, not just a bigger canvas -------------------------------
 #
 # docs/concept/art_resolution.md's first pillar: 4x the pixels only counts
@@ -173,3 +202,54 @@ func test_trunk_has_bark_texture():
 			if pixel.a > 0.0 and pixel.r > pixel.b:
 				browns[pixel] = true
 	assert_gte(browns.size(), 3, "trunk should have bark shading, not one flat brown")
+
+
+# -- a fallen fruit lands where it hung ---------------------------------------
+
+## Fruit `k` is drawn at one place in the canopy and must land under THAT place.
+##
+## The drawer and the ground both derive the position from this one function, so
+## they cannot drift apart -- which is the whole point. A fallen cherry that
+## lands somewhere unrelated to where it hung is a new cherry, not the one that
+## was on the tree (reported).
+func test_a_fruits_place_is_stable():
+	assert_eq(
+		ProceduralTreeSprite.fruit_polar(3, 2),
+		ProceduralTreeSprite.fruit_polar(3, 2),
+		"the same fruit should always hang in the same place"
+	)
+
+
+func test_different_fruit_hang_in_different_places():
+	var seen := {}
+	for index in 8:
+		seen[ProceduralTreeSprite.fruit_polar(3, index)] = true
+	assert_gt(seen.size(), 5, "a crop should spread round the canopy, not pile up")
+
+
+## Different trees carry their crop differently.
+func test_two_trees_hang_their_fruit_differently():
+	assert_ne(
+		ProceduralTreeSprite.fruit_polar(1, 0), ProceduralTreeSprite.fruit_polar(4, 0)
+	)
+
+
+## Distance out from the trunk is a fraction of the crown, never beyond it --
+## fruit hanging in mid-air past the leaves is the bug this bounds.
+func test_fruit_hangs_within_the_crown():
+	for variant in 6:
+		for index in 10:
+			var polar := ProceduralTreeSprite.fruit_polar(variant, index)
+			assert_between(polar.y, 0.0, 1.0, "fruit should hang inside the crown")
+
+
+## The ground offset is the same bearing as the hanging place, scaled out to
+## world pixels -- so it lands under the fruit rather than beside the tree.
+func test_the_ground_offset_follows_the_hanging_bearing():
+	for index in 6:
+		var polar := ProceduralTreeSprite.fruit_polar(2, index)
+		var offset := ProceduralTreeSprite.fruit_ground_offset(2, index)
+		assert_almost_eq(
+			signf(offset.x), signf(cos(polar.x)), 0.001,
+			"fruit %d fell to the wrong side of the trunk" % index
+		)

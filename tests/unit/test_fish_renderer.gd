@@ -135,3 +135,57 @@ func test_a_large_ocean_chunk_spawns_a_mix_of_species():
 	for fish in spawned:
 		species_seen[fish.species] = true
 	assert_gt(species_seen.size(), 1, "expected more than one species across a large ocean chunk")
+
+
+# -- population-driven spawn count (see docs/concept/fishing.md#individual-fidelity-promotion) --
+#
+# target_count defaults to -1 (every test above), which keeps the legacy
+# per-cell SPAWN_CHANCE roll unchanged -- every pre-existing call site (and
+# test) keeps compiling and behaving exactly as before, same convention as
+# CreatureRenderer's biome_name parameter.
+
+func test_target_count_spawns_exactly_that_many_when_water_area_allows():
+	var chunk := _make_chunk("ocean")
+	var spawned := renderer.spawn_fish(parent, Vector2i(1, 1), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 4)
+	assert_eq(spawned.size(), 4)
+
+
+func test_target_count_of_zero_spawns_nothing():
+	var chunk := _make_chunk("ocean")
+	var spawned := renderer.spawn_fish(parent, Vector2i(1, 1), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 0)
+	assert_eq(spawned.size(), 0)
+
+
+func test_target_count_is_capped_by_max_fish_per_chunk():
+	var chunk := _make_chunk("ocean")
+	var spawned := renderer.spawn_fish(parent, Vector2i(1, 1), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 999)
+	assert_eq(spawned.size(), FishRenderer.MAX_FISH_PER_CHUNK)
+
+
+func test_target_count_selection_is_deterministic():
+	var chunk := _make_chunk("ocean")
+	var first := renderer.spawn_fish(parent, Vector2i(1, 1), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 5)
+	var first_positions: Array[Vector2] = []
+	for fish in first:
+		first_positions.append(fish.position)
+
+	var other_parent := Node2D.new()
+	var second := renderer.spawn_fish(other_parent, Vector2i(1, 1), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 5)
+	var second_positions: Array[Vector2] = []
+	for fish in second:
+		second_positions.append(fish.position)
+	other_parent.free()
+
+	assert_eq(first_positions, second_positions)
+
+
+func test_target_count_still_respects_interior_water_only():
+	var chunk := _make_chunk("ocean")
+	var land_x := CHUNK_SIZE / 2
+	for y in CHUNK_SIZE:
+		chunk.biome[y * CHUNK_SIZE + land_x] = "grassland"
+
+	var spawned := renderer.spawn_fish(parent, Vector2i(1, 1), chunk, CHUNK_ORIGIN, TILE_SIZE, null, 999)
+	for fish in spawned:
+		var tile_x := int(fish.position.x / TILE_SIZE) - CHUNK_ORIGIN.x
+		assert_ne(tile_x, land_x, "fish spawned on land itself")

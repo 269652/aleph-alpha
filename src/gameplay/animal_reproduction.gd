@@ -22,7 +22,14 @@ const DECAY_RATE_PER_SECOND := 0.01
 ## Reproduction gates.
 const REPRO_ENERGY_THRESHOLD := 0.6
 const REPRO_HEALTH_THRESHOLD := 0.7
-const REPRO_COOLDOWN := 30.0
+## A full real-world day between births for one animal (requested directly:
+## "reproduction should take at least 1 real day (24h)"). It was 30 SECONDS,
+## which only ever looked survivable because the ecology simulation was never
+## actually running (see World.owns_ecosystem_simulation_for); the moment it
+## did, well-fed animals bred every half-minute and a clearing filled with
+## deer. Breeding is meant to be a slow background change to a region's
+## makeup that a returning player notices, not something they watch happen.
+const REPRO_COOLDOWN := 24.0 * 60.0 * 60.0
 
 ## Energy paid per birth. Must exceed MAX_ENERGY - REPRO_ENERGY_THRESHOLD so
 ## that energy_after_birth(MAX_ENERGY) lands strictly below the threshold,

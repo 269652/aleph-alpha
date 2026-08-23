@@ -16,6 +16,7 @@ extends RefCounted
 
 const HerbivorePopulationModel = preload("res://src/world/herbivore_population_model.gd")
 const PredatorPopulationModel = preload("res://src/world/predator_population_model.gd")
+const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 
 ## Game seconds that make up one simulated ecological "day" (the model_s unit the
 ## population models integrate in). One in-game hour of unloaded time is one
@@ -34,11 +35,12 @@ const FRUIT_STOCK_MAX := 500.0
 
 var _herbivore_model := HerbivorePopulationModel.new()
 var _predator_model := PredatorPopulationModel.new()
+var _aquatic_model := AquaticPopulationModel.new()
 
 
 ## Integrate a chunk's aggregate ecology forward by `elapsed_seconds` in one step.
-## `state`    -> {herbivores, predators, fruit_stock, vegetation}
-## `capacity` -> {herbivore_capacity, fruit_growth_rate}
+## `state`    -> {herbivores, predators, fruit_stock, vegetation, fish}
+## `capacity` -> {herbivore_capacity, fruit_growth_rate, fish_capacity}
 ## Pure: does not mutate `state`; returns a fresh dictionary.
 func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) -> Dictionary:
 	var elapsed := maxf(0.0, elapsed_seconds)
@@ -48,9 +50,11 @@ func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) ->
 	var predators: float = state.get("predators", 0.0)
 	var fruit_stock: float = state.get("fruit_stock", 0.0)
 	var vegetation: float = state.get("vegetation", 0.0)
+	var fish: float = state.get("fish", 0.0)
 
 	var herbivore_capacity: float = capacity.get("herbivore_capacity", 0.0)
 	var fruit_growth_rate: float = capacity.get("fruit_growth_rate", 0.0)
+	var fish_capacity: float = capacity.get("fish_capacity", 0.0)
 
 	# Vegetation regrows toward 1.0 (exponential approach, monotone, no overshoot).
 	var new_vegetation := 1.0 - (1.0 - vegetation) * exp(-VEGETATION_REGROWTH_PER_DAY * delta_days)
@@ -67,9 +71,15 @@ func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) ->
 	var predator_capacity := _predator_model.carrying_capacity(new_herbivores)
 	var new_predators := _predator_model.step(predators, predator_capacity, delta_days)
 
+	# Fish: same logistic step as herbivores, but its capacity is an
+	# independent input (water area/temperature), not derived from anything
+	# else in this state -- see docs/concept/fishing.md#unloaded-chunk-catch-up.
+	var new_fish := _aquatic_model.step(fish, fish_capacity, delta_days)
+
 	return {
 		"herbivores": new_herbivores,
 		"predators": new_predators,
 		"fruit_stock": new_fruit_stock,
 		"vegetation": new_vegetation,
+		"fish": new_fish,
 	}
