@@ -2,6 +2,37 @@
 
 > A proprietary, non-commercial alpha game.
 
+## Overview
+
+Aleph Alpha is an experimental game about exploring systems, possibilities, and the consequences of your choices. It is built as a living alpha: mechanics, content, presentation, and balance will evolve as the project develops.
+
+The game is designed to reward curiosity rather than prescribe a single correct way to play. Experimentation, observation, adaptation, and interpretation are central to the experience.
+
+## Gameplay
+
+Gameplay focuses on exploration, interaction, and discovery within a reactive world. Players are encouraged to:
+
+- Investigate unfamiliar environments and systems.
+- Experiment with mechanics to understand how they interact.
+- Make choices whose consequences may unfold over time.
+- Find their own strategies instead of following a strictly linear solution.
+- Pay attention to patterns, feedback, and emergent behavior.
+
+As an alpha, some systems may be incomplete, unstable, intentionally opaque, or subject to significant change. Progress, balance, and saved data may not be preserved between versions.
+
+## Philosophy
+
+Aleph Alpha is guided by several principles:
+
+- **Player agency:** The player should have meaningful choices and room to form their own approach.
+- **Emergence over prescription:** Interesting outcomes should arise from interactions between systems, not only from scripted sequences.
+- **Curiosity as a mechanic:** The game should make observation and asking “what happens if…?” worthwhile.
+- **Depth through simplicity:** A small number of understandable rules can produce complex and surprising results.
+- **Iteration with intent:** The alpha exists to test ideas, learn from play, and refine the experience rather than to present a finished product.
+- **Respect for interpretation:** The game may leave space for players to connect clues, form theories, and decide what its world means to them.
+
+These principles describe the project’s direction, not a guarantee that every current feature fully represents the intended final experience.
+
 ## Status
 
 Aleph Alpha is an early alpha build. Features, content, balance, and availability may change without notice.
