@@ -37,6 +37,19 @@ These principles describe the project’s direction, not a guarantee that every 
 
 Aleph Alpha is an early alpha build. Features, content, balance, and availability may change without notice.
 
+## Running the Game
+
+Aleph Alpha is built with [Godot Engine](https://godotengine.org/) 4.3 or later (GDScript). To run the alpha locally:
+
+1. Install Godot 4.3+ from [godotengine.org/download](https://godotengine.org/download) (the standard, non-.NET build is sufficient; the project doesn't use C#).
+2. Clone or download this repository:
+   `git clone https://github.com/269652/aleph-alpha.git`
+3. Open Godot, choose **Import**, and select the `project.godot` file in the cloned folder.
+4. With the project open in the editor, press **F5** (or click the **Play** button in the top-right corner) to launch the game. The first launch may take a moment while Godot imports assets and caches shaders.
+5. If prompted to select a main scene, choose `scenes/world.tscn`.
+
+Running from the editor is the supported way to play the alpha; there are currently no pre-built binary releases. Since this is an early alpha, expect occasional errors in the Godot debugger console — these are useful to report (see Contact below) but generally shouldn't block play.
+
 ## Private Alpha Use
 
 The copyright holder grants private individuals a limited, personal, non-exclusive, non-transferable, revocable license to download, install, and play the alpha solely for personal, non-commercial purposes.
