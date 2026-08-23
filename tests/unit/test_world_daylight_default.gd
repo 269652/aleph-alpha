@@ -25,3 +25,9 @@ func test_env_one_forces_day_even_in_a_release_build():
 
 func test_live_console_toggle_forces_day_regardless_of_build_or_env():
 	assert_true(World.always_day_for(true, "0", false))
+
+
+## `/ecotest off` is a durable return to real-time ecology.  In particular,
+## no diagnostic update may silently restore the fast-forward scale afterwards.
+func test_ecotest_off_keeps_normal_ecology_scale():
+	assert_eq(World.ecology_scale_for_console_argument(15360.0, "off"), 1.0)

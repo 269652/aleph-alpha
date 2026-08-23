@@ -11,9 +11,11 @@ extends RefCounted
 ## seed / tick, so a reloaded chunk reproduces the same initial layout.
 
 ## Chance (0..1) that any given grassland cell starts with a grass patch.
-const SEED_CHANCE := 0.08
+## A field must be visibly continuous, not a few isolated decoration cells.
+## The 128-patch cap below keeps this bounded even in an all-grass chunk.
+const SEED_CHANCE := 0.20
 ## Hard cap on patches per chunk, so spread can't grow unbounded.
-const MAX_PATCHES := 64
+const MAX_PATCHES := 128
 ## Growth (0..1) gained per second of advance().
 const GROWTH_RATE := 0.01
 ## Seconds between spread ticks.

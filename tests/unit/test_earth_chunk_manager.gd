@@ -1363,8 +1363,10 @@ func test_a_mature_grass_tuft_stays_at_its_intended_per_seed_world_scale():
 			if sim.get_growth(cell) < 1.0:
 				continue
 			found_mature = true
-			var sprite: Sprite2D = manager._grass_sprites[chunk_coord][cell]
-			var expected := ProceduralGrassSprite.world_scale_for_seed(_grass_tuft_seed(chunk_coord, cell))
+			var cards: Array = manager._grass_sprites[chunk_coord][cell]
+			assert_gte(cards.size(), 3, "one grass cell should read as a small field of blade cards")
+			var sprite: Sprite2D = cards[0]
+	var expected := 16.0 / float(sprite.region_rect.size.x)
 			assert_almost_eq(
 				sprite.scale.x, expected, 0.001,
 				"a mature tuft must stay at its intended (per-variant) world size, not balloon to the full canvas"
@@ -1382,20 +1384,16 @@ func test_a_mature_grass_tuft_stays_at_its_intended_per_seed_world_scale():
 func test_a_mature_grass_tufts_world_height_stays_within_its_intended_range():
 	manager.update(_berlin_tile)
 	var found_mature := false
-	var min_tiles: float = ProceduralGrassSprite.VARIANTS[0].world_tiles
-	var max_tiles: float = ProceduralGrassSprite.VARIANTS[ProceduralGrassSprite.VARIANTS.size() - 1].world_tiles
 	for chunk_coord in manager._grass_sprites.keys():
 		var sim: TallGrass = manager._grass_sims[chunk_coord]
 		for cell in manager._grass_sprites[chunk_coord]:
 			if sim.get_growth(cell) < 1.0:
 				continue
 			found_mature = true
-			var sprite: Sprite2D = manager._grass_sprites[chunk_coord][cell]
-			var rendered_height: float = sprite.scale.y * ProceduralGrassSprite.SIZE.y
-			assert_between(
-				rendered_height, ProceduralGrassSprite.WORLD_WIDTH * min_tiles, ProceduralGrassSprite.WORLD_WIDTH * max_tiles,
-				"a mature tuft should render within its intended world-height range regardless of art resolution"
-			)
+			var cards: Array = manager._grass_sprites[chunk_coord][cell]
+			for sprite: Sprite2D in cards:
+				var rendered_height: float = sprite.scale.y * sprite.region_rect.size.y
+				assert_almost_eq(rendered_height, 16.0, 0.001, "an illustrated blade card stays one tile tall")
 	assert_true(found_mature, "precondition: Berlin's grassland seeded at least one mature patch")
 
 
@@ -1403,15 +1401,15 @@ func test_a_mature_grass_tufts_world_height_stays_within_its_intended_range():
 ## visibly different heights, not one uniform size.
 func test_mature_grass_tufts_show_more_than_one_world_height():
 	manager.update(_berlin_tile)
-	var heights := {}
+	var roots := {}
 	for chunk_coord in manager._grass_sprites.keys():
 		var sim: TallGrass = manager._grass_sims[chunk_coord]
 		for cell in manager._grass_sprites[chunk_coord]:
 			if sim.get_growth(cell) < 1.0:
 				continue
-			var sprite: Sprite2D = manager._grass_sprites[chunk_coord][cell]
-			heights[snappedf(sprite.scale.y, 0.001)] = true
-	assert_gt(heights.size(), 1, "a meadow of mature tufts should show more than one height")
+			for sprite: Sprite2D in manager._grass_sprites[chunk_coord][cell]:
+				roots[snappedf(sprite.position.y, 0.01)] = true
+	assert_gt(roots.size(), 1, "a patch's cards must carry distinct Y roots for y-sorted depth")
 
 
 ## /village dev-console command's discovery half (see World._handle_village_

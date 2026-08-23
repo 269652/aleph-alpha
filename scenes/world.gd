@@ -268,6 +268,15 @@ var _creature_panels_accumulator := CREATURE_PANELS_REFRESH_INTERVAL  # refresh 
 var _ecology_time_scale := 1.0
 
 
+## Pure command parsing so `/ecotest off` remains testable and independent
+## from any diagnostic display code.
+static func ecology_scale_for_console_argument(current_scale: float, argument: String) -> float:
+	if argument.to_lower() == "off":
+		return 1.0
+	var asked := argument.to_float()
+	return TimeLapse.scale_for(asked) if asked > 0.0 else current_scale
+
+
 ## Set true by the /day console command -- forces daytime lighting for the
 ## rest of the session, same effect as DEBUG_ALWAYS_DAY_ENV but toggled live
 ## rather than only at launch.
@@ -1409,7 +1418,7 @@ func _handle_weather_command(args: Array) -> void:
 ## around and look at things while the year runs past.
 func _handle_ecotest_command(args: Array) -> void:
 	if args.size() > 0 and str(args[0]) == "off":
-		_ecology_time_scale = 1.0
+		_ecology_time_scale = ecology_scale_for_console_argument(_ecology_time_scale, "off")
 		_dev_console.log_line("Ecology back to normal speed.")
 		return
 
@@ -1932,8 +1941,6 @@ func _diag(delta: float) -> void:
 	if _diag_t < 3.0:
 		return
 	_diag_t = 0.0
-	if _ecology_time_scale <= 1.0:
-		_handle_ecotest_command([])
 	var fruit := 0
 	for item in _ground_items.get_children():
 		if item.item_stack != null and TreeSpecies.IDS.has(item.item_stack.item.id):
@@ -1996,6 +2003,8 @@ func _process(delta: float) -> void:
 	_chunk_manager.step_water_disturbances(delta)
 	if _owns_ecosystem_simulation():
 		var focus_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+		if focus_player != null:
+			_chunk_manager.set_grass_walker_position(focus_player.position)
 		# Normally one slice carrying the frame's own delta; several when
 		# /ecotest is running the year fast (see TimeLapse).
 		# Two groups, at two cadences -- see _step_ecology_fine and

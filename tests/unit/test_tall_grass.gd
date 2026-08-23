@@ -35,6 +35,13 @@ func test_seeds_patches_only_on_grassland_cells():
 		assert_lt(cell.x, WIDTH / 2)
 
 
+## Long grass is a field the player can enter, not isolated decorations.
+## Pin the initial density so future visual work cannot silently revert it.
+func test_grassland_starts_with_a_visible_field_density():
+	assert_gte(TallGrass.SEED_CHANCE, 0.20)
+	assert_gte(TallGrass.MAX_PATCHES, 128)
+
+
 func test_seeding_is_deterministic_for_the_same_seed():
 	var a := TallGrass.new(7, WIDTH, HEIGHT, _biome_all("grassland"))
 	var b := TallGrass.new(7, WIDTH, HEIGHT, _biome_all("grassland"))

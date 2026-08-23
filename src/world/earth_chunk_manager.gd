@@ -8,6 +8,7 @@ const TallGrass = preload("res://src/world/tall_grass.gd")
 const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_sprite.gd")
+const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
@@ -166,6 +167,7 @@ var _terrain_renderer := TerrainRenderer.new()
 var _tree_renderer := TreeRenderer.new()
 var _stone_renderer := StoneRenderer.new()
 var _grass_sprite_generator := ProceduralGrassSprite.new()
+var _illustrated_grass := IllustratedGrassPatch.new()
 var _scrub_sprite_generator := ProceduralScrubSprite.new()
 var _lichen_sprite_generator := ProceduralLichenSprite.new()
 var _wind_sway := WindSway.new()
@@ -274,7 +276,7 @@ var _flower_sprites: Dictionary = {}
 ## the ground (see FlowerPatch.shed_seed).
 var _seed_sprites: Dictionary = {}
 var _flower_sprite_generator := ProceduralFlowerSprite.new()
-var _grass_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
+var _grass_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Array[Sprite2D]}
 var _grass_refresh_accumulator := 0.0
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
@@ -1454,6 +1456,12 @@ func step_tall_grass(delta_seconds: float) -> void:
 		_sync_grass_sprites(chunk_coord)
 
 
+## One shared shader-uniform write per frame makes nearby blades yield to a
+## walker; individual cards intentionally have no process callbacks.
+func set_grass_walker_position(world_position: Vector2) -> void:
+	_illustrated_grass.set_walker_position(world_position)
+
+
 ## Whether a wild carrot (Daucus carota) is growing in the clump at `tile`.
 ##
 ## The carrot existed as an item with nothing in the world producing it, which
@@ -1656,7 +1664,11 @@ func _drop_decoration(holder: Dictionary, chunk_coord: Vector2i) -> void:
 	if sprites.is_empty():
 		return
 	for sprite in sprites.values():
-		sprite.queue_free()
+		if sprite is Array:
+			for card in sprite:
+				card.queue_free()
+		else:
+			sprite.queue_free()
 	holder[chunk_coord] = {}
 
 
@@ -1671,7 +1683,8 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 
 	for cell in sprites.keys().duplicate():
 		if not sim.has_grass(cell):
-			sprites[cell].free()
+			for blade in sprites[cell]:
+				blade.queue_free()
 			sprites.erase(cell)
 
 	var origin := chunk_coord * CHUNK_SIZE
@@ -1681,31 +1694,17 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 		# (see ProceduralGrassSprite.VARIANTS) sets its own world-space
 		# height between 0.75 and 1.5 tiles, so a meadow shows real height
 		# variety instead of identically-sized clumps.
-		var base_scale := ProceduralGrassSprite.world_scale_for_seed(seed_value)
 		if not sprites.has(cell):
-			var sprite := Sprite2D.new()
-			sprite.texture = _grass_sprite_generator.generate_texture(seed_value)
-			sprite.scale = Vector2.ONE * base_scale
-			# Anchor at the blade BASE, not the sprite's middle. Blades are
-			# drawn in the lower part of the canvas, so a centred sprite has
-			# its origin ABOVE its own visible grass -- Y-sort then treats
-			# the tuft as standing further north than it looks and it draws
-			# behind a player whose feet are actually further back. Same
-			# anchor bug, and same fix, as TreeRenderer's canopy.
-			sprite.offset.y = -float(ProceduralGrassSprite.SIZE.y) * 0.5
-			# Blades sway in the wind (shared GPU shader, see WindSway).
-			sprite.material = _wind_sway.tuft_material()
-			sprite.position = Vector2(
+			sprites[cell] = _illustrated_grass.create_cards(seed_value, Vector2(
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
-			)
-			_entities_parent.add_child(sprite)
-			sprites[cell] = sprite
+			), _entities_parent)
 		# Growth MULTIPLIES onto the base world scale above -- it must never
 		# replace it outright, or a mature patch (growth 1.0) renders at the
 		# full oversized art canvas instead of its intended clump size (see
 		# test_a_mature_grass_tuft_stays_at_its_intended_world_scale).
-		sprites[cell].scale = Vector2.ONE * base_scale * maxf(0.3, sim.get_growth(cell))
+		for blade in sprites[cell]:
+			blade.scale = Vector2.ONE * (IllustratedGrassPatch.WORLD_SIZE / blade.region_rect.size.x) * maxf(0.3, sim.get_growth(cell))
 
 
 ## Adds/removes a Sprite2D per flower cell so the rendered blooms match the
@@ -3328,8 +3327,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		stone.free()
 	_loaded_stones.erase(chunk_coord)
 
-	for sprite in _grass_sprites.get(chunk_coord, {}).values():
-		sprite.free()
+	for cards in _grass_sprites.get(chunk_coord, {}).values():
+		for card in cards:
+			card.free()
 	_grass_sprites.erase(chunk_coord)
 	_grass_sims.erase(chunk_coord)
 
