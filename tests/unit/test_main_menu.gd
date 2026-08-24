@@ -481,6 +481,25 @@ func test_dna_glow_color_differs_between_common_and_legendary():
 	assert_almost_eq(style.bg_color.b, legendary_color.b, 0.01)
 
 
+## _dna_glow's own parent (glow_wrap) must stay pinned to its
+## custom_minimum_size, not stretch out to whatever width the hero card
+## itself happens to be (SIZE_EXPAND_FILL, to share the dialog's own
+## width with the appearance column) -- a plain Control defaults to
+## SIZE_FILL on both axes, which a VBoxContainer parent (inner) DOES
+## stretch to its own cross-axis width. Left unguarded, the glow ring
+## (anchored PRESET_FULL_RECT within glow_wrap) stretches out to that same
+## huge size -- a large, near-empty gold-at-low-alpha box over the card's
+## dark background reads as a flat, unrelated tan panel with the actual
+## diorama frame (PRESET_CENTER, so it does NOT stretch) anchored off-
+## centre somewhere inside it -- reported live, both for the diorama and,
+## before it, the static portrait this replaced: "not contained in the
+## panel."
+func test_glow_wrap_does_not_stretch_to_fill_the_hero_card():
+	var glow_wrap: Control = menu._dna_glow.get_parent()
+	assert_eq(glow_wrap.size_flags_horizontal, Control.SIZE_SHRINK_CENTER)
+	assert_eq(glow_wrap.size_flags_vertical, Control.SIZE_SHRINK_CENTER)
+
+
 ## Only legendary pulses -- common/rare stay a static glow so the animation
 ## itself reads as "something special", not constant background motion.
 func test_only_legendary_rarity_starts_a_pulsing_glow_tween():

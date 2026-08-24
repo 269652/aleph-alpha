@@ -127,22 +127,43 @@ real, modeled mass (`Item.mass_kg > 0.0`, most items still sit at the
 "not modeled" 0.0), kicking whichever candidate -- stone or dropped item --
 is genuinely closer, so a pulled wild carrot/potato
 (`docs/concept/wild_crops.md`) is kickable the same way a pebble is. This
-does NOT extend to the held-item pickup/charge/throw mechanism below, which
-stays stone-only for now (see `wild_crops.md`'s own status list for that
-explicit follow-up).
+extends to the held-item pickup/charge/throw mechanism below too (see that
+section's own update) -- both halves of "a real physical object" now cover
+the same set: a liftable stone, or a dropped item with a real, modeled
+mass.
 
-**Held-item throw.** With a stone already in hand, pressing and HOLDING E
-starts a charge: a "strengthometer" bar above the player's own head bounces
-back and forth between empty and full repeatedly while held (`ChargeMeter`
--- a classic charge-meter minigame, not a bar that simply fills), so
-release power depends on exact timing, not just how long E was held.
-Releasing E throws the held stone with power set by wherever the meter was
-at that instant (`HeldItemThrow.release_speed_mps`), feeding the SAME shared
-momentum model as Kick: release speed x the stone's real mass is its impact
-momentum against whatever it lands near (`ImpactResolver.resolve_impact`,
+**Held-item pickup, throw, and stash.** E's pickup-into-hand is likewise no
+longer stone-only (reported live: "pick up should put it in the hand first
+instead of the inventory"): empty-handed near a liftable stone, E still
+picks it into the hand first; failing that, empty-handed near a dropped
+item with a real, kickable-grade mass, E picks THAT into the hand instead
+(`Player._try_pick_item_into_hand`) -- an item with no modeled mass (most
+food/material drops) is left alone, still going straight to inventory via
+the ordinary sweep exactly as before. With a stone OR an item already in
+hand, pressing and HOLDING E starts a charge: a "strengthometer" bar above
+the player's own head bounces back and forth between empty and full
+repeatedly while held (`ChargeMeter` -- a classic charge-meter minigame,
+not a bar that simply fills), so release power depends on exact timing,
+not just how long E was held. Releasing E throws whatever's in hand with
+power set by wherever the meter was at that instant
+(`HeldItemThrow.release_speed_mps`), feeding the SAME shared momentum model
+as Kick: release speed x the held object's real mass is its impact momentum
+against whatever it lands near (`ImpactResolver.resolve_impact`,
 `MeleeAttack.knockback_vector`), and its flight distance follows the same
-real sliding kinematics Kick uses. The stone reappears in the world at its
-landing spot whether or not it struck anything on the way.
+real sliding kinematics Kick uses. It reappears in the world at its
+landing spot whether or not it struck anything on the way -- a stone as a
+`LiftableStone` exactly as before, a generic item as an ordinary
+`DroppedItem`.
+
+A NEW key (default H, "Stash Held Item") is the deliberate complement:
+puts whatever's in hand away into the inventory instead of throwing it --
+a stone converts to rock (the same conversion `LiftableStone.pick_up`
+already does on an ordinary ground pickup), a generic item goes in as
+itself. Unlike the ordinary ground-pickup path (which silently discards
+whatever doesn't fit), stashing never loses anything: an inventory too
+full to take it all drops the remainder as a real ground item at the
+player's own feet, since this is a deliberate player action, not an
+incidental walk-up collect.
 
 **Dispersion.** Walking close enough to a loose stone rolls a MASS-WEIGHTED
 CHANCE, fresh on every contact, of kicking it a small distance further out of
@@ -213,12 +234,19 @@ picked up off the ground was never struck.
   modeled mass, whichever is closer -- flying a mass-scaled distance;
   anything at or above leg mass doesn't move at all. `toggle_skills` moved
   from K to L to make room.
-- ✅ Held-item pickup + charge/release throw: E is contextual -- empty-handed
-  near a stone it picks into the HAND (a new concept distinct from inventory
-  and the worn weapon slot); with something in hand, hold E to bounce a
+- ✅ Held-item pickup + charge/release throw + stash: E is contextual --
+  empty-handed near a stone it picks into the HAND (a new concept distinct
+  from inventory and the worn weapon slot); failing that, empty-handed
+  near a dropped item with a real, kickable-grade mass, it picks THAT into
+  the hand instead (an item with no modeled mass keeps going straight to
+  inventory, unchanged). With something in hand, hold E to bounce a
   strengthometer (`ChargeMeter`) and release to throw, feeding the same
-  shared momentum model. A real UI meter floats above the player while
-  charging.
+  shared momentum model -- a stone reappears as a `LiftableStone`, a
+  generic item as an ordinary `DroppedItem`. A real UI meter floats above
+  the player while charging. A new key (default H, "Stash Held Item")
+  puts whatever's in hand into inventory instead -- a stone converts to
+  rock, an item goes in as itself; anything that doesn't fit drops at the
+  player's own feet rather than being lost.
 - ✅ Weapon mass: weapon-kind items (sword, club, crude blade) carry a real
   mass derived from their material's real density x an estimated real-world
   volume (`MaterialProperties.mass_kg_for`), feeding a swing's knockback

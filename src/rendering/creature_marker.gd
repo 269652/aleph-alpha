@@ -33,6 +33,7 @@ const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const CreatureBehavior = preload("res://src/gameplay/creature_behavior.gd")
 const Health = preload("res://src/gameplay/health.gd")
+const BossAggro = preload("res://src/gameplay/boss_aggro.gd")
 const LootTable = preload("res://src/gameplay/loot_table.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const Knockback = preload("res://src/gameplay/knockback.gd")
@@ -234,6 +235,7 @@ var _seconds_since_birth := 0.0
 var _perception := CreaturePerception.new()
 var _behavior := CreatureBehavior.new()
 var _health := Health.new()
+var _boss_aggro := BossAggro.new()
 var _loot_table := LootTable.new()
 var _knockback := Knockback.new()
 var _health_bar := HealthBar.new()
@@ -618,6 +620,8 @@ func _process(frame_delta: float) -> void:
 		"prey": _positions_of(_cached_prey),
 		"food_direction": _cached_food_direction,
 		"water_direction": _cached_water_direction,
+		"is_world_boss": info.is_world_boss,
+		"is_aggroed": info.is_aggroed,
 	})
 
 	_apply_decision(decision, _cached_threats, _cached_prey, delta)
@@ -1723,9 +1727,20 @@ func _nearest_node(nodes: Array) -> Node:
 ## the same species that used to get an instant loot spray now get a real
 ## carcass instead) and frees this marker. A species with nothing to yield
 ## (no LootTable entry) still just despawns, exactly like before.
+##
+## A world boss (see BossAggro, docs/concept/worldbosses.md) filters this
+## FIRST, before any of the above: while not yet aggroed, a hit that
+## doesn't clear BossAggro's real-damage threshold bounces off entirely --
+## no health lost, no aggro gained, nothing else in this function runs.
+## Once aggroed, or for any non-boss species, damage always applies exactly
+## as before this feature existed.
 func take_damage(amount: float) -> void:
 	if info == null:
 		return
+	if info.is_world_boss and not info.is_aggroed:
+		if not _boss_aggro.deals_real_damage(amount, info.max_health):
+			return
+		info.is_aggroed = true
 	info.health = _health.take_damage(info.health, amount)
 	_update_health_bar()
 	if _health.is_dead(info.health):

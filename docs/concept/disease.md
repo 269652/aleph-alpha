@@ -43,6 +43,12 @@ already-documented gap.
   kill, and the anthrax-like archetype below is *fed by* an unburied
   carcass in the first place. Disease and carrion are two ends of the same
   chain, not two unrelated systems that happen to ship in the same month.
+- **Fills a real, already-named gap instead of inventing a parallel one.**
+  `survival.md`'s Sickness & medicine section already names "a bite from a
+  disease-carrying creature" as a sickness trigger and leaves wildlife
+  contagion as an explicit open question — this spec answers exactly that,
+  reusing the real `sickness.gd` pure model rather than building a second
+  player-illness system beside it (see Player spillover below).
 - **Observer this pass, management later, by design.** This spec is
   scoped to the emergent simulation and its real, passive risk to the
   player and tamed animals — quarantine/cull/treatment tools are a
@@ -140,14 +146,29 @@ already watches, so a sick animal you've invested trust in is legible the
 instant it happens (the "connection/responsibility" feel this session's
 brainstorm named directly).
 
-#### Player spillover (`DiseaseDebuff`, mirrors `VenomModel` exactly)
+#### Player spillover (routes through the EXISTING `Sickness` model, not a new debuff)
 
-A `DiseaseDebuff` module shaped identically to the existing `VenomModel`
-(`DEBUFF_ID`, `DURATION_SECONDS`, effect-per-stack), applied through the
-SAME generic `DebuffStack.apply`/`advance`/`stacks_of` contract
-`Player.active_venom_debuffs` already uses — a sick player is a real,
-visible, ongoing cost (not fatal outright, a real tax: stamina regen,
-attack strength, or similar), not a new debuff system built from scratch.
+`docs/concept/survival.md`'s own "Sickness & medicine" section already
+names **"a bite from a disease-carrying creature"** as one of four
+sickness triggers, and `src/gameplay/sickness.gd` already exists as the
+real, tested, pure model for it — `infection_chance`/`attempt_infect`
+(exposure vs. resistance), `progress`/`is_recovered` (worsens untreated,
+recovers under treatment), and `diagnose` (skill- and severity-weighted,
+matching `TamingSystem.taming_chance`'s own shape). That doc explicitly
+scoped OUT wildlife-to-wildlife contagion as "an undecided open
+question" — this spec is exactly that missing piece, not a competing
+system: the SIRS wildlife model above is the real exposure SOURCE, and an
+infected predator's landed bite (or handling a contaminated carcass
+unsafely) is what calls `Sickness.attempt_infect` with a real
+`exposure_level` this spec derives (bite severity for the rabies-like
+archetype, contamination chance for the anthrax-like one). Once infected,
+the player's illness is an ordinary `Sickness` case from there — same
+severity/diagnosis/treatment loop, same Herbalist-skill/remedy-crafting
+path `survival.md` already describes — not a parallel `DiseaseDebuff`
+mirroring `VenomModel`. `VenomModel`/`DebuffStack` remain exactly what
+they are (an instant-bite DOT), a different real shape from a diagnosable,
+treatable sickness — the two were never actually the same problem, despite
+this doc's earlier draft assuming they should share a mechanism.
 
 #### Feeds carrion (`CreatureMarker`)
 
@@ -162,11 +183,14 @@ loop rather than the two systems merely coexisting.
 - ⬜ Not yet implemented — this is a compiled design spec from a
   brainstorming session, the deliverable of that conversation, not code.
 - ⬜ Management tools (quarantine, deliberate culling of a sick tamed
-  animal, a craft-able treatment/cure — a natural target for the wild-crop
-  work in `wild_crops.md` to eventually feed, a real medicinal-plant
-  angle) are explicitly out of scope for the first pass, by design (see
-  pillars) — the interfaces above (a per-creature/player `DiseaseModel`
-  state, a visible symptom readout) are shaped so bolting these on later
+  animal) are explicitly out of scope for the first pass, by design (see
+  pillars) — but a craft-able treatment/cure is NOT a new gap this spec
+  opens: it's `Sickness`'s own `being_treated`/remedy path, already named
+  in `survival.md` and already a natural target for the wild-crop work in
+  `wild_crops.md` to eventually feed (a real medicinal-plant angle) — the
+  interfaces above (a per-creature `DiseaseModel` state, a visible symptom
+  readout, and routing player spillover through `Sickness` rather than a
+  parallel debuff) are shaped so wiring an actual remedy recipe later
   doesn't require touching the transmission math itself.
 - ⬜ Open question, not yet decided: does a recovering wild POPULATION
   (not just an individual) carry aggregate herd immunity across a
