@@ -9,10 +9,17 @@ extends GutTest
 ## species, so the slicer finds them rather than being told where they are.
 
 const CompositeSheetSlicer = preload("res://src/rendering/composite_sheet_slicer.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 
+## SpriteSheetLoader rather than a raw Image.load_from_file: this sheet
+## already has a real .import (assets/sprites/trees/composite_walnut.png.
+## import), so a raw file read logs "Loaded resource as image file, this
+## will not work on export" -- and since this helper has no cache, every one
+## of this file's tests calls it fresh, so every one of them failed GUT's
+## unhandled-engine-error check (see SpriteSheetLoader's own doc comment).
 func _sheet() -> Image:
-	return Image.load_from_file("res://assets/sprites/trees/composite_walnut.png")
+	return SpriteSheetLoader.load_image("res://assets/sprites/trees/composite_walnut.png")
 
 
 # -- finding the drawings ----------------------------------------------------

@@ -151,7 +151,7 @@ const ATLAS_COLUMNS := 64
 ## still being decorrelated between neighbouring tiles.
 const _VARIANT_SALT := 90210
 
-const ATLAS_VERSION := "art_resolution_v20_curved_blend_boundaries_7_variants"
+const ATLAS_VERSION := "art_resolution_v21_curved_blend_boundaries_and_land_land_diagonal_corners"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -295,15 +295,21 @@ func _is_more_dominant(candidate: String, candidate_directions: Array, best_biom
 ## Vector2i toward it}, or an empty Dictionary if this cell has no corner
 ## case at all.
 ##
-## Scoped to water/land corners (mirrors dominant_blend_for's own water
-## special case, which never blends land toward ocean or vice versa on the
-## dithered layer -- this is the carved-corner equivalent instead). Covers
-## BOTH real shoreline corner shapes an irregular coastline actually
-## produces, not just a clean rectangle's:
+## Three corner shapes, each checked per diagonal direction (see
+## docs/concept/terrain_biome_borders.md):
 ##   - CONVEX (this cell is ocean, land pokes into it on two perpendicular
 ##     cardinal sides -- a peninsula tip narrowing the water).
 ##   - CONCAVE (this cell is land, water pokes into it on two perpendicular
 ##     cardinal sides -- a bay/inlet tip narrowing the land).
+##   - DIAGONAL-ONLY (this cell's own biome fills BOTH cardinal flanks --
+##     no shared cardinal edge with anything -- but its actual DIAGONAL
+##     neighbor, read from `diagonal_neighbor_biomes`, is a different LAND
+##     biome: two land biomes meeting only at a shared tile corner, the
+##     outer corner of a staircase-shaped biome boundary. Reported: a
+##     grassland/forest corner rendering as a hard, unblended square.
+##     Deliberately scoped to LAND/LAND only -- ocean stays out of this new
+##     branch, kept separate from the already-much-revised water-corner
+##     logic above.)
 ## A cell can qualify on MORE THAN ONE of its four corners at once -- a
 ## single-tile-wide spit/peninsula (land with water on three sides) has TWO
 ## simultaneous qualifying corners, and a lone one-tile pond/island has all
@@ -325,26 +331,43 @@ func _is_more_dominant(candidate: String, candidate_directions: Array, best_biom
 ## north, desert east -- routine on a real coastline where land-biome edges
 ## rarely line up with shore corners) now still carves, toward whichever
 ## neighbor wins BLEND_PRIORITY (deterministic tie-break, same convention as
-## dominant_blend_for). A land cell corner always carves toward "ocean" --
-## there's only one water biome, so no such ambiguity exists there.
-## Land/land diagonal-only corners (no shared cardinal edge, two different
-## LAND biomes only touching from a "T"-junction where just one side is
-## ocean) remain deliberately out of scope for this pass (see
-## docs/progress.md).
-func corner_direction_for(biome_name: String, neighbor_biomes: Dictionary) -> Dictionary:
+## dominant_blend_for).
+## The diagonal-only branch stays ONE-SIDED like dominant_blend_for's own
+## cardinal fringe ("exactly ONE side of any border renders a transition
+## tile"): it only carves toward a diagonal neighbor with a STRICTLY HIGHER
+## BLEND_PRIORITY, so the higher-priority side's own corner (looking back at
+## the same point from its own cell) never also carves -- the same point
+## never gets carved from both sides at once. `diagonal_neighbor_biomes`
+## defaults to an empty Dictionary so every existing caller that only passes
+## cardinal neighbors keeps working unchanged. A water/land diagonal-only
+## touch (e.g. the corner-diagonal land cells around an isolated one-tile
+## pond) has this same underlying gap but is deliberately left unaddressed
+## here too -- see docs/concept/terrain_biome_borders.md.
+func corner_direction_for(
+	biome_name: String, neighbor_biomes: Dictionary, diagonal_neighbor_biomes: Dictionary = {}
+) -> Dictionary:
 	var directions_by_partner := {}
 	for direction in ProceduralTerrainSprite.CORNER_DIRECTIONS:
 		var horizontal: String = neighbor_biomes.get(Vector2i(direction.x, 0), "")
 		var vertical: String = neighbor_biomes.get(Vector2i(0, direction.y), "")
-		if horizontal == "" or vertical == "" or horizontal == biome_name or vertical == biome_name:
-			continue
 		var partner := ""
-		if horizontal == vertical:
-			partner = horizontal
-		elif biome_name == "ocean" and horizontal != "ocean" and vertical != "ocean":
-			# Mixed land biomes flanking an ocean corner: still a real
-			# corner, just carved toward whichever neighbor dominates.
-			partner = _dominant_corner_partner(horizontal, vertical)
+		if horizontal != "" and vertical != "" and horizontal != biome_name and vertical != biome_name:
+			if horizontal == vertical:
+				partner = horizontal
+			elif biome_name == "ocean" and horizontal != "ocean" and vertical != "ocean":
+				# Mixed land biomes flanking an ocean corner: still a real
+				# corner, just carved toward whichever neighbor dominates.
+				partner = _dominant_corner_partner(horizontal, vertical)
+		elif horizontal == biome_name and vertical == biome_name and biome_name != "ocean":
+			# No shared cardinal edge with anything -- only a genuine
+			# diagonal-only touch (see this function's own doc comment)
+			# can still qualify this corner.
+			var diagonal: String = diagonal_neighbor_biomes.get(direction, "")
+			if (
+				diagonal != "" and diagonal != biome_name and diagonal != "ocean"
+				and BLEND_PRIORITY.get(diagonal, 0) > BLEND_PRIORITY.get(biome_name, 0)
+			):
+				partner = diagonal
 		if partner == "":
 			continue
 		if not directions_by_partner.has(partner):
@@ -478,11 +501,15 @@ func _blend_linear(near_biome: String, far_biome: String, mask: int, variant_ind
 ## How many atlas cells one "corner family" (every land-biome ordinal slot,
 ## including ocean's own never-referenced one, x every non-empty subset of
 ## the 4 diagonal corners (CORNER_MASK_COUNT) x BLEND_VARIANTS) reserves.
-## Two such families exist (see _corner_linear): ocean-owning (convex
-## corners) and land-owning (concave corners). A cell can qualify on more
-## than one corner simultaneously (see corner_direction_for), so every mask
-## -- not just a single direction slot -- needs its own tile, mirroring
-## _TILES_PER_PAIR's role for the blend system.
+## Two such families are sized by this function (see _corner_linear):
+## ocean-owning (convex corners) and land-owning (concave corners) -- both
+## always pair a land biome with ocean specifically. A THIRD, differently-
+## sized family (land/land, pair-indexed rather than single-biome-indexed --
+## see _land_land_corner_family_size) covers every corner between two
+## DIFFERENT land biomes instead. A cell can qualify on more than one corner
+## simultaneously (see corner_direction_for), so every mask -- not just a
+## single direction slot -- needs its own tile, mirroring _TILES_PER_PAIR's
+## role for the blend system.
 func _corner_family_size() -> int:
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
 	return biome_count * CORNER_MASK_COUNT * BLEND_VARIANTS
@@ -503,17 +530,77 @@ func _land_corner_base_linear() -> int:
 	return _corner_base_linear() + _corner_family_size()
 
 
-## Linear atlas index of one corner-carve tile. Only ever called with one of
-## `own_biome`/`other_biome` equal to "ocean" (see corner_direction_for) --
-## routes to whichever of the two corner families actually owns the tile:
-## ocean-owning (own_biome == "ocean", indexed by other_biome's ordinal) or
-## land-owning (own_biome != "ocean", indexed by own_biome's ordinal,
-## other_biome always "ocean"). Ocean's own ordinal slot in either family is
-## never referenced (corner_direction_for never returns a same-biome
-## partner) -- a small, cheap amount of unused atlas space rather than a
-## fragile re-indexing scheme.
+## How many of the 6 land biomes exist (KNOWN_BIOMES minus ocean, which is
+## always index 0) -- the land/land corner family's own pair space is scoped
+## to these, since land/ocean corners keep their existing, unchanged
+## addressing above.
+func _land_biome_count() -> int:
+	return BiomeClassifier.KNOWN_BIOMES.size() - 1
+
+
+## Linear atlas index where the land/land corner family begins -- right
+## after the whole land-owning-toward-ocean family. The THIRD and last
+## corner-carve family (see _corner_linear): unlike the other two, which
+## always pair a land biome with ocean, this one carves toward another LAND
+## biome entirely -- the corner shape a staircase-shaped biome boundary
+## makes where two land biomes touch only at a shared tile corner (no shared
+## cardinal edge -- see corner_direction_for's own doc comment), or a real
+## right-angle corner between two land biomes.
+func _land_land_corner_base_linear() -> int:
+	return _land_corner_base_linear() + _corner_family_size()
+
+
+## Every ordered (own,other) land pair -- own != other, own's own ordinal
+## slot against itself skipped, same "n * (n-1)" shape _TILES_PER_PAIR's own
+## family uses for the blend system -- x CORNER_MASK_COUNT x BLEND_VARIANTS.
+## Some slots go permanently unused: corner_direction_for's own diagonal-only
+## branch is one-sided (only the lower-BLEND_PRIORITY side ever carves), so
+## the "wrong direction" of every pair is never actually requested through
+## paint(). Reserving the full pair space anyway -- rather than a fragile,
+## priority-restricted half-sized scheme -- mirrors this function's own
+## ocean-corner siblings, which already accept ocean's own unused ordinal
+## slot as cheap, deliberate waste; corner_direction_for's existing
+## right-angle branch (unlike the new diagonal-only one) has no priority
+## gate at all and is unit-tested with hand-built dictionaries that bypass
+## paint()'s call-order gating, so a half-sized scheme would leave undefined/
+## colliding behavior for a synthetic call in the "wrong" priority direction.
+func _land_land_corner_family_size() -> int:
+	var land_count := _land_biome_count()
+	return land_count * (land_count - 1) * CORNER_MASK_COUNT * BLEND_VARIANTS
+
+
+## Linear atlas index of one land/land corner-carve tile. Ordered pair
+## (own_biome, other_biome), both real land biomes -- mirrors _blend_linear's
+## own near/far pair-ordinal formula exactly, scoped to the 6 land biomes
+## (skip ocean's own KNOWN_BIOMES index 0 by subtracting 1 from each
+## ordinal).
+func _land_land_corner_linear(own_biome: String, other_biome: String, mask: int, variant: int) -> int:
+	var land_count := _land_biome_count()
+	var own_ordinal := BiomeClassifier.KNOWN_BIOMES.find(own_biome) - 1
+	var other_ordinal := BiomeClassifier.KNOWN_BIOMES.find(other_biome) - 1
+	var other_slot := other_ordinal if other_ordinal < own_ordinal else other_ordinal - 1
+	var pair_ordinal := own_ordinal * (land_count - 1) + other_slot
+	return (
+		_land_land_corner_base_linear()
+		+ pair_ordinal * CORNER_MASK_COUNT * BLEND_VARIANTS
+		+ (mask - 1) * BLEND_VARIANTS + (variant % BLEND_VARIANTS)
+	)
+
+
+## Linear atlas index of one corner-carve tile. Routes to whichever of the
+## THREE corner families actually owns the tile (see corner_direction_for):
+## ocean-owning (own_biome == "ocean", indexed by other_biome's ordinal),
+## land-owning-toward-ocean (own_biome != "ocean" and other_biome == "ocean",
+## indexed by own_biome's ordinal), or land/land (neither side is "ocean",
+## indexed by the ordered (own_biome,other_biome) pair -- see
+## _land_land_corner_linear). Ocean's own ordinal slot in the first two
+## families is never referenced (corner_direction_for never returns a
+## same-biome partner) -- a small, cheap amount of unused atlas space rather
+## than a fragile re-indexing scheme.
 func _corner_linear(own_biome: String, other_biome: String, corner_directions: Array, variant: int) -> int:
 	var mask := _corner_direction_mask(corner_directions)
+	if own_biome != "ocean" and other_biome != "ocean":
+		return _land_land_corner_linear(own_biome, other_biome, mask, variant)
 	var base := _corner_base_linear()
 	var biome_index := BiomeClassifier.KNOWN_BIOMES.find(other_biome)
 	if own_biome != "ocean":
@@ -624,11 +711,12 @@ func _blend_image(near_biome: String, far_biome: String, directions: Array, vari
 
 
 ## Corner-carve counterpart of _blend_image -- see its own doc comment.
-## Unlike directional blends, a corner ALWAYS involves ocean on one side
-## (see corner_direction_for), so own_image/other_image routinely mismatch
-## in size (illustrated land at 32px vs still-procedural ocean at
-## ProceduralTerrainSprite.SIZE, 64px) -- _normalized_for_compositing is
-## what keeps that from crashing or silently cropping.
+## Generic over any biome pair (land/ocean OR land/land -- see
+## corner_direction_for): _normalized_for_compositing is what keeps a size
+## mismatch (illustrated land at 32px vs still-procedural ocean at
+## ProceduralTerrainSprite.SIZE, 64px) from crashing or silently cropping;
+## for a land/land pair both sides are already the same illustrated size, so
+## it's a no-op there.
 func _corner_image(own_biome: String, other_biome: String, corner_directions: Array, variant: int) -> Image:
 	var own_image := _normalized_for_compositing(_biome_frame_image(own_biome, variant, 0))
 	var other_image := _normalized_for_compositing(_biome_frame_image(other_biome, variant, 0))
@@ -697,8 +785,8 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 					var blend_image := _blend_image(near_biome, far_biome, directions, variant)
 					_blit_tile(image, blend_image, _blend_linear(near_biome, far_biome, mask, variant))
 
-		# Corner-carve tiles (see corner_direction_for), two families for the
-		# two real shoreline corner shapes:
+		# Corner-carve tiles (see corner_direction_for), the first two of
+		# THREE families for the two real shoreline corner shapes:
 		#   - ocean-owning (CONVEX corner: an ocean cell carved toward a land
 		#     neighbor poking into it).
 		#   - land-owning (CONCAVE corner: a land cell carved toward the
@@ -718,6 +806,31 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 					var concave_image := _corner_image(corner_biome, "ocean", corner_directions, variant)
 					_blit_tile(image, concave_image, _corner_linear(corner_biome, "ocean", corner_directions, variant))
 
+	# The THIRD corner family: land/land (see corner_direction_for's own doc
+	# comment) -- two different LAND biomes meeting only at a shared tile
+	# corner, or a real right-angle corner between two land biomes (both
+	# reachable before this pass; the right-angle one used to silently bake
+	# OCEAN's texture instead, since _corner_linear's land-owning branch used
+	# to ignore other_biome entirely). Every ordered pair of DISTINCT land
+	# biomes gets its own reserved slot, same nested shape as the blend loop
+	# above.
+	for own_index in biome_count:
+		var own_land_biome: String = BiomeClassifier.KNOWN_BIOMES[own_index]
+		if own_land_biome == "ocean":
+			continue
+		for other_index in biome_count:
+			var other_land_biome: String = BiomeClassifier.KNOWN_BIOMES[other_index]
+			if other_land_biome == "ocean" or other_land_biome == own_land_biome:
+				continue
+			for corner_mask in range(1, CORNER_MASK_COUNT + 1):
+				var corner_directions := _corner_directions_from_mask(corner_mask)
+				for variant in BLEND_VARIANTS:
+					var corner_image := _corner_image(own_land_biome, other_land_biome, corner_directions, variant)
+					_blit_tile(
+						image, corner_image,
+						_land_land_corner_linear(own_land_biome, other_land_biome, corner_mask, variant)
+					)
+
 	return image
 
 
@@ -732,7 +845,7 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 ## every call regardless of cache state.
 func build_tile_set() -> TileSet:
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
-	var total_cells := _land_corner_base_linear() + _corner_family_size()
+	var total_cells := _land_land_corner_base_linear() + _land_land_corner_family_size()
 	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
 
 	var image: Image = null
@@ -828,11 +941,12 @@ func paint(
 					# Water/land is never dither-blended (see above), but a
 					# cell whose tile-grid corner is a real right-angle
 					# (land on BOTH cardinal sides of one diagonal, from
-					# either the water side OR the land side -- see
-					# corner_direction_for) still gets an actual
-					# carved-corner tile on this same opaque base layer,
-					# instead of a hard square notch.
-					var corner := corner_direction_for(biome_name, neighbors)
+					# either the water side OR the land side) OR a genuine
+					# diagonal-only land/land touch (see corner_direction_for)
+					# still gets an actual carved-corner tile on this same
+					# opaque base layer, instead of a hard square notch.
+					var diagonal_neighbors := _diagonal_neighbor_biomes(chunk, x, y, origin, global_biome_lookup)
+					var corner := corner_direction_for(biome_name, neighbors, diagonal_neighbors)
 					if corner.is_empty():
 						atlas_coords = atlas_coords_for_biome(biome_name, variant)
 					else:
@@ -873,6 +987,28 @@ func _neighbor_biomes(
 ) -> Dictionary:
 	var neighbors := {}
 	for direction in _DIRECTIONS:
+		var nx: int = x + direction.x
+		var ny: int = y + direction.y
+		if nx >= 0 and nx < chunk.width and ny >= 0 and ny < chunk.height:
+			neighbors[direction] = chunk.biome[ny * chunk.width + nx]
+		elif global_biome_lookup.is_valid():
+			var neighbor_biome: String = global_biome_lookup.call(origin.x + nx, origin.y + ny)
+			if neighbor_biome != "":
+				neighbors[direction] = neighbor_biome
+	return neighbors
+
+
+## The DIAGONAL neighbor biomes of a local chunk cell, keyed by direction --
+## the corner-carve counterpart of _neighbor_biomes, used only for the
+## diagonal-only land/land corner case (see corner_direction_for's own doc
+## comment). Same in/out-of-chunk resolution as _neighbor_biomes, just over
+## ProceduralTerrainSprite.CORNER_DIRECTIONS (the 4 diagonals) instead of
+## _DIRECTIONS (the 4 cardinals).
+func _diagonal_neighbor_biomes(
+	chunk: Chunk, x: int, y: int, origin: Vector2i, global_biome_lookup: Callable
+) -> Dictionary:
+	var neighbors := {}
+	for direction in ProceduralTerrainSprite.CORNER_DIRECTIONS:
 		var nx: int = x + direction.x
 		var ny: int = y + direction.y
 		if nx >= 0 and nx < chunk.width and ny >= 0 and ny < chunk.height:

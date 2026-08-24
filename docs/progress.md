@@ -2559,10 +2559,7 @@ all. `corner_direction_for` now checks both shapes symmetrically (a second
 land-owning atlas tile family, `TerrainRenderer._land_corner_base_linear`),
 and also carves when the two flanking land neighbors are two DIFFERENT
 biomes (routine on a real coastline) rather than bailing out, carving
-toward whichever neighbor wins `BLEND_PRIORITY`. Land/land diagonal-only
-corners (two different LAND biomes that touch only at a shared tile corner,
-no shared cardinal edge, no ocean involved) are still an unblended hard
-corner, 🚧 not addressed by this pass. A follow-up report of "zero visible
+toward whichever neighbor wins `BLEND_PRIORITY`. A follow-up report of "zero visible
 change at all" after that fix was traced with a throwaway debug script
 (loads a real chunk via `EarthChunkManager.update()`, the exact code path
 the game uses, then inspects the live `TileMapLayer`'s actual painted atlas
@@ -2628,6 +2625,44 @@ there) -- the land-side (bay-tip) carves have no overlay over them at all
 and render fully crisp. A fresh in-game screenshot is still needed to
 confirm the carve now reads clearly at actual camera zoom -- not yet
 visually re-confirmed after this pass.
+
+✅ **Diagonal-only land/land corners now blend too.** Reported (screenshot):
+a grassland/forest border, where the two biomes touch only at a single
+tile-grid corner point (the outer corner of a staircase-shaped biome
+boundary, no shared cardinal edge), still rendered as a hard, unblended
+square corner -- the exact gap the previous pass above left open.
+`corner_direction_for` now also reads the actual DIAGONAL neighbor cell (a
+new `TerrainRenderer._diagonal_neighbor_biomes`, the corner-carve
+counterpart of `_neighbor_biomes`) and carves toward it when both cardinal
+flanks are the cell's own biome but the diagonal neighbor is a different
+LAND biome with a higher `BLEND_PRIORITY` -- one-sided, same "exactly one
+side carries the transition" rule `dominant_blend_for` already uses, so the
+same point is never carved from both sides at once. Deliberately scoped to
+LAND/LAND only; a water/land diagonal-only touch (e.g. the corner-diagonal
+land cells around an isolated one-tile pond) has the same underlying gap but
+is left unaddressed here too, given the water-corner logic's own four-round
+bug history above (see `docs/concept/terrain_biome_borders.md`).
+Investigating this surfaced a second, previously-unreported bug with the
+same root cause: `_corner_linear`'s land-owning branch indexed the atlas
+slot by `own_biome`'s ordinal ALONE, silently discarding `other_biome` (its
+own doc comment assumed `other_biome` was always `"ocean"`) -- but
+`corner_direction_for`'s existing right-angle branch never actually
+restricted itself to ocean, so a real, reachable land/land right-angle
+corner (a lower-priority land cell flanked on two perpendicular cardinal
+sides by the SAME higher-priority land biome) silently baked **ocean's**
+texture into the wedge instead of the real neighboring biome's. Fixed by
+giving the corner system a genuine THIRD atlas family
+(`_land_land_corner_base_linear`/`_land_land_corner_linear`), pair-indexed
+like the dither-blend family already is (`_blend_linear`), rather than
+single-biome-indexed -- confirmed with a real baked-pixel test
+(`test_baked_atlas_pixels_for_a_land_land_corner_show_the_real_partner_biome`),
+the same discipline the earlier "atlas coordinate matched but pixels were
+wrong" bug round above already established as load-bearing for this
+subsystem. One-time atlas-bake cost grows accordingly (measured ~218s for
+the full `test_terrain_renderer.gd` file in this environment, up from the
+file's own historical "~13.5s" build_tile_set() baseline) -- cached to disk
+per `ATLAS_VERSION` as before, so this is paid once per version bump, not
+per boot.
 
 ✅ **Illustrated ground tiles -- real art registered for every land biome.**
 Following the same transition loose stone already made

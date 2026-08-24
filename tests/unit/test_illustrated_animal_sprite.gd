@@ -426,3 +426,15 @@ func test_repeated_calls_to_a_fallback_action_stay_the_same_cached_objects():
 	var second := sprite.generate_textures("deer", "swim")
 	assert_eq(first, second)
 	assert_eq(first[0], second[0])
+
+
+## A raw Image.load_from_file logs an engine WARNING ("Loaded resource as
+## image file, this will not work on export") that GUT's error tracker
+## counts as an unhandled error -- see SpriteSheetLoader's own doc comment.
+## _frame_cache is cleared first (static, shared across every test in this
+## file) so this genuinely re-reads horse_walk.png off disk rather than
+## hitting a cache an earlier test already warmed.
+func test_loading_a_sheet_does_not_log_an_engine_warning():
+	IllustratedAnimalSprite._frame_cache.clear()
+	sprite.generate_textures("horse", "walk")
+	assert_engine_error_count(0, "loading an animal sheet should not warn")

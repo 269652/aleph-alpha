@@ -328,10 +328,10 @@ func test_a_real_boulder_draws_from_the_registered_illustrated_sheet():
 
 
 ## Cobbles now ALSO draw from a real illustrated sheet (assets/sprites/
-## cobbles.png) -- stale as of this test's original writing, when cobbles
-## were still excluded by design (see IllustratedStoneSprite's own class doc
-## comment for why that changed). Kept as a real-art proof, same shape as
-## the pebble/boulder equivalents above, rather than deleted outright.
+## cobbles.png) instead of falling back to the procedural generator -- the
+## fallback this test used to pin no longer applies now that cobble art
+## exists (see IllustratedStoneSprite's own class doc comment: every real
+## stone class now has real illustrated art).
 func test_a_real_cobble_draws_from_the_registered_illustrated_sheet():
 	var cobble_texture := renderer._texture_for(555, StoneSize.CLASS_COBBLE)
 	var expected: ImageTexture = renderer._illustrated_stones.frame_for(StoneSize.CLASS_COBBLE, 555)

@@ -105,7 +105,7 @@ func _wipe_cache_behavior_files():
 ## "room_for_tile" errors for every grid cell beyond the fake image's
 ## bounds. Mirrors build_tile_set()'s own size math exactly.
 func _full_atlas_size() -> Vector2i:
-	var total_cells: int = renderer._land_corner_base_linear() + renderer._corner_family_size()
+	var total_cells: int = renderer._land_land_corner_base_linear() + renderer._land_land_corner_family_size()
 	var rows := int(ceil(float(total_cells) / TerrainRenderer.ATLAS_COLUMNS))
 	var art := TerrainRenderer.ART_TILE_SIZE
 	return Vector2i(TerrainRenderer.ATLAS_COLUMNS * art, rows * art)
@@ -186,16 +186,21 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 	# swapping discrete art. Ocean is a plain animated biome tile like any
 	# other, so this atlas has no water-specific terms anymore.
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
+	var land_n := n - 1
 	var expected := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1 + ProceduralStructureSprite.STRUCTURE_IDS.size()
 		+ BuildingPiece.PIECE_IDS.size()
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
-		# Corner-carve tiles, TWO families (see corner_direction_for): convex
-		# (ocean-owning) and concave (land-owning) -- one per (biome ordinal
-		# slot incl. ocean's own unused slot) x every non-empty subset of the
-		# 4 diagonal corners (CORNER_MASK_COUNT, a cell can qualify on more
-		# than one corner at once) x BLEND_VARIANTS, x2 for the two families.
+		# Corner-carve tiles, THREE families (see corner_direction_for):
+		# convex (ocean-owning) and concave (land-owning) -- one per (biome
+		# ordinal slot incl. ocean's own unused slot) x every non-empty
+		# subset of the 4 diagonal corners (CORNER_MASK_COUNT, a cell can
+		# qualify on more than one corner at once) x BLEND_VARIANTS, x2 for
+		# those two families -- plus land/land (every ordered pair of
+		# DISTINCT land biomes, diagonal-only or right-angle corners between
+		# two land biomes) x the same CORNER_MASK_COUNT x BLEND_VARIANTS.
 		+ 2 * n * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		+ land_n * (land_n - 1) * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -207,15 +212,14 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 	var tile_set := renderer.build_tile_set()
 	var source := tile_set.get_source(0) as TileSetAtlasSource
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
+	var land_n := n - 1
 	var tile_count_without_structures_or_pieces := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
-		# Corner-carve tiles, TWO families (see corner_direction_for): convex
-		# (ocean-owning) and concave (land-owning) -- one per (biome ordinal
-		# slot incl. ocean's own unused slot) x every non-empty subset of the
-		# 4 diagonal corners (CORNER_MASK_COUNT, a cell can qualify on more
-		# than one corner at once) x BLEND_VARIANTS, x2 for the two families.
+		# Corner-carve tiles, THREE families -- see the matching comment in
+		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
 		+ 2 * n * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		+ land_n * (land_n - 1) * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -331,15 +335,14 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 	var tile_set := renderer.build_tile_set()
 	var source := tile_set.get_source(0) as TileSetAtlasSource
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
+	var land_n := n - 1
 	var tile_count_without_pieces := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1 + ProceduralStructureSprite.STRUCTURE_IDS.size()
 		+ n * (n - 1) * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
-		# Corner-carve tiles, TWO families (see corner_direction_for): convex
-		# (ocean-owning) and concave (land-owning) -- one per (biome ordinal
-		# slot incl. ocean's own unused slot) x every non-empty subset of the
-		# 4 diagonal corners (CORNER_MASK_COUNT, a cell can qualify on more
-		# than one corner at once) x BLEND_VARIANTS, x2 for the two families.
+		# Corner-carve tiles, THREE families -- see the matching comment in
+		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
 		+ 2 * n * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		+ land_n * (land_n - 1) * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
@@ -1241,6 +1244,83 @@ func test_corner_direction_for_returns_all_four_corners_for_an_isolated_water_ti
 	assert_eq(result.directions.size(), 4)
 
 
+# -- diagonal-only land/land corners (no shared cardinal edge) ---------------
+#
+# Two different LAND biomes that touch only at a shared tile-grid corner --
+# the outer corner of a staircase-shaped biome boundary -- have neither
+# cardinal flank differing (dominant_blend_for's dithered fringe never fires,
+# there's no shared edge to dither along) nor a matching pair of differing
+# cardinal flanks (corner_direction_for's existing right-angle carve never
+# fires either, since both flanks equal the cell's OWN biome). Reported: a
+# grassland/forest corner rendering as a hard, unblended square (screenshot).
+# Fixed by also reading the actual DIAGONAL neighbor (see
+# _diagonal_neighbor_biomes) and carving toward it when it's the only thing
+# differing at that corner.
+
+func test_diagonal_neighbor_biomes_reads_the_four_diagonal_cells():
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	chunk.biome = PackedStringArray([
+		"forest", "grassland", "desert",
+		"grassland", "grassland", "grassland",
+		"tundra", "grassland", "mountain",
+	])
+	var diagonals := renderer._diagonal_neighbor_biomes(chunk, 1, 1, Vector2i.ZERO, Callable())
+	assert_eq(diagonals[Vector2i(1, -1)], "desert", "NE")
+	assert_eq(diagonals[Vector2i(1, 1)], "mountain", "SE")
+	assert_eq(diagonals[Vector2i(-1, 1)], "tundra", "SW")
+	assert_eq(diagonals[Vector2i(-1, -1)], "forest", "NW")
+
+
+func test_diagonal_neighbor_biomes_uses_the_lookup_for_out_of_chunk_diagonals():
+	var chunk := _uniform_chunk("grassland")
+	var lookup := func(gx: int, gy: int) -> String:
+		return "forest" if Vector2i(gx, gy) == Vector2i(-1, -1) else ""
+	var diagonals := renderer._diagonal_neighbor_biomes(chunk, 0, 0, Vector2i.ZERO, lookup)
+	assert_eq(diagonals[Vector2i(-1, -1)], "forest")
+	assert_false(diagonals.has(Vector2i(1, -1)), "an unanswered out-of-chunk diagonal should be omitted")
+
+
+func test_corner_direction_for_finds_a_diagonal_only_land_corner():
+	# Grassland cell whose cardinal flanks are both grassland (itself), but
+	# whose NE diagonal neighbor is forest (higher BLEND_PRIORITY) -- a pure
+	# point-touch, no shared cardinal edge.
+	var result := renderer.corner_direction_for(
+		"grassland",
+		{Vector2i(0, -1): "grassland", Vector2i(1, 0): "grassland"},
+		{Vector2i(1, -1): "forest"}
+	)
+	assert_eq(result.partner, "forest")
+	assert_eq(result.directions, [Vector2i(1, -1)])
+
+
+## Only the LOWER-priority side carves (mirrors dominant_blend_for's own
+## "exactly one side renders a transition" rule) -- from forest's own
+## perspective (the higher-priority side), the same corner must NOT carve.
+func test_corner_direction_for_diagonal_only_corner_is_one_sided():
+	var result := renderer.corner_direction_for(
+		"forest",
+		{Vector2i(0, -1): "forest", Vector2i(1, 0): "forest"},
+		{Vector2i(1, -1): "grassland"}
+	)
+	assert_true(result.is_empty(), "the higher-priority side must not carve its own diagonal corner")
+
+
+## Deliberately out of scope for this pass (see corner_direction_for's own
+## doc comment): a diagonal-only touch to OCEAN does not carve via this new
+## path -- the water-corner logic above already has its own, separately-
+## scoped right-angle-only carving.
+func test_corner_direction_for_diagonal_only_corner_ignores_ocean():
+	var result := renderer.corner_direction_for(
+		"grassland",
+		{Vector2i(0, -1): "grassland", Vector2i(1, 0): "grassland"},
+		{Vector2i(1, -1): "ocean"}
+	)
+	assert_true(result.is_empty())
+
+
 func test_atlas_coords_for_corner_is_distinct_from_plain_and_blend_tiles():
 	var corner_coords := renderer.atlas_coords_for_corner("ocean", "grassland", [Vector2i(1, -1)], 0)
 	for biome_name in BiomeClassifier.KNOWN_BIOMES:
@@ -1284,6 +1364,20 @@ func test_atlas_coords_for_corner_differs_by_which_side_owns_the_tile():
 	var convex := renderer.atlas_coords_for_corner("ocean", "grassland", [Vector2i(1, -1)], 0)
 	var concave := renderer.atlas_coords_for_corner("grassland", "ocean", [Vector2i(1, -1)], 0)
 	assert_ne(convex, concave)
+
+
+## Regression for a real, separately-found bug: _corner_linear's land-owning
+## branch used to index the atlas slot by own_biome's ordinal ALONE, silently
+## discarding other_biome (its own doc comment assumed other_biome was always
+## "ocean"). A land/land corner is a real, reachable case though (see
+## corner_direction_for's existing horizontal==vertical branch, which never
+## actually restricted itself to ocean) -- so two DIFFERENT land/land corners
+## sharing the same own_biome used to silently collide on the exact same
+## atlas tile.
+func test_atlas_coords_for_corner_differs_by_partner_biome_for_a_land_owning_pair():
+	var toward_forest := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var toward_desert := renderer.atlas_coords_for_corner("grassland", "desert", [Vector2i(1, -1)], 0)
+	assert_ne(toward_forest, toward_desert)
 
 
 func test_atlas_coords_for_corner_is_a_created_tile_in_the_atlas():
@@ -1396,6 +1490,32 @@ func test_paint_carves_multiple_corners_on_the_same_tile_for_a_land_spit():
 	)
 
 
+## The diagonal-only land/land case, end to end through paint(): a grassland
+## cell whose cardinal neighbors are all grassland (itself) but whose NE
+## diagonal neighbor is forest must still carve its NE corner toward forest,
+## not fall through to a plain unblended tile.
+func test_paint_carves_a_diagonal_only_land_corner():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	chunk.biome = PackedStringArray([
+		"grassland", "grassland", "forest",
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+	])
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(1, 1)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], variant)
+	)
+
+
 ## The check every earlier corner test was missing: those all compared an
 ## atlas COORDINATE against atlas_coords_for_corner(), but both sides come
 ## from the same _corner_linear math -- self-consistent, and blind to what
@@ -1474,6 +1594,49 @@ func test_baked_tiles_represent_the_whole_generated_tile_not_a_cropped_corner():
 
 func _rgb_distance(a: Color, b: Color) -> float:
 	return Vector3(a.r, a.g, a.b).distance_to(Vector3(b.r, b.g, b.b))
+
+
+## Same discipline as the isolated-pond pixel test above: an atlas COORDINATE
+## matching atlas_coords_for_corner() proves nothing about the PIXELS
+## actually baked there (see that test's own doc comment) -- doubly
+## important here, since _corner_linear's land-owning branch used to
+## silently discard other_biome entirely (see
+## test_atlas_coords_for_corner_differs_by_partner_biome_for_a_land_owning_pair):
+## a land/land right-angle corner used to bake OCEAN's texture into the wedge
+## instead of the real neighboring biome's. Compares against each biome's OWN
+## real baked tile pixel rather than a flat swatch -- grassland/forest are
+## both real illustrated art, not a flat procedural fill, so
+## generate_corner_image_from's carve is a literal per-pixel copy from the
+## other biome's own real image, which the carved pixel must match exactly.
+func test_baked_atlas_pixels_for_a_land_land_corner_show_the_real_partner_biome():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	var art := TerrainRenderer.ART_TILE_SIZE
+
+	var corner_coords := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var corner_tile := image.get_region(
+		Rect2i(Vector2i(corner_coords.x * art, corner_coords.y * art), Vector2i(art, art))
+	)
+
+	var forest_coords := renderer.atlas_coords_for_biome("forest", 0)
+	var forest_tile := image.get_region(
+		Rect2i(Vector2i(forest_coords.x * art, forest_coords.y * art), Vector2i(art, art))
+	)
+
+	var grassland_coords := renderer.atlas_coords_for_biome("grassland", 0)
+	var grassland_tile := image.get_region(
+		Rect2i(Vector2i(grassland_coords.x * art, grassland_coords.y * art), Vector2i(art, art))
+	)
+
+	assert_eq(
+		corner_tile.get_pixel(art - 1, 0), forest_tile.get_pixel(art - 1, 0),
+		"the carved NE corner should be an exact copy of forest's own real pixel there, not ocean or grassland"
+	)
+	assert_eq(
+		corner_tile.get_pixel(0, art - 1), grassland_tile.get_pixel(0, art - 1),
+		"the UNcarved SW corner of that same tile must still read as grassland's own real pixel"
+	)
 
 
 func test_paint_keeps_a_straight_ocean_shore_unrounded():

@@ -119,3 +119,15 @@ func test_frames_come_back_for_a_species_covered_by_its_archetype():
 
 func test_a_species_with_nothing_to_draw_gets_no_frames():
 	assert_eq(generator.frames_for_species("clover", "puff").size(), 0)
+
+
+## A raw Image.load_from_file logs an engine WARNING ("Loaded resource as
+## image file, this will not work on export") that GUT's error tracker
+## counts as an unhandled error -- see SpriteSheetLoader's own doc comment.
+## _frame_cache is cleared first (static, shared across every test in this
+## file) so this genuinely re-reads cup.png off disk rather than hitting a
+## cache an earlier test already warmed.
+func test_loading_a_sheet_does_not_log_an_engine_warning():
+	IllustratedFlowerHead._frame_cache.clear()
+	generator.frames_for("cup")
+	assert_engine_error_count(0, "loading a flower sheet should not warn")
