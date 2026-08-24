@@ -19,6 +19,11 @@ const ACTIONS := [
 	{"action": "block", "label": "Block", "default": KEY_SHIFT},
 	{"action": "pickup", "label": "Pick Up Nearby Items", "default": KEY_E},
 	{"action": "kick", "label": "Kick Nearby Stone", "default": KEY_K},
+	# The "put this down" complement to E's "pick this up into hand" (see
+	# docs/concept/stone.md's held-item concept, generalized to any real
+	# physical object in docs/concept/wild_crops.md) -- stashes whatever
+	# is currently held into the inventory.
+	{"action": "stash", "label": "Stash Held Item", "default": KEY_H},
 	{"action": "fish", "label": "Fish / Reel", "default": KEY_F},
 	{"action": "lasso", "label": "Throw / Release Lasso", "default": KEY_R},
 	{"action": "mount", "label": "Mount / Dismount", "default": KEY_V},

@@ -160,3 +160,51 @@ func test_kick_prefers_a_nearer_dropped_item_over_a_farther_stone():
 	assert_ne(dropped.position, player.position + Vector2(5, 0), "the nearer dropped item should be the one kicked")
 	dropped.free()
 	stone.free()
+
+
+# -- the FULL real pipeline: pull a real wild potato patch to completion, --
+# -- let WorldItemBus/a real DroppedItem receive it exactly like World. ----
+# -- _on_item_dropped does, THEN try to kick it -- reported live: "the ------
+# -- tooltip shows Kick but pressing K doesn't kick a potato or carrot." ---
+
+const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
+const CropPull = preload("res://src/gameplay/crop_pull.gd")
+
+var _spawned_drops: Array = []
+
+
+func _spawn_real_drop(item_stack, world_position: Vector2) -> void:
+	var dropped := DroppedItem.new()
+	dropped.item_stack = item_stack
+	dropped.position = world_position
+	add_child(dropped)
+	_spawned_drops.append(dropped)
+
+
+func test_pulling_a_real_potato_patch_then_kicking_it_moves_it():
+	WorldItemBus.item_dropped.connect(_spawn_real_drop)
+	_spawned_drops = []
+
+	var crop := WildCropMarker.new()
+	crop.crop_id = "potato"
+	crop.sprite_seed = 0
+	crop.growth = 1.0
+	crop.position = player.position + Vector2(5, 0)
+	add_child(crop)
+
+	assert_true(crop.begin_pull(), "precondition: a mature patch should start pulling")
+	crop._process(CropPull.DURATION_SECONDS + 0.01)  # finishes the pull, emits the real drop
+
+	assert_eq(_spawned_drops.size(), 1, "precondition: the real pull should have dropped exactly one item")
+	var dropped: DroppedItem = _spawned_drops[0]
+	assert_eq(dropped.item_stack.item.id, "potato")
+	assert_gt(dropped.item_stack.item.mass_kg, 0.0, "precondition: the real dropped potato should carry a real mass")
+
+	var original_position := dropped.position
+	_tap_kick()
+	assert_ne(dropped.position, original_position, "kicking the REAL dropped potato should move it")
+
+	WorldItemBus.item_dropped.disconnect(_spawn_real_drop)
+	for d in _spawned_drops:
+		if is_instance_valid(d):
+			d.free()
