@@ -851,7 +851,7 @@ project's own terminology.
 | 11 — World bosses | ✅ Done (mechanism); ⬜ live trigger | `WorldBoss`/`WorldBossStore` wrap the pre-existing, real `world_boss_fitness.gd` promotion math in a causal, `/why`/`/boss`-inspectable entity. See below — no creature currently tracks kills/lifetime age for a live trigger to read from. |
 | 12 — Emergent quests | ✅ Done (production-shortfall projection); ⬜ everything else | `quest.gd` — a real, stateless PROJECTION over household/market/recipe state, never a new entity. See below — safety/social need sources, quorum/promotion, and resolution all still depend on unbuilt systems. |
 | 13 — Governance & politics | ✅ Done (form + legitimacy, changes a real decision); ⬜ policy/taxation/enforcement | New `docs/concept/governance.md`, `governance.gd`. Governance form now drives which institution type a settlement's own automatic formation attempts. Live-verified. See below. |
-| 14 — Regional trade & migration | ✅ Done (trade networks, one real edge); ⬜ migration | New `docs/concept/regional_trade.md`, `regional_trade.gd`. Real stock moves between two real settlements' markets to resolve a real shortage. Live-verified. See below — migration stays `quests.md`'s own unbuilt design. |
+| 14 — Regional trade & migration | ✅ Done (trade networks + real travel/raid risk); ⬜ migration | `regional_trade.gd`/`caravan_trip.gd`/`caravan_raid.gd`, wired into `EarthChunkManager.step_regional_trade`/`step_caravans`. See below. Migration flows are still unbuilt — `world.md`'s "population exists wherever conditions make it viable" isn't yet applied at regional/trade-network scale. |
 | 15 — Technology & cultural diffusion | ⬜ Not started | No `concept/*.md` coverage yet. |
 | 16 — Religion, festivals, legends | ⬜ Not started | `festivals.md` is referenced by `npc.md` as an eventual daily-planner byproduct, but doesn't cover belief-community formation itself. |
 | 17 — Polities, wars, civilization | ⬜ Not started | Gated behind real multiplayer per `docs/roadmap.md`; overlaps roadmap Phase 5+ #2/#3 (economy/society, era progression). |
@@ -1765,60 +1765,62 @@ priesthood/representative governance forms (no real signal to derive them
 from); and crime/religion (`docs/emergence/01`'s own adjacent sections,
 unbuilt and unrelated to this slice).
 
-✅ **Regional trade — the smallest possible trade network, one real edge
-between two real settlements** (new `docs/concept/regional_trade.md`,
-`regional_trade.gd`, `EarthChunkManager.step_regional_trade`), the "trade
-networks" element of `docs/emergence/07-implementation-roadmap.md` Phase
-14's own exit language: "Implement regions, trade networks, migration
-flows, dependency graphs, and resource corridors." No concept doc covered
-cross-settlement trade at all before this phase — scaffolded first per
-`CLAUDE.md` (migration stays `quests.md`'s own already-designed, still
-unbuilt section — not repeated here), then implemented the same pass.
+✅ **Regional trade: nearest-supplier resupply is real** (new
+`docs/concept/regional_trade.md`, `regional_trade.gd`,
+`EarthChunkManager.step_regional_trade`/`_attempt_regional_resupply`) —
+this table's own row for this phase had gone stale claiming "Not started"
+after this mechanism actually landed; corrected here. A settlement's real
+production shortfall (Phase 12's own `Quest` projection) is resupplied by
+the NEAREST other real settlement holding genuine surplus of the missing
+item (`RegionalTrade.has_surplus`'s own safety margin, `MIN_SURPLUS`, so a
+settlement never trades its own last reserve away), "nearest" being real
+Euclidean distance between the two settlements' own chunk coordinates.
 
-**Composed entirely from two primitives this substrate already had, with
-zero new "who needs what"/"who has extra" tracking invented.** A
-settlement's shortage is Phase 12's own live `Quest` projection; a
-settlement's surplus is just its real `Market` stock, checked directly.
-`RegionalTrade.has_surplus(stock, need)` requires real headroom beyond a
-tested safety margin (`MIN_SURPLUS`) — a settlement never trades its own
-last reserve away down to the exact edge just to help a neighbor.
-"Nearest" is real Euclidean distance between two settlements' own chunk
-coordinates, parsed directly back out of their existing `EntityRef` keys
-(`RegionalTrade.chunk_coord_of`) rather than a second stored position —
-the same "derive it from a key the entity already has" idiom `EntityRef`
-itself has used since Phase 0/1.
+✅ **Trade becomes a real journey with real risk** (new
+`docs/concept/trade.md`, which builds explicitly on top of
+`regional_trade.md` rather than reinventing its price/shortage signals —
+`caravan_trip.gd`, `caravan_raid.gd`, `CaravanMarker`/
+`ProceduralCaravanSprite`, `EarthChunkManager.step_caravans`/
+`_resolve_caravan_arrival`/`_resolve_caravan_raid`). Regional trade's own
+open question ("should a resupply be gradual... once there's a real reason
+[travel time] to model that lag?") is now answered: the supplier's stock
+is still deducted the instant a resupply is dispatched (`regional_trade_
+departed` event), but the shortage settlement is credited, and the
+`regional_trade_shipped` event fires, only once a real `CaravanTrip` —
+walking the real straight-line route between the two settlements' own
+"well" landmarks at ordinary on-foot NPC pace — actually finishes the
+walk. Every missing item on a shortfall dispatches its own independent
+caravan (a blacksmith short both rock and stick sends two), so one
+shipment's fate never couples to another's. The route carries **real
+raid risk**, reusing `RegionDifficulty`'s existing distance-from-spawn
+danger tiers rather than a second danger scale (the worse of the two
+endpoints' own tiers sets the trip's chance, `CaravanRaid.RAID_CHANCE`,
+hash-derived from the trip's own real identity so the same trip always
+resolves the same way — no `RandomNumberGenerator` state); a raided
+caravan's goods scatter into the world via `WorldItemBus.item_dropped`
+(the same real ground-drop path a felled tree or a smashed stone already
+uses) instead of arriving OR silently vanishing. A caravan is also a
+**second real caller of `PathScarring.step_on`** — the same mechanism
+that already wears the player's own footsteps into dirt paths
+(`concept/infrastructure.md`, Phase 8) now runs for caravan traffic too,
+on its own `EarthChunkManager._caravan_path_scarring` instance. Both
+`step_regional_trade` and `step_caravans` are wired into
+`World._step_ecology_batch`/`_step_ecology_fine` — live in a real
+session, not only under test.
 
-**`step_regional_trade` reuses `production_shortfall_quests_for_settlement`
-directly** — every known settlement's real shortfalls are checked each
-step, and for each missing item, the nearest real settlement with genuine
-surplus ships exactly enough to cover it, in one call:
-`Market.add_stock` with a negative count on the supplier, positive on the
-recipient, both real markets updated together, and a real
-`regional_trade_shipped` event naming both settlements and the item —
-`/why`-inspectable, not a silent number change. Resolves a shortage fully
-in one step rather than gradually (this doc's own open question names
-partial/gradual shipment as a real future refinement once there's a
-reason — travel time, route capacity — to model the lag).
-
-**A regional shock affecting multiple settlements falls out of the
-mechanism itself, not a bespoke propagation system** — this phase's own
-third design pillar made concrete: draining a supplier's real stock to
-help a neighbor is the exact same real number that could later leave the
-supplier itself short, with no extra code required to make that true.
-
-**Live end-to-end verification, zero manual calls:** a real settlement
-with a real blacksmith's shortfall, a real neighboring settlement with
-real surplus stock, `/ecotest` enabled, and the ordinary `_process` loop
-run with zero manual calls to `step_regional_trade` or
-`_attempt_regional_resupply` — `shipped=2` (both of `stone_pickaxe`'s
-missing inputs) by tick 3.
-
-**Left for the next slice, deliberately, and named in `regional_trade.md`'s
-own Status section:** dependency graphs and resource corridors (real
-aggregations over trade edges once enough of them exist, not a separate
-structure this slice builds); migration flows (`quests.md`'s own unbuilt
-design, needs the replan-interrupt architecture); and regions as a
-first-class grouping (not needed for nearest-neighbor resupply to work).
+**Left for the next slice, deliberately:** caravan wear tracks on its own
+`PathScarring` instance rather than the same one `World._path_scarring`
+renders the player's dirt paths from, so a heavily-trafficked trade route
+doesn't yet visibly render as a road — a real, scoped follow-up named in
+`trade.md`'s own Status section, not a silent gap. `CaravanMarker`'s art
+is a minimal placeholder silhouette, not a real pack-animal/cart
+depiction (no cart/wagon vehicle system exists per `transportation.md`).
+Gradual/partial shipments (splitting one need across multiple smaller
+trips, or a trip delivering only SOME cargo before a raid) stay an open
+question, carried over from `regional_trade.md`. **Migration** (this same
+phase's other named element) remains ⬜ entirely unstarted — still blocked
+on `quests.md`'s own replan-interrupt architecture and a real
+habitability/push signal, neither of which exist yet.
 
 ---
 

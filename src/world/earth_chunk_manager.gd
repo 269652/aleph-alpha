@@ -79,6 +79,11 @@ const NpcEncounter = preload("res://src/emergence/npc_encounter.gd")
 const Quest = preload("res://src/emergence/quest.gd")
 const Governance = preload("res://src/emergence/governance.gd")
 const RegionalTrade = preload("res://src/emergence/regional_trade.gd")
+const CaravanTrip = preload("res://src/emergence/caravan_trip.gd")
+const CaravanRaid = preload("res://src/emergence/caravan_raid.gd")
+const CaravanMarker = preload("res://src/rendering/caravan_marker.gd")
+const PathScarring = preload("res://src/world/path_scarring.gd")
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
 const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
@@ -1417,6 +1422,29 @@ func legitimacy_for_settlement(settlement_id: String) -> String:
 const REGIONAL_TRADE_INTERVAL := 30.0
 var _regional_trade_accumulator := 0.0
 
+## Real in-flight regional-trade shipments (docs/concept/trade.md, the
+## "supply really in transit, real risk" layer this builds on top of
+## step_regional_trade's own dispatch decision above). Array of
+## {"trip": CaravanTrip, "marker": CaravanMarker, "last_tile": Vector2i} --
+## a plain Array, not keyed by chunk, since a caravan is never tied to a
+## single chunk's load/unload lifecycle the way DecomposerMarker's
+## _decomposer_markers is: it is real and progressing whether or not the
+## player is anywhere near its route (see step_caravans).
+var _active_caravans: Array = []
+
+## Real ground worn by real caravan traffic -- the same PathScarring class
+## World._path_scarring already uses for the player's own footsteps
+## (world.gd's own doc comment on _step_path_scarring notes it is
+## "PLAYER-ONLY for now"), now real for a second caller. A separate
+## instance from world.gd's: nothing here reaches into a Node the way
+## world.gd's private player-tracking one is scoped, so caravan wear is
+## tracked on its own and not yet merged into the same rendered dirt-path
+## pass -- a real, honestly-scoped follow-up, not a silent gap (see
+## docs/concept/trade.md's Status section).
+var _caravan_path_scarring := PathScarring.new()
+
+var _item_catalog := ItemCatalog.new()
+
 
 func step_regional_trade(delta_seconds: float) -> void:
 	_regional_trade_accumulator += delta_seconds
@@ -1433,14 +1461,16 @@ func step_regional_trade(delta_seconds: float) -> void:
 				_attempt_regional_resupply(settlement_id, entry["item_id"], entry["need"], settlement_ids)
 
 
-## Ships `need` units of `item_id` from the NEAREST real settlement (by
-## real Euclidean distance between chunk coordinates) holding genuine
-## surplus of it -- real stock actually moves between two real markets in
-## one call, and the transfer is recorded as a real,
-## `/why`-inspectable event. A no-op if no known settlement has real
-## surplus (RegionalTrade.has_surplus's own safety margin), the same
-## "an invalid/impossible transition does nothing" discipline every other
-## coordinator here already respects.
+## Dispatches a real caravan carrying `need` units of `item_id` from the
+## NEAREST real settlement (by real Euclidean distance between chunk
+## coordinates) holding genuine surplus of it. The supplier's stock is gone
+## the moment the caravan departs -- goods really in transit, real risk
+## (docs/concept/trade.md) -- but the shortage settlement is credited only
+## once a real CaravanTrip (see step_caravans) actually finishes walking
+## there, or its goods scatter into the world if raided along the way. A
+## no-op if no known settlement has real surplus (RegionalTrade.has_surplus's
+## own safety margin), the same "an invalid/impossible transition does
+## nothing" discipline every other coordinator here already respects.
 func _attempt_regional_resupply(
 	shortage_settlement_id: String, item_id: String, need: int, settlement_ids: Array
 ) -> void:
@@ -1461,12 +1491,118 @@ func _attempt_regional_resupply(
 		return
 
 	_market_store.market_for(supplier_id).add_stock(item_id, -need)
-	_market_store.market_for(shortage_settlement_id).add_stock(item_id, need)
+
+	var origin := _well_position_for_settlement(supplier_id)
+	var destination := _well_position_for_settlement(shortage_settlement_id)
+	# The route is only as safe as its most dangerous stretch -- the worse
+	# of the two endpoints' own real RegionDifficulty tier, not just the
+	# destination's (see docs/concept/trade.md's open-questions call).
+	var tier := maxi(
+		_difficulty_tier_at(RegionalTrade.chunk_coord_of(supplier_id)),
+		_difficulty_tier_at(RegionalTrade.chunk_coord_of(shortage_settlement_id))
+	)
+	var raid_roll := CaravanRaid.roll_for(
+		supplier_id, shortage_settlement_id, item_id, _world_age_seconds, "raid_check"
+	)
+	var raided := CaravanRaid.is_raided(tier, raid_roll)
+	var raid_fraction := CaravanRaid.roll_for(
+		supplier_id, shortage_settlement_id, item_id, _world_age_seconds, "raid_fraction"
+	) if raided else 1.0
+
+	var trip := CaravanTrip.new(
+		supplier_id, shortage_settlement_id, item_id, need,
+		origin, destination, _world_age_seconds, tier, raided, raid_fraction
+	)
+	var marker := CaravanMarker.new()
+	marker.item_id = item_id
+	marker.count = need
+	marker.position = origin
+	if _entities_parent != null:
+		_entities_parent.add_child(marker)
+	_active_caravans.append({"trip": trip, "marker": marker, "last_tile": _world_tile_for_pixel(origin)})
+
+	var departed_event := Event.new("regional_trade_departed", _world_age_seconds)
+	departed_event.actors.append(supplier_id)
+	departed_event.actors.append(shortage_settlement_id)
+	departed_event.tags.append(item_id)
+	_event_store.append(departed_event)
+	_memory_store.witness_event(departed_event, _world_age_seconds)
+
+
+## `settlement_id`'s real "well" landmark world position -- a caravan's real
+## start/end point, the same lookup find_nearest_village already does to
+## turn a discovered settlement chunk into a real teleport target.
+func _well_position_for_settlement(settlement_id: String) -> Vector2:
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+	)
+	return settlement.landmarks.well
+
+
+## Advances every real in-flight caravan (see _active_caravans) to the
+## current _world_age_seconds -- called after advance_world_age each slice
+## (see World._step_ecology_fine), never throttled itself: CaravanTrip's own
+## position_at is a pure closed-form function of elapsed time, so this is
+## cheap regardless of how often it runs, and running it every slice is what
+## gives PathScarring real tile-by-tile wear along the route instead of one
+## coarse jump. Resolves each trip exactly once, either into a real market
+## credit (arrival) or a real scattered drop (raid) -- never both.
+func step_caravans() -> void:
+	var still_active: Array = []
+	for entry in _active_caravans:
+		var trip: CaravanTrip = entry["trip"]
+		var marker: CaravanMarker = entry["marker"]
+		var position := trip.position_at(_world_age_seconds)
+		if is_instance_valid(marker):
+			marker.sync(position)
+
+		var tile := trip.tile_at(_world_age_seconds, TerrainRenderer.TILE_SIZE)
+		if tile != entry["last_tile"]:
+			_caravan_path_scarring.step_on(tile)
+			entry["last_tile"] = tile
+
+		if trip.raid_triggered(_world_age_seconds):
+			_resolve_caravan_raid(trip, position)
+			if is_instance_valid(marker):
+				marker.queue_free()
+			continue
+		if trip.is_arrived(_world_age_seconds):
+			_resolve_caravan_arrival(trip)
+			if is_instance_valid(marker):
+				marker.queue_free()
+			continue
+		still_active.append(entry)
+	_active_caravans = still_active
+
+
+## Real delivery: the shortage settlement is credited only now, and the
+## "shipped" event only becomes real now -- see _attempt_regional_resupply's
+## own doc comment on why this moved out of the departure call.
+func _resolve_caravan_arrival(trip: CaravanTrip) -> void:
+	_market_store.market_for(trip.shortage_settlement_id).add_stock(trip.item_id, trip.count)
 
 	var event := Event.new("regional_trade_shipped", _world_age_seconds)
-	event.actors.append(supplier_id)
-	event.actors.append(shortage_settlement_id)
-	event.tags.append(item_id)
+	event.actors.append(trip.supplier_id)
+	event.actors.append(trip.shortage_settlement_id)
+	event.tags.append(trip.item_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+
+## Real failure: the shortage settlement never sees this shipment. Its
+## carried goods scatter into the world at the raid position via
+## WorldItemBus -- the same real ground-drop path a felled tree or a
+## smashed stone already uses, not a silent stock deletion.
+func _resolve_caravan_raid(trip: CaravanTrip, raid_position: Vector2) -> void:
+	if _item_catalog.has(trip.item_id):
+		var stack := ItemStack.new(_item_catalog.make(trip.item_id), trip.count)
+		WorldItemBus.item_dropped.emit(stack, raid_position)
+
+	var event := Event.new("regional_trade_raided", _world_age_seconds)
+	event.actors.append(trip.supplier_id)
+	event.actors.append(trip.shortage_settlement_id)
+	event.tags.append(trip.item_id)
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 
