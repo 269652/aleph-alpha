@@ -24,6 +24,29 @@ static func read_code(candidate_paths: Array[String]) -> String:
 	return ""
 
 
+## Writes `code` (trimmed) to every path in `candidate_paths`, overwriting
+## whatever was there before -- used by the in-game "enter a license key"
+## UI to save what a player pastes/types. Writes to ALL candidates, not
+## just the first, so a stale file at a lower-priority path (e.g. an old
+## license.txt still sitting next to the executable) can't keep shadowing
+## a freshly-saved one on the next read_code() call, since read_code()
+## always returns the FIRST existing candidate. Paths that can't be
+## opened for writing (missing parent directory, no permission) are
+## silently skipped -- not every candidate is expected to be writable in
+## every install (e.g. a read-only Program Files executable directory).
+## Returns true if at least one candidate was actually written.
+static func write_code(candidate_paths: Array[String], code: String) -> bool:
+	var wrote_any := false
+	var trimmed := code.strip_edges()
+	for path in candidate_paths:
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		if file == null:
+			continue
+		file.store_string(trimmed)
+		wrote_any = true
+	return wrote_any
+
+
 ## The real candidate paths the shipped game checks, in priority order:
 ## next to the running executable first (where a customer would naturally
 ## drop a file after extracting/installing the game -- the most
