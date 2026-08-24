@@ -1366,7 +1366,7 @@ func test_a_mature_grass_tuft_stays_at_its_intended_per_seed_world_scale():
 			var cards: Array = manager._grass_sprites[chunk_coord][cell]
 			assert_gte(cards.size(), 3, "one grass cell should read as a small field of blade cards")
 			var sprite: Sprite2D = cards[0]
-	var expected := 16.0 / float(sprite.region_rect.size.x)
+			var expected := 16.0 / float(sprite.region_rect.size.x)
 			assert_almost_eq(
 				sprite.scale.x, expected, 0.001,
 				"a mature tuft must stay at its intended (per-variant) world size, not balloon to the full canvas"
