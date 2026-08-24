@@ -4974,10 +4974,12 @@ func test_step_settlements_forms_the_governance_appropriate_institution_type():
 # -- emergence: Phase 14 -- regional trade, one real edge at a time --------
 
 ## A real settlement with a real production shortfall (Phase 12's own
-## Quest) is resupplied from the nearest OTHER real settlement's real
-## surplus -- stock actually moves between two real markets, and the
-## transfer is a real, /why-inspectable event.
-func test_step_regional_trade_resupplies_a_shortage_from_a_surplus_settlement():
+## Quest) has a caravan dispatched from the nearest OTHER real settlement's
+## real surplus -- the supplier's stock is gone immediately (goods really
+## in transit, real risk -- see docs/concept/trade.md), but the shortage
+## settlement isn't credited yet: that only happens once the caravan
+## actually finishes walking there (see the arrival test below).
+func test_step_regional_trade_departs_a_caravan_but_defers_the_shortage_credit():
 	var shortage_coord := Vector2i(0, 0)
 	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])  # blacksmith
 	var shortage_id := EntityRef.for_settlement(shortage_coord)
@@ -4990,16 +4992,146 @@ func test_step_regional_trade_resupplies_a_shortage_from_a_surplus_settlement():
 
 	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
 
-	# stone_pickaxe needs 2 stick + 3 rock -- the shortage settlement should
-	# now have real stock it didn't have before, taken from the supplier.
-	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 3)
-	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 2)
+	# The supplier is really out this stock right away -- stone_pickaxe
+	# needs 2 stick + 3 rock.
 	assert_eq(manager.market_store().market_for(supplier_id).stock_of("rock"), 17)
 	assert_eq(manager.market_store().market_for(supplier_id).stock_of("stick"), 18)
+	# But the shortage settlement has nothing yet -- it's still on the road.
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 0)
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 0)
+
+	# stone_pickaxe needs both rock and stick -- one real caravan per missing
+	# item, each its own departure event.
+	var departed: Array = manager.event_store().events_of_type("regional_trade_departed")
+	assert_eq(departed.size(), 2)
+	for event in departed:
+		assert_eq(event.actors, [supplier_id, shortage_id])
+	assert_eq(manager.event_store().events_of_type("regional_trade_shipped").size(), 0)
+	assert_eq(manager._active_caravans.size(), 2)
+
+
+## The other real half of the same trip: once a departed caravan actually
+## finishes walking the real route to the shortage settlement's own well,
+## the shortage settlement is credited and the "shipped" event becomes
+## real -- not at the moment of departure. supplier=(-1,0) is a real fixed
+## point where actually running CaravanRaid.roll_for on both real items
+## (rock, stick) at departure_age 0.0 clears HARD tier's own chance for
+## neither -- a clean, deliberately unraided pair, contrasting with the
+## deliberately-raided one the raid test below uses.
+func test_a_departed_caravan_credits_the_shortage_settlement_on_real_arrival():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var supplier_coord := Vector2i(-1, 0)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	assert_eq(manager._active_caravans.size(), 2, "precondition: both caravans are on the road")
+
+	# Walk them all the way there -- one real chunk apart is a short enough
+	# route that a handful of seconds-sized steps comfortably clears it,
+	# whatever CaravanTrip.WALK_SPEED_PX_PER_SEC happens to be tuned to.
+	for i in 200:
+		manager.advance_world_age(1.0)
+		manager.step_caravans()
+		if manager._active_caravans.is_empty():
+			break
+
+	assert_true(manager._active_caravans.is_empty(), "both caravans should have resolved by now")
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 3)
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 2)
 
 	var shipped: Array = manager.event_store().events_of_type("regional_trade_shipped")
-	assert_true(shipped.size() >= 1)
-	assert_eq(shipped[0].actors, [supplier_id, shortage_id])
+	assert_eq(shipped.size(), 2)
+	for event in shipped:
+		assert_eq(event.actors, [supplier_id, shortage_id])
+
+
+## Walking a real route wears it, the same real PathScarring.step_on every
+## other repeated-traffic system in this codebase already uses (see
+## docs/concept/infrastructure.md) -- a caravan is a second real caller of
+## it, not a cosmetic-only walk.
+func test_a_caravan_wears_a_real_path_along_its_route():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var supplier_coord := Vector2i(1, 0)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	assert_eq(manager._caravan_path_scarring.tracked_tile_count(), 0, "precondition: no wear yet")
+
+	# A handful of small steps partway along the route -- enough to cross
+	# several tiles without necessarily finishing the whole trip.
+	for i in 10:
+		manager.advance_world_age(1.0)
+		manager.step_caravans()
+
+	assert_gt(manager._caravan_path_scarring.tracked_tile_count(), 0)
+
+
+## A raided trip never reaches the shortage settlement -- its carried goods
+## scatter into the world via WorldItemBus (the same real drop path a
+## felled tree or a smashed stone already uses) instead of being credited.
+## supplier=(0,1)/shortage=(0,0)/departure_age=0.0 is a real fixed point:
+## exercising the real, production CaravanRaid.roll_for with these exact
+## real inputs (not mocked, not invented) puts the ROCK trip's roll under
+## HARD tier's real chance while the STICK trip's roll clears it -- so this
+## one scenario also proves two caravans from the same shortage resolve
+## fully independently. Found once by actually running roll_for with these
+## inputs, the same "chosen coordinates that force a specific real outcome"
+## approach test_step_regional_trade_prefers_the_nearest_surplus_settlement
+## already uses for distance.
+func test_a_raided_caravan_scatters_its_goods_while_its_sibling_still_arrives():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])  # blacksmith
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var supplier_coord := Vector2i(0, 1)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	var dropped_stacks: Array = []
+	var dropped_positions: Array = []
+	WorldItemBus.item_dropped.connect(
+		func(item_stack, world_position): dropped_stacks.append(item_stack); dropped_positions.append(world_position)
+	)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	assert_eq(manager._active_caravans.size(), 2, "precondition: both caravans are on the road")
+
+	for i in 200:
+		manager.advance_world_age(1.0)
+		manager.step_caravans()
+		if manager._active_caravans.is_empty():
+			break
+
+	assert_true(manager._active_caravans.is_empty(), "both caravans should have resolved by now")
+	# Rock was raided -- never arrives. Stick wasn't -- it arrives normally,
+	# exactly like the plain arrival test above.
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 0, "raided goods never arrive")
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 2, "the unraided sibling still arrives")
+
+	var shipped: Array = manager.event_store().events_of_type("regional_trade_shipped")
+	assert_eq(shipped.size(), 1)
+	assert_eq(shipped[0].tags, ["stick"])
+
+	var raided: Array = manager.event_store().events_of_type("regional_trade_raided")
+	assert_eq(raided.size(), 1)
+	assert_eq(raided[0].actors, [supplier_id, shortage_id])
+	assert_eq(raided[0].tags, ["rock"])
+
+	assert_eq(dropped_stacks.size(), 1, "the caravan's carried rock scatters into the world exactly once")
+	assert_eq(dropped_stacks[0].item.id, "rock")
+	assert_eq(dropped_stacks[0].count, 3)
 
 
 ## Given two candidate suppliers, the CLOSER one (real Euclidean distance
