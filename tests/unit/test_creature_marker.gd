@@ -1264,14 +1264,29 @@ func test_an_illustrated_species_never_falls_back_to_procedural_art():
 ## the one action guaranteed to still fall through to the procedural
 ## generator for every illustrated species -- the right one to exercise
 ## this rescale with.
-## An action can come from its OWN source file at its OWN resolution (boar's
+## An action can come from its OWN source file at its OWN resolution (horse's
 ## idle is a 1536x1024 portrait; its walk is a 2172x724 sheet), so `scale`
 ## must be recomputed per action or the creature would visibly change size
 ## the instant it stopped walking. Originally written against the
 ## illustrated→procedural swap, which no longer exists for these species --
 ## the per-action-file case is now the real one.
+##
+## Species matters here, not just as a stand-in for "some illustrated
+## species": marker_scale measures frame 0's content width AFTER
+## normalize_frames has already rescaled the whole action's frame batch so
+## its OWN widest pose fills the shared canvas (see normalize_frames' own
+## doc comment) -- so the measured width, and therefore marker_scale, comes
+## out identical across actions whenever frame 0 happens to BE that batch's
+## widest, canvas-width-bound pose. That is a real, deterministic property
+## of the ART, not a computation bug -- verified by hand-measuring boar's
+## three sheets, where frame 0 is exactly that pose in walk, idle, AND eat
+## alike, so every boar action lands on the exact same scale (confirmed via
+## IllustratedAnimalSprite.marker_scale("boar", ...)). Boar is therefore the
+## one species where this test's premise doesn't hold; horse's walk/idle
+## frame-0 poses are NOT both the width-bound extreme of their batches, so
+## their measured scales genuinely differ.
 func test_animation_step_rescales_when_an_action_comes_from_a_different_source_file():
-	marker.info = CreatureInfo.new("boar")
+	marker.info = CreatureInfo.new("horse")
 	marker._current_action = "walk"
 	marker._is_moving = true
 	marker._animation_step()
@@ -1282,7 +1297,7 @@ func test_animation_step_rescales_when_an_action_comes_from_a_different_source_f
 	marker._animation_step()
 
 	assert_ne(marker.scale, walk_scale, "scale must change once the texture source changes")
-	var expected: float = marker._illustrated.marker_scale("boar", "idle")
+	var expected: float = marker._illustrated.marker_scale("horse", "idle")
 	assert_almost_eq(marker.scale.x, expected, 0.0001, "should match that action's own measured scale")
 
 
