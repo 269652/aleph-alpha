@@ -221,6 +221,83 @@ key.
 
 ## Status
 
-Pure design, nothing implemented. Depends on nothing else in this project
-— no gameplay system reads or is gated by this, it's the first design pass
-for this concern.
+Implemented and live-wired on `main`:
+
+- `src/licensing/serial_base32.gd` — Crockford Base32 encode/decode
+  (9/9 tests). Godot has no native Base32.
+- `src/licensing/serial_codec.gd` — pure payload encode/decode as
+  designed above (10/10 tests).
+- `src/licensing/serial_verifier.gd` — RSA-2048/SHA-256 verification via
+  `Crypto`/`CryptoKey`, supports multiple registered public keys for key
+  rotation, checks expiry (10/10 tests, using a real generated keypair).
+- `src/licensing/license_store.gd` — reads the pasted code from a
+  `license.txt` file next to the executable (or `user://license.txt`),
+  not an in-game typed field (6/6 tests).
+- `src/licensing/embedded_public_keys.gd` — the ship-side public key
+  list. **Currently empty**, which means the shipped game refuses every
+  code, including a genuinely valid one, until a real public key is
+  pasted in — this is the correct, safe default for an unreleased build,
+  not a bug.
+- `src/licensing/license_gate.gd` — the enforcement point. Split into a
+  pure `evaluate()` decision function (fully unit-tested, 6/6) and thin
+  Node glue (`_ready()`/`require_licensed()`) that calls
+  `get_tree().quit(1)` on failure — the Node glue itself is intentionally
+  left to contract-level testing only, per this project's existing
+  "engine side effects aren't unit-tested" boundary
+  (see `test_water_shader.gd`).
+- Registered as the `LicenseGate` autoload in `project.godot`, so it runs
+  at the earliest possible boot hook, before any scene loads.
+- Checked a **second, independent time** in `scenes/world.gd`'s own
+  `_ready()`, which calls `LicenseGate.require_licensed()` again from
+  scratch — defense in depth, so bypassing the game requires patching
+  more than the one autoload call site.
+- A deliberate, transparent development bypass:
+  `OS.has_feature("editor")` short-circuits the check to always-licensed.
+  This tag is an engine-level distinction that does not exist in exported
+  builds, so it opens no bypass in anything actually shipped — it exists
+  purely so normal in-editor development/playtesting isn't blocked by an
+  unfilled public key. It's a one-line removal if editor runs should be
+  gated too.
+- `tools/generate_keypair.gd` — never-shipped CLI tool, run once by the
+  key owner, to generate the real RSA-2048 keypair.
+- `tools/generate_serial.gd` — never-shipped CLI tool that mints a real
+  signed serial from `--key`/`--products`/`--id`/`--expiry` args, using
+  the exact same `serial_codec.gd`/`serial_base32.gd` the shipped
+  verifier reads, so a minted serial is guaranteed to match the format
+  the game actually checks.
+- End-to-end smoke-tested (throwaway keypair, generated in a scratch
+  directory outside the repo and deleted immediately after): keypair
+  generation → `generate_serial.gd` signing → produced a valid paste-able
+  code. Not committed anywhere, per "the private key must never touch
+  this repository."
+
+**Not done / left to the user, by design** (see "Implement the
+infrastructure and I will later create a private key and sign serial
+numbers myself" — this repo intentionally contains no real private key
+and no real signed serial):
+
+1. Run `tools/generate_keypair.gd` yourself, on a machine you control, to
+   generate the real keypair.
+2. Move the resulting private-key file somewhere that never touches this
+   git repository (password manager attachment, encrypted offline drive).
+3. Paste the printed public-key PEM into
+   `src/licensing/embedded_public_keys.gd`'s `PUBLIC_KEY_PEMS` list.
+4. Use `tools/generate_serial.gd` with the private key to mint real
+   serials for sale.
+5. To test the full flow locally: drop the resulting code into a
+   `license.txt` next to the exported executable (or `user://license.txt`)
+   and run the exported build — the editor bypass means Play-button
+   testing in-editor won't exercise this path, only an actual export will.
+
+**Known, deliberately unverified assumption:** if `license_gate.gd` were
+deleted from disk entirely, `project.godot`'s autoload entry would point
+at a missing path, and any script referencing the global `LicenseGate`
+identifier (e.g. `world.gd`'s `LicenseGate.require_licensed()`) should
+fail to resolve/compile — a fail-closed outcome consistent with the "if
+the check mechanism is removed it should fail to start" requirement. This
+was reasoned from how Godot's autoload-name resolution works, not
+verified by actually deleting a real project file and observing the
+result, since doing that against a live, concurrently-edited `main`
+checkout wasn't a safe experiment to run. Worth a real verification pass
+(in a disposable worktree, never on `main`) before treating it as
+confirmed.

@@ -270,12 +270,18 @@ func test_record_water_disturbance_updates_the_installed_water_materials_uniform
 	manager.set_water_layer(water_layer)
 	manager.update(_berlin_tile)
 
-	manager.record_water_disturbance(Vector2(12.0, 34.0))
+	# Disturbances beyond DISTURBANCE_RADIUS_TILES of the update() center are
+	# silently culled (see record_water_disturbance) -- anchor near Berlin's
+	# own pixel position, not an arbitrary offset from the world origin, or
+	# this disturbance never reaches the shader at all.
+	var berlin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var disturbance_pos := berlin_pixel + Vector2(12.0, 34.0)
+	manager.record_water_disturbance(disturbance_pos)
 
 	var material := water_layer.material as ShaderMaterial
 	assert_eq(material.get_shader_parameter("disturbance_count"), 1)
 	var positions: PackedVector2Array = material.get_shader_parameter("disturbance_pos")
-	assert_eq(positions[0], Vector2(12.0, 34.0))
+	assert_eq(positions[0], disturbance_pos)
 	water_layer.free()
 
 
@@ -287,7 +293,10 @@ func test_step_water_disturbances_ages_the_installed_water_materials_ripple():
 	manager.set_water_layer(water_layer)
 	manager.update(_berlin_tile)
 
-	manager.record_water_disturbance(Vector2(1.0, 1.0))
+	# Same DISTURBANCE_RADIUS_TILES culling as the test above -- anchor near
+	# Berlin's own pixel position.
+	var berlin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	manager.record_water_disturbance(berlin_pixel + Vector2(1.0, 1.0))
 	manager.step_water_disturbances(0.5)
 
 	var material := water_layer.material as ShaderMaterial
@@ -2589,12 +2598,30 @@ func test_a_grazed_tuft_stops_being_drawn_immediately():
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
 	var tufts: Array = manager.grass_near(centre, 40)
 	assert_gt(tufts.size(), 0, "precondition: something to graze")
-	var eaten: Vector2 = tufts[0].position
-	var tile: Vector2i = manager._world_tile_for_pixel(eaten)
-	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(tile)
-	var cell: Vector2i = tile - chunk_coord * EarthChunkManager.CHUNK_SIZE
-	var band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
-	assert_true(manager._grass_sprites[chunk_coord].has(band), "precondition: its band was drawn")
+
+	# grass_near's 40-tile reach is simulation-wide (a grazer may walk to an
+	# off-screen tuft -- see grass_near's own doc comment), scanned in
+	# dictionary order across a 3x3-chunk neighbourhood, NOT sorted by
+	# distance. Drawing is intentionally scoped far tighter, to the camera's
+	# own tile-precise view window (GRASS_VIEW_BUFFER_TILES/_sync_grass_
+	# sprites), so tufts[0] is not reliably one of the handful that are
+	# actually drawn. This test's own subject is the draw-immediacy of an
+	# on-screen tuft, so pick the first one the manager itself already drew
+	# rather than assuming grass_near's first result is on-screen.
+	var eaten: Vector2
+	var chunk_coord: Vector2i
+	var band := -1
+	for tuft in tufts:
+		var tile: Vector2i = manager._world_tile_for_pixel(tuft.position)
+		var candidate_chunk: Vector2i = manager._chunk_coord_for_tile(tile)
+		var cell: Vector2i = tile - candidate_chunk * EarthChunkManager.CHUNK_SIZE
+		var candidate_band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
+		if manager._grass_sprites.get(candidate_chunk, {}).has(candidate_band):
+			eaten = tuft.position
+			chunk_coord = candidate_chunk
+			band = candidate_band
+			break
+	assert_true(band != -1, "precondition: at least one grazeable tuft is actually drawn")
 	var before: int = manager._grass_sprites[chunk_coord][band].multimesh.instance_count
 	manager.graze_grass_at(eaten)
 	var bands: Dictionary = manager._grass_sprites[chunk_coord]
