@@ -305,9 +305,33 @@ the actual live depth/weather/night computation feeding the trigger, and the
 `spawn_single` + combat encounter it should produce, are a documented
 follow-up; see `docs/progress.md`.
 
-Everything else in this doc (the other trigger shapes, and every remaining
-Starter Collection entry) is still design-only; see `docs/progress.md`'s
-Easter Eggs section for the exact breakdown.
+The two remaining trigger shapes — secret console commands and calendar-date
+gating — are now implemented too, alongside two more Starter Collection
+entries: the WarGames secret console command
+(`/globalthermonuclearwar`, `src/gameplay/wargames_response.gd`, wired as an
+undocumented `match` arm in `scenes/world.gd`'s dispatcher) prints one
+original, deadpan homage line, and Back to the Future Day
+(`src/gameplay/back_to_the_future_day.gd`) fires once per session on the
+real *system* calendar date of October 21st (`Time.
+get_datetime_dict_from_system()` — a different clock than this game's own
+fictional `SeasonCycle`) as a brief, description-only on-screen cameo line,
+reusing the same banner `EasterEggSightings` already uses. The Rush ambient
+nod (`src/gameplay/rush_ambient_cue.gd`) is also implemented as a real,
+location-triggered (no rarity roll — proximity alone fires it) on-screen
+flavor line at a real, out-of-the-way coordinate, but its *audio* half is
+deliberately stubbed: no audio-generation tool was available to build the
+doc's actual ask (a real composed ambient instrumental cue), so `scenes/
+world.gd` leaves an explicit `TODO` where a real `AudioStreamPlayer2D` +
+`.ogg` cue belongs — see `docs/progress.md`. The D&D d20 nod is also
+implemented (`src/gameplay/secret_d20.gd`) as this project's one deliberate,
+tightly isolated exception to "no random rolls anywhere" — a dedicated
+`RandomNumberGenerator` instance never shared with anything else, wired as
+a second undocumented secret console command (`/rolld20`), harmless and
+silly on a natural 20, a no-op otherwise.
+
+Everything else in this doc (the remaining Starter Collection entries) is
+still design-only; see `docs/progress.md`'s Easter Eggs section for the
+exact breakdown.
 
 ### Open questions
 

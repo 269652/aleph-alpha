@@ -2483,12 +2483,71 @@ quiet contradiction of every other system's "never hand-placed" rule.
   named constants and exercised by relative property tests (landmarks
   trigger far more often than fleeting glimpses; Roswell/Area 51 stay a
   symmetric matched pair) rather than eyeballed.
-- **Secret Console Commands** (trivial) — ⬜ Not started — reuses
-  `console_command_parser.gd`'s existing parse/dispatch shape; an Easter
-  egg command is just an undocumented `match` arm in `World`'s dispatcher.
-- **Calendar-Date-Gated Triggers** (trivial) — ⬜ Not started — a plain
-  real-system-date check, the same category of real-world-time input
-  `SeasonCycle`/`WeatherModel` already read for unrelated reasons.
+- **Secret Console Commands** (trivial) — ✅ Done — reuses
+  `console_command_parser.gd`'s existing parse/dispatch shape; each Easter
+  egg command is an undocumented `match` arm in `World`'s dispatcher, never
+  listed in `/help`. Two live commands: `/globalthermonuclearwar` (the
+  WarGames egg, below) and `/rolld20` (the d20 egg, below).
+- **Calendar-Date-Gated Triggers** (trivial) — ✅ Done — a plain
+  real-*system*-date check, the same category of real-world-time input
+  `SeasonCycle`/`WeatherModel` already read for unrelated reasons (though a
+  genuinely different clock than `SeasonCycle`'s own in-game calendar — see
+  Back to the Future Day, below, which is the one live user of this shape
+  so far).
+- **WarGames secret console command** (trivial) — ✅ Done —
+  `WarGamesResponse` (`src/gameplay/wargames_response.gd`): a single
+  original, deadpan `RESPONSE_LINE`, printed by the undocumented
+  `/globalthermonuclearwar` `match` arm in `scenes/world.gd`'s dispatcher.
+  No quoting of the film's own dialogue (pillar 4) — enforced by
+  `test_wargames_response.gd`'s own "does not contain the film's famous
+  lines" check, not just a comment. Zero mechanical weight: prints one line
+  and does nothing else.
+- **Back to the Future Day cameo** (small) — ✅ Done —
+  `BackToTheFutureDay` (`src/gameplay/back_to_the_future_day.gd`): a pure
+  `is_today(month, day)` check against the REAL system calendar date
+  (`Time.get_datetime_dict_from_system()`, read by `scenes/world.gd` the
+  same place it already reads UTC for solar lighting) — explicitly NOT this
+  game's own fictional `SeasonCycle` clock, a distinct real-world-time input
+  in the same category `SeasonCycle`/`WeatherModel` already read, just
+  keyed to one calendar day instead of a season. On October 21st, fires
+  once per session (a simple session flag — once-a-year eligibility makes
+  "once per session" and "once per day" indistinguishable in practice, the
+  same low-risk scope call `EasterEggCreatures`' own doc comment already
+  sanctions) via the exact same on-screen banner (`_easter_egg_label`)
+  `EasterEggSightings`' Mothman/Jersey Devil/Roswell/Area 51 cameos already
+  use, since there is no real car sprite/art to spawn instead. Description
+  only, no trademarked name anywhere — enforced by
+  `test_back_to_the_future_day.gd`'s own "never names the car" check.
+- **Rush ambient nod** (small) — 🚧 Partial — `RushAmbientCue`
+  (`src/gameplay/rush_ambient_cue.gd`) reuses `GeoCoordinates`' reverse
+  lookup + radius exactly like `EasterEggSightings`/`EasterEggCreatures`,
+  pinned at a real, remote stretch of Canadian Shield wilderness near
+  Temagami, Ontario — a private wink at the band's own home country, never
+  named in-game (checked by `test_rush_ambient_cue.gd`'s own "never names
+  the band" test). Unlike every `chance_per_check`-gated cameo elsewhere in
+  this doc, LOCATION ALONE is the trigger (the doc: "plays... on approach",
+  not "sometimes, on approach") — no rarity roll, fires once per approach
+  via a simple session flag. **Deliberately incomplete, and documented as
+  such rather than faked:** the doc's actual ask is a real *composed*
+  short original ambient instrumental cue, and no audio-generation tool was
+  available to this stage to produce one. What's implemented instead is a
+  real, original, on-screen flavor line (reusing `EasterEggSightings`' own
+  banner) plus an explicit `TODO` left in `scenes/world.gd` at the exact
+  spot a real `AudioStreamPlayer2D` + composed `.ogg` cue would attach once
+  one exists — a hook point, not a fabricated audio asset.
+- **The d20 Easter egg** (small) — ✅ Done — `SecretD20`
+  (`src/gameplay/secret_d20.gd`): this project's one deliberate exception
+  to "no random rolls anywhere" (combat/crafting/spellcasting stay fully
+  deterministic elsewhere). Isolated on purpose in its own small,
+  obviously-named module specifically so it can never be mistaken for, or
+  reused as, a general RNG source — `roll()` takes a caller-supplied
+  `RandomNumberGenerator`, and `scenes/world.gd` wires it to its own
+  dedicated `_secret_d20_rng` instance, never the ambient `randf()` the
+  cameo-rarity checks elsewhere in that file already use. Findable
+  "somewhere unlikely" via a second undocumented secret console command
+  (`/rolld20`) — the same discovery register as the WarGames egg. Harmless
+  and silly on a natural 20 (`NATURAL_20_MESSAGE`), a complete no-op on
+  every other result (1-19), per the doc.
 - **Squallmaw, Coilnecca, Champ** (medium) — ✅ Done — unlike the sightings
   above, these are **real, spawnable creatures**, not flavor-text-only
   glimpses: full `CreatureInfo`/`AnimalAnatomy`/`ProceduralAnimalSprite`
@@ -2603,11 +2662,12 @@ quiet contradiction of every other system's "never hand-placed" rule.
     as a named constant and exercised directly by its own tests rather than
     eyeballed inline.
 - **Remaining Starter Collection entries** (Joust-homage sea cave at the
-  Bermuda Triangle, WarGames console command, Zork terminal, Atari
-  Adventure secret room, Back to the Future Day, Monty Python's
-  Bridgekeeper, Rush ambient cue, D&D d20, the retro-handheld
-  creature-battler, "Three Fragments") (medium) — ⬜ Not started — ~10
-  concrete eggs still unimplemented. Two are real, playable original
+  Bermuda Triangle, Zork terminal, Atari Adventure secret room, Monty
+  Python's Bridgekeeper, the retro-handheld creature-battler, "Three
+  Fragments") (medium) — ⬜ Not started — ~6 concrete eggs still
+  unimplemented (WarGames, Back to the Future Day, Rush's ambient nod, and
+  the D&D d20 nod are now done — see their own entries above). Two of the
+  remaining six are real, playable original
   mini-games rather than props/flavor text (the Joust-homage dueling-birds
   cabinet and the handheld creature-battler starring this project's OWN
   existing creature roster — zero new art needed, reuses

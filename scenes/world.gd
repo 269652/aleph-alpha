@@ -8,6 +8,10 @@ const Snowfall = preload("res://src/world/snowfall.gd")
 const ConsoleSpecies = preload("res://src/gameplay/console_species.gd")
 const EasterEggSightings = preload("res://src/gameplay/easter_egg_sightings.gd")
 const EasterEggCreatures = preload("res://src/gameplay/easter_egg_creatures.gd")
+const WarGamesResponse = preload("res://src/gameplay/wargames_response.gd")
+const BackToTheFutureDay = preload("res://src/gameplay/back_to_the_future_day.gd")
+const RushAmbientCue = preload("res://src/gameplay/rush_ambient_cue.gd")
+const SecretD20 = preload("res://src/gameplay/secret_d20.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
@@ -205,6 +209,25 @@ var _geo_coordinates := GeoCoordinates.new()
 var _solar_position := SolarPosition.new()
 var _easter_egg_sightings := EasterEggSightings.new()
 var _easter_egg_creatures := EasterEggCreatures.new()
+var _wargames_response := WarGamesResponse.new()
+var _back_to_the_future_day := BackToTheFutureDay.new()
+## Once-per-session flag (see BackToTheFutureDay's own doc comment for why
+## this is enough): the cameo is only eligible one real calendar day a year,
+## so "once per session" and "once per day" are indistinguishable in
+## practice.
+var _bttf_cameo_shown_this_session := false
+var _rush_ambient_cue := RushAmbientCue.new()
+## Once-per-approach flag (see RushAmbientCue's own doc comment for the
+## same low-risk "no de-duplication guard" scope call EasterEggCreatures
+## already makes) -- fires the cue once per session rather than replaying
+## it on every check while the player lingers nearby.
+var _rush_ambient_cue_played := false
+var _secret_d20 := SecretD20.new()
+## Dedicated to SecretD20 alone -- see that module's own doc comment on why
+## this is a separate, narrowly-named RandomNumberGenerator instance rather
+## than the ambient randf() the cameo-rarity checks elsewhere in this file
+## already use: nothing else in this project should ever draw from this.
+var _secret_d20_rng := RandomNumberGenerator.new()
 var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
@@ -341,6 +364,11 @@ func _ready() -> void:
 	# scratch rather than trusting that already ran, so bypassing the game
 	# requires patching more than one call site, not just one `if`.
 	LicenseGate.require_licensed()
+
+	# Seeds SecretD20's OWN dedicated RandomNumberGenerator -- see that
+	# module's own doc comment for why this instance is never shared with
+	# anything else in the project.
+	_secret_d20_rng.randomize()
 
 	# Area2D's input_event (used by DroppedItem's click-to-pick-up) never
 	# fires unless the viewport's physics picking is explicitly enabled -- it
@@ -1162,6 +1190,45 @@ func _check_easter_egg_creature_spawns(player_tile: Vector2i, local_player: Play
 			return
 
 
+## Back to the Future Day (docs/concept/easter_eggs.md) -- gated on the
+## REAL system calendar date (utc.month/utc.day, NOT SeasonCycle -- see
+## BackToTheFutureDay's own doc comment), not a rarity roll: on the one
+## real day a year this is eligible, it fires once per session via the
+## same on-screen banner (_easter_egg_label) the sightings cameos already
+## use, since there is no real car sprite/art to spawn instead.
+func _check_back_to_the_future_day(month: int, day: int) -> void:
+	if _bttf_cameo_shown_this_session:
+		return
+	if not _back_to_the_future_day.is_today(month, day):
+		return
+	_bttf_cameo_shown_this_session = true
+	_easter_egg_label.text = _back_to_the_future_day.cameo_message()
+	_easter_egg_label.visible = true
+	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
+
+
+## Rush ambient nod (docs/concept/easter_eggs.md) -- LOCATION alone is the
+## trigger (see RushAmbientCue's own doc comment: no rarity roll, unlike
+## every other coordinate-triggered cameo above), fired once per session on
+## approach via the same on-screen banner the other cameos use.
+func _check_rush_ambient_cue(player_tile: Vector2i) -> void:
+	if _rush_ambient_cue_played:
+		return
+	if not _rush_ambient_cue.is_in_range(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	_rush_ambient_cue_played = true
+	_easter_egg_label.text = _rush_ambient_cue.cameo_message()
+	_easter_egg_label.visible = true
+	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
+	# TODO(easter-eggs): once a real short original ambient instrumental cue
+	# exists (.ogg), attach it here via an AudioStreamPlayer2D at the
+	# player's position -- no audio-generation tool was available to this
+	# stage, so this cameo is text-only for now; see docs/progress.md.
+
+
 func _update_easter_egg_label(delta: float) -> void:
 	if _easter_egg_message_timer <= 0.0:
 		return
@@ -1681,6 +1748,21 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_gold_command(args, local_player)
 		"village":
 			_handle_village_command(local_player)
+		"globalthermonuclearwar":
+			# docs/concept/easter_eggs.md's WarGames Easter egg -- deliberately
+			# NOT listed in /help's output above (pillar 3, undocumented on
+			# purpose): a hidden command prints one original, deadpan homage
+			# line (WarGamesResponse) and does nothing else at all -- zero
+			# mechanical weight, same as every other cameo in this doc.
+			_dev_console.log_line(_wargames_response.response_line())
+		"rolld20":
+			# docs/concept/easter_eggs.md's d20 Easter egg -- also never
+			# listed in /help (pillar 3): the ONE genuinely-random moment in
+			# this entire deterministic-by-design game, deliberately drawn
+			# from SecretD20's own dedicated RNG, never the ambient randf()
+			# the cameo-rarity checks elsewhere in this file use. Harmless
+			# and silly on a natural 20; a complete no-op otherwise.
+			_handle_d20_command()
 		_:
 			_dev_console.log_line("Unknown command: /%s (try /help)" % command)
 
@@ -2037,6 +2119,20 @@ func _handle_village_command(local_player: Player) -> void:
 
 	local_player.position = destination
 	_dev_console.log_line("Teleported to the nearest village.")
+
+
+## /rolld20 (docs/concept/easter_eggs.md's d20 Easter egg, undocumented on
+## purpose) -- draws one real roll from SecretD20's own dedicated RNG
+## (never the ambient randf() the cameo-rarity checks elsewhere in this
+## file already use) and prints the harmless, silly natural-20 payoff, or a
+## flat "nothing happens" for every other result.
+func _handle_d20_command() -> void:
+	var value := _secret_d20.roll(_secret_d20_rng)
+	var outcome := _secret_d20.outcome_message(value)
+	if outcome == "":
+		_dev_console.log_line("You roll a %d. Nothing happens." % value)
+	else:
+		_dev_console.log_line("You roll a %d! %s" % [value, outcome])
 
 
 ## Spawns a clickable ground item where a creature died or a tree dropped
@@ -2860,6 +2956,13 @@ func _client_process(delta: float) -> void:
 		# (see EasterEggCreatures' own doc comment for why this is a
 		# separate module rather than folded into EasterEggSightings).
 		_check_easter_egg_creature_spawns(player_tile, local_player)
+		# Back to the Future Day -- gated on the REAL system calendar
+		# date (utc.month/utc.day), not a rarity roll like every cameo
+		# above; see _check_back_to_the_future_day's own doc comment.
+		_check_back_to_the_future_day(utc.month, utc.day)
+		# Rush ambient nod -- location alone triggers this one, no roll;
+		# see _check_rush_ambient_cue's own doc comment.
+		_check_rush_ambient_cue(player_tile)
 	_update_easter_egg_label(delta)
 	# Real sun compass bearing, for hillshading (see HillshadeShader,
 	# docs/concept/terrain_relief.md) -- same real inputs as elevation just
