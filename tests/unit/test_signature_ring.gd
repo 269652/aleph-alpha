@@ -58,14 +58,22 @@ func test_accepts_either_of_two_registered_keys_for_rotation():
 	assert_true(ring.verify_hash(file_hash, new_signature))
 
 
-func test_skips_a_malformed_pem_without_erroring():
+## CryptoKey.load_from_string logs a real engine ERROR when a PEM fails
+## to parse (confirmed via probe: "Error parsing key" from
+## crypto_mbedtls.cpp) -- unavoidable, not something GDScript can
+## suppress. The engine's return code is still FAILED and our code still
+## correctly skips the key, so assert_engine_error acknowledges the
+## expected log line rather than the test failing on it.
+func test_skips_a_malformed_pem_without_crashing():
 	var ring := SignatureRing.new(["not a real pem"])
 	assert_eq(ring.key_count(), 0)
+	assert_engine_error("Error parsing key")
 
 
 func test_key_count_reflects_only_successfully_loaded_keys():
 	var ring := SignatureRing.new([_private_key.save_to_string(true), "garbage"])
 	assert_eq(ring.key_count(), 1)
+	assert_engine_error("Error parsing key")
 
 
 func test_empty_ring_verifies_nothing():
@@ -82,7 +90,7 @@ func test_empty_ring_verifies_nothing():
 func test_sha256_matches_the_published_empty_string_vector():
 	var digest := SignatureRing.sha256(PackedByteArray())
 	var hex := digest.hex_encode()
-	assert_eq(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85")
+	assert_eq(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 
 
 func test_sha256_is_deterministic_and_input_sensitive():

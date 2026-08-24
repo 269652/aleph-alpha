@@ -46,8 +46,16 @@ func verify_hash(file_hash: PackedByteArray, signature: PackedByteArray) -> bool
 ## SHA-256 of arbitrary bytes. Static + stateless so callers (SelfIntegrity
 ## hashing a multi-hundred-MB file) don't need a SignatureRing instance
 ## just to hash something before checking it.
+##
+## `update()` on a zero-length PackedByteArray logs a real engine ERROR
+## (confirmed via probe: "Condition 'len == 0' is true" from
+## hashing_context.cpp) even though start()+finish() alone already
+## produces the correct digest for empty input -- skip the call rather
+## than let a plausible edge case (an empty/corrupted target file) print
+## a scary but harmless error every time it's hit.
 static func sha256(bytes: PackedByteArray) -> PackedByteArray:
 	var context := HashingContext.new()
 	context.start(HASH_TYPE)
-	context.update(bytes)
+	if not bytes.is_empty():
+		context.update(bytes)
 	return context.finish()

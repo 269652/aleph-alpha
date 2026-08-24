@@ -147,12 +147,17 @@ const ART_SLOT_SIZE := Vector2i(14, 14)
 
 ## The character's own origin sits at its feet (y=0, see the feet-anchoring
 ## tests in test_character_view.gd) -- this is the top of the HEAD relative
-## to that, i.e. the character's own total height. Mirrors
-## character_view.tscn's Head position (-27) minus half HEAD_SIZE.y (6);
-## pinned against the live scene by test_head_top_y_matches_the_actual_head_
-## nodes_top_edge so a .tscn layout change can't silently drift out of sync
-## with the scale computed from it below.
-const HEAD_TOP_Y := -33.0
+## to that, i.e. the character's own total height. Computed as
+## ABOVE_HIP_HEIGHT + LEG_SIZE.y (torso/neck/head plus the now-stretched
+## legs) rather than a second independent literal, so the two can't silently
+## drift apart the way an eyeballed pair could -- pinned by
+## test_head_top_y_equals_above_hip_height_plus_the_new_leg_height. Mirrors
+## character_view.tscn's Head position (-35) minus half HEAD_SIZE.y (6);
+## also pinned against the live scene by
+## test_head_top_y_matches_the_actual_head_nodes_top_edge so a .tscn layout
+## change can't silently drift out of sync with the scale computed from it
+## below.
+const HEAD_TOP_Y := -(ABOVE_HIP_HEIGHT + float(LEG_SIZE.y))
 
 ## The character (and every NPC, who shares this same scene -- see
 ## VillageRenderer) reads at this fraction of a full-grown tree's height,

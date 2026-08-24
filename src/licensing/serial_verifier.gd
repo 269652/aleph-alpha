@@ -7,27 +7,25 @@ extends RefCounted
 
 const SerialBase32 = preload("res://src/licensing/serial_base32.gd")
 const SerialCodec = preload("res://src/licensing/serial_codec.gd")
+const SignatureRing = preload("res://src/licensing/signature_ring.gd")
 
 ## RSA-2048 signature length in bytes -- see docs/licensing.md's size math.
 const SIGNATURE_SIZE := 256
 
-var _public_keys: Array[CryptoKey] = []
-var _crypto := Crypto.new()
+var _ring: SignatureRing
 
 
 ## `public_key_pems`: one or more PEM-encoded PUBLIC-only keys (see
 ## docs/licensing.md's "Key rotation") -- a code verifying against ANY
 ## registered key is accepted, so a lost/rotated private key doesn't
 ## invalidate already-issued serials once the new public key ships
-## alongside the old one in a future patch. A PEM string that fails to
-## load is silently skipped rather than erroring the whole verifier --
-## one malformed embedded constant shouldn't take every other key down
-## with it.
+## alongside the old one in a future patch. Delegates the actual
+## multi-key load-and-verify to SignatureRing, the same shared primitive
+## SelfIntegrity uses for signed build hashes -- one malformed embedded
+## constant still can't take every other key down with it (see
+## SignatureRing's own doc comment).
 func _init(public_key_pems: Array[String] = []) -> void:
-	for pem in public_key_pems:
-		var key := CryptoKey.new()
-		if key.load_from_string(pem, true) == OK:
-			_public_keys.append(key)
+	_ring = SignatureRing.new(public_key_pems)
 
 
 ## Full verification of one pasted code. `current_unix_time` defaults to
@@ -70,14 +68,7 @@ func verify_code(code: String, current_unix_time: int = -1) -> Dictionary:
 
 
 func _signature_matches_any_key(payload: PackedByteArray, signature: PackedByteArray) -> bool:
-	var context := HashingContext.new()
-	context.start(HashingContext.HASH_SHA256)
-	context.update(payload)
-	var hash := context.finish()
-	for key in _public_keys:
-		if _crypto.verify(HashingContext.HASH_SHA256, hash, signature, key):
-			return true
-	return false
+	return _ring.verify_hash(SignatureRing.sha256(payload), signature)
 
 
 func _invalid(reason: String) -> Dictionary:
