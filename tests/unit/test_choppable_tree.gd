@@ -171,3 +171,21 @@ func test_a_sapling_is_still_a_smaller_node():
 	assert_lt(tree.scale.x, 1.0)
 	tree.set_age(TreeGrowth.MATURITY_SECONDS * 2.0)
 	assert_almost_eq(tree.scale.x, 1.0, 0.01)
+
+
+# -- canopy removal actually redraws what's shown, not just the state flag --
+#
+# Reported live: the FIRST swing on a felled tree correctly dropped sticks
+# and flipped _canopy_removed, but the tree still visibly had its full
+# canopy -- nothing ever told the canopy sprite to redraw.
+
+func test_removing_the_canopy_actually_changes_what_is_drawn():
+	var tree := _tree()
+	tree.set_age(TreeGrowth.MATURITY_SECONDS * 2.0)
+	tree.set_ripe_fruit(0, "summer")
+	var full_canopy_data := tree._canopy_sprite.texture.get_image().get_data()
+
+	tree.take_damage(ChoppableTree.MAX_HEALTH)  # fell it
+	tree.take_damage(ChoppableTree.MAX_HEALTH)  # first swing on the felled tree: canopy off
+
+	assert_ne(tree._canopy_sprite.texture.get_image().get_data(), full_canopy_data)

@@ -18,6 +18,7 @@ const ProceduralSeedSprite = preload("res://src/rendering/procedural_seed_sprite
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
+const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
@@ -66,6 +67,14 @@ const InstitutionFormation = preload("res://src/emergence/institution_formation.
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+const WorldBoss = preload("res://src/emergence/world_boss.gd")
+const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
+const WorldBossStorePersistence = preload("res://src/emergence/world_boss_store_persistence.gd")
+const WorldBossFitness = preload("res://src/gameplay/world_boss_fitness.gd")
+const NpcEncounter = preload("res://src/emergence/npc_encounter.gd")
+const Quest = preload("res://src/emergence/quest.gd")
+const Governance = preload("res://src/emergence/governance.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
 const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
@@ -194,6 +203,7 @@ var _terrain_renderer := TerrainRenderer.new()
 var _tree_renderer := TreeRenderer.new()
 var _stone_renderer := StoneRenderer.new()
 var _wild_crop_renderer := WildCropRenderer.new()
+var _decomposer_renderer := DecomposerRenderer.new()
 var _grass_sprite_generator := ProceduralGrassSprite.new()
 var _illustrated_grass := IllustratedGrassPatch.new()
 var _scrub_sprite_generator := ProceduralScrubSprite.new()
@@ -334,6 +344,12 @@ var _wild_crop_refresh_accumulator := 0.0
 ## Every crop this world grows in the wild -- the one list both _load_chunk
 ## and step_wild_crops iterate, so adding a future crop is a one-line change.
 const WILD_CROP_IDS := ["carrot", "potato"]
+
+## Ants/carrion bugs (see docs/concept/carrion.md). chunk_coord -> Array of
+## DecomposerMarker -- no per-chunk sim needed (unlike wild crops/grass),
+## since a decomposer's whole behavior lives on the marker itself and it
+## queries the Carcass/CarcassGuts groups directly.
+var _decomposer_markers: Dictionary = {}
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
 var _scrub_refresh_accumulator := 0.0
@@ -847,7 +863,250 @@ func dissolve_institution(institution_id: String) -> bool:
 		event.actors.append(member)
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
+	# Emergence Phase 10, source 3 (docs/emergence/05 "Social transformation:
+	# criminal hideouts... abandoned prisons") -- a dissolved institution
+	# leaves behind a real ruin: its old headquarters/hideout.
+	record_ruin_from_dissolved_institution(institution_id, event.id)
 	return true
+
+
+## Emergence Phase 10 (docs/emergence/05-dungeons-bosses-exploration-
+## content.md "Ruins": "A ruin is the physical state of a formerly
+## functional place. Creation causes must be stored."): shared plumbing for
+## all three ruin-formation sources below. Never invented -- always linked
+## back to the real, ALREADY-RECORDED event that caused it via
+## EventStore.link_cause, so "why does this ruin exist" has a real,
+## traceable answer, the literal "Creation causes must be stored" language
+## made concrete. No new *Store, same as Phase 8's paths -- a ruin's whole
+## lifecycle IS its own event history.
+##
+## Guarded on real persisted event history the same way
+## record_path_worn_if_new/record_settlement_founded_if_new already are:
+## once formed from a given source, a second call for the SAME source is a
+## harmless no-op rather than a duplicate founding.
+func _record_ruin_from(ruin_key: String, cause_event_id: String) -> void:
+	var ruin_id := EntityRef.for_kind("ruin", ruin_key)
+	if not _event_store.events_for_entity(ruin_id).is_empty():
+		return
+	var event := Event.new("ruin_formed", _world_age_seconds)
+	event.actors.append(ruin_id)
+	event.importance = 0.4
+	_event_store.append(event)
+	_event_store.link_cause(event.id, cause_event_id)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+
+## Source 1 (docs/emergence/05 "Historical catastrophe"): a settlement in
+## real, sustained decline (Phase 7's own automatic DECLINING status,
+## food-driven) leaves behind a real ruin.
+func record_ruin_from_settlement_decline(settlement_id: String, cause_event_id: String) -> void:
+	_record_ruin_from("settlement_%s" % EntityRef.key_of(settlement_id), cause_event_id)
+
+
+## Source 2 (docs/emergence/05 "Ecological transformation... overgrown
+## ruins"): nature reclaiming a worn path (Phase 8's own automatic
+## path_reclaimed event) IS literally an overgrown ruin forming -- the
+## exact real-world phenomenon this dungeon-source category names, not an
+## analogy stretched to fit.
+func record_ruin_from_reclaimed_path(path_id: String, cause_event_id: String) -> void:
+	_record_ruin_from("path_%s" % EntityRef.key_of(path_id), cause_event_id)
+
+
+## Source 3 (docs/emergence/05 "Social transformation: criminal hideouts...
+## abandoned prisons"): a dissolved institution's old headquarters/hideout.
+## Institution ids are NOT EntityRef "kind:key" strings
+## (InstitutionStore.form's own "inst_<ordinal>_<type>" shape) -- used
+## verbatim rather than run through EntityRef.key_of, which only strips a
+## colon-separated prefix and would return "" against one of these.
+func record_ruin_from_dissolved_institution(institution_id: String, cause_event_id: String) -> void:
+	_record_ruin_from("institution_%s" % institution_id, cause_event_id)
+
+
+## World bosses (see src/gameplay/world_boss_fitness.gd's own fitness/
+## promotion math, docs/concept/worldbosses.md) -- one more piece of shared
+## world state alongside the stores above.
+var _world_boss_store := WorldBossStore.new()
+var _world_boss_fitness := WorldBossFitness.new()
+
+
+func world_boss_store() -> WorldBossStore:
+	return _world_boss_store
+
+
+func save_world_boss_store(path: String = WorldBossStorePersistence.SAVE_PATH) -> void:
+	WorldBossStorePersistence.new().save(_world_boss_store, path)
+
+
+func load_world_boss_store(path: String = WorldBossStorePersistence.SAVE_PATH) -> void:
+	_world_boss_store = WorldBossStorePersistence.new().load_store(path)
+
+
+func reset_world_boss_store() -> void:
+	_world_boss_store = WorldBossStore.new()
+
+
+func wipe_world_boss_store(path: String = WorldBossStorePersistence.SAVE_PATH) -> void:
+	WorldBossStorePersistence.new().wipe(path)
+	reset_world_boss_store()
+
+
+## Scores a real individual against WorldBossFitness's real threshold AND
+## records a successful promotion as a real event, in one call -- the same
+## "one call, two stores kept in sync" shape every other coordinator here
+## already establishes. docs/emergence/05's own exit language made
+## concrete: "Boss emergence and defeat must permanently affect the
+## world" -- a promotion is a real, `/why`-inspectable event, not a
+## scripted one. Guarded on `active_boss_for` the same way
+## `attempt_institution_formation` guards on `active_institution_for`: an
+## already-promoted individual is never re-promoted, and the (potentially
+## costly) phase_generator is never invoked for one that fails the
+## threshold check (WorldBossFitness.attempt_promotion's own guarantee).
+##
+## No live gameplay trigger calls this yet -- nothing in this project
+## currently tracks a creature's accumulated kills or lifetime age (only
+## `CreatureInfo.level` is real, and it is fixed at spawn from the
+## creature's seed, not something that grows), so there is no real data to
+## attempt promotion FROM automatically yet. The mechanism itself is real,
+## tested, and ready the moment that tracking exists -- matches Phase 4's
+## own original, honestly-documented gap before Phase 5/6 gave it real data
+## to work from.
+func attempt_world_boss_promotion(
+	individual_id: String,
+	species: String,
+	level: int,
+	kills: int,
+	age_seconds: float,
+	trait_description: String,
+	phase_generator
+) -> WorldBoss:
+	if _world_boss_store.active_boss_for(individual_id) != null:
+		return null
+	var score := _world_boss_fitness.fitness_score(level, kills, age_seconds)
+	var result: Dictionary = _world_boss_fitness.attempt_promotion(
+		individual_id, species, score, trait_description, phase_generator
+	)
+	if result.is_empty():
+		return null
+
+	var boss := _world_boss_store.promote(
+		individual_id, species, result["score"], result["threshold"], result["phases"], _world_age_seconds
+	)
+	var event := Event.new("world_boss_promoted", _world_age_seconds)
+	event.actors.append(individual_id)
+	event.tags.append(species)
+	event.importance = 0.6
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+	return boss
+
+
+## Defeats a promoted boss AND records it as a real event, in one call --
+## "Killing a boss emits a major historical event" (docs/emergence/05 "World
+## bosses"), made concrete. An invalid defeat (an unknown boss, or one
+## already defeated) records no event, the same guard every other
+## coordinator here already respects.
+func defeat_world_boss(boss_id: String) -> bool:
+	if not _world_boss_store.defeat(boss_id, _world_age_seconds):
+		return false
+	var boss := _world_boss_store.get_boss(boss_id)
+	var event := Event.new("world_boss_defeated", _world_age_seconds)
+	event.actors.append(boss.individual_id)
+	event.importance = 0.7
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+	return true
+
+
+## Gap-closing (docs/progress.md's Emergence Phase 2 entry): rumor
+## auto-propagation, closing the ONE gap `npc.md`'s own memory/rumor
+## section explicitly named -- "nothing yet calls it automatically when
+## two NPCs meet at a settlement's shared landmarks on their daily
+## schedule." Reads directly off ALREADY-LIVE NpcMarker state
+## (`_loaded_villages`, `.schedule`) via `NpcEncounter.
+## group_by_shared_landmark` -- no new position/scheduling system, exactly
+## as `npc.md` itself says. Same throttled-accumulator shape
+## SPREAD_INTERVAL/step_tree_spread already use.
+const NPC_ENCOUNTER_INTERVAL := 30.0
+var _npc_encounter_accumulator := 0.0
+
+
+func step_npc_encounters(delta_seconds: float) -> void:
+	_npc_encounter_accumulator += delta_seconds
+	if _npc_encounter_accumulator < NPC_ENCOUNTER_INTERVAL:
+		return
+	_npc_encounter_accumulator -= NPC_ENCOUNTER_INTERVAL
+	if _npc_encounter_accumulator >= NPC_ENCOUNTER_INTERVAL:
+		_npc_encounter_accumulator = fmod(_npc_encounter_accumulator, NPC_ENCOUNTER_INTERVAL)
+
+	var hour := _current_hour_of_day()
+	for node_list in _loaded_villages.values():
+		var schedules_by_npc_id: Dictionary = {}
+		for node in node_list:
+			if not (node is NpcMarker) or node.schedule.is_empty():
+				continue
+			schedules_by_npc_id[EntityRef.for_npc(node.identity.seed_value)] = node.schedule
+
+		var groups: Dictionary = NpcEncounter.group_by_shared_landmark(schedules_by_npc_id, hour)
+		for tag in groups:
+			_exchange_recent_memories(groups[tag])
+
+
+## Every pair in `npc_ids` exchanges their single most-recently-formed
+## memory -- "catching up on the latest" rather than an exhaustive dump of
+## everything each has ever witnessed. Each npc's "most recent" is
+## snapshotted BEFORE any transmission in this group runs, not re-queried
+## mid-loop -- otherwise the second half of a pair's exchange would hand
+## back whatever the first half JUST told them a moment earlier in this
+## same step, rather than their own actual news.
+func _exchange_recent_memories(npc_ids: Array) -> void:
+	var most_recent_event_id: Dictionary = {}
+	for npc_id in npc_ids:
+		var memories := _memory_store.memories_for(npc_id)
+		if not memories.is_empty():
+			most_recent_event_id[npc_id] = memories.back().event_id
+
+	for i in npc_ids.size():
+		for j in npc_ids.size():
+			if i == j:
+				continue
+			var teller: String = npc_ids[i]
+			if not most_recent_event_id.has(teller):
+				continue
+			_memory_store.transmit(teller, npc_ids[j], most_recent_event_id[teller], _world_age_seconds)
+
+
+## A REAL SHARED hour-of-day derived from the world clock -- deliberately
+## NOT NpcMarker's own `_current_hour()`, which is a private per-marker
+## clock (elapsed real seconds since THAT marker happened to spawn, never
+## synced across markers). Fine for a marker's own walk-toward-target
+## movement; useless for comparing two different NPCs' schedules against
+## each other, which is exactly what grouping needs. Mirrors NpcMarker.
+## SECONDS_PER_SIMULATED_DAY's own pacing (both intentionally the same
+## constant, see that file's own doc comment) applied to the real world
+## clock instead of a per-marker one.
+func _current_hour_of_day() -> int:
+	var day_fraction := fmod(_world_age_seconds, SECONDS_PER_SIMULATED_DAY) / SECONDS_PER_SIMULATED_DAY
+	return int(day_fraction * 24.0)
+
+
+## Emergence Phase 12 (docs/concept/quests.md "Supply and demand quests",
+## docs/emergence/07's own exit language: "projections... not authored
+## content"): a settlement's real, currently-discoverable production
+## shortfall quests, derived ENTIRELY from real household/market/recipe
+## state already read by _step_settlement_production/
+## production_counts_for_settlement above -- no new persisted entity, no
+## event recorded (a quest is a VIEW, not a fact; there is nothing to
+## event-source). Always current: called fresh, it can never go stale the
+## way a recorded "quest offered" event could once the shortage it named
+## resolves.
+func production_shortfall_quests_for_settlement(settlement_id: String) -> Array:
+	var household_occupations: Dictionary = {}
+	for household_id in _households_in_settlement(settlement_id):
+		var occupation := _occupation_of_household(household_id)
+		if occupation != "":
+			household_occupations[household_id] = occupation
+	var market := _market_store.market_for(settlement_id)
+	return Quest.production_shortfall_quests_for(settlement_id, household_occupations, market, _recipe_book)
 
 
 ## Settlement assessment cadence: every SETTLEMENT_STEP_INTERVAL of real
@@ -869,6 +1128,11 @@ var _settlement_step_accumulator := 0.0
 ## rough edge, not a source of runaway duplicate events, since it can only
 ## ever re-fire once per reload rather than repeatedly.
 var _settlement_status: Dictionary = {}
+## settlement_id -> last recorded SettlementTier tier / specialization,
+## same "event-source only a real CHANGE, not persisted, accepted reload
+## rough edge" reasoning as _settlement_status immediately above.
+var _settlement_tier: Dictionary = {}
+var _settlement_specialization: Dictionary = {}
 
 
 func step_settlements(delta_seconds: float) -> void:
@@ -892,6 +1156,11 @@ func step_settlements(delta_seconds: float) -> void:
 		# and trade are real recurring activity, not a one-off status label.
 		_step_settlement_production(settlement_id, household_ids)
 		_step_settlement_trade(settlement_id, household_ids, status)
+		# Runs AFTER trade, not before: an institution that just traded
+		# again THIS step needs to see its own fresh fulfilled contract in
+		# the recent window, not a stale pre-trade snapshot.
+		_step_settlement_institution_health(household_ids)
+		_step_settlement_classification(settlement_id, household_ids)
 
 		if _settlement_status.get(settlement_id, "") == status:
 			continue
@@ -901,6 +1170,12 @@ func step_settlements(delta_seconds: float) -> void:
 		event.actors.append(settlement_id)
 		_event_store.append(event)
 		_memory_store.witness_event(event, _world_age_seconds)
+
+		# Emergence Phase 10, source 1 (docs/emergence/05 "Historical
+		# catastrophe"): a settlement's real, automatic decline leaves
+		# behind a real ruin too.
+		if status == SettlementState.DECLINING:
+			record_ruin_from_settlement_decline(settlement_id, event.id)
 
 
 ## The occupation of a household's founder, reconstructed from the founder's
@@ -955,7 +1230,13 @@ func _step_settlement_production(settlement_id: String, household_ids: Array[Str
 ## Once the same pair's fulfilled trades cross InstitutionFormation's real
 ## threshold, this is also what makes Phase 6 form an institution with no
 ## manual call -- genuinely downstream of Phase 4, not a separate trigger of
-## its own.
+## its own. Emergence Phase 13: WHICH institution type gets attempted is no
+## longer a hardcoded "cooperative" -- it reads the settlement's own real
+## governance form (Governance.institution_type_for_new_formation), so a
+## settlement with a real military-rule/merchant-oligarchy history attempts
+## a militia/merchant_company instead. A settlement with no governance
+## history yet still defaults to "cooperative," unchanged from before this
+## phase existed.
 func _step_settlement_trade(settlement_id: String, household_ids: Array[String], status: String) -> void:
 	if household_ids.size() < 2:
 		return
@@ -976,7 +1257,143 @@ func _step_settlement_trade(settlement_id: String, household_ids: Array[String],
 	else:
 		fulfill_contract(contract.id)
 
-	attempt_institution_formation("cooperative", party_a, party_b)
+	var governance_form := Governance.form_for(_institution_type_counts_for(household_ids))
+	var institution_type := Governance.institution_type_for_new_formation(governance_form)
+	attempt_institution_formation(institution_type, party_a, party_b)
+
+
+## Gap-closing (docs/progress.md's Emergence Phase 6 entry): checks each of
+## this settlement's ACTIVE institutions for real, RECENT coordination
+## collapse (InstitutionFormation.should_dissolve, now windowed rather than
+## all-time -- see that module's own doc comment for why the all-time count
+## alone structurally could never fire once formed) and dissolves any that
+## have genuinely gone quiet. Only meaningful for the two-party
+## institutions this substrate builds (Phase 6's own documented scope); an
+## institution with a different member count is skipped rather than
+## guessed at. Deduped by institution id so a shared institution between
+## two of this settlement's households is only checked once per step.
+func _step_settlement_institution_health(household_ids: Array[String]) -> void:
+	var seen := {}
+	for household_id in household_ids:
+		for institution in _institution_store.institutions_for(household_id):
+			if institution.status != Institution.ACTIVE or seen.has(institution.id):
+				continue
+			seen[institution.id] = true
+			if institution.members.size() != 2:
+				continue
+			var party_a: String = institution.members[0]
+			var party_b: String = institution.members[1]
+			if InstitutionFormation.should_dissolve(_contract_store, party_a, party_b, _world_age_seconds):
+				dissolve_institution(institution.id)
+
+
+## Emergence Phase 9 (docs/emergence/04-settlements-cities-infrastructure.md
+## "City threshold"/"Specialization", `src/emergence/settlement_tier.gd`):
+## re-derives this settlement's town/city tier and dominant specialization
+## from real flows every step -- production (Phase 5), trade-fed
+## institutions (Phase 4/6), and households (Phase 3/7), the exact same
+## data _step_settlement_production/_step_settlement_trade above already
+## produce. Event-sources only a real CHANGE, the same discipline
+## _settlement_status already uses.
+func _step_settlement_classification(settlement_id: String, household_ids: Array[String]) -> void:
+	var institutions := _active_institution_count_for(household_ids)
+	var production_counts := _production_counts_for_settlement(settlement_id)
+	var tier := SettlementTier.tier_for(household_ids.size(), institutions, production_counts.size())
+
+	if _settlement_tier.get(settlement_id, "") != tier:
+		_settlement_tier[settlement_id] = tier
+		var tier_event := Event.new("settlement_became_%s" % tier, _world_age_seconds)
+		tier_event.actors.append(settlement_id)
+		_event_store.append(tier_event)
+		_memory_store.witness_event(tier_event, _world_age_seconds)
+
+	var specialization := SettlementTier.specialization_for(production_counts)
+	if specialization != "" and _settlement_specialization.get(settlement_id, "") != specialization:
+		_settlement_specialization[settlement_id] = specialization
+		var spec_event := Event.new("settlement_specialized", _world_age_seconds)
+		spec_event.actors.append(settlement_id)
+		spec_event.tags.append(specialization)
+		_event_store.append(spec_event)
+		_memory_store.witness_event(spec_event, _world_age_seconds)
+
+
+## How many currently-ACTIVE institutions belong to any of these
+## households -- deduped by institution id, so an institution shared by two
+## of the settlement's own households (the common case, given
+## _step_settlement_trade's own two-party pairing) is counted once, not
+## twice.
+func _active_institution_count_for(household_ids: Array[String]) -> int:
+	var seen := {}
+	for household_id in household_ids:
+		for institution in _institution_store.institutions_for(household_id):
+			if institution.status == Institution.ACTIVE:
+				seen[institution.id] = true
+	return seen.size()
+
+
+## institution_type -> how many DISTINCT institutions (active OR dissolved
+## -- "historical precedent," Governance's own grounding) any of these
+## households have ever belonged to. Deduped by institution id, the same
+## reasoning _active_institution_count_for already uses, so an institution
+## shared by two of the settlement's own households is counted once.
+func _institution_type_counts_for(household_ids: Array[String]) -> Dictionary:
+	var seen := {}
+	var counts := {}
+	for household_id in household_ids:
+		for institution in _institution_store.institutions_for(household_id):
+			if seen.has(institution.id):
+				continue
+			seen[institution.id] = true
+			counts[institution.type] = counts.get(institution.type, 0) + 1
+	return counts
+
+
+## Emergence Phase 13 (docs/concept/governance.md, docs/emergence/01
+## "Governance"/"Legitimacy"): a settlement's real, derived governance form
+## and legitimacy -- for a console command to report without reaching into
+## private reconstruction, the same reasoning household_count_for_settlement
+## already established.
+func governance_form_for_settlement(settlement_id: String) -> String:
+	return Governance.form_for(_institution_type_counts_for(_households_in_settlement(settlement_id)))
+
+
+func institution_type_counts_for_settlement(settlement_id: String) -> Dictionary:
+	return _institution_type_counts_for(_households_in_settlement(settlement_id))
+
+
+func legitimacy_for_settlement(settlement_id: String) -> String:
+	var market := _market_store.market_for(settlement_id)
+	var household_count := _households_in_settlement(settlement_id).size()
+	var capacity := SettlementState.carrying_capacity(market)
+	return Governance.legitimacy_for(SettlementState.status_for(household_count, capacity))
+
+
+## Real production HISTORY for `settlement_id` -- recipe_id -> how many
+## times a production attempt for it has SUCCEEDED, read back out of the
+## event graph itself (Phase 5's own production_succeeded events already
+## tag which recipe), the same "the event graph already is the record"
+## reasoning _known_settlement_ids established. Failed attempts do not
+## count -- specialization is inferred from what a settlement actually
+## PRODUCES, not what it merely attempted.
+func _production_counts_for_settlement(settlement_id: String) -> Dictionary:
+	var counts := {}
+	for event in _event_store.events_for_entity(settlement_id):
+		if event.type != "production_succeeded" or event.tags.is_empty():
+			continue
+		var recipe_id: String = event.tags[0]
+		counts[recipe_id] = counts.get(recipe_id, 0) + 1
+	return counts
+
+
+## Public wrappers, same "for a console command to report without reaching
+## into private reconstruction" reasoning household_count_for_settlement
+## already established.
+func active_institution_count_for_settlement(settlement_id: String) -> int:
+	return _active_institution_count_for(_households_in_settlement(settlement_id))
+
+
+func production_counts_for_settlement(settlement_id: String) -> Dictionary:
+	return _production_counts_for_settlement(settlement_id)
 
 
 ## How many real households a settlement currently has, for a console
@@ -984,6 +1401,54 @@ func _step_settlement_trade(settlement_id: String, household_ids: Array[String],
 ## reconstruction itself.
 func household_count_for_settlement(settlement_id: String) -> int:
 	return _households_in_settlement(settlement_id).size()
+
+
+## Emergence Phase 8 (docs/concept/infrastructure.md, docs/emergence/04-
+## settlements-cities-infrastructure.md "Infrastructure": "Repeated movement
+## upgrades path -> trail -> road"): gives the ALREADY-LIVE `PathScarring`
+## wear mechanism (World._step_path_scarring) a real, `/why`-inspectable
+## entity, the same way `record_settlement_founded_if_new` did for
+## settlement founding. No new store needed -- a path's whole lifecycle IS
+## its own event history, read back the same way `_known_settlement_ids`
+## reads settlements out of the event graph itself.
+##
+## Guarded on real persisted event history (was this path's MOST RECENT
+## event already a formation?), not the caller's own in-memory transition
+## flag (`World._scarred_tiles`, not persisted) -- so a fresh reload, which
+## resets that in-memory flag but not the event store, cannot record a
+## duplicate founding for a path already known to be worn.
+func record_path_worn_if_new(tile: Vector2i) -> void:
+	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
+	var history := _event_store.events_for_entity(path_id)
+	if not history.is_empty() and history.back().type == "path_worn":
+		return
+	var event := Event.new("path_worn", _world_age_seconds)
+	event.actors.append(path_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+
+## The mirror of record_path_worn_if_new -- nature reclaiming a path
+## (docs/emergence/04 "Infrastructure degrades") is exactly as recorded as
+## one forming. NOT once-only the way founding is: a path can be worn,
+## reclaimed, and worn again over a real session, and each cycle is real,
+## distinct history. Only fires while the path's most recent event actually
+## IS a formation -- reclaiming a path that was never worn (or is already
+## reclaimed) would not be a real transition, so nothing is recorded.
+func record_path_reclaimed(tile: Vector2i) -> void:
+	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
+	var history := _event_store.events_for_entity(path_id)
+	if history.is_empty() or history.back().type != "path_worn":
+		return
+	var event := Event.new("path_reclaimed", _world_age_seconds)
+	event.actors.append(path_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+	# Emergence Phase 10, source 2 (docs/emergence/05 "Ecological
+	# transformation... overgrown ruins"): nature reclaiming a path IS this
+	# dungeon source, verbatim.
+	record_ruin_from_reclaimed_path(path_id, event.id)
 
 
 ## Every settlement that has ever recorded a founding -- read back out of the
@@ -2311,6 +2776,17 @@ func grass_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 ## Crops the tuft at `pixel_position`, returning whether there was a mature
 ## one to take -- the mutation counterpart of grass_near, mirroring
 ## take_worm_at/take_seed_at.
+##
+## Land health (docs/concept/world.md "Land health: overharvesting leaves a
+## lasting mark, not just a slower respawn"): the exact same real growth just
+## eaten ALSO leaves this region's real standing vegetation -- previously a
+## grazer's bite only ever removed the cosmetic per-tuft TallGrass patch,
+## never touched EcosystemSimulation's aggregate density/land-health at all
+## (mirrors NpcEconomy._gather's identical farmer-side wiring, which passes
+## its own real gathered amount to the same record_vegetation_harvest).
+## `growth` is always 1.0 here (only mature patches are ever offered by
+## grass_near/grazed here), read live off the sim rather than hardcoded, so
+## this stays correct if TallGrass ever grows a partial-bite mechanic.
 func graze_grass_at(pixel_position: Vector2) -> bool:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)
@@ -2318,10 +2794,12 @@ func graze_grass_at(pixel_position: Vector2) -> bool:
 	if sim == null:
 		return false
 	var cell := tile - chunk_coord * CHUNK_SIZE
-	if sim.get_growth(cell) < 1.0:
+	var growth := sim.get_growth(cell)
+	if growth < 1.0:
 		return false
 	if not sim.graze(cell):
 		return false
+	_ecosystem.record_vegetation_harvest(chunk_coord, growth)
 	# Refresh THIS chunk immediately rather than waiting for the next
 	# throttled step, the same reasoning as take_worm_at/take_seed_at: the
 	# player just watched the animal eat it, so it has to vanish on that
@@ -2398,6 +2876,15 @@ func plant_grass_at(pixel_position: Vector2) -> bool:
 ## Any herbivore-role creature standing on a mature grass patch's tile eats
 ## it -- the "tall grass is eaten by herbivores" loop, driven by where the
 ## creatures' own AI already took them rather than a separate seek behavior.
+##
+## Land health (docs/concept/world.md "Land health: overharvesting leaves a
+## lasting mark, not just a slower respawn"): this ambient standing-on-grass
+## sweep is genuine herbivore pressure exactly like GrazerForaging's own
+## deliberate bite (see graze_grass_at's identical wiring/doc comment) -- a
+## horse or sheep that happens to be standing on a mature tuft eats real
+## vegetation whether or not it walked there on purpose. Previously this only
+## ever touched the cosmetic per-tuft TallGrass sim, never
+## EcosystemSimulation's aggregate density/land-health.
 func _graze_by_herbivores() -> void:
 	for chunk_key in _loaded_creatures.keys():
 		var chunk_coord: Vector2i = chunk_key
@@ -2409,8 +2896,9 @@ func _graze_by_herbivores() -> void:
 				continue
 			var tile := _world_tile_for_pixel(creature.position)
 			var local: Vector2i = tile - chunk_coord * CHUNK_SIZE
-			if sim.get_growth(local) >= 1.0:
-				sim.graze(local)
+			var growth := sim.get_growth(local)
+			if growth >= 1.0 and sim.graze(local):
+				_ecosystem.record_vegetation_harvest(chunk_coord, growth)
 			_step_seed_dispersal(creature)
 			_step_grass_seed_caching(creature)
 
@@ -3225,6 +3713,48 @@ func take_fruit_at(pixel_position: Vector2) -> String:
 		item.queue_free()
 		return id
 	return ""
+
+
+## The nearest tree within `max_distance` of `pixel_position` that currently
+## carries real hanging fruit (FruitingModel.hanging_at > 0) -- the direct-
+## from-the-branch counterpart to fruit_near/take_fruit_at above, which only
+## ever see WINDFALL already on the ground (docs/concept/progression.md
+## "Ecological literacy"). Returns {"species_id": String, "is_peak": bool}
+## for the nearest qualifying tree, or {} if none is in reach. Read-only:
+## this does NOT reduce the tree's own crop -- hanging_at is a pure function
+## of elapsed time (see fruiting_model.gd), the same number _step_fruiting
+## already computes every step, so a direct pick needs no separate mutable
+## stock to decrement.
+func harvest_peak_fruit_near(pixel_position: Vector2, max_distance: float) -> Dictionary:
+	var found := {}
+	var nearest_distance := max_distance
+	for trees in _loaded_trees.values():
+		for tree in trees:
+			if not is_instance_valid(tree):
+				continue
+			var distance: float = pixel_position.distance_to(tree.position)
+			if distance > nearest_distance:
+				continue
+			var genome := _forage_scheduler.genome_for(tree.position)
+			var species_id := TreeSpecies.species_for_bias(genome.species_bias)
+			if not _NAMED_FRUIT_ITEMS.has(species_id):
+				continue
+			var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id)
+			var ripening_multiplier := TreeSpecies.ripening_multiplier_for(species_id)
+			var warmth := _warmth_at_pixel(tree.position)
+			var hanging := _fruiting_model.hanging_at(
+				genome, _world_age_seconds, warmth, yield_multiplier, ripening_multiplier
+			)
+			if hanging <= 0:
+				continue
+			nearest_distance = distance
+			found = {
+				"species_id": species_id,
+				"is_peak": _fruiting_model.is_peak_ripe(
+					genome, _world_age_seconds, warmth, yield_multiplier, ripening_multiplier
+				),
+			}
+	return found
 
 
 ## Plants a sapling of `species_id` at `pixel_position`, if a tree can
@@ -4198,6 +4728,11 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_wild_crop_sims[chunk_coord] = crop_sims
 	_wild_crop_markers[chunk_coord] = crop_markers
 
+	_decomposer_markers[chunk_coord] = _decomposer_renderer.spawn_decomposers(
+		_entities_parent, _biome_classifier.dominant_biome(chunk.biome), chunk_coord * CHUNK_SIZE,
+		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, hash("%d_%d_decomposers" % [chunk_coord.x, chunk_coord.y])
+	)
+
 	_flower_patches[chunk_coord] = FlowerPatch.new(
 		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
@@ -4353,6 +4888,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 			marker.free()
 	_wild_crop_markers.erase(chunk_coord)
 	_wild_crop_sims.erase(chunk_coord)
+
+	for marker in _decomposer_markers.get(chunk_coord, []):
+		marker.free()
+	_decomposer_markers.erase(chunk_coord)
 
 	for sprite in _flower_sprites.get(chunk_coord, {}).values():
 		sprite.free()

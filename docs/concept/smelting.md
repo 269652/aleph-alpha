@@ -49,4 +49,5 @@ weapons, and armor.
 - ⬜ Material-property-vector emergence (the `materials.md` target: stats fall out
   of composite material + shape rather than fixed per-recipe numbers).
 - ⬜ Smithing skill quality multiplier (a master realizes more of an item's
-  ceiling — see `materials.md`).
+  ceiling — designed in [labor_skills.md](labor_skills.md#skill-driven-crafting-quality-closes-smeltingmds-open-todo),
+  not yet implemented).

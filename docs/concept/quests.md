@@ -261,8 +261,27 @@ failed to save isn't a dead end, it's an input to what grows next.
 
 ## Current implementation status
 
-Nothing in this doc is implemented — this is a pure design pass building on
-top of Phase 1's ecosystem/evolution sim and Phase 2's NPC daily-planner
-architecture, both themselves partial (see `docs/progress.md`'s Phase 1/2
-tables). See `docs/progress.md`'s Phase 4 entry and its new Quests section
-for the mechanism-by-mechanism status breakdown.
+A narrow first slice of the **Production** need source is real
+(`src/emergence/quest.gd`, `EarthChunkManager.
+production_shortfall_quests_for_settlement`, Emergence Phase 12 — see
+`docs/roadmap.md`'s "Emergence substrate" section for how this thread
+relates to the numbered phases elsewhere in this project). A quest here is
+a pure, stateless PROJECTION over real household/market/recipe state —
+"which of a settlement's households have a blocked recipe, and what are
+they specifically missing" — never a new persisted entity, matching this
+doc's own design pillar #1 and `docs/emergence/07`'s Phase 12 exit
+language verbatim ("projections... disabling quests must not remove the
+underlying problem"): delete the query function and the settlement's real
+shortage is completely unaffected, only the player-facing framing of it is
+gone.
+
+Everything else in this doc remains unbuilt: Safety needs
+(`worldbosses.md`'s threat detection has no live trigger yet, and NPC
+threat-memory-crossing thresholds don't exist); Social needs (this doc's
+own "lightest touch... deferred" scope); quorum/promotion/settlement-level
+merging and representative selection (needs `factions.md`'s reputation
+score, not built); resolution/consequences, including quest acceptance,
+delivery, and any currency-to-NPC transaction (no such transaction system
+exists — Phase 4/5's own documented gap); and settlement growth/migration.
+See `docs/progress.md`'s Emergence substrate section, Phase 12 entry, for
+the mechanism-by-mechanism status breakdown.

@@ -1,6 +1,6 @@
 extends GutTest
 
-## SkillTreeWindow: the skill-tree spend menu (toggle K). Covers the same
+## SkillTreeWindow: the skill-tree spend menu (toggle L). Covers the same
 ## class of bug test_inventory_window.gd pins for InventoryWindow -- refresh()
 ## rebuilding rows can run synchronously from inside a row's OWN click
 ## handler.
@@ -50,3 +50,21 @@ func test_refresh_survives_being_called_from_within_a_rows_own_click_handler():
 	row.gui_input.emit(event)  # what a real click ultimately does
 
 	assert_eq(window._list.get_child_count(), row_count_before, "the skill list should still show every row, not be corrupted")
+
+
+## land_sense (see KeystonePassive) is a REVEAL keystone, not a stat bump --
+## its row must show its real description, not the ordinary "+0.0 stat"
+## phrasing every other keystone row uses (see KeystonePassive.keystone_info's
+## own doc comment on why its stat_name is deliberately empty).
+func test_keystone_row_shows_a_description_for_a_reveal_keystone_not_a_bonus_number():
+	window.refresh(1000, {}, {})
+	var found := false
+	for row in window._list.get_children():
+		if not (row is HBoxContainer):
+			continue
+		var label := row.get_child(0) as Label
+		if label.text.findn("Land Sense") == -1:
+			continue
+		found = true
+		assert_eq(label.text.findn("+0"), -1, "reveal keystone row should not show a '+0' bonus number")
+	assert_true(found, "expected a Land Sense keystone row to be rendered")

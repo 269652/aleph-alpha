@@ -264,6 +264,11 @@ var _warmth_fill: ColorRect
 var _warmth_label: Label
 var _xp_fill: ColorRect
 var _xp_label: Label
+## Naturalist "land_sense" keystone reveal (docs/concept/progression.md
+## "Ecological literacy"): real land-health/vegetation numbers near the
+## player, visible only once that keystone is unlocked -- see
+## _update_land_sense_label.
+var _land_sense_label: Label
 var _fishing_label: Label
 ## Taming state banner (see docs/concept/taming.md) -- sits just under the
 ## fishing one, same shape.
@@ -356,6 +361,7 @@ func _ready() -> void:
 	_build_death_label()
 	_build_survival_bar()
 	_build_xp_bar()
+	_build_land_sense_label()
 	_build_fishing_label()
 	_build_lasso_label()
 	_build_trade_label()
@@ -465,6 +471,7 @@ func _wipe_persisted_world() -> void:
 	_chunk_manager.wipe_contract_store()
 	_chunk_manager.wipe_market_store()
 	_chunk_manager.wipe_institution_store()
+	_chunk_manager.wipe_world_boss_store()
 	# And a brand new world clock: any previous run's persisted clock must not
 	# leak into this one either, then a fresh random starting point is rolled
 	# for THIS world (see EarthChunkManager.randomize_world_age/
@@ -661,7 +668,7 @@ func _on_craft_requested(recipe_id: String) -> void:
 
 
 ## Builds the skill-tree spend window (see SkillTreeWindow), hidden until
-## toggled with toggle_skills (default K). Clicking an affordable node/keystone
+## toggled with toggle_skills (default L). Clicking an affordable node/keystone
 ## allocates it on the local player and refreshes.
 func _build_skill_window() -> void:
 	_skill_window = SkillTreeWindow.new()
@@ -915,6 +922,21 @@ func _build_xp_bar() -> void:
 	bar.add_child(_xp_label)
 
 
+## Naturalist "land_sense" keystone reveal (docs/concept/progression.md
+## "Ecological literacy"): real EarthChunkManager.land_health_near/
+## vegetation_density_near numbers near the player, just under the XP bar.
+## Hidden until the keystone is unlocked -- see _update_land_sense_label.
+## This keystone's whole payoff IS this reveal, not a stat bump (see
+## SkillTreeWindow's own special-cased row rendering for the same keystone).
+func _build_land_sense_label() -> void:
+	_land_sense_label = Label.new()
+	_land_sense_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_land_sense_label.position = Vector2(8, 88)
+	_land_sense_label.add_theme_font_size_override("font_size", 10)
+	_land_sense_label.visible = false
+	_ui.add_child(_land_sense_label)
+
+
 ## A centered fishing prompt/result banner (hidden when there's nothing to say).
 func _build_fishing_label() -> void:
 	_fishing_label = Label.new()
@@ -1102,6 +1124,26 @@ func _update_xp_bar(local_player: Player) -> void:
 	_xp_fill.size.x = xp.progress_fraction() * SURVIVAL_BAR_WIDTH
 	var points := "  (%d pts)" % xp.unspent_points if xp.unspent_points > 0 else ""
 	_xp_label.text = "Lv %d — %s%s" % [xp.level, local_player.character_class.capitalize(), points]
+
+
+## Every frame: hidden unless the local player has unlocked the Naturalist
+## "land_sense" keystone; otherwise reads REAL EarthChunkManager.
+## land_health_near/vegetation_density_near at the player's own position --
+## the exact same numbers the simulation itself runs on (see
+## VegetationGrowthModel.effective_capacity/step_land_health), not a
+## separate display-only stat. This is the keystone's actual payoff (see
+## KeystonePassive._KEYSTONES's own doc comment on why land_sense carries no
+## stat bonus).
+func _update_land_sense_label(local_player: Player) -> void:
+	var unlocked: bool = local_player.unlocked_keystones.get("land_sense", false)
+	_land_sense_label.visible = unlocked and _chunk_manager != null
+	if not _land_sense_label.visible:
+		return
+	var land_health := _chunk_manager.land_health_near(local_player.position)
+	var vegetation := _chunk_manager.vegetation_density_near(local_player.position)
+	_land_sense_label.text = "Land health %d%%  ·  Vegetation %d%%" % [
+		int(round(land_health * 100.0)), int(round(vegetation * 100.0))
+	]
 
 
 func _make_survival_meter_row(parent: Control, fill_color: Color) -> Dictionary:
@@ -1358,6 +1400,12 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# real session actually produces settlement_growing/settlement_declining
 	# events without a console command.
 	_chunk_manager.step_settlements(delta)
+	# NPCs sharing a real landmark on their real daily schedule exchange
+	# memories automatically (see EarthChunkManager.step_npc_encounters,
+	# docs/concept/npc.md "Memory, beliefs, and rumor propagation") -- the
+	# one gap that section itself named, now closed the same way
+	# step_settlements already is.
+	_chunk_manager.step_npc_encounters(delta)
 	_step_herbivore_food_consumption(delta)
 	_step_reproduction(delta)
 
@@ -1400,7 +1448,8 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /ecotest [seconds_per_year|off]"
 					+ "  /history <entity_id>  /why <event_id>  /remember <entity_id>"
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
-					+ "  /institution <entity_id>  /settlement <entity_id>  /emergence"
+					+ "  /institution <entity_id>  /settlement <entity_id>  /boss <entity_id>"
+					+ "  /quests <entity_id>  /emergence"
 					+ "  /spawn <species> [count]  /give <item_id> [count]"
 					+ "  /craft <recipe_id>  /gold <amount>  /village  /species  /help"
 				)
@@ -1428,6 +1477,10 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_institution_command(args)
 		"settlement":
 			_handle_settlement_command(args)
+		"boss":
+			_handle_world_boss_command(args)
+		"quests":
+			_handle_quests_command(args)
 		"emergence":
 			_handle_emergence_command()
 		"season":
@@ -1537,8 +1590,11 @@ func _handle_institution_command(args: Array) -> void:
 		_dev_console.log_line(line)
 
 
-## /settlement <settlement_id> -- food, capacity, households, and growth/
-## decline status (see SettlementState).
+## /settlement <settlement_id> -- food, capacity, households, growth/decline
+## status (see SettlementState), town/city tier + specialization derived
+## from real institution/production flows (see SettlementTier), and
+## governance form + legitimacy derived from real institution history and
+## food security (see Governance).
 func _handle_settlement_command(args: Array) -> void:
 	if args.size() == 0:
 		_dev_console.log_line("Usage: /settlement <settlement_id>  e.g. /settlement settlement:673_127")
@@ -1546,7 +1602,44 @@ func _handle_settlement_command(args: Array) -> void:
 	var entity_id := str(args[0])
 	var market := _chunk_manager.market_store().market_for(entity_id)
 	var household_count := _chunk_manager.household_count_for_settlement(entity_id)
-	for line in Why.explain_settlement(market, household_count, entity_id).split("
+	var active_institutions := _chunk_manager.active_institution_count_for_settlement(entity_id)
+	var production_counts := _chunk_manager.production_counts_for_settlement(entity_id)
+	var institution_type_counts := _chunk_manager.institution_type_counts_for_settlement(entity_id)
+	for line in Why.explain_settlement(
+		market, household_count, entity_id, active_institutions, production_counts, institution_type_counts
+	).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /boss <individual_id> -- every world-boss promotion a real individual has
+## ever had (see WorldBossStore, docs/concept/worldbosses.md). No live
+## gameplay trigger promotes anyone automatically yet (see
+## EarthChunkManager.attempt_world_boss_promotion's own doc comment for
+## why), so this will show nothing for an ordinary creature today -- the
+## command exists for whenever a real caller starts promoting real
+## individuals.
+func _handle_world_boss_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /boss <individual_id>  e.g. /boss creature:12345")
+		return
+	var individual_id := str(args[0])
+	for line in Why.explain_world_boss(_chunk_manager.world_boss_store(), individual_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /quests <settlement_id> -- real, currently-discoverable production
+## shortfall quests (see Quest, docs/concept/quests.md "Supply and demand
+## quests"). A live projection over real household/market state, not a
+## stored list -- recomputed fresh every call.
+func _handle_quests_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /quests <settlement_id>  e.g. /quests settlement:673_127")
+		return
+	var settlement_id := str(args[0])
+	var quests := _chunk_manager.production_shortfall_quests_for_settlement(settlement_id)
+	for line in Why.explain_quests(quests).split("
 "):
 		_dev_console.log_line(line)
 
@@ -2085,6 +2178,7 @@ func _spawn_local_singleplayer_from_save() -> void:
 	_chunk_manager.load_contract_store()
 	_chunk_manager.load_market_store()
 	_chunk_manager.load_institution_store()
+	_chunk_manager.load_world_boss_store()
 
 
 ## The world position a player spawning on `tile` should take: the tile's
@@ -2132,6 +2226,7 @@ func _save_local_player(player: Player) -> void:
 	_chunk_manager.save_contract_store()
 	_chunk_manager.save_market_store()
 	_chunk_manager.save_institution_store()
+	_chunk_manager.save_world_boss_store()
 	# The world clock too -- without this, New Game's random starting point
 	# (see EarthChunkManager.randomize_world_age) would never actually reach
 	# disk, and a Load Game would fall back to the pre-persistence default of
@@ -2262,11 +2357,19 @@ func _step_path_scarring(delta: float) -> void:
 		if not _scarred_tiles.has(tile):
 			if _chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.EARTH_TILE_ID):
 				_scarred_tiles[tile] = true
+				# Emergence Phase 8 (see docs/concept/infrastructure.md,
+				# EarthChunkManager.record_path_worn_if_new): the same real
+				# state transition that renders a worn path also records it
+				# as a real, /why-inspectable event -- "repeated movement
+				# creates infrastructure" made concrete, not just a texture
+				# change.
+				_chunk_manager.record_path_worn_if_new(tile)
 
 	for tile in _scarred_tiles.keys().duplicate():
 		if not _path_scarring.is_worn(tile):
 			_chunk_manager.destroy_at_global(tile.x, tile.y)
 			_scarred_tiles.erase(tile)
+			_chunk_manager.record_path_reclaimed(tile)
 
 
 ## Pebble dispersion (see PebbleDispersion, docs/concept/stone.md): walking
@@ -2529,6 +2632,7 @@ func _client_process(delta: float) -> void:
 		_update_hover_tooltip()
 	_update_survival_bar(local_player)
 	_update_xp_bar(local_player)
+	_update_land_sense_label(local_player)
 	_update_fishing_label(local_player)
 	_update_lasso_label(local_player)
 	_update_trade_label(local_player)

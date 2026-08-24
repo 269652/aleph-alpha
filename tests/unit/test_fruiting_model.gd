@@ -566,3 +566,41 @@ func test_fruit_leave_from_the_top_of_the_order():
 	assert_eq(model.fallen_indices(5, 2), [4, 3], "the last two hanging are the ones that go")
 	assert_eq(model.fallen_indices(5, 0), [])
 	assert_eq(model.fallen_indices(3, 9), [2, 1, 0], "cannot drop more than it carried")
+
+
+# -- peak-timed harvest (docs/concept/progression.md "Ecological literacy") --
+#
+# "Peak ripeness" is real and tested against the model's OWN output, not an
+# invented calendar band: the crop is at genuine peak exactly while it is
+# STILL FULLY HANGING (hanging_at has reached its own crop_potential) -- the
+# plateau after grow_end (nothing has fallen yet) and before fall_start
+# (abscission begins). The moment even one fruit has left the tree, ripeness
+# is no longer at its peak.
+
+func test_is_peak_ripe_true_while_the_full_crop_is_still_hanging():
+	var genome := _genome_for("apple")
+	var window: Dictionary = model._window_for(genome, 0.5)
+	# Comfortably inside the plateau, not right at either edge.
+	var mid_plateau: float = (float(window.grow_end) + float(window.fall_start)) / 2.0 * FruitingModel.BEARING_CYCLE_SECONDS
+	assert_eq(model.hanging_at(genome, mid_plateau, 0.5), model.crop_potential(genome))
+	assert_true(model.is_peak_ripe(genome, mid_plateau, 0.5))
+
+
+func test_is_peak_ripe_false_once_abscission_has_begun():
+	var genome := _genome_for("apple")
+	var window: Dictionary = model._window_for(genome, 0.5)
+	var mid_fall: float = (float(window.fall_start) + float(window.fall_end)) / 2.0 * FruitingModel.BEARING_CYCLE_SECONDS
+	assert_lt(model.hanging_at(genome, mid_fall, 0.5), model.crop_potential(genome))
+	assert_false(model.is_peak_ripe(genome, mid_fall, 0.5))
+
+
+func test_is_peak_ripe_false_before_anything_has_ripened_yet():
+	var genome := _genome_for("apple")
+	var window: Dictionary = model._window_for(genome, 0.5)
+	var still_growing: float = float(window.grow_end) * 0.5 * FruitingModel.BEARING_CYCLE_SECONDS
+	assert_false(model.is_peak_ripe(genome, still_growing, 0.5))
+
+
+func test_is_peak_ripe_false_for_a_zero_yield_genome():
+	var g := _genome(50, 0.0)
+	assert_false(model.is_peak_ripe(g, 1000.0, 0.5))

@@ -93,6 +93,13 @@ const _ITEMS := {
 	"carrot": ["Carrot", "food", 20, 0.0],
 	# The other wild root crop -- see docs/concept/wild_crops.md.
 	"potato": ["Potato", "food", 20, 0.0],
+	# Woodworking chain (see docs/concept/woodworking.md): a bare felled
+	# trunk bucks into logs by hand, or (saw + trained Carpentry) is sawn
+	# whole into beam/plank instead.
+	"log": ["Log", "material", 20, 0.0],
+	"beam": ["Beam", "material", 20, 0.0],
+	"plank": ["Plank", "material", 20, 0.0],
+	"saw": ["Saw", "tool", 1, 0.0],
 	"crude_blade": ["Crude Blade", "weapon", 1, 9.0],
 	# Mining chain: a stone pickaxe knocks ore out of ore-bearing boulders.
 	"stone": ["Stone", "material", 40, 0.0],
@@ -129,6 +136,18 @@ const _ITEMS := {
 
 func has(item_id: String) -> bool:
 	return _ITEMS.has(item_id)
+
+
+## `item_id`'s category ("food", "weapon", "tool", ...) -- the same string
+## make() stamps onto the built Item's `kind`, exposed standalone so a caller
+## can classify an item id (e.g. "is this food?") without constructing a
+## whole Item first (see Player.sell_food_to_village's village-feeding
+## fallback, docs/concept/progression.md "Ecological literacy"). "" for an
+## unknown id.
+func kind_of(item_id: String) -> String:
+	if not _ITEMS.has(item_id):
+		return ""
+	return String(_ITEMS[item_id][1])
 
 
 func make(item_id: String) -> Item:

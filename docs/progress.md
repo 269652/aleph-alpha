@@ -94,15 +94,48 @@ than the original brief anticipated, discovered by actually opening them
 rather than assuming the brief's plan still matched reality:
 
 - **Torso/legs/arms are ✅ wired**, each falling back to procedural
-  automatically if unregistered. `leg.png` draws BOTH legs as one fused pair,
-  not a single leg meant to be mirrored — `CharacterView._apply_legs` wears
-  it as one sprite covering both `LegLeft`/`LegRight` world slots (`LegLeft`
-  centred at the midpoint, `LegRight` hidden), rather than splitting it,
-  which would have cut through the art's own belt buckle. `arms.png` holds
-  two independent poses divided by an OPAQUE line, which defeats
-  `SpriteSheetSlicer.detect_frames`'s column-emptiness scan — its `_PARTS`
-  entry gives exact pixel rects instead (`idle_rects`, new support in
-  `_load_frames`) rather than relying on auto-detection.
+  automatically if unregistered — but no longer from the single-pose
+  `torso.png`/`leg.png`/`arms.png` files this bullet originally described.
+  Superseded mid-pass (reported: "I added hero_composite ... use it") by
+  `assets/sprites/player/hero_composite.png`, a combined 1024×1536 sheet: 3
+  columns (arms/body/legs) × 8 rows, each row a complete PRE-COLORED outfit
+  variant rather than a neutral part `modulate` tints at runtime.
+  `IllustratedCharacterSprite` gained a dedicated surface for it
+  (`has_composite_part`/`outfit_variant_for`/`generate_composite_textures`/
+  `composite_part_scale_for`) since a variant (which of 8 outfits) and
+  `facing` axis has no room in the old single-pose `_PARTS` shape; `_PARTS`
+  itself is now empty (kept working, untested-by-disuse-only, for any future
+  single-pose part like hair). Legs are still a FUSED pair exactly as
+  `leg.png` was (one sprite covers both `LegLeft`/`LegRight` world slots,
+  `CharacterView._apply_legs`); arms are still two independent poses
+  (`ArmLeft`/`ArmRight` from separate frames), except outfit row 6, whose
+  art doesn't split into two frames — `_apply_arms` falls back to reusing
+  frame 0 for both sides there rather than erroring. Which outfit a hero
+  wears is DNA-derived (`outfit_variant_for`, hash % 8), the same "vary by
+  seed, no new UI" answer skin/hair/eyes already give — the opposite answer
+  from head's own axis below, deliberately: a face is identity, an outfit
+  color isn't. Column x-ranges needed real per-row verification, not just
+  row 0 (`test_every_outfit_row_produces_the_expected_frame_count`): row 7's
+  body picked up a detached 11px shoulder-cape fragment as a false second
+  frame (an over-wide upper bound, narrowed 683→660), and row 7's legs
+  vanished outright because their real content started at x=670, outside an
+  assumed 683 lower bound (widened to 668) — both caught by looping all 8
+  rows instead of trusting row 0's ranges for the rest. Only FRONT-facing
+  art exists at this path today; an earlier regenerated version additionally
+  had a side-profile set, but the sheet currently in place replaced it with
+  a front-only one. `facing` stays a real parameter throughout this surface
+  (`_resolved_facing` falls back to `"front"` for anything else), so a
+  future side/back sheet slots in without another signature change — a
+  structured 4-direction regeneration prompt was written and handed over for
+  the user to run, but has NOT been folded into
+  `docs/art/ai_sprite_prompts.md` section 4 yet (still describes the
+  original single-pose prompt shape) — a real, flagged doc gap, not silently
+  left stale. The walk-cycle gap this entry originally recorded (illustrated
+  legs stay static while walking — reported: "the legs aren't animated") is
+  now closed, partially: no per-leg swing art exists for a fused pair, but
+  `CharacterView._process` gives the whole pair a vertical bob
+  (`FUSED_LEG_BOB_AMPLITUDE`, dips twice per stride like a real gait) while
+  walking.
 - **A real, previously-latent sizing bug surfaced immediately**:
   `IllustratedCharacterSprite.CANVAS_SIZE` is ONE shared 64×96 working
   canvas every part normalizes onto (mirroring `IllustratedAnimalSprite`'s
@@ -125,26 +158,45 @@ rather than assuming the brief's plan still matched reality:
 - **Head is ✅ wired, but is not a neutral single-tint part like the other
   three** — `head.png` is a 10×10 grid of 100 fully-painted faces (bald, one
   baked skin tone, solid near-black background, no alpha channel), so it
-  gets its own surface (`has_head`/`generate_head_texture`/
-  `head_cell_index_for`/`head_scale_for`), not `has_part`/`generate_textures`.
-  Which of the 100 faces a hero wears is deterministic from their DNA seed
-  (`head_cell_index_for`) — `HeroAppearance.appearance_for` and
-  `appearance_from_choices` now both carry `"seed"` on the returned
-  appearance dict specifically so a face choice has something stable to key
-  off (the character creator's live-preview rebuild, `main_menu.gd`'s
-  `current_appearance`, previously discarded the seed entirely). The
-  sheet's own baked tone is discarded and repainted toward the hero's real
-  DNA-picked skin tone by LUMINANCE ONLY — the exact recolor trick
-  `ProceduralFlowerSprite._paint_illustrated_head` already proved on
+  gets its own surface (`has_head`/`generate_head_texture`/`head_scale_for`),
+  not `has_part`/`generate_textures`. `HeroAppearance.appearance_for` and
+  `appearance_from_choices` both carry `"seed"` on the returned appearance
+  dict so illustrated art always has something deterministic to key off.
+  Background removal needed a second new mechanism: `head.png` has no alpha
+  and a near-pure-black background (measured directly with a small Node.js
+  PNG probe rather than guessed — `IHDR`/`IDAT` parsed and inflated by hand
+  since Python wasn't on PATH in this environment either) — but a first flat
+  per-pixel chroma-key attempt (distance-from-black, tolerance 0.06) left a
+  visible dark halo around every face once actually seen live, because the
+  real background-to-face transition is a soft 20-30px blur, not a crisp
+  cut. Replaced with a border-connected flood fill
+  (`_remove_background_by_flood`): starting from the canvas edges and
+  stepping only to a neighbour within `HEAD_BACKGROUND_FLOOD_STEP_TOLERANCE`
+  of the pixel that reached it, the flood rides the blur to where real
+  content begins but can never cross into the content's own interior (doing
+  so would need one big step across the content's edge, which a per-step
+  tolerance refuses) — a flat distance-from-black key can't tell a
+  coincidentally dark pixel INSIDE a face (an eye) from real background,
+  because it never checks what a pixel connects to. 0.02 was reached by
+  sweeping 0.02-0.18 against 7 sample cells with a throwaway visual-diff
+  harness: most cells hold a stable opaque plateau from 0.02 up to a
+  per-cell cliff around 0.06-0.10, but two darker-toned cells show no clean
+  plateau at all, so 0.02 is the conservative value that holds a complete
+  face on every sampled cell. The sheet's own baked tone is discarded and
+  repainted toward the hero's `appearance.skin` by LUMINANCE ONLY — the same
+  recolor trick `ProceduralFlowerSprite._paint_illustrated_head` proved on
   illustrated blooms (see `flora.md`'s "Recolouring illustrated blooms"),
   deliberately simplified (no accent-hue mask separating eyes from skin —
-  eyes are already dark enough to still read as a distinct darker patch of
-  whatever tone the recolor lands on). Background removal needed a second
-  new mechanism: `head.png` has no alpha and a near-pure-black background
-  (measured directly with a small Node.js PNG probe rather than guessed —
-  `IHDR`/`IDAT` parsed and inflated by hand since Python wasn't on PATH in
-  this environment either), chroma-keyed out per cropped cell before the
-  normal slicing pipeline runs.
+  eyes are already dark enough to read as a distinct darker patch of
+  whatever tone the recolor lands on).
+  **Which face a hero wears reversed from DNA-derived to a real player
+  choice** (reported live, after the DNA-only version shipped: "you can't
+  choose different heads") — `"head"` is now a full `HeroAppearance.AXES`
+  entry (`option_count` reads `HEAD_GRID_COLUMNS * HEAD_GRID_ROWS` from the
+  art itself, not a second hardcoded 100), cycles in the creator like every
+  other axis, and round-trips through `appearance.head_index`; a DNA roll is
+  still the fallback for a hero nobody hand-authors (a fresh randomize, an
+  NPC).
 - **Hair is an honest, explicit gap, not a half-implementation.** `head.png`
   is bald throughout, and no hair-overlay art exists — asked directly
   (overlay the old procedural hairstyles on the new head's silhouette, or
@@ -164,6 +216,129 @@ rather than assuming the brief's plan still matched reality:
   `_apply_paperdoll_part` silently stuck on the procedural fallback despite
   real art being registered — caught immediately by the new tests, not
   discovered live.
+- ✅ **`CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE` raised 2/3 → 0.85** once
+  the illustrated parts above replaced the flat-color procedural ones. At
+  2/3, a leg's own measured content rendered at roughly 4 on-screen pixels
+  tall — reported as "legs are not wired" (they were; detailed shaded art
+  doesn't survive that downscale the way flat color does, it smears into a
+  muddy blob that blends with the ground). Asked directly how to fix it
+  (raise the whole character vs. legs specifically): raising the whole
+  character keeps every part's proportions AND legibility consistent, not
+  just legs'. At 0.85 the same leg content renders at roughly 5.4px — a real
+  compromise, not a full fix, deliberately short of 1.0 (as tall as a tree)
+  to preserve the original reason this constant exists (the hero reads
+  visibly smaller than the trees around it). The art was drawn assuming a
+  larger viewing size than this project's tile-scale budget affords; closing
+  that gap the rest of the way is a real follow-up, not solved here.
+  **Correction: this alone did not fix "legs are not wired."** Relaunched
+  and reported live, twice more, after this landed ("still no legs" /
+  "back to the old procedural version" / "no neck; head is floating and no
+  legs"): legibility was real but was never the whole story. Two separate,
+  unrelated bugs were still hiding the actual, correctly-sized art:
+  - **hero_composite.png's rows each hold a second, unrelated close-up**
+    (a belt buckle, a shoulder pauldron) sitting BELOW the real garment, at
+    x-coordinates landing inside the very same legs/body column range
+    `detect_frames` already isolates for that part — `detect_frames` only
+    ever splits on COLUMN gaps (see its own doc comment), so it hands back
+    one rect spanning the full row height regardless of what's actually
+    drawn in it, and `_content_rect`'s plain min/max bounding-box scan then
+    welds the garment and the stray fragment into one "frame" with a real
+    gap of transparent rows between them. Measured directly (dumped every
+    row as a real PNG and looked): 6 of legs' 8 rows and 6 of body's 8 rows
+    carried this, only rows 0 and 7 of each were clean. This both inflated
+    `composite_part_scale_for`'s measured content height (shrinking the
+    real garment further than the fraction above alone would predict) and
+    painted a second, unrelated object below it. Fixed by
+    `IllustratedCharacterSprite._primary_content_rect`, which clips a
+    column-matched rect down to just its first contiguous run of non-empty
+    rows before normalizing — the real garment is always the topmost run in
+    every row observed, so "cut at the first full gap" needed no tuned
+    gap-size threshold, just the same single-empty-row-is-a-divider
+    convention `detect_frames` already uses for columns. Pinned by
+    `test_every_outfit_rows_legs_have_no_fragment_stacked_below_a_gap` and
+    its body counterpart, looping all 8 rows of each (a helper asserts no
+    row reads as real content — max alpha ≥50%, chosen because
+    `normalize_frames`' own LANCZOS resize blurs a true 0%-alpha source gap
+    into a soft ramp that bottoms out at ≤39% everywhere it was measured —
+    after a prior row that already read as a real gap).
+  - **Sprite2D centers its TEXTURE on `.position` by default**, which is
+    only the same thing as centering on the visible CONTENT for the old
+    flat, padding-free procedural art. hero_composite.png's parts normalize
+    onto one shared padded canvas with content baseline-anchored near the
+    canvas's bottom (see `CANVAS_SIZE`/`BASELINE_Y`), so most of a part's
+    own padding sits ABOVE its content, not evenly around it — left
+    uncorrected, the actual art renders noticeably LOWER than `.position`
+    alone suggests. For the body this pushed the torso down far enough to
+    visually cover the (by-then correctly wired) legs entirely, and shifted
+    the head/body relationship enough to read as "no neck." Fixed by
+    `CharacterView._composite_content_offset_y`, which back-derives each
+    part's own measured content height from the scale
+    `composite_part_scale_for`/`head_scale_for` already returned and sets
+    `Sprite2D.offset` so the CONTENT's own center — not the padded canvas's
+    — lands on `.position`, restoring the old semantics regardless of how
+    tall a given outfit row's art happens to be. Applied to body/legs/arms
+    and, for consistency, the head (its own smaller canvas has the same
+    padding-asymmetry shape, just less pronounced).
+  - **Incidentally surfaced while dumping every seed for visual proof**: 7
+    of the head's 100 cells (all but one landing in the sheet's own column
+    1 — a systematic pattern, not per-cell noise, though the exact cause
+    wasn't chased down) have `_remove_background_by_flood` erode almost the
+    entire face — opaque fraction ≤8.3% for every one of the 7, against a
+    comfortable margin for every other cell — which `head_scale_for` then
+    divides a target height by, producing a huge, wildly oversized, nearly
+    blank texture. A pre-existing bug, unrelated to the two above, just
+    never previously noticed since the flood-fill's original calibration
+    sweep only sampled 7 of the 100 cells. Not root-caused here (that needs
+    understanding why column 1 specifically is fragile); instead given the
+    same has-X-then-fallback safety net body/legs/arms already lean on for
+    their own per-row gaps: `IllustratedCharacterSprite.has_usable_head`
+    (opaque fraction ≥15%, measured with margin on both sides of the real
+    7-cell/rest-of-grid gap) gates both `CharacterView._apply_head` and the
+    portrait's `_portrait_head_image`, falling back to the procedural head
+    for exactly those 7 cells rather than showing a broken smear.
+  - **A second, opposite flood-fill failure mode surfaced live**: 12 more
+    cells (a contiguous block, rows 1-2 columns 3-8) never had their
+    background removed AT ALL — opaque fraction ~1.0 — reported directly:
+    a dark rectangle where a face should be. Consistent with the flood's
+    own approach: if a cell's face art touches (or crosses) the cell's own
+    edge with no background margin, the border flood has nowhere to start
+    from and leaves the whole square untouched. `has_usable_head` gained a
+    matching upper bound (`HEAD_MAXIMUM_OPAQUE_FRACTION`, 0.97 — a real
+    face's silhouette always leaves at least the corners transparent, so
+    1.0 is only reachable by a flood that found nothing to remove),
+    catching these 12 the same way. **19 of the 100 head cells now fall
+    back to procedural** between both bounds — real, visible, and still not
+    root-caused (that needs either a smarter per-cell flood or fixing the
+    source art's own margins), just no longer broken-looking.
+- ✅ **Body was rendering roughly 2x too wide** (reported live: "proportions
+  are awfully wrong"). `composite_part_scale_for` only ever matched CONTENT
+  HEIGHT to `BODY_SIZE.y`, then applied that one scale to width too — fine
+  for the old flat rectangle (drawn at exactly that box), wrong once
+  hero_composite.png's torso (short sleeves baked into the same silhouette)
+  measured noticeably wider relative to its height than `BODY_SIZE`'s own
+  13:19 aspect assumed. `CharacterView._width_bounded_scale` clamps to
+  whichever of width/height is more constraining — the same "fit inside a
+  box, preserve aspect" rule `normalize_frames` already applies one step up
+  — and `BODY_SIZE.x` was widened 13→26 (measured from the most common
+  outfit row's real content, 19 × 64/47, not eyeballed) so that row still
+  renders at its full intended height rather than being squished by its own
+  new clamp. Scoped to body alone, not every part — legs/arms/head were
+  checked too and have smaller mismatches that a width clamp would "fix" by
+  shrinking their height for no visible gain; revisit per-part if one is
+  ever reported looking wrong the way body was.
+- ✅ **Arms are visible in every movement state now, not swimming only**
+  (reported live: "no hands are visible"). Leftover from when the flat
+  procedural torso rectangle was wide enough to visually stand in for a
+  whole upper body, arms included, and separate Arm sprites existed only
+  for the swimming stroke pose — hero_composite.png's illustrated torso
+  stops at the shoulder, so standing/walking showed no hands at all. Only
+  the STROKE animation itself stays gated to actually swimming.
+- ✅ **Body now draws BEFORE arms**, not after (`.tscn` child order, which is
+  Godot's own paint order) — the wider body above is wide enough to
+  horizontally overlap where `ArmLeft`/`ArmRight` sit, and with arms drawn
+  first, the torso's own sleeve fabric was painting over the very hands
+  the fix above just made visible. Body-then-arms keeps a hand always in
+  front of the torso.
 
 
 ### `/ecotest` — watching a year go by
@@ -551,18 +726,18 @@ project's own terminology.
 |---|---|---|
 | 0 — Baseline & instrumentation | ✅ Done | Stable entity references (`EntityRef`), event type/importance model, entity-history query, cause-chain debugger, `/why`/`/history`/`/emergence` console commands, deterministic save/load round-trip. See below. |
 | 1 — Event & causality substrate | ✅ Done (core); 🚧 unloaded-region replay | `Event`/`EventStore` with automatic bidirectional cause↔consequence linking, deterministic insertion-ordered IDs, importance, query-by-type/window/entity. Retention/pruning by importance is a tested function, not yet wired to actually prune a running store. "Unloaded-region replay" (catch-up simulation feeding the store while a region is unloaded) is explicitly deferred — no emergence-tracked system yet needs catch-up, so there is nothing to replay. |
-| 2 — Memory, beliefs, information | ✅ Done (mechanism); 🚧 auto-propagation | `MemoryRecord`/`Rumor`/`MemoryStore` built per `npc.md`'s "Memory, beliefs, and rumor propagation" spec, tested, wired live. See below. |
+| 2 — Memory, beliefs, information | ✅ Done (mechanism + live auto-propagation) | `MemoryRecord`/`Rumor`/`MemoryStore` built per `npc.md`'s "Memory, beliefs, and rumor propagation" spec, tested, wired live. `EarthChunkManager.step_npc_encounters` now closes the one gap that section itself named — NPCs meeting at real shared landmarks exchange memories automatically. See below. |
 | 3 — Households & property | ✅ Done (household + property); ⬜ inheritance | `Household`/`HouseholdStore` built and wired live: every villager owns the house it lives in. See below. `npc.md`'s lifecycle (aging/reproduction/death) is still designed but not built, so multi-member households and inheritance stay out of scope until it exists. |
 | 4 — Contracts & obligations | ✅ Done (mechanism + live trigger) | `Contract`/`ContractStore` built, tested, wired into events/memory. `EarthChunkManager.step_settlements` now proposes/accepts/activates/fulfills-or-breaches a real trade contract between a settlement's own households every automatic step. See below. |
 | 5 — Local production economy | ✅ Done (mechanism + live trigger) | `Market`/`MarketStore` built, reusing `CraftingRecipeBook`'s existing recipes rather than a parallel schema. `step_settlements` now attempts each household's occupation-grounded recipe (`OccupationProduction`) automatically. See below. |
-| 6 — Institutions | ✅ Done (mechanism + live trigger) | `Institution`/`InstitutionStore`/`InstitutionFormation` built, formation gated by real fulfilled-contract history with proper hysteresis. `step_settlements`' automatic trade now feeds it real history, so institutions form with no manual call. See below. |
+| 6 — Institutions | ✅ Done (formation + dissolution both live-triggered) | `Institution`/`InstitutionStore`/`InstitutionFormation` built, formation gated by real fulfilled-contract history with proper hysteresis; dissolution now reads a real RECENT window (closing the gap that made it structurally unable to ever fire). `step_settlements` drives both automatically. See below. |
 | 7 — Settlement simulation | ✅ Done (food-driven); ⬜ other inputs | `SettlementState`/`EarthChunkManager.step_settlements`, food-only carrying capacity, wired into `World._step_ecology_batch`. Now also the home of Phase 4/5/6's own automatic triggers (see below) — no longer the only phase with a live trigger. |
-| 8 — Infrastructure networks | ⬜ Not started | `building.md`/`transportation.md` cover the player-facing side; this phase is the emergent traffic→trail→road side. |
-| 9 — Towns & cities | ⬜ Not started | Only `docs/emergence/04-settlements-cities-infrastructure.md` covers this so far — no `concept/*.md` overlap yet. |
-| 10 — Dungeons/ruins/history POIs | ⬜ Not started | `exploration.md`'s abandoned-settlement ruins are already designed (including the world-boss-destruction cause added alongside `quests.md`); this phase is the general historical-POI/archaeology mechanism behind it. |
-| 11 — World bosses | ⬜ Not started | `concept/worldbosses.md` already specifies this phase in detail (emergent-stats + one-shot LLM phase-authoring, village-endangerment attractor); not yet built. |
-| 12 — Emergent quests | ⬜ Not started | `concept/quests.md` already specifies this phase in detail (promotion/quorum/representative, village endangerment, supply/demand quests); not yet built. |
-| 13 — Governance & politics | ⬜ Not started | Only `docs/emergence/01-society-and-institutions.md` covers this so far — no `concept/*.md` overlap yet. |
+| 8 — Infrastructure networks | ✅ Done (path tier + live trigger); ⬜ trail/road/crossings | `docs/concept/infrastructure.md` (new), `EarthChunkManager.record_path_worn_if_new`/`record_path_reclaimed`, wired into the ALREADY-live `World._step_path_scarring`. Exit criterion live-verified. See below. |
+| 9 — Towns & cities | ✅ Done (tier + specialization, 3 of 6 dimensions); ⬜ contraction/abandonment | `settlement_tier.gd`, wired into `step_settlements`. Exit criterion live-verified. See below. |
+| 10 — Dungeons/ruins/history POIs | ✅ Done (causal layer, 3 real sources); ⬜ physical generation | New `ruin_formed` entity in `EarthChunkManager`, linked back to its real cause via `EventStore.link_cause`. Exit criterion ("at least three independent causal sources") live-verified. See below. |
+| 11 — World bosses | ✅ Done (mechanism); ⬜ live trigger | `WorldBoss`/`WorldBossStore` wrap the pre-existing, real `world_boss_fitness.gd` promotion math in a causal, `/why`/`/boss`-inspectable entity. See below — no creature currently tracks kills/lifetime age for a live trigger to read from. |
+| 12 — Emergent quests | ✅ Done (production-shortfall projection); ⬜ everything else | `quest.gd` — a real, stateless PROJECTION over household/market/recipe state, never a new entity. See below — safety/social need sources, quorum/promotion, and resolution all still depend on unbuilt systems. |
+| 13 — Governance & politics | ✅ Done (form + legitimacy, changes a real decision); ⬜ policy/taxation/enforcement | New `docs/concept/governance.md`, `governance.gd`. Governance form now drives which institution type a settlement's own automatic formation attempts. Live-verified. See below. |
 | 14 — Regional trade & migration | ⬜ Not started | `world.md`'s "population exists wherever conditions make it viable" is the same philosophy, not yet applied at regional/trade-network scale. |
 | 15 — Technology & cultural diffusion | ⬜ Not started | No `concept/*.md` coverage yet. |
 | 16 — Religion, festivals, legends | ⬜ Not started | `festivals.md` is referenced by `npc.md` as an eventual daily-planner byproduct, but doesn't cover belief-community formation itself. |
@@ -682,6 +857,51 @@ of an unreinforced memory's confidence/salience ("shape only for now" per
 `npc.md`); content distortion, as above; and the player as a first-class
 belief-holder (`npc.md` answers this directly for now: a quest/rumor UI
 queries a nearby NPC's own sufficiently-confident memory instead).
+
+✅ **Auto-propagation's gap is now closed — genuinely more tractable than
+it first looked** (new `npc_encounter.gd`, `EarthChunkManager.
+step_npc_encounters`). `_loaded_villages` (already registering every
+currently-loaded `NpcMarker`, the same list `nearest_npc_near` iterates)
+and `NpcMarker.schedule` + `NpcSchedule.current_entry` (already resolving
+each NPC's real current `location_tag`) meant "which NPCs share a landmark
+right now" needed no new position/scheduling system, exactly as `npc.md`
+itself claimed. `NpcEncounter.group_by_shared_landmark` is the pure
+grouping logic — a real hour and a Dictionary of npc_id→schedule in, a
+Dictionary of landmark→npc_ids (2+ only; a landmark with one npc has
+nobody to meet) out. "home" is explicitly excluded (every NPC's home is a
+different building, so two NPCs both "at home" have not met).
+
+**A real hour-of-day bug avoided, not inherited.** `NpcMarker._current_hour()`
+is a PRIVATE per-marker clock — elapsed real seconds since THAT marker
+happened to spawn, never synced across markers — fine for its own
+walk-toward-target movement, but comparing two different NPCs' schedules
+against each other needs the SAME hour for both. `step_npc_encounters`
+derives `_current_hour_of_day()` from the real shared world clock instead
+(mirroring `NpcMarker.SECONDS_PER_SIMULATED_DAY`'s own pacing, applied to
+`_world_age_seconds`), not each marker's own drifted one.
+
+**Memory selection: each meeting exchanges the pair's single
+most-recently-formed memory, bidirectionally** — "catching up on the
+latest" rather than an exhaustive dump, the obvious first-slice choice
+`npc.md` itself left undecided. A real ordering bug the unit tests caught
+before it went live: a naive same-step double loop let the second half of
+an exchange hand back whatever the first half had JUST told them moments
+earlier in that same step, rather than their own actual news — fixed by
+snapshotting each npc's "most recent memory" once, before any transmission
+in the group runs.
+
+**Live end-to-end verification, zero manual calls:** two real `NpcMarker`
+nodes sharing a landmark on their real schedule, one holding a real
+memory, let the ordinary `_process` loop run with zero manual calls to
+`step_npc_encounters` or `MemoryStore.transmit` — the listener held a real
+transmitted memory by tick 4.
+
+**Left for the next slice, deliberately:** trust/relationship-weighted
+decay is still deferred (`npc_identity.gd` has no relationships yet,
+Phase 3's own scope), so propagation runs at a flat one-hop step
+regardless of who is talking to whom; content distortion remains
+deferred per this section's own earlier note; and the player still isn't
+a first-class belief-holder, unchanged from before.
 
 ✅ **A household owns real property, not a placeholder** (`household.gd`,
 `household_store.gd`, `household_store_persistence.gd`), the first link in
@@ -907,6 +1127,49 @@ explicitly out of scope — the doc's own "Start with guilds, cooperatives,
 militias..." roster names the TYPES this phase supports, not yet the
 behaviors those types would eventually enact.
 
+**Dissolution's own automatic-trigger gap is now closed too — and it
+needed a real fix, not just wiring, because the old metric could
+structurally never produce a dissolution.** `InstitutionFormation.
+shared_contract_count` (what formation reads) is ALL-TIME and
+monotonically non-decreasing: once it crosses `FORMATION_THRESHOLD`, it
+can only ever grow, so a `should_dissolve` check built against that same
+count could only ever be true BEFORE formation, never after — a real
+structural reason this had no live trigger, discovered while investigating
+whether one could simply be added. The fix is a second, deliberately
+different metric: `recent_shared_contract_count(store, party_a, party_b,
+now)` counts only FULFILLED contracts created within a trailing
+`RECENT_WINDOW_SECONDS` (300, tested against the behavior it produces, the
+same "no real economy data to derive a correct number from, but real
+behavior a test can pin" honesty `FORMATION_THRESHOLD` itself already
+states) — genuinely falls back toward zero if a pair stops coordinating,
+because CONTRACTS AGE OUT of the window rather than staying counted
+forever. `should_form` still reads the all-time count unchanged (a strong
+track record is exactly why an institution should form, and should never
+be "forgotten"); only `should_dissolve` reads the windowed one — the real
+distinction between "has a track record" and "is still active,"
+mirroring how a real relationship works. Wired into `step_settlements` as
+a new `_step_settlement_institution_health` step, deliberately placed
+AFTER `_step_settlement_trade` in the per-settlement loop (not before) so
+a pair that traded again THIS step sees its own fresh fulfilled contract
+before the health check runs, rather than being judged on a stale
+pre-trade snapshot.
+
+**A real subtlety the unit tests caught before it became a live bug:** a
+first draft test asserted "an institution that traded once more stays
+active" using a single post-jump trade — and that trade ALONE produced
+exactly one recent contract, which is itself at or below
+`DISSOLUTION_THRESHOLD` (1), so the institution dissolved anyway. The fix
+wasn't the mechanism, it was the test: ongoing prosperity means trading
+EVERY settlement step (every 30s), so a genuinely healthy institution
+accumulates several recent contracts within the 300s window, not just
+one — the corrected test simulates that real repeated cadence instead of
+one isolated trade. Live end-to-end verification, zero manual calls to
+`dissolve_institution`: formed a real institution from manually-fulfilled
+history, gave the settlement no food (so its own automatic trade breaches
+every step, adding nothing new to the window), enabled `/ecotest`, and let
+`step_settlements` run on its own — a real `institution_dissolved` event
+appeared at world-clock tick ~960, safely past the 300-second window.
+
 ✅ **A settlement's growth/decline status is real, automatic, and
 FOOD-driven** (`settlement_state.gd`,
 `EarthChunkManager.step_settlements`/`_known_settlement_ids`/
@@ -985,6 +1248,409 @@ practice once production starts outpacing a starting stock of zero.
 Migration, city thresholds, specialization-from-flows, and dependency
 networks are all later parts of this same doc, explicitly out of scope
 here.
+
+✅ **Worn paths are a real, causally-grounded entity — grown from a
+mechanism that already existed rather than a new one** (new
+`docs/concept/infrastructure.md`, `EarthChunkManager.record_path_worn_if_new`/
+`record_path_reclaimed`), the literal `docs/emergence/04-settlements-
+cities-infrastructure.md` "Infrastructure" exit criterion: "Repeated
+movement upgrades path → trail → road." `PathScarring` (per-tile wear from
+footsteps, decaying over time, rendered as trampled earth once worn) already
+existed and already ran live every session — this phase does not reinvent
+it, it gives the SAME mechanism a real emergence-substrate identity. A path
+needed no new `*Store` the way households/contracts/markets/institutions
+did: `EntityRef.for_kind("path", "<tile_x>_<tile_y>")` is a real, already-
+available deterministic key (the tile itself), and a path's whole lifecycle
+IS its own event history — `/history path:<x>_<y>` already answers "why
+does this dirt path exist" with no new store or `Why.explain_*` function
+needed, the same "the event graph itself is the record" reasoning
+`_known_settlement_ids` already established for settlements.
+
+**Idempotent against a real, subtle reload edge Phase 7's own precedent
+left as an accepted rough edge — this one closes it instead.**
+`record_path_worn_if_new` is guarded on whether this path's MOST RECENT
+persisted event is already a formation, not on the caller's own in-memory
+transition flag (`World._scarred_tiles`, reset on every reload) — so unlike
+`_settlement_status` (Phase 7, explicitly documented as "a reload may
+re-record its current status once more"), a path cannot record a duplicate
+founding just because a session restarted. `record_path_reclaimed` is the
+mirror and deliberately NOT once-only: a path can be worn, reclaimed by
+nature, and worn again over a real session, and each cycle is real,
+distinct history, exactly as `docs/emergence/04`'s "Infrastructure
+degrades" names it.
+
+**This phase's automatic trigger did not need building — it already
+existed.** Unlike Phases 4/5/6 (which needed a NEW periodic coordinator
+built and wired in), `World._step_path_scarring` already runs every real
+session from ordinary player movement; the two new coordinator calls simply
+sit at the exact two points a tile already crosses a real state boundary
+(newly rendered as earth; no longer worn), the same "hook the real existing
+trigger" reasoning Phase 0/1 used for settlement founding via
+`VillageRenderer.spawn_village`.
+
+**Live end-to-end verification, zero manual coordinator calls:** seeded a
+real player-standing tile with enough real wear to cross the threshold
+(the same `PathScarring.step_on` the real per-footstep code path calls),
+then let the ordinary `_process` loop run with **zero manual calls** to
+`record_path_worn_if_new` or `record_path_reclaimed`. A real `path_worn`
+event appeared on its own once the real 2-second refresh interval elapsed;
+fast-forwarding the same real `PathScarring.advance` decay path below
+threshold produced a real `path_reclaimed` event, again with no manual
+coordinator call — `worn=1 reclaimed=1`, both from the real automatic path.
+
+**Left for the next slice, deliberately** (see `docs/concept/
+infrastructure.md`'s own Status list): the trail/road tiers above today's
+single "worn" threshold, crossings (ford/ferry/bridge — no "crossing point"
+concept exists yet), traffic heatmaps, inter-settlement routes, market
+nodes, and infrastructure condition/maintenance feeding back into Phase 5's
+real market prices are all explicitly out of scope for this slice.
+Creature-driven wear is out of scope for the same documented reason
+`PebbleDispersion` already is (an O(creatures × nearby tiles) scan nothing
+yet needs enough to justify).
+
+✅ **A settlement's town/city tier and specialization are both derived from
+real flows, never a stored tag** (`settlement_tier.gd`), the literal
+`docs/emergence/04-settlements-cities-infrastructure.md` "City threshold"/
+"Specialization" exit criteria: "Use multiple dimensions rather than
+population alone" and "Infer specialization from persistent production and
+trade... Do not store specialization as a static content tag when it can be
+derived from flows."
+
+**Deliberately narrow, same honesty as every prior phase.** Of the six
+named tier dimensions (population density, economic specialization,
+institutional complexity, infrastructure density, trade connectivity,
+administrative capacity), only THREE have real data behind them today:
+population (household count, Phase 3/7), economic specialization
+(production history, Phase 5), and institutional complexity (active
+institution count, Phase 6) — read straight from `_households_in_settlement`,
+`_production_counts_for_settlement`, and `_active_institution_count_for`,
+the exact same data `_step_settlement_production`/`_step_settlement_trade`
+already produce, nothing new tracked. Infrastructure density (Phase 8's
+paths), trade connectivity (cross-SETTLEMENT trade — Phase 4's automatic
+trigger is intra-settlement only), and administrative capacity (no
+governance/authority concept exists) are explicitly deferred rather than
+guessed at.
+
+**Population alone is provably never enough — proven through the real
+mechanism, not merely asserted.** `tier_for` requires households AND active
+institutions AND production diversity to all cross together; a settlement
+with high population but no food breaches every trade (Phase 4), so no
+institution ever forms (Phase 6) and nothing is ever produced (Phase 5) —
+it genuinely cannot reach TOWN no matter how many households it has, the
+same causal chain the food-driven economy already enforces elsewhere in
+this substrate, not a special case written just for tier classification.
+
+**Specialization is exactly two labels today, both real, neither
+invented.** `_SPECIALIZATION_BY_RECIPE` maps only the two recipes
+`OccupationProduction` (Phase 5) actually grounds — `cooked_meat` →
+"hunting center", `stone_pickaxe` → "manufacturing town" — picked by
+whichever recipe a settlement has produced most (ties break toward the
+alphabetically-first recipe id, deterministic rather than depending on
+Dictionary iteration order). `Why.explain_settlement` shows tier
+unconditionally and specialization only once real production actually
+grounds one, via two new optional trailing parameters that keep every
+existing caller working unchanged.
+
+**Live end-to-end verification, zero manual coordinator calls:** founded a
+real settlement with 3 households (one a real hunter) and real `meat`
+stock, enabled `/ecotest`, and let the ordinary `_process` loop run with
+**zero manual calls** to `step_settlements`, `attempt_production`,
+`propose_contract`, `attempt_institution_formation`, or anything
+tier-specific. Within 5 real engine frames: `became_town=1 specialized=1`
+— the full population→production→trade→institution→tier chain, spanning
+Phases 3 through 9, firing entirely on its own.
+
+**Left for the next slice, deliberately, and named directly in the exit
+criterion itself:** "contraction and abandonment." Contraction is already
+reasonably covered by Phase 7's existing DECLINING status — a settlement
+under real food pressure IS contracting pressure. True abandonment
+(household count reaching zero on a settlement that once had population)
+is NOT built: `SettlementState.status_for(0, 0)` already has deliberate,
+tested, DIFFERENT semantics — "an empty settlement with no food and no
+households is not declining, there is nothing there yet to be under
+pressure" (Phase 7's own test) — meaning household_count==0 already means
+"never grew" for a settlement snapshot with no memory of its own past size,
+and overloading it to also mean "lost everyone" would conflict with that
+existing, deliberate behavior rather than extend it. Distinguishing the two
+needs real history comparison (was this settlement's household count ever
+above zero before now), which nothing needs yet since no migration/death
+mechanism exists to ever actually shrink a settlement's real population —
+the same "no real trigger to hook into" reasoning that gated every other
+deferred piece across this whole 9-phase run. Tier/specialization thresholds
+are tested against the classification they produce, not any specific
+"correct" population, the same honesty `InstitutionFormation.
+FORMATION_THRESHOLD`'s own doc comment states.
+
+✅ **A ruin is a real entity with a real, stored cause — never invented,
+never a bare label** (new `EarthChunkManager.record_ruin_from_*` trio,
+`docs/concept/exploration.md`'s new Status section), the literal
+`docs/emergence/05-dungeons-bosses-exploration-content.md` "Ruins" exit
+language: "A ruin is the physical state of a formerly functional place.
+Creation causes must be stored." No new `*Store` — same as Phase 8's paths,
+a ruin's whole lifecycle IS its own event history
+(`EntityRef.for_kind("ruin", ...)`), and `EventStore.link_cause` (Phase 0/1's
+own bidirectional cause↔consequence machinery, unused by any coordinator
+until now) wires the ruin's `ruin_formed` event straight back to whatever
+real event actually caused it — `/why ruin:<key>` traces to a genuine
+antecedent, not a description with nothing behind it.
+
+**Exactly three independent causal sources, matching the exit criterion
+word for word** — mapped to `docs/emergence/05`'s own named "Dungeon
+sources" categories rather than invented to hit the number three:
+
+- **"Historical catastrophe"** ← a settlement's real, automatic decline
+  (Phase 7, food-driven) — wired directly into `step_settlements`'s
+  existing status-change block.
+- **"Ecological transformation... overgrown ruins"** ← nature reclaiming a
+  worn path (Phase 8) — the literal named phenomenon, not an analogy
+  stretched to fit. Wired into `record_path_reclaimed`.
+- **"Social transformation... abandoned prisons"** ← a dissolved
+  institution's old headquarters (Phase 6). Wired into
+  `dissolve_institution`.
+
+Each source builds the ruin's key from ITS OWN real identifier, prefixed by
+source kind so the same raw location number can never collide across
+different source types (a settlement and a path could both be keyed "5_5"
+otherwise) — proven directly by a test that forms all three from identical
+raw numbers and gets three genuinely independent ruins. Institution ids
+needed a small real correction along the way: they are NOT `EntityRef`
+"kind:key" strings the way household/settlement/path ids are —
+`InstitutionStore.form`'s own `"inst_<ordinal>_<type>"` shape has no colon
+— so that source uses the institution id verbatim rather than running it
+through `EntityRef.key_of`, which would have silently returned `""`
+against it.
+
+**Two of the three ride on already-automatic triggers; the third's own
+gap is real, pre-existing, and now understood more precisely than
+before.** Settlement decline and path reclamation were already firing
+automatically before this phase touched them (Phase 7/8's own triggers) —
+a ruin now forms as a genuine side effect of each, with zero new
+scheduling. Institution dissolution is different: `dissolve_institution`
+itself still has no automatic caller (Phase 6's own pre-existing,
+documented gap) — and investigating why while building this phase surfaced
+a real, previously-unstated reason it *can't* be trivially added the way
+Phase 4/5/6's own gaps were closed: `InstitutionFormation.
+shared_contract_count` counts ALL-TIME fulfilled contracts between a pair,
+which only ever grows, never shrinks — so `should_dissolve` (checking that
+count against `DISSOLUTION_THRESHOLD`) can only ever be true BEFORE an
+institution forms, never after. A periodic automatic dissolution check
+would therefore be a real no-op today, not a genuine mechanism — correctly
+left unbuilt rather than added just to look complete.
+
+**Live end-to-end verification, zero manual coordinator calls:** a real
+settlement declining (Phase 7's own automatic trigger) formed a real ruin
+on its own, correctly cause-linked back to the exact `settlement_declining`
+event that triggered it — proven by walking `EventStore.causes_of` on the
+ruin's own event and checking its id matches. A real path reclaimed by
+nature (Phase 8's own automatic trigger) formed a second, independent ruin
+the same way, again with no manual call to any `record_ruin_from_*`
+coordinator anywhere in either check.
+
+**Left for the next slice, deliberately, and named directly in
+`docs/concept/exploration.md`'s new Status section:** physical ruin
+structures/rendering in the actual game world (this phase is the causal/
+data layer only — no building, monster lair, or ancient grove is generated
+or drawn from any of this yet), occupants, archaeology/evidence beyond the
+causal link itself, and the whole materials-gated puzzle-obstacle
+vocabulary `exploration.md` already designs but nothing here builds. World
+boss lairs and ancient-grove POIs specifically wait on Phase 11 (world
+bosses) and a confirmed ancient-tree mechanic, neither of which exist yet.
+
+✅ **World bosses aren't a new mechanism — the real one already existed**
+(`world_boss.gd`, `world_boss_store.gd`, `world_boss_store_persistence.gd`),
+discovered mid-phase rather than built from scratch: `src/gameplay/
+world_boss_fitness.gd` already implements the exact math `docs/concept/
+worldbosses.md` specifies (`fitness_score(level, kills, age_seconds)`,
+per-species thresholds, one-shot `PhaseGenerator`/`FakePhaseGenerator`
+authoring) — fully real, fully tested (20 pre-existing tests), and simply
+never called from anywhere in live gameplay. `worldbosses.md`'s own "Open
+questions" section still said the fitness-threshold math "needs numeric
+design" even though it had already been resolved elsewhere in the codebase
+— a real doc/code divergence, now corrected (see the doc's new Status
+section) per `CLAUDE.md`'s cross-alignment rule.
+
+**This phase's actual job, once that was found, was narrow: give the
+already-real mechanism a causal identity, without touching its math.**
+`WorldBoss`/`WorldBossStore` mirror `Institution`/`InstitutionStore`'s
+exact shape (active/defeated, persisted, history kept after defeat, same
+`"boss_<ordinal>_<species>"` id convention). `EarthChunkManager.
+attempt_world_boss_promotion` wraps `WorldBossFitness.attempt_promotion`
+and records a real `world_boss_promoted` event in the same call — the
+literal `docs/emergence/05-dungeons-bosses-exploration-content.md` "Boss
+emergence... must permanently affect the world" language made concrete,
+`/why`/`/boss`-inspectable rather than a silent Dictionary nobody sees.
+`defeat_world_boss` does the same for "Killing a boss emits a major
+historical event." Both guard the same way every other coordinator here
+does: `active_boss_for` blocks a duplicate promotion (a defeated boss does
+NOT block re-promotion, the same "dissolved doesn't block re-forming"
+reasoning `InstitutionStore.active_institution_for` already establishes),
+and the (potentially costly) phase generator is never invoked for an
+ineligible individual — `WorldBossFitness`'s own guarantee, still true
+through the coordinator, tested directly.
+
+**Left for the next slice, honestly — this is Phase 4's own original gap,
+not a new one:** nothing in live gameplay calls `attempt_world_boss_
+promotion` yet, because nothing tracks the two inputs it actually needs.
+`CreatureInfo.level` is real but FIXED at spawn from the creature's own
+seed — not something that grows through play — and no creature anywhere
+accumulates a kill count or a lifetime-age-in-seconds value. Building that
+tracking is real, separate creature/combat-system work, not something the
+emergence substrate alone should invent — the mechanism is complete,
+tested, and ready to be called the instant that tracking exists, the exact
+position Phase 4 (contracts) was in before Phase 5/6 gave it real data to
+work from. Territory effects, era-gating, village endangerment (both
+depend on systems that don't exist yet either — `quests.md`'s own
+endangerment mechanism, the era system), taming, and the physics-spectacle
+combat layer are all untouched by this slice; `worldbosses.md`'s new
+Status section names each explicitly rather than leaving them implicit.
+
+**Investigated concretely during a later gap-closing pass (not yet
+implemented):** confirmed the shape of the gap rather than closed it.
+`CreatureMarker._seconds_since_birth` IS a real, already-incrementing
+per-creature age value — but it is plain in-memory scene-node state, never
+persisted the way this substrate's own stores are, so it almost certainly
+resets on chunk unload/reload rather than surviving as a genuine lifetime
+age. No kill attribution exists anywhere in the combat code (neither
+player-kills-creature nor creature-on-creature predation records who
+killed what). Closing this for real needs a decision on whether age must
+survive unload or a fresh-per-load approximation is acceptable, plus real
+kill bookkeeping added at combat-resolution time — genuine, separate
+creature/combat-system work touching live simulation code under active
+concurrent development, not a quick wire-up. Deferred pending an explicit
+go-ahead for that scope.
+
+✅ **A quest is a real, stateless projection — never new authoritative
+content, by construction, not just by claim** (new `quest.gd`,
+`EarthChunkManager.production_shortfall_quests_for_settlement`), the
+literal `docs/emergence/07-implementation-roadmap.md` Phase 12 exit
+language: "Refactor quests into projections of household, institution,
+settlement, ecology, infrastructure, history, and economy problems.
+Disabling quests must not remove the underlying problem." Deliberately NOT
+a `Store` — every prior phase's entity (Household/Contract/Market/
+Institution/WorldBoss) persisted real state; a quest here persists
+nothing and records no event, because "disabling it must not remove the
+underlying problem" means a quest can never BE the problem. Deleting
+`quest.gd` entirely changes nothing about whether a settlement's market is
+actually short on stock — only the player-facing framing of that real
+shortage disappears. This also makes a quest incapable of going stale the
+way a recorded "quest offered" event could: it is recomputed fresh every
+call, so the moment a shortage resolves, the SAME query already reflects
+that, live-verified directly (`test_production_shortfall_quests_disappear_
+once_the_market_is_stocked`).
+
+**Deliberately narrow, same discipline as every phase before it.** Of
+`docs/concept/quests.md`'s three need sources (safety, production,
+social), only Production is grounded in real, already-tracked data —
+Phase 5's `Market`/`CraftingRecipeBook`, the exact same state
+`_step_settlement_production`/`production_counts_for_settlement` already
+read. Safety needs Phase 11's world-boss threat detection (no live
+trigger) and NPC threat-memory-crossing thresholds (not built); Social is
+explicitly deferred by `quests.md` itself ("lightest touch... deferred
+detailed design"). Quorum/promotion/settlement-level merging and
+representative selection (needs `factions.md`'s reputation score, not
+built) and resolution/consequences (needs a currency-to-NPC transaction,
+which does not exist — Phase 4/5's own documented gap) are both
+explicitly out of scope too: this slice is discovery only — proving a real
+quest can be DERIVED from real state at all, not the full offer/accept/
+resolve loop `quests.md` eventually specifies.
+
+**Named the specific shortfall, not just that one exists.** A quest names
+which item(s) a household's blocked recipe is missing and by how much
+(`Quest._missing_inputs`, reading the same `CraftingRecipeBook.
+recipe_inputs`/`Market.stock_of` Phase 5's own `attempt_production`
+already uses) — "production failed" (Phase 5's own event) tells a player
+nothing actionable; "household:1 needs 3 rock for stone_pickaxe" does.
+
+**No headless live-check this phase, deliberately — and here is exactly
+why, rather than a silent skip.** Every prior phase's live-check proved
+either an automatic TIMING trigger (does this fire on its own, on a real
+clock) or a real SCENE-TREE dependency (does this correctly read live
+`NpcMarker` state). `production_shortfall_quests_for_settlement` has
+neither: it is a pure function of `EventStore`/`HouseholdStore`/
+`MarketStore` state, called on demand, with zero scene-tree involvement —
+and `record_settlement_founded_if_new` (the coordinator-level tests' own
+setup call) IS the exact same function the real `VillageRenderer` spawn
+path calls, so a synthetic test settlement and a real rendered one produce
+identical underlying state. A separate live-check would exercise the
+identical code path a second time in a different process, adding no real
+confidence beyond what `test_earth_chunk_manager.gd`'s own coordinator
+tests already provide.
+
+**Left for the next slice, deliberately, and named directly above rather
+than left implicit:** safety/social need sources, quorum/promotion/
+representative selection, resolution (accept/deliver/reward), village
+endangerment, and settlement growth/migration are all untouched by this
+slice — `quests.md`'s own "Current implementation status" section now
+names each explicitly.
+
+✅ **Governance form and legitimacy are both real, derived classifications
+— and governance form genuinely changes a real decision, not just a
+label** (new `docs/concept/governance.md`, `governance.gd`), the literal
+`docs/emergence/07-implementation-roadmap.md` Phase 13 exit language:
+"Governance changes actual decisions and resource flows." No concept doc
+covered this mechanic at all before this phase — scaffolded first per
+`CLAUDE.md`, grounded in `docs/emergence/01-society-and-institutions.md`'s
+own "Governance"/"Legitimacy" sections, before any code was written.
+
+**Only the governance forms and legitimacy inputs with a real, already-
+tracked signal behind them are grounded — everything else named in
+`docs/emergence/01`'s own lists stays unmapped rather than guessed at.**
+Of eight named governance forms, three have a real institution TYPE
+(Phase 6) behind them: `militia`→military rule, `merchant_company`/
+`guild`→merchant oligarchy, `cooperative`→cooperative administration.
+`criminal_group` is deliberately left unmapped — a purely criminal
+presence has coercive power, not legitimate authority, per
+`docs/emergence/01`'s own invariant ("No authority without legitimacy or
+coercion"), and this slice does not yet model coercion-based rule
+separately. Of legitimacy's eight named inputs, only food security has
+real data (`SettlementState`, Phase 7) — `Governance.legitimacy_for`
+reads its GROWING/STABLE/DECLINING status directly, the same signal
+through a different lens, not a second number to keep in sync.
+
+**The real decision it changes**: `EarthChunkManager._step_settlement_
+trade`'s own automatic institution-formation call, previously a hardcoded
+`"cooperative"` since Phase 4/6 first wired it, now reads
+`Governance.institution_type_for_new_formation(governance_form)` instead
+— a settlement with a real military-rule history attempts a militia for
+its next automatic formation, a merchant-oligarchy one attempts a
+merchant_company. A settlement with no governance history yet still
+defaults to `"cooperative"`, unchanged from every prior test's own
+expectations — confirmed by re-running Phase 4/6/9's own existing
+regression suite, all still green with zero changes needed to a single
+existing test.
+
+**Governance form is read from a settlement's WHOLE real institutional
+history, active or dissolved — "historical precedent" made literal.** A
+settlement's political character persists through a specific
+institution's failure: `_institution_type_counts_for` counts every
+distinct institution (deduped by id) any of the settlement's households
+have EVER belonged to, `institutions_for`'s own "active or dissolved"
+shape (Phase 6), not just its currently-active ones.
+
+**Live end-to-end verification, zero manual calls for the pair being
+tested:** a settlement with a real military-rule history (a militia
+formed between one pair of its households) had its automatic formation
+for a genuinely DIFFERENT pair attempt a militia too — proven by running
+the ordinary `_process`/`step_settlements` loop for real elapsed time,
+zero manual calls to `attempt_institution_formation` for that second
+pair. One real timing lesson from this check, worth recording: an initial
+attempt using a large `/ecotest` acceleration failed, because it advanced
+the world clock by hundreds of simulated seconds per real frame — racing
+PAST `InstitutionFormation.RECENT_WINDOW_SECONDS` (300, Phase 6's own
+recent gap-closing fix) faster than fulfilled contracts could accumulate
+within it, so nothing ever stayed "recent" long enough to reach
+`FORMATION_THRESHOLD`. Re-run at normal real-time pace (no acceleration)
+succeeded cleanly: `elapsed=90.1 found=true type=militia`, exactly the 3
+real `SETTLEMENT_STEP_INTERVAL`s (30s each) the mechanism was always
+expected to need.
+
+**Left for the next slice, deliberately, and named in `governance.md`'s
+own Status section:** policies, taxation, and enforcement (taxation
+specifically needs a real currency/wealth-flow system that doesn't exist
+yet); legitimacy's other seven inputs; council/hereditary/clan/
+priesthood/representative governance forms (no real signal to derive them
+from); and crime/religion (`docs/emergence/01`'s own adjacent sections,
+unbuilt and unrelated to this slice).
 
 ---
 
@@ -1147,9 +1813,9 @@ No marriage/reproduction/child-rearing system exists. All ⬜ Not started:
 
 No skill/passive system is wired into live gameplay yet, but a tested pure-logic foundation now exists:
 
-- **Archetype Passive Skill Web** (large) — 🚧 Partial — `src/gameplay/skill_tree.gd` now wired to a real spend UI (`scenes/skill_tree_window.gd`, toggle K) fed by the XP/level system (see Progression / `concept/progression.md`); still a flat node list, no web/graph layout or archetype-specific branches yet.
-- **Small Stat Nodes** (small) — ✅ Done (basic) — `skill_tree.gd` nodes are allocated in the skill-tree window and applied live to player stats (`Player.allocate_skill` → max-health/attack bonuses); stamina-regen bonus is tracked but not yet fed to the meter.
-- **Keystone Passives** (medium) — ✅ Done (basic) — `keystone_passive.gd` keystones are unlockable in the window once their minimum-node gate is met and points are paid (`Player.unlock_keystone`), applying their bonus live.
+- **Archetype Passive Skill Web** (large) — 🚧 Partial — `src/gameplay/skill_tree.gd` now wired to a real spend UI (`scenes/skill_tree_window.gd`, toggle L) fed by the XP/level system (see Progression / `concept/progression.md`); still a flat node list, no web/graph layout, though it now has more than one thematic branch (vitality/endurance/strength plus a new Naturalist branch, see below) rather than archetype-specific ones.
+- **Small Stat Nodes** (small) — ✅ Done (basic) — `skill_tree.gd` nodes are allocated in the skill-tree window and applied live to player stats (`Player.allocate_skill` → max-health/attack bonuses); stamina-regen bonus is tracked but not yet fed to the meter. Includes a new Naturalist pair (`naturalist_1`/`naturalist_2`, `stamina_regen`) added to gate the `land_sense` keystone below (docs/concept/progression.md "Ecological literacy").
+- **Keystone Passives** (medium) — ✅ Done (basic) — `keystone_passive.gd` keystones are unlockable in the window once their minimum-node gate is met and points are paid (`Player.unlock_keystone`), applying their bonus live. A new keystone, `land_sense`, deliberately breaks that "applies a stat bonus" pattern: empty `stat_name`/zero `bonus_amount` (a sentinel, not a bug — see the dict's own doc comment) instead of a number going up. `SkillTreeWindow._keystone_label` special-cases it to show a real description instead of a "+0.0" line, and once unlocked `World._update_land_sense_label` shows a small always-on HUD readout of the player's real, live `EarthChunkManager.land_health_near`/`vegetation_density_near` at their own position — the same numbers `VegetationGrowthModel.effective_capacity`/`step_land_health` already run the simulation on. See Progression / `concept/progression.md`'s "Ecological literacy" section for the full mechanism and its known gaps.
 - **Soft Cross-Archetype Pathing Gate** (medium) — ⬜ Not started — no cross-archetype gating logic exists, only same-archetype node-count gating.
 - **DNA Resonance / Class Resonance** (large)
 - **Web-to-Domain Unlock Hooks** (medium)
@@ -1157,19 +1823,50 @@ No skill/passive system is wired into live gameplay yet, but a tested pure-logic
 - **DNA-Flavored Shared Node Variants** (large)
 - **Respec System (undecided)** (small)
 
+### Labor Skills (`concept/labor_skills.md`)
+
+New design doc this pass — a second, separate use-based mastery axis
+alongside the PoE-style web above (Woodcutting/Mining/Fishing/Foraging/
+Farming/Herbalism/Cooking/Smithing/Construction/Animal Handling, leveled by
+doing the corresponding action, shared code path for players and NPCs).
+Nothing in this section is implemented yet.
+
+- **Shared `Skill` resource** (medium) — ⬜ Not started — pure XP/level/tier
+  logic mirroring `ExperienceTrack`, but independent per skill and per actor.
+- **Per-action XP hooks** (large) — ⬜ Not started — value-weighted XP across
+  all ten roster skills (chopping, mining, fishing, foraging, farming,
+  herbalism, cooking, smithing, construction, animal handling).
+- **Tier-unlocked passive bonuses** (medium) — ⬜ Not started — gathering
+  yield/speed and production ceiling-realization, unlocked automatically per
+  tier, no spend UI needed (the mechanical distinction from the PoE web).
+- **Crafter skill quality multiplier** (medium) — ⬜ Not started — see
+  Crafting section below; same feature, cross-listed.
+- **NPC skill accrual from occupation production** (medium) — ⬜ Not started
+  — wiring `occupation_production.gd`'s existing automatic recipe loop to
+  also grant the producing NPC their own Skill XP.
+- **Auction house** (large) — ⬜ Not started — see Economy section below.
+
 ### Crafting (`concept/crafting.md`)
 
 A first crafting loop is now real and wired into live gameplay, though shallow:
 
 - **Base gather-craft-build loop** (medium) — ✅ Done (basic) — `src/gameplay/crafting_recipe_book.gd` defines recipes (inputs → output), wired into `Player.craft()`; there's now a real **crafting UI** (`scenes/crafting_window.gd`, toggle C) — plus the `/craft` console command. Overhauled from a single narrow, right-anchored list of thin text rows into a **centered, card-based catalog** (`UiTheme`-styled, matching the inventory/settings windows rather than reading as a leftover sidebar): recipes are grouped into sections by their output's item kind (Weapons/Tools/Armor/Structures/Cooking/Materials) inside a scrolling, fixed-size window rather than one that grows unbounded with the recipe count; each card shows a real item **thumbnail**, the output name (+ a `x2`-style count badge when a recipe yields more than one), and every required material as its own icon + live **have/need** count, colored green when covered and red when short, so what's blocking a craft is legible at a glance instead of buried in a text string. Unaffordable cards dim and lose their hover/click affordance; affordable ones highlight on hover with a pointing-hand cursor. `Player.craft()` produces the output into the inventory (and, if the inventory is full and consuming inputs didn't free a slot, drops the crafted item at the player's feet rather than silently losing it). The gather side is real too: chop trees (wood+sticks), smash boulders (rock), knap rock-on-rock (sharp shards), harvest tall grass (fibre), and mine ore-bearing boulders with a pickaxe (ore+stone). **Smelting/metalworking** now exists (`src/gameplay/smelting.gd`, tested, see `concept/smelting.md`): ore + coal smelted at a **heat source** (a carried campfire or crafted **furnace**) → iron/copper ingots, which forge a full **iron armor set** that out-protects leather — `Player.craft` heat-gates the smelt recipes exactly like cooking. No skill-gating or placed stations yet.
 - **Crafting Stations** (small) — 🚧 Partial — `src/gameplay/crafting_station.gd` (tier-gated `can_craft_at`), tested but not wired — `/craft` currently works anywhere, no station placement/proximity check.
-- **Skill-gated crafting progression** (medium)
+- **Skill-gated crafting progression** (medium) — ⬜ Not started — design landed in
+  [concept/labor_skills.md](concept/labor_skills.md) (a use-based Smithing/
+  Woodcutting/Mining/... mastery track, separate from the PoE-style
+  `concept/skills.md` web); no `Skill` resource or per-action XP hook exists
+  in code yet.
 - **Blueprint DSL** (large)
 - **Base Item Templates** (trivial) — ✅ Done — `item.gd`/`item_catalog.gd` (now also includes torch/campfire/cooked_meat).
 - **Material Inputs** (small) — ✅ Done — `crafting_recipe_book.gd` recipes consume a dictionary of item-id→count inputs.
 - **Modifier Slots** (medium)
 - **Deterministic crafting resolution** (small) — ✅ Done — no RNG in `crafting_recipe_book.gd`; a craft either has enough inputs or it doesn't.
 - **Material quality feed from creature rarity** (medium)
+- **Crafter skill quality multiplier** (medium) — ⬜ Not started — design landed in
+  [concept/labor_skills.md](concept/labor_skills.md#skill-driven-crafting-quality-closes-smeltingmds-open-todo)
+  (`final_item_stat = base_stat * ceiling_realization(crafter_skill_level)`,
+  shared by players and NPCs); not wired into `crafting_recipe_book.gd` yet.
 - **Dual item-sourcing tracks (crafted vs. looted)** (large) — 🚧 Partial — both tracks now exist (loot drops + `/craft`) but aren't unified under one design (no shared rarity/affix system yet).
 - **Station-tier gating of blueprint complexity** (medium) — 🚧 Partial — `crafting_station.gd`'s tier check exists; not wired to `/craft`.
 
@@ -1319,7 +2016,7 @@ A first real currency now exists and is wired into live gameplay; everything els
 
 - **Regular Currency System** (medium) — 🚧 Partial — `src/gameplay/wallet.gd` (`Wallet`): a real gold balance on the player, shown in the HUD (`world.gd`'s `_wallet_label`) and adjustable via the dev console's `/gold <amount>` command, now also spendable at a village merchant (see below). Still no way to actually earn gold through play (no quest rewards, no selling anything) — a functioning ledger with a real sink now, but no faucet beyond the debug command.
 - **Premium Currency System** (large) — ⬜ Not started
-- **Market (NPC & Player Selling)** (large) — 🚧 Partial — `src/gameplay/shop.gd`: buying from a village merchant NPC now works (see NPC section's "Basic Merchant Shopping"), spending the real `Wallet` above. Fixed shared catalog/pricing (not per-NPC), no shop browsing UI, and no selling the player's own goods yet.
+- **Market (NPC & Player Selling)** (large) — 🚧 Partial — `src/gameplay/shop.gd`: buying from a village merchant NPC now works (see NPC section's "Basic Merchant Shopping"), spending the real `Wallet` above. Fixed shared catalog/pricing (not per-NPC), no shop browsing UI, and no selling the player's own goods yet. An **auction house** extending the newer `src/emergence/market.gd` (per-settlement supply/demand pricing) with crafter identity/skill-tier-aware listings is designed in [concept/labor_skills.md](concept/labor_skills.md#the-auction-house) — forward-compatible with real player listings once multiplayer ships — but not implemented; `shop.gd` remains the only live buying path today.
 - **Crafting System (external)** (large)
 - **Resource Gathering System (external)** (medium)
 - **Taming/Breeding System (external)** (huge)
@@ -1743,7 +2440,8 @@ festival wiring, no hiring/wages yet.
 - **Child-NPC Trust Exception** (small) — ⬜ Not started
 - **Faction/Settlement Reputation Aggregation** (medium) — ⬜ Not started
 - **Emergent Village Festivals** (large) — ⬜ Not started
-- **Basic Merchant Shopping** (medium) — ✅ Done (basic) — `src/gameplay/shop.gd`: a fixed gold-priced catalog (tool/weapon/armor/food), spent from the player's existing (previously unwired) `Wallet`. `EarthChunkManager.has_merchant_near` finds a nearby villager with occupation "merchant"; `Player._shop_step` (trade key, default T) buys the first affordable catalog item, cycling through the list on repeat presses so it doesn't just rebuy the same thing. No shop UI browsing, no selling the player's own goods, no per-NPC stock/pricing -- open follow-ups.
+- **Basic Merchant Shopping** (medium) — ✅ Done (basic) — `src/gameplay/shop.gd`: a fixed gold-priced catalog (tool/weapon/armor/food), spent from the player's existing (previously unwired) `Wallet`. `EarthChunkManager.has_merchant_near` finds a nearby villager with occupation "merchant"; `Player._shop_step` (trade key, default T) buys the first affordable catalog item, cycling through the list on repeat presses so it doesn't just rebuy the same thing. No shop UI browsing, no per-NPC stock/pricing -- open follow-ups. **Selling the player's own goods now exists, but through a different path**: when no merchant is near, the trade key falls back to `Player.sell_food_to_village`, a real player-initiated sale into a nearby non-merchant villager's own `VillageMarket` (see docs/concept/progression.md "Ecological literacy") -- distinct from this shop catalog (no gold changes hands; the reward is XP for feeding a genuinely hungry village, read from `VillageMarket.can_buy_meal()`'s own real state). Selling INTO this fixed shop catalog itself is still not built.
+- **Peak-timed direct-from-the-tree harvest & village-feeding XP** (small) — ✅ Done — docs/concept/progression.md "Ecological literacy": see Skills section above (`land_sense` keystone) and Progression's own status list for the full mechanism.
 - **NPC Needs / Local Production Economy** (large) — ✅ Done — implements npc.md's "Needs and the local production economy" section in full: real per-NPC hunger (`src/world/npc_needs.gd`, mirrors `creature_needs.gd`'s shape -- hash-seeded stagger, `HUNGER_RATE_PER_SECOND=0.02` matching `CreatureNeeds`, `is_hungry()`/`feed()` -- deliberately hunger-only, no thirst, per the spec's own scope); real production (`src/world/npc_production.gd`) where farmer/hunter/fisher read the SAME weather-tied numbers the wild ecosystem already runs on via 2 new `EarthChunkManager` accessors mirroring `fish_population_near`'s exact existing pattern (`vegetation_density_near` for farmer, `herbivore_population_near` for hunter, the pre-existing `fish_population_near` reused as-is for fisher) -- a real drought (lower moisture, same biome/temperature) measured 93.8% lower farmer AND hunter yield in a real probe (`PRODUCTION_RATE_PER_SECOND=0.05`, a shared fraction-of-standing-resource rate, tested behaviorally rather than pinned to a magnitude, matching this codebase's existing fraction-per-time-unit tuned-rate convention); a real per-settlement `VillageMarket` (`src/world/village_market.gd`, one instance per `VillageRenderer.spawn_village` call, shared by every villager of that settlement) holding real stock keyed by real `ItemCatalog` ids (farmer→"fruit", hunter→"meat", fisher→"fish" -- no invented item ids) at a tested `VILLAGE_LOCAL_FOOD_PRICE=2` (below `shop.gd`'s `cooked_meat` price of 4, a deliberately distinct informal villager-to-villager price, NOT the player-facing global catalog); `src/world/npc_economy.gd` ties needs+`Wallet`+production+market together per NPC and is driven once per frame from `NpcMarker._process` (`NpcMarker.setup_economy`, wired by `VillageRenderer._build_npc`). **Judgment calls made and documented in-code**: (1) a producer self-feeds for FREE from their own currently-active production (no market/gold transaction) rather than buying from the market like a non-producer -- gated on genuinely nonzero real yield right now, so total ecological collapse can still starve a producer too, not just everyone else; (2) gold is a real two-faucet flow (`docs/concept/economy.md`), not a closed loop -- a producer earns `YIELD_TO_GOLD_RATE=1` gold per unit the instant it's gathered (independent of whether it's ever bought), a buyer spends `VILLAGE_LOCAL_FOOD_PRICE=2`, and the two rates deliberately differ (a real wholesale-vs-retail margin) rather than round-tripping the same number; (3) the market is NPC-only -- npc.md's own framing never extends it to the player, so the player still only uses `shop.gd`'s existing global catalog; (4) nurse's `FakeNpcPlanner` work tag resolves to the shared "well" landmark (a village-care role tending the square) rather than a new dedicated building; (5) settlement occupation balance is left to chance, not guaranteed (see Procedural NPC Population Generation above). **Real probe** (`godot --headless -s <standalone script>`, not GUT, run against the actual production code -- `EcosystemSimulation`/`NpcProduction`/`NpcEconomy`/`VillageMarket`, not hand-traced): a real settlement (chunk (30,1) in one run) with a real hunter and real blacksmith -- the hunter gathered 34 real "meat" units and earned 34 real gold over a simulated 300-second workday reading a real `herbivore_population` of 2.304 in a lush region; the blacksmith, forced hungry with 50 gold, spent 2 gold buying 1 unit from that same real stock and was fed (hunger 1.0→0.0, stock 34→33); a stranded merchant with an empty market and no gold stayed genuinely hungry (hunger→1.0, no crash, no free pass) after 100 simulated seconds. **Known gaps**: `VillageMarket` is freshly created per `spawn_village` call, so a chunk reload resets village stock to empty -- the same "regenerates identically on revisit, no persistence" limitation trees/creatures/houses already accept, not novel to this system; no wiring yet from sustained hunger to any lifecycle/death consequence (deliberately out of scope this pass, see npc.md's own "Deliberately NOT in this pass" line); `HeroAppearance` outfit palette gap for hunter/nurse (see NPC Identity System above). **Update**: a working farmer's yield now also depletes the real land it comes from — see world.md's "Land Health" entry above — so a village worked too hard by its own farmers, not just a drought, can genuinely go hungry over time.
 - **Basic Talk Interaction** (small) — ✅ Done (basic) — spec'd in `concept/npc.md`'s "Minimal talk interaction" section: an explicit placeholder for the real Live Dialogue System below, not a cut-down version of it. `src/world/npc_greeting.gd` turns an `NpcIdentity` into one deterministic line flavored by its own personality trait and need (8 trait templates × 6 need phrases); `EarthChunkManager.nearest_npc_near` finds the closest villager (any occupation) within range; `Player._talk_step` (talk key, default G, new `Keybindings` entry) shows that villager's line as a HUD banner on press. A proximity prompt ("Talk (<bound key>)", reading the live keybinding so a rebind is never stale) floats above whichever villager is in range (`World._update_interaction_prompt`, world-to-screen via the viewport's canvas transform), shown even before the key is pressed -- the general "nearby-interaction hint" affordance requested for NPCs. No memory of the exchange, no branching, no quest hooks.
 - **Settlement Growth via Migration** (large) — ⬜ Not started — spec'd in `concept/npc.md`'s new "Settlement growth" section and `concept/quests.md`'s Settlement growth section: player-built structures as a habitability pull, migration as a new replan-interrupt resolution, and unification of player-grown settlements with procedurally-seeded ones. Depends on Village-Endangerment Attractor Mechanism below for its preferred migration source (settlements that lost that fight).
@@ -2476,6 +3174,139 @@ carrots out of earth (visually animated)". Supersedes the old
   purely cosmetic.
 - ⬜ No player-tilled farming access point from this wild population yet.
 
+### Carrion (`concept/carrion.md`)
+
+New concept doc + system (2026-08-24), reported: *"killing a boar should
+leave a carcass if not cleaned up by a player ... the player can cut out
+the meat parts and skin ... if he takes out the guts they spawn as entity
+and stay in the world so other animals can eat them ... then we need ants
+and bugs to clean up the left parts ... all this should be skills the
+player can train."* Replaces the old instant "die → hide+meat spray" model
+(`CreatureMarker._drop_loot`) with a real carcass, exactly the same
+"evaporates instead of being cut down" fix already made once for trees.
+
+- **Carcass entity** (medium) — ✅ Done — `src/rendering/carcass.gd`:
+  spawned in place of the old instant loot drop, for every species
+  `LootTable` already covers (herbivore/boar/predator/lynx — the same
+  scope as today's real drop table, no new per-species tuning in this
+  pass). Real ordered parts (hide → meat → guts,
+  `src/gameplay/butchering.gd`'s `PART_ORDER`), one swing removes the
+  next remaining part (`Carcass.butcher`, same melee-range-sweep shape as
+  chop/smash/pull). Independent rot clock (`ROT_SECONDS`, tuned to be
+  observable within an ordinary session per `ecosystem_dynamics.md`'s own
+  pacing pillar, deliberately NOT `FruitSpoilage`'s real-day-compressed
+  timescale) and a separate decompose-health pool decomposers whittle down
+  once rotten (`take_bite`) — an untouched carcass is not permanent
+  clutter.
+- **Guts as a real food entity, not an item** (medium) — ✅ Done —
+  `src/rendering/carcass_guts.gd` (`CarcassGuts`): the "guts" cut spawns
+  this as a sibling of the carcass instead of going through
+  `WorldItemBus.item_dropped` — a player can't carry or eat it, but it
+  exposes the same `take_bite` contract as `Carcass` so a decomposer
+  doesn't need to distinguish "carcass" from "guts". Decays on its own,
+  faster than the carcass it came from (offal spoils first, real-world
+  grounded).
+- **Butchering skill** (small) — ✅ Done — `SkillTree` gained a
+  `butchering_1`/`butchering_2` node pair (same shape as the existing
+  `naturalist_1`/`2` stamina nodes) raising a `meat_yield` stat;
+  `Player._butcher_step` reads it live via
+  `skill_tree.total_bonus("meat_yield", allocated_nodes)` (not cached
+  through `_apply_skill_stat`, so it can never drift out of sync with
+  actually-allocated nodes) and `Butchering.meat_count` turns it into
+  extra meat off the same carcass. Not `skills.md`'s much larger
+  aspirational DNA-passive-web system, which has no code yet — this uses
+  the one *real, live* progression system this project has.
+- **Ants + carrion bugs** (medium) — ✅ Done —
+  `src/gameplay/carrion_forage_behavior.gd` (pure seek → approach → feed
+  state machine, simpler than `GroundForageBehavior`/`PiscivoreBirdBehavior`
+  since a ground crawler has no separate "descend" phase) +
+  `src/rendering/decomposer_marker.gd`/`decomposer_renderer.gd`.
+  Deliberately NOT built on `CreatureMarker`/`CreatureInfo` — that stack is
+  a full roaming-wildlife AI (flee/fight/hunt/graze/mate/ecosystem
+  population tracking), the wrong shape for a tiny insect whose entire
+  behaviour is "find carrion, eat it, wander otherwise"; mirrors
+  `AmbientFlyerMarker` instead (home-anchored wander, no population math).
+  Scans the `Carcass`/`CarcassGuts` groups directly (the same
+  `get_tree().get_nodes_in_group` shape `Player`'s own melee-sweep steps
+  already use) rather than needing an injected "world" reference. Two
+  species (`ant`, `bug`), guaranteed min/max count per land-biome chunk
+  (`DecomposerRenderer`, mirroring `AmbientFlyerRenderer`'s own
+  guaranteed-not-a-coin-flip fix for butterflies/bees), wired into
+  `EarthChunkManager._load_chunk`/`_unload_chunk` per chunk. Verified
+  end-to-end in a real test: a decomposer finds a rotten carcass, walks to
+  it, bites it repeatedly, and the carcass is actually fully consumed and
+  freed.
+- **Universal hover tooltip coverage** (small) — ✅ Done — `Carcass`/
+  `CarcassGuts` both implement `get_display_name`/`get_hover_actions` (see
+  UI/presentation section's hover system): a carcass reads its species and
+  "Butcher (Space)" while parts remain, "\<Species\> Remains" once
+  stripped; guts show only a name, no player action.
+- ⬜ Opportunistic scavenging by existing predators/omnivores (a bear or
+  jackal actually walking to and eating a fresh carcass/guts instead of
+  only hunting live prey) — `take_bite`'s contract is already shaped to
+  support this, but wiring it into `CreatureBehavior`'s decision tree is a
+  real, separate AI change, deliberately deferred rather than folded into
+  this already-large pass.
+- ⬜ Species-specific butcher yields (a bear's hide vs. a boar's hide) —
+  every carcass-eligible species shares one part order/quantity today,
+  mirroring `LootTable`'s own existing flat-by-role shape.
+- ⬜ Persistence/catch-up integration for carcasses across a chunk
+  unload — chunk-local, ephemeral state, the same explicit scope cut
+  `soil_fauna.md`'s worm burrows already made for the same reason.
+
+### Woodworking (`concept/woodworking.md`)
+
+New concept doc + system (2026-08-24), reported: *"when chopping a felled
+tree, it should first remove the canopy and spawn sticks; but leave the
+stem/trunk, then next chop splits the trunk into logs which can be further
+split into more sticks. If you have high enough carpenter skills you can
+turn the full trunk into a Balken or Planken using a saw."* Replaces the
+old flat "every cut on a felled tree gives the same wood+stick mix"
+(`FelledTree.wood_per_cut`) with the real felling sequence: limb the crown
+off first, then either buck the bare trunk into logs by hand or — saw +
+trained Carpentry — turn the whole remaining trunk straight into
+construction lumber in one action.
+
+- **Staged felled-tree processing** (medium) — ✅ Done — `ChoppableTree`
+  gained a second state bit, `_canopy_removed`, alongside the existing
+  `_felled`: the FIRST swing on a freshly-felled tree limbs the crown off
+  as sticks (`FelledTree.sticks_from_canopy`) and does not consume a trunk
+  cut; every swing after that bucks one length off the now-bare trunk into
+  a real `log` item (`FelledTree.logs_per_cut`), the same
+  `CUTS_TO_CLEAR`-counted shape the old flat cut used. `FelledTree.wood_for`/
+  `wood_per_cut` renamed `timber_for`/`logs_per_cut` to match what's
+  actually dropped now.
+- **Sawing the bare trunk** (medium) — ✅ Done — `ChoppableTree.saw_up`:
+  an alternative to the ordinary chop, converting the ENTIRE remaining
+  trunk into `beam`+`plank` in one action
+  (`FelledTree.beams_from_trunk`/`planks_from_trunk`) instead of one log
+  per swing. Gated on both a `saw` tool (`Item.is_saw`, same
+  `id.contains(...)` shape as `is_axe`/`is_pickaxe`) AND enough allocated
+  `Carpentry` (`SkillTree`'s `carpentry_1`/`2` nodes, read live via
+  `total_bonus("carpentry_level", ...)` — the same live-read-not-cached
+  shape `carrion.md`'s `meat_yield` skill uses) — `Player._chop_step`
+  tries `saw_up()` first when both are met and falls back to the ordinary
+  `take_damage()` chop otherwise; `saw_up()` itself is the authority on
+  whether the trunk is actually bare and workable, so an unqualified swing
+  never has a special case to get wrong. No mechanism yet to choose beam
+  vs. plank output specifically — sawing always yields both, a named
+  simplification (real sawmills cut a log one way or the other on
+  purpose).
+- **Logs refine further at the bench** (small) — ✅ Done — two new,
+  ungated `CraftingRecipeBook` recipes: `log_to_sticks` (more kindling)
+  and `log_to_wood` (keeps every existing `wood`-consuming recipe —
+  `torch`, `wooden_club`, `campfire`, … — reachable now that bare-trunk
+  chopping yields logs instead of wood directly, rather than silently
+  cutting off their supply).
+- **The saw itself** (small) — ✅ Done — craftable (`wood` + `rock`, same
+  tier as `stone_pickaxe`), registered in `ItemCatalog`.
+- ⬜ `beam`/`plank` have no consumers yet — `building.md`'s construction
+  system is itself still unbuilt; this pass only makes the materials
+  obtainable.
+- ⬜ Species/hardness variation in yield — every tree shares one yield
+  curve today, the same flat-by-role simplification `carrion.md`'s
+  butchering already made for carcasses.
+
 ### World (`concept/world.md`)
 
 The hub doc for the core simulated planet. Its foundational terrain/clock
@@ -2488,7 +3319,7 @@ Exploration sections (referenced, not redefined, in world.md itself).
 - **Köppen-style Climate Banding** (small) — ✅ Done — `climate_model.gd` + `biome_classifier.gd`.
 - **Day/Night & Seasonal Clock** (medium) — ✅ Done — `solar_position.gd` real-time astronomical lighting (no distinct "season" gameplay variable yet, only the real solar geometry).
 - **Vegetation Growth Simulation** (large) — 🚧 Partial — see Phase 1 table above (`vegetation_growth_model.gd`); not unified with visible tree rendering yet.
-- **Land Health (overharvesting leaves a lasting mark, not just a slower respawn)** (medium) — ✅ Done (mechanism); 🚧 Partial (depletion drivers) — implements world.md's own "Land health" bullet: a persistent per-CHUNK-AGGREGATE scalar (`EcosystemSimulation._land_health`, same fidelity tier as herbivore/predator/fish population, deliberately not per-cell — documented tradeoff in `ecosystem_simulation.gd`'s own file doc comment) that `VegetationGrowthModel.effective_capacity`/`step_grid` now multiply the weather-driven ceiling down by, on top of (not instead of) the existing drought effect. `EcosystemSimulation.record_vegetation_harvest` is the new explicit mortality term standing vegetation density previously lacked entirely (only weather ever moved it) — mirrors `record_catch`'s role for fish. `VegetationGrowthModel.step_land_health` compares a region's harvest RATE since the last step against its own live `regrowth_rate` (the same logistic term `step_density` already integrates, factored out): depletes at `LAND_HEALTH_DEPLETION_PACE_PER_DAY` (`GROWTH_PACE_PER_DAY/8`) only while harvest genuinely outpaces regrowth, recovers at the far slower `LAND_HEALTH_RECOVERY_PACE_PER_DAY` (`GROWTH_PACE_PER_DAY/40`) otherwise — both grounded against real soil-organic-matter-recovery timescales (years-to-decades) vs. a single growing season's biomass regrowth, cited in the constants' own doc comments, not eyeballed. **Persists across both an in-session unload/reload and a real app restart** (`ChunkSerializer.save_ecology`/`load_ecology` gained a `land_health` field, backward-compatible with old 4-field save files via a file-length check defaulting to 1.0; `ChunkEcologyCatchup.advance` now also recovers land health — never depletes it, nothing harvests an unloaded chunk — over real elapsed unloaded time) — this is the one persistent-state gap the concept doc explicitly called out NOT to repeat (unlike vegetation density/fruit stock, which still reset to a fresh weather-driven equilibrium on every chunk reload, a known pre-existing simplification this pass did not touch). **Wired to exactly one real depletion driver this pass**: a working farmer NPC's `NpcEconomy._gather` now also calls `EarthChunkManager.record_vegetation_harvest_near` with the exact same amount its own yield already computed (no separately invented rate) — so sustained NPC farming, not just a hypothetical player action, is a real depletion driver, verified end-to-end in a real probe (below). **Known scope gap, flagged honestly**: grazing (`EarthChunkManager._graze_by_herbivores`) and tree felling still only touch their own separate cosmetic systems (`TallGrass` tuft growth, discrete tree nodes) — NEITHER currently reduces the aggregate `_vegetation_density` this feature governs, so land health does not yet respond to them; this was true before this pass too (nothing reduced aggregate vegetation density at all until now) and unifying those systems with the aggregate density field is a separate, larger follow-up, not attempted here. **Real probe** (`godot --headless -s <standalone script>`, not GUT, run against the live `EcosystemSimulation`/`NpcProduction`/`NpcEconomy`/`VillageMarket`/`EarthChunkManager` code): two identical grassland regions, identical good weather (temp=moisture=0.8); 2 real farmer NPCs worked one region for 15 simulated days (real `NpcEconomy.step` calls each real second) then stopped for a 10-day settle — land health fell 1.0→0.1875, density settled at a real nonzero 0.0650 (NOT stripped bare, ruling out "nothing left to harvest" as the explanation) vs. the untouched baseline's 0.3840/1.0; a **fresh farmer's real yield_per_second was 83.1% lower** in the degraded region under the exact same weather (0.003252 vs. 0.019200) — land health is a genuine, additional, separate factor from weather, exactly as the concept doc requires. Left alone for a further 200 simulated days, the region fully recovered (density back to 0.3840, land health back to 1.0), confirming the recovery-pace grounding. **Player-observable timescale, stated honestly**: this is a deliberately SLOW mechanic — a loaded/watched chunk runs its ecosystem "day" at 60 real seconds (`EarthChunkManager.SECONDS_PER_SIMULATED_DAY`), so full depletion under continuous overharvest takes on the order of 15-20 minutes of real, continuous, active overharvesting to show up clearly, and full recovery on the order of an hour or more of the land being left alone WHILE LOADED; an unloaded/away region instead catches up on the much coarser real-wall-clock catch-up clock (1 real hour = 1 ecosystem day), so a genuinely scarred plot realistically heals over real DAYS of the player simply not being there, not one login session — matching the concept doc's "years, not until the next rain" framing translated onto this game's actual clocks.
+- **Land Health (overharvesting leaves a lasting mark, not just a slower respawn)** (medium) — ✅ Done (mechanism); 🚧 Partial (depletion drivers) — implements world.md's own "Land health" bullet: a persistent per-CHUNK-AGGREGATE scalar (`EcosystemSimulation._land_health`, same fidelity tier as herbivore/predator/fish population, deliberately not per-cell — documented tradeoff in `ecosystem_simulation.gd`'s own file doc comment) that `VegetationGrowthModel.effective_capacity`/`step_grid` now multiply the weather-driven ceiling down by, on top of (not instead of) the existing drought effect. `EcosystemSimulation.record_vegetation_harvest` is the new explicit mortality term standing vegetation density previously lacked entirely (only weather ever moved it) — mirrors `record_catch`'s role for fish. `VegetationGrowthModel.step_land_health` compares a region's harvest RATE since the last step against its own live `regrowth_rate` (the same logistic term `step_density` already integrates, factored out): depletes at `LAND_HEALTH_DEPLETION_PACE_PER_DAY` (`GROWTH_PACE_PER_DAY/8`) only while harvest genuinely outpaces regrowth, recovers at the far slower `LAND_HEALTH_RECOVERY_PACE_PER_DAY` (`GROWTH_PACE_PER_DAY/40`) otherwise — both grounded against real soil-organic-matter-recovery timescales (years-to-decades) vs. a single growing season's biomass regrowth, cited in the constants' own doc comments, not eyeballed. **Persists across both an in-session unload/reload and a real app restart** (`ChunkSerializer.save_ecology`/`load_ecology` gained a `land_health` field, backward-compatible with old 4-field save files via a file-length check defaulting to 1.0; `ChunkEcologyCatchup.advance` now also recovers land health — never depletes it, nothing harvests an unloaded chunk — over real elapsed unloaded time) — this is the one persistent-state gap the concept doc explicitly called out NOT to repeat (unlike vegetation density/fruit stock, which still reset to a fresh weather-driven equilibrium on every chunk reload, a known pre-existing simplification this pass did not touch). **Wired to two real depletion drivers now**: a working farmer NPC's `NpcEconomy._gather` calls `EarthChunkManager.record_vegetation_harvest_near` with the exact same amount its own yield already computed (no separately invented rate) — so sustained NPC farming, not just a hypothetical player action, is a real depletion driver, verified end-to-end in a real probe (below). **This pass adds real horse/sheep grazing as a second, independent depletion driver**, closing the gap this entry previously flagged: both real grazing paths now call `EcosystemSimulation.record_vegetation_harvest` directly with a REAL amount, never an invented one — `EarthChunkManager.graze_grass_at` (GrazerForaging's deliberate walk-to-a-tuft bite) and `EarthChunkManager._graze_by_herbivores` (the ambient any-non-predator-standing-on-mature-grass sweep) both pass `TallGrass.get_growth(cell)` read live off the sim immediately before grazing it — always exactly 1.0 today (only mature patches are ever offered/grazed), but read rather than hardcoded so it stays correct if TallGrass ever grows a partial-bite mechanic, the same "pass the real number you already computed" discipline the farmer wiring established. Two new unit tests (`test_earth_chunk_manager.gd`): `test_graze_grass_at_records_a_real_vegetation_harvest` and `test_ambient_herbivore_grazing_records_a_real_vegetation_harvest`, both red-first (failed for the expected reason against the pre-change code, confirmed via real `godot --headless ... -gselect=test_earth_chunk_manager.gd` runs) then green after the two-line wiring change; no new tuned constant was introduced (the existing `record_vegetation_harvest` is called unchanged), so nothing new needed pinning. **Known scope gap, still honestly flagged**: tree felling (`ChoppableTree`) does NOT yet feed land health — unlike grazing/farming, a `ChoppableTree` node carries no chunk-coordinate or `EarthChunkManager`/`world` reference at all (`TreeRenderer.spawn_tree_at` takes none), and there is no existing real quantity analogous to "vegetation density consumed" for a felled tree the way a farmer's yield or a grazed tuft's growth level provides one — wiring it would mean threading a manager reference through the tree-spawning pipeline AND inventing a new amount from nothing, a structurally different and larger follow-up, not attempted here. **Real probe** (`godot --headless -s <standalone script>`, not GUT, run against the live `EcosystemSimulation`/`NpcProduction`/`NpcEconomy`/`VillageMarket`/`EarthChunkManager` code): two identical grassland regions, identical good weather (temp=moisture=0.8); 2 real farmer NPCs worked one region for 15 simulated days (real `NpcEconomy.step` calls each real second) then stopped for a 10-day settle — land health fell 1.0→0.1875, density settled at a real nonzero 0.0650 (NOT stripped bare, ruling out "nothing left to harvest" as the explanation) vs. the untouched baseline's 0.3840/1.0; a **fresh farmer's real yield_per_second was 83.1% lower** in the degraded region under the exact same weather (0.003252 vs. 0.019200) — land health is a genuine, additional, separate factor from weather, exactly as the concept doc requires. Left alone for a further 200 simulated days, the region fully recovered (density back to 0.3840, land health back to 1.0), confirming the recovery-pace grounding. **A second, separate real probe for grazing** (same shape, standalone `godot --headless -s` script against the live code, deleted after use): two identical Berlin-chunk regions under identical weather; one grazed by 6 real spawned horses over 15 sustained simulated days (`EarthChunkManager._creature_renderer.spawn_single` + `_loaded_creatures`, exactly `test_earth_chunk_manager.gd`'s own `_tame_a_horse_here` wiring) exercising BOTH real grazing paths every tick — 60 deliberate `graze_grass_at` bites landed plus 12 ticks where the ambient `_graze_by_herbivores` sweep measurably moved density, all constrained to the one chunk being measured — land health fell 1.0→0.6625 and density fell 0.1360→0.0883, while the untouched control stayed EXACTLY at 1.0/0.1360 for the entire 15 days under the identical weather, isolating grazing as the sole variable. Land health's decline was not monotonic-to-zero: it flattened and partially recovered from day 7 onward (0.5625→0.6625) as the grazed field itself thinned, giving grazers fewer mature tufts per tick and so a naturally shrinking harvest rate — the mechanic self-limits rather than collapsing a field to nothing. Removing the horses for a further 10-day settle recovered land health 0.6625→0.7875, a **0.125 gain that matches `LAND_HEALTH_RECOVERY_PACE_PER_DAY` (`GROWTH_PACE_PER_DAY/40` = 0.0125/day) times 10 days exactly**, confirming the same tested recovery pace the farmer probe already validated now also governs grazing-caused depletion. **Player-observable timescale, stated honestly**: this is a deliberately SLOW mechanic — a loaded/watched chunk runs its ecosystem "day" at 60 real seconds (`EarthChunkManager.SECONDS_PER_SIMULATED_DAY`), so full depletion under continuous overharvest takes on the order of 15-20 minutes of real, continuous, active overharvesting to show up clearly, and full recovery on the order of an hour or more of the land being left alone WHILE LOADED; an unloaded/away region instead catches up on the much coarser real-wall-clock catch-up clock (1 real hour = 1 ecosystem day), so a genuinely scarred plot realistically heals over real DAYS of the player simply not being there, not one login session — matching the concept doc's "years, not until the next rain" framing translated onto this game's actual clocks.
 - **Herbivore Population Simulation** (large) — ✅ Done — see Phase 1 table above.
 - **Predator Population Simulation** (large) — ✅ Done — see Phase 1 table above.
 - **Emergent Creature Distribution ("boars" pillar)** (medium) — ✅ Done — `test_ecosystem_time_lapse.gd` proves biome-driven clustering with no hand-placed spawners, matching this pillar's exact framing.

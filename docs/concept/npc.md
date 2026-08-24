@@ -74,15 +74,22 @@ expects here, the same relationship [quests.md](quests.md) has to
   distortion accumulator.
 - **Source types** (unchanged from `02`): firsthand, witnessed, trusted
   testimony, stranger testimony, inference, written record, rumor.
-- **Propagation reuses existing NPC proximity, not a new social model.**
-  NPCs already meet at a settlement's shared landmarks (well/stall/gate) on
-  their daily schedule (`npc_schedule.gd`) — that existing contact point is
-  where memory propagates: when one NPC tells another about an event, the
-  listener gets a new memory record for the same event, confidence and
-  source type both stepping down by one hop (firsthand → the listener gets
-  trusted/stranger testimony, not firsthand), scaled by the pair's existing
-  relationship/trust. No new movement, scheduling, or social-graph code
-  required — it rides the schedule system that already exists.
+- **Propagation reuses existing NPC proximity, not a new social model —
+  built and automatic** (`EarthChunkManager.step_npc_encounters`,
+  `NpcEncounter.group_by_shared_landmark`). NPCs meet at a settlement's
+  shared landmarks (well/stall/gate) on their daily schedule
+  (`npc_schedule.gd`) — that existing contact point is where memory
+  propagates: when one NPC tells another about an event, the listener gets
+  a new memory record for the same event, confidence and source type both
+  stepping down by one hop (firsthand → the listener gets trusted/stranger
+  testimony, not firsthand). No new movement, scheduling, or social-graph
+  code required — it reads real, already-live `NpcMarker` schedule/position
+  state directly, exactly as this section originally predicted. Each
+  meeting exchanges the pair's single most-recently-formed memory
+  (bidirectional), not an exhaustive dump. Trust/relationship-weighted
+  decay is still deferred — `npc_identity.gd` has no relationships yet
+  (Phase 3's own documented scope) — so propagation currently runs at a
+  flat one-hop step regardless of who is talking to whom.
 - **Decay.** An unreinforced memory's confidence/salience fades over time,
   the same "decay unless reinforced" principle relationships already assume
   above. Shape only for now — the exact decay function is a tuned constant,

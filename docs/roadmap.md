@@ -192,12 +192,12 @@ project's specific, already-partially-built expression of it.
 | 5 — Local production economy | Recipes, sites, local markets, supply/demand | `economy.md` (currency only so far), `crafting.md`/`resources.md`/`materials.md` | existing crafting/materials systems |
 | 6 — Institutions | Guilds, militias, formation/dissolution hysteresis | `factions.md` (deliberately *aggregate reputation, no separate faction entity* — an institution here is the first real organizational entity; must not duplicate the aggregate-reputation model, should sit alongside it) | — |
 | 7 — Settlement simulation | Carrying capacity, growth/decline/specialization | `quests.md`'s "closed loop" (settlement born → grows → risk rises → destroyed/dwindles → migration seeds next), `npc.md`'s village population open question | `settlement_generator.gd`, `predator_population_model.gd`'s carrying-capacity idiom |
-| 8 — Infrastructure networks | Traffic → trail → road, bridges, condition | `building.md`, `transportation.md` | — |
-| 9 — Towns & cities | Multi-dimensional city thresholds, contraction | `04-settlements-cities-infrastructure.md` only so far | — |
-| 10 — Dungeons/ruins/history POIs | Historical-POI lifecycle, archaeology | `exploration.md`'s abandoned-settlement ruins (designed) | — |
-| 11 — World bosses | Exceptional-individual promotion, legacy | `worldbosses.md` (🚧 designed in detail: emergent-stats + one-shot LLM phase-authoring, village-endangerment attractor — not built) | `evolution.md`'s fitness/rarity sim |
-| 12 — Emergent quests | Quests as projections of real problems | `quests.md` (🚧 designed in detail: promotion/quorum/representative, village endangerment, supply/demand quests — explicitly "nothing implemented" per its own status note) | — |
-| 13 — Governance & politics | Legitimacy, policy, taxation | `01-society-and-institutions.md` only so far | — |
+| 8 — Infrastructure networks | Traffic → trail → road, bridges, condition | `building.md`, `transportation.md`, new `infrastructure.md` (the path tier — see `docs/progress.md`) | `path_scarring.gd` (pre-existing wear/decay mechanism, now event-sourced) |
+| 9 — Towns & cities | Multi-dimensional city thresholds, contraction | `04-settlements-cities-infrastructure.md` only so far | `settlement_tier.gd` (3 of 6 dimensions — see `docs/progress.md`) |
+| 10 — Dungeons/ruins/history POIs | Historical-POI lifecycle, archaeology | `exploration.md`'s abandoned-settlement ruins (designed; now has a Status section marking the causal layer done) | 3 real causal sources into `record_ruin_from_*` — see `docs/progress.md` |
+| 11 — World bosses | Exceptional-individual promotion, legacy | `worldbosses.md` (now has a Status section — fitness/promotion math and causal layer both real; village-endangerment attractor still not built) | `world_boss_fitness.gd` (pre-existing, discovered mid-phase) + `evolution.md`'s fitness/rarity sim |
+| 12 — Emergent quests | Quests as projections of real problems | `quests.md` (now has a real implementation-status section — production-shortfall projection done; promotion/quorum/representative, village endangerment, safety/social need sources all still unbuilt) | `quest.gd` (pure projection, no Store — see `docs/progress.md`) |
+| 13 — Governance & politics | Legitimacy, policy, taxation | new `governance.md` (scaffolded, then implemented, same pass) + `01-society-and-institutions.md` | `governance.gd` — see `docs/progress.md` |
 | 14 — Regional trade & migration | Trade networks, migration corridors | `world.md`'s "population exists wherever conditions make it viable" | — |
 | 15 — Technology & cultural diffusion | Knowledge transmission, regional variants | none yet | — |
 | 16 — Religion, festivals, legends | Belief communities, sacred sites | `festivals.md` (referenced by `npc.md` as an eventual daily-planner byproduct) | — |
@@ -214,15 +214,70 @@ event's causes traced (`/why <event_id>`) without reading source code or
 asking an LLM, a save/load round-trip is lossless and deterministic, and at
 least one real, already-live gameplay moment (not a synthetic test fixture)
 emits a real event visible through those commands during ordinary play. Met,
-and now the foundation Phases 2–7 build on — see `docs/progress.md` for
+and now the foundation Phases 2–11 build on — see `docs/progress.md` for
 current status phase-by-phase. Phase 7 (settlement simulation) was the first
 later phase with a genuinely automatic live trigger of its own, not just a
 callable, tested mechanism; Phases 4 (contracts), 5 (local production
 economy), and 6 (institutions) now share that same trigger — extended into
-`step_settlements` itself rather than each growing a separate one — so
-every phase through 7 has a real automatic path, not only a tested
-mechanism waiting to be called. Phases 8 onward remain callable-mechanism-or-
-unstarted, same as before.
+`step_settlements` itself rather than each growing a separate one. Phase 8
+(infrastructure, first slice) has an automatic trigger too, but by a
+different route: rather than building a new periodic coordinator, it hooks
+`PathScarring`, a wear/decay mechanism that was ALREADY running live every
+session before this phase existed. Phase 9 (towns & cities, tier +
+specialization) reuses `step_settlements` again, reading the exact same
+production/trade/institution data Phases 4–6 already produce there — no new
+data tracked just to classify a settlement. Phase 10 (dungeons/ruins,
+causal layer) does not add a trigger of its own either: it hangs a real
+`EventStore.link_cause`-linked `ruin_formed` entity directly off Phase 7's
+settlement-decline event and Phase 8's path-reclaimed event, so 2 of its 3
+required independent causal sources are automatic from the moment they're
+wired, with zero new scheduling. Phase 11 (world bosses) breaks the
+streak, honestly: `src/gameplay/world_boss_fitness.gd`'s real promotion
+math turned out to already exist, discovered mid-phase, but nothing
+tracks the per-creature kill-count/lifetime-age it needs to run FROM, so
+there is no automatic trigger yet — the same position Phase 4 was in
+before Phase 5/6 gave it real data. Phases 0-10 now have a real automatic
+path; Phase 11 has a real, tested, causally-wired mechanism waiting on
+data that does not exist yet. Phases 12 onward remain callable-mechanism-
+or-unstarted.
+
+**A dedicated gap-closing pass** (after Phase 11) went back to close
+Phase 6's own remaining gap: `dissolve_institution` had no automatic
+trigger, and — unlike Phase 4/5/6's original gaps — this one was
+structural, not just unwired: `shared_contract_count` (all-time,
+monotonically non-decreasing) meant `should_dissolve` built against it
+could only ever be true BEFORE formation. Fixed with a real second metric
+(`recent_shared_contract_count`, windowed) rather than just adding a
+scheduled check, then wired automatically into `step_settlements`
+alongside formation. Live-verified. The same pass investigated Phase 11's
+and Phase 2's own remaining automatic-trigger gaps concretely — both real,
+both larger in scope than Phase 6's fix (Phase 11 needs new persistent
+kill/age tracking on creatures, touching live combat code; Phase 2 needs a
+new periodic co-location check comparable in size to Phase 8/9/10's own
+steps) — deferred both pending an explicit go-ahead, documented in
+`docs/progress.md`'s own Phase 2/11 entries rather than silently dropped.
+
+**Phase 2's gap was then closed too** (new `npc_encounter.gd`,
+`EarthChunkManager.step_npc_encounters`), on explicit request. Genuinely
+more tractable than first estimated: `_loaded_villages` and `NpcMarker.
+schedule`/`NpcSchedule.current_entry` already gave real, live per-NPC
+position/schedule state, so no new tracking was needed — only new
+grouping logic, a real shared hour-of-day (NOT `NpcMarker`'s own private
+per-marker clock, a real bug avoided rather than inherited), and a
+memory-selection rule. Live-verified. Phase 11's gap remains open,
+deliberately — it needs new persistent creature state and combat-code
+kill attribution, real scope this pass did not attempt.
+
+**Phase 12 (emergent quests, first slice) followed directly.** Breaks the
+"every phase gets a Store" pattern deliberately: a quest is a real,
+stateless PROJECTION over already-real household/market/recipe state, not
+a new persisted entity — the literal Phase 12 exit language ("Disabling
+quests must not remove the underlying problem") made structurally true
+rather than merely claimed, since there is no entity to disable. No
+headless live-check for this one, and not by omission: it is a pure
+function with no timing trigger and no scene-tree dependency beyond what
+the coordinator-level unit tests already exercise through the exact same
+`record_settlement_founded_if_new` real settlements are founded through.
 
 ---
 

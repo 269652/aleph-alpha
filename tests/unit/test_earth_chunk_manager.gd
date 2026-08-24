@@ -29,6 +29,9 @@ const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const MemoryRecord = preload("res://src/emergence/memory_record.gd")
 const InstitutionFormation = preload("res://src/emergence/institution_formation.gd")
+const Event = preload("res://src/emergence/event.gd")
+const WorldBossFitness = preload("res://src/gameplay/world_boss_fitness.gd")
+const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
@@ -1888,6 +1891,100 @@ func test_take_fruit_at_where_there_is_none_fails_rather_than_erroring():
 	ground_items.free()
 
 
+# -- harvest_peak_fruit_near: direct-from-the-tree harvest (docs/concept/
+# progression.md "Ecological literacy") --------------------------------------
+#
+# Distinct from fruit_near/take_fruit_at above: those cover WINDFALL already
+# on the ground. This is picking straight off a tree that still carries real
+# hanging fruit (FruitingModel.hanging_at > 0) -- the only harvest event that
+# can ever land inside FruitingModel's real "peak" plateau, since windfall by
+# definition has already left it (see fruiting_model.gd's is_peak_ripe).
+
+const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
+const FruitingModel = preload("res://src/world/fruiting_model.gd")
+
+## An integer pixel position whose deterministic genome (ForageScheduler.
+## genome_for, position-keyed -- no stored per-tree genome anywhere in this
+## codebase) resolves to `species_id` with a real nonzero crop. Same
+## brute-force-a-real-instance idiom test_fruiting_model.gd's own
+## _genome_for uses, just keyed by POSITION instead of a seed, since that is
+## what the real per-tree lookup is keyed by.
+func _position_for_species(species_id: String) -> Vector2:
+	var scheduler := ForageScheduler.new()
+	for step in 4000:
+		var position := Vector2(step * 37, step * 53)
+		var genome := scheduler.genome_for(position)
+		if TreeSpecies.species_for_bias(genome.species_bias) != species_id:
+			continue
+		if FruitingModel.new().crop_potential(genome) <= 0:
+			continue
+		return position
+	return Vector2.ZERO
+
+
+func test_harvest_peak_fruit_near_finds_nothing_with_no_trees_loaded():
+	assert_true(manager.harvest_peak_fruit_near(Vector2.ZERO, 10000.0).is_empty())
+
+
+func test_harvest_peak_fruit_near_finds_nothing_out_of_range():
+	var tree := Node2D.new()
+	tree.position = _position_for_species("apple")
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	assert_true(manager.harvest_peak_fruit_near(tree.position + Vector2(99999, 0), 10.0).is_empty())
+
+
+func test_harvest_peak_fruit_near_finds_nothing_before_anything_has_ripened():
+	var tree := Node2D.new()
+	tree.position = _position_for_species("apple")
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	manager.set_world_age_seconds(0.0)  # start of the bearing cycle: still growing
+	assert_true(manager.harvest_peak_fruit_near(tree.position, 10.0).is_empty())
+
+
+## The real, tested claim item 3 of the task asks for: a PEAK-timed harvest of
+## a tree reports is_peak true, an off-peak-but-still-hanging harvest of the
+## SAME tree reports is_peak false -- both read against the real FruitingModel
+## window for this tree's own real (position-derived) genome, not a
+## hardcoded assumption about when peak falls.
+func test_harvest_peak_fruit_near_reports_the_real_peak_state():
+	var species_id := "apple"
+	var tree := Node2D.new()
+	tree.position = _position_for_species(species_id)
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	var scheduler := ForageScheduler.new()
+	var genome := scheduler.genome_for(tree.position)
+	var model := FruitingModel.new()
+	var warmth: float = manager._warmth_at_pixel(tree.position)
+	# Window boundaries (grow_end/fall_start/fall_end, as YEAR FRACTIONS) don't
+	# depend on yield_multiplier/ripening_multiplier -- see fruiting_model.gd's
+	# own doc comments on _cycle_length/_window_for -- so computing them here
+	# without TreeSpecies' multipliers still matches what
+	# harvest_peak_fruit_near computes internally with them.
+	var window: Dictionary = model._window_for(genome, warmth)
+
+	# -- at genuine peak (mid-plateau) --
+	manager.set_world_age_seconds(
+		(float(window.grow_end) + float(window.fall_start)) / 2.0 * FruitingModel.BEARING_CYCLE_SECONDS
+	)
+	var at_peak: Dictionary = manager.harvest_peak_fruit_near(tree.position, 10.0)
+	assert_eq(at_peak.get("species_id", ""), species_id)
+	assert_true(at_peak.get("is_peak", false), "expected mid-plateau to read as genuine peak ripeness")
+
+	# -- off-peak, but still hanging (mid-abscission) --
+	manager.set_world_age_seconds(
+		(float(window.fall_start) + float(window.fall_end)) / 2.0 * FruitingModel.BEARING_CYCLE_SECONDS
+	)
+	var off_peak: Dictionary = manager.harvest_peak_fruit_near(tree.position, 10.0)
+	assert_eq(off_peak.get("species_id", ""), species_id)
+	assert_false(off_peak.get("is_peak", true), "expected mid-abscission to no longer read as peak")
+
+
 func test_try_plant_seed_at_fails_when_the_chunk_is_not_loaded():
 	var far_away_pixel := Vector2(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE) * TerrainRenderer.TILE_SIZE
 	assert_false(manager.try_plant_seed_at(far_away_pixel, "cherry"))
@@ -2821,6 +2918,26 @@ func test_step_wild_crops_updates_marker_growth_too():
 	assert_eq(marker.growth, sim.get_growth(immature_cell))
 
 
+# -- decomposers: ants, carrion bugs (see docs/concept/carrion.md) ----------
+
+func test_update_spawns_decomposers_for_loaded_regions_around_berlin():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	assert_true(manager._decomposer_markers.has(center_chunk))
+	assert_gt(manager._decomposer_markers[center_chunk].size(), 0)
+
+
+func test_evicting_old_chunks_frees_decomposer_markers():
+	manager.update(Vector2i(0, 0))
+	var old_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	assert_true(manager._decomposer_markers.has(old_chunk), "precondition: the old chunk had decomposers")
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	assert_false(manager._decomposer_markers.has(old_chunk))
+
+
 # -- the periodic ecosystem refresh must not rebuild the world ---------------
 #
 # step_ecosystem freed EVERY creature marker in EVERY loaded chunk once a
@@ -3056,6 +3173,54 @@ func test_record_vegetation_harvest_near_reduces_the_right_chunks_density():
 	var before := manager.vegetation_density_near(pixel)
 	manager.record_vegetation_harvest_near(pixel, 0.1)
 	assert_lt(manager.vegetation_density_near(pixel), before)
+
+
+# -- grazing (horses/sheep) is a real land-health depletion driver too, the
+# same way a working farmer NPC already is (see NpcEconomy._gather) --
+# previously TallGrass's cosmetic per-tuft sim and EcosystemSimulation's
+# aggregate land-health density never spoke, so no amount of grazing ever
+# moved vegetation_density_near/land_health_near, no matter how bare a field
+# got. Both real grazing paths (GrazerForaging's deliberate walk-to-a-tuft
+# bite via graze_grass_at, AND the ambient any-non-predator-standing-on-
+# mature-grass sweep via _graze_by_herbivores) must leave the same real mark.
+
+## Mirrors test_record_vegetation_harvest_near_reduces_the_right_chunks_
+## density's own shape, but through the real player-observed grazing bite
+## instead of an invented amount.
+func test_graze_grass_at_records_a_real_vegetation_harvest():
+	manager.update(_berlin_tile)
+	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var tufts: Array = manager.grass_near(centre, 40)
+	assert_gt(tufts.size(), 0, "precondition: something to graze")
+	var eaten: Vector2 = tufts[0].position
+	var before := manager.vegetation_density_near(eaten)
+	assert_true(manager.graze_grass_at(eaten), "precondition: the bite lands")
+	assert_lt(
+		manager.vegetation_density_near(eaten), before,
+		"a real grazing bite must leave a real mark on land health's own density field, not just the cosmetic tuft layer"
+	)
+
+
+## The other real grazing path -- ambient herbivore-standing-on-grass,
+## driven by _graze_by_herbivores rather than GrazerForaging's deliberate
+## bite -- must leave the same real mark for the same reason: a wandering
+## horse or sheep grazing where its wander happened to take it is genuine
+## herbivore pressure too, not just a horse that deliberately walked to a
+## sensed tuft.
+func test_ambient_herbivore_grazing_records_a_real_vegetation_harvest():
+	manager.update(_berlin_tile)
+	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var tufts: Array = manager.grass_near(centre, 40)
+	assert_gt(tufts.size(), 0, "precondition: something to graze")
+	var tuft_position: Vector2 = tufts[0].position
+	var tuft_tile := manager._world_tile_for_pixel(tuft_position)
+	_tame_a_horse_here(tuft_tile)
+	var before := manager.vegetation_density_near(tuft_position)
+	manager._graze_by_herbivores()
+	assert_lt(
+		manager.vegetation_density_near(tuft_position), before,
+		"a horse standing on a mature tuft must deplete land health's density field, not just the cosmetic tuft layer"
+	)
 
 
 # -- land health survives a real restart (same persistence path land ecology
@@ -4114,3 +4279,693 @@ func test_step_settlements_eventually_forms_an_institution_from_repeated_trade()
 		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
 
 	assert_eq(manager.event_store().events_of_type("institution_formed").size(), 1)
+
+
+# -- emergence: Phase 8 -- worn paths are a real, causally-grounded entity --
+
+## The literal "repeated movement creates infrastructure" exit criterion
+## (docs/emergence/04): the FIRST time a tile becomes worn, that is a real,
+## `/why`-inspectable event, not just a texture change.
+func test_recording_a_worn_path_records_a_real_event():
+	manager.record_path_worn_if_new(Vector2i(5, 5))
+	var formed: Array = manager.event_store().events_of_type("path_worn")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["path:5_5"])
+
+
+## Idempotent while already worn -- the caller (World._step_path_scarring)
+## only calls this at a real state transition, but the store itself is ALSO
+## guarded (reading real persisted event history, not the caller's own
+## in-memory transition flag) so a reload cannot record a duplicate
+## founding for a path already known to be worn.
+func test_recording_the_same_worn_path_twice_does_not_duplicate_it():
+	manager.record_path_worn_if_new(Vector2i(6, 6))
+	manager.record_path_worn_if_new(Vector2i(6, 6))
+	assert_eq(manager.event_store().events_for_entity("path:6_6").size(), 1)
+
+
+## Nature reclaiming a path (docs/emergence/04 "Infrastructure degrades") is
+## exactly as recorded as a path forming.
+func test_reclaiming_a_worn_path_records_a_real_event():
+	manager.record_path_worn_if_new(Vector2i(7, 7))
+	manager.record_path_reclaimed(Vector2i(7, 7))
+	var reclaimed: Array = manager.event_store().events_of_type("path_reclaimed")
+	assert_eq(reclaimed.size(), 1)
+	assert_eq(reclaimed[0].actors, ["path:7_7"])
+
+
+## A path that was never worn cannot be reclaimed -- there is nothing real
+## to record.
+func test_reclaiming_a_path_that_was_never_worn_records_nothing():
+	manager.record_path_reclaimed(Vector2i(8, 8))
+	assert_eq(manager.event_store().events_for_entity("path:8_8").size(), 0)
+
+
+## A path can be worn, reclaimed by nature, and worn again over a real
+## session -- each cycle is real, distinct history, not a duplicate of the
+## first.
+func test_a_reclaimed_path_can_be_worn_again():
+	manager.record_path_worn_if_new(Vector2i(9, 9))
+	manager.record_path_reclaimed(Vector2i(9, 9))
+	manager.record_path_worn_if_new(Vector2i(9, 9))
+	assert_eq(manager.event_store().events_of_type("path_worn").size(), 2)
+
+
+## The same composition contracts every other phase already demonstrated:
+## the path forms a real firsthand memory of its own founding.
+func test_a_worn_path_is_remembered():
+	manager.record_path_worn_if_new(Vector2i(10, 10))
+	var memories: Array = manager.memory_store().memories_for("path:10_10")
+	assert_eq(memories.size(), 1)
+	assert_eq(memories[0].source_type, MemoryRecord.FIRSTHAND)
+
+
+# -- emergence: Phase 9 -- town/city tier and specialization, from real flows
+
+## Crossing ALL THREE real dimensions (3 households, 1 active institution
+## via the automatic trade chain, 1 distinct produced recipe) becomes a real
+## town -- with NO manual call to anything, the whole chain running off the
+## same automatic settlement steps Phase 4/5/6 already established.
+func test_step_settlements_records_a_real_tier_change_when_crossing_town_thresholds():
+	var chunk_coord := Vector2i(63, 63)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(5), NpcIdentity.new(10), NpcIdentity.new(11)]
+	)  # seed 5 is a real hunter
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var became_town: Array = manager.event_store().events_of_type("settlement_became_town")
+	assert_eq(became_town.size(), 1)
+	assert_eq(became_town[0].actors, [settlement_id])
+
+
+## The doc's own explicit point, proven through the REAL automatic
+## mechanism rather than asserted in the abstract: high population with no
+## food means every trade breaches (Phase 4), so no institution ever forms
+## (Phase 6) and nothing is ever produced either -- population alone stays
+## a hamlet.
+func test_step_settlements_stays_a_hamlet_on_population_alone():
+	var chunk_coord := Vector2i(65, 65)
+	var npcs: Array = []
+	for i in 5:
+		npcs.append(NpcIdentity.new(100 + i))
+	manager.record_settlement_founded_if_new(chunk_coord, npcs)
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(manager.event_store().events_of_type("settlement_became_town").size(), 0)
+
+
+## Specialization is "derived from flows" made concrete: a real hunter
+## household with real meat stock produces cooked_meat, and that shows up
+## as a real, automatic settlement_specialized event.
+func test_step_settlements_records_specialization_once_grounded():
+	var chunk_coord := Vector2i(67, 67)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(5)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var specialized: Array = manager.event_store().events_of_type("settlement_specialized")
+	assert_eq(specialized.size(), 1)
+	assert_eq(specialized[0].tags, ["hunting center"])
+
+
+## A tier that has already settled is not re-recorded every step -- the same
+## "only a real CHANGE is event-sourced" discipline every other coordinator
+## here already respects.
+func test_step_settlements_does_not_repeat_an_unchanged_tier():
+	var chunk_coord := Vector2i(69, 69)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(5), NpcIdentity.new(10), NpcIdentity.new(11)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD + 1:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(manager.event_store().events_of_type("settlement_became_town").size(), 1)
+
+
+func test_active_institution_count_for_settlement_counts_real_active_institutions():
+	var chunk_coord := Vector2i(71, 71)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("guild", household_a, household_b)
+
+	assert_eq(manager.active_institution_count_for_settlement(settlement_id), 1)
+
+
+func test_active_institution_count_for_an_unfounded_settlement_is_zero():
+	assert_eq(manager.active_institution_count_for_settlement("settlement:999_999"), 0)
+
+
+func test_production_counts_for_settlement_counts_real_successes_by_recipe():
+	var settlement_id := "settlement:73_73"
+	manager.market_store().market_for(settlement_id).add_stock("meat", 3)
+	manager.attempt_production(settlement_id, "cooked_meat")
+	manager.attempt_production(settlement_id, "cooked_meat")
+
+	assert_eq(manager.production_counts_for_settlement(settlement_id), {"cooked_meat": 2})
+
+
+func test_production_counts_ignore_failed_attempts():
+	var settlement_id := "settlement:75_75"
+	manager.attempt_production(settlement_id, "cooked_meat")  # no stock -- fails
+	assert_eq(manager.production_counts_for_settlement(settlement_id), {})
+
+
+# -- emergence: Phase 10 -- ruins, formed from at least 3 independent causes -
+
+## Source 1 (docs/emergence/05 "Historical catastrophe"): a real event
+## records a real ruin, with the causing event actually LINKED as its
+## cause -- "Creation causes must be stored," made concrete and traceable,
+## not just a bare label.
+func test_record_ruin_from_settlement_decline_records_a_real_event_with_a_real_cause():
+	var cause := Event.new("settlement_declining", 1.0)
+	var cause_id := manager.event_store().append(cause)
+
+	manager.record_ruin_from_settlement_decline("settlement:77_77", cause_id)
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:settlement_77_77"])
+	var causes: Array = manager.event_store().causes_of(formed[0].id)
+	assert_eq(causes.size(), 1)
+	assert_eq(causes[0].id, cause_id)
+
+
+func test_recording_the_same_settlement_decline_ruin_twice_does_not_duplicate_it():
+	var cause_id := manager.event_store().append(Event.new("settlement_declining", 1.0))
+	manager.record_ruin_from_settlement_decline("settlement:79_79", cause_id)
+	manager.record_ruin_from_settlement_decline("settlement:79_79", cause_id)
+	assert_eq(manager.event_store().events_for_entity("ruin:settlement_79_79").size(), 1)
+
+
+## Source 2 (docs/emergence/05 "Ecological transformation... overgrown
+## ruins"): nature reclaiming a path IS this dungeon source, verbatim.
+func test_record_ruin_from_reclaimed_path_records_a_real_event_with_a_real_cause():
+	var cause_id := manager.event_store().append(Event.new("path_reclaimed", 1.0))
+	manager.record_ruin_from_reclaimed_path("path:5_5", cause_id)
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:path_5_5"])
+
+
+## Source 3 (docs/emergence/05 "Social transformation... abandoned
+## prisons"): a dissolved institution's old headquarters. Institution ids
+## are NOT EntityRef "kind:key" strings (InstitutionStore.form's own
+## "inst_<ordinal>_<type>" shape) -- used verbatim rather than run through
+## EntityRef.key_of, which only strips a colon-separated prefix.
+func test_record_ruin_from_dissolved_institution_records_a_real_event_with_a_real_cause():
+	var cause_id := manager.event_store().append(Event.new("institution_dissolved", 1.0))
+	manager.record_ruin_from_dissolved_institution("inst_3_guild", cause_id)
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:institution_inst_3_guild"])
+
+
+## The literal exit criterion: at least three INDEPENDENT causal sources,
+## proven by using the exact same raw location number ("5_5") across all
+## three source kinds without collapsing into one ruin -- each source's own
+## kind prefix keeps them genuinely independent.
+func test_three_different_ruin_sources_produce_three_independent_ruins():
+	var cause_a := manager.event_store().append(Event.new("settlement_declining", 1.0))
+	var cause_b := manager.event_store().append(Event.new("path_reclaimed", 1.0))
+	var cause_c := manager.event_store().append(Event.new("institution_dissolved", 1.0))
+
+	manager.record_ruin_from_settlement_decline("settlement:5_5", cause_a)
+	manager.record_ruin_from_reclaimed_path("path:5_5", cause_b)
+	manager.record_ruin_from_dissolved_institution("inst_5_5", cause_c)
+
+	assert_eq(manager.event_store().events_of_type("ruin_formed").size(), 3)
+
+
+## The same composition contracts every other phase already demonstrated:
+## a ruin forms a real firsthand memory of its own founding.
+func test_a_ruin_is_remembered():
+	var cause_id := manager.event_store().append(Event.new("path_reclaimed", 1.0))
+	manager.record_ruin_from_reclaimed_path("path:9_9", cause_id)
+	var memories: Array = manager.memory_store().memories_for("ruin:path_9_9")
+	assert_eq(memories.size(), 1)
+	assert_eq(memories[0].source_type, MemoryRecord.FIRSTHAND)
+
+
+# -- emergence: Phase 10's automatic triggers -------------------------------
+
+## A settlement that automatically declines (Phase 7's own real trigger)
+## automatically leaves behind a real ruin too -- with ZERO manual call to
+## record_ruin_from_settlement_decline.
+func test_step_settlements_forms_a_ruin_automatically_when_a_settlement_declines():
+	var chunk_coord := Vector2i(81, 81)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)  # no food -> declines
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:settlement_%d_%d" % [chunk_coord.x, chunk_coord.y]])
+
+	var declines: Array = manager.event_store().events_of_type("settlement_declining")
+	var causes: Array = manager.event_store().causes_of(formed[0].id)
+	assert_eq(causes[0].id, declines[0].id)
+
+
+## A path nature reclaims (Phase 8's own real trigger) automatically leaves
+## a ruin behind too -- with ZERO manual call to
+## record_ruin_from_reclaimed_path.
+func test_record_path_reclaimed_forms_a_ruin_automatically():
+	manager.record_path_worn_if_new(Vector2i(11, 11))
+	manager.record_path_reclaimed(Vector2i(11, 11))
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:path_11_11"])
+
+
+## Dissolving an institution (Phase 6's real, callable mechanism) forms a
+## real ruin too, in the same call.
+func test_dissolving_an_institution_forms_a_ruin():
+	_fulfill_contracts_between("household:9", "household:10", InstitutionFormation.FORMATION_THRESHOLD)
+	var institution := manager.attempt_institution_formation("guild", "household:9", "household:10")
+
+	manager.dissolve_institution(institution.id)
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+
+
+# -- emergence: Phase 11 -- world bosses, promoted from real fitness data ---
+
+## Below the real, tested WorldBossFitness threshold, nothing is promoted --
+## the whole point of a real threshold rather than a bare create-on-demand
+## call.
+func test_attempting_promotion_below_threshold_promotes_nothing():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:1", "herbivore", 1, 0, 5.0, "a small boar", generator
+	)
+	assert_null(boss)
+	assert_eq(manager.event_store().events_of_type("world_boss_promoted").size(), 0)
+
+
+## At/above the real threshold, a real boss is promoted AND recorded as a
+## real event -- docs/emergence/05's own "Boss emergence... must
+## permanently affect the world" made concrete: a real, /why-inspectable
+## promotion, not a scripted one.
+func test_attempting_promotion_at_threshold_promotes_a_real_boss():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:2", "predator", 50, 200, 500000.0, "an apex wolf", generator
+	)
+	assert_not_null(boss)
+	assert_eq(boss.species, "predator")
+	assert_eq(boss.phases, generator.generate_phases("an apex wolf"))
+
+	var promoted: Array = manager.event_store().events_of_type("world_boss_promoted")
+	assert_eq(promoted.size(), 1)
+	assert_eq(promoted[0].actors, ["creature:2"])
+	assert_eq(promoted[0].tags, ["predator"])
+
+
+## Asking again once already promoted does not duplicate it -- the same
+## once-only guard every other coordinator in this file already uses.
+func test_attempting_promotion_twice_does_not_duplicate_it():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	manager.attempt_world_boss_promotion("creature:3", "predator", 50, 200, 500000.0, "x", generator)
+	manager.attempt_world_boss_promotion("creature:3", "predator", 50, 200, 500000.0, "x", generator)
+	assert_eq(manager.event_store().events_of_type("world_boss_promoted").size(), 1)
+
+
+## The phase generator (which may wrap a real, costly LLM call) is never
+## invoked for an ineligible individual -- WorldBossFitness's own guarantee,
+## still true through the coordinator.
+func test_attempting_promotion_below_threshold_never_invokes_the_phase_generator():
+	var counting_generator := _CountingPhaseGenerator.new()
+	manager.attempt_world_boss_promotion("creature:4", "herbivore", 1, 0, 5.0, "x", counting_generator)
+	assert_eq(counting_generator.call_count, 0)
+
+
+func test_defeating_a_boss_records_a_real_event():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:5", "predator", 50, 200, 500000.0, "an apex wolf", generator
+	)
+	assert_true(manager.defeat_world_boss(boss.id))
+
+	assert_eq(manager.world_boss_store().get_boss(boss.id).status, WorldBoss.DEFEATED)
+	var defeated: Array = manager.event_store().events_of_type("world_boss_defeated")
+	assert_eq(defeated.size(), 1)
+	assert_eq(defeated[0].actors, ["creature:5"])
+
+
+func test_defeating_an_unknown_boss_fails_and_records_nothing():
+	assert_false(manager.defeat_world_boss("boss_999_predator"))
+	assert_eq(manager.event_store().events_of_type("world_boss_defeated").size(), 0)
+
+
+## The same composition contracts every other phase already demonstrated:
+## the promoted individual forms a real firsthand memory of its own
+## promotion.
+func test_a_promoted_boss_is_remembered():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	manager.attempt_world_boss_promotion("creature:6", "predator", 50, 200, 500000.0, "x", generator)
+	var memories: Array = manager.memory_store().memories_for("creature:6")
+	assert_eq(memories.size(), 1)
+	assert_eq(memories[0].source_type, MemoryRecord.FIRSTHAND)
+
+
+# -- emergence: the world-boss store persists alongside the others ---------
+
+func test_save_world_boss_store_then_load_world_boss_store_round_trips_live_state():
+	var path := "user://test_ecm_emergence_world_bosses.bin"
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:7", "predator", 50, 200, 500000.0, "x", generator
+	)
+
+	manager.save_world_boss_store(path)
+	manager.reset_world_boss_store()
+	assert_null(manager.world_boss_store().get_boss(boss.id), "precondition: reset cleared it")
+	manager.load_world_boss_store(path)
+
+	assert_eq(manager.world_boss_store().get_boss(boss.id).species, "predator")
+
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+
+func test_wipe_world_boss_store_clears_both_memory_and_disk():
+	var path := "user://test_ecm_emergence_world_bosses_wipe.bin"
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:8", "predator", 50, 200, 500000.0, "x", generator
+	)
+	manager.save_world_boss_store(path)
+	manager.wipe_world_boss_store(path)
+
+	assert_null(manager.world_boss_store().get_boss(boss.id))
+	assert_false(FileAccess.file_exists(path))
+
+
+## Test double that counts calls, matching test_world_boss_fitness.gd's own
+## _CountingPhaseGenerator convention.
+class _CountingPhaseGenerator extends WorldBossFitness.PhaseGenerator:
+	var call_count := 0
+
+	func generate_phases(_trait_description: String) -> Array:
+		call_count += 1
+		return []
+
+
+# -- gap-closing: automatic institution dissolution (Phase 6's own gap) -----
+
+## The literal gap closed: an institution with plenty of all-time
+## fulfilled-contract history (which alone would have kept the old
+## all-time-count check from ever firing) genuinely dissolves once real
+## time passes with no NEW coordination -- with a real, automatic call to
+## step_settlements, not a direct call to dissolve_institution.
+func test_step_settlements_dissolves_an_institution_that_has_gone_quiet():
+	var chunk_coord := Vector2i(83, 83)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	var institution := manager.attempt_institution_formation("cooperative", household_a, household_b)
+	assert_not_null(institution, "precondition: institution formed")
+
+	manager.set_world_age_seconds(InstitutionFormation.RECENT_WINDOW_SECONDS + 100.0)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(manager.institution_store().get_institution(institution.id).status, "dissolved")
+	assert_eq(manager.event_store().events_of_type("institution_dissolved").size(), 1)
+
+
+## An institution whose pair keeps trading every real automatic step (a
+## settlement that stays prospering, never running out of food) stays
+## active well past the recent window's length -- ongoing activity
+## genuinely protects it, proven through repeated real automatic steps
+## rather than a single isolated post-jump trade (which would only ever
+## produce exactly ONE recent contract -- itself at or below
+## DISSOLUTION_THRESHOLD, an easy false-dissolve trap this test guards
+## against by simulating real sustained activity instead).
+func test_step_settlements_does_not_dissolve_an_institution_still_actively_trading():
+	var chunk_coord := Vector2i(85, 85)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)  # keeps it prospering
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD + 5:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var institution := manager.institution_store().active_institution_for([household_a, household_b])
+	assert_not_null(institution, "precondition: institution formed")
+	assert_eq(institution.status, "active")
+	assert_eq(manager.event_store().events_of_type("institution_dissolved").size(), 0)
+
+
+# -- gap-closing: rumor auto-propagation at real NPC meetings (Phase 2) -----
+
+func _add_scheduled_npc(seed_value: int, location_tag: String) -> NpcMarker:
+	var npc := NpcMarker.new()
+	npc.identity = NpcIdentity.new(seed_value)
+	npc.schedule = [{"time_block": "midday", "location_tag": location_tag, "activity": "idle"}]
+	creatures_parent.add_child(npc)
+	return npc
+
+
+## Real end-to-end: two NPCs at the same real landmark, on their real
+## schedule, at a real shared hour derived from the world clock -- the
+## literal npc.md exit language ("NPCs already meet at a settlement's
+## shared landmarks... on their daily schedule") made concrete, with zero
+## manual calls to MemoryStore.transmit anywhere in this test.
+func test_step_npc_encounters_transmits_a_memory_between_two_npcs_at_the_same_landmark():
+	manager.set_world_age_seconds(30.0)  # hour 12 == "midday"
+	var teller := _add_scheduled_npc(1, "well")
+	var listener := _add_scheduled_npc(2, "well")
+	manager._loaded_villages[Vector2i(0, 0)] = [teller, listener]
+
+	var teller_id := EntityRef.for_npc(1)
+	var listener_id := EntityRef.for_npc(2)
+	var event := Event.new("something_happened", 1.0)
+	event.actors.append(teller_id)
+	manager.event_store().append(event)
+	manager.memory_store().witness_event(event, 1.0)
+
+	manager.step_npc_encounters(EarthChunkManager.NPC_ENCOUNTER_INTERVAL)
+
+	var listener_memories: Array = manager.memory_store().memories_for(listener_id)
+	assert_eq(listener_memories.size(), 1)
+	assert_eq(listener_memories[0].event_id, event.id)
+	assert_eq(listener_memories[0].source_type, MemoryRecord.TRUSTED_TESTIMONY)
+
+	teller.free()
+	listener.free()
+
+
+## Throttled -- the same shape every other periodic coordinator here uses.
+func test_step_npc_encounters_does_nothing_before_its_interval_elapses():
+	manager.set_world_age_seconds(30.0)
+	var teller := _add_scheduled_npc(1, "well")
+	var listener := _add_scheduled_npc(2, "well")
+	manager._loaded_villages[Vector2i(0, 0)] = [teller, listener]
+	var event := Event.new("something_happened", 1.0)
+	event.actors.append(EntityRef.for_npc(1))
+	manager.event_store().append(event)
+	manager.memory_store().witness_event(event, 1.0)
+
+	manager.step_npc_encounters(1.0)
+
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(2)).size(), 0)
+	teller.free()
+	listener.free()
+
+
+## Two NPCs at DIFFERENT landmarks never exchange -- no invented meeting.
+func test_step_npc_encounters_does_not_transmit_between_npcs_at_different_landmarks():
+	manager.set_world_age_seconds(30.0)
+	var teller := _add_scheduled_npc(1, "well")
+	var elsewhere := _add_scheduled_npc(2, "gate")
+	manager._loaded_villages[Vector2i(0, 0)] = [teller, elsewhere]
+	var event := Event.new("something_happened", 1.0)
+	event.actors.append(EntityRef.for_npc(1))
+	manager.event_store().append(event)
+	manager.memory_store().witness_event(event, 1.0)
+
+	manager.step_npc_encounters(EarthChunkManager.NPC_ENCOUNTER_INTERVAL)
+
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(2)).size(), 0)
+	teller.free()
+	elsewhere.free()
+
+
+## A meeting is bidirectional -- each npc's own most recent memory
+## transmits to the other, not just one direction.
+func test_step_npc_encounters_transmission_is_bidirectional():
+	manager.set_world_age_seconds(30.0)
+	var a := _add_scheduled_npc(1, "well")
+	var b := _add_scheduled_npc(2, "well")
+	manager._loaded_villages[Vector2i(0, 0)] = [a, b]
+
+	var event_a := Event.new("thing_a", 1.0)
+	event_a.actors.append(EntityRef.for_npc(1))
+	manager.event_store().append(event_a)
+	manager.memory_store().witness_event(event_a, 1.0)
+
+	var event_b := Event.new("thing_b", 2.0)
+	event_b.actors.append(EntityRef.for_npc(2))
+	manager.event_store().append(event_b)
+	manager.memory_store().witness_event(event_b, 2.0)
+
+	manager.step_npc_encounters(EarthChunkManager.NPC_ENCOUNTER_INTERVAL)
+
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(1)).size(), 2)
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(2)).size(), 2)
+	a.free()
+	b.free()
+
+
+## An npc with no memories yet has nothing to tell -- a real no-op, not an
+## error.
+func test_step_npc_encounters_handles_an_npc_with_no_memories_gracefully():
+	manager.set_world_age_seconds(30.0)
+	var a := _add_scheduled_npc(1, "well")
+	var b := _add_scheduled_npc(2, "well")
+	manager._loaded_villages[Vector2i(0, 0)] = [a, b]
+
+	manager.step_npc_encounters(EarthChunkManager.NPC_ENCOUNTER_INTERVAL)
+
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(1)).size(), 0)
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(2)).size(), 0)
+	a.free()
+	b.free()
+
+
+# -- emergence: Phase 12 -- quests as real projections, never new state ----
+
+## A real settlement with a real blacksmith household and an empty market
+## produces a real, discoverable quest -- reading straight off the same
+## household/market state every other coordinator already touches.
+func test_production_shortfall_quests_for_settlement_reads_real_state():
+	var chunk_coord := Vector2i(87, 87)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(8)])  # seed 8 is a real blacksmith
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	var quests := manager.production_shortfall_quests_for_settlement(settlement_id)
+
+	assert_eq(quests.size(), 1)
+	assert_eq(quests[0]["recipe_id"], "stone_pickaxe")
+
+
+## Once the market genuinely has what the recipe needs, the SAME query
+## reflects that immediately -- no stale quest hanging around, proving this
+## is a live projection, not recorded state.
+func test_production_shortfall_quests_disappear_once_the_market_is_stocked():
+	var chunk_coord := Vector2i(89, 89)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(8)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(manager.production_shortfall_quests_for_settlement(settlement_id).size(), 1, "precondition")
+
+	manager.market_store().market_for(settlement_id).add_stock("stick", 2)
+	manager.market_store().market_for(settlement_id).add_stock("rock", 3)
+
+	assert_eq(manager.production_shortfall_quests_for_settlement(settlement_id).size(), 0)
+
+
+func test_production_shortfall_quests_for_an_unfounded_settlement_is_empty():
+	assert_eq(manager.production_shortfall_quests_for_settlement("settlement:999_999"), [])
+
+
+# -- emergence: Phase 13 -- governance form and legitimacy, from real flows -
+
+func test_governance_form_for_settlement_reads_real_institution_history():
+	var chunk_coord := Vector2i(91, 91)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("militia", household_a, household_b)
+
+	assert_eq(manager.governance_form_for_settlement(settlement_id), "military rule")
+
+
+func test_institution_type_counts_for_settlement_counts_real_history():
+	var chunk_coord := Vector2i(101, 101)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("militia", household_a, household_b)
+
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(manager.institution_type_counts_for_settlement(settlement_id), {"militia": 1})
+
+
+func test_governance_form_for_a_settlement_with_no_institutions_is_none():
+	var chunk_coord := Vector2i(93, 93)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(manager.governance_form_for_settlement(settlement_id), "none")
+
+
+func test_legitimacy_for_settlement_reads_real_food_status():
+	var chunk_coord := Vector2i(95, 95)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+	assert_eq(manager.legitimacy_for_settlement(settlement_id), "high")
+
+
+func test_legitimacy_for_an_empty_market_settlement_is_low():
+	var chunk_coord := Vector2i(97, 97)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(manager.legitimacy_for_settlement(settlement_id), "low")
+
+
+## The real "changes actual decisions" test: a settlement with a real
+## military-rule history (a militia already formed between a DIFFERENT
+## pair of its households) has its NEXT automatic institution formation
+## attempt a militia too -- not the old hardcoded "cooperative" -- proven
+## through the real automatic step_settlements chain, not a direct call.
+func test_step_settlements_forms_the_governance_appropriate_institution_type():
+	var chunk_coord := Vector2i(99, 99)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2), NpcIdentity.new(3)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+	var household_1: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_3: String = manager.household_store().household_for(EntityRef.for_npc(3)).id
+
+	# Establish military-rule governance via a DIFFERENT pair
+	# (household:1/household:3) than the one step_settlements' own
+	# automatic trade will use (the lowest two, household:1/household:2) --
+	# so this doesn't block the automatic pair's own formation.
+	_fulfill_contracts_between(household_1, household_3, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("militia", household_1, household_3)
+	assert_eq(manager.governance_form_for_settlement(settlement_id), "military rule", "precondition")
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var household_2: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	var new_institution := manager.institution_store().active_institution_for([household_1, household_2])
+	assert_not_null(new_institution, "precondition: the automatic pair actually formed one")
+	assert_eq(new_institution.type, "militia")

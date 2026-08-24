@@ -71,3 +71,10 @@ func is_axe() -> bool:
 
 func is_pickaxe() -> bool:
 	return kind == "tool" and id.contains("pickaxe")
+
+
+## A saw is what turns a bare felled trunk straight into beam/plank instead
+## of raw logs (see docs/concept/woodworking.md) -- an axe fundamentally
+## cannot do this.
+func is_saw() -> bool:
+	return kind == "tool" and id.contains("saw")

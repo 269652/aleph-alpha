@@ -251,3 +251,34 @@ func test_every_new_species_has_positive_health_stamina_and_mana_and_a_known_die
 		assert_gt(creature_info.max_stamina, 0.0, species)
 		assert_gt(creature_info.max_mana, 0.0, species)
 		assert_ne(creature_info.diet, "Unknown", species)
+
+
+# -- Germany-region world bosses (docs/concept/worldbosses.md) --------------
+#
+# Debug/test-spawn stats, not the doc's real design: worldbosses.md specs
+# boss stats as *emergent* (world_boss_fitness.gd's fitness-threshold
+# promotion), not hand-authored -- that promotion mechanism doesn't exist in
+# code yet. These entries exist so `/spawn krampus` produces something
+# actually fightable (aggressive, real threat) right now rather than
+# silently falling back to CreatureInfo's calm/10hp defaults, the same way
+# every other species here is a plain hand-authored stat row (see this
+# file's MAX_HEALTH_BY_SPECIES -- bear/lion are hand-authored too, not
+# derived) -- not a violation of this project's no-eyeballed-thresholds
+# rule, which targets tuned FORMULAS/curves, not per-species flavor stats in
+# an already-precedent-setting hand-authored table.
+const GERMANY_BOSS_SPECIES := ["lindwurm", "rubezahl", "nyx", "krampus"]
+
+
+func test_every_germany_boss_is_aggressive_and_a_predator():
+	for species in GERMANY_BOSS_SPECIES:
+		var info := CreatureInfo.new(species)
+		assert_eq(info.temperament, "aggressive", species)
+		assert_true(info.is_predator, species)
+
+
+## Should read as tougher than this roster's current toughest ordinary
+## predator (bear, 50 base health) -- boss stakes, not a routine encounter.
+func test_every_germany_boss_has_more_base_health_than_a_bear():
+	var bear_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["bear"]
+	for species in GERMANY_BOSS_SPECIES:
+		assert_gt(CreatureInfo.MAX_HEALTH_BY_SPECIES[species], bear_health, species)

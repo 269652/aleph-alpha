@@ -8,6 +8,7 @@ extends GutTest
 
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
+const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_character_sprite.gd")
 
 var appearance_maker := HeroAppearance.new()
 var sprite := ProceduralCharacterSprite.new()
@@ -124,11 +125,11 @@ func test_missing_choices_fall_back_to_the_first_option():
 	assert_eq(a.hair_style, 0)
 
 
-## The seed drives which of IllustratedCharacterSprite's 100 illustrated
-## heads a hero gets (see head_cell_index_for) -- carried on the appearance
-## dict itself so any caller building a look, DNA-rolled or hand-picked in
-## the creator, has one available without a second parameter threaded
-## everywhere apply_appearance is called from.
+## The seed carries through onto the appearance dict for any caller that
+## wants a stable per-hero value not tied to a cyclable axis (village NPCs'
+## own DNA seed, say) -- no live consumer of the bare "seed" field remains
+## after "head" became a real axis (see below), but keeping it costs nothing
+## and other per-seed variation may want it later.
 func test_appearance_for_carries_the_seed_it_was_rolled_from():
 	var a := appearance_maker.appearance_for("warrior", 4242)
 	assert_eq(a.seed, 4242)
@@ -145,6 +146,39 @@ func test_appearance_from_choices_defaults_the_seed_when_none_is_given():
 	# produce a valid, usable appearance rather than erroring.
 	var a := appearance_maker.appearance_from_choices("warrior", {})
 	assert_eq(a.seed, 0)
+
+
+## Which of IllustratedCharacterSprite's 100 illustrated heads a hero wears
+## is a real customization axis like every other -- DNA-rolled by default,
+## directly cyclable in the creator (reported, after "derive it from the DNA
+## seed with no new UI" shipped and was actually tried: "you can't choose
+## different heads"). option_count reads the grid size from
+## IllustratedCharacterSprite rather than a second hardcoded 100, so the two
+## can never drift if the sheet's own layout ever changes.
+func test_head_is_a_real_customization_axis():
+	assert_has(HeroAppearance.AXES, "head")
+	assert_eq(
+		appearance_maker.option_count("head"),
+		IllustratedCharacterSprite.HEAD_GRID_COLUMNS * IllustratedCharacterSprite.HEAD_GRID_ROWS
+	)
+
+
+func test_appearance_for_rolls_a_head_index_in_range():
+	for seed_value in [0, 1, 4242, 99999]:
+		var a := appearance_maker.appearance_for("warrior", seed_value)
+		assert_between(a.head_index, 0, appearance_maker.option_count("head") - 1)
+
+
+func test_appearance_from_choices_uses_the_picked_head_index():
+	var a := appearance_maker.appearance_from_choices("warrior", {"head": 37})
+	assert_eq(a.head_index, 37)
+
+
+func test_head_choice_wraps_like_every_other_axis():
+	var past_end := appearance_maker.appearance_from_choices(
+		"warrior", {"head": appearance_maker.option_count("head")}
+	)
+	assert_eq(past_end.head_index, 0)
 
 
 ## A rolled hero must be resumable in the creator: reading its choices back

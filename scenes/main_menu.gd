@@ -59,6 +59,7 @@ const AXIS_LABELS := {
 	"beard": "Beard",
 	"eyes": "Eyes",
 	"trim": "Trim Color",
+	"head": "Face",
 }
 
 ## The portrait renders at ProceduralCharacterSprite.PORTRAIT_SIZE and is

@@ -103,7 +103,15 @@ const TRIM_COLORS := [
 ## Names in TRIM_COLORS order, for the creator's axis readout.
 const TRIM_NAMES := ["Gold", "Silver", "Copper", "Crimson", "Verdant", "Amethyst"]
 
-const AXES := ["skin", "hair_color", "hair_style", "beard", "eyes", "trim"]
+## The character rig's illustrated art (see IllustratedCharacterSprite) --
+## this class doesn't render anything itself, but "head" (below) needs to
+## know how many faces exist to offer as a customization axis, and that
+## count is a fact about the ART, not the DNA/identity layer. Read from
+## there rather than a second hardcoded 100 so the two can never drift if
+## the sheet's own grid layout ever changes.
+const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_character_sprite.gd")
+
+const AXES := ["skin", "hair_color", "hair_style", "beard", "eyes", "trim", "head"]
 
 
 ## How many options a customization axis offers. 0 for an unknown axis
@@ -122,6 +130,8 @@ func option_count(axis: String) -> int:
 			return EYE_COLORS.size()
 		"trim":
 			return TRIM_COLORS.size()
+		"head":
+			return IllustratedCharacterSprite.HEAD_GRID_COLUMNS * IllustratedCharacterSprite.HEAD_GRID_ROWS
 		_:
 			return 0
 
@@ -137,6 +147,7 @@ func appearance_for(class_id: String, dna_seed: int) -> Dictionary:
 		"beard": _roll(dna_seed, "beard", BEARD_STYLE_COUNT),
 		"eyes": _roll(dna_seed, "eyes", EYE_COLORS.size()),
 		"trim": _roll(dna_seed, "trim", TRIM_COLORS.size()),
+		"head": _roll(dna_seed, "head", option_count("head")),
 	}, dna_seed)
 
 
@@ -170,6 +181,12 @@ func appearance_from_choices(class_id: String, choices: Dictionary, seed_value: 
 		"tunic": palette.tunic,
 		"trim": TRIM_COLORS[_wrap(int(choices.get("trim", 0)), TRIM_COLORS.size())],
 		"legs": palette.legs,
+		# Which of IllustratedCharacterSprite's illustrated faces this hero
+		# wears (see CharacterView._apply_head/ProceduralCharacterSprite's
+		# portrait) -- a real index, not derived from "seed" the way it used
+		# to be, so the creator can cycle it independently of a full DNA
+		# reroll (reported: "you can't choose different heads").
+		"head_index": _wrap(int(choices.get("head", 0)), option_count("head")),
 	}
 
 
@@ -184,6 +201,7 @@ func choices_from_appearance(appearance: Dictionary) -> Dictionary:
 		"beard": int(appearance.get("beard", 0)),
 		"eyes": maxi(EYE_COLORS.find(appearance.get("eyes", EYE_COLORS[0])), 0),
 		"trim": maxi(TRIM_COLORS.find(appearance.get("trim", TRIM_COLORS[0])), 0),
+		"head": int(appearance.get("head_index", 0)),
 	}
 
 

@@ -30,6 +30,154 @@ func test_has_part_is_false_for_an_unregistered_part():
 	assert_false(sprite.has_part("totally_unknown_part"))
 
 
+# -- hero_composite.png: 8 outfits x {arms, body, legs} -- what body/legs/ --
+# -- arms now source from ------------------------------------------------
+#
+# body/legs/arms now source from here (see the file's own doc comment on
+# HERO_COMPOSITE_PATH) instead of the old single-pose torso.png/leg.png/
+# arms.png -- has_part/generate_textures correctly report nothing for them
+# any more (the old machinery stays real and tested for a future simple
+# part, it just isn't what these three use).
+
+func test_has_part_no_longer_reports_body_legs_or_arms():
+	for part_name in ["body", "legs", "arms"]:
+		assert_false(sprite.has_part(part_name), part_name)
+
+
+func test_has_composite_part_is_true_for_body_legs_and_arms():
+	for part_name in ["body", "legs", "arms"]:
+		assert_true(sprite.has_composite_part(part_name), part_name)
+
+
+func test_has_composite_part_is_false_for_head_or_an_unknown_part():
+	assert_false(sprite.has_composite_part("head"))
+	assert_false(sprite.has_composite_part("totally_unknown_part"))
+
+
+func test_outfit_variant_is_deterministic_and_in_range():
+	for seed_value in [0, 1, 4242, 99999]:
+		var a := sprite.outfit_variant_for(seed_value)
+		var b := sprite.outfit_variant_for(seed_value)
+		assert_eq(a, b, "seed %d" % seed_value)
+		assert_between(a, 0, IllustratedCharacterSprite.HERO_COMPOSITE_ROWS - 1)
+
+
+func test_different_seeds_can_pick_different_outfit_variants():
+	var seen := {}
+	for seed_value in range(20):
+		seen[sprite.outfit_variant_for(seed_value)] = true
+	assert_gt(seen.size(), 1, "20 different heroes should not all wear the same outfit")
+
+
+## Body and legs are each ONE drawing per cell; arms are genuinely TWO
+## (a real transparent gap splits them, unlike the fused legs) -- see the
+## file's own doc comment on why arms alone splits.
+func test_generate_composite_textures_returns_the_right_frame_count_per_part():
+	for part_name in ["body", "legs"]:
+		var textures := sprite.generate_composite_textures(part_name, 0)
+		assert_eq(textures.size(), 1, part_name)
+	var arm_textures := sprite.generate_composite_textures("arms", 0)
+	assert_eq(arm_textures.size(), 2)
+	for texture in arm_textures:
+		assert_gt(texture.get_width(), 0)
+		assert_gt(texture.get_height(), 0)
+
+
+func test_generate_composite_textures_is_empty_for_an_unregistered_part():
+	assert_eq(sprite.generate_composite_textures("totally_unknown_part", 0), [] as Array[ImageTexture])
+
+
+## The whole point of a variant axis: two different outfit rows must
+## actually look different from each other.
+func test_different_variants_produce_different_art():
+	var variant_a := sprite.generate_composite_textures("body", 0)[0].get_image().get_data()
+	var variant_b := sprite.generate_composite_textures("body", 1)[0].get_image().get_data()
+	assert_ne(variant_a, variant_b, "two different outfit rows should look different")
+
+
+## Only "front" resolves to real art today (see the file's own doc comment)
+## -- a caller asking for a facing that doesn't exist yet gets front-facing
+## art back rather than nothing.
+func test_an_unavailable_facing_falls_back_to_front_rather_than_nothing():
+	var front := sprite.generate_composite_textures("body", 0, "front")
+	var unavailable := sprite.generate_composite_textures("body", 0, "side")
+	assert_eq(front.size(), unavailable.size())
+	assert_gt(unavailable.size(), 0)
+	assert_eq(front[0].get_image().get_data(), unavailable[0].get_image().get_data())
+
+
+func test_composite_part_scale_for_maps_measured_content_to_the_target_world_height():
+	var scale := sprite.composite_part_scale_for("body", 0, 19.0)
+	var content_height := _measured_content_height(
+		sprite.generate_composite_textures("body", 0)[0].get_image()
+	)
+	assert_almost_eq(content_height * scale, 19.0, 0.05)
+
+
+## arms.png's two drawings are independent, not a mirrored copy of one --
+## each must be measured (and therefore scaled) on its own frame_index.
+func test_composite_part_scale_for_is_independent_per_arm_frame():
+	for frame_index in [0, 1]:
+		var scale := sprite.composite_part_scale_for("arms", 0, 9.0, frame_index)
+		var content_height := _measured_content_height(
+			sprite.generate_composite_textures("arms", 0)[frame_index].get_image()
+		)
+		assert_almost_eq(content_height * scale, 9.0, 0.05, "frame %d" % frame_index)
+
+
+func test_composite_part_scale_for_falls_back_to_one_for_an_unregistered_part():
+	assert_eq(sprite.composite_part_scale_for("totally_unknown_part", 0, 19.0), 1.0)
+
+
+## Every one of the 8 outfit rows must produce EXACTLY one frame for
+## body/legs -- checked across the whole grid, not just one row, after two
+## separate real gaps this exact check caught: row 7's ornate-plate-armor
+## shoulder cape casting a stray detached fragment a too-generous body
+## x-range counted as a second "body" frame (reached the live game as a
+## malformed portrait), and row 7's legs content starting further left than
+## an assumed lower bound, so the whole frame fell OUTSIDE the range and
+## silently vanished (see HERO_COMPOSITE_COLUMN_X's own doc comment on both).
+## Arms is checked more loosely -- almost every row's two arms detach
+## cleanly into two frames, but the source art doesn't guarantee it for
+## every one (row 6 doesn't), and CharacterView/the portrait both already
+## degrade gracefully to one shared frame when it happens (see
+## CharacterView._apply_arms), so a row that fuses is a known, harmless
+## shape, not a bug to pin out of existence here.
+func test_every_outfit_row_produces_the_expected_frame_count():
+	for variant in range(IllustratedCharacterSprite.HERO_COMPOSITE_ROWS):
+		assert_eq(sprite.generate_composite_textures("body", variant).size(), 1, "body row %d" % variant)
+		assert_eq(sprite.generate_composite_textures("legs", variant).size(), 1, "legs row %d" % variant)
+		var arm_count: int = sprite.generate_composite_textures("arms", variant).size()
+		assert_between(arm_count, 1, 2, "arms row %d" % variant)
+
+
+## detect_frames only ever splits on COLUMN gaps (see its own doc comment) --
+## it has no way to know a row's legs column also holds a second, unrelated
+## drawing (a belt-buckle or shoulder-pauldron close-up) sitting BELOW the
+## real garment at overlapping x-coordinates, so _content_rect's plain
+## min/max bounding-box scan silently welds the two into one "frame" spanning
+## from the garment's top to the fragment's bottom, with a real gap of fully
+## transparent rows in between. Verified visually against a rendered dump
+## (reported live: "still no legs" even after CharacterView.
+## TARGET_HEIGHT_FRACTION_OF_TREE was raised -- the fragment was inflating
+## composite_part_scale_for's measured content height, shrinking the real
+## boots/trousers well below what that fraction alone would predict): 6 of
+## the 8 legs rows carry this, only rows 0 and 7 are clean. A single
+## contiguous drawing's own tight bounding box should never contain a fully
+## empty row with real content both above AND below it -- that shape is only
+## possible when two unrelated blobs got cropped together.
+func test_every_outfit_rows_legs_have_no_fragment_stacked_below_a_gap():
+	for variant in range(IllustratedCharacterSprite.HERO_COMPOSITE_ROWS):
+		var trimmed := sprite.trimmed_composite_image("legs", variant)
+		assert_true(_has_no_disconnected_fragment(trimmed), "legs row %d" % variant)
+
+
+func test_every_outfit_rows_body_has_no_fragment_stacked_below_a_gap():
+	for variant in range(IllustratedCharacterSprite.HERO_COMPOSITE_ROWS):
+		var trimmed := sprite.trimmed_composite_image("body", variant)
+		assert_true(_has_no_disconnected_fragment(trimmed), "body row %d" % variant)
+
+
 func test_has_action_is_false_for_an_unregistered_part():
 	assert_false(sprite.has_action("totally_unknown_part", "walk"))
 
@@ -38,73 +186,23 @@ func test_generate_textures_returns_empty_for_an_unregistered_part():
 	assert_eq(sprite.generate_textures("totally_unknown_part", "idle"), [] as Array[ImageTexture])
 
 
-# -- body/legs/arms: registered, single-rect or exact-rect-pair sheets -------
-
-func test_body_legs_and_arms_are_registered_parts_with_an_idle_action():
-	for part_name in ["body", "legs", "arms"]:
-		assert_true(sprite.has_part(part_name), part_name)
-		assert_true(sprite.has_action(part_name, "idle"), part_name)
-
-
-func test_body_and_legs_generate_exactly_one_idle_frame():
-	for part_name in ["body", "legs"]:
-		var frames := sprite.generate_textures(part_name, "idle")
-		assert_eq(frames.size(), 1, part_name)
-		assert_gt(frames[0].get_width(), 0, part_name)
-		assert_gt(frames[0].get_height(), 0, part_name)
-
-
-## arms.png is one sheet holding two poses side by side -- exactly what
-## CharacterView needs for ArmLeft/ArmRight (see _apply_paperdoll_part's
-## frame_index argument).
-func test_arms_generate_exactly_two_idle_frames():
-	var frames := sprite.generate_textures("arms", "idle")
-	assert_eq(frames.size(), 2)
-	for frame in frames:
-		assert_gt(frame.get_width(), 0)
-		assert_gt(frame.get_height(), 0)
-
-
-func test_generated_frames_are_cached_not_rebuilt_every_call():
-	var first := sprite.generate_textures("body", "idle")
-	var second := sprite.generate_textures("body", "idle")
-	assert_eq(first[0], second[0], "repeated calls should reuse the same cached texture")
-
-
-# -- part_scale_for: measure the actual art, not the shared working canvas ---
-#
-# CANVAS_SIZE is one shared WORKING resolution every part is normalized onto
-# (see the file's own doc comment) -- it is not a claim that a torso and a
-# leg pair are the same real size, so CharacterView must scale each part by
-# its OWN measured content, not a flat constant (see
-# IllustratedAnimalSprite.marker_scale, the same pattern one rig over).
-
-func test_part_scale_for_maps_measured_content_to_the_target_world_height():
-	var scale := sprite.part_scale_for("body", 19.0)
-	var content_height := _measured_content_height(sprite.generate_textures("body", "idle")[0].get_image())
-	assert_almost_eq(content_height * scale, 19.0, 0.05)
-
-
-func test_part_scale_for_is_independent_per_arm_frame():
-	# arms.png's two poses are independent crops, not a mirrored copy of one
-	# -- each must be measured (and therefore scaled) on its own frame_index.
-	for frame_index in [0, 1]:
-		var scale := sprite.part_scale_for("arms", 9.0, frame_index)
-		var content_height := _measured_content_height(
-			sprite.generate_textures("arms", "idle")[frame_index].get_image()
-		)
-		assert_almost_eq(content_height * scale, 9.0, 0.05, "frame %d" % frame_index)
-
+## part_scale_for/trimmed_part_image are still real, functional machinery
+## for a future part that only ever needs one neutral pose (see _PARTS' own
+## doc comment) -- with `_PARTS` currently empty, only the "unregistered
+## part" fail-safe shape is exercisable here; a future caller registering a
+## real part will want to add the equivalent of the coverage this class's
+## git history shows for body/legs/arms before hero_composite.png replaced
+## them (measured-content scale, per-frame independence, cached frames).
 
 func test_part_scale_for_falls_back_to_one_for_an_unregistered_part():
 	assert_eq(sprite.part_scale_for("totally_unknown_part", 19.0), 1.0)
 
 
 func test_head_scale_for_maps_the_chosen_faces_measured_height_to_the_target():
-	var seed_value := 4242
-	var scale := sprite.head_scale_for(seed_value, 12.0)
+	var cell_index := 42
+	var scale := sprite.head_scale_for(cell_index, 12.0)
 	# Recoloring must not change the geometry it was measured from.
-	var image := sprite.generate_head_texture(seed_value, Color.WHITE).get_image()
+	var image := sprite.generate_head_texture(cell_index, Color.WHITE).get_image()
 	var content_height := _measured_content_height(image)
 	assert_almost_eq(content_height * scale, 12.0, 0.05)
 
@@ -123,30 +221,33 @@ func _measured_content_height(image: Image) -> float:
 # -- trimmed content images: for callers compositing raw Images rather than -
 # -- Sprite2D nodes (see ProceduralCharacterSprite's illustrated portrait) --
 
-func test_trimmed_part_image_has_a_tight_bounding_box():
-	assert_true(_bbox_is_tight(sprite.trimmed_part_image("body")))
+func test_trimmed_part_image_returns_null_for_an_unregistered_part():
+	assert_null(sprite.trimmed_part_image("totally_unknown_part"))
 
 
-## At least ONE dimension must shrink -- content can legitimately fill the
-## canvas exactly in the dimension that BOUNDS the aspect-preserving fit
-## (measured: body's content is exactly CANVAS_SIZE.x wide), so this checks
-## that trimming did something, not that both dimensions shrink.
-func test_trimmed_part_image_is_smaller_than_the_padded_shared_canvas():
-	var trimmed := sprite.trimmed_part_image("body")
+# -- trimmed_composite_image: the portrait's counterpart for hero_composite --
+
+func test_trimmed_composite_image_has_a_tight_bounding_box():
+	assert_true(_bbox_is_tight(sprite.trimmed_composite_image("body", 0, "front")))
+
+
+func test_trimmed_composite_image_is_smaller_than_the_padded_shared_canvas():
+	var trimmed := sprite.trimmed_composite_image("legs", 0, "front")
 	assert_true(
 		trimmed.get_width() < IllustratedCharacterSprite.CANVAS_SIZE.x
 		or trimmed.get_height() < IllustratedCharacterSprite.CANVAS_SIZE.y
 	)
 
 
-func test_trimmed_part_image_returns_null_for_an_unregistered_part():
-	assert_null(sprite.trimmed_part_image("totally_unknown_part"))
+func test_trimmed_composite_image_returns_null_for_an_unknown_part():
+	assert_null(sprite.trimmed_composite_image("totally_unknown_part", 0, "front"))
 
 
-func test_trimmed_part_image_respects_frame_index():
-	var left := sprite.trimmed_part_image("arms", 0)
-	var right := sprite.trimmed_part_image("arms", 1)
-	assert_ne(left.get_data(), right.get_data())
+## An unavailable facing falls back to "front" (see _resolved_facing) rather
+## than returning null -- a caller asking for "side" before that art exists
+## gets a facing hero back, not a blank one.
+func test_trimmed_composite_image_falls_back_to_front_for_an_unavailable_facing():
+	assert_not_null(sprite.trimmed_composite_image("body", 0, "totally_unknown_facing"))
 
 
 ## Measured directly against the real sheet (see head_edge_probe.js, run
@@ -223,15 +324,52 @@ func _bbox_is_tight(image: Image) -> bool:
 	return top and bottom and left and right
 
 
+## True if `image` is one single contiguous blob top-to-bottom: once a row
+## reading as a real GAP is crossed, no later row may read as real content
+## again. A real single drawing (a leg, a torso) never has a genuine gap
+## like this -- the garment fills continuously from top to bottom -- so a
+## gap followed by more content below it can only mean two unrelated pieces
+## got cropped into one frame together (see
+## test_every_outfit_rows_legs_have_no_fragment_stacked_below_a_gap).
+##
+## A row's own max alpha, not a flat >0 check, and 0.5 rather than the usual
+## near-zero content threshold: `trimmed_composite_image` has already gone
+## through normalize_frames' LANCZOS resize by the time a caller can see it,
+## which blurs what was a hard 0%-alpha gap on the source sheet into a soft
+## multi-row ramp -- measured directly (see the row-by-row max-alpha dump
+## behind this pass): every known-contaminated row's gap bottoms out at
+## <=39% at its lowest point, while every real content row (including the
+## two clean rows' own edge-antialiasing) never drops below 73%. 0.5 sits
+## in the middle of that gap with margin on both sides.
+func _has_no_disconnected_fragment(image: Image) -> bool:
+	var seen_gap_after_content := false
+	var seen_content := false
+	for y in image.get_height():
+		var max_alpha := 0.0
+		for x in image.get_width():
+			max_alpha = maxf(max_alpha, image.get_pixel(x, y).a)
+		var row_has_content := max_alpha >= 0.5
+		if row_has_content:
+			seen_content = true
+			if seen_gap_after_content:
+				return false
+		elif seen_content:
+			seen_gap_after_content = true
+	return true
+
+
 # -- head art: a 10x10 grid of full illustrated faces, a different shape ------
 #
 # A single flat modulate can't separate a head's skin/hair/eye color (see
 # this file's own doc comment above and character_art_brief.md), so unlike
 ## body/legs/arms this ONE registered sheet is not exposed through has_part/
-## generate_textures at all: has_head()/generate_head_texture() pick exactly
-## one of its 100 painted faces per DNA seed and recolor it to the caller's
-## own skin tone by luminance (the same shading-only recolor already proven
-## on illustrated flower blooms), discarding the sheet's own baked tone.
+## generate_textures at all: has_head()/generate_head_texture() take a real,
+## directly-chosen grid cell index -- which face a hero wears is now a
+## genuine customization axis (HeroAppearance.AXES' "head", DNA-rolled by
+## default but directly cyclable in the creator, see appearance_from_choices'
+## "head_index") -- and recolor it to the caller's own skin tone by
+## luminance (the same shading-only recolor already proven on illustrated
+## flower blooms), discarding the sheet's own baked tone.
 
 func test_has_head_is_true_now_that_head_art_is_registered():
 	assert_true(sprite.has_head())
@@ -241,35 +379,49 @@ func test_has_part_does_not_report_head_head_uses_its_own_surface():
 	assert_false(sprite.has_part("head"))
 
 
-## Same seed, same face, every time -- a hero must not change which of the
-## 100 faces it wears from one frame to the next.
-func test_head_cell_index_is_deterministic():
-	var a := sprite.head_cell_index_for(4242)
-	var b := sprite.head_cell_index_for(4242)
-	assert_eq(a, b)
+## Measured directly (see the survey behind this pass): 7 of the 100 cells
+## have their background-removal flood erode almost the entire face (opaque
+## fraction <=0.083 for every one), leaving a huge, near-blank, wildly
+## oversized texture once head_scale_for divides a target height by that
+## tiny measured content height -- reached the live game as a floating
+## translucent smear where a face should be. has_usable_head is the same
+## has-X-then-fallback safety net body/legs/arms already lean on for their
+## own per-row gaps (see HERO_COMPOSITE_COLUMN_X's doc comment), applied to
+## head art instead of chasing down the flood-fill's own root cause per cell.
+func test_has_usable_head_is_false_for_a_known_near_empty_cell():
+	assert_false(sprite.has_usable_head(51, Color(0.5, 0.35, 0.24)))
 
 
-func test_head_cell_index_always_lands_inside_the_10x10_grid():
-	for seed_value in range(50):
-		var index := sprite.head_cell_index_for(seed_value)
-		assert_between(index, 0, 99, "seed %d picked an out-of-grid cell" % seed_value)
+func test_has_usable_head_is_true_for_a_normal_cell():
+	assert_true(sprite.has_usable_head(42, Color(0.5, 0.35, 0.24)))
 
 
-func test_different_seeds_can_pick_different_head_cells():
-	var seen := {}
-	for seed_value in range(30):
-		seen[sprite.head_cell_index_for(seed_value)] = true
-	assert_gt(seen.size(), 1, "30 different heroes should not all wear the same face")
+## The flood's OTHER failure mode (see HEAD_MAXIMUM_OPAQUE_FRACTION's own
+## doc comment): 12 cells' backgrounds were never removed at all, leaving
+## the whole square cell opaque -- reported live as a dark rectangle where
+## a face should be.
+func test_has_usable_head_is_false_for_a_known_fully_opaque_cell():
+	assert_false(sprite.has_usable_head(23, Color(0.5, 0.35, 0.24)))
+
+
+## Out-of-range cell indices wrap rather than crash -- defense in depth,
+## since HeroAppearance is expected to hand this an already-wrapped index
+## (see _wrap_cell_index's own doc comment).
+func test_out_of_range_cell_indices_wrap_into_the_grid():
+	var texture := sprite.generate_head_texture(137, Color(0.8, 0.6, 0.44))
+	assert_not_null(texture)
+	var negative := sprite.generate_head_texture(-1, Color(0.8, 0.6, 0.44))
+	assert_not_null(negative)
 
 
 func test_generate_head_texture_returns_a_real_texture():
-	var texture := sprite.generate_head_texture(4242, Color(0.9, 0.7, 0.55))
+	var texture := sprite.generate_head_texture(42, Color(0.9, 0.7, 0.55))
 	assert_not_null(texture)
 	assert_gt(texture.get_width(), 0)
 	assert_gt(texture.get_height(), 0)
 
 
-func test_generate_head_texture_is_deterministic_for_the_same_seed_and_tone():
+func test_generate_head_texture_is_deterministic_for_the_same_cell_and_tone():
 	var tone := Color(0.66, 0.47, 0.32)
 	var a := sprite.generate_head_texture(11, tone)
 	var b := sprite.generate_head_texture(11, tone)
@@ -280,9 +432,9 @@ func test_generate_head_texture_is_deterministic_for_the_same_seed_and_tone():
 ## DIFFERENT DNA skin tones must actually look different, not both wear the
 ## sheet's own single baked-in tone.
 func test_generate_head_texture_actually_recolors_toward_the_given_skin_tone():
-	var seed_value := 4242
-	var pale := sprite.generate_head_texture(seed_value, Color(0.96, 0.82, 0.69))
-	var deep := sprite.generate_head_texture(seed_value, Color(0.36, 0.25, 0.18))
+	var cell_index := 42
+	var pale := sprite.generate_head_texture(cell_index, Color(0.96, 0.82, 0.69))
+	var deep := sprite.generate_head_texture(cell_index, Color(0.36, 0.25, 0.18))
 	assert_ne(pale.get_image().get_data(), deep.get_image().get_data())
 
 	var pale_avg := _average_opaque_color(pale.get_image())

@@ -7,12 +7,15 @@ players, and a premium currency purchasable with real money.
 
 Currency enters the economy roughly equally from two faucets:
 
-- **Selling to the market** (NPC and, later, player) — crafted goods
+- **Selling to the market** (NPC and, later, player, via the
+  [auction house](labor_skills.md#the-auction-house)) — crafted goods
   ([crafting.md](crafting.md)), gathered resources
   ([resources.md](resources.md)), and tamed/bred creatures
   ([pets.md](pets.md)/[evolution.md](evolution.md)). This ties the economy
   directly into every production system already designed, instead of being
-  a separate quest-reward faucet bolted on top.
+  a separate quest-reward faucet bolted on top. Crafted-goods pricing carries
+  a quality premium tied to the crafter's own labor-skill tier, not just a
+  flat per-item-type price.
 - **Quest/bounty rewards** from NPCs' need-driven requests
   ([npc.md](npc.md)) — the classic MMO faucet, still meaningful, just not
   the only one.

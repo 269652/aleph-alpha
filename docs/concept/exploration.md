@@ -58,6 +58,41 @@ obstacles; an old fire-scarred one biases toward "burnt-sealed" ones) — so
 ruins read as genuinely guarded without a single hand-designed puzzle
 existing in the game.
 
+### Status
+
+The emergence substrate (`docs/emergence/05-dungeons-bosses-exploration-
+content.md`, `docs/roadmap.md`'s Emergence Phase 10) built the **causal/data
+layer only** — a real `ruin_formed` entity, `EventStore.link_cause`-linked
+back to whatever real event actually caused it, satisfying "Creation causes
+must be stored" and making "why does this ruin exist" a real,
+`/history ruin:<key>`-inspectable question. **No physical ruin structure is
+generated or rendered in the game world yet** — everything this doc
+describes above (actual decayed buildings, monster lairs, ancient groves,
+ecosystem-history-weighted placement, materials-gated obstacles) is still
+future work; the substrate only proves a ruin's real, causally-grounded
+*existence*, not its appearance.
+
+Three independent, real causal sources exist today (the Phase 10 exit
+criterion: "At least three independent causal sources must be able to
+create a dungeon"), each mapped to one of `docs/emergence/05`'s own named
+"Dungeon sources" categories rather than invented to hit a number:
+
+- **Historical catastrophe**: a settlement's real, automatic decline
+  (Phase 7, food-driven).
+- **Ecological transformation... overgrown ruins**: nature reclaiming a
+  worn path (Phase 8) — literally the named phenomenon, not an analogy.
+- **Social transformation... abandoned prisons**: a dissolved institution's
+  old headquarters (Phase 6).
+
+Two of the three ride on ALREADY-automatic triggers (settlement decline,
+path reclamation); the third (institution dissolution) is real and wired,
+but its own root trigger — `dissolve_institution` — still has no automatic
+call of its own (Phase 6's own pre-existing, documented gap, not new to
+this phase). "Occupants," "archaeology," and physical obstacle-gating are
+all explicitly future slices — none of the systems they'd need (creature
+spawning tied to a location, a puzzle/obstacle-verb generator, world
+bosses) exist yet either.
+
 ### Open questions
 
 - How much actual simulated history needs to be logged/retained to seed
@@ -69,3 +104,6 @@ existing in the game.
   whole-Earth-scale goal)?
 - Exact vocabulary/difficulty curve for procedurally picking which physical
   obstacle(s) gate a given POI's loot tier.
+- When physical generation eventually lands, does it read the real
+  `ruin_formed`/`causes` data already recorded, or does it need richer
+  spatial/structural state the current causal-only entity doesn't carry?

@@ -22,6 +22,8 @@ const Market = preload("res://src/emergence/market.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
 
 var store: EventStore
 
@@ -269,3 +271,91 @@ func test_explain_settlement_reports_food_capacity_and_status():
 	assert_string_contains(text, "food")
 	assert_string_contains(text, "40")
 	assert_string_contains(text, SettlementState.GROWING)
+
+
+## Emergence Phase 9: tier is always shown, derived from all three real
+## dimensions (population alone is never enough -- an empty settlement with
+## no institutions/production stays a hamlet even with 40 food).
+func test_explain_settlement_reports_its_tier():
+	var market := Market.new()
+	market.add_stock("meat", 40)
+	var text: String = Why.explain_settlement(market, 1, "settlement:0_0")
+	assert_string_contains(text, SettlementTier.HAMLET)
+
+
+## Specialization is only shown once real production flows actually support
+## one -- "derived from flows," not a stored tag.
+func test_explain_settlement_reports_specialization_once_grounded():
+	var market := Market.new()
+	var text: String = Why.explain_settlement(
+		market, SettlementTier.TOWN_HOUSEHOLDS, "settlement:1_1",
+		SettlementTier.TOWN_INSTITUTIONS, {"cooked_meat": 3}
+	)
+	assert_string_contains(text, SettlementTier.TOWN)
+	assert_string_contains(text, "hunting center")
+
+
+func test_explain_settlement_omits_specialization_when_nothing_produced_yet():
+	var text: String = Why.explain_settlement(Market.new(), 1, "settlement:2_2")
+	assert_eq(text.find("specialization"), -1)
+
+
+## Emergence Phase 13: governance form and legitimacy are always shown,
+## derived from the same real status/institution-history data this
+## function already computes/receives.
+func test_explain_settlement_reports_governance_and_legitimacy():
+	var market := Market.new()
+	market.add_stock("meat", 40)
+	var text: String = Why.explain_settlement(
+		market, 1, "settlement:3_3", 0, {}, {"militia": 1}
+	)
+	assert_string_contains(text, "military rule")
+	assert_string_contains(text, "high")
+
+
+func test_explain_settlement_defaults_to_no_governance_and_stable_legitimacy():
+	var text: String = Why.explain_settlement(Market.new(), 0, "settlement:4_4")
+	assert_string_contains(text, "none")
+	assert_string_contains(text, "stable")
+
+
+# -- explaining a world boss's promotion state -------------------------------
+
+func test_explain_world_boss_says_so_when_the_individual_was_never_promoted():
+	var boss_store := WorldBossStore.new()
+	var text: String = Why.explain_world_boss(boss_store, "creature:999")
+	assert_string_contains(text, "no")
+
+
+func test_explain_world_boss_reports_species_score_and_status():
+	var boss_store := WorldBossStore.new()
+	var boss := boss_store.promote("creature:1", "predator", 900.0, 800.0, [], 1.0)
+	var text: String = Why.explain_world_boss(boss_store, "creature:1")
+	assert_string_contains(text, boss.id)
+	assert_string_contains(text, "predator")
+	assert_string_contains(text, "900")
+	assert_string_contains(text, "800")
+	assert_string_contains(text, "active")
+
+
+# -- explaining a settlement's real, live-projected quests -------------------
+
+func test_explain_quests_says_so_when_there_are_none():
+	var text: String = Why.explain_quests([])
+	assert_string_contains(text, "no")
+
+
+func test_explain_quests_reports_the_recipe_and_missing_items():
+	var quests := [
+		{
+			"settlement_id": "settlement:0_0",
+			"household_id": "household:1",
+			"recipe_id": "stone_pickaxe",
+			"missing": [{"item_id": "rock", "need": 3}],
+		},
+	]
+	var text: String = Why.explain_quests(quests)
+	assert_string_contains(text, "household:1")
+	assert_string_contains(text, "stone_pickaxe")
+	assert_string_contains(text, "rock")
+	assert_string_contains(text, "3")

@@ -78,6 +78,23 @@ const _RECIPES := {
 		"inputs": [{"item_id": "stick", "count": 2}, {"item_id": "plant_fibre", "count": 2}],
 		"output": {"item_id": "fishing_rod", "count": 1},
 	},
+	# Woodworking (see docs/concept/woodworking.md): a bucked log refines
+	# further at the bench -- no tool/skill gate, that's reserved for the
+	# in-world saw+Carpentry beam/plank path (ChoppableTree.saw_up). Keeps
+	# every existing wood-consuming recipe above reachable now that a bare
+	# trunk yields logs instead of wood directly.
+	"log_to_sticks": {
+		"inputs": [{"item_id": "log", "count": 1}],
+		"output": {"item_id": "stick", "count": 3},
+	},
+	"log_to_wood": {
+		"inputs": [{"item_id": "log", "count": 1}],
+		"output": {"item_id": "wood", "count": 2},
+	},
+	"saw": {
+		"inputs": [{"item_id": "wood", "count": 2}, {"item_id": "rock", "count": 2}],
+		"output": {"item_id": "saw", "count": 1},
+	},
 }
 
 

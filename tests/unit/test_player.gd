@@ -592,6 +592,99 @@ func test_talking_near_a_villager_shows_that_villagers_own_greeting():
 	npc.free()
 
 
+# -- selling food into a village (see VillageMarket, docs/concept/npc.md
+# "Local trade is NPC-to-NPC, not just player-to-shop" extended here to a
+# player-initiated sale; docs/concept/progression.md "Ecological literacy") --
+
+const VillageMarket = preload("res://src/world/village_market.gd")
+const EcologicalLiteracy = preload("res://src/gameplay/ecological_literacy.gd")
+
+
+## Like _add_fake_npc_near_player, but with a real VillageMarket wired up (see
+## NpcMarker.setup_economy) -- what a producer/non-merchant villager actually
+## has, unlike the plain talk-only fixture above.
+func _add_fake_npc_with_market_near_player(seed_value: int = 3) -> NpcMarker:
+	var npc := NpcMarker.new()
+	npc.identity = NpcIdentity.new(seed_value)
+	npc.position = player.position
+	creatures_parent.add_child(npc)
+	chunk_manager._loaded_villages[Vector2i(0, 0)] = [npc]
+	npc.setup_economy(VillageMarket.new())
+	return npc
+
+
+func test_sell_food_to_village_fails_without_enough_of_the_item():
+	var market := VillageMarket.new()
+	assert_false(player.sell_food_to_village(market, "cherry", 1))
+	assert_eq(market.total_stock(), 0.0)
+
+
+func test_sell_food_to_village_moves_the_item_into_the_markets_real_stock():
+	player.inventory.add(_item_catalog.make("cherry"), 3)
+	var market := VillageMarket.new()
+
+	assert_true(player.sell_food_to_village(market, "cherry", 2))
+
+	assert_eq(player.inventory.count_of("cherry"), 1)
+	assert_almost_eq(market.stock.get("cherry", 0.0), 2.0, 0.001)
+
+
+## The real, tested claim: selling into a genuinely hungry market (can't
+## currently buy even one meal -- VillageMarket.can_buy_meal() reads false)
+## awards more XP than selling into a well-stocked one.
+func test_selling_into_a_hungry_village_awards_more_xp_than_a_well_stocked_one():
+	player.inventory.add(_item_catalog.make("cherry"), 2)
+
+	var hungry_market := VillageMarket.new()
+	assert_false(hungry_market.can_buy_meal(), "precondition: genuinely hungry, no stock at all")
+	var xp_before := player.experience.total_xp
+	player.sell_food_to_village(hungry_market, "cherry", 1)
+	var hungry_xp_gained := player.experience.total_xp - xp_before
+	assert_eq(
+		hungry_xp_gained,
+		EcologicalLiteracy.VILLAGE_SALE_XP_BASE + EcologicalLiteracy.VILLAGE_FEEDING_XP_BONUS
+	)
+
+	var stocked_market := VillageMarket.new()
+	stocked_market.add_stock("meat", 10.0)
+	assert_true(stocked_market.can_buy_meal(), "precondition: well-stocked")
+	xp_before = player.experience.total_xp
+	player.sell_food_to_village(stocked_market, "cherry", 1)
+	var stocked_xp_gained := player.experience.total_xp - xp_before
+	assert_eq(stocked_xp_gained, EcologicalLiteracy.VILLAGE_SALE_XP_BASE)
+
+	assert_gt(hungry_xp_gained, stocked_xp_gained, "feeding a genuinely hungry village should earn more")
+
+
+## The trade key (T) already buys from a MERCHANT (see _shop_step above);
+## with no merchant near but a real villager in reach, it now falls back to
+## selling the player's own food into that villager's market instead.
+func test_trade_key_sells_food_to_a_nearby_villager_when_no_merchant_is_near():
+	var npc := _add_fake_npc_with_market_near_player()
+	player.inventory.add(_item_catalog.make("cherry"), 1)
+
+	_tap_trade()
+
+	assert_eq(player.inventory.count_of("cherry"), 0)
+	assert_almost_eq(npc.economy.market.stock.get("cherry", 0.0), 1.0, 0.001)
+	assert_string_contains(player.trade_message, "Sold")
+	npc.free()
+
+
+func test_trade_key_with_a_villager_near_but_no_food_shows_a_no_food_message():
+	var npc := _add_fake_npc_with_market_near_player()
+	_tap_trade()
+	assert_string_contains(player.trade_message, "No food")
+	npc.free()
+
+
+## Unchanged from before this feature existed: no merchant AND no villager at
+## all still shows the original message.
+func test_trade_key_with_nobody_nearby_still_shows_the_original_no_merchant_message():
+	_tap_trade()
+	assert_string_contains(player.trade_message, "No merchant")
+
+
 # -- rare/legendary fish grant a real buff on eating --------------------------
 
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")

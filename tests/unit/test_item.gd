@@ -45,6 +45,19 @@ func test_a_non_pickaxe_is_not_a_pickaxe():
 	assert_false(Item.new("iron_sword", "Iron Sword", "weapon", 1, 5.0).is_pickaxe())
 
 
+## A saw is what turns a bare trunk straight into beam/plank instead of raw
+## logs (see docs/concept/woodworking.md) -- an axe fundamentally cannot do
+## this, so it needs its own real gate, the same shape is_axe/is_pickaxe
+## already use.
+func test_a_saw_tool_reports_as_a_saw():
+	var saw := Item.new("saw", "Saw", "tool", 1)
+	assert_true(saw.is_saw())
+
+
+func test_an_axe_is_not_a_saw():
+	assert_false(Item.new("iron_axe", "Iron Axe", "tool", 1).is_saw())
+
+
 func test_stack_reports_its_item_and_count():
 	var stack := ItemStack.new(Item.new("meat", "Meat", "food", 20), 3)
 	assert_eq(stack.item.id, "meat")

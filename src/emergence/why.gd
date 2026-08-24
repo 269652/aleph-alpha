@@ -24,6 +24,10 @@ const Market = preload("res://src/emergence/market.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
+const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
+const WorldBoss = preload("res://src/emergence/world_boss.gd")
+const Governance = preload("res://src/emergence/governance.gd")
 
 const _INDENT := "  "
 ## Same default as EventStore.cause_chain -- a belt-and-suspenders cap on top
@@ -196,10 +200,76 @@ static func explain_institutions(store: InstitutionStore, entity_id: String) -> 
 ## the market and household count directly rather than the stores
 ## themselves, since the caller (a console command) already has to look
 ## the market up by settlement id anyway.
-static func explain_settlement(market, household_count: int, entity_id: String) -> String:
+## `active_institutions`/`production_counts` are optional (default to "none
+## yet") so every existing caller keeps working unchanged -- Emergence
+## Phase 9's tier/specialization are additive, not a breaking change to
+## explain_settlement's own established shape.
+## `institution_type_counts` is optional (defaults to "no history yet") so
+## every existing caller keeps working unchanged -- Emergence Phase 13's
+## governance/legitimacy are additive, the same shape Phase 9's tier/
+## specialization params already established.
+static func explain_settlement(
+	market,
+	household_count: int,
+	entity_id: String,
+	active_institutions: int = 0,
+	production_counts: Dictionary = {},
+	institution_type_counts: Dictionary = {}
+) -> String:
 	var food := SettlementState.food_stock(market)
 	var capacity := SettlementState.carrying_capacity(market)
 	var status := SettlementState.status_for(household_count, capacity)
-	return "%s:\n%sfood: %d (capacity %d)\n%shouseholds: %d\n%sstatus: %s" % [
-		entity_id, _INDENT, food, capacity, _INDENT, household_count, _INDENT, status
+	var tier := SettlementTier.tier_for(household_count, active_institutions, production_counts.size())
+	var governance_form := Governance.form_for(institution_type_counts)
+	var legitimacy := Governance.legitimacy_for(status)
+	var text := (
+		"%s:\n%sfood: %d (capacity %d)\n%shouseholds: %d\n%sstatus: %s\n%stier: %s"
+		+ "\n%sgovernance: %s\n%slegitimacy: %s"
+	) % [
+		entity_id, _INDENT, food, capacity, _INDENT, household_count, _INDENT, status, _INDENT, tier,
+		_INDENT, governance_form, _INDENT, legitimacy
 	]
+	var specialization := SettlementTier.specialization_for(production_counts)
+	if specialization != "":
+		text += "\n%sspecialization: %s" % [_INDENT, specialization]
+	return text
+
+
+## Renders every promotion a real individual has ever had (active or
+## defeated -- WorldBossStore.bosses_for keeps history the same way
+## InstitutionStore.institutions_for does), most recent first is not
+## required since a real individual is promoted at most once while active
+## and defeats are terminal, so chronological order already reads clearly.
+static func explain_world_boss(store: WorldBossStore, individual_id: String) -> String:
+	var bosses: Array[WorldBoss] = store.bosses_for(individual_id)
+	if bosses.is_empty():
+		return "%s: no world-boss promotion" % individual_id
+
+	var lines: Array[String] = ["%s:" % individual_id]
+	for boss in bosses:
+		lines.append(
+			_INDENT
+			+ "%s (%s, %s) score %.1f / threshold %.1f, %d phase(s)"
+			% [boss.id, boss.species, boss.status, boss.score, boss.threshold, boss.phases.size()]
+		)
+	return "\n".join(lines)
+
+
+## Renders a settlement's real, currently-discoverable production-shortfall
+## quests (see Quest.production_shortfall_quests_for, Emergence Phase 12) --
+## a plain list, not indexed by any id of its own, since a quest here is a
+## live projection with no persistent identity to key on.
+static func explain_quests(quests: Array) -> String:
+	if quests.is_empty():
+		return "no production-shortfall quests right now"
+
+	var lines: Array[String] = []
+	for quest in quests:
+		var missing_parts: Array[String] = []
+		for entry in quest["missing"]:
+			missing_parts.append("%d %s" % [entry["need"], entry["item_id"]])
+		lines.append(
+			"%s needs %s for %s (%s)"
+			% [quest["household_id"], ", ".join(missing_parts), quest["recipe_id"], quest["settlement_id"]]
+		)
+	return "\n".join(lines)

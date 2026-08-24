@@ -195,7 +195,10 @@ Deterministic *inputs* still leave room for the *act*: **character skill sets
 the ceiling** (a master smith realizes more of an item's theoretical potential
 from the same parts), while **player execution reaches for it** (a forging
 interaction where doing it well pushes quality). Mastery is thus in sourcing,
-design, *and* the making.
+design, *and* the making. "Character skill" here is
+[labor_skills.md](labor_skills.md)'s use-based Smithing mastery specifically —
+that doc works out the actual `ceiling_realization(skill_level)` formula this
+paragraph gestures at.
 
 ## Worked example — "throw the oil-barrel into the torch-lit room"
 

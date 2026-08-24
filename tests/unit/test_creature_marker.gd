@@ -6,6 +6,7 @@ const CreatureInfo = preload("res://src/world/creature_info.gd")
 const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const Carcass = preload("res://src/rendering/carcass.gd")
 
 const TILE_SIZE := 16
 
@@ -72,6 +73,12 @@ func after_each():
 	for node in _extra:
 		if is_instance_valid(node):
 			node.free()
+	# A lethal take_damage() call anywhere in this file now leaves a real
+	# Carcass sibling behind (see docs/concept/carrion.md) -- swept here
+	# rather than patched into every individual death test, so a stray one
+	# never leaks into whatever test runs next.
+	for carcass in get_tree().get_nodes_in_group(Carcass.GROUP_NAME):
+		carcass.free()
 	CreatureMarker.sun_elevation_deg = CreatureMarker.DEFAULT_SUN_ELEVATION_DEG
 	_extra = []
 
@@ -337,11 +344,22 @@ func test_take_damage_frees_the_marker_once_health_reaches_zero():
 	assert_true(marker.is_queued_for_deletion())
 
 
-func test_dying_drops_its_species_loot_via_the_world_item_bus():
-	# A herbivore drops 2 stacks (hide + meat) -- see LootTable.
+## Dying no longer instantly sprays loot (see docs/concept/carrion.md) --
+## the exact "evaporates instead of being cut down" pattern already fixed
+## once for trees. A carcass-eligible species (herbivore has hide+meat in
+## LootTable) leaves a real Carcass behind instead; hide/meat only reach
+## the world-item bus once a player actually butchers it. Delta-based
+## rather than assuming a zero baseline -- other tests in this file kill
+## creatures too, and after_each sweeps whatever carcass each one leaves,
+## not every individual test.
+func test_dying_leaves_a_carcass_instead_of_instant_loot():
 	watch_signals(WorldItemBus)
+	var before := get_tree().get_nodes_in_group(Carcass.GROUP_NAME).size()
 	marker.take_damage(marker.info.max_health)
-	assert_signal_emit_count(WorldItemBus, "item_dropped", 2)
+	assert_signal_emit_count(WorldItemBus, "item_dropped", 0)
+	var carcasses := get_tree().get_nodes_in_group(Carcass.GROUP_NAME)
+	assert_eq(carcasses.size(), before + 1)
+	assert_eq(carcasses[carcasses.size() - 1].species, "herbivore")
 
 
 func test_a_non_lethal_hit_drops_no_loot():

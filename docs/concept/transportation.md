@@ -2,7 +2,10 @@
 
 The planet is toroidal and water-heavy ([world.md](world.md)), and
 [pets.md](pets.md) currently only offers horses as a mount. Transportation
-gets its own system rather than staying an afterthought of the pet list:
+gets its own system rather than staying an afterthought of the pet list.
+This doc covers the tools a player carries; see
+[infrastructure.md](infrastructure.md) for what the land itself accumulates
+from repeated traffic — worn paths, trails, roads, and crossings:
 
 - **Boats** are a craftable/buildable mode of transport (see
   [crafting.md](crafting.md)/[building.md](building.md)) for crossing the

@@ -34,6 +34,7 @@ const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 const CreatureBehavior = preload("res://src/gameplay/creature_behavior.gd")
 const Health = preload("res://src/gameplay/health.gd")
 const LootTable = preload("res://src/gameplay/loot_table.gd")
+const Carcass = preload("res://src/rendering/carcass.gd")
 const Knockback = preload("res://src/gameplay/knockback.gd")
 const HealthBar = preload("res://src/gameplay/health_bar.gd")
 const AnimalReproduction = preload("res://src/gameplay/animal_reproduction.gd")
@@ -1717,15 +1718,18 @@ func _nearest_node(nodes: Array) -> Node:
 	return best
 
 
-## Reduces info.health; on death, drops the species' loot into the world (via
-## WorldItemBus, so world.gd spawns the ground items) and frees this marker.
+## Reduces info.health; on death, leaves a real Carcass behind (see
+## docs/concept/carrion.md) for a carcass-eligible species (see LootTable --
+## the same species that used to get an instant loot spray now get a real
+## carcass instead) and frees this marker. A species with nothing to yield
+## (no LootTable entry) still just despawns, exactly like before.
 func take_damage(amount: float) -> void:
 	if info == null:
 		return
 	info.health = _health.take_damage(info.health, amount)
 	_update_health_bar()
 	if _health.is_dead(info.health):
-		_drop_loot()
+		_spawn_carcass_if_eligible()
 		queue_free()
 
 
@@ -1735,9 +1739,13 @@ func _update_health_bar() -> void:
 	_health_bar_fill.size.x = _health_bar.fill_width(info.health, info.max_health, HEALTH_BAR_WIDTH)
 
 
-func _drop_loot() -> void:
-	for stack in _loot_table.drops_for(info.species):
-		WorldItemBus.item_dropped.emit(stack, position)
+func _spawn_carcass_if_eligible() -> void:
+	if _loot_table.drops_for(info.species).is_empty():
+		return
+	var carcass := Carcass.new()
+	carcass.species = info.species
+	carcass.position = position
+	get_parent().add_child(carcass)
 
 
 ## Starts a shove of `force` total displacement, played out smoothly over

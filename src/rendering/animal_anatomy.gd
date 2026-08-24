@@ -48,6 +48,7 @@ const SPECIES := [
 	"wolf", "lynx", "jaguar", "predator",
 	"mouse",
 	"venomous_snake", "nonvenomous_snake",
+	"lindwurm", "rubezahl", "nyx", "krampus",
 ]
 
 ## Legless species (see the "serpents" profiles below): zero leg_length, so
@@ -305,6 +306,65 @@ const _PROFILES := {
 		"leg_length": 0.0, "leg_thickness": 0.0,
 		"tail": TAIL_THIN, "tail_length": 0.40,
 		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+
+	# -- Germany-region world bosses (docs/concept/worldbosses.md) ----------
+	# All fully-illustrated (see IllustratedAnimalSprite) -- these fields
+	# only actually draw during the rare "eat" action, the one action
+	# illustrated art has no walk-fallback for (see has_action's own doc
+	# comment). world_scale is the field that matters everywhere else: it
+	# multiplies the illustrated sprite's on-screen size directly (see
+	# IllustratedAnimalSprite.marker_scale), so it's what makes a boss
+	# actually read as bigger than an ordinary predator on screen, not just
+	# in its health bar.
+	# Legless serpentine dragon -- same "no legs, long tapering body" shape
+	# as the two snake profiles, scaled up to dragon size.
+	"lindwurm": {
+		"barrel_squareness": 0.35,
+		"world_scale": 2.4,
+		"body_length": 0.52, "body_height": 0.16, "body_y": 0.62, "shoulder_hump": 0.0,
+		"neck_length": 0.05, "neck_thickness": 0.12, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.16, "head_height": 0.11, "muzzle": 0.5, "ear_size": 0.0,
+		"leg_length": 0.10, "leg_thickness": 0.06,
+		"tail": TAIL_THIN, "tail_length": 0.34,
+		"headgear": HEADGEAR_HORNS, "has_mane": false,
+	},
+	# Storm-boar -- a scaled-up boar build (low, humped, tusked), not a new
+	# shape family.
+	"rubezahl": {
+		"barrel_squareness": 0.55,
+		"world_scale": 2.0,
+		"body_length": 0.58, "body_height": 0.32, "body_y": 0.56, "shoulder_hump": 0.14,
+		"neck_length": 0.07, "neck_thickness": 0.19, "neck_carriage": NECK_LOW,
+		"head_length": 0.21, "head_height": 0.14, "muzzle": 0.9, "ear_size": 0.20,
+		"leg_length": 0.18, "leg_thickness": 0.07,
+		"tail": TAIL_STUB, "tail_length": 0.06,
+		"headgear": HEADGEAR_TUSKS, "has_mane": false,
+	},
+	# Upright torso tapering into a long tail (no legs) -- closest existing
+	# shape is a level-backed predator's proportions with a snake-length tail.
+	"nyx": {
+		"barrel_squareness": 0.35,
+		"world_scale": 1.9,
+		"body_length": 0.40, "body_height": 0.24, "body_y": 0.48, "shoulder_hump": 0.0,
+		"neck_length": 0.14, "neck_thickness": 0.09, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.14, "head_height": 0.12, "muzzle": 0.2, "ear_size": 0.10,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.36,
+		"headgear": HEADGEAR_NONE, "has_mane": true,
+	},
+	# Tall bipedal goat-demon -- goat headgear, but noticeably taller/
+	# heavier-necked and longer-legged than the quadruped goat profile to
+	# read as an upright figure.
+	"krampus": {
+		"barrel_squareness": 0.4,
+		"world_scale": 2.1,
+		"body_length": 0.36, "body_height": 0.34, "body_y": 0.44, "shoulder_hump": 0.05,
+		"neck_length": 0.14, "neck_thickness": 0.13, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.16, "head_height": 0.13, "muzzle": 0.5, "ear_size": 0.18,
+		"leg_length": 0.34, "leg_thickness": 0.07,
+		"tail": TAIL_THIN, "tail_length": 0.14,
+		"headgear": HEADGEAR_HORNS, "has_mane": false,
 	},
 
 	# -- the small exception ------------------------------------------------

@@ -68,7 +68,23 @@ around inside.
   [npc.md](npc.md#needs-and-the-local-production-economy)'s farmer/hunter
   yield, which already reads these same density/capacity numbers — a
   village near land the player stripped bare goes hungry for real,
-  measurable years, not until the next rain.
+  measurable years, not until the next rain. **Depletion drivers wired so
+  far**: a working farmer NPC's harvest, and real grazing pressure — both
+  a grazer's deliberate walk-to-a-tuft bite (`GrazerForaging`) and the
+  ambient any-herbivore-standing-on-mature-grass sweep
+  (`EarthChunkManager._graze_by_herbivores`) — now feed the same
+  `record_vegetation_harvest` mortality term, so sustained horse/sheep
+  grazing measurably depletes land health exactly like sustained
+  overharvesting does. **Known gap, honestly flagged**: tree felling
+  (`ChoppableTree`) does not yet — a chopped tree is a wholly separate
+  discrete-node system with no chunk-coordinate/`EarthChunkManager`
+  reference at all (unlike every other depletion driver above, which
+  already receives a `world`/`manager` reference to call through), and a
+  felled tree has no existing real quantity analogous to "vegetation
+  density consumed" the way a farmer's yield or a grazed tuft's growth
+  level does. Wiring it would mean threading a manager reference through
+  `TreeRenderer`'s spawn path AND inventing a new amount from nothing,
+  not just adding a caller — a separate, larger follow-up.
 - **Globe topology**: the world wraps — walk far enough in any direction and
   you return to your start. Implementation note: true spherical tiling
   (geodesic/cube-sphere) has serious complexity costs (pole singularities,

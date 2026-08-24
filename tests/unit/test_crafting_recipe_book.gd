@@ -19,8 +19,9 @@ func test_recipe_ids_returns_all_defined_recipes():
 	assert_true(ids.has("stone_pickaxe"))
 	assert_true(ids.has("lasso"))
 	# + smelting/forge recipes: furnace, iron_ingot, copper_ingot,
-	# iron_helm/chest/legs/boots + fishing_rod + lasso.
-	assert_eq(ids.size(), 15)
+	# iron_helm/chest/legs/boots + fishing_rod + lasso
+	# + woodworking: log_to_sticks, log_to_wood, saw.
+	assert_eq(ids.size(), 18)
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():
@@ -132,6 +133,31 @@ func test_stone_pickaxe_recipe_uses_sticks_and_rocks():
 	assert_true(book.recipe_ids().has("stone_pickaxe"))
 	assert_false(book.can_craft("stone_pickaxe", {"stick": 1}))
 	assert_true(book.can_craft("stone_pickaxe", {"stick": 2, "rock": 3}))
+
+
+# -- woodworking (see docs/concept/woodworking.md) ---------------------------
+#
+# A log refines two ways at the bench, no tool/skill gate (see
+# ChoppableTree.saw_up for the gated, in-world beam/plank path instead):
+# more kindling, or the plain wood every existing wood-consuming recipe
+# (torch/wooden_club/campfire/...) still needs, so that supply is never cut
+# off just because bare-trunk chopping now yields logs instead of wood.
+
+func test_log_splits_into_sticks():
+	assert_true(book.recipe_ids().has("log_to_sticks"))
+	assert_true(book.can_craft("log_to_sticks", {"log": 1}))
+	assert_eq(book.recipe_output("log_to_sticks")["item_id"], "stick")
+
+
+func test_log_converts_into_wood():
+	assert_true(book.recipe_ids().has("log_to_wood"))
+	assert_true(book.can_craft("log_to_wood", {"log": 1}))
+	assert_eq(book.recipe_output("log_to_wood")["item_id"], "wood")
+
+
+func test_saw_is_craftable():
+	assert_true(book.recipe_ids().has("saw"))
+	assert_eq(book.recipe_output("saw")["item_id"], "saw")
 
 
 func test_smelting_and_forge_recipes_exist():

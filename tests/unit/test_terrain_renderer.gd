@@ -105,7 +105,7 @@ func _wipe_cache_behavior_files():
 ## "room_for_tile" errors for every grid cell beyond the fake image's
 ## bounds. Mirrors build_tile_set()'s own size math exactly.
 func _full_atlas_size() -> Vector2i:
-	var total_cells: int = renderer._land_land_corner_base_linear() + renderer._land_land_corner_family_size()
+	var total_cells: int = renderer._earth_blend_base_linear() + renderer._earth_blend_family_size()
 	var rows := int(ceil(float(total_cells) / TerrainRenderer.ATLAS_COLUMNS))
 	var art := TerrainRenderer.ART_TILE_SIZE
 	return Vector2i(TerrainRenderer.ATLAS_COLUMNS * art, rows * art)
@@ -201,6 +201,11 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 		# two land biomes) x the same CORNER_MASK_COUNT x BLEND_VARIANTS.
 		+ 2 * n * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 		+ land_n * (land_n - 1) * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Earth-modification blend tiles (see earth_dominant_blend_for): one
+		# slot per real land biome partner (ocean excluded) x every non-empty
+		# cardinal-direction subset x BLEND_VARIANTS -- no pair indexing, since
+		# earth is always the "own"/near side and never a partner itself.
+		+ land_n * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -220,6 +225,9 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
 		+ 2 * n * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 		+ land_n * (land_n - 1) * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Earth-modification blend tiles -- see the matching comment in
+		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
+		+ land_n * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -343,6 +351,9 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
 		+ 2 * n * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 		+ land_n * (land_n - 1) * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Earth-modification blend tiles -- see the matching comment in
+		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
+		+ land_n * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
@@ -845,10 +856,37 @@ func test_paint_roofs_restores_a_cell_that_is_no_longer_hidden():
 	assert_ne(tile_map_layer.get_cell_source_id(Vector2i(0, 0)), -1, "should repaint once no longer hidden")
 
 
+## Uses a structure id ("campfire"), not EARTH_TILE_ID: structures/building
+## pieces are deliberately man-made and always paint their flat modification
+## tile regardless of neighbors, unlike EARTH_TILE_ID -- see the dedicated
+## earth-modification-blend tests below for that cell's own (now
+## neighbor-aware) behavior.
 func test_paint_uses_the_modification_tile_when_a_cell_has_one():
 	var tile_set := renderer.build_tile_set()
 	tile_map_layer.tile_set = tile_set
 	var chunk := _make_chunk()
+	chunk.modifications[Vector2i(0, 0)] = "campfire"
+
+	renderer.paint(tile_map_layer, chunk)
+
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_modification("campfire")
+	)
+
+
+## An EARTH_TILE_ID cell with no real, unmodified neighbor to blend toward
+## (every cardinal neighbor is out of chunk with no lookup provided) still
+## falls back to the plain flat earth tile -- the pre-existing fallback
+## behavior atlas_coords_for_modification always provides.
+func test_paint_uses_the_flat_earth_tile_when_no_real_neighbor_is_available_to_blend_toward():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 1
+	chunk.height = 1
+	chunk.elevation = PackedFloat32Array([0.4])
+	chunk.biome = PackedStringArray(["grassland"])
 	chunk.modifications[Vector2i(0, 0)] = TerrainRenderer.EARTH_TILE_ID
 
 	renderer.paint(tile_map_layer, chunk)
@@ -871,6 +909,173 @@ func test_paint_falls_back_to_the_biome_tile_when_a_cell_has_no_modification():
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
 		renderer.atlas_coords_for_biome("grassland", expected_variant)
+	)
+
+
+# -- earth-modification blend (see paint()'s modifications branch, PathScarring) --
+# Reported (screenshot): a grass/dirt-path boundary reads as a hard, unblended
+# edge, and the tile-grid corner where they meet is a hard square. Root cause:
+# paint()'s `if chunk.modifications.has(local):` branch short-circuited straight
+# to atlas_coords_for_modification BEFORE ever consulting neighbor biomes --
+# every modification tile (player-built floor as well as PathScarring's worn-
+# ground earth, see docs/progress.md and src/world/path_scarring.gd) painted one
+# dead-flat EARTH_COLOR square regardless of what real ground surrounded it,
+# completely bypassing the whole blend/corner system the four prior rounds
+# above built. Scoped to EARTH_TILE_ID only -- structures/building pieces are
+# deliberately man-made and should stay flat-edged, not organically blended
+# into the ground. No separate corner-carve family is needed here (unlike the
+# land/land and water/land families above): earth_dominant_blend_for has no
+# "same biome, stay pure" skip the way dominant_blend_for does for two real
+# biomes, so it already fires on every differing cardinal direction including
+# two-at-once (the corner shape) -- generate_multi_directional_blend_image_from
+# already dithers a shared corner between two active directions on its own
+# (see that function's own doc comment).
+
+func test_earth_dominant_blend_for_returns_the_partner_and_all_of_its_directions():
+	var result := renderer.earth_dominant_blend_for(
+		{Vector2i(0, -1): "grassland", Vector2i(1, 0): "grassland", Vector2i(-1, 0): "grassland"}
+	)
+	assert_eq(result.partner, "grassland")
+	assert_eq(result.directions.size(), 3)
+
+
+func test_earth_dominant_blend_for_returns_empty_when_no_real_neighbor_borders_it():
+	# Every neighbor excluded (see _neighbor_biomes' exclude_modified_neighbors
+	# param) -- an earth cell fully enclosed by other modified cells (a solid
+	# multi-tile built floor or worn path) must stay a plain, unblended earth
+	# tile, not dither a seam against ground that isn't actually adjacent.
+	assert_true(renderer.earth_dominant_blend_for({}).is_empty())
+
+
+## Mirrors dominant_blend_for's own "land never blends toward ocean" rule --
+## the shoreline transition stays entirely the GPU WaterFx overlay's job.
+func test_earth_dominant_blend_for_never_blends_toward_ocean():
+	var result := renderer.earth_dominant_blend_for({Vector2i(1, 0): "ocean"})
+	assert_true(result.is_empty())
+
+
+func test_earth_dominant_blend_for_picks_the_biome_covering_the_most_edges():
+	var result := renderer.earth_dominant_blend_for(
+		{Vector2i(0, -1): "desert", Vector2i(0, 1): "desert", Vector2i(1, 0): "grassland"}
+	)
+	assert_eq(result.partner, "desert")
+	assert_eq(result.directions.size(), 2)
+
+
+func test_atlas_coords_for_earth_blend_is_distinct_from_the_plain_earth_tile():
+	var blend_coords := renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1)], 0)
+	assert_ne(blend_coords, renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID))
+
+
+func test_atlas_coords_for_earth_blend_differs_by_direction_set():
+	var north := renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1)], 0)
+	var north_east := renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1), Vector2i(1, 0)], 0)
+	assert_ne(north, north_east)
+
+
+func test_atlas_coords_for_earth_blend_is_a_created_tile_in_the_atlas():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var coords := renderer.atlas_coords_for_earth_blend(
+		"mountain", [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)], TerrainRenderer.BLEND_VARIANTS - 1
+	)
+	assert_true(source.has_tile(coords), "earth blend tile %s should exist in the atlas" % coords)
+
+
+## End to end through paint(): a worn/built earth cell sitting inside plain
+## grassland (the exact real shape PathScarring produces -- a dirt patch
+## worn into a grass field) must now blend toward that real neighbor on
+## every side, not paint the old flat, context-blind earth square.
+func test_paint_blends_an_earth_modification_toward_its_real_neighbor_biome():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	chunk.biome = PackedStringArray([
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+	])
+	chunk.modifications[Vector2i(1, 1)] = TerrainRenderer.EARTH_TILE_ID
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(1, 1)
+	var all_four := [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_earth_blend("grassland", all_four, variant),
+		"an earth cell surrounded by real grassland should blend on all four sides, not paint a flat square"
+	)
+	assert_ne(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID)
+	)
+
+
+## Two adjacent earth cells (a multi-tile worn path, or a player-built floor)
+## must NOT dither a seam against each other's ORIGINAL pre-modification
+## biome -- only their outer-facing edges (touching genuinely unmodified
+## ground) should blend. A 3x3 all-grassland chunk with earth at (0,1) and
+## (1,1): cell (1,1)'s real differing neighbors are north/south/east (all
+## still plain grassland); its west neighbor (0,1) is ALSO earth-modified
+## and must be excluded, not counted as a fourth "grassland" direction.
+func test_paint_does_not_blend_an_earth_modification_toward_an_adjacent_modified_neighbor():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	chunk.biome = PackedStringArray([
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+	])
+	chunk.modifications[Vector2i(0, 1)] = TerrainRenderer.EARTH_TILE_ID
+	chunk.modifications[Vector2i(1, 1)] = TerrainRenderer.EARTH_TILE_ID
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(1, 1)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1), Vector2i(0, 1), Vector2i(1, 0)], variant),
+		"the shared west edge between two adjacent earth cells must not blend -- only the real 3 differing sides should"
+	)
+
+
+## Same discipline every earlier corner/blend bug round in this file already
+## established as load-bearing: an atlas COORDINATE matching what the caller
+## expects proves nothing about the PIXELS actually baked there. Confirms the
+## earth cell's real baked edge pixel is a genuine copy of grassland's own
+## real pixel, not the flat EARTH_COLOR fill straight through.
+func test_baked_atlas_pixels_for_an_earth_modification_cell_show_real_grassland_pixels_at_its_blended_edge():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	var art := TerrainRenderer.ART_TILE_SIZE
+
+	var north_coords := renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1)], 0)
+	var earth_tile := image.get_region(Rect2i(Vector2i(north_coords.x * art, north_coords.y * art), Vector2i(art, art)))
+
+	var grassland_coords := renderer.atlas_coords_for_biome("grassland", 0)
+	var grassland_tile := image.get_region(
+		Rect2i(Vector2i(grassland_coords.x * art, grassland_coords.y * art), Vector2i(art, art))
+	)
+
+	var earth_color: Color = TerrainRenderer.EARTH_COLOR
+	var north_edge_pixel := earth_tile.get_pixel(art / 2, 0)
+	assert_lt(
+		_rgb_distance(north_edge_pixel, grassland_tile.get_pixel(art / 2, 0)), _rgb_distance(north_edge_pixel, earth_color),
+		"the blended north edge should read as real grassland pixels, not the flat earth fill"
+	)
+	var south_edge_pixel := earth_tile.get_pixel(art / 2, art - 1)
+	assert_lt(
+		_rgb_distance(south_edge_pixel, earth_color), _rgb_distance(south_edge_pixel, grassland_tile.get_pixel(art / 2, art - 1)),
+		"the un-blended far (south) edge of a north-only blend should still read as plain earth"
 	)
 
 

@@ -134,6 +134,22 @@ func test_a_potato_is_food():
 	assert_eq(potato.kind, "food")
 
 
+# -- woodworking (see docs/concept/woodworking.md) ---------------------------
+
+func test_catalog_knows_the_woodworking_materials():
+	for item_id in ["log", "beam", "plank"]:
+		var item = catalog.make(item_id)
+		assert_not_null(item, item_id)
+		assert_eq(item.kind, "material", item_id)
+
+
+func test_a_saw_is_a_tool_that_reports_as_a_saw():
+	var saw = catalog.make("saw")
+	assert_not_null(saw)
+	assert_eq(saw.kind, "tool")
+	assert_true(saw.is_saw())
+
+
 # -- real weapon mass (see MaterialProperties.mass_kg_for, docs/concept/ -----
 # -- materials.md's momentum = mass * velocity model) ------------------------
 
@@ -157,3 +173,20 @@ func test_every_weapon_kind_item_has_a_positive_mass():
 ## volumes chosen, a real consequence of the shared density table.
 func test_the_iron_sword_masses_more_than_the_wooden_club():
 	assert_gt(catalog.make("iron_sword").mass_kg, catalog.make("wooden_club").mass_kg)
+
+
+# -- kind_of: an item's category without building a whole Item first --------
+#
+## Exposed standalone (the same "kind" make() already stamps onto the built
+## Item) so a caller can classify an item id, e.g. "is this food?", without
+## constructing one -- see Player.sell_food_to_village's village-feeding
+## fallback (docs/concept/progression.md "Ecological literacy").
+
+func test_kind_of_matches_the_kind_make_builds():
+	assert_eq(catalog.kind_of("cherry"), catalog.make("cherry").kind)
+	assert_eq(catalog.kind_of("cherry"), "food")
+	assert_eq(catalog.kind_of("iron_axe"), "tool")
+
+
+func test_kind_of_unknown_item_is_empty_string():
+	assert_eq(catalog.kind_of("not_a_real_item"), "")

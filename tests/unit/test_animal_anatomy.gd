@@ -171,3 +171,30 @@ func test_a_deer_is_four_fifths_the_size_of_a_horse():
 	var deer: float = AnimalAnatomy.profile_for("deer").world_scale
 	var horse: float = AnimalAnatomy.profile_for("horse").world_scale
 	assert_almost_eq(deer / horse, 0.8, 0.01)
+
+
+# -- Germany-region world bosses (docs/concept/worldbosses.md) --------------
+#
+# Fully-illustrated species (see IllustratedAnimalSprite) -- their PROFILE
+# fields other than world_scale never actually draw (illustrated art wins
+# over ProceduralAnimalSprite whenever it's registered), but a profile must
+# still exist: ConsoleSpecies.resolve gates on AnimalAnatomy.SPECIES, and a
+# rare "eat" action (the one action illustrated art has no walk-fallback
+# for -- see IllustratedAnimalSprite.has_action) still drops all the way to
+# the procedural renderer, which needs real proportions to draw something
+# coherent rather than a bare default.
+
+const GERMANY_BOSS_SPECIES := ["lindwurm", "rubezahl", "nyx", "krampus"]
+
+
+func test_every_germany_boss_has_a_profile():
+	for species in GERMANY_BOSS_SPECIES:
+		assert_true(AnimalAnatomy.has_profile(species), species)
+
+
+## World bosses should read as bigger than an ordinary bear (this roster's
+## current largest, world_scale 1.5) -- boss stature is part of the point.
+func test_every_germany_boss_is_larger_than_a_bear():
+	var bear: float = AnimalAnatomy.profile_for("bear").world_scale
+	for species in GERMANY_BOSS_SPECIES:
+		assert_gt(AnimalAnatomy.profile_for(species).world_scale, bear, species)

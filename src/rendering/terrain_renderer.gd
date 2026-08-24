@@ -151,7 +151,7 @@ const ATLAS_COLUMNS := 64
 ## still being decorrelated between neighbouring tiles.
 const _VARIANT_SALT := 90210
 
-const ATLAS_VERSION := "art_resolution_v21_curved_blend_boundaries_and_land_land_diagonal_corners"
+const ATLAS_VERSION := "art_resolution_v22_earth_modification_blend"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -221,6 +221,15 @@ func atlas_coords_for_directional_blend(
 	return _grid_coords(_blend_linear(near_biome, far_biome, mask, variant_index))
 
 
+## Returns the atlas coordinate for an earth-modification blend tile (see
+## earth_dominant_blend_for/paint()'s modifications branch): neighbor_biome
+## is the real land biome this earth cell is dithering toward, `directions`
+## is every cardinal direction that neighbor lies in.
+func atlas_coords_for_earth_blend(neighbor_biome: String, directions: Array, variant_index: int = 0) -> Vector2i:
+	var mask := _direction_mask(directions)
+	return _grid_coords(_earth_blend_linear(neighbor_biome, mask, variant_index))
+
+
 ## Which biome fringes over which at a border: exactly ONE side of any border
 ## renders a transition tile -- the higher-priority biome dithers over its
 ## lower-priority neighbor while that neighbor stays a pure tile (both sides
@@ -287,6 +296,55 @@ func _is_more_dominant(candidate: String, candidate_directions: Array, best_biom
 	if candidate_directions.size() != best_directions.size():
 		return candidate_directions.size() > best_directions.size()
 	return BiomeClassifier.KNOWN_BIOMES.find(candidate) < BiomeClassifier.KNOWN_BIOMES.find(best_biome)
+
+
+## Earth-modification counterpart of dominant_blend_for (see paint()'s
+## modifications branch) -- the fifth distinct root cause behind a report of
+## "grass to dirt path reads as a hard edge, and the corner where they meet
+## is a hard square": paint()'s modifications branch short-circuited straight
+## to the single flat EARTH_COLOR tile before ever consulting neighbor
+## biomes, so a built or PathScarring-worn earth cell (see
+## src/world/path_scarring.gd) never got ANY border treatment at all,
+## regardless of what real ground surrounded it -- not a repeat of any of
+## the four prior corner-blend rounds above, which were all real-biome-pair
+## logic and never touched the separate modification-tile system.
+##
+## Unlike dominant_blend_for, there is no "same biome, stay pure" skip and no
+## priority gate: earth has no real biome identity of its own to compare
+## against, so it always concedes to whatever real, unmodified ground
+## borders it (see _neighbor_biomes' exclude_modified_neighbors param, which
+## keeps two adjacent earth cells -- a multi-tile worn path or built floor --
+## from dithering a seam against each other's pre-modification biome). Ocean
+## is skipped, mirroring dominant_blend_for's own "land never blends toward
+## ocean" rule -- the shoreline transition stays the GPU WaterFx overlay's
+## job alone. Because every differing direction qualifies unconditionally
+## (no priority filtering to exclude a two-perpendicular-sides case the way
+## a corner-carve family exists to catch elsewhere), a shared corner between
+## two active directions is already handled by the SAME directional-blend
+## mask (generate_multi_directional_blend_image_from dithers a shared corner
+## between active directions on its own -- see that function's own doc
+## comment) -- no separate earth corner-carve family is needed or reachable.
+func earth_dominant_blend_for(neighbor_biomes: Dictionary) -> Dictionary:
+	var directions_by_biome := {}
+	for direction in neighbor_biomes:
+		var neighbor: String = neighbor_biomes[direction]
+		if neighbor == "" or neighbor == "ocean":
+			continue
+		if not directions_by_biome.has(neighbor):
+			directions_by_biome[neighbor] = []
+		directions_by_biome[neighbor].append(direction)
+
+	if directions_by_biome.is_empty():
+		return {}
+
+	var best_biome := ""
+	var best_directions: Array = []
+	for candidate in directions_by_biome:
+		var candidate_directions: Array = directions_by_biome[candidate]
+		if _is_more_dominant(candidate, candidate_directions, best_biome, best_directions):
+			best_biome = candidate
+			best_directions = candidate_directions
+	return {"partner": best_biome, "directions": best_directions}
 
 
 ## Which of `biome_name`'s geometric tile CORNERS (see
@@ -587,6 +645,40 @@ func _land_land_corner_linear(own_biome: String, other_biome: String, mask: int,
 	)
 
 
+## Linear atlas index where the earth-modification blend family begins --
+## right after the whole land/land corner family (see
+## earth_dominant_blend_for). A FOURTH, differently-shaped family alongside
+## the three corner-carve ones above: earth is always the "own"/near side
+## (see paint()'s modifications branch), so this only needs one slot per
+## real land-biome partner (no NxN pair space -- earth itself is never a
+## `other_biome`/partner for any real biome's own blend or corner).
+func _earth_blend_base_linear() -> int:
+	return _land_land_corner_base_linear() + _land_land_corner_family_size()
+
+
+## One slot per real land biome (ocean is excluded -- see
+## earth_dominant_blend_for) x every non-empty cardinal-direction subset x
+## BLEND_VARIANTS -- mirrors _land_corner_base_linear's sibling family
+## shape (single-biome-indexed, not pair-indexed), sized on
+## DIRECTION_MASK_COUNT instead of CORNER_MASK_COUNT since this is a
+## directional-blend family, not a corner-carve one.
+func _earth_blend_family_size() -> int:
+	return _land_biome_count() * DIRECTION_MASK_COUNT * BLEND_VARIANTS
+
+
+## Linear atlas index of one earth-modification blend tile, indexed by the
+## real land-biome partner's ordinal within the 6 land biomes (skip ocean's
+## own KNOWN_BIOMES index 0, same "- 1" convention _land_land_corner_linear
+## uses).
+func _earth_blend_linear(neighbor_biome: String, mask: int, variant: int) -> int:
+	var neighbor_ordinal := BiomeClassifier.KNOWN_BIOMES.find(neighbor_biome) - 1
+	return (
+		_earth_blend_base_linear()
+		+ neighbor_ordinal * DIRECTION_MASK_COUNT * BLEND_VARIANTS
+		+ (mask - 1) * BLEND_VARIANTS + (variant % BLEND_VARIANTS)
+	)
+
+
 ## Linear atlas index of one corner-carve tile. Routes to whichever of the
 ## THREE corner families actually owns the tile (see corner_direction_for):
 ## ocean-owning (own_biome == "ocean", indexed by other_biome's ordinal),
@@ -831,6 +923,31 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 						_land_land_corner_linear(own_land_biome, other_land_biome, corner_mask, variant)
 					)
 
+	# Earth-modification blend tiles (see earth_dominant_blend_for/paint()'s
+	# modifications branch): a built or PathScarring-worn earth cell now
+	# dithers its own flat texture toward whichever real land biome borders
+	# it, the same treatment every real biome pair already gets above,
+	# instead of always being one dead-flat unblended square regardless of
+	# neighbors (reported: a grass-to-dirt-path boundary read as a hard
+	# edge, with the corner where they met a hard square). Ocean is
+	# excluded, mirroring every other family's own "land never blends
+	# toward ocean" scope limit -- the shoreline stays the GPU WaterFx
+	# overlay's job alone.
+	var earth_flat_image := Image.create(ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	earth_flat_image.fill(EARTH_COLOR)
+	for neighbor_index in biome_count:
+		var neighbor_biome: String = BiomeClassifier.KNOWN_BIOMES[neighbor_index]
+		if neighbor_biome == "ocean":
+			continue
+		for mask in range(1, DIRECTION_MASK_COUNT + 1):
+			var directions := _directions_from_mask(mask)
+			for variant in BLEND_VARIANTS:
+				var neighbor_image := _normalized_for_compositing(_biome_frame_image(neighbor_biome, variant, 0))
+				var earth_blend_image := _terrain_sprite_generator.generate_multi_directional_blend_image_from(
+					earth_flat_image, neighbor_image, directions, variant
+				)
+				_blit_tile(image, earth_blend_image, _earth_blend_linear(neighbor_biome, mask, variant))
+
 	return image
 
 
@@ -845,7 +962,7 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 ## every call regardless of cache state.
 func build_tile_set() -> TileSet:
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
-	var total_cells := _land_land_corner_base_linear() + _land_land_corner_family_size()
+	var total_cells := _earth_blend_base_linear() + _earth_blend_family_size()
 	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
 
 	var image: Image = null
@@ -896,7 +1013,15 @@ func build_tile_set() -> TileSet:
 ## origin (in tile coordinates) -- used to place a chunk at its global
 ## position when streaming multiple chunks onto one shared TileMapLayer. A
 ## cell with a player-made modification (see Chunk.modifications) paints that
-## instead of its generated biome tile; otherwise, if any cardinal neighbor
+## instead of its generated biome tile -- an EARTH_TILE_ID cell (built floor
+## OR PathScarring's worn-ground dirt, see src/world/path_scarring.gd) now
+## blends toward whichever real, unmodified biome cardinally borders it (see
+## earth_dominant_blend_for), instead of always painting one dead-flat
+## EARTH_COLOR square regardless of neighbors -- reported (screenshot): a
+## grass-to-dirt-path boundary read as a hard edge, with the corner where
+## they met a hard square. Every other modification (structures, building
+## pieces) stays exactly as before: deliberately man-made, flat-edged, never
+## organically blended into the ground. Otherwise, if any cardinal neighbor
 ## *within this same chunk* is a different biome, a corner-aware directional
 ## blend tile is used -- the cell dithers toward the dominant differing neighbor
 ## biome (see dominant_blend_for) on every edge that neighbor occupies, so
@@ -919,7 +1044,17 @@ func paint(
 			var global := origin + local
 			var atlas_coords: Vector2i
 			if chunk.modifications.has(local):
-				atlas_coords = atlas_coords_for_modification(chunk.modifications[local])
+				var tile_id: String = chunk.modifications[local]
+				if tile_id == EARTH_TILE_ID:
+					var variant := variant_index_for_position(global.x, global.y)
+					var neighbors := _neighbor_biomes(chunk, x, y, origin, global_biome_lookup, true)
+					var earth_blend := earth_dominant_blend_for(neighbors)
+					if earth_blend.is_empty():
+						atlas_coords = atlas_coords_for_modification(tile_id)
+					else:
+						atlas_coords = atlas_coords_for_earth_blend(earth_blend.partner, earth_blend.directions, variant)
+				else:
+					atlas_coords = atlas_coords_for_modification(tile_id)
 			else:
 				var biome_name: String = chunk.biome[y * chunk.width + x]
 				var variant := variant_index_for_position(global.x, global.y)
@@ -982,14 +1117,32 @@ func paint_roofs(
 ## grid; neighbors outside it are resolved via `global_biome_lookup` when
 ## provided (asked with the neighbor's *global* tile coordinate), and omitted
 ## when the lookup is invalid or answers "" (unknown).
+##
+## `exclude_modified_neighbors` (used only by paint()'s earth-modification
+## branch, see earth_dominant_blend_for): when true, an IN-CHUNK neighbor
+## that itself carries a modification is omitted entirely instead of
+## reporting its underlying pre-modification biome. Without this, two
+## adjacent earth cells (a multi-tile worn path or built floor) would each
+## treat the other's original ground biome as a differing neighbor and
+## dither a seam straight through the middle of what should read as one
+## uniform patch of dirt -- chunk.biome is never actually overwritten by a
+## modification, only shadowed by it (see Chunk.modifications), so a plain
+## lookup can't otherwise tell the two apart. Out-of-chunk neighbors keep
+## going through global_biome_lookup unchanged either way -- that callable
+## has no visibility into a neighboring chunk's modifications at all, the
+## same pre-existing blind spot the ordinary biome-to-biome blend/corner
+## system already has at chunk seams.
 func _neighbor_biomes(
-	chunk: Chunk, x: int, y: int, origin: Vector2i, global_biome_lookup: Callable
+	chunk: Chunk, x: int, y: int, origin: Vector2i, global_biome_lookup: Callable,
+	exclude_modified_neighbors: bool = false
 ) -> Dictionary:
 	var neighbors := {}
 	for direction in _DIRECTIONS:
 		var nx: int = x + direction.x
 		var ny: int = y + direction.y
 		if nx >= 0 and nx < chunk.width and ny >= 0 and ny < chunk.height:
+			if exclude_modified_neighbors and chunk.modifications.has(Vector2i(nx, ny)):
+				continue
 			neighbors[direction] = chunk.biome[ny * chunk.width + nx]
 		elif global_biome_lookup.is_valid():
 			var neighbor_biome: String = global_biome_lookup.call(origin.x + nx, origin.y + ny)

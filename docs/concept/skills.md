@@ -1,7 +1,12 @@
 ## Skills
 
 A unique skill system inspired by Path of Exile's passive web, layered with
-per-player DNA-driven uniqueness.
+per-player DNA-driven uniqueness. This is **combat/magic build power**,
+spent from level-up skill points — see [progression.md](progression.md) for
+how those points are earned. It is deliberately separate from
+[labor_skills.md](labor_skills.md)'s use-based practical mastery (Woodcutting,
+Smithing, Farming, ...), which levels from doing the corresponding action, not
+from allocation. A character advances both at once, independently.
 
 ### Per-archetype webs, softly gated
 

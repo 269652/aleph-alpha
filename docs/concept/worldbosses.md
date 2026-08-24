@@ -92,13 +92,54 @@ via catch-up simulation with zero warning). Full mechanism, including how
 the quest itself is offered and what a settlement's success/failure
 actually changes, in [quests.md](quests.md#village-endangerment-the-attractor-mechanism).
 
+### Status
+
+**The fitness/promotion math and the one-shot phase-authoring contract are
+both real and built** (`src/gameplay/world_boss_fitness.gd`, pre-dating
+this section): `fitness_score(level, kills, age_seconds)` (level ×10, each
+kill ×5, age ×0.01/second — level and kills dominate at everyday scale,
+age lets mere survival still climb toward boss tier), per-species
+thresholds (predator 800, herbivore 400 — "becoming a boss should be rarer
+for predators," per this doc's own words), and `attempt_promotion` (never
+invokes the phase generator — the real, potentially-costly LLM call this
+doc describes — for an ineligible individual). `PhaseGenerator`/
+`FakePhaseGenerator` already mirror the exact "LLM plans once, offline,
+never live" contract this doc's "Encounter design" section specifies,
+matching `npc_planner.gd`'s own stubbed/fake-LLM testing convention.
+
+**The emergence substrate (Emergence Phase 11) gave that pre-existing
+mechanism a real causal identity on top, without changing its math**:
+`EarthChunkManager.attempt_world_boss_promotion` wraps it and records a
+real `world_boss_promoted` event (docs/emergence/05's own "Boss
+emergence... must permanently affect the world," made concrete and
+`/why`/`/boss`-inspectable); `defeat_world_boss` does the same for "Killing
+a boss emits a major historical event." A `WorldBoss`/`WorldBossStore`
+(mirrors `Institution`/`InstitutionStore`'s shape: active/defeated,
+persisted, history kept after defeat) holds the promoted individual's real
+score, threshold, and baked-in phases.
+
+**No live gameplay trigger calls this yet.** This is the one real, honest
+gap: nothing in this project currently tracks a creature's accumulated
+kills or lifetime age — `CreatureInfo.level` is real but fixed at spawn
+from the creature's own seed, not something that grows through play, so
+there is no real per-individual data to attempt promotion FROM
+automatically. The mechanism itself is real, tested, and ready to be
+called the moment a real kill-counter/age-tracker exists on a creature —
+matches Phase 4's own original, honestly-documented gap before Phase 5/6
+gave it real data to work from. Territory effects, era-gating, village
+endangerment (both explicitly depend on systems — quests.md's own
+endangerment mechanism, the era system — that do not exist yet either),
+taming a world boss, and the physics-spectacle combat layer are all
+untouched by this slice.
+
 ### Open questions
 
-- Exact fitness-threshold/rarity math for when the sim promotes an
-  individual to world-boss status — needs numeric design once the base
-  fitness/rarity system ([evolution.md](evolution.md)) has real numbers.
-  The wealth→opportunity-biomass conversion above needs the same numeric
-  pass, as a further input to the same open question.
 - Exact cost/latency budget for the one-time promotion-triggered LLM call,
   and what the fallback behavior is if that call fails (a boss should never
   fail to spawn just because an API call did).
+- What real per-individual signal should drive `attempt_world_boss_promotion`
+  once one exists — a kill-counter and lifetime-age field added directly to
+  the creature, most likely, but exact ownership/persistence isn't decided.
+- The wealth→opportunity-biomass conversion (village endangerment, above)
+  still needs its own numeric pass, separate from — and still open even
+  though — the base fitness-threshold math is now resolved.

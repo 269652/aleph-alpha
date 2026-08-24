@@ -15,6 +15,7 @@ const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ExperienceTrack = preload("res://src/gameplay/experience_track.gd")
 const SkillTree = preload("res://src/gameplay/skill_tree.gd")
 const KeystonePassive = preload("res://src/gameplay/keystone_passive.gd")
+const EcologicalLiteracy = preload("res://src/gameplay/ecological_literacy.gd")
 const Equipment = preload("res://src/gameplay/equipment.gd")
 const Smelting = preload("res://src/gameplay/smelting.gd")
 const FishingSession = preload("res://src/gameplay/fishing_session.gd")
@@ -37,6 +38,7 @@ const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
+const Carcass = preload("res://src/rendering/carcass.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
@@ -212,6 +214,9 @@ var hotbar := Hotbar.new(HOTBAR_SLOT_COUNT)
 var experience := ExperienceTrack.new()
 var skill_tree := SkillTree.new()
 var keystones := KeystonePassive.new()
+## XP-award arithmetic for non-combat "ecological literacy" sources (see
+## harvest_fruit_from_tree/sell_food_to_village, docs/concept/progression.md).
+var _ecological_literacy := EcologicalLiteracy.new()
 ## Worn armor (see Equipment): reduces incoming damage by its total armor.
 var equipment := Equipment.new()
 ## node_id/keystone_id -> true for every allocated skill (see SkillTree /
@@ -1169,6 +1174,7 @@ func _perform_attack() -> void:
 	_smash_step()
 	_harvest_grass_step()
 	_pull_wild_crop_step()
+	_butcher_step()
 
 
 ## Smashing/mining: a swing that reaches a rock node (shared "stone" group)
@@ -1223,6 +1229,25 @@ func _pull_wild_crop_step() -> void:
 
 	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
 		crops[index].begin_pull()
+
+
+## Butchering: a swing over a nearby carcass (see Carcass.butcher,
+## docs/concept/carrion.md) takes its next remaining part -- same shared
+## group-scan + range-sweep shape as every other harvest step above. Meat
+## yield reads the player's allocated butchering skill live (SkillTree's
+## meat_yield stat, see Butchering.meat_count) rather than caching it --
+## always in sync with allocated_nodes, no separate accumulator to drift.
+func _butcher_step() -> void:
+	var carcasses := get_tree().get_nodes_in_group(Carcass.GROUP_NAME)
+	var positions: Array = []
+	for carcass in carcasses:
+		positions.append(carcass.position)
+
+	if positions.is_empty():
+		return
+	var meat_yield_bonus := skill_tree.total_bonus("meat_yield", allocated_nodes)
+	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
+		carcasses[index].butcher(meat_yield_bonus)
 
 
 ## The held item's material-model kind (see MaterialDamage/Block), used for
@@ -1287,11 +1312,24 @@ func is_blocking() -> bool:
 	return Input.is_action_pressed("block") if _controlled_locally() else _pending_block_pressed
 
 
+## How much Carpentry (SkillTree's carpentry_1/2 nodes, summed via
+## total_bonus) it takes to saw a bare trunk into beam/plank instead of
+## bucking it into raw logs -- see docs/concept/woodworking.md. Requires
+## BOTH nodes allocated, genuine investment rather than a single point.
+const CARPENTRY_LEVEL_FOR_SAWING := 2.0
+
 ## Felling: any swing damages ChoppableTrees in range through the material
 ## damage model (see MaterialDamage), scaled by the HELD item -- an axe chops
 ## at full efficiency (3x wood multiplier), a sword hacks weakly (0.5x, so a
 ## tree takes many more swings), bare hands barely scratch bark (0.25x). Same
 ## AOE range/targeting math as creature hits (reuses MeleeAttack.targets_in_range).
+##
+## A saw + enough Carpentry tries ChoppableTree.saw_up first, on a bare
+## trunk, turning the whole remaining trunk into beam+plank in one action
+## instead of the ordinary one-log-per-swing chop -- saw_up itself is the
+## authority on whether that's actually possible right now (is the trunk
+## even bare yet?), so a swing that doesn't qualify just falls through to
+## the normal take_damage() unchanged.
 func _chop_step() -> void:
 	var damage := _material_damage.effective_damage(BASE_CHOP_DAMAGE, _held_kind(), "wood")
 	if damage <= 0.0:
@@ -1302,9 +1340,15 @@ func _chop_step() -> void:
 	for tree in trees:
 		positions.append(tree.position)
 
+	var has_saw: bool = equipped_item != null and equipped_item.is_saw()
+	var carpentry_level := skill_tree.total_bonus("carpentry_level", allocated_nodes)
+	var can_saw := has_saw and carpentry_level >= CARPENTRY_LEVEL_FOR_SAWING
+
 	var hit_indices := _melee_attack.targets_in_range(position, positions, ATTACK_RANGE)
 	for index in hit_indices:
 		var tree: ChoppableTree = trees[index]
+		if can_saw and tree.saw_up():
+			continue
 		tree.take_damage(damage)
 
 
@@ -1326,7 +1370,12 @@ func _pickup_step(delta: float) -> void:
 
 	if not is_holding_stone():
 		if just_pressed and not _try_pick_stone_into_hand():
-			pickup_nearby()
+			# A direct-from-the-tree harvest (see _try_harvest_peak_fruit) only
+			# runs when the ordinary ground-item sweep found nothing -- one E
+			# press does one thing, and a windfall already underfoot takes
+			# priority over reaching for the branch.
+			if pickup_nearby() == 0:
+				_try_harvest_peak_fruit()
 		return
 
 	if just_pressed:
@@ -1477,6 +1526,28 @@ func pickup_nearby() -> int:
 		if position.distance_to(item.position) <= PICKUP_RADIUS and item.pick_up(self):
 			collected += 1
 	return collected
+
+
+## Fallback for the pickup key when the ordinary ground sweep found nothing:
+## takes real hanging fruit straight from the nearest tree in reach (see
+## EarthChunkManager.harvest_peak_fruit_near, PICKUP_RADIUS) into inventory
+## and awards real XP (see EcologicalLiteracy.harvest_xp) -- more when the
+## harvest lands at genuine peak ripeness than off-peak (docs/concept/
+## progression.md "Ecological literacy"). Returns whether anything was
+## harvested. This is the only harvest path that can ever land AT peak: a
+## windfall item on the ground (pickup_nearby above) has, by construction,
+## already left that window (see fruiting_model.gd's is_peak_ripe).
+func _try_harvest_peak_fruit() -> bool:
+	if _chunk_manager == null:
+		return false
+	var found := _chunk_manager.harvest_peak_fruit_near(position, PICKUP_RADIUS)
+	if found.is_empty():
+		return false
+	var species_id: String = found["species_id"]
+	inventory.add(_item_catalog.make(species_id), 1)
+	inventory_changed.emit()
+	gain_experience(_ecological_literacy.harvest_xp(found.get("is_peak", false)))
+	return true
 
 
 ## Authority-only: on the rising edge of the kick input (default K -- see
@@ -1873,10 +1944,14 @@ func _shop_step(delta: float) -> void:
 	var just_pressed := trade_pressed and not _last_trade_input
 	_last_trade_input = trade_pressed
 	if just_pressed:
-		if _chunk_manager == null or not _chunk_manager.has_merchant_near(position, TRADE_RADIUS):
-			_trade_result_message = "No merchant nearby."
-		else:
+		if _chunk_manager != null and _chunk_manager.has_merchant_near(position, TRADE_RADIUS):
 			_attempt_a_purchase()
+		else:
+			# No merchant in reach -- fall back to selling real gathered food
+			# into a nearby villager's own VillageMarket (see
+			# _attempt_village_food_sale), rather than the flat "No merchant
+			# nearby." this branch used to be unconditionally.
+			_attempt_village_food_sale()
 		_trade_result_timer = TRADE_MESSAGE_DURATION
 
 	_trade_result_timer = maxf(0.0, _trade_result_timer - delta)
@@ -1899,6 +1974,60 @@ func _attempt_a_purchase() -> void:
 			]
 			return
 	_trade_result_message = "Not enough gold."
+
+
+## Fallback for the trade key when no merchant is near: sells one unit of the
+## player's own gathered food into the nearest real villager's own
+## VillageMarket (see sell_food_to_village, docs/concept/npc.md "Local trade
+## is NPC-to-NPC, not just player-to-shop" -- extended here to cover a
+## player-initiated sale) -- a real XP bonus if that village was genuinely
+## hungry (see EcologicalLiteracy, docs/concept/progression.md "Ecological
+## literacy"). Unchanged fallback message when there is truly nobody nearby
+## at all (no merchant AND no villager), matching this branch's original
+## behaviour before this feature existed.
+func _attempt_village_food_sale() -> void:
+	var npc = _chunk_manager.nearest_npc_near(position, TRADE_RADIUS) if _chunk_manager != null else null
+	if npc == null or npc.economy == null:
+		_trade_result_message = "No merchant nearby."
+		return
+	var item_id := _first_food_item_id()
+	if item_id == "":
+		_trade_result_message = "No food to sell."
+		return
+	sell_food_to_village(npc.economy.market, item_id, 1)
+	_trade_result_message = "Sold %s to the village." % _item_catalog.make(item_id).display_name
+
+
+## The first food item id the player is carrying (by inventory_counts()
+## iteration order), or "" if none -- what _attempt_village_food_sale sells
+## when the player doesn't name a specific item.
+func _first_food_item_id() -> String:
+	for item_id in inventory_counts():
+		if _item_catalog.kind_of(item_id) == "food":
+			return item_id
+	return ""
+
+
+## Sells `amount` of `item_id` from inventory into `market`'s real per-
+## village food stock (see VillageMarket). Real XP bonus (see
+## EcologicalLiteracy) only when the market was GENUINELY hungry right
+## before the sale -- VillageMarket.can_buy_meal() already means exactly
+## that ("could a hungry villager buy a meal from this stock right now"), so
+## "hungry" reuses that real boolean rather than an invented stock
+## threshold. No gold changes hands: VillageMarket has no village-side
+## wallet to pay from (see its own doc comment -- it's fed by NPC
+## production, not player commerce), and the reward for feeding a real
+## hungry settlement is the XP itself, not a shop transaction. Returns
+## false (no-op) if the player doesn't actually carry `amount` of the item.
+func sell_food_to_village(market, item_id: String, amount: int) -> bool:
+	if amount <= 0 or inventory.count_of(item_id) < amount:
+		return false
+	var was_hungry: bool = not market.can_buy_meal()
+	inventory.remove(item_id, amount)
+	inventory_changed.emit()
+	market.add_stock(item_id, float(amount))
+	gain_experience(_ecological_literacy.village_sale_xp(was_hungry))
+	return true
 
 
 ## Authority-only: press the talk key next to any villager (see

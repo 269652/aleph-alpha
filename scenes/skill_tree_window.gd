@@ -1,7 +1,7 @@
 extends PanelContainer
 
 ## The skill-tree spend window (see concept/progression.md). Hidden until
-## toggled (toggle_skills, default K). Shows the player's unspent points, a row
+## toggled (toggle_skills, default L). Shows the player's unspent points, a row
 ## per small stat node (allocate to spend its cost and gain its bonus), and a
 ## row per keystone (gated behind a minimum allocated-node count). Purely glue:
 ## the rules live in the tested SkillTree/KeystonePassive/ExperienceTrack; the
@@ -92,12 +92,26 @@ func refresh(unspent_points: int, allocated: Dictionary, unlocked: Dictionary) -
 		var is_unlocked: bool = unlocked.get(keystone_id, false)
 		var gated: bool = _keystones.can_unlock(keystone_id, node_count)
 		var can_buy: bool = gated and not is_unlocked and unspent_points >= KEYSTONE_POINT_COST
-		var label := "%s  +%s %s  (needs %d nodes, %d pt)" % [
-			keystone_id.capitalize(), str(info["bonus_amount"]), info["stat_name"],
-			int(info["required_node_count"]), KEYSTONE_POINT_COST
-		]
+		var label := _keystone_label(keystone_id, info)
 		_list.add_child(_row(label, is_unlocked, can_buy,
 			func(): keystone_unlocked.emit(keystone_id)))
+
+
+## A keystone row's label: the ordinary "+bonus stat" phrasing for a stat
+## keystone, or its own real `description` for a REVEAL keystone (empty
+## stat_name -- see KeystonePassive._KEYSTONES's own doc comment, e.g.
+## land_sense) whose payoff is real information becoming visible, not a
+## number going up.
+func _keystone_label(keystone_id: String, info: Dictionary) -> String:
+	if info["stat_name"] == "":
+		return "%s — %s  (needs %d nodes, %d pt)" % [
+			keystone_id.capitalize(), info.get("description", ""),
+			int(info["required_node_count"]), KEYSTONE_POINT_COST
+		]
+	return "%s  +%s %s  (needs %d nodes, %d pt)" % [
+		keystone_id.capitalize(), str(info["bonus_amount"]), info["stat_name"],
+		int(info["required_node_count"]), KEYSTONE_POINT_COST
+	]
 
 
 func _heading(text: String) -> Label:

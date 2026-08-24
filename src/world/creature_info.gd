@@ -59,6 +59,15 @@ const MAX_HEALTH_BY_SPECIES := {
 	"lion": 45.0,
 	"nonvenomous_snake": 10.0,
 	"venomous_snake": 14.0,
+	# -- Germany-region world bosses (docs/concept/worldbosses.md) ----------
+	# Debug/test-spawn stats, not this doc's real design -- see this file's
+	# GERMANY_BOSS_SPECIES-adjacent test for why these are hand-authored
+	# placeholders rather than fitness-derived. All above this roster's
+	# current toughest ordinary predator (bear, 50.0).
+	"lindwurm": 140.0,
+	"rubezahl": 110.0,
+	"nyx": 95.0,
+	"krampus": 120.0,
 }
 const MAX_STAMINA_BY_SPECIES := {
 	"herbivore": 30.0,
@@ -81,6 +90,10 @@ const MAX_STAMINA_BY_SPECIES := {
 	"lion": 30.0,
 	"nonvenomous_snake": 15.0,
 	"venomous_snake": 15.0,
+	"lindwurm": 30.0,
+	"rubezahl": 35.0,
+	"nyx": 30.0,
+	"krampus": 35.0,
 }
 const MAX_MANA_BY_SPECIES := {
 	"herbivore": 5.0,
@@ -103,6 +116,10 @@ const MAX_MANA_BY_SPECIES := {
 	"lion": 10.0,
 	"nonvenomous_snake": 5.0,
 	"venomous_snake": 5.0,
+	"lindwurm": 10.0,
+	"rubezahl": 10.0,
+	"nyx": 10.0,
+	"krampus": 10.0,
 }
 const DIET_BY_SPECIES := {
 	"herbivore": "Grazer",
@@ -125,6 +142,10 @@ const DIET_BY_SPECIES := {
 	"lion": "Hunter",
 	"nonvenomous_snake": "Small-Prey Hunter",
 	"venomous_snake": "Venomous Hunter",
+	"lindwurm": "Apex Hunter",
+	"rubezahl": "Apex Hunter",
+	"nyx": "Apex Hunter",
+	"krampus": "Apex Hunter",
 }
 ## Herbivores are calm (always flee threats); boars/predators/lynx are
 ## aggressive (fight when strong, flee when weak). See CreatureBehavior for
@@ -153,6 +174,10 @@ const TEMPERAMENT_BY_SPECIES := {
 	"lion": "aggressive",
 	"nonvenomous_snake": "calm",
 	"venomous_snake": "aggressive",
+	"lindwurm": "aggressive",
+	"rubezahl": "aggressive",
+	"nyx": "aggressive",
+	"krampus": "aggressive",
 }
 ## Only true predators (hunt herbivores/boars for food) go here -- a boar is
 ## aggressive but not a predator (see TEMPERAMENT_BY_SPECIES doc above).
@@ -169,6 +194,10 @@ const PREDATOR_SPECIES := {
 	"bear": true,
 	"lion": true,
 	"venomous_snake": true,
+	"lindwurm": true,
+	"rubezahl": true,
+	"nyx": true,
+	"krampus": true,
 }
 
 ## Levels roll in [1, LEVEL_RANGE] from the individual's seed -- a cheap,

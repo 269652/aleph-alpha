@@ -124,6 +124,38 @@ func test_legs_are_visible_while_walking_or_idle():
 	assert_true(view.legs_visible())
 
 
+## Arms used to be visible ONLY while swimming -- a leftover from when the
+## flat procedural torso rectangle was wide enough to visually stand in for
+## a whole upper body, arms included, and separate Arm sprites existed only
+## for the swimming stroke animation. hero_composite.png's illustrated torso
+## stops at the shoulder (see docs/concept/character_art_brief.md's own
+## proportions note), so that assumption no longer holds -- reported live:
+## "no hands are visible" while standing/walking. Arms now stay visible in
+## every movement state; only the STROKE animation itself stays gated to
+## swimming (see arm_stroke_offset's own handling in _process).
+func test_arms_are_visible_while_idle():
+	view.set_movement_state(view.MovementState.IDLE)
+	view._process(0.1)
+	var arm_left: Sprite2D = view.get_node("ArmLeft")
+	var arm_right: Sprite2D = view.get_node("ArmRight")
+	assert_true(arm_left.visible)
+	assert_true(arm_right.visible)
+
+
+func test_arms_are_visible_while_walking():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	var arm_left: Sprite2D = view.get_node("ArmLeft")
+	assert_true(arm_left.visible)
+
+
+func test_arms_are_visible_while_swimming():
+	view.set_movement_state(view.MovementState.SWIMMING)
+	view._process(0.1)
+	var arm_left: Sprite2D = view.get_node("ArmLeft")
+	assert_true(arm_left.visible)
+
+
 # -- illustrated legs: worn as one fused pair, not two independent sprites --
 #
 # leg.png draws both legs together (see IllustratedCharacterSprite's own doc
@@ -147,6 +179,23 @@ func test_fused_legs_still_hide_entirely_for_swimming():
 	view.set_movement_state(view.MovementState.SWIMMING)
 	view._process(0.1)
 	assert_false(view.legs_visible())
+
+
+## No per-leg swing art exists for the fused pair, so a whole-pair bob
+## substitutes for it (reported: "the legs aren't animated") -- must still
+## move, just not by splitting into two offset copies of one sprite.
+func test_fused_legs_bob_while_walking():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.3)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	assert_ne(leg_left.position.y, view._leg_fused_rest_position.y)
+
+
+func test_fused_legs_stay_put_while_idle():
+	view.set_movement_state(view.MovementState.IDLE)
+	view._process(0.3)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	assert_almost_eq(leg_left.position.y, view._leg_fused_rest_position.y, 0.001)
 
 
 # -- illustrated arms: two independent poses, not one frame worn twice ------
@@ -223,7 +272,9 @@ const CharacterView = preload("res://scenes/character_view.gd")
 
 
 func test_body_world_size_is_unchanged_by_the_art_resolution_pass():
-	assert_eq(CharacterView.BODY_SIZE, Vector2i(13, 19))
+	# BODY_SIZE.x widened 13 -> 26 to match hero_composite.png's own torso
+	# proportions -- see BODY_SIZE's own doc comment.
+	assert_eq(CharacterView.BODY_SIZE, Vector2i(26, 19))
 	assert_eq(CharacterView.HEAD_SIZE, Vector2i(12, 12))
 
 
@@ -255,9 +306,14 @@ func test_equipment_slots_share_the_flat_art_resolution_scale():
 ## undersized the instant their content doesn't fill the shared working
 ## canvas identically (which normalize_frames' own aspect-preserving fit
 ## means it usually doesn't).
+## Body is checked with an upper bound, not assert_almost_eq like the rest --
+## see BODY_SIZE's own doc comment: it only renders at EXACTLY BODY_SIZE.y
+## for an outfit row whose aspect matches the box BODY_SIZE.x was measured
+## from, and other rows legitimately render shorter once
+## _width_bounded_scale's own width clamp binds instead. Never taller,
+## always the real invariant to pin.
 func test_illustrated_parts_are_each_scaled_to_their_own_world_size():
 	var expected_world_height := {
-		"Body": CharacterView.BODY_SIZE.y,
 		"Head": CharacterView.HEAD_SIZE.y,
 		"LegLeft": CharacterView.LEG_SIZE.y,
 		"ArmLeft": CharacterView.ARM_SIZE.y,
@@ -269,17 +325,20 @@ func test_illustrated_parts_are_each_scaled_to_their_own_world_size():
 		assert_almost_eq(
 			content_height * sprite.scale.y, float(expected_world_height[part_name]), 0.5, part_name
 		)
+	var body: Sprite2D = view.get_node("Body")
+	var body_height := _opaque_content_height(body.texture.get_image()) * body.scale.y
+	assert_true(body_height <= float(CharacterView.BODY_SIZE.y) + 0.5, "Body: rendered %.2f" % body_height)
 
 
 ## The body's drawn CONTENT (art pixels x scale, trimmed to what is actually
 ## opaque -- illustrated art is normalized onto a padded shared canvas, see
 ## IllustratedCharacterSprite.CANVAS_SIZE, so the raw texture size alone
-## overstates it) must equal its world size -- the invariant that keeps the
-## hero matched to the world and to the .tscn's world-unit part positions.
-func test_body_draws_at_its_world_size():
+## overstates it) must never EXCEED its world size -- see BODY_SIZE's own
+## doc comment on why "at most", not "exactly", is the real invariant now.
+func test_body_draws_at_most_its_world_size():
 	var body: Sprite2D = view.get_node("Body")
 	var content_height := _opaque_content_height(body.texture.get_image())
-	assert_almost_eq(content_height * body.scale.y, float(CharacterView.BODY_SIZE.y), 0.5)
+	assert_true(content_height * body.scale.y <= float(CharacterView.BODY_SIZE.y) + 0.5)
 
 
 func _opaque_content_height(image: Image) -> float:
@@ -291,6 +350,48 @@ func _opaque_content_height(image: Image) -> float:
 				min_y = mini(min_y, y)
 				max_y = maxi(max_y, y)
 	return float(max_y - min_y + 1)
+
+
+func _opaque_content_width(image: Image) -> float:
+	var min_x := image.get_width()
+	var max_x := -1
+	for x in image.get_width():
+		for y in image.get_height():
+			if image.get_pixel(x, y).a > 0.01:
+				min_x = mini(min_x, x)
+				max_x = maxi(max_x, x)
+	return float(max_x - min_x + 1)
+
+
+## composite_part_scale_for matches CONTENT HEIGHT to a part's target world
+## height alone, then CharacterView applies that SAME scale to width
+## (Sprite2D.scale is one uniform Vector2.ONE * scale) -- correct only when
+## the source art's own aspect ratio already matches the target box's own
+## aspect, the assumption the old flat-rectangle procedural art satisfied by
+## construction (drawn at EXACTLY that box, so matching height always meant
+## matching width too). Scoped to BODY specifically, not every part: it is
+## the one confirmed, visually dramatic case -- hero_composite.png's torso
+## column measures noticeably WIDER relative to its own height than
+## BODY_SIZE's own aspect (short sleeves drawn as part of the same
+## silhouette), and height-matching alone rendered it roughly 2x BODY_SIZE.x
+## wide (reported live: "proportions are awfully wrong"). Legs/arms/head
+## were checked too and are NOT put through the same clamp -- their own
+## aspect mismatches are real but small enough that forcing a width bound
+## shrank their rendered HEIGHT well below target for no visible gain (see
+## _width_bounded_scale's own doc comment); revisit per-part if one of them
+## is ever reported looking wrong the way body was.
+func test_body_never_renders_wider_than_its_own_world_width():
+	var expected_world_width := {
+		"Body": CharacterView.BODY_SIZE.x,
+	}
+	for part_name in expected_world_width:
+		var sprite: Sprite2D = view.get_node(part_name)
+		var content_width := _opaque_content_width(sprite.texture.get_image())
+		var rendered_width: float = content_width * sprite.scale.x
+		assert_true(
+			rendered_width <= float(expected_world_width[part_name]) + 0.5,
+			"%s: rendered %.2f, expected at most %s" % [part_name, rendered_width, expected_world_width[part_name]]
+		)
 
 
 # -- the character must be anchored at its FEET, not its center --------------
@@ -334,6 +435,32 @@ func test_no_part_hangs_below_the_characters_own_origin():
 # from movement_state.
 
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
+
+
+## Neither Head's nor Body's own art draws a neck, and both are positioned
+## by their own measured content (varies per outfit row/head cell), so a
+## fixed-size neck would only fit one combination -- reported live: "the
+## head is floating" / "the neck should be rendered procedurally". Checks
+## the real invariant (no visible gap once the neck is accounted for)
+## rather than exact pixel positions, since which appearance the view's
+## default seed happens to roll -- and therefore whether a gap exists at
+## all for it -- isn't something this test controls.
+func test_neck_bridges_any_gap_between_head_and_body():
+	var neck: Sprite2D = view.get_node("Neck")
+	var head: Sprite2D = view.get_node("Head")
+	var body: Sprite2D = view.get_node("Body")
+	var head_bottom: float = head.position.y + head.offset.y * head.scale.y + CharacterView.HEAD_SIZE.y * 0.5
+	var body_top: float = (
+		body.position.y + body.offset.y * body.scale.y - view._body_content_height_world() * 0.5
+	)
+	if not neck.visible:
+		assert_true(body_top <= head_bottom + 0.5, "no neck shown, but a gap exists")
+		return
+	var neck_height: float = neck.texture.get_image().get_height() * neck.scale.y
+	var neck_top: float = neck.position.y - neck_height * 0.5
+	var neck_bottom: float = neck.position.y + neck_height * 0.5
+	assert_true(neck_top <= head_bottom + 0.5, "neck should reach up to head's bottom edge")
+	assert_true(neck_bottom >= body_top - 0.5, "neck should reach down to body's top edge")
 
 
 func test_the_torso_carries_the_shared_submersion_material():
@@ -396,7 +523,7 @@ func test_head_top_y_matches_the_actual_head_nodes_top_edge():
 ## head-top) by CharacterView.SCALE must land it at exactly
 ## TARGET_HEIGHT_FRACTION_OF_TREE of a real tree's world height -- not an
 ## eyeballed constant.
-func test_scaled_character_height_is_two_thirds_a_trees_world_height():
+func test_scaled_character_height_matches_its_target_fraction_of_a_trees_height():
 	var character_height := -CharacterView.HEAD_TOP_Y  # feet (y=0) to head-top
 	var scaled_height := character_height * CharacterView.SCALE
 	var expected := CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE * ProceduralTreeSprite.WORLD_SIZE.y
