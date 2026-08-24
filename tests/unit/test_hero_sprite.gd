@@ -264,13 +264,22 @@ func _close(a: Color, b: Color) -> bool:
 
 ## Shoulders are the widest point, the waist is pinched in, and the hem
 ## flares back out -- a body shape, not a box.
+## The hem used to flare back out past the waist, nearly back to shoulder
+## width -- worked through the actual geometry against CharacterView's leg
+## positions, that flare made the hem read as wide as (and directly
+## overlapping) the two legs below it, an undifferentiated "second pair of
+## legs" for any class whose leg color sat close to its tunic/trim
+## (reported, screenshotted: "double legs" -- see procedural_character_
+## sprite.gd's _HEM_FRACTION doc comment and test_character_view.gd's
+## test_tunic_hem_does_not_read_as_a_second_pair_of_legs, which pins the
+## real fix). The hem now continues narrowing past the waist instead.
 func test_torso_is_widest_at_the_shoulders_and_pinched_at_the_waist():
 	var size := Vector2i(52, 76)
 	var shoulder := sprite.torso_half_width(size, int(size.y * 0.12))
 	var waist := sprite.torso_half_width(size, int(size.y * 0.55))
 	var hem := sprite.torso_half_width(size, size.y - 2)
 	assert_gt(shoulder, waist, "shoulders should be wider than the waist")
-	assert_gt(hem, waist, "the hem should flare back out below the waist")
+	assert_lt(hem, waist, "the hem should keep narrowing below the waist, not flare back out")
 
 
 func test_torso_half_width_never_exceeds_the_canvas():

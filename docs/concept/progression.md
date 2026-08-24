@@ -40,6 +40,17 @@ spawns. The chosen archetype's stat lens is applied to the fresh player
 (`ClassArchetype.stats_for` → base health/attack/mana/stamina offsets). Classes
 are a starting bias; the skill tree is where a build actually diverges.
 
+The creator's preview is a live animated vignette, not a static pose: the
+authored character actually walks back and forth through a small grass patch,
+swings their sword, and picks up a pebble to throw or kick away, alternating
+between the two each time the loop repeats. It's the same `CharacterView` rig
+the player and every NPC use, driven by a small, fixed, pure choreography
+timeline (`CharacterPreviewChoreographer`) rather than a one-off animation —
+reusing the real gameplay math for the throw/kick landing spot
+(`HeldItemThrow.throw_distance_px`/`Kick.landing_position`) so the preview's
+physics language matches actual play instead of inventing its own. Purely
+presentational; nothing about class/stat selection changed.
+
 ## Skill tree
 
 Levels grant points; the **skill tree window** spends them on

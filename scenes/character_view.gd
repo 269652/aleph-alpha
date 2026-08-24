@@ -21,6 +21,12 @@ const WALK_CYCLE_SPEED := 10.0
 const LEG_SWING_AMPLITUDE := 3.0
 const SWIM_CYCLE_SPEED := 6.0
 const ARM_STROKE_AMPLITUDE := 4.0
+## The walking arm counter-swing's amplitude -- reuses LEG_SWING_AMPLITUDE
+## rather than a fresh eyeballed number: a natural gait swings each arm
+## opposite its same-side leg by an equal amount, so "equal and opposite to
+## the leg" is the derived, defensible choice, not an invented one (see
+## CLAUDE.md: tuned values must be derived/pinned, not eyeballed).
+const ARM_SWING_AMPLITUDE := LEG_SWING_AMPLITUDE
 const TOOL_SLOT_SIDE_OFFSET := 8.0
 
 ## Bumped from the original 10x14/8x8 (see the character sprite engine's
@@ -87,6 +93,11 @@ var movement_state := MovementState.IDLE
 var is_moving := false
 var leg_swing_offset := 0.0
 var arm_stroke_offset := 0.0
+## Walking's counter-swing offset -- kept separate from arm_stroke_offset
+## (swimming's own animation) rather than overloaded onto it, so each stays
+## a single state's animation and existing swim-stroke assertions don't have
+## to account for a second animation sharing the field.
+var arm_swing_offset := 0.0
 
 var _cycle_time := 0.0
 var _equipped_slots: Dictionary = {}  # slot_name (String) -> bool
@@ -153,8 +164,8 @@ func _ready() -> void:
 	else:
 		apply_appearance(_pending_appearance)
 
-	_arm_left.visible = false
-	_arm_right.visible = false
+	# Arms stay visible from the start now (see _process's own comment) --
+	# only the equipment slots default to hidden until something's equipped.
 	_head_slot.visible = false
 	_tool_slot.visible = false
 
@@ -165,8 +176,11 @@ func _process(delta: float) -> void:
 			_cycle_time += delta * WALK_CYCLE_SPEED
 			leg_swing_offset = sin(_cycle_time) * LEG_SWING_AMPLITUDE
 			arm_stroke_offset = 0.0
+			# Opposite the legs -- see ARM_SWING_AMPLITUDE's own doc comment.
+			arm_swing_offset = -sin(_cycle_time) * ARM_SWING_AMPLITUDE
 		MovementState.SWIMMING:
 			leg_swing_offset = 0.0
+			arm_swing_offset = 0.0
 			if is_moving:
 				_cycle_time += delta * SWIM_CYCLE_SPEED
 				arm_stroke_offset = sin(_cycle_time) * ARM_STROKE_AMPLITUDE
@@ -177,16 +191,23 @@ func _process(delta: float) -> void:
 			_cycle_time = 0.0
 			leg_swing_offset = 0.0
 			arm_stroke_offset = 0.0
+			arm_swing_offset = 0.0
 
 	_leg_left.visible = movement_state != MovementState.SWIMMING
 	_leg_right.visible = movement_state != MovementState.SWIMMING
-	_arm_left.visible = movement_state == MovementState.SWIMMING
-	_arm_right.visible = movement_state == MovementState.SWIMMING
+	# Arms are visible in every state now -- see arms_visible's own doc
+	# comment for why they used to be swim-only.
+	_arm_left.visible = true
+	_arm_right.visible = true
 
 	_leg_left.position = _leg_left_base_position + Vector2(0, leg_swing_offset)
 	_leg_right.position = _leg_right_base_position + Vector2(0, -leg_swing_offset)
-	_arm_left.position = _arm_left_base_position + Vector2(0, arm_stroke_offset)
-	_arm_right.position = _arm_right_base_position + Vector2(0, -arm_stroke_offset)
+	# arm_stroke_offset (swim) and arm_swing_offset (walk) are never nonzero
+	# at the same time -- only one state drives either -- so summing them is
+	# safe and avoids a branch here duplicating the match above.
+	var arm_offset := arm_stroke_offset + arm_swing_offset
+	_arm_left.position = _arm_left_base_position + Vector2(0, arm_offset)
+	_arm_right.position = _arm_right_base_position + Vector2(0, -arm_offset)
 
 	# The waterline sits at the torso's own vertical CENTER -- _body.position
 	# is already that centre (Sprite2D draws centred on its own position by
@@ -259,6 +280,12 @@ func set_movement_state(state: MovementState) -> void:
 
 func legs_visible() -> bool:
 	return _leg_left.visible
+
+
+## Arms used to only ever be shown while swimming -- see _process's own
+## comment. Exposed the same way legs_visible() already is.
+func arms_visible() -> bool:
+	return _arm_left.visible
 
 
 func equip_slot(slot_name: String, color: Color) -> void:

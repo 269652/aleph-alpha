@@ -124,6 +124,56 @@ func test_legs_are_visible_while_walking_or_idle():
 	assert_true(view.legs_visible())
 
 
+## Arms used to only ever show up while swimming (see set_movement_state's
+## visibility toggle before this fix) -- a normal walking/standing character
+## rendered with a literally armless torso (reported, screenshotted: "no
+## arms"). A person has arms all the time, not just mid-stroke.
+func test_arms_are_visible_while_idle():
+	view.set_movement_state(view.MovementState.IDLE)
+	view._process(0.1)
+	assert_true(view.arms_visible())
+
+
+func test_arms_are_visible_while_walking():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	assert_true(view.arms_visible())
+
+
+func test_arms_are_visible_while_swimming():
+	view.set_movement_state(view.MovementState.SWIMMING)
+	view._process(0.1)
+	assert_true(view.arms_visible())
+
+
+## Walking gets a counter-swing (opposite the legs), the same natural-gait
+## treatment legs already had -- arms used to just hang rigid (invisible,
+## even) through an entire walk cycle.
+func test_arm_swing_is_nonzero_partway_through_a_walk_cycle():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	assert_ne(view.arm_swing_offset, 0.0)
+
+
+## Opposite the legs, not matching them -- a real gait swings the left arm
+## forward with the RIGHT leg, not its own-side leg. Reuses
+## LEG_SWING_AMPLITUDE (see ARM_SWING_AMPLITUDE's own doc comment) rather
+## than a fresh eyeballed number, so the two swings are equal-and-opposite
+## by construction.
+func test_arm_swing_is_opposite_phase_to_the_leg_swing_while_walking():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	assert_almost_eq(view.arm_swing_offset, -view.leg_swing_offset, 0.0001)
+
+
+func test_arm_swing_resets_once_walking_stops():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	view.set_movement_state(view.MovementState.IDLE)
+	view._process(0.1)
+	assert_eq(view.arm_swing_offset, 0.0)
+
+
 func test_equip_slot_marks_the_slot_as_equipped():
 	assert_false(view.is_slot_equipped("head"))
 	view.equip_slot("head", Color.RED)
@@ -218,6 +268,42 @@ func test_body_draws_at_its_world_size():
 	var drawn := Vector2(body.texture.get_size()) * body.scale
 	assert_almost_eq(drawn.x, float(CharacterView.BODY_SIZE.x), 0.01)
 	assert_almost_eq(drawn.y, float(CharacterView.BODY_SIZE.y), 0.01)
+
+
+## The tunic's hem used to flare to nearly full shoulder width and directly
+## overlap the legs' own span below it -- for any class whose leg color sits
+## close to its tunic/trim (e.g. "guard": tunic (0.28,0.34,0.46), legs
+## (0.22,0.24,0.28)), the hem read as an undifferentiated second pair of
+## legs sitting right on top of the real ones (reported, screenshotted:
+## "double legs"). Measured from the ACTUAL generated art (not the
+## _HEM_FRACTION constant directly), converted art->world px the same way
+## every other part-size assertion in this file does, and compared against
+## the real leg-pair span read from the live .tscn nodes -- so this stays
+## correct even if LEG_SIZE or the legs' positions ever change.
+func test_tunic_hem_does_not_read_as_a_second_pair_of_legs():
+	var body: Sprite2D = view.get_node("Body")
+	var image: Image = body.texture.get_image()
+	var hem_row := image.get_height() - 1
+	var min_x := image.get_width()
+	var max_x := -1
+	for x in image.get_width():
+		if image.get_pixel(x, hem_row).a > 0.01:
+			min_x = mini(min_x, x)
+			max_x = maxi(max_x, x)
+	var hem_world_width: float = float(max_x - min_x + 1) * ArtResolution.SPRITE_SCALE
+
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	var leg_right: Sprite2D = view.get_node("LegRight")
+	var legs_left_edge: float = leg_left.position.x - CharacterView.LEG_SIZE.x / 2.0
+	var legs_right_edge: float = leg_right.position.x + CharacterView.LEG_SIZE.x / 2.0
+	var legs_world_width: float = legs_right_edge - legs_left_edge
+
+	# Clearly narrower, not a hairline margin -- 0.85 is this test's own
+	# "meaningfully narrower" bar, not a production-tuned value.
+	assert_lt(
+		hem_world_width, legs_world_width * 0.85,
+		"hem width %s vs leg-pair width %s -- hem must read clearly narrower or it looks like a second pair of legs" % [hem_world_width, legs_world_width]
+	)
 
 
 # -- the character must be anchored at its FEET, not its center --------------

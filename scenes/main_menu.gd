@@ -8,16 +8,19 @@ extends PanelContainer
 ##
 ## The creation screen is a real character creator: pick a class on the left,
 ## cycle five appearance axes on the right (skin, hair color, hair style,
-## beard, eyes -- see HeroAppearance.AXES), and watch a live full-body
-## portrait update in the middle. Purely glue -- World owns actually spawning
-## the player, starting ENet, and applying the chosen class's stat lens
-## (ClassArchetype); HeroAppearance/ProceduralCharacterSprite own the look.
+## beard, eyes -- see HeroAppearance.AXES), and watch a live animated preview
+## in the middle -- the character actually walking through grass, swinging
+## its sword, and picking up/throwing a pebble (see CharacterPreviewStage),
+## not a static pose. Purely glue -- World owns actually spawning the player,
+## starting ENet, and applying the chosen class's stat lens (ClassArchetype);
+## HeroAppearance/ProceduralCharacterSprite/CharacterPreviewStage own the look.
 
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
-const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const HeroDna = preload("res://src/gameplay/hero_dna.gd")
+const CharacterPreviewStageScene = preload("res://scenes/character_preview_stage.tscn")
+const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 ## Friendly labels for a rolled genome's rarity (see HeroDna) -- purely
 ## presentational, the mechanics live in HeroDna itself.
@@ -47,9 +50,15 @@ const AXIS_LABELS := {
 	"eyes": "Eyes",
 }
 
-## The portrait renders at ProceduralCharacterSprite.PORTRAIT_SIZE and is
-## scaled up by this much -- nearest-neighbour, so it stays crisp pixel art.
-const PORTRAIT_SCALE := 5
+## The live preview's on-screen footprint -- close to the old static
+## portrait's (PORTRAIT_SIZE(26,40) * the old PORTRAIT_SCALE(5) == (130,200))
+## so swapping it in doesn't reflow the rest of the creator's layout.
+const PREVIEW_SIZE := Vector2(150, 200)
+## Renders the stage at a fraction of PREVIEW_SIZE and scales the result up
+## (nearest-neighbour, via the container's own texture_filter below) --
+## keeps the same crisp, chunky pixel-art look the old 5x-scaled portrait
+## had, rather than a smoothly-antialiased render.
+const PREVIEW_STRETCH_SHRINK := 2
 
 const PANEL_SIZE := Vector2(760, 520)
 
@@ -79,7 +88,7 @@ var reroll_save_path := "user://hero_dna_rerolls.bin"
 
 var _archetypes := ClassArchetype.new()
 var _appearance_maker := HeroAppearance.new()
-var _char_sprite := ProceduralCharacterSprite.new()
+var _item_sprite_generator := ProceduralItemSprite.new()
 var _player_save := PlayerSave.new()
 var _dna := HeroDna.new()
 
@@ -110,7 +119,7 @@ var _last_reset_unix := 0
 
 var _class_detail: Label
 var _class_buttons: Dictionary = {}  # archetype -> Button
-var _portrait: TextureRect
+var _preview_stage: CharacterPreviewStage
 var _axis_value_labels: Dictionary = {}  # axis -> Label
 var _dna_detail: Label
 var _reroll_button: Button
@@ -248,7 +257,11 @@ func _build_class_column() -> Control:
 	return col
 
 
-## The live full-body preview -- the whole point of the creator screen.
+## The live preview -- the whole point of the creator screen. A real
+## CharacterPreviewStage (walking through grass, swinging its sword, picking
+## up/throwing a pebble -- see its own doc comment) rendered into a
+## SubViewport rather than a static portrait image, so the creator actually
+## shows off the character instead of just a pose.
 func _build_portrait_column() -> Control:
 	var col := VBoxContainer.new()
 	col.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -265,14 +278,20 @@ func _build_portrait_column() -> Control:
 	frame.add_theme_stylebox_override("panel", style)
 	frame.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 
-	_portrait = TextureRect.new()
-	_portrait.custom_minimum_size = Vector2(
-		ProceduralCharacterSprite.PORTRAIT_SIZE * PORTRAIT_SCALE
-	)
-	_portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	var viewport_container := SubViewportContainer.new()
+	viewport_container.custom_minimum_size = PREVIEW_SIZE
+	viewport_container.stretch = true
+	viewport_container.stretch_shrink = PREVIEW_STRETCH_SHRINK
 	# Pixel art must not blur when scaled up.
-	_portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	frame.add_child(_portrait)
+	viewport_container.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+
+	var viewport := SubViewport.new()
+	viewport.transparent_bg = true
+	viewport.handle_input_locally = false
+	_preview_stage = CharacterPreviewStageScene.instantiate()
+	viewport.add_child(_preview_stage)
+	viewport_container.add_child(viewport)
+	frame.add_child(viewport_container)
 	col.add_child(frame)
 
 	# The DNA moment (see HeroDna/docs/concept/dna.md): rarity + trait name +
@@ -405,8 +424,12 @@ func current_dna() -> Dictionary:
 
 func _refresh_appearance() -> void:
 	var appearance := current_appearance()
-	if _portrait != null:
-		_portrait.texture = _char_sprite.generate_hero_portrait_texture(appearance)
+	if _preview_stage != null:
+		_preview_stage.apply_appearance(appearance)
+		# Re-equipping every refresh (rather than once at setup) sidesteps
+		# any node-readiness ordering question -- cheap, and apply_appearance
+		# above already regenerates textures on every refresh the same way.
+		_preview_stage.equip_weapon(_item_sprite_generator.generate_texture("iron_sword"))
 	for axis in _axis_value_labels:
 		var label: Label = _axis_value_labels[axis]
 		label.text = "%s: %s" % [AXIS_LABELS.get(axis, axis), _axis_value_text(axis, appearance)]
