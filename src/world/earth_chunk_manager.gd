@@ -4,6 +4,9 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
 const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
+const GeologyRenderer = preload("res://src/rendering/geology_renderer.gd")
+const Strata = preload("res://src/world/strata.gd")
+const CaveEntrancePlacement = preload("res://src/world/cave_entrance_placement.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
 const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
@@ -76,6 +79,11 @@ const NpcEncounter = preload("res://src/emergence/npc_encounter.gd")
 const Quest = preload("res://src/emergence/quest.gd")
 const Governance = preload("res://src/emergence/governance.gd")
 const RegionalTrade = preload("res://src/emergence/regional_trade.gd")
+const CaravanTrip = preload("res://src/emergence/caravan_trip.gd")
+const CaravanRaid = preload("res://src/emergence/caravan_raid.gd")
+const CaravanMarker = preload("res://src/rendering/caravan_marker.gd")
+const PathScarring = preload("res://src/world/path_scarring.gd")
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
 const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
@@ -203,6 +211,8 @@ var generator := EarthChunkGenerator.new()
 var _terrain_renderer := TerrainRenderer.new()
 var _tree_renderer := TreeRenderer.new()
 var _stone_renderer := StoneRenderer.new()
+var _geology_renderer := GeologyRenderer.new()
+var _cave_entrance_placement := CaveEntrancePlacement.new()
 var _wild_crop_renderer := WildCropRenderer.new()
 var _decomposer_renderer := DecomposerRenderer.new()
 var _grass_sprite_generator := ProceduralGrassSprite.new()
@@ -278,6 +288,20 @@ var _decoration_dirty := true
 var _loaded_trees: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_stones: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 
+# -- geology (see docs/concept/geology.md) -----------------------------------
+# Per-chunk topsoil/regolith Strata sim (kept for the chunk's lifetime, so a
+# chamber re-revealed after the player walks away still shows its real mined
+# tunnels), the surface entrance markers those chunks spawn, and which
+# entrance (if any) is CURRENTLY revealed -- same "chunk-load-lifetime
+# placement, entry-lifetime reveal" split _hidden_roof_chunk_coord already
+# keeps for roofs, just one layer down. Only the topsoil/regolith layer is
+# wired end-to-end today (see geology.md's Status); deeper layers exist as
+# pure, tested Strata configuration only.
+var _topsoil_strata: Dictionary = {}  # Vector2i chunk_coord -> Strata
+var _cave_entrance_markers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
+var _revealed_cave_entrance_tile = null  # Vector2i global tile, or null
+var _revealed_cave_nodes: Array = []
+
 ## Fallback half-extent for a solid prop carrying no CollisionShape2D of its
 ## own to measure -- see solid_obstacles_near.
 const DEFAULT_OBSTACLE_RADIUS := 8.0
@@ -290,6 +314,14 @@ const DEFAULT_OBSTACLE_RADIUS := 8.0
 ## loaded chunk, per creature, on every sensing tick (reported: "since the
 ## last change the game is laggy"); the per-chunk bookkeeping this class
 ## already keeps makes the same lookup O(nearby) instead of O(world).
+## The topsoil/regolith Strata sim for a loaded chunk, or null if that
+## chunk isn't currently loaded -- lets a caller (tests, a future hazard
+## HUD) inspect real per-cell rock state without reaching into private
+## bookkeeping (see docs/concept/geology.md).
+func strata_at(chunk_coord: Vector2i) -> Strata:
+	return _topsoil_strata.get(chunk_coord)
+
+
 func solid_obstacles_near(at: Vector2, radius: float) -> Array:
 	var chunk_px := float(CHUNK_SIZE * TerrainRenderer.TILE_SIZE)
 	var min_chunk := Vector2i(floori((at.x - radius) / chunk_px), floori((at.y - radius) / chunk_px))
@@ -476,6 +508,7 @@ func update(player_global_tile: Vector2i) -> void:
 			_unload_chunk(chunk_coord)
 
 	_update_roof_visibility(player_global_tile)
+	_update_geology_reveal(player_global_tile)
 
 
 func is_chunk_loaded(chunk_coord: Vector2i) -> bool:
@@ -506,6 +539,15 @@ func _difficulty_tier_at(chunk_coord: Vector2i) -> int:
 
 func herbivore_population_at_chunk(chunk_coord: Vector2i) -> float:
 	return _ecosystem.herbivore_population(chunk_coord)
+
+
+## This region's herbivore carrying capacity (see EcosystemSimulation.
+## herbivore_capacity_at) -- CreatureMarker's own density-vs-capacity signal
+## for herd (foot-and-mouth-like) disease transmission pressure (see
+## docs/concept/disease.md, DiseaseModel.herd_transmission_chance). Mirrors
+## herbivore_population_at_chunk's exact pattern.
+func herbivore_capacity_at_chunk(chunk_coord: Vector2i) -> float:
+	return _ecosystem.herbivore_capacity_at(chunk_coord)
 
 
 ## Whether the chunk containing `pixel_position` can support another
@@ -1380,6 +1422,29 @@ func legitimacy_for_settlement(settlement_id: String) -> String:
 const REGIONAL_TRADE_INTERVAL := 30.0
 var _regional_trade_accumulator := 0.0
 
+## Real in-flight regional-trade shipments (docs/concept/trade.md, the
+## "supply really in transit, real risk" layer this builds on top of
+## step_regional_trade's own dispatch decision above). Array of
+## {"trip": CaravanTrip, "marker": CaravanMarker, "last_tile": Vector2i} --
+## a plain Array, not keyed by chunk, since a caravan is never tied to a
+## single chunk's load/unload lifecycle the way DecomposerMarker's
+## _decomposer_markers is: it is real and progressing whether or not the
+## player is anywhere near its route (see step_caravans).
+var _active_caravans: Array = []
+
+## Real ground worn by real caravan traffic -- the same PathScarring class
+## World._path_scarring already uses for the player's own footsteps
+## (world.gd's own doc comment on _step_path_scarring notes it is
+## "PLAYER-ONLY for now"), now real for a second caller. A separate
+## instance from world.gd's: nothing here reaches into a Node the way
+## world.gd's private player-tracking one is scoped, so caravan wear is
+## tracked on its own and not yet merged into the same rendered dirt-path
+## pass -- a real, honestly-scoped follow-up, not a silent gap (see
+## docs/concept/trade.md's Status section).
+var _caravan_path_scarring := PathScarring.new()
+
+var _item_catalog := ItemCatalog.new()
+
 
 func step_regional_trade(delta_seconds: float) -> void:
 	_regional_trade_accumulator += delta_seconds
@@ -1396,14 +1461,16 @@ func step_regional_trade(delta_seconds: float) -> void:
 				_attempt_regional_resupply(settlement_id, entry["item_id"], entry["need"], settlement_ids)
 
 
-## Ships `need` units of `item_id` from the NEAREST real settlement (by
-## real Euclidean distance between chunk coordinates) holding genuine
-## surplus of it -- real stock actually moves between two real markets in
-## one call, and the transfer is recorded as a real,
-## `/why`-inspectable event. A no-op if no known settlement has real
-## surplus (RegionalTrade.has_surplus's own safety margin), the same
-## "an invalid/impossible transition does nothing" discipline every other
-## coordinator here already respects.
+## Dispatches a real caravan carrying `need` units of `item_id` from the
+## NEAREST real settlement (by real Euclidean distance between chunk
+## coordinates) holding genuine surplus of it. The supplier's stock is gone
+## the moment the caravan departs -- goods really in transit, real risk
+## (docs/concept/trade.md) -- but the shortage settlement is credited only
+## once a real CaravanTrip (see step_caravans) actually finishes walking
+## there, or its goods scatter into the world if raided along the way. A
+## no-op if no known settlement has real surplus (RegionalTrade.has_surplus's
+## own safety margin), the same "an invalid/impossible transition does
+## nothing" discipline every other coordinator here already respects.
 func _attempt_regional_resupply(
 	shortage_settlement_id: String, item_id: String, need: int, settlement_ids: Array
 ) -> void:
@@ -1424,12 +1491,118 @@ func _attempt_regional_resupply(
 		return
 
 	_market_store.market_for(supplier_id).add_stock(item_id, -need)
-	_market_store.market_for(shortage_settlement_id).add_stock(item_id, need)
+
+	var origin := _well_position_for_settlement(supplier_id)
+	var destination := _well_position_for_settlement(shortage_settlement_id)
+	# The route is only as safe as its most dangerous stretch -- the worse
+	# of the two endpoints' own real RegionDifficulty tier, not just the
+	# destination's (see docs/concept/trade.md's open-questions call).
+	var tier := maxi(
+		_difficulty_tier_at(RegionalTrade.chunk_coord_of(supplier_id)),
+		_difficulty_tier_at(RegionalTrade.chunk_coord_of(shortage_settlement_id))
+	)
+	var raid_roll := CaravanRaid.roll_for(
+		supplier_id, shortage_settlement_id, item_id, _world_age_seconds, "raid_check"
+	)
+	var raided := CaravanRaid.is_raided(tier, raid_roll)
+	var raid_fraction := CaravanRaid.roll_for(
+		supplier_id, shortage_settlement_id, item_id, _world_age_seconds, "raid_fraction"
+	) if raided else 1.0
+
+	var trip := CaravanTrip.new(
+		supplier_id, shortage_settlement_id, item_id, need,
+		origin, destination, _world_age_seconds, tier, raided, raid_fraction
+	)
+	var marker := CaravanMarker.new()
+	marker.item_id = item_id
+	marker.count = need
+	marker.position = origin
+	if _entities_parent != null:
+		_entities_parent.add_child(marker)
+	_active_caravans.append({"trip": trip, "marker": marker, "last_tile": _world_tile_for_pixel(origin)})
+
+	var departed_event := Event.new("regional_trade_departed", _world_age_seconds)
+	departed_event.actors.append(supplier_id)
+	departed_event.actors.append(shortage_settlement_id)
+	departed_event.tags.append(item_id)
+	_event_store.append(departed_event)
+	_memory_store.witness_event(departed_event, _world_age_seconds)
+
+
+## `settlement_id`'s real "well" landmark world position -- a caravan's real
+## start/end point, the same lookup find_nearest_village already does to
+## turn a discovered settlement chunk into a real teleport target.
+func _well_position_for_settlement(settlement_id: String) -> Vector2:
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var settlement := _settlement_generator.generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+	)
+	return settlement.landmarks.well
+
+
+## Advances every real in-flight caravan (see _active_caravans) to the
+## current _world_age_seconds -- called after advance_world_age each slice
+## (see World._step_ecology_fine), never throttled itself: CaravanTrip's own
+## position_at is a pure closed-form function of elapsed time, so this is
+## cheap regardless of how often it runs, and running it every slice is what
+## gives PathScarring real tile-by-tile wear along the route instead of one
+## coarse jump. Resolves each trip exactly once, either into a real market
+## credit (arrival) or a real scattered drop (raid) -- never both.
+func step_caravans() -> void:
+	var still_active: Array = []
+	for entry in _active_caravans:
+		var trip: CaravanTrip = entry["trip"]
+		var marker: CaravanMarker = entry["marker"]
+		var position := trip.position_at(_world_age_seconds)
+		if is_instance_valid(marker):
+			marker.sync(position)
+
+		var tile := trip.tile_at(_world_age_seconds, TerrainRenderer.TILE_SIZE)
+		if tile != entry["last_tile"]:
+			_caravan_path_scarring.step_on(tile)
+			entry["last_tile"] = tile
+
+		if trip.raid_triggered(_world_age_seconds):
+			_resolve_caravan_raid(trip, position)
+			if is_instance_valid(marker):
+				marker.queue_free()
+			continue
+		if trip.is_arrived(_world_age_seconds):
+			_resolve_caravan_arrival(trip)
+			if is_instance_valid(marker):
+				marker.queue_free()
+			continue
+		still_active.append(entry)
+	_active_caravans = still_active
+
+
+## Real delivery: the shortage settlement is credited only now, and the
+## "shipped" event only becomes real now -- see _attempt_regional_resupply's
+## own doc comment on why this moved out of the departure call.
+func _resolve_caravan_arrival(trip: CaravanTrip) -> void:
+	_market_store.market_for(trip.shortage_settlement_id).add_stock(trip.item_id, trip.count)
 
 	var event := Event.new("regional_trade_shipped", _world_age_seconds)
-	event.actors.append(supplier_id)
-	event.actors.append(shortage_settlement_id)
-	event.tags.append(item_id)
+	event.actors.append(trip.supplier_id)
+	event.actors.append(trip.shortage_settlement_id)
+	event.tags.append(trip.item_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+
+## Real failure: the shortage settlement never sees this shipment. Its
+## carried goods scatter into the world at the raid position via
+## WorldItemBus -- the same real ground-drop path a felled tree or a
+## smashed stone already uses, not a silent stock deletion.
+func _resolve_caravan_raid(trip: CaravanTrip, raid_position: Vector2) -> void:
+	if _item_catalog.has(trip.item_id):
+		var stack := ItemStack.new(_item_catalog.make(trip.item_id), trip.count)
+		WorldItemBus.item_dropped.emit(stack, raid_position)
+
+	var event := Event.new("regional_trade_raided", _world_age_seconds)
+	event.actors.append(trip.supplier_id)
+	event.actors.append(trip.shortage_settlement_id)
+	event.tags.append(trip.item_id)
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 
@@ -2021,6 +2194,61 @@ func _update_roof_visibility(player_global_tile: Vector2i) -> void:
 	for cell in room_cells:
 		hidden[cell] = true
 	_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, hidden)
+
+
+## How many tiles out from the player a cave entrance still triggers a
+## reveal -- standing right at the mouth or immediately beside it, not
+## a proximity radius wide enough to reveal chambers the player can't
+## even see yet.
+const CAVE_ENTRY_TRIGGER_RADIUS := 1
+
+## Reveals the real diggable-rock chamber under whichever cave entrance (if
+## any) the player is currently standing at/beside, and despawns whichever
+## chamber was PREVIOUSLY revealed the moment the player is no longer near
+## it -- the same reveal-on-entry shape as _update_roof_visibility, one
+## layer down (see docs/concept/geology.md "Reveal-on-entry, reused
+## recursively"). Only the topsoil/regolith layer has a Strata instance
+## wired here today (_topsoil_strata); deeper layers are not yet reachable
+## (see geology.md's Status).
+func _update_geology_reveal(player_global_tile: Vector2i) -> void:
+	var entrance_tile = _nearby_cave_entrance(player_global_tile)
+
+	if entrance_tile == _revealed_cave_entrance_tile:
+		return  # nothing changed -- still at the same entrance (or still away from one)
+
+	for node in _revealed_cave_nodes:
+		if is_instance_valid(node):
+			node.free()
+	_revealed_cave_nodes = []
+	_revealed_cave_entrance_tile = null
+
+	if entrance_tile == null:
+		return
+
+	var entrance_chunk_coord := _chunk_coord_for_tile(entrance_tile)
+	var strata: Strata = _topsoil_strata.get(entrance_chunk_coord)
+	if strata == null:
+		return  # the entrance's own chunk isn't loaded (yet) -- nothing to reveal
+
+	var local_cell := _local_coord(entrance_tile.x, entrance_tile.y)
+	_revealed_cave_nodes = _geology_renderer.reveal_chamber(
+		_entities_parent, strata, local_cell, entrance_chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+	)
+	_revealed_cave_entrance_tile = entrance_tile
+
+
+## The global tile of a real cave entrance within CAVE_ENTRY_TRIGGER_RADIUS
+## of the player, or null if none -- scans a small fixed neighborhood
+## rather than the whole loaded area, cheap enough to run every frame the
+## same way _update_roof_visibility's own per-frame room lookup already is.
+func _nearby_cave_entrance(player_global_tile: Vector2i):
+	for dy in range(-CAVE_ENTRY_TRIGGER_RADIUS, CAVE_ENTRY_TRIGGER_RADIUS + 1):
+		for dx in range(-CAVE_ENTRY_TRIGGER_RADIUS, CAVE_ENTRY_TRIGGER_RADIUS + 1):
+			var candidate := player_global_tile + Vector2i(dx, dy)
+			var biome_name: String = generator.biome_at_global(candidate.x, candidate.y)
+			if _cave_entrance_placement.has_entrance_at(candidate.x, candidate.y, biome_name):
+				return candidate
+	return null
 
 
 ## Marks every ocean cell of a loaded chunk on the water overlay layer with
@@ -4424,6 +4652,15 @@ func herbivore_population_near(pixel_position: Vector2) -> float:
 	return _ecosystem.herbivore_population(chunk_coord)
 
 
+## This pixel's chunk's herbivore carrying capacity -- see
+## herbivore_capacity_at_chunk. Mirrors herbivore_population_near's exact
+## pattern; the two together are CreatureMarker's herd-disease density
+## signal (docs/concept/disease.md).
+func herbivore_capacity_near(pixel_position: Vector2) -> float:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	return _ecosystem.herbivore_capacity_at(chunk_coord)
+
+
 ## This pixel's chunk's persistent land health (docs/concept/world.md "Land
 ## health: overharvesting leaves a lasting mark, not just a slower
 ## respawn") -- the extra multiplier on top of vegetation_density_near's
@@ -4774,6 +5011,17 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
 
+	# Geology (see docs/concept/geology.md): a real per-chunk topsoil/
+	# regolith Strata sim, plus the surface markers for whichever cave
+	# entrances this chunk's own tiles roll (sparse -- most chunks have
+	# none). Strata is kept for the chunk's lifetime so a chamber
+	# re-revealed later still shows real mined tunnels; only ever mutated
+	# by _update_geology_reveal's spawned DiggableRock nodes.
+	_topsoil_strata[chunk_coord] = Strata.new(Strata.LAYER_TOPSOIL_REGOLITH, chunk_coord * CHUNK_SIZE)
+	_cave_entrance_markers[chunk_coord] = _geology_renderer.spawn_entrance_markers(
+		_entities_parent, chunk_coord * CHUNK_SIZE, chunk.biome, chunk.width, chunk.height, TerrainRenderer.TILE_SIZE
+	)
+
 	_grass_sims[chunk_coord] = TallGrass.new(
 		hash("%d_%d_tall_grass" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
@@ -4943,6 +5191,23 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for stone in _loaded_stones.get(chunk_coord, []):
 		stone.free()
 	_loaded_stones.erase(chunk_coord)
+
+	for marker in _cave_entrance_markers.get(chunk_coord, []):
+		marker.free()
+	_cave_entrance_markers.erase(chunk_coord)
+	# Mined-tunnel state does NOT persist across an unload -- a documented
+	# gap (see geology.md's Status), same class of limitation as every
+	# other per-chunk sim here that isn't yet written to the modifications
+	# save file. If the chamber currently revealed belongs to this chunk,
+	# its nodes are about to be orphaned by the chunk unload -- free them
+	# now rather than leaking, and forget the reveal.
+	if _revealed_cave_entrance_tile != null and _chunk_coord_for_tile(_revealed_cave_entrance_tile) == chunk_coord:
+		for node in _revealed_cave_nodes:
+			if is_instance_valid(node):
+				node.free()
+		_revealed_cave_nodes = []
+		_revealed_cave_entrance_tile = null
+	_topsoil_strata.erase(chunk_coord)
 
 	for mmi in _grass_sprites.get(chunk_coord, {}).values():
 		mmi.free()

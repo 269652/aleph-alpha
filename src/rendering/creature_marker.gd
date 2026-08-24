@@ -43,6 +43,8 @@ const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
+const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
+const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 
 ## Sun elevation in degrees, shared by every creature's shadow -- set once
 ## per frame by World from its real sun-position calculation (see
@@ -61,6 +63,18 @@ const TRUST_BAR_COLOR := Color(0.45, 0.75, 0.95)
 const TRUST_BAR_OFFSET_Y := -16.0
 const HUNGER_PIP_COLOR := Color(0.95, 0.72, 0.2)
 const HUNGER_PIP_SIZE := 3.0
+## A third pip beside hunger, shown only on a tamed/kept animal (see
+## docs/concept/taming.md's own hunger/trust readouts and disease.md's
+## "third pip added the same way") -- a sickly yellow-green distinct from
+## both the blue trust bar and the amber hunger pip.
+const SICK_PIP_COLOR := Color(0.55, 0.75, 0.25)
+const SICK_PIP_SIZE := 3.0
+## Visible symptom for EVERY infected creature, tamed or wild (docs/concept/
+## disease.md "What you see is what's real" -- a sick animal visibly reads
+## as sick without a new animation system): reuses Sprite2D's own built-in
+## `modulate`, a duller, sicklier cast of the sprite's normal color.
+const SICK_MODULATE_COLOR := Color(0.72, 0.8, 0.55)
+const HEALTHY_MODULATE_COLOR := Color.WHITE
 const HEALTH_BAR_HEIGHT := 2.0
 const HEALTH_BAR_OFFSET_Y := -12.0
 const HEALTH_BAR_BG_COLOR := Color(0.1, 0.1, 0.1, 0.85)
@@ -194,6 +208,24 @@ var _wander := CreatureWander.new()
 ## lockstep -- see CreatureNeeds.START_STAGGER.
 var _needs := CreatureNeeds.new()
 
+## Disease (see docs/concept/disease.md / DiseaseModel): which of the three
+## real archetypes (if any) this individual carries, and where it is in the
+## SIRS cycle. "" disease_id / State.SUSCEPTIBLE means healthy. region_tier
+## is set once at spawn (see CreatureRenderer.spawn_creatures) from the SAME
+## RegionDifficulty tier that already gates this individual's species pool,
+## so disease pressure scales with the one distance-from-spawn signal this
+## project already computes rather than a second one.
+var disease_state: int = DiseaseModel.State.SUSCEPTIBLE
+var disease_id := ""
+var disease_severity := 0.0
+var _disease_state_seconds := 0.0
+var region_tier: int = RegionDifficulty.Tier.EASY
+var _disease_model := DiseaseModel.new()
+## Counts this individual's disease rolls, so each one draws a different,
+## still-deterministic seed from wander_seed -- the same salted-hash pattern
+## _struggle_count already uses for _step_restraint's own rolls.
+var _disease_roll_count := 0
+
 ## Taming (see docs/concept/taming.md). `_rope_anchor` is whatever holds the
 ## other end of the lasso -- the player leading it, or the point it is tied to
 ## -- and is pushed in each frame by the holder rather than stored as a node
@@ -245,6 +277,8 @@ var _health_bar_fill: ColorRect
 ## animal over is, and whether it wants feeding right now.
 var _trust_bar: ColorRect
 var _hunger_pip: ColorRect
+## Third readout beside hunger, tamed/kept animals only -- see disease.md.
+var _sick_pip: ColorRect
 ## The ground-contact shadow CreatureRenderer adds as a child (see
 ## set_shadow) -- null until it does, since bare test markers never get one.
 var _shadow: Node2D = null
@@ -310,6 +344,10 @@ var _gait_distance := 0.0
 ## two radii can never collapse back into the same boundary.
 var _cached_caution_threats: Array = []
 var _cached_prey: Array = []
+## Nearby herbivore-role creatures, for herd (foot-and-mouth-like) disease
+## transmission (see _herd_disease_step) -- separate from _cached_prey,
+## which only ever populates for a predator (see _nearby_prey_creatures).
+var _cached_nearby_herbivores: Array = []
 var _cached_food_direction := Vector2.ZERO
 var _cached_water_direction := Vector2.ZERO
 
@@ -350,6 +388,13 @@ func _ready() -> void:
 	_hunger_pip.top_level = true
 	_hunger_pip.visible = false
 	add_child(_hunger_pip)
+
+	_sick_pip = ColorRect.new()
+	_sick_pip.color = SICK_PIP_COLOR
+	_sick_pip.size = Vector2(SICK_PIP_SIZE, SICK_PIP_SIZE)
+	_sick_pip.top_level = true
+	_sick_pip.visible = false
+	add_child(_sick_pip)
 
 	_health_bar_fill = ColorRect.new()
 	_health_bar_fill.color = HEALTH_BAR_FILL_COLOR
@@ -405,6 +450,12 @@ func _sync_grounded_children() -> void:
 		_trust_bar.global_position = global_position + trust_offset
 		_hunger_pip.global_position = (
 			global_position + trust_offset + Vector2(HEALTH_BAR_WIDTH + 2.0, 0.0)
+		)
+		# Sick pip sits on the OTHER side of the trust bar from hunger, so a
+		# tamed animal that is both hungry AND sick shows both cues at once
+		# instead of one overwriting the other's spot.
+		_sick_pip.global_position = (
+			global_position + trust_offset + Vector2(-SICK_PIP_SIZE - 2.0, 0.0)
 		)
 		_update_taming_readouts()
 	if _shadow != null:
@@ -529,6 +580,13 @@ func _process(frame_delta: float) -> void:
 		return
 	_elapsed_time += delta
 	_attack_cooldown_remaining = maxf(0.0, _attack_cooldown_remaining - delta)
+	# Runs unconditionally, ahead of every early-return branch below (rope,
+	# tame order, foraging, knockback) -- a sick animal keeps getting sicker
+	# (and can still die) no matter what it's doing that frame, the same way
+	# _needs.advance never pauses for those states either.
+	_disease_step(delta)
+	if is_queued_for_deletion():
+		return  # died of disease this frame -- nothing below has a live marker to act on
 
 	if _knockback_time_remaining > 0.0:
 		var result := _knockback.step(_knockback_remaining, _knockback_time_remaining, delta)
@@ -603,6 +661,9 @@ func _process(frame_delta: float) -> void:
 		)
 		_cached_prey = _nearby_prey_creatures()
 		_cached_blockers = _blockers_near(BLOCKER_SCAN_RADIUS)
+		_cached_nearby_herbivores = _nearby_herbivore_creatures()
+		_herd_disease_step()
+		_carrion_disease_step()
 		# Fresh senses: a creature standing because the gate found nowhere
 		# to go re-evaluates now, not per frame (see _gate_standing).
 		_gate_standing = false
@@ -648,6 +709,11 @@ func _update_taming_readouts() -> void:
 	_trust_bar.size.x = HEALTH_BAR_WIDTH * clampf(trust / Taming.TAME_TRUST, 0.0, 1.0)
 	# The cue to act: shown when feeding would actually do something.
 	_hunger_pip.visible = in_the_loop and not is_tame() and _needs.is_hungry()
+	# Third readout (docs/concept/disease.md): a tamed/kept animal you've
+	# invested trust in reads as sick the instant it happens, the same shape
+	# hunger already uses -- not shown on every animal in the world, only one
+	# already "in the loop" with the player.
+	_sick_pip.visible = in_the_loop and disease_state == DiseaseModel.State.INFECTED
 
 
 ## How far a tamed animal told to STAY will drift from the spot it was left,
@@ -1191,6 +1257,15 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	if desired.length() < 0.001:
 		_is_moving = false
 		return
+	# Herd (foot-and-mouth-like) disease's real secondary effect (docs/
+	# concept/disease.md): it doesn't damage directly, it makes the carrier
+	# measurably easier prey by slowing it down (see DiseaseModel.
+	# movement_speed_multiplier). The single choke point every intent's
+	# movement (wander/flee/seek/hunt/attack) already funnels through, via
+	# _advance_gated/_advance_avoided calling this -- so one multiplier here
+	# covers all of them.
+	if disease_id == DiseaseModel.HERD and disease_state == DiseaseModel.State.INFECTED:
+		speed *= _disease_model.movement_speed_multiplier(disease_severity)
 	_facing_commit_remaining = maxf(0.0, _facing_commit_remaining - delta)
 	var position_before := position
 	if not _is_serpent():
@@ -1317,7 +1392,28 @@ func _try_attack(target: Node) -> void:
 		target.take_damage(ATTACK_DAMAGE)
 		if VENOMOUS_SPECIES.has(info.species) and target.has_method("apply_venom"):
 			target.apply_venom()
+		_try_transmit_predator_disease(target)
 		_attack_cooldown_remaining = ATTACK_COOLDOWN
+
+
+## Predator (rabies-like) disease transmission: rides this SAME bite,
+## rolled only when the attacker itself is currently INFECTED with the
+## PREDATOR archetype (docs/concept/disease.md "rides the existing attack-
+## resolution path"). Works identically whether `target` is another
+## creature or the player (see Player.apply_disease_bite) -- the doc's
+## zoonotic spillover path is just this same duck-typed call landing on a
+## Player instead of a CreatureMarker, no separate code path needed.
+func _try_transmit_predator_disease(target: Node) -> void:
+	if disease_state != DiseaseModel.State.INFECTED or disease_id != DiseaseModel.PREDATOR:
+		return
+	if not target.has_method("apply_disease_bite"):
+		return
+	_disease_roll_count += 1
+	var chance := _disease_model.predator_bite_transmission_chance(region_tier)
+	if _disease_model.attempt_infect(
+		chance, hash("%d_%d_predator_disease" % [wander_seed, _disease_roll_count])
+	):
+		target.apply_disease_bite(DiseaseModel.PREDATOR)
 
 
 func _try_eat(target: Node) -> void:
@@ -1699,6 +1795,21 @@ func _nearby_prey_creatures() -> Array:
 	return result
 
 
+## Other herbivore-role creatures within sense range -- for herd disease
+## transmission (see _herd_disease_step), NOT hunting: unlike
+## _nearby_prey_creatures (predator-only), this only ever populates for a
+## herbivore-role individual, since herd disease spreads herbivore to
+## herbivore, never through a predator.
+func _nearby_herbivore_creatures() -> Array:
+	if info.is_predator:
+		return []
+	var result: Array = []
+	for node in _nearby_in_group(GROUP_NAME):
+		if node.info != null and not node.info.is_predator:
+			result.append(node)
+	return result
+
+
 ## Cached node lists can span several frames (see SENSE_INTERVAL); a cached
 ## target may have been freed (eaten/killed) since -- skip invalid instances.
 func _positions_of(nodes: Array) -> Array:
@@ -1744,8 +1855,7 @@ func take_damage(amount: float) -> void:
 	info.health = _health.take_damage(info.health, amount)
 	_update_health_bar()
 	if _health.is_dead(info.health):
-		_spawn_carcass_if_eligible()
-		queue_free()
+		_die()
 
 
 func _update_health_bar() -> void:
@@ -1754,13 +1864,142 @@ func _update_health_bar() -> void:
 	_health_bar_fill.size.x = _health_bar.fill_width(info.health, info.max_health, HEALTH_BAR_WIDTH)
 
 
+## Shared death path: a real Carcass (see docs/concept/carrion.md) for a
+## carcass-eligible species (see LootTable), then the marker frees itself.
+## The ONE place a marker actually dies, whatever the cause -- ordinary
+## take_damage above, and a lethal disease death (_disease_step below) alike
+## (docs/concept/disease.md "Feeds carrion": a disease-driven die-off must
+## be a real source of carrion, not a silent despawn, so it has to go
+## through this exact same path, not a parallel one).
+func _die() -> void:
+	_spawn_carcass_if_eligible()
+	queue_free()
+
+
 func _spawn_carcass_if_eligible() -> void:
 	if _loot_table.drops_for(info.species).is_empty():
 		return
 	var carcass := Carcass.new()
 	carcass.species = info.species
 	carcass.position = position
+	carcass.region_tier = region_tier
 	get_parent().add_child(carcass)
+
+
+# -- disease (see docs/concept/disease.md / DiseaseModel) ---------------------
+
+## Called by an infected predator's bite (see _try_attack, the PREDATOR
+## archetype's "rides the existing attack-resolution path") or a herd-
+## disease proximity check (_herd_disease_step) -- infects this creature if
+## it is currently SUSCEPTIBLE. A creature already INFECTED or RECOVERED
+## (immune) can't be re-infected mid-cycle -- the real epidemiological
+## constraint the SIRS states exist to express, not an oversight.
+func apply_disease_bite(new_disease_id: String) -> void:
+	if disease_state != DiseaseModel.State.SUSCEPTIBLE:
+		return
+	disease_state = DiseaseModel.State.INFECTED
+	disease_id = new_disease_id
+	disease_severity = 0.0
+	_disease_state_seconds = 0.0
+	_update_disease_tint()
+
+
+## Authority-only: advances this creature's own SIRS cycle one tick (see
+## DiseaseModel.advance_state) and routes a disease death through _die() --
+## the exact same carcass path a predation kill already uses.
+func _disease_step(delta: float) -> void:
+	if disease_state == DiseaseModel.State.SUSCEPTIBLE:
+		return
+	_disease_roll_count += 1
+	var result: Dictionary = _disease_model.advance_state(
+		disease_state,
+		disease_id,
+		disease_severity,
+		_disease_state_seconds,
+		delta,
+		hash("%d_%d_disease_progress" % [wander_seed, _disease_roll_count])
+	)
+	disease_state = result["state"]
+	disease_severity = result["severity"]
+	_disease_state_seconds = result["state_seconds"]
+	if disease_state == DiseaseModel.State.SUSCEPTIBLE:
+		disease_id = ""  # immunity waned -- healthy and vulnerable again
+	_update_disease_tint()
+	if result["died"]:
+		_die()
+
+
+## Visible symptom (docs/concept/disease.md "What you see is what's real"):
+## reuses Sprite2D's own `modulate` rather than a new rendering system --
+## same reasoning as the taming sick pip, but shown on EVERY infected
+## creature, tamed or wild, not just ones the player has a stake in.
+func _update_disease_tint() -> void:
+	modulate = (
+		SICK_MODULATE_COLOR if disease_state == DiseaseModel.State.INFECTED else HEALTHY_MODULATE_COLOR
+	)
+
+
+## Herd (foot-and-mouth-like) proximity transmission: an infected herbivore
+## can pass it to a nearby SUSCEPTIBLE herbivore, density-weighted against
+## this region's real herbivore population vs. carrying capacity (see
+## DiseaseModel.herd_transmission_chance) -- the same real distance check
+## GrazerForaging/courtship already resolve off, reused rather than adding a
+## second spatial system. Called once per sensing tick (see _process), not
+## every frame, matching every other proximity check's own cadence.
+func _herd_disease_step() -> void:
+	if info == null or info.is_predator:
+		return
+	if disease_state != DiseaseModel.State.INFECTED or disease_id != DiseaseModel.HERD:
+		return
+	if _world == null or not _world.has_method("herbivore_population_near"):
+		return
+	var target: Node = _nearest_node(_cached_nearby_herbivores)
+	if target == null or target.disease_state != DiseaseModel.State.SUSCEPTIBLE:
+		return
+	var local_population: float = _world.herbivore_population_near(position)
+	var capacity: float = _world.herbivore_capacity_near(position)
+	var chance := _disease_model.herd_transmission_chance(local_population, capacity, region_tier)
+	_disease_roll_count += 1
+	if _disease_model.attempt_infect(
+		chance, hash("%d_%d_herd_disease" % [wander_seed, _disease_roll_count])
+	):
+		target.apply_disease_bite(DiseaseModel.HERD)
+
+
+## Carrion (anthrax-like) graze exposure: real blowflies/carrion beetles
+## mechanically carry anthrax spores from an infected carcass to nearby
+## vegetation, which grazing herbivores then ingest (docs/concept/
+## disease.md). Simplified to direct proximity to the contaminated Carcass
+## itself, rather than a separately-tracked "contaminated patch of grass"
+## object -- this project has no such object today, and the carcass IS the
+## real, already-visible source the player can see and avoid. Scans the
+## SAME Carcass.GROUP_NAME group Player's own butcher step already scans.
+## Called once per sensing tick, matching every other proximity check here.
+func _carrion_disease_step() -> void:
+	if info == null or info.is_predator or disease_state != DiseaseModel.State.SUSCEPTIBLE:
+		return
+	var nearest := _nearest_contaminated_carcass()
+	if nearest == null:
+		return
+	_disease_roll_count += 1
+	var chance := _disease_model.carrion_graze_transmission_chance(region_tier)
+	if _disease_model.attempt_infect(
+		chance, hash("%d_%d_carrion_graze" % [wander_seed, _disease_roll_count])
+	):
+		apply_disease_bite(DiseaseModel.CARRION)
+
+
+func _nearest_contaminated_carcass() -> Node:
+	var best: Node = null
+	var best_distance := SENSE_RADIUS
+	for node in get_tree().get_nodes_in_group(Carcass.GROUP_NAME):
+		if not node.contaminated:
+			continue
+		var distance := position.distance_to(node.position)
+		if distance <= best_distance:
+			best = node
+			best_distance = distance
+	return best
 
 
 ## Starts a shove of `force` total displacement, played out smoothly over

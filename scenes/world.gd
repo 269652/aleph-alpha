@@ -1441,6 +1441,10 @@ func _step_ecology_fine(delta: float, focus_player: Player) -> void:
 	_chunk_manager.step_worms(delta)
 	if focus_player != null:
 		_chunk_manager.step_fruiting(delta, focus_player.position)
+	# Real in-flight regional-trade caravans (see docs/concept/trade.md):
+	# advanced every slice, not batched, so PathScarring wear along a
+	# route builds up tile-by-tile rather than one coarse jump.
+	_chunk_manager.step_caravans()
 
 
 ## Once a frame, carrying the whole frame's simulated time: the heavy periodic
@@ -1478,6 +1482,10 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# 12) can be resupplied by the nearest other real settlement's genuine
 	# surplus (see step_regional_trade, docs/concept/regional_trade.md) --
 	# the region's own most basic trade network, running automatically.
+	# Dispatch is throttled by REGIONAL_TRADE_INTERVAL internally, same
+	# accumulator shape as step_settlements above; delivery is now a real
+	# caravan trip (see step_caravans, docs/concept/trade.md), not an
+	# instant credit.
 	_chunk_manager.step_regional_trade(delta)
 	_step_herbivore_food_consumption(delta)
 	_step_reproduction(delta)

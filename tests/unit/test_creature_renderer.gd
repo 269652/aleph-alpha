@@ -77,6 +77,18 @@ func test_spawns_one_marker_per_rounded_unit_of_herbivore_population():
 	assert_eq(spawned.size(), 3)
 
 
+## See docs/concept/disease.md's "Region pressure": a spawned marker carries
+## its own region's RegionDifficulty tier forward (rather than the world
+## re-deriving it later), reusing the SAME distance-from-spawn signal that
+## already gates its species pool above, not a second one.
+func test_spawned_markers_carry_the_regions_difficulty_tier_for_disease_pressure():
+	var spawned := renderer.spawn_creatures(
+		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 2.0, 0.0, null, "",
+		RegionDifficulty.Tier.HARD
+	)
+	assert_eq(spawned[0].region_tier, RegionDifficulty.Tier.HARD)
+
+
 func test_spawns_markers_for_both_herbivores_and_predators():
 	var spawned := renderer.spawn_creatures(
 		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 2.0, 1.0
