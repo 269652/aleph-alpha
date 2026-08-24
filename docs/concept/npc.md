@@ -14,6 +14,22 @@ NPCs are individuals, not quest dispensers.
   traits, a driving need/goal, and relationships to a handful of other NPCs.
   Backstory/personal-history depth starts minimal and is allowed to grow
   organically through logged events rather than being hand-authored upfront.
+  Personality is DNA derived (`NpcGenome`, same "continuous 0..1 gene per
+  trait, seeded" shape `TreeGenome` already uses for trees): each of the 8
+  named traits gets its own independent gene, and the trait that rolls
+  highest is the NPC's expressed `personality_trait` -- a real genotype
+  underneath one visible phenotype, not a single flat categorical roll with
+  nothing behind it. Deliberately kept as a plain `String -> float`
+  Dictionary rather than fixed fields, since that shape already slots
+  directly into the existing `dna_crossover.gd` utility unchanged -- once
+  villagers can have children at all (see Lifecycle below), two parents'
+  genomes crossing into a child's is a natural follow-up, not a new
+  mechanism. This also gives other systems a continuous strength to read
+  instead of a yes/no category match -- e.g. which house blueprint a
+  villager builds (`HouseBlueprint.choose_blueprint_id`, see
+  [building.md](building.md#a-blueprint-catalog-not-one-box)) is nudged by
+  how strongly their dominant trait actually rolled, not just which name it
+  happened to land on.
 - **Planning architecture** (cost- and latency-aware by design):
   - Once per in-game day, one LLM call produces a rough schedule for that
     NPC: a sequence of `{time block, location, activity}` entries, informed
@@ -125,7 +141,8 @@ option, in [quests.md](quests.md#settlement-growth-migration-and-player-founded-
 A first real slice exists (see `docs/progress.md`'s NPC section for the full
 breakdown): procedural village placement (`settlement_generator.gd`,
 sparse/deterministic per chunk), villager identity (`npc_identity.gd`: name/
-occupation/personality/need, no relationships yet), and the planning
+occupation/personality (now DNA derived via `npc_genome.gd`, see Identity
+above)/need, no relationships yet), and the planning
 architecture's cheap-local-FSM half fully working (`npc_marker.gd` walks a
 daily schedule, sharing the player's own `CharacterView` walk cycle --
 `NpcMarker.setup(world, tile_size)` gives it the same water-awareness

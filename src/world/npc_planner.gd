@@ -29,17 +29,8 @@ class Planner:
 ## Unrecognized occupations fall back to a generic idle-at-home/socialize day
 ## rather than crashing.
 class FakeNpcPlanner extends Planner:
-	const _WORK_LOCATION_BY_OCCUPATION := {
-		"farmer": "field",
-		"blacksmith": "forge",
-		"merchant": "stall",
-		"guard": "gate",
-		"fisher": "dock",
-		"herbalist": "garden",
-	}
-
 	func plan_day(identity: NpcIdentity, _day_index: int) -> Array:
-		var work_location: String = _WORK_LOCATION_BY_OCCUPATION.get(identity.occupation, "")
+		var work_location: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(identity.occupation, "")
 		if work_location == "":
 			return [
 				{"time_block": "morning", "location_tag": "home", "activity": "idle"},

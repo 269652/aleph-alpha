@@ -9,6 +9,7 @@ const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
@@ -81,6 +82,21 @@ func _find_settlement_chunk_with_merchant(biome: String) -> Vector2i:
 	return Vector2i.ZERO
 
 
+## How many personal, per-villager workspot props (field/forge/dock/garden --
+## see NpcIdentity.WORK_LOCATION_BY_OCCUPATION) a settlement's roster should
+## produce: one per villager whose own work tag isn't already one of the 3
+## shared landmarks (merchant/stall and guard/gate both already have
+## something real there via a different mechanism).
+func _workspot_prop_count(settlement: Dictionary) -> int:
+	const NpcIdentity = preload("res://src/world/npc_identity.gd")
+	var count := 0
+	for npc in settlement.npcs:
+		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npc.occupation, "")
+		if work_tag != "" and not settlement.landmarks.has(work_tag):
+			count += 1
+	return count
+
+
 func _find_non_settlement_chunk(biome: String) -> Vector2i:
 	for x in 400:
 		var coord := Vector2i(x, 1)
@@ -121,6 +137,7 @@ func test_spawns_landmarks_and_npc_markers_on_a_settlement_chunk():
 	for npc in settlement.npcs:
 		if npc.occupation == "merchant":
 			merchant_count += 1
+	var workspot_prop_count := _workspot_prop_count(settlement)
 
 	var spawned := renderer.spawn_village(
 		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
@@ -136,8 +153,8 @@ func test_spawns_landmarks_and_npc_markers_on_a_settlement_chunk():
 			props += 1
 	assert_eq(npc_markers, SettlementGenerator.POPULATION)
 	assert_eq(
-		props, 3 + merchant_count,
-		"expected the 3 shared landmarks plus one personal stand per merchant"
+		props, 3 + merchant_count + workspot_prop_count,
+		"expected the 3 shared landmarks plus one personal stand per merchant plus one workspot prop per farmer/blacksmith/fisher/herbalist"
 	)
 
 
@@ -212,6 +229,26 @@ func test_npc_home_position_is_its_own_houses_door_not_the_raw_anchor():
 		npc_index += 1
 
 
+## The largest footprint any catalog blueprint could possibly choose --
+## houses now vary in size per-villager (see HouseBlueprint.choose_
+## blueprint_id), so a water-flooding test can no longer assume one fixed
+## footprint the way it could when every house was the same 5x4 box. Flood
+## generously against the biggest possible pick instead of trying to
+## predict which exact blueprint a given seed lands on: a raw origin is
+## always `anchor - (that house's own footprint) / 2`, and any real
+## footprint is <= this max in both dimensions, so a flood centred the same
+## way at the max size is guaranteed to cover whichever smaller footprint
+## actually gets chosen.
+static func _max_catalog_footprint() -> Vector2i:
+	var house_blueprint := HouseBlueprint.new()
+	var max_footprint := Vector2i.ZERO
+	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
+		var footprint: Vector2i = house_blueprint.footprint_for(blueprint_id)
+		max_footprint.x = maxi(max_footprint.x, footprint.x)
+		max_footprint.y = maxi(max_footprint.y, footprint.y)
+	return max_footprint
+
+
 ## A house whose ring-layout anchor happens to land on/over a water pocket
 ## (a chunk's dominant biome only gates the CHUNK, not every individual
 ## cell -- see BiomeClassifier.dominant_biome -- so a grassland-dominant
@@ -223,13 +260,15 @@ func test_a_house_is_never_stamped_partially_in_water():
 	var settlement := SettlementGenerator.new().generate_settlement(
 		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE
 	)
-	# Flood the exact footprint every house's raw (un-nudged) origin would
-	# use, forcing every single one of them to need rescuing.
+	# Flood generously around every anchor (see _max_catalog_footprint's own
+	# doc comment), forcing every single house to need rescuing regardless
+	# of which blueprint it ends up choosing.
+	var max_footprint := _max_catalog_footprint()
 	for anchor in settlement.house_positions:
 		var anchor_tile := Vector2i(floori(anchor.x / TILE_SIZE), floori(anchor.y / TILE_SIZE))
-		var raw_origin := anchor_tile - VillageRenderer._HOUSE_FOOTPRINT / 2
-		for x in VillageRenderer._HOUSE_FOOTPRINT.x:
-			for y in VillageRenderer._HOUSE_FOOTPRINT.y:
+		var raw_origin := anchor_tile - max_footprint / 2
+		for x in max_footprint.x:
+			for y in max_footprint.y:
 				world.water_cells[raw_origin + Vector2i(x, y)] = true
 
 	renderer.spawn_village(parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world)
@@ -277,22 +316,20 @@ func test_merchant_villagers_get_a_personal_trading_stand_near_their_own_house()
 		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
 	)
 
-	# One shared plaza stall (well/gate are the other 2 shared landmarks) plus
-	# one personal stand per merchant.
-	var stall_like_positions: Array[Vector2] = []
+	# Every "stall"-tagged prop (see _build_landmark's landmark_id metadata):
+	# one shared plaza stall plus one personal stand per merchant.
+	var stall_positions: Array[Vector2] = []
 	for node in spawned:
-		if node is NpcMarker:
+		if node is NpcMarker or not node.has_meta("landmark_id") or node.get_meta("landmark_id") != "stall":
 			continue
-		if node.position == settlement.landmarks["well"] or node.position == settlement.landmarks["gate"]:
-			continue
-		stall_like_positions.append(node.position)
-	assert_eq(stall_like_positions.size(), 1 + merchant_count, "expected the shared stall plus one stand per merchant")
+		stall_positions.append(node.position)
+	assert_eq(stall_positions.size(), 1 + merchant_count, "expected the shared stall plus one stand per merchant")
 
 	for node in spawned:
 		if not (node is NpcMarker) or node.identity.occupation != "merchant":
 			continue
 		var nearest := INF
-		for pos in stall_like_positions:
+		for pos in stall_positions:
 			nearest = minf(nearest, pos.distance_to(node.home_position))
 		assert_lt(nearest, 4.0 * TILE_SIZE, "merchant should have a personal stand near their own house")
 
@@ -303,25 +340,93 @@ func test_non_merchant_villagers_do_not_get_a_personal_trading_stand():
 	var settlement := SettlementGenerator.new().generate_settlement(
 		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE
 	)
-	var non_merchant_count := 0
+	var non_merchants: Array = []
 	for npc in settlement.npcs:
 		if npc.occupation != "merchant":
-			non_merchant_count += 1
-	if non_merchant_count == 0:
+			non_merchants.append(npc)
+	if non_merchants.is_empty():
 		return  # nothing to assert -- this roster is all merchants
 
 	var spawned := renderer.spawn_village(
 		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
 	)
-	var npc_markers := 0
+	var stall_count := 0
 	for node in spawned:
-		if node is NpcMarker:
-			npc_markers += 1
-	# props = 3 shared landmarks + 1 personal stand per merchant, never one
-	# per non-merchant villager too.
-	var merchant_count := npc_markers - non_merchant_count
-	var props := spawned.size() - npc_markers
-	assert_eq(props, 3 + merchant_count)
+		if not (node is NpcMarker) and node.has_meta("landmark_id") and node.get_meta("landmark_id") == "stall":
+			stall_count += 1
+	var all_npcs: Array = settlement.npcs
+	var merchant_count: int = all_npcs.size() - non_merchants.size()
+	assert_eq(stall_count, 1 + merchant_count, "still exactly one stall per merchant plus the shared one -- never a stall for anyone else")
+
+
+## Every occupation whose own work location isn't already one of the
+## settlement's 3 shared landmarks (merchant/stall and guard/gate both
+## already have something real there) now gets a real prop of its own at
+## the villager's personal workspot -- closing the gap the previous
+## personal-stand-only pass left open (reported: "no per-occupation
+## building beyond the shared landmarks and a merchant's own stand").
+func test_farmer_blacksmith_fisher_and_herbalist_each_get_their_own_workspot_prop():
+	const NpcIdentity = preload("res://src/world/npc_identity.gd")
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var settlement := SettlementGenerator.new().generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE
+	)
+	var spawned := renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	for i in settlement.npcs.size():
+		var npc = settlement.npcs[i]
+		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npc.occupation, "")
+		if work_tag == "" or settlement.landmarks.has(work_tag):
+			continue  # merchant/guard already have a real shared/personal prop elsewhere
+		var found := false
+		for node in spawned:
+			if not (node is NpcMarker) and node.has_meta("landmark_id") and node.get_meta("landmark_id") == work_tag:
+				found = true
+				break
+		assert_true(found, "%s (occupation %s) should have gotten a %s prop" % [npc.npc_name, npc.occupation, work_tag])
+
+
+## Matches by the exact NpcIdentity instance, not just occupation name, so
+## this stays correct even when a settlement's small 5-villager roster rolls
+## the same occupation more than once -- each such villager must get their
+## OWN prop at their OWN workspot, not share one.
+func test_workspot_props_land_at_the_villagers_own_workspot_position():
+	const NpcIdentity = preload("res://src/world/npc_identity.gd")
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var world := StubWorld.new()
+	var settlement := SettlementGenerator.new().generate_settlement(
+		chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE
+	)
+	var spawned := renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+
+	for i in settlement.npcs.size():
+		var npc = settlement.npcs[i]
+		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npc.occupation, "")
+		if work_tag == "" or settlement.landmarks.has(work_tag):
+			continue
+		var marker: NpcMarker = null
+		for node in spawned:
+			# By seed_value, not `== npc` -- this test's own `settlement` and
+			# spawn_village's internal one are separately-generated, value-
+			# equal-but-reference-distinct NpcIdentity instances, and
+			# GDScript's `==` on a RefCounted compares identity, not value.
+			if node is NpcMarker and node.identity.seed_value == npc.seed_value:
+				marker = node
+				break
+		assert_not_null(marker, "expected a marker for %s" % npc.npc_name)
+		var found_at_workspot := false
+		for node in spawned:
+			if node is NpcMarker or not node.has_meta("landmark_id") or node.get_meta("landmark_id") != work_tag:
+				continue
+			if node.position == marker.workspot_position:
+				found_at_workspot = true
+				break
+		assert_true(found_at_workspot, "%s's %s prop should sit at their own workspot_position" % [npc.occupation, work_tag])
 
 
 ## Villagers must be water-aware (see NpcMarker._is_in_water/setup) the same
@@ -356,11 +461,12 @@ func test_spawn_village_does_not_crash_without_a_world():
 	for npc in settlement.npcs:
 		if npc.occupation == "merchant":
 			merchant_count += 1
+	var workspot_prop_count := _workspot_prop_count(settlement)
 
 	var spawned := renderer.spawn_village(
 		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
 	)
-	assert_eq(spawned.size(), SettlementGenerator.POPULATION + 3 + merchant_count)
+	assert_eq(spawned.size(), SettlementGenerator.POPULATION + 3 + merchant_count + workspot_prop_count)
 
 
 ## The well/stall/gate must be real visible sprites at the settlement's
