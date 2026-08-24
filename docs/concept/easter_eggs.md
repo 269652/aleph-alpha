@@ -261,9 +261,17 @@ mirroring the book's structure rather than quoting its content.
 
 ### Status
 
-⬜ Design only — nothing above exists in code yet. This is a genuinely new
-concept doc for a genuinely new (small, deliberately lightweight) system;
-see `docs/progress.md`'s new Easter Eggs row.
+🚧 Partial. The reverse-geo-lookup-with-radius infrastructure
+(`GeoCoordinates.tile_for_coordinate`/`radius_in_tiles`/
+`tile_is_within_radius`) and four of the real-coordinate cameos above —
+Mothman, the Jersey Devil, and the Roswell/Area 51 crashed-saucer +
+"little grey" pair — are implemented (`src/gameplay/
+easter_egg_sightings.gd`), as brief on-screen sighting lines rather than
+spawned sprites/props (a deliberate, documented scope choice — see the
+module's own doc comment and `docs/progress.md`). Everything else in this
+doc (the other trigger shapes, and every remaining Starter Collection
+entry) is still design-only; see `docs/progress.md`'s Easter Eggs section
+for the exact breakdown.
 
 ### Open questions
 

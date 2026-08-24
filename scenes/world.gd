@@ -6,6 +6,7 @@ const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
 const ConsoleSpecies = preload("res://src/gameplay/console_species.gd")
+const EasterEggSightings = preload("res://src/gameplay/easter_egg_sightings.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
@@ -67,6 +68,19 @@ const MINIMAP_REFRESH_INTERVAL := 1.0
 ## per-frame path.
 const HOVER_REFRESH_INTERVAL := 0.033
 var _hover_accumulator := 0.0
+
+## Real seconds between Easter-egg sighting checks (docs/concept/
+## easter_eggs.md's Mothman/Jersey Devil/Roswell/Area 51 cameos) -- these
+## are meant to be rare, atmospheric glimpses, not a per-frame lottery, so
+## chance_per_check in EasterEggSightings is calibrated against "a check
+## roughly every few seconds while in range", not against frame rate.
+const EASTER_EGG_CHECK_INTERVAL := 4.0
+## How long a triggered sighting message stays on screen before clearing --
+## long enough to read a short line, short enough that it's clearly a
+## glimpse, not a persistent HUD element.
+const EASTER_EGG_MESSAGE_DURATION := 6.0
+var _easter_egg_check_accumulator := 0.0
+var _easter_egg_message_timer := 0.0
 
 ## Real seconds between player-state autosaves (see docs/concept/
 ## persistence.md) -- mirrors the world's own "persist eagerly, not on an
@@ -178,6 +192,7 @@ var _last_scar_step_tile := Vector2i(-2147483648, -2147483648)
 var _scar_refresh_accumulator := 0.0
 var _geo_coordinates := GeoCoordinates.new()
 var _solar_position := SolarPosition.new()
+var _easter_egg_sightings := EasterEggSightings.new()
 var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
@@ -241,6 +256,7 @@ var _creature_panels_container: VBoxContainer
 var _hover_tooltip: Label
 var _hover_target_finder := HoverTargetFinder.new()
 var _talk_label: Label
+var _easter_egg_label: Label
 ## Floating "Talk (<key>)" prompt shown above the nearest in-range villager
 ## (see Player.TALK_RADIUS, EarthChunkManager.nearest_npc_near) -- the
 ## available-interaction hint requested alongside the talk feature itself.
@@ -376,6 +392,7 @@ func _ready() -> void:
 	_build_lasso_label()
 	_build_trade_label()
 	_build_talk_label()
+	_build_easter_egg_label()
 	_build_interaction_prompt()
 	_build_charge_meter()
 
@@ -1060,6 +1077,60 @@ func _build_talk_label() -> void:
 func _update_talk_label(local_player: Player) -> void:
 	_talk_label.text = local_player.talk_message
 	_talk_label.visible = local_player.talk_message != ""
+
+
+## The Easter-egg sighting banner (see _check_easter_egg_sightings below) --
+## same centered-banner shape as _talk_label just above, but driven off a
+## World-level message + countdown timer rather than a Player field, since
+## a sighting is an ambient world event, not the result of a player
+## interaction.
+func _build_easter_egg_label() -> void:
+	_easter_egg_label = Label.new()
+	_easter_egg_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_easter_egg_label.offset_top = 210.0
+	_easter_egg_label.offset_left = -260.0
+	_easter_egg_label.offset_right = 260.0
+	_easter_egg_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_easter_egg_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_easter_egg_label.add_theme_font_size_override("font_size", 14)
+	_easter_egg_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.95))
+	_easter_egg_label.visible = false
+	_ui.add_child(_easter_egg_label)
+
+
+## Undocumented on purpose (docs/concept/easter_eggs.md pillar 3 -- no
+## quest marker, no hint pointing here): once every EASTER_EGG_CHECK_
+## INTERVAL seconds, rolls each registered sighting against the player's
+## current real-world tile. The first that clears both its radius and its
+## own rarity roll shows as a brief on-screen line, same shape as the talk/
+## trade/fishing banners, then clears itself after EASTER_EGG_MESSAGE_
+## DURATION -- there is nothing left to walk up to afterward (see
+## EasterEggSightings' own doc comment: no persistent sighting object).
+func _check_easter_egg_sightings(player_tile: Vector2i, is_night: bool) -> void:
+	for id in _easter_egg_sightings.sighting_ids():
+		var message := _easter_egg_sightings.check_one(
+			id,
+			player_tile.x,
+			player_tile.y,
+			EarthChunkGenerator.WORLD_WIDTH_TILES,
+			EarthChunkGenerator.WORLD_HEIGHT_TILES,
+			randf(),
+			is_night
+		)
+		if message != "":
+			_easter_egg_label.text = message
+			_easter_egg_label.visible = true
+			_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
+			return
+
+
+func _update_easter_egg_label(delta: float) -> void:
+	if _easter_egg_message_timer <= 0.0:
+		return
+	_easter_egg_message_timer -= delta
+	if _easter_egg_message_timer <= 0.0:
+		_easter_egg_label.visible = false
+		_easter_egg_label.text = ""
 
 
 ## The floating "Talk (<key>)" prompt (see _interaction_prompt's own doc
@@ -2738,6 +2809,15 @@ func _client_process(delta: float) -> void:
 	var elevation := ALWAYS_DAY_ELEVATION if _always_day() else _solar_position.elevation_degrees(
 		latitude, longitude, day_of_year, utc_hour
 	)
+	# Easter-egg sighting cameos (docs/concept/easter_eggs.md) -- gated on
+	# the same real sun elevation day/night lighting already uses, so
+	# "spookier at night" (the Jersey Devil) means the same thing here as it
+	# does for the lights overhead.
+	_easter_egg_check_accumulator += delta
+	if _easter_egg_check_accumulator >= EASTER_EGG_CHECK_INTERVAL:
+		_easter_egg_check_accumulator = 0.0
+		_check_easter_egg_sightings(player_tile, elevation <= 0.0)
+	_update_easter_egg_label(delta)
 	# Real sun compass bearing, for hillshading (see HillshadeShader,
 	# docs/concept/terrain_relief.md) -- same real inputs as elevation just
 	# above, so mountain shading is driven by the exact same sun as day/

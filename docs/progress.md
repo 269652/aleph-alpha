@@ -2451,30 +2451,57 @@ Brand-new doc, 2026-08-24. Deliberately the one place in this project's
 design corpus that's hand-placed rather than emergent — see the doc's own
 "Design pillars" for why that's the right call here specifically, not a
 quiet contradiction of every other system's "never hand-placed" rule.
-All ⬜ Not started — pure design, no code:
 
-- **Real-Coordinate Easter Egg Triggers** (small) — ⬜ Not started —
-  reuses the existing `GeoCoordinates` real lat/lon lookup (same source
-  the regional-mythology brainstorm uses); a small hand-curated
-  {lat/lon, effect} table, nothing new needed at the engine level.
+- **Real-Coordinate Reverse Lookup** (small) — ✅ Done —
+  `GeoCoordinates.tile_for_coordinate`/`radius_in_tiles`/
+  `tile_is_within_radius` (`src/world/geo_coordinates.gd`): the shared
+  "given a real lat/lon + a small radius, is this tile in range"
+  infrastructure every coordinate-triggered egg builds on (the pre-existing
+  `tile_for_latitude`/`tile_for_longitude` only did an exact single-tile
+  reverse lookup, no radius). Tested incl. a round trip at the real
+  game-world scale (`EarthChunkGenerator.WORLD_WIDTH_TILES`/
+  `WORLD_HEIGHT_TILES`, ~111 tiles/degree), not just the toy dimensions the
+  pre-existing tests used — see `tests/unit/test_geo_coordinates.gd`.
+- **Mothman, Jersey Devil, Roswell/Area 51 crashed-saucer + "little grey"
+  pair** (small) — ✅ Done — `EasterEggSightings`
+  (`src/gameplay/easter_egg_sightings.gd`), a pure tile+roll decision
+  module (`tests/unit/test_easter_egg_sightings.gd`), wired into
+  `scenes/world.gd`'s per-frame update (checked every
+  `EASTER_EGG_CHECK_INTERVAL` seconds, not every frame) as a brief
+  on-screen banner line, same shape as the existing talk/trade/fishing
+  banners. Deliberately **log-line-only, not a spawned sprite/prop** — an
+  explicitly-sanctioned scope call, documented in the module's own doc
+  comment: there is no persistent "sighting" object for the player to walk
+  up to, so "never actually catchable... gone if approached" (the doc's own
+  words for Mothman) is true by construction rather than enforced by a
+  despawn-on-approach check. The "crashed saucer" landmarks specifically
+  read more like an actual landmark than a glimpse in the doc's own text;
+  promoting them to a real visible static prop (a `_draw()`-based shape,
+  no new art needed) is a reasonable next small step, left open here.
+  `chance_per_check`/`radius_km` are first-pass placeholders (no real
+  playtesting data yet to calibrate encounter rates against), pinned as
+  named constants and exercised by relative property tests (landmarks
+  trigger far more often than fleeting glimpses; Roswell/Area 51 stay a
+  symmetric matched pair) rather than eyeballed.
 - **Secret Console Commands** (trivial) — ⬜ Not started — reuses
   `console_command_parser.gd`'s existing parse/dispatch shape; an Easter
   egg command is just an undocumented `match` arm in `World`'s dispatcher.
 - **Calendar-Date-Gated Triggers** (trivial) — ⬜ Not started — a plain
   real-system-date check, the same category of real-world-time input
   `SeasonCycle`/`WeatherModel` already read for unrelated reasons.
-- **Starter Collection (cryptid cameos, WarGames/Zork/Atari Adventure/
-  BTTF/Monty Python/Rush/D&D nods)** (medium) — ⬜ Not started — ~15
-  concrete, written-up eggs in the doc, none implemented yet. Two are
-  real, playable original mini-games rather than props/flavor text (a
-  Joust-homage dueling-birds cabinet in a hidden sea cave at the Bermuda
-  Triangle, and a turn-based creature-battler on a hidden handheld
-  starring this project's OWN existing creature roster, not the Easter
-  eggs' cameos — zero new art needed, reuses
-  `ProceduralAnimalSprite`/`IllustratedAnimalSprite` as-is) —
-  meaningfully bigger implementation lifts than the rest of the list,
-  flagged as such in the doc rather than
-  under-scoped alongside the prop-only entries.
+- **Remaining Starter Collection entries** (Champ/Lake Champlain, Loch
+  Ness's Coilnecca, Bermuda Triangle's Squallmaw + Joust-homage sea cave,
+  WarGames console command, Zork terminal, Atari Adventure secret room,
+  Back to the Future Day, Monty Python's Bridgekeeper, Rush ambient cue,
+  D&D d20, the Kraken, the retro-handheld creature-battler, "Three
+  Fragments") (medium) — ⬜ Not started — ~11 concrete eggs still
+  unimplemented. Two are real, playable original mini-games rather than
+  props/flavor text (the Joust-homage dueling-birds cabinet and the
+  handheld creature-battler starring this project's OWN existing creature
+  roster — zero new art needed, reuses
+  `ProceduralAnimalSprite`/`IllustratedAnimalSprite` as-is) — meaningfully
+  bigger implementation lifts than the rest of the list, flagged as such in
+  the doc rather than under-scoped alongside the prop-only entries.
 
 ### Electromagnetism (`concept/electromagnetism.md`)
 
