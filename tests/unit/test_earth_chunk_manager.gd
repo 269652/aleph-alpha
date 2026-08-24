@@ -36,6 +36,7 @@ const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
+const Strata = preload("res://src/world/strata.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -1416,6 +1417,46 @@ func test_update_shows_the_roof_again_once_the_player_leaves_the_room():
 
 	assert_ne(roof_layer.get_cell_source_id(interior_tile), -1, "leaving the room should show the roof again")
 	roof_layer.free()
+
+
+# -- geology: a real per-chunk Strata sim exists for every loaded chunk ------
+# (see docs/concept/geology.md). Cave-entrance discovery/reveal itself is
+# exercised directly against GeologyRenderer (test_geology_renderer.gd) --
+# entrances are far too sparse (~1 in 500 mountain tiles) to reliably land
+# inside a small, fast real-elevation-generated test chunk, so these smoke
+# tests only cover what every loaded chunk (any biome) guarantees: a real
+# Strata instance exists, and update()'s new geology-reveal step never
+# crashes even when nothing is nearby.
+
+func test_loading_a_chunk_creates_a_real_topsoil_strata_instance():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var strata := manager.strata_at(chunk_coord)
+	assert_not_null(strata, "a loaded chunk should have a real Strata instance")
+	assert_eq(strata.layer, Strata.LAYER_TOPSOIL_REGOLITH)
+
+
+func test_unloading_a_chunk_clears_its_strata():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_not_null(manager.strata_at(chunk_coord), "precondition: chunk is loaded")
+
+	# Walk far enough away that the original chunk falls outside UNLOAD_RADIUS.
+	var far_tile := _berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 40, 0)
+	manager.update(far_tile)
+
+	assert_null(manager.strata_at(chunk_coord), "an unloaded chunk's strata should be cleared")
+
+
+func test_update_does_not_crash_the_geology_reveal_step_away_from_any_entrance():
+	# Berlin is inland, non-mountain -- exercises the "nothing nearby" path
+	# through _update_geology_reveal/_nearby_cave_entrance every frame the
+	# rest of update() already runs, the same smoke-test shape the roof
+	# visibility tests above give _update_roof_visibility.
+	manager.update(_berlin_tile)
+	manager.update(_berlin_tile + Vector2i(1, 0))
+	manager.update(_berlin_tile)
+	assert_true(true, "update() should run the geology reveal step without error")
 
 
 func _chunk_coord_for_tile(tile: Vector2i) -> Vector2i:
