@@ -29,6 +29,33 @@ or usable in the environment the user actually runs.
   clean git merge does not by itself guarantee the feature still behaves
   correctly in a checkout that may have moved on since the branch point.
 
+## Concurrent sessions: never let a broad git operation delete others' work
+
+Several Claude Code sessions can be working in this repo at the same time,
+often in the same physical `main` checkout — not just different feature
+branches. That makes any *broad* git action (`git add -A`, "commit
+everything", staging a whole working tree) genuinely dangerous, not just a
+style concern: the working tree can contain another session's in-progress
+edits, deletions mid-resolution, or a file that was *just* restored after
+an earlier accidental deletion (a real incident: a silent auto-merge
+deletion of `CharacterPreviewChoreographer`/`CharacterPreviewStage` was
+restored per explicit instruction, and a subsequent `git add -A` — run
+without re-checking recent history — staged and committed the exact same
+deletion again).
+
+- Before running a broad stage/commit, skim `git log --oneline -10` on the
+  target branch for anything recent about restores, reverts, or "kept
+  both" resolutions — that is a direct signal that specific paths must
+  not be deleted or overwritten by whatever you are about to stage.
+- Prefer staging by explicit pathspec over `git add -A` when you know
+  exactly what you changed. When the user does ask you to commit
+  everything in the tree, verify what "everything" contains first (`git
+  status`, and diff anything unfamiliar) rather than trusting that the
+  working tree only reflects your own intended changes.
+- After a broad commit, double-check that files present before it are
+  still present after it, especially anything touched by a recent
+  restore/revert commit.
+
 ## Concept docs are the spec — keep them cross-aligned
 
 `docs/concept/*.md` is the design source of truth and `docs/progress.md` is the
