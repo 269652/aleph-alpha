@@ -4969,3 +4969,92 @@ func test_step_settlements_forms_the_governance_appropriate_institution_type():
 	var new_institution := manager.institution_store().active_institution_for([household_1, household_2])
 	assert_not_null(new_institution, "precondition: the automatic pair actually formed one")
 	assert_eq(new_institution.type, "militia")
+
+
+# -- emergence: Phase 14 -- regional trade, one real edge at a time --------
+
+## A real settlement with a real production shortfall (Phase 12's own
+## Quest) is resupplied from the nearest OTHER real settlement's real
+## surplus -- stock actually moves between two real markets, and the
+## transfer is a real, /why-inspectable event.
+func test_step_regional_trade_resupplies_a_shortage_from_a_surplus_settlement():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])  # blacksmith
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var supplier_coord := Vector2i(1, 0)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+
+	# stone_pickaxe needs 2 stick + 3 rock -- the shortage settlement should
+	# now have real stock it didn't have before, taken from the supplier.
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 3)
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 2)
+	assert_eq(manager.market_store().market_for(supplier_id).stock_of("rock"), 17)
+	assert_eq(manager.market_store().market_for(supplier_id).stock_of("stick"), 18)
+
+	var shipped: Array = manager.event_store().events_of_type("regional_trade_shipped")
+	assert_true(shipped.size() >= 1)
+	assert_eq(shipped[0].actors, [supplier_id, shortage_id])
+
+
+## Given two candidate suppliers, the CLOSER one (real Euclidean distance
+## between real chunk coordinates) is chosen.
+func test_step_regional_trade_prefers_the_nearest_surplus_settlement():
+	var shortage_coord := Vector2i(10, 10)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var near_coord := Vector2i(11, 10)  # distance 1
+	manager.record_settlement_founded_if_new(near_coord, [NpcIdentity.new(1)])
+	var near_id := EntityRef.for_settlement(near_coord)
+	manager.market_store().market_for(near_id).add_stock("rock", 20)
+	manager.market_store().market_for(near_id).add_stock("stick", 20)
+
+	var far_coord := Vector2i(100, 10)  # distance 90
+	manager.record_settlement_founded_if_new(far_coord, [NpcIdentity.new(2)])
+	var far_id := EntityRef.for_settlement(far_coord)
+	manager.market_store().market_for(far_id).add_stock("rock", 20)
+	manager.market_store().market_for(far_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+
+	assert_eq(manager.market_store().market_for(near_id).stock_of("rock"), 17, "the near settlement supplied")
+	assert_eq(manager.market_store().market_for(far_id).stock_of("rock"), 20, "the far settlement untouched")
+
+
+## A settlement with SOME stock but not real surplus (below the safety
+## margin) never trades its own reserve away.
+func test_step_regional_trade_does_not_resupply_from_insufficient_surplus():
+	var shortage_coord := Vector2i(0, 2)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var barely_stocked_coord := Vector2i(1, 2)
+	manager.record_settlement_founded_if_new(barely_stocked_coord, [NpcIdentity.new(1)])
+	var barely_stocked_id := EntityRef.for_settlement(barely_stocked_coord)
+	manager.market_store().market_for(barely_stocked_id).add_stock("rock", 3)  # exactly the need, no margin
+	manager.market_store().market_for(barely_stocked_id).add_stock("stick", 2)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 0)
+	assert_eq(manager.event_store().events_of_type("regional_trade_shipped").size(), 0)
+
+
+func test_step_regional_trade_does_nothing_before_its_interval_elapses():
+	var shortage_coord := Vector2i(0, 3)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var supplier_coord := Vector2i(1, 3)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(1.0)
+
+	assert_eq(manager.event_store().events_of_type("regional_trade_shipped").size(), 0)

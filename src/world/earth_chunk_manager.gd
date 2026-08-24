@@ -75,6 +75,7 @@ const WorldBossFitness = preload("res://src/gameplay/world_boss_fitness.gd")
 const NpcEncounter = preload("res://src/emergence/npc_encounter.gd")
 const Quest = preload("res://src/emergence/quest.gd")
 const Governance = preload("res://src/emergence/governance.gd")
+const RegionalTrade = preload("res://src/emergence/regional_trade.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
 const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
@@ -1366,6 +1367,71 @@ func legitimacy_for_settlement(settlement_id: String) -> String:
 	var household_count := _households_in_settlement(settlement_id).size()
 	var capacity := SettlementState.carrying_capacity(market)
 	return Governance.legitimacy_for(SettlementState.status_for(household_count, capacity))
+
+
+## Emergence Phase 14 (docs/concept/regional_trade.md, docs/emergence/07's
+## own "trade networks" element): every settlement's real production
+## shortfall (Phase 12's own Quest) can be resupplied by the NEAREST
+## other real settlement with genuine surplus of the missing item -- the
+## region's most basic trade network, one real edge at a time, reusing
+## Phase 12's shortage detection rather than a parallel "who needs what"
+## system. Same throttled-accumulator shape SPREAD_INTERVAL/
+## step_tree_spread already use.
+const REGIONAL_TRADE_INTERVAL := 30.0
+var _regional_trade_accumulator := 0.0
+
+
+func step_regional_trade(delta_seconds: float) -> void:
+	_regional_trade_accumulator += delta_seconds
+	if _regional_trade_accumulator < REGIONAL_TRADE_INTERVAL:
+		return
+	_regional_trade_accumulator -= REGIONAL_TRADE_INTERVAL
+	if _regional_trade_accumulator >= REGIONAL_TRADE_INTERVAL:
+		_regional_trade_accumulator = fmod(_regional_trade_accumulator, REGIONAL_TRADE_INTERVAL)
+
+	var settlement_ids := _known_settlement_ids()
+	for settlement_id in settlement_ids:
+		for quest in production_shortfall_quests_for_settlement(settlement_id):
+			for entry in quest["missing"]:
+				_attempt_regional_resupply(settlement_id, entry["item_id"], entry["need"], settlement_ids)
+
+
+## Ships `need` units of `item_id` from the NEAREST real settlement (by
+## real Euclidean distance between chunk coordinates) holding genuine
+## surplus of it -- real stock actually moves between two real markets in
+## one call, and the transfer is recorded as a real,
+## `/why`-inspectable event. A no-op if no known settlement has real
+## surplus (RegionalTrade.has_surplus's own safety margin), the same
+## "an invalid/impossible transition does nothing" discipline every other
+## coordinator here already respects.
+func _attempt_regional_resupply(
+	shortage_settlement_id: String, item_id: String, need: int, settlement_ids: Array
+) -> void:
+	var supplier_id := ""
+	var supplier_distance := INF
+	for candidate_id in settlement_ids:
+		if candidate_id == shortage_settlement_id:
+			continue
+		var candidate_stock := _market_store.market_for(candidate_id).stock_of(item_id)
+		if not RegionalTrade.has_surplus(candidate_stock, need):
+			continue
+		var distance := RegionalTrade.distance_between(shortage_settlement_id, candidate_id)
+		if distance < supplier_distance:
+			supplier_distance = distance
+			supplier_id = candidate_id
+
+	if supplier_id == "":
+		return
+
+	_market_store.market_for(supplier_id).add_stock(item_id, -need)
+	_market_store.market_for(shortage_settlement_id).add_stock(item_id, need)
+
+	var event := Event.new("regional_trade_shipped", _world_age_seconds)
+	event.actors.append(supplier_id)
+	event.actors.append(shortage_settlement_id)
+	event.tags.append(item_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
 
 
 ## Real production HISTORY for `settlement_id` -- recipe_id -> how many

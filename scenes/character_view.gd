@@ -22,7 +22,17 @@ const WALK_CYCLE_SPEED := 10.0
 const LEG_SWING_AMPLITUDE := 3.0
 const SWIM_CYCLE_SPEED := 6.0
 const ARM_STROKE_AMPLITUDE := 4.0
+## A smaller sway for walking than the swim stroke uses (reported live:
+## "hands should also slightly sway when walking") -- real arms swing less
+## dramatically than a swimming stroke, roughly the same restraint
+## LEG_SWING_AMPLITUDE already shows relative to ARM_STROKE_AMPLITUDE.
+const ARM_SWAY_AMPLITUDE := 1.5
 const TOOL_SLOT_SIDE_OFFSET := 8.0
+## How far below ArmRight's own centre a held weapon's grip sits -- roughly
+## the arm's own half-height (ARM_SIZE.y / 2 = 4.5), reaching toward where
+## a hand at the bottom of the arm sprite would hold a hilt, not the arm's
+## own midpoint.
+const GRIP_OFFSET_Y := 4.0
 
 ## The fused leg pair's whole-body walk bob, in world units -- gentler than
 ## LEG_SWING_AMPLITUDE (a single sprite bobbing reads as a smaller motion
@@ -175,6 +185,13 @@ var _leg_right_base_position: Vector2
 var _arm_left_base_position: Vector2
 var _arm_right_base_position: Vector2
 var _tool_slot_base_position: Vector2
+## Which side of the body ToolSlot's grip point offsets toward -- 1.0/-1.0
+## for RIGHT/LEFT facing, 0.0 otherwise (see set_facing). Stored rather than
+## applied directly there: _process now recomputes ToolSlot's position every
+## frame from ArmRight's OWN current position (see GRIP_OFFSET's own doc
+## comment), which changes continuously while walking, not just on a facing
+## change.
+var _tool_side := 0.0
 
 ## True while LegLeft is wearing the illustrated fused leg PAIR in place of
 ## two independently-tinted/animated procedural legs (see _apply_legs) --
@@ -242,7 +259,11 @@ func _process(delta: float) -> void:
 		MovementState.WALKING:
 			_cycle_time += delta * WALK_CYCLE_SPEED
 			leg_swing_offset = sin(_cycle_time) * LEG_SWING_AMPLITUDE
-			arm_stroke_offset = 0.0
+			# Contralateral, not in-phase: real gait swings an arm opposite
+			# the leg on its own side (left arm forward with right leg
+			# forward), so this carries the OPPOSITE sign from
+			# leg_swing_offset above, not the same one.
+			arm_stroke_offset = -sin(_cycle_time) * ARM_SWAY_AMPLITUDE
 		MovementState.SWIMMING:
 			leg_swing_offset = 0.0
 			if is_moving:
@@ -287,6 +308,14 @@ func _process(delta: float) -> void:
 		_leg_right.position = _leg_right_base_position + Vector2(0, -leg_swing_offset)
 	_arm_left.position = _arm_left_base_position + Vector2(0, arm_stroke_offset)
 	_arm_right.position = _arm_right_base_position + Vector2(0, -arm_stroke_offset)
+	# A held weapon tracks ArmRight's OWN current position -- including its
+	# walk/swim sway above -- rather than a fixed torso-side slot (reported
+	# live: "the sword should be held by the actual hand"). GRIP_OFFSET
+	# reaches from the arm sprite's own centre down toward where a hand
+	# holds a hilt, plus the same facing-driven side shift set_facing always
+	# applied, now stored in _tool_side instead of baked into a one-time
+	# position write.
+	_tool_slot.position = _arm_right.position + Vector2(_tool_side * TOOL_SLOT_SIDE_OFFSET, GRIP_OFFSET_Y)
 
 	# The waterline sits at the torso's own vertical CENTER -- _body.position
 	# is already that centre (Sprite2D draws centred on its own position by
@@ -320,12 +349,11 @@ func set_facing(direction: Vector2) -> void:
 	else:
 		facing = Facing.DOWN if direction.y > 0 else Facing.UP
 
-	var tool_side := 0.0
+	_tool_side = 0.0
 	if facing == Facing.RIGHT:
-		tool_side = 1.0
+		_tool_side = 1.0
 	elif facing == Facing.LEFT:
-		tool_side = -1.0
-	_tool_slot.position = _tool_slot_base_position + Vector2(tool_side * TOOL_SLOT_SIDE_OFFSET, 0.0)
+		_tool_side = -1.0
 	_tool_slot.z_index = -1 if facing == Facing.UP else 1
 
 

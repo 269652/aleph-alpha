@@ -69,10 +69,32 @@ func test_leg_swing_resets_once_walking_stops():
 	assert_eq(view.leg_swing_offset, 0.0)
 
 
-func test_arm_stroke_is_zero_while_not_swimming():
-	view.set_movement_state(view.MovementState.WALKING)
+## arm_stroke_offset now also drives a small hand SWAY while walking, not
+## swimming alone (reported live: "hands should also slightly sway when
+## walking") -- hero_composite.png's arms weren't visible outside swimming
+## until this same pass (see CharacterView._process's own doc comment on
+## why), so a standing-still hand had never needed to look alive before.
+## Idle stays the true "not moving at all" zero case.
+func test_arm_stroke_is_zero_while_idle():
+	view.set_movement_state(view.MovementState.IDLE)
 	view._process(0.1)
 	assert_eq(view.arm_stroke_offset, 0.0)
+
+
+func test_arm_stroke_is_nonzero_partway_through_a_walk_cycle():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	assert_ne(view.arm_stroke_offset, 0.0)
+
+
+## Real gait swings an arm opposite the leg on its OWN side (contralateral
+## coordination: left arm forward with right leg forward) -- checked by
+## sign, not exact magnitude, since ARM_SWAY_AMPLITUDE and
+## LEG_SWING_AMPLITUDE are free to differ.
+func test_arm_sway_is_contralateral_to_leg_swing_while_walking():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	assert_ne(signf(view.arm_stroke_offset), signf(view.leg_swing_offset))
 
 
 ## Stroking requires BOTH swimming and is_moving -- see is_moving's doc
@@ -230,6 +252,32 @@ func test_equip_weapon_sets_the_tool_slot_texture_and_marks_it_equipped():
 	view.equip_weapon(texture)
 	assert_eq(view.tool_slot_texture(), texture)
 	assert_true(view.is_slot_equipped("tool"))
+
+
+## Reported live: "the sword should be held by the actual hand" -- ToolSlot
+## used to sit at a fixed torso-side position (_tool_slot_base_position),
+## independent of the arm entirely. It now tracks ArmRight's own current
+## position every frame instead, so a held weapon inherits the hand's own
+## sway (see ARM_SWAY_AMPLITUDE) rather than floating at a static point.
+func test_tool_slot_tracks_arm_rights_current_position():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	var arm_right: Sprite2D = view.get_node("ArmRight")
+	var tool_slot: Sprite2D = view.get_node("ToolSlot")
+	var expected := arm_right.position + Vector2(0, CharacterView.GRIP_OFFSET_Y)
+	assert_almost_eq(tool_slot.position.x, expected.x, 0.01)
+	assert_almost_eq(tool_slot.position.y, expected.y, 0.01)
+
+
+## The tracked position must actually move as the arm sways, not just agree
+## with it at one single frame by coincidence.
+func test_tool_slot_moves_with_the_arms_walk_sway():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.1)
+	var first := view.get_node("ToolSlot").position
+	view._process(0.4)
+	var second := view.get_node("ToolSlot").position
+	assert_ne(first, second)
 
 
 func test_equip_weapon_pivots_rotation_at_the_grip_not_the_sprite_center():

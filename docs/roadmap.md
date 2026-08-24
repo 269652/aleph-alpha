@@ -279,6 +279,20 @@ function with no timing trigger and no scene-tree dependency beyond what
 the coordinator-level unit tests already exercise through the exact same
 `record_settlement_founded_if_new` real settlements are founded through.
 
+**Phase 13 (governance & politics, first slice) had no `concept/*.md`
+coverage at all beforehand — scaffolded per `CLAUDE.md`, then implemented
+the same pass.** Governance form and legitimacy are both real derived
+classifications (`governance.gd`), grounded only where a real signal
+exists (three institution TYPES map to governance forms; food security is
+legitimacy's one grounded input of eight named). Crucially satisfies its
+own exit language ("Governance changes actual decisions"): a settlement's
+real governance history now determines which institution type its next
+automatic formation attempts — previously a hardcoded `"cooperative"`
+since Phase 4/6. Live-verified, with a real timing lesson recorded: a
+large `/ecotest` acceleration raced the world clock past Phase 6's own
+`RECENT_WINDOW_SECONDS` faster than contracts could accumulate within it;
+normal real-time pacing fixed it cleanly.
+
 ---
 
 ## Working notes
