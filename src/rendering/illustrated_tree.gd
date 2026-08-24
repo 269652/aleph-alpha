@@ -19,6 +19,7 @@ extends RefCounted
 
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const CompositeSheetSlicer = preload("res://src/rendering/composite_sheet_slicer.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 const _SHEET_DIR := "res://assets/sprites/trees"
 
@@ -311,22 +312,12 @@ func _frames(path: String, count: int) -> Array[Texture2D]:
 	return frames
 
 
-## Loads a sheet off disk. Uses load() when the resource is imported and falls
-## back to reading the file directly, so the sheets work in a headless test run
-## where Godot's import step has not necessarily happened.
+## Loads a sheet off disk, normalized to FORMAT_RGBA8 and cached per path (see
+## SpriteSheetLoader for the load()-vs-raw-file fallback this delegates to).
 func _load_image(path: String) -> Image:
 	if _image_cache.has(path):
 		return _image_cache[path]
-	var image: Image = null
-	if not _sheet_exists(path):
-		_image_cache[path] = null
-		return null
-	if ResourceLoader.exists(path):
-		var resource := load(path)
-		if resource is Texture2D:
-			image = resource.get_image()
-	if image == null:
-		image = Image.load_from_file(path)
+	var image := SpriteSheetLoader.load_image(path)
 	if image != null and image.get_format() != Image.FORMAT_RGBA8:
 		image.convert(Image.FORMAT_RGBA8)
 	_image_cache[path] = image

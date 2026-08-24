@@ -22,6 +22,7 @@ extends RefCounted
 ## same illustrated frames) -- both explicitly out of scope for now.
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const AnimalAnatomy = preload("res://src/rendering/animal_anatomy.gd")
 
 ## Every frame, from every registered species and action, is re-composited
@@ -251,7 +252,7 @@ func _load_frames(species: String, action: String) -> Array[Image]:
 ## concatenating them in list order (see _SHEETS' own doc comment on why a
 ## single action can span multiple bands).
 func _slice_bands(sheet: Dictionary, bands: Array, path: String = "") -> Array[Image]:
-	var image := Image.load_from_file(path if path != "" else sheet["path"])
+	var image := SpriteSheetLoader.load_image(path if path != "" else sheet["path"])
 	var alpha_threshold: float = sheet["alpha_threshold"]
 	# Most sheets use a near-white divider line, comfortably above
 	# SpriteSheetSlicer's own default bound -- only sheets that measure

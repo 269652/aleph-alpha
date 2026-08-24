@@ -28,6 +28,7 @@ extends RefCounted
 ## stone class now has real illustrated art.
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 
@@ -195,7 +196,7 @@ func _frames_for(stone_class: String) -> Array:
 ## from one shared file rather than a per-action one.
 func _load_frames_from(stone_class: String) -> Array:
 	var sheet: Dictionary = _SHEETS[stone_class]
-	var image := _prepared_for_slicing(Image.load_from_file(sheet["path"]))
+	var image := _prepared_for_slicing(SpriteSheetLoader.load_image(sheet["path"]))
 	var textures: Array[ImageTexture] = []
 	for band in sheet["row_bands"]:
 		var rect: Vector2i = band

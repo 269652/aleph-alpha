@@ -28,6 +28,7 @@ extends RefCounted
 ## Sprite's consumption of them is deferred, not the art pipeline itself.
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 ## Left-to-right order every archetype sheet is authored in.
 const STAGE_BUD := 0
@@ -131,7 +132,7 @@ func _load_frames(archetype: String) -> Array:
 ## Keyed by PATH rather than by archetype, so a species sheet and an archetype
 ## sheet can never collide in the cache.
 func _load_frames_from(path: String) -> Array:
-	var image := Image.load_from_file(path)
+	var image := SpriteSheetLoader.load_image(path)
 	var frames := _slicer.detect_frames(image, 0, image.get_height())
 	var normalized := _slicer.normalize_frames(image, frames, HEAD_CANVAS_SIZE, HEAD_BASELINE_Y)
 	var textures: Array[ImageTexture] = []
