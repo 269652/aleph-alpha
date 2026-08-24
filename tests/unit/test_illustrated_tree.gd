@@ -1147,6 +1147,21 @@ func test_scaling_a_piece_invents_no_new_colours():
 			)
 
 
+## A raw Image.load_from_file logs an engine WARNING ("Loaded resource as
+## image file, this will not work on export") that GUT's error tracker
+## counts as an unhandled error -- see SpriteSheetLoader's own doc comment.
+## _load_image already guarded against this before this pass (it already
+## preferred load()); this pins that guarantee now that the read itself
+## delegates to SpriteSheetLoader instead of duplicating the same logic.
+## _image_cache is cleared first (static, shared across every test in this
+## file) so this genuinely re-reads trunk_cherry.png off disk rather than
+## hitting a cache an earlier test already warmed.
+func test_loading_a_sheet_does_not_log_an_engine_warning():
+	IllustratedTree._image_cache.clear()
+	trees.trunk_for("cherry")
+	assert_engine_error_count(0, "loading a tree sheet should not warn")
+
+
 ## No half-transparent edges either: a pixel is branch or it is air.
 func test_a_scaled_piece_has_no_part_transparent_edges():
 	var source := Image.create(8, 8, false, Image.FORMAT_RGBA8)

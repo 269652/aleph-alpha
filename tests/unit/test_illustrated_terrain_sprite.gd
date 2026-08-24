@@ -157,3 +157,15 @@ func _painted_pixel_count(image: Image) -> int:
 			if image.get_pixel(x, y).a > 0.05:
 				count += 1
 	return count
+
+
+## A raw Image.load_from_file logs an engine WARNING ("Loaded resource as
+## image file, this will not work on export") that GUT's error tracker
+## counts as an unhandled error -- see SpriteSheetLoader's own doc comment.
+## _frame_cache is cleared first (static, shared across every test in this
+## file) so this genuinely re-reads grass.png off disk rather than hitting a
+## cache an earlier test already warmed.
+func test_loading_a_sheet_does_not_log_an_engine_warning():
+	IllustratedTerrainSprite._frame_cache.clear()
+	generator.frame_for("grassland", 7)
+	assert_engine_error_count(0, "loading a terrain sheet should not warn")
