@@ -70,15 +70,22 @@ func test_evaluate_rejects_a_code_signed_by_an_unregistered_key():
 	assert_false(gate.evaluate(code).licensed)
 
 
-## Honest current-repo-state check: with no real key filled in yet (see
-## embedded_public_keys.gd's placeholder), the PRODUCTION gate (no injected
-## verifier -- the constructor's real default) must reject every code,
-## including a well-formed one -- "always refuses until a key exists" is
-## the correct, safe default for this state, not a bug to fix later.
-func test_the_real_production_gate_rejects_everything_while_no_key_is_embedded():
-	assert_true(EmbeddedPublicKeys.PUBLIC_KEY_PEMS.is_empty(), "this test documents the placeholder state, not a permanent assumption")
+## Honest current-repo-state check: a real key IS now embedded (see
+## embedded_public_keys.gd), so the PRODUCTION gate (no injected verifier --
+## the constructor's real default) must still reject a code signed by any
+## OTHER key -- a genuine-accept test would need the real private key,
+## which must never exist in this repo (see docs/licensing.md's
+## "Operational security"), so this is the strongest check exercisable here.
+func test_the_real_production_gate_rejects_a_code_signed_by_an_unregistered_key():
+	assert_false(EmbeddedPublicKeys.PUBLIC_KEY_PEMS.is_empty(), "a real key should now be embedded")
 	var production_gate := LicenseGate.new()
-	var code := _sign_code(1, 1)
+	var other_private := Crypto.new().generate_rsa(2048)
+	var payload := SerialCodec.encode_payload(1, 1)
+	var context := HashingContext.new()
+	context.start(HashingContext.HASH_SHA256)
+	context.update(payload)
+	var signature := Crypto.new().sign(HashingContext.HASH_SHA256, context.finish(), other_private)
+	var code := SerialBase32.encode(payload + signature)
 	assert_false(production_gate.evaluate(code).licensed)
 	production_gate.free()
 

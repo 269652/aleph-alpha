@@ -188,6 +188,64 @@ freshly generated one in a future patch — existing customers' old serials
 embedded alongside the new one, while new serials go out signed by the new
 key.
 
+## Source/build integrity verification
+
+Separate concern from serial verification, same trust root: instead of
+checking that the *player* holds a valid entitlement, this checks that
+the *game files themselves* haven't been modified since they left the
+signing machine — a genuinely different question (a legitimate customer
+running a patched/repackaged binary is exactly what this catches; someone
+running the unmodified game with a shared/leaked serial is a
+serial-verification problem, not this one).
+
+**What gets hashed.** Not individual source files — the single exported
+data artifact: the `.pck` Godot produces next to the executable (the
+default "Embed PCK" unchecked layout), or the executable itself when PCK
+is embedded. Every compiled script, scene, and resource in the game lives
+inside that one file, so any change to any of them changes its hash.
+Whole-file hashing was chosen over a per-file manifest deliberately: it's
+one `FileAccess` read of a normal OS path rather than enumerating
+resources inside a mounted virtual filesystem at runtime (which has its
+own quirks this design avoids relying on), and it's trivially testable
+end to end with a throwaway file rather than depending on a real export
+existing. The tradeoff is granularity — this answers "was anything
+changed", not "which file" — acceptable for a refuse-to-run gate, where
+the only actions on failure are "run" or "don't."
+
+**Detached signature, not embedded.** The signed hash ships as a sidecar
+`<file>.sig` next to whatever it signs, never bundled inside it — bundling
+it would change the very hash it's certifying (a hash that includes its
+own signed copy of itself is self-referential and can't be computed in
+one pass). Same shape as `license.txt`: a plain file the build process
+drops next to the executable, nothing baked into the export itself.
+
+**Hashing the raw repo `src/*.gd` files would not work.** Export compiles
+and packs scripts into the `.pck`; a hash taken before export never
+matches what the running game reads from the `.pck` at runtime. The
+signing tool must run *after* export, against the actual shipped
+artifact — see `tools/sign_build.gd`'s own doc comment.
+
+**What this does and doesn't add over the "read first" section above:**
+still a client-side check, still patchable by someone willing to
+reverse-engineer the binary and strip the call site (see this doc's
+opening section — that limitation is universal, not specific to this
+mechanism). What it raises the bar on specifically: a modified `.pck`
+(a cracked build with the serial check patched out, a repackaged pirate
+build with assets swapped, a corrupted/incomplete copy) now fails a
+*second*, independent check before the first one is even reached, so
+defeating both means patching two things, not one. It does **not**
+protect the native Godot engine binary itself — only the data/`.pck`, or
+the whole executable when embedded — and it does **not** detect tampering
+that happens *after* the check passes (a debugger or memory patcher
+altering the already-running process). Userspace/script-level integrity
+checking cannot close that gap; only kernel-level anti-cheat/DRM can, and
+this project isn't reaching for that.
+
+**Shared trust root.** Uses the same `EmbeddedPublicKeys.PUBLIC_KEY_PEMS`
+list as serial verification — one key (or rotated set) signs both serials
+and builds, rather than maintaining two separate keys to protect and
+rotate.
+
 ## Proposed file layout
 
 - `src/licensing/serial_codec.gd` — pure encode/decode between the payload
@@ -204,6 +262,14 @@ key.
   private key and produces new serials — explicitly excluded from
   whatever the Godot export template packages, since accidentally shipping
   it would ship the private key alongside it.
+- `src/licensing/signature_ring.gd` — the shared multi-key RSA
+  verify-a-hash primitive both serial verification and integrity
+  verification delegate to.
+- `src/licensing/integrity_paths.gd` / `src/licensing/self_integrity.gd` —
+  pure path derivation and the integrity enforcement gate (see "Source/
+  build integrity verification" above).
+- `tools/sign_build.gd` — never-shipped signing tool for the exported
+  build artifact, parallel to `tools/generate_serial.gd`.
 
 ## Open questions
 
@@ -219,6 +285,36 @@ key.
   implementation) if the paste-able RSA code turns out to be a genuine UX
   problem in practice — deferred, not rejected outright.
 
+## Operational security
+
+The private key that signs real serials and real builds
+(`my_private_key.pem`) must never be committed. `.gitignore` covers it by
+name and by extension (`private_key.pem`, `my_private_key.pem`, `*.pem`),
+so a plain `git add` can't accidentally stage it — but `.gitignore` only
+stops git from tracking it, it does nothing to protect the file itself.
+
+It currently lives unencrypted in the repo root on the key owner's
+machine, which is a deliberate trade for
+`self_integrity.gd`'s auto-sign-for-local-testing convenience (see
+"Status" below) — that feature only works if the private key sits next
+to what's being verified. This is acceptable on a machine only the key
+owner controls, but it means:
+
+- Anyone with filesystem access to that machine can mint serials or
+  re-sign builds. Treat that machine's access controls as part of this
+  system's real security boundary, not just the RSA math.
+- The only copy should not be *only* here — a password manager
+  attachment or an encrypted offline backup is still recommended, since
+  losing this file means every previously-issued serial keeps working
+  (they don't depend on it) but minting new ones or re-signing future
+  builds requires generating a new keypair, re-embedding a new public
+  key, and re-fingerprinting (see "Key rotation" above) — existing
+  serials signed under the old key still verify unless it's actively
+  revoked.
+- Never copy `my_private_key.pem` into an exported build's folder for a
+  real release — that would ship the ability to forge signatures to
+  every player. It belongs only on the developer's own machine.
+
 ## Status
 
 Implemented and live-wired on `main`:
@@ -227,17 +323,30 @@ Implemented and live-wired on `main`:
   (9/9 tests). Godot has no native Base32.
 - `src/licensing/serial_codec.gd` — pure payload encode/decode as
   designed above (10/10 tests).
+- `src/licensing/signature_ring.gd` — shared "load N public keys, verify
+  a raw hash's signature against any of them" primitive (9/9 tests).
+  `serial_verifier.gd` and `self_integrity.gd` both delegate to this
+  rather than each loading PEMs and calling `Crypto.verify` themselves.
 - `src/licensing/serial_verifier.gd` — RSA-2048/SHA-256 verification via
-  `Crypto`/`CryptoKey`, supports multiple registered public keys for key
-  rotation, checks expiry (10/10 tests, using a real generated keypair).
+  `SignatureRing`, checks expiry (10/10 tests, using a real generated
+  keypair).
 - `src/licensing/license_store.gd` — reads the pasted code from a
   `license.txt` file next to the executable (or `user://license.txt`),
   not an in-game typed field (6/6 tests).
 - `src/licensing/embedded_public_keys.gd` — the ship-side public key
-  list. **Currently empty**, which means the shipped game refuses every
-  code, including a genuinely valid one, until a real public key is
-  pasted in — this is the correct, safe default for an unreleased build,
-  not a bug.
+  list. **A real public key is now embedded** (the matching private key
+  lives only on the key owner's machine, gitignored — see "Operational
+  security"). Before this, the list was empty, which meant the shipped
+  game refused every code, including a genuinely valid one — the correct,
+  safe default for that state, not a bug.
+- `src/licensing/key_fingerprint.gd` — key-swap resistance (9/9 tests).
+  `LicenseGate`/`SelfIntegrity`'s production `_init()` independently
+  checks `EmbeddedPublicKeys.PUBLIC_KEY_PEMS`'s SHA-256 fingerprint
+  against a value pinned here; a mismatch (someone editing
+  `embedded_public_keys.gd` alone to point at a different key) makes
+  both gates fall back to an empty ring, which fails closed, rather than
+  silently trusting the swapped-in key. Editing both files together
+  (a deliberate key rotation) is unaffected.
 - `src/licensing/license_gate.gd` — the enforcement point. Split into a
   pure `evaluate()` decision function (fully unit-tested, 6/6) and thin
   Node glue (`_ready()`/`require_licensed()`) that calls
@@ -265,39 +374,106 @@ Implemented and live-wired on `main`:
   the exact same `serial_codec.gd`/`serial_base32.gd` the shipped
   verifier reads, so a minted serial is guaranteed to match the format
   the game actually checks.
-- End-to-end smoke-tested (throwaway keypair, generated in a scratch
-  directory outside the repo and deleted immediately after): keypair
-  generation → `generate_serial.gd` signing → produced a valid paste-able
-  code. Not committed anywhere, per "the private key must never touch
-  this repository."
+- `src/licensing/integrity_paths.gd` — pure derivation of the target file
+  to hash (the sidecar `.pck`, or the executable itself for an embedded-
+  PCK export) and its `.sig` signature path (5/5 tests).
+- `src/licensing/self_integrity.gd` — the integrity enforcement gate
+  (see "Source/build integrity verification" above). Same pure/glue split
+  as `license_gate.gd`: `evaluate()` is fully unit-tested (7/7, real
+  generated keypair), `_ready()`/`require_verified()` is thin Node glue
+  that reads the real target file + signature off disk and calls
+  `get_tree().quit(1)` on failure.
+- Registered as the `SelfIntegrity` autoload in `project.godot`, ordered
+  **before** `LicenseGate` — verifying the code hasn't been tampered with
+  logically comes before trusting that code's own license check.
+- Checked a second, independent time in `scenes/world.gd`'s own
+  `_ready()`, alongside the license re-check, same defense-in-depth
+  reasoning.
+- `self_integrity.gd`'s `_auto_sign_if_private_key_present()` —
+  local-testing convenience: if `private_key.pem` sits next to the
+  target being verified, it's re-signed fresh before every verification
+  pass, so iterating on a local export doesn't need a separate manual
+  `tools/sign_build.gd` run after every rebuild. A real customer's copy
+  never has this file, so this path is never taken for anyone but the
+  developer testing locally.
+- `tools/sign_build.gd` — never-shipped CLI tool that hashes an exported
+  artifact and writes its signature to the `.sig` sidecar `self_integrity.
+  gd` reads. Must be run against the actual exported `.pck`/executable,
+  never against the raw repo source (see "Source/build integrity
+  verification" above for why).
+- End-to-end smoke-tested twice (throwaway keypairs, generated in a
+  scratch directory outside the repo and deleted immediately after):
+  (1) keypair generation → `generate_serial.gd` signing → a valid
+  paste-able code; (2) keypair generation → a stand-in package file →
+  `sign_build.gd` signing → `self_integrity.gd`'s real `evaluate()`
+  accepting the genuine file, rejecting a one-byte tamper, and rejecting
+  a missing signature. Nothing from either run was committed anywhere,
+  per "the private key must never touch this repository."
 
-**Not done / left to the user, by design** (see "Implement the
-infrastructure and I will later create a private key and sign serial
-numbers myself" — this repo intentionally contains no real private key
-and no real signed serial):
+**Done** (steps 1-3 of what was originally left to the user):
 
-1. Run `tools/generate_keypair.gd` yourself, on a machine you control, to
+1. ✅ `tools/generate_keypair.gd` was run, on the key owner's machine, to
    generate the real keypair.
-2. Move the resulting private-key file somewhere that never touches this
-   git repository (password manager attachment, encrypted offline drive).
-3. Paste the printed public-key PEM into
-   `src/licensing/embedded_public_keys.gd`'s `PUBLIC_KEY_PEMS` list.
-4. Use `tools/generate_serial.gd` with the private key to mint real
-   serials for sale.
-5. To test the full flow locally: drop the resulting code into a
-   `license.txt` next to the exported executable (or `user://license.txt`)
-   and run the exported build — the editor bypass means Play-button
-   testing in-editor won't exercise this path, only an actual export will.
+2. ✅ The private-key file (`my_private_key.pem`) is kept only on disk,
+   never committed — covered by `.gitignore` (`*.pem`,
+   `private_key.pem`, `my_private_key.pem`). It currently sits in the
+   repo root purely so `self_integrity.gd`'s auto-sign convenience
+   (above) can find it during local testing; it is not otherwise treated
+   as safely backed up (see "Operational security" below — a password
+   manager attachment or encrypted offline copy is still recommended for
+   the only real copy).
+3. ✅ The printed public-key PEM is pasted into
+   `src/licensing/embedded_public_keys.gd`'s `PUBLIC_KEY_PEMS` list, with
+   its fingerprint pinned in `key_fingerprint.gd` (see above).
 
-**Known, deliberately unverified assumption:** if `license_gate.gd` were
-deleted from disk entirely, `project.godot`'s autoload entry would point
-at a missing path, and any script referencing the global `LicenseGate`
-identifier (e.g. `world.gd`'s `LicenseGate.require_licensed()`) should
-fail to resolve/compile — a fail-closed outcome consistent with the "if
-the check mechanism is removed it should fail to start" requirement. This
-was reasoned from how Godot's autoload-name resolution works, not
-verified by actually deleting a real project file and observing the
-result, since doing that against a live, concurrently-edited `main`
-checkout wasn't a safe experiment to run. Worth a real verification pass
-(in a disposable worktree, never on `main`) before treating it as
-confirmed.
+**Issued serials** (tracked here so a future revocation-list decision has
+a record to work from — see "check `license_id` against the local
+revocation list" above):
+
+| license_id | product_mask | expiry (unix / date) | purpose |
+|---|---|---|---|
+| 90001 | 1 (base game) | 1788134400 / 2026-08-31 | Public 7-day trial key, published in `README.md`'s "License Key" section |
+
+**Still left to the user, by design** (this repo intentionally contains
+no *other* real signed serials beyond the public trial key above):
+
+1. Use `tools/generate_serial.gd` with the private key to mint further
+   real serials (e.g. alpha tester keys) for sale/distribution.
+2. To test the full flow locally: drop a code into a `license.txt` next
+   to the exported executable (or `user://license.txt`) and run the
+   exported build — the editor bypass means Play-button testing
+   in-editor won't exercise this path, only an actual export will.
+3. **After every export, including patches:** run `tools/sign_build.gd`
+   against the freshly exported `.pck` (or executable, for an embedded-PCK
+   export) with the same private key, and ship the resulting `.sig`
+   alongside it — unless `private_key.pem` is shipped next to that export
+   too (never do this for a real release; the auto-sign path above is a
+   local-testing-only convenience). An old signature correctly fails
+   verification against a newer build — this step isn't optional per
+   release, it's part of exporting.
+
+**Known, deliberately unverified assumption:** if `license_gate.gd` or
+`self_integrity.gd` were deleted from disk entirely, `project.godot`'s
+autoload entry would point at a missing path, and any script referencing
+the global `LicenseGate`/`SelfIntegrity` identifier (e.g. `world.gd`'s
+own calls) should fail to resolve/compile — a fail-closed outcome
+consistent with the "if the check mechanism is removed it should fail to
+start" requirement. This was reasoned from how Godot's autoload-name
+resolution works, not verified by actually deleting a real project file
+and observing the result, since doing that against a live,
+concurrently-edited `main` checkout wasn't a safe experiment to run.
+Worth a real verification pass (in a disposable worktree, never on
+`main`) before treating it as confirmed.
+
+**Note specific to integrity verification:** deleting the check code
+still doesn't help an attacker who *also* needs to pass it — but someone
+willing to patch source before export can simply not sign the result, or
+sign it and ship their own public key... except they can't: the public
+key that verifies is embedded in the game binary the attacker doesn't
+control the distribution of. What they *can* do is delete the `.sig`
+sidecar or the `self_integrity.gd` call site from their own patched copy
+before repackaging — which is exactly the "patching the binary" limit
+this doc's opening section already prices in. This mechanism's honest
+value is raising the cost of casual repackaging (game-crack sites that
+redistribute a patched `.pck` without touching the loader/autoload
+wiring), not stopping a determined reverse engineer.

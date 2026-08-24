@@ -32,3 +32,15 @@ static func target_path(executable_path: String, pck_exists: bool) -> String:
 	if pck_exists:
 		return pck_path_for_executable(executable_path)
 	return executable_path
+
+
+## The private key AUTO-SIGN-for-local-testing checks for (see
+## SelfIntegrity, docs/licensing.md's "Auto-sign for local testing") --
+## sits next to whatever's being verified, same directory-adjacency
+## convention signature_path_for already uses, but a FIXED filename (there
+## is exactly one private key regardless of what's being signed) matching
+## generate_keypair.gd's own default --out name, so running that tool with
+## no --out argument while its cwd is the export folder already produces
+## exactly the path this looks for.
+static func private_key_path_for(target_path: String) -> String:
+	return target_path.get_base_dir().path_join("private_key.pem")

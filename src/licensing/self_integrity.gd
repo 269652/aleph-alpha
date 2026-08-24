@@ -28,6 +28,7 @@ extends Node
 const SignatureRing = preload("res://src/licensing/signature_ring.gd")
 const IntegrityPaths = preload("res://src/licensing/integrity_paths.gd")
 const EmbeddedPublicKeys = preload("res://src/licensing/embedded_public_keys.gd")
+const KeyFingerprint = preload("res://src/licensing/key_fingerprint.gd")
 
 ## Set once verification runs. Other boot-critical code can read this
 ## after the fact, but should prefer calling require_verified() itself
@@ -45,7 +46,16 @@ var _ring: SignatureRing
 ## instead, the same "inject the real dependency, default to the
 ## production one" shape LicenseGate already uses.
 func _init(ring: SignatureRing = null) -> void:
-	_ring = ring if ring != null else SignatureRing.new(EmbeddedPublicKeys.PUBLIC_KEY_PEMS)
+	if ring != null:
+		_ring = ring
+		return
+	# Key-swap resistance (see KeyFingerprint, docs/licensing.md): same
+	# check LicenseGate's own production path runs, applied here too so a
+	# swapped key can't slip a forged build-signature through either.
+	var pems: Array[String] = []
+	if KeyFingerprint.matches_expected(EmbeddedPublicKeys.PUBLIC_KEY_PEMS):
+		pems = EmbeddedPublicKeys.PUBLIC_KEY_PEMS
+	_ring = SignatureRing.new(pems)
 
 
 func _ready() -> void:
@@ -74,13 +84,25 @@ func _ready() -> void:
 ## overridden" -- an override that is genuinely empty bytes would fail
 ## evaluate() anyway, so collapsing the two cases costs nothing.
 func require_verified(file_bytes_override: PackedByteArray = PackedByteArray(), signature_override: PackedByteArray = PackedByteArray()) -> void:
-	var file_bytes := file_bytes_override
-	var signature := signature_override
-	if file_bytes.is_empty() and signature.is_empty():
-		var target := _target_path()
-		file_bytes = FileAccess.get_file_as_bytes(target)
-		signature = _signature_bytes_at(IntegrityPaths.signature_path_for(target))
+	if not file_bytes_override.is_empty() or not signature_override.is_empty():
+		_finish_verification(file_bytes_override, signature_override)
+		return
+	require_verified_at(_target_path())
 
+
+## The same real enforcement as require_verified(), against an EXPLICIT
+## target path rather than the real running executable's own -- lets
+## tests exercise the full real file-I/O flow (including auto-sign, see
+## _auto_sign_if_private_key_present) against a controlled scratch
+## location instead of depending on a real exported .pck existing on disk.
+func require_verified_at(target: String) -> void:
+	var file_bytes := FileAccess.get_file_as_bytes(target)
+	_auto_sign_if_private_key_present(target, file_bytes)
+	var signature := _signature_bytes_at(IntegrityPaths.signature_path_for(target))
+	_finish_verification(file_bytes, signature)
+
+
+func _finish_verification(file_bytes: PackedByteArray, signature: PackedByteArray) -> void:
 	var result := evaluate(file_bytes, signature)
 	is_verified = result.ok
 	if not result.ok:
@@ -91,6 +113,32 @@ func require_verified(file_bytes_override: PackedByteArray = PackedByteArray(), 
 		)
 		if get_tree() != null:
 			get_tree().quit(1)
+
+
+## Local-testing convenience (see docs/licensing.md's "Auto-sign for local
+## testing" -- NEVER present in a real distributed copy, and NEVER shipped
+## itself: the private key file only matters if it happens to exist on
+## whoever's disk is running this). If a private key sits next to the
+## target being verified (IntegrityPaths.private_key_path_for), sign the
+## target fresh and write the result out before verifying -- so iterating
+## on a local export doesn't need a separate manual tools/sign_build.gd
+## run after every rebuild. A real customer's copy never has this file,
+## so this path is simply never taken for anyone but the developer
+## testing locally. Overwrites any stale signature already there, since
+## the whole point is "the freshest build always verifies."
+func _auto_sign_if_private_key_present(target: String, file_bytes: PackedByteArray) -> void:
+	if file_bytes.is_empty():
+		return
+	var key_path := IntegrityPaths.private_key_path_for(target)
+	if not FileAccess.file_exists(key_path):
+		return
+	var private_key := CryptoKey.new()
+	if private_key.load(key_path, false) != OK:
+		return
+	var signature := SignatureRing.sign_hash(SignatureRing.sha256(file_bytes), private_key)
+	var sig_file := FileAccess.open(IntegrityPaths.signature_path_for(target), FileAccess.WRITE)
+	if sig_file != null:
+		sig_file.store_buffer(signature)
 
 
 ## The pure decision: given the bytes that were read (possibly empty) and

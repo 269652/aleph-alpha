@@ -35,3 +35,21 @@ func test_target_path_falls_back_to_the_executable_when_no_pck_exists():
 	# Covers "Embed PCK" exports, where everything ships as one .exe.
 	var target := IntegrityPaths.target_path("C:/Games/AlephAlfa/AlephAlfa.exe", false)
 	assert_eq(target, "C:/Games/AlephAlfa/AlephAlfa.exe")
+
+
+## The auto-sign-for-local-testing convenience (see SelfIntegrity, docs/
+## licensing.md) looks for a private key sitting next to whatever's being
+## verified -- same directory-adjacency convention signature_path_for
+## already uses, but a FIXED filename (there is exactly one private key
+## regardless of what's being signed), matching generate_keypair.gd's own
+## default --out name so running that tool from inside the target's own
+## folder already produces exactly the path this looks for.
+func test_private_key_path_sits_next_to_the_target_with_a_fixed_name():
+	var key_path := IntegrityPaths.private_key_path_for("C:/Games/AlephAlfa/AlephAlfa.pck")
+	assert_eq(key_path, "C:/Games/AlephAlfa/private_key.pem")
+
+
+func test_private_key_path_ignores_the_targets_own_filename():
+	var a := IntegrityPaths.private_key_path_for("C:/Games/AlephAlfa/AlephAlfa.pck")
+	var b := IntegrityPaths.private_key_path_for("C:/Games/AlephAlfa/AlephAlfa.exe")
+	assert_eq(a, b)

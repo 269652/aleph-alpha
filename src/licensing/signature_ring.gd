@@ -59,3 +59,12 @@ static func sha256(bytes: PackedByteArray) -> PackedByteArray:
 	if not bytes.is_empty():
 		context.update(bytes)
 	return context.finish()
+
+
+## Signs `file_hash` with a PRIVATE key -- the inverse of verify_hash, used
+## only by dev-side tooling that actually HOLDS a private key
+## (tools/sign_build.gd, SelfIntegrity's own local-testing auto-sign path)
+## -- never by anything that ships. Static: signing needs no registered key
+## ring, just the one private key doing the signing.
+static func sign_hash(file_hash: PackedByteArray, private_key: CryptoKey) -> PackedByteArray:
+	return Crypto.new().sign(HASH_TYPE, file_hash, private_key)

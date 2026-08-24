@@ -22,6 +22,7 @@ extends Node
 const SerialVerifier = preload("res://src/licensing/serial_verifier.gd")
 const LicenseStore = preload("res://src/licensing/license_store.gd")
 const EmbeddedPublicKeys = preload("res://src/licensing/embedded_public_keys.gd")
+const KeyFingerprint = preload("res://src/licensing/key_fingerprint.gd")
 
 ## Set once verification runs. Other boot-critical code can read this
 ## after the fact, but should prefer calling require_licensed() itself
@@ -42,7 +43,19 @@ var _verifier: SerialVerifier
 ## "inject the real dependency, default to the production one" shape
 ## TerrainRelief/StoneRenderer already use elsewhere in this project.
 func _init(verifier: SerialVerifier = null) -> void:
-	_verifier = verifier if verifier != null else SerialVerifier.new(EmbeddedPublicKeys.PUBLIC_KEY_PEMS)
+	if verifier != null:
+		_verifier = verifier
+		return
+	# Key-swap resistance (see KeyFingerprint, docs/licensing.md): only the
+	# PRODUCTION default path checks this -- an injected test verifier
+	# never touches EmbeddedPublicKeys at all, so it has nothing to swap.
+	# A mismatch here means embedded_public_keys.gd was edited to a
+	# different key than KeyFingerprint expects -- fail closed with an
+	# empty ring (rejects every code) rather than trust an unverified key.
+	var pems: Array[String] = []
+	if KeyFingerprint.matches_expected(EmbeddedPublicKeys.PUBLIC_KEY_PEMS):
+		pems = EmbeddedPublicKeys.PUBLIC_KEY_PEMS
+	_verifier = SerialVerifier.new(pems)
 
 
 func _ready() -> void:

@@ -100,3 +100,22 @@ func test_sha256_is_deterministic_and_input_sensitive():
 	assert_eq(a, b)
 	assert_ne(a, c)
 	assert_eq(a.size(), 32)
+
+
+# -- sign_hash: the inverse of verify_hash, used only by dev-side tooling --
+# -- (tools/sign_build.gd, SelfIntegrity's own local-testing auto-sign) ----
+# -- that actually holds a private key -- never by anything that ships. ---
+
+func test_sign_hash_produces_a_signature_verify_hash_accepts():
+	var data := "sign me".to_utf8_buffer()
+	var file_hash := SignatureRing.sha256(data)
+	var signature := SignatureRing.sign_hash(file_hash, _private_key)
+	var ring := SignatureRing.new([_private_key.save_to_string(true)])
+	assert_true(ring.verify_hash(file_hash, signature))
+
+
+func test_sign_hash_matches_crypto_sign_directly():
+	var data := "same as calling Crypto.sign by hand".to_utf8_buffer()
+	var file_hash := SignatureRing.sha256(data)
+	var expected := _crypto.sign(HashingContext.HASH_SHA256, file_hash, _private_key)
+	assert_eq(SignatureRing.sign_hash(file_hash, _private_key), expected)
