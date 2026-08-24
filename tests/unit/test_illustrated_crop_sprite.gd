@@ -119,27 +119,52 @@ func test_growth_stage_index_mature_at_and_above_one():
 # -- final on-screen size: comparable to the existing dropped-fruit family,
 # never tile-sized (the exact bug already fixed once for tree fruit -- see
 # ProceduralItemSprite.WORLD_WIDTH_BY_ID's own doc comment: "gigantic").
+#
+# First pass sized off CANVAS WIDTH alone (LEAF_CANVAS_SIZE/ROOT_CANVAS_SIZE
+# are portrait -- taller than wide -- to fit the source art's own elongated
+## proportions), which left the actual on-screen HEIGHT of a portrait-shaped
+# plant nowhere close to constrained -- reported live, twice, as "huge
+# potato crops above soil" even after a first width-only re-tune. Replaced
+# with a MEASURED scale (max_content_extent, mirroring
+# IllustratedAnimalSprite.marker_scale's own "measure the real drawn
+# pixels, not the nominal canvas" precedent): whichever of a frame's own
+# width/height is larger is what gets constrained to the target size, so
+# neither dimension can ever exceed it regardless of the source art's
+# aspect ratio.
 
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 
-func test_root_world_width_is_smaller_than_a_full_tile():
-	assert_lt(IllustratedCropSprite.ROOT_WORLD_WIDTH, TerrainRenderer.TILE_SIZE)
+func test_leaf_and_root_world_sizes_are_smaller_than_a_full_tile():
+	assert_lt(IllustratedCropSprite.LEAF_WORLD_SIZE, TerrainRenderer.TILE_SIZE)
+	assert_lt(IllustratedCropSprite.ROOT_WORLD_SIZE, TerrainRenderer.TILE_SIZE)
 
 
-func test_leaf_world_width_is_smaller_than_a_full_tile():
-	assert_lt(IllustratedCropSprite.LEAF_WORLD_WIDTH, TerrainRenderer.TILE_SIZE)
+func test_max_content_extent_measures_the_real_drawn_pixels_not_the_canvas():
+	# A frame's measured extent must be its own real opaque-pixel bounding
+	# box, strictly smaller than the (padded) canvas it was normalized onto.
+	var texture := crop.leaf_texture("carrot", 2)
+	var extent := IllustratedCropSprite.max_content_extent(texture)
+	assert_gt(extent, 0.0)
+	assert_lt(extent, float(IllustratedCropSprite.LEAF_CANVAS_SIZE.y))
 
 
-func test_root_world_scale_actually_produces_the_declared_world_width():
-	assert_almost_eq(
-		IllustratedCropSprite.ROOT_WORLD_SCALE * float(IllustratedCropSprite.ROOT_CANVAS_SIZE.x),
-		IllustratedCropSprite.ROOT_WORLD_WIDTH, 0.001
-	)
+## The actual invariant that matters: applying the computed scale to EVERY
+## stage's own real content extent must never exceed the declared target
+## size, in either dimension -- not just at the canvas level.
+func test_leaf_world_scale_keeps_every_stage_within_the_target_size():
+	for crop_id in ["carrot", "potato"]:
+		var scale: float = crop.leaf_world_scale(crop_id)
+		assert_gt(scale, 0.0)
+		for stage in 3:
+			var extent := IllustratedCropSprite.max_content_extent(crop.leaf_texture(crop_id, stage))
+			assert_lte(extent * scale, IllustratedCropSprite.LEAF_WORLD_SIZE + 0.01)
 
 
-func test_leaf_world_scale_actually_produces_the_declared_world_width():
-	assert_almost_eq(
-		IllustratedCropSprite.LEAF_WORLD_SCALE * float(IllustratedCropSprite.LEAF_CANVAS_SIZE.x),
-		IllustratedCropSprite.LEAF_WORLD_WIDTH, 0.001
-	)
+func test_root_world_scale_keeps_every_variant_within_the_target_size():
+	for crop_id in ["carrot", "potato"]:
+		var scale: float = crop.root_world_scale(crop_id)
+		assert_gt(scale, 0.0)
+		for seed_value in 7:
+			var extent := IllustratedCropSprite.max_content_extent(crop.root_texture(crop_id, seed_value))
+			assert_lte(extent * scale, IllustratedCropSprite.ROOT_WORLD_SIZE + 0.01)

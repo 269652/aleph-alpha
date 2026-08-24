@@ -375,6 +375,15 @@ func generate_hero_portrait_texture(appearance: Dictionary) -> ImageTexture:
 	return ImageTexture.create_from_image(generate_hero_portrait_image(appearance))
 
 
+## The character creator's live preview -- must reflect the SAME illustrated
+## rig CharacterView wears in-game, not just the procedural fallback (asked
+## directly: "rehaul the character rendering in game AND in creation"). Each
+## part checks IllustratedCharacterSprite first and falls back to this
+## file's own procedural generator otherwise, the same has-art-then-fallback
+## shape CharacterView uses -- just working in raw Images (this function
+## composites onto one small canvas by pixel-blending, not by positioning
+## Sprite2D nodes), which is why it needs its own per-part helpers below
+## rather than reusing CharacterView's Sprite2D-scale logic.
 func generate_hero_portrait_image(appearance: Dictionary) -> Image:
 	var image := Image.create(PORTRAIT_SIZE.x, PORTRAIT_SIZE.y, false, Image.FORMAT_RGBA8)
 	var center_x := PORTRAIT_SIZE.x / 2
@@ -383,23 +392,105 @@ func generate_hero_portrait_image(appearance: Dictionary) -> Image:
 	var legs_y := torso_y + _PORTRAIT_TORSO.y - 1
 
 	# Arms first, so the torso's outline overlaps them at the shoulder rather
-	# than the other way around.
-	var arm := generate_body_part_image(_PORTRAIT_ARM, appearance.skin)
+	# than the other way around. Left/right use frame 0/1 of the illustrated
+	# sheet's two independent poses (see IllustratedCharacterSprite's own
+	# doc comment on arms.png) rather than the same frame mirrored twice.
 	var arm_y := torso_y + 3
-	_blend(image, arm, Vector2i(center_x - _PORTRAIT_TORSO.x / 2 - _PORTRAIT_ARM.x + 1, arm_y))
-	_blend(image, arm, Vector2i(center_x + _PORTRAIT_TORSO.x / 2 - 1, arm_y))
+	_blend(
+		image, _portrait_arm_image(appearance, 0),
+		Vector2i(center_x - _PORTRAIT_TORSO.x / 2 - _PORTRAIT_ARM.x + 1, arm_y)
+	)
+	_blend(
+		image, _portrait_arm_image(appearance, 1),
+		Vector2i(center_x + _PORTRAIT_TORSO.x / 2 - 1, arm_y)
+	)
 
-	# Legs (trousers) with darker boots at the bottom.
+	_blend_portrait_legs(image, appearance, center_x, legs_y)
+
+	_blend(
+		image, _portrait_torso_image(appearance),
+		Vector2i(center_x - _PORTRAIT_TORSO.x / 2, torso_y)
+	)
+	_blend(image, _portrait_head_image(appearance), Vector2i(center_x - _PORTRAIT_HEAD.x / 2, 0))
+	return image
+
+
+func _portrait_head_image(appearance: Dictionary) -> Image:
+	if _illustrated.has_head():
+		var trimmed := _illustrated.trimmed_head_image(appearance.get("seed", 0), appearance.skin)
+		if trimmed != null:
+			return _fit_to_box(trimmed, _PORTRAIT_HEAD)
+	return generate_hero_head_image(_PORTRAIT_HEAD, appearance)
+
+
+func _portrait_torso_image(appearance: Dictionary) -> Image:
+	if _illustrated.has_action("body", "idle"):
+		var trimmed := _illustrated.trimmed_part_image("body")
+		if trimmed != null:
+			return _fit_and_tint(trimmed, _PORTRAIT_TORSO, appearance.tunic)
+	return generate_hero_tunic_image(_PORTRAIT_TORSO, appearance)
+
+
+func _portrait_arm_image(appearance: Dictionary, frame_index: int) -> Image:
+	if _illustrated.has_action("arms", "idle"):
+		var trimmed := _illustrated.trimmed_part_image("arms", frame_index)
+		if trimmed != null:
+			return _fit_and_tint(trimmed, _PORTRAIT_ARM, appearance.skin)
+	return generate_body_part_image(_PORTRAIT_ARM, appearance.skin)
+
+
+## legs.png draws both legs together as one fused pair (see
+## IllustratedCharacterSprite's own doc comment on why), so unlike arms it
+## is blended ONCE, centred, sized to the combined span the procedural
+## path's two separate leg blends would otherwise occupy -- not the same
+## small image blended twice. The procedural fallback still paints its own
+## synthetic boots (`_paint_boots`); the illustrated pair already has real
+## boots drawn into the art, so that step is skipped for it.
+func _blend_portrait_legs(image: Image, appearance: Dictionary, center_x: int, legs_y: int) -> void:
+	if _illustrated.has_action("legs", "idle"):
+		var trimmed := _illustrated.trimmed_part_image("legs")
+		if trimmed != null:
+			var span := Vector2i(_PORTRAIT_LEG.x * 2 + 2, _PORTRAIT_LEG.y)
+			var fitted := _fit_and_tint(trimmed, span, appearance.legs)
+			_blend(image, fitted, Vector2i(center_x - fitted.get_width() / 2, legs_y))
+			return
 	var leg := generate_body_part_image(_PORTRAIT_LEG, appearance.legs)
 	_paint_boots(leg, _PORTRAIT_LEG, appearance)
 	_blend(image, leg, Vector2i(center_x - _PORTRAIT_LEG.x - 1, legs_y))
 	_blend(image, leg, Vector2i(center_x + 1, legs_y))
 
-	_blend(image, generate_hero_tunic_image(_PORTRAIT_TORSO, appearance),
-		Vector2i(center_x - _PORTRAIT_TORSO.x / 2, torso_y))
-	_blend(image, generate_hero_head_image(_PORTRAIT_HEAD, appearance),
-		Vector2i(center_x - _PORTRAIT_HEAD.x / 2, 0))
-	return image
+
+## Scales `source` to fit inside `target_size`, preserving aspect (the same
+## "scale to fit, never stretch" rule normalize_frames applies one step up)
+## -- no tint, for the head, whose skin tone is already baked in by
+## IllustratedCharacterSprite.generate_head_texture's own luminance recolor.
+func _fit_to_box(source: Image, target_size: Vector2i) -> Image:
+	var scale := minf(
+		float(target_size.x) / float(maxi(1, source.get_width())),
+		float(target_size.y) / float(maxi(1, source.get_height()))
+	)
+	var width := maxi(1, int(round(float(source.get_width()) * scale)))
+	var height := maxi(1, int(round(float(source.get_height()) * scale)))
+	var resized := source.duplicate()
+	if resized.get_format() != Image.FORMAT_RGBA8:
+		resized.convert(Image.FORMAT_RGBA8)
+	resized.resize(width, height, Image.INTERPOLATE_LANCZOS)
+	return resized
+
+
+## _fit_to_box, then multiplies every opaque pixel by `tint` -- the manual
+## equivalent of the `modulate` tint Sprite2D applies for free, needed here
+## because this function blends raw Images onto a shared canvas instead of
+## compositing Sprite2D nodes. Body/legs/arms art is drawn neutral for
+## exactly this (see the art brief's "draw every part neutral" convention).
+func _fit_and_tint(source: Image, target_size: Vector2i, tint: Color) -> Image:
+	var fitted := _fit_to_box(source, target_size)
+	for y in fitted.get_height():
+		for x in fitted.get_width():
+			var c := fitted.get_pixel(x, y)
+			if c.a > 0.0:
+				fitted.set_pixel(x, y, Color(c.r * tint.r, c.g * tint.g, c.b * tint.b, c.a))
+	return fitted
 
 
 ## Darkens the bottom rows of a leg into a boot, so legs read as clothed

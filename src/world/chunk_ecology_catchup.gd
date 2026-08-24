@@ -37,10 +37,11 @@ const FRUIT_STOCK_MAX := 500.0
 var _herbivore_model := HerbivorePopulationModel.new()
 var _predator_model := PredatorPopulationModel.new()
 var _aquatic_model := AquaticPopulationModel.new()
+var _vegetation_model := VegetationGrowthModel.new()
 
 
 ## Integrate a chunk's aggregate ecology forward by `elapsed_seconds` in one step.
-## `state`    -> {herbivores, predators, fruit_stock, vegetation, fish}
+## `state`    -> {herbivores, predators, fruit_stock, vegetation, fish, land_health}
 ## `capacity` -> {herbivore_capacity, fruit_growth_rate, fish_capacity}
 ## Pure: does not mutate `state`; returns a fresh dictionary.
 func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) -> Dictionary:
@@ -52,6 +53,7 @@ func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) ->
 	var fruit_stock: float = state.get("fruit_stock", 0.0)
 	var vegetation: float = state.get("vegetation", 0.0)
 	var fish: float = state.get("fish", 0.0)
+	var land_health: float = state.get("land_health", 1.0)
 
 	var herbivore_capacity: float = capacity.get("herbivore_capacity", 0.0)
 	var fruit_growth_rate: float = capacity.get("fruit_growth_rate", 0.0)
@@ -59,6 +61,15 @@ func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) ->
 
 	# Vegetation regrows toward 1.0 (exponential approach, monotone, no overshoot).
 	var new_vegetation := 1.0 - (1.0 - vegetation) * exp(-VEGETATION_REGROWTH_PER_DAY * delta_days)
+
+	# Land health (docs/concept/world.md "Land health: overharvesting leaves
+	# a lasting mark, not just a slower respawn"): nothing harvests an
+	# unloaded chunk, so this is pure recovery, never depletion -- harvest
+	# rate is always 0.0 here, and step_land_health only depletes when
+	# harvest exceeds regrowth, so a 0.0/0.0 comparison always takes the
+	# recovery branch, at the same slow real-world-grounded pace loaded
+	# chunks use (VegetationGrowthModel.LAND_HEALTH_RECOVERY_PACE_PER_DAY).
+	var new_land_health := _vegetation_model.step_land_health(land_health, 0.0, 0.0, delta_days)
 
 	# Fruit stock accumulates linearly with elapsed time, bounded by chunk capacity.
 	var new_fruit_stock := minf(fruit_stock + fruit_growth_rate * elapsed, FRUIT_STOCK_MAX)
@@ -83,4 +94,5 @@ func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) ->
 		"fruit_stock": new_fruit_stock,
 		"vegetation": new_vegetation,
 		"fish": new_fish,
+		"land_health": new_land_health,
 	}

@@ -70,7 +70,7 @@ func _ready() -> void:
 	add_child(_lift)
 
 	_leaves = Sprite2D.new()
-	_leaves.scale = Vector2.ONE * IllustratedCropSprite.LEAF_WORLD_SCALE
+	_leaves.scale = Vector2.ONE * _illustrated.leaf_world_scale(crop_id)
 	_lift.add_child(_leaves)
 
 	# Leaves+root are assembled as ONE entity from the start, not built
@@ -87,7 +87,7 @@ func _ready() -> void:
 	# flip at the moment the swing lands.
 	_root = Sprite2D.new()
 	_root.texture = _illustrated.root_texture(crop_id, sprite_seed)
-	_root.scale = Vector2.ONE * IllustratedCropSprite.ROOT_WORLD_SCALE
+	_root.scale = Vector2.ONE * _illustrated.root_world_scale(crop_id)
 	_root.region_enabled = true
 	_lift.add_child(_root)
 	_reveal_root(0.0)

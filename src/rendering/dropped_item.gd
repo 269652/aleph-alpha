@@ -59,7 +59,7 @@ func _ready() -> void:
 		# procedural path every other item still uses.
 		if _crop_sprite_generator.has_crop(item_stack.item.id):
 			texture = _crop_sprite_generator.root_texture(item_stack.item.id, 0)
-			scale = Vector2.ONE * IllustratedCropSprite.ROOT_WORLD_SCALE
+			scale = Vector2.ONE * _crop_sprite_generator.root_world_scale(item_stack.item.id)
 		else:
 			texture = _sprite_generator.texture_for(item_stack.item.id)
 			# Item art is authored DETAIL_MULTIPLIER times oversized; scaling

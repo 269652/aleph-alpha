@@ -3016,6 +3016,91 @@ func test_a_region_never_visited_before_keeps_its_fresh_population():
 	assert_almost_eq(manager._ecosystem.herbivore_population(chunk_coord), before, 0.001)
 
 
+# -- land health: overharvesting leaves a lasting mark ------------------------
+#
+# docs/concept/world.md "Land health: overharvesting leaves a lasting mark,
+# not just a slower respawn". land_health_near/record_vegetation_harvest_near
+# mirror the existing vegetation_density_near/fish_population_near/
+# record_fish_catch_near "_near" accessor pattern exactly.
+
+func test_land_health_near_matches_the_chunks_land_health():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		(center_chunk.x * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE,
+		(center_chunk.y * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE
+	)
+	assert_almost_eq(
+		manager.land_health_near(pixel), manager._ecosystem.land_health(center_chunk), 0.001
+	)
+
+
+## A freshly-loaded, never-touched region is pristine.
+func test_land_health_near_starts_at_full_health():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		(center_chunk.x * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE,
+		(center_chunk.y * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE
+	)
+	assert_almost_eq(manager.land_health_near(pixel), 1.0, 0.001)
+
+
+func test_record_vegetation_harvest_near_reduces_the_right_chunks_density():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		(center_chunk.x * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE,
+		(center_chunk.y * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE
+	)
+	var before := manager.vegetation_density_near(pixel)
+	manager.record_vegetation_harvest_near(pixel, 0.1)
+	assert_lt(manager.vegetation_density_near(pixel), before)
+
+
+# -- land health survives a real restart (same persistence path land ecology
+# already uses -- see the "land ecology survives a real restart" tests above)
+
+## A degraded region's land health must not come back pristine on reload --
+## the entire point of the concept doc's "lasting mark" framing.
+func test_a_degraded_land_health_region_does_not_come_back_pristine():
+	manager.update(_berlin_tile)
+	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(_berlin_tile)
+
+	DirAccess.make_dir_recursive_absolute(EarthChunkManager.ECOLOGY_DIR)
+	manager._chunk_serializer.save_ecology(
+		{
+			"herbivores": 1.0, "predators": 0.0, "vegetation": 0.5,
+			"saved_at_unix": Time.get_unix_time_from_system(), "land_health": 0.2,
+		},
+		manager._ecology_path(chunk_coord)
+	)
+	manager._apply_persisted_ecology(chunk_coord)
+
+	assert_lt(
+		manager._ecosystem.land_health(chunk_coord), 0.9,
+		"a badly degraded region saved moments ago must not come back pristine"
+	)
+	DirAccess.remove_absolute(manager._ecology_path(chunk_coord))
+
+
+func test_unloading_a_chunk_persists_a_degraded_land_health():
+	manager.update(_berlin_tile)
+	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(_berlin_tile)
+	manager._ecosystem.seed_land_health(chunk_coord, 0.25)
+	var path: String = manager._ecology_path(chunk_coord)
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+	# Walk far enough that Berlin's chunks are evicted.
+	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 40, 0))
+
+	assert_true(FileAccess.file_exists(path), "an unloaded region must leave a record")
+	var loaded := manager._chunk_serializer.load_ecology(path)
+	assert_almost_eq(float(loaded.get("land_health", 1.0)), 0.25, 0.001)
+	DirAccess.remove_absolute(path)
+
+
 # -- the player's own animals survive a chunk unload -------------------------
 #
 # Creature markers are freed with their chunk and re-spawned from the region's

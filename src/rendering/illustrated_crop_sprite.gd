@@ -38,27 +38,26 @@ const LEAF_BASELINE_Y := 90
 const ROOT_CANVAS_SIZE := Vector2i(40, 56)
 const ROOT_BASELINE_Y := 52
 
-## How wide a pulled root should read ON THE GROUND, in world pixels --
-## comparable to the existing dropped-fruit family
+## How big a pulled root/mature leaf cluster should read ON THE GROUND, in
+## world pixels -- comparable to the existing dropped-fruit family
 ## (ProceduralItemSprite.WORLD_WIDTH_BY_ID), never tile-sized. That exact
 ## "gigantic" bug already happened once for tree fruit (see that file's own
-## doc comment), and a first pass at THIS constant (3x walnut, plus a 1.4x
-## leaf multiplier on top) repeated it -- reported live as "huge potato
-## crops above soil", the leaf cluster reading nearly as wide as the tile
-## itself. Re-tuned to sit at APPLE_WORLD_WIDTH -- the biggest thing in the
-## existing dropped-fruit family -- rather than exceeding the whole family,
-## since a harvested root is a similar order of magnitude to a piece of
-## fruit, not categorically bigger.
-const ROOT_WORLD_WIDTH := ProceduralItemSprite.WALNUT_WORLD_WIDTH * 2.0  # == APPLE_WORLD_WIDTH
-## The scale factor a marker applies to a ROOT_CANVAS_SIZE-authored root
-## sprite to make it actually read at ROOT_WORLD_WIDTH on screen.
-const ROOT_WORLD_SCALE := ROOT_WORLD_WIDTH / float(ROOT_CANVAS_SIZE.x)
-
-## A mature plant's leaf cluster reads as a small bush -- noticeably bigger
-## than the harvested root alone, but still comfortably under a full tile
-## (re-tuned alongside ROOT_WORLD_WIDTH above, same live report).
-const LEAF_WORLD_WIDTH := ROOT_WORLD_WIDTH * 1.4
-const LEAF_WORLD_SCALE := LEAF_WORLD_WIDTH / float(LEAF_CANVAS_SIZE.x)
+## doc comment); a first WIDTH-only pass at this constant repeated it,
+## TWICE, reported live as "huge potato crops above soil" even after a
+## re-tune -- LEAF_CANVAS_SIZE/ROOT_CANVAS_SIZE are portrait (taller than
+## wide, to fit the source art's own elongated proportions), so sizing off
+## canvas WIDTH alone left the real on-screen HEIGHT of a portrait-shaped
+## plant nowhere close to constrained. Fixed by measuring the ACTUAL drawn
+## content extent (see max_content_extent/leaf_world_scale/root_world_scale
+## below) and scaling THAT to this target, in whichever dimension (width or
+## height) is larger -- the same "measure the real pixels, don't assume the
+## canvas" precedent IllustratedAnimalSprite.marker_scale already
+## established for creature art. Sized at APPLE_WORLD_WIDTH -- the biggest
+## thing in the existing dropped-fruit family -- since a harvested root or
+## a small plant is a similar order of magnitude to a piece of fruit, not
+## categorically bigger.
+const LEAF_WORLD_SIZE := ProceduralItemSprite.WALNUT_WORLD_WIDTH * 2.0  # == APPLE_WORLD_WIDTH
+const ROOT_WORLD_SIZE := LEAF_WORLD_SIZE
 
 var _slicer := SpriteSheetSlicer.new()
 
@@ -67,6 +66,10 @@ var _slicer := SpriteSheetSlicer.new()
 ## caller would be pure waste). "crop_id" -> Array[ImageTexture].
 static var _leaf_frame_cache: Dictionary = {}
 static var _root_frame_cache: Dictionary = {}
+## "crop_id" -> float, memoized the same reason IllustratedAnimalSprite.
+## marker_scale caches: computing it scans every frame's own pixels.
+static var _leaf_world_scale_cache: Dictionary = {}
+static var _root_world_scale_cache: Dictionary = {}
 
 
 func has_crop(crop_id: String) -> bool:
@@ -93,6 +96,60 @@ func root_texture(crop_id: String, seed_value: int) -> Texture2D:
 	if frames.is_empty():
 		return null
 	return frames[posmod(seed_value, frames.size())]
+
+
+## The scale factor a marker applies to `crop_id`'s leaf sprites so that
+## the LARGEST growth stage's own real drawn extent (see max_content_extent)
+## -- not the nominal canvas size -- reads at LEAF_WORLD_SIZE on screen.
+## Since every stage shares one normalize_frames scale (see LEAF_CANVAS_SIZE's
+## own doc comment), a smaller stage's real extent is proportionally
+## smaller too, so nothing ever exceeds the target.
+func leaf_world_scale(crop_id: String) -> float:
+	if not _leaf_world_scale_cache.has(crop_id):
+		_leaf_world_scale_cache[crop_id] = _world_scale_for(_leaf_frames(crop_id), LEAF_WORLD_SIZE)
+	return _leaf_world_scale_cache[crop_id]
+
+
+## The scale factor a marker applies to `crop_id`'s root sprites so that
+## the LARGEST variant's own real drawn extent reads at ROOT_WORLD_SIZE.
+func root_world_scale(crop_id: String) -> float:
+	if not _root_world_scale_cache.has(crop_id):
+		_root_world_scale_cache[crop_id] = _world_scale_for(_root_frames(crop_id), ROOT_WORLD_SIZE)
+	return _root_world_scale_cache[crop_id]
+
+
+func _world_scale_for(frames: Array, target_size: float) -> float:
+	var widest := 0.0
+	for texture in frames:
+		widest = maxf(widest, max_content_extent(texture))
+	return target_size / maxf(widest, 1.0)
+
+
+## The largest opaque-pixel dimension (width or height) actually drawn in
+## `texture` -- the real footprint, not the canvas it was normalized onto,
+## which can carry significant padding on one axis when the source art's
+## aspect ratio doesn't match the canvas (see LEAF_WORLD_SIZE's own doc
+## comment for the live-reported bug this fixes). Public so callers/tests
+## can verify a scaled sprite's actual on-screen size, not just its nominal
+## canvas size.
+static func max_content_extent(texture: Texture2D) -> float:
+	if texture == null:
+		return 0.0
+	var image := texture.get_image()
+	var min_x := image.get_width()
+	var max_x := -1
+	var min_y := image.get_height()
+	var max_y := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.01:
+				min_x = mini(min_x, x)
+				max_x = maxi(max_x, x)
+				min_y = mini(min_y, y)
+				max_y = maxi(max_y, y)
+	if max_x < 0:
+		return 0.0
+	return maxf(float(max_x - min_x + 1), float(max_y - min_y + 1))
 
 
 ## Maps WildCropPatch's continuous 0..1 growth onto a discrete stage index
