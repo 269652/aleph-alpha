@@ -31,6 +31,8 @@ const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const SettingsOverlay = preload("res://scenes/settings_overlay.gd")
+const LicenseGateOverlay = preload("res://scenes/license_gate_overlay.gd")
+const LicenseStore = preload("res://src/licensing/license_store.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
 const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
@@ -203,6 +205,7 @@ var _inventory_window: PanelContainer
 var _crafting_window: CraftingWindow
 var _skill_window: SkillTreeWindow
 var _settings_overlay: SettingsOverlay
+var _license_gate_overlay: LicenseGateOverlay
 var _main_menu: MainMenu
 var _menu_backdrop: ColorRect
 var _menu_background: TextureRect
@@ -307,12 +310,40 @@ var _force_day := false
 
 
 func _ready() -> void:
-	# Second, independent license check (see docs/licensing.md,
-	# src/licensing/license_gate.gd) -- the LicenseGate autoload already
-	# checks at boot, before this scene even loads; this re-verifies from
-	# scratch rather than trusting that already ran, so bypassing the game
-	# requires patching more than one call site, not just one `if`.
-	LicenseGate.require_licensed()
+	# Second, independent integrity + license check (see docs/licensing.md,
+	# src/licensing/self_integrity.gd, src/licensing/license_gate.gd) --
+	# the SelfIntegrity/LicenseGate autoloads already check at boot, before
+	# this scene even loads; these re-verify from scratch rather than
+	# trusting that already ran, so bypassing the game requires patching
+	# more than one call site, not just one `if`. Integrity failures still
+	# hard-quit (a tampered install isn't something an in-game screen can
+	# fix) -- only the license check gets a recoverable in-game path,
+	# since the fix there really is just "type/paste a valid key".
+	#
+	# Real bug found live: this redundant re-check used to run
+	# unconditionally, with no editor bypass of its own -- unlike the
+	# autoloads' own _ready(), which correctly skips both checks under
+	# OS.has_feature("editor") (true for the editor binary itself, whether
+	# launched via the Play button or a raw `--path` command line, and
+	# NEVER true in an exported build). That meant a plain dev/test launch
+	# re-failed a check the primary one had already correctly and
+	# deliberately skipped -- SelfIntegrity in particular can never pass
+	# here anyway (there's no exported .pck for it to hash while running
+	# raw project files this way), so it just produced permanent false-
+	# positive "reinstall from original source" noise on every non-editor-
+	# Play dev launch. Mirroring the same bypass here removes that noise
+	# without weakening anything for a real shipped build, where
+	# OS.has_feature("editor") is always false.
+	if not OS.has_feature("editor"):
+		SelfIntegrity.require_verified()
+	var license_result: Dictionary = (
+		{"licensed": true, "product_mask": LicenseGate.product_mask, "reason": ""}
+		if OS.has_feature("editor")
+		else LicenseGate.check_licensed()
+	)
+	if not license_result.licensed:
+		_show_license_gate()
+		return
 
 	# Area2D's input_event (used by DroppedItem's click-to-pick-up) never
 	# fires unless the viewport's physics picking is explicitly enabled -- it
@@ -760,6 +791,58 @@ func _refresh_skill_window(local_player: Player) -> void:
 	)
 
 
+## Shown INSTEAD OF building the rest of the world when LicenseGate finds no
+## valid key (see _ready(), docs/licensing.md's "In-game license entry").
+## Deliberately built standalone here rather than depending on anything the
+## skipped rest of _ready() would have set up -- _ui and _ui_theme are the
+## only things this needs, and both are already valid this early (_ui via
+## @onready, _ui_theme via its own field initializer -- see their
+## declarations above).
+func _show_license_gate() -> void:
+	_license_gate_overlay = LicenseGateOverlay.new()
+	_license_gate_overlay.theme = _ui_theme
+	_license_gate_overlay.set_anchors_preset(Control.PRESET_CENTER)
+	_license_gate_overlay.offset_left = -260.0
+	_license_gate_overlay.offset_top = -170.0
+	_license_gate_overlay.offset_right = 260.0
+	_license_gate_overlay.offset_bottom = 170.0
+	_ui.add_child(_license_gate_overlay)
+	_license_gate_overlay.verify_requested.connect(_on_license_gate_verify_requested)
+	_license_gate_overlay.quit_requested.connect(func(): get_tree().quit())
+
+
+## A valid key gets saved to every real candidate path (see LicenseStore.
+## write_code()'s own doc comment for why "every", not just the first) and
+## the scene reloads fresh -- _ready() runs again, LicenseGate.check_licensed()
+## re-reads the now-valid file, and this time the real world builds normally.
+## An invalid key just reports back; the player can try again without losing
+## anything (nothing else in the world has been built yet at this point).
+func _on_license_gate_verify_requested(code: String) -> void:
+	var result := LicenseGate.check_licensed(code)
+	if result.licensed:
+		LicenseStore.write_code(LicenseStore.default_candidate_paths(), code)
+		_license_gate_overlay.show_status("Valid! Restarting...")
+		get_tree().reload_current_scene()
+	else:
+		_license_gate_overlay.show_status("That key isn't valid. Check for typos and try again.")
+
+
+## The already-in-game "change your license key" path (SettingsOverlay's
+## License tab), distinct from _on_license_gate_verify_requested() above --
+## that one blocks all of play with no valid key yet; this one is only
+## reachable once already playing. Saves to disk either way, but doesn't
+## reload the scene on success (nothing here needs the world rebuilt) --
+## just reports honestly that a restart is needed for it to take effect,
+## since no gameplay code today re-reads product_mask mid-session.
+func _on_settings_license_code_submitted(code: String) -> void:
+	var result := LicenseGate.check_licensed(code)
+	if result.licensed:
+		LicenseStore.write_code(LicenseStore.default_candidate_paths(), code)
+		_settings_overlay.show_license_status("Saved. Restart the game for it to take effect.")
+	else:
+		_settings_overlay.show_license_status("That key isn't valid. Check for typos and try again.")
+
+
 ## Builds the key-binding settings overlay (see SettingsOverlay), hidden until
 ## toggled with toggle_settings (default Escape). Rebinding an action re-applies
 ## the InputMap immediately and persists the override to disk.
@@ -783,6 +866,7 @@ func _build_settings_overlay() -> void:
 	_settings_overlay.graphics_changed.connect(_on_graphics_changed)
 	_settings_overlay.graphics_option_changed.connect(_on_graphics_option_changed)
 	_settings_overlay.resume_requested.connect(_toggle_settings_menu)
+	_settings_overlay.license_code_submitted.connect(_on_settings_license_code_submitted)
 
 
 ## Opens/closes the pause menu, pausing the world while it's open so it acts

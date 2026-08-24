@@ -100,3 +100,29 @@ func test_require_licensed_does_not_error_on_a_valid_code():
 	var code := _sign_code(1, 1)
 	gate.require_licensed(code)
 	assert_true(gate.is_licensed)
+
+
+## check_licensed() is require_licensed() minus the quit() side effect --
+## the non-fatal half World's boot uses so it can show an in-game "enter
+## your key" screen instead of the process just ending (see
+## scenes/world.gd, docs/licensing.md's "In-game license entry"). Same
+## flag-setting/logging behavior, just never calls get_tree().quit().
+func test_check_licensed_sets_is_licensed_true_on_a_valid_code():
+	var code := _sign_code(0b1, 7)
+	var result := gate.check_licensed(code)
+	assert_true(gate.is_licensed)
+	assert_eq(gate.product_mask, 0b1)
+	assert_true(result.licensed)
+
+
+## The whole point: an invalid/missing code must be safe to check
+## (flags set, no crash) WITHOUT ending the process -- unlike
+## require_licensed(), which would (if a real tree existed to quit).
+## check_licensed() logging the failure via push_error() is expected,
+## real, intentional behavior (see its own doc comment) -- claim it with
+## assert_push_error() rather than let GUT flag it as an unexpected error.
+func test_check_licensed_sets_is_licensed_false_on_an_invalid_code_without_quitting():
+	var result := gate.check_licensed("NOT-A-REAL-CODE")
+	assert_false(gate.is_licensed)
+	assert_false(result.licensed)
+	assert_push_error("License check failed:")
