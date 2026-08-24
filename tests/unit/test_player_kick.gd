@@ -13,6 +13,9 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
+const DroppedItem = preload("res://src/rendering/dropped_item.gd")
+const Item = preload("res://src/gameplay/item.gd")
+const ItemStack = preload("res://src/gameplay/item_stack.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -108,4 +111,52 @@ func test_kick_only_fires_once_per_press():
 	player._kick_step()  # still held -- must not kick again
 	assert_eq(stone.position, after_first, "kick should only fire on the rising edge, not every frame held")
 	Input.action_release("kick")
+	stone.free()
+
+
+# -- a dropped item (docs/concept/wild_crops.md's "physical entity, not -----
+# -- just an inventory grant") is kickable the same way a stone is, when ----
+# -- no stone is closer -------------------------------------------------------
+
+func _add_dropped_carrot(offset: Vector2) -> DroppedItem:
+	var dropped := DroppedItem.new()
+	dropped.item_stack = ItemStack.new(Item.new("carrot", "Carrot", "food", 20, 0.0, "", 0.0, 0.07), 1)
+	dropped.position = player.position + offset
+	# Unlike _add_stone (found via chunk_manager._loaded_stones, a direct
+	# dict injection that doesn't need real tree membership), a DroppedItem
+	# is found via its own scene-tree group (see Player.
+	# _nearest_kickable_dropped_item_near / pickup_nearby) -- it has to
+	# actually be IN the live tree for _ready() to join it, so it's parented
+	# under `self` (already in the tree) rather than the disconnected
+	# entities_parent this test file never mounts.
+	add_child(dropped)
+	return dropped
+
+
+func test_kick_sends_a_dropped_carrot_flying_away_from_the_player():
+	var dropped := _add_dropped_carrot(Vector2(5, 0))
+	var original_position := dropped.position
+	_tap_kick()
+	assert_ne(dropped.position, original_position, "a kicked dropped item should have moved")
+	assert_gt(dropped.position.x, original_position.x, "should fly further AWAY from the player")
+	dropped.free()
+
+
+func test_kick_prefers_a_nearer_stone_over_a_farther_dropped_item():
+	var dropped := _add_dropped_carrot(Vector2(50, 0))  # far
+	var stone := _add_stone(3.0, Vector2(5, 0))  # near
+	_tap_kick()
+	assert_eq(dropped.position, player.position + Vector2(50, 0), "the far dropped item should be untouched")
+	assert_ne(stone.position, player.position + Vector2(5, 0), "the nearer stone should be the one kicked")
+	dropped.free()
+	stone.free()
+
+
+func test_kick_prefers_a_nearer_dropped_item_over_a_farther_stone():
+	var dropped := _add_dropped_carrot(Vector2(5, 0))  # near
+	var stone := _add_stone(3.0, Vector2(50, 0))  # far
+	_tap_kick()
+	assert_eq(stone.position, player.position + Vector2(50, 0), "the far stone should be untouched")
+	assert_ne(dropped.position, player.position + Vector2(5, 0), "the nearer dropped item should be the one kicked")
+	dropped.free()
 	stone.free()

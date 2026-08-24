@@ -15,6 +15,7 @@ const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
+const Kick = preload("res://src/gameplay/kick.gd")
 
 const GROUP_NAME := "dropped_item"
 ## Un-picked-up items despawn after this many seconds so the ground doesn't
@@ -129,9 +130,18 @@ func get_display_name() -> String:
 	)
 
 
-## For World's mouse-hover tooltip (see HoverTargetFinder).
+## For World's mouse-hover tooltip (see HoverTargetFinder). Every dropped
+## item can be picked up; one with a real, MODELED mass (item.gd's own
+## "0.0 = not modeled yet" convention -- most food/material items still sit
+## there) light enough for Kick.is_kickable can also be kicked -- the same
+## "a real physical object, not just an inventory grant" LiftableStone
+## already promises (docs/concept/stone.md), extended here so a pulled wild
+## carrot/potato (docs/concept/wild_crops.md) is one too.
 func get_hover_actions() -> Array:
-	return [{"verb": "Pick Up", "action": "pickup"}]
+	var actions := [{"verb": "Pick Up", "action": "pickup"}]
+	if item_stack != null and item_stack.item.mass_kg > 0.0 and Kick.is_kickable(item_stack.item.mass_kg):
+		actions.append({"verb": "Kick", "action": "kick"})
+	return actions
 
 
 func _on_input_event(_viewport: Node, event: InputEvent, _shape_idx: int) -> void:

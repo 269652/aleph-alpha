@@ -89,6 +89,10 @@ func _ready() -> void:
 	_root.texture = _illustrated.root_texture(crop_id, sprite_seed)
 	_root.scale = Vector2.ONE * _illustrated.root_world_scale(crop_id)
 	_root.region_enabled = true
+	# NOT centered: see _reveal_root's own doc comment -- the grown region
+	# has to stay pinned to the ground line by its own BOTTOM edge, not
+	# straddle the marker's origin the way a centered growing rect would.
+	_root.centered = false
 	_lift.add_child(_root)
 	_reveal_root(0.0)
 
@@ -108,9 +112,22 @@ func _process(delta: float) -> void:
 
 ## How much of the root's art is currently uncovered, 0 (nothing, still
 ## fully buried) to 1 (the whole root, fully clear of the ground).
+##
+## Reported live: "potato fruits are still rendered above soil and not
+## buried". `region_rect` growing while `centered` stays true (Sprite2D's
+## default) draws the revealed strip straddling the marker's own origin --
+## half above local y=0, half below -- rather than emerging upward out of a
+## fixed ground point, which reads as "already half above ground" the
+## instant any of it is revealed. A carrot's thin taper made that easy to
+## miss; a potato's wide, round tuber made it obvious. `centered = false`
+## (see _ready) plus this offset pins the drawn quad's BOTTOM edge -- not
+## its middle -- to y=0, so growth always reads as "rising out of the
+## ground," for any crop's art, not just the one this happened to look
+## acceptable for.
 func _reveal_root(progress: float) -> void:
 	var revealed_height := progress * float(IllustratedCropSprite.ROOT_CANVAS_SIZE.y)
 	_root.region_rect = Rect2(Vector2.ZERO, Vector2(IllustratedCropSprite.ROOT_CANVAS_SIZE.x, revealed_height))
+	_root.offset = Vector2(-float(IllustratedCropSprite.ROOT_CANVAS_SIZE.x) / 2.0, -revealed_height)
 
 
 ## For World's mouse-hover tooltip (see HoverTargetFinder).

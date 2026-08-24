@@ -558,7 +558,7 @@ project's own terminology.
 | 6 — Institutions | ✅ Done (mechanism); ⬜ live trigger | `Institution`/`InstitutionStore`/`InstitutionFormation` built, formation gated by real fulfilled-contract history with proper hysteresis. Exit criterion live-verified. See below. |
 | 7 — Settlement simulation | ✅ Done (food-driven); ⬜ other inputs | `SettlementState`/`EarthChunkManager.step_settlements`, food-only carrying capacity. **The first emergence phase with a genuinely automatic live trigger** — wired into `World._step_ecology_batch`, live-verified firing with zero manual calls. See below. |
 | 8 — Infrastructure networks | ⬜ Not started | `building.md`/`transportation.md` cover the player-facing side; this phase is the emergent traffic→trail→road side. |
-| 9 — Towns & cities | ⬜ Not started | Only `docs/emergence/04-settlements-cities-infrastructure.md` covers this so far — no `concept/*.md` overlap yet. |
+| 9 — Towns & cities | ⬜ Not started | `docs/emergence/04-settlements-cities-infrastructure.md` covers settlement/city mechanics broadly; `concept/timber_construction.md` (new) now covers the housing-construction slice specifically (statics, withering, NPC-built structures) — roads/bridges/city-threshold/decline remain unimplemented and unspecified beyond the emergence doc. |
 | 10 — Dungeons/ruins/history POIs | ⬜ Not started | `exploration.md`'s abandoned-settlement ruins are already designed (including the world-boss-destruction cause added alongside `quests.md`); this phase is the general historical-POI/archaeology mechanism behind it. |
 | 11 — World bosses | ⬜ Not started | `concept/worldbosses.md` already specifies this phase in detail (emergent-stats + one-shot LLM phase-authoring, village-endangerment attractor); not yet built. |
 | 12 — Emergent quests | ⬜ Not started | `concept/quests.md` already specifies this phase in detail (promotion/quorum/representative, village endangerment, supply/demand quests); not yet built. |
@@ -1541,6 +1541,31 @@ to slope at all. Nothing implemented — all ⬜ Not started:
 - **Player-influenced economy** (huge) — ⬜ Not started
 - **Player-driven society** (huge) — ⬜ Not started
 
+### Timber Construction (`concept/timber_construction.md`)
+
+New doc (2026-08-24) — no implementation yet. Specifies a Balken/Planke
+material pipeline on top of the existing `FelledTree`/`ChoppableTree`
+felling mechanic, a real support-graph statics model, a closed-form
+withering/decay model mirroring `chunk_ecology_catchup.gd`'s own shape, and
+an autonomous NPC builder AI run at two fidelities (individual agent
+on-screen, deterministic catch-up integration off-screen) so a settlement
+can be discovered fully built — or mid-build, or decayed to ruins — in a
+chunk that was never loaded, without ever stamping a house-shaped prefab.
+
+- **Log → Balken/Planke shaping pipeline** (medium) — ⬜ Not started.
+- **Structural statics (support graph, collapse)** (large) — ⬜ Not started.
+- **Withering / decay of built pieces** (medium) — ⬜ Not started.
+- **NPC builder occupation + on-screen fell/shape/place FSM** (large) —
+  ⬜ Not started.
+- **Offscreen construction catch-up (`construction_catchup.gd`)** (large) —
+  ⬜ Not started.
+- **`ConstructionProject`/`ConstructionProjectStore`** (medium) —
+  ⬜ Not started.
+- **Retiring `VillageRenderer._stamp_house`'s instant free stamp** in favor
+  of a seeded `ConstructionProject` at settlement founding (medium) —
+  ⬜ Not started; see this doc's own Status section for why the current
+  behavior is a known anti-pattern, not a baseline to preserve.
+
 ### Pets (`concept/pets.md`)
 
 No pets/taming system is wired into live gameplay, but two of its core math pieces now exist as tested pure logic:
@@ -2427,8 +2452,46 @@ carrots out of earth (visually animated)". Supersedes the old
   player just watched rise out of the ground (`DroppedItem._ready()` now
   prefers `IllustratedCropSprite` over the generic procedural fallback for
   any registered crop id) — not an instant straight-to-inventory grant.
+  **Follow-up, reported live: "potatoes are still rendered above soil and
+  not buried."** `Sprite2D` defaults to `centered = true`, so the growing
+  `region_rect` drew straddling the marker's own origin — half the revealed
+  strip above the ground line, half below — rather than emerging upward out
+  of a fixed ground point. A carrot's thin taper made this easy to miss; a
+  potato's wide, high-contrast tuber made it obvious the instant any of it
+  was revealed. Confirmed against the real shipped art with a headless
+  probe (not guessed at): both crops' actual root textures showed solid
+  content well before the region had grown far. Fixed by turning `centered`
+  off and pinning the drawn quad's BOTTOM edge, not its middle, to the
+  marker's local origin (`WildCropMarker._reveal_root`'s own offset), so the
+  root always grows UPWARD out of a fixed ground point for either crop, not
+  just the one whose specific proportions happened to hide the bug.
 - **`potato` item** (small) — ✅ Done — added to `ItemCatalog` (food); had
   no source anywhere in the game before this pass.
+- **A pulled root is a real physical object, not just an inventory grant**
+  (medium) — ✅ Done — reported live: "a pulled carrot/potato should be a
+  physical entity like anything else and should be able to be picked up;
+  thrown or kicked by the player." Picking up already worked (a harvested
+  root drops as an ordinary `DroppedItem`, collected by click or the
+  existing E-key sweep, same as any other ground item). Kicking did not:
+  only `LiftableStone` (`docs/concept/stone.md`) offered it. Carrot/potato
+  now carry a real average whole-vegetable mass (`ItemCatalog._PRODUCE_MASS_KG`
+  — 70g/170g, real reference weights, not a material-density estimate the
+  way weapon mass is) instead of the "not modeled" 0.0 every other food item
+  still carries, feeding the SAME shared momentum model
+  (`Kick.is_kickable`/`Kick.landing_position`) stones already use.
+  `DroppedItem.get_hover_actions` now offers "Kick" for any item with a
+  real, modeled, kickable mass — not crop-specific, so anything given a
+  real mass in the future gets this for free. `Player._kick_step` now
+  checks both the nearest liftable stone AND the nearest kickable
+  `DroppedItem`, kicking whichever is genuinely closer, rather than a stone
+  always winning just because it was the first kickable thing this game
+  had. ⬜ Held-item pickup + charge/release THROW (the other half of the
+  ask) is deliberately NOT done this pass — `Player`'s hand-hold state
+  (`_hand_stone_diameter_cm`, `_try_pick_stone_into_hand`,
+  `_throw_held_stone`) is entirely typed around "a stone, described by a
+  diameter," and generalizing it to hold an arbitrary item is a real
+  refactor of load-bearing input code that deserves its own dedicated pass
+  and test coverage rather than being rushed in alongside this fix.
 - ⬜ No DNA/quality variation on the wild population (see `farming.md`'s
   still-unbuilt shared DNA model) — the 7 root/tuber art variants are
   purely cosmetic.
@@ -2452,14 +2515,21 @@ Exploration sections (referenced, not redefined, in world.md itself).
 - **Aggregate-to-Individual Agent Promotion (simulation LOD)** (large) — ✅ Done — see Phase 1 table above; placeholder visuals only, not replicated in multiplayer yet.
 - **Torus/Globe World Topology** (medium) — ✅ Done — `world_coordinates.gd` toroidal wrap.
 - **Chunk-Based World Persistence** (large) — 🚧 Partial — built and tested, not wired into live gameplay.
-- **Variable-Fidelity Chunk Simulation (catch-up pass)** (large) — ⬜ Not started
+- **Variable-Fidelity Chunk Simulation (catch-up pass)** (large) — ✅ Done
+  for ecology specifically — this line was stale; see the Ecosystem
+  Dynamics section above (`src/world/chunk_ecology_catchup.gd`). Not yet
+  generalized beyond ecology — construction/settlement catch-up is tracked
+  separately, see the Timber Construction section below.
 - **Dynamic Weather & Disaster Events** (large) — ⬜ Not started (see Weather section)
 - **Creature Genetics/Evolution System** (huge) — ⬜ Not started (see Evolution section)
 - **World Boss Emergence** (medium) — ⬜ Not started (see World Bosses section)
 - **Fishing/Aquatic Ecosystem Simulation** (large) — ⬜ Not started (see Fishing section)
 - **Farming System** (medium) — ⬜ Not started (see Farming section)
 - **Flora DNA & Seed-Dispersal Evolution** (huge) — ⬜ Not started (see Flora section)
-- **Building/Construction System** (large) — ⬜ Not started (see Building section)
+- **Building/Construction System** (large) — ⬜ Not started — see the
+  Building section above for the existing piece/placement/room mechanism,
+  and the new Timber Construction section (`concept/timber_construction.md`)
+  for statics, withering, and NPC-built settlements specifically.
 - **Exploration & History-Seeded Points of Interest** (large) — ⬜ Not started (see Exploration section)
 
 ### Farming (`concept/farming.md`)
