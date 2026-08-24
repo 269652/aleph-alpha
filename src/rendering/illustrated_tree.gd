@@ -312,8 +312,13 @@ func _frames(path: String, count: int) -> Array[Texture2D]:
 	return frames
 
 
-## Loads a sheet off disk, normalized to FORMAT_RGBA8 and cached per path (see
-## SpriteSheetLoader for the load()-vs-raw-file fallback this delegates to).
+## Loads a sheet off disk, normalized to FORMAT_RGBA8 and cached per path.
+## Delegates the actual read to SpriteSheetLoader (prefers the imported
+## resource, falls back to reading the file directly so the sheets work in
+## a headless test run where Godot's import step has not necessarily
+## happened) -- no separate existence pre-check needed here, since
+## SpriteSheetLoader already returns null for a path that is neither a
+## registered resource nor a real file on disk.
 func _load_image(path: String) -> Image:
 	if _image_cache.has(path):
 		return _image_cache[path]
