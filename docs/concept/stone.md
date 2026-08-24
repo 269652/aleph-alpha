@@ -107,18 +107,29 @@ once the hand is free again.
 
 **Kick.** Bound to K (`toggle_skills` moved to L to make room). Delivers a
 real one-time momentum -- the "leg" (`StoneSize.LEG_MASS_KG`) swung at a
-brisk, deliberate speed (`Kick.KICK_SPEED_MPS`) -- to the nearest liftable
-stone in reach, through the SAME momentum model (`momentum = mass *
-velocity`) `impact_resolver.gd`/`throwable.gd` already use for combat and
+brisk, deliberate speed (`Kick.KICK_SPEED_MPS`) -- to the nearest kickable
+PHYSICAL OBJECT in reach, through the SAME momentum model (`momentum = mass
+* velocity`) `impact_resolver.gd`/`throwable.gd` already use for combat and
 throwing (see `materials.md`'s "one damage model for the whole world"). How
-far the stone flies scales with that momentum against the stone's OWN mass
+far it flies scales with that momentum against its OWN mass
 (`Kick.kick_distance_px`, real sliding kinematics under kinetic friction) --
-a heavier stone moves less for the same kick, exactly `Throwable.
-impact_knockback`'s own reasoning. A stone at or above leg mass simply
+a heavier object moves less for the same kick, exactly `Throwable.
+impact_knockback`'s own reasoning. Something at or above leg mass simply
 doesn't move at all: too heavy for a kick's delivered momentum to matter.
 Since a cobble at the top of its size range already outweighs a leg, this
 single mass cutoff naturally limits kicking to pebbles (and the lightest
 cobbles) with no separate per-class check needed.
+
+`Kick`'s own math was always generic (mass in, distance/landing position
+out -- nothing about it named "stone"); only `Player._kick_step`'s target
+search was stone-only. It now also checks the nearest `DroppedItem` with a
+real, modeled mass (`Item.mass_kg > 0.0`, most items still sit at the
+"not modeled" 0.0), kicking whichever candidate -- stone or dropped item --
+is genuinely closer, so a pulled wild carrot/potato
+(`docs/concept/wild_crops.md`) is kickable the same way a pebble is. This
+does NOT extend to the held-item pickup/charge/throw mechanism below, which
+stays stone-only for now (see `wild_crops.md`'s own status list for that
+explicit follow-up).
 
 **Held-item throw.** With a stone already in hand, pressing and HOLDING E
 starts a charge: a "strengthometer" bar above the player's own head bounces
@@ -197,9 +208,11 @@ picked up off the ground was never struck.
   volume), feeding the same momentum model the rest of combat/throwing uses
   (see `materials.md`) -- what pebble dispersion's mass-weighting and the
   Kick action's leg-mass cutoff both read from.
-- ✅ Kick (K): a real one-time momentum sends the nearest reachable liftable
-  stone flying a mass-scaled distance; a stone at or above leg mass doesn't
-  move at all. `toggle_skills` moved from K to L to make room.
+- ✅ Kick (K): a real one-time momentum sends the nearest reachable
+  kickable object -- a liftable stone, or a dropped item with a real
+  modeled mass, whichever is closer -- flying a mass-scaled distance;
+  anything at or above leg mass doesn't move at all. `toggle_skills` moved
+  from K to L to make room.
 - ✅ Held-item pickup + charge/release throw: E is contextual -- empty-handed
   near a stone it picks into the HAND (a new concept distinct from inventory
   and the worn weapon slot); with something in hand, hold E to bounce a

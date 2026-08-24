@@ -158,9 +158,30 @@ func make(item_id: String) -> Item:
 	return Item.new(item_id, spec[0], spec[1], spec[2], spec[3], equip_slot, armor, mass_kg)
 
 
-## Real mass for `item_id` (see _WEAPON_MATERIAL_AND_VOLUME's own doc
-## comment) -- 0.0 for anything with no material + volume estimate yet.
+## Real average mass of one harvested root/tuber, kilograms (see
+## docs/concept/wild_crops.md) -- a REAL reference weight for the whole
+## vegetable, not a material-density x volume estimate the way weapon mass
+## is: a carrot/potato isn't a uniform block of "carrot material" the way a
+## sword is iron, so the honest real-world number is a whole-item average
+## rather than a derived one. Real, so a pulled root can enter the same
+## momentum model (Kick/HeldItemThrow, docs/concept/materials.md) every other
+## physical object already does -- "a real physical entity, not just an
+## inventory grant" (docs/concept/wild_crops.md's own framing for the pull).
+##
+## carrot: a medium carrot averages roughly 60-70g.
+## potato: a medium potato averages roughly 150-200g.
+const _PRODUCE_MASS_KG := {
+	"carrot": 0.07,
+	"potato": 0.17,
+}
+
+
+## Real mass for `item_id` -- a real weapon (material + volume estimate, see
+## _WEAPON_MATERIAL_AND_VOLUME) or a real harvested vegetable
+## (_PRODUCE_MASS_KG); 0.0 for anything with no real mass modeled yet.
 func _mass_kg_for(item_id: String) -> float:
+	if _PRODUCE_MASS_KG.has(item_id):
+		return _PRODUCE_MASS_KG[item_id]
 	if not _WEAPON_MATERIAL_AND_VOLUME.has(item_id):
 		return 0.0
 	var material_and_volume: Array = _WEAPON_MATERIAL_AND_VOLUME[item_id]

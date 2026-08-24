@@ -206,3 +206,74 @@ func test_pull_reveals_the_full_root_by_the_time_it_completes():
 	assert_almost_eq(
 		marker._root.region_rect.size.y, float(IllustratedCropSprite.ROOT_CANVAS_SIZE.y), 0.5
 	)
+
+
+# -- the root stays ground-anchored, not centred on the marker ---------------
+#
+# Reported live: "potato fruits are still rendered above soil and not
+# buried". Sprite2D defaults to `centered = true`, so a growing region_rect
+# was drawn straddling the marker's own origin -- half of it BELOW ground,
+# half ABOVE -- rather than emerging upward from the ground line. A carrot's
+# thin taper made this easy to miss; a potato's wide, high-contrast tuber
+# made it obvious the instant any of it was revealed. Confirmed against the
+# REAL shipped art (not a guess): a headless probe of
+# IllustratedCropSprite.root_texture for both crops showed solid content
+# starting well before the region had grown far, and growing symmetrically
+# off centre rather than off a fixed ground line. Fixed by turning
+# `centered` off and pinning the drawn quad's BOTTOM edge -- not its middle
+# -- to the marker's local origin (y=0), so the root always grows UPWARD out
+# of a fixed ground point regardless of how tall any given crop's art is.
+
+func test_root_sprite_is_not_centered():
+	add_child_autofree(marker)
+	assert_false(
+		marker._root.centered, "centered=true would straddle the ground line instead of growing off it"
+	)
+
+
+func test_freshly_planted_root_offset_sits_exactly_on_the_ground_line():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	# Nothing revealed yet (region height 0) -- the bottom-pinning offset
+	# should already sit at the ground line, not wherever centering would
+	# have put a zero-height rect.
+	assert_eq(marker._root.offset.y, 0.0)
+
+
+func test_partly_revealed_roots_bottom_edge_stays_on_the_ground_line():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS * 0.5)
+	# The drawn quad spans [offset.y, offset.y + region_rect.size.y] in the
+	# root's own local space -- its BOTTOM edge (offset.y + height) must sit
+	# at the marker's ground line (0), for every crop, every progress value,
+	# not just the one carrot happened to look acceptable at.
+	assert_almost_eq(marker._root.offset.y + marker._root.region_rect.size.y, 0.0, 0.01)
+
+
+func test_fully_revealed_roots_bottom_edge_still_stays_on_the_ground_line():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS * 0.999)
+	assert_almost_eq(marker._root.offset.y + marker._root.region_rect.size.y, 0.0, 0.01)
+
+
+func test_root_offset_stays_horizontally_centred_on_the_soil():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS * 0.5)
+	assert_almost_eq(marker._root.offset.x, -float(IllustratedCropSprite.ROOT_CANVAS_SIZE.x) / 2.0, 0.01)
+
+
+## Same ground-anchoring invariant, but for potato specifically -- the crop
+## actually reported broken, so the fix must hold for it, not just carrot.
+func test_potato_roots_bottom_edge_also_stays_on_the_ground_line():
+	marker.crop_id = "potato"
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS * 0.5)
+	assert_almost_eq(marker._root.offset.y + marker._root.region_rect.size.y, 0.0, 0.01)

@@ -1552,13 +1552,16 @@ func _try_harvest_peak_fruit() -> bool:
 
 ## Authority-only: on the rising edge of the kick input (default K -- see
 ## Keybindings), delivers a real one-time momentum (Kick.KICK_MOMENTUM_KG_M_S)
-## to the nearest liftable stone in reach (docs/concept/stone.md). Reuses
-## PICKUP_RADIUS and EarthChunkManager.nearest_liftable_stone_near -- the
-## SAME nearby-target-finding convention pickup/dispersion already use --
-## rather than a new proximity query. A stone at or above leg mass
-## (Kick.is_kickable) is too heavy for a kick to move at all; a lighter one
-## flies a distance that scales with the delivered momentum vs. its own
-## mass, exactly Throwable.impact_knockback's reasoning.
+## to the nearest kickable PHYSICAL OBJECT in reach -- a liftable stone
+## (docs/concept/stone.md) OR a dropped item with a real, modeled mass (e.g.
+## a pulled wild carrot/potato, docs/concept/wild_crops.md's "a real physical
+## entity, not just an inventory grant"), whichever is genuinely closer.
+## Reuses PICKUP_RADIUS and EarthChunkManager.nearest_liftable_stone_near --
+## the SAME nearby-target-finding convention pickup/dispersion already use --
+## rather than a new proximity query for the stone half. An object at or
+## above leg mass (Kick.is_kickable) is too heavy for a kick to move at all;
+## a lighter one flies a distance that scales with the delivered momentum
+## vs. its own mass, exactly Throwable.impact_knockback's reasoning.
 func _kick_step() -> void:
 	var kick_pressed := (
 		Input.is_action_pressed("kick") if _controlled_locally() else _pending_kick_pressed
@@ -1569,20 +1572,55 @@ func _kick_step() -> void:
 		return
 
 	var stone: Node2D = _chunk_manager.nearest_liftable_stone_near(position, PICKUP_RADIUS)
-	if stone == null:
+	var stone_mass := StoneSize.mass_kg_for(stone.diameter_cm) if stone != null else 0.0
+	var stone_kickable := stone != null and Kick.is_kickable(stone_mass)
+	var stone_distance := position.distance_to(stone.position) if stone_kickable else INF
+
+	var dropped_item := _nearest_kickable_dropped_item_near(position, PICKUP_RADIUS)
+	var dropped_distance := position.distance_to(dropped_item.position) if dropped_item != null else INF
+
+	if not stone_kickable and dropped_item == null:
 		return
-	var mass := StoneSize.mass_kg_for(stone.diameter_cm)
-	if not Kick.is_kickable(mass):
-		return
-	var landing_position := Kick.landing_position(position, stone.position, mass)
-	# The leg's momentum is conserved into the kicked stone (see kick.gd's
-	# own doc comment: exit velocity = KICK_MOMENTUM_KG_M_S / stone mass, so
-	# the stone's own momentum at landing is exactly KICK_MOMENTUM_KG_M_S
-	# again) -- the same real momentum a thrown stone delivers via
+
+	# The leg's momentum is conserved into the kicked object (see kick.gd's
+	# own doc comment: exit velocity = KICK_MOMENTUM_KG_M_S / its own mass, so
+	# its own momentum at landing is exactly KICK_MOMENTUM_KG_M_S again) --
+	# the same real momentum a thrown stone delivers via
 	# _resolve_stone_impact_on_obstacles above, just from a kick instead of
-	# a throw.
-	_resolve_stone_impact_on_obstacles(landing_position, Kick.KICK_MOMENTUM_KG_M_S)
-	stone.position = landing_position
+	# a throw. Whichever candidate is genuinely nearer wins -- a farther
+	# stone should not always take priority over a nearer dropped item just
+	# because stones were the first kickable thing this game had.
+	if stone_kickable and stone_distance <= dropped_distance:
+		var landing_position := Kick.landing_position(position, stone.position, stone_mass)
+		_resolve_stone_impact_on_obstacles(landing_position, Kick.KICK_MOMENTUM_KG_M_S)
+		stone.position = landing_position
+	else:
+		var mass: float = dropped_item.item_stack.item.mass_kg
+		var landing_position := Kick.landing_position(position, dropped_item.position, mass)
+		_resolve_stone_impact_on_obstacles(landing_position, Kick.KICK_MOMENTUM_KG_M_S)
+		dropped_item.position = landing_position
+
+
+## Nearest DroppedItem within `radius` whose real item mass (Item.mass_kg) is
+## light enough for Kick.is_kickable -- an item with no modeled mass yet
+## (0.0, item.gd's own "not modeled" convention, still most food/material
+## items) is deliberately excluded, the same as a stone at/above leg mass:
+## kicking something with no real mass would be meaningless under the shared
+## momentum model (docs/concept/materials.md).
+func _nearest_kickable_dropped_item_near(from: Vector2, radius: float) -> DroppedItem:
+	var nearest: DroppedItem = null
+	var nearest_distance := radius
+	for item in get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
+		if item.is_queued_for_deletion() or item.item_stack == null:
+			continue
+		var mass: float = item.item_stack.item.mass_kg
+		if mass <= 0.0 or not Kick.is_kickable(mass):
+			continue
+		var distance := from.distance_to(item.position)
+		if distance <= nearest_distance:
+			nearest = item
+			nearest_distance = distance
+	return nearest
 
 
 ## Authority-only: the fishing minigame (see FishingSession / concept/fishing.md).
