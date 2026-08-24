@@ -433,6 +433,7 @@ revocation list" above):
 | license_id | product_mask | expiry (unix / date) | purpose |
 |---|---|---|---|
 | 90001 | 1 (base game) | 1788134400 / 2026-08-31 | Public 7-day trial key, published in `README.md`'s "License Key" section |
+| 1 | all 64 bits set (every product/DLC) | 0 / never | Owner/developer key, local testing only. The code itself is deliberately **not** written here (this doc is pushed to the shared remote) — it lives only in the two local `license.txt` files it was written to. Not for distribution. |
 
 **Still left to the user, by design** (this repo intentionally contains
 no *other* real signed serials beyond the public trial key above):
