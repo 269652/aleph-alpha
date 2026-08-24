@@ -33,8 +33,8 @@ func after_each():
 	gate.free()
 
 
-func _sign_code(product_mask: int, license_id: int) -> String:
-	var payload := SerialCodec.encode_payload(product_mask, license_id)
+func _sign_code(product_mask: int, license_id: int, github_user_id: int = 0) -> String:
+	var payload := SerialCodec.encode_payload(product_mask, license_id, 0, github_user_id)
 	var context := HashingContext.new()
 	context.start(HashingContext.HASH_SHA256)
 	context.update(payload)
@@ -126,3 +126,24 @@ func test_check_licensed_sets_is_licensed_false_on_an_invalid_code_without_quitt
 	assert_false(gate.is_licensed)
 	assert_false(result.licensed)
 	assert_push_error("License check failed:")
+
+
+# -- GitHub-bound personal keys (see docs/licensing.md's "Personal /
+# GitHub-bound keys") -------------------------------------------------
+
+func test_evaluate_reports_github_user_id_zero_for_an_unbound_code():
+	var code := _sign_code(1, 1)
+	assert_eq(gate.evaluate(code).github_user_id, 0)
+
+
+func test_evaluate_reports_the_bound_github_user_id():
+	var code := _sign_code(1, 1, 123456)
+	var result := gate.evaluate(code)
+	assert_true(result.licensed)
+	assert_eq(result.github_user_id, 123456)
+
+
+func test_check_licensed_sets_the_github_user_id_flag():
+	var code := _sign_code(1, 1, 123456)
+	gate.check_licensed(code)
+	assert_eq(gate.github_user_id, 123456)

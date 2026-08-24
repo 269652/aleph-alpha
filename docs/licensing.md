@@ -188,6 +188,65 @@ freshly generated one in a future patch — existing customers' old serials
 embedded alongside the new one, while new serials go out signed by the new
 key.
 
+## Personal / GitHub-bound keys
+
+An ordinary serial (everything above) is a bearer credential -- anyone who
+has the text can use it, indistinguishable from the person it was issued
+to. For a personal key you want harder to casually pass around (e.g. an
+alpha tester key, or a "here's a 7-day trial, upgrade to a real key
+that's yours" flow), a serial can optionally be bound to a specific
+GitHub account, verified online at launch.
+
+**Payload extension.** The 17-byte payload above gets an OPTIONAL 8 more
+bytes: a GitHub numeric user id (not a login -- logins are renameable,
+ids aren't), format version 2. Omitting it (version 1, the original
+17-byte layout, byte-identical to every already-issued serial) keeps a
+key fully offline and unbound, exactly as today -- this is opt-in per
+serial, not a replacement for the existing scheme.
+
+**Verification (in the shipped game).** `LicenseGate.evaluate()`
+decoding a bound key means "structurally valid" (signature checks out,
+not expired) -- NOT yet "this player may play". World's boot flow then
+runs GitHub's OAuth **Device Flow**
+(docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow):
+
+1. The game requests a device/user code pair from GitHub using only a
+   public Client ID (Device Flow is a *public client* flow specifically
+   so a distributed app never needs a client secret -- nothing secret is
+   ever embedded or transmitted).
+2. The player is shown the code and a URL, approves in their own
+   browser, on their own device.
+3. The game polls until GitHub returns an access token, then calls
+   `GET /user` with it and compares the real authenticated numeric id
+   against the one baked into the serial.
+4. The resulting access token is cached (`GithubTokenStore`,
+   `user://github_token.txt`) so this isn't an interactive browser
+   round-trip on *every* launch -- but every launch still re-hits
+   `GET /user` with whatever token is cached to reconfirm identity. This
+   is what actually makes it harder to share than a bearer credential:
+   the check runs every time, not once, and a revoked/expired cached
+   token falls back to a fresh interactive approval rather than quietly
+   passing.
+5. No internet at launch, for a key that IS bound, fails closed -- same
+   philosophy as every other check in this doc. An unbound key never
+   makes a network call at all.
+
+**Minting a bound key.** `tools/generate_serial.gd --github-login
+<username>` resolves the login to its numeric id via one unauthenticated
+call to GitHub's public API (`GET /users/{login}`, no token needed to
+read a public profile) at mint time, so the person minting the key only
+ever has to remember a login, never look up a numeric id by hand.
+
+**What this does and doesn't defend against.** Same honest framing as
+integrity verification above: this raises the cost of casual sharing
+(the sharer would have to also share ongoing control of their GitHub
+account, or personally approve the device code for someone else every
+time their cached token lapses) -- it does not stop two people who
+fully trust each other and are willing to do that. It also adds a real
+dependency on GitHub's uptime and on the player having a GitHub account
+at all, which is exactly why this is opt-in per serial rather than the
+only way to license the game.
+
 ## Source/build integrity verification
 
 Separate concern from serial verification, same trust root: instead of
@@ -314,6 +373,17 @@ owner controls, but it means:
 - Never copy `my_private_key.pem` into an exported build's folder for a
   real release — that would ship the ability to forge signatures to
   every player. It belongs only on the developer's own machine.
+
+**GitHub OAuth App credentials** (see "Personal / GitHub-bound keys"
+above): the `.env` file holding `GITHUB_OAUTH_ID` (the Device Flow
+Client ID) and `GITHUB_OAUTH_SECRET` is gitignored the same way. Only
+`GITHUB_OAUTH_ID` is ever actually used (embedded as
+`github_device_auth.gd`'s `CLIENT_ID` constant, since Device Flow needs
+no secret and it's safe to embed a public client id in shipped source).
+`GITHUB_OAUTH_SECRET`, if one exists in that file, is never read by
+anything in this repo and must never be committed or embedded — a
+leaked client_id+secret pair could be used to impersonate this OAuth App
+in a *different*, secret-requiring flow against real GitHub users.
 
 ## Status
 
@@ -459,6 +529,58 @@ Implemented and live-wired on `main`:
   "reinstall from original source" noise on every non-editor-Play dev
   launch. Fixed by mirroring the same bypass in `world.gd`; changes
   nothing for a real shipped build, where the feature is always false.
+- **Personal / GitHub-bound keys** (see the section above) --
+  implemented and live-wired:
+  - `serial_codec.gd` -- optional V2 payload with a bound GitHub user id,
+    byte-identical V1 output when omitted (17/17 tests, including that
+    every already-issued serial's format is unaffected).
+  - `serial_verifier.gd`/`license_gate.gd` -- verify either payload size,
+    surface `github_user_id` through `evaluate()`/`check_licensed()`
+    (14/14, 11/11).
+  - `github_device_flow.gd` -- pure response parsing/decision logic for
+    Device Flow (device-code response, token-poll response incl.
+    pending/slow_down/expired/denied, user response, and the actual
+    bound-id-matches-authenticated-id check) -- fully unit-tested with
+    fake JSON dictionaries, no real network in tests (16/16).
+  - `github_token_store.gd` -- caches/clears the access token at
+    `user://github_token.txt`, same shape as `LicenseStore` (7/7).
+  - `github_device_auth.gd` -- the real HTTPRequest glue (request device
+    code, poll for token, fetch `/user`) plus `run_device_flow()`/
+    `run_fetch_user_id()` async wrappers `await`-friendly callers use.
+    No GUT test file (real network calls against real GitHub endpoints
+    aren't something a headless suite should make) -- same "engine side
+    effects aren't unit-tested" boundary as `settings_overlay.gd`/
+    `world.gd`. Live-verified instead: a real (disabled-Device-Flow)
+    request against the real Client ID returned GitHub's own
+    `device_flow_disabled` error with the exact expected body shape,
+    confirming the request format itself is correct; full interactive
+    approval needs Device Flow enabled on the OAuth App first (see "Not
+    done" below).
+  - `scenes/github_verify_overlay.gd` -- the in-game "waiting for GitHub
+    approval" screen, purely glue like `license_gate_overlay.gd`.
+  - `world.gd`'s `_ready()` awaits identity verification (a normal,
+    supported GDScript pattern) before continuing boot when a checked
+    key's `github_user_id != 0`; an unbound key's boot path is completely
+    unaffected (no `await`, no network call).
+  - `tools/generate_serial.gd --github-login <username>` -- resolves a
+    login to its numeric id via GitHub's public API at mint time.
+    Live-verified end to end: minted a real key bound to GitHub's own
+    public `octocat` account, confirmed it verifies against the real
+    production `LicenseGate` in both single-line and real-multi-line-
+    pasted form.
+
+**Not done / left to the user:**
+
+1. **Enable Device Flow on the GitHub OAuth App.** A live request against
+   the real Client ID currently returns `device_flow_disabled` --
+   GitHub, Settings → Developer settings → OAuth Apps → this app → check
+   "Enable Device Flow" → Update Application. Nothing else blocks this;
+   the whole flow up to and including this toggle has been live-verified
+   against real GitHub endpoints.
+2. Mint and test a real personal key bound to an actual player's GitHub
+   account (the `octocat` test above only verified minting + structural
+   verification, not a real interactive approval, since that step
+   requires a human in a real browser).
 
 **Done** (steps 1-3 of what was originally left to the user):
 

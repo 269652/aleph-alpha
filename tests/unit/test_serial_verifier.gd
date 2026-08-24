@@ -31,8 +31,8 @@ func _hash_of(payload: PackedByteArray) -> PackedByteArray:
 	return ctx.finish()
 
 
-func _sign_with(private_key: CryptoKey, product_mask: int, license_id: int, expiry_unix: int = 0) -> String:
-	var payload := SerialCodec.encode_payload(product_mask, license_id, expiry_unix)
+func _sign_with(private_key: CryptoKey, product_mask: int, license_id: int, expiry_unix: int = 0, github_user_id: int = 0) -> String:
+	var payload := SerialCodec.encode_payload(product_mask, license_id, expiry_unix, github_user_id)
 	var signature := Crypto.new().sign(HashingContext.HASH_SHA256, _hash_of(payload), private_key)
 	return SerialBase32.encode(payload + signature)
 
@@ -108,3 +108,31 @@ func test_reports_a_reason_string_on_failure_for_logs_not_the_player():
 func test_a_valid_result_reports_no_reason():
 	var code := _sign_code(1, 1)
 	assert_eq(verifier.verify_code(code).reason, "")
+
+
+# -- GitHub-bound personal keys (see docs/licensing.md's "Personal /
+# GitHub-bound keys") -- longer V2 payload, still verifies end to end. --
+
+func test_a_github_bound_code_verifies_and_reports_the_bound_id():
+	var code := _sign_with(_private_key, 0b1, 111, 0, 123456)
+	var result := verifier.verify_code(code)
+	assert_true(result.valid)
+	assert_eq(result.github_user_id, 123456)
+
+
+func test_an_unbound_code_reports_github_user_id_zero():
+	var code := _sign_code(1, 1)
+	assert_eq(verifier.verify_code(code).github_user_id, 0)
+
+
+func test_a_tampered_github_bound_payload_fails_verification():
+	var code := _sign_with(_private_key, 0b1, 111, 0, 123456)
+	var flipped := "A" if code[1] != "A" else "B"
+	var tampered := code.left(1) + flipped + code.substr(2)
+	assert_false(verifier.verify_code(tampered).valid)
+
+
+func test_a_github_bound_code_signed_by_a_different_key_is_rejected():
+	var other_private := Crypto.new().generate_rsa(2048)
+	var code := _sign_with(other_private, 1, 1, 0, 123456)
+	assert_false(verifier.verify_code(code).valid)

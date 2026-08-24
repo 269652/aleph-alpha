@@ -31,6 +31,11 @@ const KeyFingerprint = preload("res://src/licensing/key_fingerprint.gd")
 ## edit to flip than genuinely defeating the RSA check.
 var is_licensed := false
 var product_mask := 0
+## 0 unless the checked code is a personal/GitHub-bound key (docs/licensing.md's
+## "Personal / GitHub-bound keys") -- World reads this after check_licensed()
+## to decide whether GitHub identity verification is needed at all before
+## letting a structurally-valid-but-bound code actually count as licensed.
+var github_user_id := 0
 
 var _verifier: SerialVerifier
 
@@ -110,6 +115,7 @@ func check_licensed(code_override: String = "") -> Dictionary:
 	var result := evaluate(code)
 	is_licensed = result.licensed
 	product_mask = result.product_mask
+	github_user_id = result.github_user_id
 	if not result.licensed:
 		push_error("License check failed: %s" % result.reason)
 		printerr(
@@ -121,11 +127,24 @@ func check_licensed(code_override: String = "") -> Dictionary:
 
 ## The pure decision: given whatever code was read (possibly ""), does
 ## this game session get to run? No file I/O, no quit() -- fully testable.
-## Returns {"licensed": bool, "product_mask": int, "reason": String}.
+## Returns {"licensed": bool, "product_mask": int, "github_user_id": int,
+## "reason": String}. `github_user_id` is 0 unless the code is a personal/
+## GitHub-bound key (docs/licensing.md's "Personal / GitHub-bound keys") --
+## note that "licensed" here means "structurally valid" (signature checks
+## out, not expired), NOT "identity verified": a bound code with a
+## nonzero github_user_id still needs the caller to separately confirm
+## the player controls that GitHub account before actually treating them
+## as licensed (see world.gd's boot flow) -- evaluate() itself never makes
+## network calls.
 func evaluate(code: String) -> Dictionary:
 	if code.is_empty():
-		return {"licensed": false, "product_mask": 0, "reason": "no license code found"}
+		return {"licensed": false, "product_mask": 0, "github_user_id": 0, "reason": "no license code found"}
 	var result := _verifier.verify_code(code)
 	if not result.valid:
-		return {"licensed": false, "product_mask": 0, "reason": result.reason}
-	return {"licensed": true, "product_mask": result.product_mask, "reason": ""}
+		return {"licensed": false, "product_mask": 0, "github_user_id": 0, "reason": result.reason}
+	return {
+		"licensed": true,
+		"product_mask": result.product_mask,
+		"github_user_id": result.github_user_id,
+		"reason": "",
+	}

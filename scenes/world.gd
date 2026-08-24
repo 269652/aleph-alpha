@@ -33,6 +33,10 @@ const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const SettingsOverlay = preload("res://scenes/settings_overlay.gd")
 const LicenseGateOverlay = preload("res://scenes/license_gate_overlay.gd")
 const LicenseStore = preload("res://src/licensing/license_store.gd")
+const GithubVerifyOverlay = preload("res://scenes/github_verify_overlay.gd")
+const GithubDeviceAuth = preload("res://src/licensing/github_device_auth.gd")
+const GithubDeviceFlow = preload("res://src/licensing/github_device_flow.gd")
+const GithubTokenStore = preload("res://src/licensing/github_token_store.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
 const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
@@ -50,6 +54,13 @@ const EscapeAction = preload("res://src/ui/escape_action.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const WorldReset = preload("res://src/world/world_reset.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
+const Compass = preload("res://src/gameplay/compass.gd")
+const MapProjection = preload("res://src/world/map_projection.gd")
+const Spyglass = preload("res://src/gameplay/spyglass.gd")
+const WeatherForecast = preload("res://src/gameplay/weather_forecast.gd")
+const SeasonAlmanac = preload("res://src/world/season_almanac.gd")
+const FieldJournal = preload("res://src/emergence/field_journal.gd")
+const RegionalTrade = preload("res://src/emergence/regional_trade.gd")
 
 ## How many hotbar slots the HUD row draws. Derived from Player's own
 ## hotbar size (see Player.HOTBAR_SLOT_COUNT / Hotbar) rather than duplicated,
@@ -206,10 +217,18 @@ var _crafting_window: CraftingWindow
 var _skill_window: SkillTreeWindow
 var _settings_overlay: SettingsOverlay
 var _license_gate_overlay: LicenseGateOverlay
+var _github_verify_overlay: GithubVerifyOverlay
 var _main_menu: MainMenu
 var _menu_backdrop: ColorRect
 var _menu_background: TextureRect
 var _loading_overlay: LoadingOverlay
+## One-shot guard around the joining-client version of the loading stall (see
+## _run_initial_client_chunk_load) -- true once that async chunk-load task has
+## actually been kicked off, so the per-frame _client_process never starts a
+## second overlapping one; _done flips true once it actually finishes, which
+## is when _client_process resumes its own plain per-frame update() calls.
+var _initial_client_chunk_load_task_running := false
+var _initial_client_chunk_load_done := false
 ## Shared dark/rounded UI theme (see UiTheme), assigned to every window/menu so
 ## the whole UI reads as one styled system rather than raw grey boxes.
 var _ui_theme := UiTheme.new().build_theme()
@@ -337,13 +356,23 @@ func _ready() -> void:
 	if not OS.has_feature("editor"):
 		SelfIntegrity.require_verified()
 	var license_result: Dictionary = (
-		{"licensed": true, "product_mask": LicenseGate.product_mask, "reason": ""}
+		{"licensed": true, "product_mask": LicenseGate.product_mask, "github_user_id": LicenseGate.github_user_id, "reason": ""}
 		if OS.has_feature("editor")
 		else LicenseGate.check_licensed()
 	)
 	if not license_result.licensed:
 		_show_license_gate()
 		return
+	# Personal/GitHub-bound key (docs/licensing.md's "Personal / GitHub-
+	# bound keys"): structurally valid (signature checks out, not
+	# expired) isn't the same as identity-verified yet -- await the real
+	# check before letting boot continue. _ready() awaiting mid-function
+	# is a normal, supported GDScript pattern; the node is still
+	# considered ready while this is pending.
+	if license_result.github_user_id != 0:
+		var identity_ok: bool = await _verify_github_identity(license_result.github_user_id)
+		if not identity_ok:
+			return
 
 	# Area2D's input_event (used by DroppedItem's click-to-pick-up) never
 	# fires unless the viewport's physics picking is explicitly enabled -- it
@@ -498,7 +527,7 @@ func _on_menu_start_requested(
 	_wipe_persisted_world()
 	if mode == "host":
 		_start_server()
-	_spawn_local_singleplayer()
+	await _spawn_local_singleplayer()
 	_dismiss_main_menu()
 
 
@@ -534,7 +563,7 @@ func _wipe_persisted_world() -> void:
 ## unlike _on_menu_start_requested. Deliberately does NOT wipe anything.
 func _on_menu_load_requested() -> void:
 	await _show_loading_overlay("Loading your world...")
-	_spawn_local_singleplayer_from_save()
+	await _spawn_local_singleplayer_from_save()
 	_dismiss_main_menu()
 
 
@@ -593,6 +622,26 @@ func _show_loading_overlay(text: String) -> void:
 	_loading_overlay.show_with_text(text)
 	await get_tree().process_frame
 	await get_tree().process_frame
+
+
+## Passed as the on_progress Callable to every EarthChunkManager.
+## update_with_progress call site (New Game/Load Game/Join) so the overlay's
+## status line shows the same real "N / M chunks" progress regardless of
+## which entry point is loading (see LoadingOverlay.set_progress).
+func _on_chunk_load_progress(loaded: int, total: int) -> void:
+	_loading_overlay.set_progress(loaded, total)
+
+
+## The joining-client (and New Game/Load Game's own second, now-cheap) chunk
+## load, run from _client_process -- see its own call site's doc comment for
+## why this is a separate fire-and-forget function rather than an inline
+## await. Hides the overlay itself once done, the same single hide point the
+## old code had, still idempotent (a no-op if already hidden).
+func _run_initial_client_chunk_load(player_tile: Vector2i) -> void:
+	await _chunk_manager.update_with_progress(player_tile, _on_chunk_load_progress)
+	_initial_client_chunk_load_done = true
+	if _loading_overlay.visible:
+		_loading_overlay.hide_overlay()
 
 
 func _start_server() -> void:
@@ -825,6 +874,70 @@ func _on_license_gate_verify_requested(code: String) -> void:
 		get_tree().reload_current_scene()
 	else:
 		_license_gate_overlay.show_status("That key isn't valid. Check for typos and try again.")
+
+
+## The identity-verification half of a personal/GitHub-bound key (see
+## _ready(), docs/licensing.md's "Personal / GitHub-bound keys"). Shows
+## GithubVerifyOverlay for the duration, tries a cached token first (no
+## interactive step at all if it still checks out -- this is what makes
+## it a genuine per-launch identity check rather than a one-time flag,
+## without forcing a browser round-trip on every single launch), and
+## falls back to a fresh interactive device flow otherwise. A token
+## GitHub itself rejects gets cleared and the flow retries once from
+## scratch. Returns true only once GET /user's real id matches the bound
+## one; the overlay is left showing a terminal message on any failure
+## (mismatched identity, denied, expired, no network) rather than
+## auto-retrying forever.
+func _verify_github_identity(bound_user_id: int) -> bool:
+	_github_verify_overlay = GithubVerifyOverlay.new()
+	_github_verify_overlay.theme = _ui_theme
+	_github_verify_overlay.set_anchors_preset(Control.PRESET_CENTER)
+	_github_verify_overlay.offset_left = -240.0
+	_github_verify_overlay.offset_top = -150.0
+	_github_verify_overlay.offset_right = 240.0
+	_github_verify_overlay.offset_bottom = 150.0
+	_ui.add_child(_github_verify_overlay)
+
+	var auth := GithubDeviceAuth.new()
+	add_child(auth)
+	auth.user_code_ready.connect(func(user_code: String, verification_uri: String):
+		_github_verify_overlay.show_device_code(user_code, verification_uri)
+		_github_verify_overlay.show_status("Waiting for you to approve in your browser...")
+	)
+
+	var token_path := GithubTokenStore.default_path()
+	var token := GithubTokenStore.read_token(token_path)
+	# At most two passes: one retry if a cached token turns out to be
+	# stale, then a fresh interactive flow -- never an unbounded loop.
+	for attempt in 2:
+		if token.is_empty():
+			_github_verify_overlay.show_status("Starting GitHub sign-in...")
+			var flow_result: Dictionary = await auth.run_device_flow()
+			if not flow_result.ok:
+				push_error("GitHub device flow failed: %s" % flow_result.reason)
+				_github_verify_overlay.show_status("Could not verify your GitHub identity. Please restart to try again.")
+				auth.queue_free()
+				return false
+			token = flow_result.access_token
+			GithubTokenStore.write_token(token_path, token)
+
+		_github_verify_overlay.show_status("Confirming your identity...")
+		var user_result: Dictionary = await auth.run_fetch_user_id(token)
+		if not user_result.ok:
+			GithubTokenStore.clear_token(token_path)
+			token = ""
+			continue
+
+		auth.queue_free()
+		if GithubDeviceFlow.identity_satisfies_binding(bound_user_id, user_result.user_id):
+			_github_verify_overlay.queue_free()
+			return true
+		_github_verify_overlay.show_status("This key is registered to a different GitHub account.")
+		return false
+
+	_github_verify_overlay.show_status("Could not verify your GitHub identity. Please restart to try again.")
+	auth.queue_free()
+	return false
 
 
 ## The already-in-game "change your license key" path (SettingsOverlay's
@@ -1363,11 +1476,21 @@ func _build_hover_tooltip() -> void:
 ## once nothing else claimed the cursor.
 func _update_hover_tooltip() -> void:
 	var mouse_world := get_global_mouse_position()
-	# The finder only ever picks a target within HOVER_RADIUS_PX of the cursor,
-	# so skip the expensive per-marker work (get_display_name/get_hover_actions
-	# + dict alloc) for anything farther away -- turns an O(all loaded trees/
+	# The finder only ever picks a target within HOVER_RADIUS_PX of the cursor
+	# (relaxed by Spyglass.effective_hover_radius when a Spyglass is equipped
+	# -- docs/concept/wayfinding.md's Spyglass item, no new "detection" stat,
+	# just the existing hover system resolving from further away), so skip
+	# the expensive per-marker work (get_display_name/get_hover_actions +
+	# dict alloc) for anything farther away -- turns an O(all loaded trees/
 	# stones/creatures) scan into O(the handful under the cursor).
-	var scan_radius_sq := HoverTargetFinder.HOVER_RADIUS_PX * HoverTargetFinder.HOVER_RADIUS_PX
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	var has_spyglass: bool = (
+		local_player != null
+		and local_player.equipped_item != null
+		and local_player.equipped_item.id == "spyglass"
+	)
+	var scan_radius := Spyglass.effective_hover_radius(HoverTargetFinder.HOVER_RADIUS_PX, has_spyglass)
+	var scan_radius_sq := scan_radius * scan_radius
 	var candidates: Array = []
 	for marker in get_tree().get_nodes_in_group(HoverTargetFinder.GROUP_NAME):
 		if mouse_world.distance_squared_to(marker.position) > scan_radius_sq:
@@ -1377,7 +1500,7 @@ func _update_hover_tooltip() -> void:
 		)
 		candidates.append({"position": marker.position, "name": marker.get_display_name(), "actions": actions})
 
-	var info := _hover_target_finder.info_under(mouse_world, candidates)
+	var info := _hover_target_finder.info_under(mouse_world, candidates, scan_radius)
 	var found_name: String = info.get("name", "")
 	var found_actions: Array = info.get("actions", [])
 	if found_name == "":
@@ -1617,6 +1740,9 @@ func _on_console_command(command: String, args: Array) -> void:
 					+ "  /quests <entity_id>  /emergence"
 					+ "  /spawn <species> [count]  /give <item_id> [count]"
 					+ "  /craft <recipe_id>  /gold <amount>  /village  /species  /help"
+					+ "  /compass  /map  /weatherglass  /almanac  /deed"
+					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
+					+ "  /journal <entity_id>"
 				)
 			)
 		"species":
@@ -1664,6 +1790,22 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_gold_command(args, local_player)
 		"village":
 			_handle_village_command(local_player)
+		"compass":
+			_handle_compass_command(local_player)
+		"map":
+			_handle_map_command(local_player)
+		"weatherglass":
+			_handle_weatherglass_command(local_player)
+		"almanac":
+			_handle_almanac_command(local_player)
+		"deed":
+			_handle_deed_command(local_player)
+		"ledger":
+			_handle_ledger_command(args, local_player)
+		"charter":
+			_handle_charter_command(args, local_player)
+		"journal":
+			_handle_journal_command(args, local_player)
 		_:
 			_dev_console.log_line("Unknown command: /%s (try /help)" % command)
 
@@ -2022,6 +2164,253 @@ func _handle_village_command(local_player: Player) -> void:
 	_dev_console.log_line("Teleported to the nearest village.")
 
 
+## /compass -- requires "rough_compass" or (fine) "compass" (docs/concept/
+## wayfinding.md's Compass item). Bearing toward the world's own spawn point
+## (EarthChunkManager.spawn_chunk_coord(), "point me home" -- this item's own
+## natural default target before the player ever sets a waypoint). The
+## chunk-coord -> pixel conversion reuses the exact same
+## chunk_coord*CHUNK_SIZE + half-chunk-tile-offset pattern
+## EarthChunkManager already uses elsewhere (e.g. its worm-patch climate
+## sampling), fed through this file's own existing tile -> pixel-center
+## helper (_spawn_position_for_tile) rather than a third formula.
+func _handle_compass_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a compass for.")
+		return
+	var has_fine: bool = local_player.inventory.has("compass")
+	if not has_fine and not local_player.inventory.has("rough_compass"):
+		_dev_console.log_line("You don't have a compass.")
+		return
+
+	var chunk_coord := _chunk_manager.spawn_chunk_coord()
+	var centre_tile := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var target_world_position := _spawn_position_for_tile(centre_tile)
+	var bearing := Compass.bearing_degrees(local_player.position, target_world_position)
+	var reading := Compass.reading_for(bearing, has_fine)
+	_dev_console.log_line("Compass: %.1f degrees toward home." % reading)
+
+
+## /map -- requires "map" (docs/concept/wayfinding.md's Map item). Visual map
+## rendering is explicitly out of scope for this pass regardless -- a
+## text-only report is the intended MVP: how many chunks have been explored,
+## plus which real, already-founded settlements (EventStore's own
+## "settlement_founded" events -- the same real source
+## EarthChunkManager._known_settlement_ids reads internally, just read here
+## through the already-public event_store() accessor, the same "/why"
+## precedent every other command in this file follows) fall inside that
+## explored set, via MapProjection.landmarks_visible_on_map.
+func _handle_map_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a map for.")
+		return
+	if not local_player.inventory.has("map"):
+		_dev_console.log_line("You don't have a map.")
+		return
+
+	var explored: Array = _chunk_manager.explored_chunks()
+	_dev_console.log_line("Map: %d chunk(s) explored." % explored.size())
+
+	var known_landmarks: Array = []
+	for event in _chunk_manager.event_store().events_of_type("settlement_founded"):
+		if event.actors.is_empty():
+			continue
+		var settlement_id: String = event.actors[0]
+		known_landmarks.append(
+			{"chunk_coord": RegionalTrade.chunk_coord_of(settlement_id), "id": settlement_id}
+		)
+
+	var visible: Array = MapProjection.landmarks_visible_on_map(explored, known_landmarks)
+	if visible.is_empty():
+		_dev_console.log_line("No known settlements fall inside explored territory yet.")
+		return
+	var ids: Array = []
+	for landmark in visible:
+		ids.append(landmark.get("id"))
+	_dev_console.log_line("Settlements visible: %s" % ", ".join(ids))
+
+
+## /weatherglass -- requires "weather_glass" (docs/concept/wayfinding.md's
+## Weather glass item). Current sky plus WeatherForecast's own
+## instrument-grade-vague read of what's coming, never an exact-hour
+## cheat-omniscient forecast.
+func _handle_weatherglass_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a weather glass for.")
+		return
+	if not local_player.inventory.has("weather_glass"):
+		_dev_console.log_line("You don't have a weather glass.")
+		return
+
+	var current := _chunk_manager.current_weather(local_player.position)
+	var upcoming := _chunk_manager.upcoming_weather(local_player.position)
+	_dev_console.log_line(
+		"Weather glass: %s now. %s." % [current, WeatherForecast.forecast_label(current, upcoming)]
+	)
+
+
+## /almanac -- requires "star_chart" (docs/concept/wayfinding.md's Star
+## chart item). Current season, the next one, and real days remaining until
+## it turns.
+func _handle_almanac_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a star chart for.")
+		return
+	if not local_player.inventory.has("star_chart"):
+		_dev_console.log_line("You don't have a star chart.")
+		return
+
+	var current := _chunk_manager.current_season()
+	var next_season := SeasonAlmanac.next_season(current)
+	var days := SeasonAlmanac.days_until_next_season(_chunk_manager.world_age_seconds())
+	_dev_console.log_line(
+		"Almanac: %s now, %s next (%.1f days)." % [current, next_season, days]
+	)
+
+
+## /deed -- requires "deed" (docs/concept/player_citizenship.md's Deed
+## item). Claims the plot the player currently stands on -- a marked,
+## unbuilt plot is a valid Deed target per that doc's own Deed section,
+## alongside an existing structure; no "nearest structure" query exists
+## yet, a named, in-spec scoping choice for this pass, not a shortcut
+## around the design. The tile -> chunk-coord conversion replicates
+## EarthChunkManager._chunk_coord_for_tile's own real formula exactly
+## (floori(tile / CHUNK_SIZE) per axis) rather than inventing a different one.
+func _handle_deed_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to claim property for.")
+		return
+	if not local_player.inventory.has("deed"):
+		_dev_console.log_line("You don't have a deed.")
+		return
+
+	var tile := local_player.current_tile()
+	var chunk := Vector2i(
+		floori(float(tile.x) / EarthChunkManager.CHUNK_SIZE),
+		floori(float(tile.y) / EarthChunkManager.CHUNK_SIZE)
+	)
+	var property_id := EntityRef.for_kind("house", "player_claim_%d_%d" % [chunk.x, chunk.y])
+	var household := _chunk_manager.claim_property_with_deed(property_id)
+	_dev_console.log_line("Claimed %s for household %s." % [property_id, household.id])
+
+
+## /ledger propose <type> <counterparty_id> <consideration> <deadline_seconds>
+## /ledger accept|fulfill|breach <contract_id>
+## -- requires "ledger" (docs/concept/player_citizenship.md's Ledger item).
+## Obligations authoring is out of scope for this pass -- propose always
+## sends an empty obligations array, a named gap, not an oversight.
+func _handle_ledger_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to use a ledger for.")
+		return
+	if not local_player.inventory.has("ledger"):
+		_dev_console.log_line("You don't have a ledger.")
+		return
+	if args.is_empty():
+		_dev_console.log_line(
+			"Usage: /ledger propose <type> <counterparty_id> <consideration> <deadline_seconds>"
+			+ "  |  /ledger accept|fulfill|breach <contract_id>"
+		)
+		return
+
+	var sub: String = args[0]
+	match sub:
+		"propose":
+			if args.size() < 5:
+				_dev_console.log_line(
+					"Usage: /ledger propose <type> <counterparty_id> <consideration> <deadline_seconds>"
+				)
+				return
+			var type: String = args[1]
+			var counterparty_id: String = args[2]
+			var consideration: String = args[3]
+			var deadline: float = str(args[4]).to_float()
+			var contract := _chunk_manager.player_propose_contract(
+				type, counterparty_id, [], consideration, deadline
+			)
+			_dev_console.log_line("Proposed contract %s." % contract.id)
+		"accept":
+			if args.size() < 2:
+				_dev_console.log_line("Usage: /ledger accept <contract_id>")
+				return
+			var contract_id: String = args[1]
+			_dev_console.log_line("Accepted: %s" % _chunk_manager.accept_contract(contract_id))
+		"fulfill":
+			if args.size() < 2:
+				_dev_console.log_line("Usage: /ledger fulfill <contract_id>")
+				return
+			var contract_id: String = args[1]
+			_dev_console.log_line("Fulfilled: %s" % _chunk_manager.fulfill_contract(contract_id))
+		"breach":
+			if args.size() < 2:
+				_dev_console.log_line("Usage: /ledger breach <contract_id>")
+				return
+			var contract_id: String = args[1]
+			_dev_console.log_line("Breached: %s" % _chunk_manager.breach_contract(contract_id))
+		_:
+			_dev_console.log_line(
+				"Unknown /ledger action '%s'. Try: propose, accept, fulfill, breach" % sub
+			)
+
+
+## /charter found <type> <counterparty_id> -- requires "charter" (docs/
+## concept/player_citizenship.md's Charter item). No craftable "charter"
+## item id exists yet -- a named, pre-existing gap (none of the other 9
+## wayfinding/citizenship items' registration pass covered this one, per
+## docs/progress.md's own Player Citizenship entry) -- so this command is
+## real and fully wired but currently unreachable by a player until that
+## item is registered.
+func _handle_charter_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to use a charter for.")
+		return
+	if not local_player.inventory.has("charter"):
+		_dev_console.log_line("You don't have a charter.")
+		return
+	if args.size() < 3 or str(args[0]) != "found":
+		_dev_console.log_line("Usage: /charter found <type> <counterparty_id>")
+		return
+
+	var type: String = args[1]
+	var counterparty_id: String = args[2]
+	var institution := _chunk_manager.player_attempt_institution_formation(type, counterparty_id)
+	if institution == null:
+		_dev_console.log_line("Not enough shared history yet.")
+		return
+	_dev_console.log_line("Founded institution %s." % institution.id)
+
+
+## /journal <entity_id> -- requires "field_journal" (docs/concept/
+## player_citizenship.md's Field Journal item). Builds the stores
+## Dictionary FieldJournal.entry_for needs directly from _chunk_manager's
+## own public store accessors (household_store()/institution_store()/
+## world_boss_store()/event_store()) -- the exact same accessors /household,
+## /institution, /boss, and /history already read directly in this file, so
+## no new coordinator method was needed on EarthChunkManager.
+func _handle_journal_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a field journal for.")
+		return
+	if not local_player.inventory.has("field_journal"):
+		_dev_console.log_line("You don't have a field journal.")
+		return
+	if args.is_empty():
+		_dev_console.log_line("Usage: /journal <entity_id>  e.g. /journal settlement:673_127")
+		return
+
+	var entity_id: String = args[0]
+	var stores := {
+		"household_store": _chunk_manager.household_store(),
+		"institution_store": _chunk_manager.institution_store(),
+		"world_boss_store": _chunk_manager.world_boss_store(),
+		"event_store": _chunk_manager.event_store(),
+	}
+	for line in FieldJournal.entry_for(entity_id, stores).split("
+"):
+		_dev_console.log_line(line)
+
+
 ## Spawns a clickable ground item where a creature died or a tree dropped
 ## forage. Only the simulation-owning side (server/singleplayer) holds the
 ## authoritative item layer for now -- ground items aren't replicated yet.
@@ -2248,7 +2637,7 @@ func _update_minimap(player_tile: Vector2i, delta: float) -> void:
 func _on_peer_connected(peer_id: int) -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(peer_id)
-	player.position = _spawn_position_for_tile(_compute_dry_land_spawn_tile())
+	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	_players.add_child(player)
 	# So its pack ages and, once something in it turns, smells (see
@@ -2284,7 +2673,7 @@ func _stats_with_dna(base: Dictionary, dna_stat_modifiers: Dictionary) -> Dictio
 func _spawn_local_singleplayer() -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(multiplayer.get_unique_id())
-	player.position = _spawn_position_for_tile(_compute_dry_land_spawn_tile())
+	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	player.apply_class(
 		_pending_class,
@@ -2332,7 +2721,7 @@ func _spawn_local_singleplayer_from_save() -> void:
 	# own save left off, never re-roll a new random start the way New Game
 	# does).
 	_chunk_manager.load_world_clock()
-	_chunk_manager.update(_tile_for_position(saved_position))
+	await _chunk_manager.update_with_progress(_tile_for_position(saved_position), _on_chunk_load_progress)
 	player.apply_save_dict(save_data)
 	# Restores whatever history and memory a prior session recorded -- the
 	# same "Load Game means exactly where you left off" pillar the player
@@ -2433,7 +2822,7 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 		_geo_coordinates.tile_for_longitude(SPAWN_LONGITUDE, EarthChunkGenerator.WORLD_WIDTH_TILES),
 		_geo_coordinates.tile_for_latitude(SPAWN_LATITUDE, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	)
-	_chunk_manager.update(spawn_tile)
+	await _chunk_manager.update_with_progress(spawn_tile, _on_chunk_load_progress)
 	var dry_land_tile := _find_dry_land_spawn(spawn_tile)
 	# The real dry-land spawn tile is also the center of the EASY-difficulty
 	# region (see RegionDifficulty / docs/concept/ecosystem_dynamics.md's
@@ -2779,17 +3168,29 @@ func _client_process(delta: float) -> void:
 		if player != null and not player.is_set_up():
 			player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 
-	_chunk_manager.update(local_player.current_tile())
-	# Covers the joining-client version of the same stall (see
-	# _on_menu_join_requested): unlike New Game/Load Game, a joining client has
-	# no single call site to wrap -- its local player only exists once the
-	# server's own spawn has replicated in, and its first real chunk load
-	# happens right here, on whichever frame that lands on. Idempotent once
-	# already hidden, so this is a no-op for every later frame and for the
-	# New Game/Load Game paths, which have already hidden it themselves by the
-	# time their own local player reaches this point.
-	if _loading_overlay.visible:
-		_loading_overlay.hide_overlay()
+	# Covers the joining-client version of the same New Game/Load Game
+	# loading stall (see _on_menu_join_requested): unlike those two, a joining
+	# client has no single call site to wrap -- its local player only exists
+	# once the server's own spawn has replicated in, and its first real chunk
+	# load happens on whichever _client_process frame that lands on. Run via
+	# a separate fire-and-forget async task (_run_initial_client_chunk_load)
+	# rather than awaiting right here -- _client_process itself stays a plain
+	# synchronous per-frame function, so suspending across frames doesn't also
+	# suspend every per-frame UI update below. While that task is in flight,
+	# skip the plain update() below entirely: update_with_progress already
+	# owns the manager's chunk state for this stretch, and calling update()
+	# concurrently on the same EarthChunkManager instance would race it. Once
+	# done, ordinary per-frame update() calls resume exactly as before --
+	# this also correctly covers New Game/Load Game, whose local player
+	# reaches here only after their own update_with_progress call already
+	# finished, so this one-shot task just re-confirms nothing is pending and
+	# completes without ever needing to await a frame.
+	if not _initial_client_chunk_load_done:
+		if not _initial_client_chunk_load_task_running:
+			_initial_client_chunk_load_task_running = true
+			_run_initial_client_chunk_load(local_player.current_tile())
+	else:
+		_chunk_manager.update(local_player.current_tile())
 
 	var player_tile := local_player.current_tile()
 	_update_minimap(player_tile, delta)
