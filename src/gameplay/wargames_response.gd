@@ -17,7 +17,24 @@ extends RefCounted
 
 const RESPONSE_LINE := "SYSTEM: Simulating global thermonuclear war... complete. Every scenario ends the same way. Recommendation: close this terminal and go outside."
 
+var _found := false
+
 
 ## The one deadpan line printed back by /globalthermonuclearwar.
 func response_line() -> String:
 	return RESPONSE_LINE
+
+
+## "Found" state: has_been_found()/mark_found() are the same clean, testable
+## boolean signal AncientTerminal/SignedSecretRoom already expose for
+## docs/concept/easter_eggs.md's "Three Fragments" hunt to check "has the
+## player triggered the WarGames egg" against -- this module only exposes
+## the signal; it does not decide what a later system does with it (no
+## fragment item, no bonus trigger here; see scenes/world.gd's own
+## forwarding getter, has_found_wargames_egg).
+func mark_found() -> void:
+	_found = true
+
+
+func has_been_found() -> bool:
+	return _found

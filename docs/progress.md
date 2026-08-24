@@ -2728,21 +2728,68 @@ quiet contradiction of every other system's "never hand-placed" rule.
   is harmless, a silly non-consequence" is true by construction rather than
   needing an explicit unblock step. Not part of the "Three Fragments" hunt,
   so no found-signal needed here.
-- **"Three Fragments" hunt** (medium) — ⬜ Not started — deliberately NOT
-  built by this stage (out of scope by design, see the task notes this
-  stage was given). Two of its three source signals now exist and are
-  tested: `World.has_found_ancient_terminal()` and `World.
-  has_found_signed_secret_room()` (both forwarding getters over each
-  module's own `has_been_found()`). The third — the WarGames egg
-  (`/globalthermonuclearwar`, `src/gameplay/wargames_response.gd`) — does
-  **NOT** yet expose an analogous found-signal as of this writing; a future
-  stage building "Three Fragments" needs to add one there first (a
-  `has_been_found()`/`mark_found()` pair on `WarGamesResponse`, or an
-  equivalent forwarding getter on `World`, mirroring the shape the two
-  signals above already establish) before it can check all three
-  consistently. The actual bonus-discovery payoff for holding all three at
-  once is still fully open, per the doc's own "TBD what... deliberately
-  left open" framing.
+- **"Three Fragments" hunt** (medium) — ✅ Done — `ThreeFragmentsHunt`
+  (`src/gameplay/three_fragments_hunt.gd`): a pure aggregation module over
+  the three source eggs' own found-signals. `has_all_fragments`/
+  `should_trigger`/`mark_triggered`/`has_triggered` take plain
+  caller-supplied booleans, never `AncientTerminal`/`SignedSecretRoom`/
+  `WarGamesResponse` themselves — the same "caller supplies the real
+  primitive, module only decides" shape `KrakenTrigger`/
+  `BridgekeeperEncounter` already use — so it's fully unit-tested
+  (`tests/unit/test_three_fragments_hunt.gd`) independently of the three
+  source eggs, per this stage's own task ask. `should_trigger` latches
+  permanently via `mark_triggered` (true exactly once, the instant all
+  three are first held together, never again afterwards).
+  The WarGames egg needed a found-signal added first (it didn't have one
+  before this stage): `WarGamesResponse.has_been_found()`/`mark_found()`
+  (`tests/unit/test_wargames_response.gd`), mirroring the shape
+  `AncientTerminal`/`SignedSecretRoom` already established, forwarded by a
+  new `World.has_found_wargames_egg()` getter (also new:
+  `World.has_triggered_three_fragments_bonus()`, forwarding
+  `ThreeFragmentsHunt.has_triggered()`) — both pinned by
+  `tests/unit/test_world_easter_egg_discovery.gd`.
+  **Item catalog additions** (`src/gameplay/item_catalog.gd`,
+  `tests/unit/test_item_catalog.gd`): three fragment items
+  (`terminal_fragment`/`secret_room_token`/`wargames_punch_card`) plus the
+  bonus item (`curious_keepsake`) — all inert `"material"`-kind items with
+  zero `weapon_damage`, matching this whole family's zero-mechanical-weight
+  pillar (pinned by its own test, not just a comment).
+  **Wiring** (`scenes/world.gd`): each of the three source-egg find sites
+  (`_check_ancient_terminal`, `_check_signed_secret_room`, the
+  `/globalthermonuclearwar` command handler) now checks "was this egg NOT
+  already found before this call", and if so grants that egg's own fragment
+  item via a shared `_grant_fragment_and_check_three_fragments_hunt` helper
+  — quietly, no fanfare, alongside whatever else that egg already does (the
+  terminal's prose, the secret room's credit banner, the WarGames response
+  line). That helper then calls `_check_three_fragments_hunt`, which reads
+  `Player.inventory.has(...)` for all three fragment ids and, the moment
+  `ThreeFragmentsHunt.should_trigger` returns true, grants the bonus item
+  and shows the bonus message via the same on-screen banner every other
+  cameo in this doc uses. This grant-once gating is why a re-triggerable
+  egg (the terminal, the secret room) never grants a second copy of its own
+  fragment on a later re-find. **Scope call, matching this whole family's
+  precedent (`test_world_easter_egg_discovery.gd`'s own "World has no
+  direct unit tests... orchestration glue over already-tested pieces"):**
+  the wiring itself (`_check_three_fragments_hunt`/
+  `_grant_fragment_and_check_three_fragments_hunt`, and the edited
+  `_check_ancient_terminal`/`_check_signed_secret_room`/
+  `/globalthermonuclearwar` call sites) is not directly unit-tested — it
+  needs a real `Player` node's `inventory` plus `World`'s own
+  dynamically-built `_easter_egg_label` (not a scene-tree `@onready` field,
+  so a bare `World.new()` can't exercise it safely) — the exact same
+  untested-wiring shape every sibling `_check_*` function in this file
+  already has. The pure module, the item catalog entries, and both new
+  forwarding getters are the parts this stage could and did unit-test.
+  **The final bonus discovery's actual content** (the doc's own "TBD
+  what... whoever implements this gets to invent the actual payoff", now
+  resolved): the three fragments physically interlock into one inert
+  keepsake carrying a scratched line addressed to whoever was thorough
+  enough to find all three — a deliberate meta-echo of the signed secret
+  room's own tribute to Robinett's original gesture, not a reference to
+  RP1's own invented Key content (pillar 4) — see
+  `docs/concept/easter_eggs.md`'s own "Three Fragments" entry for the full
+  reasoning. Monty Python's Bridgekeeper is deliberately NOT part of this
+  hunt (never one of the three eggs the doc names for it).
 - **Remaining Starter Collection entries** (Joust-homage sea cave at the
   Bermuda Triangle, the retro-handheld creature-battler) (medium) — ⬜ Not
   started. Both are real, playable original mini-games rather than

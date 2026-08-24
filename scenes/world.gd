@@ -15,6 +15,7 @@ const SecretD20 = preload("res://src/gameplay/secret_d20.gd")
 const AncientTerminal = preload("res://src/gameplay/ancient_terminal.gd")
 const SignedSecretRoom = preload("res://src/gameplay/signed_secret_room.gd")
 const BridgekeeperEncounter = preload("res://src/gameplay/bridgekeeper_encounter.gd")
+const ThreeFragmentsHunt = preload("res://src/gameplay/three_fragments_hunt.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
@@ -109,6 +110,11 @@ const ANCIENT_TERMINAL_MESSAGE_DURATION := 12.0
 ## credit line gets its own brief but slightly longer read time than an
 ## ordinary one-line cameo.
 const SIGNED_SECRET_ROOM_MESSAGE_DURATION := 8.0
+## docs/concept/easter_eggs.md's "Three Fragments" bonus discovery -- the
+## same "slightly longer than a one-line glimpse" reasoning as
+## SIGNED_SECRET_ROOM_MESSAGE_DURATION, since ThreeFragmentsHunt.
+## BONUS_MESSAGE is a similarly-sized short passage, not a single line.
+const THREE_FRAGMENTS_BONUS_MESSAGE_DURATION := 8.0
 
 ## Real seconds between player-state autosaves (see docs/concept/
 ## persistence.md) -- mirrors the world's own "persist eagerly, not on an
@@ -257,6 +263,15 @@ var _bridgekeeper := BridgekeeperEncounter.new()
 ## once a session, unlike the once-per-session cameos above.
 var _bridgekeeper_riddle_index := -1
 var _bridgekeeper_correct_count := 0
+## docs/concept/easter_eggs.md's "Three Fragments" hunt -- pure aggregation
+## logic over the three source eggs' own has_been_found() signals (see
+## ThreeFragmentsHunt's own doc comment). Granting each fragment item is
+## handled inline in _check_ancient_terminal/_check_signed_secret_room/the
+## /globalthermonuclearwar command handler, each gated on "was this egg NOT
+## already found before this call" so a fragment is only ever granted once
+## per source egg, no matter how many times a re-triggerable egg (the
+## terminal, the secret room) fires again later.
+var _three_fragments_hunt := ThreeFragmentsHunt.new()
 var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
@@ -1267,7 +1282,7 @@ func _check_rush_ambient_cue(player_tile: Vector2i) -> void:
 ## once-per-session guard) -- a terminal you can walk up to and "read"
 ## again is more in the spirit of a found prop than a one-time cutscene;
 ## only has_been_found's own latch is permanent.
-func _check_ancient_terminal(player_tile: Vector2i) -> void:
+func _check_ancient_terminal(player_tile: Vector2i, local_player: Player) -> void:
 	if not Input.is_action_just_pressed("talk"):
 		return
 	if not _ancient_terminal.is_in_range(
@@ -1275,10 +1290,20 @@ func _check_ancient_terminal(player_tile: Vector2i) -> void:
 		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 	):
 		return
+	var already_found := _ancient_terminal.has_been_found()
 	_ancient_terminal.mark_found()
 	_easter_egg_label.text = "\n".join(_ancient_terminal.terminal_lines())
 	_easter_egg_label.visible = true
 	_easter_egg_message_timer = ANCIENT_TERMINAL_MESSAGE_DURATION
+	# "Three Fragments" hunt (docs/concept/easter_eggs.md) -- quietly leaves
+	# behind one small, unremarkable fragment item the FIRST time the
+	# terminal is found; re-reading it later (this egg is deliberately
+	# re-triggerable, see this function's own doc comment above) does not
+	# grant a second copy.
+	if not already_found:
+		_grant_fragment_and_check_three_fragments_hunt(
+			local_player, ThreeFragmentsHunt.TERMINAL_FRAGMENT_ITEM_ID
+		)
 
 
 ## The signed secret room (docs/concept/easter_eggs.md, see
@@ -1288,7 +1313,7 @@ func _check_ancient_terminal(player_tile: Vector2i) -> void:
 ## each to a small rolling buffer capped at the sequence's own length, and
 ## reveals the credit the moment that buffer's tail matches AND the player
 ## is standing at the room's own location.
-func _check_signed_secret_room(player_tile: Vector2i) -> void:
+func _check_signed_secret_room(player_tile: Vector2i, local_player: Player) -> void:
 	for action_name in SignedSecretRoom.ACTION_SEQUENCE:
 		if not Input.is_action_just_pressed(action_name):
 			continue
@@ -1306,10 +1331,17 @@ func _check_signed_secret_room(player_tile: Vector2i) -> void:
 		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 	):
 		return
+	var already_found := _signed_secret_room.has_been_found()
 	_signed_secret_room.mark_found()
 	_easter_egg_label.text = _signed_secret_room.credit_text()
 	_easter_egg_label.visible = true
 	_easter_egg_message_timer = SIGNED_SECRET_ROOM_MESSAGE_DURATION
+	# "Three Fragments" hunt (docs/concept/easter_eggs.md) -- same grant-once
+	# shape as _check_ancient_terminal above.
+	if not already_found:
+		_grant_fragment_and_check_three_fragments_hunt(
+			local_player, ThreeFragmentsHunt.SECRET_ROOM_FRAGMENT_ITEM_ID
+		)
 
 
 ## Monty Python's Bridgekeeper (docs/concept/easter_eggs.md, see
@@ -1368,6 +1400,59 @@ func has_found_ancient_terminal() -> bool:
 ## the signed secret room.
 func has_found_signed_secret_room() -> bool:
 	return _signed_secret_room.has_been_found()
+
+
+## Forwarding getter: same purpose as has_found_ancient_terminal above, for
+## the WarGames egg.
+func has_found_wargames_egg() -> bool:
+	return _wargames_response.has_been_found()
+
+
+## Forwarding getter: ThreeFragmentsHunt's own has_triggered() latch -- true
+## once the "Three Fragments" bonus discovery has fired.
+func has_triggered_three_fragments_bonus() -> bool:
+	return _three_fragments_hunt.has_triggered()
+
+
+## Grants one fragment item of docs/concept/easter_eggs.md's "Three
+## Fragments" hunt to local_player, then checks whether the player now holds
+## all three -- called from each of the three source eggs' own find sites
+## (the ancient terminal, the signed secret room, the /globalthermonuclearwar
+## command), each already gated by its own caller on "this egg was NOT
+## already found before this call" so a fragment is only ever granted once
+## per source egg no matter how many times a re-triggerable egg fires again
+## later. A no-op with no local player to give it to (matches _handle_give_
+## command's own "no local player" guard).
+func _grant_fragment_and_check_three_fragments_hunt(
+	local_player: Player, fragment_item_id: String
+) -> void:
+	if local_player == null:
+		return
+	local_player.inventory.add(_item_catalog.make(fragment_item_id), 1)
+	_check_three_fragments_hunt(local_player)
+
+
+## docs/concept/easter_eggs.md's "Three Fragments" bonus discovery -- fires
+## the moment local_player is found to be holding all three fragment items at
+## once (ThreeFragmentsHunt.should_trigger latches permanently via
+## mark_triggered, so this can only ever actually fire once per session,
+## even though it's re-checked every time a fragment is granted). Reuses the
+## same on-screen banner every other cameo in this file uses, and grants
+## ThreeFragmentsHunt.BONUS_ITEM_ID -- see that module's own doc comment for
+## why this specific payoff was chosen.
+func _check_three_fragments_hunt(local_player: Player) -> void:
+	if local_player == null:
+		return
+	var has_terminal := local_player.inventory.has(ThreeFragmentsHunt.TERMINAL_FRAGMENT_ITEM_ID)
+	var has_secret_room := local_player.inventory.has(ThreeFragmentsHunt.SECRET_ROOM_FRAGMENT_ITEM_ID)
+	var has_wargames := local_player.inventory.has(ThreeFragmentsHunt.WARGAMES_FRAGMENT_ITEM_ID)
+	if not _three_fragments_hunt.should_trigger(has_terminal, has_secret_room, has_wargames):
+		return
+	_three_fragments_hunt.mark_triggered()
+	local_player.inventory.add(_item_catalog.make(ThreeFragmentsHunt.BONUS_ITEM_ID), 1)
+	_easter_egg_label.text = _three_fragments_hunt.bonus_message()
+	_easter_egg_label.visible = true
+	_easter_egg_message_timer = THREE_FRAGMENTS_BONUS_MESSAGE_DURATION
 
 
 func _update_easter_egg_label(delta: float) -> void:
@@ -1895,7 +1980,17 @@ func _on_console_command(command: String, args: Array) -> void:
 			# purpose): a hidden command prints one original, deadpan homage
 			# line (WarGamesResponse) and does nothing else at all -- zero
 			# mechanical weight, same as every other cameo in this doc.
+			var wargames_already_found := _wargames_response.has_been_found()
+			_wargames_response.mark_found()
 			_dev_console.log_line(_wargames_response.response_line())
+			# "Three Fragments" hunt (docs/concept/easter_eggs.md) -- quietly
+			# leaves behind one small, unremarkable fragment item the first
+			# time this command is ever run, same "no fanfare" grant-once
+			# shape _check_ancient_terminal/_check_signed_secret_room use.
+			if not wargames_already_found:
+				_grant_fragment_and_check_three_fragments_hunt(
+					local_player, ThreeFragmentsHunt.WARGAMES_FRAGMENT_ITEM_ID
+				)
 		"rolld20":
 			# docs/concept/easter_eggs.md's d20 Easter egg -- also never
 			# listed in /help (pillar 3): the ONE genuinely-random moment in
@@ -3119,8 +3214,8 @@ func _client_process(delta: float) -> void:
 	# single-frame Input.is_action_just_pressed edge (see each function's own
 	# doc comment for why they can't share the throttled block above --
 	# throttling to EASTER_EGG_CHECK_INTERVAL would drop most real presses).
-	_check_ancient_terminal(player_tile)
-	_check_signed_secret_room(player_tile)
+	_check_ancient_terminal(player_tile, local_player)
+	_check_signed_secret_room(player_tile, local_player)
 	_update_easter_egg_label(delta)
 	# Real sun compass bearing, for hillshading (see HillshadeShader,
 	# docs/concept/terrain_relief.md) -- same real inputs as elevation just

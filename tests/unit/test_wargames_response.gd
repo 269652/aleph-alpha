@@ -38,3 +38,17 @@ func test_response_line_does_not_quote_the_films_famous_dialogue():
 	]
 	for phrase in forbidden_phrases:
 		assert_false(line.contains(phrase), "should not quote: %s" % phrase)
+
+
+## has_been_found()/mark_found() (docs/concept/easter_eggs.md's "Three
+## Fragments" hunt): the same clean, testable "was this found" signal shape
+## AncientTerminal/SignedSecretRoom already expose, added here so a future
+## stage can check all three source eggs consistently (see this module's own
+## doc comment).
+func test_not_found_until_marked():
+	assert_false(response.has_been_found())
+
+
+func test_mark_found_latches_true():
+	response.mark_found()
+	assert_true(response.has_been_found())

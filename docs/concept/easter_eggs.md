@@ -253,11 +253,26 @@ finding the signed secret room, successfully navigating the Zork-homage
 terminal, and triggering the WarGames console command each quietly
 leaves behind one small, unremarkable "fragment" item — no fanfare, easy
 to miss the significance of any one. Holding all three at once triggers
-one final, extra-special bonus discovery (TBD what — deliberately left
-open, the same way the rest of this doc leaves exact numbers open, so
-whoever implements this gets to invent the actual payoff). Turns four
-separate one-off jokes into a hunt with its own quiet throughline,
-mirroring the book's structure rather than quoting its content.
+one final, extra-special bonus discovery. Turns four separate one-off
+jokes into a hunt with its own quiet throughline, mirroring the book's
+structure rather than quoting its content.
+
+**The final bonus discovery (the implementing stage's own creative call —
+this entry originally left the payoff open, "TBD what... whoever
+implements this gets to invent the actual payoff"):** the three
+fragments — a pitted circuit shard, a tarnished token, a scorched punch
+card, individually inert junk with no visible connection to each other —
+turn out, held together, to physically interlock. Nothing mechanical
+happens. But the joined piece carries one line scratched on its
+underside, meant for whoever was thorough enough to notice: "you weren't
+supposed to find all three. nice work." The choice deliberately mirrors,
+at the meta level, the exact gesture the signed secret room itself pays
+tribute to — Robinett's own quiet, personal signature left for whoever
+found it — rather than inventing new lore or referencing RP1's own
+Copper/Jade/Crystal Keys (pillar 4: homage to the *shape* of the
+gesture, not a copy of the book's own invented content). Still zero
+mechanical weight (pillar 2): the assembled item does nothing a normal
+inert material item doesn't already do.
 
 ### Status
 
@@ -371,18 +386,35 @@ WarGames/the d20 egg already use. Passage never actually depends on the
 score, by construction, matching "failing is harmless, a silly
 non-consequence."
 
-Both the ancient terminal and the signed secret room expose a clean,
-testable `has_been_found()`/`mark_found()` signal (forwarded by `World.
-has_found_ancient_terminal()`/`has_found_signed_secret_room()`) for the
-"Three Fragments" hunt below to eventually check — this work stops at
-exposing the signal, not the fragment-drop/aggregation logic itself. The
-WarGames egg does not yet expose an equivalent signal; a future "Three
-Fragments" stage needs to add one there first, mirroring the shape these
-two already establish, before it can check all three consistently.
+The ancient terminal, the signed secret room, and the WarGames console
+command each expose a clean, testable `has_been_found()`/`mark_found()`
+signal (forwarded by `World.has_found_ancient_terminal()`/
+`has_found_signed_secret_room()`/`has_found_wargames_egg()` — the WarGames
+egg's own signal was added specifically to let "Three Fragments" check all
+three consistently, mirroring the shape the other two already
+established).
+
+**"Three Fragments" is now implemented.** `ThreeFragmentsHunt`
+(`src/gameplay/three_fragments_hunt.gd`) is the pure aggregation module —
+`has_all_fragments`/`should_trigger`/`mark_triggered`/`has_triggered`, every
+input a plain caller-supplied boolean rather than the three source egg
+modules themselves, so it's fully testable independent of them (the same
+"caller supplies the real primitive" shape `KrakenTrigger`/
+`BridgekeeperEncounter` already use). `scenes/world.gd` grants one fragment
+item (`ItemCatalog`'s `terminal_fragment`/`secret_room_token`/
+`wargames_punch_card`, all inert "material" items) into the player's
+inventory the first time each source egg's own `has_been_found()` flips
+from false to true — quietly, no fanfare, alongside whatever else that egg
+already does — then checks `Inventory.has(...)` for all three and grants
+the bonus item (`curious_keepsake`) plus a banner message the moment all
+three are first held together. See this doc's own "Three Fragments" entry
+above for the final bonus discovery's actual content and the reasoning
+behind that creative choice. Monty Python's Bridgekeeper is deliberately
+NOT part of this hunt (it was never one of the three eggs the doc names).
 
 Everything else in this doc (the Joust-homage sea cave, the retro-handheld
-creature-battler, and "Three Fragments" itself) is still design-only; see
-`docs/progress.md`'s Easter Eggs section for the exact breakdown.
+creature-battler) is still design-only; see `docs/progress.md`'s Easter
+Eggs section for the exact breakdown.
 
 ### Open questions
 

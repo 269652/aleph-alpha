@@ -211,3 +211,38 @@ func test_potato_has_a_plausible_real_potato_mass():
 func test_carrot_and_potato_are_both_light_enough_to_kick():
 	assert_true(Kick.is_kickable(catalog.make("carrot").mass_kg))
 	assert_true(Kick.is_kickable(catalog.make("potato").mass_kg))
+
+
+# -- "Three Fragments" hunt items (docs/concept/easter_eggs.md) -------------
+#
+## The three fragments each source egg (signed secret room/ancient terminal/
+## WarGames) quietly leaves behind, plus the bonus item ThreeFragmentsHunt
+## grants once all three are held together -- all deliberately inert
+## ("material" kind, zero weapon_damage) matching this whole Easter-egg
+## family's zero-mechanical-weight design pillar.
+
+const ThreeFragmentsHunt = preload("res://src/gameplay/three_fragments_hunt.gd")
+
+func test_catalog_knows_the_three_fragments_and_the_bonus_item():
+	for item_id in [
+		ThreeFragmentsHunt.TERMINAL_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.SECRET_ROOM_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.WARGAMES_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.BONUS_ITEM_ID,
+	]:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+
+
+## Zero mechanical weight (pillar 2): none of these four items is a weapon,
+## and none carries any real weapon damage.
+func test_three_fragments_and_bonus_item_carry_no_weapon_damage():
+	for item_id in [
+		ThreeFragmentsHunt.TERMINAL_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.SECRET_ROOM_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.WARGAMES_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.BONUS_ITEM_ID,
+	]:
+		var item := catalog.make(item_id)
+		assert_false(item.is_weapon(), "%s should not be a weapon" % item_id)
+		assert_eq(item.weapon_damage, 0.0, "%s should carry no weapon damage" % item_id)
+		assert_eq(item.kind, "material", "%s should be an inert material item" % item_id)

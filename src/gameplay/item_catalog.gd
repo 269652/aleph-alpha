@@ -131,6 +131,19 @@ const _ITEMS := {
 	"iron_boots": ["Iron Boots", "armor", 1, 0.0, "feet", 2.0],
 	# Fishing (see concept/fishing.md): a rod cast at water lands fish.
 	"fishing_rod": ["Fishing Rod", "tool", 1, 0.0],
+	# "Three Fragments" hunt (docs/concept/easter_eggs.md, see
+	# ThreeFragmentsHunt for the aggregation logic): three small,
+	# unremarkable items, each quietly granted the first time its own source
+	# egg is found (signed secret room / ancient terminal / WarGames console
+	# command -- see scenes/world.gd's own granting logic), plus the bonus
+	# item granted once all three are held together. All four are purely
+	# inert "material" items with zero weapon_damage -- no fanfare, no
+	# mechanical weight, matching this whole Easter-egg family's design
+	# pillars.
+	"terminal_fragment": ["Pitted Circuit Shard", "material", 5, 0.0],
+	"secret_room_token": ["Tarnished Token", "material", 5, 0.0],
+	"wargames_punch_card": ["Scorched Punch Card", "material", 5, 0.0],
+	"curious_keepsake": ["Curious Keepsake", "material", 5, 0.0],
 }
 
 

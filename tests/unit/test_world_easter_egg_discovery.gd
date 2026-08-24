@@ -37,3 +37,20 @@ func test_has_found_signed_secret_room_false_until_the_module_marks_it():
 	assert_false(world.has_found_signed_secret_room())
 	world._signed_secret_room.mark_found()
 	assert_true(world.has_found_signed_secret_room())
+
+
+## Same forwarding-getter shape, for the WarGames egg's own found signal
+## (added alongside the "Three Fragments" hunt -- see WarGamesResponse's own
+## doc comment for why it needed one).
+func test_has_found_wargames_egg_false_until_the_module_marks_it():
+	assert_false(world.has_found_wargames_egg())
+	world._wargames_response.mark_found()
+	assert_true(world.has_found_wargames_egg())
+
+
+## ThreeFragmentsHunt's own has_triggered() latch, forwarded the same way --
+## the "Three Fragments" bonus discovery's own "was this found" signal.
+func test_has_triggered_three_fragments_bonus_false_until_the_module_marks_it():
+	assert_false(world.has_triggered_three_fragments_bonus())
+	world._three_fragments_hunt.mark_triggered()
+	assert_true(world.has_triggered_three_fragments_bonus())
