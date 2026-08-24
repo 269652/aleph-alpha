@@ -167,11 +167,14 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
    weight rather than a material-density estimate), trivially light enough
    for `Kick.is_kickable`, so `Player`'s existing kick action
    (`docs/concept/stone.md`) now reaches any dropped item with a real,
-   modeled mass, not just `LiftableStone`. It does NOT (yet) share
-   `LiftableStone`'s full hand-hold-and-throw shape — picking one into the
-   HAND to charge and release is a real refactor of `Player`'s stone-typed
-   hand state, deliberately deferred rather than rushed (see `progress.md`
-   for the explicit follow-up).
+   modeled mass, not just `LiftableStone`. It also shares `LiftableStone`'s
+   full hand-hold shape now (reported live: "pick up should put it in the
+   hand first instead of the inventory"): E picks a nearby kickable-mass
+   root into the HAND rather than straight to inventory, hold-and-release
+   charges/throws it exactly like a stone, and a new stash key (default H)
+   puts it away into inventory instead — see `docs/concept/stone.md`'s
+   "Held-item pickup, throw, and stash" section for the full mechanism,
+   which this pulled root now uses unmodified.
 
 ### Status
 
@@ -202,11 +205,13 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
   item with a real, modeled, kickable mass now offers Kick
   (`DroppedItem.get_hover_actions`, `Player._kick_step`) — a pulled root is
   a real physical object, not just an inventory grant.
-- ⬜ Held-item pickup + charge/release throw for a dropped item generally
-  (`LiftableStone`'s full hand-hold shape) — `Player`'s hand state is
-  currently typed around "a stone, described by a diameter"; generalizing
-  it to hold an arbitrary item is a real refactor deliberately deferred to
-  its own pass, not attempted here.
+- ✅ Held-item pickup + charge/release throw + stash, generalized from
+  `LiftableStone`'s own shape (`Player._try_pick_item_into_hand`/
+  `_throw_held_item`/`_stash_step`, `docs/concept/stone.md`'s "Held-item
+  pickup, throw, and stash"): E picks a nearby kickable-mass root into the
+  HAND instead of straight to inventory; hold-and-release charges/throws
+  it; a new stash key (default H) puts it into inventory instead, dropping
+  any overflow at the player's feet rather than losing it.
 - ⬜ No animal-carried seed dispersal for root crops (no scatter-hoarding
   equivalent to `TallGrass`'s mouse-cached grass seed) — spreading is
   purely the adjacent-cell throttled tick.

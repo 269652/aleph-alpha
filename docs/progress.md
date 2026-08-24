@@ -2485,13 +2485,30 @@ carrots out of earth (visually animated)". Supersedes the old
   checks both the nearest liftable stone AND the nearest kickable
   `DroppedItem`, kicking whichever is genuinely closer, rather than a stone
   always winning just because it was the first kickable thing this game
-  had. ⬜ Held-item pickup + charge/release THROW (the other half of the
-  ask) is deliberately NOT done this pass — `Player`'s hand-hold state
+  had. **Follow-up, reported live: "pressing K doesn't kick a potato or
+  carrot" / "pick up should put it in the hand first instead of the
+  inventory ... there should be an extra key to stash the item in hand
+  into inventory."** The kick logic itself was verified correct end-to-end
+  (a real `WildCropMarker` pull → real `WorldItemBus` drop → real
+  `DroppedItem` → real `Player._kick_step` pipeline test moved the dropped
+  potato); the live report is most plausibly explained by the merge/
+  restart timing around this same fix landing, not a code defect. The
+  hand-hold ask is real, separate work: `Player`'s held-item state,
+  previously typed entirely around "a stone, described by a diameter"
   (`_hand_stone_diameter_cm`, `_try_pick_stone_into_hand`,
-  `_throw_held_stone`) is entirely typed around "a stone, described by a
-  diameter," and generalizing it to hold an arbitrary item is a real
-  refactor of load-bearing input code that deserves its own dedicated pass
-  and test coverage rather than being rushed in alongside this fix.
+  `_throw_held_stone`), is now generalized (`_hand_item_stack`,
+  `is_holding_item`/`is_holding_anything`, `_try_pick_item_into_hand`,
+  `_throw_held_item`, `_spawn_thrown_item`) — E now picks any dropped item
+  with a real, kickable-grade mass into the HAND first, exactly like a
+  stone (an item with no modeled mass still goes straight to inventory,
+  unchanged); charging and releasing throws it as a real `DroppedItem`
+  instead of straight to inventory; and a NEW stash key (default H,
+  `Player._stash_step`, `Keybindings` "stash") puts whatever's held away
+  into inventory instead, dropping any overflow at the player's own feet
+  rather than losing it (deliberately NOT copying `LiftableStone.pick_up`'s
+  own "silently discard the overflow" ground-pickup shortcut, since
+  stashing is a deliberate player action). See `docs/concept/stone.md`'s
+  "Held-item pickup, throw, and stash" for the full mechanism.
 - ⬜ No DNA/quality variation on the wild population (see `farming.md`'s
   still-unbuilt shared DNA model) — the 7 root/tuber art variants are
   purely cosmetic.

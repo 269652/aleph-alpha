@@ -1056,11 +1056,15 @@ func _update_charge_meter(local_player: Player) -> void:
 ## EarthChunkManager.nearest_liftable_stone_near, Player.PICKUP_RADIUS) and
 ## shows "Pick (<key>)" instead -- a boulder never qualifies (see
 ## StoneSize.is_liftable), only something the pickup key would actually
-## collect. An NPC to talk to takes precedence over a stone to pick up when
-## both are in range at once: talking is the rarer, more deliberate action,
-## and a pebble underfoot isn't going anywhere. Both bound keys are read
-## live from _keybindings so a rebind is reflected immediately, never a
-## stale hardcoded letter.
+## collect. Failing THAT, the same for the nearest dropped item with a
+## real, kickable-grade mass (Player.nearest_kickable_dropped_item_near) --
+## the generic-item counterpart of the stone case (docs/concept/
+## wild_crops.md's "a real physical entity" now also picks into the hand).
+## An NPC to talk to takes precedence over anything to pick up when both
+## are in range at once: talking is the rarer, more deliberate action, and
+## a pebble underfoot isn't going anywhere. All bound keys are read live
+## from _keybindings so a rebind is reflected immediately, never a stale
+## hardcoded letter.
 func _update_interaction_prompt(local_player: Player) -> void:
 	if _chunk_manager == null:
 		_interaction_prompt.visible = false
@@ -1074,14 +1078,22 @@ func _update_interaction_prompt(local_player: Player) -> void:
 	# Something already in hand: E is now dedicated to charge/release (see
 	# Player._pickup_step, the charge meter above the player's own head
 	# handles that hint) -- "Pick" would be misleading since pressing the
-	# key no longer sweeps a new stone into inventory while the hand is full.
-	if local_player.is_holding_stone():
+	# key no longer sweeps a new stone/item into inventory while the hand
+	# is full.
+	if local_player.is_holding_anything():
 		_interaction_prompt.visible = false
 		return
 
 	var stone := _chunk_manager.nearest_liftable_stone_near(local_player.position, Player.PICKUP_RADIUS)
 	if stone != null:
 		_show_interaction_prompt("Pick (%s)" % OS.get_keycode_string(_keybindings.keycode_for("pickup")), stone.position)
+		return
+
+	var dropped_item := local_player.nearest_kickable_dropped_item_near(local_player.position, Player.PICKUP_RADIUS)
+	if dropped_item != null:
+		_show_interaction_prompt(
+			"Pick (%s)" % OS.get_keycode_string(_keybindings.keycode_for("pickup")), dropped_item.position
+		)
 		return
 
 	_interaction_prompt.visible = false
