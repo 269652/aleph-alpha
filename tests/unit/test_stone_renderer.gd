@@ -326,13 +326,16 @@ func test_a_real_boulder_draws_from_the_registered_illustrated_sheet():
 	assert_eq(boulder_texture, expected)
 
 
-## Cobbles have no sheet at all, by design (see IllustratedStoneSprite's own
-## class doc comment) -- the one class that still genuinely falls all the way
-## through to the procedural generator.
-func test_a_real_cobble_still_falls_back_to_procedural():
+## Cobbles now ALSO draw from a real illustrated sheet (assets/sprites/
+## cobbles.png) instead of falling back to the procedural generator -- the
+## fallback this test used to pin no longer applies now that cobble art
+## exists (see IllustratedStoneSprite's own class doc comment: every real
+## stone class now has real illustrated art).
+func test_a_real_cobble_draws_from_the_registered_illustrated_sheet():
 	var cobble_texture := renderer._texture_for(555, StoneSize.CLASS_COBBLE)
-	assert_not_null(cobble_texture)
-	assert_null(renderer._illustrated_stones.frame_for(StoneSize.CLASS_COBBLE, 555))
+	var expected: ImageTexture = renderer._illustrated_stones.frame_for(StoneSize.CLASS_COBBLE, 555)
+	assert_not_null(expected, "the real cobble sheet should have produced a frame")
+	assert_eq(cobble_texture, expected)
 
 
 ## Public wrapper around the existing _build_liftable_node, for callers
