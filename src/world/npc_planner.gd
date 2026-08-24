@@ -39,19 +39,14 @@ class FakeNpcPlanner extends Planner:
 	## a village-care role works the shared square, the same real prop every
 	## settlement already has, instead of a work tag with nowhere real to
 	## resolve to.
-	const _WORK_LOCATION_BY_OCCUPATION := {
-		"farmer": "field",
-		"blacksmith": "forge",
-		"merchant": "stall",
-		"guard": "gate",
-		"fisher": "dock",
-		"herbalist": "garden",
-		"hunter": "hunting_ground",
-		"nurse": "well",
-	}
-
+	##
+	## Reads NpcIdentity.WORK_LOCATION_BY_OCCUPATION rather than keeping its
+	## own copy of this mapping -- the single shared source both this planner
+	## (which tag a villager's schedule sends them to) and VillageRenderer
+	## (which landmark prop, if any, actually stands there) read from, so the
+	## two can never drift apart.
 	func plan_day(identity: NpcIdentity, _day_index: int) -> Array:
-		var work_location: String = _WORK_LOCATION_BY_OCCUPATION.get(identity.occupation, "")
+		var work_location: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(identity.occupation, "")
 		if work_location == "":
 			return [
 				{"time_block": "morning", "location_tag": "home", "activity": "idle"},

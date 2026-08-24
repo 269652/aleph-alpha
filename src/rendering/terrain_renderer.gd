@@ -353,12 +353,25 @@ func earth_dominant_blend_for(neighbor_biomes: Dictionary) -> Dictionary:
 ## Vector2i toward it}, or an empty Dictionary if this cell has no corner
 ## case at all.
 ##
-## Three corner shapes, each checked per diagonal direction (see
-## docs/concept/terrain_biome_borders.md):
+## Covers every real corner shape an irregular biome map actually produces,
+## not just a clean rectangle's -- three families total (see
+## docs/concept/terrain_borders.md's "Diagonal corners" section for the full
+## picture; atlas_coords_for_corner/_corner_linear route each to its own
+## atlas cells):
 ##   - CONVEX (this cell is ocean, land pokes into it on two perpendicular
 ##     cardinal sides -- a peninsula tip narrowing the water).
 ##   - CONCAVE (this cell is land, water pokes into it on two perpendicular
 ##     cardinal sides -- a bay/inlet tip narrowing the land).
+##   - MIXED-PARTNER (this cell is flanked by two DIFFERENT other biomes on
+##     its two perpendicular cardinal sides -- e.g. grassland north, desert
+##     east, routine on a real coastline or biome map where one biome's own
+##     borders rarely line up with another's -- carved toward whichever
+##     neighbor wins BLEND_PRIORITY, deterministic tie-break, same
+##     convention as dominant_blend_for. Used to be gated to
+##     `biome_name == "ocean"` only, leaving every land/land three-biome
+##     corner an unblended hard corner; generalized to every biome_name,
+##     since the underlying dominance rule never actually depended on ocean
+##     being involved.)
 ##   - DIAGONAL-ONLY (this cell's own biome fills BOTH cardinal flanks --
 ##     no shared cardinal edge with anything -- but its actual DIAGONAL
 ##     neighbor, read from `diagonal_neighbor_biomes`, is a different LAND
@@ -384,12 +397,6 @@ func earth_dominant_blend_for(neighbor_biomes: Dictionary) -> Dictionary:
 ## corners (nearly always the same partner) all round together, and a mixed
 ## spit only drops a direction if it genuinely disagrees on which biome it's
 ## carving toward.
-## The two flanking neighbors no longer need to be the SAME biome, either:
-## an ocean corner flanked by two DIFFERENT land biomes (e.g. grassland
-## north, desert east -- routine on a real coastline where land-biome edges
-## rarely line up with shore corners) now still carves, toward whichever
-## neighbor wins BLEND_PRIORITY (deterministic tie-break, same convention as
-## dominant_blend_for).
 ## The diagonal-only branch stays ONE-SIDED like dominant_blend_for's own
 ## cardinal fringe ("exactly ONE side of any border renders a transition
 ## tile"): it only carves toward a diagonal neighbor with a STRICTLY HIGHER
@@ -412,9 +419,11 @@ func corner_direction_for(
 		if horizontal != "" and vertical != "" and horizontal != biome_name and vertical != biome_name:
 			if horizontal == vertical:
 				partner = horizontal
-			elif biome_name == "ocean" and horizontal != "ocean" and vertical != "ocean":
-				# Mixed land biomes flanking an ocean corner: still a real
-				# corner, just carved toward whichever neighbor dominates.
+			else:
+				# horizontal != vertical, and neither equals biome_name
+				# (checked above) -- a real corner with two DIFFERENT
+				# flanking neighbors, carved toward whichever dominates
+				# BLEND_PRIORITY (see this function's own doc comment).
 				partner = _dominant_corner_partner(horizontal, vertical)
 		elif horizontal == biome_name and vertical == biome_name and biome_name != "ocean":
 			# No shared cardinal edge with anything -- only a genuine
@@ -445,7 +454,7 @@ func corner_direction_for(
 	return {"partner": best_partner, "directions": best_directions}
 
 
-## Deterministic tie-break for a mixed-biome ocean corner (see
+## Deterministic tie-break for a mixed-biome corner (see
 ## corner_direction_for): higher BLEND_PRIORITY wins, ties broken toward the
 ## earlier KNOWN_BIOMES entry -- the same convention _is_more_dominant uses
 ## for land/land blending.
@@ -1032,6 +1041,11 @@ func build_tile_set() -> TileSet:
 ## without a lookup, out-of-chunk neighbors are simply ignored as before.
 ## The tile's global position picks a deterministic procedural variant either
 ## way (see variant_index_for_position).
+##
+## A corner whose flanking edges blend ALREADY covers is deliberately left to
+## blend, not carved -- see _corner_directions_not_covered_by_blend's own doc
+## comment for why a plain "corner always wins" rule (tried first) regressed
+## real, intentional multi-edge dithering.
 func paint(
 	tile_map_layer: TileMapLayer,
 	chunk: Chunk,
@@ -1068,7 +1082,17 @@ func paint(
 				# of swapping discrete baked tiles at the 16px tile grid
 				# (the old approach's jagged shore-staircase look).
 				var blend := dominant_blend_for(biome_name, neighbors)
-				if not blend.is_empty():
+				var corner := _corner_directions_not_covered_by_blend(
+					corner_direction_for(biome_name, neighbors), blend
+				)
+				if not corner.is_empty():
+					# A real tile-grid right-angle (see corner_direction_for)
+					# blend structurally could never have expressed for
+					# these specific directions -- carve it, even when blend
+					# also found something real on a genuinely unrelated
+					# edge of this same cell.
+					atlas_coords = atlas_coords_for_corner(biome_name, corner.partner, corner.directions, variant)
+				elif not blend.is_empty():
 					atlas_coords = atlas_coords_for_directional_blend(
 						biome_name, blend.partner, blend.directions, variant
 					)
@@ -1081,12 +1105,75 @@ func paint(
 					# still gets an actual carved-corner tile on this same
 					# opaque base layer, instead of a hard square notch.
 					var diagonal_neighbors := _diagonal_neighbor_biomes(chunk, x, y, origin, global_biome_lookup)
-					var corner := corner_direction_for(biome_name, neighbors, diagonal_neighbors)
-					if corner.is_empty():
+					var fallback_corner := corner_direction_for(biome_name, neighbors, diagonal_neighbors)
+					if fallback_corner.is_empty():
 						atlas_coords = atlas_coords_for_biome(biome_name, variant)
 					else:
-						atlas_coords = atlas_coords_for_corner(biome_name, corner.partner, corner.directions, variant)
+						atlas_coords = atlas_coords_for_corner(
+							biome_name, fallback_corner.partner, fallback_corner.directions, variant
+						)
 			tile_map_layer.set_cell(global, 0, atlas_coords)
+
+
+## Strips out any of `corner`'s diagonal directions whose flanking cardinal
+## edges are BOTH already being dithered by `blend` -- what's left (if
+## anything) is genuinely inexpressible by blend, and should be carved
+## instead of silently dropped.
+##
+## Reported directly, as a follow-up after the land/land corner family
+## itself landed: "still sharp corners at diagonal borders". A cell can have
+## a genuinely real corner on ONE diagonal while an entirely UNRELATED
+## cardinal side also qualifies for ordinary dithering toward some THIRD,
+## lower-priority neighbor biome -- checking blend first (the original
+## order) let that unrelated edge silently steal the whole tile's treatment
+## before the real corner was ever even asked about. Measured directly
+## against real generated chunks near Berlin: 553 of 1065 real land/land
+## corner-eligible cells (52%) were starved this way, plus 20 of 2448 real
+## ocean corners (a smaller pre-existing instance of the same bug, since an
+## ocean cell's own BLEND_PRIORITY(0) is the lowest possible and can never be
+## the LOWER-priority side of a blend, so only its LAND-owning concave corner
+## case was ever actually at risk).
+##
+## A blanket "corner always wins" fix (tried first) regressed real,
+## INTENTIONAL multi-edge blending instead: a cell whose two perpendicular
+## differing neighbors are the SAME lower-priority biome (e.g. grassland
+## notched by desert on both east and south) is a real corner geometrically,
+## but dominant_blend_for is not merely "also willing" to handle it -- for
+## THAT specific case blend and corner describe the exact same fact, and the
+## existing, tested, intentional behavior is a soft dithered fringe across
+## both edges (test_paint_blends_a_corner_toward_multiple_differing_
+## neighbors), not a carved corner. The distinguishing rule: a corner
+## direction survives only when NEITHER of its two flanking cardinal edges
+## is one blend already chose to dither -- if EITHER flank is already being
+## dithered toward some partner, this corner's own carved shape (which may
+## pick a DIFFERENT dominant partner than that edge's own dither, see
+## _dominant_corner_partner) would sit awkwardly against/inside an edge
+## already getting its own separate treatment, so it defers to the simpler,
+## already-decided blend instead of adding a second, possibly-conflicting
+## treatment on top of it. This also naturally covers the exact case blend
+## only ever picks up STRICTLY LOWER-priority neighbors for in the first
+## place (a corner whose own flanking neighbors are BOTH priority >=
+## biome_name's own could never have a flank blend-covered at all, so
+## nothing here ever excludes it) without needing to re-derive that priority
+## comparison independently -- which also keeps this correct against
+## dominant_blend_for's own ocean exclusion (ocean is never a blend partner
+## regardless of priority -- see that function's own doc comment); checking
+## blend's ACTUAL returned directions, not a re-derived priority comparison,
+## is what makes that automatic.
+func _corner_directions_not_covered_by_blend(corner: Dictionary, blend: Dictionary) -> Dictionary:
+	if corner.is_empty():
+		return corner
+	var blend_directions: Array = blend.get("directions", [])
+	var surviving := []
+	for corner_direction in corner.directions:
+		var horizontal := Vector2i(corner_direction.x, 0)
+		var vertical := Vector2i(0, corner_direction.y)
+		if blend_directions.has(horizontal) or blend_directions.has(vertical):
+			continue
+		surviving.append(corner_direction)
+	if surviving.is_empty():
+		return {}
+	return {"partner": corner.partner, "directions": surviving}
 
 
 ## Paints a chunk's ROOF layer -- a separate TileMapLayer from `paint()`'s

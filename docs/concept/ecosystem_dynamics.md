@@ -199,6 +199,51 @@ reindeer/tapir/goat did, with no new mechanism required:
   ecological side-behaviour (which plant species end up where) is
   mouse-specific.
 
+### Forest gets its own named predator: wolves, and their sheep prey
+
+The biome-specific pools above (desert/jackal, tundra/arctic_fox, rainforest/
+jaguar, mountain/mountain_lion) each pair a biome with one dominant NAMED
+predator of its own — except forest, which drew its dominant predator slot
+from the plain `"predator"` placeholder (wolf-shaped, gray-coated) that every
+other biome falls back to when nothing more specific applies. That
+placeholder was always this project's own anonymous stand-in for a wolf —
+see `ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY`'s `"predator": "wolf_shape"`
+and this doc's own "wolf-dominant predators" phrasing above — so giving it a
+real name, real stats, and real illustrated art closes the one gap left in
+that per-biome pattern rather than adding a new role.
+
+- **Wolves** are forest-exclusive (real wolves are the classic temperate/
+  boreal forest apex predator), added to forest's predator pool alongside —
+  not in place of — its existing lynx dominance, generic `predator` filler,
+  and HARD-gated bear. An ordinary `CreatureInfo` predator-role entry
+  (`is_predator = true`, aggressive temperament, "Hunter" diet), no minimum
+  difficulty tier (like every other pre-existing roster member).
+- **Sheep** are wolves' (and deer's) real forest prey. Predation itself needs
+  no new mechanism: `is_predator` already means "hunts herbivore-role
+  creatures generically" (see CreatureInfo's own doc comment), not a
+  per-species prey list, so a wolf sharing forest with sheep and deer already
+  hunts both by construction — the roster addition alone is what makes it
+  real rather than just a name. Sheep are an ordinary calm, non-predator
+  herbivore-role entry, joining forest only (not every biome, unlike mice) —
+  they exist here specifically as wolf/deer-adjacent prey, not as a
+  general-purpose grazer.
+- Both get real illustrated art (`assets/sprites/animals/wolf.png`,
+  `sheep.png`) via `IllustratedAnimalSprite`, rather than falling back to
+  the shared procedural silhouettes deer/boar/horse used before their own
+  art existed. Their source sheets are the first illustrated-animal sheets
+  supplied on a solid **chroma-keyed magenta** ground (with a real alpha
+  channel and near-white cell dividers) instead of the plain white/
+  transparent convention deer/boar/horse use — the same "transparent
+  background was ignored by the AI image generator" situation
+  `IllustratedStoneSprite` already solved for pebbles/boulders/cobbles (see
+  that class's own doc comment). `IllustratedAnimalSprite` gained its own
+  copy of that despill-before-slice, scrub-after-normalize chroma-key logic,
+  gated per sheet behind a `"magenta_keyed"` flag so the existing white-
+  background sheets are entirely unaffected (skipped outright, not merely a
+  no-op on non-magenta pixels). Each sheet is a 2-row (walk, then eat) x
+  8-column grid; neither has a dedicated idle row, so idle synthesizes from
+  the eat cycle's own frame 0, same as deer/boar.
+
 ### A new aerial tier: ambient flyers and one predator
 
 Birds and butterflies don't fit the ground-quadruped mold at all —
@@ -537,6 +582,17 @@ than O(all-chunks-per-frame).
   (`procedural_animal_sprite.gd`), stats/diet in `creature_info.gd`, wired
   into `creature_renderer.gd`'s `HERBIVORE_SPECIES_POOL_BY_BIOME` (mouse in
   every non-ocean biome, horse in grassland/desert).
+- ✅ Wolf/sheep added to forest's roster — forest's own named predator
+  (joining lynx/predator/bear, not replacing them) and its real prey (see
+  this doc's own "Forest gets its own named predator" section above): stats/
+  diet in `creature_info.gd`, `AnimalAnatomy` profiles (wolf's pre-existed;
+  sheep's is new), procedural color/shape fallback in
+  `procedural_animal_sprite.gd`, wired into `creature_renderer.gd`'s
+  `PREDATOR_SPECIES_POOL_BY_BIOME`/`HERBIVORE_SPECIES_POOL_BY_BIOME` forest
+  entries, and real illustrated art in `illustrated_animal_sprite.gd` via a
+  new per-sheet `"magenta_keyed"` chroma-key pass (own copy of
+  `IllustratedStoneSprite`'s despill logic) for their chroma-keyed-magenta
+  source sheets.
 - ✅ Ambient-flyer tier (butterflies, songbirds) — `ambient_flyer_movement.gd`
   (configurable flutter/glide), `procedural_butterfly_sprite.gd`/
   `procedural_bird_sprite.gd`, `ambient_flyer_renderer.gd` (biome-gated,

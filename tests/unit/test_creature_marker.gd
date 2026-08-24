@@ -1231,11 +1231,11 @@ func test_animation_step_uses_illustrated_walk_frames_for_a_species_with_real_ar
 	assert_eq(marker._animation_frames["walk"].size(), IllustratedAnimalSprite.new().generate_textures("horse", "walk").size())
 
 
-## A species with no registered art (e.g. wolf) must keep using the
+## A species with no registered art (e.g. predator) must keep using the
 ## procedural generator exactly as before -- switching horse/deer/boar to
 ## real art must not silently break, or change the look of, everything else.
 func test_animation_step_still_uses_procedural_frames_for_a_species_without_real_art():
-	marker.info = CreatureInfo.new("wolf")
+	marker.info = CreatureInfo.new("predator")
 	marker._current_action = "walk"
 	marker._is_moving = true
 	marker._animation_step()
@@ -1416,7 +1416,7 @@ func test_the_submersion_waterline_is_released_once_it_leaves_the_water():
 ## A procedural species' swim frames already have the water baked into the
 ## pixels, so adding the shader on top would tint them twice.
 func test_a_procedural_species_does_not_also_get_the_submersion_shader():
-	marker.info = CreatureInfo.new("wolf")
+	marker.info = CreatureInfo.new("predator")
 	marker._current_action = "swim"
 	marker._is_moving = true
 

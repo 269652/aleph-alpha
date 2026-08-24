@@ -94,8 +94,8 @@ func test_lynx_is_an_aggressive_predator():
 
 # -- biome-specific species (see CreatureRenderer's per-biome species pools) --
 
-const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat", "mouse", "horse", "deer", "nonvenomous_snake"]
-const NEW_PREDATOR_SPECIES := ["jackal", "arctic_fox", "jaguar", "mountain_lion", "bear", "lion", "venomous_snake"]
+const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat", "mouse", "horse", "deer", "nonvenomous_snake", "sheep"]
+const NEW_PREDATOR_SPECIES := ["jackal", "arctic_fox", "jaguar", "mountain_lion", "bear", "lion", "venomous_snake", "wolf"]
 
 
 func test_camel_is_a_calm_herbivore_that_is_not_a_predator():
@@ -242,6 +242,25 @@ func test_venomous_snake_is_frailer_than_bear_and_lion():
 	var snake_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["venomous_snake"]
 	assert_lt(snake_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["bear"])
 	assert_lt(snake_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["lion"])
+
+
+## Wolves are forest's own named apex predator (see CreatureRenderer's
+## PREDATOR_SPECIES_POOL_BY_BIOME forest entry, and
+## docs/concept/ecosystem_dynamics.md's Species roster section) -- real
+## wolves are pack-hunting predators, aggressive like every other predator-
+## role species.
+func test_wolf_is_an_aggressive_predator():
+	var wolf_info := CreatureInfo.new("wolf")
+	assert_eq(wolf_info.temperament, "aggressive")
+	assert_true(wolf_info.is_predator)
+
+
+## Sheep are wolf's (and deer's) forest prey -- an ordinary calm, non-
+## predator herbivore, the same role every other grazer in the roster has.
+func test_sheep_is_a_calm_herbivore_that_is_not_a_predator():
+	var sheep_info := CreatureInfo.new("sheep")
+	assert_eq(sheep_info.temperament, "calm")
+	assert_false(sheep_info.is_predator)
 
 
 func test_every_new_species_has_positive_health_stamina_and_mana_and_a_known_diet():

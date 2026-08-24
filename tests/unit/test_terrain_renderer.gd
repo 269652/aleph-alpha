@@ -186,6 +186,8 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 	# swapping discrete art. Ocean is a plain animated biome tile like any
 	# other, so this atlas has no water-specific terms anymore.
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
+	# Land biomes only (ocean excluded) -- see _land_land_corner_linear's own
+	# doc comment.
 	var land_n := n - 1
 	var expected := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1 + ProceduralStructureSprite.STRUCTURE_IDS.size()
@@ -1390,6 +1392,39 @@ func test_corner_direction_for_still_carves_when_the_two_flanking_land_biomes_di
 	assert_eq(result.directions, [Vector2i(1, -1)])
 
 
+# -- land/land diagonal corners, no ocean involved at all (see
+# docs/concept/terrain_borders.md's "Land/land" corner family; reported:
+# "diagonal blend border tiles [broken] at the border of two biomes e.g.
+# grass/forest") ------------------------------------------------------------
+
+## The plain notch case: a grassland cell with forest on two perpendicular
+## cardinal sides. corner_direction_for is only ever reached by the LOWER-
+## priority side of a pair (dominant_blend_for already claims the higher-
+## priority side via ordinary cardinal dithering -- see paint()'s own doc
+## comment), so grassland (priority 3) is the one that sees this, carving
+## toward forest (priority 5).
+func test_corner_direction_for_finds_a_land_land_notch_with_the_same_biome_on_two_sides():
+	var result := renderer.corner_direction_for(
+		"grassland", {Vector2i(0, -1): "forest", Vector2i(1, 0): "forest", Vector2i(-1, 0): "grassland"}
+	)
+	assert_eq(result.partner, "forest")
+	assert_eq(result.directions, [Vector2i(1, -1)])
+
+
+## A genuine three-biome meeting point: grassland flanked by forest on one
+## cardinal side and desert on the perpendicular one, neither ocean. Used to
+## be gated to biome_name == "ocean" only and fall through as an unblended
+## hard corner for every other biome -- this is the exact gap
+## docs/concept/terrain_borders.md's Status entry describes closing.
+func test_corner_direction_for_carves_a_land_land_corner_with_two_different_flanking_biomes():
+	var result := renderer.corner_direction_for(
+		"grassland", {Vector2i(0, -1): "forest", Vector2i(1, 0): "desert"}
+	)
+	assert_false(result.is_empty(), "a mixed land/land corner is still a real corner and must carve")
+	assert_eq(result.partner, "forest", "forest (priority 5) should dominate desert (priority 1)")
+	assert_eq(result.directions, [Vector2i(1, -1)])
+
+
 func test_corner_direction_for_is_empty_for_a_straight_shore():
 	# Only one land side -- a plain straight edge, not a corner.
 	var result := renderer.corner_direction_for("ocean", {Vector2i(0, -1): "grassland"})
@@ -1585,6 +1620,128 @@ func test_atlas_coords_for_corner_differs_by_partner_biome_for_a_land_owning_pai
 	assert_ne(toward_forest, toward_desert)
 
 
+# -- land/land corner tiles occupy their own real atlas cells -----------------
+#
+# Before this, _corner_linear routed ANY non-ocean own_biome into the
+# land-owning (concave, land-vs-ocean) family purely by own_biome's own
+# ordinal, silently ignoring other_biome entirely -- so a genuine grassland/
+# forest corner collided with grassland's own land-vs-ocean corner tile and
+# painted an ocean-shaped rounded cutout on dry land. These pin that a
+# land/land pair gets a real, DISTINCT cell of its own.
+
+func test_atlas_coords_for_a_land_land_corner_differs_from_the_ocean_corner_family():
+	var land_land := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var land_vs_ocean := renderer.atlas_coords_for_corner("grassland", "ocean", [Vector2i(1, -1)], 0)
+	var ocean_vs_land := renderer.atlas_coords_for_corner("ocean", "grassland", [Vector2i(1, -1)], 0)
+	assert_ne(land_land, land_vs_ocean, "a land/land corner must not collide with own_biome's land-vs-ocean corner")
+	assert_ne(land_land, ocean_vs_land)
+
+
+func test_atlas_coords_for_a_land_land_corner_differs_by_the_other_biome():
+	var toward_forest := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var toward_mountain := renderer.atlas_coords_for_corner("grassland", "mountain", [Vector2i(1, -1)], 0)
+	assert_ne(toward_forest, toward_mountain)
+
+
+func test_atlas_coords_for_a_land_land_corner_differs_by_the_own_biome():
+	var grassland_toward_forest := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var desert_toward_forest := renderer.atlas_coords_for_corner("desert", "forest", [Vector2i(1, -1)], 0)
+	assert_ne(grassland_toward_forest, desert_toward_forest)
+
+
+## own_biome MUST be the lower-priority side (see corner_direction_for's own
+## doc comment: it is only ever reached by the lower-priority side of a
+## land/land pair) -- but the atlas index math itself must not silently
+## alias the swapped call onto the SAME cell either way, or a future caller
+## bug would paint the wrong biome's texture without any visible symptom
+## until someone happened to look at a real screenshot.
+func test_atlas_coords_for_a_land_land_corner_is_not_symmetric():
+	var grassland_owns := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var forest_owns := renderer.atlas_coords_for_corner("forest", "grassland", [Vector2i(1, -1)], 0)
+	assert_ne(grassland_owns, forest_owns)
+
+
+func test_atlas_coords_for_a_land_land_corner_is_a_created_tile_in_the_atlas():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var coords := renderer.atlas_coords_for_corner(
+		"grassland", "forest", [Vector2i(1, -1)], TerrainRenderer.VARIANTS_PER_BIOME - 1
+	)
+	assert_true(source.has_tile(coords), "land/land corner tile %s should exist in the atlas" % coords)
+
+
+## The pixel-level check the coordinate-only tests above can't give: a real
+## grassland/forest corner must actually be BAKED with forest's own texture
+## carved into the corner, not grassland's plain texture (a hard corner) and
+## not ocean's texture (the old collision bug).
+##
+## Compared against each biome's own REAL rendered average, not the flat
+## ProceduralTerrainSprite.BASE_COLORS constant the ocean/land corner tests
+## above use: grassland and forest are BOTH illustrated today (real
+## AI-illustrated ground art, not the flat-colour procedural fallback), and
+## an illustrated texture's real average colour can sit meaningfully off its
+## own bare BASE_COLORS entry (measured: illustrated grassland's real average
+## reads (0.23, 0.34, 0.06) against a flat-swatch reference of (0.36, 0.74,
+## 0.22) -- close enough to forest's OWN flat swatch to flip a
+## flat-swatch-only comparison entirely, though never yet a problem for
+## ocean, whose real texture stays procedural and close to its own swatch).
+## Also averages a small patch rather than one pixel, since any real texture
+## carries per-pixel grain a single sample can't average out.
+func test_baked_atlas_pixels_for_a_land_land_corner_are_carved_toward_the_partner():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	var art := TerrainRenderer.ART_TILE_SIZE
+
+	var coords := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var tile := image.get_region(Rect2i(Vector2i(coords.x * art, coords.y * art), Vector2i(art, art)))
+	var grassland_plain: Image = renderer._biome_frame_image("grassland", 0, 0)
+	var forest_plain: Image = renderer._biome_frame_image("forest", 0, 0)
+
+	# Region-matched, not a whole-tile average: an illustrated tile can carry
+	# real spatial structure of its own (e.g. a lighter canopy in one part of
+	# the art, darker undergrowth in another), so a small LOCAL patch isn't
+	# necessarily close to the WHOLE tile's average even when genuinely
+	# uncarved -- comparing the same region of the plain source tiles is what
+	# actually isolates "was this region carved" from "is this biome's art
+	# spatially uniform".
+	#
+	# Tight and right at the true corner point, not just "somewhere near the
+	# corner": ProceduralTerrainSprite.CORNER_RADIUS_PIXELS (8 at the
+	# generator's own 64px SIZE) scales down to a 4px radius at this 32px art
+	# tile, so only a small wedge right at the (art-1, 0) corner point is
+	# actually carved -- a wider patch mixes in real uncarved pixels just
+	# outside that wedge and silently dilutes the average back toward
+	# grassland.
+	var patch := 3
+	var corner_region := Rect2i(art - patch, 0, patch, patch)
+	var corner_average := _average_color(tile, corner_region)
+	assert_lt(
+		_rgb_distance(corner_average, _average_color(forest_plain, corner_region)),
+		_rgb_distance(corner_average, _average_color(grassland_plain, corner_region)),
+		"the carved NE corner should read forest, not grassland or ocean"
+	)
+	# The tile's centre must still be plain grassland -- the carve is one
+	# corner only.
+	var center_region := Rect2i(art / 2 - patch / 2, art / 2 - patch / 2, patch, patch)
+	var center_average := _average_color(tile, center_region)
+	assert_lt(
+		_rgb_distance(center_average, _average_color(grassland_plain, center_region)),
+		_rgb_distance(center_average, _average_color(forest_plain, center_region)),
+		"the tile's centre should still read as plain grassland"
+	)
+
+
+func _average_color(image: Image, region: Rect2i) -> Color:
+	var total := Color(0, 0, 0, 0)
+	var count := 0
+	for y in range(region.position.y, region.position.y + region.size.y):
+		for x in range(region.position.x, region.position.x + region.size.x):
+			total += image.get_pixel(x, y)
+			count += 1
+	return total / float(maxi(count, 1))
+
+
 func test_atlas_coords_for_corner_is_a_created_tile_in_the_atlas():
 	var tile_set := renderer.build_tile_set()
 	var source := tile_set.get_source(0) as TileSetAtlasSource
@@ -1666,6 +1823,126 @@ func test_paint_carves_a_convex_corner_toward_the_dominant_biome_when_flanking_l
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
 		renderer.atlas_coords_for_corner("ocean", "grassland", [Vector2i(1, 1)], variant)
+	)
+
+
+## The end-to-end reproduction of the reported bug: a real chunk with a
+## grassland cell notched by forest on two perpendicular sides, no ocean
+## anywhere in the chunk at all. Before this pass this painted a plain
+## unblended grassland tile (corner_direction_for still returned a partner,
+## but _corner_linear's atlas index collided with grassland's own land-vs-
+## ocean corner family, so it silently painted the WRONG tile -- an
+## ocean-shaped cutout on dry land, not a hard corner).
+func test_paint_carves_a_land_land_corner_for_a_grassland_cell_notched_by_forest():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 2
+	chunk.height = 2
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4])
+	# (0,0) grassland, forest east (1,0) and south (0,1) -> a corner carved
+	# toward the south-east, entirely on land.
+	chunk.biome = PackedStringArray(["grassland", "forest", "forest", "forest"])
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(0, 0)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, 1)], variant)
+	)
+
+
+# -- corner vs. blend: which wins when both apply to the same cell ----------
+
+func test_corner_survives_when_neither_flanking_edge_is_covered_by_blend():
+	var corner := {"partner": "forest", "directions": [Vector2i(1, -1)]}
+	var blend := {"partner": "desert", "directions": [Vector2i(0, 1)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, blend)
+	assert_eq(result, corner)
+
+
+## The exact configuration test_paint_blends_a_corner_toward_multiple_
+## differing_neighbors pins: a grassland cell's east+south corner toward
+## desert is the SAME fact dominant_blend_for already dithers on both of
+## those edges -- the corner must defer entirely, not carve.
+func test_corner_is_fully_dropped_when_both_flanking_edges_are_covered_by_blend():
+	var corner := {"partner": "desert", "directions": [Vector2i(1, 1)]}
+	var blend := {"partner": "desert", "directions": [Vector2i(1, 0), Vector2i(0, 1)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, blend)
+	assert_true(result.is_empty())
+
+
+## PARTIAL overlap (just one of the two flanking edges already dithered) is
+## enough to drop the direction, same as full overlap -- a corner's own
+## carved shape may pick a DIFFERENT dominant partner than that one already-
+## dithered edge (see _dominant_corner_partner), which would sit awkwardly
+## against/inside an edge already getting its own separate treatment.
+func test_corner_is_dropped_when_only_one_flanking_edge_is_covered_by_blend():
+	var corner := {"partner": "forest", "directions": [Vector2i(1, -1)]}
+	var blend := {"partner": "desert", "directions": [Vector2i(1, 0)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, blend)
+	assert_true(result.is_empty())
+
+
+## A cell with two simultaneous corners (see corner_direction_for's own
+## multi-corner support) can have ONE covered by blend and the other
+## genuinely untouched by it -- only the covered one should drop.
+func test_corner_drops_only_the_covered_direction_keeping_others():
+	var corner := {"partner": "forest", "directions": [Vector2i(1, -1), Vector2i(-1, -1)]}
+	var blend := {"partner": "forest", "directions": [Vector2i(1, 0)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, blend)
+	assert_eq(result.partner, "forest")
+	assert_eq(result.directions, [Vector2i(-1, -1)])
+
+
+func test_empty_corner_stays_empty_regardless_of_blend():
+	var result := renderer._corner_directions_not_covered_by_blend({}, {"partner": "desert", "directions": [Vector2i(1, 0)]})
+	assert_true(result.is_empty())
+
+
+func test_corner_survives_untouched_when_blend_is_empty():
+	var corner := {"partner": "ocean", "directions": [Vector2i(1, 1)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, {})
+	assert_eq(result, corner)
+
+
+## The real bug behind a follow-up screenshot report ("still sharp corners
+## at diagonal borders" after the land/land corner family above landed): a
+## cell can have a genuinely real corner on ONE diagonal while an UNRELATED
+## cardinal side also qualifies for ordinary dithering toward some THIRD,
+## lower-priority biome -- paint() used to check dominant_blend_for FIRST
+## and only fall back to corner_direction_for when blend was entirely empty,
+## so that unrelated edge silently stole the whole tile's treatment and the
+## real corner never got painted at all. Measured directly against real
+## generated chunks near Berlin: 553 of 1065 real land/land corner-eligible
+## cells (52%) were starved this way -- not a rare edge case.
+func test_paint_still_carves_a_corner_even_when_an_unrelated_edge_also_qualifies_for_blending():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	# Center (1,1) grassland, forest north (1,0) and east (2,1) -> a real
+	# land/land corner. Desert south (1,2) is UNRELATED to that corner but
+	# still a real, lower-priority (1 < grassland's 3) cardinal neighbor --
+	# exactly what used to steal the whole tile via dominant_blend_for.
+	chunk.biome = PackedStringArray(
+		[
+			"grassland", "forest", "grassland",
+			"grassland", "grassland", "forest",
+			"grassland", "desert", "grassland",
+		]
+	)
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(1, 1)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], variant),
+		"the real corner must still carve even though an unrelated south edge also qualifies for blending"
 	)
 
 

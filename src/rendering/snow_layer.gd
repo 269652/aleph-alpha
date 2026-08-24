@@ -35,7 +35,6 @@ const BAND_COVERAGE := [0.45, 0.72, 0.92, 1.0]
 ## thin to begin with does a boot reach the ground.
 const TREAD_BANDS := 2.0
 
-
 ## The tile set: one tile per depth band.
 func build_tile_set() -> TileSet:
 	var art := TerrainRenderer.ART_TILE_SIZE

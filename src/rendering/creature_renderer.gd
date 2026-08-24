@@ -51,17 +51,29 @@ const PREDATOR_SPECIES_POOL := ["predator", "predator", "predator", "lynx"]
 ## listed in a biome's pool means "ecologically plausible there", not
 ## "always spawns there" for the dangerous three (see
 ## docs/concept/ecosystem_dynamics.md's Region difficulty section).
+## Sheep already grazed grassland and mountain; it now joins forest too,
+## alongside deer -- real prey for forest's own wolves below, not just a
+## general-purpose grazer (see docs/concept/ecosystem_dynamics.md's Species
+## roster section).
 const HERBIVORE_SPECIES_POOL_BY_BIOME := {
 	"grassland": ["herbivore", "herbivore", "herbivore", "boar", "horse", "mouse", "mouse", "deer", "nonvenomous_snake", "sheep"],
-	"forest": ["boar", "boar", "boar", "herbivore", "mouse", "mouse", "deer", "nonvenomous_snake"],
+	"forest": ["boar", "boar", "boar", "herbivore", "mouse", "mouse", "deer", "sheep", "nonvenomous_snake"],
 	"desert": ["camel", "camel", "camel", "herbivore", "horse", "mouse", "nonvenomous_snake"],
 	"tundra": ["reindeer", "reindeer", "reindeer", "herbivore", "mouse", "deer"],
 	"rainforest": ["tapir", "tapir", "tapir", "herbivore", "mouse", "mouse", "nonvenomous_snake"],
 	"mountain": ["goat", "goat", "goat", "herbivore", "mouse", "sheep", "sheep"],
 }
+## Wolf joins forest only (real wolves are the classic temperate/boreal
+## forest apex predator, and this project's own dominant-species-per-biome
+## pattern -- jackal/desert, arctic_fox/tundra, jaguar/rainforest,
+## mountain_lion/mountain -- had left forest as the one biome without a
+## dedicated named predator of its own; see
+## docs/concept/ecosystem_dynamics.md's Species roster section). Purely
+## additive to forest's existing lynx dominance/predator/bear entries, not a
+## replacement of them -- lynx keeps its own real habitat here.
 const PREDATOR_SPECIES_POOL_BY_BIOME := {
 	"grassland": ["predator", "predator", "predator", "lynx", "lion"],
-	"forest": ["lynx", "lynx", "lynx", "predator", "bear"],
+	"forest": ["lynx", "lynx", "lynx", "wolf", "wolf", "predator", "bear"],
 	"desert": ["jackal", "jackal", "jackal", "predator", "lion", "venomous_snake"],
 	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "predator", "bear"],
 	"rainforest": ["jaguar", "jaguar", "jaguar", "predator", "venomous_snake"],

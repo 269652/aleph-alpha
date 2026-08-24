@@ -1,7 +1,7 @@
 extends RefCounted
 
 ## Real hand/AI-illustrated sprite-sheet animation for species with actual
-## art (assets/sprites/*.png -- currently horse, deer, boar, sheep; see
+## art (assets/sprites/*.png -- currently horse, deer, boar, sheep, wolf; see
 ## SpriteSheetSlicer for how a hand-assembled reference sheet becomes clean,
 ## aligned frames), replacing ProceduralAnimalSprite's primitive-shape
 ## generation for just those species. Reported: "the procedural generated
@@ -135,6 +135,24 @@ const _SHEETS := {
 		"eat_bands": [Vector2i(266, 448)],
 		"alpha_threshold": 0.3,
 		"divider_gray_min": 0.45,
+	},
+	# assets/sprites/animals/wolf.png: an AI-generated 2-row x 8-column grid
+	# (walk row, then eat row) on the same solid chroma-keyed magenta ground
+	# as "sheep" below, with near-white divider lines between cells. Bands
+	# measured directly from the real PNG (1536x1024): a divider row reads
+	# as near-uniform white across the full width; everything between two
+	# divider bands is one row's own content. Background sampled at
+	# (0.93, 0.03, 0.95) -- close enough to sheep's own measured background
+	# to reuse its exact chroma_key/tolerance rather than re-deriving a
+	# separate one for what is visibly the same generation batch.
+	"wolf": {
+		"faces_left": true,
+		"path": "res://assets/sprites/animals/wolf.png",
+		"walk_bands": [Vector2i(4, 511)],
+		"eat_bands": [Vector2i(512, 1020)],
+		"alpha_threshold": 0.3,
+		"chroma_key": Color(0.95, 0.02, 0.96),
+		"chroma_key_tolerance": 0.25,
 	},
 	# A single sheet, 8-column x 2-row grid (walk row, then an eat/graze
 	# row), cut out on a solid MAGENTA ground rather than real transparency

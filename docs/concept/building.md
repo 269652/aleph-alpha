@@ -135,6 +135,57 @@ adjacent floor) still aren't enforced for village generation. Full
 unification — the village generator asking `BuildingPlacement` the same
 question the player's build cursor does — remains a follow-up.
 
+### A blueprint catalog, not one box
+
+Reported directly: "the houses the npcs build are minimal and don't look
+neat and diverse... we want Anno 1800 like houses and villages... so maybe
+we need house blueprints which function as template/recipe for the npcs
+building their houses... there should be enough different blueprints that
+every house in a village can look different... NPCs choice though."
+
+Before this, `HouseBlueprint` generated exactly one shape: a wall ring
+around a floor interior, fixed at 5x4, with one seeded door and no windows
+at all. Every villager in every settlement built the identical box, in one
+of two materials. `HouseBlueprint` is now a real CATALOG of named shapes
+(`HouseBlueprint.BLUEPRINT_IDS`) spanning a tiny one-room hut through
+wide/tall/bright cottages to genuinely L-shaped manors — real footprint-size
+and window-count variety, plus (for the L entries) a non-rectangular
+silhouette, not just a recolour of the same box.
+
+**Built from three safe, tested geometric primitives, not hand-pixeled
+floor plans.** A blueprint recipe is a footprint size, a window count, and
+an optional corner notch — `build()` assembles it by (1) filling a plain
+wall-ring rectangle, (2) carving the notch out if the recipe declares one
+(erasing those cells entirely and upgrading any newly-exposed floor cell to
+a wall), then (3) punching a door and the requested number of windows
+through whichever wall cells qualify. A cell qualifies for a door/window
+when it has *exactly one* floor neighbour and at least one missing
+(exterior) neighbour — one rule that correctly excludes both an ordinary
+rectangle's corners (zero floor neighbours) and an L-shape's own inner
+corner (two floor neighbours at once) without any shape-specific
+special-casing. Hand-authoring each shape as raw ASCII art was considered
+and rejected: it is exactly the kind of content that can silently produce
+an unenclosed or two-door house with no obvious symptom until someone looks
+at a screenshot; every blueprint this system can produce is provably a
+real, single, enclosable room (verified by `RoomDetector` in the test
+suite, for every catalog entry, not spot-checked).
+
+**Which blueprint a villager builds is their own choice, not raw noise.**
+`choose_blueprint_id(occupation, genome, seed_value)` picks from a
+per-occupation pool (`HouseBlueprint.BLUEPRINT_POOL_BY_OCCUPATION`, ordered
+plain → showy, weighted by simple repetition the same way biome species
+pools already are) — a farmer or guard tends toward a hut or small cottage,
+a merchant toward a bright or grand one, a blacksmith toward something wide
+enough for a real workspace. The villager's `NpcGenome` (see
+[npc.md](npc.md)'s "personality should be DNA derived") then nudges *where
+in that pool* the choice lands: a bold/greedy-dominant NPC's roll is pushed
+into the showy (larger/later) half of their own occupation's pool, a
+cautious/stoic one into the plain half, a neutral trait picks uniformly.
+Occupation decides what a villager could plausibly build; personality
+colours which of those options they actually pick — the same "identity
+actually matters mechanically" pillar this project's NPC system already
+commits to elsewhere.
+
 ### Persistence
 
 Pieces persist through the existing per-chunk modification system (see
@@ -152,10 +203,13 @@ modification like any other.
 - ✅ `room_detector.gd` — enclosure flood fill; rooms, and whether a given
   cell is indoors, tested. Doors block the fill while staying walkable,
   which is what makes a house enterable without ceasing to be enclosed.
-- ✅ `house_blueprint.gd` — seed + footprint → piece list, shared by the
-  player's prefabs and the village generator, tested. A generated house is
-  verified to enclose a real room, so village houses cannot silently
-  degrade back into scenery.
+- ✅ `house_blueprint.gd` — a CATALOG of named blueprints (see "A blueprint
+  catalog, not one box" above), each a seed away from a real piece list,
+  shared by the player's prefabs and the village generator, tested. Every
+  single catalog entry is verified to enclose exactly one real room, so
+  village houses cannot silently degrade back into scenery. Which blueprint
+  a villager builds is chosen from their own occupation/personality
+  (`choose_blueprint_id`), not picked uniformly at random.
 - ✅ Piece rendering, wall/window collision, door passability, roof
   hide-on-enter. `ProceduralBuildingPieceSprite` gives all 10 piece ids
   (floor/wall/door/window/roof × wood/stone) their own atlas tile, alongside
@@ -179,21 +233,43 @@ modification like any other.
   generator, see below) rather than one `build_at_global` call per cell,
   which would repaint the owning chunk once per cell.
 - ✅ Village houses rebuilt from blueprints, replacing the decorative
-  `ProceduralHouseSprite`. `VillageRenderer._stamp_house` builds a real
-  5x4 `HouseBlueprint` structure (seeded wood/stone material) centred on
-  each villager's ring-layout anchor and stamps it via
+  `ProceduralHouseSprite`. `VillageRenderer._stamp_house` picks a real named
+  `HouseBlueprint` shape via `choose_blueprint_id` (the villager's own
+  occupation/personality, not a fixed 5x4 box any more -- see "A blueprint
+  catalog, not one box" above), builds it (seeded wood/stone material)
+  centred on each villager's ring-layout anchor, and stamps it via
   `stamp_structure_at_global`; a house is a chunk modification now, not a
   spawned node. A villager's `home_position` resolves to the house's own
   DOOR cell (found by scanning the stamped pieces for `CATEGORY_DOOR`), not
   the raw anchor point, so a villager standing "at home" is standing
   somewhere it could actually have walked to rather than the middle of a
-  wall or floor cell. Verified end-to-end against a real loaded chunk
-  (real walls, exactly one door, real floor, a roof all present), not just
-  the unit-level piece/placement/room logic. `VillageRenderer._find_dry_origin`
+  wall or floor cell. `_door_facing_direction` derives which way a door
+  opens from its own actual floor neighbour rather than assuming a plain
+  box's 4 sides, so an L-shaped blueprint's door (which can land on the
+  notch's own exposed edge, not one of the bounding rectangle's 4 sides)
+  still points a merchant's personal trading stand at open ground instead
+  of a wall. Verified end-to-end against a real loaded chunk (real walls,
+  exactly one door, real floor, a roof all present), not just the
+  unit-level piece/placement/room logic. `VillageRenderer._find_dry_origin`
   nudges a house's origin off a water pocket before stamping (see "One
   system, two builders" above), and every merchant villager gets a second,
   personal trading stand next to their own door (the same "stall" sprite as
   the shared village-square one), not just the one shared landmark.
+- ✅ Per-occupation workspot props close the gap the merchant-stand pass left
+  open (reported: "no per-occupation building beyond the shared landmarks
+  and a merchant's own stand"). `NpcIdentity.WORK_LOCATION_BY_OCCUPATION` is
+  the single shared mapping both `NpcPlanner.FakeNpcPlanner` (which
+  `location_tag` a villager's schedule sends them to by day) and
+  `VillageRenderer` (which prop, if any, actually stands there) read from,
+  so the two can't drift the way two hand-maintained copies eventually
+  would. `ProceduralLandmarkSprite` gained a field (farmer), forge
+  (blacksmith), dock (fisher) and garden (herbalist) prop alongside its
+  existing well/stall/gate; merchant and guard already had a real prop at
+  their work tag (a personal stand, the shared gate) so they're
+  intentionally skipped. `VillageRenderer.spawn_village` stamps one such
+  prop per qualifying villager at that villager's own `workspot_position`
+  (not a shared village-square point), so two herbalists in one settlement
+  each get their own garden rather than sharing one.
 - ⬜ Player-facing build cursor/piece selection UI (placing pieces by hand is
   currently only reachable via `stamp_structure_at_global`/`build_at_global`
   directly, not through the hotbar/inventory the way campfire/furnace are).

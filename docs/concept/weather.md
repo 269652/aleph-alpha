@@ -89,6 +89,19 @@ whitens the GROUND rather than the whole scene -- snow lies on the land, and
 tinting everything would put a wash over the trees and the player too. The
 grass keeps its shape and its blades under it: it is covered, not replaced.
 
+**It fills in tile by tile, not the whole field at once.** A single lying-snow
+DEPTH still drives the whole snowfall -- one clock, one number, exactly as
+above -- but each tile answers that number differently: real snow does not
+accumulate evenly, it drifts and shelters unevenly (a hollow, a lee side, the
+shade under a tree line all hold snow at a different rate than open, exposed
+ground), so different tiles cross into a deeper band at different points along
+the SAME snowfall. The whole field still starts bare and still ends fully
+covered together -- only the middle of the fall differs tile to tile -- so a
+snowfall reads as spreading, patchy cover arriving across the ground rather
+than the entire loaded field flashing to the next shade of white in lockstep.
+Reported directly: "snow still covers a percentage of a whole chunk instantly
+instead of gradually filling individual tiles."
+
 **Walking displaces it.** Footprints are the same shape as the dirt paths worn
 into grass (see `PathScarring`): walking marks a tile and the world slowly
 undoes it. What undoes it is the difference -- a path grows back on its own,
@@ -139,6 +152,11 @@ order of dozens of repaints across a whole snowfall, not one every frame.
 - ✅ The repaint that reveals that spread runs often enough to show it moving
   — `EarthChunkManager.SNOW_REPAINT_DEPTH_STEP`, tested; wired in
   `_repaint_snow`.
+- ✅ A chunk streamed in mid-snowfall shows its own correct snow immediately
+  (`_load_chunk` calls `_paint_snow_chunk` for just that chunk) rather than
+  staying bare until the next field-wide repaint happens to reach it; an
+  unloaded chunk's painted snow cells are erased along with the rest of its
+  overlays (`_unload_chunk`), not left floating over nothing.
 
 ## Pinning the weather (`/weather`)
 
