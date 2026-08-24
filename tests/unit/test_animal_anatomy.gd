@@ -265,3 +265,48 @@ func test_no_easter_egg_creature_shares_a_body_plan_with_squallmaw():
 	var squallmaw := AnimalAnatomy.profile_for("squallmaw")
 	assert_ne(squallmaw, AnimalAnatomy.profile_for("coilnecca"))
 	assert_ne(squallmaw, AnimalAnatomy.profile_for("champ"))
+
+
+# -- Kraken (docs/concept/easter_eggs.md's condition-triggered, higher-
+# stakes entry) --------------------------------------------------------
+#
+# Not one of the Squallmaw/Coilnecca/Champ trio above (each a coordinate-
+# pinned cameo) -- a real, procedurally-generated, massive tentacled sea
+# creature, still the same legless "snake_shape" body-plan family, but
+# scaled up well past every Germany world boss. AnimalAnatomy has no
+# per-tentacle limb primitive, so "many-tentacled" is approximated by a
+# long, heavily-tapered tail plus a trailing fringe around the head
+# (has_mane, reinterpreted here rather than as Squallmaw's fin crest) --
+# a documented scope call, not a claim of literal per-tentacle geometry.
+
+
+func test_kraken_has_a_profile():
+	assert_true(AnimalAnatomy.has_profile("kraken"))
+
+
+func test_kraken_is_legless_like_every_other_serpentine_easter_egg_creature():
+	assert_almost_eq(AnimalAnatomy.profile_for("kraken").leg_length, 0.0, 0.001)
+	assert_true(AnimalAnatomy.SERPENT_SPECIES.has("kraken"))
+
+
+## Doc: "massive" -- the single largest creature in the game, bigger than
+## every Germany-region world boss (this roster's previous largest at
+## world_scale 2.4, lindwurm).
+func test_kraken_is_larger_than_every_germany_world_boss():
+	var kraken: float = AnimalAnatomy.profile_for("kraken").world_scale
+	for species in GERMANY_BOSS_SPECIES:
+		assert_gt(kraken, AnimalAnatomy.profile_for(species).world_scale, species)
+
+
+func test_kraken_is_larger_than_every_other_easter_egg_creature():
+	var kraken: float = AnimalAnatomy.profile_for("kraken").world_scale
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		assert_gt(kraken, AnimalAnatomy.profile_for(species).world_scale, species)
+
+
+func test_kraken_does_not_share_a_body_plan_with_any_other_species():
+	var kraken := AnimalAnatomy.profile_for("kraken")
+	for species in AnimalAnatomy.SPECIES:
+		if species == "kraken":
+			continue
+		assert_ne(kraken, AnimalAnatomy.profile_for(species), species)

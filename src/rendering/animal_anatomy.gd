@@ -50,6 +50,7 @@ const SPECIES := [
 	"venomous_snake", "nonvenomous_snake",
 	"lindwurm", "rubezahl", "nyx", "krampus",
 	"squallmaw", "coilnecca", "champ",
+	"kraken",
 ]
 
 ## Legless species (see the "serpents" profiles below): zero leg_length, so
@@ -57,7 +58,7 @@ const SPECIES := [
 ## move and must give these a whole-body slither instead (see
 ## SERPENT_SPECIES's use in procedural_animal_animation.gd).
 const SERPENT_SPECIES: Array[String] = [
-	"venomous_snake", "nonvenomous_snake", "squallmaw", "coilnecca", "champ"
+	"venomous_snake", "nonvenomous_snake", "squallmaw", "coilnecca", "champ", "kraken"
 ]
 
 
@@ -423,6 +424,32 @@ const _PROFILES := {
 		"leg_length": 0.0, "leg_thickness": 0.0,
 		"tail": TAIL_THIN, "tail_length": 0.24,
 		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+
+	# -- Kraken (docs/concept/easter_eggs.md's condition-triggered, higher-
+	# stakes entry) ----------------------------------------------------------
+	# "Massive, many-tentacled" -- deliberately the single biggest creature
+	# in the game (world_scale above every Germany-region world boss's
+	# 1.9-2.4 range, see test_kraken_is_larger_than_every_germany_world_boss
+	# in test_animal_anatomy.gd), matching the doc's one deliberately
+	# higher-stakes entry. AnimalAnatomy has no per-tentacle limb primitive
+	# (every profile here is one torso + at most one tail/neck/4 legs), so
+	# "many-tentacled" is approximated rather than literally modeled: a
+	# thick, heavily-tapered, far-longer-than-usual tail (the single longest
+	# in the roster) for a trailing mass of limbs, plus has_mane -- reused
+	# here as a writhing fringe around the head/neck rather than Squallmaw's
+	# fin crest -- for a crown of shorter tentacles. A documented scope call
+	# (no new anatomy field was added for this one creature), not a claim
+	# this literally draws N separate tentacles.
+	"kraken": {
+		"barrel_squareness": 0.25,
+		"world_scale": 3.2,
+		"body_length": 0.62, "body_height": 0.20, "body_y": 0.56, "shoulder_hump": 0.0,
+		"neck_length": 0.12, "neck_thickness": 0.16, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.20, "head_height": 0.15, "muzzle": 0.3, "ear_size": 0.0,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.46,
+		"headgear": HEADGEAR_NONE, "has_mane": true,
 	},
 
 	# -- the small exception ------------------------------------------------

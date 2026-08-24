@@ -287,6 +287,24 @@ ordinary flee-when-threatened creature AI takes over) rather than a
 literal per-species detection-radius mechanic — see `docs/progress.md` for
 the exact scope call and what a fuller version would need.
 
+The Kraken is also partially implemented: `KrakenTrigger`
+(`src/gameplay/kraken_trigger.gd`) is a pure, fully-tested decision module
+for its condition trigger (open ocean + night + active storm, all at once,
+anywhere on the map — no coordinate lookup, unlike every cameo above), and
+it has a full `CreatureInfo`/`AnimalAnatomy`/`ProceduralAnimalSprite` roster
+entry, `/spawn`-able for testing the same way as every other cameo creature.
+Deliberately the collection's toughest entry by a clear margin (max_health
+and world_scale both exceed every existing species, including every
+Germany-region world boss) and its `is_world_boss` flag is set, reusing
+`BossAggro`'s existing aggro-gate mechanism so it fights for real once
+provoked rather than free-ambushing an unprovoked player — see
+`creature_info.gd`'s own comment for why this does NOT make it part of
+`worldbosses.md`'s regional-mythology roster. Not yet wired into
+`scenes/world.gd`'s live per-frame loop (unlike Squallmaw/Coilnecca/Champ) —
+the actual live depth/weather/night computation feeding the trigger, and the
+`spawn_single` + combat encounter it should produce, are a documented
+follow-up; see `docs/progress.md`.
+
 Everything else in this doc (the other trigger shapes, and every remaining
 Starter Collection entry) is still design-only; see `docs/progress.md`'s
 Easter Eggs section for the exact breakdown.

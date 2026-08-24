@@ -690,6 +690,59 @@ func test_easter_egg_creatures_have_colors_distinct_from_each_other():
 			)
 
 
+# -- Kraken (docs/concept/easter_eggs.md's condition-triggered, higher-
+# stakes entry) ----------------------------------------------------------
+
+
+func test_kraken_uses_the_snake_shape_family():
+	assert_eq(ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY.get("kraken", ""), "snake_shape")
+
+
+func test_kraken_generated_image_has_the_expected_size():
+	var image: Image = generator.generate_image("kraken", 1)
+	assert_eq(image.get_width(), ProceduralAnimalSprite.WIDTH)
+	assert_eq(image.get_height(), ProceduralAnimalSprite.HEIGHT)
+
+
+func test_kraken_generated_image_has_a_substantial_opaque_body():
+	var image: Image = generator.generate_image("kraken", 1)
+	assert_gt(_opaque_count(image), 60, "kraken should have a substantial body")
+
+
+func test_kraken_generated_image_is_deterministic_per_seed():
+	var first: Image = generator.generate_image("kraken", 42)
+	var second: Image = generator.generate_image("kraken", 42)
+	assert_eq(_pixel_diff_count(first, second), 0)
+
+
+## Kraken not registered in SPECIES_BASE_COLORS would silently fall back to
+## the generic herbivore body/color -- same regression risk noted on the
+## other Easter-egg creatures above.
+func test_kraken_does_not_fall_back_to_the_generic_herbivore_shape():
+	var herbivore: Image = generator.generate_image("herbivore", 5)
+	var kraken: Image = generator.generate_image("kraken", 5)
+	assert_gt(_opacity_diff_count(kraken, herbivore), 0)
+
+
+func test_kraken_is_ringed_with_the_shared_dark_outline():
+	var image: Image = generator.generate_image("kraken", 1)
+	assert_true(_has_pixel(image, PixelPalette.OUTLINE))
+
+
+func test_kraken_has_a_color_distinct_from_every_other_species():
+	var all_species: Array = SPECIES + NEW_SPECIES + [
+		"mouse", "venomous_snake", "nonvenomous_snake", "squallmaw", "coilnecca", "champ"
+	]
+	var kraken_color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS["kraken"]
+	for species in all_species:
+		var color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[species]
+		assert_gt(
+			Vector3(kraken_color.r, kraken_color.g, kraken_color.b).distance_to(Vector3(color.r, color.g, color.b)),
+			0.02,
+			"kraken vs %s should be visually distinguishable" % species
+		)
+
+
 ## The walking silhouette must still be a fully connected, outlined animal --
 ## a bent leg must not tear a hole in the body or leave the outline broken.
 func test_a_mid_stride_horse_is_still_a_solid_outlined_silhouette():

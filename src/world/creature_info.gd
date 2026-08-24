@@ -81,6 +81,17 @@ const MAX_HEALTH_BY_SPECIES := {
 	"squallmaw": 58.0,
 	"coilnecca": 24.0,
 	"champ": 21.0,
+	# -- Kraken (docs/concept/easter_eggs.md's condition-triggered, higher-
+	# stakes entry) ---------------------------------------------------------
+	# The doc's one deliberate exception to pillar 2's "zero mechanical
+	# weight": "genuinely dangerous... actually a real fight if it notices
+	# you". Deliberately above the whole roster's current toughest species
+	# (lindwurm, 140.0, the Germany-region world bosses) by a clear margin --
+	# see test_kraken_exceeds_the_previous_toughest_species_by_a_clear_margin
+	# in test_creature_info.gd, which pins ">1.5x lindwurm" as a relative
+	# property rather than an isolated eyeballed literal, same discipline as
+	# every other hand-authored stat row in this table.
+	"kraken": 220.0,
 }
 const MAX_STAMINA_BY_SPECIES := {
 	"herbivore": 30.0,
@@ -112,6 +123,10 @@ const MAX_STAMINA_BY_SPECIES := {
 	"squallmaw": 32.0,
 	"coilnecca": 26.0,
 	"champ": 26.0,
+	# A relentless deep-sea leviathan -- above this table's current max
+	# (horse, 40.0), tested by test_kraken_has_more_base_stamina_than_every_
+	# other_species in test_creature_info.gd.
+	"kraken": 45.0,
 }
 const MAX_MANA_BY_SPECIES := {
 	"herbivore": 5.0,
@@ -141,6 +156,11 @@ const MAX_MANA_BY_SPECIES := {
 	"squallmaw": 10.0,
 	"coilnecca": 5.0,
 	"champ": 5.0,
+	# Mana isn't the Kraken's headline stat (no spellcasting exists to spend
+	# it on yet) -- kept at the same apex-predator-tier value every other
+	# aggressive world boss/predator here already uses, not stretched purely
+	# to claim a new max on an axis the doc never actually describes.
+	"kraken": 10.0,
 }
 const DIET_BY_SPECIES := {
 	"herbivore": "Grazer",
@@ -170,6 +190,7 @@ const DIET_BY_SPECIES := {
 	"squallmaw": "Apex Hunter",
 	"coilnecca": "Forager",
 	"champ": "Forager",
+	"kraken": "Abyssal Hunter",
 }
 ## Herbivores are calm (always flee threats); boars/predators/lynx are
 ## aggressive (fight when strong, flee when weak). See CreatureBehavior for
@@ -223,6 +244,9 @@ const TEMPERAMENT_BY_SPECIES := {
 	"squallmaw": "aggressive",
 	"coilnecca": "calm",
 	"champ": "skittish",
+	# Kraken: "actually a real fight if it notices you" -- aggressive, same
+	# as every other genuinely dangerous species here.
+	"kraken": "aggressive",
 }
 ## Only true predators (hunt herbivores/boars for food) go here -- a boar is
 ## aggressive but not a predator (see TEMPERAMENT_BY_SPECIES doc above).
@@ -244,6 +268,7 @@ const PREDATOR_SPECIES := {
 	"nyx": true,
 	"krampus": true,
 	"squallmaw": true,
+	"kraken": true,
 }
 
 ## Gates the aggro-provocation rule (docs/concept/worldbosses.md, see
@@ -252,11 +277,22 @@ const PREDATOR_SPECIES := {
 ## lands, unlike every other species' proximity-based reaction. Currently
 ## just the Germany-region roster; a future regional boss joins this table
 ## the same way it joins PREDATOR_SPECIES above.
+##
+## Kraken (docs/concept/easter_eggs.md) also joins this table, but for a
+## different reason than the Germany bosses below: it is NOT part of
+## worldbosses.md's regional-mythology roster (no fitness-threshold
+## promotion, no regional theming) -- this flag purely gates the mechanical
+## aggro/provocation behavior above, which happens to be exactly what the
+## doc's "actually a real fight if it notices you... never a free ambush"
+## framing wants for a creature this dangerous. Reusing the existing flag
+## for its mechanical effect needs zero new code; a second, parallel
+## aggro-gate system for one creature would just be the same rule twice.
 const WORLD_BOSS_SPECIES := {
 	"lindwurm": true,
 	"rubezahl": true,
 	"nyx": true,
 	"krampus": true,
+	"kraken": true,
 }
 
 ## Levels roll in [1, LEVEL_RANGE] from the individual's seed -- a cheap,

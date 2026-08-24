@@ -2547,11 +2547,66 @@ quiet contradiction of every other system's "never hand-placed" rule.
     accepted as a low-risk simplification given how low each
     `chance_per_check` is tuned, matching `EasterEggSightings`' own
     "no persistent state" precedent rather than adding new session state.
+- **The Kraken** (medium) — 🚧 Partial — the doc's one deliberately
+  higher-stakes, CONDITION-triggered (not coordinate-triggered) entry: open
+  ocean, night, and active storm weather (`WeatherModel`), all at once,
+  anywhere on the map. Built: (1) `KrakenTrigger`
+  (`src/gameplay/kraken_trigger.gd`), a pure decision module —
+  `is_open_ocean`/`is_eligible`/`check`, every input a plain already-computed
+  primitive (bool/String/float), no `GeoCoordinates` lookup at all (there is
+  no single point to be near) — tested in `tests/unit/test_kraken_trigger.gd`
+  including a relative-property test pinning its `CHANCE_PER_CHECK` as far
+  rarer than every existing coordinate-triggered cameo (`EasterEggCreatures`'
+  squallmaw, this project's previous rarest entry), same "no eyeballed
+  thresholds" discipline as everywhere else. (2) A full `CreatureInfo`/
+  `AnimalAnatomy`/`ProceduralAnimalSprite` roster entry for `"kraken"`,
+  following the Germany-region world-boss precedent's shape but deliberately
+  ABOVE that whole roster's stat/size scale rather than below it (the doc's
+  own one exception to pillar 2's "zero mechanical weight"): `max_health`
+  220.0, over 1.5x the previous roster max (lindwurm, 140.0, pinned as a
+  relative-property test, not an isolated literal); `world_scale` 3.2,
+  larger than every Germany-region world boss (1.9–2.4) and every other
+  Easter-egg creature. Legless `snake_shape` body (`AnimalAnatomy.
+  SERPENT_SPECIES`), procedurally rendered, no illustrated art needed —
+  `/spawn kraken`-able the same "registering it in `AnimalAnatomy.SPECIES`
+  is the only wiring `ConsoleSpecies` needs" way as every other cameo
+  creature. `is_world_boss` is set true, joining `CreatureInfo.
+  WORLD_BOSS_SPECIES` — a deliberate reuse of that flag purely for its
+  mechanical aggro-gate effect (`BossAggro`/`CreatureBehavior.
+  _perceives_threats`: no proactive attack on an unprovoked player, but a
+  real fight once real damage lands), matching the doc's "actually a real
+  fight if it notices you... never a free ambush" framing with zero new
+  code — NOT a claim that the Kraken joins `worldbosses.md`'s regional-
+  mythology roster (no fitness-threshold promotion, no regional theming);
+  documented as such in both `creature_info.gd`'s own comment and
+  `kraken_trigger.gd`'s.
+  **Deliberate scope decisions, documented rather than silently
+  under-built:**
+  - `AnimalAnatomy` has no per-tentacle limb primitive (every profile is one
+    torso + at most one tail/neck/4 legs) — "many-tentacled" is approximated
+    by the single longest tail in the roster plus a `has_mane` fringe
+    (reinterpreted from Squallmaw's fin crest into a writhing head/neck
+    fringe) rather than literally modeling N separate limbs. A real
+    multi-tentacle rig would need a new anatomy field this stage didn't add.
+  - `KrakenTrigger` is deliberately NOT wired into `scenes/world.gd`'s live
+    per-frame loop the way `EasterEggCreatures` was for Squallmaw/Coilnecca/
+    Champ — no `elevation_at_global`/`BiomeClassifier.depth_at`/
+    `WeatherModel.weather_at` plumbing exists yet feeding it real values,
+    and no actual `spawn_single` + combat encounter is triggered by it. The
+    module itself is complete and fully tested in isolation; stitching it
+    into the live game loop (computing `depth_normalized` from the player's
+    real tile, choosing a spawn point, handling what happens once the fight
+    ends) is left to a later integration pass.
+  - `OPEN_OCEAN_MIN_DEPTH` (0.5 on `BiomeClassifier.depth_at`'s normalized
+    [0,1] scale) is a first-pass placeholder, same "no real playtesting
+    data yet" situation as every other tuned threshold in this doc — pinned
+    as a named constant and exercised directly by its own tests rather than
+    eyeballed inline.
 - **Remaining Starter Collection entries** (Joust-homage sea cave at the
   Bermuda Triangle, WarGames console command, Zork terminal, Atari
   Adventure secret room, Back to the Future Day, Monty Python's
-  Bridgekeeper, Rush ambient cue, D&D d20, the Kraken, the retro-handheld
-  creature-battler, "Three Fragments") (medium) — ⬜ Not started — ~11
+  Bridgekeeper, Rush ambient cue, D&D d20, the retro-handheld
+  creature-battler, "Three Fragments") (medium) — ⬜ Not started — ~10
   concrete eggs still unimplemented. Two are real, playable original
   mini-games rather than props/flavor text (the Joust-homage dueling-birds
   cabinet and the handheld creature-battler starring this project's OWN

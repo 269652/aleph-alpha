@@ -378,3 +378,76 @@ func test_the_three_easter_egg_creatures_have_distinct_temperaments_or_stats():
 	assert_ne(squallmaw.temperament, coilnecca.temperament)
 	assert_ne(coilnecca.temperament, champ.temperament)
 	assert_ne(coilnecca.max_health, champ.max_health, "Champ should not be a bare stat reskin of Coilnecca")
+
+
+# -- Kraken (docs/concept/easter_eggs.md's condition-triggered, higher-stakes
+# entry) ----------------------------------------------------------------
+#
+# Unlike every other Easter-egg creature above (coordinate-pinned cameos,
+# explicitly NOT boss-tier), the Kraken is the doc's one deliberate
+# exception to pillar 2's "zero mechanical weight" -- "genuinely dangerous
+# rather than purely cosmetic... actually a real fight if it notices you".
+# Debug/first-pass stats, same "hand-authored table row" precedent as
+# GERMANY_BOSS_SPECIES/EASTER_EGG_CREATURE_SPECIES above -- but deliberately
+# ABOVE that whole roster's stat scale, not below it: this is the toughest
+# thing in the game on purpose.
+
+
+func test_kraken_is_an_aggressive_predator_and_a_world_boss():
+	var info := CreatureInfo.new("kraken")
+	assert_eq(info.temperament, "aggressive")
+	assert_true(info.is_predator)
+	# is_world_boss is reused here purely for its mechanical aggro-gate
+	# effect (BossAggro/CreatureBehavior._perceives_threats: no proactive
+	# attack on an unprovoked player, but a real fight once a real hit
+	# lands) -- NOT a claim that the Kraken joins worldbosses.md's
+	# regional-mythology roster (see GERMANY_BOSS_SPECIES above, which it
+	# deliberately does not join).
+	assert_true(info.is_world_boss)
+	assert_false(GERMANY_BOSS_SPECIES.has("kraken"))
+
+
+## Doc: "genuinely dangerous... massive" -- must read as the single toughest
+## thing in the game, exceeding every existing species (including every
+## Germany-region world boss), not just every ordinary predator.
+func test_kraken_has_more_base_health_than_every_other_species():
+	var kraken_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["kraken"]
+	for species in CreatureInfo.MAX_HEALTH_BY_SPECIES:
+		if species == "kraken":
+			continue
+		assert_gt(kraken_health, CreatureInfo.MAX_HEALTH_BY_SPECIES[species], species)
+
+
+## Not just an edge-past-the-max increment: pinned as a clear multiple of
+## this roster's previous toughest species (lindwurm, 140.0), the same
+## relative-margin discipline as every other tuned threshold in this
+## project (e.g. test_easter_egg_creatures.gd's "5x rarer than" checks)
+## rather than an isolated eyeballed literal.
+func test_kraken_exceeds_the_previous_toughest_species_by_a_clear_margin():
+	var kraken_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["kraken"]
+	var lindwurm_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["lindwurm"]
+	assert_gt(kraken_health, lindwurm_health * 1.5)
+
+
+## Doc language leans on scale/menace, not agility -- but "higher stats than
+## any existing creature" (this stage's own brief) is checked directly
+## rather than assumed: stamina too should read as the new roster max, not
+## just health.
+func test_kraken_has_more_base_stamina_than_every_other_species():
+	var kraken_stamina: float = CreatureInfo.MAX_STAMINA_BY_SPECIES["kraken"]
+	for species in CreatureInfo.MAX_STAMINA_BY_SPECIES:
+		if species == "kraken":
+			continue
+		assert_gt(kraken_stamina, CreatureInfo.MAX_STAMINA_BY_SPECIES[species], species)
+
+
+func test_kraken_has_positive_health_stamina_and_mana_and_a_known_diet():
+	var info := CreatureInfo.new("kraken")
+	assert_gt(info.max_health, 0.0)
+	assert_gt(info.max_stamina, 0.0)
+	assert_gt(info.max_mana, 0.0)
+	assert_ne(info.diet, "Unknown")
+
+
+func test_a_fresh_kraken_starts_unaggroed():
+	assert_false(CreatureInfo.new("kraken").is_aggroed)

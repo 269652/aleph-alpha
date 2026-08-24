@@ -72,6 +72,10 @@ const SPECIES_BASE_COLORS := {
 	"squallmaw": Color(0.09, 0.28, 0.34),
 	"coilnecca": Color(0.24, 0.46, 0.40),
 	"champ": Color(0.36, 0.37, 0.28),
+	# Kraken: a near-black abyssal blue -- distinctly darker/colder than
+	# Squallmaw's own storm-blue-green so the doc's two ocean cameos never
+	# read as recolors of each other despite sharing the snake_shape family.
+	"kraken": Color(0.04, 0.09, 0.14),
 }
 
 ## Maps every species name to one of the 4 hand-drawn silhouette families in
@@ -114,6 +118,7 @@ const SPECIES_SHAPE_FAMILY := {
 	"squallmaw": "snake_shape",
 	"coilnecca": "snake_shape",
 	"champ": "snake_shape",
+	"kraken": "snake_shape",
 }
 
 ## Jaguar (lynx-shaped) gets a scatter of dark rosette-like speckle dots so it
