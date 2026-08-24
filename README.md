@@ -82,39 +82,6 @@ alpha, some systems are incomplete, unstable, intentionally opaque, or
 subject to significant change. Progress, balance, and saved data may not be
 preserved between versions.
 
-## Screenshots
-
-*(placeholders — to be added)*
-
-![Main gameplay: exploring the living world](docs/screenshots/gameplay-overview.png)
-*A real biome, populated by the ecosystem simulation rather than hand-placed spawns.*
-
-![A village and its inhabitants](docs/screenshots/village.png)
-*A procedurally placed settlement, its NPCs going about self-directed daily routines.*
-
-![Inventory and equipment](docs/screenshots/inventory.png)
-*The player's inventory/equipment window.*
-
-![Crafting](docs/screenshots/crafting.png)
-*Gathering materials and crafting gear at a station.*
-
-![Terrain and biome variety](docs/screenshots/terrain.png)
-*Biome borders blending organically instead of a hard grid seam.*
-
-### The same landscape, four seasons
-
-The exact same patch of forest, one real in-game year apart each shot —
-canopy color, blossom, fruit, and bare winter branches all come from the
-live season simulation (`SeasonCycle`), not a swapped texture set.
-
-| Spring | Summer |
-| --- | --- |
-| ![Spring](screenshots/season-spring.png) | ![Summer](screenshots/season-summer.png) |
-
-| Autumn | Winter |
-| --- | --- |
-| ![Autumn](screenshots/season-autumn.png) | ![Winter](screenshots/season-winter.png) |
-
 ## What you can actually do
 
 A tour through the game's systems, grouped by what they're about. Every

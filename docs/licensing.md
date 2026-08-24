@@ -409,6 +409,56 @@ Implemented and live-wired on `main`:
   accepting the genuine file, rejecting a one-byte tamper, and rejecting
   a missing signature. Nothing from either run was committed anywhere,
   per "the private key must never touch this repository."
+- `LicenseGate.check_licensed()` — `require_licensed()` minus the
+  process-ending side effect. Same real re-read-and-evaluate, same
+  `is_licensed`/`product_mask` flags, same failure logging, just never
+  calls `quit()`. Exists so a caller can react to "not licensed" instead
+  of the process just ending.
+- **In-game license entry** (`scenes/license_gate_overlay.gd`,
+  `scenes/settings_overlay.gd`'s License tab, `LicenseStore.write_code()`):
+  two separate paths, both purely-glue UI over `LicenseGate.check_licensed()`
+  + `LicenseStore.write_code()` (never showing the failure `reason` to the
+  player -- see "generic failure message" above):
+  - No valid key yet: `World._ready()` calls `check_licensed()` instead of
+    `require_licensed()`; if unlicensed, it shows `LicenseGateOverlay`
+    (a paste-a-key screen) INSTEAD of building the rest of the world, and
+    returns early -- no gameplay code runs, which is at least as strong a
+    gate as the quit() it replaces, since a patched `world.gd` skipping
+    the `is_licensed` check was already the documented limit of the old
+    quit()-based gate too. A valid key gets saved and the scene reloads.
+  - Already playing, want to swap keys (e.g. trial → full): the pause
+    menu's License tab, saves the same way but doesn't reload the scene
+    (nothing live re-reads `product_mask` mid-session today) -- reports
+    "restart to take effect" instead of overclaiming a hot-apply that
+    doesn't exist yet.
+  - `LicenseStore.write_code()` writes to EVERY real candidate path, not
+    just the first, so a stale file at a lower-priority path can't keep
+    shadowing a freshly-saved one on the next `read_code()` (which always
+    returns the first existing candidate).
+- **Real bug fixed: `SerialBase32.decode()` rejected the documented
+  paste-able format.** `generate_serial.gd` prints a code split across
+  multiple lines for readability, and this doc (and `README.md`) said
+  "line breaks are fine" -- but `decode()` treated `\n` as just another
+  invalid character and returned nothing, so a code saved by literally
+  following the documented instructions failed as "malformed code" for
+  every user who ever tried it, including the very first live serial
+  minted after `embedded_public_keys.gd` got a real key. Fixed by
+  skipping whitespace while decoding; a genuinely invalid character is
+  still rejected exactly as before.
+- **Real bug fixed: `world.gd`'s redundant second check had no editor
+  bypass of its own.** The `SelfIntegrity`/`LicenseGate` autoloads'
+  own `_ready()` correctly skip both checks under
+  `OS.has_feature("editor")` (true for the editor binary itself --
+  Play button OR a raw `--path` command-line launch both count, NEVER
+  true in an exported build) -- but `world.gd`'s "second, independent"
+  re-check ran unconditionally, with no bypass of its own, so it
+  re-failed a check the primary one had already correctly and
+  deliberately skipped. `SelfIntegrity` in particular can never pass
+  there anyway (no exported `.pck` exists to hash while running raw
+  project files this way), so this produced permanent false-positive
+  "reinstall from original source" noise on every non-editor-Play dev
+  launch. Fixed by mirroring the same bypass in `world.gd`; changes
+  nothing for a real shipped build, where the feature is always false.
 
 **Done** (steps 1-3 of what was originally left to the user):
 

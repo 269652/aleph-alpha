@@ -68,7 +68,13 @@ func _ready() -> void:
 	if OS.has_feature("editor"):
 		is_licensed = true
 		return
-	require_licensed()
+	# Non-quitting: an invalid/missing key no longer ends the process here.
+	# world.gd's own _ready() is what actually enforces this now -- it
+	# shows an in-game "enter your key" gate instead of building the rest
+	# of the world when is_licensed is false, which is a strictly stronger
+	# gate than a quit() here would be (no gameplay code runs at all,
+	# rather than a quit() call that a patched world.gd could ignore).
+	check_licensed()
 
 
 ## The real enforcement call: read the license file, verify it, and end
@@ -84,6 +90,22 @@ func _ready() -> void:
 ## same "inject what varies" shape SerialVerifier.verify_code's
 ## current_unix_time parameter already uses.
 func require_licensed(code_override: String = "") -> void:
+	var result := check_licensed(code_override)
+	if not result.licensed and get_tree() != null:
+		get_tree().quit(1)
+
+
+## check_licensed() is require_licensed() minus the process-ending side
+## effect -- reads/re-verifies from scratch exactly the same way, sets
+## `is_licensed`/`product_mask`, logs the same failure messages, but never
+## calls quit(). World's boot uses this instead of require_licensed() so
+## an invalid/missing key shows an in-game "enter your license key" screen
+## (see docs/licensing.md's "In-game license entry") rather than the
+## process simply ending with no chance to fix it without editing a file
+## by hand. Returns the same {"licensed", "product_mask", "reason"} dict
+## evaluate() does, for a caller that wants the reason without re-deriving
+## it from the now-set is_licensed flag.
+func check_licensed(code_override: String = "") -> Dictionary:
 	var code := code_override if not code_override.is_empty() else LicenseStore.read_code(LicenseStore.default_candidate_paths())
 	var result := evaluate(code)
 	is_licensed = result.licensed
@@ -94,8 +116,7 @@ func require_licensed(code_override: String = "") -> void:
 			"This copy could not be verified. Place a valid license.txt " +
 			"next to the game and restart."
 		)
-		if get_tree() != null:
-			get_tree().quit(1)
+	return result
 
 
 ## The pure decision: given whatever code was read (possibly ""), does
