@@ -13,6 +13,9 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
+const DroppedItem = preload("res://src/rendering/dropped_item.gd")
+const Item = preload("res://src/gameplay/item.gd")
+const ItemStack = preload("res://src/gameplay/item_stack.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -109,3 +112,99 @@ func test_kick_only_fires_once_per_press():
 	assert_eq(stone.position, after_first, "kick should only fire on the rising edge, not every frame held")
 	Input.action_release("kick")
 	stone.free()
+
+
+# -- a dropped item (docs/concept/wild_crops.md's "physical entity, not -----
+# -- just an inventory grant") is kickable the same way a stone is, when ----
+# -- no stone is closer -------------------------------------------------------
+
+func _add_dropped_carrot(offset: Vector2) -> DroppedItem:
+	var dropped := DroppedItem.new()
+	dropped.item_stack = ItemStack.new(Item.new("carrot", "Carrot", "food", 20, 0.0, "", 0.0, 0.07), 1)
+	dropped.position = player.position + offset
+	# Unlike _add_stone (found via chunk_manager._loaded_stones, a direct
+	# dict injection that doesn't need real tree membership), a DroppedItem
+	# is found via its own scene-tree group (see Player.
+	# _nearest_kickable_dropped_item_near / pickup_nearby) -- it has to
+	# actually be IN the live tree for _ready() to join it, so it's parented
+	# under `self` (already in the tree) rather than the disconnected
+	# entities_parent this test file never mounts.
+	add_child(dropped)
+	return dropped
+
+
+func test_kick_sends_a_dropped_carrot_flying_away_from_the_player():
+	var dropped := _add_dropped_carrot(Vector2(5, 0))
+	var original_position := dropped.position
+	_tap_kick()
+	assert_ne(dropped.position, original_position, "a kicked dropped item should have moved")
+	assert_gt(dropped.position.x, original_position.x, "should fly further AWAY from the player")
+	dropped.free()
+
+
+func test_kick_prefers_a_nearer_stone_over_a_farther_dropped_item():
+	var dropped := _add_dropped_carrot(Vector2(50, 0))  # far
+	var stone := _add_stone(3.0, Vector2(5, 0))  # near
+	_tap_kick()
+	assert_eq(dropped.position, player.position + Vector2(50, 0), "the far dropped item should be untouched")
+	assert_ne(stone.position, player.position + Vector2(5, 0), "the nearer stone should be the one kicked")
+	dropped.free()
+	stone.free()
+
+
+func test_kick_prefers_a_nearer_dropped_item_over_a_farther_stone():
+	var dropped := _add_dropped_carrot(Vector2(5, 0))  # near
+	var stone := _add_stone(3.0, Vector2(50, 0))  # far
+	_tap_kick()
+	assert_eq(stone.position, player.position + Vector2(50, 0), "the far stone should be untouched")
+	assert_ne(dropped.position, player.position + Vector2(5, 0), "the nearer dropped item should be the one kicked")
+	dropped.free()
+	stone.free()
+
+
+# -- the FULL real pipeline: pull a real wild potato patch to completion, --
+# -- let WorldItemBus/a real DroppedItem receive it exactly like World. ----
+# -- _on_item_dropped does, THEN try to kick it -- reported live: "the ------
+# -- tooltip shows Kick but pressing K doesn't kick a potato or carrot." ---
+
+const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
+const CropPull = preload("res://src/gameplay/crop_pull.gd")
+
+var _spawned_drops: Array = []
+
+
+func _spawn_real_drop(item_stack, world_position: Vector2) -> void:
+	var dropped := DroppedItem.new()
+	dropped.item_stack = item_stack
+	dropped.position = world_position
+	add_child(dropped)
+	_spawned_drops.append(dropped)
+
+
+func test_pulling_a_real_potato_patch_then_kicking_it_moves_it():
+	WorldItemBus.item_dropped.connect(_spawn_real_drop)
+	_spawned_drops = []
+
+	var crop := WildCropMarker.new()
+	crop.crop_id = "potato"
+	crop.sprite_seed = 0
+	crop.growth = 1.0
+	crop.position = player.position + Vector2(5, 0)
+	add_child(crop)
+
+	assert_true(crop.begin_pull(), "precondition: a mature patch should start pulling")
+	crop._process(CropPull.DURATION_SECONDS + 0.01)  # finishes the pull, emits the real drop
+
+	assert_eq(_spawned_drops.size(), 1, "precondition: the real pull should have dropped exactly one item")
+	var dropped: DroppedItem = _spawned_drops[0]
+	assert_eq(dropped.item_stack.item.id, "potato")
+	assert_gt(dropped.item_stack.item.mass_kg, 0.0, "precondition: the real dropped potato should carry a real mass")
+
+	var original_position := dropped.position
+	_tap_kick()
+	assert_ne(dropped.position, original_position, "kicking the REAL dropped potato should move it")
+
+	WorldItemBus.item_dropped.disconnect(_spawn_real_drop)
+	for d in _spawned_drops:
+		if is_instance_valid(d):
+			d.free()

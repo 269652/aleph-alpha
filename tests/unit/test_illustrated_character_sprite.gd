@@ -250,6 +250,89 @@ func test_trimmed_composite_image_falls_back_to_front_for_an_unavailable_facing(
 	assert_not_null(sprite.trimmed_composite_image("body", 0, "totally_unknown_facing"))
 
 
+# -- composite_leg_segments: a real hip+knee joint on the fused leg pair ----
+#
+# Reported live: "add proper walk animation by morphing the leg sprites and
+# include a knee joint animated motion" -- the fused pair (see this file's
+# own doc comment on why legs are one connected drawing, not two
+# independently-swinging sprites) has no thigh/shin split baked into the
+# source art at all, so CharacterView cuts the SAME real pixels into a
+# thigh (top) and shin (bottom) crop at KNEE_LINE_FRACTION of the leg's own
+# measured height, and hinges them on a real hip+knee pivot chain (see
+# CharacterView._apply_legs/leg_gait_cycle.gd) -- a genuine two-piece
+# crop-and-hinge rig, not a full weight-painted mesh skin (see
+# CharacterView's own doc comment for why a Polygon2D/Skeleton2D bone-weight
+# skin was evaluated and set aside this pass).
+
+func test_composite_leg_segments_returns_two_images_for_a_registered_variant():
+	var segments := sprite.composite_leg_segments(0)
+	assert_eq(segments.size(), 2)
+
+
+## The thigh (top) crop and shin (bottom) crop must together cover more than
+## the full trimmed leg's own height -- they OVERLAP across the knee line on
+## purpose (see KNEE_OVERLAP_PX's own doc comment: several outfit rows draw
+## a belt/banner bridging straight across the knee line, and a bare,
+## non-overlapping cut would tear it the moment the shin rotates
+## independently), so neither crop alone should equal the full height, and
+## their sum should exceed it by roughly 2x the overlap.
+func test_composite_leg_segments_overlap_across_the_knee_line():
+	var trimmed := sprite.trimmed_composite_image("legs", 0)
+	var segments := sprite.composite_leg_segments(0)
+	var thigh: Image = segments[0]
+	var shin: Image = segments[1]
+	assert_lt(thigh.get_height(), trimmed.get_height())
+	assert_lt(shin.get_height(), trimmed.get_height())
+	var combined := thigh.get_height() + shin.get_height()
+	assert_almost_eq(
+		combined, trimmed.get_height() + 2 * IllustratedCharacterSprite.KNEE_OVERLAP_PX, 1
+	)
+
+
+## The split point itself: thigh's own height should land at
+## KNEE_LINE_FRACTION of the full leg's height, plus the overlap band.
+func test_composite_leg_segments_splits_at_the_knee_line_fraction():
+	var trimmed := sprite.trimmed_composite_image("legs", 0)
+	var segments := sprite.composite_leg_segments(0)
+	var thigh: Image = segments[0]
+	var expected_knee_y := roundi(trimmed.get_height() * IllustratedCharacterSprite.KNEE_LINE_FRACTION)
+	var expected_thigh_height := mini(
+		trimmed.get_height(), expected_knee_y + IllustratedCharacterSprite.KNEE_OVERLAP_PX
+	)
+	assert_eq(thigh.get_height(), expected_thigh_height)
+
+
+func test_composite_leg_segments_same_width_as_the_full_leg():
+	var trimmed := sprite.trimmed_composite_image("legs", 0)
+	var segments := sprite.composite_leg_segments(0)
+	var thigh: Image = segments[0]
+	var shin: Image = segments[1]
+	assert_eq(thigh.get_width(), trimmed.get_width())
+	assert_eq(shin.get_width(), trimmed.get_width())
+
+
+# -- pure geometry for placing the thigh/shin crops on the hip/knee pivots --
+
+func test_leg_thigh_offset_y_centers_the_top_edge_on_the_hip_position():
+	# Sprite2D draws centred on `.position` by default; offsetting by half
+	# the crop's own height shifts its TOP edge onto `.position` instead.
+	assert_almost_eq(sprite.leg_thigh_offset_y(40.0), 20.0, 0.0001)
+
+
+func test_leg_knee_pivot_local_y_is_the_knee_line_fraction_of_the_full_leg():
+	assert_almost_eq(
+		sprite.leg_knee_pivot_local_y(100.0), 100.0 * IllustratedCharacterSprite.KNEE_LINE_FRACTION, 0.0001
+	)
+
+
+## The shin crop's own top edge sits KNEE_OVERLAP_PX above the real knee
+## point (see composite_leg_segments) -- the offset must land THAT point,
+## not the crop's bare top edge, on the knee pivot's own position.
+func test_leg_shin_offset_y_lands_the_knee_point_on_the_pivot():
+	var offset := sprite.leg_shin_offset_y(50.0, 10.0)
+	assert_almost_eq(offset, 50.0 * 0.5 - 10.0, 0.0001)
+
+
 ## Measured directly against the real sheet (see head_edge_probe.js, run
 ## during debugging): the transition from head.png's background to a face
 ## is a WIDE, gradual blur -- 20-30 pixels of ramp between near-black and

@@ -43,6 +43,12 @@ already-documented gap.
   kill, and the anthrax-like archetype below is *fed by* an unburied
   carcass in the first place. Disease and carrion are two ends of the same
   chain, not two unrelated systems that happen to ship in the same month.
+- **Fills a real, already-named gap instead of inventing a parallel one.**
+  `survival.md`'s Sickness & medicine section already names "a bite from a
+  disease-carrying creature" as a sickness trigger and leaves wildlife
+  contagion as an explicit open question — this spec answers exactly that,
+  reusing the real `sickness.gd` pure model rather than building a second
+  player-illness system beside it (see Player spillover below).
 - **Observer this pass, management later, by design.** This spec is
   scoped to the emergent simulation and its real, passive risk to the
   player and tamed animals — quarantine/cull/treatment tools are a
@@ -140,14 +146,26 @@ already watches, so a sick animal you've invested trust in is legible the
 instant it happens (the "connection/responsibility" feel this session's
 brainstorm named directly).
 
-#### Player spillover (`DiseaseDebuff`, mirrors `VenomModel` exactly)
+#### Player spillover (routes through the EXISTING `Sickness` model, not a new debuff)
 
-A `DiseaseDebuff` module shaped identically to the existing `VenomModel`
-(`DEBUFF_ID`, `DURATION_SECONDS`, effect-per-stack), applied through the
-SAME generic `DebuffStack.apply`/`advance`/`stacks_of` contract
-`Player.active_venom_debuffs` already uses — a sick player is a real,
-visible, ongoing cost (not fatal outright, a real tax: stamina regen,
-attack strength, or similar), not a new debuff system built from scratch.
+`docs/concept/survival.md`'s own "Sickness & medicine" section already
+names **"a bite from a disease-carrying creature"** as one of four
+sickness triggers, and `src/gameplay/sickness.gd` already exists as the
+real, tested, pure model for it — `infection_chance`/`attempt_infect`
+(exposure vs. resistance), `progress`/`is_recovered` (worsens untreated,
+recovers under treatment), and `diagnose` (skill- and severity-weighted,
+matching `TamingSystem.taming_chance`'s own shape). That doc explicitly
+scoped OUT wildlife-to-wildlife contagion as "an undecided open
+question" — this spec is exactly that missing piece, not a competing
+system: the SIRS wildlife model above is the real exposure SOURCE, and an
+infected predator's landed bite (or handling a contaminated carcass
+unsafely) is what calls `Sickness.attempt_infect` — implemented as
+`Player.apply_disease_bite`/`Player._sickness_step`. Once infected, the
+player's illness is an ordinary `Sickness` case from there — same
+severity/diagnosis/treatment loop `survival.md` already describes — not a
+parallel `DiseaseDebuff` mirroring `VenomModel`. `VenomModel`/
+`DebuffStack` remain exactly what they are (an instant-bite DOT), a
+different real shape from a diagnosable, treatable sickness.
 
 #### Feeds carrion (`CreatureMarker`)
 
@@ -159,23 +177,95 @@ loop rather than the two systems merely coexisting.
 
 ### Status
 
-- ⬜ Not yet implemented — this is a compiled design spec from a
-  brainstorming session, the deliverable of that conversation, not code.
+- ✅ **The core SIRS model** (medium) — Done —
+  `src/gameplay/disease_model.gd` (`DiseaseModel`), pure and fully tested
+  (`tests/unit/test_disease_model.gd`, 27 tests): the full
+  Susceptible→Infected→Recovered→Susceptible-again cycle
+  (`advance_state`), all three archetypes' transmission-chance formulas
+  (`herd_transmission_chance` density-weighted against real population ÷
+  real carrying capacity, `predator_bite_transmission_chance`,
+  `carcass_contamination_chance`/`decomposer_carry_chance`/
+  `carrion_graze_transmission_chance`), region-pressure scaling
+  (`region_pressure_multiplier`, keyed off `RegionDifficulty.Tier`), herd
+  disease's real "makes you prey, not dead" secondary effect
+  (`movement_speed_multiplier`), and per-archetype lethality
+  (`is_lethal_capable`/`death_chance_per_second` — herd never kills
+  directly, predator/carrion do). Deterministic hash-seeded rolls
+  (`attempt_transmit`/`attempt_infect`), same pattern as `Sickness`/
+  `TamingSystem`.
+- ✅ **Herd (foot-and-mouth-like)** (medium) — Done —
+  `CreatureMarker._herd_disease_step`: runs on the existing throttled
+  sensing tick, checks the nearest susceptible herbivore-role creature
+  within sense range against real region population/capacity (new
+  `EarthChunkManager.herbivore_capacity_at_chunk`/`herbivore_capacity_near`,
+  mirroring the existing `herbivore_population_at_chunk`/`_near` pair).
+  The real "moves slower / easier prey" secondary effect is wired into
+  `CreatureMarker._advance` itself (`DiseaseModel.movement_speed_
+  multiplier`) — the one choke point every intent's movement (wander,
+  flee, seek, hunt, attack) already funnels through via `_advance_gated`/
+  `_advance_avoided`, so a single multiplier there covers all of them.
+- ✅ **Predator (rabies-like)** (small) — Done —
+  `CreatureMarker._try_transmit_predator_disease`, riding the exact same
+  bite `_try_attack` already resolves, mirroring `VENOMOUS_SPECIES`'s call
+  shape exactly (`target.has_method("apply_disease_bite")`). Works
+  identically whether the target is another creature or the player — the
+  zoonotic spillover path is just this same duck-typed call landing on a
+  `Player` instead.
+- ✅ **Carrion (anthrax-like)** (medium) — Done — `Carcass` rolls
+  `contaminated` once, the instant it first crosses `is_rotten()`
+  (`region_tier`/`contaminated` fields, `_roll_contamination`).
+  `DecomposerMarker` is the real insect carry-vector: picks up
+  `carrying_disease` biting a contaminated carcass, spreads it to the next
+  clean carcass it feeds on (`_step_disease_carry`). A nearby susceptible
+  herbivore risks exposure grazing near a contaminated carcass
+  (`CreatureMarker._carrion_disease_step`) — simplified to direct
+  proximity to the carcass itself rather than a separately-tracked
+  "contaminated patch of grass" object, which this project has no
+  substrate for today (a documented simplification of the doc's literal
+  insect→grass→herbivore chain, not the full three-hop version).
+- ✅ **Visible symptoms** (small) — Done — `CreatureMarker` tints itself
+  (`Sprite2D.modulate`) while `INFECTED`, on every creature, wild or tame,
+  reusing the engine's own built-in property rather than a new rendering
+  system. A tamed/kept animal additionally gets a third "sick" pip beside
+  the existing hunger/trust readouts (`docs/concept/taming.md`), shown
+  only while it's already "in the loop" with the player.
+- ✅ **Player spillover** (medium) — Done — `Player.apply_disease_bite`/
+  `_sickness_step`, routed entirely through the existing `Sickness` pure
+  model (`src/gameplay/sickness.gd`) exactly as this doc specifies — NOT a
+  `VenomModel`/`DebuffStack`-style module. Both spillover paths wired: a
+  predator's bite (via `_try_transmit_predator_disease` above) and
+  careless butchering of a contaminated carcass
+  (`Player._butcher_step`). Untreated severity is a real, ongoing stamina
+  tax (`SICKNESS_STAMINA_DRAIN_PER_SECOND`), never fatal outright, and —
+  since no cure/treatment tool exists yet (see the management-tools cut
+  below) — never naturally recovers either; that's `Sickness.progress`'s
+  own existing, already-documented behavior, not a new gap this system
+  introduced.
+- ✅ **Feeds carrion** (small) — Done — a lethal disease death routes
+  through a new shared `CreatureMarker._die()` (factored out of
+  `take_damage`'s existing death branch), so it spawns a real `Carcass`
+  through the EXACT same path a predation kill already uses, not a
+  parallel one.
 - ⬜ Management tools (quarantine, deliberate culling of a sick tamed
   animal, a craft-able treatment/cure — a natural target for the wild-crop
   work in `wild_crops.md` to eventually feed, a real medicinal-plant
-  angle) are explicitly out of scope for the first pass, by design (see
-  pillars) — the interfaces above (a per-creature/player `DiseaseModel`
-  state, a visible symptom readout) are shaped so bolting these on later
-  doesn't require touching the transmission math itself.
-- ⬜ Open question, not yet decided: does a recovering wild POPULATION
-  (not just an individual) carry aggregate herd immunity across a
-  region-level reload, the same way `carrion.md` deliberately left
-  carcasses chunk-local/ephemeral — or does immunity, like everything else
-  in the population-aggregate layer, reset on chunk unload? Worth
-  resolving before implementation, not guessed at here.
-- ⬜ Open question: exact numeric transmission/severity rates — this doc
-  specifies the REAL SHAPE (SIRS, density-dependent, three real
-  archetypes) but not the tuned constants themselves, which per this
-  project's own rule need to be pinned by test at implementation time, not
-  guessed at in a design doc.
+  angle) remain explicitly out of scope, by design (see pillars) — the
+  interfaces above (`DiseaseModel` state, `Sickness.diagnose`, the visible
+  symptom readouts) are shaped so bolting these on later doesn't require
+  touching the transmission math itself.
+- ⬜ Resolved (diverging slightly from the open question as posed):
+  immunity/SIRS state lives on the individual `CreatureMarker` in memory,
+  the same as every other per-creature field here — it resets when that
+  marker despawns/the chunk unloads, exactly like `carrion.md`'s own
+  carcasses. There is no separate AGGREGATE population-level herd-immunity
+  number layered on top of `EcosystemSimulation` — that would be a real,
+  separate addition this pass didn't build, not an oversight.
+- ⬜ Numeric transmission/severity/lethality rates are now real, tuned,
+  test-pinned constants in `DiseaseModel` (see `test_disease_model.gd`),
+  not the open question this doc used to pose — but they are first-pass
+  numbers chosen to be internally consistent (e.g. region pressure at
+  `HARD` deliberately saturates several chances to certain, for
+  determinism and because "the most dangerous regions are a real hazard"
+  is the intended shape) rather than balance-tested against real
+  moment-to-moment play. Expect these to move once the system is actually
+  played against.

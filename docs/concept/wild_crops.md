@@ -141,21 +141,40 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
    curve itself is headlessly testable, the same "runtime tween over static
    parts" idiom `Knockback.step` already established for hit displacement.
    The SAME progress also grows the root's `region_rect` from nothing up to
-   its full art, top-down (the art's baseline convention puts its drawn
-   content near the canvas bottom, so revealing top-down is crown-first,
-   tip-last — physically correct for something being drawn up out of the
-   ground) — the root visibly emerges as it rises, rather than popping
-   fully visible the instant the swing lands. No baked "mid-pull" animation
-   frames — `ai_sprite_prompts.md`'s own note on why that draft was
-   dropped.
+   its full art, top-down (crown-first, tip-last — the root's own canvas
+   convention puts the crown, closest to the leaves, near the top and the
+   tip, deepest underground, near the bottom) — the root visibly emerges as
+   it rises, rather than popping fully visible the instant the swing lands.
+   The revealed strip's BOTTOM edge stays pinned to the marker's own ground
+   line throughout (`WildCropMarker._root.centered = false`, an explicit
+   offset recomputed every reveal) rather than the strip being centered on
+   it — a centered growing rect straddles the ground line (half revealed
+   above it, half below) the instant any of it shows, which read as "the
+   vegetable is already sitting above the soil, not buried" — obvious on a
+   wide, round potato tuber, easy to miss on a carrot's thin taper, but a
+   real defect for both (reported live, fixed 2026-08-24; see
+   `progress.md`). No baked "mid-pull" animation frames —
+   `ai_sprite_prompts.md`'s own note on why that draft was dropped.
 3. Once the rise completes, the sim's patch cell is actually removed
    (`WildCropPatch.graze`) and the harvested root drops into the world as a
    real `DroppedItem` — carrying the SAME illustrated root texture the
    player just watched rise out of the ground, not a different fallback
-   sprite — which the player then picks up the ordinary way (E), exactly
-   like a felled tree's wood or a mined boulder's ore. Not an instant
-   straight-to-inventory grant (`LiftableStone`'s shape) — a harvest yields
-   a real object in the world, matching every other swing-driven harvest.
+   sprite. It is a real physical object from here on, not an instant
+   straight-to-inventory grant: it can be picked up the ordinary way (E or
+   a click), exactly like a felled tree's wood or a mined boulder's ore,
+   and it can also be **kicked** — a harvested root carries a real average
+   whole-vegetable mass (`ItemCatalog._PRODUCE_MASS_KG`, a real reference
+   weight rather than a material-density estimate), trivially light enough
+   for `Kick.is_kickable`, so `Player`'s existing kick action
+   (`docs/concept/stone.md`) now reaches any dropped item with a real,
+   modeled mass, not just `LiftableStone`. It also shares `LiftableStone`'s
+   full hand-hold shape now (reported live: "pick up should put it in the
+   hand first instead of the inventory"): E picks a nearby kickable-mass
+   root into the HAND rather than straight to inventory, hold-and-release
+   charges/throws it exactly like a stone, and a new stash key (default H)
+   puts it away into inventory instead — see `docs/concept/stone.md`'s
+   "Held-item pickup, throw, and stash" section for the full mechanism,
+   which this pulled root now uses unmodified.
 
 ### Status
 
@@ -175,11 +194,24 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
 - ✅ Visible per-patch markers (`WildCropMarker`/`WildCropRenderer`),
   spawned/despawned per chunk load same as trees/stones.
 - ✅ Animated pull harvest (`CropPull`), bound to the swing input, dropping
-  a real ground item.
+  a real ground item, its reveal correctly ground-anchored for any crop's
+  art (see "The pull" step 2 above).
 - ✅ Superseded: `EarthChunkManager.has_wild_carrot`/grass-harvest-yields-a-
   carrot freebie is removed — a real wild carrot patch supplies carrots now,
   so the old shortcut would just be a second, disconnected way to get the
   same item. `taming.md` updated to point at this system instead.
+- ✅ Real produce mass + kickable: carrot/potato carry a real average
+  whole-vegetable mass (`ItemCatalog._PRODUCE_MASS_KG`), and any dropped
+  item with a real, modeled, kickable mass now offers Kick
+  (`DroppedItem.get_hover_actions`, `Player._kick_step`) — a pulled root is
+  a real physical object, not just an inventory grant.
+- ✅ Held-item pickup + charge/release throw + stash, generalized from
+  `LiftableStone`'s own shape (`Player._try_pick_item_into_hand`/
+  `_throw_held_item`/`_stash_step`, `docs/concept/stone.md`'s "Held-item
+  pickup, throw, and stash"): E picks a nearby kickable-mass root into the
+  HAND instead of straight to inventory; hold-and-release charges/throws
+  it; a new stash key (default H) puts it into inventory instead, dropping
+  any overflow at the player's feet rather than losing it.
 - ⬜ No animal-carried seed dispersal for root crops (no scatter-hoarding
   equivalent to `TallGrass`'s mouse-cached grass seed) — spreading is
   purely the adjacent-cell throttled tick.

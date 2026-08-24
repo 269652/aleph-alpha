@@ -75,7 +75,9 @@ express something the cost formula and physics won't allow.
 **Resolved**: spells are tradeable — see
 [items.md](items.md#spells-as-items). A designed spell can be crystallized
 into a scroll/gem item, so spellcrafting feeds the wider item economy
-instead of staying purely personal/character-bound.
+instead of staying purely personal/character-bound. See the 2026-08-24
+brainstorm below for the two distinct vessels (sealed gems vs. teachable
+scrolls) and the gold cost of compiling a spell in the first place.
 
 ---
 
@@ -158,4 +160,129 @@ spell's complexity and material cost** (a costly-to-author spell is a rare
 gem), slotting into the shared item rarity vocabulary
 ([items.md](items.md)/[dna.md](dna.md)). This makes a mage's authored library a
 real piece of personal IP and a market of *effects* — distinct from a market of
-*recipes* — without letting buyers strip-mine the author's designs.
+*recipes* — without letting buyers strip-mine the author's designs. See the
+2026-08-24 brainstorm below for **scrolls**, the teachable counterpart to
+this sealed vessel, and for the separate gold cost of compiling a spell at
+all (distinct from this section's *sale* price).
+
+---
+
+## Brainstorm extensions (2026-08-24)
+
+Answers the open request "players craft their own spells with the DSL; the
+ops available depend on skill; crafting costs money, more LOCs costs
+exponentially more; spells go on scrolls, get sold, and others can learn and
+use them if requirements are met." Extends, not replaces, the model above —
+in particular it does not touch Constraint layer 1 (mana, paid every *cast*)
+or the sealed-gem decision above (unchanged); it adds a third, independent
+gate on top of Layer 0, priced in gold instead of mana, plus a second
+tradeable vessel alongside gems.
+
+### The compilation gate: crafting costs gold, exponential in complexity
+
+Everything above prices *casting* a spell you already know (mana/stamina,
+paid every time — Constraint layer 1) or *authoring permission* (which
+atoms/params you're even allowed to write — Layer 0). Neither prices the act
+of **compiling** a finished design into a spell you permanently know. That's
+a third, independent gate, paid in **gold, once** — not mana, not repeatedly:
+
+- **LOC is the pipeline-step count.** A spell/enchantment/instruction's
+  "lines of code" is the total number of atom calls across every
+  `on EVENT: PIPELINE` rule in its AST (`fire_damage(...) |> ignite(...)` is
+  2 lines; a three-rule enchantment with 2/3/1-step pipelines is 6 lines).
+  This falls straight out of the AST the parser already produces — nothing
+  new has to be authored to measure it.
+- **Cost grows exponentially with LOC, not linearly or polynomially.** Each
+  additional line **multiplies** the gold price by a constant growth factor
+  rather than adding a flat or diminishing increment:
+  `gold_cost = CRAFT_BASE * CRAFT_GROWTH ^ (weighted_loc - 1)`. This is
+  deliberate: a linear or even polynomial cost still lets a patient player
+  grind gold for an arbitrarily long, arbitrarily powerful spell — a genuine
+  compounding exponential makes each extra line a real economic decision and
+  rewards *elegant* short compositions over *long* ones, the authoring-side
+  mirror of the magnitude/spam-penalty curves Constraint layer 1 already
+  applies to casting.
+- **Lines aren't uniform — atom tier weighs in.** `spell_atom_catalog.gd`
+  already tiers every atom (see Primitive effects above); a line using a
+  higher-tier atom counts as more than one "line" toward `weighted_loc` — a
+  rarer, more dangerous verb should cost more to fix permanently into a
+  spellbook than a common one, on top of the exponential curve itself. Exact
+  tier weights and `CRAFT_BASE`/`CRAFT_GROWTH` are a first-pass numeric
+  design for implementation time, pinned by a property test like every other
+  cost constant here, never eyeballed.
+- **Paid once per design, not once per compile.** Gold is charged the first
+  time a given AST (content-addressed — same rules, same atoms, same params)
+  is successfully compiled into a known spell; recompiling an *unchanged*
+  draft is free, and changing even one parameter is a new design that pays
+  again. A spell, once known, **stays known** even if a later respec would
+  no longer let its owner *author* it from scratch — compiling fixes the
+  pattern permanently, it doesn't lease it.
+- **Applies uniformly across all three surface forms.** Per the unifying
+  model (a self-cast spell, a weapon enchantment, and an NPC instruction are
+  the same underlying object), the same gold-for-LOC gate applies whether
+  the AST being compiled is a personal spell, a weapon's bound rules, or an
+  NPC instruction script — it's a property of the AST, not of which context
+  consumes it.
+- **Where the gold is paid** is likely an arcane-forge-style crafting
+  station, reusing [crafting.md](crafting.md)'s already-built tier-gated
+  station pattern (`crafting_station.gd`) rather than inventing a parallel
+  one. Exact tier thresholds are open (see below).
+
+Layer 0 decides *whether you're even allowed to write this line*; this gate
+decides *what fixing it into your spellbook costs*; Constraint layer 1
+decides *what casting it costs every time after that*. Three independent
+gates on the same AST, not one blurred cost.
+
+### Two vessels for a finished spell: sealed gems vs. teachable scrolls
+
+A compiled spell crystallizes into a tradeable item two ways, for two
+different purposes:
+
+- **Spell gems — sealed, use-only, no requirements** (unchanged from the
+  decision above). A gem lets a buyer *cast* the author's spell, as on-item
+  charges, without ever learning, inspecting, or modifying it. No
+  skill/atom requirement gates *using* one — the gem holds the knowledge,
+  not the wielder. The right vessel for a top-tier design nobody but the
+  author should ever be able to reproduce.
+- **Spell scrolls — teachable, requirement-gated, consumed only on
+  success.** A scroll instead carries the *readable* AST. Reading one
+  **attempts** to permanently teach the spell to the reader's known-spell
+  list, gated by the exact same predicate Layer 0 already uses for
+  authoring: every atom the spell uses must be unlocked on the reader's own
+  skill tree, every parameter within their own caps (see
+  [skills.md](skills.md)). Meet the requirements and the scroll is
+  consumed, the spell is now permanently known — mana cost and casting
+  behave identically to having written it yourself. Don't meet them and
+  nothing happens; the scroll is **not** consumed, so an underleveled buyer
+  can hold onto one and try again once they've grown into it rather than
+  wasting the purchase.
+- **The crafting gold cost is paid once, by the original author — never
+  re-charged to learners.** A scroll's market price (informed by
+  `rarity_tier.tier_from_complexity`, already pure/tested against the same
+  complexity score the gold-cost formula above uses) is how the author
+  recoups that cost and profits. Buying and successfully learning from a
+  scroll is a purchase, not a second compile.
+
+This is the resolution to "spells can be put on scrolls and sold and others
+can then learn and use the spell if requirements are met": gems sell an
+*effect* without the *recipe*; scrolls sell the *recipe* itself, gated by
+the same access rules the game already uses to decide who's allowed to
+write it in the first place.
+
+### Open questions (2026-08-24)
+
+- Exact `CRAFT_BASE`/`CRAFT_GROWTH`/per-tier weight constants — first-pass
+  numeric design at implementation time, same as every other cost constant
+  in this doc.
+- Should guard-expression / targeting-selector complexity also count toward
+  `weighted_loc`, to prevent offloading complexity into the parts of a rule
+  the pipeline-step count doesn't see (a player writing one enormous `when`
+  guard to dodge the per-line gold cost)?
+- Does scroll-learning need a coarser raw level/skill-point floor on top of
+  per-atom unlocks, or is "every atom unlocked, every param in-cap" a
+  sufficient requirement on its own?
+- Exact station-tier thresholds for compiling (or whether compiling needs a
+  station at all vs. being available from any spell-editor UI).
+- Can an NPC "study" a scroll the same way a player does, feeding
+  [npc.md](npc.md)'s instruction economy — an NPC mage that learns spells
+  from what it's traded, not just what it's scripted with?

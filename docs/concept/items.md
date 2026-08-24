@@ -23,13 +23,22 @@ comparable, just arrived at differently.
 ### Spells as items
 
 Resolves the open question from [magic.md](magic.md): yes — a designed
-spell can be crystallized into a tradeable item (scroll/gem/rune), socketed
-or consumed to grant a spell to a character that didn't design it. A spell
-gem's own rarity is derived from the complexity/rarity of the atoms used to
-build it, plugging spellcrafting directly into the same item-rarity
-vocabulary as everything else, and giving the crafting/trading economy
-(see [economy.md](economy.md)) a genuinely novel tradeable category no
-other system here produces.
+spell can be crystallized into a tradeable item, socketed or consumed to
+grant a spell to a character that didn't design it. Two distinct vessels,
+not one (see magic.md's 2026-08-24 brainstorm for the full mechanism):
+
+- **Spell gems** — sealed, use-only. Grants on-item casting *charges*
+  without teaching the recipe; no skill/atom requirement to use one.
+- **Spell scrolls** — teachable. Reading one attempts to permanently learn
+  the spell, gated by the same skill/atom requirements authoring it would
+  need; consumed only on a successful learn.
+
+Both derive their rarity/value from the same complexity score
+(`rarity_tier.tier_from_complexity`), which is also what magic.md's
+exponential-in-LOC gold crafting cost is derived from — plugging
+spellcrafting directly into the same item-rarity vocabulary as everything
+else, and giving the crafting/trading economy (see [economy.md](economy.md))
+a genuinely novel tradeable category no other system here produces.
 
 ### Open questions
 

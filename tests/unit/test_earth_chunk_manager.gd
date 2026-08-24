@@ -36,6 +36,7 @@ const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
+const Strata = preload("res://src/world/strata.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -270,12 +271,18 @@ func test_record_water_disturbance_updates_the_installed_water_materials_uniform
 	manager.set_water_layer(water_layer)
 	manager.update(_berlin_tile)
 
-	manager.record_water_disturbance(Vector2(12.0, 34.0))
+	# Disturbances beyond DISTURBANCE_RADIUS_TILES of the update() center are
+	# silently culled (see record_water_disturbance) -- anchor near Berlin's
+	# own pixel position, not an arbitrary offset from the world origin, or
+	# this disturbance never reaches the shader at all.
+	var berlin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var disturbance_pos := berlin_pixel + Vector2(12.0, 34.0)
+	manager.record_water_disturbance(disturbance_pos)
 
 	var material := water_layer.material as ShaderMaterial
 	assert_eq(material.get_shader_parameter("disturbance_count"), 1)
 	var positions: PackedVector2Array = material.get_shader_parameter("disturbance_pos")
-	assert_eq(positions[0], Vector2(12.0, 34.0))
+	assert_eq(positions[0], disturbance_pos)
 	water_layer.free()
 
 
@@ -287,7 +294,10 @@ func test_step_water_disturbances_ages_the_installed_water_materials_ripple():
 	manager.set_water_layer(water_layer)
 	manager.update(_berlin_tile)
 
-	manager.record_water_disturbance(Vector2(1.0, 1.0))
+	# Same DISTURBANCE_RADIUS_TILES culling as the test above -- anchor near
+	# Berlin's own pixel position.
+	var berlin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	manager.record_water_disturbance(berlin_pixel + Vector2(1.0, 1.0))
 	manager.step_water_disturbances(0.5)
 
 	var material := water_layer.material as ShaderMaterial
@@ -846,6 +856,24 @@ func test_herbivore_population_near_matches_herbivore_population_at_chunk():
 	)
 
 
+## docs/concept/disease.md's herd (foot-and-mouth-like) archetype: real
+## population vs. real carrying capacity is CreatureMarker's own density
+## signal for herd disease transmission pressure (see
+## DiseaseModel.herd_transmission_chance) -- mirrors herbivore_population_
+## at_chunk/near's exact existing pair-of-accessors pattern.
+func test_herbivore_capacity_near_matches_herbivore_capacity_at_chunk():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		(center_chunk.x * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE,
+		(center_chunk.y * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE
+	)
+	assert_gt(manager.herbivore_capacity_at_chunk(center_chunk), 0.0)
+	assert_almost_eq(
+		manager.herbivore_capacity_near(pixel), manager.herbivore_capacity_at_chunk(center_chunk), 0.001
+	)
+
+
 func test_update_spawns_creature_markers_for_loaded_regions_around_berlin():
 	manager.update(_berlin_tile)
 	assert_gt(creatures_parent.get_child_count(), 0)
@@ -1044,13 +1072,23 @@ func test_build_at_global_fails_when_the_chunk_is_not_loaded():
 	assert_false(success)
 
 
+## Asserts the cell actually changed rather than pinning an exact atlas
+## coordinate: a real Berlin tile almost always has at least one real,
+## unmodified land-biome cardinal neighbor, so the earth cell now blends
+## toward it (see TerrainRenderer.earth_dominant_blend_for/paint()'s
+## modifications branch) instead of always landing on the flat
+## atlas_coords_for_modification("earth") tile -- which TerrainRenderer's
+## own test suite (test_terrain_renderer.gd) already covers in detail. This
+## test's own job is just proving build_at_global -> paint() wiring fires.
 func test_build_at_global_repaints_the_tile_map_cell():
 	manager.update(_berlin_tile)
+	var before_coords := tile_map_layer.get_cell_atlas_coords(_berlin_tile)
+
 	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "earth")
-	var terrain_renderer := TerrainRenderer.new()
-	assert_eq(
-		tile_map_layer.get_cell_atlas_coords(_berlin_tile),
-		terrain_renderer.atlas_coords_for_modification("earth")
+
+	assert_ne(
+		tile_map_layer.get_cell_atlas_coords(_berlin_tile), before_coords,
+		"building earth should repaint the cell away from its original biome tile"
 	)
 
 
@@ -1416,6 +1454,46 @@ func test_update_shows_the_roof_again_once_the_player_leaves_the_room():
 
 	assert_ne(roof_layer.get_cell_source_id(interior_tile), -1, "leaving the room should show the roof again")
 	roof_layer.free()
+
+
+# -- geology: a real per-chunk Strata sim exists for every loaded chunk ------
+# (see docs/concept/geology.md). Cave-entrance discovery/reveal itself is
+# exercised directly against GeologyRenderer (test_geology_renderer.gd) --
+# entrances are far too sparse (~1 in 500 mountain tiles) to reliably land
+# inside a small, fast real-elevation-generated test chunk, so these smoke
+# tests only cover what every loaded chunk (any biome) guarantees: a real
+# Strata instance exists, and update()'s new geology-reveal step never
+# crashes even when nothing is nearby.
+
+func test_loading_a_chunk_creates_a_real_topsoil_strata_instance():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var strata := manager.strata_at(chunk_coord)
+	assert_not_null(strata, "a loaded chunk should have a real Strata instance")
+	assert_eq(strata.layer, Strata.LAYER_TOPSOIL_REGOLITH)
+
+
+func test_unloading_a_chunk_clears_its_strata():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_not_null(manager.strata_at(chunk_coord), "precondition: chunk is loaded")
+
+	# Walk far enough away that the original chunk falls outside UNLOAD_RADIUS.
+	var far_tile := _berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 40, 0)
+	manager.update(far_tile)
+
+	assert_null(manager.strata_at(chunk_coord), "an unloaded chunk's strata should be cleared")
+
+
+func test_update_does_not_crash_the_geology_reveal_step_away_from_any_entrance():
+	# Berlin is inland, non-mountain -- exercises the "nothing nearby" path
+	# through _update_geology_reveal/_nearby_cave_entrance every frame the
+	# rest of update() already runs, the same smoke-test shape the roof
+	# visibility tests above give _update_roof_visibility.
+	manager.update(_berlin_tile)
+	manager.update(_berlin_tile + Vector2i(1, 0))
+	manager.update(_berlin_tile)
+	assert_true(true, "update() should run the geology reveal step without error")
 
 
 func _chunk_coord_for_tile(tile: Vector2i) -> Vector2i:
@@ -2579,12 +2657,30 @@ func test_a_grazed_tuft_stops_being_drawn_immediately():
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
 	var tufts: Array = manager.grass_near(centre, 40)
 	assert_gt(tufts.size(), 0, "precondition: something to graze")
-	var eaten: Vector2 = tufts[0].position
-	var tile: Vector2i = manager._world_tile_for_pixel(eaten)
-	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(tile)
-	var cell: Vector2i = tile - chunk_coord * EarthChunkManager.CHUNK_SIZE
-	var band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
-	assert_true(manager._grass_sprites[chunk_coord].has(band), "precondition: its band was drawn")
+
+	# grass_near's 40-tile reach is simulation-wide (a grazer may walk to an
+	# off-screen tuft -- see grass_near's own doc comment), scanned in
+	# dictionary order across a 3x3-chunk neighbourhood, NOT sorted by
+	# distance. Drawing is intentionally scoped far tighter, to the camera's
+	# own tile-precise view window (GRASS_VIEW_BUFFER_TILES/_sync_grass_
+	# sprites), so tufts[0] is not reliably one of the handful that are
+	# actually drawn. This test's own subject is the draw-immediacy of an
+	# on-screen tuft, so pick the first one the manager itself already drew
+	# rather than assuming grass_near's first result is on-screen.
+	var eaten: Vector2
+	var chunk_coord: Vector2i
+	var band := -1
+	for tuft in tufts:
+		var tile: Vector2i = manager._world_tile_for_pixel(tuft.position)
+		var candidate_chunk: Vector2i = manager._chunk_coord_for_tile(tile)
+		var cell: Vector2i = tile - candidate_chunk * EarthChunkManager.CHUNK_SIZE
+		var candidate_band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
+		if manager._grass_sprites.get(candidate_chunk, {}).has(candidate_band):
+			eaten = tuft.position
+			chunk_coord = candidate_chunk
+			band = candidate_band
+			break
+	assert_true(band != -1, "precondition: at least one grazeable tuft is actually drawn")
 	var before: int = manager._grass_sprites[chunk_coord][band].multimesh.instance_count
 	manager.graze_grass_at(eaten)
 	var bands: Dictionary = manager._grass_sprites[chunk_coord]
@@ -4974,10 +5070,12 @@ func test_step_settlements_forms_the_governance_appropriate_institution_type():
 # -- emergence: Phase 14 -- regional trade, one real edge at a time --------
 
 ## A real settlement with a real production shortfall (Phase 12's own
-## Quest) is resupplied from the nearest OTHER real settlement's real
-## surplus -- stock actually moves between two real markets, and the
-## transfer is a real, /why-inspectable event.
-func test_step_regional_trade_resupplies_a_shortage_from_a_surplus_settlement():
+## Quest) has a caravan dispatched from the nearest OTHER real settlement's
+## real surplus -- the supplier's stock is gone immediately (goods really
+## in transit, real risk -- see docs/concept/trade.md), but the shortage
+## settlement isn't credited yet: that only happens once the caravan
+## actually finishes walking there (see the arrival test below).
+func test_step_regional_trade_departs_a_caravan_but_defers_the_shortage_credit():
 	var shortage_coord := Vector2i(0, 0)
 	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])  # blacksmith
 	var shortage_id := EntityRef.for_settlement(shortage_coord)
@@ -4990,16 +5088,146 @@ func test_step_regional_trade_resupplies_a_shortage_from_a_surplus_settlement():
 
 	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
 
-	# stone_pickaxe needs 2 stick + 3 rock -- the shortage settlement should
-	# now have real stock it didn't have before, taken from the supplier.
-	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 3)
-	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 2)
+	# The supplier is really out this stock right away -- stone_pickaxe
+	# needs 2 stick + 3 rock.
 	assert_eq(manager.market_store().market_for(supplier_id).stock_of("rock"), 17)
 	assert_eq(manager.market_store().market_for(supplier_id).stock_of("stick"), 18)
+	# But the shortage settlement has nothing yet -- it's still on the road.
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 0)
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 0)
+
+	# stone_pickaxe needs both rock and stick -- one real caravan per missing
+	# item, each its own departure event.
+	var departed: Array = manager.event_store().events_of_type("regional_trade_departed")
+	assert_eq(departed.size(), 2)
+	for event in departed:
+		assert_eq(event.actors, [supplier_id, shortage_id])
+	assert_eq(manager.event_store().events_of_type("regional_trade_shipped").size(), 0)
+	assert_eq(manager._active_caravans.size(), 2)
+
+
+## The other real half of the same trip: once a departed caravan actually
+## finishes walking the real route to the shortage settlement's own well,
+## the shortage settlement is credited and the "shipped" event becomes
+## real -- not at the moment of departure. supplier=(-1,0) is a real fixed
+## point where actually running CaravanRaid.roll_for on both real items
+## (rock, stick) at departure_age 0.0 clears HARD tier's own chance for
+## neither -- a clean, deliberately unraided pair, contrasting with the
+## deliberately-raided one the raid test below uses.
+func test_a_departed_caravan_credits_the_shortage_settlement_on_real_arrival():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var supplier_coord := Vector2i(-1, 0)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	assert_eq(manager._active_caravans.size(), 2, "precondition: both caravans are on the road")
+
+	# Walk them all the way there -- one real chunk apart is a short enough
+	# route that a handful of seconds-sized steps comfortably clears it,
+	# whatever CaravanTrip.WALK_SPEED_PX_PER_SEC happens to be tuned to.
+	for i in 200:
+		manager.advance_world_age(1.0)
+		manager.step_caravans()
+		if manager._active_caravans.is_empty():
+			break
+
+	assert_true(manager._active_caravans.is_empty(), "both caravans should have resolved by now")
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 3)
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 2)
 
 	var shipped: Array = manager.event_store().events_of_type("regional_trade_shipped")
-	assert_true(shipped.size() >= 1)
-	assert_eq(shipped[0].actors, [supplier_id, shortage_id])
+	assert_eq(shipped.size(), 2)
+	for event in shipped:
+		assert_eq(event.actors, [supplier_id, shortage_id])
+
+
+## Walking a real route wears it, the same real PathScarring.step_on every
+## other repeated-traffic system in this codebase already uses (see
+## docs/concept/infrastructure.md) -- a caravan is a second real caller of
+## it, not a cosmetic-only walk.
+func test_a_caravan_wears_a_real_path_along_its_route():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var supplier_coord := Vector2i(1, 0)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	assert_eq(manager._caravan_path_scarring.tracked_tile_count(), 0, "precondition: no wear yet")
+
+	# A handful of small steps partway along the route -- enough to cross
+	# several tiles without necessarily finishing the whole trip.
+	for i in 10:
+		manager.advance_world_age(1.0)
+		manager.step_caravans()
+
+	assert_gt(manager._caravan_path_scarring.tracked_tile_count(), 0)
+
+
+## A raided trip never reaches the shortage settlement -- its carried goods
+## scatter into the world via WorldItemBus (the same real drop path a
+## felled tree or a smashed stone already uses) instead of being credited.
+## supplier=(0,1)/shortage=(0,0)/departure_age=0.0 is a real fixed point:
+## exercising the real, production CaravanRaid.roll_for with these exact
+## real inputs (not mocked, not invented) puts the ROCK trip's roll under
+## HARD tier's real chance while the STICK trip's roll clears it -- so this
+## one scenario also proves two caravans from the same shortage resolve
+## fully independently. Found once by actually running roll_for with these
+## inputs, the same "chosen coordinates that force a specific real outcome"
+## approach test_step_regional_trade_prefers_the_nearest_surplus_settlement
+## already uses for distance.
+func test_a_raided_caravan_scatters_its_goods_while_its_sibling_still_arrives():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])  # blacksmith
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var supplier_coord := Vector2i(0, 1)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	var dropped_stacks: Array = []
+	var dropped_positions: Array = []
+	WorldItemBus.item_dropped.connect(
+		func(item_stack, world_position): dropped_stacks.append(item_stack); dropped_positions.append(world_position)
+	)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	assert_eq(manager._active_caravans.size(), 2, "precondition: both caravans are on the road")
+
+	for i in 200:
+		manager.advance_world_age(1.0)
+		manager.step_caravans()
+		if manager._active_caravans.is_empty():
+			break
+
+	assert_true(manager._active_caravans.is_empty(), "both caravans should have resolved by now")
+	# Rock was raided -- never arrives. Stick wasn't -- it arrives normally,
+	# exactly like the plain arrival test above.
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 0, "raided goods never arrive")
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 2, "the unraided sibling still arrives")
+
+	var shipped: Array = manager.event_store().events_of_type("regional_trade_shipped")
+	assert_eq(shipped.size(), 1)
+	assert_eq(shipped[0].tags, ["stick"])
+
+	var raided: Array = manager.event_store().events_of_type("regional_trade_raided")
+	assert_eq(raided.size(), 1)
+	assert_eq(raided[0].actors, [supplier_id, shortage_id])
+	assert_eq(raided[0].tags, ["rock"])
+
+	assert_eq(dropped_stacks.size(), 1, "the caravan's carried rock scatters into the world exactly once")
+	assert_eq(dropped_stacks[0].item.id, "rock")
+	assert_eq(dropped_stacks[0].count, 3)
 
 
 ## Given two candidate suppliers, the CLOSER one (real Euclidean distance

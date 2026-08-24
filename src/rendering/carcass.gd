@@ -14,6 +14,8 @@ const CarcassGuts = preload("res://src/rendering/carcass_guts.gd")
 const Butchering = preload("res://src/gameplay/butchering.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
+const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
+const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 
 const GROUP_NAME := "carcass"
 
@@ -37,6 +39,19 @@ var _parts_taken := 0
 var _decompose_health := DECOMPOSE_HEALTH
 var _sprite: Sprite2D
 
+## Disease (see docs/concept/disease.md's anthrax-like CARRION archetype):
+## which RegionDifficulty tier this carcass rotted in (set by whoever spawns
+## it -- see CreatureMarker._spawn_carcass_if_eligible, which copies its own
+## region_tier straight across) and whether it rolled contaminated the
+## instant it crossed is_rotten() (see _roll_contamination_if_just_rotten).
+## A contaminated carcass is a real hazard: a decomposer can carry it onward
+## (DecomposerMarker) and a player who butchers it carelessly risks exposure
+## (Player._butcher_step).
+var region_tier: int = RegionDifficulty.Tier.EASY
+var contaminated := false
+var _was_rotten := false
+var _disease_model := DiseaseModel.new()
+
 static var _item_catalog := ItemCatalog.new()
 static var _carcass_sprite_generator := ProceduralCarcassSprite.new()
 
@@ -51,10 +66,25 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_age += delta
+	if not _was_rotten and is_rotten():
+		_was_rotten = true
+		_roll_contamination()
 
 
 func is_rotten() -> bool:
 	return _age >= ROT_SECONDS
+
+
+## Rolled exactly once, the instant this carcass first crosses is_rotten()
+## (docs/concept/disease.md: "an unburied Carcass past its ROT_SECONDS
+## threshold has a real chance to be contaminated"). Seeded from this
+## carcass's own position + species -- deterministic for a given carcass,
+## the same spatial-hash convention ore_placement.gd/stone_placement.gd
+## already use for their own one-time world rolls.
+func _roll_contamination() -> void:
+	var chance := _disease_model.carcass_contamination_chance(region_tier)
+	var seed_value := hash("%d_%d_%s_contaminate" % [int(position.x), int(position.y), species])
+	contaminated = _disease_model.attempt_transmit(chance, seed_value)
 
 
 func has_parts_remaining() -> bool:

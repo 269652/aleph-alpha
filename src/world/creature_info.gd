@@ -216,6 +216,19 @@ const PREDATOR_SPECIES := {
 	"wolf": true,
 }
 
+## Gates the aggro-provocation rule (docs/concept/worldbosses.md, see
+## BossAggro/CreatureBehavior._perceives_threats): a world boss doesn't
+## proactively attack (or flee) a nearby player at all until a real hit
+## lands, unlike every other species' proximity-based reaction. Currently
+## just the Germany-region roster; a future regional boss joins this table
+## the same way it joins PREDATOR_SPECIES above.
+const WORLD_BOSS_SPECIES := {
+	"lindwurm": true,
+	"rubezahl": true,
+	"nyx": true,
+	"krampus": true,
+}
+
 ## Levels roll in [1, LEVEL_RANGE] from the individual's seed -- a cheap,
 ## deterministic source of "some creatures are tougher than others" variety
 ## without a full leveling/XP system.
@@ -230,6 +243,13 @@ var display_name: String
 var diet: String
 var temperament: String
 var is_predator: bool
+## See WORLD_BOSS_SPECIES above.
+var is_world_boss: bool
+## Per-individual state, not per-species data -- always starts false
+## regardless of species; BossAggro/CreatureMarker.take_damage flips it on
+## the first hit that clears the real-damage threshold. Meaningless (and
+## unread) for a non-boss creature.
+var is_aggroed: bool = false
 var level: int
 var max_health: float
 var health: float
@@ -245,6 +265,7 @@ func _init(a_species: String, seed_value: int = 0) -> void:
 	diet = DIET_BY_SPECIES.get(a_species, "Unknown")
 	temperament = TEMPERAMENT_BY_SPECIES.get(a_species, "calm")
 	is_predator = PREDATOR_SPECIES.get(a_species, false)
+	is_world_boss = WORLD_BOSS_SPECIES.get(a_species, false)
 	level = 1 + (absi(seed_value) % LEVEL_RANGE)
 	var base_max_health: float = MAX_HEALTH_BY_SPECIES.get(a_species, 10.0)
 	max_health = base_max_health * (1.0 + (level - 1) * LEVEL_HEALTH_SCALE)

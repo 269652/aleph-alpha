@@ -557,6 +557,116 @@ func trimmed_composite_image(
 
 
 ## ============================================================================
+## Leg hip/knee segments: a real joint on the fused leg pair, from the SAME
+## pixels, no new art.
+## ============================================================================
+##
+## Reported live, directly: "add proper walk animation by morphing the leg
+## sprites and include a knee joint animated motion." The fused leg pair (see
+## this file's own doc comment on why legs.png/hero_composite.png's legs
+## column draws both legs together as one connected pose, not two
+## independently-swinging sprites) has no thigh/shin split baked into the
+## source art at all -- CharacterView cannot wear a "thigh" and "shin" that
+## were never drawn separately.
+##
+## A full weight-painted Polygon2D/Skeleton2D mesh skin (the standard Godot
+## mechanism for bending one texture smoothly around a joint with no visible
+## seam) was evaluated and set aside for this pass: Godot 4's
+## `Polygon2D.bones` property expects a specific, thinly-documented internal
+## array shape (pairs of a Bone2D NodePath and a PackedFloat32Array of
+## per-vertex weights, normally hand-painted with the editor's own UV/weight
+## tool) that has to be assembled and assigned through `set("bones", ...)`
+## from script -- with zero precedent anywhere in this codebase to build
+## from, and real risk of a subtly wrong weight paint being effectively
+## undebuggable without the editor's own visual painting tool. What this
+## builds instead is the fallback the same design brief explicitly allows: a
+## genuine two-piece CROP, hinged on a real hip+knee pivot chain
+## (CharacterView._leg_left/_leg_knee, driven by leg_gait_cycle.gd's real
+## hip_angle/knee_angle functions) -- real image content, cut rather than
+## fabricated, cruder than a smooth skin (a rigid crop shows a seam once the
+## knee actually bends, a soft skin wouldn't) but honest about being cruder,
+## and buildable/testable with ordinary Image.get_region calls this file
+## already uses everywhere else (see _trimmed).
+
+## Thigh and shank are close enough to equal length in Winter's own
+## anthropometric table (CharacterView.WINTER_THIGH_FRACTION_OF_HEIGHT ~=
+## WINTER_SHANK_FRACTION_OF_HEIGHT -- see that constant's own citation) that
+## the knee sits at essentially the leg art's own midpoint. This does NOT
+## detect where a given outfit row's artist actually drew the knee crease --
+## no such per-row pixel analysis is attempted -- it reuses the same real
+## anthropometric number the leg's own overall height is already built from,
+## rather than a second, independent eyeballed guess.
+const KNEE_LINE_FRACTION := 0.5
+
+## How far the thigh/shin crops overlap across the knee line, in raw
+## composite-canvas pixels -- a real mitigation for the seam a RIGID
+## two-piece crop-and-hinge (see this section's own doc comment on why it
+## isn't a full weight-painted skin) would otherwise show the moment the
+## knee bends even slightly. Several hero_composite.png outfit rows draw a
+## belt or a heraldic banner that visually bridges straight across the knee
+## line (verified directly: crop both rows and look -- row 0's belt sits
+## well above the knee line, but row 7's banner runs from the hip down past
+## it); a bare, non-overlapping cut would tear that shared decoration in two
+## the instant the shin piece rotates independently of the thigh. Generous
+## on purpose -- both crops carry the SAME pixels across this band at rest,
+## so it costs nothing when the knee angle is zero (the shin piece is drawn
+## on top and exactly matches what's already there), and only becomes a
+## visible trade-off (a slightly thicker knee) once the joint actually bends.
+const KNEE_OVERLAP_PX := 10
+
+
+## The thigh (top) and shin (bottom) crops of one outfit variant's fused leg
+## pair, split at KNEE_LINE_FRACTION of its own measured content height with
+## a KNEE_OVERLAP_PX overlap band shared by both -- what CharacterView wears
+## on its hip/knee pivot chain (see this section's own doc comment) instead
+## of one whole-pair sprite, so a real hip+knee gait can bend the pair at a
+## real joint instead of only ever rotating or bobbing it as one rigid
+## whole. Returns `[thigh_image, shin_image]`; empty if legs aren't
+## registered for this variant/facing (mirrors trimmed_composite_image's own
+## has-X-then-fallback contract).
+func composite_leg_segments(variant: int, facing: String = "front") -> Array[Image]:
+	var trimmed := trimmed_composite_image("legs", variant, facing)
+	if trimmed == null:
+		return []
+	var height := trimmed.get_height()
+	var width := trimmed.get_width()
+	var knee_y := clampi(roundi(height * KNEE_LINE_FRACTION), 1, height - 1)
+	var thigh_bottom := mini(height, knee_y + KNEE_OVERLAP_PX)
+	var shin_top := maxi(0, knee_y - KNEE_OVERLAP_PX)
+	var thigh := trimmed.get_region(Rect2i(0, 0, width, thigh_bottom))
+	var shin := trimmed.get_region(Rect2i(0, shin_top, width, height - shin_top))
+	var result: Array[Image] = [thigh, shin]
+	return result
+
+
+## How far down (raw, unscaled texture-pixel units -- the same convention
+## _composite_content_offset_y already uses for Sprite2D.offset elsewhere in
+## this rig) the thigh crop's own drawn texture must be offset so its TOP
+## edge -- not Sprite2D's own default CENTER -- lands on `.position` (the
+## hip pivot). Pure geometry, no image access, independently testable
+## without loading the real sheet.
+func leg_thigh_offset_y(thigh_height_px: float) -> float:
+	return thigh_height_px * 0.5
+
+
+## The knee pivot's own LOCAL Y position (raw, unscaled pixel units) as a
+## child of the hip/thigh sprite -- straight down from the hip line
+## (`.position`, the thigh's own top edge, see leg_thigh_offset_y above) by
+## however many pixels KNEE_LINE_FRACTION of the FULL trimmed leg puts the
+## knee.
+func leg_knee_pivot_local_y(trimmed_height_px: float) -> float:
+	return trimmed_height_px * KNEE_LINE_FRACTION
+
+
+## How far down the shin crop's own drawn texture must be offset so the SAME
+## knee point the thigh/knee pivot above already sits at -- not the shin
+## crop's own top edge, which is `overlap_px` pixels ABOVE that point (see
+## composite_leg_segments) -- lands on the knee pivot's own `.position`.
+func leg_shin_offset_y(shin_height_px: float, overlap_px: float) -> float:
+	return shin_height_px * 0.5 - overlap_px
+
+
+## ============================================================================
 ## Head art: a 10x10 grid of 100 fully-painted faces, recolored per hero.
 ## ============================================================================
 ##

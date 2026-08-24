@@ -80,7 +80,11 @@ aggregate of the same per-tile wear data already being tracked; routes
 between settlements, market nodes at trade hubs, and infrastructure
 condition feeding back into Phase 5's real market prices are all real,
 intended extensions once there is more than one real settlement's worth of
-inter-settlement movement to aggregate over. Unbuilt; later slices.
+inter-settlement movement to aggregate over. Unbuilt; later slices. See
+[trade.md](trade.md) for the compiled spec of exactly this: real
+inter-settlement caravans, driven by real price differentials, wearing
+these routes in as a byproduct of trips actually taken — not yet
+implemented either, but the two are designed to land together.
 
 ## Status
 

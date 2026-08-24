@@ -206,3 +206,94 @@ func test_pull_reveals_the_full_root_by_the_time_it_completes():
 	assert_almost_eq(
 		marker._root.region_rect.size.y, float(IllustratedCropSprite.ROOT_CANVAS_SIZE.y), 0.5
 	)
+
+
+# -- the root's CROWN stays anchored to the leaves, not centred on the ------
+# -- marker and not drifting away as more of it reveals ---------------------
+#
+# Two live reports, in sequence, on the same growing region_rect:
+#
+# 1. "potato fruits are still rendered above soil and not buried" --
+#    Sprite2D defaults to `centered = true`, so the growing region straddled
+#    the marker's own origin, half below ground, half above. Fixed by turning
+#    `centered` off.
+# 2. "carrots/potatoes render a huge blob behind the leaves" -- the first
+#    fix's own offset ALSO shifted vertically by `-revealed_height` every
+#    frame to keep the region's BOTTOM edge pinned at the ground line. That
+#    correctly avoided straddling at any single instant, but it moved the
+#    CROWN itself (texture y=0, where the root attaches to the leaves --
+#    see IllustratedCropSprite's baseline-anchoring convention and
+#    CropPull.root_reveal_rect's own doc comment) further from the leaf
+#    cluster the more of the root became revealed, since a taller revealed
+#    slice needs a bigger upward shift to keep ITS bottom fixed. The crown
+#    should never move -- it is still attached to the leaves throughout the
+#    whole pull. Fixed by pinning the OFFSET once (see CropPull.
+#    root_reveal_offset), so the region's TOP edge -- the crown -- stays at
+#    the marker's local origin, and only the newly-revealed shaft/tip
+#    extends downward from that fixed point as the region grows.
+
+func test_root_sprite_is_not_centered():
+	add_child_autofree(marker)
+	assert_false(
+		marker._root.centered, "centered=true would straddle the ground line instead of growing off it"
+	)
+
+
+func test_freshly_planted_roots_crown_sits_exactly_on_the_ground_line():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	# Nothing revealed yet (region height 0) -- the crown-pinning offset
+	# should already sit at the ground line, not wherever centering would
+	# have put a zero-height rect.
+	assert_eq(marker._root.offset.y, 0.0)
+
+
+func test_partly_revealed_roots_crown_stays_on_the_ground_line():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS * 0.5)
+	# The drawn quad spans [offset.y, offset.y + region_rect.size.y] in the
+	# root's own local space -- its TOP edge (offset.y) -- the crown -- must
+	# stay exactly at the marker's ground line (0), for every crop, every
+	# progress value, not just the one carrot happened to look acceptable at.
+	assert_almost_eq(marker._root.offset.y, 0.0, 0.01)
+
+
+func test_fully_revealed_roots_crown_still_stays_on_the_ground_line():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS * 0.999)
+	assert_almost_eq(marker._root.offset.y, 0.0, 0.01)
+
+
+## The exact regression this test guards against: at full reveal, the
+## crown must NOT have drifted away from the ground line by the whole
+## scaled canvas height (the actual "huge blob behind the leaves" bug).
+func test_root_offset_does_not_drift_as_more_of_it_is_revealed():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	var offset_before_pull := marker._root.offset.y
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS * 0.999)
+	assert_eq(marker._root.offset.y, offset_before_pull)
+
+
+func test_root_offset_stays_horizontally_centred_on_the_soil():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS * 0.5)
+	assert_almost_eq(marker._root.offset.x, -float(IllustratedCropSprite.ROOT_CANVAS_SIZE.x) / 2.0, 0.01)
+
+
+## Same ground-anchoring invariant, but for potato specifically -- the crop
+## actually reported broken, so the fix must hold for it, not just carrot.
+func test_potato_roots_crown_also_stays_on_the_ground_line():
+	marker.crop_id = "potato"
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	marker._process(CropPull.DURATION_SECONDS * 0.5)
+	assert_almost_eq(marker._root.offset.y, 0.0, 0.01)

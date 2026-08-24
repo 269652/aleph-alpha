@@ -1,6 +1,7 @@
 extends GutTest
 
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const Kick = preload("res://src/gameplay/kick.gd")
 
 var catalog := ItemCatalog.new()
 
@@ -190,3 +191,23 @@ func test_kind_of_matches_the_kind_make_builds():
 
 func test_kind_of_unknown_item_is_empty_string():
 	assert_eq(catalog.kind_of("not_a_real_item"), "")
+
+
+# -- real produce mass (docs/concept/wild_crops.md: a pulled root should be --
+# -- a real physical object, kickable/throwable like anything else) ---------
+
+## A medium carrot averages roughly 60-70g in the real world.
+func test_carrot_has_a_plausible_real_carrot_mass():
+	assert_between(catalog.make("carrot").mass_kg, 0.04, 0.12)
+
+
+## A medium potato averages roughly 150-200g in the real world.
+func test_potato_has_a_plausible_real_potato_mass():
+	assert_between(catalog.make("potato").mass_kg, 0.1, 0.3)
+
+
+## Both are far below Kick's leg-mass cutoff -- a real vegetable is trivially
+## light enough to kick, the same way a pebble is.
+func test_carrot_and_potato_are_both_light_enough_to_kick():
+	assert_true(Kick.is_kickable(catalog.make("carrot").mass_kg))
+	assert_true(Kick.is_kickable(catalog.make("potato").mass_kg))

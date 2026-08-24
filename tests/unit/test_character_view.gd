@@ -220,6 +220,31 @@ func test_fused_legs_stay_put_while_idle():
 	assert_almost_eq(leg_left.position.y, view._leg_fused_rest_position.y, 0.001)
 
 
+## An interim stride cue for the fused pair, on top of the existing vertical
+## bob -- real per-leg knee art doesn't exist yet (see docs/concept/
+## character_art_brief.md's own "Four bugs" section on why the fused
+## drawing can't split into independently-swinging legs at all), but a
+## small hip-pivot rock reads as more of a stride than the bob alone
+## (reported live: asked for real knee-jointed per-leg animation; a whole-
+## pair rotational rock is the closest this session can build without new
+## art -- see FUSED_LEG_ROCK_AMPLITUDE's own doc comment). Once per full
+## stride (sin, not the bob's absf(sin)) -- a real gait leans one way then
+## the other over a whole stride, not twice per stride the way footfalls
+## land.
+func test_fused_legs_rock_side_to_side_while_walking():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.3)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	assert_ne(leg_left.rotation, 0.0)
+
+
+func test_fused_legs_rock_resets_to_upright_while_idle():
+	view.set_movement_state(view.MovementState.IDLE)
+	view._process(0.3)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	assert_almost_eq(leg_left.rotation, 0.0, 0.001)
+
+
 # -- illustrated arms: two independent poses, not one frame worn twice ------
 
 func test_arm_left_and_arm_right_use_different_source_frames():
@@ -274,9 +299,10 @@ func test_tool_slot_tracks_arm_rights_current_position():
 func test_tool_slot_moves_with_the_arms_walk_sway():
 	view.set_movement_state(view.MovementState.WALKING)
 	view._process(0.1)
-	var first := view.get_node("ToolSlot").position
+	var tool_slot: Sprite2D = view.get_node("ToolSlot")
+	var first: Vector2 = tool_slot.position
 	view._process(0.4)
-	var second := view.get_node("ToolSlot").position
+	var second: Vector2 = tool_slot.position
 	assert_ne(first, second)
 
 
@@ -584,3 +610,36 @@ func test_the_instantiated_view_is_scaled_down():
 	assert_almost_eq(view.scale.x, CharacterView.SCALE, 0.0001)
 	assert_almost_eq(view.scale.y, CharacterView.SCALE, 0.0001)
 	assert_lt(CharacterView.SCALE, 1.0, "the character should shrink, not grow, relative to its old size")
+
+
+# -- leg proportions: a real anthropometric leg-to-height fraction ----------
+#
+# Reported live: "the players walk animation and overall appearance looks
+# like a dwarf" -- LEG_SIZE.y previously put legs at 12/33 (~36%) of the
+# character's own total height, short of a real standing human's leg share.
+# Winter's "Biomechanics and Motor Control of Human Movement" segment-length
+# table (the same book stone_size.gd's LEG_MASS_FRACTION already cites, for
+# a different table) gives thigh length as ~0.245x standing height and shank
+# length as ~0.246x -- together ~49.1% of a person's real standing height is
+# leg, hip joint to floor. See CharacterView.LEG_TO_HEIGHT_FRACTION.
+
+func test_leg_size_matches_the_anthropometric_leg_to_height_fraction():
+	var expected := roundi(CharacterView._anthropometric_leg_height(CharacterView.ABOVE_HIP_HEIGHT))
+	assert_eq(CharacterView.LEG_SIZE.y, expected)
+
+
+func test_the_resulting_leg_share_of_total_height_is_within_the_cited_anthropometric_range():
+	var total := CharacterView.ABOVE_HIP_HEIGHT + float(CharacterView.LEG_SIZE.y)
+	var fraction: float = float(CharacterView.LEG_SIZE.y) / total
+	assert_true(fraction >= 0.45 and fraction <= 0.50, "leg fraction was %.3f" % fraction)
+
+
+## HEAD_TOP_Y must grow by exactly however much the legs grew (see
+## ABOVE_HIP_HEIGHT's own doc comment: everything above the hip line is held
+## fixed while legs stretch) -- a literal Y-axis stretch that makes the
+## character genuinely taller, not a bigger overall SCALE multiplier that
+## would leave proportions (and the "dwarf" look) unchanged.
+func test_head_top_y_equals_above_hip_height_plus_the_new_leg_height():
+	assert_almost_eq(
+		-CharacterView.HEAD_TOP_Y, CharacterView.ABOVE_HIP_HEIGHT + float(CharacterView.LEG_SIZE.y), 0.01
+	)

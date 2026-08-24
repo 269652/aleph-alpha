@@ -132,7 +132,25 @@ format" below) for any future part that only ever needs one neutral pose.
   footfall rather than once per stride) while `MovementState.WALKING`,
   reported gap: "the legs aren't animated." Reads as "this pair is walking"
   without needing per-leg frames — a real animation, just a coarser one than
-  true per-leg swing art would give.
+  true per-leg swing art would give. A small hip-pivot rock
+  (`FUSED_LEG_ROCK_AMPLITUDE`, once per full stride) was added alongside
+  the bob later the same pass, asked directly for real knee-jointed
+  per-leg animation and told plainly that needs new source art the fused
+  single-drawing legs can't provide — accepted as an interim over waiting.
+  A genuine per-leg walk cycle (separate thigh/shin art, or a walk-cycle
+  strip like the animal sprites have) is still the real fix, not solved
+  here.
+- **A procedural Neck bridges Head and Body**, since neither part's own art
+  draws one and both are positioned by their own measured content (see
+  "Every part gets its own measured scale" below), which varies per outfit
+  row/head cell — reported live: "the head is floating" / "the neck should
+  be rendered procedurally." `CharacterView._apply_neck` sizes a plain
+  skin-toned fill fresh each apply to exactly span whatever gap THIS
+  appearance's own measured edges leave, not a fixed guess. Deliberately
+  NOT drawn in the shaded-cylinder LIMB style `generate_body_part_texture`
+  gives arms/legs (a full dark outline) — that read as an obvious floating
+  rectangle for a bridge piece meant to mostly disappear under the collar,
+  once actually seen live.
 
 ## Four bugs that made correctly-wired art still look broken
 

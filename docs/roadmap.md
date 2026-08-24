@@ -198,7 +198,7 @@ project's specific, already-partially-built expression of it.
 | 11 — World bosses | Exceptional-individual promotion, legacy | `worldbosses.md` (now has a Status section — fitness/promotion math and causal layer both real; village-endangerment attractor still not built) | `world_boss_fitness.gd` (pre-existing, discovered mid-phase) + `evolution.md`'s fitness/rarity sim |
 | 12 — Emergent quests | Quests as projections of real problems | `quests.md` (now has a real implementation-status section — production-shortfall projection done; promotion/quorum/representative, village endangerment, safety/social need sources all still unbuilt) | `quest.gd` (pure projection, no Store — see `docs/progress.md`) |
 | 13 — Governance & politics | Legitimacy, policy, taxation | new `governance.md` (scaffolded, then implemented, same pass) + `01-society-and-institutions.md` | `governance.gd` — see `docs/progress.md` |
-| 14 — Regional trade & migration | Trade networks, migration corridors | `world.md`'s "population exists wherever conditions make it viable" | — |
+| 14 — Regional trade & migration | Trade networks, migration corridors | new `regional_trade.md` (scaffolded, then implemented, same pass) + `world.md`'s "population exists wherever conditions make it viable" + `quests.md`'s own migration design (unbuilt) | `regional_trade.gd` — see `docs/progress.md` |
 | 15 — Technology & cultural diffusion | Knowledge transmission, regional variants | none yet | — |
 | 16 — Religion, festivals, legends | Belief communities, sacred sites | `festivals.md` (referenced by `npc.md` as an eventual daily-planner byproduct) | — |
 | 17 — Polities, wars, civilization | Territory, law, war, diplomacy | roadmap Phase 5+ #2/#3 (era progression) | gated behind real multiplayer per Phase 5+ ordering above |
@@ -292,6 +292,20 @@ since Phase 4/6. Live-verified, with a real timing lesson recorded: a
 large `/ecotest` acceleration raced the world clock past Phase 6's own
 `RECENT_WINDOW_SECONDS` faster than contracts could accumulate within it;
 normal real-time pacing fixed it cleanly.
+
+**Phase 14 (regional trade & migration, trade-networks slice) also had no
+`concept/*.md` coverage — scaffolded then implemented the same pass.**
+Composed entirely from two existing primitives (Phase 12's shortage
+`Quest`, Phase 5's `Market` stock) with zero new tracking: the nearest
+real settlement with genuine surplus resupplies another's real shortfall,
+real stock moving between two real markets in one call. "A regional
+shock should alter multiple settlements" (the exit criterion's own
+language) falls out of the mechanism itself — draining a supplier to
+help a neighbor is the same real number that could later leave the
+supplier short too. Migration stays out of scope, deliberately —
+`quests.md`'s own already-designed section, still unbuilt. Live-verified
+with a normal `/ecotest` acceleration (no recency-window interaction like
+Phase 13's, so the earlier timing lesson didn't apply here).
 
 ---
 
