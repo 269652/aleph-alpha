@@ -6,20 +6,34 @@ extends PanelContainer
 ## Join / Quit), character creation (New Game + Host both route through it),
 ## and a join screen (IP entry).
 ##
-## The creation screen is a real character creator: pick a class on the left,
-## cycle five appearance axes on the right (skin, hair color, hair style,
-## beard, eyes -- see HeroAppearance.AXES), and watch a live full-body
-## portrait update in the middle. Purely glue -- World owns actually spawning
-## the player, starting ENet, and applying the chosen class's stat lens
-## (ClassArchetype); HeroAppearance/ProceduralCharacterSprite own the look.
+## The creation screen is a real character creator, tabbed between
+## **Character** and **Skills** (see _build_character_tab/_build_skills_tab).
+## The Character tab is a hero showcase: class icon cards (each a genuine
+## mini rendering of that class's own look, not a placeholder glyph) sit
+## above a DNA-rarity glow ring wrapping a live animated preview -- the
+## character actually walking through grass, swinging its sword, and
+## picking up/throwing a pebble (see CharacterPreviewStage), not a static
+## pose -- with class name/blurb/stats and a DNA readout underneath, and an
+## appearance column cycling six customization axes (skin, hair color, hair
+## style, beard, eyes, accent/trim color -- see HeroAppearance.AXES) on the
+## right. The Skills tab previews the shared SkillTree node pool, live-
+## highlighting whichever nodes synergize with the currently-picked class.
+## Purely glue -- World owns actually spawning the player, starting ENet, and
+## applying the chosen class's stat lens (ClassArchetype); HeroAppearance/
+## ProceduralCharacterSprite/CharacterPreviewStage/SkillTree own the look and
+## the underlying data.
 
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
-const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const HeroDna = preload("res://src/gameplay/hero_dna.gd")
+## Still needed for the class icon row's mini portraits (_build_class_icon_row)
+## even though the main preview itself moved to CharacterPreviewStage below.
+const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const SkillTree = preload("res://src/gameplay/skill_tree.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
+const CharacterPreviewStageScene = preload("res://scenes/character_preview_stage.tscn")
+const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 ## Shared look, reusing UiTheme's palette (the same dark/rounded/gold-accent
 ## theme World assigns to every other menu/window -- see World._ui_theme) so
@@ -62,9 +76,15 @@ const AXIS_LABELS := {
 	"head": "Face",
 }
 
-## The portrait renders at ProceduralCharacterSprite.PORTRAIT_SIZE and is
-## scaled up by this much -- nearest-neighbour, so it stays crisp pixel art.
-const PORTRAIT_SCALE := 5
+## The live preview's on-screen footprint -- close to the old static
+## portrait's (PORTRAIT_SIZE(26,40) * the old PORTRAIT_SCALE(5) == (130,200))
+## so swapping it in doesn't reflow the rest of the creator's layout.
+const PREVIEW_SIZE := Vector2(150, 200)
+## Renders the stage at a fraction of PREVIEW_SIZE and scales the result up
+## (nearest-neighbour, via the container's own texture_filter below) --
+## keeps the same crisp, chunky pixel-art look the old 5x-scaled portrait
+## had, rather than a smoothly-antialiased render.
+const PREVIEW_STRETCH_SHRINK := 2
 
 ## Widened/heightened for the tabbed creator (Character + Skills, see
 ## _build_create_screen) -- the old 760x520 already fit its 3-column layout
@@ -97,6 +117,9 @@ var reroll_save_path := "user://hero_dna_rerolls.bin"
 
 var _archetypes := ClassArchetype.new()
 var _appearance_maker := HeroAppearance.new()
+var _item_sprite_generator := ProceduralItemSprite.new()
+## Only for the class icon row's mini portraits now (_build_class_icon_row) --
+## the main preview moved to CharacterPreviewStage (see _preview_stage).
 var _char_sprite := ProceduralCharacterSprite.new()
 var _player_save := PlayerSave.new()
 var _dna := HeroDna.new()
@@ -136,8 +159,10 @@ var _resonance_badges: Dictionary = {}
 ## Cached per-class mini portraits for the icon row -- generated once each
 ## (that class's own default look, seed 0), never per-frame.
 var _class_icon_textures: Dictionary = {}
-var _portrait: TextureRect
-## The glow ring behind the portrait, repainted to the rolled DNA's rarity
+## The live animated preview (see CharacterPreviewStage) shown inside the
+## glow ring below -- replaces what used to be a static _portrait TextureRect.
+var _preview_stage: CharacterPreviewStage
+## The glow ring behind the preview, repainted to the rolled DNA's rarity
 ## color (see _refresh_dna) -- the "DNA moment" made visible, not just read.
 var _dna_glow: PanelContainer
 var _dna_glow_tween: Tween
@@ -311,9 +336,13 @@ func _build_character_tab() -> Control:
 	return cols
 
 
-## The showcase card: class-icon strip -> glowing portrait -> class name/
+## The showcase card: class-icon strip -> glowing live preview -> class name/
 ## blurb/stats -> DNA readout -> Reroll button, all one continuous story
-## about the character being built, top to bottom.
+## about the character being built, top to bottom. The preview itself is a
+## real CharacterPreviewStage (walking through grass, swinging its sword,
+## picking up/throwing a pebble -- see its own doc comment) rendered into a
+## SubViewport rather than a static portrait image, so the creator actually
+## shows off the character instead of just a pose.
 func _build_hero_column() -> Control:
 	var col := _card_panel(Vector2(0, 0))
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -325,15 +354,12 @@ func _build_hero_column() -> Control:
 	inner.add_child(_build_class_icon_row())
 
 	# The DNA "moment" made visible, not just read about: a glow ring sits
-	# BEHIND the portrait and repaints to the rolled genome's rarity color
+	# BEHIND the preview and repaints to the rolled genome's rarity color
 	# (see _refresh_dna) -- common stays a quiet accent glow, rare turns
 	# cool blue, legendary a vivid pulsing gold, so a great roll is felt the
 	# instant it lands instead of only readable in the text line below it.
 	var glow_wrap := Control.new()
-	glow_wrap.custom_minimum_size = Vector2(
-		ProceduralCharacterSprite.PORTRAIT_SIZE.x * PORTRAIT_SCALE + 28,
-		ProceduralCharacterSprite.PORTRAIT_SIZE.y * PORTRAIT_SCALE + 28
-	)
+	glow_wrap.custom_minimum_size = PREVIEW_SIZE + Vector2(28, 28)
 	_dna_glow = PanelContainer.new()
 	_dna_glow.set_anchors_preset(Control.PRESET_FULL_RECT)
 	var glow_style := StyleBoxFlat.new()
@@ -353,14 +379,20 @@ func _build_hero_column() -> Control:
 	style.set_content_margin_all(10)
 	frame.add_theme_stylebox_override("panel", style)
 
-	_portrait = TextureRect.new()
-	_portrait.custom_minimum_size = Vector2(
-		ProceduralCharacterSprite.PORTRAIT_SIZE * PORTRAIT_SCALE
-	)
-	_portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	var viewport_container := SubViewportContainer.new()
+	viewport_container.custom_minimum_size = PREVIEW_SIZE
+	viewport_container.stretch = true
+	viewport_container.stretch_shrink = PREVIEW_STRETCH_SHRINK
 	# Pixel art must not blur when scaled up.
-	_portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	frame.add_child(_portrait)
+	viewport_container.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+
+	var viewport := SubViewport.new()
+	viewport.transparent_bg = true
+	viewport.handle_input_locally = false
+	_preview_stage = CharacterPreviewStageScene.instantiate()
+	viewport.add_child(_preview_stage)
+	viewport_container.add_child(viewport)
+	frame.add_child(viewport_container)
 	glow_wrap.add_child(frame)
 	inner.add_child(glow_wrap)
 
@@ -664,8 +696,12 @@ func current_dna() -> Dictionary:
 
 func _refresh_appearance() -> void:
 	var appearance := current_appearance()
-	if _portrait != null:
-		_portrait.texture = _char_sprite.generate_hero_portrait_texture(appearance)
+	if _preview_stage != null:
+		_preview_stage.apply_appearance(appearance)
+		# Re-equipping every refresh (rather than once at setup) sidesteps
+		# any node-readiness ordering question -- cheap, and apply_appearance
+		# above already regenerates textures on every refresh the same way.
+		_preview_stage.equip_weapon(_item_sprite_generator.generate_texture("iron_sword"))
 	for axis in _axis_value_labels:
 		var label: Label = _axis_value_labels[axis]
 		label.text = "%s: %s" % [AXIS_LABELS.get(axis, axis), _axis_value_text(axis, appearance)]

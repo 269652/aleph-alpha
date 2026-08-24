@@ -272,7 +272,9 @@ func generate_hero_tunic_texture(size: Vector2i, appearance: Dictionary) -> Imag
 ## Half the torso's width at row `y`, in pixels -- the body's silhouette.
 ## Proportions are expressed as fractions of the canvas so they hold at any
 ## art resolution: a narrow neck/shoulder line at the very top, the widest
-## point across the chest, a pinched waist, then a flare to the hem.
+## point across the chest, a pinched waist, then a continued taper to the
+## hem (see _HEM_FRACTION's own doc comment for why this narrows rather
+## than flares).
 func torso_half_width(size: Vector2i, y: int) -> float:
 	var t := clampf(float(y) / maxf(float(size.y - 1), 1.0), 0.0, 1.0)
 	var widest := float(size.x) / 2.0
@@ -284,7 +286,7 @@ func torso_half_width(size: Vector2i, y: int) -> float:
 		# Chest tapers in toward the waist.
 		fraction = lerp(1.0, _WAIST_FRACTION, (t - _SHOULDER_T) / (_WAIST_T - _SHOULDER_T))
 	else:
-		# Hem flares back out below the waist.
+		# Continues narrowing from the waist to the hem (see _HEM_FRACTION).
 		fraction = lerp(_WAIST_FRACTION, _HEM_FRACTION, (t - _WAIST_T) / maxf(1.0 - _WAIST_T, 0.0001))
 	return clampf(widest * fraction, 1.0, widest)
 
@@ -295,7 +297,18 @@ const _SHOULDER_T := 0.16
 const _WAIST_T := 0.62
 const _NECK_FRACTION := 0.62
 const _WAIST_FRACTION := 0.82
-const _HEM_FRACTION := 0.96
+## Was 0.96 (a near-full-width flare almost back out to shoulder width) --
+## worked through the actual geometry against CharacterView's leg
+## positions/LEG_SIZE, that flare made the hem's rendered width slightly
+## WIDER than the two legs' own combined span, sitting directly on top of
+## them. For any class whose legs color sits close to its tunic/trim (e.g.
+## "guard"), the hem read as an undifferentiated second pair of legs
+## (reported, screenshotted: "double legs"). Narrowing past the waist
+## instead of flaring keeps the hem clearly distinct from the legs below it
+## -- pinned by test_tunic_hem_does_not_read_as_a_second_pair_of_legs in
+## test_character_view.gd, which measures the real generated art against
+## the real leg geometry rather than eyeballing this number in isolation.
+const _HEM_FRACTION := 0.7
 
 
 func generate_hero_tunic_image(size: Vector2i, appearance: Dictionary) -> Image:

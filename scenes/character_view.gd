@@ -248,8 +248,8 @@ func _ready() -> void:
 	else:
 		apply_appearance(_pending_appearance)
 
-	_arm_left.visible = false
-	_arm_right.visible = false
+	# Arms stay visible from the start now (see _process's own comment) --
+	# only the equipment slots default to hidden until something's equipped.
 	_head_slot.visible = false
 	_tool_slot.visible = false
 
@@ -731,6 +731,12 @@ func legs_visible() -> bool:
 ## only) rather than two independent sprites -- see _apply_legs.
 func legs_are_fused() -> bool:
 	return _legs_are_fused
+
+
+## Arms used to only ever be shown while swimming -- see _process's own
+## comment. Exposed the same way legs_visible() already is.
+func arms_visible() -> bool:
+	return _arm_left.visible
 
 
 func equip_slot(slot_name: String, color: Color) -> void:
