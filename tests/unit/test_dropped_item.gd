@@ -122,7 +122,9 @@ func test_a_dropped_carrot_is_sized_at_its_own_illustrated_world_width():
 	var carrot_item := DroppedItem.new()
 	carrot_item.item_stack = ItemStack.new(Item.new("carrot", "Carrot", "food", 20), 1)
 	add_child_autofree(carrot_item)
-	assert_almost_eq(carrot_item.scale.x, IllustratedCropSprite.ROOT_WORLD_SCALE, 0.0001)
+	assert_almost_eq(
+		carrot_item.scale.x, IllustratedCropSprite.new().root_world_scale("carrot"), 0.0001
+	)
 
 
 func test_a_full_inventory_leaves_the_item_on_the_ground_with_the_remainder():

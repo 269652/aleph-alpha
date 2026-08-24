@@ -215,10 +215,14 @@ asking an LLM, a save/load round-trip is lossless and deterministic, and at
 least one real, already-live gameplay moment (not a synthetic test fixture)
 emits a real event visible through those commands during ordinary play. Met,
 and now the foundation Phases 2–7 build on — see `docs/progress.md` for
-current status phase-by-phase. As of Phase 7, exactly one of those later
-phases (settlement simulation) also has a genuinely automatic live trigger
-of its own, not just a callable, tested mechanism; the others are stated,
-open gaps there, not oversights.
+current status phase-by-phase. Phase 7 (settlement simulation) was the first
+later phase with a genuinely automatic live trigger of its own, not just a
+callable, tested mechanism; Phases 4 (contracts), 5 (local production
+economy), and 6 (institutions) now share that same trigger — extended into
+`step_settlements` itself rather than each growing a separate one — so
+every phase through 7 has a real automatic path, not only a tested
+mechanism waiting to be called. Phases 8 onward remain callable-mechanism-or-
+unstarted, same as before.
 
 ---
 

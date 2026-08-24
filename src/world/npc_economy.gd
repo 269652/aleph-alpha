@@ -65,8 +65,34 @@ func step(delta_seconds: float, is_working: bool, world, pixel_position: Vector2
 		_try_eat(is_working, world, pixel_position)
 
 
+## Land health (docs/concept/world.md "Land health: overharvesting leaves a
+## lasting mark, not just a slower respawn"): only "farmer" reads/depletes
+## vegetation_density_near -- hunter/fisher read a different resource pool
+## entirely (herbivore/fish population) and must not also drain vegetation.
+const _VEGETATION_HARVESTING_OCCUPATION := "farmer"
+
+
 func _gather(delta_seconds: float, world, pixel_position: Vector2) -> void:
-	_accumulated_yield += _production.yield_per_second(occupation, world, pixel_position) * delta_seconds
+	var rate := _production.yield_per_second(occupation, world, pixel_position)
+	var gathered := rate * delta_seconds
+	_accumulated_yield += gathered
+
+	# The exact same real yield just gathered ALSO leaves this region's real
+	# standing vegetation -- previously a farmer only ever READ this number,
+	# never removed anything from it (only weather ever moved it). This is
+	# what makes sustained NPC farming, not just the player's, a real
+	# land-health depletion driver (see EarthChunkManager.
+	# record_vegetation_harvest_near / EcosystemSimulation.
+	# record_vegetation_harvest). Duck-typed fail-open, matching the rest of
+	# this codebase's world-duck-typing: a world without the hook (an older
+	# double, or a caller that hasn't wired it) is a harmless no-op.
+	if (
+		occupation == _VEGETATION_HARVESTING_OCCUPATION
+		and world != null
+		and world.has_method("record_vegetation_harvest_near")
+	):
+		world.record_vegetation_harvest_near(pixel_position, gathered)
+
 	while _accumulated_yield >= NpcProduction.FOOD_UNIT:
 		_accumulated_yield -= NpcProduction.FOOD_UNIT
 		market.add_stock(_production.item_id_for(occupation), NpcProduction.FOOD_UNIT)

@@ -22,12 +22,22 @@ class StubWorld:
 	var vegetation_density := 0.6
 	var herbivore_population := 10.0
 	var fish_population := 8.0
+	var harvested_amount := 0.0
 	func vegetation_density_near(_pos: Vector2) -> float:
 		return vegetation_density
 	func herbivore_population_near(_pos: Vector2) -> float:
 		return herbivore_population
 	func fish_population_near(_pos: Vector2) -> float:
 		return fish_population
+	func record_vegetation_harvest_near(_pos: Vector2, amount: float) -> void:
+		harvested_amount += amount
+
+
+## A world exposing only the original accessor, not the new harvest hook --
+## the exact shape an older/duck-typed caller would still have.
+class BareWorld:
+	func vegetation_density_near(_pos: Vector2) -> float:
+		return 0.6
 
 
 var market: VillageMarket
@@ -157,3 +167,55 @@ func test_a_sated_npc_does_not_buy_anything():
 
 	assert_eq(economy.wallet.balance, 100)
 	assert_almost_eq(market.stock["meat"], 5.0, 0.001)
+
+
+# -- a working farmer's real harvest reaches the world's land-health model ----
+#
+# docs/concept/world.md "Land health: overharvesting leaves a lasting mark,
+# not just a slower respawn" -- a farmer NPC's gathered yield previously only
+# READ vegetation_density_near, never actually removed anything from it (only
+# weather ever moved that number). A real farmer working must now also feed
+# EarthChunkManager's record_vegetation_harvest_near hook, the same real
+# resource its own yield comes from -- so sustained NPC farming is a real
+# depletion driver, not just the player's.
+
+func test_a_working_farmer_records_a_real_vegetation_harvest():
+	var economy := _economy("farmer")
+	economy.step(1.0, true, world, Vector2.ZERO)
+	assert_gt(world.harvested_amount, 0.0)
+
+
+func test_a_non_working_farmer_records_no_harvest():
+	var economy := _economy("farmer")
+	economy.step(1.0, false, world, Vector2.ZERO)
+	assert_eq(world.harvested_amount, 0.0)
+
+
+## Only farmer reads/depletes vegetation -- hunter/fisher read a DIFFERENT
+## resource pool (herbivore/fish population), so they must not also drain
+## vegetation density.
+func test_a_working_hunter_does_not_record_a_vegetation_harvest():
+	var economy := _economy("hunter")
+	economy.step(1.0, true, world, Vector2.ZERO)
+	assert_eq(world.harvested_amount, 0.0)
+
+
+## Dimensionally consistent with the yield actually gathered: the harvested
+## amount over one step must equal yield_per_second * delta_seconds -- the
+## exact same "fraction of standing vegetation converted to food" number the
+## farmer's own production already computes, not a separately invented rate.
+func test_farmer_harvest_amount_matches_the_real_yield_gathered():
+	var economy := _economy("farmer")
+	var expected := NpcProduction.new().yield_per_second("farmer", world, Vector2.ZERO) * 2.5
+	economy.step(2.5, true, world, Vector2.ZERO)
+	assert_almost_eq(world.harvested_amount, expected, 0.0001)
+
+
+## Duck-typed fail-open: a world that doesn't expose the new hook (an older
+## test double, or any other duck-typed caller) must not crash a working
+## farmer's step -- same convention as the rest of this codebase's
+## world-duck-typing (see NpcProduction.yield_per_second's own fail-open).
+func test_a_working_farmer_does_not_crash_when_world_lacks_the_harvest_hook():
+	var economy := _economy("farmer")
+	economy.step(1.0, true, BareWorld.new(), Vector2.ZERO)
+	pass_test("a working farmer against a world without the harvest hook should not crash")

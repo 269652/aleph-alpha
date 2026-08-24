@@ -2188,49 +2188,7 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 const MAX_GROUND_ITEMS := 80
 
 
-## TEMP LIVECHECK -- verifies Phases 4/5/6's gap-closing triggers
-## (step_settlements' production/trade/institution-formation) fire
-## automatically through the real _process/_step_ecology_batch chain, with
-## zero manual coordinator calls. Gated behind --livecheck so an ordinary
-## --solo run is unaffected. Removed before commit.
-var _livecheck_ticks := 0
-const _LIVECHECK_LOG := "user://livecheck_456.log"
-
-func _livecheck_process() -> void:
-	if not ("--livecheck" in OS.get_cmdline_user_args()):
-		return
-	_livecheck_ticks += 1
-	if _livecheck_ticks == 2:
-		var npc_identity_script = load("res://src/world/npc_identity.gd")
-		var entity_ref_script = load("res://src/emergence/entity_ref.gd")
-		var chunk_coord := Vector2i(900, 900)
-		_chunk_manager.record_settlement_founded_if_new(
-			chunk_coord, [npc_identity_script.new(5), npc_identity_script.new(1)]
-		)
-		var settlement_id: String = entity_ref_script.for_settlement(chunk_coord)
-		_chunk_manager.market_store().market_for(settlement_id).add_stock("meat", 200)
-		_handle_ecotest_command(["10"])
-	if _livecheck_ticks % 30 == 0 or _livecheck_ticks == 900:
-		var f := FileAccess.open(_LIVECHECK_LOG, FileAccess.WRITE)
-		f.store_string(
-			(
-				"tick=%d production_succeeded=%d contract_proposed=%d contract_fulfilled=%d institution_formed=%d\n"
-				% [
-					_livecheck_ticks,
-					_chunk_manager.event_store().events_of_type("production_succeeded").size(),
-					_chunk_manager.event_store().events_of_type("contract_proposed").size(),
-					_chunk_manager.event_store().events_of_type("contract_fulfilled").size(),
-					_chunk_manager.event_store().events_of_type("institution_formed").size(),
-				]
-			)
-		)
-		f.close()
-	if _livecheck_ticks >= 900:
-		get_tree().quit()
-
-
 func _process(delta: float) -> void:
-	_livecheck_process()
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
 	# its ring actually expands and fades -- every frame, every client, not
 	# gated behind _owns_ecosystem_simulation() like the simulation steps

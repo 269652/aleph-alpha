@@ -149,6 +149,44 @@ func test_trimmed_part_image_respects_frame_index():
 	assert_ne(left.get_data(), right.get_data())
 
 
+## Measured directly against the real sheet (see head_edge_probe.js, run
+## during debugging): the transition from head.png's background to a face
+## is a WIDE, gradual blur -- 20-30 pixels of ramp between near-black and
+## clearly-face brightness, not a crisp cut. A flat per-pixel
+## distance-from-black chroma-key (what this used to be) either left a
+## visible dark halo around every face (too tight a tolerance) or risked
+## punching a hole through a genuinely dark part of the face itself -- an
+## eye, wherever it happens to also fall within tolerance of black -- since
+## a flat tolerance cannot tell "background" apart from "coincidentally
+## dark pixel in the middle of the face"; it never looks at what a pixel is
+## CONNECTED to. A border flood fill can: starting from the four canvas
+## edges (guaranteed background) and stepping only to a neighbour that is
+## itself close to the pixel that reached it, it rides the background's own
+## gradual blur all the way to where the face genuinely begins, and can
+## never cross INTO the face's interior no matter how dark a pixel there is
+## -- reaching it would require one big step across the face's own edge,
+## which the per-step tolerance refuses.
+func test_flood_removes_a_gradient_background_but_preserves_a_dark_island_inside_content():
+	var image := Image.create(10, 10, false, Image.FORMAT_RGBA8)
+	for y in 10:
+		for x in 10:
+			var ring := mini(mini(x, 9 - x), mini(y, 9 - y))
+			if ring == 0:
+				image.set_pixel(x, y, Color(0.0, 0.0, 0.0, 1.0))
+			elif ring == 1:
+				image.set_pixel(x, y, Color(0.15, 0.15, 0.15, 1.0))  # the blurred edge
+			else:
+				image.set_pixel(x, y, Color(0.8, 0.7, 0.6, 1.0))  # the "face"
+	image.set_pixel(5, 5, Color(0.0, 0.0, 0.0, 1.0))  # a dark "eye" inside the face
+
+	var result := sprite._remove_background_by_flood(image, 0.2)
+
+	assert_almost_eq(result.get_pixel(0, 0).a, 0.0, 0.01, "the border should become transparent")
+	assert_almost_eq(result.get_pixel(1, 1).a, 0.0, 0.01, "the blurred ring should become transparent")
+	assert_gt(result.get_pixel(5, 5).a, 0.5, "a dark pixel surrounded by content should stay opaque")
+	assert_gt(result.get_pixel(4, 4).a, 0.5, "the face content itself should stay opaque")
+
+
 func test_trimmed_head_image_has_a_tight_bounding_box():
 	assert_true(_bbox_is_tight(sprite.trimmed_head_image(4242, Color(0.8, 0.6, 0.44))))
 

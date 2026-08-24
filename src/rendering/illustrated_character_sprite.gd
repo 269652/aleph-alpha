@@ -256,6 +256,63 @@ func _apply_chroma_key(image: Image, key: Color, tolerance: float) -> Image:
 	return keyed
 
 
+## Removes a solid-but-anti-aliased background via a border-connected flood
+## fill (a "magic wand" from the edges) instead of a flat per-pixel
+## chroma-key. Starting from the four canvas edges (guaranteed background)
+## and stepping only to a 4-connected neighbour whose color is within
+## `step_tolerance` of the pixel that reached it, the flood rides a gradual
+## blur all the way to wherever the real content begins, and can never cross
+## INTO that content's interior no matter how dark a pixel there is --
+## reaching it would require one big step across the content's own edge,
+## which the per-step tolerance refuses. A flat distance-from-a-fixed-color
+## key cannot make that distinction: it treats a coincidentally dark pixel in
+## the MIDDLE of the content exactly like real background, because it never
+## looks at what a pixel is connected to (see HEAD_BACKGROUND_FLOOD_STEP_TOLERANCE's
+## own doc comment for the measurement that found this the hard way).
+func _remove_background_by_flood(image: Image, step_tolerance: float) -> Image:
+	var result := image.duplicate()
+	if result.get_format() != Image.FORMAT_RGBA8:
+		result.convert(Image.FORMAT_RGBA8)
+	var width := image.get_width()
+	var height := image.get_height()
+	var visited := {}
+	var queue: Array[Vector2i] = []
+	for x in width:
+		queue.append(Vector2i(x, 0))
+		queue.append(Vector2i(x, height - 1))
+	for y in height:
+		queue.append(Vector2i(0, y))
+		queue.append(Vector2i(width - 1, y))
+	while not queue.is_empty():
+		var at: Vector2i = queue.pop_back()
+		if visited.has(at):
+			continue
+		visited[at] = true
+		var here := image.get_pixel(at.x, at.y)
+		# Explicit type, not := -- result's static type is ambiguous after
+		# .duplicate() (same reason _apply_chroma_key's own `keyed.get_pixel`
+		# is typed this way above), so inference has nothing concrete to
+		# infer from.
+		var was: Color = result.get_pixel(at.x, at.y)
+		result.set_pixel(at.x, at.y, Color(was.r, was.g, was.b, 0.0))
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var next: Vector2i = at + step
+			if next.x < 0 or next.x >= width or next.y < 0 or next.y >= height:
+				continue
+			if visited.has(next):
+				continue
+			if _color_distance(image.get_pixel(next.x, next.y), here) <= step_tolerance:
+				queue.append(next)
+	return result
+
+
+## Manhattan distance in RGB -- cheap, and all that a per-step tolerance
+## needs (unlike a masking decision, there is no hue-vs-brightness question
+## here, just "is this neighbour close enough to still be background").
+func _color_distance(a: Color, b: Color) -> float:
+	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
+
+
 ## ============================================================================
 ## Head art: a 10x10 grid of 100 fully-painted faces, recolored per hero.
 ## ============================================================================
@@ -282,13 +339,21 @@ const HEAD_GRID_ROWS := 10
 const HEAD_CANVAS_SIZE := Vector2i(24, 24)
 const HEAD_BASELINE_Y := 24
 
-## The sheet's own background: solid, near-pure black, no alpha channel.
-## Tolerance is generous enough to catch the measured 0-3 background noise
-## but stays well clear of any genuine dark shading/outline ink in the actual
-## paintings (this project's convention is dark-grey linework, not literal
-## (0,0,0) -- see flora.md's own "shade floor" note on the same risk).
-const HEAD_BACKGROUND_KEY := Color(0.0, 0.0, 0.0)
-const HEAD_BACKGROUND_KEY_TOLERANCE := 0.06
+## The sheet's own background: near-pure black, no alpha channel -- but the
+## transition into a face is a WIDE, gradual blur (measured directly against
+## the real file: 20-30 pixels of ramp between near-black and clearly-face
+## brightness, not a crisp cut). A flat per-pixel distance-from-black
+## chroma-key first tried here either left a visible dark halo around every
+## face (a tight tolerance, reported: the recolored head rendering as a dark
+## block) or would have risked punching a hole through a genuinely dark part
+## of a face -- an eye -- wherever it happened to also fall within tolerance
+## of black. See _remove_background_by_flood's own doc comment for why a
+## border flood fill replaces the flat key instead. This is the per-STEP
+## tolerance the flood walks with, not a distance from a fixed reference
+## color -- generous enough to ride the measured blur (steps up to ~0.18)
+## while stopping at the sharpest jump measured at the true edge (~0.176 in
+## the sampled ramp).
+const HEAD_BACKGROUND_FLOOD_STEP_TOLERANCE := 0.2
 
 ## How dark the recolor's own deepest shading is allowed to go, and the floor
 ## under the sheet's measured peak brightness -- identical role to
@@ -394,7 +459,7 @@ func _load_head_cell(cell_index: int) -> Image:
 	var cropped := _head_sheet.get_region(
 		Rect2i(column * cell_width, row * cell_height, cell_width, cell_height)
 	)
-	var keyed := _apply_chroma_key(cropped, HEAD_BACKGROUND_KEY, HEAD_BACKGROUND_KEY_TOLERANCE)
+	var keyed := _remove_background_by_flood(cropped, HEAD_BACKGROUND_FLOOD_STEP_TOLERANCE)
 	var frames := _slicer.detect_frames(keyed, 0, keyed.get_height())
 	var result := keyed
 	if not frames.is_empty():

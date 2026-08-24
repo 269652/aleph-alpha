@@ -3828,6 +3828,29 @@ func herbivore_population_near(pixel_position: Vector2) -> float:
 	return _ecosystem.herbivore_population(chunk_coord)
 
 
+## This pixel's chunk's persistent land health (docs/concept/world.md "Land
+## health: overharvesting leaves a lasting mark, not just a slower
+## respawn") -- the extra multiplier on top of vegetation_density_near's
+## weather-driven ceiling. Mirrors fish_population_near's exact pattern.
+func land_health_near(pixel_position: Vector2) -> float:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	return _ecosystem.land_health(chunk_coord)
+
+
+## Records a real vegetation harvest against this pixel's chunk -- the
+## explicit mortality term vegetation_density_near previously lacked
+## entirely (only weather ever moved it; see EcosystemSimulation.
+## record_vegetation_harvest's own doc comment). Sustained harvest here,
+## faster than the region can regrow, is what depletes land_health_near
+## (see EcosystemSimulation.step). Mirrors record_fish_catch_near's
+## chunk-resolution pattern, without a discrete world node to remove --
+## vegetation density has no individual on-screen entity the way a fish
+## does.
+func record_vegetation_harvest_near(pixel_position: Vector2, amount: float) -> void:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	_ecosystem.record_vegetation_harvest(chunk_coord, amount)
+
+
 ## Records a harvest against this pixel's chunk's aggregate fish population --
 ## the duck-typed hook a piscivore bird's successful grab calls (see
 ## PiscivoreBirdMarker), the same EcosystemSimulation.record_catch
@@ -4274,6 +4297,12 @@ func _apply_ecology_catchup(chunk_coord: Vector2i) -> void:
 		"fish_capacity": _ecosystem.fish_capacity_at(chunk_coord),
 	}
 	var advanced: Dictionary = _ecology_catchup.advance(record["state"], elapsed, capacity)
+	# Land health (docs/concept/world.md "Land health: overharvesting leaves a
+	# lasting mark, not just a slower respawn") keeps recovering while this
+	# chunk sat unloaded, at the same slow real-grounded pace loaded chunks
+	# use (see ChunkEcologyCatchup.advance/VegetationGrowthModel.
+	# step_land_health) -- it must NOT silently reset to pristine on reload.
+	_ecosystem.seed_land_health(chunk_coord, float(advanced.get("land_health", 1.0)))
 	_ecosystem.seed_populations(chunk_coord, advanced["herbivores"], advanced["predators"])
 	_ecosystem.seed_fish_population(chunk_coord, advanced["fish"])
 
@@ -4361,19 +4390,25 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 				"fruit_stock": 0.0,
 				"vegetation": _ecosystem.average_vegetation_density(chunk_coord),
 				"fish": fish_population,
+				"land_health": _ecosystem.land_health(chunk_coord),
 			},
 		}
 		DirAccess.make_dir_recursive_absolute(FISH_POPULATION_DIR)
 		_chunk_serializer.save_fish_population(fish_population, _fish_population_path(chunk_coord))
 		# ...and the land with it, stamped in WALL-CLOCK time so a revisit
 		# tomorrow can advance the region by however long the player was
-		# actually away (see _apply_persisted_ecology).
+		# actually away (see _apply_persisted_ecology). Land health is saved
+		# alongside it (docs/concept/world.md "Land health: overharvesting
+		# leaves a lasting mark, not just a slower respawn") -- this is
+		# exactly the kind of lasting change that must survive a real
+		# restart, not just an in-session unload/reload.
 		DirAccess.make_dir_recursive_absolute(ECOLOGY_DIR)
 		_chunk_serializer.save_ecology(
 			{
 				"herbivores": _ecosystem.herbivore_population(chunk_coord),
 				"predators": _ecosystem.predator_population(chunk_coord),
 				"vegetation": _ecosystem.average_vegetation_density(chunk_coord),
+				"land_health": _ecosystem.land_health(chunk_coord),
 				"saved_at_unix": Time.get_unix_time_from_system(),
 			},
 			_ecology_path(chunk_coord)
@@ -4470,6 +4505,7 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 			"vegetation": float(saved.get("vegetation", 0.0)),
 			"fruit_stock": 0.0,
 			"fish": _ecosystem.fish_population(chunk_coord),
+			"land_health": float(saved.get("land_health", 1.0)),
 		},
 		elapsed,
 		{
@@ -4483,6 +4519,12 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 		float(caught_up.get("herbivores", 0.0)),
 		float(caught_up.get("predators", 0.0))
 	)
+	# Land health (docs/concept/world.md "Land health: overharvesting leaves a
+	# lasting mark, not just a slower respawn") -- restores the real persisted
+	# value (recovered by however long the player was genuinely away) instead
+	# of leaving add_region's fresh-pristine seeding stand, the same override
+	# seed_populations does for herbivores/predators just above.
+	_ecosystem.seed_land_health(chunk_coord, float(caught_up.get("land_health", 1.0)))
 
 
 func _ecology_path(chunk_coord: Vector2i) -> String:

@@ -26,12 +26,12 @@ const SIZE := 24
 ## live: rendering at the raw SIZE=24 texture with no scale applied at all
 ## looked roughly 1.5 tiles wide next to a 16px tile -- the same "gigantic"
 ## class of bug ProceduralItemSprite's WORLD_WIDTH_BY_ID already fixed once
-## for tree fruit. A follow-up live report ("huge potato crops above soil")
-## caught the leaves/root themselves ALSO reading too large relative to a
-## tile (see IllustratedCropSprite.ROOT_WORLD_WIDTH/LEAF_WORLD_WIDTH, both
-## re-tuned smaller in the same pass) -- this is sized to roughly match
-## that smaller plant footprint: big enough to plausibly cover a planted
-## root sitting at the same origin, without itself dominating the tile.
+## for tree fruit. A follow-up live report ("huge potato crops above soil",
+## reported twice) caught the leaves/root themselves ALSO reading too large
+## (see IllustratedCropSprite.LEAF_WORLD_SIZE/ROOT_WORLD_SIZE, re-tuned to a
+## measured scale in the same pass) -- this is sized to roughly match that
+## smaller plant footprint: big enough to plausibly cover a planted root
+## sitting at the same origin, without itself dominating the tile.
 const SOIL_WORLD_WIDTH := 10.0
 ## The scale factor a marker applies to a SIZE-authored soil sprite to make
 ## it actually read at SOIL_WORLD_WIDTH on screen.

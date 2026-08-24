@@ -553,10 +553,10 @@ project's own terminology.
 | 1 — Event & causality substrate | ✅ Done (core); 🚧 unloaded-region replay | `Event`/`EventStore` with automatic bidirectional cause↔consequence linking, deterministic insertion-ordered IDs, importance, query-by-type/window/entity. Retention/pruning by importance is a tested function, not yet wired to actually prune a running store. "Unloaded-region replay" (catch-up simulation feeding the store while a region is unloaded) is explicitly deferred — no emergence-tracked system yet needs catch-up, so there is nothing to replay. |
 | 2 — Memory, beliefs, information | ✅ Done (mechanism); 🚧 auto-propagation | `MemoryRecord`/`Rumor`/`MemoryStore` built per `npc.md`'s "Memory, beliefs, and rumor propagation" spec, tested, wired live. See below. |
 | 3 — Households & property | ✅ Done (household + property); ⬜ inheritance | `Household`/`HouseholdStore` built and wired live: every villager owns the house it lives in. See below. `npc.md`'s lifecycle (aging/reproduction/death) is still designed but not built, so multi-member households and inheritance stay out of scope until it exists. |
-| 4 — Contracts & obligations | ✅ Done (mechanism); ⬜ live trigger | `Contract`/`ContractStore` built, tested, wired into events/memory. See below — no real economic activity exists yet for a contract to model. |
-| 5 — Local production economy | ✅ Done (mechanism); ⬜ live trigger | `Market`/`MarketStore` built, reusing `CraftingRecipeBook`'s existing recipes rather than a parallel schema. Exit criterion live-verified. See below. |
-| 6 — Institutions | ✅ Done (mechanism); ⬜ live trigger | `Institution`/`InstitutionStore`/`InstitutionFormation` built, formation gated by real fulfilled-contract history with proper hysteresis. Exit criterion live-verified. See below. |
-| 7 — Settlement simulation | ✅ Done (food-driven); ⬜ other inputs | `SettlementState`/`EarthChunkManager.step_settlements`, food-only carrying capacity. **The first emergence phase with a genuinely automatic live trigger** — wired into `World._step_ecology_batch`, live-verified firing with zero manual calls. See below. |
+| 4 — Contracts & obligations | ✅ Done (mechanism + live trigger) | `Contract`/`ContractStore` built, tested, wired into events/memory. `EarthChunkManager.step_settlements` now proposes/accepts/activates/fulfills-or-breaches a real trade contract between a settlement's own households every automatic step. See below. |
+| 5 — Local production economy | ✅ Done (mechanism + live trigger) | `Market`/`MarketStore` built, reusing `CraftingRecipeBook`'s existing recipes rather than a parallel schema. `step_settlements` now attempts each household's occupation-grounded recipe (`OccupationProduction`) automatically. See below. |
+| 6 — Institutions | ✅ Done (mechanism + live trigger) | `Institution`/`InstitutionStore`/`InstitutionFormation` built, formation gated by real fulfilled-contract history with proper hysteresis. `step_settlements`' automatic trade now feeds it real history, so institutions form with no manual call. See below. |
+| 7 — Settlement simulation | ✅ Done (food-driven); ⬜ other inputs | `SettlementState`/`EarthChunkManager.step_settlements`, food-only carrying capacity, wired into `World._step_ecology_batch`. Now also the home of Phase 4/5/6's own automatic triggers (see below) — no longer the only phase with a live trigger. |
 | 8 — Infrastructure networks | ⬜ Not started | `building.md`/`transportation.md` cover the player-facing side; this phase is the emergent traffic→trail→road side. |
 | 9 — Towns & cities | ⬜ Not started | Only `docs/emergence/04-settlements-cities-infrastructure.md` covers this so far — no `concept/*.md` overlap yet. |
 | 10 — Dungeons/ruins/history POIs | ⬜ Not started | `exploration.md`'s abandoned-settlement ruins are already designed (including the world-boss-destruction cause added alongside `quests.md`); this phase is the general historical-POI/archaeology mechanism behind it. |
@@ -755,14 +755,22 @@ is the actual payoff the whole substrate was built for: composing
 independently-built primitives producing a real behaviour neither one
 implements alone.
 
-**Left for the next slice, honestly — this phase is different from 0–3:**
-every prior phase had a real trigger already sitting in the codebase to wire
-against (settlement founding). Contracts have none yet — no production, no
-market, no hiring exists in live gameplay, so nothing currently proposes a
-real contract on its own. The mechanism is complete, tested, and
-live-verified with a synthetic rent contract; it is ready to be called the
-moment Phase 5 (local production economy) or `npc.md`'s hiring system
-exists to call it from.
+**The automatic-trigger gap this phase originally left open is now closed**
+(alongside Phase 5/6's own matching gaps — see Phase 7's entry below for
+where the trigger actually lives). `EarthChunkManager._step_settlement_trade`,
+called from `step_settlements` every automatic step, proposes a real `trade`
+contract between a settlement's own households (the same two, lowest-id
+first, so repeated success/failure is genuine accumulated history rather
+than noise from a shuffling partner) and drives it through
+accept → activate → fulfill (a growing/stable settlement can make good on
+it) or breach (a declining one cannot) — tied to `SettlementState`'s own
+real food-driven status (Phase 7), the same "one real number, multiple
+downstream consequences" pattern Phase 5's pricing already established. A
+settlement with fewer than two households is skipped, not forced onto a
+solo "trade." Live-verified firing with zero manual calls (see Phase 7's
+entry). Hiring/employment contracts specifically still wait on `npc.md`'s
+occupation-driven behavior maturing further; trade was the grounded choice
+available now.
 
 ✅ **A resource shortage raises price AND blocks production, from the same
 real number** (`market.gd`, `market_store.gd`, `market_store_persistence.gd`),
@@ -805,15 +813,26 @@ recorded as a real, `/why`-traceable event. `/market <settlement_id>` is a
 real console command; persistence follows the identical lifecycle as every
 other store.
 
-**Left for the next slice, deliberately, same honesty as Phase 4:** nothing
-in live gameplay calls `attempt_production` yet — no NPC occupation
-currently runs a production tick, so a settlement's market never fills or
-drains on its own. Per-item base pricing (right now every item shares one
-uniform elasticity curve around a neutral 1.0) waits on a real
-currency/value system. Trade ROUTES and cross-settlement price arbitrage
-(docs/emergence/03's "repeated profitable movement creates routes") are
-explicitly out of scope for this slice — they need multiple markets
-actually trading with each other, not just existing independently.
+**The automatic-trigger gap this phase originally left open is now closed.**
+`OccupationProduction.recipe_for` maps a household founder's real occupation
+(`NpcIdentity.occupation`, reconstructed from the founder's own seed — no
+live NpcMarker node required) to a `CraftingRecipeBook` recipe id, and
+`EarthChunkManager._step_settlement_production`, called from
+`step_settlements` every automatic step, attempts it for every household
+whose occupation has one. Deliberately partial, same "don't invent what
+isn't grounded" discipline as `SettlementState`'s food-only carrying
+capacity: only `hunter` (→ `cooked_meat`, matching the SEPARATE, already-live
+`NpcProduction.PRODUCER_ITEM_BY_OCCUPATION`'s own hunter→meat pairing) and
+`blacksmith` (→ `stone_pickaxe`) have a comparably obvious real recipe to
+point at; farmer/merchant/guard/fisher/herbalist/nurse have none in the
+current recipe book and are silently skipped rather than forced onto an
+unrelated one. Live-verified firing with zero manual calls (see Phase 7's
+entry). Per-item base pricing (right now every item shares one uniform
+elasticity curve around a neutral 1.0) still waits on a real currency/value
+system. Trade ROUTES and cross-settlement price arbitrage (docs/emergence/03's
+"repeated profitable movement creates routes") are explicitly out of scope
+for this slice — they need multiple markets actually trading with each
+other, not just existing independently.
 
 ✅ **An institution forms from real repeated coordination, with real
 hysteresis — not a bare create-on-demand call**
@@ -868,16 +887,25 @@ purely because both were built as small, honest, composable primitives
 rather than a monolith — which is the actual thesis the whole substrate is
 testing.
 
-**Left for the next slice, same honest gap as Phase 4/5:** nothing in live
-gameplay calls `attempt_institution_formation` automatically — it is a
-real, tested, callable mechanism, live-verified with a synthetic pair of
-households, not a scheduled check running against every settlement's real
-contract history. N-party clustering (this slice is deliberately two-party
-only), goal derivation ("member needs, pooled dependencies, leadership
-priorities..."), and institution actions (recruit, negotiate, patrol,
-petition, strike, ...) are all explicitly out of scope — the doc's own
-"Start with guilds, cooperatives, militias..." roster names the TYPES this
-phase supports, not yet the behaviors those types would eventually enact.
+**The automatic-trigger gap this phase originally left open is now closed —
+genuinely DOWNSTREAM of Phase 4's, not a separate trigger of its own.**
+`_step_settlement_trade` (Phase 4's own automatic trigger, above) calls
+`attempt_institution_formation("cooperative", party_a, party_b)` for the
+same pair every settlement step; once their repeated fulfilled trades cross
+`InstitutionFormation`'s real threshold, a cooperative forms with no
+scheduled check written specifically for it — the mechanism reuses the same
+`active_institution_for` once-only guard every other coordinator already
+relies on, so repeated calls after formation are harmless no-ops. Live
+end-to-end verification (see Phase 7's entry) crossed the threshold for
+real: three real automatic settlement steps, three real fulfilled trades
+between the same two households, one real `institution_formed` event, zero
+manual coordinator calls anywhere in the check. N-party clustering (this
+slice is deliberately two-party only), goal derivation ("member needs,
+pooled dependencies, leadership priorities..."), and institution actions
+(recruit, negotiate, patrol, petition, strike, ...) are all still
+explicitly out of scope — the doc's own "Start with guilds, cooperatives,
+militias..." roster names the TYPES this phase supports, not yet the
+behaviors those types would eventually enact.
 
 ✅ **A settlement's growth/decline status is real, automatic, and
 FOOD-driven** (`settlement_state.gd`,
@@ -909,8 +937,8 @@ record, this just queries it, which is the kind of demonstrable payoff
 `00-emergence-architecture.md`'s own "why does this city exist" observability
 goal is actually for.
 
-**This is the first emergence phase with a genuinely automatic live
-trigger — closing the gap Phases 4, 5, and 6 each left open.**
+**This was the first emergence phase with a genuinely automatic live
+trigger, and is now also home to Phase 4/5/6's own.**
 `EarthChunkManager.step_settlements` uses the exact same throttled-
 accumulator shape `TreeSpread`/`step_tree_spread` already established
 (`SETTLEMENT_STEP_INTERVAL := 30.0`), and is wired directly into
@@ -921,26 +949,39 @@ silently skipped, `_settlement_status` tracked but deliberately not
 persisted — a reload may re-record its current status once more on the
 first step after loading, a known, accepted rough edge rather than a
 source of runaway duplicates, since it can only happen once per reload).
+Every real settlement step now ALSO drives Phase 5's production attempt and
+Phase 4's household trade (which in turn feeds Phase 6's institution check)
+— extending the one real automatic hook rather than adding three separate
+ones, closing "Phases 4, 5, and 6 still have NO automatic live trigger,"
+the gap this same entry used to state here.
 
 **Live end-to-end verification proved the automatic path specifically, not
-just the mechanism**: loaded a real settlement, enabled `/ecotest`
-acceleration, and let the ordinary `_process` loop run with **zero manual
-calls** to `step_settlements` or any other coordinator. A real
-`settlement_declining` event appeared on its own at world-clock tick ~962,
-correctly reflecting that real settlement's 5 real households against its
-real (zero) food stock — `/settlement`, `/why`, and `/history` all showed
-consistent, correct state.
+just the mechanism, twice over.** Settlement status: loaded a real
+settlement, enabled `/ecotest` acceleration, and let the ordinary `_process`
+loop run with **zero manual calls** to `step_settlements` or any other
+coordinator. A real `settlement_declining` event appeared on its own at
+world-clock tick ~962, correctly reflecting that real settlement's 5 real
+households against its real (zero) food stock — `/settlement`, `/why`, and
+`/history` all showed consistent, correct state. Production/trade/
+institutions: a fresh settlement with a real hunter household and real
+`meat` stock, `/ecotest` enabled, and again **zero manual calls** to
+`step_settlements`, `attempt_production`, `propose_contract`, or
+`attempt_institution_formation` — within 5 real engine frames the log
+showed `production_succeeded=3 contract_proposed=3 contract_fulfilled=3
+institution_formed=1`, the entire Phase 4→5→6 causal chain firing on its
+own from nothing but the real `_process` loop.
 
 **Left for the next slice, deliberately:** water, housing, jobs,
-sanitation, security, transport, trade, climate, and disease — every other
+sanitation, security, transport, climate, and disease — every other
 carrying-capacity input the concept doc lists — wait on real systems to
 derive them from (a housing capacity check is trivial but currently
 meaningless, since every villager already owns exactly one house by Phase
-3's own construction; it would always read "at capacity"). Nothing
-currently produces or consumes food automatically either — `Market` fills
-only when something calls `attempt_production`, which itself has no
-automatic trigger yet (Phase 5's own stated gap), so a settlement's food
-stock is currently static once set, not a live economy feeding itself.
+3's own construction; it would always read "at capacity"). Food itself is
+now automatically PRODUCED (Phase 5's trigger, for occupations with a
+grounded recipe) but still not automatically CONSUMED by anything — a
+settlement's food stock only drains if something spends it, and nothing
+does yet, so `step_settlements` can currently only report GROWING/STABLE in
+practice once production starts outpacing a starting stock of zero.
 Migration, city thresholds, specialization-from-flows, and dependency
 networks are all later parts of this same doc, explicitly out of scope
 here.
@@ -1494,13 +1535,14 @@ No faction/reputation system exists. All ⬜ Not started:
 
 ### Exploration (`concept/exploration.md`)
 
-No exploration-specific mechanics (map/POIs/fog-of-war/waypoints) exist beyond raw walking. All ⬜ Not started:
+No map/fog-of-war/waypoint exploration mechanics exist beyond raw walking. All ⬜ Not started except the two below:
 
-- **History-Seeded POI System** (large)
+- **History-Seeded POI System** (large) — ⬜ Not started. No POI/ruin/dungeon generator exists anywhere in `src/world/` yet (checked before building the obstacle below) — placement is the honest next step, not silently implied by the obstacle existing.
 - **Abandoned Settlements** (medium) — a settlement lost to a `concept/quests.md` village-endangerment fight is now a named, specific cause among these (2026-08-13), the unresolved quest itself standing in as the ruin's "what happened" fragment.
 - **Monster Lairs** (medium)
 - **Causal Procedural Weighting** (large)
 - **Historical Event Logging / Discoverable Fragments** (large)
+- **Puzzle Content Stays Emergent — Momentum Obstacle** (medium) — 🚧 Partial (2026-08-24) — `src/rendering/collapsed_passage.gd`: the first of the doc's "Puzzle content stays emergent, not hand-authored" obstacle types, "a collapsed passage that only enough momentum ... can clear," built as a real, tested, standalone placeable/spawnable `StaticBody2D` (real `MaterialProperties` material, defaults to `"stone"`) rather than a bespoke puzzle mechanism — it routes every delivered hit through the SAME `ImpactResolver.resolve_impact` call every other hittable thing in this world already uses (contact geometry always `"blunt"`; `"crush"`/`"shatter"` outcomes clear it, `"dent"`/`"bounce"` leave it blocked). Wired to TWO real momentum sources already built this session: a thrown stone (`Player._resolve_stone_impact_on_obstacles`, called from `_throw_held_stone`) and a kicked stone (same helper, called from `_kick_step`) — both real, tested, no parallel physics system. Real-world-probed: a thrown 2cm pebble at minimum charge measured 0.0226 kg·m/s → `bounce`, stays blocked; a thrown 15cm cobble at full charge measured 38.17 kg·m/s → `crush`, clears; a kicked 3cm pebble measured 46.2 kg·m/s (`Kick.KICK_MOMENTUM_KG_M_S`) → clears. The other two obstacle types (Freeze/Heat-class chamber, hardness/toughness-gated sealed door) remain ⬜ out of scope this pass. **Not yet wired into any POI generator** — none exists (see above) — this is a real, correct primitive waiting to be placed by one.
 - **POI Loot Rarity Integration** (small) — 🚧 Partial — `src/gameplay/poi_loot_scaling.gd`: deterministic rarity-scaling-by-POI-tier math, tested; no actual POIs exist in the world yet to attach it to.
 - **World-Scale POI Density Scaling (open question)** (small)
 
@@ -1702,7 +1744,7 @@ festival wiring, no hiring/wages yet.
 - **Faction/Settlement Reputation Aggregation** (medium) — ⬜ Not started
 - **Emergent Village Festivals** (large) — ⬜ Not started
 - **Basic Merchant Shopping** (medium) — ✅ Done (basic) — `src/gameplay/shop.gd`: a fixed gold-priced catalog (tool/weapon/armor/food), spent from the player's existing (previously unwired) `Wallet`. `EarthChunkManager.has_merchant_near` finds a nearby villager with occupation "merchant"; `Player._shop_step` (trade key, default T) buys the first affordable catalog item, cycling through the list on repeat presses so it doesn't just rebuy the same thing. No shop UI browsing, no selling the player's own goods, no per-NPC stock/pricing -- open follow-ups.
-- **NPC Needs / Local Production Economy** (large) — ✅ Done — implements npc.md's "Needs and the local production economy" section in full: real per-NPC hunger (`src/world/npc_needs.gd`, mirrors `creature_needs.gd`'s shape -- hash-seeded stagger, `HUNGER_RATE_PER_SECOND=0.02` matching `CreatureNeeds`, `is_hungry()`/`feed()` -- deliberately hunger-only, no thirst, per the spec's own scope); real production (`src/world/npc_production.gd`) where farmer/hunter/fisher read the SAME weather-tied numbers the wild ecosystem already runs on via 2 new `EarthChunkManager` accessors mirroring `fish_population_near`'s exact existing pattern (`vegetation_density_near` for farmer, `herbivore_population_near` for hunter, the pre-existing `fish_population_near` reused as-is for fisher) -- a real drought (lower moisture, same biome/temperature) measured 93.8% lower farmer AND hunter yield in a real probe (`PRODUCTION_RATE_PER_SECOND=0.05`, a shared fraction-of-standing-resource rate, tested behaviorally rather than pinned to a magnitude, matching this codebase's existing fraction-per-time-unit tuned-rate convention); a real per-settlement `VillageMarket` (`src/world/village_market.gd`, one instance per `VillageRenderer.spawn_village` call, shared by every villager of that settlement) holding real stock keyed by real `ItemCatalog` ids (farmer→"fruit", hunter→"meat", fisher→"fish" -- no invented item ids) at a tested `VILLAGE_LOCAL_FOOD_PRICE=2` (below `shop.gd`'s `cooked_meat` price of 4, a deliberately distinct informal villager-to-villager price, NOT the player-facing global catalog); `src/world/npc_economy.gd` ties needs+`Wallet`+production+market together per NPC and is driven once per frame from `NpcMarker._process` (`NpcMarker.setup_economy`, wired by `VillageRenderer._build_npc`). **Judgment calls made and documented in-code**: (1) a producer self-feeds for FREE from their own currently-active production (no market/gold transaction) rather than buying from the market like a non-producer -- gated on genuinely nonzero real yield right now, so total ecological collapse can still starve a producer too, not just everyone else; (2) gold is a real two-faucet flow (`docs/concept/economy.md`), not a closed loop -- a producer earns `YIELD_TO_GOLD_RATE=1` gold per unit the instant it's gathered (independent of whether it's ever bought), a buyer spends `VILLAGE_LOCAL_FOOD_PRICE=2`, and the two rates deliberately differ (a real wholesale-vs-retail margin) rather than round-tripping the same number; (3) the market is NPC-only -- npc.md's own framing never extends it to the player, so the player still only uses `shop.gd`'s existing global catalog; (4) nurse's `FakeNpcPlanner` work tag resolves to the shared "well" landmark (a village-care role tending the square) rather than a new dedicated building; (5) settlement occupation balance is left to chance, not guaranteed (see Procedural NPC Population Generation above). **Real probe** (`godot --headless -s <standalone script>`, not GUT, run against the actual production code -- `EcosystemSimulation`/`NpcProduction`/`NpcEconomy`/`VillageMarket`, not hand-traced): a real settlement (chunk (30,1) in one run) with a real hunter and real blacksmith -- the hunter gathered 34 real "meat" units and earned 34 real gold over a simulated 300-second workday reading a real `herbivore_population` of 2.304 in a lush region; the blacksmith, forced hungry with 50 gold, spent 2 gold buying 1 unit from that same real stock and was fed (hunger 1.0→0.0, stock 34→33); a stranded merchant with an empty market and no gold stayed genuinely hungry (hunger→1.0, no crash, no free pass) after 100 simulated seconds. **Known gaps**: `VillageMarket` is freshly created per `spawn_village` call, so a chunk reload resets village stock to empty -- the same "regenerates identically on revisit, no persistence" limitation trees/creatures/houses already accept, not novel to this system; no wiring yet from sustained hunger to any lifecycle/death consequence (deliberately out of scope this pass, see npc.md's own "Deliberately NOT in this pass" line); `HeroAppearance` outfit palette gap for hunter/nurse (see NPC Identity System above).
+- **NPC Needs / Local Production Economy** (large) — ✅ Done — implements npc.md's "Needs and the local production economy" section in full: real per-NPC hunger (`src/world/npc_needs.gd`, mirrors `creature_needs.gd`'s shape -- hash-seeded stagger, `HUNGER_RATE_PER_SECOND=0.02` matching `CreatureNeeds`, `is_hungry()`/`feed()` -- deliberately hunger-only, no thirst, per the spec's own scope); real production (`src/world/npc_production.gd`) where farmer/hunter/fisher read the SAME weather-tied numbers the wild ecosystem already runs on via 2 new `EarthChunkManager` accessors mirroring `fish_population_near`'s exact existing pattern (`vegetation_density_near` for farmer, `herbivore_population_near` for hunter, the pre-existing `fish_population_near` reused as-is for fisher) -- a real drought (lower moisture, same biome/temperature) measured 93.8% lower farmer AND hunter yield in a real probe (`PRODUCTION_RATE_PER_SECOND=0.05`, a shared fraction-of-standing-resource rate, tested behaviorally rather than pinned to a magnitude, matching this codebase's existing fraction-per-time-unit tuned-rate convention); a real per-settlement `VillageMarket` (`src/world/village_market.gd`, one instance per `VillageRenderer.spawn_village` call, shared by every villager of that settlement) holding real stock keyed by real `ItemCatalog` ids (farmer→"fruit", hunter→"meat", fisher→"fish" -- no invented item ids) at a tested `VILLAGE_LOCAL_FOOD_PRICE=2` (below `shop.gd`'s `cooked_meat` price of 4, a deliberately distinct informal villager-to-villager price, NOT the player-facing global catalog); `src/world/npc_economy.gd` ties needs+`Wallet`+production+market together per NPC and is driven once per frame from `NpcMarker._process` (`NpcMarker.setup_economy`, wired by `VillageRenderer._build_npc`). **Judgment calls made and documented in-code**: (1) a producer self-feeds for FREE from their own currently-active production (no market/gold transaction) rather than buying from the market like a non-producer -- gated on genuinely nonzero real yield right now, so total ecological collapse can still starve a producer too, not just everyone else; (2) gold is a real two-faucet flow (`docs/concept/economy.md`), not a closed loop -- a producer earns `YIELD_TO_GOLD_RATE=1` gold per unit the instant it's gathered (independent of whether it's ever bought), a buyer spends `VILLAGE_LOCAL_FOOD_PRICE=2`, and the two rates deliberately differ (a real wholesale-vs-retail margin) rather than round-tripping the same number; (3) the market is NPC-only -- npc.md's own framing never extends it to the player, so the player still only uses `shop.gd`'s existing global catalog; (4) nurse's `FakeNpcPlanner` work tag resolves to the shared "well" landmark (a village-care role tending the square) rather than a new dedicated building; (5) settlement occupation balance is left to chance, not guaranteed (see Procedural NPC Population Generation above). **Real probe** (`godot --headless -s <standalone script>`, not GUT, run against the actual production code -- `EcosystemSimulation`/`NpcProduction`/`NpcEconomy`/`VillageMarket`, not hand-traced): a real settlement (chunk (30,1) in one run) with a real hunter and real blacksmith -- the hunter gathered 34 real "meat" units and earned 34 real gold over a simulated 300-second workday reading a real `herbivore_population` of 2.304 in a lush region; the blacksmith, forced hungry with 50 gold, spent 2 gold buying 1 unit from that same real stock and was fed (hunger 1.0→0.0, stock 34→33); a stranded merchant with an empty market and no gold stayed genuinely hungry (hunger→1.0, no crash, no free pass) after 100 simulated seconds. **Known gaps**: `VillageMarket` is freshly created per `spawn_village` call, so a chunk reload resets village stock to empty -- the same "regenerates identically on revisit, no persistence" limitation trees/creatures/houses already accept, not novel to this system; no wiring yet from sustained hunger to any lifecycle/death consequence (deliberately out of scope this pass, see npc.md's own "Deliberately NOT in this pass" line); `HeroAppearance` outfit palette gap for hunter/nurse (see NPC Identity System above). **Update**: a working farmer's yield now also depletes the real land it comes from — see world.md's "Land Health" entry above — so a village worked too hard by its own farmers, not just a drought, can genuinely go hungry over time.
 - **Basic Talk Interaction** (small) — ✅ Done (basic) — spec'd in `concept/npc.md`'s "Minimal talk interaction" section: an explicit placeholder for the real Live Dialogue System below, not a cut-down version of it. `src/world/npc_greeting.gd` turns an `NpcIdentity` into one deterministic line flavored by its own personality trait and need (8 trait templates × 6 need phrases); `EarthChunkManager.nearest_npc_near` finds the closest villager (any occupation) within range; `Player._talk_step` (talk key, default G, new `Keybindings` entry) shows that villager's line as a HUD banner on press. A proximity prompt ("Talk (<bound key>)", reading the live keybinding so a rebind is never stale) floats above whichever villager is in range (`World._update_interaction_prompt`, world-to-screen via the viewport's canvas transform), shown even before the key is pressed -- the general "nearby-interaction hint" affordance requested for NPCs. No memory of the exchange, no branching, no quest hooks.
 - **Settlement Growth via Migration** (large) — ⬜ Not started — spec'd in `concept/npc.md`'s new "Settlement growth" section and `concept/quests.md`'s Settlement growth section: player-built structures as a habitability pull, migration as a new replan-interrupt resolution, and unification of player-grown settlements with procedurally-seeded ones. Depends on Village-Endangerment Attractor Mechanism below for its preferred migration source (settlements that lost that fight).
 
@@ -2446,6 +2488,7 @@ Exploration sections (referenced, not redefined, in world.md itself).
 - **Köppen-style Climate Banding** (small) — ✅ Done — `climate_model.gd` + `biome_classifier.gd`.
 - **Day/Night & Seasonal Clock** (medium) — ✅ Done — `solar_position.gd` real-time astronomical lighting (no distinct "season" gameplay variable yet, only the real solar geometry).
 - **Vegetation Growth Simulation** (large) — 🚧 Partial — see Phase 1 table above (`vegetation_growth_model.gd`); not unified with visible tree rendering yet.
+- **Land Health (overharvesting leaves a lasting mark, not just a slower respawn)** (medium) — ✅ Done (mechanism); 🚧 Partial (depletion drivers) — implements world.md's own "Land health" bullet: a persistent per-CHUNK-AGGREGATE scalar (`EcosystemSimulation._land_health`, same fidelity tier as herbivore/predator/fish population, deliberately not per-cell — documented tradeoff in `ecosystem_simulation.gd`'s own file doc comment) that `VegetationGrowthModel.effective_capacity`/`step_grid` now multiply the weather-driven ceiling down by, on top of (not instead of) the existing drought effect. `EcosystemSimulation.record_vegetation_harvest` is the new explicit mortality term standing vegetation density previously lacked entirely (only weather ever moved it) — mirrors `record_catch`'s role for fish. `VegetationGrowthModel.step_land_health` compares a region's harvest RATE since the last step against its own live `regrowth_rate` (the same logistic term `step_density` already integrates, factored out): depletes at `LAND_HEALTH_DEPLETION_PACE_PER_DAY` (`GROWTH_PACE_PER_DAY/8`) only while harvest genuinely outpaces regrowth, recovers at the far slower `LAND_HEALTH_RECOVERY_PACE_PER_DAY` (`GROWTH_PACE_PER_DAY/40`) otherwise — both grounded against real soil-organic-matter-recovery timescales (years-to-decades) vs. a single growing season's biomass regrowth, cited in the constants' own doc comments, not eyeballed. **Persists across both an in-session unload/reload and a real app restart** (`ChunkSerializer.save_ecology`/`load_ecology` gained a `land_health` field, backward-compatible with old 4-field save files via a file-length check defaulting to 1.0; `ChunkEcologyCatchup.advance` now also recovers land health — never depletes it, nothing harvests an unloaded chunk — over real elapsed unloaded time) — this is the one persistent-state gap the concept doc explicitly called out NOT to repeat (unlike vegetation density/fruit stock, which still reset to a fresh weather-driven equilibrium on every chunk reload, a known pre-existing simplification this pass did not touch). **Wired to exactly one real depletion driver this pass**: a working farmer NPC's `NpcEconomy._gather` now also calls `EarthChunkManager.record_vegetation_harvest_near` with the exact same amount its own yield already computed (no separately invented rate) — so sustained NPC farming, not just a hypothetical player action, is a real depletion driver, verified end-to-end in a real probe (below). **Known scope gap, flagged honestly**: grazing (`EarthChunkManager._graze_by_herbivores`) and tree felling still only touch their own separate cosmetic systems (`TallGrass` tuft growth, discrete tree nodes) — NEITHER currently reduces the aggregate `_vegetation_density` this feature governs, so land health does not yet respond to them; this was true before this pass too (nothing reduced aggregate vegetation density at all until now) and unifying those systems with the aggregate density field is a separate, larger follow-up, not attempted here. **Real probe** (`godot --headless -s <standalone script>`, not GUT, run against the live `EcosystemSimulation`/`NpcProduction`/`NpcEconomy`/`VillageMarket`/`EarthChunkManager` code): two identical grassland regions, identical good weather (temp=moisture=0.8); 2 real farmer NPCs worked one region for 15 simulated days (real `NpcEconomy.step` calls each real second) then stopped for a 10-day settle — land health fell 1.0→0.1875, density settled at a real nonzero 0.0650 (NOT stripped bare, ruling out "nothing left to harvest" as the explanation) vs. the untouched baseline's 0.3840/1.0; a **fresh farmer's real yield_per_second was 83.1% lower** in the degraded region under the exact same weather (0.003252 vs. 0.019200) — land health is a genuine, additional, separate factor from weather, exactly as the concept doc requires. Left alone for a further 200 simulated days, the region fully recovered (density back to 0.3840, land health back to 1.0), confirming the recovery-pace grounding. **Player-observable timescale, stated honestly**: this is a deliberately SLOW mechanic — a loaded/watched chunk runs its ecosystem "day" at 60 real seconds (`EarthChunkManager.SECONDS_PER_SIMULATED_DAY`), so full depletion under continuous overharvest takes on the order of 15-20 minutes of real, continuous, active overharvesting to show up clearly, and full recovery on the order of an hour or more of the land being left alone WHILE LOADED; an unloaded/away region instead catches up on the much coarser real-wall-clock catch-up clock (1 real hour = 1 ecosystem day), so a genuinely scarred plot realistically heals over real DAYS of the player simply not being there, not one login session — matching the concept doc's "years, not until the next rain" framing translated onto this game's actual clocks.
 - **Herbivore Population Simulation** (large) — ✅ Done — see Phase 1 table above.
 - **Predator Population Simulation** (large) — ✅ Done — see Phase 1 table above.
 - **Emergent Creature Distribution ("boars" pillar)** (medium) — ✅ Done — `test_ecosystem_time_lapse.gd` proves biome-driven clustering with no hand-placed spawners, matching this pillar's exact framing.
