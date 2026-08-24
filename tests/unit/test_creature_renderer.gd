@@ -263,7 +263,7 @@ func test_grassland_biome_matches_the_original_generic_pool_identity():
 	assert_true(herbivore_species.has("boar"))
 	for species in herbivore_species:
 		assert_true(
-			species in ["herbivore", "boar", "mouse", "horse", "deer", "nonvenomous_snake"],
+			species in ["herbivore", "boar", "mouse", "horse", "deer", "nonvenomous_snake", "sheep"],
 			"unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("predator"))
@@ -339,7 +339,9 @@ func test_mountain_biome_promotes_goats_and_mountain_lions():
 	var predator_species := _species_seen_across_chunks(0.0, 1.0, "mountain")
 	assert_true(herbivore_species.has("goat"), "mountain should promote goats")
 	for species in herbivore_species:
-		assert_true(species in ["herbivore", "goat", "mouse"], "unexpected herbivore-role species: %s" % species)
+		assert_true(
+			species in ["herbivore", "goat", "mouse", "sheep"], "unexpected herbivore-role species: %s" % species
+		)
 	assert_true(predator_species.has("mountain_lion"), "mountain should promote mountain lions")
 	for species in predator_species:
 		assert_true(species in ["predator", "mountain_lion"], "unexpected predator-role species: %s" % species)

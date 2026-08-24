@@ -36,6 +36,9 @@ const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
+const Why = preload("res://src/emergence/why.gd")
+const SimulationMetrics = preload("res://src/emergence/simulation_metrics.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const DragSlot = preload("res://src/ui/drag_slot.gd")
 const TimeLapse = preload("res://src/gameplay/time_lapse.gd")
@@ -58,6 +61,11 @@ const HUD_SLOT_LOCKED_COLOR := Color(0.08, 0.08, 0.08, 0.6)
 ## tiles every frame would be wasteful; the player doesn't need pixel-perfect
 ## real-time minimap updates.
 const MINIMAP_REFRESH_INTERVAL := 1.0
+## Hover tooltip recompute cadence (~30 Hz) -- imperceptible for a tooltip,
+## and keeps the (throttled + radius-filtered) hoverable scan off the critical
+## per-frame path.
+const HOVER_REFRESH_INTERVAL := 0.033
+var _hover_accumulator := 0.0
 
 ## Real seconds between player-state autosaves (see docs/concept/
 ## persistence.md) -- mirrors the world's own "persist eagerly, not on an
@@ -132,6 +140,7 @@ var _rain_overlay := RainOverlay.new()
 
 @onready var _terrain: TileMapLayer = $Terrain
 @onready var _water_fx: TileMapLayer = $WaterFx
+@onready var _hillshade_fx: TileMapLayer = $HillshadeFx
 ## Snow lies here rather than as a tint on the ground, so footprints can be
 ## carved out of it (see SnowLayer).
 @onready var _snow_fx: TileMapLayer = $SnowFx
@@ -181,6 +190,10 @@ var _hotbar_counts: Array[Label] = []
 ## _update_hotbar can set each slot's tooltip to what's actually bound there
 ## (see _hotbar_tooltip_text), matching InventoryWindow's item tooltips.
 var _hotbar_slot_frames: Array[Control] = []
+## Last-rendered "item_id:count" per hotbar slot, so _update_hotbar can skip
+## slots that didn't change (avoids per-frame texture rebuilds). Sized when the
+## slots are built; a sentinel forces the first real refresh.
+var _hotbar_slot_state: Array[String] = []
 var _creature_renderer := CreatureRenderer.new()
 var _item_catalog := ItemCatalog.new()
 var _crafting_recipe_book := CraftingRecipeBook.new()
@@ -213,7 +226,10 @@ var _world_reset := WorldReset.new()
 var _world_coordinates := WorldCoordinates.new()
 var _keybindings := Keybindings.new()
 var _graphics_fullscreen := false
-var _graphics_vsync := true
+## Default VSync OFF so the frame rate can exceed the monitor refresh toward
+## 120+ FPS (VSync hard-caps to refresh). Re-enable it in Settings > Graphics
+## for a tear-free image on a high-refresh display.
+var _graphics_vsync := false
 ## Render resolution (see RenderResolution): how many pixels the world is
 ## drawn into before being scaled to the window. The one graphics lever that
 ## scales the entire frame cost at once.
@@ -298,6 +314,9 @@ func _ready() -> void:
 	# translucent so shore foam and rain ripples show through (WaterShader).
 	_chunk_manager.set_water_layer(_water_fx)
 	_chunk_manager.set_snow_layer(_snow_fx)
+	# GPU relief shading: real slope/aspect data shaded by the real, live sun
+	# position (see HillshadeShader, docs/concept/terrain_relief.md).
+	_chunk_manager.set_hillshade_layer(_hillshade_fx)
 	# Roof pieces (see docs/concept/building.md#what-enterable-means-in-a-top-down-game):
 	# a separate layer above the player/entities so a house reads as a real
 	# building from outside, hidden per-room while the player is inside it.
@@ -436,6 +455,25 @@ func _wipe_persisted_world() -> void:
 	_world_reset.wipe_directory(EarthChunkManager.PLANTED_TREES_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.FISH_POPULATION_DIR)
 	_player_save.wipe()
+	# The event store and memory store are two more pieces of world-scoped
+	# state that must not survive "New Game" -- the same "New Game means new"
+	# pillar as the three lines above (see docs/concept/persistence.md,
+	# EventStorePersistence/MemoryStorePersistence).
+	_chunk_manager.wipe_event_store()
+	_chunk_manager.wipe_memory_store()
+	_chunk_manager.wipe_household_store()
+	_chunk_manager.wipe_contract_store()
+	_chunk_manager.wipe_market_store()
+	_chunk_manager.wipe_institution_store()
+	# And a brand new world clock: any previous run's persisted clock must not
+	# leak into this one either, then a fresh random starting point is rolled
+	# for THIS world (see EarthChunkManager.randomize_world_age/
+	# docs/concept/seasons.md) -- every save used to start at world-age 0
+	# exactly, which reliably began mid-winter-adjacent and snowed within
+	# minutes of every single new game (reported: "it starts to snow
+	# deterministically").
+	_chunk_manager.wipe_world_clock()
+	_chunk_manager.randomize_world_age()
 
 
 ## Restores a previously saved character exactly where they left off (see
@@ -1105,9 +1143,9 @@ func _build_creature_panels_container() -> void:
 
 
 ## A small floating label that follows the mouse cursor, showing whichever
-## animal marker (land creature, fish, ambient flyer, or piscivore bird --
-## see CreatureMarker.HOVERABLE_GROUP) is nearest the cursor, or hidden if
-## nothing is close enough (see HoverTargetFinder).
+## hoverable entity (creature, fish, ambient/piscivore flyer, tree, stone,
+## ore, or dropped item -- every type that joins HoverTargetFinder.
+## GROUP_NAME) is nearest the cursor, or hidden if nothing is close enough.
 func _build_hover_tooltip() -> void:
 	_hover_tooltip = Label.new()
 	_hover_tooltip.add_theme_font_size_override("font_size", 12)
@@ -1119,20 +1157,61 @@ func _build_hover_tooltip() -> void:
 	_ui.add_child(_hover_tooltip)
 
 
-## Every frame: finds whichever hoverable animal marker is nearest the mouse
+## Every frame: finds whichever hoverable entity (creature, fish, ambient/
+## piscivore flyer, tree, stone, ore, or dropped item) is nearest the mouse
 ## cursor (world-space, so it tracks correctly regardless of camera zoom/pan)
 ## and shows/hides+positions the tooltip label near the cursor accordingly.
+## The tooltip shows the entity's name and, for anything with an action
+## (pick up, chop, mine, smash, kick...), that action's verb and its live
+## keybinding -- ALL of them, if more than one applies (e.g. a pebble reads
+## both "Pick Up (E)" and "Kick (K)"). Grass is the one exception: it has no
+## per-tuft Node2D to join HoverTargetFinder's group (see
+## EarthChunkManager._sync_grass_sprites), so it is checked separately, only
+## once nothing else claimed the cursor.
 func _update_hover_tooltip() -> void:
 	var mouse_world := get_global_mouse_position()
+	# The finder only ever picks a target within HOVER_RADIUS_PX of the cursor,
+	# so skip the expensive per-marker work (get_display_name/get_hover_actions
+	# + dict alloc) for anything farther away -- turns an O(all loaded trees/
+	# stones/creatures) scan into O(the handful under the cursor).
+	var scan_radius_sq := HoverTargetFinder.HOVER_RADIUS_PX * HoverTargetFinder.HOVER_RADIUS_PX
 	var candidates: Array = []
-	for marker in get_tree().get_nodes_in_group(CreatureMarker.HOVERABLE_GROUP):
-		candidates.append({"position": marker.position, "name": marker.get_display_name()})
+	for marker in get_tree().get_nodes_in_group(HoverTargetFinder.GROUP_NAME):
+		if mouse_world.distance_squared_to(marker.position) > scan_radius_sq:
+			continue
+		var actions: Array = (
+			marker.get_hover_actions() if marker.has_method("get_hover_actions") else []
+		)
+		candidates.append({"position": marker.position, "name": marker.get_display_name(), "actions": actions})
 
-	var found_name := _hover_target_finder.name_under(mouse_world, candidates)
+	var info := _hover_target_finder.info_under(mouse_world, candidates)
+	var found_name: String = info.get("name", "")
+	var found_actions: Array = info.get("actions", [])
+	if found_name == "":
+		var grass_growth := _chunk_manager.tall_grass_growth_at(mouse_world)
+		if grass_growth >= 0.0:
+			found_name = "Tall Grass"
+			if grass_growth >= 1.0:
+				found_actions = [{"verb": "Harvest", "action": "attack"}]
+
 	_hover_tooltip.visible = found_name != ""
 	if _hover_tooltip.visible:
-		_hover_tooltip.text = found_name
+		_hover_tooltip.text = _hover_tooltip_text(found_name, found_actions)
 		_hover_tooltip.position = get_viewport().get_mouse_position() + Vector2(14, -8)
+
+
+## Formats a hovered entity's name plus, on their own following lines, every
+## action it offers with its LIVE keybinding (OS.get_keycode_string, so a
+## rebind shows immediately -- the same pattern _show_interaction_prompt
+## already uses for the proximity prompt). Multiple actions all show, e.g.
+## a pebble reads "Pebble\nPick Up (E)\nKick (K)".
+func _hover_tooltip_text(entity_name: String, actions: Array) -> String:
+	var lines := [entity_name]
+	for action in actions:
+		lines.append(
+			"%s (%s)" % [action["verb"], OS.get_keycode_string(_keybindings.keycode_for(action["action"]))]
+		)
+	return "\n".join(lines)
 
 
 ## Big centered "You Died / Respawning in N..." text, hidden until the local
@@ -1273,6 +1352,12 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	_chunk_manager.step_flowers(delta)
 	_chunk_manager.step_desert_scrub(delta)
 	_chunk_manager.step_tundra_lichen(delta)
+	# Every founded settlement is reassessed against its own food stock (see
+	# EarthChunkManager.step_settlements/SettlementState) -- population
+	# growth/decline pressure, throttled the same way tree spread is, so a
+	# real session actually produces settlement_growing/settlement_declining
+	# events without a console command.
+	_chunk_manager.step_settlements(delta)
 	_step_herbivore_food_consumption(delta)
 	_step_reproduction(delta)
 
@@ -1313,6 +1398,9 @@ func _on_console_command(command: String, args: Array) -> void:
 				(
 					"Commands: /day  /season [name]  /weather [state|off]"
 					+ "  /ecotest [seconds_per_year|off]"
+					+ "  /history <entity_id>  /why <event_id>  /remember <entity_id>"
+					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
+					+ "  /institution <entity_id>  /settlement <entity_id>  /emergence"
 					+ "  /spawn <species> [count]  /give <item_id> [count]"
 					+ "  /craft <recipe_id>  /gold <amount>  /village  /species  /help"
 				)
@@ -1324,6 +1412,24 @@ func _on_console_command(command: String, args: Array) -> void:
 		"day":
 			_force_day = true
 			_dev_console.log_line("Time forced to day.")
+		"history":
+			_handle_history_command(args)
+		"why":
+			_handle_why_command(args)
+		"remember":
+			_handle_remember_command(args)
+		"household":
+			_handle_household_command(args)
+		"contract":
+			_handle_contract_command(args)
+		"market":
+			_handle_market_command(args)
+		"institution":
+			_handle_institution_command(args)
+		"settlement":
+			_handle_settlement_command(args)
+		"emergence":
+			_handle_emergence_command()
 		"season":
 			_handle_season_command(args)
 		"weather":
@@ -1342,6 +1448,115 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_village_command(local_player)
 		_:
 			_dev_console.log_line("Unknown command: /%s (try /help)" % command)
+
+
+## /history <entity_id> -- an entity's whole recorded history (see
+## docs/emergence, EntityRef for the "<kind>:<key>" id shape -- e.g.
+## "settlement:3_-7", "npc:483920").
+func _handle_history_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /history <entity_id>  e.g. /history settlement:3_-7")
+		return
+	var entity_id := str(args[0])
+	for line in Why.explain_entity(_chunk_manager.event_store(), entity_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /why <event_id> -- an event's cause-chain provenance trace. Event ids are
+## printed by /history (they look like "evt_0_settlement_founded").
+func _handle_why_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /why <event_id>  e.g. /why evt_0_settlement_founded")
+		return
+	var event_id := str(args[0])
+	for line in Why.explain_event(_chunk_manager.event_store(), event_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /remember <entity_id> -- what this entity itself recalls (see MemoryRecord):
+## source type and confidence per memory, distinct from /history's
+## authoritative record of what it was part of.
+func _handle_remember_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /remember <entity_id>  e.g. /remember npc:483920")
+		return
+	var entity_id := str(args[0])
+	for line in Why.explain_memories(_chunk_manager.memory_store(), entity_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /household <entity_id> -- what household this entity belongs to and what
+## it owns (see Household/HouseholdStore).
+func _handle_household_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /household <entity_id>  e.g. /household npc:483920")
+		return
+	var entity_id := str(args[0])
+	for line in Why.explain_household(_chunk_manager.household_store(), entity_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /contract <entity_id> -- every contract this entity is a party to (see
+## Contract/ContractStore).
+func _handle_contract_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /contract <entity_id>  e.g. /contract household:483920")
+		return
+	var entity_id := str(args[0])
+	for line in Why.explain_contracts(_chunk_manager.contract_store(), entity_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /market <settlement_id> -- stock and price for a settlement's market (see
+## Market/MarketStore).
+func _handle_market_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /market <settlement_id>  e.g. /market settlement:673_127")
+		return
+	var entity_id := str(args[0])
+	var market := _chunk_manager.market_store().market_for(entity_id)
+	for line in Why.explain_market(market, entity_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /institution <entity_id> -- every institution this entity has ever
+## belonged to, active or dissolved (see Institution/InstitutionStore).
+func _handle_institution_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /institution <entity_id>  e.g. /institution household:483920")
+		return
+	var entity_id := str(args[0])
+	for line in Why.explain_institutions(_chunk_manager.institution_store(), entity_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /settlement <settlement_id> -- food, capacity, households, and growth/
+## decline status (see SettlementState).
+func _handle_settlement_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /settlement <settlement_id>  e.g. /settlement settlement:673_127")
+		return
+	var entity_id := str(args[0])
+	var market := _chunk_manager.market_store().market_for(entity_id)
+	var household_count := _chunk_manager.household_count_for_settlement(entity_id)
+	for line in Why.explain_settlement(market, household_count, entity_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /emergence -- store-wide health check: how much has the event substrate
+## actually recorded so far.
+func _handle_emergence_command() -> void:
+	for line in SimulationMetrics.format_report(_chunk_manager.event_store()).split("
+"):
+		_dev_console.log_line(line)
 
 
 ## /season [name] -- reports the season, or skips the world FORWARD to the
@@ -1666,6 +1881,7 @@ func _build_hotbar_slots() -> void:
 		_hotbar_slots.append(icon)
 		_hotbar_counts.append(count_label)
 		_hotbar_slot_frames.append(slot)
+		_hotbar_slot_state.append("<unset>")  # sentinel: forces first real refresh
 
 
 ## A left-click on hotbar slot `index` activates it (equip/use), same as its
@@ -1723,8 +1939,17 @@ func _update_hotbar(local_player: Player) -> void:
 	for i in HOTBAR_SLOT_COUNT:
 		var item_id := local_player.hotbar.item_id_at(i)
 		var count := local_player.inventory.count_of(item_id) if item_id != "" else 0
+		# Skip slots whose (item, count) is unchanged since last frame: rebuilding
+		# the icon/count every frame regenerated a GPU texture per slot per frame
+		# (a real hitch source). Only touch a slot when it actually changed.
+		var state := "%s:%d" % [item_id, count]
+		if _hotbar_slot_state[i] == state:
+			continue
+		_hotbar_slot_state[i] = state
 		if item_id != "" and count > 0:
-			_hotbar_slots[i].texture = _item_sprite_generator.generate_texture(item_id)
+			# texture_for() hits a shared static cache keyed by id (no per-frame
+			# image build / GPU upload) -- item art is a pure function of the id.
+			_hotbar_slots[i].texture = _item_sprite_generator.texture_for(item_id)
 			_hotbar_counts[i].text = str(count) if count > 1 else ""
 			_hotbar_slot_frames[i].tooltip_text = _hotbar_tooltip_text(item_id, count)
 		else:
@@ -1841,8 +2066,25 @@ func _spawn_local_singleplayer_from_save() -> void:
 	# EarthChunkManager.register_scent_carrier).
 	_chunk_manager.register_scent_carrier(player)
 	player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
+	# Resumes the world clock BEFORE the first update() -- update() loads
+	# chunks, and chunk-loading reads _world_age_seconds itself (sapling ages,
+	# ecology catchup), so this has to land before that or the loaded-in world
+	# briefly sees the wrong clock (see EarthChunkManager.load_world_clock /
+	# docs/concept/seasons.md: a resumed game must pick up exactly where its
+	# own save left off, never re-roll a new random start the way New Game
+	# does).
+	_chunk_manager.load_world_clock()
 	_chunk_manager.update(_tile_for_position(saved_position))
 	player.apply_save_dict(save_data)
+	# Restores whatever history and memory a prior session recorded -- the
+	# same "Load Game means exactly where you left off" pillar the player
+	# state above already follows (see docs/concept/persistence.md).
+	_chunk_manager.load_event_store()
+	_chunk_manager.load_memory_store()
+	_chunk_manager.load_household_store()
+	_chunk_manager.load_contract_store()
+	_chunk_manager.load_market_store()
+	_chunk_manager.load_institution_store()
 
 
 ## The world position a player spawning on `tile` should take: the tile's
@@ -1881,6 +2123,20 @@ func _autosave_step(local_player: Player, delta: float) -> void:
 
 func _save_local_player(player: Player) -> void:
 	_player_save.save(player.to_save_dict())
+	# Persisted alongside the player on the same cadence -- world-scoped
+	# state, so it belongs with the autosave/quit-save that already covers
+	# the rest of what a session accumulates, not a separate schedule.
+	_chunk_manager.save_event_store()
+	_chunk_manager.save_memory_store()
+	_chunk_manager.save_household_store()
+	_chunk_manager.save_contract_store()
+	_chunk_manager.save_market_store()
+	_chunk_manager.save_institution_store()
+	# The world clock too -- without this, New Game's random starting point
+	# (see EarthChunkManager.randomize_world_age) would never actually reach
+	# disk, and a Load Game would fall back to the pre-persistence default of
+	# world-age 0 instead of resuming where the session left off.
+	_chunk_manager.save_world_clock()
 
 
 ## Also saves once right before the window actually closes (OS close button/
@@ -1932,79 +2188,66 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 const MAX_GROUND_ITEMS := 80
 
 
-var _diag_t := 0.0
-var _diag_n := 0
-var _diag_detail: Array = []
+## TEMP LIVECHECK -- verifies Phases 4/5/6's gap-closing triggers
+## (step_settlements' production/trade/institution-formation) fire
+## automatically through the real _process/_step_ecology_batch chain, with
+## zero manual coordinator calls. Gated behind --livecheck so an ordinary
+## --solo run is unaffected. Removed before commit.
+var _livecheck_ticks := 0
+const _LIVECHECK_LOG := "user://livecheck_456.log"
 
-func _diag(delta: float) -> void:
-	_diag_t += delta
-	if _diag_t < 3.0:
+func _livecheck_process() -> void:
+	if not ("--livecheck" in OS.get_cmdline_user_args()):
 		return
-	_diag_t = 0.0
-	var fruit := 0
-	for item in _ground_items.get_children():
-		if item.item_stack != null and TreeSpecies.IDS.has(item.item_stack.item.id):
-			fruit += 1
-	var lp := _players.get_node_or_null(str(multiplayer.get_unique_id()))
-	var by_species := {}
-	var fruit_eaters := 0
-	var seeking_fruit := 0
-	var hungry := 0
-	for c in _creatures.get_children():
-		if not ("wander_seed" in c):
-			continue
-		if not ("info" in c):
-			continue  # flyers and fish are counted elsewhere; this is the land
-		var sp: String = "?"
-		if ("info" in c) and c.info != null:
-			sp = str(c.info.species)
-		elif ("species" in c):
-			sp = str(c.species)
-		by_species[sp] = int(by_species.get(sp, 0)) + 1
-		if c.has_method("_forage_kinds") and c._forage_kinds().has("fruit"):
-			fruit_eaters += 1
-		if ("_forage_kind" in c) and c._forage_kind == "fruit":
-			seeking_fruit += 1
-		if ("_needs" in c) and c._needs != null and c._needs.is_hungry():
-			hungry += 1
-		if lp != null and ("_needs" in c) and c._needs != null:
-			_diag_detail.append("%s d=%.0f hunger=%.2f world=%s" % [
-				sp, c.position.distance_to(lp.position), c._needs.hunger,
-				str(("_world" in c) and c._world != null)
-			])
-	var ptile: Vector2i = lp.current_tile() if lp != null else Vector2i.ZERO
-	var line := "DIAG chunks=%d ptile=%s age=%.0f yearfrac=%.3f scale=%.0f season=%s groundfruit=%d creatures=%s fruiteaters=%d hungry=%d seekingfruit=%d" % [
-		_chunk_manager.loaded_chunk_count(),
-		str(ptile),
-		_chunk_manager.world_age_seconds(),
-		_chunk_manager.world_age_seconds() / 691200.0,
-		_ecology_time_scale,
-		_chunk_manager.current_season(), fruit, str(by_species), fruit_eaters, hungry, seeking_fruit
-	]
-	if _diag_n % 8 == 0:
-		line += "
-   " + " | ".join(_diag_detail)
-	_diag_detail.clear()
-	var f := FileAccess.open("user://diag.log", FileAccess.READ_WRITE if FileAccess.file_exists("user://diag.log") else FileAccess.WRITE)
-	f.seek_end()
-	f.store_line(line)
-	f.close()
-	_diag_n += 1
-	if _diag_n >= 70:
+	_livecheck_ticks += 1
+	if _livecheck_ticks == 2:
+		var npc_identity_script = load("res://src/world/npc_identity.gd")
+		var entity_ref_script = load("res://src/emergence/entity_ref.gd")
+		var chunk_coord := Vector2i(900, 900)
+		_chunk_manager.record_settlement_founded_if_new(
+			chunk_coord, [npc_identity_script.new(5), npc_identity_script.new(1)]
+		)
+		var settlement_id: String = entity_ref_script.for_settlement(chunk_coord)
+		_chunk_manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+		_handle_ecotest_command(["10"])
+	if _livecheck_ticks % 30 == 0 or _livecheck_ticks == 900:
+		var f := FileAccess.open(_LIVECHECK_LOG, FileAccess.WRITE)
+		f.store_string(
+			(
+				"tick=%d production_succeeded=%d contract_proposed=%d contract_fulfilled=%d institution_formed=%d\n"
+				% [
+					_livecheck_ticks,
+					_chunk_manager.event_store().events_of_type("production_succeeded").size(),
+					_chunk_manager.event_store().events_of_type("contract_proposed").size(),
+					_chunk_manager.event_store().events_of_type("contract_fulfilled").size(),
+					_chunk_manager.event_store().events_of_type("institution_formed").size(),
+				]
+			)
+		)
+		f.close()
+	if _livecheck_ticks >= 900:
 		get_tree().quit()
 
 
 func _process(delta: float) -> void:
-	_diag(delta)
+	_livecheck_process()
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
 	# its ring actually expands and fades -- every frame, every client, not
 	# gated behind _owns_ecosystem_simulation() like the simulation steps
 	# below (a visual effect, not shared world state).
 	_chunk_manager.step_water_disturbances(delta)
+	var focus_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	# Grass parting under a walker is the SAME kind of purely-cosmetic,
+	# per-client-only effect as the water disturbances above -- it was
+	# previously gated behind _owns_ecosystem_simulation(), which is false for
+	# every connected client except whichever peer hosts (see
+	# owns_ecosystem_simulation_for below): a joining client's OWN local grass
+	# never parted for them, only the host's did. Every client needs their own
+	# nearby grass to part around their own view, not just the simulation
+	# owner's.
+	if focus_player != null:
+		_chunk_manager.set_grass_walker_position(focus_player.position)
 	if _owns_ecosystem_simulation():
-		var focus_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
-		if focus_player != null:
-			_chunk_manager.set_grass_walker_position(focus_player.position)
 		# Normally one slice carrying the frame's own delta; several when
 		# /ecotest is running the year fast (see TimeLapse).
 		# Two groups, at two cadences -- see _step_ecology_fine and
@@ -2319,7 +2562,13 @@ func _client_process(delta: float) -> void:
 	_update_player_health_bar(local_player)
 	_update_hotbar(local_player)
 	_update_creature_panels(local_player, delta)
-	_update_hover_tooltip()
+	# Hover tooltip is throttled (~30 Hz): recomputing which of potentially
+	# thousands of hoverables is under the cursor every single frame was a top
+	# CPU cost. 30 Hz is imperceptible for a tooltip.
+	_hover_accumulator += delta
+	if _hover_accumulator >= HOVER_REFRESH_INTERVAL:
+		_hover_accumulator = 0.0
+		_update_hover_tooltip()
 	_update_survival_bar(local_player)
 	_update_xp_bar(local_player)
 	_update_fishing_label(local_player)
@@ -2344,6 +2593,20 @@ func _client_process(delta: float) -> void:
 	var elevation := ALWAYS_DAY_ELEVATION if _always_day() else _solar_position.elevation_degrees(
 		latitude, longitude, day_of_year, utc_hour
 	)
+	# Real sun compass bearing, for hillshading (see HillshadeShader,
+	# docs/concept/terrain_relief.md) -- same real inputs as elevation just
+	# above, so mountain shading is driven by the exact same sun as day/
+	# night lighting rather than a second light source.
+	var azimuth := _solar_position.azimuth_degrees(latitude, longitude, day_of_year, utc_hour)
+	# The displayed clock reads LOCAL time at the character's own in-game
+	# longitude, not raw UTC -- the same real-astronomy local-solar-time
+	# basis elevation_degrees already uses for lighting (see
+	# SolarPosition.local_hour's own doc comment). Reported: "if a player
+	# from Japan has his character in Berlin, it's still GMT+2 for him" --
+	# the clock used to ignore where the character actually stood entirely.
+	var local_hour := _solar_position.local_hour(utc_hour, longitude)
+	var local_hour_whole := int(local_hour)
+	var local_minute := int((local_hour - float(local_hour_whole)) * 60.0)
 	var sunlight := _solar_position.sunlight_intensity(elevation)
 	_day_night.color = Color(0.2 + sunlight * 0.8, 0.2 + sunlight * 0.8, 0.3 + sunlight * 0.7)
 	# Drives every creature's silhouette shadow length (see DropShadow.
@@ -2375,14 +2638,18 @@ func _client_process(delta: float) -> void:
 	# Walking packs the snow down, which is what leaves a trail.
 	_chunk_manager.tread_snow_at(local_player.position)
 	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
+	# Real relief shading, lit by the exact same sun already computed above
+	# for day/night (elevation) and now also its compass bearing (azimuth).
+	_chunk_manager.set_sun_position(elevation, azimuth)
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
-		"Lat %.1f Lon %.1f   UTC %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"
+		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"
 		% [
+			Engine.get_frames_per_second(),
 			latitude,
 			longitude,
-			utc.hour,
-			utc.minute,
+			local_hour_whole,
+			local_minute,
 			elevation,
 			season,
 			weather,

@@ -10,6 +10,17 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const PixelRamp = preload("res://src/rendering/pixel_ramp.gd")
 const PixelForm = preload("res://src/rendering/pixel_form.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_character_sprite.gd")
+
+## The character creator's live preview (see main_menu.gd's `_portrait`) goes
+## through generate_hero_portrait_image below, entirely independently of
+## CharacterView's in-game Sprite2D paperdoll -- it composites raw Images
+## onto one small canvas rather than positioning/scaling nodes, so it needs
+## its own has-art-then-fallback branch per part rather than reusing
+## CharacterView's. Shared instance (same reasoning as CharacterView's own
+## _illustrated -- no per-caller state, IllustratedCharacterSprite's own
+## caches are already static/shared).
+var _illustrated := IllustratedCharacterSprite.new()
 
 const OUTLINE_DARKEN := 0.5
 const SHADE_DARKEN := 0.2

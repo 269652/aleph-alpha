@@ -16,9 +16,7 @@ const PiscivoreAppetite = preload("res://src/gameplay/piscivore_appetite.gd")
 const ProceduralFishSprite = preload("res://src/rendering/procedural_fish_sprite.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
-
-## For World's mouse-hover animal-name tooltip (see CreatureMarker.HOVERABLE_GROUP).
-const HOVERABLE_GROUP := "hoverable_animal"
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 ## How far below cruise altitude the sprite visibly drops at the bottom of a
 ## dive -- a simple vertical offset "descent" (a kingfisher dives essentially
@@ -67,7 +65,7 @@ var _cruise_position := Vector2.ZERO
 
 
 func _ready() -> void:
-	add_to_group(HOVERABLE_GROUP)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
 
 
 func setup(world, movement: AmbientFlyerMovement) -> void:

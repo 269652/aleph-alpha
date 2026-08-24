@@ -101,11 +101,12 @@ Since hunger rises on its own schedule (`CreatureNeeds`), taming is naturally
 paced across real time: turn up, feed, come back later.
 
 **Carrots** are the reward the system is tuned around. They come from the
-meadow rather than from a farm: wild carrot grows among the grasses, so
-harvesting a mature tall-grass clump for fibre occasionally turns one up. That
-deliberately puts the lasso and its reward in the same place -- a walk through
-a meadow equips you for the whole loop. It takes several successful feeds to
-reach full trust.
+meadow rather than from a farm: wild carrot is a real, visible plant that
+grows and spreads among the grasses (see [wild_crops.md](wild_crops.md)) --
+pulling a mature one is a swing-driven harvest, the same input as chopping a
+tree or harvesting grass fibre. That deliberately puts the lasso and its
+reward in the same place -- a walk through a meadow equips you for the whole
+loop. It takes several successful feeds to reach full trust.
 
 Trust **decays** if the animal is left restrained and hungry for a long
 stretch — neglect is not neutral.
@@ -170,10 +171,11 @@ is a creature in the ecosystem, not a vehicle.
 - ✅ Mounting (horses only): the rider stays the node the player controls and
   the mount is carried along with them, so inventory, combat and survival all
   keep working unchanged while riding
-- ✅ Carrots have a source: **wild carrot** (Daucus carota) is a meadow plant
-  that grows among the grasses, so it comes up when the player harvests a
-  mature tall-grass clump for fibre (`EarthChunkManager.has_wild_carrot`) --
-  the same meadow that supplies the lasso also supplies the reward
+- ✅ Carrots have a source: **wild carrot** (Daucus carota) is a real,
+  visible meadow plant that grows, spreads, and is pulled directly --
+  `WildCropPatch`/`WildCropMarker`, see [wild_crops.md](wild_crops.md) --
+  superseding the earlier grass-harvest freebie. The same meadow that
+  supplies the lasso also supplies the reward
 - ✅ Persistence: a tamed, part-tamed or tied animal is kept as an INDIVIDUAL
   across chunk unload and across sessions (`KeptAnimals`), re-spawned where it
   was left with its trust, its order and whatever it was tied to. Deliberately

@@ -316,6 +316,143 @@ func test_an_illustrated_bloom_still_stays_inside_its_canvas():
 				image.get_pixel(x, y)
 
 
+# -- the blossom is shrunk to fit, never sliced off ---------------------------
+#
+# IllustratedFlowerHead.HEAD_CANVAS_SIZE is taller than the headroom a short
+# stem roll leaves above its own attachment point (see stem_height_px):
+# composited at full size, the crown was sliced off flat by the canvas edge
+# instead of drawn smaller. Invisible on the small species this shipped with;
+# glaring on the sunflower, whose much larger world scale turns the same
+# handful of always-clipped art pixels into an obvious flat top (reported,
+# with a screenshot: "the sunflower sprite is clipped at the top").
+
+func test_head_fit_scale_is_full_when_the_head_already_fits():
+	assert_eq(ProceduralFlowerSprite.head_fit_scale(18, 18), 1.0)
+	assert_eq(ProceduralFlowerSprite.head_fit_scale(30, 18), 1.0)
+
+
+func test_head_fit_scale_shrinks_to_exactly_the_available_headroom():
+	assert_almost_eq(ProceduralFlowerSprite.head_fit_scale(9, 18), 0.5, 0.001)
+	assert_almost_eq(ProceduralFlowerSprite.head_fit_scale(6, 12), 0.5, 0.001)
+
+
+## The invariant the compositor actually relies on: whatever it shrinks the
+## head to, the result must never exceed the real headroom -- checked across
+## every stem-height roll this project's own seed range can produce, not just
+## one hand-picked case.
+func test_head_fit_scale_never_exceeds_the_real_headroom_at_any_stem_roll():
+	for seed_value in range(200):
+		var headroom: int = (
+			ProceduralFlowerSprite.SIZE.y - ProceduralFlowerSprite.stem_height_px(seed_value)
+		)
+		var scale := ProceduralFlowerSprite.head_fit_scale(
+			headroom, IllustratedFlowerHead.HEAD_CANVAS_SIZE.y
+		)
+		var fitted := int(round(IllustratedFlowerHead.HEAD_CANVAS_SIZE.y * scale))
+		assert_lte(fitted, headroom, "seed %d still overflows its own headroom" % seed_value)
+
+
+## The direct measure of the bug: a hard clip only ever drops ROWS past the
+## canvas edge, so a tight-headroom head would still be exactly as WIDE as a
+## roomy one -- just cut off flat across the top. A head genuinely shrunk to
+## fit reads narrower too, because both dimensions shrink together.
+func test_a_tight_headroom_sunflower_head_is_narrower_not_just_clipped_flat():
+	var tightest_seed := 0
+	var roomiest_seed := 0
+	var min_headroom := 9999
+	var max_headroom := 0
+	for seed_value in range(60):
+		var headroom: int = (
+			ProceduralFlowerSprite.SIZE.y - ProceduralFlowerSprite.stem_height_px(seed_value)
+		)
+		if headroom < min_headroom:
+			min_headroom = headroom
+			tightest_seed = seed_value
+		if headroom > max_headroom:
+			max_headroom = headroom
+			roomiest_seed = seed_value
+	assert_lt(
+		min_headroom, max_headroom,
+		"precondition: the scanned seeds should vary the stem's headroom"
+	)
+	assert_lt(
+		min_headroom, IllustratedFlowerHead.HEAD_CANVAS_SIZE.y,
+		"precondition: the tightest roll in range should actually need shrinking"
+	)
+
+	var tight_width := _widest_head_run(
+		generator.generate_image("sunflower", tightest_seed), tightest_seed
+	)
+	var roomy_width := _widest_head_run(
+		generator.generate_image("sunflower", roomiest_seed), roomiest_seed
+	)
+	assert_lt(
+		tight_width, roomy_width,
+		"a short-stemmed sunflower's head should be drawn smaller, not clipped flat at the same width"
+	)
+
+
+## The widest run of painted pixels in any one row of the head region (above
+## the stem, see _head_pixels) -- how wide the bloom reads at its widest.
+func _widest_head_run(image: Image, seed_value: int) -> int:
+	var head_bottom: int = ProceduralFlowerSprite.SIZE.y - ProceduralFlowerSprite.stem_height_px(seed_value)
+	var widest := 0
+	for y in head_bottom:
+		var run := 0
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.0:
+				run += 1
+				widest = maxi(widest, run)
+			else:
+				run = 0
+	return widest
+
+
+# -- the blossom offset tracks the ACTUAL plant, not just its species --------
+#
+# blossom_height_world used to scale by the species' own nominal size alone
+# (world_scale_for), while the sprite itself is drawn at plant_scale_for
+# (species size nudged by this plant's own variance) times growth_scale (how
+# far it has grown -- see EarthChunkManager._flower_scale_for). A
+# below-average or still-growing plant's sprite is smaller than the species
+# norm, but its landing point did not move with it -- most visible on a
+# species whose scale is large to begin with, where even a modest mismatch is
+# a lot of world pixels (reported on the sunflower: "butterflies drink from
+# their stem").
+
+func test_blossom_height_scales_linearly_with_the_actual_plant_scale():
+	var seed_value := 5
+	var full := ProceduralFlowerSprite.blossom_height_world(seed_value, 10.0)
+	var half := ProceduralFlowerSprite.blossom_height_world(seed_value, 5.0)
+	assert_almost_eq(half, full * 0.5, 0.001)
+
+
+func test_a_smaller_plant_has_a_lower_blossom_than_the_species_norm():
+	var seed_value := 5
+	var species_scale := ProceduralFlowerSprite.world_scale_for("sunflower")
+	var norm := ProceduralFlowerSprite.blossom_height_world(seed_value, species_scale)
+	var runt := ProceduralFlowerSprite.blossom_height_world(
+		seed_value, species_scale * (1.0 - ProceduralFlowerSprite.PLANT_SIZE_VARIANCE)
+	)
+	assert_lt(runt, norm, "a below-average plant's blossom should sit lower than the species norm")
+
+
+func test_a_still_growing_flowers_blossom_sits_lower_than_a_mature_ones():
+	var seed_value := 5
+	var species_scale := ProceduralFlowerSprite.world_scale_for("sunflower")
+	var mature := ProceduralFlowerSprite.blossom_height_world(
+		seed_value, species_scale * ProceduralFlowerSprite.growth_scale(1.0)
+	)
+	var seedling := ProceduralFlowerSprite.blossom_height_world(
+		seed_value, species_scale * ProceduralFlowerSprite.growth_scale(0.0)
+	)
+	assert_lt(seedling, mature, "a seedling's blossom should sit far lower than a mature plant's")
+	assert_almost_eq(
+		seedling / mature, ProceduralFlowerSprite.growth_scale(0.0), 0.001,
+		"the blossom should shrink in lockstep with the plant's own growth"
+	)
+
+
 func test_an_illustrated_head_is_tinted_toward_its_species_colour_not_left_pale():
 	# The source art is deliberately pale/neutral (see ai_sprite_prompts.md)
 	# so it can be recoloured per species -- if tinting isn't actually

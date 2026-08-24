@@ -137,3 +137,44 @@ func test_a_region_that_was_never_saved_is_distinguishable_from_an_empty_one():
 	assert_false(loaded.is_empty(), "a hunted-out region is a real, saved state")
 	assert_almost_eq(float(loaded["herbivores"]), 0.0, 0.001)
 	DirAccess.remove_absolute(path)
+
+
+# -- land health survives a real restart too (docs/concept/world.md "Land
+# health: overharvesting leaves a lasting mark, not just a slower respawn")
+#
+# Land health is exactly the kind of lasting change the concept doc calls
+# for -- it must NOT silently reset on reload the way the vegetation/fruit
+# patch-sims that predate this feature are documented as not persisting.
+
+func test_land_health_round_trips_through_the_ecology_file():
+	var path := "user://test_ecology_land_health.bin"
+	var state := {
+		"herbivores": 1.0, "predators": 0.0, "vegetation": 0.5,
+		"saved_at_unix": 1700000000.0, "land_health": 0.35,
+	}
+	serializer.save_ecology(state, path)
+	var loaded := serializer.load_ecology(path)
+	assert_almost_eq(float(loaded["land_health"]), 0.35, 0.001)
+	DirAccess.remove_absolute(path)
+
+
+## Backward compatibility: an ecology file written BEFORE land health existed
+## (the original 4-field format -- herbivores/predators/vegetation/
+## saved_at_unix, nothing more) must still load cleanly, defaulting land
+## health to 1.0 (pristine) rather than reading past end-of-file. An old save
+## genuinely has no history of degradation to report, which IS the correct
+## fact -- not a crash, and not a fabricated degraded value.
+func test_an_old_ecology_file_without_land_health_defaults_it_to_pristine():
+	var path := "user://test_ecology_old_format.bin"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_float(2.0)  # herbivores
+	file.store_float(1.0)  # predators
+	file.store_float(0.6)  # vegetation
+	file.store_double(1700000000.0)  # saved_at_unix
+	file.close()
+
+	var loaded := serializer.load_ecology(path)
+
+	assert_almost_eq(float(loaded["herbivores"]), 2.0, 0.001)
+	assert_almost_eq(float(loaded["land_health"]), 1.0, 0.001)
+	DirAccess.remove_absolute(path)

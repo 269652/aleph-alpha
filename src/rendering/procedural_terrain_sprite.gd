@@ -644,8 +644,56 @@ func generate_multi_directional_blend_image(
 	near_biome: String, far_biome: String, directions: Array, variant_seed: int
 ) -> Image:
 	return generate_multi_directional_blend_image_from(
-		generate_image(near_biome, variant_seed), generate_image(far_biome, variant_seed), directions
+		generate_image(near_biome, variant_seed), generate_image(far_biome, variant_seed), directions, variant_seed
 	)
+
+
+## How strongly a blend edge's seeded noise curve can perturb the
+## transition, in edge-fraction units (matching _BLEND_BAND_START/
+## _BLEND_BAND_END's own 0..1 scale). Enveloped by blend_wobble_envelope,
+## which is exactly zero at and beyond the band edges, so however large
+## this is, the wobble can only ever act strictly INSIDE the existing
+## sharpening band and provably cannot perturb a pixel the un-wobbled
+## design already resolves to pure near/far -- the outer-quarter-purity and
+## far-fraction-monotonic guarantees hold unconditionally, not by tuning.
+const BLEND_WOBBLE_AMPLITUDE := 0.5
+## How many full noise waves span one tile edge -- few enough that the
+## boundary reads as a handful of gentle curves, not high-frequency jitter
+## (reported live: "improve the blended tiles so they include curves...
+## individual per tile rather than straight half forest half grass tile").
+const BLEND_WOBBLE_WAVES := 2.2
+
+
+## Tapers a blend edge's wobble to exactly zero at and beyond
+## _BLEND_BAND_START/_BLEND_BAND_END (a triangular window peaking at 1 in
+## the band's own center) -- see BLEND_WOBBLE_AMPLITUDE's doc comment for
+## why this envelope is what makes the wobble provably safe regardless of
+## amplitude.
+static func blend_wobble_envelope(edge_t: float) -> float:
+	# Explicit boundary check rather than trusting the linear formula below
+	# to land on exactly 0.0 at the band edges: it does mathematically, but
+	# float division can leave a tiny non-zero residue right at the
+	# boundary, and the "provably zero outside the band" guarantee this
+	# envelope exists for needs to be exact, not just numerically close.
+	if edge_t <= _BLEND_BAND_START or edge_t >= _BLEND_BAND_END:
+		return 0.0
+	var half_band := (_BLEND_BAND_END - _BLEND_BAND_START) * 0.5
+	var center := (_BLEND_BAND_START + _BLEND_BAND_END) * 0.5
+	return clampf(1.0 - absf(edge_t - center) / half_band, 0.0, 1.0)
+
+
+## A smooth, seeded curve offset (in edge-fraction units, before the
+## envelope above is applied) at fraction `along` (0..1) across a blend
+## edge -- gives the near/far boundary an organic wave instead of a
+## straight line. A different variant_seed makes different variants of the
+## same biome pair/direction curve differently rather than just re-speckle
+## around one identical line; `direction` salts the seed so a tile blending
+## on two edges at once (e.g. a corner cell bordering the same neighbor
+## north AND east) doesn't wobble both edges in lockstep.
+static func blend_edge_wobble(variant_seed: int, direction: Vector2i, along: float) -> float:
+	var direction_salt := direction.x * 4001 + direction.y * 7919
+	var n := PixelNoise.smooth(variant_seed + direction_salt, along * BLEND_WOBBLE_WAVES, 0.0)
+	return (n * 2.0 - 1.0) * BLEND_WOBBLE_AMPLITUDE
 
 
 ## Like generate_multi_directional_blend_image, but sources real pixels from
@@ -654,35 +702,60 @@ func generate_multi_directional_blend_image(
 ## hand in each side's REAL illustrated or procedural texture, so a border
 ## dithers actual ground art together instead of a flat-color stand-in
 ## (reported: illustrated ground next to a flat/procedural-looking border
-## read as visibly inconsistent). Purely the dither MASK is computed here
-## (which image's pixel wins at each position, via the same directional
-## gradient + Bayer threshold as the biome-name form): no variant_seed and
-## no extra speckle layered on top, since the source images already carry
-## their own real texture (including, for the procedural wrapper above,
-## generate_image's own speckle -- adding a second speckle pass on top of
-## an already-textured image would just be noise on noise). near_image and
+## read as visibly inconsistent). The dither MASK is computed here (which
+## image's pixel wins at each position, via the directional gradient +
+## seeded curve wobble + Bayer threshold): no extra speckle layered on top,
+## since the source images already carry their own real texture (including,
+## for the procedural wrapper above, generate_image's own speckle -- adding
+## a second speckle pass on top of an already-textured image would just be
+## noise on noise). variant_seed only shapes the curve (see
+## blend_edge_wobble) -- it does not affect pixel sourcing. near_image and
 ## far_image must be the same size; the output matches that size.
-func generate_multi_directional_blend_image_from(near_image: Image, far_image: Image, directions: Array) -> Image:
+func generate_multi_directional_blend_image_from(near_image: Image, far_image: Image, directions: Array, variant_seed: int = 0) -> Image:
 	var size := near_image.get_width()
 	var image := Image.create(size, size, false, Image.FORMAT_RGBA8)
 	var last := float(size - 1)
 
+	# Precompute each active direction's wobble curve once: it only depends
+	# on the coordinate running ALONG the edge (x for a N/S direction, y for
+	# an E/W one), never on the coordinate ACROSS it, so recomputing
+	# PixelNoise.smooth inside the pixel loop below recomputed the identical
+	# value up to `size` times over. Measured: with this precompute missing,
+	# a real atlas rebuild at BLEND_VARIANTS=7 didn't finish in several
+	# minutes; with it, generation time is indistinguishable from the
+	# unwobbled version's own cost.
+	var wobble_curves: Array[PackedFloat32Array] = []
+	for direction in directions:
+		var curve := PackedFloat32Array()
+		curve.resize(size)
+		for i in size:
+			curve[i] = blend_edge_wobble(variant_seed, direction, float(i) / last)
+		wobble_curves.append(curve)
+
 	for y in size:
 		for x in size:
 			# Fraction toward far_biome (0 at a near edge, 1 at a far edge),
-			# taken as the strongest pull among all active directions.
+			# taken as the strongest pull among all active directions, each
+			# nudged by its own curved wobble before that max is taken.
 			var t := 0.0
-			for direction in directions:
+			for i in directions.size():
+				var direction: Vector2i = directions[i]
 				var edge_t := 0.0
+				var wobble := 0.0
 				if direction.y < 0:
 					edge_t = 1.0 - y / last
+					wobble = wobble_curves[i][x]
 				elif direction.y > 0:
 					edge_t = y / last
+					wobble = wobble_curves[i][x]
 				elif direction.x < 0:
 					edge_t = 1.0 - x / last
+					wobble = wobble_curves[i][y]
 				elif direction.x > 0:
 					edge_t = x / last
-				t = maxf(t, edge_t)
+					wobble = wobble_curves[i][y]
+				var envelope := blend_wobble_envelope(edge_t)
+				t = maxf(t, clampf(edge_t + wobble * envelope, 0.0, 1.0))
 
 			var sharpened := smoothstep(_BLEND_BAND_START, _BLEND_BAND_END, t)
 			var threshold := (float(_BAYER_4X4[y % 4][x % 4]) + 0.5) / 16.0

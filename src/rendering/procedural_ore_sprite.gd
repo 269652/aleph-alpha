@@ -94,3 +94,50 @@ func _paint_flecks(
 		if dx * dx + dy * dy > 0.78:
 			continue  # keep flecks off the outline ring
 		image.set_pixel(fx, fy, bright_color if (i % 3 == 0) else base_color)
+
+
+# -- ore composited onto an illustrated base (see StoneRenderer._ore_texture_for) -
+#
+# An ore node is always drawn at boulder scale (StoneRenderer._attach_body_parts'
+# diameter_cm==0 branch), so once illustrated boulder art exists the rock
+# silhouette itself should come from that instead of this file's flat
+# ellipse -- only the ore flecks are still generated here, scattered by
+# testing the BASE image's own alpha channel rather than ellipse geometry,
+# so this works against any silhouette (an illustrated boulder's actual
+# irregular outline included) with no shape-specific math of its own to
+# keep in sync with the art. StoneRenderer gates which path a caller reaches
+# (has_variants(CLASS_BOULDER)) exactly like it already does for plain loose
+# stone -- generate_image/_paint_flecks above stay the fallback for when no
+# illustrated base exists, unchanged.
+
+## Ore drawn over `base_image` (a real illustrated boulder frame, or any
+## other RGBA image) rather than a freshly-drawn ellipse. Returns a NEW
+## image -- `base_image` itself is never mutated, since callers (the
+## illustrated art frame cache) may reuse it elsewhere.
+func generate_image_from_base(base_image: Image, ore_type: String, seed_value: int) -> Image:
+	var image := base_image.duplicate() as Image
+	_paint_flecks_on_silhouette(image, ore_type, seed_value)
+	return image
+
+
+func generate_texture_from_base(base_image: Image, ore_type: String, seed_value: int) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_image_from_base(base_image, ore_type, seed_value))
+
+
+## Same fleck coloring as _paint_flecks, but picks each fleck's PIXEL
+## directly (seeded x/y) and keeps it only if that pixel is already opaque
+## in `image` -- a miss is simply skipped rather than retried, so this stays
+## O(FLECK_COUNT) regardless of how much of the canvas the silhouette fills.
+func _paint_flecks_on_silhouette(image: Image, ore_type: String, seed_value: int) -> void:
+	var base_color: Color = FLECK_COLOR.get(ore_type, FLECK_COLOR["iron"])
+	var bright_color := base_color.lightened(0.25)
+	var width := image.get_width()
+	var height := image.get_height()
+	for i in FLECK_COUNT:
+		var x_seed := hash("%d_%s_ore_fleck_x_%d" % [seed_value, ore_type, i])
+		var y_seed := hash("%d_%s_ore_fleck_y_%d" % [seed_value, ore_type, i])
+		var fx := absi(x_seed) % width
+		var fy := absi(y_seed) % height
+		if image.get_pixel(fx, fy).a <= 0.0:
+			continue  # off the silhouette -- leave the transparent background alone
+		image.set_pixel(fx, fy, bright_color if (i % 3 == 0) else base_color)

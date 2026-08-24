@@ -124,6 +124,29 @@ func test_missing_choices_fall_back_to_the_first_option():
 	assert_eq(a.hair_style, 0)
 
 
+## The seed drives which of IllustratedCharacterSprite's 100 illustrated
+## heads a hero gets (see head_cell_index_for) -- carried on the appearance
+## dict itself so any caller building a look, DNA-rolled or hand-picked in
+## the creator, has one available without a second parameter threaded
+## everywhere apply_appearance is called from.
+func test_appearance_for_carries_the_seed_it_was_rolled_from():
+	var a := appearance_maker.appearance_for("warrior", 4242)
+	assert_eq(a.seed, 4242)
+
+
+func test_appearance_from_choices_carries_the_seed_passed_to_it():
+	var a := appearance_maker.appearance_from_choices("warrior", {}, 777)
+	assert_eq(a.seed, 777)
+
+
+func test_appearance_from_choices_defaults_the_seed_when_none_is_given():
+	# The creator's live-preview rebuild doesn't always have a seed to hand
+	# (see main_menu.gd's _current_appearance) -- a missing seed must still
+	# produce a valid, usable appearance rather than erroring.
+	var a := appearance_maker.appearance_from_choices("warrior", {})
+	assert_eq(a.seed, 0)
+
+
 ## A rolled hero must be resumable in the creator: reading its choices back
 ## and rebuilding must reproduce the same look.
 func test_choices_round_trip_through_an_appearance():
@@ -250,6 +273,46 @@ func test_portraits_of_different_heroes_differ():
 	var a := sprite.generate_hero_portrait_image(appearance_maker.appearance_for("warrior", 1))
 	var b := sprite.generate_hero_portrait_image(appearance_maker.appearance_for("mage", 99))
 	assert_ne(a.get_data(), b.get_data())
+
+
+## The character-creation preview must actually reflect the illustrated rig
+## (asked directly: "rehaul the character rendering in game AND IN
+## CREATION"), not just CharacterView's in-game paperdoll -- this portrait is
+## what main_menu.gd's creator screen shows, generated independently of
+## CharacterView since it composites raw Images rather than Sprite2D nodes.
+## Skin tone is the one signal that can only move through the ILLUSTRATED
+## head (its own luminance recolor, see IllustratedCharacterSprite
+## .generate_head_texture) -- the procedural head is also skin-tone
+## sensitive, so this alone wouldn't distinguish the two paths, but it does
+## confirm the wiring is live at all, and the two portraits below are
+## additionally checked for a directional lightness shift consistent with a
+## real recolor rather than two arbitrary-looking images.
+func test_portrait_changes_with_skin_tone():
+	var pale := appearance_maker.appearance_from_choices("warrior", {"skin": 0}, 4242)
+	var deep := appearance_maker.appearance_from_choices(
+		"warrior", {"skin": HeroAppearance.SKIN_TONES.size() - 1}, 4242
+	)
+	assert_ne(pale.skin, deep.skin, "precondition: the two skin choices should actually differ")
+	var pale_image := sprite.generate_hero_portrait_image(pale)
+	var deep_image := sprite.generate_hero_portrait_image(deep)
+	assert_ne(pale_image.get_data(), deep_image.get_data())
+
+
+func test_portrait_is_a_cohesive_figure_when_legs_are_a_fused_pair():
+	# leg.png draws both legs as one connected pose (see CharacterView's own
+	# doc comment on legs fusion) -- the portrait has no separate LegLeft/
+	# LegRight nodes to hide one of, so it must blend the fused pair ONCE
+	# rather than the procedural path's "same small leg image blended
+	# twice", or the legs band would show two overlapping copies instead of
+	# one figure.
+	var image := sprite.generate_hero_portrait_image(appearance_maker.appearance_for("warrior", 1))
+	var height := ProceduralCharacterSprite.PORTRAIT_SIZE.y
+	var opaque := 0
+	for y in range(int(height * 0.85), height):
+		for x in ProceduralCharacterSprite.PORTRAIT_SIZE.x:
+			if image.get_pixel(x, y).a > 0.0:
+				opaque += 1
+	assert_gt(opaque, 0, "the legs band should still show the figure's legs")
 
 
 func _close(a: Color, b: Color) -> bool:

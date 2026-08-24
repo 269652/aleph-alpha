@@ -11,10 +11,13 @@ const ProceduralGrassSprite = preload("res://src/rendering/procedural_grass_spri
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
+const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
 const ProceduralSeedSprite = preload("res://src/rendering/procedural_seed_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
+const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
@@ -28,6 +31,7 @@ const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
+const HillshadeShader = preload("res://src/rendering/hillshade_shader.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
@@ -40,6 +44,29 @@ const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
 const TreeSpread = preload("res://src/gameplay/tree_spread.gd")
 const FruitFall = preload("res://src/world/fruit_fall.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
+const EntityRef = preload("res://src/emergence/entity_ref.gd")
+const Event = preload("res://src/emergence/event.gd")
+const EventStore = preload("res://src/emergence/event_store.gd")
+const EventStorePersistence = preload("res://src/emergence/event_store_persistence.gd")
+const MemoryStore = preload("res://src/emergence/memory_store.gd")
+const MemoryStorePersistence = preload("res://src/emergence/memory_store_persistence.gd")
+const HouseholdStore = preload("res://src/emergence/household_store.gd")
+const HouseholdStorePersistence = preload("res://src/emergence/household_store_persistence.gd")
+const Contract = preload("res://src/emergence/contract.gd")
+const ContractStore = preload("res://src/emergence/contract_store.gd")
+const ContractStorePersistence = preload("res://src/emergence/contract_store_persistence.gd")
+const Market = preload("res://src/emergence/market.gd")
+const MarketStore = preload("res://src/emergence/market_store.gd")
+const MarketStorePersistence = preload("res://src/emergence/market_store_persistence.gd")
+const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
+const Institution = preload("res://src/emergence/institution.gd")
+const InstitutionStore = preload("res://src/emergence/institution_store.gd")
+const InstitutionStorePersistence = preload("res://src/emergence/institution_store_persistence.gd")
+const InstitutionFormation = preload("res://src/emergence/institution_formation.gd")
+const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
 const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
 const SnowTrail = preload("res://src/world/snow_trail.gd")
@@ -166,6 +193,7 @@ var generator := EarthChunkGenerator.new()
 var _terrain_renderer := TerrainRenderer.new()
 var _tree_renderer := TreeRenderer.new()
 var _stone_renderer := StoneRenderer.new()
+var _wild_crop_renderer := WildCropRenderer.new()
 var _grass_sprite_generator := ProceduralGrassSprite.new()
 var _illustrated_grass := IllustratedGrassPatch.new()
 var _scrub_sprite_generator := ProceduralScrubSprite.new()
@@ -174,9 +202,27 @@ var _wind_sway := WindSway.new()
 var _water_layer: TileMapLayer  # optional GPU water overlay, see set_water_layer
 var _water_material: ShaderMaterial  # the water overlay's shared shader material, see set_rain
 var _water_shader := WaterShader.new()  # owns _water_material's disturbance buffer, see record_water_disturbance
-## Last streamed-around tile, used to cull far-off water disturbances (see
-## record_water_disturbance / DISTURBANCE_RADIUS_TILES).
+var _hillshade_layer: TileMapLayer  # optional GPU relief-shading overlay, see set_hillshade_layer
+var _hillshade_shader := HillshadeShader.new()
+## The player's own current tile, refreshed every update() call -- named for
+## its original use (culling far-off water disturbances, see
+## record_water_disturbance / DISTURBANCE_RADIUS_TILES) but also doubles as
+## the general "where is the player right now" reference for anything else
+## that needs it without its own tracking (_warmth_at_pixel, and grass's own
+## tile-precise view cutoff -- see _sync_grass_sprites).
 var _disturbance_center_tile := Vector2i.ZERO
+## Tile the grass tile-precise view window (GRASS_VIEW_BUFFER_TILES) was last
+## resynced against -- read by update() to force an immediate grass resync,
+## like the chunk-boundary trigger just below it but at TILE granularity.
+## Grass's view cutoff is far tighter than the chunk-level _decorates gate
+## (a chunk is CHUNK_SIZE=32 tiles square; the camera shows only a fraction
+## of that), so a player can walk many tiles -- bringing new ground into
+## view -- without ever crossing into a new chunk. Left at the old cadence
+## (GRASS_REFRESH_INTERVAL, or a chunk crossing), that stretch of walking
+## found bare ground that only caught up in one late batch -- reported live:
+## "the blades load way too late and the player walks into a new area
+## without any blades which then suddenly appear".
+var _grass_view_synced_tile := Vector2i.ZERO
 var _creature_renderer := CreatureRenderer.new()
 var _fish_renderer := FishRenderer.new()
 var _ambient_flyer_renderer := AmbientFlyerRenderer.new()
@@ -276,8 +322,18 @@ var _flower_sprites: Dictionary = {}
 ## the ground (see FlowerPatch.shed_seed).
 var _seed_sprites: Dictionary = {}
 var _flower_sprite_generator := ProceduralFlowerSprite.new()
-var _grass_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Array[Sprite2D]}
+var _grass_sprites: Dictionary = {}  # Vector2i chunk_coord -> {band index int -> MultiMeshInstance2D}
 var _grass_refresh_accumulator := 0.0
+## Wild carrot/potato (see docs/concept/wild_crops.md). One WildCropPatch per
+## chunk PER CROP, not one sim juggling both -- see WildCropPatch's own doc
+## comment. chunk_coord -> {crop_id String -> WildCropPatch}.
+var _wild_crop_sims: Dictionary = {}
+## chunk_coord -> {crop_id String -> {Vector2i cell -> WildCropMarker}}.
+var _wild_crop_markers: Dictionary = {}
+var _wild_crop_refresh_accumulator := 0.0
+## Every crop this world grows in the wild -- the one list both _load_chunk
+## and step_wild_crops iterate, so adding a future crop is a one-line change.
+const WILD_CROP_IDS := ["carrot", "potato"]
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
 var _scrub_refresh_accumulator := 0.0
@@ -324,6 +380,18 @@ var _spread_tick := 0
 ## throttle, so a sapling's age tracks real elapsed time, not spread ticks.
 var _world_age_seconds := 0.0
 
+## How wide a range a brand new world may start at within the year (see
+## randomize_world_age below, and docs/concept/seasons.md).
+##
+## Every fresh save used to start at world-age 0 exactly, and SeasonCycle's
+## own phase formula puts that moment at warmth ~0.1465 -- just under
+## Snowfall.FREEZING_WARMTH (0.15) -- so every new game began mid-winter-
+## adjacent and reliably snowed within the first few minutes (reported: "it
+## starts to snow deterministically"). A full year of possible starting
+## points is the whole point: any season is a valid place for a new world to
+## begin.
+const NEW_GAME_WORLD_AGE_RANGE_SECONDS := SeasonCycle.SECONDS_PER_YEAR
+
 
 func _init(tile_map_layer: TileMapLayer, entities_parent: Node2D, creatures_parent: Node2D) -> void:
 	_tile_map_layer = tile_map_layer
@@ -366,6 +434,21 @@ func update(player_global_tile: Vector2i) -> void:
 		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
 		_worm_refresh_accumulator = WORM_REFRESH_INTERVAL
 		_decoration_dirty = false
+
+	# Grass ALONE is also tile-precise culled (see _grass_view_synced_tile's
+	# own doc comment for why the chunk-boundary trigger above isn't tight
+	# enough on its own). This also primes sim.advance/shed_seed to run early
+	# (step_tall_grass gates both behind the same accumulator) -- harmless,
+	# not just cheap: growth is linear in delta and spread carries its own
+	# accumulator, so more frequent smaller steps land in exactly the same
+	# state (test_growth_lands_in_the_same_place_whether_batched_or_per_
+	# frame). Triggering per TILE rather than per frame still matters for
+	# cost -- tile crossings happen at a walking pace (a few a second), far
+	# below the per-frame (60/sec) rate step_tall_grass's own throttle was
+	# introduced to avoid.
+	if player_global_tile != _grass_view_synced_tile:
+		_grass_view_synced_tile = player_global_tile
+		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
 
 	for chunk_coord in chunks_in_radius(center_chunk, LOAD_RADIUS):
 		if not _loaded_chunks.has(chunk_coord):
@@ -488,6 +571,523 @@ var _fruiting_accumulator := 0.0
 ## exactly the elapsed interval (all trees share the one world clock).
 var _last_fruiting_time := 0.0
 
+## The world's causal event graph (see docs/emergence/00-emergence-architecture.md,
+## docs/roadmap.md's "Emergence substrate" section). One shared store, owned
+## here alongside the world clock and every other piece of shared world state
+## -- the same placement _snow_trail/_forage_claims already use for their own
+## reasons.
+var _event_store := EventStore.new()
+
+
+func event_store() -> EventStore:
+	return _event_store
+
+
+## Every entity's own recollection of events it took part in (see
+## docs/emergence/02-history-memory-rumors.md "Memory") -- layered on top of
+## _event_store rather than folded into it, so appending an event and
+## deciding who remembers it stay two separate, independently testable
+## steps.
+var _memory_store := MemoryStore.new()
+
+
+func memory_store() -> MemoryStore:
+	return _memory_store
+
+
+## Persistence, reset, and wipe for the memory store -- same four-function
+## shape as save_event_store/load_event_store/reset_event_store/
+## wipe_event_store immediately above, since the two are wired into the same
+## New Game / Load Game / autosave lifecycle together (see World).
+func save_memory_store(path: String = MemoryStorePersistence.SAVE_PATH) -> void:
+	MemoryStorePersistence.new().save(_memory_store, path)
+
+
+func load_memory_store(path: String = MemoryStorePersistence.SAVE_PATH) -> void:
+	_memory_store = MemoryStorePersistence.new().load_bank(path)
+
+
+func reset_memory_store() -> void:
+	_memory_store = MemoryStore.new()
+
+
+func wipe_memory_store(path: String = MemoryStorePersistence.SAVE_PATH) -> void:
+	MemoryStorePersistence.new().wipe(path)
+	reset_memory_store()
+
+
+## Households and what they own (see docs/emergence/01/03) -- one more piece
+## of shared world state alongside the event/memory stores above.
+var _household_store := HouseholdStore.new()
+
+
+func household_store() -> HouseholdStore:
+	return _household_store
+
+
+func save_household_store(path: String = HouseholdStorePersistence.SAVE_PATH) -> void:
+	HouseholdStorePersistence.new().save(_household_store, path)
+
+
+func load_household_store(path: String = HouseholdStorePersistence.SAVE_PATH) -> void:
+	_household_store = HouseholdStorePersistence.new().load_store(path)
+
+
+func reset_household_store() -> void:
+	_household_store = HouseholdStore.new()
+
+
+func wipe_household_store(path: String = HouseholdStorePersistence.SAVE_PATH) -> void:
+	HouseholdStorePersistence.new().wipe(path)
+	reset_household_store()
+
+
+## Contracts and their lifecycle (see docs/emergence/03-contracts-property-
+## economy.md "Contracts") -- one more piece of shared world state alongside
+## the stores above.
+var _contract_store := ContractStore.new()
+
+
+func contract_store() -> ContractStore:
+	return _contract_store
+
+
+func save_contract_store(path: String = ContractStorePersistence.SAVE_PATH) -> void:
+	ContractStorePersistence.new().save(_contract_store, path)
+
+
+func load_contract_store(path: String = ContractStorePersistence.SAVE_PATH) -> void:
+	_contract_store = ContractStorePersistence.new().load_store(path)
+
+
+func reset_contract_store() -> void:
+	_contract_store = ContractStore.new()
+
+
+func wipe_contract_store(path: String = ContractStorePersistence.SAVE_PATH) -> void:
+	ContractStorePersistence.new().wipe(path)
+	reset_contract_store()
+
+
+## Proposes a contract AND records it as a real event, in one call -- the
+## same "one call, two stores kept in sync" shape
+## record_settlement_founded_if_new already establishes for founding, so a
+## contract can never exist in _contract_store without a matching entry in
+## _event_store. No live gameplay trigger calls this yet (see
+## docs/progress.md's Emergence Phase 4 entry: nothing in the game currently
+## produces real economic activity to propose a contract FROM -- no
+## production, market, or hiring exists), but the mechanism itself is real,
+## tested, and ready for whichever of those lands first.
+func propose_contract(
+	type: String, parties: Array, obligations: Array, consideration: String, deadline: float
+) -> Contract:
+	var contract := _contract_store.propose(
+		type, parties, obligations, consideration, deadline, _world_age_seconds
+	)
+	_record_contract_event("contract_proposed", contract)
+	return contract
+
+
+func accept_contract(contract_id: String) -> bool:
+	return _drive_contract(contract_id, _contract_store.accept(contract_id, _world_age_seconds), "contract_accepted")
+
+
+func activate_contract(contract_id: String) -> bool:
+	return _drive_contract(contract_id, _contract_store.activate(contract_id, _world_age_seconds), "contract_active")
+
+
+func fulfill_contract(contract_id: String) -> bool:
+	return _drive_contract(contract_id, _contract_store.fulfill(contract_id, _world_age_seconds), "contract_fulfilled")
+
+
+func breach_contract(contract_id: String) -> bool:
+	return _drive_contract(contract_id, _contract_store.breach(contract_id, _world_age_seconds), "contract_breached")
+
+
+func default_on_contract(contract_id: String) -> bool:
+	return _drive_contract(contract_id, _contract_store.default_on(contract_id, _world_age_seconds), "contract_defaulted")
+
+
+func cancel_contract(contract_id: String) -> bool:
+	return _drive_contract(contract_id, _contract_store.cancel(contract_id, _world_age_seconds), "contract_cancelled")
+
+
+## Records the matching event ONLY when the transition actually happened --
+## an invalid transition (the store already refused it) records no event,
+## since nothing meaningful actually occurred.
+func _drive_contract(contract_id: String, transitioned: bool, event_type: String) -> bool:
+	if not transitioned:
+		return false
+	var contract := _contract_store.get_contract(contract_id)
+	if contract != null:
+		_record_contract_event(event_type, contract)
+	return true
+
+
+func _record_contract_event(event_type: String, contract: Contract) -> void:
+	var event := Event.new(event_type, _world_age_seconds)
+	for party in contract.parties:
+		event.actors.append(party)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+
+## Local supply/demand-driven markets, one per settlement (see
+## docs/emergence/03-contracts-property-economy.md "Markets") -- one more
+## piece of shared world state alongside the stores above.
+var _market_store := MarketStore.new()
+var _recipe_book := CraftingRecipeBook.new()
+
+
+func market_store() -> MarketStore:
+	return _market_store
+
+
+func save_market_store(path: String = MarketStorePersistence.SAVE_PATH) -> void:
+	MarketStorePersistence.new().save(_market_store, path)
+
+
+func load_market_store(path: String = MarketStorePersistence.SAVE_PATH) -> void:
+	_market_store = MarketStorePersistence.new().load_store(path)
+
+
+func reset_market_store() -> void:
+	_market_store = MarketStore.new()
+
+
+func wipe_market_store(path: String = MarketStorePersistence.SAVE_PATH) -> void:
+	MarketStorePersistence.new().wipe(path)
+	reset_market_store()
+
+
+## Attempts `recipe_id` against `settlement_id`'s own market stock AND
+## records the outcome as a real event, in one call -- the same "one call,
+## two stores kept in sync" shape record_settlement_founded_if_new/
+## propose_contract already establish. A resource shortage genuinely blocks
+## production (CraftingRecipeBook.can_craft's own check, run against market
+## stock instead of a player's inventory) and that failure is exactly as
+## recorded as a success -- the Phase 5 exit criterion ("a resource shortage
+## can... cause downstream production failure") made concrete and
+## /why-inspectable, not a scripted event.
+func attempt_production(settlement_id: String, recipe_id: String) -> Dictionary:
+	var market := _market_store.market_for(settlement_id)
+	var result: Dictionary = market.produce(_recipe_book, recipe_id)
+
+	var event := Event.new(
+		"production_succeeded" if result.success else "production_failed", _world_age_seconds
+	)
+	event.actors.append(settlement_id)
+	event.tags.append(recipe_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+	return result
+
+
+## Institutions (see docs/emergence/01-society-and-institutions.md) -- one
+## more piece of shared world state alongside the stores above.
+var _institution_store := InstitutionStore.new()
+
+
+func institution_store() -> InstitutionStore:
+	return _institution_store
+
+
+func save_institution_store(path: String = InstitutionStorePersistence.SAVE_PATH) -> void:
+	InstitutionStorePersistence.new().save(_institution_store, path)
+
+
+func load_institution_store(path: String = InstitutionStorePersistence.SAVE_PATH) -> void:
+	_institution_store = InstitutionStorePersistence.new().load_store(path)
+
+
+func reset_institution_store() -> void:
+	_institution_store = InstitutionStore.new()
+
+
+func wipe_institution_store(path: String = InstitutionStorePersistence.SAVE_PATH) -> void:
+	InstitutionStorePersistence.new().wipe(path)
+	reset_institution_store()
+
+
+## Checks REAL accumulated coordination between `party_a` and `party_b`
+## (fulfilled contracts between them, see InstitutionFormation) and forms an
+## institution if it crosses the formation threshold -- "NPCs can
+## independently form... an institution" made concrete: gated by real
+## history, not a bare create-on-demand call. Returns null (and records
+## nothing) below the threshold, or if an active institution for exactly
+## these two already exists (the same once-only guard every other
+## coordinator in this file already uses).
+func attempt_institution_formation(type: String, party_a: String, party_b: String) -> Institution:
+	if not InstitutionFormation.should_form(_contract_store, party_a, party_b):
+		return null
+	if _institution_store.active_institution_for([party_a, party_b]) != null:
+		return null
+
+	var institution := _institution_store.form(type, [party_a, party_b], _world_age_seconds)
+	var event := Event.new("institution_formed", _world_age_seconds)
+	event.actors.append(party_a)
+	event.actors.append(party_b)
+	event.importance = 0.3
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+	return institution
+
+
+## Dissolves an institution AND records it as a real event, in one call --
+## "Institutions can fail, merge, split, migrate, or disappear"
+## (docs/emergence/01's own invariant), and a dissolution is exactly as
+## recorded as a founding.
+func dissolve_institution(institution_id: String) -> bool:
+	if not _institution_store.dissolve(institution_id, _world_age_seconds):
+		return false
+	var institution := _institution_store.get_institution(institution_id)
+	var event := Event.new("institution_dissolved", _world_age_seconds)
+	for member in institution.members:
+		event.actors.append(member)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+	return true
+
+
+## Settlement assessment cadence: every SETTLEMENT_STEP_INTERVAL of real
+## time, every settlement that has ever been founded is reassessed. The same
+## throttled-accumulator shape SPREAD_INTERVAL/step_tree_spread already
+## uses, and the FIRST emergence coordinator with a genuinely automatic
+## live trigger -- Phases 4/5/6 built real, tested, callable mechanisms with
+## nothing in live gameplay calling them yet; this one is wired straight
+## into World's own per-frame ecology step (see World._step_ecology_batch),
+## so it runs in every real session without a console command.
+const SETTLEMENT_STEP_INTERVAL := 30.0
+var _settlement_step_accumulator := 0.0
+## settlement_id -> last recorded SettlementState status, so a status is
+## only ever event-sourced on a real CHANGE -- "do not event-source every
+## low-level movement," the same principle every other coordinator in this
+## file already respects. Not persisted: a reload recomputes fresh from the
+## real (persisted) market/household state and may re-record its current
+## status once more on the first step after loading -- a known, accepted
+## rough edge, not a source of runaway duplicate events, since it can only
+## ever re-fire once per reload rather than repeatedly.
+var _settlement_status: Dictionary = {}
+
+
+func step_settlements(delta_seconds: float) -> void:
+	_settlement_step_accumulator += delta_seconds
+	if _settlement_step_accumulator < SETTLEMENT_STEP_INTERVAL:
+		return
+	_settlement_step_accumulator -= SETTLEMENT_STEP_INTERVAL
+	if _settlement_step_accumulator >= SETTLEMENT_STEP_INTERVAL:
+		_settlement_step_accumulator = fmod(_settlement_step_accumulator, SETTLEMENT_STEP_INTERVAL)
+
+	for settlement_id in _known_settlement_ids():
+		var market := _market_store.market_for(settlement_id)
+		var household_ids := _households_in_settlement(settlement_id)
+		var capacity := SettlementState.carrying_capacity(market)
+		var status := SettlementState.status_for(household_ids.size(), capacity)
+
+		# Emergence Phase 5/4/6's own automatic triggers, closing the gap
+		# Phase 7's own settlement assessment originally left open (see
+		# docs/progress.md's Emergence Phase 7 entry). Run every step
+		# regardless of whether `status` itself changed below -- production
+		# and trade are real recurring activity, not a one-off status label.
+		_step_settlement_production(settlement_id, household_ids)
+		_step_settlement_trade(settlement_id, household_ids, status)
+
+		if _settlement_status.get(settlement_id, "") == status:
+			continue
+		_settlement_status[settlement_id] = status
+
+		var event := Event.new("settlement_%s" % status, _world_age_seconds)
+		event.actors.append(settlement_id)
+		_event_store.append(event)
+		_memory_store.witness_event(event, _world_age_seconds)
+
+
+## The occupation of a household's founder, reconstructed from the founder's
+## own seed rather than requiring a live NpcMarker node -- NpcIdentity is
+## deterministic per seed (see its own doc comment: "a settlement
+## regenerates the same villagers every time its chunk reloads"), so this
+## reads purely from persisted store data. "" for an unknown household or
+## one whose founder is not an npc (should not happen in practice, but never
+## crashes on it).
+func _occupation_of_household(household_id: String) -> String:
+	var household := _household_store.get_household(household_id)
+	if household == null or household.members.is_empty():
+		return ""
+	var founder_id: String = household.members[0]
+	if EntityRef.kind_of(founder_id) != "npc":
+		return ""
+	return NpcIdentity.new(int(EntityRef.key_of(founder_id))).occupation
+
+
+## Attempts each household's occupation-grounded recipe (see
+## OccupationProduction) against its own settlement's market -- Emergence
+## Phase 5's automatic trigger. Every household whose founder's occupation
+## maps to a real recipe gets one attempt per settlement step; the recipe
+## itself may still fail from a genuine stock shortage
+## (attempt_production's own behaviour), recorded exactly like a manual
+## attempt. A household with no grounded recipe (see OccupationProduction's
+## own doc comment) is silently skipped, not forced onto an unrelated one.
+func _step_settlement_production(settlement_id: String, household_ids: Array[String]) -> void:
+	for household_id in household_ids:
+		var recipe_id := OccupationProduction.recipe_for(_occupation_of_household(household_id))
+		if recipe_id != "":
+			attempt_production(settlement_id, recipe_id)
+
+
+## A settlement's own households periodically trade with each other --
+## Emergence Phase 4's automatic trigger. Deterministic, not random: the
+## same two households (lowest id first) trade every step, so repeated
+## success/failure is genuine accumulated history for InstitutionFormation
+## to read (see below), not noise from a shuffling partner. A settlement
+## with fewer than two households has no one to trade with and is skipped.
+##
+## The full propose -> accept -> activate -> fulfill/breach lifecycle runs
+## within one step (a trade between two villagers in the same settlement is
+## not a long negotiation) rather than being spread across steps. Outcome is
+## tied to the settlement's OWN current prosperity (see SettlementState,
+## Phase 7): a growing/stable settlement fulfills (real capacity to make
+## good on a trade); a declining settlement's trade breaches (times are
+## hard enough that the counterparty cannot deliver) -- the same "one real
+## number, multiple downstream consequences" pattern Phase 5's own pricing
+## already established, now driving Phase 4's automatic outcome too.
+##
+## Once the same pair's fulfilled trades cross InstitutionFormation's real
+## threshold, this is also what makes Phase 6 form an institution with no
+## manual call -- genuinely downstream of Phase 4, not a separate trigger of
+## its own.
+func _step_settlement_trade(settlement_id: String, household_ids: Array[String], status: String) -> void:
+	if household_ids.size() < 2:
+		return
+	var sorted_ids := household_ids.duplicate()
+	sorted_ids.sort()
+	var party_a: String = sorted_ids[0]
+	var party_b: String = sorted_ids[1]
+
+	var contract := propose_contract(
+		"trade", [party_a, party_b],
+		["%s delivers goods" % party_a, "%s delivers goods" % party_b],
+		"mutual goods exchange", -1.0
+	)
+	accept_contract(contract.id)
+	activate_contract(contract.id)
+	if status == SettlementState.DECLINING:
+		breach_contract(contract.id)
+	else:
+		fulfill_contract(contract.id)
+
+	attempt_institution_formation("cooperative", party_a, party_b)
+
+
+## How many real households a settlement currently has, for a console
+## command to report without reaching into the private membership
+## reconstruction itself.
+func household_count_for_settlement(settlement_id: String) -> int:
+	return _households_in_settlement(settlement_id).size()
+
+
+## Every settlement that has ever recorded a founding -- read back out of the
+## event graph itself (settlement_founded's own actor) rather than a second,
+## separately-tracked list of "settlements that exist," so there is exactly
+## one place that decides a settlement is real: EventStore.
+func _known_settlement_ids() -> Array[String]:
+	var ids: Array[String] = []
+	for event in _event_store.events_of_type("settlement_founded"):
+		if not event.actors.is_empty():
+			ids.append(event.actors[0])
+	return ids
+
+
+## The households belonging to `settlement_id`, reconstructed from the
+## npc_settled events that settlement witnessed -- one more read against the
+## event graph rather than a second membership index to keep in sync with
+## it. household_for returns null for an npc with no household yet, which
+## this simply skips.
+func _households_in_settlement(settlement_id: String) -> Array[String]:
+	var household_ids: Array[String] = []
+	for event in _event_store.events_for_entity(settlement_id):
+		if event.type != "npc_settled" or event.actors.is_empty():
+			continue
+		var household := _household_store.household_for(event.actors[0])
+		if household != null:
+			household_ids.append(household.id)
+	return household_ids
+
+
+## Persists the live event store, following the same store_var convention
+## PlayerSave/ChunkSerializer already established for world-scoped state (see
+## EventStorePersistence).
+func save_event_store(path: String = EventStorePersistence.SAVE_PATH) -> void:
+	EventStorePersistence.new().save(_event_store, path)
+
+
+## Replaces the live store with whatever is persisted at `path` (an empty
+## store if there is nothing there yet) -- the Load Game side of the same
+## convention.
+func load_event_store(path: String = EventStorePersistence.SAVE_PATH) -> void:
+	_event_store = EventStorePersistence.new().load_store(path)
+
+
+## Discards the live store's in-memory state, without touching disk.
+func reset_event_store() -> void:
+	_event_store = EventStore.new()
+
+
+## The New Game side: clears both the persisted file and the live store, so
+## a freshly spawned character loads into a world with no prior history --
+## the same "New Game means new" pillar docs/concept/persistence.md already
+## established for the player save and the per-chunk persistence dirs.
+func wipe_event_store(path: String = EventStorePersistence.SAVE_PATH) -> void:
+	EventStorePersistence.new().wipe(path)
+	reset_event_store()
+
+
+## Records that a settlement was founded, and that every one of its villagers
+## settled there -- but only the FIRST time a given settlement is seen. Called
+## by VillageRenderer.spawn_village (duck-typed) every time a chunk carrying a
+## settlement loads, which is NOT the same as "every time it is founded": a
+## chunk reload happens whenever a player walks back near it, so the event
+## store's own state (has this settlement ever recorded anything?) is the
+## guard, not an in-memory flag -- the same robustness reasoning as every
+## other "spawn once, persist across reload" system in this file.
+func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> void:
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	if not _event_store.events_for_entity(settlement_id).is_empty():
+		return
+
+	var npc_ids: Array[String] = []
+	for npc in npcs:
+		npc_ids.append(EntityRef.for_npc(npc.seed_value))
+
+	var founded := Event.new("settlement_founded", _world_age_seconds)
+	founded.actors = [settlement_id]
+	founded.witnesses = npc_ids
+	founded.importance = 0.2
+	_event_store.append(founded)
+	_memory_store.witness_event(founded, _world_age_seconds)
+
+	for i in npcs.size():
+		var settled := Event.new("npc_settled", _world_age_seconds)
+		settled.actors = [npc_ids[i]]
+		settled.witnesses = [settlement_id]
+		_event_store.append(settled)
+		_memory_store.witness_event(settled, _world_age_seconds)
+
+		# A single-member household of its own, owning the house it lives in
+		# (see docs/emergence/01/03 "Households"/"Property"). Single-member
+		# because no partnership/reproduction system exists yet to justify
+		# who belongs to whose household (docs/roadmap.md's Emergence
+		# Phase 3 note) -- keyed the same way VillageRenderer._stamp_house
+		# derives that villager's own house seed, so this needs no new
+		# per-house id scheme: house index `i` and npc index `i` are the
+		# same villager by construction (SettlementGenerator.generate_
+		# settlement builds npcs and house_positions in the same loop).
+		var household := _household_store.form_household(npc_ids[i])
+		var house_id := EntityRef.for_kind(
+			"house", "%d_%d_%d" % [chunk_coord.x, chunk_coord.y, i]
+		)
+		_household_store.grant_property(household.id, house_id)
+
 
 ## Individual-fidelity fruiting for trees near `player_pixel` (see the "two
 ## fidelities" pillar in concept/ecosystem_dynamics.md): each nearby tree shows
@@ -607,6 +1207,55 @@ func world_age_seconds() -> float:
 	return _world_age_seconds
 
 
+## Sets the world clock, and keeps every OTHER clock-tracking mark that reads
+## against it in step -- the shared plumbing under both randomize_world_age
+## (a brand new world) and load_world_clock (a resumed one).
+##
+## Without this, a mark like _last_fruiting_time/_snow_world_age would still
+## read 0 the instant the real clock jumped to a random or loaded value, and
+## the NEXT step_fruiting/step_snow call would see the whole jump as elapsed
+## time -- the same "two clocks that have to agree" trap jump_to_season's own
+## doc comment describes, just at world-creation/load time instead of a
+## /season skip.
+func set_world_age_seconds(value: float) -> void:
+	_world_age_seconds = value
+	_last_fruiting_time = value
+	_snow_world_age = value
+
+
+## Rolls a brand new world's starting point in the year, once (see
+## NEW_GAME_WORLD_AGE_RANGE_SECONDS) -- called only at New Game/Host Game
+## creation (see World._wipe_persisted_world), never on Load Game (see
+## load_world_clock, which restores the persisted value instead of rerolling
+## it -- a load must resume exactly where the save left off, not time-travel
+## on every session).
+func randomize_world_age() -> void:
+	set_world_age_seconds(randf() * NEW_GAME_WORLD_AGE_RANGE_SECONDS)
+
+
+## Persists the world clock, following the same store_var convention
+## PlayerSave/EventStorePersistence already established (see
+## WorldClockPersistence).
+func save_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
+	WorldClockPersistence.new().save(_world_age_seconds, path)
+
+
+## Restores the world clock from disk -- the Load Game side of the same
+## convention. A missing file (e.g. a --solo dev launch with no save yet)
+## leaves the clock exactly where it already was, matching PlayerSave/
+## EventStorePersistence's own "nothing to load" behaviour rather than
+## silently resetting it.
+func load_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
+	var persistence := WorldClockPersistence.new()
+	if not persistence.has_save(path):
+		return
+	set_world_age_seconds(persistence.load_seconds(path))
+
+
+func wipe_world_clock(path: String = WorldClockPersistence.SAVE_PATH) -> void:
+	WorldClockPersistence.new().wipe(path)
+
+
 ## Skips the world FORWARD to the start of `season` (see /season). Returns
 ## whether that was a season we have.
 ##
@@ -723,6 +1372,25 @@ func set_water_layer(water_layer: TileMapLayer) -> void:
 	water_layer.material = _water_material
 	for chunk_coord in _loaded_chunks:
 		_paint_water_overlay(chunk_coord, _loaded_chunks[chunk_coord])
+
+
+## Registers the GPU relief-shading overlay layer (see HillshadeShader,
+## TerrainRenderer.build_hillshade_overlay_tile_set,
+## docs/concept/terrain_relief.md's "Hillshading" section) -- same optional,
+## fail-open shape as set_water_layer above: a caller that never registers
+## this simply never sees terrain shading. Every loaded cell gets a real
+## slope/aspect data tile (see _paint_hillshade_overlay) and the layer
+## shares HillshadeShader's one material, so a single set_sun_position call
+## re-shades every painted tile at once rather than needing a repaint.
+func set_hillshade_layer(hillshade_layer: TileMapLayer) -> void:
+	_hillshade_layer = hillshade_layer
+	hillshade_layer.tile_set = _terrain_renderer.build_hillshade_overlay_tile_set()
+	# Must match the base terrain layer's scale exactly, same reasoning as
+	# set_water_layer's own identical line.
+	hillshade_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	hillshade_layer.material = _hillshade_shader.shared_material()
+	for chunk_coord in _loaded_chunks:
+		_paint_hillshade_overlay(chunk_coord, _loaded_chunks[chunk_coord])
 
 
 ## Registers the roof overlay layer (see docs/concept/
@@ -846,6 +1514,24 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			_water_layer.set_cell(
 				global, 0,
 				_terrain_renderer.atlas_coords_for_water_overlay(land_directions, ring_distance)
+			)
+
+
+## Real slope/aspect shading for every cell in the chunk, not gated by
+## biome -- a GENERAL mechanism (docs/concept/terrain_relief.md: "not
+## mountain-specific code"), reads most dramatically where slope is high
+## but applies everywhere, unlike the ocean-only water overlay above.
+func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if _hillshade_layer == null:
+		return
+	var origin := chunk_coord * CHUNK_SIZE
+	for y in chunk.height:
+		for x in chunk.width:
+			var global := origin + Vector2i(x, y)
+			var slope := slope_at_global(global.x, global.y)
+			var aspect := aspect_at_global(global.x, global.y)
+			_hillshade_layer.set_cell(
+				global, 0, _terrain_renderer.atlas_coords_for_hillshade(slope, aspect)
 			)
 
 
@@ -980,10 +1666,31 @@ func step_snow(snowing: bool, warmth: float) -> void:
 ## Repainting every loaded tile every frame is thousands of set_cell calls for
 ## a field that mostly has not changed -- the same shape of cost that took the
 ## frame rate down when the fast-forward first ran. The FIELD is repainted only
-## when its depth crosses into a new band, which happens a handful of times a
-## snowfall; footprints repaint only the tiles that were actually walked on.
+## when its depth crosses into a new band, or has moved by SNOW_REPAINT_DEPTH_STEP
+## since the last repaint (see below); footprints repaint only the tiles that
+## were actually walked on.
 var _snow_painted_band := -1
 var _snow_dirty: Dictionary = {}
+
+## How far `_snow_depth` must move since the last whole-field repaint before
+## another one is due, independent of DEPTH_BANDS (which is about how many
+## TEXTURES exist, not how often tiles get re-evaluated).
+##
+## Per-tile onset variance (see SnowLayer.ONSET_VARIANCE) means an individual
+## tile's own band can change well within a single texture band -- gating
+## repaints on the band index alone left the field frozen for a large chunk
+## of a snowfall and then jumping a big step once the band finally did cross
+## (measured live before this existed: coverage sat flat at the exact same
+## percentage from depth 0.02 through 0.25, then jumped straight to 100% at
+## depth 0.5 -- the "instant reveal" bug again, just on a coarser timescale).
+##
+## Bounded well under ONSET_VARIANCE (0.18) so a repaint reliably lands
+## between one onset extreme and the next -- several checkpoints across the
+## spread rather than one -- while staying coarse enough that a whole
+## snowfall (SECONDS_TO_COVER) still repaints a few dozen times, not every
+## frame.
+const SNOW_REPAINT_DEPTH_STEP := 0.05
+var _snow_painted_depth := -1.0
 
 
 ## Paints the tiles that need it.
@@ -994,12 +1701,15 @@ func _repaint_snow() -> void:
 		if _snow_painted_band != -1:
 			_snow_layer.clear()
 			_snow_painted_band = -1
+			_snow_painted_depth = -1.0
 			_snow_dirty.clear()
 		return
 
 	var band := _snow_renderer.band_for(_snow_depth, 0.0)
-	if band != _snow_painted_band:
+	var moved_enough := absf(_snow_depth - _snow_painted_depth) >= SNOW_REPAINT_DEPTH_STEP
+	if band != _snow_painted_band or moved_enough:
 		_snow_painted_band = band
+		_snow_painted_depth = _snow_depth
 		_snow_dirty.clear()
 		_repaint_whole_field()
 		return
@@ -1023,7 +1733,15 @@ func _paint_snow_tile(tile: Vector2i) -> void:
 	if biome_at_global(tile.x, tile.y) == "ocean":
 		_snow_layer.erase_cell(tile)
 		return
-	var band := _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile))
+	# Every tile used to read the exact same _snow_depth, so a whole loaded
+	# chunk snapped to whatever band the clock said the instant it was
+	# evaluated (reported: "snow covers a whole chunk instantly instead of
+	# spreading progressively"). This tile's own onset offset (seeded from its
+	# GLOBAL coordinates, see SnowLayer.onset_offset_for) makes it lead or lag
+	# the shared depth by a bounded amount, so a partial snowfall paints a
+	# genuine mix of bare and covered land rather than one uniform state.
+	var onset := _snow_renderer.onset_offset_for(tile.x, tile.y)
+	var band := _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile), onset)
 	if band < 0:
 		_snow_layer.erase_cell(tile)
 	else:
@@ -1035,12 +1753,32 @@ func set_rain(raining: bool) -> void:
 		_water_material.set_shader_parameter("rain_intensity", 1.0 if raining else 0.0)
 
 
-## Sets how energetic the water's wind-driven surface shimmer is (see
-## WaterShader.set_wind_strength) -- pass WeatherModel.wind_strength_for(the
-## current weather). Paces the surface TEXTURE only; ripple rings come from
-## rain and movement, never from wind.
+## Sets how energetic the live wind is (see WeatherModel.wind_strength_for --
+## pass WeatherModel.wind_strength_for(the current weather)) across every
+## wind-reactive visual this manager owns:
+## - the water's wind-driven surface shimmer (see WaterShader.set_wind_strength
+##   -- paces the surface TEXTURE only; ripple rings come from rain and
+##   movement, never from wind);
+## - tree canopy sway (WindSway, via _tree_renderer's own shared material);
+## - grass/scrub/lichen tuft AND flower bloom sway (WindSway.tuft_material --
+##   blooms share this exact tuft material, see the render call sites in this
+##   file; there is no separate flower-sway system to also wire up);
+## - illustrated tall-grass's own ambient wind term (walker-push parting is
+##   deliberately left unscaled -- see IllustratedGrassPatch.set_wind_strength).
 func set_wind_strength(strength: float) -> void:
 	_water_shader.set_wind_strength(strength)
+	_wind_sway.set_wind_strength(strength)
+	_tree_renderer.set_wind_strength(strength)
+	_illustrated_grass.set_wind_strength(strength)
+
+
+## Pushes the real, live sun position (see solar_position.gd's
+## elevation_degrees/azimuth_degrees -- the same values already driving
+## day/night lighting in world.gd) into the shared hillshade material, the
+## same "live value pushed into a shared uniform every tick" shape
+## set_wind_strength/set_rain above already use for weather.
+func set_sun_position(elevation_deg: float, azimuth_deg: float) -> void:
+	_hillshade_shader.set_sun_position(elevation_deg, azimuth_deg)
 
 
 ## How far from the streaming center a disturbance may be and still be worth
@@ -1450,10 +2188,34 @@ func step_tall_grass(delta_seconds: float) -> void:
 	# sprites are only re-synced here too.
 	for sim in _grass_sims.values():
 		sim.advance(elapsed)
+		sim.shed_seed(elapsed)
 
 	_graze_by_herbivores()
 	for chunk_coord in _grass_sims.keys():
 		_sync_grass_sprites(chunk_coord)
+
+
+## Wild carrot/potato growth + spread (see docs/concept/wild_crops.md) --
+## same throttled-accumulator shape as step_tall_grass, batched for the same
+## reason: advancing every loaded patch 60 times a second would be pure
+## waste for growth this slow.
+func step_wild_crops(delta_seconds: float) -> void:
+	_wild_crop_refresh_accumulator += delta_seconds
+	if _wild_crop_refresh_accumulator < GRASS_REFRESH_INTERVAL:
+		return
+	var elapsed := _wild_crop_refresh_accumulator
+	_wild_crop_refresh_accumulator = 0.0
+
+	for chunk_coord in _wild_crop_sims.keys():
+		var sims: Dictionary = _wild_crop_sims[chunk_coord]
+		var markers: Dictionary = _wild_crop_markers[chunk_coord]
+		for crop_id in sims:
+			var sim: WildCropPatch = sims[crop_id]
+			sim.advance(elapsed)
+			_wild_crop_renderer.sync_markers(
+				_entities_parent, sim, crop_id, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+				markers[crop_id]
+			)
 
 
 ## One shared shader-uniform write per frame makes nearby blades yield to a
@@ -1462,23 +2224,21 @@ func set_grass_walker_position(world_position: Vector2) -> void:
 	_illustrated_grass.set_walker_position(world_position)
 
 
-## Whether a wild carrot (Daucus carota) is growing in the clump at `tile`.
-##
-## The carrot existed as an item with nothing in the world producing it, which
-## left the whole taming loop unreachable in normal play (see
-## docs/concept/taming.md). Wild carrot is a meadow plant that grows among the
-## grasses, so it turns up where the player is already pulling grass for fibre
-## -- rather than waiting on a farming system that is not wired into the game.
-##
-## Hash-derived rather than rolled, matching the "the same tile always answers
-## the same" idiom used throughout the world sim (TallGrass, FlowerPatch,
-## TreeGenome): a reloaded chunk agrees with itself.
-const WILD_CARROT_CHANCE := 0.18
-
-
-static func has_wild_carrot(tile: Vector2i) -> bool:
-	var roll := float(absi(hash("%d_%d_wild_carrot" % [tile.x, tile.y])) % 10000) / 10000.0
-	return roll < WILD_CARROT_CHANCE
+## How grown the tall-grass patch at `pixel_position` is (0..1, 1 mature), or
+## a negative number if there is no patch there. Grass has no per-tuft
+## Node2D of its own (see _sync_grass_sprites), so it cannot join
+## HoverTargetFinder's group like every other hoverable entity -- World reads
+## this directly instead to special-case the mouse-hover tooltip over grass.
+func tall_grass_growth_at(pixel_position: Vector2) -> float:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var sim: TallGrass = _grass_sims.get(chunk_coord)
+	if sim == null:
+		return -1.0
+	var local := _local_coord(tile.x, tile.y)
+	if not sim.has_grass(local):
+		return -1.0
+	return sim.get_growth(local)
 
 
 ## Harvests the tall-grass patch nearest `pixel_position` within
@@ -1504,12 +2264,6 @@ func harvest_grass_near(pixel_position: Vector2, radius_tiles: int = 1) -> bool:
 					Item.new("plant_fibre", "Plant Fibre", "material", 40), 2
 				)
 				WorldItemBus.item_dropped.emit(fibre, drop_position)
-				# Wild carrot grows among the meadow grasses, so it comes up
-				# with them (see has_wild_carrot).
-				if has_wild_carrot(tile):
-					WorldItemBus.item_dropped.emit(
-						ItemStack.new(Item.new("carrot", "Carrot", "food", 20), 1), drop_position
-					)
 				_sync_grass_sprites(chunk_coord)
 				return true
 	return false
@@ -1576,6 +2330,71 @@ func graze_grass_at(pixel_position: Vector2) -> bool:
 	return true
 
 
+## Every grass-shed seed lying on the ground within `radius_tiles` of
+## `pixel_position` (see TallGrass.shed_seed / ground_seed_cells), in the
+## same {position} shape as worms_near/seeds_near/fruit_near/grass_near so
+## GroundForageBehavior and GrazerForaging can treat it identically to any
+## other forageable entity.
+##
+## Scans only the 3x3 chunk neighbourhood, the same bound and reason as
+## flowers_near/seeds_near/worms_near/grass_near: this runs per forager per
+## sniff.
+func grass_seeds_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
+	var out: Array = []
+	var center := _world_tile_for_pixel(pixel_position)
+	var center_chunk := _chunk_coord_for_tile(center)
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var chunk_coord := center_chunk + Vector2i(dx, dy)
+			var sim: TallGrass = _grass_sims.get(chunk_coord)
+			if sim == null:
+				continue
+			var origin := chunk_coord * CHUNK_SIZE
+			for cell in sim.ground_seed_cells():
+				var tile: Vector2i = origin + cell
+				if maxi(absi(tile.x - center.x), absi(tile.y - center.y)) > radius_tiles:
+					continue
+				out.append({
+					"position": Vector2(
+						float(tile.x) + 0.5, float(tile.y) + 0.5
+					) * float(TerrainRenderer.TILE_SIZE),
+				})
+	return out
+
+
+## Takes the grass seed lying at `pixel_position`, if there is one (see
+## grass_seeds_near). Returns whether anything was actually there -- the
+## mutation counterpart of grass_seeds_near, mirroring take_worm_at (no
+## species to report, unlike take_seed_at -- see TallGrass.take_ground_seed).
+func take_grass_seed_at(pixel_position: Vector2) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var sim: TallGrass = _grass_sims.get(chunk_coord)
+	if sim == null:
+		return false
+	return sim.take_ground_seed(tile - chunk_coord * CHUNK_SIZE)
+
+
+## Plants a NEW, immature tall-grass patch at `pixel_position` (see
+## TallGrass.plant), if the chunk is loaded and the ground there can
+## actually take it (grassland, under the chunk's own MAX_PATCHES cap). The
+## sink a bird's or mouse's carried grass seed calls once it is done being
+## carried, mirroring plant_flower_at/try_plant_seed_at -- this is what lets
+## a carried seed found a genuinely NEW field _step_spread's contiguous
+## local growth could never reach on its own (see
+## docs/concept/long_grass.md's "Reproduction" section).
+func plant_grass_at(pixel_position: Vector2) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var sim: TallGrass = _grass_sims.get(chunk_coord)
+	if sim == null:
+		return false
+	if not sim.plant(tile - chunk_coord * CHUNK_SIZE):
+		return false
+	_sync_grass_sprites(chunk_coord)
+	return true
+
+
 ## Any herbivore-role creature standing on a mature grass patch's tile eats
 ## it -- the "tall grass is eaten by herbivores" loop, driven by where the
 ## creatures' own AI already took them rather than a separate seek behavior.
@@ -1593,6 +2412,57 @@ func _graze_by_herbivores() -> void:
 			if sim.get_growth(local) >= 1.0:
 				sim.graze(local)
 			_step_seed_dispersal(creature)
+			_step_grass_seed_caching(creature)
+
+
+## Rodent scatter-hoarding (see SeedCaching / docs/concept/long_grass.md's
+## "Reproduction" section): a mouse that passes near a fallen grass seed
+## picks it up, carries it a short GROUND distance while it goes on foraging,
+## and caches (plants) it nearby but not adjacent. Gated to mice specifically
+## (species == "mouse"), not the whole "Forager" diet label -- this is a real
+## mouse behaviour (scatter-hoarding), not a generic dietary fact that should
+## attach to anything sharing mice's diet table entry.
+##
+## Deliberately NOT the bird endozoochory model (swallow, digest over real
+## flight time, deposit far away): a real mouse does not fly and does not
+## digest a whole seed in transit -- it carries one in its cheek pouch on
+## foot and caches it close to where it found it, which is why
+## SeedCaching's carry range is a fraction of SeedEndozoochory's.
+func _step_grass_seed_caching(creature) -> void:
+	if creature.info == null or creature.info.species != "mouse":
+		return
+	if not creature.carried_grass_seed:
+		var nearby := grass_seeds_near(creature.position, int(SeedCaching.PICKUP_RADIUS_TILES))
+		if nearby.is_empty():
+			return
+		# The nearest seed actually within reach, not just anything in the
+		# wider query radius -- a mouse grabs what it is standing next to.
+		var nearest_position: Vector2 = nearby[0]["position"]
+		var nearest_distance: float = creature.position.distance_to(nearest_position)
+		for candidate in nearby:
+			var candidate_position: Vector2 = candidate["position"]
+			var distance: float = creature.position.distance_to(candidate_position)
+			if distance < nearest_distance:
+				nearest_distance = distance
+				nearest_position = candidate_position
+		if nearest_distance > SeedCaching.PICKUP_RADIUS_TILES * TerrainRenderer.TILE_SIZE:
+			return
+		if not take_grass_seed_at(nearest_position):
+			return
+		creature.carried_grass_seed = true
+		creature.carried_grass_seed_origin = creature.position
+		return
+
+	# Carrying: cache once it has actually travelled its own (short) carry
+	# distance, so the seed lands somewhere new rather than right back where
+	# it was picked up.
+	var carried_tiles: float = (
+		creature.position.distance_to(creature.carried_grass_seed_origin) / float(TerrainRenderer.TILE_SIZE)
+	)
+	if carried_tiles < SeedCaching.carry_distance_tiles(creature.wander_seed):
+		return
+	plant_grass_at(creature.position)
+	creature.carried_grass_seed = false
 
 
 ## Flowers spread on the backs of grazing animals (see SeedDispersal /
@@ -1635,17 +2505,26 @@ func _step_seed_dispersal(creature) -> void:
 ## and start showing bare ground at the edges. Falls back to the derived
 ## default if there is no viewport to ask (headless tests).
 func _derive_decoration_radius() -> int:
+	return DecorationLod.radius_chunks(_visible_half_span_tiles(), CHUNK_SIZE)
+
+
+## Real half-span of tiles the camera actually frames -- shared by
+## _derive_decoration_radius (the coarser chunk-level gate) and grass's own
+## tighter tile-level cutoff (see GRASS_VIEW_BUFFER_TILES/_sync_grass_
+## sprites). Asked in TILES rather than measured off raw viewport pixels:
+## with `canvas_items` stretch the viewport reports the window's real size
+## while the canvas is scaled to match, so pixels alone would say a 4K
+## player sees three times as much world as a 720p one. They see the same
+## amount (see DisplayScaling.visible_tiles_across) -- this is why
+## DecorationLod.visible_half_span_tiles' own raw-pixel math isn't reused
+## here despite doing the same conceptual job.
+func _visible_half_span_tiles() -> Vector2:
 	var viewport_size := Vector2(DEFAULT_VIEWPORT_SIZE)
 	if _tile_map_layer != null and _tile_map_layer.is_inside_tree():
 		viewport_size = _tile_map_layer.get_viewport_rect().size
-	# Asked in TILES rather than measured off raw viewport pixels: with
-	# `canvas_items` stretch the viewport reports the window's real size while
-	# the canvas is scaled to match, so pixels alone would say a 4K player
-	# sees three times as much world as a 720p one. They see the same amount
-	# (see DisplayScaling.visible_tiles_across).
 	var across := DisplayScaling.visible_tiles_across(viewport_size.x, viewport_size.y)
 	var down := DisplayScaling.visible_tiles_across(viewport_size.y, viewport_size.y)
-	return DecorationLod.radius_chunks(Vector2(across, down) * 0.5, CHUNK_SIZE)
+	return Vector2(across, down) * 0.5
 
 
 ## Whether this chunk is close enough to the player to be worth drawing (see
@@ -1672,39 +2551,83 @@ func _drop_decoration(holder: Dictionary, chunk_coord: Vector2i) -> void:
 	holder[chunk_coord] = {}
 
 
+## Tile-precise buffer beyond the camera's own visible window (see
+## _visible_half_span_tiles) that grass keeps drawn, once a chunk has
+## already passed the coarser chunk-level _decorates gate. Reported live:
+## "optimize the grass blade rendering so it only draws what the player
+## currently sees +2 tiles of buffer in every direction... to improve
+## framerate" -- see docs/concept/long_grass.md.
+const GRASS_VIEW_BUFFER_TILES := 2
+
+## One MultiMeshInstance2D draw call per Y-band, not one Sprite2D per card
+## (see IllustratedGrassPatch.BAND_COUNT for why bands, not per-tile or
+## per-chunk). Every band fully rebuilds from the sim's current patch set
+## and growth on each throttled sync (see GRASS_REFRESH_INTERVAL) - cheap
+## under GPU instancing, unlike the individual-node churn this replaced. On
+## top of that, each individual cell is further filtered to the player's
+## own tile-precise view window (see GRASS_VIEW_BUFFER_TILES) rather than
+## the whole chunk being all-or-nothing.
 func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 	if not _decorates(chunk_coord):
 		_drop_decoration(_grass_sprites, chunk_coord)
 		return
 	var sim: TallGrass = _grass_sims.get(chunk_coord)
-	var sprites: Dictionary = _grass_sprites.get(chunk_coord, {})
 	if sim == null:
 		return
-
-	for cell in sprites.keys().duplicate():
-		if not sim.has_grass(cell):
-			for blade in sprites[cell]:
-				blade.queue_free()
-			sprites.erase(cell)
+	var bands: Dictionary = _grass_sprites.get(chunk_coord, {})
 
 	var origin := chunk_coord * CHUNK_SIZE
+	var half_span := _visible_half_span_tiles()
+	var cells_by_band: Dictionary = {}  # band index -> Array[Dictionary]
 	for cell in sim.get_patch_cells():
-		var seed_value := hash("%d_%d_grass_tuft" % [origin.x + cell.x, origin.y + cell.y])
-		# Per-seed, not a single flat constant: each tuft's rolled variant
-		# (see ProceduralGrassSprite.VARIANTS) sets its own world-space
-		# height between 0.75 and 1.5 tiles, so a meadow shows real height
-		# variety instead of identically-sized clumps.
-		if not sprites.has(cell):
-			sprites[cell] = _illustrated_grass.create_cards(seed_value, Vector2(
-				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
-				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
-			), _entities_parent)
-		# Growth MULTIPLIES onto the base world scale above -- it must never
-		# replace it outright, or a mature patch (growth 1.0) renders at the
-		# full oversized art canvas instead of its intended clump size (see
-		# test_a_mature_grass_tuft_stays_at_its_intended_world_scale).
-		for blade in sprites[cell]:
-			blade.scale = Vector2.ONE * (IllustratedGrassPatch.WORLD_SIZE / blade.region_rect.size.x) * maxf(0.3, sim.get_growth(cell))
+		var tile: Vector2i = origin + cell
+		# Tile-precise cutoff on top of the coarser chunk-level _decorates
+		# gate above: a chunk is CHUNK_SIZE tiles square while the camera
+		# only ever shows a much smaller window (DecorationLod's own doc
+		# comment: "three times what the camera can actually show").
+		# Re-evaluated on the same cadence _sync_grass_sprites already runs
+		# at (GRASS_REFRESH_INTERVAL, plus immediately on a chunk-boundary
+		# crossing -- see update()), so cards genuinely load/unload as the
+		# player walks, not just once per chunk.
+		if not DecorationLod.keeps_decoration_tile(tile, _disturbance_center_tile, half_span, GRASS_VIEW_BUFFER_TILES):
+			continue
+		var band := IllustratedGrassPatch.band_index_for_local_y(cell.y, CHUNK_SIZE)
+		# Per-seed, not a single flat constant: IllustratedGrassPatch derives
+		# each tuft's atlas variant, card offsets and depth ordering from this
+		# same seed (card_specs_for_seed), so a meadow shows real per-tuft
+		# variety instead of identically-placed clumps.
+		var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
+		var list: Array = cells_by_band.get(band, [])
+		list.append({
+			"seed": seed_value,
+			"ground_position": Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
+				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			),
+			"growth": sim.get_growth(cell),
+		})
+		cells_by_band[band] = list
+
+	# A band whose last patch died (grazed/built on) is freed outright
+	# rather than left holding a zero-instance MultiMesh.
+	for band in bands.keys().duplicate():
+		if not cells_by_band.has(band):
+			bands[band].queue_free()
+			bands.erase(band)
+
+	for band in cells_by_band.keys():
+		var mmi: MultiMeshInstance2D = bands.get(band)
+		if mmi == null:
+			mmi = MultiMeshInstance2D.new()
+			mmi.position = Vector2(
+				(origin.x + CHUNK_SIZE * 0.5) * TerrainRenderer.TILE_SIZE,
+				IllustratedGrassPatch.band_anchor_world_y(band, origin.y, CHUNK_SIZE, TerrainRenderer.TILE_SIZE)
+			)
+			_entities_parent.add_child(mmi)
+			bands[band] = mmi
+		_illustrated_grass.fill_band(mmi, mmi.position, cells_by_band[band])
+
+	_grass_sprites[chunk_coord] = bands
 
 
 ## Adds/removes a Sprite2D per flower cell so the rendered blooms match the
@@ -1893,9 +2816,19 @@ func flowers_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 					"species": species,
 					"nectar": patch.nectar_at(cell),
 					# Where a pollinator should settle: on the bloom, not at
-					# the stem's foot (which is what "position" is).
+					# the stem's foot (which is what "position" is). Scaled by
+					# THIS plant's actual size -- species norm, its own
+					# variance, and how far it has grown -- the exact scale
+					# _flower_scale_for draws its sprite at, so the landing
+					# point can never drift from a plant smaller, or still
+					# growing, than the species' nominal size (see
+					# ProceduralFlowerSprite.blossom_height_world).
 					"landing": flower_position - Vector2(
-						0.0, ProceduralFlowerSprite.blossom_height_world(species, sprite_seed)
+						0.0,
+						ProceduralFlowerSprite.blossom_height_world(
+							sprite_seed,
+							_flower_scale_for(species, patch.growth_at(cell), sprite_seed).y
+						)
 					),
 				})
 	return out
@@ -2777,6 +3710,21 @@ func elevation_at_global(global_x: int, global_y: int) -> float:
 	return chunk.elevation[_local_index(global_x, global_y)]
 
 
+## Real slope in degrees at a global tile (see terrain_relief.gd,
+## docs/concept/terrain_relief.md). Always delegates to the generator --
+## unlike elevation_at_global above, no chunk caches a per-tile slope array
+## to read from instead, so there is no faster path to take when the chunk
+## happens to be loaded.
+func slope_at_global(global_x: int, global_y: int) -> float:
+	return generator.slope_at_global(global_x, global_y)
+
+
+## Real aspect (compass bearing the slope faces) at a global tile -- same
+## always-delegates shape as slope_at_global above.
+func aspect_at_global(global_x: int, global_y: int) -> float:
+	return generator.aspect_at_global(global_x, global_y)
+
+
 func biome_at_global(global_x: int, global_y: int) -> String:
 	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
 	if chunk == null:
@@ -2858,6 +3806,26 @@ func catch_nearest_fish(pixel_position: Vector2, max_distance: float) -> String:
 func fish_population_near(pixel_position: Vector2) -> float:
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
 	return _ecosystem.fish_population(chunk_coord)
+
+
+## This pixel's chunk's average vegetation density -- the same
+## effective_capacity-chasing number that visibly thins wild grass under
+## drought (see EcosystemSimulation.add_region/step), exposed for a farmer
+## NPC's production yield to read (docs/concept/npc.md "Needs and the local
+## production economy") -- never an invented economy stat. Mirrors
+## fish_population_near's exact pattern.
+func vegetation_density_near(pixel_position: Vector2) -> float:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	return _ecosystem.average_vegetation_density(chunk_coord)
+
+
+## This pixel's chunk's aggregate herbivore population -- the same regional-
+## game number wildlife density already runs on, exposed for a hunter NPC's
+## production yield to read (docs/concept/npc.md). Mirrors
+## fish_population_near's exact pattern.
+func herbivore_population_near(pixel_position: Vector2) -> float:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	return _ecosystem.herbivore_population(chunk_coord)
 
 
 ## Records a harvest against this pixel's chunk's aggregate fish population --
@@ -3158,6 +4126,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_loaded_chunks[chunk_coord] = chunk
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_paint_water_overlay(chunk_coord, chunk)
+	_paint_hillshade_overlay(chunk_coord, chunk)
 	# Restores collision for every wall/window piece PERSISTED from a
 	# previous session -- fresh village-stamped pieces get their collision
 	# immediately inside stamp_structure_at_global instead, further below in
@@ -3182,6 +4151,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 
 	_loaded_stones[chunk_coord] = _stone_renderer.spawn_stones(
 		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+	) + _stone_renderer.spawn_mountain_veins(
+		_entities_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
 
 	_grass_sims[chunk_coord] = TallGrass.new(
@@ -3189,6 +4160,20 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	)
 	_grass_sprites[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
+
+	var crop_sims := {}
+	var crop_markers := {}
+	for crop_id in WILD_CROP_IDS:
+		var sim := WildCropPatch.new(
+			crop_id, hash("%d_%d_wild_crop" % [chunk_coord.x, chunk_coord.y]),
+			chunk.width, chunk.height, chunk.biome
+		)
+		crop_sims[crop_id] = sim
+		crop_markers[crop_id] = _wild_crop_renderer.spawn_markers(
+			_entities_parent, sim, crop_id, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+		)
+	_wild_crop_sims[chunk_coord] = crop_sims
+	_wild_crop_markers[chunk_coord] = crop_markers
 
 	_flower_patches[chunk_coord] = FlowerPatch.new(
 		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
@@ -3308,6 +4293,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_terrain_renderer.erase(_tile_map_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _water_layer != null:
 		_terrain_renderer.erase(_water_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	if _hillshade_layer != null:
+		_terrain_renderer.erase(_hillshade_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _roof_layer != null:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _hidden_roof_chunk_coord == chunk_coord:
@@ -3327,11 +4314,16 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		stone.free()
 	_loaded_stones.erase(chunk_coord)
 
-	for cards in _grass_sprites.get(chunk_coord, {}).values():
-		for card in cards:
-			card.free()
+	for mmi in _grass_sprites.get(chunk_coord, {}).values():
+		mmi.free()
 	_grass_sprites.erase(chunk_coord)
 	_grass_sims.erase(chunk_coord)
+
+	for markers_by_crop in _wild_crop_markers.get(chunk_coord, {}).values():
+		for marker in markers_by_crop.values():
+			marker.free()
+	_wild_crop_markers.erase(chunk_coord)
+	_wild_crop_sims.erase(chunk_coord)
 
 	for sprite in _flower_sprites.get(chunk_coord, {}).values():
 		sprite.free()

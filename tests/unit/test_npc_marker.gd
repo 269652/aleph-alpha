@@ -16,11 +16,22 @@ const TILE_SIZE := 16
 
 
 ## Duck-typed world: every tile is the same biome unless overridden, same
-## shape as CreatureMarker's test stub.
+## shape as CreatureMarker's test stub. Also exposes NpcProduction's real
+## weather-tied accessors (settable canned values) so an economy-wiring test
+## can simulate a producer actually gathering real food.
 class StubWorld:
 	var biome := "grassland"
+	var vegetation_density := 0.6
+	var herbivore_population := 10.0
+	var fish_population := 8.0
 	func biome_at_global(_x: int, _y: int) -> String:
 		return biome
+	func vegetation_density_near(_pos: Vector2) -> float:
+		return vegetation_density
+	func herbivore_population_near(_pos: Vector2) -> float:
+		return herbivore_population
+	func fish_population_near(_pos: Vector2) -> float:
+		return fish_population
 
 
 var marker: NpcMarker
@@ -187,3 +198,73 @@ func test_no_bound_view_never_crashes():
 	marker.position = Vector2(1000, 1200)
 	marker._process(0.1)  # no bound CharacterView -- must not error
 	assert_ne(marker.position, Vector2(1000, 1200), "should still walk normally with no view bound")
+
+
+# -- needs/local production economy (docs/concept/npc.md "Needs and the
+# local production economy") -- NpcMarker carries zero needs/economy state
+# by default (no setup_economy call); _process must still never crash. --
+
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
+const VillageMarket = preload("res://src/world/village_market.gd")
+
+
+func test_process_without_economy_never_crashes():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+	]
+	marker._process(0.1)  # no setup_economy call -- must not error
+	assert_null(marker.economy)
+
+
+func test_setup_economy_builds_an_economy_from_this_villagers_identity():
+	var market := VillageMarket.new()
+	marker.setup_economy(market)
+	assert_not_null(marker.economy)
+	assert_eq(marker.economy.occupation, marker.identity.occupation)
+	assert_same(marker.economy.market, market)
+
+
+func test_process_advances_hunger_through_the_bound_economy():
+	var market := VillageMarket.new()
+	marker.setup_economy(market)
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "home", "activity": "idle"},
+		{"time_block": "midday", "location_tag": "home", "activity": "idle"},
+		{"time_block": "evening", "location_tag": "home", "activity": "idle"},
+		{"time_block": "night", "location_tag": "home", "activity": "sleep"},
+	]
+	var before: float = marker.economy.needs.hunger
+	marker._process(1.0)
+	assert_gt(marker.economy.needs.hunger, before)
+
+
+## The full real production loop through NpcMarker's own _process: a hunter
+## whose "work" schedule entry is active gathers real food (via the world's
+## herbivore_population_near) into the shared market and earns real gold.
+func test_a_working_hunter_gathers_real_food_through_process():
+	var hunter_identity: NpcIdentity
+	for seed_value in range(50):
+		var candidate := NpcIdentity.new(seed_value)
+		if candidate.occupation == "hunter":
+			hunter_identity = candidate
+			break
+	assert_not_null(hunter_identity, "precondition: expected a hunter within 50 seeds")
+	marker.identity = hunter_identity
+
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	var market := VillageMarket.new()
+	marker.setup_economy(market)
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "hunting_ground", "activity": "work"},
+		{"time_block": "midday", "location_tag": "hunting_ground", "activity": "work"},
+		{"time_block": "evening", "location_tag": "well", "activity": "socialize"},
+		{"time_block": "night", "location_tag": "home", "activity": "sleep"},
+	]
+	marker.position = marker.workspot_position  # already at the work tag's resolved spot
+
+	for i in 300:
+		marker._process(1.0)
+
+	assert_gt(market.total_stock(), 0.0)
+	assert_gt(marker.economy.wallet.balance, 0)

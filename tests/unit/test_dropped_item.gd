@@ -4,6 +4,7 @@ const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
+const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 
 
 class StubPicker:
@@ -75,17 +76,53 @@ func test_standing_next_to_an_item_does_not_auto_pick_it_up():
 	assert_false(item.is_queued_for_deletion())
 
 
-func test_shows_a_clickable_name_label():
-	assert_eq(item._name_label.text, "Hide x3")
+## The label above a dropped item used to be always-on (Path-of-Exile
+## style); it now only shows via World's hover tooltip (see
+## HoverTargetFinder.GROUP_NAME/get_display_name), so the count-aware
+## formatting is now something get_display_name computes on demand rather
+## than a persistent Label's cached text.
+func test_get_display_name_includes_the_count():
+	assert_eq(item.get_display_name(), "Hide x3")
 
 
-func test_name_label_shows_the_remaining_count_after_a_partial_pickup():
+func test_get_display_name_omits_the_count_when_it_is_one():
+	item.item_stack.count = 1
+	assert_eq(item.get_display_name(), "Hide")
+
+
+func test_get_display_name_shows_the_remaining_count_after_a_partial_pickup():
 	# Single slot, already 1/2 full of "hide" -- only 1 more can merge in, so
 	# 2 of the dropped stack's 3 stay behind on the ground.
 	var picker := _make_picker(Vector2(500, 500), 1)
 	picker.inventory.add(Item.new("hide", "Hide", "material", 2), 1)
 	item.pick_up(picker)
-	assert_eq(item._name_label.text, "Hide x2")
+	assert_eq(item.get_display_name(), "Hide x2")
+
+
+func test_get_hover_actions_offers_pickup():
+	var actions: Array = item.get_hover_actions()
+	assert_eq(actions.size(), 1)
+	assert_eq(actions[0]["action"], "pickup")
+
+
+## A dropped carrot/potato uses the real illustrated root art (see
+## IllustratedCropSprite, docs/concept/wild_crops.md) rather than the
+## generic procedural fallback every other item still uses -- the same
+## texture the player just watched rise out of the ground during the pull,
+## not a different sprite once it lands.
+func test_a_dropped_carrot_uses_the_illustrated_root_texture():
+	var carrot_item := DroppedItem.new()
+	carrot_item.item_stack = ItemStack.new(Item.new("carrot", "Carrot", "food", 20), 1)
+	add_child_autofree(carrot_item)
+	var expected := IllustratedCropSprite.new().root_texture("carrot", 0)
+	assert_eq(carrot_item.texture.get_image().get_data(), expected.get_image().get_data())
+
+
+func test_a_dropped_carrot_is_sized_at_its_own_illustrated_world_width():
+	var carrot_item := DroppedItem.new()
+	carrot_item.item_stack = ItemStack.new(Item.new("carrot", "Carrot", "food", 20), 1)
+	add_child_autofree(carrot_item)
+	assert_almost_eq(carrot_item.scale.x, IllustratedCropSprite.ROOT_WORLD_SCALE, 0.0001)
 
 
 func test_a_full_inventory_leaves_the_item_on_the_ground_with_the_remainder():

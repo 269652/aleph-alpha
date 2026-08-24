@@ -91,6 +91,8 @@ const _ITEMS := {
 	# trust afterwards.
 	"lasso": ["Lasso", "tool", 1, 0.0],
 	"carrot": ["Carrot", "food", 20, 0.0],
+	# The other wild root crop -- see docs/concept/wild_crops.md.
+	"potato": ["Potato", "food", 20, 0.0],
 	"crude_blade": ["Crude Blade", "weapon", 1, 9.0],
 	# Mining chain: a stone pickaxe knocks ore out of ore-bearing boulders.
 	"stone": ["Stone", "material", 40, 0.0],

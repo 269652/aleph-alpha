@@ -20,6 +20,8 @@ const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const Kick = preload("res://src/gameplay/kick.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 ## How big this stone is, in centimetres -- decides how much rock it is worth
 ## (see StoneSize.rock_yield). Set by StoneRenderer from the stone's own seed.
@@ -47,6 +49,24 @@ var _disperse_contact_count := 0
 
 func _ready() -> void:
 	add_to_group(DroppedItem.GROUP_NAME)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
+
+
+## For World's mouse-hover tooltip (see HoverTargetFinder).
+func get_display_name() -> String:
+	return StoneSize.class_for(diameter_cm).capitalize()
+
+
+## For World's mouse-hover tooltip (see HoverTargetFinder). Every liftable
+## stone can be picked up; only a light enough one (Kick.is_kickable's
+## leg-mass cutoff, same one try_disperse's own mass-weighted roll reads --
+## see PebbleDispersion) can also be kicked -- a heavy cobble is liftable but
+## too heavy for a kick to budge.
+func get_hover_actions() -> Array:
+	var actions := [{"verb": "Pick Up", "action": "pickup"}]
+	if Kick.is_kickable(StoneSize.mass_kg_for(diameter_cm)):
+		actions.append({"verb": "Kick", "action": "kick"})
+	return actions
 
 
 ## Rolls whether THIS contact nudges the stone a small distance away from

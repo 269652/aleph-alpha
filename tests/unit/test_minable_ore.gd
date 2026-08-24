@@ -36,3 +36,26 @@ func test_mining_with_a_pickaxe_yields_stone_plus_ore():
 		ids.append(get_signal_parameters(WorldItemBus, "item_dropped", i)[0].item.id)
 	assert_true(ids.has("stone"))
 	assert_true(ids.has("iron_ore"))
+
+
+# -- hover tooltip: name + available actions ---------------------------------
+
+## The display name is the actual yielded item's name (via ItemCatalog),
+## not a naive "<ore_type> Ore" -- coal's own item is just "Coal", not
+## "Coal Ore".
+func test_display_name_matches_the_ores_own_item_name():
+	assert_eq(ore.get_display_name(), "Iron Ore")
+
+
+func test_coals_display_name_is_not_coal_ore():
+	var coal := MinableOre.new()
+	coal.ore_type = "coal"
+	add_child_autofree(coal)
+	assert_eq(coal.get_display_name(), "Coal")
+
+
+func test_hover_action_is_mine_bound_to_attack():
+	var actions: Array = ore.get_hover_actions()
+	assert_eq(actions.size(), 1)
+	assert_eq(actions[0]["verb"], "Mine")
+	assert_eq(actions[0]["action"], "attack")

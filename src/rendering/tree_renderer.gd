@@ -47,6 +47,13 @@ var _wind_sway := WindSway.new()
 var _drop_shadow := DropShadow.new()
 
 
+## Forwards the live wind strength (see WeatherModel.wind_strength_for, via
+## EarthChunkManager.set_wind_strength) to the one shared canopy-sway
+## material every spawned tree's sprite already uses (see spawn_tree_at).
+func set_wind_strength(strength: float) -> void:
+	_wind_sway.set_wind_strength(strength)
+
+
 ## Spawns a collidable tree node (as a child of `parent`) for every forested
 ## cell in the chunk, positioned at its global tile coordinate. Returns the
 ## spawned nodes so the caller can free them again when the chunk unloads.

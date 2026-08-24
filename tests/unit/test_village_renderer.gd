@@ -45,6 +45,12 @@ class StubWorld:
 			return "ocean"
 		return biome
 
+	## Records every settlement-founded call instead of touching a real event
+	## store (see EarthChunkManager.record_settlement_founded_if_new).
+	var founded_calls: Array = []
+	func record_settlement_founded_if_new(chunk_coord: Vector2i, npcs: Array) -> void:
+		founded_calls.append({"chunk_coord": chunk_coord, "npcs": npcs})
+
 
 func before_each():
 	renderer = VillageRenderer.new()
@@ -484,3 +490,80 @@ func test_npc_shadow_is_scaled_down_to_match_the_shrunk_character_view():
 	var shadow: Sprite2D = npc.get_node("Shadow")
 	var expected_width := int(CharacterView.BODY_SIZE.x * 0.9 * CharacterView.SCALE)
 	assert_almost_eq(shadow.texture.get_width(), expected_width, 1)
+
+
+# -- needs/local production economy (docs/concept/npc.md "Needs and the
+# local production economy"): every villager of a settlement is wired up
+# with a real NpcEconomy, and they all share the SAME VillageMarket -- a
+# producer's real surplus must be visible to every consumer in that same
+# village, not siloed per-NPC. ---------------------------------------------
+
+func _all_npcs(spawned: Array) -> Array:
+	var npcs: Array = []
+	for node in spawned:
+		if node is NpcMarker:
+			npcs.append(node)
+	return npcs
+
+
+func test_every_spawned_villager_has_an_economy():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var spawned := renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
+	)
+	var npcs := _all_npcs(spawned)
+	assert_gt(npcs.size(), 0, "the fixture should spawn at least one villager")
+	for npc in npcs:
+		assert_not_null(npc.economy, "every villager should carry a real NpcEconomy")
+
+
+func test_every_villager_of_the_same_settlement_shares_one_village_market():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	var spawned := renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
+	)
+	var npcs := _all_npcs(spawned)
+	assert_gt(npcs.size(), 1, "precondition: need more than one villager to compare markets")
+	var shared_market = npcs[0].economy.market
+	for npc in npcs:
+		assert_same(npc.economy.market, shared_market, "every villager of one settlement should share one market")
+
+
+# -- founding is reported to the world, once ---------------------------------
+
+## A newly-spawned settlement tells the world it was founded (see
+## docs/emergence, EarthChunkManager.record_settlement_founded_if_new) --
+## duck-typed exactly like stamp_structure_at_global, so a world that lacks
+## the method (or is null, per the other tests in this file) is skipped
+## rather than crashing.
+func test_spawning_a_settlement_reports_it_founded():
+	var world := StubWorld.new()
+	var chunk_coord := _find_settlement_chunk("grassland")
+	renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	assert_eq(world.founded_calls.size(), 1)
+	assert_eq(world.founded_calls[0].chunk_coord, chunk_coord)
+	assert_eq(world.founded_calls[0].npcs.size(), SettlementGenerator.POPULATION)
+
+
+## An empty chunk (no settlement here) reports nothing.
+func test_a_chunk_with_no_settlement_reports_nothing():
+	var world := StubWorld.new()
+	var chunk_coord := Vector2i(0, 0)
+	# Not every chunk hosts a settlement -- find one that provably doesn't
+	# rather than assuming (0,0) never does.
+	while _generator.has_settlement_at(chunk_coord, "grassland"):
+		chunk_coord.x += 1
+	renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland", world
+	)
+	assert_eq(world.founded_calls.size(), 0)
+
+
+func test_a_world_with_no_such_method_does_not_crash():
+	var chunk_coord := _find_settlement_chunk("grassland")
+	renderer.spawn_village(
+		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
+	)
+	pass_test("spawning with no world at all should not crash")

@@ -15,6 +15,9 @@ z_index = -1
 [node name="SnowFx" type="TileMapLayer" parent="."]
 z_index = -1
 
+[node name="HillshadeFx" type="TileMapLayer" parent="."]
+z_index = -1
+
 [node name="Entities" type="Node2D" parent="."]
 y_sort_enabled = true
 

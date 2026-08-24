@@ -13,6 +13,15 @@ extends RefCounted
 ##   docs/progress.md as "Variable-Fidelity Chunk Simulation").
 ## - "Water access" is approximated as the fraction of a region's cells that
 ##   are ocean biome -- the only water body this project currently models.
+## - Land health (docs/concept/world.md "Land health: overharvesting leaves a
+##   lasting mark, not just a slower respawn") is a PER-CHUNK AGGREGATE
+##   scalar, deliberately NOT per-cell like vegetation density itself. This
+##   is a documented fidelity call: herbivore/predator/fish populations are
+##   already chunk aggregates in this same file, and the "harvest" numbers
+##   feeding land health (a farmer NPC's yield, a region's average density)
+##   are themselves already chunk-aggregate reads -- a per-cell land-health
+##   grid would double the persisted state and per-step cost of this feature
+##   for a value nothing yet reads at finer-than-chunk granularity.
 
 const Chunk = preload("res://src/world/chunk.gd")
 const VegetationGrowthModel = preload("res://src/world/vegetation_growth_model.gd")
@@ -35,6 +44,13 @@ var _predator_population: Dictionary = {}  # Vector2i chunk_coord -> float
 var _water_area_cells: Dictionary = {}  # Vector2i chunk_coord -> float (see fish_capacity_at)
 var _water_temperature: Dictionary = {}  # Vector2i chunk_coord -> float
 var _fish_population: Dictionary = {}  # Vector2i chunk_coord -> float
+var _land_health: Dictionary = {}  # Vector2i chunk_coord -> float, see land_health()
+## Vegetation harvested (via record_vegetation_harvest) since the last step()
+## call, per region -- consumed and reset to 0.0 by step() itself, which
+## turns it into a per-day rate to compare against the region's own
+## regrowth_rate (see step()'s doc comment and VegetationGrowthModel.
+## step_land_health).
+var _harvest_accumulator: Dictionary = {}  # Vector2i chunk_coord -> float
 
 
 ## Starts simulating a newly-loaded region, seeded at ecosystem equilibrium
@@ -53,6 +69,13 @@ func add_region(chunk_coord: Vector2i, chunk: Chunk) -> void:
 		)
 	_vegetation_density[chunk_coord] = density
 	_water_access[chunk_coord] = _water_access_fraction(chunk)
+	# A newly-loaded region is assumed pristine, matching this function's own
+	# doc comment ("the world is assumed to already contain a mature
+	# ecosystem, not one growing from nothing") -- a real persisted value (if
+	# any) is installed afterward via seed_land_health, the same override
+	# pattern seed_populations/seed_fish_population already use.
+	_land_health[chunk_coord] = 1.0
+	_harvest_accumulator[chunk_coord] = 0.0
 
 	var herbivore_capacity := _herbivore_model.carrying_capacity(
 		_average(density), _water_access[chunk_coord]
@@ -79,6 +102,8 @@ func remove_region(chunk_coord: Vector2i) -> void:
 	_water_area_cells.erase(chunk_coord)
 	_water_temperature.erase(chunk_coord)
 	_fish_population.erase(chunk_coord)
+	_land_health.erase(chunk_coord)
+	_harvest_accumulator.erase(chunk_coord)
 
 
 func has_region(chunk_coord: Vector2i) -> bool:
@@ -97,20 +122,44 @@ func update_environment(chunk_coord: Vector2i, chunk: Chunk) -> void:
 
 
 ## Advances every currently-loaded region by delta_days simulated days:
-## vegetation grows/spreads per-cell, then herbivore and predator populations
-## grow/decline toward their resource-derived capacity and migrate toward
-## adjacent regions with spare capacity.
+## land health first (see below), then vegetation grows/spreads per-cell
+## against that freshly-updated land health, then herbivore and predator
+## populations grow/decline toward their resource-derived capacity and
+## migrate toward adjacent regions with spare capacity.
+##
+## Land health step: compares this region's HARVEST rate since the last
+## step() (see record_vegetation_harvest/_harvest_accumulator) against its
+## own current regrowth_rate (how fast the land can currently replace what
+## was taken, at its PRE-step density/capacity) -- sustained harvest above
+## that rate depletes land health; anything at or below it (including no
+## harvest at all) lets it slowly recover. See VegetationGrowthModel.
+## step_land_health for the tested rates.
 func step(delta_days: float) -> void:
 	for chunk_coord in _vegetation_density.keys():
 		var chunk: Chunk = _chunks[chunk_coord]
+		var density: PackedFloat32Array = _vegetation_density[chunk_coord]
+		var current_land_health: float = _land_health.get(chunk_coord, 1.0)
+
+		if delta_days > 0.0:
+			var regrowth_rate := _vegetation_model.regrowth_rate(
+				_average(density), _average_capacity(chunk, current_land_health)
+			)
+			var harvest_rate: float = _harvest_accumulator.get(chunk_coord, 0.0) / delta_days
+			current_land_health = _vegetation_model.step_land_health(
+				current_land_health, harvest_rate, regrowth_rate, delta_days
+			)
+			_land_health[chunk_coord] = current_land_health
+		_harvest_accumulator[chunk_coord] = 0.0
+
 		_vegetation_density[chunk_coord] = _vegetation_model.step_grid(
-			_vegetation_density[chunk_coord],
+			density,
 			chunk.biome,
 			chunk.temperature,
 			chunk.moisture,
 			chunk.width,
 			chunk.height,
-			delta_days
+			delta_days,
+			current_land_health
 		)
 
 	var herbivore_capacities: Dictionary = {}
@@ -165,6 +214,26 @@ func step(delta_days: float) -> void:
 
 func average_vegetation_density(chunk_coord: Vector2i) -> float:
 	return _average(_vegetation_density.get(chunk_coord, PackedFloat32Array()))
+
+
+## This region's persistent land health (docs/concept/world.md "Land health:
+## overharvesting leaves a lasting mark, not just a slower respawn"), in
+## [0.0, 1.0]. Fail-open to 1.0 (pristine) for an unknown/unloaded region --
+## same convention as herbivore_capacity_at/fish_capacity_at failing open to
+## 0.0: a region nothing has ever touched should read as untouched, not as
+## the worst possible degradation.
+func land_health(chunk_coord: Vector2i) -> float:
+	return _land_health.get(chunk_coord, 1.0)
+
+
+## Overrides a region's land health -- used on chunk reload to install a
+## persisted (or unloaded-time-caught-up) value instead of add_region's
+## fresh-pristine seeding, the same override pattern seed_populations/
+## seed_fish_population already use. A no-op for a region that isn't
+## currently loaded, matching seed_populations's own guard.
+func seed_land_health(chunk_coord: Vector2i, value: float) -> void:
+	if _land_health.has(chunk_coord):
+		_land_health[chunk_coord] = clampf(value, 0.0, 1.0)
 
 
 func herbivore_population(chunk_coord: Vector2i) -> float:
@@ -232,6 +301,30 @@ func record_catch(chunk_coord: Vector2i, count: float) -> void:
 		_fish_population[chunk_coord] = maxf(0.0, _fish_population[chunk_coord] - count)
 
 
+## Records a real vegetation harvest against this region -- record_catch's
+## counterpart for standing vegetation, which previously had NO mortality
+## term at all: only weather ever moved _vegetation_density. Two effects:
+## (1) immediately removes `amount` from the region's standing density,
+## spread evenly across its cells (the actual bite/graze/gather happening
+## now), floored at 0.0 like record_catch; (2) banks `amount` into this
+## region's harvest accumulator, which the next step() call turns into a
+## per-day rate compared against the region's own regrowth_rate to decide
+## whether land health should deplete (see step()'s own doc comment) -- a
+## single harvest never directly moves land health, only SUSTAINED pressure
+## across many steps does. A harvest against an unknown region is a
+## harmless no-op, matching record_catch.
+func record_vegetation_harvest(chunk_coord: Vector2i, amount: float) -> void:
+	if not _vegetation_density.has(chunk_coord):
+		return
+	var density: PackedFloat32Array = _vegetation_density[chunk_coord]
+	if density.size() > 0 and amount > 0.0:
+		var per_cell := amount / density.size()
+		for i in density.size():
+			density[i] = maxf(0.0, density[i] - per_cell)
+		_vegetation_density[chunk_coord] = density
+	_harvest_accumulator[chunk_coord] = _harvest_accumulator.get(chunk_coord, 0.0) + amount
+
+
 ## An animal was BORN near the player -- an individual event, watched
 ## happening -- so the region's aggregate population goes up to match.
 ##
@@ -262,6 +355,22 @@ func _average(values: PackedFloat32Array) -> float:
 	for value in values:
 		total += value
 	return total / values.size()
+
+
+## This chunk's average effective_capacity at the given land_health -- the
+## same per-cell computation step_grid does internally, factored out so
+## step()'s land-health update can compare a live harvest rate against the
+## region's real current regrowth capability without duplicating step_grid
+## itself.
+func _average_capacity(chunk: Chunk, land_health: float) -> float:
+	if chunk.biome.is_empty():
+		return 0.0
+	var total := 0.0
+	for i in chunk.biome.size():
+		total += _vegetation_model.effective_capacity(
+			chunk.biome[i], chunk.temperature[i], chunk.moisture[i], land_health
+		)
+	return total / chunk.biome.size()
 
 
 func _water_access_fraction(chunk: Chunk) -> float:

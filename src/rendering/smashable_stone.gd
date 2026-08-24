@@ -24,6 +24,7 @@ const Item = preload("res://src/gameplay/item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const Knapping = preload("res://src/gameplay/knapping.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 const GROUP_NAME := "stone"
 
@@ -47,6 +48,21 @@ var _broken := false
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
+
+
+## For World's mouse-hover tooltip (see HoverTargetFinder). Everything above
+## the cobble/boulder line reads the same to a player looking at it -- size
+## across is already shown by the sprite itself.
+func get_display_name() -> String:
+	return "Boulder"
+
+
+## For World's mouse-hover tooltip (see HoverTargetFinder). Bound to "attack"
+## because that is the input Player._smash_step actually reads (see
+## Player._perform_attack).
+func get_hover_actions() -> Array:
+	return [{"verb": "Smash", "action": "attack"}]
 
 
 ## How many more strikes this boulder needs. Mainly for tests and for a future

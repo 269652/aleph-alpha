@@ -52,12 +52,12 @@ const PREDATOR_SPECIES_POOL := ["predator", "predator", "predator", "lynx"]
 ## "always spawns there" for the dangerous three (see
 ## docs/concept/ecosystem_dynamics.md's Region difficulty section).
 const HERBIVORE_SPECIES_POOL_BY_BIOME := {
-	"grassland": ["herbivore", "herbivore", "herbivore", "boar", "horse", "mouse", "mouse", "deer", "nonvenomous_snake"],
+	"grassland": ["herbivore", "herbivore", "herbivore", "boar", "horse", "mouse", "mouse", "deer", "nonvenomous_snake", "sheep"],
 	"forest": ["boar", "boar", "boar", "herbivore", "mouse", "mouse", "deer", "nonvenomous_snake"],
 	"desert": ["camel", "camel", "camel", "herbivore", "horse", "mouse", "nonvenomous_snake"],
 	"tundra": ["reindeer", "reindeer", "reindeer", "herbivore", "mouse", "deer"],
 	"rainforest": ["tapir", "tapir", "tapir", "herbivore", "mouse", "mouse", "nonvenomous_snake"],
-	"mountain": ["goat", "goat", "goat", "herbivore", "mouse"],
+	"mountain": ["goat", "goat", "goat", "herbivore", "mouse", "sheep", "sheep"],
 }
 const PREDATOR_SPECIES_POOL_BY_BIOME := {
 	"grassland": ["predator", "predator", "predator", "lynx", "lion"],

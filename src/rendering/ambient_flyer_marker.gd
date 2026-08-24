@@ -23,9 +23,16 @@ const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
-## For World's mouse-hover animal-name tooltip (see CreatureMarker.HOVERABLE_GROUP).
-const HOVERABLE_GROUP := "hoverable_animal"
+## Own dedicated group for _look_for_a_partner's nearby-flyer search --
+## deliberately NOT the same group as HoverTargetFinder.GROUP_NAME below.
+## That group now covers every hoverable entity in the loaded world
+## (dropped items, stones, ore, trees, ...), so scanning it for courtship
+## partners would mean walking the whole loaded world's item/stone/tree
+## count on every search instead of just nearby flyers -- a real
+## performance regression the two groups being separate avoids entirely.
+const FLOCK_GROUP := "ambient_flyer"
 
 var home := Vector2.ZERO
 var wander_seed := 0
@@ -97,6 +104,15 @@ var _seed_sniff_accumulator := 0.0
 var _seed_target = null  # Vector2, or null
 var _seed_pick_index := 0
 
+## Grass seed (see TallGrass.shed_seed / docs/concept/long_grass.md's
+## "Reproduction" section) uses the SAME `seed_world` port as flower seed
+## above -- a sparrow's crop does not care whether what it swallowed came
+## from a flower head or a grass seed head, so this is a fourth parallel
+## sniff track on the one existing duck-typed world, not a new export.
+var _grass_seed_sniff_accumulator := 0.0
+var _grass_seed_target = null  # Vector2, or null
+var _grass_seed_pick_index := 0
+
 ## The seed currently working its way through this bird after eating a fruit
 ## (a species id, or "" while not carrying one) -- see SeedEndozoochory. Only
 ## ONE seed is carried at a time, deliberately: a real bird's crop holds one
@@ -116,9 +132,15 @@ var _carried_seed_species := ""
 ## happened to be and the player never sees the connection.
 var _fullness := BirdDigestion.STARTING_FULLNESS
 var _carry_seconds_remaining := 0.0
-## Whether the carried seed is a FLOWER's (planted via plant_flower_at) as
-## opposed to tree fruit (try_plant_seed_at). Both ride the same carry timer.
+## Whether the carried seed is a FLOWER's (planted via plant_flower_at), a
+## grass seed's (planted via plant_grass_at), or -- if neither -- tree fruit
+## (try_plant_seed_at). All three ride the same carry timer; only one of
+## these two flags is ever true at a time, and every _take_targeted_* method
+## resets BOTH before setting its own, so a stale flag from a previous kind
+## can never survive into what a later swallowed item plants (see
+## _step_seed_carrying).
 var _carried_seed_is_flower := false
+var _carried_seed_is_grass := false
 
 ## How strongly a pollinator's drift bends up the scent gradient, 0 = pure
 ## wander, 1 = fly straight at the flowers. Partial on purpose: a butterfly
@@ -180,7 +202,8 @@ const AIRBORNE_Z_INDEX := 1
 
 
 func _ready() -> void:
-	add_to_group(HOVERABLE_GROUP)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
+	add_to_group(FLOCK_GROUP)
 	z_index = AIRBORNE_Z_INDEX
 
 
@@ -203,6 +226,10 @@ var _courting_with := 0
 var _courting_centre := Vector2.ZERO
 var _courting_elapsed := 0.0
 var _courting_cooldown := 0.0
+## Throttle on the (whole-group) partner search after it comes up empty, so an
+## idle adult doesn't rescan every flyer every frame (see _step_courtship).
+const PARTNER_SEARCH_INTERVAL := 0.5
+var _partner_search_cooldown := 0.0
 var _courtship_round := 0
 ## How old this flyer is, in real seconds. Spawned flyers start as ADULTS --
 ## the meadow is not full of newborns -- while anything born from a courting
@@ -253,10 +280,17 @@ func _nearest_player_position():
 	# player to measure against, so it runs at full rate.
 	if not is_inside_tree():
 		return null
-	var players := get_tree().get_nodes_in_group("player")
-	if players.is_empty():
-		return null
-	return players[0].position
+	# Cache the player node -- this runs every frame for every flyer just to
+	# find the (single) player; re-query only when the cached ref is invalid.
+	if _cached_player == null or not is_instance_valid(_cached_player):
+		var players := get_tree().get_nodes_in_group("player")
+		if players.is_empty():
+			return null
+		_cached_player = players[0]
+	return _cached_player.position
+
+
+var _cached_player: Node = null
 
 
 func _process(frame_delta: float) -> void:
@@ -585,14 +619,17 @@ func _step_ground_forage(delta: float) -> bool:
 
 	match ground_forage.phase:
 		GroundForageBehavior.Phase.DESCENDING:
-			# Exactly one of worm/fruit is ever set at a time (see the field
-			# doc comments) -- whichever committed is what it flies at.
+			# Exactly one of worm/fruit/seed/grass-seed is ever set at a time
+			# (see the field doc comments) -- whichever committed is what it
+			# flies at.
 			if _worm_target != null:
 				_fly_at_worm(delta)
 			elif _fruit_target != null:
 				_fly_at_fruit(delta)
 			elif _seed_target != null:
 				_fly_at_seed(delta)
+			elif _grass_seed_target != null:
+				_fly_at_grass_seed(delta)
 			_animate_wings()
 			return true
 		GroundForageBehavior.Phase.PECKING:
@@ -608,6 +645,8 @@ func _step_ground_forage(delta: float) -> bool:
 					_take_targeted_fruit()
 				elif _seed_target != null:
 					_take_targeted_seed()
+				elif _grass_seed_target != null:
+					_take_targeted_grass_seed()
 			_animate_wings()
 			return true
 		GroundForageBehavior.Phase.RESUMING:
@@ -623,9 +662,11 @@ func _step_ground_forage(delta: float) -> bool:
 	_worm_target = null
 	_fruit_target = null
 	_seed_target = null
+	_grass_seed_target = null
 	_look_for_worms(delta)
 	_look_for_fruit(delta)
 	_look_for_seeds(delta)
+	_look_for_grass_seeds(delta)
 	return false
 
 
@@ -692,6 +733,14 @@ func _take_targeted_fruit() -> void:
 	if eaten_species == "" or _carried_seed_species != "":
 		return
 	_carried_seed_species = eaten_species
+	# Neither flag: this is tree fruit, the "otherwise" case _step_seed_carrying
+	# falls through to. Reset explicitly rather than relying on a fresh bird's
+	# default -- a bird that swallowed a flower or grass seed earlier in its
+	# life, planted it, and is only now eating fruit for the first time would
+	# otherwise carry a stale flag from that first meal forever (see the
+	# shared doc comment on _carried_seed_is_flower/_carried_seed_is_grass).
+	_carried_seed_is_flower = false
+	_carried_seed_is_grass = false
 	var carry_tiles := SeedEndozoochory.carry_distance_tiles(wander_seed + _fruit_pick_index)
 	_carry_seconds_remaining = carry_tiles * float(TerrainRenderer.TILE_SIZE) / maxf(_movement.speed, 1.0)
 
@@ -818,6 +867,7 @@ func _take_targeted_seed() -> void:
 		return
 	_carried_seed_species = eaten_species
 	_carried_seed_is_flower = true
+	_carried_seed_is_grass = false  # see the shared doc comment on both flags
 	# Same carry model as fruit (see _take_targeted_fruit): a distance, not a
 	# fixed time, so a faster bird carries the seed proportionally further.
 	var carry_tiles := SeedEndozoochory.carry_distance_tiles(wander_seed + _seed_pick_index)
@@ -852,6 +902,76 @@ func _look_for_seeds(delta: float) -> void:
 		return
 	if _seed_target.distance_to(home) > _movement.radius:
 		home = _seed_target
+
+
+## Flies straight at the committed grass seed, landing on arrival -- same
+## shape as _fly_at_seed/_fly_at_worm/_fly_at_fruit.
+func _fly_at_grass_seed(delta: float) -> void:
+	if _grass_seed_target == null:
+		ground_forage.abort()
+		return
+	var before := position
+	var to_target: Vector2 = _grass_seed_target - position
+	if to_target.length() <= GroundForageBehavior.LANDING_DISTANCE:
+		position = _grass_seed_target
+		ground_forage.arrive()
+		perched = true
+		return
+	position += to_target.normalized() * _movement.speed * delta
+	face_travel(position - before, delta)
+
+
+## Eats the committed grass seed and starts carrying it, exactly like flower
+## seed (see _take_targeted_seed) -- a sparrow's crop does not distinguish
+## which plant a swallowed seed came from, only _carried_seed_is_grass does,
+## so _step_seed_carrying calls plant_grass_at instead of plant_flower_at.
+func _take_targeted_grass_seed() -> void:
+	_fullness = BirdDigestion.fullness_after_meal(_fullness)
+	if seed_world == null or _grass_seed_target == null:
+		return
+	var eaten: bool = seed_world.take_grass_seed_at(_grass_seed_target)
+	if not eaten or _carried_seed_species != "":
+		return
+	# No species to carry -- a chunk grows only one kind of grass -- but
+	# _carried_seed_species still has to go non-empty, since that is what
+	# every other part of the carry cycle (only-one-at-a-time, the carry
+	# timer, _step_seed_carrying) gates on.
+	_carried_seed_species = "grass"
+	_carried_seed_is_flower = false  # see the shared doc comment on both flags
+	_carried_seed_is_grass = true
+	var carry_tiles := SeedEndozoochory.carry_distance_tiles(wander_seed + _grass_seed_pick_index)
+	_carry_seconds_remaining = carry_tiles * float(TerrainRenderer.TILE_SIZE) / maxf(_movement.speed, 1.0)
+
+
+## Looks for the next grass seed on a throttled interval, in parallel with
+## the worm/fruit/flower-seed searches (see _step_ground_forage's SEEKING
+## branch).
+func _look_for_grass_seeds(delta: float) -> void:
+	if seed_world == null or not seed_world.has_method("grass_seeds_near"):
+		return
+	_grass_seed_sniff_accumulator += delta
+	if _grass_seed_sniff_accumulator < WORM_SNIFF_INTERVAL:
+		return
+	_grass_seed_sniff_accumulator = 0.0
+	if not ground_forage.can_commit():
+		return
+	var seeds: Array = seed_world.grass_seeds_near(
+		position, int(GroundForageBehavior.SEARCH_TILES)
+	)
+	if seeds.is_empty():
+		return
+	_grass_seed_pick_index += 1
+	var target := GroundForageBehavior.choose_worm(
+		position, seeds, PixelNoise.value(wander_seed, _grass_seed_pick_index, 1)
+	)
+	if target.is_empty():
+		return
+	_grass_seed_target = target["position"]
+	if not ground_forage.begin_descent():
+		_grass_seed_target = null
+		return
+	if _grass_seed_target.distance_to(home) > _movement.radius:
+		home = _grass_seed_target
 
 
 ## Ticks down this bird's seed-carry timer (see _carried_seed_species),
@@ -921,8 +1041,16 @@ func _step_courtship(delta: float) -> bool:
 		return false
 	if _courting_cooldown > 0.0 or _drink_remaining > 0.0:
 		return false
+	# Scanning the whole flyer group for a partner every frame is O(flyers^2)
+	# across a meadow. A flyer that comes up empty waits PARTNER_SEARCH_INTERVAL
+	# before scanning again (a real bee doesn't re-survey the whole field 60x a
+	# second) -- pairs still form within a fraction of a second.
+	_partner_search_cooldown = maxf(0.0, _partner_search_cooldown - delta)
+	if _partner_search_cooldown > 0.0:
+		return false
 	var partner_found = _look_for_a_partner()
 	if partner_found == null:
+		_partner_search_cooldown = PARTNER_SEARCH_INTERVAL
 		return false
 	_begin_courtship(partner_found)
 	return true
@@ -936,7 +1064,7 @@ func _look_for_a_partner():
 	# to court, the same guard the distance LOD uses.
 	if not is_inside_tree():
 		return null
-	for other in get_tree().get_nodes_in_group(HOVERABLE_GROUP):
+	for other in get_tree().get_nodes_in_group(FLOCK_GROUP):
 		if other == self or other.get("species") == null:
 			continue
 		if not Courtship.can_court(species, String(other.species)):
@@ -993,13 +1121,18 @@ func _step_seed_carrying(delta: float) -> void:
 	if _carry_seconds_remaining > 0.0:
 		return
 	# Where it lands decides what grows: a swallowed FLOWER seed becomes a
-	# flower (bird endozoochory -- see concept/flora.md#bird-endozoochory),
-	# tree fruit becomes a tree. Both are simply dropped where the bird
-	# happens to be, which is what ties plant spread to the ecosystem's real
-	# movement corridors rather than to a spread radius.
+	# flower, a GRASS seed becomes a new tall-grass patch (see
+	# docs/concept/long_grass.md's "Reproduction" section), tree fruit
+	# becomes a tree (bird endozoochory -- see
+	# concept/flora.md#bird-endozoochory). All three are simply dropped
+	# where the bird happens to be, which is what ties plant spread to the
+	# ecosystem's real movement corridors rather than to a spread radius.
 	if _carried_seed_is_flower:
 		if seed_world != null and seed_world.has_method("plant_flower_at"):
 			seed_world.plant_flower_at(position, _carried_seed_species)
+	elif _carried_seed_is_grass:
+		if seed_world != null and seed_world.has_method("plant_grass_at"):
+			seed_world.plant_grass_at(position)
 	elif fruit_world != null:
 		fruit_world.try_plant_seed_at(position, _carried_seed_species)
 	# The dropping itself: the visible half of dispersal, so the player can see
@@ -1007,6 +1140,8 @@ func _step_seed_carrying(delta: float) -> void:
 	if seed_world != null and seed_world.has_method("drop_guano_at"):
 		seed_world.drop_guano_at(position, _carried_seed_species)
 	_carried_seed_species = ""
+	_carried_seed_is_flower = false
+	_carried_seed_is_grass = false
 
 
 ## How much closer a bloom must be than the one this flyer is already flying

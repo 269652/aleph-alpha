@@ -16,8 +16,12 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 config/name="Aleph Alfa"
 run/main_scene="res://scenes/world.tscn"
-config/features=PackedStringArray("4.7", "Forward Plus")
+config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
+; Uncapped-ish ceiling so the frame rate can climb past 60 toward 120+ (VSync,
+; which otherwise hard-caps to the monitor refresh, defaults off in-game -- see
+; World._graphics_vsync; toggle it back on in Settings > Graphics if preferred).
+run/max_fps=240
 
 [autoload]
 

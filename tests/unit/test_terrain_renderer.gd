@@ -8,6 +8,7 @@ const ProceduralStructureSprite = preload("res://src/rendering/procedural_struct
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
+const ProceduralHillshadeSprite = preload("res://src/rendering/procedural_hillshade_sprite.gd")
 
 ## Shared across every test in this file (see docs/concept/
 ## art_resolution.md#boot-performance): the first build_tile_set() call
@@ -1506,3 +1507,52 @@ func test_paint_without_a_lookup_still_ignores_out_of_chunk_neighbors():
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
 		renderer.atlas_coords_for_biome("grassland", variant)
 	)
+
+
+# -- hillshade overlay: real slope/aspect data, quantized into a small atlas ----
+# (see docs/concept/terrain_relief.md's "Hillshading" section, mirrors the
+# water overlay's own "bake data, not art" shape above)
+
+func test_hillshade_overlay_tile_set_has_one_flat_tile_plus_every_slope_aspect_bin():
+	var overlay_set := renderer.build_hillshade_overlay_tile_set()
+	var source := overlay_set.get_source(0) as TileSetAtlasSource
+	assert_eq(
+		source.get_tiles_count(),
+		1 + ProceduralHillshadeSprite.SLOPE_BINS * ProceduralHillshadeSprite.ASPECT_BINS
+	)
+
+
+func test_atlas_coords_for_hillshade_differs_by_slope_bin():
+	var gentle := renderer.atlas_coords_for_hillshade(5.0, 90.0)
+	var steep := renderer.atlas_coords_for_hillshade(80.0, 90.0)
+	assert_ne(gentle, steep)
+
+
+func test_atlas_coords_for_hillshade_differs_by_aspect_bin():
+	var facing_north := renderer.atlas_coords_for_hillshade(45.0, 0.0)
+	var facing_south := renderer.atlas_coords_for_hillshade(45.0, 180.0)
+	assert_ne(facing_north, facing_south)
+
+
+func test_atlas_coords_for_hillshade_is_the_shared_flat_tile_regardless_of_aspect():
+	var one := renderer.atlas_coords_for_hillshade(0.0, 45.0)
+	var another := renderer.atlas_coords_for_hillshade(0.0, 270.0)
+	var undefined_aspect := renderer.atlas_coords_for_hillshade(0.0, -1.0)
+	assert_eq(one, another)
+	assert_eq(one, undefined_aspect)
+
+
+func test_hillshade_overlay_tiles_are_real_slope_aspect_data_not_a_flat_fill():
+	var overlay_set := renderer.build_hillshade_overlay_tile_set()
+	var source := overlay_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	var art := TerrainRenderer.ART_TILE_SIZE
+
+	var flat_coords := renderer.atlas_coords_for_hillshade(0.0, -1.0)
+	var steep_coords := renderer.atlas_coords_for_hillshade(80.0, 90.0)
+	var flat_origin := Vector2i(flat_coords.x * art, flat_coords.y * art)
+	var steep_origin := Vector2i(steep_coords.x * art, steep_coords.y * art)
+
+	var flat_pixel := image.get_pixel(flat_origin.x, flat_origin.y)
+	var steep_pixel := image.get_pixel(steep_origin.x, steep_origin.y)
+	assert_lt(flat_pixel.r, steep_pixel.r, "the steep bin's tile should encode a higher slope than the flat tile")

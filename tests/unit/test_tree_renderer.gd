@@ -184,6 +184,22 @@ func test_spawned_tree_sprites_share_the_wind_sway_material():
 				assert_eq(child.material, seen_material, "all trees should share one material instance")
 
 
+## Trees must sway harder in stronger live wind (see WindSway.set_wind_strength,
+## EarthChunkManager.set_wind_strength) -- forwarded through the SAME shared
+## material every spawned tree sprite already uses.
+func test_set_wind_strength_forwards_to_the_shared_sway_material():
+	var chunk := _make_forest_chunk()
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	renderer.set_wind_strength(1.8)
+	var checked_any := false
+	for tree in spawned:
+		for child in tree.get_children():
+			if child is Sprite2D and child.name != "Shadow":
+				assert_eq(child.material.get_shader_parameter("wind_strength"), 1.8)
+				checked_any = true
+	assert_true(checked_any, "precondition: the forest chunk spawned at least one tree sprite")
+
+
 # -- art resolution (docs/concept/art_resolution.md phase 2) -----------------
 #
 # Trees are authored at ArtResolution.DETAIL_MULTIPLIER times their world

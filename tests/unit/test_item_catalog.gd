@@ -126,6 +126,14 @@ func test_a_carrot_is_food():
 	assert_eq(carrot.kind, "food")
 
 
+## The other wild root crop (see docs/concept/wild_crops.md) -- a pulled
+## potato is food the same way a pulled carrot is.
+func test_a_potato_is_food():
+	var potato = catalog.make("potato")
+	assert_not_null(potato)
+	assert_eq(potato.kind, "food")
+
+
 # -- real weapon mass (see MaterialProperties.mass_kg_for, docs/concept/ -----
 # -- materials.md's momentum = mass * velocity model) ------------------------
 

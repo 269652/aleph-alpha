@@ -1,8 +1,11 @@
 extends Sprite2D
 
 ## An item lying on the ground: a visible, procedurally-drawn sprite holding an
-## ItemStack, with a clickable name label floating above it (Path-of-Exile
-## style) -- click the label (or the icon) to pick it up. There is
+## ItemStack. Its name only shows on mouse hover, via World's shared hover
+## tooltip (see HoverTargetFinder/get_display_name/get_hover_actions) -- it
+## used to float an always-on name label above every dropped item
+## (Path-of-Exile style), which cluttered the ground with labels for every
+## windfall and pebble lying around. Click the icon to pick it up. There is
 ## deliberately no proximity auto-pickup; walking past a dropped item leaves
 ## it alone until the player actually clicks it. Picking up merges the stack
 ## into the player's inventory and frees this node; if the inventory has no
@@ -10,6 +13,8 @@ extends Sprite2D
 
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
+const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
 
 const GROUP_NAME := "dropped_item"
 ## Un-picked-up items despawn after this many seconds so the ground doesn't
@@ -33,31 +38,37 @@ var spoil_seconds := LIFETIME
 ## still sitting there in spring.
 var ages_on_world_time := false
 
-## The clickable area covers both the icon and the name label above it, not
-## just the icon -- "click the name to pick it up" needs the label itself to
-## be a real click target.
 const CLICK_AREA_SIZE := Vector2(64.0, 32.0)
 const CLICK_AREA_OFFSET_Y := -8.0
-const NAME_LABEL_OFFSET_Y := -20.0
 
 static var _sprite_generator := ProceduralItemSprite.new()
+static var _crop_sprite_generator := IllustratedCropSprite.new()
 
 var item_stack
 var _age := 0.0
-var _name_label: Label
 
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
 	if item_stack != null and texture == null:
-		texture = _sprite_generator.texture_for(item_stack.item.id)
-		# Item art is authored DETAIL_MULTIPLIER times oversized; scaling it
-		# back keeps a dropped item the right size on the ground (see
-		# docs/concept/art_resolution.md). Tree fruit additionally has its own
-		# per-species world width, because at the shared scale a fallen cherry
-		# was as wide as the tile it lay on -- see
-		# ProceduralItemSprite.world_scale_for.
-		scale = Vector2.ONE * _sprite_generator.world_scale_for(item_stack.item.id)
+		# A pulled wild carrot/potato uses the real illustrated root art (see
+		# docs/concept/wild_crops.md) -- the same texture the player just
+		# watched rise out of the ground during the pull, not a different
+		# fallback sprite once it lands. Checked first, ahead of the generic
+		# procedural path every other item still uses.
+		if _crop_sprite_generator.has_crop(item_stack.item.id):
+			texture = _crop_sprite_generator.root_texture(item_stack.item.id, 0)
+			scale = Vector2.ONE * IllustratedCropSprite.ROOT_WORLD_SCALE
+		else:
+			texture = _sprite_generator.texture_for(item_stack.item.id)
+			# Item art is authored DETAIL_MULTIPLIER times oversized; scaling
+			# it back keeps a dropped item the right size on the ground (see
+			# docs/concept/art_resolution.md). Tree fruit additionally has its
+			# own per-species world width, because at the shared scale a
+			# fallen cherry was as wide as the tile it lay on -- see
+			# ProceduralItemSprite.world_scale_for.
+			scale = Vector2.ONE * _sprite_generator.world_scale_for(item_stack.item.id)
 
 	var click_area := Area2D.new()
 	var collision_shape := CollisionShape2D.new()
@@ -68,14 +79,6 @@ func _ready() -> void:
 	click_area.add_child(collision_shape)
 	click_area.input_event.connect(_on_input_event)
 	add_child(click_area)
-
-	_name_label = Label.new()
-	_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_name_label.position = Vector2(-CLICK_AREA_SIZE.x / 2.0, NAME_LABEL_OFFSET_Y)
-	_name_label.size = Vector2(CLICK_AREA_SIZE.x, 14.0)
-	_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE  # clicks go to click_area below
-	add_child(_name_label)
-	_update_name_label()
 
 
 func _process(delta: float) -> void:
@@ -102,8 +105,7 @@ func spoilage() -> float:
 
 ## Merges this stack into the picker's inventory. Frees the node if it all fit;
 ## if the inventory was full, leaves the node on the ground with the
-## remainder (and its label updated to match). Returns whether anything at
-## all was picked up.
+## remainder. Returns whether anything at all was picked up.
 func pick_up(picker) -> bool:
 	if item_stack == null or picker.inventory == null:
 		return false
@@ -113,19 +115,23 @@ func pick_up(picker) -> bool:
 	item_stack.count = overflow
 	if item_stack.count <= 0:
 		queue_free()
-	else:
-		_update_name_label()
 	return true
 
 
-func _update_name_label() -> void:
-	if item_stack == null or _name_label == null:
-		return
-	_name_label.text = (
+## For World's mouse-hover tooltip (see HoverTargetFinder).
+func get_display_name() -> String:
+	if item_stack == null:
+		return ""
+	return (
 		"%s x%d" % [item_stack.item.display_name, item_stack.count]
 		if item_stack.count > 1
 		else item_stack.item.display_name
 	)
+
+
+## For World's mouse-hover tooltip (see HoverTargetFinder).
+func get_hover_actions() -> Array:
+	return [{"verb": "Pick Up", "action": "pickup"}]
 
 
 func _on_input_event(_viewport: Node, event: InputEvent, _shape_idx: int) -> void:

@@ -1,11 +1,15 @@
 # Progress Tracker
 
-This document is a living status tracker for everything defined across the 32
-design docs in `docs/concept/*.md` plus `docs/roadmap.md`, cross-referenced
+This document is a living status tracker for everything defined across the
+design docs in `docs/concept/*.md` (49 as of this writing, up from the 32
+this doc was first generated against) plus `docs/roadmap.md` and, since the
+2026-08-23 emergent-systems pass, `docs/emergence/*.md`, cross-referenced
 against what is actually implemented in the codebase today. It was generated
-by extracting every distinct mechanism named or implied in those docs (481
-total, catalogued below) and checking each one against the real, tested
-source in `src/`, `scenes/`, and `tests/`.
+by extracting every distinct mechanism named or implied in those docs
+(catalogued below — the original count of 481 is stale now that more docs
+have been added since, and hasn't been re-tallied to an exact figure) and
+checking each one against the real, tested source in `src/`, `scenes/`, and
+`tests/`.
 
 **Update this file as work progresses.** When a mechanism moves from
 not-started to partial or done, update its row/bullet, and when new design
@@ -28,7 +32,9 @@ features.
 
 ✅ **Pebbles sometimes flock.** A pebble-class cell (never cobble, never boulder) has a ~40% chance of spawning as a cluster of 2-5 pebbles instead of one lone stone -- both the chance and the size range are tested named constants (`StonePlacement.PEBBLE_FLOCK_CHANCE`/`FLOCK_MIN_MEMBERS`/`FLOCK_MAX_MEMBERS`). Each member is a REAL independently-seeded `LiftableStone` (its own diameter, shape, grain, yield), positioned around the cell's centre with a seeded angular jitter so members can never land on top of each other by construction -- flat sibling nodes, not one wrapping container (a container positioned at the cell centre would put each member's `.position` in local rather than world space, breaking `Player.pickup_nearby`'s distance check). A flock's whole spread stays well inside `Player.PICKUP_RADIUS`, so one approach collects every member.
 
-✅ **Loose stone can draw from illustrated art.** `IllustratedStoneSprite` slices a hand/AI-illustrated sheet into cached, seed-picked variant frames -- the same "sheet → `SpriteSheetSlicer` → cached frames" shape as flowers/animals. Pebbles and boulders each have a real 20-variant sheet registered and live (`assets/sprites/pebbles.png`/`boulders.png`, each a 4-row x 5-column grid, rows increasing in size/complexity top-to-bottom, sliced as four independently hand-measured row bands with five auto-detected columns per band -- mirrors `IllustratedAnimalSprite`'s multi-band `walk_bands` shape). Cobbles have no sheet at all, by design, and fall back to the procedural generator, gated by a `has_variants()` check so nothing errors or draws blank while art is still being produced for that class. The supplied sheets are opaque solid-magenta background rather than real alpha (the AI generator ignores "transparent background" requests), so loading includes a chroma-key + despill pass: pixels close to pure magenta are keyed to real alpha 0, and remaining magenta-tinted blend pixels (antialiased edges baked directly into RGB, since there is no real alpha to separate them) have the colour cast removed rather than being deleted outright, so a soft shadow/outline survives as a shadow instead of a hard-edged hole. A real-chunk probe (6x6 grassland chunks, 8163 stones) confirmed all 20 variants of each class actually turn up among spawned nodes, not just a handful of buckets.
+✅ **Loose stone can draw from illustrated art.** `IllustratedStoneSprite` slices a hand/AI-illustrated sheet into cached, seed-picked variant frames -- the same "sheet → `SpriteSheetSlicer` → cached frames" shape as flowers/animals. Pebbles, boulders, AND cobbles each have a real 20-variant sheet registered and live (`assets/sprites/pebbles.png`/`boulders.png`/`cobbles.png`, each a 4-row x 5-column grid, rows increasing in size/complexity top-to-bottom, sliced as four independently hand-measured row bands with five auto-detected columns per band -- mirrors `IllustratedAnimalSprite`'s multi-band `walk_bands` shape). Cobbles were originally excluded by design (a fist-sized cobble isn't just a bigger pebble) -- since resolved by giving cobbles their own sheet instead. The supplied sheets are opaque solid-magenta background rather than real alpha (the AI generator ignores "transparent background" requests), so loading includes a chroma-key + despill pass: pixels close to pure magenta are keyed to real alpha 0, and remaining magenta-tinted blend pixels (antialiased edges baked directly into RGB, since there is no real alpha to separate them) have the colour cast removed rather than being deleted outright, so a soft shadow/outline survives as a shadow instead of a hard-edged hole. A real-chunk probe (6x6 grassland chunks, 8163 stones) confirmed all 20 variants of each class actually turn up among spawned nodes, not just a handful of buckets.
+
+✅ **Ore nodes no longer show the old flat procedural look either.** Reported (2026-08-24, screenshot): "still boulders with the old design from the procedural engine" -- traced to `MinableOre`/`ProceduralOreSprite`, a code path entirely separate from the loose-stone illustration above (ore is a rarer subset of stone cells, `OrePlacement.ORE_FRACTION` 0.3 of ALL stone cells, not just boulder-class ones) that never got illustrated art of its own. Rather than requiring a brand new illustrated-ore sheet (none exists yet -- prompts for one are drafted in `docs/art/ai_sprite_prompts.md` section 5, not yet run), `ProceduralOreSprite.generate_image_from_base`/`generate_texture_from_base` now composite the ore's flecks onto a COPY of the illustrated BOULDER frame (ore always draws at boulder scale regardless of the underlying cell's rolled size, see `_attach_body_parts`'s `diameter_cm == 0` branch) instead of a freshly-drawn flat ellipse -- flecks are scattered by testing the base image's own alpha channel rather than ellipse geometry, so this works against any silhouette with no shape-specific math to keep in sync with the art. `StoneRenderer._ore_texture_for` gates this the same `has_variants()`-first-then-fallback way `_texture_for` already does for plain loose stone. The flat-ellipse `generate_image`/`_paint_flecks` stay completely unchanged as the fallback for a stone class with no illustrated sheet at all.
 
 ✅ **Pebble dispersion is mass-weighted and repeatable.** Walking within a few pixels of a loose stone rolls a per-contact chance (`PebbleDispersion.dispersion_chance`) of kicking it a fixed small distance directly away -- lighter stones roll a much better chance than heavier ones (the same footstep-momentum-vs-own-mass framing as the Kick action, just modelled as a foot at walking pace rather than a deliberate swing). A nudge that happens stays displaced rather than settling back, like real kicked gravel, but a stone is never "used up": every later contact rolls again (superseding the earlier one-shot-per-lifetime design), so it can keep drifting further across many walkovers. The roll is hash-derived from the stone's own seed and its own advancing contact counter (`LiftableStone._disperse_contact_count`, `PixelNoise`), not Godot's global RNG -- deterministic and reproducible like every other seeded pick in this codebase. Pure trigger/nudge/chance math lives in `PebbleDispersion` (tested headlessly); the per-frame "is a walker near a stone" detection is player-only scene glue in `World._step_pebble_dispersion`, mirroring `PathScarring`'s own pure/wiring split. Not wired to creatures yet -- deliberately, to avoid an O(creatures × nearby stones) scan every frame that nothing currently needs.
 
@@ -43,8 +49,8 @@ features.
 ✅ **Weapon mass.** Weapon-kind items now carry a real mass (`Item.mass_kg`, `MaterialProperties.mass_kg_for` -- density x an estimated real-world volume per item type, e.g. an iron sword's ~154cm³ estimate lands at ~1.2kg, within the real "one-handed swords are typically 1-1.5kg" range used as its sanity check). `Player._knockback_force_for` now scales a swing's knockback from that real mass through `Throwable.impact_knockback`, calibrated so an iron sword (unchanged) reproduces the exact original tuned `KNOCKBACK_FORCE`; bare hands and any weapon with no mass modeled yet fall back to that same original constant. Only the three weapon-kind items (sword, club, crude blade) have a mass estimate today -- tools (axe, pickaxe, fishing rod, lasso) are a documented follow-up, not guessed at here.
 
 ⬜ Visible damage state on a part-smashed boulder -- only the final break is shown.
-⬜ Stone type varying by biome (granite, limestone, sandstone); all loose stone is the same grey, aside from the illustrated pebble/boulder variants.
-⬜ Illustrated cobble art -- the plumbing (`IllustratedStoneSprite`) supports it, but no cobble sheet is registered, by design, for now.
+⬜ Stone type varying by biome (granite, limestone, sandstone); all loose stone is the same grey, aside from the illustrated pebble/boulder/cobble variants.
+⬜ Real illustrated ore art (as opposed to flecks composited onto the illustrated boulder frame, done above) -- prompts drafted in `docs/art/ai_sprite_prompts.md` section 5, no sheet generated/registered yet.
 ⬜ Pebble dispersion for creatures, not just the player.
 ⬜ Tool mass (axe, pickaxe, fishing rod, lasso) -- only weapon-kind items have a real mass estimate today.
 ⬜ A thrown stone's flight is a straight teleport to its landing spot, not an animated arc, and it isn't re-registered into chunk-manager bookkeeping (see the held-item throw entry above for the full list of documented simplifications).
@@ -71,6 +77,93 @@ features.
 ✅ **Fruit was piling up in one spot.** `hash("..._fruit_N")` is near-LINEAR across inputs differing only in a trailing number, so all eight of a crop landed within a tenth of a pixel of each other and read as one berry stuck to the tree. Both the illustrated and the procedural scatter now use `PixelNoise`, which exists for exactly this -- the same banding bit this project once in terrain.
 
 ⬜ Superseded: pine/acorn/hazelnut now exist as species; this note is kept only to record that they once did not.
+
+
+### Illustrated character art (`concept/character_art_brief.md`)
+
+Asked directly: "rehaul the character rendering in game and in creation so it
+uses the illustrated sprite sheets" — the player/NPC rig (`CharacterView`,
+already a paperdoll of separate Body/Head/LegLeft/LegRight/ArmLeft/ArmRight
+sprites, see the art brief) was still 100% `ProceduralCharacterSprite`
+primitive shapes despite the illustrated-part pipeline
+(`IllustratedCharacterSprite`) and the `has_action`-then-fallback wiring in
+`CharacterView._apply_paperdoll_part` already existing as scaffolding, with
+`_PARTS` empty. Four real art files existed
+(`assets/sprites/player/{torso,leg,arms,head}.png`) but in a different shape
+than the original brief anticipated, discovered by actually opening them
+rather than assuming the brief's plan still matched reality:
+
+- **Torso/legs/arms are ✅ wired**, each falling back to procedural
+  automatically if unregistered. `leg.png` draws BOTH legs as one fused pair,
+  not a single leg meant to be mirrored — `CharacterView._apply_legs` wears
+  it as one sprite covering both `LegLeft`/`LegRight` world slots (`LegLeft`
+  centred at the midpoint, `LegRight` hidden), rather than splitting it,
+  which would have cut through the art's own belt buckle. `arms.png` holds
+  two independent poses divided by an OPAQUE line, which defeats
+  `SpriteSheetSlicer.detect_frames`'s column-emptiness scan — its `_PARTS`
+  entry gives exact pixel rects instead (`idle_rects`, new support in
+  `_load_frames`) rather than relying on auto-detection.
+- **A real, previously-latent sizing bug surfaced immediately**:
+  `IllustratedCharacterSprite.CANVAS_SIZE` is ONE shared 64×96 working
+  canvas every part normalizes onto (mirroring `IllustratedAnimalSprite`'s
+  "one canvas per creature" convention), not a claim that a torso and a leg
+  pair are the same real size — so the flat `ArtResolution.SPRITE_SCALE`
+  the procedural parts share (correct only because THAT generator draws at
+  exactly its target art size with no padding) would have rendered every
+  illustrated part at the wrong size the instant it had any padding within
+  that shared canvas, which `normalize_frames`' own aspect-preserving fit
+  means it (almost) always does. Fixed the same way
+  `IllustratedAnimalSprite.marker_scale` already solves it one rig over:
+  `part_scale_for`/`head_scale_for` measure the generated frame's own
+  opaque-pixel content height and compute the scale that maps IT to the
+  part's real world height, instead of trusting the canvas size or a flat
+  constant. Two now-legacy tests that assumed `texture size == content size`
+  (true only for the old padding-free procedural art) were rewritten to
+  measure the actual opaque content bounding box instead of the raw texture,
+  reflecting the real, intentional change rather than being hacked back to
+  green.
+- **Head is ✅ wired, but is not a neutral single-tint part like the other
+  three** — `head.png` is a 10×10 grid of 100 fully-painted faces (bald, one
+  baked skin tone, solid near-black background, no alpha channel), so it
+  gets its own surface (`has_head`/`generate_head_texture`/
+  `head_cell_index_for`/`head_scale_for`), not `has_part`/`generate_textures`.
+  Which of the 100 faces a hero wears is deterministic from their DNA seed
+  (`head_cell_index_for`) — `HeroAppearance.appearance_for` and
+  `appearance_from_choices` now both carry `"seed"` on the returned
+  appearance dict specifically so a face choice has something stable to key
+  off (the character creator's live-preview rebuild, `main_menu.gd`'s
+  `current_appearance`, previously discarded the seed entirely). The
+  sheet's own baked tone is discarded and repainted toward the hero's real
+  DNA-picked skin tone by LUMINANCE ONLY — the exact recolor trick
+  `ProceduralFlowerSprite._paint_illustrated_head` already proved on
+  illustrated blooms (see `flora.md`'s "Recolouring illustrated blooms"),
+  deliberately simplified (no accent-hue mask separating eyes from skin —
+  eyes are already dark enough to still read as a distinct darker patch of
+  whatever tone the recolor lands on). Background removal needed a second
+  new mechanism: `head.png` has no alpha and a near-pure-black background
+  (measured directly with a small Node.js PNG probe rather than guessed —
+  `IHDR`/`IDAT` parsed and inflated by hand since Python wasn't on PATH in
+  this environment either), chroma-keyed out per cropped cell before the
+  normal slicing pipeline runs.
+- **Hair is an honest, explicit gap, not a half-implementation.** `head.png`
+  is bald throughout, and no hair-overlay art exists — asked directly
+  (overlay the old procedural hairstyles on the new head's silhouette, or
+  ship bald for now?), and bald-for-now won: those hairstyles were drawn to
+  fit the OLD procedural head, not this one, and a mismatched overlay would
+  read worse than an honest gap. The DNA `hair_style`/`hair` axes still
+  exist and still work for the procedural fallback; they simply have
+  nothing to draw against once the illustrated head is active. What closing
+  this gap actually needs is spelled out in the art brief.
+- **"Decorations" is explicitly undefined, not attempted.** Mentioned
+  alongside hair as "still missing" when this was scoped; asked what it
+  should mean and the honest answer was "no idea yet." Recorded as an open
+  question in the art brief rather than guessed at.
+- Also fixed in passing: `has_action` only ever checked for a part's
+  `"<action>_bands"` key, so registering body/legs/arms via the new
+  `idle_rects` mechanism alone left `has_action` reporting false and
+  `_apply_paperdoll_part` silently stuck on the procedural fallback despite
+  real art being registered — caught immediately by the new tests, not
+  discovered live.
 
 
 ### `/ecotest` — watching a year go by
@@ -297,6 +390,17 @@ Both reported, both the same underlying mistake in different clothes: numbers ch
 Two of my own tests had assumed the old slow rates -- they asserted STRICTLY increasing depth over twenty minutes, which stopped holding once covering finished inside a spell. Flat at full cover is correct behaviour, not a regression; they assert non-decreasing and reaching full now.
 
 
+### Every new game began on the same frozen instant, and a snowfall snapped instead of spreading
+
+Both reported by name while actually playing, both traced to real code rather than assumed.
+
+✅ **A new game no longer starts on a fixed frozen instant.** `_world_age_seconds` (the clock `season_at`/`warmth_modifier` are pure functions of) started at a hardcoded `0.0` for every fresh save, and was never persisted in any form at all -- not even for a loaded game. `warmth_modifier`'s own phase formula puts world-age zero at warmth **≈0.1465**, just under `Snowfall.FREEZING_WARMTH` (0.15), so every single new game began mid-winter-adjacent and reliably snowed within minutes (reported: "it starts to snow deterministically"). `EarthChunkManager.randomize_world_age()` now rolls a uniform random offset across the whole year (`NEW_GAME_WORLD_AGE_RANGE_SECONDS = SeasonCycle.SECONDS_PER_YEAR`, Godot's own default-seeded `randf()`) once, at New Game/Host Game creation, and `set_world_age_seconds` re-syncs `_last_fruiting_time`/`_snow_world_age` in the same call so the jump doesn't read as a fake elapsed span the next time fruiting or snow steps -- the exact "two clocks that have to agree" trap `jump_to_season`'s own doc comment already warns about, just at world-creation time instead of a `/season` skip. A loaded game never re-rolls: the clock is now genuinely persisted (`WorldClockPersistence`, `user://world_clock.bin`, the same `store_var` convention `PlayerSave`/`EventStorePersistence` already established) and `World._spawn_local_singleplayer_from_save` restores it **before** the first `update()` call, since chunk-loading itself reads the world age (sapling ages, ecology catchup). Verified live: 20 freshly-constructed managers landed on 20 distinct world-ages, and 40 of them spanned more than one season -- against the old code, all of them would have landed on the exact same instant, every time.
+
+✅ **A snowfall now fills in a chunk tile by tile instead of snapping everywhere at once.** `Snowfall.accumulate`'s aggregate 0-to-1 coverage number is the right shape for the pure model, but `EarthChunkManager._paint_snow_tile` fed that SAME number to every tile in the loaded field, so the instant it crossed a depth-band boundary the whole chunk changed together in one frame (reported: "snow covers a whole chunk instantly instead of spreading progressively"). Each tile now carries its own small, bounded lead or lag on the shared depth (`SnowLayer.ONSET_VARIANCE = 0.18`, `onset_offset_for`, seeded off the tile's GLOBAL coordinates via `PixelNoise` so the pattern neither repeats nor seams at a chunk boundary) -- the same per-cell-seeded-jitter idea `TallGrass`/`FlowerPatch` already use so a uniform process doesn't read as synchronized; this project has hit that exact "same value everywhere" clustering bug five times before (see `PixelNoise`'s own doc comment).
+
+A first pass left the WHOLE-FIELD repaint trigger untouched (it only fired when the tracked onset-free depth crossed one of `DEPTH_BANDS`' 4 boundaries) on the assumption that per-tile onset alone was enough. A real probe against a live `EarthChunkManager` proved that judgment call wrong: coverage sat flat at the exact same 55.1% of land tiles from global depth 0.02 clear through 0.25 (all inside band 0), then jumped straight to 100% at depth 0.5 -- the *same* instant-reveal bug, just relocated to a coarser timescale. `_repaint_snow` now ALSO repaints whenever depth has moved by `SNOW_REPAINT_DEPTH_STEP` (0.05, well under `ONSET_VARIANCE` so several checkpoints land across the onset spread) since the last repaint, not only on a band crossing. Re-measured after the fix, same live manager: 55.1% → 55.1% → 77.5% → 100.0% across depths 0.02/0.05/0.1/0.25 -- a genuine multi-step climb rather than one flat plateau followed by a snap. (A whole snowfall, `Snowfall.SECONDS_TO_COVER` ≈ 360s, still only repaints on the order of dozens of times, not every frame -- the cost concern the original batching existed for.)
+
+
 ## Status legend
 
 - ✅ **Done** — implemented and (per project convention) covered by tests.
@@ -320,7 +424,7 @@ Goal per roadmap: de-risk the unknowns before building gameplay on top of them.
 
 | Mechanism | Status | Note | Complexity |
 |---|---|---|---|
-| Project Scaffold & Tile Rendering | ✅ Done | Godot 4.7 project set up; `scenes/world.gd`/`.tscn` is the root scene (viewport 1280x720). `src/rendering/terrain_renderer.gd` bakes procedurally-generated, seeded pixel-art tiles (`procedural_terrain_sprite.gd`) with `VARIANTS_PER_BIOME` (6) variety per biome, now **animated in real time** via `TileSetAtlasSource` tile animation (`FRAME_COUNT` 4-frame blocks, zero per-frame script cost): grass tufts sway (baked, frozen-per-blade -- real motion lives in the GPU blade field below), and each biome layers detail over its base speckle (grass tufts + flower accents, forest-floor moss, desert dune ripples, tundra stones, mountain cracks). The base water tile is now a calm static-per-frame tint/texture only -- all visible water motion (waves, shore blending, rain) moved to a dedicated **WaterFx GPU overlay** (`water_shader.gd`, a second TileMapLayer painted via `TerrainRenderer.build_water_overlay_tile_set`/`EarthChunkManager.set_water_layer`): a per-pixel "shore distance" data tile family (`procedural_shore_distance_sprite.gd`, 0 at the land edge to 1 in open water) drives a fragment shader that sums ambient wind chop, an incident+reflected standing-wave band near the coast ("waves bounce off shore"), and hash-seeded expanding raindrop ripple rings (`rain_intensity` uniform, driven continuously by `EarthChunkManager.set_rain` from the live weather model) into one interfering wave field, fading alpha smoothly with shore distance so the coastline blends instead of cutting off at a tile edge (replacing the old baked foam/dash shore tiles, whose 16px grid read as a jagged staircase). A `wind_strength` uniform (`WeatherModel.wind_strength_for`, driven the same way as `rain_intensity` via `EarthChunkManager.set_wind_strength`) paces the ambient wave's scroll rate to the live weather's severity, so the same shore idles calmly on a clear day and churns faster/choppier during a storm. Individual 1px grass blades similarly moved off the tile grid onto a per-chunk GPU `MultiMeshInstance2D` field (`grass_blade_field.gd`) clustered into natural tufts, excluding any cell a building piece currently occupies (`build_field`'s `occupied_cells` param, rebuilt via `EarthChunkManager._rebuild_blade_field` after every `build_at_global`/`destroy_at_global`/`stamp_structure_at_global` and after village generation stamps its houses -- previously blades sprouted straight through house floors and walls, reported as "there should not be any plants growing inside of a building"). Vegetation sprites (trees, tall-grass and scrub tufts, the GPU blade field) sway via a shared GPU vertex shader (`wind_sway.gd`, gentle two-frequency gust motion, world-position phase so gusts roll across a meadow; lichen deliberately static). Border cells still dither toward whichever differing neighbor biome dominates on each edge (`dominant_blend_for`, `BLEND_VARIANTS` 3 -- fringe needs fewer looks than base ground), and chunk seams blend through `EarthChunkGenerator.biome_at_global` exactly like interior borders. | small |
+| Project Scaffold & Tile Rendering | ✅ Done | Godot 4.7 project set up; `scenes/world.gd`/`.tscn` is the root scene (viewport 1280x720). `src/rendering/terrain_renderer.gd` bakes procedurally-generated, seeded pixel-art tiles (`procedural_terrain_sprite.gd`) with `VARIANTS_PER_BIOME` (6) variety per biome, now **animated in real time** via `TileSetAtlasSource` tile animation (`FRAME_COUNT` 4-frame blocks, zero per-frame script cost): grass tufts sway (baked, frozen-per-blade -- real motion lives in the GPU blade field below), and each biome layers detail over its base speckle (grass tufts + flower accents, forest-floor moss, desert dune ripples, tundra stones, mountain cracks). The base water tile is now a calm static-per-frame tint/texture only -- all visible water motion (waves, shore blending, rain) moved to a dedicated **WaterFx GPU overlay** (`water_shader.gd`, a second TileMapLayer painted via `TerrainRenderer.build_water_overlay_tile_set`/`EarthChunkManager.set_water_layer`): a per-pixel "shore distance" data tile family (`procedural_shore_distance_sprite.gd`, 0 at the land edge to 1 in open water) drives a fragment shader that sums ambient wind chop, an incident+reflected standing-wave band near the coast ("waves bounce off shore"), and hash-seeded expanding raindrop ripple rings (`rain_intensity` uniform, driven continuously by `EarthChunkManager.set_rain` from the live weather model) into one interfering wave field, fading alpha smoothly with shore distance so the coastline blends instead of cutting off at a tile edge (replacing the old baked foam/dash shore tiles, whose 16px grid read as a jagged staircase). A `wind_strength` uniform (`WeatherModel.wind_strength_for`, driven the same way as `rain_intensity` via `EarthChunkManager.set_wind_strength`) paces the ambient wave's scroll rate to the live weather's severity, so the same shore idles calmly on a clear day and churns faster/choppier during a storm. Individual 1px grass blades similarly moved off the tile grid onto a per-chunk GPU `MultiMeshInstance2D` field (`grass_blade_field.gd`) clustered into natural tufts, excluding any cell a building piece currently occupies (`build_field`'s `occupied_cells` param, rebuilt via `EarthChunkManager._rebuild_blade_field` after every `build_at_global`/`destroy_at_global`/`stamp_structure_at_global` and after village generation stamps its houses -- previously blades sprouted straight through house floors and walls, reported as "there should not be any plants growing inside of a building"). Vegetation sprites (trees, tall-grass and scrub tufts, the GPU blade field) sway via a shared GPU vertex shader (`wind_sway.gd`, gentle two-frequency gust motion, world-position phase so gusts roll across a meadow; lichen deliberately static). `wind_sway.gd`'s amplitude now also scales with the SAME live `wind_strength` (`WeatherModel.wind_strength_for` via `EarthChunkManager.set_wind_strength`) driving the water shimmer above, rather than a fixed amount regardless of weather -- `WindSway.set_wind_strength` pushes it onto both `shared_material()` (trees, via `TreeRenderer.set_wind_strength`) and `tuft_material()` (grass/scrub tufts AND flower blooms, which share this exact material -- see `concept/long_grass.md`), calibrated so the default (`wind_strength == 1.0`) exactly reproduces today's tuned look on a clear day. Border cells still dither toward whichever differing neighbor biome dominates on each edge (`dominant_blend_for`, `BLEND_VARIANTS` 3 -- fringe needs fewer looks than base ground), and chunk seams blend through `EarthChunkGenerator.biome_at_global` exactly like interior borders. | small |
 | Camera & Player Movement | ✅ Done | `scenes/player.gd` — `CharacterBody2D` with WASD movement (runtime-bound), toroidal wrap, water movement integration. | small |
 | Heightmap Generation | 🚧 Partial (repurposed) | `src/world/heightmap_generator.gd` exists, tested, but no longer used for Earth — kept explicitly for generating future non-Earth planets. Earth instead uses real elevation data (`earth_elevation_source.gd`). | medium |
 | Hydraulic Erosion Pass | 🚧 Partial (repurposed) | `src/world/hydraulic_erosion.gd` exists, tested, same caveat: part of the old fully-procedural pipeline, not used for Earth's real rivers/lakes. | large |
@@ -356,7 +460,7 @@ gaps noted per mechanism below.
 | Aquatic Population Model (fish) | ✅ Done | The aquatic sibling of this whole table -- see the Fishing section's own entries (`concept/fishing.md`) for the full breakdown: `aquatic_population_model.gd`, `water_area_survey.gd`, wired into `EcosystemSimulation`/`ChunkEcologyCatchup`/`EarthChunkManager`, with an explicit `record_catch` harvest term (land creatures still lack one) and real cross-session disk persistence (land ecology still doesn't have that either). | large |
 | Species Roster Expansion (mice, horses, ambient flyers, kingfisher) | ✅ Done | See `concept/ecosystem_dynamics.md`'s "Species roster" section. **Mice/horses**: pure roster variety within the existing herbivore role/AI -- new `mouse_shape` silhouette (`procedural_animal_sprite.gd`, deliberately the smallest of the five families) and horse's reuse of `deer_shape`; stats/diet in `creature_info.gd`; wired into `creature_renderer.gd`'s `HERBIVORE_SPECIES_POOL_BY_BIOME` (mouse in every non-ocean biome, horse in grassland/desert). No new mechanism -- both run the exact same aggregate `HerbivorePopulationModel`/`CreatureBehavior` AI as every other herbivore. **Ambient flyers (butterflies, songbirds)**: a new, deliberately lighter tier -- `ambient_flyer_movement.gd` (per-instance-configurable flutter/glide, shared by both; interval slowed from an initial 0.4s to 0.7s for butterflies so flutter reads as motion, not jitter; butterflies additionally render at `BUTTERFLY_SCALE` 0.5x, half a songbird's size, after in-game feedback that the full 14x10 source art read too large against grass/trees), `procedural_butterfly_sprite.gd` (monarch/swallowtail/blue_morpho, vividly saturated -- real butterflies are)/`procedural_bird_sprite.gd` (sparrow/robin, deliberately muted -- real songbirds mostly are; bird silhouette redrawn after the first attempt read as unrecognizable, verified this time by rendering to PNG and inspecting before committing), `ambient_flyer_renderer.gd` (biome-gated to grassland/forest/rainforest, capped, decorative-only -- explicitly NOT population-simulated, same tier as the original static tree-placement layer/grass tufts). Spawn count is now a **guaranteed MIN..MAX range per qualifying chunk** (deterministic ranked selection, same technique as `FishRenderer.spawn_fish`'s `target_count`), not an independent low per-cell probability roll -- the original probability design could plausibly (if astronomically unlikely per-chunk) land on zero butterflies for some real-world coordinate ranges, which is exactly what got reported ("can't see butterflies"); the guarantee removes that failure mode entirely regardless of what the actual root cause was. Wired into `EarthChunkManager`'s load/unload lifecycle. **Fish-eating birds (kingfisher)**: the one genuinely new mechanism -- `piscivore_bird_behavior.gd` (pure, tested cruise → dive → grab-or-miss (`CATCH_CHANCE` 0.35, real birds miss most strikes) → ascend → cooldown state machine), `piscivore_bird_marker.gd` (drives real movement + the dive's vertical animation), `piscivore_bird_renderer.gd` (spawn gated by water presence, not a land biome pool -- at most one per water chunk, a deliberately rare sight). A successful grab calls the exact same `EcosystemSimulation.record_catch` the player's own rod uses (via new `EarthChunkManager.fish_population_near`/`record_fish_catch_near` hooks) -- fishing pressure is no longer only ever the player's. | large |
 | Per-Species Body Proportions (`AnimalAnatomy`) | ✅ Done | `src/rendering/animal_anatomy.gd`: every species is a set of real proportions (body/neck/leg/head length+height, muzzle taper, ear size, headgear, tail shape, `barrel_squareness` for a slab-sided vs. oval body, `world_scale` for real relative size) rather than one of a handful of shared hand-authored bitmaps — the fix for `herbivore`/`horse`/`deer`/`camel`/`reindeer`/`goat` all sharing one silhouette and differing only by coat colour ("herbivore, deer and horse look exactly the same"). `ProceduralAnimalSprite` assembles the parts from a profile through the shared pixel art engine (see `pixel_art_engine.md`). The horse profile has `shoulder_hump` zeroed (a level topline, unlike the humped rooters) and a deeper `head_height` than the other grazers -- but numeric tuning alone didn't fix the reported "straighter back"/"less flat head" asks: every species' neck attaches at the SAME fixed point on the body silhouette (`ProceduralAnimalSprite._paint_animal`, previously hardcoded, not profile-driven) and the muzzle is drawn as a second, much-shallower ellipse tacked onto the head ellipse — fine for a short-necked/short-muzzled grazer, but on a horse's unusually long neck and muzzle those fixed ratios read as a notch cut into the topline and a ball-with-a-cone head no matter how the lengths were dialed in. Fixed structurally, not just numerically, with three new optional per-species fields (every other species keeps today's behavior via a `.get(key, default)` fallback, so nothing else changed): `neck_attach_height`/`neck_attach_x` move the neck's attachment to the front-top corner of the barrel -- exactly where the superellipse silhouette is already curving upward — so the neck continues that curve instead of erupting from the flat mid-back; `muzzle_depth` lets a long-muzzled species keep the snout nearly as deep as the head itself instead of the sharp taper that reads fine on a cat but reads as a beak on a horse; `body_center_x` shifts the whole body left on its canvas so the now-longer neck+head have real room on the right without needing to be shrunk back down to fit (a real regression caught and then guarded against — see `test_no_species_silhouette_touches_the_top_or_right_edge`). leg_length also came down from the original 0.38 (the tallest of any species by a wide margin) to 0.33, corrected mid-fix from an initial thinner-legs attempt after explicit feedback ("shorter legs, not thinner") — leg_thickness is unchanged. A later pass against a reference image (explicitly proportions/pose only, not the reference's full painterly shading/tack — see the divergence note this triggered in the same conversation) added two more optional fields: `neck_direction_override` lets a species arch its neck at its own angle instead of sharing `NECK_UPRIGHT`'s steep near-vertical default (a horse's real neck arches forward and down from the withers, not straight up), and `has_hooves` caps each foot with a small dark hoof ellipse (`_paint_articulated_leg`) instead of the leg just tapering to the same coat color as the rest of the body. Horse's body also went stockier (`body_length` 0.58→0.52, `body_height` 0.27→0.31) to read as a real horse's build rather than a lean, elongated one. | medium |
-| Illustrated Species Sprites (`IllustratedAnimalSprite`) | ✅ Done | Reported, after the anatomy pass above still didn't land: "the procedural generated sprites are too bad... let's switch to illustrated ones." Real hand/AI-illustrated art (`assets/sprites/{horse,deer,boar}.png`) now REPLACES `ProceduralAnimalSprite` entirely for these three species; every other species is untouched and still procedural. Each sheet is a small set of action rows, hand-composited (not a uniform grid -- pose extents and frame counts genuinely differ row to row) with thin divider lines between cells -- exactly which actions a sheet covers varies per species: deer/boar have a walk-cycle row + an eat/graze-cycle row (idle synthesized from the eat cycle's own first frame); horse's sheet (replaced twice since first landing, latest labeled "1. Idle 2. Walking 3. Trot 4. Sit / Hurt / Death") has dedicated idle + walk rows instead -- real idle art for the first time, but NO eat/graze row at all, so a grazing horse falls back to `ProceduralAnimalAnimation` (a real, honest gap -- unlike swim/drink, eat's own head-down grazing pose isn't approximated well by reusing walk or idle, see below). Horse's trot and sit/hurt/death rows are measured but unwired: no matching action exists yet in `CreatureMarker`, and the trot row's poses overlap across their own divider lines (legs/tail crossing into the neighbor cell), which defeats column-gap frame detection outright. `src/rendering/sprite_sheet_slicer.gd` (pure, tested) finds each frame's own tight content bounding box directly from pixel data -- masking against the same `is_content_pixel` test used to find it in the first place, not just cropping the rectangle verbatim, since a bounding box is still a rectangle around a non-rectangular silhouette and would otherwise leave background wash visible in the corners -- then re-composites every frame onto one shared canvas with a consistent ground-contact baseline, so the walk/eat cycles don't visibly bob from inconsistent source padding. Each source sheet needed its own `alpha_threshold` (0.3 default; deer's sheet uses a soft vignette wash around each cell instead of a crisp divider or true transparency, needing 0.85 to exclude it) -- boar's sheet has no alpha channel at all (opaque white background), handled by the same gray-divider check, not the alpha check. The gray-divider check itself is also tunable per sheet (`divider_gray_min`, default 0.7): horse's current sheet draws a darker dashed rule (~0.63) than the default bound catches, which otherwise pulled each frame's bounding box upward to include it, leaking a faint dotted line into the empty space above every frame. `src/rendering/illustrated_animal_sprite.gd` is the registry (species → sheet path + data-driven `<action>_bands` Y ranges, so a species registers whichever subset of actions its sheet actually has + alpha/divider thresholds + reference content width for `marker_scale`, which reuses `AnimalAnatomy.world_scale` -- `BASE_WORLD_WIDTH * world_scale / reference_content_width` -- so a species' real on-screen content width always works out to `BASE_WORLD_WIDTH * world_scale` regardless of that species' own sheet's pixel density, the same "one shared unit, scaled per species" convention the procedural generator uses; raw `marker_scale()` values themselves are NOT comparable across species with different sheets, only that resulting on-screen width is -- see `test_marker_scale_produces_a_bigger_on_screen_width_for_a_bigger_species`, which measures it from each species' own rendered frame rather than assuming the formula) and per-(species,action) texture cache (shared across every marker of a species -- there's no per-seed variation the way procedural generation has). Horse's `world_scale` was later reduced 1.6 → 1.2 (reported "make the horse ~25% smaller" -- it read oversized once the illustrated sprite replaced the procedural one); since `world_scale` is the single point of control for both this and horse's procedural fallback actions, every one of its actions shrank together rather than only the illustrated ones. `has_action` also gives "swim" and "drink" their own illustrated fallback (reusing walk/idle respectively, see the Individual Creature AI row above for why) rather than dropping straight to procedural -- reported after landing without it: "when swimming the procedural generated horse shape is rendered instead of the illustrated one". `CreatureMarker._animation_step` and `CreatureRenderer._build_marker`/`_shadow_foot_offset_y` check `has_species`/`has_action` first and fall back to the procedural path unchanged for anything still not covered, so nothing crashes or goes blank. Art has since moved to **one file per action per species** (`<action>_path` alongside `<action>_bands`): all three species (horse, boar, deer) now have dedicated walk/idle/eat sheets, and all three are drawn facing LEFT. Because those files are authored at different resolutions (a 1536x1024 idle portrait against a 2172x724 walk sheet), `marker_scale` is measured **per action** from each action's own frame-0 content width, so a creature cannot change apparent size when it switches action — and there is no hand-declared `reference_content_width` left to fall out of sync when art is swapped (this project's horse art has been replaced four times). `SpriteSheetSlicer.normalize_frames` also scales an oversized frame down to fit the shared canvas instead of CLIPPING it, which was silently rendering a crop of the horse's legs as its idle pose. `attack` now falls back to the walk cycle rather than the procedural generator (reported: "when the boar is attacking it switches to old procedural sprite") — a charge is a fast run, and keeping the creature's own art beats swapping to a different rendering of a different animal mid-lunge. With that, an illustrated species has art for **every** action, so the procedural path is now reached only by species with no sheet at all. Per-sheet `faces_left` is pinned by test per species: boar's new sheets face LEFT where the single `boar.png` they replaced faced right, and getting that wrong renders a creature mirrored so it walks backwards in every direction (the bug the horse shipped with). Known gaps: no dedicated attack/swim/drink art for any species (all are fallbacks); no per-individual visual variation (every horse in the world looks pixel-identical); horse's trot and sit/hurt/death poses exist in earlier source art but aren't wired to any in-game action. | large |
+| Illustrated Species Sprites (`IllustratedAnimalSprite`) | ✅ Done | Reported, after the anatomy pass above still didn't land: "the procedural generated sprites are too bad... let's switch to illustrated ones." Real hand/AI-illustrated art (`assets/sprites/{horse,deer,boar}.png`) now REPLACES `ProceduralAnimalSprite` entirely for these three species; every other species is untouched and still procedural. Each sheet is a small set of action rows, hand-composited (not a uniform grid -- pose extents and frame counts genuinely differ row to row) with thin divider lines between cells -- exactly which actions a sheet covers varies per species: deer/boar have a walk-cycle row + an eat/graze-cycle row (idle synthesized from the eat cycle's own first frame); horse's sheet (replaced twice since first landing, latest labeled "1. Idle 2. Walking 3. Trot 4. Sit / Hurt / Death") has dedicated idle + walk rows instead -- real idle art for the first time, but NO eat/graze row at all, so a grazing horse falls back to `ProceduralAnimalAnimation` (a real, honest gap -- unlike swim/drink, eat's own head-down grazing pose isn't approximated well by reusing walk or idle, see below). Horse's trot and sit/hurt/death rows are measured but unwired: no matching action exists yet in `CreatureMarker`, and the trot row's poses overlap across their own divider lines (legs/tail crossing into the neighbor cell), which defeats column-gap frame detection outright. `src/rendering/sprite_sheet_slicer.gd` (pure, tested) finds each frame's own tight content bounding box directly from pixel data -- masking against the same `is_content_pixel` test used to find it in the first place, not just cropping the rectangle verbatim, since a bounding box is still a rectangle around a non-rectangular silhouette and would otherwise leave background wash visible in the corners -- then re-composites every frame onto one shared canvas with a consistent ground-contact baseline, so the walk/eat cycles don't visibly bob from inconsistent source padding. Each source sheet needed its own `alpha_threshold` (0.3 default; deer's sheet uses a soft vignette wash around each cell instead of a crisp divider or true transparency, needing 0.85 to exclude it) -- boar's sheet has no alpha channel at all (opaque white background), handled by the same gray-divider check, not the alpha check. The gray-divider check itself is also tunable per sheet (`divider_gray_min`, default 0.7): horse's current sheet draws a darker dashed rule (~0.63) than the default bound catches, which otherwise pulled each frame's bounding box upward to include it, leaking a faint dotted line into the empty space above every frame. `src/rendering/illustrated_animal_sprite.gd` is the registry (species → sheet path + data-driven `<action>_bands` Y ranges, so a species registers whichever subset of actions its sheet actually has + alpha/divider thresholds + reference content width for `marker_scale`, which reuses `AnimalAnatomy.world_scale` -- `BASE_WORLD_WIDTH * world_scale / reference_content_width` -- so a species' real on-screen content width always works out to `BASE_WORLD_WIDTH * world_scale` regardless of that species' own sheet's pixel density, the same "one shared unit, scaled per species" convention the procedural generator uses; raw `marker_scale()` values themselves are NOT comparable across species with different sheets, only that resulting on-screen width is -- see `test_marker_scale_produces_a_bigger_on_screen_width_for_a_bigger_species`, which measures it from each species' own rendered frame rather than assuming the formula) and per-(species,action) texture cache (shared across every marker of a species -- there's no per-seed variation the way procedural generation has). Horse's `world_scale` was later reduced 1.6 → 1.2 (reported "make the horse ~25% smaller" -- it read oversized once the illustrated sprite replaced the procedural one); since `world_scale` is the single point of control for both this and horse's procedural fallback actions, every one of its actions shrank together rather than only the illustrated ones. `has_action` also gives "swim" and "drink" their own illustrated fallback (reusing walk/idle respectively, see the Individual Creature AI row above for why) rather than dropping straight to procedural -- reported after landing without it: "when swimming the procedural generated horse shape is rendered instead of the illustrated one". `CreatureMarker._animation_step` and `CreatureRenderer._build_marker`/`_shadow_foot_offset_y` check `has_species`/`has_action` first and fall back to the procedural path unchanged for anything still not covered, so nothing crashes or goes blank. Art has since moved to **one file per action per species** (`<action>_path` alongside `<action>_bands`): all three species (horse, boar, deer) now have dedicated walk/idle/eat sheets, and all three are drawn facing LEFT. Because those files are authored at different resolutions (a 1536x1024 idle portrait against a 2172x724 walk sheet), `marker_scale` is measured **per action** from each action's own frame-0 content width, so a creature cannot change apparent size when it switches action — and there is no hand-declared `reference_content_width` left to fall out of sync when art is swapped (this project's horse art has been replaced four times). `SpriteSheetSlicer.normalize_frames` also scales an oversized frame down to fit the shared canvas instead of CLIPPING it, which was silently rendering a crop of the horse's legs as its idle pose. `attack` now falls back to the walk cycle rather than the procedural generator (reported: "when the boar is attacking it switches to old procedural sprite") — a charge is a fast run, and keeping the creature's own art beats swapping to a different rendering of a different animal mid-lunge. With that, an illustrated species has art for **every** action, so the procedural path is now reached only by species with no sheet at all. Per-sheet `faces_left` is pinned by test per species: boar's new sheets face LEFT where the single `boar.png` they replaced faced right, and getting that wrong renders a creature mirrored so it walks backwards in every direction (the bug the horse shipped with). Known gaps: no dedicated attack/swim/drink art for any species (all are fallbacks); no per-individual visual variation (every horse in the world looks pixel-identical); horse's trot and sit/hurt/death poses exist in earlier source art but aren't wired to any in-game action. **A fourth species, sheep, was added the same way** (reported: "I added sheep spritesheet in animals folder ... can you add sheep as creature?") from a single user-supplied `assets/sprites/animals/sheep.png` (an 8-column x 2-row grid: a walk cycle, then an eat/graze cycle; no dedicated idle art, synthesized from the eat cycle's own frame 0 like deer/boar). This sheet is cut out on a solid MAGENTA background rather than real transparency or a pale divider line, which `SpriteSheetSlicer.is_empty` had no way to recognize as background (its divider check only matches near-white, low-saturation pixels) -- `IllustratedAnimalSprite` gained a `chroma_key`/`chroma_key_tolerance` per-sheet option (`_apply_chroma_key`, per-channel RGB distance so a generous tolerance handles anti-aliased edge blending without swallowing the wool's own pale-but-different-hued color) applied before handing the image to the slicer, so every downstream step keeps working off plain alpha the same way it already did for every other sheet. Sheep also got a full `AnimalAnatomy` profile (`world_scale` 0.8, hornless, short-legged and stockier than the existing goat entry -- the only field of it `IllustratedAnimalSprite.marker_scale` actually reads, since the procedural shape fields go unused for an illustrated species) and `CreatureInfo` stats (calm grazer, modest health/stamina, no mana), and joined the grassland and mountain herbivore spawn pools (`CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME`) and `/spawn sheep` (automatic, since `ConsoleSpecies` derives its roster directly from `AnimalAnatomy.SPECIES`). A later perf bug (reported as the game getting stuck on a "Loading..." screen, with the log showing many repeated "Loaded resource as image file" warnings during `_animation_step`): the fallback branches for `swim`/`attack` (→ walk), `drink` (→ idle), and idle-without-its-own-art (→ eat/walk frame 0) resolved via a private helper that recursed into ITSELF rather than back through `generate_textures`'s own cache -- so the first request for any new fallback action key re-ran a full, expensive pixel-by-pixel re-slice of the source sheet even though the identical result was already cached under a different action key. Fixed by renaming that helper to `_build_textures` and routing every fallback branch through `generate_textures(species, target_action)` instead, so a fallback is now a guaranteed cache hit; regression-tested by asserting the fallback's returned texture array is the exact same object as the target action's (`test_swim_fallback_reuses_the_exact_walk_textures_not_a_fresh_reslice` and siblings), which is only possible with no re-slice. | large |
 | Mouse-Hover Animal Name Tooltip | ✅ Done | New, separate from the existing proximity-based `CreaturePanel` HUD list: `hover_target_finder.gd` (pure "what's closest to the mouse, within a radius" lookup) plus a `get_display_name()` method + shared `"hoverable_animal"` Godot group added to all four marker types (`CreatureMarker`, `FishMarker`, `AmbientFlyerMarker`, `PiscivoreBirdMarker` -- the latter three had no name display of any kind before this). `World._update_hover_tooltip` (untested scene glue, same convention as `CreaturePanel`) shows/positions a small floating label at the mouse cursor every frame. | small |
 | Bear, Deer, Lion, Snakes (venomous/nonvenomous) + Region Difficulty | ✅ Done | See `concept/ecosystem_dynamics.md`'s new "Region difficulty" section for the full design rationale (why not real-world danger statistics, why not manual per-country curation). **Roster**: deer (reuses `deer_shape`) and nonvenomous_snake are ordinary, ungated herbivore-role additions; bear (reuses `boar_shape`) and lion (reuses `lynx_shape` -- lions are cats) are new predator-role apex species (`MAX_HEALTH_BY_SPECIES` tougher than every existing predator); venomous_snake is a new predator-role hazard (fragile in raw stats, dangerous via its bite instead -- see Venom below). Snakes get a genuinely new `snake_shape` silhouette (`procedural_animal_sprite.gd`); venomous_snake reuses the jaguar-rosette speckle technique for a real-world-grounded warning pattern. **Region difficulty**: `region_difficulty.gd` derives an EASY/MEDIUM/HARD tier purely from chunk-distance to the world's actual (dry-land-resolved) spawn tile -- a transparent, standard game-design gradient, explicitly not derived from real-world statistics or manual region curation. `creature_renderer.gd`'s `MIN_DIFFICULTY_TIER_BY_SPECIES` gates bear/lion/venomous_snake behind HARD; every other species (including all 15 pre-existing ones) has no gate and is unaffected. `EarthChunkManager.set_spawn_tile` (called once by `World._compute_dry_land_spawn_tile`) feeds the real spawn point in; without it, difficulty defaults to HARD (fails open to unrestricted, not "nothing dangerous ever spawns"). **Venom**: `venom_model.gd` (pure damage-per-second by stack count, capped) plus the existing generic `debuff_stack.gd` for duration/stack tracking -- `Player.apply_venom()`/`_venom_step` (real damage over time, ticked in `_authority_step`), triggered by `CreatureMarker._try_attack` when the attacker's species is `venomous_snake`. | large |
 
@@ -435,6 +539,412 @@ phase has been started**, with one notable scale-related caveat.
 | Multi-Planet/Galaxy System | ⬜ Not started | | huge |
 | Full-Planet-Scale World | 🚧 Partial (divergent path) | The roadmap describes reaching whole-Earth scale later by "reusing the same [procedural] worldgen systems" as a scaling exercise. In practice the project reached real-Earth scale (~40,000×20,000 tiles) much earlier and via a completely different mechanism — real bundled elevation/moisture data instead of procedurally expanding the Phase-0 heightmap. The scale goal is arguably met; none of Phase 1–4's gameplay exists on top of it yet. | huge |
 
+### Emergence substrate (`docs/emergence/*.md`, dependency-ordered — see `docs/roadmap.md`'s "Emergence substrate" section for how this threads into the phases above)
+
+Cross-cutting causal/social/historical substrate, not itself a roadmap phase
+— see `docs/roadmap.md` for how its 18 phases map onto Phases 2/4/5+ above and
+which existing concept docs (`npc.md`, `quests.md`, `worldbosses.md`,
+`factions.md`, `economy.md`) already cover pieces of a given phase in this
+project's own terminology.
+
+| Emergence phase | Status | Note |
+|---|---|---|
+| 0 — Baseline & instrumentation | ✅ Done | Stable entity references (`EntityRef`), event type/importance model, entity-history query, cause-chain debugger, `/why`/`/history`/`/emergence` console commands, deterministic save/load round-trip. See below. |
+| 1 — Event & causality substrate | ✅ Done (core); 🚧 unloaded-region replay | `Event`/`EventStore` with automatic bidirectional cause↔consequence linking, deterministic insertion-ordered IDs, importance, query-by-type/window/entity. Retention/pruning by importance is a tested function, not yet wired to actually prune a running store. "Unloaded-region replay" (catch-up simulation feeding the store while a region is unloaded) is explicitly deferred — no emergence-tracked system yet needs catch-up, so there is nothing to replay. |
+| 2 — Memory, beliefs, information | ✅ Done (mechanism); 🚧 auto-propagation | `MemoryRecord`/`Rumor`/`MemoryStore` built per `npc.md`'s "Memory, beliefs, and rumor propagation" spec, tested, wired live. See below. |
+| 3 — Households & property | ✅ Done (household + property); ⬜ inheritance | `Household`/`HouseholdStore` built and wired live: every villager owns the house it lives in. See below. `npc.md`'s lifecycle (aging/reproduction/death) is still designed but not built, so multi-member households and inheritance stay out of scope until it exists. |
+| 4 — Contracts & obligations | ✅ Done (mechanism); ⬜ live trigger | `Contract`/`ContractStore` built, tested, wired into events/memory. See below — no real economic activity exists yet for a contract to model. |
+| 5 — Local production economy | ✅ Done (mechanism); ⬜ live trigger | `Market`/`MarketStore` built, reusing `CraftingRecipeBook`'s existing recipes rather than a parallel schema. Exit criterion live-verified. See below. |
+| 6 — Institutions | ✅ Done (mechanism); ⬜ live trigger | `Institution`/`InstitutionStore`/`InstitutionFormation` built, formation gated by real fulfilled-contract history with proper hysteresis. Exit criterion live-verified. See below. |
+| 7 — Settlement simulation | ✅ Done (food-driven); ⬜ other inputs | `SettlementState`/`EarthChunkManager.step_settlements`, food-only carrying capacity. **The first emergence phase with a genuinely automatic live trigger** — wired into `World._step_ecology_batch`, live-verified firing with zero manual calls. See below. |
+| 8 — Infrastructure networks | ⬜ Not started | `building.md`/`transportation.md` cover the player-facing side; this phase is the emergent traffic→trail→road side. |
+| 9 — Towns & cities | ⬜ Not started | Only `docs/emergence/04-settlements-cities-infrastructure.md` covers this so far — no `concept/*.md` overlap yet. |
+| 10 — Dungeons/ruins/history POIs | ⬜ Not started | `exploration.md`'s abandoned-settlement ruins are already designed (including the world-boss-destruction cause added alongside `quests.md`); this phase is the general historical-POI/archaeology mechanism behind it. |
+| 11 — World bosses | ⬜ Not started | `concept/worldbosses.md` already specifies this phase in detail (emergent-stats + one-shot LLM phase-authoring, village-endangerment attractor); not yet built. |
+| 12 — Emergent quests | ⬜ Not started | `concept/quests.md` already specifies this phase in detail (promotion/quorum/representative, village endangerment, supply/demand quests); not yet built. |
+| 13 — Governance & politics | ⬜ Not started | Only `docs/emergence/01-society-and-institutions.md` covers this so far — no `concept/*.md` overlap yet. |
+| 14 — Regional trade & migration | ⬜ Not started | `world.md`'s "population exists wherever conditions make it viable" is the same philosophy, not yet applied at regional/trade-network scale. |
+| 15 — Technology & cultural diffusion | ⬜ Not started | No `concept/*.md` coverage yet. |
+| 16 — Religion, festivals, legends | ⬜ Not started | `festivals.md` is referenced by `npc.md` as an eventual daily-planner byproduct, but doesn't cover belief-community formation itself. |
+| 17 — Polities, wars, civilization | ⬜ Not started | Gated behind real multiplayer per `docs/roadmap.md`; overlaps roadmap Phase 5+ #2/#3 (economy/society, era progression). |
+| 18 — Player legacy | ⬜ Not started | No `concept/*.md` coverage yet, though `death.md`'s reincarnation mechanic is an obvious future tie-in. |
+
+✅ **The event/causality substrate exists and is provably inspectable**
+(`src/emergence/entity_ref.gd`, `event.gd`, `event_store.gd`,
+`event_store_persistence.gd`, `why.gd`, `simulation_metrics.gd`). An
+`EntityRef` is a canonical `"<kind>:<key>"` string built from whatever
+deterministic key that entity already has (an NPC's `seed_value`, a
+settlement's `chunk_coord`) rather than a newly-allocated counter — the same
+"deterministic key, not an allocated ID" idiom `TreeGenome`/`CreatureInfo`/
+`NpcIdentity` already use everywhere else, so nothing new has to be persisted
+just to keep IDs from colliding. `EventStore.append` assigns each event a
+deterministic, sortable id (`evt_<ordinal>_<type>`); `EventStore.link_cause`
+is the only path that ever writes a cause/consequence edge, and it always
+writes both directions from one call — a caller can forget to wire the
+reverse edge, `link_cause` cannot, because it is the only thing that ever
+writes `consequences`. `EventStore.cause_chain` is cycle-safe (a visited-set
+plus a depth cap) even against a malformed graph, and so is `Why`'s own
+recursive trace. Persistence (`EventStorePersistence`) mirrors `PlayerSave`'s
+exact convention — one `user://emergence_events.bin` file,
+`FileAccess.store_var`/`get_var`, a `file_exists` guard, a `wipe()` — rather
+than inventing a second I/O convention; `EventStore` itself stays engine-free
+(`to_dicts()`/`from_dicts()`), with the `FileAccess` calls isolated to the
+persistence wrapper alone, matching this project's pure-module/engine-glue
+split. `Why.explain_event`/`explain_entity` render the same indented
+provenance shape `00-emergence-architecture.md`'s own "why does this city
+exist" example uses.
+
+**Wired into the real game lifecycle, not just held in memory.**
+`EarthChunkManager` owns one shared `_event_store`, exactly where
+`_snow_trail`/`_forage_claims` already live for the same reason. Founding:
+`VillageRenderer.spawn_village` calls a duck-typed
+`world.record_settlement_founded_if_new(chunk_coord, npcs)` (same fail-open
+shape as its existing `stamp_structure_at_global` hook) every time a chunk
+carrying a settlement loads — which happens on every reload, not just the
+true first founding — so `EarthChunkManager` itself guards on
+`events_for_entity(settlement_id).is_empty()` rather than an in-memory flag,
+robust across save/load. A genuine first founding records one
+`settlement_founded` event and one `npc_settled` event per villager, and the
+two witness each other (the settlement witnesses each villager settling, each
+villager witnesses the founding) — deliberately richer than a narrow
+actor-only history, since that is exactly what `witnesses[]` exists for.
+Persistence: `save_event_store`/`load_event_store`/`wipe_event_store` follow
+`persistence.md`'s established pillars exactly — wiped alongside `PlayerSave`
+on New Game (`World._wipe_persisted_world`), restored alongside it on Load
+Game (`_spawn_local_singleplayer_from_save`), and saved alongside it on
+autosave/quit (`_save_local_player`) — so "New Game means new" and "Load Game
+means exactly where you left off" both now cover the event store too, not
+only the player.
+
+`/history <entity_id>`, `/why <event_id>`, and `/emergence` (store-wide
+metrics: event/entity counts, events by type, tick range, average importance)
+are real console commands, verified live end to end: relaunching, walking to
+a settlement, and running `/history settlement:<x>_<y>` shows the real
+recorded founding.
+
+**Left for the next slice, deliberately:** no other gameplay system feeds the
+store yet (fruit falling, animal deaths, tree felling, etc. — settlement
+founding is the one proof-of-concept hook, chosen because it was the lowest-
+risk already-existing trigger to wire against); retention/pruning by
+importance is a tested pure function not yet wired to actually prune a
+running store; "unloaded-region replay" has nothing to replay yet, since no
+tracked system needs catch-up.
+
+✅ **A memory is a lossy projection of an event, never a rewrite of it**
+(`src/emergence/memory_record.gd`, `rumor.gd`, `memory_store.gd`,
+`memory_store_persistence.gd`), built per `npc.md`'s "Memory, beliefs, and
+rumor propagation" section — the project-specific expression of
+`docs/emergence/02-history-memory-rumors.md`'s general mechanism, the same
+relationship `quests.md` has to `worldbosses.md`. `MemoryRecord.from_event`
+forms a fresh, fully-confident memory for every ACTOR (`FIRSTHAND`) and
+WITNESS (`WITNESSED`) of an event — an entity with no part in it forms no
+memory, there is nothing to remember firsthand if you were not there.
+`Rumor.transmit` is the retelling: confidence decays by a tested constant per
+hop (`CONFIDENCE_DECAY_PER_HOP`), source type degrades monotonically toward
+`RUMOR` and never climbs back (`firsthand`/`witnessed` → `trusted_testimony`
+→ `stranger_testimony` → `rumor`, terminal), and a `distortion` accumulator
+is tracked from the first hop. **Content distortion is deliberately NOT
+applied yet** — `remembered_actors`/`location`/`outcome` survive every hop
+unchanged, matching `npc.md`'s explicit call that content mutation ("who did
+something changes, not just how confident you are") is "real, but unproven
+gameplay payoff yet," a follow-up once a scenario actually needs it, not a
+missing piece of this one. (An earlier pass of this same work built the
+content-mutation behavior before that concept-doc section existed to check
+it against; found the conflict, and simplified back down to match the
+documented, deliberately smaller scope — the concept doc is the source of
+truth, not whichever was implemented first.)
+
+`MemoryStore` layers the per-entity collection on top of `EventStore` rather
+than folding into it (`00-emergence-architecture.md`'s own authoritative
+loop: "emit events → update memories/beliefs" is a distinct step), so
+`EventStore` stays usable for entities that do not have memories at all — a
+settlement does not "remember" the way an NPC does, even though it can still
+be an event's actor. `witness_event` forms memories for every actor and
+witness in one call and dedupes against an event already remembered;
+`transmit` is the exit criterion made concrete — **NPC A can tell NPC B about
+an event and B receives a lower-confidence representation** — returning null
+when the teller never actually knew. Persistence follows the exact same
+`PlayerSave` convention as the event store, wired into the identical New
+Game/Load Game/autosave lifecycle points alongside it. `Why.explain_memories`
+(`/remember <entity_id>`) renders source type and confidence per memory,
+distinct from `/history`'s authoritative record of what an entity was part
+of. Wired live: founding a settlement forms real memories for the settlement
+and every villager, through the same `record_settlement_founded_if_new` hook
+Phase 0/1 already established.
+
+**Left for the next slice, deliberately, per `npc.md`'s own explicit
+scoping:** *auto-propagation* — the mechanism (`transmit`) is built and
+tested, but nothing yet calls it automatically when two NPCs meet at a
+settlement's shared landmarks on their daily schedule (`npc_schedule.gd`),
+which is the trigger `npc.md` specifies; trust/relationship-weighted decay,
+since `npc_identity.gd` has no relationships yet (Phase 3); time-based decay
+of an unreinforced memory's confidence/salience ("shape only for now" per
+`npc.md`); content distortion, as above; and the player as a first-class
+belief-holder (`npc.md` answers this directly for now: a quest/rumor UI
+queries a nearby NPC's own sufficiently-confident memory instead).
+
+✅ **A household owns real property, not a placeholder** (`household.gd`,
+`household_store.gd`, `household_store_persistence.gd`), the first link in
+the master brief's own causal chain ("household → property → production →
+market → contract → institution → resource shock → economic consequence →
+NPC response → historical event"). `Household.for_founder` forms a
+household keyed by its founder's own entity ref — same "deterministic key,
+not an allocated ID" idiom `EntityRef` itself already uses — and is
+deliberately **single-member**: `npc.md`'s own lifecycle section still has
+no partnership/reproduction system built, so multi-member households would
+be exactly the premature complexity the master brief warns against.
+`HouseholdStore.grant_property` enforces property has at most one owner at a
+time — granting it to a new household transfers it away from the old one
+rather than letting two claim the same thing, the same invariant a title
+deed enforces in reality.
+
+**Wired against something real, not a synthetic fixture.** Every villager's
+own house is a real, already-stamped structure (`VillageRenderer.
+_stamp_house`), keyed the same way that function already derives its own
+seed (`chunk_coord` + house index) — so recording ownership needed no new
+per-house id scheme. `record_settlement_founded_if_new` forms a household
+and grants it that house the same moment it records the founding/settling
+events, guarded by the same once-only dedupe. Persistence follows the
+identical `PlayerSave` convention and lifecycle wiring as the event/memory
+stores. `Why.explain_household` (`/household <entity_id>`) looks a household
+up by MEMBER rather than by household id, since a player is far more likely
+to know an NPC's own name than the id derived from it.
+
+**Left for the next slice, deliberately:** inheritance ("pass property to
+descendants") needs death to exist, which `npc.md`'s lifecycle section does
+not have yet; multi-member households need partnership/birth, same
+dependency; consumption/production of resources is Phase 5's local
+production economy, a separate concern from ownership itself.
+
+✅ **A contract's full lifecycle is real, and failures are as recorded as
+success** (`contract.gd`, `contract_store.gd`, `contract_store_persistence.gd`),
+per `docs/emergence/03-contracts-property-economy.md`'s own schema
+(`parties[]`, `obligations[]`, `consideration`, `deadline`, `status`).
+`obligations`/`consideration` stay free-form strings rather than structured
+amounts — this project has no currency/resource flow wired to NPCs yet
+(Phase 5), and inventing one just to give a contract a number to hold would
+be exactly the premature complexity the master brief warns against.
+`ContractStore` enforces the documented lifecycle
+(`proposed → accepted → active → fulfilled`, with `breached`/`defaulted`
+reachable only from `active` and `cancelled` only from `proposed`/`accepted`)
+as real transition guards, not just status labels a caller could set to
+anything — an invalid transition (fulfilling a proposed contract, breaching
+a cancelled one) is refused and returns false rather than erroring or
+silently succeeding, and a terminal contract (`fulfilled`, `breached`, …)
+stays exactly there.
+
+**Every transition is coordinated with a real event, by construction.**
+`EarthChunkManager.propose_contract`/`accept_contract`/.../`cancel_contract`
+each drive `ContractStore` AND append the matching event in one call — the
+same "one call, two stores kept in sync" shape
+`record_settlement_founded_if_new` already established for founding — and
+record NO event when the store refused the transition, since nothing
+meaningful actually happened. This is what makes the Phase 4 exit criterion
+("agreement failures create deterministic social/economic/history
+consequences") demonstrably true even before anything in the game proposes a
+contract on its own: a breach recorded this way is a real, traceable
+`contract_breached` event, `/why`-inspectable like any other.
+
+**A genuinely emergent composition, found by the live check, not
+engineered on purpose:** because a contract's parties are its event actors,
+and event actors automatically form firsthand memories (Phase 2's
+`witness_event`), a household that goes through propose → accept → activate
+→ breach ends up holding a firsthand memory of *each* of those four stages
+— with zero code written specifically to connect contracts to memory. This
+is the actual payoff the whole substrate was built for: composing
+independently-built primitives producing a real behaviour neither one
+implements alone.
+
+**Left for the next slice, honestly — this phase is different from 0–3:**
+every prior phase had a real trigger already sitting in the codebase to wire
+against (settlement founding). Contracts have none yet — no production, no
+market, no hiring exists in live gameplay, so nothing currently proposes a
+real contract on its own. The mechanism is complete, tested, and
+live-verified with a synthetic rent contract; it is ready to be called the
+moment Phase 5 (local production economy) or `npc.md`'s hiring system
+exists to call it from.
+
+✅ **A resource shortage raises price AND blocks production, from the same
+real number** (`market.gd`, `market_store.gd`, `market_store_persistence.gd`),
+the Phase 5 exit criterion made concrete: "a resource shortage can raise
+prices and cause downstream production failure without scripted events."
+**Production itself was not reinvented** — `CraftingRecipeBook` already has
+real, tested recipes grounded in this project's real item ids (wood, rock,
+stick, stone_pickaxe, ...); a parallel `ProductionRecipe` schema would have
+been exactly the "two places doing the same thing" duplication this
+project's own postmortems keep flagging. `Market.produce` runs an existing
+recipe against a market's own stock the same way `Player.craft` already runs
+one against a player's inventory — both ultimately call
+`CraftingRecipeBook.craft` against a plain `item_id -> count` Dictionary; a
+market is just a different Dictionary to run it against.
+
+**One real number, two honest consequences, not two independently-tuned
+effects that happen to agree.** `Market.price_for` derives price from stock
+alone — `REFERENCE_STOCK / stock`, a uniform elasticity curve rather than a
+per-item base-price table, since there is no real currency/value system
+wired to NPCs yet and inventing per-item base prices would be an invented
+number with nothing grounding it. `Market.produce` calls
+`CraftingRecipeBook.can_craft` against that SAME stock. A shortage that
+spikes the price is the identical shortage that blocks production — no
+separate budget/currency system was needed to connect the two, because they
+were never two systems. Markets are per-SETTLEMENT (`MarketStore`, keyed the
+same way `HouseholdStore`/`ContractStore` already key by real entities), per
+the doc's own "do not use one global price."
+
+**Wired the same coordinator way as Phase 3/4.**
+`EarthChunkManager.attempt_production(settlement_id, recipe_id)` runs
+production and records a real `production_succeeded`/`production_failed`
+event in one call — a failure is exactly as recorded as a success, and (via
+the same automatic actor→memory composition Phase 4 already demonstrated)
+the settlement forms a real firsthand memory of its own shortage. Live
+end-to-end verification: a settlement's market at the reference stock level
+(rock: 20, price 1.0) produced a `stone_pickaxe` successfully; draining rock
+to 1 spiked its price to exactly `20/1 = 20.0` — matching the tested formula
+precisely — and the same production attempt then genuinely failed,
+recorded as a real, `/why`-traceable event. `/market <settlement_id>` is a
+real console command; persistence follows the identical lifecycle as every
+other store.
+
+**Left for the next slice, deliberately, same honesty as Phase 4:** nothing
+in live gameplay calls `attempt_production` yet — no NPC occupation
+currently runs a production tick, so a settlement's market never fills or
+drains on its own. Per-item base pricing (right now every item shares one
+uniform elasticity curve around a neutral 1.0) waits on a real
+currency/value system. Trade ROUTES and cross-settlement price arbitrage
+(docs/emergence/03's "repeated profitable movement creates routes") are
+explicitly out of scope for this slice — they need multiple markets
+actually trading with each other, not just existing independently.
+
+✅ **An institution forms from real repeated coordination, with real
+hysteresis — not a bare create-on-demand call**
+(`institution.gd`, `institution_store.gd`, `institution_store_persistence.gd`,
+`institution_formation.gd`), per `docs/emergence/01-society-and-institutions.md`
+"Emergence": "Institution candidates arise when clusters repeatedly
+coordinate around a common problem or opportunity... Use hysteresis:
+formation, stabilization, and dissolution thresholds prevent flicker."
+**Deliberately does NOT duplicate `factions.md`'s aggregate-reputation
+model** — an institution is a new organizational *entity* with its own
+membership, existing alongside `factions.md`'s reputation, which stays a
+*projection* over individual relationships, not something an institution
+overrides.
+
+**Grounded in something that actually exists, unlike Phase 4/5's synthetic
+verification** — this is the first phase since settlement founding (Phase
+0/1) with a REAL signal to hook into. `InstitutionFormation.
+shared_contract_count` counts FULFILLED contracts (docs/emergence/01's own
+"repeated success" scoring factor) between two parties, reading directly
+from `ContractStore` — no new coordination-tracking system needed, the
+contract store already IS the record of who has coordinated with whom.
+Classic two-threshold hysteresis: `FORMATION_THRESHOLD` (3) is meaningfully
+higher than `DISSOLUTION_THRESHOLD` (1), so an institution sitting exactly
+at the count that formed it is never at risk of dissolving on the same
+edge — only a genuine regression triggers that, which is what "prevent
+flicker" actually means, tested directly
+(`test_should_dissolve_is_false_right_at_the_formation_threshold`).
+
+**Institutions keep their history rather than disappearing.**
+`InstitutionStore.dissolve` marks status `dissolved` rather than removing
+the entity — the same "a fulfilled/breached contract stays queryable" shape
+`ContractStore` already established — so a dissolved guild remains
+`/institution`-inspectable, matching "history over static lore." No leader
+is ever auto-assigned: `docs/emergence/01` says leadership derives from
+"trust, competence, resources, reputation, coercive capacity, social
+centrality, and historical success," none of which exist as real data yet
+(Phase 3 households have no relationships), so `leader` stays `""` until
+something with real grounds to pick one exists — an invented choice would
+be worse than none.
+
+**Live end-to-end verification, and the composition kept compounding.**
+Two households with 2 fulfilled contracts: `attempt_institution_formation`
+correctly refused (below threshold). A third fulfilled contract crossed it:
+a real `guild` formed, `/institution` showed it, and — with zero code
+written to connect any of this — `/remember` showed the household holding
+firsthand memories of all three contracts' full lifecycles *and* the
+institution's founding, 13 events in total. Dissolving it flipped its
+status to `dissolved` while keeping it in `/institution`'s output. `/why`
+correctly traced the founding event. This is the fourth phase running in a
+row (2, 4, 5, 6) where memory composed with something else automatically,
+purely because both were built as small, honest, composable primitives
+rather than a monolith — which is the actual thesis the whole substrate is
+testing.
+
+**Left for the next slice, same honest gap as Phase 4/5:** nothing in live
+gameplay calls `attempt_institution_formation` automatically — it is a
+real, tested, callable mechanism, live-verified with a synthetic pair of
+households, not a scheduled check running against every settlement's real
+contract history. N-party clustering (this slice is deliberately two-party
+only), goal derivation ("member needs, pooled dependencies, leadership
+priorities..."), and institution actions (recruit, negotiate, patrol,
+petition, strike, ...) are all explicitly out of scope — the doc's own
+"Start with guilds, cooperatives, militias..." roster names the TYPES this
+phase supports, not yet the behaviors those types would eventually enact.
+
+✅ **A settlement's growth/decline status is real, automatic, and
+FOOD-driven** (`settlement_state.gd`,
+`EarthChunkManager.step_settlements`/`_known_settlement_ids`/
+`_households_in_settlement`), per
+`docs/emergence/04-settlements-cities-infrastructure.md` "Carrying
+capacity": "Population capacity depends on food, water, housing, jobs,
+sanitation, security, transport, trade, climate, and disease. Population
+should move toward capacity rather than use arbitrary growth." Deliberately
+food-only for this slice — food is the one input this project already has
+live, real data for (`Market`, Phase 5); water/housing/job/sanitation
+simulation don't exist yet either, and deriving capacity from them would
+mean inventing the very systems this slice is avoiding inventing.
+`SettlementState.food_stock` reads real item CATEGORIES from the existing
+`ItemCatalog` (`Item.kind == "food"`) rather than a second, hand-maintained
+list of "which items count as food" that could silently drift from it.
+`status_for` classifies GROWING/STABLE/DECLINING with a dead band around the
+1:1 ratio, the same "prevent flicker" reasoning `InstitutionFormation`'s
+two-threshold hysteresis already uses, just as one band around a single
+threshold instead of two separate ones.
+
+**Membership and settlement existence are both read back out of the event
+graph itself, not tracked a second time.** `_known_settlement_ids` reads
+every `settlement_founded` event's own actor; `_households_in_settlement`
+reads every `npc_settled` event a settlement witnessed and resolves each
+villager's household through `HouseholdStore`. Neither needed a new
+membership index — the event graph built in Phase 0/1 already *was* the
+record, this just queries it, which is the kind of demonstrable payoff
+`00-emergence-architecture.md`'s own "why does this city exist" observability
+goal is actually for.
+
+**This is the first emergence phase with a genuinely automatic live
+trigger — closing the gap Phases 4, 5, and 6 each left open.**
+`EarthChunkManager.step_settlements` uses the exact same throttled-
+accumulator shape `TreeSpread`/`step_tree_spread` already established
+(`SETTLEMENT_STEP_INTERVAL := 30.0`), and is wired directly into
+`World._step_ecology_batch` — "the heavy periodic work, and everything
+that adds to the world," the same group tree spread and forage already run
+in. It only event-sources a REAL status CHANGE (an unchanged status is
+silently skipped, `_settlement_status` tracked but deliberately not
+persisted — a reload may re-record its current status once more on the
+first step after loading, a known, accepted rough edge rather than a
+source of runaway duplicates, since it can only happen once per reload).
+
+**Live end-to-end verification proved the automatic path specifically, not
+just the mechanism**: loaded a real settlement, enabled `/ecotest`
+acceleration, and let the ordinary `_process` loop run with **zero manual
+calls** to `step_settlements` or any other coordinator. A real
+`settlement_declining` event appeared on its own at world-clock tick ~962,
+correctly reflecting that real settlement's 5 real households against its
+real (zero) food stock — `/settlement`, `/why`, and `/history` all showed
+consistent, correct state.
+
+**Left for the next slice, deliberately:** water, housing, jobs,
+sanitation, security, transport, trade, climate, and disease — every other
+carrying-capacity input the concept doc lists — wait on real systems to
+derive them from (a housing capacity check is trivial but currently
+meaningless, since every villager already owns exactly one house by Phase
+3's own construction; it would always read "at capacity"). Nothing
+currently produces or consumes food automatically either — `Market` fills
+only when something calls `attempt_production`, which itself has no
+automatic trigger yet (Phase 5's own stated gap), so a settlement's food
+stock is currently static once set, not a live economy feeding itself.
+Migration, city thresholds, specialization-from-flows, and dependency
+networks are all later parts of this same doc, explicitly out of scope
+here.
+
 ---
 
 ## Unscheduled — not yet phased into the roadmap
@@ -480,7 +990,7 @@ chunks away from the player). See the concept doc for the full spec.
 - **An in-game day is four real hours** (small) — ✅ Done — `SeasonCycle.SECONDS_PER_DAY`, with the year derived from it (48 days → eight real days a year, two a season). It was 25 seconds, implied by a 20-minute year, which is why "a couple of fish a day" still stripped a pond in minutes. **Weather deliberately keeps its own, much shorter period**: it rolled once per day, and at four hours a day that would lock a whole session into one sky. Re-anchored a stale fruiting test that had hardcoded a 3000-second window — the same staleness class as the terrain-renderer tests fixed earlier.
 - **Kingfisher hunger, and a life outside hunting** (medium) — ✅ Done — `src/gameplay/piscivore_appetite.gd` (tested). The bird hunted continuously and would fish out a chunk. Now: **appetite** (a couple of fish per in-game day, nothing in between) *and* **giving up on a poor patch** — even a hungry bird leaves water worked below a quarter of its capacity, which is the rule that actually protects the population rather than merely slowing the stripping. Needed a new world query, `fish_capacity_near`, since "is this pond worth working" needs what it *could* hold as well as what it does. A sated bird patrols, perches or carries material to a nest site, re-picked on an interval and seeded per bird so a river is not choreographed. Tested at the behaviour level: a bird left alone for a whole in-game day takes at most three fish, and a hungry bird at a depleted pond takes none. ⬜ Remaining: nest-building is a flight to a site, not a structure that gets built; birds still have no courtship or mating of their own (the dance is pollinator-only by design, see the jitter fix).
 - **Illustrated blooms are recoloured by luminance, not multiply** (small) — ✅ Fixed — the illustrated head sheet is composited with the species petal colour, which as a plain multiply only recolours correctly if the source art is pale and neutral. The cup sheet carries real green in its sepals and outlines, and multiply preserves hue, so crocus and tulip rendered as **green cages** — invisible against grass and not a petal colour ("green petals are hard to see on green grass"). The composite now reads the source as Rec. 709 luminance and paints the petal colour at that brightness, keeping all the illustration's form and shading while discarding its hue, so the recolour is robust to the art rather than depending on a promise about it. A shade floor stops linework multiplying to near-black. Three tests pin it: no bloom is painted mostly green, every bloom stands clear of grass green, and each still carries its own species colour. **The sparse-outline look had the same root cause**: the sheet is line art with hollow petals, so the grass showed through them — recolouring the outlines left the green, because the green *was* the background ("the bloom is correctly colored but the petals are still green"). Enclosed transparent areas are now filled before compositing, found by flooding from the canvas edge, so any line-art sheet composites solid. **Flower sizes are pinned to two anchors** -- a tulip at the player's hip, a sunflower at full player height -- with the curve between them computed, not eyeballed. Deliberately taller than life (a real tulip is a quarter of a person). Anchored to centimetres rather than to the tallest species, so adding the sunflower did not silently shrink everything else. **Sunflower added** as the one species that stands above the meadow rather than among it. **Sunflower and lavender now have their own sheets** (7 registered species sheets: crocus, tulip, rose, daisy, sunflower, lavender; shared archetype sheets: cup, layered; only clover is still procedural). The sunflower's dark centre needed no special casing: brown is dark gold, so it sits in the same hue bucket as the petals and recolours with them, coming out dark in whatever colour the plant came up as. These two also proved out the earlier gate fix -- their archetypes (spike, radial) have no sheets, so the old "does this ARCHETYPE have art?" check would have silently left both procedural despite the art existing. **Flowers are sized against the player**: species carry real heights in centimetres, the tallest rendering at knee height (30% of the player) and the rest below -- they had drifted to 72%, standing chest-high on the hero. Small species are exaggerated toward legibility without reordering. **Per-plant size variance** nudges each individual off its species' norm, fixed for that plant's life. **Bush habit**: lavender and clover draw several stems with their own heights and lean rather than one lonely spike. **Masks**: each sheet declares where its petals sit on the hue wheel, and saturated gold outside that window keeps its own colour, so blooms retain their eyes -- green sepals are deliberately NOT preserved, because at this size a kept sepal reads as a green flower. Enclosed transparent pixels are filled everywhere now, not just in illustrated heads, since overlapping spikes punched holes in the bloom mass. **Per-species stature and per-species colour varieties**: each species carries its own height (a lavender spike stands nearly twice a crocus) and its own list of colours, with each plant picking a variety from its own seed so a bed comes up mixed but no individual flower changes colour. The recolour now normalises against each sheet's own peak brightness -- without that it topped out at however bright the artist drew the highlight, which a saturated red survives and a white or pale yellow does not, washing every pale variety into grey. Registered species sheets: crocus, tulip, rose, daisy; shared archetype sheets: cup, layered; spike and puff are still procedural. **The fallback shape family was renamed "daisy" -> "radial"** -- a daisy is a species, and a shape family named after one of its members left that species unable to have art of its own. **Species art overrides archetype art**: a sheet registered against a species wins over its archetype's shared one, other species of that archetype are unaffected, and a species with neither falls back to the procedural painter — the same species-first-then-generic lookup the animal art uses, so a species that deserves its own drawing costs one entry and no changes elsewhere.
-- **Taming (lasso → hold → feed → tame)** (large) — 🚧 Partial, playable end to end — spec at `docs/concept/taming.md`. **Built:** `src/gameplay/taming.gd` (break-free chance from health fraction, per-struggle stamina cost, trust that rises only on feeding a HUNGRY animal, neglect decay, order/mount/predator gates) and `src/gameplay/rope_tether.gd` (slack rope leaves the animal alone, taut rope pulls it back, hard clamp so a bolting horse can't outrun its tether). Wired through `CreatureMarker` (`restrain_to`/`release`/`feed_treat`, a restrained animal stops making its own decisions and cannot flee, led movement goes through the existing movement gate so it walks *around* trees) and `Player` (`_lasso_step`: one key throws / ties to a tree / unties / releases depending on what you are holding; carrots are spent only when the animal actually takes one; a visible rope `Line2D`). Readouts: trust bar + hunger pip on the animal, state line in the HUD. **Lasso** (4× plant fibre) and **Carrot** items with their own art. **Verified live** with a temporary in-game harness, not just in tests: catch lands, healthy horses break free repeatedly (as designed), 5 hungry feeds at one carrot each takes trust 0.00→1.00, and a tamed horse stops fighting the rope. Carrots have a real source: **wild carrot** (Daucus carota) grows among the meadow grasses, so harvesting a mature tall-grass clump for fibre occasionally turns one up (`EarthChunkManager.has_wild_carrot`, deterministic per tile) -- the same meadow supplies both the lasso and its reward. **Orders and riding** are in: a tamed animal takes follow/stay (cycled with the lasso key, which changes meaning once the rope has nothing left to do), and horses can be ridden at `Taming.MOUNTED_SPEED` (150 vs walking 80). The rider stays the node the player controls and the mount is carried along underneath, so inventory/combat/survival keep working while mounted. A tamed animal also stops treating the player as a threat -- players are sensed as threats, so without that fix a horse you spent five carrots taming would flee you forever. Verified live: tame -> `fears_players=false`, mount -> speed 150, rode 120px with the horse at gap 0.0, dismount -> 80, STAY order held the horse inside its `STAY_RADIUS`. ⬜ Remaining: persistence of a tamed/tied animal across chunk unload (walk ~100 tiles away and it is gone -- the significant one), and an animation for the struggle.
+- **Taming (lasso → hold → feed → tame)** (large) — 🚧 Partial, playable end to end — spec at `docs/concept/taming.md`. **Built:** `src/gameplay/taming.gd` (break-free chance from health fraction, per-struggle stamina cost, trust that rises only on feeding a HUNGRY animal, neglect decay, order/mount/predator gates) and `src/gameplay/rope_tether.gd` (slack rope leaves the animal alone, taut rope pulls it back, hard clamp so a bolting horse can't outrun its tether). Wired through `CreatureMarker` (`restrain_to`/`release`/`feed_treat`, a restrained animal stops making its own decisions and cannot flee, led movement goes through the existing movement gate so it walks *around* trees) and `Player` (`_lasso_step`: one key throws / ties to a tree / unties / releases depending on what you are holding; carrots are spent only when the animal actually takes one; a visible rope `Line2D`). Readouts: trust bar + hunger pip on the animal, state line in the HUD. **Lasso** (4× plant fibre) and **Carrot** items with their own art. **Verified live** with a temporary in-game harness, not just in tests: catch lands, healthy horses break free repeatedly (as designed), 5 hungry feeds at one carrot each takes trust 0.00→1.00, and a tamed horse stops fighting the rope. Carrots have a real source: **wild carrot** (Daucus carota) is now a real, visible growing/spreading plant (`WildCropPatch`/`WildCropMarker`, see `concept/wild_crops.md`), pulled with an animated swing-driven harvest -- superseding the earlier grass-harvest freebie. The same meadow supplies both the lasso and its reward. **Orders and riding** are in: a tamed animal takes follow/stay (cycled with the lasso key, which changes meaning once the rope has nothing left to do), and horses can be ridden at `Taming.MOUNTED_SPEED` (150 vs walking 80). The rider stays the node the player controls and the mount is carried along underneath, so inventory/combat/survival keep working while mounted. A tamed animal also stops treating the player as a threat -- players are sensed as threats, so without that fix a horse you spent five carrots taming would flee you forever. Verified live: tame -> `fears_players=false`, mount -> speed 150, rode 120px with the horse at gap 0.0, dismount -> 80, STAY order held the horse inside its `STAY_RADIUS`. ⬜ Remaining: persistence of a tamed/tied animal across chunk unload (walk ~100 tiles away and it is gone -- the significant one), and an animation for the struggle.
 - **Active foraging for land herbivores** (medium) — ✅ Done — `src/gameplay/grazer_foraging.gd` (tested, see `concept/ecosystem_dynamics.md` "Grazing is an act, not an aura"): horses, boars and deer now **see a specific bite, walk to it, and put their heads down**, instead of feeding off the biome under their feet. A diet (default by `CreatureInfo` diet label, per-species override for the deer's mixed feeding) decides what an animal walks to; a seek→approach→graze phase machine decides when, with target choice delegated to `PollinatorForaging.choose_target` so a herd spreads over a meadow rather than single-filing behind one tuft. Wired through `CreatureMarker._step_foraging`, fed by `EarthChunkManager.grass_near`/`graze_grass_at` (new — mature tufts only, immediate sprite resync like `take_worm_at`) plus the existing `fruit_near`/`seeds_near`/`worms_near`. Biome grazing survives as `FOOD_UNDERFOOT`: an animal with nothing in sight crops what it stands on, but as a full head-down bout rather than the instant hunger-reset that made a grassland horse never hungry for longer than one frame. Blooms are deliberately not edible (they are the pollinators' resource). ⬜ Gaps: predators still feed only by catching prey, and an animal doesn't remember a patch it has already cropped.
 - **Frame-set generation shared across animals** (small) — ✅ Done — `ProceduralAnimalAnimation.textures_for` + `LOOK_VARIANTS = 8` (tested): every `CreatureMarker` used to draw its own frame set the first time it played an action, uncached. Measured live: **25 creatures crossing into "eat" together burned 1.18 SECONDS of frame generation inside one 5-second window** (~47ms each) — the 130–145ms frame spikes reported as lag. Generation is now bounded by species × action × 8 looks for the whole session, paid once.
 - **A herd is not on one clock** (small) — ✅ Done — `CreatureNeeds.new(seed_value)` / `START_STAGGER` (tested): every creature used to start at hunger 0 and rise at the same fixed rate, so a whole herd crossed the hunger threshold on the same tick and switched action in the same frame — the other half of the spike above. Each animal now starts at its own deterministic, hash-derived point in its cycle, below the threshold so nothing spawns already starving.
@@ -490,6 +1000,7 @@ chunks away from the player). See the concept doc for the full spec.
 - **Variable-fidelity LOD / unloaded-chunk catch-up** (large) — ✅ Done — `src/world/chunk_ecology_catchup.gd` (tested, reuses the same logistic + predator-prey models as loaded chunks): a chunk records its aggregate ecology at unload; on revisit `EarthChunkManager._apply_ecology_catchup` integrates it forward over the elapsed unloaded time and installs the caught-up herbivore/predator populations (`EcosystemSimulation.seed_populations`) instead of resetting to fresh equilibrium — so a region the player left keeps evolving (herds grow or get thinned by predators). Closes the long-standing "regenerates at equilibrium on revisit" gap.
 - **Seasonal forcing of phenology** (medium) — ⬜ Not started — warmth is instantaneous temperature, not a seasonal calendar variable.
 - **Animal-mediated seed dispersal** (medium) — ⬜ Not started.
+- **Sunflower head was clipped, and its blossom read as sitting on the stem** (small) — ✅ Fixed — reported with a screenshot: "the sunflower sprite is clipped at the top" and "butterflies drink from their stem... I'm not sure if butterflies should even visit sunflowers?" The second question needed no code change: real sunflowers are a genuine nectar/pollen source for both bees and butterflies, so a pollinator visiting one is correctly grounded — the two visible symptoms shared one structural cause instead. `IllustratedFlowerHead.HEAD_CANVAS_SIZE` (18px) is taller than the headroom ANY stem roll leaves above its own attachment point (`ProceduralFlowerSprite.stem_height_px`, at most 16px of the 32px art canvas) — composited at full size the crown was sliced off flat by the canvas edge, invisible on the small species this shipped with and glaring on the sunflower once its much larger world scale (see "Illustrated blooms..." above) turned a few always-clipped art pixels into an obvious flat top. `_paint_illustrated_head` now shrinks the whole head to fit the real headroom (`ProceduralFlowerSprite.head_fit_scale`, the same "scale a drawing down to fit its canvas" trick `SpriteSheetSlicer.normalize_frames` already uses one layer up) instead of clipping it. Separately, `blossom_height_world` — where a pollinator actually lands — scaled by the species' own nominal size alone, while the sprite itself is drawn at a smaller PER-PLANT size for a below-average individual (`PLANT_SIZE_VARIANCE`) or one still growing in (`FlowerPatch.growth_at`); the landing point did not shrink with it, which on a species as large as the sunflower reads as landing near the stem rather than on the bloom. It now takes the exact per-plant scale `EarthChunkManager._flower_scale_for` draws the sprite at, so sprite and landing point can never drift apart. Tests: `head_fit_scale` never exceeds the real headroom across 200 stem rolls, a tight-headroom sunflower head measurably narrows rather than clipping flat at the same width, the blossom offset scales linearly with the actual plant scale and shrinks in lockstep with growth, and a freshly-planted seedling's `EarthChunkManager.flowers_near` landing point sits well below the mature blossom height.
 
 ### Overview (`concept/overview.md`)
 
@@ -785,9 +1296,9 @@ A first real currency now exists and is wired into live gameplay; everything els
 
 Only real-time day/night lighting is wired into live rendering; a first deterministic weather model now exists as tested pure logic but isn't wired into the game world yet:
 
-- **Dynamic Weather System** (large) — 🚧 Partial — `src/world/weather_model.gd` (deterministic clear/cloudy/rain/storm per region+time) is now **wired with mechanical teeth**: `EarthChunkManager.current_weather` derives the player-region weather (shown in the HUD "Season · Weather"); rain/storm **slow the player** (`weather_speed_modifier` → `Player._weather_speed_multiplier`), and wet/cold weather feeds the new **body-temperature exposure** system (see Survival). Water is now the one visibly weather-reactive surface: `weather_model.wind_strength_for` (calm on clear days, most energetic in a storm) drives `WaterShader`'s `wind_strength` uniform via `EarthChunkManager.set_wind_strength`, pacing the GPU ambient wave scroll rate to match, alongside the existing rain-ripple tie-in. Still missing: visual rain/storm particles/tint over land, combat fire-dousing, and disaster events (drought/flood/wildfire).
+- **Dynamic Weather System** (large) — 🚧 Partial — `src/world/weather_model.gd` (deterministic clear/cloudy/rain/storm per region+time) is now **wired with mechanical teeth**: `EarthChunkManager.current_weather` derives the player-region weather (shown in the HUD "Season · Weather"); rain/storm **slow the player** (`weather_speed_modifier` → `Player._weather_speed_multiplier`), and wet/cold weather feeds the new **body-temperature exposure** system (see Survival). Water is now the one visibly weather-reactive surface: `weather_model.wind_strength_for` (calm on clear days, most energetic in a storm) drives `WaterShader`'s `wind_strength` uniform via `EarthChunkManager.set_wind_strength`, pacing the GPU ambient wave scroll rate to match, alongside the existing rain-ripple tie-in. Still missing: visual rain/storm particles/tint over land, combat fire-dousing, and disaster events (drought/flood/wildfire). **Divergence note (2026-08-24)**: this is currently a flat per-region hash roll, identical odds anywhere on the planet — exactly the "independent random layer" this doc's own top bullet says not to build. See the new Climate Dynamics section below, which specifies the real mechanism this is meant to become.
 - **Weather Exposure Debuff** (small) — ✅ Done — cold/wet weather chills the player's warmth meter; while cold, condition (fitness) degrades faster and, while freezing, movement is slowed further (`SurvivalMeters` warmth + `Player._weather_speed_multiplier`). See Survival section.
-- **Seasons (calendar cycle)** (medium) — ✅ Done — `src/world/season_cycle.gd` (tested, see `concept/seasons.md`): a deterministic spring→summer→autumn→winter year with smooth warmth/growth modifiers. Wired into fruit phenology (`EarthChunkManager._warmth_at_pixel` scales `FruitingModel` warmth by season, so trees fruit fast in summer / slowly in winter) and shown in the HUD. Not yet driving vegetation/tall-grass growth rate or farming crop viability.
+- **Seasons (calendar cycle)** (medium) — ✅ Done — `src/world/season_cycle.gd` (tested, see `concept/seasons.md`): a deterministic spring→summer→autumn→winter year with smooth warmth/growth modifiers. Wired into fruit phenology (`EarthChunkManager._warmth_at_pixel` scales `FruitingModel` warmth by season, so trees fruit fast in summer / slowly in winter) and shown in the HUD. A new world now starts at a random point in the year rather than always on the same frozen instant, and a loaded world resumes its own persisted point rather than re-rolling (`randomize_world_age`/`load_world_clock`, `WorldClockPersistence` — see `concept/seasons.md`'s "A new world starts at a random point in the year"). Not yet driving vegetation/tall-grass growth rate or farming crop viability.
 - **Regional Weather Variety** (medium) — 🚧 Partial — `weather_model.gd` takes a `region_seed` parameter so different regions roll independently; not wired to any real per-chunk region concept yet.
 - **Disaster Events** (large)
 - **Drought Carrying-Capacity Penalty** (medium)
@@ -801,6 +1312,38 @@ Only real-time day/night lighting is wired into live rendering; a first determin
 - **Seasonal Crop Viability** (medium)
 - **Farm Disaster Risk** (medium)
 - **Disaster Forecast/Warning (open question)** (small)
+
+### Climate Dynamics (`concept/climate_dynamics.md`)
+
+New concept doc (2026-08-24), replacing `weather_model.gd`'s flat per-region
+weather roll and `biome_classifier.gd`'s one-shot worldgen classification
+with a live pressure/wind/ocean-current/water-cycle simulation. Nothing
+implemented — all ⬜ Not started:
+
+- **Coarse Climate Grid (Two-Fidelity LOD)** (large) — same aggregate-grid-
+  plus-interpolated-tile-reads shape `ecosystem_dynamics.md`'s population
+  model and `earth_elevation_source.gd`'s bilinear elevation sampling
+  already use elsewhere; not yet built for atmosphere.
+- **Pressure Field (Three-Cell Latitude Baseline + Land/Ocean/Season
+  Modulation)** (large) — `climate_model.gd`'s `temperature_at` and
+  `season_cycle.gd`'s `warmth_modifier` both already exist as real inputs
+  this would read; not yet connected to any pressure computation, because
+  none exists.
+- **Wind from Pressure Gradient + Coriolis** (medium) — replaces
+  `weather_model.gd`'s current `wind_direction_for`, an independent random
+  walk with no relationship to pressure or geography.
+- **Ocean Currents (Wind-Driven, Coriolis-Deflected, Coastline-Redirected)**
+  (large) — no current model of any kind exists today.
+- **Water Cycle (Evaporation → Advection → Precipitation, Orographic Lift)**
+  (large)
+- **Storms from Threshold-Crossing Pressure/Temperature Contrast** (medium)
+  — replaces `weather_model.gd`'s flat 5%-of-rolls storm chance.
+- **Live Biome Reclassification + Hysteresis** (large) — `biome_classifier.gd`'s
+  `classify()` keeps its exact threshold logic; only whether its
+  temperature/moisture inputs are a worldgen-time constant vs. a live
+  climate-grid read changes. `vegetation_growth_model.gd`'s existing
+  climate-to-density response is proposed to double as the visible-drift
+  mechanism once biome LABEL is also climate-derived, not a new one.
 
 ### World Bosses (`concept/worldbosses.md`)
 
@@ -886,6 +1429,37 @@ yet wired into the live, still-lookup-table-shaped `material_damage.gd`/
 - **Physical Honesty (Item Wear/Chip/Fracture Over Time)** (medium) — ⬜ Not started — no durability/wear state exists on any item.
 - **Traversal-Tool Material Viability (Raft Buoyancy / Rope Tensile Strength)** (small) — ✅ Done (basic) — `material_properties.gd`'s `is_viable_for_tool()`, tested: density-gated for `raft`, toughness-gated (standing in for tensile strength — see the doc's transportation.md cross-reference) for `grapple_rope`. No raft/rope items or transportation.md wiring exist yet to consume it — see Transportation section.
 
+### Electromagnetism (`concept/electromagnetism.md`)
+
+New concept doc (2026-08-24), extending `materials.md`'s existing (already
+implemented, but so far unused) `conductivity` scalar into a real
+water-wheel/windmill → generator → wire/circuit → battery/light-bulb
+mechanism. Nothing implemented — all ⬜ Not started:
+
+- **Circuit Topology (Adjacency Flood-Fill)** (medium) — the algorithm
+  shape already exists and is real, tested code
+  (`src/gameplay/room_detector.gd`'s room-enclosure flood-fill), just not
+  yet generalized past room enclosure to conductivity.
+- **Torque from Flow (Water Wheel / Windmill)** (medium) — windmill has no
+  new world-sim dependency (`weather.md`'s `wind_strength_for` already
+  real); water wheel's flow-from-elevation-gradient proxy is proposed, not
+  validated.
+- **Generator (Torque + Magnet + Coil → EMF)** (medium)
+- **Wire / Circuit Resistance & Current (Ohm's Law)** (medium)
+- **Battery (Charge Storage)** (small)
+- **Light Bulb (Load, Brightness from Power)** (small)
+- **Magnetic Permeability Material Scalar** (small) — proposed addition to
+  `material_properties.gd`'s existing vector (density/hardness/toughness/
+  elasticity/sharpness_capacity/flammability/conductivity/decay_rate);
+  not yet added.
+- **Magnetite Ore / Magnetized-Iron Crafting** (small) — proposed fourth
+  `OrePlacement.ORE_TYPES` entry (today iron/copper/coal) plus a craft-a-
+  magnet-from-iron recipe; neither exists.
+- **Wire Overload Burnout** (small) — proposed reuse of the existing
+  melting/damage-threshold mechanism (`impact_resolver.gd`'s
+  `T_BRITTLE_TOUGHNESS`-style thresholds), not yet extended to current
+  load.
+
 ### Housing (`concept/housing.md`)
 
 No housing/decoration system is wired into live gameplay, but its scoring math now exists as tested pure logic:
@@ -940,6 +1514,20 @@ No exploration-specific mechanics (map/POIs/fog-of-war/waypoints) exist beyond r
 - **Personal Portal Item (fast-travel option B)** (medium) — ⬜ Not started
 - **Fast-Travel Cost/Limitation Mechanic** (small) — 🚧 Partial — resolved per `concept/transportation.md` ("Fast travel: free for cargo, never for living stock"): `fast_travel.gd`'s cost/cooldown math is unchanged and untaxed for cargo, plus a new `can_fast_travel_with_cargo(cargo)` that allows any inanimate load but blocks the whole trip if it contains even one living creature. Tested; not yet wired to a live travel action.
 - **Boat/Weather Interaction (storm risk, open question)** (medium) — ⬜ Not started
+- **Traversal Tools (Climbing Rope, Raft, etc.)** (medium) — ⬜ Not started — `concept/terrain_relief.md` (2026-08-24) now gives the climbing rope a real purpose (raising the slope threshold at which terrain becomes impassable); no traversal tool of any kind is craftable/usable yet.
+
+### Terrain Relief (`concept/terrain_relief.md`)
+
+New concept doc (2026-08-24): real elevation data currently only feeds a
+biome threshold — nothing stops the player walking up a cliff, and
+mountain terrain has no ore, no visible relief shading, and no relationship
+to slope at all. Nothing implemented — all ⬜ Not started:
+
+- **Slope/Aspect Field (from Real Elevation Data)** (medium) — ✅ Done, and now wired into live movement — `src/world/terrain_relief.gd` (tested, 21/21): `slope_at`/`aspect_at` sample four real neighbors through any `elevation_at(lat, lon)`-shaped source (real `EarthElevationSource` or a test fake), converting to real meters and a real central-difference gradient — real degrees, real GIS aspect-bearing convention (0=north/90=east/180=south/270=west, -1 on flat ground). Exposed per-global-tile via `EarthChunkGenerator`/`EarthChunkManager.slope_at_global`/`aspect_at_global`, and consumed by the Slope-Gated Passability row below. This is also the shared field `climate_dynamics.md`'s orographic lift needs; not yet consumed there. Hillshading and mountain-ore (the rest of this section) still aren't built on top of it.
+- **Slope-Gated Passability (Soft Slow, Hard Refusal)** (large) — ✅ Done and wired into live movement — `src/gameplay/terrain_passability.gd` (`speed_multiplier`/`is_passable`, tested: 11/11) plus real wiring in `scenes/player.gd`'s `_authority_step`: `current_speed_multiplier` now also factors `_terrain_speed_multiplier(tile)` (the soft case, same shape as `_weather_speed_multiplier`), and a real look-ahead check (`_terrain_blocks_movement`, same "ask before you step" principle `creature_movement_gate.gd` established for creatures) zeroes the frame's velocity outright when the tile ahead is too steep, before `move_and_slide()` ever runs. `EarthChunkGenerator`/`EarthChunkManager` both gained `slope_at_global`/`aspect_at_global` to expose `terrain_relief.gd`'s real slope/aspect field per global tile (tested: `test_earth_chunk_generator.gd` 214/216 asserts passing — the 2 "failures" are the pre-existing, unrelated image-load-warning flake, not a real failure; `test_earth_chunk_manager.gd`/`test_player.gd` verified via targeted `-gunit_test_name` runs rather than a full-file run, both too slow to complete in full — see the Godot-test-execution memory note). **Not yet wired**: no creature (only the player) is gated by slope.
+- **Climbing Rope Raises the Hard Threshold** (medium) — 🚧 Partial — `TerrainPassability.is_passable`'s `has_climbing_gear` parameter is real and tested, but `Player._has_climbing_gear()` always returns `false` — no rope item/equipment concept exists yet (`transportation.md`'s already-specified, currently-unused rope concept), so nothing can set it true. The hook is real; the payoff isn't.
+- **Hillshading (Real Lambertian Formula, Real Solar Position)** (medium) — ✅ Done and wired into live chunk load/unload — `src/rendering/hillshade.gd`'s `illumination()` is the real standard hillshade formula (tested, 8/8), fed by `solar_position.gd`'s new `azimuth_degrees()` (tested, 20/20 for the whole file) alongside its existing `elevation_degrees`. `procedural_hillshade_sprite.gd` bakes real (quantized) slope/aspect as DATA into a small atlas (8 slope bins x 8 aspect octants + one shared flat tile, tested 14/14); `hillshade_shader.gd` is a real, compile-verified `canvas_item` fragment shader (tested 12/12 — caught a genuine bug mid-development: Godot's shader language rejects an early `return` inside `fragment()`, unlike plain GLSL); `TerrainRenderer.atlas_coords_for_hillshade`/`build_hillshade_overlay_tile_set` build the atlas TileSet (tested 5/5). **Now wired live**: `EarthChunkManager.set_hillshade_layer`/`_paint_hillshade_overlay`/`set_sun_position` (mirroring `set_water_layer`/`_paint_water_overlay`/`set_wind_strength` exactly) are called from `_load_chunk`/unload and verified via a real chunk load at the Berlin spawn tile — every one of ~25,600 loaded cells got a real hillshade tile, and moving away correctly erased cells outside the new radius (25605/25606 asserts passing; the one "failure" is the same pre-existing per-sheet image-load-warning flake hit repeatedly this session, not a real defect). `scenes/world.tscn` gained a real `HillshadeFx` `TileMapLayer` node (mirroring `WaterFx`/`SnowFx`); `scenes/world.gd` now computes real sun azimuth alongside its existing elevation computation and pushes both via `set_sun_position` every frame, alongside the existing `set_wind_strength`/`set_rain` calls. **Honest verification gap**: no automated test instantiates `world.tscn`/`World` itself anywhere in this project's suite, so the scene-level wiring (the `@onready $HillshadeFx` reference, the `.tscn` node block) is verified only by confirming both resources load without structural/parse errors (a real, if partial, check), not by a live GUI session.
+- **Slope-Gated Mountain Ore Veins** (medium) — ✅ Done and wired into live chunk load/unload — `src/world/mountain_ore_placement.gd` (tested, 15/15): vein chance is zero below `terrain_passability.gd`'s own `SOFT_THRESHOLD_DEG`, scales linearly up to `MAX_VEIN_CHANCE` (0.35) at its `HARD_THRESHOLD_WITH_ROPE_DEG` — the same steepness gating passability also gates ore exposure, deliberately, one shared quantity with two consequences. Ore type/seed reuse `OrePlacement`'s own derivation exactly. `StoneRenderer.spawn_mountain_veins` (tested, 6/6 — 689/692 asserts passing across the whole file, the 3 "failures" the same pre-existing flake) spawns real `MinableOre` nodes on mountain cells that roll a vein, drawing from the exact same illustrated-boulder-composited texture path flat-ground ore already uses. **Now wired live**: `EarthChunkManager._load_chunk` concatenates `spawn_mountain_veins(..., self)` (passing itself as the duck-typed slope lookup) onto the same `_loaded_stones[chunk_coord]` array `spawn_stones` already populates — a deliberate one-line reuse rather than a parallel dictionary: mountain veins are `StaticBody2D` ore nodes exactly like flat-ground ore, so they need the exact same obstacle-avoidance (`solid_obstacles_near`) and unload-cleanup machinery `_loaded_stones` already provides, with nothing new to duplicate. Not separately re-verified against a real chunk load in this pass (Berlin, this suite's existing fixture location, isn't mountainous) — correctness rests on the already-passing `StoneRenderer`-level tests plus direct code review of the one-line change.
 
 ### Building (`concept/building.md`)
 
@@ -1084,24 +1672,26 @@ Core survival meters are now real and wired into live gameplay; the sickness/wou
 
 A first real slice of the "AI-native NPC" pillar is now live and playable --
 procedurally placed villages, walking villagers running a deterministic
-daily plan, and basic shopping. Still nothing LLM-driven yet: the planning
-architecture is built and wired end-to-end, but behind a deterministic stand-
-in, exactly like `worldbosses.md`'s `PhaseGenerator`/`FakePhaseGenerator`
-split -- so a real local-LLM planner (the design brainstorm settled on
-Ollama + a local model, e.g. `qwen2.5-coder:14b`, called via `HTTPRequest`,
-never live during normal ticks) is a drop-in swap, not a rearchitect. No
-dialogue, no instruction DSL, no memory, no lifecycle/aging, no faction/
-festival wiring yet.
+daily plan, basic shopping, and now real hunger with a working village-scale
+production/trade economy underneath it (see "NPC Needs / Local Production
+Economy" below). Still nothing LLM-driven yet: the planning architecture is
+built and wired end-to-end, but behind a deterministic stand-in, exactly
+like `worldbosses.md`'s `PhaseGenerator`/`FakePhaseGenerator` split -- so a
+real local-LLM planner (the design brainstorm settled on Ollama + a local
+model, e.g. `qwen2.5-coder:14b`, called via `HTTPRequest`, never live during
+normal ticks) is a drop-in swap, not a rearchitect. No dialogue, no
+instruction DSL, no memory-driven behavior, no lifecycle/aging, no faction/
+festival wiring, no hiring/wages yet.
 
-- **Procedural NPC Population Generation** (large) — ✅ Done — `src/world/settlement_generator.gd` places a sparse (~1-in-30 habitable chunks, never on ocean/mountain), deterministic 5-villager settlement per qualifying chunk, wired into `EarthChunkManager`'s chunk load/unload (same regenerates-identically-on-revisit philosophy as trees/creatures). `src/rendering/village_renderer.gd` spawns a walking `NpcMarker` per villager, wearing the same hero-appearance engine the player uses (`HeroAppearance`/`ProceduralCharacterSprite`), extended with 6 occupation outfit palettes. **Houses are now real, enterable, multi-tile structures, not a decorative sprite** (see `concept/building.md`'s Status section for the full mechanism): `VillageRenderer._stamp_house` builds a real 5x4 `HouseBlueprint` assembly (wall ring, one door, floor, roof — seeded wood/stone material) centred on each villager's ring-layout anchor and stamps it into the chunk via `EarthChunkManager.stamp_structure_at_global` — the exact same piece vocabulary and collision/roof-hide mechanism the player's own building pieces use (`docs/concept/building.md#one-system-two-builders`, now actually true rather than aspirational). A villager's `home_position` resolves to its own house's door cell, not an arbitrary anchor point, so it stands somewhere it could actually have walked to. **A house's ring-layout anchor can land on a water pocket** (a chunk's dominant biome only gates the whole chunk, not every individual cell — see `BiomeClassifier.dominant_biome` — so a grassland-dominant chunk can still have a pond/river cutting through it, reported as "NPC should not build their house in water"): `VillageRenderer._find_dry_origin` nudges the origin to the nearest dry candidate (deterministic, squared-distance ordering) within a 6-tile search radius before stamping, and skips the house entirely (falling back to the raw anchor as a walk target, unbuilt) if nothing dry is found nearby — no house is better than a half-submerged one. This *replaces* the old decorative `ProceduralHouseSprite` (3 seeded sizes/palettes) entirely — that generator still exists, fully tested, just no longer called from village generation. The shared **well/market-stall/gate landmarks are still real visible props** (`ProceduralLandmarkSprite`) anchoring a village square, and every **merchant villager now also gets a second, personal trading stand** of their own (`VillageRenderer._door_facing_direction` + `_STAND_OFFSET_TILES`, same "stall" sprite, placed just outside their own house's door in the direction it opens) — previously every merchant in a village routed to the one shared stall, which read as a single shop rather than several villagers who each trade. Known gaps: house footprint is fixed (5x4), not seed-varied in size; no per-occupation building beyond the shared landmarks and a merchant's own stand (a blacksmith's forge, herbalist's garden stall, etc. still have no dedicated prop); a house stamped by a settlement re-loading its chunk overwrites whatever was in those exact cells before (including a player's own prior edit there) — the same "regenerates identically on revisit, no interference tracking" limitation trees/creatures already accept, not something new to houses.
-- **NPC Identity System** (small) — ✅ Done — `src/world/npc_identity.gd`: deterministic per-seed name (two-part syllable generator), occupation (farmer/blacksmith/merchant/guard/fisher/herbalist), personality trait, and driving need, tested. Relationships to other NPCs (also part of npc.md's Identity) are NOT modeled yet.
+- **Procedural NPC Population Generation** (large) — ✅ Done — `src/world/settlement_generator.gd` places a sparse (~1-in-30 habitable chunks, never on ocean/mountain), deterministic 5-villager settlement per qualifying chunk, wired into `EarthChunkManager`'s chunk load/unload (same regenerates-identically-on-revisit philosophy as trees/creatures). `src/rendering/village_renderer.gd` spawns a walking `NpcMarker` per villager, wearing the same hero-appearance engine the player uses (`HeroAppearance`/`ProceduralCharacterSprite`), extended with 6 occupation outfit palettes (still only 6 — see NPC Identity System's own note below on the 2 newest occupations' cosmetic gap). **Houses are now real, enterable, multi-tile structures, not a decorative sprite** (see `concept/building.md`'s Status section for the full mechanism): `VillageRenderer._stamp_house` builds a real 5x4 `HouseBlueprint` assembly (wall ring, one door, floor, roof — seeded wood/stone material) centred on each villager's ring-layout anchor and stamps it into the chunk via `EarthChunkManager.stamp_structure_at_global` — the exact same piece vocabulary and collision/roof-hide mechanism the player's own building pieces use (`docs/concept/building.md#one-system-two-builders`, now actually true rather than aspirational). A villager's `home_position` resolves to its own house's door cell, not an arbitrary anchor point, so it stands somewhere it could actually have walked to. **A house's ring-layout anchor can land on a water pocket** (a chunk's dominant biome only gates the whole chunk, not every individual cell — see `BiomeClassifier.dominant_biome` — so a grassland-dominant chunk can still have a pond/river cutting through it, reported as "NPC should not build their house in water"): `VillageRenderer._find_dry_origin` nudges the origin to the nearest dry candidate (deterministic, squared-distance ordering) within a 6-tile search radius before stamping, and skips the house entirely (falling back to the raw anchor as a walk target, unbuilt) if nothing dry is found nearby — no house is better than a half-submerged one. This *replaces* the old decorative `ProceduralHouseSprite` (3 seeded sizes/palettes) entirely — that generator still exists, fully tested, just no longer called from village generation. The shared **well/market-stall/gate landmarks are still real visible props** (`ProceduralLandmarkSprite`) anchoring a village square, and every **merchant villager now also gets a second, personal trading stand** of their own (`VillageRenderer._door_facing_direction` + `_STAND_OFFSET_TILES`, same "stall" sprite, placed just outside their own house's door in the direction it opens) — previously every merchant in a village routed to the one shared stall, which read as a single shop rather than several villagers who each trade. Known gaps: house footprint is fixed (5x4), not seed-varied in size; no per-occupation building beyond the shared landmarks and a merchant's own stand (a blacksmith's forge, herbalist's garden stall, etc. still have no dedicated prop); a house stamped by a settlement re-loading its chunk overwrites whatever was in those exact cells before (including a player's own prior edit there) — the same "regenerates identically on revisit, no interference tracking" limitation trees/creatures already accept, not something new to houses. **Occupation balance per settlement is left to chance, deliberately** (see NPC Needs / Local Production Economy below): with `POPULATION` fixed at 5 and now 8 occupations, roughly a tenth of settlements roll zero producer villagers and every resident there genuinely struggles to eat — matches this codebase's existing "population exists wherever conditions make it viable" philosophy (`world.md`) rather than forcing an artificial producer guarantee; flagged as a real, known consequence, not an oversight.
+- **NPC Identity System** (small) — ✅ Done — `src/world/npc_identity.gd`: deterministic per-seed name (two-part syllable generator), occupation (farmer/blacksmith/merchant/guard/fisher/herbalist/**hunter**/**nurse** — the last two added for the local production economy below: hunter is a producer distinct from farmer, nurse a new non-producer village-care role), personality trait, and driving need, tested. Relationships to other NPCs (also part of npc.md's Identity) are NOT modeled yet. Known gap: `HeroAppearance.CLASS_PALETTES` was not extended for hunter/nurse — both fall back to the warrior palette (fail-safe, not a crash) until a dedicated outfit is authored for each.
 - **Organic Backstory Growth** (small) — ⬜ Not started
 - **NPC Behaviour DSL** (huge) — ⬜ Not started
 - **Daily Planning (LLM Scheduler)** (large) — 🚧 Partial — `src/world/npc_planner.gd`'s `Planner`/`FakeNpcPlanner` split (mirroring `WorldBossFitness`'s `PhaseGenerator` convention exactly): `FakeNpcPlanner` deterministically produces an occupation-keyed `{time_block, location_tag, activity}` day (work by day, home to sleep by night, a guard stays on watch through the evening instead of socializing) with zero LLM calls. The real LLM-backed planner (see intro above) isn't built yet.
-- **Local FSM/Pathfinder Plan Execution** (large) — ✅ Done (basic) — `src/rendering/npc_marker.gd`: a lightweight per-frame FSM (deliberately much lighter than `CreatureMarker`'s full sense/perceive/act AI) reads the current schedule entry for the in-game hour (`src/world/npc_schedule.gd`, paced by the same `SECONDS_PER_SIMULATED_DAY` clock as the rest of the world sim) and walks toward wherever it resolves to -- "home", a settlement's 3 shared landmarks (well/stall/gate), or a personal workspot for occupations without a dedicated building yet (field/forge/dock/garden). No real pathfinding (straight-line `move_toward`, no obstacle avoidance). Its bound `CharacterView` is now actually driven by that movement (previously it was bound once by `VillageRenderer._build_npc` and then never updated, so every villager's walk cycle sat frozen in `IDLE` despite visibly moving): `_update_animation` sets `is_moving`/`set_facing`/`set_movement_state` from the per-frame position delta each `_process`, and `NpcMarker.setup(world, tile_size)` (mirroring `CreatureMarker.setup`, now wired through `VillageRenderer.spawn_village`'s existing `world` param into `_build_npc`) gives it the same water-tile check `CreatureMarker` uses so a villager swims across water instead of walking on it.
+- **Local FSM/Pathfinder Plan Execution** (large) — ✅ Done (basic) — `src/rendering/npc_marker.gd`: a lightweight per-frame FSM (deliberately much lighter than `CreatureMarker`'s full sense/perceive/act AI) reads the current schedule entry for the in-game hour (`src/world/npc_schedule.gd`, paced by the same `SECONDS_PER_SIMULATED_DAY` clock as the rest of the world sim) and walks toward wherever it resolves to -- "home", a settlement's 3 shared landmarks (well/stall/gate), or a personal workspot for occupations without a dedicated building yet (field/forge/dock/garden/hunting_ground). No real pathfinding (straight-line `move_toward`, no obstacle avoidance). Its bound `CharacterView` is now actually driven by that movement (previously it was bound once by `VillageRenderer._build_npc` and then never updated, so every villager's walk cycle sat frozen in `IDLE` despite visibly moving): `_update_animation` sets `is_moving`/`set_facing`/`set_movement_state` from the per-frame position delta each `_process`, and `NpcMarker.setup(world, tile_size)` (mirroring `CreatureMarker.setup`, now wired through `VillageRenderer.spawn_village`'s existing `world` param into `_build_npc`) gives it the same water-tile check `CreatureMarker` uses so a villager swims across water instead of walking on it.
 - **Interrupt System** (medium) — ⬜ Not started
 - **Live Dialogue System** (large) — ⬜ Not started — see "Basic Talk Interaction" below for the deterministic single-line placeholder standing in for this today.
-- **Persistent Memory Log** (medium) — ⬜ Not started
+- **Persistent Memory Log** (medium) — ✅ Done (mechanism); 🚧 not yet auto-triggered off ordinary NPC proximity — `MemoryRecord`/`MemoryStore`/`Rumor` (`src/emergence/`) implement `npc.md`'s "Memory, beliefs, and rumor propagation" spec: fact stays authoritative in `EventStore`, a memory is a separate lossy per-holder projection, `Rumor` steps confidence/source-type down one hop at a time (tested against a ~3-hop "heard it from a guy" feel). Content mutation still deliberately deferred per the spec. Propagation isn't yet wired to fire automatically off NPCs' landmark-proximity schedule (`npc_schedule.gd`) — the mechanism is real and callable, the trigger isn't live yet.
 - **Self-Determination / Role Drift** (medium) — ⬜ Not started
 - **Dynamic Quest Generation** (large) — ⬜ Not started (each `NpcIdentity` already carries a `need`, but nothing turns it into a request yet)
 - **Instruction DSL** (huge) — ⬜ Not started
@@ -1112,6 +1702,7 @@ festival wiring yet.
 - **Faction/Settlement Reputation Aggregation** (medium) — ⬜ Not started
 - **Emergent Village Festivals** (large) — ⬜ Not started
 - **Basic Merchant Shopping** (medium) — ✅ Done (basic) — `src/gameplay/shop.gd`: a fixed gold-priced catalog (tool/weapon/armor/food), spent from the player's existing (previously unwired) `Wallet`. `EarthChunkManager.has_merchant_near` finds a nearby villager with occupation "merchant"; `Player._shop_step` (trade key, default T) buys the first affordable catalog item, cycling through the list on repeat presses so it doesn't just rebuy the same thing. No shop UI browsing, no selling the player's own goods, no per-NPC stock/pricing -- open follow-ups.
+- **NPC Needs / Local Production Economy** (large) — ✅ Done — implements npc.md's "Needs and the local production economy" section in full: real per-NPC hunger (`src/world/npc_needs.gd`, mirrors `creature_needs.gd`'s shape -- hash-seeded stagger, `HUNGER_RATE_PER_SECOND=0.02` matching `CreatureNeeds`, `is_hungry()`/`feed()` -- deliberately hunger-only, no thirst, per the spec's own scope); real production (`src/world/npc_production.gd`) where farmer/hunter/fisher read the SAME weather-tied numbers the wild ecosystem already runs on via 2 new `EarthChunkManager` accessors mirroring `fish_population_near`'s exact existing pattern (`vegetation_density_near` for farmer, `herbivore_population_near` for hunter, the pre-existing `fish_population_near` reused as-is for fisher) -- a real drought (lower moisture, same biome/temperature) measured 93.8% lower farmer AND hunter yield in a real probe (`PRODUCTION_RATE_PER_SECOND=0.05`, a shared fraction-of-standing-resource rate, tested behaviorally rather than pinned to a magnitude, matching this codebase's existing fraction-per-time-unit tuned-rate convention); a real per-settlement `VillageMarket` (`src/world/village_market.gd`, one instance per `VillageRenderer.spawn_village` call, shared by every villager of that settlement) holding real stock keyed by real `ItemCatalog` ids (farmer→"fruit", hunter→"meat", fisher→"fish" -- no invented item ids) at a tested `VILLAGE_LOCAL_FOOD_PRICE=2` (below `shop.gd`'s `cooked_meat` price of 4, a deliberately distinct informal villager-to-villager price, NOT the player-facing global catalog); `src/world/npc_economy.gd` ties needs+`Wallet`+production+market together per NPC and is driven once per frame from `NpcMarker._process` (`NpcMarker.setup_economy`, wired by `VillageRenderer._build_npc`). **Judgment calls made and documented in-code**: (1) a producer self-feeds for FREE from their own currently-active production (no market/gold transaction) rather than buying from the market like a non-producer -- gated on genuinely nonzero real yield right now, so total ecological collapse can still starve a producer too, not just everyone else; (2) gold is a real two-faucet flow (`docs/concept/economy.md`), not a closed loop -- a producer earns `YIELD_TO_GOLD_RATE=1` gold per unit the instant it's gathered (independent of whether it's ever bought), a buyer spends `VILLAGE_LOCAL_FOOD_PRICE=2`, and the two rates deliberately differ (a real wholesale-vs-retail margin) rather than round-tripping the same number; (3) the market is NPC-only -- npc.md's own framing never extends it to the player, so the player still only uses `shop.gd`'s existing global catalog; (4) nurse's `FakeNpcPlanner` work tag resolves to the shared "well" landmark (a village-care role tending the square) rather than a new dedicated building; (5) settlement occupation balance is left to chance, not guaranteed (see Procedural NPC Population Generation above). **Real probe** (`godot --headless -s <standalone script>`, not GUT, run against the actual production code -- `EcosystemSimulation`/`NpcProduction`/`NpcEconomy`/`VillageMarket`, not hand-traced): a real settlement (chunk (30,1) in one run) with a real hunter and real blacksmith -- the hunter gathered 34 real "meat" units and earned 34 real gold over a simulated 300-second workday reading a real `herbivore_population` of 2.304 in a lush region; the blacksmith, forced hungry with 50 gold, spent 2 gold buying 1 unit from that same real stock and was fed (hunger 1.0→0.0, stock 34→33); a stranded merchant with an empty market and no gold stayed genuinely hungry (hunger→1.0, no crash, no free pass) after 100 simulated seconds. **Known gaps**: `VillageMarket` is freshly created per `spawn_village` call, so a chunk reload resets village stock to empty -- the same "regenerates identically on revisit, no persistence" limitation trees/creatures/houses already accept, not novel to this system; no wiring yet from sustained hunger to any lifecycle/death consequence (deliberately out of scope this pass, see npc.md's own "Deliberately NOT in this pass" line); `HeroAppearance` outfit palette gap for hunter/nurse (see NPC Identity System above).
 - **Basic Talk Interaction** (small) — ✅ Done (basic) — spec'd in `concept/npc.md`'s "Minimal talk interaction" section: an explicit placeholder for the real Live Dialogue System below, not a cut-down version of it. `src/world/npc_greeting.gd` turns an `NpcIdentity` into one deterministic line flavored by its own personality trait and need (8 trait templates × 6 need phrases); `EarthChunkManager.nearest_npc_near` finds the closest villager (any occupation) within range; `Player._talk_step` (talk key, default G, new `Keybindings` entry) shows that villager's line as a HUD banner on press. A proximity prompt ("Talk (<bound key>)", reading the live keybinding so a rebind is never stale) floats above whichever villager is in range (`World._update_interaction_prompt`, world-to-screen via the viewport's canvas transform), shown even before the key is pressed -- the general "nearby-interaction hint" affordance requested for NPCs. No memory of the exchange, no branching, no quest hooks.
 - **Settlement Growth via Migration** (large) — ⬜ Not started — spec'd in `concept/npc.md`'s new "Settlement growth" section and `concept/quests.md`'s Settlement growth section: player-built structures as a habitability pull, migration as a new replan-interrupt resolution, and unification of player-grown settlements with procedurally-seeded ones. Depends on Village-Endangerment Attractor Mechanism below for its preferred migration source (settlements that lost that fight).
 
@@ -1741,6 +2332,108 @@ disperser/climate scope is still unbuilt:
 - **Rare Grove Discovery & Harvest Payoff** (small) — ⬜ Not started
 - **Grove Overharvesting Population Consequence** (small) — ⬜ Not started — felling a tree (`ChoppableTree.take_damage`) drops wood and removes it permanently; nothing tracks grove-level depletion.
 
+### Long Grass (`concept/long_grass.md`)
+
+- **Illustrated, multi-card patch rendering** (medium) — ✅ Done — `src/rendering/illustrated_grass_patch.gd`: each `TallGrass` cell renders `CARD_COUNT=7` deterministically-placed blade cards sliced from a real 10×10 illustrated atlas (`assets/sprites/grass_blades.png`, genuine alpha transparency in its gaps — verified directly, no chroma-key/despill pass needed, unlike this codebase's other illustrated-art classes which ingest a magenta-keyed sheet instead), replacing the old purely-decorative `GrassBladeField` (a flat-colored `MultiMeshInstance2D`, removed entirely this pass — it wasn't destructible and didn't match the illustrated art style, per direct user report). Rendered GPU-instanced (see the third follow-up below) — bands, not individual cards, are what Y-sorts against the player/creatures.
+- **Path-traced per-blade wind sway + walker push** (medium) — ✅ Done — the shader bends each pixel row by displacing the *sampled* texture UV in `fragment()` rather than shearing the quad's geometry in `vertex()` (the original, cruder implementation): `bend_curve(top_t) = pow(top_t, BEND_CURVE_EXPONENT)` eases in so the root stays pinned and curvature concentrates near the tip (a per-vertex shear on an unsubdivided quad can only ever interpolate linearly between 4 corners, reading as one rigid parallelogram); wind phase and amplitude both vary with local UV.x (`blade_phase`/`blade_amplitude_scale`, `AMPLITUDE_BASE`/`AMPLITUDE_VARIATION` keep every column's amplitude strictly positive) so blades drawn side by side in one card sway out of lockstep, approximating independent blade motion without per-blade geometry. The same curve gates the radial player-wake push, tuned so it clearly dominates ambient wind (`WALKER_PUSH_UV_AMPLITUDE > WIND_UV_AMPLITUDE`, pinned by test) for a readable "parting" reaction. All tuned constants are named/tested, not eyeballed. `EarthChunkManager` feeds one shared `player_world_position` uniform per frame from the live player position. **Follow-up bug, reported after seeing it live: "moves the blades left right and doesn't curve them... the bigger bushes don't part."** Root cause: a region-mapped `Sprite2D`'s canvas_item shader `UV` is atlas-relative, not local `[0,1]` to the card — a card whose seed rolled atlas row 9 of 10 saw `UV.y` in roughly `[0.9, 1.0]` for its *entire* card, compressing `top_t` into a near-flat sliver (near-uniform sideways slide instead of a curve) and, for rows near `UV.y == 1` (the bigger/denser bush variants), almost zero bend at all regardless of push strength — both symptoms, one bug. Fixed by giving each card its own atlas sub-rect as `instance uniform` parameters (`region_uv0`/`region_uv1`, one shared `ShaderMaterial` still batches every card) and renormalizing UV against them (`IllustratedGrassPatch.local_uv`, mirrored exactly between the tested GDScript helper and the GLSL) before computing the curve. **Second follow-up, reported after seeing the fix live: "only single blades move... they move at the bottom which is rooted into solid... bigger bushes don't part at all... don't sway anymore."** This codebase's headless test runner uses a null renderer (validates GLSL compilation, produces no real framebuffer), so direction was verified with a real, non-headless, off-screen `SubViewport` capture instead of more static analysis: a color-visualizing diagnostic shader confirmed `bend ≈ 0` at a card's bottommost opaque row and `bend ≈ 1` at its topmost — root-pinning direction was already correct. The actual cause was amplitude, not direction: a rendered-pixel diff showed a dense, busy bush card (many overlapping similarly-toned blades filling the cell) barely *looks* different even when its sampled pixels genuinely shift, because a small positional shift of repetitive texture still reads as the same texture — unlike a sparse single-blade card, where the identical shift moves a high-contrast silhouette edge and reads clearly (visually confirmed: at the original amplitude the blade showed an obvious lean while the bush looked static, even though the bush's raw pixel diff was numerically *larger* than the blade's). Fixed by resizing `WIND_UV_AMPLITUDE` (0.05→0.09) and `WALKER_PUSH_UV_AMPLITUDE` (0.22→0.45) for the busier case, re-confirmed visually: the bush's wheat-head now visibly displaces under push. **Third follow-up, reported once the first two fixes read correctly live: "it's still not volumetric (only one sprite per tile)... also it's now super laggy."** Root cause: individual `Sprite2D` cards, once actually rendering at the density this system is designed for (up to ~4,600 simultaneous cards across a typical decoration radius), meant that many separate alpha-blended draw calls — Y-sorting forces per-node paint order, which defeats Godot's automatic batching. User-approved trade-off (asked directly, since batching for speed and exact per-blade Y-sorting are fundamentally in tension): GPU-instance via `MultiMeshInstance2D`, one draw call per (chunk, Y-band of `BAND_COUNT=8`) rather than per chunk (which would only Y-sort as one unit, too coarse) or per card (no batching win). Building this surfaced two further, compounding rendering bugs, both invisible to this codebase's headless test runner (null renderer: validates GLSL compilation, produces no real framebuffer) and only caught via a real, non-headless `SubViewport` capture: (1) `instance uniform` for the per-card atlas region draws from one *global* buffer shared by the whole scene, hardware-capped (measured: 4096) — a test grid of just 576 cards already overflowed it, silently falling back to each instance's default value past the cap; (2) switching to `MultiMesh`'s `use_colors`, read as plain `COLOR` directly in `fragment()`, rendered as a dithered/checkerboard mix of neighboring instances' packed data — reproduced with a bare-minimum shader (zero bend math, `COLOR.rg` alone, no texture sampling) — apparently specific to this project's `gl_compatibility` (GLES3) renderer, which packs `MultiMesh` instance data into a texture internally rather than a true per-instance buffer. Fixed by reading `INSTANCE_CUSTOM` in `vertex()` (not `COLOR` in `fragment()`) and carrying it via a `varying`, confirmed clean via the same real-render technique. `CARD_COUNT` raised 4→7 once per-instance cost stopped being the constraint. **Fourth follow-up, reported across several more live sessions: "swaying was really good now player doesn't influence sprite" / "now the barely bend."** Investigating the first report found a literal `const WALKER_PUSH_UV_AMPLITUDE := 5.0 # TEMP DIAGNOSTIC CRANK` left in place from an earlier debugging pass, self-labelled but never reverted, alongside a `COLOR = vec4(1,0,1,1)` magenta override gated on `wake > 0.01` — both debug scaffolding that had shipped, not a regression in the underlying mechanism (now caught by `test_shader_never_unconditionally_overrides_color_to_a_flat_debug_tint`/`test_walker_push_amplitude_matches_its_own_tuned_constant_not_a_debug_crank`, added so this class of bug fails loudly instead of shipping silently again). Reset to the real tuned value and the magenta override removed. Confounded by a second, unrelated cause across the same stretch: a parallel editing session repeatedly touched this same file and constant concurrently, so several later "broken again" reports traced to `WALKER_PUSH_UV_AMPLITUDE` having been reverted back to `5.0` (or another stale value) between visual checks rather than a new bug — re-diagnosed and re-fixed each time by re-reading the file fresh rather than assuming a prior fix still held. Once genuinely stable, live "still not enough" feedback across several more rounds climbed the real tuned value further: 0.45 → 0.6 → 0.7 → 1.5, the last a deliberately large jump (rather than another small nudge, since the smaller steps still read as weak in practice) — pinned exactly by test, confirmed to stay well clear of the ~5.0 region where `bend_offset` overshoots the shader's own UV clamp and the curve collapses into a static-looking clamped sliver instead of a visible sway.
+- **Creature wake** (small) — ⬜ Not started — the shader already exposes the same `player_world_position`/`walker_radius` inputs a creature push would need, but only the player position is ever written.
+- **Cards spread across a tile's own footprint, not clustered in one corner** (medium) — ✅ Done — reported live: "make grass blades volumetric, so that more than one entity spawns on the same tile not only at bottom corner so that when the player walks through it looks and feels like a dense field of grass." `IllustratedGrassPatch.card_specs_for_seed`'s offset formula previously spread cards across only ±3.3×±1.4 world units (roughly a fifth of a 16×16 tile), a small sub-region hugging the tile's own center — visually one clump sitting somewhere on the tile rather than grass filling its whole footprint. Widened to spread across ±6.8 world units on both axes independently (comfortably inside the tile's own ±8 half-bounds, so a root never bleeds into a neighbouring cell's footprint) via a 21×17 bucket split of the same per-card hash, pinned by test (`test_card_offsets_spread_across_most_of_a_full_tile_not_a_small_corner`/`..._stay_within_the_tiles_own_bounds`). `CARD_COUNT` moved 7 → 12 alongside the spread (spreading the same small count over a bigger area would read as *sparser*, not denser, so count and spread were raised together) then settled at 8 in a later pass once a fill-rate/overdraw cost showed up on an integrated GPU (GPU instancing keeps this to one draw call regardless of card count, but each card is still a translucent, alpha-blended, shaded quad the GPU must rasterize and blend — cheap in draw calls, not in fill rate/overdraw). 8 trades a little of the peak volumetric density for materially less overdraw; the spread fix (the part of the original report about clumping in one corner) stays fully intact regardless of card count.
+- **Grass draws only what the player can currently see** (medium) — ✅ Done — reported live: "optimize the grass blade rendering so it only draws what the player currently sees +2 tiles of buffer in every direction and blades get loaded/unloaded as the player walks to improve framerate." The existing chunk-level decoration gate (`DecorationLod.keeps_decoration`) only ever scoped drawing to whole `CHUNK_SIZE`=32-tile chunks near the player — several times what the camera can actually show (see `decoration_lod.gd`'s own doc comment), so a decorating chunk still drew every one of its grass cells regardless of whether they were actually on-screen. `DecorationLod.keeps_decoration_tile` adds a tighter, rectangular, tile-precise cutoff layered ON TOP of (never instead of) that coarser gate: half the camera's own visible span (`EarthChunkManager._visible_half_span_tiles`, rounded up) plus a `GRASS_VIEW_BUFFER_TILES=2` buffer in every direction, independent per axis (matching the camera's own rectangular view, not a circular radius). `_sync_grass_sprites` filters each cell against it before grouping into bands, so a band's real instance count can now be smaller than its full cell count once some of those cells fall outside the window.
+- **Newly-visible tiles weren't getting grass promptly enough** (small) — ✅ Done — a regression from the view-distance culling above, reported live immediately after: "also now the blades load way too late and the player walks into a new area without any blades which then suddenly appear." The tile-precise cutoff is only re-evaluated when `_sync_grass_sprites` actually runs, which was throttled to `GRASS_REFRESH_INTERVAL=5.0`s or an immediate resync on crossing into a new CHUNK — fine for the old chunk-level-only gate, but the new cutoff is tight enough that a player can walk many tiles (up to a whole `CHUNK_SIZE`=32 without ever crossing a chunk boundary) bringing new ground into view that stayed bare until the next coarse trigger, then a whole batch of tufts popped in at once. Fixed by tracking the tile the grass view was last resynced against (`_grass_view_synced_tile`) and marking the resync due on ANY tile change — the same "mark due, picked up by the next `step_tall_grass` call" mechanism the chunk-boundary trigger already used, just at tile instead of chunk granularity. This also primes `sim.advance`/`shed_seed` to run early (both gated behind the same accumulator) — harmless, not just cheap: growth is linear in delta and spread carries its own accumulator, so more frequent smaller steps land in exactly the same state (`test_growth_lands_in_the_same_place_whether_batched_or_per_frame`); triggering per TILE rather than per frame is what keeps the cost down, since tile crossings happen at a walking pace (a few a second) rather than the 60/sec rate the original throttle exists to avoid.
+- **Grass seeds into coherent fields, not scattered individual cells** (medium) — ✅ Done — reported live: "remove the percentage of overall grass blades instead make them stick more together forming fields using perlin noise / voronoi." `TallGrass._seed_initial_patches` previously rolled each grassland cell independently against `SEED_CHANCE=0.20` — statistically the right overall coverage, but because each roll is uncorrelated with its neighbours, it painted scattered individual dots rather than anything a player would read as a meadow. Replaced with `PixelNoise.smooth` (the same shared bilinear value-noise the curved terrain-blend boundaries use — see `concept/art_resolution.md`) thresholded per cell: neighbouring noise samples stay close together, so thresholding carves out contiguous blobs instead of salt-and-pepper — confirmed with a real probe (ASCII-rendered a 32×32 sample: several distinct, organically-shaped fields per chunk, not one giant blob or a return to speckle). `FIELD_NOISE_SCALE=0.12`/`FIELD_NOISE_THRESHOLD=0.65` were picked from a real probe sweeping scale × threshold combinations (deleted after use, per this project's convention) for the combination whose emergent coverage landed closest to the old `SEED_CHANCE` target (~20%), pinned exactly by test rather than eyeballed. `SEED_CHANCE` itself stays defined at the same value — it is no longer read as a literal per-cell roll, but several OTHER ecological scatter systems (`DesertScrub`, `EarthwormPatch`, `WildCropPatch`, `TundraLichen`) pin their own rarity below it in their own tests, so removing it outright would have broken a wider cross-system convention this request never asked to touch. Clustering surfaced a few pre-existing tests whose fixed guesses no longer held once nearby cells' occupancy became correlated instead of independent (e.g. a "try two adjacent corner cells to find an empty one" precondition, safe at a 4% chance of both being occupied under independent rolls, no longer safe once an occupied cell's neighbour is occupied ~3x more often than the base rate) — fixed by making those tests robust by construction (scan the whole grid; retry across several spread ticks) rather than hand-picking a new lucky seed. Deliberately NOT seamless across chunk boundaries (noise is sampled in each chunk's own local coordinates against its own per-chunk seed, the same inputs every other roll in this file already uses) — a field can visibly restart its pattern at a chunk edge; not asked for, and would need a shared noise seed sampled in global tile coordinates instead, a natural follow-up if it turns out to matter in practice.
+- **Grass parts for every client, not just the simulation owner** (small) — ✅ Done — reported live: "grass doesn't part when the player walks through it." `World._process` called `EarthChunkManager.set_grass_walker_position` from inside the `_owns_ecosystem_simulation()` gate meant for actual simulation steps; that gate evaluates true in single-player (masking the bug there) but is false for every connected multiplayer client except the host, so a joining client's own local grass never parted for them. Fixed by moving the call out of the gate, unconditional every frame for every client — the same treatment `step_water_disturbances` (a fellow purely-cosmetic, per-client effect) already had, right above it in the same function. Investigated and REFUTED, via a real non-headless render (not just code reading): a `Player.position`/grass-`MODEL_MATRIX` coordinate-space mismatch (both are children of the same untransformed `$Entities` node) and the walker uniform/`wake` math not reaching the shader (a temporary `wake > 0.01` → solid-magenta diagnostic confirmed it fires exactly where expected, at the real tuned `walker_radius`/`WALKER_PUSH_UV_AMPLITUDE`, not just an artificially cranked one). See `concept/long_grass.md` History #5.
+- **Ambient wind sway scales with live weather** (small) — ✅ Done — `IllustratedGrassPatch`'s ambient wind term (not the walker push, which stays constant) now carries a `wind_strength` uniform fed by `EarthChunkManager.set_wind_strength` from the same live `WeatherModel.wind_strength_for` value the water's shimmer and `WindSway` (trees, grass/scrub tufts, and flower blooms — see the Phase 0 Project Scaffold row) already use — one shared wind concept, not a parallel one. Default `1.0` is calibrated to `wind_strength_for("clear")`, so today's tuned look is exactly reproduced on a clear day (the majority weather state) and scales up visibly in worse weather. Verified with a real non-headless render: a per-pixel motion-energy diff across a burst of frames under `storm` (1.8) vs `clear` (1.0) showed a distinct, coherent canopy-shaped region of high frame-to-frame displacement under storm that the clear-weather diff (dominated by uniform background/ground-texture noise) did not show.
+- **Seed, and animal-carried dispersal to distant/cross-chunk locations** (large) — ✅ Done — see `concept/long_grass.md`'s "Reproduction" section for the full mechanism spec. `_step_spread` (existing) only ever creeps into the four cells touching a mature patch; this pass adds the OTHER half real grass reproduction needs: `TallGrass.shed_seed`/`ground_seed_cells`/`take_ground_seed` (mirrors `FlowerPatch`'s own shape, no bloom/pollination gate since grass has no bloom cycle, no species field since a chunk grows only one kind of grass) and `TallGrass.plant` (the sink, mirrors `FlowerPatch.plant`), backed by `EarthChunkManager.grass_seeds_near`/`take_grass_seed_at`/`plant_grass_at` (same 3×3-chunk-neighbourhood-scanned shape as `flowers_near`/`seeds_near`/`fruit_near`). Two carriers, deliberately different mechanisms: **sparrows** eat grass seed through the exact same `seed_world` port and `SeedEndozoochory` carry-distance model they already use for flower seed (a sparrow's crop doesn't care which plant a swallowed seed came from) — `AmbientFlyerMarker` gained a fourth parallel sniff track (`_grass_seed_*`) alongside worm/fruit/flower-seed, all sharing one `ground_forage` state machine and one `_carried_seed_species` slot. **Mice** do NOT get the bird treatment: a real scatter-hoarding rodent doesn't fly and doesn't digest a seed in transit, so `src/gameplay/seed_caching.gd` is its own small module (short GROUND carry, `CARRY_MIN/MAX_TILES` 1–6 vs the bird's 10–40 and the flower grazer's 3–14 — pinned by test to sit below both) wired through `EarthChunkManager._step_grass_seed_caching`, gated to `species == "mouse"` specifically rather than the whole "Forager" diet label. Both carriers land in the SAME sink (`plant_grass_at`), so either one can found a genuinely new, disconnected field a chunk (or neighbouring chunk) away — not just extend an existing one. **Grazing counter-pressure was already live before this pass** — `EarthChunkManager._graze_by_herbivores` already ate a mature patch under any non-predator creature standing on it (horses/sheep included), driven from the same throttled tick as growth/spread — this pass only needed to confirm it, not build it; a real-world probe (real Berlin chunk, real `AmbientFlyerMarker`/`CreatureMarker` instances driven through hundreds of real `_process` steps, deleted after use) measured genuine coverage divergence between grazers-present and grazers-absent runs over the same simulated span — see the probe numbers callout below. Found and fixed one adjacent latent bug while restructuring the carried-seed-kind branching to add a third kind: `_carried_seed_is_flower` was set `true` on eating a flower seed but never reset, so a bird that later ate fruit (sparrows are diet-eligible for both) would incorrectly call `plant_flower_at` with the fruit's species instead of `fruit_world.try_plant_seed_at` — now every `_take_targeted_*` method resets both kind flags before setting its own (regression-tested).
+  - **Probe numbers** (real Berlin chunk data, 500 ticks × 5s = 2500 simulated seconds; probe scripts not kept in the tree — deleted after use, per this project's real-world-verification convention). **Full loop, end to end** (4 real `AmbientFlyerMarker` sparrows + 3 real `CreatureMarker` mice, all driven through hundreds of real `_process` steps against the real production code path, no mocks): 11 grass seeds eaten, 1 new distant patch established — by a MOUSE (`mouse grass-cachings: 11`, `sparrow grass-plantings: 0`). That zero for sparrows is a real, reproducible finding, not a bug: `AmbientFlyerMarker`'s four ground-forage searches run in a fixed priority (worm → fruit → flower-seed → grass-seed, unchanged order, grass-seed only appended at the end), so with real Berlin flower-seed abundant in range the whole run, sparrows committed to flower seed on every opportunity and grass-seed foraging never got a turn — proven mechanically correct in isolation (see `test_ambient_flyer_marker.gd`'s dedicated sparrow/grass-seed tests, a `StubSeedWorld` with ONLY grass seed on offer), but in a real mixed meadow today's fixed priority order makes mice the dominant real-world driver of new distant patches, not birds. Flagged as a judgment call, not fixed: changing that priority order risks the already-tested flower-dispersal behavior and wasn't asked for. **Grazing counter-pressure**, isolated from the above (a creature pinned onto a real, currently-mature patch in its own chunk every tick, re-picked as each one is eaten — the direct causal test, since a freely-wandering herd's tiny `WANDER_RADIUS` (40px, ~2.5 tiles) turned out to make the full-loop probe's own grazer placement a matter of luck, not a property of the mechanism): 121 real `TallGrass.graze()` calls over the run; total coverage **without** a grazer grew 3101 → 3200 (+99), **with** one continuously-grazing creature it fell 3101 → 3072 (−29) — a swing of 128 patches from a single animal, confirming the mechanism (already live before this pass, see below) is real and strong. Honest caveat for what a player actually sees: that strength depends on a herd's home point actually being near grass, since footfall grazing only fires on the exact tile a creature is standing on — the same 40px tether that made the full-loop probe's own grazer placement unreliable in the wild also governs how promptly a real, freely-wandering herd finds grass to crop in the first place.
+
+### Wild Crops (`concept/wild_crops.md`)
+
+New concept doc + system (2026-08-24), reported: "grow in the wild; spread
+and can be harvested with fully animated Pull action that pulls ripe
+carrots out of earth (visually animated)". Supersedes the old
+`EarthChunkManager.has_wild_carrot`/grass-harvest-yields-a-carrot freebie
+(see Taming/NPC section) with a real, visible wild population, mirroring
+`TallGrass`'s own patch-sim contract rather than a spawn table.
+
+- **Growth + spread simulation** (medium) — ✅ Done — `src/world/wild_crop_patch.gd`
+  (`WildCropPatch`): one instance per chunk PER CROP (carrot, potato each get
+  their own sim, not a shared one), seeds a small fraction of `grassland`
+  cells (`SEED_CHANCE` pinned below `TallGrass.SEED_CHANCE` by test — a
+  meadow is mostly grass with the occasional carrot in it), grows 0..1 at a
+  tested multiple slower than grass regrowth (`GROWTH_RATE_SLOWDOWN`), and
+  spreads mature patches into adjacent grassland on a throttled tick
+  (`_step_spread`, identical mechanism to `TallGrass`'s own). No animal-
+  carried seed dispersal for root crops (scope cut, see the concept doc).
+  **Follow-up, reported live: "carrots render potatoes as crop"** — two
+  independently-seeded sims sharing a chunk could claim the exact same
+  cell (each blind to the other), stacking a carrot marker and a potato
+  marker on one tile. Fixed with `_in_this_crops_territory`: a stable hash
+  partitions every cell into exactly one crop's share up front, and both
+  seeding and spread skip any cell outside their own crop's territory —
+  collision is now impossible by construction (`test_territory_partition_is_exhaustively_disjoint`
+  proves it directly over a wide cell sample, not just statistically on one
+  seed/grid that got lucky).
+- **Growth-staged art** (medium) — ✅ Done — real AI-illustrated sheets
+  already existed (`assets/sprites/plants/{carrot,potato}{,_leaves}.png`:
+  3 growth-stage leaf frames + 7 root/tuber color variants each) with
+  nothing in the world using them; `src/rendering/illustrated_crop_sprite.gd`
+  slices them (chroma-key + `SpriteSheetSlicer`, the same `sheep.png`
+  recipe `IllustratedAnimalSprite` established) and maps `WildCropPatch`'s
+  continuous growth onto the 3 stages (seedling/vegetative/mature). A
+  direct cross-crop distinctness test
+  (`test_carrot_and_potato_leaf_textures_are_visually_distinct`) confirmed
+  the two crops' art was never actually mixed up — the "don't use variants"
+  live report traced to the territory-overlap bug above, not this piece.
+- **Soil mound** (small) — ✅ Done (procedural fallback) —
+  `src/rendering/procedural_soil_sprite.gd`: no AI art exists yet for
+  `ai_sprite_prompts.md`'s soil-pile prompt, so a hand-drawn
+  undisturbed/disturbed mound in the same offline-art style as
+  `ProceduralBobberSprite`, swappable for real art later with no marker
+  changes needed. **Follow-up, reported live: rendered ~1.5 tiles wide** —
+  the raw `SIZE=24` texture was drawn with no scale applied at all, the
+  same "gigantic" bug class `ProceduralItemSprite.WORLD_WIDTH_BY_ID` already
+  fixed once for tree fruit. Fixed with `SOIL_WORLD_WIDTH`/`SOIL_WORLD_SCALE`
+  (pinned below a full tile by test).
+- **Visible per-patch markers** (medium) — ✅ Done — `src/rendering/wild_crop_marker.gd`
+  (`WildCropMarker`) + `src/rendering/wild_crop_renderer.gd`
+  (`WildCropRenderer`): one real Node2D per patch cell (sparse, unlike
+  grass's GPU-instanced bands — each cell needs its own hover identity and
+  independent pull animation), spawned/synced/despawned per chunk exactly
+  like trees/stones (`EarthChunkManager._wild_crop_sims`/
+  `_wild_crop_markers`, `step_wild_crops` on the same throttled cadence as
+  `step_tall_grass`). **Follow-up, reported live: the root was visible even
+  while still planted** ("crop should not be visible, only leaves") —
+  leaves+root are now assembled as one entity from `_ready()` (the root's
+  real art loads immediately, not lazily at pull time) with the root fully
+  clipped away (`Sprite2D.region_rect` height 0) until a pull actually
+  starts; see the pull entry below for how that region grows. Wired into
+  the universal hover tooltip (see UI / presentation section) via
+  `get_display_name`/`get_hover_actions` — name
+  reflects growth stage ("Carrot Sprout" → "Carrot Plant" → "Carrot"),
+  and only a mature patch offers "Pull".
+- **Animated pull harvest** (medium) — ✅ Done — bound to the SAME swing
+  input as chopping a tree / harvesting grass / smashing a boulder
+  (`attack`, default Space) via `Player._pull_wild_crop_step`, the same
+  group-scan + range-sweep shape as its siblings. `src/gameplay/crop_pull.gd`
+  (`CropPull`) is a pure, headlessly-tested function of elapsed time (cubic
+  ease-out rise), the same "runtime tween over static parts" idiom
+  `Knockback.step` already established for hit displacement — no baked
+  mid-pull animation frames. The same progress value also drives the
+  root's `region_rect` growing from nothing to its full art, top-down, so
+  it visibly emerges as it rises rather than popping instantly visible.
+  On completion: soil swaps to its disturbed
+  look, the sim's cell is actually removed, and the harvested root drops
+  as a real `DroppedItem` carrying the SAME illustrated root texture the
+  player just watched rise out of the ground (`DroppedItem._ready()` now
+  prefers `IllustratedCropSprite` over the generic procedural fallback for
+  any registered crop id) — not an instant straight-to-inventory grant.
+- **`potato` item** (small) — ✅ Done — added to `ItemCatalog` (food); had
+  no source anywhere in the game before this pass.
+- ⬜ No DNA/quality variation on the wild population (see `farming.md`'s
+  still-unbuilt shared DNA model) — the 7 root/tuber art variants are
+  purely cosmetic.
+- ⬜ No player-tilled farming access point from this wild population yet.
+
 ### World (`concept/world.md`)
 
 The hub doc for the core simulated planet. Its foundational terrain/clock
@@ -1794,10 +2487,12 @@ No farming system is wired into live gameplay, but its plot and breeding math no
 - **Main-menu backdrop** — ✅ Done — the start-up menu now dims the whole screen behind a full-rect backdrop (`World._show_main_menu`) so the game world/HUD no longer bleed through it.
 - **HUD polish** — 🚧 Partial — survival meters grouped into a themed panel card; XP bar / creature panels repositioned to stop overlapping. Meter fills are still plain rects (no rounded fills).
 - **Character screen / inventory revamp** — ✅ Done (basic) — `scenes/inventory_window.gd` (toggle I) is now a PoE/Valheim/Hammerwatch-style **two-pane character screen**: a left **equipment paperdoll** (rendered head+torso preview + right-clickable head/chest/legs/feet/weapon slots) and a right **item-slot grid** (icon + count, hover tooltips). **Right-click** an inventory item to wear/equip or eat it; right-click a worn slot to unequip. **Drag-and-drop works** (left-click and drag): drag an item onto another grid slot to reorder, or out onto a HUD hotbar slot to bind it to a number key (`src/ui/drag_slot.gd` is the shared drag-capable slot Control; `src/gameplay/hotbar.gd` holds the bindings). Left and right are deliberately split across the two gestures — clicking left used to ALSO activate an item (equip/eat) on mouse-down, which fired the instant you pressed down to start a drag, before Godot's drag threshold even triggered (reported: "a click on a carrot makes it vanish"). Shows total armor. The hotbar picked up the same UX pass: a hover highlight, a tooltip naming what's bound and its count, and right-click to clear a slot (previously the only way to change one was overwriting it via drag). Not yet: splitting/merging stacks by drag, or dragging directly onto a paperdoll slot to equip.
-- **Character creation with pixel art** — ✅ Done — `scenes/main_menu.gd` is now a real **character creator**, replacing the old class picker (whose "preview" was a disembodied head floating above a flat colored rectangle): a class column with stat blurbs and a highlighted selection, a **live full-body portrait** in the middle (`ProceduralCharacterSprite.generate_hero_portrait_image` composes head/torso/arms/legs/boots into one figure, scaled 5x with nearest-neighbour filtering so it stays crisp), and an appearance column cycling **five customization axes** with ◀ ▶ arrows — skin tone (6), hair colour (7), hair style (6, named), beard (4, named), eye colour (4) — plus a Randomise button. The authored appearance now flows through `start_requested` → `World._pending_appearance` → `Player.apply_class(..., appearance)`, so the spawned hero actually wears what the creator previewed (previously the in-world look was always re-rolled from the peer id, ignoring the picker entirely). The menu itself was restyled: bigger title, tagline, section headings, separators, and a primary/secondary button hierarchy.
+- **Character creation with pixel art** — ✅ Done — `scenes/main_menu.gd` is now a real **character creator**, replacing the old class picker (whose "preview" was a disembodied head floating above a flat colored rectangle): a class column with stat blurbs and a highlighted selection, a **live full-body portrait** in the middle (`ProceduralCharacterSprite.generate_hero_portrait_image` composes head/torso/arms/legs/boots into one figure, scaled 5x with nearest-neighbour filtering so it stays crisp), and an appearance column cycling **five customization axes** with ◀ ▶ arrows — skin tone (6), hair colour (7), hair style (6, named), beard (4, named), eye colour (4) — plus a Randomise button. The authored appearance now flows through `start_requested` → `World._pending_appearance` → `Player.apply_class(..., appearance)`, so the spawned hero actually wears what the creator previewed (previously the in-world look was always re-rolled from the peer id, ignoring the picker entirely). **The creator is now tabbed** (reported: "there should be tabs with character and skilltree so you can view each classes skills before creating"): a `TabContainer` splits **Character** (the class/portrait/appearance columns above, now themed card panels instead of loose Controls) from a new **Skills** tab, which previews the shared `SkillTree` node pool as a card grid and highlights whichever nodes actually synergize with the currently-picked class's own dominant stat (`_class_dominant_stat`/`_CLASS_STAT_TO_SKILL_STAT`) — live-updating as the player switches classes, before committing. Honestly scoped: `SkillTree` is one pool shared by every class (see the Soft Class System row above — full class-specific skill webs aren't built yet), so the tab previews the real shared pool plus the class's own stat lens rather than fabricating fake per-class trees; a mage-leaning pick simply highlights nothing today since no shared node grants mana yet, and the tab says so in its own footer. Visual pass: the whole creator now reuses `UiTheme`'s palette (the same theme `World` already assigns every other window) instead of picking its own colors, class/skill entries are bordered card panels rather than bare Buttons/Labels, section headers got an accent underline, and the panel grew from 760x520 to 880x620 to fit the tab bar and skills grid without cramping. That still wasn't enough headroom once real theme/font metrics applied — reported: "the character creation screen overflows and is not scrollable so I can't start a new game because button is not visible" — since MainMenu is a fixed-size panel (not an auto-growing one), the overflowing tab content was silently pushing the Back/Begin row off-screen with nothing to reach it by. The tab content is now wrapped in its own `ScrollContainer`, added deliberately OUTSIDE the Back/Begin row's own container, so the middle content scrolls internally while Begin always stays visible and clickable at a fixed position regardless of how tall either tab's content gets. **A follow-up pass made the Character tab a genuine hero showcase** (reported: "make it genuinely captivating ... I want the classes to be icons and on top over the character and more character customization options and DNA influence"): the old plain-text class name list is gone — the 7 classes are now small icon cards (`_build_class_icon_row`) sitting directly above the portrait, each icon a real miniature rendering of that class's own default look via the same portrait generator (not a placeholder glyph), so picking a class previews it before it's even selected. DNA is now visible, not just readable: a glow ring behind the portrait (`_dna_glow`) repaints to the rolled genome's rarity color and, for legendary specifically, pulses via a looping `Tween` — common/rare/legendary now read as visibly different moments, not just different words in a stat line — and a "★" badge lights up on whichever class icon the current roll's `HeroDna.resonance` favors most, so DNA visibly steers the class picker itself. **A sixth customization axis, accent/trim color** (`HeroAppearance.TRIM_COLORS`, 6 named options — gold/silver/copper/crimson/verdant/amethyst), is now independently player-chosen rather than always fixed by the class palette with no choice at all — tunic/leg colors still communicate class identity, only the accent trim is free, matching dna.md's resolved "cosmetics layer on top" pillar (customization that doesn't touch what the class itself signals).
+- **Illustrated character building blocks (scaffolding)** — 🚧 Partial — `src/rendering/illustrated_character_sprite.gd` (`IllustratedCharacterSprite`) is the character-rig counterpart to `IllustratedAnimalSprite` (same registry/chroma-key/`SpriteSheetSlicer` shape that already replaced the animal roster's procedural sprites with real horse/deer/boar/sheep art), wired into `CharacterView.apply_appearance` for the three single-tint paperdoll parts (body/legs/arms — each falls back to its existing procedural texture automatically via `_apply_paperdoll_part` until real art is registered, so this is a no-op today, not a visual change). No part art is registered yet (`_PARTS` is empty) — `docs/concept/character_art_brief.md` is a practical brief for generating it with AI: draw parts NEUTRAL (grey/white, no baked-in color) so `modulate` can tint them per class/skin-tone at runtime, the same magenta chroma-key convention `sheep.png` already established, and exactly how to register a finished sheet once it exists. The HEAD is deliberately excluded from this registry (see the brief) — a head mixes skin/hair/eye color in one drawing, which a single flat tint can't separate; doing that properly needs layered art (a base head + separate recolorable hair/beard overlays), scoped but not built.
 - **Character sprite engine** — ✅ Done (basic) — `HeroAppearance` grew from 3 axes to 5 with real pools, an explicit-choice constructor (`appearance_from_choices`, index-wrapping in both directions so a creator can cycle freely) and a `choices_from_appearance` inverse so a rolled hero is resumable in the creator. `ProceduralCharacterSprite`'s hero head went from "a circle with two dots" to a real face: 6 hair silhouettes (short/swept/long/ponytail/topknot/bald), 4 beard styles (none/stubble/goatee/full), brows, colored irises with pupil + catchlight, and a mouth; the tunic gained chamfered shoulders, a collar, and a belt with a buckle. Outfit palettes cover all 7 player classes plus the 6 villager occupations. Still a paper-doll rig of separate part sprites in-world (`CharacterView`) with no per-facing or walk-frame art — the parts are just much better drawn now.
 - **Main-menu centering fix** — ✅ Done — `MainMenu._ready()` centered itself with `set_anchors_preset(PRESET_CENTER)` alone, which (per Godot 4's actual anchor semantics — it recomputes offsets to *preserve* the control's current on-screen rect under the new anchor fraction, not to center a rect of its size) left the panel pinned to the CanvasLayer's top-left corner. Fixed by explicitly setting the four `offset_*` to a symmetric half-`PANEL_SIZE` box after the preset call, matching the pattern every other centered popup in this codebase already used (`SettingsOverlay`/`InventoryWindow`/`DevConsole`, wired in `world.gd`). Pinned by `test_panel_is_actually_centered_not_pinned_to_a_corner`.
 - **4x camera zoom** — ✅ Done — `Camera2D.zoom` bumped from the original `3x` to `4x` (`Player.CAMERA_ZOOM`, applied in `_ready()` rather than left as a bare `.tscn` number) so pixel art reads clearly across the full 1280x720 window. HUD is unaffected (built screen-space under the `_ui` `CanvasLayer`, independent of world-camera zoom). Nearest-neighbour texture filtering was already project-wide correct, so no filtering change was needed.
+- **Universal hover name/action tooltip** — ✅ Done — reported: "fruits on the ground should only show labels on hover .. and also EVERY entity (worm, fly, fruit, stone, boulder, pebble, grass blade, carrot, potato, tree, fruit on tree) should show its name on hover ... also all entities with interactions should show the action name and the hotkey ... if multiple available show all". `HoverTargetFinder` (`src/rendering/hover_target_finder.gd`, group `GROUP_NAME := "hoverable"`) is a pure nearest-candidate-within-radius picker; `World._update_hover_tooltip` scans the group every frame, building each candidate's name/actions from two duck-typed methods, `get_display_name()` and `get_hover_actions() -> Array[{verb, action}]`, and renders the winner as a multi-line floating label (name, then one `"Verb (Key)"` line per action, key read live via `OS.get_keycode_string(Keybindings.keycode_for(...))` so a rebind is reflected immediately — the same pattern the pre-existing proximity `_interaction_prompt` already used for NPCs/liftable stones). Wired into every hoverable node: `CreatureMarker`/`FishMarker`/`PiscivoreBirdMarker`/`AmbientFlyerMarker` (name-only, pre-existing), `DroppedItem` (name + Pick Up — this is also what makes ground items name-on-hover-only: the old always-on floating label over every dropped item, Path-of-Exile style, is gone), `LiftableStone` (Wentworth-class name + Pick Up, plus Kick when `Kick.is_kickable` says the stone is light enough), `SmashableStone` ("Boulder" + Smash), `MinableOre` (the actual yielded item's own name via `ItemCatalog`, e.g. "Iron Ore"/"Coal", not a naive "<type> Ore" guess + Mine), `ChoppableTree` ("Tree"/"Fallen Tree" + Chop). Grass is the one exception, tile- rather than Node-based (see Long Grass below): `EarthChunkManager.tall_grass_growth_at(pixel_position)` is a new read-only accessor `World` falls back to only when nothing in the group claimed the cursor, showing "Tall Grass" name-only for an immature patch and adding Harvest once mature (`growth >= 1.0`). Explicitly out of scope for this pass: worms (`earthworm_patch.gd` has no player interaction yet), carrot/potato as world entities (only AI-art prompts exist so far, see `docs/art/ai_sprite_prompts.md`), and fruit still on a tree (passive-only — only the fallen `DroppedItem` version is a real, separately-hoverable object). `World._update_hover_tooltip`/`_hover_tooltip_text` are untested UI glue, matching this file's pre-existing boundary for `world.gd` (see Persistence section below) — every piece of actual logic underneath (the finder's nearest-candidate pick, each entity's name/action list, the grass growth accessor) is unit-tested.
 
 ---
 
@@ -1807,15 +2502,20 @@ No farming system is wired into live gameplay, but its plot and breeding math no
 
 ## Reality check
 
-This design corpus — 32 concept docs plus a roadmap, 481 catalogued
-mechanisms — describes a multi-year, full-team-scale MMORPG: procedurally
-simulated planetary ecology, LLM-driven autonomous NPCs with memory and daily
-planning, deep genetics/evolution shared across animals/plants/players/pets,
-a player-authorable spellcrafting DSL, deterministic blueprint-based
-crafting, a dual-currency economy, factions, housing, world bosses, PvP,
-festivals, farming, fishing, cooking, marriage and child-rearing, permadeath
-with reincarnation across technological eras, and eventual multi-planet space
-travel — before multiplayer is even considered.
+This design corpus — 49 concept docs plus a roadmap and, since 2026-08-23, a
+10-doc `docs/emergence/*.md` substrate spec, several hundred catalogued
+mechanisms in total (the exact figure is stale, see this doc's intro) —
+describes a multi-year, full-team-scale MMORPG: procedurally simulated
+planetary ecology, LLM-driven autonomous NPCs with memory and daily planning,
+deep genetics/evolution shared across animals/plants/players/pets, a
+player-authorable spellcrafting DSL, deterministic blueprint-based crafting,
+a dual-currency economy, factions, housing, world bosses, PvP, festivals,
+farming, fishing, cooking, marriage and child-rearing, permadeath with
+reincarnation across technological eras, eventual multi-planet space travel,
+and — the newest and most structurally ambitious layer — an event-sourced
+causal substrate meant to make society, history, economy, settlements, and
+dungeon/boss content emerge from simulated cause and effect rather than
+hand-placed content, all before multiplayer is even considered.
 
 A solo/part-time developer has, to date, built a real, tested foundation:
 a genuine real-Earth world simulation (bilinear elevation sampling, real
@@ -2036,6 +2736,65 @@ literally honored by the generator, only the requested bolder STYLE was)
 `ATLAS_VERSION` bumped again so the stale-content cache isn't reused.
 desert, mountain, tundra, and rainforest are still on their original
 sheets (not yet regenerated with this bolder-shape lesson applied).
+
+✅ **Directional-blend and corner-carve border tiles now composite real
+illustrated pixels, not a flat-color-plus-speckle stand-in.** Reported live
+once illustrated ground tiles landed: "the blend tiles are the culprit" --
+an illustrated grassland tile sitting directly against a still-flat-
+procedural-looking border read as visibly inconsistent, even though the two
+PLAIN tiles on either side matched. `TerrainRenderer._blend_image`/
+`_corner_image` now fetch each side's real frame
+(`_biome_frame_image`, illustrated-art-gated same as plain tiles) and hand
+those actual pixels into `ProceduralTerrainSprite.
+generate_multi_directional_blend_image_from`/`generate_corner_image_from`
+(new `_from` variants, size-agnostic, no `variant_seed` of their own at the
+time since the mask itself was purely positional) instead of synthesizing
+a flat `BASE_COLORS` fill. `_normalized_for_compositing` Lanczos-resizes
+either side up/down to match when they mismatch (every land biome is
+illustrated at 32px today, but corners always involve ocean, still
+procedural at `ProceduralTerrainSprite.SIZE`=64px).
+
+✅ **Blend boundaries now curve, and differ per baked variant, instead of
+running as one straight line repeated identically across every tile.**
+Reported live: "improve the blended tiles so they include curves and
+procedural blends looking more natural and individual per tile rather than
+straight half forest half grass tile." Root cause: the blend mask's bias
+(`t`, how far toward the far biome a pixel leans) was purely a function of
+position along ONE axis (`y` for a north/south border), with the only
+per-pixel variation coming from a small repeating 4x4 Bayer dither pattern
+-- every tile sharing the same direction mask showed the textbook-identical
+transition shape, since nothing in the mask depended on `variant_seed` at
+all. Fixed by `ProceduralTerrainSprite.blend_edge_wobble`: a smooth, seeded
+noise curve (`PixelNoise.smooth`, the same value-noise primitive `_paint_
+dune_ripples`-adjacent code already had available) added to the transition
+itself, salted per direction so a tile blending on two edges at once (a
+corner cell bordering the same neighbor on two sides) doesn't wobble both
+in lockstep. Enveloped (`blend_wobble_envelope`, a triangular window that's
+*exactly* zero at and beyond `_BLEND_BAND_START`/`_BLEND_BAND_END`, not
+just numerically small there) so however large the wobble amplitude is, it
+can only ever act strictly inside the existing sharpening band and
+provably cannot perturb a pixel the un-wobbled design already resolves to
+pure near/far -- the pre-existing outer-quarter-purity and far-fraction-
+monotonic-growth guarantees hold unconditionally by construction, confirmed
+by every one of those original tests passing unchanged. Visually confirmed
+via a real rendered dump: three variants of the same forest/grassland
+north border now show three genuinely different wavy boundary shapes, and
+a two-direction (north+east) corner shows both edges curving independently
+rather than as a rigid right-angle wedge. `TerrainRenderer.BLEND_VARIANTS`
+raised 3 → 7 (requested live: "make it 7 variants") now that each variant
+has a genuinely different shape to show, not just re-speckled pixels
+around one identical line -- at 3, a long biome border would still have
+visibly repeated its transition shape every third tile. The naive
+per-pixel implementation (recomputing the noise sample inside the double
+pixel loop) measured as making a real atlas rebuild at the new variant
+count not finish in several minutes; the wobble curve only ever depends on
+the coordinate running ALONG an edge, never the one across it, so it's
+precomputed once per direction (one `size`-length array) before the pixel
+loop instead of up to `size` times over -- confirmed back down to
+in-line with the increased variant count's own inherent cost (real build:
+~137s, in line with roughly 2.3x more blend/corner images to generate, not
+a wobble-specific slowdown). `ATLAS_VERSION` bumped for both changes at
+once.
 
 reaching 0 HP now actually kills and respawns the player instead of silently
 doing nothing; and three of the 36 pure-logic mechanics built in a large

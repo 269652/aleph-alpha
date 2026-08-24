@@ -14,6 +14,7 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
+const VillageMarket = preload("res://src/world/village_market.gd")
 const ProceduralLandmarkSprite = preload("res://src/rendering/procedural_landmark_sprite.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
@@ -98,6 +99,24 @@ func spawn_village(
 		chunk_coord, chunk_origin_tiles, chunk_size, tile_size
 	)
 
+	# One VillageMarket per settlement, shared by every villager built below
+	# (see NpcMarker.setup_economy) -- docs/concept/npc.md "Needs and the
+	# local production economy": a producer's real surplus must be visible
+	# to every consumer of the SAME village, not siloed per NPC. Freshly
+	# created on every spawn_village call, same as the rest of this
+	# settlement's state -- a chunk reload regenerates an empty market, the
+	# same known "regenerates identically on revisit, no persistence"
+	# simplification trees/creatures already accept (see docs/progress.md).
+	var market := VillageMarket.new()
+
+	# Tells the world this settlement exists, duck-typed exactly like
+	# stamp_structure_at_global above -- world == null or lacking the method
+	# is skipped rather than crashing, the same fail-open shape the rest of
+	# this function already uses. EarthChunkManager owns deciding whether this
+	# is genuinely a FIRST founding (a chunk reload must not re-record one).
+	if world != null and world.has_method("record_settlement_founded_if_new"):
+		world.record_settlement_founded_if_new(chunk_coord, settlement.npcs)
+
 	var spawned: Array[Node2D] = []
 	var house_positions: Array = settlement.house_positions
 	var door_positions: Array[Vector2] = []
@@ -110,7 +129,7 @@ func spawn_village(
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
 	var npcs: Array = settlement.npcs
 	for i in npcs.size():
-		spawned.append(_build_npc(settlement, i, door_positions[i], tile_size, parent, world))
+		spawned.append(_build_npc(settlement, i, door_positions[i], tile_size, parent, world, market))
 		# A merchant gets a second, PERSONAL trading stand at their own house,
 		# on top of the one shared village-square stall -- otherwise every
 		# merchant in the village routes to the same single stall, which reads
@@ -252,7 +271,9 @@ const _WORKSPOT_OFFSET_TILES := 4.0
 ## animation) exactly like the player and wild creatures -- previously
 ## nothing passed it through, so a villager's walk cycle never left WALKING
 ## even while crossing water.
-func _build_npc(settlement: Dictionary, index: int, home_position: Vector2, tile_size: int, parent: Node2D, world = null) -> NpcMarker:
+func _build_npc(
+	settlement: Dictionary, index: int, home_position: Vector2, tile_size: int, parent: Node2D, world = null, market = null
+) -> NpcMarker:
 	var identity = settlement.npcs[index]
 
 	var marker := NpcMarker.new()
@@ -263,6 +284,8 @@ func _build_npc(settlement: Dictionary, index: int, home_position: Vector2, tile
 	marker.position = home_position
 	if world != null:
 		marker.setup(world, tile_size)
+	if market != null:
+		marker.setup_economy(market)
 
 	# Villagers use the SAME CharacterView the player does, rather than a
 	# hand-assembled torso-plus-head. The old version had neither legs nor

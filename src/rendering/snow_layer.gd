@@ -81,12 +81,52 @@ func build_band_image(band: int) -> Image:
 	return image
 
 
+## How far a tile's own snow onset can lead or lag the field's overall
+## coverage, so a chunk fills in as a visible spread rather than every tile
+## crossing the same threshold in the same instant.
+##
+## Every tile used to read the exact same `depth` (see EarthChunkManager's
+## single shared `_snow_depth`), so the moment that one number ticked past a
+## band boundary the WHOLE loaded field flipped together -- reported as "snow
+## covers a whole chunk instantly instead of spreading progressively". This is
+## the same seeded-per-cell-jitter idea TallGrass/FlowerPatch already use so a
+## uniform process doesn't read as synchronized (see PixelNoise's own doc
+## comment: this project has hit that "same value everywhere" clustering bug
+## five times already), just applied to WHEN a tile catches on rather than
+## WHERE something is placed.
+##
+## Bounded well under one full depth band (0.25 at DEPTH_BANDS=4): wide enough
+## that a partial snowfall genuinely mixes bare and covered tiles instead of
+## everyone crossing together, narrow enough that full cover (depth 1.0) still
+## reaches the deepest band even for the most-lagging tile, and bare ground
+## (depth 0.0) still shows nothing even for the most-leading one.
+const ONSET_VARIANCE := 0.18
+const _ONSET_SALT := 5303
+
+
+## This tile's own onset offset, in [-ONSET_VARIANCE, ONSET_VARIANCE] --
+## seeded from its GLOBAL tile coordinates (not chunk-local, so the pattern
+## doesn't repeat or seam at chunk boundaries) via PixelNoise rather than
+## Godot's own `hash()`, which correlates neighbouring inputs (see
+## PixelNoise's doc comment).
+func onset_offset_for(global_x: int, global_y: int) -> float:
+	return PixelNoise.range_value(_ONSET_SALT, global_x, global_y, -ONSET_VARIANCE, ONSET_VARIANCE)
+
+
 ## Which band a tile shows, or -1 for bare ground.
 ##
-## `depth` is how much snow is lying (see Snowfall) and `tread` how much has
-## been displaced by walking (see SnowTrail).
-func band_for(depth: float, tread: float) -> int:
-	var lying := clampf(depth, 0.0, 1.0)
+## `depth` is how much snow is lying overall (see Snowfall), `tread` how much
+## has been displaced by walking (see SnowTrail), and `onset_offset` this
+## tile's own lead/lag on the field's coverage (see onset_offset_for) -- it is
+## what turns one shared depth into a chunk that fills in tile by tile rather
+## than snapping everywhere at once.
+func band_for(depth: float, tread: float, onset_offset: float = 0.0) -> int:
+	# A genuinely bare field (no snow has fallen ANYWHERE) stays bare even for
+	# the most-leading tile -- onset is a lead/lag on real snow, not a way to
+	# conjure some out of nothing.
+	if depth <= 0.0:
+		return -1
+	var lying := clampf(depth + onset_offset, 0.0, 1.0)
 	if lying <= 0.0:
 		return -1
 	# Depth maps onto the bands, then treading knocks it down.

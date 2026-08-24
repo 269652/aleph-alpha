@@ -322,3 +322,107 @@ func test_all_three_species_have_dedicated_walk_idle_and_eat_art():
 				sprite.generate_textures(species, action).size(), 0,
 				"%s should have real %s art" % [species, action]
 			)
+
+
+# -- sheep: a single 8x2 sheet on a magenta (chroma-key) background ---------
+
+func test_sheep_is_a_registered_illustrated_species():
+	assert_true(sprite.has_species("sheep"))
+
+
+func test_sheep_has_walk_and_eat_art_but_no_dedicated_idle():
+	assert_true(sprite.has_action("sheep", "walk"))
+	assert_true(sprite.has_action("sheep", "eat"))
+	# No idle_bands registered -- falls back to the eat cycle's own frame 0
+	# (see has_action's fallback-chain doc comment).
+	assert_true(sprite.has_action("sheep", "idle"))
+	assert_eq(sprite.generate_textures("sheep", "idle").size(), 1)
+
+
+func test_sheep_walk_and_eat_are_each_a_full_eight_frame_cycle():
+	assert_eq(sprite.generate_textures("sheep", "walk").size(), 8)
+	assert_eq(sprite.generate_textures("sheep", "eat").size(), 8)
+
+
+## The whole point of chroma-keying: the magenta ground must not survive into
+## the sliced frame as either opaque magenta pixels or a magenta-tinted
+## fringe -- corners of the normalized canvas (always background, whichever
+## species) must read fully transparent.
+func test_sheep_frames_have_no_leftover_magenta_background():
+	var frame: Image = sprite.generate_textures("sheep", "walk")[0].get_image()
+	assert_almost_eq(frame.get_pixel(0, 0).a, 0.0, 0.01, "top-left corner should be transparent, not magenta")
+	assert_almost_eq(
+		frame.get_pixel(frame.get_width() - 1, 0).a, 0.0, 0.01, "top-right corner should be transparent"
+	)
+	# No pixel anywhere in the frame should still read as the chroma-key
+	# color -- a leftover fringe would show up as scattered magenta pixels.
+	var magenta_survivors := 0
+	for y in frame.get_height():
+		for x in frame.get_width():
+			var c := frame.get_pixel(x, y)
+			if c.a > 0.5 and absf(c.r - 0.95) <= 0.05 and absf(c.g - 0.02) <= 0.05 and absf(c.b - 0.96) <= 0.05:
+				magenta_survivors += 1
+	assert_eq(magenta_survivors, 0, "no opaque magenta pixel should survive chroma-keying")
+
+
+func test_sheep_frame_has_real_wool_colored_content():
+	var frame: Image = sprite.generate_textures("sheep", "walk")[0].get_image()
+	var found_content := false
+	for y in frame.get_height():
+		for x in frame.get_width():
+			if frame.get_pixel(x, y).a > 0.5:
+				found_content = true
+				break
+		if found_content:
+			break
+	assert_true(found_content, "the sheep drawing itself must survive chroma-keying, not just its background")
+
+
+func test_sheep_actions_render_at_the_same_apparent_size():
+	var walk := _content_width(sprite.generate_textures("sheep", "walk")[0]) * sprite.marker_scale("sheep", "walk")
+	var eat := _content_width(sprite.generate_textures("sheep", "eat")[0]) * sprite.marker_scale("sheep", "eat")
+	assert_almost_eq(eat, walk, walk * 0.05)
+
+
+# -- fallback actions reuse the cache, they don't re-slice (perf) -----------
+#
+# Reported live symptom: the game got stuck on a "Loading..." screen. Every
+# fallback action (swim/attack -> walk, drink -> idle, idle-without-its-own-
+# art -> eat/walk frame 0) used to call _load_frames directly, bypassing
+# generate_textures' own cache -- so the FIRST time each fallback action was
+# ever requested for a species, it re-sliced the source sheet from scratch
+# even though an identical slice was already cached under a different
+## action key. A world's worth of creatures all needing swim/idle/etc. for
+# the first time around the same moment turned into a real multi-second
+# stall, indistinguishable from the game having hung. These tests prove a
+# fallback action reuses the exact same ImageTexture objects (reference
+# equality, not just equal pixels) as its target action -- the only way
+# that's true is if no re-slice happened.
+
+func test_swim_fallback_reuses_the_exact_walk_textures_not_a_fresh_reslice():
+	var walk := sprite.generate_textures("horse", "walk")
+	var swim := sprite.generate_textures("horse", "swim")
+	assert_eq(swim, walk)
+	assert_eq(swim[0], walk[0], "must be the SAME ImageTexture instance, not a re-sliced copy")
+
+
+func test_attack_fallback_reuses_the_exact_walk_textures():
+	var walk := sprite.generate_textures("boar", "walk")
+	var attack := sprite.generate_textures("boar", "attack")
+	assert_eq(attack, walk)
+
+
+func test_drink_fallback_reuses_the_exact_idle_textures():
+	var idle := sprite.generate_textures("deer", "idle")
+	var drink := sprite.generate_textures("deer", "drink")
+	assert_eq(drink, idle)
+
+
+## Repeated calls to a fallback action itself must also stay O(1) cache
+## lookups (same objects every time), not just the first call reusing the
+## target action's cache.
+func test_repeated_calls_to_a_fallback_action_stay_the_same_cached_objects():
+	var first := sprite.generate_textures("deer", "swim")
+	var second := sprite.generate_textures("deer", "swim")
+	assert_eq(first, second)
+	assert_eq(first[0], second[0])

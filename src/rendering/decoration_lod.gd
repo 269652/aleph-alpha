@@ -56,3 +56,27 @@ static func keeps_decoration(
 	chunk_coord: Vector2i, center_chunk: Vector2i, radius: int
 ) -> bool:
 	return maxi(absi(chunk_coord.x - center_chunk.x), absi(chunk_coord.y - center_chunk.y)) <= radius
+
+
+## Whether `tile` is close enough to the player's own TILE to be worth
+## drawing -- a tighter, rectangular, sub-chunk-granularity cutoff than
+## keeps_decoration's own chunk-level check, for decoration cheap enough to
+## filter per-tile (see EarthChunkManager's grass sync; reported live:
+## "optimize the grass blade rendering so it only draws what the player
+## currently sees +2 tiles of buffer in every direction... to improve
+## framerate"). Layered ON TOP of, never instead of, the coarser chunk-level
+## gate -- a chunk only reaches this check at all once keeps_decoration has
+## already let it through.
+##
+## Rectangular (independent per-axis bounds), not circular: matches the
+## camera's own rectangular view, the same philosophy keeps_decoration's own
+## Chebyshev-not-Euclidean chunk check already uses. half_span_tiles is
+## rounded UP before the buffer is added, so a fractional span (the real
+## camera framing routinely isn't a whole number of tiles) never drops a
+## tile the camera can genuinely still see.
+static func keeps_decoration_tile(
+	tile: Vector2i, player_tile: Vector2i, half_span_tiles: Vector2, buffer_tiles: int
+) -> bool:
+	var half_x := ceili(half_span_tiles.x) + buffer_tiles
+	var half_y := ceili(half_span_tiles.y) + buffer_tiles
+	return absi(tile.x - player_tile.x) <= half_x and absi(tile.y - player_tile.y) <= half_y

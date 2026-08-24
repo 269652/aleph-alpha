@@ -67,3 +67,11 @@ func test_every_occupation_appears_across_enough_samples():
 		seen[NpcIdentity.new(seed_value).occupation] = true
 	for occupation in NpcIdentity.OCCUPATIONS:
 		assert_true(seen.has(occupation), "occupation never appeared: %s" % occupation)
+
+
+## docs/concept/npc.md "Needs and the local production economy": hunter
+## (a producer, distinct from farmer) and nurse (a new non-producer
+## village-care role) both join the occupation roster this pass.
+func test_hunter_and_nurse_are_valid_occupations():
+	assert_true(NpcIdentity.OCCUPATIONS.has("hunter"))
+	assert_true(NpcIdentity.OCCUPATIONS.has("nurse"))

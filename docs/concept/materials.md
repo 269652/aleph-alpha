@@ -49,7 +49,10 @@ function with a red-first test):
 - **Flammability** — ignites and sustains fire; couples to the surface/
   reaction system below.
 - **Thermal/electrical conductivity** — conducts heat and shock (metal blade
-  in a fire; shock through a wet or metal object).
+  in a fire; shock through a wet or metal object). See
+  [electromagnetism.md](electromagnetism.md) for the real mechanism this
+  scalar drives — wire resistance, circuit current, overload burnout — once
+  a material carries current instead of just a torch's heat.
 - **Melting/damage thresholds** — the stress/temperature at which it deforms
   or fails.
 - **Decay/weathering rate** — how fast it degrades untended (organics rot;

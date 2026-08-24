@@ -43,7 +43,7 @@ const NECK_LOW := "low"
 ## Every species with a hand-tuned profile. Anything else falls back to the
 ## generic herbivore build (see profile_for).
 const SPECIES := [
-	"herbivore", "deer", "horse", "goat", "camel", "reindeer",
+	"herbivore", "deer", "horse", "goat", "camel", "reindeer", "sheep",
 	"boar", "tapir", "bear",
 	"wolf", "lynx", "jaguar", "predator",
 	"mouse",
@@ -167,6 +167,23 @@ const _PROFILES := {
 		"leg_length": 0.24, "leg_thickness": 0.05,
 		"tail": TAIL_STUB, "tail_length": 0.05,
 		"headgear": HEADGEAR_HORNS, "has_mane": false,
+	},
+	# Rendered with real illustrated art (see IllustratedAnimalSprite), not
+	# this procedural body plan -- these fields exist only so profile_for
+	# never falls through to the generic herbivore for it, and so
+	# world_scale (the one field IllustratedAnimalSprite.marker_scale
+	# actually reads) is set deliberately rather than defaulting to 1.0.
+	# Compact and stocky like a goat, but hornless and a touch smaller/
+	# rounder -- real sheep are shorter-legged and stockier than goats.
+	"sheep": {
+		"barrel_squareness": 0.55,
+		"world_scale": 0.8,
+		"body_length": 0.48, "body_height": 0.28, "body_y": 0.50, "shoulder_hump": 0.02,
+		"neck_length": 0.10, "neck_thickness": 0.12, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.14, "head_height": 0.12, "muzzle": 0.4, "ear_size": 0.26,
+		"leg_length": 0.18, "leg_thickness": 0.055,
+		"tail": TAIL_STUB, "tail_length": 0.05,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 	# Defined by the hump and a long neck on long legs.
 	"camel": {

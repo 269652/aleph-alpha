@@ -187,6 +187,17 @@ reindeer/tapir/goat did, with no new mechanism required:
   `EcosystemSimulation`/`HerbivorePopulationModel` logistic growth as every
   other herbivore — no new population mechanism, only roster variety. Both
   are herd/calm-temperament grazers.
+- **Update, grass seed dispersal pass:** mice DO now carry one small,
+  genuinely new mechanism on top of the above — real scatter-hoarding
+  rodents cache seed, and that behaviour has nothing to do with the generic
+  "Forager" diet label mice happen to share the table with (see
+  `concept/long_grass.md`'s "Reproduction" section and
+  `EarthChunkManager._step_grass_seed_caching`, gated to `species ==
+  "mouse"` specifically). This narrows, rather than contradicts, "no new
+  mechanism required" above: population growth/reproduction is still the
+  exact same aggregate machinery every herbivore uses; only this one
+  ecological side-behaviour (which plant species end up where) is
+  mouse-specific.
 
 ### A new aerial tier: ambient flyers and one predator
 

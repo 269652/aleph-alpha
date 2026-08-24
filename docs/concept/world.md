@@ -3,12 +3,22 @@
 The planet is not a painted backdrop — it's a simulation the player walks
 around inside.
 
-- **Terrain & climate**: generated from a heightmap + hydraulic erosion pass
-  (rivers/lakes carve themselves out during generation, not hand-placed) and
-  Köppen-style climate banding by latitude, elevation, and distance from
-  water. This happens *once* at world-gen time — we are not running a live
+- **Terrain**: generated from a heightmap + hydraulic erosion pass
+  (rivers/lakes carve themselves out during generation, not hand-placed).
+  This happens *once* at world-gen time — we are not running a live
   plate-tectonics simulation. "Realistic" means the *output* looks and
-  behaves like Earth, not that we simulate continental drift.
+  behaves like Earth, not that we simulate continental drift. Elevation
+  itself is real data, but today only feeds a biome threshold — nothing
+  currently stops the player walking straight up a cliff.
+  [terrain_relief.md](terrain_relief.md) is what turns that same elevation
+  data into real slope: passability, visible hillshading, and mountain ore
+  exposure, all from one shared field.
+- **Climate**: Köppen-style biome banding by latitude, elevation, and
+  distance from water was originally a one-shot worldgen classification,
+  same as terrain above. [climate_dynamics.md](climate_dynamics.md)
+  replaces that snapshot with a live pressure/wind/ocean-current/water-cycle
+  simulation — biomes are now a continuous *read* of that simulation, able
+  to genuinely transition over time, not a value frozen at world-gen.
 - **Day/night and seasons**: a global clock drives sunlight per-tile (as a
   function of latitude, time of day, and season), which feeds directly into
   the ecosystem simulation below, NPC schedules, and nocturnal/diurnal
@@ -35,6 +45,30 @@ around inside.
   density field: see [flora.md](flora.md) for how individual trees carry
   DNA and how animal foraging/seed dispersal drives real plant evolution
   over time.
+- **Land health: overharvesting leaves a lasting mark, not just a slower
+  respawn.** Today a cell's carrying capacity (the ceiling
+  `vegetation_growth_model.gd`'s density grows toward) is purely a function
+  of biome and CURRENT weather — strip a plot bare and it fully regrows the
+  moment weather allows, indistinguishable from a plot nobody ever touched.
+  That undersells the "a drought or overhunting measurably changes where
+  you find them" claim two paragraphs up: overhunting already thins
+  population, but overharvesting the PLANTS underneath it leaves no trace
+  at all once pressure stops. Real land does: sustained harvesting faster
+  than regrowth depletes soil organic matter and structure, not just
+  standing biomass, and that recovers on a much longer real timescale
+  (years, not one growing season) than the biomass itself does. A new
+  persistent per-cell (or per-chunk-aggregate, for performance — same
+  fidelity tradeoff the density field itself already makes) **land health**
+  value multiplies the existing weather-driven ceiling down further:
+  depletes when a cell is harvested faster than it can regrow, recovers
+  slowly if left fallow, tested named constants for both rates grounded
+  against real soil-recovery timescales rather than eyeballed. This is
+  what makes deforestation/overharvesting a genuine, lasting choice rather
+  than a respawn timer, and it feeds directly into
+  [npc.md](npc.md#needs-and-the-local-production-economy)'s farmer/hunter
+  yield, which already reads these same density/capacity numbers — a
+  village near land the player stripped bare goes hungry for real,
+  measurable years, not until the next rain.
 - **Globe topology**: the world wraps — walk far enough in any direction and
   you return to your start. Implementation note: true spherical tiling
   (geodesic/cube-sphere) has serious complexity costs (pole singularities,

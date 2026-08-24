@@ -5,6 +5,7 @@ const ProceduralStoneSprite = preload("res://src/rendering/procedural_stone_spri
 const StonePlacement = preload("res://src/world/stone_placement.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const OrePlacement = preload("res://src/world/ore_placement.gd")
+const MountainOrePlacement = preload("res://src/world/mountain_ore_placement.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
 
@@ -326,13 +327,69 @@ func test_a_real_boulder_draws_from_the_registered_illustrated_sheet():
 	assert_eq(boulder_texture, expected)
 
 
-## Cobbles have no sheet at all, by design (see IllustratedStoneSprite's own
-## class doc comment) -- the one class that still genuinely falls all the way
-## through to the procedural generator.
-func test_a_real_cobble_still_falls_back_to_procedural():
+## Cobbles now ALSO draw from a real illustrated sheet (assets/sprites/
+## cobbles.png) -- stale as of this test's original writing, when cobbles
+## were still excluded by design (see IllustratedStoneSprite's own class doc
+## comment for why that changed). Kept as a real-art proof, same shape as
+## the pebble/boulder equivalents above, rather than deleted outright.
+func test_a_real_cobble_draws_from_the_registered_illustrated_sheet():
 	var cobble_texture := renderer._texture_for(555, StoneSize.CLASS_COBBLE)
-	assert_not_null(cobble_texture)
-	assert_null(renderer._illustrated_stones.frame_for(StoneSize.CLASS_COBBLE, 555))
+	var expected: ImageTexture = renderer._illustrated_stones.frame_for(StoneSize.CLASS_COBBLE, 555)
+	assert_not_null(expected, "the real cobble sheet should have produced a frame")
+	assert_eq(cobble_texture, expected)
+
+
+## Ore is always drawn at boulder scale (see _attach_body_parts' diameter_cm
+## ==0 branch), so it should ask illustrated art for CLASS_BOULDER
+## specifically and composite ore flecks onto that frame rather than the
+## flat procedural ellipse -- same has_variants()-gated fallback convention
+## as loose stone's own _texture_for.
+class _FakeIllustratedStonesForOre:
+	var boulder_registered := false
+	var canned_base: Image
+
+	func has_variants(stone_class: String) -> bool:
+		return boulder_registered and stone_class == StoneSize.CLASS_BOULDER
+
+	func frame_for(_stone_class: String, _seed_value: int) -> ImageTexture:
+		return ImageTexture.create_from_image(canned_base)
+
+
+func _opaque_base_image(size: int = 8) -> Image:
+	var image := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0.5, 0.5, 0.5, 1.0))
+	return image
+
+
+func test_ore_texture_for_uses_illustrated_boulder_base_when_registered():
+	var fake := _FakeIllustratedStonesForOre.new()
+	fake.boulder_registered = true
+	fake.canned_base = _opaque_base_image()
+	renderer._illustrated_stones = fake
+	var expected := renderer._ore_sprite_generator.generate_texture_from_base(fake.canned_base, "iron", 42)
+	var texture := renderer._ore_texture_for("iron", 42)
+	assert_eq(texture.get_image().get_data(), expected.get_image().get_data())
+
+
+func test_ore_texture_for_falls_back_to_procedural_when_boulder_class_has_no_sheet():
+	var fake := _FakeIllustratedStonesForOre.new()
+	fake.boulder_registered = false
+	renderer._illustrated_stones = fake
+	var expected := renderer._ore_sprite_generator.generate_texture("iron", 42)
+	var texture := renderer._ore_texture_for("iron", 42)
+	assert_eq(texture.get_image().get_data(), expected.get_image().get_data())
+
+
+## Real end-to-end integration, no fake: a fresh renderer's OWN
+## IllustratedStoneSprite instance has real boulder art registered, so a
+## real ore node should draw from that illustrated base instead of the flat
+## procedural ellipse -- the same live-art proof loose stone already has.
+func test_a_real_ore_node_composites_flecks_onto_the_illustrated_boulder_frame():
+	var base: ImageTexture = renderer._illustrated_stones.frame_for(StoneSize.CLASS_BOULDER, 555)
+	assert_not_null(base, "the real boulder sheet should have produced a frame")
+	var expected := renderer._ore_sprite_generator.generate_texture_from_base(base.get_image(), "copper", 555)
+	var texture := renderer._ore_texture_for("copper", 555)
+	assert_eq(texture.get_image().get_data(), expected.get_image().get_data())
 
 
 ## Public wrapper around the existing _build_liftable_node, for callers
@@ -370,3 +427,92 @@ func test_texture_for_does_not_collide_across_stone_classes_sharing_a_seed():
 	)
 	assert_eq(boulder_texture, renderer._illustrated_stones.frame_for(StoneSize.CLASS_BOULDER, shared_seed))
 	assert_eq(pebble_texture, renderer._illustrated_stones.frame_for(StoneSize.CLASS_PEBBLE, shared_seed))
+
+
+# -- mountain ore veins: slope-gated placement (see docs/concept/terrain_relief.md) -
+
+## Duck-typed slope source, mirroring _FakeIllustratedStones' own fake-
+## injection shape -- real EarthChunkManager has a real slope_at_global
+## method; this stands in for it in a unit test with no real elevation
+## data or chunk-manager scene setup needed.
+class _FakeSlopeLookup:
+	var slope := 0.0
+
+	func slope_at_global(_global_x: int, _global_y: int) -> float:
+		return slope
+
+
+func _mountain_chunk(size: int = 16) -> Chunk:
+	var chunk := Chunk.new()
+	chunk.width = size
+	chunk.height = size
+	chunk.elevation = PackedFloat32Array()
+	chunk.elevation.resize(size * size)
+	chunk.biome = PackedStringArray()
+	for i in size * size:
+		chunk.biome.append("mountain")
+	return chunk
+
+
+func test_spawn_mountain_veins_spawns_nothing_on_a_gentle_slope():
+	var chunk := _mountain_chunk()
+	var fake := _FakeSlopeLookup.new()
+	fake.slope = MountainOrePlacement.MIN_SLOPE_FOR_VEINS_DEG - 1.0
+	var spawned := renderer.spawn_mountain_veins(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, fake)
+	assert_eq(spawned.size(), 0)
+
+
+func test_spawn_mountain_veins_spawns_something_on_a_very_steep_slope():
+	var chunk := _mountain_chunk()
+	var fake := _FakeSlopeLookup.new()
+	fake.slope = MountainOrePlacement.MAX_SLOPE_FOR_SCALING_DEG
+	var spawned := renderer.spawn_mountain_veins(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, fake)
+	assert_gt(spawned.size(), 0)
+
+
+func test_spawn_mountain_veins_ignores_non_mountain_cells():
+	var chunk := _make_grassland_chunk()
+	var fake := _FakeSlopeLookup.new()
+	fake.slope = MountainOrePlacement.MAX_SLOPE_FOR_SCALING_DEG
+	var spawned := renderer.spawn_mountain_veins(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, fake)
+	assert_eq(spawned.size(), 0)
+
+
+func test_spawned_mountain_vein_is_a_real_minable_ore_node():
+	var chunk := _mountain_chunk()
+	var fake := _FakeSlopeLookup.new()
+	fake.slope = MountainOrePlacement.MAX_SLOPE_FOR_SCALING_DEG
+	var spawned := renderer.spawn_mountain_veins(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, fake)
+	assert_gt(spawned.size(), 0)
+	for node in spawned:
+		assert_true(node.has_method("mine"), "a mountain vein should be minable like any other ore node")
+		assert_true(node is StaticBody2D, "an ore vein should block movement like any other boulder")
+
+
+func test_spawned_mountain_veins_are_positioned_at_their_tile_centers():
+	var chunk := _mountain_chunk()
+	var fake := _FakeSlopeLookup.new()
+	fake.slope = MountainOrePlacement.MAX_SLOPE_FOR_SCALING_DEG
+	var spawned := renderer.spawn_mountain_veins(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, fake)
+	assert_gt(spawned.size(), 0)
+	for node in spawned:
+		var expected_tile := Vector2i(floori(node.position.x / TILE_SIZE), floori(node.position.y / TILE_SIZE))
+		assert_almost_eq(node.position.x, (expected_tile.x + 0.5) * TILE_SIZE, 0.01)
+		assert_almost_eq(node.position.y, (expected_tile.y + 0.5) * TILE_SIZE, 0.01)
+
+
+## A mountain vein draws from the same illustrated-boulder-composited
+## texture path as flat-ground ore (see _ore_texture_for) -- real
+## illustrated art, not a separate, lesser rendering for mountain ore.
+func test_a_mountain_vein_draws_from_the_same_illustrated_ore_compositing_as_flat_ground_ore():
+	var chunk := _mountain_chunk()
+	var fake := _FakeSlopeLookup.new()
+	fake.slope = MountainOrePlacement.MAX_SLOPE_FOR_SCALING_DEG
+	var spawned := renderer.spawn_mountain_veins(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, fake)
+	assert_gt(spawned.size(), 0)
+	for node in spawned:
+		var sprite: Sprite2D = null
+		for child in node.get_children():
+			if child is Sprite2D:
+				sprite = child
+		assert_not_null(sprite, "a mountain vein should carry a real rendered sprite child")

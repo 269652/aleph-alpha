@@ -11,6 +11,7 @@ const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrain_sprite.gd")
+const ProceduralHillshadeSprite = preload("res://src/rendering/procedural_hillshade_sprite.gd")
 
 ## How many WORLD UNITS one tile occupies. Every gameplay system is built on
 ## this -- player movement/collision, spawn placement, chunk streaming,
@@ -119,11 +120,16 @@ const DIRECTION_MASK_COUNT := (1 << _DIRECTION_COUNT) - 1
 ## Border/blend tiles keep fewer variants than base ground: they're
 ## transitional fringe noise, not the surface the eye rests on, and every
 ## extra blend variant costs n*(n-1)*15 more generated atlas images at
-## startup. Three here (vs. six base variants) keeps the atlas build FASTER
-## than the original 4-variant scheme while the ground itself got richer.
+## startup (a one-time cost -- TerrainAtlasCache keys the whole baked atlas
+## to ATLAS_VERSION, so this only runs again when that bumps). Raised from
+## 3 to match VARIANTS_PER_BIOME-adjacent variety once the curved-boundary
+## wobble (see ProceduralTerrainSprite.blend_edge_wobble) gave each variant
+## a genuinely different shape to show, not just re-speckled pixels around
+## one identical straight line -- with only 3 shapes, a long biome border
+## would still visibly repeat every third tile.
 ## atlas_coords_for_directional_blend folds the caller's 0..VARIANTS_PER_BIOME
 ## variant into this range, so callers don't care about the difference.
-const BLEND_VARIANTS := 3
+const BLEND_VARIANTS := 7
 
 ## Every ordered (near, far) biome pair reserves this many atlas tiles: one per
 ## direction mask x BLEND_VARIANTS.
@@ -145,7 +151,7 @@ const ATLAS_COLUMNS := 64
 ## still being decorrelated between neighbouring tiles.
 const _VARIANT_SALT := 90210
 
-const ATLAS_VERSION := "art_resolution_v19_illustrated_blend_and_corner_tiles"
+const ATLAS_VERSION := "art_resolution_v20_curved_blend_boundaries_7_variants"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -157,6 +163,7 @@ var _terrain_sprite_generator := ProceduralTerrainSprite.new()
 var _structure_sprite_generator := ProceduralStructureSprite.new()
 var _building_piece_sprite_generator := ProceduralBuildingPieceSprite.new()
 var _shore_distance_generator := ProceduralShoreDistanceSprite.new()
+var _hillshade_generator := ProceduralHillshadeSprite.new()
 var _atlas_cache := TerrainAtlasCache.new()
 var _illustrated_terrain = IllustratedTerrainSprite.new()
 
@@ -613,7 +620,7 @@ func _biome_frame_image(biome_name: String, variant: int, frame: int) -> Image:
 func _blend_image(near_biome: String, far_biome: String, directions: Array, variant: int) -> Image:
 	var near_image := _normalized_for_compositing(_biome_frame_image(near_biome, variant, 0))
 	var far_image := _normalized_for_compositing(_biome_frame_image(far_biome, variant, 0))
-	return _terrain_sprite_generator.generate_multi_directional_blend_image_from(near_image, far_image, directions)
+	return _terrain_sprite_generator.generate_multi_directional_blend_image_from(near_image, far_image, directions, variant)
 
 
 ## Corner-carve counterpart of _blend_image -- see its own doc comment.
@@ -955,3 +962,58 @@ func build_water_overlay_tile_set() -> TileSet:
 	tile_set.tile_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
 	tile_set.add_source(source, 0)
 	return tile_set
+
+
+## The atlas coordinate of the HillshadeFx overlay tile for a real slope/
+## aspect reading (see terrain_relief.gd, docs/concept/terrain_relief.md's
+## "Hillshading" section) -- quantized into ProceduralHillshadeSprite's
+## small slope-bin x aspect-bin grid, since real slope/aspect are
+## continuous and don't fit a bounded atlas the way shore-distance's
+## enumerable land-direction masks do (see that generator's own doc
+## comment). `aspect_deg` below 0 (terrain_relief.gd's flat-ground
+## sentinel) always resolves to the single shared flat tile, same as
+## slope_deg at or near 0 -- both read as "no meaningful direction".
+func atlas_coords_for_hillshade(slope_deg: float, aspect_deg: float) -> Vector2i:
+	if slope_deg <= 0.001 or aspect_deg < 0.0:
+		return Vector2i(0, 0)
+	var slope_bin := ProceduralHillshadeSprite.slope_bin_for(slope_deg)
+	var aspect_bin := ProceduralHillshadeSprite.aspect_bin_for(aspect_deg)
+	return Vector2i(1 + slope_bin * ProceduralHillshadeSprite.ASPECT_BINS + aspect_bin, 0)
+
+
+## A small, separate TileSet for the GPU hillshade overlay layer: one flat
+## "no slope" tile plus one tile per (slope bin, aspect bin) combination --
+## SLOPE_BINS x ASPECT_BINS total, each holding real quantized slope/aspect
+## DATA (see ProceduralHillshadeSprite) rather than art. hillshade_shader.gd
+## samples it as a texture channel and shades continuously on the GPU from
+## the real, live sun position -- same "bake data once, animate on the GPU
+## from a live uniform" shape build_water_overlay_tile_set already
+## established for shore distance + weather.
+func build_hillshade_overlay_tile_set() -> TileSet:
+	var hillshade_total := 1 + ProceduralHillshadeSprite.SLOPE_BINS * ProceduralHillshadeSprite.ASPECT_BINS
+	var hillshade_image := Image.create(hillshade_total * ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	hillshade_image.blit_rect(
+		_hillshade_generator.generate_flat_image(),
+		Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)), Vector2i.ZERO
+	)
+	for slope_bin in ProceduralHillshadeSprite.SLOPE_BINS:
+		for aspect_bin in ProceduralHillshadeSprite.ASPECT_BINS:
+			var index := 1 + slope_bin * ProceduralHillshadeSprite.ASPECT_BINS + aspect_bin
+			var slope_deg := ProceduralHillshadeSprite.slope_for_bin(slope_bin)
+			var aspect_deg := ProceduralHillshadeSprite.aspect_for_bin(aspect_bin)
+			var tile_image := _hillshade_generator.generate_image(slope_deg, aspect_deg)
+			hillshade_image.blit_rect(
+				tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),
+				Vector2i(index * ART_TILE_SIZE, 0)
+			)
+
+	var hillshade_source := TileSetAtlasSource.new()
+	hillshade_source.texture = ImageTexture.create_from_image(hillshade_image)
+	hillshade_source.texture_region_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
+	for i in hillshade_total:
+		hillshade_source.create_tile(Vector2i(i, 0))
+
+	var hillshade_tile_set := TileSet.new()
+	hillshade_tile_set.tile_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
+	hillshade_tile_set.add_source(hillshade_source, 0)
+	return hillshade_tile_set

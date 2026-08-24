@@ -224,8 +224,25 @@ func _build_ore_node(global_x: int, global_y: int) -> StaticBody2D:
 	body.ore_seed = seed_value
 	# Ore art isn't cached by bucket -- there are far fewer ore nodes than
 	# plain boulders, and the flecks should reflect the actual ore type/seed.
-	_attach_body_parts(body, _ore_sprite_generator.generate_texture(ore_type, seed_value))
+	_attach_body_parts(body, _ore_texture_for(ore_type, seed_value))
 	return body
+
+
+## An ore node is always drawn at boulder scale regardless of the underlying
+## cell's rolled diameter (see _attach_body_parts' diameter_cm==0 branch), so
+## it always asks illustrated art for CLASS_BOULDER specifically -- the same
+## has_variants()-gated fallback _texture_for already uses for plain loose
+## stone, just with the ore's own flecks composited onto that illustrated
+## frame (ProceduralOreSprite.generate_texture_from_base) rather than reused
+## as-is, so the ore type still reads at a glance. Falls back to the flat
+## procedural boulder+flecks (generate_texture) when no illustrated boulder
+## art is registered.
+func _ore_texture_for(ore_type: String, seed_value: int) -> ImageTexture:
+	if _illustrated_stones.has_variants(StoneSize.CLASS_BOULDER):
+		var base: ImageTexture = _illustrated_stones.frame_for(StoneSize.CLASS_BOULDER, seed_value)
+		if base != null:
+			return _ore_sprite_generator.generate_texture_from_base(base.get_image(), ore_type, seed_value)
+	return _ore_sprite_generator.generate_texture(ore_type, seed_value)
 
 
 ## `diameter_cm` of 0 keeps the node at the shared art scale, which is what
@@ -278,3 +295,61 @@ func _texture_for(seed_value: int, stone_class: String = StoneSize.CLASS_BOULDER
 		else:
 			_texture_cache[cache_key] = _stone_sprite_generator.generate_texture(seed_value)
 	return _texture_cache[cache_key]
+
+
+# -- mountain ore veins: slope-gated placement (see docs/concept/terrain_relief.md) -
+#
+# A separate spawn path from spawn_stones above -- mountain isn't in
+# StonePlacement.STONE_BIOMES at all, and even where it overlapped, vein
+# placement is gated by real LOCAL SLOPE (MountainOrePlacement), not the
+# flat per-tile density roll grassland/forest ore uses.
+
+const MountainOrePlacement = preload("res://src/world/mountain_ore_placement.gd")
+
+var _mountain_ore_placement := MountainOrePlacement.new()
+
+
+## Spawns a collidable ore-vein node for every mountain cell whose real
+## local slope rolls a vein (see MountainOrePlacement). `slope_lookup` is
+## anything with a `slope_at_global(global_x, global_y)` method -- real
+## EarthChunkManager, or a test fake (see test_stone_renderer.gd's
+## _FakeSlopeLookup, the same fake-injection shape _illustrated_stones
+## already uses) -- left untyped/duck-typed so this file doesn't need to
+## import EarthChunkManager's type. Returns every spawned node, same
+## contract as spawn_stones, so the caller can free them on unload.
+func spawn_mountain_veins(
+	parent: Node2D, chunk: Chunk, chunk_origin_tiles: Vector2i, tile_size: int, slope_lookup
+) -> Array[Node2D]:
+	var spawned: Array[Node2D] = []
+	for y in chunk.height:
+		for x in chunk.width:
+			var biome_name: String = chunk.biome[y * chunk.width + x]
+			if biome_name != "mountain":
+				continue
+			var global_x := chunk_origin_tiles.x + x
+			var global_y := chunk_origin_tiles.y + y
+			var slope: float = slope_lookup.slope_at_global(global_x, global_y)
+			if not _mountain_ore_placement.has_vein_at(global_x, global_y, slope):
+				continue
+			var node := _build_mountain_vein_node(global_x, global_y)
+			node.position = Vector2((global_x + 0.5) * tile_size, (global_y + 0.5) * tile_size)
+			parent.add_child(node)
+			spawned.append(node)
+	return spawned
+
+
+## Same shape as _build_ore_node, drawing from the exact same
+## illustrated-boulder-composited texture path (_ore_texture_for) -- a
+## mountain vein is visually and mechanically an ore node, just placed by a
+## different rule. MountainOrePlacement.ore_type_at/seed_at reuse
+## OrePlacement's own derivation exactly (see that class's own doc
+## comment), so this composes with the existing ore-texture cache/
+## compositing with no changes needed there.
+func _build_mountain_vein_node(global_x: int, global_y: int) -> StaticBody2D:
+	var ore_type := _mountain_ore_placement.ore_type_at(global_x, global_y)
+	var seed_value := _mountain_ore_placement.seed_at(global_x, global_y)
+	var body := MinableOre.new()
+	body.ore_type = ore_type
+	body.ore_seed = seed_value
+	_attach_body_parts(body, _ore_texture_for(ore_type, seed_value))
+	return body

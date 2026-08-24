@@ -11,7 +11,16 @@ extends RefCounted
 ## deliberately NOT modeled yet (see docs/progress.md's NPC section);
 ## everything here is the seed-derived starting point those would layer onto.
 
-const OCCUPATIONS: Array[String] = ["farmer", "blacksmith", "merchant", "guard", "fisher", "herbalist"]
+## "hunter" and "nurse" (docs/concept/npc.md "Needs and the local production
+## economy") joined this pass: hunter is a producer occupation distinct from
+## farmer (gathers wild game, not tended crops); nurse is a new non-producer
+## village-care role. Adding to this array reshuffles which seed rolls which
+## OTHER occupation too (see NpcIdentity._index's modulo pick) -- every
+## existing occupation test loops the module's own const arrays rather than
+## hardcoding a seed->occupation expectation, so that reshuffle is harmless.
+const OCCUPATIONS: Array[String] = [
+	"farmer", "blacksmith", "merchant", "guard", "fisher", "herbalist", "hunter", "nurse",
+]
 
 const PERSONALITY_TRAITS: Array[String] = [
 	"friendly", "gruff", "curious", "stoic", "greedy", "kind", "cautious", "bold"

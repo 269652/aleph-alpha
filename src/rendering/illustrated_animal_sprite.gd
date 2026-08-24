@@ -1,7 +1,7 @@
 extends RefCounted
 
 ## Real hand/AI-illustrated sprite-sheet animation for species with actual
-## art (assets/sprites/*.png -- currently horse, deer, boar; see
+## art (assets/sprites/*.png -- currently horse, deer, boar, sheep; see
 ## SpriteSheetSlicer for how a hand-assembled reference sheet becomes clean,
 ## aligned frames), replacing ProceduralAnimalSprite's primitive-shape
 ## generation for just those species. Reported: "the procedural generated
@@ -135,6 +135,24 @@ const _SHEETS := {
 		"alpha_threshold": 0.3,
 		"divider_gray_min": 0.45,
 	},
+	# A single sheet, 8-column x 2-row grid (walk row, then an eat/graze
+	# row), cut out on a solid MAGENTA ground rather than real transparency
+	# or a pale divider -- see "chroma_key"/_apply_chroma_key. The gridlines
+	# between cells are an ordinary near-white divider, same as every other
+	# sheet, so no divider_gray_min override is needed; only the background
+	# itself needed new handling.
+	"sheep": {
+		"path": "res://assets/sprites/animals/sheep.png",
+		"walk_bands": [Vector2i(3, 442)],
+		"eat_bands": [Vector2i(445, 883)],
+		"alpha_threshold": 0.3,
+		# Measured background samples clustered around (0.95, 0.02, 0.96);
+		# a generous per-channel tolerance also swallows the anti-aliased
+		# blend right at the wool's silhouette edge without reaching into
+		# the cream wool itself (high on every channel, not just R/B).
+		"chroma_key": Color(0.95, 0.02, 0.96),
+		"chroma_key_tolerance": 0.25,
+	},
 }
 
 var _slicer := SpriteSheetSlicer.new()
@@ -209,32 +227,47 @@ func has_action(species: String, action: String) -> bool:
 ## has_action first and fall back to ProceduralAnimalAnimation themselves,
 ## the same "ask before you leap" shape as every other optional-capability
 ## check in this codebase.
+##
+## Every FALLBACK action (swim/attack -> walk, drink -> idle, idle-without-
+## its-own-art -> eat/walk's frame 0 -- see has_action's fallback-chain doc
+## comment) is resolved by calling back into THIS function for the target
+## action, not by re-slicing the source sheet -- a fallback action's result
+## is always identical to its target's, so it reuses that target's own
+## cache entry (and warms it, for whichever of the two is requested first)
+## instead of paying a full re-slice (a multi-million-pixel scan per call --
+## see _slice_bands/SpriteSheetSlicer) again for the exact same pixels. This
+## used to redundantly re-slice once per distinct fallback action ever
+## requested for a species -- with 3 fallback actions per species and
+## several illustrated species, that's a real multi-second stall the first
+## time a populated world's creatures start needing them, easy to mistake
+## for the game having hung entirely.
 func generate_textures(species: String, action: String) -> Array[ImageTexture]:
 	if not has_action(species, action):
 		return []
 	var key := "%s/%s" % [species, action]
 	if not _frame_cache.has(key):
-		var textures: Array[ImageTexture] = []
-		for frame in _load_frames(species, action):
-			textures.append(ImageTexture.create_from_image(frame))
-		_frame_cache[key] = textures
+		_frame_cache[key] = _build_textures(species, action)
 	return _frame_cache[key]
 
 
-func _load_frames(species: String, action: String) -> Array[Image]:
+func _build_textures(species: String, action: String) -> Array[ImageTexture]:
 	var sheet: Dictionary = _SHEETS[species]
 
 	if sheet.has(action + "_bands"):
-		return _slice_bands(sheet, sheet[action + "_bands"], sheet.get(action + "_path", ""))
+		var textures: Array[ImageTexture] = []
+		for frame in _slice_bands(sheet, sheet[action + "_bands"], sheet.get(action + "_path", "")):
+			textures.append(ImageTexture.create_from_image(frame))
+		return textures
 
 	# No dedicated band for this action -- see has_action's own doc comment
 	# for the exact fallback chain (only idle/swim/drink ever reach here;
 	# everything else is rejected by has_action before generate_textures
-	# ever calls in).
+	# ever calls in). Each branch calls generate_textures (cached), never
+	# _slice_bands (a fresh re-slice) -- see this function's own doc comment.
 	if action == "swim" or action == "attack":
-		return _slice_bands(sheet, sheet["walk_bands"])
+		return generate_textures(species, "walk")
 	if action == "drink":
-		return _load_frames(species, "idle")
+		return generate_textures(species, "idle")
 
 	# "idle" with no dedicated idle_bands: the eat cycle's own frame 0 is a
 	# head-up, alert standing pose, exactly a neutral "not doing anything in
@@ -242,9 +275,9 @@ func _load_frames(species: String, action: String) -> Array[Image]:
 	# ProceduralAnimalAnimation's "idle" precedent: a single static pose,
 	# not a cycle). A walk-only sheet holds the walk cycle's frame 0 instead
 	# -- see has_action's fallback-chain doc comment.
-	var source_bands: Array = sheet["eat_bands"] if sheet.has("eat_bands") else sheet["walk_bands"]
-	var frames := _slice_bands(sheet, source_bands)
-	return [frames[0]] as Array[Image]
+	var source_action := "eat" if sheet.has("eat_bands") else "walk"
+	var source_frames := generate_textures(species, source_action)
+	return [source_frames[0]] as Array[ImageTexture]
 
 
 ## Slices+normalizes every band in `bands` from `sheet`'s own source image,
@@ -252,6 +285,16 @@ func _load_frames(species: String, action: String) -> Array[Image]:
 ## single action can span multiple bands).
 func _slice_bands(sheet: Dictionary, bands: Array, path: String = "") -> Array[Image]:
 	var image := Image.load_from_file(path if path != "" else sheet["path"])
+	# Sheets cut out on a solid chroma-key colour (e.g. magenta) rather than
+	# real transparency or a pale divider: everything below (detect_frames/
+	# normalize_frames, via SpriteSheetSlicer.is_empty) already treats
+	# LOW-ALPHA pixels as background, so turning the chroma-keyed pixels
+	# transparent up front lets the exact same downstream logic handle them
+	# with no separate "or matches this color" branch needed anywhere else.
+	if sheet.has("chroma_key"):
+		image = _apply_chroma_key(
+			image, sheet["chroma_key"], sheet.get("chroma_key_tolerance", 0.1)
+		)
 	var alpha_threshold: float = sheet["alpha_threshold"]
 	# Most sheets use a near-white divider line, comfortably above
 	# SpriteSheetSlicer's own default bound -- only sheets that measure
@@ -265,6 +308,28 @@ func _slice_bands(sheet: Dictionary, bands: Array, path: String = "") -> Array[I
 			_slicer.normalize_frames(image, frames, CANVAS_SIZE, BASELINE_Y, alpha_threshold, divider_gray_min)
 		)
 	return normalized
+
+
+## A copy of `image` with every pixel within `tolerance` of `key` (each of
+## R/G/B independently, ignoring alpha) turned fully transparent -- per-
+## channel rather than a single combined distance so a saturated key color
+## (e.g. magenta) can use a generous tolerance for anti-aliased edge blending
+## without also swallowing a pale, low-saturation drawing color that happens
+## to sit at a similar overall brightness.
+func _apply_chroma_key(image: Image, key: Color, tolerance: float) -> Image:
+	var keyed := image.duplicate()
+	if keyed.get_format() != Image.FORMAT_RGBA8:
+		keyed.convert(Image.FORMAT_RGBA8)
+	for y in keyed.get_height():
+		for x in keyed.get_width():
+			var c: Color = keyed.get_pixel(x, y)
+			if (
+				absf(c.r - key.r) <= tolerance
+				and absf(c.g - key.g) <= tolerance
+				and absf(c.b - key.b) <= tolerance
+			):
+				keyed.set_pixel(x, y, Color(0, 0, 0, 0))
+	return keyed
 
 
 ## Local-space Y offset (from the marker's own origin, i.e. canvas center) to

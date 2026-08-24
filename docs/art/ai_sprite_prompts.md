@@ -411,6 +411,202 @@ limit, not a gap to close in the same pass as the base tiles.
 
 ---
 
+## 4. Character building blocks (player/NPC paperdoll)
+
+See `docs/concept/character_art_brief.md` for the full engineering
+rationale (why parts not a full-body sheet, why NEUTRAL/untinted color, the
+registry shape, exact canvas/baseline). This section is just the prompts.
+
+`IllustratedCharacterSprite` (`src/rendering/illustrated_character_sprite.gd`)
+is wired and ready for **body/legs/arms** — CharacterView tints whatever art
+is registered via `modulate` per class color (body, legs) or skin tone
+(arms), so **draw every part in flat neutral light grey, no baked-in
+color** (this is the one hard rule that differs from every other section
+of this doc — a tinted part multiplies wrong). One shared leg/foot shape
+and one shared arm/hand shape each cover BOTH left and right (CharacterView
+already renders the same texture on both sides, just at mirrored X
+positions) — don't generate separate left/right art.
+
+**Head/hair/beard are NOT wired yet** (see the brief for why — one flat
+tint can't separate skin/hair/eye color in a single drawing). Prompts 4d–4f
+below are ready for whenever that layering work happens; generating them
+now doesn't hurt, but don't expect them to appear in-game without the
+matching engine change.
+
+Facing convention: **right** (unlike horse/deer/boar/sheep, which all face
+left) — matches `ProceduralCharacterSprite`'s existing right-facing rig.
+
+### 4a. Torso/tunic — idle pose
+
+> [style preamble] A single pixel-art sprite of a humanoid TORSO only — from
+> the neck down to the waist/hip, no head, no arms, no legs — standing
+> upright, facing RIGHT, viewed top-down/near-top-down as if seen slightly
+> from above in an overworld game. A simple tunic/jerkin silhouette:
+> slightly chamfered shoulders, a round collar, a belt with a small buckle
+> at the waist. Rendered in a single FLAT LIGHT GREY tone throughout — no
+> color, no pattern, no logos — with only posterized light/shadow banding
+> (a highlight band on the upper-left-facing surfaces, a shadow band on the
+> lower-right, per the shading rule above) to show its form and folds. This
+> art will be tint-colored by the game engine afterward, so it must stay
+> perfectly neutral grey. Isolated subject, generous empty padding on all
+> sides, nothing touching the canvas edge.
+
+### 4b. Legs — idle pose (shared shape, used for both left and right)
+
+> [style preamble] A single pixel-art sprite of one humanoid LEG AND FOOT
+> only — from the hip down, a simple trouser leg and a plain boot — standing
+> upright, facing RIGHT, viewed top-down/near-top-down. Straight standing
+> pose, not mid-stride. Rendered in a single FLAT LIGHT GREY tone
+> throughout, posterized light/shadow banding only, no color, no pattern.
+> Perfectly neutral grey for engine tinting. Isolated subject, generous
+> empty padding, nothing touching the canvas edge.
+
+### 4c. Arms — idle pose (shared shape, used for both left and right)
+
+> [style preamble] A single pixel-art sprite of one humanoid ARM AND HAND
+> only — from the shoulder down, bare skin, no sleeve — hanging naturally
+> at rest, facing RIGHT, viewed top-down/near-top-down. Rendered in a
+> single FLAT LIGHT GREY tone throughout, posterized light/shadow banding
+> only, no skin color baked in. Perfectly neutral grey for engine tinting
+> (the game applies the character's actual skin tone at runtime).
+> Isolated subject, generous empty padding, nothing touching the canvas
+> edge.
+
+### 4d. Head — base (future; not yet wired, see brief)
+
+> [style preamble] A single pixel-art sprite of a humanoid HEAD in profile,
+> facing RIGHT, viewed top-down/near-top-down — neck, jaw, ears, and a bald
+> scalp (no hair at all — hair is a separate overlay, see 4e), with basic
+> eye sockets and a simple nose/mouth suggested but not colored (leave eyes
+> as a slightly darker grey recess, not a real eye color). Rendered in a
+> single FLAT LIGHT GREY tone throughout, posterized light/shadow banding
+> only, no skin tone baked in — the game applies actual skin tone at
+> runtime. Isolated subject, generous empty padding.
+
+### 4e. Hair overlays — one sheet, all 5 non-bald styles
+
+> [style preamble] A pixel-art sprite sheet of 5 different HAIR styles for
+> a humanoid head, laid out side by side in one row, each separated by a
+> thin 1–2px near-white divider line: (1) SHORT — a close-cropped simple
+> crop; (2) SWEPT — short hair swept back off the forehead; (3) LONG —
+> hair falling past the shoulder in the back; (4) PONYTAIL — hair gathered
+> at the back into a single tied tail; (5) TOPKNOT — hair gathered into a
+> small knot on top of the head. Each style shown as ONLY the hair shape
+> itself (no head/face underneath it) sized and positioned to sit correctly
+> on top of the head sprite from 4d, facing RIGHT, top-down/near-top-down
+> perspective. Rendered in a single FLAT LIGHT GREY tone throughout,
+> posterized light/shadow banding only — no hair color baked in, the game
+> tints it per character at runtime. [ingestion format]
+
+### 4f. Beard overlays — one sheet, all 3 non-none styles
+
+> [style preamble] A pixel-art sprite sheet of 3 different BEARD/facial-hair
+> styles, laid out side by side in one row, each separated by a thin 1–2px
+> near-white divider line: (1) STUBBLE — a light shadow of short stubble
+> across the jaw and chin only; (2) GOATEE — a small pointed patch of hair
+> on the chin only, cheeks and jaw clean; (3) FULL — a full beard covering
+> the jaw, chin, and upper cheeks, moderate length. Each style shown as
+> ONLY the facial-hair shape itself (no head/face underneath it) sized and
+> positioned to sit correctly on the lower half of the head sprite from 4d,
+> facing RIGHT, top-down/near-top-down perspective. Rendered in a single
+> FLAT LIGHT GREY tone throughout, posterized light/shadow banding only —
+> no hair color baked in, tinted per character at runtime. [ingestion
+> format]
+
+### File naming, once generated
+
+Following the `assets/sprites/animals/sheep.png` precedent, drop these into
+`assets/sprites/character/`:
+
+```
+assets/sprites/character/body_idle.png
+assets/sprites/character/legs_idle.png
+assets/sprites/character/arms_idle.png
+assets/sprites/character/head_base.png       (future)
+assets/sprites/character/hair.png            (future, one sheet, 5 cells)
+assets/sprites/character/beard.png           (future, one sheet, 3 cells)
+```
+
+Then register body/legs/arms in `IllustratedCharacterSprite._PARTS` (see
+`character_art_brief.md`'s "How to register a finished part" for the exact
+Dictionary shape) — measuring each sheet's own content band the same way
+`illustrated_animal_sprite.gd`'s sheep entry documents, not by guessing.
+
+---
+
+## 5. Ore nodes — one sheet per ore type, boulder-scale with embedded deposits
+
+Ore is the one stone-adjacent entity still fully procedural
+(`ProceduralOreSprite`) — a flat grey ellipse with runtime-painted flecks
+(`FLECK_COLOR`: iron orange-brown, copper teal-green, coal near-black), the
+same "old procedural" look pebbles/boulders/cobbles have already moved past
+(see `docs/concept/stone.md`). Ore nodes always draw at BOULDER scale
+regardless of the underlying cell's rolled size
+(`StoneRenderer._attach_body_parts`'s `diameter_cm == 0` branch), so —
+unlike pebbles/cobbles/boulders, which each needed their own scale-
+appropriate sheet — one sheet per ORE TYPE covers it completely; no
+pebble/cobble-scale ore sheet is needed.
+
+Follow the `boulders.png` precedent directly: that sheet is a real 4-row x
+5-column (20-variant) grid that came back clean on the first attempt. Ask
+for the full 5x5 (25) here — the "only 3x3 held" finding in section 3 was
+specific to full-bleed *tiling* terrain textures, not isolated padded
+objects like this, so there's no reason to expect the same ceiling.
+
+### Working prompt template (fill in `[ORE NAME]` / `[DEPOSIT DESCRIPTION]`)
+
+> [style preamble] A pixel-art sprite sheet of 25 individual **[ORE NAME]
+> ORE** boulder/rock chunks, laid out as a strict 5x5 grid, each cell
+> separated by a thin 1–2px near-white divider line, generous empty padding
+> around each rock so nothing touches a divider or the canvas edge. Every
+> rock is a craggy, faceted grey stone boulder — the same rock-formation
+> style as a plain granite boulder, angular chunky facets with visible
+> cracks, not a smooth pebble — with [DEPOSIT DESCRIPTION] embedded directly
+> in the rock face, clearly visible as part of the stone's own surface, not
+> a separate floating overlay. Each of the 25 must be a genuinely different
+> rock silhouette and a different arrangement of its ore deposits — rows
+> progress from smaller/simpler rocks with fewer visible deposits at the top
+> to larger/more complex rocks with more deposits at the bottom. [ingestion
+> format]
+
+Fill-ins:
+
+- **iron** — `[ORE NAME]`: "IRON"; `[DEPOSIT DESCRIPTION]`: "rusty
+  orange-brown streaks and small rounded nodules of oxidized iron ore (like
+  real hematite/limonite), scattered irregularly across the rock face"
+- **copper** — `[ORE NAME]`: "COPPER"; `[DEPOSIT DESCRIPTION]`: "bright
+  teal-green mineral veins and small crusty patches of oxidized copper ore
+  (like real malachite/azurite), running through cracks and across exposed
+  faces of the rock"
+- **coal** — `[ORE NAME]`: "COAL"; `[DEPOSIT DESCRIPTION]`: "glossy
+  near-black coal bands and chunky black seams embedded in the grey rock,
+  with a subtle sheen distinguishing them from the matte grey stone around
+  them"
+
+### File naming + wiring, once generated
+
+Following the `boulders.png`/`pebbles.png`/`cobbles.png` precedent, drop
+these into `assets/sprites/`:
+
+```
+assets/sprites/iron_ore.png
+assets/sprites/copper_ore.png
+assets/sprites/coal_ore.png
+```
+
+Wiring these needs a small new class mirroring `IllustratedStoneSprite`'s
+exact shape (sheet path + measured `row_bands`) but keyed by ORE TYPE
+instead of stone CLASS — ore isn't a `StoneSize` class, so it doesn't belong
+inside `IllustratedStoneSprite` itself. `StoneRenderer._ore_texture_for`
+would gain a `has_variants(ore_type)`-gated preference for it, ahead of the
+boulder-frame-compositing fallback that exists today
+(`ProceduralOreSprite.generate_texture_from_base`, itself already a
+fallback ahead of the fully-procedural ellipse) — the same
+has_variants()-gated layering every other optional illustrated-art seam in
+this codebase already uses, just one layer deeper.
+
+---
+
 ## Notes for whoever runs these
 
 - Run the flower archetype sheets (1b) at pale/neutral tone as specified —

@@ -182,3 +182,165 @@ func test_step_grid_does_not_spread_into_a_non_vegetated_biome():
 	var next := model.step_grid(density, biome, temperature, moisture, width, height, 1.0)
 
 	assert_eq(next[1], 0.0)
+
+
+# -- land health: overharvesting leaves a lasting mark (docs/concept/world.md
+# "Land health: overharvesting leaves a lasting mark, not just a slower
+# respawn") -------------------------------------------------------------------
+
+func test_effective_capacity_defaults_land_health_to_full_and_is_unaffected():
+	# Backward compatibility: every existing caller that doesn't pass
+	# land_health must see the exact same number as before this feature.
+	var with_default := model.effective_capacity("grassland", 0.8, 0.8)
+	var with_explicit_full := model.effective_capacity("grassland", 0.8, 0.8, 1.0)
+	assert_almost_eq(with_default, with_explicit_full, 0.0001)
+
+
+func test_effective_capacity_is_multiplied_down_by_degraded_land_health():
+	var healthy := model.effective_capacity("grassland", 0.8, 0.8, 1.0)
+	var degraded := model.effective_capacity("grassland", 0.8, 0.8, 0.5)
+	assert_almost_eq(degraded, healthy * 0.5, 0.0001)
+
+
+func test_effective_capacity_at_zero_land_health_is_zero():
+	assert_eq(model.effective_capacity("grassland", 0.8, 0.8, 0.0), 0.0)
+
+
+func test_effective_capacity_clamps_land_health_above_one():
+	# Land health cannot boost a cell PAST its weather-driven ceiling.
+	var uncapped := model.effective_capacity("grassland", 0.8, 0.8, 5.0)
+	var capped := model.effective_capacity("grassland", 0.8, 0.8, 1.0)
+	assert_almost_eq(uncapped, capped, 0.0001)
+
+
+# -- regrowth_rate: the live regrowth speed land health compares harvest against
+
+func test_regrowth_rate_is_zero_when_capacity_is_zero():
+	assert_eq(model.regrowth_rate(0.5, 0.0), 0.0)
+
+
+func test_regrowth_rate_is_zero_when_density_has_met_or_passed_capacity():
+	assert_eq(model.regrowth_rate(1.0, 1.0), 0.0)
+	assert_eq(model.regrowth_rate(1.2, 1.0), 0.0)
+
+
+func test_regrowth_rate_is_positive_below_capacity():
+	assert_gt(model.regrowth_rate(0.3, 1.0), 0.0)
+
+
+## Exact pinned value -- the same logistic term step_density's growth branch
+## integrates over delta_days, factored out rather than reinvented.
+func test_regrowth_rate_matches_the_logistic_growth_term_exactly():
+	var density := 0.4
+	var capacity := 1.0
+	var expected: float = VegetationGrowthModel.GROWTH_PACE_PER_DAY * density * (1.0 - density / capacity)
+	assert_almost_eq(model.regrowth_rate(density, capacity), expected, 0.0001)
+
+
+# -- step_land_health: depletes under sustained overharvest, recovers when fallow
+
+func test_step_land_health_depletes_when_harvest_exceeds_regrowth():
+	var next := model.step_land_health(1.0, 0.5, 0.1, 1.0)
+	assert_lt(next, 1.0)
+
+
+func test_step_land_health_recovers_when_harvest_does_not_exceed_regrowth():
+	var next := model.step_land_health(0.5, 0.05, 0.1, 1.0)
+	assert_gt(next, 0.5)
+
+
+func test_step_land_health_recovers_when_left_entirely_fallow():
+	var next := model.step_land_health(0.5, 0.0, 0.0, 1.0)
+	assert_gt(next, 0.5)
+
+
+func test_step_land_health_at_the_boundary_recovers_not_depletes():
+	# Harvest exactly matching regrowth is sustainable, not overharvest.
+	var next := model.step_land_health(0.5, 0.1, 0.1, 1.0)
+	assert_gt(next, 0.5)
+
+
+func test_step_land_health_never_exceeds_one():
+	var next := model.step_land_health(0.999, 0.0, 0.0, 1000.0)
+	assert_almost_eq(next, 1.0, 0.0001)
+
+
+func test_step_land_health_never_goes_below_zero():
+	var next := model.step_land_health(0.001, 100.0, 0.0, 1000.0)
+	assert_almost_eq(next, 0.0, 0.0001)
+
+
+func test_step_land_health_exact_depletion_pace():
+	var next := model.step_land_health(1.0, 1.0, 0.0, 1.0)
+	assert_almost_eq(
+		next, 1.0 - VegetationGrowthModel.LAND_HEALTH_DEPLETION_PACE_PER_DAY, 0.0001
+	)
+
+
+func test_step_land_health_exact_recovery_pace():
+	var next := model.step_land_health(0.0, 0.0, 0.0, 1.0)
+	assert_almost_eq(next, VegetationGrowthModel.LAND_HEALTH_RECOVERY_PACE_PER_DAY, 0.0001)
+
+
+## Real-world grounding (see the constants' own doc comments): soil organic
+## matter/structure recovers on the order of a DECADE-PLUS of rest once
+## depleted, dramatically slower than a single growing season's biomass
+## regrowth (GROWTH_PACE_PER_DAY) -- land health recovery must be at least an
+## order of magnitude slower than raw biomass growth. Degradation from
+## sustained overuse is documented faster than recovery but still slower than
+## raw biomass growth, so it sits strictly between the two.
+func test_land_health_recovery_is_at_least_an_order_of_magnitude_slower_than_growth():
+	assert_lt(
+		VegetationGrowthModel.LAND_HEALTH_RECOVERY_PACE_PER_DAY,
+		VegetationGrowthModel.GROWTH_PACE_PER_DAY * 0.1
+	)
+
+
+func test_land_health_depletion_sits_between_recovery_and_raw_growth_pace():
+	assert_gt(
+		VegetationGrowthModel.LAND_HEALTH_DEPLETION_PACE_PER_DAY,
+		VegetationGrowthModel.LAND_HEALTH_RECOVERY_PACE_PER_DAY
+	)
+	assert_lt(
+		VegetationGrowthModel.LAND_HEALTH_DEPLETION_PACE_PER_DAY,
+		VegetationGrowthModel.GROWTH_PACE_PER_DAY
+	)
+
+
+# -- step_grid applies land health as a further multiplier ---------------------
+
+func test_step_grid_default_land_health_matches_pre_existing_behavior():
+	var width := 2
+	var height := 1
+	var biome := PackedStringArray(["grassland", "grassland"])
+	var temperature := PackedFloat32Array([0.8, 0.8])
+	var moisture := PackedFloat32Array([0.8, 0.8])
+	var density := PackedFloat32Array([0.1, 0.1])
+
+	var with_default := model.step_grid(density, biome, temperature, moisture, width, height, 1.0)
+	var with_explicit_full := model.step_grid(
+		density, biome, temperature, moisture, width, height, 1.0, 1.0
+	)
+
+	assert_eq(with_default, with_explicit_full)
+
+
+func test_step_grid_degraded_land_health_caps_growth_below_the_weather_ceiling():
+	var width := 1
+	var height := 1
+	var biome := PackedStringArray(["grassland"])
+	var temperature := PackedFloat32Array([0.8])
+	var moisture := PackedFloat32Array([0.8])
+	# A small nonzero starting density -- pure logistic growth cannot
+	# bootstrap from an exact 0.0 (0 * anything is still 0), same as real
+	# vegetation needs some existing seed stock to spread from.
+	var density := PackedFloat32Array([0.05])
+
+	# A long time, so both regions would otherwise fully reach their ceiling.
+	var healthy := model.step_grid(density, biome, temperature, moisture, width, height, 100.0, 1.0)
+	var degraded := model.step_grid(density, biome, temperature, moisture, width, height, 100.0, 0.3)
+
+	assert_lt(degraded[0], healthy[0], "degraded land health must cap growth below the healthy ceiling")
+	assert_almost_eq(
+		degraded[0], model.effective_capacity("grassland", 0.8, 0.8, 0.3), 0.001
+	)

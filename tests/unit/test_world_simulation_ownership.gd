@@ -4,8 +4,8 @@ extends GutTest
 ## _owns_ecosystem_simulation / owns_ecosystem_simulation_for).
 ##
 ## This gate fronts EVERY ecology step: step_ecosystem, step_forage,
-## step_tree_spread, step_tall_grass, step_flowers, step_worms,
-## step_fruiting. `step_tree_spread` is also what advances
+## step_tree_spread, step_tall_grass, step_wild_crops, step_flowers,
+## step_worms, step_fruiting. `step_tree_spread` is also what advances
 ## `_world_age_seconds`, so when the gate is closed the world CLOCK stops
 ## too -- season and weather freeze at their day-zero values.
 ##

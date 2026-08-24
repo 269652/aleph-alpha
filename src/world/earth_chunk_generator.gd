@@ -4,6 +4,7 @@ const EarthElevationSource = preload("res://src/world/earth_elevation_source.gd"
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const ClimateModel = preload("res://src/world/climate_model.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
+const TerrainRelief = preload("res://src/world/terrain_relief.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 
 ## World scale: ~111 tiles per degree of latitude/longitude (~1km/tile),
@@ -38,6 +39,7 @@ var _elevation_source := EarthElevationSource.new()
 var _geo_coordinates := GeoCoordinates.new()
 var _climate_model := ClimateModel.new()
 var _biome_classifier := BiomeClassifier.new()
+var _terrain_relief := TerrainRelief.new()
 
 var _fine_detail_noise := FastNoiseLite.new()
 var _moisture_noise := FastNoiseLite.new()
@@ -102,6 +104,27 @@ func elevation_at_global(global_x: int, global_y: int) -> float:
 	var macro := macro_elevation_at_global(global_x, global_y)
 	var fine_detail := _fine_detail_noise.get_noise_2d(global_x, global_y) * FINE_DETAIL_AMPLITUDE
 	return clampf(macro + fine_detail, 0.0, 1.0)
+
+
+## Real slope in degrees at a global tile (see terrain_relief.gd's slope_at,
+## docs/concept/terrain_relief.md). Reads the same RAW elevation source
+## macro_elevation_at_global does, not the fine-detail-blended
+## elevation_at_global -- the fine-detail layer exists to compensate for the
+## source image's real ~10km/pixel coarseness (see FINE_DETAIL_AMPLITUDE's
+## own doc comment), which is texture, not real geological relief, and would
+## only add noise to a real slope reading rather than inform it.
+func slope_at_global(global_x: int, global_y: int) -> float:
+	var latitude := _geo_coordinates.latitude_for_tile(global_y, WORLD_HEIGHT_TILES)
+	var longitude := _geo_coordinates.longitude_for_tile(global_x, WORLD_WIDTH_TILES)
+	return _terrain_relief.slope_at(_elevation_source, latitude, longitude)
+
+
+## Real aspect (compass bearing the slope faces) at a global tile -- see
+## slope_at_global's own doc comment and terrain_relief.gd's aspect_at.
+func aspect_at_global(global_x: int, global_y: int) -> float:
+	var latitude := _geo_coordinates.latitude_for_tile(global_y, WORLD_HEIGHT_TILES)
+	var longitude := _geo_coordinates.longitude_for_tile(global_x, WORLD_WIDTH_TILES)
+	return _terrain_relief.aspect_at(_elevation_source, latitude, longitude)
 
 
 ## Real precipitation-proxy moisture for any global tile coordinate, normalized

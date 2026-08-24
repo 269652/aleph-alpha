@@ -13,6 +13,7 @@ const Health = preload("res://src/gameplay/health.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const FelledTree = preload("res://src/rendering/felled_tree.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 const GROUP_NAME := "tree"
 const MAX_HEALTH := 30.0
@@ -51,6 +52,21 @@ var _tree_sprite_generator := ProceduralTreeSprite.new()
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
+
+
+## For World's mouse-hover tooltip (see HoverTargetFinder). A felled trunk is
+## still choppable (see _cut_up) but is no longer a standing tree, so it says
+## so rather than keep calling itself "Tree".
+func get_display_name() -> String:
+	return "Fallen Tree" if _felled else "Tree"
+
+
+## For World's mouse-hover tooltip (see HoverTargetFinder). Bound to "attack"
+## because that is the input Player._chop_step actually reads (see
+## Player._perform_attack).
+func get_hover_actions() -> Array:
+	return [{"verb": "Chop", "action": "attack"}]
 
 
 ## Registers the canopy sprite so set_ripe_fruit can swap its texture.

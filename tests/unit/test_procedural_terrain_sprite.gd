@@ -251,7 +251,7 @@ func _solid_image(color: Color) -> Image:
 func test_multi_directional_blend_from_sources_the_real_given_pixels():
 	var near_image := _solid_image(Color(1, 0, 0, 1))
 	var far_image := _solid_image(Color(0, 0, 1, 1))
-	var image := generator.generate_multi_directional_blend_image_from(near_image, far_image, [Vector2i(0, -1)])
+	var image := generator.generate_multi_directional_blend_image_from(near_image, far_image, [Vector2i(0, -1)], 0)
 	assert_eq(image.get_width(), near_image.get_width())
 	assert_eq(image.get_height(), near_image.get_height())
 
@@ -285,8 +285,99 @@ func test_generate_multi_directional_blend_image_matches_the_from_variant_given_
 	var near_image := generator.generate_image("forest", 3)
 	var far_image := generator.generate_image("grassland", 3)
 	var via_biomes := generator.generate_multi_directional_blend_image("forest", "grassland", [Vector2i(0, -1)], 3)
-	var via_from := generator.generate_multi_directional_blend_image_from(near_image, far_image, [Vector2i(0, -1)])
-	assert_eq(via_biomes.get_data(), via_from.get_data(), "the biome-name wrapper should just be generate_image + _from")
+	var via_from := generator.generate_multi_directional_blend_image_from(near_image, far_image, [Vector2i(0, -1)], 3)
+	assert_eq(via_biomes.get_data(), via_from.get_data(), "the biome-name wrapper should just be generate_image + _from, same variant_seed threaded to both")
+
+
+# -- organic, per-variant curved blend boundaries ----------------------------
+#
+# The straight-line gradient + small repeating 4x4 Bayer pattern read as a
+# uniform "half forest half grass" split: the transition's SHAPE never
+# varied with variant_seed, only which pixels got dithered near a fixed
+# straight line (reported live: "improve the blended tiles so they include
+# curves... individual per tile rather than straight half forest half
+# grass"). blend_edge_wobble adds a smooth, seeded noise curve to the
+# transition itself, enveloped (blend_wobble_envelope) so it can only ever
+# act strictly inside the existing sharpening band
+# (_BLEND_BAND_START.._BLEND_BAND_END) and therefore can never perturb a
+# pixel the un-wobbled design already resolves to pure near/far, however
+# large the wobble amplitude is -- the existing purity/monotonicity
+# guarantees above hold unconditionally, by construction, not by tuning.
+
+func test_blend_wobble_envelope_is_exactly_zero_at_and_beyond_the_band_edges():
+	assert_eq(ProceduralTerrainSprite.blend_wobble_envelope(ProceduralTerrainSprite._BLEND_BAND_START), 0.0)
+	assert_eq(ProceduralTerrainSprite.blend_wobble_envelope(ProceduralTerrainSprite._BLEND_BAND_END), 0.0)
+	assert_eq(ProceduralTerrainSprite.blend_wobble_envelope(0.0), 0.0)
+	assert_eq(ProceduralTerrainSprite.blend_wobble_envelope(1.0), 0.0)
+	assert_eq(ProceduralTerrainSprite.blend_wobble_envelope(0.1), 0.0)
+	assert_eq(ProceduralTerrainSprite.blend_wobble_envelope(0.9), 0.0)
+
+
+func test_blend_wobble_envelope_peaks_at_the_bands_own_center():
+	var center := (ProceduralTerrainSprite._BLEND_BAND_START + ProceduralTerrainSprite._BLEND_BAND_END) * 0.5
+	var at_center := ProceduralTerrainSprite.blend_wobble_envelope(center)
+	assert_almost_eq(at_center, 1.0, 0.001)
+	assert_lt(ProceduralTerrainSprite.blend_wobble_envelope(center - 0.05), at_center)
+	assert_lt(ProceduralTerrainSprite.blend_wobble_envelope(center + 0.05), at_center)
+
+
+func test_blend_edge_wobble_is_deterministic():
+	var a := ProceduralTerrainSprite.blend_edge_wobble(7, Vector2i(0, -1), 0.42)
+	var b := ProceduralTerrainSprite.blend_edge_wobble(7, Vector2i(0, -1), 0.42)
+	assert_eq(a, b)
+
+
+func test_blend_edge_wobble_varies_smoothly_along_the_edge_not_constant():
+	var start := ProceduralTerrainSprite.blend_edge_wobble(7, Vector2i(0, -1), 0.0)
+	var mid := ProceduralTerrainSprite.blend_edge_wobble(7, Vector2i(0, -1), 0.5)
+	var end := ProceduralTerrainSprite.blend_edge_wobble(7, Vector2i(0, -1), 1.0)
+	assert_true(start != mid or mid != end, "a genuinely curved edge must not hold one constant offset end to end")
+
+
+func test_blend_edge_wobble_differs_by_variant_seed():
+	# The whole point: different variants of the SAME biome pair/direction
+	# must curve differently, not just re-speckle around an identical line.
+	var a := ProceduralTerrainSprite.blend_edge_wobble(0, Vector2i(0, -1), 0.5)
+	var b := ProceduralTerrainSprite.blend_edge_wobble(1, Vector2i(0, -1), 0.5)
+	assert_ne(a, b)
+
+
+func test_blend_edge_wobble_differs_by_direction_so_two_active_edges_dont_lockstep():
+	var north := ProceduralTerrainSprite.blend_edge_wobble(5, Vector2i(0, -1), 0.5)
+	var east := ProceduralTerrainSprite.blend_edge_wobble(5, Vector2i(1, 0), 0.5)
+	assert_ne(north, east)
+
+
+## The actual behavioral guarantee: the near/far boundary crossing must land
+## at a DIFFERENT row for different columns -- proof the transition curves
+## rather than running as one flat horizontal line. A boundary row is the
+## first (topmost) row, scanning from the far edge, where the far-leaning
+## count in that row drops out of "almost entirely far".
+func _boundary_row_at_column(image: Image, x: int, far_image: Image, near_image: Image) -> int:
+	var size := image.get_width()
+	for y in size:
+		var pixel := image.get_pixel(x, y)
+		if _rgb_distance(pixel, far_image.get_pixel(x, y)) >= _rgb_distance(pixel, near_image.get_pixel(x, y)):
+			return y
+	return size
+
+
+func test_multi_directional_blend_curves_instead_of_running_dead_straight():
+	var far_image := generator.generate_image("grassland", 0)
+	var near_image := generator.generate_image("forest", 0)
+	var image := generator.generate_multi_directional_blend_image("forest", "grassland", [Vector2i(0, -1)], 0)
+	var size := ProceduralTerrainSprite.SIZE
+
+	var boundary_rows: Dictionary = {}
+	for x in size:
+		boundary_rows[_boundary_row_at_column(image, x, far_image, near_image)] = true
+	assert_gt(boundary_rows.size(), 1, "the near/far boundary must land at more than one row across the tile's width to read as a curve, not a flat line")
+
+
+func test_multi_directional_blend_curve_shape_differs_by_variant():
+	var image_a := generator.generate_multi_directional_blend_image("forest", "grassland", [Vector2i(0, -1)], 0)
+	var image_b := generator.generate_multi_directional_blend_image("forest", "grassland", [Vector2i(0, -1)], 1)
+	assert_ne(image_a.get_data(), image_b.get_data(), "different variants of the same border must curve differently, not repeat one shape")
 
 
 func test_corner_image_from_sources_the_real_given_pixels():

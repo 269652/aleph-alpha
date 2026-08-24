@@ -124,6 +124,39 @@ func test_legs_are_visible_while_walking_or_idle():
 	assert_true(view.legs_visible())
 
 
+# -- illustrated legs: worn as one fused pair, not two independent sprites --
+#
+# leg.png draws both legs together (see IllustratedCharacterSprite's own doc
+# comment) -- CharacterView wears it as one sprite covering both world slots
+# rather than splitting it, so LegRight stays hidden and LegLeft does not
+# swing independently (see _apply_legs/_process).
+
+func test_legs_are_fused_now_that_illustrated_leg_art_is_registered():
+	assert_true(view.legs_are_fused())
+
+
+func test_fused_legs_hide_the_right_leg_node_regardless_of_movement():
+	for state in [view.MovementState.IDLE, view.MovementState.WALKING]:
+		view.set_movement_state(state)
+		view._process(0.1)
+		var leg_right: Sprite2D = view.get_node("LegRight")
+		assert_false(leg_right.visible, str(state))
+
+
+func test_fused_legs_still_hide_entirely_for_swimming():
+	view.set_movement_state(view.MovementState.SWIMMING)
+	view._process(0.1)
+	assert_false(view.legs_visible())
+
+
+# -- illustrated arms: two independent poses, not one frame worn twice ------
+
+func test_arm_left_and_arm_right_use_different_source_frames():
+	var arm_left: Sprite2D = view.get_node("ArmLeft")
+	var arm_right: Sprite2D = view.get_node("ArmRight")
+	assert_ne(arm_left.texture, arm_right.texture)
+
+
 func test_equip_slot_marks_the_slot_as_equipped():
 	assert_false(view.is_slot_equipped("head"))
 	view.equip_slot("head", Color.RED)
@@ -201,23 +234,63 @@ func test_part_art_sizes_are_the_world_sizes_times_the_detail_multiplier():
 	assert_eq(CharacterView.ART_ARM_SIZE, ArtResolution.art_size(CharacterView.ARM_SIZE))
 
 
-## Every part sprite must be scaled back down, or the oversized art would
-## render a hero 4x their world footprint.
-func test_every_part_sprite_is_scaled_back_to_its_world_footprint():
-	for part_name in ["Body", "Head", "LegLeft", "LegRight", "ArmLeft", "ArmRight", "HeadSlot", "ToolSlot"]:
+## HeadSlot/ToolSlot are equipment, never routed through the illustrated
+## pipeline (see equip_slot/equip_weapon) -- they always share the flat
+## ArtResolution.SPRITE_SCALE. Head/Body/Leg*/Arm* now go through
+## IllustratedCharacterSprite by default (see below): each is normalized onto
+## ONE shared working canvas, not sized per part, so they carry their OWN
+## measured scale instead of this flat constant -- see
+## test_illustrated_parts_are_each_scaled_to_their_own_world_size.
+func test_equipment_slots_share_the_flat_art_resolution_scale():
+	for part_name in ["HeadSlot", "ToolSlot"]:
 		var sprite: Sprite2D = view.get_node(part_name)
 		assert_almost_eq(sprite.scale.x, ArtResolution.SPRITE_SCALE, 0.0001, part_name)
 		assert_almost_eq(sprite.scale.y, ArtResolution.SPRITE_SCALE, 0.0001, part_name)
 
 
-## The body's drawn size (art pixels x scale) must equal its world size --
-## the invariant that keeps the hero matched to the world and to the
-## .tscn's world-unit part positions.
+## Every illustrated part sprite must be scaled back down to its OWN real
+## world footprint (see IllustratedCharacterSprite.part_scale_for/
+## head_scale_for) -- measured from the part's own drawn content, since a
+## flat shared scale would render some parts oversized and others
+## undersized the instant their content doesn't fill the shared working
+## canvas identically (which normalize_frames' own aspect-preserving fit
+## means it usually doesn't).
+func test_illustrated_parts_are_each_scaled_to_their_own_world_size():
+	var expected_world_height := {
+		"Body": CharacterView.BODY_SIZE.y,
+		"Head": CharacterView.HEAD_SIZE.y,
+		"LegLeft": CharacterView.LEG_SIZE.y,
+		"ArmLeft": CharacterView.ARM_SIZE.y,
+		"ArmRight": CharacterView.ARM_SIZE.y,
+	}
+	for part_name in expected_world_height:
+		var sprite: Sprite2D = view.get_node(part_name)
+		var content_height := _opaque_content_height(sprite.texture.get_image())
+		assert_almost_eq(
+			content_height * sprite.scale.y, float(expected_world_height[part_name]), 0.5, part_name
+		)
+
+
+## The body's drawn CONTENT (art pixels x scale, trimmed to what is actually
+## opaque -- illustrated art is normalized onto a padded shared canvas, see
+## IllustratedCharacterSprite.CANVAS_SIZE, so the raw texture size alone
+## overstates it) must equal its world size -- the invariant that keeps the
+## hero matched to the world and to the .tscn's world-unit part positions.
 func test_body_draws_at_its_world_size():
 	var body: Sprite2D = view.get_node("Body")
-	var drawn := Vector2(body.texture.get_size()) * body.scale
-	assert_almost_eq(drawn.x, float(CharacterView.BODY_SIZE.x), 0.01)
-	assert_almost_eq(drawn.y, float(CharacterView.BODY_SIZE.y), 0.01)
+	var content_height := _opaque_content_height(body.texture.get_image())
+	assert_almost_eq(content_height * body.scale.y, float(CharacterView.BODY_SIZE.y), 0.5)
+
+
+func _opaque_content_height(image: Image) -> float:
+	var min_y := image.get_height()
+	var max_y := -1
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.01:
+				min_y = mini(min_y, y)
+				max_y = maxi(max_y, y)
+	return float(max_y - min_y + 1)
 
 
 # -- the character must be anchored at its FEET, not its center --------------

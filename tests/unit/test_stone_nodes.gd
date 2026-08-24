@@ -248,6 +248,54 @@ func test_try_disperse_contact_count_advances_between_calls():
 	assert_eq(pebble._disperse_contact_count, 2)
 
 
+# -- hover tooltip: name + available actions ---------------------------------
+#
+# See HoverTargetFinder/World._update_hover_tooltip. A stone's name reflects
+# its Wentworth class, and its actions depend on what a player can actually
+# do to it: every liftable stone can be picked up, and only a LIGHT one
+# (below Kick.is_kickable's leg-mass cutoff) can also be kicked -- a boulder-
+# adjacent cobble is too heavy for a kick to budge (see PebbleDispersion).
+
+func test_a_pebbles_display_name_is_its_wentworth_class():
+	var pebble := LiftableStone.new()
+	pebble.diameter_cm = 3.0
+	add_child_autofree(pebble)
+	assert_eq(pebble.get_display_name(), StoneSize.class_for(3.0).capitalize())
+
+
+func test_a_light_stone_can_be_picked_up_and_kicked():
+	var pebble := LiftableStone.new()
+	pebble.diameter_cm = 3.0  # well under Kick.is_kickable's mass cutoff
+	add_child_autofree(pebble)
+	var verbs := []
+	for action in pebble.get_hover_actions():
+		verbs.append(action["verb"])
+	assert_has(verbs, "Pick Up")
+	assert_has(verbs, "Kick")
+
+
+func test_a_heavy_liftable_stone_cannot_be_kicked():
+	var cobble := LiftableStone.new()
+	cobble.diameter_cm = 25.0  # liftable (under COBBLE_MAX_CM) but too heavy to kick
+	add_child_autofree(cobble)
+	var verbs := []
+	for action in cobble.get_hover_actions():
+		verbs.append(action["verb"])
+	assert_has(verbs, "Pick Up")
+	assert_does_not_have(verbs, "Kick")
+
+
+func test_a_boulders_display_name_and_action():
+	var boulder := SmashableStone.new()
+	boulder.diameter_cm = 150.0
+	add_child_autofree(boulder)
+	assert_eq(boulder.get_display_name(), "Boulder")
+	var actions: Array = boulder.get_hover_actions()
+	assert_eq(actions.size(), 1)
+	assert_eq(actions[0]["verb"], "Smash")
+	assert_eq(actions[0]["action"], "attack")
+
+
 class _Picker:
 	var inventory = Inventory.new(20)
 

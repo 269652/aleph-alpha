@@ -68,3 +68,50 @@ func test_a_diagonal_neighbour_counts_as_near_as_a_side_one():
 		DecorationLod.keeps_decoration(Vector2i(1, 1), Vector2i.ZERO, 1),
 		DecorationLod.keeps_decoration(Vector2i(1, 0), Vector2i.ZERO, 1)
 	)
+
+
+# -- tile-precise cutoff (grass) ----------------------------------------------
+#
+# keeps_decoration's own chunk-level check is coarser than it looks: a chunk
+# is CHUNK_SIZE tiles square while the camera only ever shows a much smaller
+# window (its own doc comment: "three times what the camera can actually
+# show"). Reported live: "optimize the grass blade rendering so it only draws
+# what the player currently sees +2 tiles of buffer in every direction...
+# to improve framerate" -- keeps_decoration_tile is the tighter, rectangular,
+# sub-chunk cutoff EarthChunkManager applies to grass specifically, layered
+# ON TOP of (never instead of) the existing chunk-level gate.
+
+func test_keeps_decoration_tile_is_true_at_the_players_own_tile():
+	assert_true(DecorationLod.keeps_decoration_tile(Vector2i(5, -3), Vector2i(5, -3), Vector2(10.0, 5.0), 2))
+
+
+func test_keeps_decoration_tile_is_true_exactly_at_the_span_plus_buffer_edge():
+	# half_span (10, 5) + buffer 2 -> kept up to (12, 7) away on each axis.
+	assert_true(DecorationLod.keeps_decoration_tile(Vector2i(12, 0), Vector2i.ZERO, Vector2(10.0, 5.0), 2))
+	assert_true(DecorationLod.keeps_decoration_tile(Vector2i(0, 7), Vector2i.ZERO, Vector2(10.0, 5.0), 2))
+
+
+func test_keeps_decoration_tile_is_false_just_beyond_the_span_plus_buffer_edge():
+	assert_false(DecorationLod.keeps_decoration_tile(Vector2i(13, 0), Vector2i.ZERO, Vector2(10.0, 5.0), 2))
+	assert_false(DecorationLod.keeps_decoration_tile(Vector2i(0, 8), Vector2i.ZERO, Vector2(10.0, 5.0), 2))
+
+
+## Rectangular, not circular: a tile can be far away on BOTH axes at once and
+## still count as kept, as long as each axis alone stays within its own
+## bound -- matching the camera's own rectangular view, the same philosophy
+## keeps_decoration's own Chebyshev (not Euclidean) chunk check already uses.
+func test_keeps_decoration_tile_is_rectangular_not_circular():
+	assert_true(DecorationLod.keeps_decoration_tile(Vector2i(12, 7), Vector2i.ZERO, Vector2(10.0, 5.0), 2))
+
+
+func test_keeps_decoration_tile_buffer_widens_the_kept_area():
+	var tile := Vector2i(11, 0)
+	assert_false(DecorationLod.keeps_decoration_tile(tile, Vector2i.ZERO, Vector2(10.0, 5.0), 0))
+	assert_true(DecorationLod.keeps_decoration_tile(tile, Vector2i.ZERO, Vector2(10.0, 5.0), 2))
+
+
+func test_keeps_decoration_tile_half_span_is_rounded_up_not_truncated():
+	# A fractional span (matches real camera framing, e.g. 5.625 tiles down)
+	# must round UP before the buffer is added, or a tile the camera can
+	# genuinely still see gets dropped a fraction of a tile early.
+	assert_true(DecorationLod.keeps_decoration_tile(Vector2i(0, 6), Vector2i.ZERO, Vector2(10.0, 5.625), 0))

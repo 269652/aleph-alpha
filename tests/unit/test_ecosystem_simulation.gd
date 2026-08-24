@@ -310,3 +310,114 @@ func test_animals_do_not_jump_to_a_region_that_is_not_adjacent():
 		sim.herbivore_population(Vector2i(9, 9)), 0.0, 0.0001,
 		"a distant region is not a neighbour"
 	)
+
+
+# -- land health: overharvesting leaves a lasting mark ------------------------
+#
+# docs/concept/world.md "Land health: overharvesting leaves a lasting mark,
+# not just a slower respawn" -- a persistent per-chunk-aggregate value (same
+# fidelity tier as herbivore/predator/fish population, all Dictionary[
+# Vector2i, float] here already) that depletes under sustained
+# harvest-exceeds-regrowth pressure and multiplies effective_capacity down
+# further, on top of the existing weather-driven ceiling.
+
+func test_add_region_seeds_land_health_at_full():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.6, 0.6))
+	assert_almost_eq(simulation.land_health(Vector2i(0, 0)), 1.0, 0.0001)
+
+
+## Fail-open, same convention as herbivore_capacity_at/fish_capacity_at for
+## an unknown region -- an unloaded/never-visited region reads as pristine,
+## not as fully degraded.
+func test_land_health_is_full_for_an_unknown_region():
+	var sim = EcosystemSimulation.new()
+	assert_almost_eq(sim.land_health(Vector2i(9, 9)), 1.0, 0.0001)
+
+
+func test_seed_land_health_overrides_the_fresh_seeding():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.6, 0.6))
+	simulation.seed_land_health(Vector2i(0, 0), 0.4)
+	assert_almost_eq(simulation.land_health(Vector2i(0, 0)), 0.4, 0.0001)
+
+
+func test_seed_land_health_on_an_unknown_region_is_a_harmless_no_op():
+	var sim = EcosystemSimulation.new()
+	sim.seed_land_health(Vector2i(9, 9), 0.4)
+	assert_almost_eq(sim.land_health(Vector2i(9, 9)), 1.0, 0.0001)
+
+
+## record_vegetation_harvest mirrors record_catch's shape/role for fishing:
+## an explicit mortality/removal term the wild vegetation density otherwise
+## lacks entirely (only weather moves it today).
+func test_record_vegetation_harvest_immediately_reduces_standing_density():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.8, 0.8))
+	var before := simulation.average_vegetation_density(Vector2i(0, 0))
+	simulation.record_vegetation_harvest(Vector2i(0, 0), 0.1)
+	assert_lt(simulation.average_vegetation_density(Vector2i(0, 0)), before)
+
+
+func test_record_vegetation_harvest_never_goes_negative():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.8, 0.8))
+	simulation.record_vegetation_harvest(Vector2i(0, 0), 1000.0)
+	assert_almost_eq(simulation.average_vegetation_density(Vector2i(0, 0)), 0.0, 0.0001)
+
+
+func test_record_vegetation_harvest_on_an_unknown_region_is_a_harmless_no_op():
+	var sim = EcosystemSimulation.new()
+	sim.record_vegetation_harvest(Vector2i(9, 9), 1.0)
+	assert_almost_eq(sim.average_vegetation_density(Vector2i(9, 9)), 0.0, 0.0001)
+
+
+## The core causal claim: sustained harvest that outpaces regrowth, repeated
+## step after step, measurably depletes land health -- not a single harvest
+## event.
+func test_sustained_overharvest_depletes_land_health_over_many_steps():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.8, 0.8))
+	for i in 60:
+		# A harvest far larger than one day's regrowth could ever replace,
+		# every single simulated day -- genuine sustained overharvest.
+		simulation.record_vegetation_harvest(Vector2i(0, 0), 0.5)
+		simulation.step(1.0)
+	assert_lt(simulation.land_health(Vector2i(0, 0)), 1.0)
+
+
+## A region harvested lightly enough to stay within its own regrowth (or not
+## harvested at all) should NOT have its land health ground down -- this is
+## the "sustained overharvest", not "any use at all", distinction the concept
+## doc calls for.
+func test_light_or_no_harvest_does_not_deplete_land_health():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.8, 0.8))
+	for i in 30:
+		simulation.step(1.0)
+	assert_almost_eq(simulation.land_health(Vector2i(0, 0)), 1.0, 0.0001)
+
+
+## A degraded region left alone (no further harvest) should recover, however
+## slowly -- see VegetationGrowthModel.LAND_HEALTH_RECOVERY_PACE_PER_DAY.
+func test_land_health_recovers_over_time_once_harvesting_stops():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.8, 0.8))
+	simulation.seed_land_health(Vector2i(0, 0), 0.2)
+	for i in 30:
+		simulation.step(1.0)
+	assert_gt(simulation.land_health(Vector2i(0, 0)), 0.2)
+
+
+## The full multiplicative chain within this layer: a degraded region's
+## vegetation density settles at a LOWER equilibrium than an identical twin
+## region with full land health, given the EXACT SAME weather -- proving
+## land health is a real additional factor, not redundant with weather.
+func test_degraded_land_health_measurably_lowers_settled_vegetation_density():
+	var degraded_coord := Vector2i(0, 0)
+	var healthy_coord := Vector2i(5, 5)
+	simulation.add_region(degraded_coord, _make_chunk("grassland", 0.8, 0.8))
+	simulation.add_region(healthy_coord, _make_chunk("grassland", 0.8, 0.8))
+	simulation.seed_land_health(degraded_coord, 0.3)
+
+	for i in 30:
+		simulation.step(1.0)
+
+	assert_lt(
+		simulation.average_vegetation_density(degraded_coord),
+		simulation.average_vegetation_density(healthy_coord),
+		"degraded land health must settle at a lower density than untouched land under identical weather"
+	)

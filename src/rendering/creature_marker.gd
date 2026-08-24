@@ -38,6 +38,7 @@ const Knockback = preload("res://src/gameplay/knockback.gd")
 const HealthBar = preload("res://src/gameplay/health_bar.gd")
 const AnimalReproduction = preload("res://src/gameplay/animal_reproduction.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
 
@@ -91,10 +92,10 @@ const MOVEMENT_LOOKAHEAD := 14.0
 ## _blocker_radius.
 const DEFAULT_BLOCKER_RADIUS := 8.0
 
-## Every hoverable animal marker (this one plus FishMarker/AmbientFlyerMarker/
-## PiscivoreBirdMarker) joins this shared group too, so World's mouse-hover
-## name tooltip can scan one group regardless of marker type.
-const HOVERABLE_GROUP := "hoverable_animal"
+## Every hoverable entity -- this marker plus FishMarker/AmbientFlyerMarker/
+## PiscivoreBirdMarker/DroppedItem/LiftableStone/SmashableStone/MinableOre/
+## ChoppableTree -- joins HoverTargetFinder.GROUP_NAME, so World's hover
+## tooltip can scan one group regardless of entity type.
 
 ## How far (pixels) a creature can sense other creatures/players, and how far
 ## (tiles) it scans terrain for food/water.
@@ -266,6 +267,16 @@ var _water_ripple_accumulator := 0.0
 ## manager so it travels with the animal across chunk boundaries.
 var carried_seed_species := ""
 var carried_seed_origin := Vector2.ZERO
+
+## Grass seed a MOUSE is currently caching, and where it picked it up (see
+## EarthChunkManager._step_grass_seed_caching / SeedCaching). Separate from
+## carried_seed_species/_origin above rather than reusing them: those track a
+## FLOWER seed riding on ANY non-predator creature's coat, and a mouse can in
+## principle be doing both at once (brushing a bloom while also caching a
+## grass seed it actively picked up), so the two carriers need independent
+## state. No species field -- a chunk grows only one kind of grass.
+var carried_grass_seed := false
+var carried_grass_seed_origin := Vector2.ZERO
 var _world = null
 var _tile_size := 16
 
@@ -302,7 +313,7 @@ var _cached_water_direction := Vector2.ZERO
 
 func _ready() -> void:
 	add_to_group(GROUP_NAME)
-	add_to_group(HOVERABLE_GROUP)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
 	# By now CreatureRenderer has assigned this individual's wander_seed, so
 	# its needs can start somewhere of its own in the cycle rather than at
 	# exactly empty like every other animal in the herd.
@@ -493,10 +504,18 @@ func _nearest_player_position():
 	# player to measure against, so it runs at full rate.
 	if not is_inside_tree():
 		return null
-	var players := get_tree().get_nodes_in_group("player")
-	if players.is_empty():
-		return null
-	return players[0].position
+	# Cache the player node so this LOD-distance check (run every frame for
+	# every creature) doesn't re-query the whole "player" group each time --
+	# just re-look-up when the cached ref is gone (player despawn/respawn).
+	if _cached_player == null or not is_instance_valid(_cached_player):
+		var players := get_tree().get_nodes_in_group("player")
+		if players.is_empty():
+			return null
+		_cached_player = players[0]
+	return _cached_player.position
+
+
+var _cached_player: Node = null
 
 
 func _process(frame_delta: float) -> void:

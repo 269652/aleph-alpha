@@ -165,10 +165,16 @@ correct tile positions once `TILE_SIZE` changes.
   `IllustratedStoneSprite`'s, tuned specifically for these sheets. Two
   deliberate scope limits, not gaps: ocean stays procedural (illustrated
   tiles have no animation seam yet, and ocean's whole identity is the
-  animated scroll), and the directional-blend/corner-carve border tiles
-  stay procedural regardless of what's registered (illustrating that
-  combinatorial space by hand isn't practical — see
-  `IllustratedTerrainSprite`'s own doc comment).
+  animated scroll), and the directional-blend/corner-carve border tiles'
+  *shape* stays procedurally generated regardless of what's registered
+  (illustrating that combinatorial space by hand isn't practical — see
+  `IllustratedTerrainSprite`'s own doc comment) — but the *pixels* that
+  shape selects between are real illustrated art on both sides, composited
+  by `TerrainRenderer._blend_image`/`_corner_image`, and the boundary
+  itself now curves organically and differs per baked variant instead of
+  running as one straight line (`ProceduralTerrainSprite.
+  blend_edge_wobble`) — see `docs/progress.md`'s illustrated-ground-tiles
+  entry for the full history of both.
 
 
 ## Presentation: how an art pixel reaches a screen pixel

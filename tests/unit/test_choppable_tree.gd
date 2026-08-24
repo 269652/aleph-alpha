@@ -74,6 +74,23 @@ func test_a_non_lethal_hit_does_not_drop_wood_or_free_the_tree():
 	assert_false(tree.is_queued_for_deletion())
 
 
+# -- hover tooltip: name + available actions ---------------------------------
+
+func test_a_standing_trees_display_name_and_action():
+	assert_eq(tree.get_display_name(), "Tree")
+	var actions: Array = tree.get_hover_actions()
+	assert_eq(actions.size(), 1)
+	assert_eq(actions[0]["verb"], "Chop")
+	assert_eq(actions[0]["action"], "attack")
+
+
+## A felled trunk is still choppable (see _cut_up), so its hover name should
+## say so rather than keep calling it a standing tree.
+func test_a_felled_trees_display_name_changes():
+	tree.take_damage(tree.health)
+	assert_eq(tree.get_display_name(), "Fallen Tree")
+
+
 # -- a sapling has to actually grow ------------------------------------------
 
 ## A planted sapling grew only when its chunk was unloaded and reloaded.

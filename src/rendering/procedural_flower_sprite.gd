@@ -216,10 +216,34 @@ static func stem_height_px(seed_value: int) -> int:
 
 ## How far above the flower's own world position (which is the stem's FOOT,
 ## since the sprite is foot-anchored for Y-sorting) the blossom sits, in
-## world units. Landing at the flower's position alone put insects at the
-## base of the stem instead of on the bloom.
-static func blossom_height_world(species_id: String, seed_value: int) -> float:
-	return float(stem_height_px(seed_value)) * world_scale_for(species_id)
+## world units, for a plant actually rendered at `plant_scale` -- the SAME
+## per-plant scale (species size, this plant's own variance, and how far it
+## has grown -- see plant_scale_for/growth_scale) the sprite itself is drawn
+## at, not just the species' nominal size.
+##
+## Landing at the flower's position alone put insects at the base of the
+## stem instead of on the bloom. Scaling by the species alone was a smaller
+## version of the same mistake: a below-average or still-growing plant's
+## sprite is smaller than its species' norm, but its landing point did not
+## shrink with it, which reads as landing near the stem rather than on the
+## bloom -- worst on a species whose scale is large to begin with, where even
+## a modest mismatch is a lot of world pixels (reported on the sunflower:
+## "butterflies drink from their stem").
+static func blossom_height_world(seed_value: int, plant_scale: float) -> float:
+	return float(stem_height_px(seed_value)) * plant_scale
+
+
+## How much an illustrated head's canvas must shrink, 0..1, to fit
+## `headroom_px` rows -- the space actually available above the stem's own
+## attachment point (see stem_height_px) -- given the head's nominal size is
+## `head_canvas_px`. 1.0 means it already fits as drawn.
+##
+## See _paint_illustrated_head for why the whole head shrinks instead of
+## letting whatever doesn't fit get clipped by the canvas edge.
+static func head_fit_scale(headroom_px: int, head_canvas_px: int) -> float:
+	if head_canvas_px <= 0:
+		return 1.0
+	return clampf(float(headroom_px) / float(head_canvas_px), 0.0, 1.0)
 
 
 func generate_texture(
@@ -442,17 +466,37 @@ func _paint_illustrated_head(image: Image, cx: int, cy: int, petal: Color, arche
 		else IllustratedFlowerHead.STAGE_FULL_BLOOM
 	)
 	var head_image: Image = _filled_head(frames[stage].get_image())
+	var canvas := IllustratedFlowerHead.HEAD_CANVAS_SIZE
+	# The stem leaves only `cy` rows of headroom above its own attachment
+	# point (see stem_height_px), which is LESS than the head's nominal
+	# canvas height for every roll this project currently draws -- composited
+	# at full size, the crown was sliced off flat by the canvas edge instead
+	# of drawn smaller. Invisible on the small species this shipped with;
+	# glaring on the sunflower, whose much larger world scale turned that
+	# always-present few-pixel clip into an obvious flat top (reported, with
+	# a screenshot: "the sunflower sprite is clipped at the top"). Shrinking
+	# the whole head to fit -- the same trick normalize_frames already uses
+	# one layer up, to fit a drawing to ITS canvas -- keeps every stage's
+	# full silhouette, just smaller on a short-stemmed plant, instead of
+	# cutting its crown off.
+	var fit_scale := head_fit_scale(cy, canvas.y)
+	if fit_scale < 1.0:
+		canvas = Vector2i(
+			maxi(1, int(round(float(canvas.x) * fit_scale))),
+			maxi(1, int(round(float(canvas.y) * fit_scale)))
+		)
+		head_image.resize(canvas.x, canvas.y, Image.INTERPOLATE_LANCZOS)
 	# What counts as "fully lit" in THIS sheet. Without it the recolour tops
 	# out at however bright the artist happened to draw the highlight, so
 	# every variety came out darker than its own colour -- which a saturated
 	# red survives and a white or pale yellow does not, washing the pale
 	# varieties into grey. Normalising here means a white tulip is actually
-	# white, whatever the sheet's exposure.
+	# white, whatever the sheet's exposure. Measured AFTER any fit-shrink
+	# above, so it normalises against what is actually about to be painted.
 	# Where this sheet's petals sit on the hue wheel (see "The accent mask").
 	# -1 means the sheet declares no mask, and everything is petal.
 	var petal_hue := IllustratedFlowerHead.petal_hue_for(_head_species, archetype) / 360.0
 	var peak := _peak_luminance(head_image, petal_hue)
-	var canvas := IllustratedFlowerHead.HEAD_CANVAS_SIZE
 	var dest_x := cx - canvas.x / 2
 	var dest_y := cy - canvas.y
 	for y in canvas.y:

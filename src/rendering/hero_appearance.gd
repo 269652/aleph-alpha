@@ -87,7 +87,23 @@ const BEARD_STYLE_COUNT := 4
 
 ## The customization axes a character creator can cycle through, and how many
 ## options each has -- so the creator UI never hard-codes pool sizes.
-const AXES := ["skin", "hair_color", "hair_style", "beard", "eyes"]
+## Accent/trim color -- independent of class (previously always the class's
+## own fixed palette.trim, no player choice at all). Matches dna.md's
+## resolved "cosmetics layer on top" pillar: dye/accent color is exactly the
+## kind of thing that customizes without touching what the class itself
+## communicates (tunic/legs stay class-derived, only the accent is free).
+const TRIM_COLORS := [
+	Color(0.88, 0.72, 0.28),  # gold
+	Color(0.82, 0.85, 0.9),  # silver
+	Color(0.7, 0.36, 0.14),  # copper
+	Color(0.72, 0.16, 0.16),  # crimson
+	Color(0.24, 0.56, 0.36),  # verdant
+	Color(0.42, 0.32, 0.62),  # amethyst
+]
+## Names in TRIM_COLORS order, for the creator's axis readout.
+const TRIM_NAMES := ["Gold", "Silver", "Copper", "Crimson", "Verdant", "Amethyst"]
+
+const AXES := ["skin", "hair_color", "hair_style", "beard", "eyes", "trim"]
 
 
 ## How many options a customization axis offers. 0 for an unknown axis
@@ -104,6 +120,8 @@ func option_count(axis: String) -> int:
 			return BEARD_STYLE_COUNT
 		"eyes":
 			return EYE_COLORS.size()
+		"trim":
+			return TRIM_COLORS.size()
 		_:
 			return 0
 
@@ -118,18 +136,30 @@ func appearance_for(class_id: String, dna_seed: int) -> Dictionary:
 		"hair_style": _roll(dna_seed, "hair_style", HAIR_STYLE_COUNT),
 		"beard": _roll(dna_seed, "beard", BEARD_STYLE_COUNT),
 		"eyes": _roll(dna_seed, "eyes", EYE_COLORS.size()),
-	})
+		"trim": _roll(dna_seed, "trim", TRIM_COLORS.size()),
+	}, dna_seed)
 
 
 ## The look for an explicitly authored hero -- what the character creator
 ## builds as the player cycles each axis. `choices` maps axis name -> option
 ## index; a missing or out-of-range index wraps into its pool rather than
 ## erroring, so a creator can increment freely and let this normalize.
-func appearance_from_choices(class_id: String, choices: Dictionary) -> Dictionary:
+##
+## `seed_value` is carried straight through onto the returned dict's "seed"
+## rather than used to roll anything here -- unlike appearance_for, this path
+## is for a look a player is actively hand-authoring, so nothing about it
+## should be RE-derived from the seed. It exists so IllustratedCharacterSprite
+## has something deterministic to pick this hero's illustrated head cell from
+## (see head_cell_index_for) without every caller of apply_appearance needing
+## to plumb a seed through separately. Defaults to 0 -- a caller with no seed
+## in hand yet (e.g. a live creator preview before Randomise has run) still
+## gets a valid, stable appearance rather than an error.
+func appearance_from_choices(class_id: String, choices: Dictionary, seed_value: int = 0) -> Dictionary:
 	var palette: Dictionary = CLASS_PALETTES.get(class_id, CLASS_PALETTES[_FALLBACK_CLASS])
 	var hair_style := _wrap(int(choices.get("hair_style", 0)), HAIR_STYLE_COUNT)
 	var beard := _wrap(int(choices.get("beard", 0)), BEARD_STYLE_COUNT)
 	return {
+		"seed": seed_value,
 		"skin": SKIN_TONES[_wrap(int(choices.get("skin", 0)), SKIN_TONES.size())],
 		"hair": HAIR_COLORS[_wrap(int(choices.get("hair_color", 0)), HAIR_COLORS.size())],
 		"hair_style": hair_style,
@@ -138,7 +168,7 @@ func appearance_from_choices(class_id: String, choices: Dictionary) -> Dictionar
 		"beard_name": BEARD_STYLES[beard],
 		"eyes": EYE_COLORS[_wrap(int(choices.get("eyes", 0)), EYE_COLORS.size())],
 		"tunic": palette.tunic,
-		"trim": palette.trim,
+		"trim": TRIM_COLORS[_wrap(int(choices.get("trim", 0)), TRIM_COLORS.size())],
 		"legs": palette.legs,
 	}
 
@@ -153,6 +183,7 @@ func choices_from_appearance(appearance: Dictionary) -> Dictionary:
 		"hair_style": int(appearance.get("hair_style", 0)),
 		"beard": int(appearance.get("beard", 0)),
 		"eyes": maxi(EYE_COLORS.find(appearance.get("eyes", EYE_COLORS[0])), 0),
+		"trim": maxi(TRIM_COLORS.find(appearance.get("trim", TRIM_COLORS[0])), 0),
 	}
 
 

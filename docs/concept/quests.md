@@ -124,8 +124,13 @@ split rather than a separate warning system:
 - **Loaded chunk** (player nearby, whether or not they triggered the
   encounter): the threat is real-time. Individual NPC need-threshold
   crossings (the same interrupt that already triggers an out-of-cycle
-  replan per `npc.md`) surface a visible rumor/quest offer before the attack
-  lands — genuinely preventable. Combat, when it happens, runs in real time
+  replan per `npc.md`) create the underlying threat awareness; once a
+  nearby NPC's own memory of it
+  ([npc.md](npc.md#memory-beliefs-and-rumor-propagation)) crosses a
+  confidence/salience threshold, it surfaces as a visible rumor/quest offer
+  before the attack lands — genuinely preventable, and no longer a hand-wave:
+  the rumor *is* a real memory record, not a scripted trigger. Combat, when
+  it happens, runs in real time
   between the settlement's defenders — *any* NPC with combat-capable
   build, not a dedicated guard/militia occupation, keeping every villager's
   self-determination intact — and the threat, using the same

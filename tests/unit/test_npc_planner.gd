@@ -74,6 +74,42 @@ func test_fake_planner_merchant_works_at_the_stall():
 	assert_eq(midday["activity"], "work")
 
 
+## A hunter's schedule should route them to a hunting ground, not the
+## farmer's field -- gathering wild game is a distinct role (see
+## docs/concept/npc.md "Needs and the local production economy").
+func test_fake_planner_hunter_works_at_the_hunting_ground():
+	var planner := NpcPlanner.FakeNpcPlanner.new()
+	var identity: NpcIdentity
+	for seed_value in range(50):
+		var candidate := NpcIdentity.new(seed_value)
+		if candidate.occupation == "hunter":
+			identity = candidate
+			break
+	assert_not_null(identity, "precondition: expected a hunter within 50 seeds")
+	var schedule := planner.plan_day(identity, 0)
+	var midday := NpcSchedule.entry_for_time_block(schedule, "midday")
+	assert_eq(midday["location_tag"], "hunting_ground")
+	assert_eq(midday["activity"], "work")
+
+
+## A nurse (new non-producer village-care role) works the shared well/square
+## rather than a dedicated building that doesn't exist yet -- documented
+## judgment call, see docs/concept/npc.md.
+func test_fake_planner_nurse_works_at_the_well():
+	var planner := NpcPlanner.FakeNpcPlanner.new()
+	var identity: NpcIdentity
+	for seed_value in range(50):
+		var candidate := NpcIdentity.new(seed_value)
+		if candidate.occupation == "nurse":
+			identity = candidate
+			break
+	assert_not_null(identity, "precondition: expected a nurse within 50 seeds")
+	var schedule := planner.plan_day(identity, 0)
+	var midday := NpcSchedule.entry_for_time_block(schedule, "midday")
+	assert_eq(midday["location_tag"], "well")
+	assert_eq(midday["activity"], "work")
+
+
 ## -- NpcSchedule: resolving which entry is "current" for the time of day --
 
 func test_time_block_for_hour_covers_the_full_day():

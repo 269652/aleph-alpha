@@ -52,6 +52,59 @@ so an NPC feels like *someone* to approach even before the Live Dialogue
 System (`docs/progress.md`) is built, the same relationship Basic Merchant
 Shopping has to a real shop UI.
 
+## Memory, beliefs, and rumor propagation
+
+Formalizes the "persistent memory log" named above (Planning architecture)
+into this project's own terms — the concrete, project-specific expression of
+[docs/emergence/02-history-memory-rumors.md](../emergence/02-history-memory-rumors.md)'s
+general mechanism that `docs/roadmap.md`'s Emergence-substrate table already
+expects here, the same relationship [quests.md](quests.md) has to
+`worldbosses.md`.
+
+- **Fact vs. belief.** The event/causality substrate
+  ([docs/emergence/00-emergence-architecture.md](../emergence/00-emergence-architecture.md),
+  `EventStore`) stays exactly as-is — ground truth, append-only, untouched by
+  this. A memory record never overwrites an event; it's a separate,
+  deliberately-less-authoritative record one entity holds *about* one event.
+  Many different NPCs can each hold their own, possibly contradictory,
+  memory of the same event.
+- **What a memory holds**: which event, the holder, believed actors/
+  location/outcome (start equal to the real event, may diverge later),
+  confidence (0–1), emotional salience, source type, recency, and a
+  distortion accumulator.
+- **Source types** (unchanged from `02`): firsthand, witnessed, trusted
+  testimony, stranger testimony, inference, written record, rumor.
+- **Propagation reuses existing NPC proximity, not a new social model.**
+  NPCs already meet at a settlement's shared landmarks (well/stall/gate) on
+  their daily schedule (`npc_schedule.gd`) — that existing contact point is
+  where memory propagates: when one NPC tells another about an event, the
+  listener gets a new memory record for the same event, confidence and
+  source type both stepping down by one hop (firsthand → the listener gets
+  trusted/stranger testimony, not firsthand), scaled by the pair's existing
+  relationship/trust. No new movement, scheduling, or social-graph code
+  required — it rides the schedule system that already exists.
+- **Decay.** An unreinforced memory's confidence/salience fades over time,
+  the same "decay unless reinforced" principle relationships already assume
+  above. Shape only for now — the exact decay function is a tuned constant,
+  not eyeballed, pinned by a test once it exists (per this project's no-
+  manual-tuning rule).
+- **Content distortion deliberately deferred.** `02` also describes believed
+  *content* itself mutating through retelling (a "telephone game" where
+  *who* did something changes, not just how confident you are about it).
+  Real, but unproven gameplay payoff yet — this pass keeps believed actors/
+  location/outcome equal to the source event and only decays confidence/
+  salience; content mutation is a real follow-up once a scenario actually
+  needs it, not a missing piece of this one.
+- **The player isn't a first-class belief-holder yet.** Rather than model
+  player cognition as another citizen of the memory graph,
+  [quests.md](quests.md#resolution-warning-surprise-and-autonomous-defense)'s
+  rumor signal is answered directly: a nearby NPC holding a sufficiently
+  confident/salient memory of a threat-to-their-settlement event is what a
+  quest-offer/rumor UI queries. Modeling the player's own beliefs as memory
+  records is a natural extension once there's an actual reason to need it
+  (a rumor the player mishears, say), not required for the mechanism to
+  work today.
+
 ## Hiring & instruction
 
 - **A separate instruction DSL, not the magic DSL.** Player-authored NPC
@@ -102,6 +155,62 @@ not, depending on how that child's own traits/relationships develop.
   conditions make it viable, and that can shift over time" philosophy,
   applied to people instead of wildlife.
 
+## Needs and the local production economy
+
+The lifecycle section above says famine can hollow out a village; this
+section is the mechanism that makes famine possible at all, and the
+scaffolding [economy.md](economy.md) is waiting on ("needs actual numbers
+once the production systems it depends on are built").
+
+- **NPCs get real hunger**, not just villagers-as-scenery. Same shape as
+  [creature_needs.gd](../../src/gameplay/creature_needs.gd) (hunger rises
+  per second, `is_hungry()`, `feed()`) — a genuinely new wiring, since
+  `NpcMarker` carries no needs state today, but the identical pattern
+  already proven for wild/tamed animals, not a new design.
+- **Occupation decides how a need gets met, not just where an NPC stands
+  during the day.** Today `occupation` only picks a work-location tag
+  ([npc_planner.gd](../../src/world/npc_planner.gd)); this is the missing
+  half — what actually happens at that location:
+  - **Producer occupations** (farmer, fisher, hunter — hunter is a new
+    addition to the existing occupation list, since gathering wild game is
+    a distinct role from tending fields) gather real food while working,
+    reading the SAME numbers the player's own foraging already uses rather
+    than a parallel economy stat:
+    - farmer → [vegetation_growth_model.gd](../../src/world/vegetation_growth_model.gd)'s
+      `effective_capacity` (a real drought measurably lowers a farmer's
+      yield, the same number that visibly thins wild vegetation)
+    - hunter → [herbivore_population_model.gd](../../src/world/herbivore_population_model.gd)'s
+      `carrying_capacity` (regional game scarcity is the same number
+      wildlife density already runs on)
+    - fisher → the aquatic population model's own yield, mirrored the same
+      way (no separate "fisher abundance" stat invented)
+  - **Non-producer occupations** (blacksmith, merchant, guard, herbalist,
+    and a new **nurse**, added per this pass — village healthcare/care
+    role) do not gather food. They eat by BUYING it, out of their own
+    wallet, from whichever village producer has stock — this is what
+    makes specialization real rather than cosmetic: a blacksmith who never
+    farms only keeps smithing because someone else's hunting keeps them
+    fed.
+  - **Local trade is NPC-to-NPC, not just player-to-shop.** [shop.gd](../../src/gameplay/shop.gd)
+    today is player-buy-only from one fixed catalog; this needs the
+    genuinely new half — a producer's real surplus becomes real stock a
+    fellow villager can buy with real gold, at a village-local price
+    (not the player-facing shop's fixed list), so food actually moves
+    from the hunter's hands to the blacksmith's.
+- **This is the two-faucet economy from [economy.md](economy.md) actually
+  running**, at village scale, before any player market exists: a
+  producer earns gold from what they gather, a non-producer spends gold
+  to eat, and a bad season (real weather, real vegetation/game decline)
+  is now something a village can genuinely go hungry from — the causal
+  chain the Lifecycle section's famine-driven decline needs underneath it,
+  even before aging/reproduction/death themselves are built.
+- **Deliberately NOT in this pass**: the instruction DSL, hiring/wages,
+  relationships/trust, memory/rumor, lifecycle (aging/reproduction/death),
+  migration, and the real LLM-backed planner all stay exactly as
+  documented above — this section is the needs/production/local-trade
+  floor those systems will eventually stand on, not a replacement for any
+  of them.
+
 ## Settlement growth: migration toward player-built structures
 
 The dwindling side of the lifecycle above has a growth counterpart: a
@@ -150,6 +259,35 @@ biome only gates the whole chunk, not every individual cell, so a
 grassland-dominant chunk can still have a pond cutting through it, and a
 house whose ring-layout anchor would land there is nudged to nearby dry
 ground instead of stamped into the water.
+
+The "Needs and the local production economy" section above is now real
+end-to-end (see `docs/progress.md`'s NPC section for the full breakdown):
+every villager has real hunger (`npc_needs.gd`); farmer/hunter/fisher gather
+real food while working, reading the exact `vegetation_growth_model.gd`/
+`herbivore_population_model.gd`/aquatic-population numbers named above
+through two new thin `EarthChunkManager` accessors
+(`vegetation_density_near`, `herbivore_population_near`, mirroring the
+pre-existing `fish_population_near` exactly) rather than an invented stat --
+a real drought (depressed moisture, same biome/temperature) measured 93.8%
+lower yield for both farmer and hunter in a real probe; a per-settlement
+`village_market.gd` holds real stock a non-producer buys from with real gold
+at a tested village-local price, distinct from `shop.gd`'s global catalog.
+A handful of judgment calls the spec left open are now decided and
+documented in-code (`npc_economy.gd`'s own doc comment has the full
+reasoning): a producer self-feeds for free from their own currently-active
+production rather than paying into the market, gated on genuinely nonzero
+yield right now so a severe enough collapse can still starve a producer
+too; the village market is NPC-only, the player keeps using `shop.gd`;
+nurse's work tag resolves to the shared "well" landmark rather than a new
+building; settlement occupation balance is left to chance (not guaranteed),
+so roughly a tenth of settlements roll no producer at all and every
+resident there genuinely struggles -- a deliberate choice matching
+[world.md](world.md)'s existing "population exists wherever conditions make
+it viable" philosophy, not an oversight. Still exactly as scoped out by that
+section's own "Deliberately NOT in this pass" line: no instruction DSL, no
+hiring/wages, no relationships/trust, no memory/rumor wiring off this
+economy, no lifecycle/death consequence for sustained hunger yet, no
+migration, no real LLM-backed planning.
 
 ### Open questions
 

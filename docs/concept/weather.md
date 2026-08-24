@@ -9,6 +9,14 @@ that has real mechanical teeth, not just atmosphere.
   climate/season/day-night clock ([world.md](world.md)) rather than being
   an independent random layer — a tropical biome and a tundra biome should
   weather differently by construction, RDR2/BOTW-style regional variety.
+  **Divergence note**: today's `weather_model.gd` is exactly the
+  independent-random-layer this bullet says NOT to build (a flat
+  per-region hash roll, identical odds anywhere on the planet).
+  [climate_dynamics.md](climate_dynamics.md) is what actually makes this
+  bullet true — real pressure/wind/water-cycle simulation, with
+  `weather_model.gd`'s four-state vocabulary and gameplay hooks
+  (`movement_speed_modifier`/`warmth_factor`/etc.) surviving as the
+  presentation layer reading its output rather than an independent roll.
 - **Occasional disaster events** — droughts, floods, wildfires, blizzards —
   are larger, rarer perturbations on top of normal weather that visibly
   stress [world.md](world.md)'s vegetation/population sim: a drought
@@ -87,12 +95,50 @@ undoes it. What undoes it is the difference -- a path grows back on its own,
 while footprints sit there until it snows again. So a trail across a field
 lasts through a clear cold day and is gone after a fall.
 
+**A field fills in tile by tile -- it does not flip all at once.** Coverage
+(`Snowfall.accumulate`) is one aggregate number, 0 bare to 1 fully covered,
+because that is the right shape for the pure model. But every PAINTED tile
+used to read that exact same number: the instant it ticked past a depth-band
+boundary, the whole loaded chunk snapped to the new band together, which reads
+as "the ground turned white in one frame" rather than as a snowfall settling
+(reported: "snow covers a whole chunk instantly instead of spreading
+progressively"). Each tile now carries its own small, seeded lead or lag on
+the shared depth (`SnowLayer.onset_offset_for`, keyed off the tile's GLOBAL
+coordinates so the pattern doesn't repeat or seam at a chunk boundary) --
+the same per-cell-seeded-jitter idea `TallGrass`/`FlowerPatch` already use so
+a uniform process doesn't read as synchronized (this project has hit that
+"same value everywhere" clustering bug five times before; see `PixelNoise`'s
+own doc comment). A partial snowfall now paints a genuine MIX of bare and
+covered land -- some tiles catch the first flakes, others hold out a little
+longer -- rather than the whole chunk changing together.
+
+**The repaint itself has to happen often enough to show that mix changing.**
+Onset variance alone was not sufficient: the whole-field repaint that
+actually pushes new pixels to the tile layer only fired when the tracked
+depth crossed one of the four texture-band boundaries, so within a single
+band's depth range -- comfortably a third of a whole snowfall -- nothing
+repainted at all no matter how far coverage kept climbing underneath. A real
+probe caught it: coverage sat flat at the same percentage from depth 0.02
+through 0.25, then jumped straight to full at 0.5 -- the instant-reveal bug
+again, just relocated to a coarser timescale. `EarthChunkManager._repaint_snow`
+now also repaints whenever depth has moved by `SNOW_REPAINT_DEPTH_STEP`
+(0.05, well under the onset variance so several checkpoints land across the
+spread) since the last repaint, not only on a band crossing -- still on the
+order of dozens of repaints across a whole snowfall, not one every frame.
+
 ### Status
 
 - ✅ Snow instead of rain below freezing, falling white and slow
 - ✅ Accumulation and thaw, whitening the ground
 - ✅ Footprint displacement and snow filling tracks back in
 - ✅ Tracks rendered: snow is a per-tile overlay, so footprints carve it
+- ✅ Per-tile onset variance, so a field fills in as a visible spread rather
+  than snapping everywhere at once — `SnowLayer.ONSET_VARIANCE`/
+  `onset_offset_for`/`band_for`, tested; wired in
+  `EarthChunkManager._paint_snow_tile`.
+- ✅ The repaint that reveals that spread runs often enough to show it moving
+  — `EarthChunkManager.SNOW_REPAINT_DEPTH_STEP`, tested; wired in
+  `_repaint_snow`.
 
 ## Pinning the weather (`/weather`)
 

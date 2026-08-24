@@ -11,6 +11,7 @@ extends Sprite2D
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const NpcPlanner = preload("res://src/world/npc_planner.gd")
 const NpcSchedule = preload("res://src/world/npc_schedule.gd")
+const NpcEconomy = preload("res://src/world/npc_economy.gd")
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 
@@ -45,6 +46,14 @@ var _world = null
 var _tile_size := 16
 var _perception := CreaturePerception.new()
 
+## docs/concept/npc.md "Needs and the local production economy": this
+## villager's hunger/gold/production state, mirroring the daily-plan
+## FSM's own "cheap local execution" pattern -- null until setup_economy is
+## called (see VillageRenderer._build_npc), so a marker built without an
+## economy (e.g. an isolated rendering test) simply carries no needs state
+## rather than crashing.
+var economy: NpcEconomy = null
+
 
 ## Swaps in a different planner (e.g. a future real LLM-backed one) -- see
 ## NpcPlanner.Planner. Defaults to the deterministic FakeNpcPlanner.
@@ -59,6 +68,13 @@ func setup(world, tile_size: int) -> void:
 	_tile_size = tile_size
 
 
+## Builds this villager's NpcEconomy from its already-assigned `identity`
+## (must be set first -- see VillageRenderer._build_npc) and `market`, the
+## VillageMarket instance shared by every NpcMarker of the same settlement.
+func setup_economy(market) -> void:
+	economy = NpcEconomy.new(identity.seed_value, identity.occupation, market)
+
+
 func _process(delta: float) -> void:
 	_elapsed_time += delta
 	if schedule.is_empty():
@@ -69,6 +85,8 @@ func _process(delta: float) -> void:
 	var before := position
 	position = position.move_toward(target, WALK_SPEED * delta)
 	_update_animation(position - before)
+	if economy != null:
+		economy.step(delta, entry.get("activity", "") == "work", _world, position)
 
 
 ## Drives the bound CharacterView's walk cycle from the actual movement this

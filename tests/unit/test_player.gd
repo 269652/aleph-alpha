@@ -17,6 +17,8 @@ const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const CreatureInfo = preload("res://src/world/creature_info.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
+const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -891,3 +893,40 @@ func test_the_mount_travels_with_its_rider():
 	player.position = Vector2(600, -220)
 	player._lasso_step(1.0 / 60.0)
 	assert_almost_eq(horse.position.distance_to(player.position), 0.0, 1.0)
+
+
+# -- terrain slope: soft slowdown + hard refusal (see docs/concept/terrain_relief.md) -
+
+func test_terrain_speed_multiplier_matches_terrain_passability_for_the_real_tile():
+	var tile := player.current_tile()
+	var slope := chunk_manager.slope_at_global(tile.x, tile.y)
+	var expected := TerrainPassability.speed_multiplier(slope)
+	assert_almost_eq(player._terrain_speed_multiplier(tile), expected, 0.0001)
+
+
+func test_terrain_blocks_movement_is_false_when_not_moving():
+	assert_false(player._terrain_blocks_movement(Vector2.ZERO))
+
+
+## Wiring test: whatever the real slope at the look-ahead tile actually is,
+## _terrain_blocks_movement must agree with TerrainPassability.is_passable
+## for that exact slope -- proving the look-ahead/wrap/query chain reaches
+## the same real data a direct call would, not that any particular real
+## coordinate happens to be steep or flat.
+func test_terrain_blocks_movement_agrees_with_terrain_passability_for_the_lookahead_tile():
+	var input_direction := Vector2.DOWN
+	var look_ahead := player.position + input_direction * player.TERRAIN_CHECK_DISTANCE_PX
+	var raw := Vector2i(floori(look_ahead.x / TILE_SIZE), floori(look_ahead.y / TILE_SIZE))
+	var world_size := Vector2i(EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	var ahead_tile: Vector2i = player._world_coordinates.wrap(raw, world_size)
+	var slope := chunk_manager.slope_at_global(ahead_tile.x, ahead_tile.y)
+	var expected := not TerrainPassability.is_passable(slope, player._has_climbing_gear())
+	assert_eq(player._terrain_blocks_movement(input_direction), expected)
+
+
+## Honest current state (see docs/progress.md's Transportation section): no
+## climbing-rope item/equipment concept exists yet, so this always reads
+## false. Exists so the day a real rope is built, this test starts failing
+## loudly rather than the hook silently staying wired to "never."
+func test_has_climbing_gear_is_false_until_a_real_rope_exists():
+	assert_false(player._has_climbing_gear())

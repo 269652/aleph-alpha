@@ -17,6 +17,7 @@ extends RefCounted
 const HerbivorePopulationModel = preload("res://src/world/herbivore_population_model.gd")
 const PredatorPopulationModel = preload("res://src/world/predator_population_model.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
+const VegetationGrowthModel = preload("res://src/world/vegetation_growth_model.gd")
 
 ## Game seconds that make up one simulated ecological "day" (the model_s unit the
 ## population models integrate in). One in-game hour of unloaded time is one

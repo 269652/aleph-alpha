@@ -2,6 +2,9 @@ extends GutTest
 
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
+const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
+const TerrainRelief = preload("res://src/world/terrain_relief.gd")
+const EarthElevationSource = preload("res://src/world/earth_elevation_source.gd")
 
 var generator: EarthChunkGenerator
 
@@ -70,6 +73,56 @@ func test_fine_detail_only_slightly_perturbs_the_real_macro_elevation():
 	var macro := generator.macro_elevation_at_global(global_x, global_y)
 	var blended := generator.elevation_at_global(global_x, global_y)
 	assert_lt(absf(blended - macro), EarthChunkGenerator.FINE_DETAIL_AMPLITUDE + 0.001)
+
+
+# -- slope/aspect: real relief from the same real elevation data -----------------
+
+func test_slope_at_global_matches_a_direct_terrain_relief_computation():
+	var global_x := 12345
+	var global_y := 6789
+	var geo := GeoCoordinates.new()
+	var latitude := geo.latitude_for_tile(global_y, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	var longitude := geo.longitude_for_tile(global_x, EarthChunkGenerator.WORLD_WIDTH_TILES)
+	var expected := TerrainRelief.new().slope_at(EarthElevationSource.new(), latitude, longitude)
+	assert_almost_eq(generator.slope_at_global(global_x, global_y), expected, 0.0001)
+
+
+func test_aspect_at_global_matches_a_direct_terrain_relief_computation():
+	var global_x := 12345
+	var global_y := 6789
+	var geo := GeoCoordinates.new()
+	var latitude := geo.latitude_for_tile(global_y, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	var longitude := geo.longitude_for_tile(global_x, EarthChunkGenerator.WORLD_WIDTH_TILES)
+	var expected := TerrainRelief.new().aspect_at(EarthElevationSource.new(), latitude, longitude)
+	assert_almost_eq(generator.aspect_at_global(global_x, global_y), expected, 0.0001)
+
+
+func test_slope_at_global_is_never_negative():
+	assert_gte(generator.slope_at_global(12345, 6789), 0.0)
+
+
+func test_aspect_at_global_is_either_undefined_or_a_valid_compass_bearing():
+	var aspect := generator.aspect_at_global(12345, 6789)
+	assert_true(
+		aspect == -1.0 or (aspect >= 0.0 and aspect < 360.0),
+		"aspect should be -1 (undefined) or a real compass bearing, got %f" % aspect
+	)
+
+
+## Real-world sanity check, same spirit as this file's existing Everest/
+## Mariana Trench tests: the dramatic local relief around the Himalayas
+## should read as measurably steeper than a genuinely flat plain, using
+## real landmark coordinates rather than an invented pair of points.
+func test_himalayan_terrain_is_steeper_than_a_great_plain():
+	var himalaya_x := floori((86.92 + 180.0) / 360.0 * EarthChunkGenerator.WORLD_WIDTH_TILES)
+	var himalaya_y := floori((90.0 - 27.99) / 180.0 * EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	# Central Kansas, USA -- proverbially flat farmland.
+	var plains_x := floori((-98.0 + 180.0) / 360.0 * EarthChunkGenerator.WORLD_WIDTH_TILES)
+	var plains_y := floori((90.0 - 38.5) / 180.0 * EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	assert_gt(
+		generator.slope_at_global(himalaya_x, himalaya_y),
+		generator.slope_at_global(plains_x, plains_y)
+	)
 
 
 func test_generated_biomes_are_all_known():

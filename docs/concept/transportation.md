@@ -33,6 +33,12 @@ hull possible. Traversal capability is therefore gated by the same
 material-sourcing loop as crafting power generally, not a separate unlock
 track.
 
+**The climbing rope now has something to unlock.** Until
+[terrain_relief.md](terrain_relief.md), no terrain feature actually
+required one — this doc named it, nothing consumed it. Terrain relief's
+slope-gated passability is what a high-tensile rope, crafted the same way
+as any other traversal tool above, actually raises.
+
 ### Fast travel: free for cargo, never for living stock
 
 Resolves the cost/limitation open question below: fast travel/portals carry

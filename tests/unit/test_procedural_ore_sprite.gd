@@ -92,3 +92,66 @@ func test_generate_texture_wraps_image():
 	var texture := generator.generate_texture("iron", 42)
 	assert_not_null(texture)
 	assert_eq(texture.get_width(), ProceduralOreSprite.SIZE.x)
+
+
+# -- ore composited onto an illustrated base (see StoneRenderer._ore_texture_for) -
+#
+# An ore node is always drawn at boulder scale (see StoneRenderer._attach_body_parts'
+# diameter_cm==0 branch), so once illustrated boulder art exists the ore's
+# rock silhouette should come from THAT instead of the flat procedural
+# ellipse, with only the ore flecks still generated here -- scattered by
+# testing the base image's own alpha channel rather than ellipse geometry,
+# so this works against any silhouette with no shape-specific math to keep
+# in sync with the art.
+
+## A small synthetic base: opaque left half, transparent right half -- enough
+## to prove flecks respect a real silhouette boundary without depending on
+## real art loading in a unit test.
+func _half_opaque_base(size: int = 16) -> Image:
+	var image := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	for y in size:
+		for x in size:
+			if x < size / 2:
+				image.set_pixel(x, y, Color(0.5, 0.5, 0.5, 1.0))
+			else:
+				image.set_pixel(x, y, Color(0, 0, 0, 0))
+	return image
+
+
+func test_generate_image_from_base_keeps_the_base_images_size():
+	var base := _half_opaque_base(16)
+	var image := generator.generate_image_from_base(base, "iron", 42)
+	assert_eq(image.get_width(), base.get_width())
+	assert_eq(image.get_height(), base.get_height())
+
+
+func test_generate_image_from_base_never_paints_outside_the_base_silhouette():
+	var base := _half_opaque_base(16)
+	var image := generator.generate_image_from_base(base, "iron", 42)
+	for y in image.get_height():
+		for x in image.get_width():
+			if base.get_pixel(x, y).a <= 0.0:
+				assert_eq(
+					image.get_pixel(x, y).a, 0.0,
+					"a fleck painted outside the base silhouette at (%d, %d)" % [x, y]
+				)
+
+
+func test_generate_image_from_base_adds_visible_fleck_color():
+	var base := _half_opaque_base(16)
+	var image := generator.generate_image_from_base(base, "iron", 42)
+	assert_ne(image.get_data(), base.get_data(), "expected at least one fleck painted onto the base")
+
+
+func test_generate_image_from_base_is_deterministic():
+	var base := _half_opaque_base(16)
+	var a := generator.generate_image_from_base(base, "copper", 123)
+	var b := generator.generate_image_from_base(base, "copper", 123)
+	assert_eq(a.get_data(), b.get_data())
+
+
+func test_generate_texture_from_base_wraps_image():
+	var base := _half_opaque_base(16)
+	var texture := generator.generate_texture_from_base(base, "iron", 42)
+	assert_not_null(texture)
+	assert_eq(texture.get_width(), base.get_width())

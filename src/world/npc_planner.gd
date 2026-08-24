@@ -29,6 +29,16 @@ class Planner:
 ## Unrecognized occupations fall back to a generic idle-at-home/socialize day
 ## rather than crashing.
 class FakeNpcPlanner extends Planner:
+	## hunter -> "hunting_ground": a wild/edge-of-village spot, deliberately
+	## not one of the settlement's 3 shared landmarks (well/stall/gate) --
+	## like farmer's "field"/fisher's "dock", it resolves to this villager's
+	## own personal workspot (see NpcMarker._resolve_location).
+	##
+	## nurse -> "well": a judgment call (docs/concept/npc.md leaves it open)
+	## -- rather than invent a dedicated clinic building/landmark this pass,
+	## a village-care role works the shared square, the same real prop every
+	## settlement already has, instead of a work tag with nowhere real to
+	## resolve to.
 	const _WORK_LOCATION_BY_OCCUPATION := {
 		"farmer": "field",
 		"blacksmith": "forge",
@@ -36,6 +46,8 @@ class FakeNpcPlanner extends Planner:
 		"guard": "gate",
 		"fisher": "dock",
 		"herbalist": "garden",
+		"hunter": "hunting_ground",
+		"nurse": "well",
 	}
 
 	func plan_day(identity: NpcIdentity, _day_index: int) -> Array:

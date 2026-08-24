@@ -37,9 +37,57 @@ func test_seeds_patches_only_on_grassland_cells():
 
 ## Long grass is a field the player can enter, not isolated decorations.
 ## Pin the initial density so future visual work cannot silently revert it.
+## SEED_CHANCE itself is no longer read as a literal per-cell roll (see its
+## own doc comment in tall_grass.gd), but it stays the reference commonality
+## other systems compare their own rarity against (DesertScrub,
+## EarthwormPatch, WildCropPatch, TundraLichen all pin themselves rarer than
+## this in their own tests), so it stays put at the same value.
 func test_grassland_starts_with_a_visible_field_density():
 	assert_gte(TallGrass.SEED_CHANCE, 0.20)
 	assert_gte(TallGrass.MAX_PATCHES, 128)
+
+
+## Pinned to the exact values measured empirically (see the constants' own
+## doc comments in tall_grass.gd) rather than left an eyeballed guess -- a
+## future "just nudge it a bit" edit becomes a deliberate, tested change
+## instead of silent drift (CLAUDE.md).
+func test_field_noise_scale_and_threshold_are_pinned_to_their_measured_values():
+	assert_eq(TallGrass.FIELD_NOISE_SCALE, 0.12)
+	assert_eq(TallGrass.FIELD_NOISE_THRESHOLD, 0.65)
+
+
+## Reported live: "remove the percentage of overall grass blades instead
+## make them stick more together forming fields using perlin noise /
+## voronoi" -- the whole point of noise-thresholded seeding over the old
+## independent per-cell chance. An independent roll makes a seeded cell's
+## own neighbour no likelier to also be seeded than the overall density
+## alone would predict; smooth noise makes adjacent samples correlated, so
+## seeded cells should cluster well above that baseline. Averaged over many
+## seeds/cells so one unlucky blob placement can't make this flaky (measured
+## empirically: neighbour density landed at over 3x the overall density, so
+## 1.5x is a comfortable, non-flaky margin, not a coin flip).
+func test_seeded_cells_cluster_next_to_each_other_more_than_chance_alone_would():
+	var total_cells := 0
+	var total_patches := 0
+	var total_neighbor_checks := 0
+	var seeded_neighbor_checks := 0
+	for seed_value in range(20):
+		var grass := TallGrass.new(seed_value, WIDTH, HEIGHT, _biome_all("grassland"))
+		var cells: Dictionary = {}
+		for cell in grass.get_patch_cells():
+			cells[cell] = true
+		total_cells += WIDTH * HEIGHT
+		total_patches += cells.size()
+		for cell: Vector2i in cells:
+			var right: Vector2i = cell + Vector2i(1, 0)
+			if right.x < WIDTH:
+				total_neighbor_checks += 1
+				if cells.has(right):
+					seeded_neighbor_checks += 1
+	assert_gt(total_neighbor_checks, 0, "precondition: at least some seeded cells have an in-bounds right neighbour to check")
+	var overall_density: float = float(total_patches) / float(total_cells)
+	var neighbor_density: float = float(seeded_neighbor_checks) / float(total_neighbor_checks)
+	assert_gt(neighbor_density, overall_density * 1.5, "a seeded cell's own neighbour must be seeded notably more often than chance alone -- otherwise this still scatters instead of clustering into fields")
 
 
 func test_seeding_is_deterministic_for_the_same_seed():
@@ -63,12 +111,23 @@ func test_patch_count_stays_within_the_per_chunk_bound():
 
 func test_advance_grows_immature_patches_toward_maturity():
 	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
-	grass.advance(TallGrass.SPREAD_INTERVAL)  # spread creates an immature patch
+	# Several ticks, not just one: noise-clustered seeding (see the
+	# FIELD_NOISE_* tests) packs a mature cell's own neighbours with OTHER
+	# mature cells far more often than the old scattered mechanism did, so a
+	# randomly chosen spread parent can land with no free neighbour on any
+	# single tick, purely by chance of interior-vs-edge placement. Checked
+	# after EVERY tick (not just once at the end) so a patch that spreads
+	# early doesn't have time to mature past 1.0 before this notices it.
 	var immature := Vector2i(-1, -1)
-	for cell in grass.get_patch_cells():
-		if grass.get_growth(cell) < 1.0:
-			immature = cell
-	assert_ne(immature, Vector2i(-1, -1))
+	for i in 20:
+		grass.advance(TallGrass.SPREAD_INTERVAL)
+		for cell in grass.get_patch_cells():
+			if grass.get_growth(cell) < 1.0:
+				immature = cell
+				break
+		if immature != Vector2i(-1, -1):
+			break
+	assert_ne(immature, Vector2i(-1, -1), "precondition: spread must have created at least one immature patch within 20 ticks")
 	var before: float = grass.get_growth(immature)
 	grass.advance(1.0)
 	assert_gt(grass.get_growth(immature), before)
@@ -166,3 +225,114 @@ func _grassland(width: int, height: int) -> PackedStringArray:
 	biome.resize(width * height)
 	biome.fill("grassland")
 	return biome
+
+
+# -- seed: a mature patch sheds its own ground entity, mirroring FlowerPatch -
+#
+# _step_spread (above) is CONTIGUOUS: it only ever grows into the four cells
+# touching a mature patch. Seed is the OTHER reproduction path -- a mature
+# patch drops seed nearby on its own, independent of any animal, and that
+# seed then sits on the ground until something (a bird, a mouse, or the
+# player) takes it -- see docs/concept/long_grass.md's "Reproduction" section.
+
+func test_a_fresh_field_has_not_shed_any_seed_yet():
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	assert_eq(grass.ground_seed_cells().size(), 0, "seed has to fall before it is there")
+
+
+## Map-seeded patches start mature, so a standing field sheds without any
+## animal or pollination step required -- unlike FlowerPatch, grass has no
+## bloom cycle to gate shedding on.
+func test_mature_patches_shed_seed_onto_the_ground_over_time():
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	for i in 400:
+		grass.shed_seed(1.0)
+	assert_gt(grass.ground_seed_cells().size(), 0, "a standing field should drop seed around itself")
+
+
+## Seed lands NEAR the patch it fell from, not anywhere in the chunk -- the
+## same "seed accumulates around the parent" rule FlowerPatch uses.
+func test_shed_seed_lands_next_to_a_patch():
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	for i in 400:
+		grass.shed_seed(1.0)
+	var patches := grass.get_patch_cells()
+	for cell in grass.ground_seed_cells():
+		var nearest := 9999
+		for patch_cell in patches:
+			nearest = mini(nearest, maxi(absi(cell.x - patch_cell.x), absi(cell.y - patch_cell.y)))
+		assert_lte(nearest, TallGrass.SEED_FALL_RADIUS, "seed should lie around the patch that dropped it")
+
+
+func test_taking_a_ground_seed_removes_it():
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	for i in 400:
+		grass.shed_seed(1.0)
+	assert_gt(grass.ground_seed_cells().size(), 0, "precondition: something shed")
+	var cell = grass.ground_seed_cells()[0]
+
+	assert_true(grass.take_ground_seed(cell), "taking returns whether a seed was actually there")
+	assert_false(grass.ground_seed_cells().has(cell))
+	assert_false(grass.take_ground_seed(cell), "nothing left to take twice")
+
+
+## Bounded, like every other per-chunk population here -- an unattended field
+## must not carpet itself in seed over a long session.
+func test_ground_seed_is_capped():
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	for i in 20000:
+		grass.shed_seed(1.0)
+	assert_lte(grass.ground_seed_cells().size(), TallGrass.MAX_GROUND_SEEDS)
+
+
+# -- plant: the sink an animal's carried seed lands in ----------------------
+#
+# The counterpart of FlowerPatch.plant: establishes a brand-new, immature
+# patch at a distant position, which is what lets a bird or mouse found a
+# genuinely NEW field _step_spread's contiguous growth could never reach.
+
+func test_planting_establishes_a_new_immature_patch():
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	# Scans the whole grid for an empty cell rather than guessing two fixed,
+	# nearby candidates: noise-clustered seeding (see the FIELD_NOISE_* tests)
+	# makes NEARBY cells' occupancy highly correlated (if one is grass, an
+	# adjacent one very likely is too), so two adjacent-ish guesses are no
+	# longer good odds of finding an empty one the way independent per-cell
+	# rolls made them under the old mechanism.
+	var cell := Vector2i(-1, -1)
+	for y in HEIGHT:
+		for x in WIDTH:
+			if not grass.has_grass(Vector2i(x, y)):
+				cell = Vector2i(x, y)
+				break
+		if cell != Vector2i(-1, -1):
+			break
+	assert_ne(cell, Vector2i(-1, -1), "precondition: an empty cell to plant into")
+
+	assert_true(grass.plant(cell))
+
+	assert_true(grass.has_grass(cell))
+	assert_lt(grass.get_growth(cell), 1.0, "a planted seed is not already mature")
+
+
+func test_planting_fails_outside_grassland():
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("desert"))
+	assert_false(grass.plant(Vector2i(0, 0)))
+
+
+func test_planting_fails_on_a_cell_that_already_has_grass():
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var cell: Vector2i = grass.get_patch_cells()[0]
+	assert_false(grass.plant(cell))
+
+
+func test_planting_respects_the_per_chunk_cap():
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var planted_any_beyond_cap := false
+	for y in HEIGHT:
+		for x in WIDTH:
+			if grass.get_patch_cells().size() >= TallGrass.MAX_PATCHES:
+				if grass.plant(Vector2i(x, y)):
+					planted_any_beyond_cap = true
+	assert_false(planted_any_beyond_cap)
+	assert_lte(grass.get_patch_cells().size(), TallGrass.MAX_PATCHES)

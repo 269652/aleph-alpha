@@ -1213,6 +1213,22 @@ class StubSeedWorld:
 	func plant_flower_at(at: Vector2, species: String) -> bool:
 		planted.append({"position": at, "species": species})
 		return true
+	## Grass seed lying on the ground -- see EarthChunkManager's real
+	## grass_seeds_near/take_grass_seed_at/plant_grass_at. No species: a
+	## chunk grows only one kind of grass.
+	var grass_seeds: Array = []
+	var grass_planted: Array = []
+	func grass_seeds_near(_at: Vector2, _radius: int) -> Array:
+		return grass_seeds
+	func take_grass_seed_at(at: Vector2) -> bool:
+		for i in grass_seeds.size():
+			if grass_seeds[i]["position"].distance_to(at) < 1.0:
+				grass_seeds.remove_at(i)
+				return true
+		return false
+	func plant_grass_at(at: Vector2) -> bool:
+		grass_planted.append(at)
+		return true
 
 
 func _sparrow_on(world: StubSeedWorld) -> void:
@@ -1278,3 +1294,88 @@ func test_a_sparrow_carries_only_one_seed_at_a_time():
 			1 if marker._carried_seed_species != "" else 0, 1,
 			"never more than one seed in the crop"
 		)
+
+
+# -- granivory, grass half: a sparrow eats GRASS seed the same organ, same
+# way it eats flower seed, and plants a new TallGrass patch, not a flower --
+# (see docs/concept/long_grass.md's "Reproduction" section: reuses the same
+# seed_world port and SeedEndozoochory's carry model unchanged, since it is
+# the same crop/gut biology regardless of which seed head it swallowed).
+
+func test_a_sparrow_flies_down_and_eats_a_grass_seed():
+	var world := StubSeedWorld.new()
+	var at := Vector2(3.0 * TILE_SIZE, 0.0)
+	world.grass_seeds.append({"position": at})
+	_sparrow_on(world)
+
+	for step in 400:
+		marker._process(0.1)
+
+	assert_eq(world.grass_seeds.size(), 0, "the grass seed should have been eaten")
+
+
+func test_a_sparrow_plants_the_grass_seed_it_ate_as_grass_not_a_flower():
+	var world := StubSeedWorld.new()
+	var at := Vector2(3.0 * TILE_SIZE, 0.0)
+	world.grass_seeds.append({"position": at})
+	_sparrow_on(world)
+
+	for step in 4000:  # long enough to eat, carry, and drop
+		marker._process(0.1)
+
+	assert_gt(world.grass_planted.size(), 0, "the swallowed grass seed should be planted again")
+	assert_gt(
+		world.grass_planted[0].distance_to(at), 2.0 * TILE_SIZE,
+		"a bird carries seed well away from where it took it, same range as flower seed"
+	)
+	assert_eq(world.planted.size(), 0, "a grass seed must establish grass, never a flower")
+
+
+## A bird carries one seed at a time regardless of KIND -- eating a grass
+## seed while a flower seed is still digesting (or vice versa) must not
+## overwrite which one gets planted. The bird still eats the grass seed for
+## nutrition (see _take_targeted_fruit's identical "eat regardless, carry
+## only if the crop is free" shape) -- only the CARRYING is skipped.
+func test_a_sparrow_does_not_start_carrying_a_second_seed_while_already_carrying_one():
+	var world := StubSeedWorld.new()
+	world.seeds = [{"position": Vector2(50, 0), "species": "clover"}]
+	world.grass_seeds = [{"position": Vector2(80, 0)}]
+	_sparrow_on(world)
+	marker._seed_target = Vector2(50, 0)
+	marker._take_targeted_seed()
+	assert_eq(marker._carried_seed_species, "clover", "precondition: carrying a flower seed")
+
+	marker._grass_seed_target = Vector2(80, 0)
+	marker._take_targeted_grass_seed()
+
+	assert_eq(marker._carried_seed_species, "clover", "still carrying the FIRST seed eaten")
+	assert_true(marker._carried_seed_is_flower, "the carried kind must not flip to grass either")
+
+
+## Regression: _carried_seed_is_flower used to be set true on a flower seed
+## and never reset, so a bird that planted a flower and then swallowed FRUIT
+## kept calling plant_flower_at with the fruit's species instead of
+## fruit_world.try_plant_seed_at -- caught while wiring in a third carried
+## kind (grass) forced auditing every transition between them.
+func test_carrying_fruit_after_a_flower_seed_plants_a_tree_not_a_flower():
+	var seed_world := StubSeedWorld.new()
+	var fruit_world := StubFruitWorld.new()
+	_sparrow_on(seed_world)
+	marker.fruit_world = fruit_world
+
+	seed_world.seeds = [{"position": Vector2(50, 0), "species": "clover"}]
+	marker._seed_target = Vector2(50, 0)
+	marker._take_targeted_seed()
+	marker._carry_seconds_remaining = 0.0
+	marker._step_seed_carrying(0.0)
+	assert_eq(seed_world.planted.size(), 1, "precondition: the flower seed got planted")
+	assert_eq(marker._carried_seed_species, "", "precondition: the crop is empty again")
+
+	fruit_world.fruit = [{"position": Vector2(80, 0), "species": "walnut"}]
+	marker._fruit_target = Vector2(80, 0)
+	marker._take_targeted_fruit()
+	marker._carry_seconds_remaining = 0.0
+	marker._step_seed_carrying(0.0)
+
+	assert_eq(fruit_world.planted.size(), 1, "the fruit's seed should plant a TREE")
+	assert_eq(seed_world.planted.size(), 1, "must not ALSO plant a second, wrong flower")

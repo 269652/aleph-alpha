@@ -306,3 +306,186 @@ func test_reroll_budget_does_not_refresh_within_the_same_day():
 
 	assert_eq(menu._rerolls_used, HeroDna.MAX_FREE_REROLLS)
 	assert_false(menu._dna.can_reroll(menu._rerolls_used, menu._seconds_since_last_reset(), false))
+
+
+# -- skills tab (reported: "there should be tabs with character and --------
+# -- skilltree so you can view each classes skills before creating") -------
+
+const SkillTree = preload("res://src/gameplay/skill_tree.gd")
+
+
+func test_skill_node_cards_exist_for_every_shared_skill_tree_node():
+	var skill_tree := SkillTree.new()
+	assert_eq(menu._skill_node_cards.size(), skill_tree.node_ids().size())
+	for node_id in skill_tree.node_ids():
+		assert_true(menu._skill_node_cards.has(node_id), node_id)
+
+
+func test_selecting_a_class_updates_the_skills_tab_heading():
+	menu._select_class("mage")
+	assert_string_contains(menu._skills_class_label.text, "Mage")
+
+	menu._select_class("warrior")
+	assert_string_contains(menu._skills_class_label.text, "Warrior")
+
+
+## Warrior's own stat lens (class_archetype.gd) favors max_health above
+## every other stat -- the vitality nodes (the only shared-pool nodes that
+## grant max_health) must be the ones highlighted as synergizing, and a
+## differently-stated node (e.g. strength, which grants attack_damage) must
+## not be.
+func test_warriors_dominant_stat_highlights_the_vitality_nodes():
+	menu._select_class("warrior")
+	var vitality_card: PanelContainer = menu._skill_node_cards["vitality_1"]
+	var strength_card: PanelContainer = menu._skill_node_cards["strength_1"]
+	var vitality_style: StyleBoxFlat = vitality_card.get_theme_stylebox("panel")
+	var strength_style: StyleBoxFlat = strength_card.get_theme_stylebox("panel")
+	assert_eq(vitality_style.border_color, MainMenu.ACCENT)
+	assert_eq(strength_style.border_color, MainMenu.PANEL_BORDER)
+
+
+## Mage's dominant stat is max_mana, which has no corresponding shared-pool
+## skill node (see _CLASS_STAT_TO_SKILL_STAT's own doc comment) -- nothing
+## should be highlighted, honestly reflecting the current gap rather than
+## forcing a false match.
+func test_mage_highlights_nothing_since_no_shared_node_grants_mana():
+	menu._select_class("mage")
+	for node_id in menu._skill_node_cards:
+		var card: PanelContainer = menu._skill_node_cards[node_id]
+		var style: StyleBoxFlat = card.get_theme_stylebox("panel")
+		assert_eq(style.border_color, MainMenu.PANEL_BORDER, node_id)
+
+
+func test_class_card_selection_repaints_its_own_border_to_the_accent_color():
+	menu._select_class("ranger")
+	var selected_card: PanelContainer = menu._class_buttons["ranger"]
+	var other_card: PanelContainer = menu._class_buttons["warrior"]
+	assert_eq((selected_card.get_theme_stylebox("panel") as StyleBoxFlat).border_color, MainMenu.ACCENT)
+	assert_eq((other_card.get_theme_stylebox("panel") as StyleBoxFlat).border_color, MainMenu.PANEL_BORDER)
+
+
+# -- the creator screen must stay scrollable, and Begin must never scroll --
+# -- off with it (reported: "the character creation screen overflows and --
+# -- is not scrollable so I can't start a new game because button is not --
+# -- visible") ---------------------------------------------------------------
+
+func _find_begin_button() -> Button:
+	for b in menu._create_screen.find_children("*", "Button", true, false):
+		if b.text == "Begin":
+			return b
+	return null
+
+
+## The skills tab has its own small inner scroll area for its node grid, so
+## this looks specifically for the OUTER one wrapping the whole TabContainer
+## (whichever ScrollContainer's direct child is the TabContainer itself),
+## not just "at least one ScrollContainer exists somewhere".
+func _find_outer_tab_scroll() -> ScrollContainer:
+	for s in menu._create_screen.find_children("*", "ScrollContainer", true, false):
+		for child in s.get_children():
+			if child is TabContainer:
+				return s
+	return null
+
+
+func test_create_screen_wraps_its_tab_content_in_a_scroll_container():
+	assert_not_null(_find_outer_tab_scroll(), "the tab content should be wrapped in a scroll area")
+
+
+## The Begin button must sit OUTSIDE the scrollable area -- otherwise a tall
+## enough tab content (a bigger skills grid, a longer class list) can scroll
+## it out of view with nothing left to reach it by.
+func test_begin_button_is_not_inside_the_scroll_container():
+	var scroll := _find_outer_tab_scroll()
+	var begin := _find_begin_button()
+	assert_not_null(begin, "Begin button should exist")
+	var ancestor := begin.get_parent()
+	var inside_scroll := false
+	while ancestor != null:
+		if ancestor == scroll:
+			inside_scroll = true
+			break
+		ancestor = ancestor.get_parent()
+	assert_false(inside_scroll, "Begin must stay outside the scrollable tab content")
+
+
+# -- hero showcase: class icons over the character, DNA glow/resonance -----
+# -- (reported: "I want the classes to be icons and on top over the -------
+# -- character and more character customization options and DNA influence")
+
+## Each class icon card must actually be a rendered portrait, not a
+## placeholder -- the whole point of "icons on top of the character".
+func test_every_class_icon_has_a_real_portrait_texture():
+	for archetype in menu._archetypes.archetype_names():
+		var texture: Texture2D = menu._class_icon_texture(archetype)
+		assert_not_null(texture, archetype)
+		assert_gt(texture.get_width(), 0, archetype)
+
+
+func test_class_icons_are_cached_not_regenerated_every_call():
+	var first := menu._class_icon_texture("warrior")
+	var second := menu._class_icon_texture("warrior")
+	assert_eq(first, second)
+
+
+## New sixth customization axis: an independent accent/trim color, per the
+## follow-up ask for "more character customization options" -- previously
+## trim was always fixed by the class palette with no player choice at all.
+func test_trim_is_now_a_cyclable_customization_axis():
+	assert_has(HeroAppearance.AXES, "trim")
+	var before: Color = menu.current_appearance().trim
+	menu._cycle_axis("trim", 1)
+	assert_ne(menu.current_appearance().trim, before)
+
+
+func test_trim_choice_survives_a_class_change_like_every_other_axis():
+	menu._cycle_axis("trim", 2)
+	var before: Color = menu.current_appearance().trim
+	menu._select_class("herbalist")
+	assert_eq(menu.current_appearance().trim, before)
+
+
+## DNA visibly steers the class picker: whichever archetype the rolled
+## genome resonates with most should have its "★" badge showing, and no
+## other class's badge should.
+func test_exactly_one_resonance_badge_is_visible_matching_the_dna_roll():
+	var genome := menu.current_dna()
+	var best_archetype := ""
+	var best_value := -1.0
+	for archetype in genome.resonance:
+		if genome.resonance[archetype] > best_value:
+			best_value = genome.resonance[archetype]
+			best_archetype = archetype
+
+	var visible_count := 0
+	for archetype in menu._resonance_badges:
+		var badge: Label = menu._resonance_badges[archetype]
+		if badge.visible:
+			visible_count += 1
+			assert_eq(archetype, best_archetype)
+	assert_eq(visible_count, 1)
+
+
+## The glow behind the portrait must actually change color with rarity, not
+## stay static -- otherwise a legendary roll wouldn't read as different from
+## a common one at a glance.
+func test_dna_glow_color_differs_between_common_and_legendary():
+	var common_color: Color = MainMenu.RARITY_GLOW_COLORS[HeroDna.RARITY_COMMON]
+	var legendary_color: Color = MainMenu.RARITY_GLOW_COLORS[HeroDna.RARITY_LEGENDARY]
+	assert_ne(common_color, legendary_color)
+
+	menu._update_dna_glow(HeroDna.RARITY_LEGENDARY)
+	var style := menu._dna_glow.get_theme_stylebox("panel") as StyleBoxFlat
+	assert_almost_eq(style.bg_color.r, legendary_color.r, 0.01)
+	assert_almost_eq(style.bg_color.g, legendary_color.g, 0.01)
+	assert_almost_eq(style.bg_color.b, legendary_color.b, 0.01)
+
+
+## Only legendary pulses -- common/rare stay a static glow so the animation
+## itself reads as "something special", not constant background motion.
+func test_only_legendary_rarity_starts_a_pulsing_glow_tween():
+	menu._update_dna_glow(HeroDna.RARITY_COMMON)
+	assert_null(menu._dna_glow_tween)
+
+	menu._update_dna_glow(HeroDna.RARITY_LEGENDARY)
+	assert_not_null(menu._dna_glow_tween)

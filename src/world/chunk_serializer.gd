@@ -103,6 +103,11 @@ func save_fish_population(fish_population: float, path: String) -> void:
 ## have moved on when the player comes back tomorrow, and the in-game clock
 ## restarts with the session (see LifeCycle, which puts the whole growth
 ## timescale on real days for the same reason).
+## `land_health` (docs/concept/world.md "Land health: overharvesting leaves
+## a lasting mark, not just a slower respawn") was added AFTER this file
+## format's original 4 fields -- appended at the end, not interleaved, so an
+## old save (see load_ecology) still reads its first 4 fields correctly and
+## simply ends before this one.
 func save_ecology(state: Dictionary, path: String) -> void:
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
@@ -111,6 +116,7 @@ func save_ecology(state: Dictionary, path: String) -> void:
 	file.store_float(float(state.get("predators", 0.0)))
 	file.store_float(float(state.get("vegetation", 0.0)))
 	file.store_double(float(state.get("saved_at_unix", 0.0)))
+	file.store_float(float(state.get("land_health", 1.0)))
 	file.close()
 
 
@@ -118,6 +124,11 @@ func save_ecology(state: Dictionary, path: String) -> void:
 ## dictionary when there is no file, so callers can tell "never persisted"
 ## from "persisted as zero" -- a region really can be hunted down to nothing,
 ## and that is a fact worth keeping rather than silently re-seeding.
+##
+## `land_health` reads as 1.0 (pristine) for a file saved before this field
+## existed (see save_ecology's doc comment) -- checked by file position
+## rather than assumed, so an old, shorter save loads its other 4 fields
+## correctly instead of reading past end-of-file for a field it never wrote.
 func load_ecology(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {}
@@ -130,6 +141,10 @@ func load_ecology(path: String) -> Dictionary:
 		"vegetation": file.get_float(),
 		"saved_at_unix": file.get_double(),
 	}
+	if file.get_position() < file.get_length():
+		state["land_health"] = file.get_float()
+	else:
+		state["land_health"] = 1.0
 	file.close()
 	return state
 

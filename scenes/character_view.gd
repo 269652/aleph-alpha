@@ -7,6 +7,7 @@ const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
+const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_character_sprite.gd")
 
 ## Reusable placeholder character rendering: a body/head/legs/arms made of
 ## flat colored shapes, a directional facing, walk and swim animations, and a
@@ -93,6 +94,7 @@ var _equipped_slots: Dictionary = {}  # slot_name (String) -> bool
 
 var _weapon_swing := WeaponSwing.new()
 var _character_sprite := ProceduralCharacterSprite.new()
+var _illustrated := IllustratedCharacterSprite.new()
 var _submersion := SubmersionShader.new()
 var _swing_time_remaining := 0.0
 var _swing_duration := 0.0
@@ -115,6 +117,14 @@ var _leg_right_base_position: Vector2
 var _arm_left_base_position: Vector2
 var _arm_right_base_position: Vector2
 var _tool_slot_base_position: Vector2
+
+## True while LegLeft is wearing the illustrated fused leg PAIR in place of
+## two independently-tinted/animated procedural legs (see _apply_legs) --
+## LegRight is hidden and unused in that state, and _process must not apply
+## the opposite-direction walk-swing offset to either leg, or the single
+## fused sprite would visibly split into two vertically-offset copies of
+## itself. Neither part is true "no legs at all" -- see legs_visible().
+var _legs_are_fused := false
 
 
 func _ready() -> void:
@@ -179,12 +189,17 @@ func _process(delta: float) -> void:
 			arm_stroke_offset = 0.0
 
 	_leg_left.visible = movement_state != MovementState.SWIMMING
-	_leg_right.visible = movement_state != MovementState.SWIMMING
+	# Fused legs use LegLeft alone -- LegRight stays hidden regardless of
+	# swim state rather than being un-hidden by the line above every frame.
+	_leg_right.visible = movement_state != MovementState.SWIMMING and not _legs_are_fused
 	_arm_left.visible = movement_state == MovementState.SWIMMING
 	_arm_right.visible = movement_state == MovementState.SWIMMING
 
-	_leg_left.position = _leg_left_base_position + Vector2(0, leg_swing_offset)
-	_leg_right.position = _leg_right_base_position + Vector2(0, -leg_swing_offset)
+	# No per-leg swing art exists for the fused pair yet (see _apply_legs) --
+	# it stays put, centred, rather than bobbing as if it were one leg.
+	if not _legs_are_fused:
+		_leg_left.position = _leg_left_base_position + Vector2(0, leg_swing_offset)
+		_leg_right.position = _leg_right_base_position + Vector2(0, -leg_swing_offset)
 	_arm_left.position = _arm_left_base_position + Vector2(0, arm_stroke_offset)
 	_arm_right.position = _arm_right_base_position + Vector2(0, -arm_stroke_offset)
 
@@ -240,12 +255,106 @@ func apply_appearance(appearance: Dictionary) -> void:
 	if _body == null:
 		_pending_appearance = appearance
 		return
-	_body.texture = _character_sprite.generate_hero_tunic_texture(ART_BODY_SIZE, appearance)
-	_head.texture = _character_sprite.generate_hero_head_texture(ART_HEAD_SIZE, appearance)
-	_leg_left.texture = _character_sprite.generate_body_part_texture(ART_LEG_SIZE, appearance.legs)
-	_leg_right.texture = _character_sprite.generate_body_part_texture(ART_LEG_SIZE, appearance.legs)
-	_arm_left.texture = _character_sprite.generate_body_part_texture(ART_ARM_SIZE, appearance.skin)
-	_arm_right.texture = _character_sprite.generate_body_part_texture(ART_ARM_SIZE, appearance.skin)
+	_apply_head(appearance)
+	_apply_paperdoll_part(
+		_body, "body", appearance.tunic, BODY_SIZE, 0,
+		func(): return _character_sprite.generate_hero_tunic_texture(ART_BODY_SIZE, appearance)
+	)
+	_apply_legs(appearance)
+	_apply_paperdoll_part(
+		_arm_left, "arms", appearance.skin, ARM_SIZE, 0,
+		func(): return _character_sprite.generate_body_part_texture(ART_ARM_SIZE, appearance.skin)
+	)
+	_apply_paperdoll_part(
+		_arm_right, "arms", appearance.skin, ARM_SIZE, 1,
+		func(): return _character_sprite.generate_body_part_texture(ART_ARM_SIZE, appearance.skin)
+	)
+
+
+## The head mixes skin tone, hair color/style, beard and eye color in one
+## drawing, which is why it is not just another _apply_paperdoll_part call --
+## see IllustratedCharacterSprite's own doc comment on why a single flat
+## modulate can't separate those out. The illustrated path recolors by
+## luminance instead (baking the DNA skin tone directly into the pixels), so
+## its own modulate must stay WHITE -- tinting an already-tinted texture
+## would double the color. Hair is a known gap on the illustrated path (see
+## the art brief): head.png's 100 faces are all bald, so an illustrated hero
+## currently reads bald regardless of the DNA-picked hair_style/hair color.
+func _apply_head(appearance: Dictionary) -> void:
+	var seed_value: int = appearance.get("seed", 0)
+	if _illustrated.has_head():
+		_head.texture = _illustrated.generate_head_texture(seed_value, appearance.skin)
+		_head.scale = Vector2.ONE * _illustrated.head_scale_for(seed_value, float(HEAD_SIZE.y))
+		_head.modulate = Color.WHITE
+	else:
+		_head.texture = _character_sprite.generate_hero_head_texture(ART_HEAD_SIZE, appearance)
+		_head.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+		_head.modulate = Color.WHITE
+
+
+## Legs are the one paperdoll slot that does not map 1:1 onto LegLeft/
+## LegRight the way every other part does. The procedural fallback still
+## needs two independently-positioned leg sprites -- the walk cycle bobs them
+## in OPPOSITE directions (see _process), which is what makes a two-legged
+## gait read at all. The illustrated art draws both legs together as one
+## fused PAIR (see IllustratedCharacterSprite's own doc comment on why), so
+## it is worn as ONE sprite covering both world slots instead: LegLeft
+## carries the whole pair, centred between the two slots' own positions, and
+## LegRight is hidden outright. _legs_are_fused records which mode is active
+## so _process knows not to apply the opposite-direction swing to a single
+## fused image (that would visibly split it into two offset copies of
+## itself) -- no per-leg swing art exists yet for the illustrated pair, an
+## honest gap rather than a broken-looking animation.
+func _apply_legs(appearance: Dictionary) -> void:
+	if _illustrated.has_action("legs", "idle"):
+		_leg_left.texture = _illustrated.generate_textures("legs", "idle")[0]
+		_leg_left.modulate = appearance.legs
+		_leg_left.scale = Vector2.ONE * _illustrated.part_scale_for("legs", float(LEG_SIZE.y))
+		_leg_left.position = (_leg_left_base_position + _leg_right_base_position) * 0.5
+		_legs_are_fused = true
+	else:
+		_apply_paperdoll_part(
+			_leg_left, "legs", appearance.legs, LEG_SIZE, 0,
+			func(): return _character_sprite.generate_body_part_texture(ART_LEG_SIZE, appearance.legs)
+		)
+		_apply_paperdoll_part(
+			_leg_right, "legs", appearance.legs, LEG_SIZE, 0,
+			func(): return _character_sprite.generate_body_part_texture(ART_LEG_SIZE, appearance.legs)
+		)
+		_leg_left.position = _leg_left_base_position
+		_legs_are_fused = false
+
+
+## Uses illustrated art for `part_name` (tinted `tint` via modulate -- see
+## IllustratedCharacterSprite's "draw parts neutral" convention) if any is
+## registered, falling back to the procedural texture `generate_procedural`
+## builds otherwise -- the same has-art-then-fallback shape CreatureMarker
+## uses for illustrated animal species.
+##
+## `target_world_size`/`frame_index` drive the illustrated branch's scale
+## (see IllustratedCharacterSprite.part_scale_for): every part is normalized
+## onto ONE shared working canvas (CANVAS_SIZE), not one sized per part, so
+## the flat ArtResolution.SPRITE_SCALE the procedural branch uses would
+## render an illustrated part at the wrong size -- each part's Sprite2D scale
+## has to be measured from what actually got drawn, not assumed from the
+## canvas. `frame_index` matters for arms specifically: its two poses are
+## independent crops (not a mirrored copy), so ArmLeft and ArmRight must each
+## measure THEIR OWN frame, not frame 0 for both.
+func _apply_paperdoll_part(
+	part: Sprite2D, part_name: String, tint: Color, target_world_size: Vector2i,
+	frame_index: int, generate_procedural: Callable
+) -> void:
+	if _illustrated.has_action(part_name, "idle"):
+		var frames := _illustrated.generate_textures(part_name, "idle")
+		part.texture = frames[clampi(frame_index, 0, frames.size() - 1)]
+		part.modulate = tint
+		part.scale = Vector2.ONE * _illustrated.part_scale_for(
+			part_name, float(target_world_size.y), frame_index
+		)
+	else:
+		part.texture = generate_procedural.call()
+		part.modulate = Color.WHITE
+		part.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 
 
 func set_movement_state(state: MovementState) -> void:
@@ -259,6 +368,12 @@ func set_movement_state(state: MovementState) -> void:
 
 func legs_visible() -> bool:
 	return _leg_left.visible
+
+
+## Whether legs are currently worn as one fused illustrated pair (LegLeft
+## only) rather than two independent sprites -- see _apply_legs.
+func legs_are_fused() -> bool:
+	return _legs_are_fused
 
 
 func equip_slot(slot_name: String, color: Color) -> void:

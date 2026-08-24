@@ -10,9 +10,7 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 ## EarthChunkManager's fish spawn/despawn wiring).
 
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
-
-## For World's mouse-hover animal-name tooltip (see CreatureMarker.HOVERABLE_GROUP).
-const HOVERABLE_GROUP := "hoverable_animal"
+const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
 ## How much open water the fish keeps around its center on every side --
 ## roughly the sprite's half-extent, so no part of the fish visually overlaps
@@ -163,7 +161,7 @@ func get_display_name() -> String:
 
 
 func _ready() -> void:
-	add_to_group(HOVERABLE_GROUP)
+	add_to_group(HoverTargetFinder.GROUP_NAME)
 
 
 func set_attraction(target: Vector2) -> void:

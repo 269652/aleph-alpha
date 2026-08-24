@@ -36,6 +36,7 @@ const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
+const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
@@ -44,6 +45,7 @@ const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
@@ -52,6 +54,7 @@ const ChargeMeter = preload("res://src/gameplay/charge_meter.gd")
 const HeldItemThrow = preload("res://src/gameplay/held_item_throw.gd")
 const ImpactResolver = preload("res://src/gameplay/impact_resolver.gd")
 const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
+const CollapsedPassage = preload("res://src/rendering/collapsed_passage.gd")
 
 const BASE_SPEED := 80.0
 const PLAYER_SIZE := 12
@@ -1025,10 +1028,15 @@ func _authority_step(delta: float) -> void:
 	var tile := current_tile()
 	var water_result := _resolve_water_state(tile, delta)
 	current_mode = water_result.mode
-	current_speed_multiplier = water_result.speed_multiplier * _weather_speed_multiplier()
+	current_speed_multiplier = (
+		water_result.speed_multiplier * _weather_speed_multiplier() * _terrain_speed_multiplier(tile)
+	)
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
-	velocity = input_direction * current_speed() * current_speed_multiplier
+	var desired_velocity := input_direction * current_speed() * current_speed_multiplier
+	if _terrain_blocks_movement(input_direction):
+		desired_velocity = Vector2.ZERO
+	velocity = desired_velocity
 	move_and_slide()
 	_wrap_position()
 
@@ -1069,6 +1077,51 @@ func _weather_speed_multiplier() -> float:
 	if survival.is_freezing():
 		m *= FREEZING_SPEED_PENALTY
 	return m
+
+
+## Soft terrain slowdown from real slope (see docs/concept/terrain_relief.md,
+## TerrainPassability.speed_multiplier) -- the same "environment scales a
+## movement multiplier" shape _weather_speed_multiplier above already uses,
+## driven by slope instead of weather. 1.0 when the world isn't wired
+## (isolated tests), matching that function's own fallback.
+func _terrain_speed_multiplier(tile: Vector2i) -> float:
+	if _chunk_manager == null:
+		return 1.0
+	return TerrainPassability.speed_multiplier(_chunk_manager.slope_at_global(tile.x, tile.y))
+
+
+## How far ahead (world pixels) to check terrain slope before committing to
+## a step -- the same "ask before you step, don't correct after" principle
+## CreatureMovementGate already established for creatures walking into
+## trees, applied here to the player walking into a mountainside. Half a
+## tile: far enough to be a real look-ahead, not so far that the player is
+## refused entry to a tile before they're anywhere near its edge.
+const TERRAIN_CHECK_DISTANCE_PX := 8.0
+
+## Whether the tile the player is currently heading toward is too steep to
+## enter at all (see TerrainPassability.is_passable). Checked BEFORE the
+## step, not corrected after -- a refused step simply never becomes
+## velocity, rather than the player being placed on impassable terrain and
+## then pushed back out of it.
+func _terrain_blocks_movement(input_direction: Vector2) -> bool:
+	if _chunk_manager == null or input_direction.length() < 0.01:
+		return false
+	var look_ahead := position + input_direction.normalized() * TERRAIN_CHECK_DISTANCE_PX
+	var raw := Vector2i(floori(look_ahead.x / _tile_size), floori(look_ahead.y / _tile_size))
+	var world_size := Vector2i(EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	var ahead_tile := _world_coordinates.wrap(raw, world_size)
+	var slope := _chunk_manager.slope_at_global(ahead_tile.x, ahead_tile.y)
+	return not TerrainPassability.is_passable(slope, _has_climbing_gear())
+
+
+## No item/equipment concept sets this true anywhere in live gameplay yet
+## (see docs/progress.md's Transportation section -- the climbing rope
+## `transportation.md`/`terrain_relief.md` both specify isn't built). The
+## hook exists now so terrain passability is already correct and already
+## tested for the day a real climbing rope exists, rather than needing this
+## call site touched again later.
+func _has_climbing_gear() -> bool:
+	return false
 
 
 ## Authority-only: resolves a melee swing on the rising edge of the attack
@@ -1115,6 +1168,7 @@ func _perform_attack() -> void:
 	_chop_step()
 	_smash_step()
 	_harvest_grass_step()
+	_pull_wild_crop_step()
 
 
 ## Smashing/mining: a swing that reaches a rock node (shared "stone" group)
@@ -1153,6 +1207,22 @@ func _pickaxe_power() -> float:
 func _harvest_grass_step() -> void:
 	if _chunk_manager != null:
 		_chunk_manager.harvest_grass_near(position)
+
+
+## Pulling: a swing over a mature wild carrot/potato patch pulls it out of
+## the ground (see WildCropMarker.begin_pull, docs/concept/wild_crops.md) --
+## same shared "stone"/"tree" group-scan + range-sweep shape as
+## _smash_step/_chop_step, just targeting WildCropMarker.GROUP_NAME. The
+## pull itself is animated over CropPull.DURATION_SECONDS and only drops the
+## actual item once that finishes -- this swing just STARTS it.
+func _pull_wild_crop_step() -> void:
+	var crops := get_tree().get_nodes_in_group(WildCropMarker.GROUP_NAME)
+	var positions: Array = []
+	for crop in crops:
+		positions.append(crop.position)
+
+	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
+		crops[index].begin_pull()
 
 
 ## The held item's material-model kind (see MaterialDamage/Block), used for
@@ -1328,6 +1398,7 @@ func _throw_held_stone() -> void:
 	var landing_position := position + direction.normalized() * distance
 
 	_resolve_thrown_stone_impact(landing_position, momentum)
+	_resolve_stone_impact_on_obstacles(landing_position, momentum)
 	_spawn_thrown_stone(landing_position, diameter_cm)
 
 
@@ -1364,6 +1435,26 @@ func _resolve_thrown_stone_impact(landing_position: Vector2, momentum: float) ->
 		)
 		creature.apply_knockback(knockback)
 		creature.take_damage(THROWN_STONE_BASE_DAMAGE)
+
+
+## Delivers `momentum` to any CollapsedPassage obstacle (docs/concept/
+## exploration.md's "collapsed passage" momentum obstacle) within
+## THROWN_STONE_IMPACT_RADIUS_PX of `landing_position` -- the SAME nearby-
+## target proximity check (_melee_attack.targets_in_range) and the SAME
+## momentum value _resolve_thrown_stone_impact already resolves against
+## creatures above, just checked against the OTHER kind of thing a real
+## delivered momentum can act on in this world. The obstacle itself decides
+## clear-vs-stays-blocked via ImpactResolver (see CollapsedPassage.
+## receive_impact) -- no second hit-detection system, no bespoke obstacle
+## event.
+func _resolve_stone_impact_on_obstacles(landing_position: Vector2, momentum: float) -> void:
+	var obstacles := get_tree().get_nodes_in_group(CollapsedPassage.GROUP_NAME)
+	var positions: Array = []
+	for obstacle in obstacles:
+		positions.append(obstacle.position)
+	var hit_indices := _melee_attack.targets_in_range(landing_position, positions, THROWN_STONE_IMPACT_RADIUS_PX)
+	for index in hit_indices:
+		obstacles[index].receive_impact(momentum)
 
 
 ## Materializes a real, correctly-rendered liftable stone (see
@@ -1412,7 +1503,15 @@ func _kick_step() -> void:
 	var mass := StoneSize.mass_kg_for(stone.diameter_cm)
 	if not Kick.is_kickable(mass):
 		return
-	stone.position = Kick.landing_position(position, stone.position, mass)
+	var landing_position := Kick.landing_position(position, stone.position, mass)
+	# The leg's momentum is conserved into the kicked stone (see kick.gd's
+	# own doc comment: exit velocity = KICK_MOMENTUM_KG_M_S / stone mass, so
+	# the stone's own momentum at landing is exactly KICK_MOMENTUM_KG_M_S
+	# again) -- the same real momentum a thrown stone delivers via
+	# _resolve_stone_impact_on_obstacles above, just from a kick instead of
+	# a throw.
+	_resolve_stone_impact_on_obstacles(landing_position, Kick.KICK_MOMENTUM_KG_M_S)
+	stone.position = landing_position
 
 
 ## Authority-only: the fishing minigame (see FishingSession / concept/fishing.md).
