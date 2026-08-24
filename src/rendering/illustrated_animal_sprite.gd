@@ -135,7 +135,105 @@ const _SHEETS := {
 		"alpha_threshold": 0.3,
 		"divider_gray_min": 0.45,
 	},
+	# assets/sprites/animals/wolf.png: an AI-generated 2-row x 8-column grid
+	# (walk row, then eat row) on a solid chroma-keyed magenta ground with
+	# near-white divider lines between cells -- see "magenta_keyed" below.
+	# Bands measured directly from the real PNG (1536x1024): a divider row
+	# reads as near-uniform white across the full width; everything between
+	# two divider bands is one row's own content.
+	"wolf": {
+		"faces_left": true,
+		"path": "res://assets/sprites/animals/wolf.png",
+		"walk_bands": [Vector2i(4, 511)],
+		"eat_bands": [Vector2i(512, 1020)],
+		"alpha_threshold": 0.3,
+		"magenta_keyed": true,
+	},
+	# assets/sprites/animals/sheep.png: same 2-row x 8-column magenta-keyed
+	# grid shape as wolf.png, at its own resolution (1774x887) and own
+	# measured bands.
+	"sheep": {
+		"faces_left": true,
+		"path": "res://assets/sprites/animals/sheep.png",
+		"walk_bands": [Vector2i(3, 443)],
+		"eat_bands": [Vector2i(444, 884)],
+		"alpha_threshold": 0.3,
+		"magenta_keyed": true,
+	},
 }
+
+## ## Chroma-keyed magenta, not a plain white/transparent ground
+##
+## wolf.png and sheep.png (see their own _SHEETS entries, "magenta_keyed":
+## true) are supplied on a solid magenta backdrop within each cell, the
+## exact same AI-image-generator convention IllustratedStoneSprite already
+## solved for pebbles/boulders/cobbles (see that class's own doc comment for
+## the full rationale) -- transparent background was ignored by the
+## generator, so this project settled on magenta instead. Kept as this
+## class's OWN copy of the identical constants/logic rather than a shared
+## utility -- the same "kept as this class's own copy" choice
+## IllustratedTerrainSprite already made for the same reason. deer/boar/
+## horse are unaffected: their sheets have no "magenta_keyed" flag, so this
+## whole pass is skipped for them (see _slice_bands), not merely a no-op.
+const MAGENTA_RED_MIN := 0.85
+const MAGENTA_BLUE_MIN := 0.85
+const MAGENTA_GREEN_MAX := 0.15
+
+## How much red/blue may exceed green before it counts as a magenta cast
+## worth despilling -- see IllustratedStoneSprite.MAGENTA_CAST_MARGIN's own
+## doc comment for the full "despill, not just a binary key" rationale (a
+## pure-magenta key alone leaves a visible pink halo along antialiased
+## edges, since the source has no real alpha of its own to fall back on).
+const MAGENTA_CAST_MARGIN := 0.03
+
+
+static func _is_magenta(color: Color) -> bool:
+	return color.r >= MAGENTA_RED_MIN and color.b >= MAGENTA_BLUE_MIN and color.g <= MAGENTA_GREEN_MAX
+
+
+static func _despilled(color: Color) -> Color:
+	var cast: float = minf(color.r - color.g, color.b - color.g)
+	if cast <= MAGENTA_CAST_MARGIN:
+		return color
+	var removed := cast - MAGENTA_CAST_MARGIN
+	return Color(
+		clampf(color.r - removed, 0.0, 1.0),
+		color.g,
+		clampf(color.b - removed, 0.0, 1.0),
+		color.a
+	)
+
+
+## Makes a magenta-keyed sheet's background genuinely transparent before it
+## reaches SpriteSheetSlicer, which only understands alpha and near-white/
+## grey as background -- it has no concept of magenta. Mirrors
+## IllustratedStoneSprite._prepared_for_slicing exactly.
+static func _prepared_for_slicing(image: Image) -> Image:
+	var prepared := image.duplicate() as Image
+	if prepared.get_format() != Image.FORMAT_RGBA8:
+		prepared.convert(Image.FORMAT_RGBA8)
+	for y in prepared.get_height():
+		for x in prepared.get_width():
+			var pixel := prepared.get_pixel(x, y)
+			if _is_magenta(pixel):
+				prepared.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, 0.0))
+			else:
+				prepared.set_pixel(x, y, _despilled(pixel))
+	return prepared
+
+
+## Second, final cleanup pass over each already-cropped-and-resized frame --
+## SpriteSheetSlicer's own crop+Lanczos resize can still ring a few output
+## pixels back toward a magenta cast even once the source sheet has been
+## despilled. Mirrors IllustratedStoneSprite._scrub_magenta_fringe exactly.
+static func _scrub_magenta_fringe(image: Image) -> void:
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			if _is_magenta(pixel):
+				image.set_pixel(x, y, Color(0, 0, 0, 0))
+			else:
+				image.set_pixel(x, y, _despilled(pixel))
 
 var _slicer := SpriteSheetSlicer.new()
 
@@ -252,6 +350,13 @@ func _load_frames(species: String, action: String) -> Array[Image]:
 ## single action can span multiple bands).
 func _slice_bands(sheet: Dictionary, bands: Array, path: String = "") -> Array[Image]:
 	var image := Image.load_from_file(path if path != "" else sheet["path"])
+	# Magenta-keyed sheets (wolf, sheep -- see "magenta_keyed" in _SHEETS)
+	# need their chroma-keyed background converted to real alpha=0 BEFORE it
+	# reaches the slicer, or the whole sheet reads as one continuous content
+	# blob. Skipped entirely for every other sheet, not merely a no-op.
+	var magenta_keyed: bool = sheet.get("magenta_keyed", false)
+	if magenta_keyed:
+		image = _prepared_for_slicing(image)
 	var alpha_threshold: float = sheet["alpha_threshold"]
 	# Most sheets use a near-white divider line, comfortably above
 	# SpriteSheetSlicer's own default bound -- only sheets that measure
@@ -261,9 +366,15 @@ func _slice_bands(sheet: Dictionary, bands: Array, path: String = "") -> Array[I
 	for band in bands:
 		var rect: Vector2i = band
 		var frames := _slicer.detect_frames(image, rect.x, rect.y, 60, 1, alpha_threshold, divider_gray_min)
-		normalized.append_array(
-			_slicer.normalize_frames(image, frames, CANVAS_SIZE, BASELINE_Y, alpha_threshold, divider_gray_min)
+		var sliced := _slicer.normalize_frames(
+			image, frames, CANVAS_SIZE, BASELINE_Y, alpha_threshold, divider_gray_min
 		)
+		if magenta_keyed:
+			# A second, final cleanup pass over each already-cropped-and-
+			# resized frame -- see _scrub_magenta_fringe's own doc comment.
+			for frame_image in sliced:
+				_scrub_magenta_fringe(frame_image)
+		normalized.append_array(sliced)
 	return normalized
 
 

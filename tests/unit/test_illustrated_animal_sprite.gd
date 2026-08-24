@@ -322,3 +322,73 @@ func test_all_three_species_have_dedicated_walk_idle_and_eat_art():
 				sprite.generate_textures(species, action).size(), 0,
 				"%s should have real %s art" % [species, action]
 			)
+
+
+# -- wolf and sheep: chroma-keyed magenta sheets, not white-background art --
+#
+# assets/sprites/animals/wolf.png and sheep.png are AI-generated 2-row x
+# 8-column grids (walk row, then eat row) supplied on a solid magenta ground
+# with a real (already-present) alpha channel and near-white divider lines
+# between cells -- the same "no true transparent background" situation
+# IllustratedStoneSprite already solved for pebbles/boulders/cobbles (see
+# its own class doc comment), not the plain white/transparent convention
+# deer/boar/horse use. Both bands were measured directly from the real PNGs
+# (a divider row/column reads as near-uniform white; everything between two
+# divider bands is one row's own content), not eyeballed: wolf.png (1536x1024)
+# walk 4-511, eat 512-1020; sheep.png (1774x887) walk 3-443, eat 444-884.
+
+func test_has_species_true_for_wolf_and_sheep():
+	assert_true(sprite.has_species("wolf"))
+	assert_true(sprite.has_species("sheep"))
+
+
+func test_wolf_and_sheep_have_walk_and_eat_art_but_no_dedicated_idle():
+	for species in ["wolf", "sheep"]:
+		assert_eq(sprite.generate_textures(species, "walk").size(), 8, species)
+		assert_eq(sprite.generate_textures(species, "eat").size(), 8, species)
+		# No dedicated idle row on either sheet -- idle synthesizes from the
+		# eat cycle's own frame 0, same as deer/boar's single-held-pose
+		# fallback (see has_action's own doc comment).
+		assert_eq(sprite.generate_textures(species, "idle").size(), 1, species)
+
+
+func test_wolf_and_sheep_sheets_are_drawn_facing_left():
+	assert_true(sprite.faces_left("wolf"), "wolf art is drawn facing left")
+	assert_true(sprite.faces_left("sheep"), "sheep art is drawn facing left")
+
+
+## The whole point of chroma-keying: a source sheet supplied on solid magenta
+## must not leave any magenta-tinted pixel in the SLICED, normalized frame --
+## a frame cut straight out without this would carry a solid magenta box (or,
+## at minimum, a magenta-tinted fringe/halo around the animal's own outline)
+## rather than a clean transparent background. Every pixel below the alpha
+## threshold is background and skipped; every remaining opaque pixel must be
+## nowhere near pure magenta.
+func test_wolf_and_sheep_frames_have_no_magenta_left_in_them():
+	for species in ["wolf", "sheep"]:
+		var image: Image = sprite.generate_textures(species, "walk")[0].get_image()
+		for y in image.get_height():
+			for x in image.get_width():
+				var pixel := image.get_pixel(x, y)
+				if pixel.a < 0.3:
+					continue
+				var is_magenta_ish := pixel.r >= 0.85 and pixel.b >= 0.85 and pixel.g <= 0.15
+				assert_false(
+					is_magenta_ish,
+					"%s frame should have no magenta pixels left at (%d, %d)" % [species, x, y]
+				)
+
+
+## Unaffected control: a species with a genuine white/transparent-background
+## sheet (no magenta anywhere in the source) must render identically whether
+## or not the magenta chroma-key pass runs -- it is a no-op on pixels that
+## were never magenta in the first place.
+func test_deer_is_unaffected_by_the_magenta_chroma_key_pass():
+	var image: Image = sprite.generate_textures("deer", "walk")[0].get_image()
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			if pixel.a < 0.3:
+				continue
+			var is_magenta_ish := pixel.r >= 0.85 and pixel.b >= 0.85 and pixel.g <= 0.15
+			assert_false(is_magenta_ish, "deer frame should never have had magenta pixels")

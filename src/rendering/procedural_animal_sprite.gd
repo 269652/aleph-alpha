@@ -65,6 +65,13 @@ const SPECIES_BASE_COLORS := {
 	"lion": Color(0.78, 0.55, 0.15),
 	"nonvenomous_snake": Color(0.35, 0.42, 0.22),
 	"venomous_snake": Color(0.55, 0.22, 0.12),
+	# A cooler, darker "timber wolf" gray, distinct from predator's own
+	# blue-leaning gray (0.47, 0.47, 0.52) -- wolf is the real, named
+	# version of what "predator" always stood in for (see
+	# SPECIES_SHAPE_FAMILY's own doc comment).
+	"wolf": Color(0.42, 0.40, 0.38),
+	# Creamy wool tan, distinct from arctic_fox's near-white coat.
+	"sheep": Color(0.82, 0.76, 0.62),
 }
 
 ## Maps every species name to one of the 4 hand-drawn silhouette families in
@@ -101,6 +108,11 @@ const SPECIES_SHAPE_FAMILY := {
 	"lion": "lynx_shape",
 	"nonvenomous_snake": "snake_shape",
 	"venomous_snake": "snake_shape",
+	# The eponymous match: "predator" has always reused wolf_shape as this
+	# project's anonymous stand-in for a wolf. Wolf now IS that species,
+	# named and real.
+	"wolf": "wolf_shape",
+	"sheep": "deer_shape",
 }
 
 ## Jaguar (lynx-shaped) gets a scatter of dark rosette-like speckle dots so it

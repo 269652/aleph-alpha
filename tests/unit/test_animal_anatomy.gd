@@ -57,6 +57,26 @@ func test_headgear_matches_the_real_animal():
 	assert_eq(AnimalAnatomy.profile_for("horse").headgear, AnimalAnatomy.HEADGEAR_NONE)
 
 
+## A sheep shares goat's shape family (both fall back to the herbivore/
+## deer_shape family, see ProceduralAnimalSprite.SHAPE_MATE-equivalent
+## SPECIES_SHAPE_FAMILY) but is unlike it in the one trait that would
+## otherwise make them read as the same animal: no horns, and a stockier,
+## woollier build. Compared against its nearest neighbor rather than as a
+## bare assertion, the same "distinguish from whichever it shares a family
+## with" idiom test_a_boar_is_low_slung_and_humped_unlike_a_deer above uses.
+func test_a_sheep_has_no_headgear_unlike_the_horned_goat_it_shares_a_shape_family_with():
+	# Proves sheep has its OWN registered profile rather than silently
+	# falling back to the generic herbivore build (see profile_for's own
+	# doc comment) -- that fallback would pass every assertion below
+	# vacuously, since herbivore also happens to have no headgear.
+	assert_true(AnimalAnatomy.has_profile("sheep"), "sheep should have its own profile, not the herbivore fallback")
+	var sheep := AnimalAnatomy.profile_for("sheep")
+	var goat := AnimalAnatomy.profile_for("goat")
+	assert_eq(sheep.headgear, AnimalAnatomy.HEADGEAR_NONE)
+	assert_eq(goat.headgear, AnimalAnatomy.HEADGEAR_HORNS)
+	assert_gt(sheep.body_height, goat.body_height, "a sheep's wool reads as a stockier, bulkier body than a goat's")
+
+
 ## A boar is the low, bulky, humped one -- the opposite build to a deer.
 func test_a_boar_is_low_slung_and_humped_unlike_a_deer():
 	var boar := AnimalAnatomy.profile_for("boar")

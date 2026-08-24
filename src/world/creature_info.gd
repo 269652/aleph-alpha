@@ -27,6 +27,16 @@ extends RefCounted
 ## ecologically distinct instead of drawing from the same global 4-species
 ## pool. Each is its own species entry here (own stats/diet), independent of
 ## which of the 4 hand-drawn shape families it happens to render with.
+##
+## wolf/sheep are forest's own equivalent addition: forest was the one
+## biome among those six still drawing its dominant predator from the
+## anonymous "predator" placeholder rather than a real named species (see
+## CreatureRenderer's PREDATOR_SPECIES_POOL_BY_BIOME) -- "predator" was
+## always this project's own unnamed stand-in for a wolf (wolf_shape,
+## gray coat), so wolf gives that a real name, real stats, and real
+## illustrated art (see IllustratedAnimalSprite) rather than a new role.
+## Sheep is wolf's (and deer's) forest prey -- an ordinary herbivore-role
+## addition, same as deer/nonvenomous_snake.
 
 ## The 8 biome-specific species below (see CreatureRenderer's per-biome
 ## species pools -- desert/tundra/rainforest/mountain each get their own
@@ -58,6 +68,8 @@ const MAX_HEALTH_BY_SPECIES := {
 	"lion": 45.0,
 	"nonvenomous_snake": 10.0,
 	"venomous_snake": 14.0,
+	"wolf": 30.0,
+	"sheep": 18.0,
 }
 const MAX_STAMINA_BY_SPECIES := {
 	"herbivore": 30.0,
@@ -79,6 +91,8 @@ const MAX_STAMINA_BY_SPECIES := {
 	"lion": 30.0,
 	"nonvenomous_snake": 15.0,
 	"venomous_snake": 15.0,
+	"wolf": 30.0,
+	"sheep": 24.0,
 }
 const MAX_MANA_BY_SPECIES := {
 	"herbivore": 5.0,
@@ -100,6 +114,8 @@ const MAX_MANA_BY_SPECIES := {
 	"lion": 10.0,
 	"nonvenomous_snake": 5.0,
 	"venomous_snake": 5.0,
+	"wolf": 10.0,
+	"sheep": 5.0,
 }
 const DIET_BY_SPECIES := {
 	"herbivore": "Grazer",
@@ -121,6 +137,8 @@ const DIET_BY_SPECIES := {
 	"lion": "Hunter",
 	"nonvenomous_snake": "Small-Prey Hunter",
 	"venomous_snake": "Venomous Hunter",
+	"wolf": "Hunter",
+	"sheep": "Grazer",
 }
 ## Herbivores are calm (always flee threats); boars/predators/lynx are
 ## aggressive (fight when strong, flee when weak). See CreatureBehavior for
@@ -148,6 +166,8 @@ const TEMPERAMENT_BY_SPECIES := {
 	"lion": "aggressive",
 	"nonvenomous_snake": "calm",
 	"venomous_snake": "aggressive",
+	"wolf": "aggressive",
+	"sheep": "calm",
 }
 ## Only true predators (hunt herbivores/boars for food) go here -- a boar is
 ## aggressive but not a predator (see TEMPERAMENT_BY_SPECIES doc above).
@@ -164,6 +184,7 @@ const PREDATOR_SPECIES := {
 	"bear": true,
 	"lion": true,
 	"venomous_snake": true,
+	"wolf": true,
 }
 
 ## Levels roll in [1, LEVEL_RANGE] from the individual's seed -- a cheap,

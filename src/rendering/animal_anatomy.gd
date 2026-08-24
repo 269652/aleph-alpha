@@ -43,7 +43,7 @@ const NECK_LOW := "low"
 ## Every species with a hand-tuned profile. Anything else falls back to the
 ## generic herbivore build (see profile_for).
 const SPECIES := [
-	"herbivore", "deer", "horse", "goat", "camel", "reindeer",
+	"herbivore", "deer", "horse", "goat", "camel", "reindeer", "sheep",
 	"boar", "tapir", "bear",
 	"wolf", "lynx", "jaguar", "predator",
 	"mouse",
@@ -189,6 +189,20 @@ const _PROFILES := {
 		"leg_length": 0.30, "leg_thickness": 0.052,
 		"tail": TAIL_TUFT, "tail_length": 0.06,
 		"headgear": HEADGEAR_ANTLERS, "has_mane": false,
+	},
+	# A woolly, stockier goat: same upright-grazer family, but no horns and a
+	# bulkier, rounder body (the wool) on shorter legs -- see
+	# test_a_sheep_has_no_headgear_unlike_the_horned_goat_it_shares_a_shape_
+	# family_with.
+	"sheep": {
+		"barrel_squareness": 0.35,
+		"world_scale": 0.8,
+		"body_length": 0.48, "body_height": 0.28, "body_y": 0.50, "shoulder_hump": 0.03,
+		"neck_length": 0.08, "neck_thickness": 0.14, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.14, "head_height": 0.12, "muzzle": 0.4, "ear_size": 0.26,
+		"leg_length": 0.18, "leg_thickness": 0.05,
+		"tail": TAIL_STUB, "tail_length": 0.05,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 
 	# -- low, bulky rooters -------------------------------------------------
