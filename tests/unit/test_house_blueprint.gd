@@ -117,17 +117,122 @@ func test_every_blueprint_stays_within_its_own_footprint():
 			assert_between(cell.y, 0, footprint.y - 1, blueprint_id)
 
 
-func test_every_blueprints_roofs_cover_only_real_floor_cells():
+# -- roof coverage and the front facade ---------------------------------------
+#
+# See docs/concept/building.md "How a house reads from above". Roofs used to
+# cover only the FLOOR cells, which from above reads inside-out: a wall ring
+# with a differently-textured rectangle sitting inside it is a courtyard, not
+# a house (reported: village buildings "don't resemble houses at all"). A
+# roof covers the whole footprint EXCEPT the front row, which stays open as a
+# facade so the door is findable from outside.
+
+
+## The southernmost structure cell of each occupied column -- the strip the
+## roof deliberately leaves uncovered.
+func _facade_cells(pieces: Dictionary) -> Dictionary:
+	var lowest_by_column := {}
+	for cell in pieces:
+		var current: int = lowest_by_column.get(cell.x, -1)
+		if cell.y > current:
+			lowest_by_column[cell.x] = cell.y
+	var facade := {}
+	for column in lowest_by_column:
+		facade[Vector2i(column, lowest_by_column[column])] = true
+	return facade
+
+
+func test_every_blueprints_roofs_are_all_roof_category_pieces():
 	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
-		var pieces := blueprint.build(blueprint_id, 1)
 		var roofs := blueprint.build_roofs(blueprint_id, 1)
 		assert_gt(roofs.size(), 0, "%s should be roofed" % blueprint_id)
 		for cell in roofs:
 			assert_eq(BuildingPiece.category_of(roofs[cell]), BuildingPiece.CATEGORY_ROOF, blueprint_id)
-			assert_eq(
-				BuildingPiece.category_of(pieces.get(cell, "")), BuildingPiece.CATEGORY_FLOOR,
-				"%s roofs a cell (%s) that isn't real floor" % [blueprint_id, cell]
+
+
+## A roof only ever sits over a cell the building actually occupies -- a
+## notched blueprint's missing corner gets no roof, same as it gets no
+## wall/floor.
+func test_roofs_never_cover_a_cell_the_building_does_not_occupy():
+	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
+		var pieces := blueprint.build(blueprint_id, 1)
+		var roofs := blueprint.build_roofs(blueprint_id, 1)
+		for cell in roofs:
+			assert_true(pieces.has(cell), "%s roofs empty cell %s" % [blueprint_id, cell])
+
+
+## The fix for the inside-out look: the roof must reach OVER the walls, not
+## stop at the interior floor.
+func test_roofs_cover_the_walls_too_not_just_the_interior():
+	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
+		var pieces := blueprint.build(blueprint_id, 1)
+		var roofs := blueprint.build_roofs(blueprint_id, 1)
+		var roofed_walls := 0
+		for cell in roofs:
+			if BuildingPiece.category_of(pieces[cell]) == BuildingPiece.CATEGORY_WALL:
+				roofed_walls += 1
+		assert_gt(roofed_walls, 0, "%s's roof stops at the interior; it must cap its walls" % blueprint_id)
+
+
+## ...but it stops short of the front row, or the player can never see where
+## the door is.
+func test_roofs_leave_the_front_facade_uncovered():
+	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
+		var pieces := blueprint.build(blueprint_id, 1)
+		var roofs := blueprint.build_roofs(blueprint_id, 1)
+		for cell in _facade_cells(pieces):
+			assert_false(roofs.has(cell), "%s roofs over its own facade at %s" % [blueprint_id, cell])
+
+
+## Roof and facade between them account for the WHOLE building -- no cell is
+## left both unroofed and not part of the visible front.
+func test_every_structure_cell_is_either_roofed_or_facade():
+	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
+		var pieces := blueprint.build(blueprint_id, 1)
+		var roofs := blueprint.build_roofs(blueprint_id, 1)
+		var facade := _facade_cells(pieces)
+		for cell in pieces:
+			assert_true(
+				roofs.has(cell) or facade.has(cell),
+				"%s leaves %s neither roofed nor facade" % [blueprint_id, cell]
 			)
+
+
+# -- the door belongs on the front ---------------------------------------------
+
+## A door tucked onto a side or back wall is both unrealistic and invisible
+## once the roof covers everything but the front row -- so it goes on the
+## facade, which is also where a person would actually put one.
+func test_the_door_is_always_on_the_front_facade():
+	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
+		for seed_value in range(12):
+			var pieces := blueprint.build(blueprint_id, seed_value)
+			var facade := _facade_cells(pieces)
+			for cell in pieces:
+				if BuildingPiece.category_of(pieces[cell]) == BuildingPiece.CATEGORY_DOOR:
+					assert_true(
+						facade.has(cell),
+						"%s seed %d put its door at %s, off the front" % [blueprint_id, seed_value, cell]
+					)
+
+
+## Windows are only visible from outside if they are on the facade too, so
+## the facade is filled first -- a blueprint with more windows than facade
+## room still places the remainder on its other walls rather than dropping
+## them (they stay visible from inside, where the roof is hidden).
+func test_windows_prefer_the_facade_before_falling_back_to_other_walls():
+	var placed_on_facade := 0
+	var placed_total := 0
+	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
+		var pieces := blueprint.build(blueprint_id, 3)
+		var facade := _facade_cells(pieces)
+		for cell in pieces:
+			if BuildingPiece.category_of(pieces[cell]) != BuildingPiece.CATEGORY_WINDOW:
+				continue
+			placed_total += 1
+			if facade.has(cell):
+				placed_on_facade += 1
+	assert_gt(placed_total, 0, "the catalog should place windows at all")
+	assert_gt(placed_on_facade, 0, "no window landed on any facade; they'd all be hidden under the roof")
 
 
 func test_material_follows_the_requested_tier_for_every_blueprint():
@@ -140,14 +245,36 @@ func test_material_follows_the_requested_tier_for_every_blueprint():
 ## Different seeds give visibly different houses within the SAME blueprint
 ## too -- a village of five identical "cottage_small" huts is the same
 ## problem the old single-box design had, just renamed.
-func test_different_seeds_place_the_door_differently_within_one_blueprint():
+func _door_positions_across_seeds(blueprint_id: String, seeds: int) -> Dictionary:
 	var doors := {}
-	for seed_value in range(20):
-		var pieces := blueprint.build(HouseBlueprint.BLUEPRINT_IDS[0], seed_value)
+	for seed_value in range(seeds):
+		var pieces := blueprint.build(blueprint_id, seed_value)
 		for cell in pieces:
 			if BuildingPiece.category_of(pieces[cell]) == BuildingPiece.CATEGORY_DOOR:
 				doors[cell] = true
-	assert_gt(doors.size(), 1, "houses should not all have their door in the same place")
+	return doors
+
+
+## Two neighbouring houses of the SAME blueprint should not be
+## distinguishable only by their windows -- wherever the front wall is wide
+## enough to offer a choice, the door actually moves.
+func test_a_wide_blueprint_varies_its_door_position_across_seeds():
+	assert_gt(
+		_door_positions_across_seeds("cottage_wide", 20).size(), 1,
+		"a 6-wide front wall offers several door positions; they should get used"
+	)
+
+
+## The counter-case, pinned deliberately rather than left as a surprise: a
+## 3x3 hut's front wall has exactly ONE cell that isn't a corner, so its
+## door cannot vary and lands dead centre. That is the correct outcome --
+## the alternative is a door in the corner of the building, which is worse
+## than a predictable one (see docs/concept/building.md "How a house reads
+## from above": the facade rule is what makes a door findable at all).
+func test_the_smallest_hut_puts_its_only_possible_door_dead_centre_on_the_front():
+	var doors := _door_positions_across_seeds("hut_tiny", 20)
+	assert_eq(doors.size(), 1, "a 3x3 hut has exactly one sensible front-door cell")
+	assert_true(doors.has(Vector2i(1, 2)), "and it is the middle of the front wall")
 
 
 # -- windows: real variety, actually placed ------------------------------------

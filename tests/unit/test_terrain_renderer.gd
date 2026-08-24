@@ -105,7 +105,7 @@ func _wipe_cache_behavior_files():
 ## "room_for_tile" errors for every grid cell beyond the fake image's
 ## bounds. Mirrors build_tile_set()'s own size math exactly.
 func _full_atlas_size() -> Vector2i:
-	var total_cells: int = renderer._earth_blend_base_linear() + renderer._earth_blend_family_size()
+	var total_cells: int = renderer._roof_variant_base_linear() + renderer._roof_variant_family_size()
 	var rows := int(ceil(float(total_cells) / TerrainRenderer.ATLAS_COLUMNS))
 	var art := TerrainRenderer.ART_TILE_SIZE
 	return Vector2i(TerrainRenderer.ATLAS_COLUMNS * art, rows * art)
@@ -208,6 +208,11 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 		# cardinal-direction subset x BLEND_VARIANTS -- no pair indexing, since
 		# earth is always the "own"/near side and never a partner itself.
 		+ land_n * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Pitched roof variants (see RoofShape): material x pitch band x
+		# outward-edge mask. A roof cell's tile is resolved from its own
+		# context within its building at paint time, so a house reads as a
+		# pitched roof rather than one flat tile repeated across a rectangle.
+		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -230,6 +235,11 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 		# Earth-modification blend tiles -- see the matching comment in
 		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
 		+ land_n * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Pitched roof variants (see RoofShape): material x pitch band x
+		# outward-edge mask. A roof cell's tile is resolved from its own
+		# context within its building at paint time, so a house reads as a
+		# pitched roof rather than one flat tile repeated across a rectangle.
+		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -356,6 +366,11 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 		# Earth-modification blend tiles -- see the matching comment in
 		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
 		+ land_n * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Pitched roof variants (see RoofShape): material x pitch band x
+		# outward-edge mask. A roof cell's tile is resolved from its own
+		# context within its building at paint time, so a house reads as a
+		# pitched roof rather than one flat tile repeated across a rectangle.
+		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
@@ -802,8 +817,18 @@ func test_paint_roofs_sets_a_cell_for_every_roof_modification():
 
 	renderer.paint_roofs(tile_map_layer, chunk)
 
-	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)), renderer.atlas_coords_for_modification("wood_roof"))
-	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)), renderer.atlas_coords_for_modification("stone_roof"))
+	# Both are isolated single-cell roofs: boundary on all four sides, and
+	# their own ridge, so each resolves to its material's band-0/mask-15
+	# variant (see RoofShape) rather than to the flat per-material tile
+	# paint_roofs used to set for every cell alike.
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 0, 15)
+	)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_STONE, 0, 15)
+	)
 
 
 func test_paint_roofs_only_touches_cells_with_a_roof_modification():
@@ -825,7 +850,10 @@ func test_paint_roofs_offsets_cells_by_the_given_origin():
 
 	renderer.paint_roofs(tile_map_layer, chunk, Vector2i(100, 200))
 
-	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(100, 200)), renderer.atlas_coords_for_modification("wood_roof"))
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(100, 200)),
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 0, 15)
+	)
 	assert_eq(tile_map_layer.get_cell_source_id(Vector2i(0, 0)), -1)
 
 
@@ -2201,3 +2229,116 @@ func test_hillshade_overlay_tiles_are_real_slope_aspect_data_not_a_flat_fill():
 	var flat_pixel := image.get_pixel(flat_origin.x, flat_origin.y)
 	var steep_pixel := image.get_pixel(steep_origin.x, steep_origin.y)
 	assert_lt(flat_pixel.r, steep_pixel.r, "the steep bin's tile should encode a higher slope than the flat tile")
+
+
+# -- pitched roof variants ----------------------------------------------------
+#
+# See docs/concept/building.md "How a house reads from above". A roof cell's
+# tile is resolved from its CONTEXT within its own building (RoofShape),
+# not from one flat per-material tile -- the same "appearance from
+# neighbours at paint time" shape the blend/corner families above use.
+
+const RoofShape = preload("res://src/rendering/roof_shape.gd")
+
+
+func test_roof_variant_tiles_differ_by_pitch_band():
+	var ridge := renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 0, 0)
+	var eave := renderer.atlas_coords_for_roof_variant(
+		BuildingPiece.MATERIAL_WOOD, RoofShape.TOTAL_SHADE_BANDS - 1, 0
+	)
+	assert_ne(ridge, eave, "the ridge and the far eave cannot share one tile")
+
+
+func test_roof_variant_tiles_differ_by_edge_mask():
+	var interior := renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 1, 0)
+	var cornered := renderer.atlas_coords_for_roof_variant(
+		BuildingPiece.MATERIAL_WOOD, 1, RoofShape.EDGE_NORTH | RoofShape.EDGE_WEST
+	)
+	assert_ne(interior, cornered)
+
+
+func test_roof_variant_tiles_differ_by_material():
+	assert_ne(
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 2, 3),
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_STONE, 2, 3)
+	)
+
+
+## Every (material, band, mask) triple must land on its own real, created
+## atlas tile -- a collision here would silently paint some other family's
+## art onto a roof, the exact class of bug the land/land corner family
+## already shipped once (see this file's own corner-collision tests).
+func test_every_roof_variant_is_a_distinct_created_tile_in_the_atlas():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var seen := {}
+	for material in TerrainRenderer.ROOF_VARIANT_MATERIALS:
+		for band in RoofShape.TOTAL_SHADE_BANDS:
+			for mask in TerrainRenderer.ROOF_EDGE_MASK_COUNT:
+				var coords := renderer.atlas_coords_for_roof_variant(material, band, mask)
+				assert_true(source.has_tile(coords), "%s band %d mask %d missing" % [material, band, mask])
+				assert_false(seen.has(coords), "%s band %d mask %d collides" % [material, band, mask])
+				seen[coords] = true
+
+
+## Out-of-range input clamps into the family rather than indexing off the
+## end of it into whatever tile happens to sit there.
+func test_out_of_range_roof_variants_clamp_into_their_own_family():
+	var too_high := renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 999, 999)
+	var top := renderer.atlas_coords_for_roof_variant(
+		BuildingPiece.MATERIAL_WOOD, RoofShape.TOTAL_SHADE_BANDS - 1, TerrainRenderer.ROOF_EDGE_MASK_COUNT - 1
+	)
+	assert_eq(too_high, top)
+
+
+## The real end-to-end claim: a house's roof does NOT paint one repeated
+## tile any more. Two cells on opposite slopes of the same roof must get
+## genuinely different atlas coords, or nothing about the pitch reached the
+## tilemap.
+func test_paint_roofs_gives_opposite_slopes_of_one_roof_different_tiles():
+	var chunk := Chunk.new()
+	chunk.width = 8
+	chunk.height = 8
+	chunk.elevation = PackedFloat32Array()
+	chunk.biome = PackedStringArray()
+	for y in 8:
+		for x in 8:
+			chunk.elevation.append(0.4)
+			chunk.biome.append("grassland")
+	# A 6x5 roof: horizontal ridge, so rows above and below it differ.
+	for y in range(5):
+		for x in range(6):
+			chunk.roof_modifications[Vector2i(x, y)] = "wood_roof"
+
+	renderer.paint_roofs(tile_map_layer, chunk)
+
+	var upper := tile_map_layer.get_cell_atlas_coords(Vector2i(3, 0))
+	var lower := tile_map_layer.get_cell_atlas_coords(Vector2i(3, 4))
+	assert_ne(upper, lower, "the lit and shaded slopes must not paint the same tile")
+
+
+## ...and an interior cell must differ from an outer-boundary one, which is
+## what gives the building a silhouette instead of a uniform slab.
+func test_paint_roofs_distinguishes_a_buildings_edge_from_its_interior():
+	var chunk := Chunk.new()
+	chunk.width = 8
+	chunk.height = 8
+	chunk.elevation = PackedFloat32Array()
+	chunk.biome = PackedStringArray()
+	for y in 8:
+		for x in 8:
+			chunk.elevation.append(0.4)
+			chunk.biome.append("grassland")
+	for y in range(5):
+		for x in range(6):
+			chunk.roof_modifications[Vector2i(x, y)] = "wood_roof"
+
+	renderer.paint_roofs(tile_map_layer, chunk)
+
+	# (0,1) is on the west boundary; (2,1) sits inside on the same row, so
+	# they share a pitch band and can only differ by their edge mask.
+	assert_ne(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 1)),
+		tile_map_layer.get_cell_atlas_coords(Vector2i(2, 1)),
+		"the building's outer edge must carry a rim its interior does not"
+	)

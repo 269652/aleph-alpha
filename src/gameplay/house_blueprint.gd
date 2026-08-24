@@ -141,33 +141,96 @@ func build(blueprint_id: String, seed_value: int, material: String = BuildingPie
 	if candidates.is_empty():
 		return {}  # never happens for a real catalog entry; stays safe regardless
 
-	var door_cell: Vector2i = candidates[PixelNoise.range_index(seed_value, footprint.x, footprint.y, candidates.size())]
+	# The door goes on the FRONT wall (see docs/concept/building.md "How a
+	# house reads from above"): the roof covers everything except the facade
+	# row, so a door on a side or back wall would be both unrealistic and
+	# invisible from outside. The unrestricted candidate list stays as the
+	# fallback for any future shape with no qualifying facade cell at all --
+	# a door somewhere beats a house with no way in.
+	var facade := _facade_cells(pieces)
+	var front_candidates := _only_facade(candidates, facade, true)
+	var door_pool: Array = front_candidates if not front_candidates.is_empty() else candidates
+	var door_cell: Vector2i = door_pool[
+		PixelNoise.range_index(seed_value, footprint.x, footprint.y, door_pool.size())
+	]
 	pieces[door_cell] = _piece(BuildingPiece.CATEGORY_DOOR, material)
 
-	var window_candidates := candidates.duplicate()
-	window_candidates.erase(door_cell)
+	# Windows fill the facade first for the same reason, then spill onto the
+	# other walls -- a window under the roof is still real and still visible
+	# from inside (where the roof hides), it just doesn't contribute to the
+	# house's exterior look, so it's the lower-value slot.
+	var remaining := candidates.duplicate()
+	remaining.erase(door_cell)
+	var window_pools: Array = [
+		_only_facade(remaining, facade, true), _only_facade(remaining, facade, false)
+	]
+	var placed := 0
 	var window_count: int = recipe.get("windows", 0)
-	for i in mini(window_count, window_candidates.size()):
-		var pick_index := PixelNoise.range_index(seed_value, i + 1, footprint.x + footprint.y, window_candidates.size())
-		var window_cell: Vector2i = window_candidates[pick_index]
-		pieces[window_cell] = _piece(BuildingPiece.CATEGORY_WINDOW, material)
-		window_candidates.remove_at(pick_index)
+	for pool in window_pools:
+		while placed < window_count and not pool.is_empty():
+			var pick_index := PixelNoise.range_index(
+				seed_value, placed + 1, footprint.x + footprint.y, pool.size()
+			)
+			var window_cell: Vector2i = pool[pick_index]
+			pieces[window_cell] = _piece(BuildingPiece.CATEGORY_WINDOW, material)
+			pool.remove_at(pick_index)
+			placed += 1
 
 	return pieces
 
 
-## The roof layer, covering the interior. Separate from `build` because
-## roofs sit ABOVE the room rather than on its plane (see
-## BuildingPlacement), so they live on their own layer. Only ever covers
-## real FLOOR cells -- a notched blueprint's missing corner gets no roof,
-## same as it gets no wall/floor.
+## `cells` split by facade membership -- `wanted` true keeps the facade
+## cells, false keeps everything else.
+func _only_facade(cells: Array, facade: Dictionary, wanted: bool) -> Array:
+	var kept: Array = []
+	for cell in cells:
+		if facade.has(cell) == wanted:
+			kept.append(cell)
+	return kept
+
+
+## The southernmost occupied cell of each column -- the strip of wall that
+## faces the player, left uncovered by the roof so the door and its windows
+## are visible from outside (see docs/concept/building.md "How a house reads
+## from above"). Derived per COLUMN rather than as one flat bottom row so a
+## notched/L-shaped blueprint gets a facade following its own real
+## silhouette rather than a straight line through empty space.
+func _facade_cells(pieces: Dictionary) -> Dictionary:
+	var lowest_by_column := {}
+	for cell in pieces:
+		var current: int = lowest_by_column.get(cell.x, -1)
+		if cell.y > current:
+			lowest_by_column[cell.x] = cell.y
+	var facade := {}
+	for column in lowest_by_column:
+		facade[Vector2i(column, lowest_by_column[column])] = true
+	return facade
+
+
+## The roof layer. Separate from `build` because roofs sit ABOVE the room
+## rather than on its plane (see BuildingPlacement), so they live on their
+## own layer.
+##
+## Covers every cell the building occupies -- WALLS INCLUDED -- except the
+## front facade (see _facade_cells). Roofing only the interior floor was
+## the "buildings don't resemble houses at all" bug (docs/concept/
+## building.md "How a house reads from above"): from above, a wall ring
+## with a differently-textured rectangle inside it reads as a courtyard,
+## not as a house. Entering still reveals the interior, because roof-hiding
+## keys on the ROOM's own cells (RoomDetector.room_containing) rather than
+## on every roof cell, so the wall cap stays while the room opens up.
+##
+## A notched blueprint's missing corner still gets no roof, same as it gets
+## no wall/floor -- the loop only ever visits cells `build` actually
+## produced.
 func build_roofs(
 	blueprint_id: String, seed_value: int, material: String = BuildingPiece.MATERIAL_WOOD
 ) -> Dictionary:
 	var pieces := build(blueprint_id, seed_value, material)
+	var facade := _facade_cells(pieces)
 	var roofs := {}
 	for cell in pieces:
-		if BuildingPiece.category_of(pieces[cell]) == BuildingPiece.CATEGORY_FLOOR:
+		if not facade.has(cell):
 			roofs[cell] = _piece(BuildingPiece.CATEGORY_ROOF, material)
 	return roofs
 

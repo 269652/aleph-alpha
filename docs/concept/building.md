@@ -186,6 +186,69 @@ colours which of those options they actually pick — the same "identity
 actually matters mechanically" pillar this project's NPC system already
 commits to elsewhere.
 
+### How a house reads from above
+
+A correct piece layout is not the same thing as a building that *looks*
+like one. Reported directly, with the blueprint catalog above already in
+place: "the buildings don't resemble houses at all... just some randomly
+placed stones and wood panels". Three separate causes, each structural
+rather than a matter of prettier textures:
+
+**1. The roof is the exterior, so it must cover the exterior.** Roofs
+originally covered only the FLOOR cells — the room interior — leaving the
+wall ring uncovered. From above that reads inside-out: a wooden ring with
+a differently-textured rectangle sitting inside it, which is a courtyard,
+not a house. A roof covers the whole footprint, walls included. Entering
+still reveals the interior, because roof-hiding keys on
+`RoomDetector.room_containing` (the room's own cells) rather than on "all
+roof cells" — so the wall cap stays while the room opens up, which is
+also what a cutaway of a real building looks like.
+
+**2. A house needs a facade, or the player cannot find the door.** A roof
+covering *everything* is geometrically honest but hides the one thing the
+player needs to see. Real top-down games solve this the same way: the roof
+stops one row short of the front, leaving a visible facade band carrying
+the door and windows. So the door is placed on the FRONT (south) wall
+rather than wherever a wall cell first qualifies, and the southernmost
+wall cell of every column stays unroofed. A villager's house therefore
+reads as roof-above-facade, with its entrance legible from outside — and
+the door is somewhere a person would actually put one.
+
+**3. A pitched roof reads as a roof; a flat one reads as a floor.** A
+single shingle texture tiled across a rectangle is, visually, a brick
+patio. What makes a roof read as a roof from above is the PITCH: a ridge
+line along the top, two slopes falling away from it, one catching the
+light and one in shade. That is per-cell context, not per-tile art, so it
+is derived the same way `TerrainRenderer` already derives biome blends and
+corners from neighbours (`dominant_blend_for`/`corner_direction_for`) —
+a pure classifier over the cell set, feeding an atlas family:
+
+- The ridge runs along the footprint's LONGER axis, because real rafters
+  span the shorter direction.
+- Each cell's shade comes from its distance to the ridge, brightest at the
+  ridge and falling toward the eaves, with the light-facing slope (up-left,
+  this project's established light direction) a full step brighter than the
+  shaded one.
+- Quantized into a small fixed number of bands rather than a continuous
+  ramp, so it stays a bounded atlas family like every other one here.
+
+**4. Per-tile rim shading is what made it read as loose panels.** Every
+piece tile drew its own bright top-left and dark bottom-right rim. Twenty
+wall tiles in a ring therefore drew twenty individually-outlined boxes —
+an internal grid over the whole building, which is precisely the "randomly
+placed panels" the report describes. A rim belongs on the STRUCTURE's
+outer boundary, not on each cell: a piece tile is rimmed only on the sides
+where it actually borders something that is not part of the same building.
+That is again neighbour context, expressed as a 4-bit edge mask over the
+cell's cardinal sides, so the atlas family is (material × band × edge
+mask) rather than one tile per piece id.
+
+None of this changes the piece vocabulary or what gets persisted — a roof
+is still one `wood_roof`/`stone_roof` chunk modification per cell (see
+Persistence below). All of the above is resolved at PAINT time from the
+neighbouring cells, exactly like terrain blending, so no new piece ids and
+no save-format change are involved.
+
 ### Persistence
 
 Pieces persist through the existing per-chunk modification system (see
