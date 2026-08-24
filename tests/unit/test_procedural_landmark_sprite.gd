@@ -53,6 +53,69 @@ func test_stall_awning_is_striped_in_two_colors():
 	assert_true(_has_color_near(image, ProceduralLandmarkSprite.AWNING_B))
 
 
+# -- per-occupation workspot props (see VillageRenderer, npc_planner.gd's
+# FakeNpcPlanner._WORK_LOCATION_BY_OCCUPATION -- reported: "the houses...
+# maybe we need... enough different blueprints", and the same follow-up ask
+# to close the remaining gap: a farmer/blacksmith/fisher/herbalist's own
+# workspot was an invisible position they walked to and stood on empty
+# grass, unlike merchant (personal stall) and guard (shared gate), which
+# both already had something real there) ---------------------------------
+
+## field (farmer), forge (blacksmith), dock (fisher), garden (herbalist) --
+## the same tag names FakeNpcPlanner._WORK_LOCATION_BY_OCCUPATION already
+## uses for these occupations' work location_tag, so the prop a player sees
+## is literally the place the schedule sends that villager.
+func test_every_occupation_workspot_prop_exists_in_the_catalog():
+	for landmark_id in ["field", "forge", "dock", "garden"]:
+		assert_true(ProceduralLandmarkSprite.LANDMARK_IDS.has(landmark_id), landmark_id)
+
+
+func test_every_landmark_looks_different_from_every_other():
+	var seen: Array[PackedByteArray] = []
+	for landmark_id in ProceduralLandmarkSprite.LANDMARK_IDS:
+		var data := generator.generate_image(landmark_id).get_data()
+		for other in seen:
+			assert_ne(data, other, landmark_id)
+		seen.append(data)
+
+
+## The field must read as tilled soil with real crop growth on it, not a
+## bare dirt rectangle -- a farmer's plot should look worked.
+func test_field_has_both_soil_and_crop_pixels():
+	var image := generator.generate_image("field")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.SOIL_COLOR), "field should have soil pixels")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.CROP_COLOR), "field should have crop pixels")
+
+
+## The forge must read as a forge: a stone furnace AND glowing embers, not
+## just a grey block.
+func test_forge_has_both_stone_and_ember_pixels():
+	var image := generator.generate_image("forge")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.STONE_COLOR), "forge should have stone pixels")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.EMBER_COLOR), "forge should have ember pixels")
+
+
+## The dock must read as real wooden planking over water, not a plain plank
+## on grass.
+func test_dock_has_both_wood_and_water_pixels():
+	var image := generator.generate_image("dock")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.WOOD_COLOR), "dock should have wood pixels")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.WATER_COLOR), "dock should have water pixels")
+
+
+## The garden must read as a real herb bed: tilled soil AND herb foliage,
+## and that foliage must be its OWN colour, not the same green a farmer's
+## crop uses (they should not read as the same plot).
+func test_garden_has_both_soil_and_its_own_herb_color():
+	var image := generator.generate_image("garden")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.SOIL_COLOR), "garden should have soil pixels")
+	assert_true(_has_color_near(image, ProceduralLandmarkSprite.HERB_COLOR), "garden should have herb pixels")
+	assert_false(
+		_has_color_near(image, ProceduralLandmarkSprite.CROP_COLOR),
+		"garden herbs should read as their own thing, not a farmer's crop"
+	)
+
+
 func test_unknown_id_falls_back_to_the_well():
 	assert_eq(
 		generator.generate_image("not_a_landmark").get_data(),

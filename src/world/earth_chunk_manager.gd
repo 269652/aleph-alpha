@@ -2419,8 +2419,8 @@ func step_snow(snowing: bool, warmth: float) -> void:
 	_repaint_snow()
 
 
-## The depth band the whole field was last painted at, and the tiles whose
-## tread has changed since.
+## Every tile's own last-painted band, and the tiles whose tread has changed
+## since.
 ##
 ## Repainting every loaded tile every frame is thousands of set_cell calls for
 ## a field that mostly has not changed -- the same shape of cost that took the
@@ -2479,11 +2479,20 @@ func _repaint_snow() -> void:
 
 func _repaint_whole_field() -> void:
 	for chunk_coord in _loaded_chunks:
-		var origin: Vector2i = chunk_coord * CHUNK_SIZE
-		var chunk: Chunk = _loaded_chunks[chunk_coord]
-		for local_y in chunk.height:
-			for local_x in chunk.width:
-				_paint_snow_tile(origin + Vector2i(local_x, local_y))
+		_paint_snow_chunk(chunk_coord)
+
+
+## Paints every tile of one chunk. Shared by _repaint_whole_field (every
+## loaded chunk, whenever the field-wide repaint above triggers) and
+## _load_chunk (this one chunk alone, immediately -- see _load_chunk's own
+## comment: without this, a chunk streamed in mid-snowfall stayed bare until
+## the next field-wide depth change happened to repaint it).
+func _paint_snow_chunk(chunk_coord: Vector2i) -> void:
+	var origin: Vector2i = chunk_coord * CHUNK_SIZE
+	var chunk: Chunk = _loaded_chunks[chunk_coord]
+	for local_y in chunk.height:
+		for local_x in chunk.width:
+			_paint_snow_tile(origin + Vector2i(local_x, local_y))
 
 
 func _paint_snow_tile(tile: Vector2i) -> void:
@@ -4983,6 +4992,11 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_paint_water_overlay(chunk_coord, chunk)
 	_paint_hillshade_overlay(chunk_coord, chunk)
+	# So a chunk streamed in mid-snowfall shows the snow already lying,
+	# instead of staying bare until the next field-wide depth change happens
+	# to repaint it (see _paint_snow_chunk's own doc comment).
+	if _snow_layer != null and _snow_depth > 0.0:
+		_paint_snow_chunk(chunk_coord)
 	# Restores collision for every wall/window piece PERSISTED from a
 	# previous session -- fresh village-stamped pieces get their collision
 	# immediately inside stamp_structure_at_global instead, further below in
@@ -5175,6 +5189,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.erase(_hillshade_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _roof_layer != null:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	if _snow_layer != null:
+		_terrain_renderer.erase(_snow_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _hidden_roof_chunk_coord == chunk_coord:
 		_hidden_roof_chunk_coord = null
 		_hidden_roof_room_cells = []

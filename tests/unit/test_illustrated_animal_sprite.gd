@@ -524,3 +524,58 @@ func test_germany_bosses_do_not_log_an_engine_warning():
 	for species in GERMANY_BOSS_SPECIES:
 		sprite.generate_textures(species, "walk")
 	assert_engine_error_count(0, "loading a Germany-boss sheet should not warn")
+
+
+# -- wolf: another chroma-keyed magenta sheet, same shape as sheep above ----
+#
+# assets/sprites/animals/wolf.png is an AI-generated 2-row x 8-column grid
+# (walk row, then eat row) supplied on the same solid magenta ground as
+# sheep.png, with near-white divider lines between cells. Bands were measured
+# directly from the real PNG (1536x1024): a divider row reads as near-uniform
+# white across the full width; everything between two divider bands is one
+# row's own content (walk 4-511, eat 512-1020).
+
+func test_wolf_is_a_registered_illustrated_species():
+	assert_true(sprite.has_species("wolf"))
+
+
+func test_wolf_has_walk_and_eat_art_but_no_dedicated_idle():
+	assert_eq(sprite.generate_textures("wolf", "walk").size(), 8)
+	assert_eq(sprite.generate_textures("wolf", "eat").size(), 8)
+	# No dedicated idle row on the sheet -- idle synthesizes from the eat
+	# cycle's own frame 0, same as sheep/deer/boar's fallback (see
+	# has_action's own doc comment).
+	assert_eq(sprite.generate_textures("wolf", "idle").size(), 1)
+
+
+func test_wolf_sheet_is_drawn_facing_left():
+	assert_true(sprite.faces_left("wolf"), "wolf art is drawn facing left")
+
+
+## Mirrors test_sheep_frames_have_no_leftover_magenta_background exactly --
+## wolf reuses sheep's own measured chroma_key/tolerance (see the class doc
+## comment on wolf's _SHEETS entry), so this is real regression coverage, not
+## an assumption that reuse was safe.
+func test_wolf_frames_have_no_leftover_magenta_background():
+	var frame: Image = sprite.generate_textures("wolf", "walk")[0].get_image()
+	assert_almost_eq(frame.get_pixel(0, 0).a, 0.0, 0.01, "top-left corner should be transparent, not magenta")
+	var magenta_survivors := 0
+	for y in frame.get_height():
+		for x in frame.get_width():
+			var c := frame.get_pixel(x, y)
+			if c.a > 0.5 and absf(c.r - 0.95) <= 0.05 and absf(c.g - 0.02) <= 0.05 and absf(c.b - 0.96) <= 0.05:
+				magenta_survivors += 1
+	assert_eq(magenta_survivors, 0, "no opaque magenta pixel should survive chroma-keying")
+
+
+func test_wolf_frame_has_real_content_that_survives_chroma_keying():
+	var frame: Image = sprite.generate_textures("wolf", "walk")[0].get_image()
+	var found_content := false
+	for y in frame.get_height():
+		for x in frame.get_width():
+			if frame.get_pixel(x, y).a > 0.5:
+				found_content = true
+				break
+		if found_content:
+			break
+	assert_true(found_content, "the wolf drawing itself must survive chroma-keying, not just its background")
