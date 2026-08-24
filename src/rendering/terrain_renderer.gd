@@ -6,6 +6,7 @@ const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
 const ProceduralBuildingPieceSprite = preload("res://src/rendering/procedural_building_piece_sprite.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const RoofShape = preload("res://src/rendering/roof_shape.gd")
 const ProceduralShoreDistanceSprite = preload("res://src/rendering/procedural_shore_distance_sprite.gd")
 const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
@@ -151,7 +152,7 @@ const ATLAS_COLUMNS := 64
 ## still being decorrelated between neighbouring tiles.
 const _VARIANT_SALT := 90210
 
-const ATLAS_VERSION := "art_resolution_v22_earth_modification_blend"
+const ATLAS_VERSION := "art_resolution_v23_pitched_roof_variants"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -688,6 +689,61 @@ func _earth_blend_linear(neighbor_biome: String, mask: int, variant: int) -> int
 	)
 
 
+## ## Pitched roof variants (docs/concept/building.md "How a house reads
+## from above")
+##
+## A FIFTH family, alongside the three corner-carve ones and the earth
+## blend. Village roofs used to paint one flat tile per material, which
+## from above reads as a brick patio rather than a building -- reported as
+## houses that "don't resemble houses at all". A roof cell's tile now
+## depends on its CONTEXT within its own building (see RoofShape): a shade
+## band for the pitch, and an outward-edge mask for the silhouette. That is
+## the same "resolve appearance from neighbours at paint time" shape the
+## blend/corner families already use, so it needs no new BuildingPiece ids
+## and no save-format change -- a roof is still one chunk modification per
+## cell.
+##
+## Ordered so the material is the outermost index, mirroring every other
+## family's own "one contiguous block per subject" layout.
+const ROOF_VARIANT_MATERIALS: Array[String] = [
+	BuildingPiece.MATERIAL_WOOD, BuildingPiece.MATERIAL_STONE
+]
+
+## Every outward-edge combination of the 4 cardinal sides, INCLUDING zero
+## (a fully interior roof cell, which must draw no rim at all) -- unlike
+## DIRECTION_MASK_COUNT's blend masks, where an empty mask means "no blend
+## tile is needed" and so is never reserved.
+const ROOF_EDGE_MASK_COUNT := 16
+
+
+func _roof_variant_base_linear() -> int:
+	return _earth_blend_base_linear() + _earth_blend_family_size()
+
+
+func _roof_variant_family_size() -> int:
+	return ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * ROOF_EDGE_MASK_COUNT
+
+
+func _roof_variant_linear(material: String, band: int, mask: int) -> int:
+	var material_ordinal: int = maxi(ROOF_VARIANT_MATERIALS.find(material), 0)
+	return (
+		_roof_variant_base_linear()
+		+ material_ordinal * RoofShape.TOTAL_SHADE_BANDS * ROOF_EDGE_MASK_COUNT
+		+ band * ROOF_EDGE_MASK_COUNT
+		+ mask
+	)
+
+
+## The atlas coordinate for one roof cell, given the pitch band and outward
+## edge mask RoofShape computed for it. Out-of-range values clamp rather
+## than index past the family -- a caller that got this wrong should show a
+## flat roof tile, not garbage from a neighbouring family.
+func atlas_coords_for_roof_variant(material: String, band: int, mask: int) -> Vector2i:
+	var safe_band := clampi(band, 0, RoofShape.TOTAL_SHADE_BANDS - 1)
+	var safe_mask := clampi(mask, 0, ROOF_EDGE_MASK_COUNT - 1)
+	return _grid_coords(_roof_variant_linear(material, safe_band, safe_mask))
+
+
 ## Linear atlas index of one corner-carve tile. Routes to whichever of the
 ## THREE corner families actually owns the tile (see corner_direction_for):
 ## ocean-owning (own_biome == "ocean", indexed by other_biome's ordinal),
@@ -957,6 +1013,18 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 				)
 				_blit_tile(image, earth_blend_image, _earth_blend_linear(neighbor_biome, mask, variant))
 
+	# Pitched roof variants (see _roof_variant_base_linear): one tile per
+	# material x pitch band x outward-edge mask, so a roof cell can be
+	# painted from its own context within its building rather than from one
+	# flat per-material tile.
+	for roof_material in ROOF_VARIANT_MATERIALS:
+		for band in RoofShape.TOTAL_SHADE_BANDS:
+			for edge_mask in ROOF_EDGE_MASK_COUNT:
+				var roof_image := _building_piece_sprite_generator.generate_roof_variant_image(
+					roof_material, band, edge_mask
+				)
+				_blit_tile(image, roof_image, _roof_variant_linear(roof_material, band, edge_mask))
+
 	return image
 
 
@@ -971,7 +1039,7 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 ## every call regardless of cache state.
 func build_tile_set() -> TileSet:
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
-	var total_cells := _earth_blend_base_linear() + _earth_blend_family_size()
+	var total_cells := _roof_variant_base_linear() + _roof_variant_family_size()
 	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
 
 	var image: Image = null
@@ -1191,12 +1259,27 @@ func _corner_directions_not_covered_by_blend(corner: Dictionary, blend: Dictiona
 func paint_roofs(
 	tile_map_layer: TileMapLayer, chunk: Chunk, origin: Vector2i = Vector2i.ZERO, hidden_cells: Dictionary = {}
 ) -> void:
+	# Classified ONCE for the whole chunk rather than per cell: RoofShape
+	# groups the chunk's roof cells into buildings (a flood fill) before it
+	# can say anything about any single cell's pitch, so asking per cell
+	# would redo that grouping for every tile.
+	#
+	# Deliberately classified over ALL of the chunk's roof cells, not just
+	# the visible ones: a cell hidden because the player is standing inside
+	# that room is still part of its building's shape, so excluding it would
+	# re-cut the roof's silhouette (and re-run its ridge) every time someone
+	# walks through a door.
+	var classified := RoofShape.classify_all(chunk.roof_modifications)
 	for local in chunk.roof_modifications:
 		var global: Vector2i = origin + local
 		if hidden_cells.has(local):
 			tile_map_layer.erase_cell(global)
-		else:
-			tile_map_layer.set_cell(global, 0, atlas_coords_for_modification(chunk.roof_modifications[local]))
+			continue
+		var shape: Dictionary = classified.get(local, {})
+		var piece_id: String = chunk.roof_modifications[local]
+		tile_map_layer.set_cell(global, 0, atlas_coords_for_roof_variant(
+			BuildingPiece.material_of(piece_id), shape.get("band", 0), shape.get("mask", 0)
+		))
 
 
 ## The cardinal neighbor biomes of a local chunk cell, keyed by direction

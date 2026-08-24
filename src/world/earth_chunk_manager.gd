@@ -86,6 +86,7 @@ const PathScarring = preload("res://src/world/path_scarring.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
 const SnowLayer = preload("res://src/rendering/snow_layer.gd")
+const RoofShape = preload("res://src/rendering/roof_shape.gd")
 const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
 const SnowTrail = preload("res://src/world/snow_trail.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
@@ -2190,10 +2191,13 @@ func _update_roof_visibility(player_global_tile: Vector2i) -> void:
 
 	_hidden_roof_chunk_coord = chunk_coord
 	_hidden_roof_room_cells = room_cells
-	var hidden := {}
-	for cell in room_cells:
-		hidden[cell] = true
-	_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, hidden)
+	# The room's own cells AND the wall ring around it -- see
+	# RoofShape.revealed_cells for why the walls have to come off too now
+	# that roofs cover them.
+	_terrain_renderer.paint_roofs(
+		_roof_layer, chunk, chunk_coord * CHUNK_SIZE,
+		RoofShape.revealed_cells(room_cells, chunk.modifications)
+	)
 
 
 ## How many tiles out from the player a cave entrance still triggers a
