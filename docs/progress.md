@@ -2933,7 +2933,7 @@ quiet contradiction of every other system's "never hand-placed" rule.
     `GUARD_DAMAGE_REDUCTION`/`FOCUS_ATTACK_BONUS`/`MIN_DAMAGE`/
     `AI_GUARD_HEALTH_FRACTION`) is a first-pass placeholder but pinned by
     direct exact-value assertions in `tests/unit/test_handheld_battle.gd`
-    (20 tests), matching `spell_cost.gd`'s `MAG_EXP`/`SPAM_PENALTY`
+    (22 tests), matching `spell_cost.gd`'s `MAG_EXP`/`SPAM_PENALTY`
     discipline rather than an eyeballed comment.
   - `HandheldCatch` (`src/gameplay/handheld_catch.gd`) — the catch/collection
     mechanic per this stage's own task: "deterministic (seed-derived, not
@@ -3035,6 +3035,36 @@ quiet contradiction of every other system's "never hand-placed" rule.
     makes.
   - The player's own battling companion is a fixed species pick, not a
     player choice — see `HandheldBattleView`'s own doc comment.
+
+**Final integration verification (2026-08-25).** Every test file any of the
+above stages added or touched — all 22 easter-egg-specific files plus the
+five shared files a stage edited in place (`test_animal_anatomy.gd`,
+`test_creature_behavior.gd`, `test_creature_info.gd`, `test_item_catalog.gd`,
+`test_procedural_animal_sprite.gd`) — was re-run together in one pass
+(`-gtest` over the full list, `-gconfig=` to bypass `.gutconfig.json`'s
+whole-suite default), alongside a broader sanity sweep of the other
+heavily-shared files this doc's stages touch a lot of code near but don't
+own (`test_illustrated_animal_sprite.gd`, `test_creature_marker.gd`,
+`test_console_species.gd`): **30 scripts, 625 tests, 625 passing, 3916
+asserts, 0 failures.** Spot-checked several of the doc's own specific claims
+directly against source rather than trusting the write-up alone —
+`ConsoleSpecies.resolve`'s `AnimalAnatomy.SPECIES.has()` gate (confirms the
+"registering a species is the only wiring `/spawn` needs" claim),
+`IllustratedAnimalSprite`'s `_SHEETS` table (confirms squallmaw/coilnecca/
+champ/kraken register no illustrated sheet, procedural-only as documented,
+so the "krampus doesn't appear" chroma-key bug class doesn't apply to any of
+them), each `chance_per_check`/`CHANCE_PER_CHECK` constant's actual value
+(confirms the relative-rarity ordering: sightings ~0.0004–0.006, Squallmaw
+0.0004, the Kraken 0.00002 — each rarer than the last, as claimed), the
+`/help` dispatcher in `scenes/world.gd` (confirms `/globalthermonuclearwar`,
+`/rolld20`, and `/answer` are real `match` arms genuinely absent from the
+help text, per pillar 3), and the Rush ambient cue's audio `TODO` (confirms
+the documented stub is real, not just described as one). No regressions
+found and no fixes were needed — every prior stage's own "✅ Done"/
+"🚧 Partial" self-assessment above checked out against actual, currently-
+green tests. One inline correction made while cross-checking: the Handheld
+Battle entry's test count above was pinned at 20; the actual, current
+`test_handheld_battle.gd` has 22 (fixed above, not re-litigated further).
 
 ### Electromagnetism (`concept/electromagnetism.md`)
 
