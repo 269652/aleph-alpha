@@ -16,6 +16,8 @@ const AncientTerminal = preload("res://src/gameplay/ancient_terminal.gd")
 const SignedSecretRoom = preload("res://src/gameplay/signed_secret_room.gd")
 const BridgekeeperEncounter = preload("res://src/gameplay/bridgekeeper_encounter.gd")
 const ThreeFragmentsHunt = preload("res://src/gameplay/three_fragments_hunt.gd")
+const SeaCaveGuardian = preload("res://src/gameplay/sea_cave_guardian.gd")
+const JoustMatchView = preload("res://src/rendering/joust_match_view.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
@@ -115,6 +117,13 @@ const SIGNED_SECRET_ROOM_MESSAGE_DURATION := 8.0
 ## SIGNED_SECRET_ROOM_MESSAGE_DURATION, since ThreeFragmentsHunt.
 ## BONUS_MESSAGE is a similarly-sized short passage, not a single line.
 const THREE_FRAGMENTS_BONUS_MESSAGE_DURATION := 8.0
+## The sea cave guardian's challenge + transform lines (docs/concept/
+## easter_eggs.md's "hidden sea cave... dueling-birds cabinet" entry) are
+## two short passages joined together -- same "genuinely more text to
+## read" reasoning as ANCIENT_TERMINAL_MESSAGE_DURATION, and it fires right
+## as JoustMatchView's own transform beat begins, so it needs to outlast
+## that beat comfortably.
+const SEA_CAVE_GUARDIAN_MESSAGE_DURATION := 12.0
 
 ## Real seconds between player-state autosaves (see docs/concept/
 ## persistence.md) -- mirrors the world's own "persist eagerly, not on an
@@ -272,6 +281,14 @@ var _bridgekeeper_correct_count := 0
 ## per source egg, no matter how many times a re-triggerable egg (the
 ## terminal, the secret room) fires again later.
 var _three_fragments_hunt := ThreeFragmentsHunt.new()
+## docs/concept/easter_eggs.md's "hidden sea cave... dueling-birds cabinet"
+## entry -- SeaCaveGuardian is the pure location/challenge-state module;
+## _joust_view is the node/rendering adapter that actually plays the match
+## (built in _build_joust_view, shown/hidden by _check_sea_cave_guardian/
+## _on_joust_match_finished below). Not part of "Three Fragments" -- that
+## hunt only ever named the terminal/secret room/WarGames eggs.
+var _sea_cave_guardian := SeaCaveGuardian.new()
+var _joust_view: JoustMatchView
 var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
@@ -477,6 +494,7 @@ func _ready() -> void:
 	_build_trade_label()
 	_build_talk_label()
 	_build_easter_egg_label()
+	_build_joust_view()
 	_build_interaction_prompt()
 	_build_charge_meter()
 
@@ -1182,6 +1200,19 @@ func _build_easter_egg_label() -> void:
 	_ui.add_child(_easter_egg_label)
 
 
+## The joust arcade-cabinet overlay (see JoustMatchView's own doc comment)
+## -- built hidden, parented under _ui like every other overlay in this
+## file, and wired to pause/unpause the world for the duration of a match
+## (see _on_joust_match_finished and _check_sea_cave_guardian below), the
+## same "acts like a real pause screen" pattern _toggle_settings_menu
+## already uses for SettingsOverlay.
+func _build_joust_view() -> void:
+	_joust_view = JoustMatchView.new()
+	_joust_view.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ui.add_child(_joust_view)
+	_joust_view.match_finished.connect(_on_joust_match_finished)
+
+
 ## Undocumented on purpose (docs/concept/easter_eggs.md pillar 3 -- no
 ## quest marker, no hint pointing here): once every EASTER_EGG_CHECK_
 ## INTERVAL seconds, rolls each registered sighting against the player's
@@ -1344,6 +1375,45 @@ func _check_signed_secret_room(player_tile: Vector2i, local_player: Player) -> v
 		)
 
 
+## The hidden sea cave's guardian (docs/concept/easter_eggs.md's "hidden
+## sea cave... dueling-birds cabinet" entry, see SeaCaveGuardian's own doc
+## comment) -- called every frame for the same just-pressed reason
+## _check_ancient_terminal is. A successful "talk" press in range shows the
+## challenge + transform banner text, starts the actual joust
+## (_joust_view.start_match), and pauses the world for the duration --
+## _on_joust_match_finished unpauses it and reports the outcome once
+## JoustMatchView's own match_finished signal fires.
+func _check_sea_cave_guardian(player_tile: Vector2i) -> void:
+	if not Input.is_action_just_pressed("talk"):
+		return
+	if not _sea_cave_guardian.can_begin_challenge(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	_sea_cave_guardian.begin_challenge()
+	_easter_egg_label.text = (
+		_sea_cave_guardian.challenge_line() + "\n\n" + _sea_cave_guardian.transform_line()
+	)
+	_easter_egg_label.visible = true
+	_easter_egg_message_timer = SEA_CAVE_GUARDIAN_MESSAGE_DURATION
+	_joust_view.start_match()
+	get_tree().paused = true
+
+
+## JoustMatchView.match_finished's handler -- unpauses the world (mirroring
+## _toggle_settings_menu's own pause/unpause symmetry), frees the guardian
+## to be re-challenged (SeaCaveGuardian is deliberately repeatable, see its
+## own doc comment), and shows the guardian's own win/lose flavor line
+## through the shared Easter-egg banner.
+func _on_joust_match_finished(winner: String) -> void:
+	get_tree().paused = false
+	_sea_cave_guardian.end_challenge()
+	_easter_egg_label.text = _sea_cave_guardian.outcome_line(winner)
+	_easter_egg_label.visible = true
+	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
+
+
 ## Monty Python's Bridgekeeper (docs/concept/easter_eggs.md, see
 ## BridgekeeperEncounter's own doc comment) -- rolled on the same throttled
 ## cadence as _check_easter_egg_sightings above (a rarity roll, not a
@@ -1412,6 +1482,15 @@ func has_found_wargames_egg() -> bool:
 ## once the "Three Fragments" bonus discovery has fired.
 func has_triggered_three_fragments_bonus() -> bool:
 	return _three_fragments_hunt.has_triggered()
+
+
+## Forwarding getter: SeaCaveGuardian's own is_challenge_active() -- lets a
+## future system check "is a joust currently in progress" without reaching
+## into World's private field directly, the same shape as has_found_
+## ancient_terminal/has_found_signed_secret_room above. Not part of "Three
+## Fragments" (SeaCaveGuardian was never one of that hunt's three eggs).
+func is_sea_cave_challenge_active() -> bool:
+	return _sea_cave_guardian.is_challenge_active()
 
 
 ## Grants one fragment item of docs/concept/easter_eggs.md's "Three
@@ -3216,6 +3295,7 @@ func _client_process(delta: float) -> void:
 	# throttling to EASTER_EGG_CHECK_INTERVAL would drop most real presses).
 	_check_ancient_terminal(player_tile, local_player)
 	_check_signed_secret_room(player_tile, local_player)
+	_check_sea_cave_guardian(player_tile)
 	_update_easter_egg_label(delta)
 	# Real sun compass bearing, for hillshading (see HillshadeShader,
 	# docs/concept/terrain_relief.md) -- same real inputs as elevation just

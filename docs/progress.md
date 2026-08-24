@@ -2790,15 +2790,104 @@ quiet contradiction of every other system's "never hand-placed" rule.
   `docs/concept/easter_eggs.md`'s own "Three Fragments" entry for the full
   reasoning. Monty Python's Bridgekeeper is deliberately NOT part of this
   hunt (never one of the three eggs the doc names for it).
-- **Remaining Starter Collection entries** (Joust-homage sea cave at the
-  Bermuda Triangle, the retro-handheld creature-battler) (medium) — ⬜ Not
-  started. Both are real, playable original mini-games rather than
-  props/flavor text (the Joust-homage dueling-birds cabinet and the
-  handheld creature-battler starring this project's OWN existing creature
-  roster — zero new art needed, reuses `ProceduralAnimalSprite`/
-  `IllustratedAnimalSprite` as-is) — meaningfully bigger implementation
-  lifts than the rest of the list, flagged as such in the doc rather than
-  under-scoped alongside the prop-only entries.
+- **The hidden sea cave / dueling-birds cabinet (Joust homage)** (large) —
+  ✅ Done — the doc's own biggest single Starter Collection entry, "a
+  genuinely bigger implementation lift... a hidden sub-area, a scripted
+  transform beat, and a real second game loop, not just a prop." Three
+  pieces, matching this project's established pure-module-plus-node-
+  adapter split throughout:
+  - `JoustMatch` (`src/gameplay/joust_match.gd`) — the pure rules core.
+    Two riders close a scrolling gap; whichever is higher when it closes
+    wins that pass; first to `ROUNDS_TO_WIN` (2, best-of-three) wins the
+    match. Exactly Duel.advance's own pure state-in/state-out shape (the
+    caller owns and persists a state `Dictionary` across frames) — no
+    instance state, no Godot dependency at all. The AI opponent
+    (`ai_should_flap`) is a **deterministic skill rule** ("stay at or
+    above the player's own height"), never `randf()` — this project has
+    no random rolls anywhere except the deliberately isolated d20 egg
+    (`SecretD20`), and this is the one place a second RNG would have been
+    the obvious wrong shortcut. It reacts to the player's height as of
+    the START of the tick (a one-frame lag), so a well-timed player flap
+    can still win — the AI can't literally read simultaneous input. Every
+    tuned constant (`GRAVITY`/`FLAP_BOOST`/`APPROACH_SPEED`/`PASS_GAP`/
+    `TIE_MARGIN`/`AI_HEIGHT_MARGIN`) is a first-pass placeholder (no real
+    playtesting data yet, the same situation as every other Easter-egg
+    rarity constant in this doc) but pinned by direct exact-value
+    assertions in `tests/unit/test_joust_match.gd` (24 tests: rider
+    physics, pass resolution/ties, the AI's own one-tick-lag property,
+    best-of-three progression including a 2-1 decider, post-match
+    inertness, no mutation of the caller's state), matching
+    `spell_cost.gd`'s `MAG_EXP`/`SPAM_PENALTY` discipline rather than an
+    eyeballed comment.
+  - `SeaCaveGuardian` (`src/gameplay/sea_cave_guardian.gd`) — the
+    location + challenge-state module for an ORIGINAL guardian, "the
+    Brinewarden" (a barnacle-crowned spirit invented for this world, never
+    RP1's own specific character — pillar 4). Pinned at the exact same
+    Bermuda Triangle coordinate `EasterEggCreatures` uses for Squallmaw
+    ("alongside Squallmaw above" per the doc), duplicated as its own named
+    constants (GDScript's const-folding doesn't reliably support
+    dictionary subscripting at parse time) with a test
+    (`tests/unit/test_sea_cave_guardian.gd`, 14 tests) pinning the two
+    coordinates in lockstep so they can't silently drift apart. A smaller
+    `RADIUS_KM` (4.0) than Squallmaw's own 30.0 — a cave mouth is one
+    specific findable point, not "somewhere in this stretch of ocean."
+    Interaction needs a deliberate "talk" press in range, same as
+    `AncientTerminal`. Deliberately **repeatable** (unlike `AncientTerminal`/
+    `SignedSecretRoom`'s one-shot `has_been_found()`) — only
+    `is_challenge_active()` blocks re-triggering mid-match; zero mechanical
+    weight (pillar 2) means there's no reason to block a rematch. Forwarded
+    by a new `World.is_sea_cave_challenge_active()` getter, pinned in
+    `tests/unit/test_world_easter_egg_discovery.gd`. Not part of "Three
+    Fragments" (never one of that hunt's three named eggs).
+  - `JoustMatchView` (`src/rendering/joust_match_view.gd`) — the node/
+    rendering adapter, and the actual playable screen: a full-viewport
+    `Control` overlay built entirely from `ColorRect`/`Label` children (no
+    new art asset, matching this stage's own "prefer no art asset"
+    guidance), reading `JoustMatch`'s own state each frame and the
+    player's "attack" action (reused rather than adding a new rebindable
+    one — ordinary attack has no meaning while this overlay owns the
+    screen) as the flap input. `start_match()` first holds a short, timed
+    transform beat (`TRANSFORM_DURATION`, 1.2s — a plain gray panel
+    standing in for the stone bench) before real play begins, matching the
+    doc's "one small scripted transformation beat, not a full cutscene
+    system." `scenes/world.gd` pauses the whole tree for the match's
+    duration (`get_tree().paused = true`, the exact "acts like a real
+    pause screen" pattern `_toggle_settings_menu` already uses for
+    `SettingsOverlay`) while this Control keeps running via
+    `PROCESS_MODE_ALWAYS`; `match_finished(winner)` unpauses and reports
+    the outcome through `SeaCaveGuardian.outcome_line`. Only lightly
+    tested (`tests/unit/test_joust_match_view.gd`, 5 tests: visibility,
+    the transform-beat timer, the finished signal + auto-hide) — this
+    project's own established convention (see `test_crafting_window.gd`'s
+    "layout glue, not game rules" framing) holds a `Control`'s actual
+    on-screen layout to a lighter bar than a pure rules module; every real
+    game rule is `JoustMatch`'s job and is covered at full rigor there.
+  **Wiring** (`scenes/world.gd`): `_check_sea_cave_guardian` runs every
+  frame alongside `_check_ancient_terminal`/`_check_signed_secret_room`
+  (the same just-pressed-edge reasoning), shows the challenge + transform
+  banner text through the shared `_easter_egg_label`, starts the match, and
+  pauses; `_on_joust_match_finished` (connected to `JoustMatchView.
+  match_finished`) unpauses and shows the win/lose banner.
+  **Scope call, matching this doc's own established precedent
+  (`SignedSecretRoom`'s identical call, see above):** no literal new
+  walkable interior/teleport for the "half-flooded sea cave" itself — this
+  project has no interior-space system to reuse (checked first, per this
+  stage's own task instructions, rather than inventing one), so "reachable
+  only by finding its entrance" is built the same proximity-plus-
+  interaction-at-a-point shape every other real-coordinate cameo in this
+  doc already uses, not a new spatial paradigm. The cave and its guardian
+  are real and discoverable; what's stubbed is the literal cave *geometry*
+  players would otherwise walk through to reach the guardian — the
+  encounter itself (challenge → transform → a fully real, playable,
+  fully-rules-tested joust) is not a prop.
+- **The retro-handheld creature-battler** (medium) — ⬜ Not started. A
+  small, battered handheld prop (generic, undescribed hardware) that boots
+  into a tiny original turn-based creature-battler starring miniature
+  pixel-art versions of this project's own existing roster — zero new art
+  needed at the character level (`ProceduralAnimalSprite`/
+  `IllustratedAnimalSprite` already exist for every creature), the actual
+  new work being a small turn-based battle-menu loop and a "world's
+  smallest Pokédex" catch-list UI.
 
 ### Electromagnetism (`concept/electromagnetism.md`)
 

@@ -412,9 +412,22 @@ above for the final bonus discovery's actual content and the reasoning
 behind that creative choice. Monty Python's Bridgekeeper is deliberately
 NOT part of this hunt (it was never one of the three eggs the doc names).
 
-Everything else in this doc (the Joust-homage sea cave, the retro-handheld
-creature-battler) is still design-only; see `docs/progress.md`'s Easter
-Eggs section for the exact breakdown.
+The hidden sea cave / dueling-birds cabinet (the Joust homage above) is
+now implemented: `JoustMatch` (`src/gameplay/joust_match.gd`) is the pure,
+fully-tested rules core (deterministic AI, no random rolls, best-of-three
+scoring); `SeaCaveGuardian` (`src/gameplay/sea_cave_guardian.gd`) is an
+original guardian ("the Brinewarden") gating the challenge at the exact
+Bermuda Triangle coordinate Squallmaw uses; `JoustMatchView`
+(`src/rendering/joust_match_view.gd`) is the actual playable arcade-cabinet
+screen, wired into `scenes/world.gd` with a scripted transform beat and a
+real pause-the-world match. See `docs/progress.md`'s Easter Eggs section
+for the full writeup, including its one deliberate, documented scope call
+(no literal new interior geometry for the cave itself, reusing this doc's
+own established "point + interaction" shape rather than a new spatial
+system — the encounter and the joust itself are both real, not props).
+
+The retro-handheld creature-battler is still design-only; see
+`docs/progress.md`'s Easter Eggs section for the exact breakdown.
 
 ### Open questions
 

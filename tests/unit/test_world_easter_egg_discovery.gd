@@ -54,3 +54,13 @@ func test_has_triggered_three_fragments_bonus_false_until_the_module_marks_it():
 	assert_false(world.has_triggered_three_fragments_bonus())
 	world._three_fragments_hunt.mark_triggered()
 	assert_true(world.has_triggered_three_fragments_bonus())
+
+
+## SeaCaveGuardian's own is_challenge_active() latch, forwarded the same
+## way (docs/concept/easter_eggs.md's "hidden sea cave... dueling-birds
+## cabinet" entry) -- not part of "Three Fragments", but the same clean
+## hook-point shape as every getter above.
+func test_is_sea_cave_challenge_active_false_until_a_challenge_begins():
+	assert_false(world.is_sea_cave_challenge_active())
+	world._sea_cave_guardian.begin_challenge()
+	assert_true(world.is_sea_cave_challenge_active())
