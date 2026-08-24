@@ -315,7 +315,12 @@ Two tempting approaches, both worth naming and rejecting:
   importantly means directly asserting that specific real countries or
   cities are "dangerous" — a real-world value claim about actual places
   that has nothing to do with this game's own simulated ecology and is
-  uncomfortable to encode as content regardless of intent.
+  uncomfortable to encode as content regardless of intent. This is
+  specifically about *danger* claims at *country/city* granularity — it
+  doesn't extend to [worldbosses.md](worldbosses.md)'s regional-folklore
+  brainstorm, which maps a bounded set of cultural/mythological
+  macro-regions (not thousands of places) onto a *flavor* identity for an
+  already-emergent boss, not a claim about real-world danger.
 
 ### What we do instead: two signals the game already computes from real data
 

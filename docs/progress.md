@@ -339,6 +339,119 @@ rather than assuming the brief's plan still matched reality:
   first, the torso's own sleeve fabric was painting over the very hands
   the fix above just made visible. Body-then-arms keeps a hand always in
   front of the torso.
+- ✅ **`LEG_SIZE.y` widened 8 → 12** (reported live: "the legs are too
+  short") — 8 out of the character's own 33-unit total height put legs at
+  ~24%, well short of a real standing human's ~45-50% leg-to-height share.
+  `LegLeft`/`LegRight`'s `.tscn` position moved -4 → -6 alongside it so the
+  fused pair's feet still land exactly on the character's own origin.
+- ✅ **A real bug in the padding-offset fix itself, found while building the
+  neck below**: `_composite_content_offset_y` back-derived a part's content
+  height as `target_world_height / scale`, correct only when `scale` came
+  straight out of `composite_part_scale_for` (which IS
+  `target_world_height / measured_content_height`) — silently wrong once
+  `_width_bounded_scale` could hand back a smaller, width-driven scale
+  instead, which overestimates the true content height and offsets the
+  content further than it should go. Stayed invisible at ordinary
+  BODY_SIZE-scale sizes but became a measurable positioning error once the
+  neck needed the exact same edge to the pixel. Now takes the real measured
+  pixel height directly (`trimmed_composite_image`/`trimmed_head_image`'s
+  own `.get_height()`) instead of back-deriving it — this whole class of
+  drift is impossible by construction now.
+- ✅ **A small procedural Neck bridges Head and Body** (reported live: "the
+  neck should be rendered procedurally so the head doesn't float"). Neither
+  part's own art draws a neck, and both are positioned by their own
+  measured content (varies per outfit row/head cell), so a fixed-size neck
+  would only fit one combination. `CharacterView._apply_neck` sizes and
+  positions a plain skin-toned fill fresh each apply, spanning exactly
+  whatever gap THIS appearance's own measured Head-bottom/Body-top edges
+  leave. First attempt reused `ProceduralCharacterSprite.generate_body_part_
+  texture`'s shaded-cylinder LIMB style (a full dark outline all the way
+  round) — read as an obvious floating rectangle rather than a neck once
+  actually seen; a plain borderless fill with a generous overlap into both
+  neighbours (mostly hidden under the head/collar, only a sliver bridging
+  the real gap) reads correctly instead.
+- ✅ **Hands sway while walking, not just arms visible** (reported live:
+  "hands should also slightly sway when walking") — reuses
+  `arm_stroke_offset` (previously swim-only) with a smaller
+  `ARM_SWAY_AMPLITUDE`, contralateral to `leg_swing_offset` (opposite sign:
+  real gait swings an arm opposite the leg on its own side).
+- ✅ **A held weapon now tracks `ArmRight`'s own current position** every
+  frame (reported live: "the sword should be held by the actual hand"),
+  instead of a fixed torso-side slot independent of the arm entirely — it
+  inherits the hand's own walk sway as a result. The existing
+  facing-driven side shift (`TOOL_SLOT_SIDE_OFFSET`) is preserved, just
+  stored (`_tool_side`) and reapplied every frame against the arm's current
+  position instead of written once on a facing change.
+- ✅ **An interim stride cue for the fused legs**: real per-leg knee-jointed
+  animation needs new source art the fused single-drawing legs can't
+  provide (asked directly; user accepted a coarser interim over waiting).
+  `FUSED_LEG_ROCK_AMPLITUDE` adds a small hip-pivot rotation on top of the
+  existing vertical bob, once per full stride (not the bob's twice-per-
+  stride cadence) — a real gait leans one way then the other over a whole
+  stride. A real per-leg walk cycle is still a documented open follow-up,
+  not solved here.
+
+
+### Character creator live preview scene (see `concept/character_creator_preview_scene.md`)
+
+✅ **The static hero portrait is now a real, live, always-animating mini
+scene.** Asked directly, after the static-portrait panel had shipped and
+every other character-rendering fix above had landed: *"It should be a
+real mini in game scene with swaying grass blades; some pebbles the edge
+of a pond and some trees where the char should stroll around."* Built from
+the SAME rendering classes the real world uses, not a parallel art style —
+`IllustratedGrassPatch` for grass, `WaterShader`/`ProceduralShoreDistanceSprite`
+for the pond, `StoneRenderer` for pebbles, `TreeRenderer` for trees, and
+the same `CharacterView.tscn` the player and every NPC wear.
+
+- `src/rendering/character_preview_layout.gd` — pure, seeded placement
+  math (no Godot nodes at all): given a DNA seed and a footprint, returns
+  the pond's centre/radius, tree positions (kept clear of the pond),
+  pebble positions (scattered along the pond's rim), and grass-clump
+  positions (filling the rest, avoiding both) — same seed, same little
+  scene, the same determinism convention `ecosystem_dynamics.md`'s own
+  pillar already established elsewhere in this codebase. Also owns
+  `is_clear(point)`, the one "is this spot clear of every obstacle here"
+  predicate the grass scatter, the tree placement's own rejection
+  sampling, AND the stroll's target-picking all share.
+- `src/rendering/character_stroll.gd` — pure walk-to-a-point-then-pick-
+  a-new-one motion (`advance`/`has_arrived`/`pick_target`), the same shape
+  `CreatureWander`/`creature_movement_gate.gd` already use for ambient
+  creature movement, scaled down to one character in a small pen. Not
+  seed-pinned — the design doc is explicit that the stroll itself is
+  ambient motion, not part of the hero's own identity, only the world
+  layout needs to reproduce.
+- `src/rendering/character_preview_diorama.gd` — the only Godot-coupled
+  piece; turns the pure layout into actual nodes and drives the stroll
+  against a real `CharacterView` every frame. Confirmed directly (traced
+  against `Player._update_character_view`, the real driver) that
+  `set_facing`/`set_movement_state`/`.is_moving`/`.position` are genuinely
+  all `CharacterView` needs to animate correctly standalone — no
+  physics/collision/input required, so no cut-down "mini player" was
+  needed.
+- `scenes/main_menu.gd`'s hero panel swaps a `TextureRect` for a
+  `SubViewportContainer`/`SubViewport` (`UPDATE_ALWAYS`, so grass/water/the
+  stroll keep animating for as long as the creator screen is open) hosting
+  one diorama, framed by a fixed (non-following) `Camera2D` — a diorama is
+  watched from outside its own little box. Rendered at exactly its display
+  resolution (`DIORAMA_VIEW_SIZE`, 220×220), so unlike the old portrait's
+  manual `TextureRect` scaling, no nearest-neighbour filter trick is
+  needed to keep it crisp. The world layout only rebuilds when the DNA
+  seed itself changes (a reroll) — cycling any other appearance axis or
+  switching class just redresses the same, already-strolling hero via
+  `apply_appearance`, rather than resetting the scene under it.
+- The class-icon row's small per-class thumbnails deliberately stay static
+  portraits (`ProceduralCharacterSprite.generate_hero_portrait_texture`,
+  unchanged) — a live `SubViewport` per tiny icon would be wasteful; only
+  the one big preview panel became a diorama.
+
+⬜ Not yet visually verified live (only headlessly, where a `SubViewport`'s
+actual rendered pixels can't be inspected — the underlying layout math,
+stroll motion, and node counts are tested directly instead, see
+`test_character_stroll.gd`/`test_character_preview_layout.gd`/
+`test_character_preview_diorama.gd`). Whether `DIORAMA_VIEW_SIZE`/the
+camera zoom/the exact footprint read well at actual screen size is a real
+open question until seen.
 
 
 ### `/ecotest` — watching a year go by
@@ -738,7 +851,7 @@ project's own terminology.
 | 11 — World bosses | ✅ Done (mechanism); ⬜ live trigger | `WorldBoss`/`WorldBossStore` wrap the pre-existing, real `world_boss_fitness.gd` promotion math in a causal, `/why`/`/boss`-inspectable entity. See below — no creature currently tracks kills/lifetime age for a live trigger to read from. |
 | 12 — Emergent quests | ✅ Done (production-shortfall projection); ⬜ everything else | `quest.gd` — a real, stateless PROJECTION over household/market/recipe state, never a new entity. See below — safety/social need sources, quorum/promotion, and resolution all still depend on unbuilt systems. |
 | 13 — Governance & politics | ✅ Done (form + legitimacy, changes a real decision); ⬜ policy/taxation/enforcement | New `docs/concept/governance.md`, `governance.gd`. Governance form now drives which institution type a settlement's own automatic formation attempts. Live-verified. See below. |
-| 14 — Regional trade & migration | ⬜ Not started | `world.md`'s "population exists wherever conditions make it viable" is the same philosophy, not yet applied at regional/trade-network scale. |
+| 14 — Regional trade & migration | ✅ Done (trade networks, one real edge); ⬜ migration | New `docs/concept/regional_trade.md`, `regional_trade.gd`. Real stock moves between two real settlements' markets to resolve a real shortage. Live-verified. See below — migration stays `quests.md`'s own unbuilt design. |
 | 15 — Technology & cultural diffusion | ⬜ Not started | No `concept/*.md` coverage yet. |
 | 16 — Religion, festivals, legends | ⬜ Not started | `festivals.md` is referenced by `npc.md` as an eventual daily-planner byproduct, but doesn't cover belief-community formation itself. |
 | 17 — Polities, wars, civilization | ⬜ Not started | Gated behind real multiplayer per `docs/roadmap.md`; overlaps roadmap Phase 5+ #2/#3 (economy/society, era progression). |
@@ -1652,6 +1765,61 @@ priesthood/representative governance forms (no real signal to derive them
 from); and crime/religion (`docs/emergence/01`'s own adjacent sections,
 unbuilt and unrelated to this slice).
 
+✅ **Regional trade — the smallest possible trade network, one real edge
+between two real settlements** (new `docs/concept/regional_trade.md`,
+`regional_trade.gd`, `EarthChunkManager.step_regional_trade`), the "trade
+networks" element of `docs/emergence/07-implementation-roadmap.md` Phase
+14's own exit language: "Implement regions, trade networks, migration
+flows, dependency graphs, and resource corridors." No concept doc covered
+cross-settlement trade at all before this phase — scaffolded first per
+`CLAUDE.md` (migration stays `quests.md`'s own already-designed, still
+unbuilt section — not repeated here), then implemented the same pass.
+
+**Composed entirely from two primitives this substrate already had, with
+zero new "who needs what"/"who has extra" tracking invented.** A
+settlement's shortage is Phase 12's own live `Quest` projection; a
+settlement's surplus is just its real `Market` stock, checked directly.
+`RegionalTrade.has_surplus(stock, need)` requires real headroom beyond a
+tested safety margin (`MIN_SURPLUS`) — a settlement never trades its own
+last reserve away down to the exact edge just to help a neighbor.
+"Nearest" is real Euclidean distance between two settlements' own chunk
+coordinates, parsed directly back out of their existing `EntityRef` keys
+(`RegionalTrade.chunk_coord_of`) rather than a second stored position —
+the same "derive it from a key the entity already has" idiom `EntityRef`
+itself has used since Phase 0/1.
+
+**`step_regional_trade` reuses `production_shortfall_quests_for_settlement`
+directly** — every known settlement's real shortfalls are checked each
+step, and for each missing item, the nearest real settlement with genuine
+surplus ships exactly enough to cover it, in one call:
+`Market.add_stock` with a negative count on the supplier, positive on the
+recipient, both real markets updated together, and a real
+`regional_trade_shipped` event naming both settlements and the item —
+`/why`-inspectable, not a silent number change. Resolves a shortage fully
+in one step rather than gradually (this doc's own open question names
+partial/gradual shipment as a real future refinement once there's a
+reason — travel time, route capacity — to model the lag).
+
+**A regional shock affecting multiple settlements falls out of the
+mechanism itself, not a bespoke propagation system** — this phase's own
+third design pillar made concrete: draining a supplier's real stock to
+help a neighbor is the exact same real number that could later leave the
+supplier itself short, with no extra code required to make that true.
+
+**Live end-to-end verification, zero manual calls:** a real settlement
+with a real blacksmith's shortfall, a real neighboring settlement with
+real surplus stock, `/ecotest` enabled, and the ordinary `_process` loop
+run with zero manual calls to `step_regional_trade` or
+`_attempt_regional_resupply` — `shipped=2` (both of `stone_pickaxe`'s
+missing inputs) by tick 3.
+
+**Left for the next slice, deliberately, and named in `regional_trade.md`'s
+own Status section:** dependency graphs and resource corridors (real
+aggregations over trade edges once enough of them exist, not a separate
+structure this slice builds); migration flows (`quests.md`'s own unbuilt
+design, needs the replan-interrupt architecture); and regions as a
+first-class grouping (not needed for nearest-neighbor resupply to work).
+
 ---
 
 ## Unscheduled — not yet phased into the roadmap
@@ -1905,7 +2073,13 @@ describes:
 - **Found/Looted Gear Generation** (medium) — 🚧 Partial — creatures drop deterministic loot (`loot_table.gd`) as clickable ground items (`dropped_item.gd`); no randomized/rarity generation, and drops are materials/food/weapons, not multi-slot gear.
 - **Crafted Gear (Blueprint DSL)** (large) — ⬜ Not started
 - **Shared Rarity/Stat Pool Consistency** (small) — ⬜ Not started
-- **Spells as Items (Spell Gems)** (large) — ⬜ Not started — no "spell"/"spell_gem" item kind exists yet, and `item.gd` has no sealed/forkable/use-only flag (`docs/concept/magic.md`'s "sealed IP" decision needs both, and neither is built).
+- **Spells as Items (Gems + Scrolls)** (large) — ⬜ Not started — no
+  "spell" item kind exists yet, and `item.gd` has no sealed/forkable/
+  use-only flag (`docs/concept/magic.md`'s "sealed IP" decision needs both).
+  The 2026-08-24 design adds a second vessel on the same item kind: a
+  `vessel` field (`"gem"` sealed/use-only vs. `"scroll"` teachable/
+  requirement-gated/consumed-on-success), the embedded AST, and author
+  metadata — neither vessel is built.
 - **Spell Gem Rarity Derivation** (medium) — 🚧 Partial — `rarity_tier.gd`'s
   `tier_from_complexity(complexity)` derives a tier straight from a numeric
   complexity/cost score (e.g. `spell_cost.gd`'s `derived_base()`), reusing the
@@ -1952,7 +2126,9 @@ authoring UI, physics compliance) is still unbuilt. The 2026-07-15 brainstorm
 extensions (atom domains beyond the physical, material-component cost,
 caster self-danger, complexity-priced spell gems) now have a pure/tested
 foundation too, but none of it is wired into runtime casting yet — see the
-new rows below.
+new rows below. The 2026-08-24 brainstorm (gold cost to compile a spell,
+exponential in size; sealed gems vs. teachable scrolls) is design-only so
+far — no code exists for it yet.
 
 - **Spellcrafting DSL** (huge) — 🚧 Partial — first three of the pure
   `RefCounted` pipeline modules exist and are test-first: `spell_atom_catalog.gd`,
@@ -2007,7 +2183,25 @@ new rows below.
 - **Shock Conduction Through Water** (medium)
 - **Skill-Tree Gating (Layer 0)** (medium)
 - **Spell Editor / Authoring Tool** (huge)
-- **Spell Crystallization (Tradeable Spells)** (medium)
+- **Compilation Gold Cost (Authoring Gate)** (medium) — ⬜ Not started — new
+  2026-08-24 design (`docs/concept/magic.md`'s "compilation gate"
+  brainstorm): compiling a drafted spell into a permanently known one costs
+  gold, exponential in the AST's atom-tier-weighted pipeline-step count
+  (`weighted_loc`), paid once per distinct design. A third, independent gate
+  alongside Layer 0 (can you write this atom) and Constraint layer 1 (what
+  it costs to cast once known) — no code yet, needs its own
+  `spell_crafting_cost.gd` module and a numeric-design pass for
+  `CRAFT_BASE`/`CRAFT_GROWTH`/tier weights, pinned by property tests like
+  every other cost constant in this doc.
+- **Spell Crystallization: Gems vs. Scrolls** (medium) — ⬜ Not started —
+  supersedes the old single "Spell Crystallization (Tradeable Spells)" row
+  with the 2026-08-24 two-vessel design: sealed, no-requirement **gems**
+  (unchanged from the original decision) alongside teachable,
+  requirement-gated **scrolls** that attempt to permanently teach their
+  spell on read, consumed only if the reader's own skill-tree state
+  satisfies the same atom/param gate Layer 0 already applies to authoring.
+  See the Items section's "Spells as Items" row below for the item-kind
+  work this needs.
 - **Master Tier: Freeform Node-Graph Authoring** (huge) — ⬜ Not started
 
 ### Economy (`concept/economy.md`)
@@ -2097,7 +2291,27 @@ No live world-boss/creature-fitness simulation exists yet, but the promotion mat
 - **Population Impact of Killing (Outlier Removal)** (small)
 - **Population Impact of Taming (Outlier Retained)** (small)
 - **Village-Endangerment Attractor / Discovery Signaling** (medium) — ⬜ Not started — formerly an open question, now specified in `concept/worldbosses.md`'s "Village endangerment" section and `concept/quests.md`; no longer open, just not yet built.
-- **World Boss Special AI/Behavior (open question)** (large)
+- **World Boss Special AI/Behavior (open question)** (large) — 🚧 Partial —
+  resolved for aggro/engagement specifically (`concept/worldbosses.md`'s
+  "Krampus: a worked encounter" section): a new `is_world_boss`
+  `CreatureInfo` flag + `BossAggro`
+  (`MIN_DAMAGE_FRACTION_OF_MAX_HEALTH`-gated real-damage check) +
+  `CreatureBehavior._perceives_threats` means a world boss ignores a
+  nearby player entirely — doesn't attack, doesn't flee — until a hit
+  clears a threshold scaled to the boss's own max_health; before that, a
+  hit deals zero damage and sets no state. Tested
+  (`test_boss_aggro.gd`/`test_creature_behavior.gd`/
+  `test_creature_marker.gd`/`test_creature_info.gd`), live on the Germany
+  roster's 4 `/spawn`-able bosses. Ability *selection* (not yet execution)
+  is real too: `BossPhase`/`BossPhaseKits` answer "which phase/ability is
+  active at this health fraction" from the exact `{hp_threshold, ability}`
+  shape `WorldBossFitness.PhaseGenerator` already produces, with Krampus's
+  own 3-ability kit (Chain Yank baseline, Chain Lash + Terrifying Roar at
+  50% HP, Chain Shackle at 20%) written into `BossPhaseKits`. Not built:
+  actually *executing* an ability (applying `pull`/`push`/`fear`/`root`'s
+  physics/status effect, on a cooldown, synced to a telegraph/VFX) —
+  needs the still-unbuilt spell-DSL runtime or a narrower boss-only
+  executor as a smaller first step.
 
 ### Evolution (`concept/evolution.md`)
 
@@ -2156,7 +2370,10 @@ combat outcomes *emerge* from a shared material property vector + contact
 geometry, replacing per-(weapon, material) authored lookup tables. A first
 pure-logic slice of that model now exists (tested), independent of and not
 yet wired into the live, still-lookup-table-shaped `material_damage.gd`/
-`block.gd` combat path:
+`block.gd` combat path. The 2026-08-24 revision (see `concept/smelting.md`'s
+"Alloying: emergent metallurgy" brainstorm) narrowly reverses this doc's
+original "materials stay pure, no alloying" clause for the mineral track
+only — design-only so far, no code exists for it yet:
 
 - **Material Property Vector** (medium) — 🚧 Partial — `src/gameplay/material_properties.gd`: a fixed "mineral track" vector (density/hardness/toughness/elasticity/sharpness_capacity/flammability/conductivity/decay_rate) for six named materials (wood/flesh/stone/iron/obsidian/fiber), tested, with unknown-material/unknown-property defaults. Only the doc's mineral track exists; the DNA-driven organic track (see dna.md/evolution.md) is unbuilt, and nothing in live gameplay reads this vector yet — `material_damage.gd`'s per-(weapon_kind, material)-string lookup table remains what `scenes/player.gd` actually calls.
 - **Impact Resolution (Momentum × Geometry × Material → Outcome)** (large) — 🚧 Partial — `src/gameplay/impact_resolver.gd`'s `resolve_impact()` (tested, calibration-pinned `T_CUT`/`T_PIERCE`/`T_CRUSH`/`T_BRITTLE_TOUGHNESS`/`PIERCE_HARDNESS_CAP` thresholds — the doc's own Open Questions section flags exactly these as needing calibration tests) returns cut/dent/crush/pierce/shatter/bounce from momentum + contact geometry (edge/point/blunt) + the target material's hardness/toughness. Not wired into any live combat, tree-felling, or mining path, and doesn't yet cover the doc's shape-assembly mechanics (leverage/edge+backing/balance) that would compute momentum and geometry from an actual item.
@@ -2166,6 +2383,24 @@ yet wired into the live, still-lookup-table-shaped `material_damage.gd`/
 - **Reactive Surfaces (Elemental Reaction Matrix on the Floor)** (large) — ⬜ Not started — see Magic section's Elemental Reaction Matrix row.
 - **Physical Honesty (Item Wear/Chip/Fracture Over Time)** (medium) — ⬜ Not started — no durability/wear state exists on any item.
 - **Traversal-Tool Material Viability (Raft Buoyancy / Rope Tensile Strength)** (small) — ✅ Done (basic) — `material_properties.gd`'s `is_viable_for_tool()`, tested: density-gated for `raft`, toughness-gated (standing in for tensile strength — see the doc's transportation.md cross-reference) for `grapple_rope`. No raft/rope items or transportation.md wiring exist yet to consume it — see Transportation section.
+- **Alloying (Emergent Metallurgy)** (large) — ⬜ Not started — new
+  2026-08-24 design (`concept/smelting.md`'s brainstorm extension): an
+  alloy's property vector is *computed*, not authored — a weighted blend
+  of two existing mineral vectors via real metallurgical rules (linear
+  rule-of-mixtures baseline, a solid-solution hardness/toughness bonus
+  peaking at a real historical ratio, a eutectic melting-point dip near
+  that same ratio, brittle collapse past a ceiling), flowing through this
+  doc's existing shape/assembly/threshold pipeline unchanged. Needs: a new
+  `melting_threshold` scalar on the property vector (the doc already names
+  it, code doesn't have it yet), a `copper` row in `material_properties.gd`
+  (missing today even though `copper_ore`/`copper_ingot` items already
+  exist), new `tin`/`zinc` ore types + items for bronze/brass specifically
+  (steel needs neither — see smelting.md, it reuses the existing coal fuel
+  slot as a carbon-fraction input), the blend-formula module itself, and a
+  numeric-design pass for the curve constants, pinned by property tests.
+  Composes with, doesn't duplicate, `concept/labor_skills.md`'s
+  `ceiling_realization` multiplier — see smelting.md's own 2026-08-24
+  section for exactly how the two compose.
 
 ### Electromagnetism (`concept/electromagnetism.md`)
 
@@ -3774,6 +4009,77 @@ in-line with the increased variant count's own inherent cost (real build:
 ~137s, in line with roughly 2.3x more blend/corner images to generate, not
 a wobble-specific slowdown). `ATLAS_VERSION` bumped for both changes at
 once.
+
+✅ **A FIFTH corner-blend report ("blended tiles still have sharp edges and
+corner tiles are not blended") turned out to be a genuinely different bug
+from all four rounds above.** Reported (screenshot): a grass-to-dirt-path
+boundary read as a hard edge, with the tile-grid corner where they met a
+hard square. Investigated with the same real-chunk debug-probe technique
+the four rounds above established (`tools/probe_path_scar_blend.gd`, loads a
+real Berlin/Grunewald chunk through the real `EarthChunkManager`): the real
+forest/grassland biome-to-biome border was confirmed still correctly
+blended (no regression in the four prior fixes), ruling out a repeat of any
+earlier round. Root cause instead: `TerrainRenderer.paint`'s
+`chunk.modifications.has(local)` branch has always short-circuited straight
+to `atlas_coords_for_modification` -- a single dead-flat `EARTH_COLOR`
+square -- before ever consulting neighbor biomes, for EVERY modification
+tile. That includes `PathScarring`'s worn-ground dirt path
+(`src/world/path_scarring.gd`, `World._step_path_scarring`, the exact
+"grass to dirt path" shape in the report) as well as player-built floor --
+neither ever got any border treatment at all, completely bypassing the
+whole blend/corner system the four prior rounds built, regardless of what
+real ground surrounded it. Confirmed directly against the real probe:
+planting a worn path next to real Berlin grassland showed the baked earth
+tile as a single flat color end to end, with a real, stark seam-pixel color
+jump against its grassland neighbor (`(0.349, 0.247, 0.149)` earth vs.
+`(0.196, 0.302, 0.035)` grassland at the shared edge) -- exactly the
+reported hard edge. Also checked and ruled out per this round's own
+decoration-vs-terrain question: tall grass patches (`IllustratedGrassPatch`)
+are alpha-blended decorative cards sitting on top of the ground layer, not
+part of the tile-grid boundary itself, so they were not contributing to
+this. Not a cache/version bug either -- `TerrainAtlasCache.has_valid_cache`
+correctly keys the cached image to `ATLAS_VERSION` and would have caught a
+stale cache regardless.
+Fixed narrowly, scoped to `EARTH_TILE_ID` only (structures/building pieces
+stay exactly as before -- deliberately man-made, flat-edged, never
+organically blended into the ground): a new `earth_dominant_blend_for`
+mirrors `dominant_blend_for`'s shape but with no "same biome, stay pure"
+skip and no priority gate, since earth has no real biome identity of its
+own to compare against -- it always concedes to whatever real, unmodified
+ground cardinally borders it (ocean excluded, same "land never blends
+toward ocean, that's the GPU WaterFx overlay's job" rule every other family
+already follows). A new, fourth atlas family (`_earth_blend_base_linear`/
+`_earth_blend_linear`, 630 tiles: one real land-biome partner x every
+non-empty cardinal-direction subset x `BLEND_VARIANTS`) reuses
+`generate_multi_directional_blend_image_from` unchanged -- no separate
+corner-carve family was needed or reachable, since earth's unconditional
+per-direction blending already dithers a shared corner between two active
+directions on its own (that function's own existing behavior), unlike the
+water/land corner families which exist specifically because dithering is
+priority-gated off there. `_neighbor_biomes` gained an
+`exclude_modified_neighbors` param (used only by this new path) so two
+adjacent earth cells -- a multi-tile worn path or built floor -- don't
+dither a seam against each other's pre-modification biome; confirmed by a
+dedicated test and by the real probe. Confirmed end to end against the same
+real Berlin chunk after the fix: the planted earth tile's baked pixels are
+no longer a flat single color, and its seam pixel against grassland moved
+to `(0.216, 0.318, 0.047)` -- much closer to the real grassland neighbor's
+own `(0.196, 0.302, 0.035)` than to the flat earth fill, a genuine blended
+transition rather than a hard cutoff. Pinned by
+`test_baked_atlas_pixels_for_an_earth_modification_cell_show_real_grassland_pixels_at_its_blended_edge`
+plus a full `earth_dominant_blend_for`/`atlas_coords_for_earth_blend`/
+`paint()` test suite in `tests/unit/test_terrain_renderer.gd`, following the
+same discipline the third/fourth rounds above established: an atlas
+coordinate matching what a caller expects proves nothing about the pixels
+actually baked there. `ATLAS_VERSION` bumped
+(`art_resolution_v22_earth_modification_blend`). Known, deliberate scope
+limit carried forward from the same "out of scope" section every prior
+round already uses: an earth cell's neighbor across a CHUNK SEAM that
+itself carries a modification is not detected (`global_biome_lookup` has no
+visibility into a neighboring chunk's modifications), the same pre-existing
+blind spot the ordinary biome-to-biome blend/corner system already has at
+chunk seams -- not attempted here, in scope only for the common in-chunk
+case PathScarring/building actually produce.
 
 reaching 0 HP now actually kills and respawns the player instead of silently
 doing nothing; and three of the 36 pure-logic mechanics built in a large
