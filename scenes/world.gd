@@ -12,6 +12,9 @@ const WarGamesResponse = preload("res://src/gameplay/wargames_response.gd")
 const BackToTheFutureDay = preload("res://src/gameplay/back_to_the_future_day.gd")
 const RushAmbientCue = preload("res://src/gameplay/rush_ambient_cue.gd")
 const SecretD20 = preload("res://src/gameplay/secret_d20.gd")
+const AncientTerminal = preload("res://src/gameplay/ancient_terminal.gd")
+const SignedSecretRoom = preload("res://src/gameplay/signed_secret_room.gd")
+const BridgekeeperEncounter = preload("res://src/gameplay/bridgekeeper_encounter.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
@@ -96,6 +99,16 @@ var _easter_egg_message_timer := 0.0
 ## feet, closer than SENSE_RADIUS's release range so it can still be walked
 ## toward and reacted to like an ordinary creature.
 const EASTER_EGG_CREATURE_SPAWN_DISTANCE := 220.0
+
+## How long the ancient-terminal sequence (multiple prose lines joined into
+## one banner, see _check_ancient_terminal) stays on screen -- longer than
+## EASTER_EGG_MESSAGE_DURATION's single-line glimpses since there is
+## genuinely more text to read here.
+const ANCIENT_TERMINAL_MESSAGE_DURATION := 12.0
+## Same reasoning as ANCIENT_TERMINAL_MESSAGE_DURATION -- the secret room's
+## credit line gets its own brief but slightly longer read time than an
+## ordinary one-line cameo.
+const SIGNED_SECRET_ROOM_MESSAGE_DURATION := 8.0
 
 ## Real seconds between player-state autosaves (see docs/concept/
 ## persistence.md) -- mirrors the world's own "persist eagerly, not on an
@@ -228,6 +241,22 @@ var _secret_d20 := SecretD20.new()
 ## than the ambient randf() the cameo-rarity checks elsewhere in this file
 ## already use: nothing else in this project should ever draw from this.
 var _secret_d20_rng := RandomNumberGenerator.new()
+var _ancient_terminal := AncientTerminal.new()
+var _signed_secret_room := SignedSecretRoom.new()
+## Rolling buffer of the last few "stash"/"lasso"/"fish"/"mount" just-pressed
+## action names (see SignedSecretRoom.ACTION_SEQUENCE/matches_sequence's own
+## doc comment) -- capped to ACTION_SEQUENCE's own length so it never grows
+## unbounded; only these four action names are ever pushed onto it, nothing
+## else the player presses touches this buffer at all.
+var _signed_secret_room_recent_actions: Array[String] = []
+var _bridgekeeper := BridgekeeperEncounter.new()
+## Session state for an in-progress riddle exchange (see
+## _check_bridgekeeper_encounter/_handle_bridgekeeper_answer_command): -1
+## means no encounter is active. Reused across encounters -- "rarely
+## encountered wandering NPC" per the doc implies this can happen more than
+## once a session, unlike the once-per-session cameos above.
+var _bridgekeeper_riddle_index := -1
+var _bridgekeeper_correct_count := 0
 var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
@@ -1229,6 +1258,118 @@ func _check_rush_ambient_cue(player_tile: Vector2i) -> void:
 	# stage, so this cameo is text-only for now; see docs/progress.md.
 
 
+## The Zork-homage ancient terminal (docs/concept/easter_eggs.md, see
+## AncientTerminal's own doc comment) -- called every frame (unlike the
+## throttled _check_easter_egg_sightings/_check_rush_ambient_cue above)
+## because this needs to catch the single frame Input.is_action_just_
+## pressed("talk") is true; throttling to EASTER_EGG_CHECK_INTERVAL would
+## silently drop most real key presses. Deliberately re-triggerable (no
+## once-per-session guard) -- a terminal you can walk up to and "read"
+## again is more in the spirit of a found prop than a one-time cutscene;
+## only has_been_found's own latch is permanent.
+func _check_ancient_terminal(player_tile: Vector2i) -> void:
+	if not Input.is_action_just_pressed("talk"):
+		return
+	if not _ancient_terminal.is_in_range(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	_ancient_terminal.mark_found()
+	_easter_egg_label.text = "\n".join(_ancient_terminal.terminal_lines())
+	_easter_egg_label.visible = true
+	_easter_egg_message_timer = ANCIENT_TERMINAL_MESSAGE_DURATION
+
+
+## The signed secret room (docs/concept/easter_eggs.md, see
+## SignedSecretRoom's own doc comment) -- called every frame for the same
+## just-pressed reason _check_ancient_terminal is. Watches only the four
+## action names SignedSecretRoom.ACTION_SEQUENCE actually needs, appends
+## each to a small rolling buffer capped at the sequence's own length, and
+## reveals the credit the moment that buffer's tail matches AND the player
+## is standing at the room's own location.
+func _check_signed_secret_room(player_tile: Vector2i) -> void:
+	for action_name in SignedSecretRoom.ACTION_SEQUENCE:
+		if not Input.is_action_just_pressed(action_name):
+			continue
+		_signed_secret_room_recent_actions.append(action_name)
+		var overflow := (
+			_signed_secret_room_recent_actions.size() - SignedSecretRoom.ACTION_SEQUENCE.size()
+		)
+		if overflow > 0:
+			_signed_secret_room_recent_actions = _signed_secret_room_recent_actions.slice(overflow)
+
+	if not _signed_secret_room.matches_sequence(_signed_secret_room_recent_actions):
+		return
+	if not _signed_secret_room.is_in_range(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	_signed_secret_room.mark_found()
+	_easter_egg_label.text = _signed_secret_room.credit_text()
+	_easter_egg_label.visible = true
+	_easter_egg_message_timer = SIGNED_SECRET_ROOM_MESSAGE_DURATION
+
+
+## Monty Python's Bridgekeeper (docs/concept/easter_eggs.md, see
+## BridgekeeperEncounter's own doc comment) -- rolled on the same throttled
+## cadence as _check_easter_egg_sightings above (a rarity roll, not a
+## per-frame check). Only rolls for a NEW encounter while none is already
+## active (_bridgekeeper_riddle_index == -1); the player answers via the
+## /answer console command (_handle_bridgekeeper_answer_command).
+func _check_bridgekeeper_encounter(player_tile: Vector2i) -> void:
+	if _bridgekeeper_riddle_index != -1:
+		return
+	if not _bridgekeeper.check(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES, randf()
+	):
+		return
+	_bridgekeeper_riddle_index = 0
+	_bridgekeeper_correct_count = 0
+	_dev_console.log_line("A robed figure blocks the narrow crossing. \"None shall pass unanswered.\"")
+	_dev_console.log_line(_bridgekeeper.riddle_text(0))
+	_dev_console.log_line("(Reply with /answer <your answer>)")
+
+
+## /answer <text> (docs/concept/easter_eggs.md's Bridgekeeper egg) --
+## deliberately never listed in /help (pillar 3), and a no-op when no
+## encounter is active (typing it on a whim outside an encounter does
+## nothing, rather than erroring). Advances the riddle index each call;
+## once all three are answered, prints passage_message and clears the
+## active-encounter state so a later roll can start a fresh one.
+func _handle_bridgekeeper_answer_command(args: Array) -> void:
+	if _bridgekeeper_riddle_index == -1:
+		_dev_console.log_line("There is no one here to answer.")
+		return
+	var answer := " ".join(args)
+	if _bridgekeeper.is_correct_answer(_bridgekeeper_riddle_index, answer):
+		_bridgekeeper_correct_count += 1
+		_dev_console.log_line("\"...Correct.\" The figure seems faintly surprised.")
+	else:
+		_dev_console.log_line("\"...Incorrect.\" The figure sighs, unbothered.")
+	_bridgekeeper_riddle_index += 1
+	if _bridgekeeper_riddle_index >= _bridgekeeper.riddle_count():
+		_dev_console.log_line(_bridgekeeper.passage_message(_bridgekeeper_correct_count))
+		_bridgekeeper_riddle_index = -1
+		return
+	_dev_console.log_line(_bridgekeeper.riddle_text(_bridgekeeper_riddle_index))
+
+
+## Forwarding getter: the clean, testable "was this found" signal a later
+## system (docs/concept/easter_eggs.md's "Three Fragments" hunt) can check
+## against, without reaching into _ancient_terminal directly.
+func has_found_ancient_terminal() -> bool:
+	return _ancient_terminal.has_been_found()
+
+
+## Forwarding getter: same purpose as has_found_ancient_terminal above, for
+## the signed secret room.
+func has_found_signed_secret_room() -> bool:
+	return _signed_secret_room.has_been_found()
+
+
 func _update_easter_egg_label(delta: float) -> void:
 	if _easter_egg_message_timer <= 0.0:
 		return
@@ -1763,6 +1904,13 @@ func _on_console_command(command: String, args: Array) -> void:
 			# the cameo-rarity checks elsewhere in this file use. Harmless
 			# and silly on a natural 20; a complete no-op otherwise.
 			_handle_d20_command()
+		"answer":
+			# docs/concept/easter_eggs.md's Bridgekeeper egg -- also never
+			# listed in /help (pillar 3): the reply channel for an in-
+			# progress riddle exchange started by _check_bridgekeeper_
+			# encounter's own rare roll. A no-op line outside an active
+			# encounter, never an error.
+			_handle_bridgekeeper_answer_command(args)
 		_:
 			_dev_console.log_line("Unknown command: /%s (try /help)" % command)
 
@@ -2963,6 +3111,16 @@ func _client_process(delta: float) -> void:
 		# Rush ambient nod -- location alone triggers this one, no roll;
 		# see _check_rush_ambient_cue's own doc comment.
 		_check_rush_ambient_cue(player_tile)
+		# Monty Python's Bridgekeeper -- a rare encounter roll, same cadence
+		# as the sightings above; see _check_bridgekeeper_encounter's own
+		# doc comment.
+		_check_bridgekeeper_encounter(player_tile)
+	# The Zork-homage terminal and the signed secret room both key off a
+	# single-frame Input.is_action_just_pressed edge (see each function's own
+	# doc comment for why they can't share the throttled block above --
+	# throttling to EASTER_EGG_CHECK_INTERVAL would drop most real presses).
+	_check_ancient_terminal(player_tile)
+	_check_signed_secret_room(player_tile)
 	_update_easter_egg_label(delta)
 	# Real sun compass bearing, for hillshading (see HillshadeShader,
 	# docs/concept/terrain_relief.md) -- same real inputs as elevation just

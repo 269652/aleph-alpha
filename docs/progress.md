@@ -2661,19 +2661,97 @@ quiet contradiction of every other system's "never hand-placed" rule.
     data yet" situation as every other tuned threshold in this doc — pinned
     as a named constant and exercised directly by its own tests rather than
     eyeballed inline.
+- **The Zork-homage ancient terminal** (small) — ✅ Done — `AncientTerminal`
+  (`src/gameplay/ancient_terminal.gd`): a fixed real-world location
+  (Cambridge, Massachusetts — home of MIT, where Zork was actually written
+  — reusing `GeoCoordinates` exactly like `RushAmbientCue`/
+  `EasterEggSightings`, never named in-game) plus `TERMINAL_LINES`, a fully
+  original few-line old-school-parser-style exchange. No quoting of Zork's
+  own prose (pillar 4) — enforced by `test_ancient_terminal.gd`'s own "does
+  not quote Zork's own famous text" check, the same discipline
+  `test_wargames_response.gd` already applies to the WarGames egg. Unlike
+  every proximity-only cameo elsewhere (Rush/Mothman/etc.), this needs a
+  deliberate ACTION at the location, not just approach — wired in
+  `scenes/world.gd`'s `_check_ancient_terminal`, called every frame (not
+  the throttled `EASTER_EGG_CHECK_INTERVAL` cadence the rarity-roll cameos
+  use) so it reliably catches the single-frame `Input.is_action_just_
+  pressed("talk")` edge, the same generic interact verb villager talk
+  already uses. Deliberately no floating "Talk (G)" interaction prompt —
+  that would itself be a hint, contradicting pillar 3. `has_been_found()`/
+  `mark_found()` give a clean, testable boolean signal (forwarded by
+  `World.has_found_ancient_terminal()`) for the "Three Fragments" hunt
+  below to eventually check against — this stage only builds the signal,
+  not the fragment-drop/aggregation logic itself.
+- **The signed secret room** (small) — ✅ Done — `SignedSecretRoom`
+  (`src/gameplay/signed_secret_room.gd`): repeats Warren Robinett's actual
+  1980 *Adventure* gesture rather than referencing the game. Pinned at
+  Sunnyvale, California (Atari's real historical HQ, reusing
+  `GeoCoordinates` the same way, never named in-game) PLUS an obscure
+  action sequence — `stash → lasso → fish → mount`, four real, existing
+  interaction verbs normally used in unrelated contexts, chosen over
+  combat verbs (attack/block/kick) specifically because those DO plausibly
+  chain together by accident in real play. `matches_sequence` is a pure
+  tail-match over a small rolling buffer of just-pressed action names
+  `scenes/world.gd`'s `_check_signed_secret_room` maintains (also called
+  every frame, same just-pressed reasoning as the terminal above) — the
+  module never touches `Input` itself. `CREDIT_TEXT` is a tasteful, generic
+  placeholder ("You found this. Made with care by the people who built
+  this world.") marked with a `TODO(ship)` comment so whoever actually
+  ships this can swap in real credited names with a one-line edit, per the
+  doc's own ask. Same `has_been_found()`/`mark_found()` signal shape as the
+  terminal above (forwarded by `World.has_found_signed_secret_room()`).
+  **Scope call:** no literal new interior geometry/teleport — reaching the
+  gate reveals the credit via the same on-screen banner every other cameo
+  in this doc uses, not a new walkable room, matching this doc's own
+  "zero mechanical weight"/"not a new game mode" discipline (see
+  `AncientTerminal`'s identical scope call) rather than building a bespoke
+  interior-space system for one Easter egg.
+- **Monty Python's Bridgekeeper** (small) — ✅ Done — `BridgekeeperEncounter`
+  (`src/gameplay/bridgekeeper_encounter.gd`): three original riddles set in
+  this game's own nature vocabulary (a river, a tree, snow), not the film's
+  own three questions — enforced by `test_bridgekeeper_encounter.gd`'s own
+  "does not quote the film's own questions" check. **Scope call:** this
+  project has no bridge/river-crossing terrain concept and no free-roaming
+  path-blocking NPC AI to reuse (neither exists anywhere in the codebase);
+  building either from scratch would be a far bigger lift than an Easter
+  egg warrants. Scoped the same way `EasterEggSightings` scoped Mothman
+  down to "a log-line, not a spawned sprite/Node": pinned at Trift Bridge,
+  Switzerland (a real, narrow, precarious rope bridge — reusing
+  `GeoCoordinates`, never named in-game) as a rare `chance_per_check`
+  encounter roll (`_check_bridgekeeper_encounter`, same cadence as the
+  sightings cameos), and the riddle exchange itself is conducted through
+  the dev console's existing text-input surface via a new undocumented
+  `/answer <text>` command (`_handle_bridgekeeper_answer_command`) — the
+  same "secret console command" shape WarGames/the d20 egg already use, no
+  new NPC node or blocking-collision AI. Passage never actually depends on
+  the score (`passage_message` always lets the player through) — "failing
+  is harmless, a silly non-consequence" is true by construction rather than
+  needing an explicit unblock step. Not part of the "Three Fragments" hunt,
+  so no found-signal needed here.
+- **"Three Fragments" hunt** (medium) — ⬜ Not started — deliberately NOT
+  built by this stage (out of scope by design, see the task notes this
+  stage was given). Two of its three source signals now exist and are
+  tested: `World.has_found_ancient_terminal()` and `World.
+  has_found_signed_secret_room()` (both forwarding getters over each
+  module's own `has_been_found()`). The third — the WarGames egg
+  (`/globalthermonuclearwar`, `src/gameplay/wargames_response.gd`) — does
+  **NOT** yet expose an analogous found-signal as of this writing; a future
+  stage building "Three Fragments" needs to add one there first (a
+  `has_been_found()`/`mark_found()` pair on `WarGamesResponse`, or an
+  equivalent forwarding getter on `World`, mirroring the shape the two
+  signals above already establish) before it can check all three
+  consistently. The actual bonus-discovery payoff for holding all three at
+  once is still fully open, per the doc's own "TBD what... deliberately
+  left open" framing.
 - **Remaining Starter Collection entries** (Joust-homage sea cave at the
-  Bermuda Triangle, Zork terminal, Atari Adventure secret room, Monty
-  Python's Bridgekeeper, the retro-handheld creature-battler, "Three
-  Fragments") (medium) — ⬜ Not started — ~6 concrete eggs still
-  unimplemented (WarGames, Back to the Future Day, Rush's ambient nod, and
-  the D&D d20 nod are now done — see their own entries above). Two of the
-  remaining six are real, playable original
-  mini-games rather than props/flavor text (the Joust-homage dueling-birds
-  cabinet and the handheld creature-battler starring this project's OWN
-  existing creature roster — zero new art needed, reuses
-  `ProceduralAnimalSprite`/`IllustratedAnimalSprite` as-is) — meaningfully
-  bigger implementation lifts than the rest of the list, flagged as such in
-  the doc rather than under-scoped alongside the prop-only entries.
+  Bermuda Triangle, the retro-handheld creature-battler) (medium) — ⬜ Not
+  started. Both are real, playable original mini-games rather than
+  props/flavor text (the Joust-homage dueling-birds cabinet and the
+  handheld creature-battler starring this project's OWN existing creature
+  roster — zero new art needed, reuses `ProceduralAnimalSprite`/
+  `IllustratedAnimalSprite` as-is) — meaningfully bigger implementation
+  lifts than the rest of the list, flagged as such in the doc rather than
+  under-scoped alongside the prop-only entries.
 
 ### Electromagnetism (`concept/electromagnetism.md`)
 

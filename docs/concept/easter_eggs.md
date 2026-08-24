@@ -329,9 +329,60 @@ tightly isolated exception to "no random rolls anywhere" — a dedicated
 a second undocumented secret console command (`/rolld20`), harmless and
 silly on a natural 20, a no-op otherwise.
 
-Everything else in this doc (the remaining Starter Collection entries) is
-still design-only; see `docs/progress.md`'s Easter Eggs section for the
-exact breakdown.
+Three more Starter Collection entries are now implemented: the Zork-homage
+ancient terminal, the signed secret room, and Monty Python's Bridgekeeper.
+
+The ancient terminal (`src/gameplay/ancient_terminal.gd`) is pinned at a
+real-world coordinate (Cambridge, Massachusetts, where Zork was actually
+written — never named in-game, reusing `GeoCoordinates` exactly like every
+other real-coordinate cameo) plus a few lines of fully original, old-school-
+parser-style prose, enforced never to quote Zork's own text by its own test.
+Unlike the proximity-only cameos above, it needs a deliberate interaction —
+the player's own "talk" input — at the location, not just approach, wired
+into `scenes/world.gd` on every frame (rather than the throttled cadence the
+rarity-roll cameos use) so the single-frame key-press is never missed.
+Deliberately no floating interaction prompt at the ruin — that would itself
+be a hint, against pillar 3.
+
+The signed secret room (`src/gameplay/signed_secret_room.gd`) repeats Warren
+Robinett's actual gesture rather than referencing *Adventure* itself: pinned
+at Sunnyvale, California (Atari's real historical HQ, never named in-game)
+plus an obscure four-verb action sequence (stash, then lasso, then fish,
+then mount — real, existing interaction verbs from unrelated contexts,
+chosen over combat verbs specifically because those chain together too
+easily by accident). `CREDIT_TEXT` is a tasteful, generic placeholder
+credit, marked with a `TODO(ship)` comment so whoever ships this can swap in
+real names with a one-line edit. Reaching the gate reveals the credit via
+the same on-screen banner every other cameo in this doc uses rather than
+a literal new walkable interior — a deliberate, documented scope call
+matching this doc's "not a new game mode" discipline, not a silent
+under-build.
+
+Monty Python's Bridgekeeper (`src/gameplay/bridgekeeper_encounter.gd`) asks
+three original riddles set in this game's own nature vocabulary (a river, a
+tree, snow) rather than the film's own three questions. This project has no
+bridge/river-crossing terrain concept and no path-blocking NPC AI to reuse,
+so — the same kind of documented scope call `EasterEggSightings` already
+makes for Mothman — the "wandering NPC" is a rare, location-gated encounter
+roll (pinned at Trift Bridge, Switzerland, a real narrow rope crossing,
+never named in-game) that opens a riddle exchange through a new undocumented
+`/answer <text>` console command, the same secret-console-command shape
+WarGames/the d20 egg already use. Passage never actually depends on the
+score, by construction, matching "failing is harmless, a silly
+non-consequence."
+
+Both the ancient terminal and the signed secret room expose a clean,
+testable `has_been_found()`/`mark_found()` signal (forwarded by `World.
+has_found_ancient_terminal()`/`has_found_signed_secret_room()`) for the
+"Three Fragments" hunt below to eventually check — this work stops at
+exposing the signal, not the fragment-drop/aggregation logic itself. The
+WarGames egg does not yet expose an equivalent signal; a future "Three
+Fragments" stage needs to add one there first, mirroring the shape these
+two already establish, before it can check all three consistently.
+
+Everything else in this doc (the Joust-homage sea cave, the retro-handheld
+creature-battler, and "Three Fragments" itself) is still design-only; see
+`docs/progress.md`'s Easter Eggs section for the exact breakdown.
 
 ### Open questions
 
