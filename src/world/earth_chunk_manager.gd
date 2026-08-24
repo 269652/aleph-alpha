@@ -974,16 +974,25 @@ func step_snow(snowing: bool, warmth: float) -> void:
 	_repaint_snow()
 
 
-## The depth band the whole field was last painted at, and the tiles whose
-## tread has changed since.
+## Every tile's own last-painted band, and the tiles whose tread has changed
+## since.
 ##
 ## Repainting every loaded tile every frame is thousands of set_cell calls for
 ## a field that mostly has not changed -- the same shape of cost that took the
-## frame rate down when the fast-forward first ran. The FIELD is repainted only
-## when its depth crosses into a new band, which happens a handful of times a
-## snowfall; footprints repaint only the tiles that were actually walked on.
-var _snow_painted_band := -1
+## frame rate down when the fast-forward first ran. A SWEEP (cheap: pure band
+## arithmetic against each tile's own warp, no engine calls -- see
+## SnowLayer.tile_warp) runs whenever the field's lying depth has actually
+## moved since the last one; only tiles whose OWN computed band differs from
+## what is already painted there get a real set_cell, so different tiles
+## genuinely flip at different times across a snowfall instead of the whole
+## field jumping to a new band together (reported: "snow still covers a
+## percentage of a whole chunk instantly instead of gradually filling
+## individual tiles"). Footprints still repaint only the tiles that were
+## actually walked on.
+var _snow_painted_band_by_tile: Dictionary = {}
 var _snow_dirty: Dictionary = {}
+## Sentinel below any real depth, so the very first call always sweeps.
+var _snow_last_swept_depth := -1.0
 
 
 ## Paints the tiles that need it.
@@ -991,43 +1000,74 @@ func _repaint_snow() -> void:
 	if _snow_layer == null:
 		return
 	if _snow_depth <= 0.0:
-		if _snow_painted_band != -1:
+		if not _snow_painted_band_by_tile.is_empty():
 			_snow_layer.clear()
-			_snow_painted_band = -1
+			_snow_painted_band_by_tile.clear()
 			_snow_dirty.clear()
+			_snow_last_swept_depth = -1.0
 		return
 
-	var band := _snow_renderer.band_for(_snow_depth, 0.0)
-	if band != _snow_painted_band:
-		_snow_painted_band = band
+	if _snow_depth != _snow_last_swept_depth:
+		_snow_last_swept_depth = _snow_depth
 		_snow_dirty.clear()
-		_repaint_whole_field()
+		_sweep_whole_field()
 		return
 	for tile in _snow_dirty:
 		_paint_snow_tile(tile)
 	_snow_dirty.clear()
 
 
-func _repaint_whole_field() -> void:
+func _sweep_whole_field() -> void:
 	for chunk_coord in _loaded_chunks:
-		var origin: Vector2i = chunk_coord * CHUNK_SIZE
-		var chunk: Chunk = _loaded_chunks[chunk_coord]
-		for local_y in chunk.height:
-			for local_x in chunk.width:
-				_paint_snow_tile(origin + Vector2i(local_x, local_y))
+		_sweep_chunk(chunk_coord)
 
 
-func _paint_snow_tile(tile: Vector2i) -> void:
+## Recomputes every tile in this one chunk's own band and repaints only the
+## ones that actually changed. Also what gives a freshly-loaded chunk its
+## correct snow immediately (see _load_chunk) rather than leaving it bare
+## until the next field-wide depth change happens to sweep it.
+func _sweep_chunk(chunk_coord: Vector2i) -> void:
+	var origin: Vector2i = chunk_coord * CHUNK_SIZE
+	var chunk: Chunk = _loaded_chunks[chunk_coord]
+	for local_y in chunk.height:
+		for local_x in chunk.width:
+			var tile := origin + Vector2i(local_x, local_y)
+			if _snow_painted_band_by_tile.get(tile, -2) != _snow_band_for_tile(tile):
+				_paint_snow_tile(tile)
+
+
+## The band `tile` should show right now, or -1 for bare ground/water.
+## Pure -- no painting -- so the sweep's change-detection above and the
+## actual paint below share exactly one source of truth for "what should
+## this tile show", rather than two copies of the same logic drifting apart.
+func _snow_band_for_tile(tile: Vector2i) -> int:
 	# Water does not take snow -- it freezes or it does not, which is a
 	# different thing and not this one.
 	if biome_at_global(tile.x, tile.y) == "ocean":
-		_snow_layer.erase_cell(tile)
-		return
-	var band := _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile))
+		return -1
+	return _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile), _snow_renderer.tile_warp(tile))
+
+
+func _paint_snow_tile(tile: Vector2i) -> void:
+	var band := _snow_band_for_tile(tile)
 	if band < 0:
 		_snow_layer.erase_cell(tile)
 	else:
 		_snow_layer.set_cell(tile, 0, Vector2i(band, 0))
+	_snow_painted_band_by_tile[tile] = band
+
+
+## Drops this chunk's own tiles from the painted-band bookkeeping above so it
+## does not grow without bound across a long session's worth of chunk
+## load/unload -- the same per-chunk cleanup shape _unload_chunk already
+## gives grass/flower/scrub/lichen, except snow's bookkeeping is keyed by
+## individual GLOBAL tile rather than nested under the chunk, so it is erased
+## one tile at a time rather than by one dictionary key.
+func _forget_snow_for_chunk(chunk_coord: Vector2i) -> void:
+	var origin: Vector2i = chunk_coord * CHUNK_SIZE
+	for local_y in CHUNK_SIZE:
+		for local_x in CHUNK_SIZE:
+			_snow_painted_band_by_tile.erase(origin + Vector2i(local_x, local_y))
 
 
 func set_rain(raining: bool) -> void:
@@ -3158,6 +3198,11 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_loaded_chunks[chunk_coord] = chunk
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_paint_water_overlay(chunk_coord, chunk)
+	# So a chunk streamed in mid-snowfall shows the snow already lying,
+	# instead of staying bare until the next field-wide depth change happens
+	# to sweep it (see _sweep_chunk's own doc comment).
+	if _snow_layer != null and _snow_depth > 0.0:
+		_sweep_chunk(chunk_coord)
 	# Restores collision for every wall/window piece PERSISTED from a
 	# previous session -- fresh village-stamped pieces get their collision
 	# immediately inside stamp_structure_at_global instead, further below in
@@ -3310,6 +3355,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.erase(_water_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _roof_layer != null:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	if _snow_layer != null:
+		_terrain_renderer.erase(_snow_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	_forget_snow_for_chunk(chunk_coord)
 	if _hidden_roof_chunk_coord == chunk_coord:
 		_hidden_roof_chunk_coord = null
 		_hidden_roof_room_cells = []

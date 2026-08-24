@@ -35,6 +35,54 @@ const BAND_COVERAGE := [0.45, 0.72, 0.92, 1.0]
 ## thin to begin with does a boot reach the ground.
 const TREAD_BANDS := 2.0
 
+## ## Per-tile spread (see docs/concept/weather.md's "It fills in tile by
+## tile, not the whole field at once")
+##
+## One lying-snow DEPTH still drives an entire snowfall (see Snowfall) -- one
+## clock, one number -- but every tile reshapes that same depth by its own
+## WARP exponent before banding it: `pow(depth, warp)`. Real snow does not
+## accumulate evenly (a sheltered hollow or the shade under a tree line holds
+## it differently than open, exposed ground), so different tiles cross into a
+## deeper band at different points along the same snowfall -- reported: "snow
+## still covers a percentage of a whole chunk instantly instead of gradually
+## filling individual tiles".
+##
+## `pow` is what keeps both ends of a snowfall agreeing regardless of warp:
+## `0^k == 0` and `1^k == 1` for any positive k, so bare ground (depth 0) and
+## a complete snowfall (depth 1) land on the exact same band for every tile
+## no matter its warp -- only the MIDDLE of a snowfall differs tile to tile.
+## A warp below 1 reaches a given band at a shallower depth (an early
+## starter); above 1, a deeper depth is needed first (a late one).
+const WARP_MIN := 0.6
+const WARP_MAX := 1.6
+
+## How many tiles one warp "patch" spans. Real snow drifts in coherent
+## patches (a hollow, a lee side), not tile-to-tile static -- see
+## `tile_warp`'s own doc comment. Smaller means smaller, more scattered
+## patches; this is the PERIOD in tiles (roughly 1/WARP_NOISE_SCALE), not the
+## noise frequency itself, since a frequency is harder to reason about
+## directly than "how many tiles wide is a patch".
+const WARP_PATCH_SIZE_TILES := 7.0
+const WARP_NOISE_SCALE := 1.0 / WARP_PATCH_SIZE_TILES
+
+## Arbitrary fixed salt for the warp noise -- any constant works, it only
+## needs to differ from other PixelNoise callers sharing the same coordinate
+## space so their patterns don't correlate.
+const WARP_NOISE_SEED := 7331
+
+
+## The warp exponent this tile reshapes the field's lying-snow depth by
+## before banding it -- deterministic (same tile always answers the same),
+## and spatially COHERENT rather than scattered: `PixelNoise.smooth` varies
+## gradually between neighbouring tiles (see `WARP_PATCH_SIZE_TILES`) so warp
+## forms drifting patches rather than a tile-to-tile static pattern, which
+## would read as noise rather than as snow.
+static func tile_warp(tile: Vector2i) -> float:
+	var noise := PixelNoise.smooth(
+		WARP_NOISE_SEED, float(tile.x) * WARP_NOISE_SCALE, float(tile.y) * WARP_NOISE_SCALE
+	)
+	return WARP_MIN + noise * (WARP_MAX - WARP_MIN)
+
 
 ## The tile set: one tile per depth band.
 func build_tile_set() -> TileSet:
@@ -84,12 +132,17 @@ func build_band_image(band: int) -> Image:
 ## Which band a tile shows, or -1 for bare ground.
 ##
 ## `depth` is how much snow is lying (see Snowfall) and `tread` how much has
-## been displaced by walking (see SnowTrail).
-func band_for(depth: float, tread: float) -> int:
+## been displaced by walking (see SnowTrail). `warp` is this tile's own
+## reshaping of `depth` before banding (see `tile_warp`'s own doc comment) --
+## defaults to 1.0, an identity power that reproduces the plain global
+## banding exactly, so every existing two-argument call site (and the field's
+## own bare/fully-covered extremes, at any warp) is unaffected.
+func band_for(depth: float, tread: float, warp: float = 1.0) -> int:
 	var lying := clampf(depth, 0.0, 1.0)
 	if lying <= 0.0:
 		return -1
+	var warped: float = pow(lying, warp)
 	# Depth maps onto the bands, then treading knocks it down.
-	var band := int(ceil(lying * float(DEPTH_BANDS))) - 1
+	var band := int(ceil(warped * float(DEPTH_BANDS))) - 1
 	band -= int(round(clampf(tread, 0.0, 1.0) * TREAD_BANDS))
 	return clampi(band, -1, DEPTH_BANDS - 1)
