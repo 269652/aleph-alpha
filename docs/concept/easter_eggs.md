@@ -268,10 +268,28 @@ Mothman, the Jersey Devil, and the Roswell/Area 51 crashed-saucer +
 "little grey" pair — are implemented (`src/gameplay/
 easter_egg_sightings.gd`), as brief on-screen sighting lines rather than
 spawned sprites/props (a deliberate, documented scope choice — see the
-module's own doc comment and `docs/progress.md`). Everything else in this
-doc (the other trigger shapes, and every remaining Starter Collection
-entry) is still design-only; see `docs/progress.md`'s Easter Eggs section
-for the exact breakdown.
+module's own doc comment and `docs/progress.md`).
+
+Squallmaw, Coilnecca, and Champ are also implemented, but unlike the four
+above they're real, spawnable creatures — full `CreatureInfo`/
+`AnimalAnatomy`/`ProceduralAnimalSprite` entries, following the Germany-
+region world-boss precedent's shape but explicitly not their stat scale
+(`src/gameplay/easter_egg_creatures.gd` decides when/where one should
+appear, reusing the same reverse-geo + roll shape as
+`easter_egg_sightings.gd`; `scenes/world.gd` then spawns it for real via
+`CreatureRenderer.spawn_single`, the same API `/spawn` itself uses). Champ
+introduces a new `"skittish"` temperament value — `CreatureBehavior` only
+special-cases `"aggressive"`, so it already flees exactly like `"calm"`
+does today, but the distinct label keeps it from reading as a mechanical
+duplicate of Coilnecca. Champ's "dives immediately if the player closes
+in" is approximated (spawned at a fixed distance from the player, then the
+ordinary flee-when-threatened creature AI takes over) rather than a
+literal per-species detection-radius mechanic — see `docs/progress.md` for
+the exact scope call and what a fuller version would need.
+
+Everything else in this doc (the other trigger shapes, and every remaining
+Starter Collection entry) is still design-only; see `docs/progress.md`'s
+Easter Eggs section for the exact breakdown.
 
 ### Open questions
 

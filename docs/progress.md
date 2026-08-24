@@ -2489,16 +2489,73 @@ quiet contradiction of every other system's "never hand-placed" rule.
 - **Calendar-Date-Gated Triggers** (trivial) — ⬜ Not started — a plain
   real-system-date check, the same category of real-world-time input
   `SeasonCycle`/`WeatherModel` already read for unrelated reasons.
-- **Remaining Starter Collection entries** (Champ/Lake Champlain, Loch
-  Ness's Coilnecca, Bermuda Triangle's Squallmaw + Joust-homage sea cave,
-  WarGames console command, Zork terminal, Atari Adventure secret room,
-  Back to the Future Day, Monty Python's Bridgekeeper, Rush ambient cue,
-  D&D d20, the Kraken, the retro-handheld creature-battler, "Three
-  Fragments") (medium) — ⬜ Not started — ~11 concrete eggs still
-  unimplemented. Two are real, playable original mini-games rather than
-  props/flavor text (the Joust-homage dueling-birds cabinet and the
-  handheld creature-battler starring this project's OWN existing creature
-  roster — zero new art needed, reuses
+- **Squallmaw, Coilnecca, Champ** (medium) — ✅ Done — unlike the sightings
+  above, these are **real, spawnable creatures**, not flavor-text-only
+  glimpses: full `CreatureInfo`/`AnimalAnatomy`/`ProceduralAnimalSprite`
+  entries (`src/world/creature_info.gd`, `src/rendering/animal_anatomy.gd`,
+  `src/rendering/procedural_animal_sprite.gd`), same precedent shape as the
+  Germany-region world bosses (krampus/lindwurm/rubezahl/nyx) but explicitly
+  NOT at that roster's stat scale (Squallmaw is a strong ordinary apex
+  predator, above bear, below every Germany boss — the doc: "does nothing a
+  real creature doesn't already do"). All three are legless serpentine
+  bodies (`AnimalAnatomy.SERPENT_SPECIES`), procedurally rendered (no
+  illustrated art needed), and `/spawn`-able for testing the same way
+  krampus etc. already are (`ConsoleSpecies` gates purely on
+  `AnimalAnatomy.SPECIES`, so registering them there was the only wiring
+  needed). Squallmaw is aggressive (can fight, per the doc) but deliberately
+  NOT a world boss — no aggro-gate, ordinary creature behavior. Coilnecca is
+  calm, per the doc. Champ is a NEW `"skittish"` temperament value — the doc
+  is explicit it must not be a reskin of Coilnecca's calm despite the family
+  resemblance; `CreatureBehavior._will_fight` only special-cases the literal
+  string `"aggressive"`, so `"skittish"` already flees exactly like `"calm"`
+  does with zero behavior-module changes (pinned as a regression test in
+  `test_creature_behavior.gd`).
+  Real-world-coordinate spawning: `EasterEggCreatures`
+  (`src/gameplay/easter_egg_creatures.gd`) reuses the exact same reverse-geo
+  + radius + per-check-roll shape as `EasterEggSightings`, but a hit
+  returns the SPECIES ID to spawn rather than a message; wired into
+  `scenes/world.gd`'s per-frame update (`_check_easter_egg_creature_spawns`,
+  same `EASTER_EGG_CHECK_INTERVAL` cadence as the sightings) via
+  `CreatureRenderer.spawn_single` — the same API `/spawn` itself calls, so
+  a triggered cameo is a completely ordinary `CreatureMarker` once it
+  exists (no despawn timer, no special persistence; "fight, flee, be
+  tamed" is true by construction). Squallmaw's `chance_per_check` is tuned
+  far rarer than every other coordinate-triggered cameo in the project
+  (pinned by a relative property test against both this module's own
+  Coilnecca/Champ and `EasterEggSightings`' whole roster) — the doc's own
+  "wildly lower rate than even the rarest ordinary predator".
+  **Deliberate scope decisions, documented rather than silently
+  under-built:**
+  - Tied into a **live, real-time coordinate check + `spawn_single`**, NOT
+    into `EarthChunkManager`'s deterministic per-chunk population
+    promotion — a fundamentally different mechanism (a fixed population
+    computed once at chunk generation, keyed by biome) that a coordinate-
+    pinned rare cameo has no natural way to hook into without much larger
+    surgery on that system. Follow-up if ever wanted.
+  - Champ's "visible only from a real distance, dives immediately if the
+    player closes in" is approximated, not built exactly as described:
+    it spawns `EASTER_EGG_CREATURE_SPAWN_DISTANCE` (220px, a first-pass
+    placeholder) away from the player rather than on top of them, and then
+    uses the ordinary calm/skittish flee-when-threatened `CreatureMarker`
+    behavior everyone else uses (`SENSE_RADIUS`-gated) — there is no
+    per-species flee-detection-radius override in `CreatureMarker` today,
+    so Champ and Coilnecca currently flee at the exact same real distance
+    despite the doc wanting Champ to read as more easily spooked. A real
+    per-species radius hook is a follow-up, not built here.
+  - No de-duplication guard against multiple simultaneous spawns of the
+    same cameo (e.g. a player idling for a long session near Loch Ness) —
+    accepted as a low-risk simplification given how low each
+    `chance_per_check` is tuned, matching `EasterEggSightings`' own
+    "no persistent state" precedent rather than adding new session state.
+- **Remaining Starter Collection entries** (Joust-homage sea cave at the
+  Bermuda Triangle, WarGames console command, Zork terminal, Atari
+  Adventure secret room, Back to the Future Day, Monty Python's
+  Bridgekeeper, Rush ambient cue, D&D d20, the Kraken, the retro-handheld
+  creature-battler, "Three Fragments") (medium) — ⬜ Not started — ~11
+  concrete eggs still unimplemented. Two are real, playable original
+  mini-games rather than props/flavor text (the Joust-homage dueling-birds
+  cabinet and the handheld creature-battler starring this project's OWN
+  existing creature roster — zero new art needed, reuses
   `ProceduralAnimalSprite`/`IllustratedAnimalSprite` as-is) — meaningfully
   bigger implementation lifts than the rest of the list, flagged as such in
   the doc rather than under-scoped alongside the prop-only entries.

@@ -600,6 +600,96 @@ func test_gait_phase_is_a_no_op_for_legless_species():
 	)
 
 
+# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) ---------------
+#
+# Squallmaw (Bermuda Triangle), Coilnecca (Loch Ness), and Champ (Lake
+# Champlain) -- real, procedurally-generated serpentine creatures, no
+# illustrated art. Same "snake_shape" family the two existing snake species
+# already use (see AnimalAnatomy.SERPENT_SPECIES), each with its own color.
+
+const EASTER_EGG_CREATURE_SPECIES := ["squallmaw", "coilnecca", "champ"]
+
+
+func test_easter_egg_creatures_use_the_snake_shape_family():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		assert_eq(ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY.get(species, ""), "snake_shape", species)
+
+
+func test_easter_egg_creatures_generated_images_have_the_expected_size():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_eq(image.get_width(), ProceduralAnimalSprite.WIDTH, species)
+		assert_eq(image.get_height(), ProceduralAnimalSprite.HEIGHT, species)
+
+
+func test_easter_egg_creatures_generated_images_have_transparent_corners():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_eq(image.get_pixel(0, 0).a, 0.0, species)
+		assert_eq(image.get_pixel(ProceduralAnimalSprite.WIDTH - 1, ProceduralAnimalSprite.HEIGHT - 1).a, 0.0, species)
+
+
+func test_easter_egg_creatures_generated_images_have_a_substantial_opaque_body():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_gt(_opaque_count(image), 60, "%s should have a substantial body" % species)
+
+
+func test_easter_egg_creatures_generated_images_are_deterministic_per_seed():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var first: Image = generator.generate_image(species, 42)
+		var second: Image = generator.generate_image(species, 42)
+		assert_eq(_pixel_diff_count(first, second), 0, species)
+
+
+## Squallmaw not registered in SPECIES_BASE_COLORS would silently fall back
+## to the generic herbivore body/color -- a real regression risk given
+## generate_image's own `key = species if SPECIES_BASE_COLORS.has(species)
+## else "herbivore"` fallback.
+func test_easter_egg_creatures_do_not_fall_back_to_the_generic_herbivore_shape():
+	var herbivore: Image = generator.generate_image("herbivore", 5)
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 5)
+		assert_gt(
+			_opacity_diff_count(image, herbivore), 0,
+			"%s should have its own silhouette, not the generic herbivore's" % species
+		)
+
+
+func test_easter_egg_creatures_are_ringed_with_the_shared_dark_outline():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_true(_has_pixel(image, PixelPalette.OUTLINE), "%s should use the shared outline" % species)
+
+
+## Every easter-egg creature, and every existing species, must have a
+## visually distinct base color -- same discipline as
+## test_every_species_has_a_visually_distinct_base_color_from_every_other.
+func test_easter_egg_creatures_have_colors_distinct_from_every_existing_species():
+	var existing_species: Array = SPECIES + NEW_SPECIES + ["mouse", "venomous_snake", "nonvenomous_snake"]
+	for new_species in EASTER_EGG_CREATURE_SPECIES:
+		var new_color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[new_species]
+		for species in existing_species:
+			var color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[species]
+			assert_gt(
+				Vector3(new_color.r, new_color.g, new_color.b).distance_to(Vector3(color.r, color.g, color.b)),
+				0.02,
+				"%s vs %s should be visually distinguishable" % [new_species, species]
+			)
+
+
+func test_easter_egg_creatures_have_colors_distinct_from_each_other():
+	for i in EASTER_EGG_CREATURE_SPECIES.size():
+		for j in range(i + 1, EASTER_EGG_CREATURE_SPECIES.size()):
+			var a: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[EASTER_EGG_CREATURE_SPECIES[i]]
+			var b: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[EASTER_EGG_CREATURE_SPECIES[j]]
+			assert_gt(
+				Vector3(a.r, a.g, a.b).distance_to(Vector3(b.r, b.g, b.b)),
+				0.02,
+				"%s vs %s should be visually distinguishable" % [EASTER_EGG_CREATURE_SPECIES[i], EASTER_EGG_CREATURE_SPECIES[j]]
+			)
+
+
 ## The walking silhouette must still be a fully connected, outlined animal --
 ## a bent leg must not tear a hole in the body or leave the outline broken.
 func test_a_mid_stride_horse_is_still_a_solid_outlined_silhouette():

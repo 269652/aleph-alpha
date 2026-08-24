@@ -65,6 +65,13 @@ const SPECIES_BASE_COLORS := {
 	"lion": Color(0.78, 0.55, 0.15),
 	"nonvenomous_snake": Color(0.35, 0.42, 0.22),
 	"venomous_snake": Color(0.55, 0.22, 0.12),
+	# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) -----------
+	# Squallmaw: a stormy deep blue-green sea dragon. Coilnecca: a calm
+	# slate-green loch color. Champ: a murkier warm brown-grey lake color --
+	# distinct from Coilnecca despite the shared premise.
+	"squallmaw": Color(0.09, 0.28, 0.34),
+	"coilnecca": Color(0.24, 0.46, 0.40),
+	"champ": Color(0.36, 0.37, 0.28),
 }
 
 ## Maps every species name to one of the 4 hand-drawn silhouette families in
@@ -101,6 +108,12 @@ const SPECIES_SHAPE_FAMILY := {
 	"lion": "lynx_shape",
 	"nonvenomous_snake": "snake_shape",
 	"venomous_snake": "snake_shape",
+	# Easter-egg cameo creatures (docs/concept/easter_eggs.md) -- legless
+	# serpentine bodies, same family as the two snakes above (see
+	# AnimalAnatomy.SERPENT_SPECIES).
+	"squallmaw": "snake_shape",
+	"coilnecca": "snake_shape",
+	"champ": "snake_shape",
 }
 
 ## Jaguar (lynx-shaped) gets a scatter of dark rosette-like speckle dots so it

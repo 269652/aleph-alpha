@@ -68,6 +68,19 @@ const MAX_HEALTH_BY_SPECIES := {
 	"rubezahl": 110.0,
 	"nyx": 95.0,
 	"krampus": 120.0,
+	# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) -----------
+	# Debug/first-pass stats, same "hand-authored row" precedent as the
+	# Germany bosses just above -- but deliberately NOT at that roster's
+	# scale (95-140): the doc is explicit that Squallmaw "does nothing a
+	# real creature doesn't already do (fight, flee, be tamed)", an
+	# ordinary creature encounter, not a boss fight. Squallmaw reads as a
+	# strong apex predator (above bear, this roster's toughest ordinary
+	# predator at 50) without reaching world-boss stakes. Coilnecca and
+	# Champ are calm/skittish cameos, not combat encounters, so they sit at
+	# an ordinary-herbivore scale instead.
+	"squallmaw": 58.0,
+	"coilnecca": 24.0,
+	"champ": 21.0,
 }
 const MAX_STAMINA_BY_SPECIES := {
 	"herbivore": 30.0,
@@ -94,6 +107,11 @@ const MAX_STAMINA_BY_SPECIES := {
 	"rubezahl": 35.0,
 	"nyx": 30.0,
 	"krampus": 35.0,
+	# Squallmaw is a strong swimmer (high stamina); Coilnecca/Champ are
+	# unhurried lake dwellers, ordinary-herbivore-scale.
+	"squallmaw": 32.0,
+	"coilnecca": 26.0,
+	"champ": 26.0,
 }
 const MAX_MANA_BY_SPECIES := {
 	"herbivore": 5.0,
@@ -120,6 +138,9 @@ const MAX_MANA_BY_SPECIES := {
 	"rubezahl": 10.0,
 	"nyx": 10.0,
 	"krampus": 10.0,
+	"squallmaw": 10.0,
+	"coilnecca": 5.0,
+	"champ": 5.0,
 }
 const DIET_BY_SPECIES := {
 	"herbivore": "Grazer",
@@ -146,6 +167,9 @@ const DIET_BY_SPECIES := {
 	"rubezahl": "Apex Hunter",
 	"nyx": "Apex Hunter",
 	"krampus": "Apex Hunter",
+	"squallmaw": "Apex Hunter",
+	"coilnecca": "Forager",
+	"champ": "Forager",
 }
 ## Herbivores are calm (always flee threats); boars/predators/lynx are
 ## aggressive (fight when strong, flee when weak). See CreatureBehavior for
@@ -178,6 +202,27 @@ const TEMPERAMENT_BY_SPECIES := {
 	"rubezahl": "aggressive",
 	"nyx": "aggressive",
 	"krampus": "aggressive",
+	# Squallmaw is furious-looking and can fight (docs/concept/
+	# easter_eggs.md: "does nothing a real creature doesn't already do
+	# (fight, flee, be tamed)") -- an ordinary aggressive predator, not a
+	# world boss (see WORLD_BOSS_SPECIES below, which it deliberately does
+	# not join). Coilnecca is explicitly calm ("Deliberately calm-
+	# temperament (not aggressive like the mythology roster's kelpie)").
+	# Champ is deliberately "skittish rather than placid" in the doc's own
+	# words -- NOT a reskin of Coilnecca's calm despite the family
+	# resemblance. "skittish" is a new temperament value: CreatureBehavior
+	# only special-cases "aggressive" (see _will_fight), so anything else,
+	# including this new label, already flees exactly like "calm" does --
+	# see test_creature_behavior.gd's regression test for that. The
+	# distinct label exists so Champ never reads as a mechanical duplicate
+	# of Coilnecca, even though both currently behave the same way in
+	# CreatureBehavior (a real per-species flee-detection-radius
+	# difference, matching the doc's "visible only from a real distance"
+	# flavor more precisely, is a documented follow-up -- see
+	# docs/progress.md).
+	"squallmaw": "aggressive",
+	"coilnecca": "calm",
+	"champ": "skittish",
 }
 ## Only true predators (hunt herbivores/boars for food) go here -- a boar is
 ## aggressive but not a predator (see TEMPERAMENT_BY_SPECIES doc above).
@@ -198,6 +243,7 @@ const PREDATOR_SPECIES := {
 	"rubezahl": true,
 	"nyx": true,
 	"krampus": true,
+	"squallmaw": true,
 }
 
 ## Gates the aggro-provocation rule (docs/concept/worldbosses.md, see

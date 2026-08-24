@@ -301,3 +301,80 @@ func test_ordinary_species_are_not_world_bosses():
 func test_a_fresh_creature_always_starts_unaggroed():
 	assert_false(CreatureInfo.new("krampus").is_aggroed)
 	assert_false(CreatureInfo.new("herbivore").is_aggroed)
+
+
+# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) ---------------
+#
+# Squallmaw (Bermuda Triangle), Coilnecca (Loch Ness), and Champ (Lake
+# Champlain) -- real, spawnable creatures, not the flavor-text-only
+# sightings in easter_egg_sightings.gd. Debug/first-pass stats, same
+# "hand-authored table row, not a violation of the no-eyeballed-thresholds
+# rule" precedent as GERMANY_BOSS_SPECIES just above -- but deliberately
+# NOT at that roster's aggressive-tier stat scale (doc: Squallmaw "does
+# nothing a real creature doesn't already do", not a boss encounter).
+const EASTER_EGG_CREATURE_SPECIES := ["squallmaw", "coilnecca", "champ"]
+
+
+func test_every_easter_egg_creature_has_positive_health_stamina_and_mana_and_a_known_diet():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var info := CreatureInfo.new(species)
+		assert_gt(info.max_health, 0.0, species)
+		assert_gt(info.max_stamina, 0.0, species)
+		assert_gt(info.max_mana, 0.0, species)
+		assert_ne(info.diet, "Unknown", species)
+
+
+## Squallmaw is described as furious-looking and able to fight -- aggressive
+## temperament -- but explicitly NOT a world boss (doc: "does nothing a real
+## creature doesn't already do (fight, flee, be tamed)" -- ordinary creature
+## behavior, no aggro-gate mechanic).
+func test_squallmaw_is_an_aggressive_predator_but_not_a_world_boss():
+	var info := CreatureInfo.new("squallmaw")
+	assert_eq(info.temperament, "aggressive")
+	assert_true(info.is_predator)
+	assert_false(info.is_world_boss)
+
+
+## Explicitly not boss-tier: Squallmaw should read as a strong ordinary
+## predator, not a Germany-region world boss.
+func test_squallmaw_has_less_health_than_every_germany_world_boss():
+	var squallmaw_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["squallmaw"]
+	for species in GERMANY_BOSS_SPECIES:
+		assert_lt(
+			squallmaw_health, CreatureInfo.MAX_HEALTH_BY_SPECIES[species],
+			"squallmaw should be tougher than an ordinary predator but not boss-tier"
+		)
+
+
+## Doc: "calm-temperament lake serpent cameo".
+func test_coilnecca_is_a_calm_creature_that_is_not_a_predator():
+	var info := CreatureInfo.new("coilnecca")
+	assert_eq(info.temperament, "calm")
+	assert_false(info.is_predator)
+	assert_false(info.is_world_boss)
+
+
+## Doc: Champ is deliberately "skittish rather than placid" -- NOT a reskin
+## of Coilnecca's calm temperament, despite the obvious family resemblance.
+## "skittish" flees exactly like "calm" does in CreatureBehavior (only
+## "aggressive" is special-cased there -- see test_creature_behavior.gd's
+## own regression test for that), but is a distinct label so Champ never
+## reads as mechanically identical to Coilnecca.
+func test_champ_is_skittish_not_calm_and_is_not_a_predator():
+	var info := CreatureInfo.new("champ")
+	assert_eq(info.temperament, "skittish")
+	assert_ne(info.temperament, "calm")
+	assert_false(info.is_predator)
+	assert_false(info.is_world_boss)
+
+
+## The doc is explicit that Coilnecca and Champ must not be reskins of each
+## other or of Squallmaw -- pinned as distinct stat rows, not just distinct
+## flavor text.
+func test_the_three_easter_egg_creatures_have_distinct_temperaments_or_stats():
+	var squallmaw := CreatureInfo.new("squallmaw")
+	var coilnecca := CreatureInfo.new("coilnecca")
+	var champ := CreatureInfo.new("champ")
+	assert_ne(squallmaw.temperament, coilnecca.temperament)
+	assert_ne(coilnecca.temperament, champ.temperament)
+	assert_ne(coilnecca.max_health, champ.max_health, "Champ should not be a bare stat reskin of Coilnecca")

@@ -7,6 +7,7 @@ const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
 const ConsoleSpecies = preload("res://src/gameplay/console_species.gd")
 const EasterEggSightings = preload("res://src/gameplay/easter_egg_sightings.gd")
+const EasterEggCreatures = preload("res://src/gameplay/easter_egg_creatures.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
@@ -81,6 +82,16 @@ const EASTER_EGG_CHECK_INTERVAL := 4.0
 const EASTER_EGG_MESSAGE_DURATION := 6.0
 var _easter_egg_check_accumulator := 0.0
 var _easter_egg_message_timer := 0.0
+
+## How far (px) a triggered creature cameo (Squallmaw/Coilnecca/Champ, see
+## EasterEggCreatures) spawns from the player, rather than on top of them --
+## first-pass placeholder, same discipline as EASTER_EGG_CHECK_INTERVAL:
+## outside melee/interaction range (see CREATURE_PANELS_RADIUS, 220.0 --
+## "wider than melee range, meant to cover what's visibly on screen") so it
+## reads as spotted at a distance rather than materializing at the player's
+## feet, closer than SENSE_RADIUS's release range so it can still be walked
+## toward and reacted to like an ordinary creature.
+const EASTER_EGG_CREATURE_SPAWN_DISTANCE := 220.0
 
 ## Real seconds between player-state autosaves (see docs/concept/
 ## persistence.md) -- mirrors the world's own "persist eagerly, not on an
@@ -193,6 +204,7 @@ var _scar_refresh_accumulator := 0.0
 var _geo_coordinates := GeoCoordinates.new()
 var _solar_position := SolarPosition.new()
 var _easter_egg_sightings := EasterEggSightings.new()
+var _easter_egg_creatures := EasterEggCreatures.new()
 var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
@@ -1121,6 +1133,32 @@ func _check_easter_egg_sightings(player_tile: Vector2i, is_night: bool) -> void:
 			_easter_egg_label.text = message
 			_easter_egg_label.visible = true
 			_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
+			return
+
+
+## Squallmaw/Coilnecca/Champ (docs/concept/easter_eggs.md) -- unlike
+## _check_easter_egg_sightings above, a hit here is a REAL creature: rolls
+## each registered id against the player's current tile via
+## EasterEggCreatures (same reverse-geo + radius + per-check-roll shape as
+## the sightings above), and on a hit, spawns that species a short distance
+## from the player with CreatureRenderer.spawn_single -- the exact same API
+## the debug /spawn command uses (see _handle_spawn_command). Once spawned
+## it's an ordinary CreatureMarker: no despawn timer, no special
+## persistence, so "fight, flee, be tamed" is true by construction, same as
+## every other creature in the world.
+func _check_easter_egg_creature_spawns(player_tile: Vector2i, local_player: Player) -> void:
+	if local_player == null:
+		return
+	for id in _easter_egg_creatures.sighting_ids():
+		var species := _easter_egg_creatures.check_one(
+			id, player_tile.x, player_tile.y,
+			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES, randf()
+		)
+		if species != "":
+			var offset := Vector2.RIGHT.rotated(randf() * TAU) * EASTER_EGG_CREATURE_SPAWN_DISTANCE
+			_creature_renderer.spawn_single(
+				_creatures, species, local_player.position + offset, _chunk_manager, TerrainRenderer.TILE_SIZE
+			)
 			return
 
 
@@ -2817,6 +2855,11 @@ func _client_process(delta: float) -> void:
 	if _easter_egg_check_accumulator >= EASTER_EGG_CHECK_INTERVAL:
 		_easter_egg_check_accumulator = 0.0
 		_check_easter_egg_sightings(player_tile, elevation <= 0.0)
+		# Squallmaw/Coilnecca/Champ -- real, rare, spawnable cameos, checked
+		# on the same cadence/roll as the flavor-text-only sightings above
+		# (see EasterEggCreatures' own doc comment for why this is a
+		# separate module rather than folded into EasterEggSightings).
+		_check_easter_egg_creature_spawns(player_tile, local_player)
 	_update_easter_egg_label(delta)
 	# Real sun compass bearing, for hillshading (see HillshadeShader,
 	# docs/concept/terrain_relief.md) -- same real inputs as elevation just

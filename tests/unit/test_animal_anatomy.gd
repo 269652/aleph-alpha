@@ -198,3 +198,70 @@ func test_every_germany_boss_is_larger_than_a_bear():
 	var bear: float = AnimalAnatomy.profile_for("bear").world_scale
 	for species in GERMANY_BOSS_SPECIES:
 		assert_gt(AnimalAnatomy.profile_for(species).world_scale, bear, species)
+
+
+# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) ---------------
+#
+# Squallmaw (Bermuda Triangle), Coilnecca (Loch Ness), and Champ (Lake
+# Champlain) -- real, procedurally-generated serpentine creatures (see
+# ProceduralAnimalSprite), not illustrated art. All three are legless (see
+# AnimalAnatomy.SERPENT_SPECIES), the same body plan family as the two
+# snake profiles and the Germany bosses' lindwurm/nyx, adapted per species.
+
+const EASTER_EGG_CREATURE_SPECIES := ["squallmaw", "coilnecca", "champ"]
+
+
+func test_every_easter_egg_creature_has_a_profile():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		assert_true(AnimalAnatomy.has_profile(species), species)
+
+
+## Legless serpentine bodies -- the doc calls Squallmaw "long, serpentine"
+## and both lake serpents share that same premise (see SERPENT_SPECIES's
+## whole-body-slither animation override).
+func test_every_easter_egg_creature_is_legless():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		assert_almost_eq(AnimalAnatomy.profile_for(species).leg_length, 0.0, 0.001, species)
+		assert_true(AnimalAnatomy.SERPENT_SPECIES.has(species), "%s should be a registered serpent species" % species)
+
+
+## Doc: Squallmaw has "a white, mane-like fin crest" -- Coilnecca/Champ do
+## not. A real, testable distinction rather than just flavor text, and part
+## of what keeps Squallmaw from reading as a reskin of the lake serpents.
+func test_only_squallmaw_has_a_mane_like_fin_crest():
+	assert_true(AnimalAnatomy.profile_for("squallmaw").has_mane)
+	assert_false(AnimalAnatomy.profile_for("coilnecca").has_mane)
+	assert_false(AnimalAnatomy.profile_for("champ").has_mane)
+
+
+## Doc: Coilnecca and Champ are "long-necked" lake serpents (a Loch-Ness-
+## style silhouette) -- Squallmaw is a low, horizontal sea serpent instead,
+## the same low neck carriage as lindwurm.
+func test_coilnecca_and_champ_carry_their_necks_upright_unlike_squallmaw():
+	assert_eq(AnimalAnatomy.profile_for("coilnecca").neck_carriage, AnimalAnatomy.NECK_UPRIGHT)
+	assert_eq(AnimalAnatomy.profile_for("champ").neck_carriage, AnimalAnatomy.NECK_UPRIGHT)
+	assert_ne(AnimalAnatomy.profile_for("squallmaw").neck_carriage, AnimalAnatomy.NECK_UPRIGHT)
+
+
+## Doc: Squallmaw should read as a strong apex predator -- bigger than an
+## ordinary bear (this roster's largest non-boss species) -- but explicitly
+## not boss stature (see test_creature_info.gd's matching stats test).
+func test_squallmaw_is_larger_than_a_bear_but_smaller_than_every_germany_boss():
+	var bear: float = AnimalAnatomy.profile_for("bear").world_scale
+	var squallmaw: float = AnimalAnatomy.profile_for("squallmaw").world_scale
+	assert_gt(squallmaw, bear)
+	for species in GERMANY_BOSS_SPECIES:
+		assert_lt(squallmaw, AnimalAnatomy.profile_for(species).world_scale, species)
+
+
+## Explicitly NOT a reskin of each other -- the doc is emphatic that
+## Coilnecca and Champ must read as distinct individuals despite the
+## obvious family resemblance in premise.
+func test_coilnecca_and_champ_do_not_share_a_body_plan():
+	assert_ne(AnimalAnatomy.profile_for("coilnecca"), AnimalAnatomy.profile_for("champ"))
+
+
+func test_no_easter_egg_creature_shares_a_body_plan_with_squallmaw():
+	var squallmaw := AnimalAnatomy.profile_for("squallmaw")
+	assert_ne(squallmaw, AnimalAnatomy.profile_for("coilnecca"))
+	assert_ne(squallmaw, AnimalAnatomy.profile_for("champ"))

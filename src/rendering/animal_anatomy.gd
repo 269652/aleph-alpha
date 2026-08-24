@@ -49,13 +49,16 @@ const SPECIES := [
 	"mouse",
 	"venomous_snake", "nonvenomous_snake",
 	"lindwurm", "rubezahl", "nyx", "krampus",
+	"squallmaw", "coilnecca", "champ",
 ]
 
 ## Legless species (see the "serpents" profiles below): zero leg_length, so
 ## ProceduralAnimalAnimation's generic leg-shift walk cycle has nothing to
 ## move and must give these a whole-body slither instead (see
 ## SERPENT_SPECIES's use in procedural_animal_animation.gd).
-const SERPENT_SPECIES: Array[String] = ["venomous_snake", "nonvenomous_snake"]
+const SERPENT_SPECIES: Array[String] = [
+	"venomous_snake", "nonvenomous_snake", "squallmaw", "coilnecca", "champ"
+]
 
 
 ## The proportions for `species`, or a safe generic build for an unknown
@@ -365,6 +368,61 @@ const _PROFILES := {
 		"leg_length": 0.34, "leg_thickness": 0.07,
 		"tail": TAIL_THIN, "tail_length": 0.14,
 		"headgear": HEADGEAR_HORNS, "has_mane": false,
+	},
+
+	# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) -----------
+	# Real, procedurally-generated serpentine creatures (ProceduralAnimalSprite
+	# -- no illustrated art, unlike the Germany bosses just above), so every
+	# proportion here actually draws on screen, not just during a rare "eat"
+	# fallback.
+	#
+	# Squallmaw: "a long, serpentine, furious-looking sea-dragon with a
+	# white, mane-like fin crest" -- a scaled-up, low-slung horizontal body
+	# plan adapted from lindwurm's legless dragon silhouette (NECK_LEVEL,
+	# low body_y), with has_mane true for the fin crest. Strong-apex-
+	# predator sized (world_scale above bear's 1.5, the roster's largest
+	# ordinary species) but explicitly below every Germany world boss's
+	# scale (1.9-2.4) -- see test_squallmaw_is_larger_than_a_bear_but_
+	# smaller_than_every_germany_boss.
+	"squallmaw": {
+		"barrel_squareness": 0.3,
+		"world_scale": 1.7,
+		"body_length": 0.58, "body_height": 0.15, "body_y": 0.58, "shoulder_hump": 0.0,
+		"neck_length": 0.10, "neck_thickness": 0.11, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.18, "head_height": 0.12, "muzzle": 0.6, "ear_size": 0.0,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.38,
+		"headgear": HEADGEAR_NONE, "has_mane": true,
+	},
+	# Coilnecca: "gentle, long-necked, placid lake serpent" -- a compact
+	# body (mostly submerged; only the neck reads above the waterline) with
+	# a long upright neck, the opposite carriage from Squallmaw's low sea-
+	# serpent build. No mane, no headgear -- Squallmaw's fin crest is
+	# deliberately its own, not shared (see test_only_squallmaw_has_a_
+	# mane_like_fin_crest).
+	"coilnecca": {
+		"barrel_squareness": 0.3,
+		"world_scale": 1.1,
+		"body_length": 0.34, "body_height": 0.17, "body_y": 0.58, "shoulder_hump": 0.0,
+		"neck_length": 0.24, "neck_thickness": 0.09, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.14, "head_height": 0.10, "muzzle": 0.4, "ear_size": 0.0,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.20,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+	# Champ: doc-explicit "family resemblance" to Coilnecca (same long-
+	# necked lake-serpent premise, same upright carriage) but deliberately
+	# NOT identical proportions -- a leaner, slightly smaller build (a
+	# shyer, less substantial-looking animal) rather than a bare recolor.
+	"champ": {
+		"barrel_squareness": 0.25,
+		"world_scale": 0.95,
+		"body_length": 0.30, "body_height": 0.14, "body_y": 0.58, "shoulder_hump": 0.0,
+		"neck_length": 0.20, "neck_thickness": 0.075, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.12, "head_height": 0.085, "muzzle": 0.4, "ear_size": 0.0,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.24,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 
 	# -- the small exception ------------------------------------------------

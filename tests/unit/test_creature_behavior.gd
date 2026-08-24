@@ -205,6 +205,34 @@ func test_aggroed_world_boss_still_flees_if_weak_like_any_other_creature():
 	assert_eq(decision.intent, "flee")
 
 
+# -- "skittish" temperament (docs/concept/easter_eggs.md's Champ) -----------
+#
+# Champ is deliberately "skittish, NOT calm" (distinct from Coilnecca's
+# placid "calm") in CreatureInfo, but _will_fight only special-cases the
+# literal string "aggressive" -- so any other temperament value, including
+# this new one, must already flee a threat exactly like "calm" does,
+# regardless of health. Pinned here as a real regression test rather than
+# an assumption: introducing a brand-new temperament string is exactly the
+# kind of change that could silently break if this file ever grew a
+# temperament allow-list.
+
+
+func test_skittish_creature_flees_a_nearby_threat_just_like_calm():
+	var decision := behavior.decide(_context({
+		"position": Vector2.ZERO, "temperament": "skittish", "threats": [Vector2(10, 0)]
+	}))
+	assert_eq(decision.intent, "flee")
+	assert_lt(decision.direction.x, 0.0)
+
+
+func test_skittish_creature_never_fights_even_at_full_health():
+	var decision := behavior.decide(_context({
+		"position": Vector2.ZERO, "temperament": "skittish", "health_fraction": 1.0,
+		"threats": [Vector2(10, 0)]
+	}))
+	assert_ne(decision.intent, "attack")
+
+
 func test_unaggroed_world_boss_still_seeks_food_and_water_normally():
 	# Ignoring the player as a threat must not make it ignore everything --
 	# ordinary needs still drive it exactly like any other creature.
