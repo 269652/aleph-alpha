@@ -40,6 +40,15 @@ const GRIP_OFFSET_Y := 4.0
 ## yet to make a bigger motion read as a real stride rather than a wobble
 ## (reported: "the legs aren't animated" -- see _apply_legs/_process).
 const FUSED_LEG_BOB_AMPLITUDE := 1.2
+## An interim stride cue for the fused pair (reported live: real per-leg
+## knee-jointed animation) -- the fused drawing can't split into two
+## independently-swinging legs at all without new source art (see
+## docs/concept/character_art_brief.md's "Four bugs" section), so this is
+## the closest a whole-pair transform alone can get: a small hip-pivot
+## rock, in RADIANS, on top of the existing vertical bob. Small on purpose
+## -- this is a coarse stand-in for a real stride, not meant to read as
+## exaggerated swagger.
+const FUSED_LEG_ROCK_AMPLITUDE := 0.12
 
 ## Bumped from the original 10x14/8x8 (see the character sprite engine's
 ## hero head/tunic detail -- hairstyles, brows, eyes, belt/collar trim): at
@@ -248,8 +257,8 @@ func _ready() -> void:
 	else:
 		apply_appearance(_pending_appearance)
 
-	# Arms stay visible from the start now (see _process's own comment) --
-	# only the equipment slots default to hidden until something's equipped.
+	_arm_left.visible = false
+	_arm_right.visible = false
 	_head_slot.visible = false
 	_tool_slot.visible = false
 
@@ -303,6 +312,10 @@ func _process(delta: float) -> void:
 		# pair is walking" without needing per-leg frames.
 		var bob := absf(sin(_cycle_time)) * FUSED_LEG_BOB_AMPLITUDE if movement_state == MovementState.WALKING else 0.0
 		_leg_left.position = _leg_fused_rest_position + Vector2(0, -bob)
+		# sin, not the bob's absf(sin) -- a stride leans one way then the
+		# other over a whole cycle, not twice per cycle the way footfalls
+		# (and the bob above) land.
+		_leg_left.rotation = sin(_cycle_time) * FUSED_LEG_ROCK_AMPLITUDE if movement_state == MovementState.WALKING else 0.0
 	else:
 		_leg_left.position = _leg_left_base_position + Vector2(0, leg_swing_offset)
 		_leg_right.position = _leg_right_base_position + Vector2(0, -leg_swing_offset)
@@ -731,12 +744,6 @@ func legs_visible() -> bool:
 ## only) rather than two independent sprites -- see _apply_legs.
 func legs_are_fused() -> bool:
 	return _legs_are_fused
-
-
-## Arms used to only ever be shown while swimming -- see _process's own
-## comment. Exposed the same way legs_visible() already is.
-func arms_visible() -> bool:
-	return _arm_left.visible
 
 
 func equip_slot(slot_name: String, color: Color) -> void:

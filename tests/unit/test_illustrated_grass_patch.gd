@@ -68,6 +68,35 @@ func test_card_offsets_stay_within_the_tiles_own_bounds():
 			assert_lte(absf(offset.y), IllustratedGrassPatch.WORLD_SIZE * 0.5)
 
 
+## Reported live (with real screenshots): "the player's head is behind the
+## long grass blades when the feet already are past it... there are none
+## [higher than the player]." band_anchor_world_y (see its own doc comment)
+## fixed the coarse per-BAND case but a single MultiMeshInstance2D draw call
+## can only Y-sort as ONE unit -- a blade whose own root the player has
+## genuinely walked past can still sit in the SAME still-ahead band as
+## others that legitimately haven't been reached yet, and the whole band
+## draws together. True per-blade precision needs a per-PIXEL decision, not
+## a coarser per-draw-call one -- the fragment shader already computes
+## `from_walker` (this blade's own root minus the live player position) and
+## `distance_to_walker` for the existing parting/push effect, so this reuses
+## them rather than adding new uniforms: any blade whose root sits behind
+## the player (from_walker.y <= 0) fades to fully transparent as the player
+## gets close enough to plausibly stand in front of it, using the SAME
+## walker_radius already established for the push effect rather than a
+## fresh tuned constant. A per-pixel alpha decision works regardless of
+## which draw call/band the blade's macro Y-sort put it in.
+func test_shader_hides_a_blade_whose_root_the_player_has_already_walked_past():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	assert_string_contains(code, "from_walker.y")
+	assert_string_contains(code, "occlusion_fade")
+	assert_string_contains(code, "COLOR.a *= occlusion_fade")
+	# The fade line itself must reuse walker_radius, not a fresh constant.
+	var fade_line_start := code.find("float occlusion_fade")
+	assert_gte(fade_line_start, 0, "occlusion_fade must be computed somewhere in the shader")
+	var fade_line := code.substr(fade_line_start, code.find(";", fade_line_start) - fade_line_start)
+	assert_string_contains(fade_line, "walker_radius")
+
+
 func test_shader_bends_each_pixel_row_along_a_curved_per_blade_path():
 	# A per-vertex shear can only ever move a quad's 4 corners, which linearly
 	# interpolates into a flat parallelogram - every blade drawn on the card
@@ -271,6 +300,47 @@ func test_band_anchor_world_y_orders_the_same_as_band_index():
 		var anchor_y := IllustratedGrassPatch.band_anchor_world_y(band, 0, chunk_size, 16.0)
 		assert_gt(anchor_y, previous)
 		previous = anchor_y
+
+
+## Reported live: "the player's head is behind the long grass blades when
+## the feet already are past it" -- a single MultiMeshInstance2D draw call
+## can only Y-sort as ONE unit against the player (see BAND_COUNT's own doc
+## comment), using this anchor as that unit's sort key. A CENTER anchor
+## means every row in the LOWER half of a band sits below (a larger world Y
+## than) the anchor -- so a player standing on one of those rows, having
+## already walked past every blade in the band's upper half, still sees the
+## WHOLE band (including blades whose own root the player is already past)
+## Y-sort in front of them, since the comparison uses the band's midpoint,
+## not any individual blade's real position. A blade card is exactly
+## WORLD_SIZE (one tile) tall (see `mesh()`), so this isn't a sub-pixel
+## rounding error -- a mid-band player can end up visibly behind a blade
+## whose root is a full tile or more BEHIND their own feet, and since the
+## card renders upward from its root, that reads exactly as "my head is
+## behind grass my feet have already passed."
+##
+## The anchor must instead sit at the band's own BOTTOM edge (its largest
+## row's world Y, not its midpoint): an entity standing anywhere within or
+## above the band then always sorts BEHIND the whole band (grass draws in
+## front while you're walking through it -- normal, expected concealment,
+## see docs/concept/combat.md's vegetation-concealment pillar), and only
+## pops in front of the entire band once genuinely past its very last row.
+## That trades "occasionally covered a beat longer than a single blade's
+## own root would justify" for "never shows a body part behind grass it has
+## unambiguously already passed" -- the same choice BAND_COUNT's own doc
+## comment already argues for ("the whole field flickering... is what
+## actually reads as broken").
+func test_band_anchor_world_y_is_never_smaller_than_any_row_actually_in_that_band():
+	var chunk_size := 32
+	var chunk_origin_y := 96  # nonzero, so this doesn't accidentally pass via origin canceling out
+	var tile_size := 16.0
+	for local_y in range(chunk_size):
+		var band := IllustratedGrassPatch.band_index_for_local_y(local_y, chunk_size)
+		var anchor_y := IllustratedGrassPatch.band_anchor_world_y(band, chunk_origin_y, chunk_size, tile_size)
+		var row_world_y := float(chunk_origin_y + local_y) * tile_size
+		assert_gte(
+			anchor_y, row_world_y,
+			"row %d (band %d)'s own world Y must never exceed its band's anchor, or a player standing on it would wrongly Y-sort in front of blades from earlier rows in the same band" % [local_y, band]
+		)
 
 
 func test_instances_for_cells_produces_one_instance_per_card_across_all_given_cells():

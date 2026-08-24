@@ -282,3 +282,22 @@ func test_every_germany_boss_has_more_base_health_than_a_bear():
 	var bear_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["bear"]
 	for species in GERMANY_BOSS_SPECIES:
 		assert_gt(CreatureInfo.MAX_HEALTH_BY_SPECIES[species], bear_health, species)
+
+
+## is_world_boss gates the aggro-provocation rule (see BossAggro,
+## CreatureBehavior._perceives_threats): a boss should not proactively
+## attack a low-level player, and shouldn't even flee one, until a real hit
+## lands. is_aggroed is the per-individual state that flips that on.
+func test_germany_bosses_are_flagged_as_world_bosses():
+	for species in GERMANY_BOSS_SPECIES:
+		assert_true(CreatureInfo.new(species).is_world_boss, species)
+
+
+func test_ordinary_species_are_not_world_bosses():
+	assert_false(CreatureInfo.new("bear").is_world_boss)
+	assert_false(CreatureInfo.new("herbivore").is_world_boss)
+
+
+func test_a_fresh_creature_always_starts_unaggroed():
+	assert_false(CreatureInfo.new("krampus").is_aggroed)
+	assert_false(CreatureInfo.new("herbivore").is_aggroed)

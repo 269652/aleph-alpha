@@ -6,34 +6,21 @@ extends PanelContainer
 ## Join / Quit), character creation (New Game + Host both route through it),
 ## and a join screen (IP entry).
 ##
-## The creation screen is a real character creator, tabbed between
-## **Character** and **Skills** (see _build_character_tab/_build_skills_tab).
-## The Character tab is a hero showcase: class icon cards (each a genuine
-## mini rendering of that class's own look, not a placeholder glyph) sit
-## above a DNA-rarity glow ring wrapping a live animated preview -- the
-## character actually walking through grass, swinging its sword, and
-## picking up/throwing a pebble (see CharacterPreviewStage), not a static
-## pose -- with class name/blurb/stats and a DNA readout underneath, and an
-## appearance column cycling six customization axes (skin, hair color, hair
-## style, beard, eyes, accent/trim color -- see HeroAppearance.AXES) on the
-## right. The Skills tab previews the shared SkillTree node pool, live-
-## highlighting whichever nodes synergize with the currently-picked class.
-## Purely glue -- World owns actually spawning the player, starting ENet, and
-## applying the chosen class's stat lens (ClassArchetype); HeroAppearance/
-## ProceduralCharacterSprite/CharacterPreviewStage/SkillTree own the look and
-## the underlying data.
+## The creation screen is a real character creator: pick a class on the left,
+## cycle five appearance axes on the right (skin, hair color, hair style,
+## beard, eyes -- see HeroAppearance.AXES), and watch a live full-body
+## portrait update in the middle. Purely glue -- World owns actually spawning
+## the player, starting ENet, and applying the chosen class's stat lens
+## (ClassArchetype); HeroAppearance/ProceduralCharacterSprite own the look.
 
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
+const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
+const CharacterPreviewDioramaScript = preload("res://src/rendering/character_preview_diorama.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const HeroDna = preload("res://src/gameplay/hero_dna.gd")
-## Still needed for the class icon row's mini portraits (_build_class_icon_row)
-## even though the main preview itself moved to CharacterPreviewStage below.
-const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const SkillTree = preload("res://src/gameplay/skill_tree.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
-const CharacterPreviewStageScene = preload("res://scenes/character_preview_stage.tscn")
-const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 ## Shared look, reusing UiTheme's palette (the same dark/rounded/gold-accent
 ## theme World assigns to every other menu/window -- see World._ui_theme) so
@@ -76,15 +63,21 @@ const AXIS_LABELS := {
 	"head": "Face",
 }
 
-## The live preview's on-screen footprint -- close to the old static
-## portrait's (PORTRAIT_SIZE(26,40) * the old PORTRAIT_SCALE(5) == (130,200))
-## so swapping it in doesn't reflow the rest of the creator's layout.
-const PREVIEW_SIZE := Vector2(150, 200)
-## Renders the stage at a fraction of PREVIEW_SIZE and scales the result up
-## (nearest-neighbour, via the container's own texture_filter below) --
-## keeps the same crisp, chunky pixel-art look the old 5x-scaled portrait
-## had, rather than a smoothly-antialiased render.
-const PREVIEW_STRETCH_SHRINK := 2
+## Replaced the static portrait's fixed aspect (ProceduralCharacterSprite
+## .PORTRAIT_SIZE * PORTRAIT_SCALE, a tall 130x200 headshot strip) with a
+## square live-diorama view (asked directly: "a real mini in game scene
+## with swaying grass blades; some pebbles the edge of a pond and some
+## trees where the char should stroll around" -- see docs/concept/
+## character_creator_preview_scene.md). Screen pixels, not world units --
+## the SubViewport underneath renders at exactly this resolution (no
+## up/downscale, so no nearest-neighbour filtering trick is needed the way
+## the old portrait's manual TextureRect scaling required one).
+## Bumped 220 -> 280 (reported live, alongside the containment bug above:
+## "too small") -- the footprint (CharacterPreviewDioramaScript.FOOTPRINT)
+## stays the same world-unit size, so this only changes the camera's own
+## zoom (DIORAMA_VIEW_SIZE.x / footprint.x, see _build_diorama_view) --
+## the same little scene renders bigger, not a different/larger one.
+const DIORAMA_VIEW_SIZE := Vector2i(280, 280)
 
 ## Widened/heightened for the tabbed creator (Character + Skills, see
 ## _build_create_screen) -- the old 760x520 already fit its 3-column layout
@@ -117,9 +110,6 @@ var reroll_save_path := "user://hero_dna_rerolls.bin"
 
 var _archetypes := ClassArchetype.new()
 var _appearance_maker := HeroAppearance.new()
-var _item_sprite_generator := ProceduralItemSprite.new()
-## Only for the class icon row's mini portraits now (_build_class_icon_row) --
-## the main preview moved to CharacterPreviewStage (see _preview_stage).
 var _char_sprite := ProceduralCharacterSprite.new()
 var _player_save := PlayerSave.new()
 var _dna := HeroDna.new()
@@ -159,10 +149,16 @@ var _resonance_badges: Dictionary = {}
 ## Cached per-class mini portraits for the icon row -- generated once each
 ## (that class's own default look, seed 0), never per-frame.
 var _class_icon_textures: Dictionary = {}
-## The live animated preview (see CharacterPreviewStage) shown inside the
-## glow ring below -- replaces what used to be a static _portrait TextureRect.
-var _preview_stage: CharacterPreviewStage
-## The glow ring behind the preview, repainted to the rolled DNA's rarity
+## The live diorama's own root node (see CharacterPreviewDiorama) --
+## rebuilt (CharacterPreviewDioramaScript.build) only when the DNA seed
+## itself changes (a reroll), so cycling an appearance axis redresses the
+## SAME strolling hero rather than resetting the little scene under it.
+var _diorama: Node2D
+## Which DNA seed _diorama's world layout was last built for -- -1 so the
+## very first _refresh_appearance always builds once, regardless of
+## whatever _dna_seed's own default happens to be.
+var _diorama_built_for_seed := -1
+## The glow ring behind the portrait, repainted to the rolled DNA's rarity
 ## color (see _refresh_dna) -- the "DNA moment" made visible, not just read.
 var _dna_glow: PanelContainer
 var _dna_glow_tween: Tween
@@ -336,13 +332,9 @@ func _build_character_tab() -> Control:
 	return cols
 
 
-## The showcase card: class-icon strip -> glowing live preview -> class name/
+## The showcase card: class-icon strip -> glowing portrait -> class name/
 ## blurb/stats -> DNA readout -> Reroll button, all one continuous story
-## about the character being built, top to bottom. The preview itself is a
-## real CharacterPreviewStage (walking through grass, swinging its sword,
-## picking up/throwing a pebble -- see its own doc comment) rendered into a
-## SubViewport rather than a static portrait image, so the creator actually
-## shows off the character instead of just a pose.
+## about the character being built, top to bottom.
 func _build_hero_column() -> Control:
 	var col := _card_panel(Vector2(0, 0))
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -354,12 +346,28 @@ func _build_hero_column() -> Control:
 	inner.add_child(_build_class_icon_row())
 
 	# The DNA "moment" made visible, not just read about: a glow ring sits
-	# BEHIND the preview and repaints to the rolled genome's rarity color
+	# BEHIND the portrait and repaints to the rolled genome's rarity color
 	# (see _refresh_dna) -- common stays a quiet accent glow, rare turns
 	# cool blue, legendary a vivid pulsing gold, so a great roll is felt the
 	# instant it lands instead of only readable in the text line below it.
 	var glow_wrap := Control.new()
-	glow_wrap.custom_minimum_size = PREVIEW_SIZE + Vector2(28, 28)
+	glow_wrap.custom_minimum_size = Vector2(DIORAMA_VIEW_SIZE) + Vector2(28, 28)
+	# custom_minimum_size is only a MINIMUM -- a plain Control defaults to
+	# SIZE_FILL on both axes, so `inner` (a VBoxContainer whose own width
+	# tracks `col`'s SIZE_EXPAND_FILL card, i.e. most of the dialog) was
+	# stretching glow_wrap out to that same width. The glow ring
+	# (_dna_glow, anchored PRESET_FULL_RECT within glow_wrap) stretched
+	# right along with it -- a large, near-empty gold-at-0.35-alpha box
+	# over the card's dark background reads as flat tan -- while the actual
+	# frame/diorama (PRESET_CENTER, so it does NOT stretch) stayed its own
+	# correct small size and just anchored off-centre somewhere inside that
+	# oversized wrap (reported live, both for the diorama and, before it,
+	# the static portrait this replaced: "not contained in the panel").
+	# SHRINK_CENTER keeps glow_wrap (and everything anchored inside it) at
+	# exactly its own custom_minimum_size, centred, regardless of how wide
+	# its container is.
+	glow_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	glow_wrap.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_dna_glow = PanelContainer.new()
 	_dna_glow.set_anchors_preset(Control.PRESET_FULL_RECT)
 	var glow_style := StyleBoxFlat.new()
@@ -370,7 +378,6 @@ func _build_hero_column() -> Control:
 	glow_wrap.add_child(_dna_glow)
 
 	var frame := PanelContainer.new()
-	frame.set_anchors_preset(Control.PRESET_CENTER)
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.05, 0.055, 0.075, 0.95)
 	style.set_border_width_all(1)
@@ -379,21 +386,26 @@ func _build_hero_column() -> Control:
 	style.set_content_margin_all(10)
 	frame.add_theme_stylebox_override("panel", style)
 
-	var viewport_container := SubViewportContainer.new()
-	viewport_container.custom_minimum_size = PREVIEW_SIZE
-	viewport_container.stretch = true
-	viewport_container.stretch_shrink = PREVIEW_STRETCH_SHRINK
-	# Pixel art must not blur when scaled up.
-	viewport_container.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-
-	var viewport := SubViewport.new()
-	viewport.transparent_bg = true
-	viewport.handle_input_locally = false
-	_preview_stage = CharacterPreviewStageScene.instantiate()
-	viewport.add_child(_preview_stage)
-	viewport_container.add_child(viewport)
-	frame.add_child(viewport_container)
-	glow_wrap.add_child(frame)
+	frame.add_child(_build_diorama_view())
+	# CenterContainer, not frame.set_anchors_preset(PRESET_CENTER) directly
+	# (the original code here, before the diorama existed) -- an anchor
+	# preset applied to a Control BEFORE it has any child freezes its
+	# centering math against whatever size it happens to be AT THAT EXACT
+	# MOMENT (zero, since `frame` had no content yet) into fixed pixel
+	# offsets; when frame's real size appears afterward (its
+	# PanelContainer minimum size growing once the diorama view is added
+	# as a child), Godot does not recompute those offsets -- the box just
+	# grows from that frozen zero-size anchor point instead of staying
+	# centred, which reads as "hanging in a corner, not contained" (reported
+	# live, for the diorama AND, before it, in the very first screenshot
+	# of the OLD static portrait this replaced -- the same latent bug,
+	# just never fixed until now). CenterContainer keeps its child centred
+	# continuously, correctly, regardless of when/how the child's own size
+	# changes -- the robust fix, not a one-time offset calculation.
+	var centered := CenterContainer.new()
+	centered.set_anchors_preset(Control.PRESET_FULL_RECT)
+	centered.add_child(frame)
+	glow_wrap.add_child(centered)
 	inner.add_child(glow_wrap)
 
 	_class_name_label = _title_label("", 20)
@@ -416,6 +428,39 @@ func _build_hero_column() -> Control:
 	_reroll_button = _menu_button("Reroll DNA", func(): _reroll_dna())
 	inner.add_child(_reroll_button)
 	return col
+
+
+## The live diorama itself (see docs/concept/character_creator_preview_
+## scene.md): a fixed Camera2D framing CharacterPreviewDiorama's whole
+## FOOTPRINT from outside -- a diorama is watched from outside its own
+## little box, not a camera that follows the stroll -- inside a
+## SubViewport rendered at exactly DIORAMA_VIEW_SIZE (see that constant's
+## own doc comment on why that avoids needing a filter-mode trick the old
+## portrait's manual texture scaling did). UPDATE_ALWAYS, not the default
+## UPDATE_WHEN_VISIBLE -- this keeps animating (grass sway, the stroll)
+## for as long as the creator screen stays open, the same "ambient, always
+## live" the real world's own grass/water already are.
+func _build_diorama_view() -> Control:
+	var container := SubViewportContainer.new()
+	container.custom_minimum_size = Vector2(DIORAMA_VIEW_SIZE)
+	container.stretch = true
+
+	var viewport := SubViewport.new()
+	viewport.size = DIORAMA_VIEW_SIZE
+	viewport.transparent_bg = true
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	container.add_child(viewport)
+
+	var footprint: Vector2 = CharacterPreviewDioramaScript.FOOTPRINT
+	var camera := Camera2D.new()
+	camera.zoom = Vector2.ONE * (float(DIORAMA_VIEW_SIZE.x) / footprint.x)
+	camera.position = footprint * 0.5
+	viewport.add_child(camera)
+
+	_diorama = CharacterPreviewDioramaScript.new()
+	viewport.add_child(_diorama)
+
+	return container
 
 
 ## The class picker, now a horizontal strip of small icon cards sitting
@@ -696,12 +741,17 @@ func current_dna() -> Dictionary:
 
 func _refresh_appearance() -> void:
 	var appearance := current_appearance()
-	if _preview_stage != null:
-		_preview_stage.apply_appearance(appearance)
-		# Re-equipping every refresh (rather than once at setup) sidesteps
-		# any node-readiness ordering question -- cheap, and apply_appearance
-		# above already regenerates textures on every refresh the same way.
-		_preview_stage.equip_weapon(_item_sprite_generator.generate_texture("iron_sword"))
+	if _diorama != null:
+		# The world layout (pond/tree/pebble/grass positions) only rebuilds
+		# when the DNA seed itself actually changed (a reroll) -- every
+		# OTHER call here (cycling an axis, switching class) just redresses
+		# the same, already-strolling hero, matching the design doc's own
+		# Determinism pillar: same seed, same little scene, not reset on
+		# every click.
+		if _diorama_built_for_seed != _dna_seed:
+			_diorama.build(_dna_seed)
+			_diorama_built_for_seed = _dna_seed
+		_diorama.apply_appearance(appearance)
 	for axis in _axis_value_labels:
 		var label: Label = _axis_value_labels[axis]
 		label.text = "%s: %s" % [AXIS_LABELS.get(axis, axis), _axis_value_text(axis, appearance)]

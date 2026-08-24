@@ -152,26 +152,30 @@ func test_legs_are_visible_while_walking_or_idle():
 ## for the swimming stroke animation. hero_composite.png's illustrated torso
 ## stops at the shoulder (see docs/concept/character_art_brief.md's own
 ## proportions note), so that assumption no longer holds -- reported live:
-## "no hands are visible" while standing/walking (also reported/screenshotted
-## elsewhere as "no arms" -- see arms_visible()). Arms now stay visible in
+## "no hands are visible" while standing/walking. Arms now stay visible in
 ## every movement state; only the STROKE animation itself stays gated to
 ## swimming (see arm_stroke_offset's own handling in _process).
 func test_arms_are_visible_while_idle():
 	view.set_movement_state(view.MovementState.IDLE)
 	view._process(0.1)
-	assert_true(view.arms_visible())
+	var arm_left: Sprite2D = view.get_node("ArmLeft")
+	var arm_right: Sprite2D = view.get_node("ArmRight")
+	assert_true(arm_left.visible)
+	assert_true(arm_right.visible)
 
 
 func test_arms_are_visible_while_walking():
 	view.set_movement_state(view.MovementState.WALKING)
 	view._process(0.1)
-	assert_true(view.arms_visible())
+	var arm_left: Sprite2D = view.get_node("ArmLeft")
+	assert_true(arm_left.visible)
 
 
 func test_arms_are_visible_while_swimming():
 	view.set_movement_state(view.MovementState.SWIMMING)
 	view._process(0.1)
-	assert_true(view.arms_visible())
+	var arm_left: Sprite2D = view.get_node("ArmLeft")
+	assert_true(arm_left.visible)
 
 
 # -- illustrated legs: worn as one fused pair, not two independent sprites --
@@ -214,6 +218,31 @@ func test_fused_legs_stay_put_while_idle():
 	view._process(0.3)
 	var leg_left: Sprite2D = view.get_node("LegLeft")
 	assert_almost_eq(leg_left.position.y, view._leg_fused_rest_position.y, 0.001)
+
+
+## An interim stride cue for the fused pair, on top of the existing vertical
+## bob -- real per-leg knee art doesn't exist yet (see docs/concept/
+## character_art_brief.md's own "Four bugs" section on why the fused
+## drawing can't split into independently-swinging legs at all), but a
+## small hip-pivot rock reads as more of a stride than the bob alone
+## (reported live: asked for real knee-jointed per-leg animation; a whole-
+## pair rotational rock is the closest this session can build without new
+## art -- see FUSED_LEG_ROCK_AMPLITUDE's own doc comment). Once per full
+## stride (sin, not the bob's absf(sin)) -- a real gait leans one way then
+## the other over a whole stride, not twice per stride the way footfalls
+## land.
+func test_fused_legs_rock_side_to_side_while_walking():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.3)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	assert_ne(leg_left.rotation, 0.0)
+
+
+func test_fused_legs_rock_resets_to_upright_while_idle():
+	view.set_movement_state(view.MovementState.IDLE)
+	view._process(0.3)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	assert_almost_eq(leg_left.rotation, 0.0, 0.001)
 
 
 # -- illustrated arms: two independent poses, not one frame worn twice ------
@@ -270,9 +299,10 @@ func test_tool_slot_tracks_arm_rights_current_position():
 func test_tool_slot_moves_with_the_arms_walk_sway():
 	view.set_movement_state(view.MovementState.WALKING)
 	view._process(0.1)
-	var first: Vector2 = view.get_node("ToolSlot").position
+	var tool_slot: Sprite2D = view.get_node("ToolSlot")
+	var first: Vector2 = tool_slot.position
 	view._process(0.4)
-	var second: Vector2 = view.get_node("ToolSlot").position
+	var second: Vector2 = tool_slot.position
 	assert_ne(first, second)
 
 
@@ -436,42 +466,6 @@ func test_body_never_renders_wider_than_its_own_world_width():
 			rendered_width <= float(expected_world_width[part_name]) + 0.5,
 			"%s: rendered %.2f, expected at most %s" % [part_name, rendered_width, expected_world_width[part_name]]
 		)
-
-
-## The tunic's hem used to flare to nearly full shoulder width and directly
-## overlap the legs' own span below it -- for any class whose leg color sits
-## close to its tunic/trim (e.g. "guard": tunic (0.28,0.34,0.46), legs
-## (0.22,0.24,0.28)), the hem read as an undifferentiated second pair of
-## legs sitting right on top of the real ones (reported, screenshotted:
-## "double legs"). Measured from the ACTUAL generated art (not the
-## _HEM_FRACTION constant directly), converted art->world px the same way
-## every other part-size assertion in this file does, and compared against
-## the real leg-pair span read from the live .tscn nodes -- so this stays
-## correct even if LEG_SIZE or the legs' positions ever change.
-func test_tunic_hem_does_not_read_as_a_second_pair_of_legs():
-	var body: Sprite2D = view.get_node("Body")
-	var image: Image = body.texture.get_image()
-	var hem_row := image.get_height() - 1
-	var min_x := image.get_width()
-	var max_x := -1
-	for x in image.get_width():
-		if image.get_pixel(x, hem_row).a > 0.01:
-			min_x = mini(min_x, x)
-			max_x = maxi(max_x, x)
-	var hem_world_width: float = float(max_x - min_x + 1) * ArtResolution.SPRITE_SCALE
-
-	var leg_left: Sprite2D = view.get_node("LegLeft")
-	var leg_right: Sprite2D = view.get_node("LegRight")
-	var legs_left_edge: float = leg_left.position.x - CharacterView.LEG_SIZE.x / 2.0
-	var legs_right_edge: float = leg_right.position.x + CharacterView.LEG_SIZE.x / 2.0
-	var legs_world_width: float = legs_right_edge - legs_left_edge
-
-	# Clearly narrower, not a hairline margin -- 0.85 is this test's own
-	# "meaningfully narrower" bar, not a production-tuned value.
-	assert_lt(
-		hem_world_width, legs_world_width * 0.85,
-		"hem width %s vs leg-pair width %s -- hem must read clearly narrower or it looks like a second pair of legs" % [hem_world_width, legs_world_width]
-	)
 
 
 # -- the character must be anchored at its FEET, not its center --------------

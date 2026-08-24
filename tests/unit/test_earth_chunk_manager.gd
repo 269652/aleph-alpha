@@ -1044,13 +1044,23 @@ func test_build_at_global_fails_when_the_chunk_is_not_loaded():
 	assert_false(success)
 
 
+## Asserts the cell actually changed rather than pinning an exact atlas
+## coordinate: a real Berlin tile almost always has at least one real,
+## unmodified land-biome cardinal neighbor, so the earth cell now blends
+## toward it (see TerrainRenderer.earth_dominant_blend_for/paint()'s
+## modifications branch) instead of always landing on the flat
+## atlas_coords_for_modification("earth") tile -- which TerrainRenderer's
+## own test suite (test_terrain_renderer.gd) already covers in detail. This
+## test's own job is just proving build_at_global -> paint() wiring fires.
 func test_build_at_global_repaints_the_tile_map_cell():
 	manager.update(_berlin_tile)
+	var before_coords := tile_map_layer.get_cell_atlas_coords(_berlin_tile)
+
 	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "earth")
-	var terrain_renderer := TerrainRenderer.new()
-	assert_eq(
-		tile_map_layer.get_cell_atlas_coords(_berlin_tile),
-		terrain_renderer.atlas_coords_for_modification("earth")
+
+	assert_ne(
+		tile_map_layer.get_cell_atlas_coords(_berlin_tile), before_coords,
+		"building earth should repaint the cell away from its original biome tile"
 	)
 
 

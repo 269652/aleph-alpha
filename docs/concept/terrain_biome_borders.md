@@ -99,6 +99,41 @@ routes between them):
   biome must land on different tiles, or one silently overwrites the other
   in the atlas.
 
+## Earth-modification blend: `earth_dominant_blend_for`
+
+A built or worn "earth" cell (`TerrainRenderer.EARTH_TILE_ID` -- player-built
+floor via the Terraria-style build/destroy system, or `PathScarring`'s
+worn-ground dirt path, see `src/world/path_scarring.gd`) is not a biome at
+all: `Chunk.modifications` shadows the cell's real biome tile with this one
+instead, on the same opaque base layer everything above paints onto.
+Reported live (screenshot): a grass-to-dirt-path boundary read as a hard
+edge, with the corner where they met a hard square -- the same two
+complaints the corner-blend rounds above kept fixing for real biome pairs,
+but this time for a system those rounds never touched at all
+(`TerrainRenderer.paint`'s modifications branch short-circuited straight to
+one dead-flat `EARTH_COLOR` square before ever consulting neighbor biomes).
+
+`earth_dominant_blend_for` gives earth the same treatment, with one
+structural difference from `dominant_blend_for`: earth has no real biome
+identity of its own to compare priority against, so there is no "same
+biome, stay pure" skip and no priority gate -- it unconditionally concedes
+to whatever real, unmodified biome cardinally borders it (ocean excluded,
+same "land never blends toward ocean" rule pillar 2 already establishes).
+Because every differing direction qualifies unconditionally, a shared
+corner between two active directions is already handled by the same
+directional-blend mask -- `generate_multi_directional_blend_image_from`
+dithers a shared corner between active directions on its own (see that
+function's own doc comment) -- so, unlike the land/ocean and land/land
+cases, no separate corner-carve family exists or is reachable for earth;
+one blend family (`_earth_blend_base_linear`/`_earth_blend_linear`) covers
+both the edge and the corner shape.
+
+Two adjacent earth cells (a multi-tile worn path, or a built floor) must
+not dither a seam against each other's pre-modification biome --
+`_neighbor_biomes`'s `exclude_modified_neighbors` param omits an in-chunk
+neighbor that itself carries a modification, rather than reporting its
+shadowed original biome.
+
 ## Deliberately out of scope
 
 - **Water/land diagonal-only corners** (e.g. the four corner-diagonal land
@@ -110,15 +145,28 @@ routes between them):
 - **Symmetric diagonal-only carving.** The diagonal-only case only ever
   carves from the lower-priority side, matching pillar 2. The higher-
   priority side's own corner, looking back at the same point, never also
-  carves — its real texture is already what shows through the lower side's
+  carves -- its real texture is already what shows through the lower side's
   carved wedge, so there is no second "hole" needing its own treatment.
+- **Earth-modification neighbors across a chunk seam.** An earth cell's
+  cardinal neighbor in an already-loaded adjacent chunk is resolved through
+  `global_biome_lookup`, which has no visibility into that neighboring
+  chunk's own `Chunk.modifications` -- so a modified neighbor just across a
+  chunk seam is (incorrectly) read as its original biome instead of being
+  excluded. The same pre-existing blind spot the ordinary biome-to-biome
+  blend/corner system already has at chunk seams; not attempted here, in
+  scope only for the common in-chunk case PathScarring/building actually
+  produce.
 
 ## Status
 
 - ✅ Shared-edge dithered blend, any two land biomes.
 - ✅ Convex/concave shared-corner carve, land/ocean.
 - ✅ Right-angle and diagonal-only shared-corner carve, land/land.
-- 🚧 Diagonal-only shared-corner carve, water/land — not addressed.
+- ✅ Earth-modification (built floor / worn path) shared-edge AND
+  shared-corner blend toward its real land-biome neighbor, one family.
+- 🚧 Diagonal-only shared-corner carve, water/land -- not addressed.
+- 🚧 Earth-modification neighbor detection across a chunk seam -- not
+  addressed (see "Deliberately out of scope" above).
 - ⬜ A visible in-game screenshot re-confirming the land/land corner reads
   correctly at actual camera zoom (this environment cannot launch the game
   to check; verified so far only via baked-atlas-pixel tests, see
