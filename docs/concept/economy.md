@@ -10,19 +10,24 @@ Currency enters the economy roughly equally from two faucets:
 - **Selling to the market** (NPC and, later, player, via the
   [auction house](labor_skills.md#the-auction-house)) — crafted goods
   ([crafting.md](crafting.md)), gathered resources
-  ([resources.md](resources.md)), and tamed/bred creatures
-  ([pets.md](pets.md)/[evolution.md](evolution.md)). This ties the economy
-  directly into every production system already designed, instead of being
-  a separate quest-reward faucet bolted on top. Crafted-goods pricing carries
-  a quality premium tied to the crafter's own labor-skill tier, not just a
-  flat per-item-type price.
+  ([resources.md](resources.md)), tamed/bred creatures
+  ([pets.md](pets.md)/[evolution.md](evolution.md)), and crystallized spell
+  gems/scrolls ([magic.md](magic.md) — [items.md](items.md#spells-as-items)).
+  This ties the economy directly into every production system already
+  designed, instead of being a separate quest-reward faucet bolted on top.
+  Crafted-goods pricing carries a quality premium tied to the crafter's own
+  labor-skill tier, not just a flat per-item-type price.
 - **Quest/bounty rewards** from NPCs' need-driven requests
   ([npc.md](npc.md)) — the classic MMO faucet, still meaningful, just not
   the only one.
 
 Currency is spent on: hiring NPCs (wages, see
 [npc.md](npc.md#hiring--instruction)), buying resources/goods from other
-players, and other players' crafted/tamed goods.
+players, other players' crafted/tamed goods, and **compiling a designed
+spell into a permanently known one** — a gold sink priced exponentially in
+the spell's size ([magic.md](magic.md)'s compilation-gate brainstorm), so
+spellcrafting is a real, recurring drain on the same currency the rest of
+the economy earns, not a free character-building action.
 
 ### Premium currency: convenience and rarity, never power
 

@@ -607,6 +607,192 @@ this codebase already uses, just one layer deeper.
 
 ---
 
+## 6. World boss special-attack telegraphs — Krampus
+
+Attack-cycle sheets for Krampus's real, tested kit (see
+[worldbosses.md](../concept/worldbosses.md)'s "Krampus: a worked encounter"
+section, `src/gameplay/boss_phase_kits.gd`): Chain Yank (baseline), Chain
+Lash + Terrifying Roar (phase 2, 50% HP), Chain Shackle (phase 3, 20% HP).
+Same one-bespoke-sheet-per-action shape as Krampus's already-generated
+walk cycle (registered in `illustrated_animal_sprite.gd`'s `_SHEETS`, not
+itself re-documented here — see that file's own entry for the exact walk
+prompt used), not modular recolored parts. These would replace the current fallback
+(`has_action`'s "attack" falls back to the walk cycle when no dedicated
+`attack_bands` exists) with a real, ability-specific telegraph once
+generated and wired in.
+
+**Prefix every prompt below with the shared style preamble above**, plus
+this attack-cycle addendum (parallel to the walk-cycle one, adjusted for a
+wind-up→release→recovery beat instead of a locomotion loop):
+
+> Lay out an 8-frame attack cycle in a single horizontal row — a clear
+> wind-up (frames 1-3), a release/peak (frames 4-5), and a follow-through/
+> recovery (frames 6-8) — each frame separated by a thin 1-2px near-white
+> divider line, generous empty magenta padding around each pose so nothing
+> touches a divider or the canvas edge. Frames do not need uniform width.
+> Export at least 2200px wide by 900px tall for the row. SAME CHARACTER as
+> the existing Krampus walk cycle, for visual continuity across his action
+> set: a tall, powerfully-built bipedal creature with dark brown-black fur,
+> a goat's head with large curved backswept horns, red eyes, a long lolling
+> tongue, cloven hooves, a long thin tail, a leather chest harness with a
+> skull ornament. Facing LEFT, matching the existing walk cycle's facing
+> direction, so every action sheet reads as the same character from the
+> same angle.
+
+### 6a. Chain Yank (baseline — always available, not phase-gated)
+
+> A pixel-art attack cycle of KRAMPUS performing a CHAIN YANK: he winds up
+> by coiling the chain back in one clawed hand (frames 1-3, chain gathering
+> into loose loops at his side), then whips it forward in a hard throwing
+> motion so it extends nearly straight out toward the LEFT edge of the
+> frame at full length (frames 4-5, the peak of the throw — chain taut, a
+> few links visible along its length, small motion-blur-style speed lines
+> trailing it, rendered as the same flat posterized style as everything
+> else, not a soft blur), then hauls it back in a heaving retrieving
+> motion, whole body leaning into the pull (frames 6-8, chain coiling back
+> toward him). The chain is the star of this cycle — his body reads mostly
+> as a grounded anchor/pivot for the throw and haul.
+
+### 6b. Chain Lash (phase 2, unlocks at 50% HP)
+
+> A pixel-art attack cycle of KRAMPUS performing a CHAIN LASH: a wide
+> horizontal sweeping attack. He winds up by twisting his whole torso and
+> raising the chain-wielding arm back and up (frames 1-3), then sweeps it
+> in a broad horizontal arc all the way across in front of him (frames
+> 4-6, the chain reading as a sweeping curved line with visible links,
+> covering a wide horizontal span — this is a CROWD-CLEARING swing, the
+> arc should read as wide, not a narrow jab), then follows through with
+> his body twisted to the opposite side from where he started, chain now
+> trailing loosely on the ground (frames 7-8).
+
+### 6c. Terrifying Roar (phase 2, unlocks at 50% HP, alongside Chain Lash)
+
+> A pixel-art attack cycle of KRAMPUS performing a TERRIFYING ROAR: no
+> chain motion this cycle -- both his hands stay low/loose at his sides
+> throughout, all the drama is in the head and posture. He draws his head
+> back and inhales, chest visibly expanding (frames 1-3), then throws his
+> head forward and down toward the viewer with his mouth wide open, tongue
+> extended, in a full roar (frames 4-5 -- the peak: add a few short, pale,
+> radiating motion-lines around his open mouth reading as a sound-wave/
+> shout burst, rendered in the same flat posterized style, not a glow or
+> particle effect), then straightens back up, mouth closing, breathing hard
+> (frames 6-8).
+
+### 6d. Chain Shackle (phase 3 "The Reckoning", unlocks at 20% HP)
+
+> A pixel-art attack cycle of KRAMPUS performing a CHAIN SHACKLE: he winds
+> up by gathering the chain into a tight coiled loop held ready in one hand
+> (frames 1-3, distinctly a COILED LOOP shape this time, not the loose
+> gathered loops of Chain Yank -- read as a lasso/snare), then hurls the
+> loop forward and down toward the ground just in front of him, the loop
+> opening out mid-throw (frames 4-6, the chain's loop shape clearly
+> visible, aimed at a point on the ground rather than thrown straight
+> ahead like Chain Yank), then plants both feet and braces, chain now taut
+> and anchored to whatever it caught, leaning back against the tension
+> (frames 7-8 -- this is the "something is now bound" pose, his body
+> reading as actively holding something down rather than following
+> through past it).
+
+---
+
+## 7. World bosses — Germany / Central Europe walk cycles (2026-08-24)
+
+Bespoke, one-off illustrated sheets for the mythic-region roster in
+[worldbosses.md](../concept/worldbosses.md)'s Germany entry (chronologically
+these came first — before section 6's Krampus attack telegraphs — kept as
+their own numbered section rather than renumbering everything above). Unlike
+sections 1-2 above, these are **not** modular parts recolored/assembled at
+runtime — a world boss gets its own fully-realized creature art, the same
+"one bespoke sheet per species" shape `illustrated_animal_sprite.gd`
+already uses for horse/deer/boar (see that file's own doc comment: no
+per-seed variation, every instance shows the same illustrated frames — a
+world boss is exactly that shape, just with a unique species entry of its
+own instead of a common one). Each entry below is a **walk cycle**, the
+minimum viable action (horse.png shipped with walk-only and still reads
+fine in-game — idle can synthesize from frame 0, per `has_action`'s
+fallback chain, see that file). All four of these were actually generated
+and are live in the game — see `illustrated_animal_sprite.gd`'s `_SHEETS`
+entries for `lindwurm`/`rubezahl`/`nyx`/`krampus`.
+
+**Prefix every prompt below with the shared style preamble above** (flat
+posterized 3-band shading, solid magenta #FF00FF background, orthographic
+top-down, upper-left light source), plus this walk-cycle-specific
+addendum:
+
+> Lay out an 8-frame walking cycle in a single horizontal row, each frame
+> separated by a thin 1-2px near-white divider line (not a decorative
+> border), generous empty magenta padding around each pose so nothing
+> touches a divider or the canvas edge. Frames do not need uniform width.
+> Export at least 2200px wide by 800px tall for the row (matches this
+> project's existing `horse_walk.png` precedent) so the downsample to the
+> game's actual pixel grid stays clean. The creature reads at a
+> consistent scale and ground-contact line across all 8 frames — it should
+> not grow, shrink, or drift vertically frame to frame. Facing RIGHT
+> (head/leading edge on the right side of each frame) unless the
+> individual prompt says otherwise.
+
+### 7a. Lindwurm
+
+> A pixel-art walk cycle of a LINDWURM — a wingless, serpentine
+> Central-European dragon, NOT a Western winged dragon and NOT a snake:
+> a long, thick, muscular serpentine body ending in a blunt wedge-shaped
+> head with small backswept horns and a forked tongue, TWO short clawed
+> forelegs near the front of the body and NO hindlegs or wings at all —
+> the rear two-thirds of the body drags/slithers along the ground like a
+> heavy tail. Overlapping dark bronze-green scales with a lighter
+> underbelly band, a single low dorsal ridge of small spines running
+> down the spine's full length. Locomotion is a sinuous full-body
+> slither with the two forelegs pulling/gripping the ground — NOT a
+> normal quadruped walk, since it has no back legs. Roughly as long as
+> 3-4 times its own body height, read as heavy and powerful rather than
+> serpent-thin. [walk-cycle addendum above]
+
+### 7b. Rübezahl (storm-boar form)
+
+> A pixel-art walk cycle of a giant, supernatural WILD BOAR wreathed in
+> a faint storm — this is Rübezahl, a Central-European mountain spirit,
+> in the animal form his own folklore says he takes. A heavily-built
+> wild boar, larger and more powerful-looking than a normal boar, dark
+> slate-grey hide with a coarse bristled mane running along its spine
+> from head to shoulders, oversized curved tusks, small crackling
+> pale-blue-white lightning-like markings faintly visible along its
+> flanks and mane (subtle, not a glowing special effect — read as part
+> of the creature's own hide pattern, flat-shaded like everything else,
+> not a light-emitting overlay). A standard quadruped walk cycle, heavy
+> and deliberate rather than a light trot. [walk-cycle addendum above]
+
+### 7c. Nix (Wasserfrau)
+
+> A pixel-art walk cycle of a NIX (Wasserfrau) — a Central-European
+> water spirit — shown in a hybrid, non-humanoid creature form suited to
+> this game's animal roster: a sleek, elongated aquatic body with a
+> humanoid-adjacent torso tapering smoothly into a long scaled,
+> fish-finned lower body/tail (no legs at all — it moves by an
+> undulating serpentine tail motion, not walking), pale
+> green-grey-blue skin with a faint scale texture, webbed clawed
+> forearms, long dark hair/weed-like trailing fronds streaming from the
+> head. Since it has no legs, render this as a LOCOMOTION cycle of the
+> tail's undulating S-curve pulling the body forward (still 8 frames in
+> one row, same divider/export rules) rather than a walk gait — the
+> torso stays upright and roughly level while the tail whips side to
+> side beneath it. [walk-cycle addendum above, substituting "undulating
+> aquatic locomotion cycle" for "walking cycle"]
+
+### 7d. Krampus
+
+> A pixel-art walk cycle of KRAMPUS — an Alpine/Bavarian goat-demon
+> companion figure. A tall, powerfully-built bipedal creature with dark
+> brown-black fur covering a humanoid-proportioned but distinctly
+> non-human body, a goat's head with large curved backswept horns and a
+> long lolling tongue, cloven hooves for feet, a long thin tail. One arm
+> ends in a clawed hand dragging a length of heavy chain with a couple
+> of visible links trailing behind it in every frame (part of the
+> creature itself, not a separate prop layer). A confident, heavy
+> bipedal walk cycle, chain dragging and swinging slightly with the
+> gait. [walk-cycle addendum above]
+
+---
+
 ## Notes for whoever runs these
 
 - Run the flower archetype sheets (1b) at pale/neutral tone as specified —
@@ -633,3 +819,20 @@ this codebase already uses, just one layer deeper.
   its sheet, dropping it in over the old file, and re-measuring row_bands
   the same way (see `IllustratedTerrainSprite._SHEETS`'s own doc comment for
   the exact Y-ranges and how they were measured).
+- Krampus's attack sheets (section 6) follow the walk-cycle wiring pattern
+  exactly: drop each in as `assets/sprites/krampus_<ability>.png` (e.g.
+  `krampus_chain_yank.png`) and add an `<ability>_bands`/`<ability>_path`
+  pair to `illustrated_animal_sprite.gd`'s existing `"krampus"` `_SHEETS`
+  entry, same shape as `eat_bands`/`eat_path` on deer/boar — **measure the
+  chroma-key/content Y-range from the real generated pixels, don't reuse
+  the walk cycle's `Vector2i(156, 600)`**, since an attack pose's silhouette
+  sits differently on the canvas (the walk cycle's own diagnostic script,
+  used to catch the missing-chroma_key bug this project shipped once
+  already, is the right tool to reuse here too). Registering these art
+  files alone does not make the abilities fire in a real fight —
+  `BossPhase`/`BossPhaseKits` (`src/gameplay/`) currently only *select*
+  which ability should be active at a given health fraction; nothing yet
+  reads that selection during combat and swaps `CreatureMarker`'s
+  `"attack"` action away from its current walk-cycle fallback to the
+  matching new sheet (see `concept/worldbosses.md`'s Krampus Status
+  sub-section for that real, open gap).

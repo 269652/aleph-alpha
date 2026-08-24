@@ -10,6 +10,25 @@ Implement everything using strict Test-Driven Development (TDD): red first.
 - Never write implementation code without a failing test driving it.
 - Tuned values/thresholds must be tested functions or test-pinned constants, never eyeballed comments.
 
+## Merge to main before calling a feature done
+
+A feature is not verified once its tests pass in isolation — it must be
+merged into `main` (the checkout actually run/played) before it counts as
+finished. Passing tests in a worktree or feature branch only prove the
+logic works there; they say nothing about whether the feature is visible
+or usable in the environment the user actually runs.
+
+- Once a feature's tests are green, merge/port the change into `main`
+  before considering it done — not as a separate, later cleanup step.
+- `main` is a live, actively co-edited checkout, often with several
+  concurrent sessions writing to it at once. Re-read the current state of
+  every file you're about to touch there immediately before editing — do
+  not assume it still matches whatever a worktree branched from, and do
+  not overwrite independent changes that landed on `main` since.
+- After merging, re-run the affected tests directly against `main` — a
+  clean git merge does not by itself guarantee the feature still behaves
+  correctly in a checkout that may have moved on since the branch point.
+
 ## Concept docs are the spec — keep them cross-aligned
 
 `docs/concept/*.md` is the design source of truth and `docs/progress.md` is the

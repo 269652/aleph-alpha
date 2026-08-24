@@ -68,12 +68,22 @@ function with a red-first test):
   reliable**, a property of the material type and its geology, *not* genetics.
   Mined, predictable, the dependable backbone.
 
-Materials stay **pure** — no alloying/compositing into new materials (design
-decision). All emergent depth therefore lives in **shape + assembly +
-physical interaction**, which leans the whole game toward physics rather than
-chemistry. A crafter's art is blending a *variable biological* input with a
-*stable mineral* one and choosing the geometry that turns their properties
-into the effect they want.
+**Revised 2026-08-24** (was: materials stay pure, no alloying/compositing —
+see [smelting.md](smelting.md)'s "Alloying: emergent metallurgy" for the
+full mechanism): the original reasoning — leaning the whole game toward
+*physics* rather than *chemistry*, keeping the design space bounded for a
+solo/part-time project — still holds and still scopes this narrowly. What
+changed is realizing an alloy doesn't actually need new machinery: it's
+just *one more way to arrive at a property vector* (a weighted blend of two
+existing mineral vectors, by real metallurgical rules), which then flows
+through this exact same shape+assembly+threshold pipeline unchanged. That's
+physics composing with itself, not a parallel chemistry system, so it
+doesn't cost what the original decision was protecting against. Scoped
+specifically to the **mineral track only** — organic materials
+(hide, bone, sinew, wood, fiber) stay pure and get their emergent variety
+from DNA instead (unchanged). A crafter's art is blending a *variable
+biological* input with a *stable-or-alloyed mineral* one and choosing the
+geometry that turns their properties into the effect they want.
 
 ## Shape and assembly
 
