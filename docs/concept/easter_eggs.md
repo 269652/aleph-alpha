@@ -426,8 +426,40 @@ for the full writeup, including its one deliberate, documented scope call
 own established "point + interaction" shape rather than a new spatial
 system — the encounter and the joust itself are both real, not props).
 
-The retro-handheld creature-battler is still design-only; see
-`docs/progress.md`'s Easter Eggs section for the exact breakdown.
+The retro-handheld creature-battler is now implemented. `HandheldRoster`
+(`src/gameplay/handheld_roster.gd`) is the pure roster data — the doc's own
+"deer, wolf, boar, bear, lynx at common tiers; krampus/lindwurm/rubezahl at
+[legendary] tiers", a self-contained stat table deliberately NOT read from
+`CreatureInfo` (this mini-game needs its own small internal balance, and
+"wolf" has no entry at all in `CreatureInfo` today — a pre-existing gap in
+the open world's own wolf wiring, not previously documented elsewhere in
+this project — see `docs/progress.md`'s Easter Eggs section for the full
+scope note).
+`HandheldBattle` (`src/gameplay/handheld_battle.gd`) is the pure,
+fully-tested turn-based rules core — four original moves (charge/rend/
+guard/focus), deterministic damage (no `randf()` anywhere, matching this
+project's derived-not-rolled combat/crafting philosophy), and a
+deterministic skill-based AI opponent, the same discipline `JoustMatch`
+already established for this doc's family. `HandheldCatch`
+(`src/gameplay/handheld_catch.gd`) is the catch mechanic — a seed-derived
+(never `randf()`), health-fraction-based success chance, mirroring
+`CreatureInfo`'s own seed → level derivation. `HandheldCollection`
+(`src/gameplay/handheld_collection.gd`) is the pure "world's smallest
+Pokédex" catch-list model. `HandheldBattleView`
+(`src/rendering/handheld_battle_view.gd`) is the actual playable battle +
+dex screen, drawing every creature with the EXISTING `ProceduralAnimalSprite`/
+`IllustratedAnimalSprite` rendering (zero new art, per the doc). `RetroHandheld`
+(`src/gameplay/retro_handheld.gd`) is the hidden prop's location + interaction
+gate (a real-world coordinate, Kyoto — a quiet nod to the handheld-games era,
+never named in-game — plus a "talk" press, the same shape `AncientTerminal`
+uses), repeatable like `SeaCaveGuardian` rather than a one-shot find. See
+`docs/progress.md`'s Easter Eggs section for the full writeup, including its
+one documented, out-of-scope gap: "wolf" has an `AnimalAnatomy` body profile
+but no `ProceduralAnimalSprite`/`CreatureInfo` wiring anywhere in this
+project (not previously called out in this doc or `docs/progress.md`), so it
+currently renders with the generic procedural silhouette rather than a
+wolf-shaped one, both here and in the open world's own `/spawn wolf` — a
+pre-existing gap this stage didn't introduce and isn't the right place to fix.
 
 ### Open questions
 

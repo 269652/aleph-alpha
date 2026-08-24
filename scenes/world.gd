@@ -18,6 +18,8 @@ const BridgekeeperEncounter = preload("res://src/gameplay/bridgekeeper_encounter
 const ThreeFragmentsHunt = preload("res://src/gameplay/three_fragments_hunt.gd")
 const SeaCaveGuardian = preload("res://src/gameplay/sea_cave_guardian.gd")
 const JoustMatchView = preload("res://src/rendering/joust_match_view.gd")
+const RetroHandheld = preload("res://src/gameplay/retro_handheld.gd")
+const HandheldBattleView = preload("res://src/rendering/handheld_battle_view.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
@@ -124,6 +126,10 @@ const THREE_FRAGMENTS_BONUS_MESSAGE_DURATION := 8.0
 ## as JoustMatchView's own transform beat begins, so it needs to outlast
 ## that beat comfortably.
 const SEA_CAVE_GUARDIAN_MESSAGE_DURATION := 12.0
+## The retro handheld's own found/reopened flavor line (docs/concept/
+## easter_eggs.md's "hidden retro handheld" entry) -- a single short line,
+## same duration as every other one-line cameo cue.
+const RETRO_HANDHELD_MESSAGE_DURATION := EASTER_EGG_MESSAGE_DURATION
 
 ## Real seconds between player-state autosaves (see docs/concept/
 ## persistence.md) -- mirrors the world's own "persist eagerly, not on an
@@ -289,6 +295,15 @@ var _three_fragments_hunt := ThreeFragmentsHunt.new()
 ## hunt only ever named the terminal/secret room/WarGames eggs.
 var _sea_cave_guardian := SeaCaveGuardian.new()
 var _joust_view: JoustMatchView
+## The hidden retro handheld (docs/concept/easter_eggs.md's "hidden retro
+## handheld" entry) -- RetroHandheld is the pure location/interaction-state
+## module (mirrors AncientTerminal's real-coordinate shape but, like
+## SeaCaveGuardian, is repeatable rather than a one-shot has_been_found()
+## gate on re-entry); HandheldBattleView is the actual playable battle +
+## dex screen (built in _build_handheld_view, opened/closed by
+## _check_retro_handheld/_on_handheld_closed below).
+var _retro_handheld := RetroHandheld.new()
+var _handheld_view: HandheldBattleView
 var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
@@ -495,6 +510,7 @@ func _ready() -> void:
 	_build_talk_label()
 	_build_easter_egg_label()
 	_build_joust_view()
+	_build_handheld_view()
 	_build_interaction_prompt()
 	_build_charge_meter()
 
@@ -1213,6 +1229,16 @@ func _build_joust_view() -> void:
 	_joust_view.match_finished.connect(_on_joust_match_finished)
 
 
+## The hidden retro handheld's battle + dex screen (see HandheldBattleView's
+## own doc comment) -- same "built hidden, parented under _ui, pause/unpause
+## for the duration" shape as _build_joust_view just above.
+func _build_handheld_view() -> void:
+	_handheld_view = HandheldBattleView.new()
+	_handheld_view.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ui.add_child(_handheld_view)
+	_handheld_view.closed.connect(_on_handheld_closed)
+
+
 ## Undocumented on purpose (docs/concept/easter_eggs.md pillar 3 -- no
 ## quest marker, no hint pointing here): once every EASTER_EGG_CHECK_
 ## INTERVAL seconds, rolls each registered sighting against the player's
@@ -1414,6 +1440,40 @@ func _on_joust_match_finished(winner: String) -> void:
 	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
 
 
+## The hidden retro handheld (docs/concept/easter_eggs.md's "hidden retro
+## handheld" entry, see RetroHandheld's own doc comment) -- called every
+## frame for the same just-pressed reason _check_ancient_terminal is. A
+## successful "talk" press in range shows the found/reopened flavor line,
+## opens the actual battle+dex screen (_handheld_view.open), and pauses the
+## world for the duration -- _on_handheld_closed unpauses it once the
+## player puts the handheld away (HandheldBattleView's own closed signal).
+func _check_retro_handheld(player_tile: Vector2i) -> void:
+	if not Input.is_action_just_pressed("talk"):
+		return
+	if not _retro_handheld.can_open(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	var already_found := _retro_handheld.has_been_found()
+	_retro_handheld.mark_found()
+	_retro_handheld.open()
+	_easter_egg_label.text = _retro_handheld.flavor_line(already_found)
+	_easter_egg_label.visible = true
+	_easter_egg_message_timer = RETRO_HANDHELD_MESSAGE_DURATION
+	_handheld_view.open()
+	get_tree().paused = true
+
+
+## HandheldBattleView.closed's handler -- unpauses the world (mirroring
+## _on_joust_match_finished's identical pause/unpause symmetry) and frees
+## the prop to be reopened (RetroHandheld is deliberately repeatable, see
+## its own doc comment).
+func _on_handheld_closed() -> void:
+	get_tree().paused = false
+	_retro_handheld.close()
+
+
 ## Monty Python's Bridgekeeper (docs/concept/easter_eggs.md, see
 ## BridgekeeperEncounter's own doc comment) -- rolled on the same throttled
 ## cadence as _check_easter_egg_sightings above (a rarity roll, not a
@@ -1491,6 +1551,13 @@ func has_triggered_three_fragments_bonus() -> bool:
 ## Fragments" (SeaCaveGuardian was never one of that hunt's three eggs).
 func is_sea_cave_challenge_active() -> bool:
 	return _sea_cave_guardian.is_challenge_active()
+
+
+## Forwarding getter: RetroHandheld's own is_open() -- the same shape as
+## is_sea_cave_challenge_active above. Not part of "Three Fragments" (the
+## handheld was never one of that hunt's three eggs).
+func is_handheld_open() -> bool:
+	return _retro_handheld.is_open()
 
 
 ## Grants one fragment item of docs/concept/easter_eggs.md's "Three
@@ -3296,6 +3363,7 @@ func _client_process(delta: float) -> void:
 	_check_ancient_terminal(player_tile, local_player)
 	_check_signed_secret_room(player_tile, local_player)
 	_check_sea_cave_guardian(player_tile)
+	_check_retro_handheld(player_tile)
 	_update_easter_egg_label(delta)
 	# Real sun compass bearing, for hillshading (see HillshadeShader,
 	# docs/concept/terrain_relief.md) -- same real inputs as elevation just

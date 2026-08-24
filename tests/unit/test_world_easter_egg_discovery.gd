@@ -64,3 +64,12 @@ func test_is_sea_cave_challenge_active_false_until_a_challenge_begins():
 	assert_false(world.is_sea_cave_challenge_active())
 	world._sea_cave_guardian.begin_challenge()
 	assert_true(world.is_sea_cave_challenge_active())
+
+
+## RetroHandheld's own is_open() latch, forwarded the same way (docs/concept/
+## easter_eggs.md's "hidden retro handheld" entry) -- not part of "Three
+## Fragments", but the same clean hook-point shape as every getter above.
+func test_is_handheld_open_false_until_the_handheld_is_opened():
+	assert_false(world.is_handheld_open())
+	world._retro_handheld.open()
+	assert_true(world.is_handheld_open())

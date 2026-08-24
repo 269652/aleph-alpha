@@ -2880,14 +2880,161 @@ quiet contradiction of every other system's "never hand-placed" rule.
   players would otherwise walk through to reach the guardian — the
   encounter itself (challenge → transform → a fully real, playable,
   fully-rules-tested joust) is not a prop.
-- **The retro-handheld creature-battler** (medium) — ⬜ Not started. A
-  small, battered handheld prop (generic, undescribed hardware) that boots
-  into a tiny original turn-based creature-battler starring miniature
-  pixel-art versions of this project's own existing roster — zero new art
-  needed at the character level (`ProceduralAnimalSprite`/
-  `IllustratedAnimalSprite` already exist for every creature), the actual
-  new work being a small turn-based battle-menu loop and a "world's
-  smallest Pokédex" catch-list UI.
+- **The retro-handheld creature-battler** (medium) — ✅ Done. A small,
+  battered handheld prop (generic, undescribed hardware — no trademarked
+  shape/logo, enforced by `test_retro_handheld.gd`'s own "never names a
+  trademarked handheld brand" check) that boots into a tiny, original,
+  actually-playable turn-based creature-battler starring miniature versions
+  of this project's OWN, ALREADY-BUILT wildlife roster — not the Easter-egg
+  cameo creatures from other stages in this doc. Four pure modules plus one
+  node/rendering adapter, matching this doc's established
+  pure-module-plus-node-adapter split throughout:
+  - `HandheldRoster` (`src/gameplay/handheld_roster.gd`) — pure roster data:
+    exactly the doc's own split, common tier (deer/wolf/boar/bear/lynx) and
+    legendary tier (krampus/lindwurm/rubezahl), each with a hand-authored
+    `{hp, attack, defense, speed}` block. Deliberately a SEPARATE,
+    self-contained stat table from `CreatureInfo`'s own
+    `MAX_HEALTH_BY_SPECIES`/etc, not read from it — this mini-game needs its
+    own small internally-balanced numbers, and "wolf" specifically has no
+    entry at all in `CreatureInfo` today (a pre-existing, separately-tracked
+    gap, see the Ecosystem Dynamics section below) so reaching into that
+    table here would either crash or silently fall back to a meaningless
+    default. Every stat is a first-pass placeholder (no real playtesting
+    data yet, same situation as every other tuned constant in this doc's
+    family) but pinned by relative-property tests (every legendary
+    outclasses every common on hp/attack) rather than isolated eyeballed
+    literals, the same discipline `test_creature_info.gd`'s own Kraken/
+    Squallmaw tests use. `encounter_species(roll)` is a deterministic
+    (roll-in, species-out) picker — never `randf()` itself, mirroring
+    `EasterEggCreatures.check_one`'s own "caller supplies the real roll"
+    shape — that `HandheldBattleView` feeds a real `randf()` into (picking
+    WHICH creature you run into is the same category of roll
+    `EasterEggCreatures` already makes with ordinary `randf()`, not a
+    combat-outcome roll).
+  - `HandheldBattle` (`src/gameplay/handheld_battle.gd`) — the pure,
+    fully-tested turn-based rules core, exactly `JoustMatch`/`Duel.advance`'s
+    own state-in/state-out shape. Four original moves: charge (a plain
+    attack), rend (harder-hitting, but persistently weakens the user's own
+    defense — a real risk/reward, not a strictly-better option), guard
+    (halves damage received that round), focus (persistently raises the
+    user's own attack); plus `MOVE_PASS`, a true no-op `HandheldBattleView`
+    uses to spend a turn on a catch attempt without this module ever needing
+    to know catching exists. Damage is `power + attack - defense`
+    (guard-halved if the target guarded, floored at `MIN_DAMAGE`) —
+    deterministic, no RNG anywhere, "consistent with this project's whole
+    combat/crafting philosophy of derived-not-rolled outcomes" per this
+    stage's own task. Turn order is speed-based (faster unit acts first; a
+    unit defeated by the first blow never gets to act; ties favor the
+    player). The AI opponent (`ai_choose_move`) is a deterministic skill rule
+    (guard below `AI_GUARD_HEALTH_FRACTION`, otherwise press the attack),
+    never a dice roll — the same discipline `JoustMatch.ai_should_flap`
+    already established for this doc's family. Every tuned constant
+    (`CHARGE_POWER`/`REND_POWER`/`REND_DEFENSE_PENALTY`/
+    `GUARD_DAMAGE_REDUCTION`/`FOCUS_ATTACK_BONUS`/`MIN_DAMAGE`/
+    `AI_GUARD_HEALTH_FRACTION`) is a first-pass placeholder but pinned by
+    direct exact-value assertions in `tests/unit/test_handheld_battle.gd`
+    (20 tests), matching `spell_cost.gd`'s `MAG_EXP`/`SPAM_PENALTY`
+    discipline rather than an eyeballed comment.
+  - `HandheldCatch` (`src/gameplay/handheld_catch.gd`) — the catch/collection
+    mechanic per this stage's own task: "deterministic (seed-derived, not
+    random) success chance based on a defeated creature's remaining health
+    fraction". `catch_chance` is linear from `BASE_CATCH_CHANCE` (0.05, at
+    full health) up to `BASE_CATCH_CHANCE + MAX_CATCH_BONUS` (0.95, at zero
+    remaining health — deliberately never a guaranteed 1.0, a catch is never
+    a bare formality no matter how weakened the target is); `attempt_catch`
+    compares that chance against `_seeded_roll(seed_value)`, a plain hash of
+    a caller-supplied int, NEVER `RandomNumberGenerator`/`randf()` — the
+    same "looks varied, is actually a pure hash of its input" idiom
+    `PixelNoise` already uses, mirroring `CreatureInfo`'s own
+    `level = 1 + (absi(seed_value) % LEVEL_RANGE)` seed-derived-not-random
+    shape. `HandheldBattleView` derives a real seed from
+    `hash("%s_%d" % [enemy_species, attempt_count])` — a hash of
+    already-known identity, the same idiom `CreatureRenderer`'s own
+    `wander_seed`/`species_seed` already use — so repeated attempts on the
+    same encounter vary deterministically rather than rolling dice.
+    Deliberately separate from `HandheldBattle` — catching is something
+    `HandheldBattleView` offers the player INSTEAD of a battle move (passing
+    `HandheldBattle.MOVE_PASS` in on that round), so the battle core never
+    needs to know catching exists.
+  - `HandheldCollection` (`src/gameplay/handheld_collection.gd`) — the pure
+    "world's smallest Pokédex" catch-list data model: `mark_caught`/
+    `has_caught`/`caught_count`/`caught_fraction`/`entries` (one row per
+    roster species, common tier before legendary, `{species, tier, caught}`,
+    `"???"` for an uncaught species — the dex screen's own data source).
+    Deliberately in-memory/session-only, not persisted to `PlayerSave` — the
+    same "no persistence layer built for this family of Easter eggs yet"
+    scope call every sibling module here already makes (`SeaCaveGuardian`'s
+    own challenge state, `AncientTerminal`'s `has_been_found` — none of them
+    survive a restart today either).
+  - `RetroHandheld` (`src/gameplay/retro_handheld.gd`) — the hidden prop's
+    location + interaction gate, mirroring `AncientTerminal`'s real-coordinate
+    shape. Pinned at Kyoto, Japan (the real-world home of the handheld/
+    monster-collecting games era this prop is an affectionate wink at, never
+    named in-game — no brand, no console name, no logo anywhere in
+    `FOUND_LINE`/`REOPEN_LINE`, the same "quiet, factual geography pick"
+    register `AncientTerminal`/`SignedSecretRoom` already use for Cambridge/
+    Sunnyvale). Repeatable by design like `SeaCaveGuardian` (`is_open()`
+    alone gates re-triggering while the mini-game is already showing) rather
+    than a one-shot find — `has_been_found()`/`mark_found()` exist ONLY to
+    pick which `flavor_line` plays (a quieter "you found it" beat once, a
+    plain "it's on again" beat every visit after), never to block re-entry.
+  - `HandheldBattleView` (`src/rendering/handheld_battle_view.gd`) — the
+    node/rendering adapter and actual playable screen: a full-viewport
+    `Control` overlay styled as a small bordered device with a muted-green
+    "screen" area (built entirely from `ColorRect`/`Label`/`Button`/
+    `TextureRect` children, no new art asset for the chrome, matching
+    `JoustMatchView`'s own "prefer no art asset" precedent), with a battle
+    screen (both creatures' sprites, hp bars reusing `HealthBar.fill_width`,
+    a message line, four move buttons, a Catch button, a Next Encounter
+    button once a round ends) and a dex screen (`HandheldCollection.entries`
+    rendered as plain text lines) toggled by a "Dex" button. Each creature is
+    drawn with the EXISTING rendering this project already built —
+    `IllustratedAnimalSprite`'s own idle frame for a species that has one
+    (deer, boar, krampus, lindwurm, rubezahl all already do), otherwise
+    `ProceduralAnimalSprite`, the exact same "ask before you leap" fallback
+    chain `CreatureMarker._animation_step` uses — zero new creature art, per
+    the doc. The player's own fighter is a fixed companion pick (`"wolf"`,
+    flavor: a loyal wolf at the player's side) rather than a "choose your
+    starter" flow, a deliberate simplification (zero mechanical weight
+    either way, pillar 2). Only lightly tested
+    (`tests/unit/test_handheld_battle_view.gd`, 8 tests: screen switching,
+    that selecting a move drives a real `HandheldBattle` round, that a
+    successful catch marks the collection and ends the encounter, closing
+    emits its signal) — this project's own established "layout glue, not
+    game rules" convention; every real rule is `HandheldBattle`/
+    `HandheldCatch`/`HandheldCollection`'s own job and is covered at full
+    rigor in their own test files.
+  **Wiring** (`scenes/world.gd`): `_check_retro_handheld` runs every frame
+  alongside `_check_ancient_terminal`/`_check_signed_secret_room`/
+  `_check_sea_cave_guardian` (the same just-pressed-"talk"-edge reasoning),
+  shows the found/reopened flavor line through the shared
+  `_easter_egg_label`, opens the handheld view, and pauses the world
+  (`get_tree().paused = true`, the same pattern `_check_sea_cave_guardian`
+  already uses); `_on_handheld_closed` (connected to `HandheldBattleView.
+  closed`) unpauses. Forwarded by a new `World.is_handheld_open()` getter,
+  pinned in `tests/unit/test_world_easter_egg_discovery.gd`, the same shape
+  as `is_sea_cave_challenge_active`. Not part of "Three Fragments" (never
+  one of that hunt's three named eggs).
+  **Deliberate scope decisions, documented rather than silently
+  under-built:**
+  - "wolf" has a full `AnimalAnatomy` body profile (its own `wolf_shape`
+    silhouette family exists, and it's already `/spawn`-able in the open
+    world via `ConsoleSpecies`) but no entry in `ProceduralAnimalSprite`'s
+    own `SPECIES_BASE_COLORS`/`SPECIES_SHAPE_FAMILY` tables (nor in
+    `CreatureInfo`'s stat tables) — a pre-existing gap in the open world's
+    own wolf wiring, not previously called out anywhere in this doc, and
+    NOT this stage's to fix (out of scope for an Easter egg; belongs with
+    the Ecosystem Dynamics section's own next-additions work, if/when
+    someone picks it up there). Consequence for THIS mini-game specifically:
+    the handheld's own wolf encounters currently render as the generic tan
+    "herbivore" silhouette instead of a wolf-shaped one — noted here rather
+    than silently papered over.
+  - No persistence: a caught-species collection resets on restart (see
+    `HandheldCollection`'s own doc comment) — the same "no save/load layer
+    for this Easter-egg family yet" scope call every sibling module already
+    makes.
+  - The player's own battling companion is a fixed species pick, not a
+    player choice — see `HandheldBattleView`'s own doc comment.
 
 ### Electromagnetism (`concept/electromagnetism.md`)
 
