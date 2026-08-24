@@ -32,6 +32,7 @@ const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const SettingsOverlay = preload("res://scenes/settings_overlay.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
+const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
@@ -205,6 +206,7 @@ var _settings_overlay: SettingsOverlay
 var _main_menu: MainMenu
 var _menu_backdrop: ColorRect
 var _menu_background: TextureRect
+var _loading_overlay: LoadingOverlay
 ## Shared dark/rounded UI theme (see UiTheme), assigned to every window/menu so
 ## the whole UI reads as one styled system rather than raw grey boxes.
 var _ui_theme := UiTheme.new().build_theme()
@@ -305,6 +307,13 @@ var _force_day := false
 
 
 func _ready() -> void:
+	# Second, independent license check (see docs/licensing.md,
+	# src/licensing/license_gate.gd) -- the LicenseGate autoload already
+	# checks at boot, before this scene even loads; this re-verifies from
+	# scratch rather than trusting that already ran, so bypassing the game
+	# requires patching more than one call site, not just one `if`.
+	LicenseGate.require_licensed()
+
 	# Area2D's input_event (used by DroppedItem's click-to-pick-up) never
 	# fires unless the viewport's physics picking is explicitly enabled -- it
 	# defaults to off.
@@ -356,6 +365,7 @@ func _ready() -> void:
 	_build_crafting_window()
 	_build_skill_window()
 	_build_settings_overlay()
+	_build_loading_overlay()
 	_build_creature_panels_container()
 	_build_hover_tooltip()
 	_build_death_label()
@@ -449,6 +459,11 @@ func _on_menu_start_requested(
 	_pending_class = chosen_class
 	_pending_appearance = appearance
 	_pending_dna_stat_modifiers = dna_stat_modifiers
+	# Shown and PAINTED before any of the real, synchronous world-setup work
+	# below starts (see _show_loading_overlay) -- that work is what was
+	# reported as the game appearing to hang (see docs/progress.md's Loading
+	# screens entry for the real measured cost).
+	await _show_loading_overlay("Preparing a new world...")
 	_wipe_persisted_world()
 	if mode == "host":
 		_start_server()
@@ -487,11 +502,22 @@ func _wipe_persisted_world() -> void:
 ## docs/concept/persistence.md) -- bypasses the character creator entirely,
 ## unlike _on_menu_start_requested. Deliberately does NOT wipe anything.
 func _on_menu_load_requested() -> void:
+	await _show_loading_overlay("Loading your world...")
 	_spawn_local_singleplayer_from_save()
 	_dismiss_main_menu()
 
 
+## A joining client's own version of the same stall (see _client_process,
+## which is where its first real EarthChunkManager.update() call actually
+## happens -- there is no single call here to wrap the way the two entry
+## points above wrap _spawn_local_singleplayer[_from_save], since a joining
+## client's player node only exists once the server's own spawn has
+## replicated in). Shown here so it's up immediately on click rather than
+## leaving a blank/frozen-looking screen for however long the connection
+## handshake plus that later freeze take; _client_process hides it once that
+## first update() call actually completes.
 func _on_menu_join_requested(address: String) -> void:
+	await _show_loading_overlay("Connecting to host...")
 	_start_client_to(address)
 	_dismiss_main_menu()
 
@@ -507,6 +533,35 @@ func _dismiss_main_menu() -> void:
 	if _menu_background != null:
 		_menu_background.queue_free()
 		_menu_background = null
+
+
+## Builds the loading overlay (see LoadingOverlay) once, hidden, ready to be
+## shown/hidden repeatedly by _show_loading_overlay/_client_process. Built
+## alongside the other menu-era overlays (_build_settings_overlay) rather than
+## lazily, so it's already in the tree -- and can be moved to the front of
+## `_ui` -- the first time New Game/Load Game/Join needs it.
+func _build_loading_overlay() -> void:
+	_loading_overlay = LoadingOverlay.new()
+	_loading_overlay.theme = _ui_theme
+	# Must keep animating/painting while the world is paused (see
+	# _show_main_menu/_toggle_settings_menu -- every other paused-but-live
+	# overlay in this file uses the same PROCESS_MODE_ALWAYS).
+	_loading_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ui.add_child(_loading_overlay)
+
+
+## Shows the loading overlay with `text` and waits for it to actually be
+## PAINTED before returning, so callers can safely follow this with a long
+## synchronous call without leaving a blank/frozen-looking frame on screen
+## first. Two frames, not one: adding a Control and making it visible in the
+## same frame queues a draw that a single `await process_frame` isn't
+## guaranteed to have been presented by (Godot can defer that first draw one
+## frame further) -- verified against a real running instance, see
+## docs/progress.md's Loading screens entry.
+func _show_loading_overlay(text: String) -> void:
+	_loading_overlay.show_with_text(text)
+	await get_tree().process_frame
+	await get_tree().process_frame
 
 
 func _start_server() -> void:
@@ -1078,11 +1133,15 @@ func _update_charge_meter(local_player: Player) -> void:
 ## EarthChunkManager.nearest_liftable_stone_near, Player.PICKUP_RADIUS) and
 ## shows "Pick (<key>)" instead -- a boulder never qualifies (see
 ## StoneSize.is_liftable), only something the pickup key would actually
-## collect. An NPC to talk to takes precedence over a stone to pick up when
-## both are in range at once: talking is the rarer, more deliberate action,
-## and a pebble underfoot isn't going anywhere. Both bound keys are read
-## live from _keybindings so a rebind is reflected immediately, never a
-## stale hardcoded letter.
+## collect. Failing THAT, the same for the nearest dropped item with a
+## real, kickable-grade mass (Player.nearest_kickable_dropped_item_near) --
+## the generic-item counterpart of the stone case (docs/concept/
+## wild_crops.md's "a real physical entity" now also picks into the hand).
+## An NPC to talk to takes precedence over anything to pick up when both
+## are in range at once: talking is the rarer, more deliberate action, and
+## a pebble underfoot isn't going anywhere. All bound keys are read live
+## from _keybindings so a rebind is reflected immediately, never a stale
+## hardcoded letter.
 func _update_interaction_prompt(local_player: Player) -> void:
 	if _chunk_manager == null:
 		_interaction_prompt.visible = false
@@ -1096,14 +1155,22 @@ func _update_interaction_prompt(local_player: Player) -> void:
 	# Something already in hand: E is now dedicated to charge/release (see
 	# Player._pickup_step, the charge meter above the player's own head
 	# handles that hint) -- "Pick" would be misleading since pressing the
-	# key no longer sweeps a new stone into inventory while the hand is full.
-	if local_player.is_holding_stone():
+	# key no longer sweeps a new stone/item into inventory while the hand
+	# is full.
+	if local_player.is_holding_anything():
 		_interaction_prompt.visible = false
 		return
 
 	var stone := _chunk_manager.nearest_liftable_stone_near(local_player.position, Player.PICKUP_RADIUS)
 	if stone != null:
 		_show_interaction_prompt("Pick (%s)" % OS.get_keycode_string(_keybindings.keycode_for("pickup")), stone.position)
+		return
+
+	var dropped_item := local_player.nearest_kickable_dropped_item_near(local_player.position, Player.PICKUP_RADIUS)
+	if dropped_item != null:
+		_show_interaction_prompt(
+			"Pick (%s)" % OS.get_keycode_string(_keybindings.keycode_for("pickup")), dropped_item.position
+		)
 		return
 
 	_interaction_prompt.visible = false
@@ -1410,9 +1477,15 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# one gap that section itself named, now closed the same way
 	# step_settlements already is.
 	_chunk_manager.step_npc_encounters(delta)
-	# Regional trade's own dispatch decision (docs/concept/regional_trade.md
-	# Phase 14) -- throttled by REGIONAL_TRADE_INTERVAL internally, same
-	# accumulator shape as step_settlements above.
+	# A settlement's own real production shortfall (see
+	# EarthChunkManager.production_shortfall_quests_for_settlement, Phase
+	# 12) can be resupplied by the nearest other real settlement's genuine
+	# surplus (see step_regional_trade, docs/concept/regional_trade.md) --
+	# the region's own most basic trade network, running automatically.
+	# Dispatch is throttled by REGIONAL_TRADE_INTERVAL internally, same
+	# accumulator shape as step_settlements above; delivery is now a real
+	# caravan trip (see step_caravans, docs/concept/trade.md), not an
+	# instant credit.
 	_chunk_manager.step_regional_trade(delta)
 	_step_herbivore_food_consumption(delta)
 	_step_reproduction(delta)
@@ -2623,6 +2696,16 @@ func _client_process(delta: float) -> void:
 			player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 
 	_chunk_manager.update(local_player.current_tile())
+	# Covers the joining-client version of the same stall (see
+	# _on_menu_join_requested): unlike New Game/Load Game, a joining client has
+	# no single call site to wrap -- its local player only exists once the
+	# server's own spawn has replicated in, and its first real chunk load
+	# happens right here, on whichever frame that lands on. Idempotent once
+	# already hidden, so this is a no-op for every later frame and for the
+	# New Game/Load Game paths, which have already hidden it themselves by the
+	# time their own local player reaches this point.
+	if _loading_overlay.visible:
+		_loading_overlay.hide_overlay()
 
 	var player_tile := local_player.current_tile()
 	_update_minimap(player_tile, delta)

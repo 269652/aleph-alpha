@@ -160,3 +160,57 @@ func test_flee_direction_is_nonzero_even_when_overlapping_the_threat():
 func test_wander_returns_a_zero_direction_for_the_caller_to_fill_in():
 	var decision := behavior.decide(_context({}))
 	assert_eq(decision.direction, Vector2.ZERO)
+
+
+# -- world boss aggro gating (docs/concept/worldbosses.md) -------------------
+#
+# A world boss should not attack a low-level player just for being nearby,
+# the way an ordinary aggressive+strong creature does -- and it shouldn't
+# flee one either, which a bare "ignore the aggressive rule" toggle would
+# accidentally produce (falling through to the calm-creature branch). It
+# should not perceive the player as a threat AT ALL until provoked by a
+# real hit (see BossAggro/CreatureMarker.take_damage, which sets
+# is_aggroed). Once aggroed, it behaves exactly like any other creature of
+# its temperament -- no special "bosses never flee" rule invented here.
+
+func test_unaggroed_world_boss_ignores_a_nearby_threat_and_wanders():
+	var decision := behavior.decide(_context({
+		"position": Vector2.ZERO, "temperament": "aggressive", "health_fraction": 1.0,
+		"threats": [Vector2(10, 0)], "is_world_boss": true, "is_aggroed": false,
+	}))
+	assert_eq(decision.intent, "wander")
+
+
+func test_unaggroed_world_boss_does_not_flee_a_threat_either():
+	var decision := behavior.decide(_context({
+		"position": Vector2.ZERO, "temperament": "calm", "health_fraction": 0.1,
+		"threats": [Vector2(10, 0)], "is_world_boss": true, "is_aggroed": false,
+	}))
+	assert_ne(decision.intent, "flee")
+
+
+func test_aggroed_world_boss_fights_like_an_ordinary_aggressive_creature():
+	var decision := behavior.decide(_context({
+		"position": Vector2.ZERO, "temperament": "aggressive", "health_fraction": 1.0,
+		"threats": [Vector2(10, 0)], "is_world_boss": true, "is_aggroed": true,
+	}))
+	assert_eq(decision.intent, "attack")
+
+
+func test_aggroed_world_boss_still_flees_if_weak_like_any_other_creature():
+	var decision := behavior.decide(_context({
+		"position": Vector2.ZERO, "temperament": "aggressive", "health_fraction": 0.1,
+		"threats": [Vector2(10, 0)], "is_world_boss": true, "is_aggroed": true,
+	}))
+	assert_eq(decision.intent, "flee")
+
+
+func test_unaggroed_world_boss_still_seeks_food_and_water_normally():
+	# Ignoring the player as a threat must not make it ignore everything --
+	# ordinary needs still drive it exactly like any other creature.
+	var decision := behavior.decide(_context({
+		"position": Vector2.ZERO, "temperament": "aggressive",
+		"threats": [Vector2(10, 0)], "is_world_boss": true, "is_aggroed": false,
+		"thirsty": true, "water_direction": Vector2(1, 0),
+	}))
+	assert_eq(decision.intent, "seek_water")

@@ -44,6 +44,31 @@ func test_spawns_nothing_on_a_chunk_with_no_ocean():
 	assert_eq(spawned.size(), 0)
 
 
+# -- spawn_fish_at: one real fish outside the chunk system entirely --------
+#
+# For the character preview diorama's own small standalone pond (see
+# character_preview_diorama.gd) -- not ocean-tile spawning, no Chunk
+# involved at all.
+
+func test_spawn_fish_at_places_a_real_fish_at_the_given_position():
+	var fish := renderer.spawn_fish_at(parent, "koi", Vector2(40, 60), 7)
+	assert_not_null(fish.texture)
+	assert_eq(fish.position, Vector2(40, 60))
+	assert_eq(fish.get_parent(), parent)
+
+
+func test_spawn_fish_at_processes_a_frame_without_a_world_without_crashing():
+	add_child(parent)
+	var fish := renderer.spawn_fish_at(parent, "goldfish", Vector2.ZERO, 1)
+	# FishMarker.setup's own doc comment says a null world means the fish
+	# swims unconfined rather than checking water-tile boundaries -- a real
+	# crash trying to duck-type against that null world would only show up
+	# once _process actually runs, not at construction time.
+	fish._process(0.1)
+	assert_true(true)
+	remove_child(parent)
+
+
 func test_spawns_some_fish_on_a_large_ocean_chunk():
 	var chunk := _make_chunk("ocean")
 	var spawned := renderer.spawn_fish(parent, Vector2i(1, 1), chunk, CHUNK_ORIGIN, TILE_SIZE)

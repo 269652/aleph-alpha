@@ -57,6 +57,12 @@ const CLASS_PALETTES := {
 	"fisher": {
 		"tunic": Color(0.22, 0.5, 0.52), "trim": Color(0.8, 0.72, 0.5), "legs": Color(0.24, 0.3, 0.32),
 	},
+	"hunter": {
+		"tunic": Color(0.34, 0.38, 0.22), "trim": Color(0.58, 0.42, 0.24), "legs": Color(0.24, 0.22, 0.16),
+	},
+	"nurse": {
+		"tunic": Color(0.82, 0.8, 0.76), "trim": Color(0.68, 0.28, 0.32), "legs": Color(0.5, 0.48, 0.46),
+	},
 }
 const _FALLBACK_CLASS := "warrior"
 

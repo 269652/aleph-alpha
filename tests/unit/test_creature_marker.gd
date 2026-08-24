@@ -157,6 +157,44 @@ func test_take_damage_reduces_info_health():
 	assert_eq(marker.info.health, before - 5.0)
 
 
+# -- world boss aggro gating (docs/concept/worldbosses.md, BossAggro) -------
+
+func test_a_weak_hit_against_an_unaggroed_world_boss_deals_no_damage():
+	marker.info = CreatureInfo.new("krampus")
+	var before := marker.info.health
+	marker.take_damage(0.01)  # far below any real fraction-of-max-health threshold
+	assert_eq(marker.info.health, before)
+
+
+func test_a_weak_hit_against_an_unaggroed_world_boss_does_not_aggro_it():
+	marker.info = CreatureInfo.new("krampus")
+	marker.take_damage(0.01)
+	assert_false(marker.info.is_aggroed)
+
+
+func test_a_real_hit_against_an_unaggroed_world_boss_damages_it_and_aggros_it():
+	marker.info = CreatureInfo.new("krampus")
+	var before := marker.info.health
+	marker.take_damage(marker.info.max_health)  # unmistakably above any threshold
+	assert_lt(marker.info.health, before)
+	assert_true(marker.info.is_aggroed)
+
+
+func test_once_aggroed_even_a_weak_hit_still_deals_damage():
+	marker.info = CreatureInfo.new("krampus")
+	marker.info.is_aggroed = true
+	var before := marker.info.health
+	marker.take_damage(0.01)
+	assert_lt(marker.info.health, before)
+
+
+func test_non_boss_species_are_unaffected_by_the_aggro_gate():
+	marker.info = CreatureInfo.new("herbivore")
+	var before := marker.info.health
+	marker.take_damage(0.01)
+	assert_lt(marker.info.health, before, "an ordinary creature takes any amount of damage, no threshold")
+
+
 func test_has_a_visible_health_bar_at_full_health():
 	assert_almost_eq(marker._health_bar_fill.size.x, CreatureMarker.HEALTH_BAR_WIDTH, 0.01)
 

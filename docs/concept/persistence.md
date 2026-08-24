@@ -119,6 +119,63 @@ world upkeep already ticking in `World` (see implementation for the exact
 interval — a tuned/tested constant, not eyeballed) plus once on quit, so
 progress is never more than one short interval old.
 
+## Loading screens
+
+New Game/Host, Load Game, and Join all pay a real, synchronous cost before
+the player can actually move: `EarthChunkManager.update()`'s first call for a
+freshly-centered chunk radius (`_compute_dry_land_spawn_tile`/
+`_spawn_local_singleplayer_from_save`) generates and paints every chunk in
+`LOAD_RADIUS`, spawning trees/stones/grass/crops/decomposers/flowers/scrub/
+lichen for each — measured at **~39s for that single call** in this dev
+sandbox (real timing instrumentation against a real running instance, not
+estimated). Nothing in that call chain (`EarthChunkManager.update` →
+`_load_chunk` → `TerrainRenderer.paint`/`TreeRenderer.spawn_trees`/...) ever
+`await`s, so it fully blocks the engine's own frame presentation for its
+entire real duration — without a loading screen this reads as the game
+having hung, not as it working.
+
+`World._show_loading_overlay(text)` shows `LoadingOverlay` (a small,
+purpose-built `Control` — dim full-screen backdrop, centered status label,
+indeterminate spinner glyph) and awaits **two** `process_frame` signals
+before returning, so the overlay is genuinely painted on screen before the
+caller starts its long synchronous call (one await frame is not reliably
+enough — Godot can defer a freshly-added Control's first draw one frame
+further; confirmed by capturing a real rendered screenshot mid-freeze, not
+assumed from the `await` alone). Wired into all three entry points:
+
+- `_on_menu_start_requested` (New Game/Host): "Preparing a new world..."
+- `_on_menu_load_requested` (Load Game): "Loading your world..."
+- `_on_menu_join_requested` (Join): "Connecting to host..." — a joining
+  client has no single call site to wrap the way the other two wrap
+  `_spawn_local_singleplayer[_from_save]`, since its local player only
+  exists once the server's own spawn has replicated in and its first real
+  chunk load happens later, inside the ordinary per-frame `_client_process`
+  tick. Shown immediately on click regardless, so the connection handshake
+  and the later freeze aren't a blank/frozen-looking screen either.
+
+Hidden from one place, `_client_process`, right after its own
+`EarthChunkManager.update()` call, gated on `_loading_overlay.visible` (a
+no-op once already hidden). This single hide point correctly covers all
+three flows: New Game/Load Game have already finished their own heavy
+`update()` call by the time `_dismiss_main_menu()` runs, so `_client_process`
+hides it on the very next frame (a second, now-cheap `update()` call, since
+the needed chunks are already loaded); Join has no earlier call, so this is
+the exact moment its own real freeze ends.
+
+Progress is an honest **indeterminate spinner**, not a fabricated
+percentage: nothing outside `EarthChunkManager.update()` can observe real
+interim progress without it yielding mid-loop, and making it do that would
+mean restructuring `EarthChunkManager`/`TerrainRenderer` internals to load
+chunks across multiple frames — a materially bigger, riskier change than a
+loading *screen*, and out of scope here (every existing synchronous caller,
+including ~127 test files, currently depends on `update()` completing in one
+call). Confirmed by the same real screenshots: because nothing renders
+during the freeze itself, the spinner glyph is only ever actually seen to
+change across the couple of awaited frames before/after the freeze, then
+necessarily holds on one frame for the freeze's real duration — still a
+correct, honest indeterminate spinner, just one that (like everything else
+on screen) can't animate through a period nothing can render during.
+
 ## Status / mechanisms
 
 - ✅ `Player.appearance` field + `to_save_dict()`/`apply_save_dict()`, tested
@@ -144,5 +201,26 @@ progress is never more than one short interval old.
 - ✅ Autosave (`World.AUTOSAVE_INTERVAL`, periodic in `_client_process` +
   once on `NOTIFICATION_WM_CLOSE_REQUEST`) — same untested-glue boundary as
   the rest of `World`.
+- ✅ Loading screen (`LoadingOverlay`, `src/ui/loading_spinner.gd`) covering
+  New Game/Host, Load Game, and Join's real synchronous world-setup stall
+  (see Loading screens above) — `LoadingSpinner.frame_for_elapsed` is pure
+  and tested (`test_loading_spinner.gd`); `LoadingOverlay`/its `World` wiring
+  are untested Node-composition glue, the same established boundary as the
+  rest of `World`/its overlay classes (`MainMenu`/`SettingsOverlay`). Verified
+  against a real running instance (real screenshots, both mid-freeze and
+  post-spawn, for New Game and Load Game), not just read through — see
+  `docs/progress.md`.
+- 🚧 The pre-menu terrain-atlas bake (`TerrainRenderer.build_tile_set`,
+  triggered unconditionally in `World._ready()` via `EarthChunkManager`'s
+  constructor, before the main menu itself is even shown) is a real,
+  separate stall on the same order of magnitude when its on-disk cache is
+  stale or missing (measured ~62s in this dev sandbox on this session's own
+  `ATLAS_VERSION` bump) — NOT covered by the New Game/Load Game/Join loading
+  screens above, since it happens before any of those entry points exist to
+  wrap. Left alone deliberately: fixing it would mean restructuring when/how
+  `World` constructs its `EarthChunkManager`, materially bigger than a
+  loading screen over an existing synchronous call. A stale cache is a
+  one-time cost per `ATLAS_VERSION` bump, self-heals (writes a fresh cache)
+  on that first paid run, and every run after is fast (~3s, cache hit).
 - ⬜ Multiple save slots, cloud sync, or any cross-device concern — out of
   scope; single local save file only.

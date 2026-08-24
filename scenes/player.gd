@@ -370,6 +370,15 @@ var _stone_renderer := StoneRenderer.new()
 ## THAT the same way every other stone's mass is -- see StoneSize.mass_kg_for).
 var _hand_stone_diameter_cm := -1.0
 
+## The held-item concept, generalized beyond stones (reported live: "pick up
+## should put it in the hand first instead of the inventory" -- see
+## docs/concept/wild_crops.md's "a real physical entity, not just an
+## inventory grant"). null means nothing generic is held; a real ItemStack
+## is whatever's currently in hand. Mutually exclusive with
+## _hand_stone_diameter_cm -- only one thing occupies the hand at a time
+## (see is_holding_anything).
+var _hand_item_stack = null
+
 ## How long the pickup input has been continuously held THIS charge (reset
 ## on a fresh press while already holding something -- see _pickup_step).
 ## Fed to ChargeMeter.fraction_at every frame while charging.
@@ -394,6 +403,7 @@ var _last_build_input_state := false
 var _last_destroy_input_state := false
 var _last_pickup_input_state := false
 var _last_kick_input_state := false
+var _last_stash_input_state := false
 
 ## Authority-side: last input direction received from the owning client (or
 ## read directly from Input, in the no-networking singleplayer fallback).
@@ -404,6 +414,7 @@ var _pending_build_pressed := false
 var _pending_destroy_pressed := false
 var _pending_pickup_pressed := false
 var _pending_kick_pressed := false
+var _pending_stash_pressed := false
 ## Non-authority proxy side: for inferring facing/animation from replicated
 ## position deltas, since only position itself is replicated.
 var _last_position := Vector2.ZERO
@@ -1128,6 +1139,7 @@ func _authority_step(delta: float) -> void:
 	_attack_step(delta)
 	_pickup_step(delta)
 	_kick_step()
+	_stash_step()
 	_build_step()
 	_destroy_step()
 	_fishing_step(delta)
@@ -1426,14 +1438,20 @@ func _chop_step() -> void:
 		tree.take_damage(damage)
 
 
-## Authority-only: E (pickup) is now CONTEXTUAL (see docs/concept/stone.md):
+## Authority-only: E (pickup) is now CONTEXTUAL (see docs/concept/stone.md,
+## generalized in docs/concept/wild_crops.md to any real physical object):
 ## empty-handed near a liftable stone, E picks it into the HAND instead of
-## straight to inventory (_try_pick_stone_into_hand); empty-handed with no
-## stone nearby, E still does the ordinary ground-item sweep unchanged
-## (pickup_nearby). With something already in hand, a NEW press starts a
-## charge (ChargeMeter bounces while held -- see hand_charge_fraction), and
-## releasing throws it (_throw_held_stone). Rising-edge detection throughout
-## so holding E doesn't repeat the initial action every frame.
+## straight to inventory (_try_pick_stone_into_hand); failing that, empty-
+## handed near a dropped item with a real, kickable-grade mass, E picks
+## THAT into the hand instead (_try_pick_item_into_hand); empty-handed with
+## neither nearby, E still does the ordinary ground-item sweep unchanged
+## (pickup_nearby) -- so an item with no modeled mass (most food/material
+## drops today) keeps going straight to inventory exactly as before. With
+## something already in hand, a NEW press starts a charge (ChargeMeter
+## bounces while held -- see hand_charge_fraction), and releasing throws it
+## (_throw_held_stone or _throw_held_item, whichever is actually held).
+## Rising-edge detection throughout so holding E doesn't repeat the initial
+## action every frame.
 func _pickup_step(delta: float) -> void:
 	var pickup_pressed := (
 		Input.is_action_pressed("pickup") if _controlled_locally() else _pending_pickup_pressed
@@ -1442,8 +1460,8 @@ func _pickup_step(delta: float) -> void:
 	var just_released := _last_pickup_input_state and not pickup_pressed
 	_last_pickup_input_state = pickup_pressed
 
-	if not is_holding_stone():
-		if just_pressed and not _try_pick_stone_into_hand():
+	if not is_holding_anything():
+		if just_pressed and not _try_pick_stone_into_hand() and not _try_pick_item_into_hand():
 			# A direct-from-the-tree harvest (see _try_harvest_peak_fruit) only
 			# runs when the ordinary ground-item sweep found nothing -- one E
 			# press does one thing, and a windfall already underfoot takes
@@ -1463,21 +1481,38 @@ func _pickup_step(delta: float) -> void:
 
 	if just_released and _charging:
 		_charging = false
-		_throw_held_stone()
+		if is_holding_stone():
+			_throw_held_stone()
+		else:
+			_throw_held_item()
 
 
-## Whether something is currently held in hand (see _hand_stone_diameter_cm's
+## Whether a stone is currently held in hand (see _hand_stone_diameter_cm's
 ## own doc comment) -- distinct from both inventory and Equipment's worn
 ## weapon slot.
 func is_holding_stone() -> bool:
 	return _hand_stone_diameter_cm >= 0.0
 
 
+## Whether a general dropped item (not a stone) is currently held in hand
+## (see _hand_item_stack's own doc comment).
+func is_holding_item() -> bool:
+	return _hand_item_stack != null
+
+
+## Whether ANYTHING is currently held in hand -- a stone or a general item.
+## Read wherever code previously asked is_holding_stone() to gate "is the
+## hand occupied at all" (e.g. the E-pickup dispatch above, the interaction
+## prompt) now that the hand can hold either kind of object.
+func is_holding_anything() -> bool:
+	return is_holding_stone() or is_holding_item()
+
+
 ## The charge meter's current reading in [0, 1] (see ChargeMeter) -- 0.0
 ## whenever nothing is in hand, or the pickup input isn't currently held.
 ## Read by World for the strengthometer UI.
 func hand_charge_fraction() -> float:
-	if not is_holding_stone() or not _charging:
+	if not is_holding_anything() or not _charging:
 		return 0.0
 	return ChargeMeter.fraction_at(_hand_charge_elapsed)
 
@@ -1498,6 +1533,24 @@ func _try_pick_stone_into_hand() -> bool:
 	_hand_charge_elapsed = 0.0
 	_charging = false
 	stone.queue_free()
+	return true
+
+
+## Takes the nearest dropped item with a real, kickable-grade mass (the
+## SAME "physical object" set Kick already recognizes -- see
+## nearest_kickable_dropped_item_near) into the HAND, mirroring
+## _try_pick_stone_into_hand exactly. An item with no modeled mass (most
+## food/material drops today) is NOT a hand object -- it is deliberately
+## left for the caller to fall back to the ordinary pickup_nearby() sweep,
+## unchanged from before this existed.
+func _try_pick_item_into_hand() -> bool:
+	var dropped_item := nearest_kickable_dropped_item_near(position, PICKUP_RADIUS)
+	if dropped_item == null:
+		return false
+	_hand_item_stack = dropped_item.item_stack
+	_hand_charge_elapsed = 0.0
+	_charging = false
+	dropped_item.queue_free()
 	return true
 
 
@@ -1523,6 +1576,28 @@ func _throw_held_stone() -> void:
 	_resolve_thrown_stone_impact(landing_position, momentum)
 	_resolve_stone_impact_on_obstacles(landing_position, momentum)
 	_spawn_thrown_stone(landing_position, diameter_cm)
+
+
+## Throws whatever generic item is in hand -- the SAME release-power ->
+## real-momentum pipeline _throw_held_stone uses, just reading the item's
+## own real mass (Item.mass_kg) instead of deriving one from a stone
+## diameter, and spawning a plain DroppedItem at the landing spot instead
+## of rebuilding a LiftableStone.
+func _throw_held_item() -> void:
+	var item_stack = _hand_item_stack
+	_hand_item_stack = null
+
+	var power := ChargeMeter.fraction_at(_hand_charge_elapsed)
+	var release_speed := HeldItemThrow.release_speed_mps(power)
+	var mass_kg: float = item_stack.item.mass_kg
+	var momentum := _throwable.impact_knockback(mass_kg, release_speed)
+	var distance := HeldItemThrow.throw_distance_px(power)
+	var direction := _last_facing_direction if _last_facing_direction.length() > 0.01 else Vector2.DOWN
+	var landing_position := position + direction.normalized() * distance
+
+	_resolve_thrown_stone_impact(landing_position, momentum)
+	_resolve_stone_impact_on_obstacles(landing_position, momentum)
+	_spawn_thrown_item(landing_position, item_stack)
 
 
 ## How close a thrown stone's landing spot must be to a creature to count as
@@ -1590,6 +1665,16 @@ func _spawn_thrown_stone(landing_position: Vector2, diameter_cm: float) -> void:
 	get_parent().add_child(stone)
 
 
+## Materializes a real DroppedItem at `landing_position` -- the generic-item
+## counterpart of _spawn_thrown_stone, and also reused by _stash_step to
+## drop whatever doesn't fit in a full inventory rather than losing it.
+func _spawn_thrown_item(landing_position: Vector2, item_stack) -> void:
+	var dropped := DroppedItem.new()
+	dropped.item_stack = item_stack
+	dropped.position = landing_position
+	get_parent().add_child(dropped)
+
+
 ## Picks up every ground item within PICKUP_RADIUS. Returns the number of item
 ## nodes fully collected.
 func pickup_nearby() -> int:
@@ -1650,7 +1735,7 @@ func _kick_step() -> void:
 	var stone_kickable := stone != null and Kick.is_kickable(stone_mass)
 	var stone_distance := position.distance_to(stone.position) if stone_kickable else INF
 
-	var dropped_item := _nearest_kickable_dropped_item_near(position, PICKUP_RADIUS)
+	var dropped_item := nearest_kickable_dropped_item_near(position, PICKUP_RADIUS)
 	var dropped_distance := position.distance_to(dropped_item.position) if dropped_item != null else INF
 
 	if not stone_kickable and dropped_item == null:
@@ -1681,7 +1766,7 @@ func _kick_step() -> void:
 ## items) is deliberately excluded, the same as a stone at/above leg mass:
 ## kicking something with no real mass would be meaningless under the shared
 ## momentum model (docs/concept/materials.md).
-func _nearest_kickable_dropped_item_near(from: Vector2, radius: float) -> DroppedItem:
+func nearest_kickable_dropped_item_near(from: Vector2, radius: float) -> DroppedItem:
 	var nearest: DroppedItem = null
 	var nearest_distance := radius
 	for item in get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
@@ -1695,6 +1780,42 @@ func _nearest_kickable_dropped_item_near(from: Vector2, radius: float) -> Droppe
 			nearest = item
 			nearest_distance = distance
 	return nearest
+
+
+## Authority-only: on the rising edge of the stash input (default H -- see
+## Keybindings), puts whatever is currently held in the HAND away into the
+## inventory -- the deliberate "put this down" complement to E's "pick this
+## up into hand" (docs/concept/stone.md's held-item concept, generalized in
+## docs/concept/wild_crops.md to any real physical object). A no-op with
+## nothing in hand. Whatever doesn't fit is dropped as a real ground item at
+## the player's own feet (_spawn_thrown_item) rather than lost -- stashing
+## never silently discards anything, unlike LiftableStone.pick_up's own
+## existing "partial overflow is silently dropped" ground-pickup behavior,
+## which this deliberately does NOT copy: that shortcut is tolerable for an
+## incidental walk-up pickup, not for a player's own deliberate stash.
+func _stash_step() -> void:
+	var stash_pressed := (
+		Input.is_action_pressed("stash") if _controlled_locally() else _pending_stash_pressed
+	)
+	var just_pressed := stash_pressed and not _last_stash_input_state
+	_last_stash_input_state = stash_pressed
+	if not just_pressed or not is_holding_anything() or inventory == null:
+		return
+
+	if is_holding_stone():
+		var diameter_cm := _hand_stone_diameter_cm
+		_hand_stone_diameter_cm = -1.0
+		var count := StoneSize.rock_yield(diameter_cm)
+		var rock_item := Item.new("rock", "Rock", "material", 20)
+		var overflow: int = inventory.add(rock_item, count)
+		if overflow > 0:
+			_spawn_thrown_item(position, ItemStack.new(rock_item, overflow))
+	else:
+		var item_stack = _hand_item_stack
+		_hand_item_stack = null
+		var overflow: int = inventory.add(item_stack.item, item_stack.count)
+		if overflow > 0:
+			_spawn_thrown_item(position, ItemStack.new(item_stack.item, overflow))
 
 
 ## Authority-only: the fishing minigame (see FishingSession / concept/fishing.md).

@@ -93,6 +93,12 @@ func _ready() -> void:
 	# has to stay pinned to the ground line by its own BOTTOM edge, not
 	# straddle the marker's origin the way a centered growing rect would.
 	_root.centered = false
+	# Horizontal centering only, set ONCE -- see CropPull.root_reveal_offset's
+	# own doc comment for why this must NOT depend on progress (the actual
+	# "huge blob behind the leaves" bug: a per-frame vertical shift here
+	# used to push the crown away from the leaves as more of the root
+	# revealed).
+	_root.offset = CropPull.root_reveal_offset(IllustratedCropSprite.ROOT_CANVAS_SIZE)
 	_lift.add_child(_root)
 	_reveal_root(0.0)
 
@@ -113,21 +119,23 @@ func _process(delta: float) -> void:
 ## How much of the root's art is currently uncovered, 0 (nothing, still
 ## fully buried) to 1 (the whole root, fully clear of the ground).
 ##
-## Reported live: "potato fruits are still rendered above soil and not
-## buried". `region_rect` growing while `centered` stays true (Sprite2D's
-## default) draws the revealed strip straddling the marker's own origin --
-## half above local y=0, half below -- rather than emerging upward out of a
-## fixed ground point, which reads as "already half above ground" the
-## instant any of it is revealed. A carrot's thin taper made that easy to
-## miss; a potato's wide, round tuber made it obvious. `centered = false`
-## (see _ready) plus this offset pins the drawn quad's BOTTOM edge -- not
-## its middle -- to y=0, so growth always reads as "rising out of the
-## ground," for any crop's art, not just the one this happened to look
-## acceptable for.
+## Reported live, twice: first "potato fruits are still rendered above soil
+## and not buried" (fixed by pinning the growing region to `centered =
+## false` -- see _ready), then "carrots/potatoes render a huge blob behind
+## the leaves" -- that first fix's own offset ALSO shifted vertically by
+## `-revealed_height` every frame, which correctly pinned the region's
+## bottom edge to the ground at any single instant, but meant the crown's
+## own drawn position climbed steadily higher as revealed_height grew,
+## since a taller revealed slice needs a bigger upward shift to keep its
+## bottom at y=0. The crown -- where the root attaches to the leaves --
+## ended up floating further and further from the leaf cluster as the pull
+## progressed instead of staying anchored to it. See
+## CropPull.root_reveal_rect/root_reveal_offset: offset is now set ONCE in
+## _ready (horizontal centering only), and only the region_rect grows here,
+## so the crown never moves -- the root now visibly hangs below the leaves
+## it's still attached to, growing more visible from that fixed point.
 func _reveal_root(progress: float) -> void:
-	var revealed_height := progress * float(IllustratedCropSprite.ROOT_CANVAS_SIZE.y)
-	_root.region_rect = Rect2(Vector2.ZERO, Vector2(IllustratedCropSprite.ROOT_CANVAS_SIZE.x, revealed_height))
-	_root.offset = Vector2(-float(IllustratedCropSprite.ROOT_CANVAS_SIZE.x) / 2.0, -revealed_height)
+	_root.region_rect = CropPull.root_reveal_rect(IllustratedCropSprite.ROOT_CANVAS_SIZE, progress)
 
 
 ## For World's mouse-hover tooltip (see HoverTargetFinder).

@@ -445,13 +445,56 @@ the same `CharacterView.tscn` the player and every NPC wear.
   unchanged) — a live `SubViewport` per tiny icon would be wasteful; only
   the one big preview panel became a diorama.
 
-⬜ Not yet visually verified live (only headlessly, where a `SubViewport`'s
-actual rendered pixels can't be inspected — the underlying layout math,
-stroll motion, and node counts are tested directly instead, see
-`test_character_stroll.gd`/`test_character_preview_layout.gd`/
-`test_character_preview_diorama.gd`). Whether `DIORAMA_VIEW_SIZE`/the
-camera zoom/the exact footprint read well at actual screen size is a real
-open question until seen.
+✅ **Seen live and iterated on real screenshots** — several real bugs only
+visible once actually rendered, none catchable headlessly:
+
+- **The panel wasn't containing the diorama at all** — `glow_wrap` (a
+  plain `Control`) defaulted to `SIZE_FILL`, so `inner` (a `VBoxContainer`
+  whose own width tracks the hero card's `SIZE_EXPAND_FILL`) stretched it
+  out to nearly the whole card; the DNA rarity-glow ring anchored inside it
+  stretched right along with it, and a gold-at-0.35-alpha ring over the
+  card's dark background reads as a flat, unrelated tan panel. Fixed with
+  `SIZE_SHRINK_CENTER` on both axes.
+- **A second, deeper bug behind the same symptom**: `frame.set_anchors_
+  preset(PRESET_CENTER)` was called BEFORE the diorama view existed as its
+  child, freezing the centring math against a zero-size box; when frame's
+  real size appeared afterward, Godot does not recompute those offsets, so
+  it grew from that frozen corner instead of staying centred — the exact
+  same latent bug the very first screenshot already showed with the OLD
+  static portrait, just never fixed until now. Replaced with a real
+  `CenterContainer`, which recentres continuously regardless of when/how
+  its child's size changes.
+- **The pond "seemed tinted"** — `ProceduralShoreDistanceSprite` is built
+  around a square terrain TILE with land on specific cardinal SIDES, not
+  an isolated round pond; an empty `land_directions` list gave a uniform
+  "no shore anywhere" fill with no alpha mask (a flat, square, untextured
+  tint). `src/rendering/circular_pond_sprite.gd` measures shore-distance
+  RADIALLY from the image's own centre instead and masks a real circular
+  silhouette, in the same red-channel convention `WaterShader` already
+  reads.
+- **"The fish pond should be at the edge"** — the pond was placed with a
+  small random jitter around dead-centre; `CharacterPreviewLayout` now
+  picks one of the footprint's 4 edges per seed and places the pond close
+  to it (`POND_EDGE_MARGIN`), randomizing only its position ALONG that
+  edge.
+- **"Add fish to the pond"** — `FishRenderer` gained a public
+  `spawn_fish_at(parent, species, position, seed_value)` wrapper (the same
+  convention `StoneRenderer.build_liftable_stone_node` already
+  established) around its own private `_build_fish`, sidestepping the
+  chunk-based ocean-tile spawning `spawn_fish` itself requires. 2 fish per
+  diorama, scattered by seeded polar coordinates (sqrt-corrected so they
+  don't bunch toward the centre) within the pond's own radius.
+  `CharacterPreviewLayout.Result.fish_positions` follows the same
+  determinism convention as everything else. Needed one more fix once
+  trees enabled y-sort on the whole diorama root: the pond, a large flat
+  ground feature sorted by its own centre point, would otherwise
+  y-sort BEHIND roughly half the fish scattered around that centre and
+  make them vanish — pinned to `z_index = -1` so it always draws first
+  regardless of any Y comparison.
+- **"The grass blades don't part when it walks through"** —
+  `IllustratedGrassPatch.set_walker_position` already existed and is a
+  pure no-op until called (see that function's own doc comment); the
+  diorama just never called it. One line in `_process`.
 
 
 ### `/ecotest` — watching a year go by
@@ -2404,6 +2447,34 @@ only — design-only so far, no code exists for it yet:
   `ceiling_realization` multiplier — see smelting.md's own 2026-08-24
   section for exactly how the two compose.
 
+### Easter Eggs (`concept/easter_eggs.md`)
+
+Brand-new doc, 2026-08-24. Deliberately the one place in this project's
+design corpus that's hand-placed rather than emergent — see the doc's own
+"Design pillars" for why that's the right call here specifically, not a
+quiet contradiction of every other system's "never hand-placed" rule.
+All ⬜ Not started — pure design, no code:
+
+- **Real-Coordinate Easter Egg Triggers** (small) — ⬜ Not started —
+  reuses the existing `GeoCoordinates` real lat/lon lookup (same source
+  the regional-mythology brainstorm uses); a small hand-curated
+  {lat/lon, effect} table, nothing new needed at the engine level.
+- **Secret Console Commands** (trivial) — ⬜ Not started — reuses
+  `console_command_parser.gd`'s existing parse/dispatch shape; an Easter
+  egg command is just an undocumented `match` arm in `World`'s dispatcher.
+- **Calendar-Date-Gated Triggers** (trivial) — ⬜ Not started — a plain
+  real-system-date check, the same category of real-world-time input
+  `SeasonCycle`/`WeatherModel` already read for unrelated reasons.
+- **Starter Collection (cryptid cameos, WarGames/Zork/Atari Adventure/
+  BTTF/Monty Python/Rush/D&D nods)** (medium) — ⬜ Not started — ~15
+  concrete, written-up eggs in the doc, none implemented yet. Two are
+  real, playable original mini-games rather than props/flavor text (a
+  Joust-homage dueling-birds cabinet at the Bermuda Triangle, and a
+  turn-based creature-battler on a hidden handheld starring this doc's
+  own cameo creatures) — meaningfully bigger implementation lifts than
+  the rest of the list, flagged as such in the doc rather than
+  under-scoped alongside the prop-only entries.
+
 ### Electromagnetism (`concept/electromagnetism.md`)
 
 New concept doc (2026-08-24), extending `materials.md`'s existing (already
@@ -3462,13 +3533,30 @@ carrots out of earth (visually animated)". Supersedes the old
   checks both the nearest liftable stone AND the nearest kickable
   `DroppedItem`, kicking whichever is genuinely closer, rather than a stone
   always winning just because it was the first kickable thing this game
-  had. ⬜ Held-item pickup + charge/release THROW (the other half of the
-  ask) is deliberately NOT done this pass — `Player`'s hand-hold state
+  had. **Follow-up, reported live: "pressing K doesn't kick a potato or
+  carrot" / "pick up should put it in the hand first instead of the
+  inventory ... there should be an extra key to stash the item in hand
+  into inventory."** The kick logic itself was verified correct end-to-end
+  (a real `WildCropMarker` pull → real `WorldItemBus` drop → real
+  `DroppedItem` → real `Player._kick_step` pipeline test moved the dropped
+  potato); the live report is most plausibly explained by the merge/
+  restart timing around this same fix landing, not a code defect. The
+  hand-hold ask is real, separate work: `Player`'s held-item state,
+  previously typed entirely around "a stone, described by a diameter"
   (`_hand_stone_diameter_cm`, `_try_pick_stone_into_hand`,
-  `_throw_held_stone`) is entirely typed around "a stone, described by a
-  diameter," and generalizing it to hold an arbitrary item is a real
-  refactor of load-bearing input code that deserves its own dedicated pass
-  and test coverage rather than being rushed in alongside this fix.
+  `_throw_held_stone`), is now generalized (`_hand_item_stack`,
+  `is_holding_item`/`is_holding_anything`, `_try_pick_item_into_hand`,
+  `_throw_held_item`, `_spawn_thrown_item`) — E now picks any dropped item
+  with a real, kickable-grade mass into the HAND first, exactly like a
+  stone (an item with no modeled mass still goes straight to inventory,
+  unchanged); charging and releasing throws it as a real `DroppedItem`
+  instead of straight to inventory; and a NEW stash key (default H,
+  `Player._stash_step`, `Keybindings` "stash") puts whatever's held away
+  into inventory instead, dropping any overflow at the player's own feet
+  rather than losing it (deliberately NOT copying `LiftableStone.pick_up`'s
+  own "silently discard the overflow" ground-pickup shortcut, since
+  stashing is a deliberate player action). See `docs/concept/stone.md`'s
+  "Held-item pickup, throw, and stash" for the full mechanism.
 - ⬜ No DNA/quality variation on the wild population (see `farming.md`'s
   still-unbuilt shared DNA model) — the 7 root/tuber art variants are
   purely cosmetic.
@@ -3757,6 +3845,10 @@ No farming system is wired into live gameplay, but its plot and breeding math no
 ### Persistence (`concept/persistence.md`)
 
 - **New Game / Load Game** — ✅ Done — previously the world persisted eagerly to `user://` regardless of menu choice while the player never persisted at all, so "New Game" actually meant "old world, new stats". `Player.to_save_dict()`/`apply_save_dict()` round-trip position, class, authored appearance (now retained in a new `Player.appearance` field instead of applied-once-and-forgotten), health/max health, wallet, XP/level, skill-tree allocations, inventory, worn equipment + held weapon, and hotbar bindings. `PlayerSave` (`src/gameplay/player_save.gd`) is the pure I/O layer (mirrors `ChunkSerializer`'s `store_var`/`get_var` convention). `MainMenu` gained a root-screen **Load Game** button, shown only when a save exists, that bypasses the character creator entirely. New Game / Host Game now wipe the previous run's player save and all three `EarthChunkManager` persistence dirs (`WorldReset`, `src/world/world_reset.gd`) before spawning, so a fresh character actually loads into a fresh world. Autosaves periodically (`World.AUTOSAVE_INTERVAL`, 60s) and once on window close. Tested: `test_player_persistence.gd`, `test_player_save.gd`, `test_main_menu.gd`, `test_world_reset.gd`, `test_world_persistence.gd`. `World`'s own spawn/autosave wiring is untested glue over those pieces, matching `World`'s pre-existing boundary (no `world.gd` function had a direct unit test before this either). Not yet: multiple save slots (out of scope, see the concept doc).
+
+- **Loading screens** — ✅ Done (see `concept/persistence.md`'s "Loading screens" section) — reported: "the game doesn't appear to hang when starting a new game". Investigated with real timing instrumentation against a real running instance (not assumed): New Game/Load Game/Join's real synchronous stall is `EarthChunkManager.update()`'s first call for a freshly-centered chunk radius, inside `_compute_dry_land_spawn_tile`/`_spawn_local_singleplayer_from_save` — **measured ~39s for that single call** in this dev sandbox (`_spawn_local_singleplayer` end to end: ~40s; the rest, mostly `CharacterView`'s appearance/portrait generation, is under a second). Nothing in that call chain (`update` → `_load_chunk` → terrain paint + tree/stone/grass/crop/decomposer/flower/scrub/lichen spawning) ever `await`s, so it fully blocks frame presentation for its whole real duration. `LoadingOverlay` (`scenes/loading_overlay.gd`, a small dim-backdrop + centered status label + indeterminate spinner `Control`) is shown via `World._show_loading_overlay`, which awaits **two** `process_frame` signals so the overlay is actually painted before the long call starts (confirmed against real rendered screenshots captured mid-freeze — one `await` alone was not reliably enough, and a first attempt without the explicit post-preset offset reset left the whole overlay pinned to a zero-size rect at the origin instead of covering the screen, the same `set_anchors_preset`-preserves-current-rect gotcha `MainMenu._ready()` already documents; both confirmed and fixed against real screenshots, not by re-reading the code and assuming it was right). Wired into all three entry points — `_on_menu_start_requested` ("Preparing a new world..."), `_on_menu_load_requested` ("Loading your world..."), `_on_menu_join_requested` ("Connecting to host...", covering a joining client's own version of the same stall, which actually lands later, inside `_client_process`, since a joining client has no single call site to wrap the way the other two do) — and hidden from one unified place, `_client_process`, right after its own `update()` call, idempotently. Progress is a real, honest **indeterminate spinner**, not a fabricated percentage: nothing outside `update()` can observe real interim progress without it yielding mid-loop, which would mean restructuring `EarthChunkManager`/`TerrainRenderer` internals — out of scope for a loading screen (every existing synchronous caller, including most of the test suite, depends on `update()` completing in one call). The same real screenshots confirm the honest limit of this approach: since nothing renders during the freeze itself, the spinner is only ever actually seen to advance across the couple of frames awaited before/after the freeze, then holds on one frame for the freeze's real duration — a real indeterminate spinner, just one that (like everything else on screen) can't animate through a period nothing can render during. Tested: `LoadingSpinner.frame_for_elapsed` (`src/ui/loading_spinner.gd`), pure and tuned-constant-driven, `test_loading_spinner.gd`; `LoadingOverlay`/its `World` wiring are untested Node-composition glue, `World`'s pre-existing boundary. Verified end-to-end against a real running instance for New Game and Load Game (real screenshots, both mid-freeze and post-spawn-with-overlay-gone); Join's overlay-hide wiring could not be verified live the same way — this dev machine's live multiplayer connectivity is blocked (see the Multiplayer notes elsewhere in this doc), so it's reasoned from the code rather than screenshot-confirmed. Separately, and NOT covered by any of the above: a stale/missing `TerrainAtlasCache` (`TerrainRenderer.build_tile_set`, gated on `ATLAS_VERSION`) is a real, similarly-sized stall (~62s measured in this dev sandbox on this session's own `ATLAS_VERSION` bump) that happens in `World._ready()`, unconditionally, before the main menu itself is even shown — out of scope here since there's no entry point left to wrap it with once it's already running before any menu click exists; self-heals after the first paid run (writes a fresh cache), so it's a one-time cost per `ATLAS_VERSION` bump rather than a recurring one.
+
+---
 
 ### Geology (`concept/geology.md`)
 

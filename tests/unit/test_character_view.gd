@@ -220,6 +220,31 @@ func test_fused_legs_stay_put_while_idle():
 	assert_almost_eq(leg_left.position.y, view._leg_fused_rest_position.y, 0.001)
 
 
+## An interim stride cue for the fused pair, on top of the existing vertical
+## bob -- real per-leg knee art doesn't exist yet (see docs/concept/
+## character_art_brief.md's own "Four bugs" section on why the fused
+## drawing can't split into independently-swinging legs at all), but a
+## small hip-pivot rock reads as more of a stride than the bob alone
+## (reported live: asked for real knee-jointed per-leg animation; a whole-
+## pair rotational rock is the closest this session can build without new
+## art -- see FUSED_LEG_ROCK_AMPLITUDE's own doc comment). Once per full
+## stride (sin, not the bob's absf(sin)) -- a real gait leans one way then
+## the other over a whole stride, not twice per stride the way footfalls
+## land.
+func test_fused_legs_rock_side_to_side_while_walking():
+	view.set_movement_state(view.MovementState.WALKING)
+	view._process(0.3)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	assert_ne(leg_left.rotation, 0.0)
+
+
+func test_fused_legs_rock_resets_to_upright_while_idle():
+	view.set_movement_state(view.MovementState.IDLE)
+	view._process(0.3)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	assert_almost_eq(leg_left.rotation, 0.0, 0.001)
+
+
 # -- illustrated arms: two independent poses, not one frame worn twice ------
 
 func test_arm_left_and_arm_right_use_different_source_frames():
@@ -274,9 +299,10 @@ func test_tool_slot_tracks_arm_rights_current_position():
 func test_tool_slot_moves_with_the_arms_walk_sway():
 	view.set_movement_state(view.MovementState.WALKING)
 	view._process(0.1)
-	var first := view.get_node("ToolSlot").position
+	var tool_slot: Sprite2D = view.get_node("ToolSlot")
+	var first: Vector2 = tool_slot.position
 	view._process(0.4)
-	var second := view.get_node("ToolSlot").position
+	var second: Vector2 = tool_slot.position
 	assert_ne(first, second)
 
 

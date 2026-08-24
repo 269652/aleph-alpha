@@ -222,7 +222,10 @@ roster within it.
   Cerberus (three-headed hound; physical).
 - **Celtic / British Isles** — Cù Sìth (fairy hound; perceptual/physical),
   each-uisge / kelpie (shapeshifting water horse; spatial/perceptual —
-  lures and drags into water).
+  lures and drags into water). Loch Ness itself also carries a separate,
+  hand-placed Easter egg cameo at its exact real coordinates — see
+  [easter_eggs.md](easter_eggs.md), a deliberately different (non-emergent)
+  content category living alongside this one.
 - **Slavic / Eastern Europe** — Firebird (Zhar-ptitsa; perceptual — light,
   fire), Zmey (multi-headed dragon; physical/biological), Leshy (forest
   guardian; biological/spatial — roots, disorientation).
