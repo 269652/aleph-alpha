@@ -1,5 +1,7 @@
 extends RefCounted
 
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+
 ## Real-world elevation, bilinearly sampled from a bundled equirectangular
 ## grayscale image (see assets/data/CREDITS.md). Encoding: 0.0 = -8000m,
 ## 1.0 = +6400m, linear; sea level (0m) sits at ~0.5556.
@@ -11,7 +13,7 @@ var _height: int
 
 
 func _init(image_path: String = DEFAULT_IMAGE_PATH) -> void:
-	_image = Image.load_from_file(image_path)
+	_image = SpriteSheetLoader.load_image(image_path)
 	_width = _image.get_width()
 	_height = _image.get_height()
 

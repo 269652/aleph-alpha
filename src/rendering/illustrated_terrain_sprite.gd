@@ -39,6 +39,7 @@ extends RefCounted
 ## mechanism exists.
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
 ## Biome name -> sheet metadata: a "path" and a list of row_bands (one per
@@ -223,7 +224,7 @@ const _DISABLED_DIVIDER_GRAY_MIN := 1.01
 
 func _load_frames_from(biome_name: String) -> Array:
 	var sheet: Dictionary = _SHEETS[biome_name]
-	var image := _prepared_for_slicing(Image.load_from_file(sheet["path"]))
+	var image := _prepared_for_slicing(SpriteSheetLoader.load_image(sheet["path"]))
 	var images: Array[Image] = []
 	for band in sheet["row_bands"]:
 		var rect: Vector2i = band

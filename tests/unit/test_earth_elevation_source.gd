@@ -9,6 +9,22 @@ func before_each():
 	source = EarthElevationSource.new()
 
 
+## _init used to load world_elevation.png via a raw Image.load_from_file,
+## which logs an engine WARNING ("Loaded resource as image file, this will
+## not work on export") that GUT's error tracker counts as an unhandled
+## error -- see SpriteSheetLoader's own doc comment for why. Mirrors
+## test_sprite_sheet_loader.gd's own assert_engine_error_count(0, ...) check.
+##
+## Constructs its OWN instance rather than using before_each's `source`:
+## GUT's error tracker does not attribute a warning logged during before_each
+## to the test that follows it (a timing quirk, not a real pass) -- so this
+## must construct inside the test body itself to actually observe the
+## warning fire.
+func test_construction_does_not_log_an_engine_warning():
+	EarthElevationSource.new()
+	assert_engine_error_count(0, "constructing EarthElevationSource should not warn")
+
+
 func test_the_deepest_ocean_trench_has_very_low_elevation():
 	# Mariana Trench, measured directly from the bundled asset at ~0.0431.
 	assert_lt(source.elevation_at(11.0, 142.0), 0.1)
