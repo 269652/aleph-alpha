@@ -3552,6 +3552,83 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
 
+### Disease (`concept/disease.md`)
+
+New concept doc + system (2026-08-24), born from a design session
+brainstorm: *"further emergent mechanics... genuinely novel gameplay"* —
+the trophic pressure this project's population model always had a slot for
+(predation, the player, and now disease) but never actually applied. A real
+SIRS (Susceptible→Infected→Recovered→Susceptible-again) epidemiology model,
+three real named-disease archetypes, and both player spillover paths, all
+via TDD.
+
+- **Core SIRS model** (medium) — ✅ Done — `src/gameplay/disease_model.gd`
+  (`DiseaseModel`), pure and fully tested
+  (`tests/unit/test_disease_model.gd`, 27 tests, all green): the full
+  state machine (`advance_state`), all three archetypes' real transmission
+  math (herd: density-weighted against real population ÷ real carrying
+  capacity; predator: bite chance; carrion: contamination/carry/graze
+  chances), region-pressure scaling off the existing `RegionDifficulty`
+  tier, herd disease's real "makes you prey, not dead" secondary effect
+  (`movement_speed_multiplier`), and per-archetype lethality. Same
+  deterministic hash-seeded roll pattern as `Sickness`/`TamingSystem`.
+- **Herd (foot-and-mouth-like)** (medium) — ✅ Done —
+  `CreatureMarker._herd_disease_step`, on the existing throttled sensing
+  tick, checking a real region population/capacity ratio (two new
+  `EarthChunkManager` accessors, `herbivore_capacity_at_chunk`/
+  `herbivore_capacity_near`, mirroring the existing
+  `herbivore_population_at_chunk`/`_near` pair exactly). The real "moves
+  slower, easier prey" secondary effect is wired straight into
+  `CreatureMarker._advance` (`DiseaseModel.movement_speed_multiplier`) --
+  the one choke point every intent's movement already funnels through.
+- **Predator (rabies-like)** (small) — ✅ Done —
+  `CreatureMarker._try_transmit_predator_disease`, riding the exact same
+  bite `_try_attack` already resolves, mirroring `VENOMOUS_SPECIES`'s
+  duck-typed `target.has_method(...)` call shape exactly. Works
+  identically against another creature or the player — the zoonotic
+  spillover path IS this same call landing on a `Player`.
+- **Carrion (anthrax-like)** (medium) — ✅ Done — `Carcass` rolls
+  `contaminated` once at its `is_rotten()` transition
+  (`_roll_contamination`); `DecomposerMarker` is the real insect carry
+  vector, picking up `carrying_disease` off a contaminated carcass and
+  spreading it to the next clean one it feeds on
+  (`_step_disease_carry`); a susceptible herbivore risks exposure grazing
+  near a contaminated carcass (`CreatureMarker._carrion_disease_step`) —
+  simplified to direct carcass proximity rather than a separately-tracked
+  "contaminated patch of grass" object this project has no substrate for.
+- **Visible symptoms** (small) — ✅ Done — every infected `CreatureMarker`
+  tints itself (`Sprite2D.modulate`), no new rendering system; a tamed/kept
+  animal additionally gets a third sick pip beside its existing
+  hunger/trust readouts (`_sick_pip`, see `taming.md`).
+- **Player spillover** (medium) — ✅ Done — `Player.apply_disease_bite`/
+  `_sickness_step`, routed entirely through the existing `Sickness` pure
+  model (per this doc's own explicit instruction) rather than a new
+  `VenomModel`-style debuff. Both paths wired: an infected predator's bite,
+  and careless butchering of a contaminated carcass
+  (`Player._butcher_step`). Untreated severity is a real, ongoing stamina
+  tax, never fatal outright, and — since no cure/treatment tool exists yet
+  — never naturally recovers either (that's `Sickness.progress`'s own
+  pre-existing behavior, not a new gap).
+- **Feeds carrion** (small) — ✅ Done — a lethal disease death routes
+  through a new shared `CreatureMarker._die()` (factored out of
+  `take_damage`'s existing death branch), so it spawns a real `Carcass`
+  through the exact same path a predation kill already uses.
+- ⬜ Management tools (quarantine, culling a sick tamed animal, a
+  craft-able treatment/cure) — explicitly out of scope for this pass, by
+  design; the interfaces above are shaped so adding these later doesn't
+  touch the transmission math.
+- ⬜ Aggregate population-level herd immunity (a whole region's herd
+  carrying immunity across a reload, as opposed to one individual
+  `CreatureMarker`'s own in-memory SIRS state, which resets on
+  despawn/chunk-unload exactly like `carrion.md`'s carcasses) — not built;
+  immunity here is individual-level and ephemeral, a real, deliberate scope
+  cut, not an oversight.
+- ⬜ Numeric rates are real, tuned, test-pinned constants now (not the
+  open design question this doc used to pose) — but first-pass numbers,
+  chosen for internal consistency (region pressure at `HARD` deliberately
+  saturates several chances to certain) rather than balance-tested against
+  real play. Expect these to move.
+
 ### Woodworking (`concept/woodworking.md`)
 
 New concept doc + system (2026-08-24), reported: *"when chopping a felled

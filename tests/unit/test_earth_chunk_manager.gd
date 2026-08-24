@@ -846,6 +846,24 @@ func test_herbivore_population_near_matches_herbivore_population_at_chunk():
 	)
 
 
+## docs/concept/disease.md's herd (foot-and-mouth-like) archetype: real
+## population vs. real carrying capacity is CreatureMarker's own density
+## signal for herd disease transmission pressure (see
+## DiseaseModel.herd_transmission_chance) -- mirrors herbivore_population_
+## at_chunk/near's exact existing pair-of-accessors pattern.
+func test_herbivore_capacity_near_matches_herbivore_capacity_at_chunk():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		(center_chunk.x * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE,
+		(center_chunk.y * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE
+	)
+	assert_gt(manager.herbivore_capacity_at_chunk(center_chunk), 0.0)
+	assert_almost_eq(
+		manager.herbivore_capacity_near(pixel), manager.herbivore_capacity_at_chunk(center_chunk), 0.001
+	)
+
+
 func test_update_spawns_creature_markers_for_loaded_regions_around_berlin():
 	manager.update(_berlin_tile)
 	assert_gt(creatures_parent.get_child_count(), 0)

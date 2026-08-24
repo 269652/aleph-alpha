@@ -508,6 +508,15 @@ func herbivore_population_at_chunk(chunk_coord: Vector2i) -> float:
 	return _ecosystem.herbivore_population(chunk_coord)
 
 
+## This region's herbivore carrying capacity (see EcosystemSimulation.
+## herbivore_capacity_at) -- CreatureMarker's own density-vs-capacity signal
+## for herd (foot-and-mouth-like) disease transmission pressure (see
+## docs/concept/disease.md, DiseaseModel.herd_transmission_chance). Mirrors
+## herbivore_population_at_chunk's exact pattern.
+func herbivore_capacity_at_chunk(chunk_coord: Vector2i) -> float:
+	return _ecosystem.herbivore_capacity_at(chunk_coord)
+
+
 ## Whether the chunk containing `pixel_position` can support another
 ## individual herbivore -- the aggregate carrying capacity (vegetation and
 ## water at that location) expressed as a yes/no for individual-fidelity
@@ -4422,6 +4431,15 @@ func vegetation_density_near(pixel_position: Vector2) -> float:
 func herbivore_population_near(pixel_position: Vector2) -> float:
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
 	return _ecosystem.herbivore_population(chunk_coord)
+
+
+## This pixel's chunk's herbivore carrying capacity -- see
+## herbivore_capacity_at_chunk. Mirrors herbivore_population_near's exact
+## pattern; the two together are CreatureMarker's herd-disease density
+## signal (docs/concept/disease.md).
+func herbivore_capacity_near(pixel_position: Vector2) -> float:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(pixel_position))
+	return _ecosystem.herbivore_capacity_at(chunk_coord)
 
 
 ## This pixel's chunk's persistent land health (docs/concept/world.md "Land
