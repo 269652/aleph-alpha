@@ -2467,10 +2467,13 @@ All ⬜ Not started — pure design, no code:
   BTTF/Monty Python/Rush/D&D nods)** (medium) — ⬜ Not started — ~15
   concrete, written-up eggs in the doc, none implemented yet. Two are
   real, playable original mini-games rather than props/flavor text (a
-  Joust-homage dueling-birds cabinet at the Bermuda Triangle, and a
-  turn-based creature-battler on a hidden handheld starring this doc's
-  own cameo creatures) — meaningfully bigger implementation lifts than
-  the rest of the list, flagged as such in the doc rather than
+  Joust-homage dueling-birds cabinet in a hidden sea cave at the Bermuda
+  Triangle, and a turn-based creature-battler on a hidden handheld
+  starring this project's OWN existing creature roster, not the Easter
+  eggs' cameos — zero new art needed, reuses
+  `ProceduralAnimalSprite`/`IllustratedAnimalSprite` as-is) —
+  meaningfully bigger implementation lifts than the rest of the list,
+  flagged as such in the doc rather than
   under-scoped alongside the prop-only entries.
 
 ### Electromagnetism (`concept/electromagnetism.md`)
