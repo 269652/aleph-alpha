@@ -152,13 +152,13 @@ func spawn_creatures(
 	spawned.append_array(
 		_spawn_species(
 			parent, chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
-			herbivore_population, herbivore_pool, 1, world, start_index
+			herbivore_population, herbivore_pool, 1, world, start_index, difficulty_tier
 		)
 	)
 	spawned.append_array(
 		_spawn_species(
 			parent, chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
-			predator_population, predator_pool, 2, world, start_index
+			predator_population, predator_pool, 2, world, start_index, difficulty_tier
 		)
 	)
 	return spawned
@@ -186,7 +186,8 @@ func _spawn_species(
 	species_pool: Array,
 	species_salt: int,
 	world,
-	start_index: int = 0
+	start_index: int = 0,
+	difficulty_tier: int = RegionDifficulty.Tier.EASY
 ) -> Array[Node2D]:
 	var count := marker_count_for(population)
 	var spawned: Array[Node2D] = []
@@ -201,9 +202,12 @@ func _spawn_species(
 		var position := _deterministic_position(
 			chunk_coord, chunk_origin_tiles, chunk_size, tile_size, species_salt, i
 		)
-		spawned.append(
-			_build_marker(parent, species_name, position, wander_seed, world, tile_size)
-		)
+		var marker := _build_marker(parent, species_name, position, wander_seed, world, tile_size)
+		# See docs/concept/disease.md "Region pressure": carried forward so
+		# disease transmission scales with the SAME distance-from-spawn
+		# signal that already gated this individual's species pool above.
+		marker.region_tier = difficulty_tier
+		spawned.append(marker)
 	return spawned
 
 

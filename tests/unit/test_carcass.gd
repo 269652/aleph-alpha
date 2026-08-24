@@ -10,6 +10,7 @@ const Carcass = preload("res://src/rendering/carcass.gd")
 const Butchering = preload("res://src/gameplay/butchering.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const CarcassGuts = preload("res://src/rendering/carcass_guts.gd")
+const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 
 var carcass: Carcass
 var _drops: Array = []
@@ -156,3 +157,33 @@ func test_hover_actions_are_empty_once_fully_butchered():
 	carcass.butcher()
 	carcass.butcher()
 	assert_eq(carcass.get_hover_actions().size(), 0)
+
+
+# -- disease: anthrax-like contamination (see docs/concept/disease.md) --------
+
+func test_a_fresh_carcass_is_not_contaminated():
+	assert_false(carcass.contaminated)
+
+
+func test_carcass_defaults_to_easy_region_tier():
+	assert_eq(carcass.region_tier, RegionDifficulty.Tier.EASY)
+
+
+## HARD region pressure (2.4x) on top of DiseaseModel's carcass contamination
+## base rate clamps the roll to certain -- deterministic regardless of
+## position/species-derived seed, the same "push the chance past 1.0" trick
+## test_disease_model.gd's own tests use.
+func test_a_carcass_becomes_contaminated_when_it_rots_in_a_hard_region():
+	carcass.region_tier = RegionDifficulty.Tier.HARD
+	assert_false(carcass.contaminated, "should not roll contamination before it's even rotten")
+	carcass._process(Carcass.ROT_SECONDS + 1.0)
+	assert_true(carcass.contaminated)
+
+
+func test_contamination_is_only_rolled_once_per_carcass():
+	carcass.region_tier = RegionDifficulty.Tier.HARD
+	carcass._process(Carcass.ROT_SECONDS + 1.0)
+	assert_true(carcass.contaminated)
+	carcass.contaminated = false  # simulate it having been "cleared" somehow
+	carcass._process(1.0)  # still rotten, but the one-time roll already happened
+	assert_false(carcass.contaminated, "contamination should only be rolled once, at the rot transition")
