@@ -102,6 +102,14 @@ func test_campfire_and_furnace_are_placeable():
 	assert_eq(catalog.make("furnace").kind, "placeable")
 
 
+## Storage (see docs/concept/timber_construction.md's "Storage, logistics,
+## and the autonomous dependency chain" section) is the same placeable kind
+## as campfire/furnace -- a tile-based structure, not an inert material.
+func test_storage_is_placeable():
+	assert_true(catalog.has("storage"))
+	assert_eq(catalog.make("storage").kind, "placeable")
+
+
 ## Named fruit tree species (see docs/concept/flora.md#named-fruit-and-nut-tree-species)
 ## drop their OWN item id -- cherry/apple/walnut -- rather than the generic
 ## "fruit"/"nut" every tree used to drop regardless of species.

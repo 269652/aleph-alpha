@@ -22,6 +22,7 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
+const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
@@ -407,6 +408,15 @@ var _loaded_villages: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 ## generic tile-solidity check. Tracked per chunk so unloading frees exactly
 ## that chunk's bodies, mirroring _loaded_trees/_loaded_stones.
 var _piece_collision_bodies: Dictionary = {}  # Vector2i chunk_coord -> {Vector2i global_cell -> StaticBody2D}
+
+## Every placed structure's own real stock -- a Storage building's inventory,
+## keyed by its own tile position (see docs/concept/timber_construction.md's
+## "Storage, logistics, and the autonomous dependency chain" section, and
+## StructureStock/StructureStockStore's own doc comments). Not per-chunk
+## tracked/evicted like the render-only dicts above -- this is real state a
+## structure carries regardless of whether its chunk is currently loaded, the
+## same "survives unload" contract chunk.modifications itself already has.
+var _structure_stocks := StructureStockStore.new()
 
 ## Optional roof overlay layer (see set_roof_layer) -- separate TileMapLayer
 ## from _tile_map_layer since a roof piece shares its cell with the floor
@@ -4975,6 +4985,75 @@ func has_structure_near(global_x: int, global_y: int, structure_id: String, radi
 			if _chebyshev_distance(tile_global, query_tile) <= radius:
 				return true
 	return false
+
+
+## The pixel-space center of the nearest modification tile matching
+## `structure_id` within `max_distance` pixels of `pixel_position`, or null
+## if none is loaded/in range -- has_structure_near's own boolean answer plus
+## WHERE, for a caller that needs to walk there (see LogisticsMarker's own
+## SEEKING/CARRYING legs, docs/concept/timber_construction.md's "Storage,
+## logistics, and the autonomous dependency chain" section). Scans the same
+## chunk-Chebyshev-radius-1 window has_structure_near uses, for the same
+## reason (see its own doc comment) -- exact for any `max_distance` up to one
+## chunk's width in pixels.
+func nearest_structure_position(pixel_position: Vector2, structure_id: String, max_distance: float):
+	var query_tile := Vector2i(
+		floori(pixel_position.x / TerrainRenderer.TILE_SIZE), floori(pixel_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	var center_chunk := _chunk_coord_for_tile(query_tile)
+	var nearest_distance := max_distance
+	var nearest: Vector2 = Vector2.ZERO
+	var found := false
+
+	for chunk_coord in chunks_in_radius(center_chunk, 1):
+		var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+		if chunk == null:
+			continue
+		var origin := chunk_coord * CHUNK_SIZE
+		for local_coord in chunk.modifications:
+			if chunk.modifications[local_coord] != structure_id:
+				continue
+			var tile_global: Vector2i = origin + local_coord
+			var tile_pixel := (
+				Vector2(tile_global) * TerrainRenderer.TILE_SIZE
+				+ Vector2.ONE * (TerrainRenderer.TILE_SIZE * 0.5)
+			)
+			var distance: float = pixel_position.distance_to(tile_pixel)
+			if distance <= nearest_distance:
+				nearest = tile_pixel
+				nearest_distance = distance
+				found = true
+	if not found:
+		return null
+	return nearest
+
+
+## The stock key a structure's own tile position resolves to -- position, not
+## structure id, is the identity (see StructureStockStore's own doc comment:
+## two structures never share a stock).
+func _structure_stock_key(global_x: int, global_y: int) -> String:
+	return "%d_%d" % [global_x, global_y]
+
+
+## `item_id`'s count in the stock belonging to the structure at
+## (global_x, global_y). 0 if nothing has ever been deposited there.
+func structure_stock_at(global_x: int, global_y: int, item_id: String) -> int:
+	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).stock_of(item_id)
+
+
+## Deposits `count` of `item_id` into the stock belonging to the structure at
+## (global_x, global_y) -- a Logistics worker's DEPOSITING action (see
+## LogisticsMarker), or a future production building crediting its own
+## accumulated output.
+func deposit_to_structure_at(global_x: int, global_y: int, item_id: String, count: int) -> void:
+	_structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).add_stock(item_id, count)
+
+
+## Withdraws `count` of `item_id` from the stock belonging to the structure at
+## (global_x, global_y). All-or-nothing, mirroring StructureStock.remove_stock
+## itself -- returns false (no-op) if less than `count` is present.
+func withdraw_from_structure_at(global_x: int, global_y: int, item_id: String, count: int) -> bool:
+	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).remove_stock(item_id, count)
 
 
 ## All chunk coordinates within `radius` chunks of center (a square/Chebyshev

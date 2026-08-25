@@ -131,6 +131,11 @@ const _ITEMS := {
 	"iron_boots": ["Iron Boots", "armor", 1, 0.0, "feet", 2.0],
 	# Fishing (see concept/fishing.md): a rod cast at water lands fish.
 	"fishing_rod": ["Fishing Rod", "tool", 1, 0.0],
+	# Storage (see docs/concept/timber_construction.md's "Storage, logistics,
+	# and the autonomous dependency chain" section): a placeable structure
+	# like campfire/furnace, not an inert material -- holds its own real
+	# item_id -> count stock (StructureStock) once built.
+	"storage": ["Storage", "placeable", 5, 0.0],
 }
 
 

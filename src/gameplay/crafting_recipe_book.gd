@@ -95,6 +95,17 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 2}, {"item_id": "rock", "count": 2}],
 		"output": {"item_id": "saw", "count": 1},
 	},
+	# Storage (see docs/concept/timber_construction.md's "Storage, logistics,
+	# and the autonomous dependency chain" section): a small lumber shed --
+	# wood (12) for the frame, roughly 1.5x campfire's own 8-wood cost since a
+	# shed encloses real volume a campfire doesn't, plus plank (4) for
+	# walls/shelving, a real already-craftable woodworking material. No skill
+	# gate -- only the log-to-Balken/Planke shaping step is skill-gated per
+	# that doc section, not Storage itself.
+	"storage": {
+		"inputs": [{"item_id": "wood", "count": 12}, {"item_id": "plank", "count": 4}],
+		"output": {"item_id": "storage", "count": 1},
+	},
 }
 
 

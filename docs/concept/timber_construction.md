@@ -304,6 +304,106 @@ real drought already measurably lowers a farmer's yield
 farmer AND hunter yield"). This closes construction into the existing
 ecosystem loop rather than inventing a separate, infinite lumber source.
 
+## Storage, logistics, and the autonomous dependency chain
+
+A settlement that can build with timber needs somewhere to put the timber
+before it's built with, and something moving it from wherever it accumulates
+to wherever it's stockpiled. Real vernacular building sites work this way —
+a woodyard/lumber store next to the sawpit, a haulier moving squared timber
+from the yard to the working building site — rather than every worker
+carrying material directly from tree to wall. This section adds that
+storage-and-haulage layer, plus the settlement-level decision it exists to
+unblock: *when a settlement wants to build something and can't yet, is the
+real bottleneck a missing producer, or a missing material it could still buy
+in via `regional_trade.md`?*
+
+**Storage.** A new placeable structure, `storage`, built the same tile-based
+way `campfire`/`furnace` already are (`ItemCatalog`, a `CraftingRecipeBook`
+recipe — 12 wood + 4 plank, no skill gate; only the log-shaping step itself
+is skill-gated), with its own real per-instance stock: `item_id -> int`, the
+*exact same shape* `Market` already proves at settlement scale
+(`market.gd`), reused here at building scale rather than inventing a third
+container design (`StructureStock`/`StructureStockStore`, keyed by the
+structure's own tile position — two Storage buildings never share a stock,
+the same way two settlements' markets don't). `EarthChunkManager` grew the
+small, generic glue this needs: `nearest_structure_position` (WHERE the
+nearest structure of a given id is, not just whether one exists —
+`has_structure_near`'s own boolean answer plus a location a walker can use),
+and `structure_stock_at`/`deposit_to_structure_at`/`withdraw_from_structure_at`
+against that per-position stock.
+
+**Logistics worker.** A dedicated small worker Node (`LogisticsMarker` +
+`LogisticsBehavior`), this codebase's established pattern for a narrow,
+single-purpose autonomous actor (mirroring `DecomposerMarker`/
+`CarrionForageBehavior`'s pure-state-machine-plus-engine-glue split exactly)
+rather than the full `NpcMarker`/`CreatureMarker` sense/perceive/act stack.
+Its cycle: `SEEKING` (find a source structure with real waiting stock) →
+`APPROACHING` → `COLLECTING` (a timed pickup, up to a real hand-cart-sized
+`CARRY_CAPACITY` per trip, not "however much the source has") → `CARRYING`
+(walk to the nearest real Storage — a second walk leg to a *different*
+destination than the first, the one real difference from a single-
+destination forager's own seek/approach/act loop) → `DEPOSITING` (a timed
+drop-off, crediting Storage's real stock) → back to `SEEKING`. Every
+transition is driven by real distance/timers, not a scripted animation.
+
+**The dependency-chain priority decision.** `ConstructionPriority.decide`
+(`src/gameplay/construction_priority.gd`) is the pure function this section
+exists to unblock: given a target recipe, a settlement's real local stock,
+and which structures are known present nearby, it returns `READY` (build it
+now), `SHORTFALL` (materials are short — the regional-trade/shortfall path
+in `regional_trade.md` applies, not a new producer), or
+`BUILD_PRODUCER_FIRST` (the recipe is gated on a structure that isn't there
+yet — go build that first). It composes two already-real mechanisms rather
+than inventing a new resolver: `CraftingRecipeBook`'s real recipe data, and
+`Smelting.can_smelt`'s already-proven "is this recipe gated on a present
+structure" check — the exact same heat-source gate `Player.craft` already
+enforces for the player (`scenes/player.gd`'s `_has_heat_source`), reused at
+the settlement-decision layer instead of duplicated.
+
+### What's honestly still a stand-in here
+
+This section was implemented against a task brief that described several
+pieces as already real and merged — a general recursive `NeedResolver`
+module, a "Sägewerk" (sawmill) production structure with its own
+`LumberjackMarker`/`LumberjackBehavior` worker, `log_to_balken`/
+`log_to_planke` recipes gated on it, and a `production_chains.md` doc
+describing the general mechanism. On checking this codebase directly (not
+trusting that description), **none of those exist** — `docs/progress.md`'s
+own Timber Construction entry already said "no implementation yet," and this
+section is the first real one. This is recorded here in the interest of the
+same honesty this doc's own "Tuned values" pillar asks for elsewhere:
+
+- **No real production building accumulates output on its own yet.** The
+  Logistics worker's `SEEKING`/`COLLECTING` legs are real and tested against
+  a source structure's real stock, but nothing in this codebase currently
+  *deposits* into a source's stock the way a running Sägewerk eventually
+  will — today that stock has to be seeded directly (exactly the way this
+  section's own tests do, and the way `has_structure_near`'s existing tests
+  already place a bare structure tile with no real building process behind
+  it). Once any future production structure adopts the same `StructureStock`
+  shape to accumulate its own real output, a Logistics worker assigned to
+  collect from it needs zero code changes — this was designed generically
+  for exactly that reason — but that producer itself is still the
+  material-pipeline work `docs/progress.md` already lists as not started.
+- **No settlement automatically spawns a Logistics worker yet.** The
+  "Sägewerk + Storage present → spawn a Logistics worker" trigger this
+  section's originating brief asked for has no real producer to spawn in
+  response to (see above), so it is not wired into
+  `EarthChunkManager._load_chunk`/`update()`. `LogisticsMarker` is real,
+  tested, and instantiable directly (dev console or a future settlement
+  system), not yet auto-spawned.
+- **`ConstructionPriority.decide` has no live settlement caller yet** — the
+  "Settlement construction ledger" section above already documents that
+  `ConstructionProject`/`ConstructionProjectStore` don't exist; this
+  function is the smallest real, tested slice that demonstrates the
+  priority decision (real recipe data, real local stock, real structure-gate
+  check) rather than wiring into a settlement-decision system that isn't
+  built yet. Its `BUILD_PRODUCER_FIRST` branch currently only fires for
+  smelting recipes (`Smelting.is_smelting_recipe`) — the only real
+  structure-gated recipes that exist today, since `CraftingRecipeBook`
+  itself has no general per-recipe structure-requirement field the way the
+  originating brief assumed.
+
 ## Interaction with other docs
 
 - **[building.md](building.md)** — this doc adds sourcing, physics, decay,
@@ -423,7 +523,20 @@ shape a real abandoned timber building decays into.
 
 ## Status
 
-⬜ Not started — this is a new concept doc; no implementation exists yet.
+⬜ Not started — the material pipeline (log → Balken/Planke), statics,
+withering, and the NPC builder FSM/offscreen catch-up are all still
+unimplemented; see `docs/progress.md`'s own Timber Construction entry.
+
+🚧 Partial — **Storage, logistics, and the autonomous dependency chain** (see
+that section above for the full honesty note on what's real vs. a stand-in):
+Storage (placeable structure, real per-instance stock), the Logistics worker
+(real, tested SEEKING→APPROACHING→COLLECTING→CARRYING→DEPOSITING state
+machine + engine glue), and `ConstructionPriority.decide` (the dependency-
+chain priority function) are real and tested. None of it has a live producer
+or settlement caller yet — no production structure accumulates real output
+on its own, no settlement auto-spawns a Logistics worker, and no settlement
+system calls the priority function.
+
 Reusable primitives already in the codebase this system should build on,
 not reinvent:
 
@@ -446,6 +559,15 @@ not reinvent:
   should follow.
 - `SettlementState` (`src/emergence/settlement_state.gd`) — the pure
   capacity-classifier shape a builder-count derivation should follow.
+- `StructureStock`/`StructureStockStore` (`src/emergence/`) — Storage's real
+  per-instance stock, and the shape any future production structure should
+  reuse for its own accumulated-output queue rather than a third design.
+- `LogisticsBehavior`/`LogisticsMarker` (`src/gameplay/`,
+  `src/rendering/`) — the real, tested collect/carry/deposit worker; assign
+  a `source_structure_id`/`item_id` to it once a real producer exists.
+- `ConstructionPriority` (`src/gameplay/construction_priority.gd`) — the
+  real, tested dependency-chain priority function; wire a settlement-decision
+  caller to it once one exists.
 
 **Known anti-pattern this doc replaces**: `VillageRenderer._stamp_house`
 currently stamps a complete house, instantly and for free, at settlement

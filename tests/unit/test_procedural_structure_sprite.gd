@@ -3,9 +3,11 @@ extends GutTest
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
-## The two placeable structure ids TerrainRenderer needs distinct art for
-## today (see item_catalog.gd's "placeable" kind items).
-const STRUCTURE_IDS := ["campfire", "furnace"]
+## The placeable structure ids TerrainRenderer needs distinct art for today
+## (see item_catalog.gd's "placeable" kind items). "storage" is the
+## docs/concept/timber_construction.md "Storage, logistics, and the
+## autonomous dependency chain" section's placeable.
+const STRUCTURE_IDS := ["campfire", "furnace", "storage"]
 
 var generator: ProceduralStructureSprite
 
@@ -121,3 +123,22 @@ func test_unknown_structure_id_falls_back_without_crashing():
 func test_structure_ids_constant_contains_campfire_and_furnace():
 	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("campfire"))
 	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("furnace"))
+	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("storage"))
+
+
+## Storage should read as a wooden shed/crate -- warm timber-brown, not
+## furnace's cool stone grey nor campfire's ember-dark ground.
+func test_storage_reads_as_a_distinct_wooden_structure():
+	var storage: Image = generator.generate_image("storage", 3)
+	var furnace: Image = generator.generate_image("furnace", 3)
+	var campfire: Image = generator.generate_image("campfire", 3)
+	assert_gt(
+		_pixel_diff_count(storage, furnace),
+		TerrainRenderer.ART_TILE_SIZE,
+		"storage and furnace should look clearly different"
+	)
+	assert_gt(
+		_pixel_diff_count(storage, campfire),
+		TerrainRenderer.ART_TILE_SIZE,
+		"storage and campfire should look clearly different"
+	)

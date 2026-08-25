@@ -20,8 +20,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	assert_true(ids.has("lasso"))
 	# + smelting/forge recipes: furnace, iron_ingot, copper_ingot,
 	# iron_helm/chest/legs/boots + fishing_rod + lasso
-	# + woodworking: log_to_sticks, log_to_wood, saw.
-	assert_eq(ids.size(), 18)
+	# + woodworking: log_to_sticks, log_to_wood, saw
+	# + storage (see docs/concept/timber_construction.md's "Storage,
+	# logistics, and the autonomous dependency chain" section).
+	assert_eq(ids.size(), 19)
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():
@@ -171,6 +173,19 @@ func test_smelting_and_forge_recipes_exist():
 	for i in chest_inputs:
 		ids.append(i["item_id"])
 	assert_true(ids.has("iron_ingot"))
+
+
+## Storage (see docs/concept/timber_construction.md's "Storage, logistics,
+## and the autonomous dependency chain" section): a small lumber shed, costed
+## in wood (the frame) and plank (the walls/shelving) -- both real,
+## already-craftable woodworking materials, no new item type needed. No
+## skill gate, matching the doc section's own explicit note that only the
+## Sägewerk-equivalent production step is skill-gated, not Storage itself.
+func test_storage_recipe_uses_wood_and_plank():
+	assert_true(book.recipe_ids().has("storage"), "storage must be craftable")
+	assert_eq(book.recipe_output("storage")["item_id"], "storage")
+	assert_false(book.can_craft("storage", {"wood": 12, "plank": 1}))
+	assert_true(book.can_craft("storage", {"wood": 12, "plank": 4}))
 
 
 ## The lasso is the entry point to taming (docs/concept/taming.md) and is
