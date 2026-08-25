@@ -38,6 +38,7 @@ const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
 const Strata = preload("res://src/world/strata.gd")
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
+const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -1497,6 +1498,141 @@ func test_reloading_a_chunk_restores_collision_for_a_persisted_wall():
 	var path := "user://chunk_modifications/%d_%d.bin" % [_chunk_coord_for_tile(_berlin_tile).x, _chunk_coord_for_tile(_berlin_tile).y]
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
+
+
+# -- real statics: a support graph over the piece grid (see
+# docs/concept/timber_construction.md#real-statics-a-support-graph-over-the-
+# piece-grid, src/gameplay/building_statics.gd) -- event-driven, not
+# per-tick: build_at_global/destroy_at_global/stamp_structure_at_global each
+# trigger a recompute scoped to just the touched structure's own connected
+# piece grid.
+#
+# A single wall with all four neighbors occupied by non-load-bearing floor
+# pieces never touches bare terrain, so its only possible support is a
+# load-bearing chain that doesn't exist here -- it is unsupported the moment
+# the last floor closes it in. This is the shared fixture below.
+
+func _build_unsupported_wall_cluster(origin: Vector2i) -> void:
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+	manager.build_at_global(origin.x + 1, origin.y, "wood_floor")
+	manager.build_at_global(origin.x - 1, origin.y, "wood_floor")
+	manager.build_at_global(origin.x, origin.y + 1, "wood_floor")
+	manager.build_at_global(origin.x, origin.y - 1, "wood_floor")  # closes it in -- now unsupported
+
+
+## Re-triggers _sync_statics for the whole connected cluster _build_
+## unsupported_wall_cluster made, WITHOUT itself propping any of it back up:
+## a bare non-load-bearing floor "bridge" (bare, not itself load-bearing, so
+## it can't relay support on its own), THEN a real (independently grounded)
+## wall well past BuildingStatics.CANTILEVER_LIMIT tiles from the nearest
+## cluster floor (F1, at origin+(1,0)) -- far enough that the new wall
+## cannot rescue it. This is just "some further, unrelated edit happens
+## nearby," the same way any other real player action naturally would
+## re-touch this structure.
+func _retrigger_statics_recheck(origin: Vector2i) -> void:
+	var bridge_start := 2
+	var trigger_x := origin.x + 1 + BuildingStatics.CANTILEVER_LIMIT + 1
+	for x in range(origin.x + bridge_start, trigger_x):
+		manager.build_at_global(x, origin.y, "wood_floor")
+	manager.build_at_global(trigger_x, origin.y, "wood_wall")
+
+
+## Well inside the chunk, not tied to _berlin_tile's own (possibly
+## edge-adjacent) position -- see test_stamp_structure_at_global_writes_
+## every_ground_piece_cell's doc comment for why a multi-cell footprint
+## anchored on _berlin_tile itself is unsafe (posmod-aliasing across a
+## chunk boundary).
+func _statics_test_origin() -> Vector2i:
+	return _chunk_coord_for_tile(_berlin_tile) * EarthChunkManager.CHUNK_SIZE + Vector2i(10, 10)
+
+
+func test_a_piece_that_loses_its_support_path_does_not_collapse_immediately():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	watch_signals(WorldItemBus)
+
+	_build_unsupported_wall_cluster(origin)
+
+	assert_eq(
+		manager.modification_at_global(origin.x, origin.y), "wood_wall",
+		"a piece that just lost support should still be standing -- it needs grace time first"
+	)
+	assert_signal_emit_count(
+		WorldItemBus, "item_dropped", 0, "nothing should have collapsed/dropped yet"
+	)
+
+
+## The full flow: an unsupported piece that stays unsupported past the real
+## grace period actually collapses -- dropping its own constituent material
+## back to the ground (mirroring how a felled tree/smashed stone already
+## drops items via WorldItemBus.item_dropped) -- and the recompute this
+## triggers cascades to whatever it was (in this case, non-load-bearingly)
+## propping up, all without a second manual trigger: placing ONE more
+## nearby piece is what re-triggers the same structure's recompute, the
+## same way any further edit naturally would in real play.
+func test_a_severed_support_collapses_past_the_grace_period_and_drops_its_material():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	_build_unsupported_wall_cluster(origin)
+	watch_signals(WorldItemBus)
+
+	manager.advance_world_age(BuildingStatics.GRACE_SECONDS + 1.0)
+	_retrigger_statics_recheck(origin)
+
+	assert_eq(
+		manager.modification_at_global(origin.x, origin.y), "",
+		"the wall should have actually collapsed and been removed"
+	)
+	var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
+	assert_gt(drops, 0, "a real collapse should drop real material")
+	var found_wood_drop := false
+	for i in range(drops):
+		var params = get_signal_parameters(WorldItemBus, "item_dropped", i)
+		var stack: ItemStack = params[0]
+		if stack.item.id == "wood" and stack.count == 2:
+			found_wood_drop = true
+	assert_true(found_wood_drop, "the collapsed wall should drop exactly its own cost_of (2 wood)")
+
+
+## The dependent floors, no longer within cantilever reach of any supported
+## load-bearing cell once the wall is gone, come down too -- Worked Example
+## D's cascade, at the engine level.
+func test_a_collapse_cascades_to_the_pieces_it_was_propping_up():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	_build_unsupported_wall_cluster(origin)
+
+	manager.advance_world_age(BuildingStatics.GRACE_SECONDS + 1.0)
+	_retrigger_statics_recheck(origin)
+
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		assert_eq(
+			manager.modification_at_global(origin.x + offset.x, origin.y + offset.y), "",
+			"the floor at %s, which only ever depended on the collapsed wall, should have come down too" % offset
+		)
+
+
+func test_destroying_a_wall_removes_its_collision_body_via_collapse_too():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	_build_unsupported_wall_cluster(origin)
+	var expected_position := Vector2(
+		(origin.x + 0.5) * TerrainRenderer.TILE_SIZE, (origin.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	var before := false
+	for child in entities_parent.get_children():
+		if child is StaticBody2D and child.position == expected_position:
+			before = true
+	assert_true(before, "precondition: the still-standing wall has real collision")
+
+	manager.advance_world_age(BuildingStatics.GRACE_SECONDS + 1.0)
+	_retrigger_statics_recheck(origin)
+
+	var after := false
+	for child in entities_parent.get_children():
+		if child is StaticBody2D and child.position == expected_position:
+			after = true
+	assert_false(after, "a collapsed wall must not leave a stale collision body behind")
 
 
 # -- bulk structure stamping (see VillageRenderer, HouseBlueprint) ------------

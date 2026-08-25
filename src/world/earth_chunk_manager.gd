@@ -120,6 +120,7 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const RoomDetector = preload("res://src/gameplay/room_detector.gd")
+const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageFinder = preload("res://src/world/village_finder.gd")
 const ExploredTiles = preload("res://src/world/explored_tiles.gd")
@@ -483,6 +484,9 @@ var _structure_stocks := StructureStockStore.new()
 ## beneath it (Chunk.roof_modifications can't merge into `modifications`).
 var _roof_layer: TileMapLayer = null
 var _room_detector := RoomDetector.new()
+## Real statics (see BuildingStatics / docs/concept/timber_construction.md
+## #real-statics-a-support-graph-over-the-piece-grid).
+var _building_statics := BuildingStatics.new()
 ## Which chunk/room's roof is currently hidden (the player is standing under
 ## it), so update() can restore it the moment that stops being true rather
 ## than leaving it hidden forever. null chunk_coord means nothing is hidden.
@@ -5085,6 +5089,14 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, tile_id)
+	if previous_tile_id != tile_id:
+		# A different piece now occupies this cell (build_at_global doesn't
+		# check occupancy, see _sync_piece_collision's own doc comment) --
+		# whatever statics tracking belonged to the OLD piece here must not
+		# leak onto the new one (see destroy_at_global's matching comment).
+		chunk.structural_instability.erase(local)
+		chunk.structural_checked_at.erase(local)
+	_sync_statics(chunk_coord, chunk, local)
 	return true
 
 
@@ -5105,6 +5117,14 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	_remove_piece_collision(Vector2i(global_x, global_y))
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, "")
+	# This cell no longer holds a piece at all -- its own statics tracking
+	# (if any) belonged to whatever WAS here, not to bare ground. Clear it
+	# before recomputing, or a piece rebuilt on this exact cell later could
+	# inherit a stale checked_at timestamp and appear to have been
+	# unsupported for far longer than it actually has.
+	chunk.structural_instability.erase(local)
+	chunk.structural_checked_at.erase(local)
+	_sync_statics(chunk_coord, chunk, local)
 	return true
 
 
@@ -5143,6 +5163,17 @@ func stamp_structure_at_global(
 			_sync_piece_collision(global_cell, ground_pieces[local_cell])
 	if _roof_layer != null:
 		_terrain_renderer.paint_roofs(_roof_layer, chunk, chunk_coord * CHUNK_SIZE, _hidden_cells_for(chunk_coord))
+	# One recompute per distinct connected structure would be more precise,
+	# but _sync_statics itself is O(structure size), and a stamped footprint
+	# is exactly one small structure (HouseBlueprint's own scale) -- so a
+	# single recompute seeded from any one of its own cells already covers
+	# the whole thing, the same way find_rooms floods outward from wherever
+	# it starts.
+	for local_cell in ground_pieces:
+		var global_cell: Vector2i = origin_tile + local_cell
+		if _chunk_coord_for_tile(global_cell) == chunk_coord:
+			_sync_statics(chunk_coord, chunk, _local_coord(global_cell.x, global_cell.y))
+			break
 
 
 ## Adds, replaces, or removes `global_cell`'s collision body to match
@@ -5328,6 +5359,127 @@ func _despawn_logistics_workers_at(chunk_coord: Vector2i, local_cell: Vector2i) 
 	for marker in by_item.values():
 		marker.free()
 	by_cell.erase(local_cell)
+
+
+# -- real statics: a support graph over the piece grid (see
+# docs/concept/timber_construction.md#real-statics-a-support-graph-over-the-
+# piece-grid, src/gameplay/building_statics.gd) ------------------------------
+
+## Keeps a structure's support graph in sync with a piece placement/removal/
+## collapse at `local_cell` -- event-driven, not per-tick, exactly the doc's
+## own framing: "a graph recompute over O(structure size) cells whenever a
+## piece is placed, removed, or decays away... it never needs to run every
+## frame." Scoped to just the touched structure's own connected piece grid
+## via _structure_statics_view -- O(structure size), never the whole chunk.
+func _sync_statics(chunk_coord: Vector2i, chunk: Chunk, local_cell: Vector2i) -> void:
+	var seed_cells: Array[Vector2i] = [local_cell]
+	for offset in _STATICS_NEIGHBORS:
+		seed_cells.append(local_cell + offset)
+	var view := _structure_statics_view(chunk, seed_cells)
+	var grid: Dictionary = view["grid"]
+	if grid.is_empty():
+		return
+	var grounded: Dictionary = view["grounded"]
+
+	var prior_instability := {}
+	var elapsed := 0.0
+	for cell in grid:
+		if chunk.structural_instability.has(cell):
+			prior_instability[cell] = chunk.structural_instability[cell]
+		if chunk.structural_checked_at.has(cell):
+			elapsed = maxf(elapsed, _world_age_seconds - chunk.structural_checked_at[cell])
+
+	var result := _building_statics.resolve(grid, grounded, prior_instability, elapsed)
+
+	for cell in grid:
+		if cell in result["collapsed"]:
+			continue
+		if result["instability"].has(cell):
+			chunk.structural_instability[cell] = result["instability"][cell]
+			chunk.structural_checked_at[cell] = _world_age_seconds
+		else:
+			chunk.structural_instability.erase(cell)
+			chunk.structural_checked_at.erase(cell)
+
+	for cell in result["collapsed"]:
+		chunk.structural_instability.erase(cell)
+		chunk.structural_checked_at.erase(cell)
+		_collapse_piece(chunk_coord, chunk, cell, grid[cell])
+
+
+## Neighbor offsets shared with BuildingStatics/RoomDetector's own 4-neighbor
+## orthogonal convention.
+const _STATICS_NEIGHBORS: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+
+
+## Flood-fills chunk.modifications from `seed_cells` through piece adjacency
+## (any two BuildingPiece cells sharing an edge belong to the same
+## structure), collecting just the touched structure's own local-cell ->
+## piece_id grid (BuildingStatics' own input shape) plus the bare-terrain
+## cells bordering it (a piece cell's neighbor that is NOT itself a piece --
+## BuildingStatics' "grounded" input; no foundation-piece category exists
+## yet, so bare terrain is the only real grounding source today). Only cells
+## actually connected to `seed_cells` are ever visited -- never the whole
+## chunk -- so this is O(structure size), matching _piece_grid_for's own
+## per-cell shape without that helper's whole-chunk scan.
+func _structure_statics_view(chunk: Chunk, seed_cells: Array) -> Dictionary:
+	var grid := {}
+	var grounded := {}
+	var visited := {}
+	var queue: Array[Vector2i] = []
+	for seed in seed_cells:
+		if visited.has(seed):
+			continue
+		var tile_id: String = chunk.modifications.get(seed, "")
+		if BuildingPiece.has_piece(tile_id):
+			visited[seed] = true
+			grid[seed] = tile_id
+			queue.append(seed)
+
+	var head := 0
+	while head < queue.size():
+		var current: Vector2i = queue[head]
+		head += 1
+		for offset in _STATICS_NEIGHBORS:
+			var next: Vector2i = current + offset
+			if visited.has(next):
+				continue
+			var next_tile_id: String = chunk.modifications.get(next, "")
+			if BuildingPiece.has_piece(next_tile_id):
+				visited[next] = true
+				grid[next] = next_tile_id
+				queue.append(next)
+			else:
+				grounded[next] = true
+	return {"grid": grid, "grounded": grounded}
+
+
+## A piece that lost its support path for too long topples (see
+## docs/concept/materials.md's "Topple / collapse" verb, reused here rather
+## than a bespoke "building HP" system, per this doc's pillar 2 -- "it
+## eventually falls"). Drops its own constituent material back to the
+## ground -- the exact reverse of BuildingPiece.cost_of, mirroring how
+## breaking terrain/felling a tree already "drops its constituent
+## materials, closing the loop straight back into crafting supply"
+## (materials.md), via the same WorldItemBus.item_dropped path
+## _resolve_caravan_raid already uses. Does NOT itself re-walk the support
+## graph for what this piece was holding up -- _sync_statics' own resolve()
+## call already found the WHOLE cascade in one pass (see BuildingStatics.
+## resolve's own doc comment), so every collapsed cell in that pass is
+## handled here independently, not by re-triggering a second recompute.
+func _collapse_piece(chunk_coord: Vector2i, chunk: Chunk, local_cell: Vector2i, piece_id: String) -> void:
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var drop_position := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var cost := BuildingPiece.cost_of(piece_id)
+	for item_id in cost:
+		if not _item_catalog.has(item_id):
+			continue
+		var stack := ItemStack.new(_item_catalog.make(item_id), int(cost[item_id]))
+		WorldItemBus.item_dropped.emit(stack, drop_position)
+
+	chunk.modifications.erase(local_cell)
+	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
+	_remove_piece_collision(global_cell)
 
 
 ## The pixel-space center of the nearest modification tile matching

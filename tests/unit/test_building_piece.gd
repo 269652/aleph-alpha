@@ -116,3 +116,78 @@ func test_timber_wall_is_more_durable_than_a_plain_wood_wall():
 func test_timber_pieces_are_included_in_piece_ids():
 	assert_true(BuildingPiece.PIECE_IDS.has("timber_wall"))
 	assert_true(BuildingPiece.PIECE_IDS.has("timber_floor"))
+
+
+# -- real statics: load-bearing / support capacity (see
+# docs/concept/timber_construction.md#real-statics-a-support-graph-over-the-
+# piece-grid) -- "every CATEGORY_WALL piece is load-bearing with some support
+# capacity; CATEGORY_FLOOR/ROOF/DOOR/WINDOW pieces are not load-bearing
+# themselves", generalizing pillar 1's "a Balken is load-bearing, a Planke is
+# not" to every material tier, not just the timber one.
+
+## Regression: every existing piece's category/material/encloses/walkable/
+## durability/cost must be completely unaffected by the new field -- this
+## test locks in the exact same assertions test_building_piece.gd already
+## made above, now for every single piece id in one pass, so a future
+## statics change can never silently corrupt placement/enclosure behavior.
+func test_existing_piece_fields_are_unaffected_by_the_new_statics_field():
+	for piece_id in BuildingPiece.PIECE_IDS:
+		var expected_category := BuildingPiece.category_of(piece_id)
+		var expected_material := BuildingPiece.material_of(piece_id)
+		var expected_encloses := BuildingPiece.encloses(piece_id)
+		var expected_walkable := BuildingPiece.is_walkable(piece_id)
+		var expected_durability := BuildingPiece.durability_of(piece_id)
+		var expected_cost := BuildingPiece.cost_of(piece_id)
+		# Reading the new field must not have mutated anything above.
+		BuildingPiece.is_load_bearing(piece_id)
+		BuildingPiece.support_capacity_of(piece_id)
+		assert_eq(BuildingPiece.category_of(piece_id), expected_category, piece_id)
+		assert_eq(BuildingPiece.material_of(piece_id), expected_material, piece_id)
+		assert_eq(BuildingPiece.encloses(piece_id), expected_encloses, piece_id)
+		assert_eq(BuildingPiece.is_walkable(piece_id), expected_walkable, piece_id)
+		assert_eq(BuildingPiece.durability_of(piece_id), expected_durability, piece_id)
+		assert_eq(BuildingPiece.cost_of(piece_id), expected_cost, piece_id)
+
+
+## Every CATEGORY_WALL piece, and only CATEGORY_WALL pieces, are load-bearing
+## -- checked for every real piece id (not just the timber tier) since this
+## generalizes across all three material tiers.
+func test_every_wall_piece_is_load_bearing_and_nothing_else_is():
+	for piece_id in BuildingPiece.PIECE_IDS:
+		var expected := BuildingPiece.category_of(piece_id) == BuildingPiece.CATEGORY_WALL
+		assert_eq(
+			BuildingPiece.is_load_bearing(piece_id), expected,
+			"%s load-bearing should match whether it's a wall" % piece_id
+		)
+
+
+## A load-bearing piece must carry positive support capacity; a non-load-
+## bearing one must carry none -- the "flag or support-capacity number" the
+## concept doc describes are the same field here, not two.
+func test_support_capacity_is_positive_for_walls_and_zero_otherwise():
+	for piece_id in BuildingPiece.PIECE_IDS:
+		var capacity := BuildingPiece.support_capacity_of(piece_id)
+		if BuildingPiece.is_load_bearing(piece_id):
+			assert_gt(capacity, 0.0, "%s is load-bearing, it should carry real support capacity" % piece_id)
+		else:
+			assert_eq(capacity, 0.0, "%s is not load-bearing, it should carry none" % piece_id)
+
+
+## Support capacity mirrors durability's own already-tuned wood < timber <
+## stone progression (reusing an existing tested number rather than
+## inventing a fresh one) -- real per-material span capacity stays future
+## work per the concept doc's own "ships first as a simpler fixed span/
+## support-count approximation" note.
+func test_wall_support_capacity_matches_the_wood_timber_stone_progression():
+	assert_gt(BuildingPiece.support_capacity_of("timber_wall"), BuildingPiece.support_capacity_of("wood_wall"))
+	assert_gt(BuildingPiece.support_capacity_of("stone_wall"), BuildingPiece.support_capacity_of("timber_wall"))
+	for wall_id in ["wood_wall", "stone_wall", "timber_wall"]:
+		assert_eq(
+			BuildingPiece.support_capacity_of(wall_id), BuildingPiece.durability_of(wall_id),
+			"%s's support capacity should reuse its own already-tuned durability number" % wall_id
+		)
+
+
+func test_unknown_piece_is_not_load_bearing_and_carries_no_capacity():
+	assert_false(BuildingPiece.is_load_bearing("mystery"), "an unknown id must never silently carry load")
+	assert_eq(BuildingPiece.support_capacity_of("mystery"), 0.0)

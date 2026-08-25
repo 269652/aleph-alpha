@@ -24,6 +24,7 @@ const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const RoomDetector = preload("res://src/gameplay/room_detector.gd")
 const NpcGenome = preload("res://src/world/npc_genome.gd")
+const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 
 var blueprint: HouseBlueprint
 
@@ -81,6 +82,50 @@ func test_every_blueprint_encloses_exactly_one_real_room():
 		var rooms := RoomDetector.new().find_rooms(pieces)
 		assert_eq(rooms.size(), 1, "%s should enclose exactly one room" % blueprint_id)
 		assert_gt(rooms[0].size(), 0, blueprint_id)
+
+
+## Every blueprint's own piece grid, stood on ordinary open ground (its own
+## bounding box's bordering cells count as grounded, exactly like
+## EarthChunkManager._structure_statics_view derives "grounded" for a real
+## stamped structure), must be a real, fully STANDING house per
+## docs/concept/timber_construction.md's "Real statics" section -- not just
+## enclosable. A regression guard: this is what would have caught a
+## CANTILEVER_LIMIT too tight for these real footprints (a real bug this
+## test caught: cottage_bright/cottage_L_small/manor_wide/manor_grand/
+## manor_L_wide's own dead-center floor cells sit up to 2 tiles from their
+## nearest wall, further than a limit of 1 -- see BuildingStatics.
+## CANTILEVER_LIMIT's own doc comment for the fix).
+## Swept across several seeds, not just one -- a blueprint's window
+## placement is seed-derived (see build), and an unluckily-placed window can
+## push a floor cell's nearest REAL wall further away than a full unbroken
+## ring would (a door/window is not itself load-bearing, so it can't relay
+## another cell's support).
+func test_every_blueprint_is_fully_statically_supported():
+	var statics := BuildingStatics.new()
+	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
+		for seed_value in range(30):
+			var pieces := blueprint.build(blueprint_id, seed_value)
+			var grounded := _grounded_cells_bordering(pieces)
+			var unsupported := statics.unsupported_cells(pieces, grounded)
+			assert_eq(
+				unsupported, [],
+				"%s seed %d should stand fully supported on open ground" % [blueprint_id, seed_value]
+			)
+
+
+## The cells immediately bordering `pieces` (any piece cell's neighbor that
+## is NOT itself a piece) -- ordinary open terrain, mirroring
+## EarthChunkManager._structure_statics_view's own "grounded" derivation for
+## a real stamped structure, without needing an engine/chunk to compute it.
+func _grounded_cells_bordering(pieces: Dictionary) -> Dictionary:
+	var neighbors: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	var grounded := {}
+	for cell in pieces:
+		for offset in neighbors:
+			var neighbor: Vector2i = cell + offset
+			if not pieces.has(neighbor):
+				grounded[neighbor] = true
+	return grounded
 
 
 func test_every_blueprint_has_exactly_one_door():

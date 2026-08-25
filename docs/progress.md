@@ -3418,13 +3418,19 @@ end (2026-08-25 follow-up pass): the Sägewerk's own output credits
 `StructureStock` instead of dropping on the ground, a player without
 Storage/Logistics collects it directly (`Player._collect_step`), a
 Sägewerk+Storage pair auto-spawns its Logistics workers, and
-`ConstructionPriority.decide` now calls the real `NeedResolver`. See the
-concept doc's own Status section for the full accounting, including the
-one honest constraint carried forward (a Sägewerk pairs with only its
-single nearest Storage) and what's still not wired (no settlement-decision
-system yet calls `ConstructionPriority.decide`). Statics, withering, the
-settlement construction ledger, and offscreen catch-up remain entirely
-unbuilt.
+`ConstructionPriority.decide` now calls the real `NeedResolver`. A third
+slice landed 2026-08-25 (follow-up pass): real statics — a support graph
+over the piece grid, with real grace-period collapse and material
+drop-back, event-driven off `build_at_global`/`destroy_at_global`/
+`stamp_structure_at_global`. See the concept doc's own Status section for
+the full accounting, including the one honest constraint carried forward
+from the Storage/Logistics slice (a Sägewerk pairs with only its single
+nearest Storage), statics' own named limitation (no independent per-frame
+poll yet advancing an idle at-risk structure's grace clock — it only
+re-checks when a further edit touches that structure), and what's still
+not wired (no settlement-decision system yet calls
+`ConstructionPriority.decide`). Withering, the settlement construction
+ledger, and offscreen catch-up remain entirely unbuilt.
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
@@ -3456,10 +3462,50 @@ unbuilt.
   direct-pickup path for a player without Storage/Logistics built yet.
 - **Real consumers for beam/plank** (small) — ✅ Done — `BuildingPiece`'s
   new `timber_wall` (costs beam, load-bearing per the doc's pillar 1) and
-  `timber_floor` (costs plank), `tests/unit/test_building_piece.gd`. Does
-  NOT add the load-bearing/support-capacity field — that's the unbuilt
-  statics item below.
-- **Structural statics (support graph, collapse)** (large) — ⬜ Not started.
+  `timber_floor` (costs plank), `tests/unit/test_building_piece.gd`. Now
+  also carries the real `support_capacity` field the statics item below
+  consumes.
+- **Structural statics (support graph, collapse)** (large) — ✅ Done
+  (2026-08-25 follow-up pass). `BuildingPiece.is_load_bearing`/
+  `support_capacity_of` (every `CATEGORY_WALL` piece across all three
+  material tiers, mirroring its own already-tuned durability number,
+  regression-tested for every piece id in `test_building_piece.gd`).
+  `BuildingStatics` (`src/gameplay/building_statics.gd`,
+  `tests/unit/test_building_statics.gd`, 18 tests) is the new pure module:
+  reuses `RoomDetector`'s grid-over-local-cells/flood-fill shape for a
+  support-chain BFS instead of enclosure — `MAX_UNSUPPORTED_RUN` (4) for a
+  load-bearing chain back to a grounded cell, `CANTILEVER_LIMIT` (3, real
+  Manhattan-distance floor-joist-reach grounding, calibrated against every
+  real `HouseBlueprint` shape in `test_house_blueprint.gd`'s own
+  `test_every_blueprint_is_fully_statically_supported` — a tighter limit
+  read straight off the concept doc's own Worked Example B language
+  flagged real, already-shipped village houses' dead-center floor tiles as
+  permanently unsupported, a real regression that calibration test caught)
+  for a non-load-bearing piece's own shorter reach, `GRACE_SECONDS` (6)
+  before an unsupported piece actually collapses — all three test-pinned
+  calibration constants, not eyeballed comments. A
+  collapse drops the piece's own `cost_of` material back to the ground via
+  the same `WorldItemBus.item_dropped` path `_resolve_caravan_raid` already
+  uses, and `resolve()`'s own single pass already finds a full cascade (an
+  unsupported chain and whatever cantilevers off it are flagged together,
+  since a piece can only be a valid support stepping-stone by being
+  supported itself) — no second manual trigger needed.
+  `EarthChunkManager._sync_statics` hooks `build_at_global`/
+  `destroy_at_global`/`stamp_structure_at_global` (mirroring the existing
+  `_sync_sagewerk_lumberjack` call-site convention), scoped via
+  `_structure_statics_view`'s own flood-fill to just the touched
+  structure's connected piece grid — O(structure size), never the whole
+  chunk. Real per-cell instability/checked-at tracking lives on `Chunk`,
+  read against the real world-age clock. Tested in
+  `test_earth_chunk_manager.gd`'s new "real statics" section: grace delay
+  before collapse, a real collapse dropping material, cascade at the
+  engine level, collision-body cleanup. **Named limitation**: no
+  independent per-frame poll yet — an idle, untouched at-risk structure's
+  grace clock only advances when a further build/destroy/stamp event
+  touches that same structure again; and roof pieces
+  (`Chunk.roof_modifications`, a separate dict from `modifications`) are
+  not yet read into the statics grid, so roofs aren't statics-checked yet.
+  See the concept doc's own Status section for the full account.
 - **Withering / decay of built pieces** (medium) — ⬜ Not started.
 - **NPC construction beyond gathering (`CARRY_MATERIAL`/`PLACE_PIECE`,
   an NPC actually placing house pieces)** (large) — ⬜ Not started; the

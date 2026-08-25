@@ -597,12 +597,13 @@ shape a real abandoned timber building decays into.
 ## Status
 
 🚧 A scoped MVP slice is real: the Sägewerk worksite, its Lumberjack NPC,
-real timber building pieces, and a real, generic, now-live end-to-end
-Storage/Logistics/dependency-chain-priority layer. Everything else this
-doc describes (statics, withering, the settlement construction ledger,
-offscreen catch-up, autonomous NPC house-building) is still ⬜, exactly as
-specified below — deliberately left alone this pass, not silently
-dropped.
+real timber building pieces, a real, generic, now-live end-to-end
+Storage/Logistics/dependency-chain-priority layer, and (2026-08-25
+follow-up pass) real statics — a support graph over the piece grid, with
+real grace-period collapse and material drop-back. Everything else this
+doc describes (withering, the settlement construction ledger, offscreen
+catch-up, autonomous NPC house-building) is still ⬜, exactly as specified
+below — deliberately left alone this pass, not silently dropped.
 
 - ✅ **The Sägewerk worksite** — the doc's own generic "sawpit/hewing-block"
   prop, named and built concretely as `sagewerk` (`item_catalog.gd`'s
@@ -648,15 +649,94 @@ dropped.
 - ✅ **Real consumers for beam/plank** — `BuildingPiece`'s new
   `timber_wall` (costs `beam`, load-bearing per pillar 1) and
   `timber_floor` (costs `plank`, non-structural), appended to `PIECE_IDS`.
-  Durability sits between the wood and stone tiers. Deliberately does
-  **not** add the load-bearing/support-capacity field this doc's own "Real
-  statics" section describes below — that stays future work; these two
-  pieces are shaped identically to every existing wood/stone piece so
-  nothing implies a statics mechanic that isn't real yet.
-- ⬜ **Real statics** (a support graph over the piece grid) — not built.
-  Every piece placed today (wood, stone, or the new timber tier) still
-  "stands because it was placed," per this doc's own pillar 2's honest
-  framing of the pre-doc status quo.
+  Durability sits between the wood and stone tiers. Now also carries the
+  real `support_capacity` field the "Real statics" section below consumes
+  (see that bullet) — the load-bearing/support-capacity field this entry
+  used to say was deliberately deferred is real now.
+- ✅ **Real statics** (a support graph over the piece grid) — real
+  (2026-08-25 follow-up pass), not the "stands because it was placed"
+  status quo pillar 2 called out. `BuildingPiece` gains a `support_capacity`
+  field (`is_load_bearing`/`support_capacity_of`), additive to the existing
+  category/material/encloses/walkable/durability/cost shape and regression-
+  tested for every existing piece id: every `CATEGORY_WALL` piece across
+  all three material tiers (wood/stone/timber) is load-bearing, mirroring
+  its own already-tuned durability number rather than a fresh eyeballed
+  one — generalizing pillar 1 beyond just the timber tier, exactly as
+  asked. `BuildingStatics`
+  (`src/gameplay/building_statics.gd`, `tests/unit/test_building_statics.gd`)
+  is the new pure module: reuses `RoomDetector`'s grid-over-local-cells
+  shape and 4-neighbor flood-fill approach, but the traversal answers "does
+  this load-bearing cell have a path of adjacent load-bearing cells back to
+  a grounded cell within `MAX_UNSUPPORTED_RUN` (4, grounded in real
+  half-timbered bay spacing)" instead of enclosure; a non-load-bearing
+  piece (floor/roof/door/window) needs a SUPPORTED load-bearing cell within
+  its own shorter `CANTILEVER_LIMIT` (3, real floor-joist-reach grounding,
+  calibrated against every actual `HouseBlueprint` — see that constant's
+  own doc comment for a real regression this calibration caught: a tighter
+  literal reading of Worked Example B's "two tiles" language flagged
+  already-shipped village houses' own dead-center floor tiles as
+  permanently unsupported). Ships as one fixed span for every
+  material this pass — `support_capacity` is real and regression-tested but
+  not yet consumed by the span computation itself, exactly the "simpler
+  fixed span/support-count approximation" this doc's own "Interaction with
+  other docs" section on materials.md already named as the first-ship
+  shape, staged for a later upgrade once materials.md's property-vector
+  curves land.
+
+  A piece that loses its support path does not vanish: `BuildingStatics.
+  resolve` accumulates real instability (seconds continuously unsupported)
+  and, past `GRACE_SECONDS` (6, a real grace window), collapses — the
+  `Topple / collapse` verb, not a bespoke "building HP" system. A collapse
+  drops its own constituent material back to the ground (`BuildingPiece.
+  cost_of` reversed, via the exact same `WorldItemBus.item_dropped` path
+  `_resolve_caravan_raid` already uses) and the SAME `resolve()` pass finds
+  the whole cascade at once (a piece can only ever be a valid support
+  stepping-stone by being supported itself, so an unsupported chain and
+  everything cantilevered off it are already flagged together) — Worked
+  Example D's "the roof section it was holding up now unsupported, comes
+  down in turn" resolves within one call given enough elapsed time, no
+  second manual trigger required.
+
+  Event-driven, not per-tick: `EarthChunkManager._sync_statics` hooks
+  `build_at_global`/`destroy_at_global`/`stamp_structure_at_global`
+  (mirroring the existing `_sync_sagewerk_lumberjack`/
+  `_sync_logistics_workers` call-site convention exactly), scoped via
+  `_structure_statics_view`'s own flood-fill to just the touched
+  structure's own connected piece grid — O(structure size), never the
+  whole chunk. Real per-cell instability/last-checked-at tracking lives on
+  `Chunk` (`structural_instability`/`structural_checked_at`), read against
+  the real world-age clock (`advance_world_age`), not a fixed per-event
+  tick — so a piece genuinely needs real elapsed time unsupported before it
+  collapses, not just "an edit happened."
+
+  **Named, honest limitation**: the grace clock only actually gets
+  re-checked when a build/destroy/stamp event touches that structure's own
+  connected piece grid again — there is no independent per-frame poll (yet)
+  driving an idle, untouched at-risk structure's own clock forward on its
+  own. In real play this means an unsupported piece with no further nearby
+  edits sits "creaking" (correctly flagged, correctly not yet collapsed)
+  until something else disturbs that structure; a lightweight periodic
+  poll over just the currently-at-risk cell set (bounded, not O(chunk))
+  would close this gap and is the natural next step, deliberately left out
+  of this pass's scope. Also does not yet read `roof_modifications` (a
+  separate per-cell dict from `modifications`, see `chunk.gd`) into the
+  statics grid — roof pieces are not yet statics-checked; only
+  wall/floor/door/window pieces (`modifications`) are. Withering/decay
+  (which would feed this same collapse path per the doc's own framing) is
+  untouched, still ⬜ below.
+
+  Real, tested: `tests/unit/test_building_piece.gd` (the new field, every
+  piece id, regression), `tests/unit/test_building_statics.gd` (18 tests:
+  supported/severed detection, the cantilever rule, grace-threshold timing
+  across successive calls, cascade-in-one-call, determinism, the three
+  calibration constants), `tests/unit/test_house_blueprint.gd`'s new
+  `test_every_blueprint_is_fully_statically_supported` (every real
+  `HouseBlueprint` shape across 30 seeds validates as fully standing — the
+  actual calibration guard behind `CANTILEVER_LIMIT`'s chosen value, not
+  the number alone), and `tests/unit/test_earth_chunk_manager.gd`'s new
+  "real statics" section (grace delay before collapse, a real collapse
+  dropping the wall's own `cost_of` material via `WorldItemBus`, the
+  cascade at the engine level, and collision-body cleanup on collapse).
 - ⬜ **Withering/decay** (`condition`, the closed-form catch-up decay
   curve) — not built. No placed piece loses condition over time yet.
 - ⬜ **NPC construction beyond gathering** — the Lumberjack's own loop stops

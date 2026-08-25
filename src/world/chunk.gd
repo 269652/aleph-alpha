@@ -31,3 +31,18 @@ var roof_modifications: Dictionary = {}
 ## deterministic and regenerable, like terrain, so only these need
 ## persisting across an unload/reload.
 var planted_trees: Array = []
+
+## Real statics (see BuildingStatics / docs/concept/timber_construction.md
+## #real-statics-a-support-graph-over-the-piece-grid): how many continuous
+## real seconds each currently-unsupported piece cell (keyed like
+## `modifications`) has accumulated toward BuildingStatics.GRACE_SECONDS
+## before it topples/collapses, and the world-age each was last checked (so
+## the next check can compute a real elapsed delta rather than assuming a
+## fixed per-event tick). Only ever holds entries for cells CURRENTLY
+## unsupported -- a piece that regains its support path is dropped from
+## both, forgetting whatever instability it had built up. Not persisted
+## across an unload/reload -- an accepted gap, the same class of limitation
+## the Lumberjack's own in-progress shaping state already has (see that
+## doc's "Offscreen catch-up" status note).
+var structural_instability: Dictionary = {}
+var structural_checked_at: Dictionary = {}
