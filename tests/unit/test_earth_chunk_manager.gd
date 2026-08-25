@@ -37,6 +37,7 @@ const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sp
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
 const Strata = preload("res://src/world/strata.gd")
+const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -776,6 +777,55 @@ func test_moving_far_away_evicts_the_original_chunk():
 	assert_false(manager.is_chunk_loaded(Vector2i(0, 0)))
 
 
+# -- update_with_progress: chunked, frame-yielding update() variant used by
+# the initial New Game/Load Game/Join loading-screen flow (see
+# World._show_loading_overlay, LoadingOverlay, docs/concept/persistence.md's
+# "Loading screens" section) so it can show REAL per-chunk progress instead
+# of an indeterminate spinner frozen for the whole synchronous update()
+# duration. pending_load_chunks is the plain, cheap (no generation) piece
+# that makes the total knowable up front. --------------------------------
+
+func test_pending_load_chunks_lists_every_chunk_update_would_load():
+	var center_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	var expected := manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS)
+	assert_eq(manager.pending_load_chunks(Vector2i(0, 0)).size(), expected.size())
+
+
+func test_pending_load_chunks_is_empty_once_update_already_loaded_them():
+	manager.update(Vector2i(0, 0))
+	assert_eq(manager.pending_load_chunks(Vector2i(0, 0)).size(), 0)
+
+
+func test_update_with_progress_loads_the_same_chunks_update_would():
+	var center_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	var expected := manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS)
+	await manager.update_with_progress(Vector2i(0, 0))
+	for chunk_coord in expected:
+		assert_true(manager.is_chunk_loaded(chunk_coord))
+
+
+func test_update_with_progress_reports_real_progress_from_zero_to_the_true_total():
+	var total := manager.pending_load_chunks(Vector2i(0, 0)).size()
+	assert_gt(total, 0, "nothing loaded yet -- there should be chunks pending")
+	var calls := []
+	var record_progress := func(loaded: int, of_total: int) -> void:
+		calls.append([loaded, of_total])
+	await manager.update_with_progress(Vector2i(0, 0), record_progress)
+	assert_eq(calls[0], [0, total], "first call reports zero of the real total")
+	assert_eq(calls[calls.size() - 1], [total, total], "last call reports completion")
+	assert_eq(calls.size(), total + 1, "one call per chunk loaded, plus the initial zero")
+
+
+func test_update_with_progress_still_evicts_chunks_beyond_unload_radius():
+	await manager.update_with_progress(Vector2i(0, 0))
+	assert_true(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	await manager.update_with_progress(far_away_tile)
+
+	assert_false(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+
 func test_elevation_at_global_matches_the_generator_for_a_loaded_tile():
 	manager.update(Vector2i(5, 5))
 	var expected := manager.generator.elevation_at_global(5, 5)
@@ -954,6 +1004,42 @@ func test_a_configured_spawns_own_chunk_is_easy_difficulty():
 	manager.set_spawn_tile(_berlin_tile)
 	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
 	assert_eq(manager._difficulty_tier_at(center_chunk), RegionDifficulty.Tier.EASY)
+
+
+# -- explored-tiles wiring (see docs/concept/wayfinding.md's Map item) ------
+# Pure delegation to ExploredTiles -- no chunk loading involved, so these
+# stay cheap: construct a manager the same way every other fast test in
+# this file already does and call the three coordinator methods directly.
+
+func test_marking_a_chunk_explored_returns_true_the_first_time():
+	assert_true(manager.mark_chunk_explored(Vector2i(2, 3)))
+
+
+func test_marking_an_already_explored_chunk_again_returns_false():
+	manager.mark_chunk_explored(Vector2i(2, 3))
+	assert_false(manager.mark_chunk_explored(Vector2i(2, 3)))
+
+
+func test_is_chunk_explored_is_false_before_marking_and_true_after():
+	assert_false(manager.is_chunk_explored(Vector2i(4, 5)))
+	manager.mark_chunk_explored(Vector2i(4, 5))
+	assert_true(manager.is_chunk_explored(Vector2i(4, 5)))
+
+
+func test_explored_chunks_lists_every_distinct_marked_chunk():
+	manager.mark_chunk_explored(Vector2i(1, 1))
+	manager.mark_chunk_explored(Vector2i(2, 2))
+	assert_eq(manager.explored_chunks().size(), 2)
+	assert_true(manager.explored_chunks().has(Vector2i(1, 1)))
+	assert_true(manager.explored_chunks().has(Vector2i(2, 2)))
+
+
+# -- spawn chunk coord getter (Compass's "point me home" default target) ----
+
+func test_spawn_chunk_coord_reflects_the_configured_spawn_tile():
+	manager.set_spawn_tile(_berlin_tile)
+	var expected_chunk := _chunk_coord_for_tile(_berlin_tile)
+	assert_eq(manager.spawn_chunk_coord(), expected_chunk)
 
 
 func test_promoted_creatures_near_berlin_only_use_species_from_their_chunks_biome_pool():
@@ -3632,6 +3718,26 @@ func test_an_unknown_weather_state_is_refused():
 	assert_false(manager.is_weather_forced())
 
 
+# -- emergence: the Weather glass item reads weather one period ahead
+# (docs/concept/wayfinding.md's Weather glass item) -- upcoming_weather
+# mirrors current_weather's own internals (same day/region-seed derivation)
+# but calls WeatherForecast.upcoming_weather(_weather_model, day, seed)
+# instead of _weather_model.weather_at(day, seed) directly, one day ahead.
+
+## Proven by advancing the world clock forward exactly one weather period
+## and comparing against current_weather's own reading there -- rather than
+## re-deriving WEATHER_PERIOD_SECONDS/region-seed math in the test, which
+## would just restate the implementation instead of proving it.
+func test_upcoming_weather_matches_current_weather_one_period_later():
+	manager.set_world_age_seconds(0.0)
+	var forecast: String = manager.upcoming_weather(Vector2.ZERO)
+
+	manager.set_world_age_seconds(EarthChunkManager.WEATHER_PERIOD_SECONDS)
+	var next_periods_current := manager.current_weather(Vector2.ZERO)
+
+	assert_eq(forecast, next_periods_current)
+
+
 # -- snow keeps the world's clock, not the frame's ---------------------------
 
 ## Snow melts on WORLD time, the same clock the season is on.
@@ -4106,6 +4212,36 @@ func test_wipe_household_store_clears_both_memory_and_disk():
 	assert_false(FileAccess.file_exists(path))
 
 
+# -- emergence: the Deed item claims real property (docs/concept/
+# player_citizenship.md's Deed item) -- the same form_household/
+# grant_property mechanism NPC houses already use, keyed by the player's
+# own PlayerIdentity.PLAYER_ENTITY_ID rather than an npc id.
+
+func test_claiming_property_with_a_deed_forms_a_household_owning_it():
+	var household = manager.claim_property_with_deed("house:99_99_0")
+	assert_not_null(household)
+	assert_eq(household.members, [PlayerIdentity.PLAYER_ENTITY_ID])
+	assert_true(household.property.has("house:99_99_0"))
+
+
+## Idempotent, matching HouseholdStore.grant_property's own idempotence --
+## claiming the same property a second time does not error and the property
+## stays owned by the same household.
+func test_claiming_the_same_property_twice_stays_owned_by_the_same_household():
+	var first = manager.claim_property_with_deed("house:98_98_0")
+	var second = manager.claim_property_with_deed("house:98_98_0")
+	assert_eq(first.id, second.id)
+	assert_eq(manager.household_store().owner_of("house:98_98_0"), first.id)
+
+
+func test_claiming_property_with_a_deed_records_a_real_event():
+	var household = manager.claim_property_with_deed("house:97_97_0")
+	var claimed: Array = manager.event_store().events_of_type("player_claimed_property")
+	assert_eq(claimed.size(), 1)
+	assert_eq(claimed[0].actors, [household.id])
+	assert_eq(claimed[0].tags, ["house:97_97_0"])
+
+
 # -- emergence: contracts are coordinated with events, same as founding -----
 
 ## Proposing a contract through EarthChunkManager both creates the contract
@@ -4143,6 +4279,34 @@ func test_an_invalid_transition_records_no_event():
 	var contract = manager.propose_contract("rent", ["household:1"], [], "", -1.0)
 	assert_false(manager.fulfill_contract(contract.id))  # not active yet
 	assert_eq(manager.event_store().events_of_type("contract_fulfilled").size(), 0)
+
+
+# -- emergence: the Ledger item proposes real player contracts (docs/
+# concept/player_citizenship.md's Ledger item) -- a thin wrapper over the
+# existing propose_contract naming the player's own household as one party.
+
+func test_player_propose_contract_names_the_players_household_and_counterparty():
+	var contract = manager.player_propose_contract(
+		"trade", "household:50", ["10 wood/week"], "shelter", -1.0
+	)
+	assert_not_null(contract)
+	var player_household_id: String = manager.household_store().household_for(
+		PlayerIdentity.PLAYER_ENTITY_ID
+	).id
+	assert_true(contract.parties.has(player_household_id))
+	assert_true(contract.parties.has("household:50"))
+
+
+## The existing generic lifecycle methods already work unchanged for a
+## player-named contract -- ContractStore._transition never assumes
+## anything about WHICH entity a party is, so accept_contract/
+## fulfill_contract need no player-specific counterpart.
+func test_a_player_proposed_contract_can_be_accepted_and_fulfilled():
+	var contract = manager.player_propose_contract("trade", "household:51", [], "", -1.0)
+	assert_true(manager.accept_contract(contract.id))
+	assert_true(manager.activate_contract(contract.id))
+	assert_true(manager.fulfill_contract(contract.id))
+	assert_eq(manager.contract_store().get_contract(contract.id).status, "fulfilled")
 
 
 # -- emergence: the contract store persists alongside the others -------------
@@ -4286,6 +4450,38 @@ func test_dissolving_an_institution_records_a_real_event():
 	assert_eq(manager.institution_store().get_institution(institution.id).status, "dissolved")
 	var dissolved: Array = manager.event_store().events_of_type("institution_dissolved")
 	assert_eq(dissolved.size(), 1)
+
+
+# -- emergence: the Charter item forms real player institutions (docs/
+# concept/player_citizenship.md's Charter item) -- a thin wrapper over the
+# existing attempt_institution_formation naming the player's own household
+# as one party, gated by the SAME real InstitutionFormation.should_form
+# threshold an NPC pair is held to.
+
+func _player_fulfill_contracts_with(counterparty_id: String, count: int) -> void:
+	for i in count:
+		var contract = manager.player_propose_contract("trade", counterparty_id, [], "", -1.0)
+		manager.accept_contract(contract.id)
+		manager.activate_contract(contract.id)
+		manager.fulfill_contract(contract.id)
+
+
+func test_player_attempt_institution_formation_below_threshold_forms_nothing():
+	_player_fulfill_contracts_with("household:60", 2)
+	var institution = manager.player_attempt_institution_formation("guild", "household:60")
+	assert_null(institution)
+
+
+func test_player_attempt_institution_formation_at_threshold_forms_a_real_institution_containing_the_players_household():
+	_player_fulfill_contracts_with("household:61", InstitutionFormation.FORMATION_THRESHOLD)
+	var institution = manager.player_attempt_institution_formation("guild", "household:61")
+	assert_not_null(institution)
+
+	var player_household_id: String = manager.household_store().household_for(
+		PlayerIdentity.PLAYER_ENTITY_ID
+	).id
+	assert_true(institution.members.has(player_household_id))
+	assert_true(institution.members.has("household:61"))
 
 
 # -- emergence: the institution store persists alongside the others ---------

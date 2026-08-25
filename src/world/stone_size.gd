@@ -15,7 +15,7 @@ extends RefCounted
 ## look at a rock and know what to do with it without being told.
 
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
-const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
+const CharacterView = preload("res://scenes/character_view.gd")
 
 ## ## The Wentworth grain-size scale
 ##
@@ -148,13 +148,15 @@ static func rock_yield(diameter_cm: float) -> int:
 # -- how big it looks --------------------------------------------------------
 
 ## Read against the PLAYER, as everything else in this world is (see
-## ProceduralFlowerSprite, where flowers are pinned to the player's hip). The
-## character's own height comes from the rule CharacterView uses -- two thirds
-## of a full-grown tree -- rather than a second copy of the number.
-const PLAYER_HEIGHT_FRACTION_OF_TREE := 2.0 / 3.0
-const PLAYER_WORLD_HEIGHT_PX := (
-	PLAYER_HEIGHT_FRACTION_OF_TREE * float(ProceduralTreeSprite.WORLD_SIZE.y)
-)
+## ProceduralFlowerSprite, where flowers are pinned to the player's hip).
+## Taken directly from CharacterView's own computed height (its total
+## feet-to-head-top span, HEAD_TOP_Y, times its world SCALE) rather than a
+## second, independent copy of "how big is the player" -- this used to be its
+## own fraction-of-a-tree literal (2/3), which silently went stale when
+## CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE was later raised to 0.85, the
+## same drift ProceduralFlowerSprite.PLAYER_WORLD_HEIGHT_PX was fixed to guard
+## against (see test_the_player_height_stones_are_measured_against_is_the_real_one).
+const PLAYER_WORLD_HEIGHT_PX := -CharacterView.HEAD_TOP_Y * CharacterView.SCALE
 
 ## A person is this tall, so a stone this wide stands as tall as the player.
 ## The largest boulder is deliberately set to it.

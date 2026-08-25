@@ -324,18 +324,41 @@ func _color_distance(a: Color, b: Color) -> float:
 ## reason head does: a variant (which of 8 outfits) axis the simple
 ## part->rects shape has no room for.
 ##
-## REGENERATED once already, from a prompt this project wrote after
-## measuring the first version's per-cell inconsistency (see
-## docs/progress.md) -- 1024x1536, 3 columns (arms/torso/legs) x 8 rows, cell
-## boundaries measured directly by scanning for real transparent gaps
-## between content blocks (colorType 6, real populated alpha -- no
-## chroma-key/flood needed, unlike head.png's solid background), not assumed
-## from an even three-way pixel split (1024 does not divide evenly by 3).
-## Column x-ranges are generous, not exact-to-the-pixel: normalize_frames'
-## own crop-to-content step (see _composite_image) finds the real boundary
-## inside whatever range it's given, so the range only has to fully CONTAIN
-## one column's content without touching its neighbour's, not land exactly
-## on the seam.
+## REGENERATED a second time (see docs/progress.md for the full history of
+## the first regeneration and its own fixes) once the user supplied a
+## walk-cycle prompt request and delivered a NEW sheet in response ("I
+## replaced hero composite sprite .. pls wire"): still 1024x1535, still 8
+## outfit rows, but the source art itself changed shape in two real ways
+## this class has to account for:
+##
+## 1. Solid near-BLACK background (colorType 2, no alpha channel at all),
+##    not the previous version's real populated alpha -- measured directly
+##    (corner pixels read (0,0,0)/(1,1,0)), the SAME convention head.png
+##    already uses. Removed the same way: a border-connected flood fill
+##    (_remove_background_by_flood), not detect_frames' own alpha-or-pale-
+##    divider emptiness check, which a black background defeats entirely
+##    (it isn't transparent and isn't pale, so nothing would ever read as
+##    "empty" and the whole row would detect as one solid blob).
+## 2. Legs are no longer ONE fused pose per row -- each row now carries a
+##    real 5-frame WALK-CYCLE strip for the legs specifically (measured
+##    directly: every one of the 8 rows produces exactly 8 real content
+##    bands left to right -- 2 arm poses, 1 body pose, then 5 leg poses of
+##    similar width to each other -- see HERO_COMPOSITE_MIN_BAND_WIDTH's
+##    own doc comment on how "real" vs. noise is told apart). CharacterView
+##    now cycles through these 5 real frames for the walk animation instead
+##    of synthesizing motion from one static pose (see
+##    CharacterView._apply_legs/_process) -- this SUPERSEDES the hip/knee
+##    crop-and-hinge rig below (composite_leg_segments and friends), which
+##    was always documented as a compromise for exactly this gap ("no
+##    thigh/shin split baked into the source art") -- kept, not deleted,
+##    since the reasoning for why a full skinned mesh was set aside is
+##    still valid background for whoever next touches leg animation, but no
+##    longer called from CharacterView.
+##
+## Row Y-bands are NOT an even grid either (regenerated art, not a fixed
+## template) -- measured directly the same way the row-1 defect that broke
+## the FIRST hero_composite regeneration was found, a real per-row content
+## scan, not assumed from height/8 (see HERO_COMPOSITE_ROW_BANDS).
 ##
 ## PRE-COLORED per variant/row -- NOT neutral grey for runtime
 ## modulate-tinting the way body/legs/arms used to be. A caller must
@@ -347,50 +370,58 @@ func _color_distance(a: Color, b: Color) -> float:
 ## answered the same way skin/hair/eyes already are: no new player-choosable
 ## axis, unlike head's own) -- see outfit_variant_for.
 ##
-## legs are a FUSED pair (both legs drawn together, exactly like legs.png
-## always was) -- CharacterView wears them as one sprite covering both world
-## slots (see CharacterView._apply_legs). arms are genuinely TWO separate
-## drawings side by side with real transparent space between them (unlike
-## the fused legs, or the first hero_composite version's arms) -- detected
-## as two frames via the same detect_frames column-emptiness scan the old
-## arms.png used, not treated as one fused image, so ArmLeft/ArmRight keep
-## independent art the way they did before.
-##
-## Only FRONT-facing art exists at this path today -- the earlier version
-## additionally had a side-profile set, but this regenerated file replaced
-## it with a cleaner front-only sheet (see the art brief's follow-up prompt
-## for back/side, not yet run). `facing` stays a real parameter throughout
-## this surface, defaulting to and currently only ever resolving to "front"
-## (see _resolved_facing), so a future side/back sheet slots in without
-## another signature change.
+## Only FRONT-facing art exists at this path today (asked for all 4
+## directions; what came back both times was front-only -- see docs/
+## progress.md). `facing` stays a real parameter throughout this surface,
+## defaulting to and currently only ever resolving to "front" (see
+## _resolved_facing), so a future side/back sheet slots in without another
+## signature change.
 
 const HERO_COMPOSITE_PATH := "res://assets/sprites/player/hero_composite.png"
 
-const HERO_COMPOSITE_ROW_HEIGHT := 192
 const HERO_COMPOSITE_ROWS := 8
 
-## x-ranges per part, front-facing, in art pixels -- see this section's own
-## doc comment on how these were measured. Not an even 3-way split of the
-## 1024px width: arms' content sits toward the left of its own third, so its
-## range is trimmed slightly narrower than an even split would give it,
-## leaving torso/legs the remainder.
-## Verified against the LIVE slicer across all 8 rows, not just row 0 --
-## `test_every_outfit_row_produces_the_expected_frame_count` -- after this
-## exact class of miscount (a row's real content landing outside the
-## assumed range, or a stray fragment landing inside it) twice reached the
-## live game: once as a malformed portrait (body row 7's shoulder cape casts
-## a detached fragment at x=[672,683) that an upper bound of 683 wrongly
-## included as a second "body" frame) and once as a silently-missing part
-## (legs row 7's content starts at x=670, left of an assumed 683 lower
-## bound, so the whole frame fell outside the range and vanished). Bounds
-## below are deliberately not an even three-way split of the 1024px width
-## for exactly this reason -- they were adjusted until every row matched,
-## not assumed from geometry.
-const HERO_COMPOSITE_COLUMN_X := {
-	"arms": {"front": Vector2i(0, 341)},
-	"body": {"front": Vector2i(341, 660)},
-	"legs": {"front": Vector2i(668, 1024)},
+## Which real content bands (see HERO_COMPOSITE_MIN_BAND_WIDTH), in strict
+## left-to-right order, belong to which part -- every one of the 8 rows
+## produces exactly this many real bands in exactly this order (measured
+## directly across all 8, not assumed from row 0 alone -- the exact mistake
+## that broke the FIRST hero_composite regeneration, see
+## test_every_outfit_row_produces_the_expected_frame_count). Legs keep all
+## 5 of theirs (a real walk-cycle strip, see this section's own top-level
+## doc comment); arms and body keep their own single/double band as before.
+const HERO_COMPOSITE_BAND_INDICES := {
+	"arms": [0, 1],
+	"body": [2],
+	"legs": [3, 4, 5, 6, 7],
 }
+
+## The narrowest a detect_frames band can be and still count as real
+## content, not the thin anti-aliasing sliver detect_frames sometimes finds
+## at a frame seam after the black-background flood fill -- measured
+## directly: every real band across all 8 rows is at least 50px wide, every
+## stray sliver is 4px or less, so 20 sits cleanly in the gap between the
+## two with real margin either side.
+const HERO_COMPOSITE_MIN_BAND_WIDTH := 20
+
+## The per-STEP flood tolerance for removing the sheet's own solid-black
+## background (see _remove_background_by_flood's own doc comment for what
+## "per-step" means) -- the same 0.02 HEAD_BACKGROUND_FLOOD_STEP_TOLERANCE
+## measures further down this file (a literal here, not a forward
+## reference to it -- GDScript const expressions can't reference a const
+## declared later in the same file), reused rather than swept independently
+## since both sheets share the same near-black-background-with-a-soft-blur-
+## into-content characteristic that value was originally measured against.
+const HERO_COMPOSITE_BACKGROUND_FLOOD_STEP_TOLERANCE := 0.02
+
+## Row Y-bands (art pixels, inclusive), one per outfit row, measured
+## directly against the real file the same way HERO_COMPOSITE_BAND_INDICES
+## above was -- NOT an even 1535/8 split (not even a whole number) since
+## this is hand-illustrated art with real, uneven gaps between rows, not a
+## fixed template grid.
+const HERO_COMPOSITE_ROW_BANDS: Array[Vector2i] = [
+	Vector2i(34, 145), Vector2i(195, 304), Vector2i(356, 480), Vector2i(529, 652),
+	Vector2i(702, 829), Vector2i(875, 1012), Vector2i(1058, 1197), Vector2i(1246, 1418),
+]
 
 var _hero_composite_sheet: Image = null
 
@@ -404,7 +435,7 @@ static var _composite_content_height_cache: Dictionary = {}
 
 
 func has_composite_part(part_name: String) -> bool:
-	return HERO_COMPOSITE_COLUMN_X.has(part_name)
+	return HERO_COMPOSITE_BAND_INDICES.has(part_name)
 
 
 ## Which of the 8 pre-colored outfits this hero wears -- deterministic per
@@ -454,16 +485,18 @@ func _composite_key(part_name: String, variant: int, facing: String) -> String:
 ## caller asking for "side" before that art exists gets a facing hero
 ## instead of a blank one.
 func _resolved_facing(part_name: String, facing: String) -> String:
-	var facings: Dictionary = HERO_COMPOSITE_COLUMN_X.get(part_name, {})
-	return facing if facings.has(facing) else "front"
+	return "front"
 
 
-## Finds and normalizes the frame(s) within one part's column for outfit row
-## `variant` -- one frame for body/legs (the whole column is one drawing),
-## two for arms (a real transparent gap splits it, found the same way
-## detect_frames already splits any other divided sheet).
+## Finds and normalizes the frame(s) belonging to one part for outfit row
+## `variant` -- one frame for body, two for arms (left/right), five for
+## legs (a real walk-cycle strip -- see this section's own top-level doc
+## comment). The whole row band is background-flood-filled once, then
+## detect_frames splits it on the now-real transparent gaps between poses;
+## HERO_COMPOSITE_BAND_INDICES picks out which of the resulting bands (in
+## strict left-to-right order) belong to `part_name`.
 func _composite_frames(part_name: String, variant: int, facing: String) -> Array[Image]:
-	if not HERO_COMPOSITE_COLUMN_X.has(part_name):
+	if not HERO_COMPOSITE_BAND_INDICES.has(part_name):
 		return []
 	var resolved := _resolved_facing(part_name, facing)
 	var key := _composite_key(part_name, variant, resolved)
@@ -471,75 +504,24 @@ func _composite_frames(part_name: String, variant: int, facing: String) -> Array
 		return _composite_frames_cache[key]
 	if _hero_composite_sheet == null:
 		_hero_composite_sheet = Image.load_from_file(HERO_COMPOSITE_PATH)
-	var x_range: Vector2i = HERO_COMPOSITE_COLUMN_X[part_name][resolved]
 	var row := clampi(variant, 0, HERO_COMPOSITE_ROWS - 1)
-	var top := row * HERO_COMPOSITE_ROW_HEIGHT
-	var bottom := top + HERO_COMPOSITE_ROW_HEIGHT
-	var frame_rects := _slicer.detect_frames(_hero_composite_sheet, top, bottom)
-	# Clip to this part's own x-range -- detect_frames scans the WHOLE row,
-	# which would also find the neighbouring parts' content.
-	var column_rects: Array[Rect2i] = []
-	for rect in frame_rects:
-		if rect.position.x >= x_range.x and rect.position.x + rect.size.x <= x_range.y:
-			column_rects.append(_primary_content_rect(_hero_composite_sheet, rect))
-	var result: Array[Image] = _slicer.normalize_frames(
-		_hero_composite_sheet, column_rects, CANVAS_SIZE, BASELINE_Y
+	var band: Vector2i = HERO_COMPOSITE_ROW_BANDS[row]
+	var row_crop := _hero_composite_sheet.get_region(
+		Rect2i(0, band.x, _hero_composite_sheet.get_width(), band.y - band.x + 1)
 	)
+	var keyed := _remove_background_by_flood(row_crop, HERO_COMPOSITE_BACKGROUND_FLOOD_STEP_TOLERANCE)
+	var raw_bands := _slicer.detect_frames(keyed, 0, keyed.get_height())
+	var real_bands: Array[Rect2i] = []
+	for candidate in raw_bands:
+		if candidate.size.x >= HERO_COMPOSITE_MIN_BAND_WIDTH:
+			real_bands.append(candidate)
+	var selected: Array[Rect2i] = []
+	for index in HERO_COMPOSITE_BAND_INDICES[part_name]:
+		if index < real_bands.size():
+			selected.append(real_bands[index])
+	var result: Array[Image] = _slicer.normalize_frames(keyed, selected, CANVAS_SIZE, BASELINE_Y)
 	_composite_frames_cache[key] = result
 	return result
-
-
-## Clips `rect` down to just its first contiguous run of non-empty rows,
-## discarding anything below the first real gap.
-##
-## detect_frames only ever splits on COLUMN gaps (see its own doc comment)
-## -- it hands back a rect spanning the FULL row height regardless of what's
-## actually drawn in it, on the assumption that one column-separated blob is
-## one frame's whole vertical extent. hero_composite.png's rows break that
-## assumption: several rows hold a second, unrelated close-up (a belt
-## buckle, a shoulder pauldron) sitting BELOW the real garment at
-## x-coordinates that land inside the very same legs/body column range, with
-## a real gap of empty rows between the two. Left alone, normalize_frames'
-## plain min/max bounding-box scan welds them into one "frame" spanning from
-## the garment's top to the fragment's bottom -- inflating the measured
-## content height composite_part_scale_for scales against (shrinking the
-## real garment well below its intended on-screen size) and painting a
-## second, unrelated object below it. Measured directly against the real
-## sheet (see test_every_outfit_rows_legs_have_no_fragment_stacked_below_a_gap):
-## 6 of legs' 8 rows and 6 of body's 8 rows carry this; only rows 0 and 7 of
-## each are clean -- reached the live game as "still no legs" even after
-## raising CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE, because the actual
-## defect was never size, it was this contamination.
-##
-## The real garment is always the FIRST (topmost) contiguous run in every
-## row observed -- the stray fragment always sits below it, never above --
-## so "first run, cut at the first full gap" is enough; no magic gap-size
-## threshold is needed, the same single-empty-row-is-a-divider convention
-## detect_frames itself already uses for columns (its own default
-## min_divider_width is 1).
-func _primary_content_rect(image: Image, rect: Rect2i) -> Rect2i:
-	var left := rect.position.x
-	var right := rect.position.x + rect.size.x
-	var top := rect.position.y
-	var bottom := rect.position.y + rect.size.y
-	var content_start := -1
-	for y in range(top, bottom):
-		if _row_is_empty(image, y, left, right):
-			if content_start >= 0:
-				return Rect2i(left, content_start, rect.size.x, y - content_start)
-			continue
-		if content_start < 0:
-			content_start = y
-	if content_start < 0:
-		return rect  # Fully empty -- let normalize_frames' own empty-content handling apply, unchanged.
-	return Rect2i(left, content_start, rect.size.x, bottom - content_start)
-
-
-func _row_is_empty(image: Image, y: int, left: int, right: int) -> bool:
-	for x in range(left, right):
-		if not SpriteSheetSlicer.is_empty(image.get_pixel(x, y)):
-			return false
-	return true
 
 
 ## The trimmed (padding-cropped) content image for one composite part/

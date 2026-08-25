@@ -140,6 +140,20 @@ a campfire/furnace already exist as placeable worksite props):
   existing dict shape — every current piece keeps working, walls just
   start meaning something structurally they didn't before.
 
+**A Sägewerk itself needs a real carpenter's eye to raise, not just
+materials — generalized, not hardcoded.** Reported directly: "you also
+need a given crafting skill level to build a sawmill... [and] this needs
+to work for all future buildings and economics." Rather than a
+Sägewerk-specific check, this is [production_chains.md](production_chains.md)'s
+general `required_skill` recipe field, applied to the `"sagewerk"` recipe
+(Carpentry level N, read live via the exact
+`SkillTree.total_bonus("carpentry_level", allocated_nodes)` pattern
+`Player._chop_step`'s `CARPENTRY_LEVEL_FOR_SAWING` already uses) — the
+SAME mechanism any future production building's own skill requirement
+uses, not a one-off gate invented for this one structure. See that doc
+for the full mechanism; this paragraph only records the Sägewerk's own
+concrete instance of it.
+
 ### Real statics: a support graph over the piece grid
 
 `RoomDetector` already treats a structure's pieces as a grid keyed by local
@@ -303,6 +317,106 @@ real drought already measurably lowers a farmer's yield
 (`docs/progress.md`'s NPC section: "a real drought... measured 93.8% lower
 farmer AND hunter yield"). This closes construction into the existing
 ecosystem loop rather than inventing a separate, infinite lumber source.
+
+### Storage, logistics, and the autonomous dependency chain (mechanism spec)
+
+Compiled from a follow-up design-brainstorm session, reported directly:
+"NPCs should be able to build a storage building in their village — if
+both production buildings and storage exist, new NPCs may move in which
+handle logistics... and somehow we need a dependency chain which causes
+NPCs to understand that they need a Sawmill in order to produce
+construction material they can use to build houses." This is the
+Settlement construction ledger's own "which project does a settlement
+start next" reasoning made concrete — extending the Sägewerk (see
+"Material pipeline" above) with two more real building/NPC roles and the
+autonomous logic to sequence them correctly. Depends on the Sägewerk
+material pipeline landing first (a real production building to move goods
+FROM) and on the Settlement construction ledger above (a real place to
+check "is this settlement already trying to build a Sägewerk").
+
+**Storage: a real place accumulated goods live, not loose ground
+clutter.** The Sägewerk's own production, as scoped above, drops finished
+Balken/Planke as ordinary ground items at its own position — fine for a
+single mill, but nothing a settlement-scale ledger can read as real stock.
+A Storage building (a new placeable, the exact same tile-based pattern as
+campfire/furnace/Sägewerk) gives a settlement a real, persistent stock
+instead. Needs no new container shape — `VillageMarket.stock`/`Market.stock`
+are already a generic `item_id -> count` dict at settlement scale; a
+Storage instance holds the same shape at building scale, and the
+Settlement construction ledger's own shortfall check (below) reads it
+exactly the way `Quest.production_shortfall_quests_for` already reads
+`Market.stock_of` — one real number, not a second accounting system.
+
+**Logistics: carrying finished goods, not raw material.** A new dedicated
+worker, the same "small, purpose-built walker, not the full NpcMarker AI
+stack" shape `LumberjackMarker`/`DecomposerMarker`/`CaravanMarker` already
+established — the mirror image of the Lumberjack's own loop: instead of
+raw material INTO production, it moves FINISHED output OUT of a
+production building and INTO the nearest real Storage. SEEKING (find a
+production building with real accumulated output waiting) → APPROACHING →
+COLLECTING (pick up the waiting stack) → CARRYING → DEPOSITING (credit the
+Storage's stock) → repeat. Intra-settlement transport, distinct from
+`CaravanMarker`'s inter-settlement one — same walker shape, different
+route and cargo.
+
+**Who moves in, and when.** Matches `quests.md`'s own already-specified
+migration pillar almost exactly: "specialty infrastructure (a forge, a
+dock, a farm plot) is a specific pull for a specific occupation-need." The
+full mechanism there (real push/pull, a minimum floor before eligibility,
+player-invite, sourced preferentially from a declining settlement's own
+push-pressured residents) stays exactly as specified there, and exactly as
+unbuilt (it needs a replan-interrupt architecture that doesn't exist yet)
+— this section does not attempt to build it. For this pass, mirroring how
+placing a Sägewerk directly spawns its own Lumberjack with no hiring/
+migration system needed, a settlement/area with both a real production
+building AND a real Storage building present spawns one Logistics worker
+directly — a simplified, directly-triggered stand-in for the fuller
+migration mechanism, upgradeable later (routing the same spawn decision
+through the real migration mechanism once it exists) without changing
+anything this section builds.
+
+**The dependency chain: recognizing what to build first.** The actual
+ask's hardest piece — and, per direct correction ("this needs to work for
+all future buildings and economics... also for quests and other things"),
+NOT a Sägewerk-specific one-hop lookup. This is
+[production_chains.md](production_chains.md)'s general `NeedResolver`,
+walking `CraftingRecipeBook`'s real recipe graph recursively — the
+Sägewerk is simply that system's first two real recipes (`"sagewerk"`
+itself, and the log→Balken/Planke shaping recipes), not a special case
+with its own bespoke resolution logic. See that doc for the full
+mechanism (recipe `requires_structure`/`required_skill` fields, the
+recursive walk, and its other real consumers — the Quest system among
+them).
+
+A settlement deciding to start a `ConstructionProject` (this doc's own
+Settlement construction ledger above) checks its target blueprint's real
+material cost against real local stock (Storage, or loose Sägewerk output)
+through that SAME resolver. A real, PERSISTENT shortfall — gated by the
+exact same hysteresis-threshold pattern `InstitutionFormation.should_form`
+already uses for "has this cluster coordinated enough to justify forming
+something real" (a shortfall that persists across N real checks over time,
+not one instantaneous read reacting to a single unit of stock changing
+hands) — resolves to one of two real outcomes:
+
+- The resolver names a real missing PRODUCER (a building the settlement
+  doesn't have yet, e.g. a Sägewerk): the settlement's construction
+  PRIORITY becomes building THAT first, ahead of the house project that
+  needed it. A village that wants Balken framing but has no Sägewerk
+  builds the Sägewerk, not a doomed house project that can never actually
+  source its material.
+- The resolver finds no missing producer (the settlement already has one
+  and is just short on time/labor/current stock, or the missing item is
+  raw/gathered with no real producer at all): the existing shortfall/
+  regional-trade path (this doc's own sibling, `regional_trade.md`/
+  `trade.md`) applies completely unchanged — buy it from a neighboring
+  settlement's real surplus, exactly as already specified there.
+
+This is the concrete, real answer to "how do NPCs understand they need a
+Sawmill": not a scripted tech-tree unlock or an authored prerequisite
+list, but [production_chains.md](production_chains.md)'s general recursive
+read of what a project is missing against what actually produces it —
+usable by every future building and every other economic reasoner in this
+project, not rebuilt per structure.
 
 ## Interaction with other docs
 
@@ -528,6 +642,22 @@ not reinvent:
   should follow.
 - `SettlementState` (`src/emergence/settlement_state.gd`) — the pure
   capacity-classifier shape a builder-count derivation should follow.
+- `Quest.production_shortfall_quests_for`/`Market.stock_of`
+  (`src/emergence/quest.gd`, `market.gd`) — the exact shortfall-detection
+  shape the dependency chain's own "is this settlement missing a real
+  input" check reuses, not a second one.
+- [production_chains.md](production_chains.md) (new sibling doc) — the
+  general recipe-requirement/dependency-resolution mechanism this doc's
+  own Sägewerk skill-gate and dependency-chain sections both defer to
+  rather than solving one-off. Read it first; it generalizes what this
+  doc originally sketched narrowly.
+- Note (2026-08-25): the Sägewerk-named material pipeline slice of this
+  doc's own "Material pipeline" section above is currently mid-
+  implementation (see `docs/progress.md`); the "Storage, logistics, and
+  the autonomous dependency chain" section above is a real follow-up on
+  top of it, not yet started, and its migration-trigger piece is
+  explicitly a simplified stand-in for `quests.md`'s own still-unbuilt
+  full migration mechanism — see that section's own framing.
 
 **Known anti-pattern this doc replaces**: `VillageRenderer._stamp_house`
 currently stamps a complete house, instantly and for free, at settlement

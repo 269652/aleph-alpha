@@ -2,6 +2,7 @@ extends GutTest
 
 const CharacterPreviewDioramaScript = preload("res://src/rendering/character_preview_diorama.gd")
 const CharacterPreviewLayout = preload("res://src/rendering/character_preview_layout.gd")
+const CharacterActionPicker = preload("res://src/rendering/character_action_picker.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 
 var diorama: Node2D
@@ -74,7 +75,101 @@ func test_character_stays_within_the_footprint_while_strolling():
 		)
 
 
+## FishMarker's own built-in wander (CreatureWander.WANDER_RADIUS, 40 world
+## units) is tuned for a real ocean/lake, not this diorama's own ~21-unit
+## pond -- reported live: "the pond has no fish" (they were there, just no
+## longer visibly in the pond by the time it was looked at). Each fish's
+## own _process is disabled and driven from here instead, confined to the
+## pond -- checked the same way test_character_stays_within_the_footprint_
+## while_strolling checks the hero, over many steps, not just one frame.
+func test_fish_stay_within_the_pond_while_swimming():
+	var pond_bounds := Rect2(
+		diorama.get("_layout").pond_center - Vector2.ONE * diorama.get("_layout").pond_radius,
+		Vector2.ONE * diorama.get("_layout").pond_radius * 2.0
+	).grow(1.0)
+	for i in 200:
+		diorama._process(0.2)
+		for fish in diorama.fish_nodes:
+			assert_true(
+				pond_bounds.has_point(fish.position),
+				"fish left the pond at step %d: %s" % [i, fish.position]
+			)
+
+
 func test_rebuilding_frees_the_previous_generation_of_nodes():
 	var first_character_view: Node2D = diorama.character_view
 	diorama.build(99)
 	assert_ne(diorama.character_view, first_character_view)
+
+
+## build() called on a diorama that is NOT YET inside a live scene tree
+## (this file's own before_each always adds it first -- every OTHER test
+## here already covers that path) -- the real crash this reproduces:
+## CharacterView's @onready _tool_slot stays null until its own _ready
+## fires, which add_child only fires SYNCHRONOUSLY when its ancestor chain
+## is already live. Reported as a real crash inside test_main_menu.gd's
+## own suite once this diorama started equipping a weapon: "Invalid
+## assignment of property or key 'texture' ... on a base object of type
+## 'Nil'".
+func test_build_before_being_added_to_the_tree_still_equips_the_weapon_once_ready():
+	var detached := CharacterPreviewDioramaScript.new()
+	detached.build(7)  # must not crash
+	add_child(detached)
+	await get_tree().process_frame
+	assert_not_null(detached.character_view.tool_slot_texture())
+	remove_child(detached)
+	detached.free()
+
+
+# -- random ambient actions (reported live: "make it so that the char does
+# random actions like swinging the sword or fishing or just staying still
+# then wandering") -- each action forced directly via _enter_action rather
+# than waiting on the real random picker, so these are deterministic, not
+# flaky.
+
+func test_build_starts_with_a_real_action_and_a_positive_duration():
+	assert_true(CharacterActionPicker.WEIGHTS.has(diorama.get("_current_action")))
+	assert_gt(diorama.get("_action_time_remaining"), 0.0)
+
+
+func test_character_holds_still_during_idle():
+	diorama._enter_action(CharacterActionPicker.Action.IDLE)
+	diorama.set("_action_time_remaining", 10.0)
+	var start: Vector2 = diorama.character_view.position
+	diorama._process(0.5)
+	assert_eq(diorama.character_view.position, start)
+	assert_eq(diorama.character_view.movement_state, diorama.character_view.MovementState.IDLE)
+
+
+func test_character_swings_the_weapon_during_swing():
+	diorama._enter_action(CharacterActionPicker.Action.SWING)
+	# play_attack_swing was already triggered once, inside _enter_action --
+	# it sets up the swing's own state (duration/facing), but the actual
+	# tool-slot ROTATION is applied by CharacterView's own _process, same
+	# as any other CharacterView animation -- one real tick of that (not
+	# the diorama's own _process, which doesn't drive this) is what
+	# actually moves the swing partway through its arc.
+	diorama.character_view._process(0.05)
+	assert_gt(diorama.character_view.tool_slot_rotation(), 0.0)
+
+
+## The fishing spot sits just INSIDE the pond's own rim now (see
+## _compute_fishing_spot's own doc comment: a shallow wade, not a shore-
+## side stand, so the water-tinting submersion shader actually has
+## something to show) -- once arrived, the hero should be in SWIMMING
+## state, not IDLE, since it is genuinely standing in the water.
+func test_character_walks_to_the_fishing_spot_during_fish_then_swims_in_place():
+	var fishing_spot: Vector2 = diorama.get("_fishing_spot")
+	diorama.character_view.position = fishing_spot + Vector2(30, 0)  # start well away from it
+	diorama._enter_action(CharacterActionPicker.Action.FISH)
+	diorama.set("_action_time_remaining", 30.0)  # long enough to actually arrive
+	for i in 300:
+		diorama._process(0.1)
+	# Within CharacterStroll.ARRIVAL_RADIUS (2.0), not exactly on top of it
+	# -- "arrived" stops advancing once inside that radius, same as the
+	# hero's own ordinary wander target.
+	assert_true(diorama.character_view.position.distance_to(fishing_spot) <= 2.5)
+	assert_eq(diorama.character_view.movement_state, diorama.character_view.MovementState.SWIMMING)
+	# Genuinely inside the pond, not just close to its centre -- the whole
+	# point of moving the spot here in the first place.
+	assert_lt(diorama.character_view.position.distance_to(diorama.get("_layout").pond_center), diorama.get("_layout").pond_radius)

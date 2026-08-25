@@ -203,46 +203,66 @@ func test_fused_legs_still_hide_entirely_for_swimming():
 	assert_false(view.legs_visible())
 
 
-## No per-leg swing art exists for the fused pair, so a whole-pair bob
-## substitutes for it (reported: "the legs aren't animated") -- must still
-## move, just not by splitting into two offset copies of one sprite.
-func test_fused_legs_bob_while_walking():
+## A real hip+knee ROTATION gait (LegGaitCycle.hip_angle/knee_angle) was
+## tried here and reported live as reading wrong: "legs still move left and
+## right instead of up and down" -- rotating a front-facing fused leg pair
+## around its hip pivot displaces its tip mostly HORIZONTALLY for any
+## angle, a pendulum swing rather than a stride, no matter how the angle is
+## tuned. A vertical LIFT was tried next and reported as barely-there
+## motion. Both are superseded now that hero_composite.png's second
+## regeneration delivered real per-frame walk-cycle art (see
+## _leg_walk_frames' own doc comment) -- the walk reads through CYCLING
+## real drawn poses, not synthesizing motion out of one. LegLeft/
+## LegLeftKnee stay permanently unrotated (there is no joint to rotate any
+## more -- the whole fused sprite is swapped frame to frame instead).
+func test_fused_legs_never_rotate_while_walking():
 	view.set_movement_state(view.MovementState.WALKING)
-	view._process(0.3)
+	view._process(0.47)
 	var leg_left: Sprite2D = view.get_node("LegLeft")
-	assert_ne(leg_left.position.y, view._leg_fused_rest_position.y)
-
-
-func test_fused_legs_stay_put_while_idle():
-	view.set_movement_state(view.MovementState.IDLE)
-	view._process(0.3)
-	var leg_left: Sprite2D = view.get_node("LegLeft")
-	assert_almost_eq(leg_left.position.y, view._leg_fused_rest_position.y, 0.001)
-
-
-## An interim stride cue for the fused pair, on top of the existing vertical
-## bob -- real per-leg knee art doesn't exist yet (see docs/concept/
-## character_art_brief.md's own "Four bugs" section on why the fused
-## drawing can't split into independently-swinging legs at all), but a
-## small hip-pivot rock reads as more of a stride than the bob alone
-## (reported live: asked for real knee-jointed per-leg animation; a whole-
-## pair rotational rock is the closest this session can build without new
-## art -- see FUSED_LEG_ROCK_AMPLITUDE's own doc comment). Once per full
-## stride (sin, not the bob's absf(sin)) -- a real gait leans one way then
-## the other over a whole stride, not twice per stride the way footfalls
-## land.
-func test_fused_legs_rock_side_to_side_while_walking():
-	view.set_movement_state(view.MovementState.WALKING)
-	view._process(0.3)
-	var leg_left: Sprite2D = view.get_node("LegLeft")
-	assert_ne(leg_left.rotation, 0.0)
-
-
-func test_fused_legs_rock_resets_to_upright_while_idle():
-	view.set_movement_state(view.MovementState.IDLE)
-	view._process(0.3)
-	var leg_left: Sprite2D = view.get_node("LegLeft")
+	var knee: Node2D = view.get_node("LegLeft/LegLeftKnee")
 	assert_almost_eq(leg_left.rotation, 0.0, 0.001)
+	assert_almost_eq(knee.rotation, 0.0, 0.001)
+
+
+## Real proof of animation: sampling the SAME leg sprite's texture at
+## different points across one walk cycle must not always show the same
+## frame -- a full lap of _cycle_time (2*PI at WALK_CYCLE_SPEED) should
+## visit more than one of the outfit row's own real walk-cycle frames.
+func test_fused_legs_cycle_through_more_than_one_real_frame_while_walking():
+	view.set_movement_state(view.MovementState.WALKING)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	var seen_textures := {}
+	for i in 20:
+		view._process(0.1)
+		seen_textures[leg_left.texture] = true
+	assert_gt(seen_textures.size(), 1, "expected more than one distinct leg frame across a full walk cycle")
+
+
+## Frame 0 (a neutral standing pose) plays while idle, and the leg stays
+## exactly at its own fused rest position -- no lift, no offset motion of
+## any kind, matching test_fused_legs_stay_put_while_idle's own bob-era
+## invariant just re-pointed at the new frame-cycling mechanism.
+func test_fused_legs_show_frame_zero_and_rest_in_place_while_idle():
+	view.set_movement_state(view.MovementState.IDLE)
+	view._process(0.3)
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	var knee: Node2D = view.get_node("LegLeft/LegLeftKnee")
+	assert_almost_eq(leg_left.position.y, view._leg_fused_rest_position.y, 0.01)
+	assert_almost_eq(leg_left.rotation, 0.0, 0.001)
+	assert_almost_eq(knee.rotation, 0.0, 0.001)
+	assert_eq(leg_left.texture, view._leg_walk_frames[0])
+
+
+## The since-retired hip/knee crop-and-hinge rig (LegLeftShin, a child of
+## LegLeftKnee) must not be left showing a stale texture from before this
+## pass -- hidden outright now, not fed real content any more (see
+## _apply_legs' own doc comment on why real walk-cycle frames superseded
+## it).
+func test_leg_shin_is_hidden_now_that_real_walk_cycle_frames_exist():
+	view.set_movement_state(view.MovementState.IDLE)
+	view._process(0.1)
+	var shin: Sprite2D = view.get_node("LegLeft/LegLeftKnee/LegLeftShin")
+	assert_false(shin.visible)
 
 
 # -- illustrated arms: two independent poses, not one frame worn twice ------
@@ -386,10 +406,15 @@ func test_equipment_slots_share_the_flat_art_resolution_scale():
 ## from, and other rows legitimately render shorter once
 ## _width_bounded_scale's own width clamp binds instead. Never taller,
 ## always the real invariant to pin.
+## LegLeft is excluded here -- it now wears only the THIGH crop (top of the
+## fused pair down to the knee line, see IllustratedCharacterSprite.
+## composite_leg_segments), not the whole leg, so its own content height is
+## deliberately shorter than LEG_SIZE.y. See
+## test_leg_thigh_and_knee_pivot_together_span_the_full_leg_world_height for
+## the real two-piece invariant that replaces this check for legs.
 func test_illustrated_parts_are_each_scaled_to_their_own_world_size():
 	var expected_world_height := {
 		"Head": CharacterView.HEAD_SIZE.y,
-		"LegLeft": CharacterView.LEG_SIZE.y,
 		"ArmLeft": CharacterView.ARM_SIZE.y,
 		"ArmRight": CharacterView.ARM_SIZE.y,
 	}
@@ -402,6 +427,26 @@ func test_illustrated_parts_are_each_scaled_to_their_own_world_size():
 	var body: Sprite2D = view.get_node("Body")
 	var body_height := _opaque_content_height(body.texture.get_image()) * body.scale.y
 	assert_true(body_height <= float(CharacterView.BODY_SIZE.y) + 0.5, "Body: rendered %.2f" % body_height)
+
+
+## The two-piece counterpart to the whole-part check above: LegLeft (thigh)
+## plus LegLeftKnee's own local Y (where the knee pivot sits, straight down
+## from the hip) must together span AT MOST LEG_SIZE.y -- the real
+## invariant that replaced "LegLeft's texture alone is LEG_SIZE.y tall"
+## once legs split into a hip+knee two-piece rig (see
+## composite_leg_segments). "At most", not "exactly", for the same reason
+## test_body_draws_at_most_its_world_size already isn't exact -- see
+## LEG_SIZE.x's own doc comment: _apply_legs' width bound can render a
+## row's legs shorter than the full anthropometric LEG_SIZE.y to avoid
+## rendering grotesquely wide instead (reported live: "walks like a duck").
+func test_leg_thigh_and_knee_pivot_together_span_the_full_leg_world_height():
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	var knee: Node2D = view.get_node("LegLeft/LegLeftKnee")
+	var knee_world_offset := knee.position.y * leg_left.scale.y
+	assert_true(
+		knee_world_offset <= float(CharacterView.LEG_SIZE.y) * 0.5 + 0.5,
+		"knee offset %.2f should be at most half of LEG_SIZE.y" % knee_world_offset
+	)
 
 
 ## The body's drawn CONTENT (art pixels x scale, trimmed to what is actually
@@ -443,17 +488,19 @@ func _opaque_content_width(image: Image) -> float:
 ## the source art's own aspect ratio already matches the target box's own
 ## aspect, the assumption the old flat-rectangle procedural art satisfied by
 ## construction (drawn at EXACTLY that box, so matching height always meant
-## matching width too). Scoped to BODY specifically, not every part: it is
-## the one confirmed, visually dramatic case -- hero_composite.png's torso
-## column measures noticeably WIDER relative to its own height than
-## BODY_SIZE's own aspect (short sleeves drawn as part of the same
+## matching width too). Originally scoped to BODY alone -- hero_composite
+## .png's torso column measures noticeably WIDER relative to its own height
+## than BODY_SIZE's own aspect (short sleeves drawn as part of the same
 ## silhouette), and height-matching alone rendered it roughly 2x BODY_SIZE.x
-## wide (reported live: "proportions are awfully wrong"). Legs/arms/head
-## were checked too and are NOT put through the same clamp -- their own
-## aspect mismatches are real but small enough that forcing a width bound
-## shrank their rendered HEIGHT well below target for no visible gain (see
-## _width_bounded_scale's own doc comment); revisit per-part if one of them
-## is ever reported looking wrong the way body was.
+## wide (reported live: "proportions are awfully wrong") -- legs were
+## checked at the time too and judged fine left unclamped. That judgment
+## didn't survive the later hip+knee leg-gait rework (see leg_gait_cycle.gd):
+## the concurrent thigh/shin split left both segments completely unbounded
+## in width (LegLeftShin.scale hardcoded to Vector2.ONE, inheriting only
+## whatever the thigh's own height-matched scale happened to be) -- measured
+## at ~42-64 world units wide against a LEG_SIZE.x of 5 (10 for the fused
+## pair), nearly as wide as the torso itself (reported live: "unproportional
+## ... walks like a duck"). Legs now get the same clamp body already has.
 func test_body_never_renders_wider_than_its_own_world_width():
 	var expected_world_width := {
 		"Body": CharacterView.BODY_SIZE.x,
@@ -466,6 +513,24 @@ func test_body_never_renders_wider_than_its_own_world_width():
 			rendered_width <= float(expected_world_width[part_name]) + 0.5,
 			"%s: rendered %.2f, expected at most %s" % [part_name, rendered_width, expected_world_width[part_name]]
 		)
+
+
+## See test_body_never_renders_wider_than_its_own_world_width's own doc
+## comment for the fuller story. The fused pair spans BOTH leg slots, so
+## its own width bound is twice a single leg's (LEG_SIZE.x * 2), the same
+## convention _apply_legs already uses for the fused pair's HEIGHT. Checked
+## across EVERY real walk-cycle frame this outfit row has (see
+## _leg_walk_frames), not just whichever one happens to be showing --
+## _apply_leg_frame re-measures and re-clamps per frame, so a frame later
+## in the cycle could in principle slip past the clamp even if frame 0
+## doesn't.
+func test_leg_frames_never_render_wider_than_the_fused_pairs_own_world_width():
+	var max_width := float(CharacterView.LEG_SIZE.x * 2) + 0.5
+	var leg_left: Sprite2D = view.get_node("LegLeft")
+	for index in view._leg_walk_frames.size():
+		view._apply_leg_frame(index)
+		var width: float = _opaque_content_width(leg_left.texture.get_image()) * leg_left.scale.x
+		assert_true(width <= max_width, "frame %d: rendered %.2f, expected at most %s" % [index, width, max_width])
 
 
 # -- the character must be anchored at its FEET, not its center --------------
@@ -482,18 +547,36 @@ func test_body_never_renders_wider_than_its_own_world_width():
 # characters -- the player's own art was the one part of this still
 # center-anchored.
 
+## LegLeft's own `.position` is now the HIP line (the leg box's own TOP
+## edge, see _apply_legs), not its centre -- it wears only the thigh crop
+## since legs split into a hip+knee two-piece rig (see
+## IllustratedCharacterSprite.composite_leg_segments). "feet at the origin"
+## for LegLeft alone now means its position PLUS the full LEG_SIZE.y (top to
+## bottom of the whole leg box), not half of it.
+## LegLeft.position is the fused pair's own CENTRE (see _apply_leg_frame --
+## a real walk-cycle frame is applied like any other composite part, offset
+## via _composite_content_offset_y around a centred position, not the
+## since-retired hip-pivot convention that positioned it at the box's TOP
+## and needed the full LEG_SIZE.y added below instead of half).
 func test_the_characters_feet_sit_at_its_own_origin():
 	var leg_left: Sprite2D = view.get_node("LegLeft")
-	var feet_y: float = leg_left.position.y + CharacterView.LEG_SIZE.y / 2.0
+	var feet_y: float = leg_left.position.y + CharacterView.LEG_SIZE.y * 0.5
 	assert_almost_eq(feet_y, 0.0, 0.5, "the character's origin should sit at its feet, not its waist")
 
 
+## LegLeft is excluded from this generic dict-driven check for the same
+## reason test_illustrated_parts_are_each_scaled_to_their_own_world_size
+## excludes it: it's now a hip pivot positioned at the leg box's TOP edge,
+## not its centre, so the shared `position.y + world_size.y / 2.0` formula
+## below no longer describes its real bottom edge. See
+## test_leg_shin_still_reaches_the_characters_feet for the real two-piece
+## invariant that covers legs instead.
 func test_no_part_hangs_below_the_characters_own_origin():
-	for part_name in ["Body", "Head", "LegLeft", "LegRight", "ArmLeft", "ArmRight"]:
+	for part_name in ["Body", "Head", "LegRight", "ArmLeft", "ArmRight"]:
 		var sprite: Sprite2D = view.get_node(part_name)
 		var world_size: Vector2i = {
 			"Body": CharacterView.BODY_SIZE, "Head": CharacterView.HEAD_SIZE,
-			"LegLeft": CharacterView.LEG_SIZE, "LegRight": CharacterView.LEG_SIZE,
+			"LegRight": CharacterView.LEG_SIZE,
 			"ArmLeft": CharacterView.ARM_SIZE, "ArmRight": CharacterView.ARM_SIZE,
 		}[part_name]
 		var bottom: float = sprite.position.y + world_size.y / 2.0

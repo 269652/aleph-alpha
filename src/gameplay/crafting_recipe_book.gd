@@ -103,6 +103,59 @@ const _RECIPES := {
 		"inputs": [{"item_id": "log", "count": 8}, {"item_id": "wood", "count": 4}],
 		"output": {"item_id": "sagewerk", "count": 1},
 	},
+	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
+	# docs/concept/player_citizenship.md). Every input below is an existing
+	# raw-material item id already in item_catalog.gd's _ITEMS -- no new
+	# material id is invented here.
+	#
+	# rough_compass is the cheap wood/fibre precursor; compass is the fine-
+	# reading upgrade that requires a real metal ingot as the
+	# material-quality step up (see docs/concept/wayfinding.md's rough vs.
+	# fine bearing distinction, and Compass.rough_reading/fine_reading).
+	"rough_compass": {
+		"inputs": [{"item_id": "stick", "count": 1}, {"item_id": "plant_fibre", "count": 2}],
+		"output": {"item_id": "rough_compass", "count": 1},
+	},
+	"compass": {
+		"inputs": [{"item_id": "iron_ingot", "count": 1}, {"item_id": "stick", "count": 1}],
+		"output": {"item_id": "compass", "count": 1},
+	},
+	"map": {
+		"inputs": [{"item_id": "hide", "count": 1}, {"item_id": "plant_fibre", "count": 1}],
+		"output": {"item_id": "map", "count": 1},
+	},
+	"spyglass": {
+		"inputs": [{"item_id": "copper_ingot", "count": 2}, {"item_id": "stick", "count": 1}],
+		"output": {"item_id": "spyglass", "count": 1},
+	},
+	"weather_glass": {
+		"inputs": [{"item_id": "copper_ingot", "count": 1}, {"item_id": "coal", "count": 1}],
+		"output": {"item_id": "weather_glass", "count": 1},
+	},
+	"star_chart": {
+		"inputs": [{"item_id": "plank", "count": 1}, {"item_id": "hide", "count": 1}],
+		"output": {"item_id": "star_chart", "count": 1},
+	},
+	"deed": {
+		"inputs": [{"item_id": "hide", "count": 2}, {"item_id": "plant_fibre", "count": 1}],
+		"output": {"item_id": "deed", "count": 1},
+	},
+	"ledger": {
+		"inputs": [{"item_id": "plank", "count": 1}, {"item_id": "plant_fibre", "count": 2}],
+		"output": {"item_id": "ledger", "count": 1},
+	},
+	"field_journal": {
+		"inputs": [{"item_id": "hide", "count": 1}, {"item_id": "stick", "count": 1}],
+		"output": {"item_id": "field_journal", "count": 1},
+	},
+	"charter": {
+		"inputs": [
+			{"item_id": "plank", "count": 1},
+			{"item_id": "hide", "count": 1},
+			{"item_id": "plant_fibre", "count": 1},
+		],
+		"output": {"item_id": "charter", "count": 1},
+	},
 }
 
 

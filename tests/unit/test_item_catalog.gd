@@ -218,3 +218,28 @@ func test_potato_has_a_plausible_real_potato_mass():
 func test_carrot_and_potato_are_both_light_enough_to_kick():
 	assert_true(Kick.is_kickable(catalog.make("carrot").mass_kg))
 	assert_true(Kick.is_kickable(catalog.make("potato").mass_kg))
+
+
+# -- wayfinding & citizenship instruments (see docs/concept/wayfinding.md, --
+# -- docs/concept/player_citizenship.md) -- Compass/RoughCompass, Map, -------
+# -- Spyglass, WeatherForecast, SeasonAlmanac, and the property/contract/ ----
+# -- journal citizenship tools all get a craftable, held item id now that ----
+# -- their pure-logic modules exist. --------------------------------------
+
+const WAYFINDING_AND_CITIZENSHIP_ITEM_IDS := [
+	"rough_compass", "compass", "map", "spyglass", "weather_glass",
+	"star_chart", "deed", "ledger", "field_journal", "charter",
+]
+
+
+func test_catalog_knows_the_wayfinding_and_citizenship_tools():
+	for item_id in WAYFINDING_AND_CITIZENSHIP_ITEM_IDS:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+		assert_eq(catalog.make(item_id).kind, "tool", item_id)
+
+
+## These are instruments/documents, not consumables -- matching the existing
+## tool-kind convention (lasso, saw, stone_pickaxe, fishing_rod all cap at 1).
+func test_wayfinding_and_citizenship_tools_do_not_stack():
+	for item_id in WAYFINDING_AND_CITIZENSHIP_ITEM_IDS:
+		assert_eq(catalog.make(item_id).max_stack, 1, item_id)

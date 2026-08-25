@@ -55,6 +55,7 @@ const EventStore = preload("res://src/emergence/event_store.gd")
 const EventStorePersistence = preload("res://src/emergence/event_store_persistence.gd")
 const MemoryStore = preload("res://src/emergence/memory_store.gd")
 const MemoryStorePersistence = preload("res://src/emergence/memory_store_persistence.gd")
+const Household = preload("res://src/emergence/household.gd")
 const HouseholdStore = preload("res://src/emergence/household_store.gd")
 const HouseholdStorePersistence = preload("res://src/emergence/household_store_persistence.gd")
 const Contract = preload("res://src/emergence/contract.gd")
@@ -68,6 +69,7 @@ const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
 const InstitutionStorePersistence = preload("res://src/emergence/institution_store_persistence.gd")
 const InstitutionFormation = preload("res://src/emergence/institution_formation.gd")
+const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
@@ -118,6 +120,8 @@ const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const RoomDetector = preload("res://src/gameplay/room_detector.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageFinder = preload("res://src/world/village_finder.gd")
+const ExploredTiles = preload("res://src/world/explored_tiles.gd")
+const WeatherForecast = preload("res://src/gameplay/weather_forecast.gd")
 
 ## Where player-made tile modifications (Phase 3 building) are persisted,
 ## keyed per chunk -- terrain itself is deterministically regenerable (see
@@ -264,6 +268,12 @@ var _region_difficulty := RegionDifficulty.new()
 ## and keeps this independent of VillageRenderer's rendering concerns.
 var _settlement_generator := SettlementGenerator.new()
 var _village_finder := VillageFinder.new()
+## Per-player explored-chunk tracking (see docs/concept/wayfinding.md's Map
+## item) -- no automatic caller wired from chunk-loading/generation yet
+## (deliberately out of scope for this pass, see ExploredTiles' own doc
+## comment); these three coordinator methods exist so a future caller (and
+## Map's landmarks_visible_on_map) has something real to read/write.
+var _explored_tiles := ExploredTiles.new()
 var _spawn_chunk_coord := Vector2i.ZERO
 ## True once set_spawn_tile has actually been called -- distinguishes "spawn
 ## is genuinely at the world origin" from "no spawn configured yet", so the
@@ -488,7 +498,23 @@ func update(player_global_tile: Vector2i) -> void:
 	# (see DISTURBANCE_RADIUS_TILES).
 	_disturbance_center_tile = player_global_tile
 	var center_chunk := _chunk_coord_for_tile(player_global_tile)
+	_sync_decoration_and_grass_tracking(player_global_tile, center_chunk)
 
+	for chunk_coord in chunks_in_radius(center_chunk, LOAD_RADIUS):
+		if not _loaded_chunks.has(chunk_coord):
+			_load_chunk(chunk_coord)
+
+	_evict_far_chunks(center_chunk)
+	_update_roof_visibility(player_global_tile)
+	_update_geology_reveal(player_global_tile)
+
+
+## The decoration-LOD and grass tile-precise-culling bookkeeping update()
+## does before touching any chunk -- split out so update_with_progress below
+## can share it exactly rather than drifting a second copy. Pure bookkeeping,
+## no chunk generation, so it costs nothing to run up front regardless of how
+## the actual load loop that follows is driven (all-at-once vs chunked).
+func _sync_decoration_and_grass_tracking(player_global_tile: Vector2i, center_chunk: Vector2i) -> void:
 	# Decoration follows the player's CHUNK, not the player: crossing a chunk
 	# boundary is what changes which chunks are worth drawing, and it forces
 	# an immediate re-sync so a newly-near chunk isn't bare ground until its
@@ -522,14 +548,72 @@ func update(player_global_tile: Vector2i) -> void:
 		_grass_view_synced_tile = player_global_tile
 		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
 
-	for chunk_coord in chunks_in_radius(center_chunk, LOAD_RADIUS):
-		if not _loaded_chunks.has(chunk_coord):
-			_load_chunk(chunk_coord)
 
+## The eviction half of update() -- split out for the same reason as
+## _sync_decoration_and_grass_tracking above: update_with_progress needs it
+## verbatim, after its own chunked load loop rather than update()'s
+## all-at-once one.
+func _evict_far_chunks(center_chunk: Vector2i) -> void:
 	for chunk_coord in _loaded_chunks.keys().duplicate():
 		if _chebyshev_distance(chunk_coord, center_chunk) > UNLOAD_RADIUS:
 			_unload_chunk(chunk_coord)
 
+
+## Chunk coordinates update(player_global_tile) would load RIGHT NOW -- those
+## within LOAD_RADIUS not already loaded. Pure and cheap (no chunk
+## generation, just the same chunks_in_radius/is_chunk_loaded check update()'s
+## own load loop already makes) -- this is what makes update_with_progress's
+## total knowable up front, for a real determinate percentage rather than an
+## indeterminate spinner (see docs/concept/persistence.md's "Loading screens"
+## section).
+func pending_load_chunks(player_global_tile: Vector2i) -> Array[Vector2i]:
+	var center_chunk := _chunk_coord_for_tile(player_global_tile)
+	var pending: Array[Vector2i] = []
+	for chunk_coord in chunks_in_radius(center_chunk, LOAD_RADIUS):
+		if not _loaded_chunks.has(chunk_coord):
+			pending.append(chunk_coord)
+	return pending
+
+
+## Same work as update(), but for the INITIAL cold load a fresh New Game/Load
+## Game/Join pays (see World._show_loading_overlay) -- awaits one process
+## frame after each chunk's real generation cost instead of loading the whole
+## radius in one uninterrupted synchronous loop. That one change is what lets
+## the engine actually PRESENT a frame between chunks: update()'s own loop
+## never yields, so nothing -- not even an indeterminate spinner -- can be
+## seen to move for its entire real duration (measured ~39-90s+ per call, see
+## docs/progress.md's "Loading screens" entry); reported back as "the loading
+## screen ... still looks like it's hanging" even with that spinner in place.
+## `on_progress`, called as (loaded_count, real_total) once before the first
+## chunk and once after each one, is what a caller (LoadingOverlay) uses to
+## show a real percentage instead -- the chunk set to load is bounded and
+## known up front (pending_load_chunks), so this was always knowable; it just
+## needed update()'s synchronous loop broken up across frames, which is
+## exactly the restructuring previously deferred as out of scope for a
+## loading screen alone.
+##
+## Every other caller -- continuous per-frame gameplay in World._process/
+## _client_process, and the whole existing update() test suite -- keeps
+## calling the synchronous update() completely unchanged; this is purely
+## additive.
+func update_with_progress(player_global_tile: Vector2i, on_progress: Callable = Callable()) -> void:
+	_disturbance_center_tile = player_global_tile
+	var center_chunk := _chunk_coord_for_tile(player_global_tile)
+	_sync_decoration_and_grass_tracking(player_global_tile, center_chunk)
+
+	var pending := pending_load_chunks(player_global_tile)
+	var total := pending.size()
+	if on_progress.is_valid():
+		on_progress.call(0, total)
+	var loaded := 0
+	for chunk_coord in pending:
+		_load_chunk(chunk_coord)
+		loaded += 1
+		if on_progress.is_valid():
+			on_progress.call(loaded, total)
+		await Engine.get_main_loop().process_frame
+
+	_evict_far_chunks(center_chunk)
 	_update_roof_visibility(player_global_tile)
 	_update_geology_reveal(player_global_tile)
 
@@ -552,6 +636,29 @@ func has_ecosystem_region(chunk_coord: Vector2i) -> bool:
 func set_spawn_tile(spawn_tile: Vector2i) -> void:
 	_spawn_chunk_coord = _chunk_coord_for_tile(spawn_tile)
 	_spawn_configured = true
+
+
+## The spawn's own chunk coordinate (see set_spawn_tile above) -- Compass's
+## "point me home" default target needs to read this without reaching into
+## the private field directly.
+func spawn_chunk_coord() -> Vector2i:
+	return _spawn_chunk_coord
+
+
+## Marks `chunk_coord` explored (see ExploredTiles above). Returns true only
+## if this chunk was newly marked -- idempotent, same as ExploredTiles.
+## mark_visited itself.
+func mark_chunk_explored(chunk_coord: Vector2i) -> bool:
+	return _explored_tiles.mark_visited(chunk_coord)
+
+
+## Every distinct chunk coordinate marked explored so far.
+func explored_chunks() -> Array:
+	return _explored_tiles.visited_chunks()
+
+
+func is_chunk_explored(chunk_coord: Vector2i) -> bool:
+	return _explored_tiles.is_visited(chunk_coord)
 
 
 func _difficulty_tier_at(chunk_coord: Vector2i) -> int:
@@ -724,6 +831,29 @@ func wipe_household_store(path: String = HouseholdStorePersistence.SAVE_PATH) ->
 	reset_household_store()
 
 
+## Claims `property_id` for the local player via a real Deed
+## (docs/concept/player_citizenship.md's Deed item) -- the exact same
+## form_household -> grant_property pairing record_settlement_founded_if_new
+## already establishes for a villager's own house, keyed by PlayerIdentity.
+## PLAYER_ENTITY_ID instead of an npc id. Both underlying calls are already
+## idempotent (form_household returns the same household on a second call;
+## grant_property re-granting to the same owner is a no-op), so claiming the
+## same property twice is safe and does not change who owns it. Also
+## records a real event, the same "one call, two stores kept in sync" shape
+## every other coordinator in this file already uses.
+func claim_property_with_deed(property_id: String) -> Household:
+	var household := _household_store.form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	_household_store.grant_property(household.id, property_id)
+
+	var event := Event.new("player_claimed_property", _world_age_seconds)
+	event.actors.append(household.id)
+	event.tags.append(property_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+	return household
+
+
 ## Contracts and their lifecycle (see docs/emergence/03-contracts-property-
 ## economy.md "Contracts") -- one more piece of shared world state alongside
 ## the stores above.
@@ -768,6 +898,24 @@ func propose_contract(
 	)
 	_record_contract_event("contract_proposed", contract)
 	return contract
+
+
+## Proposes a contract naming the local player's own household as one party
+## (docs/concept/player_citizenship.md's Ledger item) -- a thin wrapper over
+## the existing propose_contract, the same accept/fulfil/breach lifecycle
+## _step_settlement_trade already drives for two NPC households. No new
+## accept/fulfil/breach counterpart is needed: ContractStore._transition
+## never assumes anything about WHICH entity a party is, so the existing
+## generic accept_contract/fulfill_contract/breach_contract already work
+## unchanged for a contract that names a player household. form_household
+## is idempotent, so calling it every time is safe.
+func player_propose_contract(
+	type: String, counterparty_id: String, obligations: Array, consideration: String, deadline: float
+) -> Contract:
+	var player_household := _household_store.form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	return propose_contract(
+		type, [player_household.id, counterparty_id], obligations, consideration, deadline
+	)
 
 
 func accept_contract(contract_id: String) -> bool:
@@ -914,6 +1062,19 @@ func attempt_institution_formation(type: String, party_a: String, party_b: Strin
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 	return institution
+
+
+## Attempts to found/join an institution with the local player's own
+## household as one party (docs/concept/player_citizenship.md's Charter
+## item) -- a thin wrapper over the existing attempt_institution_formation,
+## gated by the SAME real InstitutionFormation.should_form threshold an NPC
+## pair is held to; a player who hasn't built up real fulfilled contract
+## history with `counterparty_id` (see player_propose_contract, above) has
+## nothing to found yet, exactly like an NPC pair wouldn't. form_household
+## is idempotent, so calling it every time is safe.
+func player_attempt_institution_formation(type: String, counterparty_id: String) -> Institution:
+	var player_household := _household_store.form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	return attempt_institution_formation(type, player_household.id, counterparty_id)
 
 
 ## Dissolves an institution AND records it as a real event, in one call --
@@ -2623,6 +2784,18 @@ func current_weather(player_pixel: Vector2) -> String:
 	# within a day anyway, so it gets its own period.
 	var day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
 	return _weather_model.weather_at(day, hash("%d_%d" % [chunk_coord.x, chunk_coord.y]))
+
+
+## The Weather glass item's real prerequisite (docs/concept/wayfinding.md's
+## Weather glass) -- mirrors current_weather's own day/region-seed
+## derivation exactly, but reads one period ahead via
+## WeatherForecast.upcoming_weather instead of calling
+## _weather_model.weather_at directly, so a forecast can never disagree with
+## what current_weather will itself report once that period arrives.
+func upcoming_weather(player_pixel: Vector2) -> String:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(player_pixel))
+	var day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
+	return WeatherForecast.upcoming_weather(_weather_model, day, hash("%d_%d" % [chunk_coord.x, chunk_coord.y]))
 
 
 func _loaded_tree_positions() -> Array:

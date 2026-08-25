@@ -21,7 +21,9 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# + smelting/forge recipes: furnace, iron_ingot, copper_ingot,
 	# iron_helm/chest/legs/boots + fishing_rod + lasso
 	# + woodworking: log_to_sticks, log_to_wood, saw, sagewerk.
-	assert_eq(ids.size(), 19)
+	# + wayfinding & citizenship: rough_compass, compass, map, spyglass,
+	# weather_glass, star_chart, deed, ledger, field_journal, charter (10 more).
+	assert_eq(ids.size(), 29)
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():
@@ -196,3 +198,104 @@ func test_a_lasso_is_braided_from_plant_fibre():
 	assert_eq(inputs.size(), 1, "fibre and nothing else")
 	assert_eq(inputs[0]["item_id"], "plant_fibre")
 	assert_eq(inputs[0]["count"], 4)
+
+
+# -- wayfinding & citizenship instruments (see docs/concept/wayfinding.md, --
+# -- docs/concept/player_citizenship.md) -- every recipe below uses ONLY -----
+# -- existing raw-material item ids (stick, plant_fibre, hide, iron_ingot, ---
+# -- copper_ingot, coal, plank) already present in item_catalog.gd's -------
+# -- _ITEMS -- no new raw material id is invented for this pass. -------------
+
+func _input_item_ids(recipe_id: String) -> Array:
+	var ids := []
+	for i in book.recipe_inputs(recipe_id):
+		ids.append(i["item_id"])
+	return ids
+
+
+func test_wayfinding_and_citizenship_recipes_exist_and_are_craftable():
+	var recipe_ids_and_output := {
+		"rough_compass": "rough_compass",
+		"compass": "compass",
+		"map": "map",
+		"spyglass": "spyglass",
+		"weather_glass": "weather_glass",
+		"star_chart": "star_chart",
+		"deed": "deed",
+		"ledger": "ledger",
+		"field_journal": "field_journal",
+		"charter": "charter",
+	}
+	for recipe_id in recipe_ids_and_output:
+		assert_true(book.recipe_ids().has(recipe_id), "missing recipe %s" % recipe_id)
+		assert_eq(book.recipe_output(recipe_id)["item_id"], recipe_ids_and_output[recipe_id])
+
+
+## rough_compass is the cheap, low-material precursor -- crafted from stick +
+## plant_fibre, not a metal ingot (see compass below for the upgrade).
+func test_rough_compass_uses_only_cheap_raw_materials():
+	var ids := _input_item_ids("rough_compass")
+	assert_true(ids.has("stick"))
+	assert_true(ids.has("plant_fibre"))
+	assert_false(ids.has("iron_ingot"))
+	assert_true(book.can_craft("rough_compass", {"stick": 1, "plant_fibre": 2}))
+
+
+## compass is the fine-reading upgrade over rough_compass -- it requires a
+## real metal ingot (iron_ingot already exists in _ITEMS) as the
+## material-quality step up from rough_compass's cheap wood/fibre build.
+func test_compass_requires_a_real_metal_ingot():
+	var ids := _input_item_ids("compass")
+	assert_true(ids.has("iron_ingot"), "compass should require a metal ingot")
+	assert_true(book.can_craft("compass", {"iron_ingot": 1, "stick": 1}))
+
+
+func test_map_is_craftable_from_hide_and_plant_fibre():
+	assert_true(book.can_craft("map", {"hide": 1, "plant_fibre": 1}))
+
+
+func test_spyglass_is_craftable_from_copper_ingot_and_stick():
+	assert_true(book.can_craft("spyglass", {"copper_ingot": 2, "stick": 1}))
+
+
+func test_weather_glass_is_craftable_from_copper_ingot_and_coal():
+	assert_true(book.can_craft("weather_glass", {"copper_ingot": 1, "coal": 1}))
+
+
+func test_star_chart_is_craftable_from_plank_and_hide():
+	assert_true(book.can_craft("star_chart", {"plank": 1, "hide": 1}))
+
+
+func test_deed_is_craftable_from_hide_and_plant_fibre():
+	assert_true(book.can_craft("deed", {"hide": 2, "plant_fibre": 1}))
+
+
+func test_ledger_is_craftable_from_plank_and_plant_fibre():
+	assert_true(book.can_craft("ledger", {"plank": 1, "plant_fibre": 2}))
+
+
+func test_field_journal_is_craftable_from_hide_and_stick():
+	assert_true(book.can_craft("field_journal", {"hide": 1, "stick": 1}))
+
+
+## Charter is the "founds/joins a real Institution" item -- deliberately the
+## most materially demanding of the four citizenship items (plank + hide +
+## plant_fibre, a real 3-input recipe unlike deed/ledger/field_journal's
+## 2-input ones), matching that founding an institution is a bigger step
+## than claiming property or proposing one contract.
+func test_charter_is_craftable_from_plank_hide_and_plant_fibre():
+	assert_true(book.can_craft("charter", {"plank": 1, "hide": 1, "plant_fibre": 1}))
+
+
+## Every input item id across all 10 new recipes must already exist in
+## item_catalog.gd -- no new raw material id invented for this pass.
+func test_wayfinding_and_citizenship_recipes_use_only_existing_raw_materials():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	var new_recipe_ids := [
+		"rough_compass", "compass", "map", "spyglass", "weather_glass",
+		"star_chart", "deed", "ledger", "field_journal", "charter",
+	]
+	for recipe_id in new_recipe_ids:
+		for item_id in _input_item_ids(recipe_id):
+			assert_true(catalog.has(item_id), "%s recipe uses unknown material %s" % [recipe_id, item_id])

@@ -58,5 +58,9 @@ generically.
 
 - Fast-travel mechanic specifics — fixed waypoint network (discover/unlock
   nodes) vs. a craftable personal-portal item vs. something else?
+  [wayfinding.md](wayfinding.md)'s Waystone item is a candidate answer (a
+  player-placed, persistent, nameable waypoint) but deliberately doesn't
+  resolve this question itself — it only registers the point; whether
+  registering one grants fast travel is this open question's call to make.
 - Do boats interact with the [weather](weather.md) system (storms making
   water travel genuinely risky)?

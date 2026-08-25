@@ -344,6 +344,9 @@ rather than assuming the brief's plan still matched reality:
   ~24%, well short of a real standing human's ~45-50% leg-to-height share.
   `LegLeft`/`LegRight`'s `.tscn` position moved -4 → -6 alongside it so the
   fused pair's feet still land exactly on the character's own origin.
+  **Superseded by a second pass below** (`LEG_SIZE.y` 12 → 20) that replaced
+  the eyeballed "~45-50%" target this bullet used with a cited anthropometric
+  formula.
 - ✅ **A real bug in the padding-offset fix itself, found while building the
   neck below**: `_composite_content_offset_y` back-derived a part's content
   height as `target_world_height / scale`, correct only when `scale` came
@@ -382,14 +385,134 @@ rather than assuming the brief's plan still matched reality:
   facing-driven side shift (`TOOL_SLOT_SIDE_OFFSET`) is preserved, just
   stored (`_tool_side`) and reapplied every frame against the arm's current
   position instead of written once on a facing change.
-- ✅ **An interim stride cue for the fused legs**: real per-leg knee-jointed
-  animation needs new source art the fused single-drawing legs can't
-  provide (asked directly; user accepted a coarser interim over waiting).
-  `FUSED_LEG_ROCK_AMPLITUDE` adds a small hip-pivot rotation on top of the
-  existing vertical bob, once per full stride (not the bob's twice-per-
-  stride cadence) — a real gait leans one way then the other over a whole
-  stride. A real per-leg walk cycle is still a documented open follow-up,
-  not solved here.
+- ✅ **An interim stride cue for the fused legs** (superseded by the real
+  hip+knee gait below): real per-leg knee-jointed animation needs new source
+  art the fused single-drawing legs can't provide (asked directly at the
+  time; user accepted a coarser interim over waiting). `FUSED_LEG_ROCK_
+  AMPLITUDE` added a small hip-pivot rotation on top of the existing
+  vertical bob, once per full stride (not the bob's twice-per-stride
+  cadence) — a real gait leans one way then the other over a whole stride.
+
+### Taller proportions + a real hip/knee gait (reported live: "the players
+### walk animation and overall appearance looks like a dwarf... stretch legs
+### so he becomes taller and add proper walk animation by morphing the leg
+### sprites and include a knee joint animated motion")
+
+✅ **Leg-to-height proportion, done for real this time** — the earlier
+`LEG_SIZE.y` 8→12 bump above got partway there but was still tuned against
+an eyeballed "~45-50%" reading, not a cited source. This pass replaced that
+with `CharacterView.LEG_TO_HEIGHT_FRACTION` (0.245 + 0.246 = 0.491), taken
+directly from Winter's *Biomechanics and Motor Control of Human Movement*
+segment-length table — the same book `stone_size.gd`'s `LEG_MASS_FRACTION`
+already cites, for a different table: thigh ≈0.245× standing height, shank
+≈0.246× (almost exactly equal, which is why the knee sits at essentially the
+leg's own midpoint — see the gait bullet below). `LEG_SIZE.y` went 12 → 20,
+computed (not eyeballed) by a small tested pure function,
+`CharacterView._anthropometric_leg_height`, solving
+`leg / (above_hip_height + leg) = LEG_TO_HEIGHT_FRACTION` against
+`ABOVE_HIP_HEIGHT` (21, the torso/neck/head block's own pre-stretch height,
+held fixed) and rounding to the nearest pixel (~49%, pinned within
+[45%, 50%] by `test_the_resulting_leg_share_of_total_height_is_within_the_
+cited_anthropometric_range`). Because `ABOVE_HIP_HEIGHT` stays fixed while
+legs grow, this is a genuine Y-axis stretch that makes the character
+literally taller (`HEAD_TOP_Y` now `-(ABOVE_HIP_HEIGHT + LEG_SIZE.y)`, a
+computed expression instead of a second independent literal) — Body/Neck/
+Head/Arms/HeadSlot's own `.tscn` positions all shifted up by the same
+8-unit delta the legs grew, so the taller legs read as the whole character
+growing from the hips down rather than the torso sinking into overlapping
+legs. `CharacterView.SCALE`'s own formula (unchanged) then renormalizes the
+whole rig back to the same `TARGET_HEIGHT_FRACTION_OF_TREE` of a tree's
+height it always used — the character's apparent on-screen size next to a
+tree is unaffected, only its internal hip/leg proportions changed, which is
+the actual "dwarf" fix (a bigger `SCALE` alone would have kept the same
+proportions, just bigger). Tested: `test_leg_size_matches_the_anthropometric_
+leg_to_height_fraction`, `test_the_resulting_leg_share_of_total_height_is_
+within_the_cited_anthropometric_range`, `test_head_top_y_equals_above_hip_
+height_plus_the_new_leg_height`, in `test_character_view.gd`.
+
+✅ **A real hip+knee joint, not a whole-pair bob/rock.** The fused pair (see
+"Legs are still a fused pair" above) has no thigh/shin split baked into the
+source art, and revisiting the earlier "needs new art" conclusion found a
+real answer that needs none: `IllustratedCharacterSprite.
+composite_leg_segments` crops the SAME fused-pair pixels into a thigh (top)
+and shin (bottom) image at `KNEE_LINE_FRACTION` (0.5 — the same near-equal
+thigh/shank split the height fraction above is built from), with a
+`KNEE_OVERLAP_PX` (10px) overlap band so a belt/banner that bridges straight
+across the knee line in several outfit rows (verified directly against the
+real sheet) doesn't visibly tear the moment the shin rotates independently.
+`LegLeft` is now the HIP pivot (wearing the thigh crop, positioned at the
+leg box's own top edge rather than its old centre); its new children
+`LegLeftKnee`/`LegLeftShin` (plain `Node2D`/`Sprite2D`, not `Bone2D` — see
+below) are the KNEE pivot and shin crop. Both angles come from a new pure,
+tested module, `src/rendering/leg_gait_cycle.gd`
+(`hip_angle`/`knee_angle(phase)`), replacing `FUSED_LEG_BOB_AMPLITUDE`/
+`FUSED_LEG_ROCK_AMPLITUDE` entirely (both consts kept only as historical doc
+pointers, no longer read by any code): `hip_angle` is a plain cosine swing
+(±25°, inside Winter's own cited hip-flexion range); `knee_angle` is a
+rectified sine (`KNEE_BEND_AMPLITUDE * max(0, -sin(phase))`) that stays at
+zero through the whole stance half of the cycle and peaks at mid-swing — a
+deliberate simplification of the real double-humped biomechanical curve
+(one hump, not two), same spirit as the height fraction's own real-but-
+simplified grounding. Tested: 9 cases in `test_leg_gait_cycle.gd` (phase
+boundaries, periodicity, straight-through-stance, peak-at-mid-swing); 6 new/
+updated cases in `test_character_view.gd` (hip position fixed while
+walking, hip rotates, knee bends, both reset to zero while idle, shin still
+reaches the feet); 8 new cases in `test_illustrated_character_sprite.gd`
+(segment count/overlap/split-fraction/width, plus the three pure placement-
+geometry helpers `leg_thigh_offset_y`/`leg_knee_pivot_local_y`/
+`leg_shin_offset_y`).
+- **A full weight-painted `Polygon2D`/`Skeleton2D` mesh skin — the standard
+  Godot mechanism for bending one texture smoothly around a joint with no
+  seam — was evaluated and set aside, not attempted blind.** Godot 4's
+  `Polygon2D.bones` property needs a specific, thinly-documented per-vertex
+  weight array format normally hand-painted with the editor's own UV/weight
+  tool, assigned from script via `set("bones", ...)` rather than the normal
+  property path — with zero `Skeleton2D`/`Bone2D` precedent anywhere in this
+  codebase to build from, and real risk of a subtly wrong weight paint being
+  effectively undebuggable without that editor tool. The two-piece rigid
+  crop-and-hinge is the documented fallback this was explicitly scoped to
+  reach for instead if a full skin proved unworkable to build reliably —
+  real image content (a crop), not fabricated, cruder than a smooth skin
+  (a rigid crop can show a seam once the knee bends far enough — see below)
+  but honest about being cruder. `LegLeftKnee` is a plain `Node2D`, not a
+  `Bone2D`: `Bone2D`'s real value (rest-pose bookkeeping, `Skeleton2D` pose-
+  array integration) only matters for actual `Polygon2D` skinning, which
+  this isn't — a bare `Bone2D` with no `Skeleton2D` parent would have been
+  the node type without the substance.
+- **Still a single FUSED rig, not two independently-alternating legs** — the
+  known, explicit remaining gap. hero_composite.png's legs column draws both
+  legs as one connected pose; there is no way to rig genuine left-forward/
+  right-back alternation out of that on a front-facing-only character
+  without either new split-leg art or an X-split into two independent leg
+  halves, which was assessed and set aside too (several outfit rows draw a
+  belt/banner bridging straight across BOTH legs, which a rigid X-split
+  would tear in a way the overlap band above can't fix, since it only
+  overlaps ABOVE/BELOW the knee line, not left/right). What's real now: the
+  hip AND knee both rotate through an actual per-phase gait curve — a
+  genuine two-joint skeletal animation, just still one whole pair moving
+  together, not two alternating legs.
+- **Visually verified with real screenshots**, not hand-traced reasoning: a
+  throwaway probe scene (`tests/manual/_visual_probe_leg_gait.*`, deleted
+  after review) placed the hero next to a full-grown tree and captured the
+  live rendered viewport at four real gait phases plus one debug frame with
+  an exaggerated 90° knee angle. Confirms: legs visibly longer relative to
+  the torso/head at idle; the hip-only phases (0 and π/2) render the thigh
+  and shin perfectly collinear (straight leg, `knee_angle` == 0 there by
+  construction); the mid-swing phase (3π/2, `knee_angle`'s real tested peak)
+  shows a real, if subtle at this pixel-art scale, kink between thigh and
+  shin that the straight phases don't have; the exaggerated debug frame
+  makes that same kink completely unmistakable, with no gap/tear at the
+  seam even at 90° — confirming `KNEE_OVERLAP_PX` does its job.
+- **NPC/villager rendering checked, not assumed unaffected**: `NpcMarker`/
+  `VillageRenderer` dress every villager with this exact same
+  `CharacterView`/`.tscn` (see "Every NPC ... shares this same scene"
+  elsewhere in this doc) — there is no separate NPC-only rig to gate. Full
+  `test_npc_marker.gd`/`test_village_renderer.gd` runs pass (the one
+  `test_npc_marker.gd` failure seen is the same pre-existing, unrelated
+  `head.png` "loaded resource as image file" GUT warning-as-failure flake
+  described elsewhere — reproduces identically on the unmodified base branch
+  before this pass, confirmed by re-running the same file on a stashed-back
+  copy of the working tree).
 
 
 ### Character creator live preview scene (see `concept/character_creator_preview_scene.md`)
@@ -495,6 +618,64 @@ visible once actually rendered, none catchable headlessly:
   `IllustratedGrassPatch.set_walker_position` already existed and is a
   pure no-op until called (see that function's own doc comment); the
   diorama just never called it. One line in `_process`.
+- **A real, unrelated bug in the hero rig itself, found while chasing
+  "unproportional ... walks like a duck"**: a concurrent session's own
+  hip+knee leg-gait rework (see `character_view.gd`'s `LEG_SIZE`/
+  `leg_gait_cycle.gd` — a real anthropometric leg-height formula replacing
+  the eyeballed guess two earlier passes this doc already records) left
+  both leg segments completely unbounded in WIDTH — `LegLeftShin.scale`
+  hardcoded to `Vector2.ONE`, inheriting only whatever the thigh's own
+  height-matched scale happened to be. Measured at 42-64 world units wide
+  against a `LEG_SIZE.x` of 5 (10 for the fused pair), nearly as wide as
+  the torso itself. `LEG_SIZE.x` widened 5 → 10 (measured from outfit row
+  0's own 1:1 aspect, the same derivation `BODY_SIZE.x` already used) and
+  `_apply_legs` now runs the SAME `_width_bounded_scale` clamp `_apply_
+  body` already had — some rows still fall short of the full anthropometric
+  `LEG_SIZE.y` as a result (the same real trade `BODY_SIZE`'s own doc
+  comment already accepts), loosening two of the concurrent session's own
+  exact-height tests to "at most"/"a bounded gap" instead, with the
+  reasoning recorded directly in both.
+- **Pond reverted from a circle back to a rectangle** — the FIRST pond fix
+  in this section (a genuine circular shape, `CircularPondSprite`) was
+  itself superseded almost immediately (reported live: "should be more
+  rectangular not a real circle"). `CircularPondSprite` is deleted;
+  `_build_pond` is back on `ProceduralShoreDistanceSprite`, this time
+  passing all 4 cardinal `land_directions` (the actual, correct fix for
+  the original "seems tinted" bug — an empty list gave no shore gradient
+  at all, not "should have been a circle") for a real shore-to-centre
+  gradient inside a clean rectangular silhouette.
+- **"The pond has no fish"** (reported AGAIN after fish were already
+  added) — `FishMarker`'s own built-in wander
+  (`CreatureWander.WANDER_RADIUS`, a flat 40 world units) is tuned for a
+  real ocean/lake, not this diorama's ~21-unit pond; an unconfined fish
+  drifted clean out of the water within moments of `build()`. Each
+  diorama fish now gets `set_process(false)` (disabling that built-in
+  wander entirely) and is driven from `CharacterPreviewDiorama._process`
+  instead, reusing `CharacterStroll` (the same pure walk-to-a-point logic
+  the hero's own stroll already uses) confined to a box comfortably
+  inside the pond's own rim.
+- **"The char's head is behind long grass" / "no fish in pond" (a SECOND,
+  different cause from the one two bullets up)** — once trees turned on
+  Y-sort for the whole diorama root, the grass patch's own
+  `MultiMeshInstance2D` had no `z_index` pin at all (unlike the pond,
+  fixed above), so it Y-sorted as one giant multimesh keyed by its own
+  origin — sometimes drawing after the hero's head, sometimes after the
+  fish, depending on where in the patch that origin fell relative to
+  them. Same fix as the pond: `mmi.z_index = -1` so grass always draws
+  first regardless of any Y comparison, the head and the fish always on
+  top of it.
+- **"No water tinting when the player walks in water"** — `CharacterView`
+  already applies its submersion tint automatically whenever
+  `set_movement_state(SWIMMING)` is called (real players get this
+  crossing ocean/lake tiles); the diorama's hero simply never reached
+  that state, because the FISH action's own fishing spot
+  (`_compute_fishing_spot`) stood just OUTSIDE the pond's rim — a
+  shore-side stand, never touching water. Moved the spot to a shallow
+  wade just INSIDE the rim instead (`WADE_FRACTION := 0.85` of
+  `pond_radius`), and `_process` now switches to `SWIMMING` for as long
+  as the hero's own position is genuinely inside `pond_radius` of
+  `pond_center`, whatever action put it there — not only FISH, so a
+  wander target that happens to clip the pond tints correctly too.
 
 
 ### `/ecotest` — watching a year go by
@@ -3884,7 +4065,9 @@ No farming system is wired into live gameplay, but its plot and breeding math no
 
 - **New Game / Load Game** — ✅ Done — previously the world persisted eagerly to `user://` regardless of menu choice while the player never persisted at all, so "New Game" actually meant "old world, new stats". `Player.to_save_dict()`/`apply_save_dict()` round-trip position, class, authored appearance (now retained in a new `Player.appearance` field instead of applied-once-and-forgotten), health/max health, wallet, XP/level, skill-tree allocations, inventory, worn equipment + held weapon, and hotbar bindings. `PlayerSave` (`src/gameplay/player_save.gd`) is the pure I/O layer (mirrors `ChunkSerializer`'s `store_var`/`get_var` convention). `MainMenu` gained a root-screen **Load Game** button, shown only when a save exists, that bypasses the character creator entirely. New Game / Host Game now wipe the previous run's player save and all three `EarthChunkManager` persistence dirs (`WorldReset`, `src/world/world_reset.gd`) before spawning, so a fresh character actually loads into a fresh world. Autosaves periodically (`World.AUTOSAVE_INTERVAL`, 60s) and once on window close. Tested: `test_player_persistence.gd`, `test_player_save.gd`, `test_main_menu.gd`, `test_world_reset.gd`, `test_world_persistence.gd`. `World`'s own spawn/autosave wiring is untested glue over those pieces, matching `World`'s pre-existing boundary (no `world.gd` function had a direct unit test before this either). Not yet: multiple save slots (out of scope, see the concept doc).
 
-- **Loading screens** — ✅ Done (see `concept/persistence.md`'s "Loading screens" section) — reported: "the game doesn't appear to hang when starting a new game". Investigated with real timing instrumentation against a real running instance (not assumed): New Game/Load Game/Join's real synchronous stall is `EarthChunkManager.update()`'s first call for a freshly-centered chunk radius, inside `_compute_dry_land_spawn_tile`/`_spawn_local_singleplayer_from_save` — **measured ~39s for that single call** in this dev sandbox (`_spawn_local_singleplayer` end to end: ~40s; the rest, mostly `CharacterView`'s appearance/portrait generation, is under a second). Nothing in that call chain (`update` → `_load_chunk` → terrain paint + tree/stone/grass/crop/decomposer/flower/scrub/lichen spawning) ever `await`s, so it fully blocks frame presentation for its whole real duration. `LoadingOverlay` (`scenes/loading_overlay.gd`, a small dim-backdrop + centered status label + indeterminate spinner `Control`) is shown via `World._show_loading_overlay`, which awaits **two** `process_frame` signals so the overlay is actually painted before the long call starts (confirmed against real rendered screenshots captured mid-freeze — one `await` alone was not reliably enough, and a first attempt without the explicit post-preset offset reset left the whole overlay pinned to a zero-size rect at the origin instead of covering the screen, the same `set_anchors_preset`-preserves-current-rect gotcha `MainMenu._ready()` already documents; both confirmed and fixed against real screenshots, not by re-reading the code and assuming it was right). Wired into all three entry points — `_on_menu_start_requested` ("Preparing a new world..."), `_on_menu_load_requested` ("Loading your world..."), `_on_menu_join_requested` ("Connecting to host...", covering a joining client's own version of the same stall, which actually lands later, inside `_client_process`, since a joining client has no single call site to wrap the way the other two do) — and hidden from one unified place, `_client_process`, right after its own `update()` call, idempotently. Progress is a real, honest **indeterminate spinner**, not a fabricated percentage: nothing outside `update()` can observe real interim progress without it yielding mid-loop, which would mean restructuring `EarthChunkManager`/`TerrainRenderer` internals — out of scope for a loading screen (every existing synchronous caller, including most of the test suite, depends on `update()` completing in one call). The same real screenshots confirm the honest limit of this approach: since nothing renders during the freeze itself, the spinner is only ever actually seen to advance across the couple of frames awaited before/after the freeze, then holds on one frame for the freeze's real duration — a real indeterminate spinner, just one that (like everything else on screen) can't animate through a period nothing can render during. Tested: `LoadingSpinner.frame_for_elapsed` (`src/ui/loading_spinner.gd`), pure and tuned-constant-driven, `test_loading_spinner.gd`; `LoadingOverlay`/its `World` wiring are untested Node-composition glue, `World`'s pre-existing boundary. Verified end-to-end against a real running instance for New Game and Load Game (real screenshots, both mid-freeze and post-spawn-with-overlay-gone); Join's overlay-hide wiring could not be verified live the same way — this dev machine's live multiplayer connectivity is blocked (see the Multiplayer notes elsewhere in this doc), so it's reasoned from the code rather than screenshot-confirmed. Separately, and NOT covered by any of the above: a stale/missing `TerrainAtlasCache` (`TerrainRenderer.build_tile_set`, gated on `ATLAS_VERSION`) is a real, similarly-sized stall (~62s measured in this dev sandbox on this session's own `ATLAS_VERSION` bump) that happens in `World._ready()`, unconditionally, before the main menu itself is even shown — out of scope here since there's no entry point left to wrap it with once it's already running before any menu click exists; self-heals after the first paid run (writes a fresh cache), so it's a one-time cost per `ATLAS_VERSION` bump rather than a recurring one.
+- **Loading screens** — ✅ Done (see `concept/persistence.md`'s "Loading screens" section) — reported: "the game doesn't appear to hang when starting a new game". Investigated with real timing instrumentation against a real running instance (not assumed): New Game/Load Game/Join's real stall is `EarthChunkManager.update()`'s first call for a freshly-centered chunk radius, inside `_compute_dry_land_spawn_tile`/`_spawn_local_singleplayer_from_save` — **measured ~39-90s+ for a single call** across dev-sandbox runs (`_spawn_local_singleplayer` end to end similarly dominated by this one call; the rest, mostly `CharacterView`'s appearance/portrait generation, is under a second). `LoadingOverlay` (`scenes/loading_overlay.gd`, a small dim-backdrop + centered status label + spinner `Control`) is shown via `World._show_loading_overlay`, which awaits **two** `process_frame` signals so the overlay is actually painted before the long call starts (confirmed against real rendered screenshots captured mid-freeze — one `await` alone was not reliably enough, and a first attempt without the explicit post-preset offset reset left the whole overlay pinned to a zero-size rect at the origin instead of covering the screen, the same `set_anchors_preset`-preserves-current-rect gotcha `MainMenu._ready()` already documents; both confirmed and fixed against real screenshots, not by re-reading the code and assuming it was right). Wired into all three entry points — `_on_menu_start_requested` ("Preparing a new world..."), `_on_menu_load_requested` ("Loading your world..."), `_on_menu_join_requested` ("Connecting to host...", covering a joining client's own version of the same stall).
+  **Follow-up (2026-08-25, reported: "the loading screen doesn't show actual progress and still looks like it's hanging")** — the first pass's honest indeterminate spinner turned out not to actually fix the perceived-hang problem: nothing in `update()`'s call chain (`update` → `_load_chunk` → terrain paint + tree/stone/grass/crop/decomposer/flower/scrub/lichen spawning) ever `await`ed, so the engine could never present a frame during it — the spinner necessarily froze on whatever glyph it was on for the *entire* real duration, indistinguishable from an actual hang despite being "honest". Fixed at the actual cause rather than the screen over it: `EarthChunkManager.pending_load_chunks(tile)` (new, pure — the exact chunk set `update()` would load, no generation cost) makes the real total known up front, and `EarthChunkManager.update_with_progress(tile, on_progress)` (new) loads that set one chunk at a time, calling `on_progress(loaded, total)` and `await`ing one `process_frame` after each — the single structural change ("restructuring `EarthChunkManager` internals to load chunks across multiple frames") the original pass had explicitly deferred as out of scope for a loading screen alone. `update()` itself is completely untouched (verified: its own extensive existing test suite still passes after the refactor that extracted its shared decoration/grass/eviction bookkeeping into `_sync_decoration_and_grass_tracking`/`_evict_far_chunks` for `update_with_progress` to reuse) — every per-frame gameplay caller keeps calling synchronous `update()` unchanged; only the loading-screen entry points switch to the chunked variant. `LoadingOverlay.set_progress(loaded, total)` appends a real `"(N / M chunks)"` suffix onto the status line, called via `World._on_chunk_load_progress`, the one `on_progress` callback all three entry points share. Join's own version (`_client_process`) now runs its first load through a separate one-shot fire-and-forget async task, `_run_initial_client_chunk_load`, guarded by `_initial_client_chunk_load_task_running`/`_done` so it runs exactly once and never races the plain per-frame `update()` calls before/after it — done deliberately as a separate function rather than an inline `await` so `_client_process` itself stays a plain synchronous per-frame function (suspending it directly would also suspend every per-frame UI update below the chunk-load line). Tested: `EarthChunkManager.pending_load_chunks`/`update_with_progress` — total matches `chunks_in_radius`'s own count, same chunks end up loaded as plain `update()`, `on_progress` fires exactly once per chunk from `(0, total)` to `(total, total)`, eviction beyond `UNLOAD_RADIUS` still happens (`test_earth_chunk_manager.gd`, TDD red-then-green: the new tests failed with an undefined-method parse error before the methods existed). Also caught and fixed two `_compute_dry_land_spawn_tile()` call sites that would otherwise have silently used its result before the now-async call finished (`_on_peer_connected`, a dedicated-server peer-spawn path with no loading-overlay coverage at all, and the two menu entry points' own spawn functions) — found by grepping every call site after the signature changed, not assumed complete from the two obvious ones. `LoadingOverlay`/`World`'s own wiring stay the established untested Node-composition glue boundary (confirmed `world.gd` and `loading_overlay.gd` still compile and `world.gd`'s existing pure-helper tests, `test_world_persistence.gd`/`test_world_simulation_ownership.gd`/`test_world_daylight_default.gd`, still pass); unlike the original pass, this follow-up was **not** re-verified against a real running instance with screenshots — no live-GUI-automation harness was available in the session that built it (a native Godot window has no accessibility tree the way a browser page does, and driving one blind via raw screen coordinates on the dev machine's own active desktop session was judged not worth the risk for glue code already covered this thoroughly at the mechanism level) — so, same as Join's own hide-wiring already was, this is reasoned from the code and the passing chunk-manager tests rather than screenshot-confirmed.
+  Separately, and NOT covered by any of the above: a stale/missing `TerrainAtlasCache` (`TerrainRenderer.build_tile_set`, gated on `ATLAS_VERSION`) is a real, similarly-sized stall (~62s measured in this dev sandbox on this session's own `ATLAS_VERSION` bump) that happens in `World._ready()`, unconditionally, before the main menu itself is even shown — out of scope here since there's no entry point left to wrap it with once it's already running before any menu click exists; self-heals after the first paid run (writes a fresh cache), so it's a one-time cost per `ATLAS_VERSION` bump rather than a recurring one.
 
 ---
 
@@ -3902,6 +4085,261 @@ New concept doc this pass -- no prior doc covered what's underground (`stone.md`
 - ⬜ **Collapse/foul-air/flood-risk are not yet live gameplay events.** The pure hazard functions exist and are tested; nothing calls them from the reveal/mining path yet (no actual cave-in, no actual air/water damage-over-time tick).
 - ⬜ **Mined-tunnel state does not persist across a chunk unload/reload** -- `_topsoil_strata` is kept only for a chunk's LOADED lifetime, unlike `chunk.modifications`'s own on-disk persistence. Walking away far enough to unload the chunk and returning currently resets any tunnels dug there. A documented gap, not an oversight -- persisting it would need a new save-file format this pass didn't build.
 - ⬜ **Underground art is the flat procedural fallback** (`ProceduralStoneSprite`/`ProceduralOreSprite`, same textures surface stone/ore nodes fall back to with no illustrated sheet), not a cave-specific illustrated sheet -- none exists yet, the same honestly-documented situation `stone.md` itself describes for any future stone class with no art of its own.
+
+### Wayfinding & Instruments (`concept/wayfinding.md`)
+
+New concept doc this pass -- the deliberate exception list to `materials.md`'s
+"behavior emerges from physical properties" rule: a compass, map, spyglass,
+weather glass, star chart and waystone don't cut/weigh/burn, their entire job
+is reading real, already-simulated state (position, explored tiles, weather,
+season clock) and surfacing it to the player. Every instrument except
+Waystone is now reachable in-game: Compass/Map/Weather glass/Star chart via
+real dev-console commands (`/compass`, `/map`, `/weatherglass`, `/almanac`
+-- `World._on_console_command`, `scenes/world.gd`), each gated on the player
+actually owning the item (`Player.inventory.has`), and Spyglass as a real
+LIVE passive effect on the hover-tooltip system rather than a command (see
+below). This is the item-use call site every entry below previously named
+as its own last missing piece -- still through the dev console, not
+in-world UI/HUD, which stays the next layer:
+
+- 🚧 **Compass** -- `Compass.bearing_degrees(from_position, to_position)` is a
+  real, tested (`test_compass.gd`, 12/12 passing) bearing calculation against
+  this world's fixed +Y-is-north convention (compass-rose degrees,
+  clockwise-positive, wrapped to [0, 360), direction-only), plus the
+  rough/fine quality-axis reading (`rough_reading` snaps to the nearest of
+  the 8 compass points, `fine_reading` is exact, `reading_for` dispatches
+  between them). Both a cheap `rough_compass` (stick + plant_fibre) and a
+  fine `compass` (iron_ingot + stick, the metal-quality upgrade) are now
+  real craftable, tool-kind, non-stacking item ids with their own recipes
+  (`CraftingRecipeBook`) and procedural sprite looks
+  (`ProceduralItemSprite`) -- `test_item_catalog.gd`,
+  `test_crafting_recipe_book.gd`, `test_procedural_item_sprite.gd`. The
+  default-target read is real too now: `EarthChunkManager.spawn_chunk_coord()`
+  is a public getter over `_spawn_chunk_coord` (new test in
+  `test_earth_chunk_manager.gd`, passing). A real `/compass` console command
+  (`World._handle_compass_command`) now reads it: requires owning
+  `rough_compass` or `compass`, converts `spawn_chunk_coord()` to a world
+  pixel via the chunk-center-tile convention `EarthChunkManager` already
+  uses elsewhere fed through this file's own `_spawn_position_for_tile`,
+  computes `Compass.bearing_degrees(player.position, target)`, and prints
+  `Compass.reading_for(bearing, is_fine)` where `is_fine` is true only when
+  the player owns the metal-quality `compass` rather than `rough_compass`.
+  Still missing: no bound-waypoint target (Waystone doesn't exist yet), and
+  this is a dev-console read, not an in-world compass-needle UI.
+- 🚧 **Map** -- the one instrument here with a genuine new prerequisite: a
+  per-player **explored-tiles** record. That prerequisite now exists
+  (`ExploredTiles` -- `mark_visited`/`is_visited`/`visited_chunks`, in-memory
+  only for this pass, session-only/not yet save-persisted, a named gap) and
+  a pure reader over it now exists too (`MapProjection` --
+  `is_chunk_explored`/`landmarks_visible_on_map`, `test_map_projection.gd`,
+  9/9 passing): a real landmark only ever appears once its own chunk has
+  actually been explored, never as a hint for something unfound. A
+  craftable `map` item id (hide + plant_fibre) now exists too (`ItemCatalog`,
+  `CraftingRecipeBook`, `ProceduralItemSprite`). `EarthChunkManager` now
+  owns a real `_explored_tiles := ExploredTiles.new()` and exposes it
+  through three coordinator methods -- `mark_chunk_explored(chunk_coord)`,
+  `explored_chunks()`, `is_chunk_explored(chunk_coord)` (4 new tests in
+  `test_earth_chunk_manager.gd`, all passing) -- pure delegation, no chunk
+  loading involved. A real `/map` console command
+  (`World._handle_map_command`) now reads them: requires owning `map`,
+  prints `explored_chunks().size()`, and lists which real, already-founded
+  settlements fall inside that explored set via
+  `MapProjection.landmarks_visible_on_map`. The landmark registry it feeds
+  is built directly from `EventStore`'s own `settlement_founded` events
+  (read through the already-public `event_store()` accessor, the exact same
+  events `EarthChunkManager._known_settlement_ids` derives its own private
+  registry from internally) -- a real registry, not a stub, so no new
+  coordinator method was needed. Still missing: nothing calls
+  `mark_chunk_explored` from the player's actual movement/visibility-range
+  path yet (a deliberately scoped gap -- see `ExploredTiles`' own doc
+  comment, unchanged by this pass), and there is still no visual map UI (no
+  fogged scaled-down terrain image reusing `terrain_relief.md`'s hillshade
+  data) -- `/map` is a text-only report, the intended MVP for this pass.
+- 🚧 **Spyglass** -- `Spyglass.effective_hover_radius(base_radius, equipped)`
+  is a real, tested (`test_spyglass.gd`, 3/3 passing) relaxation of
+  `hover_target_finder.gd`'s own real `HOVER_RADIUS_PX` gate: equipped
+  multiplies it by a test-pinned `MAGNIFICATION` (4.0), unequipped leaves it
+  untouched. No new "detection" stat, no new reveal. A craftable `spyglass`
+  item id (copper_ingot x2 + stick) now exists too (`ItemCatalog`,
+  `CraftingRecipeBook`, `ProceduralItemSprite`). This is now a real LIVE
+  passive effect, not a console command: `World._update_hover_tooltip`
+  checks whether the local player's `equipped_item.id == "spyglass"` (the
+  same equipped-item-id check the lasso already establishes) and passes
+  `Spyglass.effective_hover_radius(HoverTargetFinder.HOVER_RADIUS_PX,
+  equipped)` through to both the candidate-collection distance filter AND
+  `HoverTargetFinder.info_under`'s own selection radius. That second part
+  needed a real fix, not just a wiring pass: `info_under` previously
+  ignored the caller's scan radius entirely and re-capped its own nearest-
+  candidate search at the bare `HOVER_RADIUS_PX` constant internally, which
+  would have silently discarded every widened-radius candidate the wiring
+  was meant to reach. `info_under` now takes an optional `radius` param
+  (defaulting to `HOVER_RADIUS_PX`, so its 6 existing tests are unaffected)
+  and a new test proves a custom wider radius actually reaches further
+  (`test_hover_target_finder.gd`, 7/7 passing). Equipping a spyglass now
+  measurably relaxes the real hover-tooltip range in-game.
+- 🚧 **Weather glass** (`WeatherForecast`) -- `upcoming_weather(weather_model,
+  current_day, region_seed)` reads `weather_model.gd`'s own real
+  `weather_at` one day ahead (no new state or randomness), and
+  `forecast_label(current, upcoming)` renders it at instrument-grade
+  vagueness ("no change expected" / "`<state>` likely"), never an exact-hour
+  cheat-omniscient forecast. Real, tested (`test_weather_forecast.gd`, 4/4
+  passing) against an actual `WeatherModel` instance. A craftable
+  `weather_glass` item id (copper_ingot + coal) now exists too
+  (`ItemCatalog`, `CraftingRecipeBook`, `ProceduralItemSprite`). The one-day-
+  ahead read now has a real coordinator too:
+  `EarthChunkManager.upcoming_weather(player_pixel) -> String` mirrors
+  `current_weather`'s own day/region-seed derivation exactly but calls
+  `WeatherForecast.upcoming_weather(_weather_model, day, seed)` instead of
+  `_weather_model.weather_at` directly, built strict-TDD (red: "Nonexistent
+  function"; green after implementing; proven by advancing the world clock
+  forward one `WEATHER_PERIOD_SECONDS` and checking the forecast matches
+  what `current_weather` itself reports there, rather than re-deriving the
+  day/seed math in the test -- 1 new test in `test_earth_chunk_manager.gd`,
+  passing). A real `/weatherglass` console command
+  (`World._handle_weatherglass_command`) requires owning `weather_glass`
+  and prints `current_weather` plus `WeatherForecast.forecast_label(current,
+  upcoming)`. Still missing: no UI surfacing the label in-world, only the
+  dev console.
+- 🚧 **Star chart / seasonal almanac** (`SeasonAlmanac`) --
+  `next_season(current_season)` wraps `SeasonCycle.SEASONS` (winter ->
+  spring), and `days_until_next_season(elapsed_seconds)` converts
+  `season_cycle.gd`'s own real `seconds_until_season`/`SECONDS_PER_DAY` into
+  real days remaining, no invented constant. Real, tested
+  (`test_season_almanac.gd`, 7/7 passing) against hand-computed
+  `SeasonCycle` values. A craftable `star_chart` item id (plank + hide) now
+  exists too (`ItemCatalog`, `CraftingRecipeBook`, `ProceduralItemSprite`). A
+  real `/almanac` console command (`World._handle_almanac_command`)
+  requires owning `star_chart` and prints `current_season()`,
+  `SeasonAlmanac.next_season(current)`, and
+  `SeasonAlmanac.days_until_next_season(world_age_seconds())`. Still
+  missing: no in-world UI (dev console only), and the doc's own "which
+  regions are seasonally best for what" clause still waits on
+  `climate_dynamics.md`'s live weather-cycle simulation reaching enough
+  places to matter.
+- ⬜ **Waystone** -- player-placed persistent waypoint anchor; deliberately
+  deferred until `transportation.md`'s own open "fixed waypoint network vs.
+  craftable personal-portal" question resolves, so this doc doesn't pre-empt
+  that decision.
+
+### Player Citizenship (`concept/player_citizenship.md`)
+
+New concept doc this pass -- the deliberate reversal of every emergence-phase
+progress note above that says some version of "the player isn't a
+first-class belief-holder/party/household yet." A small item family whose
+entire job is making the player a genuine participant in systems that
+already exist and already work for NPCs, through the exact same real stores
+(`HouseholdStore`, `ContractStore`, `InstitutionStore`, `Why`), never a
+player-only shortcut. Each item's own real prerequisite already existed in
+the emergence substrate, and Deed/Ledger/Charter's own backend coordinators
+are now real, tested `EarthChunkManager` methods too, built one at a time
+via strict TDD -- what's left for each is the item-use call site and
+in-world UI, not the underlying mechanism. The player's own deterministic
+identity is real code now as well: `PlayerIdentity.PLAYER_ENTITY_ID`
+(`src/emergence/player_identity.gd`, `test_player_identity.gd`, 2/2
+passing) is a real, valid `EntityRef` (`"player:local"`), the same
+`"<kind>:<key>"` scheme every other emergence entity already uses:
+
+- 🚧 **Deed** -- claims real property via `HouseholdStore.grant_property`/
+  `form_household`, the same mechanism NPC houses are already granted
+  through. A craftable `deed` item id (hide x2 + plant_fibre) now exists
+  (`ItemCatalog`, `CraftingRecipeBook`, `ProceduralItemSprite`), and the
+  backend coordinator is real too:
+  `EarthChunkManager.claim_property_with_deed(property_id) -> Household`
+  forms/reuses the player's own household (keyed by
+  `PlayerIdentity.PLAYER_ENTITY_ID`) and grants it the property, then
+  records a real `player_claimed_property` event -- the same "one call, two
+  stores kept in sync" shape every other coordinator in this file already
+  uses. Both underlying calls are already idempotent, so claiming the same
+  property twice is a safe no-op (3 new tests in
+  `test_earth_chunk_manager.gd`, all passing). A real `/deed` console
+  command (`World._handle_deed_command`) now invokes it: requires owning
+  `deed`, derives `property_id` as
+  `EntityRef.for_kind("house", "player_claim_<chunk.x>_<chunk.y>")` for the
+  chunk the player currently stands on (the tile -> chunk-coord conversion
+  replicates `EarthChunkManager._chunk_coord_for_tile`'s own real formula
+  exactly), and prints the claimed property id plus the household id.
+  Deliberately claims "a marked, unbuilt plot" rather than requiring a
+  detected existing structure -- `player_citizenship.md`'s own Deed section
+  explicitly allows either as a valid target, and no "nearest structure"
+  query exists yet. Still missing: only a dev-console call site, no
+  in-world use/equip interaction or UI.
+- 🚧 **Ledger** -- proposes a real `Contract` via
+  `EarthChunkManager.propose_contract`, the same accept/fulfil/breach
+  lifecycle `_step_settlement_trade` already drives for NPC pairs, with the
+  player as one named party. A craftable `ledger` item id (plank +
+  plant_fibre x2) now exists (`ItemCatalog`, `CraftingRecipeBook`,
+  `ProceduralItemSprite`), and the backend coordinator is real too:
+  `EarthChunkManager.player_propose_contract(type, counterparty_id,
+  obligations, consideration, deadline) -> Contract` is a thin wrapper
+  naming the player's own household as one party -- no new accept/fulfil/
+  breach counterpart was needed, since `ContractStore._transition` never
+  assumes anything about WHICH entity a party is, so the existing generic
+  `accept_contract`/`activate_contract`/`fulfill_contract`/
+  `breach_contract` already work unchanged (2 new tests, both passing). Real
+  console commands now invoke both sides
+  (`World._handle_ledger_command`): `/ledger propose <type>
+  <counterparty_id> <consideration> <deadline_seconds>` requires owning
+  `ledger` and calls `player_propose_contract` (with an empty obligations
+  array for this pass -- full obligations authoring is a named, deliberate
+  gap, not an oversight); `/ledger accept|fulfill|breach <contract_id>`
+  calls the existing generic lifecycle methods directly. Still missing:
+  only a dev-console call site, no in-world use/equip interaction or UI.
+- 🚧 **Charter** -- founds/joins a real `Institution` via
+  `attempt_institution_formation`, gated by the same real
+  `InstitutionFormation.should_form` threshold NPC pairs are gated by (see
+  Governance's institution-type inference above, Emergence Phase 13). The
+  backend coordinator is real too:
+  `EarthChunkManager.player_attempt_institution_formation(type,
+  counterparty_id) -> Institution` is a thin wrapper naming the player's
+  own household as one party, gated by the exact same threshold an NPC
+  pair is held to (2 new tests: below-threshold forms nothing,
+  at-threshold forms a real institution containing the player's household
+  -- both passing). A real `/charter found <type> <counterparty_id>`
+  console command (`World._handle_charter_command`) now calls it and
+  prints the formed institution's id, or "Not enough shared history yet."
+  when the threshold isn't met. A craftable `charter` item id (plank + hide
+  + plant_fibre -- deliberately the most materially demanding of the four
+  citizenship items, matching that founding an institution is a bigger step
+  than claiming property or proposing one contract) now exists too
+  (`ItemCatalog`, `CraftingRecipeBook` -- 28 recipes total,
+  `ProceduralItemSprite`), closing the gap this section originally flagged
+  ("real and fully wired but currently unreachable"). Still missing: only a
+  dev-console call site, no in-world use/equip interaction or UI, same as
+  the other three.
+- 🚧 Partial **Field Journal** -- the pure read side is built:
+  `src/emergence/field_journal.gd`'s `entry_for(entity_id, stores)`
+  dispatches by `EntityRef.kind_of(entity_id)` onto `Why`'s existing
+  `explain_*` functions (`tests/unit/test_field_journal.gd`, 7/7 passing).
+  The routing is grounded in how these stores are actually keyed by real
+  callers, not a naive "kind X routes to explain_X" guess: `"npc"` routes
+  to `explain_household` (household lookup is by MEMBER, and every real
+  member/founder id is an `"npc:"` id), `"household"` routes to
+  `explain_institutions` (institution membership is by MEMBER too, and
+  every real institution member is a `"household:"` id --
+  `explain_household` itself would always read "no household" for a
+  household's own id), `"creature"` routes to `explain_world_boss`
+  (matching `individual_id`'s own "real creature entity this boss IS" doc
+  comment, ready the moment a real creature-producing caller exists --
+  `attempt_world_boss_promotion` has none yet, a pre-existing gap). Any
+  other kind (`"settlement"`, `"house"`, `"ruin"`, `"path"`, no separator
+  at all) falls back to the generic `explain_entity`; `explain_settlement`/
+  `explain_market` are deliberately NOT routed to (they need live
+  household_count/active_institutions/production_counts/`Market` context
+  this pure module has no access to -- that composition stays the console
+  command's job). A craftable `field_journal` item id (hide + stick) now
+  exists too (`ItemCatalog`, `CraftingRecipeBook`, `ProceduralItemSprite`). A
+  real `/journal <entity_id>` console command
+  (`World._handle_journal_command`) now invokes it: requires owning
+  `field_journal`, and builds the `stores` Dictionary `entry_for` needs
+  directly from `EarthChunkManager`'s own public store accessors
+  (`household_store()`/`institution_store()`/`world_boss_store()`/
+  `event_store()`) -- the exact same accessors `/household`, `/institution`,
+  `/boss`, and `/history` already read directly in `World.gd`, so no new
+  coordinator method was needed on `EarthChunkManager` (matching that
+  existing precedent rather than adding a redundant wrapper). Still
+  missing: the in-world UI/presentation layer itself (rendering as readable
+  lore instead of dev-console text, the optional LLM rephrasing pass) --
+  what actually makes this player-facing rather than a dev-console reader.
 
 ## Reality check
 

@@ -135,6 +135,22 @@ const _ITEMS := {
 	# placeable worksite, same "kind" as campfire/furnace above, where a
 	# Lumberjack NPC shapes gathered logs into beam/plank over time.
 	"sagewerk": ["Sagewerk", "placeable", 5, 0.0],
+	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
+	# docs/concept/player_citizenship.md): the pure-logic Compass/
+	# RoughCompass reading, ExploredTiles/MapProjection, Spyglass,
+	# WeatherForecast, SeasonAlmanac, property claiming/contracts and
+	# FieldJournal modules all now have a craftable, held item id. Instruments
+	# and documents, not consumables -- max_stack 1 like every other tool.
+	"rough_compass": ["Rough Compass", "tool", 1, 0.0],
+	"compass": ["Compass", "tool", 1, 0.0],
+	"map": ["Map", "tool", 1, 0.0],
+	"spyglass": ["Spyglass", "tool", 1, 0.0],
+	"weather_glass": ["Weather Glass", "tool", 1, 0.0],
+	"star_chart": ["Star Chart", "tool", 1, 0.0],
+	"deed": ["Deed", "tool", 1, 0.0],
+	"ledger": ["Ledger", "tool", 1, 0.0],
+	"field_journal": ["Field Journal", "tool", 1, 0.0],
+	"charter": ["Charter", "tool", 1, 0.0],
 }
 
 

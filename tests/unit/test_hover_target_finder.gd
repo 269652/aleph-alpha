@@ -52,6 +52,21 @@ func test_returns_empty_dict_for_an_empty_candidate_list():
 	assert_eq(finder.info_under(Vector2.ZERO, []), {})
 
 
+## A candidate beyond the default HOVER_RADIUS_PX is reachable once a wider
+## radius is passed explicitly (Spyglass.effective_hover_radius's own real
+## caller in World._update_hover_tooltip) -- the optional third `radius`
+## param defaults to HOVER_RADIUS_PX so every call site above this one stays
+## unchanged.
+func test_an_explicit_wider_radius_reaches_further_than_the_default():
+	var far := {"position": Vector2(HoverTargetFinder.HOVER_RADIUS_PX * 2.0, 0), "name": "Far", "actions": []}
+	assert_eq(
+		finder.info_under(Vector2.ZERO, [far]), {},
+		"the default radius should not reach a candidate this far away"
+	)
+	var found := finder.info_under(Vector2.ZERO, [far], HoverTargetFinder.HOVER_RADIUS_PX * 4.0)
+	assert_eq(found["name"], "Far")
+
+
 ## Carries the candidate's actions through untouched -- formatting them into
 ## display strings (verb + live keybinding) is World's job, not the
 ## finder's, so it stays a plain data pass-through here.

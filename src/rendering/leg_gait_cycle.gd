@@ -55,6 +55,11 @@ const KNEE_BEND_AMPLITUDE := deg_to_rad(45.0)
 ## to plant), 0 a quarter-cycle either side (leg vertical, passing under the
 ## body at mid-stance or mid-swing), -amplitude at phase=PI (leg trailing,
 ## about to lift for swing).
+##
+## SUPERSEDED -- see knee_angle's own doc comment for why (rotating a
+## front-facing leg reads as a left-right pendulum, not a stride, no
+## matter the angle). Kept for the same reason: the phase math itself
+## wasn't wrong, only rotation as the OUTPUT was.
 func hip_angle(phase: float) -> float:
 	return HIP_SWING_AMPLITUDE * cos(phase)
 
@@ -70,5 +75,29 @@ func hip_angle(phase: float) -> float:
 ## zero-crossing at phase=PI (leg starts trailing/lifting) rather than
 ## coinciding with it -- the knee keeps bending past the moment the hip
 ## starts swinging forward, exactly the lag a real recovering leg shows.
+##
+## SUPERSEDED, along with hip_angle, as what CharacterView._process actually
+## drives with -- kept, not deleted, because the phase-timing research above
+## is still correct and still exactly what swing_lift_fraction below reuses;
+## only the OUTPUT changed. Rotating a front-facing fused leg pair around
+## its hip pivot displaces its tip mostly LEFT-RIGHT (a pendulum swing) for
+## ANY angle, not up-down, no matter how small -- reported live, even after
+## HIP_SWING_AMPLITUDE/KNEE_BEND_AMPLITUDE were already reduced well below
+## their real anatomical values for exactly this front-on concern (see both
+## constants' own doc comments): "legs still move left and right instead of
+## up and down". A real human's visible motion walking straight toward/away
+## from a camera is a vertical knee-lift, not a side-to-side swing -- see
+## swing_lift_fraction.
 func knee_angle(phase: float) -> float:
 	return KNEE_BEND_AMPLITUDE * maxf(0.0, -sin(phase))
+
+
+## Vertical lift fraction at this phase, in [0, 1] -- 0 fully down/at rest,
+## 1 fully lifted; a caller multiplies by its own amplitude for world units
+## (see CharacterView.FUSED_LEG_LIFT_AMPLITUDE). The EXACT same rectified-
+## sine shape/timing as knee_angle above (zero through stance, peaking at
+## phase = 3*PI/2 mid-swing) -- see knee_angle's own doc comment for why
+## this drives POSITION instead of ROTATION now: a front-facing leg's real
+## visible walking motion is vertical, not a pendulum swing.
+func swing_lift_fraction(phase: float) -> float:
+	return maxf(0.0, -sin(phase))

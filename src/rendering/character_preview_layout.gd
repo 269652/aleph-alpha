@@ -12,6 +12,21 @@ const POND_RADIUS_FRACTION := 0.22
 const TREE_COUNT := 2
 const PEBBLE_COUNT := 5
 const FISH_COUNT := 2
+## How much of the pond's own radius a fish is allowed to roam within, as a
+## fraction -- kept well under 1.0 so a fish's own drawn BODY (not just its
+## centre point) never overhangs the shore. Tightened from 0.8 (reported
+## live: "the fish spawns outside the pond") -- a fish's own art measures
+## roughly 4.4 world units from its centre to its longest edge
+## (ProceduralFishSprite.WORLD_SIZE * ArtResolution.SPRITE_SCALE *
+## FishRenderer.FISH_WORLD_SCALE, halved), which at 0.8 * a ~21-unit pond
+## radius left as little as ~0.4 units of clearance for a fish spawned at
+## the very edge of its own allowed band -- not always enough once that
+## body extends outward from its own centre in a random direction. 0.6
+## leaves a real, comfortable margin instead. CharacterPreviewDiorama's own
+## ongoing swim-target picking (_pick_new_fish_target) uses this exact same
+## fraction, not a separate hand-copied number, so a fish's SPAWN position
+## and its later wander targets can never quietly drift out of sync.
+const FISH_SAFE_RADIUS_FRACTION := 0.6
 ## World units kept clear around each tree -- both for the pebble/grass
 ## scatter below and for CharacterPreviewDiorama's own obstacle-avoiding
 ## stroll (see is_clear).
@@ -76,7 +91,7 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 		# centre (a plain uniform radius, with no correction, oversamples
 		# the middle since a ring's area grows with radius).
 		var angle := rng.randf_range(0.0, TAU)
-		var radius := sqrt(rng.randf()) * result.pond_radius * 0.8
+		var radius := sqrt(rng.randf()) * result.pond_radius * FISH_SAFE_RADIUS_FRACTION
 		result.fish_positions.append(result.pond_center + Vector2(cos(angle), sin(angle)) * radius)
 
 	var x := GRASS_CLUMP_SPACING * 0.5
