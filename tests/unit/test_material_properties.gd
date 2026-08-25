@@ -97,3 +97,37 @@ func test_mass_kg_for_a_denser_material_masses_more_at_the_same_volume() -> void
 
 func test_mass_kg_for_zero_volume_is_zero_mass() -> void:
 	assert_almost_eq(mp.mass_kg_for("iron", 0.0), 0.0, 0.0001)
+
+
+# -- timber (docs/concept/timber_construction.md): a real MATERIALS entry for
+# -- BuildingPiece.MATERIAL_TIMBER, previously absent and silently falling
+# -- back to DEFAULT_PROPERTIES' decay_rate=1.0 (stone-like) -- almost
+# -- certainly wrong for a worked-but-still-organic material. See
+# -- material_properties.gd's own "timber" entry doc comment for the full
+# -- real-world grounding.
+
+func test_timber_decay_rate_is_pinned() -> void:
+	assert_almost_eq(mp.property_value("timber", "decay_rate"), 4.0, 0.0001)
+
+
+func test_timber_decays_slower_than_raw_wood_but_faster_than_stone() -> void:
+	var timber_rate: float = mp.property_value("timber", "decay_rate")
+	assert_lt(
+		timber_rate, mp.property_value("wood", "decay_rate"),
+		"seasoned, squared timber should resist decay better than raw green wood"
+	)
+	assert_gt(
+		timber_rate, mp.property_value("stone", "decay_rate"),
+		"timber is still organic -- nowhere near stone's near-permanence"
+	)
+
+
+func test_timber_shares_every_other_property_with_wood() -> void:
+	for property_name in [
+		"density", "hardness", "toughness", "elasticity",
+		"sharpness_capacity", "flammability", "conductivity",
+	]:
+		assert_almost_eq(
+			mp.property_value("timber", property_name), mp.property_value("wood", property_name), 0.0001,
+			"timber is the same wood, just worked/seasoned -- only decay_rate should differ"
+		)

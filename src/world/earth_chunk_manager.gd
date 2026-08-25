@@ -121,6 +121,7 @@ const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const RoomDetector = preload("res://src/gameplay/room_detector.gd")
 const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
+const BuildingDecay = preload("res://src/gameplay/building_decay.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageFinder = preload("res://src/world/village_finder.gd")
 const ExploredTiles = preload("res://src/world/explored_tiles.gd")
@@ -492,6 +493,9 @@ var _room_detector := RoomDetector.new()
 ## Real statics (see BuildingStatics / docs/concept/timber_construction.md
 ## #real-statics-a-support-graph-over-the-piece-grid).
 var _building_statics := BuildingStatics.new()
+## Withering (see BuildingDecay / docs/concept/timber_construction.md
+## #withering-decay-as-a-bounded-closed-form-catch-up).
+var _building_decay := BuildingDecay.new()
 ## Which chunk/room's roof is currently hidden (the player is standing under
 ## it), so update() can restore it the moment that stops being true rather
 ## than leaving it hidden forever. null chunk_coord means nothing is hidden.
@@ -802,6 +806,18 @@ var _weather_model := WeatherModel.new()
 ## time (variable-fidelity LOD, see concept/ecosystem_dynamics.md) rather than
 ## reset to fresh equilibrium. chunk_coord -> {state Dictionary, unloaded_at float}.
 var _unloaded_ecology: Dictionary = {}
+## The withering counterpart to _unloaded_ecology directly above: per-chunk
+## piece-condition snapshot recorded at unload + the world-age then, so a
+## revisited chunk's placed pieces catch up on the elapsed unloaded time
+## (see BuildingDecay / docs/concept/timber_construction.md#withering-decay-
+## as-a-bounded-closed-form-catch-up) instead of silently sitting at
+## whatever condition a freshly (re)generated Chunk object defaults to.
+## chunk_coord -> {unloaded_at: float, condition: Dictionary (local cell ->
+## float, the exact snapshot of Chunk.piece_condition at unload time)}.
+## In-memory only, same as _unloaded_ecology -- Chunk.piece_condition itself
+## is not persisted to disk (see that field's own doc comment), so this
+## record does not survive a real app restart either.
+var _unloaded_piece_condition: Dictionary = {}
 var _fruiting_accumulator := 0.0
 ## The world-age at the previous fruiting step, so fallen_between integrates
 ## exactly the elapsed interval (all trees share the one world clock).
@@ -5078,6 +5094,19 @@ func modification_at_global(global_x: int, global_y: int) -> String:
 	return chunk.modifications.get(_local_coord(global_x, global_y), "")
 
 
+## The withering condition (1.0 = new, decaying toward 0.0 -- see
+## BuildingDecay / docs/concept/timber_construction.md#withering-decay-as-a-
+## bounded-closed-form-catch-up) of the piece at a global tile. 1.0 for a
+## piece with no recorded decay yet (the same "absent means default"
+## convention structural_instability/checked_at already use) and for an
+## unloaded chunk or a non-piece cell.
+func piece_condition_at_global(global_x: int, global_y: int) -> float:
+	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
+	if chunk == null:
+		return 1.0
+	return float(chunk.piece_condition.get(_local_coord(global_x, global_y), 1.0))
+
+
 ## Places a modification tile (Phase 3 building) at a global tile, repainting
 ## just its owning chunk. Returns false (no-op) if that tile isn't in a
 ## currently-loaded chunk -- building far outside the streamed area isn't
@@ -5646,6 +5675,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	chunk.roof_modifications = _chunk_serializer.load_modifications(_roof_modifications_path(chunk_coord))
 	chunk.planted_trees = _chunk_serializer.load_planted_trees(_planted_trees_path(chunk_coord))
 	_loaded_chunks[chunk_coord] = chunk
+	# Withering catch-up BEFORE the first paint/collision pass below, so a
+	# piece that decayed away entirely while this chunk sat unloaded is
+	# already gone from chunk.modifications by the time anything paints or
+	# spawns collision for it -- see _apply_piece_condition_catchup's own
+	# doc comment.
+	_apply_piece_condition_catchup(chunk_coord, chunk)
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_paint_water_overlay(chunk_coord, chunk)
 	_paint_hillshade_overlay(chunk_coord, chunk)
@@ -5843,6 +5878,128 @@ func _apply_ecology_catchup(chunk_coord: Vector2i) -> void:
 	_ecosystem.seed_fish_population(chunk_coord, advanced["fish"])
 
 
+# -- withering: decay as a bounded, closed-form catch-up (see
+# docs/concept/timber_construction.md#withering-decay-as-a-bounded-closed-
+# form-catch-up, src/gameplay/building_decay.gd) -- the direct sibling of the
+# ecology catch-up immediately above, same "record unload world-time, advance
+# by elapsed time on reload" shape, applied per-piece instead of per-region.
+
+## The withering counterpart to _apply_ecology_catchup directly above:
+## advances every real placed piece in `chunk` by however long this chunk
+## sat unloaded, using BuildingDecay's SAME closed-form shape
+## ChunkEcologyCatchup uses for vegetation. No-ops if this chunk has no
+## in-session unload record (first-ever load this session, or a real app
+## restart -- see Chunk.piece_condition's own "not persisted" doc comment).
+##
+## elapsed_days is capped at MAX_CATCHUP_DAYS, reusing the EXACT same
+## constant/exchange-rate the ecology catch-up already established below --
+## "a decade-unloaded structure converges to a fixed 'ruins' condition, not
+## an ever-precise unbounded timer" (the doc's own framing, mirroring
+## ecology's own "logistic growth converges anyway").
+##
+## A piece whose caught-up condition crosses BuildingDecay.
+## RUINED_CONDITION_THRESHOLD feeds the EXACT SAME _collapse_piece/
+## _sync_statics path a severed support does (see the "real statics"
+## section further below) -- decay and a severed support are two INPUTS
+## into one collapse mechanism, per the doc's own explicit framing, not two
+## parallel ones.
+func _apply_piece_condition_catchup(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if not _unloaded_piece_condition.has(chunk_coord):
+		return
+	var record: Dictionary = _unloaded_piece_condition[chunk_coord]
+	_unloaded_piece_condition.erase(chunk_coord)
+	# No early-return on zero/negative elapsed time (e.g. an immediate
+	# unload/reload flicker with no world-age passing in between): the loop
+	# below still needs to run to carry `saved_condition` forward into this
+	# FRESH Chunk object's own piece_condition dict, or a piece that had
+	# already decayed on a PREVIOUS cycle would silently reset to 1.0 here.
+	# advance_condition(..., 0.0) is exactly a no-op (exp(0) == 1), so this
+	# is safe and correct either way, not just a defensive branch.
+	var elapsed_seconds := maxf(0.0, _world_age_seconds - float(record["unloaded_at"]))
+	var elapsed_days := minf(elapsed_seconds / REAL_SECONDS_PER_ECOLOGICAL_DAY, MAX_CATCHUP_DAYS)
+	var saved_condition: Dictionary = record["condition"]
+	var grid := _piece_grid_for(chunk)
+	# find_rooms is O(chunk piece count) -- computed ONCE for the whole
+	# chunk here and reused as a plain cell membership lookup below, rather
+	# than letting _is_piece_roofed call RoomDetector.is_indoors (which
+	# internally re-runs find_rooms) per neighbor per piece, which would
+	# make this whole pass O(pieces^2) on a large stamped structure.
+	var indoor_cells := {}
+	for room in _room_detector.find_rooms(grid):
+		for room_cell in room:
+			indoor_cells[room_cell] = true
+	var collapsed_cells: Array[Vector2i] = []
+
+	for cell in grid:
+		var piece_id: String = grid[cell]
+		var starting_condition: float = float(saved_condition.get(cell, 1.0))
+		var material := BuildingPiece.material_of(piece_id)
+		var is_roofed := _is_piece_roofed(cell, indoor_cells)
+		var owner_id: String = _household_store.owner_of(_piece_property_id(chunk_coord, cell))
+		var exposure := _building_decay.exposure_for(is_roofed, owner_id)
+		var new_condition := _building_decay.advance_condition(starting_condition, material, exposure, elapsed_days)
+		if _building_decay.is_ruined(new_condition):
+			collapsed_cells.append(cell)
+		else:
+			chunk.piece_condition[cell] = new_condition
+			chunk.piece_condition_checked_at[cell] = _world_age_seconds
+
+	# A cascade earlier in this SAME loop (via _sync_statics, e.g. a
+	# grounding post decaying away and immediately taking an already-at-risk
+	# neighbor down with it) can have already erased a LATER cell in this
+	# list -- re-check chunk.modifications rather than trusting the
+	# `piece_id` this cell had when the list was built, so nothing gets
+	# double-collapsed/double-dropped.
+	for cell in collapsed_cells:
+		var piece_id: String = chunk.modifications.get(cell, "")
+		if piece_id == "":
+			continue
+		_collapse_piece(chunk_coord, chunk, cell, piece_id)
+		_sync_statics(chunk_coord, chunk, cell)
+
+
+## A property_id convention for HouseholdStore.owner_of, keyed per PIECE
+## CELL (global coordinates) rather than per structure -- the smallest
+## honest thing available today. Grouping cells into one real per-house
+## property (the doc's own "house_<chunk>_<origin>" convention) needs the
+## Settlement construction ledger (ConstructionProject/
+## ConstructionProjectStore), a separate, still-⬜ piece of this doc, out of
+## scope here. No real caller grants property under this exact key yet, so
+## this exposure branch currently always resolves to "" (unowned) in real
+## play today -- it is wired to the real HouseholdStore rather than stubbed
+## out, so a future caller (the settlement ledger, or a player claiming a
+## specific tile with a Deed) makes it live with no changes needed here.
+func _piece_property_id(chunk_coord: Vector2i, local_cell: Vector2i) -> String:
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	return "house_%d_%d" % [global_cell.x, global_cell.y]
+
+
+## Is `cell` (a piece in the grid `indoor_cells` was computed from) roofed
+## for withering-exposure purposes? A wall/door/window cell is, by
+## construction, never itself part of RoomDetector's own interior "room"
+## region (it's the enclosing boundary, not the inside -- see
+## RoomDetector.find_rooms' own "a wall or a door stops the fill" comment),
+## so a literal indoor_cells.has(cell) would always read false for exactly
+## the load-bearing pieces this doc's own "ground-contact/post-rot"
+## grounding cares about most (sill rot, post rot). A piece counts as
+## roofed if IT, or any orthogonal neighbor, sits inside a real enclosed
+## room -- "this wall bounds a real roofed room" is the doc's actual intent
+## ("why old timber buildings sit on a stone footing... and why a roof
+## overhang exists at all"), not "this wall's own single cell happens to be
+## the interior." A free-standing wall touching no interior anywhere stays
+## exposed, exactly as it should. `indoor_cells` is every interior cell of
+## every room in the chunk (Vector2i -> true), computed ONCE by the caller
+## via RoomDetector.find_rooms -- see _apply_piece_condition_catchup's own
+## doc comment for why this isn't a live RoomDetector.is_indoors call here.
+func _is_piece_roofed(cell: Vector2i, indoor_cells: Dictionary) -> bool:
+	if indoor_cells.has(cell):
+		return true
+	for offset in _STATICS_NEIGHBORS:
+		if indoor_cells.has(cell + offset):
+			return true
+	return false
+
+
 func _unload_chunk(chunk_coord: Vector2i) -> void:
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk != null and not chunk.modifications.is_empty():
@@ -5854,6 +6011,19 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	if chunk != null and not chunk.roof_modifications.is_empty():
 		DirAccess.make_dir_recursive_absolute(ROOF_MODIFICATIONS_DIR)
 		_chunk_serializer.save_modifications(chunk.roof_modifications, _roof_modifications_path(chunk_coord))
+
+	# Withering (see _apply_piece_condition_catchup above): snapshot this
+	# chunk's real per-piece condition state and the world-age it was taken
+	# at, so a later revisit can catch up on the elapsed unloaded time
+	# instead of the freshly (re)generated Chunk object silently defaulting
+	# every piece back to full condition. In-memory only, mirroring
+	# _unloaded_ecology's own unload-time record just below in spirit (not
+	# persisted to disk -- see Chunk.piece_condition's own doc comment).
+	if chunk != null and not chunk.modifications.is_empty():
+		_unloaded_piece_condition[chunk_coord] = {
+			"unloaded_at": _world_age_seconds,
+			"condition": chunk.piece_condition.duplicate(),
+		}
 
 	_terrain_renderer.erase(_tile_map_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _water_layer != null:

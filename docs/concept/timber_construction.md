@@ -598,10 +598,13 @@ shape a real abandoned timber building decays into.
   threshold (mirroring the existing replan-interrupt pattern from
   `npc.md`'s settlement-growth section)? Leaning toward ad hoc — shelter
   is a need, not a profession — but undecided.
-- **Do player-placed pieces wither too?** Consistency with "one system,
-  two builders" says yes, but that turns base upkeep into a real survival
-  loop and needs its own player-facing warning (a creak before a collapse,
-  not a silent surprise) before it ships.
+- **Do player-placed pieces wither too?** Settled by implementation
+  (2026-08-25): yes — `BuildingDecay`'s catch-up runs over every real piece
+  in `chunk.modifications` with no placer distinction, "one system, two
+  builders" applied literally. Still genuinely open: the player-facing
+  warning this turns into a real survival loop needs (a creak before a
+  collapse, not a silent surprise on return from a long trip) — nothing
+  reads `piece_condition_at_global` for UI/audio feedback yet.
 - **Collapse safety.** Should a falling piece deal real momentum damage
   to whoever's standing under it, per `materials.md`'s one damage model —
   or is that a frustration risk worth a grace window first? Deferred to a
@@ -625,14 +628,16 @@ shape a real abandoned timber building decays into.
 
 🚧 A scoped MVP slice is real: the Sägewerk worksite, its Lumberjack NPC,
 real timber building pieces, a real, generic, now-live end-to-end
-Storage/Logistics/dependency-chain-priority layer, (2026-08-25 follow-up
-pass) real statics — a support graph over the piece grid, with real
-grace-period collapse and material drop-back, and (a further 2026-08-25
-follow-up pass) the settlement construction ledger and
-`ConstructionPriority.decide`'s first real, live caller. Everything else
-this doc describes (withering, offscreen catch-up, autonomous NPC
-house-building beyond gathering) is still ⬜, exactly as specified below —
-deliberately left alone this pass, not silently dropped.
+Storage/Logistics/dependency-chain-priority layer, real statics — a support
+graph over the piece grid, with real grace-period collapse and material
+drop-back — real withering (a closed-form decay catch-up feeding that same
+collapse path), and the settlement construction ledger with
+`ConstructionPriority.decide`'s first real, live caller (all landed
+2026-08-25, across three follow-up passes). Everything else this doc
+describes (offscreen construction catch-up, and autonomous NPC
+house-building beyond gathering — `CARRY_MATERIAL`/`PLACE_PIECE` and
+retiring `VillageRenderer._stamp_house`) is still ⬜, exactly as specified
+below — deliberately left alone this pass, not silently dropped.
 
 - ✅ **The Sägewerk worksite** — the doc's own generic "sawpit/hewing-block"
   prop, named and built concretely as `sagewerk` (`item_catalog.gd`'s
@@ -751,8 +756,9 @@ deliberately left alone this pass, not silently dropped.
   separate per-cell dict from `modifications`, see `chunk.gd`) into the
   statics grid — roof pieces are not yet statics-checked; only
   wall/floor/door/window pieces (`modifications`) are. Withering/decay
-  (which would feed this same collapse path per the doc's own framing) is
-  untouched, still ⬜ below.
+  (2026-08-25 follow-up pass) is now real too and feeds this same collapse
+  path exactly as this framing predicted — see its own entry below, which
+  inherits this same roof-pieces gap for the identical reason.
 
   Real, tested: `tests/unit/test_building_piece.gd` (the new field, every
   piece id, regression), `tests/unit/test_building_statics.gd` (18 tests:
@@ -766,8 +772,97 @@ deliberately left alone this pass, not silently dropped.
   "real statics" section (grace delay before collapse, a real collapse
   dropping the wall's own `cost_of` material via `WorldItemBus`, the
   cascade at the engine level, and collision-body cleanup on collapse).
-- ⬜ **Withering/decay** (`condition`, the closed-form catch-up decay
-  curve) — not built. No placed piece loses condition over time yet.
+- ✅ **Withering/decay** (`condition`, the closed-form catch-up decay curve)
+  (2026-08-25 follow-up pass). `Chunk` gains `piece_condition`/
+  `piece_condition_checked_at` (local cell -> float / world-age), the exact
+  same "value + last-checked-at" pairing `structural_instability`/
+  `structural_checked_at` already established for statics. `BuildingDecay`
+  (`src/gameplay/building_decay.gd`, `tests/unit/test_building_decay.gd`,
+  21 tests) is the new pure module: the EXACT closed-form shape
+  `chunk_ecology_catchup.gd` uses for vegetation regrowth, decaying toward
+  zero instead of growing toward one — `new_condition := condition *
+  exp(-decay_rate * exposure_multiplier * elapsed_days)`. `exp(-x)` for
+  `x >= 0` is always in `(0, 1]`, so a huge `elapsed_days` jump (tested up
+  to 100 years in one call) can never overshoot below zero, never produces
+  NaN/Inf, and needs no clamping — exactly the "safe and deterministic in
+  one call" property this section asked for.
+  `MaterialProperties.MATERIALS` gains a real `"timber"` entry (previously
+  absent — a lookup silently fell back to `DEFAULT_PROPERTIES`'
+  stone-like `decay_rate=1.0`, an unnoticed but real bug this entry
+  closes): shares every property with `"wood"` except `decay_rate` (4.0,
+  two-thirds of wood's 6.0 — seasoned, worked timber resists rot better
+  than raw green wood but is still organic, nowhere near stone's 1.0),
+  test-pinned in `test_material_properties.gd` rather than eyeballed.
+  Exposure modulation is real: `BuildingDecay.exposure_for(is_roofed,
+  owner_id)` returns `SHELTERED` (0.2x the material's base rate — real
+  untreated-wood service-life surveys put a roofed, elevated member at
+  roughly 5x the life of the same wood in continuous ground contact/full
+  exposure) if EITHER the piece is roofed (caller answers via
+  `RoomDetector.find_rooms`) OR belongs to an owned property (caller
+  answers via `HouseholdStore.owner_of`), else `EXPOSED` (1.0x, the
+  material's own undamped rate) — both multiplier values test-pinned.
+  `BuildingDecay.RUINED_CONDITION_THRESHOLD` (0.05, test-pinned) is the
+  real collapse trigger in place of an unreachable literal zero (`exp(-x)`
+  is asymptotic, never exactly 0 for finite `x`).
+
+  Wired at the exact same unload/reload catch-up boundary the ecology
+  precedent already uses: `EarthChunkManager._unloaded_piece_condition`
+  (chunk_coord -> `{unloaded_at, condition}`) is `_unload_chunk`'s own
+  snapshot, and `_apply_piece_condition_catchup` (called from `_load_chunk`,
+  before the first paint/collision pass, mirroring `_apply_ecology_catchup`
+  exactly) advances every real placed piece by the actual elapsed
+  world-age, capped at the SAME `MAX_CATCHUP_DAYS` (120) the ecology
+  catch-up already established — a decade-unloaded structure converges to
+  a fixed "ruins" condition in one call, not an ever-precise unbounded
+  timer. A piece whose caught-up condition crosses
+  `RUINED_CONDITION_THRESHOLD` feeds the EXACT SAME `_collapse_piece`/
+  `_sync_statics` path a severed support does (`_apply_piece_condition_
+  catchup` calls both directly for each decayed-out cell) — decay and a
+  severed support are two INPUTS into one collapse mechanism, not two
+  parallel ones, per this section's own framing. `EarthChunkManager.
+  piece_condition_at_global` is the new read accessor (1.0 default for an
+  unrecorded/unloaded/non-piece cell, matching `structural_instability`'s
+  own "absent means default" convention).
+
+  Real, tested: `test_building_decay.gd` (the formula's monotonicity/
+  boundedness/determinism, exposure modulation, the ruined threshold,
+  timber-vs-wood-vs-stone material grounding), `test_material_properties.gd`
+  (the timber entry's pinned `decay_rate` and that every OTHER property
+  matches plain wood exactly), and `tests/unit/test_earth_chunk_manager.gd`'s
+  new withering section (a freshly-placed piece starts at 1.0, a piece on a
+  chunk that never unloads does not decay, a real simulated unloaded
+  absence measurably lowers condition, a roofed wall retains more condition
+  than a free-standing exposed one over the same absence, a piece decayed
+  past the ruined threshold collapses via the real `_collapse_piece` path
+  and drops its own `cost_of` material, and a collapsed piece's condition
+  is no longer tracked afterward) — all run against the real chunk
+  streaming path (`manager.update` to unload, `advance_world_age`, `manager.
+  update` to reload), not a stubbed shortcut.
+
+  **Named, honest limitations**: `Chunk.piece_condition`/
+  `piece_condition_checked_at` are NOT persisted to disk — the exact same
+  class of gap `structural_instability`'s own doc comment already names.
+  `EarthChunkManager._unloaded_piece_condition` keeps an IN-SESSION record
+  (mirroring `_unloaded_ecology`'s own shape) so a chunk unloaded and
+  reloaded within one session still catches up correctly; only a real app
+  restart loses accumulated condition. Decay only actually advances at the
+  unload/reload catch-up boundary — there is no separate live per-frame
+  decay tick for a chunk that stays loaded the whole time, the same
+  two-fidelity split `chunk_ecology_catchup.gd` itself uses (and the same
+  shape statics' own grace clock already has: it only re-checks when a
+  further edit touches that structure). Only `chunk.modifications`
+  (wall/floor/door/window) pieces decay — `roof_modifications` is a
+  separate per-cell dict `_piece_grid_for` never reads, so roof pieces are
+  not yet withering-checked either, mirroring statics' own identical named
+  gap exactly. The "owned property" exposure branch is wired to the real
+  `HouseholdStore.owner_of` (via a new `_piece_property_id(chunk_coord,
+  local_cell)` per-CELL key, the smallest honest thing available before the
+  still-⬜ settlement construction ledger's real per-house property
+  grouping exists) but no real caller grants ownership under that exact key
+  yet, so in real play today this branch always resolves unowned — only
+  the roofed branch is actually live; a future settlement-ledger caller (or
+  a player claiming a tile with a Deed) makes it live with no changes
+  needed here.
 - ⬜ **NPC construction beyond gathering** — the Lumberjack's own loop stops
   at DEPOSIT; `CARRY_MATERIAL`/`PLACE_PIECE` (an NPC actually building a
   house piece by piece) are not built. `HouseBlueprint`/
@@ -871,11 +966,13 @@ deliberately left alone this pass, not silently dropped.
   close enough together may have their Lumberjacks compete for the same
   standing tree (each independently targets its own nearest one, with no
   coordination) — a known, accepted edge case, not a crash risk.
-- ⬜ All of this doc's own "Open questions" remain genuinely open (who
-  becomes a builder as a real occupation vs. ad hoc, whether player-placed
-  pieces wither too, collapse safety/momentum damage, tool-tier gating on
-  shaping, forest depletion ceiling via `land_health`, multiplayer
-  authority).
+- ⬜ Most of this doc's own "Open questions" remain genuinely open (who
+  becomes a builder as a real occupation vs. ad hoc, collapse safety/
+  momentum damage, tool-tier gating on shaping, forest depletion ceiling
+  via `land_health`, multiplayer authority). One is now settled by
+  implementation: player-placed pieces do wither too (see the Withering/
+  decay entry above) — its own player-facing warning UX is what remains
+  open there.
 - ✅ **Storage, logistics, and the dependency-chain priority function** (see
   that section's own "What's honestly still a stand-in here" for the full
   account): Storage (a real placeable structure with a real per-instance
@@ -913,6 +1010,11 @@ not reinvent:
 - `chunk_ecology_catchup.gd` — the exact offscreen catch-up shape
   (`advance(state, elapsed_seconds, capacity) -> Dictionary`, pure,
   closed-form, bounded) to mirror for construction.
+- `BuildingDecay`/`BuildingStatics` (`src/gameplay/`) — withering's own
+  real, tested closed-form decay module and the collapse mechanism it
+  feeds; a settlement-decision construction catch-up should read
+  `piece_condition_at_global`/collapse the same way rather than a third
+  aging model.
 - `HouseholdStore.grant_property` (`src/emergence/household_store.gd`) —
   house ownership, already correct as-is.
 - `InstitutionFormation` (`src/emergence/institution_formation.gd`) — the
