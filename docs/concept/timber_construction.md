@@ -436,25 +436,42 @@ what's ACTUALLY real right now:
   proximity-check shape. Real, tested (`test_player.gd`): withdraws real
   present stock, no-ops with nothing stocked, no-ops with no Sägewerk
   nearby.
-- **A Sägewerk + Storage pair now automatically spawns its Logistics
-  workers.** `EarthChunkManager._sync_logistics_workers`/
-  `_resync_logistics_for_sagewerk` mirror the existing
-  `_sagewerk_lumberjacks` sync-on-modification-change wiring exactly:
-  once a real Storage is within `SAGEWERK_STORAGE_PAIR_RADIUS_TILES` of a
-  real Sägewerk, exactly two `LogisticsMarker` workers spawn (one for
-  `beam`, one for `plank` — today's one-item-id-per-worker `LogisticsMarker`
-  design, not a design change), tracked chunk_coord → local_cell → worker
-  keyed off the **Sägewerk's own** cell, mirroring `_sagewerk_lumberjacks`'
-  own shape. Re-syncs on every build/destroy of either structure and on
-  chunk load/unload; a redundant sync call does not double-spawn.
-  **Named, honest constraint**: a Sägewerk pairs with only the single
-  nearest Storage it can find — the "a Sägewerk could in principle serve
-  more than one nearby Storage" case this doc's own brief raised is not
-  modeled; today's simplest correct implementation assumes one Storage per
-  Sägewerk. Real, tested (`test_earth_chunk_manager.gd`'s Storage/Logistics
-  section): no nearby Storage spawns nothing, a nearby Storage spawns
-  exactly two workers regardless of build order or resync count, and
-  destroying either structure despawns them.
+- **A Sägewerk pairs with EVERY real Storage within
+  `SAGEWERK_STORAGE_PAIR_RADIUS_TILES`, not just the single nearest one**
+  (closed 2026-08-25 — this section previously named the single-nearest
+  behavior as an honest constraint; it no longer applies).
+  `EarthChunkManager._sync_logistics_workers`/`_resync_logistics_for_sagewerk`
+  still mirror the existing `_sagewerk_lumberjacks` sync-on-modification-
+  change wiring, but now reconcile against a full set: a new
+  `nearby_structure_positions` accessor (the ALL-matches counterpart to
+  `nearest_structure_position`, reusing its exact chunk-scan loop) returns
+  every real Storage in range, and `_resync_logistics_for_sagewerk` spawns
+  one full worker-pair (one `LogisticsMarker` per `beam`/`plank`) for each
+  Storage newly in range, despawns the pair for any previously-paired
+  Storage that dropped out of range or was destroyed, and leaves an
+  already-correctly-staffed pair alone. `_logistics_workers` grew one level
+  deeper to hold this: chunk_coord → local_cell (the Sägewerk's own cell)
+  → storage_key (`_storage_pairing_key`, the same position-keying pattern
+  `_structure_stock_key` already uses, so two Storages never share an
+  identity) → `{item_id -> LogisticsMarker}`. A new `LogisticsMarker.
+  preferred_storage_position` field (unset/null by default, additive —
+  every existing single-storage caller/test is unaffected) is what makes
+  the pairing mean anything: without it, every worker's own dynamic
+  `nearest_structure_position` lookup would independently reconverge on
+  the SAME single nearest Storage regardless of which one it was nominally
+  paired with. `_resync_logistics_for_sagewerk` sets each newly-spawned
+  pair's `preferred_storage_position` to its own paired Storage's position;
+  `_collect_from_source` uses it directly when set, falling back to the
+  original dynamic lookup when unset. Real, tested
+  (`test_earth_chunk_manager.gd`'s Storage/Logistics section and
+  `test_logistics_marker.gd`): two real Storages in range of one Sägewerk
+  each get their own full worker-pair (four workers total, not two), each
+  pair's real deliveries land in its own paired Storage's stock (not
+  funneled to whichever Storage `nearest_structure_position` would have
+  picked), destroying one of two paired Storages despawns only that
+  Storage's own pair and leaves the other's workers running, and the
+  original single-Storage behavior (exactly one pair) is unchanged as a
+  pure regression case.
 - **`ConstructionPriority.decide` is now rebuilt on the real
   `NeedResolver`** — the old `CraftingRecipeBook` + `Smelting.can_smelt`
   composition is gone. `decide` resolves the recipe's own output item
@@ -701,8 +718,10 @@ dropped.
   Still not live: nothing calls `ConstructionPriority.decide` from a real
   settlement-decision system yet — that still needs
   `ConstructionProject`/`ConstructionProjectStore`, which remain ⬜ below.
-  One real, named constraint carried forward: a Sägewerk pairs with only
-  its single nearest Storage, not every Storage within range.
+  The previously-named constraint here (a Sägewerk pairing with only its
+  single nearest Storage) is closed (2026-08-25): a Sägewerk now pairs
+  with EVERY real Storage within `SAGEWERK_STORAGE_PAIR_RADIUS_TILES` (see
+  this section's own account above).
 
 Reusable primitives already in the codebase this system should build on,
 not reinvent:
@@ -741,7 +760,13 @@ not reinvent:
 - `LogisticsBehavior`/`LogisticsMarker` (`src/gameplay/`,
   `src/rendering/`) — the real, tested collect/carry/deposit worker; assign
   a `source_structure_id`/`item_id` to it once a real producer credits
-  `StructureStock`.
+  `StructureStock`. `LogisticsMarker.preferred_storage_position` pins a
+  specific worker to a specific Storage when a caller has already paired
+  them (see Status).
+- `EarthChunkManager.nearby_structure_positions` (`src/world/`) — the
+  ALL-matches counterpart to `nearest_structure_position`; use this
+  whenever a caller needs every real structure of a given id in range, not
+  just the closest.
 - `ConstructionPriority` (`src/gameplay/construction_priority.gd`) — the
   real, tested dependency-chain priority function; wire a settlement-decision
   caller to it once one exists, and rewire its structure-gate check from

@@ -121,3 +121,64 @@ func test_returns_to_seeking_once_the_delivery_is_complete():
 	assert_eq(marker._behavior.phase, LogisticsBehavior.Phase.SEEKING)
 	assert_eq(marker.carried_item_id, "")
 	assert_eq(marker.carried_count, 0)
+
+
+# -- preferred_storage_position (see docs/concept/timber_construction.md's --
+# -- own named honest constraint this closes: a Sägewerk-paired worker must --
+# -- deliver to ITS OWN paired Storage, not whichever Storage its own -------
+# -- dynamic nearest_structure_position lookup would independently converge -
+# -- on -- every worker doing that would defeat multi-storage pairing) ------
+
+func test_preferred_storage_position_is_unset_by_default():
+	assert_null(marker.preferred_storage_position, "existing single-storage callers never set this")
+
+
+## Regression: with preferred_storage_position left unset, behavior is
+## unchanged from before this field existed -- the worker still finds and
+## delivers to a Storage via the existing dynamic nearest_structure_position
+## lookup.
+func test_falls_back_to_nearest_structure_position_when_preferred_storage_position_is_unset():
+	var source_tile := _berlin_tile + Vector2i(2, 0)
+	var storage_tile := _berlin_tile + Vector2i(-2, 0)
+	manager.build_at_global(source_tile.x, source_tile.y, "furnace")
+	manager.build_at_global(storage_tile.x, storage_tile.y, "storage")
+	manager.deposit_to_structure_at(source_tile.x, source_tile.y, "plank", 4)
+
+	for i in 400:
+		marker._process(0.25)
+		if manager.structure_stock_at(storage_tile.x, storage_tile.y, "plank") > 0:
+			break
+
+	assert_gt(manager.structure_stock_at(storage_tile.x, storage_tile.y, "plank"), 0)
+
+
+## The actual fix: when preferred_storage_position IS set, the worker
+## delivers there directly, ignoring a closer Storage that
+## nearest_structure_position would otherwise have picked -- this is what
+## makes pairing a Sägewerk with more than one Storage mean anything.
+func test_delivers_to_the_preferred_storage_instead_of_the_nearer_one():
+	var source_tile := _berlin_tile + Vector2i(2, 0)
+	var near_storage_tile := _berlin_tile + Vector2i(-1, 0)  # closer to the source than far_storage
+	var far_storage_tile := _berlin_tile + Vector2i(-10, 0)
+	manager.build_at_global(source_tile.x, source_tile.y, "furnace")
+	manager.build_at_global(near_storage_tile.x, near_storage_tile.y, "storage")
+	manager.build_at_global(far_storage_tile.x, far_storage_tile.y, "storage")
+	manager.deposit_to_structure_at(source_tile.x, source_tile.y, "plank", 4)
+
+	marker.preferred_storage_position = Vector2(far_storage_tile) * TerrainRenderer.TILE_SIZE + (
+		Vector2.ONE * (TerrainRenderer.TILE_SIZE * 0.5)
+	)
+
+	for i in 800:
+		marker._process(0.25)
+		if manager.structure_stock_at(far_storage_tile.x, far_storage_tile.y, "plank") > 0:
+			break
+
+	assert_gt(
+		manager.structure_stock_at(far_storage_tile.x, far_storage_tile.y, "plank"), 0,
+		"delivered to the preferred (farther) storage"
+	)
+	assert_eq(
+		manager.structure_stock_at(near_storage_tile.x, near_storage_tile.y, "plank"), 0,
+		"the nearer storage nearest_structure_position would have picked gets nothing"
+	)

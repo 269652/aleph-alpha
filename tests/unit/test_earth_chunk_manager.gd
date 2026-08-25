@@ -1303,6 +1303,68 @@ func test_nearest_structure_position_picks_the_closer_of_two_candidates():
 	assert_almost_eq(found.y, expected_near.y, 0.5)
 
 
+# -- nearby_structure_positions (see docs/concept/timber_construction.md's --
+# -- own named honest constraint this closes: "a Sägewerk pairs with only --
+# -- its single nearest Storage, not every Storage within range" -- the -----
+# -- ALL-matches counterpart to nearest_structure_position's single-closest -
+# -- answer, reusing the exact same chunk-scan loop) -------------------------
+
+func test_nearby_structure_positions_finds_a_structure_within_range():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 200.0)
+
+	assert_eq(found.size(), 1)
+
+
+func test_nearby_structure_positions_returns_every_match_within_range_not_just_the_nearest():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 10, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 2000.0)
+
+	assert_eq(found.size(), 2, "both real Storage tiles are within range -- not just the closer one")
+
+
+func test_nearby_structure_positions_excludes_matches_beyond_max_distance():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x + 50, _berlin_tile.y, "storage")
+
+	# origin_pixel is the query tile's top-left corner, and distance is
+	# measured to the FAR structure's own tile CENTER (same convention
+	# nearest_structure_position already uses) -- at TILE_SIZE=16 that is
+	# 1*16 + 8 = 24px for the +1-tile storage, so max_distance must clear
+	# 24 to count it as in-range while still excluding the +50-tile one.
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 30.0)
+
+	assert_eq(found.size(), 1, "only the in-range Storage should be returned")
+
+
+func test_nearby_structure_positions_returns_empty_array_when_nothing_built():
+	manager.update(_berlin_tile)
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 2000.0)
+
+	assert_eq(found.size(), 0)
+
+
+func test_nearby_structure_positions_ignores_a_different_structure_id():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "furnace")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 200.0)
+
+	assert_eq(found.size(), 0)
+
+
 # -- structure stock (Storage's real inventory, and any future producer's ----
 # -- accumulated-output queue -- see StructureStock/StructureStockStore's ----
 # -- own doc comments) --------------------------------------------------------
@@ -3290,11 +3352,24 @@ func test_reloading_a_chunk_with_a_persisted_sagewerk_respawns_its_lumberjack():
 # -- Storage/Logistics: "if both production buildings and storage exist, new
 # NPCs may move in which handle logistics" (docs/concept/timber_
 # construction.md's "Storage, logistics, and the autonomous dependency
-# chain" section) -- one LogisticsMarker per real output item id
-# (_SAGEWERK_LOGISTICS_ITEM_IDS: beam, plank) once a real Sägewerk AND a
-# real Storage are both present within SAGEWERK_STORAGE_PAIR_RADIUS_TILES
-# of each other, keyed off the Sägewerk's own cell, mirroring
-# _sagewerk_lumberjacks' own per-chunk dict-of-cells shape exactly.
+# chain" section) -- one worker-pair (one LogisticsMarker per real output
+# item id, _SAGEWERK_LOGISTICS_ITEM_IDS: beam, plank) per real Storage
+# within SAGEWERK_STORAGE_PAIR_RADIUS_TILES of a real Sägewerk -- EVERY
+# real Storage in range, not just the single nearest one (this closes this
+# doc's own previously-named honest constraint). Keyed off the Sägewerk's
+# own cell, then by each paired Storage's own identity, mirroring
+# _sagewerk_lumberjacks' per-chunk dict-of-cells shape one level deeper.
+
+## Total LogisticsMarker count across every Storage paired to the Sägewerk
+## at (chunk_coord, local_cell) -- sums each storage-keyed pair's own
+## item-keyed worker count, so a test doesn't need to know the internal
+## storage-key format to assert "N workers total."
+func _logistics_worker_count(chunk_coord: Vector2i, local_cell: Vector2i) -> int:
+	var total := 0
+	for by_item in manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).values():
+		total += by_item.size()
+	return total
+
 
 func test_a_sagewerk_with_no_nearby_storage_spawns_no_logistics_workers():
 	manager.update(_berlin_tile)
@@ -3314,7 +3389,9 @@ func test_a_sagewerk_with_a_nearby_storage_spawns_exactly_two_logistics_workers(
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
 	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
 
-	var by_item: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	var by_storage: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	assert_eq(by_storage.size(), 1, "exactly one real Storage in range -- one worker-pair")
+	var by_item: Dictionary = by_storage.values()[0]
 	assert_eq(by_item.size(), 2, "one worker per real Sägewerk output item (beam, plank)")
 	assert_true(by_item.has("beam"))
 	assert_true(by_item.has("plank"))
@@ -3330,7 +3407,7 @@ func test_a_storage_built_before_its_sagewerk_still_gets_paired():
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
 	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
 
-	assert_eq(manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).size(), 2)
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2)
 
 
 func test_re_syncing_a_staffed_sagewerk_does_not_double_spawn_logistics_workers():
@@ -3345,7 +3422,7 @@ func test_re_syncing_a_staffed_sagewerk_does_not_double_spawn_logistics_workers(
 	# touching the Sägewerk or Storage tiles themselves.
 	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
 
-	assert_eq(manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).size(), 2)
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2)
 
 
 func test_destroying_the_sagewerk_despawns_its_logistics_workers():
@@ -3354,9 +3431,7 @@ func test_destroying_the_sagewerk_despawns_its_logistics_workers():
 	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
 	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
-	assert_eq(
-		manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).size(), 2, "precondition"
-	)
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2, "precondition")
 
 	manager.destroy_at_global(_berlin_tile.x, _berlin_tile.y)
 
@@ -3369,13 +3444,98 @@ func test_destroying_the_paired_storage_despawns_its_logistics_workers():
 	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
 	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
-	assert_eq(
-		manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).size(), 2, "precondition"
-	)
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2, "precondition")
 
 	manager.destroy_at_global(_berlin_tile.x + 2, _berlin_tile.y)
 
 	assert_true(manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).is_empty())
+
+
+## The actual fix: TWO real Storages within range of one Sägewerk each get
+## their own real worker-pair -- four workers total, not two. This is the
+## direct test of this doc's previously-named honest constraint ("a Sägewerk
+## pairs with only its single nearest Storage, not every Storage within
+## range") now being closed.
+func test_two_storages_within_range_each_get_their_own_worker_pair():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x - 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+
+	var by_storage: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	assert_eq(by_storage.size(), 2, "both real Storages in range get their own pair")
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 4, "two workers per pair, two pairs")
+	for by_item in by_storage.values():
+		assert_true(by_item.has("beam"))
+		assert_true(by_item.has("plank"))
+
+
+## Each pair's own real deliveries land in ITS OWN paired Storage's stock --
+## not funneled to whichever Storage nearest_structure_position would pick
+## from the worker's own position, which (before this fix) would have been
+## the SAME single storage for every worker regardless of which one it was
+## nominally paired with. The far storage is placed further from the
+## Sägewerk than the near one but still within SAGEWERK_STORAGE_PAIR_RADIUS_
+## TILES -- under the old bug, its own paired worker would have delivered to
+## the NEAR storage instead (whichever nearest_structure_position picked),
+## so a delivery actually landing at the far storage is the real proof.
+func test_each_paired_storage_receives_its_own_deliveries_not_the_nearest_ones():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var near_storage_tile := _berlin_tile + Vector2i(2, 0)
+	var far_storage_tile := _berlin_tile + Vector2i(18, 0)
+	manager.build_at_global(near_storage_tile.x, near_storage_tile.y, "storage")
+	manager.build_at_global(far_storage_tile.x, far_storage_tile.y, "storage")
+	manager.deposit_to_structure_at(_berlin_tile.x, _berlin_tile.y, "beam", 8)
+
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	var by_storage: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	assert_eq(by_storage.size(), 2, "precondition: both Storages paired")
+
+	var beam_markers: Array = []
+	for by_item in by_storage.values():
+		beam_markers.append(by_item["beam"])
+
+	for i in 800:
+		for beam_marker in beam_markers:
+			beam_marker._process(0.25)
+		if (
+			manager.structure_stock_at(near_storage_tile.x, near_storage_tile.y, "beam") > 0
+			and manager.structure_stock_at(far_storage_tile.x, far_storage_tile.y, "beam") > 0
+		):
+			break
+
+	assert_gt(
+		manager.structure_stock_at(near_storage_tile.x, near_storage_tile.y, "beam"), 0,
+		"the near storage's own paired worker delivers to it"
+	)
+	assert_gt(
+		manager.structure_stock_at(far_storage_tile.x, far_storage_tile.y, "beam"), 0,
+		"the far storage's own paired worker delivers to it too -- not funneled to the nearer one"
+	)
+
+
+## Removing one of two paired Storages despawns only that Storage's own
+## worker-pair -- the other Storage's own workers keep running undisturbed.
+func test_destroying_one_of_two_paired_storages_despawns_only_its_own_pair():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var storage_a_tile := _berlin_tile + Vector2i(2, 0)
+	var storage_b_tile := _berlin_tile + Vector2i(-2, 0)
+	manager.build_at_global(storage_a_tile.x, storage_a_tile.y, "storage")
+	manager.build_at_global(storage_b_tile.x, storage_b_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 4, "precondition: two pairs")
+
+	manager.destroy_at_global(storage_a_tile.x, storage_a_tile.y)
+
+	var by_storage: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	assert_eq(by_storage.size(), 1, "only storage_a's own pair despawns")
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2, "storage_b's own pair keeps running")
 
 
 # -- the periodic ecosystem refresh must not rebuild the world ---------------
