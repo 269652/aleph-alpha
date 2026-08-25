@@ -67,6 +67,8 @@ const Market = preload("res://src/emergence/market.gd")
 const MarketStore = preload("res://src/emergence/market_store.gd")
 const MarketStorePersistence = preload("res://src/emergence/market_store_persistence.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
+const ConstructionProject = preload("res://src/emergence/construction_project.gd")
+const ConstructionProjectStore = preload("res://src/emergence/construction_project_store.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
 const InstitutionStorePersistence = preload("res://src/emergence/institution_store_persistence.gd")
@@ -818,6 +820,21 @@ var _unloaded_ecology: Dictionary = {}
 ## is not persisted to disk (see that field's own doc comment), so this
 ## record does not survive a real app restart either.
 var _unloaded_piece_condition: Dictionary = {}
+## The offscreen construction-labor catch-up's own unload-time record (see
+## docs/concept/timber_construction.md's "Unloaded / offscreen fidelity"
+## subsection and _apply_construction_labor_catchup below) -- SIMPLER than
+## _unloaded_piece_condition/_unloaded_ecology directly above: those two
+## snapshot real per-region STATE because it lives on a Chunk/
+## EcosystemSimulation region object that gets discarded on unload.
+## _construction_project_store above is never discarded (manager-lifetime
+## scope, same as _household_store/_market_store), so a project's own
+## labor_hours_accumulated is already safe across an unload -- only the
+## world-age this chunk was unloaded AT needs recording, so a reload can
+## compute the real elapsed unloaded time to feed
+## ConstructionProjectStore.advance_project_labor. chunk_coord -> {unloaded_at:
+## float}. In-memory only, same "does not survive a real app restart" caveat
+## as its two siblings above.
+var _unloaded_construction_labor: Dictionary = {}
 var _fruiting_accumulator := 0.0
 ## The world-age at the previous fruiting step, so fallen_between integrates
 ## exactly the elapsed interval (all trees share the one world clock).
@@ -1031,9 +1048,28 @@ func _record_contract_event(event_type: String, contract: Contract) -> void:
 var _market_store := MarketStore.new()
 var _recipe_book := CraftingRecipeBook.new()
 
+## The Settlement construction ledger (see docs/concept/timber_construction.md
+## "Settlement construction ledger" / ConstructionProject/
+## ConstructionProjectStore) -- one more piece of shared world state alongside
+## _household_store/_market_store above, at the SAME manager-lifetime scope
+## (never discarded per-chunk-unload the way a Chunk's own piece_condition or
+## EcosystemSimulation's per-region state is) so a project's real
+## labor_hours_accumulated survives a chunk unload/reload with no snapshotting
+## of its own -- only "how long did this chunk sit unloaded" needs recording
+## (see _unloaded_construction_labor below). No persistence wrapper yet (see
+## that doc's own "Named, honest limitations" -- to_dicts/from_dicts are real
+## but nothing calls them from a save path), the same "additive capability, no
+## live save-path caller yet" honesty _market_store's own sibling stores
+## already carry elsewhere in this file.
+var _construction_project_store := ConstructionProjectStore.new()
+
 
 func market_store() -> MarketStore:
 	return _market_store
+
+
+func construction_project_store() -> ConstructionProjectStore:
+	return _construction_project_store
 
 
 func save_market_store(path: String = MarketStorePersistence.SAVE_PATH) -> void:
@@ -5849,6 +5885,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
 
+	# Construction labor catch-up (see _apply_construction_labor_catchup's
+	# own doc comment) -- last, so it runs against a chunk that is already
+	# fully loaded (statics/collision/lumberjack/logistics wiring all
+	# already in place): a completed project's own build_at_global call
+	# below reuses every one of those existing sync paths rather than
+	# needing a second, earlier-in-load-order variant of its own.
+	_apply_construction_labor_catchup(chunk_coord)
+
 
 ## If this chunk was visited before, advance its aggregate ecology over the
 ## time it spent unloaded and install the caught-up populations, instead of
@@ -5958,6 +6002,79 @@ func _apply_piece_condition_catchup(chunk_coord: Vector2i, chunk: Chunk) -> void
 		_sync_statics(chunk_coord, chunk, cell)
 
 
+# -- construction labor catch-up (see docs/concept/timber_construction.md's
+# "Unloaded / offscreen fidelity" subsection, construction_catchup.gd,
+# ConstructionProjectStore.advance_project_labor) -- the settlement
+# construction ledger's own real chunk-load caller: gives every real
+# IN_PROGRESS ConstructionProject sited in a reloaded chunk its real elapsed
+# unloaded time's worth of labor, and actually places a completed project's
+# real placeable output in the world.
+
+## Advances every real IN_PROGRESS ConstructionProject sited at `chunk_coord`
+## by however long this chunk sat unloaded, mirroring _apply_ecology_catchup/
+## _apply_piece_condition_catchup's own identical "no-op with no in-session
+## unload record" shape directly above. builder_count comes from the
+## EXISTING household_count_for_settlement (already real -- see that
+## function's own doc comment), keyed off the SAME settlement_id
+## record_settlement_founded_if_new derives a chunk's settlement under
+## (EntityRef.for_settlement(chunk_coord)) -- not reinvented here. A
+## settlement with no real households yet (household_count_for_settlement
+## == 0) makes zero progress regardless of elapsed time, the exact
+## "population growth is what raises builder_count" throttle this doc's own
+## framing names.
+##
+## Deliberately does NOT decide which project to START -- only advances
+## labor on projects that are ALREADY IN_PROGRESS (see this pass's own
+## explicit scope: "which structure should this settlement build next" stays
+## genuinely unspecified, SettlementConstruction.advance is not called from
+## here).
+func _apply_construction_labor_catchup(chunk_coord: Vector2i) -> void:
+	if not _unloaded_construction_labor.has(chunk_coord):
+		return
+	var record: Dictionary = _unloaded_construction_labor[chunk_coord]
+	_unloaded_construction_labor.erase(chunk_coord)
+	var elapsed := maxf(0.0, _world_age_seconds - float(record["unloaded_at"]))
+	if elapsed <= 0.0:
+		return
+
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var capacity := {"builder_count": float(household_count_for_settlement(settlement_id))}
+	for project in _construction_project_store.in_progress_projects_in_chunk(chunk_coord):
+		var result: Dictionary = _construction_project_store.advance_project_labor(
+			project.id, elapsed, capacity, _recipe_book, _household_store
+		)
+		if result.get("action", "") == "completed":
+			_place_completed_construction_project(project)
+
+
+## Closes docs/concept/timber_construction.md's own previously-named gap:
+## "completing a project today only marks status + grants household
+## property, it never actually builds anything." If `project`'s own
+## blueprint_id names a real CraftingRecipeBook recipe whose OUTPUT item is a
+## real placeable (ItemCatalog.kind_of == "placeable" -- sagewerk/storage/
+## campfire/furnace), places it via build_at_global at the project's own
+## (chunk_coord, origin) -- the SAME call Player's own placeable-handling
+## build step makes (see scenes/player.gd's _build_step), no new placement
+## path. A recipe whose output is not a placeable (e.g. "log_to_balken" ->
+## "beam", a plain material) is a deliberate no-op here -- the project still
+## reaches real COMPLETE status and still grants its household real property
+## (see complete_project), there is simply nothing to place in the world for
+## a raw-material output. Does NOT invent a siting/placement algorithm --
+## `project.origin` is whatever real local cell the project was started at
+## (this pass's own explicit scope), exactly as the doc's "Named, honest
+## limitations" already frame a queued producer project's own origin as
+## "bookkeeping, not real siting."
+func _place_completed_construction_project(project) -> void:
+	var output: Dictionary = _recipe_book.recipe_output(project.blueprint_id)
+	if output.is_empty():
+		return
+	var output_item_id: String = output["item_id"]
+	if _item_catalog.kind_of(output_item_id) != "placeable":
+		return
+	var global_cell: Vector2i = project.chunk_coord * CHUNK_SIZE + project.origin
+	build_at_global(global_cell.x, global_cell.y, output_item_id)
+
+
 ## A property_id convention for HouseholdStore.owner_of, keyed per PIECE
 ## CELL (global coordinates) rather than per structure -- the smallest
 ## honest thing available today. Grouping cells into one real per-house
@@ -6024,6 +6141,16 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 			"unloaded_at": _world_age_seconds,
 			"condition": chunk.piece_condition.duplicate(),
 		}
+
+	# Construction labor catch-up (see _apply_construction_labor_catchup
+	# below): snapshot the world-age this chunk was unloaded at, so a
+	# revisit can advance any real IN_PROGRESS ConstructionProject sited
+	# here by the real elapsed unloaded time. Only recorded when there is
+	# real IN_PROGRESS work to catch up on -- mirrors _unloaded_piece_
+	# condition's own "not chunk.modifications.is_empty()" guard, avoiding
+	# growing this dict for every ordinary chunk unload.
+	if not _construction_project_store.in_progress_projects_in_chunk(chunk_coord).is_empty():
+		_unloaded_construction_labor[chunk_coord] = {"unloaded_at": _world_age_seconds}
 
 	_terrain_renderer.erase(_tile_map_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _water_layer != null:

@@ -633,19 +633,28 @@ graph over the piece grid, with real grace-period collapse and material
 drop-back — real withering (a closed-form decay catch-up feeding that same
 collapse path), the settlement construction ledger with
 `ConstructionPriority.decide`'s first real, live caller (all landed
-2026-08-25, across three follow-up passes), and now the offscreen
-construction labor catch-up itself — `construction_catchup.gd` plus its
-real `ConstructionProjectStore.advance_project_labor` caller (landed
-2026-08-25, a fourth follow-up pass) — which actually carries an
-`IN_PROGRESS` `ConstructionProject` to `COMPLETE` over elapsed time, closing
-this arc's last named mechanism gap. What's still ⬜ is autonomous NPC
+2026-08-25, across three follow-up passes), the offscreen construction labor
+catch-up itself — `construction_catchup.gd` plus its real
+`ConstructionProjectStore.advance_project_labor` caller (landed 2026-08-25,
+a fourth follow-up pass) — which actually carries an `IN_PROGRESS`
+`ConstructionProject` to `COMPLETE` over elapsed time, and now (2026-08-25, a
+fifth follow-up pass) that catch-up's own real, live `EarthChunkManager`
+chunk-unload/reload caller: `_apply_construction_labor_catchup`, wired at the
+EXACT SAME unload/reload boundary withering's own
+`_unloaded_piece_condition`/`_apply_piece_condition_catchup` pair already
+uses, closing the "mechanism real and tested, first live gameplay caller
+still pending" gap the previous pass's own note named. A `COMPLETE` project
+whose recipe output is a real placeable now actually gets built via
+`build_at_global` — closing the previously-silent gap where completing a
+project only marked status and granted household property without ever
+placing anything in the world. What's still ⬜ is autonomous NPC
 house-building beyond gathering — `CARRY_MATERIAL`/`PLACE_PIECE` and
-retiring `VillageRenderer._stamp_house` — plus, honestly, a live
-gameplay caller: nothing in `EarthChunkManager`'s own chunk-load path
-invokes `advance_project_labor` yet (see that entry's own "Named, honest
-limitations" below), the same "mechanism real and tested, first live
-gameplay caller still pending" pattern this arc's other closed items
-already carry before their own follow-up passes wired them in.
+retiring `VillageRenderer._stamp_house` — and, honestly, deciding WHICH
+project a settlement should start next (`SettlementConstruction.advance` is
+not called from this new chunk-load wiring; only projects ALREADY
+`IN_PROGRESS` get their labor advanced there — see that entry's own "Named,
+honest limitations" below for the full account of what this pass
+deliberately left unspecified).
 
 - ✅ **The Sägewerk worksite** — the doc's own generic "sawpit/hewing-block"
   prop, named and built concretely as `sagewerk` (`item_catalog.gd`'s
@@ -945,19 +954,78 @@ already carry before their own follow-up passes wired them in.
   progress without completing, and `PLANNED`/`COMPLETE`/`ABANDONED`/unknown
   projects are all left untouched no-ops).
 
-  **Named, honest limitation**: there is still no live `EarthChunkManager`/
-  chunk-load call site invoking `advance_project_labor` from real gameplay
-  — the mechanism and its caller are real and tested in isolation, but
-  nothing yet supplies a real `builder_count` from actual settlement
-  population and calls this on a chunk's own load/unload boundary the way
-  `_apply_ecology_catchup`/`_apply_piece_condition_catchup` already do for
-  ecology/withering. That wiring is the natural next step, deliberately left
-  out of this pass's scope, matching this whole arc's own established
-  "mechanism real and tested, first live gameplay caller still pending"
-  pattern. A Lumberjack's own in-progress state (log stock, shaping
-  progress) is also still not persisted across a chunk unload/reload — a
-  separate, still-real, still-documented gap (see `docs/progress.md`), the
-  same class of limitation geology's mined-tunnel state already has.
+  **`EarthChunkManager` now HAS a live chunk-unload/reload caller**
+  (2026-08-25, a fifth follow-up pass — closes the gap this note used to
+  describe). `_apply_construction_labor_catchup`, wired at the EXACT SAME
+  unload/reload boundary `_apply_ecology_catchup`/
+  `_apply_piece_condition_catchup` already use: `_unload_chunk` snapshots
+  `{unloaded_at: world_age}` into a new `_unloaded_construction_labor`
+  Dictionary (chunk_coord -> record) whenever real `IN_PROGRESS`
+  `ConstructionProject`s are sited in that chunk (via the new
+  `ConstructionProjectStore.in_progress_projects_in_chunk` lookup, an
+  additive "find every match at a site's own chunk_coord" counterpart to
+  `find_project`'s single-exact-key lookup); `_load_chunk` calls
+  `_apply_construction_labor_catchup` last (after every other per-chunk
+  system is already wired back up, so a completed project's own placement
+  below reuses every existing sync path rather than needing an earlier-in-
+  load-order variant), which computes the real elapsed unloaded time and,
+  for each real `IN_PROGRESS` project sited there, supplies `builder_count`
+  from the EXISTING `household_count_for_settlement` (keyed by the SAME
+  `EntityRef.for_settlement(chunk_coord)` id `record_settlement_founded_if_new`
+  already derives a chunk's settlement under — not reinvented) before
+  calling `advance_project_labor`. Simpler than its ecology/withering
+  siblings in one real way: `ConstructionProjectStore` itself (like
+  `_household_store`/`_market_store`) lives at `EarthChunkManager`'s own
+  manager-lifetime scope and is never discarded on unload the way a
+  `Chunk`/`EcosystemSimulation` region is, so a project's own
+  `labor_hours_accumulated` is already safe across an unload — only the
+  elapsed unloaded TIME needs recording, not a state snapshot.
+
+  **A `COMPLETE` project's real placeable output is now actually placed.**
+  `advance_project_labor`'s own return value (`{"action": "completed", ...}`)
+  is what `_apply_construction_labor_catchup` reads to trigger the new
+  `_place_completed_construction_project`: if the project's `blueprint_id`
+  names a real `CraftingRecipeBook` recipe whose OUTPUT item is a real
+  placeable (`ItemCatalog.kind_of(output_item_id) == "placeable"` --
+  sagewerk/storage/campfire/furnace), it calls `build_at_global` at the
+  project's own `(chunk_coord, origin)` — the SAME call `Player`'s own
+  placeable-handling build step makes, no new placement path. Closes a real,
+  previously silent gap: completing a project used to only mark status and
+  grant household property, never actually build anything. A recipe whose
+  output is NOT a placeable (e.g. `log_to_balken` -> `beam`, a plain
+  material) still reaches real `COMPLETE` status and still grants its
+  household real property — there is simply nothing to place in the world
+  for a raw-material output, a deliberate no-op, not a crash or a garbage
+  tile.
+
+  Real, tested: `test_construction_project_store.gd`'s new
+  `in_progress_projects_in_chunk` cases, and `test_earth_chunk_manager.gd`'s
+  new "construction labor catch-up" section (mirroring the withering
+  section's own test style exactly): a real `IN_PROGRESS` project's
+  `labor_hours_accumulated` measurably advances after a real simulated
+  chunk-unload absence, a chunk that never unloads does not advance
+  construction labor at all (regression, mirroring withering's own identical
+  "never unloads" test), a completed project's real placeable output
+  (`sagewerk`) is actually placed in the world (verified via
+  `modification_at_global`), and a completed project whose recipe output is
+  NOT a placeable (`log_to_balken`) reaches `COMPLETE` while placing nothing
+  and not crashing.
+
+  **Named, honest limitation — deliberately still out of scope**: this pass
+  does NOT decide which project a settlement should START next. Only
+  projects that are ALREADY `IN_PROGRESS` get their labor advanced by this
+  new wiring; `SettlementConstruction.advance` (the function that actually
+  starts a `PLANNED` project via `ConstructionPriority.decide`) is not
+  called from anywhere in this chunk-load path. "Which structure should this
+  settlement build next" — e.g. when a settlement wants a second Sägewerk —
+  remains genuinely unspecified, exactly as it was before this pass; this
+  pass only ever advances real, already-reserved-material work that some
+  other caller (today: only tests, and `SettlementConstruction.advance`
+  itself in isolation) already put into `IN_PROGRESS`. A Lumberjack's own
+  in-progress state (log stock, shaping progress) is also still not
+  persisted across a chunk unload/reload — a separate, still-real,
+  still-documented gap (see `docs/progress.md`), the same class of
+  limitation geology's mined-tunnel state already has.
 - ✅ **Settlement construction ledger** (2026-08-25, a further follow-up
   pass) — `ConstructionProject`/`ConstructionProjectStore`
   (`src/emergence/`), mirroring `Household`/`HouseholdStore`'s own real
@@ -1105,7 +1173,11 @@ not reinvent:
   `HouseBlueprint.total_labor_hours`) and the real, tested caller that
   carries an `IN_PROGRESS` `ConstructionProject` to `COMPLETE` via
   `construction_catchup.gd`, calling the already-correct `complete_project`
-  rather than reimplementing it.
+  rather than reimplementing it. `EarthChunkManager.
+  _apply_construction_labor_catchup` (see Status) is its real, live
+  chunk-unload/reload caller; `EarthChunkManager.construction_project_store()`
+  exposes the manager's own `ConstructionProjectStore` instance the same way
+  `household_store()`/`market_store()` already expose theirs.
 - `BuildingDecay`/`BuildingStatics` (`src/gameplay/`) — withering's own
   real, tested closed-form decay module and the collapse mechanism it
   feeds; a settlement-decision construction catch-up should read
