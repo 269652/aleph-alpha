@@ -3667,25 +3667,74 @@ free — see the "Retiring `VillageRenderer._stamp_house`'s instant free
 stamp" bullet below for the real mechanism (a computed completion fraction,
 deliberately NOT the `ConstructionProject` ledger). It still does not build
 a house up piece by piece by a real live Builder — that remains open, see
-that same bullet's own honest account.
+that same bullet's own honest account. A seventh follow-up pass (2026-08-25)
+closed the "which project should this settlement start next" gap this
+paragraph itself used to name: `SettlementSpareCapacity`/
+`SettlementBuildDecision` (`src/emergence/`) are real, tested, and wired at
+the real chunk-load boundary (`EarthChunkManager._apply_settlement_build_
+decision`) — see the "Deciding what to build, and who builds it" bullet
+directly below for the full account, including the corrected `builder_count`
+bug fix (construction labor was silently consuming TOTAL population, not
+spare capacity, competing with survival occupations it never should have)
+and the honest account of how rarely "start new work" actually fires in live
+play today.
 
-- **Deciding what to build, and who builds it** (medium) — ⬜ Design only,
-  not implemented (2026-08-25, a follow-up brainstorm session — see
+- **Deciding what to build, and who builds it** (medium) — 🚧 Two of its
+  three real pieces landed (2026-08-25, a further follow-up pass, closing
+  most of what the 2026-08-25 brainstorm session settled — see
   `concept/timber_construction.md`'s own "Deciding what to build, and who
-  builds it" section for the full account). Settles this arc's two
-  remaining open questions: a settlement's own worst real shortfall (a real
-  magnitude `Quest.production_shortfall_quests_for` already reports, not a
-  new number) names WHAT to build, gated by real spare population capacity
-  (household count beyond what farmer/hunter/fisher require, the same
-  derived-from-real-stock style `SettlementState.carrying_capacity` already
-  uses) deciding WHETHER a settlement can act on it right now; Builder is
-  ad hoc (not a fixed occupation), assigned via the same replan-interrupt
-  shape `npc.md`'s migration section already names, and several Builders
-  may pool effort on one project. Also specs a real, narrow first crack at
-  player-hired Builders (pay gold to pull a settlement's own spare Builder
-  to a player's own site) and a real cancellation path when the player
-  independently fixes a shortfall a settlement was already building its own
-  producer for.
+  builds it" section for the full account):
+  - ✅ **What to build, and whether the settlement can act on it** —
+    `SettlementSpareCapacity.for_settlement` (`src/emergence/
+    settlement_spare_capacity.gd`) is real, tested: `household_count_for_
+    settlement` minus however many households work a real survival
+    occupation (read off `NpcProduction.PRODUCER_ITEM_BY_OCCUPATION`'s own
+    keys, not a second hand-maintained list), clamped at zero — the same
+    derived-from-real-stock style `SettlementState.carrying_capacity`
+    already uses. `SettlementBuildDecision.decide_and_advance`
+    (`src/emergence/settlement_build_decision.gd`) is real, tested: ranks a
+    settlement's own real shortfalls worst-`need`-first (`Quest.
+    production_shortfall_quests_for`'s own real magnitude, no new number),
+    skips any with no real recipe producing the missing item (left to the
+    existing shortfall path), and supplies `SettlementConstruction.advance`'s
+    own still-missing candidate `blueprint_id` for the first with a real
+    `ConstructionPriority.missing_structure_id`, gated by real spare
+    capacity (`{"action": "no_spare_capacity"}`, distinctly named from
+    "nothing needed"). Composes the real cancellation path too: a
+    settlement's own redundant `PLANNED`/`IN_PROGRESS` producer project is
+    abandoned (`ConstructionProjectStore.abandon_project`, a new small
+    tested method also now shared by the material-crash abandon path) once
+    the player independently supplies the real fix first. Wired at the real
+    chunk-load boundary (`EarthChunkManager._apply_settlement_build_
+    decision`, called from `_load_chunk` alongside the offscreen labor
+    catch-up) using real chunk-scanned `present_structure_ids`, generalized
+    over every real `ItemCatalog` placeable id. **Named, honest
+    limitation**: `production_shortfall_quests_for_settlement`'s own narrow
+    real wiring today (`OccupationProduction` only grounds
+    `hunter`→`cooked_meat`/`blacksmith`→`stone_pickaxe`, neither of which
+    has a recipe-producible input) means the "start new work from a real
+    shortfall" branch essentially never finds an actionable one in live
+    play yet — real, tested (including via directly-supplied shortfalls),
+    just not the lived case today; double-fix cancellation does NOT share
+    this limitation (it never reads the shortfalls feed) and is real and
+    reachable today. The Carpentry-skill-gate limitation
+    (`concept/timber_construction.md`'s own framing: this function can never
+    autonomously queue a second Sägewerk, only skill-ungated structures like
+    `storage`) is confirmed by a real test, not left as a comment.
+  - ⬜ **Who becomes a Builder** — still ad hoc-by-design but genuinely
+    unimplemented: no replan-interrupt reassignment of an idle NPC to
+    Builder duty, no pooling of several Builders on one project.
+  - ⬜ **A live Builder spawner, and player-hired Builders** — deliberately
+    still unbuilt: every real structure the decision function above can
+    currently queue is a single-tile placeable the ALREADY-REAL offscreen
+    labor catch-up completes in one shot
+    (`_place_completed_construction_project`/`build_at_global`) — there is
+    no real multi-piece target yet for an onscreen `BuilderMarker` to place
+    piece-by-piece, unlike `_stamp_house`'s own house-construction case
+    (deliberately kept OUT of the `ConstructionProject` ledger during its
+    own retirement, to avoid a real house-id-scheme collision). Both stay
+    blocked on a future pass giving multi-piece, ledger-tracked construction
+    a real target to place.
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +

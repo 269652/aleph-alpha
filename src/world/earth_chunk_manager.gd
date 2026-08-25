@@ -69,6 +69,8 @@ const MarketStorePersistence = preload("res://src/emergence/market_store_persist
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
 const ConstructionProjectStore = preload("res://src/emergence/construction_project_store.gd")
+const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_capacity.gd")
+const SettlementBuildDecision = preload("res://src/emergence/settlement_build_decision.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
 const InstitutionStorePersistence = preload("res://src/emergence/institution_store_persistence.gd")
@@ -1516,13 +1518,24 @@ func _current_hour_of_day() -> int:
 ## way a recorded "quest offered" event could once the shortage it named
 ## resolves.
 func production_shortfall_quests_for_settlement(settlement_id: String) -> Array:
+	var household_occupations := _household_occupations_for_settlement(settlement_id)
+	var market := _market_store.market_for(settlement_id)
+	return Quest.production_shortfall_quests_for(settlement_id, household_occupations, market, _recipe_book)
+
+
+## household_id -> occupation for every household in `settlement_id` with a
+## real, known occupation -- the shape production_shortfall_quests_for_
+## settlement above ALREADY built inline; lifted out so SettlementSpareCapacity
+## (docs/concept/timber_construction.md's "Deciding what to build, and who
+## builds it" section) can read the SAME real map rather than a second,
+## separately-derived copy of it.
+func _household_occupations_for_settlement(settlement_id: String) -> Dictionary:
 	var household_occupations: Dictionary = {}
 	for household_id in _households_in_settlement(settlement_id):
 		var occupation := _occupation_of_household(household_id)
 		if occupation != "":
 			household_occupations[household_id] = occupation
-	var market := _market_store.market_for(settlement_id)
-	return Quest.production_shortfall_quests_for(settlement_id, household_occupations, market, _recipe_book)
+	return household_occupations
 
 
 ## Settlement assessment cadence: every SETTLEMENT_STEP_INTERVAL of real
@@ -5521,6 +5534,34 @@ func has_structure_near(global_x: int, global_y: int, structure_id: String, radi
 	return false
 
 
+## Half the chunk size: the Chebyshev distance from a chunk's own CENTER
+## tile to any of its four edges is exactly CHUNK_SIZE/2 -- the natural scan
+## radius for "is a structure present anywhere in this settlement's own
+## chunk" from that center tile (see
+## _present_structure_ids_for_settlement_chunk below), reusing has_structure_
+## near's own real distance metric rather than inventing a second one.
+const SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES := CHUNK_SIZE / 2
+
+## Every real placeable structure id (ItemCatalog "placeable" kind --
+## sagewerk/storage/campfire/furnace, generalized over every future one too,
+## not hardcoded to just today's two construction-relevant ids) actually
+## present within SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES of `chunk_coord`'s
+## own center tile -- the real `present_structure_ids` ConstructionPriority.
+## decide/SettlementBuildDecision need (see docs/concept/timber_
+## construction.md's "Deciding what to build, and who builds it" section),
+## derived the SAME has_structure_near chunk-scan style every other real
+## structure-presence check in this file already uses.
+func _present_structure_ids_for_settlement_chunk(chunk_coord: Vector2i) -> Array:
+	var center := chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+	var present: Array = []
+	for item_id in _item_catalog.known_ids():
+		if _item_catalog.kind_of(item_id) != "placeable":
+			continue
+		if has_structure_near(center.x, center.y, item_id, SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES):
+			present.append(item_id)
+	return present
+
+
 ## Keeps `_sagewerk_lumberjacks` in sync with a modification change at
 ## `local_cell`: a tile that just BECAME "sagewerk" gets staffed (if it
 ## isn't already -- rebuilding the same tile twice must not double-spawn), a
@@ -6092,6 +6133,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
 	)
 
+	# Settlement build decision (see _apply_settlement_build_decision's own
+	# doc comment) runs BEFORE construction labor catch-up -- a project this
+	# call decides to abandon (double-fix cancellation) or start is resolved
+	# before the labor/completion sync below runs against it, not racing it.
+	_apply_settlement_build_decision(chunk_coord)
+
 	# Construction labor catch-up (see _apply_construction_labor_catchup's
 	# own doc comment) -- last, so it runs against a chunk that is already
 	# fully loaded (statics/collision/lumberjack/logistics wiring all
@@ -6220,21 +6267,31 @@ func _apply_piece_condition_catchup(chunk_coord: Vector2i, chunk: Chunk) -> void
 ## Advances every real IN_PROGRESS ConstructionProject sited at `chunk_coord`
 ## by however long this chunk sat unloaded, mirroring _apply_ecology_catchup/
 ## _apply_piece_condition_catchup's own identical "no-op with no in-session
-## unload record" shape directly above. builder_count comes from the
-## EXISTING household_count_for_settlement (already real -- see that
-## function's own doc comment), keyed off the SAME settlement_id
-## record_settlement_founded_if_new derives a chunk's settlement under
-## (EntityRef.for_settlement(chunk_coord)) -- not reinvented here. A
-## settlement with no real households yet (household_count_for_settlement
-## == 0) makes zero progress regardless of elapsed time, the exact
-## "population growth is what raises builder_count" throttle this doc's own
-## framing names.
+## unload record" shape directly above. builder_count is real SPARE capacity
+## (SettlementSpareCapacity.for_settlement, docs/concept/timber_
+## construction.md's "Deciding what to build, and who builds it" section),
+## keyed off the SAME settlement_id record_settlement_founded_if_new derives
+## a chunk's settlement under (EntityRef.for_settlement(chunk_coord)) -- not
+## reinvented here.
+##
+## **Corrected (see that section's own "Spare capacity" paragraph)**: this
+## used to pass `float(household_count_for_settlement(settlement_id))` --
+## TOTAL population, not spare capacity, a real bug relative to that
+## section's own design: construction should only ever consume population
+## BEYOND what farmer/hunter/fisher require, never compete with the survival
+## occupations SettlementState.carrying_capacity itself depends on. A
+## settlement whose entire population works a real survival occupation now
+## correctly accrues ZERO construction labor even though household_count_
+## for_settlement is nonzero (see test_earth_chunk_manager.gd's own
+## "construction labor only advances using spare capacity" case) -- the
+## exact "population growth is what raises builder_count" throttle this
+## doc's own framing names, now measuring the real thing it names.
 ##
 ## Deliberately does NOT decide which project to START -- only advances
-## labor on projects that are ALREADY IN_PROGRESS (see this pass's own
-## explicit scope: "which structure should this settlement build next" stays
-## genuinely unspecified, SettlementConstruction.advance is not called from
-## here).
+## labor on projects that are ALREADY IN_PROGRESS. Deciding WHICH project to
+## start next is _apply_settlement_build_decision's own job, called
+## alongside this one from _load_chunk (see that function's own doc
+## comment) -- this function stays scoped to advancing what already exists.
 func _apply_construction_labor_catchup(chunk_coord: Vector2i) -> void:
 	if not _unloaded_construction_labor.has(chunk_coord):
 		return
@@ -6245,13 +6302,77 @@ func _apply_construction_labor_catchup(chunk_coord: Vector2i) -> void:
 		return
 
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	var capacity := {"builder_count": float(household_count_for_settlement(settlement_id))}
+	var household_occupations := _household_occupations_for_settlement(settlement_id)
+	var spare_capacity := SettlementSpareCapacity.for_settlement(
+		household_count_for_settlement(settlement_id), household_occupations
+	)
+	var capacity := {"builder_count": float(spare_capacity)}
 	for project in _construction_project_store.in_progress_projects_in_chunk(chunk_coord):
 		var result: Dictionary = _construction_project_store.advance_project_labor(
 			project.id, elapsed, capacity, _recipe_book, _household_store
 		)
 		if result.get("action", "") == "completed":
 			_place_completed_construction_project(project)
+
+
+## The real, live chunk-load caller for docs/concept/timber_construction.md's
+## "Deciding what to build, and who builds it" section: gives a settlement
+## the chance to decide WHICH project to start next (SettlementBuildDecision,
+## which also composes the "double-fix cancellation" sweep), closing the gap
+## _apply_construction_labor_catchup's own doc comment names ("this used to
+## only ever advance real, already-reserved-material work... 'which
+## structure should this settlement build next' ... remains unimplemented").
+##
+## Deliberately runs on EVERY real chunk load, NOT gated on
+## `_unloaded_construction_labor`'s own "was there already in-progress work"
+## record above -- a settlement with ZERO in-progress projects still needs a
+## real chance to decide whether to START one; gating on that record would
+## mean a settlement that has never yet started building could never be
+## reached by this call at all. Runs BEFORE _apply_construction_labor_catchup
+## (called right after this one, see the shared call site in _load_chunk) so
+## a project this SAME call decides to abandon or start is resolved before
+## the completed-work sync runs, not racing it.
+##
+## No-ops for a chunk with no real households (household_count_for_settlement
+## == 0) -- an ordinary wilderness chunk has no settlement decision to make,
+## and this avoids the real shortfall/structure-scan work below for the vast
+## majority of chunks that are not settlements at all.
+##
+## **Named, honest limitation** (see docs/concept/timber_construction.md's
+## own "Deciding what to build" section for the fuller account): `origin` is
+## `Vector2i.ZERO` -- bookkeeping only, the SAME "not real siting" honest gap
+## SettlementConstruction._handle_build_producer_first's own queued producer
+## project already carries (this pass does not add a real placement/
+## collision algorithm either). `household_id` is the settlement's own
+## lexicographically-first household id -- deterministic, but an arbitrary
+## real household to credit a communal structure's eventual property to;
+## there is no real "settlement-owned" property concept yet to grant it to
+## instead. And per production_shortfall_quests_for_settlement's own real,
+## narrow wiring (OccupationProduction only grounds "hunter"->cooked_meat and
+## "blacksmith"->stone_pickaxe today, and NEITHER recipe requires a
+## structure) -- this real decision can genuinely fire (double-fix
+## cancellation is real and reachable today, see test_earth_chunk_manager.gd),
+## but the "start a producer project from a real detected shortfall" branch
+## essentially never finds an actionable one in real play yet, honestly, the
+## same "real, reachable, but rarely the lived case today" honesty this doc's
+## VillageRenderer._stamp_house partial-completion entry already carries.
+func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return
+	household_ids.sort()
+
+	var household_occupations := _household_occupations_for_settlement(settlement_id)
+	var spare_capacity := SettlementSpareCapacity.for_settlement(household_ids.size(), household_occupations)
+	var market := _market_store.market_for(settlement_id)
+	var present_structure_ids := _present_structure_ids_for_settlement_chunk(chunk_coord)
+	var shortfalls := production_shortfall_quests_for_settlement(settlement_id)
+
+	SettlementBuildDecision.decide_and_advance(
+		_construction_project_store, market, chunk_coord, Vector2i.ZERO, household_ids[0],
+		present_structure_ids, _recipe_book, shortfalls, spare_capacity
+	)
 
 
 ## Closes docs/concept/timber_construction.md's own previously-named gap:
