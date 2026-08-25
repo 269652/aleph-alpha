@@ -423,13 +423,18 @@ var _sagewerk_lumberjacks: Dictionary = {}
 ## Every Logistics worker autonomously spawned for a Sägewerk+Storage pair
 ## (see docs/concept/timber_construction.md's "Storage, logistics, and the
 ## autonomous dependency chain" section) -- chunk_coord -> {Vector2i
-## local_cell (the SÄGEWERK's own cell, NOT Storage's) -> {item_id ->
-## LogisticsMarker}}, mirroring _sagewerk_lumberjacks' own per-chunk
-## dict-of-cells shape. Keyed off the Sägewerk's own position: today's
-## simplest correct implementation pairs each Sägewerk with only the
-## single nearest Storage it can find (see
-## _resync_logistics_for_sagewerk) -- a Sägewerk feeding more than one
-## Storage at once is a real, honestly-named constraint, not modeled here.
+## local_cell (the SÄGEWERK's own cell, NOT any Storage's) -> {storage_key
+## -> {item_id -> LogisticsMarker}}}, mirroring _sagewerk_lumberjacks' own
+## per-chunk dict-of-cells shape one level deeper. A Sägewerk pairs with
+## EVERY real Storage within SAGEWERK_STORAGE_PAIR_RADIUS_TILES, not just
+## the single nearest one -- the innermost dict is one full worker-pair
+## (one LogisticsMarker per _SAGEWERK_LOGISTICS_ITEM_IDS entry) per paired
+## Storage, keyed by that Storage's own position via
+## _storage_pairing_key (see _resync_logistics_for_sagewerk), the same
+## "position, not structure id, is the identity" reasoning
+## _structure_stock_key already uses -- so a specific Storage's own workers
+## can be despawned independently of another paired Storage's when it drops
+## out of range or is destroyed.
 var _logistics_workers: Dictionary = {}
 
 ## Which real items a Logistics worker gets spawned for, one worker per id
@@ -5295,7 +5300,7 @@ func _despawn_lumberjack_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void
 ## stopping being a Sägewerk (re-decide staffing for exactly this cell), or
 ## a Storage appearing/disappearing anywhere nearby (re-decide staffing for
 ## EVERY already-known Sägewerk, since any one of them might have just
-## gained or lost its nearest Storage). Called AFTER _sync_sagewerk_
+## gained or lost one of its paired Storages). Called AFTER _sync_sagewerk_
 ## lumberjack in both build_at_global/destroy_at_global, so
 ## `_sagewerk_lumberjacks` already reflects this change by the time this
 ## runs.
@@ -5312,12 +5317,16 @@ func _sync_logistics_workers(
 
 ## Re-decides whether the Sägewerk at (chunk_coord, local_cell) -- if one is
 ## actually there right now, per `_sagewerk_lumberjacks` -- should have
-## Logistics workers: exactly one per `_SAGEWERK_LOGISTICS_ITEM_IDS` entry
-## once a real Storage is within SAGEWERK_STORAGE_PAIR_RADIUS_TILES, none
-## otherwise. Safe to call redundantly -- a no-op both ways once already in
-## the correct state (see the "already staffed" guard below), so callers
-## don't need to know which of _sync_logistics_workers' two independent
-## triggers actually applies.
+## Logistics workers: one full worker-pair (one per
+## `_SAGEWERK_LOGISTICS_ITEM_IDS` entry) per real Storage currently within
+## SAGEWERK_STORAGE_PAIR_RADIUS_TILES -- EVERY Storage in range, not just
+## the nearest one. Reconciles rather than blindly spawning: a Storage
+## newly in range gets a fresh pair, a previously-paired Storage no longer
+## in range/present has its own pair despawned, and an already-correctly-
+## staffed pair is left alone. Safe to call redundantly -- a no-op for
+## already-staffed Storages (see the "already staffed" guard below), so
+## callers don't need to know which of _sync_logistics_workers' two
+## independent triggers actually applies.
 func _resync_logistics_for_sagewerk(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
 	if not _sagewerk_lumberjacks.get(chunk_coord, {}).has(local_cell):
 		_despawn_logistics_workers_at(chunk_coord, local_cell)
@@ -5325,39 +5334,71 @@ func _resync_logistics_for_sagewerk(chunk_coord: Vector2i, local_cell: Vector2i)
 
 	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
 	var sagewerk_pixel := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
-	var storage_found = nearest_structure_position(
+	var storages_found: Array[Vector2] = nearby_structure_positions(
 		sagewerk_pixel, "storage", float(SAGEWERK_STORAGE_PAIR_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
 	)
-	if storage_found == null:
+	if storages_found.is_empty():
 		_despawn_logistics_workers_at(chunk_coord, local_cell)
 		return
 
-	if _logistics_workers.get(chunk_coord, {}).has(local_cell):
-		return  # already staffed -- a redundant sync call must not double-spawn
+	var by_storage: Dictionary = _logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+
+	var in_range_keys := {}
+	for storage_pixel in storages_found:
+		var key := _storage_pairing_key(storage_pixel)
+		in_range_keys[key] = true
+		if by_storage.has(key):
+			continue  # already staffed for this specific Storage -- no double-spawn
+		var by_item: Dictionary = {}
+		for item_id in _SAGEWERK_LOGISTICS_ITEM_IDS:
+			var marker := LogisticsMarker.new()
+			marker.earth = self
+			marker.item_id = item_id
+			marker.source_structure_id = "sagewerk"
+			marker.storage_structure_id = "storage"
+			marker.search_radius_tiles = SAGEWERK_STORAGE_PAIR_RADIUS_TILES
+			marker.position = sagewerk_pixel
+			marker.preferred_storage_position = storage_pixel
+			_entities_parent.add_child(marker)
+			by_item[item_id] = marker
+		by_storage[key] = by_item
+
+	# A previously-paired Storage that dropped out of range (or was
+	# destroyed) gets its OWN pair despawned -- the other paired Storages'
+	# own workers are untouched.
+	for key in by_storage.keys().duplicate():
+		if not in_range_keys.has(key):
+			for marker in by_storage[key].values():
+				marker.free()
+			by_storage.erase(key)
 
 	if not _logistics_workers.has(chunk_coord):
 		_logistics_workers[chunk_coord] = {}
-	var by_item: Dictionary = {}
-	for item_id in _SAGEWERK_LOGISTICS_ITEM_IDS:
-		var marker := LogisticsMarker.new()
-		marker.earth = self
-		marker.item_id = item_id
-		marker.source_structure_id = "sagewerk"
-		marker.storage_structure_id = "storage"
-		marker.search_radius_tiles = SAGEWERK_STORAGE_PAIR_RADIUS_TILES
-		marker.position = sagewerk_pixel
-		_entities_parent.add_child(marker)
-		by_item[item_id] = marker
-	_logistics_workers[chunk_coord][local_cell] = by_item
+	_logistics_workers[chunk_coord][local_cell] = by_storage
+
+
+## The stable key one paired Storage resolves to under a Sägewerk's own
+## `_logistics_workers` entry -- position, not structure id, is the
+## identity, the exact same "%d_%d" position-keying pattern
+## `_structure_stock_key` already uses (two Storages never share an
+## identity, the same way they never share a stock). Takes
+## nearby_structure_positions' own tile-center pixel return shape.
+func _storage_pairing_key(storage_pixel_position: Vector2) -> String:
+	var tile := Vector2i(
+		floori(storage_pixel_position.x / TerrainRenderer.TILE_SIZE),
+		floori(storage_pixel_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	return _structure_stock_key(tile.x, tile.y)
 
 
 func _despawn_logistics_workers_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
 	var by_cell: Dictionary = _logistics_workers.get(chunk_coord, {})
-	var by_item = by_cell.get(local_cell)
-	if by_item == null:
+	var by_storage = by_cell.get(local_cell)
+	if by_storage == null:
 		return
-	for marker in by_item.values():
-		marker.free()
+	for by_item in by_storage.values():
+		for marker in by_item.values():
+			marker.free()
 	by_cell.erase(local_cell)
 
 
@@ -5521,6 +5562,44 @@ func nearest_structure_position(pixel_position: Vector2, structure_id: String, m
 	if not found:
 		return null
 	return nearest
+
+
+## Every matching structure's pixel-space tile center within `max_distance`
+## of `pixel_position` -- the ALL-matches counterpart to
+## nearest_structure_position's single-closest answer (see its own doc
+## comment), reusing the exact same chunk-Chebyshev-radius-1 scan loop, just
+## collecting every match instead of tracking one nearest. Closes this doc's
+## own previously-named honest constraint: "a Sägewerk pairs with only its
+## single nearest Storage, not every Storage within range" (see
+## _resync_logistics_for_sagewerk, docs/concept/timber_construction.md's
+## "Storage, logistics, and the autonomous dependency chain" section).
+## nearest_structure_position itself is unchanged -- other callers (and
+## LogisticsMarker's own single-storage fallback lookup) still need "just
+## the closest one."
+func nearby_structure_positions(pixel_position: Vector2, structure_id: String, max_distance: float) -> Array[Vector2]:
+	var query_tile := Vector2i(
+		floori(pixel_position.x / TerrainRenderer.TILE_SIZE), floori(pixel_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	var center_chunk := _chunk_coord_for_tile(query_tile)
+	var found: Array[Vector2] = []
+
+	for chunk_coord in chunks_in_radius(center_chunk, 1):
+		var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+		if chunk == null:
+			continue
+		var origin := chunk_coord * CHUNK_SIZE
+		for local_coord in chunk.modifications:
+			if chunk.modifications[local_coord] != structure_id:
+				continue
+			var tile_global: Vector2i = origin + local_coord
+			var tile_pixel := (
+				Vector2(tile_global) * TerrainRenderer.TILE_SIZE
+				+ Vector2.ONE * (TerrainRenderer.TILE_SIZE * 0.5)
+			)
+			var distance: float = pixel_position.distance_to(tile_pixel)
+			if distance <= max_distance:
+				found.append(tile_pixel)
+	return found
 
 
 ## The stock key a structure's own tile position resolves to -- position, not
@@ -5838,9 +5917,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		marker.free()
 	_sagewerk_lumberjacks.erase(chunk_coord)
 
-	for by_item in _logistics_workers.get(chunk_coord, {}).values():
-		for marker in by_item.values():
-			marker.free()
+	for by_storage in _logistics_workers.get(chunk_coord, {}).values():
+		for by_item in by_storage.values():
+			for marker in by_item.values():
+				marker.free()
 	_logistics_workers.erase(chunk_coord)
 	# This chunk may have held the Storage (or Sägewerk) a worker elsewhere
 	# was paired against -- re-decide every REMAINING known Sägewerk's

@@ -3417,20 +3417,21 @@ generic Storage/Logistics/`ConstructionPriority` layer — now live end to
 end (2026-08-25 follow-up pass): the Sägewerk's own output credits
 `StructureStock` instead of dropping on the ground, a player without
 Storage/Logistics collects it directly (`Player._collect_step`), a
-Sägewerk+Storage pair auto-spawns its Logistics workers, and
-`ConstructionPriority.decide` now calls the real `NeedResolver`. A third
-slice landed 2026-08-25 (follow-up pass): real statics — a support graph
-over the piece grid, with real grace-period collapse and material
-drop-back, event-driven off `build_at_global`/`destroy_at_global`/
-`stamp_structure_at_global`. See the concept doc's own Status section for
-the full accounting, including the one honest constraint carried forward
-from the Storage/Logistics slice (a Sägewerk pairs with only its single
-nearest Storage), statics' own named limitation (no independent per-frame
-poll yet advancing an idle at-risk structure's grace clock — it only
-re-checks when a further edit touches that structure), and what's still
-not wired (no settlement-decision system yet calls
-`ConstructionPriority.decide`). Withering, the settlement construction
-ledger, and offscreen catch-up remain entirely unbuilt.
+Sägewerk+Storage pair auto-spawns its Logistics workers, now paired with
+EVERY real Storage in range rather than just the single nearest one
+(closed 2026-08-25), and `ConstructionPriority.decide` now calls the real
+`NeedResolver`. A third and fourth slice landed 2026-08-25 (a further
+follow-up pass, run in parallel): real statics — a support graph over the
+piece grid, with real grace-period collapse and material drop-back,
+event-driven off `build_at_global`/`destroy_at_global`/
+`stamp_structure_at_global` — and the multi-Storage pairing fix above. See
+the concept doc's own Status section for the full accounting, including
+statics' own named limitation (no independent per-frame poll yet advancing
+an idle at-risk structure's grace clock — it only re-checks when a further
+edit touches that structure) and what's still not wired (no
+settlement-decision system yet calls `ConstructionPriority.decide`).
+Withering, the settlement construction ledger, and offscreen catch-up
+remain entirely unbuilt.
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
@@ -3538,23 +3539,35 @@ ledger, and offscreen catch-up remain entirely unbuilt.
   (medium) — ✅ Done, and now live (2026-08-25 follow-up pass).
   `LogisticsBehavior` (pure FSM, mirrors `CarrionForageBehavior`'s split) +
   `LogisticsMarker` (engine glue, mirrors `DecomposerMarker`) collect real
-  stock from a source structure and deposit it into the nearest real
-  Storage, end to end (`test_logistics_behavior.gd`,
-  `test_logistics_marker.gd`). The Sägewerk's own real output now feeds a
-  source's stock directly (see the shaping-pipeline bullet above), and
-  `EarthChunkManager._resync_logistics_for_sagewerk` auto-spawns exactly
-  two workers (one per real output item: `beam`, `plank`) the moment a
-  real Sägewerk and a real Storage are both present within
-  `SAGEWERK_STORAGE_PAIR_RADIUS_TILES` of each other — mirroring
-  `_sagewerk_lumberjacks`' own sync-on-modification-change wiring exactly,
-  tracked chunk_coord → local_cell (the Sägewerk's own cell) → workers.
-  Re-syncs on build/destroy of either structure and on chunk load/unload;
-  a redundant sync does not double-spawn. **Named, honest constraint**: a
-  Sägewerk pairs with only its single nearest Storage, not every Storage
-  within range. Tested in `test_earth_chunk_manager.gd`'s Storage/Logistics
-  section (no nearby Storage spawns nothing; a nearby Storage spawns
-  exactly two regardless of build order or resync count; destroying either
-  structure despawns them).
+  stock from a source structure and deposit it into a real Storage, end to
+  end (`test_logistics_behavior.gd`, `test_logistics_marker.gd`). The
+  Sägewerk's own real output now feeds a source's stock directly (see the
+  shaping-pipeline bullet above), and
+  `EarthChunkManager._resync_logistics_for_sagewerk` auto-spawns one
+  worker-pair (one per real output item: `beam`, `plank`) for EVERY real
+  Storage within `SAGEWERK_STORAGE_PAIR_RADIUS_TILES` of a real Sägewerk —
+  closed 2026-08-25: this previously paired with only the single nearest
+  Storage. A new `EarthChunkManager.nearby_structure_positions` accessor
+  (the ALL-matches counterpart to `nearest_structure_position`) finds
+  every candidate; `_logistics_workers` grew a storage-keyed level
+  (chunk_coord → local_cell → storage_key → `{item_id -> LogisticsMarker}`,
+  keyed by `_storage_pairing_key`, the same position-keying pattern
+  `_structure_stock_key` uses) so each paired Storage's own workers can be
+  despawned independently; and a new `LogisticsMarker.
+  preferred_storage_position` field pins a worker to its own paired
+  Storage so its real deliveries land there instead of wherever
+  `nearest_structure_position` would otherwise have picked (left
+  unset/null, existing single-storage callers are unaffected). Re-syncs on
+  build/destroy of either structure and on chunk load/unload; a redundant
+  sync does not double-spawn, and reconciliation is per-Storage (a
+  Storage dropping out of range despawns only its own pair). Tested in
+  `test_earth_chunk_manager.gd`'s Storage/Logistics section (two real
+  Storages in range each get their own full worker-pair — four workers
+  total; each pair's deliveries land in its own paired Storage's stock;
+  destroying one of two paired Storages despawns only its own pair; the
+  single-Storage case is unchanged) and `test_logistics_marker.gd`
+  (`preferred_storage_position` unset falls back to the old dynamic
+  lookup; set, it overrides a closer Storage).
 - **Dependency-chain priority function** (small) — ✅ Done, and rebuilt on
   the real `NeedResolver` (2026-08-25 follow-up pass).
   `ConstructionPriority.decide` (`src/gameplay/construction_priority.gd`)

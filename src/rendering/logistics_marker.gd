@@ -40,6 +40,20 @@ var item_id := ""
 var storage_structure_id := "storage"
 var search_radius_tiles := 20
 
+## Optional pixel-space override (Vector2, null when unset) for WHICH real
+## Storage this specific worker carries to, set by a caller that has already
+## paired this worker with one particular Storage among several in range
+## (see EarthChunkManager._resync_logistics_for_sagewerk and
+## docs/concept/timber_construction.md's own previously-named honest
+## constraint this closes). Without this, every worker's own dynamic
+## nearest_structure_position lookup would independently converge on the
+## SAME single nearest Storage regardless of which one it was nominally
+## paired with, defeating multi-storage pairing entirely. Left unset
+## (null), _collect_from_source falls back to the original dynamic
+## nearest_structure_position lookup unchanged -- additive, not a breaking
+## change to any existing single-storage caller.
+var preferred_storage_position = null
+
 ## Late-bound world reference, the same pattern other markers use for their
 ## EarthChunkManager access (e.g. AmbientFlyerMarker's own worm/flower
 ## lookups) -- set by whatever spawns this marker.
@@ -122,9 +136,16 @@ func _collect_from_source() -> void:
 		_behavior.abort()
 		return
 	earth.withdraw_from_structure_at(source_tile.x, source_tile.y, item_id, amount)
-	var storage_position = earth.nearest_structure_position(
-		position, storage_structure_id, float(search_radius_tiles) * TerrainRenderer.TILE_SIZE
-	)
+	# A caller that already paired this worker with one specific Storage
+	# (see preferred_storage_position's own doc comment) wins outright over
+	# the dynamic "whichever is nearest right now" lookup -- otherwise every
+	# worker paired to the same Sägewerk would independently re-discover the
+	# SAME nearest Storage regardless of its own pairing.
+	var storage_position = preferred_storage_position
+	if storage_position == null:
+		storage_position = earth.nearest_structure_position(
+			position, storage_structure_id, float(search_radius_tiles) * TerrainRenderer.TILE_SIZE
+		)
 	if storage_position == null:
 		earth.deposit_to_structure_at(source_tile.x, source_tile.y, item_id, amount)  # put it back
 		_behavior.abort()
