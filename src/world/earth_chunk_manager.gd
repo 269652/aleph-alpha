@@ -23,6 +23,7 @@ const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
 const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
+const LogisticsMarker = preload("res://src/rendering/logistics_marker.gd")
 const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
@@ -417,6 +418,33 @@ var _decomposer_markers: Dictionary = {}
 ## known/documented gap (see docs/progress.md), same class of limitation as
 ## geology's mined-tunnel state.
 var _sagewerk_lumberjacks: Dictionary = {}
+
+## Every Logistics worker autonomously spawned for a Sägewerk+Storage pair
+## (see docs/concept/timber_construction.md's "Storage, logistics, and the
+## autonomous dependency chain" section) -- chunk_coord -> {Vector2i
+## local_cell (the SÄGEWERK's own cell, NOT Storage's) -> {item_id ->
+## LogisticsMarker}}, mirroring _sagewerk_lumberjacks' own per-chunk
+## dict-of-cells shape. Keyed off the Sägewerk's own position: today's
+## simplest correct implementation pairs each Sägewerk with only the
+## single nearest Storage it can find (see
+## _resync_logistics_for_sagewerk) -- a Sägewerk feeding more than one
+## Storage at once is a real, honestly-named constraint, not modeled here.
+var _logistics_workers: Dictionary = {}
+
+## Which real items a Logistics worker gets spawned for, one worker per id
+## -- today's only real accumulating-output producer (the Sägewerk) has
+## exactly these two (see SagewerkProduction), matching LogisticsMarker's
+## own one-item-id-per-worker design (see its own class doc comment) rather
+## than changing that design to carry a list.
+const _SAGEWERK_LOGISTICS_ITEM_IDS := ["beam", "plank"]
+
+## How far (in tiles) a Storage may be from a Sägewerk and still count as
+## "the same worksite" for auto-spawning Logistics workers -- matches
+## LogisticsMarker's own default `search_radius_tiles`: spawning a worker
+## whose own search radius could never reach the Storage it was paired for
+## would be a real worker that can never actually find its destination.
+const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
+
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
 var _scrub_refresh_accumulator := 0.0
@@ -5056,6 +5084,7 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
+	_sync_logistics_workers(chunk_coord, local, previous_tile_id, tile_id)
 	return true
 
 
@@ -5075,6 +5104,7 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_remove_piece_collision(Vector2i(global_x, global_y))
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
+	_sync_logistics_workers(chunk_coord, local, previous_tile_id, "")
 	return true
 
 
@@ -5226,6 +5256,77 @@ func _despawn_lumberjack_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void
 	if marker == null:
 		return
 	marker.free()
+	by_cell.erase(local_cell)
+
+
+## Keeps `_logistics_workers` in sync with a modification change at
+## `local_cell`. Two independent triggers matter: the tile itself becoming/
+## stopping being a Sägewerk (re-decide staffing for exactly this cell), or
+## a Storage appearing/disappearing anywhere nearby (re-decide staffing for
+## EVERY already-known Sägewerk, since any one of them might have just
+## gained or lost its nearest Storage). Called AFTER _sync_sagewerk_
+## lumberjack in both build_at_global/destroy_at_global, so
+## `_sagewerk_lumberjacks` already reflects this change by the time this
+## runs.
+func _sync_logistics_workers(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	if previous_tile_id == "sagewerk" or new_tile_id == "sagewerk":
+		_resync_logistics_for_sagewerk(chunk_coord, local_cell)
+	if previous_tile_id == "storage" or new_tile_id == "storage":
+		for sagewerk_chunk_coord in _sagewerk_lumberjacks:
+			for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
+				_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
+
+
+## Re-decides whether the Sägewerk at (chunk_coord, local_cell) -- if one is
+## actually there right now, per `_sagewerk_lumberjacks` -- should have
+## Logistics workers: exactly one per `_SAGEWERK_LOGISTICS_ITEM_IDS` entry
+## once a real Storage is within SAGEWERK_STORAGE_PAIR_RADIUS_TILES, none
+## otherwise. Safe to call redundantly -- a no-op both ways once already in
+## the correct state (see the "already staffed" guard below), so callers
+## don't need to know which of _sync_logistics_workers' two independent
+## triggers actually applies.
+func _resync_logistics_for_sagewerk(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	if not _sagewerk_lumberjacks.get(chunk_coord, {}).has(local_cell):
+		_despawn_logistics_workers_at(chunk_coord, local_cell)
+		return
+
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var sagewerk_pixel := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var storage_found = nearest_structure_position(
+		sagewerk_pixel, "storage", float(SAGEWERK_STORAGE_PAIR_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	)
+	if storage_found == null:
+		_despawn_logistics_workers_at(chunk_coord, local_cell)
+		return
+
+	if _logistics_workers.get(chunk_coord, {}).has(local_cell):
+		return  # already staffed -- a redundant sync call must not double-spawn
+
+	if not _logistics_workers.has(chunk_coord):
+		_logistics_workers[chunk_coord] = {}
+	var by_item: Dictionary = {}
+	for item_id in _SAGEWERK_LOGISTICS_ITEM_IDS:
+		var marker := LogisticsMarker.new()
+		marker.earth = self
+		marker.item_id = item_id
+		marker.source_structure_id = "sagewerk"
+		marker.storage_structure_id = "storage"
+		marker.search_radius_tiles = SAGEWERK_STORAGE_PAIR_RADIUS_TILES
+		marker.position = sagewerk_pixel
+		_entities_parent.add_child(marker)
+		by_item[item_id] = marker
+	_logistics_workers[chunk_coord][local_cell] = by_item
+
+
+func _despawn_logistics_workers_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	var by_cell: Dictionary = _logistics_workers.get(chunk_coord, {})
+	var by_item = by_cell.get(local_cell)
+	if by_item == null:
+		return
+	for marker in by_item.values():
+		marker.free()
 	by_cell.erase(local_cell)
 
 
@@ -5393,6 +5494,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	for local_cell in chunk.modifications:
 		if chunk.modifications[local_cell] == "sagewerk":
 			_spawn_lumberjack_for(chunk_coord, local_cell)
+
+	# A freshly (re)loaded chunk can bring either a Sägewerk or a Storage
+	# into range of a Sägewerk that was already staffed -- re-decide every
+	# currently-known Sägewerk's Logistics staffing, the same broad resync
+	# _sync_logistics_workers' own "storage changed" trigger uses.
+	for sagewerk_chunk_coord in _sagewerk_lumberjacks:
+		for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
+			_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
 
 	_flower_patches[chunk_coord] = FlowerPatch.new(
 		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
@@ -5576,6 +5685,18 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for marker in _sagewerk_lumberjacks.get(chunk_coord, {}).values():
 		marker.free()
 	_sagewerk_lumberjacks.erase(chunk_coord)
+
+	for by_item in _logistics_workers.get(chunk_coord, {}).values():
+		for marker in by_item.values():
+			marker.free()
+	_logistics_workers.erase(chunk_coord)
+	# This chunk may have held the Storage (or Sägewerk) a worker elsewhere
+	# was paired against -- re-decide every REMAINING known Sägewerk's
+	# Logistics staffing now that this chunk's own structures are gone,
+	# mirroring _load_chunk's own identical broad resync on the way in.
+	for sagewerk_chunk_coord in _sagewerk_lumberjacks:
+		for sagewerk_local_cell in _sagewerk_lumberjacks[sagewerk_chunk_coord]:
+			_resync_logistics_for_sagewerk(sagewerk_chunk_coord, sagewerk_local_cell)
 
 	for sprite in _flower_sprites.get(chunk_coord, {}).values():
 		sprite.free()

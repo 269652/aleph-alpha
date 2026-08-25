@@ -362,6 +362,47 @@ func test_craft_sagewerk_succeeds_with_enough_carpentry_skill():
 	assert_eq(player.inventory_counts().get("sagewerk", 0), 1)
 
 
+# -- collecting a Sägewerk's real StructureStock straight into inventory ------
+#
+# docs/concept/timber_construction.md's "Storage, logistics, and the
+# autonomous dependency chain" section: shaped beam/plank now credits the
+# Sägewerk's own StructureStock instead of dropping on the ground (see
+# LumberjackMarker._step_production) -- a player with no Storage/Logistics
+# built yet needs a real, direct way to collect it, mirroring the swing-driven
+# interaction convention _chop_step/_butcher_step already establish.
+
+func test_collect_step_withdraws_real_beam_and_plank_stock_into_inventory():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "sagewerk")
+	chunk_manager.deposit_to_structure_at(tile.x + 1, tile.y, "beam", 3)
+	chunk_manager.deposit_to_structure_at(tile.x + 1, tile.y, "plank", 2)
+
+	player._collect_step()
+
+	assert_eq(player.inventory_counts().get("beam", 0), 3)
+	assert_eq(player.inventory_counts().get("plank", 0), 2)
+	assert_eq(chunk_manager.structure_stock_at(tile.x + 1, tile.y, "beam"), 0)
+	assert_eq(chunk_manager.structure_stock_at(tile.x + 1, tile.y, "plank"), 0)
+
+
+func test_collect_step_no_ops_with_a_nearby_sagewerk_but_nothing_stocked():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "sagewerk")
+
+	player._collect_step()
+
+	assert_eq(player.inventory_counts().get("beam", 0), 0)
+	assert_eq(player.inventory_counts().get("plank", 0), 0)
+
+
+func test_collect_step_no_ops_with_no_sagewerk_nearby():
+	chunk_manager.deposit_to_structure_at(0, 0, "beam", 3)  # nowhere real, no sagewerk built
+
+	player._collect_step()
+
+	assert_eq(player.inventory_counts().get("beam", 0), 0)
+
+
 # -- catching a real, visible fish flavors the catch message ------------------
 #
 # The abstract fishing minigame (see FishingSession/FishingMinigame) already

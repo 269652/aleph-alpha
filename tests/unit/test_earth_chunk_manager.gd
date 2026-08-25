@@ -3287,6 +3287,97 @@ func test_reloading_a_chunk_with_a_persisted_sagewerk_respawns_its_lumberjack():
 	_remove_persisted_modifications(chunk_coord)
 
 
+# -- Storage/Logistics: "if both production buildings and storage exist, new
+# NPCs may move in which handle logistics" (docs/concept/timber_
+# construction.md's "Storage, logistics, and the autonomous dependency
+# chain" section) -- one LogisticsMarker per real output item id
+# (_SAGEWERK_LOGISTICS_ITEM_IDS: beam, plank) once a real Sägewerk AND a
+# real Storage are both present within SAGEWERK_STORAGE_PAIR_RADIUS_TILES
+# of each other, keyed off the Sägewerk's own cell, mirroring
+# _sagewerk_lumberjacks' own per-chunk dict-of-cells shape exactly.
+
+func test_a_sagewerk_with_no_nearby_storage_spawns_no_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+
+	assert_true(
+		manager._logistics_workers.get(chunk_coord, {}).is_empty(),
+		"no Storage nearby -- nothing real for a Logistics worker to carry to"
+	)
+
+
+func test_a_sagewerk_with_a_nearby_storage_spawns_exactly_two_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+
+	var by_item: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	assert_eq(by_item.size(), 2, "one worker per real Sägewerk output item (beam, plank)")
+	assert_true(by_item.has("beam"))
+	assert_true(by_item.has("plank"))
+
+
+## Building the Storage first (before the Sägewerk exists) still ends up
+## staffed once the Sägewerk itself is placed -- the pairing doesn't depend
+## on build order.
+func test_a_storage_built_before_its_sagewerk_still_gets_paired():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+
+	assert_eq(manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).size(), 2)
+
+
+func test_re_syncing_a_staffed_sagewerk_does_not_double_spawn_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+
+	# A second, redundant build on an UNRELATED nearby tile re-triggers the
+	# storage-changed resync path (see _sync_logistics_workers) without
+	# touching the Sägewerk or Storage tiles themselves.
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+
+	assert_eq(manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).size(), 2)
+
+
+func test_destroying_the_sagewerk_despawns_its_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(
+		manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).size(), 2, "precondition"
+	)
+
+	manager.destroy_at_global(_berlin_tile.x, _berlin_tile.y)
+
+	assert_true(manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).is_empty())
+
+
+func test_destroying_the_paired_storage_despawns_its_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(
+		manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).size(), 2, "precondition"
+	)
+
+	manager.destroy_at_global(_berlin_tile.x + 2, _berlin_tile.y)
+
+	assert_true(manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).is_empty())
+
+
 # -- the periodic ecosystem refresh must not rebuild the world ---------------
 #
 # step_ecosystem freed EVERY creature marker in EVERY loaded chunk once a
