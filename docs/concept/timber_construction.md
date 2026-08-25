@@ -650,16 +650,21 @@ placing anything in the world), and a real Builder worker —
 `BuilderBehavior`/`BuilderMarker` — that actually carries
 `CARRY_MATERIAL`/`PLACE_PIECE`, placing one real piece at a time and
 crediting the SAME real `labor_hours_accumulated` field the offscreen
-catch-up writes to ("two fidelities, one truth"). What's still ⬜ is
-retiring `VillageRenderer._stamp_house` (a settlement still gets its houses
-stamped for free at generation time) — plus, honestly, two still-missing
-live decisions: nothing decides WHICH project a settlement should start
-next (`SettlementConstruction.advance` is not called from the new chunk-load
+catch-up writes to ("two fidelities, one truth"). A sixth follow-up pass
+(2026-08-25) closed this doc's own named anti-pattern —
+`VillageRenderer._stamp_house` — for real: see that entry below for the
+exact mechanism (a real, computed completion fraction, reusing this
+section's own labor math as a bare, un-persisted calculation, deliberately
+NOT wired through the `ConstructionProject`/`ConstructionProjectStore`
+ledger — see that entry's own honest account of why). What's still ⬜,
+honestly, are two still-missing live decisions unrelated to that: nothing
+decides WHICH project a settlement should start next
+(`SettlementConstruction.advance` is not called from the new chunk-load
 wiring; only projects ALREADY `IN_PROGRESS` get their labor advanced there),
 and no live spawner yet decides a Builder should exist for a given
 `ConstructionProject` and injects its real `target_pieces` — see each
 entry's own "Named, honest limitations" below for the full account of what
-this pass deliberately left unspecified.
+remains unspecified.
 
 - ✅ **The Sägewerk worksite** — the doc's own generic "sawpit/hewing-block"
   prop, named and built concretely as `sagewerk` (`item_catalog.gd`'s
@@ -988,9 +993,13 @@ this pass deliberately left unspecified.
   building piece-by-piece, and no real caller yet produces a real
   footprint-relative piece layout for a house-shaped `ConstructionProject`.
   `VillageRenderer._stamp_house`'s own retirement — this doc's own named
-  anti-pattern — stays a separate, later task, matching how `LogisticsMarker`
-  itself shipped real and tested before `EarthChunkManager` auto-spawned it
-  in a later pass. Roof pieces are out of scope: `CATEGORY_ROOF` lives in a
+  anti-pattern — was a separate, later task (closed 2026-08-25, a sixth
+  follow-up pass, see that entry below), and it does NOT use this real
+  Builder worker: a village house's physical piece placement is resolved by
+  a bare completion-fraction calculation at stamp time, not by spawning a
+  live `BuilderMarker` per house — the same "reuse the math, not the
+  machinery built for a different ledger" reasoning that entry's own doc
+  comment names explicitly. Roof pieces are out of scope: `CATEGORY_ROOF` lives in a
   SEPARATE `roof_modifications` layer only `stamp_structure_at_global`
   writes to; `build_at_global` (what `BuilderMarker` calls) never touches
   it, mirroring withering/statics' own already-named "roof pieces not yet
@@ -1000,6 +1009,87 @@ this pass deliberately left unspecified.
   one. A Builder's own in-progress state (which piece it is mid-carrying,
   round-robin cursor) is not persisted across a chunk unload/reload, the
   same class of gap the Lumberjack's own shaping progress already has.
+- ✅ **Retiring `VillageRenderer._stamp_house`'s "stamps for free" anti-pattern**
+  (2026-08-25, a sixth follow-up pass) — closes this doc's own explicitly
+  named anti-pattern (see pillar 5 and "Known anti-pattern this doc
+  replaces" below) with a real, computed, causal resolution, deliberately
+  behavior-preserving for the common case rather than turning every
+  already-shipped village into rubble.
+
+  `_stamp_house` now derives a real completion fraction BEFORE stamping,
+  reusing the exact same offscreen labor-catch-up math this doc's own
+  "Unloaded / offscreen fidelity" section already established, as a bare,
+  un-persisted CALCULATION rather than a real `ConstructionProject`:
+  `ConstructionLabor.labor_hours_required_for_pieces(pieces)` for the
+  requirement, `ConstructionCatchup.advance` for how much of it a
+  settlement's own real villager count (`settlement.npcs.size()`, now
+  threaded into `_stamp_house` as a new `npc_count` parameter) could
+  plausibly have accumulated over `ConstructionCatchup.MAX_CATCHUP_DAYS`
+  worth of assumed elapsed time — the SAME "logistic growth converges
+  anyway" cap `EarthChunkManager.MAX_CATCHUP_DAYS` already establishes
+  elsewhere: by the time a player discovers a settlement, assume it has had
+  at least that long to build.
+
+  **Deliberately NOT wired through the real
+  `ConstructionProject`/`ConstructionProjectStore` ledger** — a real,
+  already-discovered hazard this pass explicitly avoided:
+  `EarthChunkManager.record_settlement_founded_if_new` already forms a real
+  `Household` per villager and already grants that household its house
+  property, under its OWN house-id scheme (`EntityRef.for_kind("house",
+  "%d_%d_%d" % [chunk_coord.x, chunk_coord.y, i])`, keyed by chunk +
+  villager INDEX) — a DIFFERENT scheme than `ConstructionProject.
+  property_id()`'s own (keyed by chunk + footprint ORIGIN, see
+  `construction_project.gd`). Creating a real `ConstructionProject` here
+  would produce two divergent ownership records for the same real house.
+  This pass's scope is the physical PIECE PLACEMENT only.
+
+  At fraction >= 1.0 — real, tested, and true for every real
+  `HouseBlueprint.BLUEPRINT_IDS` entry (both material tiers) at
+  `SettlementGenerator.POPULATION`'s real villager count
+  (`test_every_real_blueprint_reaches_full_completion_at_the_real_
+  settlement_population`, the actual regression-safety proof, not an
+  assumption) — a house stamps exactly as it always has: full pieces, full
+  roof, `stamp_structure_at_global` called the same way, unchanged visible
+  behavior for every settlement in the game today.
+
+  Fraction < 1.0 is a real, reachable, tested code path, exercised honestly
+  (not left as untested theater) against a deliberately oversized synthetic
+  piece set (500 non-roof cells, an order of magnitude past the biggest
+  real blueprint) and a single builder in `test_village_renderer.gd` — it
+  stamps a real, deterministic PARTIAL prefix following this doc's own real
+  historical build order: floor first, then load-bearing walls
+  (`BuildingPiece.is_load_bearing`), then infill door/window cells, a
+  proportional prefix sized by the completion fraction (no
+  `RandomNumberGenerator`, per this doc's determinism pillar), with the
+  roof included only once every non-roof piece is placed — Worked Example
+  C's own "walls up, no roof yet" partial-project flavor, made real.
+  **Named, honestly**: this essentially never fires at today's typical
+  settlement sizes — even a single real villager's own
+  `MAX_CATCHUP_DAYS`-capped labor budget (960 hours) comfortably dwarfs
+  every real blueprint's own requirement (roughly a few dozen to ~150
+  hours), so this is a real, tested, reachable safety valve for a
+  hypothetically much larger future blueprint or a much smaller settlement
+  population, not a constant lived experience today.
+
+  The door position (`_stamp_house`'s own `home_position` output) stays
+  real and sensible even in the partial case: it is derived from the FULL
+  blueprint's own door cell regardless of completion state, using the exact
+  same `_door_cell`/`_door_facing_direction` helpers, unchanged signatures
+  — a villager needs somewhere real to walk home to while their own house
+  is still being built.
+
+  Real, tested: the new "retiring the 'houses stamp instantly, for free'
+  anti-pattern" section of `tests/unit/test_village_renderer.gd` (8 new
+  tests: the completion-fraction formula cross-checked against the real
+  `ConstructionLabor`/`ConstructionCatchup` functions directly rather than
+  reimplemented math, the empty/zero-cost guard, the full regression proof
+  across every real blueprint/material at the real settlement population,
+  the oversized-piece-set partial fraction, the deterministic
+  floor->wall->infill install order, a real `_stamp_house` call stamping
+  only the partial prefix with no roof, the door position staying correct
+  in the partial case, and the fraction >= 1.0 boundary stamping the full
+  set unchanged) plus the FULL pre-existing 26-test regression suite in
+  that same file — 34/34 passing.
 - ✅ **Offscreen catch-up** (2026-08-25, a fourth follow-up pass) —
   `construction_catchup.gd` (`src/world/`), mirroring
   `chunk_ecology_catchup.gd`'s EXACT contract shape:
@@ -1217,10 +1307,12 @@ this pass deliberately left unspecified.
   currently calls them from a save path, the same "additive capability,
   no live caller yet" honesty this doc's own `NeedResolver`/`Quest.
   deeper_need_for` entries already carry. And per this doc's own explicit
-  scope for this pass: nothing here is wired into `VillageRenderer.
-  _stamp_house` or any chunk-generation call site — that migration stays
-  a documented future step (see "Known anti-pattern this doc replaces"
-  below), not attempted this pass. Real, tested:
+  scope for this pass: this real `ConstructionProject`/`ConstructionProjectStore`
+  ledger itself is still never wired into `VillageRenderer._stamp_house` or
+  any chunk-generation call site — a village house never seeds a real
+  ledger entry (deliberately: see "Known anti-pattern this doc replaces"
+  below for why a later pass closed the actual anti-pattern by a narrower,
+  different mechanism instead of this one). Real, tested:
   `tests/unit/test_construction_project.gd`,
   `tests/unit/test_construction_project_store.gd`,
   `tests/unit/test_construction_start_hysteresis.gd`,
@@ -1359,8 +1451,26 @@ not reinvent:
   `ConstructionProjectStore.advance_project_labor_for_piece`.
 
 **Known anti-pattern this doc replaces**: `VillageRenderer._stamp_house`
-currently stamps a complete house, instantly and for free, at settlement
-generation time (see `docs/progress.md`'s NPC section). Implementing this
-doc means that call site changes to seed a `ConstructionProject` at
-founding time instead of stamping on the spot — a deliberate, acknowledged
-behavior change, not an oversight to preserve.
+used to stamp a complete house, instantly and for free, at settlement
+generation time (see `docs/progress.md`'s NPC section). **Closed
+(2026-08-25, a sixth follow-up pass)** — see the "NPC construction beyond
+gathering" section's own "Retiring `VillageRenderer._stamp_house`'s 'stamps
+for free' anti-pattern" entry above for the full account — but by a real,
+computed, causal resolution genuinely narrower than this paragraph
+originally proposed: rather than seeding a real `ConstructionProject` at
+founding time, `_stamp_house` now gates its stamp behind a real completion
+fraction computed from the exact same labor-catch-up math this doc's
+offscreen fidelity already uses, applied as a bare, un-persisted
+calculation. Seeding a real `ConstructionProject` here turned out to be a
+real hazard, not a viable path: `EarthChunkManager.
+record_settlement_founded_if_new` already forms a real `Household` per
+villager and grants it house property under its own chunk+villager-index
+house-id scheme, a different scheme than `ConstructionProject.
+property_id()`'s own chunk+footprint-origin one — wiring the ledger in here
+would have produced two divergent ownership records for the same real
+house. The house is no longer stamped UNCONDITIONALLY for free — it is
+gated by a real, tested, computed check — even though that check resolves
+to "fully complete" for essentially every real settlement in the game
+today (see that entry's own regression proof); a deliberate, acknowledged
+behavior change was avoided for the common case on purpose, not by
+oversight.

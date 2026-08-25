@@ -3595,10 +3595,13 @@ roof pieces out of scope; terrain buildability is a permissive stand-in).
 Which project a settlement should START next stays genuinely unspecified
 and out of scope (`SettlementConstruction.advance` is not called from the
 new chunk-load wiring — only already-`IN_PROGRESS` projects' labor advances
-there). `VillageRenderer._stamp_house` is still not migrated to seed a
-`ConstructionProject` (deliberately out of scope this pass too) — a
-settlement still gets its houses stamped for free at generation time, not
-built up piece by piece by a real Builder over real elapsed time.
+there). A sixth follow-up pass (2026-08-25) closed a related, separate gap:
+`VillageRenderer._stamp_house` no longer stamps a house unconditionally for
+free — see the "Retiring `VillageRenderer._stamp_house`'s instant free
+stamp" bullet below for the real mechanism (a computed completion fraction,
+deliberately NOT the `ConstructionProject` ledger). It still does not build
+a house up piece by piece by a real live Builder — that remains open, see
+that same bullet's own honest account.
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
@@ -3890,10 +3893,42 @@ built up piece by piece by a real Builder over real elapsed time.
 - **Multiple lumberjacks per settlement / cross-Sägewerk coordination**
   (medium) — ⬜ Not started; today's model is exactly one worker per
   Sägewerk, with no coordination if two Sägewerke's search radii overlap.
-- **Retiring `VillageRenderer._stamp_house`'s instant free stamp** in favor
-  of a seeded `ConstructionProject` at settlement founding (medium) —
-  ⬜ Not started; see this doc's own Status section for why the current
-  behavior is a known anti-pattern, not a baseline to preserve.
+- **Retiring `VillageRenderer._stamp_house`'s instant free stamp** (medium)
+  — ✅ Done (2026-08-25, a sixth follow-up pass), but by a real mechanism
+  narrower than a seeded `ConstructionProject` at settlement founding
+  (which turned out to be a real hazard: `EarthChunkManager.
+  record_settlement_founded_if_new` already grants each house's property
+  under its OWN chunk+villager-index id scheme, a DIFFERENT scheme than
+  `ConstructionProject.property_id()`'s chunk+footprint-origin one —
+  wiring the ledger in here would create two divergent ownership records
+  for the same real house). `_stamp_house` now computes a real completion
+  fraction before stamping, as a bare, un-persisted calculation that reuses
+  the exact same `ConstructionLabor.labor_hours_required_for_pieces`/
+  `ConstructionCatchup.advance` math the offscreen catch-up bullet above
+  already established, against the settlement's own real villager count
+  (`settlement.npcs.size()`, now threaded into `_stamp_house` as a new
+  `npc_count` parameter) over `ConstructionCatchup.MAX_CATCHUP_DAYS` worth
+  of assumed elapsed time (the same cap `EarthChunkManager.MAX_CATCHUP_DAYS`
+  already uses elsewhere). At fraction >= 1.0 — real, tested, and true for
+  every real `HouseBlueprint.BLUEPRINT_IDS` entry at
+  `SettlementGenerator.POPULATION`'s real villager count — a house stamps
+  exactly as before: full pieces, full roof, unchanged visible behavior for
+  every settlement in the game today. Fraction < 1.0 is a real, reachable,
+  tested code path (exercised against a deliberately oversized synthetic
+  piece set and a single builder, since no real catalog blueprint is large
+  enough to trigger it at any real settlement population) that stamps a
+  real, deterministic partial prefix in the doc's own historical build
+  order (floor, then load-bearing walls, then infill door/window cells,
+  roof only once every non-roof piece is placed) — essentially never fires
+  at today's typical settlement sizes, honestly named as such rather than
+  overstated. The door position stays real and sensible even in the partial
+  case, derived from the full blueprint's own door cell regardless of
+  completion state. Does NOT build the house up piece by piece by a real
+  live `BuilderMarker` — that (and deciding which project a settlement
+  should build next) remains genuinely open, see the offscreen-catch-up
+  bullet above. Tested: 8 new cases in `tests/unit/test_village_renderer.gd`
+  plus that file's full pre-existing 26-test regression suite, 34/34
+  passing.
 - **Storage (placeable structure + real per-instance stock)** (small) —
   ✅ Done — `storage` is a real placeable (`ItemCatalog`, a
   `CraftingRecipeBook` recipe: 12 wood + 4 plank, no skill gate, real
