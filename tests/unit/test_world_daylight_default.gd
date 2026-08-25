@@ -94,3 +94,54 @@ func test_off_is_recognised_for_any_of_the_three_commands():
 ## no diagnostic update may silently restore the fast-forward scale afterwards.
 func test_ecotest_off_keeps_normal_ecology_scale():
 	assert_eq(World.ecology_scale_for_console_argument(15360.0, "off"), 1.0)
+
+
+# -- day/night tint (reported: "I can barely see at night") ------------------
+#
+# day_night_tint_for(sunlight) is the pure function DayNightTint's live color
+# is computed from every frame (see World's own day/night lighting step,
+# _day_night.color = day_night_tint_for(sunlight)) -- extracted out of that
+# per-frame call site so the actual floor/ceiling values are testable rather
+# than an inline literal nobody could pin. NIGHT_TINT/DAY_TINT are the real,
+# named endpoints: night is deliberately not pitch black (real moonlight +
+# starlight + skyglow give usable vision outdoors even with no direct
+# sunlight -- a "never fully black" floor most games deliberately keep for
+# playability), just dim and blue-shifted; day is neutral, undimmed color.
+
+func test_full_night_is_the_pinned_night_floor_not_pitch_black():
+	assert_eq(World.day_night_tint_for(0.0), World.NIGHT_TINT)
+
+
+func test_full_day_is_the_pinned_day_ceiling():
+	assert_eq(World.day_night_tint_for(1.0), World.DAY_TINT)
+
+
+func test_night_is_still_visibly_darker_and_bluer_than_day():
+	var night: Color = World.day_night_tint_for(0.0)
+	var day: Color = World.day_night_tint_for(1.0)
+	assert_lt(night.r, day.r)
+	assert_lt(night.g, day.g)
+	assert_lt(night.b, day.b)
+	# Blue-shifted: night's blue channel should sit relatively higher against
+	# its own red/green than day's does -- a cool, moonlit tone, not just a
+	# uniformly-dimmed copy of daylight.
+	assert_gt(night.b - night.r, day.b - day.r)
+
+
+func test_the_night_floor_is_bright_enough_to_read_the_scene_by():
+	# The actual reported complaint: the old floor (0.2, 0.2, 0.3) was too
+	# dark to see by. Every channel must clear a real, deliberately chosen
+	# "still legible" floor.
+	var night: Color = World.day_night_tint_for(0.0)
+	assert_gt(night.r, 0.3)
+	assert_gt(night.g, 0.3)
+	assert_gt(night.b, 0.3)
+
+
+func test_sunlight_interpolates_linearly_between_the_two_tints():
+	var half: Color = World.day_night_tint_for(0.5)
+	var night: Color = World.NIGHT_TINT
+	var day: Color = World.DAY_TINT
+	assert_almost_eq(half.r, (night.r + day.r) / 2.0, 0.0001)
+	assert_almost_eq(half.g, (night.g + day.g) / 2.0, 0.0001)
+	assert_almost_eq(half.b, (night.b + day.b) / 2.0, 0.0001)

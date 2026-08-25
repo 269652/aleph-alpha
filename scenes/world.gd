@@ -4052,6 +4052,30 @@ static func always_day_for(force_day: bool, env_value: String) -> bool:
 	return force_day or env_value == "1"
 
 
+## Night's tint floor and day's tint ceiling for DayNightTint (see
+## day_night_tint_for below). Reported directly: "I can barely see at night" --
+## the old inline floor (0.2, 0.2, 0.3) was too dark to read the scene by.
+## Real-world grounding: even with the sun fully below the horizon, moonlight
+## + starlight + skyglow give real usable outdoor vision -- night is dim and
+## blue-shifted, never pitch black, the same "never fully black" floor most
+## games deliberately keep for playability. Blue sits noticeably higher than
+## red/green (a cool, moonlit cast), rather than a uniformly dimmed copy of
+## daylight. DAY_TINT is unchanged from the previous formula's sunlight=1.0
+## case (neutral, undimmed) -- only the night floor moved.
+const NIGHT_TINT := Color(0.4, 0.4, 0.55)
+const DAY_TINT := Color(1.0, 1.0, 1.0)
+
+
+## The DayNightTint color for a given sunlight_intensity() value -- a plain
+## linear interpolation between the pinned night floor and day ceiling.
+## Extracted out of the per-frame lighting step (see _client_process) so the
+## actual endpoint values are testable rather than an inline literal nobody
+## could pin (see test_world_daylight_default.gd's own day/night tint
+## section).
+static func day_night_tint_for(sunlight: float) -> Color:
+	return NIGHT_TINT.lerp(DAY_TINT, clampf(sunlight, 0.0, 1.0))
+
+
 ## The elevation to light the world by: whichever sky the console pinned,
 ## else the real one just computed. ONE place decides, so /day and /night can
 ## never disagree about which wins -- and a live /night beats a stale
@@ -4245,7 +4269,7 @@ func _client_process(delta: float) -> void:
 	var local_hour_whole := int(local_hour)
 	var local_minute := int((local_hour - float(local_hour_whole)) * 60.0)
 	var sunlight := _solar_position.sunlight_intensity(elevation)
-	_day_night.color = Color(0.2 + sunlight * 0.8, 0.2 + sunlight * 0.8, 0.3 + sunlight * 0.7)
+	_day_night.color = day_night_tint_for(sunlight)
 	# Drives every creature's silhouette shadow length (see DropShadow.
 	# stretch_for_elevation / CreatureMarker.sun_elevation_deg) with the same
 	# real sun position already computed for day/night lighting above.
