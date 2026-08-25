@@ -400,13 +400,29 @@ its own bespoke resolution logic. See "What's honestly still a stand-in
 here" below for `ConstructionPriority.decide`'s actual current
 implementation, which does not yet call `NeedResolver`.
 
-### Deciding what to build, and who builds it (design, from a follow-up brainstorm session)
+### Deciding what to build, and who builds it
 
 Compiled from a follow-up design-brainstorm session, answering this
-section's own two still-named gaps directly: nothing decides WHICH project
-a settlement should start next, and nothing decides WHO becomes a Builder.
-Design only — not yet implemented; see "What's honestly still a stand-in
-here" below for exactly what's real today.
+section's own two still-named gaps: nothing decided WHICH project a
+settlement should start next, and nothing decides WHO becomes a Builder.
+
+**The first gap is closed** (2026-08-25, a further follow-up pass):
+`SettlementSpareCapacity`/`SettlementBuildDecision` are real, tested, and
+wired at the real chunk-load boundary — see "What's honestly still a
+stand-in here" below for the exact account of what actually runs today (and
+the real, honest reasons it rarely finds anything actionable yet in live
+play). **The second (who becomes a Builder, a live BuilderMarker spawner,
+and player-hired Builders) stays exactly as designed below and genuinely
+unimplemented** — deliberately out of scope for this pass: every real
+structure this decision function can currently queue is a single-tile
+placeable the ALREADY-REAL offscreen labor catch-up completes in one shot
+(`_place_completed_construction_project`/`build_at_global`), so there is no
+real multi-piece target yet for an onscreen `BuilderMarker` to place
+piece-by-piece the way `_stamp_house`'s own retirement pass explicitly kept
+house construction OUT of this ledger (to avoid a real house-id-scheme
+collision, see that entry's own account below) — a future pass that gives
+multi-piece, ledger-tracked construction a real target to place is what
+would finally need a live spawner and Builder assignment, not this one.
 
 **What to build: shortfall names it, population gates it.** Two real
 signals feed one decision, not two competing ones. `Quest.
@@ -418,12 +434,20 @@ wins. Population is the second, independent gate: a settlement only
 *acts* on the worst shortfall once it has real spare capacity (see next
 paragraph) to spend on it — a healthy, well-fed settlement with room to
 grow builds; one at subsistence does not, no matter how bad its shortfall
-is. This is `SettlementConstruction.advance`'s own still-missing candidate
-`blueprint_id` argument (see "What's honestly still a stand-in here"
-below) — this reasoning is what would finally supply it, giving
-`ConstructionPriority.decide`'s live caller a real settlement-decision
+is. This was `SettlementConstruction.advance`'s own still-missing candidate
+`blueprint_id` argument — **now real** (2026-08-25):
+`SettlementBuildDecision.decide_and_advance` (`src/emergence/
+settlement_build_decision.gd`) is exactly this reasoning made concrete —
+flattens every real shortfall quest's own `missing` list (worst `need`
+first), skips any item with no real recipe producing it (a pure
+raw-material issue, left to the existing shortfall/regional-trade path
+unchanged, per this paragraph's own framing), and for the first item whose
+recipe resolves a real `ConstructionPriority.missing_structure_id`, supplies
+it as `SettlementConstruction.advance`'s own candidate `blueprint_id` —
+giving `ConstructionPriority.decide`'s live caller a real settlement-decision
 system to sit inside instead of only being reachable with a caller-chosen
-candidate.
+candidate. See "What's honestly still a stand-in here" below for the exact,
+honest account of how far this actually reaches in live play today.
 
 **Spare capacity: a real derived number, the same style
 `SettlementState.carrying_capacity` already uses.** Not a flat ratio.
@@ -442,6 +466,23 @@ advance`'s own real formula already treats zero builders as zero progress
 for that call, and resumes exactly where it left off the moment spare
 capacity is positive again (a famine, a raid, or a migration wave all fall
 out of the SAME real number, with no new mechanism).
+
+**Real, tested** (2026-08-25): `SettlementSpareCapacity.for_settlement`
+(`src/emergence/settlement_spare_capacity.gd`) is exactly this formula —
+`household_count_for_settlement` minus however many of those households
+work a real survival occupation, read straight off `NpcProduction.
+PRODUCER_ITEM_BY_OCCUPATION`'s own keys (not a second, hand-maintained
+`["farmer", "hunter", "fisher"]` list that could drift from it), clamped at
+zero. This ALSO closed a real, live bug this exact paragraph's own reasoning
+named but `EarthChunkManager._apply_construction_labor_catchup` never
+actually implemented: that function was passing `builder_count` as
+`household_count_for_settlement` — TOTAL population, not spare capacity —
+so construction labor was silently competing with the survival occupations
+this paragraph says it never should. Corrected: a settlement whose entire
+population works a real survival occupation now correctly accrues ZERO
+construction labor even though `household_count_for_settlement` is
+genuinely nonzero (real, tested — `test_earth_chunk_manager.gd`'s own
+"corrected builder_count" section).
 
 **Builder is ad hoc, not a fixed occupation.** Matches this doc's own
 Open Questions section's existing lean ("shelter is a need, not a
@@ -480,6 +521,25 @@ decision loop runs, the same way `SettlementConstruction._handle_shortfall`
 already abandons a project whose material has genuinely crashed. No second
 Sägewerk silently appears because the player got there first.
 
+**Real, tested** (2026-08-25): composed into `SettlementBuildDecision.
+decide_and_advance`'s own same call, running unconditionally (independent of
+spare capacity — retiring wasted work needs no population headroom). Every
+real `PLANNED`/`IN_PROGRESS` project at a site whose `blueprint_id` names a
+real structure-producing recipe AND is a genuine producer-fix target (some
+real recipe in the book actually `requires_structure` it) is re-checked
+against `ConstructionPriority.missing_structure_id` for that dependent
+recipe with the CURRENT `present_structure_ids`; once the structure is no
+longer missing, `ConstructionProjectStore.abandon_project` (a new small,
+tested method, lifted out of `_handle_shortfall`'s own inline
+`project.status = ABANDONED` mutation so both real triggers — a material
+crash, or a double-fix — share one real action) retires it. Deliberately
+scoped to structures SOME real recipe actually gates on — a structure
+nothing gates on (e.g. `"storage"`, which has no skill/structure
+prerequisite of its own) is never swept, since a settlement may legitimately
+want a SECOND one (`EarthChunkManager.nearby_structure_positions` already
+supports multiple real Storages per settlement — a real feature, not a
+redundancy).
+
 **Silent by design.** No quest, no popup — a settlement deciding to build
 is discovered the same way village growth already is: you notice the new
 or half-finished structure next time you visit. Matches this doc's own
@@ -497,6 +557,22 @@ hiring/wage system `npc.md`'s own hiring section and this doc's earlier
 passes both flagged as unbuilt — scoped narrowly to "hire one spare
 Builder for one project," not the fuller hiring system those sections
 still leave open.
+
+**Deliberately still unbuilt (2026-08-25 pass), and why**: a live
+`BuilderMarker` spawner for the projects this decision function queues, and
+player-hired Builders. Every real structure this decision function can
+currently queue (`storage`; `sagewerk` is skill-blocked, see the "Spare
+capacity" entry's own real limitation above) is a SINGLE-TILE placeable,
+built in one shot by the ALREADY-REAL offscreen labor catch-up
+(`_place_completed_construction_project` calling `build_at_global` once
+`labor_hours_accumulated` clears the requirement) — there is no real
+multi-piece target for an onscreen `BuilderMarker` to place piece-by-piece
+here, unlike `_stamp_house`'s own house-construction case (deliberately kept
+OUT of `ConstructionProject`/`ConstructionProjectStore` during its own
+retirement, to avoid a real house-id-scheme collision, see that entry's own
+account below). Both stay genuinely blocked on a future pass that gives
+multi-piece, ledger-tracked construction a real target to place, not
+something to fabricate a use case for here.
 
 ### What's honestly still a stand-in here
 
@@ -601,6 +677,70 @@ what's ACTUALLY real right now:
   its own test/doc comment) by reading the same `NeedResolver` walk
   `decide` already runs. See the "Settlement construction ledger" section
   below for the real, tested caller this feeds.
+- **"Deciding what to build, and who builds it" now HAS its first two real
+  pieces** (2026-08-25, a further follow-up pass) — closes that section's
+  own "nothing decides WHICH project a settlement should start next" gap,
+  and its own real, honest account of how far this ACTUALLY reaches today:
+  - `SettlementSpareCapacity.for_settlement` (`src/emergence/
+    settlement_spare_capacity.gd`) is real and tested: `household_count`
+    minus however many households work a real survival occupation (read off
+    `NpcProduction.PRODUCER_ITEM_BY_OCCUPATION`'s own keys), clamped at
+    zero. `EarthChunkManager._apply_construction_labor_catchup`'s own
+    `builder_count` — previously TOTAL population, a real bug relative to
+    this doc's own design — now reads this instead (real, tested:
+    `test_earth_chunk_manager.gd`'s "corrected builder_count" section).
+  - `SettlementBuildDecision.decide_and_advance` (`src/emergence/
+    settlement_build_decision.gd`) is real and tested: ranks a settlement's
+    real shortfalls worst-`need`-first, skips any with no real recipe
+    producing the missing item (a pure material issue, left to the existing
+    shortfall path), and for the first with a real
+    `ConstructionPriority.missing_structure_id`, supplies it as
+    `SettlementConstruction.advance`'s own candidate `blueprint_id` if real
+    spare capacity is positive (`{"action": "no_spare_capacity"}`,
+    distinctly named, otherwise). Composes "double-fix cancellation" into
+    the same call (see that paragraph's own "Real, tested" note above).
+    Wired at the real chunk-load boundary: `EarthChunkManager.
+    _apply_settlement_build_decision`, called from `_load_chunk` on every
+    real load of a chunk with real households (not gated on there already
+    being `IN_PROGRESS` work, unlike its `_apply_construction_labor_catchup`
+    sibling — a settlement with zero in-progress projects still needs a
+    real chance to decide whether to start one), using real
+    chunk-scanned `present_structure_ids`
+    (`_present_structure_ids_for_settlement_chunk`, generalized over every
+    real `ItemCatalog` "placeable" id via the same `has_structure_near`
+    chunk-scan style, not hardcoded to `"sagewerk"`/`"storage"`).
+  - **Named, honest limitation, not glossed over**: `production_shortfall_
+    quests_for_settlement`'s own real wiring today
+    (`OccupationProduction._RECIPE_BY_OCCUPATION`) only ever grounds
+    `"hunter"` → `cooked_meat` and `"blacksmith"` → `stone_pickaxe` — and
+    NEITHER recipe's own inputs (`meat`; `stick`/`rock`) are produced by any
+    real recipe in the book, so `recipe_book.recipe_for_output` always
+    returns `""` for them and this function's "start new work from a real
+    shortfall" branch never actually finds an actionable one in live play
+    yet. Double-fix cancellation IS real and reachable today regardless (it
+    does not depend on the shortfalls feed at all — see that paragraph's own
+    "Real, tested" account); "start new work" is real, tested (via directly
+    -supplied shortfalls, the same explicit-dependencies-in shape this whole
+    module already uses) and will fire the moment a real shortfall-producing
+    recipe requiring a structure exists — it is simply not the lived case
+    today, the same honesty this doc's `_stamp_house` partial-completion
+    entry below already carries for its own rarely-reached branch.
+  - Also real, tested: the exact "Carpentry-gated recipe is never
+    autonomously queued" limitation named in the "Spare capacity" entry
+    above (`test_settlement_build_decision.gd`'s own dedicated case, not
+    left as a comment alone).
+  - Real, tested: `test_settlement_spare_capacity.gd`,
+    `test_settlement_build_decision.gd`, `test_construction_project_store.
+    gd`'s new `abandon_project`/`active_projects_in_chunk` sections, and
+    `test_earth_chunk_manager.gd`'s new "corrected builder_count" and
+    "double-fix cancellation" sections (the latter proven against the REAL
+    chunk-scanned `present_structure_ids`, not a literal Array a test hands
+    the pure decision function directly).
+  - Still genuinely unimplemented, deliberately: WHO becomes a Builder (the
+    ad hoc replan-interrupt NPC assignment), a live `BuilderMarker` spawner,
+    and player-hired Builders — see this section's own "Deliberately still
+    unbuilt" paragraph above for the real reason (no multi-piece target for
+    a live spawner yet).
 
 ## Interaction with other docs
 
@@ -759,16 +899,20 @@ catch-up writes to ("two fidelities, one truth"). A sixth follow-up pass
 exact mechanism (a real, computed completion fraction, reusing this
 section's own labor math as a bare, un-persisted calculation, deliberately
 NOT wired through the `ConstructionProject`/`ConstructionProjectStore`
-ledger — see that entry's own honest account of why). What's still ⬜,
-honestly, are two still-missing live decisions unrelated to that: nothing
-decides WHICH project a settlement should start next
-(`SettlementConstruction.advance` is not called from the new chunk-load
-wiring; only projects ALREADY `IN_PROGRESS` get their labor advanced there),
-and no live spawner yet decides a Builder should exist for a given
-`ConstructionProject` and injects its real `target_pieces` — see each
-entry's own "Named, honest limitations" below for the full account of what
-remains unspecified, and "Deciding what to build, and who builds it" above
-for the real, agreed design both of these still need wired.
+ledger — see that entry's own honest account of why), and a seventh
+follow-up pass (2026-08-25) closed the remaining "which project should a
+settlement start next" gap this paragraph used to name: `SettlementSpareCapacity`/
+`SettlementBuildDecision` are real, tested, and wired at the real chunk-load
+boundary (see "Deciding what to build, and who builds it" above for the full
+account, including the corrected `builder_count` bug fix and the honest
+account of how rarely "start new work" actually fires in live play today,
+given `production_shortfall_quests_for_settlement`'s own narrow real
+wiring). What's still ⬜, honestly, is the OTHER gap that section names: no
+live spawner yet decides a Builder should exist for a given
+`ConstructionProject` and injects its real `target_pieces` — see that
+entry's own "Named, honest limitations" below, and "Deciding what to build,
+and who builds it" above's own "Deliberately still unbuilt" paragraph for
+the real reason (no multi-piece target for a live spawner yet).
 
 - ✅ **The Sägewerk worksite** — the doc's own generic "sawpit/hewing-block"
   prop, named and built concretely as `sagewerk` (`item_catalog.gd`'s
@@ -1558,6 +1702,17 @@ not reinvent:
   (`src/emergence/construction_labor.gd`) is the per-piece labor-hours
   derivation it credits onto a project's real `labor_hours_accumulated` via
   `ConstructionProjectStore.advance_project_labor_for_piece`.
+- `SettlementSpareCapacity` (`src/emergence/settlement_spare_capacity.gd`) —
+  the real, tested "population minus real survival-occupation households,
+  clamped at zero" derivation (see Status); the real `builder_count`
+  `EarthChunkManager._apply_construction_labor_catchup` now uses instead of
+  total population.
+- `SettlementBuildDecision` (`src/emergence/settlement_build_decision.gd`) —
+  the real, tested "what should this settlement build next" decision (see
+  Status): ranks real shortfalls, supplies `SettlementConstruction.advance`'s
+  own candidate `blueprint_id`, and composes double-fix cancellation into
+  the same call. `EarthChunkManager._apply_settlement_build_decision` is its
+  real, live chunk-load caller.
 
 **Known anti-pattern this doc replaces**: `VillageRenderer._stamp_house`
 used to stamp a complete house, instantly and for free, at settlement

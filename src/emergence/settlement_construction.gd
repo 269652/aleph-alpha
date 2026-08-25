@@ -121,7 +121,7 @@ static func _handle_shortfall(
 		return {"priority": ConstructionPriority.Priority.SHORTFALL, "action": "left_to_shortfall_path"}
 
 	if _any_input_crashed(market, recipe_book, blueprint_id):
-		project.status = ConstructionProject.Status.ABANDONED
+		project_store.abandon_project(project.id)
 		return {
 			"priority": ConstructionPriority.Priority.SHORTFALL,
 			"action": "abandoned",
