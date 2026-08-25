@@ -181,6 +181,41 @@ func setup(world, tile_size: int) -> void:
 	_tile_size = tile_size
 
 
+## Overrides the wander scale this fish's own unconfined swimming uses (see
+## CreatureWander.wander_radius/wander_speed's own doc comment) -- for a
+## caller whose water body is much smaller than the real world's own
+## WANDER_RADIUS, most obviously the character preview diorama's pond.
+func configure_wander(radius: float, speed: float) -> void:
+	_wander.wander_radius = radius
+	_wander.wander_speed = speed
+
+
+## Advances this fish through exactly the SAME unconfined wander _process
+## already runs whenever _world is null (see that branch below, which calls
+## _step_unconfined_wander directly since ITS OWN _elapsed_time/ripple step
+## already ran once in _process's shared preamble) -- exposed as a public
+## method so a caller that keeps this fish's own _process disabled
+## (set_process(false), the character preview diorama's own convention for
+## every fish it places -- its real WANDER_RADIUS/pond-size mismatch means
+## it must drive fish manually rather than let them free-run) can still step
+## it through the real algorithm once per frame, instead of reimplementing
+## swimming from scratch (reported live: "fish don't swim like in the real
+## game" -- the diorama's own point-to-point movement never was this
+## algorithm at all). Unlike _process's branch, this owns its own
+## _elapsed_time/ripple advance -- nothing else is ticking this fish's
+## clock for it.
+func step_wander(delta: float) -> void:
+	_elapsed_time += delta
+	_step_water_ripple(delta)
+	_step_unconfined_wander(delta)
+
+
+func _step_unconfined_wander(delta: float) -> void:
+	var before := position
+	position = _wander.step_position(home, position, _elapsed_time, delta, wander_seed)
+	_face_along(position - before)
+
+
 ## A fish is always "swimming" (it's a fish), but it doesn't always have
 ## open water to actually push through -- gated on genuinely having moved
 ## since the last call (see _last_ripple_check_position), the same
@@ -279,9 +314,7 @@ func _process(delta: float) -> void:
 	_elapsed_time += delta
 	_step_water_ripple(delta)
 	if _world == null:
-		var before := position
-		position = _wander.step_position(home, position, _elapsed_time, delta, wander_seed)
-		_face_along(position - before)
+		_step_unconfined_wander(delta)
 		return
 
 	# Turn the swim heading gradually toward the target rather than snapping
@@ -330,8 +363,17 @@ func _process(delta: float) -> void:
 
 	# A real fast tail flap propels the fish faster than an ordinary glide
 	# (see FLAP_SPEED_MULTIPLIER/_is_flapping) -- not just a faster ring
-	# cadence.
-	var speed := CreatureWander.WANDER_SPEED * (FLAP_SPEED_MULTIPLIER if _is_flapping else 1.0)
+	# cadence. _wander.wander_speed, not the bare CreatureWander.WANDER_SPEED
+	# constant -- this is the ONE place in the world-aware _process branch
+	# that reads a raw speed rather than going through _wander itself, so a
+	# caller overriding wander_speed (configure_wander -- the character
+	# preview diorama's own pond, far smaller than any real water body) was
+	# silently ignored here even though direction_at/wander_radius already
+	# honored the override; the fish's own visible speed stayed real-ocean
+	# fast regardless (reported live, alongside the diorama switching this
+	# fish onto its real _process for the first time: "fish still don't
+	# move natural like ingame").
+	var speed := _wander.wander_speed * (FLAP_SPEED_MULTIPLIER if _is_flapping else 1.0)
 	if _bolt_remaining > 0.0:
 		speed = BOLT_SPEED  # the dash that makes an escape read as an escape
 

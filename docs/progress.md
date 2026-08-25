@@ -4278,6 +4278,30 @@ play today.
   construction ledger bullet above — closing the gap this entry used to
   name.
 
+### Civic Construction (`concept/civic_construction.md`)
+
+New doc (2026-08-26, a follow-up brainstorm session, from a direct
+question about Timber Construction's own still-named gap: no real
+multi-piece target exists for a live Builder spawner or player-hired
+Builders, since every real structure the settlement decision system can
+queue is single-tile). Design only, ⬜, not yet implemented. Generalizes
+`ConstructionProject`/`ConstructionProjectStore`/`BuilderMarker` (all real,
+see Timber Construction above) to three real owners at once: a player's
+own build site (a real ghost/planned placement mode, hired-Builder labor
+market), new settlement-owned civic buildings (Meeting Hall — a real
+physical seat for `governance.gd`/`institution_formation.gd`'s already-real
+formed institutions; Granary — a real settlement-scale stock raising
+`SettlementState.carrying_capacity`; Watchtower — a real vantage over
+already-simulated danger, deliberately NOT a scripted-alert mechanic, per
+`building.md`'s own diegetic-threat philosophy, caught and corrected while
+writing this doc), and village houses done properly (fixing the id-scheme
+mismatch `VillageRenderer._stamp_house`'s own retirement deliberately
+routed around rather than fixed). The one real code seam this all hinges
+on: `ConstructionProjectStore.complete_project` gains an injected
+`Callable` completion side-effect instead of its own hardcoded
+`HouseholdStore.grant_property` call — everything else composes from
+already-real primitives with no new foundational mechanism.
+
 ### Production Chains (`concept/production_chains.md`)
 
 New doc (2026-08-25). The general recipe-gating/dependency-resolution

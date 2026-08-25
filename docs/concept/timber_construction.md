@@ -572,7 +572,12 @@ OUT of `ConstructionProject`/`ConstructionProjectStore` during its own
 retirement, to avoid a real house-id-scheme collision, see that entry's own
 account below). Both stay genuinely blocked on a future pass that gives
 multi-piece, ledger-tracked construction a real target to place, not
-something to fabricate a use case for here.
+something to fabricate a use case for here. See
+[civic_construction.md](civic_construction.md) (design only, from a
+follow-up brainstorm session) for exactly that: a generalized ledger
+completion seam plus three real multi-piece targets (a player's own build
+site, new settlement civic buildings, and village houses done properly)
+that would give both of these their real, non-fabricated use case.
 
 ### What's honestly still a stand-in here
 
@@ -940,7 +945,9 @@ live spawner yet decides a Builder should exist for a given
 `ConstructionProject` and injects its real `target_pieces` — see that
 entry's own "Named, honest limitations" below, and "Deciding what to build,
 and who builds it" above's own "Deliberately still unbuilt" paragraph for
-the real reason (no multi-piece target for a live spawner yet).
+the real reason (no multi-piece target for a live spawner yet — see
+[civic_construction.md](civic_construction.md) for the design that would
+close it).
 
 - ✅ **The Sägewerk worksite** — the doc's own generic "sawpit/hewing-block"
   prop, named and built concretely as `sagewerk` (`item_catalog.gd`'s
