@@ -87,16 +87,77 @@ inertia, not just a label. Taxation, enforcement, policy, and
 representation are all real, separate mechanisms this doc's own exit
 criterion names but none of them are built — see Status.
 
+## Conflict and enforcement (mechanism spec)
+
+Compiled from a design-brainstorm session — this section is exactly what
+the Status list below used to flag as unbuilt ("a future criminal-
+governance slice would extend this doc's 'None ← criminal_group' choice
+above rather than replace it"), and it deliberately reuses real signals
+already tracked rather than inventing a parallel crime/law layer:
+
+- **Failed-state banditry.** `Institution.TYPES` already declares a
+  `criminal_group` type that has NO formation trigger anywhere in the
+  codebase today — listed, never chosen. A settlement whose real
+  `SettlementState` reads DECLINING and whose real legitimacy (above) reads
+  LOW gets one more real formation attempt: `criminal_group`, extending
+  `Governance`'s existing form→attempted-institution mapping table exactly
+  the way military-rule→`militia`/merchant-oligarchy→`merchant_company`
+  already work. Once formed, [trade.md](trade.md)'s own real
+  `CaravanRaid.raid_chance_for_tier` mechanism gets re-sourced from that
+  specific settlement's own state rather than a bare `RegionDifficulty`
+  tier lookup — raids trace back via `/why` to a named, starving village,
+  not an anonymous danger-tier dice roll. Real grounding: resource-
+  scarcity-driven banditry is a well-documented political-economy
+  phenomenon — opportunistic raiding emerging once legitimate subsistence
+  channels (farming, trade) stop covering a population's real needs, the
+  actual mechanism behind real agrarian-famine banditry.
+- **Whose militia catches you.** The already-real but currently passive
+  `militia` institution type becomes a real enforcement actor: committing a
+  flagged offense (theft, or being the player-attributed source of a
+  caravan raid) inside a military-rule settlement's territory makes its
+  militia hostile, extending [pvp.md](pvp.md)'s existing zone-based
+  flagging model with a governance-form gate rather than replacing it — the
+  exact same offense inside a settlement with no governance history yet, or
+  a cooperative/merchant-oligarchy one, draws no militia response at all,
+  purely because of which institution that settlement's own history
+  happened to produce. Real grounding: Weber's monopoly-on-legitimate-
+  violence framing — enforcement capacity is not a universal constant, it
+  is a function of which coercive/legitimate institutions a polity actually
+  has, independent of how much anyone might want the player punished.
+  Deliberately does NOT invent a full crime/justice system — just a
+  minimal offense event and a militia reaction rule, the same one-real-
+  input-at-a-time discipline this doc's own pillars already insist on.
+
+On the wider Phase 17 gate ("only after local society is stable"):
+Governance, Institutions, Settlements, and RegionalTrade are now all real
+and live-verified, so the foundation for a scoped conflict slice like the
+one above is close — but this section deliberately stays scoped to exactly
+these two real-signal-reuse mechanisms, not the full territory/war/treaty/
+diplomacy scope Phase 17 eventually names. Two real, larger follow-ups are
+visible from here but explicitly NOT built by this section: a settlement
+that stops resupplying an ally once its own stock gets squeezed (real
+trade-dependency-as-leverage, Hirschman's asymmetric-dependence framing),
+and a raided settlement's own rumor network turning a specific attack into
+a lasting inter-settlement grudge (a real scarcity → raid → distrust →
+reduced cooperation → worse scarcity feedback loop) — both depend on
+Failed-state banditry existing first as a real event to propagate or react
+to, and are left for a later pass.
+
 ## Status
 
 - ✅ Governance form and legitimacy are both real, derived classifications
   (`governance.gd`), inspectable via `/settlement`.
 - ✅ Governance form changes a real decision: which institution type a
   settlement's own automatic formation attempts.
-- ⬜ Policies, taxation, enforcement, and representation — all real,
-  separate mechanisms this doc's own governance-forms list implies, none
-  built. Taxation specifically needs a real currency/wealth-flow system
-  that doesn't exist yet (Phase 4/5's own documented gap).
+- ⬜ Failed-state banditry and militia enforcement (see "Conflict and
+  enforcement" above) — design spec only, not yet implemented. Both reuse
+  entirely real, already-tracked signals (`SettlementState`, `Governance`,
+  the already-declared-but-untriggered `criminal_group` type,
+  [trade.md](trade.md)'s `CaravanRaid`, [pvp.md](pvp.md)'s zone flagging).
+- ⬜ Policies, taxation, and representation — real, separate mechanisms
+  this doc's own governance-forms list implies, none built. Taxation
+  specifically needs a real currency/wealth-flow system that doesn't exist
+  yet (Phase 4/5's own documented gap).
 - ⬜ Legitimacy's other seven real-world inputs (protection, justice,
   tradition, wealth distribution, religious authority, military success,
   popular trust) — all wait on systems (crime, currency, trust/reputation,

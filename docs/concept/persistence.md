@@ -121,60 +121,90 @@ progress is never more than one short interval old.
 
 ## Loading screens
 
-New Game/Host, Load Game, and Join all pay a real, synchronous cost before
-the player can actually move: `EarthChunkManager.update()`'s first call for a
-freshly-centered chunk radius (`_compute_dry_land_spawn_tile`/
-`_spawn_local_singleplayer_from_save`) generates and paints every chunk in
-`LOAD_RADIUS`, spawning trees/stones/grass/crops/decomposers/flowers/scrub/
-lichen for each — measured at **~39s for that single call** in this dev
-sandbox (real timing instrumentation against a real running instance, not
-estimated). Nothing in that call chain (`EarthChunkManager.update` →
-`_load_chunk` → `TerrainRenderer.paint`/`TreeRenderer.spawn_trees`/...) ever
-`await`s, so it fully blocks the engine's own frame presentation for its
-entire real duration — without a loading screen this reads as the game
-having hung, not as it working.
+New Game/Host, Load Game, and Join all pay a real cost before the player can
+actually move: generating and painting every chunk in a freshly-centered
+`LOAD_RADIUS` (trees/stones/grass/crops/decomposers/flowers/scrub/lichen for
+each) — measured at **~39-90s+ for a full radius** in this dev sandbox (real
+timing instrumentation against a real running instance, not estimated).
+
+This used to be one single fully-synchronous `EarthChunkManager.update()`
+call with no `await` anywhere in its chain (`update` → `_load_chunk` →
+`TerrainRenderer.paint`/`TreeRenderer.spawn_trees`/...), so the engine could
+never present a frame during it — even an honest indeterminate spinner froze
+on whatever glyph it was on for the entire real duration, and the game read
+as hung despite the loading screen (reported: "the loading screen doesn't
+show actual progress and still looks like it's hanging"). The fix was
+restructuring the load itself, not just the screen over it:
+`EarthChunkManager.update_with_progress(player_tile, on_progress)` is a
+chunked variant that computes the exact chunk set up front
+(`pending_load_chunks`, cheap — no generation, just the same
+`chunks_in_radius`/`is_chunk_loaded` check `update()`'s own loop already
+made), then loads one chunk at a time, calling `on_progress(loaded, total)`
+and `await`ing one `process_frame` after each. That single `await` is what
+lets the engine actually paint a frame between chunks — both the spinner's
+own animation and a REAL determinate percentage are visible for the first
+time, where neither was reachable before without exactly this restructuring
+(previously deferred as "out of scope for a loading screen alone").
+`update()` itself is untouched and still fully synchronous — every other
+caller (continuous per-frame gameplay in `World._process`/`_server_process`,
+and the whole pre-existing `update()` test suite) keeps using it unchanged;
+`update_with_progress` is purely additive.
 
 `World._show_loading_overlay(text)` shows `LoadingOverlay` (a small,
 purpose-built `Control` — dim full-screen backdrop, centered status label,
-indeterminate spinner glyph) and awaits **two** `process_frame` signals
-before returning, so the overlay is genuinely painted on screen before the
-caller starts its long synchronous call (one await frame is not reliably
-enough — Godot can defer a freshly-added Control's first draw one frame
-further; confirmed by capturing a real rendered screenshot mid-freeze, not
-assumed from the `await` alone). Wired into all three entry points:
+spinner glyph) and awaits **two** `process_frame` signals before returning,
+so the overlay is genuinely painted on screen before the caller starts its
+long call (one await frame is not reliably enough — Godot can defer a
+freshly-added Control's first draw one frame further; confirmed by
+capturing a real rendered screenshot mid-freeze, not assumed from the
+`await` alone). `LoadingOverlay.set_progress(loaded, total)` is the new
+piece: it appends a real `"(N / M chunks)"` suffix onto the status line,
+called as the `on_progress` callback (`World._on_chunk_load_progress`) every
+`update_with_progress` call site shares. Wired into all three entry points:
 
-- `_on_menu_start_requested` (New Game/Host): "Preparing a new world..."
-- `_on_menu_load_requested` (Load Game): "Loading your world..."
+- `_on_menu_start_requested` (New Game/Host): "Preparing a new world..." →
+  `_spawn_local_singleplayer` → `_compute_dry_land_spawn_tile`, which now
+  calls `update_with_progress` instead of `update`.
+- `_on_menu_load_requested` (Load Game): "Loading your world..." →
+  `_spawn_local_singleplayer_from_save`, same swap.
 - `_on_menu_join_requested` (Join): "Connecting to host..." — a joining
-  client has no single call site to wrap the way the other two wrap
-  `_spawn_local_singleplayer[_from_save]`, since its local player only
-  exists once the server's own spawn has replicated in and its first real
-  chunk load happens later, inside the ordinary per-frame `_client_process`
-  tick. Shown immediately on click regardless, so the connection handshake
-  and the later freeze aren't a blank/frozen-looking screen either.
+  client still has no single call site to wrap the way the other two wrap
+  their spawn functions, since its local player only exists once the
+  server's own spawn has replicated in and its first real chunk load
+  happens later, inside the per-frame `_client_process` tick. Shown
+  immediately on click regardless, so the connection handshake and the
+  later load aren't a blank/frozen-looking screen either. `_client_process`
+  now runs that first load via a separate one-shot async task
+  (`_run_initial_client_chunk_load`, fire-and-forget so `_client_process`
+  itself stays a plain synchronous per-frame function and every per-frame
+  UI update below it keeps running rather than also suspending across
+  frames) instead of a single synchronous `update()` call, guarded by
+  `_initial_client_chunk_load_task_running`/`_done` so it only ever runs
+  once and never races the plain per-frame `update()` calls before/after it.
 
-Hidden from one place, `_client_process`, right after its own
-`EarthChunkManager.update()` call, gated on `_loading_overlay.visible` (a
-no-op once already hidden). This single hide point correctly covers all
-three flows: New Game/Load Game have already finished their own heavy
-`update()` call by the time `_dismiss_main_menu()` runs, so `_client_process`
-hides it on the very next frame (a second, now-cheap `update()` call, since
-the needed chunks are already loaded); Join has no earlier call, so this is
-the exact moment its own real freeze ends.
+Hidden once the relevant path's own load actually finishes: New Game/Load
+Game hide it from `_run_initial_client_chunk_load`'s own completion (their
+local player only reaches `_client_process` after their heavy
+`update_with_progress` call already finished, so this "second pass" finds
+zero chunks pending and completes instantly — the same "second, now-cheap
+call" shape as before, just through the chunked entry point uniformly); Join
+hides it from that same completion point the first time it actually
+represents real, multi-frame chunk loading. Still gated on
+`_loading_overlay.visible` (a no-op once already hidden), the same single
+hide point as before.
 
-Progress is an honest **indeterminate spinner**, not a fabricated
-percentage: nothing outside `EarthChunkManager.update()` can observe real
-interim progress without it yielding mid-loop, and making it do that would
-mean restructuring `EarthChunkManager`/`TerrainRenderer` internals to load
-chunks across multiple frames — a materially bigger, riskier change than a
-loading *screen*, and out of scope here (every existing synchronous caller,
-including ~127 test files, currently depends on `update()` completing in one
-call). Confirmed by the same real screenshots: because nothing renders
-during the freeze itself, the spinner glyph is only ever actually seen to
-change across the couple of awaited frames before/after the freeze, then
-necessarily holds on one frame for the freeze's real duration — still a
-correct, honest indeterminate spinner, just one that (like everything else
-on screen) can't animate through a period nothing can render during.
+Progress is now a REAL, determinate **"N / M chunks"** count, not a
+fabricated percentage and not just an indeterminate spinner glyph anymore
+(that was this section's earlier design, before the reported "still looks
+like it's hanging" follow-up made it clear an honest-but-frozen spinner
+wasn't actually solving the perceived-hang problem). The chunk set is known
+and bounded up front (`pending_load_chunks`), so a real total was always
+computable — what was missing was `update()`'s own loop ever yielding, which
+`update_with_progress` now does. `update()` itself is unchanged and every
+one of the ~127 test files that depends on it completing in one synchronous
+call keeps working exactly as before; only the three loading-screen entry
+points (plus Join's `_client_process` tick) now go through the chunked
+variant.
 
 ## Status / mechanisms
 
@@ -202,14 +232,27 @@ on screen) can't animate through a period nothing can render during.
   once on `NOTIFICATION_WM_CLOSE_REQUEST`) — same untested-glue boundary as
   the rest of `World`.
 - ✅ Loading screen (`LoadingOverlay`, `src/ui/loading_spinner.gd`) covering
-  New Game/Host, Load Game, and Join's real synchronous world-setup stall
-  (see Loading screens above) — `LoadingSpinner.frame_for_elapsed` is pure
-  and tested (`test_loading_spinner.gd`); `LoadingOverlay`/its `World` wiring
-  are untested Node-composition glue, the same established boundary as the
-  rest of `World`/its overlay classes (`MainMenu`/`SettingsOverlay`). Verified
-  against a real running instance (real screenshots, both mid-freeze and
-  post-spawn, for New Game and Load Game), not just read through — see
-  `docs/progress.md`.
+  New Game/Host, Load Game, and Join's real world-setup stall, now with REAL
+  chunk-by-chunk progress (see Loading screens above) —
+  `EarthChunkManager.pending_load_chunks`/`update_with_progress` are pure
+  chunk-manager methods, tested (`test_earth_chunk_manager.gd`: total-matches-
+  chunks-in-radius, same chunks loaded as `update()`, progress calls run
+  0→total exactly once per chunk, eviction still happens); `LoadingSpinner.
+  frame_for_elapsed` is pure and tested (`test_loading_spinner.gd`);
+  `LoadingOverlay.set_progress`/its `World` wiring
+  (`_on_chunk_load_progress`/`_run_initial_client_chunk_load`) are untested
+  Node-composition glue, the same established boundary as the rest of
+  `World`/its overlay classes (`MainMenu`/`SettingsOverlay`) — `world.gd`
+  itself has no dedicated unit test (confirmed to still compile and its own
+  existing pure-helper tests, `test_world_persistence.gd`, still pass after
+  this change). The original spinner-only design was verified against a real
+  running instance (real screenshots, both mid-freeze and post-spawn, for New
+  Game and Load Game — see `docs/progress.md`); this progress-reporting
+  follow-up was NOT re-verified the same way (no live-GUI-automation harness
+  available in the session that built it), so the `World`-level wiring is
+  reasoned from the code and the passing chunk-manager tests, not
+  screenshot-confirmed — the same honestly-scoped gap this doc's own Join
+  entry already had.
 - 🚧 The pre-menu terrain-atlas bake (`TerrainRenderer.build_tile_set`,
   triggered unconditionally in `World._ready()` via `EarthChunkManager`'s
   constructor, before the main menu itself is even shown) is a real,

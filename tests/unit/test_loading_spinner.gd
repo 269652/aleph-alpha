@@ -1,13 +1,15 @@
 extends GutTest
 
-## LoadingSpinner: which indeterminate-spinner frame to show given how long
-## the loading overlay (see scenes/loading_overlay.gd) has been visible.
-## Pure and tuned-constant-driven per CLAUDE.md ("no eyeballed values") --
-## the overlay covers World's synchronous New Game/Load Game/Join stall
-## (EarthChunkManager.update()'s first call, measured ~39s in this dev
-## sandbox -- see docs/progress.md), which has no `await` anywhere in its own
-## call chain, so this can only ever be an HONEST indeterminate spinner, never
-## a real percentage.
+## LoadingSpinner: which spinner frame to show given how long the loading
+## overlay (see scenes/loading_overlay.gd) has been visible. Pure and
+## tuned-constant-driven per CLAUDE.md ("no eyeballed values") -- the overlay
+## covers World's New Game/Load Game/Join stall (EarthChunkManager.update()'s
+## first call, measured ~39-90s+ in this dev sandbox -- see docs/progress.md).
+## This glyph itself is still indeterminate (no percent-done concept), but
+## EarthChunkManager.update_with_progress now yields a frame between chunks
+## so it can actually be SEEN to animate, alongside a real "N / M chunks"
+## count LoadingOverlay.set_progress shows next to it -- see
+## docs/concept/persistence.md's "Loading screens" section.
 
 const LoadingSpinner = preload("res://src/ui/loading_spinner.gd")
 

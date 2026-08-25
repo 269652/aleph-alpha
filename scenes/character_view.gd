@@ -8,6 +8,7 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_character_sprite.gd")
+const LegGaitCycle = preload("res://src/rendering/leg_gait_cycle.gd")
 
 ## Reusable placeholder character rendering: a body/head/legs/arms made of
 ## flat colored shapes, a directional facing, walk and swim animations, and a
@@ -34,20 +35,58 @@ const TOOL_SLOT_SIDE_OFFSET := 8.0
 ## own midpoint.
 const GRIP_OFFSET_Y := 4.0
 
-## The fused leg pair's whole-body walk bob, in world units -- gentler than
-## LEG_SWING_AMPLITUDE (a single sprite bobbing reads as a smaller motion
-## than two legs swinging apart) since there is no per-leg swing art for it
-## yet to make a bigger motion read as a real stride rather than a wobble
-## (reported: "the legs aren't animated" -- see _apply_legs/_process).
+## The fused leg pair's own vertical walk motion, in world units -- the
+## THIRD attempt at this (see FUSED_LEG_BOB_AMPLITUDE/FUSED_LEG_ROCK_
+## AMPLITUDE below for the first two). The second attempt (a rock) was
+## itself superseded by a real hip+knee ROTATION gait (LegGaitCycle.
+## hip_angle/knee_angle) — biomechanically real angle math, deliberately
+## reduced below anatomical values for this exact concern (see both
+## constants' own doc comments: "on a front-on silhouette the full real
+## angle reads as an exaggerated snap") — but reported live even after
+## that reduction: "legs still move left and right instead of up and
+## down". Rotating a front-facing leg around its hip pivot displaces its
+## tip mostly HORIZONTALLY for any angle, full stop — a real human's own
+## visible motion walking straight toward/away from a camera is a
+## vertical knee-lift, not a side-to-side swing. LegGaitCycle.
+## swing_lift_fraction reuses the exact same phase-timing research
+## (still correct) as a [0,1] lift fraction instead of an angle; this is
+## what that fraction gets multiplied by. Originally set to 1.0 (this now
+## drives the WHOLE leg -- thigh AND the shin riding along via the
+## parent-child chain -- so a smaller amplitude than the very first bob
+## attempt's 1.2 seemed reasonable), but reported live as reading as
+## almost no motion at all: "legs now barely move at all... there should
+## be visible natural walking motion". Bumped to 3.0 -- roughly 15% of
+## LEG_SIZE.y (20), a real, legible lift rather than a barely-there
+## wobble, while still well short of the leg's own full height so it
+## doesn't read as a hop.
+const FUSED_LEG_LIFT_AMPLITUDE := 3.0
+
+## SUPERSEDED by a real hip+knee gait (see FUSED_LEG_ROCK_AMPLITUDE's own
+## doc comment, and leg_gait_cycle.gd) -- kept only as a historical pointer;
+## no code reads it any more. It WAS the fused leg pair's whole-body walk
+## bob, in world units -- gentler than LEG_SWING_AMPLITUDE (a single sprite
+## bobbing reads as a smaller motion than two legs swinging apart) since
+## there was no per-leg swing art for it yet to make a bigger motion read as
+## a real stride rather than a wobble (reported at the time: "the legs
+## aren't animated").
 const FUSED_LEG_BOB_AMPLITUDE := 1.2
-## An interim stride cue for the fused pair (reported live: real per-leg
-## knee-jointed animation) -- the fused drawing can't split into two
-## independently-swinging legs at all without new source art (see
-## docs/concept/character_art_brief.md's "Four bugs" section), so this is
-## the closest a whole-pair transform alone can get: a small hip-pivot
-## rock, in RADIANS, on top of the existing vertical bob. Small on purpose
-## -- this is a coarse stand-in for a real stride, not meant to read as
-## exaggerated swagger.
+## SUPERSEDED by a real hip+knee gait (see leg_gait_cycle.gd / _apply_legs /
+## _process) -- kept only as a historical pointer for the doc comments below
+## that still narrate how this constant used to work; no code reads it any
+## more. It WAS an interim stride cue for the fused pair (reported live at
+## the time: real per-leg knee-jointed animation) -- the fused drawing can't
+## split into two independently-swinging legs at all without new source art
+## (see docs/concept/character_art_brief.md's "Four bugs" section), so a
+## small whole-pair hip-pivot rock, in RADIANS, on top of a vertical bob was
+## the closest a single rigid transform could get. Reported live again
+## later, still asking for a REAL knee: replaced by LegGaitCycle.hip_angle/
+## knee_angle driving a genuine two-piece hip+knee pivot chain instead (see
+## IllustratedCharacterSprite.composite_leg_segments for the crop that makes
+## that chain possible without new art) -- which was ITSELF then reported as
+## reading wrong ("legs still move left and right instead of up and down")
+## and replaced by FUSED_LEG_LIFT_AMPLITUDE above driving vertical position
+## instead of rotation, reusing the same LegGaitCycle phase timing as a
+## [0,1] fraction (see LegGaitCycle.swing_lift_fraction).
 const FUSED_LEG_ROCK_AMPLITUDE := 0.12
 
 ## Bumped from the original 10x14/8x8 (see the character sprite engine's
@@ -127,7 +166,24 @@ static func _anthropometric_leg_height(above_hip_height: float) -> float:
 ## shift up by that same delta, so the now-taller legs read as the whole
 ## character growing taller from the hips down, not the torso/head sinking
 ## into overlapping legs.
-const LEG_SIZE := Vector2i(5, 20)
+##
+## .x widened 5 -> 10 once the hip+knee leg-gait split (see leg_gait_
+## cycle.gd) exposed a real, previously-hidden bug: composite_part_scale_for
+## matches CONTENT HEIGHT alone (see _width_bounded_scale's own doc comment
+## on why that isn't automatically also correct for width), and nothing
+## clamped the thigh/shin split's own width the way _apply_body's own
+## _width_bounded_scale call already does for the torso -- measured
+## rendering the fused pair 42-64 world units wide against the OLD
+## LEG_SIZE.x's target of 10 (5*2), nearly as wide as the torso itself
+## (reported live: "unproportional ... walks like a duck"). 10 is measured,
+## not eyeballed, the same way BODY_SIZE.x was: outfit row 0's legs measure
+## 64x64 (a 1:1 aspect), so LEG_SIZE.y(20) * 64/64 / 2 = 10 lets THAT row's
+## fused pair hit its full anthropometric HEIGHT with no width clamp needed
+## at all, while shorter/wider rows (the other 7) still compromise toward
+## width the same way BODY_SIZE.x's own rows do -- a real trade-off between
+## "never distort the art" and "always hit the exact target height," not a
+## bug, when a row's own aspect doesn't match this box's.
+const LEG_SIZE := Vector2i(10, 20)
 const ARM_SIZE := Vector2i(4, 9)
 const SLOT_SIZE := Vector2i(7, 7)
 const EYE_COLOR := Color(0.1, 0.1, 0.1)
@@ -141,7 +197,7 @@ const EYE_COLOR := Color(0.1, 0.1, 0.1)
 ## units) valid unchanged.
 const ART_BODY_SIZE := Vector2i(52, 38)
 const ART_HEAD_SIZE := Vector2i(24, 24)
-const ART_LEG_SIZE := Vector2i(10, 40)
+const ART_LEG_SIZE := Vector2i(20, 40)
 const ART_ARM_SIZE := Vector2i(8, 18)
 const ART_SLOT_SIZE := Vector2i(14, 14)
 
@@ -210,6 +266,7 @@ var _cycle_time := 0.0
 var _equipped_slots: Dictionary = {}  # slot_name (String) -> bool
 
 var _weapon_swing := WeaponSwing.new()
+var _leg_gait := LegGaitCycle.new()
 var _character_sprite := ProceduralCharacterSprite.new()
 var _illustrated := IllustratedCharacterSprite.new()
 var _submersion := SubmersionShader.new()
@@ -234,6 +291,14 @@ var _pending_appearance: Dictionary = {}
 @onready var _head: Sprite2D = $Head
 @onready var _leg_left: Sprite2D = $LegLeft
 @onready var _leg_right: Sprite2D = $LegRight
+## The knee pivot (Node2D, not Bone2D -- see IllustratedCharacterSprite's own
+## doc comment on "Leg hip/knee segments" for why plain Bone2D nodes without
+## a real Skeleton2D-driven Polygon2D skin were set aside as more nominal
+## than useful here) and the shin crop it carries, both children of LegLeft
+## so they automatically inherit the hip's own rotation (see _apply_legs/
+## _process). Unused (left at rest, hidden) on the procedural fallback path.
+@onready var _leg_knee: Node2D = $LegLeft/LegLeftKnee
+@onready var _leg_shin: Sprite2D = $LegLeft/LegLeftKnee/LegLeftShin
 @onready var _arm_left: Sprite2D = $ArmLeft
 @onready var _arm_right: Sprite2D = $ArmRight
 @onready var _head_slot: Sprite2D = $HeadSlot
@@ -263,6 +328,18 @@ var _legs_are_fused := false
 ## bobs around this rather than around _leg_left_base_position, which is the
 ## UN-centred single-leg tscn position the fused pair never actually sits at.
 var _leg_fused_rest_position: Vector2
+
+## This outfit row's own real walk-cycle frames for the fused leg pair (see
+## IllustratedCharacterSprite's own top-level doc comment on the second
+## hero_composite.png regeneration: up to 5 real drawn poses per row now,
+## not one static image) -- set once in _apply_legs, cycled through by
+## _process/_apply_leg_frame while WALKING. SUPERSEDES the hip/knee
+## crop-and-hinge rig (_leg_knee/_leg_shin, leg_gait_cycle.gd) that used to
+## fake motion out of a single pose -- real art beats a synthetic
+## approximation of it, so that whole system is retired (its own nodes stay
+## in the .tscn, just permanently hidden -- see _apply_legs) rather than
+## restructuring the scene file over it.
+var _leg_walk_frames: Array[ImageTexture] = []
 
 ## Which of hero_composite.png's 8 pre-colored outfit rows this view is
 ## currently wearing on body/legs/arms -- rolled once per apply_appearance
@@ -353,19 +430,25 @@ func _process(delta: float) -> void:
 	_arm_right.visible = true
 
 	if _legs_are_fused:
-		# No per-leg swing art exists for the fused pair (see _apply_legs) --
-		# splitting leg_swing_offset's opposite-direction motion across a
-		# SINGLE sprite would visibly tear it into two offset copies of
-		# itself. A small whole-pair bob instead: absf(sin), not sin, so it
-		# dips at every footfall (twice a stride) rather than once per full
-		# swing cycle, the cadence a real gait actually has -- reads as "this
-		# pair is walking" without needing per-leg frames.
-		var bob := absf(sin(_cycle_time)) * FUSED_LEG_BOB_AMPLITUDE if movement_state == MovementState.WALKING else 0.0
-		_leg_left.position = _leg_fused_rest_position + Vector2(0, -bob)
-		# sin, not the bob's absf(sin) -- a stride leans one way then the
-		# other over a whole cycle, not twice per cycle the way footfalls
-		# (and the bob above) land.
-		_leg_left.rotation = sin(_cycle_time) * FUSED_LEG_ROCK_AMPLITUDE if movement_state == MovementState.WALKING else 0.0
+		# Real walk-cycle FRAMES now, not synthesized rotation or a lift
+		# (see _leg_walk_frames' own doc comment for the fuller history --
+		# rotation read as a left-right pendulum on a front-facing sprite
+		# no matter the angle; a lift alone was reported as barely visible
+		# motion). hero_composite.png's own outfit rows each carry several
+		# real drawn leg poses now; this just steps through them in step
+		# with the shared walk-cycle clock, the same one leg_swing_offset/
+		# arm_stroke_offset above already use, so a full lap of _cycle_time
+		# (2*PI, WALK_CYCLE_SPEED radians/sec) plays through the WHOLE
+		# sequence once per stride rather than racing ahead of or lagging
+		# behind everything else that's timed off it.
+		if movement_state == MovementState.WALKING:
+			var frame_count := _leg_walk_frames.size()
+			if frame_count > 0:
+				var phase_fraction := fposmod(_cycle_time, TAU) / TAU
+				var frame_index := int(phase_fraction * frame_count) % frame_count
+				_apply_leg_frame(frame_index)
+		else:
+			_apply_leg_frame(0)
 	else:
 		_leg_left.position = _leg_left_base_position + Vector2(0, leg_swing_offset)
 		_leg_right.position = _leg_right_base_position + Vector2(0, -leg_swing_offset)
@@ -707,30 +790,33 @@ func _apply_head(appearance: Dictionary) -> void:
 ## in OPPOSITE directions (see _process), which is what makes a two-legged
 ## gait read at all. The illustrated art draws both legs together as one
 ## fused PAIR (see IllustratedCharacterSprite's own doc comment on why), so
-## it is worn as ONE sprite covering both world slots instead: LegLeft
-## carries the whole pair, centred between the two slots' own positions, and
-## LegRight is hidden outright. _legs_are_fused records which mode is active
-## so _process knows not to apply the opposite-direction swing to a single
-## fused image (that would visibly split it into two offset copies of
-## itself) -- no per-leg swing art exists yet for the illustrated pair, an
-## honest gap rather than a broken-looking animation.
+## it is worn as TWO sprites covering both world slots between them instead:
+## LegLeft is the HIP pivot, wearing the THIGH crop (see
+## IllustratedCharacterSprite.composite_leg_segments) and centred where the
+## fused pair used to sit as one whole sprite; LegLeftKnee/LegLeftShin (its
+## children -- see the .tscn) are the KNEE pivot and the SHIN crop.
+## LegRight is hidden outright, same as before. _legs_are_fused records
+## which mode is active so _process knows to drive the hip/knee pivot chain
+## with a real gait (see leg_gait_cycle.gd) instead of the procedural
+## fallback's independent per-leg position swing.
 func _apply_legs(appearance: Dictionary) -> void:
 	var textures := _illustrated.generate_composite_textures("legs", _outfit_variant)
 	# See _apply_body's own comment on why this checks the actual result,
 	# not has_composite_part alone.
 	if not textures.is_empty():
-		_leg_left.texture = textures[0]
 		_leg_left.modulate = Color.WHITE
-		var legs_scale := _illustrated.composite_part_scale_for(
-			"legs", _outfit_variant, float(LEG_SIZE.y)
-		)
-		_leg_left.scale = Vector2.ONE * legs_scale
-		_leg_left.offset.y = _composite_content_offset_y(
-			_illustrated.trimmed_composite_image("legs", _outfit_variant).get_height(),
-			IllustratedCharacterSprite.CANVAS_SIZE.y, IllustratedCharacterSprite.BASELINE_Y
-		)
+		_leg_left.rotation = 0.0
 		_leg_fused_rest_position = (_leg_left_base_position + _leg_right_base_position) * 0.5
-		_leg_left.position = _leg_fused_rest_position
+		# The hip/knee crop-and-hinge rig used to live here (LegLeftKnee/
+		# LegLeftShin) -- retired now that hero_composite.png carries real
+		# walk-cycle frames for the legs (see _leg_walk_frames' own doc
+		# comment): real art beats synthesizing motion from one static
+		# pose. The nodes stay in the .tscn, just permanently hidden, so
+		# they never show a stale texture from before this pass.
+		_leg_knee.rotation = 0.0
+		_leg_shin.visible = false
+		_leg_walk_frames = textures
+		_apply_leg_frame(0)
 		_legs_are_fused = true
 	else:
 		_apply_paperdoll_part(
@@ -742,7 +828,46 @@ func _apply_legs(appearance: Dictionary) -> void:
 			func(): return _character_sprite.generate_body_part_texture(ART_LEG_SIZE, appearance.legs)
 		)
 		_leg_left.position = _leg_left_base_position
+		_leg_left.rotation = 0.0
+		_leg_knee.rotation = 0.0
+		# No knee crop on the procedural fallback (flat rectangles, no
+		# hip/knee split art) -- hidden rather than left showing a stale
+		# illustrated-path texture from a previous appearance.
+		_leg_shin.visible = false
 		_legs_are_fused = false
+
+
+## Shows walk-cycle frame `frame_index` of _leg_walk_frames -- scaled,
+## width-clamped, and positioned exactly the way _apply_legs' own
+## single-frame version always was, just re-measured per FRAME instead of
+## once per appearance: real walk-cycle poses can genuinely differ in
+## their own drawn height (a mid-stride pose often reads a little shorter
+## than a standing one), so re-measuring per frame lets the character's
+## own real art drive a small natural vertical bob as a side effect,
+## rather than needing a second synthetic bob layered on top of real
+## animated art. Called once at rest (frame 0, a neutral standing pose)
+## and again every WALKING frame from _process to actually step through
+## the sequence (see that function's own doc comment).
+func _apply_leg_frame(frame_index: int) -> void:
+	if _leg_walk_frames.is_empty():
+		return
+	var index := clampi(frame_index, 0, _leg_walk_frames.size() - 1)
+	var trimmed := _illustrated.trimmed_composite_image("legs", _outfit_variant, "front", index)
+	var legs_scale := _illustrated.composite_part_scale_for(
+		"legs", _outfit_variant, float(LEG_SIZE.y), index
+	)
+	# The fused pair spans BOTH world slots, so its own width bound is
+	# twice a single leg's -- see _width_bounded_scale's own doc comment,
+	# and LEG_SIZE.x's own doc comment for why this clamp exists at all
+	# (reported live: "unproportional ... walks like a duck").
+	legs_scale = _width_bounded_scale(legs_scale, trimmed, float(LEG_SIZE.x * 2))
+	_leg_left.texture = _leg_walk_frames[index]
+	_leg_left.scale = Vector2.ONE * legs_scale
+	_leg_left.offset.y = _composite_content_offset_y(
+		trimmed.get_height() if trimmed != null else float(IllustratedCharacterSprite.BASELINE_Y),
+		IllustratedCharacterSprite.CANVAS_SIZE.y, IllustratedCharacterSprite.BASELINE_Y
+	)
+	_leg_left.position = _leg_fused_rest_position
 
 
 ## Uses illustrated art for `part_name` (tinted `tint` via modulate -- see

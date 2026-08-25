@@ -29,7 +29,7 @@ const SIZE := 32
 ## TerrainRenderer reserves their atlas slots (see
 ## TerrainRenderer._structure_linear) -- adding a new placeable structure's
 ## art means adding its id here and a case in generate_image.
-const STRUCTURE_IDS: Array[String] = ["campfire", "furnace"]
+const STRUCTURE_IDS: Array[String] = ["campfire", "furnace", "sagewerk", "storage"]
 
 # -- campfire: warm ember ground, crossed logs, a licking flame -------------
 
@@ -87,6 +87,10 @@ func generate_texture(structure_id: String, variant_seed: int = 0) -> ImageTextu
 func generate_image(structure_id: String, variant_seed: int = 0) -> Image:
 	if structure_id == "furnace":
 		return _furnace_image(variant_seed)
+	if structure_id == "sagewerk":
+		return _sagewerk_image(variant_seed)
+	if structure_id == "storage":
+		return _storage_image(variant_seed)
 	return _campfire_image(variant_seed)
 
 
@@ -235,5 +239,140 @@ func _shade_top_left_highlight_bottom_right_shadow(image: Image) -> void:
 		image.set_pixel(SIZE - 1, y, _palette.shade(image.get_pixel(SIZE - 1, y)))
 
 
+# -- sagewerk: a sawdust-pale worksite, a trunk on trestles, a saw kerf ------
+# (see docs/concept/timber_construction.md's Sägewerk worksite -- log ->
+# beam/plank shaping, distinct from campfire's fire-warm and furnace's
+# stone-cool reads: this one reads as raw, pale, worked wood.)
+
+const _SAWDUST_GROUND := Color(0.62, 0.5, 0.32)
+const _TRESTLE_COLOR := Color(0.3, 0.2, 0.1)
+const _LOG_ON_TRESTLE_COLOR := Color(0.45, 0.32, 0.16)
+const _SAWCUT_COLOR := Color(0.85, 0.8, 0.65)
+
+## Two trestle uprights hold the trunk off the ground -- the same real
+## "keep wood off bare earth" reasoning timber_construction.md's own
+## grounding section gives for footings, applied to a worksite prop instead
+## of a finished building.
+const _TRESTLE_LEFT_X := 6
+const _TRESTLE_RIGHT_X := 26
+const _TRESTLE_TOP_ROW := 12
+const _TRESTLE_BOTTOM_ROW := 28
+const _TRESTLE_THICKNESS := 3
+
+## The trunk lying across both trestles, spanning the full tile width.
+const _LOG_ROW := 12
+const _LOG_THICKNESS_SAGEWERK := 6
+
+
+func _sagewerk_image(variant_seed: int) -> Image:
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	image.fill(_SAWDUST_GROUND)
+
+	_paint_trestle(image, _TRESTLE_LEFT_X)
+	_paint_trestle(image, _TRESTLE_RIGHT_X)
+	_paint_log_on_trestle(image, variant_seed)
+	_paint_sawcut(image, variant_seed)
+	_outline_against_background(image, _SAWDUST_GROUND)
+	return image
+
+
+func _paint_trestle(image: Image, x: int) -> void:
+	for y in range(_TRESTLE_TOP_ROW, _TRESTLE_BOTTOM_ROW):
+		for t in _TRESTLE_THICKNESS:
+			var px := x + t
+			if px >= 0 and px < SIZE:
+				image.set_pixel(px, y, _TRESTLE_COLOR)
+
+
+## The trunk itself, with a small seeded lighten/darken so different seeds
+## read as different individual logs, not one fixed texture.
+func _paint_log_on_trestle(image: Image, variant_seed: int) -> void:
+	var jitter := _seeded_unit_float(variant_seed, "sagewerk_log") - 0.5
+	var color := _LOG_ON_TRESTLE_COLOR.lightened(maxf(jitter * 0.2, 0.0)).darkened(maxf(-jitter * 0.2, 0.0))
+	for y in range(_LOG_ROW, _LOG_ROW + _LOG_THICKNESS_SAGEWERK):
+		for x in SIZE:
+			image.set_pixel(x, y, color)
+
+
+## A pale saw kerf drawn straight through the trunk -- the detail that reads
+## "sawmill worksite" rather than "log pile". A small seeded horizontal
+## offset keeps different seeds visibly distinct.
+func _paint_sawcut(image: Image, variant_seed: int) -> void:
+	var offset := _seeded_unit_float(variant_seed, "sagewerk_saw") * 4.0
+	var mid_row := _LOG_ROW + _LOG_THICKNESS_SAGEWERK / 2
+	for x in SIZE:
+		var y := mid_row + int(round(sin((float(x) + offset) * 0.4)))
+		if y >= 0 and y < SIZE:
+			image.set_pixel(x, y, _SAWCUT_COLOR)
+
+
 func _seeded_unit_float(seed_value: int, salt: String) -> float:
 	return float(absi(hash("%d_%s" % [seed_value, salt])) % 10000) / 10000.0
+
+
+# -- storage: a small wooden lumber shed with a darker plank-seam wall -------
+#
+# Warm timber-brown (unlike furnace's cool stone grey), and a flat plank
+# wall rather than campfire's open ember ground -- reads as an enclosed
+# structure you'd stack goods inside, not a heat source.
+
+## A brighter, more saturated honey-wood than TerrainRenderer.EARTH_COLOR's
+## muddy brown -- freshly built planks read lighter than bare dirt.
+const _SHED_WALL_COLOR := Color(0.66, 0.45, 0.2)
+const _SHED_SEAM_COLOR := Color(0.42, 0.28, 0.13)
+const _SHED_ROOF_COLOR := Color(0.28, 0.19, 0.1)
+const _SHED_DOOR_COLOR := Color(0.22, 0.14, 0.07)
+
+## The roof band occupies these top rows (exclusive end).
+const _SHED_ROOF_ROWS := 6
+## Vertical plank seams every this many px across the wall.
+const _SHED_PLANK_SPACING := 6
+## The door opening's bounds (exclusive end) -- the detail that reads "shed
+## you can walk into", the same role furnace's firebox opening plays.
+const _SHED_DOOR_LEFT := 12
+const _SHED_DOOR_RIGHT := 20
+const _SHED_DOOR_TOP := 20
+const _SHED_DOOR_BOTTOM := 30
+
+
+func _storage_image(variant_seed: int) -> Image:
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	image.fill(_SHED_WALL_COLOR)
+
+	_paint_plank_seams(image, variant_seed)
+	_paint_roof_band(image)
+	_paint_door(image)
+	_shade_top_left_highlight_bottom_right_shadow(image)
+	return image
+
+
+## Vertical seams between wall planks, offset per row so they read as
+## individual boards rather than a printed grid -- mirrors
+## _paint_brick_pattern's running-bond reasoning, just vertical instead of
+## horizontal since a plank wall's boards stand upright, not stacked flat.
+func _paint_plank_seams(image: Image, variant_seed: int) -> void:
+	var jitter := _seeded_unit_float(variant_seed, "shed_shade") - 0.5
+	var wall := _SHED_WALL_COLOR.lightened(maxf(jitter * 0.1, 0.0)).darkened(maxf(-jitter * 0.1, 0.0))
+	for y in range(_SHED_ROOF_ROWS, SIZE):
+		_fill_row(image, y, wall)
+	for x in SIZE:
+		if x % _SHED_PLANK_SPACING == 0:
+			for y in range(_SHED_ROOF_ROWS, SIZE):
+				image.set_pixel(x, y, _SHED_SEAM_COLOR)
+
+
+## A flat dark roof band across the top rows -- the detail that reads "shed"
+## rather than "plank fence".
+func _paint_roof_band(image: Image) -> void:
+	for y in range(_SHED_ROOF_ROWS):
+		_fill_row(image, y, _SHED_ROOF_COLOR)
+
+
+## The dark door opening low on the wall, outlined -- the same "gives the
+## silhouette its function" role furnace's firebox plays.
+func _paint_door(image: Image) -> void:
+	var outline := _palette.outline_color()
+	for y in range(_SHED_DOOR_TOP, _SHED_DOOR_BOTTOM):
+		for x in range(_SHED_DOOR_LEFT, _SHED_DOOR_RIGHT):
+			var edge := y == _SHED_DOOR_TOP or y == _SHED_DOOR_BOTTOM - 1 or x == _SHED_DOOR_LEFT or x == _SHED_DOOR_RIGHT - 1
+			image.set_pixel(x, y, outline if edge else _SHED_DOOR_COLOR)

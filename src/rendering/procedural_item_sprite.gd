@@ -125,6 +125,22 @@ const _ITEM_LOOKS := {
 	"iron_legs": {"color": Color(0.64, 0.66, 0.73), "shape": "legs"},
 	"iron_boots": {"color": Color(0.6, 0.62, 0.69), "shape": "boots"},
 	"fishing_rod": {"color": Color(0.5, 0.36, 0.2), "shape": "sword"},
+	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
+	# docs/concept/player_citizenship.md). Reuses existing shapes only --
+	# "sword" doubles as this renderer's generic "elongated handheld object"
+	# silhouette already (torch, stick, fishing_rod), and "armor" as its
+	# generic "flat rectangular plate" silhouette (a book cover) already --
+	# each item still gets its own distinct color so none collide.
+	"rough_compass": {"color": Color(0.5, 0.42, 0.3), "shape": "round"},
+	"compass": {"color": Color(0.78, 0.66, 0.28), "shape": "round"},
+	"map": {"color": Color(0.85, 0.75, 0.55), "shape": "oval"},
+	"spyglass": {"color": Color(0.55, 0.5, 0.42), "shape": "sword"},
+	"weather_glass": {"color": Color(0.6, 0.75, 0.82), "shape": "oval"},
+	"star_chart": {"color": Color(0.22, 0.2, 0.42), "shape": "round"},
+	"deed": {"color": Color(0.78, 0.42, 0.28), "shape": "oval"},
+	"ledger": {"color": Color(0.22, 0.34, 0.24), "shape": "armor"},
+	"field_journal": {"color": Color(0.5, 0.3, 0.16), "shape": "armor"},
+	"charter": {"color": Color(0.4, 0.3, 0.62), "shape": "armor"},
 }
 const _FALLBACK := {"color": Color(0.6, 0.6, 0.6), "shape": "round"}
 

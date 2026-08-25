@@ -81,3 +81,38 @@ func test_unknown_pieces_answer_safely_rather_than_crashing():
 	assert_false(BuildingPiece.encloses("mystery"))
 	assert_true(BuildingPiece.is_walkable("mystery"), "unknown ids must not silently block the world")
 	assert_eq(BuildingPiece.cost_of("mystery"), {})
+
+
+# -- timber tier: real consumers for beam/plank (see
+# docs/concept/timber_construction.md, docs/concept/woodworking.md's own
+# "beam/plank have no consumers yet" gap) -- a real Anno-style upgrade path,
+# wood tier then timber tier, sourced from a Sägewerk supply chain rather
+# than the raw wood tier's plain gather-and-place. Pillar 1 of the timber
+# doc: Balken (beam) is the load-bearing structural piece, Planke (plank)
+# is not -- so the wall costs beam, the floor costs plank.
+
+func test_timber_wall_costs_beam():
+	assert_true(BuildingPiece.has_piece("timber_wall"))
+	var cost := BuildingPiece.cost_of("timber_wall")
+	assert_true(cost.has("beam"), "a timber wall is the load-bearing piece -- it should cost beam")
+	assert_true(BuildingPiece.encloses("timber_wall"))
+	assert_false(BuildingPiece.is_walkable("timber_wall"))
+
+
+func test_timber_floor_costs_plank():
+	assert_true(BuildingPiece.has_piece("timber_floor"))
+	var cost := BuildingPiece.cost_of("timber_floor")
+	assert_true(cost.has("plank"), "a timber floor is non-structural decking -- it should cost plank")
+	assert_true(BuildingPiece.is_walkable("timber_floor"))
+	assert_false(BuildingPiece.encloses("timber_floor"))
+
+
+## The timber tier sits ABOVE plain wood (a real Sägewerk supply chain, not
+## just gathered wood) but is not itself the stone tier.
+func test_timber_wall_is_more_durable_than_a_plain_wood_wall():
+	assert_gt(BuildingPiece.durability_of("timber_wall"), BuildingPiece.durability_of("wood_wall"))
+
+
+func test_timber_pieces_are_included_in_piece_ids():
+	assert_true(BuildingPiece.PIECE_IDS.has("timber_wall"))
+	assert_true(BuildingPiece.PIECE_IDS.has("timber_floor"))

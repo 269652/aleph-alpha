@@ -17,7 +17,6 @@ const SkillTree = preload("res://src/gameplay/skill_tree.gd")
 const KeystonePassive = preload("res://src/gameplay/keystone_passive.gd")
 const EcologicalLiteracy = preload("res://src/gameplay/ecological_literacy.gd")
 const Equipment = preload("res://src/gameplay/equipment.gd")
-const Smelting = preload("res://src/gameplay/smelting.gd")
 const FishingSession = preload("res://src/gameplay/fishing_session.gd")
 const MaterialDamage = preload("res://src/gameplay/material_damage.gd")
 const Block = preload("res://src/gameplay/block.gd")
@@ -256,7 +255,6 @@ const XP_PER_KILL := 6
 ## mitigates, it doesn't make you invulnerable.
 const MIN_ARMORED_DAMAGE := 1.0
 var _crafting_recipe_book := CraftingRecipeBook.new()
-var _smelting := Smelting.new()
 var _fishing := FishingSession.new()
 ## Taming (see docs/concept/taming.md): the animal currently on the end of
 ## this player's lasso, and the point the rope's loose end is tied to (a tree)
@@ -984,6 +982,39 @@ func _has_structure_near_player(structure_id: String) -> bool:
 	return _chunk_manager.has_structure_near(tile.x, tile.y, structure_id, HEAT_SOURCE_RADIUS_TILES)
 
 
+## Generic requires_structure gate (see docs/concept/production_chains.md,
+## and CraftingRecipeBook.recipe_requires_structure) -- true if recipe_id
+## has no structure gate at all (the common case). "heat_source" is the one
+## abstract category value: EITHER a campfire OR a furnace nearby satisfies
+## it, exactly as _has_heat_source already accepted for every smelt before
+## this generalization (see concept/smelting.md). Every other value names
+## one real, specific structure id, checked directly via
+## _has_structure_near_player -- e.g. the Sägewerk's own log_to_balken/
+## log_to_planke recipes require "sagewerk" nearby, no separate mechanism.
+func _meets_requires_structure(recipe_id: String) -> bool:
+	var structure_id := _crafting_recipe_book.recipe_requires_structure(recipe_id)
+	if structure_id == "":
+		return true
+	if structure_id == "heat_source":
+		return _has_heat_source()
+	return _has_structure_near_player(structure_id)
+
+
+## Generic required_skill gate (see docs/concept/production_chains.md, and
+## CraftingRecipeBook.recipe_required_skill) -- true if recipe_id has no
+## skill gate at all (the common case). Reads the live allocated-skill total
+## via SkillTree.total_bonus, the exact same pattern
+## Player._chop_step's own CARPENTRY_LEVEL_FOR_SAWING check already uses --
+## this is what makes a recipe's required_skill field actually refuse the
+## craft in practice, not just exist as unread data.
+func _meets_required_skill(recipe_id: String) -> bool:
+	var requirement := _crafting_recipe_book.recipe_required_skill(recipe_id)
+	if requirement.is_empty():
+		return true
+	var have_level := skill_tree.total_bonus(requirement["stat_name"], allocated_nodes)
+	return have_level >= requirement["level"]
+
+
 ## Equips a weapon or tool as the single held item (drawn in hand, and the
 ## sole driver of attack/chop/mine effectiveness). The item stays in the
 ## inventory -- equipping just makes it active and updates the drawn sprite,
@@ -1040,11 +1071,11 @@ func _inventory_counts() -> Dictionary:
 ## inputs: removes exactly the consumed amount of each input (the delta
 ## between the pre-craft count and CraftingRecipeBook's reported remaining
 ## count) and adds the output via ItemCatalog. Returns false (no-op, nothing
-## removed or added) if the recipe is unknown or inputs are insufficient.
+## removed or added) if the recipe is unknown, its requires_structure/
+## required_skill gate (see docs/concept/production_chains.md) isn't met, or
+## inputs are insufficient.
 func craft(recipe_id: String) -> bool:
-	# Smelting recipes (ore + coal -> ingot) need a heat source present, like
-	# cooking does (see Smelting / concept/smelting.md).
-	if _smelting.is_smelting_recipe(recipe_id) and not _has_heat_source():
+	if not _meets_requires_structure(recipe_id) or not _meets_required_skill(recipe_id):
 		return false
 	var counts := _inventory_counts()
 	var result := _crafting_recipe_book.craft(recipe_id, counts)

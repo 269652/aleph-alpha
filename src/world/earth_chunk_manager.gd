@@ -22,6 +22,8 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
+const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
+const StructureStockStore = preload("res://src/emergence/structure_stock_store.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
@@ -54,6 +56,7 @@ const EventStore = preload("res://src/emergence/event_store.gd")
 const EventStorePersistence = preload("res://src/emergence/event_store_persistence.gd")
 const MemoryStore = preload("res://src/emergence/memory_store.gd")
 const MemoryStorePersistence = preload("res://src/emergence/memory_store_persistence.gd")
+const Household = preload("res://src/emergence/household.gd")
 const HouseholdStore = preload("res://src/emergence/household_store.gd")
 const HouseholdStorePersistence = preload("res://src/emergence/household_store_persistence.gd")
 const Contract = preload("res://src/emergence/contract.gd")
@@ -67,6 +70,7 @@ const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
 const InstitutionStorePersistence = preload("res://src/emergence/institution_store_persistence.gd")
 const InstitutionFormation = preload("res://src/emergence/institution_formation.gd")
+const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
@@ -117,6 +121,8 @@ const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const RoomDetector = preload("res://src/gameplay/room_detector.gd")
 const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const VillageFinder = preload("res://src/world/village_finder.gd")
+const ExploredTiles = preload("res://src/world/explored_tiles.gd")
+const WeatherForecast = preload("res://src/gameplay/weather_forecast.gd")
 
 ## Where player-made tile modifications (Phase 3 building) are persisted,
 ## keyed per chunk -- terrain itself is deterministically regenerable (see
@@ -216,6 +222,11 @@ var _geology_renderer := GeologyRenderer.new()
 var _cave_entrance_placement := CaveEntrancePlacement.new()
 var _wild_crop_renderer := WildCropRenderer.new()
 var _decomposer_renderer := DecomposerRenderer.new()
+## "an NPC moves in" (see docs/concept/timber_construction.md's NPC
+## section) -- no dedicated renderer class needed (spawning one
+## LumberjackMarker per Sägewerk tile is simple enough to do directly, see
+## _spawn_lumberjack_for/_despawn_lumberjack_at below), unlike the
+## per-chunk-random-count decomposer/wild-crop spawners.
 var _grass_sprite_generator := ProceduralGrassSprite.new()
 var _illustrated_grass := IllustratedGrassPatch.new()
 var _scrub_sprite_generator := ProceduralScrubSprite.new()
@@ -258,6 +269,12 @@ var _region_difficulty := RegionDifficulty.new()
 ## and keeps this independent of VillageRenderer's rendering concerns.
 var _settlement_generator := SettlementGenerator.new()
 var _village_finder := VillageFinder.new()
+## Per-player explored-chunk tracking (see docs/concept/wayfinding.md's Map
+## item) -- no automatic caller wired from chunk-loading/generation yet
+## (deliberately out of scope for this pass, see ExploredTiles' own doc
+## comment); these three coordinator methods exist so a future caller (and
+## Map's landmarks_visible_on_map) has something real to read/write.
+var _explored_tiles := ExploredTiles.new()
 var _spawn_chunk_coord := Vector2i.ZERO
 ## True once set_spawn_tile has actually been called -- distinguishes "spawn
 ## is genuinely at the world origin" from "no spawn configured yet", so the
@@ -384,6 +401,22 @@ const WILD_CROP_IDS := ["carrot", "potato"]
 ## since a decomposer's whole behavior lives on the marker itself and it
 ## queries the Carcass/CarcassGuts groups directly.
 var _decomposer_markers: Dictionary = {}
+
+## The Sägewerk's own Lumberjack -- "an NPC moves in" the moment a
+## "sagewerk" modification tile exists (see
+## docs/concept/timber_construction.md). chunk_coord -> {Vector2i local_cell
+## -> LumberjackMarker}, mirroring _piece_collision_bodies' own per-chunk
+## dict-of-cells shape -- one entry per placed Sägewerk instance, keyed by
+## its own cell so a rebuild/overwrite/destroy on that exact tile can find
+## and despawn just its own worker (see _spawn_lumberjack_for/
+## _despawn_lumberjack_at). Persisted implicitly: the "sagewerk" tile itself
+## is an ordinary chunk modification (see build_at_global), so a reloaded
+## chunk re-staffs a fresh Lumberjack for every persisted Sägewerk found in
+## _load_chunk -- the Lumberjack's own in-progress gathering/production
+## state (log stock, shaping progress) is NOT persisted across an unload, a
+## known/documented gap (see docs/progress.md), same class of limitation as
+## geology's mined-tunnel state.
+var _sagewerk_lumberjacks: Dictionary = {}
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
 var _scrub_refresh_accumulator := 0.0
@@ -407,6 +440,15 @@ var _loaded_villages: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 ## generic tile-solidity check. Tracked per chunk so unloading frees exactly
 ## that chunk's bodies, mirroring _loaded_trees/_loaded_stones.
 var _piece_collision_bodies: Dictionary = {}  # Vector2i chunk_coord -> {Vector2i global_cell -> StaticBody2D}
+
+## Every placed structure's own real stock -- a Storage building's inventory,
+## keyed by its own tile position (see docs/concept/timber_construction.md's
+## "Storage, logistics, and the autonomous dependency chain" section, and
+## StructureStock/StructureStockStore's own doc comments). Not per-chunk
+## tracked/evicted like the render-only dicts above -- this is real state a
+## structure carries regardless of whether its chunk is currently loaded, the
+## same "survives unload" contract chunk.modifications itself already has.
+var _structure_stocks := StructureStockStore.new()
 
 ## Optional roof overlay layer (see set_roof_layer) -- separate TileMapLayer
 ## from _tile_map_layer since a roof piece shares its cell with the floor
@@ -466,7 +508,23 @@ func update(player_global_tile: Vector2i) -> void:
 	# (see DISTURBANCE_RADIUS_TILES).
 	_disturbance_center_tile = player_global_tile
 	var center_chunk := _chunk_coord_for_tile(player_global_tile)
+	_sync_decoration_and_grass_tracking(player_global_tile, center_chunk)
 
+	for chunk_coord in chunks_in_radius(center_chunk, LOAD_RADIUS):
+		if not _loaded_chunks.has(chunk_coord):
+			_load_chunk(chunk_coord)
+
+	_evict_far_chunks(center_chunk)
+	_update_roof_visibility(player_global_tile)
+	_update_geology_reveal(player_global_tile)
+
+
+## The decoration-LOD and grass tile-precise-culling bookkeeping update()
+## does before touching any chunk -- split out so update_with_progress below
+## can share it exactly rather than drifting a second copy. Pure bookkeeping,
+## no chunk generation, so it costs nothing to run up front regardless of how
+## the actual load loop that follows is driven (all-at-once vs chunked).
+func _sync_decoration_and_grass_tracking(player_global_tile: Vector2i, center_chunk: Vector2i) -> void:
 	# Decoration follows the player's CHUNK, not the player: crossing a chunk
 	# boundary is what changes which chunks are worth drawing, and it forces
 	# an immediate re-sync so a newly-near chunk isn't bare ground until its
@@ -500,14 +558,72 @@ func update(player_global_tile: Vector2i) -> void:
 		_grass_view_synced_tile = player_global_tile
 		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
 
-	for chunk_coord in chunks_in_radius(center_chunk, LOAD_RADIUS):
-		if not _loaded_chunks.has(chunk_coord):
-			_load_chunk(chunk_coord)
 
+## The eviction half of update() -- split out for the same reason as
+## _sync_decoration_and_grass_tracking above: update_with_progress needs it
+## verbatim, after its own chunked load loop rather than update()'s
+## all-at-once one.
+func _evict_far_chunks(center_chunk: Vector2i) -> void:
 	for chunk_coord in _loaded_chunks.keys().duplicate():
 		if _chebyshev_distance(chunk_coord, center_chunk) > UNLOAD_RADIUS:
 			_unload_chunk(chunk_coord)
 
+
+## Chunk coordinates update(player_global_tile) would load RIGHT NOW -- those
+## within LOAD_RADIUS not already loaded. Pure and cheap (no chunk
+## generation, just the same chunks_in_radius/is_chunk_loaded check update()'s
+## own load loop already makes) -- this is what makes update_with_progress's
+## total knowable up front, for a real determinate percentage rather than an
+## indeterminate spinner (see docs/concept/persistence.md's "Loading screens"
+## section).
+func pending_load_chunks(player_global_tile: Vector2i) -> Array[Vector2i]:
+	var center_chunk := _chunk_coord_for_tile(player_global_tile)
+	var pending: Array[Vector2i] = []
+	for chunk_coord in chunks_in_radius(center_chunk, LOAD_RADIUS):
+		if not _loaded_chunks.has(chunk_coord):
+			pending.append(chunk_coord)
+	return pending
+
+
+## Same work as update(), but for the INITIAL cold load a fresh New Game/Load
+## Game/Join pays (see World._show_loading_overlay) -- awaits one process
+## frame after each chunk's real generation cost instead of loading the whole
+## radius in one uninterrupted synchronous loop. That one change is what lets
+## the engine actually PRESENT a frame between chunks: update()'s own loop
+## never yields, so nothing -- not even an indeterminate spinner -- can be
+## seen to move for its entire real duration (measured ~39-90s+ per call, see
+## docs/progress.md's "Loading screens" entry); reported back as "the loading
+## screen ... still looks like it's hanging" even with that spinner in place.
+## `on_progress`, called as (loaded_count, real_total) once before the first
+## chunk and once after each one, is what a caller (LoadingOverlay) uses to
+## show a real percentage instead -- the chunk set to load is bounded and
+## known up front (pending_load_chunks), so this was always knowable; it just
+## needed update()'s synchronous loop broken up across frames, which is
+## exactly the restructuring previously deferred as out of scope for a
+## loading screen alone.
+##
+## Every other caller -- continuous per-frame gameplay in World._process/
+## _client_process, and the whole existing update() test suite -- keeps
+## calling the synchronous update() completely unchanged; this is purely
+## additive.
+func update_with_progress(player_global_tile: Vector2i, on_progress: Callable = Callable()) -> void:
+	_disturbance_center_tile = player_global_tile
+	var center_chunk := _chunk_coord_for_tile(player_global_tile)
+	_sync_decoration_and_grass_tracking(player_global_tile, center_chunk)
+
+	var pending := pending_load_chunks(player_global_tile)
+	var total := pending.size()
+	if on_progress.is_valid():
+		on_progress.call(0, total)
+	var loaded := 0
+	for chunk_coord in pending:
+		_load_chunk(chunk_coord)
+		loaded += 1
+		if on_progress.is_valid():
+			on_progress.call(loaded, total)
+		await Engine.get_main_loop().process_frame
+
+	_evict_far_chunks(center_chunk)
 	_update_roof_visibility(player_global_tile)
 	_update_geology_reveal(player_global_tile)
 
@@ -530,6 +646,29 @@ func has_ecosystem_region(chunk_coord: Vector2i) -> bool:
 func set_spawn_tile(spawn_tile: Vector2i) -> void:
 	_spawn_chunk_coord = _chunk_coord_for_tile(spawn_tile)
 	_spawn_configured = true
+
+
+## The spawn's own chunk coordinate (see set_spawn_tile above) -- Compass's
+## "point me home" default target needs to read this without reaching into
+## the private field directly.
+func spawn_chunk_coord() -> Vector2i:
+	return _spawn_chunk_coord
+
+
+## Marks `chunk_coord` explored (see ExploredTiles above). Returns true only
+## if this chunk was newly marked -- idempotent, same as ExploredTiles.
+## mark_visited itself.
+func mark_chunk_explored(chunk_coord: Vector2i) -> bool:
+	return _explored_tiles.mark_visited(chunk_coord)
+
+
+## Every distinct chunk coordinate marked explored so far.
+func explored_chunks() -> Array:
+	return _explored_tiles.visited_chunks()
+
+
+func is_chunk_explored(chunk_coord: Vector2i) -> bool:
+	return _explored_tiles.is_visited(chunk_coord)
 
 
 func _difficulty_tier_at(chunk_coord: Vector2i) -> int:
@@ -702,6 +841,29 @@ func wipe_household_store(path: String = HouseholdStorePersistence.SAVE_PATH) ->
 	reset_household_store()
 
 
+## Claims `property_id` for the local player via a real Deed
+## (docs/concept/player_citizenship.md's Deed item) -- the exact same
+## form_household -> grant_property pairing record_settlement_founded_if_new
+## already establishes for a villager's own house, keyed by PlayerIdentity.
+## PLAYER_ENTITY_ID instead of an npc id. Both underlying calls are already
+## idempotent (form_household returns the same household on a second call;
+## grant_property re-granting to the same owner is a no-op), so claiming the
+## same property twice is safe and does not change who owns it. Also
+## records a real event, the same "one call, two stores kept in sync" shape
+## every other coordinator in this file already uses.
+func claim_property_with_deed(property_id: String) -> Household:
+	var household := _household_store.form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	_household_store.grant_property(household.id, property_id)
+
+	var event := Event.new("player_claimed_property", _world_age_seconds)
+	event.actors.append(household.id)
+	event.tags.append(property_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+	return household
+
+
 ## Contracts and their lifecycle (see docs/emergence/03-contracts-property-
 ## economy.md "Contracts") -- one more piece of shared world state alongside
 ## the stores above.
@@ -746,6 +908,24 @@ func propose_contract(
 	)
 	_record_contract_event("contract_proposed", contract)
 	return contract
+
+
+## Proposes a contract naming the local player's own household as one party
+## (docs/concept/player_citizenship.md's Ledger item) -- a thin wrapper over
+## the existing propose_contract, the same accept/fulfil/breach lifecycle
+## _step_settlement_trade already drives for two NPC households. No new
+## accept/fulfil/breach counterpart is needed: ContractStore._transition
+## never assumes anything about WHICH entity a party is, so the existing
+## generic accept_contract/fulfill_contract/breach_contract already work
+## unchanged for a contract that names a player household. form_household
+## is idempotent, so calling it every time is safe.
+func player_propose_contract(
+	type: String, counterparty_id: String, obligations: Array, consideration: String, deadline: float
+) -> Contract:
+	var player_household := _household_store.form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	return propose_contract(
+		type, [player_household.id, counterparty_id], obligations, consideration, deadline
+	)
 
 
 func accept_contract(contract_id: String) -> bool:
@@ -892,6 +1072,19 @@ func attempt_institution_formation(type: String, party_a: String, party_b: Strin
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 	return institution
+
+
+## Attempts to found/join an institution with the local player's own
+## household as one party (docs/concept/player_citizenship.md's Charter
+## item) -- a thin wrapper over the existing attempt_institution_formation,
+## gated by the SAME real InstitutionFormation.should_form threshold an NPC
+## pair is held to; a player who hasn't built up real fulfilled contract
+## history with `counterparty_id` (see player_propose_contract, above) has
+## nothing to found yet, exactly like an NPC pair wouldn't. form_household
+## is idempotent, so calling it every time is safe.
+func player_attempt_institution_formation(type: String, counterparty_id: String) -> Institution:
+	var player_household := _household_store.form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	return attempt_institution_formation(type, player_household.id, counterparty_id)
 
 
 ## Dissolves an institution AND records it as a real event, in one call --
@@ -2601,6 +2794,18 @@ func current_weather(player_pixel: Vector2) -> String:
 	# within a day anyway, so it gets its own period.
 	var day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
 	return _weather_model.weather_at(day, hash("%d_%d" % [chunk_coord.x, chunk_coord.y]))
+
+
+## The Weather glass item's real prerequisite (docs/concept/wayfinding.md's
+## Weather glass) -- mirrors current_weather's own day/region-seed
+## derivation exactly, but reads one period ahead via
+## WeatherForecast.upcoming_weather instead of calling
+## _weather_model.weather_at directly, so a forecast can never disagree with
+## what current_weather will itself report once that period arrives.
+func upcoming_weather(player_pixel: Vector2) -> String:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(player_pixel))
+	var day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
+	return WeatherForecast.upcoming_weather(_weather_model, day, hash("%d_%d" % [chunk_coord.x, chunk_coord.y]))
 
 
 func _loaded_tree_positions() -> Array:
@@ -4845,9 +5050,12 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null:
 		return false
-	chunk.modifications[_local_coord(global_x, global_y)] = tile_id
+	var local := _local_coord(global_x, global_y)
+	var previous_tile_id: String = chunk.modifications.get(local, "")
+	chunk.modifications[local] = tile_id
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
+	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
 	return true
 
 
@@ -4862,9 +5070,11 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	var local := _local_coord(global_x, global_y)
 	if not chunk.modifications.has(local):
 		return false
+	var previous_tile_id: String = chunk.modifications[local]
 	chunk.modifications.erase(local)
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_remove_piece_collision(Vector2i(global_x, global_y))
+	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
 	return true
 
 
@@ -4977,6 +5187,117 @@ func has_structure_near(global_x: int, global_y: int, structure_id: String, radi
 	return false
 
 
+## Keeps `_sagewerk_lumberjacks` in sync with a modification change at
+## `local_cell`: a tile that just BECAME "sagewerk" gets staffed (if it
+## isn't already -- rebuilding the same tile twice must not double-spawn), a
+## tile that just STOPPED being "sagewerk" (overwritten by something else,
+## or destroyed -- `new_tile_id` is "" for a destroy) has its worker
+## despawned. A tile going from one non-sagewerk id to another is a no-op.
+func _sync_sagewerk_lumberjack(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	if previous_tile_id == "sagewerk" and new_tile_id != "sagewerk":
+		_despawn_lumberjack_at(chunk_coord, local_cell)
+	elif new_tile_id == "sagewerk":
+		_spawn_lumberjack_for(chunk_coord, local_cell)
+
+
+## Spawns exactly one LumberjackMarker for the Sägewerk at `local_cell`, or
+## does nothing if one already exists there -- "an NPC moves in", once, per
+## Sägewerk instance.
+func _spawn_lumberjack_for(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	if not _sagewerk_lumberjacks.has(chunk_coord):
+		_sagewerk_lumberjacks[chunk_coord] = {}
+	var by_cell: Dictionary = _sagewerk_lumberjacks[chunk_coord]
+	if by_cell.has(local_cell):
+		return
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var home := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var marker := LumberjackMarker.new()
+	marker.home = home
+	marker.position = home
+	_entities_parent.add_child(marker)
+	by_cell[local_cell] = marker
+
+
+func _despawn_lumberjack_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	var by_cell: Dictionary = _sagewerk_lumberjacks.get(chunk_coord, {})
+	var marker: Node = by_cell.get(local_cell)
+	if marker == null:
+		return
+	marker.free()
+	by_cell.erase(local_cell)
+
+
+## The pixel-space center of the nearest modification tile matching
+## `structure_id` within `max_distance` pixels of `pixel_position`, or null
+## if none is loaded/in range -- has_structure_near's own boolean answer plus
+## WHERE, for a caller that needs to walk there (see LogisticsMarker's own
+## SEEKING/CARRYING legs, docs/concept/timber_construction.md's "Storage,
+## logistics, and the autonomous dependency chain" section). Scans the same
+## chunk-Chebyshev-radius-1 window has_structure_near uses, for the same
+## reason (see its own doc comment) -- exact for any `max_distance` up to one
+## chunk's width in pixels.
+func nearest_structure_position(pixel_position: Vector2, structure_id: String, max_distance: float):
+	var query_tile := Vector2i(
+		floori(pixel_position.x / TerrainRenderer.TILE_SIZE), floori(pixel_position.y / TerrainRenderer.TILE_SIZE)
+	)
+	var center_chunk := _chunk_coord_for_tile(query_tile)
+	var nearest_distance := max_distance
+	var nearest: Vector2 = Vector2.ZERO
+	var found := false
+
+	for chunk_coord in chunks_in_radius(center_chunk, 1):
+		var chunk: Chunk = _loaded_chunks.get(chunk_coord)
+		if chunk == null:
+			continue
+		var origin := chunk_coord * CHUNK_SIZE
+		for local_coord in chunk.modifications:
+			if chunk.modifications[local_coord] != structure_id:
+				continue
+			var tile_global: Vector2i = origin + local_coord
+			var tile_pixel := (
+				Vector2(tile_global) * TerrainRenderer.TILE_SIZE
+				+ Vector2.ONE * (TerrainRenderer.TILE_SIZE * 0.5)
+			)
+			var distance: float = pixel_position.distance_to(tile_pixel)
+			if distance <= nearest_distance:
+				nearest = tile_pixel
+				nearest_distance = distance
+				found = true
+	if not found:
+		return null
+	return nearest
+
+
+## The stock key a structure's own tile position resolves to -- position, not
+## structure id, is the identity (see StructureStockStore's own doc comment:
+## two structures never share a stock).
+func _structure_stock_key(global_x: int, global_y: int) -> String:
+	return "%d_%d" % [global_x, global_y]
+
+
+## `item_id`'s count in the stock belonging to the structure at
+## (global_x, global_y). 0 if nothing has ever been deposited there.
+func structure_stock_at(global_x: int, global_y: int, item_id: String) -> int:
+	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).stock_of(item_id)
+
+
+## Deposits `count` of `item_id` into the stock belonging to the structure at
+## (global_x, global_y) -- a Logistics worker's DEPOSITING action (see
+## LogisticsMarker), or a future production building crediting its own
+## accumulated output.
+func deposit_to_structure_at(global_x: int, global_y: int, item_id: String, count: int) -> void:
+	_structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).add_stock(item_id, count)
+
+
+## Withdraws `count` of `item_id` from the stock belonging to the structure at
+## (global_x, global_y). All-or-nothing, mirroring StructureStock.remove_stock
+## itself -- returns false (no-op) if less than `count` is present.
+func withdraw_from_structure_at(global_x: int, global_y: int, item_id: String, count: int) -> bool:
+	return _structure_stocks.stock_for(_structure_stock_key(global_x, global_y)).remove_stock(item_id, count)
+
+
 ## All chunk coordinates within `radius` chunks of center (a square/Chebyshev
 ## radius, not circular -- simpler, and streaming radii don't need to be exact).
 func chunks_in_radius(center: Vector2i, radius: int) -> Array[Vector2i]:
@@ -5064,6 +5385,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_entities_parent, _biome_classifier.dominant_biome(chunk.biome), chunk_coord * CHUNK_SIZE,
 		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, hash("%d_%d_decomposers" % [chunk_coord.x, chunk_coord.y])
 	)
+
+	# Re-staff every Sägewerk this chunk already had persisted, before this
+	# load, with a fresh Lumberjack -- "an NPC moves in" applies just as much
+	# to a revisited worksite as a freshly-placed one (see
+	# _spawn_lumberjack_for's own doc comment).
+	for local_cell in chunk.modifications:
+		if chunk.modifications[local_cell] == "sagewerk":
+			_spawn_lumberjack_for(chunk_coord, local_cell)
 
 	_flower_patches[chunk_coord] = FlowerPatch.new(
 		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
@@ -5243,6 +5572,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for marker in _decomposer_markers.get(chunk_coord, []):
 		marker.free()
 	_decomposer_markers.erase(chunk_coord)
+
+	for marker in _sagewerk_lumberjacks.get(chunk_coord, {}).values():
+		marker.free()
+	_sagewerk_lumberjacks.erase(chunk_coord)
 
 	for sprite in _flower_sprites.get(chunk_coord, {}).values():
 		sprite.free()

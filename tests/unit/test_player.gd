@@ -254,6 +254,114 @@ func test_cook_fails_when_a_campfire_is_only_carried_not_placed():
 	assert_eq(player.inventory_counts().get("cooked_meat", 0), 0)
 
 
+# -- Player.craft's generalized recipe gating (see docs/concept/ -------------
+# -- production_chains.md): the old hardcoded "if is_smelting_recipe(...) -----
+# -- and not _has_heat_source(): return false" special case is replaced ------
+# -- by a GENERIC read of CraftingRecipeBook's own "requires_structure"/ -----
+# -- "required_skill" recipe fields -- proven here two ways: the smelting ----
+# -- heat-gate itself must keep behaving EXACTLY as before (regression), -----
+# -- and the SAME mechanism must gate a totally different recipe/structure ---
+# -- (Sägewerk log shaping) with no new hardcoded branch. ---------------------
+
+func _give(item_id: String, count: int = 1) -> void:
+	player.inventory.add(_item_catalog.make(item_id), count)
+
+
+## Regression: smelting recipes still refuse to craft with no heat source
+## nearby -- the exact behavior _has_heat_source already had, now reached
+## generically via requires_structure == "heat_source" instead of a
+## hardcoded is_smelting_recipe branch.
+func test_craft_iron_ingot_fails_with_no_heat_source_nearby():
+	_give("iron_ore")
+	_give("coal")
+
+	assert_false(player.craft("iron_ingot"))
+	assert_eq(player.inventory_counts().get("iron_ingot", 0), 0)
+	# Nothing consumed on a blocked craft.
+	assert_eq(player.inventory_counts().get("iron_ore", 0), 1)
+
+
+## Regression: a placed CAMPFIRE still counts as a heat source for smelting
+## (Player._has_heat_source accepts campfire OR furnace) -- the generalized
+## "heat_source" category must not silently narrow this to furnace-only.
+func test_craft_iron_ingot_succeeds_with_a_campfire_nearby():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "campfire")
+	_give("iron_ore")
+	_give("coal")
+
+	assert_true(player.craft("iron_ingot"))
+	assert_eq(player.inventory_counts().get("iron_ingot", 0), 1)
+
+
+## Regression: a placed FURNACE also still counts.
+func test_craft_iron_ingot_succeeds_with_a_furnace_nearby():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "furnace")
+	_give("iron_ore")
+	_give("coal")
+
+	assert_true(player.craft("iron_ingot"))
+	assert_eq(player.inventory_counts().get("iron_ingot", 0), 1)
+
+
+## A recipe with NO requires_structure/required_skill (torch) is completely
+## unaffected by the generalized gate -- proves the generalization is
+## additive, not a behavior change for every other recipe.
+func test_craft_torch_is_unaffected_by_the_generalized_gate():
+	_give("wood")
+	_give("hide")
+
+	assert_true(player.craft("torch"))
+
+
+## The SAME generic mechanism gates a totally different recipe/structure
+## pair (log_to_balken requires "sagewerk", not "heat_source") with zero
+## new code in Player.craft -- proves it's real generalization, not a
+## second hardcoded special case for the Sägewerk.
+func test_craft_log_to_balken_fails_without_a_nearby_sagewerk():
+	_give("log", 3)
+
+	assert_false(player.craft("log_to_balken"))
+	assert_eq(player.inventory_counts().get("beam", 0), 0)
+
+
+func test_craft_log_to_balken_succeeds_with_a_nearby_sagewerk():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "sagewerk")
+	_give("log", 3)
+
+	assert_true(player.craft("log_to_balken"))
+	assert_eq(player.inventory_counts().get("beam", 0), 1)
+
+
+## required_skill's first real consumer (docs/concept/timber_construction.md's
+## "generalized, not hardcoded" section): the sagewerk recipe itself needs
+## real Carpentry, read live via SkillTree.total_bonus -- with none
+## allocated, the craft is refused even though every material input is on
+## hand.
+func test_craft_sagewerk_fails_without_enough_carpentry_skill():
+	_give("log", 8)
+	_give("wood", 4)
+
+	assert_false(player.craft("sagewerk"))
+	assert_eq(player.inventory_counts().get("sagewerk", 0), 0)
+	# Nothing consumed on a blocked craft.
+	assert_eq(player.inventory_counts().get("log", 0), 8)
+
+
+## Allocating the real carpentry_1 + carpentry_2 nodes (the same total_bonus
+## read Player._chop_step's own CARPENTRY_LEVEL_FOR_SAWING check uses)
+## clears the skill gate.
+func test_craft_sagewerk_succeeds_with_enough_carpentry_skill():
+	_give("log", 8)
+	_give("wood", 4)
+	player.allocated_nodes = {"carpentry_1": true, "carpentry_2": true}
+
+	assert_true(player.craft("sagewerk"))
+	assert_eq(player.inventory_counts().get("sagewerk", 0), 1)
+
+
 # -- catching a real, visible fish flavors the catch message ------------------
 #
 # The abstract fishing minigame (see FishingSession/FishingMinigame) already

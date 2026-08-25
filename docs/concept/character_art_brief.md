@@ -121,25 +121,57 @@ format" below) for any future part that only ever needs one neutral pose.
   quietly left stale. Whoever generates back/side art next should write that
   prompt into section 4 properly rather than relying on it having survived
   in chat history.
-- **The walk-cycle gap this doc used to flag is closed, partially.** The
-  original `leg.png` version of this doc recorded "illustrated legs stay
-  static while walking" as an honest, explicit gap. There is still no real
-  per-leg swing art for the fused pair (splitting `leg_swing_offset`'s
-  opposite-direction motion across a single sprite would visibly tear it
-  into two offset copies of itself), but `CharacterView._process` now gives
-  the fused pair a whole-pair vertical bob instead
-  (`FUSED_LEG_BOB_AMPLITUDE`, `absf(sin(_cycle_time))` so it dips at every
-  footfall rather than once per stride) while `MovementState.WALKING`,
-  reported gap: "the legs aren't animated." Reads as "this pair is walking"
-  without needing per-leg frames — a real animation, just a coarser one than
-  true per-leg swing art would give. A small hip-pivot rock
-  (`FUSED_LEG_ROCK_AMPLITUDE`, once per full stride) was added alongside
-  the bob later the same pass, asked directly for real knee-jointed
-  per-leg animation and told plainly that needs new source art the fused
-  single-drawing legs can't provide — accepted as an interim over waiting.
-  A genuine per-leg walk cycle (separate thigh/shin art, or a walk-cycle
-  strip like the animal sprites have) is still the real fix, not solved
-  here.
+- **The walk-cycle gap this doc used to flag now has a real hip+knee
+  joint**, not just a whole-pair bob/rock. Timeline: the original `leg.png`
+  version of this doc recorded "illustrated legs stay static while walking"
+  as an honest gap; a later pass added a whole-pair vertical bob
+  (`FUSED_LEG_BOB_AMPLITUDE`) plus a small hip-pivot rock
+  (`FUSED_LEG_ROCK_AMPLITUDE`) as an explicitly-labelled INTERIM stand-in,
+  told plainly at the time that a real knee needs new source art the fused
+  single-drawing legs can't provide. Reported live again, still asking for a
+  real knee-jointed walk ("the players walk animation and overall appearance
+  looks like a dwarf... add proper walk animation by morphing the leg
+  sprites and include a knee joint animated motion") — revisited that
+  "needs new art" conclusion and found a real answer that needs none:
+  `IllustratedCharacterSprite.composite_leg_segments` crops the SAME fused-
+  pair pixels into a thigh (top) and shin (bottom) image at
+  `KNEE_LINE_FRACTION` (0.5 — see `CharacterView.LEG_TO_HEIGHT_FRACTION`'s
+  own Winter-table citation for why thigh and shank split almost exactly in
+  half) of the leg's own measured height, with a `KNEE_OVERLAP_PX` overlap
+  band so a belt/banner that bridges straight across the knee line in
+  several outfit rows doesn't visibly tear when the shin rotates. `LegLeft`
+  is now the HIP pivot (wearing the thigh crop); its child `LegLeftKnee` /
+  `LegLeftShin` are the KNEE pivot and shin crop. Both angles come from
+  `src/rendering/leg_gait_cycle.gd` (`hip_angle`/`knee_angle`, pure, tested,
+  a real function of gait-cycle phase — a deliberately simplified
+  single-hump rectified-sine knee curve, not the full biomechanical
+  double-hump, see that file's own doc comment) instead of a flat-amplitude
+  rock.
+  - **A full weight-painted Polygon2D/Skeleton2D mesh skin was evaluated and
+    set aside**, not attempted blind: Godot 4's `Polygon2D.bones` property
+    needs a specific, thinly-documented per-vertex weight array format
+    normally hand-painted with the editor's own tool, with zero precedent
+    anywhere in this codebase to build from. The two-piece rigid crop is the
+    documented fallback this was explicitly allowed to reach for instead —
+    see `IllustratedCharacterSprite`'s own "Leg hip/knee segments" section
+    for the fuller reasoning.
+  - **Still a single FUSED rig, not two independently-alternating legs.**
+    The source art draws both legs as one connected pose (see this doc's own
+    "hero_composite.png" section above) — there was no way to rig genuine
+    left-leg-forward/right-leg-back alternation out of it this pass, on a
+    front-facing-only character, without either new art or attempting the
+    same visual-breakage risk a rigid X-split into two independent leg
+    halves would have raised across the outfit rows whose belt/banner
+    bridges the two legs. What's real now: the hip AND knee both rotate
+    through an actual per-phase gait curve (visually confirmed with real
+    screenshots, including one with an exaggerated 90° knee angle to make
+    the joint's independence from the hip unmistakable at this art's pixel
+    scale) — a genuine two-joint skeletal animation, just still one whole
+    pair moving together rather than two alternating legs. A true
+    independently-alternating per-leg gait is still a real, explicit future
+    gap — it needs either new split-leg source art, or a second attempt at
+    the weight-painted skin now that a real hip/knee joint exists to hang
+    it from.
 - **A procedural Neck bridges Head and Body**, since neither part's own art
   draws one and both are positioned by their own measured content (see
   "Every part gets its own measured scale" below), which varies per outfit

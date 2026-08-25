@@ -131,6 +131,31 @@ const _ITEMS := {
 	"iron_boots": ["Iron Boots", "armor", 1, 0.0, "feet", 2.0],
 	# Fishing (see concept/fishing.md): a rod cast at water lands fish.
 	"fishing_rod": ["Fishing Rod", "tool", 1, 0.0],
+	# Sägewerk (sawmill -- see docs/concept/timber_construction.md): a
+	# placeable worksite, same "kind" as campfire/furnace above, where a
+	# Lumberjack NPC shapes gathered logs into beam/plank over time.
+	"sagewerk": ["Sagewerk", "placeable", 5, 0.0],
+	# Storage (see docs/concept/timber_construction.md's "Storage, logistics,
+	# and the autonomous dependency chain" section): a placeable structure
+	# like campfire/furnace, not an inert material -- holds its own real
+	# item_id -> count stock (StructureStock) once built.
+	"storage": ["Storage", "placeable", 5, 0.0],
+	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
+	# docs/concept/player_citizenship.md): the pure-logic Compass/
+	# RoughCompass reading, ExploredTiles/MapProjection, Spyglass,
+	# WeatherForecast, SeasonAlmanac, property claiming/contracts and
+	# FieldJournal modules all now have a craftable, held item id. Instruments
+	# and documents, not consumables -- max_stack 1 like every other tool.
+	"rough_compass": ["Rough Compass", "tool", 1, 0.0],
+	"compass": ["Compass", "tool", 1, 0.0],
+	"map": ["Map", "tool", 1, 0.0],
+	"spyglass": ["Spyglass", "tool", 1, 0.0],
+	"weather_glass": ["Weather Glass", "tool", 1, 0.0],
+	"star_chart": ["Star Chart", "tool", 1, 0.0],
+	"deed": ["Deed", "tool", 1, 0.0],
+	"ledger": ["Ledger", "tool", 1, 0.0],
+	"field_journal": ["Field Journal", "tool", 1, 0.0],
+	"charter": ["Charter", "tool", 1, 0.0],
 	# "Three Fragments" hunt (docs/concept/easter_eggs.md, see
 	# ThreeFragmentsHunt for the aggregation logic): three small,
 	# unremarkable items, each quietly granted the first time its own source

@@ -10,8 +10,8 @@ extends RefCounted
 
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
-const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const IllustratedFlowerHead = preload("res://src/rendering/illustrated_flower_head.gd")
+const CharacterView = preload("res://scenes/character_view.gd")
 
 ## The ART canvas. Kept independent of the world size below on purpose: this
 ## project has twice shipped sprites that changed size on screen because a
@@ -28,15 +28,15 @@ const SIZE := Vector2i(32, 32)
 ## almost as tall as a player"). Grass is a poor yardstick because grass is
 ## itself waist-high in places.
 ##
-## The character's own height comes from the same rule CharacterView uses --
-## two thirds of a full-grown tree -- rather than a second copy of the number.
-## Pinned against CharacterView by
+## The character's own height, taken directly from CharacterView's own
+## computed height (its total feet-to-head-top span, HEAD_TOP_Y, times its
+## world SCALE) rather than a second, independent copy of "how big is the
+## player" -- this used to be its own fraction-of-a-tree literal (2/3), which
+## silently went stale when CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE was
+## later raised to 0.85. Pinned against CharacterView by
 ## test_the_player_height_flowers_are_measured_against_is_the_real_one, so the
 ## two cannot drift apart.
-const PLAYER_HEIGHT_FRACTION_OF_TREE := 2.0 / 3.0
-const PLAYER_WORLD_HEIGHT_PX := (
-	PLAYER_HEIGHT_FRACTION_OF_TREE * float(ProceduralTreeSprite.WORLD_SIZE.y)
-)
+const PLAYER_WORLD_HEIGHT_PX := -CharacterView.HEAD_TOP_Y * CharacterView.SCALE
 
 ## ## Where the curve is pinned
 ##

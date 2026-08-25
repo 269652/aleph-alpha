@@ -217,6 +217,14 @@ shelter+infrastructure count before it's eligible as a migration target at
 all — the same shape as the [quest quorum](#individual-vs-settlement-level-quests)
 above, so one placed campfire doesn't spawn a village.
 
+**A simplified stand-in exists for one specific case, not the full
+mechanism.** [timber_construction.md](timber_construction.md#storage-logistics-and-the-autonomous-dependency-chain-mechanism-spec)'s
+Logistics worker spawn (a settlement with both a real production building
+and real Storage directly gets one Logistics NPC) is explicitly a
+directly-triggered shortcut for THIS one occupation-pull case, not an
+implementation of this section's full push/pull/floor/player-invite
+mechanism — that stays exactly as specified above, and exactly as unbuilt.
+
 **Player agency.** Passive/emergent by default — build real shelter and
 infrastructure, and eventually someone notices. An NPC a player has real
 relationship with can additionally be actively invited to accelerate or

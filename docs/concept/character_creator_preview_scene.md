@@ -103,10 +103,16 @@ hero instead of a static image.
   (`character_preview_diorama.gd`), and the `main_menu.gd` embedding. See
   `docs/progress.md`'s own entry for the full detail and exact file/class
   names.
-- ✅ Seen live and iterated on real screenshots — several real bugs only
-  visible once actually rendered (panel containment, the pond's shape and
-  shading, fish, grass-parting). See `docs/progress.md`'s own entry for
-  the full list, exact fixes, and file names.
+- ✅ Seen live and iterated across several real rounds of screenshots —
+  real bugs only visible once actually rendered, several requiring a
+  second pass once the first fix's own result was seen (panel
+  containment, the pond's shape/shading — reverted from a first "fix" to
+  a genuine circle back to a rectangle once actually seen — fish
+  visibility AND containment as two separate bugs, and a real hero-rig
+  width bug a concurrent session's own leg-gait rework had introduced,
+  found while chasing an "unproportional ... walks like a duck" report).
+  See `docs/progress.md`'s own entry for the full list, exact fixes, and
+  file names.
 - Fish (`FishRenderer.spawn_fish_at`) and grass-parting
   (`IllustratedGrassPatch.set_walker_position`) round out the scene,
   reusing existing real-world mechanisms rather than adding new ones, per

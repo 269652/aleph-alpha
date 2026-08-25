@@ -1,34 +1,29 @@
 extends Control
 
 ## Full-screen "the game is working, not hung" cover, shown while New Game /
-## Host / Load Game / Join pay their real, synchronous world-setup cost (see
+## Host / Load Game / Join pay their real world-setup cost (see
 ## World._show_loading_overlay and the entry points that call it).
 ##
-## Deliberately plain: a full-rect dim behind a centered status label and an
-## indeterminate spinner glyph (see LoadingSpinner). No fabricated percentage
-## -- the heavy call this covers (EarthChunkManager.update()'s first call for
-## a fresh chunk radius, ~39s measured in this dev sandbox, see
-## docs/progress.md) has no `await` anywhere in its own call chain, so nothing
-## outside it can observe real interim progress without restructuring
-## EarthChunkManager/TerrainRenderer internals -- out of scope for a loading
-## SCREEN. An honest indeterminate spinner + a clear status line is the
-## accurate representation of what's actually knowable here.
+## A full-rect dim behind a centered status label and a spinner glyph (see
+## LoadingSpinner). The status label now shows REAL, determinate progress
+## ("N / M chunks") when a caller reports it via set_progress -- see
+## EarthChunkManager.update_with_progress and docs/concept/persistence.md's
+## "Loading screens" section. This used to be impossible: the heavy call this
+## covers (EarthChunkManager.update()'s first call for a fresh chunk radius,
+## ~39-90s+ measured in this dev sandbox, see docs/progress.md) had no
+## `await` anywhere in its own call chain, so the engine could never present
+## a frame during it and the spinner necessarily froze on whatever glyph it
+## was on for the ENTIRE real duration -- reported back as "the loading
+## screen ... still looks like it's hanging" even with an honest
+## indeterminate spinner in place. update_with_progress fixes the actual
+## cause (it awaits a frame between each chunk instead of loading the whole
+## radius in one uninterrupted loop), which is what makes both the spinner's
+## own animation AND this real percentage visible for the first time.
 ##
 ## PROCESS_MODE_ALWAYS (set by World, matching every other paused-but-live
 ## overlay in this file -- SettingsOverlay/MainMenu) so the spinner keeps
-## advancing across the brief awaited frames before/after the freeze, even
-## though the world is paused underneath it the whole time.
-##
-## IMPORTANT, verified by real timing instrumentation (see docs/progress.md):
-## the spinner glyph can only ever actually be SEEN to change across the
-## couple of frames World awaits before starting the heavy call, or between
-## two separate real stages -- once the heavy synchronous call itself starts,
-## the engine cannot present another frame until it returns, so the glyph
-## necessarily freezes on whatever frame it was on for the full real
-## duration. That's still correct and honest (a real indeterminate spinner,
-## just one that can't animate through a period nothing can render during),
-## and is the reason this shows a spinner + text rather than a fake percentage
-## that would silently stop tracking anything real the moment the freeze began.
+## advancing across every awaited frame, even though the world is paused
+## underneath it the whole time.
 
 const LoadingSpinner = preload("res://src/ui/loading_spinner.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
@@ -36,6 +31,10 @@ const UiTheme = preload("res://src/ui/ui_theme.gd")
 var _status_label: Label
 var _spinner_label: Label
 var _elapsed_seconds := 0.0
+## The text show_with_text was called with, kept separate from
+## _status_label.text so set_progress can append "(N / M chunks)" onto it
+## repeatedly without accumulating a new suffix onto the previous call's.
+var _base_status_text := ""
 
 
 func _ready() -> void:
@@ -92,6 +91,7 @@ func _ready() -> void:
 ## process frames right after calling this so it genuinely paints before the
 ## synchronous work it's covering starts).
 func show_with_text(text: String) -> void:
+	_base_status_text = text
 	_status_label.text = text
 	_elapsed_seconds = 0.0
 	_spinner_label.text = LoadingSpinner.frame_for_elapsed(0.0)
@@ -101,6 +101,17 @@ func show_with_text(text: String) -> void:
 
 func hide_overlay() -> void:
 	visible = false
+
+
+## Updates the status line with REAL, determinate chunk-load progress -- the
+## one piece show_with_text's original indeterminate-only design assumed was
+## unknowable (see this script's own doc comment above). `total` of 0 is
+## shown as-is (matching EarthChunkManager.pending_load_chunks' own
+## "nothing left to load" contract) rather than attempting a divide -- this
+## only ever formats already-computed counts, so there's no division here to
+## guard.
+func set_progress(loaded: int, total: int) -> void:
+	_status_label.text = "%s (%d / %d chunks)" % [_base_status_text, loaded, total]
 
 
 func _process(delta: float) -> void:
