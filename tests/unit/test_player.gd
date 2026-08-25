@@ -794,6 +794,99 @@ func test_repeated_bites_stack_venom_up_to_the_cap():
 	assert_eq(player.active_venom_debuffs[0]["stacks"], VenomModel.MAX_STACKS)
 
 
+# -- disease spillover: routed through Sickness, NOT a new debuff module
+# (see docs/concept/disease.md "Player spillover") ---------------------------
+
+const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
+const Carcass = preload("res://src/rendering/carcass.gd")
+
+
+func test_apply_disease_bite_with_zero_exposure_never_infects():
+	player.apply_disease_bite(DiseaseModel.PREDATOR, 0.0)
+	assert_eq(player.sickness_id, "")
+
+
+## Sickness.infection_chance never reaches a guaranteed 1.0 by design (real
+## exposure never means CERTAIN infection) -- retried across many rolls
+## (each apply_disease_bite call draws a fresh seed off an incrementing
+## counter) is the deterministic-enough way to prove this path CAN succeed,
+## the same shape TamingSystem's own catch-rate tests already use for a
+## chance that's real but not 100%.
+func test_apply_disease_bite_can_infect_the_player():
+	var infected := false
+	for i in 50:
+		player.sickness_id = ""
+		player.apply_disease_bite(DiseaseModel.PREDATOR, 1.0)
+		if player.sickness_id != "":
+			infected = true
+			break
+	assert_true(infected, "a full-exposure bite should eventually infect across many rolls")
+	assert_eq(player.sickness_id, DiseaseModel.PREDATOR)
+	assert_gt(player.sickness_severity, 0.0)
+
+
+func test_apply_disease_bite_does_nothing_while_already_sick():
+	player.sickness_id = "existing"
+	player.sickness_severity = 0.4
+	player.apply_disease_bite(DiseaseModel.CARRION, 1.0)
+	assert_eq(player.sickness_id, "existing")
+	assert_eq(player.sickness_severity, 0.4)
+
+
+func test_sickness_step_increases_severity_while_sick():
+	player.sickness_id = "flu_test"
+	player.sickness_severity = 0.1
+	player._sickness_step(5.0)
+	assert_gt(player.sickness_severity, 0.1)
+
+
+func test_sickness_step_does_nothing_while_healthy():
+	player._sickness_step(5.0)
+	assert_eq(player.sickness_severity, 0.0)
+
+
+## Not fatal outright (docs/concept/disease.md), a real ongoing tax instead --
+## stamina regen, the same lever _food_buff_step's own "sustenance" buff
+## already uses in reverse.
+func test_sickness_step_drains_stamina_while_sick():
+	player.sickness_id = "flu_test"
+	player.sickness_severity = 1.0
+	var before: float = player.survival.stamina
+	player._sickness_step(1.0)
+	assert_lt(player.survival.stamina, before)
+
+
+func test_butchering_a_contaminated_carcass_can_expose_the_player():
+	var carcass := Carcass.new()
+	carcass.species = "boar"
+	carcass.contaminated = true
+	carcass.position = player.position
+	add_child_autofree(carcass)
+
+	var infected := false
+	for i in 50:
+		player.sickness_id = ""
+		carcass._parts_taken = 0  # re-arm butcher() so each loop iteration takes a part
+		player._butcher_step()
+		if player.sickness_id != "":
+			infected = true
+			break
+	assert_true(infected, "butchering a contaminated carcass should eventually infect the player")
+	assert_eq(player.sickness_id, DiseaseModel.CARRION)
+
+
+func test_butchering_a_clean_carcass_never_exposes_the_player():
+	var carcass := Carcass.new()
+	carcass.species = "boar"
+	carcass.contaminated = false
+	carcass.position = player.position
+	add_child_autofree(carcass)
+
+	player._butcher_step()
+
+	assert_eq(player.sickness_id, "")
+
+
 # -- taming: throwing the lasso (see docs/concept/taming.md) ------------------
 
 func _horse_at(offset: Vector2) -> CreatureMarker:

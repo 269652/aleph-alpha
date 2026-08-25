@@ -53,3 +53,54 @@ func test_default_candidate_paths_checks_the_executable_directory_first_then_use
 	assert_eq(paths.size(), 2)
 	assert_true(paths[0].ends_with("license.txt"))
 	assert_eq(paths[1], "user://license.txt")
+
+
+## write_code() is the save half of the in-game "enter a license key" UI --
+## a customer pasting a new code should be able to overwrite whatever was
+## there before, not just append/create-if-missing.
+func test_write_code_writes_a_code_that_read_code_then_reads_back():
+	var path := "user://test_license_store_write_a.txt"
+	_test_paths.append(path)
+	LicenseStore.write_code([path], "NEWCODE-12345")
+	assert_eq(LicenseStore.read_code([path]), "NEWCODE-12345")
+
+
+func test_write_code_trims_surrounding_whitespace_before_writing():
+	var path := "user://test_license_store_write_b.txt"
+	_test_paths.append(path)
+	LicenseStore.write_code([path], "  NEWCODE-12345  \n")
+	assert_eq(LicenseStore.read_code([path]), "NEWCODE-12345")
+
+
+func test_write_code_overwrites_an_existing_file_rather_than_leaving_stale_content():
+	var path := _write_temp_file("test_license_store_write_c.txt", "OLDCODE")
+	LicenseStore.write_code([path], "REPLACEMENT")
+	assert_eq(LicenseStore.read_code([path]), "REPLACEMENT")
+
+
+## A stale, still-present old license.txt next to the executable must not
+## keep shadowing a freshly-saved one -- read_code() returns the FIRST
+## existing candidate, so saving has to refresh every candidate, not just
+## whichever one happens to be writable/first.
+func test_write_code_writes_to_every_candidate_path_not_just_the_first():
+	var path_a := "user://test_license_store_write_d.txt"
+	var path_b := "user://test_license_store_write_e.txt"
+	_test_paths.append(path_a)
+	_test_paths.append(path_b)
+	LicenseStore.write_code([path_a, path_b], "BOTHCODE")
+	assert_eq(LicenseStore.read_code([path_a]), "BOTHCODE")
+	assert_eq(LicenseStore.read_code([path_b]), "BOTHCODE")
+
+
+func test_write_code_returns_true_when_at_least_one_path_is_writable():
+	var path := "user://test_license_store_write_f.txt"
+	_test_paths.append(path)
+	assert_true(LicenseStore.write_code([path], "SOMECODE"))
+
+
+## A path under a directory that doesn't exist can't be opened for
+## writing -- write_code() must not crash on that, and must not falsely
+## report success when every candidate failed.
+func test_write_code_returns_false_when_every_path_is_unwritable():
+	var unwritable := "user://this_directory_does_not_exist_%d/license.txt" % randi()
+	assert_false(LicenseStore.write_code([unwritable], "SOMECODE"))

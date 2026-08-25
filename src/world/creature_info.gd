@@ -27,6 +27,16 @@ extends RefCounted
 ## ecologically distinct instead of drawing from the same global 4-species
 ## pool. Each is its own species entry here (own stats/diet), independent of
 ## which of the 4 hand-drawn shape families it happens to render with.
+##
+## wolf/sheep are forest's own equivalent addition: forest was the one
+## biome among those six still drawing its dominant predator from the
+## anonymous "predator" placeholder rather than a real named species (see
+## CreatureRenderer's PREDATOR_SPECIES_POOL_BY_BIOME) -- "predator" was
+## always this project's own unnamed stand-in for a wolf (wolf_shape,
+## gray coat), so wolf gives that a real name, real stats, and real
+## illustrated art (see IllustratedAnimalSprite) rather than a new role.
+## Sheep is wolf's (and deer's) forest prey -- an ordinary herbivore-role
+## addition, same as deer/nonvenomous_snake.
 
 ## The 8 biome-specific species below (see CreatureRenderer's per-biome
 ## species pools -- desert/tundra/rainforest/mountain each get their own
@@ -68,6 +78,7 @@ const MAX_HEALTH_BY_SPECIES := {
 	"rubezahl": 110.0,
 	"nyx": 95.0,
 	"krampus": 120.0,
+	"wolf": 30.0,
 	# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) -----------
 	# Debug/first-pass stats, same "hand-authored row" precedent as the
 	# Germany bosses just above -- but deliberately NOT at that roster's
@@ -118,6 +129,7 @@ const MAX_STAMINA_BY_SPECIES := {
 	"rubezahl": 35.0,
 	"nyx": 30.0,
 	"krampus": 35.0,
+	"wolf": 30.0,
 	# Squallmaw is a strong swimmer (high stamina); Coilnecca/Champ are
 	# unhurried lake dwellers, ordinary-herbivore-scale.
 	"squallmaw": 32.0,
@@ -153,6 +165,7 @@ const MAX_MANA_BY_SPECIES := {
 	"rubezahl": 10.0,
 	"nyx": 10.0,
 	"krampus": 10.0,
+	"wolf": 10.0,
 	"squallmaw": 10.0,
 	"coilnecca": 5.0,
 	"champ": 5.0,
@@ -187,6 +200,7 @@ const DIET_BY_SPECIES := {
 	"rubezahl": "Apex Hunter",
 	"nyx": "Apex Hunter",
 	"krampus": "Apex Hunter",
+	"wolf": "Hunter",
 	"squallmaw": "Apex Hunter",
 	"coilnecca": "Forager",
 	"champ": "Forager",
@@ -223,6 +237,7 @@ const TEMPERAMENT_BY_SPECIES := {
 	"rubezahl": "aggressive",
 	"nyx": "aggressive",
 	"krampus": "aggressive",
+	"wolf": "aggressive",
 	# Squallmaw is furious-looking and can fight (docs/concept/
 	# easter_eggs.md: "does nothing a real creature doesn't already do
 	# (fight, flee, be tamed)") -- an ordinary aggressive predator, not a
@@ -267,6 +282,7 @@ const PREDATOR_SPECIES := {
 	"rubezahl": true,
 	"nyx": true,
 	"krampus": true,
+	"wolf": true,
 	"squallmaw": true,
 	"kraken": true,
 }

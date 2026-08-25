@@ -38,6 +38,21 @@ func test_name_is_non_empty():
 		assert_gt(NpcIdentity.new(seed_value).npc_name.length(), 0)
 
 
+## WORK_LOCATION_BY_OCCUPATION is the one shared source both NpcPlanner
+## (which location_tag a villager's schedule sends them to) and
+## VillageRenderer (which landmark prop, if any, actually stands there) read
+## from -- see docs/concept/building.md's "close the remaining gap" note.
+## Every known occupation must have a mapped work location, or a villager of
+## that occupation would silently get no location_tag at all.
+func test_every_occupation_has_a_mapped_work_location():
+	for occupation in NpcIdentity.OCCUPATIONS:
+		assert_true(
+			NpcIdentity.WORK_LOCATION_BY_OCCUPATION.has(occupation),
+			"no work location mapped for %s" % occupation
+		)
+		assert_gt(NpcIdentity.WORK_LOCATION_BY_OCCUPATION[occupation].length(), 0, occupation)
+
+
 func test_occupation_is_always_a_known_occupation():
 	for seed_value in range(40):
 		var identity := NpcIdentity.new(seed_value)
@@ -51,6 +66,22 @@ func test_personality_trait_is_always_known():
 	for seed_value in range(40):
 		var identity := NpcIdentity.new(seed_value)
 		assert_true(NpcIdentity.PERSONALITY_TRAITS.has(identity.personality_trait))
+
+
+## The follow-up ask: personality should be DNA derived, not an independent
+## flat roll -- personality_trait must be exactly the genome's own
+## dominant_trait(), not a second unrelated pick that merely happens to
+## agree.
+func test_personality_trait_is_derived_from_the_npcs_own_genome():
+	for seed_value in range(20):
+		var identity := NpcIdentity.new(seed_value)
+		assert_eq(identity.personality_trait, identity.genome.dominant_trait())
+
+
+func test_genome_carries_a_gene_for_every_personality_trait():
+	var identity := NpcIdentity.new(11)
+	for trait_name in NpcIdentity.PERSONALITY_TRAITS:
+		assert_true(identity.genome.traits.has(trait_name), trait_name)
 
 
 func test_need_is_always_known():

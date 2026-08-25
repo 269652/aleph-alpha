@@ -26,6 +26,8 @@ const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const VenomModel = preload("res://src/gameplay/venom_model.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
+const Sickness = preload("res://src/gameplay/sickness.gd")
+const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const NpcGreeting = preload("res://src/world/npc_greeting.gd")
 const Hotbar = preload("res://src/gameplay/hotbar.gd")
@@ -202,6 +204,16 @@ var active_food_buffs: Array = []
 ## CreatureMarker._try_attack) -- DebuffStack-shaped, ticked down and
 ## dealing damage in _venom_step. Empty means not currently poisoned.
 var active_venom_debuffs: Array = []
+## Player-side disease spillover (docs/concept/disease.md "Player
+## spillover"): routed through the existing Sickness pure model (see
+## src/gameplay/sickness.gd) EXACTLY the way survival.md's own sickness
+## already works -- deliberately NOT a new VenomModel/DebuffStack-style
+## module. "" sickness_id means not currently sick. Ticked in
+## _sickness_step; set by apply_disease_bite (an infected predator's
+## zoonotic bite, or careless butchering of a contaminated carcass).
+var sickness_severity := 0.0
+var sickness_id := ""
+var sickness_diagnosed := false
 var wallet := Wallet.new()
 ## How many number-key hotbar slots exist. World derives its HUD row's slot
 ## count from this (see World.HOTBAR_SLOT_COUNT), so the two can't drift.
@@ -902,6 +914,61 @@ func _venom_step(delta: float) -> void:
 	active_venom_debuffs = _debuff_stack.advance(active_venom_debuffs, delta)
 
 
+# -- disease spillover: Sickness, not a new debuff module (see
+# docs/concept/disease.md "Player spillover") --------------------------------
+
+## A well-fed, healthy player resists infection somewhat better -- real-
+## world-grounded (malnourishment measurably weakens immune response), a
+## modest term off current health fraction rather than a new stat.
+const DISEASE_RESISTANCE_FROM_HEALTH := 0.3
+## Sickness while untreated is "not fatal outright, a real tax" (see the
+## doc): drains stamina proportional to severity rather than dealing direct
+## damage -- the same lever _food_buff_step's "sustenance" buff already
+## pulls, just in reverse.
+const SICKNESS_STAMINA_DRAIN_PER_SECOND := 0.03
+
+var _sickness := Sickness.new()
+## Counts this player's disease exposure rolls, so each one draws a
+## different, still-deterministic seed -- mirrors CreatureMarker's own
+## _disease_roll_count.
+var _disease_roll_count := 0
+
+
+## Called by an infected predator's bite (see CreatureMarker._try_attack /
+## _try_transmit_predator_disease -- the doc's zoonotic spillover path) or a
+## careless butchering of a contaminated carcass (see _butcher_step -- the
+## anthrax spillover path). Rolls real infection odds through
+## Sickness.infection_chance/attempt_infect, the SAME mechanism survival.md's
+## own sickness already uses -- not a bespoke debuff. No-op while already
+## sick: a second exposure mid-recovery isn't modeled (mirrors Sickness's
+## own single-instance scope).
+func apply_disease_bite(new_disease_id: String, exposure_level: float = 1.0) -> void:
+	if sickness_id != "":
+		return
+	_disease_roll_count += 1
+	var chance := _sickness.infection_chance(exposure_level, _disease_resistance())
+	var seed_value := hash("%d_%s_player_disease" % [_disease_roll_count, new_disease_id])
+	if _sickness.attempt_infect(chance, seed_value):
+		sickness_id = new_disease_id
+		sickness_severity = 0.01  # just infected -- _sickness_step ramps it from here
+		sickness_diagnosed = false
+
+
+func _disease_resistance() -> float:
+	return clampf(health / max_health, 0.0, 1.0) * DISEASE_RESISTANCE_FROM_HEALTH
+
+
+## Authority-only: ticks sickness_severity via Sickness.progress (always
+## untreated for now -- no cure/treatment tool exists yet, see disease.md's
+## own explicitly-deferred "management tools" scope) and taxes stamina while
+## sick, a real ongoing cost rather than a fatal one.
+func _sickness_step(delta: float) -> void:
+	if sickness_id == "":
+		return
+	sickness_severity = _sickness.progress(sickness_severity, delta, false)
+	survival.spend_stamina(SICKNESS_STAMINA_DRAIN_PER_SECOND * sickness_severity * delta)
+
+
 ## Melee damage multiplier from an active "combat" category food buff (see
 ## FoodConsumption.FISH_BUFFS's legendary_fish entry) -- 1.0 (no change) when
 ## none is active.
@@ -1079,6 +1146,7 @@ func _authority_step(delta: float) -> void:
 	_lasso_step(delta)
 	_food_buff_step(delta)
 	_venom_step(delta)
+	_sickness_step(delta)
 	_shop_step(delta)
 	_talk_step(delta)
 
@@ -1260,6 +1328,12 @@ func _butcher_step() -> void:
 	var meat_yield_bonus := skill_tree.total_bonus("meat_yield", allocated_nodes)
 	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
 		carcasses[index].butcher(meat_yield_bonus)
+		# Anthrax-like spillover (docs/concept/disease.md): butchering a
+		# contaminated carcass without care carries real infection risk --
+		# the "careless butchering" consequence the doc names directly, a
+		# real tax on skipping caution rather than a hidden gotcha.
+		if carcasses[index].contaminated:
+			apply_disease_bite(DiseaseModel.CARRION)
 
 
 ## The held item's material-model kind (see MaterialDamage/Block), used for

@@ -57,3 +57,39 @@ func test_decode_is_case_insensitive():
 func test_encoding_is_deterministic():
 	var bytes := PackedByteArray([9, 8, 7, 6])
 	assert_eq(SerialBase32.encode(bytes), SerialBase32.encode(bytes))
+
+
+## Real bug found live: tools/generate_serial.gd prints the code split
+## across multiple lines for readability (docs/licensing.md's own "a
+## paste-able block", README's "line breaks are fine"), and a customer
+## pasting that whole block into a license.txt keeps the embedded
+## newlines. Before this fix, decode() treated '\n' as just another
+## out-of-alphabet character and rejected the whole thing -- silently
+## turning the documented, encouraged way to save a code into "malformed
+## code". Whitespace carries no bits of its own, so ignoring it is safe.
+func test_decode_ignores_embedded_newlines_from_the_pretty_printed_block_format():
+	var bytes := PackedByteArray()
+	for i in 40:
+		bytes.append((i * 53 + 7) % 256)
+	var encoded := SerialBase32.encode(bytes)
+	var with_line_breaks := ""
+	for i in encoded.length():
+		with_line_breaks += encoded[i]
+		if i % 10 == 9:
+			with_line_breaks += "\n"
+	assert_eq(SerialBase32.decode(with_line_breaks), bytes)
+
+
+func test_decode_ignores_carriage_returns_and_spaces_too():
+	var bytes := PackedByteArray([1, 2, 3, 4, 5])
+	var encoded := SerialBase32.encode(bytes)
+	var padded := " " + encoded.substr(0, 3) + "\r\n" + encoded.substr(3) + " \t"
+	assert_eq(SerialBase32.decode(padded), bytes)
+
+
+## Whitespace is the only thing decode() should now treat as filler --
+## a genuinely wrong character (see the excluded-alphabet test above)
+## must still fail the whole decode, not be silently skipped like
+## whitespace is.
+func test_decode_still_rejects_a_real_invalid_character_alongside_whitespace():
+	assert_eq(SerialBase32.decode("A\nI"), PackedByteArray())

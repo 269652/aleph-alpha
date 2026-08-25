@@ -10,7 +10,7 @@ const SPECIES := ["boar", "lynx", "herbivore", "predator"]
 ## color, per CreatureRenderer's per-biome species pools.
 const NEW_SPECIES := [
 	"camel", "jackal", "reindeer", "arctic_fox", "tapir", "jaguar", "goat", "mountain_lion", "horse",
-	"deer", "bear", "lion"
+	"deer", "bear", "lion", "wolf", "sheep"
 ]
 
 ## Maps each new species to the one of the original 4 species it should share
@@ -20,15 +20,23 @@ const NEW_SPECIES := [
 ## Bear reuses boar_shape (both heavy-bodied, low-slung quadrupeds). Lion
 ## reuses lynx_shape -- lions are cats, anatomically closer to the lynx
 ## silhouette than the wolf one (see
-## docs/concept/ecosystem_dynamics.md's Species roster section).
+## docs/concept/ecosystem_dynamics.md's Species roster section). Wolf reuses
+## "predator"'s own wolf_shape family -- the eponymous match, since "predator"
+## was always this project's anonymous stand-in for a wolf (see
+## SPECIES_SHAPE_FAMILY's "predator": "wolf_shape" and CreatureRenderer's own
+## "wolf-dominant predators" doc comment) before wolf became a real named
+## species with its own stats and art. Sheep reuses herbivore/deer_shape,
+## like goat -- a real sheep is a similar upright grazer silhouette.
 const SHAPE_MATE := {
 	"camel": "herbivore",
 	"reindeer": "herbivore",
 	"goat": "herbivore",
 	"horse": "herbivore",
 	"deer": "herbivore",
+	"sheep": "herbivore",
 	"jackal": "predator",
 	"mountain_lion": "predator",
+	"wolf": "predator",
 	"arctic_fox": "lynx",
 	"jaguar": "lynx",
 	"lion": "lynx",

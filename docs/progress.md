@@ -894,7 +894,7 @@ project's own terminology.
 | 11 — World bosses | ✅ Done (mechanism); ⬜ live trigger | `WorldBoss`/`WorldBossStore` wrap the pre-existing, real `world_boss_fitness.gd` promotion math in a causal, `/why`/`/boss`-inspectable entity. See below — no creature currently tracks kills/lifetime age for a live trigger to read from. |
 | 12 — Emergent quests | ✅ Done (production-shortfall projection); ⬜ everything else | `quest.gd` — a real, stateless PROJECTION over household/market/recipe state, never a new entity. See below — safety/social need sources, quorum/promotion, and resolution all still depend on unbuilt systems. |
 | 13 — Governance & politics | ✅ Done (form + legitimacy, changes a real decision); ⬜ policy/taxation/enforcement | New `docs/concept/governance.md`, `governance.gd`. Governance form now drives which institution type a settlement's own automatic formation attempts. Live-verified. See below. |
-| 14 — Regional trade & migration | ✅ Done (trade networks, one real edge); ⬜ migration | New `docs/concept/regional_trade.md`, `regional_trade.gd`. Real stock moves between two real settlements' markets to resolve a real shortage. Live-verified. See below — migration stays `quests.md`'s own unbuilt design. |
+| 14 — Regional trade & migration | ✅ Done (trade networks + real travel/raid risk); ⬜ migration | `regional_trade.gd`/`caravan_trip.gd`/`caravan_raid.gd`, wired into `EarthChunkManager.step_regional_trade`/`step_caravans`. See below. Migration flows are still unbuilt — `world.md`'s "population exists wherever conditions make it viable" isn't yet applied at regional/trade-network scale. |
 | 15 — Technology & cultural diffusion | ⬜ Not started | No `concept/*.md` coverage yet. |
 | 16 — Religion, festivals, legends | ⬜ Not started | `festivals.md` is referenced by `npc.md` as an eventual daily-planner byproduct, but doesn't cover belief-community formation itself. |
 | 17 — Polities, wars, civilization | ⬜ Not started | Gated behind real multiplayer per `docs/roadmap.md`; overlaps roadmap Phase 5+ #2/#3 (economy/society, era progression). |
@@ -1808,60 +1808,62 @@ priesthood/representative governance forms (no real signal to derive them
 from); and crime/religion (`docs/emergence/01`'s own adjacent sections,
 unbuilt and unrelated to this slice).
 
-✅ **Regional trade — the smallest possible trade network, one real edge
-between two real settlements** (new `docs/concept/regional_trade.md`,
-`regional_trade.gd`, `EarthChunkManager.step_regional_trade`), the "trade
-networks" element of `docs/emergence/07-implementation-roadmap.md` Phase
-14's own exit language: "Implement regions, trade networks, migration
-flows, dependency graphs, and resource corridors." No concept doc covered
-cross-settlement trade at all before this phase — scaffolded first per
-`CLAUDE.md` (migration stays `quests.md`'s own already-designed, still
-unbuilt section — not repeated here), then implemented the same pass.
+✅ **Regional trade: nearest-supplier resupply is real** (new
+`docs/concept/regional_trade.md`, `regional_trade.gd`,
+`EarthChunkManager.step_regional_trade`/`_attempt_regional_resupply`) —
+this table's own row for this phase had gone stale claiming "Not started"
+after this mechanism actually landed; corrected here. A settlement's real
+production shortfall (Phase 12's own `Quest` projection) is resupplied by
+the NEAREST other real settlement holding genuine surplus of the missing
+item (`RegionalTrade.has_surplus`'s own safety margin, `MIN_SURPLUS`, so a
+settlement never trades its own last reserve away), "nearest" being real
+Euclidean distance between the two settlements' own chunk coordinates.
 
-**Composed entirely from two primitives this substrate already had, with
-zero new "who needs what"/"who has extra" tracking invented.** A
-settlement's shortage is Phase 12's own live `Quest` projection; a
-settlement's surplus is just its real `Market` stock, checked directly.
-`RegionalTrade.has_surplus(stock, need)` requires real headroom beyond a
-tested safety margin (`MIN_SURPLUS`) — a settlement never trades its own
-last reserve away down to the exact edge just to help a neighbor.
-"Nearest" is real Euclidean distance between two settlements' own chunk
-coordinates, parsed directly back out of their existing `EntityRef` keys
-(`RegionalTrade.chunk_coord_of`) rather than a second stored position —
-the same "derive it from a key the entity already has" idiom `EntityRef`
-itself has used since Phase 0/1.
+✅ **Trade becomes a real journey with real risk** (new
+`docs/concept/trade.md`, which builds explicitly on top of
+`regional_trade.md` rather than reinventing its price/shortage signals —
+`caravan_trip.gd`, `caravan_raid.gd`, `CaravanMarker`/
+`ProceduralCaravanSprite`, `EarthChunkManager.step_caravans`/
+`_resolve_caravan_arrival`/`_resolve_caravan_raid`). Regional trade's own
+open question ("should a resupply be gradual... once there's a real reason
+[travel time] to model that lag?") is now answered: the supplier's stock
+is still deducted the instant a resupply is dispatched (`regional_trade_
+departed` event), but the shortage settlement is credited, and the
+`regional_trade_shipped` event fires, only once a real `CaravanTrip` —
+walking the real straight-line route between the two settlements' own
+"well" landmarks at ordinary on-foot NPC pace — actually finishes the
+walk. Every missing item on a shortfall dispatches its own independent
+caravan (a blacksmith short both rock and stick sends two), so one
+shipment's fate never couples to another's. The route carries **real
+raid risk**, reusing `RegionDifficulty`'s existing distance-from-spawn
+danger tiers rather than a second danger scale (the worse of the two
+endpoints' own tiers sets the trip's chance, `CaravanRaid.RAID_CHANCE`,
+hash-derived from the trip's own real identity so the same trip always
+resolves the same way — no `RandomNumberGenerator` state); a raided
+caravan's goods scatter into the world via `WorldItemBus.item_dropped`
+(the same real ground-drop path a felled tree or a smashed stone already
+uses) instead of arriving OR silently vanishing. A caravan is also a
+**second real caller of `PathScarring.step_on`** — the same mechanism
+that already wears the player's own footsteps into dirt paths
+(`concept/infrastructure.md`, Phase 8) now runs for caravan traffic too,
+on its own `EarthChunkManager._caravan_path_scarring` instance. Both
+`step_regional_trade` and `step_caravans` are wired into
+`World._step_ecology_batch`/`_step_ecology_fine` — live in a real
+session, not only under test.
 
-**`step_regional_trade` reuses `production_shortfall_quests_for_settlement`
-directly** — every known settlement's real shortfalls are checked each
-step, and for each missing item, the nearest real settlement with genuine
-surplus ships exactly enough to cover it, in one call:
-`Market.add_stock` with a negative count on the supplier, positive on the
-recipient, both real markets updated together, and a real
-`regional_trade_shipped` event naming both settlements and the item —
-`/why`-inspectable, not a silent number change. Resolves a shortage fully
-in one step rather than gradually (this doc's own open question names
-partial/gradual shipment as a real future refinement once there's a
-reason — travel time, route capacity — to model the lag).
-
-**A regional shock affecting multiple settlements falls out of the
-mechanism itself, not a bespoke propagation system** — this phase's own
-third design pillar made concrete: draining a supplier's real stock to
-help a neighbor is the exact same real number that could later leave the
-supplier itself short, with no extra code required to make that true.
-
-**Live end-to-end verification, zero manual calls:** a real settlement
-with a real blacksmith's shortfall, a real neighboring settlement with
-real surplus stock, `/ecotest` enabled, and the ordinary `_process` loop
-run with zero manual calls to `step_regional_trade` or
-`_attempt_regional_resupply` — `shipped=2` (both of `stone_pickaxe`'s
-missing inputs) by tick 3.
-
-**Left for the next slice, deliberately, and named in `regional_trade.md`'s
-own Status section:** dependency graphs and resource corridors (real
-aggregations over trade edges once enough of them exist, not a separate
-structure this slice builds); migration flows (`quests.md`'s own unbuilt
-design, needs the replan-interrupt architecture); and regions as a
-first-class grouping (not needed for nearest-neighbor resupply to work).
+**Left for the next slice, deliberately:** caravan wear tracks on its own
+`PathScarring` instance rather than the same one `World._path_scarring`
+renders the player's dirt paths from, so a heavily-trafficked trade route
+doesn't yet visibly render as a road — a real, scoped follow-up named in
+`trade.md`'s own Status section, not a silent gap. `CaravanMarker`'s art
+is a minimal placeholder silhouette, not a real pack-animal/cart
+depiction (no cart/wagon vehicle system exists per `transportation.md`).
+Gradual/partial shipments (splitting one need across multiple smaller
+trips, or a trip delivering only SOME cargo before a raid) stay an open
+question, carried over from `regional_trade.md`. **Migration** (this same
+phase's other named element) remains ⬜ entirely unstarted — still blocked
+on `quests.md`'s own replan-interrupt architecture and a real
+habitability/push signal, neither of which exist yet.
 
 ---
 
@@ -1919,6 +1921,7 @@ chunks away from the player). See the concept doc for the full spec.
 - **Seasonal forcing of phenology** (medium) — ⬜ Not started — warmth is instantaneous temperature, not a seasonal calendar variable.
 - **Animal-mediated seed dispersal** (medium) — ⬜ Not started.
 - **Sunflower head was clipped, and its blossom read as sitting on the stem** (small) — ✅ Fixed — reported with a screenshot: "the sunflower sprite is clipped at the top" and "butterflies drink from their stem... I'm not sure if butterflies should even visit sunflowers?" The second question needed no code change: real sunflowers are a genuine nectar/pollen source for both bees and butterflies, so a pollinator visiting one is correctly grounded — the two visible symptoms shared one structural cause instead. `IllustratedFlowerHead.HEAD_CANVAS_SIZE` (18px) is taller than the headroom ANY stem roll leaves above its own attachment point (`ProceduralFlowerSprite.stem_height_px`, at most 16px of the 32px art canvas) — composited at full size the crown was sliced off flat by the canvas edge, invisible on the small species this shipped with and glaring on the sunflower once its much larger world scale (see "Illustrated blooms..." above) turned a few always-clipped art pixels into an obvious flat top. `_paint_illustrated_head` now shrinks the whole head to fit the real headroom (`ProceduralFlowerSprite.head_fit_scale`, the same "scale a drawing down to fit its canvas" trick `SpriteSheetSlicer.normalize_frames` already uses one layer up) instead of clipping it. Separately, `blossom_height_world` — where a pollinator actually lands — scaled by the species' own nominal size alone, while the sprite itself is drawn at a smaller PER-PLANT size for a below-average individual (`PLANT_SIZE_VARIANCE`) or one still growing in (`FlowerPatch.growth_at`); the landing point did not shrink with it, which on a species as large as the sunflower reads as landing near the stem rather than on the bloom. It now takes the exact per-plant scale `EarthChunkManager._flower_scale_for` draws the sprite at, so sprite and landing point can never drift apart. Tests: `head_fit_scale` never exceeds the real headroom across 200 stem rolls, a tight-headroom sunflower head measurably narrows rather than clipping flat at the same width, the blossom offset scales linearly with the actual plant scale and shrinks in lockstep with growth, and a freshly-planted seedling's `EarthChunkManager.flowers_near` landing point sits well below the mature blossom height.
+- **Wolves and sheep — forest's own named predator, and its prey** (medium) — ✅ Done — see `concept/ecosystem_dynamics.md`'s "Forest gets its own named predator" section. Forest's dominant predator slot had drawn from the anonymous `"predator"` placeholder (wolf-shaped, gray) rather than a real named species — the one gap left in the per-biome pattern desert/tundra/rainforest/mountain each already had (jackal/arctic_fox/jaguar/mountain_lion). Wolf is now a real `CreatureInfo` predator-role entry (own stats, `AnimalAnatomy` profile already existed unused), added to forest's `PREDATOR_SPECIES_POOL_BY_BIOME` alongside — not replacing — its existing lynx/predator/bear entries, and forest-exclusive (pinned by test: absent from every other biome's predator pool). Sheep — already grazing grassland and mountain — now joins forest too, as its (and deer's) real forest prey. No new predation mechanism was needed — `is_predator` already means "hunts herbivore-role creatures generically" (see `CreatureInfo`'s own doc comment), so a wolf sharing forest with sheep and deer already hunts both by construction. Wolf gets real illustrated art (`assets/sprites/animals/wolf.png`) rather than falling back to a procedural silhouette, reusing sheep's own already-shipped **chroma-keyed magenta** sheet handling (`IllustratedAnimalSprite`'s per-sheet `chroma_key`/`chroma_key_tolerance` fields — see the Germany-region world bosses below, which established the same convention) rather than introducing a second parallel mechanism. The sheet is a 2-row (walk, then eat) × 8-column grid with no dedicated idle row (idle synthesizes from eat's own frame 0, same as deer/boar); bands measured directly from the real PNG, not eyeballed.
 
 ### Overview (`concept/overview.md`)
 
@@ -2273,6 +2276,7 @@ Only real-time day/night lighting is wired into live rendering; a first determin
 
 - **Dynamic Weather System** (large) — 🚧 Partial — `src/world/weather_model.gd` (deterministic clear/cloudy/rain/storm per region+time) is now **wired with mechanical teeth**: `EarthChunkManager.current_weather` derives the player-region weather (shown in the HUD "Season · Weather"); rain/storm **slow the player** (`weather_speed_modifier` → `Player._weather_speed_multiplier`), and wet/cold weather feeds the new **body-temperature exposure** system (see Survival). Water is now the one visibly weather-reactive surface: `weather_model.wind_strength_for` (calm on clear days, most energetic in a storm) drives `WaterShader`'s `wind_strength` uniform via `EarthChunkManager.set_wind_strength`, pacing the GPU ambient wave scroll rate to match, alongside the existing rain-ripple tie-in. Still missing: visual rain/storm particles/tint over land, combat fire-dousing, and disaster events (drought/flood/wildfire). **Divergence note (2026-08-24)**: this is currently a flat per-region hash roll, identical odds anywhere on the planet — exactly the "independent random layer" this doc's own top bullet says not to build. See the new Climate Dynamics section below, which specifies the real mechanism this is meant to become.
 - **Weather Exposure Debuff** (small) — ✅ Done — cold/wet weather chills the player's warmth meter; while cold, condition (fitness) degrades faster and, while freezing, movement is slowed further (`SurvivalMeters` warmth + `Player._weather_speed_multiplier`). See Survival section.
+- **Snow fills in tile by tile, not the whole field at once** (medium) — ✅ Fixed — reported: "snow still covers a percentage of a whole chunk instantly instead of gradually filling individual tiles". One lying-snow depth still drives an entire snowfall (`Snowfall.accumulate` is unchanged — one clock, one number), but every tile now leads or lags that SAME depth by its own bounded, deterministic onset offset before banding it (`SnowLayer.onset_offset_for`/`ONSET_VARIANCE`, seeded from the tile's GLOBAL coordinates), grounded in real snow settling unevenly with shelter/exposure rather than an even wash — a genuinely bare field still stays bare and a complete snowfall still reaches full cover for every tile regardless of onset; only the MIDDLE of a snowfall differs tile to tile. `EarthChunkManager._repaint_whole_field` now also gates on `SNOW_REPAINT_DEPTH_STEP` (not just a whole-band crossing), so per-tile onset variance inside a single texture band still gets several repaint checkpoints across a snowfall instead of the field sitting flat until the coarser band index finally ticks over. Two related pre-existing gaps closed as part of the same pass: a chunk streamed in mid-snowfall now gets its snow immediately (`_load_chunk` calls the new `_paint_snow_chunk` for its own tiles) rather than staying bare until the next field-wide repaint happened to cross it; and an unloaded chunk's snow tiles are already erased from the snow `TileMapLayer` on unload (`_unload_chunk`, via the same `_terrain_renderer.erase` the water/roof overlays use).
 - **Seasons (calendar cycle)** (medium) — ✅ Done — `src/world/season_cycle.gd` (tested, see `concept/seasons.md`): a deterministic spring→summer→autumn→winter year with smooth warmth/growth modifiers. Wired into fruit phenology (`EarthChunkManager._warmth_at_pixel` scales `FruitingModel` warmth by season, so trees fruit fast in summer / slowly in winter) and shown in the HUD. A new world now starts at a random point in the year rather than always on the same frozen instant, and a loaded world resumes its own persisted point rather than re-rolling (`randomize_world_age`/`load_world_clock`, `WorldClockPersistence` — see `concept/seasons.md`'s "A new world starts at a random point in the year"). Not yet driving vegetation/tall-grass growth rate or farming crop viability.
 - **Regional Weather Variety** (medium) — 🚧 Partial — `weather_model.gd` takes a `region_seed` parameter so different regions roll independently; not wired to any real per-chunk region concept yet.
 - **Disaster Events** (large)
@@ -2895,11 +2899,13 @@ quiet contradiction of every other system's "never hand-placed" rule.
     `{hp, attack, defense, speed}` block. Deliberately a SEPARATE,
     self-contained stat table from `CreatureInfo`'s own
     `MAX_HEALTH_BY_SPECIES`/etc, not read from it — this mini-game needs its
-    own small internally-balanced numbers, and "wolf" specifically has no
-    entry at all in `CreatureInfo` today (a pre-existing, separately-tracked
-    gap, see the Ecosystem Dynamics section below) so reaching into that
-    table here would either crash or silently fall back to a meaningless
-    default. Every stat is a first-pass placeholder (no real playtesting
+    own small internally-balanced numbers. (At the time this stage was
+    written, "wolf" had no entry at all in `CreatureInfo`, which would have
+    made reaching into that table crash or silently fall back to a
+    meaningless default — moot now, since merging this branch into `main`
+    brought in a real `CreatureInfo` wolf entry from another concurrent
+    session; `HandheldRoster` still deliberately keeps its own separate
+    table by design.) Every stat is a first-pass placeholder (no real playtesting
     data yet, same situation as every other tuned constant in this doc's
     family) but pinned by relative-property tests (every legendary
     outclasses every common on hp/attack) rather than isolated eyeballed
@@ -3017,18 +3023,19 @@ quiet contradiction of every other system's "never hand-placed" rule.
   one of that hunt's three named eggs).
   **Deliberate scope decisions, documented rather than silently
   under-built:**
-  - "wolf" has a full `AnimalAnatomy` body profile (its own `wolf_shape`
-    silhouette family exists, and it's already `/spawn`-able in the open
-    world via `ConsoleSpecies`) but no entry in `ProceduralAnimalSprite`'s
-    own `SPECIES_BASE_COLORS`/`SPECIES_SHAPE_FAMILY` tables (nor in
-    `CreatureInfo`'s stat tables) — a pre-existing gap in the open world's
-    own wolf wiring, not previously called out anywhere in this doc, and
-    NOT this stage's to fix (out of scope for an Easter egg; belongs with
-    the Ecosystem Dynamics section's own next-additions work, if/when
-    someone picks it up there). Consequence for THIS mini-game specifically:
-    the handheld's own wolf encounters currently render as the generic tan
-    "herbivore" silhouette instead of a wolf-shaped one — noted here rather
-    than silently papered over.
+  - "wolf" had a full `AnimalAnatomy` body profile (its own `wolf_shape`
+    silhouette family, already `/spawn`-able in the open world via
+    `ConsoleSpecies`) but, at the time this stage was originally written, no
+    entry in `ProceduralAnimalSprite`'s own `SPECIES_BASE_COLORS`/
+    `SPECIES_SHAPE_FAMILY` tables or in `CreatureInfo`'s stat tables — a
+    pre-existing gap in the open world's own wolf wiring, out of scope for
+    this stage to fix directly. **Resolved by the merge**, not by this
+    stage: merging `feature/easter-eggs` into `main` brought in another
+    concurrent session's own independent wolf wiring (real
+    `ProceduralAnimalSprite` color/shape entries and a real `CreatureInfo`
+    stat row), so the handheld's wolf encounters now render as an actual
+    wolf-shaped silhouette, not the generic tan "herbivore" one this note
+    originally described.
   - No persistence: a caught-species collection resets on restart (see
     `HandheldCollection`'s own doc comment) — the same "no save/load layer
     for this Easter-egg family yet" scope call every sibling module already
@@ -3170,7 +3177,9 @@ to slope at all. Nothing implemented — all ⬜ Not started:
 ### Building (`concept/building.md`)
 
 - **Tile placement/destruction (building system)** (medium) — ✅ Done — see Phase 3 table above; earth/campfire/furnace are all live, wired to `Player._build_step`/`_arm_placeable`, persisted across unload/reload.
-- **Structure building: real multi-piece, enterable houses** (large) — ✅ Done (mechanism; not player-reachable yet) — see `concept/building.md`'s Status section for the full breakdown. `building_piece.gd`/`building_placement.gd`/`room_detector.gd`/`house_blueprint.gd` (pure logic, tested) are now wired into rendering (`ProceduralBuildingPieceSprite`, 10 piece tiles in the shared terrain atlas) and `EarthChunkManager` (real wall/window collision via the same StaticBody2D mechanism trees/boulders use; a roof piece paints onto its own `TileMapLayer` and hides over exactly the room the player is standing in, via `RoomDetector.room_containing`; `stamp_structure_at_global` writes a whole structure in one repaint). The older `src/gameplay/building_blueprint.gd` (multi-tile footprint fit/overlap validation only, no pieces/enclosure) is a separate, more limited module, superseded by this for actual house construction. Known gaps: no player-facing build cursor/piece-selection UI yet (pieces are placeable today only via direct `stamp_structure_at_global`/`build_at_global` calls, not the hotbar); village houses (see NPC section) don't call this yet either.
+- **Structure building: real multi-piece, enterable houses** (large) — ✅ Done (mechanism; not player-reachable yet) — see `concept/building.md`'s Status section for the full breakdown. `building_piece.gd`/`building_placement.gd`/`room_detector.gd`/`house_blueprint.gd` (pure logic, tested) are now wired into rendering (`ProceduralBuildingPieceSprite`, 10 piece tiles in the shared terrain atlas) and `EarthChunkManager` (real wall/window collision via the same StaticBody2D mechanism trees/boulders use; a roof piece paints onto its own `TileMapLayer` and hides over exactly the room the player is standing in, via `RoomDetector.room_containing`; `stamp_structure_at_global` writes a whole structure in one repaint). The older `src/gameplay/building_blueprint.gd` (multi-tile footprint fit/overlap validation only, no pieces/enclosure) is a separate, more limited module, superseded by this for actual house construction. Village houses DO call this (`VillageRenderer._stamp_house`, see the roster-diversity entry immediately below and the NPC section's own house-choice entry) — this line was stale, having said otherwise. Known gap: no player-facing build cursor/piece-selection UI yet (pieces are placeable today only via direct `stamp_structure_at_global`/`build_at_global` calls, not the hotbar).
+- **House blueprint catalog — real shape variety, not one fixed box** (large) — ✅ Done — reported directly: "the houses the npcs build are minimal and don't look neat and diverse... we want Anno 1800 like houses and villages... house blueprints which function as template/recipe... enough different blueprints that every house in a village can look different... NPCs choice though." `house_blueprint.gd` was a single hardcoded generator (one wall-ring box, fixed 5x4, no windows ever placed despite `wood_window`/`stone_window` existing in the piece catalog since the original building pass) — every village house in the game was visually identical apart from wood/stone material. It is now a CATALOG of 10 named shapes (`BLUEPRINT_IDS`: `hut_tiny` through `cottage_small`/`cottage_window_pair`/`cottage_wide`/`cottage_tall`/`cottage_bright`/`manor_wide`/`manor_grand`, plus two genuinely L-shaped ones, `cottage_L_small`/`manor_L_wide`), spanning real footprint sizes (9 to 42 cells), window counts (0 to 4), and — for the L entries — a non-rectangular silhouette. Built from three safe, tested geometric primitives rather than hand-pixeled ASCII floor plans (which could silently produce an unenclosed or two-door house with no obvious symptom): a plain wall-ring rectangle, a corner notch carve (`_carve_notch` — erases the notch's cells entirely and upgrades any newly-exposed floor cell to wall, so the L's own inner corner is a real, sealed boundary, not a hole), and a single general rule for where a door/window may go (`_wall_candidates`: exactly one floor neighbour, at least one missing/exterior neighbour) that correctly excludes both an ordinary rectangle's outer corners (zero floor neighbours) and an L-shape's inner corner (two floor neighbours) without any shape-specific special-casing. Verified for every one of the 10 catalog entries, not spot-checked: each encloses exactly one real room (`RoomDetector`), has exactly one door, stays within its own declared footprint, and is fully roofed except for its own front facade (see "Houses that actually read as houses from above" below — roofs originally covered only floor cells, which is what made a house read inside-out). A follow-up ASCII-render sanity check confirmed both L-shapes read as real, connected L silhouettes, not broken geometry. `VillageRenderer._stamp_house` now computes each house's origin/water-avoidance check against ITS OWN chosen blueprint's footprint rather than one fixed constant, and `_door_facing_direction` (used to place a merchant's personal trading stand) was generalized from "which of a plain box's 4 sides" to "the opposite direction from the door's own actual floor neighbour" — the old box-only logic would have silently pointed a stand at a wall for a door landing on an L-shape's own notch-exposed edge, which isn't one of a rectangle's 4 sides at all. See the NPC section's own entry for how a villager picks which of the 10 to build.
+- **Houses that actually read as houses from above** (medium) — ✅ Done — reported after the blueprint catalog above had already landed: "the buildings now look even worse than before... they don't resemble houses at all... just some randomly placed stones and wood panels." A correct piece layout turned out not to be the same thing as a building that LOOKS like one, and the causes were structural rather than a matter of prettier textures (see `concept/building.md`'s "How a house reads from above" for the full spec). Rendering a real house to a PNG first, rather than theorizing, showed all three at once. **(1) The roof was covering only the interior FLOOR cells**, leaving the wall ring bare — from above that reads inside-out, as a wooden ring with a differently-textured rectangle sitting inside it, i.e. a courtyard. `HouseBlueprint.build_roofs` now roofs the whole footprint, walls included. **(2) There was no way to see the door**, so the roof deliberately stops one row short: `_facade_cells` (the southernmost occupied cell of each column, so an L-shape gets a facade following its own real silhouette rather than a straight line through empty space) stays unroofed, and the door is placed on that facade rather than wherever a wall cell first qualified. Windows fill the facade before spilling onto the other walls, since a window under the roof contributes nothing to the exterior. **(3) A flat shingle texture tiled across a rectangle is, seen from above, a brick patio** — what reads as a roof is the PITCH. New `src/rendering/roof_shape.gd` is a pure classifier (no atlas, no Image, so its geometry is testable without paying the multi-minute atlas bake) that groups a chunk's roof cells into buildings by flood fill, runs each one's ridge along its own longer axis (real rafters span the shorter direction), and gives every cell a shade band plus a 4-bit outward-edge mask. `TerrainRenderer` gained a fifth atlas family (material × band × mask) and `paint_roofs` resolves each cell's tile from that context — the same "appearance from neighbours at paint time" shape the biome blend/corner families already use, so **no new `BuildingPiece` ids and no save-format change**: a roof is still one chunk modification per cell. Pitch distance is counted in TILES from the ridge rather than normalized to roof depth — normalizing made a 3x3 hut's two-row pitch (both rows maximally far from their own ridge) come out uniformly dark with no lit side at all, while stretching a deep roof's ramp into visible stripes. **(4) Per-tile rim shading was the literal source of the "panels" look**: every piece tile drew its own bright/dark rim, so twenty wall cells in a ring rendered as twenty individually-outlined boxes. Floor and wall pieces no longer rim themselves (doors/windows still outline their own leaf/pane, so they stay legible); a rim is drawn only on a building's real outer boundary, via the roof's edge mask. One consequence handled rather than left: since roofs now cover walls, stepping inside would have left the player in a floor bounded by roof, never seeing the room's own walls or windows — `RoofShape.revealed_cells` lifts the enclosing ring (diagonals included, or an opened room keeps four stray roof tiles pinned at its corners) alongside the room itself, and only for cells holding a real `BuildingPiece`, so a campfire or worn earth path beside a house is never stripped.
 - **Terrain digging** (medium) — ⬜ Not started
 - **Chunked world persistence** (large) — 🚧 Partial — modifications-only persistence is now wired into live gameplay (`ChunkSerializer.save_modifications`/`load_modifications` via `EarthChunkManager`); the original full-chunk `save_chunk`/`load_chunk` methods remain tested but still unused (terrain itself is deterministically regenerated, not saved).
 - **Housing decoration layer** (medium) — ⬜ Not started
@@ -3346,12 +3355,12 @@ normal ticks) is a drop-in swap, not a rearchitect. No dialogue, no
 instruction DSL, no memory-driven behavior, no lifecycle/aging, no faction/
 festival wiring, no hiring/wages yet.
 
-- **Procedural NPC Population Generation** (large) — ✅ Done — `src/world/settlement_generator.gd` places a sparse (~1-in-30 habitable chunks, never on ocean/mountain), deterministic 5-villager settlement per qualifying chunk, wired into `EarthChunkManager`'s chunk load/unload (same regenerates-identically-on-revisit philosophy as trees/creatures). `src/rendering/village_renderer.gd` spawns a walking `NpcMarker` per villager, wearing the same hero-appearance engine the player uses (`HeroAppearance`/`ProceduralCharacterSprite`), extended with 6 occupation outfit palettes (still only 6 — see NPC Identity System's own note below on the 2 newest occupations' cosmetic gap). **Houses are now real, enterable, multi-tile structures, not a decorative sprite** (see `concept/building.md`'s Status section for the full mechanism): `VillageRenderer._stamp_house` builds a real 5x4 `HouseBlueprint` assembly (wall ring, one door, floor, roof — seeded wood/stone material) centred on each villager's ring-layout anchor and stamps it into the chunk via `EarthChunkManager.stamp_structure_at_global` — the exact same piece vocabulary and collision/roof-hide mechanism the player's own building pieces use (`docs/concept/building.md#one-system-two-builders`, now actually true rather than aspirational). A villager's `home_position` resolves to its own house's door cell, not an arbitrary anchor point, so it stands somewhere it could actually have walked to. **A house's ring-layout anchor can land on a water pocket** (a chunk's dominant biome only gates the whole chunk, not every individual cell — see `BiomeClassifier.dominant_biome` — so a grassland-dominant chunk can still have a pond/river cutting through it, reported as "NPC should not build their house in water"): `VillageRenderer._find_dry_origin` nudges the origin to the nearest dry candidate (deterministic, squared-distance ordering) within a 6-tile search radius before stamping, and skips the house entirely (falling back to the raw anchor as a walk target, unbuilt) if nothing dry is found nearby — no house is better than a half-submerged one. This *replaces* the old decorative `ProceduralHouseSprite` (3 seeded sizes/palettes) entirely — that generator still exists, fully tested, just no longer called from village generation. The shared **well/market-stall/gate landmarks are still real visible props** (`ProceduralLandmarkSprite`) anchoring a village square, and every **merchant villager now also gets a second, personal trading stand** of their own (`VillageRenderer._door_facing_direction` + `_STAND_OFFSET_TILES`, same "stall" sprite, placed just outside their own house's door in the direction it opens) — previously every merchant in a village routed to the one shared stall, which read as a single shop rather than several villagers who each trade. Known gaps: house footprint is fixed (5x4), not seed-varied in size; no per-occupation building beyond the shared landmarks and a merchant's own stand (a blacksmith's forge, herbalist's garden stall, etc. still have no dedicated prop); a house stamped by a settlement re-loading its chunk overwrites whatever was in those exact cells before (including a player's own prior edit there) — the same "regenerates identically on revisit, no interference tracking" limitation trees/creatures already accept, not something new to houses. **Occupation balance per settlement is left to chance, deliberately** (see NPC Needs / Local Production Economy below): with `POPULATION` fixed at 5 and now 8 occupations, roughly a tenth of settlements roll zero producer villagers and every resident there genuinely struggles to eat — matches this codebase's existing "population exists wherever conditions make it viable" philosophy (`world.md`) rather than forcing an artificial producer guarantee; flagged as a real, known consequence, not an oversight.
-- **NPC Identity System** (small) — ✅ Done — `src/world/npc_identity.gd`: deterministic per-seed name (two-part syllable generator), occupation (farmer/blacksmith/merchant/guard/fisher/herbalist/**hunter**/**nurse** — the last two added for the local production economy below: hunter is a producer distinct from farmer, nurse a new non-producer village-care role), personality trait, and driving need, tested. Relationships to other NPCs (also part of npc.md's Identity) are NOT modeled yet. Known gap: `HeroAppearance.CLASS_PALETTES` was not extended for hunter/nurse — both fall back to the warrior palette (fail-safe, not a crash) until a dedicated outfit is authored for each.
+- **Procedural NPC Population Generation** (large) — ✅ Done — `src/world/settlement_generator.gd` places a sparse (~1-in-30 habitable chunks, never on ocean/mountain), deterministic 5-villager settlement per qualifying chunk, wired into `EarthChunkManager`'s chunk load/unload (same regenerates-identically-on-revisit philosophy as trees/creatures). `src/rendering/village_renderer.gd` spawns a walking `NpcMarker` per villager, wearing the same hero-appearance engine the player uses (`HeroAppearance`/`ProceduralCharacterSprite`), extended with 6 occupation outfit palettes (still only 6 — see NPC Identity System's own note below on the 2 newest occupations' cosmetic gap). **Houses are now real, enterable, multi-tile structures, not a decorative sprite** (see `concept/building.md`'s Status section for the full mechanism): `VillageRenderer._stamp_house` picks one of `HouseBlueprint`'s now-10-shape catalog (own occupation/personality choice, not a fixed box — see the Building section's own "House blueprint catalog" entry and this section's Identity entry below), builds it (wall ring, one door, real window count, floor, roof — seeded wood/stone material) centred on each villager's ring-layout anchor, and stamps it into the chunk via `EarthChunkManager.stamp_structure_at_global` — the exact same piece vocabulary and collision/roof-hide mechanism the player's own building pieces use (`docs/concept/building.md#one-system-two-builders`, now actually true rather than aspirational). A villager's `home_position` resolves to its own house's door cell, not an arbitrary anchor point, so it stands somewhere it could actually have walked to. **A house's ring-layout anchor can land on a water pocket** (a chunk's dominant biome only gates the whole chunk, not every individual cell — see `BiomeClassifier.dominant_biome` — so a grassland-dominant chunk can still have a pond/river cutting through it, reported as "NPC should not build their house in water"): `VillageRenderer._find_dry_origin` nudges the origin to the nearest dry candidate (deterministic, squared-distance ordering) within a 6-tile search radius before stamping, and skips the house entirely (falling back to the raw anchor as a walk target, unbuilt) if nothing dry is found nearby — no house is better than a half-submerged one. This *replaces* the old decorative `ProceduralHouseSprite` (3 seeded sizes/palettes) entirely — that generator still exists, fully tested, just no longer called from village generation. The shared **well/market-stall/gate landmarks are still real visible props** (`ProceduralLandmarkSprite`) anchoring a village square, and every **merchant villager now also gets a second, personal trading stand** of their own (`VillageRenderer._door_facing_direction` + `_STAND_OFFSET_TILES`, same "stall" sprite, placed just outside their own house's door in the direction it opens) — previously every merchant in a village routed to the one shared stall, which read as a single shop rather than several villagers who each trade. That per-occupation gap is now closed: every farmer/blacksmith/fisher/herbalist/**hunter** villager also gets a real prop of their own (field/forge/dock/garden/hunting_ground, via the new `ProceduralLandmarkSprite` entries — hunter's own "hunting_ground" id has no dedicated art yet and falls back to the well sprite, a known cosmetic gap not a crash) stamped at their own `workspot_position` — see `concept/building.md`'s Status section for the full mechanism and `NpcIdentity.WORK_LOCATION_BY_OCCUPATION`, the single mapping both the schedule system and the renderer now read from; nurse's own "well" tag is already one of the 3 shared landmarks, so nurse needs no extra prop, same as merchant/guard. Remaining known gaps: a house stamped by a settlement re-loading its chunk overwrites whatever was in those exact cells before (including a player's own prior edit there) — the same "regenerates identically on revisit, no interference tracking" limitation trees/creatures already accept, not something new to houses. **Occupation balance per settlement is left to chance, deliberately** (see NPC Needs / Local Production Economy below): with `POPULATION` fixed at 5 and now 8 occupations, roughly a tenth of settlements roll zero producer villagers and every resident there genuinely struggles to eat — matches this codebase's existing "population exists wherever conditions make it viable" philosophy (`world.md`) rather than forcing an artificial producer guarantee; flagged as a real, known consequence, not an oversight.
+- **NPC Identity System** (small) — ✅ Done — `src/world/npc_identity.gd`: deterministic per-seed name (two-part syllable generator), occupation (farmer/blacksmith/merchant/guard/fisher/herbalist/**hunter**/**nurse** — the last two added for the local production economy below: hunter is a producer distinct from farmer, nurse a new non-producer village-care role), personality trait, and driving need, tested. Personality is now DNA derived (`src/world/npc_genome.gd`, reported: "personality should be DNA derived") rather than an independent flat roll: each NPC carries an `NpcGenome` — 8 independent continuous genes, one per named trait, same "seeded per-trait fraction" shape `TreeGenome` already uses for trees — and `personality_trait` is exactly whichever gene rolled highest (`dominant_trait()`). Kept as a plain `String -> float` Dictionary rather than fixed fields specifically so it plugs directly into the existing `dna_crossover.gd` two-parent utility with zero adaptation, unblocking NPC child inheritance the moment villagers can have children at all (npc.md's Lifecycle section already calls for the same DNA-cross model players use). Also gives `HouseBlueprint.choose_blueprint_id` a continuous strength to nudge house choice by, not just a category match. Relationships to other NPCs (also part of npc.md's Identity) are NOT modeled yet. Known gap: `HeroAppearance.CLASS_PALETTES` was not extended for hunter/nurse — both fall back to the warrior palette (fail-safe, not a crash) until a dedicated outfit is authored for each.
 - **Organic Backstory Growth** (small) — ⬜ Not started
 - **NPC Behaviour DSL** (huge) — ⬜ Not started
 - **Daily Planning (LLM Scheduler)** (large) — 🚧 Partial — `src/world/npc_planner.gd`'s `Planner`/`FakeNpcPlanner` split (mirroring `WorldBossFitness`'s `PhaseGenerator` convention exactly): `FakeNpcPlanner` deterministically produces an occupation-keyed `{time_block, location_tag, activity}` day (work by day, home to sleep by night, a guard stays on watch through the evening instead of socializing) with zero LLM calls. The real LLM-backed planner (see intro above) isn't built yet.
-- **Local FSM/Pathfinder Plan Execution** (large) — ✅ Done (basic) — `src/rendering/npc_marker.gd`: a lightweight per-frame FSM (deliberately much lighter than `CreatureMarker`'s full sense/perceive/act AI) reads the current schedule entry for the in-game hour (`src/world/npc_schedule.gd`, paced by the same `SECONDS_PER_SIMULATED_DAY` clock as the rest of the world sim) and walks toward wherever it resolves to -- "home", a settlement's 3 shared landmarks (well/stall/gate), or a personal workspot for occupations without a dedicated building yet (field/forge/dock/garden/hunting_ground). No real pathfinding (straight-line `move_toward`, no obstacle avoidance). Its bound `CharacterView` is now actually driven by that movement (previously it was bound once by `VillageRenderer._build_npc` and then never updated, so every villager's walk cycle sat frozen in `IDLE` despite visibly moving): `_update_animation` sets `is_moving`/`set_facing`/`set_movement_state` from the per-frame position delta each `_process`, and `NpcMarker.setup(world, tile_size)` (mirroring `CreatureMarker.setup`, now wired through `VillageRenderer.spawn_village`'s existing `world` param into `_build_npc`) gives it the same water-tile check `CreatureMarker` uses so a villager swims across water instead of walking on it.
+- **Local FSM/Pathfinder Plan Execution** (large) — ✅ Done (basic) — `src/rendering/npc_marker.gd`: a lightweight per-frame FSM (deliberately much lighter than `CreatureMarker`'s full sense/perceive/act AI) reads the current schedule entry for the in-game hour (`src/world/npc_schedule.gd`, paced by the same `SECONDS_PER_SIMULATED_DAY` clock as the rest of the world sim) and walks toward wherever it resolves to -- "home", a settlement's 3 shared landmarks (well/stall/gate), or a personal workspot -- now marked by a real per-occupation prop of its own (field/forge/dock/garden/hunting_ground, see `concept/building.md`'s Status section) rather than an invisible walk target. No real pathfinding (straight-line `move_toward`, no obstacle avoidance). Its bound `CharacterView` is now actually driven by that movement (previously it was bound once by `VillageRenderer._build_npc` and then never updated, so every villager's walk cycle sat frozen in `IDLE` despite visibly moving): `_update_animation` sets `is_moving`/`set_facing`/`set_movement_state` from the per-frame position delta each `_process`, and `NpcMarker.setup(world, tile_size)` (mirroring `CreatureMarker.setup`, now wired through `VillageRenderer.spawn_village`'s existing `world` param into `_build_npc`) gives it the same water-tile check `CreatureMarker` uses so a villager swims across water instead of walking on it.
 - **Interrupt System** (medium) — ⬜ Not started
 - **Live Dialogue System** (large) — ⬜ Not started — see "Basic Talk Interaction" below for the deterministic single-line placeholder standing in for this today.
 - **Persistent Memory Log** (medium) — ✅ Done (mechanism); 🚧 not yet auto-triggered off ordinary NPC proximity — `MemoryRecord`/`MemoryStore`/`Rumor` (`src/emergence/`) implement `npc.md`'s "Memory, beliefs, and rumor propagation" spec: fact stays authoritative in `EventStore`, a memory is a separate lossy per-holder projection, `Rumor` steps confidence/source-type down one hop at a time (tested against a ~3-hop "heard it from a guy" feel). Content mutation still deliberately deferred per the spec. Propagation isn't yet wired to fire automatically off NPCs' landmark-proximity schedule (`npc_schedule.gd`) — the mechanism is real and callable, the trigger isn't live yet.
@@ -4233,6 +4242,83 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   unload — chunk-local, ephemeral state, the same explicit scope cut
   `soil_fauna.md`'s worm burrows already made for the same reason.
 
+### Disease (`concept/disease.md`)
+
+New concept doc + system (2026-08-24), born from a design session
+brainstorm: *"further emergent mechanics... genuinely novel gameplay"* —
+the trophic pressure this project's population model always had a slot for
+(predation, the player, and now disease) but never actually applied. A real
+SIRS (Susceptible→Infected→Recovered→Susceptible-again) epidemiology model,
+three real named-disease archetypes, and both player spillover paths, all
+via TDD.
+
+- **Core SIRS model** (medium) — ✅ Done — `src/gameplay/disease_model.gd`
+  (`DiseaseModel`), pure and fully tested
+  (`tests/unit/test_disease_model.gd`, 27 tests, all green): the full
+  state machine (`advance_state`), all three archetypes' real transmission
+  math (herd: density-weighted against real population ÷ real carrying
+  capacity; predator: bite chance; carrion: contamination/carry/graze
+  chances), region-pressure scaling off the existing `RegionDifficulty`
+  tier, herd disease's real "makes you prey, not dead" secondary effect
+  (`movement_speed_multiplier`), and per-archetype lethality. Same
+  deterministic hash-seeded roll pattern as `Sickness`/`TamingSystem`.
+- **Herd (foot-and-mouth-like)** (medium) — ✅ Done —
+  `CreatureMarker._herd_disease_step`, on the existing throttled sensing
+  tick, checking a real region population/capacity ratio (two new
+  `EarthChunkManager` accessors, `herbivore_capacity_at_chunk`/
+  `herbivore_capacity_near`, mirroring the existing
+  `herbivore_population_at_chunk`/`_near` pair exactly). The real "moves
+  slower, easier prey" secondary effect is wired straight into
+  `CreatureMarker._advance` (`DiseaseModel.movement_speed_multiplier`) --
+  the one choke point every intent's movement already funnels through.
+- **Predator (rabies-like)** (small) — ✅ Done —
+  `CreatureMarker._try_transmit_predator_disease`, riding the exact same
+  bite `_try_attack` already resolves, mirroring `VENOMOUS_SPECIES`'s
+  duck-typed `target.has_method(...)` call shape exactly. Works
+  identically against another creature or the player — the zoonotic
+  spillover path IS this same call landing on a `Player`.
+- **Carrion (anthrax-like)** (medium) — ✅ Done — `Carcass` rolls
+  `contaminated` once at its `is_rotten()` transition
+  (`_roll_contamination`); `DecomposerMarker` is the real insect carry
+  vector, picking up `carrying_disease` off a contaminated carcass and
+  spreading it to the next clean one it feeds on
+  (`_step_disease_carry`); a susceptible herbivore risks exposure grazing
+  near a contaminated carcass (`CreatureMarker._carrion_disease_step`) —
+  simplified to direct carcass proximity rather than a separately-tracked
+  "contaminated patch of grass" object this project has no substrate for.
+- **Visible symptoms** (small) — ✅ Done — every infected `CreatureMarker`
+  tints itself (`Sprite2D.modulate`), no new rendering system; a tamed/kept
+  animal additionally gets a third sick pip beside its existing
+  hunger/trust readouts (`_sick_pip`, see `taming.md`).
+- **Player spillover** (medium) — ✅ Done — `Player.apply_disease_bite`/
+  `_sickness_step`, routed entirely through the existing `Sickness` pure
+  model (per this doc's own explicit instruction) rather than a new
+  `VenomModel`-style debuff. Both paths wired: an infected predator's bite,
+  and careless butchering of a contaminated carcass
+  (`Player._butcher_step`). Untreated severity is a real, ongoing stamina
+  tax, never fatal outright, and — since no cure/treatment tool exists yet
+  — never naturally recovers either (that's `Sickness.progress`'s own
+  pre-existing behavior, not a new gap).
+- **Feeds carrion** (small) — ✅ Done — a lethal disease death routes
+  through a new shared `CreatureMarker._die()` (factored out of
+  `take_damage`'s existing death branch), so it spawns a real `Carcass`
+  through the exact same path a predation kill already uses.
+- ⬜ Management tools (quarantine, culling a sick tamed animal, a
+  craft-able treatment/cure) — explicitly out of scope for this pass, by
+  design; the interfaces above are shaped so adding these later doesn't
+  touch the transmission math.
+- ⬜ Aggregate population-level herd immunity (a whole region's herd
+  carrying immunity across a reload, as opposed to one individual
+  `CreatureMarker`'s own in-memory SIRS state, which resets on
+  despawn/chunk-unload exactly like `carrion.md`'s carcasses) — not built;
+  immunity here is individual-level and ephemeral, a real, deliberate scope
+  cut, not an oversight.
+- ⬜ Numeric rates are real, tuned, test-pinned constants now (not the
+  open design question this doc used to pose) — but first-pass numbers,
+  chosen for internal consistency (region pressure at `HARD` deliberately
+  saturates several chances to certain) rather than balance-tested against
+  real play. Expect these to move.
+
 ### Woodworking (`concept/woodworking.md`)
 
 New concept doc + system (2026-08-24), reported: *"when chopping a felled
@@ -4361,6 +4447,23 @@ No farming system is wired into live gameplay, but its plot and breeding math no
 - **New Game / Load Game** — ✅ Done — previously the world persisted eagerly to `user://` regardless of menu choice while the player never persisted at all, so "New Game" actually meant "old world, new stats". `Player.to_save_dict()`/`apply_save_dict()` round-trip position, class, authored appearance (now retained in a new `Player.appearance` field instead of applied-once-and-forgotten), health/max health, wallet, XP/level, skill-tree allocations, inventory, worn equipment + held weapon, and hotbar bindings. `PlayerSave` (`src/gameplay/player_save.gd`) is the pure I/O layer (mirrors `ChunkSerializer`'s `store_var`/`get_var` convention). `MainMenu` gained a root-screen **Load Game** button, shown only when a save exists, that bypasses the character creator entirely. New Game / Host Game now wipe the previous run's player save and all three `EarthChunkManager` persistence dirs (`WorldReset`, `src/world/world_reset.gd`) before spawning, so a fresh character actually loads into a fresh world. Autosaves periodically (`World.AUTOSAVE_INTERVAL`, 60s) and once on window close. Tested: `test_player_persistence.gd`, `test_player_save.gd`, `test_main_menu.gd`, `test_world_reset.gd`, `test_world_persistence.gd`. `World`'s own spawn/autosave wiring is untested glue over those pieces, matching `World`'s pre-existing boundary (no `world.gd` function had a direct unit test before this either). Not yet: multiple save slots (out of scope, see the concept doc).
 
 - **Loading screens** — ✅ Done (see `concept/persistence.md`'s "Loading screens" section) — reported: "the game doesn't appear to hang when starting a new game". Investigated with real timing instrumentation against a real running instance (not assumed): New Game/Load Game/Join's real synchronous stall is `EarthChunkManager.update()`'s first call for a freshly-centered chunk radius, inside `_compute_dry_land_spawn_tile`/`_spawn_local_singleplayer_from_save` — **measured ~39s for that single call** in this dev sandbox (`_spawn_local_singleplayer` end to end: ~40s; the rest, mostly `CharacterView`'s appearance/portrait generation, is under a second). Nothing in that call chain (`update` → `_load_chunk` → terrain paint + tree/stone/grass/crop/decomposer/flower/scrub/lichen spawning) ever `await`s, so it fully blocks frame presentation for its whole real duration. `LoadingOverlay` (`scenes/loading_overlay.gd`, a small dim-backdrop + centered status label + indeterminate spinner `Control`) is shown via `World._show_loading_overlay`, which awaits **two** `process_frame` signals so the overlay is actually painted before the long call starts (confirmed against real rendered screenshots captured mid-freeze — one `await` alone was not reliably enough, and a first attempt without the explicit post-preset offset reset left the whole overlay pinned to a zero-size rect at the origin instead of covering the screen, the same `set_anchors_preset`-preserves-current-rect gotcha `MainMenu._ready()` already documents; both confirmed and fixed against real screenshots, not by re-reading the code and assuming it was right). Wired into all three entry points — `_on_menu_start_requested` ("Preparing a new world..."), `_on_menu_load_requested` ("Loading your world..."), `_on_menu_join_requested` ("Connecting to host...", covering a joining client's own version of the same stall, which actually lands later, inside `_client_process`, since a joining client has no single call site to wrap the way the other two do) — and hidden from one unified place, `_client_process`, right after its own `update()` call, idempotently. Progress is a real, honest **indeterminate spinner**, not a fabricated percentage: nothing outside `update()` can observe real interim progress without it yielding mid-loop, which would mean restructuring `EarthChunkManager`/`TerrainRenderer` internals — out of scope for a loading screen (every existing synchronous caller, including most of the test suite, depends on `update()` completing in one call). The same real screenshots confirm the honest limit of this approach: since nothing renders during the freeze itself, the spinner is only ever actually seen to advance across the couple of frames awaited before/after the freeze, then holds on one frame for the freeze's real duration — a real indeterminate spinner, just one that (like everything else on screen) can't animate through a period nothing can render during. Tested: `LoadingSpinner.frame_for_elapsed` (`src/ui/loading_spinner.gd`), pure and tuned-constant-driven, `test_loading_spinner.gd`; `LoadingOverlay`/its `World` wiring are untested Node-composition glue, `World`'s pre-existing boundary. Verified end-to-end against a real running instance for New Game and Load Game (real screenshots, both mid-freeze and post-spawn-with-overlay-gone); Join's overlay-hide wiring could not be verified live the same way — this dev machine's live multiplayer connectivity is blocked (see the Multiplayer notes elsewhere in this doc), so it's reasoned from the code rather than screenshot-confirmed. Separately, and NOT covered by any of the above: a stale/missing `TerrainAtlasCache` (`TerrainRenderer.build_tile_set`, gated on `ATLAS_VERSION`) is a real, similarly-sized stall (~62s measured in this dev sandbox on this session's own `ATLAS_VERSION` bump) that happens in `World._ready()`, unconditionally, before the main menu itself is even shown — out of scope here since there's no entry point left to wrap it with once it's already running before any menu click exists; self-heals after the first paid run (writes a fresh cache), so it's a one-time cost per `ATLAS_VERSION` bump rather than a recurring one.
+
+---
+
+### Geology (`concept/geology.md`)
+
+New concept doc this pass -- no prior doc covered what's underground (`stone.md` is loose surface rock, `resources.md` names "geology and gathering" but never specifies a mechanism). Real per-chunk sim, not backdrop: `Strata` (`src/world/strata.gd`) answers solid/ore/tunnel per cell, the same class of thing `EarthChunkManager` already keeps for wild crops/decomposers, parameterized by LAYER rather than four separate classes.
+
+- ✅ **Four real layers, fully configured and tested** -- topsoil/regolith, bedrock, deep bedrock, hydrothermal, each a `Strata` instance with its own ore density and (via `GeologyOreGenesis`) its own real ore-type weighting: coal favored shallow (real sedimentary coal seams), iron favored bedrock/deep bedrock (real banded formations), copper favored the hydrothermal zone specifically (real porphyry/epithermal copper genesis -- the one weighting tied to a named real deposit type, not just "rarer/deeper"). `test_strata.gd`, `test_geology_ore_genesis.gd`.
+- ✅ **`TunnelSupport.collapse_chance_for(unsupported_span)`** -- real span-SQUARED bending-stress relationship (simple-beam mechanics): zero below a real safe-span reference (historic timber-set spacing), grows with the square of the excess span, caps at a ceiling. Pinned by `test_tunnel_support.gd` (including a direct "doubling the excess span roughly quadruples the chance" assertion).
+- ✅ **`GeologyHazards.foul_air_at(layer)` / `flood_risk_at(layer, distance_to_nearest_surface_water)`** -- real, tested, per-layer hazard functions (foul air rises with depth/enclosure, a real natural-ventilation effect; flood risk is a per-layer base times a real exponential distance falloff from the nearest surface water). `test_geology_hazards.gd`. Not yet triggered as live gameplay events -- see gaps below.
+- ✅ **`CaveEntrancePlacement`** -- sparse, deterministic, mountain-biome-weighted cave-mouth placement, same coordinate-hash idiom as `StonePlacement`/`OrePlacement`. `test_cave_entrance_placement.gd`.
+- ✅ **`GeologyChamber.cells_for`** -- the small circular pocket of Strata cells a cave entrance reveals, the underground equivalent of `RoomDetector`'s room cells. `test_geology_chamber.gd`.
+- ✅ **Topsoil/regolith wired fully end-to-end and playable.** `GeologyRenderer` spawns a visible `CaveEntranceMarker` (real, if honestly-flat-fallback, procedural art -- `ProceduralCaveEntranceSprite`) at every entrance a loaded chunk rolls (`EarthChunkManager._load_chunk`'s new geology block), and `EarthChunkManager._update_geology_reveal` (called from `update()`, mirroring `_update_roof_visibility`'s reveal-on-entry shape exactly) spawns real `DiggableRock` nodes for the chamber the moment the player is within `CAVE_ENTRY_TRIGGER_RADIUS` of an entrance, and despawns them the moment the player leaves. `DiggableRock` mirrors `MinableOre`'s contract exactly (real `WorldItemBus` drops scaled by pickaxe power via the same `OreYield`, same hover-tooltip contract, same "attack"-bound swing) plus writes the mined cell permanently back into the chunk's own `Strata` instance, so a chamber re-revealed later shows real tunnels instead of resetting. `test_diggable_rock.gd`, `test_geology_renderer.gd`, `test_procedural_cave_entrance_sprite.gd`.
+- ⬜ **The physical shaft from topsoil/regolith down into bedrock, and onward through deep bedrock into the hydrothermal zone.** All three deeper layers' `Strata` configuration, ore weighting, and hazard functions are fully implemented and fully tested (see above); nothing yet lets a player physically reach them -- a deliberately scoped, honestly documented gap (see the geology doc's own Status section for the full statement).
+- ⬜ **Collapse/foul-air/flood-risk are not yet live gameplay events.** The pure hazard functions exist and are tested; nothing calls them from the reveal/mining path yet (no actual cave-in, no actual air/water damage-over-time tick).
+- ⬜ **Mined-tunnel state does not persist across a chunk unload/reload** -- `_topsoil_strata` is kept only for a chunk's LOADED lifetime, unlike `chunk.modifications`'s own on-disk persistence. Walking away far enough to unload the chunk and returning currently resets any tunnels dug there. A documented gap, not an oversight -- persisting it would need a new save-file format this pass didn't build.
+- ⬜ **Underground art is the flat procedural fallback** (`ProceduralStoneSprite`/`ProceduralOreSprite`, same textures surface stone/ore nodes fall back to with no illustrated sheet), not a cave-specific illustrated sheet -- none exists yet, the same honestly-documented situation `stone.md` itself describes for any future stone class with no art of its own.
 
 ## Reality check
 
@@ -4525,6 +4628,65 @@ the full `test_terrain_renderer.gd` file in this environment, up from the
 file's own historical "~13.5s" build_tile_set() baseline) -- cached to disk
 per `ATLAS_VERSION` as before, so this is paid once per version bump, not
 per boot.
+Separately, `corner_direction_for`'s MIXED-flanking-neighbor branch (two
+different neighbors flanking a corner, carved toward whichever wins
+`BLEND_PRIORITY`) had also always been gated to `biome_name == "ocean"` only,
+even though the underlying dominance rule never actually depended on ocean
+being involved -- a genuine three-biome land corner (no ocean at all)
+silently fell through to a hard corner. Generalized to every `biome_name`;
+the ocean case is unaffected (the guard was already redundant with an
+earlier check by the time it was reached).
+
+✅ **A real corner still starved by an unrelated blend edge -- the same
+report a second time.** After the land/land corner family above landed, a
+follow-up screenshot showed the exact same symptom persisting: "still sharp
+corners at diagonal borders". Root cause this time was in `paint()`'s
+dispatch, not the atlas: it checked `dominant_blend_for` FIRST and only ever
+consulted `corner_direction_for` when blend was entirely empty for the whole
+cell -- but blend only needs ONE differing cardinal side to trigger, while a
+corner needs TWO PERPENDICULAR ones, a strictly narrower condition. A cell
+could easily have a real corner on one diagonal (say north+east, toward
+forest) while a completely UNRELATED third side (south, toward desert) also
+qualified for ordinary dithering -- and that unrelated edge silently stole
+the whole tile's treatment before the real corner was ever asked about.
+Measured directly against real generated chunks near Berlin with a
+throwaway debug probe (same technique as the corner-fixing history further
+up this doc: load a real chunk via `EarthChunkManager.update()`, inspect the
+live `TileMapLayer`'s actual painted atlas coordinates, not just unit-test
+logic): **553 of 1065 real land/land corner-eligible cells (52%) were
+starved this way**, plus a smaller pre-existing instance on the ocean side
+(20 of 2448) that had been there since the ocean-corner system itself
+shipped, just far rarer since an ocean cell's own `BLEND_PRIORITY` (0, the
+lowest possible) can never itself be the lower-priority side of a blend.
+A first fix (make corner win outright whenever both apply) regressed two
+existing, PASSING, intentional tests instead
+(`test_paint_blends_a_corner_toward_multiple_differing_neighbors`,
+`test_paint_blends_a_chunk_edge_cell_toward_a_differing_out_of_chunk_neighbor`):
+a cell whose two perpendicular differing neighbors are the SAME
+lower-priority biome (e.g. grassland notched by desert on both east and
+south) is geometrically a real corner too, but for that specific shape
+`dominant_blend_for`'s existing multi-edge dithering is not a competing,
+inferior treatment -- it is the exact same fact, already correctly handled
+as a soft fringe across both edges. The real fix
+(`TerrainRenderer._corner_directions_not_covered_by_blend`) reconciles the
+two rather than picking an outright winner: a corner direction survives only
+when NEITHER of its two flanking cardinal edges is one blend already chose
+to dither; a direction with even ONE flank already covered defers entirely
+to blend. Checking blend's own ACTUAL returned directions (rather than
+re-deriving the same priority comparison independently) is what keeps this
+correct against `dominant_blend_for`'s own ocean exclusion too -- ocean is
+never a blend partner regardless of priority, so re-deriving from priority
+alone would have wrongly excluded every ocean corner, whose flanking
+neighbor is always numerically the lowest priority there is. Re-measured
+after the fix with the same real-chunk probe: of the 1065 real land/land
+corner-eligible cells, 553 are now confirmed CORRECTLY deferred to blend
+(the exact count previously miscounted as "starved" -- they were never bugs,
+just genuinely the multi-edge-dither case), and only 1 of the remaining 512
+real corners still mismatches the live painted tile -- traced to a chunk-
+load-ordering artifact (this one cell's diagonal-neighbor chunk had not
+loaded yet at the moment it was itself painted), the same class of residual
+already present on the pre-existing ocean-corner system and out of scope for
+this pass.
 
 ✅ **Illustrated ground tiles -- real art registered for every land biome.**
 Following the same transition loose stone already made

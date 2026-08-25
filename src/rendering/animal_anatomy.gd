@@ -212,7 +212,6 @@ const _PROFILES := {
 		"tail": TAIL_TUFT, "tail_length": 0.06,
 		"headgear": HEADGEAR_ANTLERS, "has_mane": false,
 	},
-
 	# -- low, bulky rooters -------------------------------------------------
 	# Wedge-shaped: massive humped shoulders, head carried low, short legs.
 	"boar": {

@@ -87,7 +87,9 @@ func _floor_image(base: Color, is_stone: bool) -> Image:
 			if y % _PLANK_ROW_HEIGHT == 0:
 				for x in SIZE:
 					image.set_pixel(x, y, seam)
-	_rim_shade(image)
+	# Deliberately NOT rim-shaded -- see _rim_shade's own doc comment: a
+	# floor is a continuous surface, and rimming each cell drew a grid over
+	# every room.
 	return image
 
 
@@ -119,7 +121,11 @@ func _wall_image(base: Color, is_stone: bool) -> Image:
 			for x in SIZE:
 				if x % _LOG_WIDTH == 0:
 					image.set_pixel(x, y, seam)
-	_rim_shade(image)
+	# Deliberately NOT rim-shaded -- see _rim_shade's own doc comment. A run
+	# of wall cells is one wall; rimming each of them is what made a house's
+	# visible facade read as a row of separate panels. Door and window still
+	# outline their own leaf/pane (see _outline_rect), so they stay legible
+	# against the unbroken wall around them.
 	return image
 
 
@@ -188,9 +194,146 @@ func _roof_image(is_stone: bool) -> Image:
 	return image
 
 
+## ## Pitched roof variants (docs/concept/building.md "How a house reads
+## from above")
+##
+## A roof tiled from ONE flat shingle image reads, from above, as a brick
+## patio -- a large part of why village houses were reported as "randomly
+## placed stones and wood panels". Two things fix that, and both are
+## per-cell CONTEXT rather than per-cell art, so they arrive here as a
+## (band, mask) pair computed by RoofShape:
+##
+## - `band`: where this cell sits on the pitch. Brightest at the ridge,
+##   falling toward the eaves, with the light-facing slope a clear step
+##   brighter than the shaded one (see shade_factor_for_band).
+## - `mask`: which of the cell's sides face OUT of the building (see
+##   RoofShape's EDGE_* bits). Only those get a rim, so a run of roof cells
+##   reads as one continuous surface with a crisp outline around the whole
+##   building, instead of every tile outlining itself.
+const RoofShape = preload("res://src/rendering/roof_shape.gd")
+
+## The lit slope's brightness range, ridge -> eave, as a multiplier on the
+## roof's base colour. Starts above 1.0 so the ridge genuinely catches the
+## light rather than merely being "less dark".
+const ROOF_LIT_RIDGE_FACTOR := 1.22
+const ROOF_LIT_EAVE_FACTOR := 1.00
+
+## The shaded slope's range. The GAP between ROOF_LIT_EAVE_FACTOR and
+## ROOF_SHADED_RIDGE_FACTOR is deliberately the largest step in the whole
+## ramp: that hard contrast line, where the two slopes meet, is what reads
+## as the ridge beam -- so no separate ridge tile is needed (pinned by
+## test_the_step_across_the_ridge_is_larger_than_any_step_within_one_slope).
+const ROOF_SHADED_RIDGE_FACTOR := 0.86
+const ROOF_SHADED_EAVE_FACTOR := 0.70
+
+## How deep the building's outline is drawn on an outward-facing side, and
+## how far its base colour is darkened there -- a roof overhangs its walls
+## and casts a shadow under that overhang, which is what gives a house a
+## crisp silhouette against the ground rather than fading into it.
+const ROOF_RIM_THICKNESS := 2
+const ROOF_RIM_DARKEN := 0.55
+
+
+## The brightness multiplier for one shade band (see RoofShape's band
+## numbering: [0, FIRST_SHADED_BAND) is the lit slope, the rest is shaded,
+## and within each slope a higher index is further down toward the eave).
+## Out-of-range bands clamp rather than extrapolate into absurd values.
+static func shade_factor_for_band(band: int) -> float:
+	var steps := float(maxi(RoofShape.SHADE_BANDS_PER_SLOPE - 1, 1))
+	if band < RoofShape.FIRST_SHADED_BAND:
+		var lit_t := clampf(float(band) / steps, 0.0, 1.0)
+		return lerpf(ROOF_LIT_RIDGE_FACTOR, ROOF_LIT_EAVE_FACTOR, lit_t)
+	var shaded_t := clampf(float(band - RoofShape.FIRST_SHADED_BAND) / steps, 0.0, 1.0)
+	return lerpf(ROOF_SHADED_RIDGE_FACTOR, ROOF_SHADED_EAVE_FACTOR, shaded_t)
+
+
+## One roof cell at a given pitch band and outward-edge mask.
+func generate_roof_variant_image(material: String, band: int, mask: int) -> Image:
+	var is_stone := material == BuildingPiece.MATERIAL_STONE
+	var base := _ROOF_STONE if is_stone else _ROOF_WOOD
+	var image := _shingle_image(_scaled(base, shade_factor_for_band(band)))
+	_rim_edges(image, mask)
+	return image
+
+
+## The tile/slate COURSE pattern at an arbitrary base colour.
+##
+## Deliberately not the same weighting as the flat _roof_image below: given
+## equal emphasis, horizontal seams plus staggered vertical joints is a
+## running-bond BRICK course, which is exactly what made a roof read as a
+## patio from above. A real tiled roof is a stack of overlapping horizontal
+## courses, so the course lines are drawn hard and the vertical joints
+## between individual tiles only faintly -- the eye reads rows of roof tiles
+## rather than a brick wall lying on its back.
+const _COURSE_LINE_FACTOR := 0.74
+const _TILE_JOINT_FACTOR := 0.90
+
+
+func _shingle_image(base: Color) -> Image:
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	image.fill(base)
+	var course := _scaled(base, _COURSE_LINE_FACTOR)
+	var joint := _scaled(base, _TILE_JOINT_FACTOR)
+	for y in SIZE:
+		if y % _SHINGLE_ROW_HEIGHT == 0:
+			for x in SIZE:
+				image.set_pixel(x, y, course)
+			continue
+		var row_index := y / _SHINGLE_ROW_HEIGHT
+		var offset := (row_index % 2) * _SHINGLE_STAGGER
+		for x in SIZE:
+			if (x + offset) % (_SHINGLE_ROW_HEIGHT * 2) == 0:
+				image.set_pixel(x, y, joint)
+	return image
+
+
+## Darkens ONLY the sides named by `mask` -- the building's own silhouette.
+## An interior cell (mask 0) is left completely untouched, which is the
+## whole point: rimming every tile is what made a wall ring read as twenty
+## separate outlined boxes.
+func _rim_edges(image: Image, mask: int) -> void:
+	if mask & RoofShape.EDGE_NORTH:
+		for y in ROOF_RIM_THICKNESS:
+			for x in SIZE:
+				image.set_pixel(x, y, _scaled(image.get_pixel(x, y), ROOF_RIM_DARKEN))
+	if mask & RoofShape.EDGE_SOUTH:
+		for y in ROOF_RIM_THICKNESS:
+			for x in SIZE:
+				image.set_pixel(x, SIZE - 1 - y, _scaled(image.get_pixel(x, SIZE - 1 - y), ROOF_RIM_DARKEN))
+	if mask & RoofShape.EDGE_WEST:
+		for x in ROOF_RIM_THICKNESS:
+			for y in SIZE:
+				image.set_pixel(x, y, _scaled(image.get_pixel(x, y), ROOF_RIM_DARKEN))
+	if mask & RoofShape.EDGE_EAST:
+		for x in ROOF_RIM_THICKNESS:
+			for y in SIZE:
+				image.set_pixel(SIZE - 1 - x, y, _scaled(image.get_pixel(SIZE - 1 - x, y), ROOF_RIM_DARKEN))
+
+
+static func _scaled(color: Color, factor: float) -> Color:
+	return Color(
+		clampf(color.r * factor, 0.0, 1.0),
+		clampf(color.g * factor, 0.0, 1.0),
+		clampf(color.b * factor, 0.0, 1.0),
+		color.a
+	)
+
+
 ## Lighten the top-left rim, darken the bottom-right -- the same convention
-## ProceduralStructureSprite's furnace tile uses, applied to every piece so
-## the whole roster reads as one consistent lighting model.
+## ProceduralStructureSprite's furnace tile uses.
+##
+## No longer applied to floor or wall pieces (see docs/concept/building.md
+## "How a house reads from above"): those tile out in RUNS, and a per-tile
+## rim on a run draws a bright/dark line at every internal seam, so twenty
+## wall cells rendered as twenty individually-outlined boxes -- reported as
+## houses that look like "randomly placed stones and wood panels". A rim
+## belongs on the STRUCTURE's outer boundary, which for roofs is now the
+## edge mask (see _rim_edges) and for the facade is simply the contrast
+## against the ground and the roof's own overhang shadow above it.
+##
+## Still used by the flat fallback roof tile, which is a single standalone
+## catalog swatch (see atlas_coords_for_modification) rather than something
+## that tiles against copies of itself.
 func _rim_shade(image: Image) -> void:
 	for x in SIZE:
 		image.set_pixel(x, 0, _palette.highlight(image.get_pixel(x, 0)))

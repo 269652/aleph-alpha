@@ -610,3 +610,36 @@ func test_the_instantiated_view_is_scaled_down():
 	assert_almost_eq(view.scale.x, CharacterView.SCALE, 0.0001)
 	assert_almost_eq(view.scale.y, CharacterView.SCALE, 0.0001)
 	assert_lt(CharacterView.SCALE, 1.0, "the character should shrink, not grow, relative to its old size")
+
+
+# -- leg proportions: a real anthropometric leg-to-height fraction ----------
+#
+# Reported live: "the players walk animation and overall appearance looks
+# like a dwarf" -- LEG_SIZE.y previously put legs at 12/33 (~36%) of the
+# character's own total height, short of a real standing human's leg share.
+# Winter's "Biomechanics and Motor Control of Human Movement" segment-length
+# table (the same book stone_size.gd's LEG_MASS_FRACTION already cites, for
+# a different table) gives thigh length as ~0.245x standing height and shank
+# length as ~0.246x -- together ~49.1% of a person's real standing height is
+# leg, hip joint to floor. See CharacterView.LEG_TO_HEIGHT_FRACTION.
+
+func test_leg_size_matches_the_anthropometric_leg_to_height_fraction():
+	var expected := roundi(CharacterView._anthropometric_leg_height(CharacterView.ABOVE_HIP_HEIGHT))
+	assert_eq(CharacterView.LEG_SIZE.y, expected)
+
+
+func test_the_resulting_leg_share_of_total_height_is_within_the_cited_anthropometric_range():
+	var total := CharacterView.ABOVE_HIP_HEIGHT + float(CharacterView.LEG_SIZE.y)
+	var fraction: float = float(CharacterView.LEG_SIZE.y) / total
+	assert_true(fraction >= 0.45 and fraction <= 0.50, "leg fraction was %.3f" % fraction)
+
+
+## HEAD_TOP_Y must grow by exactly however much the legs grew (see
+## ABOVE_HIP_HEIGHT's own doc comment: everything above the hip line is held
+## fixed while legs stretch) -- a literal Y-axis stretch that makes the
+## character genuinely taller, not a bigger overall SCALE multiplier that
+## would leave proportions (and the "dwarf" look) unchanged.
+func test_head_top_y_equals_above_hip_height_plus_the_new_leg_height():
+	assert_almost_eq(
+		-CharacterView.HEAD_TOP_Y, CharacterView.ABOVE_HIP_HEIGHT + float(CharacterView.LEG_SIZE.y), 0.01
+	)

@@ -82,39 +82,6 @@ alpha, some systems are incomplete, unstable, intentionally opaque, or
 subject to significant change. Progress, balance, and saved data may not be
 preserved between versions.
 
-## Screenshots
-
-*(placeholders — to be added)*
-
-![Main gameplay: exploring the living world](docs/screenshots/gameplay-overview.png)
-*A real biome, populated by the ecosystem simulation rather than hand-placed spawns.*
-
-![A village and its inhabitants](docs/screenshots/village.png)
-*A procedurally placed settlement, its NPCs going about self-directed daily routines.*
-
-![Inventory and equipment](docs/screenshots/inventory.png)
-*The player's inventory/equipment window.*
-
-![Crafting](docs/screenshots/crafting.png)
-*Gathering materials and crafting gear at a station.*
-
-![Terrain and biome variety](docs/screenshots/terrain.png)
-*Biome borders blending organically instead of a hard grid seam.*
-
-### The same landscape, four seasons
-
-The exact same patch of forest, one real in-game year apart each shot —
-canopy color, blossom, fruit, and bare winter branches all come from the
-live season simulation (`SeasonCycle`), not a swapped texture set.
-
-| Spring | Summer |
-| --- | --- |
-| ![Spring](screenshots/season-spring.png) | ![Summer](screenshots/season-summer.png) |
-
-| Autumn | Winter |
-| --- | --- |
-| ![Autumn](screenshots/season-autumn.png) | ![Winter](screenshots/season-winter.png) |
-
 ## What you can actually do
 
 A tour through the game's systems, grouped by what they're about. Every
@@ -324,6 +291,39 @@ it) to open the in-game dev console for commands like `/help`, `/spawn`,
 `/give`, `/village`, and `/weather` — useful for exploring systems quickly
 rather than waiting on them to occur naturally.
 
+## License Key (for exported/downloaded builds)
+
+Running from the Godot editor (the method above) never requires a license
+key. An exported build, however, refuses to start without a valid
+`license.txt` file (containing just the serial code below, nothing else)
+placed next to the game's executable.
+
+A 7-day trial key, valid through **2026-08-31**, base game only:
+
+```
+040G00000000004HBW0G0064JHN6QKTH8QRE7WR5
+1P8SY9HD487AM5M5TC0K2YD5NRV4MEX448ZC86TJ
+TJB9SKNZ6Z93YPHRYAN9D5JQ8JRWC7SXM3HPTVDZ
+4091AXMDENKGH504M3169T326R8G999NTNSX10TR
+YHWJR6X6BD6YXC1DH1AAXE4EYSA2H72QX3296Q3T
+ASMENMMX7EJKPJQDKF97BNVV7ZGAVMNDY7NA5GBE
+KW91VRFNFTCGFY5KC3P3VABS5B6MZ1XYWMBGJ7AS
+BYXX7BYGTDKF68R6ZX8K4FJTWX15F4TYKKE0SRTB
+SA909Y903P02KG22TVDQMRP0Z824DJC2RCM1F9N8
+VDPSWTKK686JKCG4F3635SV8A840E9H6507AJEJS
+S4EXDK17KAAJ4M1Q3D38J2FF9H2ESYZXJ823Y
+```
+
+Paste the whole block (line breaks are fine) into a plain-text file named
+`license.txt` next to the game executable. After it expires, contact us
+(see Contact below) for an alpha tester key.
+
+The game also verifies its own files haven't been tampered with at
+startup (see `docs/licensing.md`). **Removing or bypassing this signature
+verification is expressly prohibited** under the license terms below, in
+addition to being enforced technically (see `docs/licensing.md`'s
+"Key-swap resistance" for what happens if you try).
+
 ## Private Alpha Use
 
 The copyright holder grants private individuals a limited, personal,
@@ -333,7 +333,9 @@ and play the alpha solely for personal, non-commercial purposes.
 You may not sell, rent, sublicense, publish, publicly distribute,
 commercially exploit, or use the game, its content, code, assets,
 characters, story, audiovisual materials, trademarks, or branding in
-connection with any commercial activity. You may not modify, reverse
+connection with any commercial activity. You may not remove, disable,
+circumvent, or attempt to defeat the game's license key or signature
+verification checks. You may not modify, reverse
 engineer, decompile, disassemble, or create derivative works except where
 applicable law expressly permits it.
 
@@ -356,6 +358,10 @@ royalty-free, transferable, sublicensable license to use, reproduce,
 modify, distribute, publicly display, perform, and commercially exploit
 that contribution as part of the game or related products. If you do not
 agree, do not submit contributions.
+
+Repo write access is by application, not open to unsolicited PRs — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to apply and what's expected
+once you're in.
 
 ## Disclaimer
 

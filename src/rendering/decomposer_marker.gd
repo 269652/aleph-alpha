@@ -19,6 +19,7 @@ const ProceduralDecomposerSprite = preload("res://src/rendering/procedural_decom
 const CarrionForageBehavior = preload("res://src/gameplay/carrion_forage_behavior.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const CarcassGuts = preload("res://src/rendering/carcass_guts.gd")
+const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 
 const GROUP_NAME := "decomposer"
 
@@ -43,6 +44,18 @@ const BITE_AMOUNT := 1.0
 var species := "ant"
 var home := Vector2.ZERO
 var wander_seed := 0
+
+## Anthrax-like carry vector (docs/concept/disease.md's CARRION archetype):
+## real blowflies/carrion beetles mechanically carry spores from an infected
+## carcass to the next one they feed on -- this decomposer IS that insect
+## (see carrion.md), so it carries the disease rather than a separate vector
+## being invented. Picked up feeding on a Carcass whose `contaminated` is
+## true (see _step_disease_carry); passed on to the next clean Carcass fed
+## on afterward. CarcassGuts is not part of this loop -- disease.md scopes
+## the anthrax archetype to carcasses/patches, not offal.
+var carrying_disease := false
+var _disease_model := DiseaseModel.new()
+var _disease_roll_count := 0
 
 var _behavior := CarrionForageBehavior.new()
 var _target: Node2D = null
@@ -111,9 +124,30 @@ func _step_feeding(delta: float) -> void:
 		return
 	if _behavior.advance(delta):
 		_target.take_bite(BITE_AMOUNT)
+		_step_disease_carry()
 		if not _target_still_here():
 			_target = null
 			_behavior.abort()
+
+
+## One bite's worth of anthrax-like carry (see carrying_disease's own doc
+## comment): a not-yet-carrying decomposer biting a contaminated Carcass may
+## pick it up; an already-carrying decomposer biting a CLEAN Carcass may
+## contaminate it in turn. Region pressure reads the CARCASS's own
+## region_tier (see Carcass.region_tier) rather than adding a second copy of
+## that field onto every decomposer -- the carcass being fed on is already
+## the one real source of truth for "how dangerous is this spot".
+func _step_disease_carry() -> void:
+	if not (_target is Carcass):
+		return
+	var target_carcass: Carcass = _target
+	_disease_roll_count += 1
+	var seed_value := hash("%d_%d_decomposer_carry" % [wander_seed, _disease_roll_count])
+	if target_carcass.contaminated and not carrying_disease:
+		var chance := _disease_model.decomposer_carry_chance(target_carcass.region_tier)
+		carrying_disease = _disease_model.attempt_transmit(chance, seed_value)
+	elif carrying_disease and not target_carcass.contaminated:
+		target_carcass.contaminated = true
 
 
 ## Whether _target is a real, not-yet-consumed thing still worth working --

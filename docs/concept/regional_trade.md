@@ -60,6 +60,12 @@ See Status below for what's actually built of it.
 - ✅ Trade networks: nearest-supplier resupply is real
   (`regional_trade.gd`, `EarthChunkManager.step_regional_trade`),
   automatic, and live-verified.
+- ✅ The resupply itself is no longer instant — see
+  [trade.md](trade.md), which builds directly on top of this doc's own
+  supplier-selection/surplus math to give a dispatched resupply a real
+  travel time, a real caravan, and real raid risk along the way. This
+  doc's own supplier-selection and surplus math are unchanged; only WHEN
+  the shortage settlement is actually credited moved.
 - ⬜ Dependency graphs / resource corridors — real aggregations over trade
   edges once enough of them exist; this slice only builds the one real
   edge, not the aggregation layer on top.
@@ -72,9 +78,11 @@ See Status below for what's actually built of it.
 
 ## Open questions
 
-- Should a resupply be gradual (partial shipments over several steps)
-  rather than resolving a shortage fully in one step, once there's a real
-  reason (travel time, trade-route capacity) to model that lag?
+- Should a resupply be gradual (partial shipments over several steps,
+  i.e. a trade-route CAPACITY) rather than resolving a shortage fully in
+  one trip? [trade.md](trade.md) answers the travel-TIME half of this
+  question (a resupply now has a real single-trip delay); splitting one
+  need across multiple smaller shipments is still open.
 - Does regional trade ever need a THIRD-PARTY intermediary (a trade hub
   settlement) once more than two real settlements commonly coexist, or
   does nearest-neighbor resupply stay sufficient indefinitely?

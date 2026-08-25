@@ -188,6 +188,123 @@ freshly generated one in a future patch — existing customers' old serials
 embedded alongside the new one, while new serials go out signed by the new
 key.
 
+## Personal / GitHub-bound keys
+
+An ordinary serial (everything above) is a bearer credential -- anyone who
+has the text can use it, indistinguishable from the person it was issued
+to. For a personal key you want harder to casually pass around (e.g. an
+alpha tester key, or a "here's a 7-day trial, upgrade to a real key
+that's yours" flow), a serial can optionally be bound to a specific
+GitHub account, verified online at launch.
+
+**Payload extension.** The 17-byte payload above gets an OPTIONAL 8 more
+bytes: a GitHub numeric user id (not a login -- logins are renameable,
+ids aren't), format version 2. Omitting it (version 1, the original
+17-byte layout, byte-identical to every already-issued serial) keeps a
+key fully offline and unbound, exactly as today -- this is opt-in per
+serial, not a replacement for the existing scheme.
+
+**Verification (in the shipped game).** `LicenseGate.evaluate()`
+decoding a bound key means "structurally valid" (signature checks out,
+not expired) -- NOT yet "this player may play". World's boot flow then
+runs GitHub's OAuth **Device Flow**
+(docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow):
+
+1. The game requests a device/user code pair from GitHub using only a
+   public Client ID (Device Flow is a *public client* flow specifically
+   so a distributed app never needs a client secret -- nothing secret is
+   ever embedded or transmitted).
+2. The player is shown the code and a URL, approves in their own
+   browser, on their own device.
+3. The game polls until GitHub returns an access token, then calls
+   `GET /user` with it and compares the real authenticated numeric id
+   against the one baked into the serial.
+4. The resulting access token is cached (`GithubTokenStore`,
+   `user://github_token.txt`) so this isn't an interactive browser
+   round-trip on *every* launch -- but every launch still re-hits
+   `GET /user` with whatever token is cached to reconfirm identity. This
+   is what actually makes it harder to share than a bearer credential:
+   the check runs every time, not once, and a revoked/expired cached
+   token falls back to a fresh interactive approval rather than quietly
+   passing.
+5. No internet at launch, for a key that IS bound, fails closed -- same
+   philosophy as every other check in this doc. An unbound key never
+   makes a network call at all.
+
+**Minting a bound key.** `tools/generate_serial.gd --github-login
+<username>` resolves the login to its numeric id via one unauthenticated
+call to GitHub's public API (`GET /users/{login}`, no token needed to
+read a public profile) at mint time, so the person minting the key only
+ever has to remember a login, never look up a numeric id by hand.
+
+**What this does and doesn't defend against.** Same honest framing as
+integrity verification above: this raises the cost of casual sharing
+(the sharer would have to also share ongoing control of their GitHub
+account, or personally approve the device code for someone else every
+time their cached token lapses) -- it does not stop two people who
+fully trust each other and are willing to do that. It also adds a real
+dependency on GitHub's uptime and on the player having a GitHub account
+at all, which is exactly why this is opt-in per serial rather than the
+only way to license the game.
+
+## Source/build integrity verification
+
+Separate concern from serial verification, same trust root: instead of
+checking that the *player* holds a valid entitlement, this checks that
+the *game files themselves* haven't been modified since they left the
+signing machine — a genuinely different question (a legitimate customer
+running a patched/repackaged binary is exactly what this catches; someone
+running the unmodified game with a shared/leaked serial is a
+serial-verification problem, not this one).
+
+**What gets hashed.** Not individual source files — the single exported
+data artifact: the `.pck` Godot produces next to the executable (the
+default "Embed PCK" unchecked layout), or the executable itself when PCK
+is embedded. Every compiled script, scene, and resource in the game lives
+inside that one file, so any change to any of them changes its hash.
+Whole-file hashing was chosen over a per-file manifest deliberately: it's
+one `FileAccess` read of a normal OS path rather than enumerating
+resources inside a mounted virtual filesystem at runtime (which has its
+own quirks this design avoids relying on), and it's trivially testable
+end to end with a throwaway file rather than depending on a real export
+existing. The tradeoff is granularity — this answers "was anything
+changed", not "which file" — acceptable for a refuse-to-run gate, where
+the only actions on failure are "run" or "don't."
+
+**Detached signature, not embedded.** The signed hash ships as a sidecar
+`<file>.sig` next to whatever it signs, never bundled inside it — bundling
+it would change the very hash it's certifying (a hash that includes its
+own signed copy of itself is self-referential and can't be computed in
+one pass). Same shape as `license.txt`: a plain file the build process
+drops next to the executable, nothing baked into the export itself.
+
+**Hashing the raw repo `src/*.gd` files would not work.** Export compiles
+and packs scripts into the `.pck`; a hash taken before export never
+matches what the running game reads from the `.pck` at runtime. The
+signing tool must run *after* export, against the actual shipped
+artifact — see `tools/sign_build.gd`'s own doc comment.
+
+**What this does and doesn't add over the "read first" section above:**
+still a client-side check, still patchable by someone willing to
+reverse-engineer the binary and strip the call site (see this doc's
+opening section — that limitation is universal, not specific to this
+mechanism). What it raises the bar on specifically: a modified `.pck`
+(a cracked build with the serial check patched out, a repackaged pirate
+build with assets swapped, a corrupted/incomplete copy) now fails a
+*second*, independent check before the first one is even reached, so
+defeating both means patching two things, not one. It does **not**
+protect the native Godot engine binary itself — only the data/`.pck`, or
+the whole executable when embedded — and it does **not** detect tampering
+that happens *after* the check passes (a debugger or memory patcher
+altering the already-running process). Userspace/script-level integrity
+checking cannot close that gap; only kernel-level anti-cheat/DRM can, and
+this project isn't reaching for that.
+
+**Shared trust root.** Uses the same `EmbeddedPublicKeys.PUBLIC_KEY_PEMS`
+list as serial verification — one key (or rotated set) signs both serials
+and builds, rather than maintaining two separate keys to protect and
+rotate.
+
 ## Proposed file layout
 
 - `src/licensing/serial_codec.gd` — pure encode/decode between the payload
@@ -204,6 +321,14 @@ key.
   private key and produces new serials — explicitly excluded from
   whatever the Godot export template packages, since accidentally shipping
   it would ship the private key alongside it.
+- `src/licensing/signature_ring.gd` — the shared multi-key RSA
+  verify-a-hash primitive both serial verification and integrity
+  verification delegate to.
+- `src/licensing/integrity_paths.gd` / `src/licensing/self_integrity.gd` —
+  pure path derivation and the integrity enforcement gate (see "Source/
+  build integrity verification" above).
+- `tools/sign_build.gd` — never-shipped signing tool for the exported
+  build artifact, parallel to `tools/generate_serial.gd`.
 
 ## Open questions
 
@@ -219,6 +344,47 @@ key.
   implementation) if the paste-able RSA code turns out to be a genuine UX
   problem in practice — deferred, not rejected outright.
 
+## Operational security
+
+The private key that signs real serials and real builds
+(`my_private_key.pem`) must never be committed. `.gitignore` covers it by
+name and by extension (`private_key.pem`, `my_private_key.pem`, `*.pem`),
+so a plain `git add` can't accidentally stage it — but `.gitignore` only
+stops git from tracking it, it does nothing to protect the file itself.
+
+It currently lives unencrypted in the repo root on the key owner's
+machine, which is a deliberate trade for
+`self_integrity.gd`'s auto-sign-for-local-testing convenience (see
+"Status" below) — that feature only works if the private key sits next
+to what's being verified. This is acceptable on a machine only the key
+owner controls, but it means:
+
+- Anyone with filesystem access to that machine can mint serials or
+  re-sign builds. Treat that machine's access controls as part of this
+  system's real security boundary, not just the RSA math.
+- The only copy should not be *only* here — a password manager
+  attachment or an encrypted offline backup is still recommended, since
+  losing this file means every previously-issued serial keeps working
+  (they don't depend on it) but minting new ones or re-signing future
+  builds requires generating a new keypair, re-embedding a new public
+  key, and re-fingerprinting (see "Key rotation" above) — existing
+  serials signed under the old key still verify unless it's actively
+  revoked.
+- Never copy `my_private_key.pem` into an exported build's folder for a
+  real release — that would ship the ability to forge signatures to
+  every player. It belongs only on the developer's own machine.
+
+**GitHub OAuth App credentials** (see "Personal / GitHub-bound keys"
+above): the `.env` file holding `GITHUB_OAUTH_ID` (the Device Flow
+Client ID) and `GITHUB_OAUTH_SECRET` is gitignored the same way. Only
+`GITHUB_OAUTH_ID` is ever actually used (embedded as
+`github_device_auth.gd`'s `CLIENT_ID` constant, since Device Flow needs
+no secret and it's safe to embed a public client id in shipped source).
+`GITHUB_OAUTH_SECRET`, if one exists in that file, is never read by
+anything in this repo and must never be committed or embedded — a
+leaked client_id+secret pair could be used to impersonate this OAuth App
+in a *different*, secret-requiring flow against real GitHub users.
+
 ## Status
 
 Implemented and live-wired on `main`:
@@ -227,17 +393,30 @@ Implemented and live-wired on `main`:
   (9/9 tests). Godot has no native Base32.
 - `src/licensing/serial_codec.gd` — pure payload encode/decode as
   designed above (10/10 tests).
+- `src/licensing/signature_ring.gd` — shared "load N public keys, verify
+  a raw hash's signature against any of them" primitive (9/9 tests).
+  `serial_verifier.gd` and `self_integrity.gd` both delegate to this
+  rather than each loading PEMs and calling `Crypto.verify` themselves.
 - `src/licensing/serial_verifier.gd` — RSA-2048/SHA-256 verification via
-  `Crypto`/`CryptoKey`, supports multiple registered public keys for key
-  rotation, checks expiry (10/10 tests, using a real generated keypair).
+  `SignatureRing`, checks expiry (10/10 tests, using a real generated
+  keypair).
 - `src/licensing/license_store.gd` — reads the pasted code from a
   `license.txt` file next to the executable (or `user://license.txt`),
   not an in-game typed field (6/6 tests).
 - `src/licensing/embedded_public_keys.gd` — the ship-side public key
-  list. **Currently empty**, which means the shipped game refuses every
-  code, including a genuinely valid one, until a real public key is
-  pasted in — this is the correct, safe default for an unreleased build,
-  not a bug.
+  list. **A real public key is now embedded** (the matching private key
+  lives only on the key owner's machine, gitignored — see "Operational
+  security"). Before this, the list was empty, which meant the shipped
+  game refused every code, including a genuinely valid one — the correct,
+  safe default for that state, not a bug.
+- `src/licensing/key_fingerprint.gd` — key-swap resistance (9/9 tests).
+  `LicenseGate`/`SelfIntegrity`'s production `_init()` independently
+  checks `EmbeddedPublicKeys.PUBLIC_KEY_PEMS`'s SHA-256 fingerprint
+  against a value pinned here; a mismatch (someone editing
+  `embedded_public_keys.gd` alone to point at a different key) makes
+  both gates fall back to an empty ring, which fails closed, rather than
+  silently trusting the swapped-in key. Editing both files together
+  (a deliberate key rotation) is unaffected.
 - `src/licensing/license_gate.gd` — the enforcement point. Split into a
   pure `evaluate()` decision function (fully unit-tested, 6/6) and thin
   Node glue (`_ready()`/`require_licensed()`) that calls
@@ -265,39 +444,209 @@ Implemented and live-wired on `main`:
   the exact same `serial_codec.gd`/`serial_base32.gd` the shipped
   verifier reads, so a minted serial is guaranteed to match the format
   the game actually checks.
-- End-to-end smoke-tested (throwaway keypair, generated in a scratch
-  directory outside the repo and deleted immediately after): keypair
-  generation → `generate_serial.gd` signing → produced a valid paste-able
-  code. Not committed anywhere, per "the private key must never touch
-  this repository."
+- `src/licensing/integrity_paths.gd` — pure derivation of the target file
+  to hash (the sidecar `.pck`, or the executable itself for an embedded-
+  PCK export) and its `.sig` signature path (5/5 tests).
+- `src/licensing/self_integrity.gd` — the integrity enforcement gate
+  (see "Source/build integrity verification" above). Same pure/glue split
+  as `license_gate.gd`: `evaluate()` is fully unit-tested (7/7, real
+  generated keypair), `_ready()`/`require_verified()` is thin Node glue
+  that reads the real target file + signature off disk and calls
+  `get_tree().quit(1)` on failure.
+- Registered as the `SelfIntegrity` autoload in `project.godot`, ordered
+  **before** `LicenseGate` — verifying the code hasn't been tampered with
+  logically comes before trusting that code's own license check.
+- Checked a second, independent time in `scenes/world.gd`'s own
+  `_ready()`, alongside the license re-check, same defense-in-depth
+  reasoning.
+- `self_integrity.gd`'s `_auto_sign_if_private_key_present()` —
+  local-testing convenience: if `private_key.pem` sits next to the
+  target being verified, it's re-signed fresh before every verification
+  pass, so iterating on a local export doesn't need a separate manual
+  `tools/sign_build.gd` run after every rebuild. A real customer's copy
+  never has this file, so this path is never taken for anyone but the
+  developer testing locally.
+- `tools/sign_build.gd` — never-shipped CLI tool that hashes an exported
+  artifact and writes its signature to the `.sig` sidecar `self_integrity.
+  gd` reads. Must be run against the actual exported `.pck`/executable,
+  never against the raw repo source (see "Source/build integrity
+  verification" above for why).
+- End-to-end smoke-tested twice (throwaway keypairs, generated in a
+  scratch directory outside the repo and deleted immediately after):
+  (1) keypair generation → `generate_serial.gd` signing → a valid
+  paste-able code; (2) keypair generation → a stand-in package file →
+  `sign_build.gd` signing → `self_integrity.gd`'s real `evaluate()`
+  accepting the genuine file, rejecting a one-byte tamper, and rejecting
+  a missing signature. Nothing from either run was committed anywhere,
+  per "the private key must never touch this repository."
+- `LicenseGate.check_licensed()` — `require_licensed()` minus the
+  process-ending side effect. Same real re-read-and-evaluate, same
+  `is_licensed`/`product_mask` flags, same failure logging, just never
+  calls `quit()`. Exists so a caller can react to "not licensed" instead
+  of the process just ending.
+- **In-game license entry** (`scenes/license_gate_overlay.gd`,
+  `scenes/settings_overlay.gd`'s License tab, `LicenseStore.write_code()`):
+  two separate paths, both purely-glue UI over `LicenseGate.check_licensed()`
+  + `LicenseStore.write_code()` (never showing the failure `reason` to the
+  player -- see "generic failure message" above):
+  - No valid key yet: `World._ready()` calls `check_licensed()` instead of
+    `require_licensed()`; if unlicensed, it shows `LicenseGateOverlay`
+    (a paste-a-key screen) INSTEAD of building the rest of the world, and
+    returns early -- no gameplay code runs, which is at least as strong a
+    gate as the quit() it replaces, since a patched `world.gd` skipping
+    the `is_licensed` check was already the documented limit of the old
+    quit()-based gate too. A valid key gets saved and the scene reloads.
+  - Already playing, want to swap keys (e.g. trial → full): the pause
+    menu's License tab, saves the same way but doesn't reload the scene
+    (nothing live re-reads `product_mask` mid-session today) -- reports
+    "restart to take effect" instead of overclaiming a hot-apply that
+    doesn't exist yet.
+  - `LicenseStore.write_code()` writes to EVERY real candidate path, not
+    just the first, so a stale file at a lower-priority path can't keep
+    shadowing a freshly-saved one on the next `read_code()` (which always
+    returns the first existing candidate).
+- **Real bug fixed: `SerialBase32.decode()` rejected the documented
+  paste-able format.** `generate_serial.gd` prints a code split across
+  multiple lines for readability, and this doc (and `README.md`) said
+  "line breaks are fine" -- but `decode()` treated `\n` as just another
+  invalid character and returned nothing, so a code saved by literally
+  following the documented instructions failed as "malformed code" for
+  every user who ever tried it, including the very first live serial
+  minted after `embedded_public_keys.gd` got a real key. Fixed by
+  skipping whitespace while decoding; a genuinely invalid character is
+  still rejected exactly as before.
+- **Real bug fixed: `world.gd`'s redundant second check had no editor
+  bypass of its own.** The `SelfIntegrity`/`LicenseGate` autoloads'
+  own `_ready()` correctly skip both checks under
+  `OS.has_feature("editor")` (true for the editor binary itself --
+  Play button OR a raw `--path` command-line launch both count, NEVER
+  true in an exported build) -- but `world.gd`'s "second, independent"
+  re-check ran unconditionally, with no bypass of its own, so it
+  re-failed a check the primary one had already correctly and
+  deliberately skipped. `SelfIntegrity` in particular can never pass
+  there anyway (no exported `.pck` exists to hash while running raw
+  project files this way), so this produced permanent false-positive
+  "reinstall from original source" noise on every non-editor-Play dev
+  launch. Fixed by mirroring the same bypass in `world.gd`; changes
+  nothing for a real shipped build, where the feature is always false.
+- **Personal / GitHub-bound keys** (see the section above) --
+  implemented and live-wired:
+  - `serial_codec.gd` -- optional V2 payload with a bound GitHub user id,
+    byte-identical V1 output when omitted (17/17 tests, including that
+    every already-issued serial's format is unaffected).
+  - `serial_verifier.gd`/`license_gate.gd` -- verify either payload size,
+    surface `github_user_id` through `evaluate()`/`check_licensed()`
+    (14/14, 11/11).
+  - `github_device_flow.gd` -- pure response parsing/decision logic for
+    Device Flow (device-code response, token-poll response incl.
+    pending/slow_down/expired/denied, user response, and the actual
+    bound-id-matches-authenticated-id check) -- fully unit-tested with
+    fake JSON dictionaries, no real network in tests (16/16).
+  - `github_token_store.gd` -- caches/clears the access token at
+    `user://github_token.txt`, same shape as `LicenseStore` (7/7).
+  - `github_device_auth.gd` -- the real HTTPRequest glue (request device
+    code, poll for token, fetch `/user`) plus `run_device_flow()`/
+    `run_fetch_user_id()` async wrappers `await`-friendly callers use.
+    No GUT test file (real network calls against real GitHub endpoints
+    aren't something a headless suite should make) -- same "engine side
+    effects aren't unit-tested" boundary as `settings_overlay.gd`/
+    `world.gd`. Live-verified instead: a real (disabled-Device-Flow)
+    request against the real Client ID returned GitHub's own
+    `device_flow_disabled` error with the exact expected body shape,
+    confirming the request format itself is correct; full interactive
+    approval needs Device Flow enabled on the OAuth App first (see "Not
+    done" below).
+  - `scenes/github_verify_overlay.gd` -- the in-game "waiting for GitHub
+    approval" screen, purely glue like `license_gate_overlay.gd`.
+  - `world.gd`'s `_ready()` awaits identity verification (a normal,
+    supported GDScript pattern) before continuing boot when a checked
+    key's `github_user_id != 0`; an unbound key's boot path is completely
+    unaffected (no `await`, no network call).
+  - `tools/generate_serial.gd --github-login <username>` -- resolves a
+    login to its numeric id via GitHub's public API at mint time.
+    Live-verified end to end: minted a real key bound to GitHub's own
+    public `octocat` account, confirmed it verifies against the real
+    production `LicenseGate` in both single-line and real-multi-line-
+    pasted form.
 
-**Not done / left to the user, by design** (see "Implement the
-infrastructure and I will later create a private key and sign serial
-numbers myself" — this repo intentionally contains no real private key
-and no real signed serial):
+**Not done / left to the user:**
 
-1. Run `tools/generate_keypair.gd` yourself, on a machine you control, to
+1. **Enable Device Flow on the GitHub OAuth App.** A live request against
+   the real Client ID currently returns `device_flow_disabled` --
+   GitHub, Settings → Developer settings → OAuth Apps → this app → check
+   "Enable Device Flow" → Update Application. Nothing else blocks this;
+   the whole flow up to and including this toggle has been live-verified
+   against real GitHub endpoints.
+2. Mint and test a real personal key bound to an actual player's GitHub
+   account (the `octocat` test above only verified minting + structural
+   verification, not a real interactive approval, since that step
+   requires a human in a real browser).
+
+**Done** (steps 1-3 of what was originally left to the user):
+
+1. ✅ `tools/generate_keypair.gd` was run, on the key owner's machine, to
    generate the real keypair.
-2. Move the resulting private-key file somewhere that never touches this
-   git repository (password manager attachment, encrypted offline drive).
-3. Paste the printed public-key PEM into
-   `src/licensing/embedded_public_keys.gd`'s `PUBLIC_KEY_PEMS` list.
-4. Use `tools/generate_serial.gd` with the private key to mint real
-   serials for sale.
-5. To test the full flow locally: drop the resulting code into a
-   `license.txt` next to the exported executable (or `user://license.txt`)
-   and run the exported build — the editor bypass means Play-button
-   testing in-editor won't exercise this path, only an actual export will.
+2. ✅ The private-key file (`my_private_key.pem`) is kept only on disk,
+   never committed — covered by `.gitignore` (`*.pem`,
+   `private_key.pem`, `my_private_key.pem`). It currently sits in the
+   repo root purely so `self_integrity.gd`'s auto-sign convenience
+   (above) can find it during local testing; it is not otherwise treated
+   as safely backed up (see "Operational security" below — a password
+   manager attachment or encrypted offline copy is still recommended for
+   the only real copy).
+3. ✅ The printed public-key PEM is pasted into
+   `src/licensing/embedded_public_keys.gd`'s `PUBLIC_KEY_PEMS` list, with
+   its fingerprint pinned in `key_fingerprint.gd` (see above).
 
-**Known, deliberately unverified assumption:** if `license_gate.gd` were
-deleted from disk entirely, `project.godot`'s autoload entry would point
-at a missing path, and any script referencing the global `LicenseGate`
-identifier (e.g. `world.gd`'s `LicenseGate.require_licensed()`) should
-fail to resolve/compile — a fail-closed outcome consistent with the "if
-the check mechanism is removed it should fail to start" requirement. This
-was reasoned from how Godot's autoload-name resolution works, not
-verified by actually deleting a real project file and observing the
-result, since doing that against a live, concurrently-edited `main`
-checkout wasn't a safe experiment to run. Worth a real verification pass
-(in a disposable worktree, never on `main`) before treating it as
-confirmed.
+**Issued serials** (tracked here so a future revocation-list decision has
+a record to work from — see "check `license_id` against the local
+revocation list" above):
+
+| license_id | product_mask | expiry (unix / date) | purpose |
+|---|---|---|---|
+| 90001 | 1 (base game) | 1788134400 / 2026-08-31 | Public 7-day trial key, published in `README.md`'s "License Key" section |
+| 1 | all 64 bits set (every product/DLC) | 0 / never | Owner/developer key, local testing only. The code itself is deliberately **not** written here (this doc is pushed to the shared remote) — it lives only in the two local `license.txt` files it was written to. Not for distribution. |
+
+**Still left to the user, by design** (this repo intentionally contains
+no *other* real signed serials beyond the public trial key above):
+
+1. Use `tools/generate_serial.gd` with the private key to mint further
+   real serials (e.g. alpha tester keys) for sale/distribution.
+2. To test the full flow locally: drop a code into a `license.txt` next
+   to the exported executable (or `user://license.txt`) and run the
+   exported build — the editor bypass means Play-button testing
+   in-editor won't exercise this path, only an actual export will.
+3. **After every export, including patches:** run `tools/sign_build.gd`
+   against the freshly exported `.pck` (or executable, for an embedded-PCK
+   export) with the same private key, and ship the resulting `.sig`
+   alongside it — unless `private_key.pem` is shipped next to that export
+   too (never do this for a real release; the auto-sign path above is a
+   local-testing-only convenience). An old signature correctly fails
+   verification against a newer build — this step isn't optional per
+   release, it's part of exporting.
+
+**Known, deliberately unverified assumption:** if `license_gate.gd` or
+`self_integrity.gd` were deleted from disk entirely, `project.godot`'s
+autoload entry would point at a missing path, and any script referencing
+the global `LicenseGate`/`SelfIntegrity` identifier (e.g. `world.gd`'s
+own calls) should fail to resolve/compile — a fail-closed outcome
+consistent with the "if the check mechanism is removed it should fail to
+start" requirement. This was reasoned from how Godot's autoload-name
+resolution works, not verified by actually deleting a real project file
+and observing the result, since doing that against a live,
+concurrently-edited `main` checkout wasn't a safe experiment to run.
+Worth a real verification pass (in a disposable worktree, never on
+`main`) before treating it as confirmed.
+
+**Note specific to integrity verification:** deleting the check code
+still doesn't help an attacker who *also* needs to pass it — but someone
+willing to patch source before export can simply not sign the result, or
+sign it and ship their own public key... except they can't: the public
+key that verifies is embedded in the game binary the attacker doesn't
+control the distribution of. What they *can* do is delete the `.sig`
+sidecar or the `self_integrity.gd` call site from their own patched copy
+before repackaging — which is exactly the "patching the binary" limit
+this doc's opening section already prices in. This mechanism's honest
+value is raising the cost of casual repackaging (game-crack sites that
+redistribute a patched `.pck` without touching the loader/autoload
+wiring), not stopping a determined reverse engineer.

@@ -22,6 +22,7 @@ extends Node
 const SerialVerifier = preload("res://src/licensing/serial_verifier.gd")
 const LicenseStore = preload("res://src/licensing/license_store.gd")
 const EmbeddedPublicKeys = preload("res://src/licensing/embedded_public_keys.gd")
+const KeyFingerprint = preload("res://src/licensing/key_fingerprint.gd")
 
 ## Set once verification runs. Other boot-critical code can read this
 ## after the fact, but should prefer calling require_licensed() itself
@@ -30,6 +31,11 @@ const EmbeddedPublicKeys = preload("res://src/licensing/embedded_public_keys.gd"
 ## edit to flip than genuinely defeating the RSA check.
 var is_licensed := false
 var product_mask := 0
+## 0 unless the checked code is a personal/GitHub-bound key (docs/licensing.md's
+## "Personal / GitHub-bound keys") -- World reads this after check_licensed()
+## to decide whether GitHub identity verification is needed at all before
+## letting a structurally-valid-but-bound code actually count as licensed.
+var github_user_id := 0
 
 var _verifier: SerialVerifier
 
@@ -42,7 +48,19 @@ var _verifier: SerialVerifier
 ## "inject the real dependency, default to the production one" shape
 ## TerrainRelief/StoneRenderer already use elsewhere in this project.
 func _init(verifier: SerialVerifier = null) -> void:
-	_verifier = verifier if verifier != null else SerialVerifier.new(EmbeddedPublicKeys.PUBLIC_KEY_PEMS)
+	if verifier != null:
+		_verifier = verifier
+		return
+	# Key-swap resistance (see KeyFingerprint, docs/licensing.md): only the
+	# PRODUCTION default path checks this -- an injected test verifier
+	# never touches EmbeddedPublicKeys at all, so it has nothing to swap.
+	# A mismatch here means embedded_public_keys.gd was edited to a
+	# different key than KeyFingerprint expects -- fail closed with an
+	# empty ring (rejects every code) rather than trust an unverified key.
+	var pems: Array[String] = []
+	if KeyFingerprint.matches_expected(EmbeddedPublicKeys.PUBLIC_KEY_PEMS):
+		pems = EmbeddedPublicKeys.PUBLIC_KEY_PEMS
+	_verifier = SerialVerifier.new(pems)
 
 
 func _ready() -> void:
@@ -55,7 +73,13 @@ func _ready() -> void:
 	if OS.has_feature("editor"):
 		is_licensed = true
 		return
-	require_licensed()
+	# Non-quitting: an invalid/missing key no longer ends the process here.
+	# world.gd's own _ready() is what actually enforces this now -- it
+	# shows an in-game "enter your key" gate instead of building the rest
+	# of the world when is_licensed is false, which is a strictly stronger
+	# gate than a quit() here would be (no gameplay code runs at all,
+	# rather than a quit() call that a patched world.gd could ignore).
+	check_licensed()
 
 
 ## The real enforcement call: read the license file, verify it, and end
@@ -71,27 +95,56 @@ func _ready() -> void:
 ## same "inject what varies" shape SerialVerifier.verify_code's
 ## current_unix_time parameter already uses.
 func require_licensed(code_override: String = "") -> void:
+	var result := check_licensed(code_override)
+	if not result.licensed and get_tree() != null:
+		get_tree().quit(1)
+
+
+## check_licensed() is require_licensed() minus the process-ending side
+## effect -- reads/re-verifies from scratch exactly the same way, sets
+## `is_licensed`/`product_mask`, logs the same failure messages, but never
+## calls quit(). World's boot uses this instead of require_licensed() so
+## an invalid/missing key shows an in-game "enter your license key" screen
+## (see docs/licensing.md's "In-game license entry") rather than the
+## process simply ending with no chance to fix it without editing a file
+## by hand. Returns the same {"licensed", "product_mask", "reason"} dict
+## evaluate() does, for a caller that wants the reason without re-deriving
+## it from the now-set is_licensed flag.
+func check_licensed(code_override: String = "") -> Dictionary:
 	var code := code_override if not code_override.is_empty() else LicenseStore.read_code(LicenseStore.default_candidate_paths())
 	var result := evaluate(code)
 	is_licensed = result.licensed
 	product_mask = result.product_mask
+	github_user_id = result.github_user_id
 	if not result.licensed:
 		push_error("License check failed: %s" % result.reason)
 		printerr(
 			"This copy could not be verified. Place a valid license.txt " +
 			"next to the game and restart."
 		)
-		if get_tree() != null:
-			get_tree().quit(1)
+	return result
 
 
 ## The pure decision: given whatever code was read (possibly ""), does
 ## this game session get to run? No file I/O, no quit() -- fully testable.
-## Returns {"licensed": bool, "product_mask": int, "reason": String}.
+## Returns {"licensed": bool, "product_mask": int, "github_user_id": int,
+## "reason": String}. `github_user_id` is 0 unless the code is a personal/
+## GitHub-bound key (docs/licensing.md's "Personal / GitHub-bound keys") --
+## note that "licensed" here means "structurally valid" (signature checks
+## out, not expired), NOT "identity verified": a bound code with a
+## nonzero github_user_id still needs the caller to separately confirm
+## the player controls that GitHub account before actually treating them
+## as licensed (see world.gd's boot flow) -- evaluate() itself never makes
+## network calls.
 func evaluate(code: String) -> Dictionary:
 	if code.is_empty():
-		return {"licensed": false, "product_mask": 0, "reason": "no license code found"}
+		return {"licensed": false, "product_mask": 0, "github_user_id": 0, "reason": "no license code found"}
 	var result := _verifier.verify_code(code)
 	if not result.valid:
-		return {"licensed": false, "product_mask": 0, "reason": result.reason}
-	return {"licensed": true, "product_mask": result.product_mask, "reason": ""}
+		return {"licensed": false, "product_mask": 0, "github_user_id": 0, "reason": result.reason}
+	return {
+		"licensed": true,
+		"product_mask": result.product_mask,
+		"github_user_id": result.github_user_id,
+		"reason": "",
+	}

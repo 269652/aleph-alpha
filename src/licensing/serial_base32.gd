@@ -40,17 +40,26 @@ static func encode(bytes: PackedByteArray) -> String:
 
 
 ## Inverse of encode(). Case-insensitive (a customer retyping a code
-## shouldn't have to match case exactly). Returns an EMPTY array -- never a
-## partial/best-effort result -- the moment any character falls outside
-## ALPHABET, so a caller can tell "malformed input" apart from "this
-## legitimately decoded to zero bytes" only by checking the input wasn't
-## already empty; every real caller here already knows it's passing a
-## non-empty code.
+## shouldn't have to match case exactly), and ignores whitespace (space,
+## tab, \r, \n) anywhere in `text` -- the printed/paste-able form of a
+## code is deliberately split across multiple lines for readability (see
+## tools/generate_serial.gd, docs/licensing.md), and a customer pasting
+## that whole block into a license.txt or a future in-game text field
+## keeps those line breaks. Whitespace carries no bits, so skipping it
+## costs nothing and avoids a real code failing to decode purely because
+## of how it was formatted when printed. Returns an EMPTY array -- never a
+## partial/best-effort result -- the moment any NON-whitespace character
+## falls outside ALPHABET, so a caller can tell "malformed input" apart
+## from "this legitimately decoded to zero bytes" only by checking the
+## input wasn't already empty; every real caller here already knows it's
+## passing a non-empty code.
 static func decode(text: String) -> PackedByteArray:
 	var result := PackedByteArray()
 	var buffer := 0
 	var bits_in_buffer := 0
 	for character in text.to_upper():
+		if character == " " or character == "\t" or character == "\n" or character == "\r":
+			continue
 		var index := ALPHABET.find(character)
 		if index < 0:
 			return PackedByteArray()

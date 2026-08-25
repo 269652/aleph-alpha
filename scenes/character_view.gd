@@ -74,15 +74,60 @@ const FUSED_LEG_ROCK_AMPLITUDE := 0.12
 ## when a row's own aspect doesn't match this box's, not a bug.
 const BODY_SIZE := Vector2i(26, 19)
 const HEAD_SIZE := Vector2i(12, 12)
-## .y widened 8 -> 12 (reported live: "the legs are too short") -- 8 out of
-## the character's own 33-unit total height (-HEAD_TOP_Y) put legs at ~24%
-## of the figure, well short of a real standing human's roughly 45-50%
-## leg-to-height share. 12 (~36%) reads noticeably more natural without
-## eating into where the torso/hips sit. LegLeft/LegRight's own .tscn
-## position moved -4 -> -6 alongside this (half the new height) so the
-## fused pair's feet still land exactly on the character's own origin, per
-## test_the_characters_feet_sit_at_its_own_origin.
-const LEG_SIZE := Vector2i(5, 12)
+## Winter's "Biomechanics and Motor Control of Human Movement" segment-length
+## table -- the same book stone_size.gd's LEG_MASS_FRACTION already cites,
+## for a different table -- gives thigh length as ~0.245x standing height and
+## shank length as ~0.246x. Together, ~49.1% of a real person's standing
+## height is leg, hip joint to floor (thigh and shank are close enough to
+## equal that the knee sits at essentially the leg's own midpoint -- see
+## IllustratedCharacterSprite.KNEE_LINE_FRACTION, which reuses this same
+## number rather than a second eyeballed split).
+const WINTER_THIGH_FRACTION_OF_HEIGHT := 0.245
+const WINTER_SHANK_FRACTION_OF_HEIGHT := 0.246
+const LEG_TO_HEIGHT_FRACTION := WINTER_THIGH_FRACTION_OF_HEIGHT + WINTER_SHANK_FRACTION_OF_HEIGHT
+
+## Everything ABOVE the hip line -- torso, neck, head -- held fixed while the
+## legs below stretch (see LEG_SIZE below), so this pass grows the character
+## by lengthening legs specifically (reported live: "the players walk
+## animation and overall appearance looks like a dwarf... stretch legs so he
+## becomes taller"), a real Y-axis stretch, not a bigger overall SCALE
+## multiplier that would leave every proportion (and the dwarf look) exactly
+## as it was, just bigger. Measured from this rig's own PRE-stretch layout:
+## the old HEAD_TOP_Y (-33.0) minus the old LEG_SIZE.y (12).
+const ABOVE_HIP_HEIGHT := 21.0
+
+
+## The leg height (world units) that makes legs LEG_TO_HEIGHT_FRACTION of the
+## character's own total height (legs + ABOVE_HIP_HEIGHT) -- i.e. solves
+## `leg / (above_hip_height + leg) = LEG_TO_HEIGHT_FRACTION` for `leg`. Pure
+## and tested (test_leg_size_matches_the_anthropometric_leg_to_height_
+## fraction) rather than an eyeballed literal, per this project's own
+## tuned-constants rule (CLAUDE.md) -- LEG_SIZE.y below is this function's
+## own output, rounded to the nearest whole pixel (Vector2i has no float
+## component), which GDScript's const-expression rules don't allow calling
+## directly inside LEG_SIZE's own literal below.
+static func _anthropometric_leg_height(above_hip_height: float) -> float:
+	return LEG_TO_HEIGHT_FRACTION * above_hip_height / (1.0 - LEG_TO_HEIGHT_FRACTION)
+
+
+## .y widened 8 -> 12 -> 20 across two passes. The first (8 -> 12, reported
+## live: "the legs are too short") only got partway to a real anthropometric
+## share (~36%, still eyeballed against a rough "45-50%" reading rather than
+## a cited table) before the SECOND pass (12 -> 20, reported live: "looks
+## like a dwarf") replaced that eyeballed target with the real formula above:
+## _anthropometric_leg_height(21.0) = 20.26, rounded to 20 (~49%, see
+## test_the_resulting_leg_share_of_total_height_is_within_the_cited_
+## anthropometric_range). LegLeft/LegRight's own .tscn position moved
+## -6 -> -10 alongside this (half the new height, the same rule the first
+## pass's -4 -> -6 move already followed) so the fused pair's feet still
+## land exactly on the character's own origin, per
+## test_the_characters_feet_sit_at_its_own_origin. Growing the legs alone
+## (not every part) also means HEAD_TOP_Y grows by the same 8-unit delta
+## (33 -> 41) and Body/Neck/Head/Arms/HeadSlot's own .tscn positions all
+## shift up by that same delta, so the now-taller legs read as the whole
+## character growing taller from the hips down, not the torso/head sinking
+## into overlapping legs.
+const LEG_SIZE := Vector2i(5, 20)
 const ARM_SIZE := Vector2i(4, 9)
 const SLOT_SIZE := Vector2i(7, 7)
 const EYE_COLOR := Color(0.1, 0.1, 0.1)
@@ -96,18 +141,23 @@ const EYE_COLOR := Color(0.1, 0.1, 0.1)
 ## units) valid unchanged.
 const ART_BODY_SIZE := Vector2i(52, 38)
 const ART_HEAD_SIZE := Vector2i(24, 24)
-const ART_LEG_SIZE := Vector2i(10, 24)
+const ART_LEG_SIZE := Vector2i(10, 40)
 const ART_ARM_SIZE := Vector2i(8, 18)
 const ART_SLOT_SIZE := Vector2i(14, 14)
 
 ## The character's own origin sits at its feet (y=0, see the feet-anchoring
 ## tests in test_character_view.gd) -- this is the top of the HEAD relative
-## to that, i.e. the character's own total height. Mirrors
-## character_view.tscn's Head position (-27) minus half HEAD_SIZE.y (6);
-## pinned against the live scene by test_head_top_y_matches_the_actual_head_
-## nodes_top_edge so a .tscn layout change can't silently drift out of sync
-## with the scale computed from it below.
-const HEAD_TOP_Y := -33.0
+## to that, i.e. the character's own total height. Computed as
+## ABOVE_HIP_HEIGHT + LEG_SIZE.y (torso/neck/head plus the now-stretched
+## legs) rather than a second independent literal, so the two can't silently
+## drift apart the way an eyeballed pair could -- pinned by
+## test_head_top_y_equals_above_hip_height_plus_the_new_leg_height. Mirrors
+## character_view.tscn's Head position (-35) minus half HEAD_SIZE.y (6);
+## also pinned against the live scene by
+## test_head_top_y_matches_the_actual_head_nodes_top_edge so a .tscn layout
+## change can't silently drift out of sync with the scale computed from it
+## below.
+const HEAD_TOP_Y := -(ABOVE_HIP_HEIGHT + float(LEG_SIZE.y))
 
 ## The character (and every NPC, who shares this same scene -- see
 ## VillageRenderer) reads at this fraction of a full-grown tree's height,

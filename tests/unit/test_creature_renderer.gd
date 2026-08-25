@@ -77,6 +77,18 @@ func test_spawns_one_marker_per_rounded_unit_of_herbivore_population():
 	assert_eq(spawned.size(), 3)
 
 
+## See docs/concept/disease.md's "Region pressure": a spawned marker carries
+## its own region's RegionDifficulty tier forward (rather than the world
+## re-deriving it later), reusing the SAME distance-from-spawn signal that
+## already gates its species pool above, not a second one.
+func test_spawned_markers_carry_the_regions_difficulty_tier_for_disease_pressure():
+	var spawned := renderer.spawn_creatures(
+		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 2.0, 0.0, null, "",
+		RegionDifficulty.Tier.HARD
+	)
+	assert_eq(spawned[0].region_tier, RegionDifficulty.Tier.HARD)
+
+
 func test_spawns_markers_for_both_herbivores_and_predators():
 	var spawned := renderer.spawn_creatures(
 		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 2.0, 1.0
@@ -272,18 +284,45 @@ func test_grassland_biome_matches_the_original_generic_pool_identity():
 		assert_true(species in ["predator", "lynx", "lion"], "unexpected predator-role species: %s" % species)
 
 
+## Wolves are forest's own named apex predator (see
+## docs/concept/ecosystem_dynamics.md's Species roster section) and sheep is
+## their (and deer's) forest prey -- both additive to the existing boar/lynx
+## dominance this test's name pins, not a replacement of it.
 func test_forest_biome_is_boar_and_lynx_dominant():
 	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "forest")
 	var predator_species := _species_seen_across_chunks(0.0, 1.0, "forest")
 	assert_true(herbivore_species.has("boar"), "forest should promote boars")
 	for species in herbivore_species:
 		assert_true(
-			species in ["herbivore", "boar", "mouse", "deer", "nonvenomous_snake"],
+			species in ["herbivore", "boar", "mouse", "deer", "sheep", "nonvenomous_snake"],
 			"unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("lynx"), "forest should promote lynx")
 	for species in predator_species:
-		assert_true(species in ["predator", "lynx", "bear"], "unexpected predator-role species: %s" % species)
+		assert_true(
+			species in ["predator", "lynx", "wolf", "bear"], "unexpected predator-role species: %s" % species
+		)
+
+
+## Wolves eat sheep and deer and live in forests (see
+## docs/concept/ecosystem_dynamics.md's Species roster section) -- both real
+## prey species must actually be promotable alongside them in the SAME
+## biome for that predation to be anything other than a name. Wolves are
+## forest-exclusive, unlike the ordinary ungated roster additions (deer,
+## nonvenomous_snake) that join multiple biomes.
+func test_forest_promotes_wolves_alongside_their_sheep_and_deer_prey():
+	# Sample counts raised above the default 30 (see mice/horse/deer/
+	# nonvenomous_snake's own tests just below) -- sheep and deer are both
+	# single, non-dominant entries in forest's 9-entry herbivore pool, so a
+	# low sample count under-covers their real, lower hit rate per chunk.
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "forest", 200)
+	var predator_species := _species_seen_across_chunks(0.0, 1.0, "forest", 200)
+	assert_true(predator_species.has("wolf"), "forest should promote wolves")
+	assert_true(herbivore_species.has("sheep"), "forest should promote sheep, wolf prey")
+	assert_true(herbivore_species.has("deer"), "forest should promote deer, wolf prey")
+	for biome_name in ["grassland", "desert", "tundra", "rainforest", "mountain"]:
+		var other_predators := _species_seen_across_chunks(0.0, 1.0, biome_name, 200)
+		assert_false(other_predators.has("wolf"), "%s should not promote wolves" % biome_name)
 
 
 func test_desert_biome_promotes_camels_and_jackals():
