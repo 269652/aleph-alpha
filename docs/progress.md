@@ -739,6 +739,72 @@ the creator:
   🚧 Known gap: `scenes/character_view.gd` still re-rolls its own row from the
   seed and ignores the dict key (unchanged behaviour, a one-line follow-up).
 
+A third live pass, from one combined report — "make the diorama fit the
+panel it's in", "fish are still spawned on land", "add a few long grass
+blades and birds":
+
+- ✅ **The diorama no longer overflows its own panel** (`scenes/main_menu.gd`
+  `DIORAMA_VIEW_SIZE`). Measured against the live, laid-out Character tab
+  (not eyeballed): the diorama's own box (`glow_wrap`, sitting below the
+  class-icon row) ran to global y=598 while the tab's outer `ScrollContainer`
+  — the Character tab's one and only scroll region, by design — was only
+  visible down to y=586, so the diorama's own bottom edge (grass/trees
+  mid-render) was cut off before any deliberate scrolling even happened, not
+  merely "below the fold" the way the appearance labels/reroll button
+  legitimately are. `DIORAMA_VIEW_SIZE` pulled back 280 → 248 (still well
+  above the pre-"too small" 220 two passes up), pinned by
+  `test_the_diorama_fits_within_the_first_unscrolled_view_of_the_character_tab`
+  in `test_main_menu.gd`, checked against real laid-out global rects so a
+  theme or window-size change can't quietly turn it into a false pass.
+- ✅ **Fish were inside the pond's own radius but still visibly "on land"**
+  — the pond's water shader (`water_shader.gd`) fades alpha smoothly toward
+  the shore rather than cutting off at the nominal edge, and that fade band
+  turns out to start at HALF the pond's own radius, not near its rim: a
+  point at 81% of `pond_radius` (where the old `FISH_SAFE_RADIUS_FRACTION =
+  0.6` could place a fish's own far edge) rendered at only 68% opacity —
+  barely-tinted grass, not obvious water. `WaterShader.EDGE_ALPHA_FADE_
+  START`/`EDGE_ALPHA_FADE_END` are now real, tested constants (previously
+  bare shader-string literals) with a CPU mirror,
+  `edge_alpha_for_shore_distance`, so a placement decision can be checked
+  against the actual GPU curve instead of the pond's nominal geometry.
+  `FISH_SAFE_RADIUS_FRACTION` retuned `0.6 → 0.28`, derived (not eyeballed)
+  from that curve plus the fish's own real half-extent, and pinned by
+  `test_fish_safe_radius_fraction_keeps_a_fishs_whole_body_fully_opaque`.
+  Bundled with it: `_pick_new_fish_target` used a SQUARE `Rect2` (`pick_
+  target`) whose corners sit `sqrt(2)` further from centre than its sides —
+  a fish's own wander TARGET could land 41% further out than its spawn point
+  (already genuinely circular) ever could. New shared
+  `CharacterStroll.random_point_in_circle` replaces both the diorama's
+  target-picking AND the layout's own fish-spawn scatter, so a fish's spawn
+  and its later wander targets can never disagree about what shape "inside
+  the pond" means.
+- ✅ **A few grass clumps now render taller than the rest** (reported: "add
+  a few long grass blades") — `IllustratedGrassPatch.fill_band`'s own
+  per-clump `growth` already drives a real scale factor
+  (`maxf(0.3, entry.growth)`); the real world's own `TallGrass` never
+  exceeds `growth = 1.0` ("mature"), so this is a deliberate, small stretch
+  of an existing mechanism for a decorative touch rather than new art.
+  `CharacterPreviewDiorama._pick_long_grass_positions` (pure, static,
+  directly testable) ranks the seed's own grass clumps by hash and keeps the
+  top `LONG_GRASS_MAX_COUNT` (3) at `LONG_GRASS_GROWTH` (1.5); everything
+  else stays at the normal 1.0.
+- ✅ **A few songbirds now circle overhead** (reported: "add ... birds") —
+  routed through the SAME pure/Godot-coupled split everything else in this
+  scene uses: `CharacterPreviewLayout.Result.bird_positions` (new field,
+  `BIRD_COUNT = 2`, scattered anywhere in the footprint — birds fly
+  overhead, so unlike every ground placement here they need no `is_clear()`
+  obstacle avoidance) is turned into real nodes by
+  `CharacterPreviewDiorama._build_birds`, which calls a new
+  `AmbientFlyerRenderer.build_bird` (mirroring `FishRenderer.spawn_fish_at`'s
+  own "place one directly, no chunk/world dependency" shape) with a
+  diorama-scale `BIRD_WANDER_RADIUS` (20 units) overriding the real world's
+  own `BIRD_RADIUS` (70 — comfortably bigger than the whole ~96-unit
+  footprint). No scent/worm/seed/fruit world is wired, so a diorama bird
+  just flies its own home-tethered ambient wander — purely decorative, the
+  same contract the pond's fish already have. `AmbientFlyerMarker` already
+  sets its own z_index above ground clutter, so no extra draw-order wiring
+  was needed here.
+
 ⬜ The preview's zoom/`FOOTPRINT` is unchanged and still needs a user decision
 on how large the hero should read. Note for whoever takes it: `tree_bounds`
 insets by 20×26, so at footprint 96 the tree band is 76×70, at 74 it is 54×44,
@@ -3602,6 +3668,24 @@ stamp" bullet below for the real mechanism (a computed completion fraction,
 deliberately NOT the `ConstructionProject` ledger). It still does not build
 a house up piece by piece by a real live Builder — that remains open, see
 that same bullet's own honest account.
+
+- **Deciding what to build, and who builds it** (medium) — ⬜ Design only,
+  not implemented (2026-08-25, a follow-up brainstorm session — see
+  `concept/timber_construction.md`'s own "Deciding what to build, and who
+  builds it" section for the full account). Settles this arc's two
+  remaining open questions: a settlement's own worst real shortfall (a real
+  magnitude `Quest.production_shortfall_quests_for` already reports, not a
+  new number) names WHAT to build, gated by real spare population capacity
+  (household count beyond what farmer/hunter/fisher require, the same
+  derived-from-real-stock style `SettlementState.carrying_capacity` already
+  uses) deciding WHETHER a settlement can act on it right now; Builder is
+  ad hoc (not a fixed occupation), assigned via the same replan-interrupt
+  shape `npc.md`'s migration section already names, and several Builders
+  may pool effort on one project. Also specs a real, narrow first crack at
+  player-hired Builders (pay gold to pull a settlement's own spare Builder
+  to a player's own site) and a real cancellation path when the player
+  independently fixes a shortfall a settlement was already building its own
+  producer for.
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +

@@ -251,6 +251,11 @@ would is, mechanically, a real settlement — same representative/quorum
 quest machinery, same wealth-driven risk exposure, same ruin fate on
 failure. Full mechanism, including the migration floor and the active-invite
 option, in [quests.md](quests.md#settlement-growth-migration-and-player-founded-villages).
+This same replan-interrupt shape is what
+[timber_construction.md](timber_construction.md#deciding-what-to-build-and-who-builds-it-design-from-a-follow-up-brainstorm-session)'s
+own Builder assignment reuses — an idle NPC picking up construction duty
+ad hoc, not relocating, but the identical "a need crossing a threshold
+reassigns an NPC out-of-cycle" mechanism.
 
 ### Current implementation status (divergence note)
 

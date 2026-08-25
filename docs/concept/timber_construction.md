@@ -400,6 +400,104 @@ its own bespoke resolution logic. See "What's honestly still a stand-in
 here" below for `ConstructionPriority.decide`'s actual current
 implementation, which does not yet call `NeedResolver`.
 
+### Deciding what to build, and who builds it (design, from a follow-up brainstorm session)
+
+Compiled from a follow-up design-brainstorm session, answering this
+section's own two still-named gaps directly: nothing decides WHICH project
+a settlement should start next, and nothing decides WHO becomes a Builder.
+Design only — not yet implemented; see "What's honestly still a stand-in
+here" below for exactly what's real today.
+
+**What to build: shortfall names it, population gates it.** Two real
+signals feed one decision, not two competing ones. `Quest.
+production_shortfall_quests_for`'s own `"missing"` list already carries a
+real magnitude per gap (`need := input["count"] - have`, not just an item
+id) — that's the ranking a settlement needs with no new number to invent:
+among several real shortfalls at once, the one with the largest `need`
+wins. Population is the second, independent gate: a settlement only
+*acts* on the worst shortfall once it has real spare capacity (see next
+paragraph) to spend on it — a healthy, well-fed settlement with room to
+grow builds; one at subsistence does not, no matter how bad its shortfall
+is. This is `SettlementConstruction.advance`'s own still-missing candidate
+`blueprint_id` argument (see "What's honestly still a stand-in here"
+below) — this reasoning is what would finally supply it, giving
+`ConstructionPriority.decide`'s live caller a real settlement-decision
+system to sit inside instead of only being reachable with a caller-chosen
+candidate.
+
+**Spare capacity: a real derived number, the same style
+`SettlementState.carrying_capacity` already uses.** Not a flat ratio.
+`household_count_for_settlement(settlement_id)` (already real) minus
+however many of those households are currently needed for real survival
+occupations (farmer/hunter/fisher — the subset of `NpcProduction.
+PRODUCER_ITEM_BY_OCCUPATION` that feeds the settlement's own food stock,
+which `SettlementState.carrying_capacity` already reads) is the real spare
+count. Zero or negative spare capacity means no Builder exists right now —
+construction is a genuine luxury of a settlement with room to grow, never
+a competing priority against the survival occupations `carrying_capacity`
+itself depends on. This composes cleanly with `MAX_CATCHUP_DAYS`-style
+integration for free: a `builder_count` of zero is not a special "paused"
+state needing its own status or cancellation logic — `ConstructionCatchup.
+advance`'s own real formula already treats zero builders as zero progress
+for that call, and resumes exactly where it left off the moment spare
+capacity is positive again (a famine, a raid, or a migration wave all fall
+out of the SAME real number, with no new mechanism).
+
+**Builder is ad hoc, not a fixed occupation.** Matches this doc's own
+Open Questions section's existing lean ("shelter is a need, not a
+profession"), settled here: an idle NPC not currently needed for a real
+occupation picks up Builder duty only while a real project exists and
+spare capacity covers it, then reverts — the same replan-interrupt shape
+`npc.md`'s own migration section already names as the mechanism for a need
+crossing a threshold reassigning an NPC, applied to construction instead
+of migration. `Builder` is *not* added to `NpcProduction.
+PRODUCER_ITEM_BY_OCCUPATION` — that table maps an occupation to the item it
+produces, and a Builder doesn't produce an item, it consumes real material
+and produces a placed structure; it is its own category, not a fourth
+producer row.
+
+**Multiple Builders may pool effort on one project.** Unlike one-
+Lumberjack-per-Sägewerk, a large project may be worth more than one pair
+of hands. This needs less new mechanism than it sounds: each Builder's own
+`PLACING` step already operates on one piece at a time from a shared
+target dict, and `ConstructionProjectStore.advance_project_labor_for_piece`
+already clamps `labor_hours_accumulated` at the real required total
+regardless of how many separate calls credit it — several Builders
+crediting the same project concurrently is already safe under today's real
+code, not a new completion-math problem. The new work is purely on the
+assignment side: allowing N idle-and-spare NPCs to be assigned to the same
+`ConstructionProject`, not just one.
+
+**Two real needs resolving each other: the settlement's own project gets
+cancelled, not left redundant.** If a settlement is already building its
+own missing producer (say, a second Sägewerk) and the player independently
+brings/builds the same real fix first, `ConstructionPriority.decide`
+re-evaluated against the now-current structure list simply stops reporting
+`BUILD_PRODUCER_FIRST` for it — the settlement's own redundant `PLANNED`/
+`IN_PROGRESS` project for that structure is abandoned (the real `ABANDONED`
+status `ConstructionProject.Status` already has) the next time this
+decision loop runs, the same way `SettlementConstruction._handle_shortfall`
+already abandons a project whose material has genuinely crashed. No second
+Sägewerk silently appears because the player got there first.
+
+**Silent by design.** No quest, no popup — a settlement deciding to build
+is discovered the same way village growth already is: you notice the new
+or half-finished structure next time you visit. Matches this doc's own
+"the game is not lying to the player about what happened off-screen; it is
+computing it cheaply" pillar exactly.
+
+**Player-hired Builders, on a player's own structure.** A real, later
+extension of the same mechanism, not a separate system: the player pays
+gold to a settlement (via its own `VillageMarket`) to pull one of ITS real
+spare-capacity Builders to work at the player's own build site instead of
+the settlement's own queue — a genuine trade-off (that settlement's own
+construction slows while its Builder works for the player), not a free or
+conjured worker. This is the first real, deliberately-scoped crack at the
+hiring/wage system `npc.md`'s own hiring section and this doc's earlier
+passes both flagged as unbuilt — scoped narrowly to "hire one spare
+Builder for one project," not the fuller hiring system those sections
+still leave open.
+
 ### What's honestly still a stand-in here
 
 This section's implementation and this doc's own prose were, for a real
@@ -526,11 +624,15 @@ what's ACTUALLY real right now:
   logger occupation draws down the same vegetation grid, so deforestation
   near a large village is visible in the ecosystem simulation itself, not
   a separate stat.
-- **[npc.md](npc.md)** — builder is a new producer-shaped occupation on
-  `NpcProduction`'s existing pattern. Settlement growth (population
-  rising) is what raises a settlement's `builder_count` in the offscreen
-  catch-up, directly tying construction speed to the population-growth
-  mechanism npc.md already specifies, rather than a separate number.
+- **[npc.md](npc.md)** — corrected: Builder is deliberately NOT a fourth
+  row on `NpcProduction.PRODUCER_ITEM_BY_OCCUPATION` (see "Deciding what to
+  build, and who builds it" above) — it's ad hoc, not a producer occupation,
+  assigned via the same replan-interrupt shape npc.md's own migration
+  section already names. Settlement growth (population rising) is still
+  what raises a settlement's real spare capacity and therefore its
+  `builder_count`, directly tying construction speed to the
+  population-growth mechanism npc.md already specifies, rather than a
+  separate number.
 - **[docs/emergence/00-emergence-architecture.md](../emergence/00-emergence-architecture.md)**
   / **[04-settlements-cities-infrastructure.md](../emergence/04-settlements-cities-infrastructure.md)**
   — this doc is the concrete implementation of Layer 0's "construction"
@@ -592,12 +694,13 @@ shape a real abandoned timber building decays into.
 
 ## Open questions
 
-- **Who becomes a builder?** A dedicated occupation slot competing with
-  farmer/hunter/fisher for population, or an ad hoc task any idle
-  non-producer NPC picks up once a household's shelter need crosses a
-  threshold (mirroring the existing replan-interrupt pattern from
-  `npc.md`'s settlement-growth section)? Leaning toward ad hoc — shelter
-  is a need, not a profession — but undecided.
+- **Who becomes a builder?** Settled by design (2026-08-25, a follow-up
+  brainstorm — see "Deciding what to build, and who builds it" above): ad
+  hoc, not a dedicated occupation — an idle non-producer NPC picks up
+  Builder duty only while a real project exists and real spare capacity
+  (population beyond what farmer/hunter/fisher require) covers it, the
+  same replan-interrupt pattern `npc.md`'s settlement-growth section
+  already names. Design only, not yet implemented.
 - **Do player-placed pieces wither too?** Settled by implementation
   (2026-08-25): yes — `BuildingDecay`'s catch-up runs over every real piece
   in `chunk.modifications` with no placer distinction, "one system, two
@@ -664,7 +767,8 @@ wiring; only projects ALREADY `IN_PROGRESS` get their labor advanced there),
 and no live spawner yet decides a Builder should exist for a given
 `ConstructionProject` and injects its real `target_pieces` — see each
 entry's own "Named, honest limitations" below for the full account of what
-remains unspecified.
+remains unspecified, and "Deciding what to build, and who builds it" above
+for the real, agreed design both of these still need wired.
 
 - ✅ **The Sägewerk worksite** — the doc's own generic "sawpit/hewing-block"
   prop, named and built concretely as `sagewerk` (`item_catalog.gd`'s
@@ -992,6 +1096,9 @@ remains unspecified.
   trigger yet that decides which project a settlement should be actively
   building piece-by-piece, and no real caller yet produces a real
   footprint-relative piece layout for a house-shaped `ConstructionProject`.
+  See "Deciding what to build, and who builds it" above for the real,
+  agreed design ("ad hoc, replan-interrupt, spare-capacity-gated"),
+  design-only and not yet implemented.
   `VillageRenderer._stamp_house`'s own retirement — this doc's own named
   anti-pattern — was a separate, later task (closed 2026-08-25, a sixth
   follow-up pass, see that entry below), and it does NOT use this real
@@ -1221,8 +1328,10 @@ remains unspecified.
   starts a `PLANNED` project via `ConstructionPriority.decide`) is not
   called from anywhere in this chunk-load path. "Which structure should this
   settlement build next" — e.g. when a settlement wants a second Sägewerk —
-  remains genuinely unspecified, exactly as it was before this pass; this
-  pass only ever advances real, already-reserved-material work that some
+  is now a real, agreed design (see "Deciding what to build, and who builds
+  it" above: the worst real shortfall, gated by real spare population
+  capacity) but remains unimplemented; this pass only ever advances real,
+  already-reserved-material work that some
   other caller (today: only tests, and `SettlementConstruction.advance`
   itself in isolation) already put into `IN_PROGRESS`. A Lumberjack's own
   in-progress state (log stock, shaping progress) is also still not
