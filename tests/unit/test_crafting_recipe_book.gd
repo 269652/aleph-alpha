@@ -23,7 +23,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# + woodworking: log_to_sticks, log_to_wood, saw, sagewerk.
 	# + wayfinding & citizenship: rough_compass, compass, map, spyglass,
 	# weather_glass, star_chart, deed, ledger, field_journal, charter (10 more).
-	assert_eq(ids.size(), 29)
+	# + production chains (see docs/concept/production_chains.md): the
+	# Sägewerk's own log_to_balken/log_to_planke shaping recipes (2 more),
+	# pinned to agree with SagewerkProduction's real cost constants.
+	assert_eq(ids.size(), 31)
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():
@@ -299,3 +302,101 @@ func test_wayfinding_and_citizenship_recipes_use_only_existing_raw_materials():
 	for recipe_id in new_recipe_ids:
 		for item_id in _input_item_ids(recipe_id):
 			assert_true(catalog.has(item_id), "%s recipe uses unknown material %s" % [recipe_id, item_id])
+
+
+# -- production chains (see docs/concept/production_chains.md): the two -----
+# -- new OPTIONAL recipe fields, "required_skill" and "requires_structure" --
+# -- (purely additive -- every recipe above that doesn't declare them must ---
+# -- keep working exactly as it does today), plus a reverse output->recipe --
+# -- lookup for NeedResolver's recursive walk. -------------------------------
+
+## Regression: a recipe with neither new field (torch has always been a
+## plain 2-input recipe) reports empty/absent for both -- the additive
+## fields must never silently invent a gate nothing declared.
+func test_recipes_without_the_new_fields_report_no_gate_and_still_craft():
+	assert_eq(book.recipe_required_skill("torch"), {})
+	assert_eq(book.recipe_requires_structure("torch"), "")
+	# The exact same regression assertions the original torch tests already
+	# make -- proving the additive fields changed nothing about existing
+	# can_craft/craft behavior.
+	assert_true(book.can_craft("torch", {"wood": 1, "hide": 1}))
+	var result := book.craft("torch", {"wood": 1, "hide": 1})
+	assert_true(result["success"])
+
+
+func test_recipe_required_skill_of_unknown_recipe_is_empty():
+	assert_eq(book.recipe_required_skill("not_a_real_recipe"), {})
+
+
+func test_recipe_requires_structure_of_unknown_recipe_is_empty_string():
+	assert_eq(book.recipe_requires_structure("not_a_real_recipe"), "")
+
+
+## The Sägewerk itself needs a real carpenter's eye to raise (see
+## docs/concept/timber_construction.md's own "generalized, not hardcoded"
+## section) -- required_skill's first real consumer. Pinned to the SAME
+## real threshold Player._chop_step's CARPENTRY_LEVEL_FOR_SAWING already
+## uses for the same real skill (carpentry_level), not a second invented
+## number for it.
+func test_sagewerk_requires_carpentry_skill_matching_the_existing_sawing_threshold():
+	const PlayerScene = preload("res://scenes/player.tscn")
+	var player: Player = PlayerScene.instantiate()
+	var requirement: Dictionary = book.recipe_required_skill("sagewerk")
+	assert_eq(requirement["stat_name"], "carpentry_level")
+	assert_eq(requirement["level"], player.CARPENTRY_LEVEL_FOR_SAWING)
+	player.free()
+
+
+## Smelting recipes are heat-gated (a campfire OR a furnace both count --
+## see Player._has_heat_source) -- requires_structure names the abstract
+## "heat_source" category smelting.md itself already uses as its own
+## vocabulary ("a heat source present: a campfire, or the sturdier crafted
+## furnace"), not one specific structure id, so Player.craft's generalized
+## check can still accept either the same way it always has.
+func test_smelting_recipes_require_a_heat_source():
+	assert_eq(book.recipe_requires_structure("iron_ingot"), "heat_source")
+	assert_eq(book.recipe_requires_structure("copper_ingot"), "heat_source")
+
+
+func test_recipe_for_output_finds_the_recipe_that_produces_an_item():
+	assert_eq(book.recipe_for_output("torch"), "torch")
+	assert_eq(book.recipe_for_output("stick"), "log_to_sticks")
+
+
+## The bottom case NeedResolver's recursive walk relies on: an item nothing
+## in this book produces (e.g. a raw, gathered item like "log") -- "go get
+## it from the world," not a broken lookup.
+func test_recipe_for_output_is_empty_for_an_item_no_recipe_produces():
+	assert_eq(book.recipe_for_output("log"), "")
+	assert_eq(book.recipe_for_output("not_a_real_item"), "")
+
+
+## Sägewerk production (SagewerkProduction, log -> Balken/Planke) is a
+## real, separately-tested pure module (see docs/concept/timber_
+## construction.md's "Sägewerk production" status entry) that the
+## Lumberjack-staffed mill runs continuously -- deliberately NOT rerouted
+## through CraftingRecipeBook this pass (see production_chains.md's own
+## "narrowing" note). These two recipe entries exist ONLY so NeedResolver
+## can reason about beam/plank's real dependency chain; they must agree
+## with SagewerkProduction's own real cost constants so the two data
+## sources never silently disagree.
+func test_log_to_balken_and_log_to_planke_agree_with_sagewerk_production_costs():
+	const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
+
+	assert_true(book.recipe_ids().has("log_to_balken"))
+	assert_true(book.recipe_ids().has("log_to_planke"))
+	assert_eq(book.recipe_output("log_to_balken")["item_id"], "beam")
+	assert_eq(book.recipe_output("log_to_planke")["item_id"], "plank")
+
+	var balken_inputs := book.recipe_inputs("log_to_balken")
+	assert_eq(balken_inputs.size(), 1)
+	assert_eq(balken_inputs[0]["item_id"], "log")
+	assert_eq(balken_inputs[0]["count"], int(SagewerkProduction.LOG_COST_PER_BEAM))
+
+	var planke_inputs := book.recipe_inputs("log_to_planke")
+	assert_eq(planke_inputs.size(), 1)
+	assert_eq(planke_inputs[0]["item_id"], "log")
+	assert_eq(planke_inputs[0]["count"], int(SagewerkProduction.LOG_COST_PER_PLANK))
+
+	assert_eq(book.recipe_requires_structure("log_to_balken"), "sagewerk")
+	assert_eq(book.recipe_requires_structure("log_to_planke"), "sagewerk")

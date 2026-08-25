@@ -2245,7 +2245,7 @@ Nothing in this section is implemented yet.
 
 A first crafting loop is now real and wired into live gameplay, though shallow:
 
-- **Base gather-craft-build loop** (medium) — ✅ Done (basic) — `src/gameplay/crafting_recipe_book.gd` defines recipes (inputs → output), wired into `Player.craft()`; there's now a real **crafting UI** (`scenes/crafting_window.gd`, toggle C) — plus the `/craft` console command. Overhauled from a single narrow, right-anchored list of thin text rows into a **centered, card-based catalog** (`UiTheme`-styled, matching the inventory/settings windows rather than reading as a leftover sidebar): recipes are grouped into sections by their output's item kind (Weapons/Tools/Armor/Structures/Cooking/Materials) inside a scrolling, fixed-size window rather than one that grows unbounded with the recipe count; each card shows a real item **thumbnail**, the output name (+ a `x2`-style count badge when a recipe yields more than one), and every required material as its own icon + live **have/need** count, colored green when covered and red when short, so what's blocking a craft is legible at a glance instead of buried in a text string. Unaffordable cards dim and lose their hover/click affordance; affordable ones highlight on hover with a pointing-hand cursor. `Player.craft()` produces the output into the inventory (and, if the inventory is full and consuming inputs didn't free a slot, drops the crafted item at the player's feet rather than silently losing it). The gather side is real too: chop trees (wood+sticks), smash boulders (rock), knap rock-on-rock (sharp shards), harvest tall grass (fibre), and mine ore-bearing boulders with a pickaxe (ore+stone). **Smelting/metalworking** now exists (`src/gameplay/smelting.gd`, tested, see `concept/smelting.md`): ore + coal smelted at a **heat source** (a carried campfire or crafted **furnace**) → iron/copper ingots, which forge a full **iron armor set** that out-protects leather — `Player.craft` heat-gates the smelt recipes exactly like cooking. No skill-gating or placed stations yet.
+- **Base gather-craft-build loop** (medium) — ✅ Done (basic) — `src/gameplay/crafting_recipe_book.gd` defines recipes (inputs → output), wired into `Player.craft()`; there's now a real **crafting UI** (`scenes/crafting_window.gd`, toggle C) — plus the `/craft` console command. Overhauled from a single narrow, right-anchored list of thin text rows into a **centered, card-based catalog** (`UiTheme`-styled, matching the inventory/settings windows rather than reading as a leftover sidebar): recipes are grouped into sections by their output's item kind (Weapons/Tools/Armor/Structures/Cooking/Materials) inside a scrolling, fixed-size window rather than one that grows unbounded with the recipe count; each card shows a real item **thumbnail**, the output name (+ a `x2`-style count badge when a recipe yields more than one), and every required material as its own icon + live **have/need** count, colored green when covered and red when short, so what's blocking a craft is legible at a glance instead of buried in a text string. Unaffordable cards dim and lose their hover/click affordance; affordable ones highlight on hover with a pointing-hand cursor. `Player.craft()` produces the output into the inventory (and, if the inventory is full and consuming inputs didn't free a slot, drops the crafted item at the player's feet rather than silently losing it). The gather side is real too: chop trees (wood+sticks), smash boulders (rock), knap rock-on-rock (sharp shards), harvest tall grass (fibre), and mine ore-bearing boulders with a pickaxe (ore+stone). **Smelting/metalworking** now exists (`src/gameplay/smelting.gd`, tested, see `concept/smelting.md`): ore + coal smelted at a **heat source** (a carried campfire or crafted **furnace**) → iron/copper ingots, which forge a full **iron armor set** that out-protects leather. Real, generalized **recipe gating** now exists too (see `concept/production_chains.md`, new doc): `Player.craft`'s old hardcoded "is this a smelting recipe" special case is gone, replaced by two OPTIONAL, additive `CraftingRecipeBook` fields — `required_skill` (a `SkillTree` stat/level threshold, e.g. the `sagewerk` recipe's real Carpentry gate) and `requires_structure` (a structure id that must be built/nearby, e.g. smelting's own heat-source gate, now data-driven instead of hardcoded) — read generically, so any future recipe gets real gating just by declaring the field.
 - **Crafting Stations** (small) — 🚧 Partial — `src/gameplay/crafting_station.gd` (tier-gated `can_craft_at`), tested but not wired — `/craft` currently works anywhere, no station placement/proximity check.
 - **Skill-gated crafting progression** (medium) — ⬜ Not started — design landed in
   [concept/labor_skills.md](concept/labor_skills.md) (a use-based Smithing/
@@ -2831,6 +2831,60 @@ section for the full accounting.
   of a seeded `ConstructionProject` at settlement founding (medium) —
   ⬜ Not started; see this doc's own Status section for why the current
   behavior is a known anti-pattern, not a baseline to preserve.
+
+### Production Chains (`concept/production_chains.md`)
+
+New doc (2026-08-25). The general recipe-gating/dependency-resolution
+mechanism `timber_construction.md`'s own Sägewerk skill-gate and
+dependency-chain sections both point to rather than solving one-off. Core
+mechanism is real and tested; no live gameplay caller reads
+`NeedResolver`/`Quest.deeper_need_for` yet (their intended real consumer,
+the settlement construction ledger, is itself still unbuilt — see Timber
+Construction above).
+
+- **Recipe gating fields (`required_skill`/`requires_structure`)** (small)
+  — ✅ Done — `CraftingRecipeBook.recipe_required_skill`/
+  `recipe_requires_structure`, purely additive and regression-tested
+  (every recipe without either field keeps working exactly as before).
+  `sagewerk` carries a real Carpentry `required_skill`, pinned to the same
+  threshold `Player._chop_step`'s `CARPENTRY_LEVEL_FOR_SAWING` already
+  uses; `iron_ingot`/`copper_ingot` carry `requires_structure:
+  "heat_source"` (the abstract campfire-or-furnace category
+  `smelting.md` already names); `log_to_balken`/`log_to_planke` carry
+  `requires_structure: "sagewerk"`.
+- **`CraftingRecipeBook.recipe_for_output` reverse lookup** (trivial) —
+  ✅ Done — output item_id → the recipe_id that produces it, "" for a
+  raw/gathered item nothing produces — `NeedResolver`'s own bottom case.
+- **`Player.craft`'s generalized gate** (small) — ✅ Done — the old
+  hardcoded `is_smelting_recipe`/`_has_heat_source` special case is gone,
+  replaced by `_meets_requires_structure`/`_meets_required_skill`, each
+  reading a recipe's own declared fields generically. Regression-tested
+  (smelting still heat-gates exactly as before) and newly real (the
+  Sägewerk's Carpentry gate now actually refuses the craft, not just
+  exists as unread data).
+- **`NeedResolver`** (medium) — ✅ Done — `src/gameplay/need_resolver.gd`,
+  pure, recursive, cycle-guarded (`MAX_DEPTH`, pinned by test against a
+  fabricated cyclic recipe graph). Covers direct stock satisfaction,
+  one-hop missing structure, one-hop missing skill, multi-hop missing
+  sub-material, and a raw/gatherable item with no recipe.
+- **`Quest.deeper_need_for`** (small) — ✅ Done — additive; does not
+  change `production_shortfall_quests_for`'s own signature, behavior, or
+  its one real call site.
+- **Sägewerk production stays bespoke (deliberate narrowing)** — 🚧
+  Partial/by design — `SagewerkProduction.advance` is deliberately NOT
+  rerouted through `CraftingRecipeBook`/`Player.craft` this pass;
+  `log_to_balken`/`log_to_planke` exist only as data for `NeedResolver` to
+  reason over beam/plank's dependency chain, pinned by test to agree with
+  `SagewerkProduction`'s own real cost constants. See the concept doc's
+  own "Sägewerk production: a deliberate, named narrowing" section.
+- **A live gameplay caller for `NeedResolver`/`Quest.deeper_need_for`**
+  (medium) — ⬜ Not started — both are real, tested, callable
+  capabilities, but nothing in live gameplay calls either yet; their
+  intended real consumer is `timber_construction.md`'s own still-unbuilt
+  settlement construction ledger.
+- **Quantity scaling through the recursive walk, diamond-dependency
+  deduplication** (small) — ⬜ Not started — see the concept doc's own
+  Open questions; not needed by any real caller yet.
 
 ### Pets (`concept/pets.md`)
 

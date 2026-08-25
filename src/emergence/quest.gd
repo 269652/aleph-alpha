@@ -29,6 +29,7 @@ extends RefCounted
 
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
+const NeedResolver = preload("res://src/gameplay/need_resolver.gd")
 
 
 ## A settlement's own household needs a real recipe input its market
@@ -73,3 +74,24 @@ static func _missing_inputs(market, recipe_book: CraftingRecipeBook, recipe_id: 
 		if have < input["count"]:
 			missing.append({"item_id": input["item_id"], "need": input["count"] - have})
 	return missing
+
+
+## ADDITIVE capability (see docs/concept/production_chains.md): for ONE
+## specific item named in a production_shortfall_quests_for "missing" list
+## (or any other item id a caller wants the deeper picture on), resolves
+## what actually producing more of it needs -- a missing skill, a missing
+## structure, or deeper missing sub-materials, possibly several hops down
+## -- via NeedResolver's real recursive walk over CraftingRecipeBook.
+##
+## Deliberately does NOT change production_shortfall_quests_for's own
+## signature, behavior, or its one real call site
+## (EarthChunkManager.production_shortfall_quests_for_settlement,
+## earth_chunk_manager.gd:1329-1336) -- this is a separate, additive
+## function a caller reaches for only when it wants MORE than "how many of
+## item_id are missing," e.g. to explain to a player (or a settlement's own
+## construction-ledger reasoning, per timber_construction.md) WHY an item
+## is missing and what would actually resolve it.
+static func deeper_need_for(
+	item_id: String, stock: Dictionary, allocated_nodes: Dictionary, nearby_structures: Dictionary, recipe_book: CraftingRecipeBook
+) -> Array:
+	return NeedResolver.new(recipe_book).resolve(item_id, stock, allocated_nodes, nearby_structures)
