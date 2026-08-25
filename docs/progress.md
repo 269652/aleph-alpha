@@ -3570,7 +3570,19 @@ resolves unowned in real play today), and the new offscreen catch-up's own
 named limitation (real and tested in isolation, but no live
 `EarthChunkManager` chunk-load call site invokes it yet from real
 gameplay). `VillageRenderer._stamp_house` is still not migrated to seed a
-`ConstructionProject` (deliberately out of scope this pass too).
+`ConstructionProject` (deliberately out of scope this pass too). An eighth
+slice landed 2026-08-25 (a fifth follow-up pass): that offscreen catch-up now
+HAS its live `EarthChunkManager` chunk-unload/reload caller —
+`_apply_construction_labor_catchup`, wired at the exact same boundary
+withering's own `_unloaded_piece_condition`/`_apply_piece_condition_catchup`
+pair already uses, supplying a real `builder_count` from the existing
+`household_count_for_settlement` — and a project reaching `COMPLETE` with a
+real placeable recipe output (e.g. `sagewerk`) now actually gets built via
+`build_at_global`, closing the previously-silent gap where completion only
+marked status and granted property without ever placing anything. Which
+project a settlement should START next stays genuinely unspecified and out
+of scope (`SettlementConstruction.advance` is not called from this new
+wiring — only already-`IN_PROGRESS` projects' labor advances here).
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
@@ -3739,15 +3751,36 @@ gameplay). `VillageRenderer._stamp_house` is still not migrated to seed a
   the property, accumulated caps exactly at the real requirement,
   partial elapsed time accumulates real partial progress without
   completing, `PLANNED`/`COMPLETE`/`ABANDONED`/unknown projects are all
-  no-ops). **Named limitation**: there is still no live
-  `EarthChunkManager` chunk-load call site invoking
-  `advance_project_labor` from real gameplay — mechanism and caller are
-  real and tested in isolation, matching this whole arc's own established
-  "mechanism real and tested, first live gameplay caller still pending"
-  pattern. A Lumberjack's own in-progress state (log stock, shaping
-  progress) is also still not persisted across a chunk unload/reload — a
-  separate, still-real gap, same class of limitation as geology's
-  mined-tunnel state.
+  no-ops). **`EarthChunkManager` now HAS a live chunk-unload/reload caller**
+  (2026-08-25, a fifth follow-up pass, closing the gap this bullet used to
+  name): `_apply_construction_labor_catchup`, wired at the exact same
+  unload/reload boundary `_apply_ecology_catchup`/
+  `_apply_piece_condition_catchup` already use — `_unload_chunk` snapshots
+  `{unloaded_at}` per chunk_coord (a new `_unloaded_construction_labor`
+  Dictionary) whenever real `IN_PROGRESS` projects are sited there (via a new
+  `ConstructionProjectStore.in_progress_projects_in_chunk` lookup), and
+  `_load_chunk` advances each one by the real elapsed time with
+  `builder_count` from the existing `household_count_for_settlement`. A
+  project reaching `COMPLETE` whose recipe output is a real placeable
+  (`ItemCatalog.kind_of == "placeable"`) is now actually built via
+  `build_at_global` at the project's own `(chunk_coord, origin)` — the same
+  call `Player`'s own placeable build step makes — closing the previously-
+  silent "completion never builds anything" gap; a non-placeable output
+  (e.g. `log_to_balken` -> `beam`) still reaches real `COMPLETE` and grants
+  property, placing nothing, no crash. Tested:
+  `test_construction_project_store.gd`'s new `in_progress_projects_in_chunk`
+  cases, and `test_earth_chunk_manager.gd`'s new "construction labor
+  catch-up" section (4 tests, mirroring withering's own test style: measurable
+  labor advance after a real simulated unloaded absence, a never-unloaded
+  chunk regression, a completed placeable actually placed, a completed
+  non-placeable placing nothing without crashing). **Named limitation,
+  deliberately unchanged this pass**: which project a settlement should
+  START next stays genuinely unspecified — `SettlementConstruction.advance`
+  is not called anywhere in this new wiring; only already-`IN_PROGRESS`
+  projects' labor advances here. A Lumberjack's own in-progress state (log
+  stock, shaping progress) is also still not persisted across a chunk
+  unload/reload — a separate, still-real gap, same class of limitation as
+  geology's mined-tunnel state.
 - **`ConstructionProject`/`ConstructionProjectStore` + live
   `ConstructionPriority.decide` caller (the settlement construction
   ledger)** (medium) — ✅ Done (2026-08-25, a further follow-up pass).

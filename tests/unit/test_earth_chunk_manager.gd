@@ -1983,6 +1983,116 @@ func test_a_collapsed_decayed_piece_condition_is_no_longer_tracked():
 	assert_almost_eq(manager.piece_condition_at_global(origin.x, origin.y), 1.0, 0.0001)
 
 
+# -- construction labor catch-up (see docs/concept/timber_construction.md's
+# "Unloaded / offscreen fidelity" subsection, construction_catchup.gd,
+# ConstructionProjectStore.advance_project_labor) -- the settlement
+# construction ledger's own real chunk-load caller. Wired at the EXACT SAME
+# unload/reload catch-up boundary the withering section directly above
+# already uses (_unload_wait_and_reload is the same helper), the same
+# "two fidelities" philosophy applied to a ConstructionProject's own
+# labor-hours accumulator instead of a piece's condition value.
+
+const ConstructionProject = preload("res://src/emergence/construction_project.gd")
+
+## A local footprint origin well inside the chunk, distinct from
+## _statics_test_origin()'s own (10, 10) -- these tests build no actual
+## wall/floor pieces, just a ConstructionProject sited at this cell, so
+## there is no real collision risk either way, but keeping it distinct
+## avoids any accidental coupling to the statics tests' own fixture cell.
+func _construction_test_local_origin() -> Vector2i:
+	return Vector2i(15, 15)
+
+
+func test_an_in_progress_projects_labor_measurably_advances_after_a_real_simulated_chunk_unload_absence():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	# 2 real households -> builder_count 2 (household_count_for_settlement,
+	# already real -- see this doc's own "do not reinvent" instruction).
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, _construction_test_local_origin(), "sagewerk", "household:construction_labor_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 1.0)
+
+	assert_gt(
+		project.labor_hours_accumulated, 0.0,
+		"a real IN_PROGRESS project's labor should measurably advance after a real simulated unloaded absence"
+	)
+
+
+## A chunk that never unloads must not advance construction labor at all --
+## mirrors test_a_piece_on_a_chunk_that_never_unloads_does_not_decay's own
+## identical regression shape: the mechanism only runs at the real
+## unload/reload catch-up boundary, there is no separate live per-frame
+## labor tick for a chunk that stays loaded the whole time.
+func test_a_chunk_that_never_unloads_does_not_advance_construction_labor_at_all():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, _construction_test_local_origin(), "sagewerk", "household:construction_labor_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	manager.advance_world_age(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 5.0)
+
+	assert_almost_eq(project.labor_hours_accumulated, 0.0, 0.0001)
+
+
+## The full flow: a project reaching COMPLETE (2 households' worth of labor
+## over 2 real unloaded days comfortably clears sagewerk's real 18-hour
+## requirement -- see ConstructionLabor.labor_hours_required) actually
+## places its own real tile at the project's own (chunk_coord, origin) --
+## closing this doc's own previously-named "completing a project today only
+## marks status + grants household property, it never actually builds
+## anything" gap for a real placeable output.
+func test_a_completed_projects_placeable_output_is_actually_placed_in_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var local_origin := _construction_test_local_origin()
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, local_origin, "sagewerk", "household:construction_labor_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 2.0)
+
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	var global_cell := chunk_coord * EarthChunkManager.CHUNK_SIZE + local_origin
+	assert_eq(
+		manager.modification_at_global(global_cell.x, global_cell.y), "sagewerk",
+		"a completed project whose recipe output is a real placeable should actually place it in the world"
+	)
+
+
+## A project whose recipe output is NOT a placeable (e.g. "log_to_balken",
+## whose real output is "beam" -- a plain material item, ItemCatalog.
+## kind_of("beam") == "material") must still reach COMPLETE (the labor
+## catch-up itself does not care what the output is), but must not attempt
+## to place anything -- no crash, no garbage tile written to the world.
+func test_a_completed_project_whose_output_is_not_placeable_places_nothing_and_does_not_crash():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var local_origin := _construction_test_local_origin()
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, local_origin, "log_to_balken", "household:construction_labor_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 1.0)
+
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	var global_cell := chunk_coord * EarthChunkManager.CHUNK_SIZE + local_origin
+	assert_eq(
+		manager.modification_at_global(global_cell.x, global_cell.y), "",
+		"a completed project whose recipe output is not a real placeable should place nothing"
+	)
+
+
 # -- bulk structure stamping (see VillageRenderer, HouseBlueprint) ------------
 #
 # Stamping a whole house one build_at_global call per cell would repaint its

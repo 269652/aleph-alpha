@@ -231,3 +231,37 @@ func test_advancing_labor_for_an_unknown_project_id_is_a_no_op():
 		"construction_project:unknown", 1.0e6, {"builder_count": 4.0}, recipe_book, households
 	)
 	assert_eq(result["action"], "no_op")
+
+
+# -- in_progress_projects_in_chunk (EarthChunkManager's own real chunk-unload/
+# reload catch-up caller needs this to enumerate what to advance) ------------
+#
+# Additive lookup, the same "look up by a real key" shape find_project/
+# get_project already establish, but returning every match at a SITE's own
+# chunk_coord rather than one exact (chunk_coord, origin, blueprint_id) key --
+# EarthChunkManager only knows "this chunk just reloaded," not which specific
+# projects live in it.
+
+func test_in_progress_projects_in_chunk_returns_only_real_in_progress_projects_at_that_site():
+	var a := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", "household:1")
+	a.status = ConstructionProject.Status.IN_PROGRESS
+	var b := store.start_project(Vector2i(3, -2), Vector2i(2, 2), "sagewerk", "household:1")
+	b.status = ConstructionProject.Status.IN_PROGRESS
+	# Still PLANNED -- must not be returned (advance_project_labor's own
+	# identical no-op filter for a non-IN_PROGRESS project).
+	store.start_project(Vector2i(3, -2), Vector2i(3, 3), "log_to_balken", "household:1")
+	var elsewhere := store.start_project(Vector2i(9, 9), Vector2i(1, 1), "storage", "household:1")
+	elsewhere.status = ConstructionProject.Status.IN_PROGRESS
+
+	var found: Array = store.in_progress_projects_in_chunk(Vector2i(3, -2))
+
+	assert_eq(found.size(), 2)
+	var ids: Array = []
+	for project in found:
+		ids.append(project.id)
+	assert_true(ids.has(a.id))
+	assert_true(ids.has(b.id))
+
+
+func test_in_progress_projects_in_chunk_is_empty_for_a_chunk_with_no_real_projects():
+	assert_eq(store.in_progress_projects_in_chunk(Vector2i(50, 50)), [])

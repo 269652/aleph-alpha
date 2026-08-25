@@ -98,6 +98,27 @@ func advance_project_labor(
 	return {"action": "advanced", "project_id": project_id}
 
 
+## Every real IN_PROGRESS project sited at `chunk_coord` -- the offscreen
+## labor catch-up's own real chunk-load caller (EarthChunkManager.
+## _apply_construction_labor_catchup, see docs/concept/timber_construction.md's
+## "Unloaded / offscreen fidelity" subsection) needs to enumerate these at a
+## chunk's own reload boundary, mirroring find_project/get_project's own
+## "look up by a real key" shape but returning every match at a SITE's own
+## chunk_coord rather than one exact (chunk_coord, origin, blueprint_id) key
+## -- a caller reloading a chunk only knows WHICH CHUNK just came back, not
+## which specific projects live in it. Only IN_PROGRESS projects are
+## returned -- PLANNED/COMPLETE/ABANDONED all mean there is no real labor to
+## advance, the exact same filter advance_project_labor's own no-op guard
+## already applies.
+func in_progress_projects_in_chunk(chunk_coord: Vector2i) -> Array:
+	var out: Array = []
+	for id in _projects:
+		var project: ConstructionProject = _projects[id]
+		if project.chunk_coord == chunk_coord and project.status == ConstructionProject.Status.IN_PROGRESS:
+			out.append(project)
+	return out
+
+
 ## For a future ConstructionProjectStorePersistence -- pure serialization,
 ## no FileAccess (same split EventStore/HouseholdStore already use).
 func to_dicts() -> Array:
