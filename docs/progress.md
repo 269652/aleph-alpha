@@ -3557,32 +3557,48 @@ project's own recipe, since there is no `HouseBlueprint.total_labor_hours`)
 and the real caller, `ConstructionProjectStore.advance_project_labor`,
 which now actually carries an `IN_PROGRESS` `ConstructionProject` to
 `COMPLETE` over elapsed time and calls the already-correct
-`complete_project`. See the concept doc's own Status section for the full
-accounting, including statics' own named limitation (no independent
-per-frame poll yet advancing an idle at-risk structure's grace clock — it
-only re-checks when a further edit touches that structure), the ledger's
-own named limitations (no persistence wrapper, queued-producer siting is
-bookkeeping only, not real placement), withering's own named limitations
-(piece condition isn't persisted to disk, in-session only; only
-wall/floor/door/window pieces decay, not roofs; the "owned property"
-exposure branch has no real caller granting ownership yet, so it always
-resolves unowned in real play today), and the new offscreen catch-up's own
+`complete_project`. An eighth slice landed 2026-08-25 (a fifth follow-up
+pass): a real Builder worker — `BuilderBehavior`/`BuilderMarker`
+(`src/gameplay/builder_behavior.gd`, `src/rendering/builder_marker.gd`) —
+closing `CARRY_MATERIAL`/`PLACE_PIECE`, the doc's own last-named NPC
+construction gap: a SEEKING->WITHDRAWING->CARRYING->PLACING loop that
+withdraws a real target piece's own `cost_of` material from the nearest
+real Storage, carries it to the build site, and places it only once
+`BuildingPlacement.can_place` accepts it (never force-placed), crediting
+the SAME real `labor_hours_accumulated` field the offscreen catch-up above
+also writes to and completing the project via the same real
+`complete_project` once every piece lands. See the concept doc's own Status
+section for the full accounting, including statics' own named limitation
+(no independent per-frame poll yet advancing an idle at-risk structure's
+grace clock — it only re-checks when a further edit touches that
+structure), the ledger's own named limitations (no persistence wrapper,
+queued-producer siting is bookkeeping only, not real placement), withering's
+own named limitations (piece condition isn't persisted to disk, in-session
+only; only wall/floor/door/window pieces decay, not roofs; the "owned
+property" exposure branch has no real caller granting ownership yet, so it
+always resolves unowned in real play today), the offscreen catch-up's own
 named limitation (real and tested in isolation, but no live
 `EarthChunkManager` chunk-load call site invokes it yet from real
-gameplay). `VillageRenderer._stamp_house` is still not migrated to seed a
-`ConstructionProject` (deliberately out of scope this pass too). An eighth
-slice landed 2026-08-25 (a fifth follow-up pass): that offscreen catch-up now
-HAS its live `EarthChunkManager` chunk-unload/reload caller —
+gameplay). An eighth and ninth slice landed 2026-08-25 (a fifth follow-up
+pass, run as two parallel tracks): that offscreen catch-up now HAS its live
+`EarthChunkManager` chunk-unload/reload caller —
 `_apply_construction_labor_catchup`, wired at the exact same boundary
 withering's own `_unloaded_piece_condition`/`_apply_piece_condition_catchup`
 pair already uses, supplying a real `builder_count` from the existing
 `household_count_for_settlement` — and a project reaching `COMPLETE` with a
 real placeable recipe output (e.g. `sagewerk`) now actually gets built via
 `build_at_global`, closing the previously-silent gap where completion only
-marked status and granted property without ever placing anything. Which
-project a settlement should START next stays genuinely unspecified and out
-of scope (`SettlementConstruction.advance` is not called from this new
-wiring — only already-`IN_PROGRESS` projects' labor advances here).
+marked status and granted property without ever placing anything; and the
+new Builder worker (its own named limitations: no live spawner yet decides
+a Builder should exist for a given project and injects its piece layout;
+roof pieces out of scope; terrain buildability is a permissive stand-in).
+Which project a settlement should START next stays genuinely unspecified
+and out of scope (`SettlementConstruction.advance` is not called from the
+new chunk-load wiring — only already-`IN_PROGRESS` projects' labor advances
+there). `VillageRenderer._stamp_house` is still not migrated to seed a
+`ConstructionProject` (deliberately out of scope this pass too) — a
+settlement still gets its houses stamped for free at generation time, not
+built up piece by piece by a real Builder over real elapsed time.
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
@@ -3706,9 +3722,58 @@ wiring — only already-`IN_PROGRESS` projects' labor advances here).
   under its per-cell key yet, so it always resolves unowned in real play
   today — only the roofed branch is actually live. See the concept doc's
   own Status section for the full account.
-- **NPC construction beyond gathering (`CARRY_MATERIAL`/`PLACE_PIECE`,
-  an NPC actually placing house pieces)** (large) — ⬜ Not started; the
-  Lumberjack's own loop stops at DEPOSIT.
+- **NPC construction beyond gathering: a real Builder worker
+  (`CARRY_MATERIAL`/`PLACE_PIECE`)** (large) — ✅ Done (2026-08-25, a fifth
+  follow-up pass). A deliberately simpler slice than the doc's own full
+  `SEEK_FOREST->WALK_TO_TREE->FELL->CARRY_LOG->SHAPE` chain — raw-material
+  sourcing is already the real Sägewerk/Storage/Logistics chain above, so a
+  Builder does not re-fell trees itself. `BuilderBehavior`
+  (`src/gameplay/builder_behavior.gd`, pure FSM,
+  `tests/unit/test_builder_behavior.gd`, 24 tests) mirrors
+  `LumberjackBehavior`/`LogisticsBehavior`'s own split:
+  `SEEKING -> WITHDRAWING -> CARRYING -> PLACING -> SEEKING`, with
+  `WITHDRAWING`/`PLACING` each covering both a walk leg and their own timed
+  action (a deliberately simpler 4-phase shape), ticked only once the
+  caller (`BuilderMarker`) confirms real arrival. `BuilderMarker`
+  (`src/rendering/builder_marker.gd`, engine glue,
+  `tests/unit/test_builder_marker.gd`, 7 tests) withdraws the SPECIFIC
+  target piece's own real `BuildingPiece.cost_of` material from the nearest
+  real Storage (`EarthChunkManager.nearest_structure_position`/
+  `withdraw_from_structure_at`), carries it to the build site, and attempts
+  a real placement validated against `BuildingPlacement.can_place` BEFORE
+  ever calling the real `EarthChunkManager.build_at_global` — a refused
+  piece (no floor beneath it yet) is never force-placed, its withdrawn
+  material is returned to Storage, and the same cell is retried on a later
+  round-robin pass through `target_pieces`' own still-unplaced cells (so a
+  refused piece never starves every other piece's own turn). Placing a real
+  piece credits its own real labor-hours
+  (`ConstructionLabor.labor_hours_for_piece`/
+  `labor_hours_required_for_pieces`, a new sibling reusing the exact same
+  `HOURS_PER_UNIT_MATERIAL`
+  rate, applied per-piece via `BuildingPiece.cost_of` since a Builder's
+  target is a real piece layout, not necessarily a recipe) onto the SAME
+  `labor_hours_accumulated` field the offscreen catch-up above also writes
+  to, via a new `ConstructionProjectStore.advance_project_labor_for_piece`
+  mirroring `advance_project_labor`'s own no-op/clamp/completion shape and
+  calling the same already-correct `complete_project`. Tested end to end
+  against a real `EarthChunkManager`/real Storage stock/a real
+  `ConstructionProject`/`HouseholdStore`: a real withdrawal pulls EXACTLY
+  the target piece's own cost (not more, not less); a placement
+  `BuildingPlacement` would refuse (a wall with no floor anywhere near it)
+  is genuinely skipped, never force-placed, its material restored; and
+  completing every piece in a 2-piece layout (exercising a real
+  round-robin refusal-then-retry) drives the project to `COMPLETE` and the
+  household genuinely receives its property. **Named limitations**: no live
+  spawner yet decides a Builder should exist for a given
+  `ConstructionProject` and injects its `target_pieces` — this is a bare,
+  tested worker a future caller injects into, the same way `LogisticsMarker`
+  itself shipped before `EarthChunkManager` auto-spawned it; roof pieces are
+  out of scope (`build_at_global` never touches `roof_modifications`,
+  mirroring statics'/withering's own identical gap); `buildable_ground` is a
+  permissive stand-in (no live caller anywhere checks real water/cliff
+  buildability yet); a Builder's own in-progress state is not persisted
+  across a chunk unload/reload. See the concept doc's own Status section for
+  the full account.
 - **Offscreen construction catch-up (`construction_catchup.gd`)** (large) —
   ✅ Done (2026-08-25, a fourth follow-up pass). `construction_catchup.gd`
   (`src/world/`) mirrors `chunk_ecology_catchup.gd`'s EXACT contract

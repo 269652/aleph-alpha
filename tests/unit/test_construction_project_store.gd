@@ -265,3 +265,91 @@ func test_in_progress_projects_in_chunk_returns_only_real_in_progress_projects_a
 
 func test_in_progress_projects_in_chunk_is_empty_for_a_chunk_with_no_real_projects():
 	assert_eq(store.in_progress_projects_in_chunk(Vector2i(50, 50)), [])
+
+
+# -- per-piece labor progress (the Builder's own completion signal) ----------
+#
+# advance_project_labor_for_piece is docs/concept/timber_construction.md's NPC
+# construction section's own real caller for a Builder's PLACING step: credits
+# ONE real piece's own labor-hours (ConstructionLabor.labor_hours_for_piece)
+# onto a real IN_PROGRESS project's labor_hours_accumulated -- the SAME field
+# advance_project_labor's own offscreen catch-up writes to, not a second
+# parallel completion signal -- clamped at a caller-supplied
+# required_labor_hours (the Builder's own real target total for its piece
+# layout, e.g. ConstructionLabor.labor_hours_required_for_pieces), completing
+# through the ALREADY-CORRECT complete_project once reached, exactly the same
+# no-op/clamp/completion shape advance_project_labor already carries.
+
+func test_advancing_labor_for_a_piece_credits_its_real_cost_derived_hours():
+	var households := HouseholdStore.new()
+	var household := households.form_household("npc:1")
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", household.id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	# A generous required total (a real 2-piece layout) so one piece's own
+	# credit alone does not complete the project.
+	var required := ConstructionLabor.labor_hours_required_for_pieces(
+		{Vector2i(0, 0): "timber_wall", Vector2i(1, 0): "timber_wall"}
+	)
+	var result := store.advance_project_labor_for_piece(project.id, "timber_wall", required, households)
+
+	assert_eq(result["action"], "advanced")
+	assert_almost_eq(project.labor_hours_accumulated, ConstructionLabor.labor_hours_for_piece("timber_wall"), 0.001)
+	assert_eq(project.status, ConstructionProject.Status.IN_PROGRESS)
+
+
+func test_advancing_labor_for_the_last_piece_completes_the_project_and_grants_the_property():
+	var households := HouseholdStore.new()
+	var household := households.form_household("npc:1")
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", household.id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	var required := ConstructionLabor.labor_hours_for_piece("timber_floor")
+	var result := store.advance_project_labor_for_piece(project.id, "timber_floor", required, households)
+
+	assert_eq(result["action"], "completed")
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	assert_eq(households.owner_of(project.property_id()), household.id)
+
+
+func test_advancing_labor_for_a_piece_never_overshoots_the_required_total():
+	var households := HouseholdStore.new()
+	var household := households.form_household("npc:1")
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", household.id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+	# A piece far more expensive than the real required total -- accumulated
+	# must clamp at required, never overshoot past it.
+	var required := ConstructionLabor.labor_hours_for_piece("timber_floor")
+
+	store.advance_project_labor_for_piece(project.id, "stone_door", required, households)
+
+	assert_almost_eq(project.labor_hours_accumulated, required, 0.001)
+
+
+func test_advancing_labor_for_a_piece_on_a_planned_project_is_a_no_op():
+	var households := HouseholdStore.new()
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", "household:1")
+	var result := store.advance_project_labor_for_piece(project.id, "timber_wall", 100.0, households)
+
+	assert_eq(result["action"], "no_op")
+	assert_eq(project.status, ConstructionProject.Status.PLANNED)
+	assert_almost_eq(project.labor_hours_accumulated, 0.0, 0.0001)
+
+
+func test_advancing_labor_for_a_piece_on_a_complete_project_is_a_no_op():
+	var households := HouseholdStore.new()
+	var household := households.form_household("npc:1")
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", household.id)
+	store.complete_project(project.id, households)
+
+	var result := store.advance_project_labor_for_piece(project.id, "timber_wall", 100.0, households)
+
+	assert_eq(result["action"], "no_op")
+
+
+func test_advancing_labor_for_a_piece_for_an_unknown_project_id_is_a_no_op():
+	var households := HouseholdStore.new()
+	var result := store.advance_project_labor_for_piece(
+		"construction_project:unknown", "timber_wall", 100.0, households
+	)
+	assert_eq(result["action"], "no_op")

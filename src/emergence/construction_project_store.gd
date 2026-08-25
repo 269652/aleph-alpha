@@ -119,6 +119,38 @@ func in_progress_projects_in_chunk(chunk_coord: Vector2i) -> Array:
 	return out
 
 
+## The real caller for a Builder's own PLACING step (see docs/concept/
+## timber_construction.md's NPC construction section): credits ONE real
+## piece's own labor-hours (ConstructionLabor.labor_hours_for_piece) onto a
+## real IN_PROGRESS project's labor_hours_accumulated -- the SAME field
+## advance_project_labor's own offscreen catch-up writes to above, not a
+## second parallel completion signal ("two fidelities, one truth"). Clamped
+## at `required_labor_hours` (the caller's own real target total for its
+## piece layout, e.g. ConstructionLabor.labor_hours_required_for_pieces) so a
+## project can never overshoot done here either, mirroring
+## construction_catchup.advance's own clamp. Once accumulated reaches
+## required, completes the project through the ALREADY-CORRECT
+## complete_project (see above) rather than a second completion path.
+##
+## No-ops (`{"action": "no_op"}`, no mutation) for an unknown project_id or
+## any project not currently IN_PROGRESS -- the SAME guard advance_project_
+## labor already uses, for the same reason.
+func advance_project_labor_for_piece(
+	project_id: String, piece_id: String, required_labor_hours: float, household_store
+) -> Dictionary:
+	var project: ConstructionProject = _projects.get(project_id)
+	if project == null or project.status != ConstructionProject.Status.IN_PROGRESS:
+		return {"action": "no_op"}
+
+	var earned := ConstructionLabor.labor_hours_for_piece(piece_id)
+	project.labor_hours_accumulated = minf(project.labor_hours_accumulated + earned, required_labor_hours)
+
+	if project.labor_hours_accumulated >= required_labor_hours and required_labor_hours > 0.0:
+		complete_project(project_id, household_store)
+		return {"action": "completed", "project_id": project_id}
+	return {"action": "advanced", "project_id": project_id}
+
+
 ## For a future ConstructionProjectStorePersistence -- pure serialization,
 ## no FileAccess (same split EventStore/HouseholdStore already use).
 func to_dicts() -> Array:

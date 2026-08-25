@@ -34,6 +34,8 @@ extends RefCounted
 ## eyeballed comment alone, per this project's no-manual-tuning rule.
 const HOURS_PER_UNIT_MATERIAL := 1.5
 
+const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+
 
 ## The real labor-hours a project building `blueprint_id` requires, derived
 ## from `recipe_book`'s own real input material counts. 0.0 for an unknown
@@ -43,4 +45,37 @@ static func labor_hours_required(blueprint_id: String, recipe_book) -> float:
 	var total := 0.0
 	for input in recipe_book.recipe_inputs(blueprint_id):
 		total += float(input["count"]) * HOURS_PER_UNIT_MATERIAL
+	return total
+
+
+## The real labor-hours placing ONE piece requires, derived from its own
+## real `BuildingPiece.cost_of` material -- a small, clearly-named SIBLING to
+## labor_hours_required above (see docs/concept/timber_construction.md's NPC
+## construction section), not a second parallel model: reuses the EXACT SAME
+## HOURS_PER_UNIT_MATERIAL rate ("two fidelities, one truth" -- more material
+## to assemble, more labor, whichever real quantity source names it), applied
+## per-piece via BuildingPiece.cost_of instead of a whole recipe's summed
+## inputs. This is the Builder's own per-piece completion signal: its target
+## is a real piece layout (local_cell -> piece_id, see BuilderMarker), not
+## necessarily a CraftingRecipeBook recipe the way a whole ConstructionProject
+## blueprint_id is. 0.0 for an unknown piece_id (cost_of already returns an
+## empty Dictionary for one). Pure, deterministic.
+static func labor_hours_for_piece(piece_id: String) -> float:
+	var total := 0.0
+	var cost := BuildingPiece.cost_of(piece_id)
+	for item_id in cost:
+		total += float(cost[item_id]) * HOURS_PER_UNIT_MATERIAL
+	return total
+
+
+## The real total labor-hours required to place every real piece in a target
+## piece Dictionary (Vector2i local cell -> piece_id, the same shape
+## RoomDetector/BuildingStatics already use) -- the Builder's own target-total
+## companion to labor_hours_for_piece above: sums that function's own
+## per-piece result across the whole layout. 0.0 for an empty dict. Pure,
+## deterministic.
+static func labor_hours_required_for_pieces(piece_ids: Dictionary) -> float:
+	var total := 0.0
+	for cell in piece_ids:
+		total += labor_hours_for_piece(piece_ids[cell])
 	return total
