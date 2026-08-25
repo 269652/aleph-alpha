@@ -69,38 +69,57 @@ func test_no_shortfalls_at_all_is_a_distinct_outcome_from_zero_spare_capacity():
 ## path per this section's own framing. "beam" (log_to_balken) DOES have one
 ## (requires_structure "sagewerk", not present) -- even though its own need
 ## is smaller, it is the one this function acts on.
+##
+## Real log/wood stock and real allocated_nodes (the same carpentry_1 +
+## carpentry_2 fixture test_construction_priority.gd's own skill-gate test
+## already uses) are supplied so the recursive check on "sagewerk" ITSELF
+## (SettlementConstruction.advance's own internal decide() call, checking
+## whether building a Sägewerk is itself READY) clears rather than tripping
+## the SAME real Carpentry gate one level deeper -- this test is about the
+## ranking/selection logic, not a second exercise of the skill-gate
+## limitation (see test_a_carpentry_gated_recipe_is_never_queued_even_as_
+## the_only_shortfall below for that).
 func test_picks_the_worst_shortfall_that_has_a_real_structural_fix_skipping_a_worse_one_that_does_not():
 	var shortfalls := [
 		_shortfall([_missing("meat", 50.0)]),   # worse need, no structural fix
 		_shortfall([_missing("beam", 5.0)]),    # lesser need, HAS a structural fix
 	]
+	market.add_stock("log", 8.0)
+	market.add_stock("wood", 4.0)
+	var allocated_nodes := {"carpentry_1": true, "carpentry_2": true}
 
 	var result := SettlementBuildDecision.decide_and_advance(
-		projects, market, CHUNK, ORIGIN, "household:1", [], book, shortfalls, 3
+		projects, market, CHUNK, ORIGIN, "household:1", [], book, shortfalls, 3, allocated_nodes
 	)
 
-	assert_eq(result["priority"], ConstructionPriority.Priority.BUILD_PRODUCER_FIRST)
-	assert_eq(result["missing_structure_id"], "sagewerk")
+	assert_eq(result["priority"], ConstructionPriority.Priority.READY)
+	assert_eq(result["item_id"], "beam")
 	var producer_project := projects.find_project(CHUNK, ORIGIN, "sagewerk")
 	assert_not_null(producer_project)
-	assert_eq(producer_project.status, ConstructionProject.Status.PLANNED)
+	assert_eq(producer_project.status, ConstructionProject.Status.IN_PROGRESS)
 
 
 ## Flattened across quests too -- a settlement's real shortfalls come as one
 ## quest per producing household, each carrying its own "missing" list; the
 ## ranking must consider every entry across every quest, not just the first
-## quest's own list.
+## quest's own list. Same real log/wood stock + allocated_nodes as the test
+## above, for the same reason (clears the recursive Carpentry check on
+## "sagewerk" itself so this test isolates ranking, not the skill gate).
 func test_ranks_across_multiple_shortfall_quests_not_just_within_one():
 	var shortfalls := [
 		_shortfall([_missing("meat", 3.0)]),
 		_shortfall([_missing("beam", 100.0)]),
 	]
+	market.add_stock("log", 8.0)
+	market.add_stock("wood", 4.0)
+	var allocated_nodes := {"carpentry_1": true, "carpentry_2": true}
 
 	var result := SettlementBuildDecision.decide_and_advance(
-		projects, market, CHUNK, ORIGIN, "household:1", [], book, shortfalls, 3
+		projects, market, CHUNK, ORIGIN, "household:1", [], book, shortfalls, 3, allocated_nodes
 	)
 
-	assert_eq(result["missing_structure_id"], "sagewerk")
+	assert_eq(result["item_id"], "beam")
+	assert_not_null(projects.find_project(CHUNK, ORIGIN, "sagewerk"))
 
 
 func test_no_actionable_shortfall_when_every_gap_is_a_pure_material_issue():

@@ -722,9 +722,37 @@ what's ACTUALLY real right now:
     "Real, tested" account); "start new work" is real, tested (via directly
     -supplied shortfalls, the same explicit-dependencies-in shape this whole
     module already uses) and will fire the moment a real shortfall-producing
-    recipe requiring a structure exists — it is simply not the lived case
-    today, the same honesty this doc's `_stamp_house` partial-completion
-    entry below already carries for its own rarely-reached branch.
+    recipe requiring a SKILL-UNGATED structure exists — it is simply not the
+    lived case today, the same honesty this doc's `_stamp_house`
+    partial-completion entry below already carries for its own
+    rarely-reached branch.
+  - **A sharper version of the skill-gate limitation than first written,
+    found and fixed while merging this pass (2026-08-25)**: it recurses.
+    `SettlementBuildDecision` correctly resolves e.g. `"beam"`'s own missing
+    structure as `"sagewerk"` and hands it to `SettlementConstruction.
+    advance` as the candidate `blueprint_id` — but `advance` then asks
+    `ConstructionPriority.decide("sagewerk", ...)` whether building a
+    Sägewerk ITSELF is ready, and that recipe's OWN Carpentry-2.0 gate
+    blocks it too (with an empty `allocated_nodes`, exactly the same gate
+    the "Spare capacity" entry above already names) — so no project ever
+    actually gets queued for `"sagewerk"` specifically, not even `PLANNED`,
+    unless a real skill pool clears BOTH the direct recipe AND whatever
+    structure it resolves to. Two of this pass's own tests initially failed
+    for exactly this reason (expecting a real queued Sägewerk project with
+    no skill pool supplied) and were corrected to pass a real
+    `allocated_nodes` (`{"carpentry_1": true, "carpentry_2": true}`, the
+    same fixture `test_construction_priority.gd`'s own skill-gate test
+    already uses) — demonstrating the pipeline genuinely works end-to-end
+    once a skill pool exists, while a separate, dedicated test
+    (`test_a_carpentry_gated_recipe_is_never_queued_even_as_the_only_
+    shortfall`) keeps the honest without-skill-pool case real and covered.
+    Practical upshot: with today's real recipe book, `"sagewerk"` is the
+    ONLY concrete `requires_structure` target this pipeline could ever
+    resolve to, and it is unconditionally skill-gated — so "start new work"
+    cannot autonomously succeed in live play until a real settlement-level
+    skill/labor source exists, not merely "rarely," full stop. Storage is
+    real and skill-ungated but is never anyone's `requires_structure`
+    target, so it is never something this pipeline is asked to fix.
   - Also real, tested: the exact "Carpentry-gated recipe is never
     autonomously queued" limitation named in the "Spare capacity" entry
     above (`test_settlement_build_decision.gd`'s own dedicated case, not
