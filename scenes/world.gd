@@ -378,6 +378,12 @@ var _skill_window: SkillTreeWindow
 var _settings_overlay: SettingsOverlay
 var _license_gate_overlay: LicenseGateOverlay
 var _github_verify_overlay: GithubVerifyOverlay
+## True only once _ready() has actually built the world (chunk manager,
+## menus, etc.) -- false for the entire time a license-gate/GitHub-verify
+## overlay is showing instead. _process()/_unhandled_input() guard on
+## this so they don't run against not-yet-built state (see _ready()'s
+## own doc comment on the line that sets this true).
+var _world_ready := false
 var _main_menu: MainMenu
 var _menu_backdrop: ColorRect
 var _menu_background: TextureRect
@@ -560,11 +566,28 @@ func _ready() -> void:
 	# Play dev launch. Mirroring the same bypass here removes that noise
 	# without weakening anything for a real shipped build, where
 	# OS.has_feature("editor") is always false.
+	#
+	# Real discovery made live: OS.has_feature("editor") is true for ANY
+	# run of the Godot editor binary -- not only an actual Play-button
+	# click, confirmed by launching `Godot.exe --path <repo>` (no `-e`)
+	# with every candidate license.txt moved aside and reaching the main
+	# menu anyway. That means the license gate/GitHub-verify UI can never
+	# be exercised via a raw dev launch of this binary, only by a real
+	# export (which has no "editor" feature at all, so is unaffected by
+	# any of this). `--force-license-check` (a user arg after `--`, e.g.
+	# `Godot.exe --path <repo> -- --force-license-check`) opts a dev
+	# launch back into the real check for testing the gate itself,
+	# without touching SelfIntegrity (which can never pass here anyway --
+	# there's no exported .pck to hash while running raw project files,
+	# so forcing it would just always hard-quit, not usefully test
+	# anything) or changing anything for a real shipped build, which
+	# never has this flag passed and never has the editor binary at all.
+	var force_license_check := "--force-license-check" in OS.get_cmdline_user_args()
 	if not OS.has_feature("editor"):
 		SelfIntegrity.require_verified()
 	var license_result: Dictionary = (
 		{"licensed": true, "product_mask": LicenseGate.product_mask, "github_user_id": LicenseGate.github_user_id, "reason": ""}
-		if OS.has_feature("editor")
+		if OS.has_feature("editor") and not force_license_check
 		else LicenseGate.check_licensed()
 	)
 	if not license_result.licensed:
@@ -580,6 +603,16 @@ func _ready() -> void:
 		var identity_ok: bool = await _verify_github_identity(license_result.github_user_id)
 		if not identity_ok:
 			return
+
+	# Real bug found live: _process()/_unhandled_input() run every frame
+	# regardless of whether _ready() returned early above -- before this
+	# flag existed, an unlicensed/unverified boot's early return still
+	# left the license/GitHub-verify overlay's screen crashing every
+	# frame on _chunk_manager (built further below) being null, via
+	# _process()'s step_water_disturbances() call. Both callbacks below
+	# now no-op until this is true, set only once everything they touch
+	# has actually been built.
+	_world_ready = true
 
 	# Seeds SecretD20's OWN dedicated RandomNumberGenerator -- see that
 	# module's own doc comment for why this instance is never shared with
@@ -1151,14 +1184,37 @@ func _show_license_gate() -> void:
 ## re-reads the now-valid file, and this time the real world builds normally.
 ## An invalid key just reports back; the player can try again without losing
 ## anything (nothing else in the world has been built yet at this point).
+##
+## Real bug found live: this used to set the status label text and call
+## reload_current_scene() in the very same frame -- reported back as
+## "hangs a lot after verify and save ... appears stuck", because the
+## confirmation text was queued to draw but reload_current_scene()'s real
+## synchronous work started before the engine ever presented that frame,
+## so nothing was ever visibly shown before the freeze. Same root cause
+## and same fix _show_loading_overlay's own doc comment already documents
+## for every OTHER long synchronous call in this file: await two frames
+## (not one -- see that doc comment for why one isn't reliably enough)
+## after showing something, before starting the long call. This does NOT
+## make the reload itself faster or animate through it -- reload_current_scene()
+## is one opaque synchronous call with no incremental unit to await
+## mid-way through, so the loading screen still freezes on this one frame
+## for the reload's real duration, the same documented limitation
+## LoadingOverlay's own doc comment accepts for chunk-loading before
+## update_with_progress existed. What this fixes is the confirmation
+## never painting AT ALL first, not the freeze itself.
 func _on_license_gate_verify_requested(code: String) -> void:
 	var result := LicenseGate.check_licensed(code)
-	if result.licensed:
-		LicenseStore.write_code(LicenseStore.default_candidate_paths(), code)
-		_license_gate_overlay.show_status("Valid! Restarting...")
-		get_tree().reload_current_scene()
-	else:
+	if not result.licensed:
 		_license_gate_overlay.show_status("That key isn't valid. Check for typos and try again.")
+		return
+	LicenseStore.write_code(LicenseStore.default_candidate_paths(), code)
+	var loading := LoadingOverlay.new()
+	loading.theme = _ui_theme
+	_ui.add_child(loading)
+	loading.show_with_text("Valid! Restarting the game...")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	get_tree().reload_current_scene()
 
 
 ## The identity-verification half of a personal/GitHub-bound key (see
@@ -2283,6 +2339,8 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if not _world_ready:
+		return
 	if event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
 		_dev_console.toggle()
 	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):
@@ -3686,6 +3744,8 @@ const MAX_GROUND_ITEMS := 80
 
 
 func _process(delta: float) -> void:
+	if not _world_ready:
+		return
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
 	# its ring actually expands and fades -- every frame, every client, not
 	# gated behind _owns_ecosystem_simulation() like the simulation steps

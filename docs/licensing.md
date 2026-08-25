@@ -569,18 +569,64 @@ Implemented and live-wired on `main`:
     production `LicenseGate` in both single-line and real-multi-line-
     pasted form.
 
+- **Real discovery + two real bugs found live testing the boot flow
+  itself, not just the licensing logic:**
+  - `OS.has_feature("editor")` is true for ANY run of the Godot EDITOR
+    binary -- not only an actual Play-button click, confirmed by
+    launching `Godot.exe --path <repo>` (no `-e`) with every candidate
+    `license.txt` moved aside and reaching the main menu anyway. This
+    means the license-gate/GitHub-verify UI can never be exercised via a
+    raw dev launch of the editor binary, only by a real export (which
+    has no "editor" feature at all). `world.gd` now reads a
+    `--force-license-check` user arg (after `--`, e.g. `Godot.exe --path
+    <repo> -- --force-license-check`) to opt a dev launch back into the
+    real check for testing the gate itself -- deliberately does NOT
+    touch `SelfIntegrity` (which can never pass in this launch mode
+    anyway, no exported `.pck` to hash) or change anything for a real
+    shipped build, which never has this flag passed and never has the
+    editor binary at all.
+  - `_process()`/`_unhandled_input()` run every frame regardless of
+    whether `_ready()` returned early for the license-gate/GitHub-verify
+    path -- before this was fixed, showing the gate crashed every single
+    frame on `_chunk_manager` (built further down in `_ready()`) being
+    null, via `_process()`'s `step_water_disturbances()` call. Both now
+    no-op via a `_world_ready` flag, set true only once `_ready()`
+    actually finishes building the world.
+  - The post-verify confirmation ("Valid! Restarting...") and
+    `reload_current_scene()` used to run in the same frame -- reported
+    live as "hangs a lot after verify and save ... appears stuck",
+    because the confirmation text was queued to draw but the reload's
+    real synchronous work started before the engine ever presented that
+    frame. Fixed with the exact same documented "await two frames before
+    a long synchronous call" pattern `_show_loading_overlay`'s own doc
+    comment already established elsewhere in this file, reusing
+    `LoadingOverlay` itself for visual consistency with every other
+    loading moment in the game. This does not make the reload faster or
+    animate through it -- `reload_current_scene()` is one opaque
+    synchronous call with no incremental unit to await mid-way through,
+    same documented limitation `LoadingOverlay` already accepts for
+    chunk-loading before `update_with_progress` existed. It fixes the
+    confirmation never painting at all, not the freeze itself.
+
 **Not done / left to the user:**
 
-1. **Enable Device Flow on the GitHub OAuth App.** A live request against
-   the real Client ID currently returns `device_flow_disabled` --
-   GitHub, Settings → Developer settings → OAuth Apps → this app → check
-   "Enable Device Flow" → Update Application. Nothing else blocks this;
-   the whole flow up to and including this toggle has been live-verified
-   against real GitHub endpoints.
+1. ✅ Device Flow is enabled on the OAuth App and the request/response
+   format has been live-verified against real GitHub endpoints
+   end-to-end (device code issued, polling, correct `expired`/`denied`
+   detection on real responses). What's still unconfirmed: the
+   **Authorize button appeared disabled/unclickable** on a real attempt --
+   most likely cause is an organization-level "third-party application
+   access policy" restriction (Settings → the org → Third-party Access →
+   this app needs an admin to approve it before ANY member, including
+   the app's own creator, can authorize it). Worth checking there before
+   assuming a code bug -- six live attempts all failed only at the
+   literal human-approval step, never at code generation, polling, or
+   response parsing, which have each been independently proven correct
+   against the real API multiple times.
 2. Mint and test a real personal key bound to an actual player's GitHub
-   account (the `octocat` test above only verified minting + structural
-   verification, not a real interactive approval, since that step
-   requires a human in a real browser).
+   account with a real interactive approval completing end to end (the
+   `octocat` test only verified minting + structural verification, not a
+   completed approval).
 
 **Done** (steps 1-3 of what was originally left to the user):
 
