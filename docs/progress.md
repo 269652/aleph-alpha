@@ -3254,6 +3254,39 @@ green tests. One inline correction made while cross-checking: the Handheld
 Battle entry's test count above was pinned at 20; the actual, current
 `test_handheld_battle.gd` has 22 (fixed above, not re-litigated further).
 
+**Merged to `main` (2026-08-25).** Per CLAUDE.md's "merge to main before
+calling a feature done" rule: `main` had moved 33 commits since
+`feature/easter-eggs` branched (Sägewerk/timber-construction, storage &
+logistics, Wayfinding & citizenship instruments, licensing work), with real
+conflicts in `scenes/world.gd` (both sides added new console-command match
+arms and helper functions in the same spot), `creature_info.gd`/
+`procedural_animal_sprite.gd` (both sides added new species — main's own
+independent `wolf` wiring landed at the same time as this branch's cameo
+species; combining them for free closed a pre-existing gap this doc had
+been carrying — see the Handheld Creature-Battler entry above, which
+previously described wolf rendering as a generic tan silhouette; that note
+is now stale and has been corrected there), and `item_catalog.gd` (both
+sides added new item rows). All resolved by hand (additive combination in
+every case, nothing actually competing for the same behavior), then
+re-verified: 21 easter-egg test files (242 tests) plus 9 heavily-shared
+files this branch touched (`test_creature_info.gd`, `test_animal_anatomy.gd`,
+`test_procedural_animal_sprite.gd`, `test_item_catalog.gd`,
+`test_world_persistence.gd`, `test_world_easter_egg_discovery.gd`,
+`test_creature_marker.gd`, `test_console_species.gd`,
+`test_creature_behavior.gd`, `test_illustrated_animal_sprite.gd`) all green
+— **31 scripts, 654 tests, 654 passing, 0 failures** — run directly against
+`main` after the merge landed (`git merge --ff-only`, a clean fast-forward
+once `main`'s own commits were folded into the branch first), not just in
+the isolated worktree. Separately, while chasing this merge, found and
+fixed an unrelated pre-existing break on `main`: `scenes/world.gd` already
+referenced a whole "Wayfinding" feature (Compass/MapProjection/Spyglass/
+WeatherForecast/SeasonAlmanac/FieldJournal) via `preload()`, but the actual
+source/test files had never been `git add`ed — only sitting untracked in
+one checkout — so a fresh clone of `main` could not parse `scenes/world.gd`
+at all. Fixed by committing those files by explicit path (see that commit's
+own message for the concurrent-session mechanics that made a first attempt
+at this land the wrong 39 files — since corrected).
+
 ### Electromagnetism (`concept/electromagnetism.md`)
 
 New concept doc (2026-08-24), extending `materials.md`'s existing (already
