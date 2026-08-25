@@ -486,13 +486,23 @@ what's ACTUALLY real right now:
   enough logs and wood but no carpenter would have been reported READY.
   `decide` now takes an optional `allocated_nodes` parameter (default
   empty) so a caller with a real skill pool can clear that gate; existing
-  callers/tests are unaffected by the default. Still no live settlement
-  caller — the "Settlement construction ledger" section above still
-  documents that `ConstructionProject`/`ConstructionProjectStore` don't
-  exist, so this remains the smallest real, tested slice demonstrating the
-  priority decision rather than a wired settlement-decision system.
+  callers/tests are unaffected by the default.
   Real, tested (`test_construction_priority.gd`), including the new
-  skill-gate case and a multi-hop structure+material case.
+  skill-gate case and a multi-hop structure+material case. (This entry
+  used to note `decide` had no live settlement caller yet -- see the next
+  bullet immediately below, which closes that gap.)
+- **`ConstructionPriority` now HAS a live settlement caller** (2026-08-25,
+  a further follow-up pass) — closes the gap this note used to describe.
+  `ConstructionPriority` also grew one small additive method,
+  `missing_structure_id` (same "does not change `decide`'s own signature or
+  behavior" shape `Quest.deeper_need_for` already established next to
+  `production_shortfall_quests_for`): for a `BUILD_PRODUCER_FIRST` result,
+  names the SPECIFIC structure id blocking it (or `""` for a skill-only
+  gate, or for an abstract multi-structure category like `"heat_source"`
+  that doesn't map to one concrete recipe — a named, honest limitation, see
+  its own test/doc comment) by reading the same `NeedResolver` walk
+  `decide` already runs. See the "Settlement construction ledger" section
+  below for the real, tested caller this feeds.
 
 ## Interaction with other docs
 
@@ -615,12 +625,14 @@ shape a real abandoned timber building decays into.
 
 🚧 A scoped MVP slice is real: the Sägewerk worksite, its Lumberjack NPC,
 real timber building pieces, a real, generic, now-live end-to-end
-Storage/Logistics/dependency-chain-priority layer, and (2026-08-25
-follow-up pass) real statics — a support graph over the piece grid, with
-real grace-period collapse and material drop-back. Everything else this
-doc describes (withering, the settlement construction ledger, offscreen
-catch-up, autonomous NPC house-building) is still ⬜, exactly as specified
-below — deliberately left alone this pass, not silently dropped.
+Storage/Logistics/dependency-chain-priority layer, (2026-08-25 follow-up
+pass) real statics — a support graph over the piece grid, with real
+grace-period collapse and material drop-back, and (a further 2026-08-25
+follow-up pass) the settlement construction ledger and
+`ConstructionPriority.decide`'s first real, live caller. Everything else
+this doc describes (withering, offscreen catch-up, autonomous NPC
+house-building beyond gathering) is still ⬜, exactly as specified below —
+deliberately left alone this pass, not silently dropped.
 
 - ✅ **The Sägewerk worksite** — the doc's own generic "sawpit/hewing-block"
   prop, named and built concretely as `sagewerk` (`item_catalog.gd`'s
@@ -768,9 +780,92 @@ below — deliberately left alone this pass, not silently dropped.
   shaping progress) is not persisted across a chunk unload/reload either —
   a real, documented gap (see `docs/progress.md`), the same class of
   limitation geology's mined-tunnel state already has.
-- ⬜ **Settlement construction ledger** (`ConstructionProject`,
-  `ConstructionProjectStore`, `InstitutionFormation`-style hysteresis on
-  whether a household starts building) — not built.
+- ✅ **Settlement construction ledger** (2026-08-25, a further follow-up
+  pass) — `ConstructionProject`/`ConstructionProjectStore`
+  (`src/emergence/`), mirroring `Household`/`HouseholdStore`'s own real
+  shape and idempotent-creation/`to_dicts`/`from_dicts` contract exactly:
+  a project is keyed deterministically off its own site (chunk_coord +
+  footprint origin) and `blueprint_id` (a real `CraftingRecipeBook` recipe
+  id, not a second vocabulary), carries a real `PLANNED`/`IN_PROGRESS`/
+  `COMPLETE`/`ABANDONED` status, `labor_hours_accumulated`, and
+  `reserved_material`. `ConstructionProjectStore.complete_project` calls
+  the already-correct `HouseholdStore.grant_property(household_id,
+  "house_<chunk>_<origin>")` unchanged, per this section's own "Ownership"
+  paragraph. `ConstructionStartHysteresis`
+  (`src/emergence/construction_start_hysteresis.gd`) is
+  `InstitutionFormation`'s own asymmetric hysteresis PATTERN applied to a
+  real number instead of shared FULFILLED-contract counts: local material
+  stock crossing a blueprint recipe's own input requirement to start,
+  dropping WELL below it (a test-pinned `ABANDON_FRACTION`, not a fixed
+  unit gap, since a recipe's own requirement varies wildly by blueprint)
+  to abandon — its own small, fresh module, not a reuse of
+  `InstitutionFormation` itself (contract-specific).
+
+  **The live wiring**: `SettlementConstruction.advance`
+  (`src/emergence/settlement_construction.gd`) is `ConstructionPriority.
+  decide`'s first real, live caller (closing this doc's own
+  previously-named gap) — a static-function module, the same explicit-
+  dependencies-in shape `Quest.gd`'s `production_shortfall_quests_for`/
+  `deeper_need_for` already use. Given a settlement's real `VillageMarket`
+  stock, its present structure ids, and a candidate blueprint to build
+  next at a real site, it calls the real `ConstructionPriority.decide` and
+  acts on all three real outcomes: **READY** starts (or continues) a real
+  `ConstructionProject`, gated by `ConstructionStartHysteresis` rather than
+  an eyeballed assumption that `decide()==READY` always implies the
+  recipe's own direct inputs are covered (a real edge case this gate
+  catches: `decide`'s own "already-stocked output" shortcut can report
+  READY off an already-sufficient OUTPUT stock with the recipe's own INPUT
+  completely absent — the gate refuses to draw down material that isn't
+  really there), and on passing draws the recipe's real inputs down from
+  `VillageMarket` (via a new `VillageMarket.remove_stock`, mirroring
+  `StructureStock.remove_stock`'s own all-or-nothing contract exactly),
+  recording them as the project's own `reserved_material`. **
+  BUILD_PRODUCER_FIRST** is this section's own actual payoff, and
+  `production_chains.md`'s "a resolver, not a solver" pillar's real
+  consequence made concrete: `ConstructionPriority.missing_structure_id`
+  names the specific blocking structure, and a real `PLANNED`
+  `ConstructionProject` is queued for THAT producer, ahead of the project
+  that needed it (idempotent — a repeat call while still missing returns
+  the same queued project) — a missing SKILL (no structure to queue) is
+  surfaced plainly instead of silently no-op'ing. **SHORTFALL** never
+  mutates `VillageMarket` (the existing regional-trade/shortfall path
+  already covers a pure materials gap, per this section's own framing) —
+  its only real action is retiring an already-PLANNED (materials not yet
+  committed) project via `ConstructionStartHysteresis.should_abandon` when
+  local stock has genuinely collapsed well below the recipe's own
+  requirement; a project already `IN_PROGRESS` has already reserved what
+  it needs and is left alone regardless of how the SHARED stock pool reads
+  afterward (a real scenario this pass tests directly: a project's own
+  drawdown of the last shared units must not immediately read back as a
+  shortfall crash against itself).
+
+  **Named, honest limitations, not silently glossed over**: the queued
+  producer project's own footprint `origin` is bookkeeping, not real
+  siting — this pass does not build a placement/collision algorithm for
+  where a producer structure should actually go (explicitly out of scope,
+  same as the rest of this list's still-⬜ items below). `labor_hours_
+  accumulated` and `reserved_material` are real fields nothing yet
+  advances further once a project is `IN_PROGRESS` — that is `construction_
+  catchup.gd`'s own job (offscreen catch-up, still ⬜ below); this pass
+  builds the ledger and the live decision wiring, not the labor-accrual
+  loop that would carry a project to `COMPLETE` on its own. No persistence
+  wrapper (`ConstructionProjectStorePersistence`) or `EarthChunkManager`
+  save/load wiring exists yet — `to_dicts`/`from_dicts` are real and
+  tested in isolation (mirroring `HouseholdStore`'s own split) but nothing
+  currently calls them from a save path, the same "additive capability,
+  no live caller yet" honesty this doc's own `NeedResolver`/`Quest.
+  deeper_need_for` entries already carry. And per this doc's own explicit
+  scope for this pass: nothing here is wired into `VillageRenderer.
+  _stamp_house` or any chunk-generation call site — that migration stays
+  a documented future step (see "Known anti-pattern this doc replaces"
+  below), not attempted this pass. Real, tested:
+  `tests/unit/test_construction_project.gd`,
+  `tests/unit/test_construction_project_store.gd`,
+  `tests/unit/test_construction_start_hysteresis.gd`,
+  `tests/unit/test_settlement_construction.gd` (15 tests covering all
+  three `ConstructionPriority.Priority` outcomes end to end), plus the new
+  `missing_structure_id` cases in `test_construction_priority.gd` and the
+  new `remove_stock` cases in `test_village_market.gd`.
 - ⬜ **Multiple lumberjacks per settlement** — out of scope for this pass;
   today's model is exactly one worker per Sägewerk instance. Two Sägewerke
   close enough together may have their Lumberjacks compete for the same
@@ -795,9 +890,12 @@ below — deliberately left alone this pass, not silently dropped.
   (`EarthChunkManager._resync_logistics_for_sagewerk`, mirroring the
   Sägewerk/Lumberjack sync wiring), and `ConstructionPriority.decide` now
   calls the real, general `NeedResolver` instead of `Smelting.can_smelt`.
-  Still not live: nothing calls `ConstructionPriority.decide` from a real
-  settlement-decision system yet — that still needs
-  `ConstructionProject`/`ConstructionProjectStore`, which remain ⬜ below.
+  `ConstructionPriority.decide` now DOES have a real, live settlement
+  caller (2026-08-25, a further follow-up pass): `SettlementConstruction.
+  advance` (`src/emergence/settlement_construction.gd`) — see the
+  "Settlement construction ledger" section's own entry below for the full
+  account of `ConstructionProject`/`ConstructionProjectStore` and this
+  wiring, closing the gap this paragraph used to name.
   The previously-named constraint here (a Sägewerk pairing with only its
   single nearest Storage) is closed (2026-08-25): a Sägewerk now pairs
   with EVERY real Storage within `SAGEWERK_STORAGE_PAIR_RADIUS_TILES` (see
@@ -818,11 +916,14 @@ not reinvent:
 - `HouseholdStore.grant_property` (`src/emergence/household_store.gd`) —
   house ownership, already correct as-is.
 - `InstitutionFormation` (`src/emergence/institution_formation.gd`) — the
-  hysteresis-threshold *pattern* to reuse for "should this household start
-  building."
+  hysteresis-threshold *pattern* `ConstructionStartHysteresis`
+  (`src/emergence/construction_start_hysteresis.gd`) already reuses for
+  "should this household start building" (see Status).
 - `NpcProduction`/`VillageMarket` (`src/world/`) — the producer-occupation
   → yield → shared-stock pattern a `logger` occupation and lumber stockpile
-  should follow.
+  should follow. `VillageMarket.remove_stock` (real, see Status) is the
+  all-or-nothing draw-down `SettlementConstruction.advance` already uses
+  against it, mirroring `StructureStock.remove_stock`'s own contract.
 - `SettlementState` (`src/emergence/settlement_state.gd`) — the pure
   capacity-classifier shape a builder-count derivation should follow.
 - `Quest.production_shortfall_quests_for`/`Market.stock_of`
@@ -848,9 +949,19 @@ not reinvent:
   whenever a caller needs every real structure of a given id in range, not
   just the closest.
 - `ConstructionPriority` (`src/gameplay/construction_priority.gd`) — the
-  real, tested dependency-chain priority function; wire a settlement-decision
-  caller to it once one exists, and rewire its structure-gate check from
-  `Smelting.can_smelt` to the real `NeedResolver`.
+  real, tested dependency-chain priority function, rebuilt on the real
+  `NeedResolver`, and (see Status) now with a real live settlement caller,
+  `SettlementConstruction.advance`.
+- `ConstructionProject`/`ConstructionProjectStore`
+  (`src/emergence/construction_project.gd`,
+  `construction_project_store.gd`) — the real settlement construction
+  ledger (see Status); mirrors `Household`/`HouseholdStore`'s own shape and
+  idempotent-creation contract exactly.
+- `SettlementConstruction` (`src/emergence/settlement_construction.gd`) —
+  the real, tested live caller of `ConstructionPriority.decide` (see
+  Status); the entry point a future settlement-decision system (e.g. a
+  household's own "what should my village build next" loop) should call
+  rather than re-deriving this reasoning itself.
 
 **Known anti-pattern this doc replaces**: `VillageRenderer._stamp_house`
 currently stamps a complete house, instantly and for free, at settlement

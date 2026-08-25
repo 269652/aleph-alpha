@@ -139,3 +139,61 @@ func test_an_already_stocked_output_is_ready_even_with_no_input_material():
 	assert_eq(
 		priority.decide("log_to_balken", stock, [], book), ConstructionPriority.Priority.READY
 	)
+
+
+# -- missing_structure_id: the ADDITIVE capability the Settlement --------
+# -- construction ledger's own live integration (settlement_construction.gd)
+# -- needs to actually queue the missing producer's own project, per
+# -- docs/concept/timber_construction.md's "production_chains.md's own
+# -- real payoff... turns that named blocker into an action" framing. Does
+# -- NOT change decide's own signature/behavior -- every test above this
+# -- section is unaffected.
+
+func test_missing_structure_id_is_empty_for_an_unknown_recipe():
+	assert_eq(priority.missing_structure_id("not_a_real_recipe", {}, [], book), "")
+
+
+func test_missing_structure_id_is_empty_when_nothing_is_missing():
+	var stock := {"wood": 3}
+	assert_eq(priority.missing_structure_id("wooden_club", stock, [], book), "")
+
+
+## A pure material shortfall (no structure/skill need at all) still names
+## no structure -- that's exactly what SHORTFALL already means.
+func test_missing_structure_id_is_empty_for_a_pure_material_shortfall():
+	var stock := {"wood": 1}
+	assert_eq(priority.missing_structure_id("wooden_club", stock, [], book), "")
+
+
+## iron_ingot's own requires_structure is the ABSTRACT "heat_source"
+## category (see _HEAT_SOURCE_STRUCTURE_IDS's own doc comment) -- decide's
+## own translation is a many-to-one mapping (campfire OR furnace both
+## satisfy it), so the real NeedResolver need this reads back out names
+## that same abstract category, not one concrete recipe id. A caller
+## queuing a real project off this value needs a real disambiguation step
+## for an abstract category like this one -- honestly out of scope here
+## (see settlement_construction.gd's own real, concrete queuing case,
+## log_to_balken -> "sagewerk", a structure_id that IS a real recipe id).
+func test_missing_structure_id_names_the_real_missing_structure():
+	var stock := {"iron_ore": 5, "coal": 5}
+	assert_eq(priority.missing_structure_id("iron_ingot", stock, [], book), "heat_source")
+
+
+func test_missing_structure_id_is_empty_once_the_structure_is_present():
+	var stock := {"iron_ore": 5, "coal": 5}
+	assert_eq(priority.missing_structure_id("iron_ingot", stock, ["furnace"], book), "")
+
+
+## A missing SKILL (not a structure) reports no structure to build --
+## nothing spatial to queue for a skill gate.
+func test_missing_structure_id_is_empty_for_a_skill_only_gate():
+	var stock := {"log": 8, "wood": 4}
+	assert_eq(priority.missing_structure_id("sagewerk", stock, [], book), "")
+
+
+## Multi-hop: log_to_balken's own top-level requires_structure names
+## "sagewerk" directly, even with the material short too (same fixture as
+## the multi-hop decide() test above).
+func test_missing_structure_id_names_a_multi_hop_recipes_own_structure():
+	var stock := {"log": 0}
+	assert_eq(priority.missing_structure_id("log_to_balken", stock, [], book), "sagewerk")

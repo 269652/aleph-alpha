@@ -82,6 +82,41 @@ func decide(
 	return Priority.SHORTFALL
 
 
+## ADDITIVE capability, same shape as Quest.deeper_need_for (does not
+## change decide's own signature or behavior; every existing caller/test is
+## unaffected): for a recipe whose decide() reports BUILD_PRODUCER_FIRST,
+## names the SPECIFIC missing structure -- or "" when the block is a
+## missing SKILL instead (or when nothing is missing at all) -- so a real
+## caller (the Settlement construction ledger's own live integration
+## function, see docs/concept/timber_construction.md) can queue a real
+## project for that missing PRODUCER structure ahead of the one that
+## needed it, per that doc's "production_chains.md's own real payoff...
+## the first real caller that actually turns that named blocker into an
+## action" framing. Only the FIRST structure need in NeedResolver's walk is
+## returned -- this project's real recipe graph is at most 1-2 hops deep
+## today (see NeedResolver's own MAX_DEPTH comment), so there is no real
+## multi-structure scenario yet to choose an ordering for.
+func missing_structure_id(
+	recipe_id: String,
+	local_stock: Dictionary,
+	present_structure_ids: Array,
+	recipe_book,
+	allocated_nodes: Dictionary = {}
+) -> String:
+	if not recipe_book.recipe_ids().has(recipe_id):
+		return ""
+
+	var output_item_id: String = recipe_book.recipe_output(recipe_id)["item_id"]
+	var nearby_structures := _nearby_structures_dict(present_structure_ids)
+	var needs: Array = NeedResolver.new(recipe_book).resolve(
+		output_item_id, local_stock, allocated_nodes, nearby_structures
+	)
+	for need in needs:
+		if need["kind"] == "structure":
+			return need["structure_id"]
+	return ""
+
+
 ## Expands a flat list of present structure ids into the nearby_structures
 ## Dictionary NeedResolver expects -- every present id maps true, PLUS
 ## "heat_source" -> true if a campfire or furnace is among them (see

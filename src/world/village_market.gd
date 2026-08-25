@@ -41,6 +41,21 @@ func add_stock(item_id: String, amount: float) -> void:
 	stock[item_id] = stock.get(item_id, 0.0) + amount
 
 
+## Withdraws `amount` of item_id -- the real draw-down docs/concept/
+## timber_construction.md's "Settlement construction ledger" section needs
+## ("VillageMarket.stock... it holds lumber the same way [as food]"), e.g.
+## the Sagewerk/Storage beam and plank stock a real ConstructionProject
+## reserves against on start. All-or-nothing, mirroring
+## StructureStock.remove_stock's own contract exactly: fails (false, no
+## mutation) if less than `amount` is present, rather than silently
+## withdrawing a partial amount.
+func remove_stock(item_id: String, amount: float) -> bool:
+	if stock.get(item_id, 0.0) < amount:
+		return false
+	stock[item_id] = stock.get(item_id, 0.0) - amount
+	return true
+
+
 func total_stock() -> float:
 	var total := 0.0
 	for item_id in stock:
