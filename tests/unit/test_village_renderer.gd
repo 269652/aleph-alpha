@@ -10,6 +10,9 @@ const SettlementGenerator = preload("res://src/world/settlement_generator.gd")
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
+const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
+const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
@@ -673,3 +676,191 @@ func test_a_world_with_no_such_method_does_not_crash():
 		parent, chunk_coord, chunk_coord * CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "grassland"
 	)
 	pass_test("spawning with no world at all should not crash")
+
+
+# -- retiring the "houses stamp instantly, for free" anti-pattern (see
+# docs/concept/timber_construction.md's "Known anti-pattern this doc
+# replaces") -------------------------------------------------------------
+#
+# _stamp_house now computes a real completion fraction from the SAME
+# already-tested ConstructionLabor/ConstructionCatchup math the rest of the
+# timber-construction pipeline uses, applied as a bare, un-persisted
+# CALCULATION (never a real ConstructionProject/ConstructionProjectStore
+# entry -- that ledger uses a different house-id scheme keyed by footprint
+# origin, see construction_project.gd, and record_settlement_founded_if_new
+# already grants house property under ITS OWN chunk+villager-index scheme;
+# creating a second ledger entry here would produce two divergent ownership
+# records for the same real house).
+
+func test_construction_completion_fraction_matches_the_real_catchup_and_labor_math():
+	var pieces := {
+		Vector2i(0, 0): "wood_floor",
+		Vector2i(1, 0): "wood_wall",
+	}
+	var required := ConstructionLabor.labor_hours_required_for_pieces(pieces)
+	var elapsed := ConstructionCatchup.MAX_CATCHUP_DAYS * ConstructionCatchup.SECONDS_PER_DAY
+	var caught_up := ConstructionCatchup.new().advance(
+		{"labor_hours_accumulated": 0.0, "labor_hours_required": required},
+		elapsed,
+		{"builder_count": 2.0}
+	)
+	var expected_fraction: float = float(caught_up.get("labor_hours_accumulated", 0.0)) / required
+
+	assert_eq(renderer._construction_completion_fraction(pieces, 2), expected_fraction)
+
+
+func test_construction_completion_fraction_treats_an_empty_piece_set_as_fully_complete():
+	assert_eq(renderer._construction_completion_fraction({}, 0), 1.0)
+
+
+## Every real named blueprint, in both material tiers, built with a real
+## HouseBlueprint -- against the settlement generator's own real population
+## (SettlementGenerator.POPULATION villagers) -- must clear a completion
+## fraction of 1.0. This is the real regression-safety proof behind "fraction
+## < 1.0 is a reachable code path but essentially never fires at today's
+## typical settlement sizes" (see docs/concept/timber_construction.md).
+func test_every_real_blueprint_reaches_full_completion_at_the_real_settlement_population():
+	var house_blueprint := HouseBlueprint.new()
+	for blueprint_id in HouseBlueprint.BLUEPRINT_IDS:
+		for material in [BuildingPiece.MATERIAL_WOOD, BuildingPiece.MATERIAL_STONE]:
+			var pieces := house_blueprint.build(blueprint_id, hash(blueprint_id + material), material)
+			var fraction: float = renderer._construction_completion_fraction(pieces, SettlementGenerator.POPULATION)
+			assert_true(
+				fraction >= 1.0,
+				"%s (%s) should be fully complete at %d real villagers, got %s" % [
+					blueprint_id, material, SettlementGenerator.POPULATION, fraction
+				]
+			)
+
+
+## Deliberately far larger than any real HouseBlueprint entry -- the biggest
+## real one (manor_L_wide, 7x6 minus a 3x2 notch) tops out around three dozen
+## non-roof cells (see the regression proof above) -- so that a single
+## builder's own MAX_CATCHUP_DAYS-capped labor budget (960 hours: see
+## ConstructionCatchup.HOURS_PER_BUILDER_PER_DAY * MAX_CATCHUP_DAYS) genuinely
+## falls short of it: 200 floor cells, 200 load-bearing wall cells, 99 window
+## cells and 1 door cell, 500 non-roof cells total.
+func _oversized_pieces() -> Dictionary:
+	var pieces := {}
+	for x in 200:
+		pieces[Vector2i(x, 0)] = "wood_floor"
+	for x in 200:
+		pieces[Vector2i(x, 1)] = "wood_wall"
+	pieces[Vector2i(0, 2)] = "wood_door"
+	for x in range(1, 100):
+		pieces[Vector2i(x, 2)] = "wood_window"
+	return pieces
+
+
+## A test double for HouseBlueprint that hands _stamp_house a fixed, caller-
+## supplied piece/roof set regardless of occupation/genome/seed -- lets the
+## partial-completion tests below drive _stamp_house's real code end to end
+## against the deliberately oversized set above, which no real seeded
+## HouseBlueprint pick could ever produce. Extends the real HouseBlueprint
+## (rather than a bare RefCounted double) so it satisfies VillageRenderer's
+## own statically-typed `_house_blueprint` field.
+class FakeHouseBlueprint extends HouseBlueprint:
+	var pieces: Dictionary
+	var roofs: Dictionary
+	func choose_blueprint_id(_occupation: String, _genome, _seed_value: int) -> String:
+		return "fake_oversized"
+	func footprint_for(_blueprint_id: String) -> Vector2i:
+		return Vector2i(1, 1)
+	func build(_blueprint_id: String, _seed_value: int, _material: String = "wood") -> Dictionary:
+		return pieces
+	func build_roofs(_blueprint_id: String, _seed_value: int, _material: String = "wood") -> Dictionary:
+		return roofs
+
+
+func test_a_single_builder_against_an_oversized_piece_set_produces_a_partial_fraction():
+	var pieces := _oversized_pieces()
+	var required := ConstructionLabor.labor_hours_required_for_pieces(pieces)
+	assert_gt(
+		required, 960.0,
+		"precondition: the oversized set must exceed one builder's real MAX_CATCHUP_DAYS budget"
+	)
+
+	var fraction: float = renderer._construction_completion_fraction(pieces, 1)
+	assert_gt(fraction, 0.0)
+	assert_lt(fraction, 1.0)
+
+
+## The partial subset follows the doc's own real historical build order:
+## floor first, then load-bearing walls, then infill door/window cells --
+## deterministic (no RandomNumberGenerator), a proportional prefix sized by
+## the completion fraction.
+func test_partial_pieces_is_a_deterministic_prefix_in_floor_then_wall_then_infill_order():
+	var pieces := _oversized_pieces()
+	var fraction: float = renderer._construction_completion_fraction(pieces, 1)
+	var ordered: Array = renderer._construction_install_order(pieces)
+	assert_eq(ordered.size(), pieces.size())
+	var expected_count := int(floor(fraction * ordered.size()))
+	assert_gt(expected_count, 0, "precondition: this scenario should still yield a real, non-empty partial slice")
+
+	var partial: Dictionary = renderer._partial_pieces(pieces, fraction)
+	assert_eq(partial.size(), expected_count)
+	for i in expected_count:
+		var cell: Vector2i = ordered[i]
+		assert_true(partial.has(cell))
+		assert_eq(partial[cell], pieces[cell])
+		var category := BuildingPiece.category_of(pieces[cell])
+		if i < 200:
+			assert_eq(category, BuildingPiece.CATEGORY_FLOOR, "the first 200 install-order cells should be floor")
+		elif i < 400:
+			assert_eq(category, BuildingPiece.CATEGORY_WALL, "cells 200-399 should be the load-bearing walls")
+		else:
+			assert_true(
+				category == BuildingPiece.CATEGORY_DOOR or category == BuildingPiece.CATEGORY_WINDOW,
+				"cells 400+ should be infill door/window pieces"
+			)
+
+
+func test_stamp_house_stamps_only_the_partial_prefix_and_no_roof_when_completion_is_below_one():
+	var world := StubWorld.new()
+	var fake_blueprint := FakeHouseBlueprint.new()
+	fake_blueprint.pieces = _oversized_pieces()
+	fake_blueprint.roofs = {Vector2i(0, 0): "wood_roof"}
+	renderer._house_blueprint = fake_blueprint
+
+	var npc := NpcIdentity.new(42)
+	var result: Dictionary = renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 1)
+
+	assert_eq(world.stamp_calls.size(), 1)
+	var call = world.stamp_calls[0]
+	var fraction: float = renderer._construction_completion_fraction(fake_blueprint.pieces, 1)
+	var ordered: Array = renderer._construction_install_order(fake_blueprint.pieces)
+	var expected_count := int(floor(fraction * ordered.size()))
+	assert_lt(expected_count, ordered.size(), "precondition: this scenario must genuinely be partial")
+
+	assert_eq(call.ground_pieces.size(), expected_count)
+	assert_true(call.roof_pieces.is_empty(), "no roof until every non-roof piece is placed")
+
+	# The door position must be real and sensible even though the door cell
+	# (index 400 in the install order -- see _oversized_pieces) is not yet
+	# among the stamped pieces at this completion level.
+	var door_tile := Vector2i(floori(result.door.x / TILE_SIZE), floori(result.door.y / TILE_SIZE))
+	assert_eq(door_tile - call.origin_tile, Vector2i(0, 2), "home_position's door should still be the blueprint's real door cell")
+
+
+## At (or above) 100% completion, _stamp_house's behavior is UNCHANGED from
+## before this pass: the full pieces and full roofs get stamped, exactly as
+## every other test in this file (all exercised at
+## SettlementGenerator.POPULATION real villagers) already proves. This test
+## pins that explicitly against the oversized set with a builder_count large
+## enough to finish it, as a direct fraction-crosses-1.0 boundary check.
+func test_stamp_house_stamps_the_full_set_once_completion_reaches_one():
+	var world := StubWorld.new()
+	var fake_blueprint := FakeHouseBlueprint.new()
+	fake_blueprint.pieces = _oversized_pieces()
+	fake_blueprint.roofs = {Vector2i(0, 0): "wood_roof"}
+	renderer._house_blueprint = fake_blueprint
+
+	var npc := NpcIdentity.new(42)
+	# Comfortably many builders -- required (a bit over 1200 hours, see the
+	# precondition above) is trivially covered.
+	renderer._stamp_house(Vector2i(3, 3), 0, Vector2(100, 100), npc, TILE_SIZE, world, 50)
+
+	assert_eq(world.stamp_calls.size(), 1)
+	var call = world.stamp_calls[0]
+	assert_eq(call.ground_pieces.size(), fake_blueprint.pieces.size())
+	assert_eq(call.roof_pieces.size(), fake_blueprint.roofs.size())
