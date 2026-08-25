@@ -10,6 +10,7 @@ const TileTargeting = preload("res://src/gameplay/tile_targeting.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
+const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ExperienceTrack = preload("res://src/gameplay/experience_track.gd")
@@ -52,6 +53,7 @@ const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
+const InputLatch = preload("res://src/gameplay/input_latch.gd")
 const Throwable = preload("res://src/gameplay/throwable.gd")
 const ChargeMeter = preload("res://src/gameplay/charge_meter.gd")
 const HeldItemThrow = preload("res://src/gameplay/held_item_throw.gd")
@@ -410,6 +412,23 @@ var _last_pickup_input_state := false
 var _last_kick_input_state := false
 var _last_stash_input_state := false
 
+## The rising-edge ("tap") actions: one discrete thing per press, so losing
+## the press loses the whole action. These are the ones latched on the input
+## EVENT (see _unhandled_input / InputLatch), because a tap shorter than one
+## rendered frame is never visible to a poll of Input.is_action_pressed at
+## all -- reported live at 6-8 FPS, a 140ms tap silently swallowed.
+##
+## Deliberately NOT in here: block, pickup, fish, lasso and mount. Those are
+## read as a held LEVEL -- guard up, the pickup charge meter, the cast and
+## reel, the rope -- and latching a level would turn a hold into one tap.
+const MOMENTARY_ACTIONS := ["attack", "build", "destroy", "kick", "stash", "talk", "trade"]
+
+## Rising edges seen by the input event but not yet acted on by the physics
+## step (see _unhandled_input and _rising_edge). Local-input side only: the
+## authority's view of a REMOTE client's actions still arrives as the
+## replicated _pending_*_pressed levels below.
+var _input_latch := InputLatch.new()
+
 ## Authority-side: last input direction received from the owning client (or
 ## read directly from Input, in the no-networking singleplayer fallback).
 var _pending_input_direction := Vector2.ZERO
@@ -522,6 +541,93 @@ func _controlled_locally() -> bool:
 	return _is_local_player_instance() and is_multiplayer_authority() and not ConsoleFocus.is_open
 
 
+## Momentary actions latch on the input EVENT, not on a poll of the level.
+##
+## Godot delivers accumulated input once per rendered frame. At 6-8 FPS the
+## gap between two flushes is 125-165ms, so a tap shorter than that has its
+## press AND its release delivered in the same flush: every physics tick that
+## polls Input.is_action_pressed sees false, and the press is not delayed, it
+## is ERASED. Reported live during a playtest: a 140ms tap silently
+## swallowed. Making the game faster narrows that window but never closes it,
+## which is why this is an input bug in its own right and not a symptom of
+## the frame rate.
+##
+## The EVENTS still arrive, whatever the frame rate. So the rising edge is
+## recorded here and consumed by the physics step (see _rising_edge), which
+## makes the poll rate irrelevant.
+##
+## _unhandled_input rather than _input on purpose: an event a focused Control
+## has already used -- typing into the dev console, driving a menu -- never
+## reaches here at all, which is the behaviour the polled path could only
+## approximate with the ConsoleFocus flag (checked below as well, since the
+## polled half still needs it).
+##
+## Gated on _is_local_player_instance, not _controlled_locally: a non-
+## authority client's own avatar reads the keyboard too (it forwards the
+## result to the server, see _physics_process), and it needs the same latch
+## or the tap is erased one hop earlier instead.
+func _unhandled_input(event: InputEvent) -> void:
+	if not _is_local_player_instance() or ConsoleFocus.is_open:
+		return
+	for action in MOMENTARY_ACTIONS:
+		# has_action guard: there is no static [input] section in
+		# project.godot (World._apply_keybindings registers the map at
+		# runtime), so an isolated Player may legitimately be running before
+		# every action exists.
+		if InputMap.has_action(action) and event.is_action_pressed(action):
+			_input_latch.press(action)
+
+
+## True on the rising edge of a momentary action, from EITHER source: a press
+## the input event latched, or the polled level going false->true.
+##
+## Both halves are kept deliberately. The latch is the only thing that sees a
+## tap shorter than one rendered frame (see _unhandled_input). The poll is
+## still what fires for a key genuinely held down across a tick, what fires
+## when the event was consumed elsewhere before reaching _unhandled_input,
+## and what the authority uses for a REMOTE client, whose actions arrive as
+## the replicated _pending_*_pressed level rather than as local events.
+##
+## The two cannot double-fire: a real press latches once and the latch is
+## cleared by the consume here, while the level half only fires on the tick
+## the level itself changes.
+##
+## The consume is UNCONDITIONAL, and only acting on it is gated on
+## _controlled_locally. A latch that is looked at but not cleared banks the
+## press indefinitely -- and "remembered forever" is a failure mode the
+## polled read never had. Concretely: press T, the dev console takes focus
+## before this tick, the press is not acted on (correctly), and then thirty
+## seconds later the console closes and the player greets an NPC out of
+## nowhere. Taking it and discarding it means a press the world never got to
+## act on is DROPPED, which is what letting go of focus should mean.
+## (On the authority simulating a REMOTE player this consume is a no-op:
+## _unhandled_input only latches for the local instance, so that node's latch
+## is always empty and its actions arrive as _pending_*_pressed instead.)
+func _rising_edge(action: String, pressed_now: bool, pressed_last_tick: bool) -> bool:
+	var latched := _input_latch.consume(action)
+	return (latched and _controlled_locally()) or (pressed_now and not pressed_last_tick)
+
+
+## What a non-authority client reports to the server for a momentary action
+## this tick (see _physics_process's _submit_* rpcs): the polled level OR a
+## press the event latch caught. Without the latch half, a tap that never
+## shows up in the level is never sent at all, so the server's own
+## rising-edge detector cannot see it either -- the same erased tap, one hop
+## further away.
+##
+## Console focus is checked here for the same reason _controlled_locally
+## checks it on the authority side: this poll reads Input directly, which
+## Godot's Control focus system does not suppress, so a client typing "b"
+## into the dev console was otherwise forwarding a build to the server on
+## every keystroke. Like _rising_edge, the latch is still consumed first --
+## a press the console interrupted is dropped, never banked for later.
+func _local_momentary_input(action: String) -> bool:
+	var latched := _input_latch.consume(action)
+	if ConsoleFocus.is_open:
+		return false
+	return latched or Input.is_action_pressed(action)
+
+
 ## Registers WASD movement actions at runtime rather than hand-editing
 ## project.godot's input map (a hand-typed InputEventKey resource literal
 ## there is an easy way to silently corrupt the whole project file).
@@ -590,6 +696,12 @@ func _respawn() -> void:
 	modulate = Color.WHITE
 	_respawn_accumulator = 0.0
 	position = respawn_position
+	# Nothing pressed while dead should replay on the first live tick: the
+	# simulation steps that would have consumed those presses never ran (see
+	# _authority_step's early-out), so the latch would otherwise be holding
+	# them. The polled half has the same property for free -- it only ever
+	# reads the CURRENT level.
+	_input_latch.clear()
 
 
 func is_set_up() -> bool:
@@ -1129,9 +1241,9 @@ func _physics_process(delta: float) -> void:
 
 	if _is_local_player_instance() and not is_multiplayer_authority() and multiplayer.has_multiplayer_peer():
 		_submit_input.rpc_id(1, _read_local_input())
-		_submit_attack.rpc_id(1, Input.is_action_pressed("attack"))
-		_submit_build.rpc_id(1, Input.is_action_pressed("build"))
-		_submit_destroy.rpc_id(1, Input.is_action_pressed("destroy"))
+		_submit_attack.rpc_id(1, _local_momentary_input("attack"))
+		_submit_build.rpc_id(1, _local_momentary_input("build"))
+		_submit_destroy.rpc_id(1, _local_momentary_input("destroy"))
 
 
 ## Runs only on the authority (the server, or this same instance in the
@@ -1149,8 +1261,14 @@ func _authority_step(delta: float) -> void:
 	var tile := current_tile()
 	var water_result := _resolve_water_state(tile, delta)
 	current_mode = water_result.mode
+	# Overall condition (SurvivalMeters.fitness, driven by starving/
+	# dehydrated/cold) is a real movement debuff, not a dead meter -- see
+	# ConditionPenalty and docs/concept/survival.md's "Debuffs, not death".
 	current_speed_multiplier = (
-		water_result.speed_multiplier * _weather_speed_multiplier() * _terrain_speed_multiplier(tile)
+		water_result.speed_multiplier
+		* _weather_speed_multiplier()
+		* _terrain_speed_multiplier(tile)
+		* ConditionPenalty.speed_multiplier(survival.fitness)
 	)
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
@@ -1192,7 +1310,11 @@ func _authority_step(delta: float) -> void:
 ## Combined weather + exposure movement penalty (see WeatherModel /
 ## SurvivalMeters): rain and storm slow you, and being freezing slows you
 ## further (stiff, sluggish). 1.0 when the world isn't wired (isolated tests).
-const FREEZING_SPEED_PENALTY := 0.75
+##
+## The freezing magnitude is defined once, in ConditionPenalty, and shared:
+## the continuous condition slow deliberately reuses this already-committed
+## number rather than inventing a second one (see condition_penalty.gd).
+const FREEZING_SPEED_PENALTY := ConditionPenalty.WORST_SPEED_MULTIPLIER
 func _weather_speed_multiplier() -> float:
 	var m := 1.0
 	if _chunk_manager != null:
@@ -1255,7 +1377,7 @@ func _attack_step(delta: float) -> void:
 	var attack_pressed := (
 		Input.is_action_pressed("attack") if _controlled_locally() else _pending_attack_pressed
 	)
-	var just_pressed := attack_pressed and not _last_attack_input_state
+	var just_pressed := _rising_edge("attack", attack_pressed, _last_attack_input_state)
 	_last_attack_input_state = attack_pressed
 
 	# No swinging while swimming -- the weapon is stowed in the water (see
@@ -1799,7 +1921,7 @@ func _kick_step() -> void:
 	var kick_pressed := (
 		Input.is_action_pressed("kick") if _controlled_locally() else _pending_kick_pressed
 	)
-	var just_pressed := kick_pressed and not _last_kick_input_state
+	var just_pressed := _rising_edge("kick", kick_pressed, _last_kick_input_state)
 	_last_kick_input_state = kick_pressed
 	if not just_pressed or _chunk_manager == null:
 		return
@@ -1844,6 +1966,17 @@ func nearest_kickable_dropped_item_near(from: Vector2, radius: float) -> Dropped
 	var nearest: DroppedItem = null
 	var nearest_distance := radius
 	for item in get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
+		# Not every member of this group is a DroppedItem: LiftableStone and
+		# PickableSeed deliberately join it so the pickup sweep collects them
+		# with no special case of their own (see their own doc comments), and
+		# neither carries an item_stack -- reading one threw a runtime error
+		# per stone per frame and aborted this whole scan, so K silently
+		# stopped kicking dropped items whenever a pebble or seed was loaded.
+		# Gated by what a member actually answers to, the same way
+		# EarthChunkManager.step_ground_food gates this very group and
+		# nearest_liftable_stone_near gates the stone one.
+		if not is_instance_valid(item) or not ("item_stack" in item):
+			continue
 		if item.is_queued_for_deletion() or item.item_stack == null:
 			continue
 		var mass: float = item.item_stack.item.mass_kg
@@ -1871,7 +2004,7 @@ func _stash_step() -> void:
 	var stash_pressed := (
 		Input.is_action_pressed("stash") if _controlled_locally() else _pending_stash_pressed
 	)
-	var just_pressed := stash_pressed and not _last_stash_input_state
+	var just_pressed := _rising_edge("stash", stash_pressed, _last_stash_input_state)
 	_last_stash_input_state = stash_pressed
 	if not just_pressed or not is_holding_anything() or inventory == null:
 		return
@@ -2248,7 +2381,7 @@ func _shop_step(delta: float) -> void:
 	var trade_pressed := (
 		Input.is_action_pressed("trade") if _controlled_locally() else _pending_trade_pressed
 	)
-	var just_pressed := trade_pressed and not _last_trade_input
+	var just_pressed := _rising_edge("trade", trade_pressed, _last_trade_input)
 	_last_trade_input = trade_pressed
 	if just_pressed:
 		if _chunk_manager != null and _chunk_manager.has_merchant_near(position, TRADE_RADIUS):
@@ -2345,7 +2478,7 @@ func _talk_step(delta: float) -> void:
 	var talk_pressed := (
 		Input.is_action_pressed("talk") if _controlled_locally() else _pending_talk_pressed
 	)
-	var just_pressed := talk_pressed and not _last_talk_input
+	var just_pressed := _rising_edge("talk", talk_pressed, _last_talk_input)
 	_last_talk_input = talk_pressed
 	if just_pressed:
 		var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS) if _chunk_manager != null else null
@@ -2368,7 +2501,7 @@ func _build_step() -> void:
 	var build_pressed := (
 		Input.is_action_pressed("build") if _controlled_locally() else _pending_build_pressed
 	)
-	var just_pressed := build_pressed and not _last_build_input_state
+	var just_pressed := _rising_edge("build", build_pressed, _last_build_input_state)
 	_last_build_input_state = build_pressed
 
 	if not just_pressed or _chunk_manager == null:
@@ -2406,7 +2539,7 @@ func _destroy_step() -> void:
 	var destroy_pressed := (
 		Input.is_action_pressed("destroy") if _controlled_locally() else _pending_destroy_pressed
 	)
-	var just_pressed := destroy_pressed and not _last_destroy_input_state
+	var just_pressed := _rising_edge("destroy", destroy_pressed, _last_destroy_input_state)
 	_last_destroy_input_state = destroy_pressed
 
 	if not just_pressed or _chunk_manager == null:

@@ -78,9 +78,22 @@ decides: a cold snap in autumn snows and a mild winter rains. That is what
 makes weather feel like weather rather than a label on the season.
 
 Snow falling is the same drop field as rain -- one mesh, one draw call -- with
-the colour, speed and slant swapped. White, far slower, and drifting rather
-than slanting; reusing rain unchanged would give WHITE RAIN, which reads as a
-recolour rather than as weather.
+the colour, speed, slant and drop SHAPE swapped. White, far slower, drifting
+rather than slanting, and coming down as flecks rather than streaks; reusing
+rain unchanged would give WHITE RAIN, which reads as a recolour rather than as
+weather.
+
+Shape was the property this first missed, and it is the one that most says
+"rain": a streak IS motion blur, so an eleven-pixel white streak is a raindrop
+however pale you paint it, and a flake drifting at `FLAKE_FALL_SPEED` (90 px/s
+against rain's 620) has no blur to draw. Reported as rain still falling during
+a snowstorm. The drop field is one MultiMesh built once, so the shape cannot be
+swapped by swapping the mesh -- the weather has to be expressible as uniforms.
+`RainOverlay.drop_length_scale` squashes the same quad down its length
+(`FLAKE_LENGTH` over `STREAK_LENGTH`, derived rather than restated so the CPU
+constant and the GPU value cannot drift apart), and because the quad is
+anchored at its head only the tail shortens. Real sideways DRIFT -- a wobble
+across the fall -- is still not built; flakes come down near-vertically.
 
 **It accumulates and it thaws.** The ground whitens over a snowfall and clears
 over a thaw, both slowly enough to watch: ground that went from bare to white
@@ -88,6 +101,21 @@ between two frames would read as a bug, and so would a thaw that did. It
 whitens the GROUND rather than the whole scene -- snow lies on the land, and
 tinting everything would put a wash over the trees and the player too. The
 grass keeps its shape and its blades under it: it is covered, not replaced.
+
+"Covered, not replaced" is a claim about the ART as much as about the layering,
+and the first version only made it true at the deep end. A shallow band was
+written FULLY OPAQUE at 45% coverage, so a dusting was 45% of the tile switched
+hard to near-white and 55% punched out -- a 50/50 dither of near-white at the
+finest grain the atlas can express, reported as texture corruption rather than
+as snow. Two things make it true now. A thin cover is TRANSLUCENT
+(`SnowLayer.BAND_ALPHA`), so the ground tints through it instead of being
+knocked out in specks; that is the only way this layer can tint toward the
+ground at all, since one tile set is baked for every biome and so the layer has
+no ground colour of its own to blend with. And the coverage roll happens in
+blocks of `SnowLayer.GRAIN_BLOCK` art pixels rather than per art pixel: one art
+pixel is half a WORLD pixel, a shade nudge may legitimately be that fine but
+coverage is a hard present/absent mask, and a hard mask rolled below the world
+pixel grid is a dither, i.e. static.
 
 **It fills in tile by tile, not the whole field at once.** A single lying-snow
 DEPTH still drives the whole snowfall -- one clock, one number, exactly as
@@ -115,15 +143,34 @@ used to read that exact same number: the instant it ticked past a depth-band
 boundary, the whole loaded chunk snapped to the new band together, which reads
 as "the ground turned white in one frame" rather than as a snowfall settling
 (reported: "snow covers a whole chunk instantly instead of spreading
-progressively"). Each tile now carries its own small, seeded lead or lag on
-the shared depth (`SnowLayer.onset_offset_for`, keyed off the tile's GLOBAL
-coordinates so the pattern doesn't repeat or seam at a chunk boundary) --
-the same per-cell-seeded-jitter idea `TallGrass`/`FlowerPatch` already use so
-a uniform process doesn't read as synchronized (this project has hit that
-"same value everywhere" clustering bug five times before; see `PixelNoise`'s
-own doc comment). A partial snowfall now paints a genuine MIX of bare and
-covered land -- some tiles catch the first flakes, others hold out a little
+progressively"). Each tile now carries its own small lead or lag on the shared
+depth, sampled from a LOW-FREQUENCY DRIFT FIELD spanning
+`SnowLayer.ONSET_DRIFT_TILES` tiles per lift (`SnowLayer.onset_offset_for`,
+keyed off the tile's GLOBAL coordinates so the pattern doesn't repeat or seam
+at a chunk boundary) -- the same seeded-jitter idea `TallGrass`/`FlowerPatch`
+already use so a uniform process doesn't read as synchronized (this project
+has hit that "same value everywhere" clustering bug five times before; see
+`PixelNoise`'s own doc comment), applied to WHEN a tile catches on rather than
+WHERE something is placed. A partial snowfall now paints a genuine MIX of bare
+and covered land -- some tiles catch the first flakes, others hold out a little
 longer -- rather than the whole chunk changing together.
+
+**Why a drift FIELD rather than a per-tile roll.** The lead/lag was first
+rolled per tile as white noise, which is what those two placement systems use
+-- and it was the wrong tool here, because a tile is the smallest thing a snow
+band can speak about. Measured over an 800x80 tile sweep, two EDGE-ADJACENT
+tiles could land 0.358 apart while one whole depth band is only 0.25, so
+neighbours routinely sat a band apart and sometimes two, and the field rendered
+as a checkerboard of bare / dusted / covered SQUARES with a razor edge on the
+tile grid. Noise driving a per-tile decision has to be much COARSER than a
+tile, not finer. Real snow drifts and shelters in patches many metres across, a
+low-frequency shape by nature, so `onset_offset_for` samples `PixelNoise`'s
+smooth form instead: `MAX_NEIGHBOUR_ONSET_STEP` holds two touching tiles to a
+quarter of a band, so a band boundary takes at least four tiles to cross and
+the snow LINE meanders through the field. The field still spans the full
+variance -- a test pins that too, so nobody "fixes" a neighbour-step failure by
+flattening the drift to a constant and putting the whole chunk back on one
+shared threshold.
 
 **The repaint itself has to happen often enough to show that mix changing.**
 Onset variance alone was not sufficient: the whole-field repaint that
@@ -141,14 +188,31 @@ order of dozens of repaints across a whole snowfall, not one every frame.
 
 ### Status
 
-- ✅ Snow instead of rain below freezing, falling white and slow
+- ✅ Snow instead of rain below freezing, falling white, slow, and as FLECKS
+  rather than rain's streaks — `RainOverlay.FLAKE_LENGTH`/`drop_length_scale`
+  plus the `drop_length_scale` shader uniform, tested; wired in `set_snowing`.
 - ✅ Accumulation and thaw, whitening the ground
 - ✅ Footprint displacement and snow filling tracks back in
 - ✅ Tracks rendered: snow is a per-tile overlay, so footprints carve it
+- ✅ A dusting reads as frost, not as white static — a thin cover is
+  translucent so the ground tints through it, and the coverage mask is never
+  rolled finer than one world pixel (`SnowLayer.BAND_ALPHA`/`GRAIN_BLOCK`,
+  both pinned by tests).
 - ✅ Per-tile onset variance, so a field fills in as a visible spread rather
   than snapping everywhere at once — `SnowLayer.ONSET_VARIANCE`/
   `onset_offset_for`/`band_for`, tested; wired in
   `EarthChunkManager._paint_snow_tile`.
+- ✅ That onset is a low-frequency DRIFT field, not per-tile static, so the
+  snow line meanders instead of rendering as hard-edged tile squares —
+  `SnowLayer.ONSET_DRIFT_TILES`/`MAX_NEIGHBOUR_ONSET_STEP`, tested from both
+  sides (coarse enough, and not flattened to a constant).
+- ⬜ Sideways DRIFT on falling flakes — a wobble across the fall. Flakes
+  currently come down near-vertically (`Snowfall.FLAKE_SLANT` 0.05). Needs its
+  own uniform and its own tested constant.
+- ⬜ Water freezing over. Snow deliberately never lies on water
+  (`EarthChunkManager._paint_snow_tile` erases the cell over `"ocean"`):
+  ice is a separate mechanic that does not exist yet, so this is a boundary
+  rather than an omission.
 - ✅ The repaint that reveals that spread runs often enough to show it moving
   — `EarthChunkManager.SNOW_REPAINT_DEPTH_STEP`, tested; wired in
   `_repaint_snow`.

@@ -199,9 +199,22 @@ func test_herbivore_and_predator_markers_use_different_textures():
 	assert_ne(herbivore_sprite.texture, predator_sprite.texture)
 
 
+## Per-individual seeded shade variation (see ProceduralAnimalSprite
+## .generate_texture's seed argument): two promoted individuals of a
+## PROCEDURALLY drawn species must not be pixel-identical.
+##
+## Driven through rainforest specifically, whose herbivore pool (tapir,
+## mouse, nonvenomous_snake) is the one pool with no illustrated species in
+## it. Species with real illustrated art share one authored sheet per action
+## (see IllustratedAnimalSprite.generate_textures, which takes no seed), so
+## they have no per-individual variation at all -- this test used to run on
+## the default pool and only passed because that pool was dominated by the
+## procedurally drawn "herbivore" placeholder, now retired. With the
+## placeholder gone the default pool is ["deer" x3, "boar"], every member
+## illustrated, and it can no longer exercise this code path at all.
 func test_individual_creatures_get_visually_distinct_procedurally_generated_sprites():
 	var spawned := renderer.spawn_creatures(
-		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 2.0, 0.0
+		parent, CHUNK_COORD, CHUNK_ORIGIN, CHUNK_SIZE, TILE_SIZE, 2.0, 0.0, null, "rainforest"
 	)
 	assert_eq(spawned.size(), 2)
 	var first_image := (spawned[0] as Sprite2D).texture.get_image()
@@ -257,31 +270,36 @@ func test_empty_biome_name_falls_back_to_the_generic_species_pools():
 	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "")
 	var predator_species := _species_seen_across_chunks(0.0, 1.0, "")
 	for species in herbivore_species:
-		assert_true(species in ["herbivore", "boar"], "unexpected herbivore-role species: %s" % species)
+		assert_true(species in ["deer", "boar"], "unexpected herbivore-role species: %s" % species)
 	for species in predator_species:
-		assert_true(species in ["predator", "lynx"], "unexpected predator-role species: %s" % species)
+		assert_true(species in ["lynx", "jackal"], "unexpected predator-role species: %s" % species)
 
 
 func test_unmapped_biome_name_falls_back_to_the_generic_species_pools():
 	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "ocean")
 	for species in herbivore_species:
-		assert_true(species in ["herbivore", "boar"], "unexpected herbivore-role species: %s" % species)
+		assert_true(species in ["deer", "boar"], "unexpected herbivore-role species: %s" % species)
 
 
-func test_grassland_biome_matches_the_original_generic_pool_identity():
+## Was test_grassland_biome_matches_the_original_generic_pool_identity: the
+## "original generic pool identity" it pinned was the anonymous
+## "herbivore"/"predator" stand-ins, now retired from every spawn pool (see
+## test_no_biome_ever_promotes_the_anonymous_placeholder_species). Deer and
+## jackal hold grassland's dominant slots in their place.
+func test_grassland_is_deer_and_jackal_dominant():
 	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "grassland")
 	var predator_species := _species_seen_across_chunks(0.0, 1.0, "grassland")
-	assert_true(herbivore_species.has("herbivore"))
+	assert_true(herbivore_species.has("deer"))
 	assert_true(herbivore_species.has("boar"))
 	for species in herbivore_species:
 		assert_true(
-			species in ["herbivore", "boar", "mouse", "horse", "deer", "nonvenomous_snake", "sheep"],
+			species in ["boar", "mouse", "horse", "deer", "nonvenomous_snake", "sheep"],
 			"unexpected herbivore-role species: %s" % species
 		)
-	assert_true(predator_species.has("predator"))
+	assert_true(predator_species.has("jackal"))
 	assert_true(predator_species.has("lynx"))
 	for species in predator_species:
-		assert_true(species in ["predator", "lynx", "lion"], "unexpected predator-role species: %s" % species)
+		assert_true(species in ["lynx", "jackal", "lion"], "unexpected predator-role species: %s" % species)
 
 
 ## Wolves are forest's own named apex predator (see
@@ -294,13 +312,13 @@ func test_forest_biome_is_boar_and_lynx_dominant():
 	assert_true(herbivore_species.has("boar"), "forest should promote boars")
 	for species in herbivore_species:
 		assert_true(
-			species in ["herbivore", "boar", "mouse", "deer", "sheep", "nonvenomous_snake"],
+			species in ["boar", "mouse", "deer", "sheep", "nonvenomous_snake"],
 			"unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("lynx"), "forest should promote lynx")
 	for species in predator_species:
 		assert_true(
-			species in ["predator", "lynx", "wolf", "bear"], "unexpected predator-role species: %s" % species
+			species in ["lynx", "wolf", "bear"], "unexpected predator-role species: %s" % species
 		)
 
 
@@ -331,13 +349,13 @@ func test_desert_biome_promotes_camels_and_jackals():
 	assert_true(herbivore_species.has("camel"), "desert should promote camels")
 	for species in herbivore_species:
 		assert_true(
-			species in ["herbivore", "camel", "mouse", "horse", "nonvenomous_snake"],
+			species in ["camel", "mouse", "horse", "nonvenomous_snake"],
 			"unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("jackal"), "desert should promote jackals")
 	for species in predator_species:
 		assert_true(
-			species in ["predator", "jackal", "lion", "venomous_snake"],
+			species in ["jackal", "lion", "venomous_snake"],
 			"unexpected predator-role species: %s" % species
 		)
 
@@ -348,12 +366,12 @@ func test_tundra_biome_promotes_reindeer_and_arctic_foxes():
 	assert_true(herbivore_species.has("reindeer"), "tundra should promote reindeer")
 	for species in herbivore_species:
 		assert_true(
-			species in ["herbivore", "reindeer", "mouse", "deer"], "unexpected herbivore-role species: %s" % species
+			species in ["reindeer", "mouse", "deer"], "unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("arctic_fox"), "tundra should promote arctic foxes")
 	for species in predator_species:
 		assert_true(
-			species in ["predator", "arctic_fox", "bear"], "unexpected predator-role species: %s" % species
+			species in ["arctic_fox", "bear"], "unexpected predator-role species: %s" % species
 		)
 
 
@@ -363,13 +381,13 @@ func test_rainforest_biome_promotes_tapirs_and_jaguars():
 	assert_true(herbivore_species.has("tapir"), "rainforest should promote tapirs")
 	for species in herbivore_species:
 		assert_true(
-			species in ["herbivore", "tapir", "mouse", "nonvenomous_snake"],
+			species in ["tapir", "mouse", "nonvenomous_snake"],
 			"unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("jaguar"), "rainforest should promote jaguars")
 	for species in predator_species:
 		assert_true(
-			species in ["predator", "jaguar", "venomous_snake"], "unexpected predator-role species: %s" % species
+			species in ["jaguar", "venomous_snake"], "unexpected predator-role species: %s" % species
 		)
 
 
@@ -379,11 +397,11 @@ func test_mountain_biome_promotes_goats_and_mountain_lions():
 	assert_true(herbivore_species.has("goat"), "mountain should promote goats")
 	for species in herbivore_species:
 		assert_true(
-			species in ["herbivore", "goat", "mouse", "sheep"], "unexpected herbivore-role species: %s" % species
+			species in ["goat", "mouse", "sheep"], "unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("mountain_lion"), "mountain should promote mountain lions")
 	for species in predator_species:
-		assert_true(species in ["predator", "mountain_lion"], "unexpected predator-role species: %s" % species)
+		assert_true(species in ["mountain_lion"], "unexpected predator-role species: %s" % species)
 
 
 # -- mice and horses (see docs/concept/ecosystem_dynamics.md's Species roster) --
@@ -484,3 +502,47 @@ func test_lion_appears_in_grassland_at_hard_difficulty():
 func test_venomous_snake_appears_in_desert_at_hard_difficulty():
 	var predator_species := _species_seen_across_chunks(0.0, 1.0, "desert", 80)
 	assert_true(predator_species.has("venomous_snake"), "desert should promote venomous snakes at HARD difficulty")
+
+
+# -- the retired anonymous placeholders ----------------------------------------
+#
+# "herbivore" and "predator" were never species: they are this project's own
+# unnamed stand-ins from before deer and wolf existed (see
+# ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY, which maps "herbivore" ->
+# deer_shape and "predator" -> wolf_shape, and CreatureInfo's own note that
+# '"predator" was always this project's own unnamed stand-in for a wolf').
+# Naming those two species never removed the stand-ins from the spawn pools,
+# so a promoted individual could still reach the creature panel as a nameless
+# "Herbivore Lv.5" standing next to a "Boar Lv.1". They are retired from
+# SPAWNING here -- but deliberately kept as data-table keys (see
+# test_the_placeholder_ids_survive_as_data_fallbacks_for_an_unknown_species in
+# tests/unit/test_animal_anatomy.gd).
+
+const ANONYMOUS_PLACEHOLDER_SPECIES := ["herbivore", "predator"]
+
+
+func test_no_biome_ever_promotes_the_anonymous_placeholder_species():
+	for biome_name in ["", "ocean", "grassland", "forest", "desert", "tundra", "rainforest", "mountain"]:
+		var herbivore_species := _species_seen_across_chunks(1.0, 0.0, biome_name, 200)
+		var predator_species := _species_seen_across_chunks(0.0, 1.0, biome_name, 200)
+		for placeholder in ANONYMOUS_PLACEHOLDER_SPECIES:
+			assert_false(
+				herbivore_species.has(placeholder),
+				'"%s" still promotes the anonymous placeholder species "%s"' % [biome_name, placeholder]
+			)
+			assert_false(
+				predator_species.has(placeholder),
+				'"%s" still promotes the anonymous placeholder species "%s"' % [biome_name, placeholder]
+			)
+
+
+## The two named species that take over the slots the placeholders held.
+## Deer is what "herbivore" was always drawn as; grassland's dominant
+## predator goes to jackal (a real open grassland/steppe canid across Eurasia
+## and Africa) rather than wolf, because wolves stay forest-exclusive by
+## design -- see test_forest_promotes_wolves_alongside_their_sheep_and_deer_prey.
+func test_grassland_promotes_deer_and_jackals_in_place_of_the_placeholders():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "grassland", 200)
+	var predator_species := _species_seen_across_chunks(0.0, 1.0, "grassland", 200)
+	assert_true(herbivore_species.has("deer"), "grassland should promote deer")
+	assert_true(predator_species.has("jackal"), "grassland should promote jackals")

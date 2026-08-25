@@ -376,10 +376,13 @@ func _find_begin_button() -> Button:
 	return null
 
 
-## The skills tab has its own small inner scroll area for its node grid, so
-## this looks specifically for the OUTER one wrapping the whole TabContainer
+## Looks specifically for the scroll wrapping the whole TabContainer
 ## (whichever ScrollContainer's direct child is the TabContainer itself),
-## not just "at least one ScrollContainer exists somewhere".
+## not just "at least one ScrollContainer exists somewhere" -- the creator
+## should have exactly this one scroll region and no other (the skills tab
+## used to nest a second one around its node grid, which collapsed the grid
+## to zero height; see
+## test_the_skill_grid_is_not_nested_in_a_second_scroll_container).
 func _find_outer_tab_scroll() -> ScrollContainer:
 	for s in menu._create_screen.find_children("*", "ScrollContainer", true, false):
 		for child in s.get_children():
@@ -407,6 +410,122 @@ func test_begin_button_is_not_inside_the_scroll_container():
 			break
 		ancestor = ancestor.get_parent()
 	assert_false(inside_scroll, "Begin must stay outside the scrollable tab content")
+
+
+# -- the Skills tab must not collapse (reported live: picking Skills shrank --
+# -- the whole tab body AND its tab strip to a narrow column, with the -------
+# -- shared skill grid not visible at all) -----------------------------------
+
+func _find_tab_container() -> TabContainer:
+	for t in menu._create_screen.find_children("*", "TabContainer", true, false):
+		return t
+	return null
+
+
+func _find_tab_named(tab_name: String) -> Control:
+	for child in _find_tab_container().get_children():
+		if child.name == tab_name:
+			return child
+	return null
+
+
+## Shows the create screen with the named tab selected and lets the layout
+## settle, so these assert against REAL laid-out rects rather than flags --
+## the defect is a size, not a property.
+func _lay_out_create_screen_on_tab(tab_name: String) -> void:
+	menu._show(menu._create_screen)
+	var tabs := _find_tab_container()
+	tabs.current_tab = tabs.get_tab_idx_from_control(_find_tab_named(tab_name))
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
+## The width a tab body should occupy: the outer scroll's own width LESS
+## whatever its vertical scrollbar is currently taking, since a shown
+## scrollbar is laid over the right edge and the content area ends where it
+## begins. Read off the live scrollbar rather than written down as a number,
+## so a theme that changes the scrollbar's thickness can't turn this into a
+## false failure.
+func _tab_scroll_content_width() -> float:
+	var scroll := _find_outer_tab_scroll()
+	var bar := scroll.get_v_scroll_bar()
+	return scroll.size.x - (bar.size.x if bar.visible else 0.0)
+
+
+## The tab body must span the full width of the ScrollContainer that holds
+## it, on EVERY tab. ScrollContainer sizes a non-EXPAND child to that child's
+## own combined minimum size, and a TabContainer's minimum width is (with the
+## default use_hidden_tabs_for_min_size == false) the minimum width of
+## whichever tab is CURRENTLY VISIBLE. The Skills tab's own minimum width is
+## tiny -- autowrapping labels have near-zero minimum width -- so selecting
+## it collapsed the entire tab body, and with it the tab strip, into a narrow
+## column with most of the 880px panel sitting empty beside it (reported
+## live). The Character tab only ever looked right by luck: its hero card +
+## fixed-width appearance card happen to have a minimum width close to the
+## panel's. Note the outer scroll has horizontal_scroll_mode DISABLED, so
+## "exactly the scroll's width" is the only correct answer -- anything wider
+## would be unreachable, anything narrower wastes the panel.
+func test_selecting_the_skills_tab_does_not_collapse_the_tab_body():
+	await _lay_out_create_screen_on_tab("Skills")
+	var tabs := _find_tab_container()
+	var available := _tab_scroll_content_width()
+	assert_eq(tabs.get_parent(), _find_outer_tab_scroll(), "the TabContainer should be the outer scroll's child")
+	assert_almost_eq(
+		tabs.size.x,
+		available,
+		1.0,
+		"Skills tab body is %d wide in a %d-wide content area" % [tabs.size.x, available]
+	)
+
+
+## ...and the Character tab must not have been narrowed by the same fix.
+func test_the_character_tab_body_also_spans_the_scroll_areas_width():
+	await _lay_out_create_screen_on_tab("Character")
+	var tabs := _find_tab_container()
+	var available := _tab_scroll_content_width()
+	assert_almost_eq(
+		tabs.size.x,
+		available,
+		1.0,
+		"Character tab body is %d wide in a %d-wide content area" % [tabs.size.x, available]
+	)
+
+
+## The skill grid's own parent must give it its full height. The creator has
+## exactly one scroll region -- the outer one wrapping the whole TabContainer
+## (see test_create_screen_wraps_its_tab_content_in_a_scroll_container), so
+## nothing inside a tab is entitled to clip its own contents. Wrapping the
+## grid in a SECOND, inner ScrollContainer did exactly that: a ScrollContainer
+## reports a combined minimum size of ~0 on every axis it may scroll, so the
+## grid's height never propagated up to the tab's VBoxContainer, which then
+## had no spare height to hand its EXPAND_FILL child -- the inner scroll got
+## zero height and the whole shared skill pool was never visible at all
+## (reported live).
+func test_the_shared_skill_grid_is_not_clipped_away_by_its_parent():
+	await _lay_out_create_screen_on_tab("Skills")
+	var card: PanelContainer = menu._skill_node_cards["vitality_1"]
+	var grid: Control = card.get_parent()
+	var holder: Control = grid.get_parent()
+	assert_gt(grid.size.y, 0.0, "the skill grid should have a real laid-out height")
+	assert_gte(
+		holder.size.y,
+		grid.size.y,
+		"the skill grid is %d tall inside a %d-tall parent" % [grid.size.y, holder.size.y]
+	)
+
+
+## Belt and braces on the same defect, stated structurally: the grid belongs
+## under the OUTER tab scroll and nothing else. A second, nested scroll is
+## what zeroed it out above.
+func test_the_skill_grid_is_not_nested_in_a_second_scroll_container():
+	var card: PanelContainer = menu._skill_node_cards["vitality_1"]
+	var scrolls := 0
+	var ancestor: Node = card.get_parent()
+	while ancestor != null and ancestor != menu:
+		if ancestor is ScrollContainer:
+			scrolls += 1
+		ancestor = ancestor.get_parent()
+	assert_eq(scrolls, 1, "the skill grid should sit under the outer tab scroll only")
 
 
 # -- hero showcase: class icons over the character, DNA glow/resonance -----
@@ -508,3 +627,108 @@ func test_only_legendary_rarity_starts_a_pulsing_glow_tween():
 
 	menu._update_dna_glow(HeroDna.RARITY_LEGENDARY)
 	assert_not_null(menu._dna_glow_tween)
+
+
+# -- Begin is the destructive click: it must be confirmed ---------------------
+# -- (New Game AND Host Game both route through this same creator screen, and
+# -- World answers start_requested by wiping the player save plus every
+# -- world-persistence store -- see World._wipe_persisted_world.) -------------
+
+## Rebuilds `menu` with a real save file already on disk, so `_ready()` sees
+## `_player_save.has_save(save_path)` as true -- the same fixture shape
+## test_root_screen_offers_load_game_when_a_save_exists already uses.
+func _rebuild_menu_with_a_save() -> void:
+	var file := FileAccess.open(TEST_SAVE_PATH, FileAccess.WRITE)
+	file.store_var({"health": 80.0})
+	file.close()
+	menu.free()
+	menu = MainMenu.new()
+	menu.save_path = TEST_SAVE_PATH
+	menu.reroll_save_path = TEST_REROLL_SAVE_PATH
+	add_child(menu)
+
+
+func _find_button(screen: Control, label: String) -> Button:
+	for b in screen.find_children("*", "Button", true, false):
+		if b.text == label:
+			return b
+	return null
+
+
+## New Game and Host Game both reach Begin, and World answers
+## start_requested by wiping the player save and every world-persistence
+## store (chunk modifications, planted trees, fish populations, the event/
+## memory/household/contract/market/institution/world-boss stores, the world
+## clock) -- irreversibly, and the 60s autosave then overwrites
+## player_save.bin so even undeleting is gone. Begin must not be able to
+## trigger that without the player saying so.
+func test_begin_does_not_start_immediately_when_a_save_would_be_overwritten():
+	_rebuild_menu_with_a_save()
+	watch_signals(menu)
+
+	_find_button(menu._create_screen, "Begin").pressed.emit()
+
+	assert_signal_not_emitted(menu, "start_requested")
+	assert_true(menu._overwrite_confirm_screen.visible, "the confirmation should be showing")
+	assert_false(menu._create_screen.visible, "the creator should have been swapped out")
+
+
+## The guard on the other side: a first-ever game has nothing to lose, so it
+## must not be made to click through a warning about destroying a save that
+## does not exist. Uses the SAME has_save predicate that decides whether the
+## root screen offers Load Game -- one answer to "is there something to
+## lose", in one place.
+func test_begin_starts_immediately_when_there_is_no_save_to_lose():
+	watch_signals(menu)
+
+	_find_button(menu._create_screen, "Begin").pressed.emit()
+
+	assert_signal_emitted(menu, "start_requested")
+
+
+func test_confirming_the_overwrite_starts_the_game():
+	_rebuild_menu_with_a_save()
+	watch_signals(menu)
+
+	_find_button(menu._create_screen, "Begin").pressed.emit()
+	_find_button(menu._overwrite_confirm_screen, "Overwrite and start").pressed.emit()
+
+	assert_signal_emitted(menu, "start_requested")
+
+
+func test_keeping_the_save_returns_to_the_creator_without_starting():
+	_rebuild_menu_with_a_save()
+	watch_signals(menu)
+
+	_find_button(menu._create_screen, "Begin").pressed.emit()
+	_find_button(menu._overwrite_confirm_screen, "Keep my save").pressed.emit()
+
+	assert_signal_not_emitted(menu, "start_requested")
+	assert_true(menu._create_screen.visible, "Keep my save should go back to the creator")
+
+
+## Host Game is exactly as destructive as New Game -- it routes through the
+## same creator and the same Begin button, so a confirmation placed only on
+## the root screen's "New Game" would miss it entirely.
+func test_hosting_a_game_is_confirmed_too():
+	_rebuild_menu_with_a_save()
+	_find_button(menu._root_screen, "Host Game (LAN)").pressed.emit()
+	watch_signals(menu)
+
+	_find_button(menu._create_screen, "Begin").pressed.emit()
+
+	assert_signal_not_emitted(menu, "start_requested")
+	assert_true(menu._overwrite_confirm_screen.visible)
+
+
+## The confirmation is a screen in the SAME state machine as the other three
+## (root/create/join), so _show hides it like any other -- a screen missing
+## from _show's list stays visible on top of whatever comes next.
+func test_the_confirmation_screen_is_hidden_by_showing_another_screen():
+	_rebuild_menu_with_a_save()
+	_find_button(menu._create_screen, "Begin").pressed.emit()
+
+	menu._show(menu._root_screen)
+
+	assert_false(menu._overwrite_confirm_screen.visible)
+	assert_true(menu._root_screen.visible)

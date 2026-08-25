@@ -410,3 +410,73 @@ func test_a_tree_stands_in_the_same_spot_every_time():
 	var second := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
 	for index in second.size():
 		assert_eq(second[index].position, places[index])
+
+
+# -- a building piece occupies its tile against vegetation ---------------------
+#
+# Reported: a tree with its trunk rooted in a village house's stone floor and
+# its canopy drawn over the masonry. Half of that is this file's: chunk
+# modifications are loaded from disk BEFORE spawn_trees runs (see
+# EarthChunkManager._load_chunk), so without a check here the deterministic
+# forest respawns straight into a persisted house on every revisit. The other
+# half -- a house stamped over a tree that is already standing -- lives in
+# EarthChunkManager.stamp_structure_at_global.
+
+
+## The first local cell of `chunk` that the placement rules put a tree on, or
+## (-1, -1) if this chunk happens to have rolled none.
+func _first_tree_cell(chunk: Chunk) -> Vector2i:
+	for y in chunk.height:
+		for x in chunk.width:
+			if tree_placement.has_tree_at(
+				CHUNK_ORIGIN.x + x, CHUNK_ORIGIN.y + y, chunk.biome[y * chunk.width + x]
+			):
+				return Vector2i(x, y)
+	return Vector2i(-1, -1)
+
+
+func _spawned_on_cell(spawned: Array[Node2D], cell: Vector2i) -> bool:
+	for tree in spawned:
+		var tile := Vector2i(
+			int(floor(tree.position.x / float(TILE_SIZE))),
+			int(floor(tree.position.y / float(TILE_SIZE)))
+		)
+		if tile == CHUNK_ORIGIN + cell:
+			return true
+	return false
+
+
+func test_no_tree_spawns_on_a_cell_a_building_piece_occupies():
+	var chunk := _make_forest_chunk()
+	var cell := _first_tree_cell(chunk)
+	assert_ne(cell, Vector2i(-1, -1), "this chunk rolled no trees at all")
+	var without_house := _expected_tree_count(chunk)
+
+	chunk.modifications[cell] = "stone_floor"
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+
+	assert_false(
+		_spawned_on_cell(spawned, cell),
+		"a tree spawned on a cell a building piece already stands on"
+	)
+	assert_eq(spawned.size(), without_house - 1)
+
+
+## The rule is narrow on purpose: an earth path or a campfire is a chunk
+## modification too, and neither of those uproots a tree. Only a real
+## BuildingPiece occupies its tile -- the same distinction
+## EarthChunkManager._piece_grid_for already draws.
+func test_a_non_piece_modification_does_not_stop_a_tree_spawning():
+	var chunk := _make_forest_chunk()
+	var cell := _first_tree_cell(chunk)
+	assert_ne(cell, Vector2i(-1, -1), "this chunk rolled no trees at all")
+	var without_house := _expected_tree_count(chunk)
+
+	chunk.modifications[cell] = "earth"
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+
+	assert_true(
+		_spawned_on_cell(spawned, cell),
+		"an earth tile is not a building -- it should not have uprooted the tree"
+	)
+	assert_eq(spawned.size(), without_house)

@@ -137,7 +137,27 @@ chosen from a **per-biome species pool** (grassland/forest/desert/tundra/
 rainforest/mountain each have their own herbivore+predator pair; unmapped
 biomes fall back to a generic pool), keyed off the chunk's **dominant
 biome** — the most frequent biome among its cells, since a chunk can straddle
-more than one. Every species reuses one of 4 hand-drawn silhouette shapes
+more than one.
+
+Those pools no longer contain the anonymous `"herbivore"`/`"predator"` ids.
+Those were never species: they were this project's own unnamed stand-ins —
+`ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY` maps `"herbivore"` to
+`deer_shape` and `"predator"` to `wolf_shape` — from before deer and wolf
+existed as real named species with real illustrated art. Naming those two did
+not remove the stand-ins from the pools, so a promoted individual could still
+reach the creature panel as a nameless "Herbivore Lv.5" standing beside a
+"Boar Lv.1" (`CreatureInfo.display_name` is just the species id capitalized).
+They are now retired from **spawning**: grassland's dominant grazer slot goes
+to deer (what `"herbivore"` was always drawn as), grassland's dominant
+predator slot to jackal, and every other biome simply drops its single
+placeholder entry, each already having a dominant named specialist plus named
+fillers. The generic fall-back pool for an unmapped biome is likewise named
+now (`deer`/`boar`, `lynx`/`jackal`). The two ids **remain as data keys** and
+must not be deleted: `AnimalAnatomy.profile_for` falls back to
+`_PROFILES["herbivore"]` and `ProceduralAnimalSprite` resolves any unknown
+species to `"herbivore"`, so they are the never-crash-on-an-odd-id default.
+The dev console's `/spawn` still defaults to `"herbivore"` — an explicitly
+debug path, deliberately left spawnable on demand. Every species reuses one of 4 hand-drawn silhouette shapes
 (deer-shaped, boar-shaped, wolf-shaped, lynx-shaped) in its own color rather
 than needing bespoke pixel art per species, since the ecological point is
 biome-appropriate *variety*, not bespoke art for its own sake. Temperament/
@@ -212,6 +232,16 @@ and this doc's own "wolf-dominant predators" phrasing above — so giving it a
 real name, real stats, and real illustrated art closes the one gap left in
 that per-biome pattern rather than adding a new role.
 
+Naming the wolf did not by itself finish the job: the `"predator"` placeholder
+stayed in every biome's pool for a long time afterwards and kept spawning
+alongside the named species. It is retired now (see "Biome-specific species
+composition" above). Grassland's freed dominant-predator slot went to
+**jackal**, not to wolf — real golden jackals are an open grassland/steppe
+canid across Eurasia and Africa, and wolves stay **forest-exclusive** here by
+design, as this section specifies and `test_forest_promotes_wolves_alongside_
+their_sheep_and_deer_prey` asserts. Moving wolves onto grassland would be a
+deliberate reversal of that design, not a placeholder cleanup.
+
 - **Wolves** are forest-exclusive (real wolves are the classic temperate/
   boreal forest apex predator), added to forest's predator pool alongside —
   not in place of — its existing lynx dominance, generic `predator` filler,
@@ -266,9 +296,11 @@ deferred.
   bird's straighter glide), confined to no particular target — just "make
   a meadow feel alive." Biome-gated to grassland/forest/rainforest (real
   butterflies are a warm/flowering-habitat presence; excluded from desert/
-  tundra/mountain/ocean as implausible).
-- **Songbirds** are the same ambient tier, biome-gated to forest/grassland/
-  rainforest, with their own glide-and-perch movement pattern (straighter
+  tundra/mountain/ocean as implausible) — but that tier-wide gate is no
+  longer the whole story; see "Where a flyer actually lives" below.
+- **Songbirds** are the same ambient tier, biome-gated tier-wide to forest/
+  grassland/rainforest and then range-gated per species (see "Where a flyer
+  actually lives" below), with their own glide-and-perch movement pattern (straighter
   runs between heading changes than a butterfly's flutter). Real songbirds
   are largely insectivore/granivore. The **insectivore half now has a real
   feeding model** — see [soil_fauna.md](soil_fauna.md): a per-chunk earthworm
@@ -309,6 +341,57 @@ deferred.
   aggregate number — exactly the kind of multi-source pressure a real
   fishery actually has.
 
+#### Where a flyer actually lives
+
+The aerial tier shipped as a decorative layer and, alone among the creature
+categories, never got the per-species range treatment the ground roster got in
+"Biome-specific species composition" above: one fixed global pool per group,
+gated only by biome name. The visible result was a **Blue Morpho — a
+Neotropical rainforest butterfly — fluttering over a German meadow at 52.5°N**,
+next to a Monarch, a Nearctic one.
+
+Flyers are now range-gated per species (`AmbientFlyerRenderer.FLYER_RANGE`,
+filtered by `_in_range_pool`, the aerial mirror of
+`CreatureRenderer._allowed_pool`) on **two** axes rather than one, because
+biome alone cannot tell a German meadow from a Kansas one:
+
+- **Biome** — the same biome-name gate as before, now per species. The
+  tier-wide `BUTTERFLY_BIOMES`/`BIRD_BIOMES` constants stay (other files refer
+  to them by name) and are pinned consistent with the per-species table by
+  test, so the two cannot drift apart.
+- **Absolute latitude band** — degrees from the equator, so one band covers
+  both hemispheres. The chunk's real latitude is derived from the global tile
+  row the renderer already receives, through the same
+  `GeoCoordinates.latitude_for_tile` / `EarthChunkGenerator.WORLD_HEIGHT_TILES`
+  pair the generator itself uses for temperature and biome — so a flyer's range
+  is measured against exactly the geography that produced the biome it is
+  flying over. Measured at the chunk's middle row, not its corner.
+
+The ranges are real, not invented:
+
+| Species | Biomes | Abs. latitude | Why |
+| --- | --- | --- | --- |
+| monarch (*Danaus plexippus*) | grassland, forest | 15–50° | Nearctic butterfly of open country; absent from Europe — the reported bug |
+| swallowtail (*Papilio machaon*) | grassland, forest | 25–70° | The **Old World** swallowtail: Palearctic, Mediterranean into the subarctic. The swallowtail a German meadow really has |
+| blue_morpho (*Morpho* spp.) | rainforest | 0–25° | Neotropical rainforest, inside the tropics |
+| bee (*Apis mellifera*) | grassland, forest, rainforest | 0–70° | Near-cosmopolitan |
+| sparrow (*Passer domesticus*) | grassland, forest, rainforest | 0–70° | Near-cosmopolitan |
+| robin (*Erithacus rubecula* / *Turdus migratorius*) | grassland, forest | 20–70° | Temperate woodland and garden bird in both the Old and New World; not a rainforest species |
+
+Two consequences worth stating plainly rather than discovering later:
+
+- A filtered pool can legitimately come out **empty** (nothing at all can live
+  in a 52.5°N rainforest), so the spawn path returns nothing instead of
+  dividing by zero on the modulo that picks a species.
+- **A German meadow now shows one butterfly species (swallowtail) plus bees,
+  where it used to show three.** That is the honest state of the roster, not a
+  loosening candidate: the butterfly roster is Americas-heavy. The fix for the
+  thinness is a roster *addition* — one genuinely Palearctic species such as a
+  peacock butterfly, which is procedural art plus an entry each in the sprite
+  tables, `FLYER_WORLD_SCALE`, `FlyerDiet` and `FLYER_RANGE` — not a widening
+  of the bands.
+
+
 ### Open questions
 
 - Pollination (butterflies/songbirds feeding vegetation or
@@ -326,6 +409,16 @@ deferred.
   no predation pressure on butterflies/songbirds yet to make that number
   mean anything, unlike fish (angler + bird harvest) or land herbivores
   (predator hunting).
+- **No biogeographic realm axis exists anywhere in the project**, and a
+  latitude band cannot substitute for one: a band cannot separate Nearctic
+  from Palearctic, so a monarch can still appear on a 40°N Eurasian steppe,
+  and the same gap already lets `CreatureRenderer` put camels in American
+  deserts and jaguars in African rainforest. Both tiers have the identical
+  omission, so closing it once serves both. What it would take: bundling a
+  biogeographic-realm/ecoregion raster and sampling it the way
+  `EarthElevationSource` samples `assets/data/world_elevation.png` — the only
+  real geographic raster shipped today. That is feature-scale work, not a
+  filter tweak, which is why the range tables stop at biome + latitude.
 - Fish-eating-bird population itself is decorative/capped, not aggregate —
   a real "more fish support more birds" feedback (bird carrying capacity
   derived from local fish population, mirroring how predator capacity

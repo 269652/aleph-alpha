@@ -14,6 +14,80 @@ restoration into real temporary buffs.
   dangerous. Exposure to [weather.md](weather.md) events (cold, wet) feeds
   this same debuff-stacking model.
 
+### Hunger and thirst keep the world's calendar (mechanism spec)
+
+The meters are measured in the world's own day (`SeasonCycle.SECONDS_PER_DAY`,
+four real hours — the same clock fruit phenology, tree growth and every
+animal's appetite already keep), not in a private one of their own.
+[seasons.md](seasons.md)'s "One clock, many readers" pillar already names
+survival as a reader; this is that pillar honoured for the two meters that
+were still on their own timer.
+
+- **A full day of eating nothing empties you.** Hunger runs 0 → 1 across one
+  in-game day, so one food item (`Player.EAT_HUNGER_RELIEF`, 0.4) is roughly a
+  third of a day's need — 2.5 real meals a day, not dozens.
+- **Thirst runs on two thirds of that**, so you go looking for water before you
+  go looking for a meal. Real grounding: a person drinks several times for
+  every time they eat, and dehydration is the faster of the two clocks by a
+  wide margin.
+- The old rates (0.004/0.006 per second) were 250 s and 167 s to full — about
+  58 starvations per in-game day — because they were chosen against "how long
+  before this nags a player" rather than against the calendar. Same two-clocks
+  mistake `Snowfall`'s cover/thaw times documents about itself.
+- Per this project's no-eyeballed-constants rule the spans are a tested
+  function of `SECONDS_PER_DAY`, bracketed from both sides by test, not a
+  number in a comment.
+
+Status:
+
+- ✅ Hunger/thirst spans derived from the world's day
+  (`SurvivalMeters.SECONDS_TO_STARVE`/`SECONDS_TO_DEHYDRATE`), tested.
+- 🚧 Crossing `is_starving`/`is_dehydrated` drives `fitness` decay, which is
+  now a real movement debuff (see "What poor condition costs you" below). The
+  mild `is_hungry`/`is_thirsty` thresholds still drive nothing — the ramp is a
+  cliff at 0.85, not an escalation.
+
+### What poor condition costs you (mechanism spec)
+
+The "debuffs, not death" pillar above named four legal effect kinds; this is
+the first of them actually wired. `SurvivalMeters.fitness` is already this
+game's single accumulator of survival neglect — it falls while starving, while
+dehydrated and while cold, and recovers otherwise — but until now **nothing
+read it**, so hunger and thirst had no mechanical consequence at all and cold
+had only the separate freezing movement slow.
+
+- `condition_penalty.gd` is the missing consumer: one pure
+  fitness → movement-multiplier curve, in the same "environment scales a
+  movement multiplier" shape `Player._weather_speed_multiplier` and
+  `_terrain_speed_multiplier` already use. It composes into
+  `Player.current_speed_multiplier` alongside the water/weather/terrain
+  factors.
+- Deliberately **not** damage and deliberately not a health cap: the pillar is
+  explicit that unmet needs never kill the player outright.
+- Compounding is by construction, not by an invented stacking matrix: hungry
+  AND dehydrated AND cold at once already drive the same meter down, so they
+  compound through the one axis.
+- No new tuned magnitude was invented. The worst-case multiplier **is** the
+  value this codebase already committed to for its one existing severe
+  exposure debuff, the freezing movement slow, which now references the
+  module's constant so there is exactly one definition (pinned by
+  `test_condition_penalty.gd`).
+- Continuous survival state deliberately stays **out** of `debuff_stack.gd`.
+  That model is duration-based (`{debuff_id, stacks, time_remaining}`, expiring
+  on advance), a natural fit for discrete timed events like venom and an
+  awkward one for a continuous state like hunger, which would have to be
+  re-applied every frame with a meaningless duration just to stay alive.
+
+Status:
+
+- ✅ `fitness` → movement multiplier (`condition_penalty.gd`), composed into
+  `Player.current_speed_multiplier`, tested.
+- ⬜ The pillar's other three effect kinds (stamina regen, damage/accuracy,
+  blurred vision). A damage hook exists (`Player._damage_buff_multiplier`) and
+  would need only a magnitude decision; stamina regen would be invisible (see
+  the stamina scope section — nothing spends stamina but sickness); blurred
+  vision has no rendering hook at all.
+
 ### Body temperature & weather exposure (mechanism spec)
 
 Concrete first pass at the "exposure to [weather.md](weather.md) events (cold,
@@ -36,8 +110,11 @@ dimension the core meters were missing.
 
 Status:
 
-- 🚧 Warmth meter + thermoregulation (`survival_meters.gd`), cold accelerates
-  fitness loss.
+- ✅ Warmth meter + thermoregulation (`survival_meters.gd`), cold accelerates
+  fitness loss — and `fitness` now has a real consumer: `condition_penalty.gd`
+  turns it into a live movement multiplier, so starving, dehydrated and cold
+  all cost real speed. Until that landed, fitness was an accumulator with no
+  reader anywhere in `scenes/` or `src/`.
 - 🚧 Ambient warmth from climate × season × weather (`EarthChunkManager`),
   wetness chills.
 - 🚧 Weather/freezing movement slow; warmth bar in the HUD.
@@ -160,7 +237,13 @@ Status:
   doesn't spend stamina yet (it only drains thirst via `drink()` and affects
   speed via water depth). None of the three traversal actions this section
   names are wired to stamina; that wiring is still to build, alongside the
-  sprint/climb mechanics themselves.
+  sprint/climb mechanics themselves. Measured consequence, recorded so this is
+  not mistaken for an oversight later: the only `spend_stamina` caller in the
+  entire game is `Player._sickness_step`, so a healthy player's stamina is
+  pinned at 1.0 and `is_exhausted()` can never fire. The exhaustion half of the
+  "debuffs, not death" pillar is structurally unreachable until a traversal
+  sink exists, which is exactly why `ConditionPenalty` deliberately has no
+  exhaustion branch — it would be untestable-in-play dead code.
 
 ### Open questions
 
@@ -173,7 +256,17 @@ Status:
   multiplayer (roadmap Phase 5+) makes "nearby others" a meaningful
   concept.
 - Exact debuff curve/stacking rules for compounding neglect (e.g. hungry +
-  sick + exhausted at once) — needs numeric design.
+  sick + exhausted at once) — **partially answered, still open.** Compounding
+  now happens through the single existing `fitness` axis: every unmet need
+  drives the same meter down, so they compound by construction rather than
+  through an invented stacking matrix, and the worst-case magnitude
+  deliberately reuses the already-committed freezing-slow value rather than
+  inventing a second number (`ConditionPenalty.WORST_SPEED_MULTIPLIER`). What
+  remains genuinely open: which of the pillar's OTHER named effect kinds
+  (stamina regen, damage/accuracy, vision) each need should also drive, and
+  whether the mild thresholds (`is_hungry`/`is_thirsty`, as opposed to
+  starving/dehydrated) deserve their own smaller drop rate — today the ramp is
+  a cliff at 0.85, not an escalation.
 - Exact tuned constants for each of the four triggers above (wound-bleed
   rate, cold-exposure duration threshold, water-contamination radius/chance,
   diet-variety window/decay) — this doc specifies the real SHAPE, per this

@@ -55,6 +55,12 @@ Bermuda Triangle, plus Ready Player One and the tangle of 80s pop culture
   parse-then-dispatch shape already supports this for free — an Easter
   egg command is just another `match` arm in `World`'s dispatcher
   (`scenes/world.gd`), deliberately **not** listed in `/help`'s output.
+  One constraint on the name: a secret command must still begin with `/`
+  or a letter, because the parser now drops any leading run of characters
+  that cannot start a command (`_strip_leading_junk`) — that run is
+  layout/dead-key junk, e.g. the buffered German `^`. So no command may be
+  hidden behind a punctuation prefix; hide it by omission from `/help`
+  instead.
 - **Calendar-date triggers.** The game already has a real, live clock
   driving seasons/weather (`SeasonCycle`, `WeatherModel`) — a date-gated
   egg is a small, pure check against the real system date, the same kind

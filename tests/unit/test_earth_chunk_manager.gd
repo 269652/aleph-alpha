@@ -251,6 +251,57 @@ func test_hillshade_overlay_paints_a_real_tile_for_every_loaded_cell():
 	hillshade_layer.free()
 
 
+## RULE-9 pin for the hillshade painter's halved elevation sampling: EVERY
+## painted cell must still be exactly the atlas coordinate the old
+## slope_at_global + aspect_at_global pair produced. The painter now takes
+## ONE gradient per tile and derives both readings from it (see
+## TerrainRelief.gradient_at) -- four elevation samples per tile instead of
+## eight, on what is the largest per-chunk cost in the running game.
+##
+## Counts mismatches and asserts once rather than asserting 25,600 times:
+## the coverage is every loaded cell either way, but GUT's per-assert
+## bookkeeping across a full load radius is itself minutes of runtime.
+func test_hillshade_tiles_are_exactly_the_slope_and_aspect_atlas_coords():
+	var hillshade_layer := TileMapLayer.new()
+	manager.set_hillshade_layer(hillshade_layer)
+	manager.update(_berlin_tile)
+
+	var renderer := TerrainRenderer.new()
+	var mismatches := 0
+	var first_mismatch := ""
+	for cell in hillshade_layer.get_used_cells():
+		var expected := renderer.atlas_coords_for_hillshade(
+			manager.slope_at_global(cell.x, cell.y), manager.aspect_at_global(cell.x, cell.y)
+		)
+		if hillshade_layer.get_cell_atlas_coords(cell) != expected:
+			mismatches += 1
+			if first_mismatch == "":
+				first_mismatch = "%s painted %s, expected %s" % [
+					cell, hillshade_layer.get_cell_atlas_coords(cell), expected
+				]
+	assert_eq(mismatches, 0, "hillshade tiles must be unchanged; first: %s" % first_mismatch)
+	assert_gt(hillshade_layer.get_used_cells().size(), 0, "and there must be cells to check")
+	hillshade_layer.free()
+
+
+## The manager-level delegate the painter uses, mirroring slope_at_global /
+## aspect_at_global's own always-delegates-to-the-generator shape. Must agree
+## exactly with both, since it is the single source they are now derived from.
+func test_gradient_at_global_matches_the_generator_and_derives_slope_and_aspect():
+	var relief := manager.generator.terrain_relief()
+	for tile in [_berlin_tile, _berlin_tile + Vector2i(37, -21), Vector2i(12345, 6789)]:
+		var gradient := manager.gradient_at_global(tile.x, tile.y)
+		assert_eq(gradient, manager.generator.gradient_at_global(tile.x, tile.y))
+		assert_eq(
+			relief.slope_degrees_from_gradient(gradient.x, gradient.y),
+			manager.slope_at_global(tile.x, tile.y)
+		)
+		assert_eq(
+			relief.aspect_degrees_from_gradient(gradient.x, gradient.y),
+			manager.aspect_at_global(tile.x, tile.y)
+		)
+
+
 ## set_wind_strength must also drive SWAY -- trees, blooms/scrub/lichen tufts
 ## (WindSway), and illustrated grass's own ambient wind term -- not just the
 ## water shimmer, reusing the SAME live WeatherModel.wind_strength_for value
@@ -776,6 +827,114 @@ func test_moving_far_away_evicts_the_original_chunk():
 	manager.update(far_away_tile)
 
 	assert_false(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+
+# -- steady-state streaming budget (see docs/concept/persistence.md's
+# "Loading screens" section). update() has always loaded every pending chunk
+# in one uninterrupted synchronous call. That is fine for the COLD load,
+# which has update_with_progress and a loading screen -- but World calls
+# update() every frame during play, and stepping across one chunk boundary
+# makes a whole LOAD_RADIUS column pending at once, all of it generated,
+# painted and populated inside that single frame. -------------------------
+
+## The guard for the ~210 existing update() call sites: the default is
+## unbudgeted, exactly as update() has always behaved.
+func test_update_loads_every_pending_chunk_when_no_budget_is_set():
+	var center_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	var expected := manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS).size()
+	manager.update(Vector2i(0, 0))
+	assert_eq(manager.loaded_chunk_count(), expected)
+	assert_eq(manager.max_chunk_loads_per_update, 0, "unbudgeted must stay the default")
+
+
+func test_update_loads_at_most_the_configured_budget_in_one_call():
+	manager.max_chunk_loads_per_update = 1
+	manager.update(Vector2i(0, 0))
+	assert_eq(manager.loaded_chunk_count(), 1)
+
+
+## With a budget it matters WHICH chunk gets loaded: chunks_in_radius is
+## row-major, so an unordered budgeted loader would start at the far
+## top-left corner rather than the ground under the player's feet.
+func test_a_budgeted_update_loads_the_nearest_pending_chunk_first():
+	manager.max_chunk_loads_per_update = 1
+	manager.update(_berlin_tile)
+	assert_true(
+		manager.is_chunk_loaded(_chunk_coord_for_tile(_berlin_tile)),
+		"the chunk the player is standing in must be loaded before any other"
+	)
+
+
+func test_repeated_budgeted_updates_eventually_load_the_whole_radius():
+	var center_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	var expected := manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS)
+	manager.max_chunk_loads_per_update = 1
+	for i in expected.size():
+		manager.update(Vector2i(0, 0))
+	for chunk_coord in expected:
+		assert_true(manager.is_chunk_loaded(chunk_coord))
+
+
+## RULE-9 for the streaming change: budgeting alters WHEN chunks load and in
+## what order, and must not alter WHICH ones end up loaded. Compares a
+## budgeted manager driven to completion against an unbudgeted one -- the
+## same comparison the game itself relies on, since both end in the same
+## steady state.
+func test_a_budgeted_manager_ends_with_exactly_the_same_chunks_as_an_unbudgeted_one():
+	manager.update(_berlin_tile)
+	var unbudgeted := manager.chunks_in_radius(
+		_chunk_coord_for_tile(_berlin_tile), EarthChunkManager.LOAD_RADIUS
+	)
+
+	var other_layer := TileMapLayer.new()
+	var other_entities := Node2D.new()
+	var other_creatures := Node2D.new()
+	var budgeted := EarthChunkManager.new(other_layer, other_entities, other_creatures)
+	budgeted.max_chunk_loads_per_update = 1
+	for i in unbudgeted.size():
+		budgeted.update(_berlin_tile)
+
+	assert_eq(budgeted.loaded_chunk_count(), manager.loaded_chunk_count())
+	for chunk_coord in unbudgeted:
+		assert_true(
+			budgeted.is_chunk_loaded(chunk_coord),
+			"%s must be loaded by the budgeted manager too" % chunk_coord
+		)
+	other_layer.free()
+	other_entities.free()
+	other_creatures.free()
+
+
+## Eviction is not part of the budget: a budgeted update still drops chunks
+## the player has left behind, or a slow loader would grow the live set.
+func test_a_budgeted_update_still_evicts_beyond_unload_radius():
+	manager.update(Vector2i(0, 0))
+	assert_true(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+	manager.max_chunk_loads_per_update = 1
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	assert_false(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+
+## The budget VALUE is a derived, tested number rather than an eyeballed
+## one. At the player's real base pace -- Player.BASE_SPEED 80 world units a
+## second over TerrainRenderer.TILE_SIZE 16, i.e. 5 tiles a second -- one
+## chunk per frame is ample: the newly pending ring is LOAD_RADIUS *
+## CHUNK_SIZE = 64 tiles ahead, so even halving that for safety leaves 6.4
+## seconds of walking, ~192 frames at 30 fps, to load a worst-case 9 chunks.
+func test_chunks_per_update_at_the_players_real_walking_pace_is_one():
+	assert_eq(EarthChunkManager.chunks_per_update_for(5.0, 30.0), 1)
+
+
+## ...and it scales rather than pretending: a player crossing the whole lead
+## in a handful of frames needs the whole pending set in one call, which is
+## exactly the unbudgeted behaviour.
+func test_chunks_per_update_for_an_impossibly_fast_player_is_the_whole_pending_set():
+	var worst_case := 2 * (2 * EarthChunkManager.LOAD_RADIUS + 1) - 1
+	assert_eq(EarthChunkManager.chunks_per_update_for(10000.0, 30.0), worst_case)
+	assert_gt(EarthChunkManager.chunks_per_update_for(200.0, 30.0), 1)
 
 
 # -- update_with_progress: chunked, frame-yielding update() variant used by
@@ -3517,6 +3676,92 @@ func test_step_wild_crops_updates_marker_growth_too():
 	assert_eq(marker.growth, sim.get_growth(immature_cell))
 
 
+# -- wild crops and the season (see docs/concept/wild_crops.md "The season")
+#
+# WildCropPatch.advance grew a `season_growth` parameter and WildCropRenderer
+# grew a `season_tint` one, both defaulted so an untaught caller sees exactly
+# today's picture -- and step_wild_crops was that untaught caller, so both
+# halves were inert in the running game. These pin the manager actually
+# passing the season through, not the phenology itself (WildCropPatch's own
+# tests have that). Share the `wild_crops_in_season` token so one narrowed
+# -gunit_test_name run covers the set.
+
+## A tint no season could produce by accident, so a pass cannot be the
+## default Color.WHITE sitting there untouched.
+const SEASON_PROBE_TINT := Color(0.25, 0.5, 0.75)
+
+
+## Forces `cell` back to bare ground so a growth step is measurable.
+## _seed_initial_patches hands every map-generated patch 1.0 (mature, like
+## map-generated grass and trees), and clamped-at-maturity growth measures
+## nothing -- immature cells otherwise only appear once spread has fired,
+## which is a geographic accident of the run.
+func _reset_crop_growth(sim: WildCropPatch, cell: Vector2i) -> void:
+	sim._patches[cell] = 0.0
+
+
+func test_wild_crops_in_season_grow_slower_in_winter_than_in_high_summer():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var sim: WildCropPatch = manager._wild_crop_sims[chunk_coord]["carrot"]
+	var cells: Array = sim.get_patch_cells()
+	assert_gt(cells.size(), 0, "precondition: a carrot patch turned up around Berlin")
+	var cell: Vector2i = cells[0]
+	var cycle := SeasonCycle.new()
+
+	_reset_crop_growth(sim, cell)
+	manager.set_world_age_seconds(cycle.seconds_until_season(0.0, "winter"))
+	manager.step_wild_crops(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+	var winter_gain: float = sim.get_growth(cell)
+
+	_reset_crop_growth(sim, cell)
+	manager.set_world_age_seconds(cycle.seconds_until_season(0.0, "summer"))
+	manager.step_wild_crops(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+	var summer_gain: float = sim.get_growth(cell)
+
+	assert_lt(winter_gain, summer_gain, "the same tick ripened a carrot as fast in January as in July")
+	# Dormancy, not death: growth_modifier's floor is 0.2, not 0 (see
+	# docs/concept/seasons.md's "modulates, doesn't gate" rule). A winter tick
+	# that moved nothing would pass the comparison above for the wrong reason.
+	assert_gt(winter_gain, 0.0, "a root crop goes dormant in winter, it does not stop")
+
+
+func test_wild_crops_in_season_tint_their_tops_on_a_step():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var markers: Dictionary = manager._wild_crop_markers[chunk_coord]["carrot"]
+	assert_gt(markers.size(), 0, "precondition: a carrot patch turned up around Berlin")
+
+	manager.set_season_tint(SEASON_PROBE_TINT)
+	manager.step_wild_crops(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+
+	for cell in markers:
+		assert_eq(
+			markers[cell].season_tint,
+			SEASON_PROBE_TINT,
+			"a crop top already on screen never learns the season turned"
+		)
+
+
+## A chunk streamed in during winter has to arrive ALREADY dead-topped.
+## Tinting it only on the next step_wild_crops tick means it pops in summer
+## green and corrects itself up to GRASS_REFRESH_INTERVAL later, in plain
+## sight, every time the player walks over a chunk boundary.
+func test_wild_crops_in_season_spawn_already_tinted_at_chunk_load():
+	manager.set_season_tint(SEASON_PROBE_TINT)
+	manager.update(_berlin_tile)
+
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var markers: Dictionary = manager._wild_crop_markers[chunk_coord]["carrot"]
+	assert_gt(markers.size(), 0, "precondition: a carrot patch turned up around Berlin")
+	for cell in markers:
+		assert_eq(
+			markers[cell].season_tint,
+			SEASON_PROBE_TINT,
+			"a newly streamed chunk popped in summer-green in the middle of winter"
+		)
+
+
 # -- decomposers: ants, carrion bugs (see docs/concept/carrion.md) ----------
 
 func test_update_spawns_decomposers_for_loaded_regions_around_berlin():
@@ -6163,3 +6408,165 @@ func test_step_regional_trade_does_nothing_before_its_interval_elapses():
 	manager.step_regional_trade(1.0)
 
 	assert_eq(manager.event_store().events_of_type("regional_trade_shipped").size(), 0)
+
+
+# -- a building piece occupies its tile against vegetation -------------------
+#
+# Reported: a village house stamped straight over a standing tree -- trunk
+# rooted in the stone floor, canopy drawn over the masonry. Three directions,
+# not one, because _load_chunk spawns trees BEFORE it spawns the village that
+# stamps houses over them, and loads chunk.modifications from disk before
+# BOTH: (A) the house arriving second must clear what is growing where it
+# lands (stamp_structure_at_global, below), (B) the forest respawning next
+# load must skip a cell a persisted piece holds (TreeRenderer.spawn_trees,
+# covered in test_tree_renderer.gd), and (C) a spread seed must not take root
+# on a floor (_can_root_at, below). Only REAL BuildingPieces occupy -- an
+# earth path or a campfire is a chunk modification too.
+
+const _OccupancyTreeRooting = preload("res://src/world/tree_rooting.gd")
+
+
+func _tree_standing_at(tile: Vector2i) -> ChoppableTree:
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(
+		(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	entities_parent.add_child(tree)
+	manager._loaded_trees[_chunk_coord_for_tile(tile)].append(tree)
+	return tree
+
+
+func test_building_piece_occupancy_clears_trees_on_a_stamped_footprint():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(10, 10)
+	var tree := _tree_standing_at(origin)
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "stone_floor"}, {})
+
+	assert_false(
+		manager._loaded_trees[chunk_coord].has(tree),
+		"a tree was left standing inside a freshly stamped floor"
+	)
+	assert_true(tree.is_queued_for_deletion())
+
+
+## ...but only what the footprint actually covers. Clearing wider than the
+## stamp would strip a house's whole clearing bare.
+func test_building_piece_occupancy_leaves_a_tree_beside_the_footprint_standing():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(10, 10)
+	var neighbour := _tree_standing_at(origin + Vector2i(3, 0))
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "stone_floor"}, {})
+
+	assert_true(
+		manager._loaded_trees[chunk_coord].has(neighbour),
+		"a tree three tiles from the footprint should still be standing"
+	)
+	assert_false(neighbour.is_queued_for_deletion())
+
+
+## A persisted sapling under the footprint has to go from the RECORD too, or
+## it simply comes back from disk on the next load (see Chunk.planted_trees).
+func test_building_piece_occupancy_forgets_a_persisted_sapling_under_the_footprint():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var chunk = manager._loaded_chunks[chunk_coord]
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(12, 12)
+	var under := Vector2(
+		(origin.x + 0.5) * TerrainRenderer.TILE_SIZE, (origin.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	var beside := Vector2(
+		(origin.x + 3.5) * TerrainRenderer.TILE_SIZE, (origin.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	chunk.planted_trees.append({"position": under, "planted_at": 0.0})
+	chunk.planted_trees.append({"position": beside, "planted_at": 0.0})
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "wood_floor"}, {})
+
+	var kept_positions := []
+	for record in chunk.planted_trees:
+		kept_positions.append(record["position"])
+	assert_false(kept_positions.has(under), "a persisted sapling survives under the house floor")
+	assert_true(kept_positions.has(beside), "the sapling beside the house should be untouched")
+
+
+## Nothing takes root on a floor afterwards either -- TreeRooting answers the
+## BIOME question only, and occupancy is a separate refusal.
+func test_building_piece_occupancy_refuses_a_sapling_rooting_on_a_piece():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var chunk = manager._loaded_chunks[chunk_coord]
+	var rootable := Vector2i(-1, -1)
+	for y in range(4, EarthChunkManager.CHUNK_SIZE - 4):
+		for x in range(4, EarthChunkManager.CHUNK_SIZE - 4):
+			if _OccupancyTreeRooting.can_root_in(chunk.biome[y * chunk.width + x]):
+				rootable = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(x, y)
+				break
+		if rootable != Vector2i(-1, -1):
+			break
+	if rootable == Vector2i(-1, -1):
+		pass_test("no rootable cell in Berlin's own chunk this run")
+		return
+	var position := Vector2(
+		(rootable.x + 0.5) * TerrainRenderer.TILE_SIZE,
+		(rootable.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+
+	manager.stamp_structure_at_global(chunk_coord, rootable, {Vector2i(0, 0): "wood_floor"}, {})
+	var before: int = chunk.planted_trees.size()
+	manager._plant_sapling_record(chunk, chunk_coord, position)
+
+	assert_eq(
+		chunk.planted_trees.size(), before,
+		"a sapling took root on a building piece"
+	)
+
+
+## The same rule for STONE. _load_chunk spawns boulders and mountain ore veins
+## (both land in _loaded_stones) before the village stamps its houses, so on a
+## first visit a boulder standing where a wall goes is enclosed by it exactly
+## the way a tree was. No persisted-record half here: stones carry no
+## planted_trees equivalent -- they regenerate deterministically, and the
+## respawn direction is closed in StoneRenderer.
+func _stone_standing_at(tile: Vector2i) -> Node2D:
+	var stone := Node2D.new()
+	stone.position = Vector2(
+		(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	entities_parent.add_child(stone)
+	manager._loaded_stones[_chunk_coord_for_tile(tile)].append(stone)
+	return stone
+
+
+func test_building_piece_occupancy_clears_stones_on_a_stamped_footprint():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(14, 14)
+	var boulder := _stone_standing_at(origin)
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "stone_floor"}, {})
+
+	assert_false(
+		manager._loaded_stones[chunk_coord].has(boulder),
+		"a boulder was left standing inside a freshly stamped floor"
+	)
+	assert_true(boulder.is_queued_for_deletion())
+
+
+## ...and, as with trees, only what the footprint actually covers.
+func test_building_piece_occupancy_leaves_a_stone_beside_the_footprint_standing():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(14, 14)
+	var neighbour := _stone_standing_at(origin + Vector2i(3, 0))
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "stone_floor"}, {})
+
+	assert_true(
+		manager._loaded_stones[chunk_coord].has(neighbour),
+		"a boulder three tiles from the footprint should still be standing"
+	)
+	assert_false(neighbour.is_queued_for_deletion())

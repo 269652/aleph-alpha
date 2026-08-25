@@ -1,6 +1,7 @@
 extends GutTest
 
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 var meters: SurvivalMeters
 
@@ -88,6 +89,12 @@ func test_stamina_regenerates_over_time_via_advance():
 func test_fitness_drops_while_starving():
 	while not meters.is_starving():
 		meters.advance(1.0)
+		# Keep drinking. On the world's-day rates thirst bottoms out (and so
+		# starts draining fitness) a third of a day BEFORE hunger reaches
+		# starving, which would leave fitness already floored at 0.0 by the
+		# time the crawl ends. This test is about starvation itself driving
+		# condition down, so dehydration is held off deliberately.
+		meters.drink(1.0)
 	var before := meters.fitness
 	meters.advance(1.0)
 	assert_lt(meters.fitness, before)
@@ -199,3 +206,43 @@ func test_meters_drain_slowly_enough_for_a_short_excursion():
 	assert_false(meters.is_thirsty(), "shouldn't be thirsty after only a minute")
 	# ...but thirst still outpaces hunger, and both are non-trivial over time.
 	assert_gt(meters.thirst, meters.hunger)
+
+
+# -- the meters keep the WORLD'S calendar, not a private one. See -------------
+# -- survival_meters.gd's SECONDS_TO_STARVE comment and concept/survival.md's -
+# -- "Hunger and thirst keep the world's calendar". The excursion test above --
+# -- only ever guarded the FAST side; these bracket the slow side too. --------
+
+func test_half_an_in_game_day_leaves_you_hungry_but_not_starving():
+	meters.advance(SeasonCycle.SECONDS_PER_DAY * 0.5)
+	assert_true(meters.is_hungry(), "half the world's day without food is genuinely hungry")
+	assert_false(meters.is_starving(), "...but half a day is not starvation")
+
+
+func test_it_takes_a_whole_in_game_day_of_not_eating_to_empty_you():
+	var nearly := SurvivalMeters.new()
+	nearly.advance(SeasonCycle.SECONDS_PER_DAY * 0.9)
+	assert_lt(nearly.hunger, 1.0, "hunger must not be pinned at full before the day is out")
+	meters.advance(SeasonCycle.SECONDS_PER_DAY)
+	assert_almost_eq(meters.hunger, 1.0, 0.001, "a full in-game day without food empties you")
+
+
+func test_thirst_bites_sooner_than_hunger_but_on_the_same_calendar():
+	meters.advance(SeasonCycle.SECONDS_PER_DAY * 0.5)
+	assert_true(meters.is_thirsty(), "half a day without water is genuinely thirsty")
+	assert_false(meters.is_dehydrated(), "...but half a day is not dying of it")
+	assert_gt(meters.thirst, meters.hunger, "thirst still outpaces hunger")
+	var dry := SurvivalMeters.new()
+	dry.advance(SeasonCycle.SECONDS_PER_DAY * 0.75)
+	assert_almost_eq(dry.thirst, 1.0, 0.001, "thirst bottoms out inside a day")
+	assert_lt(dry.hunger, 1.0, "...and does so before hunger does")
+
+
+func test_the_meters_are_measured_in_the_worlds_days_not_minutes():
+	# Expressed in DAYS rather than in the derivation's own terms: hunger takes
+	# one whole in-game day, thirst rather less but still a real fraction of
+	# one -- not the ~58 starvations a day the free 0.004/0.006 gave.
+	var hunger_days := 1.0 / (SurvivalMeters.HUNGER_RATE_PER_SECOND * SeasonCycle.SECONDS_PER_DAY)
+	var thirst_days := 1.0 / (SurvivalMeters.THIRST_RATE_PER_SECOND * SeasonCycle.SECONDS_PER_DAY)
+	assert_almost_eq(hunger_days, 1.0, 0.001, "a day without food starves you")
+	assert_between(thirst_days, 0.5, 1.0, "thirst runs faster than hunger, still measured in days")

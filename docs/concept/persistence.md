@@ -16,6 +16,16 @@ punished.
    reappearing. Before this doc, the world persisted eagerly regardless of
    menu choice while the player never persisted at all, so "New Game" actually
    meant "old world, new stats" — a bug, not a feature.
+   - **…but the player must be told what new costs, and it must be
+     recoverable.** New Game is the only irreversible action in the game.
+     There is one save slot, so starting one destroys the other — the whole
+     accumulated world, not just a character. Two consequences are part of
+     the spec, not polish: the player is asked before anything is destroyed
+     (and only when there is actually something to lose), and everything the
+     wipe removes is copied to `<path>.bak` first. One generation,
+     overwritten by the next New Game — enough to undo a mis-click, not an
+     archive. It roughly doubles the world's on-disk size while the backup
+     sits there, which is a cheap price for an undo.
 2. **Load Game means exactly where you left off.** Position, class, authored
    appearance, carried items, worn gear, hotbar bindings, wallet, XP/level,
    and skill-tree allocations all round-trip losslessly. A loaded character
@@ -93,11 +103,46 @@ isn't offered when there's nothing to load. It bypasses the character creator
 entirely (a load restores a character, it doesn't author one) and emits a new
 `load_requested` signal straight from the root screen.
 
+### Confirming a destructive New Game
+
+The destructive click is **Begin**, at the end of the character creator — not
+the root screen's "New Game", which only navigates. **Host Game (LAN)** routes
+through the same creator and the same Begin button, so it is exactly as
+destructive; a confirmation on the root screen's New Game button alone would
+miss it entirely.
+
+- `MainMenu._begin_pressed` is the only path to `start_requested`. When
+  `_player_save.has_save(save_path)` it shows a confirmation screen instead of
+  emitting — the *same* predicate that decides whether the root screen offers
+  Load Game, so "is there anything to lose" is answered in exactly one place.
+  A first-ever game never sees a warning about a save that does not exist.
+- The confirmation is a fourth screen in `MainMenu`'s existing
+  `_root_screen`/`_create_screen`/`_join_screen` state machine (a plain
+  `Control`, like every other overlay in this codebase — `SettingsOverlay`,
+  `LicenseGateOverlay`, `LoadingOverlay` — not a `ConfirmationDialog`). `_show`
+  and `_ready` read one shared `_screens()` list, so a screen can never be
+  added to the tree but forgotten by the hide loop. "Keep my save" is the
+  primary button and comes first; "Overwrite and start" emits.
+- It names what is actually destroyed — the character *and* the world they
+  lived in — rather than asking "are you sure?".
+
+**The seam with `World`:** no new signal and no change to
+`start_requested`'s signature. Its *meaning* is now stricter —
+`start_requested` means "the player has confirmed a destructive new game" —
+so `World._on_menu_start_requested` keeps wiping unconditionally. World never
+confirms anything; by the time the signal arrives the loading overlay is
+already going up.
+
 `World`:
 - **New Game** (`_on_menu_start_requested`, existing path): before spawning,
+  first **backs up** everything it is about to destroy (`_backup_persisted_
+  world` → `WorldReset.backup_directory`/`backup_file` over
+  `World.backed_up_directories()`/`backed_up_files()`), then
   wipes `PlayerSave` and every `EarthChunkManager` persistence directory
   (`MODIFICATIONS_DIR`/`PLANTED_TREES_DIR`/`FISH_POPULATION_DIR` — read as
-  already-public constants, not modified) via a `World`-local helper, so the
+  already-public constants, not modified), plus the emergence stores (event,
+  memory, household, contract, market, institution, world-boss) and the world
+  clock, via a `World`-local helper, so the
   freshly spawned character loads into a genuinely clean world. Safe to do
   unconditionally here because `EarthChunkManager` hasn't loaded any chunks
   yet at this point in `_ready()`'s sequencing (chunk loading is lazy, first
@@ -145,10 +190,69 @@ lets the engine actually paint a frame between chunks — both the spinner's
 own animation and a REAL determinate percentage are visible for the first
 time, where neither was reachable before without exactly this restructuring
 (previously deferred as "out of scope for a loading screen alone").
-`update()` itself is untouched and still fully synchronous — every other
-caller (continuous per-frame gameplay in `World._process`/`_server_process`,
-and the whole pre-existing `update()` test suite) keeps using it unchanged;
+`update()` itself is still fully synchronous — every other caller
+(continuous per-frame gameplay in `World._process`/`_server_process`, and
+the whole pre-existing `update()` test suite) keeps using it unchanged;
 `update_with_progress` is purely additive.
+
+### Steady-state streaming
+
+The same argument applies *during* play, not only at the cold load. `World`
+calls `update()` **every frame**, and stepping across one chunk boundary
+makes a whole `LOAD_RADIUS` column pending at once — five chunks generated,
+terrain/water/hillshade/roof/snow painted, and fully populated inside that
+single frame. That is the periodic stall while walking.
+
+The fix here cannot be an `await`: `_client_process` must stay a plain
+synchronous function (the constraint `world.gd`'s own comment above
+`_run_initial_client_chunk_load` already records). So `update()` instead
+takes an **optional per-call budget**,
+`EarthChunkManager.max_chunk_loads_per_update` — the same "bounded work per
+call" shape `FORAGE_DROPS_PER_TICK`/`SPREAD_ATTEMPTS_PER_TICK` already use:
+
+- **Default `0` means unbudgeted**, i.e. exactly what `update()` has always
+  done, in exactly the row-major order it always did. Nothing about the
+  cold load or any existing caller changes.
+- **When budgeted**, the pending set is loaded **nearest first** (ties
+  broken on row-major position, so the order stays deterministic). Ordering
+  is not cosmetic: `chunks_in_radius` is row-major, so a merely capped scan
+  would spend the budget on the far top-left corner of the radius while the
+  ground the player is walking onto stayed unloaded.
+- **The budget value is derived, not picked.**
+  `EarthChunkManager.chunks_per_update_for(tiles_per_second,
+  frames_per_second)` computes the smallest budget that still keeps the
+  streaming edge ahead: a diagonal boundary crossing makes at worst
+  `2 * (2 * LOAD_RADIUS + 1) - 1` = 9 chunks pending, and the nearest tile
+  of that ring is `LOAD_RADIUS * CHUNK_SIZE` = 64 tiles away, of which
+  `CHUNK_BUDGET_SAFETY_FACTOR` spends only half. At the player's real base
+  pace (`Player.BASE_SPEED` 80 world units/s over `TerrainRenderer.TILE_SIZE`
+  16 = 5 tiles/s) at 30 fps that is **1**. A player fast enough to cross the
+  whole lead inside one frame gets the entire pending set back — the budget
+  degrades to today's behaviour rather than to a hole in the ground.
+
+Budgeting changes *when* and *in what order* chunks load, never *which*: a
+budgeted manager driven to completion ends holding exactly the chunks an
+unbudgeted one does, and eviction is deliberately outside the budget so a
+slow loader cannot grow the live set.
+
+`World` is what makes the budget real in the running game — the manager's
+own default is `0`, so until someone opts in the whole mechanism is dormant.
+`World._apply_streaming_budget(manager)`, called from `_ready()` immediately
+after the manager is constructed, hands it
+`chunks_per_update_for(STREAMING_BUDGET_TILES_PER_SECOND,
+STREAMING_BUDGET_FRAMES_PER_SECOND)`. Both inputs are real measurements
+rather than dials: the pace is the *fastest* the player can actually travel
+(`Taming.MOUNTED_SPEED` over `TerrainRenderer.TILE_SIZE`, not the walking
+pace), and the frame rate is the *worst* the playtest measured — 6 FPS, the
+floor of the 6-8 FPS dip at a chunk boundary this exists to remove, not the
+20-26 FPS of smooth walking. Assuming the dip is the conservative direction:
+fewer frames per second means fewer `update()` calls to spread the pending
+chunks over, so the derivation must allow *more* chunks per call, and the
+budget can never itself be why a chunk arrives late. Neither constant is a
+knife edge — the derivation returns **1** across the whole 6-144 FPS band at
+both the walking and the mounted pace, which is what makes this a derived
+value rather than a tuned one. The cold load is untouched: it goes through
+`update_with_progress`' coroutine, which has its own per-frame yield.
 
 `World._show_loading_overlay(text)` shows `LoadingOverlay` (a small,
 purpose-built `Control` — dim full-screen backdrop, centered status label,
@@ -217,10 +321,26 @@ variant.
 - ✅ `MainMenu` Load Game button + `load_requested` signal, save-aware root
   screen (only offered when `PlayerSave.has_save()`), tested
   (`test_main_menu.gd`).
-- ✅ `WorldReset` (`src/world/world_reset.gd`) wipes a persistence directory,
-  tested (`test_world_reset.gd`); wired into `World._wipe_persisted_world`
-  (player save + all three `EarthChunkManager` persistence dirs) for both
+- ✅ `WorldReset` (`src/world/world_reset.gd`) backs up **and** wipes a
+  persistence directory or file (`backup_directory`/`backup_file`/
+  `wipe_directory`, one `.bak` generation — `BACKUP_SUFFIX`), tested
+  (`test_world_reset.gd`, including the exact New Game sequence: back up,
+  wipe, and the copy is still there); wired into
+  `World._wipe_persisted_world` (player save + all three `EarthChunkManager`
+  persistence dirs + the seven emergence stores + the world clock) for both
   New Game and Host Game.
+- ✅ The backup list itself — `World.backed_up_directories()`/
+  `backed_up_files()`, each path read from the persistence class that owns it
+  rather than restated — tested (`test_world_backup_paths.gd`), including a
+  drift pin that counts the wipe calls in `_wipe_persisted_world`'s own
+  source, so a store added to the wipe without a matching backup entry fails
+  a test instead of silently shipping as un-undoable data loss.
+- ✅ The overwrite confirmation (`MainMenu._begin_pressed` +
+  `_overwrite_confirm_screen`), tested (`test_main_menu.gd`): Begin does not
+  emit `start_requested` while a save exists, confirming emits, "Keep my
+  save" returns to the creator, Host Game is confirmed too, and the new
+  screen is hidden by `_show` like every other. Previously Begin destroyed
+  everything on one click with no prompt at all.
 - ✅ `World` Load-Game spawn path (`_spawn_local_singleplayer_from_save`) and
   the New-Game wipe call — orchestration glue over the already-tested pieces
   above, in keeping with `World`'s existing untested-glue boundary (no
@@ -265,5 +385,12 @@ variant.
   loading screen over an existing synchronous call. A stale cache is a
   one-time cost per `ATLAS_VERSION` bump, self-heals (writes a fresh cache)
   on that first paid run, and every run after is fast (~3s, cache hit).
+- 🚧 **Restoring** from a `.bak` is manual: the copies sit next to the
+  originals in `user://` and recovery today means renaming them back by hand
+  (drop the `.bak`, with the game closed). The backup closes the "gone
+  forever" hole; an in-game "restore the world I just overwrote" affordance
+  is not built. That is the honest gap, and the obvious next step — the
+  paths are already enumerated by `World.backed_up_files()`/
+  `backed_up_directories()`, so a restore is the same loop run the other way.
 - ⬜ Multiple save slots, cloud sync, or any cross-device concern — out of
   scope; single local save file only.

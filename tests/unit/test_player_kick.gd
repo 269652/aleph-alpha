@@ -208,3 +208,41 @@ func test_pulling_a_real_potato_patch_then_kicking_it_moves_it():
 	for d in _spawned_drops:
 		if is_instance_valid(d):
 			d.free()
+
+
+# -- DroppedItem.GROUP_NAME is a SHARED group: LiftableStone and PickableSeed --
+# -- both join it deliberately (so the pickup sweep collects them with no ------
+# -- special case) and neither carries an item_stack. The kickable scan must ---
+# -- survive them rather than aborting on the first one it meets. --------------
+
+const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
+
+
+func test_a_liftable_stone_sharing_the_group_does_not_break_dropped_item_kicking():
+	# NOTE the deliberate difference from _add_stone: this one is parented to
+	# the test itself, which IS in the live tree, so _ready() actually runs and
+	# it actually joins DroppedItem.GROUP_NAME. _add_stone's entities_parent is
+	# never mounted, which is exactly why the existing suite never saw this.
+	var intruder := LiftableStone.new()
+	intruder.diameter_cm = 3.0
+	intruder.position = player.position + Vector2(300, 0)  # far out of reach
+	add_child(intruder)  # BEFORE the carrot: the group is walked in insertion order
+	var dropped := _add_dropped_carrot(Vector2(5, 0))
+	var original_position := dropped.position
+	_tap_kick()
+	assert_ne(dropped.position, original_position, "a group member with no item_stack must not break the dropped-item scan")
+	dropped.free()
+	intruder.free()
+
+
+func test_a_pickable_seed_sharing_the_group_does_not_break_dropped_item_kicking():
+	var seed_node := PickableSeed.new()
+	seed_node.species = "daisy"
+	seed_node.position = player.position + Vector2(300, 0)
+	add_child(seed_node)
+	var dropped := _add_dropped_carrot(Vector2(5, 0))
+	var original_position := dropped.position
+	_tap_kick()
+	assert_ne(dropped.position, original_position, "a group member with no item_stack must not break the dropped-item scan")
+	dropped.free()
+	seed_node.free()

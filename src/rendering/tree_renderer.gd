@@ -11,6 +11,7 @@ const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 
 ## A tree's WORLD footprint (see ProceduralTreeSprite.WORLD_SIZE) -- derived
 ## from the art size through ArtResolution rather than equal to it, since
@@ -71,6 +72,16 @@ func spawn_trees(
 			var global_x := chunk_origin_tiles.x + x
 			var biome_name := chunk.biome[y * chunk.width + x]
 			if not _tree_placement.has_tree_at(global_x, global_y, biome_name):
+				continue
+			# A cell a real building piece already stands on is not open
+			# ground. chunk.modifications is loaded from disk BEFORE this runs
+			# (see EarthChunkManager._load_chunk), so without this the
+			# deterministic forest respawns straight into a persisted house on
+			# every revisit -- a trunk rooted in the floor with its canopy over
+			# the roof (reported). Only REAL pieces count, the same distinction
+			# EarthChunkManager._piece_grid_for draws: an earth path or a
+			# campfire is a modification too, and neither uproots a tree.
+			if BuildingPiece.has_piece(chunk.modifications.get(Vector2i(x, y), "")):
 				continue
 
 			var position := _stand_position(global_x, global_y, tile_size)

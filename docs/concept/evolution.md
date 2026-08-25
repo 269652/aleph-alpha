@@ -88,9 +88,10 @@ independently reactive with no notion of a group at all.
   `creature_info.gd`'s existing diet/temperament tables) scales each
   species' hunt/wander/bed-down drive by real time-of-day — deer bedding
   down at night, wolves shifting toward nocturnal activity, small prey
-  emerging after dark — reading `world_clock.gd`/`sunlight_model.gd`'s
-  already-real time-of-day data, which today drives lighting but no
-  creature behavior at all. Ramped against time-of-day, never switched, the
+  emerging after dark — reading `solar_position.gd`'s already-real
+  time-of-day data (`SolarPosition.elevation_degrees` / `local_hour`, the
+  same real-astronomy source the lighting and the HUD clock already share),
+  which today drives lighting but no creature behavior at all. Ramped against time-of-day, never switched, the
   same "thresholds are ramps or hysteresis, never hard switches" rule
   governing every other behavior gate in `ecosystem_dynamics.md`. Real
   grounding: real crepuscular/nocturnal/diurnal activity partitioning —
@@ -116,9 +117,13 @@ independently reactive with no notion of a group at all.
 
 - ⬜ Everything above (Bloodlines and herd social structure alike) — design
   spec only, not yet implemented. `dna_crossover.gd`, `ecosystem_dynamics.md`'s
-  ramped-threshold pattern, and `world_clock.gd`/`sunlight_model.gd` are all
-  real and already proven elsewhere; nothing here needed a new mechanism
-  invented, only new callers of what already exists.
+  ramped-threshold pattern, and `solar_position.gd`'s real time-of-day data
+  are all real and already proven elsewhere; nothing here needed a new
+  mechanism invented, only new callers of what already exists. (This bullet
+  previously cited `world_clock.gd`/`sunlight_model.gd` as "proven
+  elsewhere"; that was false — `world_clock.gd` was referenced only by its
+  own test and has been deleted as dead code, and `sunlight_model.gd` is
+  unreferenced outside its own test too.)
 
 ### Open questions
 

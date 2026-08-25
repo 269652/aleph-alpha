@@ -21,6 +21,9 @@ const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const CharacterActionPicker = preload("res://src/rendering/character_action_picker.gd")
+const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrain_sprite.gd")
+const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 ## Which weapon the diorama's hero wears for the SWING action -- any real
 ## weapon-kind item id works here (see item_catalog.gd); an iron sword is
@@ -32,6 +35,16 @@ const WEAPON_ITEM_ID := "iron_sword"
 ## a ~6x6-tile footprint comfortably fits a couple of trees, a pond with a
 ## few pebbles at its rim, several grass clumps, and room to stroll.
 const FOOTPRINT := Vector2(96, 96)
+## The biome this little corner of the world is a corner OF.
+const GROUND_BIOME := "grassland"
+## One diorama ground tile covers exactly one REAL world tile -- read from
+## TerrainRenderer rather than restated, so the diorama can never disagree
+## with the world about how much ground a tile is (the same rule the grass
+## cards already follow: IllustratedGrassPatch.WORLD_SIZE == TILE_SIZE).
+const GROUND_TILE_WORLD_SIZE := float(TerrainRenderer.TILE_SIZE)
+## Below BOTH the pond and the grass band, which each sit at -1 (see their
+## own doc comments on why they use a z_index group rather than Y-sort).
+const GROUND_Z_INDEX := -2
 const PEBBLE_DIAMETER_CM := 4.0
 ## How many attempts _pick_new_target makes before giving up and holding
 ## position for a frame rather than looping forever -- mirrors
@@ -48,6 +61,9 @@ const FISH_SWIM_SPEED := 4.0
 const FISH_TURN_RATE := 3.0
 
 var character_view: Node2D = null
+## The ground plane's own tiles (see _build_ground) -- kept so tests can
+## check coverage and so a rebuild replaces them rather than stacking.
+var ground_tiles: Array[Node2D] = []
 var tree_nodes: Array[Node2D] = []
 var pebble_nodes: Array[Node2D] = []
 var fish_nodes: Array[Node2D] = []
@@ -104,6 +120,7 @@ func build(dna_seed: int) -> void:
 	for child in get_children():
 		remove_child(child)
 		child.free()
+	ground_tiles = []
 	tree_nodes = []
 	pebble_nodes = []
 	fish_nodes = []
@@ -122,6 +139,7 @@ func build(dna_seed: int) -> void:
 	_rng.seed = dna_seed
 
 	_layout = CharacterPreviewLayout.generate(dna_seed, FOOTPRINT)
+	_build_ground()
 	_build_grass()
 	_build_pond()
 	_build_pebbles()
@@ -295,6 +313,54 @@ func _pick_new_fish_target() -> Vector2:
 	var half_extent := _layout.pond_radius * CharacterPreviewLayout.FISH_SAFE_RADIUS_FRACTION
 	var bounds := Rect2(_layout.pond_center - Vector2.ONE * half_extent, Vector2.ONE * half_extent * 2.0)
 	return CharacterStroll.pick_target(bounds, _rng)
+
+
+## The ground the whole diorama stands on. There was none at all before:
+## grass, pond, pebbles and trees were drawn straight onto the SubViewport's
+## transparent background, so what showed between them was the creator
+## panel's own near-black StyleBox (reported live). Worse, the pond's
+## shore-to-shore fade is pure ALPHA (water_shader: COLOR.a =
+## alpha_strength * smoothstep over the shore distance), so with nothing
+## behind it to fade INTO, a deliberately rectangular pond (kept rectangular
+## on direct instruction: "should be more rectangular not a real circle")
+## read as a hard-edged blue box rather than water lying on a bank.
+##
+## Uses the SAME has-art-then-fallback seam TerrainRenderer._biome_frame_image
+## uses, so the diorama's ground is literally the world's ground rather than
+## a preview-only backdrop -- the design doc's first pillar. The predecessor
+## stage this diorama replaced did have a ground backdrop; the capability was
+## simply lost in the rewrite and never specified, which is why nothing
+## caught it.
+func _build_ground() -> void:
+	var illustrated := IllustratedTerrainSprite.new()
+	var procedural := ProceduralTerrainSprite.new()
+	var columns := int(ceil(FOOTPRINT.x / GROUND_TILE_WORLD_SIZE))
+	var rows := int(ceil(FOOTPRINT.y / GROUND_TILE_WORLD_SIZE))
+	for row in rows:
+		for column in columns:
+			# Hash-derived per cell, so the same hero always stands on the
+			# same ground (the design doc's Determinism pillar) while
+			# neighbouring tiles still pick different art variants.
+			var tile_seed := hash("%d_%d_diorama_ground" % [column, row])
+			var image: Image = (
+				illustrated.frame_for(GROUND_BIOME, tile_seed)
+				if illustrated.has_variants(GROUND_BIOME)
+				else procedural.generate_frame_image(GROUND_BIOME, tile_seed, 0)
+			)
+			var tile := Sprite2D.new()
+			tile.name = "Ground%d_%d" % [column, row]
+			tile.texture = ImageTexture.create_from_image(image)
+			tile.centered = false
+			# Derived from the art's OWN width, not a hard-coded
+			# TerrainRenderer.LAYER_SCALE: illustrated tiles are
+			# IllustratedTerrainSprite.CANVAS_SIZE (32px) while the procedural
+			# fallback is ProceduralTerrainSprite.SIZE (64px), and both have to
+			# end up covering exactly GROUND_TILE_WORLD_SIZE.
+			tile.scale = Vector2.ONE * (GROUND_TILE_WORLD_SIZE / float(image.get_width()))
+			tile.position = Vector2(column, row) * GROUND_TILE_WORLD_SIZE
+			tile.z_index = GROUND_Z_INDEX
+			add_child(tile)
+			ground_tiles.append(tile)
 
 
 func _build_grass() -> void:

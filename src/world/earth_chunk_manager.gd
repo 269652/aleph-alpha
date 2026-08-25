@@ -171,6 +171,55 @@ const LOAD_RADIUS := 2
 ## oscillating near a boundary doesn't thrash load/unload every frame.
 const UNLOAD_RADIUS := 3
 
+## How many chunks ONE update() call may generate. 0 means "as many as are
+## pending", which is what update() has always done and what every existing
+## call site and test expects -- so the default changes nothing.
+##
+## Set to a small number by continuous per-frame gameplay (World's
+## _client_process/_server_process call update() every frame): stepping
+## across a chunk boundary makes a whole LOAD_RADIUS column pending at once,
+## and _load_chunk is real generation plus terrain/water/hillshade/roof/snow
+## painting plus every entity that chunk spawns. Five of those inside one
+## frame is the periodic stall while walking. Derive the value with
+## chunks_per_update_for below rather than picking one; the COLD initial load
+## keeps using the update_with_progress coroutine instead.
+var max_chunk_loads_per_update := 0
+
+## How much of the streaming lead to actually spend. The one product
+## decision in chunks_per_update_for below: the budget is sized to finish the
+## worst-case pending set within HALF the distance the player would have to
+## walk to reach unloaded ground, so a burst of frame drops, a diagonal run
+## or a temporary speed boost still cannot outrun the loader.
+const CHUNK_BUDGET_SAFETY_FACTOR := 2.0
+
+
+## The smallest per-update chunk budget that still keeps the streaming edge
+## ahead of a player moving at `tiles_per_second` while the game renders
+## `frames_per_second`.
+##
+## Real geometry, not a guess. Crossing a chunk boundary diagonally makes at
+## worst a full row AND a full column pending: 2 * (2 * LOAD_RADIUS + 1) - 1
+## chunks. The nearest tile of that newly pending ring is LOAD_RADIUS *
+## CHUNK_SIZE tiles from the boundary just crossed, which is the real lead
+## available; CHUNK_BUDGET_SAFETY_FACTOR spends only part of it.
+##
+## At the player's actual base pace (Player.BASE_SPEED 80 world units per
+## second over TerrainRenderer.TILE_SIZE 16 = 5 tiles/second) at 30 fps this
+## returns 1. A player fast enough to cross the whole lead inside a frame
+## gets the entire pending set, i.e. exactly today's unbudgeted behaviour --
+## the budget degrades to correctness rather than to a visible hole in the
+## ground. Pinned by test_chunks_per_update_at_the_players_real_walking_pace_
+## is_one and ..._for_an_impossibly_fast_player_is_the_whole_pending_set.
+static func chunks_per_update_for(tiles_per_second: float, frames_per_second: float) -> int:
+	var worst_case_pending := 2 * (2 * LOAD_RADIUS + 1) - 1
+	if tiles_per_second <= 0.0 or frames_per_second <= 0.0:
+		return 0
+	var lead_tiles := float(LOAD_RADIUS * CHUNK_SIZE) / CHUNK_BUDGET_SAFETY_FACTOR
+	var frames_of_lead := lead_tiles / tiles_per_second * frames_per_second
+	if frames_of_lead < 1.0:
+		return worst_case_pending
+	return clampi(ceili(float(worst_case_pending) / frames_of_lead), 1, worst_case_pending)
+
 ## Real seconds of elapsed play time per simulated ecosystem day -- fast
 ## enough that population/vegetation shifts are noticeable within a play
 ## session, slow enough that creature markers aren't visibly flickering.
@@ -232,6 +281,12 @@ var _decomposer_renderer := DecomposerRenderer.new()
 ## per-chunk-random-count decomposer/wild-crop spawners.
 var _grass_sprite_generator := ProceduralGrassSprite.new()
 var _illustrated_grass := IllustratedGrassPatch.new()
+## The season's tint on living green, as last pushed in by World (see
+## set_season_tint / SeasonalFoliage). Stored rather than read live because
+## the things that need it are refreshed on their own cadences -- the grass
+## material takes it immediately, wild-crop markers take it on the next
+## step_wild_crops tick and at chunk load.
+var _season_tint := Color.WHITE
 var _scrub_sprite_generator := ProceduralScrubSprite.new()
 var _lichen_sprite_generator := ProceduralLichenSprite.new()
 var _wind_sway := WindSway.new()
@@ -551,9 +606,8 @@ func update(player_global_tile: Vector2i) -> void:
 	var center_chunk := _chunk_coord_for_tile(player_global_tile)
 	_sync_decoration_and_grass_tracking(player_global_tile, center_chunk)
 
-	for chunk_coord in chunks_in_radius(center_chunk, LOAD_RADIUS):
-		if not _loaded_chunks.has(chunk_coord):
-			_load_chunk(chunk_coord)
+	for chunk_coord in _budgeted_load_order(center_chunk):
+		_load_chunk(chunk_coord)
 
 	_evict_far_chunks(center_chunk)
 	_update_roof_visibility(player_global_tile)
@@ -598,6 +652,42 @@ func _sync_decoration_and_grass_tracking(player_global_tile: Vector2i, center_ch
 	if player_global_tile != _grass_view_synced_tile:
 		_grass_view_synced_tile = player_global_tile
 		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
+
+
+## The chunks THIS update() call will load, in the order it will load them.
+##
+## Unbudgeted -- the default, and every existing caller -- this is exactly
+## chunks_in_radius' own row-major order over the not-yet-loaded chunks, i.e.
+## precisely what update()'s loop always did. Whatever order-sensitivity the
+## ~210 existing update() call sites and the game's cold load may have is
+## therefore left untouched by default.
+##
+## Budgeted, the pending set is sorted NEAREST FIRST and then capped.
+## chunks_in_radius is row-major, so a merely capped scan would spend the
+## whole budget on the far top-left corner of the radius while the ground the
+## player is actually walking onto stayed unloaded. Ties (a Chebyshev ring
+## holds up to eight chunks) break on row-major position, so the order stays
+## fully deterministic rather than depending on sort_custom's instability.
+func _budgeted_load_order(center_chunk: Vector2i) -> Array[Vector2i]:
+	var pending: Array[Vector2i] = []
+	for chunk_coord in chunks_in_radius(center_chunk, LOAD_RADIUS):
+		if not _loaded_chunks.has(chunk_coord):
+			pending.append(chunk_coord)
+	if max_chunk_loads_per_update <= 0:
+		return pending
+
+	var nearest_first := func(a: Vector2i, b: Vector2i) -> bool:
+		var a_distance := _chebyshev_distance(a, center_chunk)
+		var b_distance := _chebyshev_distance(b, center_chunk)
+		if a_distance != b_distance:
+			return a_distance < b_distance
+		if a.y != b.y:
+			return a.y < b.y
+		return a.x < b.x
+	pending.sort_custom(nearest_first)
+	if pending.size() > max_chunk_loads_per_update:
+		pending.resize(max_chunk_loads_per_update)
+	return pending
 
 
 ## The eviction half of update() -- split out for the same reason as
@@ -2530,15 +2620,31 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 ## biome -- a GENERAL mechanism (docs/concept/terrain_relief.md: "not
 ## mountain-specific code"), reads most dramatically where slope is high
 ## but applies everywhere, unlike the ocean-only water overlay above.
+##
+## Takes ONE elevation gradient per tile and derives both readings from it,
+## rather than calling slope_at_global and aspect_at_global separately: those
+## are two readings of the same gradient (see TerrainRelief.gradient_at), so
+## the pair sampled elevation eight times per tile where four do -- 32,768
+## byte reads per 32x32 chunk against 8,192 for generating the chunk itself,
+## i.e. hillshading alone was ~4x the whole chunk generator and exactly half
+## of that was redundant. Invisible to most of this file's tests, which never
+## call set_hillshade_layer and so return at the guard below; scenes/world.gd
+## does set it, which is why the instrumented in-game cost of a full-radius
+## update() is so much worse than a headless one.
+##
+## Every painted tile is unchanged, pinned by
+## test_hillshade_tiles_are_exactly_the_slope_and_aspect_atlas_coords.
 func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _hillshade_layer == null:
 		return
+	var relief := generator.terrain_relief()
 	var origin := chunk_coord * CHUNK_SIZE
 	for y in chunk.height:
 		for x in chunk.width:
 			var global := origin + Vector2i(x, y)
-			var slope := slope_at_global(global.x, global.y)
-			var aspect := aspect_at_global(global.x, global.y)
+			var gradient := gradient_at_global(global.x, global.y)
+			var slope := relief.slope_degrees_from_gradient(gradient.x, gradient.y)
+			var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
 			_hillshade_layer.set_cell(
 				global, 0, _terrain_renderer.atlas_coords_for_hillshade(slope, aspect)
 			)
@@ -2790,6 +2896,16 @@ func set_wind_strength(strength: float) -> void:
 	_illustrated_grass.set_wind_strength(strength)
 
 
+## The season's tint on living green (see SeasonalFoliage, forwarded from
+## World._client_process), pushed onto every green thing this manager owns.
+## Same "live value pushed into a shared uniform every tick" shape as
+## set_wind_strength/set_sun_position above. The terrain layer's own
+## GroundTint material is pushed by World, which is what owns that layer.
+func set_season_tint(tint: Color) -> void:
+	_season_tint = tint
+	_illustrated_grass.set_season_tint(tint)
+
+
 ## Pushes the real, live sun position (see solar_position.gd's
 ## elevation_degrees/azimuth_degrees -- the same values already driving
 ## day/night lighting in world.gd) into the shared hillshade material, the
@@ -2950,6 +3066,12 @@ func _can_root_at(chunk: Chunk, chunk_coord: Vector2i, position: Vector2) -> boo
 	var tile := _world_tile_for_pixel(position)
 	var local := tile - chunk_coord * CHUNK_SIZE
 	if local.x < 0 or local.y < 0 or local.x >= chunk.width or local.y >= chunk.height:
+		return false
+	# Nothing takes root on a floor. TreeRooting answers the BIOME question
+	# only; occupancy by a real building piece is a separate refusal, and the
+	# other two directions of the same rule live in stamp_structure_at_global
+	# and TreeRenderer.spawn_trees.
+	if BuildingPiece.has_piece(chunk.modifications.get(local, "")):
 		return false
 	var biome_name: String = chunk.biome[local.y * chunk.width + local.x]
 	return TreeRooting.can_root_in(biome_name)
@@ -3236,15 +3358,20 @@ func step_wild_crops(delta_seconds: float) -> void:
 	var elapsed := _wild_crop_refresh_accumulator
 	_wild_crop_refresh_accumulator = 0.0
 
+	# A root crop does not stop in winter, it goes dormant -- growth_modifier's
+	# own floor is 0.2, not 0 (see docs/concept/wild_crops.md "The season").
+	# Computed once per batched tick rather than per patch: it is a pure
+	# function of the world clock, which does not move inside this loop.
+	var season_growth := _season_cycle.growth_modifier(_world_age_seconds)
 	for chunk_coord in _wild_crop_sims.keys():
 		var sims: Dictionary = _wild_crop_sims[chunk_coord]
 		var markers: Dictionary = _wild_crop_markers[chunk_coord]
 		for crop_id in sims:
 			var sim: WildCropPatch = sims[crop_id]
-			sim.advance(elapsed)
+			sim.advance(elapsed, season_growth)
 			_wild_crop_renderer.sync_markers(
 				_entities_parent, sim, crop_id, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
-				markers[crop_id]
+				markers[crop_id], _season_tint
 			)
 
 
@@ -4820,6 +4947,17 @@ func aspect_at_global(global_x: int, global_y: int) -> float:
 	return generator.aspect_at_global(global_x, global_y)
 
 
+## The raw elevation gradient at a global tile, for a caller that wants BOTH
+## slope and aspect there. Same always-delegates shape as the two above.
+##
+## Slope and aspect are two readings of ONE gradient (see
+## TerrainRelief.gradient_at), and each of the two functions above takes its
+## own four elevation samples -- so asking for both, which is exactly what
+## hillshading every tile of every chunk does, sampled twice over.
+func gradient_at_global(global_x: int, global_y: int) -> Vector2:
+	return generator.gradient_at_global(global_x, global_y)
+
+
 func biome_at_global(global_x: int, global_y: int) -> String:
 	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
 	if chunk == null:
@@ -5180,11 +5318,15 @@ func stamp_structure_at_global(
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null:
 		return
+	var occupied_cells := {}
 	for local_cell in ground_pieces:
 		var global_cell: Vector2i = origin_tile + local_cell
 		if _chunk_coord_for_tile(global_cell) != chunk_coord:
 			continue
 		chunk.modifications[_local_coord(global_cell.x, global_cell.y)] = ground_pieces[local_cell]
+		if BuildingPiece.has_piece(ground_pieces[local_cell]):
+			occupied_cells[global_cell] = true
+	_clear_vegetation_on_cells(chunk_coord, chunk, occupied_cells)
 	for local_cell in roof_pieces:
 		var global_cell: Vector2i = origin_tile + local_cell
 		if _chunk_coord_for_tile(global_cell) != chunk_coord:
@@ -5208,6 +5350,67 @@ func stamp_structure_at_global(
 		if _chunk_coord_for_tile(global_cell) == chunk_coord:
 			_sync_statics(chunk_coord, chunk, _local_coord(global_cell.x, global_cell.y))
 			break
+
+
+## Clears whatever stands on `occupied_global_cells` -- trees and loose stone
+## alike -- and drops any persisted record of it, so a stamped structure is
+## never built AROUND a standing trunk or boulder
+## (reported: a tree rooted in a village house's stone floor with its canopy
+## drawn over the masonry).
+##
+## This is the only place that direction can be closed: _load_chunk spawns
+## trees BEFORE it spawns the village that stamps houses over them, so on a
+## fresh visit the house always arrives second. The other two directions of
+## the same rule -- a tree respawning onto a persisted piece next load, and a
+## spread seed sprouting on a floor -- live in TreeRenderer.spawn_trees and
+## _can_root_at. planted_trees is pruned too, or a sapling under the footprint
+## simply comes back from disk on the next load.
+##
+## The node is queue_free()d AND dropped from _loaded_trees in the same breath:
+## _loaded_tree_positions and the forage loop both iterate that registry and
+## read tree.position without an is_instance_valid guard.
+func _clear_vegetation_on_cells(
+	chunk_coord: Vector2i, chunk: Chunk, occupied_global_cells: Dictionary
+) -> void:
+	if occupied_global_cells.is_empty():
+		return
+	if _loaded_trees.has(chunk_coord):
+		var survivors: Array[Node2D] = []
+		for tree in _loaded_trees[chunk_coord]:
+			# An already-freed entry is dropped rather than carried over: a
+			# chopped tree queue_free()s itself while STAYING in this array
+			# (choppable_tree.gd), and re-appending a dead reference into a
+			# typed Array[Node2D] is not safe.
+			if not is_instance_valid(tree):
+				continue
+			if occupied_global_cells.has(_world_tile_for_pixel(tree.position)):
+				tree.queue_free()
+			else:
+				survivors.append(tree)
+		_loaded_trees[chunk_coord] = survivors
+	if _loaded_stones.has(chunk_coord):
+		# Boulders and ore veins get built over exactly like trees do: _load_chunk
+		# spawns them before the village stamps its houses, so on a fresh visit
+		# the house always arrives second. Same drop-what-we-free discipline as
+		# the tree loop above -- _loaded_stones is iterated without an
+		# is_instance_valid guard elsewhere, and re-appending a dead reference
+		# into a typed Array[Node2D] is not safe. No persisted-record prune is
+		# needed: stone has no planted_trees equivalent, it is regenerated
+		# deterministically, and StoneRenderer closes the respawn direction.
+		var stone_survivors: Array[Node2D] = []
+		for stone in _loaded_stones[chunk_coord]:
+			if not is_instance_valid(stone):
+				continue
+			if occupied_global_cells.has(_world_tile_for_pixel(stone.position)):
+				stone.queue_free()
+			else:
+				stone_survivors.append(stone)
+		_loaded_stones[chunk_coord] = stone_survivors
+	var kept: Array = []
+	for record in chunk.planted_trees:
+		if not occupied_global_cells.has(_world_tile_for_pixel(record["position"])):
+			kept.append(record)
+	chunk.planted_trees = kept
 
 
 ## Adds, replaces, or removes `global_cell`'s collision body to match
@@ -5742,8 +5945,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 			chunk.width, chunk.height, chunk.biome
 		)
 		crop_sims[crop_id] = sim
+		# Already carrying the current season, so a chunk streamed in during
+		# winter arrives dead-topped instead of popping in summer-green and
+		# correcting itself up to GRASS_REFRESH_INTERVAL later, in plain sight.
 		crop_markers[crop_id] = _wild_crop_renderer.spawn_markers(
-			_entities_parent, sim, crop_id, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE
+			_entities_parent, sim, crop_id, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+			_season_tint
 		)
 	_wild_crop_sims[chunk_coord] = crop_sims
 	_wild_crop_markers[chunk_coord] = crop_markers

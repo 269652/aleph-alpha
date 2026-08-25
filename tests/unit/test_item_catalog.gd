@@ -286,3 +286,36 @@ func test_three_fragments_and_bonus_item_carry_no_weapon_damage():
 		assert_false(item.is_weapon(), "%s should not be a weapon" % item_id)
 		assert_eq(item.weapon_damage, 0.0, "%s should carry no weapon damage" % item_id)
 		assert_eq(item.kind, "material", "%s should be an inert material item" % item_id)
+
+
+# -- which real material an item is made of ---------------------------------
+#
+# The catalog already derives a weapon's real mass from a material + a volume
+# estimate (see _WEAPON_MATERIAL_AND_VOLUME / _mass_kg_for), but that material
+# was private, so nothing could tell the player WHAT the sword is made of --
+# only how heavy it came out. Named after the existing
+# BuildingPiece.material_of rather than inventing a second spelling.
+
+func test_material_of_names_the_real_material_a_weapons_mass_was_derived_from():
+	assert_eq(catalog.material_of("iron_sword"), "iron")
+	assert_eq(catalog.material_of("wooden_club"), "wood")
+	assert_eq(catalog.material_of("crude_blade"), "stone")
+
+
+## Same "not modeled yet" convention Item.mass_kg's 0.0 uses -- an empty
+## string, so a caller omits the line rather than inventing a material.
+func test_material_of_is_empty_for_an_item_with_no_modeled_material():
+	assert_eq(catalog.material_of("rock"), "")
+	assert_eq(catalog.material_of("not_a_real_item"), "")
+
+
+## The material an item is named after must be the same one its mass was
+## computed from -- one fact, not two that can drift.
+func test_material_of_is_the_material_the_items_mass_was_computed_from():
+	var mp := preload("res://src/gameplay/material_properties.gd").new()
+	var sword := catalog.make("iron_sword")
+	assert_almost_eq(
+		sword.mass_kg,
+		mp.mass_kg_for(catalog.material_of("iron_sword"), ItemCatalog.IRON_SWORD_VOLUME_CM3),
+		0.0001
+	)

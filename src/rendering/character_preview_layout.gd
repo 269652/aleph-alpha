@@ -7,6 +7,19 @@ extends RefCounted
 ## nodes here at all; CharacterPreviewDiorama is the only piece that turns
 ## a Result into actual scene nodes.
 
+## The real world's own grassland rules, reused rather than restated: how
+## densely a meadow covers clear ground (TallGrass.SEED_CHANCE) and the
+## smooth-noise field that decides WHICH cells that share lands on
+## (FIELD_NOISE_SCALE) -- see the grass scatter in generate(). Preloaded as
+## a pure data/rule source; no TallGrass simulation is ever run here.
+const TallGrass = preload("res://src/world/tall_grass.gd")
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+## The tree ART's own world size -- procedural_tree_sprite, not tree_renderer,
+## so this pure module stays free of the ChoppableTree/collision dependency
+## chain while still deriving its placement margins from the real thing (see
+## tree_bounds).
+const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
+
 ## Pond radius as a fraction of the footprint's shorter side.
 const POND_RADIUS_FRACTION := 0.22
 const TREE_COUNT := 2
@@ -77,8 +90,9 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 	result.pond_radius = minf(footprint.x, footprint.y) * POND_RADIUS_FRACTION
 	result.pond_center = _pond_center_near_an_edge(result.pond_radius, footprint, rng)
 
+	var tree_area := tree_bounds(footprint)
 	for i in TREE_COUNT:
-		result.tree_positions.append(_position_clear_of_pond(result, footprint, rng))
+		result.tree_positions.append(_position_clear_of_pond(result, tree_area, rng))
 
 	for i in PEBBLE_COUNT:
 		var angle := rng.randf_range(0.0, TAU)
@@ -94,17 +108,83 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 		var radius := sqrt(rng.randf()) * result.pond_radius * FISH_SAFE_RADIUS_FRACTION
 		result.fish_positions.append(result.pond_center + Vector2(cos(angle), sin(angle)) * radius)
 
-	var x := GRASS_CLUMP_SPACING * 0.5
-	while x < footprint.x:
-		var y := GRASS_CLUMP_SPACING * 0.5
-		while y < footprint.y:
-			var candidate := Vector2(x, y)
-			if result.is_clear(candidate):
-				result.grass_positions.append(candidate)
-			y += GRASS_CLUMP_SPACING
-		x += GRASS_CLUMP_SPACING
+	# A clump on EVERY clear cell carpeted the whole footprint at ~100%
+	# coverage -- five times what a real meadow has -- and since each clump
+	# draws IllustratedGrassPatch.CARD_COUNT overlapping FULL-TILE cards, the
+	# result read as a hedge the hero was buried in rather than a field he
+	# walks through (reported live: grass tufts several times his height).
+	# The cards themselves are the right size and always were: one card is
+	# IllustratedGrassPatch.WORLD_SIZE (16 world units), exactly one
+	# TerrainRenderer.TILE_SIZE, and neither this diorama nor the real
+	# world's own EarthChunkManager._sync_grass_sprites scales the
+	# MultiMeshInstance2D at all -- so this is a DENSITY fix, not a scale one.
+	#
+	# The density reuses the real world's own meadow rule rather than
+	# inventing a diorama-only number: TallGrass.SEED_CHANCE is the reference
+	# grassland coverage TallGrass.FIELD_NOISE_THRESHOLD is itself pinned to,
+	# and WHICH cells get that share is decided by the same smooth noise
+	# field TallGrass._seed_initial_patches thresholds, indexed by CELL (not
+	# world position) because FIELD_NOISE_SCALE is per-tile.
+	#
+	# Kept as "the highest-noise SHARE of the clear cells" rather than
+	# TallGrass's own "every cell above the threshold": a chunk is 32x32
+	# cells, where a fixed threshold averages out to SEED_CHANCE, but this
+	# footprint is only ~6x6 -- less than one noise lattice cell across, so a
+	# threshold there is all-or-nothing per seed and would leave whole heroes
+	# standing in a bald diorama. Taking the share directly gives every seed
+	# the real world's coverage while the noise still decides where the
+	# meadow drifts, so the kept cells still clump instead of speckling.
+	var columns := int(footprint.x / GRASS_CLUMP_SPACING)
+	var rows := int(footprint.y / GRASS_CLUMP_SPACING)
+	var scored: Array[Dictionary] = []
+	for cell_y in rows:
+		for cell_x in columns:
+			var candidate := Vector2(
+				(float(cell_x) + 0.5) * GRASS_CLUMP_SPACING,
+				(float(cell_y) + 0.5) * GRASS_CLUMP_SPACING
+			)
+			if not result.is_clear(candidate):
+				continue
+			scored.append({
+				"position": candidate,
+				"field": PixelNoise.smooth(
+					seed_value,
+					float(cell_x) * TallGrass.FIELD_NOISE_SCALE,
+					float(cell_y) * TallGrass.FIELD_NOISE_SCALE
+				),
+			})
+	scored.sort_custom(func(a, b): return a["field"] > b["field"])
+	# At least one clump whatever the rounding says -- a diorama with no
+	# grass at all in it is never the right answer.
+	var keep := mini(maxi(1, int(round(float(scored.size()) * TallGrass.SEED_CHANCE))), scored.size())
+	for i in keep:
+		var kept: Vector2 = scored[i]["position"]
+		result.grass_positions.append(kept)
 
 	return result
+
+
+## Where a tree's own POSITION (the foot of its trunk) may land so that its
+## whole drawn body stays inside the camera's frame -- which is exactly the
+## footprint (see CharacterPreviewDiorama.FOOTPRINT and the camera derived
+## from it in main_menu's diorama view). A tree sprite is anchored at the
+## trunk foot and drawn upward from there (TreeRenderer._build_tree_node sets
+## sprite.offset.y = -ProceduralTreeSprite.SIZE.y * 0.5 at
+## ArtResolution.SPRITE_SCALE), so it occupies [x - w/2, x + w/2] x
+## [y - h, y]. Derived from the tree art's OWN world size, never an eyeballed
+## margin -- if the art ever changes size, this follows it. Previously
+## unconstrained, which cut canopies off the top of the frame and trunks off
+## its sides (reported live: trees clipped by the frame).
+static func tree_bounds(footprint: Vector2) -> Rect2:
+	var half_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5
+	var height := float(ProceduralTreeSprite.WORLD_SIZE.y)
+	return Rect2(
+		Vector2(half_width, height),
+		Vector2(
+			maxf(footprint.x - float(ProceduralTreeSprite.WORLD_SIZE.x), 0.0),
+			maxf(footprint.y - height, 0.0)
+		)
+	)
 
 
 ## A pond centre close to one randomly-chosen edge of `footprint` -- reads
@@ -128,20 +208,29 @@ static func _pond_center_near_an_edge(pond_radius: float, footprint: Vector2, rn
 			return Vector2(along_x, footprint.y - near_edge)  # bottom
 
 
-## A random point inside `footprint`, clear of the pond AND every tree
-## already placed in `result.tree_positions` -- rejection sampling rather
-## than solving the placement geometrically, since the "clear of what's
-## already there" predicate (is_clear) already has to exist for the grass
-## scatter and the stroll's own target picking, so reusing it here keeps
-## tree placement honest against the exact same rule. Bounded retries with
-## a last-resort fallback (the footprint's own corner, always clear of a
-## pond kept away from the edges and trees that keep themselves clear of
-## each other) rather than an unbounded loop, since a pathological
+## A random point inside `bounds`, clear of the pond AND every tree already
+## placed in `result.tree_positions` -- rejection sampling rather than
+## solving the placement geometrically, since the "clear of what's already
+## there" predicate (is_clear) already has to exist for the grass scatter and
+## the stroll's own target picking, so reusing it here keeps tree placement
+## honest against the exact same rule. `bounds` is the caller's already
+## inset sampling rect (see tree_bounds), not the raw footprint: is_clear
+## only knows about pond/tree OBSTACLES and has no idea an object has a
+## drawn body of its own that the camera frame can cut through. Bounded
+## retries rather than an unbounded loop, since a pathological
 ## footprint/seed combination could in principle leave very little clear
 ## room.
-static func _position_clear_of_pond(result: Result, footprint: Vector2, rng: RandomNumberGenerator) -> Vector2:
+static func _position_clear_of_pond(result: Result, bounds: Rect2, rng: RandomNumberGenerator) -> Vector2:
 	for attempt in 30:
-		var candidate := Vector2(rng.randf_range(0.0, footprint.x), rng.randf_range(0.0, footprint.y))
+		var candidate := Vector2(
+			rng.randf_range(bounds.position.x, bounds.end.x),
+			rng.randf_range(bounds.position.y, bounds.end.y)
+		)
 		if result.is_clear(candidate):
 			return candidate
-	return Vector2.ZERO
+	# The bounds' own centre, not Vector2.ZERO: the old fallback put the
+	# trunk foot at the footprint's corner, i.e. three quarters of the tree
+	# outside the frame -- the worst possible answer to "no clear spot
+	# found". The centre is always fully in frame, and worst case overlaps
+	# the pond, which reads far better than a tree sliced in half by the edge.
+	return bounds.get_center()

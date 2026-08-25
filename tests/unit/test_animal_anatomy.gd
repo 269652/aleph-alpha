@@ -330,3 +330,21 @@ func test_kraken_does_not_share_a_body_plan_with_any_other_species():
 		if species == "kraken":
 			continue
 		assert_ne(kraken, AnimalAnatomy.profile_for(species), species)
+
+
+## "herbivore" and "predator" are this project's own anonymous stand-ins, not
+## species. They have been retired from every spawn pool (see
+## tests/unit/test_creature_renderer.gd's
+## test_no_biome_ever_promotes_the_anonymous_placeholder_species) so nothing
+## reaches the creature panel as a nameless "Herbivore Lv.5" -- but they must
+## SURVIVE as data-table keys, because profile_for falls back to
+## _PROFILES["herbivore"] for any id it does not know. This test exists to
+## stop a later reader "finishing the cleanup" by deleting them.
+func test_the_placeholder_ids_survive_as_data_fallbacks_for_an_unknown_species():
+	assert_true(AnimalAnatomy.has_profile("herbivore"), "the herbivore fallback profile must not be deleted")
+	assert_true(AnimalAnatomy.has_profile("predator"), "the predator fallback profile must not be deleted")
+	assert_eq(
+		AnimalAnatomy.profile_for("some_species_that_does_not_exist"),
+		AnimalAnatomy.profile_for("herbivore"),
+		"an unknown species must resolve to the generic herbivore build"
+	)

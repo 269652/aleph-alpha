@@ -69,13 +69,36 @@ of information in it.
 ## Boot performance
 
 Painting the full atlas at 4x resolution (thousands of tiles at
-`ART_TILE_SIZE`^2 pixels each) measured **~13.5s** -- far too slow to pay on
-every launch. `TerrainAtlasCache` (`src/rendering/terrain_atlas_cache.gd`)
-saves the finished atlas image to `user://` and reloads it on later boots,
-keyed to `TerrainRenderer.ATLAS_VERSION` so a cache built under older
-generation logic is never silently reused. Only the pixel painting is
-cached; the `TileSet`/`TileSetAtlasSource` metadata (cheap) is rebuilt every
-call. Bump `ATLAS_VERSION` whenever generation logic changes.
+`ART_TILE_SIZE`^2 pixels each) is far too slow to pay on every launch --
+**~138.7s** measured on the current checkout, where the atlas has grown to
+2048x5120 px / 10,240 cells. (This section previously said ~13.5s; that
+figure predates several atlas expansions and was stale.)
+`TerrainAtlasCache` (`src/rendering/terrain_atlas_cache.gd`) saves the
+finished atlas image to `user://` and reloads it on later boots, keyed to
+`TerrainRenderer.ATLAS_VERSION` so a cache built under older generation
+logic is never silently reused. Bump `ATLAS_VERSION` whenever generation
+logic changes.
+
+The `TileSet`/`TileSetAtlasSource` metadata rebuilt on top of that cached
+image was described here as "cheap". **It is not**: wrapping the image in an
+`ImageTexture` and calling `create_tile()` for all 10,240 atlas cells
+measured **8.8s per call** -- and `EarthChunkManager._init` calls it once per
+instance, which in the headless test suite means once per `before_each`
+(~358 times in `test_earth_chunk_manager.gd` alone). So the built `TileSet`
+is now memoized **per process** too (`TerrainRenderer._tile_set_cache`), the
+same `static var _..._cache` shape the illustrated-art classes already use.
+
+The general rule this is an instance of: **deterministic generated art is
+cached at process level, keyed by everything it actually depends on.** Here
+that key is `ATLAS_VERSION`, both configurable cache paths, the version
+string actually on disk, and the **md5 of the cached atlas bytes** -- so
+rewriting the cache file mid-run correctly forces a rebuild (the file's
+modified time is not enough: it has one-second resolution and the cache
+tests rewrite the same path several times inside one second). Sharing one
+`TileSet` between `TileMapLayer`s is safe because nothing in this codebase
+ever mutates a built one. The memo does **not** help a cold cache, which
+still pays the full ~138.7s once; it costs ~42 MB of RGBA8 per distinct key
+for the process lifetime.
 
 ## Scale factor
 

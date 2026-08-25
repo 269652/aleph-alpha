@@ -131,3 +131,54 @@ func test_timber_shares_every_other_property_with_wood() -> void:
 			mp.property_value("timber", property_name), mp.property_value("wood", property_name), 0.0001,
 			"timber is the same wood, just worked/seasoned -- only decay_rate should differ"
 		)
+
+
+# -- plain-language descriptors (docs/concept/materials.md, "Learning an ------
+# -- emergent system") ------------------------------------------------------
+#
+# That section specifies descriptors + discovery as the player-facing default,
+# NOT a raw scalar spreadsheet, so the 8-scalar property vector reaches an item
+# tooltip as words ("Iron - hard, keen") rather than numbers. Every threshold
+# below is a named constant with its own calibration test, and the two lines
+# the game has ALREADY calibrated elsewhere are reused rather than re-guessed.
+
+func test_iron_and_stone_read_as_hard_but_wood_does_not() -> void:
+	assert_true(mp.descriptors_for("iron").has("hard"), "iron (hardness 8) should read as hard")
+	assert_true(mp.descriptors_for("stone").has("hard"), "stone (hardness 7) should read as hard")
+	assert_false(mp.descriptors_for("wood").has("hard"), "wood (hardness 3) should not read as hard")
+
+
+func test_obsidian_and_iron_read_as_keen_but_stone_does_not() -> void:
+	assert_true(mp.descriptors_for("obsidian").has("keen"), "obsidian (sharpness 10) takes a keen edge")
+	assert_true(mp.descriptors_for("iron").has("keen"), "iron (sharpness 8) takes a keen edge")
+	assert_false(mp.descriptors_for("stone").has("keen"), "stone (sharpness 4) does not take a keen edge")
+
+
+## The "brittle" word must mean exactly what the impact model already means by
+## it -- one cutoff, not two that can silently drift apart.
+func test_the_brittle_descriptor_uses_the_same_toughness_cutoff_the_impact_model_does() -> void:
+	var ImpactResolver := preload("res://src/gameplay/impact_resolver.gd")
+	assert_eq(MaterialProperties.BRITTLE_TOUGHNESS, ImpactResolver.T_BRITTLE_TOUGHNESS,
+		"the brittle descriptor and the impact model must share one toughness cutoff")
+	assert_true(mp.descriptors_for("obsidian").has("brittle"), "obsidian (toughness 1) is brittle")
+	assert_false(mp.descriptors_for("iron").has("brittle"), "iron (toughness 7) is not brittle")
+
+
+## "buoyant" is the raft-viability line the game already calibrated, reused --
+## see is_viable_for_tool / WATER_DENSITY.
+func test_wood_and_fiber_read_as_buoyant_at_the_water_density_line() -> void:
+	assert_true(mp.descriptors_for("wood").has("buoyant"), "wood floats")
+	assert_true(mp.descriptors_for("fiber").has("buoyant"), "fiber floats")
+	assert_false(mp.descriptors_for("iron").has("buoyant"), "iron does not float")
+	assert_eq(MaterialProperties.WATER_DENSITY, 1.0,
+		"the buoyant descriptor rides on the existing water-density cutoff")
+
+
+## A material with nothing notable says nothing -- an empty list, not a row of
+## hedged words.
+func test_flesh_has_no_notable_descriptors() -> void:
+	assert_eq(mp.descriptors_for("flesh"), [] as Array[String])
+
+
+func test_an_unknown_material_has_no_descriptors() -> void:
+	assert_eq(mp.descriptors_for("not_a_material"), [] as Array[String])

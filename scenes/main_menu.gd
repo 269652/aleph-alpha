@@ -84,7 +84,12 @@ const DIORAMA_VIEW_SIZE := Vector2i(280, 280)
 ## tightly with nothing to spare for a tab bar or a skills grid.
 const PANEL_SIZE := Vector2(880, 620)
 
-## Emitted once the player has committed to a start mode + class.
+## Emitted once the player has committed to a start mode + class -- and, when
+## a save already existed, has explicitly confirmed overwriting it (see
+## _begin_pressed). THE SEAM: World treats this signal as authorization to
+## wipe the previous run's player save and the whole persisted world, and
+## keeps doing so unconditionally; `_emit_start_requested` is the only place
+## that emits it, so the confirmation cannot be bypassed.
 ## mode is "single" or "host"; chosen_class is a ClassArchetype name.
 ## `appearance` is the authored look (see HeroAppearance). `dna_stat_
 ## modifiers` is the rolled genome's stat swing (see HeroDna) -- World adds
@@ -118,6 +123,9 @@ var _skill_tree := SkillTree.new()
 var _root_screen: Control
 var _create_screen: Control
 var _join_screen: Control
+## Shown instead of starting whenever Begin would overwrite an existing save
+## -- see _begin_pressed.
+var _overwrite_confirm_screen: Control
 
 var _pending_mode := "single"
 var _selected_class := "warrior"
@@ -198,7 +206,10 @@ func _ready() -> void:
 	_root_screen = _build_root_screen()
 	_create_screen = _build_create_screen()
 	_join_screen = _build_join_screen()
-	for s in [_root_screen, _create_screen, _join_screen]:
+	# Built after _create_screen: "Keep my save" goes back to it, so it has to
+	# exist first.
+	_overwrite_confirm_screen = _build_overwrite_confirm_screen()
+	for s in _screens():
 		s.set_anchors_preset(Control.PRESET_FULL_RECT)
 		stack.add_child(s)
 	_show(_root_screen)
@@ -275,6 +286,22 @@ func _build_create_screen() -> Control:
 	# cycles appearance -- see _select_class/_refresh_dna/_refresh_appearance,
 	# which now also refresh whichever tab reflects that state.
 	var tabs := TabContainer.new()
+	# EXPAND, not the default plain FILL: this TabContainer's parent is the
+	# ScrollContainer built just below, and ScrollContainer sizes a non-EXPAND
+	# child to that child's OWN combined minimum size, widening it to the
+	# container's width only when SIZE_EXPAND is set. A TabContainer's minimum
+	# width is in turn (use_hidden_tabs_for_min_size defaults to false) the
+	# minimum width of whichever tab is CURRENTLY VISIBLE -- and the Skills
+	# tab's is tiny, since autowrapping labels have near-zero minimum width.
+	# So picking Skills collapsed the whole tab body, tab strip included, to
+	# 145px inside an 836px scroll area, leaving most of the panel empty
+	# beside it and degrading the strip to one tab plus scroll arrows
+	# (reported live). The Character tab only looked acceptable by luck at
+	# 740px of the same 836. Vertical is deliberately left alone: the
+	# TabContainer must keep its own minimum HEIGHT, which is exactly what
+	# gives the outer ScrollContainer something to scroll. Pinned by
+	# test_selecting_the_skills_tab_does_not_collapse_the_tab_body.
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_tabs(tabs)
 	tabs.add_child(_build_character_tab())
 	tabs.add_child(_build_skills_tab())
@@ -302,13 +329,83 @@ func _build_create_screen() -> Control:
 	row.add_theme_constant_override("separation", 10)
 	row.alignment = BoxContainer.ALIGNMENT_END
 	row.add_child(_menu_button("Back", func(): _show(_root_screen)))
-	row.add_child(_menu_button("Begin", func():
-		start_requested.emit(
-			_pending_mode, _selected_class, current_appearance(), current_dna().stat_modifiers
-		), true))
+	# Routed through _begin_pressed rather than emitting inline: this is the
+	# one irreversible button in the game (see _begin_pressed).
+	row.add_child(_menu_button("Begin", func(): _begin_pressed(), true))
 	box.add_child(row)
 
 	_select_class(_selected_class)
+	return box
+
+
+## Begin's guard, and the only path to `start_requested`.
+##
+## New Game AND Host Game both reach here -- both route through this same
+## creator screen -- and World answers `start_requested` by wiping the player
+## save plus every world-persistence store (chunk modifications, planted
+## trees, fish populations, the event/memory/household/contract/market/
+## institution/world-boss stores and the world clock; see
+## World._on_menu_start_requested -> _wipe_persisted_world). Until this guard
+## existed, one click destroyed all of it with no prompt at all, and the 60s
+## autosave then overwrote player_save.bin so even undeleting was gone.
+##
+## "Is there anything to lose" is answered by the very same
+## `_player_save.has_save(save_path)` predicate that already decides whether
+## the root screen offers Load Game, so the one-save-slot model
+## (docs/concept/persistence.md) is read in exactly one place -- and a
+## first-ever game is never made to click through a warning about a save that
+## does not exist.
+func _begin_pressed() -> void:
+	if _player_save.has_save(save_path):
+		_show(_overwrite_confirm_screen)
+		return
+	_emit_start_requested()
+
+
+func _emit_start_requested() -> void:
+	start_requested.emit(
+		_pending_mode, _selected_class, current_appearance(), current_dna().stat_modifiers
+	)
+
+
+## The one thing standing between a click and an unrecoverable wipe.
+##
+## A plain Control screen in the same state machine as the other three, NOT a
+## `ConfirmationDialog`: every overlay in this codebase is a plain Control
+## (SettingsOverlay, LicenseGateOverlay, LoadingOverlay), and a Window-derived
+## dialog would also be awkward to drive in the headless test run.
+##
+## It names what is actually destroyed rather than asking "are you sure?":
+## World wipes the world's own persisted state as well as the character, so
+## "your character" alone would badly understate it. "Keep my save" is the
+## safe way out, listed first and drawn as the primary button.
+func _build_overwrite_confirm_screen() -> Control:
+	var box := VBoxContainer.new()
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 10)
+
+	box.add_child(_title_label("Overwrite your saved game?", 26))
+	var body := _muted_label(
+		(
+			"Starting a new game deletes your saved character and the world they "
+			+ "lived in -- everything you built, planted, changed and were "
+			+ "remembered for.\n\nGo back and choose Load Game instead to keep "
+			+ "playing that character."
+		)
+	)
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.custom_minimum_size = Vector2(PANEL_SIZE.x * 0.7, 0)
+	body.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	box.add_child(body)
+	box.add_child(_spacer(20))
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	row.add_child(_menu_button("Keep my save", func(): _show(_create_screen), true))
+	row.add_child(_menu_button("Overwrite and start", func(): _emit_start_requested()))
+	box.add_child(row)
 	return box
 
 
@@ -569,8 +666,17 @@ func _build_skills_tab() -> Control:
 	col.add_child(_separator())
 
 	col.add_child(_section_label("SHARED SKILL POOL"))
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Added straight to `col`, NOT wrapped in a ScrollContainer of its own:
+	# the entire TabContainer already lives inside one (see
+	# _build_create_screen), and a ScrollContainer reports a combined minimum
+	# size of ~0 on every axis it is allowed to scroll. Nested, this grid's
+	# real height therefore never propagated up to `col`, which -- having no
+	# spare height to distribute -- handed the EXPAND_FILL inner scroll its
+	# ~0 minimum instead. The measured result was a 342px-tall grid inside a
+	# 0px-tall parent: the shared skill pool was never visible at all
+	# (reported live). Un-nested, the grid's height reaches the OUTER scroll,
+	# which scrolls it while Back/Begin stay pinned outside. Pinned by
+	# test_the_shared_skill_grid_is_not_clipped_away_by_its_parent.
 	var grid := GridContainer.new()
 	grid.columns = 3
 	grid.add_theme_constant_override("h_separation", 10)
@@ -579,8 +685,7 @@ func _build_skills_tab() -> Control:
 		var card := _build_skill_node_card(node_id)
 		_skill_node_cards[node_id] = card
 		grid.add_child(card)
-	scroll.add_child(grid)
-	col.add_child(scroll)
+	col.add_child(grid)
 
 	var footer := _muted_label(
 		"Every class currently draws from this same shared pool -- full class-specific skill webs are still in development."
@@ -1109,8 +1214,16 @@ func _style_tabs(tabs: TabContainer) -> void:
 	tabs.add_theme_color_override("font_unselected_color", Color(1, 1, 1, 0.6))
 
 
+## Every screen in the menu's little state machine, in the order _ready adds
+## them to the stack. ONE list, read by both _ready and _show: while each kept
+## its own hardcoded copy, adding a screen to one and not the other either
+## never put it in the tree or left it visible on top of whatever came next.
+func _screens() -> Array:
+	return [_root_screen, _create_screen, _join_screen, _overwrite_confirm_screen]
+
+
 func _show(screen: Control) -> void:
-	for s in [_root_screen, _create_screen, _join_screen]:
+	for s in _screens():
 		s.visible = s == screen
 
 

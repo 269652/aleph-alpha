@@ -3,6 +3,8 @@ extends RefCounted
 ## A chunk's worth of TallGrass cells, rendered as GPU-instanced cards from
 ## the illustrated atlas -- one MultiMeshInstance2D draw call per Y-sort
 ## band, not one Sprite2D per card. See docs/concept/long_grass.md.
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+
 const ATLAS_PATH := "res://assets/sprites/grass_blades.png"
 ## The delivered sheet is 1254×1254 and contains 10×10 blade variants. Its
 ## source art is roughly 128px per cell; regions derive from its true size.
@@ -121,6 +123,13 @@ uniform float wind_speed = 1.6;
 // weather and down in none. Deliberately does NOT touch the walker-push
 // term below (see `push`): parting is the walker's own reaction, not wind.
 uniform float wind_strength = 1.0;
+// The season's multiplier on living green (see SeasonalFoliage, forwarded via
+// EarthChunkManager.set_season_tint) -- the same value the terrain layer
+// under these blades wears, so a field and the ground it stands in turn
+// together instead of a green lawn showing through straw-coloured grass.
+// Identity by default, so a caller that never pushes a season renders exactly
+// today's high-summer picture.
+uniform vec3 season_tint = vec3(1.0);
 
 varying vec2 v_root;
 // Per-card atlas sub-rect (normalized), packed into MultiMesh's dedicated
@@ -201,8 +210,13 @@ void fragment() {
 
 	COLOR = texture(TEXTURE, atlas_uv);
 	COLOR.a *= occlusion_fade;
+	// Gated on greenness for the same reason GroundTint is, and with the same
+	// gain: the illustrated atlas already carries dry/brown blades, and those
+	// must not be turned again by a season they are already wearing.
+	float greenness = clamp((COLOR.g - max(COLOR.r, COLOR.b)) * %s, 0.0, 1.0);
+	COLOR.rgb = mix(COLOR.rgb, COLOR.rgb * season_tint, greenness);
 }
-""" % [BEND_CURVE_EXPONENT, PHASE_SPREAD, AMPLITUDE_BASE, AMPLITUDE_VARIATION, AMPLITUDE_FREQUENCY, WIND_UV_AMPLITUDE, WALKER_PUSH_UV_AMPLITUDE]
+""" % [BEND_CURVE_EXPONENT, PHASE_SPREAD, AMPLITUDE_BASE, AMPLITUDE_VARIATION, AMPLITUDE_FREQUENCY, WIND_UV_AMPLITUDE, WALKER_PUSH_UV_AMPLITUDE, SeasonalFoliage.GREENNESS_GAIN]
 
 var _material: ShaderMaterial
 var _texture: Texture2D
@@ -211,6 +225,10 @@ var _mesh: QuadMesh
 ## material() at BUILD time too, so a caller that sets the live wind before
 ## the material has been lazily built yet doesn't lose it.
 var _wind_strength := DEFAULT_WIND_STRENGTH
+## Last season tint pushed in (see set_season_tint) -- applied in material()
+## at BUILD time too, so a caller that sets the season before the material has
+## been lazily built doesn't lose it (same reasoning as _wind_strength above).
+var _season_tint := Color(1.0, 1.0, 1.0)
 
 static func atlas_region_for_seed(seed_value: int, atlas_size: Vector2i = DEFAULT_ATLAS_SIZE) -> Rect2i:
 	var index := posmod(seed_value, ATLAS_COLUMNS * ATLAS_ROWS)
@@ -244,6 +262,7 @@ func material() -> ShaderMaterial:
 		_material = ShaderMaterial.new()
 		_material.shader = shader
 		_material.set_shader_parameter("wind_strength", _wind_strength)
+		_material.set_shader_parameter("season_tint", _season_tint_vector())
 	return _material
 
 func mesh() -> QuadMesh:
@@ -269,6 +288,21 @@ func set_walker_position(world_position: Vector2) -> void:
 func set_wind_strength(strength: float) -> void:
 	_wind_strength = strength
 	material().set_shader_parameter("wind_strength", strength)
+
+
+## Pushes the season's tint on living green (see SeasonalFoliage, via
+## EarthChunkManager.set_season_tint) onto the shared blade material.
+## Deliberately does NOT touch growth or spread: this is what a field LOOKS
+## like in November, not how fast it grows then (see docs/concept/seasons.md's
+## still-open "seasonal scaling of vegetation growth rate" -- a rendering fix
+## must not smuggle a sim change in with it).
+func set_season_tint(tint: Color) -> void:
+	_season_tint = tint
+	material().set_shader_parameter("season_tint", _season_tint_vector())
+
+
+func _season_tint_vector() -> Vector3:
+	return Vector3(_season_tint.r, _season_tint.g, _season_tint.b)
 
 ## Pure data prep for fill_band, headlessly testable on its own: computes
 ## every card's instance transform (root pinned at its own ground position,

@@ -46,14 +46,38 @@ edge of a pond and some trees where the char should stroll around."*
 `src/rendering/character_preview_layout.gd` (pure `RefCounted`, no Godot
 nodes) takes a seed and a diorama footprint (world units) and returns plain
 data: the pond's center/radius, tree positions, pebble positions (scattered
-near the pond's rim), grass clump positions (filling the rest of the
-footprint, avoiding the pond and trees), and the walkable bounds the stroll
-logic confines itself to (the footprint minus the pond and a margin around
-each tree). Everything is placed FROM the seed — same seed, same layout,
-matching this codebase's established "measure/derive, don't eyeball"
+near the pond's rim), grass clump positions, and the walkable bounds the
+stroll logic confines itself to (the footprint minus the pond and a margin
+around each tree). Everything is placed FROM the seed — same seed, same
+layout, matching this codebase's established "measure/derive, don't eyeball"
 convention for placement (see `StonePlacement`, `WildCropPatch` for the
 existing precedent of pure seeded placement logic kept separate from the
 nodes it describes).
+
+Two placement rules deserve naming, because both were originally absent and
+both were visible the moment the scene was actually looked at:
+
+- **Meadow density is the real world's, not "wherever there is room."** A
+  grass clump is not placed on every clear cell — that was ~100% coverage
+  against a real meadow's ~20%, and since one clump draws several
+  overlapping full-tile cards it read as a hedge the hero was buried in.
+  The share of clear ground kept is `TallGrass.SEED_CHANCE` (the reference
+  grassland coverage `TallGrass.FIELD_NOISE_THRESHOLD` is itself pinned to)
+  and WHICH cells get it is decided by the same `PixelNoise.smooth` field
+  `TallGrass._seed_initial_patches` uses at the same `FIELD_NOISE_SCALE`, so
+  the meadow drifts in clumps instead of speckling — pillar 1 applied to
+  density, not just to art. (The share is taken directly rather than by
+  TallGrass's own fixed threshold because a 6×6 footprint is under one noise
+  lattice cell across, where a threshold is all-or-nothing per seed.)
+- **Placement accounts for an object's own DRAWN extent, not just its centre
+  point.** The camera frames exactly the footprint, and a tree is anchored at
+  its trunk foot and drawn upward across `ProceduralTreeSprite.WORLD_SIZE`,
+  so sampling tree positions over the raw footprint cut canopies off the top
+  of the frame and trunks off its sides. `tree_bounds(footprint)` insets the
+  sampling rect by that art's own world size — derived from the art, never an
+  eyeballed margin — and the no-clear-spot fallback is the inset rect's
+  centre rather than the footprint's corner (which put three quarters of a
+  tree outside the frame).
 
 ### Stroll — pure, testable
 
@@ -71,8 +95,15 @@ is ambient motion, only the world layout itself needs to reproduce).
 
 `src/rendering/character_preview_diorama.gd` (`extends Node2D`) is the only
 part that touches actual nodes: reads a `CharacterPreviewLayout` result and
-builds one `MultiMeshInstance2D` per grass band (`IllustratedGrassPatch
-.fill_band`), one `Sprite2D` pond (`ProceduralShoreDistanceSprite` +
+builds a **ground plane** (one `Sprite2D` per `TerrainRenderer.TILE_SIZE` of
+footprint, textured through the same has-art-then-fallback seam
+`TerrainRenderer._biome_frame_image` uses — `IllustratedTerrainSprite
+.frame_for("grassland", seed)`, `ProceduralTerrainSprite` otherwise — at a
+scale derived from the art's own pixel width so 32px illustrated and 64px
+procedural tiles both cover exactly one world tile, and at a `z_index` below
+both the pond's and the grass band's), one `MultiMeshInstance2D` per grass
+band (`IllustratedGrassPatch.fill_band`), one `Sprite2D` pond
+(`ProceduralShoreDistanceSprite` +
 `WaterShader.shared_material()`), one `LiftableStone` node per pebble
 (`StoneRenderer.build_liftable_stone_node`), one `ChoppableTree` per tree
 position (`TreeRenderer.spawn_tree_at`, `age_seconds` defaulting to `INF` —
@@ -113,6 +144,18 @@ hero instead of a static image.
   found while chasing an "unproportional ... walks like a duck" report).
   See `docs/progress.md`'s own entry for the full list, exact fixes, and
   file names.
+- ✅ The diorama stands on the real world's own ground art at the real
+  world's tile size (`_build_ground`). This was a genuine SPEC GAP, not a
+  missed implementation: no version of this doc ever mentioned ground, so
+  none was ever built — grass, pond, pebbles and trees were drawn straight
+  onto the `SubViewport`'s transparent background and what showed between
+  them was the creator panel's near-black `StyleBox`. It also explains a
+  second report that looked unrelated: the pond's shore fade is pure ALPHA
+  (`water_shader.gd`), so with nothing behind it to fade INTO, a
+  deliberately rectangular pond read as a hard-edged blue box. No pond code
+  changed; giving the fade a bank to land on is the whole fix, and the
+  rectangle stays rectangular per the standing instruction ("should be more
+  rectangular not a real circle").
 - Fish (`FishRenderer.spawn_fish_at`) and grass-parting
   (`IllustratedGrassPatch.set_walker_position`) round out the scene,
   reusing existing real-world mechanisms rather than adding new ones, per
@@ -124,7 +167,14 @@ hero instead of a static image.
   above the main panel) should also become live dioramas, or stay static
   portraits — a live `SubViewport` per icon is very likely wasteful for a
   thumbnail that small; this doc assumes they stay static unless reported
-  otherwise.
+  otherwise. They are now at least genuinely per-class: all seven used to
+  render byte-identically, because the illustrated rig's outfit art is
+  pre-coloured (so the portrait path never tints by the class tunic/leg
+  palette — which is the only thing that differs between seven appearances
+  at one shared DNA seed). The outfit ROW is the one channel that art has,
+  so `HeroAppearance.outfit_variant_for` has the class pick a row and the
+  DNA seed rotate it, carried on the appearance dict so a renderer takes it
+  rather than re-rolling its own.
 - Whether the pond should ever show a disturbance ripple (the character
   wading in, rain) — `WaterShader.add_disturbance`/`set_rain_intensity`
   exist and are wired for the real world, but this diorama does not call

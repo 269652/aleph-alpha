@@ -11,7 +11,13 @@ const Chunk = preload("res://src/world/chunk.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
-const CHUNK_ORIGIN := Vector2i(64, 128)
+## A real place, not an arbitrary number. Row 128 of the world's 19980 is
+## 88.85 deg N -- 130 km from the north pole -- so every butterfly assertion
+## below used to be made on a "grassland" chunk deep inside the arctic. Once
+## flyers are range-gated (see AmbientFlyerRenderer.FLYER_RANGE) that stops
+## being merely odd and starts being wrong, so these tests now stand on the
+## German meadow the reported bug was about.
+const CHUNK_ORIGIN := Vector2i(64, GERMANY_ROW)
 
 const ProceduralBirdSprite = preload("res://src/rendering/procedural_bird_sprite.gd")
 const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
@@ -54,7 +60,10 @@ func test_spawns_butterflies_and_birds_on_a_large_grassland_chunk():
 func test_every_qualifying_chunk_spawns_at_least_the_minimum_of_each():
 	for coord_x in range(20):
 		var chunk := _make_chunk("grassland")
-		var origin := Vector2i(coord_x * CHUNK_SIZE, coord_x * 7)
+		# Varying x only, so every sampled chunk stays at the SAME latitude --
+		# `coord_x * 7` walked rows 0..133 (all within 130 km of the pole),
+		# where no butterfly can live.
+		var origin := Vector2i(coord_x * CHUNK_SIZE, GERMANY_ROW)
 		var spawned := renderer.spawn_ambient_flyers(parent, chunk, origin, TILE_SIZE, "grassland")
 		var butterflies := 0
 		var birds := 0
@@ -252,3 +261,171 @@ func test_a_flyer_draws_above_ground_clutter():
 	add_child_autofree(parent)
 	var flyer := renderer.spawn_offspring(parent, "monarch", Vector2.ZERO, 1)
 	assert_gt(flyer.z_index, 0, "a flying thing must draw over the flowers it visits")
+
+
+# -- where a flyer can actually live -----------------------------------------
+#
+# The aerial tier was the one creature category with no biogeography at all:
+# a fixed global species pool, gated only by biome, so a Blue Morpho -- a
+# Neotropical rainforest butterfly -- and a Monarch -- a Nearctic one -- both
+# flew over a German meadow at 52.5 deg N. Every other category is range-gated
+# (see CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME).
+#
+# The rows below are REAL rows on this project's Earth: the world is
+# EarthChunkGenerator.WORLD_HEIGHT_TILES (19980) rows tall and
+# GeoCoordinates.latitude_for_tile maps a row to its latitude, so these are
+# the same coordinates the biome under the butterfly was generated from.
+
+const GERMANY_ROW := 4162  # 52.50 deg N -- Brandenburg, the reported bug's coordinate
+const AMAZON_ROW := 9435  #  4.99 deg N -- the Amazon basin
+
+
+## Samples many chunks along ONE row of the world, so latitude is held fixed
+## while the per-chunk spawn hash varies -- the same "sample many chunks"
+## idiom as tests/unit/test_creature_renderer.gd's _species_seen_across_chunks.
+func _species_seen_along_row(row: int, biome_name: String, chunk_count: int = 40) -> Dictionary:
+	var seen := {}
+	for coord_x in range(chunk_count):
+		var chunk := _make_chunk(biome_name)
+		var origin := Vector2i(coord_x * CHUNK_SIZE, row)
+		for flyer in renderer.spawn_ambient_flyers(parent, chunk, origin, TILE_SIZE, biome_name):
+			seen[flyer.species] = true
+	return seen
+
+
+func test_a_german_meadow_has_no_monarchs_and_no_blue_morphos():
+	var seen := _species_seen_along_row(GERMANY_ROW, "grassland")
+	assert_false(
+		seen.has("blue_morpho"),
+		"a 52.5N German meadow spawned a blue_morpho -- a Neotropical rainforest butterfly"
+	)
+	assert_false(
+		seen.has("monarch"), "a 52.5N German meadow spawned a monarch -- a Nearctic butterfly"
+	)
+
+
+## The other half of the same fix: gating must not empty the meadow. Papilio
+## machaon, the OLD WORLD swallowtail, really is the swallowtail a German
+## meadow has, and honeybees and both songbirds belong there too.
+func test_a_german_meadow_still_has_its_own_swallowtails_and_bees():
+	var seen := _species_seen_along_row(GERMANY_ROW, "grassland")
+	assert_true(seen.has("swallowtail"), "a German meadow should still have swallowtails")
+	assert_true(seen.has("bee"), "a German meadow should still have bees")
+	assert_true(seen.has("sparrow"), "a German meadow should still have sparrows")
+	assert_true(seen.has("robin"), "a German meadow should still have robins")
+
+
+func test_the_amazon_has_blue_morphos_and_no_monarchs():
+	var seen := _species_seen_along_row(AMAZON_ROW, "rainforest")
+	assert_true(seen.has("blue_morpho"), "the Amazon is where a blue morpho actually lives")
+	assert_false(seen.has("monarch"), "the Amazon basin is outside the monarch's breeding range")
+	assert_false(
+		seen.has("swallowtail"), "Papilio machaon is a Palearctic butterfly, not an Amazonian one"
+	)
+
+
+## A chunk no butterfly can live in must spawn no butterflies -- not divide by
+## zero. Rainforest at 52.5N is not a combination the generator produces, but
+## it is reachable through this public API, and once the pools are filtered
+## per species an empty pool is a real state: `species_pool[seed % size()]`
+## on an empty pool is a modulo by zero. Bees and songbirds are unaffected
+## here (both range that far north), so this pins the butterfly pool alone.
+func test_a_chunk_no_butterfly_species_can_live_in_spawns_none_and_does_not_crash():
+	var chunk := _make_chunk("rainforest")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, Vector2i(64, GERMANY_ROW), TILE_SIZE, "rainforest"
+	)
+	for flyer in spawned:
+		assert_false(
+			AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL.has(flyer.species),
+			"no true butterfly can live in a 52.5N rainforest, but a %s spawned" % flyer.species
+		)
+
+
+const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
+const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+
+## How far outside a band a sample row is taken. Comfortably wider than the
+## ~0.14 deg a 32-tile chunk's middle row shifts the measured latitude (see
+## AmbientFlyerRenderer._abs_latitude_for), so this test never sits on an edge.
+const BAND_MARGIN_DEGREES := 5.0
+
+## Sampling budgets for the band sweep below. Deliberately much smaller than
+## _species_seen_along_row's default: the sweep visits ~30 rows and each
+## sampled chunk ranks all 1024 of its cells three times, so the default 40
+## would turn one test into several minutes. A biome/band pair narrows the
+## pool to one or two species and every chunk spawns 2-4 butterflies and 1-3
+## birds, so PRESENCE_CHUNKS is ample; ABSENCE is a hard filter rule rather
+## than a sampling question, so a handful of chunks is enough to catch it (the
+## pre-fix red was hit on the first row sampled).
+const BAND_PRESENCE_CHUNKS := 12
+const BAND_ABSENCE_CHUNKS := 6
+
+
+## The northern-hemisphere chunk origin row whose chunk MIDDLE sits at
+## `latitude` -- the row AmbientFlyerRenderer._abs_latitude_for measures.
+func _row_for_northern_latitude(latitude: float) -> int:
+	return (
+		GeoCoordinates.new().tile_for_latitude(latitude, EarthChunkGenerator.WORLD_HEIGHT_TILES)
+		- CHUNK_SIZE / 2
+	)
+
+
+## The tuned numbers in FLYER_RANGE are pinned as DATA, not as eyeballed
+## comments: every species must actually be present inside its own band and
+## actually absent outside it, in every biome it claims.
+func test_every_spawned_species_is_inside_its_own_latitude_band():
+	for species in AmbientFlyerRenderer.FLYER_RANGE:
+		var species_range: Dictionary = AmbientFlyerRenderer.FLYER_RANGE[species]
+		var band: Vector2 = species_range["abs_latitude"]
+		for biome_name in species_range["biomes"]:
+			var inside := _species_seen_along_row(
+				_row_for_northern_latitude((band.x + band.y) * 0.5), biome_name, BAND_PRESENCE_CHUNKS
+			)
+			assert_true(
+				inside.has(species),
+				"%s should be present in %s inside its own band" % [species, biome_name]
+			)
+			if band.x - BAND_MARGIN_DEGREES > 0.0:
+				var too_far_south := _species_seen_along_row(
+					_row_for_northern_latitude(band.x - BAND_MARGIN_DEGREES), biome_name,
+					BAND_ABSENCE_CHUNKS
+				)
+				assert_false(
+					too_far_south.has(species),
+					"%s spawned in %s below its own range" % [species, biome_name]
+				)
+			if band.y + BAND_MARGIN_DEGREES < 90.0:
+				var too_far_north := _species_seen_along_row(
+					_row_for_northern_latitude(band.y + BAND_MARGIN_DEGREES), biome_name,
+					BAND_ABSENCE_CHUNKS
+				)
+				assert_false(
+					too_far_north.has(species),
+					"%s spawned in %s above its own range" % [species, biome_name]
+				)
+
+
+## The anti-drift pin that lets the tier-wide biome gates and the per-species
+## table coexist: whatever biomes the species table claims, collectively, must
+## be exactly the biomes the tier-wide gate opens. Otherwise a biome could
+## qualify for butterflies while no butterfly species can live there (a chunk
+## that spawns nothing for no visible reason), or a species could claim a
+## biome the tier-wide gate never opens (a dead table row).
+func test_flyer_range_biomes_agree_with_the_tier_wide_biome_gates():
+	var pollinator_biomes := {}
+	for species in AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL + AmbientFlyerRenderer.BEE_SPECIES_POOL:
+		for biome_name in AmbientFlyerRenderer.FLYER_RANGE[species]["biomes"]:
+			pollinator_biomes[biome_name] = true
+	assert_eq(
+		pollinator_biomes.keys(), AmbientFlyerRenderer.BUTTERFLY_BIOMES.keys(),
+		"the butterfly/bee range table and BUTTERFLY_BIOMES have drifted apart"
+	)
+	var bird_biomes := {}
+	for species in AmbientFlyerRenderer.BIRD_SPECIES_POOL:
+		for biome_name in AmbientFlyerRenderer.FLYER_RANGE[species]["biomes"]:
+			bird_biomes[biome_name] = true
+	assert_eq(
+		bird_biomes.keys(), AmbientFlyerRenderer.BIRD_BIOMES.keys(),
+		"the bird range table and BIRD_BIOMES have drifted apart"
+	)

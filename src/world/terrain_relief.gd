@@ -70,7 +70,7 @@ func slope_degrees_from_gradient(dzdx: float, dzdy: float) -> float:
 ## 180=south, 270=west, clockwise) of the direction the slope FACES -- the
 ## direction water would actually flow, i.e. the negative of the uphill
 ## gradient. `dzdx`/`dzdy` are d(elevation)/d(east) and d(elevation)/d(north)
-## respectively, matching _gradient_at's own convention.
+## respectively, matching gradient_at's own convention.
 ##
 ## Undefined on perfectly flat ground (there is no "downhill" with no
 ## slope) -- returns -1.0 rather than an arbitrary angle, so a caller can
@@ -95,7 +95,7 @@ func aspect_degrees_from_gradient(dzdx: float, dzdy: float) -> float:
 ## for what this feeds: passability, hillshading, and mountain ore exposure
 ## all read this one field.
 func slope_at(source, latitude_deg: float, longitude_deg: float) -> float:
-	var gradient := _gradient_at(source, latitude_deg, longitude_deg)
+	var gradient := gradient_at(source, latitude_deg, longitude_deg)
 	return slope_degrees_from_gradient(gradient.x, gradient.y)
 
 
@@ -103,7 +103,7 @@ func slope_at(source, latitude_deg: float, longitude_deg: float) -> float:
 ## same sampling as slope_at -- see that function and
 ## aspect_degrees_from_gradient's own doc comments.
 func aspect_at(source, latitude_deg: float, longitude_deg: float) -> float:
-	var gradient := _gradient_at(source, latitude_deg, longitude_deg)
+	var gradient := gradient_at(source, latitude_deg, longitude_deg)
 	return aspect_degrees_from_gradient(gradient.x, gradient.y)
 
 
@@ -118,7 +118,16 @@ func aspect_at(source, latitude_deg: float, longitude_deg: float) -> float:
 ## meters_per_degree_longitude) and can reach zero at the poles; guarded so
 ## a caller sampling near a pole gets a flat east-west reading rather than a
 ## divide-by-zero.
-func _gradient_at(source, latitude_deg: float, longitude_deg: float) -> Vector2:
+##
+## PUBLIC because slope and aspect are two readings of ONE gradient. Asking
+## for both via slope_at + aspect_at takes these same four samples twice
+## over, and doing exactly that per tile is the entire per-tile cost of
+## hillshading a chunk (see EarthChunkManager._paint_hillshade_overlay, which
+## is the largest per-chunk cost in the running game). A caller that wants
+## both readings takes the gradient once and derives them with
+## slope_degrees_from_gradient/aspect_degrees_from_gradient, which are pure.
+## Pinned by test_one_gradient_is_four_samples_where_slope_plus_aspect_cost_eight.
+func gradient_at(source, latitude_deg: float, longitude_deg: float) -> Vector2:
 	var north_m := elevation_meters(source.elevation_at(latitude_deg + SAMPLE_OFFSET_DEG, longitude_deg))
 	var south_m := elevation_meters(source.elevation_at(latitude_deg - SAMPLE_OFFSET_DEG, longitude_deg))
 	var east_m := elevation_meters(source.elevation_at(latitude_deg, longitude_deg + SAMPLE_OFFSET_DEG))

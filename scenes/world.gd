@@ -21,6 +21,7 @@ const JoustMatchView = preload("res://src/rendering/joust_match_view.gd")
 const RetroHandheld = preload("res://src/gameplay/retro_handheld.gd")
 const HandheldBattleView = preload("res://src/rendering/handheld_battle_view.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
@@ -75,6 +76,7 @@ const WeatherForecast = preload("res://src/gameplay/weather_forecast.gd")
 const SeasonAlmanac = preload("res://src/world/season_almanac.gd")
 const FieldJournal = preload("res://src/emergence/field_journal.gd")
 const RegionalTrade = preload("res://src/emergence/regional_trade.gd")
+const Taming = preload("res://src/gameplay/taming.gd")
 
 ## How many hotbar slots the HUD row draws. Derived from Player's own
 ## hotbar size (see Player.HOTBAR_SLOT_COUNT / Hotbar) rather than duplicated,
@@ -105,6 +107,11 @@ const EASTER_EGG_CHECK_INTERVAL := 4.0
 ## long enough to read a short line, short enough that it's clearly a
 ## glimpse, not a persistent HUD element.
 const EASTER_EGG_MESSAGE_DURATION := 6.0
+## A sighting's ink: cooler and slightly dimmer than UiTheme.TEXT, so an
+## ambient glimpse reads as something the WORLD said rather than a result of
+## something the player just did. The only per-banner difference in the
+## shared message stack (see _build_message_stack).
+const EASTER_EGG_MESSAGE_COLOR := Color(0.85, 0.85, 0.95)
 var _easter_egg_check_accumulator := 0.0
 var _easter_egg_message_timer := 0.0
 
@@ -157,6 +164,17 @@ const AUTOSAVE_INTERVAL := 60.0
 ## than melee range, meant to cover what's visibly on screen around the
 ## player.
 const CREATURE_PANELS_RADIUS := 220.0
+## Where the shared message stack starts (px from the top of the screen), and
+## how wide a banner card may get.
+##
+## ONE stack, ONE x/y: the taming and trade banners used to be pinned to the
+## same hand-picked offset_top of 144 and drew straight through each other.
+## The top is the highest of the five old offsets (the fishing banner's 120),
+## so nothing moved further down the screen than it already was; the width is
+## the widest of them (the Easter-egg banner's 520) rounded down to leave a
+## margin at 720p. See _build_message_stack.
+const MESSAGE_STACK_TOP := 120.0
+const MESSAGE_STACK_WIDTH := 460.0
 ## Real seconds between creature-panel refreshes -- rebuilding a handful of
 ## panels a couple times a second is trivial, but this still avoids doing it
 ## every frame (same reasoning as the minimap/forage/spread throttling).
@@ -174,13 +192,23 @@ const PORT := 8910
 const MAX_CLIENTS := 32
 const DEFAULT_HOST := "127.0.0.1"
 
-## Debug/dev-console override for the always-day lighting default. Day is the
-## DEFAULT in debug builds (see always_day_for) so development never waits on
-## real-world night; set this env var to "0" to opt a debug build back into
-## real UTC-driven day/night, or "1" to force day in an exported build.
+## Launch-time override that pins lighting to full day for a whole session,
+## in ANY build: set it to "1" (see always_day_for). There is no longer a
+## build-type default for it to opt out of -- debug builds run the same real
+## UTC day/night cycle the shipped game does -- so "0" now means what leaving
+## it unset means. For pinning a sky while the game is already running, use
+## the /day, /night and /time console commands instead.
 const DEBUG_ALWAYS_DAY_ENV := "AA_DEBUG_ALWAYS_DAY"
 ## Sun directly overhead -- sin(90 deg) = 1.0, i.e. maximum sunlight_intensity.
 const ALWAYS_DAY_ELEVATION := 90.0
+## Sun directly underfoot -- sin(-90 deg) = -1.0, which
+## SolarPosition.sunlight_intensity clamps to no light at all. The mirror of
+## ALWAYS_DAY_ELEVATION, for /night.
+const ALWAYS_NIGHT_ELEVATION := -90.0
+## No /time pin in force -- the clock and the sun follow real UTC. Outside
+## the [0,24) range any real clock hour lives in, so it can never collide
+## with one (see clock_hour_for_console_argument).
+const NO_FORCED_HOUR := -1.0
 
 const CONSOLE_TOGGLE_ACTION := "toggle_console"
 const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
@@ -214,6 +242,12 @@ const RAIN_INTENSITY_BY_WEATHER := {
 }
 
 var _rain_overlay := RainOverlay.new()
+
+## Held only to avoid allocating one per frame -- the material it pushes to is
+## static and shared (see GroundTint._shared_material, pinned by
+## test_ground_tint.gd::test_the_shared_material_is_the_same_one_for_every_instance),
+## so which instance does the pushing is irrelevant.
+var _ground_tint := GroundTint.new()
 
 @onready var _terrain: TileMapLayer = $Terrain
 @onready var _water_fx: TileMapLayer = $WaterFx
@@ -388,8 +422,6 @@ var _death_label: Label
 var _creature_panels_container: VBoxContainer
 var _hover_tooltip: Label
 var _hover_target_finder := HoverTargetFinder.new()
-var _talk_label: Label
-var _easter_egg_label: Label
 ## Floating "Talk (<key>)" prompt shown above the nearest in-range villager
 ## (see Player.TALK_RADIUS, EarthChunkManager.nearest_npc_near) -- the
 ## available-interaction hint requested alongside the talk feature itself.
@@ -420,11 +452,17 @@ var _xp_label: Label
 ## player, visible only once that keystone is unlocked -- see
 ## _update_land_sense_label.
 var _land_sense_label: Label
-var _fishing_label: Label
-## Taming state banner (see docs/concept/taming.md) -- sits just under the
-## fishing one, same shape.
-var _lasso_label: Label
-var _trade_label: Label
+## The one top-centre stack every transient world message is shown in, and
+## the themed cards inside it -- see _build_message_stack for why there is
+## one stack rather than five hand-positioned, background-less Labels. The
+## taming banner (docs/concept/taming.md) sits just under the fishing one, as
+## it always did; it just cannot land ON it any more.
+var _message_stack: VBoxContainer
+var _fishing_banner: PanelContainer
+var _lasso_banner: PanelContainer
+var _trade_banner: PanelContainer
+var _talk_banner: PanelContainer
+var _easter_egg_banner: PanelContainer
 var _wallet_label: Label
 var _creature_panels_accumulator := CREATURE_PANELS_REFRESH_INTERVAL  # refresh immediately
 ## How much faster than real time the ECOLOGY runs, set by /ecotest.
@@ -449,10 +487,52 @@ static func ecology_scale_for_console_argument(current_scale: float, argument: S
 	return TimeLapse.scale_for(asked) if asked > 0.0 else current_scale
 
 
-## Set true by the /day console command -- forces daytime lighting for the
-## rest of the session, same effect as DEBUG_ALWAYS_DAY_ENV but toggled live
-## rather than only at launch.
-var _force_day := false
+## Which sky the console has pinned for the rest of the session: "" (the real
+## cycle), "day" (/day) or "night" (/night). Same effect as
+## DEBUG_ALWAYS_DAY_ENV but toggled live rather than only at launch.
+var _forced_sky := ""
+## Local clock hour pinned by /time <hh:mm>, or NO_FORCED_HOUR for the real
+## one (see clock_hour_for_console_argument).
+var _forced_local_hour := NO_FORCED_HOUR
+
+
+## How fast the streaming budget below assumes the player is travelling, in
+## TILES per second. Not the walking pace: the fastest the player can
+## actually move under their own power is a mount (Taming.MOUNTED_SPEED
+## world units per second, over TerrainRenderer.TILE_SIZE units per tile), so
+## that is what the streaming edge has to stay ahead of.
+const STREAMING_BUDGET_TILES_PER_SECOND := Taming.MOUNTED_SPEED / float(TerrainRenderer.TILE_SIZE)
+
+## ...and how many update() calls per second that pace gets, i.e. the frame
+## rate. This is deliberately the WORST rate the playtest measured -- 6 FPS,
+## the floor of the 6-8 FPS dip at a chunk boundary that this budget exists
+## to remove -- rather than the 20-26 FPS of smooth walking. Fewer frames per
+## second means fewer update() calls to spread the pending chunks over, so
+## the derivation has to allow MORE chunks per call: assuming the dip is the
+## conservative direction, and guarantees the budget itself can never be the
+## reason a chunk arrives late.
+##
+## Neither constant is a knife edge -- chunks_per_update_for returns 1 across
+## the whole 6-144 FPS band at both the walking and the mounted pace
+## (test_the_budget_is_one_across_the_whole_measured_frame_rate_band).
+const STREAMING_BUDGET_FRAMES_PER_SECOND := 6.0
+
+
+## Caps how many chunks ONE update() call may generate, so crossing a chunk
+## boundary no longer generates a whole LOAD_RADIUS column inside a single
+## frame (the measured walking stall: 20-26 FPS falling to 6-8). The manager
+## defaults to 0 == unbudgeted, which is what every test and the cold load
+## want, so this one call is what makes the budget real in the running game.
+##
+## The value is DERIVED, never picked: EarthChunkManager.chunks_per_update_for
+## is a pure, separately-tested function of pace and frame rate over the real
+## streaming geometry (see its own doc comment and
+## CHUNK_BUDGET_SAFETY_FACTOR). The cold initial load is untouched -- it goes
+## through update_with_progress' coroutine, which is the right tool there.
+func _apply_streaming_budget(manager: EarthChunkManager) -> void:
+	manager.max_chunk_loads_per_update = EarthChunkManager.chunks_per_update_for(
+		STREAMING_BUDGET_TILES_PER_SECOND, STREAMING_BUDGET_FRAMES_PER_SECOND
+	)
 
 
 func _ready() -> void:
@@ -512,6 +592,11 @@ func _ready() -> void:
 	get_viewport().physics_object_picking = true
 
 	_chunk_manager = EarthChunkManager.new(_terrain, _entities, _creatures)
+	# Streams at most one chunk per frame from here on, so stepping over a
+	# chunk boundary stops generating a whole column inside one frame (see
+	# _apply_streaming_budget). The cold initial load below still runs
+	# through update_with_progress' coroutine and is unaffected.
+	_apply_streaming_budget(_chunk_manager)
 	# World-space low-frequency color drift over the whole ground layer (see
 	# GroundTint) -- soft lusher/drier patches spanning many tiles, so fields
 	# read as organic ground instead of a uniform printed carpet.
@@ -564,11 +649,7 @@ func _ready() -> void:
 	_build_survival_bar()
 	_build_xp_bar()
 	_build_land_sense_label()
-	_build_fishing_label()
-	_build_lasso_label()
-	_build_trade_label()
-	_build_talk_label()
-	_build_easter_egg_label()
+	_build_message_stack()
 	_build_joust_view()
 	_build_handheld_view()
 	_build_interaction_prompt()
@@ -666,10 +747,67 @@ func _on_menu_start_requested(
 	_dismiss_main_menu()
 
 
+## Every user:// DIRECTORY New Game destroys -- listed here so the backup
+## below and the wipe underneath it can never disagree about what a world is
+## (pinned against the wipe's own source by test_world_backup_paths.gd).
+static func backed_up_directories() -> PackedStringArray:
+	return PackedStringArray([
+		EarthChunkManager.MODIFICATIONS_DIR,
+		EarthChunkManager.PLANTED_TREES_DIR,
+		EarthChunkManager.FISH_POPULATION_DIR,
+		EarthChunkManager.ROOF_MODIFICATIONS_DIR,
+	])
+
+
+## Every single-FILE store New Game destroys, in the order the wipe removes
+## them. Each path is read from the persistence class that owns it rather
+## than restated as a literal, so moving a store's file moves its backup too.
+static func backed_up_files() -> PackedStringArray:
+	return PackedStringArray([
+		EarthChunkManager.EventStorePersistence.SAVE_PATH,
+		EarthChunkManager.MemoryStorePersistence.SAVE_PATH,
+		EarthChunkManager.HouseholdStorePersistence.SAVE_PATH,
+		EarthChunkManager.ContractStorePersistence.SAVE_PATH,
+		EarthChunkManager.MarketStorePersistence.SAVE_PATH,
+		EarthChunkManager.InstitutionStorePersistence.SAVE_PATH,
+		EarthChunkManager.WorldBossStorePersistence.SAVE_PATH,
+		EarthChunkManager.WorldClockPersistence.SAVE_PATH,
+		PlayerSave.SAVE_PATH,
+	])
+
+
+## Copies everything the wipe below is about to destroy to `<path>.bak`
+## first (see WorldReset.backup_file/backup_directory).
+##
+## New Game is the only irreversible action in the game, and until this ran
+## it had no undo whatsoever: one click removed a whole world's chunk
+## modifications, its planted trees, its fish populations, its event, memory,
+## household, contract, market, institution and world-boss stores, its clock
+## and the player's own save -- and the 60-second autosave then wrote the new
+## character over player_save.bin, closing even the undelete window. Every
+## emergent thing a save accumulates lived in exactly those files.
+##
+## ONE generation, overwritten by the next New Game: enough to undo a
+## mis-click, not an archive. It roughly doubles the on-disk world for as
+## long as the backup sits there, which is a cheap price for an undo.
+func _backup_persisted_world() -> void:
+	for dir_path in backed_up_directories():
+		_world_reset.backup_directory(dir_path)
+	for path in backed_up_files():
+		_world_reset.backup_file(path)
+
+
 func _wipe_persisted_world() -> void:
+	_backup_persisted_world()
 	_world_reset.wipe_directory(EarthChunkManager.MODIFICATIONS_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.PLANTED_TREES_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.FISH_POPULATION_DIR)
+	# Roofs are chunk modifications like any other (the same per-chunk
+	# <x>_<y>.bin shape as MODIFICATIONS_DIR, written by the same building
+	# code) -- they were just added later than the three lines above and
+	# never joined the wipe, so a new world loaded the PREVIOUS world's
+	# roofs hanging over ground whose walls and floors had gone.
+	_world_reset.wipe_directory(EarthChunkManager.ROOF_MODIFICATIONS_DIR)
 	_player_save.wipe()
 	# The event store and memory store are two more pieces of world-scoped
 	# state that must not survive "New Game" -- the same "New Game means new"
@@ -891,13 +1029,25 @@ func _on_inventory_unequip_requested(slot: String) -> void:
 		_refresh_inventory_now(local_player)
 
 
+## Hands the window everything it cannot work out for itself.
+##
+## The SEASON is the world clock's, and only EarthChunkManager has it -- food
+## shelf life is seasonal, so without it the window's per-item freshness line
+## silently never appears at all. Guarded for null because the UI is built
+## before the world is (see _refresh_inventory_now's own test).
+##
+## The APPEARANCE is the look the player authored in the creator; without it
+## the paperdoll falls back to CharacterView's default warrior, so every
+## character looked identical in their own inventory.
 func _refresh_inventory_now(local_player: Player) -> void:
 	_inventory_window.refresh(
 		local_player.inventory.stacks(),
 		_equipped_map(local_player),
 		local_player.equipment.total_armor(),
-		local_player.inventory.slot_count
+		local_player.inventory.slot_count,
+		_chunk_manager.current_season() if _chunk_manager != null else ""
 	)
+	_inventory_window.apply_appearance(local_player.appearance)
 
 
 ## slot -> worn Item for the paperdoll (see Equipment).
@@ -1324,93 +1474,101 @@ func _build_land_sense_label() -> void:
 	_ui.add_child(_land_sense_label)
 
 
-## A centered fishing prompt/result banner (hidden when there's nothing to say).
-func _build_fishing_label() -> void:
-	_fishing_label = Label.new()
-	_fishing_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_fishing_label.offset_top = 120.0
-	_fishing_label.offset_left = -160.0
-	_fishing_label.offset_right = 160.0
-	_fishing_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_fishing_label.add_theme_font_size_override("font_size", 16)
-	_ui.add_child(_fishing_label)
+## Every transient message the world shows the player -- fishing, taming,
+## trade, talk, Easter-egg sightings -- in ONE themed, top-centre stack.
+##
+## They used to be five independent, absolutely-positioned, background-less
+## Labels at hand-picked y offsets: unreadable over snow (reported), washed
+## out over sand, and two of them (taming and trade) pinned to the SAME
+## offset_top of 144, so a trade message and a taming message drew straight
+## through each other. A VBoxContainer makes that overlap structurally
+## impossible -- a hidden banner takes no room, so whatever is showing simply
+## stacks -- and the shared `_ui_theme` PanelContainer card (the same opaque,
+## bordered card _build_survival_bar and CreaturePanel already use) makes each
+## one legible over any terrain.
+##
+## Each _update_*_label body keeps its name and its caller; what changed is
+## that it now sets its banner's CARD (see _set_message_banner) rather than a
+## loose Label's text and visibility.
+func _build_message_stack() -> void:
+	_message_stack = VBoxContainer.new()
+	_message_stack.theme = _ui_theme
+	_message_stack.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_message_stack.offset_top = MESSAGE_STACK_TOP
+	_message_stack.offset_left = -MESSAGE_STACK_WIDTH / 2.0
+	_message_stack.offset_right = MESSAGE_STACK_WIDTH / 2.0
+	_message_stack.alignment = BoxContainer.ALIGNMENT_CENTER
+	_message_stack.add_theme_constant_override("separation", 4)
+	_message_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(_message_stack)
+
+	# Fixed top-to-bottom order -- the same order message_banner_lines pins.
+	_fishing_banner = _make_message_banner(16)
+	_lasso_banner = _make_message_banner(16)
+	_trade_banner = _make_message_banner(16)
+	_talk_banner = _make_message_banner(14)
+	_easter_egg_banner = _make_message_banner(14)
+	# A sighting is an ambient world event rather than something the player
+	# did, and reads in its own cooler ink -- the one per-banner difference.
+	(_easter_egg_banner.get_child(0) as Label).add_theme_color_override(
+		"font_color", EASTER_EGG_MESSAGE_COLOR
+	)
 
 
-func _build_lasso_label() -> void:
-	_lasso_label = Label.new()
-	_lasso_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_lasso_label.offset_top = 144.0
-	_lasso_label.offset_left = -200.0
-	_lasso_label.offset_right = 200.0
-	_lasso_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_lasso_label.add_theme_font_size_override("font_size", 16)
-	_ui.add_child(_lasso_label)
+## One message banner: a themed card (UiTheme.panel_stylebox via _ui_theme --
+## the same opaque, bordered card the survival panel and CreaturePanel use)
+## wrapping a centred, wrapping Label. Hidden until it has something to say.
+func _make_message_banner(font_size: int) -> PanelContainer:
+	var banner := PanelContainer.new()
+	banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	banner.visible = false
+	var label := Label.new()
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.add_theme_font_size_override("font_size", font_size)
+	banner.add_child(label)
+	_message_stack.add_child(banner)
+	return banner
+
+
+## Sets one banner's text, hiding the whole CARD (not just blanking its text)
+## when there is nothing to say -- a hidden VBox child takes no room, so the
+## banners below it move up instead of a blank gap opening.
+func _set_message_banner(banner: PanelContainer, message: String) -> void:
+	(banner.get_child(0) as Label).text = message
+	banner.visible = message != ""
+
+
+## The banners on screen, top to bottom -- the fixed order the stack shows
+## them in, with empty ones dropped entirely, so two messages can never land
+## on the same line the way the taming and trade banners did (both were
+## pinned at offset_top 144). Pinned by test_world_hud.gd.
+static func message_banner_lines(
+	fishing: String, lasso: String, trade: String, talk: String, easter_egg: String
+) -> PackedStringArray:
+	var lines := PackedStringArray()
+	for message in [fishing, lasso, trade, talk, easter_egg]:
+		if message != "":
+			lines.append(message)
+	return lines
 
 
 func _update_lasso_label(local_player: Player) -> void:
-	_lasso_label.text = local_player.lasso_message
-	_lasso_label.visible = local_player.lasso_message != ""
+	_set_message_banner(_lasso_banner, local_player.lasso_message)
 
 
 func _update_fishing_label(local_player: Player) -> void:
-	_fishing_label.text = local_player.fishing_message
-	_fishing_label.visible = local_player.fishing_message != ""
+	_set_message_banner(_fishing_banner, local_player.fishing_message)
 
 
-## A centered shopping prompt/result banner (see Player._shop_step), same
-## shape as the fishing banner just below it.
-func _build_trade_label() -> void:
-	_trade_label = Label.new()
-	_trade_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_trade_label.offset_top = 144.0
-	_trade_label.offset_left = -160.0
-	_trade_label.offset_right = 160.0
-	_trade_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_trade_label.add_theme_font_size_override("font_size", 16)
-	_ui.add_child(_trade_label)
-
-
+## A shopping prompt/result banner (see Player._shop_step).
 func _update_trade_label(local_player: Player) -> void:
-	_trade_label.text = local_player.trade_message
-	_trade_label.visible = local_player.trade_message != ""
+	_set_message_banner(_trade_banner, local_player.trade_message)
 
 
-## A centered talk-result banner (see Player._talk_step/NpcGreeting), same
-## shape as the trade banner just above it.
-func _build_talk_label() -> void:
-	_talk_label = Label.new()
-	_talk_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_talk_label.offset_top = 168.0
-	_talk_label.offset_left = -220.0
-	_talk_label.offset_right = 220.0
-	_talk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_talk_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_talk_label.add_theme_font_size_override("font_size", 14)
-	_ui.add_child(_talk_label)
-
-
+## A talk-result banner (see Player._talk_step/NpcGreeting).
 func _update_talk_label(local_player: Player) -> void:
-	_talk_label.text = local_player.talk_message
-	_talk_label.visible = local_player.talk_message != ""
-
-
-## The Easter-egg sighting banner (see _check_easter_egg_sightings below) --
-## same centered-banner shape as _talk_label just above, but driven off a
-## World-level message + countdown timer rather than a Player field, since
-## a sighting is an ambient world event, not the result of a player
-## interaction.
-func _build_easter_egg_label() -> void:
-	_easter_egg_label = Label.new()
-	_easter_egg_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_easter_egg_label.offset_top = 210.0
-	_easter_egg_label.offset_left = -260.0
-	_easter_egg_label.offset_right = 260.0
-	_easter_egg_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_easter_egg_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_easter_egg_label.add_theme_font_size_override("font_size", 14)
-	_easter_egg_label.add_theme_color_override("font_color", Color(0.85, 0.85, 0.95))
-	_easter_egg_label.visible = false
-	_ui.add_child(_easter_egg_label)
+	_set_message_banner(_talk_banner, local_player.talk_message)
 
 
 ## The joust arcade-cabinet overlay (see JoustMatchView's own doc comment)
@@ -1456,8 +1614,7 @@ func _check_easter_egg_sightings(player_tile: Vector2i, is_night: bool) -> void:
 			is_night
 		)
 		if message != "":
-			_easter_egg_label.text = message
-			_easter_egg_label.visible = true
+			_set_message_banner(_easter_egg_banner, message)
 			_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
 			return
 
@@ -1500,8 +1657,7 @@ func _check_back_to_the_future_day(month: int, day: int) -> void:
 	if not _back_to_the_future_day.is_today(month, day):
 		return
 	_bttf_cameo_shown_this_session = true
-	_easter_egg_label.text = _back_to_the_future_day.cameo_message()
-	_easter_egg_label.visible = true
+	_set_message_banner(_easter_egg_banner, _back_to_the_future_day.cameo_message())
 	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
 
 
@@ -1518,8 +1674,7 @@ func _check_rush_ambient_cue(player_tile: Vector2i) -> void:
 	):
 		return
 	_rush_ambient_cue_played = true
-	_easter_egg_label.text = _rush_ambient_cue.cameo_message()
-	_easter_egg_label.visible = true
+	_set_message_banner(_easter_egg_banner, _rush_ambient_cue.cameo_message())
 	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
 	# TODO(easter-eggs): once a real short original ambient instrumental cue
 	# exists (.ogg), attach it here via an AudioStreamPlayer2D at the
@@ -1546,8 +1701,9 @@ func _check_ancient_terminal(player_tile: Vector2i, local_player: Player) -> voi
 		return
 	var already_found := _ancient_terminal.has_been_found()
 	_ancient_terminal.mark_found()
-	_easter_egg_label.text = "\n".join(_ancient_terminal.terminal_lines())
-	_easter_egg_label.visible = true
+	_set_message_banner(
+		_easter_egg_banner, "\n".join(_ancient_terminal.terminal_lines())
+	)
 	_easter_egg_message_timer = ANCIENT_TERMINAL_MESSAGE_DURATION
 	# "Three Fragments" hunt (docs/concept/easter_eggs.md) -- quietly leaves
 	# behind one small, unremarkable fragment item the FIRST time the
@@ -1587,8 +1743,7 @@ func _check_signed_secret_room(player_tile: Vector2i, local_player: Player) -> v
 		return
 	var already_found := _signed_secret_room.has_been_found()
 	_signed_secret_room.mark_found()
-	_easter_egg_label.text = _signed_secret_room.credit_text()
-	_easter_egg_label.visible = true
+	_set_message_banner(_easter_egg_banner, _signed_secret_room.credit_text())
 	_easter_egg_message_timer = SIGNED_SECRET_ROOM_MESSAGE_DURATION
 	# "Three Fragments" hunt (docs/concept/easter_eggs.md) -- same grant-once
 	# shape as _check_ancient_terminal above.
@@ -1615,10 +1770,10 @@ func _check_sea_cave_guardian(player_tile: Vector2i) -> void:
 	):
 		return
 	_sea_cave_guardian.begin_challenge()
-	_easter_egg_label.text = (
+	_set_message_banner(
+		_easter_egg_banner,
 		_sea_cave_guardian.challenge_line() + "\n\n" + _sea_cave_guardian.transform_line()
 	)
-	_easter_egg_label.visible = true
 	_easter_egg_message_timer = SEA_CAVE_GUARDIAN_MESSAGE_DURATION
 	_joust_view.start_match()
 	get_tree().paused = true
@@ -1632,8 +1787,7 @@ func _check_sea_cave_guardian(player_tile: Vector2i) -> void:
 func _on_joust_match_finished(winner: String) -> void:
 	get_tree().paused = false
 	_sea_cave_guardian.end_challenge()
-	_easter_egg_label.text = _sea_cave_guardian.outcome_line(winner)
-	_easter_egg_label.visible = true
+	_set_message_banner(_easter_egg_banner, _sea_cave_guardian.outcome_line(winner))
 	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
 
 
@@ -1655,8 +1809,7 @@ func _check_retro_handheld(player_tile: Vector2i) -> void:
 	var already_found := _retro_handheld.has_been_found()
 	_retro_handheld.mark_found()
 	_retro_handheld.open()
-	_easter_egg_label.text = _retro_handheld.flavor_line(already_found)
-	_easter_egg_label.visible = true
+	_set_message_banner(_easter_egg_banner, _retro_handheld.flavor_line(already_found))
 	_easter_egg_message_timer = RETRO_HANDHELD_MESSAGE_DURATION
 	_handheld_view.open()
 	get_tree().paused = true
@@ -1793,8 +1946,7 @@ func _check_three_fragments_hunt(local_player: Player) -> void:
 		return
 	_three_fragments_hunt.mark_triggered()
 	local_player.inventory.add(_item_catalog.make(ThreeFragmentsHunt.BONUS_ITEM_ID), 1)
-	_easter_egg_label.text = _three_fragments_hunt.bonus_message()
-	_easter_egg_label.visible = true
+	_set_message_banner(_easter_egg_banner, _three_fragments_hunt.bonus_message())
 	_easter_egg_message_timer = THREE_FRAGMENTS_BONUS_MESSAGE_DURATION
 
 
@@ -1803,8 +1955,7 @@ func _update_easter_egg_label(delta: float) -> void:
 		return
 	_easter_egg_message_timer -= delta
 	if _easter_egg_message_timer <= 0.0:
-		_easter_egg_label.visible = false
-		_easter_egg_label.text = ""
+		_set_message_banner(_easter_egg_banner, "")
 
 
 ## The floating "Talk (<key>)" prompt (see _interaction_prompt's own doc
@@ -1888,7 +2039,7 @@ func _update_charge_meter(local_player: Player) -> void:
 ## from _keybindings so a rebind is reflected immediately, never a stale
 ## hardcoded letter.
 func _update_interaction_prompt(local_player: Player) -> void:
-	if _chunk_manager == null:
+	if not world_hint_visible_for(_chunk_manager != null, _any_gameplay_window_open()):
 		_interaction_prompt.visible = false
 		return
 
@@ -2023,6 +2174,12 @@ func _build_hover_tooltip() -> void:
 ## EarthChunkManager._sync_grass_sprites), so it is checked separately, only
 ## once nothing else claimed the cursor.
 func _update_hover_tooltip() -> void:
+	# A tooltip about whatever is behind an open window is noise -- and worse,
+	# it draws ON TOP of that window (see world_hint_visible_for). Skipping
+	# the scan entirely also saves the per-marker work while a modal is up.
+	if not world_hint_visible_for(true, _any_gameplay_window_open()):
+		_hover_tooltip.visible = false
+		return
 	var mouse_world := get_global_mouse_position()
 	# The finder only ever picks a target within HOVER_RADIUS_PX of the cursor
 	# (relaxed by Spyglass.effective_hover_radius when a Spyglass is equipped
@@ -2189,17 +2346,17 @@ func _handle_escape() -> void:
 
 
 ## Per slice: cheap, and the things the lapse exists to show.
+##
+## The world CLOCK is deliberately not advanced here any more. It used to be,
+## once per slice, which tied the calendar to the per-FRAME slice budget --
+## and a lapse runs at a few frames a second, so the year came out several
+## times slower than the rate asked for. The clock now runs at the rate asked
+## for, once a frame, independently of how many slices a frame can afford
+## (see TimeLapse.calendar_seconds and _process).
 func _step_ecology_fine(delta: float, focus_player: Player) -> void:
-	# The clock first, and on EVERY slice: it is what seasons, ripening and
-	# growth all read.
-	_chunk_manager.advance_world_age(delta)
 	_chunk_manager.step_worms(delta)
 	if focus_player != null:
 		_chunk_manager.step_fruiting(delta, focus_player.position)
-	# Real in-flight regional-trade caravans (see docs/concept/trade.md):
-	# advanced every slice, not batched, so PathScarring wear along a
-	# route builds up tile-by-tile rather than one coarse jump.
-	_chunk_manager.step_caravans()
 
 
 ## Once a frame, carrying the whole frame's simulated time: the heavy periodic
@@ -2217,6 +2374,15 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# Food goes off in the pack too, on the same clock (see ItemStack.age).
 	_chunk_manager.step_carried_food(delta)
 	_chunk_manager.step_tall_grass(delta)
+	# Wild carrot/potato, on the same batched cadence and for the same reason
+	# (see EarthChunkManager.step_wild_crops / concept/wild_crops.md). This
+	# line was simply missing: the step existed, its own unit tests called it
+	# directly and passed, and nothing in a real session ever did -- so wild
+	# crops only ever showed the maturity _seed_initial_patches handed them at
+	# chunk creation (1.0, mature) and spread never fired once. Same trap the
+	# ownership gate fell into (see test_world_simulation_ownership.gd's
+	# header), one call level further out.
+	_chunk_manager.step_wild_crops(delta)
 	_chunk_manager.step_flowers(delta)
 	_chunk_manager.step_desert_scrub(delta)
 	_chunk_manager.step_tundra_lichen(delta)
@@ -2250,6 +2416,27 @@ func _any_gameplay_window_open() -> bool:
 	return _inventory_window.visible or _crafting_window.is_open() or _skill_window.is_open()
 
 
+## Whether a WORLD-SPACE floating hint -- the "Talk (G)"/"Pick (E)" prompt,
+## the hover tooltip, the message stack -- may be drawn right now.
+##
+## Every HUD node in this file is a child of the same `_ui` CanvasLayer, so
+## draw order is sibling order -- and the floaters are built AFTER the
+## inventory/crafting/skill windows in _ready(), which put "Talk (G)" and a
+## tooltip about a tree BEHIND the modal on top of the open modal (reported).
+## Hiding them is the fix rather than reordering the layers: a hint about the
+## world behind a window is noise even in the corners it does not overlap.
+##
+## `window_open` is _any_gameplay_window_open(), the same predicate
+## EscapeAction.action_for already treats as "a modal is open". Deliberately
+## NOT widened to the settings overlay (which pauses the tree, so
+## _client_process stops running and the floaters freeze rather than update)
+## or the dev console (a small bottom strip that overlaps nothing) -- and
+## widening it would change what EscapeAction means. Pinned by
+## test_world_hud.gd.
+static func world_hint_visible_for(can_show: bool, window_open: bool) -> bool:
+	return can_show and not window_open
+
+
 ## Closes every open gameplay window at once -- Escape clears the screen
 ## rather than needing one press per open window.
 func _close_gameplay_windows() -> void:
@@ -2280,7 +2467,8 @@ func _on_console_command(command: String, args: Array) -> void:
 		"help":
 			_dev_console.log_line(
 				(
-					"Commands: /day  /season [name]  /weather [state|off]"
+					"Commands: /day [off]  /night [off]  /time <hh:mm>|off"
+					+ "  /season [name]  /weather [state|off]"
 					+ "  /ecotest [seconds_per_year|off]"
 					+ "  /history <entity_id>  /why <event_id>  /remember <entity_id>"
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
@@ -2298,8 +2486,11 @@ func _on_console_command(command: String, args: Array) -> void:
 			# listing it inline would drown the other commands.
 			_dev_console.log_line("Spawnable: %s" % ", ".join(ConsoleSpecies.spawnable()))
 		"day":
-			_force_day = true
-			_dev_console.log_line("Time forced to day.")
+			_handle_sky_command("day", args)
+		"night":
+			_handle_sky_command("night", args)
+		"time":
+			_handle_time_command(args)
 		"history":
 			_handle_history_command(args)
 		"why":
@@ -2604,6 +2795,46 @@ func _handle_weather_command(args: Array) -> void:
 		_dev_console.log_line("In winter this falls as snow -- try /season winter with it.")
 
 
+## /day [off] and /night [off] -- pin the sky for the rest of the session,
+## whatever the real sun is doing at the character's real-world coordinates.
+##
+## These exist because debug builds no longer default to permanent noon (see
+## always_day_for): rather than a build type silently deciding, whoever wants
+## a particular sky asks for one, and can ask for NIGHT too -- which the old
+## default made impossible to see without waiting for real nightfall.
+func _handle_sky_command(sky: String, args: Array) -> void:
+	_forced_sky = "" if is_off_argument(args) else sky
+	if _forced_sky == "":
+		_dev_console.log_line("Real day/night cycle restored.")
+		return
+	_dev_console.log_line(
+		"Sky pinned to %s (/%s off to restore the real cycle)." % [sky, sky]
+	)
+
+
+## /time <hh:mm>|off -- pins the LOCAL clock at the character's own longitude
+## (the same local-solar-time basis SolarPosition.local_hour already uses for
+## the HUD readout), so the sun really is where that hour puts it rather than
+## the readout drifting away from the sky. /time off returns to real UTC.
+func _handle_time_command(args: Array) -> void:
+	if is_off_argument(args):
+		_forced_local_hour = NO_FORCED_HOUR
+		_dev_console.log_line("Clock back on real time.")
+		return
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /time <hh:mm>  e.g. /time 22:30, or /time off")
+		return
+	var hour := clock_hour_for_console_argument(str(args[0]))
+	if hour == NO_FORCED_HOUR:
+		_dev_console.log_line("Not a time: '%s'. Try /time 22:30 or /time off." % str(args[0]))
+		return
+	_forced_local_hour = hour
+	_dev_console.log_line(
+		"Local clock pinned to %02d:%02d. /time off for real time."
+		% [int(hour), int(round((hour - float(int(hour))) * 60.0))]
+	)
+
+
 ## /ecotest [seconds_per_year|off] -- runs the ECOLOGY fast so a whole year
 ## can be watched: winter into spring into summer into autumn, canopies going
 ## bare and back into leaf, fruit ripening and falling, saplings coming up and
@@ -2623,15 +2854,17 @@ func _handle_ecotest_command(args: Array) -> void:
 		if asked > 0.0:
 			seconds_per_year = asked
 	_ecology_time_scale = TimeLapse.scale_for(seconds_per_year)
-	# Reported as a TARGET, not a promise. The rate the world actually reaches
-	# depends on how much ecology a frame can get through, which depends on the
-	# machine and on how much is loaded: measured on this one, a year asked for
-	# in 45 seconds arrives in about 90.
+	# The SEASON rate is now exact at any framerate: the calendar advances by
+	# the full requested amount once a frame, while the ecology keeps its
+	# measured per-frame slice budget (see TimeLapse.calendar_seconds). What
+	# still depends on the machine is how much ecology each frame gets
+	# through -- not when the year ends.
 	_dev_console.log_line(
 		(
-			"Ecology target: a year every %.0fs (%.0fx). Actual depends on framerate."
-			% [seconds_per_year, _ecology_time_scale]
+			"Seasons now turn a year every %.0fs (%.0fx). How much ecology each"
+			+ " frame gets through still depends on the framerate."
 		)
+		% [seconds_per_year, _ecology_time_scale]
 	)
 	_dev_console.log_line(
 		"Watch the canopies -- a season should turn every half minute or so."
@@ -3055,21 +3288,42 @@ func _update_player_health_bar(local_player: Player) -> void:
 		_death_label.text = "You Died\nRespawning in %d..." % ceili(maxf(remaining, 0.0))
 
 
-## Hunger/thirst bars fill up as satisfaction (1.0 - the meter, which itself
-## rises toward 1.0 as hunger/thirst worsen) so a FULL bar reads as "doing
-## fine", matching the health bar's full-is-good convention; the stamina bar
-## just shows stamina directly (already 1.0 = full/good).
+## The reserve left of a meter SurvivalMeters stores as a DEFICIT.
+##
+## hunger and thirst rise toward 1.0 as they worsen (that is how the model
+## integrates them); stamina and warmth are already stored the other way up.
+## The HUD shows all four as reserves so that one panel never means two
+## opposite things at once -- reported: "Hunger 100%" printed over an EMPTY
+## bar, two rows above "Warmth 100%" over a full one. Pinned by
+## test_world_hud.gd; see docs/concept/hud.md and docs/concept/survival.md.
+static func reserve_for_deficit(deficit: float) -> float:
+	return clampf(1.0 - deficit, 0.0, 1.0)
+
+
+## One meter's label. Takes the SAME reserve fraction the bar beside it is
+## filled with, so the number and the bar are the same value by construction
+## rather than by two lines agreeing to stay in step.
+static func meter_label_text(meter_name: String, reserve: float) -> String:
+	return "%s %d%%" % [meter_name, int(round(clampf(reserve, 0.0, 1.0) * 100.0))]
+
+
+## Every meter reads as a RESERVE: full is good, and the number always says
+## the same thing as the bar under it -- the same convention the health bar
+## has always used. Food and Water are named for what is LEFT rather than for
+## what is missing (see reserve_for_deficit).
 func _update_survival_bar(local_player: Player) -> void:
 	var s := local_player.survival
-	_hunger_fill.size.x = _health_bar.fill_width(1.0 - s.hunger, 1.0, SURVIVAL_BAR_WIDTH)
-	_hunger_label.text = "Hunger %d%%" % int(s.hunger * 100)
-	_thirst_fill.size.x = _health_bar.fill_width(1.0 - s.thirst, 1.0, SURVIVAL_BAR_WIDTH)
-	_thirst_label.text = "Thirst %d%%" % int(s.thirst * 100)
+	var food := reserve_for_deficit(s.hunger)
+	_hunger_fill.size.x = _health_bar.fill_width(food, 1.0, SURVIVAL_BAR_WIDTH)
+	_hunger_label.text = meter_label_text("Food", food)
+	var water := reserve_for_deficit(s.thirst)
+	_thirst_fill.size.x = _health_bar.fill_width(water, 1.0, SURVIVAL_BAR_WIDTH)
+	_thirst_label.text = meter_label_text("Water", water)
 	_stamina_fill.size.x = _health_bar.fill_width(s.stamina, 1.0, SURVIVAL_BAR_WIDTH)
-	_stamina_label.text = "Stamina %d%%" % int(s.stamina * 100)
+	_stamina_label.text = meter_label_text("Stamina", s.stamina)
 	_warmth_fill.size.x = _health_bar.fill_width(s.warmth, 1.0, SURVIVAL_BAR_WIDTH)
 	var warmth_state := "Freezing" if s.is_freezing() else ("Cold" if s.is_cold() else "Warmth")
-	_warmth_label.text = "%s %d%%" % [warmth_state, int(s.warmth * 100)]
+	_warmth_label.text = meter_label_text(warmth_state, s.warmth)
 	_wallet_label.text = "Gold: %d" % local_player.wallet.balance
 
 
@@ -3449,8 +3703,23 @@ func _process(delta: float) -> void:
 	if focus_player != null:
 		_chunk_manager.set_grass_walker_position(focus_player.position)
 	if _owns_ecosystem_simulation():
-		# Normally one slice carrying the frame's own delta; several when
-		# /ecotest is running the year fast (see TimeLapse).
+		# The CALENDAR first, at the rate actually asked for: seasons, fruit
+		# ripening and tree growth all read the clock, and they are what
+		# /ecotest exists to let someone watch. At normal speed this is
+		# exactly the frame's own delta, so nothing changes off the lapse.
+		_chunk_manager.advance_world_age(
+			TimeLapse.calendar_seconds(delta, _ecology_time_scale)
+		)
+		# Real in-flight regional-trade caravans (see docs/concept/trade.md)
+		# read the clock rather than a delta, so they belong with the clock:
+		# once, right after it moves. They used to run per slice, back when
+		# each slice moved the clock -- now every slice within a frame would
+		# see the same world age and redo identical work.
+		_chunk_manager.step_caravans()
+		# The STEPPING keeps its measured per-frame budget (see TimeLapse):
+		# normally one slice carrying the frame's own delta, several when
+		# /ecotest is running the year fast, never more than the frame can
+		# get through.
 		# Two groups, at two cadences -- see _step_ecology_fine and
 		# _step_ecology_batch.
 		var slices := TimeLapse.slices(delta, _ecology_time_scale)
@@ -3684,9 +3953,9 @@ func _offset_hash(position: Vector2, salt: int) -> float:
 ## from the menu HOSTS it (see _start_server), so `multiplayer_peer` is set,
 ## `_is_dedicated_server` is false, and this returned false. Measured live:
 ## `owns=false`, `age=0` -- meaning step_flowers/step_worms/step_fruiting/
-## step_tree_spread never ran at all, and because step_tree_spread is what
-## advances `_world_age_seconds`, the world clock was frozen at zero, so the
-## season and weather never changed either. That is why nothing ever grew,
+## step_tree_spread never ran at all, and because the world clock is advanced
+## from inside this same `owns` branch (see _process), `_world_age_seconds`
+## was frozen at zero, so the season and weather never changed either. That is why nothing ever grew,
 ## no worm ever surfaced ("no worms in rain" -- it had never actually
 ## rained), no fruit ever fell, and the robin had nothing to hunt. A player
 ## hosting their own world IS the authority for it.
@@ -3709,27 +3978,58 @@ func _owns_ecosystem_simulation() -> bool:
 
 
 ## Whether lighting should be pinned to full sun instead of following the real
-## UTC-driven solar elevation. Day is the DEFAULT during development: a debug
-## build that happens to be run after sunset otherwise renders a dark world
-## nothing can be evaluated in, and every dev launch would have to remember to
-## set an env var. Exported builds still follow real time, so the shipped
-## day/night cycle is unaffected. Precedence, highest first: the live console
-## toggle (/day), the env var, then the build type. Pinned by
+## UTC-driven solar elevation. Precedence, highest first: the live console
+## toggle (/day), then the env var.
+##
+## There is deliberately NO build-type default any more. This used to end in
+## `return is_debug`, so every debug build was permanent noon -- sun elevation
+## 90 at two in the morning -- and nobody developing the game ever saw the
+## night the shipped build has; AA_DEBUG_ALWAYS_DAY=0 was the only escape and
+## nobody set it. /day, /night and /time <hh:mm> put a chosen sky one
+## keystroke away, which is what that default was really providing. Pinned by
 ## test_world_daylight_default.gd.
-static func always_day_for(force_day: bool, env_value: String, is_debug: bool) -> bool:
-	if force_day:
-		return true
-	if env_value == "0":
-		return false
-	if env_value == "1":
-		return true
-	return is_debug
+static func always_day_for(force_day: bool, env_value: String) -> bool:
+	return force_day or env_value == "1"
 
 
-func _always_day() -> bool:
-	return always_day_for(
-		_force_day, OS.get_environment(DEBUG_ALWAYS_DAY_ENV), OS.is_debug_build()
-	)
+## The elevation to light the world by: whichever sky the console pinned,
+## else the real one just computed. ONE place decides, so /day and /night can
+## never disagree about which wins -- and a live /night beats a stale
+## AA_DEBUG_ALWAYS_DAY=1 from launch, since whoever is typing now is more
+## current than whoever set the variable.
+static func forced_elevation_for(
+	forced_sky: String, env_value: String, real_elevation: float
+) -> float:
+	if forced_sky == "night":
+		return ALWAYS_NIGHT_ELEVATION
+	if always_day_for(forced_sky == "day", env_value):
+		return ALWAYS_DAY_ELEVATION
+	return real_elevation
+
+
+## Parses a /time argument -- "22:30", or a bare "22" -- into a local clock
+## hour in [0,24), or NO_FORCED_HOUR when it is not a real time. Pure and
+## separate from the live clock, the same way
+## ecology_scale_for_console_argument already is for /ecotest.
+static func clock_hour_for_console_argument(text: String) -> float:
+	var parts := text.split(":")
+	if parts.size() > 2 or not parts[0].is_valid_int():
+		return NO_FORCED_HOUR
+	var hours := int(parts[0])
+	var minutes := 0
+	if parts.size() == 2:
+		if not parts[1].is_valid_int():
+			return NO_FORCED_HOUR
+		minutes = int(parts[1])
+	if hours < 0 or hours > 23 or minutes < 0 or minutes > 59:
+		return NO_FORCED_HOUR
+	return float(hours) + float(minutes) / 60.0
+
+
+## Whether a console command's arguments say "off" -- shared by /day, /night
+## and /time so one word clears any of them.
+static func is_off_argument(args: Array) -> bool:
+	return args.size() > 0 and str(args[0]).to_lower() == "off"
 
 
 ## Every connected player gets a working chunk_manager reference so its
@@ -3807,6 +4107,9 @@ func _client_process(delta: float) -> void:
 	_update_lasso_label(local_player)
 	_update_trade_label(local_player)
 	_update_talk_label(local_player)
+	# The banners keep their own text; the whole stack steps aside while a
+	# window is open (see world_hint_visible_for).
+	_message_stack.visible = world_hint_visible_for(true, _any_gameplay_window_open())
 	_update_interaction_prompt(local_player)
 	_update_charge_meter(local_player)
 	_refresh_skill_window(local_player)
@@ -3817,13 +4120,22 @@ func _client_process(delta: float) -> void:
 	# Real-world UTC time drives lighting directly: day/night always matches
 	# what the sun is actually doing right now at the player's real-world
 	# latitude/longitude, not an accelerated or arbitrary in-game clock --
-	# unless overridden by DEBUG_ALWAYS_DAY_ENV for dev/testing.
+	# unless the console has pinned a sky (/day, /night) or a clock (/time),
+	# or DEBUG_ALWAYS_DAY_ENV pinned day for the whole session at launch.
 	var utc := Time.get_datetime_dict_from_system(true)
 	var day_of_year := _solar_position.day_of_year(utc.year, utc.month, utc.day)
 	var utc_hour: float = utc.hour + utc.minute / 60.0 + utc.second / 3600.0
+	# /time <hh:mm> pins the LOCAL clock, converted back here to the UTC hour
+	# that produces it (SolarPosition.utc_hour_for_local) -- so the displayed
+	# clock, the sun's elevation and its azimuth/hillshading all move
+	# together instead of the readout drifting away from the sky.
+	if _forced_local_hour != NO_FORCED_HOUR:
+		utc_hour = _solar_position.utc_hour_for_local(_forced_local_hour, longitude)
 
-	var elevation := ALWAYS_DAY_ELEVATION if _always_day() else _solar_position.elevation_degrees(
-		latitude, longitude, day_of_year, utc_hour
+	var elevation := forced_elevation_for(
+		_forced_sky,
+		OS.get_environment(DEBUG_ALWAYS_DAY_ENV),
+		_solar_position.elevation_degrees(latitude, longitude, day_of_year, utc_hour)
 	)
 	# Easter-egg sighting cameos (docs/concept/easter_eggs.md) -- gated on
 	# the same real sun elevation day/night lighting already uses, so
@@ -3906,6 +4218,18 @@ func _client_process(delta: float) -> void:
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).
 	_chunk_manager.set_sun_position(elevation, azimuth)
+	# The GROUND carries the season too, not just the canopy above it (see
+	# SeasonalFoliage / concept/seasons.md "The ground carries the season
+	# too"). Forcing winter used to give bare trees standing on a bright
+	# summer lawn, in lush grass, over green crop tops -- the season was
+	# something that happened to IllustratedTree's four canopy frames and to
+	# nothing else. Read off the same world clock every other season reader
+	# uses, so the lawn and the canopy can never disagree about the month.
+	# One shader-parameter write; invalidates no atlas (pinned by
+	# test_a_season_turn_changes_the_material_and_not_one_pixel_of_the_atlas).
+	var foliage_tint := SeasonalFoliage.tint_for_world_age(_chunk_manager.world_age_seconds())
+	_ground_tint.set_season_tint(foliage_tint)
+	_chunk_manager.set_season_tint(foliage_tint)
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"

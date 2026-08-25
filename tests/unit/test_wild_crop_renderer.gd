@@ -9,6 +9,7 @@ extends GutTest
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 
 const TILE_SIZE := 16.0
 const CHUNK_ORIGIN := Vector2i(100, 200)
@@ -127,3 +128,38 @@ func test_sync_markers_leaves_a_mid_pull_marker_alone():
 	renderer.sync_markers(parent, sim, "carrot", CHUNK_ORIGIN, TILE_SIZE, markers)
 	assert_true(markers.has(cell))
 	assert_false(marker.is_queued_for_deletion())
+
+
+# -- the season reaches the markers this renderer owns -----------------------
+
+## Same shape `growth` already uses: the renderer pushes the season in on its
+## own refresh cadence, the marker never reads a clock itself.
+func test_markers_are_spawned_wearing_the_current_season():
+	var sim := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all_grassland())
+	var winter := SeasonalFoliage.tint_for_season("winter")
+	var markers := renderer.spawn_markers(parent, sim, "carrot", CHUNK_ORIGIN, TILE_SIZE, winter)
+	assert_gt(markers.size(), 0, "precondition: something got spawned")
+	for cell in markers:
+		assert_eq(markers[cell].season_tint, winter)
+
+
+## A chunk loaded in summer is still on screen when autumn arrives, so the
+## season has to reach markers that already exist, not just new ones.
+func test_syncing_pushes_a_changed_season_onto_every_live_marker():
+	var sim := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all_grassland())
+	var markers := renderer.spawn_markers(parent, sim, "carrot", CHUNK_ORIGIN, TILE_SIZE)
+	assert_gt(markers.size(), 0, "precondition: something got spawned")
+	var autumn := SeasonalFoliage.tint_for_season("autumn")
+	renderer.sync_markers(parent, sim, "carrot", CHUNK_ORIGIN, TILE_SIZE, markers, autumn)
+	for cell in markers:
+		assert_eq(markers[cell].season_tint, autumn)
+
+
+## Every caller that has not been taught about the season yet must keep
+## seeing exactly today's picture.
+func test_a_caller_that_never_mentions_the_season_gets_untinted_markers():
+	var sim := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all_grassland())
+	var markers := renderer.spawn_markers(parent, sim, "carrot", CHUNK_ORIGIN, TILE_SIZE)
+	renderer.sync_markers(parent, sim, "carrot", CHUNK_ORIGIN, TILE_SIZE, markers)
+	for cell in markers:
+		assert_eq(markers[cell].season_tint, Color.WHITE)

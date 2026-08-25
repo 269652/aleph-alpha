@@ -1034,10 +1034,19 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 ## furnace), then a directional blend tile for every ordered pair of distinct
 ## biomes x every non-empty cardinal-direction subset (DIRECTION_MASK_COUNT
 ## masks) x VARIANTS_PER_BIOME. The atlas image itself is cached to disk
-## after the first build (see ATLAS_VERSION/_build_atlas_pixels) -- only the
-## TileSet/TileSetAtlasSource metadata below (cheap, no pixel work) runs on
-## every call regardless of cache state.
+## after the first build (see ATLAS_VERSION/_build_atlas_pixels), and the
+## built TileSet is then memoized per PROCESS (see _tile_set_cache).
+##
+## The metadata pass below was previously described here as "cheap, no pixel
+## work". It is not cheap: it wraps a 2048x5120 image in an ImageTexture and
+## calls create_tile() for all 10,240 atlas cells, which measured 8.8s per
+## call -- and EarthChunkManager._init calls it once per instance, i.e. once
+## per test fixture, which is where most of the headless suite's runtime went.
 func build_tile_set() -> TileSet:
+	var cached_key := _tile_set_cache_key()
+	if cached_key != "" and _tile_set_cache.has(cached_key):
+		return _tile_set_cache[cached_key]
+
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
 	var total_cells := _roof_variant_base_linear() + _roof_variant_family_size()
 	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
@@ -1083,7 +1092,60 @@ func build_tile_set() -> TileSet:
 	var tile_set := TileSet.new()
 	tile_set.tile_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
 	tile_set.add_source(source, 0)
+
+	# Keyed AFTER the build, not before: when no cache existed the pre-build
+	# key is empty, and the freshly saved atlas is what the next caller will
+	# fingerprint.
+	var built_key := _tile_set_cache_key()
+	if built_key != "":
+		_tile_set_cache[built_key] = tile_set
 	return tile_set
+
+
+## Built TileSets, shared by the whole process and keyed by the identity of
+## the atlas they were built from.
+##
+## Safe to share because nothing in this codebase ever mutates a built
+## TileSet -- add_source/create_tile/remove_tile appear only in this file and
+## in snow_layer.gd, on their own freshly built sets -- so every TileMapLayer
+## can point at one instance. Same process-level-memo shape
+## IllustratedAnimalSprite._frame_cache and IllustratedCropSprite already use.
+##
+## Costs ~42 MB of RGBA8 per distinct key held for the process lifetime. In
+## practice that is the production atlas plus, in a full headless test run,
+## test_terrain_renderer.gd's two dedicated test paths.
+static var _tile_set_cache: Dictionary = {}
+
+
+## The identity of the atlas this renderer would build right now: the version
+## it demands, where it reads and writes, the version string actually on
+## disk, and the md5 of the cached pixels themselves. Everything that can
+## make two build_tile_set() calls produce different tiles is in here --
+## which is what makes sharing one TileSet between callers sound, and what
+## makes a test that rewrites the cache file mid-run correctly get a rebuild
+## (test_build_tile_set_rebuilds_after_the_cached_atlas_changes_on_disk).
+##
+## Empty when there is no usable cache on disk. That case must never be
+## memoized BEFORE the build: the call is about to generate and save a new
+## atlas, so a later call at the same key would legitimately see different
+## pixels. Hashing the file rather than trusting its timestamp is deliberate
+## -- FileAccess.get_modified_time has one-second resolution, and the cache
+## tests rewrite the same path several times inside one second.
+func _tile_set_cache_key() -> String:
+	if not FileAccess.file_exists(atlas_cache_path):
+		return ""
+	if not FileAccess.file_exists(atlas_version_path):
+		return ""
+	var file := FileAccess.open(atlas_version_path, FileAccess.READ)
+	var on_disk_version := file.get_as_text()
+	file.close()
+	return "%s|%s|%s|%s|%s" % [
+		ATLAS_VERSION,
+		atlas_cache_path,
+		atlas_version_path,
+		on_disk_version,
+		FileAccess.get_md5(atlas_cache_path),
+	]
 
 
 ## Paints every cell of a chunk's biome grid onto a TileMapLayer, offset by

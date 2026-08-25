@@ -521,3 +521,32 @@ dedicated surface instead, the same way head does — see "Head" above for the
 shape to copy. A part that needs a variant axis (like hero_composite's 8
 outfit rows) or a `facing` axis needs a dedicated surface too — see
 "hero_composite.png" above.
+
+## How a sheet is READ: `SpriteSheetLoader.load_image`, never `Image.load_from_file`
+
+Every sheet — a new `_PARTS` entry, hero_composite, head, or anything a
+future dedicated surface adds — must be read through
+`SpriteSheetLoader.load_image(path)` (`src/rendering/sprite_sheet_loader.gd`),
+never `Image.load_from_file(path)` directly. `load_from_file` on a `res://`
+path bypasses Godot's import system: the raw source PNG does not ship in an
+exported build the way its imported resource does, and the engine logs
+"Loaded resource as image file, this will not work on export", which GUT
+counts as an Unexpected Error and fails whichever test happens to touch the
+sheet first in a run. `load_image` prefers the imported resource and falls
+back to the raw read only when no import exists yet.
+
+Two consequences that are part of the spec, not incidental:
+
+- **Commit the generated `assets/.../<sheet>.png.import` alongside the PNG.**
+  Without the sidecar, `ResourceLoader.exists(path)` is false and
+  `load_image` silently falls through to the raw read, so the export warning
+  (and the exported-build gap it warns about) comes straight back on any
+  fresh clone or CI checkout.
+- **Re-import after replacing a sheet's pixels.** The imported
+  `.godot/imported/*.ctex` is a cache and `.godot/` is gitignored, so
+  overwriting a PNG without re-importing leaves `load_image` serving the
+  *previous* art while `load_from_file` would have served the new art —
+  a silently stale sheet, not an error. `Godot --headless --path . --import`
+  regenerates it. This was observed for real on hero_composite.png: a
+  concurrent art update left a `.ctex` one pixel row shorter (1024x1535 PNG
+  vs 1024x1536 cache) holding the superseded single-pose legs.

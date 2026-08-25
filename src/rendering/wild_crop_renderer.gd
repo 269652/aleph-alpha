@@ -15,12 +15,17 @@ const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
 ## Builds one WildCropMarker per `sim.get_patch_cells()`, added to `parent`,
 ## keyed by cell. The caller (EarthChunkManager) holds onto the returned
 ## Dictionary and passes it back into sync_markers on later refresh ticks.
+## `season_tint` is the current SeasonalFoliage tint (see
+## docs/concept/wild_crops.md "The season"), pushed onto every marker's leaves
+## the same way `growth` is. Defaults to identity so a caller that has not
+## been taught about the season yet sees exactly today's picture.
 func spawn_markers(
-	parent: Node, sim, crop_id: String, chunk_origin: Vector2i, tile_size: float
+	parent: Node, sim, crop_id: String, chunk_origin: Vector2i, tile_size: float,
+	season_tint: Color = Color.WHITE
 ) -> Dictionary:
 	var markers := {}
 	for cell in sim.get_patch_cells():
-		var marker := _build_marker(sim, crop_id, cell, chunk_origin, tile_size)
+		var marker := _build_marker(sim, crop_id, cell, chunk_origin, tile_size, season_tint)
 		parent.add_child(marker)
 		markers[cell] = marker
 	return markers
@@ -35,15 +40,20 @@ func spawn_markers(
 ## WildCropMarker._finish_pull), so it's never mistaken for "harvested
 ## elsewhere" and torn down out from under its own animation.
 func sync_markers(
-	parent: Node, sim, crop_id: String, chunk_origin: Vector2i, tile_size: float, markers: Dictionary
+	parent: Node, sim, crop_id: String, chunk_origin: Vector2i, tile_size: float,
+	markers: Dictionary, season_tint: Color = Color.WHITE
 ) -> void:
 	var live_cells := {}
 	for cell in sim.get_patch_cells():
 		live_cells[cell] = true
 		if markers.has(cell):
 			markers[cell].growth = sim.get_growth(cell)
+			# A chunk loaded in summer is still on screen when autumn
+			# arrives, so the season has to reach markers that already exist
+			# and not just newly spread ones.
+			markers[cell].season_tint = season_tint
 		else:
-			var marker := _build_marker(sim, crop_id, cell, chunk_origin, tile_size)
+			var marker := _build_marker(sim, crop_id, cell, chunk_origin, tile_size, season_tint)
 			parent.add_child(marker)
 			markers[cell] = marker
 
@@ -54,7 +64,8 @@ func sync_markers(
 
 
 func _build_marker(
-	sim, crop_id: String, cell: Vector2i, chunk_origin: Vector2i, tile_size: float
+	sim, crop_id: String, cell: Vector2i, chunk_origin: Vector2i, tile_size: float,
+	season_tint: Color = Color.WHITE
 ) -> WildCropMarker:
 	var marker := WildCropMarker.new()
 	var tile: Vector2i = chunk_origin + cell
@@ -62,4 +73,5 @@ func _build_marker(
 	marker.crop_id = crop_id
 	marker.sprite_seed = hash("%d_%d_wild_crop" % [tile.x, tile.y])
 	marker.growth = sim.get_growth(cell)
+	marker.season_tint = season_tint
 	return marker

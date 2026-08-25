@@ -119,6 +119,46 @@ const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_char
 
 const AXES := ["skin", "hair_color", "hair_style", "beard", "eyes", "trim", "head"]
 
+## Only ever used for its pure seed->row roll (outfit_variant_for) and its
+## grid/row counts -- constructing one loads nothing (every sheet behind it
+## is lazily sliced on first real use).
+var _illustrated := IllustratedCharacterSprite.new()
+
+
+## Which of hero_composite.png's pre-coloured outfit rows this hero wears.
+##
+## That art is PRE-COLOURED, so the illustrated rig deliberately never tints
+## it by tunic/legs (re-tinting already-coloured art would double the colour
+## -- see ProceduralCharacterSprite._portrait_torso_image). That left the
+## class palette, which is the ONLY thing distinguishing two appearances of
+## different classes at the same DNA seed, with no channel into the
+## illustrated look at all: the character creator renders its seven class
+## icons from exactly that -- one portrait per archetype, one fixed seed --
+## and got seven byte-identical thumbnails (reported live).
+##
+## The outfit row is the one channel this art actually has for "show me a
+## different outfit", so the CLASS picks a row and the DNA SEED rotates it:
+## at any shared seed every class lands on its own row (which is what makes
+## an icon a real preview of picking that class), while within one class the
+## row still varies across all of them by seed -- keeping the "outfit is
+## DNA-derived, not a new player-choosable axis" rule
+## IllustratedCharacterSprite.outfit_variant_for was written for.
+##
+## The class offset is its index in CLASS_PALETTES -- derived from the table
+## that already defines what a class looks like, never a second hand-written
+## class->row map that could silently give a new archetype another's row.
+## The seven player archetypes occupy the first seven entries and therefore
+## seven distinct rows of the eight; that is pinned by
+## test_every_archetype_takes_its_own_outfit_row_at_a_shared_seed, which is
+## what would catch a reordering or an eighth archetype. Villager
+## occupations further down the table may share a row with an archetype --
+## they wear this palette for its colours (VillageRenderer's markers), not
+## for the composite rig.
+func outfit_variant_for(class_id: String, seed_value: int) -> int:
+	var class_offset := maxi(CLASS_PALETTES.keys().find(class_id), 0)
+	var rolled := _illustrated.outfit_variant_for(seed_value)
+	return (class_offset + rolled) % IllustratedCharacterSprite.HERO_COMPOSITE_ROWS
+
 
 ## How many options a customization axis offers. 0 for an unknown axis
 ## (fail-safe: a creator cycling it simply can't move).
@@ -193,6 +233,12 @@ func appearance_from_choices(class_id: String, choices: Dictionary, seed_value: 
 		# to be, so the creator can cycle it independently of a full DNA
 		# reroll (reported: "you can't choose different heads").
 		"head_index": _wrap(int(choices.get("head", 0)), option_count("head")),
+		# Which pre-coloured outfit row the illustrated rig dresses this hero
+		# in -- carried on the appearance rather than re-rolled inside each
+		# renderer, so the creator's class icon (a composited portrait) and
+		# the live CharacterView paperdoll can never disagree about what the
+		# same hero is wearing. See outfit_variant_for.
+		"outfit_variant": outfit_variant_for(class_id, seed_value),
 	}
 
 

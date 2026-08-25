@@ -568,3 +568,26 @@ func _average_opaque_color(image: Image) -> Color:
 		return Color.BLACK
 	total /= float(count)
 	return Color(total.x, total.y, total.z)
+
+
+## A raw `Image.load_from_file` on a `res://` path logs the engine warning
+## "Loaded resource as image file, this will not work on export", which GUT's
+## error tracker counts as an unhandled error -- see SpriteSheetLoader's own
+## doc comment for why that warning is real (the raw source PNG does not ship
+## in an exported build the way its imported resource does).
+##
+## The STATIC caches are cleared first (shared across every test in this file)
+## so this genuinely re-reads the sheet off disk rather than hitting a cache an
+## earlier test already warmed; `_hero_composite_sheet`/`_head_sheet` are
+## per-INSTANCE, and before_each hands each test a fresh sprite.
+func test_loading_the_hero_composite_sheet_does_not_log_an_engine_warning():
+	IllustratedCharacterSprite._composite_frames_cache.clear()
+	sprite.generate_composite_textures("body", 0)
+	assert_engine_error_count(0, "loading hero_composite.png should not warn")
+
+
+func test_loading_the_head_sheet_does_not_log_an_engine_warning():
+	IllustratedCharacterSprite._head_cell_cache.clear()
+	IllustratedCharacterSprite._head_texture_cache.clear()
+	sprite.generate_head_texture(0, Color(0.8, 0.6, 0.44))
+	assert_engine_error_count(0, "loading head.png should not warn")

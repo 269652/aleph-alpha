@@ -19,6 +19,7 @@ const StoneSize = preload("res://src/world/stone_size.gd")
 const MinableOre = preload("res://src/rendering/minable_ore.gd")
 const IllustratedStoneSprite = preload("res://src/rendering/illustrated_stone_sprite.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 
 ## The boulder's WORLD footprint -- derived from its art size, which is
 ## authored DETAIL_MULTIPLIER times oversized (see
@@ -76,6 +77,8 @@ func spawn_stones(
 	):
 		var global_x := chunk_origin_tiles.x + cell.x
 		var global_y := chunk_origin_tiles.y + cell.y
+		if _piece_occupies(chunk, cell):
+			continue
 		var position := Vector2((global_x + 0.5) * tile_size, (global_y + 0.5) * tile_size)
 		var biome_name: String = chunk.biome[cell.y * chunk.width + cell.x]
 
@@ -98,6 +101,28 @@ func spawn_stones(
 		parent.add_child(node)
 		spawned.append(node)
 	return spawned
+
+
+## Is `local_cell` already held by a real BUILDING PIECE, and therefore not
+## open ground? (see docs/concept/building.md -- "a piece occupies its tile
+## against vegetation", the same rule TreeRenderer.spawn_trees enforces for
+## the forest, in the same place and for the same reason).
+##
+## EarthChunkManager._load_chunk loads `chunk.modifications` from disk BEFORE
+## it spawns stones, and only stamps the village's houses afterwards -- so
+## without this, boulders and ore respawn straight inside a persisted house
+## on every revisit, including a player-built one the village generator never
+## re-stamps. The complementary direction (a house stamped over a boulder
+## that is ALREADY standing, on the first visit) cannot be closed here and
+## lives in EarthChunkManager._clear_vegetation_on_cells.
+##
+## Deliberately narrow: only a REAL piece occupies, the same distinction
+## EarthChunkManager._piece_grid_for draws. An earth path or a campfire is a
+## chunk modification too, and neither clears a boulder (see
+## test_a_non_piece_modification_does_not_stop_a_stone_spawning, which exists
+## to go red if anyone widens this to `modifications.has`).
+func _piece_occupies(chunk: Chunk, local_cell: Vector2i) -> bool:
+	return BuildingPiece.has_piece(chunk.modifications.get(local_cell, ""))
 
 
 ## A loose stone at this position: a boulder to be broken, or a stone small
@@ -325,6 +350,12 @@ func spawn_mountain_veins(
 		for x in chunk.width:
 			var biome_name: String = chunk.biome[y * chunk.width + x]
 			if biome_name != "mountain":
+				continue
+			# Same occupancy rule as spawn_stones -- a vein is placed by a
+			# different rule but arrives at the same point in _load_chunk and
+			# lands in the same _loaded_stones list, so a player-built
+			# mountain shelter must not sprout ore through its floor.
+			if _piece_occupies(chunk, Vector2i(x, y)):
 				continue
 			var global_x := chunk_origin_tiles.x + x
 			var global_y := chunk_origin_tiles.y + y

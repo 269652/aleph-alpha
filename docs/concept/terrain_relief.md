@@ -82,6 +82,37 @@ terrain detail. Consistent with how this project already treats terrain as
 "coarse but genuinely real, not painted," same as the elevation data
 itself.
 
+**Slope and aspect are two readings of ONE gradient.** That gradient is
+public (`terrain_relief.gd`'s `gradient_at`), because asking for both
+readings separately takes the same four elevation samples twice over — and
+doing exactly that per tile *is* the whole per-tile cost of hillshading a
+chunk, the largest per-chunk cost in the running game. A caller that wants
+both takes the gradient once and derives them with the pure
+`slope_degrees_from_gradient` / `aspect_degrees_from_gradient`. `slope_at`
+and `aspect_at` keep their signatures and are now thin wrappers over the
+same function, so a caller that wants only one reading is unaffected. The
+`gradient_at` seam takes "any object with an `elevation_at(lat, lon)`
+method" exactly as `slope_at`/`aspect_at` always did.
+
+**Constraint on the elevation asset.** `assets/data/world_elevation.png`
+must stay a **single-channel 8-bit** height field. `earth_elevation_source.gd`
+decodes it once per process into a flat `PackedByteArray` and indexes that
+directly, rather than paying `Image.get_pixel()`'s boxed `Color` per sample
+— four per bilinear reading, and 32,768 per hillshaded 32×32 chunk. Two
+consequences that are spec, not implementation detail:
+
+- Bytes are mapped back to the `[0,1]` encoding through a 256-entry
+  `PackedFloat32Array`, **not** a plain `byte / 255.0`. `Color` stores
+  32-bit floats, so the float64 division differs from what `get_pixel`
+  returned in *every* sample — the lookup table reproduces it bit for bit,
+  which is what keeps every coastline exactly where it was.
+- Replacing the asset with a **16-bit** height field would silently
+  truncate it to 8 bits here. A higher-precision source needs the decode
+  widened deliberately, not dropped in.
+
+The encoding itself is unchanged: `0.0` = −8000 m, `1.0` = +6400 m, linear,
+sea level at ~0.5556.
+
 ### Passability: ask before you step
 
 Extends `creature_movement_gate.gd`'s already-established "decide before

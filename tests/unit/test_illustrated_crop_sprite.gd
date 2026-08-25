@@ -168,3 +168,20 @@ func test_root_world_scale_keeps_every_variant_within_the_target_size():
 		for seed_value in 7:
 			var extent := IllustratedCropSprite.max_content_extent(crop.root_texture(crop_id, seed_value))
 			assert_lte(extent * scale, IllustratedCropSprite.ROOT_WORLD_SIZE + 0.01)
+
+
+## A raw `Image.load_from_file` on a `res://` path logs the engine warning
+## "Loaded resource as image file, this will not work on export", which GUT's
+## error tracker counts as an unhandled error -- see SpriteSheetLoader's own
+## doc comment for why that warning is real (the raw source PNG does not ship
+## in an exported build the way its imported resource does).
+##
+## The STATIC frame caches are cleared first (shared across every test in this
+## file) so this genuinely re-reads carrot.png/carrot_leaves.png off disk
+## rather than hitting a cache an earlier test already warmed.
+func test_loading_a_crop_sheet_does_not_log_an_engine_warning():
+	IllustratedCropSprite._leaf_frame_cache.clear()
+	IllustratedCropSprite._root_frame_cache.clear()
+	crop.root_texture("carrot", 0)
+	crop.leaf_texture("carrot", 0)
+	assert_engine_error_count(0, "loading a crop sheet should not warn")

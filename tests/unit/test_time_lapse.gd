@@ -138,3 +138,65 @@ func test_the_frame_can_carry_a_useful_amount_of_world_time():
 	var per_frame := TimeLapse.SLICE_SECONDS * float(TimeLapse.MAX_SLICES_PER_FRAME)
 	# At least a few in-game hours a frame, or a year takes all afternoon.
 	assert_gte(per_frame, 900.0, "a frame carries too little world time to be worth watching")
+
+
+# -- the calendar, which is not the stepping ----------------------------------
+
+## The world CLOCK is not bound by what the ecology can step in a frame.
+##
+## The clock used to be advanced from inside the sliced stepping, one
+## advance_world_age per slice -- so the calendar inherited the slice budget,
+## which is sized per FRAME, not per second. A lapse drops the game to a few
+## frames a second, so a frame asking for five thousand seconds of world time
+## received nine hundred and sixty of them and the year ran several times
+## slower than the number the player typed (docs/progress.md measured ~90s
+## against a 45s target). Seasons and canopies are what /ecotest exists to
+## show, and they read the clock rather than the stepping.
+func test_the_calendar_is_not_bound_by_what_the_ecology_can_step():
+	var scale := TimeLapse.scale_for(TimeLapse.DEFAULT_SECONDS_PER_YEAR)
+	# Three frames a second -- what /ecotest actually drops to on a loaded map.
+	var delta := 1.0 / 3.0
+	var stepped := 0.0
+	for slice in TimeLapse.slices(delta, scale):
+		stepped += slice
+	assert_gt(TimeLapse.calendar_seconds(delta, scale), stepped)
+	# Concretely: 5120 seconds asked for, 960 the ecology could step.
+	assert_almost_eq(TimeLapse.calendar_seconds(delta, scale), delta * scale, 0.001)
+
+
+## Whatever the framerate, the calendar advances by exactly the time asked
+## for -- so a year really does arrive when the player was told it would.
+func test_the_calendar_advances_at_the_rate_asked_however_slow_the_frame():
+	var scale := TimeLapse.scale_for(45.0)
+	for delta in [1.0 / 60.0, 1.0 / 7.0, 1.0 / 3.0, 1.0]:
+		assert_almost_eq(
+			TimeLapse.calendar_seconds(delta, scale), delta * scale, delta * scale * 0.0001
+		)
+
+
+## The whole point, stated as the player would state it: ask for a year in
+## forty-five seconds, get a year in forty-five seconds -- at three frames a
+## second, which is what a lapse on a loaded map actually manages.
+func test_a_year_arrives_in_the_time_asked_for_at_a_lapsed_framerate():
+	var scale := TimeLapse.scale_for(TimeLapse.DEFAULT_SECONDS_PER_YEAR)
+	var delta := 1.0 / 3.0
+	var simulated := 0.0
+	for _frame in int(TimeLapse.DEFAULT_SECONDS_PER_YEAR * 3.0):
+		simulated += TimeLapse.calendar_seconds(delta, scale)
+	assert_almost_eq(
+		simulated, SeasonCycle.SECONDS_PER_YEAR, SeasonCycle.SECONDS_PER_YEAR * 0.01
+	)
+
+
+## Off the lapse nothing changes: the calendar gets exactly the frame's own
+## delta, through the same clock call it always used.
+func test_normal_speed_hands_the_calendar_exactly_one_frame():
+	assert_almost_eq(TimeLapse.calendar_seconds(0.016, 1.0), 0.016, 0.000001)
+	# A scale below one must not run the clock BACKWARDS or slow it down --
+	# only the ecology has ever been asked to go faster, never slower.
+	assert_almost_eq(TimeLapse.calendar_seconds(0.016, 0.25), 0.016, 0.000001)
+
+
+func test_a_zero_length_frame_advances_no_calendar():
+	assert_eq(TimeLapse.calendar_seconds(0.0, 1000.0), 0.0)
+	assert_eq(TimeLapse.calendar_seconds(-1.0, 1000.0), 0.0)

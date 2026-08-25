@@ -10,6 +10,7 @@ extends RefCounted
 ## SpriteSheetSlicer divider-line detection).
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 const _SHEETS := {
@@ -184,7 +185,7 @@ func _root_frames(crop_id: String) -> Array:
 
 
 func _slice(path: String, canvas_size: Vector2i, baseline_y: int) -> Array[ImageTexture]:
-	var image := Image.load_from_file(path)
+	var image := SpriteSheetLoader.load_image(path)
 	if image == null:
 		return []
 	var keyed := _apply_chroma_key(image, CHROMA_KEY, CHROMA_KEY_TOLERANCE)

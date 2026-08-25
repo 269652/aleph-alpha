@@ -6,6 +6,7 @@ extends GutTest
 
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 const WIDTH := 16
 const HEIGHT := 16
@@ -188,3 +189,126 @@ func test_spread_never_crosses_into_the_other_crops_territory():
 		carrot_cells[cell] = true
 	for cell in potato.get_patch_cells():
 		assert_false(carrot_cells.has(cell), "cell %s claimed by both crops after spreading" % cell)
+
+
+# -- the season (senescence, not dieback -- see concept/wild_crops.md) -------
+
+## An immature carrot must nearly stop through winter and pick back up in
+## spring, but never fully freeze: SeasonCycle.growth_modifier's floor is
+## 0.2, documented as "dormancy, not death", which is seasons.md's
+## "modulates, doesn't gate" pillar stated as a number.
+func test_growth_slows_in_winter_and_never_fully_stops():
+	var summer := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var winter := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var cell := Vector2i(-1, -1)
+	for candidate in summer.get_patch_cells():
+		cell = candidate
+		break
+	assert_ne(cell, Vector2i(-1, -1), "precondition: at least one initial patch")
+	# Initial patches seed mature, so knock one back down to observe growth.
+	summer.graze(cell)
+	winter.graze(cell)
+
+	var cycle := SeasonCycle.new()
+	var winter_growth := cycle.growth_modifier(0.875 * SeasonCycle.SECONDS_PER_YEAR)
+	assert_gt(winter_growth, 0.0, "the premise: dormancy, not death")
+	assert_lt(winter_growth, 0.5, "the premise: winter really is slow")
+
+	var seconds := 200.0
+	var in_summer := _gained_after(summer, seconds, 1.0)
+	var in_winter := _gained_after(winter, seconds, winter_growth)
+	assert_gt(in_winter, 0.0, "a dormant crop still creeps forward")
+	assert_lt(in_winter, in_summer, "but far slower than in high summer")
+	assert_almost_eq(in_winter / in_summer, winter_growth, 0.0001)
+
+
+## The regression guard for the whole signature change: every caller that
+## has not been taught about the season yet must see exactly the numbers it
+## saw before (the "defaults to 1.0" convention this codebase already uses
+## for VegetationGrowthModel's land_health).
+func test_advance_defaults_to_the_pre_season_behaviour_for_untaught_callers():
+	var taught := WildCropPatch.new("carrot", 4, WIDTH, HEIGHT, _biome_all("grassland"))
+	var untaught := WildCropPatch.new("carrot", 4, WIDTH, HEIGHT, _biome_all("grassland"))
+	var cell: Vector2i = taught.get_patch_cells()[0]
+	taught.graze(cell)
+	untaught.graze(cell)
+	assert_almost_eq(_gained_after(untaught, 300.0, -1.0), _gained_after(taught, 300.0, 1.0), 0.0001)
+
+
+## A patch colonising new ground through a frozen January is the same
+## mistake as one ripening through it, so spread rides the season clock too.
+##
+## Stated as an exact equivalence rather than "winter spreads less": spread
+## attempts are throttled AND territory-partitioned (a tick can legitimately
+## land on an ineligible neighbour and do nothing), so counting colonisations
+## over a fixed span is lumpy. Five times as long at the 0.2 winter floor is
+## exactly one summer's worth of season-scaled time, and must therefore
+## produce exactly the summer world -- which is only true if the spread
+## accumulator advances on scaled time and not on raw seconds.
+func test_spread_runs_on_the_same_season_clock_as_growth():
+	var summer := WildCropPatch.new("carrot", 9, WIDTH, HEIGHT, _biome_all("grassland"))
+	var winter := WildCropPatch.new("carrot", 9, WIDTH, HEIGHT, _biome_all("grassland"))
+	var slow := WildCropPatch.new("carrot", 9, WIDTH, HEIGHT, _biome_all("grassland"))
+	var started := summer.get_patch_cells().size()
+	assert_gt(started, 0, "precondition: something mature to spread from")
+
+	var seconds := WildCropPatch.SPREAD_INTERVAL * 60.0
+	summer.advance(seconds)
+	winter.advance(seconds * 5.0, 0.2)
+	slow.advance(seconds, 0.2)
+
+	assert_gt(summer.get_patch_cells().size(), started, "precondition: summer spreads")
+	assert_eq(
+		winter.get_patch_cells(), summer.get_patch_cells(),
+		"five winters' seconds at the 0.2 floor is exactly one summer's growing time"
+	)
+	for cell in summer.get_patch_cells():
+		assert_almost_eq(winter.get_growth(cell), summer.get_growth(cell), 0.0001)
+	assert_lte(
+		slow.get_patch_cells().size(), summer.get_patch_cells().size(),
+		"and the same RAW seconds in winter can never colonise more than summer did"
+	)
+
+
+## The season scales TIME, so a season_growth of 0 must stall rather than run
+## backwards or divide by anything.
+func test_a_fully_stalled_season_neither_grows_nor_spreads():
+	var crop := WildCropPatch.new("carrot", 11, WIDTH, HEIGHT, _biome_all("grassland"))
+	# Reach a genuinely immature cell FIRST (that setup runs at full speed),
+	# then freeze the season and assert nothing at all moves after that.
+	var immature := _first_immature(crop)
+	assert_ne(immature, Vector2i(-1, -1), "precondition: an immature spread cell exists")
+	var growth_before: float = crop.get_growth(immature)
+	var count_before := crop.get_patch_cells().size()
+
+	crop.advance(100000.0, 0.0)
+	assert_eq(crop.get_growth(immature), growth_before, "a frozen season grows nothing")
+	assert_eq(crop.get_patch_cells().size(), count_before, "and colonises nothing")
+
+
+## Advances `crop` and reports the growth a freshly spread (0.0) cell gained.
+## `season_growth` below zero means "call the old one-argument form".
+func _gained_after(crop, seconds: float, season_growth: float) -> float:
+	# Force a known immature cell rather than hunting for one: spread is
+	# throttled and territory-partitioned, so a deterministic seed is easier
+	# to reason about than a search.
+	var immature := _first_immature(crop)
+	if immature == Vector2i(-1, -1):
+		return -1.0
+	var before: float = crop.get_growth(immature)
+	if season_growth < 0.0:
+		crop.advance(seconds)
+	else:
+		crop.advance(seconds, season_growth)
+	return crop.get_growth(immature) - before
+
+
+## Runs spread ticks until some cell is genuinely immature, at a season
+## scaling of 1.0 so the setup itself is season-independent.
+func _first_immature(crop) -> Vector2i:
+	for i in 50:
+		for cell in crop.get_patch_cells():
+			if crop.get_growth(cell) < 1.0:
+				return cell
+		crop.advance(WildCropPatch.SPREAD_INTERVAL)
+	return Vector2i(-1, -1)

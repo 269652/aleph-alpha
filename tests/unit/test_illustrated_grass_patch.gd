@@ -1,6 +1,8 @@
 extends GutTest
 
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+const GroundTint = preload("res://src/rendering/ground_tint.gd")
 
 
 func test_each_seed_selects_one_tile_inside_the_delivered_10x10_atlas():
@@ -424,3 +426,67 @@ func test_fill_band_rebuilds_cleanly_when_called_again_with_fewer_cells():
 	])
 	assert_lt(mmi.multimesh.instance_count, before)
 	assert_eq(mmi.multimesh.instance_count, IllustratedGrassPatch.CARD_COUNT)
+
+
+# -- a field carries the season, like the ground it stands in ----------------
+
+## The blade shader had no colour term at all -- the sampled atlas texel was
+## written straight through -- so tall grass stayed lush in deep winter while
+## the trees above it stood bare. See SeasonalFoliage / concept/seasons.md.
+func test_the_blade_shader_takes_a_season_tint_uniform():
+	assert_string_contains(IllustratedGrassPatch.SHADER_CODE, "uniform vec3 season_tint")
+
+
+## The delivered atlas already carries some dry/brown blades; those must not
+## be turned again by a season they are already wearing.
+func test_the_blade_shader_gates_the_season_tint_on_greenness_with_the_shared_gain():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	var fragment_body := code.substr(code.find("void fragment()"))
+	assert_string_contains(fragment_body, "COLOR.g - max(COLOR.r, COLOR.b)")
+	assert_string_contains(fragment_body, "* %s" % SeasonalFoliage.GREENNESS_GAIN)
+	assert_string_contains(fragment_body, "mix(COLOR.rgb, COLOR.rgb * season_tint")
+
+
+## A field and the ground under it must turn together -- a straw-coloured
+## meadow standing on a bright green lawn is the same defect one layer up.
+func test_the_blades_and_the_ground_under_them_use_the_same_greenness_gate():
+	var gate := "clamp((COLOR.g - max(COLOR.r, COLOR.b)) * %s, 0.0, 1.0)" % SeasonalFoliage.GREENNESS_GAIN
+	assert_string_contains(IllustratedGrassPatch.SHADER_CODE, gate)
+	assert_string_contains(GroundTint.SHADER_CODE, gate)
+
+
+## Mirrors set_wind_strength exactly, member re-applied at lazy build time.
+func test_set_season_tint_survives_being_called_before_the_material_is_built():
+	var patch := IllustratedGrassPatch.new()
+	var winter := SeasonalFoliage.tint_for_season("winter")
+	patch.set_season_tint(winter)
+	var parameter = patch.material().get_shader_parameter("season_tint")
+	assert_almost_eq(parameter.x, winter.r, 0.0001)
+	assert_almost_eq(parameter.y, winter.g, 0.0001)
+	assert_almost_eq(parameter.z, winter.b, 0.0001)
+
+
+## The shader source is built by ONE positional `%` array, so appending the
+## new greenness gain in the wrong slot would silently bake the wrong numbers
+## into the bend math -- a shader that still compiles and just looks wrong.
+## This pins the tuned constants that would move if that happened.
+func test_the_bend_math_still_carries_its_own_tuned_constants():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	assert_string_contains(
+		code, "pow(clamp(UV.y, 0.0, 1.0), %s)" % IllustratedGrassPatch.BEND_CURVE_EXPONENT
+	)
+	assert_string_contains(code, "UV.x * %s" % IllustratedGrassPatch.PHASE_SPREAD)
+	assert_string_contains(
+		code,
+		"%s + %s * sin(UV.x * %s)" % [
+			IllustratedGrassPatch.AMPLITUDE_BASE,
+			IllustratedGrassPatch.AMPLITUDE_VARIATION,
+			IllustratedGrassPatch.AMPLITUDE_FREQUENCY,
+		]
+	)
+	assert_string_contains(
+		code, "* %s * wind_strength" % IllustratedGrassPatch.WIND_UV_AMPLITUDE
+	)
+	assert_string_contains(
+		code, "wake * %s" % IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE
+	)

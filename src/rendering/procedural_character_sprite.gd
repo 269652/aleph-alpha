@@ -389,9 +389,19 @@ func generate_hero_portrait_image(appearance: Dictionary) -> Image:
 	var center_x := PORTRAIT_SIZE.x / 2
 
 	# Which of hero_composite.png's 8 pre-colored outfits this portrait wears
-	# -- DNA-derived, rolled once so body/legs/arms all match the same
-	# outfit (see IllustratedCharacterSprite.outfit_variant_for).
-	var outfit_variant := _illustrated.outfit_variant_for(appearance.get("seed", 0))
+	# -- taken once so body/legs/arms all match the same outfit. The
+	# appearance names it when it was built by HeroAppearance (class picks the
+	# row, DNA seed rotates it -- see HeroAppearance.outfit_variant_for); the
+	# bare seed roll stays as the fallback for a hand-assembled appearance
+	# dict that carries no row. It has to be readable from the OUTSIDE at all
+	# because this art is pre-colored and this path deliberately never tints
+	# by appearance.tunic/legs (see _portrait_torso_image), so an appearance
+	# that varies ONLY by class palette rendered byte-identically -- which is
+	# exactly what the creator's seven class icons did (reported live).
+	var outfit_variant: int = (
+		int(appearance["outfit_variant"]) if appearance.has("outfit_variant")
+		else _illustrated.outfit_variant_for(appearance.get("seed", 0))
+	)
 
 	var torso_y := _PORTRAIT_HEAD.y - 2
 	var legs_y := torso_y + _PORTRAIT_TORSO.y - 1

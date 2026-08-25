@@ -103,9 +103,22 @@ Rules exist to stop floating nonsense, not to nag:
 - A roof must sit above a cell that is part of an enclosed room.
 - Nothing may be placed where a piece already exists; destroying returns the
   piece's material (mirroring the existing build/destroy loop).
+- **A piece occupies its tile against vegetation, in both directions.** A
+  structure stamped onto a cell fells whatever is growing there (and forgets
+  its persisted record, so it does not return from disk); a tile a real
+  piece stands on grows nothing afterwards — no map-generated tree respawns
+  onto it when the chunk reloads, and no spread or bird-dropped seed takes
+  root on it. Only a *real* `BuildingPiece` occupies: an earth path or a
+  campfire is a chunk modification too, and neither uproots a tree.
 
 Placement validity is pure logic over a grid, so it can be asked the same
 question by the player's build cursor and by the NPC village generator.
+
+That purity is also why the vegetation rule above does **not** live in
+`BuildingPlacement`: a grid of piece ids has no notion of a world with trees
+standing in it. It is enforced instead at the three world-facing seams where
+a tree and a piece can actually meet — see "One system, two builders" and
+the status list below.
 
 ### One system, two builders
 
@@ -134,6 +147,40 @@ placement rules (not overlapping an existing piece, walls needing an
 adjacent floor) still aren't enforced for village generation. Full
 unification — the village generator asking `BuildingPlacement` the same
 question the player's build cursor does — remains a follow-up.
+
+A **second** instance of that gap has now been closed: standing vegetation.
+Reported as a tree with its trunk rooted in a village house's stone floor
+and its canopy drawn over the masonry. Unlike the water case it was *not*
+closed inside `VillageRenderer`, because nudging is the wrong answer here —
+trees only grow in forest/rainforest, so a village that avoided them would
+have nowhere to go, and a real settlement clears the wood rather than
+dodging it. It was closed on the world side instead, because the collision
+has three directions, not one, and `_load_chunk`'s ordering means no single
+site can see them all:
+
+1. **The house arrives second.** `_load_chunk` spawns trees before it spawns
+   the village that stamps houses over them, so on a fresh visit the
+   structure lands on standing trunks. `EarthChunkManager.
+   stamp_structure_at_global` now fells them (and prunes the matching
+   `Chunk.planted_trees` records).
+2. **The forest arrives second, next time.** `chunk.modifications` is loaded
+   from disk *before* trees spawn, so without a check the deterministic
+   forest respawns straight into a persisted house — including a
+   player-built one the village generator never re-stamps.
+   `TreeRenderer.spawn_trees` now skips a cell a real piece holds.
+3. **A seed arrives later still.** `EarthChunkManager._can_root_at` now
+   refuses a cell carrying a real piece, so nothing sprouts on a floor
+   afterwards.
+
+Boulders and ore have the identical bug with the identical shape, and are
+now covered in directions 2 and 3's sense but not 1's: `StoneRenderer.
+spawn_stones` (and `spawn_mountain_veins`, whose separate slope-gated
+placement runs at the same point in `_load_chunk`) now skip a cell a real
+piece holds, so stone no longer regrows inside a persisted house; nothing
+seeds a boulder, so there is no direction 3 for it. Direction 1 — a house
+stamped over a boulder that is already standing in this session — is still
+open, and needs `_loaded_stones` added to `_clear_vegetation_on_cells`'s
+loop. See the Status list below.
 
 ### A blueprint catalog, not one box
 
@@ -295,6 +342,46 @@ modification like any other.
   a whole structure's pieces in one call + one repaint (used by the village
   generator, see below) rather than one `build_at_global` call per cell,
   which would repaint the owning chunk once per cell.
+- ✅ A piece occupies its tile against vegetation (see "Placement rules" and
+  "One system, two builders"), tested at all three seams.
+  `stamp_structure_at_global` collects the cells it wrote a real
+  `BuildingPiece` to and hands them to `_clear_vegetation_on_cells`, which
+  `queue_free()`s any tree standing on them, drops it from `_loaded_trees`
+  in the same breath (that registry is iterated elsewhere without an
+  `is_instance_valid` guard) and prunes the matching `Chunk.planted_trees`
+  records so a persisted sapling under the footprint does not come back from
+  disk — closing direction 1, the house stamped over a standing trunk.
+  `TreeRenderer.spawn_trees` skips a cell whose `chunk.modifications` holds
+  a real piece — closing direction 2, the deterministic forest respawning
+  into a persisted house on revisit. `_can_root_at` refuses such a cell —
+  closing direction 3, a spread or bird-dropped seed sprouting on a floor.
+  `TreeRooting.can_root_in` still answers only the BIOME half of "can a tree
+  stand here"; occupancy is a separate, second refusal.
+- ✅ The same rule for boulders and ore, closed on **both** sides.
+  `StoneRenderer.spawn_stones` had the identical bug with the identical
+  shape — it iterated its cells over `chunk.biome` and never consulted
+  `chunk.modifications`, and `_load_chunk` runs it *before* the village is
+  stamped — so a boulder regrew inside a persisted house on every revisit,
+  including a player-built one. It now skips a cell a real `BuildingPiece`
+  holds, via a shared `_piece_occupies` helper, closing direction 2 for
+  stone exactly as `spawn_trees` closes it for the forest. The same guard is
+  applied to `spawn_mountain_veins`, whose placement rule is different
+  (slope-gated, see `MountainOrePlacement`) but which is called from the
+  same `_load_chunk` step into the same `_loaded_stones` list, so a
+  player-built mountain shelter no longer sprouts ore through its floor.
+  The narrowness is pinned by its own test, the same way the forest's is:
+  plain earth under a boulder is a modification too and must not clear it.
+  Direction 1 — a house stamped over an ALREADY-SPAWNED boulder in the
+  same session — is closed in `_clear_vegetation_on_cells`, which now walks
+  `_loaded_stones[chunk_coord]` alongside `_loaded_trees` and
+  `queue_free()`s (and drops from the registry) every stone the footprint
+  covers, mountain ore veins included since they land in the same list.
+  There is no persisted-record half to prune: stone has no
+  `planted_trees` equivalent, it regenerates deterministically, and the
+  respawn guard above catches it on the next load. Direction 3 does not
+  apply — nothing seeds a boulder. Pinned by
+  `test_building_piece_occupancy_clears_stones_on_a_stamped_footprint` and
+  its narrowness twin `..._leaves_a_stone_beside_the_footprint_standing`.
 - ✅ Village houses rebuilt from blueprints, replacing the decorative
   `ProceduralHouseSprite`. `VillageRenderer._stamp_house` picks a real named
   `HouseBlueprint` shape via `choose_blueprint_id` (the villager's own

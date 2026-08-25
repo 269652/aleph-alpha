@@ -19,6 +19,8 @@ const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
+const Keybindings = preload("res://src/gameplay/keybindings.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -1265,3 +1267,69 @@ func test_terrain_blocks_movement_agrees_with_terrain_passability_for_the_lookah
 ## loudly rather than the hook silently staying wired to "never."
 func test_has_climbing_gear_is_false_until_a_real_rope_exists():
 	assert_false(player._has_climbing_gear())
+
+
+## Wiring tests for the survival-neglect consequence (ConditionPenalty, see
+## docs/concept/survival.md's "What poor condition costs you"): fitness is the
+## single accumulator every unmet need feeds, and until now nothing read it at
+## all, so hunger and thirst had literally zero mechanical effect.
+
+## _authority_step reads the local input actions directly. World normally
+## registers every Keybindings action onto the InputMap at runtime (there is
+## no static [input] section in project.godot); these tests drive the step
+## without a World, so they register the registry themselves -- otherwise
+## every frame pushes an engine "has_action" error per action read. Same
+## trick test_player_kick.gd's before_each uses for its one action.
+func _register_all_keybindings() -> void:
+	for entry in Keybindings.ACTIONS:
+		if not InputMap.has_action(entry["action"]):
+			InputMap.add_action(entry["action"])
+
+
+## NOTE on why these compare a RATIO against a control rather than just
+## asserting "it got slower": two consecutive _authority_step calls do not
+## produce a byte-identical multiplier even with nothing changed (the
+## water/weather state settles by a fraction of a percent per frame), so a
+## bare assert_lt passes on that drift alone and would have been a false
+## green. The control run isolates the drift; the ratio is then compared to
+## what ConditionPenalty itself says the penalty should be.
+
+func test_poor_condition_slows_the_player_down():
+	_register_all_keybindings()
+	player.survival.fitness = 1.0
+	player._authority_step(0.016)
+	var healthy: float = player.current_speed_multiplier
+	player.survival.fitness = 0.0
+	player._authority_step(0.016)
+	assert_almost_eq(
+		player.current_speed_multiplier / healthy,
+		ConditionPenalty.speed_multiplier(0.0),
+		0.01,
+		"a player whose overall condition has collapsed should move slower, by exactly the penalty the module states"
+	)
+
+
+func test_unattended_hunger_eventually_slows_the_player_down_via_condition():
+	_register_all_keybindings()
+	# CONTROL: the same number of steps, well fed, to measure the drift.
+	for i in 100:
+		player.survival.hunger = 0.0
+		player.survival.thirst = 0.0
+		player.survival.warmth = 1.0
+		player.survival.fitness = 1.0
+		player._authority_step(1.0)
+	var well_fed: float = player.current_speed_multiplier
+
+	for i in 100:
+		# Isolate hunger: thirst and cold feed the same accumulator, and this
+		# test is about hunger specifically having a consequence at all.
+		player.survival.hunger = 1.0  # starving
+		player.survival.thirst = 0.0
+		player.survival.warmth = 1.0
+		player._authority_step(1.0)
+	assert_lt(player.survival.fitness, 0.5, "precondition: sustained starvation should have run condition down")
+	assert_lt(
+		player.current_speed_multiplier / well_fed,
+		ConditionPenalty.speed_multiplier(0.5),
+		"hunger left unattended must have a real mechanical consequence (docs/concept/survival.md, 'Debuffs, not death')"
+	)

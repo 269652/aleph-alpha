@@ -9,6 +9,9 @@ extends GutTest
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_character_sprite.gd")
+## The player archetypes the character creator actually offers -- the classes
+## whose icons must be told apart (see the class-portrait tests below).
+const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 
 var appearance_maker := HeroAppearance.new()
 var sprite := ProceduralCharacterSprite.new()
@@ -347,6 +350,69 @@ func test_portrait_is_a_cohesive_figure_when_legs_are_a_fused_pair():
 			if image.get_pixel(x, y).a > 0.0:
 				opaque += 1
 	assert_gt(opaque, 0, "the legs band should still show the figure's legs")
+
+
+## The character creator's class-icon row renders exactly this portrait, one
+## per archetype, at one fixed DNA seed -- so "the icon IS a tiny preview of
+## picking this class" is only true if the portraits actually differ. They
+## did not: hero_composite.png's outfit rows are PRE-COLOURED, so the
+## illustrated portrait path deliberately never tints by appearance.tunic /
+## appearance.legs (re-tinting already-coloured art would double the colour),
+## which left the class palette -- the ONLY thing that varies between these
+## seven appearances -- with no channel into the image at all. All seven
+## thumbnails came out byte-identical (reported live).
+func test_every_class_portrait_is_a_visibly_different_image():
+	var seen := {}
+	for archetype in ClassArchetype.new().archetype_names():
+		var appearance: Dictionary = appearance_maker.appearance_for(archetype, 0)
+		var key := sprite.generate_hero_portrait_image(appearance).get_data().hex_encode()
+		assert_false(
+			seen.has(key),
+			"%s renders pixel-identically to %s" % [archetype, seen.get(key, "")]
+		)
+		seen[key] = archetype
+
+
+## The outfit row a hero wears has to stay DNA-derived too (asked directly,
+## and the reason IllustratedCharacterSprite.outfit_variant_for exists) --
+## the class picks a row, the seed rotates it, so two warriors are still
+## dressed differently. The guard against "fix the icons by making every
+## warrior wear the same coat".
+func test_the_outfit_row_still_varies_with_the_dna_seed_within_one_class():
+	var seen := {}
+	for seed_value in 24:
+		seen[appearance_maker.outfit_variant_for("warrior", seed_value)] = true
+	assert_gt(seen.size(), 1, "every warrior seed picked the same outfit row")
+
+
+func test_outfit_rows_are_in_range_and_deterministic():
+	for archetype in ClassArchetype.new().archetype_names():
+		for seed_value in 12:
+			var row: int = appearance_maker.outfit_variant_for(archetype, seed_value)
+			assert_between(row, 0, IllustratedCharacterSprite.HERO_COMPOSITE_ROWS - 1)
+			assert_eq(row, appearance_maker.outfit_variant_for(archetype, seed_value))
+
+
+## Every player archetype has to land on a row of its own at a shared seed --
+## that, not the palette, is what makes the seven icons tell classes apart.
+func test_every_archetype_takes_its_own_outfit_row_at_a_shared_seed():
+	var rows := {}
+	for archetype in ClassArchetype.new().archetype_names():
+		var row: int = appearance_maker.outfit_variant_for(archetype, 0)
+		assert_false(rows.has(row), "%s reuses %s's outfit row %d" % [archetype, rows.get(row, ""), row])
+		rows[row] = archetype
+
+
+## The row travels on the appearance dict, so every renderer of that
+## appearance (portrait here, CharacterView's paperdoll in-world) dresses the
+## same hero in the same outfit instead of each re-rolling its own.
+func test_the_portrait_wears_the_outfit_row_the_appearance_carries():
+	var appearance: Dictionary = appearance_maker.appearance_for("warrior", 3)
+	assert_true(appearance.has("outfit_variant"), "the appearance should name the outfit row")
+	var as_built := sprite.generate_hero_portrait_image(appearance).get_data()
+	var moved := appearance.duplicate()
+	moved["outfit_variant"] = (int(appearance["outfit_variant"]) + 1) % IllustratedCharacterSprite.HERO_COMPOSITE_ROWS
+	assert_ne(as_built, sprite.generate_hero_portrait_image(moved).get_data())
 
 
 func _close(a: Color, b: Color) -> bool:

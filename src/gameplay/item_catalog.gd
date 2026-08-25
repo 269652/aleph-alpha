@@ -226,6 +226,21 @@ func _mass_kg_for(item_id: String) -> float:
 	return _material_properties.mass_kg_for(material_and_volume[0], material_and_volume[1])
 
 
+## Which real material `item_id` is made of (see _WEAPON_MATERIAL_AND_VOLUME),
+## or "" for any item with no material modeled yet -- the same "not modeled
+## yet" convention Item.mass_kg's 0.0 uses. Named after the existing
+## BuildingPiece.material_of rather than inventing a second spelling.
+##
+## The material was already known here (it is what _mass_kg_for derives a
+## weapon's real mass FROM), just private -- so the game could tell the player
+## how heavy a sword is but never what it is made of. Lets a tooltip name the
+## material and describe it in words (MaterialProperties.descriptors_for).
+func material_of(item_id: String) -> String:
+	if not _WEAPON_MATERIAL_AND_VOLUME.has(item_id):
+		return ""
+	return String(_WEAPON_MATERIAL_AND_VOLUME[item_id][0])
+
+
 ## Every id this catalog can build, for a /help-style listing.
 func known_ids() -> Array:
 	return _ITEMS.keys()

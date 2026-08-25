@@ -403,6 +403,19 @@ framebuffer), so several of these needed a real, non-headless, off-screen
 - ✅ Ambient wind sway (not the walker push) scales with the live
   `WeatherModel.wind_strength_for` value, the same one driving the water's
   shimmer and every other swaying plant.
+- ✅ A field carries the season: the blade shader takes the same
+  `SeasonalFoliage` tint the ground under it wears
+  (`IllustratedGrassPatch.set_season_tint`, greenness-gated with the shared
+  `GREENNESS_GAIN` so the atlas's already-dry blades are not turned twice).
+  The shader previously had no colour term at all — the sampled texel went
+  straight through — so tall grass stayed lush in deep winter. Appearance
+  only: `TallGrass.GROWTH_RATE` is still season-independent, see
+  [seasons.md](seasons.md). The sending half is wired:
+  `EarthChunkManager.set_season_tint` fans the live value onto
+  `_illustrated_grass` the way `set_wind_strength` already does, and
+  `World._client_process` pushes it once a frame off the world clock, so a
+  real session no longer shows lush winter grass. Pinned by
+  `tests/unit/test_world_season_fanout.gd`.
 - ⬜ Creature wake uses the same shader input but is not yet wired.
 - ✅ Cards spread across most of a cell's own footprint (`card_specs_for_
   seed`, `CARD_COUNT = 8`) rather than clustering in one small sub-region —

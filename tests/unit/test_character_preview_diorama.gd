@@ -4,6 +4,9 @@ const CharacterPreviewDioramaScript = preload("res://src/rendering/character_pre
 const CharacterPreviewLayout = preload("res://src/rendering/character_preview_layout.gd")
 const CharacterActionPicker = preload("res://src/rendering/character_action_picker.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
+## The real world's own tile size -- the diorama's ground has to agree with
+## it, not restate a number of its own (see the ground tests below).
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var diorama: Node2D
 
@@ -47,6 +50,62 @@ func test_build_creates_a_pond_sprite():
 		if child is Sprite2D and child.texture != null and child.name == "Pond":
 			found = true
 	assert_true(found)
+
+
+# -- the ground the whole scene stands on (reported live: the grass, pond,
+# pebbles and trees floated on the frame's own near-black panel background,
+# and the pond -- whose shore fade is pure ALPHA -- read as a hard-edged
+# blue rectangle because there was nothing behind it to fade into) ---------
+
+## One diorama ground tile covers exactly one REAL world tile, read from
+## TerrainRenderer rather than restated, so the diorama can never disagree
+## with the world about how much ground a tile is -- the same rule the grass
+## cards already follow (IllustratedGrassPatch.WORLD_SIZE == TILE_SIZE).
+func test_a_ground_tile_covers_exactly_one_real_world_tile():
+	assert_eq(
+		CharacterPreviewDioramaScript.GROUND_TILE_WORLD_SIZE,
+		float(TerrainRenderer.TILE_SIZE)
+	)
+
+
+## The camera frames exactly Rect2(0, 0, FOOTPRINT), so anything short of
+## full coverage shows the frame's own near-black panel through the gap.
+func test_build_lays_ground_tiles_across_the_whole_footprint():
+	assert_gt(diorama.ground_tiles.size(), 0, "the diorama stands on nothing at all")
+	var tile_size := Vector2.ONE * CharacterPreviewDioramaScript.GROUND_TILE_WORLD_SIZE
+	var covered := Rect2(diorama.ground_tiles[0].position, tile_size)
+	for tile in diorama.ground_tiles:
+		covered = covered.merge(Rect2(tile.position, tile_size))
+	assert_true(
+		covered.encloses(Rect2(Vector2.ZERO, CharacterPreviewDioramaScript.FOOTPRINT)),
+		"ground covers %s, needs to cover %s" % [covered, CharacterPreviewDioramaScript.FOOTPRINT]
+	)
+
+
+## Real ground art, not a flat fill -- the diorama is a corner of the real
+## world (the design doc's first pillar), so it stands on the very art
+## TerrainRenderer lays down for grassland.
+func test_ground_tiles_carry_real_terrain_art():
+	for tile in diorama.ground_tiles:
+		assert_not_null(tile.texture, "a ground tile with no texture is a hole in the world")
+
+
+func test_ground_draws_beneath_the_pond_and_the_grass():
+	var pond: Sprite2D = diorama.get_node("Pond")
+	var grass: MultiMeshInstance2D = diorama.get_node("Grass")
+	for tile in diorama.ground_tiles:
+		assert_lt(tile.z_index, pond.z_index, "ground must draw under the pond")
+		assert_lt(tile.z_index, grass.z_index, "ground must draw under the grass")
+
+
+## build() frees every previous child immediately (see its own doc comment);
+## the ground array has to be reset with the others or it holds freed nodes.
+func test_rebuilding_replaces_the_ground_rather_than_stacking_it():
+	var first_count: int = diorama.ground_tiles.size()
+	diorama.build(99)
+	assert_eq(diorama.ground_tiles.size(), first_count)
+	for tile in diorama.ground_tiles:
+		assert_true(is_instance_valid(tile), "a freed ground tile is still in the array")
 
 
 func test_apply_appearance_dresses_the_live_character_view():

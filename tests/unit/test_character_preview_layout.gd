@@ -1,8 +1,32 @@
 extends GutTest
 
 const CharacterPreviewLayout = preload("res://src/rendering/character_preview_layout.gd")
+## The real world's own grassland rule and the real tree art's own size --
+## the diorama is a corner of that world, so both its meadow density and its
+## placement margins are checked against the originals, never against a
+## number invented for the preview (see each test's own doc comment).
+const TallGrass = preload("res://src/world/tall_grass.gd")
+const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 
 var footprint := Vector2(96, 96)
+
+
+## How many of the footprint's grass cells are free of the pond and trees --
+## the denominator the meadow's coverage is measured against, walked exactly
+## the way generate() itself walks them.
+func _clear_cell_count(result, fp: Vector2) -> int:
+	var count := 0
+	var columns := int(fp.x / CharacterPreviewLayout.GRASS_CLUMP_SPACING)
+	var rows := int(fp.y / CharacterPreviewLayout.GRASS_CLUMP_SPACING)
+	for cell_y in rows:
+		for cell_x in columns:
+			var point := Vector2(
+				(float(cell_x) + 0.5) * CharacterPreviewLayout.GRASS_CLUMP_SPACING,
+				(float(cell_y) + 0.5) * CharacterPreviewLayout.GRASS_CLUMP_SPACING
+			)
+			if result.is_clear(point):
+				count += 1
+	return count
 
 
 func test_generate_is_deterministic_for_the_same_seed():
@@ -79,6 +103,85 @@ func test_pebble_positions_sit_near_the_ponds_rim():
 		# At or just outside the rim -- not deep in the water, not far out
 		# in the grass.
 		assert_between(distance_from_center, layout.pond_radius, layout.pond_radius + 6.0)
+
+
+## The diorama is a corner of the REAL world, so its meadow has to read at
+## the real world's own grassland density -- TallGrass.SEED_CHANCE, the
+## reference coverage TallGrass's field-noise threshold is itself pinned to
+## (see FIELD_NOISE_THRESHOLD's own doc comment). Placing a clump on EVERY
+## clear cell was ~100% coverage, ~5x that, and since each clump draws
+## IllustratedGrassPatch.CARD_COUNT overlapping full-tile cards the hero
+## read as buried in a hedge rather than walking through a field (reported
+## live: "grass tufts several times his height").
+func test_grass_coverage_matches_the_real_worlds_own_meadow_density():
+	var clear_cells := 0
+	var grass_cells := 0
+	for seed_value in 200:
+		var result := CharacterPreviewLayout.generate(seed_value, footprint)
+		clear_cells += _clear_cell_count(result, footprint)
+		grass_cells += result.grass_positions.size()
+	var coverage := float(grass_cells) / float(clear_cells)
+	assert_almost_eq(
+		coverage, TallGrass.SEED_CHANCE, 0.03,
+		"meadow coverage %f should match the real world's own %f" % [coverage, TallGrass.SEED_CHANCE]
+	)
+
+
+## The guard against over-correcting into a bald diorama: thinning the
+## meadow must never leave a seed with no grass at all.
+func test_every_seed_still_places_some_grass():
+	for seed_value in 200:
+		var result := CharacterPreviewLayout.generate(seed_value, footprint)
+		assert_gt(result.grass_positions.size(), 0, "seed %d placed no grass at all" % seed_value)
+
+
+## The grass that IS kept has to clump, not speckle: a meadow reads as
+## drifts of grass, which is why the cells are chosen by the same smooth
+## noise field TallGrass seeds a chunk with rather than by an independent
+## per-cell roll. Measured as "most kept cells touch another kept cell" --
+## an independent 20% roll over a 6x6 grid would leave most of them
+## isolated.
+func test_kept_grass_cells_clump_together():
+	var touching := 0
+	var total := 0
+	for seed_value in 60:
+		var result := CharacterPreviewLayout.generate(seed_value, footprint)
+		for a in result.grass_positions:
+			total += 1
+			for b in result.grass_positions:
+				if a != b and a.distance_to(b) <= CharacterPreviewLayout.GRASS_CLUMP_SPACING * 1.5:
+					touching += 1
+					break
+	assert_gt(
+		float(touching) / float(total), 0.5,
+		"only %d of %d kept grass cells neighbour another -- the meadow is speckling, not drifting" % [touching, total]
+	)
+
+
+## The camera frames exactly the footprint (see CharacterPreviewDiorama's
+## own FOOTPRINT and main_menu's derived camera zoom), and a tree is drawn
+## from its trunk FOOT upward across ProceduralTreeSprite.WORLD_SIZE -- so a
+## position sampled from the raw footprint puts canopies above the frame's
+## top edge and trunks past its sides (reported live: trees clipped by the
+## frame).
+func test_tree_positions_leave_room_for_the_trees_own_drawn_body():
+	var half_width := float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5
+	var height := float(ProceduralTreeSprite.WORLD_SIZE.y)
+	for seed_value in 60:
+		var result := CharacterPreviewLayout.generate(seed_value, footprint)
+		for tree_position in result.tree_positions:
+			assert_gte(tree_position.x - half_width, 0.0, "seed %d: tree %s clipped at the left" % [seed_value, tree_position])
+			assert_lte(tree_position.x + half_width, footprint.x, "seed %d: tree %s clipped at the right" % [seed_value, tree_position])
+			assert_gte(tree_position.y - height, 0.0, "seed %d: tree %s canopy clipped at the top" % [seed_value, tree_position])
+			assert_lte(tree_position.y, footprint.y, "seed %d: tree %s clipped at the bottom" % [seed_value, tree_position])
+
+
+## The inset band is derived from the tree art's own world size, never an
+## eyeballed margin -- if the art ever changes size the placement follows it.
+func test_tree_bounds_are_derived_from_the_tree_arts_own_size():
+	var bounds := CharacterPreviewLayout.tree_bounds(footprint)
+	assert_eq(bounds.position, Vector2(float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5, float(ProceduralTreeSprite.WORLD_SIZE.y)))
+	assert_eq(bounds.end, Vector2(footprint.x - float(ProceduralTreeSprite.WORLD_SIZE.x) * 0.5, footprint.y))
 
 
 func test_grass_positions_avoid_the_pond():

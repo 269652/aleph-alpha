@@ -75,7 +75,10 @@ func generate_chunk(chunk_coord: Vector2i, chunk_size: int) -> Chunk:
 			var cell_elevation := elevation_at_global(global_x, global_y)
 			elevation[index] = cell_elevation
 			moisture[index] = moisture_at_global(global_x, global_y)
-			temperature[index] = temperature_at_global(global_x, global_y)
+			# Reuses the elevation computed one line above rather than making
+			# temperature_at_global re-derive it -- see
+			# temperature_at_elevation's own doc comment.
+			temperature[index] = temperature_at_elevation(global_y, cell_elevation)
 			biome[index] = _biome_at_global(
 				global_x, global_y, cell_elevation, temperature[index], moisture[index]
 			)
@@ -127,6 +130,29 @@ func aspect_at_global(global_x: int, global_y: int) -> float:
 	return _terrain_relief.aspect_at(_elevation_source, latitude, longitude)
 
 
+## The raw elevation gradient at a global tile, for a caller that wants BOTH
+## slope and aspect there -- the two are readings of one gradient (see
+## TerrainRelief.gradient_at), so asking for them separately takes the same
+## four elevation samples twice. Reads the same RAW elevation source
+## slope_at_global/aspect_at_global do, for the reason spelled out in
+## slope_at_global's own doc comment.
+##
+## Derive the two readings with TerrainRelief.slope_degrees_from_gradient and
+## aspect_degrees_from_gradient, which are pure -- EarthChunkManager's
+## hillshade painter is the caller this exists for.
+func gradient_at_global(global_x: int, global_y: int) -> Vector2:
+	var latitude := _geo_coordinates.latitude_for_tile(global_y, WORLD_HEIGHT_TILES)
+	var longitude := _geo_coordinates.longitude_for_tile(global_x, WORLD_WIDTH_TILES)
+	return _terrain_relief.gradient_at(_elevation_source, latitude, longitude)
+
+
+## The shared TerrainRelief this generator derives slope/aspect with -- so a
+## caller holding a gradient from gradient_at_global above can derive the two
+## readings through the same instance rather than constructing its own.
+func terrain_relief() -> TerrainRelief:
+	return _terrain_relief
+
+
 ## Real precipitation-proxy moisture for any global tile coordinate, normalized
 ## to [0.0, 1.0]. Fully procedural for now (no real precipitation data sourced
 ## yet -- open item, see FINE_DETAIL_AMPLITUDE's comment above).
@@ -134,13 +160,35 @@ func moisture_at_global(global_x: int, global_y: int) -> float:
 	return (_moisture_noise.get_noise_2d(global_x, global_y) + 1.0) / 2.0
 
 
-## Real latitude/elevation-derived temperature for any global tile coordinate,
-## normalized to [0.0, 1.0] (see ClimateModel.temperature_at).
-func temperature_at_global(global_x: int, global_y: int) -> float:
+## Real latitude/elevation-derived temperature for a tile whose elevation the
+## caller ALREADY has, normalized to [0.0, 1.0] (see
+## ClimateModel.temperature_at).
+##
+## generate_chunk and biome_at_global both compute a cell's elevation one line
+## before asking for its temperature, and temperature_at_global below used to
+## re-derive it from scratch -- four extra bilinear elevation samples, i.e.
+## sixteen extra byte reads, per cell, for a number already sitting in a
+## local. That doubled the elevation sampling of every generated chunk (8,192
+## reads per 32x32 chunk where 4,096 do) and of biome_at_global, which is not
+## a cold path: TerrainRenderer.paint asks it for every out-of-chunk border
+## neighbour, and EarthChunkManager's water overlay asks it in an expanding
+## ring around every ocean cell.
+##
+## Same formula and the same inputs, so the result is bit-identical -- pinned
+## by test_temperature_at_elevation_is_exactly_temperature_at_global.
+func temperature_at_elevation(global_y: int, cell_elevation: float) -> float:
 	var latitude := _geo_coordinates.latitude_for_tile(global_y, WORLD_HEIGHT_TILES)
 	var latitude_0to1 := absf(latitude) / 90.0
-	var height_above_sea_level := maxf(0.0, elevation_at_global(global_x, global_y) - EARTH_SEA_LEVEL)
+	var height_above_sea_level := maxf(0.0, cell_elevation - EARTH_SEA_LEVEL)
 	return _climate_model.temperature_at(latitude_0to1, height_above_sea_level)
+
+
+## Real latitude/elevation-derived temperature for any global tile coordinate,
+## normalized to [0.0, 1.0]. The thin wrapper for callers that do NOT already
+## have the tile's elevation (EarthChunkManager.step_worms, and the tests);
+## signature and result unchanged.
+func temperature_at_global(global_x: int, global_y: int) -> float:
+	return temperature_at_elevation(global_y, elevation_at_global(global_x, global_y))
 
 
 ## Public per-tile biome query -- the same single-source-of-truth function
@@ -153,7 +201,7 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 		global_x,
 		global_y,
 		cell_elevation,
-		temperature_at_global(global_x, global_y),
+		temperature_at_elevation(global_y, cell_elevation),
 		moisture_at_global(global_x, global_y)
 	)
 

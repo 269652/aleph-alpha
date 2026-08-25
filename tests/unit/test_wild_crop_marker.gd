@@ -12,6 +12,7 @@ const CropPull = preload("res://src/gameplay/crop_pull.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite.gd")
 const IllustratedCropSprite = preload("res://src/rendering/illustrated_crop_sprite.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 
 var marker: WildCropMarker
 var _drops: Array = []
@@ -297,3 +298,35 @@ func test_potato_roots_crown_also_stays_on_the_ground_line():
 	marker.begin_pull()
 	marker._process(CropPull.DURATION_SECONDS * 0.5)
 	assert_almost_eq(marker._root.offset.y, 0.0, 0.01)
+
+
+# -- the tops carry the season, the root does not ----------------------------
+
+## A wild carrot used to stand bright green-topped in deep winter under a
+## tree that had correctly gone bare. The LEAVES take the same SeasonalFoliage
+## tint the grass around them and the ground under them wear; the root does
+## not, because a stored tuber underground is not what the frost reaches
+## (see docs/concept/wild_crops.md "The season").
+func test_the_leaves_wear_the_seasons_tint_and_the_pulled_root_does_not():
+	add_child_autofree(marker)
+	var winter := SeasonalFoliage.tint_for_season("winter")
+	marker.season_tint = winter
+	assert_eq(marker._leaves.modulate, winter, "the tops go over")
+	assert_eq(marker._root.modulate, Color.WHITE, "the tuber underground does not")
+
+
+## Same "set before the node is in the tree" convention `growth`/`crop_id`
+## already use -- the renderer sets everything before add_child.
+func test_a_season_set_before_ready_still_lands_on_the_leaves():
+	var autumn := SeasonalFoliage.tint_for_season("autumn")
+	marker.season_tint = autumn
+	add_child_autofree(marker)
+	assert_eq(marker._leaves.modulate, autumn)
+
+
+## Untouched by default, so nothing that never pushes a season renders
+## differently than it does today.
+func test_a_marker_nobody_told_about_the_season_renders_exactly_as_before():
+	add_child_autofree(marker)
+	assert_eq(marker.season_tint, Color.WHITE)
+	assert_eq(marker._leaves.modulate, Color.WHITE)

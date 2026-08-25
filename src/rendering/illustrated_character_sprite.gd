@@ -38,6 +38,7 @@ extends RefCounted
 ## to fit -- see docs/concept/character_art_brief.md).
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 ## Every registered part's frames, from a neutral idle pose to a normalized
 ## canvas with its ground-contact row on the same baseline -- mirrors
@@ -200,7 +201,7 @@ func _measured_content_height(image: Image) -> float:
 
 func _load_frames(part_name: String, action: String) -> Array[Image]:
 	var part: Dictionary = _PARTS[part_name]
-	var image := Image.load_from_file(part.get("%s_path" % action, part["path"]))
+	var image := SpriteSheetLoader.load_image(part.get("%s_path" % action, part["path"]))
 	if part.has("chroma_key"):
 		image = _apply_chroma_key(image, part["chroma_key"], part.get("chroma_key_tolerance", 0.1))
 	var alpha_threshold: float = part.get("alpha_threshold", SpriteSheetSlicer.DEFAULT_ALPHA_THRESHOLD)
@@ -503,7 +504,7 @@ func _composite_frames(part_name: String, variant: int, facing: String) -> Array
 	if _composite_frames_cache.has(key):
 		return _composite_frames_cache[key]
 	if _hero_composite_sheet == null:
-		_hero_composite_sheet = Image.load_from_file(HERO_COMPOSITE_PATH)
+		_hero_composite_sheet = SpriteSheetLoader.load_image(HERO_COMPOSITE_PATH)
 	var row := clampi(variant, 0, HERO_COMPOSITE_ROWS - 1)
 	var band: Vector2i = HERO_COMPOSITE_ROW_BANDS[row]
 	var row_crop := _hero_composite_sheet.get_region(
@@ -866,7 +867,7 @@ func _load_head_cell(cell_index: int) -> Image:
 	if _head_cell_cache.has(cell_index):
 		return _head_cell_cache[cell_index]
 	if _head_sheet == null:
-		_head_sheet = Image.load_from_file(HEAD_PATH)
+		_head_sheet = SpriteSheetLoader.load_image(HEAD_PATH)
 	var column := cell_index % HEAD_GRID_COLUMNS
 	var row := cell_index / HEAD_GRID_COLUMNS
 	# Integer division: 1254/10 = 125 with a small remainder the sheet's own

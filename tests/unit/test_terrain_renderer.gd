@@ -9,6 +9,8 @@ const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
 const ProceduralHillshadeSprite = preload("res://src/rendering/procedural_hillshade_sprite.gd")
+const GroundTint = preload("res://src/rendering/ground_tint.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 
 ## Shared across every test in this file (see docs/concept/
 ## art_resolution.md#boot-performance): the first build_tile_set() call
@@ -166,6 +168,137 @@ func test_build_tile_set_ignores_a_stale_version_cache():
 	var image := source.texture.get_image()
 	assert_ne(image.get_pixel(0, 0), Color(1.0, 0.0, 1.0, 1.0))
 	_wipe_cache_behavior_files()
+
+
+# -- the built TileSet itself is memoized per process ------------------------
+# The disk cache only skips the PIXEL PAINTING. Rebuilding the
+# TileSetAtlasSource metadata on top of it -- 10,240 atlas cells, wrapped in
+# a fresh ImageTexture -- measured 8.8s PER CALL, and EarthChunkManager._init
+# does it once per instance, i.e. once per before_each in
+# test_earth_chunk_manager.gd's ~358 tests. The TileSet is never mutated
+# anywhere in src/, scenes/ or tests/ (grep: add_source/create_tile/
+# remove_tile appear only in terrain_renderer.gd and snow_layer.gd), so one
+# instance can be shared by every TileMapLayer.
+
+
+func test_build_tile_set_returns_the_same_shared_tile_set_on_a_repeat_call():
+	assert_same(renderer.build_tile_set(), renderer.build_tile_set())
+
+
+func test_two_renderers_on_the_same_cache_share_one_tile_set():
+	var other := TerrainRenderer.new()
+	other.atlas_cache_path = SHARED_TEST_CACHE_PATH
+	other.atlas_version_path = SHARED_TEST_VERSION_PATH
+	assert_same(renderer.build_tile_set(), other.build_tile_set())
+
+
+## THE invalidation guard, and the "a different key must give a different
+## result" pin: the memo's key covers the cached atlas's own bytes, so
+## rewriting that file mid-run produces a genuinely different TileSet rather
+## than the stale memoized one. Uses two distinguishable fake atlases so the
+## assertion is about the PIXELS that came back, not merely about object
+## identity.
+func test_build_tile_set_rebuilds_after_the_cached_atlas_changes_on_disk():
+	_wipe_cache_behavior_files()
+	renderer.atlas_cache_path = CACHE_BEHAVIOR_PATH
+	renderer.atlas_version_path = CACHE_BEHAVIOR_VERSION_PATH
+	var size := _full_atlas_size()
+
+	var magenta := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	magenta.fill(Color(1.0, 0.0, 1.0, 1.0))
+	TerrainAtlasCache.new().save(
+		magenta, TerrainRenderer.ATLAS_VERSION, CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH
+	)
+	var first := renderer.build_tile_set()
+	var first_source := first.get_source(0) as TileSetAtlasSource
+	assert_eq(first_source.texture.get_image().get_pixel(0, 0), Color(1.0, 0.0, 1.0, 1.0))
+
+	var cyan := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	cyan.fill(Color(0.0, 1.0, 1.0, 1.0))
+	TerrainAtlasCache.new().save(
+		cyan, TerrainRenderer.ATLAS_VERSION, CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH
+	)
+	var second := renderer.build_tile_set()
+	var second_source := second.get_source(0) as TileSetAtlasSource
+	assert_eq(
+		second_source.texture.get_image().get_pixel(0, 0),
+		Color(0.0, 1.0, 1.0, 1.0),
+		"a rewritten atlas on disk must not be served from the memo"
+	)
+	assert_not_same(second, first)
+	_wipe_cache_behavior_files()
+
+
+## A renderer pointed at a DIFFERENT cache path must not be handed the shared
+## one's TileSet -- the path is part of the key precisely because two
+## renderers can legitimately be reading two different atlases.
+func test_a_renderer_on_a_different_cache_path_gets_its_own_tile_set():
+	_wipe_cache_behavior_files()
+	var size := _full_atlas_size()
+	var fake := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	fake.fill(Color(0.0, 0.0, 1.0, 1.0))
+	TerrainAtlasCache.new().save(
+		fake, TerrainRenderer.ATLAS_VERSION, CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH
+	)
+
+	var other := TerrainRenderer.new()
+	other.atlas_cache_path = CACHE_BEHAVIOR_PATH
+	other.atlas_version_path = CACHE_BEHAVIOR_VERSION_PATH
+	assert_not_same(other.build_tile_set(), renderer.build_tile_set())
+	_wipe_cache_behavior_files()
+
+
+# -- the season lives in the shader, NEVER in the atlas ----------------------
+# The obvious way to make the ground seasonal is to paint four grasses and
+# fold the season into ATLAS_VERSION. That is the trap this pins shut. The
+# atlas is one ~5MB disk-cached image keyed by a single version string with no
+# per-tile invalidation (see TerrainAtlasCache), and build_tile_set() also
+# returns the TileSet the live TileMapLayer is holding -- so a season in the
+# key would mean four full bakes, and one of them landing MID-SESSION at the
+# exact moment the season turned, which is precisely the boot cost the cache
+# exists to avoid. The season is a live uniform on the material the terrain
+# layer already wears instead (GroundTint.set_season_tint / SeasonalFoliage),
+# which costs one shader-parameter write and invalidates nothing.
+#
+# Stated as "a season turn changes the MATERIAL and not one pixel of the
+# atlas" rather than as "ATLAS_VERSION contains no season", so it is about the
+# behaviour and not about a string.
+
+
+func test_a_season_turn_changes_the_material_and_not_one_pixel_of_the_atlas():
+	var summer_set := renderer.build_tile_set()
+	var summer_source := summer_set.get_source(0) as TileSetAtlasSource
+	var grass := renderer.atlas_coords_for_biome("grassland")
+	var region := summer_source.get_tile_texture_region(grass)
+	var before := summer_source.texture.get_image().get_region(region).get_data()
+
+	# Turn the year all the way to deep winter, the way a live session does.
+	var tint := GroundTint.new()
+	tint.set_season_tint(SeasonalFoliage.tint_for_season("winter"))
+	assert_eq(
+		tint.shared_material().get_shader_parameter("season_tint"),
+		Vector3(
+			SeasonalFoliage.tint_for_season("winter").r,
+			SeasonalFoliage.tint_for_season("winter").g,
+			SeasonalFoliage.tint_for_season("winter").b
+		),
+		"the premise: the season really did move -- it landed on the material"
+	)
+
+	var winter_set := renderer.build_tile_set()
+	assert_same(
+		winter_set, summer_set,
+		"a season turn must not invalidate the atlas cache -- no mid-session rebake"
+	)
+	var after := (
+		(winter_set.get_source(0) as TileSetAtlasSource)
+		.texture.get_image().get_region(region).get_data()
+	)
+	assert_eq(after, before, "the baked grassland tile is the same pixels in every season")
+
+	# Leave the process-wide material as it was found (see GroundTint's static
+	# _season_tint): summer is the identity tint by construction.
+	tint.set_season_tint(SeasonalFoliage.tint_for_season("summer"))
 
 
 func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles():

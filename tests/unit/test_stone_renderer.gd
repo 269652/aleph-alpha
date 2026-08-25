@@ -8,6 +8,7 @@ const OrePlacement = preload("res://src/world/ore_placement.gd")
 const MountainOrePlacement = preload("res://src/world/mountain_ore_placement.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const LiftableStone = preload("res://src/rendering/liftable_stone.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var renderer: StoneRenderer
 var parent: Node2D
@@ -516,3 +517,110 @@ func test_a_mountain_vein_draws_from_the_same_illustrated_ore_compositing_as_fla
 			if child is Sprite2D:
 				sprite = child
 		assert_not_null(sprite, "a mountain vein should carry a real rendered sprite child")
+
+
+# -- a building piece occupies its tile against stone (see docs/concept/building.md) -
+#
+# The same rule TreeRenderer.spawn_trees already enforces for the forest,
+# and for the same reason: EarthChunkManager._load_chunk loads
+# `chunk.modifications` from disk BEFORE it spawns stones, and only stamps
+# the village's houses afterwards. So without this, boulders and ore
+# respawn straight inside a persisted house on every revisit -- a boulder
+# sitting in the middle of a stone floor with the roof drawn over it.
+
+const _OCCUPYING_PIECE_ID := "stone_floor"
+
+
+func _tile_of(node: Node2D) -> Vector2i:
+	return Vector2i(floori(node.position.x / TILE_SIZE), floori(node.position.y / TILE_SIZE))
+
+
+## How many nodes a spawn put on `tile`, and the total -- measured against a
+## throwaway parent so the real assertion can compare "with the piece" to
+## "without it" instead of to a hand-counted number.
+func _baseline_spawn(chunk: Chunk, tile: Vector2i) -> Dictionary:
+	var scratch := Node2D.new()
+	var spawned := renderer.spawn_stones(scratch, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	var on_tile := 0
+	for node in spawned:
+		if _tile_of(node) == tile:
+			on_tile += 1
+	var result := {"total": spawned.size(), "on_tile": on_tile}
+	scratch.free()
+	return result
+
+
+func test_no_stone_spawns_on_a_cell_a_building_piece_occupies():
+	var chunk := _make_grassland_chunk()
+	var cells := stone_placement.stones_in_chunk(
+		CHUNK_ORIGIN, chunk.biome, chunk.width, chunk.height
+	)
+	assert_gt(cells.size(), 0, "precondition: this chunk should roll at least one stone cell")
+	var cell: Vector2i = cells[0]
+	var occupied_tile := Vector2i(CHUNK_ORIGIN.x + cell.x, CHUNK_ORIGIN.y + cell.y)
+
+	var baseline := _baseline_spawn(chunk, occupied_tile)
+	assert_gt(baseline["on_tile"], 0, "precondition: that cell should carry stone without a piece on it")
+
+	chunk.modifications[cell] = _OCCUPYING_PIECE_ID
+	var spawned := renderer.spawn_stones(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	for node in spawned:
+		assert_ne(
+			_tile_of(node), occupied_tile,
+			"a stone spawned on a cell a building piece already stands on"
+		)
+	assert_eq(
+		spawned.size(), int(baseline["total"]) - int(baseline["on_tile"]),
+		"only the occupied cell's own stone should have been skipped"
+	)
+
+
+## Pins the NARROWNESS of the rule, not the rule itself: an earth path or a
+## campfire is a chunk modification too, and neither should clear a boulder.
+## Green before the fix by design -- its job is to go red the moment someone
+## widens `BuildingPiece.has_piece(...)` to `modifications.has(...)`.
+func test_a_non_piece_modification_does_not_stop_a_stone_spawning():
+	var chunk := _make_grassland_chunk()
+	var cells := stone_placement.stones_in_chunk(
+		CHUNK_ORIGIN, chunk.biome, chunk.width, chunk.height
+	)
+	assert_gt(cells.size(), 0, "precondition: this chunk should roll at least one stone cell")
+	var cell: Vector2i = cells[0]
+	var occupied_tile := Vector2i(CHUNK_ORIGIN.x + cell.x, CHUNK_ORIGIN.y + cell.y)
+	var baseline := _baseline_spawn(chunk, occupied_tile)
+
+	chunk.modifications[cell] = TerrainRenderer.EARTH_TILE_ID
+	var spawned := renderer.spawn_stones(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+	var on_tile := 0
+	for node in spawned:
+		if _tile_of(node) == occupied_tile:
+			on_tile += 1
+	assert_eq(on_tile, int(baseline["on_tile"]), "plain earth should not clear a boulder")
+	assert_eq(spawned.size(), int(baseline["total"]))
+
+
+## A mountain ore vein is placed by its own separate path
+## (spawn_mountain_veins, slope-gated) but is called from the same
+## _load_chunk step and stored in the same _loaded_stones list, so it needs
+## the identical guard -- otherwise a vein regrows inside a player-built
+## mountain shelter on every revisit.
+func test_no_mountain_vein_spawns_on_a_cell_a_building_piece_occupies():
+	var chunk := _mountain_chunk()
+	var fake := _FakeSlopeLookup.new()
+	fake.slope = MountainOrePlacement.MAX_SLOPE_FOR_SCALING_DEG
+
+	var scratch := Node2D.new()
+	var baseline := renderer.spawn_mountain_veins(scratch, chunk, CHUNK_ORIGIN, TILE_SIZE, fake)
+	assert_gt(baseline.size(), 0, "precondition: a very steep mountain chunk should roll veins")
+	var occupied_tile := _tile_of(baseline[0])
+	var baseline_total := baseline.size()
+	scratch.free()
+
+	chunk.modifications[occupied_tile - CHUNK_ORIGIN] = _OCCUPYING_PIECE_ID
+	var spawned := renderer.spawn_mountain_veins(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, fake)
+	for node in spawned:
+		assert_ne(
+			_tile_of(node), occupied_tile,
+			"an ore vein spawned on a cell a building piece already stands on"
+		)
+	assert_eq(spawned.size(), baseline_total - 1)

@@ -39,6 +39,18 @@ var growth: float = 0.0:
 		growth = value
 		_redraw_leaves()
 
+## The season's tint on this plant's LEAVES (see SeasonalFoliage) -- pushed in
+## by the renderer on the same refresh cadence `growth` is, never read live
+## from a clock this node holds itself. A root crop's TOPS are what the season
+## touches; the tuber underground is unchanged, which is why the root sprite
+## is deliberately left alone and a mature crop stays pullable all winter (see
+## docs/concept/wild_crops.md "The season"). Identity by default, so a caller
+## that never mentions the season renders exactly today's picture.
+var season_tint := Color.WHITE:
+	set(value):
+		season_tint = value
+		_apply_season_tint()
+
 ## Invoked once, right before this marker frees itself, so whatever spawned
 ## it (WildCropRenderer) can remove this cell from its owning WildCropPatch.
 ## Left unset (a no-op) for isolated tests/callers that don't need it.
@@ -103,6 +115,10 @@ func _ready() -> void:
 	_reveal_root(0.0)
 
 	_redraw_leaves()
+	# Catches up a season set before this node was in the tree (the renderer
+	# sets crop_id/growth/season_tint before add_child), exactly the way
+	# _redraw_leaves above catches up a growth set the same way.
+	_apply_season_tint()
 
 
 func _process(delta: float) -> void:
@@ -174,6 +190,12 @@ func begin_pull() -> bool:
 	_pull_elapsed = 0.0
 	_soil.texture = ProceduralSoilSprite.new().generate_texture(true)
 	return true
+
+
+func _apply_season_tint() -> void:
+	if _leaves == null:
+		return  # not _ready() yet -- the end of _ready() catches up
+	_leaves.modulate = season_tint
 
 
 func _redraw_leaves() -> void:

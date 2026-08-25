@@ -1,16 +1,35 @@
 extends RefCounted
 
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+
 ## The player's survival meters: hunger and thirst rise over time, stamina
 ## drains on exertion and regenerates, and fitness reflects overall condition,
 ## dropping under prolonged starvation/dehydration and recovering otherwise.
 ## Mirrors CreatureNeeds' API style (see creature_needs.gd) but scoped to the
 ## player and with two extra meters (stamina, fitness).
 
-## Hunger/thirst drain slowly enough that a short excursion never starves you
-## (pinned by test_meters_drain_slowly_enough_for_a_short_excursion): thirst is
-## a touch faster than hunger, and both take minutes, not seconds, to matter.
-const HUNGER_RATE_PER_SECOND := 0.004
-const THIRST_RATE_PER_SECOND := 0.006
+## How long going without takes to bottom a meter out.
+##
+## Measured in the WORLD'S OWN DAY (SeasonCycle.SECONDS_PER_DAY, four real
+## hours), because that is the clock every other slow body-clock in this
+## project already keeps -- a kingfisher's appetite (PiscivoreAppetite), a
+## songbird's crop (BirdDigestion), fruit going over (FruitSpoilage). These
+## were 0.004 and 0.006 per second: 250 and 167 real seconds, so the player
+## starved about 58 times per in-game day, and about 346 times per sunrise
+## (lighting runs on real UTC, see SolarPosition). The numbers were chosen
+## against "how long before this nags a player" without checking what the
+## calendar would allow, which is the same two-clocks mistake as the snowfall
+## cover/thaw times and the gut-passage timer.
+##
+## A day of eating nothing empties you. Thirst runs on two thirds of that, so
+## you go looking for water before you go looking for a meal -- the real order
+## of the two, and the order the old constants already had. Bracketed from
+## both sides by test_the_meters_are_measured_in_the_worlds_days_not_minutes
+## and its neighbours; the old pin only ever guarded the fast side.
+const SECONDS_TO_STARVE := SeasonCycle.SECONDS_PER_DAY
+const SECONDS_TO_DEHYDRATE := SeasonCycle.SECONDS_PER_DAY * (2.0 / 3.0)
+const HUNGER_RATE_PER_SECOND := 1.0 / SECONDS_TO_STARVE
+const THIRST_RATE_PER_SECOND := 1.0 / SECONDS_TO_DEHYDRATE
 const STAMINA_REGEN_PER_SECOND := 0.05
 const FITNESS_DROP_PER_SECOND := 0.01
 const FITNESS_RECOVER_PER_SECOND := 0.01

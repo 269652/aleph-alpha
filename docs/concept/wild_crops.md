@@ -95,6 +95,65 @@ instead of one.
   own crop's territory — collision is impossible by construction, not just
   unlikely.
 
+### The season
+
+A wild carrot used to stand ripe, green-topped and pullable in deep winter,
+under a tree that had correctly gone bare. Nothing seasonal existed at any
+layer of this stack — not in the sim, not in the marker, not in this
+document, which mentioned the word "season" exactly once and only as a
+passing analogy. This section is the missing spec.
+
+**What a root crop actually does in winter.** The tops die back; the tuber
+overwinters underground and is still there to be dug. That is the whole
+biological point of a storage root. So the honest answer for *this* plant is
+neither "it disappears" nor "nothing happens": it is **senescence** — the
+leaves go over, growth all but stops, and what is already mature stays
+mature and stays pullable.
+
+That is also what `seasons.md`'s second design pillar demands: the season
+**modulates, it does not gate**. `SeasonCycle.growth_modifier` is built for
+exactly this and has a raised floor (`0.2 + 0.8 * warmth`) documented as
+"dormancy, not death" — it was, until now, read by nobody.
+
+Concretely:
+
+- **Growth is on the season's clock, not wall time.** `WildCropPatch.advance`
+  takes a `season_growth` multiplier (`SeasonCycle.growth_modifier` at the
+  current world time) and scales its delta by it. An immature patch nearly
+  stops through winter and picks up again in spring; it never fully freezes,
+  because the floor is 0.2 rather than 0.
+- **Spread is on the same clock as growth.** A patch colonising new ground
+  through a frozen January is the same mistake as one ripening through it,
+  so the throttled spread accumulator advances on the season-scaled delta
+  too — not on raw seconds.
+- **The tops carry the season, the root does not.** The marker's leaves take
+  the same `SeasonalFoliage` tint the grass around them and the ground under
+  them wear (see `seasons.md`), so a winter meadow is uniformly drab rather
+  than a lawn of bright green crop tops in a straw field. The pulled root
+  keeps its own art untouched: a stored tuber underground is not what the
+  frost reaches.
+- **A mature crop stays harvestable all year, deliberately.** Winter is
+  already the hard season here (`SurvivalMeters`, `FruitSpoilage`), and
+  taking the wild food supply away in it would be a real difficulty change
+  smuggled in under a rendering fix. A brown-topped potato in January is
+  still a potato you can pull — which is both the kinder design and the
+  botanically true one.
+- **Note the interaction with seeding.** `_seed_initial_patches` seeds cells
+  at growth `1.0` ("initial crops start mature, like map-generated
+  grass/trees"), so a chunk that first loads in winter still arrives with
+  mature crops in it. That is intended under this option: they are plants
+  that grew during the year before you got there.
+
+What was deliberately **not** built is the full annual cycle: dieback to
+bare soil mounds in late autumn, dormancy over winter, and re-sprouting from
+growth 0 in spring. That is the only version that makes "come back in
+season" a real reason to remember a meadow, and it is recorded as an open
+item below rather than half-done here — it needs persisted per-cell dormancy
+state (`WildCropPatch` is a bare `Dictionary` of cell -> float with no
+serialization of its own) and a fourth "dormant" art stage that does not
+exist in `assets/sprites/plants/{carrot,potato}_leaves.png`, which ships
+exactly three growth-stage frames.
+
 ### Growth stages -> art (`IllustratedCropSprite`)
 
 The three real AI-illustrated growth-stage frames per crop
@@ -191,6 +250,26 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
 - ✅ Growth + spread simulation (`WildCropPatch`), one instance per chunk
   per crop, wired into `EarthChunkManager.step_wild_crops` on the same
   refresh cadence as `step_tall_grass`.
+- ✅ `step_wild_crops` is called from `World._step_ecology_batch`, beside
+  `step_tall_grass`. For a long stretch it was not: the step existed, its
+  unit tests called it directly and passed, and nothing in a real session
+  ever invoked it — so wild crops only ever had the maturity
+  `_seed_initial_patches` handed them at chunk creation, spread never fired
+  once, and a cell created at 0.0 by a spread tick could never ripen (the
+  same class of bug as the ownership gate: green subsystem tests that call
+  the step directly, and no caller). The missing line is now guarded by
+  `tests/unit/test_world_simulation_ownership.gd`'s
+  `test_the_ecology_batch_advances_wild_crops_like_every_other_plant_sim`.
+- ✅ Senescence, not dieback (see "The season"): `WildCropPatch.advance`
+  takes a `season_growth` multiplier (`SeasonCycle.growth_modifier`) that
+  scales growth AND spread, and `WildCropMarker.season_tint` puts the
+  `SeasonalFoliage` tint on the leaves only, never the pulled root. A
+  mature crop stays pullable in winter on purpose. `step_wild_crops` passes
+  both in now — the modifier read off the world clock once per batched tick,
+  and the tint to `sync_markers` as well as to `spawn_markers`, so a chunk
+  streamed in during winter arrives dead-topped instead of popping in
+  summer-green. Pinned by the `wild_crops_in_season` tests in
+  `test_earth_chunk_manager.gd`.
 - ✅ Visible per-patch markers (`WildCropMarker`/`WildCropRenderer`),
   spawned/despawned per chunk load same as trees/stones.
 - ✅ Animated pull harvest (`CropPull`), bound to the swing input, dropping
@@ -220,3 +299,12 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
   farmed/wild DNA model `farming.md` calls for is still entirely unbuilt.
 - ⬜ No player-tilled farming, no domestication access point from this wild
   population yet (see `farming.md`'s own open questions).
+- ⬜ **Full dieback and re-sprout** — tops dying back to bare soil mounds in
+  late autumn, the cell surviving underground over winter, re-sprouting
+  from growth 0 in spring, and a pulled cell not coming back. Deliberately
+  deferred (see "The season"), and blocked on two concrete things: no
+  persisted per-cell dormancy state (`WildCropPatch` is a plain
+  `Dictionary` of cell -> float with no serialization of its own — check
+  `chunk_serializer.gd` before starting), and no fourth "dormant" frame in
+  `assets/sprites/plants/{carrot,potato}_leaves.png`, which ships exactly
+  three growth-stage frames.
