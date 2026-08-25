@@ -131,6 +131,10 @@ const _ITEMS := {
 	"iron_boots": ["Iron Boots", "armor", 1, 0.0, "feet", 2.0],
 	# Fishing (see concept/fishing.md): a rod cast at water lands fish.
 	"fishing_rod": ["Fishing Rod", "tool", 1, 0.0],
+	# Sägewerk (sawmill -- see docs/concept/timber_construction.md): a
+	# placeable worksite, same "kind" as campfire/furnace above, where a
+	# Lumberjack NPC shapes gathered logs into beam/plank over time.
+	"sagewerk": ["Sagewerk", "placeable", 5, 0.0],
 }
 
 

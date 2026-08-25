@@ -22,6 +22,7 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropRenderer = preload("res://src/rendering/wild_crop_renderer.gd")
 const DecomposerRenderer = preload("res://src/rendering/decomposer_renderer.gd")
+const LumberjackMarker = preload("res://src/rendering/lumberjack_marker.gd")
 
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
@@ -216,6 +217,11 @@ var _geology_renderer := GeologyRenderer.new()
 var _cave_entrance_placement := CaveEntrancePlacement.new()
 var _wild_crop_renderer := WildCropRenderer.new()
 var _decomposer_renderer := DecomposerRenderer.new()
+## "an NPC moves in" (see docs/concept/timber_construction.md's NPC
+## section) -- no dedicated renderer class needed (spawning one
+## LumberjackMarker per Sägewerk tile is simple enough to do directly, see
+## _spawn_lumberjack_for/_despawn_lumberjack_at below), unlike the
+## per-chunk-random-count decomposer/wild-crop spawners.
 var _grass_sprite_generator := ProceduralGrassSprite.new()
 var _illustrated_grass := IllustratedGrassPatch.new()
 var _scrub_sprite_generator := ProceduralScrubSprite.new()
@@ -384,6 +390,22 @@ const WILD_CROP_IDS := ["carrot", "potato"]
 ## since a decomposer's whole behavior lives on the marker itself and it
 ## queries the Carcass/CarcassGuts groups directly.
 var _decomposer_markers: Dictionary = {}
+
+## The Sägewerk's own Lumberjack -- "an NPC moves in" the moment a
+## "sagewerk" modification tile exists (see
+## docs/concept/timber_construction.md). chunk_coord -> {Vector2i local_cell
+## -> LumberjackMarker}, mirroring _piece_collision_bodies' own per-chunk
+## dict-of-cells shape -- one entry per placed Sägewerk instance, keyed by
+## its own cell so a rebuild/overwrite/destroy on that exact tile can find
+## and despawn just its own worker (see _spawn_lumberjack_for/
+## _despawn_lumberjack_at). Persisted implicitly: the "sagewerk" tile itself
+## is an ordinary chunk modification (see build_at_global), so a reloaded
+## chunk re-staffs a fresh Lumberjack for every persisted Sägewerk found in
+## _load_chunk -- the Lumberjack's own in-progress gathering/production
+## state (log stock, shaping progress) is NOT persisted across an unload, a
+## known/documented gap (see docs/progress.md), same class of limitation as
+## geology's mined-tunnel state.
+var _sagewerk_lumberjacks: Dictionary = {}
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
 var _scrub_refresh_accumulator := 0.0
@@ -4845,9 +4867,12 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 	var chunk: Chunk = _loaded_chunks.get(chunk_coord)
 	if chunk == null:
 		return false
-	chunk.modifications[_local_coord(global_x, global_y)] = tile_id
+	var local := _local_coord(global_x, global_y)
+	var previous_tile_id: String = chunk.modifications.get(local, "")
+	chunk.modifications[local] = tile_id
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_sync_piece_collision(Vector2i(global_x, global_y), tile_id)
+	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, tile_id)
 	return true
 
 
@@ -4862,9 +4887,11 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	var local := _local_coord(global_x, global_y)
 	if not chunk.modifications.has(local):
 		return false
+	var previous_tile_id: String = chunk.modifications[local]
 	chunk.modifications.erase(local)
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_remove_piece_collision(Vector2i(global_x, global_y))
+	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
 	return true
 
 
@@ -4977,6 +5004,48 @@ func has_structure_near(global_x: int, global_y: int, structure_id: String, radi
 	return false
 
 
+## Keeps `_sagewerk_lumberjacks` in sync with a modification change at
+## `local_cell`: a tile that just BECAME "sagewerk" gets staffed (if it
+## isn't already -- rebuilding the same tile twice must not double-spawn), a
+## tile that just STOPPED being "sagewerk" (overwritten by something else,
+## or destroyed -- `new_tile_id` is "" for a destroy) has its worker
+## despawned. A tile going from one non-sagewerk id to another is a no-op.
+func _sync_sagewerk_lumberjack(
+	chunk_coord: Vector2i, local_cell: Vector2i, previous_tile_id: String, new_tile_id: String
+) -> void:
+	if previous_tile_id == "sagewerk" and new_tile_id != "sagewerk":
+		_despawn_lumberjack_at(chunk_coord, local_cell)
+	elif new_tile_id == "sagewerk":
+		_spawn_lumberjack_for(chunk_coord, local_cell)
+
+
+## Spawns exactly one LumberjackMarker for the Sägewerk at `local_cell`, or
+## does nothing if one already exists there -- "an NPC moves in", once, per
+## Sägewerk instance.
+func _spawn_lumberjack_for(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	if not _sagewerk_lumberjacks.has(chunk_coord):
+		_sagewerk_lumberjacks[chunk_coord] = {}
+	var by_cell: Dictionary = _sagewerk_lumberjacks[chunk_coord]
+	if by_cell.has(local_cell):
+		return
+	var global_cell: Vector2i = chunk_coord * CHUNK_SIZE + local_cell
+	var home := (Vector2(global_cell) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+	var marker := LumberjackMarker.new()
+	marker.home = home
+	marker.position = home
+	_entities_parent.add_child(marker)
+	by_cell[local_cell] = marker
+
+
+func _despawn_lumberjack_at(chunk_coord: Vector2i, local_cell: Vector2i) -> void:
+	var by_cell: Dictionary = _sagewerk_lumberjacks.get(chunk_coord, {})
+	var marker: Node = by_cell.get(local_cell)
+	if marker == null:
+		return
+	marker.free()
+	by_cell.erase(local_cell)
+
+
 ## All chunk coordinates within `radius` chunks of center (a square/Chebyshev
 ## radius, not circular -- simpler, and streaming radii don't need to be exact).
 func chunks_in_radius(center: Vector2i, radius: int) -> Array[Vector2i]:
@@ -5064,6 +5133,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_entities_parent, _biome_classifier.dominant_biome(chunk.biome), chunk_coord * CHUNK_SIZE,
 		CHUNK_SIZE, TerrainRenderer.TILE_SIZE, hash("%d_%d_decomposers" % [chunk_coord.x, chunk_coord.y])
 	)
+
+	# Re-staff every Sägewerk this chunk already had persisted, before this
+	# load, with a fresh Lumberjack -- "an NPC moves in" applies just as much
+	# to a revisited worksite as a freshly-placed one (see
+	# _spawn_lumberjack_for's own doc comment).
+	for local_cell in chunk.modifications:
+		if chunk.modifications[local_cell] == "sagewerk":
+			_spawn_lumberjack_for(chunk_coord, local_cell)
 
 	_flower_patches[chunk_coord] = FlowerPatch.new(
 		hash("%d_%d_flowers" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
@@ -5243,6 +5320,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	for marker in _decomposer_markers.get(chunk_coord, []):
 		marker.free()
 	_decomposer_markers.erase(chunk_coord)
+
+	for marker in _sagewerk_lumberjacks.get(chunk_coord, {}).values():
+		marker.free()
+	_sagewerk_lumberjacks.erase(chunk_coord)
 
 	for sprite in _flower_sprites.get(chunk_coord, {}).values():
 		sprite.free()

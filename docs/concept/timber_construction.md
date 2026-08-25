@@ -423,7 +423,89 @@ shape a real abandoned timber building decays into.
 
 ## Status
 
-⬜ Not started — this is a new concept doc; no implementation exists yet.
+🚧 A scoped MVP slice is real: the Sägewerk worksite, its Lumberjack NPC,
+and real timber building pieces. Everything else this doc describes
+(statics, withering, the settlement construction ledger, offscreen
+catch-up, autonomous NPC house-building) is still ⬜, exactly as specified
+below — deliberately left alone this pass, not silently dropped.
+
+- ✅ **The Sägewerk worksite** — the doc's own generic "sawpit/hewing-block"
+  prop, named and built concretely as `sagewerk` (`item_catalog.gd`'s
+  `"placeable"` kind, `ProceduralStructureSprite.STRUCTURE_IDS`,
+  `CraftingRecipeBook`'s `sagewerk` recipe costing real logs). Placed the
+  same way campfire/furnace are — a tile via `EarthChunkManager.
+  build_at_global`, no new scene.
+- ✅ **The Lumberjack NPC** — `LumberjackMarker`
+  (`src/rendering/lumberjack_marker.gd`), a small purpose-built walker
+  mirroring `DecomposerMarker`'s own shape (not the full `NpcMarker` daily-
+  schedule stack). Its SEEKING → APPROACHING → FELLING → CARRYING →
+  DEPOSIT loop is `LumberjackBehavior`
+  (`src/gameplay/lumberjack_behavior.gd`), pure and unit-tested. FELLING
+  calls the *same* `ChoppableTree.take_damage` loop `Player._chop_step`
+  uses — an NPC swinging an axe really is the same mechanic, a different
+  caller, exactly as this doc's own mechanism section frames it. It fells
+  and buck-cuts into plain `log` items the ordinary way (deliberately does
+  NOT use the player's saw+Carpentry `saw_up` shortcut).
+- ✅ **One Lumberjack per placed Sägewerk, "an NPC moves in"** —
+  `EarthChunkManager._sagewerk_lumberjacks` (chunk_coord → {local_cell →
+  LumberjackMarker}) spawns one the moment a `sagewerk` tile is built,
+  scans persisted modifications for any already there on `_load_chunk`
+  (a revisited Sägewerk gets re-staffed, not left abandoned), and
+  despawns/frees its worker on destroy, overwrite, or chunk unload. No
+  hiring/wage/relationship system — `npc.md`'s own hiring section stays
+  untouched and out of scope, exactly as this doc's own open question
+  ("who becomes a builder?") left ad hoc.
+- ✅ **Sägewerk production: log → Balken/Planke** — `SagewerkProduction`
+  (`src/world/sagewerk_production.gd`), pure, mirrors `npc_production.gd`'s
+  rate-formula shape. Grounded in the doc's own "hewing vs. riving"
+  section: a Balken costs more log stock (`LOG_COST_PER_BEAM` >
+  `LOG_COST_PER_PLANK`) and takes longer to shape
+  (`SHAPE_SECONDS_PER_BEAM` > `SHAPE_SECONDS_PER_PLANK`) than a Planke,
+  both pinned by tests rather than eyeballed. Runs continuously while the
+  marker exists (staffed == the marker's presence, no separate flag); real
+  output drops as `ItemStack`s via `WorldItemBus` at the Sägewerk's own
+  position, the same "what you see is what's real" pattern every other
+  production system here uses — no new inventory-UI concept needed.
+- ✅ **Real consumers for beam/plank** — `BuildingPiece`'s new
+  `timber_wall` (costs `beam`, load-bearing per pillar 1) and
+  `timber_floor` (costs `plank`, non-structural), appended to `PIECE_IDS`.
+  Durability sits between the wood and stone tiers. Deliberately does
+  **not** add the load-bearing/support-capacity field this doc's own "Real
+  statics" section describes below — that stays future work; these two
+  pieces are shaped identically to every existing wood/stone piece so
+  nothing implies a statics mechanic that isn't real yet.
+- ⬜ **Real statics** (a support graph over the piece grid) — not built.
+  Every piece placed today (wood, stone, or the new timber tier) still
+  "stands because it was placed," per this doc's own pillar 2's honest
+  framing of the pre-doc status quo.
+- ⬜ **Withering/decay** (`condition`, the closed-form catch-up decay
+  curve) — not built. No placed piece loses condition over time yet.
+- ⬜ **NPC construction beyond gathering** — the Lumberjack's own loop stops
+  at DEPOSIT; `CARRY_MATERIAL`/`PLACE_PIECE` (an NPC actually building a
+  house piece by piece) are not built. `HouseBlueprint`/
+  `stamp_structure_at_global` are unchanged; `VillageRenderer._stamp_house`
+  still stamps a complete house for free at generation time — the doc's
+  own named anti-pattern this doc set out to retire is **not yet
+  retired**.
+- ⬜ **Offscreen catch-up** (`construction_catchup.gd`, the two-fidelity
+  model) — not built. A Lumberjack's own in-progress state (log stock,
+  shaping progress) is not persisted across a chunk unload/reload either —
+  a real, documented gap (see `docs/progress.md`), the same class of
+  limitation geology's mined-tunnel state already has.
+- ⬜ **Settlement construction ledger** (`ConstructionProject`,
+  `ConstructionProjectStore`, `InstitutionFormation`-style hysteresis on
+  whether a household starts building) — not built.
+- ⬜ **Multiple lumberjacks per settlement** — out of scope for this pass;
+  today's model is exactly one worker per Sägewerk instance. Two Sägewerke
+  close enough together may have their Lumberjacks compete for the same
+  standing tree (each independently targets its own nearest one, with no
+  coordination) — a known, accepted edge case, not a crash risk.
+- ⬜ All of this doc's own "Open questions" remain genuinely open (who
+  becomes a builder as a real occupation vs. ad hoc, whether player-placed
+  pieces wither too, collapse safety/momentum damage, tool-tier gating on
+  shaping, forest depletion ceiling via `land_health`, multiplayer
+  authority).
+
 Reusable primitives already in the codebase this system should build on,
 not reinvent:
 

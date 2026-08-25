@@ -95,6 +95,14 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 2}, {"item_id": "rock", "count": 2}],
 		"output": {"item_id": "saw", "count": 1},
 	},
+	# Sägewerk (sawmill worksite -- see docs/concept/timber_construction.md):
+	# built from real gathered logs, not conjured wood, so raising the
+	# sawmill itself already draws on the same felling pipeline it later
+	# feeds. Once placed, an NPC Lumberjack moves in and staffs it.
+	"sagewerk": {
+		"inputs": [{"item_id": "log", "count": 8}, {"item_id": "wood", "count": 4}],
+		"output": {"item_id": "sagewerk", "count": 1},
+	},
 }
 
 

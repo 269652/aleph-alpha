@@ -1503,6 +1503,17 @@ func _chunk_coord_for_tile(tile: Vector2i) -> Vector2i:
 	)
 
 
+## Deletes a modifications file a test's own unload just persisted to real
+## user:// disk (mirrors this file's existing cleanup convention, e.g.
+## test_reloading_a_chunk_restores_collision_for_a_persisted_wall) -- so a
+## sagewerk built on the shared _berlin_tile spawn point for one test does
+## not leak into unrelated tests that load the same tile later.
+func _remove_persisted_modifications(chunk_coord: Vector2i) -> void:
+	var path := "user://chunk_modifications/%d_%d.bin" % [chunk_coord.x, chunk_coord.y]
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+
 func _child_instance_ids(parent: Node2D) -> Array[int]:
 	var ids: Array[int] = []
 	for child in parent.get_children():
@@ -3032,6 +3043,81 @@ func test_evicting_old_chunks_frees_decomposer_markers():
 	manager.update(far_away_tile)
 
 	assert_false(manager._decomposer_markers.has(old_chunk))
+
+
+# -- Sägewerk: "an NPC moves in" the moment the worksite exists (see
+# docs/concept/timber_construction.md) -- exactly one LumberjackMarker per
+# placed Sägewerk instance, mirroring the decomposer/wild-crop per-chunk
+# spawn/despawn lifecycle above.
+
+func test_building_a_sagewerk_spawns_a_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_true(manager._sagewerk_lumberjacks.has(chunk_coord))
+	assert_gt(manager._sagewerk_lumberjacks[chunk_coord].size(), 0)
+
+
+func test_building_a_sagewerk_twice_on_the_same_tile_spawns_only_one_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_eq(manager._sagewerk_lumberjacks[chunk_coord].size(), 1)
+
+
+func test_destroying_a_sagewerk_despawns_its_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_gt(manager._sagewerk_lumberjacks[chunk_coord].size(), 0, "precondition: a lumberjack moved in")
+
+	manager.destroy_at_global(_berlin_tile.x, _berlin_tile.y)
+
+	assert_eq(manager._sagewerk_lumberjacks[chunk_coord].size(), 0)
+
+
+func test_overwriting_a_sagewerk_with_a_different_structure_despawns_its_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "campfire")
+
+	assert_eq(manager._sagewerk_lumberjacks[chunk_coord].size(), 0)
+
+
+func test_evicting_a_chunk_frees_its_sagewerk_lumberjacks():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_true(manager._sagewerk_lumberjacks.has(chunk_coord), "precondition")
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	assert_false(manager._sagewerk_lumberjacks.has(chunk_coord))
+	_remove_persisted_modifications(chunk_coord)
+
+
+## A previously-built Sägewerk persists as an ordinary chunk modification
+## (see build_at_global's own doc comment) -- reloading that chunk must
+## re-staff it with a fresh Lumberjack, not leave it abandoned, the same
+## "an NPC moves in" guarantee a freshly-placed one gets.
+func test_reloading_a_chunk_with_a_persisted_sagewerk_respawns_its_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+	assert_false(manager._sagewerk_lumberjacks.has(chunk_coord), "precondition: chunk was evicted")
+
+	manager.update(_berlin_tile)
+
+	assert_true(manager._sagewerk_lumberjacks.has(chunk_coord))
+	assert_gt(manager._sagewerk_lumberjacks[chunk_coord].size(), 0)
+	_remove_persisted_modifications(chunk_coord)
 
 
 # -- the periodic ecosystem refresh must not rebuild the world ---------------

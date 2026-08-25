@@ -21,11 +21,19 @@ const CATEGORY_ROOF := "roof"
 ## smelt chain.
 const MATERIAL_WOOD := "wood"
 const MATERIAL_STONE := "stone"
+## The timber tier (see docs/concept/timber_construction.md): a real
+## Anno-style upgrade path above plain wood, sourced from a Sägewerk supply
+## chain (log -> beam/plank) rather than gathered wood placed directly.
+const MATERIAL_TIMBER := "timber"
 
 ## Every piece the game knows how to build.
 const PIECE_IDS: Array[String] = [
 	"wood_floor", "wood_wall", "wood_door", "wood_window", "wood_roof",
 	"stone_floor", "stone_wall", "stone_door", "stone_window", "stone_roof",
+	# Timber tier -- real consumers for beam/plank (see
+	# docs/concept/woodworking.md's own "beam/plank have no consumers yet"
+	# gap). Appended, not interleaved, per this file's existing convention.
+	"timber_wall", "timber_floor",
 ]
 
 ## Per-piece definition.
@@ -90,6 +98,26 @@ const _PIECES := {
 		"category": CATEGORY_ROOF, "material": MATERIAL_STONE,
 		"encloses": false, "walkable": true, "durability": 110.0,
 		"cost": {"stone": 2, "wood": 1},
+	},
+	# Timber tier (see docs/concept/timber_construction.md): a real Sägewerk
+	# supply chain, above plain gathered wood but not the stone tier.
+	# Pillar 1 -- a Balken (beam) is the load-bearing structural piece, a
+	# Planke (plank) is not -- so the wall costs beam, the floor costs
+	# plank, mirroring that division mechanically rather than just
+	# cosmetically. Durability sits between wood and stone: real squared,
+	# hewn timber framing outperforms a raw wood plank/pole build, but this
+	# pass deliberately does NOT add the load-bearing/support-capacity field
+	# the concept doc's own "Real statics" section describes -- that stays
+	# future, unbuilt work (see the doc's Status).
+	"timber_wall": {
+		"category": CATEGORY_WALL, "material": MATERIAL_TIMBER,
+		"encloses": true, "walkable": false, "durability": 90.0,
+		"cost": {"beam": 2},
+	},
+	"timber_floor": {
+		"category": CATEGORY_FLOOR, "material": MATERIAL_TIMBER,
+		"encloses": false, "walkable": true, "durability": 70.0,
+		"cost": {"plank": 2},
 	},
 }
 

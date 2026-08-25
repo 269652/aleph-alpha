@@ -117,9 +117,15 @@ rock like the existing `stone_pickaxe`.
   `saw` — `CraftingRecipeBook`.
 - ⬜ Choosing beam vs. plank output (today: sawing always yields both) —
   named simplification above, not a gap to silently paper over.
-- ⬜ `beam`/`plank` have no consumers yet — `building.md`'s construction
-  system is itself still unbuilt; this pass only makes the materials
-  obtainable, not yet spendable on anything.
+- 🚧 `beam`/`plank` consumers: partially closed —
+  `timber_construction.md`'s new `timber_wall`/`timber_floor`
+  `BuildingPiece`s (see that doc's Status) now spend real beam/plank on
+  construction, and its Sägewerk worksite gives a second, NPC-staffed
+  source for both alongside the player's own saw+Carpentry path. Still
+  open: only two timber pieces exist (no door/window/roof of that tier
+  yet), and `timber_construction.md`'s own statics/withering/settlement-
+  ledger sections remain unbuilt, so beam/plank are spendable but not yet
+  load-bearing in any mechanical sense.
 - ⬜ Species/hardness variation in yield (an oak vs. a pine trunk sawing
   differently) — every tree shares one yield curve today, the same flat-
   by-role simplification `carrion.md`'s butchering already made for

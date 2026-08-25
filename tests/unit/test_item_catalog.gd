@@ -95,11 +95,18 @@ func test_catalog_has_a_fishing_rod():
 	assert_eq(catalog.make("fishing_rod").kind, "tool")
 
 
-## Campfire/furnace are structures you build into the world, not inert
-## materials -- see HotbarAction.PLACE.
+## Campfire/furnace/sagewerk are structures you build into the world, not
+## inert materials -- see HotbarAction.PLACE.
 func test_campfire_and_furnace_are_placeable():
 	assert_eq(catalog.make("campfire").kind, "placeable")
 	assert_eq(catalog.make("furnace").kind, "placeable")
+
+
+## The Sägewerk (sawmill) worksite -- see docs/concept/timber_construction.md.
+## A placeable structure like campfire/furnace, not an inert material.
+func test_sagewerk_is_placeable():
+	assert_true(catalog.has("sagewerk"))
+	assert_eq(catalog.make("sagewerk").kind, "placeable")
 
 
 ## Named fruit tree species (see docs/concept/flora.md#named-fruit-and-nut-tree-species)

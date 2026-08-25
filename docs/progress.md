@@ -2597,24 +2597,55 @@ to slope at all. Nothing implemented — all ⬜ Not started:
 
 ### Timber Construction (`concept/timber_construction.md`)
 
-New doc (2026-08-24) — no implementation yet. Specifies a Balken/Planke
-material pipeline on top of the existing `FelledTree`/`ChoppableTree`
-felling mechanic, a real support-graph statics model, a closed-form
-withering/decay model mirroring `chunk_ecology_catchup.gd`'s own shape, and
-an autonomous NPC builder AI run at two fidelities (individual agent
-on-screen, deterministic catch-up integration off-screen) so a settlement
-can be discovered fully built — or mid-build, or decayed to ruins — in a
-chunk that was never loaded, without ever stamping a house-shaped prefab.
+New doc (2026-08-24). A scoped MVP slice is now real (2026-08-25): the
+Sägewerk worksite, its Lumberjack NPC, and real timber building pieces.
+Everything else the doc describes (statics, withering, the settlement
+construction ledger, offscreen catch-up, autonomous NPC house-building)
+remains unbuilt, exactly as specced — see the concept doc's own Status
+section for the full accounting.
 
-- **Log → Balken/Planke shaping pipeline** (medium) — ⬜ Not started.
+- **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
+  placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
+  wood), `ProceduralStructureSprite`'s `sagewerk` art, placed via the
+  existing `EarthChunkManager.build_at_global` tile-modification path —
+  no new scene, mirrors campfire/furnace exactly.
+- **Lumberjack NPC: SEEK/APPROACH/FELL/CARRY/DEPOSIT loop** (medium) —
+  ✅ Done — `LumberjackBehavior` (pure FSM,
+  `tests/unit/test_lumberjack_behavior.gd`) + `LumberjackMarker` (engine
+  glue, `tests/unit/test_lumberjack_marker.gd`), a small purpose-built
+  walker mirroring `DecomposerMarker`'s shape rather than the full
+  `NpcMarker` daily-schedule stack. FELLING calls the *same*
+  `ChoppableTree.take_damage` loop `Player._chop_step` uses.
+- **One Lumberjack per placed Sägewerk, staffed on load/build/reload**
+  (medium) — ✅ Done — `EarthChunkManager._sagewerk_lumberjacks` wiring
+  (`build_at_global`/`destroy_at_global`/`_load_chunk`/`_unload_chunk`),
+  tested in `tests/unit/test_earth_chunk_manager.gd`'s Sägewerk section.
+  No hiring/wage system — `npc.md`'s hiring section stays untouched.
+- **Log → Balken/Planke shaping pipeline** (medium) — ✅ Done —
+  `SagewerkProduction` (`tests/unit/test_sagewerk_production.gd`), pure,
+  grounded in real hewing-vs-riving cost/time asymmetry (a Balken costs
+  more log stock and takes longer than a Planke, both test-pinned
+  constants). Runs continuously while a Lumberjack is assigned; real
+  output drops via `WorldItemBus` at the Sägewerk's own position.
+- **Real consumers for beam/plank** (small) — ✅ Done — `BuildingPiece`'s
+  new `timber_wall` (costs beam, load-bearing per the doc's pillar 1) and
+  `timber_floor` (costs plank), `tests/unit/test_building_piece.gd`. Does
+  NOT add the load-bearing/support-capacity field — that's the unbuilt
+  statics item below.
 - **Structural statics (support graph, collapse)** (large) — ⬜ Not started.
 - **Withering / decay of built pieces** (medium) — ⬜ Not started.
-- **NPC builder occupation + on-screen fell/shape/place FSM** (large) —
-  ⬜ Not started.
+- **NPC construction beyond gathering (`CARRY_MATERIAL`/`PLACE_PIECE`,
+  an NPC actually placing house pieces)** (large) — ⬜ Not started; the
+  Lumberjack's own loop stops at DEPOSIT.
 - **Offscreen construction catch-up (`construction_catchup.gd`)** (large) —
-  ⬜ Not started.
+  ⬜ Not started. A Lumberjack's own in-progress state (log stock, shaping
+  progress) is also not persisted across a chunk unload/reload — a known
+  gap, same class of limitation as geology's mined-tunnel state.
 - **`ConstructionProject`/`ConstructionProjectStore`** (medium) —
   ⬜ Not started.
+- **Multiple lumberjacks per settlement / cross-Sägewerk coordination**
+  (medium) — ⬜ Not started; today's model is exactly one worker per
+  Sägewerk, with no coordination if two Sägewerke's search radii overlap.
 - **Retiring `VillageRenderer._stamp_house`'s instant free stamp** in favor
   of a seeded `ConstructionProject` at settlement founding (medium) —
   ⬜ Not started; see this doc's own Status section for why the current

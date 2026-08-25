@@ -3,9 +3,11 @@ extends GutTest
 const ProceduralStructureSprite = preload("res://src/rendering/procedural_structure_sprite.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
-## The two placeable structure ids TerrainRenderer needs distinct art for
-## today (see item_catalog.gd's "placeable" kind items).
-const STRUCTURE_IDS := ["campfire", "furnace"]
+## The placeable structure ids TerrainRenderer needs distinct art for today
+## (see item_catalog.gd's "placeable" kind items). "sagewerk" (Sägewerk,
+## sawmill -- see docs/concept/timber_construction.md) is the log ->
+## beam/plank shaping worksite.
+const STRUCTURE_IDS := ["campfire", "furnace", "sagewerk"]
 
 var generator: ProceduralStructureSprite
 
@@ -121,3 +123,15 @@ func test_unknown_structure_id_falls_back_without_crashing():
 func test_structure_ids_constant_contains_campfire_and_furnace():
 	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("campfire"))
 	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("furnace"))
+	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("sagewerk"))
+
+
+## Art-direction pass: the Sägewerk should read as a wood worksite (a
+## sawn-log-colored tile), clearly distinct from both the fire-colored
+## campfire and the cool-grey furnace.
+func test_sagewerk_is_visually_distinct_from_campfire_and_furnace():
+	var sagewerk: Image = generator.generate_image("sagewerk", 3)
+	var campfire: Image = generator.generate_image("campfire", 3)
+	var furnace: Image = generator.generate_image("furnace", 3)
+	assert_gt(_pixel_diff_count(sagewerk, campfire), TerrainRenderer.ART_TILE_SIZE)
+	assert_gt(_pixel_diff_count(sagewerk, furnace), TerrainRenderer.ART_TILE_SIZE)

@@ -29,7 +29,7 @@ const SIZE := 32
 ## TerrainRenderer reserves their atlas slots (see
 ## TerrainRenderer._structure_linear) -- adding a new placeable structure's
 ## art means adding its id here and a case in generate_image.
-const STRUCTURE_IDS: Array[String] = ["campfire", "furnace"]
+const STRUCTURE_IDS: Array[String] = ["campfire", "furnace", "sagewerk"]
 
 # -- campfire: warm ember ground, crossed logs, a licking flame -------------
 
@@ -87,6 +87,8 @@ func generate_texture(structure_id: String, variant_seed: int = 0) -> ImageTextu
 func generate_image(structure_id: String, variant_seed: int = 0) -> Image:
 	if structure_id == "furnace":
 		return _furnace_image(variant_seed)
+	if structure_id == "sagewerk":
+		return _sagewerk_image(variant_seed)
 	return _campfire_image(variant_seed)
 
 
@@ -233,6 +235,73 @@ func _shade_top_left_highlight_bottom_right_shadow(image: Image) -> void:
 	for y in SIZE:
 		image.set_pixel(0, y, _palette.highlight(image.get_pixel(0, y)))
 		image.set_pixel(SIZE - 1, y, _palette.shade(image.get_pixel(SIZE - 1, y)))
+
+
+# -- sagewerk: a sawdust-pale worksite, a trunk on trestles, a saw kerf ------
+# (see docs/concept/timber_construction.md's Sägewerk worksite -- log ->
+# beam/plank shaping, distinct from campfire's fire-warm and furnace's
+# stone-cool reads: this one reads as raw, pale, worked wood.)
+
+const _SAWDUST_GROUND := Color(0.62, 0.5, 0.32)
+const _TRESTLE_COLOR := Color(0.3, 0.2, 0.1)
+const _LOG_ON_TRESTLE_COLOR := Color(0.45, 0.32, 0.16)
+const _SAWCUT_COLOR := Color(0.85, 0.8, 0.65)
+
+## Two trestle uprights hold the trunk off the ground -- the same real
+## "keep wood off bare earth" reasoning timber_construction.md's own
+## grounding section gives for footings, applied to a worksite prop instead
+## of a finished building.
+const _TRESTLE_LEFT_X := 6
+const _TRESTLE_RIGHT_X := 26
+const _TRESTLE_TOP_ROW := 12
+const _TRESTLE_BOTTOM_ROW := 28
+const _TRESTLE_THICKNESS := 3
+
+## The trunk lying across both trestles, spanning the full tile width.
+const _LOG_ROW := 12
+const _LOG_THICKNESS_SAGEWERK := 6
+
+
+func _sagewerk_image(variant_seed: int) -> Image:
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	image.fill(_SAWDUST_GROUND)
+
+	_paint_trestle(image, _TRESTLE_LEFT_X)
+	_paint_trestle(image, _TRESTLE_RIGHT_X)
+	_paint_log_on_trestle(image, variant_seed)
+	_paint_sawcut(image, variant_seed)
+	_outline_against_background(image, _SAWDUST_GROUND)
+	return image
+
+
+func _paint_trestle(image: Image, x: int) -> void:
+	for y in range(_TRESTLE_TOP_ROW, _TRESTLE_BOTTOM_ROW):
+		for t in _TRESTLE_THICKNESS:
+			var px := x + t
+			if px >= 0 and px < SIZE:
+				image.set_pixel(px, y, _TRESTLE_COLOR)
+
+
+## The trunk itself, with a small seeded lighten/darken so different seeds
+## read as different individual logs, not one fixed texture.
+func _paint_log_on_trestle(image: Image, variant_seed: int) -> void:
+	var jitter := _seeded_unit_float(variant_seed, "sagewerk_log") - 0.5
+	var color := _LOG_ON_TRESTLE_COLOR.lightened(maxf(jitter * 0.2, 0.0)).darkened(maxf(-jitter * 0.2, 0.0))
+	for y in range(_LOG_ROW, _LOG_ROW + _LOG_THICKNESS_SAGEWERK):
+		for x in SIZE:
+			image.set_pixel(x, y, color)
+
+
+## A pale saw kerf drawn straight through the trunk -- the detail that reads
+## "sawmill worksite" rather than "log pile". A small seeded horizontal
+## offset keeps different seeds visibly distinct.
+func _paint_sawcut(image: Image, variant_seed: int) -> void:
+	var offset := _seeded_unit_float(variant_seed, "sagewerk_saw") * 4.0
+	var mid_row := _LOG_ROW + _LOG_THICKNESS_SAGEWERK / 2
+	for x in SIZE:
+		var y := mid_row + int(round(sin((float(x) + offset) * 0.4)))
+		if y >= 0 and y < SIZE:
+			image.set_pixel(x, y, _SAWCUT_COLOR)
 
 
 func _seeded_unit_float(seed_value: int, salt: String) -> float:

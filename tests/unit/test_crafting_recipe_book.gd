@@ -20,8 +20,8 @@ func test_recipe_ids_returns_all_defined_recipes():
 	assert_true(ids.has("lasso"))
 	# + smelting/forge recipes: furnace, iron_ingot, copper_ingot,
 	# iron_helm/chest/legs/boots + fishing_rod + lasso
-	# + woodworking: log_to_sticks, log_to_wood, saw.
-	assert_eq(ids.size(), 18)
+	# + woodworking: log_to_sticks, log_to_wood, saw, sagewerk.
+	assert_eq(ids.size(), 19)
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():
@@ -158,6 +158,19 @@ func test_log_converts_into_wood():
 func test_saw_is_craftable():
 	assert_true(book.recipe_ids().has("saw"))
 	assert_eq(book.recipe_output("saw")["item_id"], "saw")
+
+
+## The Sägewerk worksite (see docs/concept/timber_construction.md) -- a
+## placeable structure, same shape as campfire/furnace, that a player builds
+## from real gathered logs so an NPC Lumberjack can move in and staff it.
+func test_sagewerk_is_craftable_from_logs():
+	assert_true(book.recipe_ids().has("sagewerk"))
+	assert_eq(book.recipe_output("sagewerk")["item_id"], "sagewerk")
+	var inputs = book.recipe_inputs("sagewerk")
+	var ids := []
+	for i in inputs:
+		ids.append(i["item_id"])
+	assert_true(ids.has("log"), "a sawmill should be built from real logs, not conjured wood")
 
 
 func test_smelting_and_forge_recipes_exist():
