@@ -134,6 +134,13 @@ const INVENTORY_SLOTS := 12
 ## it, but you can't use one clear across a base either.
 const HEAT_SOURCE_RADIUS_TILES := 3
 
+## Same "standing near it" proximity range as HEAT_SOURCE_RADIUS_TILES,
+## named separately for the Sägewerk collection action (see _collect_step)
+## rather than repurposing a heat-source-specific constant name for an
+## unrelated structure -- same real tuned value, not a second invented
+## number.
+const SAGEWERK_COLLECT_RADIUS_TILES := HEAT_SOURCE_RADIUS_TILES
+
 ## How much a single eaten food item relieves hunger by (see eat_food()).
 const EAT_HUNGER_RELIEF := 0.4
 ## Thirst relief per second while standing in deep-enough water to be
@@ -1286,6 +1293,7 @@ func _perform_attack() -> void:
 	_harvest_grass_step()
 	_pull_wild_crop_step()
 	_butcher_step()
+	_collect_step()
 
 
 ## Smashing/mining: a swing that reaches a rock node (shared "stone" group)
@@ -1365,6 +1373,41 @@ func _butcher_step() -> void:
 		# real tax on skipping caution rather than a hidden gotcha.
 		if carcasses[index].contaminated:
 			apply_disease_bite(DiseaseModel.CARRION)
+
+
+## Collecting: a swing near a real, nearby Sägewerk (see
+## EarthChunkManager.has_structure_near) withdraws whatever real beam/plank
+## stock it has piled up (StructureStock, credited by LumberjackMarker's own
+## production step -- see docs/concept/timber_construction.md's "Storage,
+## logistics, and the autonomous dependency chain" section) straight into
+## the player's own inventory. A direct pickup, not a ground find, since the
+## player is standing right at the source performing the collection
+## themselves -- the real stand-in for a player with no Storage/Logistics
+## built yet (see that section's own "What's honestly still a stand-in
+## here" gap note this closes). No-ops with nothing built up yet, or no
+## Sägewerk within reach -- same shared group-scan/proximity shape every
+## other harvest step above uses, just against a placed structure instead
+## of a creature/tree/plant.
+func _collect_step() -> void:
+	if _chunk_manager == null:
+		return
+	var tile := current_tile()
+	if not _chunk_manager.has_structure_near(tile.x, tile.y, "sagewerk", SAGEWERK_COLLECT_RADIUS_TILES):
+		return
+	var sagewerk_pixel = _chunk_manager.nearest_structure_position(
+		position, "sagewerk", float(SAGEWERK_COLLECT_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	)
+	if sagewerk_pixel == null:
+		return
+	var sagewerk_tile := Vector2i(
+		floori(sagewerk_pixel.x / TerrainRenderer.TILE_SIZE), floori(sagewerk_pixel.y / TerrainRenderer.TILE_SIZE)
+	)
+	for item_id in ["beam", "plank"]:
+		var available: int = _chunk_manager.structure_stock_at(sagewerk_tile.x, sagewerk_tile.y, item_id)
+		if available <= 0:
+			continue
+		_chunk_manager.withdraw_from_structure_at(sagewerk_tile.x, sagewerk_tile.y, item_id, available)
+		inventory.add(_item_catalog.make(item_id), available)
 
 
 ## The held item's material-model kind (see MaterialDamage/Block), used for

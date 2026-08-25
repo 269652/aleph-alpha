@@ -404,52 +404,78 @@ implementation, which does not yet call `NeedResolver`.
 
 This section's implementation and this doc's own prose were, for a real
 stretch, written independently by two different sessions against two
-different views of this codebase — one correctly describing the real,
-merged `production_chains.md`/`NeedResolver`/Sägewerk/`LumberjackMarker`
-pipeline, the other built (and honestly self-reported as such) against an
-isolated worktree whose starting point predated all of that landing on
-`main`. Reconciled here, in the same interest of honesty this doc's own
-"Tuned values" pillar asks for elsewhere — this is what's ACTUALLY real
-right now:
+different views of this codebase, then reconciled. A follow-up pass
+(2026-08-25) closed most of what that reconciliation left open — this is
+what's ACTUALLY real right now:
 
 - **Storage, `StructureStock`/`StructureStockStore`, and
   `LogisticsMarker`/`LogisticsBehavior` are real, tested, and generic** —
   designed to collect from ANY source structure with real waiting stock,
   not hardcoded to the Sägewerk specifically, so a real future producer
-  (or the Sägewerk itself, see next point) can plug in with no changes to
-  the worker.
-- **The Sägewerk's own real production does not feed `StructureStock`
-  yet.** `SagewerkProduction`'s real beam/plank output drops as ordinary
-  ground items via `WorldItemBus` at the Sägewerk's own position (the
-  player walks up and picks it up like any other harvest) — a real,
-  deliberate design choice from the material-pipeline section above, and
-  a genuine architecture mismatch with the Logistics worker's own
-  `SEEKING` step, which looks for `StructureStock`, not ground items. This
-  is a real, open integration gap, not a rounding error: either the
-  Sägewerk's own output needs to additionally credit `StructureStock`, or
-  `LogisticsMarker` needs a second real seek mode for ground-item
-  sources — a genuine design decision, deliberately not forced through
-  without deciding it properly.
-- **No settlement automatically spawns a Logistics worker yet.** The
-  "Sägewerk + Storage present → spawn a Logistics worker" trigger is not
-  wired into `EarthChunkManager._load_chunk`/`update()` — it depends on
-  the point above being resolved first (spawning a worker with nothing
-  real to collect from would be a real, working NPC standing around doing
-  nothing, not a useful stand-in). `LogisticsMarker` is real, tested, and
-  instantiable directly, not yet auto-spawned.
-- **`ConstructionPriority.decide` has no live settlement caller yet, and
-  its `BUILD_PRODUCER_FIRST` check does not yet call `NeedResolver`** —
-  the "Settlement construction ledger" section above already documents
-  that `ConstructionProject`/`ConstructionProjectStore` don't exist, so
-  this function is the smallest real, tested slice that demonstrates the
-  priority decision (real recipe data, real local stock) rather than
-  wiring into a settlement-decision system that isn't built yet. It
-  currently composes `CraftingRecipeBook`'s real recipe data with
-  `Smelting.can_smelt`'s already-proven structure-gate check (the same
-  heat-source gate `Player.craft` enforces for the player) rather than
-  the real, now-merged `NeedResolver` — a real, small, near-term
-  follow-up (a mechanical swap, not a redesign) rather than the general
-  mechanism this section's own prose above already correctly describes.
+  (or the Sägewerk itself, see next point) plugs in with no changes to the
+  worker.
+- **The Sägewerk's own real production now feeds `StructureStock`.**
+  `LumberjackMarker._step_production` credits `SagewerkProduction`'s real
+  beam/plank output straight into `StructureStock` at the Sägewerk's own
+  tile position (via `EarthChunkManager.deposit_to_structure_at`, through
+  a late-bound `earth` reference set the same way `LogisticsMarker`'s own
+  is) — NOT a `WorldItemBus` ground-drop any more. This closes the
+  architecture mismatch the previous version of this note described: the
+  Logistics worker's own `SEEKING` step looks for `StructureStock`, and
+  now the Sägewerk's real output is actually there to find.
+  `test_lumberjack_marker.gd` covers both the credit itself and that the
+  old ground-drop is genuinely gone (no double-crediting between a
+  Logistics worker's delivery and a leftover ground pickup).
+- **A player with no Storage/Logistics built yet still has a real, direct
+  way to collect.** Removing the ground-drop would otherwise be a
+  regression for that player — `Player._collect_step` (wired into
+  `_perform_attack` alongside `_chop_step`/`_butcher_step`, the same
+  swing-driven-interaction convention) withdraws whatever real beam/plank
+  stock a nearby Sägewerk has piled up straight into the player's own
+  inventory when standing near one, mirroring `_has_heat_source`'s own
+  proximity-check shape. Real, tested (`test_player.gd`): withdraws real
+  present stock, no-ops with nothing stocked, no-ops with no Sägewerk
+  nearby.
+- **A Sägewerk + Storage pair now automatically spawns its Logistics
+  workers.** `EarthChunkManager._sync_logistics_workers`/
+  `_resync_logistics_for_sagewerk` mirror the existing
+  `_sagewerk_lumberjacks` sync-on-modification-change wiring exactly:
+  once a real Storage is within `SAGEWERK_STORAGE_PAIR_RADIUS_TILES` of a
+  real Sägewerk, exactly two `LogisticsMarker` workers spawn (one for
+  `beam`, one for `plank` — today's one-item-id-per-worker `LogisticsMarker`
+  design, not a design change), tracked chunk_coord → local_cell → worker
+  keyed off the **Sägewerk's own** cell, mirroring `_sagewerk_lumberjacks`'
+  own shape. Re-syncs on every build/destroy of either structure and on
+  chunk load/unload; a redundant sync call does not double-spawn.
+  **Named, honest constraint**: a Sägewerk pairs with only the single
+  nearest Storage it can find — the "a Sägewerk could in principle serve
+  more than one nearby Storage" case this doc's own brief raised is not
+  modeled; today's simplest correct implementation assumes one Storage per
+  Sägewerk. Real, tested (`test_earth_chunk_manager.gd`'s Storage/Logistics
+  section): no nearby Storage spawns nothing, a nearby Storage spawns
+  exactly two workers regardless of build order or resync count, and
+  destroying either structure despawns them.
+- **`ConstructionPriority.decide` is now rebuilt on the real
+  `NeedResolver`** — the old `CraftingRecipeBook` + `Smelting.can_smelt`
+  composition is gone. `decide` resolves the recipe's own output item
+  through `NeedResolver.resolve`, then maps ANY `"structure"` or `"skill"`
+  need anywhere in the recursive walk to `BUILD_PRODUCER_FIRST` (both name
+  something that must exist before the recipe can happen at all,
+  regardless of material stock) and a remaining `"material"` need to
+  `SHORTFALL`, preserving the exact same three-value contract. This closed
+  a real behavioral gap the old Smelting-only composition could not see:
+  `"sagewerk"` itself is not a smelting recipe, so the old code never
+  checked its `required_skill` (Carpentry) at all — a settlement with
+  enough logs and wood but no carpenter would have been reported READY.
+  `decide` now takes an optional `allocated_nodes` parameter (default
+  empty) so a caller with a real skill pool can clear that gate; existing
+  callers/tests are unaffected by the default. Still no live settlement
+  caller — the "Settlement construction ledger" section above still
+  documents that `ConstructionProject`/`ConstructionProjectStore` don't
+  exist, so this remains the smallest real, tested slice demonstrating the
+  priority decision rather than a wired settlement-decision system.
+  Real, tested (`test_construction_priority.gd`), including the new
+  skill-gate case and a multi-hop structure+material case.
 
 ## Interaction with other docs
 
@@ -571,7 +597,7 @@ shape a real abandoned timber building decays into.
 ## Status
 
 🚧 A scoped MVP slice is real: the Sägewerk worksite, its Lumberjack NPC,
-real timber building pieces, and (as of this pass) a real, generic
+real timber building pieces, and a real, generic, now-live end-to-end
 Storage/Logistics/dependency-chain-priority layer. Everything else this
 doc describes (statics, withering, the settlement construction ledger,
 offscreen catch-up, autonomous NPC house-building) is still ⬜, exactly as
@@ -612,9 +638,13 @@ dropped.
   (`SHAPE_SECONDS_PER_BEAM` > `SHAPE_SECONDS_PER_PLANK`) than a Planke,
   both pinned by tests rather than eyeballed. Runs continuously while the
   marker exists (staffed == the marker's presence, no separate flag); real
-  output drops as `ItemStack`s via `WorldItemBus` at the Sägewerk's own
-  position, the same "what you see is what's real" pattern every other
-  production system here uses — no new inventory-UI concept needed.
+  output credits `StructureStock` at the Sägewerk's own tile position (via
+  `EarthChunkManager.deposit_to_structure_at`) — migrated off the earlier
+  `WorldItemBus` ground-drop so a Logistics worker's own `SEEKING` step has
+  real stock to find (see the "Storage, logistics, and the autonomous
+  dependency chain" section's own status below). A player without
+  Storage/Logistics built yet collects it directly via
+  `Player._collect_step`.
 - ✅ **Real consumers for beam/plank** — `BuildingPiece`'s new
   `timber_wall` (costs `beam`, load-bearing per pillar 1) and
   `timber_floor` (costs `plank`, non-structural), appended to `PIECE_IDS`.
@@ -654,18 +684,25 @@ dropped.
   pieces wither too, collapse safety/momentum damage, tool-tier gating on
   shaping, forest depletion ceiling via `land_health`, multiplayer
   authority).
-- 🚧 **Storage, logistics, and the dependency-chain priority function** (see
+- ✅ **Storage, logistics, and the dependency-chain priority function** (see
   that section's own "What's honestly still a stand-in here" for the full
   account): Storage (a real placeable structure with a real per-instance
   stock), the Logistics worker (a real, tested SEEKING→APPROACHING→
   COLLECTING→CARRYING→DEPOSITING state machine plus engine glue), and
   `ConstructionPriority.decide` (the dependency-chain priority function)
-  are all real and tested. None of it is fully live yet: the Sägewerk's
-  own real output still drops as ground items rather than crediting
-  `StructureStock` (a real, undecided integration question, not an
-  oversight), so no settlement yet auto-spawns a Logistics worker, and
-  `ConstructionPriority.decide` still checks `Smelting.can_smelt` rather
-  than the real, now-merged `NeedResolver`.
+  are all real and tested — and now live end to end: the Sägewerk's real
+  output credits `StructureStock` (migrated off the old `WorldItemBus`
+  ground-drop, with `Player._collect_step` as the direct-pickup fallback
+  for a player with no Storage/Logistics yet), a Sägewerk+Storage pair
+  auto-spawns exactly two Logistics workers
+  (`EarthChunkManager._resync_logistics_for_sagewerk`, mirroring the
+  Sägewerk/Lumberjack sync wiring), and `ConstructionPriority.decide` now
+  calls the real, general `NeedResolver` instead of `Smelting.can_smelt`.
+  Still not live: nothing calls `ConstructionPriority.decide` from a real
+  settlement-decision system yet — that still needs
+  `ConstructionProject`/`ConstructionProjectStore`, which remain ⬜ below.
+  One real, named constraint carried forward: a Sägewerk pairs with only
+  its single nearest Storage, not every Storage within range.
 
 Reusable primitives already in the codebase this system should build on,
 not reinvent:

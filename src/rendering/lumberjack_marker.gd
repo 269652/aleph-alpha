@@ -30,8 +30,7 @@ const LumberjackBehavior = preload("res://src/gameplay/lumberjack_behavior.gd")
 const SagewerkProduction = preload("res://src/world/sagewerk_production.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const FelledTree = preload("res://src/rendering/felled_tree.gd")
-const Item = preload("res://src/gameplay/item.gd")
-const ItemStack = preload("res://src/gameplay/item_stack.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 const GROUP_NAME := "lumberjack"
 
@@ -53,8 +52,16 @@ const WANDER_SPEED_FRACTION := 0.35
 const FELL_DAMAGE := 5.0
 
 ## Where this Lumberjack's Sägewerk stands -- both its wander anchor and
-## where it carries logs home to, and where finished beam/plank drop.
+## where it carries logs home to, and where finished beam/plank credit the
+## Sägewerk's own StructureStock (see _step_production).
 var home := Vector2.ZERO
+
+## Late-bound world reference, the same pattern LogisticsMarker already
+## uses for its own EarthChunkManager access -- set by EarthChunkManager
+## itself when it spawns this Lumberjack (see _spawn_lumberjack_for), so
+## shaped output can credit the Sägewerk's real StructureStock via
+## deposit_to_structure_at instead of the old WorldItemBus ground-drop.
+var earth = null
 
 var _behavior := LumberjackBehavior.new()
 var _target: Node2D = null
@@ -115,20 +122,37 @@ func _process(delta: float) -> void:
 
 ## The Sägewerk's own production, independent of what phase its Lumberjack
 ## is currently in -- a real mill keeps shaping stock it already has even
-## while its worker is out felling the next tree.
+## while its worker is out felling the next tree. Shaped output credits the
+## Sägewerk's own real StructureStock (see EarthChunkManager.
+## deposit_to_structure_at) at its own tile position -- NOT a WorldItemBus
+## ground-drop any more (docs/concept/timber_construction.md's own
+## "Storage, logistics, and the autonomous dependency chain" section, and
+## its "What's honestly still a stand-in here" gap note this closes): a
+## Logistics worker's own SEEKING step looks for StructureStock, not ground
+## items, and a player without one yet gets a direct collection action
+## instead (see Player._collect_step). No-op if `earth` was never set (a
+## marker not spawned through EarthChunkManager) -- production output is
+## simply not credited anywhere rather than crashing.
 func _step_production(delta: float) -> void:
 	var result: Dictionary = _production.advance(_production_state, delta, true)
 	_production_state = result
 	var beam_output: int = result.get("beam_output", 0)
 	var plank_output: int = result.get("plank_output", 0)
+	if earth == null:
+		return
+	var home_tile := _tile_for(home)
 	if beam_output > 0:
-		WorldItemBus.item_dropped.emit(
-			ItemStack.new(Item.new("beam", "Beam", "material", 20), beam_output), home
-		)
+		earth.deposit_to_structure_at(home_tile.x, home_tile.y, "beam", beam_output)
 	if plank_output > 0:
-		WorldItemBus.item_dropped.emit(
-			ItemStack.new(Item.new("plank", "Plank", "material", 20), plank_output), home + Vector2(8, 4)
-		)
+		earth.deposit_to_structure_at(home_tile.x, home_tile.y, "plank", plank_output)
+
+
+## Recovers the global tile coordinate a pixel position falls in -- mirrors
+## LogisticsMarker's own identical _tile_for helper.
+func _tile_for(pixel_position: Vector2) -> Vector2i:
+	return Vector2i(
+		floori(pixel_position.x / TerrainRenderer.TILE_SIZE), floori(pixel_position.y / TerrainRenderer.TILE_SIZE)
+	)
 
 
 func _step_seeking(delta: float) -> void:
