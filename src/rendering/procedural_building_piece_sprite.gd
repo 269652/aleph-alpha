@@ -29,6 +29,16 @@ const SIZE := TerrainRenderer.ART_TILE_SIZE
 const _WOOD_BASE := Color(0.52, 0.36, 0.18)
 const _STONE_BASE := Color(0.55, 0.55, 0.58)
 
+## The timber tier (see docs/concept/timber_construction.md) is SAWN
+## structural lumber -- Balken and Planken cut at a Sägewerk -- rather than
+## the rough round wood the base tier uses, so it reads paler and less
+## saturated: a fresh-cut face is closer to the pale inner wood than to
+## weathered bark. Without its own base colour, timber_wall/timber_floor
+## fell through to _WOOD_BASE and rendered pixel-identical to their wood
+## equivalents (pinned by test_every_piece_is_visually_distinct_from_every_other,
+## which was failing on exactly that).
+const _TIMBER_BASE := Color(0.72, 0.57, 0.34)
+
 ## Door leaf and window pane read the same across both materials -- a door
 ## is a door regardless of what the wall around it is made of.
 const _DOOR_COLOR := Color(0.36, 0.22, 0.08)
@@ -52,7 +62,10 @@ func generate_image(piece_id: String) -> Image:
 	var category := BuildingPiece.category_of(piece_id)
 	var material := BuildingPiece.material_of(piece_id)
 	var is_stone := material == BuildingPiece.MATERIAL_STONE
-	var base := _STONE_BASE if is_stone else _WOOD_BASE
+	# is_stone still selects the PATTERN (brick/flagstone vs plank/log);
+	# timber shares wood's pattern -- both are boards and beams -- and is
+	# told apart by its own paler base colour instead.
+	var base := _base_color_for(material, is_stone)
 
 	match category:
 		BuildingPiece.CATEGORY_WALL:
@@ -65,6 +78,17 @@ func generate_image(piece_id: String) -> Image:
 			return _roof_image(is_stone)
 		_:
 			return _floor_image(base, is_stone)
+
+
+## The base colour a material's pieces are drawn in. Unknown materials fall
+## back to wood, matching this file's existing `.get(x, default)`-style
+## fail-safe convention rather than crashing on an id it has no art for.
+static func _base_color_for(material: String, is_stone: bool) -> Color:
+	if is_stone:
+		return _STONE_BASE
+	if material == BuildingPiece.MATERIAL_TIMBER:
+		return _TIMBER_BASE
+	return _WOOD_BASE
 
 
 ## Plank rows (wood) or flagstone blocks (stone), horizontal seams so it

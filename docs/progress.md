@@ -3667,7 +3667,18 @@ free — see the "Retiring `VillageRenderer._stamp_house`'s instant free
 stamp" bullet below for the real mechanism (a computed completion fraction,
 deliberately NOT the `ConstructionProject` ledger). It still does not build
 a house up piece by piece by a real live Builder — that remains open, see
-that same bullet's own honest account.
+that same bullet's own honest account. **Timber pieces now have their own
+art** (2026-08-25): the Sägewerk slice added the `timber` material and the
+`timber_wall`/`timber_floor` ids, but `ProceduralBuildingPieceSprite` had
+no base colour for it, so both fell through to `_WOOD_BASE` and rendered
+pixel-identical to their wood equivalents — leaving that file's own
+`test_every_piece_is_visually_distinct_from_every_other` red on main.
+`_TIMBER_BASE` (paler and less saturated: timber is SAWN lumber, closer to
+a fresh-cut inner face than to weathered round wood) fixes it, via a
+`_base_color_for` lookup rather than the previous stone/not-stone boolean.
+Timber keeps wood's plank/log PATTERN deliberately — both are boards and
+beams — so a dedicated sawn-beam pattern remains available as a later
+refinement rather than something this pass guessed at.
 
 - **Deciding what to build, and who builds it** (medium) — ⬜ Design only,
   not implemented (2026-08-25, a follow-up brainstorm session — see
