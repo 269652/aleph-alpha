@@ -1697,6 +1697,133 @@ func test_destroying_a_wall_removes_its_collision_body_via_collapse_too():
 	assert_false(after, "a collapsed wall must not leave a stale collision body behind")
 
 
+# -- withering: decay as a bounded, closed-form catch-up (see
+# docs/concept/timber_construction.md#withering-decay-as-a-bounded-closed-
+# form-catch-up, src/gameplay/building_decay.gd) -- wired at the SAME
+# unload/reload catch-up boundary the ecology precedent (_apply_ecology_
+# catchup/_unloaded_ecology) already uses, and feeding the EXACT SAME
+# _collapse_piece/_sync_statics path a severed support does once condition
+# crosses BuildingDecay.RUINED_CONDITION_THRESHOLD -- decay and a severed
+# support are two INPUTS into one collapse mechanism, not two parallel ones.
+
+## Moves the player far enough away that the chunk holding _statics_test_
+## origin()'s own structures genuinely unloads (see _unload_chunk), lets
+## `elapsed_seconds` of real world-age pass while it sits unloaded, then
+## moves back so it reloads and _apply_piece_condition_catchup actually
+## runs -- the real streaming path, not a stubbed shortcut.
+func _unload_wait_and_reload(elapsed_seconds: float) -> void:
+	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+	if elapsed_seconds > 0.0:
+		manager.advance_world_age(elapsed_seconds)
+	manager.update(_berlin_tile)
+
+
+func test_a_freshly_placed_piece_starts_at_full_condition():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+	assert_almost_eq(manager.piece_condition_at_global(origin.x, origin.y), 1.0, 0.0001)
+
+
+## A piece never touched by anything, on a chunk that was never unloaded,
+## must not silently decay either -- the mechanism only runs at the real
+## unload/reload catch-up boundary (see the doc's own two-fidelity framing);
+## there is no separate per-frame decay for a chunk that stays loaded.
+func test_a_piece_on_a_chunk_that_never_unloads_does_not_decay():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+	manager.advance_world_age(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 5.0)
+	assert_almost_eq(manager.piece_condition_at_global(origin.x, origin.y), 1.0, 0.0001)
+
+
+func test_a_piece_condition_is_measurably_lower_after_a_real_simulated_absence():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 0.1)
+
+	var condition := manager.piece_condition_at_global(origin.x, origin.y)
+	assert_lt(condition, 1.0, "an exposed piece should have measurably decayed over a real unloaded absence")
+	assert_gt(condition, 0.0, "0.1 ecological day should not be anywhere near enough to ruin plain wood")
+
+
+## A wall that bounds a real enclosed, floored room (see EarthChunkManager.
+## _is_piece_roofed's own doc comment for why walls need an adjacency check
+## rather than a literal RoomDetector.is_indoors on their own cell) should
+## retain more condition than a free-standing, fully exposed wall of the
+## SAME material over the SAME elapsed absence.
+func test_a_sheltered_piece_decays_slower_than_an_exposed_one_over_the_same_absence():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var sheltered_origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(4, 4)
+	var exposed_origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(20, 20)
+
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
+			if dx == 0 and dy == 0:
+				continue
+			manager.build_at_global(sheltered_origin.x + dx, sheltered_origin.y + dy, "wood_wall")
+	manager.build_at_global(sheltered_origin.x, sheltered_origin.y, "wood_floor")
+	# The wall directly north of the floor -- an EDGE wall, orthogonally
+	# adjacent to the one-cell interior room, unlike a corner wall (which is
+	# only diagonally adjacent and would never actually register as roofed).
+	var tracked_sheltered_wall := sheltered_origin + Vector2i(0, -1)
+
+	manager.build_at_global(exposed_origin.x, exposed_origin.y, "wood_wall")
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 0.1)
+
+	var sheltered_condition := manager.piece_condition_at_global(tracked_sheltered_wall.x, tracked_sheltered_wall.y)
+	var exposed_condition := manager.piece_condition_at_global(exposed_origin.x, exposed_origin.y)
+	assert_gt(
+		sheltered_condition, exposed_condition,
+		"a wall bounding a real roofed room should retain more condition than a free-standing exposed one"
+	)
+
+
+## The full flow: a piece decayed past BuildingDecay.RUINED_CONDITION_
+## THRESHOLD during a real unloaded absence collapses via the EXACT SAME
+## path a severed support does -- removed from modifications and dropping
+## its own constituent material back to the ground (mirrors
+## test_a_severed_support_collapses_past_the_grace_period_and_drops_its_
+## material above, the model for constructing this scenario).
+func test_a_fully_decayed_piece_collapses_via_the_same_collapse_path_and_drops_its_material():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+	watch_signals(WorldItemBus)
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 2.0)
+
+	assert_eq(
+		manager.modification_at_global(origin.x, origin.y), "",
+		"a piece decayed past the ruined threshold should have actually collapsed and been removed"
+	)
+	var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
+	assert_gt(drops, 0, "a real decay collapse should drop real material, same as a severed-support collapse")
+	var found_wood_drop := false
+	for i in range(drops):
+		var params = get_signal_parameters(WorldItemBus, "item_dropped", i)
+		var stack: ItemStack = params[0]
+		if stack.item.id == "wood" and stack.count == 2:
+			found_wood_drop = true
+	assert_true(found_wood_drop, "the decayed wall should drop exactly its own cost_of (2 wood)")
+
+
+func test_a_collapsed_decayed_piece_condition_is_no_longer_tracked():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 2.0)
+
+	# The piece is gone entirely -- piece_condition_at_global's own "1.0 for
+	# a non-piece cell" default, not a lingering near-zero value.
+	assert_almost_eq(manager.piece_condition_at_global(origin.x, origin.y), 1.0, 0.0001)
+
+
 # -- bulk structure stamping (see VillageRenderer, HouseBlueprint) ------------
 #
 # Stamping a whole house one build_at_global call per cell would repaint its

@@ -3424,14 +3424,24 @@ EVERY real Storage in range rather than just the single nearest one
 follow-up pass, run in parallel): real statics — a support graph over the
 piece grid, with real grace-period collapse and material drop-back,
 event-driven off `build_at_global`/`destroy_at_global`/
-`stamp_structure_at_global` — and the multi-Storage pairing fix above. See
-the concept doc's own Status section for the full accounting, including
-statics' own named limitation (no independent per-frame poll yet advancing
-an idle at-risk structure's grace clock — it only re-checks when a further
-edit touches that structure) and what's still not wired (no
-settlement-decision system yet calls `ConstructionPriority.decide`).
-Withering, the settlement construction ledger, and offscreen catch-up
-remain entirely unbuilt.
+`stamp_structure_at_global` — and the multi-Storage pairing fix above. A
+fifth slice, withering, landed 2026-08-25 (a further follow-up pass): a
+real closed-form decay catch-up (`BuildingDecay`, mirroring
+`chunk_ecology_catchup.gd`'s exact shape) wired at the real chunk
+unload/reload boundary, feeding condition crossing a ruined threshold into
+the EXACT SAME `_collapse_piece`/`_sync_statics` collapse path statics
+already built — decay and a severed support are two inputs into one
+collapse mechanism now, not two parallel ones. See the concept doc's own
+Status section for the full accounting, including statics' own named
+limitation (no independent per-frame poll yet advancing an idle at-risk
+structure's grace clock — it only re-checks when a further edit touches
+that structure), withering's own named limitations (piece condition isn't
+persisted to disk, in-session only; only wall/floor/door/window pieces
+decay, not roofs; the "owned property" exposure branch has no real caller
+granting ownership yet, so it always resolves unowned in real play today),
+and what's still not wired (no settlement-decision system yet calls
+`ConstructionPriority.decide`). The settlement construction ledger and
+offscreen construction catch-up remain entirely unbuilt.
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
@@ -3507,7 +3517,54 @@ remain entirely unbuilt.
   (`Chunk.roof_modifications`, a separate dict from `modifications`) are
   not yet read into the statics grid, so roofs aren't statics-checked yet.
   See the concept doc's own Status section for the full account.
-- **Withering / decay of built pieces** (medium) — ⬜ Not started.
+- **Withering / decay of built pieces** (medium) — ✅ Done (2026-08-25
+  follow-up pass). `Chunk.piece_condition`/`piece_condition_checked_at`
+  (local cell -> float/world-age, the same value+checked-at pairing
+  `structural_instability`/`structural_checked_at` already use).
+  `BuildingDecay` (`src/gameplay/building_decay.gd`,
+  `tests/unit/test_building_decay.gd`, 21 tests) is the new pure module:
+  the EXACT `chunk_ecology_catchup.gd` closed-form shape, decaying toward
+  zero instead of growing toward one (`new_condition := condition *
+  exp(-decay_rate * exposure_multiplier * elapsed_days)`) — bounded and
+  overshoot-safe for any elapsed jump since `exp(-x) in (0, 1]` for
+  `x >= 0`, no clamping needed. `MaterialProperties.MATERIALS` gains a real
+  `"timber"` entry (previously absent — silently fell back to
+  `DEFAULT_PROPERTIES`' stone-like `decay_rate=1.0`, a real bug this
+  closes): same as `"wood"` except `decay_rate=4.0` (two-thirds of wood's
+  6.0, test-pinned), grounded in seasoned timber resisting rot better than
+  raw green wood but staying nowhere near stone's near-permanence.
+  Exposure is real: `BuildingDecay.exposure_for` returns a damped 0.2x
+  multiplier (test-pinned) if the piece is roofed (`RoomDetector.
+  find_rooms`) OR its property is owned (`HouseholdStore.owner_of`), else
+  the material's undamped 1.0x rate. `RUINED_CONDITION_THRESHOLD` (0.05,
+  test-pinned) is the real collapse trigger standing in for unreachable
+  literal zero. Wired at the same unload/reload catch-up boundary the
+  ecology precedent uses (`EarthChunkManager._unloaded_piece_condition`/
+  `_apply_piece_condition_catchup`, called from `_load_chunk` exactly like
+  `_apply_ecology_catchup`), capped at the same `MAX_CATCHUP_DAYS` (120). A
+  piece whose caught-up condition crosses the ruined threshold feeds the
+  EXACT SAME `_collapse_piece`/`_sync_statics` path a severed support does
+  — decay and a severed support are two inputs into one collapse
+  mechanism, not two parallel ones. Tested end to end in
+  `test_earth_chunk_manager.gd`'s new withering section against the real
+  chunk streaming path (unload, `advance_world_age`, reload): a fresh piece
+  starts at 1.0, a piece on a chunk that never unloads does not decay, a
+  real simulated absence measurably lowers condition, a roofed wall retains
+  more condition than a free-standing exposed one, a fully decayed piece
+  collapses via the real path and drops its own `cost_of` material, and a
+  collapsed piece's condition is no longer tracked. **Named limitations**:
+  `piece_condition`/`checked_at` are NOT persisted to disk — the same class
+  of gap `structural_instability` already has (`_unloaded_piece_condition`
+  is an in-session-only record, mirroring `_unloaded_ecology`, so a real
+  app restart loses accumulated condition); decay only advances at the
+  unload/reload catch-up boundary, not via a live per-frame tick for a
+  chunk that stays loaded; only `chunk.modifications` (wall/floor/door/
+  window) pieces decay, not `roof_modifications` — mirroring statics' own
+  identical roof gap; and the "owned property" exposure branch is wired to
+  the real `HouseholdStore.owner_of` but no real caller grants ownership
+  under its per-cell key yet, so it always resolves unowned in real play
+  today — only the roofed branch is actually live. See the concept doc's
+  own Status section for the full account.
 - **NPC construction beyond gathering (`CARRY_MATERIAL`/`PLACE_PIECE`,
   an NPC actually placing house pieces)** (large) — ⬜ Not started; the
   Lumberjack's own loop stops at DEPOSIT.

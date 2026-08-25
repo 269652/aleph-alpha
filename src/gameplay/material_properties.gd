@@ -37,6 +37,38 @@ const MATERIALS: Dictionary = {
 		"conductivity": 1.0,
 		"decay_rate": 6.0,
 	},
+	# Worked/seasoned structural timber (see BuildingPiece.MATERIAL_TIMBER,
+	# docs/concept/timber_construction.md). Shares every property with plain
+	# "wood" -- it IS wood, just hewn/riven and seasoned at a Sägewerk, not a
+	# different substance -- except decay_rate: removing bark and sapwood
+	# (the layers with the highest moisture/nutrient content, where fungal
+	# decay establishes fastest) and seasoning down the remaining moisture
+	# content measurably slows rot relative to a raw, green, bark-on log in
+	# real vernacular construction, without approaching stone's near-
+	# permanence -- a decayed or waterlogged Balken is still exactly as
+	# flammable/soft/rot-prone as any other wood once decay conditions are
+	# actually met. 4.0 is two-thirds of wood's own 6.0 -- a real, moderate
+	# reduction (timber survives roughly 50% longer than green wood under
+	# the same exposure before reaching the same condition), not stone's
+	# near-immunity (1.0). Before this entry existed, BuildingDecay's
+	# material lookup would have silently fallen back to
+	# DEFAULT_PROPERTIES' decay_rate=1.0 (stone-like) for every timber
+	# piece in the game -- an unnoticed but real bug this entry closes.
+	# Pinned by test_timber_decay_rate_is_pinned/
+	# test_timber_decays_slower_than_raw_wood_but_faster_than_stone
+	# (test_material_properties.gd) and
+	# test_timber_decays_slower_than_raw_wood_for_the_same_elapsed_time
+	# (test_building_decay.gd).
+	"timber": {
+		"density": 0.6,
+		"hardness": 3.0,
+		"toughness": 6.0,
+		"elasticity": 5.0,
+		"sharpness_capacity": 3.0,
+		"flammability": 8.0,
+		"conductivity": 1.0,
+		"decay_rate": 4.0,
+	},
 	"flesh": {
 		"density": 1.05,
 		"hardness": 1.0,

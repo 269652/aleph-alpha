@@ -46,3 +46,20 @@ var planted_trees: Array = []
 ## doc's "Offscreen catch-up" status note).
 var structural_instability: Dictionary = {}
 var structural_checked_at: Dictionary = {}
+
+## Withering (see BuildingDecay / docs/concept/timber_construction.md
+## #withering-decay-as-a-bounded-closed-form-catch-up): each placed piece's
+## own `condition` (1.0 = new, decaying toward 0.0), keyed like
+## `modifications`, and the world-age each was last advanced -- the same
+## "value + last-checked-at" pairing structural_instability/
+## structural_checked_at already use above, for the same reason (the next
+## catch-up pass needs a real elapsed delta, not a fixed per-event tick).
+## Sparse like those two: a cell absent here simply hasn't decayed from 1.0
+## yet, not "unknown." Not persisted across an unload/reload -- an accepted
+## gap, the exact same class of limitation structural_instability's own doc
+## comment above already names (EarthChunkManager keeps an IN-SESSION
+## unloaded-condition record instead, the same way it does for aggregate
+## ecology, so a chunk unloaded and reloaded within one session still
+## catches up correctly; only a real app restart loses it).
+var piece_condition: Dictionary = {}
+var piece_condition_checked_at: Dictionary = {}
