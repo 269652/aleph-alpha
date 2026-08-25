@@ -3437,20 +3437,30 @@ exact shape) wired at the real chunk unload/reload boundary, feeding
 condition crossing a ruined threshold into the EXACT SAME
 `_collapse_piece`/`_sync_statics` collapse path statics already built —
 decay and a severed support are two inputs into one collapse mechanism now,
-not two parallel ones. See the concept doc's own Status section for the
-full accounting, including statics' own named limitation (no independent
+not two parallel ones. A seventh slice landed 2026-08-25 (a fourth follow-up pass): offscreen
+construction labor catch-up — `construction_catchup.gd`
+(`src/world/`, mirroring `chunk_ecology_catchup.gd`'s exact
+`advance(state, elapsed_seconds, capacity) -> Dictionary` contract) plus
+`ConstructionLabor.labor_hours_required` (`src/emergence/
+construction_labor.gd`, deriving a real labor-hours requirement from a
+project's own recipe, since there is no `HouseBlueprint.total_labor_hours`)
+and the real caller, `ConstructionProjectStore.advance_project_labor`,
+which now actually carries an `IN_PROGRESS` `ConstructionProject` to
+`COMPLETE` over elapsed time and calls the already-correct
+`complete_project`. See the concept doc's own Status section for the full
+accounting, including statics' own named limitation (no independent
 per-frame poll yet advancing an idle at-risk structure's grace clock — it
 only re-checks when a further edit touches that structure), the ledger's
-own named limitations (no offscreen labor-hour accrual yet advancing a
-project to COMPLETE, no persistence wrapper, queued-producer siting is
-bookkeeping only, not real placement), and withering's own named
-limitations (piece condition isn't persisted to disk, in-session only;
-only wall/floor/door/window pieces decay, not roofs; the "owned property"
+own named limitations (no persistence wrapper, queued-producer siting is
+bookkeeping only, not real placement), withering's own named limitations
+(piece condition isn't persisted to disk, in-session only; only
+wall/floor/door/window pieces decay, not roofs; the "owned property"
 exposure branch has no real caller granting ownership yet, so it always
-resolves unowned in real play today). Offscreen construction catch-up
-remains entirely unbuilt; `VillageRenderer._stamp_house` is still not
-migrated to seed a `ConstructionProject` (deliberately out of scope this
-pass too).
+resolves unowned in real play today), and the new offscreen catch-up's own
+named limitation (real and tested in isolation, but no live
+`EarthChunkManager` chunk-load call site invokes it yet from real
+gameplay). `VillageRenderer._stamp_house` is still not migrated to seed a
+`ConstructionProject` (deliberately out of scope this pass too).
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
@@ -3578,9 +3588,56 @@ pass too).
   an NPC actually placing house pieces)** (large) — ⬜ Not started; the
   Lumberjack's own loop stops at DEPOSIT.
 - **Offscreen construction catch-up (`construction_catchup.gd`)** (large) —
-  ⬜ Not started. A Lumberjack's own in-progress state (log stock, shaping
-  progress) is also not persisted across a chunk unload/reload — a known
-  gap, same class of limitation as geology's mined-tunnel state.
+  ✅ Done (2026-08-25, a fourth follow-up pass). `construction_catchup.gd`
+  (`src/world/`) mirrors `chunk_ecology_catchup.gd`'s EXACT contract
+  (`advance(state, elapsed_seconds, capacity) -> Dictionary`, pure, no
+  mutation): `state` carries `labor_hours_accumulated`/
+  `labor_hours_required`, `capacity` carries `builder_count`.
+  `labor_hours_accumulated` advances LINEARLY with elapsed time (a
+  straightforward hours-worked accumulator, not a logistic growth curve)
+  scaled by `builder_count` and a new, test-pinned
+  `HOURS_PER_BUILDER_PER_DAY` (8.0, the conventional workday), reusing
+  `chunk_ecology_catchup.gd`'s own `SECONDS_PER_DAY` exchange rate
+  directly, capped at `labor_hours_required` so a project can never
+  overshoot done, and bounded in one call by a new `MAX_CATCHUP_DAYS`
+  (120.0, reusing `EarthChunkManager.MAX_CATCHUP_DAYS`'s own exact value
+  and justification) so a huge elapsed-time jump stays safe/deterministic.
+  The real labor-hours REQUIREMENT (previously nonexistent — no
+  `HouseBlueprint.total_labor_hours` field, since `blueprint_id` is a
+  `CraftingRecipeBook` recipe id) is `ConstructionLabor.
+  labor_hours_required` (`src/emergence/construction_labor.gd`): sums a
+  recipe's own real input material counts and scales by a new, test-pinned
+  `HOURS_PER_UNIT_MATERIAL` (1.5), grounded in "more material to assemble
+  genuinely takes more labor," the same proportional reasoning
+  `SagewerkProduction`'s own `LOG_COST_PER_BEAM`/`SHAPE_SECONDS_PER_BEAM`
+  asymmetry already uses. The real caller,
+  `ConstructionProjectStore.advance_project_labor(project_id,
+  elapsed_seconds, capacity, recipe_book, household_store)`, no-ops for an
+  unknown project or any project not `IN_PROGRESS`
+  (`PLANNED`/`COMPLETE`/`ABANDONED`), and for a real `IN_PROGRESS` project
+  derives its requirement, calls `construction_catchup.advance`, writes the
+  result back, and — once accumulated reaches required — calls the
+  ALREADY-CORRECT `complete_project` rather than reimplementing it. Tested:
+  `test_construction_labor.gd` (6 tests), `test_construction_catchup.gd`
+  (12 tests: purity/determinism, proportional-to-time and
+  proportional-to-builder-count scaling, zero builders makes zero
+  progress, the pinned per-builder-per-day rate, never exceeding the
+  requirement, a huge elapsed-time jump staying bounded/finite in one
+  call), and `test_construction_project_store.gd`'s new "offscreen labor
+  catch-up" section (7 tests: an `IN_PROGRESS` project with enough time and
+  builders actually reaches `COMPLETE` and the household actually receives
+  the property, accumulated caps exactly at the real requirement,
+  partial elapsed time accumulates real partial progress without
+  completing, `PLANNED`/`COMPLETE`/`ABANDONED`/unknown projects are all
+  no-ops). **Named limitation**: there is still no live
+  `EarthChunkManager` chunk-load call site invoking
+  `advance_project_labor` from real gameplay — mechanism and caller are
+  real and tested in isolation, matching this whole arc's own established
+  "mechanism real and tested, first live gameplay caller still pending"
+  pattern. A Lumberjack's own in-progress state (log stock, shaping
+  progress) is also still not persisted across a chunk unload/reload — a
+  separate, still-real gap, same class of limitation as geology's
+  mined-tunnel state.
 - **`ConstructionProject`/`ConstructionProjectStore` + live
   `ConstructionPriority.decide` caller (the settlement construction
   ledger)** (medium) — ✅ Done (2026-08-25, a further follow-up pass).
@@ -3607,9 +3664,10 @@ pass too).
   PLANNED (materials not yet committed) project via
   `ConstructionStartHysteresis.should_abandon`.
   `ConstructionProjectStore.complete_project` calls the already-correct
-  `HouseholdStore.grant_property` unchanged. **Named limitations**: no
-  offscreen labor-hour accrual (`construction_catchup.gd`, still ⬜
-  below) advances an IN_PROGRESS project toward COMPLETE on its own; no
+  `HouseholdStore.grant_property` unchanged. Offscreen labor-hour accrual
+  advancing an `IN_PROGRESS` project toward `COMPLETE` is now real too —
+  see the "Offscreen construction catch-up" bullet below (closed
+  2026-08-25, a fourth follow-up pass). **Named limitations**: no
   persistence wrapper/`EarthChunkManager` save-load wiring yet
   (`to_dicts`/`from_dicts` are real and tested in isolation only); a
   queued producer project's footprint origin is bookkeeping, not real

@@ -7,13 +7,18 @@ extends GutTest
 
 const ConstructionProjectStore = preload("res://src/emergence/construction_project_store.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
+const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
 const HouseholdStore = preload("res://src/emergence/household_store.gd")
+const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
+const ChunkEcologyCatchup = preload("res://src/world/chunk_ecology_catchup.gd")
 
 var store: ConstructionProjectStore
+var recipe_book: CraftingRecipeBook
 
 
 func before_each():
 	store = ConstructionProjectStore.new()
+	recipe_book = CraftingRecipeBook.new()
 
 
 # -- starting projects --------------------------------------------------------
@@ -123,3 +128,106 @@ func test_find_project_still_works_after_a_round_trip():
 	store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", "household:1")
 	var restored := ConstructionProjectStore.from_dicts(store.to_dicts())
 	assert_not_null(restored.find_project(Vector2i(3, -2), Vector2i(1, 1), "storage"))
+
+
+# -- offscreen labor catch-up (construction_catchup.gd's real caller) --------
+#
+# advance_project_labor is docs/concept/timber_construction.md's "Unloaded /
+# offscreen fidelity" subsection's real caller: it derives a project's real
+# labor_hours_required from its own recipe (ConstructionLabor), calls
+# construction_catchup.advance with its current labor_hours_accumulated, and
+# -- once accumulated reaches required -- calls the ALREADY-CORRECT
+# complete_project (see the "completion + ownership" section above) rather
+# than reimplementing it.
+
+func test_advancing_labor_on_an_in_progress_project_with_enough_time_and_builders_completes_it_and_grants_the_property():
+	var households := HouseholdStore.new()
+	var household := households.form_household("npc:1")
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", household.id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	# storage's real labor requirement is comfortably cleared by 30 days of
+	# 4 builders' worth of hours.
+	var elapsed := ChunkEcologyCatchup.SECONDS_PER_DAY * 30.0
+	var result := store.advance_project_labor(project.id, elapsed, {"builder_count": 4.0}, recipe_book, households)
+
+	assert_eq(result["action"], "completed")
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	assert_eq(households.owner_of(project.property_id()), household.id)
+	assert_eq(households.household_for("npc:1").property, [project.property_id()])
+
+
+func test_advancing_labor_caps_accumulated_at_the_real_requirement_on_completion():
+	var households := HouseholdStore.new()
+	var household := households.form_household("npc:1")
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", household.id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	var elapsed := ChunkEcologyCatchup.SECONDS_PER_DAY * 365.0
+	store.advance_project_labor(project.id, elapsed, {"builder_count": 4.0}, recipe_book, households)
+
+	assert_almost_eq(
+		project.labor_hours_accumulated, ConstructionLabor.labor_hours_required("storage", recipe_book), 0.001
+	)
+
+
+func test_advancing_labor_with_only_partial_time_accumulates_real_partial_progress_without_completing():
+	var households := HouseholdStore.new()
+	var household := households.form_household("npc:1")
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", household.id)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	# One builder, one day only accumulates a small fraction of storage's
+	# real requirement -- real partial progress, not completion.
+	var elapsed := ChunkEcologyCatchup.SECONDS_PER_DAY * 1.0
+	var result := store.advance_project_labor(project.id, elapsed, {"builder_count": 1.0}, recipe_book, households)
+
+	assert_eq(result["action"], "advanced")
+	assert_eq(project.status, ConstructionProject.Status.IN_PROGRESS)
+	assert_gt(project.labor_hours_accumulated, 0.0)
+	assert_lt(project.labor_hours_accumulated, ConstructionLabor.labor_hours_required("storage", recipe_book))
+	assert_eq(households.owner_of(project.property_id()), "")
+
+
+func test_advancing_labor_on_a_planned_project_is_a_no_op():
+	var households := HouseholdStore.new()
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", "household:1")
+	# Still PLANNED -- material not reserved yet, so nothing is really
+	# being built.
+	var result := store.advance_project_labor(project.id, 1.0e6, {"builder_count": 4.0}, recipe_book, households)
+
+	assert_eq(result["action"], "no_op")
+	assert_eq(project.status, ConstructionProject.Status.PLANNED)
+	assert_almost_eq(project.labor_hours_accumulated, 0.0, 0.0001)
+
+
+func test_advancing_labor_on_a_complete_project_is_a_no_op():
+	var households := HouseholdStore.new()
+	var household := households.form_household("npc:1")
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", household.id)
+	store.complete_project(project.id, households)
+
+	var result := store.advance_project_labor(project.id, 1.0e6, {"builder_count": 4.0}, recipe_book, households)
+
+	assert_eq(result["action"], "no_op")
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+
+
+func test_advancing_labor_on_an_abandoned_project_is_a_no_op():
+	var households := HouseholdStore.new()
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", "household:1")
+	project.status = ConstructionProject.Status.ABANDONED
+
+	var result := store.advance_project_labor(project.id, 1.0e6, {"builder_count": 4.0}, recipe_book, households)
+
+	assert_eq(result["action"], "no_op")
+	assert_eq(project.status, ConstructionProject.Status.ABANDONED)
+	assert_almost_eq(project.labor_hours_accumulated, 0.0, 0.0001)
+
+
+func test_advancing_labor_for_an_unknown_project_id_is_a_no_op():
+	var households := HouseholdStore.new()
+	var result := store.advance_project_labor(
+		"construction_project:unknown", 1.0e6, {"builder_count": 4.0}, recipe_book, households
+	)
+	assert_eq(result["action"], "no_op")

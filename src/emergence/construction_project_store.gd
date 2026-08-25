@@ -11,6 +11,8 @@ extends RefCounted
 ## never a duplicate.
 
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
+const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
+const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 
 var _projects: Dictionary = {}   # id -> ConstructionProject
 
@@ -55,6 +57,45 @@ func complete_project(project_id: String, household_store) -> bool:
 	project.status = ConstructionProject.Status.COMPLETE
 	household_store.grant_property(project.household_id, project.property_id())
 	return true
+
+
+## The real caller for docs/concept/timber_construction.md's "Unloaded /
+## offscreen fidelity" subsection: advances one project's real labor-hours
+## by `elapsed_seconds` of `capacity` (builder_count) via
+## construction_catchup.advance, and -- once the returned accumulated hours
+## reach the project's own real labor_hours_required (derived from its
+## recipe via ConstructionLabor, since there is no HouseBlueprint.
+## total_labor_hours field) -- completes it through the ALREADY-CORRECT
+## complete_project above rather than reimplementing what it already does
+## (marking COMPLETE and granting household_store the property).
+##
+## No-ops (returns {"action": "no_op"}, no mutation) for an unknown
+## project_id or any project not currently IN_PROGRESS -- PLANNED/COMPLETE/
+## ABANDONED all mean either nothing has actually started being built yet or
+## there is nothing left to advance; only a project with material already
+## reserved (IN_PROGRESS) is actually being built. `recipe_book`: a
+## CraftingRecipeBook (for ConstructionLabor's own real requirement lookup).
+## `household_store`: passed straight through to complete_project on
+## completion.
+func advance_project_labor(
+	project_id: String, elapsed_seconds: float, capacity: Dictionary, recipe_book, household_store
+) -> Dictionary:
+	var project: ConstructionProject = _projects.get(project_id)
+	if project == null or project.status != ConstructionProject.Status.IN_PROGRESS:
+		return {"action": "no_op"}
+
+	var required := ConstructionLabor.labor_hours_required(project.blueprint_id, recipe_book)
+	var caught_up := ConstructionCatchup.new().advance(
+		{"labor_hours_accumulated": project.labor_hours_accumulated, "labor_hours_required": required},
+		elapsed_seconds,
+		capacity
+	)
+	project.labor_hours_accumulated = caught_up["labor_hours_accumulated"]
+
+	if project.labor_hours_accumulated >= required and required > 0.0:
+		complete_project(project_id, household_store)
+		return {"action": "completed", "project_id": project_id}
+	return {"action": "advanced", "project_id": project_id}
 
 
 ## For a future ConstructionProjectStorePersistence -- pure serialization,
