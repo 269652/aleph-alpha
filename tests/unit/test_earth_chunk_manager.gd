@@ -1252,6 +1252,87 @@ func test_has_structure_near_detects_a_structure_across_a_chunk_boundary():
 	assert_true(manager.has_structure_near(boundary_x, 0, "campfire", 3))
 
 
+# -- nearest_structure_position (see docs/concept/timber_construction.md's --
+# -- "Storage, logistics, and the autonomous dependency chain" section: a ----
+# -- Logistics worker needs WHERE the nearest structure is, not just whether -
+# -- one exists) -------------------------------------------------------------
+
+func test_nearest_structure_position_finds_a_structure_within_range():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found = manager.nearest_structure_position(origin_pixel, "storage", 200.0)
+
+	assert_not_null(found)
+
+
+func test_nearest_structure_position_returns_null_when_out_of_range():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 50, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	assert_null(manager.nearest_structure_position(origin_pixel, "storage", 20.0))
+
+
+func test_nearest_structure_position_returns_null_when_nothing_built():
+	manager.update(_berlin_tile)
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	assert_null(manager.nearest_structure_position(origin_pixel, "storage", 2000.0))
+
+
+func test_nearest_structure_position_ignores_a_different_structure_id():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "furnace")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	assert_null(manager.nearest_structure_position(origin_pixel, "storage", 200.0))
+
+
+func test_nearest_structure_position_picks_the_closer_of_two_candidates():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 10, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var expected_near := Vector2(_berlin_tile.x + 1, _berlin_tile.y) * TerrainRenderer.TILE_SIZE + Vector2.ONE * (
+		TerrainRenderer.TILE_SIZE * 0.5
+	)
+	var found: Vector2 = manager.nearest_structure_position(origin_pixel, "storage", 2000.0)
+	assert_almost_eq(found.x, expected_near.x, 0.5)
+	assert_almost_eq(found.y, expected_near.y, 0.5)
+
+
+# -- structure stock (Storage's real inventory, and any future producer's ----
+# -- accumulated-output queue -- see StructureStock/StructureStockStore's ----
+# -- own doc comments) --------------------------------------------------------
+
+func test_structure_stock_starts_empty():
+	assert_eq(manager.structure_stock_at(10, 20, "plank"), 0)
+
+
+func test_deposit_to_structure_at_increases_its_stock():
+	manager.deposit_to_structure_at(10, 20, "plank", 5)
+	assert_eq(manager.structure_stock_at(10, 20, "plank"), 5)
+
+
+func test_deposit_to_structure_at_keys_by_position_not_shared_globally():
+	manager.deposit_to_structure_at(10, 20, "plank", 5)
+	assert_eq(manager.structure_stock_at(30, 40, "plank"), 0)
+
+
+func test_withdraw_from_structure_at_succeeds_and_deducts_when_enough_present():
+	manager.deposit_to_structure_at(10, 20, "plank", 5)
+	assert_true(manager.withdraw_from_structure_at(10, 20, "plank", 3))
+	assert_eq(manager.structure_stock_at(10, 20, "plank"), 2)
+
+
+func test_withdraw_from_structure_at_fails_when_short():
+	manager.deposit_to_structure_at(10, 20, "plank", 2)
+	assert_false(manager.withdraw_from_structure_at(10, 20, "plank", 3))
+	assert_eq(manager.structure_stock_at(10, 20, "plank"), 2)
+
+
 # -- persistence across unload/reload ------------------------------------------
 
 func test_a_built_modification_survives_unloading_and_reloading_its_chunk():

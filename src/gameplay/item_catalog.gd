@@ -135,6 +135,11 @@ const _ITEMS := {
 	# placeable worksite, same "kind" as campfire/furnace above, where a
 	# Lumberjack NPC shapes gathered logs into beam/plank over time.
 	"sagewerk": ["Sagewerk", "placeable", 5, 0.0],
+	# Storage (see docs/concept/timber_construction.md's "Storage, logistics,
+	# and the autonomous dependency chain" section): a placeable structure
+	# like campfire/furnace, not an inert material -- holds its own real
+	# item_id -> count stock (StructureStock) once built.
+	"storage": ["Storage", "placeable", 5, 0.0],
 	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
 	# docs/concept/player_citizenship.md): the pure-logic Compass/
 	# RoughCompass reading, ExploredTiles/MapProjection, Spyglass,

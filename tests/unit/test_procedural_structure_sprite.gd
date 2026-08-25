@@ -6,8 +6,9 @@ const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 ## The placeable structure ids TerrainRenderer needs distinct art for today
 ## (see item_catalog.gd's "placeable" kind items). "sagewerk" (Sägewerk,
 ## sawmill -- see docs/concept/timber_construction.md) is the log ->
-## beam/plank shaping worksite.
-const STRUCTURE_IDS := ["campfire", "furnace", "sagewerk"]
+## beam/plank shaping worksite; "storage" is that same doc's "Storage,
+## logistics, and the autonomous dependency chain" section's placeable.
+const STRUCTURE_IDS := ["campfire", "furnace", "sagewerk", "storage"]
 
 var generator: ProceduralStructureSprite
 
@@ -124,6 +125,7 @@ func test_structure_ids_constant_contains_campfire_and_furnace():
 	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("campfire"))
 	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("furnace"))
 	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("sagewerk"))
+	assert_true(ProceduralStructureSprite.STRUCTURE_IDS.has("storage"))
 
 
 ## Art-direction pass: the Sägewerk should read as a wood worksite (a
@@ -135,3 +137,21 @@ func test_sagewerk_is_visually_distinct_from_campfire_and_furnace():
 	var furnace: Image = generator.generate_image("furnace", 3)
 	assert_gt(_pixel_diff_count(sagewerk, campfire), TerrainRenderer.ART_TILE_SIZE)
 	assert_gt(_pixel_diff_count(sagewerk, furnace), TerrainRenderer.ART_TILE_SIZE)
+
+
+## Storage should read as a wooden shed/crate -- warm timber-brown, not
+## furnace's cool stone grey nor campfire's ember-dark ground.
+func test_storage_reads_as_a_distinct_wooden_structure():
+	var storage: Image = generator.generate_image("storage", 3)
+	var furnace: Image = generator.generate_image("furnace", 3)
+	var campfire: Image = generator.generate_image("campfire", 3)
+	assert_gt(
+		_pixel_diff_count(storage, furnace),
+		TerrainRenderer.ART_TILE_SIZE,
+		"storage and furnace should look clearly different"
+	)
+	assert_gt(
+		_pixel_diff_count(storage, campfire),
+		TerrainRenderer.ART_TILE_SIZE,
+		"storage and campfire should look clearly different"
+	)

@@ -2778,12 +2778,22 @@ to slope at all. Nothing implemented — all ⬜ Not started:
 
 ### Timber Construction (`concept/timber_construction.md`)
 
-New doc (2026-08-24). A scoped MVP slice is now real (2026-08-25): the
-Sägewerk worksite, its Lumberjack NPC, and real timber building pieces.
-Everything else the doc describes (statics, withering, the settlement
-construction ledger, offscreen catch-up, autonomous NPC house-building)
-remains unbuilt, exactly as specced — see the concept doc's own Status
-section for the full accounting.
+New doc (2026-08-24). Specifies a Balken/Planke material pipeline on top of
+the existing `FelledTree`/`ChoppableTree` felling mechanic, a real
+support-graph statics model, a closed-form withering/decay model mirroring
+`chunk_ecology_catchup.gd`'s own shape, an autonomous NPC builder AI run at
+two fidelities (individual agent on-screen, deterministic catch-up
+integration off-screen), and a Storage/logistics/dependency-chain-priority
+layer on top of it. Two real slices are now built (2026-08-25): the
+Sägewerk worksite/Lumberjack NPC/timber building pieces, and (on top of
+that, and of `production_chains.md`'s general `NeedResolver`) a real,
+generic Storage/Logistics/`ConstructionPriority` layer — see the concept
+doc's own Status section for the full accounting, including what's real
+but not yet live (the Sägewerk's own output doesn't credit `StructureStock`
+yet, so no settlement auto-spawns a Logistics worker, and
+`ConstructionPriority` doesn't call `NeedResolver` yet). Statics,
+withering, the settlement construction ledger, and offscreen catch-up
+remain entirely unbuilt.
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
@@ -2831,6 +2841,41 @@ section for the full accounting.
   of a seeded `ConstructionProject` at settlement founding (medium) —
   ⬜ Not started; see this doc's own Status section for why the current
   behavior is a known anti-pattern, not a baseline to preserve.
+- **Storage (placeable structure + real per-instance stock)** (small) —
+  ✅ Done — `storage` is a real placeable (`ItemCatalog`, a
+  `CraftingRecipeBook` recipe: 12 wood + 4 plank, no skill gate, real
+  procedural art in `ProceduralStructureSprite`), with its own real
+  `item_id -> int` stock (`StructureStock`/`StructureStockStore`, the same
+  shape `Market` proves at settlement scale, reused at building scale),
+  keyed by tile position via new `EarthChunkManager.structure_stock_at`/
+  `deposit_to_structure_at`/`withdraw_from_structure_at`. Tested:
+  `test_structure_stock.gd`, `test_structure_stock_store.gd`, plus the new
+  structure-stock/nearest-structure-position cases in
+  `test_earth_chunk_manager.gd`.
+- **Logistics worker (SEEKING→APPROACHING→COLLECTING→CARRYING→DEPOSITING)**
+  (medium) — ✅ Done as a real, tested, standalone worker — 🚧 Partial on
+  live integration. `LogisticsBehavior` (pure FSM, mirrors
+  `CarrionForageBehavior`'s split) + `LogisticsMarker` (engine glue, mirrors
+  `DecomposerMarker`) collect real stock from a source structure and deposit
+  it into the nearest real Storage, end to end (`test_logistics_behavior.gd`,
+  `test_logistics_marker.gd`). **Known gap**: no production structure in this
+  codebase accumulates real output on its own yet (the Balken/Planke/Sägewerk
+  pipeline above is still ⬜ Not started), so nothing currently *feeds* a
+  source's stock outside a test seeding it directly — and no settlement
+  system auto-spawns a Logistics worker yet (not wired into
+  `EarthChunkManager._load_chunk`/`update()`). See timber_construction.md's
+  own "Storage, logistics, and the autonomous dependency chain" section for
+  the full honesty note.
+- **Dependency-chain priority function** (small) — ✅ Done as a real, tested,
+  standalone function — 🚧 Partial on live integration.
+  `ConstructionPriority.decide` (`src/gameplay/construction_priority.gd`)
+  composes real `CraftingRecipeBook` data with `Smelting.can_smelt`'s
+  already-proven structure-gate check to return READY/SHORTFALL/
+  BUILD_PRODUCER_FIRST (`test_construction_priority.gd`). **Known gap**: no
+  settlement-decision system exists yet to call it (the
+  `ConstructionProject`/`ConstructionProjectStore` prerequisite above is
+  still ⬜ Not started), and it composes `Smelting` rather than a general
+  `NeedResolver`, since no such module exists in this codebase.
 
 ### Production Chains (`concept/production_chains.md`)
 
