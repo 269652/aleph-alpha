@@ -238,3 +238,154 @@ func test_right_clicking_a_node_you_do_not_own_asks_nothing():
 	watch_signals(view)
 	view.right_click_at(view.size * 0.5)
 	assert_signal_not_emitted(view, "node_refund_requested")
+
+
+# --- hover ----------------------------------------------------------------
+#
+# Reported live against the first web view: "the skills have no hover tooltip
+# and it's pretty unclear what paths do what". Both are answered here -- a real
+# tooltip on hover, and a previewed ROUTE to anything you cannot yet reach.
+
+func test_hovering_a_node_records_it():
+	var node_id := web.start_node_for("mage")
+	view.focus_on(node_id)
+	view.hover_at(view.size * 0.5)
+	assert_eq(view.hovered_node_id, node_id)
+
+
+func test_hovering_open_space_clears_the_hover():
+	var node_id := web.start_node_for("mage")
+	view.focus_on(node_id)
+	view.hover_at(view.size * 0.5)
+	view.hover_at(Vector2.ZERO)
+	assert_eq(view.hovered_node_id, "")
+
+
+func _tooltip(node_id: String) -> String:
+	return "\n".join(view.node_tooltip(node_id))
+
+
+func test_the_tooltip_names_the_node_and_says_which_wedge_it_is_in():
+	var text := _tooltip("berserkers_fury")
+	assert_string_contains(text, "Berserker's Fury")
+	assert_string_contains(text, "Warrior")
+	assert_string_contains(text, "keystone")
+
+
+func test_the_tooltip_states_what_it_grants_this_character():
+	view.configure(web, "warrior", {"warrior": 1.0}, 0)
+	var text := _tooltip("vitality_1")
+	assert_string_contains(text, "Maximum Health")
+	assert_string_contains(text, "%s" % String.num(web.effective_bonus("vitality_1", {"warrior": 1.0}), 1).trim_suffix(".0"))
+
+
+func test_the_tooltip_quotes_this_characters_own_price():
+	var keystone := "archmage"
+	view.configure(web, "mage", {"mage": 0.0}, 0)
+	assert_string_contains(_tooltip(keystone), str(web.point_cost(keystone, {"mage": 0.0})))
+
+
+func test_a_reveal_nodes_tooltip_describes_it_instead_of_a_zero_bonus():
+	var text := _tooltip("land_sense")
+	assert_eq(text.findn("+0"), -1, "reveal node advertised a +0 bonus")
+	assert_string_contains(text, "land health")
+
+
+func test_an_owned_nodes_tooltip_says_so_and_how_to_give_it_back():
+	view.set_allocation({"vitality_1": true}, 9)
+	var text := _tooltip("vitality_1")
+	assert_string_contains(text.to_lower(), "owned")
+	assert_string_contains(text.to_lower(), "right-click")
+
+
+func test_a_signature_nodes_tooltip_says_it_came_from_your_own_genome():
+	var net := GenomeSkillNet.new().generate({
+		"seed_value": 88, "rarity": HeroDna.RARITY_RARE, "resonance": {"mage": 0.9}})
+	web.graft(net)
+	var text := _tooltip(String(net["node_ids"][0]))
+	assert_string_contains(text, String(net["nodes"][net["node_ids"][0]]["title"]))
+	assert_string_contains(text.to_lower(), "genome")
+
+
+func test_a_flavoured_nodes_tooltip_says_its_variant_was_chosen_by_dna():
+	var flavoured: String = web.flavored_node_ids()[0]
+	assert_string_contains(_tooltip(flavoured).to_lower(), "dna")
+
+
+func test_a_gateways_tooltip_explains_what_crossing_one_is_for():
+	var gateway := ""
+	for node_id in web.node_ids():
+		if web.node_info(node_id)["kind"] == SkillWeb.KIND_GATEWAY:
+			gateway = node_id
+			break
+	assert_string_contains(_tooltip(gateway).to_lower(), "wedge")
+
+
+func test_an_unknown_node_has_an_empty_tooltip():
+	assert_eq(view.node_tooltip("not_a_node"), [])
+
+
+# --- route preview --------------------------------------------------------
+
+func test_hovering_an_unreachable_node_previews_the_whole_route_to_it():
+	var target := web.start_node_for("beastmaster")
+	view.set_allocation({web.start_node_for("mage"): true}, 99)
+	view.focus_on(target)
+	view.hover_at(view.size * 0.5)
+	assert_gt(view.preview_path.size(), 1, "no route was previewed")
+	assert_eq(view.preview_path[view.preview_path.size() - 1], target)
+
+
+func test_the_route_preview_is_empty_for_a_node_you_already_own():
+	var owned := web.start_node_for("mage")
+	view.set_allocation({owned: true}, 99)
+	view.focus_on(owned)
+	view.hover_at(view.size * 0.5)
+	assert_eq(view.preview_path, [])
+
+
+func test_moving_off_a_node_clears_the_route_preview():
+	view.set_allocation({web.start_node_for("mage"): true}, 99)
+	view.focus_on(web.start_node_for("beastmaster"))
+	view.hover_at(view.size * 0.5)
+	view.hover_at(Vector2.ZERO)
+	assert_eq(view.preview_path, [])
+
+
+func test_an_unreachable_nodes_tooltip_quotes_the_cost_of_the_whole_route():
+	var target := web.start_node_for("beastmaster")
+	view.set_allocation({web.start_node_for("mage"): true}, 99)
+	var route := web.cheapest_path(target, {web.start_node_for("mage"): true}, "mage", {})
+	assert_string_contains(_tooltip(target), str(web.route_cost(route, {})))
+
+
+# --- naming on the map ----------------------------------------------------
+
+func test_a_wedge_is_named_on_the_map_in_words():
+	assert_eq(view.wedge_label(0), "Warrior")
+
+
+func test_the_big_nodes_carry_their_name_on_the_map_at_any_zoom():
+	view.zoom = SkillWebView.MIN_ZOOM
+	for node_id in ["berserkers_fury", "juggernaut", web.start_node_for("warrior")]:
+		assert_true(view.shows_label(node_id), "%s should stay named when zoomed out" % node_id)
+		assert_ne(view.map_label(node_id), "")
+
+
+## Naming all 84 at once would be an unreadable thicket; they appear as you lean
+## in, which is also when there is room for them.
+func test_minor_nodes_are_only_named_once_you_zoom_in():
+	view.zoom = SkillWebView.MIN_ZOOM
+	assert_false(view.shows_label("vitality_1"))
+	view.zoom = SkillWebView.MAX_ZOOM
+	assert_true(view.shows_label("vitality_1"))
+
+
+func test_a_gateway_is_never_named_on_the_map():
+	var gateway := ""
+	for node_id in web.node_ids():
+		if web.node_info(node_id)["kind"] == SkillWeb.KIND_GATEWAY:
+			gateway = node_id
+			break
+	view.zoom = SkillWebView.MAX_ZOOM
+	assert_false(view.shows_label(gateway), "a gateway has no name worth crowding the map with")

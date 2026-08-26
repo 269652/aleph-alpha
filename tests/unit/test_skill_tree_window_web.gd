@@ -116,9 +116,41 @@ func test_the_window_still_fits_the_room_world_actually_gives_it():
 	assert_lte(min_size.y, SkillTreeWindow.WORLD_AVAILABLE_BOX.y)
 
 
-func test_the_web_canvas_is_big_enough_to_show_more_than_one_wedge():
-	# Two wedges span 2/7 of the circle at the outer ring; if the canvas cannot
-	# hold that at minimum zoom the map is a keyhole, not a map.
-	var span := 2.0 * (SkillWeb.START_RADIUS + SkillWeb.RING_STEP * SkillWeb.OUTER_RING) \
-		* SkillWebView.MIN_ZOOM * (2.0 / float(SkillWeb.WEDGE_COUNT))
-	assert_gte(window.web_view.custom_minimum_size.x, span)
+## The window was first sized against a 960x540 viewport copied out of a stale
+## comment in world.gd. The project's real design viewport is bigger, so the
+## window had been giving the map barely half the room it could -- reported live
+## as "can you make the skill window bigger so the web is better visible". Read
+## from ProjectSettings so it can never quietly drift again.
+func test_the_windows_design_viewport_is_the_projects_own():
+	assert_eq(SkillTreeWindow.DESIGN_VIEWPORT, Vector2(
+		float(ProjectSettings.get_setting("display/window/size/viewport_width")),
+		float(ProjectSettings.get_setting("display/window/size/viewport_height"))))
+
+
+func test_the_window_fills_the_design_viewport_less_a_margin():
+	assert_eq(window.custom_minimum_size, SkillTreeWindow.DESIGN_VIEWPORT
+		- Vector2(SkillTreeWindow.SCREEN_MARGIN, SkillTreeWindow.SCREEN_MARGIN) * 2.0)
+
+
+## CHROME_HEIGHT is the room reserved for the title, points line, tabs and
+## detail line, with everything else going to the canvas. Pinned by measuring
+## the window's REAL minimum rather than by trusting the reserve.
+func test_the_reserved_chrome_really_does_hold_the_windows_own_chrome():
+	window.refresh(1000, {}, {})
+	assert_lte(window.get_combined_minimum_size().y, SkillTreeWindow.WINDOW_SIZE.y)
+
+
+## The point of the whole resize: the entire web, its wedge names included, has
+## to be visible at once when the player zooms out, or the map is a keyhole.
+func test_the_whole_web_fits_the_canvas_when_zoomed_out():
+	var span := 2.0 * web.wedge_label_position(0).length() * SkillWebView.MIN_ZOOM
+	assert_gte(window.web_view.custom_minimum_size.x, span,
+		"the web is wider than the canvas even fully zoomed out")
+	assert_gte(window.web_view.custom_minimum_size.y, span,
+		"the web is taller than the canvas even fully zoomed out")
+
+
+## ...and the node names have to be legible at the zoom the window OPENS at,
+## not only after the player thinks to zoom in.
+func test_small_nodes_are_already_named_at_the_zoom_the_window_opens_on():
+	assert_gte(window.web_view.zoom, SkillWebView.MINOR_LABEL_ZOOM)

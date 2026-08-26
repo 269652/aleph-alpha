@@ -63,6 +63,14 @@ const START_RADIUS := 120.0
 const RING_STEP := 110.0
 const OUTER_RING := 4
 
+## Where a wedge's ARCHETYPE NAME is drawn, in ring steps out from the centre --
+## half a step past the keystone rim, so a name never lands on top of the nodes
+## it is naming, and comfortably short of where a genome net grafts (a whole step
+## further out). Reported live against the first web view: the map showed which
+## nodes existed but not which direction was which archetype, so "it's pretty
+## unclear what paths do what".
+const WEDGE_LABEL_RING := OUTER_RING + 0.5
+
 ## Base point cost by ring -- index IS the ring. Deliberately equal to what the
 ## legacy flat table already charged for the same nodes (a `_1` node cost 1 and
 ## sits on ring 1, a `_2` node cost 2 and sits on ring 2), so folding the old
@@ -421,6 +429,87 @@ func position_of(node_id: String) -> Vector2:
 	if slot_count > 1:
 		offset = WEDGE_SPAN * (float(info["slot"]) / float(slot_count - 1) - 0.5)
 	return Vector2(START_RADIUS + RING_STEP * float(ring), 0.0).rotated(centre + offset)
+
+
+# --- route finding --------------------------------------------------------
+
+## The cheapest sequence of nodes to buy, in order, to end up owning
+## `target` -- the answer to "what would it take to get THERE from here", which
+## is what a web of 84 circles otherwise refuses to tell you. Already-owned
+## nodes are free and never appear in the result; everything else costs
+## point_cost at this genome's rate. Empty for an unknown node, one you already
+## own, or one nothing connects to.
+##
+## Dijkstra with the weight on the NODE rather than the edge (you pay to own a
+## node, not to traverse an edge), seeded from the whole owned frontier at once
+## -- or, for a character who owns nothing yet, from their own class start,
+## which is the one node they may always take first.
+func cheapest_path(target: String, allocated: Dictionary, archetype: String,
+		resonance: Dictionary) -> Array:
+	if not _nodes.has(target) or allocated.get(target, false):
+		return []
+	var distance := {}
+	var came_from := {}
+	var frontier := []
+	for node_id in allocated:
+		if allocated[node_id] and _nodes.has(node_id):
+			distance[node_id] = 0
+			frontier.append(node_id)
+	var start := start_node_for(archetype)
+	if frontier.is_empty() and start != "":
+		distance[start] = point_cost(start, resonance)
+		frontier.append(start)
+	if frontier.is_empty():
+		return []
+
+	# Small graph (under a hundred nodes), so a linear scan for the nearest
+	# unvisited node is cheaper than maintaining a heap and much easier to read.
+	var visited := {}
+	while true:
+		var current := ""
+		var best := INF
+		for node_id in distance:
+			if visited.has(node_id):
+				continue
+			if float(distance[node_id]) < best:
+				best = float(distance[node_id])
+				current = node_id
+		if current == "":
+			break
+		if current == target:
+			break
+		visited[current] = true
+		for neighbour in _edges[current]:
+			var step := 0 if allocated.get(neighbour, false) else point_cost(neighbour, resonance)
+			var through := int(distance[current]) + step
+			if not distance.has(neighbour) or through < int(distance[neighbour]):
+				distance[neighbour] = through
+				came_from[neighbour] = current
+	if not distance.has(target):
+		return []
+
+	var route := []
+	var walk := target
+	while walk != "":
+		if not allocated.get(walk, false):
+			route.push_front(walk)
+		walk = String(came_from.get(walk, ""))
+	return route
+
+
+## What `route` (from cheapest_path) costs this genome, all steps together.
+func route_cost(route: Array, resonance: Dictionary) -> int:
+	var total := 0
+	for node_id in route:
+		total += point_cost(node_id, resonance)
+	return total
+
+
+## Where wedge `wedge_index`'s archetype name is drawn -- on its own centre
+## line, out past its keystones (see WEDGE_LABEL_RING).
+func wedge_label_position(wedge_index: int) -> Vector2:
+	return Vector2(START_RADIUS + RING_STEP * WEDGE_LABEL_RING, 0.0).rotated(
+		wedge_angle(wedge_index))
 
 
 # --- genome net -----------------------------------------------------------

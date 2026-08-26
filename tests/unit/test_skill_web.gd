@@ -442,3 +442,128 @@ func test_every_variant_of_a_flavoured_node_carries_the_same_bonus_amount():
 
 func test_most_nodes_stay_unflavoured_so_the_map_is_still_readable():
 	assert_lt(float(web.flavored_node_ids().size()) / float(web.node_ids().size()), 0.25)
+
+
+# --- route finding --------------------------------------------------------
+#
+# "It's pretty unclear what paths do what" (reported live against the first web
+# view). The answer a player actually needs is not a prettier picture but the
+# real one: from where I stand, what would it take to get THERE.
+
+func test_the_cheapest_route_to_a_neighbour_is_just_that_node():
+	var start := web.start_node_for("mage")
+	var ring_one: String = web.nodes_in_ring("mage", 1)[0]
+	assert_eq(web.cheapest_path(ring_one, {start: true}, "mage", {}), [ring_one])
+
+
+func test_a_route_to_something_you_already_own_is_empty():
+	var start := web.start_node_for("mage")
+	assert_eq(web.cheapest_path(start, {start: true}, "mage", {}), [])
+
+
+func test_a_route_to_an_unknown_node_is_empty():
+	assert_eq(web.cheapest_path("not_a_node", {}, "mage", {}), [])
+
+
+func test_a_route_from_nothing_at_all_still_starts_at_your_own_class_start():
+	var start := web.start_node_for("mage")
+	var route := web.cheapest_path(web.nodes_in_ring("mage", 1)[0], {}, "mage", {})
+	assert_eq(route[0], start, "a route from an empty web must begin at your own start")
+
+
+func test_every_step_of_a_route_is_adjacent_to_the_step_before_it():
+	var target: String = web.nodes_in_ring("beastmaster", SkillWeb.OUTER_RING)[0]
+	var owned := {web.start_node_for("mage"): true}
+	var route := web.cheapest_path(target, owned, "mage", {})
+	assert_gt(route.size(), 1, "a keystone across the web should take several steps")
+	var reached := owned.duplicate()
+	for node_id in route:
+		var touches := false
+		for neighbour in web.neighbors(node_id):
+			if reached.get(neighbour, false):
+				touches = true
+		assert_true(touches, "%s in the route hangs off nothing already reached" % node_id)
+		reached[node_id] = true
+	assert_eq(route[route.size() - 1], target)
+
+
+func test_a_route_never_includes_a_node_you_already_own():
+	var owned := {}
+	for node_id in web.nodes_in_ring("mage", 1):
+		owned[node_id] = true
+	owned[web.start_node_for("mage")] = true
+	var target: String = web.nodes_in_ring("mage", 2)[1]
+	for node_id in web.cheapest_path(target, owned, "mage", {}):
+		assert_false(owned.has(node_id), "%s is already owned but is in the route" % node_id)
+
+
+## Another wedge is reachable, and the route has to say so honestly -- through a
+## gateway, which is the whole point of the gateway ring.
+func test_a_route_into_another_wedge_runs_through_a_gateway():
+	var target := web.start_node_for("warrior")
+	var route := web.cheapest_path(target, {web.start_node_for("mage"): true}, "mage", {})
+	var crossed := false
+	for node_id in route:
+		if web.node_info(node_id)["kind"] == SkillWeb.KIND_GATEWAY:
+			crossed = true
+	assert_true(crossed, "route %s entered another wedge without a gateway" % [route])
+
+
+func test_route_cost_is_what_this_character_would_actually_pay():
+	var target: String = web.nodes_in_ring("mage", 2)[0]
+	var route := web.cheapest_path(target, {web.start_node_for("mage"): true}, "mage", {})
+	var expected := 0
+	for node_id in route:
+		expected += web.point_cost(node_id, {})
+	assert_eq(web.route_cost(route, {}), expected)
+
+
+func test_a_resonant_character_is_quoted_a_cheaper_route_than_a_dissonant_one():
+	var target: String = web.nodes_in_ring("mage", SkillWeb.OUTER_RING)[0]
+	var owned := {web.start_node_for("mage"): true}
+	var resonant := web.route_cost(web.cheapest_path(target, owned, "mage", {"mage": 1.0}), {"mage": 1.0})
+	var dissonant := web.route_cost(web.cheapest_path(target, owned, "mage", {"mage": 0.0}), {"mage": 0.0})
+	assert_lt(resonant, dissonant)
+
+
+## The claim in the name: it is the CHEAPEST route, not merely a route. Checked
+## against a real alternative -- the deliberately long way round the gateway
+## ring to the wedge two steps away, which must never be quoted when the short
+## way exists.
+func test_the_quoted_route_is_no_dearer_than_a_hand_walked_alternative():
+	var archetypes := ClassArchetype.new().archetype_names()
+	var target := web.start_node_for(archetypes[2])
+	var owned := {web.start_node_for(archetypes[0]): true}
+	var quoted := web.route_cost(web.cheapest_path(target, owned, archetypes[0], {}), {})
+	# The long way: all the way round the ring in the other direction.
+	var the_long_way := []
+	for step in range(archetypes.size() - 1, 1, -1):
+		the_long_way.append(_gateway_between(archetypes[step], archetypes[(step + 1) % archetypes.size()]))
+		the_long_way.append(web.start_node_for(archetypes[step]))
+	assert_lte(quoted, web.route_cost(the_long_way, {}))
+
+
+func _gateway_between(a: String, b: String) -> String:
+	for node_id in web.node_ids():
+		if web.node_info(node_id)["kind"] != SkillWeb.KIND_GATEWAY:
+			continue
+		var joins := web.neighbors(node_id)
+		if joins.has(web.start_node_for(a)) and joins.has(web.start_node_for(b)):
+			return node_id
+	return ""
+
+
+# --- wedge labelling ------------------------------------------------------
+
+func test_every_wedge_has_a_label_position_out_past_its_keystones():
+	var rim := SkillWeb.START_RADIUS + SkillWeb.RING_STEP * float(SkillWeb.OUTER_RING)
+	for wedge_index in SkillWeb.WEDGE_COUNT:
+		assert_gt(web.wedge_label_position(wedge_index).length(), rim,
+			"wedge %d's label would sit on top of its own nodes" % wedge_index)
+
+
+func test_a_wedge_label_sits_on_its_own_wedges_centre_line():
+	for wedge_index in SkillWeb.WEDGE_COUNT:
+		var offset := absf(angle_difference(
+			web.wedge_label_position(wedge_index).angle(), web.wedge_angle(wedge_index)))
+		assert_lt(offset, 0.001, "wedge %d's label drifted off its own centre" % wedge_index)

@@ -43,23 +43,38 @@ const KEYSTONE_POINT_COST := 2
 ## It declared 320 while that row needed 625, and the ScrollContainer below
 ## scrolls only vertically, so the surplus was simply cut off -- reported as
 ## "left-aligned in half the panel".
-## Sized for the WEB, which needs real canvas to be a map rather than a
-## keyhole -- the list tab's own widest row (625px, measured; see
+## The project's own design viewport (display/window/size/*), which with the
+## canvas_items stretch mode IS the coordinate space this window is laid out in.
+## Read as a constant here and pinned against ProjectSettings by
+## test_the_windows_design_viewport_is_the_projects_own -- the first version of
+## this window was sized against a 960x540 figure copied out of a stale comment
+## in world.gd and so gave the map barely half the room it had.
+const DESIGN_VIEWPORT := Vector2(1280, 720)
+
+## Gap left between the window and the screen edge on every side. Small: the web
+## wants the room, and this is a full-attention modal, not a HUD panel.
+const SCREEN_MARGIN := 20.0
+
+## The web is a MAP -- it gets the whole screen bar the margin. The list tab's
+## widest row (625px, measured; see
 ## test_the_widest_skill_row_fits_the_windows_own_declared_width) fits inside
-## this comfortably. Pinned from BOTH sides: not narrower than its own content,
-## and not wider than WORLD_AVAILABLE_BOX.
-const WINDOW_SIZE := Vector2(920, 500)
+## this several times over.
+const WINDOW_SIZE := DESIGN_VIEWPORT - Vector2(SCREEN_MARGIN, SCREEN_MARGIN) * 2.0
 
-## The room World actually gives this window. It anchors it PRESET_CENTER in a
-## 960x540 viewport, so the usable box is the viewport less a small margin on
-## each side -- unlike the old left-edge strip, which is why the window could
-## grow from 660x400 to hold a graph. Stated HERE, once, and read by the test
-## that used to restate it.
-const WORLD_AVAILABLE_BOX := Vector2(944, 524)
+## The room World actually gives this window: it anchors it PRESET_CENTER, so
+## the usable box is the design viewport less a hair. Stated HERE, once, and
+## read by the test that used to restate it.
+const WORLD_AVAILABLE_BOX := DESIGN_VIEWPORT - Vector2(8.0, 8.0)
 
-## Leaves room for the title, the unspent-points line, the tab row, the detail
-## line and the panel margins inside WINDOW_SIZE.y.
-const CANVAS_HEIGHT := 360.0
+## Height reserved for the title, the unspent-points line, the tab row, the
+## detail line, the separations between them and the panel margins -- everything
+## that is not canvas. A declared RESERVE rather than a measurement, held honest
+## by test_the_reserved_chrome_really_does_hold_the_windows_own_chrome, which
+## measures the window's real minimum against WINDOW_SIZE.
+const CHROME_HEIGHT := 150.0
+
+## Everything left over goes to the map.
+const CANVAS_HEIGHT := WINDOW_SIZE.y - CHROME_HEIGHT
 const LIST_HEIGHT := CANVAS_HEIGHT
 
 ## Player-facing name per internal stat key. skill_tree.gd/keystone_passive.gd

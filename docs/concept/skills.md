@@ -202,6 +202,44 @@ becoming visible (see [progression.md](progression.md)). The web treats an empty
 `stat_name` as "grants no stat" and scaling zero by anything is still zero, so
 reveal-style nodes need no special case in the allocation maths.
 
+## Reading the map
+
+A web of 84 circles is only a map if it says what it is. Three things carry
+that, all of them addressing the same reported problem ("the skills have no
+hover tooltip and it's pretty unclear what paths do what"):
+
+- **Wedge names.** Each archetype's name is painted on its own centre line, out
+  past its keystones, in that wedge's own hue. Without them the map is
+  unattributed circles and there is no way to tell which direction is which
+  archetype.
+- **Node names.** The landmarks — start nodes, notables, keystones and your
+  genome net — are named on the map at every zoom. The small nodes are named too
+  once you lean in past `MINOR_LABEL_ZOOM`; naming all 84 at every distance is
+  an unreadable thicket, and the zoom at which they appear is also the zoom at
+  which there is room for them. Gateways are never named: their ids are not
+  names anyone needs, and seven of them would crowd the centre.
+- **Hover tooltip.** Everything in it is resolved for *this* character — the
+  DNA-chosen variant, the resonance-scaled bonus, the resonance-scaled price —
+  because a tooltip quoting the table's numbers rather than the player's own
+  would be worse than no tooltip. It names the node, its wedge and tier, what it
+  grants, what it costs, and what state it is in; a genome-net node says it came
+  from your own genome, a DNA-flavoured node says its effect was DNA-chosen.
+
+### Route preview
+
+The real answer to "what do these paths do" is not a prettier picture but a
+concrete one: *from where I stand, what would it take to get **there***.
+Hovering a node you cannot yet reach previews the **cheapest route** to it —
+drawn as a lit chain through every node you would have to buy, with the total
+quoted in the tooltip ("18 points to reach, 6 nodes away").
+
+`SkillWeb.cheapest_path` is Dijkstra with the weight on the **node** rather than
+the edge — you pay to own a node, not to traverse an edge — seeded from your
+entire owned frontier at once, or from your class start if you own nothing yet.
+Prices along the route are your own, so a resonant character is quoted a cheaper
+journey than a dissonant one to the same destination, which is exactly the
+efficiency-only bargain made visible.
+
 ## Status
 
 - ✅ **Graph** — `src/gameplay/skill_web.gd`: 7 wedges × 11 nodes + 7 gateways,
@@ -225,13 +263,23 @@ reveal-style nodes need no special case in the allocation maths.
 - ✅ **Web view** — `scenes/skill_web_view.gd`: pan/zoom graph canvas in the
   skill window (toggle L), four distinct node states, per-character labels,
   click to take, right-click to refund; the old flat list survives as a tab.
+- ✅ **Reading the map** — wedge names, on-map node names (zoom-tiered), and a
+  full hover tooltip resolved for the hovering character.
+- ✅ **Route preview** — `SkillWeb.cheapest_path`/`route_cost`; hovering an
+  out-of-reach node lights the cheapest journey to it and quotes its price.
+- ✅ **The window is the screen** — sized from the project's own design viewport
+  (`SkillTreeWindow.DESIGN_VIEWPORT`, pinned against ProjectSettings) less a
+  margin, rather than the stale 960x540 figure it was first built against. A
+  test asserts the whole web, wedge names included, fits the canvas at minimum
+  zoom, and that the small nodes are already named at the zoom it opens on.
 - ⬜ **Not built** — most of the new stat keys are *declared and summed* but not
   yet read by their owning system (only `max_health`, `attack_damage`,
   `meat_yield`, `carpentry_level` are live today); no atom-unlock/parameter-cap
   hook into [magic.md](magic.md)'s catalog, which is the specific integration
-  this doc has always called for; no node search, route preview, or keyboard
-  navigation in the view; the genome net is derived rather than stored, so a
-  change to the generator would silently change an existing character's net.
+  this doc has always called for; no node search and no keyboard navigation in
+  the view (the route preview answers "how do I get there", but you still have
+  to find the node by eye first); the genome net is derived rather than stored,
+  so a change to the generator would silently change an existing character's net.
 
 ## Open questions
 
