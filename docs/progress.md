@@ -2239,7 +2239,7 @@ chunks away from the player). See the concept doc for the full spec.
 
 - **Fruit phenology (growing → ripe → fallen)** (medium) — ✅ Done — `src/world/fruiting_model.gd` (tested): each tree runs a repeating bearing cycle **one year long** (`FruitingModel.BEARING_CYCLE_SECONDS = SeasonCycle.SECONDS_PER_YEAR`), driven by its `TreeGenome` (crop size from `fruit_yield`) and local warmth (a growing-degree-day analogue — a warm climate can carry two crops a year). The cycle length **used to be `genome.maturity_time`, 20–60 SECONDS** — that is how long a sapling takes to grow up (`TreeMaturity`), an entirely different quantity — so every mature tree shed its whole crop twice a minute: a measured **1524 fallen fruit per minute from a 40-tree stand** against a ground-item budget of 80, which buried the forest floor in stacks of ~100 and churned a hundred-odd labelled, clickable nodes a second. Same root cause as the 30-second reproduction cooldown: nothing time-dependent had ever been observed running, because the ecology simulation was not stepping at all (see `World.owns_ecosystem_simulation_for`), now also scaled per **named species** (`TreeSpecies` — Walnut/Cherry/Apple, see the Flora section below) via a yield/ripening multiplier pair layered on top. Near the player (`EarthChunkManager.step_fruiting`, within a detail radius) a tree's current **ripe crop is rendered as individual pixel dots on its canopy, in its own species' colour** (`ProceduralTreeSprite.generate_image_with_fruit`) and abscised (fallen) fruit drops as a **named-species ground item** (`cherry`/`apple`/`walnut`, not the old generic `fruit`/`nut`) animals and the player can eat.
 - **Frugivory (animals eat fallen fruit)** (small) — ✅ Done — herbivores/boars consume nearby fallen fruit (`FoodConsumption`, `World._step_herbivore_food_consumption`), gaining body condition. Seed dispersal (moved seeds germinating elsewhere) is ✅ for bird endozoochory specifically (see `Animal-mediated seed dispersal` below), still ⬜ for ground herbivores/omnivores.
-- **Condition-gated reproduction (bioenergetics)** (medium) — ✅ Done — `src/gameplay/animal_reproduction.gd` (tested): each creature carries an `energy` value that rises on eating and decays over time; a **healthy, well-fed** creature past a **birth cooldown** spawns an offspring of the same species beside it (`CreatureMarker.can_reproduce`/`on_reproduced`, `World._step_reproduction`), capped by `MAX_LIVE_CREATURES`. The cooldown is **one real day** (`REPRO_COOLDOWN = 24h`); it was 30 seconds, which only looked survivable while the ecology simulation was silently not running (see `World.owns_ecosystem_simulation_for` below) -- once it did run, a clearing filled with deer in under a minute. Birth is additionally vetoed by **local crowding**: `World._same_species_within(NEIGHBOUR_RADIUS_PX = 160)` past `MAX_SAME_SPECIES_NEARBY = 4`, and by `EarthChunkManager.can_support_another_herbivore(position, live_nearby)`, which compares that local count against the vegetation-derived `EcosystemSimulation.herbivore_capacity_at(chunk)` -- so density dependence acts where the animal stands, not just against the global cap. Verified live over 60s: species counts held at 2-9 each with worst local crowd 1.
+- **Condition-gated reproduction (bioenergetics)** (medium) — 🚧 Partial — `src/gameplay/animal_reproduction.gd` (tested): each creature carries an `energy` value that rises on eating and decays over time; a **healthy, well-fed** creature past a **birth cooldown** spawns an offspring of the same species beside it (`CreatureMarker.can_reproduce`/`on_reproduced`, `World._step_reproduction`), capped by `MAX_LIVE_CREATURES`. The cooldown is **one real day** (`REPRO_COOLDOWN = 24h`); it was 30 seconds, which only looked survivable while the ecology simulation was silently not running (see `World.owns_ecosystem_simulation_for` below) -- once it did run, a clearing filled with deer in under a minute. Birth is additionally vetoed by **local crowding**: `World._same_species_within(NEIGHBOUR_RADIUS_PX = 160)` past `MAX_SAME_SPECIES_NEARBY = 4`, and by `EarthChunkManager.can_support_another_herbivore(position, live_nearby)`, which compares that local count against the vegetation-derived `EcosystemSimulation.herbivore_capacity_at(chunk)` -- so density dependence acts where the animal stands, not just against the global cap. Verified live over 60s: species counts held at 2-9 each with worst local crowd 1. ⬜ Remaining, and it is what makes this 🚧 rather than ✅: (a) **the offspring inherits nothing** -- `World._step_reproduction` (`scenes/world.gd:3933`) calls `CreatureRenderer.spawn_single` (`:3966`), which rolls a fresh `randi()` wander seed (`src/rendering/creature_renderer.gd:266`), and that seed is precisely what `CreatureInfo` derives level and max_health from (`src/world/creature_info.gd:351-353`), so a calf is statistically unrelated to its dam. The fix is **not** to change `spawn_single` -- its `randi()` is correct for the `/spawn` dev command it was written for, and its doc comment (`src/rendering/creature_renderer.gd:256-262`) says so -- but to add a `spawn_offspring` sibling that takes the parents' seeds, with `test_spawn_single_still_produces_unrelated_individuals` standing guard over the old behaviour (`concept/animal_genetics.md`). (b) **it is one parent budding, not two mating** -- there is no partner, sex or mate check anywhere in the path, so nothing about it is selectable. (c) **the clock is unreachable** -- `_seconds_since_birth` (`src/rendering/creature_marker.gd:266`, advanced on raw frame delta at `:608`, read at `:942`) is absent from `KeptAnimals`' record and dies with the marker on chunk unload, so against a 24-real-hour `REPRO_COOLDOWN` (`src/gameplay/animal_reproduction.gd:32`) the gate essentially never opens in a real session, and `/ecotest` does not accelerate a marker's own `_process`. `concept/ecosystem_dynamics.md:658` already marks this 🚧; this entry was the side that disagreed.
 - **Fallen fruit is sized against something the player can see** (small) — ✅ Done — `ProceduralItemSprite.WORLD_WIDTH_BY_ID` / `world_scale_for` (tested): every dropped item rendered at a full 16px tile, so a fallen cherry was as wide as the ground square under it ("they are gigantic"). Sized off one free number — a walnut is **half a butterfly** wide — with cherry (0.8×), apple (2×) and the generic ambient-tier `nut` (0.8× cherry) and `fruit` (= cherry) all pinned to it as ratios, so re-sizing the family stays a one-line change. Non-fruit items keep the size they always had.
 - **Rain draws its drops, not the whole screen** (medium) — ✅ Done — `src/rendering/rain_overlay.gd` (tested): rain was one screen-covering `ColorRect` whose fragment shader carved streaks out of it. Measured on this machine's integrated GPU, hiding that single rect took the game from **42 fps to 57.7 and removed the 130–150 ms frame spikes** — and vsync turns "just over 16.7 ms" into a dropped frame, which is why rain read as heavy lag rather than a slightly slower frame. The cost was **not** the shader: a bare `COLOR = vec4(0.0)` fragment cost the same 15 fps, so did a plain translucent `ColorRect` with no material at all, and `discard` for the ~99% of pixels between streaks changed nothing; shrinking the *same* shader to a 64×64 rect gave nearly all of it back. What the pass costs is the screen **area** it rasterises. Rain is now one `MultiMesh` instance per drop (a `STREAK_WIDTH × STREAK_LENGTH` quad) placed by the vertex shader off `TIME` — still one draw call, still no per-frame script, covering a few percent of the screen. Measured after: **55 fps under a forced storm with worst frame 18.2 ms** (was 42 fps / 150 ms). Gotcha found and documented: MultiMesh instance custom data is **8 bits per channel** in this renderer, so a raw pixel coordinate stored there reads back as 0 — every channel carries a 0..1 fraction scaled back up by a uniform.
 - **Decoration is drawn where it can be seen** (small) — ✅ Done — `src/rendering/decoration_lod.gd` (tested) + guards in `EarthChunkManager`'s four `_sync_*_sprites`: the camera frames ~20×11 tiles and a chunk is 32 tiles square, yet every one of the 25–36 loaded chunks got a `Sprite2D` per grass tuft, bloom, shed seed and surfaced worm — measured at ~2,900 decorative sprites, with frame rate visibly decaying as they accumulated (55.7 → 49.1 fps across one run). Decoration now follows the player's chunk at a radius **derived from the real camera framing** (`Player.TARGET_TILE_SCREEN_PX` and the viewport size, not an eyeballed number), which drops it to ~880 sprites and total entity nodes from ~5,800 to ~2,750. The simulation still runs everywhere — grass keeps growing and worms keep surfacing in chunks nobody is looking at — only the drawing is scoped. ⬜ Not independently confirmed as an fps win: by the time it was wired the machine had thermally throttled to ~23 fps in **every** configuration including the un-culled control, so the same-session A/B (24.9/26.4 vs 22.7/21.0) is directionally positive but the absolute numbers are not trustworthy. Worth re-measuring on a cold machine.
@@ -2262,7 +2262,7 @@ chunks away from the player). See the concept doc for the full spec.
 - **An in-game day is four real hours** (small) — ✅ Done — `SeasonCycle.SECONDS_PER_DAY`, with the year derived from it (48 days → eight real days a year, two a season). It was 25 seconds, implied by a 20-minute year, which is why "a couple of fish a day" still stripped a pond in minutes. **Weather deliberately keeps its own, much shorter period**: it rolled once per day, and at four hours a day that would lock a whole session into one sky. Re-anchored a stale fruiting test that had hardcoded a 3000-second window — the same staleness class as the terrain-renderer tests fixed earlier.
 - **Kingfisher hunger, and a life outside hunting** (medium) — ✅ Done — `src/gameplay/piscivore_appetite.gd` (tested). The bird hunted continuously and would fish out a chunk. Now: **appetite** (a couple of fish per in-game day, nothing in between) *and* **giving up on a poor patch** — even a hungry bird leaves water worked below a quarter of its capacity, which is the rule that actually protects the population rather than merely slowing the stripping. Needed a new world query, `fish_capacity_near`, since "is this pond worth working" needs what it *could* hold as well as what it does. A sated bird patrols, perches or carries material to a nest site, re-picked on an interval and seeded per bird so a river is not choreographed. Tested at the behaviour level: a bird left alone for a whole in-game day takes at most three fish, and a hungry bird at a depleted pond takes none. ⬜ Remaining: nest-building is a flight to a site, not a structure that gets built; birds still have no courtship or mating of their own (the dance is pollinator-only by design, see the jitter fix).
 - **Illustrated blooms are recoloured by luminance, not multiply** (small) — ✅ Fixed — the illustrated head sheet is composited with the species petal colour, which as a plain multiply only recolours correctly if the source art is pale and neutral. The cup sheet carries real green in its sepals and outlines, and multiply preserves hue, so crocus and tulip rendered as **green cages** — invisible against grass and not a petal colour ("green petals are hard to see on green grass"). The composite now reads the source as Rec. 709 luminance and paints the petal colour at that brightness, keeping all the illustration's form and shading while discarding its hue, so the recolour is robust to the art rather than depending on a promise about it. A shade floor stops linework multiplying to near-black. Three tests pin it: no bloom is painted mostly green, every bloom stands clear of grass green, and each still carries its own species colour. **The sparse-outline look had the same root cause**: the sheet is line art with hollow petals, so the grass showed through them — recolouring the outlines left the green, because the green *was* the background ("the bloom is correctly colored but the petals are still green"). Enclosed transparent areas are now filled before compositing, found by flooding from the canvas edge, so any line-art sheet composites solid. **Flower sizes are pinned to two anchors** -- a tulip at the player's hip, a sunflower at full player height -- with the curve between them computed, not eyeballed. Deliberately taller than life (a real tulip is a quarter of a person). Anchored to centimetres rather than to the tallest species, so adding the sunflower did not silently shrink everything else. **Sunflower added** as the one species that stands above the meadow rather than among it. **Sunflower and lavender now have their own sheets** (7 registered species sheets: crocus, tulip, rose, daisy, sunflower, lavender; shared archetype sheets: cup, layered; only clover is still procedural). The sunflower's dark centre needed no special casing: brown is dark gold, so it sits in the same hue bucket as the petals and recolours with them, coming out dark in whatever colour the plant came up as. These two also proved out the earlier gate fix -- their archetypes (spike, radial) have no sheets, so the old "does this ARCHETYPE have art?" check would have silently left both procedural despite the art existing. **Flowers are sized against the player**: species carry real heights in centimetres, the tallest rendering at knee height (30% of the player) and the rest below -- they had drifted to 72%, standing chest-high on the hero. Small species are exaggerated toward legibility without reordering. **Per-plant size variance** nudges each individual off its species' norm, fixed for that plant's life. **Bush habit**: lavender and clover draw several stems with their own heights and lean rather than one lonely spike. **Masks**: each sheet declares where its petals sit on the hue wheel, and saturated gold outside that window keeps its own colour, so blooms retain their eyes -- green sepals are deliberately NOT preserved, because at this size a kept sepal reads as a green flower. Enclosed transparent pixels are filled everywhere now, not just in illustrated heads, since overlapping spikes punched holes in the bloom mass. **Per-species stature and per-species colour varieties**: each species carries its own height (a lavender spike stands nearly twice a crocus) and its own list of colours, with each plant picking a variety from its own seed so a bed comes up mixed but no individual flower changes colour. The recolour now normalises against each sheet's own peak brightness -- without that it topped out at however bright the artist drew the highlight, which a saturated red survives and a white or pale yellow does not, washing every pale variety into grey. Registered species sheets: crocus, tulip, rose, daisy; shared archetype sheets: cup, layered; spike and puff are still procedural. **The fallback shape family was renamed "daisy" -> "radial"** -- a daisy is a species, and a shape family named after one of its members left that species unable to have art of its own. **Species art overrides archetype art**: a sheet registered against a species wins over its archetype's shared one, other species of that archetype are unaffected, and a species with neither falls back to the procedural painter — the same species-first-then-generic lookup the animal art uses, so a species that deserves its own drawing costs one entry and no changes elsewhere.
-- **Taming (lasso → hold → feed → tame)** (large) — 🚧 Partial, playable end to end — spec at `docs/concept/taming.md`. **Built:** `src/gameplay/taming.gd` (break-free chance from health fraction, per-struggle stamina cost, trust that rises only on feeding a HUNGRY animal, neglect decay, order/mount/predator gates) and `src/gameplay/rope_tether.gd` (slack rope leaves the animal alone, taut rope pulls it back, hard clamp so a bolting horse can't outrun its tether). Wired through `CreatureMarker` (`restrain_to`/`release`/`feed_treat`, a restrained animal stops making its own decisions and cannot flee, led movement goes through the existing movement gate so it walks *around* trees) and `Player` (`_lasso_step`: one key throws / ties to a tree / unties / releases depending on what you are holding; carrots are spent only when the animal actually takes one; a visible rope `Line2D`). Readouts: trust bar + hunger pip on the animal, state line in the HUD. **Lasso** (4× plant fibre) and **Carrot** items with their own art. **Verified live** with a temporary in-game harness, not just in tests: catch lands, healthy horses break free repeatedly (as designed), 5 hungry feeds at one carrot each takes trust 0.00→1.00, and a tamed horse stops fighting the rope. Carrots have a real source: **wild carrot** (Daucus carota) is now a real, visible growing/spreading plant (`WildCropPatch`/`WildCropMarker`, see `concept/wild_crops.md`), pulled with an animated swing-driven harvest -- superseding the earlier grass-harvest freebie. The same meadow supplies both the lasso and its reward. **Orders and riding** are in: a tamed animal takes follow/stay (cycled with the lasso key, which changes meaning once the rope has nothing left to do), and horses can be ridden at `Taming.MOUNTED_SPEED` (150 vs walking 80). The rider stays the node the player controls and the mount is carried along underneath, so inventory/combat/survival keep working while mounted. A tamed animal also stops treating the player as a threat -- players are sensed as threats, so without that fix a horse you spent five carrots taming would flee you forever. Verified live: tame -> `fears_players=false`, mount -> speed 150, rode 120px with the horse at gap 0.0, dismount -> 80, STAY order held the horse inside its `STAY_RADIUS`. ⬜ Remaining: persistence of a tamed/tied animal across chunk unload (walk ~100 tiles away and it is gone -- the significant one), and an animation for the struggle.
+- **Taming (lasso → hold → feed → tame)** (large) — 🚧 Partial, playable end to end — spec at `docs/concept/taming.md`. **Built:** `src/gameplay/taming.gd` (break-free chance from health fraction, per-struggle stamina cost, trust that rises only on feeding a HUNGRY animal, neglect decay -- the pure function only, nothing in the game calls it, see Remaining -- order/mount/predator gates) and `src/gameplay/rope_tether.gd` (slack rope leaves the animal alone, taut rope pulls it back, hard clamp so a bolting horse can't outrun its tether). Wired through `CreatureMarker` (`restrain_to`/`release`/`feed_treat`, a restrained animal stops making its own decisions and cannot flee, led movement goes through the existing movement gate so it walks *around* trees) and `Player` (`_lasso_step`: one key throws / ties to a tree / unties / releases depending on what you are holding; carrots are spent only when the animal actually takes one; a visible rope `Line2D`). Readouts: trust bar + hunger pip on the animal, state line in the HUD. **Lasso** (4× plant fibre) and **Carrot** items with their own art. **Verified live** with a temporary in-game harness, not just in tests: catch lands, healthy horses break free repeatedly (as designed), 5 hungry feeds at one carrot each takes trust 0.00→1.00, and a tamed horse stops fighting the rope. Carrots have a real source: **wild carrot** (Daucus carota) is now a real, visible growing/spreading plant (`WildCropPatch`/`WildCropMarker`, see `concept/wild_crops.md`), pulled with an animated swing-driven harvest -- superseding the earlier grass-harvest freebie. The same meadow supplies both the lasso and its reward. **Orders and riding** are in: a tamed animal takes follow/stay (cycled with the lasso key, which changes meaning once the rope has nothing left to do), and horses can be ridden at `Taming.MOUNTED_SPEED` (150 vs walking 80). The rider stays the node the player controls and the mount is carried along underneath, so inventory/combat/survival keep working while mounted. A tamed animal also stops treating the player as a threat -- players are sensed as threats, so without that fix a horse you spent five carrots taming would flee you forever. Verified live: tame -> `fears_players=false`, mount -> speed 150, rode 120px with the horse at gap 0.0, dismount -> 80, STAY order held the horse inside its `STAY_RADIUS`. ⬜ Remaining -- and **persistence is not among them any more**: it landed as "Tamed and tied animals persist as individuals" above (`src/world/kept_animals.gd`, `FORMAT_VERSION 1` at `:32`, saved/restored at `EarthChunkManager:6623`/`:6649`), and this entry contradicted that one for as long as both stood. What is genuinely left, and almost all of it is about the player having no hand in the drama: (1) **the approach is the loop's real entry barrier and it is invisible** -- a wild animal flees at `CreatureMarker.FLEE_SPEED` 40.0 (`src/rendering/creature_marker.gd:147`) against `Player.BASE_SPEED` 80.0 (`scenes/player.gd:64`), so on paper you simply walk it down, and `tests/unit/test_creature_marker.gd:2091` `test_the_measured_catch_rate_matches_the_model` really does measure sixty captures -- but the player's pace is a PRODUCT, not a constant: `scenes/player.gd:1267` multiplies `current_speed()` by water, weather, terrain and `ConditionPenalty.speed_multiplier(survival.fitness)`, and `:1275` applies it. A live session (`docs/playtests/2026-08-26-taming-breeding-session.md`) sat at HUD `Speed: 47%` in autumn rain over vegetated ground with a freezing meter running: 0.47 x 80 = 37.6 px/s, **below `FLEE_SPEED`**, at which point a healthy wild animal is not hard to catch, it is un-runnable-down -- and nothing in the game says so. At 75% (60 px/s) later the same session the approach worked immediately. (2) **the struggle is not merely unanimated, it is uncontestable** -- `CreatureMarker._step_restraint` (`src/rendering/creature_marker.gd:854`) resolves the whole fight as a silent deterministic hash roll every `STRUGGLE_INTERVAL` 1.2s (`:700`), and there is no input the player can bring to it; (3) **neglect costs nothing** -- `Taming.trust_after_neglect`/`NEGLECT_SECONDS` (`src/gameplay/taming.gd:140`/`:134`) are implemented and unit-tested (`tests/unit/test_taming.gd`: `test_a_neglected_animal_loses_trust`, `test_a_short_wait_is_not_neglect`, `test_neglect_cannot_push_trust_below_nothing`) but have **no production caller**, so a permanently hungry tied horse loses no trust; (4) **the player cannot choose an animal** -- `_throw_lasso` (`scenes/player.gd:2193`), `_cycle_order` (`:2291`), `_nearest_tamed` (`:2317`) and `_try_mount` (`:2298`) all resolve to whatever is *nearest*, so with two tamed horses side by side you get the closer one, which blocks every multi-animal mechanic downstream; (5) **feeding has no key** -- `Player._try_feed_lassoed` (`:2182`) fires every frame from proximity plus inventory, so the entire relationship pillar reduces to standing still; (6) **persistence is lossy** -- only `{species, position, trust, order, is_tied, tied_to}` are written (`src/world/kept_animals.gd:53-62`) and `_restore_kept_animals` rebuilds the animal through `spawn_single`'s `randi()` seed, so a reloaded animal is a statistically fresh individual with a trust number pasted on; and (7) **New Game leaks the previous world's stock** -- `EarthChunkManager.KEPT_ANIMALS_DIR` (`:161`) and `ECOLOGY_DIR` (`:158`) appear in neither `World.backed_up_directories()` (`scenes/world.gd:786-792`) nor `World._wipe_persisted_world` (`:833`), so a new world inherits the old one's tamed horses and its regional ecology; both lists have to move together, because `test_world_backup_paths.gd`'s `test_the_backup_lists_cover_exactly_what_the_wipe_destroys` counts `wipe_directory(` calls in the wipe's own source against the backup list's size (the drift check this file already documents in the Persistence section).
 - **Active foraging for land herbivores** (medium) — ✅ Done — `src/gameplay/grazer_foraging.gd` (tested, see `concept/ecosystem_dynamics.md` "Grazing is an act, not an aura"): horses, boars and deer now **see a specific bite, walk to it, and put their heads down**, instead of feeding off the biome under their feet. A diet (default by `CreatureInfo` diet label, per-species override for the deer's mixed feeding) decides what an animal walks to; a seek→approach→graze phase machine decides when, with target choice delegated to `PollinatorForaging.choose_target` so a herd spreads over a meadow rather than single-filing behind one tuft. Wired through `CreatureMarker._step_foraging`, fed by `EarthChunkManager.grass_near`/`graze_grass_at` (new — mature tufts only, immediate sprite resync like `take_worm_at`) plus the existing `fruit_near`/`seeds_near`/`worms_near`. Biome grazing survives as `FOOD_UNDERFOOT`: an animal with nothing in sight crops what it stands on, but as a full head-down bout rather than the instant hunger-reset that made a grassland horse never hungry for longer than one frame. Blooms are deliberately not edible (they are the pollinators' resource). ⬜ Gaps: predators still feed only by catching prey, and an animal doesn't remember a patch it has already cropped.
 - **Frame-set generation shared across animals** (small) — ✅ Done — `ProceduralAnimalAnimation.textures_for` + `LOOK_VARIANTS = 8` (tested): every `CreatureMarker` used to draw its own frame set the first time it played an action, uncached. Measured live: **25 creatures crossing into "eat" together burned 1.18 SECONDS of frame generation inside one 5-second window** (~47ms each) — the 130–145ms frame spikes reported as lag. Generation is now bounded by species × action × 8 looks for the whole session, paid once.
 - **A herd is not on one clock** (small) — ✅ Done — `CreatureNeeds.new(seed_value)` / `START_STAGGER` (tested): every creature used to start at hunger 0 and rise at the same fixed rate, so a whole herd crossed the hunger threshold on the same tick and switched action in the same frame — the other half of the spike above. Each animal now starts at its own deterministic, hash-derived point in its cycle, below the threshold so nothing spawns already starving.
@@ -2270,8 +2270,8 @@ chunks away from the player). See the concept doc for the full spec.
 - **Illustrated long-grass cards** (medium) — 🚧 Partial — mature `TallGrass` cells now use the delivered 10×10 `assets/sprites/grass_blades.png` atlas as several deterministically selected, depth-layered blade cards instead of one procedural tuft. Tall grass now seeds at 20% of eligible cells (hard-capped at 128 per chunk) so it forms a visible field rather than isolated decorations. A shared GPU shader keeps roots planted while wind moves tips and bends nearby patches away from the player; `EarthChunkManager` writes one walker-position uniform per frame. Cards remain decoration-LOD scoped. Creature wake sharing is still open.
 - **Dropped-item art is shared** (small) — ✅ Done — `ProceduralItemSprite.texture_for` (static cache): each `DroppedItem` rebuilt its own 32×32 image pixel by pixel on `_ready`. Fine for a few items, not fine once the world sheds windfall continuously.
 - **Variable-fidelity LOD / unloaded-chunk catch-up** (large) — ✅ Done — `src/world/chunk_ecology_catchup.gd` (tested, reuses the same logistic + predator-prey models as loaded chunks): a chunk records its aggregate ecology at unload; on revisit `EarthChunkManager._apply_ecology_catchup` integrates it forward over the elapsed unloaded time and installs the caught-up herbivore/predator populations (`EcosystemSimulation.seed_populations`) instead of resetting to fresh equilibrium — so a region the player left keeps evolving (herds grow or get thinned by predators). Closes the long-standing "regenerates at equilibrium on revisit" gap.
-- **Seasonal forcing of phenology** (medium) — ⬜ Not started — warmth is instantaneous temperature, not a seasonal calendar variable.
-- **Animal-mediated seed dispersal** (medium) — ⬜ Not started.
+- **Seasonal forcing of phenology** (medium) — ✅ Done — the stale claim that "warmth is instantaneous temperature, not a seasonal calendar variable" is contradicted by its own call site. `EarthChunkManager._warmth_at_pixel` (`src/world/earth_chunk_manager.gd:2271-2274`) multiplies the real Earth climate temperature at the player's tile by `SeasonCycle.warmth_modifier(_world_age_seconds)` (`src/world/season_cycle.gd:51` -- a cosine phase-shifted to peak mid-summer and trough mid-winter) and feeds the product to `FruitingModel`, so a tree ripens and sheds fast in summer and slowly in winter on top of its baseline climate. Vegetation runs on the same clock with a **dormancy floor rather than zero** (`SeasonCycle.growth_modifier`, `:60`, consumed for root crops at `earth_chunk_manager.gd:3401`: a plant goes dormant in winter, it does not die), and the earthworm sim is forced by the same warmth (`:4547`). Pinned as measured seasonal DIVERGENCE, not as a number: `tests/unit/test_fruiting_model.gd` walks a whole `SeasonCycle.SECONDS_PER_YEAR` in 60 steps sampling the real warmth curve at each one (`test_what_falls_is_exactly_what_stopped_hanging` at `:496`, `test_nothing_falls_that_was_not_hanging` at `:525`) -- its own comment records that a constant warmth **hid** the disagreement those tests exist to catch -- and `tests/unit/test_season_cycle.gd:33` `test_summer_is_warmer_than_winter` asserts the seasonal ordering. `concept/ecosystem_dynamics.md:676` and `concept/seasons.md:140` both already mark it ✅; this entry was the only one that disagreed.
+- **Animal-mediated seed dispersal** (medium) — 🚧 Partial — ✅ for birds, ⬜ for anything on four legs. `src/gameplay/seed_endozoochory.gd` is live: `AmbientFlyerMarker` converts `SeedEndozoochory.carry_distance_tiles` into flight time at the bird's own speed for tree fruit (`src/rendering/ambient_flyer_marker.gd:744`), flower seed (`:873`) and grass seed (`:942`) alike, and plants through the same sinks ground-spread saplings already use, gated by `SeedEndozoochory.can_root_in` (`src/world/earth_chunk_manager.gd:4508`). Mice scatter-hoard grass seed on a deliberately shorter GROUND carry instead (`src/gameplay/seed_caching.gd`, whose carry range is pinned by test to sit below the bird's). ⬜ ground herbivores/omnivores still get only the food-energy half of frugivory, never a dispersal role. **This entry contradicted this same file**: see the Flora section's "Animal-Mediated Seed Dispersal", which has carried the accurate 🚧 breakdown for some time, and `concept/ecosystem_dynamics.md:670`, which agrees with it. Keep the two in step, or reduce this one to a cross-reference.
 - **Sunflower head was clipped, and its blossom read as sitting on the stem** (small) — ✅ Fixed — reported with a screenshot: "the sunflower sprite is clipped at the top" and "butterflies drink from their stem... I'm not sure if butterflies should even visit sunflowers?" The second question needed no code change: real sunflowers are a genuine nectar/pollen source for both bees and butterflies, so a pollinator visiting one is correctly grounded — the two visible symptoms shared one structural cause instead. `IllustratedFlowerHead.HEAD_CANVAS_SIZE` (18px) is taller than the headroom ANY stem roll leaves above its own attachment point (`ProceduralFlowerSprite.stem_height_px`, at most 16px of the 32px art canvas) — composited at full size the crown was sliced off flat by the canvas edge, invisible on the small species this shipped with and glaring on the sunflower once its much larger world scale (see "Illustrated blooms..." above) turned a few always-clipped art pixels into an obvious flat top. `_paint_illustrated_head` now shrinks the whole head to fit the real headroom (`ProceduralFlowerSprite.head_fit_scale`, the same "scale a drawing down to fit its canvas" trick `SpriteSheetSlicer.normalize_frames` already uses one layer up) instead of clipping it. Separately, `blossom_height_world` — where a pollinator actually lands — scaled by the species' own nominal size alone, while the sprite itself is drawn at a smaller PER-PLANT size for a below-average individual (`PLANT_SIZE_VARIANCE`) or one still growing in (`FlowerPatch.growth_at`); the landing point did not shrink with it, which on a species as large as the sunflower reads as landing near the stem rather than on the bloom. It now takes the exact per-plant scale `EarthChunkManager._flower_scale_for` draws the sprite at, so sprite and landing point can never drift apart. Tests: `head_fit_scale` never exceeds the real headroom across 200 stem rolls, a tight-headroom sunflower head measurably narrows rather than clipping flat at the same width, the blossom offset scales linearly with the actual plant scale and shrinks in lockstep with growth, and a freshly-planted seedling's `EarthChunkManager.flowers_near` landing point sits well below the mature blossom height.
 - **Wolves and sheep — forest's own named predator, and its prey** (medium) — ✅ Done — see `concept/ecosystem_dynamics.md`'s "Forest gets its own named predator" section. Forest's dominant predator slot had drawn from the anonymous `"predator"` placeholder (wolf-shaped, gray) rather than a real named species — the one gap left in the per-biome pattern desert/tundra/rainforest/mountain each already had (jackal/arctic_fox/jaguar/mountain_lion). Wolf is now a real `CreatureInfo` predator-role entry (own stats, `AnimalAnatomy` profile already existed unused), added to forest's `PREDATOR_SPECIES_POOL_BY_BIOME` alongside — not replacing — its existing lynx/predator/bear entries, and forest-exclusive (pinned by test: absent from every other biome's predator pool). Sheep — already grazing grassland and mountain — now joins forest too, as its (and deer's) real forest prey. No new predation mechanism was needed — `is_predator` already means "hunts herbivore-role creatures generically" (see `CreatureInfo`'s own doc comment), so a wolf sharing forest with sheep and deer already hunts both by construction. Wolf gets real illustrated art (`assets/sprites/animals/wolf.png`) rather than falling back to a procedural silhouette, reusing sheep's own already-shipped **chroma-keyed magenta** sheet handling (`IllustratedAnimalSprite`'s per-sheet `chroma_key`/`chroma_key_tolerance` fields — see the Germany-region world bosses below, which established the same convention) rather than introducing a second parallel mechanism. The sheet is a 2-row (walk, then eat) × 8-column grid with no dedicated idle row (idle synthesizes from eat's own frame 0, same as deer/boar); bands measured directly from the real PNG, not eyeballed.
 
@@ -2281,13 +2281,13 @@ chunks away from the player). See the concept doc for the full spec.
 - **Terrain Generation** (large) — ✅ Done — via real elevation data (`earth_elevation_source.gd`, `earth_chunk_generator.gd`); the old fully-procedural generator is kept for future non-Earth planets.
 - **Biome System** (medium) — ✅ Done — `biome_classifier.gd`, 7 biomes.
 - **Plant Growth Simulation** (large) — 🚧 Partial — static deterministic tree placement + collision exists (`tree_placement.gd`, `tree_renderer.gd`), unchanged; a real per-cell density growth/die-back/spread simulation now also exists (`vegetation_growth_model.gd`) but isn't unified with tree placement/rendering yet -- it currently only feeds herbivore carrying capacity.
-- **Animal Ecology / Population Simulation** (large) — 🚧 Partial — regional/aggregate herbivore + predator population dynamics (reproduction, drought-driven death, migration) built and wired into live gameplay (`herbivore_population_model.gd`, `predator_population_model.gd`, `ecosystem_simulation.gd`), AND individual promoted creatures now have real per-agent AI (flee/hunt/graze/drink, temperament-driven, `creature_behavior.gd` et al. — see Phase 1 table's "Individual Creature AI" row). Still missing: taming, genetics, individual reproduction, and a link between individual predation and the aggregate population counts.
+- **Animal Ecology / Population Simulation** (large) — 🚧 Partial — regional/aggregate herbivore + predator population dynamics (reproduction, drought-driven death, migration) built and wired into live gameplay (`herbivore_population_model.gd`, `predator_population_model.gd`, `ecosystem_simulation.gd`), AND individual promoted creatures now have real per-agent AI (flee/hunt/graze/drink, temperament-driven, `creature_behavior.gd` et al. — see Phase 1 table's "Individual Creature AI" row). Still missing: **genetics of any kind** -- an offspring's `wander_seed`, the value `CreatureInfo` derives its level and max_health from, is a fresh `randi()` (`src/rendering/creature_renderer.gd:266`), so a newborn inherits its species string and nothing else -- and a **death** term linking individual mortality back to the aggregate: `EcosystemSimulation` has `record_catch` (`src/world/ecosystem_simulation.gd:299`), `record_vegetation_harvest` (`:316`) and `record_birth` (`:342`), but **`record_death` does not exist anywhere in the repo** (verified by grep across all of `src/`, `scenes/` and `tests/`), so a valley hunted bare is quietly restocked by `EarthChunkManager._reconcile_chunk_creatures` (`:4896`) and hunting is mechanically weightless. Taming is **no longer missing** -- it is live and playable (see this doc's Ecosystem Dynamics and Pets sections). Individual reproduction exists as a code path but is effectively unreachable in a real session (see "Condition-gated reproduction (bioenergetics)" above).
 - **AI-Driven NPCs** (huge) — ⬜ Not started
 - **NPC Memory Log** (large) — ⬜ Not started
 - **NPC Daily Planning Loop** (large) — ⬜ Not started
 - **LLM Backend Integration** (medium) — ⬜ Not started
 - **Need-Driven Quest System** (large) — ⬜ Not started
-- **Creature Collection System** (large) — ⬜ Not started
+- **Creature Collection System** (large) — 🚧 Partial — the first real collecting verb exists: a wild animal can be caught, kept, ordered about, ridden, and persisted across sessions (see the Pets and Ecosystem Dynamics sections' taming entries; `src/gameplay/taming.gd`, `src/world/kept_animals.gd`). What is missing is everything that makes it a *collection*: no roster or list of what you own (`CreaturePanel` cards are proximity-driven and vanish when you walk away), no per-animal identity beyond species and level -- and not even that survives a reload, since `_restore_kept_animals` rebuilds the animal through `spawn_single`'s `randi()` seed -- no way to choose between two animals (every verb resolves to *nearest*), no rarity or trait axis to collect along, and no breeding. Pokémon-style collection is named as an inspiration in `concept/overview.md:8` but has no mechanism spec of its own; `concept/animal_husbandry.md` and `concept/animal_genetics.md` (both new, both entirely ⬜) now specify the pieces.
 - **Sandbox Building System** (large) — ⬜ Not started
 - **Persistent World State** (medium) — ⬜ Not started
 - **MMO-Scale Social Systems** (huge) — ⬜ Not started
@@ -2690,7 +2690,7 @@ No live world-boss/creature-fitness simulation exists yet, but the promotion mat
 - **Best-in-Slot Loot Drop** (small)
 - **High-Risk World Boss Taming** (medium)
 - **Population Impact of Killing (Outlier Removal)** (small)
-- **Population Impact of Taming (Outlier Retained)** (small)
+- **Population Impact of Taming (Outlier Retained)** (small) — 🚧 Partial — the retention rule itself is live for ordinary animals: `EarthChunkManager._thin_creatures` (`src/world/earth_chunk_manager.gd:4936`) exempts any creature with `trust > 0.0` or on a rope from the aggregate cull ("the aggregate model is a background process, and it does not get to delete the horse the player spent an evening winning over"), and `KeptAnimals` re-spawns kept animals **on top of** the region's aggregate rather than inside it, so carrying capacity governs wild stock only. The exemption has a cost worth recording: kept animals are still appended to `_loaded_creatures` (`:6664`) and still counted in `alive` by `_reconcile_chunk_creatures` (`:4896`), so a pen of six sheep permanently suppresses wild marker spawning in that chunk. ⬜ the world-boss half: nothing tracks a creature's kills or age, and `EarthChunkManager.attempt_world_boss_promotion` (`:1389`) has no production caller -- only tests and doc comments -- so there is no outlier to retain yet.
 - **Village-Endangerment Attractor / Discovery Signaling** (medium) — ⬜ Not started — formerly an open question, now specified in `concept/worldbosses.md`'s "Village endangerment" section and `concept/quests.md`; no longer open, just not yet built.
 - **World Boss Special AI/Behavior (open question)** (large) — 🚧 Partial —
   resolved for aggro/engagement specifically (`concept/worldbosses.md`'s
@@ -2716,7 +2716,7 @@ No live world-boss/creature-fitness simulation exists yet, but the promotion mat
 
 ### Evolution (`concept/evolution.md`)
 
-No DNA/genetics/evolution simulation exists. All ⬜ Not started:
+No genetics reaches a living animal: an offspring inherits its species string and nothing else (`CreatureRenderer.spawn_single`, `src/rendering/creature_renderer.gd:263`, rolls a fresh `randi()` wander seed on `:266`, and that seed is exactly what `CreatureInfo` derives level and max_health from, `src/world/creature_info.gd:351-353`). Three pieces of the machinery are nonetheless real, tested and **unwired** -- marked 🚧 individually below, not ⬜ -- and DNA does exist elsewhere in the tree for trees (`TreeGenome`) and for character creation (`HeroDna`). Unmarked entries below are ⬜ Not started:
 
 - **Evolutionary Population System (DNA/Reproduction/Selection)** (large)
 - **Resource-Constrained Reproduction** (medium)
@@ -3541,7 +3541,7 @@ No map/fog-of-war/waypoint exploration mechanics exist beyond raw walking. All �
 - **Toroidal, Water-Heavy World** (huge) — 🚧 Partial — the world is genuinely toroidal (`world_coordinates.gd`) and genuinely water-heavy (real Earth oceans/lakes from real elevation data), but this is the terrain substrate only, not a transportation mechanic.
 - **Boats** (large) — ⬜ Not started
 - **Fast Travel System** (large) — 🚧 Partial — `src/gameplay/fast_travel.gd` (cost/cooldown math + living-creature cargo restriction) + `src/gameplay/waypoint_network.gd` (unlock tracking), both tested; no player-triggered travel action, no map UI, nothing actually moves the player yet.
-- **Horses (Land Mount)** (trivial) — ⬜ Not started
+- **Horses (Land Mount)** (trivial) — ✅ Done — a tamed horse is ridable, at `Taming.MOUNTED_SPEED` against `Player.BASE_SPEED` (`src/gameplay/taming.gd:171`, `scenes/player.gd:64`/`:2281`), gated to `Taming.RIDABLE_SPECIES` (`:182`) and to full trust (`is_mountable`, `:189`). Pinned as an ordering with an upper bound by `tests/unit/test_taming.gd:161` `test_riding_is_faster_than_walking`, not as a speed number. See the Pets section's "Mount System (Horses)" entry for the wiring and what is still missing. This entry was stale.
 - **Waypoint Network (fast-travel option A)** (medium) — 🚧 Partial — see `waypoint_network.gd` above.
 - **Personal Portal Item (fast-travel option B)** (medium) — ⬜ Not started
 - **Fast-Travel Cost/Limitation Mechanic** (small) — 🚧 Partial — resolved per `concept/transportation.md` ("Fast travel: free for cargo, never for living stock"): `fast_travel.gd`'s cost/cooldown math is unchanged and untaxed for cargo, plus a new `can_fast_travel_with_cargo(cargo)` that allows any inanimate load but blocks the whole trip if it contains even one living creature. Tested; not yet wired to a live travel action.
@@ -4138,21 +4138,22 @@ itself still has no caller of its own.
 
 ### Pets (`concept/pets.md`)
 
-No pets/taming system is wired into live gameplay, but two of its core math pieces now exist as tested pure logic:
+The **taming** half of this doc is live and playable end to end -- craft a lasso, catch a wild animal, hold it through its struggle, feed it, tie it up, order it about, ride a horse -- and persists across chunk unload and across sessions. Everything **downstream** of taming is not: no roles, no animal products, no pet combat, no pens, no breeding, no pet roster. The live model is `src/gameplay/taming.gd`; `src/gameplay/taming_system.gd` is an older rival model with zero production callers. See also the Ecosystem Dynamics section's taming entry and `concept/taming.md`:
 
-- **Taming System** (medium) — 🚧 Partial — `src/gameplay/taming_system.gd`: deterministic tame-chance/success roll, tested; no player action or creature-side state to apply it to.
-- **Pet Accompaniment (Follow AI)** (medium)
+- **Taming System** (medium) — 🚧 Partial, playable end to end — the live model is `src/gameplay/taming.gd` (**not** `taming_system.gd`, see the entry below), tested by `tests/unit/test_taming.gd` and wired through `CreatureMarker.restrain_to`/`release`/`feed_treat`/`restore_taming` (`src/rendering/creature_marker.gd:812`/`:826`/`:835`/`:783`) and `Player._lasso_step` (`scenes/player.gd:2130`). The loop: craft a lasso from 4x plant fibre (`src/gameplay/crafting_recipe_book.gd:48`), throw it inside `Player.LASSO_RANGE` (`scenes/player.gd:72`, `_throw_lasso` at `:2193`), hold the animal through its struggles, feed carrots while it is genuinely hungry (`Taming.trust_after_feeding`, `TRUST_PER_FEED 0.2` at `src/gameplay/taming.gd:110` -- five hungry feeds to tame), tie it off to a tree, then order it about or ride it. Full breakdown and the honest gap list live in the Ecosystem Dynamics section's "Taming (lasso → hold → feed → tame)" entry above; everything downstream of taming in `concept/pets.md` -- roles, production, combat, breeding -- is still ⬜.
+- **Second, rival taming model (dead code)** (small) — 🚧 Partial (unwired duplicate) — `src/gameplay/taming_system.gd`: a deterministic tame-chance/success roll, tested by `tests/unit/test_taming_system.gd` and called by **nothing** in `src/` or `scenes/`. Its only other mentions repo-wide are doc comments citing it as a naming precedent -- `src/gameplay/sickness.gd:8`/`:31`/`:48`, `src/gameplay/disease_model.gd:12`/`:172`, and `tests/unit/test_player.gd:964` -- so deleting the file means repointing six comments and this file's own naming-precedent mention in the Disease section. It predates `taming.gd` and is a second answer to the same question. This entry used to be the one labelled "the Taming System", which is how the ledger came to describe a live, playable loop as unbuilt. Resolve it: either delete the file (and repoint those six mentions) or fold its chance curve into `Taming` -- do not leave two.
+- **Pet Accompaniment (Follow AI)** (medium) — ✅ Done — `CreatureMarker._step_order` (`src/rendering/creature_marker.gd:749`): a tamed, un-roped animal on FOLLOW walks toward `follow_target` -- pushed in by the owner every frame (`scenes/player.gd:2339`) rather than messaged between nodes -- until it is inside `FOLLOW_DISTANCE` (`:726`), then stands around; on STAY it mills inside `STAY_RADIUS` (`:725`) of where it was left, reusing `RopeTether.pull_direction` so "walk back when you have drifted too far" has one implementation, not two. Orders cycle on the lasso key once the animal is tame, at which point the rope has nothing left to do and the key changes meaning (`Player._cycle_order` → `Taming.next_order`, `scenes/player.gd:2291`). Pinned by `tests/unit/test_taming.gd:145` `test_the_orders_are_follow_and_stay` and `:150` `test_cycling_an_order_returns_to_where_it_started`, plus `:116`/`:120` for the trust gate on taking orders at all. Deliberate and undocumented anywhere the player can see it: a HUNGRY tamed animal falls through to foraging and ignores its order (`src/rendering/creature_marker.gd:631`). Also worth naming as a gap rather than a feature: `_cycle_order` resolves through `_nearest_tamed`, so with two tamed animals side by side the order lands on whichever is closer, not whichever you meant.
 - **Species-Fixed Role System** (small)
 - **DNA/Fitness-Driven Performance** (large)
 - **Unified Fitness Dimension (Ecosystem ↔ Taming value)** (trivial)
 - **Guard Dog Behavior** (medium)
 - **Combat Pet System** (large)
-- **Mount System (Horses)** (large)
+- **Mount System (Horses)** (large) — 🚧 Partial — riding is live. `Taming.RIDABLE_SPECIES` (`src/gameplay/taming.gd:182`) admits `horse` alone; `Taming.is_mountable` (`:189`) additionally requires `TAME_TRUST`; `Player._try_mount` (`scenes/player.gd:2298`) carries the mount along underneath the rider so inventory/combat/survival keep working while riding, and `Player.current_speed` (`scenes/player.gd:2281`) returns `Taming.MOUNTED_SPEED` against `Player.BASE_SPEED` (`:64`). The speeds are pinned as an ORDERING with an upper bound, not as numbers -- `tests/unit/test_taming.gd:161` `test_riding_is_faster_than_walking` asserts `MOUNTED_SPEED > BASE_SPEED` and `< BASE_SPEED * 3.0` ("a world to travel through rather than to blur past") -- alongside `:126` `test_only_a_ridable_species_can_be_mounted` and `:132` `test_an_untamed_horse_is_still_not_a_mount`. `World.STREAMING_BUDGET_TILES_PER_SECOND` is derived from `Taming.MOUNTED_SPEED` (`scenes/world.gd:510`), so chunk streaming is already sized for a rider. ⬜ Remaining: no saddle/tack item, no mounted combat or mount-specific animation, exactly one ridable species, and the mount is chosen by proximity rather than picked (`Player._nearest_tamed`, `scenes/player.gd:2317`). Note that `current_speed()` is only half of the player's real pace -- `scenes/player.gd:1275` multiplies it by `current_speed_multiplier`, which weather, terrain and body condition can push well below 1.0; see the Animal Husbandry section's approach entry below.
 - **Decorative Pet Behavior (Birds)** (small)
 - **Farm Animal Resource Production** (medium)
 - **Beastmaster Class Archetype** (large)
 - **Breeding System** (large)
-- **Bonding/Loyalty Mechanic (proposed, open question)** (medium) — 🚧 Partial — `src/gameplay/pet_loyalty.gd`: loyalty accrual/decay math, tested; no actual tamed pets exist yet to carry this state.
+- **Bonding/Loyalty Mechanic (proposed, open question)** (medium) — 🚧 Partial — `src/gameplay/pet_loyalty.gd`: loyalty accrual/decay math, tested (`tests/unit/test_pet_loyalty.gd`), and referenced by **nothing** in `src/`/`scenes/`. The old note that "no actual tamed pets exist yet to carry this state" was stale: tamed pets do exist, carry per-individual state (`CreatureMarker.trust`, `set_order` at `src/rendering/creature_marker.gd:731`) and survive chunk unload (`KeptAnimals`). So the open question is no longer "is there anything to attach this to" but the sharper one: does `PetLoyalty` earn its place beside `Taming`'s own trust axis (`src/gameplay/taming.gd:103` `TAME_TRUST`, `:110` `TRUST_PER_FEED`), or is it a second name for the same number? Two loyalty scalars on one animal is the two-clocks bug this repo has already been bitten by. **`concept/taming.md` owns that call** -- it is a trust/bond question, and its answer is to retire `pet_loyalty.gd` and spend the trust axis it duplicates on tiered order gates instead (`test_guarding_needs_more_trust_than_following`). ⬜ until that lands; `concept/animal_husbandry.md` references the decision and does not restate it.
 - **Species-to-Role & Fitness-to-Metric Mapping Table (design task)** (trivial)
 
 ### Cooking (`concept/cooking.md`)
@@ -5735,6 +5736,570 @@ passing) is a real, valid `EntityRef` (`"player:local"`), the same
   lore instead of dev-console text, the optional LLM rephrasing pass) --
   what actually makes this player-facing rather than a dev-console reader.
 
+### Animal Husbandry (`concept/animal_husbandry.md`)
+
+New doc this pass. It specifies the loop **around** taming -- approach, choice,
+roster, pens, upkeep, products, work, mastery -- which is where the "you can
+only watch the simulation" complaint actually bites: catching an animal works,
+and then there is nothing to do with it. **Writing the spec built none of it.**
+Every mechanism the doc introduces is ⬜ or 🚧; the ✅ rows are pre-existing
+code the doc is written to reuse, listed so nobody builds a second one.
+
+Foundations it reuses (already built, credited elsewhere in this file, not to
+this doc):
+
+- **Taming loop (lasso → hold → feed → tame → order/mount)** — 🚧 Partial —
+  see the Ecosystem Dynamics and Pets sections above. `src/gameplay/taming.gd`.
+- **Per-individual persistence of kept animals** — ✅ Done —
+  `src/world/kept_animals.gd` (`FORMAT_VERSION 1`), `EarthChunkManager:6623`/
+  `:6649`. Lossy: see the V2 entry under Animal Genetics below.
+- **Kept animals exempt from the aggregate cull** — ✅ Done —
+  `EarthChunkManager._thin_creatures` (`:4936`).
+- **Per-individual needs, disease, foraging phase machine** — ✅ Done —
+  `src/gameplay/creature_needs.gd`, `src/gameplay/grazer_foraging.gd`,
+  `src/rendering/creature_marker.gd` (~40 fields of real per-animal state).
+- **Grazing already books its own harvest against land health** — ✅ Done —
+  `EarthChunkManager._graze_by_herbivores` (`:3616`) →
+  `record_vegetation_harvest`. It does **not** skip tamed animals, so the
+  overstocked-pasture feedback loop below is live machinery waiting for
+  livestock to stand on it.
+
+New mechanisms:
+
+- **The approach: why chasing is the wrong verb** (medium) — ⬜ Not started —
+  the loop's real entry barrier, and the reason the live session never landed a
+  lasso on a wild sheep. The obvious explanation is wrong and should not be
+  repeated: `CreatureMarker.FLEE_SPEED` is 40.0
+  (`src/rendering/creature_marker.gd:147`) against `Player.BASE_SPEED` 80.0
+  (`scenes/player.gd:64`), so a fleeing animal moves at *half* a walking
+  player's speed, and `tests/unit/test_creature_marker.gd:2091`
+  `test_the_measured_catch_rate_matches_the_model` measures sixty real
+  captures. The actual cause is that the player's pace is a **product**:
+  `scenes/player.gd:1267` composes `water * weather * terrain *
+  ConditionPenalty.speed_multiplier(survival.fitness)` into
+  `current_speed_multiplier`, and `:1275` multiplies `current_speed()` by it.
+  In the live session (`docs/playtests/2026-08-26-taming-breeding-session.md`)
+  the HUD read **`Speed: 47%`** through autumn rain over vegetated ground with
+  a Cold/Freezing meter running -- 0.47 x 80 = 37.6 px/s, **below `FLEE_SPEED`**
+  -- so a healthy wild animal was not merely hard to catch but impossible to
+  run down, and the HUD's percentage never says "you are now slower than a
+  sheep". Later the multiplier rose to 75% (60 px/s) and the approach worked at
+  once. That is the honest argument for bait, crouch and patience: **bait works
+  regardless of your speed multiplier, and a stalk closes distance without a
+  foot race.** Pinned by
+  `test_a_player_slowed_by_weather_and_terrain_cannot_outpace_a_fleeing_animal`,
+  which composes the real multiplier chain against `FLEE_SPEED` rather than
+  asserting either number.
+- **Per-species flight distance, wariness, and the stalk** (medium) — ⬜ Not
+  started — `SENSE_RADIUS` (`:118`) is one constant for every creature in the
+  world, which is why a mouse and a horse react identically. Replace the threat
+  half of it with `FlightDistance.radius(species, wariness, trust, crouched)`
+  -- one function, one owner, four inputs: species sets the base, wariness
+  multiplies up, trust and crouch multiply down. Crouch is a new
+  `keybindings.gd` entry (`KEY_X`/`KEY_Z` are free in the 26-action registry)
+  and must cost speed or it is a free permanent state. Pinned as orderings and
+  outcomes, never as radii: `test_a_larger_prey_animal_flees_earlier_than_a_smaller_one`,
+  `test_a_spooked_animal_flees_earlier_than_a_calm_one`,
+  `test_wariness_never_leaves_its_range`,
+  `test_a_spooked_grazer_is_approachable_again_within_a_few_grazing_bouts`
+  (expressed against `GrazerForaging`'s own bout constants),
+  `test_crouching_is_slower_than_walking` (a ratio against `BASE_SPEED`, the
+  same shape `test_riding_is_faster_than_walking` already uses), and the
+  invariant that keeps the existing hysteresis intact:
+  `test_a_graded_flight_radius_never_dithers` -- every composed radius must
+  stay below `FLEE_RELEASE_RADIUS` 120.0 (`creature_marker.gd:143`), or the
+  Schmitt trigger that fixed the measured flee-dithering bug inverts. That test
+  is the **single** owner of the invariant; do not add a second in taming.md.
+  The one that matters end to end is
+  `test_a_crouched_baited_approach_lands_within_lasso_range`, sixty real
+  approaches against a real marker.
+- **Bait** (medium) — 🚧 Partial — the only 🚧 in this doc's own list, and it is
+  honest: the scent plumbing is genuinely live. `EarthChunkManager.smells_near`
+  publishes ground food as olfaction sources, `CreatureMarker._seek_by_smell`
+  walks a creature up the gradient, and a boar really does walk to a dropped
+  apple. Four verified gaps stop it being a husbandry verb:
+  `Olfaction.fruit_mixture` ignores its item id (`src/gameplay/olfaction.gd:49`)
+  so a carrot smells exactly like a walnut; `Olfaction.RECEPTORS` (`:68`) covers
+  boar/deer/horse/robin/fly only, leaving sheep, goat, reindeer, camel and tapir
+  with no nose at all; `_seek_by_smell` is gated on a fruit diet, excluding
+  every plain grazer; and `take_fruit_at` can only remove items whose id is in
+  `TreeSpecies.IDS`, so a baited carrot would be walked to and never eaten.
+  Driven by `test_a_carrot_and_an_apple_do_not_smell_the_same`,
+  `test_every_food_item_in_the_catalog_has_a_mixture`,
+  `test_every_keepable_species_has_a_nose`,
+  `test_a_baited_animal_crosses_ground_it_would_otherwise_avoid_the_player_for`
+  (measured over simulated approaches, not asserted as a weight) and
+  `test_bait_beyond_smelling_range_draws_nothing`.
+- **Explicit target selection (retiring "nearest")** (medium) — ⬜ Not started —
+  the prerequisite for every multi-animal mechanic below. `_throw_lasso`
+  (`scenes/player.gd:2193`), `_cycle_order` (`:2291`), `_nearest_tamed`
+  (`:2317`) and `_try_mount` (`:2298`) all resolve to whatever is closest. The
+  mechanism is a **persistent, click-latched `Player.selected_animal`**: set by
+  clicking a creature, cleared when it dies, is freed, or leaves range, drawn
+  with a selection ring, read by every animal verb. Hover is the fallback only
+  when nothing is selected, so the existing single-animal tests keep passing
+  rather than being rewritten. `CreatureMarker` already joins
+  `HoverTargetFinder.GROUP_NAME` (`src/rendering/creature_marker.gd:357`) and
+  already answers `get_display_name()` (`:518`), so the tooltip half is nearly
+  free; `CreatureMarker.get_hover_actions()` does not exist -- of the 15 scripts
+  that join the group, 11 implement it, and the four that do not are
+  `creature_marker.gd`, `fish_marker.gd`, `piscivore_bird_marker.gd` and
+  `ambient_flyer_marker.gd`, so animals are the only *tameable* thing that
+  hovers with a name and no verb. Driven by
+  `test_a_verb_prefers_the_selected_animal_over_a_nearer_one` and its
+  regression guard `test_with_nothing_selected_a_verb_still_takes_the_nearest`.
+  That is the single test name for this mechanism across all three docs.
+- **Pet/livestock roster** (medium) — ⬜ Not started — there is no list anywhere
+  of what the player owns. `CreaturePanel` cards are proximity-driven and vanish
+  when you walk away; the inventory screen is equipment plus a grid. Reuses
+  `scenes/crafting_window.gd`'s sectioned card grid and `src/ui/ui_theme.gd`.
+  Budget the plumbing tax: a new window must be registered in
+  `World._any_gameplay_window_open` (`scenes/world.gd:2473`),
+  `World._close_gameplay_windows` (`:2500`) and `World._unhandled_input`
+  (`:2341`), and `scenes/world.gd` is already 4,345 lines. **Spec gap:**
+  `animal_husbandry.md` describes the roster under "What the player can see" but
+  names no driving test. Name one there before implementing, and mirror it here
+  -- it must read `KeptAnimals` rather than the loaded-marker group, or it is
+  the creature panel again under a new name.
+- **The struggle as a contested act** (medium) — ⬜ Not started — owned by
+  `concept/taming.md`. Today `CreatureMarker._step_restraint`
+  (`src/rendering/creature_marker.gd:854`) is a silent hash roll every
+  `STRUGGLE_INTERVAL` 1.2s (`:700`) with no input the player can bring to it.
+  `RopeTether.is_taut` (`src/gameplay/rope_tether.gd:38`) is implemented, tested
+  and has **zero production callers** -- it is exactly the rope-tension signal a
+  brace/slacken contest needs -- and `World._build_charge_meter`
+  (`scenes/world.gd:2044`) is already a world-space progress meter. The
+  rewritten `taming.md` §2a now names the tests, and they are mirrored rather
+  than reinvented here: `test_riding_the_rope_holds_more_animals_than_ignoring_it`,
+  its regression guard
+  `test_a_player_who_never_touches_the_brace_key_holds_the_same_share_of_animals_as_before`,
+  and `test_bracing_through_one_full_surge_costs_less_than_half_the_players_stamina`.
+  The measurement discipline is fixed: sixty real captures with and without a
+  scripted brace input, pinning the DIFFERENCE IN CAPTURES rather than a
+  per-attempt probability -- the same discipline
+  `tests/unit/test_creature_marker.gd:2091`
+  `test_the_measured_catch_rate_matches_the_model` already established.
+- **Feeding as an offered gesture on its own key** (small) — ⬜ Not started —
+  owned by `concept/taming.md`. `Player._try_feed_lassoed`
+  (`scenes/player.gd:2182`) fires every frame from proximity plus inventory, so
+  the relationship pillar currently reduces to standing still. One entry in
+  `src/gameplay/keybindings.gd` yields an InputMap binding, a rebind row and a
+  key glyph everywhere. Driven by `test_an_offer_made_at_a_run_is_refused`; the
+  "shy threshold" that test asserts is honoured is defined in
+  `animal_husbandry.md`'s approach layer, not in taming.md.
+- **Neglect with teeth, and two different outcomes on purpose** (trivial for
+  the first half) — ⬜ Not started — `Taming.trust_after_neglect`/
+  `NEGLECT_SECONDS` (`src/gameplay/taming.gd:140`/`:134`) are already written
+  and already unit-tested and have no production caller, so a permanently hungry
+  tied horse loses nothing. Wiring them into `CreatureMarker`'s per-frame step
+  off the hunger clock `CreatureNeeds` already keeps is a handful of lines:
+  `test_a_tied_animal_left_hungry_loses_trust`, asserted through the MARKER, not
+  through `Taming` (the pure function already passes). Past trust, the outcome
+  **splits by context, deliberately**: an animal that is free to leave --
+  following, staying, or tied with an untied option -- **walks off and goes
+  feral** (`concept/taming.md`,
+  `test_a_kept_animal_left_hungry_long_enough_walks_off`), because killing it is
+  the cheaper implementation and the worse story; a **penned** animal cannot
+  leave, so its death is routed through the existing `CreatureMarker._die()`
+  (`src/rendering/creature_marker.gd:1874`), driven by
+  `test_a_penned_animal_left_long_enough_without_food_dies` with
+  `test_an_unpenned_animal_left_hungry_leaves_instead_of_dying` as the boundary
+  that keeps the two rules from colliding. The fence is precisely what removed
+  the animal's own option to solve the problem, which is what makes penning a
+  responsibility rather than free storage. **It does not leave a carcass, and
+  that is a named prerequisite (⬜) rather than something either doc may
+  assume:** `_die()` routes through `_spawn_carcass_if_eligible` (`:1879`),
+  which returns immediately when `LootTable.drops_for(species)` comes back
+  empty, and `LootTable._DROPS` (`src/gameplay/loot_table.gd:19-24`) has rows
+  for `herbivore`, `boar`, `predator` and `lynx` **only** -- so a starved
+  sheep, goat or horse vanishes without remains and never reaches
+  `concept/carrion.md`'s loop, which would make the one consequence that is
+  supposed to teach the lesson invisible. Giving the keepable roster its own
+  drop rows (hide + meat, on the `herbivore` row's shape) comes first, driven
+  by `test_every_keepable_species_leaves_a_carcass`.
+- **A pen as a placed structure** (large) — ⬜ Not started — two new
+  `BuildingPiece` rows (`wood_fence`, `wood_gate`) beside the existing twelve,
+  reusing the placeable path (`src/gameplay/item_catalog.gd` +
+  `Player._arm_placeable` `scenes/player.gd:921` + `Player._build_step`
+  `scenes/player.gd:2500`) and `crafting_recipe_book.gd` for the recipes.
+  `RoomDetector.enclosures()` is extracted from the existing `find_rooms`
+  flood-fill so a walled ring with no floor counts as a pen without counting as
+  a room. A pen is what turns "animals I happen to have tied to trees" into a
+  herd with a location. Driven by
+  `test_a_penned_animal_does_not_leave_through_a_closed_gate`,
+  `test_an_open_gate_lets_it_out`,
+  `test_a_walled_ring_with_no_floor_is_an_enclosure_but_not_a_room`,
+  `test_a_fence_costs_less_than_a_wall`, and for stocking,
+  `test_a_horse_needs_more_room_than_a_sheep`, `test_a_bigger_pen_holds_more`
+  and `test_stocking_at_capacity_does_not_outstrip_the_pasture` (derived from
+  real `TallGrass` regrowth, not eyeballed). Known interaction to pin while
+  building it: kept animals are appended to `_loaded_creatures`
+  (`earth_chunk_manager.gd:6664`) and counted in `alive` by
+  `_reconcile_chunk_creatures` (`:4896`) while `_thin_creatures` (`:4936`)
+  refuses to cull them, so a stocked pen permanently suppresses wild marker
+  spawning in its chunk. That is the concrete answer to the doc's own open
+  question about `MAX_LIVE_CREATURES`, and it needs a test, not a shrug.
+- **Upkeep: trough, water, shelter, crowding** (medium) — ⬜ Not started — the
+  section that makes the word "husbandry" honest: four ongoing costs the player
+  can satisfy or fail to. Trough fodder in a `StructureStock`
+  (`src/emergence/structure_stock.gd`), driven by
+  `test_a_full_trough_carries_a_penned_flock_across_a_night` and
+  `test_an_empty_trough_feeds_nobody`; water by
+  `test_a_penned_animal_with_no_water_in_reach_goes_thirsty`; shelter by
+  `test_an_unsheltered_animal_loses_condition_in_a_storm`. The crowding→disease
+  tension is the interesting one and it is explicitly **new code**, not a reuse:
+  `DiseaseModel.herd_transmission_chance` is a *regional density* term reading
+  chunk aggregates, and this doc's own rule deliberately keeps kept animals off
+  those aggregates, so six sheep in a shed move that input by exactly zero. The
+  doc therefore specifies `Husbandry.pen_crowding(stock, capacity)` over the
+  pen's own stock feeding a sixth transmission-chance function beside
+  `DiseaseModel`'s existing five (`herd_`, `predator_bite_`,
+  `carcass_contamination_`, `decomposer_carry_`, `carrion_graze_`) --
+  `pen_transmission_chance(crowding, region_tier)`, built in
+  `herd_transmission_chance`'s own density-ratio-times-region-pressure shape so
+  there is one transmission idiom in that file and not two. Driven by
+  `test_a_crowded_pen_spreads_disease_faster_than_a_roomy_one` and, guarding the
+  exclusion that made it necessary,
+  `test_a_pen_at_capacity_does_not_move_the_regional_herd_risk`.
+- **Breeding, the player's half** (large) — ⬜ Not started — pairing two chosen
+  animals in a pen; the genome, crossover and pedigree are
+  `concept/animal_genetics.md`'s. Driven by
+  `test_two_animals_in_different_pens_cannot_be_paired`,
+  `test_a_hungry_animal_will_not_breed`,
+  `test_a_wild_animal_standing_in_a_pen_is_not_a_breeding_candidate`,
+  `test_full_siblings_cannot_be_paired`,
+  `test_a_deliberate_pairing_resolves_within_a_single_evening_of_play` and
+  `test_gestation_survives_a_chunk_reload` (`GESTATION_SECONDS` as a fraction of
+  `LifeCycle.SECONDS_PER_REAL_DAY`, never a bare number).
+- **Animal products (milk / wool / traction)** (medium) — ⬜ Not started — a
+  grep of `src/` for `milk`, `wool`, `shear`, `fleece`, `trough` finds only a
+  `wool_rug` furniture entry in `src/gameplay/coziness_score.gd:15` and colour
+  comments in the sprite code. This is the first real REASON to keep an animal
+  rather than tame one and walk off. Hang it off the existing `CreatureInfo`
+  species tables and copy `grazer_foraging.gd`'s seek→approach→act phase machine
+  rather than inventing a second one. Driven by
+  `test_a_hungry_animal_gives_less_than_a_well_fed_one`,
+  `test_a_sick_animal_gives_nothing`,
+  `test_an_untrusting_animal_will_not_stand_to_be_milked`,
+  `test_yield_never_leaves_its_range`,
+  `test_a_sheep_shorn_today_cannot_be_shorn_again_tomorrow` and
+  `test_shearing_before_winter_costs_the_animal_condition`. The signature is
+  `Husbandry.yield_fraction(energy, health_fraction, trust, is_sick,
+  heritable_yield)`: the first four arguments are the condition term and the
+  fifth is the **only place in this design where breeding pays off in a number
+  the player can weigh**, pinned by
+  `test_a_bred_ewe_out_yields_a_wild_caught_one_at_equal_condition`. The one
+  half still open is on the other side of that interface: `animal_genetics.md`'s
+  `GENE_READERS` table names no gene as the reader for `heritable_yield` yet, so
+  either a dedicated productivity gene or an existing one has to be nominated
+  there before `test_every_gene_has_a_named_production_reader` can go green.
+  Note also that the product roster is deliberately scoped to species that are
+  already in the world -- there is no cow and no chicken in
+  `CreatureInfo.MAX_HEALTH_BY_SPECIES`, so `pets.md`'s milk cow and any `egg`
+  are out of the first loop rather than silently assumed; adding a species is a
+  documented path (five stat tables, a shape family, an `AnimalAnatomy` profile,
+  biome pools, art) and should be paid for on purpose.
+- **Work: guard, draught, herding, pack** (medium) — ⬜ Not started — a `dog`
+  species entry (`test_a_dog_can_be_tamed_but_a_wolf_cannot`), tiered order
+  gates on trust (`test_guarding_needs_more_trust_than_following`, which is also
+  where `pet_loyalty.gd` gets retired -- see the Pets section above), draught
+  hitching to `FelledTree` (`test_a_hitched_horse_moves_a_log_a_player_cannot`),
+  pack `Inventory` (`test_a_pack_animals_load_survives_a_reload`), a call/whistle
+  action (`test_the_call_orders_every_tame_animal_in_earshot`), and herding as
+  the flight-zone mechanic reused (`test_a_flock_moves_away_from_a_handler_inside_its_flight_zone`,
+  `test_backing_off_lets_the_flock_settle`). Guarding is defined rather than
+  hand-waved: a third value in the `ORDER_*` cycle `Taming.next_order` already
+  rotates, selected with the same order key, after which the dog holds the
+  position it was standing on and `CreatureBehavior._will_fight` does the rest
+  -- so `dog` is a roster entry (aggressive temperament, deliberately **not** in
+  `PREDATOR_SPECIES`, on the precedent `creature_info.gd` documents for the
+  boar) rather than a new AI. Driven by
+  `test_a_guarding_dog_holds_its_post_while_a_following_one_leaves_it`,
+  `test_a_guarding_dog_engages_what_a_staying_sheep_ignores` and the regression
+  guard the widened cycle needs,
+  `test_the_order_cycle_returns_to_follow_after_guard`.
+- **Animal Handling as a progression axis** (medium) — ⬜ Not started — an
+  information ladder rather than a stat bonus: a novice cannot read a
+  candidate's condition, an expert can. Driven by
+  `test_a_novice_cannot_read_a_candidates_condition`,
+  `test_an_expert_reads_a_phenotype_a_novice_cannot` and
+  `test_taming_a_fresh_animal_teaches_more_than_taming_a_spent_one`. Depends on
+  `concept/labor_skills.md`, all ⬜. Without it, taming has no mastery curve:
+  the hundredth horse is exactly as hard as the first.
+- **`record_death` — mortality that reaches the aggregate** (small) — ⬜ Not
+  started — `record_death` does not exist anywhere in the repo, while
+  `record_catch` (`src/world/ecosystem_simulation.gd:299`),
+  `record_vegetation_harvest` (`:316`) and `record_birth` (`:342`) all do. Copy
+  `record_catch`'s exact shape, floored at 0.0 and a silent no-op for an unknown
+  region -- deliberately asymmetric with `record_birth`, which is capped at
+  carrying capacity because the land decides the ceiling while nothing stops a
+  region being emptied. Wiring point: `CreatureMarker._die()` (`:1874`) → an
+  `EarthChunkManager.record_death_at(position)` mirroring `record_birth_at`
+  (`:4077`). Driven by `test_a_death_lowers_the_regions_population`,
+  `test_a_population_never_goes_negative` and
+  `test_a_death_in_an_unknown_region_is_a_no_op`. Without it, hunting a valley
+  bare is silently restocked by `_reconcile_chunk_creatures` (`:4896`) and
+  breeding a better herd changes nothing about the world. Note that this makes
+  hunting consequential for the first time while hunting itself (tracking,
+  traps, butchery beyond the existing carcass) still has no spec -- deferred,
+  explicitly, not overlooked.
+- **Pen births and pasture pressure stay on the right books** (small) — ⬜ Not
+  started — a pen birth must **not** call `record_birth`
+  (`test_a_pen_birth_does_not_inflate_the_wild_population`): a barn full of
+  sheep is not a wild herd the land has to support. But penned *grazing* must
+  stay on the books, because `_graze_by_herbivores` already feeds every real
+  bite into `record_vegetation_harvest`, which already depletes land health,
+  which already lowers herbivore carrying capacity -- so an overstocked pasture
+  already starves the wild deer around it, out of code that already runs
+  (`test_an_overstocked_pasture_lowers_the_regions_herbivore_capacity`). This is
+  the doc's strongest claim to "mature": a husbandry decision with an ecological
+  consequence that was not written to punish the player.
+- **`KEPT_ANIMALS_DIR`/`ECOLOGY_DIR` in the New Game backup **and** wipe**
+  (trivial) — ⬜ Not started — `EarthChunkManager.KEPT_ANIMALS_DIR` (`:161`) and
+  `ECOLOGY_DIR` (`:158`) appear in neither `World.backed_up_directories()`
+  (`scenes/world.gd:786-792`) nor `World._wipe_persisted_world` (`:833`), so New
+  Game neither backs up nor destroys them and a previous world's horses walk
+  into the new one. **Both lists must move together.**
+  `tests/unit/test_world_backup_paths.gd` is *not* currently wrong -- its
+  `test_the_backup_lists_cover_exactly_what_the_wipe_destroys` counts
+  `wipe_directory(` calls in the wipe's own source against the backup list's
+  size, and today four matches four, which is exactly the drift check this file
+  documents in the Persistence section's "New Game / Load Game" entry. Adding a
+  backup entry alone would turn that check red;
+  that is the check doing its job, not a wrong pin. Red-first here means a
+  **new** test naming the two directories explicitly (the shape
+  `test_the_roof_modification_directory_is_wiped_and_backed_up_like_its_siblings`
+  already uses in that same file), then adding both `wipe_directory` calls and
+  both backup entries so the drift count stays balanced.
+- **Dev-console husbandry commands (`/tame <trust>`, `/kept`, `/pen`, `/breed`)**
+  (small) — ⬜ Not started — no such commands exist in `World._on_console_command`.
+  Today the only route to a tamed animal is a real 72px throw at roughly
+  one-in-three odds plus five hunger-gated feeds, which makes iterating on
+  anything above punishingly slow -- build these **first**. Note
+  `ConsoleCommandParser.parse` (`src/gameplay/console_command_parser.gd:19`)
+  splits on whitespace with no quoting, so no argument may contain a space. The
+  dispatch itself currently has **no test at all**; add one with the first
+  command.
+
+### Animal Genetics (`concept/animal_genetics.md`)
+
+New doc this pass. It specifies the `AnimalGenome` data model that
+`concept/evolution.md` describes only in prose, and the seam at which an
+offspring stops being a fresh random roll. **Writing the spec built none of it.**
+The striking fact this section exists to record honestly: the genetics machinery
+is already written and tested, and connected to nothing.
+
+Written, tested, **zero production callers** (all verified by grep across `src/`
+and `scenes/`; each already has its own 🚧 row elsewhere in this file, listed
+here only so the set is visible in one place):
+
+- `src/gameplay/dna_crossover.gd` — per-trait two-parent crossover with bounded
+  mutation (`MUTATION_AMOUNT 0.15` at `:14`, `MUTATION_FLOOR 0.01` at `:19`,
+  `crossover()` at `:22`). See `docs/progress.md:4218`.
+- `src/world/animal_fitness.gd` — `phenotype_for` (`:21`, strength/agility/
+  coat_vibrancy), `fitness_score` (`:32`), symmetric `mate_attractiveness`
+  (`:44`). See `docs/progress.md:2723`/`:2725`/`:2728`.
+- `src/gameplay/crop_breeding.gd` — `cross_pollinate` (`:14`). See
+  `docs/progress.md:5405`.
+- `src/gameplay/pet_loyalty.gd` — see the Pets section above; its retirement is
+  `concept/taming.md`'s call.
+
+Wiring cost worth knowing before estimating any of the below: these are
+`RefCounted` classes with plain `func`, not `static func`, so every seam
+instantiates and holds one — the pattern `EarthChunkManager` already uses for
+`RoomDetector` (`var _room_detector := RoomDetector.new()`, `:549`) and
+`test_fruiting_model.gd` uses for `SeasonCycle.new().warmth_modifier(...)`.
+There is no drop-in class-level call.
+
+New mechanisms, all ⬜ Not started:
+
+- **`AnimalGenome` (the per-individual trait vector)** (medium) — ⬜ Not started
+  — do NOT add a parallel identity: `wander_seed` already exists on every
+  `CreatureMarker` and `src/world/creature_info.gd:351-353` already derives
+  level and max_health from it, which makes it the natural genome carrier. The
+  genome is what that seed should be *expanded into*, shaped as a plain
+  `String -> float` Dictionary so it drops straight into `DnaCrossover.crossover`
+  with no adaptation -- the same discipline `src/world/npc_genome.gd:11` already
+  documents for itself. Pinned by
+  `test_every_gene_has_a_named_production_reader` and
+  `test_every_named_reader_module_exists`, which are the doc's guard against a
+  gene existing purely as a number nobody consumes. Two spec corrections to
+  carry: `DnaCrossover._nudge` (`:35-40`) does **not** clamp its output, so a
+  0.0 x 1.0 parent pair can produce 1.15 -- the [0,1] range has to be enforced
+  in the post-pass, since the crossover itself is used verbatim; and only
+  `agility` and `coat_vibrancy` are existing `AnimalFitness.phenotype_for` keys,
+  so `hardiness` (evolution.md calls it `disease_resistance`) needs a rename
+  decision rather than a claim that it already matches.
+- **Offspring inherit — the `spawn_offspring` sibling** (medium) — ⬜ Not
+  started — `CreatureRenderer.spawn_single` (`src/rendering/creature_renderer.gd:263`)
+  is **not** modified. Its `randi()` (`:266`) is correct for the `/spawn` dev
+  command it was written for, and its own doc comment (`:256-262`) says so.
+  Instead add `spawn_offspring(...)` beside it, taking the parents' seeds and
+  genome, and change `World._step_reproduction`'s call site (`scenes/world.gd:3966`)
+  to use it. Guarded by `test_spawn_single_still_produces_unrelated_individuals`
+  and driven by `test_spawn_offspring_reproduces_the_same_animal_from_the_same_seed`,
+  `test_an_offspring_gene_lands_within_mutation_range_of_one_parent`,
+  `test_siblings_from_one_pairing_differ_from_each_other`,
+  `test_two_high_strength_parents_produce_a_stronger_than_average_child`,
+  `test_a_child_of_two_strong_parents_reads_a_higher_level_than_average` and the
+  regression `test_the_level_distribution_is_unchanged_from_the_seed_modulo_roll`.
+  Today "offspring inherit nothing" is not even a documented invariant.
+- **Two-parent mammal courtship the player can bias** (medium) — ⬜ Not started
+  — `src/gameplay/courtship.gd` is real but gated to pollinators by
+  `DANCING_SPECIES` (`:64`, monarch/swallowtail/blue_morpho/bee), and the
+  outcome is a flat `MATING_CHANCE := 0.25` hash coin flip (`:49`, rolled at
+  `:113`) with no fitness term at all. Widening the gate and replacing that
+  constant with `AnimalFitness.mate_attractiveness` is the highest
+  payoff-to-lines-changed change in the whole audit: one call site turns
+  courtship from decoration into selection. Driven by
+  `test_a_top_decile_pairing_breeds_more_often_than_a_bottom_decile_one`
+  (a measured mating COUNT across many pairings at two attractiveness levels,
+  never a probability constant), the guard
+  `test_the_measured_mating_rate_over_a_random_population_matches_the_old_flat_rate`
+  so existing pollinator behaviour is provably unchanged, and
+  `test_a_creature_with_no_partner_in_range_does_not_give_birth` -- which is
+  also the entry that ends asexual budding. Note that
+  `World._step_reproduction` iterates *every* `CreatureMarker`, so this edit
+  governs meadow births as much as pen births; the doc's agency answer ("the
+  player chose which two animals are standing next to each other") covers only
+  the pen half and must say what the wild path becomes.
+- **A reachable reproduction clock** (small) — ⬜ Not started — none of the
+  above is observable until `REPRO_COOLDOWN`'s 24 real hours
+  (`src/gameplay/animal_reproduction.gd:32`) meets a birth clock that survives
+  chunk unload (`_seconds_since_birth`, `src/rendering/creature_marker.gd:266`,
+  is not persisted) and an `/ecotest` that actually advances a marker's own
+  `_process`. Same class of problem as `LifeCycle.MATURE_SECONDS`' 7 real days
+  against state destroyed on unload. Driven by
+  `test_a_well_fed_high_fertility_pair_reaches_the_gate_within_one_in_game_day`,
+  `test_a_neglected_pair_still_takes_about_a_real_day`,
+  `test_feeding_a_pair_measurably_shortens_their_interval`,
+  `test_the_breeding_clock_advances_with_the_ecology_time_scale` and
+  `test_ecotest_produces_a_birth_within_a_measured_number_of_frames`. Related
+  correction the doc must carry: `LifeCycle` does **not** have zero production
+  callers -- `LifeCycle.can_court_at`, `size_scale_at` and `MATURE_SECONDS` are
+  live in `src/rendering/ambient_flyer_marker.gd` (`:237`, `:994`, `:1003`,
+  `:1006`, `:1040`, `:1078`) and `MATE_SECONDS` in `courtship.gd:44`. Only
+  `stage_at` is uncalled, and nothing in `CreatureMarker` calls any of it, so
+  there is no existing growth composition point at the seam being edited.
+- **Phenotype visible on the animal** (medium) — ⬜ Not started — a genome the
+  player cannot SEE is a spreadsheet. `AnimalFitness.phenotype_for` already
+  produces strength/agility/coat_vibrancy; creature colour still comes from the
+  species table. Driven by `test_the_brightest_and_dullest_coat_are_distinguishable`
+  and `test_a_bred_coat_never_leaves_its_species_colour_family`. Two spec
+  corrections: the size seam is **`CreatureMarker._apply_action_scale`**
+  (`:1082-1101`), not `_build_marker` -- both of `_apply_action_scale`'s
+  branches assign `scale` from scratch and also set `_shadow_base_scale`, so a
+  factor applied at build time is wiped on the first walk/idle transition and
+  the shadow needs the same factor; and
+  `test_no_individual_reads_as_a_different_species_by_size` cannot be written
+  against "the smallest gap between any two species' `world_scale`", because in
+  `src/rendering/animal_anatomy.gd` that gap is **0.0**
+  (`venomous_snake`/`nonvenomous_snake` both 0.7, `lynx`/`sheep` both 0.8,
+  `wolf`/`predator`/`herbivore` all 1.0). Restate it as the smallest *non-zero*
+  gap, or scope it to the doc's own sheep-0.8/goat-0.85 pair.
+- **Lineage / pedigree record** (medium) — ⬜ Not started — without a parent
+  record the player cannot tell a bred animal from a caught one, which is the
+  whole payoff of breeding for traits. Driven by
+  `test_full_siblings_score_one_half`, `test_half_siblings_score_one_quarter`,
+  `test_parent_and_offspring_score_one_half`,
+  `test_first_cousins_score_one_eighth`, `test_unrelated_founders_score_zero`,
+  `test_a_relationship_deeper_than_the_stored_depth_scores_zero`,
+  `test_a_pedigree_walk_recovers_a_grandparent_the_animal_does_not_store`, and
+  for the cost of inbreeding,
+  `test_repeated_sibling_pairings_collapse_a_line_within_a_measured_number_of_generations`,
+  `test_an_outcross_to_an_unrelated_animal_restores_fertility_in_one_generation`
+  and `test_inbreeding_does_not_touch_the_visible_conformation_genes`.
+- **`KeptAnimals` FORMAT_VERSION 2 — the one record, defined once** (medium) —
+  ⬜ Not started — **this doc owns the V2 record**; animal_husbandry.md and
+  taming.md list only the fields they care about and defer here for the rest.
+  There is exactly one binary format (`src/world/kept_animals.gd:46-63`,
+  positional `store_*` calls), so three partial specs of it would not merge.
+  Today only `{species, position, trust, order, is_tied, tied_to}` survive
+  (`:53-62`), and `_restore_kept_animals` (`earth_chunk_manager.gd:6649`)
+  rebuilds the animal through `spawn_single`'s `randi()` -- so a kept animal's
+  level, max_health and needs-stagger are re-rolled on every chunk reload and a
+  bred genome would evaporate the moment the player walked away. The V2 field
+  union: `wander_seed`, genome, `sire`/`dam`/`ancestors`/inbreeding coefficient,
+  `seconds_since_birth` and age, energy, hunger/thirst, disease state, plus the
+  fields the sibling docs need -- **pen id, player-given name, discovered food
+  preferences, kept-since time, and escape memory**. Driven by
+  `test_a_version_1_record_still_loads`,
+  `test_the_same_version_1_record_loads_the_same_genome_twice`,
+  `test_a_kept_animal_survives_being_written_and_read`,
+  `test_a_bred_animal_round_trips_its_genome_and_pedigree`,
+  `test_a_restored_animal_keeps_its_level_and_max_health`,
+  `test_the_v2_record_size_stays_within_the_measured_budget` (which is what
+  pins `ANCESTRY_DEPTH`, and is only meaningful now that the union is settled),
+  and from husbandry, `test_a_kept_animal_keeps_its_identity_across_a_reload`.
+  The format is already versioned and round-trip tested, which is exactly what
+  it was designed for.
+- **Domestication drift as a side effect, not a rule** (medium) — ⬜ Not started
+  — taking the best individuals out of the wild changes what breeds there, and
+  selecting for docility drags coat and fertility along with it, the way the
+  Belyaev fox farm did. Driven by
+  `test_selecting_only_for_docility_raises_coat_vibrancy_and_fertility`,
+  `test_a_wild_population_shows_no_such_drift_over_the_same_generations` and
+  `test_a_domesticated_animal_flees_later_than_a_wild_one` (which reads
+  `FlightDistance`'s trust input, husbandry's). Pin the **direction and
+  ordering only**: no numeric fox-farm magnitude exists in the doc or the repo,
+  so a test asserting one cannot be authored.
+- **Pairing UI: pick two parents, see the predicted child** (large) — ⬜ Not
+  started — this is `concept/pets.md`'s captive-breeding pen and the
+  Beastmaster's missing optimisation loop. Reuses `scenes/crafting_window.gd`'s
+  green/red have-vs-need requirement counts and `scenes/main_menu.gd`'s
+  live-preview-plus-confirm-dialog pattern (the richest precedent in the repo
+  for "choose, preview, commit"). Driven by
+  `test_the_predicted_range_contains_every_child_the_crossover_produces` and
+  `test_the_prediction_widens_as_the_parents_diverge` -- the preview and the
+  birth must call the same function, or the UI is lying -- plus
+  `test_a_creature_offers_a_pair_action_when_a_partner_is_selected`. Depends on
+  explicit target selection and the roster above; do not start it first, and
+  read the selection through
+  `test_a_verb_prefers_the_selected_animal_over_a_nearer_one` rather than
+  restating it under a second name.
+
+### Taming (`concept/taming.md`, rewritten this pass)
+
+`concept/taming.md` was the best-aligned doc in the repo and has been rewritten
+to cover what the live-play session exposed: the loop works, and every dramatic
+beat in it is invisible or automatic. The mechanism ledger for what is BUILT
+stays where it already is -- the Ecosystem Dynamics section's "Taming (lasso →
+hold → feed → tame)" entry (`docs/progress.md:2265`) and the Pets section's
+"Taming System" entry -- rather than being restated a third time here. What the
+rewrite ADDS is the struggle as a contested act (§2a), what an escaped animal
+remembers (§2b), feeding as an offered gesture on its own key, neglect that ends
+in the animal leaving, and the retirement of `pet_loyalty.gd`; the approach layer
+it depends on (flight distance, wariness, crouch, bait, the shy threshold) and
+the selection layer every verb reads are `animal_husbandry.md`'s, and the genome
+and V2 record are `animal_genetics.md`'s. All of it is ⬜.
+
+Four corrections the rewrite carries into the concept doc itself, recorded here
+because this ledger is where the honesty lives:
+
+1. The old doc marked "trust rises on feeding, decays on neglect" ✅ for both
+   halves. The decay half has no production caller and never has had one; the
+   rewritten status list splits the entry -- rise ✅, decay ⬜.
+2. The old doc promised "still dies if neglected". Nothing implements it, and
+   the rewrite deliberately does **not** make death the only answer: a kept
+   animal free to leave walks off and goes feral, and only a **penned** animal
+   -- one whose fence removed its own option to solve the problem -- starves.
+   Both outcomes are ⬜; husbandry owns the penned half.
+3. The premise that a rope's 72px reach sits inside an 80px flight radius "by
+   construction, so a healthy wild animal cannot be lassoed at all" is
+   **refuted** and must not survive anywhere. `FLEE_SPEED` is half
+   `BASE_SPEED`, and sixty real captures are measured in
+   `tests/unit/test_creature_marker.gd`. The real cause is the player's
+   *composed* speed multiplier dropping below the animal's flee speed --
+   see the approach entry under Animal Husbandry above.
+4. An earlier draft of the rewrite claimed the starved penned animal "leaves a
+   real carcass and joins carrion.md's loop". It does not: `LootTable._DROPS`
+   covers `herbivore`/`boar`/`predator`/`lynx` only and
+   `CreatureMarker._spawn_carcass_if_eligible` returns immediately on an empty
+   drop list, so no keepable species leaves remains today. Both the rewritten
+   `taming.md` §7 and `animal_husbandry.md` now carry the correction and name
+   the loot rows as a prerequisite; see the neglect entry under Animal Husbandry
+   above.
+
 ## Reality check
 
 This design corpus — 49 concept docs plus a roadmap and, since 2026-08-23, a
@@ -6241,7 +6806,16 @@ real dev/admin console now exists (backtick to toggle; `/day`, `/spawn`,
 mechanisms catalogued here, roughly 38 are now done and roughly 55 are
 partial (up sharply from 36/24, mostly via this session's batch of unwired
 pure-logic modules) — both counts are approximate rather than a full
-re-audit of all 481. This is not a
+re-audit of all 481.
+
+**These three figures now predate the section above them.** The
+2026-08-26 husbandry/genetics/taming pass added roughly 40 further ⬜
+mechanisms to the catalogue and moved about nine existing entries
+(D1–D14 in that pass: four to ✅, five to 🚧). The numbers were left alone
+deliberately — moving one without re-auditing all 481 would trade a stale
+figure for a wrong one — but read them as a floor from before that pass,
+not as current. Anyone doing the re-audit should start from the fact that
+the denominator itself has grown. This is not a
 criticism of the design work, which is thorough and internally consistent; it
 simply means prioritization decisions (what to build next, and how much of
 this scope is realistic for one person) are needed rather than assuming the
