@@ -151,6 +151,46 @@ func advance_project_labor_for_piece(
 	return {"action": "advanced", "project_id": project_id}
 
 
+## A direct way to set a project ABANDONED, outside the shortfall-driven
+## path SettlementConstruction._handle_shortfall already has (see docs/concept/
+## timber_construction.md's "Deciding what to build, and who builds it"
+## section's own "Two real needs resolving each other: the settlement's own
+## project gets cancelled, not left redundant" paragraph) -- the double-fix-
+## cancellation sweep (SettlementBuildDecision) needs this same real action
+## for a DIFFERENT trigger (the player independently supplying the real fix
+## first, not a material-stock crash), so it is lifted here as one shared,
+## tested method rather than a second inline `project.status = ABANDONED`
+## mutation living in a second caller. False, no mutation, for an unknown
+## project_id -- mirrors complete_project's own identical unknown-id contract.
+func abandon_project(project_id: String) -> bool:
+	var project: ConstructionProject = _projects.get(project_id)
+	if project == null:
+		return false
+	project.status = ConstructionProject.Status.ABANDONED
+	return true
+
+
+## Every real PLANNED or IN_PROGRESS project sited at `chunk_coord` -- the
+## double-fix-cancellation sweep's own "which of a settlement's active
+## projects might now be redundant" enumeration (see docs/concept/
+## timber_construction.md's "Deciding what to build, and who builds it"
+## section). Deliberately broader than in_progress_projects_in_chunk above
+## (which only returns IN_PROGRESS, for advancing real labor): a redundant
+## producer project can still be merely PLANNED (material not yet committed)
+## when the player independently supplies the real fix first, and that is
+## just as real a redundancy as an IN_PROGRESS one. COMPLETE/ABANDONED are
+## excluded -- there is nothing left to reconsider for either.
+func active_projects_in_chunk(chunk_coord: Vector2i) -> Array:
+	var out: Array = []
+	for id in _projects:
+		var project: ConstructionProject = _projects[id]
+		if project.chunk_coord != chunk_coord:
+			continue
+		if project.status == ConstructionProject.Status.PLANNED or project.status == ConstructionProject.Status.IN_PROGRESS:
+			out.append(project)
+	return out
+
+
 ## For a future ConstructionProjectStorePersistence -- pure serialization,
 ## no FileAccess (same split EventStore/HouseholdStore already use).
 func to_dicts() -> Array:

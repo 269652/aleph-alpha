@@ -255,6 +255,38 @@ func test_make_material_sets_the_color_and_threshold_uniforms():
 	assert_eq(material.get_shader_parameter("wave_high_threshold"), WaterShader.WAVE_HIGH_THRESHOLD)
 
 
+func test_make_material_pushes_the_edge_alpha_fade_uniforms():
+	var material := water.make_material()
+	assert_eq(material.get_shader_parameter("edge_alpha_fade_start"), WaterShader.EDGE_ALPHA_FADE_START)
+	assert_eq(material.get_shader_parameter("edge_alpha_fade_end"), WaterShader.EDGE_ALPHA_FADE_END)
+
+
+# -- edge_alpha_for_shore_distance mirrors the shader's coastline fade on the
+# -- CPU (the shader itself can't be asserted headlessly), so a placement
+# -- decision like "will this point clearly read as water" can be a tested
+# -- function against the real curve rather than an eyeballed fraction of a
+# -- pond's geometric radius (reported live, for the character preview
+# -- diorama: "fish are still spawned on land" -- they were inside the
+# -- pond's nominal radius, but well into the visual fade toward the shore).
+
+func test_edge_alpha_is_fully_opaque_at_and_past_the_fade_end():
+	assert_eq(WaterShader.edge_alpha_for_shore_distance(WaterShader.EDGE_ALPHA_FADE_END), 1.0)
+	assert_eq(WaterShader.edge_alpha_for_shore_distance(WaterShader.EDGE_ALPHA_FADE_END + 0.2), 1.0)
+
+
+func test_edge_alpha_is_fully_transparent_at_and_before_the_fade_start():
+	assert_eq(WaterShader.edge_alpha_for_shore_distance(WaterShader.EDGE_ALPHA_FADE_START), 0.0)
+
+
+func test_edge_alpha_increases_monotonically_across_the_fade_band():
+	var previous := 0.0
+	for step in 10:
+		var shore_dist: float = WaterShader.EDGE_ALPHA_FADE_START + (WaterShader.EDGE_ALPHA_FADE_END - WaterShader.EDGE_ALPHA_FADE_START) * (float(step) / 9.0)
+		var alpha := WaterShader.edge_alpha_for_shore_distance(shore_dist)
+		assert_gte(alpha, previous, "the fade must not darken as shore_dist grows")
+		previous = alpha
+
+
 # -- wind animates the SURFACE, but never creates ripples --------------------
 #
 # Two different things got conflated. "Ripples" -- discrete expanding rings --

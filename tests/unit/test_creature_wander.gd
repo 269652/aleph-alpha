@@ -99,6 +99,47 @@ func test_step_position_moves_by_speed_times_delta():
 	assert_almost_eq(next.distance_to(current), CreatureWander.WANDER_SPEED, 0.001)
 
 
+# -- per-instance radius/speed override --------------------------------------
+#
+# WANDER_RADIUS/WANDER_SPEED used to be read directly as module consts
+# everywhere in this file, with no way for one caller to get a different
+# scale than every other -- fine for creatures/real-world fish, all sized
+# against the same open world, but wrong for the character preview
+# diorama's own tiny pond (real WANDER_RADIUS, 40 units, comfortably
+# exceeds the whole pond). Reported live: the diorama drove its fish with
+# its OWN separate point-to-point movement instead of this real "swims like
+# in the real game" algorithm at all, and it showed ("fish don't swim like
+# in the real game"). wander_radius/wander_speed are instance fields
+# DEFAULTING to the module consts -- every existing caller (CreatureMarker,
+# FishMarker with a live water world) is completely unaffected unless it
+# explicitly opts in to a different scale.
+
+func test_wander_radius_defaults_to_the_module_constant():
+	assert_eq(wander.wander_radius, CreatureWander.WANDER_RADIUS)
+
+
+func test_wander_speed_defaults_to_the_module_constant():
+	assert_eq(wander.wander_speed, CreatureWander.WANDER_SPEED)
+
+
+func test_direction_at_honors_an_overridden_wander_radius():
+	wander.wander_radius = 5.0
+	var home := Vector2.ZERO
+	# Well past the SMALL overridden radius but well inside the real-world
+	# default -- only picks up the pull-home behavior if the override is
+	# actually being read.
+	var far_for_the_small_radius := Vector2(20.0, 0)
+	var direction := wander.direction_at(home, far_for_the_small_radius, 0.0, 7)
+	assert_lt(direction.x, 0.0, "should already be pulling home at 4x the overridden radius")
+
+
+func test_step_position_honors_an_overridden_wander_speed():
+	wander.wander_speed = 1.0
+	var home := Vector2.ZERO
+	var next := wander.step_position(home, home, 0.0, 1.0, 7)
+	assert_almost_eq(next.distance_to(home), 1.0, 0.001)
+
+
 func test_step_position_never_strands_far_beyond_the_wander_radius():
 	var home := Vector2.ZERO
 	var current := Vector2.ZERO

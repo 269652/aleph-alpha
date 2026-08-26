@@ -53,3 +53,23 @@ static func pick_target(bounds: Rect2, rng: RandomNumberGenerator) -> Vector2:
 		rng.randf_range(bounds.position.x, bounds.position.x + bounds.size.x),
 		rng.randf_range(bounds.position.y, bounds.position.y + bounds.size.y)
 	)
+
+
+## A random point strictly within `radius` of `center` -- for anything
+## confined to a genuinely ROUND area (a pond), where pick_target's own
+## square Rect2 would overshoot the boundary at its corners by a factor of
+## sqrt(2). sqrt(rng) on the radius, not a plain uniform roll, so points
+## land evenly across the disc's own AREA rather than bunching toward the
+## centre -- a thin ring near the edge covers far more area than an equally
+## thin ring near the centre, and a uniform radius roll would sample both
+## just as often. The same formula CharacterPreviewLayout.generate() already
+## used inline for the pond's fish spawn positions, pulled out here so
+## CharacterPreviewDiorama's own ongoing fish-target picking can share it
+## instead of quietly disagreeing on shape (reported live: "fish are still
+## spawned on land" -- a fish's own wander TARGET, picked from a square,
+## could land up to 41% further from the pond's centre than its spawn point
+## ever could).
+static func random_point_in_circle(center: Vector2, radius: float, rng: RandomNumberGenerator) -> Vector2:
+	var angle := rng.randf_range(0.0, TAU)
+	var sampled_radius := sqrt(rng.randf()) * radius
+	return center + Vector2(cos(angle), sin(angle)) * sampled_radius

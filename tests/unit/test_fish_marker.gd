@@ -114,6 +114,38 @@ func test_two_markers_with_different_seeds_move_differently():
 func test_swims_freely_when_no_world_is_configured():
 	for i in 50:
 		marker._process(0.2)
+
+
+# -- configure_wander / step_wander: a diorama-scale caller that keeps this
+# -- fish's own _process disabled (a small pond needs a MUCH smaller radius
+# -- than the real world's WANDER_RADIUS -- see CreatureWander.wander_radius's
+# -- own doc comment) can still drive the exact same real algorithm manually,
+# -- one call per frame, instead of reimplementing swimming from scratch
+# -- (reported live, of the character preview diorama's own earlier
+# -- point-to-point fish: "fish don't swim like in the real game").
+
+func test_configure_wander_overrides_the_radius_used_by_step_wander():
+	marker.configure_wander(5.0, CreatureWander.WANDER_SPEED)
+	for i in 200:
+		marker.step_wander(0.1)
+	assert_lt(
+		marker.position.distance_to(marker.home), 5.0 * 2.0,
+		"should stay bounded near the small configured radius, not the real-world default"
+	)
+
+
+func test_configure_wander_overrides_the_speed_used_by_step_wander():
+	marker.configure_wander(CreatureWander.WANDER_RADIUS, 1.0)
+	var before := marker.position
+	marker.step_wander(1.0)
+	assert_almost_eq(marker.position.distance_to(before), 1.0, 0.01)
+
+
+func test_step_wander_moves_the_fish_even_while_its_own_processing_is_disabled():
+	marker.set_process(false)
+	var before := marker.position
+	marker.step_wander(0.5)
+	assert_ne(marker.position, before)
 	assert_ne(marker.position, marker.home)
 
 

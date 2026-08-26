@@ -353,3 +353,64 @@ func test_advancing_labor_for_a_piece_for_an_unknown_project_id_is_a_no_op():
 		"construction_project:unknown", "timber_wall", 100.0, households
 	)
 	assert_eq(result["action"], "no_op")
+
+
+# -- abandon_project (a direct way to set ABANDONED, docs/concept/timber_
+# construction.md's "Deciding what to build, and who builds it" section's own
+# "Two real needs resolving each other" paragraph -- double-fix cancellation
+# needs this outside the shortfall-driven path SettlementConstruction.
+# _handle_shortfall already has) ----------------------------------------------
+
+func test_abandon_project_marks_a_planned_project_abandoned():
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "sagewerk", "household:1")
+	var abandoned := store.abandon_project(project.id)
+	assert_true(abandoned)
+	assert_eq(project.status, ConstructionProject.Status.ABANDONED)
+
+
+func test_abandon_project_marks_an_in_progress_project_abandoned():
+	var project := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "sagewerk", "household:1")
+	project.status = ConstructionProject.Status.IN_PROGRESS
+	store.abandon_project(project.id)
+	assert_eq(project.status, ConstructionProject.Status.ABANDONED)
+
+
+func test_abandon_project_for_an_unknown_id_fails_without_touching_anything():
+	var abandoned := store.abandon_project("construction_project:unknown")
+	assert_false(abandoned)
+
+
+# -- active_projects_in_chunk (PLANNED + IN_PROGRESS -- the double-fix-
+# cancellation sweep's own "which of a settlement's active projects might
+# now be redundant" enumeration; in_progress_projects_in_chunk above
+# deliberately excludes PLANNED, but a redundant producer project can still
+# be merely PLANNED when the player supplies the real fix first) -------------
+
+func test_active_projects_in_chunk_returns_both_planned_and_in_progress():
+	var planned := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", "household:1")
+	var in_progress := store.start_project(Vector2i(3, -2), Vector2i(2, 2), "sagewerk", "household:1")
+	in_progress.status = ConstructionProject.Status.IN_PROGRESS
+
+	var found: Array = store.active_projects_in_chunk(Vector2i(3, -2))
+
+	assert_eq(found.size(), 2)
+	var ids: Array = []
+	for project in found:
+		ids.append(project.id)
+	assert_true(ids.has(planned.id))
+	assert_true(ids.has(in_progress.id))
+
+
+func test_active_projects_in_chunk_excludes_complete_and_abandoned():
+	var households := HouseholdStore.new()
+	var complete := store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", "household:1")
+	store.complete_project(complete.id, households)
+	var abandoned := store.start_project(Vector2i(3, -2), Vector2i(2, 2), "sagewerk", "household:1")
+	store.abandon_project(abandoned.id)
+
+	assert_eq(store.active_projects_in_chunk(Vector2i(3, -2)), [])
+
+
+func test_active_projects_in_chunk_excludes_a_different_chunk():
+	store.start_project(Vector2i(3, -2), Vector2i(1, 1), "storage", "household:1")
+	assert_eq(store.active_projects_in_chunk(Vector2i(9, 9)), [])

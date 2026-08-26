@@ -64,6 +64,8 @@ uniform vec3 crest_color : source_color = vec3(0.16, 0.42, 0.72);
 uniform vec3 trough_color : source_color = vec3(0.02, 0.14, 0.34);
 uniform float wave_low_threshold = 0.05;
 uniform float wave_high_threshold = 0.45;
+uniform float edge_alpha_fade_start = 0.0;
+uniform float edge_alpha_fade_end = 0.5;
 
 // Ripple shape/decay tuning -- pushed from the GDScript constants of the
 // same name (see make_material) rather than written as literals here, so
@@ -234,7 +236,7 @@ void fragment() {
 
 	// Fade smoothly into the coastline instead of cutting off at a tile
 	// edge.
-	float edge_alpha = smoothstep(0.0, 0.5, shore_dist);
+	float edge_alpha = smoothstep(edge_alpha_fade_start, edge_alpha_fade_end, shore_dist);
 	COLOR = vec4(water, alpha_strength * edge_alpha);
 }
 """
@@ -274,6 +276,19 @@ const TROUGH_COLOR := Color(0.02, 0.14, 0.34)
 ## test_a_ripple_stays_visible_across_its_whole_lifetime.
 const WAVE_LOW_THRESHOLD := 0.05
 const WAVE_HIGH_THRESHOLD := 0.45
+
+## smoothstep bounds mapping shore_dist (see fragment()'s `shore_dist =
+## sqrt(texture(TEXTURE, UV).r)`) to the coastline alpha fade -- named
+## constants (pushed as uniforms below) rather than shader-string literals
+## for the same reason as the ripple tuning above: edge_alpha_for_shore_
+## distance() mirrors this on the CPU so placement code elsewhere (e.g. the
+## character preview diorama's fish, see character_preview_layout.gd's
+## FISH_SAFE_RADIUS_FRACTION) can derive "is this point clearly, visibly
+## water" from the SAME math the GPU actually draws with, instead of
+## eyeballing a fraction of the pond's nominal (geometric, not visual)
+## radius.
+const EDGE_ALPHA_FADE_START := 0.0
+const EDGE_ALPHA_FADE_END := 0.5
 
 ## Ripple shape/decay tuning, shared by raindrops and movement wakes. These
 ## are pushed into the shader as uniforms (see make_material) rather than
@@ -351,6 +366,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("trough_color", TROUGH_COLOR)
 	material.set_shader_parameter("wave_low_threshold", WAVE_LOW_THRESHOLD)
 	material.set_shader_parameter("wave_high_threshold", WAVE_HIGH_THRESHOLD)
+	material.set_shader_parameter("edge_alpha_fade_start", EDGE_ALPHA_FADE_START)
+	material.set_shader_parameter("edge_alpha_fade_end", EDGE_ALPHA_FADE_END)
 	# One source of truth for the ripple tuning: the shader reads these as
 	# uniforms so ripple_amplitude() below mirrors exactly what is drawn.
 	material.set_shader_parameter("ripple_speed", RIPPLE_SPEED)
@@ -397,6 +414,18 @@ static func ripple_amplitude(
 	var age_fade := 1.0 - age_seconds / lifetime
 	var spread_fade := 1.0 / (1.0 + front * RIPPLE_SPREAD_DECAY)
 	return rings * packet * age_fade * spread_fade
+
+
+## The exact math the shader's fragment() runs to fade alpha toward the
+## coastline, mirrored on the CPU for the same reason ripple_amplitude()
+## mirrors the ripple packet above -- so a placement decision ("is this
+## point visibly water") can be a tested function against the real curve
+## rather than an eyeballed fraction of the pond's geometric radius.
+## `shore_dist` is the tile's own [0, ~0.71] shore-distance value (see
+## procedural_shore_distance_sprite.gd -- sqrt of the raw per-pixel
+## distance-to-nearest-land-edge channel), not a world-space distance.
+static func edge_alpha_for_shore_distance(shore_dist: float) -> float:
+	return smoothstep(EDGE_ALPHA_FADE_START, EDGE_ALPHA_FADE_END, shore_dist)
 
 
 ## Sets how strongly raindrop ripples show on the shared material (0 = none,
