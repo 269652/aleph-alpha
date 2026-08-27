@@ -76,6 +76,17 @@ func _ready() -> void:
 	_soil = Sprite2D.new()
 	_soil.texture = ProceduralSoilSprite.new().generate_texture(false)
 	_soil.scale = Vector2.ONE * ProceduralSoilSprite.SOIL_WORLD_SCALE
+	# Hidden while the plant is simply GROWING. A tilled mound is a farming
+	# artifact and this is a WILD plant -- reported live: "the potatoes and
+	# carrots still render a brown blob which is not supposed to be there".
+	# Two earlier passes read that as a sizing bug and shrank the mound; the
+	# mound itself was the problem, since a wild carrot in a meadow grows
+	# straight out of the grass (wild_crops.md is explicit that player-tilled
+	# farming does not exist yet). Kept as a real child rather than dropped
+	# outright because the PULL earns it: yanking a root really does tear up
+	# the earth, and that swap is the harvest animation's own ground-level
+	# feedback (see begin_pull).
+	_soil.visible = false
 	add_child(_soil)
 
 	_lift = Node2D.new()
@@ -188,6 +199,9 @@ func begin_pull() -> bool:
 		return false
 	_pulling = true
 	_pull_elapsed = 0.0
+	# The ground only shows once something has actually been yanked out of
+	# it -- see _ready for why it stays hidden while the plant just grows.
+	_soil.visible = true
 	_soil.texture = ProceduralSoilSprite.new().generate_texture(true)
 	return true
 

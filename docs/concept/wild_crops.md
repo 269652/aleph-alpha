@@ -250,6 +250,18 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
   the same "offline procedural art" style as every other not-yet-AI-
   illustrated object in this codebase (`ProceduralBobberSprite` and
   friends). Swappable for real art later with no sim/marker changes needed.
+  **Shown only once the ground has actually been disturbed** (reported live:
+  "the potatoes and carrots still render a brown blob which is not supposed
+  to be there"). A tilled mound is a FARMING artifact, and this doc's own
+  scope note is explicit that player-tilled farming does not exist yet — a
+  wild carrot in a meadow grows straight out of the grass, so drawing bare
+  earth under a plant nobody planted was wrong regardless of how it was
+  sized. Two earlier passes read the same report as a sizing bug and shrank
+  the mound twice, which is why the third report says "still". The sprite is
+  kept, not deleted: the PULL earns it, since yanking a root really does
+  tear up the earth, and the undisturbed→disturbed swap is the ground-level
+  feedback the whole harvest animation is built around (see the pull
+  sequence above). It simply starts hidden and is revealed by `begin_pull`.
 - ✅ Growth + spread simulation (`WildCropPatch`), one instance per chunk
   per crop, wired into `EarthChunkManager.step_wild_crops` on the same
   refresh cadence as `step_tall_grass`, and (bug fixed 2026-08-26/27,
