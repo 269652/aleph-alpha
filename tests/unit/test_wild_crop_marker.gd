@@ -330,3 +330,59 @@ func test_a_marker_nobody_told_about_the_season_renders_exactly_as_before():
 	add_child_autofree(marker)
 	assert_eq(marker.season_tint, Color.WHITE)
 	assert_eq(marker._leaves.modulate, Color.WHITE)
+
+
+# -- a WILD plant grows in grass, not on a tilled mound -----------------------
+#
+# Reported live: "the potatoes and carrots still render a brown blob which is
+# not supposed to be there." The blob is the soil mound. Earlier passes
+# treated it as a SIZING bug and shrank it twice (see the soil-sizing section
+# above); the real problem is that it should not be drawn at all while the
+# plant is growing. A tilled mound is a FARMING artifact, and wild_crops.md
+# is explicit that player-tilled farming does not exist yet -- a wild carrot
+# in a meadow grows straight out of the grass.
+#
+# The mound is kept for the PULL, where it earns its place: yanking a root
+# really does tear up the earth, and the disturbed-soil swap is the feedback
+# the harvest animation is built around (see wild_crops.md's pull sequence).
+
+func test_a_growing_wild_crop_shows_no_soil_mound():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	assert_false(marker._soil.visible, "a wild plant should grow out of grass, not a tilled mound")
+
+
+func test_a_seedling_shows_no_soil_mound_either():
+	marker.growth = 0.1
+	add_child_autofree(marker)
+	assert_false(marker._soil.visible)
+
+
+## Pulling it up is what disturbs the ground -- that is when earth shows.
+func test_pulling_reveals_the_disturbed_earth():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	assert_true(marker.begin_pull(), "a mature crop should be pullable")
+	assert_true(marker._soil.visible, "the pull tears up the ground, so now earth shows")
+
+
+## The disturbed texture is still what gets shown -- the undisturbed mound
+## art is now only ever a fallback, never a thing the player sees planted.
+func test_the_revealed_earth_uses_the_disturbed_texture():
+	marker.growth = 1.0
+	add_child_autofree(marker)
+	marker.begin_pull()
+	var disturbed := ProceduralSoilSprite.new().generate_image(true)
+	assert_eq(
+		marker._soil.texture.get_image().get_data(), disturbed.get_data(),
+		"the ground should read as freshly dug, not as an untouched mound"
+	)
+
+
+## A failed pull (the crop is not mature) must not leave torn earth behind --
+## nothing was pulled, so nothing disturbed the ground.
+func test_a_refused_pull_leaves_the_ground_undisturbed():
+	marker.growth = 0.2
+	add_child_autofree(marker)
+	assert_false(marker.begin_pull(), "an immature crop cannot be pulled")
+	assert_false(marker._soil.visible, "a refused pull must not tear up the ground")
