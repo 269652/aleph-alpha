@@ -805,6 +805,159 @@ blades and birds":
   sets its own z_index above ground clutter, so no extra draw-order wiring
   was needed here.
 
+A fourth live pass, from one combined report — "it's supposed to fill the
+entire rectangle" (the pond), "fish don't swim like in the real game", "grass
+blades exist, but they should be more in the center", plus a new feature
+request (a preview toggle):
+
+- ✅ **The pond is now a real multi-tile grid, reusing the actual water-tile
+  pattern** (`character_preview_diorama.gd` `_build_pond`,
+  `POND_TILE_WORLD_SIZE`). The earlier fix (one `ProceduralShoreDistanceSprite`
+  tile with all 4 `land_directions` active, stretched over the pond's whole
+  diameter) meant EVERY pixel measured shore-distance from all 4 sides
+  simultaneously regardless of the pond's own size — and `WaterShader`'s
+  `edge_alpha` only reaches full opacity within the inner ~45–50% of a
+  tile's own half-width (see `EDGE_ALPHA_FADE_END`), so the genuinely
+  opaque "obviously water" core was small and most of the pond's own area
+  read as a fade (reported live: "it's supposed to fill the entire
+  rectangle"). Now tiled at `TerrainRenderer.TILE_SIZE` (16 units, matching
+  `_build_ground`'s own grid and the real world's own water overlay
+  exactly): a cell with no land-facing side renders as
+  `ProceduralShoreDistanceSprite.generate_deep_water_image()` — uniformly
+  opaque, no fade at all — and only a cell actually touching the grid's own
+  rim fades, only on the side(s) facing outward. A simplified port of the
+  real world's own per-cell decision
+  (`TerrainRenderer.atlas_coords_for_water_overlay` /
+  `EarthChunkManager._land_directions_at`) — this pond is small enough that
+  the real system's intermediate "a few rings out" tier (`RING_MAX`/
+  `generate_ring_image`) never applies; every cell is either rim or fully
+  interior. One shared `WaterShader` material across every tile, same as
+  the real water overlay's own single `TileSet`.
+- ✅ **Fish now swim through the actual real-world algorithm, not a
+  reimplementation of it** (`creature_wander.gd`, `fish_marker.gd`,
+  `character_preview_diorama.gd`). The diorama's fish were being driven by
+  its OWN point-to-point movement (`CharacterStroll.advance` toward a
+  picked target, with hand-added `lerp_angle` turn smoothing) because
+  `FishMarker`'s real wander (`CreatureWander`) hardcoded `WANDER_RADIUS`
+  (40 world units) far bigger than the whole pond — and it showed (reported
+  live: "fish don't swim like in the real game"). `CreatureWander` gained
+  per-instance `wander_radius`/`wander_speed` fields, defaulting to the
+  existing module constants so every OTHER caller (`CreatureMarker`, a
+  real-water `FishMarker`) is completely unaffected. `FishMarker.
+  configure_wander(radius, speed)` sets them; `FishMarker.step_wander(delta)`
+  exposes the exact same unconfined-wander step `_process` already runs
+  when `_world` is null (refactored into a shared `_step_unconfined_wander`
+  so there's one implementation, not two), callable manually by a caller
+  that keeps this fish's own `_process` disabled — the diorama's own
+  established "everything is driven centrally from one `_process`"
+  convention. Every diorama fish now shares `home = pond_center` (not each
+  one's own scattered spawn point) so the SAME radius the fish-visibility
+  fix above already derived (`FISH_SAFE_RADIUS_FRACTION`) is what
+  `CreatureWander`'s own containment math actually holds it to.
+- ✅ **The long-grass accent is now centred, not wherever the hash landed**
+  (`character_preview_diorama.gd` `_pick_long_grass_positions`). Previously
+  ranked candidate clumps by hash — a valid deterministic "small subset"
+  selector (the same one `AmbientFlyerRenderer._spawn_species` uses), but
+  with no spatial preference at all, so the taller clumps could land
+  anywhere the ordinary scatter did, including a corner easy to miss
+  entirely (reported live: "grass blades exist, but they should be more in
+  the center"). Now ranked by distance to the footprint's own centre
+  instead, so the accent lands where it's actually seen.
+- ✅ **A preview toggle: the live diorama vs. the old "standard" full-body
+  portrait** (`scenes/main_menu.gd`) — asked directly: "add a toggle button
+  in the top right that toggles between diorama and standard character
+  preview with full size char rendered". A small button
+  (`_preview_toggle_button`, top-right corner of the preview panel) swaps
+  visibility between `_diorama_view` (the existing `SubViewportContainer`)
+  and a new `_standard_portrait` `TextureRect` — the SAME
+  `ProceduralCharacterSprite.generate_hero_portrait_texture` pipeline the
+  class-icon row already uses, just at the preview panel's own full size
+  rather than a tiny icon, kept in sync with the current appearance on
+  every `_refresh_appearance` call regardless of which view is actually
+  showing. Toggling away from the diorama pauses it
+  (`_diorama.set_process(false)`, `SubViewport.render_target_update_mode =
+  UPDATE_DISABLED`) rather than leaving it simulating unseen — both for the
+  wasted cost and so the hero doesn't silently walk somewhere else (or end
+  up mid-swing) while hidden and then jump the instant the player toggles
+  back.
+
+A fifth live pass, on the same three fronts reported once more after the
+fourth pass's own fixes: "fish still don't move natural like ingame also no
+ripples", "grass is still not in the center", "still no rectangle filling the
+panel":
+
+- ✅ **Fish now run through FishMarker's own REAL `_process`, not a
+  standalone fallback** (`fish_marker.gd`, `character_preview_diorama.gd`).
+  The fourth pass's fix (real `CreatureWander`, scaled down) was a genuine
+  improvement but still went through `FishMarker`'s `_world == null`
+  branch — a documented isolated-test/standalone-rendering convenience (see
+  `FishMarker.setup`'s own doc comment), never what an in-game fish with a
+  real water body actually runs: no shore-avoidance, no `TURN_RATE`-smoothed
+  heading (the null branch hard-snaps `rotation` to whatever direction it
+  moved that frame), no tail-wag speed bursts, and — the other half of the
+  same report — no ripples at all (`_step_water_ripple` no-ops immediately
+  when `_world == null`). The diorama itself is now the duck-typed `world`
+  `FishMarker.setup` expects: `biome_at_global(tile_x, tile_y)` answers
+  `"ocean"` exactly when that global tile's own centre falls inside
+  `_pond_bounds` (the pond's real world-space rect, set once in
+  `_build_pond` — checked against a continuous rect rather than the pond's
+  own internal tile indices, since nothing requires the fish's global tile
+  grid, anchored at world origin, to line up with the pond's own rendered
+  tiles, anchored at the seeded `pond_center`), and
+  `record_water_disturbance(world_pos)` forwards straight to the pond's own
+  kept `WaterShader` instance (previously discarded right after
+  `.shared_material()`) via `add_disturbance` — the SAME shared material
+  every pond tile already renders with. `_process` now ages those
+  disturbances every frame (`advance_disturbances`), the one thing nothing
+  else does automatically. Fish no longer need `set_process(false)` or
+  manual driving at all — Godot's own automatic per-frame dispatch is
+  exactly what every OTHER fish in the game already relies on. One real bug
+  found along the way: the world-aware branch's own tail-wag speed read the
+  bare `CreatureWander.WANDER_SPEED` constant directly rather than
+  `_wander.wander_speed`, the ONE place in that whole path that didn't
+  already honor a `configure_wander` override — so even with the right
+  radius, a diorama fish would have suddenly darted at full real-ocean speed
+  the instant it wagged its tail. Fixed to read the instance field like
+  everywhere else in that branch already does.
+- ✅ **Grass genuinely couldn't reach the footprint's own centre, for ANY
+  seed — a root cause, not a ranking problem** (`character_preview_layout.gd`
+  `GRASS_FIELD_NOISE_SCALE`). The fourth pass's fix (rank the kept pool by
+  distance to centre) was correct as far as it went, but could only ever
+  pick from whatever the noise field actually kept — and empirically, across
+  100 sampled seeds, NONE of them ever kept any of the 4 grid cells nearest
+  the centre. Root cause: the footprint's own grid is 6 cells wide, and the
+  grass-clump noise was sampled at `cell_index * TallGrass.FIELD_NOISE_SCALE`
+  (0.12) — for cell indices 0–5, that never exceeds 0.6, so the sample never
+  crosses a lattice boundary and `PixelNoise.smooth` degenerates into a
+  single smooth MONOTONIC gradient across the WHOLE grid rather than genuine
+  organic variation. The "kept" top-`SEED_CHANCE` share of a monotonic
+  gradient is always whichever corner/edge it happens to peak toward for
+  that seed — structurally never the middle, for any seed, no matter how the
+  kept pool is later ranked. `GRASS_FIELD_NOISE_SCALE` (0.5, its own
+  constant, no longer reusing `TallGrass`'s real-chunk-scale one) widens the
+  grid until the gradient's own peak can land anywhere per seed, while
+  staying small enough that nearby cells still correlate. Measured, not
+  eyeballed: at 0.12, 0/100 seeds ever placed grass near centre; at 0.5,
+  37/100 did, with the meadow's own clump-touch ratio only dropping from
+  0.97 to 0.92 (`test_kept_grass_cells_clump_together` still passes
+  comfortably).
+- ✅ **The standard-portrait toggle view was letterboxed inside a square it
+  didn't fit** (`scenes/main_menu.gd`). The fourth pass's own new toggle
+  feature was itself the still-real second cause behind "still no rectangle
+  filling the panel" (the pond, the OTHER cause, was already fixed by
+  then): `_standard_portrait` shared the diorama's own square
+  `DIORAMA_VIEW_SIZE` as its `custom_minimum_size`, but its real texture
+  (`ProceduralCharacterSprite.PORTRAIT_SIZE`, 26×40 — a tall headshot strip)
+  is a very different shape, so `STRETCH_KEEP_ASPECT_CENTERED` letterboxed
+  it down to a narrow strip with empty margins on both sides. New
+  `STANDARD_PORTRAIT_DISPLAY_SIZE` scales the portrait to
+  `DIORAMA_VIEW_SIZE`'s own HEIGHT instead of forcing its square shape
+  (161×248) — and `_apply_preview_mode` now zeroes out the INACTIVE view's
+  own `custom_minimum_size` on every toggle, so `frame` (a plain
+  `PanelContainer`, sized to the max of its children's own minimums) is
+  never stuck matching whichever view happens to need more space in a given
+  axis regardless of which one is actually showing.
+
 ⬜ The preview's zoom/`FOOTPRINT` is unchanged and still needs a user decision
 on how large the hero should read. Note for whoever takes it: `tree_bounds`
 insets by 20×26, so at footprint 96 the tree band is 76×70, at 74 it is 54×44,
@@ -2335,7 +2488,7 @@ chunks away from the player). See the concept doc for the full spec.
 No skills/classes/leveling/stats/XP is wired into live gameplay yet, but a first pure-logic slice now exists as tested, unwired modules:
 
 - **Soft Class System** (small) — ✅ Done (basic) — `src/gameplay/class_archetype.gd`: 7 archetypes (Warrior/Mage/Ranger/Beastmaster/Artisan/Herbalist/Overseer) with stat-lens functions, now **wired to character creation**: the main menu's New Game class picker (`scenes/main_menu.gd`) applies the chosen archetype's lens to the player (`Player.apply_class` — max-health + attack offsets). Plus a real XP/level system (`experience_track.gd`) earning levels from kills. Full skill-web pathing and respec UI still to come (see Progression / `concept/progression.md`).
-- **DNA Resonance** (medium) — 🚧 Partial — `src/gameplay/hero_dna.gd` (`HeroDna`): a deterministic-per-seed genome roll now gives every character a 0..1 resonance score for each `ClassArchetype`, matching dna.md's "a DNA suitable to be played as Mage; another which fits better to a warrior" — but nothing yet actually SPEEDS UP leveling/stat gains in a resonant archetype (the "soft/efficiency-only" half of classes.md's resolution), since there's no live leveling-speed mechanic to hook it into yet (see Soft Class System above). The genome also carries a rarity tier (common/rare/legendary, weighted heavily toward common — 80/17/3%) and stat modifiers layered on top of the class's own base stats — wired end-to-end into character creation (`MainMenu`'s "Reroll DNA" button, applied via `World._stats_with_dna` at spawn). **Common and rare stay deliberately balanced**: every common/rare genome's modifiers are a tested net-zero-raw-power invariant (one buffed stat, one equal-magnitude deficit stat — "excellent magic attack but no defense"), so those two tiers buy drama, never more total power. **Legendary is a deliberate exception**, per a follow-up ask ("add legendary dna which is just better in most stats so a real win"): a legendary roll is pure upside with no deficit stat at all — net-positive raw power spread unevenly across 3 of the 4 stats (the 4th left untouched, never reduced) — balanced only at the population level by how rare it is (~3%), not by per-genome cancellation. Same seed drives BOTH the rolled genome and `HeroAppearance`'s visuals (genotype→phenotype, not two independent random draws), per dna.md's appearance section. DNA is not yet persisted across save/load (a fresh load recomputes stats from class alone, same gap the class stats themselves already had), and inheritance/genetic-cross for children (dna.md's other resolved section) is untouched.
+- **DNA Resonance** (medium) — 🚧 Partial — `src/gameplay/hero_dna.gd` (`HeroDna`): a deterministic-per-seed genome roll now gives every character a 0..1 resonance score for each `ClassArchetype`, matching dna.md's "a DNA suitable to be played as Mage; another which fits better to a warrior" — but nothing yet actually SPEEDS UP leveling/stat gains in a resonant archetype (the "soft/efficiency-only" half of classes.md's resolution), since there's no live leveling-speed mechanic to hook it into yet (see Soft Class System above). The genome also carries a rarity tier (common/rare/legendary, weighted heavily toward common — 80/17/3%) and stat modifiers layered on top of the class's own base stats — wired end-to-end into character creation (`MainMenu`'s "Reroll DNA" button, applied via `World._stats_with_dna` at spawn). **Common and rare stay deliberately balanced**: every common/rare genome's modifiers are a tested net-zero-raw-power invariant (one buffed stat, one equal-magnitude deficit stat — "excellent magic attack but no defense"), so those two tiers buy drama, never more total power. **Legendary is a deliberate exception**, per a follow-up ask ("add legendary dna which is just better in most stats so a real win"): a legendary roll is pure upside with no deficit stat at all — net-positive raw power spread unevenly across 3 of the 4 stats (the 4th left untouched, never reduced) — balanced only at the population level by how rare it is (~3%), not by per-genome cancellation. Same seed drives BOTH the rolled genome and `HeroAppearance`'s visuals (genotype→phenotype, not two independent random draws), per dna.md's appearance section. **The "soft/efficiency-only" half is now real** — this entry previously recorded resonance as computed and then dropped, but it now drives the passive web's point-cost and bonus-gain exchange rate (see Skills / **DNA Resonance / Class Resonance** below for the formulas and their neutral anchoring), and the most-resonant wedge is where the character's unique genome net gets grafted. The genome's **seed is now persisted** with the player save (`Player.to_save_dict`'s `dna_seed`), so a reloaded character keeps its resonance and regenerates the identical net. The rolled *stat modifiers* still are not re-applied on load (they are re-derivable from the same seed, but nothing does it) — a real remaining gap. Inheritance/genetic-cross for children (dna.md's other resolved section) is untouched.
 - **DNA Reroll (Premium)** (medium) — 🚧 Partial — superseded dna.md's original "reroll a few times (3-5) then buy premium credits" with a real-world-time gate per a follow-up ask ("rerolls should reset every 24h real world hours so you have to wait a whole day if your rerolls are empty forcing the player to make wise choices"): `HeroDna.MAX_FREE_REROLLS` (4) free rerolls, `HeroDna.RESET_INTERVAL_SECONDS` (a real 24h) before the budget refreshes regardless of how many were spent, `HeroDna.can_reroll`/`reroll_budget_has_reset` as the pure/tested time math. `MainMenu` persists `rerolls_used` + a `last_reset_unix` timestamp to `user://hero_dna_rerolls.bin` (reusing `PlayerSave`'s generic path-taking I/O) so the wait genuinely survives quitting the game, not just the current menu session, and shows a live "resets in Xh Ym" countdown once the button disables. `can_reroll`'s `has_premium` parameter stays a deliberate hook for wherever a real purchase flow eventually lands — no premium-currency/IAP system exists in this project, so running out simply forces the real-world wait rather than offering a purchase.
 - **Free Respec** (small) — 🚧 Partial — `class_archetype.gd`'s `respec()` is a free no-cost archetype swap; not exposed to the player.
 - **Archetype-as-Snapshot** (trivial) — 🚧 Partial — `class_archetype.gd`'s stat lens is a pure snapshot function with no persistent per-archetype state, matching this design exactly, just not wired to a live character.
@@ -2377,17 +2530,21 @@ No marriage/reproduction/child-rearing system exists. All ⬜ Not started:
 
 ### Skills (`concept/skills.md`)
 
-No skill/passive system is wired into live gameplay yet, but a tested pure-logic foundation now exists:
+The Path-of-Exile-style passive **web** is now real and wired into live gameplay (`src/gameplay/skill_web.gd`, toggle L). The full spec it was built from is `concept/skills.md`:
 
-- **Archetype Passive Skill Web** (large) — 🚧 Partial — `src/gameplay/skill_tree.gd` now wired to a real spend UI (`scenes/skill_tree_window.gd`, toggle L) fed by the XP/level system (see Progression / `concept/progression.md`); still a flat node list, no web/graph layout, though it now has more than one thematic branch (vitality/endurance/strength plus a new Naturalist branch, see below) rather than archetype-specific ones. The window itself reads as prose since the UI pass below (see UI / presentation, "Skill-tree window reads as prose"), but that is a presentation fix and must not be mistaken for progress on the web. ⬜ **The Path-of-Exile-style passive web README.md and `concept/skills.md` promise is NOT STARTED**, and the four concrete things it needs are all absent from `skill_tree.gd`: no **edges** between nodes, no **node coordinates** to lay a graph out with, no **per-archetype split** of the node pool, and no connectivity rule in `can_allocate` (any affordable node is allocable from anywhere). Until those exist there is nothing for a graph view to draw.
+- **Archetype Passive Skill Web** (large) — ✅ Done (basic) — `src/gameplay/skill_web.gd` is one **connected graph**: 7 archetype **wedges** (11 nodes each — 1 free start node, 6 minors across two rings, 2 notables, 2 keystones) radiating from a shared centre, plus 7 **gateway** nodes sitting in the gutters between adjacent wedges that carry the graph's only cross-wedge edges. All four things this entry previously listed as absent now exist: **edges** (an intra-wedge lattice where ring `r` slot `i` reaches ring `r+1` slots `i` and `i−1`, so most notables have more than one approach route and "where does the next point go" is a real decision), **node coordinates** (derived by `position_of` from `(wedge index, ring, slot)` — not one hand-placed pixel), a **per-archetype split** of the node pool, and a real **connectivity rule** in `can_allocate` (a node must be your own class's start node or adjacent to something you already own). Proven fully connected by test from every start node, so no build is ever walled out of anything — reaching another archetype's keystone costs a countable number of points rather than being forbidden, and the far side of the circle costs three gateways' worth. The 12 pre-existing flat nodes and 4 keystones were **folded into** the web rather than duplicated: a String entry in the wedge table defers stat/bonus/cost entirely to `skill_tree.gd`/`keystone_passive.gd` (drift tests hold the tables to it), and the per-ring prices were deliberately chosen equal to what those nodes already cost, so nothing was silently repriced. `Player.allocate_skill`/`unlock_keystone`/`refund_skill` all run on the web now, and `Player.skill_bonus` is the single reader for every stat it grants (`_meets_required_skill`, butchering and carpentry all route through it). Your own class's start node is granted **free** with the class, as in PoE — paying a level-up point for "you are a mage" would be a tax on existing, and without it a level-1 character owns nothing and can path nowhere. ⬜ Still open: most of the web's wider stat vocabulary (`spell_power`, `taming_affinity`, `trade_margin`, …) is summed but not yet consumed by the system it names — only `max_health`, `attack_damage`, `meat_yield` and `carpentry_level` are read live today.
+- **Skill web view** (medium) — ✅ Done (basic) — `scenes/skill_web_view.gd`: a real pannable (drag) / zoomable (wheel, anchored so whatever sits under the cursor stays under it) graph canvas inside the skill window, which now opens on a **Web** tab with the old flat list kept behind a **List** tab (a scrolling list of named rows is the readable fallback a canvas of circles cannot be). Wedge hue is derived from the wedge's index around the circle exactly the way its angle is, so colour and geometry cannot disagree; node radius reads its tier; and four genuinely distinct states are drawn — owned, available, *reachable but unaffordable*, and *no path yet*. Those last two are deliberately different answers ("come back next level" vs "walk over there first") that a single greyed-out row cannot tell apart. Clicking any node — including a locked one, which is how a route gets planned — inspects it in a detail line; clicking a takeable one buys it; right-clicking an owned one refunds it. Hit-testing picks the *nearest* candidate and pads every node by a few pixels, so a 7px minor node is not an impossible trackpad target. ⬜ No node search and no keyboard navigation of the graph.
+- **Reading the map** (medium) — ✅ Done (basic) — three fixes for a live report that "the skills have no hover tooltip and it's pretty unclear what paths do what". (1) **Wedge names** painted on each archetype's own centre line out past its keystones, in that wedge's hue — without them the map was 84 unattributed circles with no way to tell which direction was which archetype. (2) **Node names on the map**: the landmarks (starts, notables, keystones, your genome net) at every zoom, the small nodes as well once you lean in past `MINOR_LABEL_ZOOM` — naming all 84 at every distance is an unreadable thicket, and the zoom they appear at is also the zoom with room for them; gateways are never named. (3) A real **hover tooltip** (`SkillWebView.node_tooltip`) giving the node's name, wedge and tier, what it grants, what it costs and what state it is in — every figure resolved for the hovering character (DNA-chosen variant, resonance-scaled bonus and price), since a tooltip quoting the table's numbers instead of the player's own would be worse than no tooltip. A genome-net node says it came from your own genome; a DNA-flavoured node says its effect was DNA-chosen.
+- **Route preview** (medium) — ✅ Done (basic) — the concrete answer to "what do these paths do": hovering a node you cannot yet reach lights the **cheapest route** to it, node by node, and the tooltip quotes the whole journey ("18 points to reach, 6 nodes away"). `SkillWeb.cheapest_path` is Dijkstra with the weight on the NODE rather than the edge — you pay to own a node, not to traverse an edge — seeded from the player's entire owned frontier at once, or from their class start if they own nothing yet. Prices along the route are the character's own, so a resonant build is quoted a cheaper journey than a dissonant one to the same destination, which is the efficiency-only bargain made visible. Tested for adjacency at every step, for never re-quoting a node you own, for crossing a gateway when it leaves the wedge, and against a hand-walked long-way-round alternative.
+- **Skill window size** (small) — ✅ Done — the window was built against a **960x540** viewport copied out of a stale comment in `world.gd`; the project's real design viewport is **1280x720**, so the map had been given barely half the room it had (reported live as "can you make the skill window bigger so the web is better visible"). `SkillTreeWindow.DESIGN_VIEWPORT` now reads that size as a constant **pinned against ProjectSettings by test**, `WINDOW_SIZE` is the viewport less a 20px margin (1240x680, up from 920x500), and `CHROME_HEIGHT` is a declared reserve for the title/points/tabs/detail row with everything left over going to the canvas — held honest by a test measuring the window's real minimum. Two further tests pin what "better visible" has to mean: the whole web including its wedge names fits the canvas at minimum zoom, and the small nodes are already named at the zoom the window opens on.
 - **Small Stat Nodes** (small) — ✅ Done (basic) — `skill_tree.gd` nodes are allocated in the skill-tree window and applied live to player stats (`Player.allocate_skill` → max-health/attack bonuses); stamina-regen bonus is tracked but not yet fed to the meter. Includes a new Naturalist pair (`naturalist_1`/`naturalist_2`, `stamina_regen`) added to gate the `land_sense` keystone below (docs/concept/progression.md "Ecological literacy").
 - **Keystone Passives** (medium) — ✅ Done (basic) — `keystone_passive.gd` keystones are unlockable in the window once their minimum-node gate is met and points are paid (`Player.unlock_keystone`), applying their bonus live. A new keystone, `land_sense`, deliberately breaks that "applies a stat bonus" pattern: empty `stat_name`/zero `bonus_amount` (a sentinel, not a bug — see the dict's own doc comment) instead of a number going up. `SkillTreeWindow._keystone_label` special-cases it to show a real description instead of a "+0.0" line, and once unlocked `World._update_land_sense_label` shows a small always-on HUD readout of the player's real, live `EarthChunkManager.land_health_near`/`vegetation_density_near` at their own position — the same numbers `VegetationGrowthModel.effective_capacity`/`step_land_health` already run the simulation on. See Progression / `concept/progression.md`'s "Ecological literacy" section for the full mechanism and its known gaps.
-- **Soft Cross-Archetype Pathing Gate** (medium) — ⬜ Not started — no cross-archetype gating logic exists, only same-archetype node-count gating.
-- **DNA Resonance / Class Resonance** (large)
-- **Web-to-Domain Unlock Hooks** (medium)
-- **Signature Node (Procedural DNA-Seeded Spell)** (huge)
-- **DNA-Flavored Shared Node Variants** (large)
-- **Respec System (undecided)** (small)
+- **Soft Cross-Archetype Pathing Gate** (medium) — ✅ Done (basic) — the gate is the **gateway ring**: adjacent wedges are joined only through a gateway node you have to buy, so entering another archetype costs a real, plannable number of points instead of being free. Gateways belong to no archetype and are therefore always charged at **neutral** resonance — the travel tax is the same for everyone rather than a second DNA lottery stacked on the first.
+- **DNA Resonance / Class Resonance** (large) — ✅ Done (basic) — resonance is now a real **exchange rate** rather than a number nothing read (this closes the gap the DNA Resonance entry under Classes above recorded): `SkillWeb.point_cost` scales a node's price by the character's resonance with its wedge (`COST_SPREAD` 1.0 → 0.5x at full resonance, 1.5x at none) and `SkillWeb.effective_bonus` scales what it grants (`GAIN_SPREAD` 0.5 → 1.25x/0.75x). Both are **anchored at neutral 0.5**, so a character with no genome rolled (a dedicated-server or test spawn) pays and receives exactly the authored numbers, and DNA reads as a visible deviation from the tables rather than a hidden multiplier on them. Cost spread is twice the gain spread on purpose: DNA should mostly change how *fast* you get there (classes.md's "faster leveling"), only secondarily how much the destination is worth. Deliberately never a gate — the cost ceiling is finite and small, the floor is 1 point, and a test asserts every node stays payable at zero resonance, which is classes.md's "a bad roll just makes the road longer" as arithmetic.
+- **Web-to-Domain Unlock Hooks** (medium) — 🚧 Partial — every wedge's stats now *name* the system that archetype is about (mage → `spell_efficiency`/`spell_power`/`spell_atom_tier`, artisan → `mining_yield`/`smelting_yield`/`carpentry_level`, ranger → `scent_range`/`meat_yield`, beastmaster → `taming_affinity`/`pet_loyalty`/`pet_health`, herbalist → `wound_recovery`/`disease_resistance`/`venom_resistance`, overseer → `hire_capacity`/`trade_margin`/`contract_throughput`), and `Player.skill_bonus` is one generic reader any of those systems can call. Four are actually consumed today (max health, attack damage, meat yield, carpentry level); the rest are declared and summed but nothing reads them yet. No atom-unlock/parameter-cap wiring into `spell_atom_catalog.gd` — the specific hook `concept/skills.md` has always called for — exists.
+- **Signature Node (Procedural DNA-Seeded Spell)** (huge) — ✅ Done (basic), as a **skill net** rather than a spell — `src/gameplay/genome_skill_net.gd` generates, per character, a cluster nobody else has and grafts it onto the deepest notable of that character's **most-resonant** wedge, so the unique part of your web sits at the end of the path DNA was already making cheap. Size follows the dna.md rarity tier: common 1 node, rare 3, legendary 5. Balance is a **budget, not a roll** — a net divides exactly `NET_BUDGET_UNITS[rarity]` between its nodes and there is no number to roll high on, the same discipline `hero_dna.gd` already applies to its stat modifiers. A budget "unit" is deliberately not a raw amount but *the biggest single bonus the shared web already grants for that same stat*, so 40 max health and 4 taming affinity come out as the same investment with no per-stat table to drift; the common budget is pinned from both sides against the real notable tier (measured off the live table in the test, not asserted as a magic number), and a per-node cap keeps even a legendary net **broad** rather than able to eclipse a keystone. Net nodes are ordinary web nodes: reachable only through their anchor, paid for in points, refundable. Only the DNA **seed** is persisted — the net is regenerated from it on load. ⬜ It grants passive stats, not a procedurally generated *spell*; wiring generation into the magic DSL (`spell_atom_catalog.gd`/`spell_cost.gd`) is untouched, and because the net is derived rather than stored, a change to the generator would silently change an existing character's net.
+- **DNA-Flavored Shared Node Variants** (large) — ✅ Done (basic) — one node per wedge (7 of 84, deliberately a small minority so the map stays plannable — pinned by a test that the flavoured share stays under a quarter) carries a `variants` list, and `SkillWeb.flavored_variant` picks one deterministically per DNA seed. Same place on the map, same cost, and — pinned by test — the same bonus **amount** for every variant, so the flavour roll is never a second power lottery: only *which* stat you get differs (a ranger's `marksman_2` is attack damage for one genome and throwing force for another; an artisan's `smith_2` is smelting yield or ore yield). The web view labels the node with the variant **this** character actually gets.
+- **Respec System (undecided)** (small) — ✅ Done (basic) — decided as **free**, matching `concept/classes.md`. `Player.refund_skill` hands back exactly what the node cost (recorded per node at purchase rather than recomputed, so free respec is exactly free even if anything about the character's exchange rate ever moves) and removes its bonus. Refused in two cases: when it would **orphan** the build — you cannot keep a keystone while refunding the road you walked to reach it, checked by re-flooding the remaining allocation from the start node — and for the free class start node, which was never bought. Right-click on the web view is the gesture. ⬜ No bulk "refund everything" button, and no trainer-NPC/fee variant (the alternative `concept/skills.md` left open).
 
 ### Labor Skills (`concept/labor_skills.md`)
 
@@ -3667,11 +3824,21 @@ free — see the "Retiring `VillageRenderer._stamp_house`'s instant free
 stamp" bullet below for the real mechanism (a computed completion fraction,
 deliberately NOT the `ConstructionProject` ledger). It still does not build
 a house up piece by piece by a real live Builder — that remains open, see
-that same bullet's own honest account. **Timber pieces now have their own
-art** (2026-08-25): the Sägewerk slice added the `timber` material and the
-`timber_wall`/`timber_floor` ids, but `ProceduralBuildingPieceSprite` had
-no base colour for it, so both fell through to `_WOOD_BASE` and rendered
-pixel-identical to their wood equivalents — leaving that file's own
+that same bullet's own honest account. A seventh follow-up pass (2026-08-25)
+closed the "which project should this settlement start next" gap this
+paragraph itself used to name: `SettlementSpareCapacity`/
+`SettlementBuildDecision` (`src/emergence/`) are real, tested, and wired at
+the real chunk-load boundary (`EarthChunkManager._apply_settlement_build_
+decision`) — see the "Deciding what to build, and who builds it" bullet
+directly below for the full account, including the corrected `builder_count`
+bug fix (construction labor was silently consuming TOTAL population, not
+spare capacity, competing with survival occupations it never should have)
+and the honest account of how rarely "start new work" actually fires in live
+play today. **Timber pieces now have their own art** (2026-08-25): the
+Sägewerk slice added the `timber` material and the `timber_wall`/
+`timber_floor` ids, but `ProceduralBuildingPieceSprite` had no base colour
+for it, so both fell through to `_WOOD_BASE` and rendered pixel-identical to
+their wood equivalents — leaving that file's own
 `test_every_piece_is_visually_distinct_from_every_other` red on main.
 `_TIMBER_BASE` (paler and less saturated: timber is SAWN lumber, closer to
 a fresh-cut inner face than to weathered round wood) fixes it, via a
@@ -3680,23 +3847,62 @@ Timber keeps wood's plank/log PATTERN deliberately — both are boards and
 beams — so a dedicated sawn-beam pattern remains available as a later
 refinement rather than something this pass guessed at.
 
-- **Deciding what to build, and who builds it** (medium) — ⬜ Design only,
-  not implemented (2026-08-25, a follow-up brainstorm session — see
+- **Deciding what to build, and who builds it** (medium) — 🚧 Two of its
+  three real pieces landed (2026-08-25, a further follow-up pass, closing
+  most of what the 2026-08-25 brainstorm session settled — see
   `concept/timber_construction.md`'s own "Deciding what to build, and who
-  builds it" section for the full account). Settles this arc's two
-  remaining open questions: a settlement's own worst real shortfall (a real
-  magnitude `Quest.production_shortfall_quests_for` already reports, not a
-  new number) names WHAT to build, gated by real spare population capacity
-  (household count beyond what farmer/hunter/fisher require, the same
-  derived-from-real-stock style `SettlementState.carrying_capacity` already
-  uses) deciding WHETHER a settlement can act on it right now; Builder is
-  ad hoc (not a fixed occupation), assigned via the same replan-interrupt
-  shape `npc.md`'s migration section already names, and several Builders
-  may pool effort on one project. Also specs a real, narrow first crack at
-  player-hired Builders (pay gold to pull a settlement's own spare Builder
-  to a player's own site) and a real cancellation path when the player
-  independently fixes a shortfall a settlement was already building its own
-  producer for.
+  builds it" section for the full account):
+  - ✅ **What to build, and whether the settlement can act on it** —
+    `SettlementSpareCapacity.for_settlement` (`src/emergence/
+    settlement_spare_capacity.gd`) is real, tested: `household_count_for_
+    settlement` minus however many households work a real survival
+    occupation (read off `NpcProduction.PRODUCER_ITEM_BY_OCCUPATION`'s own
+    keys, not a second hand-maintained list), clamped at zero — the same
+    derived-from-real-stock style `SettlementState.carrying_capacity`
+    already uses. `SettlementBuildDecision.decide_and_advance`
+    (`src/emergence/settlement_build_decision.gd`) is real, tested: ranks a
+    settlement's own real shortfalls worst-`need`-first (`Quest.
+    production_shortfall_quests_for`'s own real magnitude, no new number),
+    skips any with no real recipe producing the missing item (left to the
+    existing shortfall path), and supplies `SettlementConstruction.advance`'s
+    own still-missing candidate `blueprint_id` for the first with a real
+    `ConstructionPriority.missing_structure_id`, gated by real spare
+    capacity (`{"action": "no_spare_capacity"}`, distinctly named from
+    "nothing needed"). Composes the real cancellation path too: a
+    settlement's own redundant `PLANNED`/`IN_PROGRESS` producer project is
+    abandoned (`ConstructionProjectStore.abandon_project`, a new small
+    tested method also now shared by the material-crash abandon path) once
+    the player independently supplies the real fix first. Wired at the real
+    chunk-load boundary (`EarthChunkManager._apply_settlement_build_
+    decision`, called from `_load_chunk` alongside the offscreen labor
+    catch-up) using real chunk-scanned `present_structure_ids`, generalized
+    over every real `ItemCatalog` placeable id. **Named, honest
+    limitation**: `production_shortfall_quests_for_settlement`'s own narrow
+    real wiring today (`OccupationProduction` only grounds
+    `hunter`→`cooked_meat`/`blacksmith`→`stone_pickaxe`, neither of which
+    has a recipe-producible input) means the "start new work from a real
+    shortfall" branch essentially never finds an actionable one in live
+    play yet — real, tested (including via directly-supplied shortfalls),
+    just not the lived case today; double-fix cancellation does NOT share
+    this limitation (it never reads the shortfalls feed) and is real and
+    reachable today. The Carpentry-skill-gate limitation
+    (`concept/timber_construction.md`'s own framing: this function can never
+    autonomously queue a second Sägewerk, only skill-ungated structures like
+    `storage`) is confirmed by a real test, not left as a comment.
+  - ⬜ **Who becomes a Builder** — still ad hoc-by-design but genuinely
+    unimplemented: no replan-interrupt reassignment of an idle NPC to
+    Builder duty, no pooling of several Builders on one project.
+  - ⬜ **A live Builder spawner, and player-hired Builders** — deliberately
+    still unbuilt: every real structure the decision function above can
+    currently queue is a single-tile placeable the ALREADY-REAL offscreen
+    labor catch-up completes in one shot
+    (`_place_completed_construction_project`/`build_at_global`) — there is
+    no real multi-piece target yet for an onscreen `BuilderMarker` to place
+    piece-by-piece, unlike `_stamp_house`'s own house-construction case
+    (deliberately kept OUT of the `ConstructionProject` ledger during its
+    own retirement, to avoid a real house-id-scheme collision). Both stay
+    blocked on a future pass giving multi-piece, ledger-tracked construction
+    a real target to place.
 
 - **Sägewerk worksite** (small) — ✅ Done — `item_catalog.gd`'s `sagewerk`
   placeable item, `CraftingRecipeBook`'s `sagewerk` recipe (real logs +
@@ -4085,6 +4291,30 @@ refinement rather than something this pass guessed at.
   caller — `SettlementConstruction.advance`, see the settlement
   construction ledger bullet above — closing the gap this entry used to
   name.
+
+### Civic Construction (`concept/civic_construction.md`)
+
+New doc (2026-08-26, a follow-up brainstorm session, from a direct
+question about Timber Construction's own still-named gap: no real
+multi-piece target exists for a live Builder spawner or player-hired
+Builders, since every real structure the settlement decision system can
+queue is single-tile). Design only, ⬜, not yet implemented. Generalizes
+`ConstructionProject`/`ConstructionProjectStore`/`BuilderMarker` (all real,
+see Timber Construction above) to three real owners at once: a player's
+own build site (a real ghost/planned placement mode, hired-Builder labor
+market), new settlement-owned civic buildings (Meeting Hall — a real
+physical seat for `governance.gd`/`institution_formation.gd`'s already-real
+formed institutions; Granary — a real settlement-scale stock raising
+`SettlementState.carrying_capacity`; Watchtower — a real vantage over
+already-simulated danger, deliberately NOT a scripted-alert mechanic, per
+`building.md`'s own diegetic-threat philosophy, caught and corrected while
+writing this doc), and village houses done properly (fixing the id-scheme
+mismatch `VillageRenderer._stamp_house`'s own retirement deliberately
+routed around rather than fixed). The one real code seam this all hinges
+on: `ConstructionProjectStore.complete_project` gains an injected
+`Callable` completion side-effect instead of its own hardcoded
+`HouseholdStore.grant_property` call — everything else composes from
+already-real primitives with no new foundational mechanism.
 
 ### Production Chains (`concept/production_chains.md`)
 

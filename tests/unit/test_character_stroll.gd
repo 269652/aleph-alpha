@@ -66,3 +66,63 @@ func test_pick_target_is_deterministic_for_the_same_rng_seed():
 	var rng_b := RandomNumberGenerator.new()
 	rng_b.seed = 7
 	assert_eq(CharacterStroll.pick_target(bounds, rng_a), CharacterStroll.pick_target(bounds, rng_b))
+
+
+# -- random_point_in_circle: the shared "anywhere inside a disc" sampler --
+# pick_target's own Rect2 (a SQUARE) overshoots a circular boundary at its
+# corners by a factor of sqrt(2) -- fine for the wander/tree bounds it was
+# built for, but wrong for anything confined to a genuinely round area (a
+# pond's own containment radius). CharacterPreviewLayout.generate() already
+# had this exact sqrt-weighted-radius math inlined for the fish SPAWN
+# positions; CharacterPreviewDiorama's ongoing fish TARGET picking used
+# pick_target's square instead, letting a swimming fish's own wander
+# target land up to 41% further from the pond's centre than its spawn ever
+# could (reported live: "fish are still spawned on land").
+
+func test_random_point_in_circle_never_lands_outside_the_radius():
+	var center := Vector2(100, 50)
+	var radius := 21.12
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 3
+	for _i in 200:
+		var point: Vector2 = CharacterStroll.random_point_in_circle(center, radius, rng)
+		assert_true(
+			point.distance_to(center) <= radius,
+			"point %s should be within %.2f of %s" % [point, radius, center]
+		)
+
+
+## A plain uniform radius (no sqrt correction) bunches points toward the
+## centre, since a thin ring near the edge covers far more AREA than an
+## equally-thin ring near the centre but a uniform radius roll samples both
+## equally often -- sqrt(rng) corrects for that so points land evenly across
+## the disc's own area. Checked by comparing how many landed in the inner
+## vs outer half of the radius (by area, i.e. inner disc of radius/sqrt(2)
+## -- exactly half the full disc's area) across enough samples that an even
+## split is the only plausible outcome.
+func test_random_point_in_circle_is_area_weighted_not_bunched_at_the_centre():
+	var center := Vector2.ZERO
+	var radius := 100.0
+	var inner_radius := radius / sqrt(2.0)  # bounds exactly half the disc's area
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	var inner_count := 0
+	var total := 2000
+	for _i in total:
+		var point: Vector2 = CharacterStroll.random_point_in_circle(center, radius, rng)
+		if point.distance_to(center) <= inner_radius:
+			inner_count += 1
+	var inner_fraction := float(inner_count) / float(total)
+	assert_almost_eq(inner_fraction, 0.5, 0.06, "expected roughly half the points inside the equal-area inner radius")
+
+
+func test_random_point_in_circle_is_deterministic_for_the_same_rng_seed():
+	var center := Vector2(10, 10)
+	var rng_a := RandomNumberGenerator.new()
+	rng_a.seed = 9
+	var rng_b := RandomNumberGenerator.new()
+	rng_b.seed = 9
+	assert_eq(
+		CharacterStroll.random_point_in_circle(center, 5.0, rng_a),
+		CharacterStroll.random_point_in_circle(center, 5.0, rng_b)
+	)

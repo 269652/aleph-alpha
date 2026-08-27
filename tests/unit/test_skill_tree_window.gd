@@ -86,12 +86,12 @@ const RAW_STAT_KEYS := [
 ]
 
 
-## World._build_skill_window anchors this window at PRESET_CENTER_LEFT with
-## offset_left 8 / offset_top -150 in a 960x540 viewport, and Godot grows a
-## Control down/right from its offsets when its own minimum exceeds them --
-## so the room genuinely available before anything runs off-screen is 952
-## wide and 420 tall (top -150 through the viewport's bottom edge at +270).
-const WORLD_AVAILABLE_BOX := Vector2(952, 420)
+## The room World._build_skill_window leaves this window before anything runs
+## off-screen. Read from the window's own constant rather than restated here:
+## World now anchors it PRESET_CENTER (it used to be pinned to the left edge,
+## which is what capped it at a 952x420 strip), and a copy of that figure in a
+## test is exactly the sort of thing that silently stops being true.
+const WORLD_AVAILABLE_BOX := SkillTreeWindow.WORLD_AVAILABLE_BOX
 
 
 func _row_labels() -> Array:

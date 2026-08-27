@@ -2093,6 +2093,70 @@ func test_a_completed_project_whose_output_is_not_placeable_places_nothing_and_d
 	)
 
 
+# -- corrected builder_count: SPARE capacity, not total population -----------
+# (docs/concept/timber_construction.md's "Deciding what to build, and who
+# builds it" section's own "Spare capacity" paragraph -- a real bug fix:
+# construction should only ever consume population BEYOND what farmer/
+# hunter/fisher require, never compete with the survival occupations
+# SettlementState.carrying_capacity itself depends on.)
+
+## Seed 5 is a real, pinned hunter (see test_step_settlements_attempts_
+## production_for_a_producer_occupation above) -- a real survival occupation,
+## NpcProduction.PRODUCER_ITEM_BY_OCCUPATION's own subset. A settlement whose
+## ENTIRE population works a real survival occupation has ZERO spare
+## capacity, and must accrue ZERO construction labor even though
+## household_count_for_settlement is genuinely nonzero -- the exact
+## regression this fix closes (the old code passed TOTAL population here).
+func test_construction_labor_only_advances_using_spare_capacity_not_total_population():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(5)])
+	manager.update(_berlin_tile)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(
+		manager.household_count_for_settlement(settlement_id), 1,
+		"sanity check on the fixture -- household_count_for_settlement is genuinely nonzero"
+	)
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, _construction_test_local_origin(), "sagewerk", "household:spare_capacity_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 5.0)
+
+	assert_almost_eq(
+		project.labor_hours_accumulated, 0.0, 0.0001,
+		"a settlement whose entire population works a real survival occupation has zero SPARE " +
+		"capacity, even though household_count_for_settlement is nonzero"
+	)
+
+
+# -- double-fix cancellation, wired at the real chunk-load boundary ----------
+# (docs/concept/timber_construction.md's "Deciding what to build, and who
+# builds it" section's own "Two real needs resolving each other" paragraph --
+# SettlementBuildDecision, called from _load_chunk via
+# _apply_settlement_build_decision.)
+
+## A settlement's own queued "sagewerk" producer project is abandoned once a
+## real sagewerk already exists nearby (the player independently brought/
+## built the same real fix first) -- proven against the REAL chunk-scanned
+## present_structure_ids (_present_structure_ids_for_settlement_chunk), not a
+## literal Array a test hands the pure decision function directly.
+func test_a_redundant_producer_project_is_abandoned_once_the_real_structure_already_exists_nearby():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var sagewerk_tile := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(5, 5)
+	manager.build_at_global(sagewerk_tile.x, sagewerk_tile.y, "sagewerk")
+	var redundant := manager.construction_project_store().start_project(
+		chunk_coord, _construction_test_local_origin(), "sagewerk", "household:double_fix_test"
+	)
+	assert_eq(redundant.status, ConstructionProject.Status.PLANNED, "precondition")
+
+	_unload_wait_and_reload(0.0)
+
+	assert_eq(redundant.status, ConstructionProject.Status.ABANDONED)
+
+
 # -- bulk structure stamping (see VillageRenderer, HouseBlueprint) ------------
 #
 # Stamping a whole house one build_at_global call per cell would repaint its

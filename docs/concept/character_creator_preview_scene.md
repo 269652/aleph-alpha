@@ -116,15 +116,25 @@ required).
 
 ### Embedding — the character creator's own UI
 
-`scenes/main_menu.gd`'s hero panel (`_build_hero_column`) swaps its
-`TextureRect` portrait for a `SubViewportContainer`/`SubViewport` hosting
-one `CharacterPreviewDiorama`, with a `Camera2D` framing the whole
-footprint from a fixed position (a diorama viewed from outside, not a
-camera that follows the stroll). `_refresh_appearance()` calls
-`apply_appearance` on the diorama's own `CharacterView` instead of
-generating a portrait texture — every other axis-cycling control keeps
-working exactly as it already does, now visibly redressing a live, walking
-hero instead of a static image.
+`scenes/main_menu.gd`'s hero panel (`_build_hero_column`) hosts a
+`SubViewportContainer`/`SubViewport` wrapping one `CharacterPreviewDiorama`,
+with a `Camera2D` framing the whole footprint from a fixed position (a
+diorama viewed from outside, not a camera that follows the stroll).
+`_refresh_appearance()` calls `apply_appearance` on the diorama's own
+`CharacterView` — every other axis-cycling control keeps working exactly as
+it already does, now visibly redressing a live, walking hero instead of a
+static image.
+
+The static portrait wasn't fully retired, though: a toggle button
+(`_preview_toggle_button`, top-right of the panel) lets the player switch
+back to it — `_standard_portrait`, a `TextureRect` showing
+`ProceduralCharacterSprite.generate_hero_portrait_texture` at the panel's
+own full size (the same pipeline the class-icon row already uses for its
+tiny thumbnails). Both views are kept in sync with the current appearance on
+every `_refresh_appearance` call; only one is ever `.visible`, and the
+diorama's own `_process`/`SubViewport` rendering pauses while it isn't the
+visible one, so an unwatched hero holds still rather than silently acting
+off-screen.
 
 ## Status / mechanisms
 

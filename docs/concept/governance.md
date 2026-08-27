@@ -169,6 +169,12 @@ to, and are left for a later pass.
   "Religion" sections) are unbuilt and unrelated to this first slice,
   though a future criminal-governance slice would extend this doc's
   "None ← criminal_group" choice above rather than replace it.
+- ⬜ A physical seat. Today a formed institution is a real, tracked fact
+  with no discoverable presence in the world — see
+  [civic_construction.md](civic_construction.md)'s Meeting Hall (design
+  only): a settlement's first real formed institution would queue a real,
+  multi-piece civic building giving governance an actual place, not a
+  change to how institutions form or dissolve.
 
 ## Open questions
 

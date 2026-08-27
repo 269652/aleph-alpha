@@ -13,6 +13,17 @@ const WANDER_SPEED := 24.0  # pixels per second
 const WANDER_RADIUS := 40.0  # drifts within roughly this many pixels of home
 const DIRECTION_CHANGE_INTERVAL := 1.5  # seconds between picking a new heading
 
+## Per-instance override for WANDER_RADIUS/WANDER_SPEED -- defaults to the
+## module consts above, so every EXISTING caller (CreatureMarker, FishMarker
+## with a live water world) is completely unaffected; only a caller that
+## explicitly wants a different scale needs to touch these at all (see
+## FishMarker.configure_wander, used by the character preview diorama's own
+## tiny pond -- the real WANDER_RADIUS, 40 world units, comfortably exceeds
+## the whole pond, and driving fish with a separate movement system instead
+## of this one was reported live: "fish don't swim like in the real game").
+var wander_radius := WANDER_RADIUS
+var wander_speed := WANDER_SPEED
+
 
 ## How far out (as a MULTIPLE of WANDER_RADIUS) the pull toward home becomes
 ## total, leaving no roam component at all -- see direction_at.
@@ -66,8 +77,8 @@ func direction_at(home: Vector2, current: Vector2, elapsed_time: float, seed_val
 	var inward := to_home / distance
 	var outward := -inward
 
-	var band := WANDER_RADIUS * HOME_CONTAINMENT_BAND_FRACTION
-	var containment := clampf((distance - (WANDER_RADIUS - band)) / band, 0.0, 1.0)
+	var band := wander_radius * HOME_CONTAINMENT_BAND_FRACTION
+	var containment := clampf((distance - (wander_radius - band)) / band, 0.0, 1.0)
 	var outward_amount := maxf(0.0, roam.dot(outward))
 	var contained := roam - outward * outward_amount * containment
 	if contained.length() < 0.001:
@@ -75,11 +86,11 @@ func direction_at(home: Vector2, current: Vector2, elapsed_time: float, seed_val
 		# along the boundary rather than stalling.
 		contained = Vector2(-outward.y, outward.x)
 
-	if distance <= WANDER_RADIUS:
+	if distance <= wander_radius:
 		return contained.normalized()
 
-	var pull_span := WANDER_RADIUS * (HOME_PULL_FULL_RADIUS_FACTOR - 1.0)
-	var pull := clampf((distance - WANDER_RADIUS) / pull_span, 0.0, 1.0)
+	var pull_span := wander_radius * (HOME_PULL_FULL_RADIUS_FACTOR - 1.0)
+	var pull := clampf((distance - wander_radius) / pull_span, 0.0, 1.0)
 	# Safe to lerp here: `contained` has no outward component left at this
 	# distance (containment is already 1.0), so it and `inward` are at worst
 	# perpendicular -- they cannot cancel.
@@ -119,4 +130,4 @@ func step_position(
 	home: Vector2, current: Vector2, elapsed_time: float, delta: float, seed_value: int
 ) -> Vector2:
 	var direction := direction_at(home, current, elapsed_time, seed_value)
-	return current + direction * WANDER_SPEED * delta
+	return current + direction * wander_speed * delta

@@ -70,33 +70,57 @@ func test_card_offsets_stay_within_the_tiles_own_bounds():
 			assert_lte(absf(offset.y), IllustratedGrassPatch.WORLD_SIZE * 0.5)
 
 
-## Reported live (with real screenshots): "the player's head is behind the
-## long grass blades when the feet already are past it... there are none
-## [higher than the player]." band_anchor_world_y (see its own doc comment)
-## fixed the coarse per-BAND case but a single MultiMeshInstance2D draw call
-## can only Y-sort as ONE unit -- a blade whose own root the player has
-## genuinely walked past can still sit in the SAME still-ahead band as
-## others that legitimately haven't been reached yet, and the whole band
-## draws together. True per-blade precision needs a per-PIXEL decision, not
-## a coarser per-draw-call one -- the fragment shader already computes
-## `from_walker` (this blade's own root minus the live player position) and
-## `distance_to_walker` for the existing parting/push effect, so this reuses
-## them rather than adding new uniforms: any blade whose root sits behind
-## the player (from_walker.y <= 0) fades to fully transparent as the player
-## gets close enough to plausibly stand in front of it, using the SAME
-## walker_radius already established for the push effect rather than a
-## fresh tuned constant. A per-pixel alpha decision works regardless of
-## which draw call/band the blade's macro Y-sort put it in.
-func test_shader_hides_a_blade_whose_root_the_player_has_already_walked_past():
+## SUPERSEDED (2026-08-26, reported live with a real screenshot): the
+## previous fix for "the player's head is behind the long grass blades"
+## used a per-pixel alpha fade (`occlusion_fade`, reusing the unrelated
+## push effect's `walker_radius = 22.0`) as a stand-in for true occlusion.
+## That both under- and over-corrected at once: any blade whose root sat
+## MORE than 22 world units (~1.4 tiles) behind the player never faded at
+## all, so it kept drawing solid on top of the player's upper body/head
+## whenever it shared an in-front BAND with the player (a real, frequent
+## case -- see the old BAND_COUNT=8 comment: each band was 4 tiles/64 world
+## units tall) -- while every blade WITHIN that radius faded to fully
+## invisible as the player simply walked near it, reported separately as
+## "grass becomes transparent when walking over it". Both symptoms were the
+## same undersized, wrongly-purposed heuristic standing in for real Y-sort.
+##
+## The real fix is architectural, not a bigger fade radius: shrink
+## BAND_COUNT's own band height (see its own doc comment and
+## test_band_height_leaves_a_real_safety_margin_under_the_players_own_max_reach
+## below) until it's fine enough that Godot's OWN native Y-sort -- the exact
+## mechanism every ordinary Sprite2D already uses correctly -- places each
+## band in the right draw order on its own. Once that's true, no alpha hack
+## is needed at all: grass is either genuinely behind the player (drawn
+## first, correctly covered) or genuinely in front (drawn after, correctly
+## covering) -- always fully opaque either way, matching what was reported.
+func test_grass_opacity_is_never_reduced_by_the_players_own_proximity():
 	var code: String = IllustratedGrassPatch.SHADER_CODE
-	assert_string_contains(code, "from_walker.y")
-	assert_string_contains(code, "occlusion_fade")
-	assert_string_contains(code, "COLOR.a *= occlusion_fade")
-	# The fade line itself must reuse walker_radius, not a fresh constant.
-	var fade_line_start := code.find("float occlusion_fade")
-	assert_gte(fade_line_start, 0, "occlusion_fade must be computed somewhere in the shader")
-	var fade_line := code.substr(fade_line_start, code.find(";", fade_line_start) - fade_line_start)
-	assert_string_contains(fade_line, "walker_radius")
+	assert_false(code.contains("occlusion_fade"), "the alpha-fade occlusion hack must be gone")
+	assert_false(code.contains("passed_by_walker"), "the alpha-fade occlusion hack must be gone")
+	assert_false(code.contains("COLOR.a *="), "grass must never have its opacity reduced")
+
+
+## The player's own real max reach above their feet/root -- HeadSlot, the
+## topmost node in scenes/character_view.tscn, sits at local Y = -42 (world
+## units above the character's own origin, which is the same root a grass
+## blade's own card grows up from -- see mesh()'s doc comment). A blade
+## card is WORLD_SIZE tall and grows from ITS OWN root upward too, so the
+## worst case is a blade sitting at the very TOP of an "in front" band: its
+## own root can be up to one full band-height behind the player's root
+## (see band_anchor_world_y's own bottom-edge anchoring), and its card then
+## reaches another WORLD_SIZE past that. For native Y-sort to never let
+## that worst-case card visually reach as high as the player's own real
+## head, band_height + WORLD_SIZE must stay comfortably under 42.
+func test_band_height_leaves_a_real_safety_margin_under_the_players_own_max_reach():
+	const PLAYER_MAX_REACH_ABOVE_ROOT := 42.0  # character_view.tscn's own real HeadSlot offset
+	var chunk_size := 32  # EarthChunkManager.CHUNK_SIZE
+	var tile_size := 16.0  # TerrainRenderer.TILE_SIZE
+	var band_height_world_units: float = (float(chunk_size) / float(IllustratedGrassPatch.BAND_COUNT)) * tile_size
+	var worst_case_reach: float = band_height_world_units + IllustratedGrassPatch.WORLD_SIZE
+	assert_lt(
+		worst_case_reach, PLAYER_MAX_REACH_ABOVE_ROOT,
+		"a band's own worst-case blade must never be able to visually reach the player's real head height"
+	)
 
 
 func test_shader_bends_each_pixel_row_along_a_curved_per_blade_path():

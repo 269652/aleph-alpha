@@ -24,14 +24,28 @@ const WORLD_SIZE := 16.0
 ## How many horizontal strips a chunk's grass splits into for Y-sorting.
 ## One draw call per (chunk, band) instead of one per card is the whole
 ## performance win; a single draw call can only Y-sort as ONE unit, so true
-## per-blade sorting against the player is impossible under batching. Bands
-## are the standard middle ground: coarse enough for a real draw-call
-## reduction (CHUNK_SIZE=32 tiles / 8 bands = 4 tiles/band), fine enough
-## that walking through a field still sorts correctly at the tile-cluster
-## level (a blade mis-sorted against its same-band neighbor is
-## imperceptible; the whole field flickering in front of/behind the player
-## as one block would not be).
-const BAND_COUNT := 8
+## per-blade sorting against the player needs each band to be thin enough
+## that native Y-sort alone (no per-pixel alpha hack -- see the shader's own
+## fragment() history below) never lets a band's own worst-case blade
+## visually reach the player's real body.
+##
+## PREVIOUSLY 8 (CHUNK_SIZE=32 tiles / 8 bands = 4 tiles/band = 64 world
+## units). That was too coarse: a band's own worst-case blade (its root at
+## the far/top edge of an in-front band, its card then reaching another
+## WORLD_SIZE past that) could visually reach 64+16=80 world units above
+## the player's own root -- comfortably past the player's own real max
+## reach (42 world units, `character_view.tscn`'s HeadSlot offset) -- so it
+## painted straight over the player's upper body/head. Reported live, with
+## a real screenshot.
+##
+## Now CHUNK_SIZE tiles / BAND_COUNT bands = 1 tile/band = 16 world units,
+## for a worst-case reach of 16+16=32 -- a real, tested (see
+## test_band_height_leaves_a_real_safety_margin_under_the_players_own_max_reach)
+## 10-world-unit margin under the player's own real 42. A deliberate,
+## honest 4x draw-call cost for grass specifically (8 -> 32 per chunk) --
+## correctness over raw draw-call count, given the coarser value was a real,
+## player-visible bug, not a theoretical one.
+const BAND_COUNT := 32
 
 ## Bend profile: how far a pixel row is displaced, as a function of
 ## top_t (0 at the root, 1 at the tip). A straight vertex shear only ever
@@ -187,29 +201,23 @@ void fragment() {
 	float local_x = clamp(UV.x - bend_offset, 0.0, 1.0);
 	vec2 atlas_uv = region_uv0 + vec2(local_x, 1.0 - UV.y) * region_size;
 
-	// A blade whose own root the player has already walked past must never
-	// render on top of them (reported live, with real screenshots: "the
-	// player's head is behind the long grass blades when the feet already
-	// are past it"). band_anchor_world_y fixes the coarse per-BAND case,
-	// but one MultiMeshInstance2D draw call can only Y-sort as ONE unit -
-	// a blade whose root is genuinely behind the player can still share a
-	// still-ahead band with others that legitimately haven't been reached
-	// yet, and the whole band draws together regardless. True per-blade
-	// precision needs a per-PIXEL decision: from_walker/distance_to_walker
-	// above (already computed for the parting/push effect) already carry
-	// exactly what's needed, reused rather than adding new uniforms. Any
-	// blade whose root sits behind the player (from_walker.y <= 0, i.e. a
-	// smaller/further-back world Y than the player's own) fades to fully
-	// transparent as the player gets close enough to plausibly stand in
-	// front of it - reusing walker_radius (already established for the
-	// push effect) rather than a fresh tuned constant. A per-pixel alpha
-	// decision is correct regardless of which draw call/band the blade's
-	// own coarse Y-sort happened to land in.
-	float passed_by_walker = step(from_walker.y, 0.0);
-	float occlusion_fade = 1.0 - passed_by_walker * (1.0 - smoothstep(0.0, walker_radius, distance_to_walker));
-
+	// SUPERSEDED (2026-08-26): a blade whose own root the player has already
+	// walked past used to fade to transparent here instead of being
+	// properly occluded (a per-pixel alpha hack standing in for real
+	// Y-sort, reusing walker_radius from the unrelated push effect above).
+	// That both under-corrected (a blade more than walker_radius behind the
+	// player never faded, so it kept drawing solid on top of the player's
+	// upper body/head) and over-corrected (any blade within walker_radius
+	// faded to fully invisible just from the player standing near it,
+	// reported separately as "grass becomes transparent when walking over
+	// it") -- two symptoms of the same wrong mechanism. BAND_COUNT is now
+	// fine-grained enough (see its own doc comment) that native Y-sort
+	// alone -- the same mechanism every ordinary Sprite2D already uses --
+	// places each band in the correct draw order without any alpha
+	// modulation: grass is either genuinely behind the player (drawn
+	// first, correctly covered) or genuinely in front (drawn after,
+	// correctly covering), always fully opaque either way.
 	COLOR = texture(TEXTURE, atlas_uv);
-	COLOR.a *= occlusion_fade;
 	// Gated on greenness for the same reason GroundTint is, and with the same
 	// gain: the illustrated atlas already carries dry/brown blades, and those
 	// must not be turned again by a season they are already wearing.
