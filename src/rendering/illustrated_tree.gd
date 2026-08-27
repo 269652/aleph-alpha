@@ -40,6 +40,14 @@ const SPECIES_WITH_ART := ["cherry", "walnut", "acorn", "hazelnut", "pine", "app
 ## Written down explicitly because this is exactly the kind of thing that
 ## silently works until a sheet is authored in a different order -- and the
 ## failure would be a forest in blossom under snow.
+##
+## This table says which frame a name MEANS. It does not say when a tree wears
+## it: a forest in blossom under snow was in fact reported, and the mapping was
+## not at fault -- SeasonTransition spends the last third of every season
+## turning into the next, so a third of winter was already reporting "turning
+## into spring". WHEN is TreePhenology's job now (src/world/tree_phenology.gd,
+## docs/concept/seasons.md), and it addresses these frames through exactly
+## these four names.
 const CANOPY_BARE := 0
 const CANOPY_BLOSSOM := 1
 const CANOPY_LEAF := 2

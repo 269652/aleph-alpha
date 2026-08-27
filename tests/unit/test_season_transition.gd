@@ -89,3 +89,20 @@ func test_progress_comes_in_a_small_number_of_steps():
 		values[SeasonTransition.state_at(float(step) / 400.0).progress] = true
 	assert_lte(values.size(), SeasonTransition.TURN_STEPS + 1)
 	assert_gte(values.size(), 4, "too few steps to read as gradual")
+
+
+## The quantiser is SHARED, not reimplemented.
+##
+## TreePhenology puts a canopy on its own schedule -- bare all winter, blossom
+## briefly in early spring (see docs/concept/seasons.md) -- but must still turn
+## on these same steps, because the granularity is a RENDERING BUDGET (every
+## distinct value is a whole tree picture to composite and cache) rather than a
+## property of the calendar. A second schedule must not arrive with a second
+## answer to it.
+func test_the_quantiser_is_public_so_a_second_schedule_can_share_it():
+	var step := 1.0 / float(SeasonTransition.TURN_STEPS)
+	assert_eq(SeasonTransition.quantise(0.0), 0.0, "settled must stay settled")
+	assert_eq(SeasonTransition.quantise(1.0), 1.0, "finished must stay finished")
+	assert_eq(SeasonTransition.quantise(0.001), step, "rounded UP, so a turn completes")
+	assert_eq(SeasonTransition.quantise(-3.0), 0.0, "clamped below")
+	assert_eq(SeasonTransition.quantise(3.0), 1.0, "clamped above")
