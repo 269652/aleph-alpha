@@ -1304,6 +1304,110 @@ func test_step_fruiting_drops_named_species_items_near_the_player():
 	)
 
 
+## The perf fix step_fruiting's per-tree loop now applies: genome lookup,
+## species/pollination lookups, FruitingModel.state_at, and above all
+## tree.set_ripe_fruit's canopy texture redraw all used to run for EVERY
+## loaded tree in the whole streaming radius -- potentially thousands --
+## roughly once a second, forever, including trees the player has never
+## been anywhere near. A tree beyond FRUITING_DETAIL_RADIUS must now be
+## skipped entirely for the tick, and because FruitingModel.state_at is a
+## PURE function of elapsed world time rather than a running simulation,
+## that skip must not freeze the tree: it has to show the correct catch-up
+## ripeness the moment the player is back in range.
+##
+## Reads the tree's raw _ripe_count field rather than the public
+## ripe_fruit_count() getter -- that getter clamps the "never touched" -1
+## sentinel to 0, so it cannot distinguish "skipped for being out of range"
+## from "processed and genuinely bore no fruit" the way this test needs to.
+func test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_range():
+	var species_id := "apple"
+	var tree_position := _position_for_species(species_id)
+
+	var scheduler := ForageScheduler.new()
+	var genome := scheduler.genome_for(tree_position)
+	var model := FruitingModel.new()
+	# Land the world clock at genuine mid-plateau peak (same technique as
+	# test_harvest_peak_fruit_near_reports_the_real_peak_state above), so the
+	# tree actually has real hanging fruit to catch up on. Computed and set
+	# BEFORE the tree is even loaded, so establishing the clock itself -- via
+	# set_world_age_seconds's own sync_tree_season call -- cannot be what
+	# dresses it.
+	var warmth_for_window: float = manager._warmth_at_pixel(tree_position)
+	var window: Dictionary = model._window_for(genome, warmth_for_window)
+	var peak_time: float = (
+		(float(window.grow_end) + float(window.fall_start)) / 2.0 * FruitingModel.BEARING_CYCLE_SECONDS
+	)
+	manager.set_world_age_seconds(peak_time)
+
+	var tree := ChoppableTree.new()
+	tree.position = tree_position
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	var far_pixel := tree.position + Vector2(EarthChunkManager.FRUITING_DETAIL_RADIUS + 1000.0, 0.0)
+	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, far_pixel)
+
+	assert_eq(
+		tree._ripe_count, -1,
+		"a tree outside FRUITING_DETAIL_RADIUS must be skipped entirely, not dressed with a stale/default value"
+	)
+
+	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
+
+	var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id)
+	var ripening_multiplier := TreeSpecies.ripening_multiplier_for(species_id)
+	var current_warmth: float = manager._warmth_at_pixel(tree.position)
+	var expected: Dictionary = manager._fruiting_model.state_at(
+		genome, manager.world_age_seconds(), current_warmth, yield_multiplier, ripening_multiplier
+	)
+	var expected_ripe := int(expected.get("ripe", 0))
+
+	assert_gt(expected_ripe, 0, "precondition: mid-plateau should carry real ripe fruit")
+	assert_eq(
+		tree._ripe_count, expected_ripe,
+		"once back in range the tree must show the REAL catch-up ripeness for the elapsed time, not a frozen/stale value"
+	)
+
+
+# -- sync_tree_season: the second path that redraws every loaded tree's ------
+# canopy, independent of step_fruiting (see World._client_process and
+# set_world_age_seconds/jump_to_season). Must respect the same
+# FRUITING_DETAIL_RADIUS gate when it has a player_pixel to check against, or
+# a tree step_fruiting skipped for being out of range gets re-dressed right
+# back in -- with its own stale cached ripe_fruit_count() -- the moment a
+# season changes, including the very first-ever call (its tracked signature,
+# _last_tree_season, starts empty and so never matches).
+
+func test_sync_tree_season_leaves_a_far_tree_untouched():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	var far_pixel := tree.position + Vector2(EarthChunkManager.FRUITING_DETAIL_RADIUS + 1000.0, 0.0)
+	manager.sync_tree_season(far_pixel)
+
+	assert_eq(tree._ripe_count, -1, "a season sync must not dress a tree the player is nowhere near")
+	assert_eq(tree.current_season(), "", "a season sync must not dress a tree the player is nowhere near")
+
+
+func test_sync_tree_season_dresses_a_nearby_tree():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	manager.sync_tree_season(tree.position)
+
+	assert_ne(
+		tree.current_season(), "",
+		"a tree the player is standing next to should be dressed on a season sync, not skipped"
+	)
+
+
 # -- building/destruction -----------------------------------------------------
 
 func test_build_at_global_sets_a_modification_when_the_chunk_is_loaded():
