@@ -467,6 +467,31 @@ framebuffer), so several of these needed a real, non-headless, off-screen
     offset) + 16 (`WORLD_SIZE`) = 30.8, an 11.2-unit margin under the
     player's real 42-unit max reach (`character_view.tscn`'s `HeadSlot`) —
     comfortable again, versus a thin 3.2 at the old ratio.
+11. **"The grass now has floating artefacts above it"** — a real property of
+    `assets/sprites/grass_blades.png` itself, unrelated to any rendering
+    math (Y-sort, growth-scale, and the wind/walker-push shader were each
+    independently ruled out with real, non-headless renders before landing
+    on this). The sheet's taller "bush"/wheat-ear variants (denser rows)
+    draw their own plant art past their own nominal cell's bottom edge,
+    bleeding into the TOP of the next row down — measured directly against
+    the real shipped sheet: growing from a few px at the row1/2 boundary up
+    to 25px at row7/8, present on the large majority of non-row-0 cells.
+    `IllustratedGrassPatch.atlas_region_for_seed` sliced the sheet with no
+    padding, content-blind, so a recipient card's own region carried a
+    fragment of the DONOR row's plant right at its own top edge — and
+    because the shader flips root-at-bottom/tip-at-top, that fragment
+    rendered at the card's TIP, genuinely detached from its own body by a
+    real transparent gap. Only newly visible once real snow (see
+    `concept/weather.md`) gave the white ground enough contrast to show it
+    clearly — reproduced identically over both white and green backgrounds,
+    so the bleed itself predates and is independent of any snow work.
+    Fixed by inseting each row's own region from the top by its own
+    MEASURED bleed depth (`ROW_TOP_BLEED_PX`, one entry per row, expressed
+    as a fraction of a cell so it scales correctly for any `atlas_size`),
+    rather than a single global worst-case margin that would over-crop rows
+    with little or no real bleed. Pinned directly against the real shipped
+    PNG (`test_atlas_region_for_seed_never_includes_the_previous_rows_
+    bled_over_content`), not just the measured table by eye.
 
 ## Status
 
@@ -485,6 +510,9 @@ framebuffer), so several of these needed a real, non-headless, off-screen
 - ✅ The walker-position uniform updates every frame for every client
   (host and connected), not just whichever peer owns the ecosystem
   simulation — see History #5.
+- ✅ `IllustratedGrassPatch.atlas_region_for_seed` insets past every row's
+  own measured content-bleed from the row above it, so no card's region
+  carries a donor fragment at its own tip — see History #11.
 - ✅ Ambient wind sway (not the walker push) scales with the live
   `WeatherModel.wind_strength_for` value, the same one driving the water's
   shimmer and every other swaying plant.
