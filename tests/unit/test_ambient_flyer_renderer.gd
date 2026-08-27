@@ -437,6 +437,51 @@ func test_every_spawned_species_is_inside_its_own_latitude_band():
 ## qualify for butterflies while no butterfly species can live there (a chunk
 ## that spawns nothing for no visible reason), or a species could claim a
 ## biome the tier-wide gate never opens (a dead table row).
+# -- built flyers reuse cached textures, not fresh ones per marker ----------
+#
+# _build_marker used to call ProceduralButterflySprite/ProceduralBirdSprite's
+# generate_texture/generate_flap_textures/generate_perched_texture directly,
+# and none of those three cached anything -- every spawned butterfly/bee/bird
+# paid real generation cost AND was permanently unbatchable with every other
+# flyer of the same species/state under Godot's gl_compatibility renderer
+# (see scenes/world.tscn's y_sort_enabled Entities/Creatures tiers). The fix
+# lives in the sprite generators themselves (mirroring
+# ProceduralTreeSprite._tree_texture_cache / ProceduralFishSprite.LOOK_VARIANTS
+# / ProceduralAnimalAnimation.textures_for), so these confirm the caching is
+# actually visible through the renderer's own public building calls.
+
+func test_two_birds_of_the_same_species_and_seed_share_one_texture_instance():
+	var first := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 4)
+	var second := renderer.build_bird(parent, "sparrow", Vector2(10, 10), 4)
+	assert_same(first.texture, second.texture, "same species+seed should reuse the cached texture")
+
+
+func test_two_birds_of_the_same_species_and_seed_share_flap_frames():
+	var first := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 4)
+	var second := renderer.build_bird(parent, "sparrow", Vector2(10, 10), 4)
+	assert_same(
+		first.flap_frames, second.flap_frames,
+		"same species+seed should reuse the cached flap-frame sequence"
+	)
+
+
+func test_two_birds_of_the_same_species_and_seed_share_one_perched_texture():
+	var first := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 4)
+	var second := renderer.build_bird(parent, "sparrow", Vector2(10, 10), 4)
+	assert_not_null(first.perched_frame)
+	assert_same(
+		first.perched_frame, second.perched_frame,
+		"same species+seed should reuse the cached perched texture"
+	)
+
+
+func test_two_butterflies_of_the_same_species_and_seed_share_texture_and_flap_frames():
+	var first := renderer.spawn_offspring(parent, "monarch", Vector2.ZERO, 4)
+	var second := renderer.spawn_offspring(parent, "monarch", Vector2(5, 5), 4)
+	assert_same(first.texture, second.texture)
+	assert_same(first.flap_frames, second.flap_frames)
+
+
 func test_flyer_range_biomes_agree_with_the_tier_wide_biome_gates():
 	var pollinator_biomes := {}
 	for species in AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL + AmbientFlyerRenderer.BEE_SPECIES_POOL:
