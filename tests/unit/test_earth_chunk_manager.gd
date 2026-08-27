@@ -5003,6 +5003,50 @@ func test_snow_coverage_advances_within_a_single_depth_band_not_only_at_band_cro
 	snow_layer.free()
 
 
+## The two tests above both jump straight to a target depth with a single
+## set_snow_depth call. Real play never does that -- scenes/world.gd's own
+## _process loop drives snow through repeated step_snow calls as the world
+## clock advances a little at a time (see step_snow's own doc comment) -- so
+## this drives the SAME per-tile spread through that real path instead, to
+## prove the mix survives being reached incrementally rather than only when
+## set directly.
+##
+## Depth ~0.55 is chosen so the leading (onset=+0.18) and lagging (onset=-0.18)
+## tiles land on opposite sides of a texture-band boundary by SnowLayer's own
+## math: lying=0.37 -> band 1, lying=0.73 -> band 2 (SnowLayer.band_for).
+func test_a_realistic_step_snow_driven_snowfall_paints_more_than_one_non_bare_band():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.update(_berlin_tile)
+
+	var step := 2.0
+	var target := Snowfall.SECONDS_TO_COVER * 0.55
+	var elapsed := 0.0
+	while elapsed < target:
+		manager.advance_world_age(step)
+		manager.step_snow(true, 0.0)  # cold and snowing throughout
+		elapsed += step
+
+	var bands := {}  # painted atlas band index -> true; bare tiles excluded
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		for y in EarthChunkManager.CHUNK_SIZE:
+			for x in EarthChunkManager.CHUNK_SIZE:
+				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+				if manager.biome_at_global(global_x, global_y) == "ocean":
+					continue
+				var cell := Vector2i(global_x, global_y)
+				if snow_layer.get_cell_source_id(cell) != -1:
+					bands[snow_layer.get_cell_atlas_coords(cell).x] = true
+
+	assert_gt(
+		bands.size(), 1,
+		"a step_snow-driven snowfall at depth ~0.55 painted only one non-bare band (%s) across the field -- the field is not spreading tile by tile through the real production code path" % [bands]
+	)
+	snow_layer.free()
+
+
 ## A fallen fruit is ONE fruit, landing under where it hung.
 ##
 ## Windfall used to be spawned as up to five arbitrary stacks scattered by a
