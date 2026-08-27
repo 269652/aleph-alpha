@@ -47,14 +47,24 @@ weapons, and armor.
 - ✅ Iron armor out-protects leather (2× armor values, feeds `Equipment.total_armor`).
 - ⬜ Charcoal from wood (a renewable fuel besides mined coal).
 - 🚧 **Alloy blending** — `src/gameplay/alloy_blend.gd` (tested): two mineral
-  property vectors blend into a third by real metallurgy — solid-solution
-  strengthening, the strength/ductility tradeoff, and cryoscopic melting
-  depression. Bronze really does come out harder than copper *and* harder than
-  tin. `copper`/`tin`/`carbon` rows now exist in `material_properties.gd`,
-  closing the gap named below. **Nothing calls it yet**: there is no tin ore, no
-  alloy ingot item, and no smelt path that produces a blended vector — the
-  computation is real and the content wiring is absent. See "What actually got
-  built" below.
+  property vectors blend into a third by real metallurgy — a **two-regime model
+  split by each pair's published second-phase onset**, Labusch solid-solution
+  strengthening below it, a lever-rule brittle-phase collapse above it, and
+  cryoscopic melting depression. Bronze really does come out harder than copper
+  *and* harder than tin, and the *optimum* composition of three unrelated alloy
+  systems falls out of three published phase boundaries. `copper`/`tin`/`carbon`
+  rows now exist in `material_properties.gd`, closing the gap named below.
+  **Nothing calls it yet**: there is no tin ore, no alloy ingot item, and no
+  smelt path that produces a blended vector — the computation is real and the
+  content wiring is absent. See "The two-regime rewrite" below.
+- 🚧 **Heat as a real tech gate** — `material_properties.gd`'s
+  `thermal_failure_c`/`thermal_failure_mode`/`can_melt`/`materials_meltable_at`
+  plus `STATION_TEMPERATURE_C` (tested): real Celsius melting/ignition/charring/
+  fracture temperatures, compared against what real campfires, bloomeries and
+  crucible furnaces reach. The whole progression ladder now falls out of
+  arithmetic with **no authored gating anywhere**. **Nothing calls it yet** —
+  `smelting.gd` still gates on "is a heat source present", not on its
+  temperature.
 - ⬜ Material-property-vector emergence (the `materials.md` target: stats fall out
   of composite material + shape rather than fixed per-recipe numbers).
 - ⬜ Smithing skill quality multiplier (a master realizes more of an item's
@@ -254,6 +264,160 @@ exact relation for a mass split is `1/ρ = w_a/ρ_a + w_b/ρ_b`. Worth the extra
 because it is checkable — 88Cu-12Sn comes out at 8.72 g/cm³ against a measured
 ~8.78 for real cast tin bronze.
 
+### The two-regime rewrite, and the material-vector correction pass (2026-08-28)
+
+Three corrections to `material_properties.gd` and one to `alloy_blend.gd`. The
+alloy one supersedes part of the section above; where it does, that is called
+out rather than quietly overwritten.
+
+#### The blend model now has two regimes, split by a published number
+
+The 2026-08-27 model had one law: Fleischer `sqrt(c)` strengthening peaking at
+the solubility limit, with toughness divided by exactly the factor hardness was
+multiplied by. It was decent, and it authored its own answer in two places. The
+replacement has **two regimes separated by each pair's published second-phase
+onset** — the composition where a brittle intermetallic starts coming out of
+solution:
+
+- **Below the onset** the alloy is a single solid solution. Hardness rises by
+  **Labusch's** `c^(2/3)`, not Fleischer's `c^(1/2)`. This is a correction, not
+  a preference: Fleischer is documented as the *dilute* result, valid below
+  about 1 at% solute, and every alloy here is far outside that (12 wt% tin is
+  6.8 at%; 39 wt% zinc is 38 at%). Toughness in this regime simply follows the
+  rule of mixtures, because one ductile phase is still one ductile phase.
+- **Above it** a real named compound precipitates — δ-Cu₃₁Sn₈, β′-CuZn, γ-Cu₃As,
+  cementite Fe₃C — its volume fraction grows by the **lever rule**, hardness
+  keeps climbing toward it, and **toughness collapses**, because a continuous
+  brittle network on the grain boundaries is a crack highway.
+
+**The four onsets, each off a real phase diagram:** Cu-Sn **13.5 wt%** (the
+practical as-cast limit; the equilibrium α boundary is 15.8% at 586 °C, but
+bronze is a cast material and coring is what a caster meets), Cu-Zn **39 wt%**
+(the α/(α+β) boundary at ~454–470 °C), Cu-As **7.96 wt%** (max solubility at
+685 °C), Fe-C **0.76 wt%**. That last one is deliberately *not* a solubility
+limit — ferrite dissolves 0.02% C — it is the **eutectoid**, above which
+proeutectoid cementite films the prior-austenite grain boundaries. It is named
+`SECOND_PHASE_ONSET` rather than a solubility precisely so that this stays
+honest.
+
+**The payoff, and the test that earns the rewrite.** The optimum is defined as
+the richest composition with no brittle network yet, and it is *scanned* from
+the model rather than returned from the constant. Three unrelated systems, three
+published boundaries, three real historical answers:
+
+| system | model optimum | reality |
+| --- | --- | --- |
+| Cu-Sn | 13.5% tin | weapons bronze is 10–14% Sn |
+| Cu-Zn | 39% zinc | Muntz metal is 40% Zn |
+| Fe-C | 0.76% carbon | eutectoid steel, the classic edged-tool carbon |
+
+Nothing in the formula knows any of that. And the **anti-wiki property** is
+explicit and test-pinned: the onsets differ so wildly per pair that a player who
+learns "about one part in seven" from bronze is wrong about brass by ~3× and
+wrong about steel by ~18×. One authored ratio could never produce that; it is
+the whole design argument for a blend *space* over a recipe list.
+
+**Where this supersedes the 2026-08-27 write-up.** Divergence 4 above recorded
+that the past-the-eutectoid plateau was "the right answer about cast iron,
+arrived at partly for the wrong reason (the plateau is the ceiling clamping, not
+modeled cementite)". Cementite is now modeled, by name and by the lever rule,
+so it is the right answer for the right reason. Two tests were rewritten to the
+better invariant rather than deleted: eutectoid steel now reads **hard, keen and
+not brittle** (normalized 0.76% pearlitic steel genuinely is the tough edged-tool
+material, and if it came out brittle the historical optimum would be nonsense),
+while **cast iron at 4.3% C reads brittle**. The old model called 0.8% carbon
+steel brittle, which was simply false. Likewise
+`test_toughness_falls_where_hardness_peaks` became
+`test_toughness_holds_up_through_the_whole_single_phase_field`: the old "every
+alloy is less tough than its parents" shape is contradicted by the
+most-produced copper alloy there is — cartridge brass at 30% zinc is both
+stronger than pure copper *and* more ductile than it.
+
+**The second phase's composition is derived, not looked up.** Only the formula
+is stored; the solute mass fraction is arithmetic over the molar masses already
+present. That the arithmetic reproduces the textbook figures (Cu₃₁Sn₈ → 32.5%
+against a published 32.6; Fe₃C → 6.69% against the textbook 6.67) is the check
+that the derivation is right, and it means a fifth alloy system needs one
+published boundary and one chemical formula rather than a measured composition.
+
+#### Conductivity is now a real IACS scale
+
+The column was wrong in the direction that matters: **iron shipped at 9.0
+against copper's 10.0**, an 11% gap, when real iron is 15.6% IACS against
+copper's 100% — a factor of six and a half, and near the *bottom* of the metals
+rather than the top. Flesh shipped at 3.0 when wet tissue is seven orders of
+magnitude below any metal.
+
+It is now derived: one anchor (`IACS_SILVER_PERCENT = 105.0`, chosen because
+silver is the true maximum of the periodic table and so never has to move
+again), one pure function `conductivity_from_iacs()`, and a published %IACS
+figure per row. Nothing in the column is assigned. This was free exactly once —
+a repo-wide grep confirms **nothing in `src/` or `scenes/` reads `conductivity`
+at all** — and it matters because [electromagnetism.md](electromagnetism.md) is
+written against this scalar and three of its sentences ("copper makes a
+genuinely better wire than iron"; "wood or stone simply doesn't conduct and
+can't complete a circuit at all") were unsupported by the old numbers and are
+supported now.
+
+The honest cost, test-pinned rather than hidden: on a *linear* silver-anchored
+scale every non-metal collapses to effectively zero, because real conductivity
+spans ~24 orders of magnitude. That is the right answer for what the scalar is
+for, and it means the scale cannot rank insulators against each other. The
+stored %IACS figures still can.
+
+#### Heat is a real temperature, and it gates the tech tree for free
+
+`materials.md`'s property list has always named "melting/damage thresholds" and
+the table never had one. There is now a real Celsius figure and a **failure
+mode** per material — the mode matters because half the table does not melt, and
+reporting a bare melting point for a hearth stone or a hide would be a number
+standing in place of the truth:
+
+- **melt** — the metals (the *same* published constants `alloy_blend.gd`'s
+  cryoscopic model runs on, pinned equal so a tooltip cannot say 1085 while the
+  physics says 1084.62) and the two glasses (their glass-transition
+  temperatures, since a glass has no melting point).
+- **fracture** — stone, at **573 °C**, the α→β quartz inversion. This is why
+  fire-cracked rock is a diagnostic artifact class in real archaeology.
+- **ignite** — the cellulose fuels (wood ~300 °C, charcoal ~349 °C).
+- **char** — the protein tissues. A fourth mode beyond the three originally
+  specified, because keratin and collagen genuinely neither melt nor sustain a
+  flame; they char and self-extinguish, the same chemistry that makes wool a
+  flame-retardant fibre. (Cooking is a *different*, far lower threshold — protein
+  denatures around 65 °C — and belongs to `cooking.gd`; this column is about
+  structural failure.)
+
+Set against `STATION_TEMPERATURE_C` — campfire ~800 °C, bloomery ~1200 °C,
+crucible furnace ~1600 °C, all real figures — **the Iron Age reproduces itself
+with zero authored gating**. A campfire melts tin and zinc and works glass but
+comes nowhere near copper at 1085 (the Chalcolithic problem exactly). A bloomery
+pours copper, bronze (which melts *below* copper, ~1000 °C) and cast iron
+(~1200 °C at the eutectic) but cannot melt wrought iron at 1538 — which is
+precisely why a bloomery makes a solid-state *bloom* to be hammered rather than a
+pour. Only a crucible furnace melts iron, which is historically when crucible
+steel appears. No recipe needs a `requires: crucible` flag; iron requires a
+crucible because 1537.85 > 1200.
+
+#### Eight missing materials
+
+`MATERIALS` had no **hide, leather, bone, sinew, glass, silver, gold or zinc**,
+so every organic part in the design resolved through `DEFAULT_PROPERTIES`' all-
+1.0 vector and every one of them realized *identically* — a boar hide and a pane
+of glass were the same material, and [crafting.md](crafting.md)'s headline
+promise ("a hide from a rare, high-fitness boar is a better material input") was
+unreachable in code. All eight now exist with sourced values. Two carry real
+mechanisms rather than just numbers: **tanning** is the hide → leather decay drop
+(the same shape the table already used for wood → timber seasoning), and **sinew**
+is the springiest and strongest cordage in the game because tendon really is the
+biological spring.
+
+One knock-on, recorded because it crossed a file boundary: gold at 19.30 g/cm³
+is now the densest modelled material, which tripped `assembly_id.gd`'s
+volume-quantum guard — a test whose own doc comment says that adding a denser
+material *must* force the quantum to be re-derived. It was, from 0.1 cm³ to
+0.05 cm³, which is the coarsest quantum under which one quantum of gold still
+weighs less than a gram.
+
 ### Open questions (2026-08-27)
 
 The 2026-08-24 list below still stands except where the section above resolved
@@ -274,6 +438,11 @@ implemented scope). What implementing it newly exposed:
   conductivity drops **below both** constituents — the same qualitative shape as
   the hardness bulge, inverted. Modeled as linear for now, which is the one place
   the file knowingly states something false rather than merely incomplete.
+  *(Still open as of 2026-08-28. Note that the 2026-08-28 pass fixed the*
+  *conductivity **column** — it is now derived from published %IACS — but not the*
+  *blend **rule**, which is a separate and still-unmodeled non-linearity. Doing it*
+  *would be cheap now that the onsets exist, since Nordheim's `x(1-x)` scattering*
+  *term applies exactly in the single-phase field and nowhere else.)*
 - **The eutectic's position is only qualitatively right.** The ideal-dilute
   linearization over-extrapolates far from either pure end: a Cu-Sn eutectic does
   emerge on the correct tin-rich side, but at ~88 wt% Sn / 169 °C against the real
@@ -281,11 +450,16 @@ implemented scope). What implementing it newly exposed:
   modeled. The solvent-rich regime — where every alloy anyone actually makes lives
   — is the part to trust.
 - **Heat treatment is absent, and it is a big absence.** What `blend()` returns is
-  an as-cast vector. Quenched high-carbon steel really is hard and really does
-  shatter, and the model says so; tempering — which trades hardness back for
-  toughness — is an *operation on a finished part*, not a property of a
-  composition, and belongs to whatever models the forge. Until it exists, there is
-  no way to make a steel blade that is not brittle, which is a real gameplay hole.
+  an as-cast vector; tempering and quenching trade hardness against toughness on
+  an *operation on a finished part*, not by composition, and belong to whatever
+  models the forge. *Rewritten 2026-08-28: this bullet used to say "quenched
+  high-carbon steel really is hard and really does shatter, and the model says
+  so", and that is no longer what the model says — nor should it be, since
+  composition alone cannot distinguish quenched martensite from normalized
+  pearlite. The two-regime model now correctly calls eutectoid steel tough. The
+  absence has flipped direction: there is no way to make a steel blade that IS
+  brittle-because-quenched, and no way to temper cast iron's brittleness back
+  out. Same hole, honestly relabelled.*
 - **Nothing calls any of this yet.** There is no tin ore (`ORE_TYPES` is still
   `["iron", "copper", "coal"]`), no alloy ingot item, no smelt path that yields a
   blended vector, and no UI for choosing a ratio. The blend is a computation with

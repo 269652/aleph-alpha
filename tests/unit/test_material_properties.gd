@@ -278,11 +278,393 @@ func test_an_unnamed_computed_vector_still_yields_descriptors() -> void:
 	assert_eq(mp.descriptors_for_vector(invented), ["hard", "keen", "brittle"] as Array[String])
 
 
-## Every new row must carry all eight scalars -- a missing key would silently
-## fall back to DEFAULT_PROPERTIES and read as a different material.
-func test_every_new_row_carries_the_full_eight_scalar_vector() -> void:
-	for material in ["copper", "tin", "carbon"]:
+# -- thermal failure: a real temperature, in real degrees --------------------
+#
+# materials.md's property list has always named "melting/damage thresholds" and
+# the table has never had one. It is deliberately NOT a ninth 0-10 scalar: the
+# whole point is that it must be comparable against real furnace temperatures
+# and real eutectic temperatures, both of which are published numbers in
+# degrees Celsius, and `density` already ships in real g/cm^3 so the precedent
+# for a real-units column exists.
+#
+# It is also deliberately NOT part of the property vector. An alloy vector has
+# to stay shape-identical to a MATERIALS row (that is what lets a computed
+# blend flow through the existing pipeline unchanged), and AlloyBlend already
+# argues the same case from the other side. So it is a lookup with an honest
+# function pair in front of it instead.
+
+func test_thermal_failure_is_a_real_celsius_temperature_not_a_zero_to_ten_band() -> void:
+	assert_almost_eq(mp.thermal_failure_c("copper"), 1084.62, 0.01,
+		"copper melts at 1084.62 C -- a real number, comparable against a real furnace")
+	assert_gt(mp.thermal_failure_c("iron"), MaterialProperties.CONDUCTIVITY_MAX,
+		"this column is degrees, not a 0-10 legibility band")
+
+
+## Every material must answer, and answer with one of the four modes -- an
+## unlisted material would silently read as INF ("nothing can ever hurt this"),
+## which is exactly the kind of quiet default this pass exists to remove.
+func test_every_material_has_a_real_thermal_failure_temperature_and_mode() -> void:
+	for material in MaterialProperties.MATERIALS:
+		assert_true(is_finite(mp.thermal_failure_c(material)),
+			"%s has no thermal failure temperature" % material)
+		assert_true(MaterialProperties.THERMAL_FAILURE_MODES.has(mp.thermal_failure_mode(material)),
+			"%s's failure mode '%s' is not one of the four" % [material, mp.thermal_failure_mode(material)])
+
+
+## Wood does not melt, it ignites; stone does not melt, it cracks; a hide does
+## neither, it chars. Reporting a "melting point" for any of them would be a
+## number in place of the truth, which is why the mode travels with the
+## temperature instead of the temperature standing alone.
+func test_the_failure_mode_says_what_actually_happens_to_each_material() -> void:
+	assert_eq(mp.thermal_failure_mode("wood"), "ignite", "wood does not melt, it burns")
+	assert_eq(mp.thermal_failure_mode("stone"), "fracture", "stone does not melt in any fire, it spalls")
+	assert_eq(mp.thermal_failure_mode("hide"), "char", "protein neither melts nor sustains a flame")
+	assert_eq(mp.thermal_failure_mode("iron"), "melt")
+	assert_eq(mp.thermal_failure_mode("glass"), "melt")
+
+
+## Fire-cracked rock is a diagnostic artifact class in real archaeology: hearth
+## stones shatter, and they shatter for one specific published reason -- the
+## alpha-to-beta quartz inversion at 573 C, where quartz abruptly changes volume
+## and tears the rock apart. That is a real, sourced number, not "some hot".
+func test_stone_fractures_at_the_quartz_inversion_temperature() -> void:
+	assert_almost_eq(mp.thermal_failure_c("stone"), 573.0, 0.01,
+		"the alpha-beta quartz inversion at 573 C is why hearth stones crack")
+	assert_false(mp.can_melt("stone", MaterialProperties.STATION_TEMPERATURE_C["crucible_furnace"]),
+		"a stone that has already fractured has not melted -- no station melts stone")
+
+
+## The metals' melting points are NOT restated here. They are the same
+## published constants alloy_blend.gd's cryoscopic model already runs on, and a
+## tooltip that said 1085 while the physics used 1084.62 would be exactly the
+## drift this project keeps warning about. Pinned equal instead, since the
+## preload can only go one way.
+func test_the_metal_melting_points_are_the_alloy_models_own_published_constants() -> void:
+	var AlloyBlend := preload("res://src/gameplay/alloy_blend.gd")
+	for metal in ["copper", "tin", "iron", "silver", "gold", "zinc"]:
+		var kelvin: float = float(AlloyBlend.ELEMENT_CONSTANTS[metal]["melting_k"])
+		assert_almost_eq(mp.thermal_failure_c(metal), kelvin + AlloyBlend.ABSOLUTE_ZERO_C, 0.01,
+			"%s's melting point must be the one number, not two that can drift" % metal)
+
+
+## THE payoff, and the reason this is a real temperature rather than a band:
+## station temperature gates the tech tree for free, with zero authored gating.
+## Nothing anywhere says "iron requires a crucible" -- iron requires a crucible
+## because 1538 > 1200, and the three station temperatures are what real
+## furnaces reach.
+func test_station_temperature_gates_the_tech_tree_with_no_authored_gating() -> void:
+	var campfire: float = MaterialProperties.STATION_TEMPERATURE_C["campfire"]
+	var bloomery: float = MaterialProperties.STATION_TEMPERATURE_C["bloomery"]
+	var crucible: float = MaterialProperties.STATION_TEMPERATURE_C["crucible_furnace"]
+
+	assert_true(mp.can_melt("tin", campfire), "an open fire really does melt tin -- ~800 C vs 232 C")
+	assert_true(mp.can_melt("zinc", campfire))
+	assert_false(mp.can_melt("copper", campfire),
+		"and it comes nowhere near copper at 1085 C, which is the whole Chalcolithic problem")
+	assert_false(mp.can_melt("silver", campfire), "even silver needs a real furnace")
+
+	assert_true(mp.can_melt("copper", bloomery), "a bellows-blown bloomery at ~1200 C pours copper")
+	assert_true(mp.can_melt("gold", bloomery))
+	assert_false(mp.can_melt("iron", bloomery),
+		"but not wrought iron at 1538 C -- which is why a bloomery makes a solid-state BLOOM, not a pour")
+
+	assert_true(mp.can_melt("iron", crucible),
+		"only a crucible furnace at ~1600 C melts iron, which is exactly when crucible steel appears")
+
+
+## The same gate, read the other way round: what a station can work is a list
+## that falls out of the temperatures, so a new material joins the tech tree by
+## having a melting point rather than by being added to a recipe gate.
+func test_what_a_station_can_work_is_derived_not_listed() -> void:
+	assert_eq(mp.materials_meltable_at(MaterialProperties.STATION_TEMPERATURE_C["campfire"]),
+		["glass", "obsidian", "tin", "zinc"] as Array[String],
+		"a campfire works the low-melting glasses and the low-melting metals, and nothing else")
+	var bloomery: Array[String] = mp.materials_meltable_at(
+		MaterialProperties.STATION_TEMPERATURE_C["bloomery"]
+	)
+	assert_true(bloomery.has("copper") and bloomery.has("silver") and bloomery.has("gold"))
+	assert_false(bloomery.has("iron"))
+
+
+## A material that cannot melt at all must say so with something that is not a
+## temperature, exactly as AlloyBlend.DOES_NOT_MELT already does for a blend.
+func test_a_material_that_never_melts_is_never_meltable_at_any_temperature() -> void:
+	for material in ["wood", "fiber", "flesh", "bone", "stone"]:
+		assert_false(mp.can_melt(material, 100000.0),
+			"%s has no melting point at any temperature -- it fails some other way" % material)
+
+
+# -- conductivity, on a real IACS scale -------------------------------------
+#
+# Every other column in this table is placed against its neighbours on a 0-10
+# legibility scale; conductivity is the one column that did not have to be,
+# because electrical conductivity has a real, universally published unit-free
+# scale already -- %IACS, the International Annealed Copper Standard, where
+# annealed copper is 100 by definition. So the column is now DERIVED from
+# published %IACS figures through one pure function rather than eyeballed
+# against iron.
+#
+# This was free exactly once: the lead verified, and so did a repo-wide grep,
+# that nothing in src/ or scenes/ reads "conductivity" at all. It is the scalar
+# concept/electromagnetism.md is written against ("a wire's resistance falls out
+# of its material's existing conductivity scalar"), so getting it right BEFORE
+# anything consumes it is the whole point.
+
+## The relative comparison every conductivity assertion below uses. These values
+## span 21 orders of magnitude, so an absolute epsilon is meaningless -- 1e-6
+## relative is the honest way to check a table of published figures.
+func assert_relative(actual: float, expected: float, message: String) -> void:
+	assert_almost_eq(actual, expected, absf(expected) * 1.0e-6 + 1.0e-30, message)
+
+
+## The column is not assigned, it is computed. Every row must equal
+## conductivity_from_iacs() of its own published %IACS figure, so a value can
+## never be nudged without changing the physical measurement it claims.
+func test_conductivity_is_derived_from_real_iacs_not_assigned() -> void:
+	for material in MaterialProperties.MATERIALS:
+		assert_true(MaterialProperties.IACS_PERCENT.has(material),
+			"%s has no published %%IACS figure -- its conductivity would be eyeballed" % material)
+		assert_relative(
+			mp.property_value(material, "conductivity"),
+			mp.conductivity_from_iacs(float(MaterialProperties.IACS_PERCENT[material])),
+			"%s's conductivity must be its %%IACS figure put through the one function" % material
+		)
+
+
+## Silver is the anchor because it is the true maximum of the entire periodic
+## table -- nothing conducts better, so the top of the scale never has to move
+## again. (Published commercial annealed silver is 105% IACS; the pure figure
+## runs a little higher, 106-108%, which is why the constant is named and
+## sourced rather than inlined.)
+func test_silver_is_the_scale_maximum() -> void:
+	assert_almost_eq(mp.conductivity_from_iacs(MaterialProperties.IACS_SILVER_PERCENT),
+		MaterialProperties.CONDUCTIVITY_MAX, 0.0001,
+		"the silver anchor must land exactly on the top of the scale")
+	assert_almost_eq(mp.property_value("silver", "conductivity"),
+		MaterialProperties.CONDUCTIVITY_MAX, 0.0001)
+	for material in MaterialProperties.MATERIALS:
+		assert_lte(mp.property_value(material, "conductivity"),
+			mp.property_value("silver", "conductivity"),
+			"nothing may out-conduct silver -- it is the periodic table's own maximum")
+
+
+## The scale's ceiling is the SAME 0-10 legibility ceiling the alloy model
+## already pins to the largest value the table uses. Restated here rather than
+## preloaded because alloy_blend.gd already preloads THIS file and the reverse
+## would be a cycle -- exactly the arrangement BRITTLE_TOUGHNESS already uses
+## against ImpactResolver -- so the two are pinned equal instead.
+func test_the_conductivity_ceiling_is_the_alloy_models_own_legibility_ceiling() -> void:
+	var AlloyBlend := preload("res://src/gameplay/alloy_blend.gd")
+	assert_eq(MaterialProperties.CONDUCTIVITY_MAX, AlloyBlend.SCALE_MAX,
+		"one legibility ceiling, not two that can drift apart")
+
+
+## The ordering is the real periodic-table ordering of the metals, which is a
+## genuinely checkable external fact: Ag > Cu > Au > Zn > Fe > Sn. The old
+## column had iron SECOND, above gold, zinc and tin -- inverted.
+func test_the_metal_ordering_matches_the_real_periodic_table_ordering() -> void:
+	var real_order := ["silver", "copper", "gold", "zinc", "iron", "tin"]
+	for index in range(real_order.size() - 1):
+		assert_gt(
+			mp.property_value(real_order[index], "conductivity"),
+			mp.property_value(real_order[index + 1], "conductivity"),
+			"%s must out-conduct %s" % [real_order[index], real_order[index + 1]]
+		)
+
+
+## And the honest consequence of anchoring a LINEAR scale on silver: every
+## non-metal collapses to effectively zero, because real conductivity spans
+## about 24 orders of magnitude and no linear 0-10 scale can hold that. This is
+## the right answer for what the scale is for -- electromagnetism.md's "wood or
+## stone simply doesn't conduct and can't complete a circuit at all" was not
+## true of the old table, where stone sat at 1.0 against iron's 9.0. It is true
+## now. What the scale cannot do is rank insulators against each other, and this
+## test pins that limitation rather than hiding it.
+func test_no_non_metal_registers_at_all_on_a_conductor_scale() -> void:
+	var metals := ["silver", "copper", "gold", "zinc", "iron", "tin"]
+	for material in MaterialProperties.MATERIALS:
+		if metals.has(material):
+			continue
+		assert_lt(mp.property_value(material, "conductivity"), 0.1,
+			"%s is not a conductor and must not read as one" % material)
+	assert_lt(
+		mp.property_value("flesh", "conductivity") / mp.property_value("iron", "conductivity"),
+		1.0e-6,
+		"wet tissue is orders of magnitude below the worst metal, not a third of it"
+	)
+
+
+## Graphite is the one non-metal that is even measurable here -- it is a
+## semi-metal and conducts along its basal planes well enough to be an
+## electrode -- but it is still ~300x worse than the worst real metal in the
+## table, not comparable to iron as the old 7.0 claimed.
+func test_graphite_is_the_only_non_metal_that_registers_and_still_loses_to_every_metal() -> void:
+	assert_gt(mp.property_value("carbon", "conductivity"),
+		mp.property_value("stone", "conductivity") * 1000.0,
+		"graphite is a semi-metal; granite is not")
+	assert_lt(mp.property_value("carbon", "conductivity"),
+		mp.property_value("tin", "conductivity") / 10.0,
+		"but graphite still loses badly to the worst metal here")
+
+
+## An unmodeled material must not be assumed to be a wire. This is the one
+## DEFAULT_PROPERTIES entry that is deliberately not 1.0: on a silver-anchored
+## scale 1.0 means "10.5% IACS", i.e. a real metal, so the old default silently
+## promoted every unmodeled substance to a usable conductor -- the same class of
+## quiet bug the iron/copper inversion was.
+func test_an_unmodeled_material_is_not_assumed_to_conduct() -> void:
+	assert_almost_eq(mp.property_value("unobtainium", "conductivity"), 0.0, 0.0001,
+		"not having measured something is not a reason to call it a conductor")
+
+
+## The inversion this whole rescale exists to fix. Iron is one of the WORST
+## conductors of the common metals (15.6% IACS) and copper is the standard the
+## whole scale is defined against (100% IACS) -- a factor of six and a half.
+## The table used to ship iron at 9.0 against copper's 10.0, an 11% gap, which
+## makes electromagnetism.md's "copper makes a genuinely better wire than iron"
+## a statement the numbers cannot support.
+func test_iron_conducts_far_worse_than_copper() -> void:
+	assert_gt(
+		mp.property_value("copper", "conductivity") / mp.property_value("iron", "conductivity"), 5.0,
+		"copper is 100%% IACS and iron 15.6%% -- the table must show a factor of six, not 11%%"
+	)
+
+
+## Every row must carry all eight scalars -- a missing key would silently
+## fall back to DEFAULT_PROPERTIES and read as a different material. Widened
+## from the three alloy rows to the whole table, because the organic rows added
+## below are exactly the ones most likely to be added in a hurry.
+func test_every_row_carries_the_full_eight_scalar_vector() -> void:
+	for material in MaterialProperties.MATERIALS:
 		var vector: Dictionary = MaterialProperties.MATERIALS[material]
 		for property_name in MaterialProperties.DEFAULT_PROPERTIES:
 			assert_true(vector.has(property_name),
 				"%s is missing '%s' and would silently read as the default" % [material, property_name])
+
+
+# -- the organic and decorative rows the design already promised --------------
+#
+# crafting.md's headline promise is "a hide from a rare, high-fitness boar is a
+# better material input". That promise was unreachable in code: hide, leather,
+# bone, sinew, glass, silver, gold and zinc had no rows at all, so every organic
+# part in the design resolved through DEFAULT_PROPERTIES' all-1.0 vector and
+# every one of them realized IDENTICALLY -- a boar hide and a pane of glass were
+# the same material.
+
+func test_the_materials_the_design_already_promises_all_have_real_rows() -> void:
+	for material in ["hide", "leather", "bone", "sinew", "glass", "silver", "gold", "zinc"]:
+		assert_true(MaterialProperties.MATERIALS.has(material),
+			"%s is named in the design and must not resolve through DEFAULT_PROPERTIES" % material)
+		assert_ne(MaterialProperties.MATERIALS[material], MaterialProperties.DEFAULT_PROPERTIES,
+			"%s must be a measured material, not the all-1.0 fallback wearing a name" % material)
+
+
+## Two different organic inputs must not realize identically -- that is the
+## whole substance of the crafting promise, and it was false before these rows
+## existed.
+func test_two_different_organic_inputs_no_longer_realize_identically() -> void:
+	assert_ne(MaterialProperties.MATERIALS["hide"], MaterialProperties.MATERIALS["bone"])
+	assert_ne(mp.descriptors_for("bone"), mp.descriptors_for("glass"))
+
+
+## Tanning is the entire point of leather: tannins cross-link collagen and make
+## it inedible to the microbes that eat a raw hide, so a tanned hide outlasts an
+## untanned one by orders of magnitude (leather artifacts survive centuries;
+## rawhide does not survive a wet season). Exactly the wood -> timber shape this
+## table already uses for seasoning.
+func test_tanning_is_what_makes_leather_outlast_a_raw_hide() -> void:
+	assert_lt(
+		mp.property_value("leather", "decay_rate"), mp.property_value("hide", "decay_rate"),
+		"tanned leather must resist decay far better than the raw hide it is made from"
+	)
+	assert_lt(
+		mp.property_value("hide", "decay_rate"), mp.property_value("flesh", "decay_rate"),
+		"but a raw hide still keeps better than the meat it came off -- it is drier and mostly collagen"
+	)
+
+
+## Rawhide and sinew are the real cordage of a pre-textile toolkit -- rawhide
+## lashings shrink tight as they dry, sinew backs bows. Both must pass the
+## toughness gate the game already uses for rope; meat must not.
+func test_rawhide_and_sinew_are_viable_cordage_but_flesh_is_not() -> void:
+	assert_true(mp.is_viable_for_tool("sinew", "grapple_rope"), "sinew is the strongest cord here")
+	assert_true(mp.is_viable_for_tool("hide", "grapple_rope"), "rawhide lashing is real cordage")
+	assert_false(mp.is_viable_for_tool("flesh", "grapple_rope"))
+
+
+## Tendon is the biological spring -- it stores and returns elastic energy
+## better than anything else in this table, which is why it backs a bow -- and
+## it out-pulls plant fibre, which is why a sinew bowstring beats a bast one.
+func test_sinew_is_the_springiest_and_strongest_cord_in_the_table() -> void:
+	for material in MaterialProperties.MATERIALS:
+		assert_lte(mp.property_value(material, "elasticity"),
+			mp.property_value("sinew", "elasticity"),
+			"%s must not out-spring tendon" % material)
+	assert_gt(mp.property_value("sinew", "toughness"), mp.property_value("fiber", "toughness"),
+		"a sinew bowstring beats a plant-fibre one")
+
+
+## Bone is the pre-metal point material: it takes a working point where flesh
+## takes nothing, but it is not a keen edge -- bone needles and harpoons are
+## real, bone razors are not.
+func test_bone_holds_a_working_point_but_never_a_keen_edge() -> void:
+	assert_gt(mp.property_value("bone", "sharpness_capacity"),
+		mp.property_value("flesh", "sharpness_capacity"))
+	assert_false(mp.descriptors_for("bone").has("keen"),
+		"bone points are real; bone razors are not")
+
+
+## Bone is why there is a fossil record: it is the one organic material that
+## outlasts wood in the ground by orders of magnitude.
+func test_bone_outlasts_every_other_organic_material() -> void:
+	for material in ["wood", "timber", "fiber", "flesh", "hide", "leather", "sinew"]:
+		assert_lt(mp.property_value("bone", "decay_rate"), mp.property_value(material, "decay_rate"),
+			"bone must outlast %s -- that is why bone is what survives to be dug up" % material)
+
+
+## Soda-lime glass and obsidian are the same class of substance -- a silicate
+## glass -- so the existing descriptor vocabulary must reach the same three
+## words for both, with obsidian keeping the edge (its higher silica and lower
+## alkali content genuinely make it the harder, finer-fracturing glass).
+func test_glass_reads_like_the_silicate_glass_it_is() -> void:
+	assert_eq(mp.descriptors_for("glass"), ["hard", "keen", "brittle"] as Array[String])
+	assert_lt(mp.property_value("glass", "hardness"), mp.property_value("obsidian", "hardness"),
+		"soda-lime alkali softens the network; obsidian keeps the harder edge")
+	assert_lt(mp.property_value("glass", "sharpness_capacity"),
+		mp.property_value("obsidian", "sharpness_capacity"))
+
+
+## The precious metals are decorative precisely BECAUSE they are useless as
+## tools: both are softer than copper, which was already too soft to hold an
+## edge against flint. Their value is that they do not corrode -- gold not at
+## all, which is why grave goods come out of the ground still bright.
+func test_the_precious_metals_are_too_soft_for_tools_and_do_not_corrode() -> void:
+	for metal in ["silver", "gold"]:
+		assert_lt(mp.property_value(metal, "hardness"), mp.property_value("copper", "hardness"),
+			"%s is softer than copper, which was already too soft for an edge" % metal)
+		assert_false(mp.descriptors_for(metal).has("keen"))
+		assert_lt(mp.property_value(metal, "decay_rate"), mp.property_value("copper", "decay_rate"))
+	assert_almost_eq(mp.property_value("gold", "decay_rate"), 0.0, 0.0001,
+		"gold is noble -- it does not corrode at all")
+
+
+## Gold is the densest thing in the table by a wide margin (19.30 g/cm^3), which
+## is a real and useful fact: it is why panning works and why a gold-coloured
+## fake is trivially detectable by weight.
+func test_gold_is_by_far_the_densest_material_in_the_table() -> void:
+	assert_almost_eq(mp.property_value("gold", "density"), 19.30, 0.0001)
+	for material in MaterialProperties.MATERIALS:
+		if material == "gold":
+			continue
+		assert_lt(mp.property_value(material, "density"), mp.property_value("gold", "density"))
+
+
+## Zinc is the brass solute: soft, but not as soft as tin, and it is the one
+## metal here that is genuinely weak enough to read near the brittle line --
+## cast zinc cleaves where cast copper bends.
+func test_zinc_sits_between_tin_and_copper_and_is_the_weakest_metal_here() -> void:
+	assert_gt(mp.property_value("zinc", "hardness"), mp.property_value("tin", "hardness"))
+	assert_lt(mp.property_value("zinc", "hardness"), mp.property_value("copper", "hardness"))
+	for metal in ["copper", "tin", "iron", "silver", "gold"]:
+		assert_lt(mp.property_value("zinc", "toughness"), mp.property_value(metal, "toughness"),
+			"zinc must be the least ductile metal in the table, below %s" % metal)

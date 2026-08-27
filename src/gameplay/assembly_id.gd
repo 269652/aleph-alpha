@@ -105,12 +105,20 @@ const TREATMENT_LEVELS := 8
 
 ## Real-world grounding: a balance reads to the gram, so a volume difference
 ## that cannot move a scale must not mint an id. One quantum of the DENSEST
-## material the game models (iron, 7.8 g/cm^3 -- MaterialProperties.MATERIALS)
-## has to weigh under a gram for that to hold, and 0.1 cm^3 of iron is 0.78 g.
-## Derived from the material model rather than typed twice: pinned against
-## MaterialProperties' own densities by
-## test_the_volume_quantum_is_finer_than_a_balance_can_read.
-const VOLUME_QUANTUM_CM3 := 0.1
+## material the game models has to weigh under a gram for that to hold.
+##
+## Re-derived 2026-08-28, exactly as
+## test_the_volume_quantum_is_finer_than_a_balance_can_read's own doc comment
+## says it must be: the densest modelled material used to be iron at 7.8 g/cm^3
+## (0.1 cm^3 = 0.78 g, comfortably under), but material_properties.gd's
+## conductivity/organics pass added GOLD at 19.30 g/cm^3 -- two and a half times
+## denser -- and 0.1 cm^3 of gold is 1.93 g, which a balance reads plainly. The
+## quantum halves to 0.05 cm^3, where one quantum of gold is 0.97 g (still
+## under) and ten quanta are 9.7 g (still plainly perceptible, so it is not
+## needlessly fine either). Pinned against MaterialProperties' own densities by
+## that test and by test_the_volume_quantum_is_no_finer_than_it_needs_to_be,
+## which bracket it from both sides.
+const VOLUME_QUANTUM_CM3 := 0.05
 
 ## How many candidate orderings stage 3 will enumerate before falling back to
 ## the refinement invariant.

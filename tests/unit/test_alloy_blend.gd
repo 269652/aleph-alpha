@@ -196,16 +196,73 @@ func test_interstitial_carbon_is_a_far_more_potent_solute_than_substitutional_ti
 	assert_lt(carbon_misfit / tin_misfit, 6.0)
 
 
-## Real maximum solid solubilities, both from the published binary phase
-## diagrams: 15.8 wt% Sn in Cu, 2.1 wt% C in austenitic Fe. Tin dissolves
-## essentially no copper and graphite dissolves essentially no iron, so the
-## reverse directions are zero -- which is exactly what makes these systems
-## asymmetric.
-func test_solubility_limits_are_the_real_phase_diagram_values() -> void:
-	assert_almost_eq(AlloyBlend.solid_solubility("copper", "tin"), 0.158, 0.0001)
-	assert_almost_eq(AlloyBlend.solid_solubility("iron", "carbon"), 0.021, 0.0001)
-	assert_almost_eq(AlloyBlend.solid_solubility("tin", "copper"), 0.0, 0.0001)
-	assert_almost_eq(AlloyBlend.solid_solubility("carbon", "iron"), 0.0, 0.0001)
+## The four published phase boundaries the whole two-regime model turns on.
+## Each is the composition above which a continuous brittle SECOND PHASE starts
+## to appear, read off a real binary phase diagram:
+##
+## - **Cu-Sn 13.5 wt%** -- the practical as-cast limit: below it no macroscopic
+##   segregation occurs even under ordinary casting conditions; above it the
+##   hard, brittle delta constituent forms. (The equilibrium alpha boundary is
+##   15.8 wt% at 586 C, but bronze is a CAST material and coring is what a
+##   caster actually meets.)
+## - **Cu-Zn 39 wt%** -- the alpha/(alpha+beta) boundary at ~454-470 C, a true
+##   maximum solid solubility.
+## - **Cu-As 7.96 wt%** -- the maximum solid solubility of arsenic in copper at
+##   685 C.
+## - **Fe-C 0.76 wt%** -- the EUTECTOID, and deliberately not a solubility
+##   limit (ferrite dissolves a mere 0.02% C). It is nonetheless the right
+##   boundary for this model, because it is the composition above which
+##   proeutectoid cementite starts precipitating as a continuous film on the
+##   prior-austenite grain boundaries. That film is what collapses toughness,
+##   and 0.76% is where it begins.
+##
+## Rewritten from test_solubility_limits_are_the_real_phase_diagram_values,
+## which pinned 15.8/2.1 -- the equilibrium solid-solubility numbers. Those are
+## the right answer to a different question ("how much will dissolve") than the
+## one the model actually asks ("when does the crack highway appear").
+func test_the_second_phase_onsets_are_the_published_phase_boundaries() -> void:
+	assert_almost_eq(AlloyBlend.second_phase_onset("copper", "tin"), 0.135, 0.0001)
+	assert_almost_eq(AlloyBlend.second_phase_onset("copper", "zinc"), 0.39, 0.0001)
+	assert_almost_eq(AlloyBlend.second_phase_onset("copper", "arsenic"), 0.0796, 0.0001)
+	assert_almost_eq(AlloyBlend.second_phase_onset("iron", "carbon"), 0.0076, 0.0001)
+
+
+## A pair with no published boundary has no modeled metallurgy at all, in
+## either direction -- an honest "not modeled", not an invented curve.
+func test_a_pair_with_no_published_boundary_has_no_modeled_second_phase() -> void:
+	assert_almost_eq(AlloyBlend.second_phase_onset("tin", "copper"), 0.0, 0.0001)
+	assert_almost_eq(AlloyBlend.second_phase_onset("carbon", "iron"), 0.0, 0.0001)
+	assert_almost_eq(AlloyBlend.second_phase_onset("wood", "stone"), 0.0, 0.0001)
+
+
+## The second phase's COMPOSITION is not a fifth looked-up number: it is
+## computed from the compound's formula and the elements' published molar
+## masses, which is arithmetic, not a measurement. That it lands on the real
+## published figures is the check that the derivation is right --
+## Cu31Sn8 comes out at 32.5 wt% Sn against a literature 32.6, and Fe3C at
+## 6.69 wt% C against the textbook 6.67.
+func test_the_second_phase_composition_is_derived_from_its_formula_not_looked_up() -> void:
+	assert_almost_eq(AlloyBlend.second_phase_solute_fraction("copper", "tin"), 0.326, 0.002,
+		"delta bronze is Cu31Sn8, which IS 32.6 wt%% tin")
+	assert_almost_eq(AlloyBlend.second_phase_solute_fraction("iron", "carbon"), 0.0667, 0.001,
+		"cementite is Fe3C, which IS 6.67 wt%% carbon")
+	assert_almost_eq(AlloyBlend.second_phase_solute_fraction("copper", "zinc"), 0.507, 0.002,
+		"beta-prime brass is the ordered equiatomic CuZn")
+	# Cu3As comes out at 28.2 wt% As against the real gamma homogeneity range of
+	# 28.6-29.6 wt%. Deriving from stoichiometry lands just under the real phase
+	# field, which is what deriving costs -- recorded rather than papered over.
+	assert_almost_eq(AlloyBlend.second_phase_solute_fraction("copper", "arsenic"), 0.282, 0.002)
+
+
+## Every second phase must be RICHER in solute than the boundary it appears at,
+## or the lever rule would run backwards.
+func test_every_second_phase_is_richer_than_the_boundary_it_appears_at() -> void:
+	for pair in [["copper", "tin"], ["copper", "zinc"], ["copper", "arsenic"], ["iron", "carbon"]]:
+		assert_gt(
+			AlloyBlend.second_phase_solute_fraction(pair[0], pair[1]),
+			AlloyBlend.second_phase_onset(pair[0], pair[1]),
+			"%s-%s's second phase must be richer than the composition it starts at" % pair
+		)
 
 
 # -- solid-solution strengthening: the headline emergent claim ---------------
@@ -223,6 +280,12 @@ func test_bronze_is_harder_than_both_pure_copper_and_pure_tin() -> void:
 ## Not merely above the endpoints: a genuine interior maximum, so the space has
 ## something to search FOR. Scanned rather than asserted at one point, because
 ## the shape is the claim.
+##
+## Rewritten from a version that asserted the peak sits at the solubility limit.
+## Under the two-regime model that is no longer true and should not be: past the
+## boundary the alloy keeps getting HARDER as the brittle intermetallic's volume
+## fraction grows, so raw hardness peaks at the intermetallic's own composition.
+## What peaks at the boundary is *usable* hardness, which is the next test.
 func test_the_copper_tin_hardness_peak_is_strictly_interior() -> void:
 	var best_x := 0.0
 	var best_hardness := -1.0
@@ -234,8 +297,93 @@ func test_the_copper_tin_hardness_peak_is_strictly_interior() -> void:
 			best_x = x
 	assert_gt(best_x, 0.0, "the hardness maximum must not sit at pure copper")
 	assert_lt(best_x, 1.0, "the hardness maximum must not sit at pure tin")
-	assert_almost_eq(best_x, AlloyBlend.solid_solubility("copper", "tin"), 0.002,
-		"the peak should land at the solubility limit -- past it the lattice cannot take more tin")
+	assert_almost_eq(best_x, AlloyBlend.second_phase_solute_fraction("copper", "tin"), 0.002,
+		"raw hardness peaks at the intermetallic itself -- delta bronze is hard and useless")
+
+
+# -- the payoff: three real historical optima, from three published numbers ---
+
+## THE test this rewrite exists to earn. The optimum is NOT placed anywhere: it
+## is the richest composition that has not yet grown a continuous brittle
+## network, and where that falls is decided entirely by the published phase
+## boundary. Three unrelated binary systems, three published boundaries, three
+## real historical answers:
+##
+## - **Cu-Sn at 13.5% tin.** Real weapons bronze is 10-14% Sn.
+## - **Cu-Zn at 39% zinc.** Muntz metal -- the alpha+beta brass that actually
+##   got used for ship sheathing and cheap castings -- is 40% Zn.
+## - **Fe-C at 0.76% carbon.** That is eutectoid steel, the classic carbon
+##   content of an edged tool, exactly.
+##
+## Nothing in the formula knows any of those three historical facts.
+func test_the_model_reproduces_three_real_historical_optima() -> void:
+	var bronze: float = AlloyBlend.optimal_solute_fraction("copper", "tin")
+	assert_between(bronze, 0.10, 0.14,
+		"the Cu-Sn optimum must land in the real 10-14%% weapons-bronze band")
+
+	var brass: float = AlloyBlend.optimal_solute_fraction("copper", "zinc")
+	assert_almost_eq(brass, 0.40, 0.02, "the Cu-Zn optimum must land on Muntz metal's 40%% zinc")
+
+	var steel: float = AlloyBlend.optimal_solute_fraction("iron", "carbon")
+	assert_almost_eq(steel, 0.0076, 0.0002,
+		"the Fe-C optimum must land on the eutectoid -- 0.76%% carbon, the classic edged-tool steel")
+
+	for pair in [["copper", "tin"], ["copper", "zinc"], ["iron", "carbon"]]:
+		assert_almost_eq(
+			AlloyBlend.optimal_solute_fraction(pair[0], pair[1]),
+			AlloyBlend.second_phase_onset(pair[0], pair[1]), 0.0002,
+			"%s-%s's optimum must FALL OUT of the published boundary, not be placed" % pair
+		)
+
+
+## The anti-wiki property, and the whole design argument for a blend space over
+## a recipe list. A player who learns "about one part in seven" from bronze is
+## wrong about brass by roughly 3x and wrong about steel by roughly 18x -- so
+## the knowledge does not transfer, and each pair has to be explored on its own
+## terms. One authored ratio could never do this.
+func test_the_knee_is_wildly_different_per_pair_so_one_ratio_does_not_transfer() -> void:
+	var bronze: float = AlloyBlend.second_phase_onset("copper", "tin")
+	var brass: float = AlloyBlend.second_phase_onset("copper", "zinc")
+	var steel: float = AlloyBlend.second_phase_onset("iron", "carbon")
+
+	assert_between(brass / bronze, 2.5, 3.5, "brass wants ~3x the solute bronze does")
+	assert_between(bronze / steel, 15.0, 20.0, "and steel wants ~18x LESS than bronze")
+
+	# And the practical consequence: taking bronze's ratio to the forge and
+	# using it on iron does not give you a slightly-off steel, it gives you
+	# something well past cast iron that shatters.
+	var bronze_ratio_applied_to_iron: Dictionary = AlloyBlend.blend("iron", "carbon", bronze)
+	assert_lt(float(bronze_ratio_applied_to_iron["toughness"]), MaterialProperties.BRITTLE_TOUGHNESS,
+		"13.5%% carbon is not steel by any stretch -- it is twice cementite's own carbon content")
+
+
+## The optimum is defined by the microstructure, not by a utility function
+## someone chose: it is the last composition whose brittle-phase fraction is
+## still exactly zero. One step further and the network exists.
+func test_the_optimum_is_the_last_composition_free_of_the_brittle_network() -> void:
+	for pair in [["copper", "tin"], ["copper", "zinc"], ["copper", "arsenic"], ["iron", "carbon"]]:
+		var optimum: float = AlloyBlend.optimal_solute_fraction(pair[0], pair[1])
+		assert_almost_eq(AlloyBlend.brittle_phase_fraction(pair[0], pair[1], optimum), 0.0, 1.0e-9,
+			"%s-%s's optimum must still be a single-phase alloy" % pair)
+		assert_gt(AlloyBlend.brittle_phase_fraction(pair[0], pair[1], optimum + 0.001), 0.0,
+			"%s-%s: one step past the optimum the brittle network must exist" % pair)
+
+
+## "Richest single-phase" is only the same thing as "hardest single-phase"
+## because hardness climbs all the way to the boundary and never doubles back.
+## That is a real claim about the curve, so it is scanned rather than assumed --
+## if it were false, the optimum would sit somewhere inside the field and the
+## three historical answers above would be a coincidence.
+func test_hardness_climbs_all_the_way_to_the_boundary_for_every_modeled_pair() -> void:
+	for pair in [["copper", "tin"], ["copper", "zinc"], ["copper", "arsenic"], ["iron", "carbon"]]:
+		var onset: float = AlloyBlend.second_phase_onset(pair[0], pair[1])
+		var previous := -1.0
+		for step in range(1, 101):
+			var c := onset * float(step) / 100.0
+			var gain: float = AlloyBlend.solution_strengthening(pair[0], pair[1], c)
+			assert_gt(gain, previous,
+				"%s-%s's strengthening must still be climbing at %f" % [pair[0], pair[1], c])
+			previous = gain
 
 
 ## The coefficient turning lattice misfit into a hardness gain is not eyeballed:
@@ -247,7 +395,7 @@ func test_the_strengthening_coefficient_is_the_measured_bronze_anchor_solved_for
 	var x: float = AlloyBlend.BRONZE_ANCHOR_TIN_FRACTION
 	var baseline := 4.0 * (1.0 - x) + 1.5 * x
 	var misfit: float = AlloyBlend.lattice_misfit("copper", "tin")
-	var saturation := sqrt(x / AlloyBlend.solid_solubility("copper", "tin"))
+	var saturation: float = pow(x / AlloyBlend.second_phase_onset("copper", "tin"), AlloyBlend.LABUSCH_EXPONENT)
 	var solved: float = (AlloyBlend.BRONZE_ANCHOR_HARDNESS_RATIO * 4.0 / baseline - 1.0) / (misfit * saturation)
 	assert_almost_eq(AlloyBlend.SOLUTION_STRENGTHENING_COEFFICIENT, solved, 0.001,
 		"K must be the bronze hardness anchor solved for, not a number that felt right")
@@ -270,48 +418,139 @@ func test_historical_bronze_lands_on_twice_pure_coppers_hardness() -> void:
 func test_historical_bronze_sits_in_the_diminishing_returns_knee() -> void:
 	var at_historical: float = AlloyBlend.solution_strengthening("copper", "tin", 0.12)
 	var at_peak: float = AlloyBlend.solution_strengthening(
-		"copper", "tin", AlloyBlend.solid_solubility("copper", "tin")
+		"copper", "tin", AlloyBlend.second_phase_onset("copper", "tin")
 	)
 	var realized := at_historical / at_peak
 	assert_gt(realized, 0.85, "12%% tin should already realize most of the achievable hardening")
 	assert_lt(realized, 0.95, "but not all of it -- there is still a real peak further along")
 
 
-## The sub-linear (sqrt) rise is the model's shape claim, so pin it directly:
-## doubling the tin from 4% to 8% must add clearly less than double the gain.
-func test_strengthening_rises_sub_linearly_with_solute_concentration() -> void:
+## The sub-linear rise is the model's shape claim, so pin the EXPONENT directly:
+## doubling the tin from 4% to 8% multiplies the gain by 2^(2/3), not by 2 and
+## not by sqrt(2).
+##
+## Rewritten from a version asserting sqrt(2), i.e. Fleischer's law. Fleischer
+## is the DILUTE result and is documented as valid below about 1 at% solute.
+## Every alloy this model cares about is far outside that: 12 wt% tin in copper
+## is 6.8 at%, and 39 wt% zinc is 38 at%. In that concentrated regime the
+## published result is Labusch's, where the collective action of solutes on the
+## glide plane gives c^(2/3) rather than c^(1/2). Using the dilute law for
+## concentrated solutions was the previous model's central error.
+func test_strengthening_follows_labuschs_two_thirds_law_not_fleischers_square_root() -> void:
 	var at_four: float = AlloyBlend.solution_strengthening("copper", "tin", 0.04)
 	var at_eight: float = AlloyBlend.solution_strengthening("copper", "tin", 0.08)
 	assert_gt(at_eight, at_four, "more solute is still more strengthening")
 	assert_lt(at_eight, 2.0 * at_four,
-		"Fleischer's law is sqrt(c), not linear -- the first few percent do most of the work")
-	assert_almost_eq(at_eight / at_four, sqrt(2.0), 0.01)
+		"the law is sub-linear -- the first few percent do most of the work")
+	assert_almost_eq(at_eight / at_four, pow(2.0, 2.0 / 3.0), 0.01,
+		"Labusch's concentrated-solution result is c^(2/3)")
+	assert_gt(absf(at_eight / at_four - sqrt(2.0)), 0.1,
+		"and it is measurably NOT Fleischer's dilute sqrt(c)")
 
 
-func test_strengthening_vanishes_at_both_pure_endpoints() -> void:
+## Strengthening vanishes at the pure solvent -- there is no solute to
+## strengthen it -- and then FREEZES at the boundary rather than continuing to
+## climb. That is not a clamp for tidiness: past the boundary the solid
+## solution's own composition stops changing (that is what the lever rule
+## means -- extra solute makes more second phase, it does not enrich the alpha
+## further), so the alpha phase's strengthening genuinely cannot rise any more.
+##
+## Rewritten from test_strengthening_vanishes_at_both_pure_endpoints, which
+## asserted the gain returns to zero at 100% solute. That was true of the old
+## two-sided model; under the one-directional solvent/solute model this
+## function describes the ALPHA PHASE, which does not exist at all at the far
+## end, so asking it about pure tin is asking a question with no referent.
+func test_strengthening_vanishes_at_the_pure_solvent_and_freezes_at_the_boundary() -> void:
 	assert_almost_eq(AlloyBlend.solution_strengthening("copper", "tin", 0.0), 0.0, 0.0001,
 		"pure copper has no solute in it to strengthen it")
-	assert_almost_eq(AlloyBlend.solution_strengthening("copper", "tin", 1.0), 0.0, 0.0001,
-		"and pure tin has none either")
+	var at_onset: float = AlloyBlend.solution_strengthening(
+		"copper", "tin", AlloyBlend.second_phase_onset("copper", "tin")
+	)
+	assert_almost_eq(AlloyBlend.solution_strengthening("copper", "tin", 0.30), at_onset, 0.0001,
+		"past the boundary the alpha phase stops changing, so its strengthening stops rising")
 
 
 # -- the tradeoff: alloying is never a free lunch ---------------------------
 
-## The same lattice distortion that pins dislocations and raises hardness also
-## stops the metal deforming gracefully. Empirically this is the "banana curve"
-## every alloy system lies on: roughly doubling the strength roughly halves the
-## ductility. Without it, alloying would always be strictly better and the
-## blend space would have no decisions in it.
-func test_toughness_falls_where_hardness_peaks() -> void:
-	var peak: float = AlloyBlend.solid_solubility("copper", "tin")
-	var bronze: Dictionary = AlloyBlend.blend("copper", "tin", peak)
-	assert_lt(float(bronze["toughness"]), mp.property_value("copper", "toughness"),
-		"the hardness peak must cost ductility against copper")
-	assert_lt(float(bronze["toughness"]), mp.property_value("tin", "toughness"),
-		"and against tin -- toughness must not peak where hardness does")
-	var linear_baseline := 8.0 * (1.0 - peak) + 4.0 * peak
-	assert_lt(float(bronze["toughness"]), linear_baseline,
-		"it must fall BELOW the rule-of-mixtures line, not merely fail to rise above it")
+## The single-phase field costs no toughness, and that is not generosity -- it
+## is what the metallurgy says. A solid solution is still one ductile phase, and
+## the famous case is flatly against the old model: cartridge brass at 30% zinc
+## is BOTH stronger than pure copper AND more ductile than it (~65% elongation
+## against copper's ~45%). A model that made every alloy less tough than its
+## parent metal would be contradicted by the most-produced copper alloy there
+## is.
+##
+## Rewritten from test_toughness_falls_where_hardness_peaks, which asserted
+## toughness must fall below the rule-of-mixtures line at the hardness peak.
+## That was the old single-regime model's "divide toughness by the same factor
+## hardness multiplies by" -- a tidy one-parameter tradeoff that put the
+## embrittlement in the wrong place. The tradeoff is real, but it lives past the
+## boundary, not throughout, which the next test pins.
+func test_toughness_holds_up_through_the_whole_single_phase_field() -> void:
+	for pair in [["copper", "tin"], ["copper", "zinc"], ["iron", "carbon"]]:
+		var onset: float = AlloyBlend.second_phase_onset(pair[0], pair[1])
+		var alloy: Dictionary = AlloyBlend.blend(pair[0], pair[1], onset)
+		var rule_of_mixtures := lerpf(
+			mp.property_value(pair[0], "toughness"), mp.property_value(pair[1], "toughness"), onset
+		)
+		assert_almost_eq(float(alloy["toughness"]), rule_of_mixtures, 0.0001,
+			"%s-%s is still one ductile phase at its boundary -- no embrittlement yet" % pair)
+		assert_gt(float(alloy["toughness"]), MaterialProperties.BRITTLE_TOUGHNESS,
+			"%s-%s's optimum must be a usable tool, not a shatterable one" % pair)
+
+
+## And past the boundary it collapses, by the lever rule, for a named reason: a
+## brittle intermetallic precipitating on the grain boundaries is a continuous
+## crack highway, and a crack that finds one does not have to break anything
+## tough on its way through. Toughness therefore falls linearly toward the
+## intermetallic's own (zero) toughness as its volume fraction grows.
+func test_toughness_collapses_by_the_lever_rule_once_the_brittle_phase_appears() -> void:
+	var onset: float = AlloyBlend.second_phase_onset("copper", "tin")
+	var at_onset: float = AlloyBlend.blend("copper", "tin", onset)["toughness"]
+	for probe in [0.18, 0.22, 0.28]:
+		var fraction: float = AlloyBlend.brittle_phase_fraction("copper", "tin", probe)
+		assert_almost_eq(float(AlloyBlend.blend("copper", "tin", probe)["toughness"]),
+			at_onset * (1.0 - fraction), 0.0001,
+			"toughness at %f tin must be the lever rule against the delta fraction" % probe)
+
+
+## The lever rule itself: the second phase's volume fraction is linear between
+## the boundary it appears at and the intermetallic's own composition, which is
+## the standard construction on any binary phase diagram.
+func test_the_brittle_phase_fraction_is_the_lever_rule() -> void:
+	var onset: float = AlloyBlend.second_phase_onset("iron", "carbon")
+	var compound: float = AlloyBlend.second_phase_solute_fraction("iron", "carbon")
+	assert_almost_eq(AlloyBlend.brittle_phase_fraction("iron", "carbon", onset), 0.0, 1.0e-9,
+		"at the eutectoid there is no proeutectoid cementite yet")
+	assert_almost_eq(AlloyBlend.brittle_phase_fraction("iron", "carbon", compound), 1.0, 1.0e-9,
+		"at 6.67%% carbon the alloy IS cementite")
+	var midpoint := (onset + compound) / 2.0
+	assert_almost_eq(AlloyBlend.brittle_phase_fraction("iron", "carbon", midpoint), 0.5, 1.0e-9,
+		"and halfway between them it is half cementite -- that is all the lever rule is")
+
+
+## Real high-tin bronze -- bell bronze, mirror bronze, 20-30% Sn -- is famously
+## brittle: a cracked bell is a cliche because bells really do crack. Weapons
+## bronze at 12% is not. The game's OWN shipped brittleness cutoff separates the
+## two, with no rule anywhere that mentions bells.
+func test_high_tin_bell_bronze_reads_brittle_where_weapons_bronze_does_not() -> void:
+	assert_gt(float(AlloyBlend.blend("copper", "tin", 0.12)["toughness"]),
+		MaterialProperties.BRITTLE_TOUGHNESS,
+		"12%% weapons bronze must not shatter -- it was the best tool metal for two millennia")
+	assert_lt(float(AlloyBlend.blend("copper", "tin", 0.30)["toughness"]),
+		MaterialProperties.BRITTLE_TOUGHNESS,
+		"30%% mirror bronze must shatter")
+	# Where the crossover actually lands, scanned rather than asserted: the
+	# model puts it around 25% tin against a real ~20%, so it is a little
+	# generous to high-tin bronze. Recorded, not hidden.
+	var crossover := 1.0
+	for step in range(0, 1001):
+		var c := float(step) / 1000.0
+		if float(AlloyBlend.blend("copper", "tin", c)["toughness"]) < MaterialProperties.BRITTLE_TOUGHNESS:
+			crossover = c
+			break
+	assert_between(crossover, 0.20, 0.30,
+		"the brittleness crossover must land in the real high-tin-bronze band")
 
 
 ## Hardness and toughness must move in opposite directions across the whole
@@ -373,9 +612,11 @@ func test_steel_saturates_the_games_hardness_scale() -> void:
 
 ## What the scale CAN still express past saturation is the cost. Hardness
 ## flattens against the ceiling while toughness keeps collapsing, so more
-## carbon past the eutectoid is pure downside -- which is the right answer
-## about cast iron, arrived at partly for the wrong reason (the plateau is the
-## ceiling clamping, not modeled cementite).
+## carbon past the eutectoid is pure downside -- and this is now the right
+## answer about cast iron for the RIGHT reason: cementite is modeled, and the
+## toughness fall is its lever-rule volume fraction rather than an incidental
+## consequence of the hardness clamp. (smelting.md's divergence 4 previously
+## recorded that it was the right answer for the wrong reason. It no longer is.)
 func test_past_the_hardness_ceiling_extra_carbon_only_costs_toughness() -> void:
 	var eutectoid: Dictionary = AlloyBlend.blend("iron", "carbon", 0.008)
 	var cast_iron: Dictionary = AlloyBlend.blend("iron", "carbon", 0.018)
@@ -385,13 +626,24 @@ func test_past_the_hardness_ceiling_extra_carbon_only_costs_toughness() -> void:
 		"but the extra carbon still costs toughness, so cast iron is the worse trade")
 
 
-## Quenched high-carbon steel shatters, and feeding it to the impact model's
-## EXISTING brittle rule with no new downstream logic is the payoff
-## smelting.md's design asked for.
-func test_high_carbon_iron_comes_out_brittle_by_the_impact_models_own_cutoff() -> void:
-	var steel: Dictionary = AlloyBlend.blend("iron", "carbon", 0.008)
-	assert_lt(float(steel["toughness"]), MaterialProperties.BRITTLE_TOUGHNESS,
-		"an untempered high-carbon blade is brittle -- tempering is a separate operation this file does not model")
+## Cast iron shatters, and feeding it to the impact model's EXISTING brittle
+## rule with no new downstream logic is the payoff smelting.md's design asked
+## for.
+##
+## Rewritten from a version that asserted this of 0.8% carbon steel. That was
+## the old model saying eutectoid steel is brittle, which is simply false --
+## normalized 0.76% pearlitic steel is the classic tough edged-tool material,
+## and if it came out brittle the historical optimum this rewrite reproduces
+## would be nonsense. What IS brittle is hypereutectoid iron, once the
+## proeutectoid cementite network exists; the model now says exactly that,
+## because the network is what it models.
+func test_cast_iron_comes_out_brittle_by_the_impact_models_own_cutoff() -> void:
+	var eutectoid: Dictionary = AlloyBlend.blend("iron", "carbon", 0.0076)
+	assert_gt(float(eutectoid["toughness"]), MaterialProperties.BRITTLE_TOUGHNESS,
+		"eutectoid steel is the classic tough edged-tool material, not a shatterable one")
+	var cast_iron: Dictionary = AlloyBlend.blend("iron", "carbon", 0.043)
+	assert_lt(float(cast_iron["toughness"]), MaterialProperties.BRITTLE_TOUGHNESS,
+		"cast iron at the 4.3%% eutectic is brittle -- which is why cast-iron pots crack and do not dent")
 
 
 ## Nothing on the legibility scale may exceed it, including the alloys.
@@ -578,9 +830,19 @@ func test_alloying_copper_produces_something_the_game_can_call_hard() -> void:
 		"but 12%% tin is still a usable tool, not a shatterable one")
 
 
-## And the same vocabulary describes untempered high-carbon steel exactly as it
-## deserves, through the impact model's own brittleness cutoff, with no rule
-## written anywhere that says "steel".
-func test_high_carbon_iron_reads_as_hard_keen_and_brittle() -> void:
-	var steel: Dictionary = AlloyBlend.blend("iron", "carbon", 0.008)
-	assert_eq(mp.descriptors_for_vector(steel), ["hard", "keen", "brittle"] as Array[String])
+## And the same vocabulary separates the two ferrous alloys exactly as they
+## deserve, through the impact model's own brittleness cutoff, with no rule
+## written anywhere that says "steel" or "cast iron". Eutectoid steel is hard
+## and keen; four percent more carbon and it is hard, keen and brittle.
+##
+## Rewritten from test_high_carbon_iron_reads_as_hard_keen_and_brittle, which
+## expected "brittle" of 0.8% carbon. See
+## test_cast_iron_comes_out_brittle_by_the_impact_models_own_cutoff for why that
+## was the wrong invariant.
+func test_the_descriptor_vocabulary_separates_eutectoid_steel_from_cast_iron() -> void:
+	var steel: Dictionary = AlloyBlend.blend("iron", "carbon", 0.0076)
+	assert_eq(mp.descriptors_for_vector(steel), ["hard", "keen"] as Array[String],
+		"eutectoid steel: the best edge in the game, and it does not shatter")
+	var cast_iron: Dictionary = AlloyBlend.blend("iron", "carbon", 0.043)
+	assert_eq(mp.descriptors_for_vector(cast_iron), ["hard", "keen", "brittle"] as Array[String],
+		"cast iron: just as hard, and it shatters")
