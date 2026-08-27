@@ -9,13 +9,24 @@ extends PanelContainer
 ## greyed and non-interactive.
 
 const SkillTree = preload("res://src/gameplay/skill_tree.gd")
+const SkillWeb = preload("res://src/gameplay/skill_web.gd")
 const KeystonePassive = preload("res://src/gameplay/keystone_passive.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
+const SkillWebView = preload("res://scenes/skill_web_view.gd")
 
 ## Emitted when the player clicks an allocatable node / keystone. World routes
 ## it to the local Player, then refreshes.
 signal node_allocated(node_id: String)
 signal keystone_unlocked(keystone_id: String)
+## Free respec (docs/concept/classes.md) -- right-click on an owned node in the
+## web view. World routes it to Player.refund_skill.
+signal node_refunded(node_id: String)
+
+## The graph is the primary way to spend a point (docs/concept/skills.md); the
+## flat list stays reachable behind a tab, since a scrolling list of named rows
+## is the readable fallback a canvas of circles cannot be.
+const MODE_WEB := "web"
+const MODE_LIST := "list"
 
 const KEYSTONE_POINT_COST := 2
 
@@ -32,10 +43,39 @@ const KEYSTONE_POINT_COST := 2
 ## It declared 320 while that row needed 625, and the ScrollContainer below
 ## scrolls only vertically, so the surplus was simply cut off -- reported as
 ## "left-aligned in half the panel".
-const WINDOW_SIZE := Vector2(660, 400)
-## Leaves room for the title, the unspent-points line and the panel margins
-## inside WINDOW_SIZE.y.
-const LIST_HEIGHT := 300.0
+## The project's own design viewport (display/window/size/*), which with the
+## canvas_items stretch mode IS the coordinate space this window is laid out in.
+## Read as a constant here and pinned against ProjectSettings by
+## test_the_windows_design_viewport_is_the_projects_own -- the first version of
+## this window was sized against a 960x540 figure copied out of a stale comment
+## in world.gd and so gave the map barely half the room it had.
+const DESIGN_VIEWPORT := Vector2(1280, 720)
+
+## Gap left between the window and the screen edge on every side. Small: the web
+## wants the room, and this is a full-attention modal, not a HUD panel.
+const SCREEN_MARGIN := 20.0
+
+## The web is a MAP -- it gets the whole screen bar the margin. The list tab's
+## widest row (625px, measured; see
+## test_the_widest_skill_row_fits_the_windows_own_declared_width) fits inside
+## this several times over.
+const WINDOW_SIZE := DESIGN_VIEWPORT - Vector2(SCREEN_MARGIN, SCREEN_MARGIN) * 2.0
+
+## The room World actually gives this window: it anchors it PRESET_CENTER, so
+## the usable box is the design viewport less a hair. Stated HERE, once, and
+## read by the test that used to restate it.
+const WORLD_AVAILABLE_BOX := DESIGN_VIEWPORT - Vector2(8.0, 8.0)
+
+## Height reserved for the title, the unspent-points line, the tab row, the
+## detail line, the separations between them and the panel margins -- everything
+## that is not canvas. A declared RESERVE rather than a measurement, held honest
+## by test_the_reserved_chrome_really_does_hold_the_windows_own_chrome, which
+## measures the window's real minimum against WINDOW_SIZE.
+const CHROME_HEIGHT := 150.0
+
+## Everything left over goes to the map.
+const CANVAS_HEIGHT := WINDOW_SIZE.y - CHROME_HEIGHT
+const LIST_HEIGHT := CANVAS_HEIGHT
 
 ## Player-facing name per internal stat key. skill_tree.gd/keystone_passive.gd
 ## store only the key ("max_health"), so without this table the identifier
@@ -48,6 +88,30 @@ const STAT_LABELS := {
 	"attack_damage": "Attack Damage",
 	"meat_yield": "Meat Yield",
 	"carpentry_level": "Carpentry",
+	# The web's wider vocabulary (see SkillWeb's wedge tables). Written out
+	# rather than left to the snake_case fallback wherever Title Case alone
+	# reads as an identifier ("Max Mana") instead of as a stat.
+	"max_mana": "Maximum Mana",
+	"max_stamina": "Maximum Stamina",
+	"knockback_resist": "Knockback Resistance",
+	"spell_efficiency": "Spell Efficiency",
+	"spell_power": "Spell Power",
+	"spell_atom_tier": "Spell Atom Tier",
+	"scent_range": "Scent Range",
+	"throw_force": "Throwing Force",
+	"pet_loyalty": "Pet Loyalty",
+	"pet_health": "Pet Health",
+	"taming_affinity": "Taming Affinity",
+	"mining_yield": "Mining Yield",
+	"ore_yield": "Ore Yield",
+	"smelting_yield": "Smelting Yield",
+	"craft_quality": "Craft Quality",
+	"wound_recovery": "Wound Recovery",
+	"disease_resistance": "Disease Resistance",
+	"venom_resistance": "Venom Resistance",
+	"hire_capacity": "Hire Capacity",
+	"trade_margin": "Trade Margin",
+	"contract_throughput": "Contract Throughput",
 }
 
 ## Rank numerals for node_title. The index IS the rank, so [0] is unused.
@@ -61,6 +125,16 @@ const KEYSTONE_TITLES := {
 	"iron_skin": "Iron Skin",
 	"swift_current": "Swift Current",
 	"land_sense": "Land Sense",
+	"apex_predator": "Apex Predator",
+	"archmage": "Archmage",
+	"deep_lore": "Deep Lore",
+	"alpha_bond": "Alpha Bond",
+	"menagerie": "Menagerie",
+	"grand_workshop": "Grand Workshop",
+	"deep_delver": "Deep Delver",
+	"lifebloom": "Lifebloom",
+	"guildmaster": "Guildmaster",
+	"grand_charter": "Grand Charter",
 }
 
 
@@ -97,6 +171,23 @@ var _skill_tree := SkillTree.new()
 var _keystones := KeystonePassive.new()
 var _points_label: Label
 var _list: VBoxContainer
+var _scroll: ScrollContainer
+## The graph canvas (see SkillWebView). Public so World and tests can drive it.
+var web_view: SkillWebView
+var mode := MODE_WEB
+var _detail_label: Label
+var _tab_buttons: Dictionary = {}
+var _web := SkillWeb.new()
+
+## A cheap fingerprint of the last refresh() call's inputs -- World calls
+## refresh() every frame while this window is visible (see scenes/world.gd's
+## _client_process), not just on an actual allocation/unlock, so without this
+## every stat-node/keystone row Control (the List tab) would be destroyed and
+## recreated every frame, starving Godot's native hover-tooltip timer (it
+## needs the SAME Control instance under the mouse continuously) -- the same
+## bug class InventoryWindow._last_refresh_signature and
+## CraftingWindow._last_refresh_signature already guard against.
+var _last_refresh_signature := ""
 
 
 func _ready() -> void:
@@ -124,13 +215,72 @@ func _ready() -> void:
 	_points_label = Label.new()
 	root.add_child(_points_label)
 
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, LIST_HEIGHT)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	root.add_child(scroll)
+	root.add_child(_build_tabs())
+
+	web_view = SkillWebView.new()
+	web_view.custom_minimum_size = Vector2(
+		WINDOW_SIZE.x - 2.0 * UiTheme.CONTENT_MARGIN, CANVAS_HEIGHT)
+	web_view.node_clicked.connect(_on_web_node_clicked)
+	web_view.node_refund_requested.connect(func(node_id): node_refunded.emit(node_id))
+	root.add_child(web_view)
+
+	_scroll = ScrollContainer.new()
+	_scroll.custom_minimum_size = Vector2(0, LIST_HEIGHT)
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	root.add_child(_scroll)
 	_list = VBoxContainer.new()
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(_list)
+	_scroll.add_child(_list)
+
+	_detail_label = Label.new()
+	_detail_label.modulate = Color(1, 1, 1, 0.85)
+	root.add_child(_detail_label)
+
+	set_mode(MODE_WEB)
+
+
+## Two plain buttons rather than a TabContainer: the panels differ in nothing
+## but visibility, and a TabContainer would take ownership of the layout the
+## rest of this window already sets up.
+func _build_tabs() -> Control:
+	var row := HBoxContainer.new()
+	for tab in [MODE_WEB, MODE_LIST]:
+		var button := Button.new()
+		button.text = "Web" if tab == MODE_WEB else "List"
+		button.toggle_mode = true
+		button.pressed.connect(set_mode.bind(tab))
+		row.add_child(button)
+		_tab_buttons[tab] = button
+	return row
+
+
+## Points this window at ONE character's web (see SkillWebView.configure) and
+## opens on their own class's start node -- a map that opens on someone else's
+## corner of it is a map you have to find yourself on first.
+func configure_web(web: SkillWeb, archetype: String, resonance: Dictionary,
+		dna_seed: int) -> void:
+	_web = web
+	web_view.configure(web, archetype, resonance, dna_seed)
+	web_view.focus_on(web.start_node_for(archetype))
+
+
+func set_mode(new_mode: String) -> void:
+	mode = new_mode
+	web_view.visible = mode == MODE_WEB
+	_scroll.visible = mode == MODE_LIST
+	for tab in _tab_buttons:
+		(_tab_buttons[tab] as Button).button_pressed = tab == mode
+
+
+## The web has no separate notion of a keystone allocation -- keystones are
+## ordinary nodes on it -- but World routes the two differently (a keystone also
+## has to clear KeystonePassive's node-count gate in Player.unlock_keystone), so
+## the click is sorted here rather than there.
+func _on_web_node_clicked(node_id: String) -> void:
+	if _web.node_info(node_id).get("kind", "") == SkillWeb.KIND_KEYSTONE:
+		keystone_unlocked.emit(node_id)
+	else:
+		node_allocated.emit(node_id)
 
 
 func toggle() -> void:
@@ -141,10 +291,28 @@ func is_open() -> bool:
 	return visible
 
 
-## Rebuilds the rows from the player's current allocation + unspent points.
-## `allocated` and `unlocked` are the player's node/keystone -> true maps.
+## Rebuilds the rows from the player's current allocation + unspent points --
+## a no-op when nothing relevant has changed since the last call (see
+## _last_refresh_signature). `allocated` and `unlocked` are the player's
+## node/keystone -> true maps.
 func refresh(unspent_points: int, allocated: Dictionary, unlocked: Dictionary) -> void:
+	var signature := _signature_for(unspent_points, allocated, unlocked)
+	if signature == _last_refresh_signature:
+		return
+	_last_refresh_signature = signature
+
 	_points_label.text = "Unspent points: %d" % unspent_points
+	# Keystones are ordinary nodes on the web but the Player still tracks them in
+	# their own map (persistence, the land_sense HUD readout), and a save written
+	# before keystones moved onto the web has them ONLY there -- so the view is
+	# handed the union rather than allocated alone, or such a build would show a
+	# hole where its keystone is.
+	var owned := allocated.duplicate()
+	for keystone_id in unlocked:
+		if unlocked[keystone_id]:
+			owned[keystone_id] = true
+	web_view.set_allocation(owned, unspent_points)
+	_refresh_detail()
 	for child in _list.get_children():
 		# refresh() can run synchronously from inside a row's OWN gui_input
 		# handler (click -> node_allocated/keystone_unlocked -> World ->
@@ -182,6 +350,44 @@ func refresh(unspent_points: int, allocated: Dictionary, unlocked: Dictionary) -
 			"%d nodes · %d pt" % [int(info["required_node_count"]), KEYSTONE_POINT_COST],
 			is_unlocked, can_buy,
 			func(): keystone_unlocked.emit(keystone_id)))
+
+
+
+## The line under the canvas: what the last-clicked node is, grants and costs
+## THIS character (see SkillWebView.node_label). Falls back to an instruction
+## rather than to an empty line -- a blank strip under a graph of 84 circles
+## teaches the player nothing about how to use it.
+func _refresh_detail() -> void:
+	var selected := web_view.selected_node_id
+	if selected == "":
+		_detail_label.text = "Click a node to inspect it · right-click one you own to refund it"
+		return
+	_detail_label.text = "%s   [%s]" % [
+		web_view.node_label(selected), _state_word(web_view.state_of(selected))]
+
+
+func _state_word(state: String) -> String:
+	match state:
+		SkillWebView.STATE_ALLOCATED:
+			return "owned"
+		SkillWebView.STATE_TAKEABLE:
+			return "available"
+		SkillWebView.STATE_UNAFFORDABLE:
+			return "not enough points"
+		_:
+			return "no path yet"
+
+
+## A cheap string fingerprint of everything refresh()'s output depends on --
+## two calls with an identical signature would rebuild an identical row list,
+## so the second one can just be skipped (see refresh's own doc comment and
+## _last_refresh_signature).
+func _signature_for(unspent_points: int, allocated: Dictionary, unlocked: Dictionary) -> String:
+	var allocated_keys := allocated.keys()
+	allocated_keys.sort()
+	var unlocked_keys := unlocked.keys()
+	unlocked_keys.sort()
+	return "%d|%s|%s" % [unspent_points, ",".join(allocated_keys), ",".join(unlocked_keys)]
 
 
 ## A keystone row's label: the ordinary "+bonus stat" phrasing for a stat

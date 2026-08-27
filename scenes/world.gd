@@ -100,6 +100,19 @@ const MINIMAP_REFRESH_INTERVAL := 1.0
 const HOVER_REFRESH_INTERVAL := 0.033
 var _hover_accumulator := 0.0
 
+## Interaction-prompt ("Talk"/"Pick") recompute cadence (~13 Hz) -- same
+## reasoning and shape as HOVER_REFRESH_INTERVAL just above: this scan chains
+## through up to three unbounded linear scans (EarthChunkManager.
+## nearest_npc_near, .nearest_liftable_stone_near, Player.
+## nearest_kickable_dropped_item_near, see _update_interaction_prompt) every
+## time the player isn't already near an NPC or holding something -- the
+## common case -- and used to run that chain on literally every frame with no
+## throttle at all. A proximity prompt needs nowhere near 60 Hz freshness;
+## pinned within the 10-15 Hz band by test_world_interaction_prompt_throttle.gd
+## rather than left an eyeballed comment-only value (see CLAUDE.md).
+const INTERACTION_PROMPT_REFRESH_INTERVAL := 0.075
+var _interaction_prompt_accumulator := 0.0
+
 ## Real seconds between Easter-egg sighting checks (docs/concept/
 ## easter_eggs.md's Mothman/Jersey Devil/Roswell/Area 51 cameos) -- these
 ## are meant to be rare, atmospheric glimpses, not a per-frame lottery, so
@@ -412,6 +425,12 @@ var _pending_appearance: Dictionary = {}
 ## added on top of the chosen class's own base stats before spawning. Empty
 ## (no-op) for non-interactive launches, same as _pending_appearance.
 var _pending_dna_stat_modifiers: Dictionary = {}
+## The seed of the SAME roll _pending_dna_stat_modifiers came out of (see
+## HeroDna/MainMenu.current_dna). It drives the passive web's resonance exchange
+## rate and the character's own grafted genome net (see Player.apply_dna_seed /
+## docs/concept/skills.md); 0 means no creator ran, which the web reads as a
+## neutral genome rather than as a penalty.
+var _pending_dna_seed := 0
 ## Player-state persistence (see docs/concept/persistence.md) -- PlayerSave
 ## is pure I/O, WorldReset wipes EarthChunkManager's own persistence dirs.
 var _player_save := PlayerSave.new()
@@ -771,6 +790,10 @@ func _on_menu_start_requested(
 	_pending_class = chosen_class
 	_pending_appearance = appearance
 	_pending_dna_stat_modifiers = dna_stat_modifiers
+	# Read straight off the menu rather than carried on start_requested: the
+	# signal already carries this genome's stat modifiers, and the seed is the
+	# same roll's other half (see MainMenu.current_dna).
+	_pending_dna_seed = int(_main_menu.current_dna().get("seed_value", 0))
 	# Shown and PAINTED before any of the real, synchronous world-setup work
 	# below starts (see _show_loading_overlay) -- that work is what was
 	# reported as the game appearing to hang (see docs/progress.md's Loading
@@ -1129,14 +1152,19 @@ func _on_craft_requested(recipe_id: String) -> void:
 func _build_skill_window() -> void:
 	_skill_window = SkillTreeWindow.new()
 	_skill_window.theme = _ui_theme
-	_skill_window.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	_skill_window.offset_left = 8.0
-	_skill_window.offset_top = -150.0
-	_skill_window.offset_right = 328.0
-	_skill_window.offset_bottom = 150.0
+	# CENTRED, not pinned to the left edge as it was while this window held only
+	# a narrow list: the web (docs/concept/skills.md) needs the whole viewport
+	# less a margin to read as a map. SkillTreeWindow.WORLD_AVAILABLE_BOX is the
+	# single statement of the room these offsets leave it.
+	_skill_window.set_anchors_preset(Control.PRESET_CENTER)
+	_skill_window.offset_left = -SkillTreeWindow.WINDOW_SIZE.x * 0.5
+	_skill_window.offset_top = -SkillTreeWindow.WINDOW_SIZE.y * 0.5
+	_skill_window.offset_right = SkillTreeWindow.WINDOW_SIZE.x * 0.5
+	_skill_window.offset_bottom = SkillTreeWindow.WINDOW_SIZE.y * 0.5
 	_ui.add_child(_skill_window)
 	_skill_window.node_allocated.connect(_on_skill_node_allocated)
 	_skill_window.keystone_unlocked.connect(_on_skill_keystone_unlocked)
+	_skill_window.node_refunded.connect(_on_skill_node_refunded)
 
 
 func _on_skill_node_allocated(node_id: String) -> void:
@@ -1151,9 +1179,27 @@ func _on_skill_keystone_unlocked(keystone_id: String) -> void:
 		_refresh_skill_window(local_player)
 
 
+## Free respec (docs/concept/classes.md): right-clicking an owned node on the
+## web hands its points back, unless doing so would orphan the rest of the build
+## (see Player.refund_skill).
+func _on_skill_node_refunded(node_id: String) -> void:
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	if local_player != null and local_player.refund_skill(node_id):
+		_refresh_skill_window(local_player)
+
+
 func _refresh_skill_window(local_player: Player) -> void:
 	if not _skill_window.visible:
 		return
+	# Re-pointed every refresh rather than once at build time: the window is
+	# built before any player exists, and the character (class, genome, grafted
+	# net) is what the view has to be showing.
+	_skill_window.configure_web(
+		local_player.skill_web,
+		local_player.character_class,
+		local_player.dna_resonance,
+		local_player.dna_seed
+	)
 	_skill_window.refresh(
 		local_player.experience.unspent_points,
 		local_player.allocated_nodes,
@@ -2097,6 +2143,10 @@ func _update_charge_meter(local_player: Player) -> void:
 ## a pebble underfoot isn't going anywhere. All bound keys are read live
 ## from _keybindings so a rebind is reflected immediately, never a stale
 ## hardcoded letter.
+##
+## Throttled to INTERACTION_PROMPT_REFRESH_INTERVAL by the caller (see
+## _maybe_update_interaction_prompt) rather than run here every frame -- call
+## that wrapper from _client_process, not this directly.
 func _update_interaction_prompt(local_player: Player) -> void:
 	if not world_hint_visible_for(_chunk_manager != null, _any_gameplay_window_open()):
 		_interaction_prompt.visible = false
@@ -2129,6 +2179,22 @@ func _update_interaction_prompt(local_player: Player) -> void:
 		return
 
 	_interaction_prompt.visible = false
+
+
+## Gates _update_interaction_prompt behind INTERACTION_PROMPT_REFRESH_INTERVAL
+## -- the exact same accumulator shape _client_process already uses inline
+## for _hover_accumulator/_update_hover_tooltip, just pulled into its own
+## function here so the throttle itself is directly callable (and testable)
+## without also invoking the rest of _client_process's per-frame work. Skips
+## the real scan on a throttled call and leaves _interaction_prompt exactly
+## as the last real scan left it -- Control properties persist on their own,
+## so nothing needs to be cached separately for that.
+func _maybe_update_interaction_prompt(local_player: Player, delta: float) -> void:
+	_interaction_prompt_accumulator += delta
+	if _interaction_prompt_accumulator < INTERACTION_PROMPT_REFRESH_INTERVAL:
+		return
+	_interaction_prompt_accumulator = 0.0
+	_update_interaction_prompt(local_player)
 
 
 ## Shows the interaction prompt with `text`, positioned just above
@@ -3593,6 +3659,11 @@ func _spawn_local_singleplayer() -> void:
 	player.name = str(multiplayer.get_unique_id())
 	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
+	# BEFORE apply_class: the class start node it grants is a real web node, and
+	# what that node is worth to this character depends on the resonance the
+	# genome rolls here (see Player._grant_class_start_node).
+	if _pending_dna_seed != 0:
+		player.apply_dna_seed(_pending_dna_seed)
 	player.apply_class(
 		_pending_class,
 		_stats_with_dna(_class_archetypes.stats_for(_pending_class), _pending_dna_stat_modifiers),
@@ -3621,6 +3692,11 @@ func _spawn_local_singleplayer_from_save() -> void:
 	var saved_position: Vector2 = save_data.get("position", Vector2.ZERO)
 	player.position = saved_position
 	player.respawn_position = save_data.get("respawn_position", saved_position)
+	# Same ordering reason as _spawn_local_singleplayer, from the saved seed
+	# instead of the creator's; apply_save_dict below re-applies it anyway, but
+	# apply_class runs first and must already know this character's genome.
+	if int(save_data.get("dna_seed", 0)) != 0:
+		player.apply_dna_seed(int(save_data["dna_seed"]))
 	player.apply_class(
 		save_data.get("character_class", _pending_class),
 		_class_archetypes.stats_for(save_data.get("character_class", _pending_class)),
@@ -4343,7 +4419,7 @@ func _client_process(delta: float) -> void:
 	# The banners keep their own text; the whole stack steps aside while a
 	# window is open (see world_hint_visible_for).
 	_message_stack.visible = world_hint_visible_for(true, _any_gameplay_window_open())
-	_update_interaction_prompt(local_player)
+	_maybe_update_interaction_prompt(local_player, delta)
 	_update_charge_meter(local_player)
 	_refresh_skill_window(local_player)
 	_autosave_step(local_player, delta)
@@ -4463,6 +4539,24 @@ func _client_process(delta: float) -> void:
 	var foliage_tint := SeasonalFoliage.tint_for_world_age(_chunk_manager.world_age_seconds())
 	_ground_tint.set_season_tint(foliage_tint)
 	_chunk_manager.set_season_tint(foliage_tint)
+	# ...and the CANOPY above that ground, off the same clock, in the same
+	# frame. This belongs here rather than in _process's ecology block because
+	# a canopy is a rendering concern, not a simulation-ownership one: the
+	# season used to reach the trees only through step_fruiting, which runs
+	# behind _owns_ecosystem_simulation(), so a JOINED CLIENT -- which owns no
+	# simulation -- kept a summer-green forest in every season for the whole
+	# session, and even a host's first chunks loaded green before the first
+	# tick corrected them. _client_process runs on every peer. Guarded to a
+	# handful of canopy rebuilds per in-game year (see
+	# EarthChunkManager.sync_tree_season); pinned by
+	# tests/unit/test_world_season_fanout.gd.
+	#
+	# Passed local_player.position so that rare full-canopy rebuild also
+	# respects FRUITING_DETAIL_RADIUS -- which already covers the whole
+	# visible viewport, so nothing on screen goes undressed, while a tree far
+	# outside it is left for step_fruiting (host) or a later, nearer sync
+	# (any peer) instead of paying a redraw nobody can see.
+	_chunk_manager.sync_tree_season(local_player.position)
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"

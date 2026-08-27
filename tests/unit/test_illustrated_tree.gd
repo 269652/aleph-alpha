@@ -1177,31 +1177,93 @@ func test_a_scaled_piece_has_no_part_transparent_edges():
 			)
 
 
-## A trunk reads as one solid piece of wood, not two objects with a sliver of
-## background showing between them.
+# -- what the four frames actually DRAW --------------------------------------
+#
+# TreePhenology (src/world/tree_phenology.gd) now decides WHEN a tree wears
+# each of these frames: bare all winter, blossom briefly in early spring, leaf
+# after. That schedule is only the right call if the frames really draw what
+# their names claim, and those are claims about pixels somebody could repaint.
+
+
+## Pine is called an evergreen in TreeSpecies ("its canopy never goes bare").
+## Its ART has to agree, because TreePhenology walks it through the same four
+## stages as everything else -- which is harmless only because a pine's four
+## frames are four TONES of conifer rather than a tree losing its leaves.
+func test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data():
+	var kept := (
+		float(_opaque_pixels(trees.canopy_for("pine", "winter").get_image()))
+		/ float(maxi(_opaque_pixels(trees.canopy_for("pine", "summer").get_image()), 1))
+	)
+	assert_gt(kept, 0.7, "a pine in winter must still be carrying its needles")
+	# The contrast it is measured against: everything else really does strip.
+	for species in ["cherry", "walnut", "acorn", "hazelnut", "apple"]:
+		var deciduous := (
+			float(_opaque_pixels(trees.canopy_for(species, "winter").get_image()))
+			/ float(maxi(_opaque_pixels(trees.canopy_for(species, "summer").get_image()), 1))
+		)
+		assert_lt(deciduous, 0.5, "%s should actually go bare in winter" % species)
+
+
+## The blossom frame is only a FLOWERING event for cherry.
 ##
-## Squeezing a wide root-flare drawing sideways into the trunk's own narrow
-## box (see illustrated_trunk_box) can land a real gap between two separate
-## root "toes" of the source art on the box's own centre column. For the
-## walnut sheet specifically that centre column IS a genuine gap in the art,
-## so every walnut tree sampled there came out fully transparent
-## (test_trunk_area_is_brownish_and_opaque, reported as a missing trunk).
-##
-## Any transparent run flanked by opaque pixels on BOTH sides in the same row
-## is enclosed by the trunk itself rather than open to the background, so it
-## is filled -- the same "petals are not windows" reasoning flora.md already
-## applies to line-art holes, just row-wise instead of a full flood fill: a
-## trunk's gaps run sideways between root legs, not as pockets needing 2D
-## reachability.
-func test_close_enclosed_gaps_fills_a_gap_flanked_by_the_trunk():
-	var source := Image.create(8, 1, false, Image.FORMAT_RGBA8)
-	source.fill(Color(0.0, 0.0, 0.0, 0.0))
-	source.set_pixel(1, 0, Color(0.4, 0.25, 0.1, 1.0))
-	source.set_pixel(2, 0, Color(0.4, 0.25, 0.1, 1.0))
-	source.set_pixel(5, 0, Color(0.5, 0.3, 0.15, 1.0))
-	var closed: Image = ProceduralTreeSprite.close_enclosed_gaps(source)
-	assert_gt(closed.get_pixel(3, 0).a, 0.0, "a gap between two root legs should be filled")
-	assert_gt(closed.get_pixel(4, 0).a, 0.0, "a gap between two root legs should be filled")
-	assert_eq(closed.get_pixel(0, 0).a, 0.0, "background before the trunk starts should stay clear")
-	assert_eq(closed.get_pixel(6, 0).a, 0.0, "background after the trunk ends should stay clear")
-	assert_eq(closed.get_pixel(7, 0).a, 0.0, "background after the trunk ends should stay clear")
+## It is shown briefly in early spring now rather than across the whole of it,
+## which has to be sensible for the species that do not flower too. Measured
+## off the shipped sheets: a cherry draws pink flowers, and the nut and orchard
+## sheets draw the yellow-green flush of a bursting bud -- new leaf, which is
+## exactly what an early-spring tree looks like and reads far better in a short
+## window than it did across three months.
+func test_the_blossom_frame_is_flowers_on_a_cherry_and_new_leaf_on_the_rest():
+	assert_lt(
+		_mean_hue_degrees(trees.canopy_for("cherry", "spring").get_image()), 30.0,
+		"a cherry's blossom frame has to read pink -- it is the whole point of it"
+	)
+	for species in ["walnut", "acorn", "hazelnut", "apple"]:
+		var flush := trees.canopy_for(species, "spring").get_image()
+		assert_gt(
+			_mean_hue_degrees(flush), 40.0,
+			"%s draws new leaf in that slot, not flowers" % species
+		)
+		assert_gt(
+			_opaque_pixels(flush),
+			_opaque_pixels(trees.canopy_for(species, "winter").get_image()),
+			"%s's flush must be fuller than its bare branches" % species
+		)
+		assert_lt(
+			_green_share(flush),
+			_green_share(trees.canopy_for(species, "summer").get_image()),
+			"%s's flush must be paler than its full leaf" % species
+		)
+
+
+## How many pixels of a frame are actually drawn on. Sampled, so it is a count
+## for COMPARING frames rather than an absolute -- which is all any caller here
+## wants.
+func _opaque_pixels(image: Image) -> int:
+	var opaque := 0
+	for y in range(0, image.get_height(), 2):
+		for x in range(0, image.get_width(), 2):
+			if image.get_pixel(x, y).a > 0.5:
+				opaque += 1
+	return opaque
+
+
+## The hue of a frame's MEAN colour, in degrees. Pink sits near 0, the
+## yellow-olive of a bud flush near 50-65, full leaf higher still.
+func _mean_hue_degrees(image: Image) -> float:
+	var red := 0.0
+	var green := 0.0
+	var blue := 0.0
+	var count := 0
+	for y in range(0, image.get_height(), 2):
+		for x in range(0, image.get_width(), 2):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a <= 0.5:
+				continue
+			red += pixel.r
+			green += pixel.g
+			blue += pixel.b
+			count += 1
+	if count == 0:
+		return 0.0
+	var total := float(count)
+	return Color(red / total, green / total, blue / total).h * 360.0

@@ -44,6 +44,18 @@ func test_produces_both_fruit_and_nuts_across_many_trees():
 	assert_true(seen.has("nut"))
 
 
+func test_genome_for_returns_the_cached_instance_for_the_same_position():
+	# A tree's genome is a pure, permanent function of its position -- it
+	# never changes for a given tree -- so a second call for the same
+	# position must return the SAME TreeGenome instance rather than
+	# constructing a new one (this is the hot path in step_fruiting, called
+	# once per second for every loaded tree).
+	var position := Vector2(42, 99)
+	var first := scheduler.genome_for(position)
+	var second := scheduler.genome_for(position)
+	assert_same(first, second, "genome_for should cache and reuse the TreeGenome for a given position")
+
+
 func test_species_selection_leans_toward_the_trees_own_genome_bias():
 	# DNA-driven: a tree's own species_bias should shape what it tends to
 	# drop, not a flat coin flip independent of the tree.

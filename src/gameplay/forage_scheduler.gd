@@ -13,6 +13,14 @@ extends RefCounted
 
 const TreeGenome = preload("res://src/gameplay/tree_genome.gd")
 
+## A tree's genome is a pure, permanent function of its position -- it never
+## changes for a given tree -- but step_fruiting calls genome_for(tree.position)
+## fresh for the same tree every fruiting tick (once per second, across
+## potentially thousands of loaded trees). Caching by position turns that into
+## a one-time TreeGenome construction per tree instead of a repeated
+## hash()+string-format cost on every tick.
+var _genome_cache: Dictionary = {}
+
 
 ## Returns up to `count` drops, each {position, id}, chosen from tree_positions.
 func drops(tree_positions: Array, tick: int, count: int) -> Array:
@@ -33,4 +41,7 @@ func drops(tree_positions: Array, tick: int, count: int) -> Array:
 ## genome for the same position, so a given tree's species lean is stable
 ## across ticks even though the roll each tick still varies.
 func genome_for(position: Vector2) -> TreeGenome:
-	return TreeGenome.new(hash("%d_%d" % [int(position.x), int(position.y)]))
+	var key: String = "%d_%d" % [int(position.x), int(position.y)]
+	if not _genome_cache.has(key):
+		_genome_cache[key] = TreeGenome.new(hash(key))
+	return _genome_cache[key]

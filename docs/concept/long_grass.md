@@ -47,19 +47,56 @@ root away from its ground position (`origin * scale == origin`, for any
 scale).
 
 **Rendering is GPU-instanced, one `MultiMeshInstance2D` draw call per
-(chunk, Y-band), not one `Sprite2D` per card.** `EarthChunkManager` groups
-each chunk's live `TallGrass` cells by `IllustratedGrassPatch.
-band_index_for_local_y` (`BAND_COUNT = 8` horizontal strips per chunk) and
-calls `fill_band` once per band on every throttled sync
-(`GRASS_REFRESH_INTERVAL`). A band's `MultiMeshInstance2D.position` is its
-own vertical center (`band_anchor_world_y`), which is what it Y-sorts
-against the player/creatures by - see pillar 2 for the granularity
-trade-off this implies. This replaced an earlier one-`Sprite2D`-per-card
-design: at the chunk/decoration-radius density this system actually runs
-at (up to several thousand simultaneous cards), that many individually
-Y-sorted, alpha-blended draw calls measured as visibly laggy, reported
-live as "super laggy" once bug fixes made the system actually render at
-its intended density for the first time.
+(chunk, Y-band), not one `Sprite2D` per card.** `BAND_COUNT` is now 64 (half
+a tile row of a `CHUNK_SIZE=32` chunk, 8 world units tall each) -- see the
+constant's own doc comment for the fix history. A band's
+`MultiMeshInstance2D.position` is anchored to its own BOTTOM edge, not its
+vertical center (`band_anchor_world_y`), so an entity standing anywhere
+within or above a band always Y-sorts behind the whole band rather than
+sometimes reading as "behind" grass its own feet have already passed --
+see that function's own doc comment for the full reasoning. This replaced
+an earlier one-`Sprite2D`-per-card design: at the chunk/decoration-radius
+density this system actually runs at (up to several thousand simultaneous
+cards), that many individually Y-sorted, alpha-blended draw calls measured
+as visibly laggy, reported live as "super laggy" once bug fixes made the
+system actually render at its intended density for the first time.
+
+**Banding is per-CARD, not per-cell** (2026-08-27, following a live report
+after the BAND_COUNT 8->32 fix: "y sorting works for some [tufts] but not
+all... it parts and bends but y ordering is correct only for some").
+`IllustratedGrassPatch.cards_for_cell` expands a `TallGrass` cell into its
+own `CARD_COUNT` real, offset-adjusted per-card positions (each card's own
+random offset from the cell's nominal ground position -- see
+`card_specs_for_seed`); `EarthChunkManager._sync_grass_sprites` buckets
+each of THOSE cards into a Y-sort band via its own real world Y
+(`IllustratedGrassPatch.local_row_for_world_y` converts a card's real
+world Y back into the same chunk-local-row space a cell's raw row already
+lived in), not the cell's own un-offset row. `IllustratedGrassPatch.
+instances_for_cards` (renamed from `instances_for_cells`) takes these
+pre-expanded per-card specs directly rather than expanding a cell itself,
+so a cell whose own cards land in two different bands can be split across
+two separate `fill_band` calls without any card drawn twice or dropped --
+one seam (`cards_for_cell`) computes a card's real position for both
+banding and final placement, so the two can never drift apart. This landed
+in two stages: at `BAND_COUNT=32` (one band == one full tile row == 16
+world units) a card's real max offset (6.8 world units, well under half a
+band's height) was mathematically incapable of crossing a band boundary --
+a genuine architectural correctness improvement (a single seam that cannot
+drift) but provably a no-op at that ratio, confirmed by every existing
+`EarthChunkManager` grass test passing completely unmodified. Raising
+`BAND_COUNT` to 64 (see the constant's own doc comment) shrank a band to 8
+world units -- now smaller than a card's own 6.8-unit max offset -- so
+per-card banding genuinely diverges from cell-level banding on real
+production data, not just at a synthetic finer test-only ratio. Directly
+demonstrated by test (`test_illustrated_grass_patch.gd`'s
+`test_per_card_banding_diverges_from_cell_level_banding_at_the_real_
+production_ratio`, sweeping every chunk-local row and many real cell
+seeds: at least one real divergence exists, and every divergence lands in
+the immediately-next band, never further -- proven directly by
+`test_per_card_banding_splits_a_single_cells_cards_across_two_real_bands`,
+same mechanism, real seed 7: 6 of its 8 cards, whose real offset.y is
++6.8, land in the next band over, while the other 2, whose real offset.y
+is -6.8, stay in the cell's own nominal band).
 
 The shader's `fragment()` stage computes a bend curve
 `bend_curve(top_t) = pow(top_t, BEND_CURVE_EXPONENT)`, where `top_t` runs
@@ -104,12 +141,8 @@ scene, see History) and not plain per-instance `COLOR` read directly in
 this project's `gl_compatibility` renderer, also History).
 
 Tall grass initially covers roughly one fifth of eligible grassland cells
-(`205`-patch hard chunk cap -- derived from a real chunk's own cell count,
-`EarthChunkManager.CHUNK_SIZE` squared, times this ~20% target, so it
-actually accommodates that target even in an all-grass chunk rather than
-truncating it early; see `MAX_PATCHES`'s own doc comment in `tall_grass.gd`
-for the exact derivation and the bug fixed by raising it from an earlier,
-undersized `128`), but NOT as an independent per-cell roll -- `TallGrass.
+(`128`-patch hard chunk cap, so this stays bounded even in an all-grass
+chunk), but NOT as an independent per-cell roll -- `TallGrass.
 _seed_initial_patches` thresholds `PixelNoise.smooth` (`FIELD_NOISE_SCALE`/
 `FIELD_NOISE_THRESHOLD`, tuned to land near the same ~20% coverage) instead.
 Reported live: "remove the percentage of overall grass blades instead make
@@ -203,14 +236,14 @@ differences from the flower version, both because grass has no bloom cycle:
   "species", so its ground seed carries no species field at all -- `take_
   ground_seed` returns whether a seed was taken, not a name.
 - **Slower per-patch, because there are more patches shedding at once.**
-  Every mature cell counts (up to `MAX_PATCHES` = 205), where a flower
+  Every mature cell counts (up to `MAX_PATCHES` = 128), where a flower
   meadow's shedding population is the much smaller "past bloom and
   pollinated" subset of `MAX_FLOWERS` = 40. `SECONDS_PER_SEED_FALL` is
   tuned longer than `FlowerPatch`'s so the aggregate accumulation rate
   stays the same order of magnitude rather than flooding the ground the
   moment a chunk loads.
 
-### Three carriers, three different mechanisms, and that difference is deliberate
+### Two carriers, two different mechanisms, and that difference is deliberate
 
 Three animal-seed shapes already existed before this pass, each in its own
 module: `SeedDispersal` (a grazer brushes a bloom, seed rides its coat until
@@ -219,11 +252,8 @@ fruit, seed survives a real gut-passage-timed digestion, dropped once the
 timer elapses -- endozoochory), and `FlowerPatch`'s own ground-seed granivory
 (a sparrow eats a shed flower seed off the ground and carries it the same
 gut-passage way `SeedEndozoochory` does). Grass seed dispersal reuses the
-CLOSEST fit for each of its carriers rather than forcing all of them through
-one shared shape -- birds and mice reuse an EXISTING carrier module, and ants
-(added in a later pass) reuse the existing per-chunk POPULATION shape
-`EarthwormPatch` established instead, since a mound is nothing like an
-individually-carrying animal:
+CLOSEST fit for each of its two carriers rather than inventing a fourth shape
+or forcing both animals through one:
 
 - **Birds (sparrow) eat it exactly like flower seed, because it is the same
   organ doing the same thing.** A sparrow already forages flower ground seed
@@ -234,13 +264,7 @@ individually-carrying animal:
   `plant_grass_at`) and reuses `SeedEndozoochory.carry_distance_tiles`
   unchanged for the carry -- a sparrow's crop does not care whether what it
   swallowed came from a flower head or a grass seed head, so there is no
-  reason to model the digestion differently. That also means the granivory
-  predation gate added later (`SeedEndozoochory.seed_is_consumed`/
-  `GRANIVORY_CONSUMED_CHANCE`, see [flora.md](flora.md#bird-endozoochory-
-  flowers-spread-where-birds-go)) applies to grass seed exactly as it does
-  to flower seed, unchanged: the large majority of a swallowed grass seed
-  is destroyed the same way, not just flower seed -- the same crop, the
-  same gizzard, regardless of which seed head it came from.
+  reason to model the digestion differently.
 - **Mice do NOT get the bird treatment, on purpose.** A real scatter-hoarding
   rodent does not fly and does not digest a seed in transit -- it finds a
   seed, carries a whole one in its cheek pouch on foot for a short distance
@@ -258,24 +282,8 @@ individually-carrying animal:
   than to the whole "Forager" diet label -- this is a real mouse behaviour,
   not a generic dietary fact that should attach to anything sharing mice's
   diet table entry.
-- **Ants get neither the bird nor the mouse treatment, for a third,
-  different reason again.** Myrmecochory (see
-  [soil_fauna.md](soil_fauna.md#ants-myrmecochory)) is not modelled as an
-  individually-carrying animal at all -- there is no ant `CreatureMarker`,
-  because one ant mound stands in for a whole colony ranging out from a
-  fixed nest, not a single forager the way the mouse or sparrow is. A
-  per-chunk `AntColony` (the same patch-sim shape `EarthwormPatch` uses)
-  rolls a small per-step chance for each mound to reach into the SAME
-  `grass_seeds_near`/`take_grass_seed_at` pair the mouse uses, and caches
-  the result a SHORT carry away (`AntColony.CARRY_MIN_TILES`/
-  `CARRY_MAX_TILES`, shorter than even `SeedCaching`'s own minimum -- real
-  myrmecochory moves a seed centimetres to a couple of metres, the
-  shortest-range disperser of the four). The harvest and the cache resolve
-  in the same step, because there is no individual carrier walking the
-  distance over time the way the mouse's carried state does.
-- **All three carriers use the SAME sink.** Whatever gets a grass seed to a
-  new position -- a sparrow's digestion timer, a mouse's cache, or an ant's
-  mound -- calls
+- **Both carriers use the SAME sink.** Whatever gets a grass seed to a new
+  position -- a sparrow's digestion timer or a mouse's cache -- calls
   `EarthChunkManager.plant_grass_at`, which establishes a brand-new,
   immature `TallGrass` patch there (`TallGrass.plant`, the grass-seed
   counterpart of `FlowerPatch.plant`) if the ground is grassland and the
@@ -420,32 +428,91 @@ framebuffer), so several of these needed a real, non-headless, off-screen
    due on any tile change, extending the existing "mark due, chunk
    crossing" mechanism to tile granularity (see its own section above for
    the cost reasoning).
-9. **`test_earth_chunk_manager.gd`'s `test_plant_grass_at_establishes_a_new_
-   patch` failed deterministically against Berlin's own real chunk (2026-08-
-   26), not a rendering bug like the others above but a density/cap mismatch
-   in the Reproduction mechanism itself.** Root cause: `MAX_PATCHES` (128)
-   was only ~12.5% of a real `CHUNK_SIZE`-square (32×32=1024-cell) chunk,
-   well under `FIELD_NOISE_THRESHOLD`'s own documented ~20% target coverage
-   (`SEED_CHANCE`). Any chunk generating mostly/fully grassland — Berlin's
-   own chunk included — hit the 128 cap from INITIAL SEEDING alone, before
-   any spread or planting, leaving `plant()` permanently unable to succeed
-   on any empty cell there (its very first check is the cap, before the
-   per-cell occupancy check). Fixed by raising `MAX_PATCHES` to 205 —
-   derived from the real chunk size and target density (32²×0.20≈204.8,
-   rounded up), not picked by feel — with the derivation and a test
-   (`test_max_patches_accommodates_the_density_target_for_a_real_full_
-   chunk` in `test_tall_grass.gd`, which independently recomputes the same
-   math against `EarthChunkManager`'s real constants) so the relationship
-   re-verifies automatically if either constant ever changes again.
+9. **"y sorting works for some [tufts] but not all... it parts and bends
+   but y ordering is correct only for some" (reported live, after the
+   BAND_COUNT 8→32 fix).** Root cause: `EarthChunkManager._sync_grass_
+   sprites` bucketed a whole cell's `CARD_COUNT=8` cards into a Y-sort band
+   from the cell's own raw, un-offset tile row (`band_index_for_local_y
+   (cell.y, CHUNK_SIZE)`), even though each individual card carries its own
+   random offset from that nominal position (up to a real, verified
+   ±6.8 world units — see `card_specs_for_seed`), computed and applied only
+   AFTER the cell-level band decision was already made. Fixed by making
+   banding per-CARD (see "Banding is per-CARD, not per-cell" above for the
+   mechanism). Verified, honest scope AT THE TIME: at `BAND_COUNT=32`/
+   `CHUNK_SIZE=32`, this was provably a no-op on every existing chunk — a
+   card's real offset (6.8) was mathematically incapable of crossing a
+   16-world-unit band boundary from a cell center that starts 8 world units
+   from either edge. The user-visible "only some tufts sort correctly"
+   symptom itself was not independently reproduced or explained by this
+   investigation beyond this one real, verified mechanism — see #10, which
+   found and fixed the actual remaining cause the same day.
+10. **Same live report as #9, still visible after the per-card fix landed
+    (same day).** A second Explore investigation, on the corrected premise
+    that the report was about the atlas's existing dense "bush" rows (not a
+    separate round-shaped rendering system, an earlier wrong premise the
+    user directly corrected: "There's no round shape it's long grass like
+    the others"), found the real residual cause: even with per-card banding
+    in place, a whole `BAND_COUNT=32` band (one full tile) still draws in
+    front of the player for as long as they stand anywhere within it
+    (`band_anchor_world_y`'s own bottom-edge anchoring, see Mechanism —
+    "normal, expected concealment" by design). That grace window is barely
+    perceptible on sparse, mostly-transparent blade art but reads as
+    glaringly broken on the atlas's dense, near-opaque "bush" cards — the
+    literal "some tufts... not others" split. Fixed by raising `BAND_COUNT`
+    32→64 (halves the grace window to 8 world units), which as a direct
+    side effect also finally made #9's per-card fix start doing something
+    real: at the finer 8-unit band height, a card's own 6.8-unit max offset
+    can now genuinely cross a boundary (see "Banding is per-CARD" above).
+    New worst-case reach under the player: 8 (band_height) + 6.8 (max card
+    offset) + 16 (`WORLD_SIZE`) = 30.8, an 11.2-unit margin under the
+    player's real 42-unit max reach (`character_view.tscn`'s `HeadSlot`) —
+    comfortable again, versus a thin 3.2 at the old ratio.
+11. **"The grass now has floating artefacts above it"** — a real property of
+    `assets/sprites/grass_blades.png` itself, unrelated to any rendering
+    math (Y-sort, growth-scale, and the wind/walker-push shader were each
+    independently ruled out with real, non-headless renders before landing
+    on this). The sheet's taller "bush"/wheat-ear variants (denser rows)
+    draw their own plant art past their own nominal cell's bottom edge,
+    bleeding into the TOP of the next row down — measured directly against
+    the real shipped sheet: growing from a few px at the row1/2 boundary up
+    to 25px at row7/8, present on the large majority of non-row-0 cells.
+    `IllustratedGrassPatch.atlas_region_for_seed` sliced the sheet with no
+    padding, content-blind, so a recipient card's own region carried a
+    fragment of the DONOR row's plant right at its own top edge — and
+    because the shader flips root-at-bottom/tip-at-top, that fragment
+    rendered at the card's TIP, genuinely detached from its own body by a
+    real transparent gap. Only newly visible once real snow (see
+    `concept/weather.md`) gave the white ground enough contrast to show it
+    clearly — reproduced identically over both white and green backgrounds,
+    so the bleed itself predates and is independent of any snow work.
+    Fixed by inseting each row's own region from the top by its own
+    MEASURED bleed depth (`ROW_TOP_BLEED_PX`, one entry per row, expressed
+    as a fraction of a cell so it scales correctly for any `atlas_size`),
+    rather than a single global worst-case margin that would over-crop rows
+    with little or no real bleed. Pinned directly against the real shipped
+    PNG (`test_atlas_region_for_seed_never_includes_the_previous_rows_
+    bled_over_content`), not just the measured table by eye.
 
 ## Status
 
 - ✅ Atlas-backed, GPU-instanced (banded `MultiMeshInstance2D`), per-blade
   curved bending, wind sway, and player wake are wired and verified with
   real (non-headless) renders at real card counts.
+- ✅ Y-sort banding is per-CARD (`IllustratedGrassPatch.cards_for_cell`/
+  `local_row_for_world_y`), not per-cell — see History #9. At `BAND_COUNT
+  =64` (History #10) this genuinely diverges from cell-level banding on
+  real production data, not just a synthetic finer test ratio. The
+  player's own safety margin against a band's worst-case blade, honestly
+  including each card's own real ±6.8-world-unit offset, is 11.2 world
+  units — see `test_illustrated_grass_patch.gd`'s
+  `test_band_height_leaves_a_real_safety_margin_under_the_players_own_
+  max_reach`.
 - ✅ The walker-position uniform updates every frame for every client
   (host and connected), not just whichever peer owns the ecosystem
   simulation — see History #5.
+- ✅ `IllustratedGrassPatch.atlas_region_for_seed` insets past every row's
+  own measured content-bleed from the row above it, so no card's region
+  carries a donor fragment at its own tip — see History #11.
 - ✅ Ambient wind sway (not the walker push) scales with the live
   `WeatherModel.wind_strength_for` value, the same one driving the water's
   shimmer and every other swaying plant.
@@ -487,54 +554,22 @@ framebuffer), so several of these needed a real, non-headless, off-screen
   flower seed via the shared `seed_world` port and `SeedEndozoochory`'s carry
   model, plants a new patch elsewhere) -- `AmbientFlyerMarker`'s fourth
   parallel ground-forage track, mechanically proven correct in isolation
-  (dedicated tests, a stub world offering ONLY grass seed). A later pass
-  made this genuinely real granivory rather than pure dispersal: the large
-  majority of a swallowed grass seed is now destroyed in digestion instead
-  of always planted (`SeedEndozoochory.GRANIVORY_CONSUMED_CHANCE`, shared
-  unchanged with the flower-seed case -- see the "Three carriers" section
-  above), so the numbers below are now an upper bound on what actually
-  establishes a new patch, not a guarantee. ✅ Worm and fruit still
-  unconditionally outrank both seed kinds (a real robin/sparrow's protein
-  and energy needs still win over a seed snack, unchanged), but between
-  flower-seed and grass-seed specifically, `AmbientFlyerMarker` now forages
-  whichever is genuinely NEAREST to the bird right now
-  (`_grass_seed_is_nearer_than`), not a fixed type-based order. Previously
-  the four ground-forage searches tried in a fixed order (worm, fruit,
-  flower-seed, grass-seed, grass-seed simply appended last), so with real
-  flower seed abundant nearby a sparrow committed to it first EVERY time and
-  grass-seed foraging never got a turn regardless of which was actually
-  closer -- measured in a real-world probe (see `docs/progress.md`): 11
-  seeds eaten over a real run, 0 by sparrows. `_look_for_seeds` now backs off
-  (without committing) whenever a grass seed candidate is strictly closer
-  than every flower-seed candidate in range, letting `_look_for_grass_seeds`
-  -- called immediately after it in the same seeking tick -- commit instead;
-  ties keep the old flower-first behaviour, and the flower-seed path itself
-  is untouched when it is genuinely the closer option (pinned by
-  `test_a_sparrow_still_forages_the_nearer_flower_seed_over_a_farther_grass_seed`,
-  a hard regression check alongside the pre-existing flower-seed tests, all
-  of which pass unmodified). Re-verified with a quick real probe (real
-  `AmbientFlyerMarker` + `GroundForageBehavior`, one flower seed fixed at 5
-  tiles, a grass seed swept from 1 to 9 tiles, 12 different `wander_seed`s
-  per distance): the sparrow ate the grass seed in all 12 runs at every
-  distance nearer than 5 tiles and the flower seed in all 12 runs at every
-  distance farther than 5 tiles -- a clean, deterministic crossover exactly
-  at the tie point, not a coin flip or a residual bias toward either kind.
+  (dedicated tests, a stub world offering ONLY grass seed). 🚧 In a real,
+  mixed meadow it is a BACKUP path today, not an equal one: the four
+  ground-forage searches try in a fixed order (worm, fruit, flower-seed,
+  grass-seed -- unchanged, grass-seed simply appended last), so with real
+  flower seed abundant nearby a sparrow commits to it first every time and
+  grass-seed foraging never gets a turn -- measured in a real-world probe
+  (see `docs/progress.md`): 11 seeds eaten over a real run, 0 by sparrows.
+  Not fixed here (reordering priority risks the already-tested flower path
+  and wasn't asked for) -- flagged as a judgment call for a future pass.
 - ✅ Rodent dispersal (mouse picks up nearby shed seed, carries a short
   ground distance, caches/plants a new patch) -- its own module
   (`src/gameplay/seed_caching.gd`), a deliberately different mechanism from
-  the bird's, gated to species == "mouse" specifically. In the real-world
-  probe run before the nearest-wins fix above, this was the ONLY carrier
-  that actually established a new patch (11 of 11 eaten seeds, 1 new patch)
-  -- the fixed-priority-order reason is now fixed (see above), so mice are
-  expected to remain a strong but no longer sole real-world driver of new
-  distant patches; the full mixed-meadow probe (real Berlin chunk data) has
-  not been re-run since the fix to re-measure the exact split.
-- ✅ Ant dispersal (myrmecochory) -- a third, deliberately different
-  mechanism again: not a carrying individual at all, but a per-chunk mound
-  population (`src/world/ant_colony.gd`, see
-  [soil_fauna.md](soil_fauna.md#ants-myrmecochory)) that reaches into the
-  same `grass_seeds_near`/`take_grass_seed_at`/`plant_grass_at` port the
-  mouse uses, with the shortest carry range of any disperser in the game.
+  the bird's, gated to species == "mouse" specifically. In the same
+  real-world probe this was the ONLY carrier that actually established a new
+  patch (11 of 11 eaten seeds, 1 new patch) -- today's real-world workhorse
+  of the two dispersal paths, for the priority-order reason above.
 - ✅ Grazing counter-pressure -- was already live before this pass
   (`EarthChunkManager._graze_by_herbivores` already ate a mature patch under
   any non-predator creature standing on it, horses/sheep included); this

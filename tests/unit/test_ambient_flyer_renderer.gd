@@ -214,6 +214,31 @@ func test_spawned_flyers_are_ambient_flyer_markers_with_a_texture():
 		assert_not_null(flyer.texture)
 
 
+## build_bird: places one songbird directly, for callers assembling a scene
+## by hand rather than spawning a chunk's worth -- the same shape FishRenderer
+## .spawn_fish_at already established for the character preview diorama's own
+## pond (reported live, for that exact diorama: "add ... birds").
+func test_build_bird_returns_a_marker_with_a_texture_at_the_given_position():
+	var position := Vector2(40, 60)
+	var bird := renderer.build_bird(parent, "sparrow", position, 5)
+	assert_true(bird is AmbientFlyerMarker)
+	assert_not_null(bird.texture)
+	assert_eq(bird.position, position)
+	assert_eq(bird.home, position)
+	assert_eq(bird.species, "sparrow")
+
+
+## The real world's own BIRD_RADIUS (70 world units) comfortably exceeds a
+## diorama-scale footprint -- callers with a small scene must be able to
+## scale the circling down to fit, the same way FISH_SWIM_SPEED already
+## scales fish movement down for the diorama's own tiny pond.
+func test_build_bird_defaults_to_the_real_world_radius_but_accepts_an_override():
+	var default_bird := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 1)
+	assert_eq(default_bird.get("_movement").radius, AmbientFlyerRenderer.BIRD_RADIUS)
+	var scaled_bird := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 2, 20.0)
+	assert_eq(scaled_bird.get("_movement").radius, 20.0)
+
+
 # -- sized against a fish ---------------------------------------------------
 #
 # Flyer sizes are expressed as multiples of a fish, the nearest visible

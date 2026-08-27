@@ -71,6 +71,8 @@ const MarketStorePersistence = preload("res://src/emergence/market_store_persist
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
 const ConstructionProjectStore = preload("res://src/emergence/construction_project_store.gd")
+const SettlementSpareCapacity = preload("res://src/emergence/settlement_spare_capacity.gd")
+const SettlementBuildDecision = preload("res://src/emergence/settlement_build_decision.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
 const InstitutionStorePersistence = preload("res://src/emergence/institution_store_persistence.gd")
@@ -1529,13 +1531,24 @@ func _current_hour_of_day() -> int:
 ## way a recorded "quest offered" event could once the shortage it named
 ## resolves.
 func production_shortfall_quests_for_settlement(settlement_id: String) -> Array:
+	var household_occupations := _household_occupations_for_settlement(settlement_id)
+	var market := _market_store.market_for(settlement_id)
+	return Quest.production_shortfall_quests_for(settlement_id, household_occupations, market, _recipe_book)
+
+
+## household_id -> occupation for every household in `settlement_id` with a
+## real, known occupation -- the shape production_shortfall_quests_for_
+## settlement above ALREADY built inline; lifted out so SettlementSpareCapacity
+## (docs/concept/timber_construction.md's "Deciding what to build, and who
+## builds it" section) can read the SAME real map rather than a second,
+## separately-derived copy of it.
+func _household_occupations_for_settlement(settlement_id: String) -> Dictionary:
 	var household_occupations: Dictionary = {}
 	for household_id in _households_in_settlement(settlement_id):
 		var occupation := _occupation_of_household(household_id)
 		if occupation != "":
 			household_occupations[household_id] = occupation
-	var market := _market_store.market_for(settlement_id)
-	return Quest.production_shortfall_quests_for(settlement_id, household_occupations, market, _recipe_book)
+	return household_occupations
 
 
 ## Settlement assessment cadence: every SETTLEMENT_STEP_INTERVAL of real
@@ -2192,24 +2205,65 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 
 	var now := _world_age_seconds
 	var warmth := _warmth_at_pixel(player_pixel)
-	var season_name := current_season()
-	_sync_tree_season(season_name)
+	# Belt and braces only: the canopy season is the CLOCK's job now (see
+	# sync_tree_season, called from set_world_age_seconds/advance_world_age/
+	# jump_to_season and World._client_process), and the signature guard makes
+	# this a no-op whenever one of those already dressed this moment. It is not
+	# load-bearing -- a peer that never runs this tick at all still has correct
+	# trees -- but fruiting is about to redraw these canopies anyway, so it may
+	# as well redraw them in the right season.
+	#
+	# Passes player_pixel through so a season change (rare, but touches every
+	# loaded tree when it happens) respects the same FRUITING_DETAIL_RADIUS
+	# gate as the per-tree loop below -- otherwise a tree this loop has
+	# deliberately skipped for being out of range gets re-dressed right back
+	# in with its own stale cached ripe_fruit_count() the moment the season
+	# turns, and the "frozen forever" bug reappears through this door instead.
+	sync_tree_season(player_pixel)
+	# ONE answer to "which canopy is this tree wearing", read from the same
+	# place the rest of the wood was just dressed from -- and read ONCE, not
+	# per tree. This used to be the calendar season plus a SeasonTransition
+	# call inside the loop below, which is a second schedule: harmless while
+	# the canopy still turned on the ground's curve, wrong the moment it got
+	# its own (see TreePhenology), because then the trees inside the fruiting
+	# radius wear a different year from the wood around them -- blossom on the
+	# first day of spring for the handful next to the player, bare branches
+	# everywhere else.
+	var canopy := _tree_renderer.canopy_state()
+	var canopy_season: String = canopy["season"]
+	var canopy_turning_into: String = canopy["turning_into"]
+	var canopy_turn_progress: float = canopy["turn_progress"]
 	for trees in _loaded_trees.values():
 		for tree in trees:
 			if not tree.has_method("set_ripe_fruit"):
 				continue
-			# Whether this tree is close enough to DROP its fruit as real
-			# items. Showing a crop is cheap -- the textures are shared
-			# between trees of the same species, season and crop level -- but
-			# every fallen fruit is a node, so the drops stay near the player.
+			# Distance pre-filter, BEFORE any per-tree work: genome lookup,
+			# species/pollination lookups, FruitingModel.state_at, and above
+			# all tree.set_ripe_fruit's canopy texture redraw are all real
+			# per-tree cost, and this loop used to pay it for EVERY loaded
+			# tree in the whole streaming radius -- potentially thousands --
+			# roughly once a second, forever, including trees the player has
+			# never been anywhere near (reported: a real perf hit from a
+			# handful of loaded forests).
 			#
-			# This check used to skip the whole tree, so only the handful
-			# within the detail radius carried any fruit at all and the rest of
-			# the wood stood bare in the middle of autumn (reported: apples on
-			# only some trees).
-			var drops_fruit: bool = (
-				player_pixel.distance_to(tree.position) <= FRUITING_DETAIL_RADIUS
-			)
+			# FRUITING_DETAIL_RADIUS already covers the full visible
+			# viewport (1280x720 screen / Player.CAMERA_ZOOM's 4x zoom =
+			# 320x180 world px, half-diagonal ~183.6px, comfortably inside
+			# 280px), so nothing actually on screen is skipped -- and
+			# because FruitingModel.state_at is a PURE function of elapsed
+			# world time rather than a running simulation, a skipped tree is
+			# not frozen: it simply shows the correct catch-up ripeness the
+			# next time it comes back into range (see
+			# chunk_ecology_catchup.gd for the same "catch up divergent
+			# world state when it comes back into scope" pattern elsewhere
+			# in this codebase).
+			#
+			# This check used to only gate whether a tree's fruit dropped as
+			# real ground items further below, which is what let every
+			# loaded tree's canopy redraw through here regardless of
+			# distance in the first place.
+			if player_pixel.distance_to(tree.position) > FRUITING_DETAIL_RADIUS:
+				continue
 			var genome := _forage_scheduler.genome_for(tree.position)
 			# NAMED species (Walnut/Cherry/Apple -- see TreeSpecies), not the
 			# raw nut/fruit spectrum: both the canopy's ripe crop and the
@@ -2233,15 +2287,17 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			var state: Dictionary = _fruiting_model.state_at(
 				genome, now, warmth, yield_multiplier, ripening_multiplier
 			)
-			var turn := SeasonTransition.state_at(
-				_season_cycle.year_fraction(_world_age_seconds)
-			)
 			tree.set_ripe_fruit(
-				int(state.get("ripe", 0)), season_name, turn.to, turn.progress
+				int(state.get("ripe", 0)),
+				canopy_season,
+				canopy_turning_into,
+				canopy_turn_progress
 			)
 
-			if not drops_fruit:
-				continue
+			# Every tree reaching here already passed the FRUITING_DETAIL_RADIUS
+			# gate above, so it drops its fallen fruit as real ground items too
+			# -- capped below, so the ground under a tree stand never turns
+			# into a hundred clickable nodes.
 			# How many were on the tree before this step, so the ones that leave
 			# can be identified: fruit leave from the top of the crop's order
 			# (see FruitingModel.fallen_indices).
@@ -2323,6 +2379,12 @@ func set_world_age_seconds(value: float) -> void:
 	_world_age_seconds = value
 	_last_fruiting_time = value
 	_snow_world_age = value
+	# The canopies are one of those readers, and this is the earliest moment
+	# they can possibly be right: both randomize_world_age (New Game) and
+	# load_world_clock (Load Game) come through here BEFORE the first chunk
+	# load, so a world that opens in winter opens with bare trees instead of
+	# summer ones that correct themselves a tick later (see sync_tree_season).
+	sync_tree_season()
 
 
 ## Rolls a brand new world's starting point in the year, once (see
@@ -2377,6 +2439,11 @@ func jump_to_season(season: String) -> bool:
 		return false
 	_world_age_seconds += skip
 	_last_fruiting_time = _world_age_seconds
+	# /season winter should show winter trees NOW, not once the next fruiting
+	# tick comes round -- and on a peer that owns no simulation, never (see
+	# sync_tree_season). This skips the clock without going through
+	# set_world_age_seconds, so it needs the push of its own.
+	sync_tree_season()
 	return true
 
 
@@ -2833,77 +2900,122 @@ func step_snow(snowing: bool, warmth: float) -> void:
 		for tile in _snow_trail.trodden_tiles(0.0):
 			_snow_dirty[tile] = true
 	_snow_trail.advance(elapsed, snowing)
-	_repaint_snow()
 
-
-## Every tile's own last-painted band, and the tiles whose tread has changed
-## since.
-##
-## Repainting every loaded tile every frame is thousands of set_cell calls for
-## a field that mostly has not changed -- the same shape of cost that took the
-## frame rate down when the fast-forward first ran. The FIELD is repainted only
-## when its depth crosses into a new band, or has moved by SNOW_REPAINT_DEPTH_STEP
-## since the last repaint (see below); footprints repaint only the tiles that
-## were actually walked on.
-var _snow_painted_band := -1
-var _snow_dirty: Dictionary = {}
-
-## How far `_snow_depth` must move since the last whole-field repaint before
-## another one is due, independent of DEPTH_BANDS (which is about how many
-## TEXTURES exist, not how often tiles get re-evaluated).
-##
-## Per-tile onset variance (see SnowLayer.ONSET_VARIANCE) means an individual
-## tile's own band can change well within a single texture band -- gating
-## repaints on the band index alone left the field frozen for a large chunk
-## of a snowfall and then jumping a big step once the band finally did cross
-## (measured live before this existed: coverage sat flat at the exact same
-## percentage from depth 0.02 through 0.25, then jumped straight to 100% at
-## depth 0.5 -- the "instant reveal" bug again, just on a coarser timescale).
-##
-## Bounded well under ONSET_VARIANCE (0.18) so a repaint reliably lands
-## between one onset extreme and the next -- several checkpoints across the
-## spread rather than one -- while staying coarse enough that a whole
-## snowfall (SECONDS_TO_COVER) still repaints a few dozen times, not every
-## frame.
-const SNOW_REPAINT_DEPTH_STEP := 0.05
-var _snow_painted_depth := -1.0
-
-
-## Paints the tiles that need it.
-func _repaint_snow() -> void:
-	if _snow_layer == null:
-		return
 	if _snow_depth <= 0.0:
-		if _snow_painted_band != -1:
-			_snow_layer.clear()
-			_snow_painted_band = -1
-			_snow_painted_depth = -1.0
-			_snow_dirty.clear()
+		_repaint_snow()  # cheap fast-clear path, see below -- no sweep needed.
 		return
 
-	var band := _snow_renderer.band_for(_snow_depth, 0.0)
-	var moved_enough := absf(_snow_depth - _snow_painted_depth) >= SNOW_REPAINT_DEPTH_STEP
-	if band != _snow_painted_band or moved_enough:
-		_snow_painted_band = band
-		_snow_painted_depth = _snow_depth
-		_snow_dirty.clear()
-		_repaint_whole_field()
-		return
+	# Footprints repaint immediately every call regardless of the sweep
+	# cadence below -- a footstep should show up the instant it happens, not
+	# wait for the next scheduled sweep.
 	for tile in _snow_dirty:
 		_paint_snow_tile(tile)
 	_snow_dirty.clear()
 
+	if _world_age_seconds - _snow_swept_world_age >= SNOW_SWEEP_INTERVAL_SECONDS:
+		_sweep_snow_field()
+		_snow_swept_world_age = _world_age_seconds
 
-func _repaint_whole_field() -> void:
+
+## Every tile's own last-painted band (Vector2i tile -> int band, -1 for
+## bare/ocean), and the tiles whose tread has changed since the last sweep.
+##
+## This is what makes repainting cheap: `_paint_snow_tile` below only ever
+## touches the actual TileMapLayer (a real `set_cell`/`erase_cell` call) for a
+## tile whose computed band differs from what is tracked here -- so calling it
+## for every loaded tile costs a scan plus a dictionary lookup per tile, not
+## thousands of set_cell calls, for the (typical) case where most of the field
+## hasn't changed. A tile absent from this dict is treated as already bare
+## (`.get(tile, -1)`), so a genuinely untouched tile whose computed band is
+## also -1 costs nothing -- there is nothing to erase that was never set.
+var _snow_painted_band_by_tile: Dictionary = {}
+var _snow_dirty: Dictionary = {}
+
+## Each tile's own onset lead/lag (see SnowLayer.onset_offset_for), cached the
+## first time that tile is painted.
+##
+## Onset is a PURE function of the tile's global coordinates -- it never
+## changes for a tile's whole loaded lifetime -- but recomputing it (a
+## PixelNoise.smooth call, several hashed lookups) for every tile on every
+## sweep dominates the sweep's cost far more than the cheap band_for
+## arithmetic that actually varies with depth. Measured live against the real
+## ~22,700-tile field a LOAD_RADIUS=2 chunk radius loads: recomputing onset
+## fresh every sweep cost ~200ms/pass; reading it from this cache instead cost
+## ~42ms/pass for the exact same sweep -- roughly 5x, and the difference
+## between a cadence tight enough to trickle being affordable at all or not.
+## Cleared per-tile on chunk unload (`_forget_snow_paint_for_chunk`) so this
+## does not grow without bound as a player roams.
+var _snow_onset_by_tile: Dictionary = {}
+
+## How often the coverage SWEEP below actually runs, independent of how often
+## step_snow itself is called (every frame, from World._client_process).
+##
+## The sweep is a real O(loaded tiles) scan -- cheap per tile thanks to the
+## onset cache above, but not free, so running it unconditionally every frame
+## would reintroduce the same shape of cost SNOW_REPAINT_DEPTH_STEP originally
+## existed to avoid (see git history: a ~200ms/frame stall the first time
+## fast-forward repainted everything every frame). This throttle is what
+## bounds that.
+##
+## MEASURED, not guessed: a full diff-aware sweep over the real ~22,700-tile
+## LOAD_RADIUS=2 field costs ~38-52ms once the onset cache is warm (see
+## `_snow_onset_by_tile`'s own doc comment and the probe this was measured
+## with). The OLD whole-field-repaint gate (SNOW_REPAINT_DEPTH_STEP=0.05
+## against SECONDS_TO_COVER=360s) fired an unconditional, non-diffed repaint
+## -- ~426ms measured, because it called set_cell/erase_cell for every one of
+## ~22,700 tiles regardless of whether that tile had actually changed -- about
+## once every 18 real seconds, so nothing changed at all in between and then a
+## whole batch changed together in one frame the instant it fired. 2.0 seconds
+## keeps this new mechanism's average CPU cost roughly the SAME order as the
+## old one's (~45ms every 2s vs ~426ms every 18s is ~2.1% vs ~2.4% of
+## wall-clock time) while being 9x more frequent, so a real crossing shows up
+## within ~2s of happening rather than sitting invisible for up to 18s and
+## then jumping. Pinned functionally, not by timing (timing varies by
+## hardware): see
+## test_step_snow_driven_coverage_changes_trickle_in_rather_than_batching_every_18_seconds
+## in test_earth_chunk_manager.gd, which asserts the real worst-case gap
+## between two visible changes stays well under the old ~18s cadence when
+## driven through this exact constant.
+const SNOW_SWEEP_INTERVAL_SECONDS := 2.0
+var _snow_swept_world_age := -INF
+
+
+## Paints the tiles that need it. Used directly by `set_snow_depth` (a rare,
+## deliberate call -- e.g. `/weather`, or a test setting depth outright) for
+## an immediate, unthrottled sweep; `step_snow`'s own per-frame path uses the
+## throttled call site above instead, for exactly the reason described on
+## SNOW_SWEEP_INTERVAL_SECONDS.
+func _repaint_snow() -> void:
+	if _snow_layer == null:
+		return
+	if _snow_depth <= 0.0:
+		# A single clear() beats diff-erasing every previously-painted tile
+		# one at a time, and resets the per-tile paint tracking to match --
+		# the onset cache is left alone, since it is still correct for
+		# whenever it next snows.
+		if not _snow_painted_band_by_tile.is_empty():
+			_snow_layer.clear()
+			_snow_painted_band_by_tile.clear()
+			_snow_dirty.clear()
+		return
+	_sweep_snow_field()
+	_snow_swept_world_age = _world_age_seconds
+
+
+## Diff-aware pass over every loaded tile: `_paint_snow_tile` below only
+## actually touches the TileMapLayer for a tile whose band changed, so this is
+## the sweep SNOW_SWEEP_INTERVAL_SECONDS gates -- see both constants' own doc
+## comments for the measured cost that makes running this often affordable.
+func _sweep_snow_field() -> void:
 	for chunk_coord in _loaded_chunks:
 		_paint_snow_chunk(chunk_coord)
 
 
-## Paints every tile of one chunk. Shared by _repaint_whole_field (every
-## loaded chunk, whenever the field-wide repaint above triggers) and
-## _load_chunk (this one chunk alone, immediately -- see _load_chunk's own
-## comment: without this, a chunk streamed in mid-snowfall stayed bare until
-## the next field-wide depth change happened to repaint it).
+## Paints every tile of one chunk. Shared by _sweep_snow_field (every loaded
+## chunk, whenever the sweep above runs) and _load_chunk (this one chunk
+## alone, immediately -- see _load_chunk's own comment: without this, a chunk
+## streamed in mid-snowfall stayed bare until the next sweep happened to reach
+## it).
 func _paint_snow_chunk(chunk_coord: Vector2i) -> void:
 	var origin: Vector2i = chunk_coord * CHUNK_SIZE
 	var chunk: Chunk = _loaded_chunks[chunk_coord]
@@ -2912,25 +3024,48 @@ func _paint_snow_chunk(chunk_coord: Vector2i) -> void:
 			_paint_snow_tile(origin + Vector2i(local_x, local_y))
 
 
+## Computes this tile's current band and touches the TileMapLayer only if that
+## differs from what is already tracked as painted -- see
+## `_snow_painted_band_by_tile`'s own doc comment for why that is what keeps
+## calling this for every loaded tile affordable.
 func _paint_snow_tile(tile: Vector2i) -> void:
+	var band := -1
 	# Water does not take snow -- it freezes or it does not, which is a
 	# different thing and not this one.
-	if biome_at_global(tile.x, tile.y) == "ocean":
-		_snow_layer.erase_cell(tile)
+	if biome_at_global(tile.x, tile.y) != "ocean":
+		# Every tile used to read the exact same _snow_depth, so a whole
+		# loaded chunk snapped to whatever band the clock said the instant it
+		# was evaluated (reported: "snow covers a whole chunk instantly
+		# instead of spreading progressively"). This tile's own onset offset
+		# (seeded from its GLOBAL coordinates, see SnowLayer.onset_offset_for)
+		# makes it lead or lag the shared depth by a bounded amount, so a
+		# partial snowfall paints a genuine mix of bare and covered land
+		# rather than one uniform state. Cached rather than recomputed every
+		# call -- see _snow_onset_by_tile's own doc comment.
+		if not _snow_onset_by_tile.has(tile):
+			_snow_onset_by_tile[tile] = _snow_renderer.onset_offset_for(tile.x, tile.y)
+		var onset: float = _snow_onset_by_tile[tile]
+		band = _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile), onset)
+
+	if _snow_painted_band_by_tile.get(tile, -1) == band:
 		return
-	# Every tile used to read the exact same _snow_depth, so a whole loaded
-	# chunk snapped to whatever band the clock said the instant it was
-	# evaluated (reported: "snow covers a whole chunk instantly instead of
-	# spreading progressively"). This tile's own onset offset (seeded from its
-	# GLOBAL coordinates, see SnowLayer.onset_offset_for) makes it lead or lag
-	# the shared depth by a bounded amount, so a partial snowfall paints a
-	# genuine mix of bare and covered land rather than one uniform state.
-	var onset := _snow_renderer.onset_offset_for(tile.x, tile.y)
-	var band := _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile), onset)
+	_snow_painted_band_by_tile[tile] = band
 	if band < 0:
 		_snow_layer.erase_cell(tile)
 	else:
 		_snow_layer.set_cell(tile, 0, Vector2i(band, 0))
+
+
+## Drops one chunk's tiles from the per-tile snow tracking dictionaries above,
+## so a player roaming far and wide does not grow them without bound -- called
+## from _unload_chunk alongside the matching TileMapLayer erase.
+func _forget_snow_paint_for_chunk(chunk_coord: Vector2i) -> void:
+	var origin: Vector2i = chunk_coord * CHUNK_SIZE
+	for local_y in CHUNK_SIZE:
+		for local_x in CHUNK_SIZE:
+			var tile := origin + Vector2i(local_x, local_y)
+			_snow_onset_by_tile.erase(tile)
+			_snow_painted_band_by_tile.erase(tile)
 
 
 func set_rain(raining: bool) -> void:
@@ -3081,6 +3216,11 @@ func _mature_tree_positions() -> Array:
 ## at the same multiple fills the map.
 func advance_world_age(delta_seconds: float) -> void:
 	_world_age_seconds += delta_seconds
+	# Time passing is the ONLY thing a canopy depends on, so the canopies move
+	# with the clock rather than with any simulation step (see
+	# sync_tree_season). The quantised signature guard keeps this a string
+	# compare on all but a handful of calls per in-game year.
+	sync_tree_season()
 
 
 ## Central, throttled tree spread: every SPREAD_INTERVAL of real time, a
@@ -3895,7 +4035,7 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 
 	var origin := chunk_coord * CHUNK_SIZE
 	var half_span := _visible_half_span_tiles()
-	var cells_by_band: Dictionary = {}  # band index -> Array[Dictionary]
+	var cards_by_band: Dictionary = {}  # band index -> Array[Dictionary] of per-card specs
 	for cell in sim.get_patch_cells():
 		var tile: Vector2i = origin + cell
 		# Tile-precise cutoff on top of the coarser chunk-level _decorates
@@ -3908,31 +4048,43 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 		# player walks, not just once per chunk.
 		if not DecorationLod.keeps_decoration_tile(tile, _disturbance_center_tile, half_span, GRASS_VIEW_BUFFER_TILES):
 			continue
-		var band := IllustratedGrassPatch.band_index_for_local_y(cell.y, CHUNK_SIZE)
 		# Per-seed, not a single flat constant: IllustratedGrassPatch derives
 		# each tuft's atlas variant, card offsets and depth ordering from this
 		# same seed (card_specs_for_seed), so a meadow shows real per-tuft
 		# variety instead of identically-placed clumps.
 		var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
-		var list: Array = cells_by_band.get(band, [])
-		list.append({
+		var cell_spec := {
 			"seed": seed_value,
 			"ground_position": Vector2(
 				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
 			),
 			"growth": sim.get_growth(cell),
-		})
-		cells_by_band[band] = list
+		}
+		# Bucketed per CARD, not per cell: each of the cell's own CARD_COUNT
+		# cards carries its own random offset from the cell's nominal ground
+		# position (see IllustratedGrassPatch.card_specs_for_seed), so a
+		# card's own REAL, offset-adjusted world Y -- not the cell's raw,
+		# un-offset row -- decides which band it Y-sorts with. Reported
+		# live, after the BAND_COUNT 8->32 fix: "y sorting works for some
+		# [tufts] but not all... it parts and bends but y ordering is
+		# correct only for some" -- see IllustratedGrassPatch.cards_for_cell
+		# and docs/concept/long_grass.md for the full mechanism.
+		for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+			var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+			var band := IllustratedGrassPatch.band_index_for_local_y(local_row, CHUNK_SIZE)
+			var list: Array = cards_by_band.get(band, [])
+			list.append(card)
+			cards_by_band[band] = list
 
 	# A band whose last patch died (grazed/built on) is freed outright
 	# rather than left holding a zero-instance MultiMesh.
 	for band in bands.keys().duplicate():
-		if not cells_by_band.has(band):
+		if not cards_by_band.has(band):
 			bands[band].queue_free()
 			bands.erase(band)
 
-	for band in cells_by_band.keys():
+	for band in cards_by_band.keys():
 		var mmi: MultiMeshInstance2D = bands.get(band)
 		if mmi == null:
 			mmi = MultiMeshInstance2D.new()
@@ -3942,7 +4094,7 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 			)
 			_entities_parent.add_child(mmi)
 			bands[band] = mmi
-		_illustrated_grass.fill_band(mmi, mmi.position, cells_by_band[band])
+		_illustrated_grass.fill_band(mmi, mmi.position, cards_by_band[band])
 
 	_grass_sprites[chunk_coord] = bands
 
@@ -4374,32 +4526,66 @@ func step_flowers(delta: float) -> void:
 		_sync_flower_sprites(chunk_coord)
 
 
-func _sync_tree_season(season_name: String) -> void:
-	# The TURN, not just the season name.
-	#
-	# This only ever fired when the season NAME changed, so every tree in the
-	# world swapped canopies on one frame -- which is exactly the instant
-	# change the gradual transition was built to remove, and the blend sat
-	# there unused because nothing ever passed it a progress. It now re-syncs
-	# whenever the turn advances a step (SeasonTransition quantises progress
-	# precisely so that is a handful of times, not every frame).
-	var turn := SeasonTransition.state_at(_season_cycle.year_fraction(_world_age_seconds))
-	var signature := "%s/%s/%.2f" % [season_name, turn.to, turn.progress]
+## Dresses the trees -- the renderer new ones are built from, and every tree
+## already loaded -- in the season the WORLD CLOCK says it is.
+##
+## Driven by the clock rather than by the simulation (see
+## docs/concept/seasons.md, "The canopy is on the clock, not on the
+## simulation"). This used to be private and called from step_fruiting alone,
+## which runs only behind World._owns_ecosystem_simulation() and a ~1s
+## accumulator -- so the first awaited chunk load built its trees before it
+## ever fired (no season at all -> IllustratedTree's summer fallback -> green
+## trees in the snow), and a joined client, owning no simulation, never ran it
+## at all and kept a summer-green forest all year. It is public now because
+## every path that establishes or moves the clock calls it, World's ungated
+## per-frame _client_process included.
+##
+## Cheap enough for that: the TURN, not just the season name, is the
+## signature, and SeasonTransition quantises progress precisely so a rebuild
+## happens a handful of times per in-game year rather than every frame. (That
+## quantised signature is also what stopped the whole world swapping canopies
+## on a single frame boundary, which the gradual transition exists to avoid.)
+##
+## `player_pixel` (Vector2, optional) gates the per-tree redraw below by
+## FRUITING_DETAIL_RADIUS, same as step_fruiting's own loop and for the same
+## reason: without it, every loaded tree -- potentially thousands -- gets
+## re-dressed with tree.ripe_fruit_count() (which clamps the "never touched"
+## -1 sentinel to 0) each time the signature changes, including the very
+## first-ever call, since _last_tree_season starts empty and so never
+## matches. A tree step_fruiting deliberately skipped for being out of range
+## must stay skipped here too, or it gets permanently un-skipped the moment a
+## season turns.
+##
+## Left unfiltered (the null default) for set_world_age_seconds/
+## jump_to_season: those are rare, deliberate whole-world refreshes -- a new
+## or loaded world's clock landing on a season, or a /season command -- and
+## are meant to dress every loaded tree at once, not just the ones near
+## whichever player happened to trigger them.
+func sync_tree_season(player_pixel: Variant = null) -> void:
+	_tree_renderer.set_world_age_seconds(_world_age_seconds)
+	var canopy := _tree_renderer.canopy_state()
+	var season_name: String = canopy["season"]
+	var turning_into: String = canopy["turning_into"]
+	var turn_progress: float = canopy["turn_progress"]
+	var signature := "%s/%s/%.2f" % [season_name, turning_into, turn_progress]
 	if signature == _last_tree_season:
 		return
 	_last_tree_season = signature
-	_tree_renderer.season = season_name
-	_tree_renderer.turning_into = turn.to
-	_tree_renderer.turn_progress = turn.progress
 	for trees in _loaded_trees.values():
 		for tree in trees:
-			if tree.has_method("set_ripe_fruit"):
-				tree.set_ripe_fruit(
-					tree.ripe_fruit_count(), season_name, turn.to, turn.progress
-				)
+			if not tree.has_method("set_ripe_fruit"):
+				continue
+			if (
+				player_pixel is Vector2
+				and player_pixel.distance_to(tree.position) > FRUITING_DETAIL_RADIUS
+			):
+				continue
+			tree.set_ripe_fruit(
+				tree.ripe_fruit_count(), season_name, turning_into, turn_progress
+			)
 
 
-## The season the loaded trees were last drawn for -- see _sync_tree_season.
+## The season the loaded trees were last drawn for -- see sync_tree_season.
 var _last_tree_season := ""
 
 
@@ -5891,6 +6077,34 @@ func has_structure_near(global_x: int, global_y: int, structure_id: String, radi
 	return false
 
 
+## Half the chunk size: the Chebyshev distance from a chunk's own CENTER
+## tile to any of its four edges is exactly CHUNK_SIZE/2 -- the natural scan
+## radius for "is a structure present anywhere in this settlement's own
+## chunk" from that center tile (see
+## _present_structure_ids_for_settlement_chunk below), reusing has_structure_
+## near's own real distance metric rather than inventing a second one.
+const SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES := CHUNK_SIZE / 2
+
+## Every real placeable structure id (ItemCatalog "placeable" kind --
+## sagewerk/storage/campfire/furnace, generalized over every future one too,
+## not hardcoded to just today's two construction-relevant ids) actually
+## present within SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES of `chunk_coord`'s
+## own center tile -- the real `present_structure_ids` ConstructionPriority.
+## decide/SettlementBuildDecision need (see docs/concept/timber_
+## construction.md's "Deciding what to build, and who builds it" section),
+## derived the SAME has_structure_near chunk-scan style every other real
+## structure-presence check in this file already uses.
+func _present_structure_ids_for_settlement_chunk(chunk_coord: Vector2i) -> Array:
+	var center := chunk_coord * CHUNK_SIZE + Vector2i(CHUNK_SIZE / 2, CHUNK_SIZE / 2)
+	var present: Array = []
+	for item_id in _item_catalog.known_ids():
+		if _item_catalog.kind_of(item_id) != "placeable":
+			continue
+		if has_structure_near(center.x, center.y, item_id, SETTLEMENT_STRUCTURE_SCAN_RADIUS_TILES):
+			present.append(item_id)
+	return present
+
+
 ## Keeps `_sagewerk_lumberjacks` in sync with a modification change at
 ## `local_cell`: a tile that just BECAME "sagewerk" gets staffed (if it
 ## isn't already -- rebuilding the same tile twice must not double-spawn), a
@@ -6484,6 +6698,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_ecosystem.kingfisher_population(chunk_coord)
 	)
 
+	# Settlement build decision (see _apply_settlement_build_decision's own
+	# doc comment) runs BEFORE construction labor catch-up -- a project this
+	# call decides to abandon (double-fix cancellation) or start is resolved
+	# before the labor/completion sync below runs against it, not racing it.
+	_apply_settlement_build_decision(chunk_coord)
+
 	# Construction labor catch-up (see _apply_construction_labor_catchup's
 	# own doc comment) -- last, so it runs against a chunk that is already
 	# fully loaded (statics/collision/lumberjack/logistics wiring all
@@ -6622,21 +6842,31 @@ func _apply_piece_condition_catchup(chunk_coord: Vector2i, chunk: Chunk) -> void
 ## Advances every real IN_PROGRESS ConstructionProject sited at `chunk_coord`
 ## by however long this chunk sat unloaded, mirroring _apply_ecology_catchup/
 ## _apply_piece_condition_catchup's own identical "no-op with no in-session
-## unload record" shape directly above. builder_count comes from the
-## EXISTING household_count_for_settlement (already real -- see that
-## function's own doc comment), keyed off the SAME settlement_id
-## record_settlement_founded_if_new derives a chunk's settlement under
-## (EntityRef.for_settlement(chunk_coord)) -- not reinvented here. A
-## settlement with no real households yet (household_count_for_settlement
-## == 0) makes zero progress regardless of elapsed time, the exact
-## "population growth is what raises builder_count" throttle this doc's own
-## framing names.
+## unload record" shape directly above. builder_count is real SPARE capacity
+## (SettlementSpareCapacity.for_settlement, docs/concept/timber_
+## construction.md's "Deciding what to build, and who builds it" section),
+## keyed off the SAME settlement_id record_settlement_founded_if_new derives
+## a chunk's settlement under (EntityRef.for_settlement(chunk_coord)) -- not
+## reinvented here.
+##
+## **Corrected (see that section's own "Spare capacity" paragraph)**: this
+## used to pass `float(household_count_for_settlement(settlement_id))` --
+## TOTAL population, not spare capacity, a real bug relative to that
+## section's own design: construction should only ever consume population
+## BEYOND what farmer/hunter/fisher require, never compete with the survival
+## occupations SettlementState.carrying_capacity itself depends on. A
+## settlement whose entire population works a real survival occupation now
+## correctly accrues ZERO construction labor even though household_count_
+## for_settlement is nonzero (see test_earth_chunk_manager.gd's own
+## "construction labor only advances using spare capacity" case) -- the
+## exact "population growth is what raises builder_count" throttle this
+## doc's own framing names, now measuring the real thing it names.
 ##
 ## Deliberately does NOT decide which project to START -- only advances
-## labor on projects that are ALREADY IN_PROGRESS (see this pass's own
-## explicit scope: "which structure should this settlement build next" stays
-## genuinely unspecified, SettlementConstruction.advance is not called from
-## here).
+## labor on projects that are ALREADY IN_PROGRESS. Deciding WHICH project to
+## start next is _apply_settlement_build_decision's own job, called
+## alongside this one from _load_chunk (see that function's own doc
+## comment) -- this function stays scoped to advancing what already exists.
 func _apply_construction_labor_catchup(chunk_coord: Vector2i) -> void:
 	if not _unloaded_construction_labor.has(chunk_coord):
 		return
@@ -6647,13 +6877,77 @@ func _apply_construction_labor_catchup(chunk_coord: Vector2i) -> void:
 		return
 
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	var capacity := {"builder_count": float(household_count_for_settlement(settlement_id))}
+	var household_occupations := _household_occupations_for_settlement(settlement_id)
+	var spare_capacity := SettlementSpareCapacity.for_settlement(
+		household_count_for_settlement(settlement_id), household_occupations
+	)
+	var capacity := {"builder_count": float(spare_capacity)}
 	for project in _construction_project_store.in_progress_projects_in_chunk(chunk_coord):
 		var result: Dictionary = _construction_project_store.advance_project_labor(
 			project.id, elapsed, capacity, _recipe_book, _household_store
 		)
 		if result.get("action", "") == "completed":
 			_place_completed_construction_project(project)
+
+
+## The real, live chunk-load caller for docs/concept/timber_construction.md's
+## "Deciding what to build, and who builds it" section: gives a settlement
+## the chance to decide WHICH project to start next (SettlementBuildDecision,
+## which also composes the "double-fix cancellation" sweep), closing the gap
+## _apply_construction_labor_catchup's own doc comment names ("this used to
+## only ever advance real, already-reserved-material work... 'which
+## structure should this settlement build next' ... remains unimplemented").
+##
+## Deliberately runs on EVERY real chunk load, NOT gated on
+## `_unloaded_construction_labor`'s own "was there already in-progress work"
+## record above -- a settlement with ZERO in-progress projects still needs a
+## real chance to decide whether to START one; gating on that record would
+## mean a settlement that has never yet started building could never be
+## reached by this call at all. Runs BEFORE _apply_construction_labor_catchup
+## (called right after this one, see the shared call site in _load_chunk) so
+## a project this SAME call decides to abandon or start is resolved before
+## the completed-work sync runs, not racing it.
+##
+## No-ops for a chunk with no real households (household_count_for_settlement
+## == 0) -- an ordinary wilderness chunk has no settlement decision to make,
+## and this avoids the real shortfall/structure-scan work below for the vast
+## majority of chunks that are not settlements at all.
+##
+## **Named, honest limitation** (see docs/concept/timber_construction.md's
+## own "Deciding what to build" section for the fuller account): `origin` is
+## `Vector2i.ZERO` -- bookkeeping only, the SAME "not real siting" honest gap
+## SettlementConstruction._handle_build_producer_first's own queued producer
+## project already carries (this pass does not add a real placement/
+## collision algorithm either). `household_id` is the settlement's own
+## lexicographically-first household id -- deterministic, but an arbitrary
+## real household to credit a communal structure's eventual property to;
+## there is no real "settlement-owned" property concept yet to grant it to
+## instead. And per production_shortfall_quests_for_settlement's own real,
+## narrow wiring (OccupationProduction only grounds "hunter"->cooked_meat and
+## "blacksmith"->stone_pickaxe today, and NEITHER recipe requires a
+## structure) -- this real decision can genuinely fire (double-fix
+## cancellation is real and reachable today, see test_earth_chunk_manager.gd),
+## but the "start a producer project from a real detected shortfall" branch
+## essentially never finds an actionable one in real play yet, honestly, the
+## same "real, reachable, but rarely the lived case today" honesty this doc's
+## VillageRenderer._stamp_house partial-completion entry already carries.
+func _apply_settlement_build_decision(chunk_coord: Vector2i) -> void:
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_ids := _households_in_settlement(settlement_id)
+	if household_ids.is_empty():
+		return
+	household_ids.sort()
+
+	var household_occupations := _household_occupations_for_settlement(settlement_id)
+	var spare_capacity := SettlementSpareCapacity.for_settlement(household_ids.size(), household_occupations)
+	var market := _market_store.market_for(settlement_id)
+	var present_structure_ids := _present_structure_ids_for_settlement_chunk(chunk_coord)
+	var shortfalls := production_shortfall_quests_for_settlement(settlement_id)
+
+	SettlementBuildDecision.decide_and_advance(
+		_construction_project_store, market, chunk_coord, Vector2i.ZERO, household_ids[0],
+		present_structure_ids, _recipe_book, shortfalls, spare_capacity
+	)
 
 
 ## Closes docs/concept/timber_construction.md's own previously-named gap:
@@ -6770,6 +7064,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _snow_layer != null:
 		_terrain_renderer.erase(_snow_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+		_forget_snow_paint_for_chunk(chunk_coord)
 	if _hidden_roof_chunk_coord == chunk_coord:
 		_hidden_roof_chunk_coord = null
 		_hidden_roof_room_cells = []

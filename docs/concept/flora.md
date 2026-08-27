@@ -894,6 +894,32 @@ winter, blossom is spring, leaf is summer, turning is autumn. Written down
 because it is exactly the kind of thing that silently works until a sheet is
 authored in a different order.
 
+**But WHEN a tree wears each frame is phenology, not the calendar.** Reported
+from a world that started in winter: pink blossom and green crowns standing in
+the snow. The mapping above was not at fault — `SeasonTransition` spends the
+last third of every season turning into the next, so a third of winter was
+already reporting "turning into spring", and blossom is 2.5x as dense a picture
+as bare branches, so a sixth of a turn already reads as pink. `TreePhenology`
+(`src/world/tree_phenology.gd`) now owns the canopy's own schedule: **winter is
+bare end to end** (its pre-turn is suppressed outright — a canopy's spring
+arrival state IS bare, so there is nothing to blend toward), **blossom is a
+brief early-spring event** derived from real bloom records (opening + full
+bloom = 12 of a 92-day spring, so 13% of an in-game spring against the 34% an
+ordinary turn takes), and **leaf-out follows it gradually** on the same six
+quantised steps. Summer and autumn are untouched. Full spec, with the measured
+frame densities that explain the report, in [seasons.md](seasons.md)'s "Winter
+stays bare: the canopy has its own phenology".
+
+Two consequences of that worth having here, where the sheets are described.
+The blossom slot is only a *flowering* frame for cherry: the nut and orchard
+sheets draw it as the yellow-green flush of a bursting bud, which reads
+correctly as new leaf in early spring and read oddly across a whole spring.
+And **pine is an evergreen in its art as well as in its data** — its bare-slot
+frame keeps 84% of its leaf-frame foliage in a grey-green rather than showing
+branches — so it walks the same four stages as four tones of conifer and is
+unaffected by any of this. Both are pinned by tests, because both are claims
+about pixels somebody could repaint.
+
 **Fruit is two frames, unripe and ripe**, so a crop coming in is visible on the
 tree before it can be picked -- the same information the fruiting model already
 tracks (see `FruitingModel`) but shown rather than hidden. Fruit is scattered

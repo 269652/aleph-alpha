@@ -16,6 +16,9 @@ const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ExperienceTrack = preload("res://src/gameplay/experience_track.gd")
 const SkillTree = preload("res://src/gameplay/skill_tree.gd")
 const KeystonePassive = preload("res://src/gameplay/keystone_passive.gd")
+const SkillWeb = preload("res://src/gameplay/skill_web.gd")
+const GenomeSkillNet = preload("res://src/gameplay/genome_skill_net.gd")
+const HeroDna = preload("res://src/gameplay/hero_dna.gd")
 const EcologicalLiteracy = preload("res://src/gameplay/ecological_literacy.gd")
 const Equipment = preload("res://src/gameplay/equipment.gd")
 const FishingSession = preload("res://src/gameplay/fishing_session.gd")
@@ -233,8 +236,26 @@ const HOTBAR_SLOT_COUNT := 5
 ## on a key, which the old mirror-the-first-5-stacks hotbar made impossible.
 var hotbar := Hotbar.new(HOTBAR_SLOT_COUNT)
 var experience := ExperienceTrack.new()
+## Kept although allocation now runs on skill_web below: SkillTree remains the
+## OWNER of the twelve original nodes' stat/bonus/cost numbers, which the web
+## reads out of it rather than restating (see SkillWeb's wedge table). Nothing
+## on Player calls it directly any more.
 var skill_tree := SkillTree.new()
 var keystones := KeystonePassive.new()
+## The PoE-style passive WEB (docs/concept/skills.md) -- the graph allocation
+## actually runs on. Per character, not shared: apply_dna_seed grafts this
+## character's own generated genome net into THIS instance.
+var skill_web := SkillWeb.new()
+## The DNA roll this character came out of (see HeroDna). `dna_resonance` is the
+## per-archetype 0..1 affinity that sets the web's exchange rate; `dna_seed` also
+## resolves DNA-flavoured node variants. Empty/0 means "no genome rolled", which
+## the web reads as neutral -- a dedicated-server or test spawn is not penalised
+## for not having been through the character creator.
+var dna_seed := 0
+var dna_resonance: Dictionary = {}
+## This character's unique grafted cluster (see GenomeSkillNet). Derived from
+## dna_seed, so only the seed is persisted.
+var genome_net: Dictionary = {}
 ## XP-award arithmetic for non-combat "ecological literacy" sources (see
 ## harvest_fruit_from_tree/sell_food_to_village, docs/concept/progression.md).
 var _ecological_literacy := EcologicalLiteracy.new()
@@ -244,6 +265,11 @@ var equipment := Equipment.new()
 ## concept/progression.md). Skill bonuses fold into derived stats.
 var allocated_nodes: Dictionary = {}
 var unlocked_keystones: Dictionary = {}
+## node_id -> the points that node ACTUALLY cost when it was taken. Refunds pay
+## back this, not a recomputed price: free respec (concept/classes.md) has to be
+## exactly free, and a recomputed cost would quietly differ if anything about
+## the character's exchange rate ever moved between taking and refunding.
+var _skill_points_paid: Dictionary = {}
 ## Skill-tree attack bonus, kept as a cached sum applied in _perform_attack.
 var _skill_attack_bonus := 0.0
 ## Points a keystone costs to unlock (on top of its node-count gate).
@@ -732,6 +758,26 @@ func apply_class(class_name_value: String, stats: Dictionary, chosen_appearance:
 	appearance = look
 	if _character_view != null:
 		_character_view.apply_appearance(look)
+	_grant_class_start_node()
+
+
+## Your class's own start node on the web comes free, the way Path of Exile
+## hands you the one you begin on: paying a level-up point for "you are a mage"
+## would be a tax on existing, and without it a level-1 character owns nothing
+## and so can path nowhere.
+##
+## Called only from apply_class, which has just RESET max_health to its class
+## base -- so the bonus is applied unconditionally (it is part of the lens that
+## reset was rebuilding) while the allocation itself stays idempotent. A start
+## node from a previously chosen class is deliberately left allocated: owning
+## another wedge's start is a legal, pathable state, not a leftover.
+func _grant_class_start_node() -> void:
+	var start := skill_web.start_node_for(character_class)
+	if start == "":
+		return
+	allocated_nodes[start] = true
+	_skill_points_paid[start] = 0
+	_apply_web_node(start)
 
 
 ## Snapshots exactly the state docs/concept/persistence.md defines as worth
@@ -769,6 +815,10 @@ func to_save_dict() -> Dictionary:
 		"experience_unspent_points": experience.unspent_points,
 		"allocated_nodes": allocated_nodes.duplicate(),
 		"unlocked_keystones": unlocked_keystones.duplicate(),
+		# Only the SEED, never the generated net: the net is derived from it, so
+		# storing both would be two copies of one fact that could disagree.
+		"dna_seed": dna_seed,
+		"skill_points_paid": _skill_points_paid.duplicate(),
 		"inventory": inventory_data,
 		"equipment": equipment_data,
 		"hotbar": hotbar_data,
@@ -796,6 +846,21 @@ func apply_save_dict(data: Dictionary) -> void:
 	experience.unspent_points = data.get("experience_unspent_points", experience.unspent_points)
 	allocated_nodes = (data.get("allocated_nodes", allocated_nodes) as Dictionary).duplicate()
 	unlocked_keystones = (data.get("unlocked_keystones", unlocked_keystones) as Dictionary).duplicate()
+	_skill_points_paid = (data.get("skill_points_paid", _skill_points_paid) as Dictionary).duplicate()
+	# Rebuilds the genome net from the seed BEFORE anything reads the web, so a
+	# reloaded character's own unique nodes are grafted again rather than
+	# silently missing from a save that still lists them as allocated. A save
+	# written before DNA was persisted has no seed and simply stays neutral.
+	if int(data.get("dna_seed", 0)) != 0:
+		apply_dna_seed(int(data["dna_seed"]))
+	# A keystone unlocked before keystones lived on the web was only ever
+	# recorded in unlocked_keystones; the web needs it in allocated_nodes too or
+	# a reloaded build has a hole in the middle of its own path. Guarded on the
+	# web actually knowing the id -- a save must never be able to inject a node
+	# the graph has no place for.
+	for keystone_id in unlocked_keystones:
+		if unlocked_keystones[keystone_id] and skill_web.has(keystone_id):
+			allocated_nodes[keystone_id] = true
 
 	inventory = Inventory.new(inventory.slot_count)
 	for entry in data.get("inventory", []):
@@ -831,32 +896,90 @@ func gain_experience(amount: int) -> int:
 	return levels
 
 
-## Allocates a skill-tree node if affordable (see SkillTree), spending its
-## point cost and applying its stat bonus immediately. Returns true on success.
+## What `node_id` costs THIS character: the web's base price at this genome's
+## resonance exchange rate (see SkillWeb.point_cost / concept/skills.md).
+func skill_point_cost(node_id: String) -> int:
+	return skill_web.point_cost(node_id, dna_resonance)
+
+
+## Total allocated bonus for `stat_name` at this character's exchange rate, with
+## DNA-flavoured nodes resolved. The single reader for every stat the web grants
+## but Player does not cache (meat_yield, carpentry_level, ...) -- always in sync
+## with allocated_nodes, no second accumulator to drift.
+func skill_bonus(stat_name: String) -> float:
+	return skill_web.total_bonus(stat_name, allocated_nodes, dna_resonance, dna_seed)
+
+
+## Takes a node on the passive web: it must be REACHABLE (your class's own start
+## node, or next to something you already own -- concept/skills.md's pathing
+## rule) and affordable at this genome's price. Returns true on success.
 func allocate_skill(node_id: String) -> bool:
-	if not skill_tree.can_allocate(node_id, allocated_nodes, experience.unspent_points):
+	if not skill_web.can_allocate(node_id, allocated_nodes, experience.unspent_points,
+			character_class, dna_resonance):
 		return false
-	var info := skill_tree.node_info(node_id)
-	if not experience.spend_points(int(info.get("point_cost", 1))):
+	var cost := skill_point_cost(node_id)
+	if not experience.spend_points(cost):
 		return false
-	allocated_nodes = skill_tree.allocate(node_id, allocated_nodes)
-	_apply_skill_stat(info.get("stat_name", ""), float(info.get("bonus_amount", 0.0)))
+	allocated_nodes = skill_web.allocate(node_id, allocated_nodes)
+	_skill_points_paid[node_id] = cost
+	_apply_web_node(node_id)
 	return true
 
 
-## Unlocks a keystone passive if its node-count gate is met and the player can
-## pay KEYSTONE_POINT_COST (see KeystonePassive). Returns true on success.
+## Keystones are ordinary web nodes with an extra floor: KeystonePassive's own
+## required_node_count, kept as a second, legible statement of "a keystone is the
+## end of a real investment" on top of the path you had to walk to reach it.
+## Also recorded in `unlocked_keystones`, which persistence and the land_sense
+## HUD readout both still read.
 func unlock_keystone(keystone_id: String) -> bool:
 	if unlocked_keystones.get(keystone_id, false):
 		return false
 	if not keystones.can_unlock(keystone_id, allocated_nodes.size()):
 		return false
-	if not experience.spend_points(KEYSTONE_POINT_COST):
+	if not allocate_skill(keystone_id):
 		return false
 	unlocked_keystones[keystone_id] = true
-	var info := keystones.keystone_info(keystone_id)
-	_apply_skill_stat(info.get("stat_name", ""), float(info.get("bonus_amount", 0.0)))
 	return true
+
+
+## Free respec (concept/classes.md): hands back exactly what the node cost and
+## removes its bonus. Refused when it would ORPHAN the rest of the build -- you
+## cannot keep a keystone while refunding the road you walked to reach it -- and
+## for the class start node, which is not something you bought.
+func refund_skill(node_id: String) -> bool:
+	if not allocated_nodes.get(node_id, false):
+		return false
+	if node_id == skill_web.start_node_for(character_class):
+		return false
+	if not skill_web.can_refund(node_id, allocated_nodes, character_class):
+		return false
+	_apply_web_node(node_id, -1.0)
+	allocated_nodes = skill_web.refund(node_id, allocated_nodes)
+	unlocked_keystones.erase(node_id)
+	experience.unspent_points += int(_skill_points_paid.get(node_id, skill_point_cost(node_id)))
+	_skill_points_paid.erase(node_id)
+	return true
+
+
+## Applies (sign +1) or removes (sign -1) one web node's live stat effect, with
+## its DNA-flavoured variant resolved and this genome's gain multiplier applied.
+func _apply_web_node(node_id: String, sign_multiplier: float = 1.0) -> void:
+	var variant := skill_web.flavored_variant(node_id, dna_seed)
+	_apply_skill_stat(String(variant["stat_name"]),
+		skill_web.effective_bonus(node_id, dna_resonance) * sign_multiplier)
+
+
+## Rolls this character's genome from `seed_value` (see HeroDna), adopts the
+## resonance it rolled as the web's exchange rate, and grafts the unique skill
+## net that genome generates (see GenomeSkillNet / concept/skills.md). Only the
+## SEED is persisted -- everything here is derived from it, so a reload rebuilds
+## the identical net. Idempotent.
+func apply_dna_seed(seed_value: int) -> void:
+	dna_seed = seed_value
+	var genome := HeroDna.new().roll(seed_value)
+	dna_resonance = genome["resonance"]
+	genome_net = GenomeSkillNet.new().generate(genome)
+	skill_web.graft(genome_net)
 
 
 ## Applies a skill/keystone stat bonus to the live character. max_health also
@@ -1136,7 +1259,7 @@ func _meets_required_skill(recipe_id: String) -> bool:
 	var requirement := _crafting_recipe_book.recipe_required_skill(recipe_id)
 	if requirement.is_empty():
 		return true
-	var have_level := skill_tree.total_bonus(requirement["stat_name"], allocated_nodes)
+	var have_level := skill_bonus(String(requirement["stat_name"]))
 	return have_level >= requirement["level"]
 
 
@@ -1492,7 +1615,7 @@ func _butcher_step() -> void:
 
 	if positions.is_empty():
 		return
-	var meat_yield_bonus := skill_tree.total_bonus("meat_yield", allocated_nodes)
+	var meat_yield_bonus := skill_bonus("meat_yield")
 	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
 		carcasses[index].butcher(meat_yield_bonus)
 		# Anthrax-like spillover (docs/concept/disease.md): butchering a
@@ -1629,7 +1752,7 @@ func _chop_step() -> void:
 		positions.append(tree.position)
 
 	var has_saw: bool = equipped_item != null and equipped_item.is_saw()
-	var carpentry_level := skill_tree.total_bonus("carpentry_level", allocated_nodes)
+	var carpentry_level := skill_bonus("carpentry_level")
 	var can_saw := has_saw and carpentry_level >= CARPENTRY_LEVEL_FOR_SAWING
 
 	var hit_indices := _melee_attack.targets_in_range(position, positions, ATTACK_RANGE)

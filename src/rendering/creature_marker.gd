@@ -421,6 +421,19 @@ var _cached_prey: Array = []
 ## transmission (see _herd_disease_step) -- separate from _cached_prey,
 ## which only ever populates for a predator (see _nearby_prey_creatures).
 var _cached_nearby_herbivores: Array = []
+
+## Consolidated per-tick classification of the "creature" group (see
+## _scan_nearby_creatures): every other creature within the tick's threat
+## radius that is a predator, and every other creature within SENSE_RADIUS
+## that is not. _nearby_threat_creatures/_nearby_prey_creatures/
+## _nearby_herbivore_creatures all read these instead of independently
+## rescanning get_tree().get_nodes_in_group(GROUP_NAME).
+var _scan_threat_candidates: Array = []
+var _scan_nonpredator_candidates: Array = []
+## Increments once per real get_tree().get_nodes_in_group(GROUP_NAME) scan
+## (see _scan_nearby_creatures) -- exists so a test can prove a whole
+## sensing tick performs exactly one such scan, not one per bucket accessor.
+var _creature_scan_count := 0
 var _cached_food_direction := Vector2.ZERO
 var _cached_water_direction := Vector2.ZERO
 
@@ -733,11 +746,15 @@ func _process(frame_delta: float) -> void:
 		# Widened while already fleeing so the creature can't straddle one
 		# threshold and dither in and out of it -- see FLEE_RELEASE_RADIUS.
 		var threat_radius := FLEE_RELEASE_RADIUS if _is_fleeing else SENSE_RADIUS
+		# One consolidated pass over the "creature" group per tick (see
+		# _scan_nearby_creatures) instead of every bucket accessor below
+		# independently rescanning it.
+		_scan_nearby_creatures(threat_radius)
 		# A tamed animal is not afraid of people any more (see fears_players):
 		# players are sensed as threats, so leaving this alone would have a
 		# horse the player just tamed spend the rest of its life fleeing them.
 		var sensed_players := _nearby_in_group(PLAYER_GROUP, threat_radius) if fears_players() else []
-		_cached_threats = sensed_players + _nearby_threat_creatures(threat_radius)
+		_cached_threats = sensed_players + _nearby_threat_creatures()
 		_cached_caution_threats = (
 			_nearby_in_group(PLAYER_GROUP, CAUTION_RADIUS) if fears_players() else []
 		)
@@ -2005,42 +2022,60 @@ func _nearby_in_group(group: String, radius: float = SENSE_RADIUS) -> Array:
 	return result
 
 
+## Single per-tick scan of the "creature" group (see SENSE_INTERVAL),
+## classifying every other creature into the two buckets
+## _nearby_threat_creatures/_nearby_prey_creatures/_nearby_herbivore_creatures
+## need -- predators within this tick's threat_radius, and non-predators
+## within SENSE_RADIUS -- in one pass instead of each accessor independently
+## calling get_tree().get_nodes_in_group(GROUP_NAME) and re-filtering the
+## whole population (previously up to 2x per tick for a herbivore marker,
+## across however many creature markers are loaded that's O(n^2)).
+func _scan_nearby_creatures(threat_radius: float) -> void:
+	_creature_scan_count += 1
+	var threats: Array = []
+	var nonpredators: Array = []
+	for node in get_tree().get_nodes_in_group(GROUP_NAME):
+		if node == self or node.info == null:
+			continue
+		var distance := position.distance_to(node.position)
+		if node.info.is_predator:
+			if distance <= threat_radius:
+				threats.append(node)
+		elif distance <= SENSE_RADIUS:
+			nonpredators.append(node)
+	_scan_threat_candidates = threats
+	_scan_nonpredator_candidates = nonpredators
+
+
 ## Other creatures within sense range that are predators to me (a herbivore's
 ## threats). Predators aren't threatened by other creatures, only by the player.
-func _nearby_threat_creatures(radius: float = SENSE_RADIUS) -> Array:
+## Reads the current tick's _scan_nearby_creatures classification.
+func _nearby_threat_creatures() -> Array:
 	if info.is_predator:
 		return []
-	var result: Array = []
-	for node in _nearby_in_group(GROUP_NAME, radius):
-		if node.info != null and node.info.is_predator:
-			result.append(node)
-	return result
+	return _scan_threat_candidates
 
 
-## Herbivores within sense range that a predator can hunt.
+## Herbivores within sense range that a predator can hunt. Reads the current
+## tick's _scan_nearby_creatures classification.
 func _nearby_prey_creatures() -> Array:
 	if not info.is_predator:
 		return []
-	var result: Array = []
-	for node in _nearby_in_group(GROUP_NAME):
-		if node.info != null and not node.info.is_predator:
-			result.append(node)
-	return result
+	return _scan_nonpredator_candidates
 
 
 ## Other herbivore-role creatures within sense range -- for herd disease
 ## transmission (see _herd_disease_step), NOT hunting: unlike
 ## _nearby_prey_creatures (predator-only), this only ever populates for a
 ## herbivore-role individual, since herd disease spreads herbivore to
-## herbivore, never through a predator.
+## herbivore, never through a predator. Reads the current tick's
+## _scan_nearby_creatures classification (the same bucket _nearby_prey_creatures
+## reads -- the two never populate for the same individual, since one requires
+## being a predator and the other requires not being one).
 func _nearby_herbivore_creatures() -> Array:
 	if info.is_predator:
 		return []
-	var result: Array = []
-	for node in _nearby_in_group(GROUP_NAME):
-		if node.info != null and not node.info.is_predator:
-			result.append(node)
-	return result
+	return _scan_nonpredator_candidates
 
 
 ## Cached node lists can span several frames (see SENSE_INTERVAL); a cached

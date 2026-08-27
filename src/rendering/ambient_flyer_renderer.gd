@@ -446,6 +446,32 @@ func build_flyer(parent: Node2D, species: String, position: Vector2, seed_value:
 	)
 
 
+## Places one songbird directly, for callers assembling a whole scene by hand
+## rather than spawning a chunk's worth -- the same shape FishRenderer
+## .spawn_fish_at already established for the character preview diorama's own
+## pond (reported live, for that exact diorama: "add ... birds"). No
+## scent/worm/seed/fruit world is wired (see _build_marker) -- a bird placed
+## this way just flies its home-tethered ambient wander, the same "purely
+## decorative, no foraging" contract the diorama's own fish already have.
+##
+## `radius` overrides BIRD_RADIUS -- the real world's own wander radius (70
+## units) comfortably exceeds a diorama-scale footprint, so a caller with a
+## small scene can scale the circling down to fit, the same reason
+## CharacterPreviewDiorama.FISH_SWIM_SPEED already scales fish movement down
+## rather than reusing FishMarker's own real-ocean speed untouched.
+func build_bird(
+	parent: Node2D, species: String, position: Vector2, seed_value: int, radius: float = BIRD_RADIUS
+) -> AmbientFlyerMarker:
+	return _build_marker(
+		parent,
+		species,
+		position,
+		seed_value,
+		AmbientFlyerMovement.new(BIRD_SPEED, radius, BIRD_INTERVAL),
+		_bird_sprite
+	)
+
+
 func _build_marker(
 	parent: Node2D,
 	species: String,

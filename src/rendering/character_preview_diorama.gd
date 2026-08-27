@@ -24,6 +24,7 @@ const CharacterActionPicker = preload("res://src/rendering/character_action_pick
 const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrain_sprite.gd")
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 
 ## Which weapon the diorama's hero wears for the SWING action -- any real
 ## weapon-kind item id works here (see item_catalog.gd); an iron sword is
@@ -51,14 +52,18 @@ const PEBBLE_DIAMETER_CM := 4.0
 ## CharacterPreviewLayout._position_clear_of_pond's own bounded-retry
 ## reasoning (a pathological footprint/seed could leave little clear room).
 const MAX_TARGET_ATTEMPTS := 30
-## Slower than CharacterStroll.WALK_SPEED -- a small pond fish drifts, it
-## doesn't march.
+## Slower than CreatureWander.WANDER_SPEED (24) -- a small pond fish drifts,
+## it doesn't march. Passed to FishMarker.configure_wander (see _build_fish),
+## NOT CharacterStroll -- fish are driven by the real wander algorithm now,
+## not a point-to-point walk (reported live: "fish don't swim like in the
+## real game").
 const FISH_SWIM_SPEED := 4.0
-## Matches FishMarker.TURN_RATE (radians/sec) -- its own built-in wander is
-## disabled here (see _fish_targets' own doc comment), but the same turn
-## smoothing still applies to keep a fish reading as steering, not
-## snapping.
-const FISH_TURN_RATE := 3.0
+## The real world's own AmbientFlyerRenderer.BIRD_RADIUS (70 world units)
+## comfortably exceeds this diorama's whole ~96-unit FOOTPRINT -- scaled down
+## for the same reason FISH_SWIM_SPEED already scales fish movement for the
+## tiny pond, so a bird's circling stays mostly on-screen instead of spending
+## most of its time off past the frame's own edge.
+const BIRD_WANDER_RADIUS := 20.0
 
 var character_view: Node2D = null
 ## The ground plane's own tiles (see _build_ground) -- kept so tests can
@@ -67,6 +72,7 @@ var ground_tiles: Array[Node2D] = []
 var tree_nodes: Array[Node2D] = []
 var pebble_nodes: Array[Node2D] = []
 var fish_nodes: Array[Node2D] = []
+var bird_nodes: Array[Node2D] = []
 
 var _layout: CharacterPreviewLayout.Result
 var _stroll_target := Vector2.ZERO
@@ -83,23 +89,22 @@ var _action_time_remaining := 0.0
 ## the SAME hero always "fishes" from the same place in their own little
 ## scene rather than wandering to a new spot each time.
 var _fishing_spot := Vector2.ZERO
-## Per-fish stroll target, parallel to fish_nodes -- FishMarker's own
-## built-in wander (CreatureWander.WANDER_RADIUS, a flat 40 world units)
-## is tuned for real ocean/lake bodies far bigger than this diorama's
-## whole ~21-unit-radius pond, so an unconfined fish drifts clean out of
-## the water within moments (reported live: "the pond has no fish" --
-## they were there, just no longer visibly IN the pond by the time it was
-## looked at). Each diorama fish has its OWN _process disabled (see
-## _build_fish) and is driven here instead, the same CharacterStroll logic
-## the hero's own stroll uses, confined to a box comfortably inside the
-## pond's own rim.
-var _fish_targets: Array[Vector2] = []
 ## The grass patch's own instance (RefCounted, not a node -- see
 ## _build_grass) and the MultiMeshInstance2D it draws into, kept so
 ## _process can report the hero's current position to it every frame (see
 ## _build_grass's own doc comment on why).
 var _grass_patch: IllustratedGrassPatch = null
 var _grass_mmi: MultiMeshInstance2D = null
+## The pond's own world-space bounding rect (set in _build_pond) -- what
+## biome_at_global checks a global tile's own centre against, and the same
+## rect test_fish_stay_within_the_ponds_real_bounds_via_shore_avoidance
+## verifies fish never cross.
+var _pond_bounds := Rect2()
+## The pond's own WaterShader instance -- kept (not just its shared
+## material) so record_water_disturbance can forward a fish's own ripple
+## straight to it, and _process can age those ripples every frame the same
+## way EarthChunkManager does for the real world's own water.
+var _water_shader: WaterShader = null
 
 
 ## Tears down and rebuilds the whole diorama for `dna_seed` -- the WORLD
@@ -124,7 +129,7 @@ func build(dna_seed: int) -> void:
 	tree_nodes = []
 	pebble_nodes = []
 	fish_nodes = []
-	_fish_targets = []
+	bird_nodes = []
 	character_view = null
 	_grass_patch = null
 	_grass_mmi = null
@@ -145,6 +150,7 @@ func build(dna_seed: int) -> void:
 	_build_pebbles()
 	_build_fish()
 	_build_trees()
+	_build_birds()
 	_build_character()
 
 	_stroll_target = character_view.position
@@ -212,19 +218,13 @@ func _process(delta: float) -> void:
 	if _grass_patch != null:
 		_grass_patch.set_walker_position(character_view.position)
 
-	for i in fish_nodes.size():
-		var fish: Node2D = fish_nodes[i]
-		if CharacterStroll.has_arrived(fish.position, _fish_targets[i]):
-			_fish_targets[i] = _pick_new_fish_target()
-		var fish_direction: Vector2 = _fish_targets[i] - fish.position
-		if fish_direction.length() > 0.01:
-			# Turned gradually toward the target, not snapped -- the same
-			# FishMarker.TURN_RATE smoothing its own (now-disabled)
-			# built-in wander used, so a fish reads as steering through
-			# the water instead of instantly flipping to face each new
-			# target (reported live: "can't swim").
-			fish.rotation = lerp_angle(fish.rotation, fish_direction.angle(), clampf(FISH_TURN_RATE * delta, 0.0, 1.0))
-		fish.position = CharacterStroll.advance(fish.position, _fish_targets[i], delta, FISH_SWIM_SPEED)
+	# Fish drive themselves now (Godot's own automatic per-frame _process --
+	# see _build_fish's own doc comment); this diorama's only remaining job
+	# for them is aging their ripples, the same way EarthChunkManager ages
+	# its own real-world disturbances every frame -- nothing else would do
+	# it here.
+	if _water_shader != null:
+		_water_shader.advance_disturbances(delta)
 
 
 func _walk_toward(target: Vector2, delta: float) -> void:
@@ -304,17 +304,6 @@ func _facing_string() -> String:
 			return "down"
 
 
-## A random point comfortably inside the pond -- CharacterPreviewLayout
-## .FISH_SAFE_RADIUS_FRACTION of its own radius (the SAME fraction the
-## initial spawn positions already use, not a separately hand-copied
-## number -- see that constant's own doc comment on why it's this
-## conservative), so a fish's own drawn body never overhangs the shore.
-func _pick_new_fish_target() -> Vector2:
-	var half_extent := _layout.pond_radius * CharacterPreviewLayout.FISH_SAFE_RADIUS_FRACTION
-	var bounds := Rect2(_layout.pond_center - Vector2.ONE * half_extent, Vector2.ONE * half_extent * 2.0)
-	return CharacterStroll.pick_target(bounds, _rng)
-
-
 ## The ground the whole diorama stands on. There was none at all before:
 ## grass, pond, pebbles and trees were drawn straight onto the SubViewport's
 ## transparent background, so what showed between them was the creator
@@ -388,49 +377,188 @@ func _build_grass() -> void:
 	# orders nodes WITHIN the same group.
 	mmi.z_index = -1
 	add_child(mmi)
-	var cells: Array[Dictionary] = []
+	var long_positions := _pick_long_grass_positions(_layout.grass_positions)
+	# fill_band now takes pre-expanded per-CARD specs (see
+	# IllustratedGrassPatch.cards_for_cell/fill_band's own doc comments) --
+	# this diorama has no Y-sort bands of its own (one single MultiMesh, see
+	# the z_index comment above), so every cell's cards are simply expanded
+	# and flattened into the one call.
+	var card_specs: Array[Dictionary] = []
 	for grass_position in _layout.grass_positions:
-		cells.append({"seed": hash(grass_position), "ground_position": grass_position, "growth": 1.0})
-	patch.fill_band(mmi, mmi.position, cells)
+		var growth := LONG_GRASS_GROWTH if long_positions.has(grass_position) else 1.0
+		var cell_spec := {"seed": hash(grass_position), "ground_position": grass_position, "growth": growth}
+		card_specs.append_array(IllustratedGrassPatch.cards_for_cell(cell_spec))
+	patch.fill_band(mmi, mmi.position, card_specs)
 	# Kept for _process (see set_walker_position's own call site there) --
 	# reported live: "the grass blades don't part when it walks through".
 	_grass_patch = patch
 	_grass_mmi = mmi
 
 
+## A few clumps render taller than the rest (reported live: "add a few long
+## grass blades") -- growth is IllustratedGrassPatch.fill_band's own real
+## per-clump scale factor (see that file's `maxf(0.3, entry.growth)`), the
+## same mechanism a genuinely overgrown real-world patch would use, just fed
+## a value the real world's own TallGrass never actually reaches (growth is
+## documented there as "0..1; 1 is mature" -- see that file's own
+## get_growth). A deliberate, small stretch of a real mechanism for a
+## decorative touch, not new art or a new rendering path.
+##
+## Static and pure (no Godot nodes) so it's directly testable: ranks every
+## clump by distance to the footprint's own centre and keeps the closest
+## LONG_GRASS_MAX_COUNT. First tried ranking by hash instead (the same
+## deterministic "small subset via hash rank" convention AmbientFlyerRenderer
+## ._spawn_species already uses to pick which cells of a larger pool
+## qualify) -- but that has no spatial preference at all, so the accent
+## could land anywhere the ordinary scatter did, including right at a
+## corner easy to miss entirely (reported live: "grass blades exist, but
+## they should be more in the center"). Distance-to-centre instead puts the
+## accent where it's actually seen.
+const LONG_GRASS_GROWTH := 1.5
+const LONG_GRASS_MAX_COUNT := 3
+
+
+static func _pick_long_grass_positions(positions: Array[Vector2]) -> Array[Vector2]:
+	var center := FOOTPRINT * 0.5
+	var ranked: Array[Vector2] = positions.duplicate()
+	ranked.sort_custom(func(a, b): return a.distance_to(center) < b.distance_to(center))
+	var picked: Array[Vector2] = []
+	for i in mini(LONG_GRASS_MAX_COUNT, ranked.size()):
+		picked.append(ranked[i])
+	return picked
+
+
+## One real water tile per TerrainRenderer.TILE_SIZE (16 world units) --
+## matches _build_ground's own grid, and the real world's own water overlay
+## (EarthChunkManager._paint_water_overlay / set_water_layer), rather than
+## the diorama's earlier single 32px ProceduralShoreDistanceSprite texture
+## stretched over the pond's WHOLE diameter.
+##
+## That single-stretched-tile approach was itself a real, deliberate fix at
+## the time (see the git history: "should be more rectangular not a real
+## circle" replaced a genuinely circular pond with this) -- but it meant
+## EVERY pixel of the pond, all the way to its own centre, measured shore-
+## distance from ALL 4 sides simultaneously, because the whole pond was
+## being treated as a single tile touching land on every side regardless of
+## its own size. WaterShader's edge_alpha only reaches full opacity within
+## the inner ~45-50% of a tile's OWN half-width (see WaterShader.EDGE_ALPHA_
+## FADE_END's own doc comment) -- stretched across the pond's full diameter,
+## that meant the genuinely fully-opaque "obviously water" region was a
+## small core surrounded by a fade covering most of the pond's own area
+## (reported live: "it's supposed to fill the entire rectangle").
+##
+## Tiling instead reuses the real world's own actual pattern: a cell with NO
+## land-facing side (fully interior to the grid) renders as
+## ProceduralShoreDistanceSprite.generate_deep_water_image() -- uniformly
+## Color(1,1,1,1), no fade at all -- and only a cell that genuinely touches
+## the grid's own rim fades on the side(s) actually facing outward
+## (generate_image(land_directions)). A simplified port of the real world's
+## own per-cell decision (TerrainRenderer.atlas_coords_for_water_overlay /
+## EarthChunkManager._land_directions_at): this diorama's pond is small
+## enough, and never needs the real system's intermediate "a few rings out"
+## tier (TerrainRenderer.RING_MAX/generate_ring_image) at all -- every cell
+## is either touching the rim or fully interior.
+const POND_TILE_WORLD_SIZE := float(TerrainRenderer.TILE_SIZE)
+
+
 func _build_pond() -> void:
-	var pond := Sprite2D.new()
+	var pond := Node2D.new()
 	pond.name = "Pond"
-	# ProceduralShoreDistanceSprite, with real shore on all 4 cardinal
-	# sides -- reported live, after a first attempt at a genuinely circular
-	# pond (CircularPondSprite, a real fix for a real "seems tinted" bug at
-	# the time -- an empty land_directions list gave a uniform "no shore
-	# anywhere" fill with no alpha mask, a flat untextured tint): "should be
-	# more rectangular not a real circle". This is the SAME class the real
-	# terrain water tiles use (see that class's own doc comment); passing
-	# all 4 directions gives a real shore-to-centre gradient in a clean
-	# rectangular silhouette -- deep water in the middle, fading toward
-	# every edge -- with no alpha masking or blocky low-res circle-edge
-	# involved at all.
-	const ALL_SIDES: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
-	pond.texture = ProceduralShoreDistanceSprite.new().generate_texture(ALL_SIDES)
-	pond.centered = true
-	var texture_size: Vector2 = pond.texture.get_size()
-	var diameter := _layout.pond_radius * 2.0
-	pond.scale = Vector2(diameter, diameter) / texture_size
-	pond.position = _layout.pond_center
-	pond.material = WaterShader.new().shared_material()
-	# _build_trees enables y_sort_enabled on this whole diorama root, which
-	# would otherwise compare the pond's own CENTRE position against each
-	# fish's position individually -- fish above the pond's centre would
-	# draw correctly on top, but fish below it would sort BEHIND the pond
-	# sprite and vanish, since y-sort has no idea the pond is one large flat
-	# ground feature rather than a small discrete object. A z_index below
-	# every other sibling's default (0) makes the pond always draw first
-	# regardless of any Y comparison -- z_index groups take priority over
-	# y-sort, which only orders nodes WITHIN the same z_index.
-	pond.z_index = -1
 	add_child(pond)
+
+	var columns := maxi(1, int(ceil(_layout.pond_radius * 2.0 / POND_TILE_WORLD_SIZE)))
+	var rows := columns
+	var grid_size := Vector2(columns, rows) * POND_TILE_WORLD_SIZE
+	var top_left := _layout.pond_center - grid_size * 0.5
+	_pond_bounds = Rect2(top_left, grid_size)
+
+	var shore_sprite := ProceduralShoreDistanceSprite.new()
+	# Kept as an instance (not discarded after .shared_material()) so
+	# record_water_disturbance/_process can call add_disturbance/
+	# advance_disturbances on it later -- see those two doc comments.
+	_water_shader = WaterShader.new()
+	# One shared material for every tile, exactly like the real water
+	# overlay's own single TileSet -- the shader reads TEXTURE (per node)
+	# and world_pos (per vertex), so many sprites can safely share one
+	# ShaderMaterial instance.
+	var material := _water_shader.shared_material()
+
+	for row in rows:
+		for column in columns:
+			var land_directions: Array[Vector2i] = []
+			if row == 0:
+				land_directions.append(Vector2i(0, -1))
+			if row == rows - 1:
+				land_directions.append(Vector2i(0, 1))
+			if column == 0:
+				land_directions.append(Vector2i(-1, 0))
+			if column == columns - 1:
+				land_directions.append(Vector2i(1, 0))
+
+			var image: Image = (
+				shore_sprite.generate_deep_water_image()
+				if land_directions.is_empty()
+				else shore_sprite.generate_image(land_directions)
+			)
+			var tile := Sprite2D.new()
+			tile.name = "PondTile%d_%d" % [column, row]
+			tile.texture = ImageTexture.create_from_image(image)
+			tile.centered = false
+			tile.scale = Vector2.ONE * (POND_TILE_WORLD_SIZE / float(image.get_width()))
+			tile.position = top_left + Vector2(column, row) * POND_TILE_WORLD_SIZE
+			tile.material = material
+			# _build_trees enables y_sort_enabled on this whole diorama
+			# root, which would otherwise compare each pond tile's own
+			# position against each fish's individually -- a fish above a
+			# given tile draws correctly on top, but one below it would
+			# sort BEHIND that tile and vanish, since y-sort has no idea a
+			# tile is one piece of a large flat ground feature rather than
+			# a small discrete object. Every tile carries its own z_index
+			# directly (not inherited from the "Pond" container) -- the
+			# same "always set it explicitly" convention the grass/ground
+			# already follow -- below every other sibling's default (0) so
+			# the whole grid always draws first regardless of any Y
+			# comparison.
+			tile.z_index = -1
+			pond.add_child(tile)
+
+
+## Duck-typed "world" for FishMarker.setup (see _build_fish) -- lets the
+## diorama's own fish run through FishMarker's REAL _process, the same one
+## every other in-game fish uses (shore-avoidance, TURN_RATE-smoothed
+## heading, tail-wag speed bursts, ripples), rather than either the
+## diorama's own earlier point-to-point movement or FishMarker's own "no
+## world at all" fallback -- that fallback is a documented isolated-test/
+## standalone-rendering convenience (see FishMarker.setup's own doc
+## comment), not what any real in-game fish actually experiences, and it
+## showed (reported live, after an earlier CreatureWander-based fix still
+## fell short: "fish still don't move natural like ingame also no
+## ripples").
+##
+## A tile is "ocean" exactly when its own centre point falls inside the
+## pond's real world-space bounds (_pond_bounds, set in _build_pond) --
+## checked against a continuous rect rather than the pond's own internal
+## tile row/column indices, since nothing requires FishMarker's global tile
+## grid (anchored at world origin) to line up with the pond's own rendered
+## tiles (anchored at _layout.pond_center, an arbitrary seeded position).
+func biome_at_global(tile_x: int, tile_y: int) -> String:
+	var tile_center := Vector2(
+		(float(tile_x) + 0.5) * POND_TILE_WORLD_SIZE, (float(tile_y) + 0.5) * POND_TILE_WORLD_SIZE
+	)
+	return "ocean" if _pond_bounds.has_point(tile_center) else GROUND_BIOME
+
+
+## The other half of the same duck-typed "world" contract -- a fish's own
+## tail-wag/ripple step (FishMarker._step_water_ripple) calls this exactly
+## the way EarthChunkManager.record_water_disturbance does for real ocean
+## fish (reported live, alongside the movement complaint: "no ripples").
+## Forwards straight to the pond's own WaterShader instance -- the same
+## shared material every pond tile already renders with, so a ripple
+## recorded here is visible on every tile it reaches. advance_disturbances
+## (aging/expiring them) is this diorama's own _process's job, the same way
+## EarthChunkManager ages its own -- nothing else would do it here.
+func record_water_disturbance(world_pos: Vector2) -> void:
+	_water_shader.add_disturbance(world_pos)
 
 
 func _build_pebbles() -> void:
@@ -453,13 +581,26 @@ func _build_fish() -> void:
 		var seed_value := hash(fish_position)
 		var species: String = FishRenderer.SPECIES_POOL[absi(seed_value) % FishRenderer.SPECIES_POOL.size()]
 		var fish := fish_renderer.spawn_fish_at(self, species, fish_position, seed_value)
-		# Disables FishMarker's own built-in wander/ripple _process --
-		# driven from THIS diorama's _process instead (see _fish_targets'
-		# own doc comment on why: its WANDER_RADIUS is tuned for a real
-		# ocean/lake, not this tiny pond).
-		fish.set_process(false)
+		# A real "world" (this diorama itself, duck-typed -- see
+		# biome_at_global/record_water_disturbance's own doc comments)
+		# instead of leaving it null: lets this fish's own _process run the
+		# FULL real path -- shore-avoidance, TURN_RATE-smoothed heading,
+		# tail-wag speed bursts, ripples -- the same one every other fish in
+		# the game uses. No more manual driving/set_process(false): Godot's
+		# own automatic per-frame _process is exactly what every OTHER fish
+		# in the game already relies on too.
+		fish.setup(self, TerrainRenderer.TILE_SIZE)
+		# The wander's own HOME is the pond's centre for every fish, not
+		# each one's own scattered spawn point -- CreatureWander.direction_
+		# at's containment math guarantees a fish's own PREFERRED roaming
+		# stays within wander_radius of ITS OWN home (the shore-avoidance
+		# above is the separate HARD guarantee that actually keeps it wet),
+		# so anchoring every fish to the SAME point the radius was derived
+		# against (FISH_SAFE_RADIUS_FRACTION * pond_radius) is what makes
+		# that preference actually centre on the pond itself.
+		fish.home = _layout.pond_center
+		fish.configure_wander(_layout.pond_radius * CharacterPreviewLayout.FISH_SAFE_RADIUS_FRACTION, FISH_SWIM_SPEED)
 		fish_nodes.append(fish)
-		_fish_targets.append(fish_position)
 
 
 func _build_trees() -> void:
@@ -470,6 +611,27 @@ func _build_trees() -> void:
 		# in front of / behind a tree by its own Y position, not always on
 		# top or always behind.
 		tree_nodes.append(tree_renderer.spawn_tree_at(self, tree_position))
+
+
+## A few songbirds circling overhead (reported live, alongside the long-grass
+## request: "add ... birds") -- purely decorative ambience, the same "reuse
+## the real rendering, no gameplay behind it" contract the diorama's fish
+## already have (AmbientFlyerRenderer.build_bird wires no scent/worm/seed/
+## fruit world, so a bird placed this way just flies its own home-tethered
+## wander -- see that function's own doc comment). Species picked the same
+## deterministic way FishRenderer._build_fish already picks a fish species
+## (hash of its own position, modulo the pool). AmbientFlyerMarker sets its
+## OWN z_index above ground clutter (see test_a_flyer_draws_above_ground_
+## clutter) -- nothing extra needed here for draw order, unlike the pond/
+## grass below it.
+func _build_birds() -> void:
+	var flyer_renderer := AmbientFlyerRenderer.new()
+	for bird_position in _layout.bird_positions:
+		var seed_value := hash(bird_position)
+		var pool := AmbientFlyerRenderer.BIRD_SPECIES_POOL
+		var species: String = pool[absi(seed_value) % pool.size()]
+		var bird := flyer_renderer.build_bird(self, species, bird_position, seed_value, BIRD_WANDER_RADIUS)
+		bird_nodes.append(bird)
 
 
 func _build_character() -> void:

@@ -20,6 +20,17 @@ class StubBiomeSource:
 		return _biome_by_tile.get(Vector2i(x, y), _default_biome)
 
 
+## Same duck-typed stub as above, but counts biome_at_global() calls so a
+## test can prove a rebuild was (or was not) actually attempted, rather than
+## just checking the returned image looks right.
+class CountingBiomeSource extends StubBiomeSource:
+	var call_count := 0
+
+	func biome_at_global(x: int, y: int) -> String:
+		call_count += 1
+		return super.biome_at_global(x, y)
+
+
 func before_each():
 	renderer = MinimapRenderer.new()
 
@@ -61,3 +72,69 @@ func test_unloaded_tiles_render_as_fully_transparent():
 	var source := StubBiomeSource.new("")  # EarthChunkManager returns "" for unloaded tiles
 	var image := renderer.build_image(source, Vector2i(0, 0))
 	assert_eq(image.get_pixel(0, 0).a, 0.0)
+
+
+## world.gd's caller already time-gates rebuilds to at most once/second, but
+## the player often stands still for many of those ticks (fishing, crafting,
+## just admiring the view) -- each of which used to re-sample all 6561 tiles
+## for a result identical to the one already on screen. Skipping the rebuild
+## when the player's tile hasn't moved since the last build avoids that.
+func test_a_second_build_at_the_same_tile_skips_the_expensive_rebuild():
+	var source := CountingBiomeSource.new("grassland")
+	var tile := Vector2i(10, 10)
+
+	renderer.build_image(source, tile)
+	var calls_after_first_build := source.call_count
+	assert_gt(calls_after_first_build, 0, "sanity check: the first build should sample biomes")
+
+	renderer.build_image(source, tile)
+	assert_eq(
+		source.call_count, calls_after_first_build,
+		"a second build at the same tile should not re-sample any biomes"
+	)
+
+
+## The skip must be keyed on the tile actually changing, not just "already
+## built once" -- otherwise the minimap would freeze the first time it's
+## drawn and never update again as the player walks around.
+func test_a_build_at_a_different_tile_still_rebuilds():
+	var source := CountingBiomeSource.new("grassland")
+
+	renderer.build_image(source, Vector2i(10, 10))
+	var calls_after_first_build := source.call_count
+
+	renderer.build_image(source, Vector2i(11, 10))
+	assert_gt(
+		source.call_count, calls_after_first_build,
+		"moving to a new tile should trigger a fresh sample"
+	)
+
+
+## build_image() bulk-writes raw bytes instead of calling Image.set_pixel()
+## per pixel (for performance), so it must reproduce Godot's own float-to-byte
+## quantization exactly -- otherwise every biome color is off by up to 1/255,
+## silently, in a way the tolerant _assert_color_almost_eq() above (0.005 ==
+## ~1.3/255) is too loose to ever catch. Build an oracle image the slow way,
+## with the engine's real Image.set_pixel(), and compare byte-for-byte rather
+## than pinning specific numbers (which would rot if BIOME_COLORS changes).
+func test_pixel_bytes_exactly_match_the_engines_own_set_pixel_quantization():
+	var tile_x := 0
+	for biome_name in TerrainRenderer.BIOME_COLORS:
+		var color: Color = TerrainRenderer.BIOME_COLORS[biome_name]
+		var oracle := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+		oracle.set_pixel(0, 0, color)
+		var expected := oracle.get_pixel(0, 0)
+
+		var source := StubBiomeSource.new(biome_name)
+		# A distinct tile per biome -- build_image() correctly skips rebuilding
+		# (see the cache test above) when the tile is unchanged, which would
+		# otherwise make every iteration after the first see the first
+		# biome's cached image instead of its own.
+		var image := renderer.build_image(source, Vector2i(tile_x, 0))
+		tile_x += 1
+		var actual := image.get_pixel(0, 0)
+
+		assert_eq(
+			actual, expected,
+			"biome '%s': bulk-written pixel %s must exactly match Image.set_pixel()'s own quantization %s" % [biome_name, actual, expected]
+		)

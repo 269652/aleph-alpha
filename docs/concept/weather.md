@@ -180,11 +180,67 @@ band's depth range -- comfortably a third of a whole snowfall -- nothing
 repainted at all no matter how far coverage kept climbing underneath. A real
 probe caught it: coverage sat flat at the same percentage from depth 0.02
 through 0.25, then jumped straight to full at 0.5 -- the instant-reveal bug
-again, just relocated to a coarser timescale. `EarthChunkManager._repaint_snow`
-now also repaints whenever depth has moved by `SNOW_REPAINT_DEPTH_STEP`
-(0.05, well under the onset variance so several checkpoints land across the
-spread) since the last repaint, not only on a band crossing -- still on the
-order of dozens of repaints across a whole snowfall, not one every frame.
+again, just relocated to a coarser timescale. A first fix gated the repaint on
+`SNOW_REPAINT_DEPTH_STEP` (a smaller depth-moved-by-0.05 threshold) instead of
+only a band crossing, which closed that particular gap but kept the same
+shape underneath: still one aggregate gate deciding when to unconditionally
+repaint EVERY loaded tile.
+
+**That shape has its own failure mode: a batch pop.** Even with the tighter
+gate, the trigger still only fired roughly once every 18 real seconds
+(`SNOW_REPAINT_DEPTH_STEP` 0.05 of depth against `Snowfall.SECONDS_TO_COVER`
+360s), and between two such firings NOTHING repainted at all -- not because
+the math was wrong (individual tiles' own onset-adjusted bands kept crossing
+their thresholds continuously the whole time, per the onset section above),
+but because nothing was WATCHING for it. Then, the instant the gate did fire,
+every tile that had crossed sometime in that whole 18-second window all
+repainted TOGETHER, in the same frame. Reported a third time, in the user's
+own words: *"doesn't correctly fall and accumulate gradually on individual
+tiles instead after a time a whole chunk get's every tile covered"* -- which
+is exactly this: long silence, then a visible batch of tiles change at once.
+An investigation this round confirmed the underlying per-tile spread math was
+never the problem (a real probe drove `step_snow` in small real-world-age
+steps and found multiple bands genuinely present in the field throughout) --
+the gate's own cadence was.
+
+The fix restores the shape a since-lost architecture
+(`_snow_painted_band_by_tile`/`_sweep_chunk`, dropped in a hand-resolved merge
+conflict without anyone noticing) already had: track every loaded tile's own
+last-PAINTED band in `EarthChunkManager._snow_painted_band_by_tile`, and on a
+real, tested cadence (`SNOW_SWEEP_INTERVAL_SECONDS`, see below) SWEEP every
+loaded tile, calling `_paint_snow_tile` for each -- but `_paint_snow_tile`
+itself now only actually touches the `TileMapLayer` (a real
+`set_cell`/`erase_cell`) for a tile whose freshly-computed band differs from
+what is tracked, not unconditionally for every tile the sweep visits. The
+sweep can therefore run far more often than the old whole-field repaint did,
+because most of its cost is no longer "thousands of set_cell calls" -- it is
+"thousands of cheap comparisons, a few dozen real paints."
+
+**Even that cheap comparison was not cheap enough at first.** Measured live
+against the real field a `LOAD_RADIUS=2` chunk radius loads (~22,700 land
+tiles): recomputing each tile's onset offset (a `PixelNoise.smooth` call --
+several hashed lookups) on every single sweep cost ~200ms per pass on its own,
+before touching the tile layer at all -- far too expensive to run on any
+cadence tighter than the old ~18s gate, which would have defeated the whole
+point. But onset is a PURE function of a tile's global coordinates: it never
+changes for that tile's entire loaded lifetime. Caching it once, the first
+time a tile is ever painted (`EarthChunkManager._snow_onset_by_tile`), cut
+the same sweep to ~40-50ms -- about 5x cheaper, and the difference between a
+tight cadence being affordable or not. The cache is dropped per-tile when its
+chunk unloads, so it does not grow without bound as a player roams.
+
+With that cache, `EarthChunkManager.SNOW_SWEEP_INTERVAL_SECONDS` (2.0 real
+seconds) throttles how often the sweep itself runs from `step_snow`'s
+per-frame call -- still a real, bounded cost (an O(loaded tiles) scan, just a
+cheap one now), not something to pay unconditionally every frame. 2.0s keeps
+the new mechanism's average CPU cost roughly the SAME order as the old one's
+(~45ms every 2s vs. the old ~426ms every 18s -- an unconditional repaint of
+every tile, measured -- is ~2.1% vs. ~2.4% of wall-clock time) while making it
+9x more frequent, so a real crossing shows up within ~2 seconds of happening
+rather than sitting invisible for up to 18 and then jumping. `set_snow_depth`
+(a rare, deliberate call -- `/weather`, or code setting depth outright) still
+sweeps immediately and unthrottled, since it is not a per-frame call and
+should reflect its own change right away.
 
 ### Status
 
@@ -213,9 +269,14 @@ order of dozens of repaints across a whole snowfall, not one every frame.
   (`EarthChunkManager._paint_snow_tile` erases the cell over `"ocean"`):
   ice is a separate mechanic that does not exist yet, so this is a boundary
   rather than an omission.
-- ✅ The repaint that reveals that spread runs often enough to show it moving
-  — `EarthChunkManager.SNOW_REPAINT_DEPTH_STEP`, tested; wired in
-  `_repaint_snow`.
+- ✅ The repaint that reveals that spread trickles in continuously rather
+  than batching into periodic pops — a per-tile diff sweep
+  (`EarthChunkManager._snow_painted_band_by_tile`/`_sweep_snow_field`) only
+  touches the TileMapLayer for a tile whose band actually changed, run on a
+  real, measured cadence (`SNOW_SWEEP_INTERVAL_SECONDS`, 2.0s, backed by a
+  per-tile onset cache — `_snow_onset_by_tile` — that keeps a full sweep
+  affordable); tested (`test_step_snow_driven_coverage_changes_trickle_in_
+  rather_than_batching_every_18_seconds`), wired in `step_snow`.
 - ✅ A chunk streamed in mid-snowfall shows its own correct snow immediately
   (`_load_chunk` calls `_paint_snow_chunk` for just that chunk) rather than
   staying bare until the next field-wide repaint happens to reach it; an

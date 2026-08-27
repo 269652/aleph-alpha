@@ -24,14 +24,45 @@ const WORLD_SIZE := 16.0
 ## How many horizontal strips a chunk's grass splits into for Y-sorting.
 ## One draw call per (chunk, band) instead of one per card is the whole
 ## performance win; a single draw call can only Y-sort as ONE unit, so true
-## per-blade sorting against the player is impossible under batching. Bands
-## are the standard middle ground: coarse enough for a real draw-call
-## reduction (CHUNK_SIZE=32 tiles / 8 bands = 4 tiles/band), fine enough
-## that walking through a field still sorts correctly at the tile-cluster
-## level (a blade mis-sorted against its same-band neighbor is
-## imperceptible; the whole field flickering in front of/behind the player
-## as one block would not be).
-const BAND_COUNT := 8
+## per-blade sorting against the player needs each band to be thin enough
+## that native Y-sort alone (no per-pixel alpha hack -- see the shader's own
+## fragment() history below) never lets a band's own worst-case blade
+## visually reach the player's real body.
+##
+## PREVIOUSLY 8 (CHUNK_SIZE=32 tiles / 8 bands = 4 tiles/band = 64 world
+## units). That was too coarse: a band's own worst-case blade (its root at
+## the far/top edge of an in-front band, its card then reaching another
+## WORLD_SIZE past that) could visually reach 64+16=80 world units above
+## the player's own root -- comfortably past the player's own real max
+## reach (42 world units, `character_view.tscn`'s HeadSlot offset) -- so it
+## painted straight over the player's upper body/head. Reported live, with
+## a real screenshot.
+##
+## THEN 32 (1 tile/band = 16 world units) -- fixed the "painted over the
+## head" symptom, but left a real, honest residual: a band still draws in
+## front of the player for as long as the player is anywhere within its own
+## full tile (band_anchor_world_y's own bottom-edge anchoring, "normal,
+## expected concealment" by design). At a whole tile per band, that grace
+## window is barely perceptible on sparse, mostly-transparent blade art but
+## reads as glaringly broken on the atlas's own dense, near-opaque "bush"
+## cards -- reported live again, the same day: "y ordering is correct only
+## for some [tufts]... should work like the lower one for all."
+##
+## Now 64 (half a tile/band = 8 world units): halves that grace window
+## again, AND (a second real effect this specific change unlocks) is now
+## fine enough that a card's own real per-card offset (up to 6.8 world
+## units, see `cards_for_cell`) CAN cross a band boundary -- so the
+## per-card banding fix landed just before this one actually starts doing
+## something at today's real production ratio, not just at a synthetic
+## test-only band_count. Worst-case reach: 8 (band_height) + 6.8 (max card
+## offset) + 16 (WORLD_SIZE) = 30.8, an 11.2-world-unit margin under the
+## player's real 42 -- a real, tested (see
+## test_band_height_leaves_a_real_safety_margin_under_the_players_own_max_reach)
+## and comfortable margin again. Another deliberate, honest draw-call cost
+## for grass specifically (32 -> 64 per chunk, 8x the original pre-fix
+## count of 8) -- correctness over raw draw-call count, the same reasoning
+## every prior pass on this exact bug already used.
+const BAND_COUNT := 64
 
 ## Bend profile: how far a pixel row is displaced, as a function of
 ## top_t (0 at the root, 1 at the tip). A straight vertex shear only ever
@@ -79,13 +110,29 @@ static func blade_phase(uv_x: float) -> float:
 static func blade_amplitude_scale(uv_x: float) -> float:
 	return AMPLITUDE_BASE + AMPLITUDE_VARIATION * sin(uv_x * AMPLITUDE_FREQUENCY)
 
-## Which Y-band (0..BAND_COUNT-1) a cell at `local_y` (row within its own
-## chunk, 0..chunk_size-1) belongs to.
-static func band_index_for_local_y(local_y: int, chunk_size: int, band_count: int = BAND_COUNT) -> int:
+## Which Y-band (0..BAND_COUNT-1) a row at `local_y` (within its own chunk,
+## 0..chunk_size-1) belongs to. `local_y` is `float`, not `int`: a CELL's
+## own raw row is always a whole number, but a CARD's real, offset-adjusted
+## position (see `cards_for_cell`/`local_row_for_world_y`) is not -- one
+## fractional function serves both cell-level and card-level callers (a
+## plain `int` widens to `float` automatically at any existing call site).
+static func band_index_for_local_y(local_y: float, chunk_size: int, band_count: int = BAND_COUNT) -> int:
 	if chunk_size <= 0 or band_count <= 0:
 		return 0
 	var band_height: float = maxf(float(chunk_size) / float(band_count), 0.0001)
-	return clampi(int(float(local_y) / band_height), 0, band_count - 1)
+	return clampi(int(local_y / band_height), 0, band_count - 1)
+
+
+## The chunk-local row-equivalent (the same fractional units `cell.y`
+## already lives in) of a real world Y -- the inverse of how a cell's own
+## `ground_position` is built (`(tile.y + 0.5) * tile_size`, where
+## `tile.y = chunk_origin_y + local_y`). Lets a CARD's real world Y (its
+## cell's ground position plus its own random offset -- see
+## `cards_for_cell`) be converted back into that same coordinate space and
+## handed to `band_index_for_local_y`, for genuine per-card banding instead
+## of the cell's own un-offset raw row.
+static func local_row_for_world_y(world_y: float, chunk_origin_y: int, tile_size: float) -> float:
+	return world_y / tile_size - float(chunk_origin_y)
 
 ## The world Y a band's MultiMeshInstance2D should sit at for Y-sorting --
 ## the band's own BOTTOM edge (its largest row's world Y), not its vertical
@@ -187,29 +234,23 @@ void fragment() {
 	float local_x = clamp(UV.x - bend_offset, 0.0, 1.0);
 	vec2 atlas_uv = region_uv0 + vec2(local_x, 1.0 - UV.y) * region_size;
 
-	// A blade whose own root the player has already walked past must never
-	// render on top of them (reported live, with real screenshots: "the
-	// player's head is behind the long grass blades when the feet already
-	// are past it"). band_anchor_world_y fixes the coarse per-BAND case,
-	// but one MultiMeshInstance2D draw call can only Y-sort as ONE unit -
-	// a blade whose root is genuinely behind the player can still share a
-	// still-ahead band with others that legitimately haven't been reached
-	// yet, and the whole band draws together regardless. True per-blade
-	// precision needs a per-PIXEL decision: from_walker/distance_to_walker
-	// above (already computed for the parting/push effect) already carry
-	// exactly what's needed, reused rather than adding new uniforms. Any
-	// blade whose root sits behind the player (from_walker.y <= 0, i.e. a
-	// smaller/further-back world Y than the player's own) fades to fully
-	// transparent as the player gets close enough to plausibly stand in
-	// front of it - reusing walker_radius (already established for the
-	// push effect) rather than a fresh tuned constant. A per-pixel alpha
-	// decision is correct regardless of which draw call/band the blade's
-	// own coarse Y-sort happened to land in.
-	float passed_by_walker = step(from_walker.y, 0.0);
-	float occlusion_fade = 1.0 - passed_by_walker * (1.0 - smoothstep(0.0, walker_radius, distance_to_walker));
-
+	// SUPERSEDED (2026-08-26): a blade whose own root the player has already
+	// walked past used to fade to transparent here instead of being
+	// properly occluded (a per-pixel alpha hack standing in for real
+	// Y-sort, reusing walker_radius from the unrelated push effect above).
+	// That both under-corrected (a blade more than walker_radius behind the
+	// player never faded, so it kept drawing solid on top of the player's
+	// upper body/head) and over-corrected (any blade within walker_radius
+	// faded to fully invisible just from the player standing near it,
+	// reported separately as "grass becomes transparent when walking over
+	// it") -- two symptoms of the same wrong mechanism. BAND_COUNT is now
+	// fine-grained enough (see its own doc comment) that native Y-sort
+	// alone -- the same mechanism every ordinary Sprite2D already uses --
+	// places each band in the correct draw order without any alpha
+	// modulation: grass is either genuinely behind the player (drawn
+	// first, correctly covered) or genuinely in front (drawn after,
+	// correctly covering), always fully opaque either way.
 	COLOR = texture(TEXTURE, atlas_uv);
-	COLOR.a *= occlusion_fade;
 	// Gated on greenness for the same reason GroundTint is, and with the same
 	// gain: the illustrated atlas already carries dry/brown blades, and those
 	// must not be turned again by a season they are already wearing.
@@ -230,11 +271,44 @@ var _wind_strength := DEFAULT_WIND_STRENGTH
 ## been lazily built doesn't lose it (same reasoning as _wind_strength above).
 var _season_tint := Color(1.0, 1.0, 1.0)
 
+## Some of the delivered sheet's taller "bush"/wheat-ear variants (the
+## denser rows) draw their own plant art past their own cell's nominal
+## bottom edge, bleeding into the TOP of the next row down -- a real
+## property of `assets/sprites/grass_blades.png` itself, not a rendering
+## bug: a mechanically-sliced region with no inset hands a recipient card a
+## fragment of the row ABOVE's plant sitting right at its own top edge.
+## Because the shader flips root-at-bottom/tip-at-top (a card's local Y=0 is
+## the ground, growing up), that fragment renders at the TIP -- the point
+## farthest from the ground -- genuinely detached from the card's own body
+## by a real transparent gap. Reported live: "the grass now has floating
+## artefacts above it" (snow gave the white background enough contrast to
+## show it clearly, but the bleed itself is independent of snow).
+##
+## MEASURED, not eyeballed, against the real shipped sheet at its own native
+## 1254x1254 resolution: for each row, how many pixels down from that row's
+## own nominal top edge the previous row's content still shows (alpha > 0)
+## on at least one column, i.e. how far this function's own region has to
+## start past the nominal boundary to guarantee a transparent top. Index 0
+## is row 0, which has no row above it and so can never inherit a bleed.
+## Pinned by test_atlas_region_for_seed_never_includes_the_previous_rows_
+## bled_over_content, which checks every real (row, column) cell in the
+## shipped atlas directly rather than trusting this table by eye.
+const ROW_TOP_BLEED_PX := [0, 0, 3, 8, 13, 15, 17, 24, 25, 8]
+
 static func atlas_region_for_seed(seed_value: int, atlas_size: Vector2i = DEFAULT_ATLAS_SIZE) -> Rect2i:
 	var index := posmod(seed_value, ATLAS_COLUMNS * ATLAS_ROWS)
 	var column := index % ATLAS_COLUMNS
 	var row := index / ATLAS_COLUMNS
-	var from := Vector2i(column * atlas_size.x / ATLAS_COLUMNS, row * atlas_size.y / ATLAS_ROWS)
+	# The bleed table above is measured in native pixels of the REAL
+	# 1254x1254 sheet; expressed as a fraction of one cell's own height so a
+	# caller passing a differently-sized atlas_size (e.g. a smaller test
+	# fixture) still gets a proportionally correct inset rather than an
+	# oversized or negative-height region.
+	var native_cell_height := float(DEFAULT_ATLAS_SIZE.y) / float(ATLAS_ROWS)
+	var bleed_fraction := float(ROW_TOP_BLEED_PX[row]) / native_cell_height
+	var cell_height := float(atlas_size.y) / float(ATLAS_ROWS)
+	var top_inset := int(round(bleed_fraction * cell_height))
+	var from := Vector2i(column * atlas_size.x / ATLAS_COLUMNS, row * atlas_size.y / ATLAS_ROWS + top_inset)
 	var to := Vector2i((column + 1) * atlas_size.x / ATLAS_COLUMNS, (row + 1) * atlas_size.y / ATLAS_ROWS)
 	return Rect2i(from, to - from)
 
@@ -304,22 +378,46 @@ func set_season_tint(tint: Color) -> void:
 func _season_tint_vector() -> Vector3:
 	return Vector3(_season_tint.r, _season_tint.g, _season_tint.b)
 
+## Expands ONE cell spec ({seed:int, ground_position:Vector2, growth:float})
+## into its CARD_COUNT real per-card specs: {atlas_seed:int, position:
+## Vector2, growth:float} -- each card's own real, offset-adjusted ground
+## position (`ground_position + this card's own random offset`, see
+## `card_specs_for_seed`). THE single seam for turning a cell into its
+## cards -- both `EarthChunkManager`'s own Y-sort banding (which needs each
+## card's own real position to bucket it correctly, via
+## `local_row_for_world_y` -- see docs/concept/long_grass.md) and
+## `instances_for_cards`' own final placement math read from here, so the
+## two can never drift apart from each other.
+static func cards_for_cell(cell_spec: Dictionary) -> Array[Dictionary]:
+	var cards: Array[Dictionary] = []
+	var ground_position: Vector2 = cell_spec.ground_position
+	for spec in card_specs_for_seed(cell_spec.seed):
+		cards.append({
+			"atlas_seed": spec.seed,
+			"position": ground_position + (spec.offset as Vector2),
+			"growth": cell_spec.growth,
+		})
+	return cards
+
 ## Pure data prep for fill_band, headlessly testable on its own: computes
-## every card's instance transform (root pinned at its own ground position,
-## regardless of growth scale) and packed atlas-region color, from plain
-## data only - no MultiMesh/Texture2D access. `cell_specs` is an array of
-## {seed:int, ground_position:Vector2, growth:float}. Sorted back-to-front
-## by ground Y so overlapping alpha-blended cards within a band blend in
-## roughly the right order.
-static func instances_for_cells(cell_specs: Array, band_anchor: Vector2, atlas_size: Vector2i) -> Array[Dictionary]:
+## every given CARD's instance transform (root pinned exactly at its own
+## real position, regardless of growth scale) and packed atlas-region
+## color, from plain per-card data only - no MultiMesh/Texture2D access.
+## `card_specs` is an array of {atlas_seed:int, position:Vector2,
+## growth:float}, one entry per CARD (see `cards_for_cell` -- the caller
+## expands cells into cards and buckets them by real Y-sort band BEFORE
+## calling this, so a cell whose own cards land in different bands can be
+## split across separate calls without any card drawn twice or dropped).
+## Sorted back-to-front by ground Y so overlapping alpha-blended cards
+## within a band blend in roughly the right order.
+static func instances_for_cards(card_specs: Array, band_anchor: Vector2, atlas_size: Vector2i) -> Array[Dictionary]:
 	var flat: Array[Dictionary] = []
-	for cell_spec in cell_specs:
-		for spec in card_specs_for_seed(cell_spec.seed):
-			flat.append({
-				"region": atlas_region_for_seed(spec.seed, atlas_size),
-				"position": cell_spec.ground_position + (spec.offset as Vector2),
-				"growth": cell_spec.growth,
-			})
+	for card_spec in card_specs:
+		flat.append({
+			"region": atlas_region_for_seed(card_spec.atlas_seed, atlas_size),
+			"position": card_spec.position,
+			"growth": card_spec.growth,
+		})
 	flat.sort_custom(func(a, b): return a.position.y < b.position.y)
 
 	var texture_size := Vector2(atlas_size)
@@ -337,17 +435,17 @@ static func instances_for_cells(cell_specs: Array, band_anchor: Vector2, atlas_s
 	return instances
 
 ## Rebuilds `mmi` (wiring its MultiMesh/texture/material on first use if
-## needed) so it renders every cell in `cell_specs` - each a
-## {seed:int, ground_position:Vector2, growth:float} - as CARD_COUNT cards.
+## needed) so it renders every CARD in `card_specs` - each a
+## {atlas_seed:int, position:Vector2, growth:float} (see `cards_for_cell`).
 ##
 ## `band_anchor` must already be `mmi`'s own `position` (it drives this
 ## band's Y-sort key against the player/creatures); instance transforms are
-## stored relative to it. Thin engine glue over instances_for_cells - see
+## stored relative to it. Thin engine glue over instances_for_cards - see
 ## that function for the actual (headlessly-tested) placement math. This
 ## wrapper itself needs a real renderer to verify: MultiMesh per-instance
 ## transform/color storage is backed by the dummy renderer under
 ## `--headless` and silently doesn't round-trip there.
-func fill_band(mmi: MultiMeshInstance2D, band_anchor: Vector2, cell_specs: Array) -> void:
+func fill_band(mmi: MultiMeshInstance2D, band_anchor: Vector2, card_specs: Array) -> void:
 	if _texture == null:
 		_texture = load(ATLAS_PATH) as Texture2D
 	if _texture == null:
@@ -362,7 +460,7 @@ func fill_band(mmi: MultiMeshInstance2D, band_anchor: Vector2, cell_specs: Array
 		mmi.texture = _texture
 		mmi.material = material()
 	var mm: MultiMesh = mmi.multimesh
-	var instances := instances_for_cells(cell_specs, band_anchor, Vector2i(_texture.get_size()))
+	var instances := instances_for_cards(card_specs, band_anchor, Vector2i(_texture.get_size()))
 	mm.instance_count = instances.size()
 	for i in instances.size():
 		mm.set_instance_transform_2d(i, instances[i].transform)

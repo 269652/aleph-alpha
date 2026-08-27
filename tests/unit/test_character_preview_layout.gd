@@ -95,6 +95,67 @@ func test_fish_positions_stay_inside_the_pond():
 		assert_true(fish_position.distance_to(layout.pond_center) < layout.pond_radius)
 
 
+## FISH_SAFE_RADIUS_FRACTION must keep a fish's whole drawn BODY inside the
+## region the pond's own water shader renders as fully, unambiguously
+## opaque water -- not just inside the pond's nominal geometric radius, which
+## is considerably bigger than the visually-obvious water (reported live:
+## "fish are still spawned on land" -- they were inside pond_radius, just
+## well into the shore's own alpha fade). _build_pond (character_preview_
+## diorama.gd) renders with all 4 cardinal land_directions, so
+## ProceduralShoreDistanceSprite's own per-pixel value is the MIN distance
+## to whichever tile edge is nearest -- for a point straight out from centre
+## along one axis (the worst case: a diagonal point of the same Euclidean
+## distance sits further from every edge, so it fades later), that raw value
+## is exactly 0.5 * (1.0 - radius_fraction) of the pond's own radius. Mirrors
+## that one geometric fact locally (the shore-tile SHAPE is this diorama's
+## own rendering choice, not something WaterShader itself knows about) and
+## hands it to WaterShader.edge_alpha_for_shore_distance -- the shader's own
+## real fade curve -- for the actual opacity verdict, so this constant is
+## checked against the SAME math the GPU draws with, not a separately
+## eyeballed fraction.
+func _worst_case_shore_distance(radius_fraction: float) -> float:
+	var WaterShader = load("res://src/rendering/water_shader.gd")
+	var raw := 0.5 * (1.0 - radius_fraction)
+	return sqrt(maxf(raw, 0.0))
+
+
+func test_fish_safe_radius_fraction_keeps_a_fishs_whole_body_fully_opaque():
+	var WaterShader = load("res://src/rendering/water_shader.gd")
+	var ProceduralFishSprite = load("res://src/rendering/procedural_fish_sprite.gd")
+	var FishRenderer = load("res://src/rendering/fish_renderer.gd")
+
+	# Centre-to-longest-edge, in world units -- see FISH_SAFE_RADIUS_
+	# FRACTION's own doc comment on this exact derivation.
+	var fish_half_extent: float = float(ProceduralFishSprite.WORLD_SIZE.x) * FishRenderer.FISH_WORLD_SCALE * 0.5
+	var pond_radius: float = minf(footprint.x, footprint.y) * CharacterPreviewLayout.POND_RADIUS_FRACTION
+
+	# The farthest a fish's own SPAWN can land (genuinely circular) or its
+	# ongoing wander TARGET (also circular -- see CharacterStroll.random_
+	# point_in_circle) is exactly FISH_SAFE_RADIUS_FRACTION of the pond's
+	# radius; its drawn body then extends fish_half_extent further still.
+	var worst_case_edge_fraction := CharacterPreviewLayout.FISH_SAFE_RADIUS_FRACTION + (fish_half_extent / pond_radius)
+	var shore_dist := _worst_case_shore_distance(worst_case_edge_fraction)
+	var alpha: float = WaterShader.edge_alpha_for_shore_distance(shore_dist)
+	assert_eq(alpha, 1.0, "a fish's own far edge (fraction %.3f of the pond radius) reads at only %.3f opacity, not fully opaque water" % [worst_case_edge_fraction, alpha])
+
+
+## Birds fly overhead, not on the ground -- unlike pebbles/trees/grass they
+## don't need is_clear() obstacle avoidance, just to start somewhere inside
+## the scene (reported live, alongside the long-grass request: "add ...
+## birds"). Own field on Result, same as every other placement, so a reroll
+## gives a different-looking flock deterministically (the design doc's
+## Determinism pillar) using the layout's own isolated rng -- not the
+## diorama's shared one, the exact coupling FISH_SAFE_RADIUS_FRACTION's own
+## retuning just got bitten by (see character_preview_diorama.gd's
+## _pick_new_fish_target).
+func test_bird_positions_are_placed_inside_the_footprint():
+	var layout := CharacterPreviewLayout.generate(6, footprint)
+	assert_eq(layout.bird_positions.size(), CharacterPreviewLayout.BIRD_COUNT)
+	var bounds := Rect2(Vector2.ZERO, footprint)
+	for bird_position in layout.bird_positions:
+		assert_true(bounds.has_point(bird_position), "bird position %s should start inside the footprint" % bird_position)
+
+
 func test_pebble_positions_sit_near_the_ponds_rim():
 	var layout := CharacterPreviewLayout.generate(3, footprint)
 	assert_gt(layout.pebble_positions.size(), 0)
@@ -133,6 +194,44 @@ func test_every_seed_still_places_some_grass():
 	for seed_value in 200:
 		var result := CharacterPreviewLayout.generate(seed_value, footprint)
 		assert_gt(result.grass_positions.size(), 0, "seed %d placed no grass at all" % seed_value)
+
+
+## The footprint's own grid (6x6 cells, GRASS_CLUMP_SPACING=16) is smaller
+## than ONE noise lattice cell at TallGrass's own FIELD_NOISE_SCALE (0.12):
+## every cell index 0..5, times 0.12, stays under 1.0, so the "noise" never
+## crosses a lattice boundary and degenerates into a single smooth MONOTONIC
+## gradient across the whole grid rather than genuine organic variation. The
+## "kept" top-SEED_CHANCE share of a monotonic gradient is always whichever
+## corner/edge the gradient happens to peak at for that seed -- STRUCTURALLY
+## never the middle, for any seed (reported live, twice: "grass blades
+## exist, but they should be more in the center", then again "still not in
+## the center" after the first attempt -- picking the CLOSEST available
+## clump to centre, see character_preview_diorama.gd's own
+## _pick_long_grass_positions, can only pick from what's actually in the
+## kept pool, and the pool itself excluded the centre no matter how it was
+## ranked). GRASS_FIELD_NOISE_SCALE spans enough lattice cells across this
+## grid that the "peak" can genuinely land anywhere per seed, while staying
+## small enough that nearby cells still correlate (so the meadow still
+## clumps -- see test_kept_grass_cells_clump_together, just below, which
+## this constant must keep passing). Measured, not eyeballed: at the old
+## 0.12, 0/100 sampled seeds ever placed a clump on any of the 4 cells
+## nearest the footprint's own centre; at 0.5, 37/100 did, with the meadow's
+## own clump-touch ratio only dropping from 0.97 to 0.92.
+func test_grass_field_noise_scale_lets_the_centre_actually_receive_grass():
+	var center := footprint * 0.5
+	var near_center: Array[Vector2] = [Vector2(40, 40), Vector2(56, 40), Vector2(40, 56), Vector2(56, 56)]
+	var seeds_with_center := 0
+	var num_seeds := 100
+	for seed_value in num_seeds:
+		var result := CharacterPreviewLayout.generate(seed_value, footprint)
+		for nc in near_center:
+			if result.grass_positions.has(nc):
+				seeds_with_center += 1
+				break
+	assert_gt(
+		seeds_with_center, num_seeds / 10,
+		"only %d/%d seeds ever placed grass near the footprint's own centre -- the noise field is still structurally excluding it" % [seeds_with_center, num_seeds]
+	)
 
 
 ## The grass that IS kept has to clump, not speckle: a meadow reads as
