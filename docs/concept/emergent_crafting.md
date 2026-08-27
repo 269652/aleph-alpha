@@ -266,6 +266,212 @@ rails goes the short way round; and letting one mitred corner go **does not
 drop a rail**, which is what a frame *is* — and no rule about frames was
 written to make that true.
 
+## The compiler: an item is a small program
+
+> Everything from here down landed 2026-08-28 and closes the Status list's
+> "composite stats and effect tags" ⬜ row. Read the new ⬜/🚧 rows at the
+> bottom before assuming more exists than does — in particular, **nothing in
+> live gameplay calls any of it yet**, and the Status list says why.
+
+**The thesis.** An assembly compiles to a list of `event → guard → pipeline`
+**rules**, in the *same AST shape* [magic.md](magic.md)'s `spell_parser.gd`
+already produces for player-written spells. Affordances — "it cuts", "it rips" —
+are a **UI projection over those rules**, never the output itself.
+
+That one choice is the whole design. Derived physics and a hand-authored
+enchantment become the same kind of thing, so a Flame Brand and a blade's own
+cut rule merge into **one list on one item** with no adapter between them. Had
+the compiler emitted `{"cuts": true, "damage": 7}` instead, the two would have
+been different kinds of thing forever. A test compares a compiled rule
+key-for-key against a rule the shipped parser actually produced, so the two
+shapes cannot drift.
+
+**Guards are single comparisons, and that is a feature.** `_parse_guard` has no
+`and`. So every conjunction in an affordance predicate is resolved
+**statically, at compile time**: either the rule is emitted, or it is not and a
+note says *which clause failed*. What remains in the guard is the one genuinely
+dynamic term — the momentum of the actual blow — and its threshold is always
+the shipped `ImpactResolver` symbol, never a copy of the number.
+
+### The swing (`src/gameplay/part_mechanics.gd`)
+
+The composition rule materials.md gestures at (`delivered_force ∝ head_mass ×
+lever_length × swing_speed`) is not what got built, because it is monotonic in
+mass and therefore says a 20 kg hammer is the best hammer. What got built is the
+rigid-body dynamics that actually govern a swing:
+
+| Quantity | How |
+| --- | --- |
+| `moment_of_inertia(graph, pivot)` | Σ (own moment + `m d²`) — the parallel-axis theorem about the grip |
+| `balance_point_cm(graph, pivot)` | signed centre of mass; branches on opposite sides of the hand oppose |
+| `reach_cm(graph, pivot)` | farthest point from the pivot's centre |
+| `gravity_torque_nm` | `M g ·` balance point — the cost of just holding it out |
+| `net_swing_torque_nm` | what is **left over** to accelerate with |
+| `swing_time_s(graph, strength)` | `√(2 θ I / τ)`, constant angular acceleration through a fixed arc |
+| `delivered_momentum(graph, strength)` | `I ω / r` — the angular momentum about the grip, delivered at the strike radius |
+
+`delivered_momentum` is the textbook rigid-body impact quantity, and it is the
+*right* generalisation rather than a convenient one: **for a point mass at
+radius r it reduces exactly to `m v`**, so it is plain momentum wherever plain
+momentum is defined, and carries the effective mass at the contact point
+everywhere else.
+
+**Why there is an optimum.** Delivered momentum **rises and then falls** with
+head mass, with the maximum strictly interior. Too light and there is no mass to
+carry momentum; too heavy and holding the thing out eats the entire torque
+budget, `net_swing_torque` hits **zero**, and the swing stops happening at all.
+That stall is a wall, not an asymptote, and it is the mechanism the optimum
+exists because of. `test_there_is_an_optimum_head_mass_for_delivered_momentum`
+sweeps 0.2–12 kg and asserts the turn-over; a model that ever becomes monotonic
+in mass fails it.
+
+A consequence nobody put in: **a stronger actor's optimum head is heavier**,
+because strength pushes the stall wall further out.
+
+#### The one free constant, solved for rather than picked
+
+`SWING_TORQUE_NM_AT_UNIT_STRENGTH = 17.140 N·m` — the torque an adult delivers
+*about the grip*. It is the **framing-hammer anchor inverted**: build the
+reference hammer (33 cm haft, 21 oz iron head — the geometry a century of
+carpentry converged on), demand its striking face arrive at the **measured
+10 m/s**, and read off the torque. A test re-derives it from the fixture and the
+measurement, so it cannot drift from what it encodes.
+
+The rejected alternative was a published isometric wrist-torque figure (~10 N·m)
+straight from an ergonomics table — rejected because a swing is a whole-body
+kinetic chain delivering *through* the grip, not an isolated wrist action, so
+that number understates it by about half and the model would have said a
+carpenter cannot drive a nail.
+
+**Two independent checks the calibration was not fitted to**, both from a
+constant derived on a hammer:
+
+- the arming sword swings in **0.295 s** (a real sword cut is about a quarter
+  second);
+- it arrives at **3.51 kg·m/s**, above the shipped `T_CUT` of 3.0 — so it cuts,
+  and nobody said it should.
+
+#### Why swords have pommels
+
+Two facts about the same lump of iron, and the second is not the one you would
+guess:
+
+- At **equal total mass**, iron at the grip costs far less inertia than iron at
+  the tip — `m d²`, so distance is squared.
+- Take the pommel **off** and the sword gets **27% lighter (1.377 → 1.005 kg)
+  and slower** (0.2953 → 0.2977 s). The inertia about the hand barely moves —
+  the pommel sat close to the grip and was never much of it. What changes is the
+  **balance point**, which runs away down the blade (34.1 → 49.6 cm), so the
+  gravity torque *rises* (4.61 → 4.89 N·m) even though there is less sword to
+  hold. That eats the torque budget, and what is left accelerates an almost
+  unchanged inertia more slowly.
+
+A lighter sword that is harder to hold out and slower to swing. That is the
+pommel's job, and no rule mentions pommels.
+
+### The compiler (`src/gameplay/item_compiler.gd`)
+
+`compile(graph, crafter_skill) → {ok, errors, mass_kg, swing_time_s, reach_cm,
+delivered_momentum, balance_point_cm, rules, affordances, notes, absences}`.
+
+Six verbs, each a list of static clauses evaluated in order, stopping at the
+first failure so the reason names the clause that actually bit:
+
+| Verb | Static clauses | Runtime guard |
+| --- | --- | --- |
+| `cut` | an edge exists; its **realized keenness** ≥ the cutting line | `T_CUT` |
+| `chop` | an edge exists; **`delivered_momentum` ≥ `T_CUT`** | `T_CUT` |
+| `rip` | an edge with a **tooth pitch**; its **set cuts a kerf wider than the plate** | `BOUNCE_MOMENTUM_THRESHOLD` |
+| `pierce` | a `point` exists | `T_PIERCE` |
+| `crush` | a **working** `bulk` or `face` exists | `T_CRUSH` |
+| `parry` | no working part is under `T_BRITTLE_TOUGHNESS` | `BOUNCE_MOMENTUM_THRESHOLD` |
+
+**The cutting line.** `cut` asks about the *grind*; `chop` asks about *mass*.
+Keeping them apart is what makes a scalpel and a maul different objects. The
+threshold is **derived, never written down**: `cut_keenness_min()` is the
+benchmark blade material (iron — the material `KEEN_SHARPNESS` was itself set
+from) ground at **30° included**, the real woodworking line between a bevel that
+severs fibres and one that merely splits them, sitting between the 15°/40° ends
+`ItemPart` already pins. It comes out at **3.2**, and it is measured by asking a
+real `ItemPart` for its `keenness()` rather than restating the formula.
+
+**Crafter skill touches only the grind.** A novice cannot put a severing edge on
+steel; what they produce is a wedge. So skill interpolates the *realized* grind
+angle from `WEDGE_ANGLE_DEG` (skill 0) to the angle the part was designed with
+(skill 1) — both already-shipped symbols, so this needed **no constant of its
+own**. The rejected alternative was a "skill factor" multiplier with a floor
+picked to feel right. At skill 0.3 the arming sword loses its `cut` rule and
+**keeps its `chop` rule**, because chopping is a question about mass.
+
+### The headline: the saw/axe reciprocal
+
+**A saw emits `rip` and not `chop`; an axe emits `chop` and not `rip`** — and
+the two absences are **two independent physical failures**, not one flag read
+two ways:
+
+- The saw **cannot chop** because its 0.9 mm plate carries only **2.18 kg·m/s**
+  to the edge against the 3.0 a chop needs. A **mass** failure.
+- The axe **cannot rip** because its bit is a **transverse wedge with no tooth
+  pitch** — there is nothing to carry chips along a cut. A **geometry** failure.
+
+A test asserts the saw's reason names momentum and never mentions teeth, and the
+axe's names teeth and never mentions momentum. If the two ever collapse into one
+shared flag, that is what notices.
+
+**The detail worth having**: a saw's teeth are bent alternately to each side (the
+**set**) so the cut they make is wider than the plate following through it. A
+saw filed with every tooth it needs and **no set** still cannot rip — it binds in
+its own kerf — and it fails with a third, distinct reason. That, and not
+sharpness, is the deep reason an axe cannot rip a plank.
+
+### Obsidian: an exception nobody wrote
+
+Obsidian takes the **keenest edge in the game** (`sharpness_capacity` 10, above
+iron's 8) **and shatters** (`toughness` 1.0, under the 3.0 the impact model
+already fractures at). Both fall out of its own property vector: the obsidian
+sword emits its `cut` rule and simply **does not emit a `parry` rule**, because
+that guard is statically false. The tooltip's "cannot parry" is a *consequence*,
+not an authored exception, and the same sword in iron parries fine.
+
+### Absence reasons (`src/gameplay/affordance_notes.gd`)
+
+`absence_reason(graph, verb) → String` and `affords(graph, verb) → bool`.
+
+This is the **legibility surface**, and it is a feature rather than a debug aid.
+Everything in this model is inferred rather than declared, which is the point
+and is also its one real risk: a system whose failures are silent is
+unlearnable. A player told only "your saw cannot chop" will guess, and will
+guess wrong — they will file the teeth sharper. A player told the *plate is too
+light to carry the blow* has learned something true and can act on it. It is the
+same commitment materials.md's "Learning an emergent system" already makes for
+descriptors over a raw scalar spreadsheet.
+
+It has **no opinions of its own**: every string comes out of `compile`, and it
+must never grow a second explanation, because a note that disagreed with the
+physics would be worse than no note.
+
+Three kinds of answer are kept distinct: the assembly is **not an item at all**
+(no grip, parts not joined, malformed) — answered with *that*, because "your
+offcut cannot cut" would imply it was nearly a tool; the verb is **not one the
+model knows**; or the ordinary case, the compiler's own reason verbatim.
+
+### What the fixtures come out as
+
+| Assembly | Mass | Momentum | Swing | Verbs |
+| --- | --- | --- | --- | --- |
+| Arming sword | 1.377 kg | 3.51 | 0.295 s | cut, chop, parry |
+| Felling axe | 1.949 kg | 6.66 | 0.278 s | cut, chop, parry |
+| Rip saw | 0.322 kg | 2.18 | 0.088 s | **rip**, parry |
+| Obsidian sword | 0.891 kg | 2.24 | 0.151 s | **cut only** |
+
+The obsidian row is the one to read twice, because two separate things went
+wrong for it and nobody arranged either. Obsidian's density is 2.4 against
+iron's 7.8, so the *same blade dimensions* mass a third as much — which puts its
+delivered momentum at **2.24, under `T_CUT`**, so it loses `chop` on **mass**
+while keeping `cut` on **grind**. And its toughness costs it `parry`
+independently. An obsidian sword ends up a thing that slices and can do nothing
+else, which is a fair description of a glass knife.
+
 ## Status
 
 ### Built and tested (✅)
@@ -292,14 +498,42 @@ written to make that true.
 - ✅ **Determinism** — explicit construction ordering throughout, asserted.
 - ✅ **The three acceptance assemblies** (sword, scissors, photo frame) as real
   tests with real dimensions and real-world mass checks.
+- ✅ **`PartMechanics`** — the swing as rigid-body dynamics: moment of inertia
+  by the parallel-axis theorem, signed balance point, reach, gravity torque, net
+  swing torque, swing time and delivered momentum. **Unimodal in head mass with
+  an interior optimum**, asserted; one free constant, solved for from the
+  measured framing-hammer anchor and re-derived by a test.
+- ✅ **`ItemCompiler`** — an assembly compiles to `event → guard → pipeline`
+  rules in `spell_parser.gd`'s own AST shape, pinned key-for-key against a rule
+  the shipped parser actually produced. Six verbs, guards reading the shipped
+  `ImpactResolver` symbols, conjunctions resolved statically with a named reason
+  for every absence. Malformed input errors with a real reason rather than
+  crashing.
+- ✅ **The saw/axe reciprocal** as two independent physical failures (mass vs.
+  edge geometry), and the tooth-set/kerf rule as a third.
+- ✅ **`AffordanceNotes`** — `absence_reason` / `affords`, projecting the
+  compiler's reasons with no second opinion of its own.
+- ✅ **Crafter skill on the grind**, expressed entirely in already-shipped
+  symbols (the 15°/40° sharpening range) rather than a tuned skill factor.
 
 ### Designed here but deliberately NOT built in this slice (⬜)
 
-- ⬜ **Affordance inference.** Nothing yet turns "two opposed edges, one
-  pivot, rotational motion" into an affordance tag such as SHEAR. The
-  topological queries it needs exist (`permits_relative_motion`,
-  `motion_between`, `separates_into`, `parts_with_geometry`); the inference
-  layer on top of them does not.
+- ⬜ **Topological affordance inference — the SHEAR case specifically.**
+  `ItemCompiler` infers six verbs from **geometry, material and swing
+  physics**, which covers every rigid body. It does **not** read articulation:
+  nothing yet turns "two opposed edges, one pivot, rotational motion" into a
+  SHEAR affordance, so **the pair of scissors that motivated the whole joint
+  primitive compiles as though it were a stiff pair of knives** — it gets no
+  shear verb, because there is no shear verb, and every number in its result
+  comes from swinging it about one bow, which is not how scissors work at all.
+  Pinned by `test_the_compiler_does_not_understand_scissors_and_says_so_here`,
+  which is written to start failing the day a shear verb exists. The
+  topological queries the
+  inference needs all exist (`permits_relative_motion`, `motion_between`,
+  `separates_into`, `parts_with_geometry`) and are unread by the compiler.
+  Scissors are also the case where "the pivot is the grip part's centre" stops
+  being a reasonable approximation, so this row and the orientation row below
+  are the same piece of work.
 - ⬜ **Part orientation.** Parts have no placement or facing, so "opposed" can
   only be checked as far as unoriented topology allows — two edges on either
   side of one articulating joint. *Which way* each edge faces needs a
@@ -315,15 +549,36 @@ written to make that true.
   `separates_into` are the three inputs a disassembly layer needs, and all
   three are real. The layer that consumes them — rolling a risk, destroying the
   right part, returning the rest — does not exist.
-- ⬜ **Composite stats and effect tags for a whole assembly.** materials.md's
-  leverage rule (`delivered_force ∝ head_mass × lever_length × swing_speed`),
-  edge-and-backing, balance/mass distribution, and the threshold-crossing that
-  produces cut/pierce/crush tags are all still unbuilt at the *assembly* level.
-  `ImpactResolver` already resolves a single impact from momentum and a contact
-  geometry; nothing yet computes that momentum *from a part graph*.
-- ⬜ **Any connection to real items.** `Item`/`ItemCatalog` still carry a flat
-  `mass_kg` and `weapon_damage`. No item in the game is built from a part graph
-  yet; this is a model with tests, not a live system.
+- ⬜ **Any connection to real items — and this is the load-bearing one.**
+  `Item`/`ItemCatalog` still carry a flat `mass_kg` and `weapon_damage`, and
+  `Item.is_saw()` / `is_axe()` / `is_pickaxe()` (`scenes/player.gd`:1594, 1691,
+  1773) are still `id.contains(...)` string hacks, so a **player-built saw
+  cannot saw**. `AffordanceNotes.affords(graph, "rip")` is exactly the call that
+  would retire them, and nothing makes it.
+
+  The blocker is concrete and worth writing down rather than restating as "not
+  wired yet": **no conversion exists between a `PartGraph` and the assembly
+  dictionaries `CraftedItemRegistry` stores, in either direction.** `part_graph.gd`
+  is referenced only by tests. The registry's canonical form carries a
+  *quantized volume* and a material per part (that is all `_mass_kg_for` needs)
+  — not geometry, not dimensions, not joint kinematics — so an assembly read
+  back off a save **cannot be rehydrated into a graph** to compile. The next
+  slice is that serializer, not the `player.gd` edit; doing the edit first would
+  produce an `Item.affords()` with nothing behind it.
+- ⬜ **Edge-and-backing.** materials.md names it and nothing implements it: an
+  edge's support against its own backing material is not modelled, so an obsidian
+  blade bonded to a tough spine behaves exactly like a bare one.
+- ⬜ **Wear, chipping and durability.** `weakest_link` is computed and the
+  compiler ignores it. Nothing degrades, nothing breaks, and no rule is emitted
+  for either — so the serviceability/strength trade-off the joint vocabulary
+  exists to express still has no consequence in play.
+- ⬜ **Effect magnitudes.** The compiler emits *which* rules fire and under what
+  guard; the pipelines carry the physical facts (keenness, kerf, delivered
+  momentum) but no damage number. What an atom like `cut_damage` actually does
+  with them is the runtime's, and is unwritten.
+- ⬜ **Two-handed grips, thrusts and non-swung use.** Every verb here assumes a
+  swing about one grip. A spear thrust, a two-handed haft, a drawn bow and a
+  pressed chisel are all real and none is modelled.
 - ⬜ **Non-linear alloy discovery.** Alloys arrive at a property vector by a
   separate route (see [smelting.md](smelting.md)) and then flow through this
   pipeline unchanged. Nothing here needs changing to accommodate them, and
@@ -342,3 +597,38 @@ written to make that true.
   the shortest one rather than the union of all of them. It returns empty
   whenever a rigid route holds the two parts, so it can never contradict
   `permits_relative_motion`.
+- 🚧 **The swing has no orientation to work with**, so parts lie end-to-end
+  along their own spans and `path_length_cm` — the shipped notion of distance
+  along a route — is what measures them. **A 20 cm crossguard therefore reads as
+  20 cm of reach it does not really have**, which is why the arming sword comes
+  out with a 105.5 cm reach and a 34 cm balance point against a real one's ~86 cm
+  and ~15 cm. Reusing the shipped symbol was judged worth more than a private,
+  differently-wrong guess at which dimension points along the assembly; the fix
+  is the ⬜ orientation row above, not a special case here.
+- 🚧 **The hand is at the grip part's centre.** True enough for a sword,
+  generous for an axe — you hold the end of a haft, not the middle — so
+  long-hafted tools get roughly half the lever they really have (the felling axe
+  swings at 5.2 m/s where a real one reaches the teens). The calibration anchor
+  uses the same convention so the one free constant absorbs it and the model
+  stays self-consistent; the rejected alternative, pivoting at the grip's far
+  end, makes gravity torque on a two-handed axe eat most of a one-handed torque
+  budget, which is worse.
+- 🚧 **The actor's own limb inertia is not modelled.** A real swing must also
+  accelerate your arm. Omitted because the graph's own inertia already prevents
+  the light-end blow-up and an arm-inertia constant would be a second ungrounded
+  number bought for nothing.
+- 🚧 **Each part's own moment uses the slender-rod result** `m L² / 12` rather
+  than a per-geometry inertia tensor. Not load-bearing: the parallel-axis terms
+  dominate it several times over on the sword (asserted), so refining it could
+  only move the answer by a fraction of a fraction.
+- 🚧 **`parry` asks only whether the material survives**, not whether the shape
+  is any good at blocking — which is why the rip saw affords it. A real block
+  wants a face, a guard, or enough length to intercept, and none of that is
+  checked.
+- 🚧 **A branchy assembly gets all its branches on one side.** The signed
+  balance point puts the branch holding the farthest part positive and every
+  other branch negative, which is exactly right for a hand in the middle of a
+  sword and a simplification for anything with three or more limbs off the grip.
+- 🚧 **Fatigue, accuracy and control are not priced**, which is why the model's
+  momentum optimum for a 33 cm haft lands at a head heavier than real one-handed
+  practice settles on. Momentum is not the only thing a carpenter is optimising.
