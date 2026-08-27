@@ -2821,77 +2821,122 @@ func step_snow(snowing: bool, warmth: float) -> void:
 		for tile in _snow_trail.trodden_tiles(0.0):
 			_snow_dirty[tile] = true
 	_snow_trail.advance(elapsed, snowing)
-	_repaint_snow()
 
-
-## Every tile's own last-painted band, and the tiles whose tread has changed
-## since.
-##
-## Repainting every loaded tile every frame is thousands of set_cell calls for
-## a field that mostly has not changed -- the same shape of cost that took the
-## frame rate down when the fast-forward first ran. The FIELD is repainted only
-## when its depth crosses into a new band, or has moved by SNOW_REPAINT_DEPTH_STEP
-## since the last repaint (see below); footprints repaint only the tiles that
-## were actually walked on.
-var _snow_painted_band := -1
-var _snow_dirty: Dictionary = {}
-
-## How far `_snow_depth` must move since the last whole-field repaint before
-## another one is due, independent of DEPTH_BANDS (which is about how many
-## TEXTURES exist, not how often tiles get re-evaluated).
-##
-## Per-tile onset variance (see SnowLayer.ONSET_VARIANCE) means an individual
-## tile's own band can change well within a single texture band -- gating
-## repaints on the band index alone left the field frozen for a large chunk
-## of a snowfall and then jumping a big step once the band finally did cross
-## (measured live before this existed: coverage sat flat at the exact same
-## percentage from depth 0.02 through 0.25, then jumped straight to 100% at
-## depth 0.5 -- the "instant reveal" bug again, just on a coarser timescale).
-##
-## Bounded well under ONSET_VARIANCE (0.18) so a repaint reliably lands
-## between one onset extreme and the next -- several checkpoints across the
-## spread rather than one -- while staying coarse enough that a whole
-## snowfall (SECONDS_TO_COVER) still repaints a few dozen times, not every
-## frame.
-const SNOW_REPAINT_DEPTH_STEP := 0.05
-var _snow_painted_depth := -1.0
-
-
-## Paints the tiles that need it.
-func _repaint_snow() -> void:
-	if _snow_layer == null:
-		return
 	if _snow_depth <= 0.0:
-		if _snow_painted_band != -1:
-			_snow_layer.clear()
-			_snow_painted_band = -1
-			_snow_painted_depth = -1.0
-			_snow_dirty.clear()
+		_repaint_snow()  # cheap fast-clear path, see below -- no sweep needed.
 		return
 
-	var band := _snow_renderer.band_for(_snow_depth, 0.0)
-	var moved_enough := absf(_snow_depth - _snow_painted_depth) >= SNOW_REPAINT_DEPTH_STEP
-	if band != _snow_painted_band or moved_enough:
-		_snow_painted_band = band
-		_snow_painted_depth = _snow_depth
-		_snow_dirty.clear()
-		_repaint_whole_field()
-		return
+	# Footprints repaint immediately every call regardless of the sweep
+	# cadence below -- a footstep should show up the instant it happens, not
+	# wait for the next scheduled sweep.
 	for tile in _snow_dirty:
 		_paint_snow_tile(tile)
 	_snow_dirty.clear()
 
+	if _world_age_seconds - _snow_swept_world_age >= SNOW_SWEEP_INTERVAL_SECONDS:
+		_sweep_snow_field()
+		_snow_swept_world_age = _world_age_seconds
 
-func _repaint_whole_field() -> void:
+
+## Every tile's own last-painted band (Vector2i tile -> int band, -1 for
+## bare/ocean), and the tiles whose tread has changed since the last sweep.
+##
+## This is what makes repainting cheap: `_paint_snow_tile` below only ever
+## touches the actual TileMapLayer (a real `set_cell`/`erase_cell` call) for a
+## tile whose computed band differs from what is tracked here -- so calling it
+## for every loaded tile costs a scan plus a dictionary lookup per tile, not
+## thousands of set_cell calls, for the (typical) case where most of the field
+## hasn't changed. A tile absent from this dict is treated as already bare
+## (`.get(tile, -1)`), so a genuinely untouched tile whose computed band is
+## also -1 costs nothing -- there is nothing to erase that was never set.
+var _snow_painted_band_by_tile: Dictionary = {}
+var _snow_dirty: Dictionary = {}
+
+## Each tile's own onset lead/lag (see SnowLayer.onset_offset_for), cached the
+## first time that tile is painted.
+##
+## Onset is a PURE function of the tile's global coordinates -- it never
+## changes for a tile's whole loaded lifetime -- but recomputing it (a
+## PixelNoise.smooth call, several hashed lookups) for every tile on every
+## sweep dominates the sweep's cost far more than the cheap band_for
+## arithmetic that actually varies with depth. Measured live against the real
+## ~22,700-tile field a LOAD_RADIUS=2 chunk radius loads: recomputing onset
+## fresh every sweep cost ~200ms/pass; reading it from this cache instead cost
+## ~42ms/pass for the exact same sweep -- roughly 5x, and the difference
+## between a cadence tight enough to trickle being affordable at all or not.
+## Cleared per-tile on chunk unload (`_forget_snow_paint_for_chunk`) so this
+## does not grow without bound as a player roams.
+var _snow_onset_by_tile: Dictionary = {}
+
+## How often the coverage SWEEP below actually runs, independent of how often
+## step_snow itself is called (every frame, from World._client_process).
+##
+## The sweep is a real O(loaded tiles) scan -- cheap per tile thanks to the
+## onset cache above, but not free, so running it unconditionally every frame
+## would reintroduce the same shape of cost SNOW_REPAINT_DEPTH_STEP originally
+## existed to avoid (see git history: a ~200ms/frame stall the first time
+## fast-forward repainted everything every frame). This throttle is what
+## bounds that.
+##
+## MEASURED, not guessed: a full diff-aware sweep over the real ~22,700-tile
+## LOAD_RADIUS=2 field costs ~38-52ms once the onset cache is warm (see
+## `_snow_onset_by_tile`'s own doc comment and the probe this was measured
+## with). The OLD whole-field-repaint gate (SNOW_REPAINT_DEPTH_STEP=0.05
+## against SECONDS_TO_COVER=360s) fired an unconditional, non-diffed repaint
+## -- ~426ms measured, because it called set_cell/erase_cell for every one of
+## ~22,700 tiles regardless of whether that tile had actually changed -- about
+## once every 18 real seconds, so nothing changed at all in between and then a
+## whole batch changed together in one frame the instant it fired. 2.0 seconds
+## keeps this new mechanism's average CPU cost roughly the SAME order as the
+## old one's (~45ms every 2s vs ~426ms every 18s is ~2.1% vs ~2.4% of
+## wall-clock time) while being 9x more frequent, so a real crossing shows up
+## within ~2s of happening rather than sitting invisible for up to 18s and
+## then jumping. Pinned functionally, not by timing (timing varies by
+## hardware): see
+## test_step_snow_driven_coverage_changes_trickle_in_rather_than_batching_every_18_seconds
+## in test_earth_chunk_manager.gd, which asserts the real worst-case gap
+## between two visible changes stays well under the old ~18s cadence when
+## driven through this exact constant.
+const SNOW_SWEEP_INTERVAL_SECONDS := 2.0
+var _snow_swept_world_age := -INF
+
+
+## Paints the tiles that need it. Used directly by `set_snow_depth` (a rare,
+## deliberate call -- e.g. `/weather`, or a test setting depth outright) for
+## an immediate, unthrottled sweep; `step_snow`'s own per-frame path uses the
+## throttled call site above instead, for exactly the reason described on
+## SNOW_SWEEP_INTERVAL_SECONDS.
+func _repaint_snow() -> void:
+	if _snow_layer == null:
+		return
+	if _snow_depth <= 0.0:
+		# A single clear() beats diff-erasing every previously-painted tile
+		# one at a time, and resets the per-tile paint tracking to match --
+		# the onset cache is left alone, since it is still correct for
+		# whenever it next snows.
+		if not _snow_painted_band_by_tile.is_empty():
+			_snow_layer.clear()
+			_snow_painted_band_by_tile.clear()
+			_snow_dirty.clear()
+		return
+	_sweep_snow_field()
+	_snow_swept_world_age = _world_age_seconds
+
+
+## Diff-aware pass over every loaded tile: `_paint_snow_tile` below only
+## actually touches the TileMapLayer for a tile whose band changed, so this is
+## the sweep SNOW_SWEEP_INTERVAL_SECONDS gates -- see both constants' own doc
+## comments for the measured cost that makes running this often affordable.
+func _sweep_snow_field() -> void:
 	for chunk_coord in _loaded_chunks:
 		_paint_snow_chunk(chunk_coord)
 
 
-## Paints every tile of one chunk. Shared by _repaint_whole_field (every
-## loaded chunk, whenever the field-wide repaint above triggers) and
-## _load_chunk (this one chunk alone, immediately -- see _load_chunk's own
-## comment: without this, a chunk streamed in mid-snowfall stayed bare until
-## the next field-wide depth change happened to repaint it).
+## Paints every tile of one chunk. Shared by _sweep_snow_field (every loaded
+## chunk, whenever the sweep above runs) and _load_chunk (this one chunk
+## alone, immediately -- see _load_chunk's own comment: without this, a chunk
+## streamed in mid-snowfall stayed bare until the next sweep happened to reach
+## it).
 func _paint_snow_chunk(chunk_coord: Vector2i) -> void:
 	var origin: Vector2i = chunk_coord * CHUNK_SIZE
 	var chunk: Chunk = _loaded_chunks[chunk_coord]
@@ -2900,25 +2945,48 @@ func _paint_snow_chunk(chunk_coord: Vector2i) -> void:
 			_paint_snow_tile(origin + Vector2i(local_x, local_y))
 
 
+## Computes this tile's current band and touches the TileMapLayer only if that
+## differs from what is already tracked as painted -- see
+## `_snow_painted_band_by_tile`'s own doc comment for why that is what keeps
+## calling this for every loaded tile affordable.
 func _paint_snow_tile(tile: Vector2i) -> void:
+	var band := -1
 	# Water does not take snow -- it freezes or it does not, which is a
 	# different thing and not this one.
-	if biome_at_global(tile.x, tile.y) == "ocean":
-		_snow_layer.erase_cell(tile)
+	if biome_at_global(tile.x, tile.y) != "ocean":
+		# Every tile used to read the exact same _snow_depth, so a whole
+		# loaded chunk snapped to whatever band the clock said the instant it
+		# was evaluated (reported: "snow covers a whole chunk instantly
+		# instead of spreading progressively"). This tile's own onset offset
+		# (seeded from its GLOBAL coordinates, see SnowLayer.onset_offset_for)
+		# makes it lead or lag the shared depth by a bounded amount, so a
+		# partial snowfall paints a genuine mix of bare and covered land
+		# rather than one uniform state. Cached rather than recomputed every
+		# call -- see _snow_onset_by_tile's own doc comment.
+		if not _snow_onset_by_tile.has(tile):
+			_snow_onset_by_tile[tile] = _snow_renderer.onset_offset_for(tile.x, tile.y)
+		var onset: float = _snow_onset_by_tile[tile]
+		band = _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile), onset)
+
+	if _snow_painted_band_by_tile.get(tile, -1) == band:
 		return
-	# Every tile used to read the exact same _snow_depth, so a whole loaded
-	# chunk snapped to whatever band the clock said the instant it was
-	# evaluated (reported: "snow covers a whole chunk instantly instead of
-	# spreading progressively"). This tile's own onset offset (seeded from its
-	# GLOBAL coordinates, see SnowLayer.onset_offset_for) makes it lead or lag
-	# the shared depth by a bounded amount, so a partial snowfall paints a
-	# genuine mix of bare and covered land rather than one uniform state.
-	var onset := _snow_renderer.onset_offset_for(tile.x, tile.y)
-	var band := _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile), onset)
+	_snow_painted_band_by_tile[tile] = band
 	if band < 0:
 		_snow_layer.erase_cell(tile)
 	else:
 		_snow_layer.set_cell(tile, 0, Vector2i(band, 0))
+
+
+## Drops one chunk's tiles from the per-tile snow tracking dictionaries above,
+## so a player roaming far and wide does not grow them without bound -- called
+## from _unload_chunk alongside the matching TileMapLayer erase.
+func _forget_snow_paint_for_chunk(chunk_coord: Vector2i) -> void:
+	var origin: Vector2i = chunk_coord * CHUNK_SIZE
+	for local_y in CHUNK_SIZE:
+		for local_x in CHUNK_SIZE:
+			var tile := origin + Vector2i(local_x, local_y)
+			_snow_onset_by_tile.erase(tile)
+			_snow_painted_band_by_tile.erase(tile)
 
 
 func set_rain(raining: bool) -> void:
@@ -6501,6 +6569,7 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _snow_layer != null:
 		_terrain_renderer.erase(_snow_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+		_forget_snow_paint_for_chunk(chunk_coord)
 	if _hidden_roof_chunk_coord == chunk_coord:
 		_hidden_roof_chunk_coord = null
 		_hidden_roof_room_cells = []

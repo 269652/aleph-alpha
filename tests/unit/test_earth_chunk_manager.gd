@@ -5047,6 +5047,97 @@ func test_a_realistic_step_snow_driven_snowfall_paints_more_than_one_non_bare_ba
 	snow_layer.free()
 
 
+## The whole-field repaint used to fire only when the tracked depth had moved
+## by SNOW_REPAINT_DEPTH_STEP (0.05) since the last one -- against
+## Snowfall.SECONDS_TO_COVER (360s) that is one checkpoint roughly every 18
+## real seconds. Between two such checkpoints NOTHING repainted for coverage
+## tiles at all, even though individual tiles' own onset-adjusted bands kept
+## crossing thresholds continuously underneath -- then every tile that
+## crossed sometime in that whole ~18s window all repainted TOGETHER in the
+## single frame the checkpoint finally fired. Reported a third time, in the
+## user's own words: "doesn't correctly fall and accumulate gradually on
+## individual tiles instead after a time a whole chunk get's every tile
+## covered" -- exactly this shape: nothing, then a batch pop.
+##
+## Driven through the real step_snow path in small real-world-age increments
+## (the way World._client_process actually calls it every frame, not one big
+## jump), the gap between two consecutive moments the painted field visibly
+## changes must stay well under that old ~18s cadence -- a genuine trickle,
+## not a slower batch pop.
+func test_step_snow_driven_coverage_changes_trickle_in_rather_than_batching_every_18_seconds():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.update(_berlin_tile)
+
+	# A STRIDED sample spread across the whole loaded 5x5-chunk field, not one
+	# compact box -- onset is a deliberately LOW-FREQUENCY drift field
+	# (SnowLayer.ONSET_DRIFT_TILES=12), so a small box near one point samples
+	# mostly-correlated onset values and can show a real but coincidental
+	# local quiet patch even while the field elsewhere keeps changing every
+	# sweep (confirmed live: a compact ~22x14 box showed a genuine ~20s local
+	# gap while the mechanism itself is unconditionally sweeping every
+	# SNOW_SWEEP_INTERVAL_SECONDS). Striding across the whole field instead
+	# means the sample spans many independent onset neighbourhoods, so it
+	# reflects the field's real aggregate change rate rather than one patch's.
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var stride := 8
+	var sample: Array[Vector2i] = []
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		var origin: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE
+		for local_y in range(0, EarthChunkManager.CHUNK_SIZE, stride):
+			for local_x in range(0, EarthChunkManager.CHUNK_SIZE, stride):
+				var tile := origin + Vector2i(local_x, local_y)
+				if manager.biome_at_global(tile.x, tile.y) != "ocean":
+					sample.append(tile)
+	assert_gt(sample.size(), 200, "precondition: a real, spatially-spread sample of land tiles to watch")
+
+	var previous := {}
+	for tile in sample:
+		previous[tile] = -1
+
+	var checkpoint_ages: Array[float] = []
+	var step := 1.0
+	var elapsed := 0.0
+	var target := 90.0
+	while elapsed < target:
+		manager.advance_world_age(step)
+		manager.step_snow(true, 0.0)  # cold and snowing throughout
+		elapsed += step
+
+		var changed := false
+		for tile in sample:
+			var band := -1
+			if snow_layer.get_cell_source_id(tile) != -1:
+				band = snow_layer.get_cell_atlas_coords(tile).x
+			if band != previous[tile]:
+				changed = true
+				previous[tile] = band
+		if changed:
+			checkpoint_ages.append(elapsed)
+
+	assert_gt(
+		checkpoint_ages.size(), 3,
+		"expected several distinct repaint checkpoints across a %.0fs snowfall, saw %s" % [target, checkpoint_ages]
+	)
+
+	var max_gap: float = target
+	if not checkpoint_ages.is_empty():
+		max_gap = checkpoint_ages[0]
+		for i in range(1, checkpoint_ages.size()):
+			max_gap = maxf(max_gap, checkpoint_ages[i] - checkpoint_ages[i - 1])
+
+	# The OLD mechanism's own real cadence (SNOW_REPAINT_DEPTH_STEP 0.05 of
+	# depth against SECONDS_TO_COVER 360s) is ~18 real seconds between
+	# whole-field repaints -- asserting well under a THIRD of that is a
+	# direct, meaningful improvement, not just barely faster.
+	var old_cadence_seconds := 0.05 * Snowfall.SECONDS_TO_COVER
+	assert_lt(
+		max_gap, old_cadence_seconds / 3.0,
+		"the longest gap between visible snow changes was %.1fs -- not meaningfully tighter than the old ~%.0fs batch-repaint cadence (checkpoints at %s)" % [max_gap, old_cadence_seconds, checkpoint_ages]
+	)
+	snow_layer.free()
+
+
 ## A fallen fruit is ONE fruit, landing under where it hung.
 ##
 ## Windfall used to be spawned as up to five arbitrary stacks scattered by a
