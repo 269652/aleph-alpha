@@ -251,37 +251,55 @@ func test_a_whole_millimetre_length_difference_does_mint_a_new_id():
 	assert_ne(AssemblyId.assembly_id(a), AssemblyId.assembly_id(b))
 
 
-## Real grounding, DERIVED from the shipped material model rather than retyped:
-## a kitchen/apothecary balance reads to the gram, so a volume difference that
-## cannot move a scale must not be allowed to mint an id. The worst case is the
-## DENSEST material the game models, so one quantum of that material has to
-## weigh under a gram. Reading MaterialProperties' own densities (rather than
-## restating "iron is 7.8") is what stops the two from drifting: add a denser
-## material one day and this test fails, forcing the quantum to be re-derived
-## instead of quietly becoming a false claim.
-func test_the_volume_quantum_is_finer_than_a_balance_can_read():
+## The densest material MaterialProperties currently models, read from the
+## model rather than named here. Which material that is has already changed
+## once (iron, until copper's 8.96 g/cm^3 arrived with the alloy work), so the
+## calibration below deliberately asserts the physical INVARIANT rather than
+## the material's identity -- naming it would make this test fail every time
+## the roster grows, including when the quantum is still perfectly correct.
+func _densest_modelled_material() -> String:
 	var properties := MaterialProperties.new()
-	var densest_material := ""
-	var densest_density := 0.0
+	var densest := ""
+	var best := 0.0
 	for material in MaterialProperties.MATERIALS:
 		var density := properties.property_value(material, "density")
-		if density > densest_density:
-			densest_density = density
-			densest_material = material
-	assert_eq(densest_material, "iron", "iron is still the densest material modelled")
-
-	var quantum_mass_kg := properties.mass_kg_for(densest_material, AssemblyId.VOLUME_QUANTUM_CM3)
-	assert_lt(quantum_mass_kg, GRAM_KG, "one quantum of the densest material cannot move a balance")
+		if density > best:
+			best = density
+			densest = material
+	return densest
 
 
-## And it is not needlessly finer than that either -- a quantum ten times
-## smaller would buy no perceptible precision while multiplying the reachable
-## id space tenfold, which is the exact unbounded-id-space failure quantization
-## exists to prevent.
+## Real grounding, DERIVED from the shipped material model rather than
+## retyped: a kitchen/apothecary balance reads to the gram, so a volume
+## difference that cannot move a scale must not be allowed to mint an id. The
+## worst case is the DENSEST material the game models -- one quantum of it has
+## to weigh under a gram.
+##
+## Reading MaterialProperties' own densities is what stops the two from
+## drifting. Add a material dense enough to break the bound and this fails,
+## forcing the quantum to be re-derived instead of the claim quietly becoming
+## false.
+func test_the_volume_quantum_is_finer_than_a_balance_can_read():
+	var properties := MaterialProperties.new()
+	var densest := _densest_modelled_material()
+	var quantum_mass_kg := properties.mass_kg_for(densest, AssemblyId.VOLUME_QUANTUM_CM3)
+	assert_lt(
+		quantum_mass_kg,
+		GRAM_KG,
+		"one quantum of %s (the densest modelled) must not move a balance" % densest
+	)
+
+
+## And it is not needlessly finer than that either. A quantum ten times LARGER
+## would be perceptible -- it puts nearly nine grams of the densest material on
+## the scale -- so 0.1cm^3 is the coarsest quantum that still hides under the
+## threshold, not an arbitrarily small one multiplying the reachable id space
+## for precision no hand can use.
 func test_the_volume_quantum_is_no_finer_than_it_needs_to_be():
 	var properties := MaterialProperties.new()
-	var ten_quanta_kg := properties.mass_kg_for("iron", AssemblyId.VOLUME_QUANTUM_CM3 * 10.0)
-	assert_gt(ten_quanta_kg, GRAM_KG, "ten quanta of iron DO read on a balance")
+	var densest := _densest_modelled_material()
+	var ten_quanta_kg := properties.mass_kg_for(densest, AssemblyId.VOLUME_QUANTUM_CM3 * 10.0)
+	assert_gt(ten_quanta_kg, GRAM_KG, "ten quanta of %s DO read on a balance" % densest)
 
 
 func test_volumes_are_quantized_to_whole_quanta():
