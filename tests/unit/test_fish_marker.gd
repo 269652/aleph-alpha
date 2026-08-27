@@ -7,6 +7,7 @@ extends GutTest
 
 const FishMarker = preload("res://src/rendering/fish_marker.gd")
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
+const WaterShader = preload("res://src/rendering/water_shader.gd")
 
 const TILE_SIZE := 16
 
@@ -59,7 +60,14 @@ class ConfinedRippleTrackingWorld:
 		positions.append(world_pos)
 
 
+## Mirrors test_creature_marker.gd's own StubPlayer/_add_stub_player: a bare
+## Node2D in the "player" group is all _nearest_player_position needs.
+class StubPlayer:
+	extends Node2D
+
+
 var marker: FishMarker
+var _extra: Array = []
 
 
 func before_each():
@@ -74,6 +82,19 @@ func before_each():
 func after_each():
 	remove_child(marker)
 	marker.free()
+	for node in _extra:
+		if is_instance_valid(node):
+			node.free()
+	_extra = []
+
+
+func _add_stub_player(at: Vector2) -> StubPlayer:
+	var player := StubPlayer.new()
+	player.position = at
+	add_child(player)
+	player.add_to_group("player")
+	_extra.append(player)
+	return player
 
 
 ## See World's mouse-hover animal-name tooltip (docs feature request).
@@ -114,6 +135,38 @@ func test_two_markers_with_different_seeds_move_differently():
 func test_swims_freely_when_no_world_is_configured():
 	for i in 50:
 		marker._process(0.2)
+
+
+# -- configure_wander / step_wander: a diorama-scale caller that keeps this
+# -- fish's own _process disabled (a small pond needs a MUCH smaller radius
+# -- than the real world's WANDER_RADIUS -- see CreatureWander.wander_radius's
+# -- own doc comment) can still drive the exact same real algorithm manually,
+# -- one call per frame, instead of reimplementing swimming from scratch
+# -- (reported live, of the character preview diorama's own earlier
+# -- point-to-point fish: "fish don't swim like in the real game").
+
+func test_configure_wander_overrides_the_radius_used_by_step_wander():
+	marker.configure_wander(5.0, CreatureWander.WANDER_SPEED)
+	for i in 200:
+		marker.step_wander(0.1)
+	assert_lt(
+		marker.position.distance_to(marker.home), 5.0 * 2.0,
+		"should stay bounded near the small configured radius, not the real-world default"
+	)
+
+
+func test_configure_wander_overrides_the_speed_used_by_step_wander():
+	marker.configure_wander(CreatureWander.WANDER_RADIUS, 1.0)
+	var before := marker.position
+	marker.step_wander(1.0)
+	assert_almost_eq(marker.position.distance_to(before), 1.0, 0.01)
+
+
+func test_step_wander_moves_the_fish_even_while_its_own_processing_is_disabled():
+	marker.set_process(false)
+	var before := marker.position
+	marker.step_wander(0.5)
+	assert_ne(marker.position, before)
 	assert_ne(marker.position, marker.home)
 
 
@@ -320,6 +373,89 @@ func test_no_further_rings_fire_immediately_after_a_burst_completes():
 	)
 
 
+# -- ripple frequency: occasional, not continuous ----------------------------
+##
+## Reported live, once the diorama's fish first ran through this real timing
+## in a small, always-visible pond: "The fish still produce ripples all the
+## time -- only fast move flap boost should produce ripples like in the real
+## ingame." Every individual ripple genuinely IS gated behind a flap burst
+## (see the burst-mechanics tests just above) -- that correlation was already
+## correct, and confirmed as such earlier. What was never checked is the
+## other half: whether flap bursts themselves are RARE enough, relative to
+## how long a single ripple stays visible (WaterShader.RIPPLE_LIFETIME, the
+## shader's own fade-out), for the pond to read as "occasionally flapping"
+## rather than "a ring is always fading somewhere". A burst's own LAST ring
+## only finishes decaying TAIL_WAG_RING_SPACING * (TAIL_WAG_RING_COUNT - 1)
+## after the burst starts, PLUS a full RIPPLE_LIFETIME -- well after the next
+## burst was scheduled to start at the pre-fix RIPPLE_INTERVAL_MIN/MAX
+## (1.1-2.6s), so consecutive bursts' visible rings overlapped almost every
+## time -- exactly the "all the time" complaint.
+
+## The fraction of any given moment a continuously-swimming fish's own
+## ripples are visible (mid-burst, or a past ring from the last burst still
+## decaying) -- derived from the actual constants, not eyeballed, so a
+## future change to burst timing or RIPPLE_LIFETIME is automatically
+## re-checked against this same property rather than silently drifting.
+func _expected_visible_ripple_fraction() -> float:
+	var last_ring_offset := FishMarker.TAIL_WAG_RING_SPACING * float(FishMarker.TAIL_WAG_RING_COUNT - 1)
+	var visible_duration := last_ring_offset + WaterShader.RIPPLE_LIFETIME
+	var avg_interval := (FishMarker.RIPPLE_INTERVAL_MIN + FishMarker.RIPPLE_INTERVAL_MAX) * 0.5
+	var avg_cycle := last_ring_offset + avg_interval
+	return visible_duration / avg_cycle
+
+
+## A fish visibly rippling well under half the time reads as "occasional"
+## rather than "constant" -- the property the live report actually named.
+func test_ripples_stay_occasional_not_continuous_by_the_numbers():
+	assert_lt(
+		_expected_visible_ripple_fraction(), 0.4,
+		"a fish's own ripples should visibly fade out between bursts, not overlap into constant rippling"
+	)
+
+
+## The same property, measured directly on a real running fish rather than
+## derived algebraically -- catches anything the formula above might miss
+## (the warm-up frame, actual PixelNoise-driven interval variance). Simulates
+## several real minutes of continuous swimming so the seeded random
+## intervals average out.
+func test_a_swimming_fish_actually_goes_quiet_between_bursts_most_of_the_time():
+	var world := RippleTrackingWorld.new()
+	marker.setup(world, TILE_SIZE)
+
+	var dt := 0.1
+	var duration := 240.0
+	var elapsed := 0.0
+	var ripple_times: Array[float] = []
+	var previous_count := 0
+	while elapsed < duration:
+		marker._process(dt)
+		elapsed += dt
+		if world.positions.size() > previous_count:
+			for i in (world.positions.size() - previous_count):
+				ripple_times.append(elapsed)
+			previous_count = world.positions.size()
+
+	var quiet_samples := 0
+	var total_samples := 0
+	var t := 0.0
+	while t < duration:
+		total_samples += 1
+		var visible := false
+		for ripple_time in ripple_times:
+			if t >= ripple_time and t - ripple_time < WaterShader.RIPPLE_LIFETIME:
+				visible = true
+				break
+		if not visible:
+			quiet_samples += 1
+		t += 1.0  # sample once a second -- fine enough to catch multi-second gaps
+
+	var quiet_fraction := float(quiet_samples) / float(total_samples)
+	assert_gt(
+		quiet_fraction, 0.5,
+		"the pond should visibly go quiet more than half the time -- measured only %.0f%% quiet" % (quiet_fraction * 100.0)
+	)
+
+
 ## The movement half of "only when wagging the tail": a fish that genuinely
 ## cannot move (boxed into a single water tile) never fires a ripple at all,
 ## no matter how long it sits there -- mirrors Player._step_water_ripples'
@@ -438,3 +574,43 @@ func test_a_bolt_wears_off():
 	assert_true(fish.is_bolting())
 	fish._process(FishMarker.BOLT_SECONDS + 0.1)
 	assert_false(fish.is_bolting(), "a fish calms down again")
+
+
+# -- distance-based simulation LOD (see SimulationLod, CreatureMarker's own
+# _lod_step/_nearest_player_position) -------------------------------------
+##
+## Nothing throttled FishMarker's per-frame work before this: every fish in
+## every loaded chunk ran its full swim/shore/ripple logic every single
+## frame regardless of how far it was from the player, unlike CreatureMarker
+## (which already throttles distant creatures to fewer, larger steps -- see
+## SimulationLod's own doc comment on why: almost nothing in a loaded chunk
+## is ever on screen). A fish this far out should sit idle across several
+## small frames, then take one full step once enough time has actually
+## accumulated -- proving the skip is a genuine throttle (time banked, not
+## lost) rather than the fish simply never moving again.
+func test_a_fish_far_from_the_player_does_not_take_a_full_step_every_frame():
+	var world := StubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	# Comfortably past SimulationLod's falloff distance, so this fish is
+	# throttled to its slowest rate (MAX_INTERVAL_SECONDS, 0.5s).
+	_add_stub_player(marker.position + Vector2(5000, 0))
+
+	var before := marker.position
+	marker._process(0.1)
+	assert_eq(
+		before, marker.position,
+		"a fish this far from the player should not take a full step on a single 0.1s frame"
+	)
+
+	marker._process(0.1)
+	marker._process(0.1)
+	assert_eq(
+		before, marker.position,
+		"still short of the throttled interval after 0.3s accumulated"
+	)
+
+	marker._process(0.3)  # crosses the accumulated ~0.5s interval
+	assert_ne(
+		before, marker.position,
+		"once enough time has accumulated, the throttled fish should finally take its full step"
+	)

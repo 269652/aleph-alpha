@@ -77,7 +77,41 @@ const AXIS_LABELS := {
 ## stays the same world-unit size, so this only changes the camera's own
 ## zoom (DIORAMA_VIEW_SIZE.x / footprint.x, see _build_diorama_view) --
 ## the same little scene renders bigger, not a different/larger one.
-const DIORAMA_VIEW_SIZE := Vector2i(280, 280)
+## Pulled back 280 -> 248 (reported live, with a screenshot: "make the
+## diorama fit the panel it's in" -- the diorama's own box, sitting below
+## the class-icon row, ran 12px past the Character tab's own scroll
+## viewport at a typical window size, so its bottom edge -- grass and trees
+## mid-render -- was visibly cut off even before any deliberate scrolling;
+## see test_the_diorama_fits_within_the_first_unscrolled_view_of_the_
+## character_tab, checked against real laid-out rects rather than a
+## hardcoded guess). Still noticeably bigger than the pre-"too small" 220
+## this replaced, just no longer bigger than its own panel has room for.
+const DIORAMA_VIEW_SIZE := Vector2i(248, 248)
+
+## The "standard" portrait's own real texture (ProceduralCharacterSprite.
+## PORTRAIT_SIZE, 26x40 -- a tall headshot strip) is a very different SHAPE
+## from the diorama's square DIORAMA_VIEW_SIZE. Both views used to share
+## that exact same square custom_minimum_size, so STRETCH_KEEP_ASPECT_
+## CENTERED letterboxed the narrow portrait inside it -- most of the square
+## stayed empty (reported live, of this exact toggle: "still no rectangle
+## filling the panel"). Scaled to roughly match DIORAMA_VIEW_SIZE's own
+## HEIGHT rather than picking a size independently, so the two views read
+## as comparably prominent -- neither a tiny inset nor an oversized one --
+## despite their different shapes. See _apply_preview_mode for how only the
+## currently-ACTIVE view's own size actually drives the shared panel.
+##
+## STANDARD_PORTRAIT_SCALE is rounded to the nearest WHOLE number, not left
+## as the exact 248/40 = 6.2 ratio -- TEXTURE_FILTER_NEAREST keeps pixel art
+## crisp only at an integer scale, where every source texel maps onto the
+## same whole number of screen pixels; at a fractional scale, texels
+## straddle destination pixel boundaries unevenly and nearest-neighbour
+## sampling shows that as soft, uneven edges rather than clean blocks
+## (reported live, with a screenshot: "char preview is super blurry" -- the
+## old static portrait this replaced used a clean 5x for exactly this
+## reason, per docs/progress.md's own "Character creation with pixel art"
+## entry).
+const STANDARD_PORTRAIT_SCALE := roundi(float(DIORAMA_VIEW_SIZE.y) / float(ProceduralCharacterSprite.PORTRAIT_SIZE.y))
+const STANDARD_PORTRAIT_DISPLAY_SIZE := Vector2(ProceduralCharacterSprite.PORTRAIT_SIZE) * float(STANDARD_PORTRAIT_SCALE)
 
 ## Widened/heightened for the tabbed creator (Character + Skills, see
 ## _build_create_screen) -- the old 760x520 already fit its 3-column layout
@@ -166,6 +200,21 @@ var _diorama: Node2D
 ## very first _refresh_appearance always builds once, regardless of
 ## whatever _dna_seed's own default happens to be.
 var _diorama_built_for_seed := -1
+## The preview panel's own toggle between the live diorama and the old
+## "standard" full-body static portrait it replaced (asked directly: "add a
+## toggle button in the top right that toggles between diorama and standard
+## character preview with full size char rendered"). _diorama_view is the
+## SubViewportContainer _build_diorama_view returns; _standard_portrait a
+## same-size TextureRect showing ProceduralCharacterSprite.generate_hero_
+## portrait_texture -- the exact pipeline the class-icon row already uses,
+## just at full panel size instead of a tiny icon. _preview_glow_wrap is
+## kept so the toggle button (a later sibling of `centered`, so it draws on
+## top) can anchor to the SAME corner the panel itself occupies.
+var _diorama_view: Control
+var _standard_portrait: TextureRect
+var _preview_toggle_button: Button
+var _preview_glow_wrap: Control
+var _showing_diorama := true
 ## The glow ring behind the portrait, repainted to the rolled DNA's rarity
 ## color (see _refresh_dna) -- the "DNA moment" made visible, not just read.
 var _dna_glow: PanelContainer
@@ -483,7 +532,25 @@ func _build_hero_column() -> Control:
 	style.set_content_margin_all(10)
 	frame.add_theme_stylebox_override("panel", style)
 
-	frame.add_child(_build_diorama_view())
+	_diorama_view = _build_diorama_view()
+	frame.add_child(_diorama_view)
+	# The "standard" preview this diorama itself replaced -- a second child
+	# of the SAME PanelContainer, given the SAME minimum size as the
+	# diorama's own SubViewportContainer so toggling between them never
+	# reflows the panel around it. PanelContainer fits every child to its
+	# own content rect independently (it isn't a list container), so two
+	# same-sized children here simply overlap; only one is ever .visible at
+	# a time (see _apply_preview_mode).
+	_standard_portrait = TextureRect.new()
+	# Starts at Vector2.ZERO, not STANDARD_PORTRAIT_DISPLAY_SIZE -- only the
+	# active view may size the shared panel (see _apply_preview_mode); the
+	# diorama is the default view, so the portrait's own real size doesn't
+	# apply until the FIRST toggle switches to it.
+	_standard_portrait.custom_minimum_size = Vector2.ZERO
+	_standard_portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_standard_portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_standard_portrait.visible = false
+	frame.add_child(_standard_portrait)
 	# CenterContainer, not frame.set_anchors_preset(PRESET_CENTER) directly
 	# (the original code here, before the diorama existed) -- an anchor
 	# preset applied to a Control BEFORE it has any child freezes its
@@ -503,6 +570,24 @@ func _build_hero_column() -> Control:
 	centered.set_anchors_preset(Control.PRESET_FULL_RECT)
 	centered.add_child(frame)
 	glow_wrap.add_child(centered)
+	_preview_glow_wrap = glow_wrap
+
+	# The toggle itself (asked directly: "add a toggle button in the top
+	# right that toggles between diorama and standard character preview with
+	# full size char rendered") -- a later sibling of `centered` within
+	# glow_wrap, so it draws on top of the panel rather than being clipped
+	# by/hidden under it. PRESET_TOP_RIGHT anchors it to glow_wrap's own
+	# corner regardless of how big the panel inside grows.
+	_preview_toggle_button = Button.new()
+	_preview_toggle_button.text = "⛶"
+	_preview_toggle_button.tooltip_text = "Switch between the live scene and a full-size portrait"
+	_preview_toggle_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_preview_toggle_button.position = Vector2(-32, 4)
+	_preview_toggle_button.custom_minimum_size = Vector2(28, 28)
+	_preview_toggle_button.focus_mode = Control.FOCUS_NONE
+	_preview_toggle_button.pressed.connect(_toggle_preview_mode)
+	glow_wrap.add_child(_preview_toggle_button)
+
 	inner.add_child(glow_wrap)
 
 	_class_name_label = _title_label("", 20)
@@ -857,10 +942,62 @@ func _refresh_appearance() -> void:
 			_diorama.build(_dna_seed)
 			_diorama_built_for_seed = _dna_seed
 		_diorama.apply_appearance(appearance)
+	# Kept in sync unconditionally, not only while it's the visible view --
+	# so the instant a player toggles to it, it's already showing the
+	# current class/DNA/appearance rather than whatever the LAST time it was
+	# visible happened to look like.
+	if _standard_portrait != null:
+		_standard_portrait.texture = _char_sprite.generate_hero_portrait_texture(appearance)
 	for axis in _axis_value_labels:
 		var label: Label = _axis_value_labels[axis]
 		label.text = "%s: %s" % [AXIS_LABELS.get(axis, axis), _axis_value_text(axis, appearance)]
 	_refresh_dna()
+
+
+## Swaps the preview panel between the live diorama and the "standard"
+## full-body static portrait (see _preview_toggle_button's own doc comment
+## on why both exist). Pausing the diorama while it's hidden isn't just an
+## efficiency thing -- UPDATE_ALWAYS/an un-paused _process would keep
+## simulating the stroll/action state machine the whole time the standard
+## portrait is on screen instead, so the hero would have silently walked
+## somewhere else (or be mid-swing) the moment the player toggled back,
+## rather than holding exactly where they left it.
+func _toggle_preview_mode() -> void:
+	_showing_diorama = not _showing_diorama
+	_apply_preview_mode()
+
+
+func _apply_preview_mode() -> void:
+	_diorama_view.visible = _showing_diorama
+	_standard_portrait.visible = not _showing_diorama
+	# Only the ACTIVE view may drive the shared panel's own size (see
+	# STANDARD_PORTRAIT_DISPLAY_SIZE's own doc comment) -- the inactive
+	# one's custom_minimum_size drops to zero so `frame` (a plain
+	# PanelContainer, sized to the max of its children's own minimums) is
+	# never stuck matching whichever view needs more space in a given axis,
+	# leaving the OTHER, differently-shaped view's own rectangle with dead
+	# space around it regardless of its own stretch mode.
+	_diorama_view.custom_minimum_size = Vector2(DIORAMA_VIEW_SIZE) if _showing_diorama else Vector2.ZERO
+	_standard_portrait.custom_minimum_size = Vector2.ZERO if _showing_diorama else STANDARD_PORTRAIT_DISPLAY_SIZE
+	# `frame` isn't the whole panel -- it sits inside `_preview_glow_wrap`
+	# (the outer gold DNA-rarity-ring box), which has its OWN separate
+	# custom_minimum_size, fixed at construction and never otherwise
+	# touched. Fixing frame's own size above wasn't enough on its own: the
+	# narrower portrait then sat centred inside a gold box still sized for
+	# the diorama's own square, with the leftover width showing as an
+	# empty gold margin down both sides (reported live, with a screenshot,
+	# right after the frame-only fix: "also fill the whole panel please").
+	# glow_wrap's own size has to track the SAME active view frame does.
+	if _preview_glow_wrap != null:
+		var active_size := Vector2(DIORAMA_VIEW_SIZE) if _showing_diorama else STANDARD_PORTRAIT_DISPLAY_SIZE
+		_preview_glow_wrap.custom_minimum_size = active_size + Vector2(28, 28)
+	if _diorama != null:
+		_diorama.set_process(_showing_diorama)
+	var viewport := _diorama_view.get_child(0) as SubViewport
+	if viewport != null:
+		viewport.render_target_update_mode = (
+			SubViewport.UPDATE_ALWAYS if _showing_diorama else SubViewport.UPDATE_DISABLED
+		)
 
 
 ## The rarity/trait "moment" plus a reroll-budget readout, and which stat

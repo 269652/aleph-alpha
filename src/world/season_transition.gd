@@ -47,12 +47,19 @@ static func state_at(year_fraction: float) -> Dictionary:
 
 	var next: String = SeasonCycle.SEASONS[(index + 1) % count]
 	var raw := (within - (1.0 - TURN_FRACTION)) / TURN_FRACTION
-	return {"from": current, "to": next, "progress": _quantise(raw)}
+	return {"from": current, "to": next, "progress": quantise(raw)}
 
 
 ## Snapped to TURN_STEPS stages. Rounded UP so the turn reaches a full 1.0
 ## before the boundary rather than arriving at it still a step short -- the
 ## whole point is that the new season starts already complete.
-static func _quantise(raw: float) -> float:
+##
+## PUBLIC, because it is the project's one definition of "how granular a
+## seasonal change is". TreePhenology puts a canopy on its own schedule (see
+## docs/concept/seasons.md) but must still turn on these same steps: the
+## granularity is a rendering budget -- every distinct value is a whole tree
+## picture to composite and cache -- not a property of the calendar, so a
+## second schedule must not come with a second answer to it.
+static func quantise(raw: float) -> float:
 	var clamped := clampf(raw, 0.0, 1.0)
 	return ceilf(clamped * float(TURN_STEPS)) / float(TURN_STEPS)

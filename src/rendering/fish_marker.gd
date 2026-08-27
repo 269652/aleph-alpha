@@ -11,6 +11,7 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
 const CreatureWander = preload("res://src/rendering/creature_wander.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 
 ## How much open water the fish keeps around its center on every side --
 ## roughly the sprite's half-extent, so no part of the fish visually overlaps
@@ -79,8 +80,30 @@ var _tile_size := 16
 ## own phase (see ripple_phase_offset): with a fixed interval and a shared
 ## zero start, an entire shoal fired its rings on the same tick forever,
 ## which reads as a mechanism rather than as wildlife.
-const RIPPLE_INTERVAL_MIN := 1.1
-const RIPPLE_INTERVAL_MAX := 2.6
+##
+## Widened again, 1.1-2.6 -> 6.0-12.0, once "unhurried" turned out to still
+## not be unhurried ENOUGH (reported live, from the diorama's small,
+## always-visible pond, once its fish first ran through this real timing:
+## "the fish still produce ripples all the time -- only fast move flap boost
+## should produce ripples like in the real ingame"). The correlation
+## (a ripple only ever fires inside a flap burst -- see _step_water_ripple)
+## was already correct; what wasn't checked before is whether bursts
+## themselves are RARE enough relative to how long one stays visible.
+## WaterShader.RIPPLE_LIFETIME (2.2s) means a burst's own last ring is still
+## fading 0.6 + 2.2 = 2.8s after the burst starts -- at the old 1.1-2.6s
+## range, the NEXT burst was scheduled to start before that decay even
+## finished, so consecutive bursts' visible rings overlapped almost every
+## time (measured directly on a real running fish, not just estimated:
+## visibly quiet only 4% of the time). Test-pinned against that exact
+## relationship, not eyeballed: test_ripples_stay_occasional_not_continuous_
+## by_the_numbers derives the expected visible fraction straight from these
+## constants + RIPPLE_LIFETIME, and test_a_swimming_fish_actually_goes_
+## quiet_between_bursts_most_of_the_time simulates several real minutes of
+## continuous swimming and measures it directly, so any future change to
+## either side of this relationship (burst timing, or WaterShader's own
+## fade duration) gets re-checked automatically.
+const RIPPLE_INTERVAL_MIN := 6.0
+const RIPPLE_INTERVAL_MAX := 12.0
 
 ## Where this fish is in its ripple cycle when it first starts swimming, so
 ## a shoal spawned on the same frame does not pulse in unison. Bounded by one
@@ -181,6 +204,41 @@ func setup(world, tile_size: int) -> void:
 	_tile_size = tile_size
 
 
+## Overrides the wander scale this fish's own unconfined swimming uses (see
+## CreatureWander.wander_radius/wander_speed's own doc comment) -- for a
+## caller whose water body is much smaller than the real world's own
+## WANDER_RADIUS, most obviously the character preview diorama's pond.
+func configure_wander(radius: float, speed: float) -> void:
+	_wander.wander_radius = radius
+	_wander.wander_speed = speed
+
+
+## Advances this fish through exactly the SAME unconfined wander _process
+## already runs whenever _world is null (see that branch below, which calls
+## _step_unconfined_wander directly since ITS OWN _elapsed_time/ripple step
+## already ran once in _process's shared preamble) -- exposed as a public
+## method so a caller that keeps this fish's own _process disabled
+## (set_process(false), the character preview diorama's own convention for
+## every fish it places -- its real WANDER_RADIUS/pond-size mismatch means
+## it must drive fish manually rather than let them free-run) can still step
+## it through the real algorithm once per frame, instead of reimplementing
+## swimming from scratch (reported live: "fish don't swim like in the real
+## game" -- the diorama's own point-to-point movement never was this
+## algorithm at all). Unlike _process's branch, this owns its own
+## _elapsed_time/ripple advance -- nothing else is ticking this fish's
+## clock for it.
+func step_wander(delta: float) -> void:
+	_elapsed_time += delta
+	_step_water_ripple(delta)
+	_step_unconfined_wander(delta)
+
+
+func _step_unconfined_wander(delta: float) -> void:
+	var before := position
+	position = _wander.step_position(home, position, _elapsed_time, delta, wander_seed)
+	_face_along(position - before)
+
+
 ## A fish is always "swimming" (it's a fish), but it doesn't always have
 ## open water to actually push through -- gated on genuinely having moved
 ## since the last call (see _last_ripple_check_position), the same
@@ -272,16 +330,75 @@ func is_bolting() -> bool:
 	return _bolt_remaining > 0.0
 
 
-func _process(delta: float) -> void:
+## Distance-based update rate (see SimulationLod; mirrors CreatureMarker's and
+## AmbientFlyerMarker's own _lod_step). Returns the time to advance by, or
+## NEGATIVE when this frame should be skipped entirely.
+##
+## There are many fish in every loaded chunk and almost none of them are ever
+## on screen (the same case SimulationLod's own doc comment makes for
+## creatures generally), so a fish far from the player advances in fewer,
+## larger steps instead of paying full per-frame cost for swim/shore/ripple
+## logic nobody is close enough to see.
+##
+## Negative rather than zero as the skip signal, because zero is a legitimate
+## step (a caller passing 0.0 expects state to settle, not to be ignored).
+## The accumulated time is handed to the update when it does run, so a
+## skipped frame is never LOST time -- a fish far from the player still lives
+## at exactly the same rate, just in fewer, larger steps.
+var _lod_accumulated := 0.0
+
+func _lod_step(delta: float) -> float:
+	_lod_accumulated += delta
+	var player = _nearest_player_position()
+	if player == null:
+		return _take_lod_step()  # nobody to be far from: always full rate
+	var interval := SimulationLod.update_interval(position.distance_to(player))
+	if _lod_accumulated < interval:
+		return -1.0
+	return _take_lod_step()
+
+
+func _take_lod_step() -> float:
+	var step := _lod_accumulated
+	_lod_accumulated = 0.0
+	return step
+
+
+## Cheap: the player group holds one node in solo play. Cached per frame by
+## the caller rather than scanned per fish would be better still, but this is
+## already off the hot path for everything nearby.
+func _nearest_player_position():
+	# Not in the tree (a marker built standalone in a test) means there is no
+	# player to measure against, so it runs at full rate.
+	if not is_inside_tree():
+		return null
+	# Cache the player node so this LOD-distance check (run every frame for
+	# every fish) doesn't re-query the whole "player" group each time -- just
+	# re-look-up when the cached ref is gone (player despawn/respawn).
+	if _cached_player == null or not is_instance_valid(_cached_player):
+		var players := get_tree().get_nodes_in_group("player")
+		if players.is_empty():
+			return null
+		_cached_player = players[0]
+	return _cached_player.position
+
+
+var _cached_player: Node = null
+
+
+func _process(frame_delta: float) -> void:
+	# Fish far from the player advance in fewer, larger steps (see
+	# SimulationLod) -- same time passes, fewer updates to pay for.
+	var delta := _lod_step(frame_delta)
+	if delta < 0.0:
+		return
 	if _bolt_remaining > 0.0:
 		_bolt_remaining -= delta
 
 	_elapsed_time += delta
 	_step_water_ripple(delta)
 	if _world == null:
-		var before := position
-		position = _wander.step_position(home, position, _elapsed_time, delta, wander_seed)
-		_face_along(position - before)
+		_step_unconfined_wander(delta)
 		return
 
 	# Turn the swim heading gradually toward the target rather than snapping
@@ -330,8 +447,17 @@ func _process(delta: float) -> void:
 
 	# A real fast tail flap propels the fish faster than an ordinary glide
 	# (see FLAP_SPEED_MULTIPLIER/_is_flapping) -- not just a faster ring
-	# cadence.
-	var speed := CreatureWander.WANDER_SPEED * (FLAP_SPEED_MULTIPLIER if _is_flapping else 1.0)
+	# cadence. _wander.wander_speed, not the bare CreatureWander.WANDER_SPEED
+	# constant -- this is the ONE place in the world-aware _process branch
+	# that reads a raw speed rather than going through _wander itself, so a
+	# caller overriding wander_speed (configure_wander -- the character
+	# preview diorama's own pond, far smaller than any real water body) was
+	# silently ignored here even though direction_at/wander_radius already
+	# honored the override; the fish's own visible speed stayed real-ocean
+	# fast regardless (reported live, alongside the diorama switching this
+	# fish onto its real _process for the first time: "fish still don't
+	# move natural like ingame").
+	var speed := _wander.wander_speed * (FLAP_SPEED_MULTIPLIER if _is_flapping else 1.0)
 	if _bolt_remaining > 0.0:
 		speed = BOLT_SPEED  # the dash that makes an escape read as an escape
 

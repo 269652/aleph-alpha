@@ -19,6 +19,9 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 ## chain while still deriving its placement margins from the real thing (see
 ## tree_bounds).
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
+## The pure walk/placement math shared with CharacterPreviewDiorama --
+## random_point_in_circle is used below for the fish spawn scatter.
+const CharacterStroll = preload("res://src/rendering/character_stroll.gd")
 
 ## Pond radius as a fraction of the footprint's shorter side.
 const POND_RADIUS_FRACTION := 0.22
@@ -26,28 +29,61 @@ const TREE_COUNT := 2
 const PEBBLE_COUNT := 5
 const FISH_COUNT := 2
 ## How much of the pond's own radius a fish is allowed to roam within, as a
-## fraction -- kept well under 1.0 so a fish's own drawn BODY (not just its
-## centre point) never overhangs the shore. Tightened from 0.8 (reported
-## live: "the fish spawns outside the pond") -- a fish's own art measures
-## roughly 4.4 world units from its centre to its longest edge
-## (ProceduralFishSprite.WORLD_SIZE * ArtResolution.SPRITE_SCALE *
-## FishRenderer.FISH_WORLD_SCALE, halved), which at 0.8 * a ~21-unit pond
-## radius left as little as ~0.4 units of clearance for a fish spawned at
-## the very edge of its own allowed band -- not always enough once that
-## body extends outward from its own centre in a random direction. 0.6
-## leaves a real, comfortable margin instead. CharacterPreviewDiorama's own
-## ongoing swim-target picking (_pick_new_fish_target) uses this exact same
-## fraction, not a separate hand-copied number, so a fish's SPAWN position
-## and its later wander targets can never quietly drift out of sync.
-const FISH_SAFE_RADIUS_FRACTION := 0.6
+## fraction. First tightened 0.8 -> 0.6 (reported live: "the fish spawns
+## outside the pond") against the pond's own NOMINAL geometric radius -- but
+## the pond's water shader fades alpha smoothly toward the shore (see
+## _build_pond's all-4-cardinal-directions ProceduralShoreDistanceSprite and
+## water_shader.gd's edge_alpha), so a point can sit well inside pond_radius
+## and still read as barely-tinted grass rather than obvious water. Retuned
+## again (reported live, still: "fish are still spawned on land") against
+## the shader's OWN fade curve instead of the pond's nominal edge --
+## test_fish_safe_radius_fraction_keeps_a_fishs_whole_body_fully_opaque
+## derives the worst-case shore-distance value for a fish's own far edge
+## (this fraction's radius plus the fish's own half-extent, ~4.4 world
+## units -- ProceduralFishSprite.WORLD_SIZE * FishRenderer.FISH_WORLD_SCALE,
+## halved) and checks it against WaterShader.edge_alpha_for_shore_distance,
+## the actual curve the GPU draws with -- not a separately eyeballed number.
+## CharacterPreviewDiorama's own ongoing swim-target picking
+## (_pick_new_fish_target) uses this exact same fraction, via the same
+## CharacterStroll.random_point_in_circle this SPAWN scatter now also uses
+## (previously a square Rect2, whose corners sit sqrt(2) further from centre
+## than this fraction alone accounts for -- also part of the same live
+## report), so a fish's spawn position and its later wander targets can
+## never quietly drift out of sync OR out of shape.
+const FISH_SAFE_RADIUS_FRACTION := 0.28
 ## World units kept clear around each tree -- both for the pebble/grass
 ## scatter below and for CharacterPreviewDiorama's own obstacle-avoiding
 ## stroll (see is_clear).
 const TREE_MARGIN := 6.0
 ## World units between grass-clump anchors -- matches roughly one ground
-## tile, since IllustratedGrassPatch.fill_band's own doc comment describes
-## one cell_specs entry as covering about one 16x16 tile.
+## tile, since each clump CharacterPreviewDiorama._build_grass expands (via
+## IllustratedGrassPatch.cards_for_cell) is rooted at one such anchor,
+## covering about one 16x16 tile of ground.
 const GRASS_CLUMP_SPACING := 16.0
+## The noise scale the grass-clump selection below samples at -- deliberately
+## NOT TallGrass.FIELD_NOISE_SCALE (0.12), despite reusing everything else
+## about that rule (see generate()'s own doc comment on SEED_CHANCE). This
+## footprint's own grid is only 6x6 cells; cell index * 0.12 never exceeds
+## 0.6 for any cell in it, so the noise sample never crosses a lattice
+## boundary and PixelNoise.smooth degenerates into a single smooth
+## MONOTONIC gradient across the WHOLE grid rather than genuine organic
+## variation. The "kept" top-SEED_CHANCE share of a monotonic gradient is
+## always whichever corner/edge it happens to peak toward for that seed --
+## STRUCTURALLY never the middle, for ANY seed (reported live, twice:
+## "grass blades exist, but they should be more in the center", then again
+## after the first attempt -- ranking the kept pool by distance to centre,
+## see character_preview_diorama.gd's own _pick_long_grass_positions -- can
+## only pick from what's actually in the pool, and the pool itself excluded
+## the centre no matter how it was ranked). Widened until the grid spans
+## enough lattice cells that the gradient's own peak can land anywhere per
+## seed, while staying small enough that nearby cells still correlate (so
+## the meadow keeps clumping, not speckling -- see test_kept_grass_cells_
+## clump_together). Measured, not eyeballed
+## (test_grass_field_noise_scale_lets_the_centre_actually_receive_grass):
+## at the old 0.12, 0/100 sampled seeds ever placed a clump on any of the 4
+## cells nearest the footprint's own centre; at 0.5, 37/100 did, with the
+## meadow's own clump-touch ratio only dropping from 0.97 to 0.92.
+const GRASS_FIELD_NOISE_SCALE := 0.5
 ## How far outside the pond's rim a pebble can land -- keeps them reading
 ## as "at the water's edge," not scattered loose in the grass.
 const PEBBLE_RIM_BAND := 4.0
@@ -58,6 +94,14 @@ const PEBBLE_RIM_BAND := 4.0
 ## the edge" rather than centred (reported live: "the fish pond should be
 ## at the edge").
 const POND_EDGE_MARGIN := 4.0
+## A few songbirds circle overhead (reported live, alongside the long-grass
+## request: "add ... birds") -- purely decorative ambience, the same "reuse
+## the real rendering, no gameplay behind it" contract the diorama's fish
+## already have. Fly overhead, so unlike every ground placement above they
+## don't need is_clear() obstacle avoidance -- just a starting point
+## somewhere inside the scene for their own home-tethered wander (see
+## CharacterPreviewDiorama._build_birds).
+const BIRD_COUNT := 2
 
 
 class Result:
@@ -67,6 +111,7 @@ class Result:
 	var pebble_positions: Array[Vector2] = []
 	var fish_positions: Array[Vector2] = []
 	var grass_positions: Array[Vector2] = []
+	var bird_positions: Array[Vector2] = []
 
 	## Whether `point` is clear of every obstacle this layout placed --
 	## outside the pond and away from every tree by TREE_MARGIN. The one
@@ -100,13 +145,18 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 		result.pebble_positions.append(result.pond_center + Vector2(cos(angle), sin(angle)) * radius)
 
 	for i in FISH_COUNT:
-		# Anywhere strictly inside the pond -- sqrt(rng) so points land
-		# evenly across the disc's own AREA rather than bunching near the
-		# centre (a plain uniform radius, with no correction, oversamples
-		# the middle since a ring's area grows with radius).
-		var angle := rng.randf_range(0.0, TAU)
-		var radius := sqrt(rng.randf()) * result.pond_radius * FISH_SAFE_RADIUS_FRACTION
-		result.fish_positions.append(result.pond_center + Vector2(cos(angle), sin(angle)) * radius)
+		# Anywhere strictly inside the pond, area-weighted (see
+		# CharacterStroll.random_point_in_circle's own doc comment) -- the
+		# SAME helper CharacterPreviewDiorama's own ongoing fish-target
+		# picking now shares, so a fish's spawn point and its later wander
+		# targets can never disagree about what shape "inside the pond"
+		# means.
+		result.fish_positions.append(
+			CharacterStroll.random_point_in_circle(result.pond_center, result.pond_radius * FISH_SAFE_RADIUS_FRACTION, rng)
+		)
+
+	for i in BIRD_COUNT:
+		result.bird_positions.append(Vector2(rng.randf_range(0.0, footprint.x), rng.randf_range(0.0, footprint.y)))
 
 	# A clump on EVERY clear cell carpeted the whole footprint at ~100%
 	# coverage -- five times what a real meadow has -- and since each clump
@@ -149,8 +199,8 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 				"position": candidate,
 				"field": PixelNoise.smooth(
 					seed_value,
-					float(cell_x) * TallGrass.FIELD_NOISE_SCALE,
-					float(cell_y) * TallGrass.FIELD_NOISE_SCALE
+					float(cell_x) * GRASS_FIELD_NOISE_SCALE,
+					float(cell_y) * GRASS_FIELD_NOISE_SCALE
 				),
 			})
 	scored.sort_custom(func(a, b): return a["field"] > b["field"])

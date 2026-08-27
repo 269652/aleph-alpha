@@ -139,6 +139,41 @@ func test_the_world_scale_is_positive():
 	assert_gt(ProceduralWormSprite.world_scale(), 0.0)
 
 
+# -- texture cache ------------------------------------------------------------
+#
+# A surfaced worm used to mint a brand new Texture2D every time it broke the
+# surface, uncached -- unlike ProceduralTreeSprite's own _tree_texture_cache.
+# Chunks aren't persisted on eviction (see EarthChunkManager's own doc
+# comment), and a worm's seed is derived from its cell, so the same cell
+# resurfacing or a chunk reloading asks for the exact same seed_value again;
+# caching means that gets the exact same Texture2D back instead of a fresh
+# repaint.
+
+func test_the_same_seed_gets_its_texture_back_instead_of_redrawing_it():
+	var first := generator.generate_texture(11)
+	var second := generator.generate_texture(11)
+	assert_same(first, second, "one texture per distinct worm, not one per sprite")
+
+
+## The cache is shared across generator INSTANCES too -- each EarthChunkManager
+## holds its own ProceduralWormSprite, so a per-instance cache would still
+## redraw once per instance.
+func test_two_generators_of_one_seed_share_the_texture():
+	var a := ProceduralWormSprite.new().generate_texture(9)
+	var b := ProceduralWormSprite.new().generate_texture(9)
+	assert_same(a, b)
+
+
+func test_a_different_seed_does_not_share_the_texture():
+	assert_not_same(generator.generate_texture(1), generator.generate_texture(2))
+
+
+func test_cached_texture_still_matches_a_freshly_drawn_one():
+	var cached := generator.generate_texture(6)
+	var fresh := generator.generate_image(6)
+	assert_eq(cached.get_image().get_data(), fresh.get_data())
+
+
 # -- how big a worm is -------------------------------------------------------
 
 ## A worm is about as long as a crocus is tall, because both are about ten

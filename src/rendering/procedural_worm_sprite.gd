@@ -74,8 +74,21 @@ static func world_scale() -> float:
 	return (WORLD_LENGTH_TILES * TILE_SIZE) / float(SIZE.x)
 
 
+## Finished worms, keyed by seed_value alone -- a worm's seed is hashed from
+## its cell, so this is naturally bounded by how many distinct cells have ever
+## surfaced one, and a cell that resurfaces or a chunk that unloads and
+## reloads (chunks are not persisted -- see EarthChunkManager's own doc
+## comment) asks for the exact same texture back instead of a fresh repaint.
+## Mirrors ProceduralTreeSprite's own _tree_texture_cache.
+static var _worm_texture_cache := {}
+
+
 func generate_texture(seed_value: int) -> ImageTexture:
-	return ImageTexture.create_from_image(generate_image(seed_value))
+	if _worm_texture_cache.has(seed_value):
+		return _worm_texture_cache[seed_value]
+	var texture := ImageTexture.create_from_image(generate_image(seed_value))
+	_worm_texture_cache[seed_value] = texture
+	return texture
 
 
 func generate_image(seed_value: int) -> Image:

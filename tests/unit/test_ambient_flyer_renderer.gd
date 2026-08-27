@@ -148,6 +148,31 @@ func test_spawned_flyers_are_ambient_flyer_markers_with_a_texture():
 		assert_not_null(flyer.texture)
 
 
+## build_bird: places one songbird directly, for callers assembling a scene
+## by hand rather than spawning a chunk's worth -- the same shape FishRenderer
+## .spawn_fish_at already established for the character preview diorama's own
+## pond (reported live, for that exact diorama: "add ... birds").
+func test_build_bird_returns_a_marker_with_a_texture_at_the_given_position():
+	var position := Vector2(40, 60)
+	var bird := renderer.build_bird(parent, "sparrow", position, 5)
+	assert_true(bird is AmbientFlyerMarker)
+	assert_not_null(bird.texture)
+	assert_eq(bird.position, position)
+	assert_eq(bird.home, position)
+	assert_eq(bird.species, "sparrow")
+
+
+## The real world's own BIRD_RADIUS (70 world units) comfortably exceeds a
+## diorama-scale footprint -- callers with a small scene must be able to
+## scale the circling down to fit, the same way FISH_SWIM_SPEED already
+## scales fish movement down for the diorama's own tiny pond.
+func test_build_bird_defaults_to_the_real_world_radius_but_accepts_an_override():
+	var default_bird := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 1)
+	assert_eq(default_bird.get("_movement").radius, AmbientFlyerRenderer.BIRD_RADIUS)
+	var scaled_bird := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 2, 20.0)
+	assert_eq(scaled_bird.get("_movement").radius, 20.0)
+
+
 # -- sized against a fish ---------------------------------------------------
 #
 # Flyer sizes are expressed as multiples of a fish, the nearest visible
@@ -412,6 +437,51 @@ func test_every_spawned_species_is_inside_its_own_latitude_band():
 ## qualify for butterflies while no butterfly species can live there (a chunk
 ## that spawns nothing for no visible reason), or a species could claim a
 ## biome the tier-wide gate never opens (a dead table row).
+# -- built flyers reuse cached textures, not fresh ones per marker ----------
+#
+# _build_marker used to call ProceduralButterflySprite/ProceduralBirdSprite's
+# generate_texture/generate_flap_textures/generate_perched_texture directly,
+# and none of those three cached anything -- every spawned butterfly/bee/bird
+# paid real generation cost AND was permanently unbatchable with every other
+# flyer of the same species/state under Godot's gl_compatibility renderer
+# (see scenes/world.tscn's y_sort_enabled Entities/Creatures tiers). The fix
+# lives in the sprite generators themselves (mirroring
+# ProceduralTreeSprite._tree_texture_cache / ProceduralFishSprite.LOOK_VARIANTS
+# / ProceduralAnimalAnimation.textures_for), so these confirm the caching is
+# actually visible through the renderer's own public building calls.
+
+func test_two_birds_of_the_same_species_and_seed_share_one_texture_instance():
+	var first := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 4)
+	var second := renderer.build_bird(parent, "sparrow", Vector2(10, 10), 4)
+	assert_same(first.texture, second.texture, "same species+seed should reuse the cached texture")
+
+
+func test_two_birds_of_the_same_species_and_seed_share_flap_frames():
+	var first := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 4)
+	var second := renderer.build_bird(parent, "sparrow", Vector2(10, 10), 4)
+	assert_same(
+		first.flap_frames, second.flap_frames,
+		"same species+seed should reuse the cached flap-frame sequence"
+	)
+
+
+func test_two_birds_of_the_same_species_and_seed_share_one_perched_texture():
+	var first := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 4)
+	var second := renderer.build_bird(parent, "sparrow", Vector2(10, 10), 4)
+	assert_not_null(first.perched_frame)
+	assert_same(
+		first.perched_frame, second.perched_frame,
+		"same species+seed should reuse the cached perched texture"
+	)
+
+
+func test_two_butterflies_of_the_same_species_and_seed_share_texture_and_flap_frames():
+	var first := renderer.spawn_offspring(parent, "monarch", Vector2.ZERO, 4)
+	var second := renderer.spawn_offspring(parent, "monarch", Vector2(5, 5), 4)
+	assert_same(first.texture, second.texture)
+	assert_same(first.flap_frames, second.flap_frames)
+
+
 func test_flyer_range_biomes_agree_with_the_tier_wide_biome_gates():
 	var pollinator_biomes := {}
 	for species in AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL + AmbientFlyerRenderer.BEE_SPECIES_POOL:

@@ -7,6 +7,7 @@ extends GutTest
 const MainMenu = preload("res://scenes/main_menu.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
+const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
 
 ## Isolates the Load Game button's save-detection from the real save file
 ## (see docs/concept/persistence.md) -- MainMenu.save_path is overridable for
@@ -489,6 +490,159 @@ func test_the_character_tab_body_also_spans_the_scroll_areas_width():
 		1.0,
 		"Character tab body is %d wide in a %d-wide content area" % [tabs.size.x, available]
 	)
+
+
+## The diorama (see docs/concept/character_creator_preview_scene.md) must fit
+## inside the FIRST, unscrolled view of the Character tab, alongside the
+## class-icon row sitting above it -- reported live, with a screenshot: the
+## diorama's own bottom edge (grass/trees mid-render) was visibly cut off by
+## the scroll area's own viewport, not merely "below the fold" the way the
+## appearance labels/reroll button legitimately are (this tab has exactly one
+## scroll region, by design -- see test_create_screen_wraps_its_tab_content_
+## in_a_scroll_container -- so SOME content scrolling is expected; the
+## diorama's own box straddling that fold mid-render is not). Checked
+## against real laid-out global rects, not a hardcoded pixel guess, so a
+## theme or window-size change can't quietly turn this into a false pass.
+func _find_diorama_glow_wrap() -> Control:
+	var svc: SubViewportContainer = null
+	for n in menu._create_screen.find_children("*", "SubViewportContainer", true, false):
+		svc = n
+	if svc == null:
+		return null
+	# svc -> frame (PanelContainer) -> centered (CenterContainer) -> glow_wrap.
+	return svc.get_parent().get_parent().get_parent()
+
+
+func test_the_diorama_fits_within_the_first_unscrolled_view_of_the_character_tab():
+	await _lay_out_create_screen_on_tab("Character")
+	var scroll := _find_outer_tab_scroll()
+	var glow_wrap := _find_diorama_glow_wrap()
+	assert_not_null(glow_wrap, "the diorama's own panel should exist on the Character tab")
+	var scroll_bottom: float = scroll.global_position.y + scroll.size.y
+	var diorama_bottom: float = glow_wrap.global_position.y + glow_wrap.size.y
+	assert_true(
+		diorama_bottom <= scroll_bottom,
+		"diorama panel bottom (%.0f) is cut off by the scroll area's own visible bottom (%.0f)" % [diorama_bottom, scroll_bottom]
+	)
+
+
+# -- preview toggle: diorama <-> the old "standard" full-body static portrait
+# -- (asked directly: "add a toggle button in the top right that toggles
+# -- between diorama and standard character preview with full size char
+# -- rendered") -- the same ProceduralCharacterSprite.generate_hero_portrait_
+# -- texture the class-icon row already uses, just at the preview panel's own
+# -- full size instead of a tiny icon, since that portrait pipeline is real,
+# -- tested, and already live on this exact screen -- not a new one.
+
+func test_preview_toggle_button_sits_top_right_of_the_preview_panel():
+	var button := menu._preview_toggle_button
+	assert_not_null(button)
+	assert_eq(button.get_parent(), menu._preview_glow_wrap)
+	assert_eq(button.anchor_left, 1.0)
+	assert_eq(button.anchor_top, 0.0)
+
+
+func test_diorama_is_the_default_view():
+	assert_true(menu._diorama_view.visible)
+	assert_false(menu._standard_portrait.visible)
+
+
+func test_pressing_the_toggle_swaps_which_view_is_visible():
+	menu._preview_toggle_button.pressed.emit()
+	assert_false(menu._diorama_view.visible)
+	assert_true(menu._standard_portrait.visible)
+	menu._preview_toggle_button.pressed.emit()
+	assert_true(menu._diorama_view.visible)
+	assert_false(menu._standard_portrait.visible)
+
+
+func test_the_standard_portrait_shows_a_real_texture_of_the_current_appearance():
+	menu._preview_toggle_button.pressed.emit()
+	assert_not_null(menu._standard_portrait.texture)
+
+
+## The SubViewport keeps rendering, and the diorama keeps simulating, for as
+## long as it's the visible view (UPDATE_ALWAYS, see _build_diorama_view's
+## own doc comment) -- but paying that cost while the OTHER view is what's
+## actually on screen would be pure waste, and would also let the hero teleport
+## mid-toggle instead of holding still where it was left.
+func test_toggling_away_from_the_diorama_pauses_it():
+	assert_true(menu._diorama.is_processing())
+	menu._preview_toggle_button.pressed.emit()
+	assert_false(menu._diorama.is_processing())
+	menu._preview_toggle_button.pressed.emit()
+	assert_true(menu._diorama.is_processing())
+
+
+## The portrait's own real texture (ProceduralCharacterSprite.PORTRAIT_SIZE,
+## 26x40 -- a tall headshot strip) is a very different SHAPE from the
+## diorama's square DIORAMA_VIEW_SIZE. Both views used to share that exact
+## same square custom_minimum_size, so STRETCH_KEEP_ASPECT_CENTERED
+## letterboxed the narrow portrait inside it -- most of the square stayed
+## empty (reported live, twice: "it's supposed to fill the entire
+## rectangle", then again after the pond fix landed: "still no rectangle
+## filling the panel" -- the pond was fixed; this, the NEW toggle's own
+## portrait view, was the still-real second cause). The portrait's own
+## custom_minimum_size must match its own aspect ratio, not the diorama's.
+func test_standard_portrait_size_matches_its_own_textures_aspect_ratio():
+	# Only the ACTIVE view's own size is nonzero (see the very next test) --
+	# the portrait's real aspect-correct size doesn't apply until it's the
+	# one being shown.
+	menu._preview_toggle_button.pressed.emit()
+	var portrait_size := ProceduralCharacterSprite.PORTRAIT_SIZE
+	var expected_aspect: float = float(portrait_size.x) / float(portrait_size.y)
+	var actual_aspect: float = menu._standard_portrait.custom_minimum_size.x / menu._standard_portrait.custom_minimum_size.y
+	assert_almost_eq(actual_aspect, expected_aspect, 0.01)
+
+
+## Fixing `frame`'s own size to the active view (the previous fix) wasn't
+## the whole panel: `glow_wrap` -- the OUTER gold DNA-rarity-ring box
+## `frame` sits centred inside -- has its own SEPARATE custom_minimum_size,
+## fixed at DIORAMA_VIEW_SIZE + 28 once at construction and never touched
+## again. Toggling to the narrower portrait shrank `frame` correctly but
+## left `glow_wrap` at its old square size regardless, so the portrait sat
+## centred inside a gold box visibly wider than it (reported live, with a
+## screenshot, after the frame-only fix: "also fill the whole panel
+## please"). glow_wrap's own size must follow the SAME active view frame
+## does.
+func test_glow_wrap_itself_resizes_to_match_the_active_view():
+	var padding := Vector2(28, 28)
+	assert_eq(menu._preview_glow_wrap.custom_minimum_size, Vector2(menu.DIORAMA_VIEW_SIZE) + padding)
+	menu._preview_toggle_button.pressed.emit()
+	assert_eq(menu._preview_glow_wrap.custom_minimum_size, menu.STANDARD_PORTRAIT_DISPLAY_SIZE + padding)
+	menu._preview_toggle_button.pressed.emit()
+	assert_eq(menu._preview_glow_wrap.custom_minimum_size, Vector2(menu.DIORAMA_VIEW_SIZE) + padding)
+
+
+## Nearest-neighbour filtering (TEXTURE_FILTER_NEAREST) keeps pixel art
+## crisp at an INTEGER scale -- every source texel maps cleanly onto the
+## same whole number of screen pixels. At a fractional scale (the previous
+## 248/40 = 6.2x), source texels straddle destination pixel boundaries
+## unevenly, and GPU nearest-neighbour sampling shows that as soft/uneven
+## edges rather than the same crisp blocks a clean multiple gives (reported
+## live, with a screenshot: "char preview is super blurry" -- the old
+## static portrait this replaced used a clean 5x for exactly this reason,
+## per its own history in docs/progress.md). STANDARD_PORTRAIT_DISPLAY_SIZE
+## must be a whole-number multiple of PORTRAIT_SIZE on both axes.
+func test_standard_portrait_display_size_is_a_whole_number_scale_of_the_source_texture():
+	var portrait_size := Vector2(ProceduralCharacterSprite.PORTRAIT_SIZE)
+	var scale := menu.STANDARD_PORTRAIT_DISPLAY_SIZE / portrait_size
+	assert_almost_eq(scale.x, round(scale.x), 0.001, "width scale %f is not a whole number" % scale.x)
+	assert_almost_eq(scale.y, round(scale.y), 0.001, "height scale %f is not a whole number" % scale.y)
+	assert_almost_eq(scale.x, scale.y, 0.001, "x/y scale must match or the portrait distorts")
+
+
+## Only the ACTIVE view may drive the shared panel's own size -- otherwise
+## the panel is stuck sized for whichever view happens to need more space in
+## a given axis, leaving the OTHER (smaller-shaped) view's own rectangle
+## with dead space around it regardless of stretch mode. The inactive view's
+## own custom_minimum_size drops to zero so it cannot contribute.
+func test_only_the_active_preview_view_has_a_nonzero_minimum_size():
+	assert_eq(menu._standard_portrait.custom_minimum_size, Vector2.ZERO)
+	assert_eq(menu._diorama_view.custom_minimum_size, Vector2(menu.DIORAMA_VIEW_SIZE))
+	menu._preview_toggle_button.pressed.emit()
+	assert_eq(menu._diorama_view.custom_minimum_size, Vector2.ZERO)
+	assert_ne(menu._standard_portrait.custom_minimum_size, Vector2.ZERO)
 
 
 ## The skill grid's own parent must give it its full height. The creator has

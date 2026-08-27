@@ -111,3 +111,38 @@ func test_fish_stay_deterministic():
 		generator.generate_image("koi", 5).get_data(),
 		generator.generate_image("koi", 5).get_data()
 	)
+
+
+# -- generated textures are shared, not rebuilt per fish --------------------
+#
+# generate_texture used to build a brand-new Texture2D on every call, so
+# every spawned FishMarker paid its own image-generation cost AND ended up
+# permanently unbatchable with every other fish, even of the same species,
+# because each got its own unique Texture2D object -- same bug
+# ProceduralAnimalAnimation.textures_for was written to fix for land
+# animals (see its own "generated frames are shared" tests).
+
+func test_the_same_species_and_seed_share_one_cached_texture():
+	var a := generator.generate_texture("koi", 3)
+	var b := generator.generate_texture("koi", 3)
+	assert_same(a, b, "same species+seed fish should share one cached texture")
+
+
+## The cache is shared across generator INSTANCES too -- FishRenderer holds
+## its own ProceduralFishSprite, so a per-instance cache would still redraw
+## once per fish.
+func test_two_generators_of_one_look_share_the_texture():
+	var a := ProceduralFishSprite.new().generate_texture("trout", 9)
+	var b := ProceduralFishSprite.new().generate_texture("trout", 9)
+	assert_same(a, b)
+
+
+## Individual variety survives bucketing: a species still shows more than
+## one look across many seeds, but the distinct-texture count stays bounded
+## by LOOK_VARIANTS rather than growing one-per-fish.
+func test_generate_texture_still_shows_more_than_one_look_but_stays_bounded():
+	var seen := {}
+	for seed_value in ProceduralFishSprite.LOOK_VARIANTS * 5:
+		seen[generator.generate_texture("koi", seed_value)] = true
+	assert_gt(seen.size(), 1, "individuals of one species should still show more than one look")
+	assert_lte(seen.size(), ProceduralFishSprite.LOOK_VARIANTS)

@@ -1304,6 +1304,110 @@ func test_step_fruiting_drops_named_species_items_near_the_player():
 	)
 
 
+## The perf fix step_fruiting's per-tree loop now applies: genome lookup,
+## species/pollination lookups, FruitingModel.state_at, and above all
+## tree.set_ripe_fruit's canopy texture redraw all used to run for EVERY
+## loaded tree in the whole streaming radius -- potentially thousands --
+## roughly once a second, forever, including trees the player has never
+## been anywhere near. A tree beyond FRUITING_DETAIL_RADIUS must now be
+## skipped entirely for the tick, and because FruitingModel.state_at is a
+## PURE function of elapsed world time rather than a running simulation,
+## that skip must not freeze the tree: it has to show the correct catch-up
+## ripeness the moment the player is back in range.
+##
+## Reads the tree's raw _ripe_count field rather than the public
+## ripe_fruit_count() getter -- that getter clamps the "never touched" -1
+## sentinel to 0, so it cannot distinguish "skipped for being out of range"
+## from "processed and genuinely bore no fruit" the way this test needs to.
+func test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_range():
+	var species_id := "apple"
+	var tree_position := _position_for_species(species_id)
+
+	var scheduler := ForageScheduler.new()
+	var genome := scheduler.genome_for(tree_position)
+	var model := FruitingModel.new()
+	# Land the world clock at genuine mid-plateau peak (same technique as
+	# test_harvest_peak_fruit_near_reports_the_real_peak_state above), so the
+	# tree actually has real hanging fruit to catch up on. Computed and set
+	# BEFORE the tree is even loaded, so establishing the clock itself -- via
+	# set_world_age_seconds's own sync_tree_season call -- cannot be what
+	# dresses it.
+	var warmth_for_window: float = manager._warmth_at_pixel(tree_position)
+	var window: Dictionary = model._window_for(genome, warmth_for_window)
+	var peak_time: float = (
+		(float(window.grow_end) + float(window.fall_start)) / 2.0 * FruitingModel.BEARING_CYCLE_SECONDS
+	)
+	manager.set_world_age_seconds(peak_time)
+
+	var tree := ChoppableTree.new()
+	tree.position = tree_position
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	var far_pixel := tree.position + Vector2(EarthChunkManager.FRUITING_DETAIL_RADIUS + 1000.0, 0.0)
+	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, far_pixel)
+
+	assert_eq(
+		tree._ripe_count, -1,
+		"a tree outside FRUITING_DETAIL_RADIUS must be skipped entirely, not dressed with a stale/default value"
+	)
+
+	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
+
+	var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id)
+	var ripening_multiplier := TreeSpecies.ripening_multiplier_for(species_id)
+	var current_warmth: float = manager._warmth_at_pixel(tree.position)
+	var expected: Dictionary = manager._fruiting_model.state_at(
+		genome, manager.world_age_seconds(), current_warmth, yield_multiplier, ripening_multiplier
+	)
+	var expected_ripe := int(expected.get("ripe", 0))
+
+	assert_gt(expected_ripe, 0, "precondition: mid-plateau should carry real ripe fruit")
+	assert_eq(
+		tree._ripe_count, expected_ripe,
+		"once back in range the tree must show the REAL catch-up ripeness for the elapsed time, not a frozen/stale value"
+	)
+
+
+# -- sync_tree_season: the second path that redraws every loaded tree's ------
+# canopy, independent of step_fruiting (see World._client_process and
+# set_world_age_seconds/jump_to_season). Must respect the same
+# FRUITING_DETAIL_RADIUS gate when it has a player_pixel to check against, or
+# a tree step_fruiting skipped for being out of range gets re-dressed right
+# back in -- with its own stale cached ripe_fruit_count() -- the moment a
+# season changes, including the very first-ever call (its tracked signature,
+# _last_tree_season, starts empty and so never matches).
+
+func test_sync_tree_season_leaves_a_far_tree_untouched():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	var far_pixel := tree.position + Vector2(EarthChunkManager.FRUITING_DETAIL_RADIUS + 1000.0, 0.0)
+	manager.sync_tree_season(far_pixel)
+
+	assert_eq(tree._ripe_count, -1, "a season sync must not dress a tree the player is nowhere near")
+	assert_eq(tree.current_season(), "", "a season sync must not dress a tree the player is nowhere near")
+
+
+func test_sync_tree_season_dresses_a_nearby_tree():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	manager.sync_tree_season(tree.position)
+
+	assert_ne(
+		tree.current_season(), "",
+		"a tree the player is standing next to should be dressed on a season sync, not skipped"
+	)
+
+
 # -- building/destruction -----------------------------------------------------
 
 func test_build_at_global_sets_a_modification_when_the_chunk_is_loaded():
@@ -2093,6 +2197,70 @@ func test_a_completed_project_whose_output_is_not_placeable_places_nothing_and_d
 	)
 
 
+# -- corrected builder_count: SPARE capacity, not total population -----------
+# (docs/concept/timber_construction.md's "Deciding what to build, and who
+# builds it" section's own "Spare capacity" paragraph -- a real bug fix:
+# construction should only ever consume population BEYOND what farmer/
+# hunter/fisher require, never compete with the survival occupations
+# SettlementState.carrying_capacity itself depends on.)
+
+## Seed 5 is a real, pinned hunter (see test_step_settlements_attempts_
+## production_for_a_producer_occupation above) -- a real survival occupation,
+## NpcProduction.PRODUCER_ITEM_BY_OCCUPATION's own subset. A settlement whose
+## ENTIRE population works a real survival occupation has ZERO spare
+## capacity, and must accrue ZERO construction labor even though
+## household_count_for_settlement is genuinely nonzero -- the exact
+## regression this fix closes (the old code passed TOTAL population here).
+func test_construction_labor_only_advances_using_spare_capacity_not_total_population():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(5)])
+	manager.update(_berlin_tile)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(
+		manager.household_count_for_settlement(settlement_id), 1,
+		"sanity check on the fixture -- household_count_for_settlement is genuinely nonzero"
+	)
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, _construction_test_local_origin(), "sagewerk", "household:spare_capacity_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 5.0)
+
+	assert_almost_eq(
+		project.labor_hours_accumulated, 0.0, 0.0001,
+		"a settlement whose entire population works a real survival occupation has zero SPARE " +
+		"capacity, even though household_count_for_settlement is nonzero"
+	)
+
+
+# -- double-fix cancellation, wired at the real chunk-load boundary ----------
+# (docs/concept/timber_construction.md's "Deciding what to build, and who
+# builds it" section's own "Two real needs resolving each other" paragraph --
+# SettlementBuildDecision, called from _load_chunk via
+# _apply_settlement_build_decision.)
+
+## A settlement's own queued "sagewerk" producer project is abandoned once a
+## real sagewerk already exists nearby (the player independently brought/
+## built the same real fix first) -- proven against the REAL chunk-scanned
+## present_structure_ids (_present_structure_ids_for_settlement_chunk), not a
+## literal Array a test hands the pure decision function directly.
+func test_a_redundant_producer_project_is_abandoned_once_the_real_structure_already_exists_nearby():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var sagewerk_tile := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(5, 5)
+	manager.build_at_global(sagewerk_tile.x, sagewerk_tile.y, "sagewerk")
+	var redundant := manager.construction_project_store().start_project(
+		chunk_coord, _construction_test_local_origin(), "sagewerk", "household:double_fix_test"
+	)
+	assert_eq(redundant.status, ConstructionProject.Status.PLANNED, "precondition")
+
+	_unload_wait_and_reload(0.0)
+
+	assert_eq(redundant.status, ConstructionProject.Status.ABANDONED)
+
+
 # -- bulk structure stamping (see VillageRenderer, HouseBlueprint) ------------
 #
 # Stamping a whole house one build_at_global call per cell would repaint its
@@ -2343,15 +2511,25 @@ func test_grass_renders_through_banded_multimesh_instances_not_per_cell_nodes():
 			assert_true(mmi is MultiMeshInstance2D)
 			assert_eq(mmi.get_parent(), manager._entities_parent, "each band's draw call is a real child of the shared y-sorted entities parent")
 			assert_gt(mmi.multimesh.instance_count, 0)
-			# Every cell contributes exactly CARD_COUNT instances.
-			assert_eq(mmi.multimesh.instance_count % IllustratedGrassPatch.CARD_COUNT, 0)
+			# SUPERSEDED (2026-08-27): used to assert every band's instance
+			# count was a clean multiple of CARD_COUNT, back when a whole
+			# cell's cards always stayed together in one band. Now that
+			# banding is per-CARD (see IllustratedGrassPatch.cards_for_cell),
+			# a cell straddling a band boundary can genuinely split its
+			# CARD_COUNT cards across two adjacent bands -- a real,
+			# intended consequence of the fix, not something to assert away.
 			found_any_band = true
 	assert_true(found_any_band, "precondition: Berlin's grassland seeded at least one patch")
 
 
-## Every cell grouped into one band's draw call must actually belong there
+## Every card grouped into one band's draw call must actually belong there
 ## by IllustratedGrassPatch's own band math - the whole point of banding is
-## that a band's Y-sort position is representative of the cells inside it.
+## that a band's Y-sort position is representative of the cards inside it.
+## SUPERSEDED (2026-08-27): used to bucket by a whole CELL's own raw row
+## (band_index_for_local_y(cell.y, ...), a flat CARD_COUNT per cell) --
+## now mirrors _sync_grass_sprites' own real per-CARD bucketing (see its
+## own doc comment), since a cell's cards can genuinely split across two
+## bands once their own real offset-adjusted position crosses a boundary.
 func test_every_bands_instance_count_matches_its_own_cells_card_total():
 	manager.update(_berlin_tile)
 	var half_span: Vector2 = manager._visible_half_span_tiles()
@@ -2365,10 +2543,21 @@ func test_every_bands_instance_count_matches_its_own_cells_card_total():
 			# Matches _sync_grass_sprites' own tile-precise view+buffer
 			# cutoff: a chunk passing the coarser chunk-level _decorates
 			# gate does not mean every one of its cells is drawn.
-			if not DecorationLod.keeps_decoration_tile(origin + cell, player_tile, half_span, EarthChunkManager.GRASS_VIEW_BUFFER_TILES):
+			var tile: Vector2i = origin + cell
+			if not DecorationLod.keeps_decoration_tile(tile, player_tile, half_span, EarthChunkManager.GRASS_VIEW_BUFFER_TILES):
 				continue
-			var band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
-			expected_by_band[band] = int(expected_by_band.get(band, 0)) + IllustratedGrassPatch.CARD_COUNT
+			var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
+			var cell_spec := {
+				"seed": seed_value,
+				"ground_position": Vector2(
+					(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+				),
+				"growth": sim.get_growth(cell),
+			}
+			for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+				var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+				var band := IllustratedGrassPatch.band_index_for_local_y(local_row, EarthChunkManager.CHUNK_SIZE)
+				expected_by_band[band] = int(expected_by_band.get(band, 0)) + 1
 		for band in manager._grass_sprites[chunk_coord]:
 			var mmi: MultiMeshInstance2D = manager._grass_sprites[chunk_coord][band]
 			assert_eq(mmi.multimesh.instance_count, expected_by_band.get(band, 0))
@@ -2408,21 +2597,61 @@ func test_a_cell_drops_out_when_the_player_walks_far_enough_away():
 	var a_cell: Vector2i = sim.get_patch_cells()[0]
 	var a_tile := origin + a_cell
 
-	# Stand right on the cell: it must be drawn (precondition).
+	# Stand right on the cell: it must be drawn (precondition). a_cell's own
+	# CARD_COUNT cards can land in more than one real band (per-card
+	# banding, not per-cell -- see this file's other SUPERSEDED notes), so
+	# find every real band they occupy rather than assuming a single naive
+	# one derived from the cell's own raw row.
+	#
+	# update() alone only marks a grass resync as DUE (see
+	# _sync_decoration_and_grass_tracking's own doc comment) -- chunk_coord
+	# was already loaded by the very first update(_berlin_tile) above, so
+	# this second update() does not re-enter _load_chunk's synchronous
+	# _sync_grass_sprites call. Without an explicit step_tall_grass() here,
+	# _grass_sprites[chunk_coord] would still reflect that FIRST,
+	# _berlin_tile-centered sync -- which a_cell (an arbitrary patch cell,
+	# not necessarily near Berlin at all) may never have been part of in the
+	# first place, making "precondition: standing on the cell, its real
+	# bands have cards" false regardless of banding. Mirrors
+	# test_walking_within_the_same_chunk_resyncs_the_grass_view_without_
+	# waiting_for_the_refresh_timer's own real per-frame cadence.
 	manager.update(a_tile)
-	var band := IllustratedGrassPatch.band_index_for_local_y(a_cell.y, EarthChunkManager.CHUNK_SIZE)
-	var near_count: int = manager._grass_sprites[chunk_coord][band].multimesh.instance_count
-	assert_gt(near_count, 0, "precondition: standing on the cell, its band has cards")
+	manager.step_tall_grass(0.0)
+	var a_seed_value := hash("%d_%d_grass_tuft" % [a_tile.x, a_tile.y])
+	var a_cell_spec := {
+		"seed": a_seed_value,
+		"ground_position": Vector2(
+			(a_tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (a_tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+		),
+		"growth": sim.get_growth(a_cell),
+	}
+	var real_bands: Array[int] = []
+	for card in IllustratedGrassPatch.cards_for_cell(a_cell_spec):
+		var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+		var card_band := IllustratedGrassPatch.band_index_for_local_y(local_row, EarthChunkManager.CHUNK_SIZE)
+		if not real_bands.has(card_band):
+			real_bands.append(card_band)
+
+	var near_count := 0
+	for band in real_bands:
+		if manager._grass_sprites[chunk_coord].has(band):
+			near_count += manager._grass_sprites[chunk_coord][band].multimesh.instance_count
+	assert_gt(near_count, 0, "precondition: standing on the cell, its real bands have cards")
 
 	# Walk far enough away (well beyond any reasonable half_span+buffer)
 	# that the chunk itself still decorates (a village-sized hop, not a
-	# world away) but this one cell no longer falls in the view window.
+	# world away) but this one cell no longer falls in the view window. Same
+	# reasoning as above: update() alone only marks the resync due.
 	manager.update(a_tile + Vector2i(0, 200))
-	if not manager._grass_sprites.has(chunk_coord) or not manager._grass_sprites[chunk_coord].has(band):
-		assert_true(true, "the band (or whole chunk) dropped entirely once nothing in it was in view -- also correct")
+	manager.step_tall_grass(0.0)
+	if not manager._grass_sprites.has(chunk_coord):
+		assert_true(true, "the whole chunk dropped entirely once nothing in it was in view -- also correct")
 		return
-	var far_count: int = manager._grass_sprites[chunk_coord][band].multimesh.instance_count
-	assert_lt(far_count, near_count, "walking away from the cell must reduce (or zero) its band's card count")
+	var far_count := 0
+	for band in real_bands:
+		if manager._grass_sprites[chunk_coord].has(band):
+			far_count += manager._grass_sprites[chunk_coord][band].multimesh.instance_count
+	assert_lt(far_count, near_count, "walking away from the cell must reduce (or zero) its real bands' card count")
 
 
 ## The tile-precise view+buffer window is far tighter than the chunk-level
@@ -2487,16 +2716,47 @@ func test_walking_within_the_same_chunk_resyncs_the_grass_view_without_waiting_f
 	# test_every_bands_instance_count_matches_its_own_cells_card_total), and
 	# require the real multimesh to already match it. A stale sync would
 	# still reflect the OLD, _berlin_tile-relative window instead.
+	# Mirrors _sync_grass_sprites' own REAL per-CARD bucketing (see its own
+	# doc comment) -- SUPERSEDED (2026-08-27) from a cell-level shortcut
+	# (band_index_for_local_y(cell.y, ...), one flat CARD_COUNT per cell)
+	# now that a cell's own cards can genuinely split across two bands.
 	var expected_by_band: Dictionary = {}
 	for cell in sim.get_patch_cells():
 		var tile: Vector2i = origin + cell
 		if not DecorationLod.keeps_decoration_tile(tile, far_tile, half_span, EarthChunkManager.GRASS_VIEW_BUFFER_TILES):
 			continue
-		var cell_band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
-		expected_by_band[cell_band] = int(expected_by_band.get(cell_band, 0)) + IllustratedGrassPatch.CARD_COUNT
+		var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
+		var cell_spec := {
+			"seed": seed_value,
+			"ground_position": Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			),
+			"growth": sim.get_growth(cell),
+		}
+		for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+			var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+			var card_band := IllustratedGrassPatch.band_index_for_local_y(local_row, EarthChunkManager.CHUNK_SIZE)
+			expected_by_band[card_band] = int(expected_by_band.get(card_band, 0)) + 1
 
-	var far_band := IllustratedGrassPatch.band_index_for_local_y(far_cell.y, EarthChunkManager.CHUNK_SIZE)
-	assert_gt(expected_by_band.get(far_band, 0), 0, "precondition: far_cell's own band should now expect a nonzero count, standing right on it")
+	# far_cell's own real cards (not the naive raw-row shortcut, which can
+	# land a band off from where a card's real offset-adjusted position
+	# actually falls -- see this file's other SUPERSEDED notes above) must
+	# have contributed a nonzero count to at least one of the bands
+	# expected_by_band just computed.
+	var far_seed_value := hash("%d_%d_grass_tuft" % [far_tile.x, far_tile.y])
+	var far_cell_spec := {
+		"seed": far_seed_value,
+		"ground_position": Vector2(
+			(far_tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (far_tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+		),
+		"growth": sim.get_growth(far_cell),
+	}
+	var far_bands_total := 0
+	for card in IllustratedGrassPatch.cards_for_cell(far_cell_spec):
+		var far_local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+		var far_card_band := IllustratedGrassPatch.band_index_for_local_y(far_local_row, EarthChunkManager.CHUNK_SIZE)
+		far_bands_total += int(expected_by_band.get(far_card_band, 0))
+	assert_gt(far_bands_total, 0, "precondition: far_cell's own real cards' bands should now expect a nonzero count, standing right on it")
 
 	var after: Dictionary = manager._grass_sprites.get(chunk_coord, {})
 	for band in expected_by_band:
@@ -3107,6 +3367,145 @@ func test_unloading_a_chunk_releases_every_departing_flyers_claim():
 	)
 
 
+# -- ground decor gets its own non-y-sorted layer ----------------------------
+#
+# Flowers, worms, desert scrub, and tundra lichen are ground-level decoration:
+# always flush with the floor, never needing to Y-sort against a tree or a
+# creature. scenes/world.tscn already gives ground-effects layers exactly
+# this "always draws behind Entities" treatment (WaterFx/SnowFx/HillshadeFx:
+# z_index=-1, no y_sort_enabled) -- world.gd wires an equivalent "GroundDecor"
+# node through to EarthChunkManager as an optional 4th constructor argument,
+# and these four kinds parent their sprites there instead of under the
+# y_sort_enabled Entities node, so they stop forcing per-sprite Y-order
+# interleaving with everything else Entities draws (which is what breaks
+# draw-call batching under the gl_compatibility renderer).
+#
+# The argument is optional, defaulting to null, so the many other
+# EarthChunkManager.new(...) call sites across this suite (and the real one
+# in scenes/world.gd before this change) keep working unchanged; omitting it
+# falls back to the same Entities parent ground decor always used.
+
+const DesertScrub = preload("res://src/world/desert_scrub.gd")
+const TundraLichen = preload("res://src/world/tundra_lichen.gd")
+
+
+func _all_biome(cell_value: String, size: int) -> PackedStringArray:
+	var biome := PackedStringArray()
+	biome.resize(size * size)
+	for i in biome.size():
+		biome[i] = cell_value
+	return biome
+
+
+func test_flower_worm_scrub_and_lichen_sprites_parent_under_the_supplied_ground_decor_layer():
+	var ground_decor := Node2D.new()
+	ground_decor.z_index = -1
+	var decor_tile_map := TileMapLayer.new()
+	var decor_entities := Node2D.new()
+	var decor_creatures := Node2D.new()
+	var decor_manager := EarthChunkManager.new(
+		decor_tile_map, decor_entities, decor_creatures, ground_decor
+	)
+	decor_manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+
+	# Flower: plant one directly, the same way
+	# test_a_freshly_planted_seedlings_landing_point_is_not_the_mature_blossom_height does.
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, decor_manager.current_season()):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var planted := false
+	for y in 8:
+		for x in 8:
+			if decor_manager.plant_flower_at(_pixel_for(chunk_coord, Vector2i(x, y)), species):
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var flower_sprites: Dictionary = decor_manager._flower_sprites[chunk_coord]
+	assert_gt(flower_sprites.size(), 0, "precondition: the planted flower should have a sprite")
+	for sprite in flower_sprites.values():
+		assert_eq(sprite.get_parent(), ground_decor, "flower sprite should parent under GroundDecor")
+
+	# Worm: force one to the surface, the same way _surface_all_worms does
+	# (that helper reaches the file-level `manager`, not this local instance).
+	for patch in decor_manager._worm_patches.values():
+		patch.set_conditions(1.0, 1.0)
+	for i in 40:
+		for patch in decor_manager._worm_patches.values():
+			patch.advance(0.5)
+	decor_manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var checked_worm := 0
+	for sprites in decor_manager._worm_sprites.values():
+		for sprite in sprites.values():
+			assert_eq(sprite.get_parent(), ground_decor, "worm sprite should parent under GroundDecor")
+			checked_worm += 1
+	assert_gt(checked_worm, 0, "precondition: some worms were rendered")
+
+	# Desert scrub / tundra lichen: Berlin's real biome is not desert or
+	# tundra, so force an all-desert/all-tundra sim directly (this suite
+	# already reaches into manager internals the same way elsewhere) rather
+	# than hunting for a real-world tile of that biome.
+	decor_manager._scrub_sims[chunk_coord] = DesertScrub.new(
+		1, EarthChunkManager.CHUNK_SIZE, EarthChunkManager.CHUNK_SIZE,
+		_all_biome("desert", EarthChunkManager.CHUNK_SIZE)
+	)
+	decor_manager._sync_scrub_sprites(chunk_coord)
+	var scrub_sprites: Dictionary = decor_manager._scrub_sprites[chunk_coord]
+	assert_gt(scrub_sprites.size(), 0, "precondition: a forced desert biome should seed scrub")
+	for sprite in scrub_sprites.values():
+		assert_eq(sprite.get_parent(), ground_decor, "scrub sprite should parent under GroundDecor")
+
+	decor_manager._lichen_sims[chunk_coord] = TundraLichen.new(
+		1, EarthChunkManager.CHUNK_SIZE, EarthChunkManager.CHUNK_SIZE,
+		_all_biome("tundra", EarthChunkManager.CHUNK_SIZE)
+	)
+	decor_manager._sync_lichen_sprites(chunk_coord)
+	var lichen_sprites: Dictionary = decor_manager._lichen_sprites[chunk_coord]
+	assert_gt(lichen_sprites.size(), 0, "precondition: a forced tundra biome should seed lichen")
+	for sprite in lichen_sprites.values():
+		assert_eq(sprite.get_parent(), ground_decor, "lichen sprite should parent under GroundDecor")
+
+	decor_tile_map.free()
+	decor_entities.free()
+	decor_creatures.free()
+	ground_decor.free()
+
+
+## Backward compatibility: every other EarthChunkManager.new(...) call site
+## passes only 3 arguments, and must keep parenting ground decor under
+## Entities exactly as before this change.
+func test_ground_decor_falls_back_to_entities_when_not_supplied():
+	manager.update(_berlin_tile)
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, manager.current_season()):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var planted := false
+	for y in 8:
+		for x in 8:
+			if manager.plant_flower_at(_pixel_for(chunk_coord, Vector2i(x, y)), species):
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var flower_sprites: Dictionary = manager._flower_sprites[chunk_coord]
+	assert_gt(flower_sprites.size(), 0, "precondition: the planted flower should have a sprite")
+	for sprite in flower_sprites.values():
+		assert_eq(
+			sprite.get_parent(), entities_parent,
+			"with no ground_decor_parent supplied, ground decor should keep parenting under Entities"
+		)
+
+
 ## A live pollinator reaches this surface through `scent_world`, which is the
 ## manager itself -- so the duck-typed contract the markers probe for with
 ## has_method must actually be present here.
@@ -3439,27 +3838,60 @@ func test_a_grazed_tuft_stops_being_drawn_immediately():
 	# actually drawn. This test's own subject is the draw-immediacy of an
 	# on-screen tuft, so pick the first one the manager itself already drew
 	# rather than assuming grass_near's first result is on-screen.
+	# SUPERSEDED (2026-08-27): used to predict a SINGLE band via the old
+	# cell-level shortcut (band_index_for_local_y(cell.y, ...)) and assert
+	# just that one band's count dropped by a flat CARD_COUNT. Now that
+	# banding is per-CARD (see IllustratedGrassPatch.cards_for_cell), one
+	# tuft's own CARD_COUNT cards can genuinely land in two DIFFERENT real
+	# bands -- so this finds every real band the eaten tuft's own cards
+	# occupy and checks the TOTAL across all of them, mirroring
+	# _sync_grass_sprites' own real per-card bucketing exactly.
 	var eaten: Vector2
 	var chunk_coord: Vector2i
-	var band := -1
+	var real_bands: Array[int] = []
 	for tuft in tufts:
 		var tile: Vector2i = manager._world_tile_for_pixel(tuft.position)
 		var candidate_chunk: Vector2i = manager._chunk_coord_for_tile(tile)
-		var cell: Vector2i = tile - candidate_chunk * EarthChunkManager.CHUNK_SIZE
-		var candidate_band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
-		if manager._grass_sprites.get(candidate_chunk, {}).has(candidate_band):
+		var origin: Vector2i = candidate_chunk * EarthChunkManager.CHUNK_SIZE
+		var cell: Vector2i = tile - origin
+		var sim: TallGrass = manager._grass_sims.get(candidate_chunk)
+		if sim == null:
+			continue
+		var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
+		var cell_spec := {
+			"seed": seed_value,
+			"ground_position": Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			),
+			"growth": sim.get_growth(cell),
+		}
+		var candidate_bands: Array[int] = []
+		for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+			var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+			var card_band := IllustratedGrassPatch.band_index_for_local_y(local_row, EarthChunkManager.CHUNK_SIZE)
+			if not candidate_bands.has(card_band):
+				candidate_bands.append(card_band)
+		var all_drawn := true
+		for candidate_band in candidate_bands:
+			if not manager._grass_sprites.get(candidate_chunk, {}).has(candidate_band):
+				all_drawn = false
+				break
+		if all_drawn and not candidate_bands.is_empty():
 			eaten = tuft.position
 			chunk_coord = candidate_chunk
-			band = candidate_band
+			real_bands = candidate_bands
 			break
-	assert_true(band != -1, "precondition: at least one grazeable tuft is actually drawn")
-	var before: int = manager._grass_sprites[chunk_coord][band].multimesh.instance_count
+	assert_false(real_bands.is_empty(), "precondition: at least one grazeable tuft is actually drawn")
+	var before := 0
+	for band in real_bands:
+		before += manager._grass_sprites[chunk_coord][band].multimesh.instance_count
 	manager.graze_grass_at(eaten)
 	var bands: Dictionary = manager._grass_sprites[chunk_coord]
-	if bands.has(band):
-		assert_eq(bands[band].multimesh.instance_count, before - IllustratedGrassPatch.CARD_COUNT, "the eaten tuft's cards stop being drawn at once")
-	else:
-		assert_eq(before, IllustratedGrassPatch.CARD_COUNT, "the band only disappears outright if that was its only tuft")
+	var after := 0
+	for band in real_bands:
+		if bands.has(band):
+			after += bands[band].multimesh.instance_count
+	assert_eq(after, before - IllustratedGrassPatch.CARD_COUNT, "the eaten tuft's cards stop being drawn at once, across every real band they occupied")
 
 
 # -- grass seed: the granivore/rodent half of a field (see
@@ -4810,6 +5242,141 @@ func test_snow_coverage_advances_within_a_single_depth_band_not_only_at_band_cro
 	assert_gt(
 		covered_later, covered_early,
 		"depth 0.02 painted %d covered tiles and depth 0.2 also painted %d -- the field is frozen within a band" % [covered_early, covered_later]
+	)
+	snow_layer.free()
+
+
+## The two tests above both jump straight to a target depth with a single
+## set_snow_depth call. Real play never does that -- scenes/world.gd's own
+## _process loop drives snow through repeated step_snow calls as the world
+## clock advances a little at a time (see step_snow's own doc comment) -- so
+## this drives the SAME per-tile spread through that real path instead, to
+## prove the mix survives being reached incrementally rather than only when
+## set directly.
+##
+## Depth ~0.55 is chosen so the leading (onset=+0.18) and lagging (onset=-0.18)
+## tiles land on opposite sides of a texture-band boundary by SnowLayer's own
+## math: lying=0.37 -> band 1, lying=0.73 -> band 2 (SnowLayer.band_for).
+func test_a_realistic_step_snow_driven_snowfall_paints_more_than_one_non_bare_band():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.update(_berlin_tile)
+
+	var step := 2.0
+	var target := Snowfall.SECONDS_TO_COVER * 0.55
+	var elapsed := 0.0
+	while elapsed < target:
+		manager.advance_world_age(step)
+		manager.step_snow(true, 0.0)  # cold and snowing throughout
+		elapsed += step
+
+	var bands := {}  # painted atlas band index -> true; bare tiles excluded
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		for y in EarthChunkManager.CHUNK_SIZE:
+			for x in EarthChunkManager.CHUNK_SIZE:
+				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+				if manager.biome_at_global(global_x, global_y) == "ocean":
+					continue
+				var cell := Vector2i(global_x, global_y)
+				if snow_layer.get_cell_source_id(cell) != -1:
+					bands[snow_layer.get_cell_atlas_coords(cell).x] = true
+
+	assert_gt(
+		bands.size(), 1,
+		"a step_snow-driven snowfall at depth ~0.55 painted only one non-bare band (%s) across the field -- the field is not spreading tile by tile through the real production code path" % [bands]
+	)
+	snow_layer.free()
+
+
+## The whole-field repaint used to fire only when the tracked depth had moved
+## by SNOW_REPAINT_DEPTH_STEP (0.05) since the last one -- against
+## Snowfall.SECONDS_TO_COVER (360s) that is one checkpoint roughly every 18
+## real seconds. Between two such checkpoints NOTHING repainted for coverage
+## tiles at all, even though individual tiles' own onset-adjusted bands kept
+## crossing thresholds continuously underneath -- then every tile that
+## crossed sometime in that whole ~18s window all repainted TOGETHER in the
+## single frame the checkpoint finally fired. Reported a third time, in the
+## user's own words: "doesn't correctly fall and accumulate gradually on
+## individual tiles instead after a time a whole chunk get's every tile
+## covered" -- exactly this shape: nothing, then a batch pop.
+##
+## Driven through the real step_snow path in small real-world-age increments
+## (the way World._client_process actually calls it every frame, not one big
+## jump), the gap between two consecutive moments the painted field visibly
+## changes must stay well under that old ~18s cadence -- a genuine trickle,
+## not a slower batch pop.
+func test_step_snow_driven_coverage_changes_trickle_in_rather_than_batching_every_18_seconds():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.update(_berlin_tile)
+
+	# A STRIDED sample spread across the whole loaded 5x5-chunk field, not one
+	# compact box -- onset is a deliberately LOW-FREQUENCY drift field
+	# (SnowLayer.ONSET_DRIFT_TILES=12), so a small box near one point samples
+	# mostly-correlated onset values and can show a real but coincidental
+	# local quiet patch even while the field elsewhere keeps changing every
+	# sweep (confirmed live: a compact ~22x14 box showed a genuine ~20s local
+	# gap while the mechanism itself is unconditionally sweeping every
+	# SNOW_SWEEP_INTERVAL_SECONDS). Striding across the whole field instead
+	# means the sample spans many independent onset neighbourhoods, so it
+	# reflects the field's real aggregate change rate rather than one patch's.
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var stride := 8
+	var sample: Array[Vector2i] = []
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		var origin: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE
+		for local_y in range(0, EarthChunkManager.CHUNK_SIZE, stride):
+			for local_x in range(0, EarthChunkManager.CHUNK_SIZE, stride):
+				var tile := origin + Vector2i(local_x, local_y)
+				if manager.biome_at_global(tile.x, tile.y) != "ocean":
+					sample.append(tile)
+	assert_gt(sample.size(), 200, "precondition: a real, spatially-spread sample of land tiles to watch")
+
+	var previous := {}
+	for tile in sample:
+		previous[tile] = -1
+
+	var checkpoint_ages: Array[float] = []
+	var step := 1.0
+	var elapsed := 0.0
+	var target := 90.0
+	while elapsed < target:
+		manager.advance_world_age(step)
+		manager.step_snow(true, 0.0)  # cold and snowing throughout
+		elapsed += step
+
+		var changed := false
+		for tile in sample:
+			var band := -1
+			if snow_layer.get_cell_source_id(tile) != -1:
+				band = snow_layer.get_cell_atlas_coords(tile).x
+			if band != previous[tile]:
+				changed = true
+				previous[tile] = band
+		if changed:
+			checkpoint_ages.append(elapsed)
+
+	assert_gt(
+		checkpoint_ages.size(), 3,
+		"expected several distinct repaint checkpoints across a %.0fs snowfall, saw %s" % [target, checkpoint_ages]
+	)
+
+	var max_gap: float = target
+	if not checkpoint_ages.is_empty():
+		max_gap = checkpoint_ages[0]
+		for i in range(1, checkpoint_ages.size()):
+			max_gap = maxf(max_gap, checkpoint_ages[i] - checkpoint_ages[i - 1])
+
+	# The OLD mechanism's own real cadence (SNOW_REPAINT_DEPTH_STEP 0.05 of
+	# depth against SECONDS_TO_COVER 360s) is ~18 real seconds between
+	# whole-field repaints -- asserting well under a THIRD of that is a
+	# direct, meaningful improvement, not just barely faster.
+	var old_cadence_seconds := 0.05 * Snowfall.SECONDS_TO_COVER
+	assert_lt(
+		max_gap, old_cadence_seconds / 3.0,
+		"the longest gap between visible snow changes was %.1fs -- not meaningfully tighter than the old ~%.0fs batch-repaint cadence (checkpoints at %s)" % [max_gap, old_cadence_seconds, checkpoint_ages]
 	)
 	snow_layer.free()
 

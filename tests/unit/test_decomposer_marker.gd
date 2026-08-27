@@ -12,6 +12,7 @@ const CarrionForageBehavior = preload("res://src/gameplay/carrion_forage_behavio
 const Carcass = preload("res://src/rendering/carcass.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 
 var marker: DecomposerMarker
 var carcass: Carcass
@@ -122,3 +123,42 @@ func test_a_carrying_decomposer_contaminates_the_next_clean_carcass_it_feeds_on(
 		if carcass.contaminated:
 			break
 	assert_true(carcass.contaminated)
+
+
+# -- LOD throttle: expensive carrion scanning is distance-scaled (see
+# CreatureMarker/AmbientFlyerMarker's own _lod_step/SimulationLod), not run
+# unconditionally every single frame regardless of whether anyone is close
+# enough to see it. -----------------------------------------------------------
+
+func test_far_from_the_player_does_not_rescan_carrion_on_every_process_call():
+	# Reach the moment a fresh decomposer is willing to commit to a target
+	# (see CarrionForageBehavior.REHUNT_SECONDS) with no player registered
+	# yet, so this priming step runs at full, un-throttled rate and isn't
+	# itself part of what this test is checking.
+	marker._process(CarrionForageBehavior.REHUNT_SECONDS)
+	assert_true(marker._behavior.can_commit(), "sanity: primed and willing to commit")
+
+	# A player far enough away that SimulationLod parks this marker at its
+	# slowest update rate (see FULL_RATE_RADIUS_PX/FALLOFF_PX/
+	# MAX_INTERVAL_SECONDS) -- comfortably past where the falloff saturates.
+	var player := Node2D.new()
+	add_child_autofree(player)
+	player.add_to_group("player")
+	player.position = marker.position + Vector2(
+		SimulationLod.FULL_RATE_RADIUS_PX + SimulationLod.FALLOFF_PX + 1.0, 0
+	)
+
+	# A rotten carcass placed right beside the decomposer -- if _step_seeking
+	# (and so _nearest_carrion) ran on every one of the frames below, an
+	# un-throttled decomposer would find and commit to it almost immediately.
+	carcass = _rotten_carcass_at(marker.position + Vector2(5, 0))
+
+	# Many tiny steps, each far under the ~0.5s LOD interval this far from
+	# the player.
+	for i in 20:
+		marker._process(0.01)
+
+	assert_eq(
+		marker._behavior.phase, CarrionForageBehavior.Phase.SEEKING,
+		"far from the player, a decomposer should not re-scan for carrion on every _process call -- it should still be waiting out its LOD interval"
+	)

@@ -45,8 +45,32 @@ var _ramp := PixelRamp.new()
 var _form := PixelForm.new()
 
 
+## How many distinct individual looks a species has, once generate_texture/
+## generate_flap_textures bucket a seed down to a cache key. Chunk spawning
+## draws seed_value from a hash of the flyer's cell (see
+## AmbientFlyerRenderer._spawn_species), an effectively unbounded space, so an
+## uncached generator meant every spawned butterfly/bee paid its own
+## image-generation cost AND ended up permanently unbatchable with every
+## other flyer of the same species, since each got its own unique Texture2D
+## object. Same bucketing philosophy as ProceduralFishSprite.LOOK_VARIANTS /
+## ProceduralAnimalAnimation.LOOK_VARIANTS: bounded so a meadow full of
+## monarchs is a handful of shared pictures, not one composite per butterfly.
+const LOOK_VARIANTS := 8
+
+static var _texture_cache: Dictionary = {}
+static var _flap_cache: Dictionary = {}
+
+
+## Individuals sharing a (species, look) share one Texture2D. Instance method
+## over a static cache because AmbientFlyerRenderer holds its own
+## ProceduralButterflySprite, so a per-instance cache would still redraw once
+## per butterfly -- same reasoning as ProceduralFishSprite.generate_texture.
 func generate_texture(species: String, seed_value: int) -> ImageTexture:
-	return ImageTexture.create_from_image(generate_image(species, seed_value))
+	var variant := absi(seed_value) % LOOK_VARIANTS
+	var key := "%s/%d" % [species, variant]
+	if not _texture_cache.has(key):
+		_texture_cache[key] = ImageTexture.create_from_image(generate_image(species, variant))
+	return _texture_cache[key]
 
 
 ## Renders `species` in its own color (falling back to "monarch" for an
@@ -123,11 +147,19 @@ func generate_flap_images(species: String, seed_value: int) -> Array:
 	return frames
 
 
+## The whole wing-beat SEQUENCE is cached together per (species, look), not
+## frame-by-frame -- repeat calls for the same key return the exact same
+## array of texture instances, so a marker's flap animation is never
+## rebuilding frames another flyer already generated.
 func generate_flap_textures(species: String, seed_value: int) -> Array:
-	var textures := []
-	for frame in generate_flap_images(species, seed_value):
-		textures.append(ImageTexture.create_from_image(frame))
-	return textures
+	var variant := absi(seed_value) % LOOK_VARIANTS
+	var key := "%s/%d" % [species, variant]
+	if not _flap_cache.has(key):
+		var textures := []
+		for frame in generate_flap_images(species, variant):
+			textures.append(ImageTexture.create_from_image(frame))
+		_flap_cache[key] = textures
+	return _flap_cache[key]
 
 
 func _butterfly_image(species: String, seed_value: int, openness: float) -> Image:

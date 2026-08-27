@@ -12,6 +12,8 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const TreePhenology = preload("res://src/world/tree_phenology.gd")
 
 ## A tree's WORLD footprint (see ProceduralTreeSprite.WORLD_SIZE) -- derived
 ## from the art size through ArtResolution rather than equal to it, since
@@ -195,16 +197,71 @@ func _build_tree_node(position: Vector2, age_seconds: float = INF) -> ChoppableT
 	return body
 
 
-## The season new trees are drawn in. Set by the caller (EarthChunkManager)
-## before spawning, so a chunk loading in winter loads bare trees rather than
-## summer ones that correct themselves a moment later.
-var season := ""
+## ## The canopy is on the CLOCK, not on the simulation
+##
+## (see docs/concept/seasons.md, "The canopy is on the clock, not on the
+## simulation".) This was three pushed fields -- `season`, `turning_into`,
+## `turn_progress` -- with `season` starting as an EMPTY STRING, written from
+## exactly one place: EarthChunkManager._sync_tree_season (now the public,
+## clock-driven sync_tree_season), reachable only from
+## step_fruiting, reachable only from World._process behind
+## _owns_ecosystem_simulation() and a ~1s accumulator. Two real consequences:
+## the initial awaited chunk load builds its trees before that ever fires, so
+## a fresh world's first chunks arrived with no season at all and fell through
+## IllustratedTree._FALLBACK_SEASON to summer leaf (green trees in the snow,
+## corrected a moment later); and on a JOINED CLIENT, which owns no
+## simulation, the tick never runs at all and every tree stays summer-green in
+## every season for the whole session.
+##
+## Which picture a tree wears is a pure function of the world clock -- a
+## RENDERING concern, exactly like the seasonal tint on the ground beside it
+## (SeasonalFoliage), and not a simulation-ownership one. So the renderer
+## holds the CLOCK and derives the canopy from it (see canopy_state), off the
+## same SeasonCycle year fraction every other season reader uses.
+##
+## That also removes the unset state rather than papering over it: there is no
+## way to be in it. A renderer nobody has pushed anything into reads the
+## clock's own zero -- the first instant of spring, which for a canopy is bare
+## wood -- instead of looking like a healthy summer tree standing in the snow.
+var _world_age_seconds := 0.0
+var _season_cycle := SeasonCycle.new()
 
-## The season new trees are turning INTO, and how far along, so a tree that
-## loads mid-turn arrives part-turned like its neighbours rather than snapping
-## to whichever season it was built in.
-var turning_into := ""
-var turn_progress := 0.0
+
+## Moves the clock the canopies are drawn against. The ONLY way to change the
+## season new trees are built in -- see the note above for why it is a clock
+## and not a season string.
+func set_world_age_seconds(seconds: float) -> void:
+	_world_age_seconds = seconds
+
+
+## Which canopy picture trees are wearing right now, as
+## {season, turning_into, turn_progress} -- the frame, the frame it is turning
+## INTO and how far along, so a tree that loads mid-turn arrives part-turned
+## like its neighbours rather than snapping to whichever stage it was built in.
+##
+## `season` here is a canopy KEY -- which of IllustratedTree's four frames --
+## and NOT a claim about what month it is: the first instant of spring is
+## still bare wood. `EarthChunkManager.current_season()` is the calendar, for
+## the HUD.
+##
+## Off TreePhenology rather than SeasonTransition, which is what keeps winter
+## bare (see docs/concept/seasons.md, "Winter stays bare: the canopy has its
+## own phenology"). The ground and the crown still share one clock, one set of
+## names and one quantiser; what they no longer share is the curve, because a
+## turn a lawn expresses as an imperceptible colour lerp a canopy expresses as
+## a much denser, much pinker picture painted over bare branches -- which is
+## how blossom ended up in the snow.
+##
+## Derived here rather than in each caller so the trees about to be built, the
+## trees already loaded (EarthChunkManager.sync_tree_season hands this very
+## dictionary on to them) and anything else that asks cannot drift apart.
+func canopy_state() -> Dictionary:
+	var stage := TreePhenology.canopy_state_at(_season_cycle.year_fraction(_world_age_seconds))
+	return {
+		"season": stage["from"],
+		"turning_into": stage["to"],
+		"turn_progress": stage["progress"],
+	}
 
 
 ## The genome-tinted tree texture for a tree at `position` -- the same genome
@@ -218,6 +275,10 @@ var turn_progress := 0.0
 func _texture_for(position: Vector2) -> ImageTexture:
 	var genome := TreeGenome.new(hash("%d_%d" % [int(position.x), int(position.y)]))
 	var species_id := TreeSpecies.species_for_bias(genome.species_bias)
+	var canopy := canopy_state()
+	var season: String = canopy["season"]
+	var turning_into: String = canopy["turning_into"]
+	var turn_progress: float = canopy["turn_progress"]
 	var key := "%s_%s_%s_%.2f" % [species_id, season, turning_into, turn_progress]
 	if not _texture_cache.has(key):
 		_texture_cache[key] = _tree_sprite_generator.generate_texture_with_fruit(

@@ -280,7 +280,9 @@ later (GDScript). To run the alpha locally:
    button in the top-right corner) to launch the game — the main scene
    (`scenes/world.tscn`) is already configured, so it launches straight into
    the world. The first launch may take a moment while Godot imports assets
-   and caches shaders.
+   and caches shaders. You'll land on an in-game "enter your license key"
+   screen first — paste in the trial key from [License Key](#license-key)
+   below and it saves itself; no file to place by hand.
 
 Running from the editor is the supported way to play the alpha; there are
 currently no pre-built binary releases. Since this is an early alpha, expect
@@ -291,12 +293,28 @@ it) to open the in-game dev console for commands like `/help`, `/spawn`,
 `/give`, `/village`, and `/weather` — useful for exploring systems quickly
 rather than waiting on them to occur naturally.
 
-## License Key (for exported/downloaded builds)
+## License Key
 
-Running from the Godot editor (the method above) never requires a license
-key. An exported build, however, refuses to start without a valid
-`license.txt` file (containing just the serial code below, nothing else)
-placed next to the game's executable.
+The game refuses to build the world without a valid license, whether
+launched via the Godot editor's Play button, a raw `Godot.exe --path
+<repo>` command line, or a real exported/downloaded build -- an
+invalid/missing key shows an in-game "enter your license key" screen
+instead. Paste the trial key below into that screen and it saves itself;
+no file to place by hand.
+
+If you'd rather provide it as a file instead: `license.txt` (containing
+just the serial code, nothing else), placed either in Godot's own
+per-project `user://` data directory, or next to whichever executable is
+actually running the game -- for a real exported build that's the game's
+own executable, but for an editor Play-button run `next to the
+executable` means next to the **Godot editor binary itself**, not this
+project folder, since that's what's actually running. The in-game screen
+above is the simpler option for a dev/editor launch.
+
+(Godot's own self-integrity check, which verifies an exported build's
+files haven't been tampered with, is the one thing that still never runs
+from the editor -- there's no exported `.pck` for it to check while
+running raw project files this way.)
 
 A 7-day trial key, valid through **2026-08-31**, base game only:
 
@@ -317,6 +335,22 @@ S4EXDK17KAAJ4M1Q3D38J2FF9H2ESYZXJ823Y
 Paste the whole block (line breaks are fine) into a plain-text file named
 `license.txt` next to the game executable. After it expires, contact us
 (see Contact below) for an alpha tester key.
+
+An extended key, valid through **2027-12-31**, base game only:
+
+```
+040G0000000000020000106E2SPS9ZQ7ZMY5Z6BN
+FKS1YAGH03CPYZMF1QGR0JP33S1W3S3FETB4EARA
+MPFYQYGJK2MRB6S8T9BCV4HBDJRVS3KZ48QA3WA1
+WE0D86WGZ924388T3ZD9QEV52GS83SWYZPFA3GZJ
+YX9FK5KZ80EGGA3D1Z9Q83F9Y6YH0FA792TQZBCH
+4SNDYS3W1B49VV6P044KT24CSTBBZY6XAK7MHATG
+1HRKYMANZ8BZHKQYPQYSK5GHMEF1SF1X9047ZF9R
+0SCCYHBT5EWQ7ZDT85ARYGTKVM96XCXM7E316XBK
+KFN68JF1XFDVDBWTYRWYW8ECKRKD6B6MBRCW1STQ
+0V5DH0RFVKGG1KFKVK6D636VXYTA0G5EEAQXBW3S
+60K69MG8ETM352FY523FCSQP5HXPZV28FFR9C
+```
 
 The game also verifies its own files haven't been tampered with at
 startup (see `docs/licensing.md`). **Removing or bypassing this signature

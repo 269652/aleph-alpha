@@ -86,12 +86,12 @@ const RAW_STAT_KEYS := [
 ]
 
 
-## World._build_skill_window anchors this window at PRESET_CENTER_LEFT with
-## offset_left 8 / offset_top -150 in a 960x540 viewport, and Godot grows a
-## Control down/right from its offsets when its own minimum exceeds them --
-## so the room genuinely available before anything runs off-screen is 952
-## wide and 420 tall (top -150 through the viewport's bottom edge at +270).
-const WORLD_AVAILABLE_BOX := Vector2(952, 420)
+## The room World._build_skill_window leaves this window before anything runs
+## off-screen. Read from the window's own constant rather than restated here:
+## World now anchors it PRESET_CENTER (it used to be pinned to the left edge,
+## which is what capped it at a 952x420 strip), and a copy of that figure in a
+## test is exactly the sort of thing that silently stops being true.
+const WORLD_AVAILABLE_BOX := SkillTreeWindow.WORLD_AVAILABLE_BOX
 
 
 func _row_labels() -> Array:
@@ -171,3 +171,30 @@ func test_the_windows_panel_is_fully_opaque_so_the_world_cannot_show_through():
 	var style := window.get_theme_stylebox("panel") as StyleBoxFlat
 	assert_not_null(style)
 	assert_eq(style.bg_color.a, 1.0, "a gameplay window's panel must be fully opaque")
+
+
+# -- refresh() must no-op when nothing about the skill state changed --------
+#
+# World._client_process calls refresh() once per frame while the window is
+# open (see scenes/world.gd), not just on an actual allocation/unlock. Same
+# bug class InventoryWindow.refresh and CraftingWindow.refresh already guard
+# against with _last_refresh_signature: without a guard here, every stat-node
+# and keystone row Control (the List tab) is freed and rebuilt every single
+# frame, which starves Godot's native hover-tooltip timer (it needs the SAME
+# Control instance under the mouse continuously).
+
+func test_refresh_does_not_rebuild_rows_when_called_again_with_unchanged_state():
+	window.refresh(10, {}, {})
+	var first_row := window._list.get_child(1)
+	window.refresh(10, {}, {})
+	assert_eq(window._list.get_child(1), first_row,
+		"a refresh() with unchanged skill state must not recreate row Controls")
+
+
+## ...but a real change to the underlying skill state must still rebuild.
+func test_refresh_does_rebuild_rows_when_the_skill_state_actually_changes():
+	window.refresh(10, {}, {})
+	var first_row := window._list.get_child(1)
+	window.refresh(5, {}, {})
+	assert_ne(window._list.get_child(1), first_row,
+		"a refresh() with a real state change must still rebuild the rows")

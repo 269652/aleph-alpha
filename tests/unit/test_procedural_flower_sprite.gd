@@ -968,3 +968,101 @@ func test_withering_does_not_depend_on_nectar():
 		generator.generate_image("tulip", 3, 1.0, true).get_data(),
 		generator.generate_image("tulip", 3, 0.0, true).get_data()
 	)
+
+
+# -- texture cache ------------------------------------------------------------
+#
+# Every bloom used to mint a brand new, uncached Texture2D on the frame it was
+# planted or reloaded -- unlike ProceduralTreeSprite's own
+# _tree_texture_cache, which shares one Texture2D per distinct look. Mirrors
+# that pattern here: same generate_texture(...) inputs get the exact same
+# Texture2D object back, sharable across the many blooms of one meadow, and
+# reused again whenever a chunk unloads and reloads (chunks aren't persisted --
+# see EarthChunkManager's own doc comment -- so the same cell asks for the
+# same texture again on every revisit).
+
+func test_the_same_bloom_gets_its_texture_back_instead_of_redrawing_it():
+	var first := generator.generate_texture("tulip", 7, 1.0, false)
+	var second := generator.generate_texture("tulip", 7, 1.0, false)
+	assert_same(first, second, "one texture per distinct bloom, not one per sprite")
+
+
+## The cache is shared across generator INSTANCES too -- each EarthChunkManager
+## holds its own ProceduralFlowerSprite, so a per-instance cache would still
+## redraw once per instance.
+func test_two_generators_of_one_bloom_share_the_texture():
+	var a := ProceduralFlowerSprite.new().generate_texture("crocus", 3, 1.0, false)
+	var b := ProceduralFlowerSprite.new().generate_texture("crocus", 3, 1.0, false)
+	assert_same(a, b)
+
+
+func test_a_different_species_does_not_share_the_texture():
+	assert_not_same(
+		generator.generate_texture("crocus", 3, 1.0, false),
+		generator.generate_texture("tulip", 3, 1.0, false)
+	)
+
+
+func test_a_different_seed_does_not_share_the_texture():
+	assert_not_same(
+		generator.generate_texture("crocus", 3, 1.0, false),
+		generator.generate_texture("crocus", 4, 1.0, false)
+	)
+
+
+func test_withered_and_fresh_do_not_share_the_texture():
+	assert_not_same(
+		generator.generate_texture("crocus", 3, 1.0, false),
+		generator.generate_texture("crocus", 3, 1.0, true)
+	)
+
+
+func test_cached_texture_still_matches_a_freshly_drawn_one():
+	var cached := generator.generate_texture("rose", 8, 1.0, false)
+	var fresh := generator.generate_image("rose", 8, 1.0, false)
+	assert_eq(cached.get_image().get_data(), fresh.get_data())
+
+
+## The bucketing the cache key relies on: nectar drains and refills
+## continuously while a bloom's other traits stay fixed, so nectar is
+## quantized into a small, bounded number of levels (see
+## ProceduralTreeSprite.CROP_LEVELS for the pattern this mirrors) rather than
+## keyed on the exact float, which would mint a fresh cache entry on almost
+## every call.
+func test_nectar_level_is_bounded_and_monotonic():
+	var previous := -1
+	for hundredth in 101:
+		var level := ProceduralFlowerSprite.nectar_level_for(float(hundredth) / 100.0)
+		assert_between(level, 0, ProceduralFlowerSprite.NECTAR_LEVELS - 1)
+		assert_gte(level, previous, "rising nectar should never drop a bucket")
+		previous = level
+
+
+func test_full_and_empty_nectar_land_in_different_buckets():
+	assert_ne(
+		ProceduralFlowerSprite.nectar_level_for(0.0),
+		ProceduralFlowerSprite.nectar_level_for(1.0)
+	)
+
+
+## Two nectar readings close enough to land in the same bucket must share a
+## texture -- this is what actually keeps the cache small as nectar ticks
+## down in tiny increments rather than in one jump.
+func test_nearby_nectar_readings_share_the_texture():
+	assert_same(
+		generator.generate_texture("tulip", 6, 0.91, false),
+		generator.generate_texture("tulip", 6, 0.99, false),
+		"both readings should quantize to the same top nectar bucket"
+	)
+
+
+## Nectar levels far enough apart to land in different buckets are still the
+## SAME picture today (nectar does not yet change how a bloom is drawn -- see
+## test_a_drained_flower_still_looks_alive) but must still be cached
+## separately, so the day nectar does start changing the art nothing here has
+## to change.
+func test_distant_nectar_readings_do_not_share_the_texture():
+	assert_not_same(
+		generator.generate_texture("tulip", 6, 0.0, false),
+		generator.generate_texture("tulip", 6, 1.0, false)
+	)
