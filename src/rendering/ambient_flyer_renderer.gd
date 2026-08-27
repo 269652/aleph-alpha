@@ -289,12 +289,18 @@ func spawn_ambient_flyers(
 		# sparrow are ecologically distinct niches (worms vs. seeds) with their
 		# own carrying capacities, so each gets its OWN spawn call against its
 		# OWN single-species pool -- mirroring why butterflies and bees were
-		# split into separate pools/budgets above, not sharing one.
+		# split into separate pools/budgets above, not sharing one. Also
+		# range-filtered via _in_range_pool exactly like butterflies/bees
+		# above: FLYER_RANGE gives both a real biogeographic band (a robin
+		# is a Palearctic/temperate bird, not a tropical one), and population
+		# alone cannot express "this species cannot live here at all" -- a
+		# chunk outside the band spawns none regardless of how large its
+		# aggregate population number is.
 		var robin_count := marker_count_for(robin_population, MAX_ROBINS_PER_CHUNK)
 		spawned.append_array(
 			_spawn_species(
 				parent, chunk, chunk_origin_tiles, tile_size, "robin_spawn",
-				ROBIN_SPECIES_POOL, robin_count, robin_count,
+				_in_range_pool(ROBIN_SPECIES_POOL, biome_name, abs_latitude), robin_count, robin_count,
 				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
 				_bird_sprite,
 				scent_world
@@ -304,7 +310,7 @@ func spawn_ambient_flyers(
 		spawned.append_array(
 			_spawn_species(
 				parent, chunk, chunk_origin_tiles, tile_size, "sparrow_spawn",
-				SPARROW_SPECIES_POOL, sparrow_count, sparrow_count,
+				_in_range_pool(SPARROW_SPECIES_POOL, biome_name, abs_latitude), sparrow_count, sparrow_count,
 				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
 				_bird_sprite,
 				scent_world
