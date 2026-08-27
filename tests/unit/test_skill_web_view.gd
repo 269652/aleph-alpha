@@ -389,3 +389,67 @@ func test_a_gateway_is_never_named_on_the_map():
 			break
 	view.zoom = SkillWebView.MAX_ZOOM
 	assert_false(view.shows_label(gateway), "a gateway has no name worth crowding the map with")
+
+
+# --- framing one class's wedge --------------------------------------------
+#
+# The character creator shows this view inside a dialog tab, for the ONE class
+# being picked. At that size the whole seven-wedge wheel is a smudge and six
+# sevenths of it belongs to another class, so the view has to be able to park
+# itself on a single wedge without the player panning there by hand.
+
+func test_framing_an_archetype_centres_the_view_on_that_wedge():
+	view.frame_archetype("beastmaster")
+	var bounds := web.archetype_bounds("beastmaster")
+	assert_almost_eq(view.pan.x, bounds.get_center().x, 0.001)
+	assert_almost_eq(view.pan.y, bounds.get_center().y, 0.001)
+
+
+## The whole wedge has to be ON SCREEN afterwards -- that is what "framed"
+## means, and it is the thing a hand-picked zoom gets wrong the moment the
+## layout constants change.
+func test_framing_fits_the_whole_wedge_inside_the_view():
+	view.frame_archetype("beastmaster")
+	for node_id in web.node_ids():
+		if String(web.node_info(node_id).get("archetype", "")) != "beastmaster":
+			continue
+		var at := view.world_to_view(web.position_of(node_id))
+		assert_between(at.x, 0.0, view.size.x, "%s is off the left/right of the view" % node_id)
+		assert_between(at.y, 0.0, view.size.y, "%s is off the top/bottom of the view" % node_id)
+
+
+## Framing a different class has to actually move the view somewhere else,
+## otherwise "the web for your class" is a caption rather than a picture.
+func test_framing_a_different_archetype_moves_the_view():
+	view.frame_archetype("beastmaster")
+	var first := view.pan
+	view.frame_archetype("mage")
+	assert_true(first.distance_to(view.pan) > 1.0, "framing another class did not move the view")
+
+
+## A narrow view must zoom out further than a wide one to fit the same wedge --
+## the relationship, not a number, is what is pinned.
+func test_a_smaller_view_frames_the_same_wedge_at_a_smaller_zoom():
+	view.size = Vector2(800, 600)
+	view.frame_archetype("beastmaster")
+	var roomy := view.zoom
+	view.size = Vector2(300, 200)
+	view.frame_archetype("beastmaster")
+	assert_lt(view.zoom, roomy, "a smaller viewport should have to zoom out further")
+
+
+## Zoom stays inside the range the rest of the view already enforces, so a
+## framed view is one the player can carry on driving with the wheel.
+func test_framing_respects_the_views_own_zoom_limits():
+	for archetype_size in [Vector2(120, 90), Vector2(2000, 1500)]:
+		view.size = archetype_size
+		view.frame_archetype("beastmaster")
+		assert_between(view.zoom, SkillWebView.MIN_ZOOM, SkillWebView.MAX_ZOOM)
+
+
+func test_framing_an_unknown_archetype_leaves_the_view_alone():
+	view.pan = Vector2(7, 9)
+	view.zoom = 1.25
+	view.frame_archetype("not_a_class")
+	assert_almost_eq(view.pan.x, 7.0, 0.001)
+	assert_almost_eq(view.zoom, 1.25, 0.001)

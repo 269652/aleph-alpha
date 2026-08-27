@@ -315,11 +315,16 @@ func test_reroll_budget_does_not_refresh_within_the_same_day():
 const SkillTree = preload("res://src/gameplay/skill_tree.gd")
 
 
-func test_skill_node_cards_exist_for_every_shared_skill_tree_node():
-	var skill_tree := SkillTree.new()
-	assert_eq(menu._skill_node_cards.size(), skill_tree.node_ids().size())
-	for node_id in skill_tree.node_ids():
-		assert_true(menu._skill_node_cards.has(node_id), node_id)
+## REPLACED: test_skill_node_cards_exist_for_every_shared_skill_tree_node.
+## The Skills tab no longer draws a card per node of one shared flat pool --
+## it shows the picked class's own wedge of the web. See the "the Skills tab
+## shows the class's own web" section below.
+func test_the_skills_tab_no_longer_shows_one_shared_flat_pool():
+	var skills_tab := _find_tab_named("Skills")
+	assert_false(
+		_any_descendant_label_contains(skills_tab, "SHARED SKILL POOL"),
+		"the shared-pool grid should be gone"
+	)
 
 
 func test_selecting_a_class_updates_the_skills_tab_heading():
@@ -330,31 +335,25 @@ func test_selecting_a_class_updates_the_skills_tab_heading():
 	assert_string_contains(menu._skills_class_label.text, "Warrior")
 
 
-## Warrior's own stat lens (class_archetype.gd) favors max_health above
-## every other stat -- the vitality nodes (the only shared-pool nodes that
-## grant max_health) must be the ones highlighted as synergizing, and a
-## differently-stated node (e.g. strength, which grants attack_damage) must
-## not be.
-func test_warriors_dominant_stat_highlights_the_vitality_nodes():
-	menu._select_class("warrior")
-	var vitality_card: PanelContainer = menu._skill_node_cards["vitality_1"]
-	var strength_card: PanelContainer = menu._skill_node_cards["strength_1"]
-	var vitality_style: StyleBoxFlat = vitality_card.get_theme_stylebox("panel")
-	var strength_style: StyleBoxFlat = strength_card.get_theme_stylebox("panel")
-	assert_eq(vitality_style.border_color, MainMenu.ACCENT)
-	assert_eq(strength_style.border_color, MainMenu.PANEL_BORDER)
-
-
-## Mage's dominant stat is max_mana, which has no corresponding shared-pool
-## skill node (see _CLASS_STAT_TO_SKILL_STAT's own doc comment) -- nothing
-## should be highlighted, honestly reflecting the current gap rather than
-## forcing a false match.
-func test_mage_highlights_nothing_since_no_shared_node_grants_mana():
-	menu._select_class("mage")
-	for node_id in menu._skill_node_cards:
-		var card: PanelContainer = menu._skill_node_cards[node_id]
-		var style: StyleBoxFlat = card.get_theme_stylebox("panel")
-		assert_eq(style.border_color, MainMenu.PANEL_BORDER, node_id)
+## REPLACED: the two card-highlight tests (warrior's vitality nodes painted
+## with the accent, mage highlighted nothing at all because no shared-pool node
+## granted mana).
+##
+## That was the flat pool's stand-in for "which of these suit me", and it could
+## only ever tint a border -- and for mage it honestly had nothing to tint. The
+## web does the real version: your genome resonates with each archetype
+## (HeroDna._resonance_for), and resonance moves the actual POINT COST of that
+## archetype's nodes (SkillWeb.point_cost), for every class rather than the ones
+## that happen to share a stat with the shared pool.
+##
+## Pinned as the relationship, not a number: a genome that resonates with an
+## archetype pays less for its nodes than one that does not.
+func test_resonance_makes_a_classs_own_nodes_cheaper_for_a_genome_that_suits_it():
+	var web := SkillWeb.new()
+	var node_id: String = web.start_node_for("warrior")
+	var attuned := web.point_cost(node_id, {"warrior": 1.0})
+	var dissonant := web.point_cost(node_id, {"warrior": 0.0})
+	assert_lt(attuned, dissonant, "resonance should make a suited class cheaper")
 
 
 func test_class_card_selection_repaints_its_own_border_to_the_accent_color():
@@ -421,6 +420,17 @@ func _find_tab_container() -> TabContainer:
 	for t in menu._create_screen.find_children("*", "TabContainer", true, false):
 		return t
 	return null
+
+
+## True when any Label under `root` carries `needle` -- used to assert a piece
+## of UI is genuinely GONE rather than merely unreferenced by a field.
+func _any_descendant_label_contains(root: Node, needle: String) -> bool:
+	if root is Label and String(root.text).contains(needle):
+		return true
+	for child in root.get_children():
+		if _any_descendant_label_contains(child, needle):
+			return true
+	return false
 
 
 func _find_tab_named(tab_name: String) -> Control:
@@ -655,39 +665,9 @@ func test_only_the_active_preview_view_has_a_nonzero_minimum_size():
 ## had no spare height to hand its EXPAND_FILL child -- the inner scroll got
 ## zero height and the whole shared skill pool was never visible at all
 ## (reported live).
-func test_the_shared_skill_grid_is_not_clipped_away_by_its_parent():
-	await _lay_out_create_screen_on_tab("Skills")
-	var card: PanelContainer = menu._skill_node_cards["vitality_1"]
-	var grid: Control = card.get_parent()
-	var holder: Control = grid.get_parent()
-	assert_gt(grid.size.y, 0.0, "the skill grid should have a real laid-out height")
-	assert_gte(
-		holder.size.y,
-		grid.size.y,
-		"the skill grid is %d tall inside a %d-tall parent" % [grid.size.y, holder.size.y]
-	)
-
-
-## Belt and braces on the same defect, stated structurally: the grid belongs
-## under the OUTER tab scroll and nothing else. A second, nested scroll is
-## what zeroed it out above.
-func test_the_skill_grid_is_not_nested_in_a_second_scroll_container():
-	var card: PanelContainer = menu._skill_node_cards["vitality_1"]
-	var scrolls := 0
-	var ancestor: Node = card.get_parent()
-	while ancestor != null and ancestor != menu:
-		if ancestor is ScrollContainer:
-			scrolls += 1
-		ancestor = ancestor.get_parent()
-	assert_eq(scrolls, 1, "the skill grid should sit under the outer tab scroll only")
-
-
-# -- hero showcase: class icons over the character, DNA glow/resonance -----
-# -- (reported: "I want the classes to be icons and on top over the -------
-# -- character and more character customization options and DNA influence")
-
-## Each class icon card must actually be a rendered portrait, not a
-## placeholder -- the whole point of "icons on top of the character".
+## REPLACED by test_the_web_view_is_not_clipped_away_by_its_parent and
+## test_the_web_view_is_not_nested_in_a_second_scroll_container below -- same
+## defect, same two guards, aimed at the control that replaced the grid.
 func test_every_class_icon_has_a_real_portrait_texture():
 	for archetype in menu._archetypes.archetype_names():
 		var texture: Texture2D = menu._class_icon_texture(archetype)
@@ -886,3 +866,117 @@ func test_the_confirmation_screen_is_hidden_by_showing_another_screen():
 
 	assert_false(menu._overwrite_confirm_screen.visible)
 	assert_true(menu._root_screen.visible)
+
+
+# --- the Skills tab shows the class's own web ------------------------------
+#
+# It used to show a flat grid of cards drawn from one shared pool, with a
+# footer conceding "full class-specific skill webs are still in development".
+# The web exists now (SkillWeb: seven archetype wedges, per-class start nodes,
+# resonance-varied costs), so the tab shows the wedge belonging to whichever
+# class is being picked.
+#
+# Preview only: the creator's own subtitle is "Pick a class, preview its
+# skills" and no points exist to spend before the character does. Hovering
+# still reads nodes; clicking allocates nothing.
+
+const SkillWebView = preload("res://scenes/skill_web_view.gd")
+const SkillWeb = preload("res://src/gameplay/skill_web.gd")
+
+
+func test_the_skills_tab_shows_the_skill_web():
+	assert_not_null(menu._skills_web_view, "the Skills tab should hold a skill web view")
+	assert_true(menu._skills_web_view is SkillWebView)
+
+
+func test_the_web_is_framed_on_the_selected_class():
+	menu._select_class("warrior")
+	var bounds: Rect2 = menu._skill_web.archetype_bounds("warrior")
+	assert_almost_eq(menu._skills_web_view.pan.x, bounds.get_center().x, 0.001)
+	assert_almost_eq(menu._skills_web_view.pan.y, bounds.get_center().y, 0.001)
+
+
+## The whole point of "the web FOR that class": picking a different one has to
+## move the view onto a different wedge.
+func test_switching_class_reframes_the_web_on_the_new_one():
+	menu._select_class("warrior")
+	var warrior_pan: Vector2 = menu._skills_web_view.pan
+	menu._select_class("mage")
+	assert_true(
+		warrior_pan.distance_to(menu._skills_web_view.pan) > 1.0,
+		"switching class should move the view to that class's wedge"
+	)
+
+
+## Preview only. Nothing is allocated, and a click must not pretend to spend a
+## point the player does not have yet.
+func test_the_creator_web_allocates_nothing():
+	assert_true(
+		menu._skills_web_view.node_clicked.get_connections().is_empty(),
+		"the creator's web preview must not wire up allocation"
+	)
+	assert_true(
+		menu._skills_web_view.node_refund_requested.get_connections().is_empty(),
+		"the creator's web preview must not wire up refunds"
+	)
+
+
+## The same defect the flat grid hit and was fixed for: a child with a real
+## height inside a parent that was handed none. A Control with a
+## custom_minimum_size under the tab scroll is exactly the shape that broke
+## before, so the guard moves to the control that replaced it.
+func test_the_web_view_is_not_clipped_away_by_its_parent():
+	await _lay_out_create_screen_on_tab("Skills")
+	var holder: Control = menu._skills_web_view.get_parent()
+	assert_gt(menu._skills_web_view.size.y, 0.0, "the web view should have a real height")
+	assert_gte(
+		holder.size.y,
+		menu._skills_web_view.size.y,
+		"the web view is %d tall inside a %d-tall parent"
+			% [menu._skills_web_view.size.y, holder.size.y]
+	)
+
+
+## Belt and braces on the same defect, stated structurally: one scroll between
+## the view and the menu, the outer tab scroll. A second, nested one is what
+## zeroed the old grid out.
+func test_the_web_view_is_not_nested_in_a_second_scroll_container():
+	var scrolls := 0
+	var ancestor: Node = menu._skills_web_view.get_parent()
+	while ancestor != null and ancestor != menu:
+		if ancestor is ScrollContainer:
+			scrolls += 1
+		ancestor = ancestor.get_parent()
+	assert_lte(scrolls, 1, "the web view sits inside %d nested scrolls" % scrolls)
+
+
+## The framing has to survive LAYOUT, which is the part a hand-set size in a
+## unit test cannot see.
+##
+## _refresh_skills_tab runs from _select_class, which happens while the create
+## screen is still being built -- at that moment the view's size is its
+## ~zero minimum, so a zoom derived from it collapses to MIN_ZOOM and the tab
+## opens showing the whole seven-wedge wheel instead of the class's own wedge.
+## Caught live: the first build rendered Artisan and Beastmaster either side of
+## the Warrior the player had actually picked.
+func test_the_web_is_framed_on_the_class_once_the_tab_is_laid_out():
+	menu._select_class("warrior")
+	await _lay_out_create_screen_on_tab("Skills")
+	var view := menu._skills_web_view
+	assert_gt(view.size.y, 0.0, "precondition: the view is laid out")
+
+	# "Every node is on screen" is NOT the assertion: framed at a zero size the
+	# zoom collapses to MIN_ZOOM, which puts the whole wheel in the middle of
+	# the view and satisfies that trivially. What actually distinguishes a good
+	# frame from a collapsed one is whether it was computed against the size
+	# the view really ended up with -- so re-frame now, at the real size, and
+	# require it to be a no-op.
+	var framed_zoom := view.zoom
+	var framed_pan := view.pan
+	view.frame_archetype("warrior")
+	assert_almost_eq(
+		framed_zoom, view.zoom, 0.001,
+		"the tab was framed at a stale size -- re-framing after layout changed the zoom"
+	)
+	assert_almost_eq(framed_pan.x, view.pan.x, 0.001)
+	assert_gt(view.zoom, SkillWebView.MIN_ZOOM, "a fully zoomed-out view is not framed on anything")

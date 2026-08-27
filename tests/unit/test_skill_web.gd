@@ -567,3 +567,84 @@ func test_a_wedge_label_sits_on_its_own_wedges_centre_line():
 		var offset := absf(angle_difference(
 			web.wedge_label_position(wedge_index).angle(), web.wedge_angle(wedge_index)))
 		assert_lt(offset, 0.001, "wedge %d's label drifted off its own centre" % wedge_index)
+
+
+# --- framing one class's wedge --------------------------------------------
+#
+# The character creator shows the web for the class you are picking, not the
+# whole seven-wedge wheel -- at the size of a dialog tab the full wheel is a
+# smudge, and six sevenths of it is somebody else's class. So the web has to be
+# able to say where ONE archetype's nodes actually are.
+
+## Rect2.has_point is HALF-OPEN -- inclusive on the min edges, exclusive on the
+## max ones -- so a node sitting exactly on the far edge of its own bounding box
+## reads as outside it, and a single-node box (zero size) contains nothing at
+## all. That is a property of the predicate, not of the box: a bounding box does
+## contain its own extreme points. So containment is asserted inclusively here
+## rather than padding the real geometry to satisfy a half-open test.
+## EPSILON is a float-comparison tolerance, not a tuned value: the extreme
+## nodes sit EXACTLY on the boundary by construction (the box is their own
+## bounding box), and `position + size` recomputed in floating point misses
+## that coordinate by a fraction of a pixel -- measured at beastmaster_start,
+## whose x is the max edge to five decimal places and still compared greater.
+const CONTAINMENT_EPSILON := 0.001
+
+
+func _contains_inclusive(bounds: Rect2, point: Vector2) -> bool:
+	return (
+		point.x >= bounds.position.x - CONTAINMENT_EPSILON
+		and point.y >= bounds.position.y - CONTAINMENT_EPSILON
+		and point.x <= bounds.position.x + bounds.size.x + CONTAINMENT_EPSILON
+		and point.y <= bounds.position.y + bounds.size.y + CONTAINMENT_EPSILON
+	)
+
+
+func test_an_archetypes_bounds_contain_every_one_of_its_nodes():
+	for archetype in ClassArchetype.new().archetype_names():
+		var bounds := web.archetype_bounds(archetype)
+		for node_id in web.node_ids():
+			if String(web.node_info(node_id).get("archetype", "")) != archetype:
+				continue
+			assert_true(
+				_contains_inclusive(bounds, web.position_of(node_id)),
+				"%s sits outside its own archetype's bounds" % node_id
+			)
+
+
+## The point of framing: one wedge is a genuinely smaller thing than the wheel.
+## If these were the same the creator would be showing the whole web and simply
+## calling it the class's.
+func test_one_wedge_is_smaller_than_the_whole_web():
+	var whole := web.archetype_bounds("")
+	for archetype in ClassArchetype.new().archetype_names():
+		var wedge := web.archetype_bounds(archetype)
+		assert_lt(
+			wedge.get_area(), whole.get_area(),
+			"%s's wedge should cover less ground than the entire web" % archetype
+		)
+
+
+## Empty archetype means "everything", which is what gives the test above a
+## whole-web baseline to compare against and what a caller wanting the full
+## wheel would ask for.
+func test_bounds_with_no_archetype_cover_every_node():
+	var whole := web.archetype_bounds("")
+	for node_id in web.node_ids():
+		assert_true(_contains_inclusive(whole, web.position_of(node_id)), node_id)
+
+
+## Each wedge sits at its own angle around the centre, so two different classes
+## must not frame to the same place -- otherwise "the web for THIS class" is a
+## label rather than a view.
+func test_two_archetypes_frame_to_different_places():
+	var names := ClassArchetype.new().archetype_names()
+	var first := web.archetype_bounds(names[0])
+	var second := web.archetype_bounds(names[1])
+	assert_true(
+		first.get_center().distance_to(second.get_center()) > 1.0,
+		"two archetypes framed to the same centre"
+	)
+
+
+func test_bounds_for_an_unknown_archetype_are_empty():
+	assert_eq(web.archetype_bounds("not_a_class").get_area(), 0.0)

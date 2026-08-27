@@ -161,6 +161,43 @@ func focus_on(node_id: String) -> void:
 	queue_redraw()
 
 
+## Margin left around a framed wedge, as a fraction of the viewport. Nodes are
+## drawn as circles with labels that overhang their own centre, so framing the
+## bare bounding box would clip the outermost ring's art even though every node
+## CENTRE was technically inside. Pinned by
+## test_framing_fits_the_whole_wedge_inside_the_view, which checks the node
+## positions actually land on screen rather than checking this number.
+const FRAME_MARGIN := 0.12
+
+
+## Parks the view on ONE archetype's wedge: centred on it, zoomed so the whole
+## wedge fits.
+##
+## The character creator shows this view inside a dialog tab for the single
+## class being picked (see MainMenu._build_skills_tab). At that size the full
+## seven-wedge wheel is a smudge and six sevenths of it is somebody else's
+## class, so the view has to be able to park itself without the player panning
+## there by hand.
+##
+## Zoom is DERIVED from the wedge's real bounds against the real viewport, not
+## chosen: the layout constants (RING_STEP, WEDGE_COUNT, OUTER_RING) and the
+## panel size both move, and a hand-picked zoom would silently stop fitting the
+## moment either did. Clamped to the same MIN_ZOOM/MAX_ZOOM the wheel obeys, so
+## a framed view is one the player can carry on driving.
+func frame_archetype(archetype: String) -> void:
+	if _web == null:
+		return
+	var bounds: Rect2 = _web.archetype_bounds(archetype)
+	if bounds.size.x <= 0.0 and bounds.size.y <= 0.0:
+		return
+	var usable := size * (1.0 - FRAME_MARGIN)
+	var fit_x := usable.x / bounds.size.x if bounds.size.x > 0.0 else MAX_ZOOM
+	var fit_y := usable.y / bounds.size.y if bounds.size.y > 0.0 else MAX_ZOOM
+	pan = bounds.get_center()
+	zoom = clampf(minf(fit_x, fit_y), MIN_ZOOM, MAX_ZOOM)
+	queue_redraw()
+
+
 # --- hit testing ----------------------------------------------------------
 
 ## The node under `view_point`, or "" for open space. Picks the NEAREST

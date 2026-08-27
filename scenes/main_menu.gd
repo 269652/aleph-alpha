@@ -20,6 +20,8 @@ const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const HeroDna = preload("res://src/gameplay/hero_dna.gd")
 const SkillTree = preload("res://src/gameplay/skill_tree.gd")
+const SkillWeb = preload("res://src/gameplay/skill_web.gd")
+const SkillWebView = preload("res://scenes/skill_web_view.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 
 ## Shared look, reusing UiTheme's palette (the same dark/rounded/gold-accent
@@ -118,6 +120,15 @@ const STANDARD_PORTRAIT_DISPLAY_SIZE := Vector2(ProceduralCharacterSprite.PORTRA
 ## tightly with nothing to spare for a tab bar or a skills grid.
 const PANEL_SIZE := Vector2(880, 620)
 
+## How tall the Skills tab's web canvas stands. A layout choice, like every
+## other size here -- what is actually PINNED is that the picked class's whole
+## wedge fits inside whatever this is, by
+## test_framing_fits_the_whole_wedge_inside_the_view, because
+## SkillWebView.frame_archetype derives its zoom from the real viewport rather
+## than assuming one. Sized to fill most of the tab body while leaving the
+## heading, blurb and footer legible above and below it.
+const SKILL_WEB_HEIGHT := 300.0
+
 ## Emitted once the player has committed to a start mode + class -- and, when
 ## a save already existed, has explicitly confirmed overwriting it (see
 ## _begin_pressed). THE SEAM: World treats this signal as authorization to
@@ -153,6 +164,10 @@ var _char_sprite := ProceduralCharacterSprite.new()
 var _player_save := PlayerSave.new()
 var _dna := HeroDna.new()
 var _skill_tree := SkillTree.new()
+
+## The passive web the Skills tab previews -- one instance for the whole
+## creator, re-framed onto whichever class is picked rather than rebuilt.
+var _skill_web := SkillWeb.new()
 
 var _root_screen: Control
 var _create_screen: Control
@@ -232,7 +247,7 @@ var _class_name_label: Label
 ## available and which of it favors their picked class before committing.
 var _skills_class_label: Label
 var _skills_summary_label: Label
-var _skill_node_cards: Dictionary = {}  # node_id -> PanelContainer
+var _skills_web_view: SkillWebView
 
 
 func _ready() -> void:
@@ -711,15 +726,22 @@ func _cycle_axis(axis: String, step: int) -> void:
 # -- skills tab ----------------------------------------------------------
 #
 # Reported: "there should be tabs with character and skilltree so you can
-# view each classes skills before creating". SkillTree (skill_tree.gd) is
-# currently one small pool SHARED by every class (see docs/progress.md's
-# Soft Class System row: "Full skill-web pathing ... still to come") --
-# there is no per-class skill web to preview yet. Rather than fabricate one,
-# this tab shows the real shared pool, plus the picked class's own starting
-# stat lens restated as a stat card, and highlights which shared nodes
-# actually synergize with that class's strongest stat (see
-# _class_dominant_stat) -- a genuine, honest preview of "what does this
-# class get", not a placeholder.
+# view each classes skills before creating", and later "make the skills tab
+# show the skill web for that class".
+#
+# The first version could not do the second thing: SkillTree (skill_tree.gd)
+# was one small pool SHARED by every class, so the tab showed that pool and
+# highlighted whichever nodes happened to share a stat with the class -- an
+# honest stopgap that said so in its own footer.
+#
+# SkillWeb exists now: seven archetype wedges around a shared centre, each
+# class starting at its own wedge's centre, costs varied by the genome's
+# resonance with each archetype. So the tab frames the picked class's wedge
+# (SkillWebView.frame_archetype) and lets the player read it. It is one shared
+# graph rather than seven trees -- your class decides where you START, never
+# where you may go -- which is why this frames a region rather than filtering
+# a node set, and why the gateways out toward neighbouring classes stay
+# visible at the edges.
 
 ## Maps a stat-lens key (ClassArchetype.stats_for) to the SkillTree node
 ## stat_name it corresponds to, for synergy highlighting -- the two use
@@ -750,61 +772,43 @@ func _build_skills_tab() -> Control:
 	col.add_child(_skills_summary_label)
 	col.add_child(_separator())
 
-	col.add_child(_section_label("SHARED SKILL POOL"))
-	# Added straight to `col`, NOT wrapped in a ScrollContainer of its own:
-	# the entire TabContainer already lives inside one (see
-	# _build_create_screen), and a ScrollContainer reports a combined minimum
-	# size of ~0 on every axis it is allowed to scroll. Nested, this grid's
-	# real height therefore never propagated up to `col`, which -- having no
-	# spare height to distribute -- handed the EXPAND_FILL inner scroll its
-	# ~0 minimum instead. The measured result was a 342px-tall grid inside a
-	# 0px-tall parent: the shared skill pool was never visible at all
-	# (reported live). Un-nested, the grid's height reaches the OUTER scroll,
-	# which scrolls it while Back/Begin stay pinned outside. Pinned by
-	# test_the_shared_skill_grid_is_not_clipped_away_by_its_parent.
-	var grid := GridContainer.new()
-	grid.columns = 3
-	grid.add_theme_constant_override("h_separation", 10)
-	grid.add_theme_constant_override("v_separation", 10)
-	for node_id in _skill_tree.node_ids():
-		var card := _build_skill_node_card(node_id)
-		_skill_node_cards[node_id] = card
-		grid.add_child(card)
-	col.add_child(grid)
+	col.add_child(_section_label("THE PASSIVE WEB"))
+	# The class's own wedge of the seven-wedge web (SkillWeb), not the flat
+	# shared pool this used to show -- that grid predated the web and carried a
+	# footer conceding "full class-specific skill webs are still in
+	# development". They are not any more.
+	#
+	# Added straight to `col`, NOT wrapped in a ScrollContainer of its own: the
+	# entire TabContainer already lives inside one (see _build_create_screen),
+	# and a nested scroll reports a combined minimum size of ~0 on the axis it
+	# scrolls, so its child's real height never propagates up and the content is
+	# handed zero height. That is exactly how the old grid ended up invisible
+	# (reported live). Pinned by test_the_web_view_is_not_clipped_away_by_its_parent
+	# and test_the_web_view_is_not_nested_in_a_second_scroll_container.
+	_skills_web_view = SkillWebView.new()
+	_skills_web_view.custom_minimum_size = Vector2(0, SKILL_WEB_HEIGHT)
+	_skills_web_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Preview only. node_clicked/node_refund_requested are deliberately NOT
+	# connected: the subtitle promises "preview its skills", and there are no
+	# points to spend before the character exists. Hover still reads a node, so
+	# the player can see what everything does.
+	# Re-frame once the view actually HAS a size. _refresh_skills_tab runs from
+	# _select_class, which fires while the create screen is still being built --
+	# at that point this control is still at its ~zero minimum, and a zoom
+	# derived from that collapses to MIN_ZOOM, so the tab opened on the whole
+	# seven-wedge wheel instead of the picked class's wedge. Seen live before
+	# this line existed: Artisan and Beastmaster either side of the Warrior the
+	# player had chosen. Pinned by
+	# test_the_web_is_framed_on_the_class_once_the_tab_is_laid_out.
+	_skills_web_view.resized.connect(_reframe_skills_web)
+	col.add_child(_skills_web_view)
 
 	var footer := _muted_label(
-		"Every class currently draws from this same shared pool -- full class-specific skill webs are still in development."
+		"Hover a node to read it. Your class starts at the centre of its own wedge and spends points outward; gateways lead into neighbouring classes."
 	)
 	footer.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	col.add_child(footer)
 	return col
-
-
-## One skill node as a small card: its name, what it grants, and its point
-## cost -- _refresh_skills_tab repaints the border/background of whichever
-## cards synergize with the currently picked class.
-func _build_skill_node_card(node_id: String) -> PanelContainer:
-	var card := _card_panel(Vector2(160, 64))
-	var info := _skill_tree.node_info(node_id)
-	var inner := VBoxContainer.new()
-	inner.add_theme_constant_override("separation", 2)
-	card.add_child(inner)
-
-	var title := Label.new()
-	title.text = _skill_node_display_name(node_id)
-	title.add_theme_font_size_override("font_size", 13)
-	inner.add_child(title)
-
-	var detail := _muted_label(
-		"%s +%s" % [_STAT_ABBREVIATIONS.get(info.get("stat_name", ""), info.get("stat_name", "")), _format_number(info.get("bonus_amount", 0.0))]
-	)
-	detail.add_theme_font_size_override("font_size", 11)
-	inner.add_child(detail)
-
-	var cost := _muted_label("Cost: %d pt" % int(info.get("point_cost", 0)))
-	cost.add_theme_font_size_override("font_size", 11)
-	inner.add_child(cost)
-	return card
 
 
 ## "vitality_1" -> "Vitality I". Falls back to a plain capitalized id for
@@ -841,21 +845,40 @@ func _class_dominant_stat(archetype: String) -> String:
 ## Refreshes the skills tab for whichever class is currently selected --
 ## called from _select_class, so switching classes updates the preview live,
 ## before the player commits.
+## Re-points the web at the current class using whatever size the view has
+## right now -- called both when the class changes and when the control is
+## laid out (see _build_skills_tab).
+func _reframe_skills_web() -> void:
+	if _skills_web_view != null:
+		_skills_web_view.frame_archetype(_selected_class)
+
+
 func _refresh_skills_tab() -> void:
 	if _skills_class_label == null:
 		return
 	_skills_class_label.text = "%s Skills" % _selected_class.capitalize()
 	_skills_summary_label.text = CLASS_BLURBS.get(_selected_class, "")
+	if _skills_web_view == null:
+		return
 
-	var dominant := _class_dominant_stat(_selected_class)
-	var synergy_skill_stat: String = _CLASS_STAT_TO_SKILL_STAT.get(dominant, "")
-	for node_id in _skill_node_cards:
-		var card: PanelContainer = _skill_node_cards[node_id]
-		var style: StyleBoxFlat = card.get_theme_stylebox("panel")
-		var node_stat: String = _skill_tree.node_info(node_id).get("stat_name", "")
-		var synergizes := synergy_skill_stat != "" and node_stat == synergy_skill_stat
-		style.bg_color = CARD_BG_SELECTED if synergizes else CARD_BG
-		style.border_color = ACCENT if synergizes else PANEL_BORDER
+	# Re-pointed on every refresh rather than once at build time, the same way
+	# World re-points the real skill window: the class and the DNA seed are both
+	# still being chosen on this screen, and the web's costs are resonance-
+	# varied, so which nodes are cheap for you changes as you pick.
+	#
+	# This supersedes the old card highlight, which painted a border on nodes
+	# sharing the class's dominant stat and honestly highlighted NOTHING for
+	# mage (no shared-pool node granted mana). Resonance is the real version of
+	# that idea: it moves the actual point cost per archetype rather than
+	# tinting a card, and it covers every class because the wedge belongs to
+	# the class rather than being drawn from one shared pool.
+	_skills_web_view.configure(
+		_skill_web, _selected_class, current_dna().get("resonance", {}), _dna_seed
+	)
+	# Nothing is allocated and nothing can be: preview only (see
+	# _build_skills_tab).
+	_skills_web_view.set_allocation({}, 0)
+	_skills_web_view.frame_archetype(_selected_class)
 
 
 ## Reads the persisted reroll budget (rerolls used + when it last reset --

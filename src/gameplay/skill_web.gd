@@ -512,6 +512,37 @@ func wedge_label_position(wedge_index: int) -> Vector2:
 		wedge_angle(wedge_index))
 
 
+## The rectangle one archetype's nodes occupy, in web space.
+##
+## Exists so a view can show the web FOR A CLASS rather than the whole wheel.
+## At the size of a dialog tab the full seven-wedge circle is a smudge, and six
+## sevenths of it belongs to somebody else's class -- see the character
+## creator's Skills tab, which frames the wedge of whichever class is being
+## picked.
+##
+## Derived from position_of() rather than stored, exactly like the positions
+## themselves, so a layout change (RING_STEP, WEDGE_COUNT, a grafted genome
+## node) moves the frame with it and cannot go stale.
+##
+## `archetype` empty means every node -- the whole wheel -- which is both what a
+## caller wanting the full view asks for and the baseline
+## test_one_wedge_is_smaller_than_the_whole_web measures a single wedge against.
+## An unknown archetype has no nodes and therefore no area.
+func archetype_bounds(archetype: String = "") -> Rect2:
+	var bounds := Rect2()
+	var found := false
+	for node_id in _nodes:
+		if archetype != "" and String(_nodes[node_id].get("archetype", "")) != archetype:
+			continue
+		var point := position_of(node_id)
+		if not found:
+			bounds = Rect2(point, Vector2.ZERO)
+			found = true
+		else:
+			bounds = bounds.expand(point)
+	return bounds
+
+
 # --- genome net -----------------------------------------------------------
 
 ## Grafts one character's generated net (see genome_skill_net.gd) into THIS web

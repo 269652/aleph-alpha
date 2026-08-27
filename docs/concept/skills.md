@@ -263,6 +263,14 @@ efficiency-only bargain made visible.
 - ✅ **Web view** — `scenes/skill_web_view.gd`: pan/zoom graph canvas in the
   skill window (toggle L), four distinct node states, per-character labels,
   click to take, right-click to refund; the old flat list survives as a tab.
+- ✅ The **character creator** previews the web for the class being picked,
+  framed on that class's own wedge (`SkillWeb.archetype_bounds` +
+  `SkillWebView.frame_archetype`) rather than showing the whole wheel. Read
+  only: there are no points to spend before the character exists, so hovering
+  reads a node and clicking allocates nothing. Because it is one connected
+  graph, the neighbouring starts and the gateways out stay visible at the edges
+  — which is the honest picture: your class decides where you START, not where
+  you may go.
 - ✅ **Reading the map** — wedge names, on-map node names (zoom-tiered), and a
   full hover tooltip resolved for the hovering character.
 - ✅ **Route preview** — `SkillWeb.cheapest_path`/`route_cost`; hovering an
