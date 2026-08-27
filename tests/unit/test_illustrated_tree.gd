@@ -1175,3 +1175,95 @@ func test_a_scaled_piece_has_no_part_transparent_edges():
 				alpha == 0.0 or alpha == 1.0,
 				"a scaled pixel came out half-transparent (%f)" % alpha
 			)
+
+
+# -- what the four frames actually DRAW --------------------------------------
+#
+# TreePhenology (src/world/tree_phenology.gd) now decides WHEN a tree wears
+# each of these frames: bare all winter, blossom briefly in early spring, leaf
+# after. That schedule is only the right call if the frames really draw what
+# their names claim, and those are claims about pixels somebody could repaint.
+
+
+## Pine is called an evergreen in TreeSpecies ("its canopy never goes bare").
+## Its ART has to agree, because TreePhenology walks it through the same four
+## stages as everything else -- which is harmless only because a pine's four
+## frames are four TONES of conifer rather than a tree losing its leaves.
+func test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data():
+	var kept := (
+		float(_opaque_pixels(trees.canopy_for("pine", "winter").get_image()))
+		/ float(maxi(_opaque_pixels(trees.canopy_for("pine", "summer").get_image()), 1))
+	)
+	assert_gt(kept, 0.7, "a pine in winter must still be carrying its needles")
+	# The contrast it is measured against: everything else really does strip.
+	for species in ["cherry", "walnut", "acorn", "hazelnut", "apple"]:
+		var deciduous := (
+			float(_opaque_pixels(trees.canopy_for(species, "winter").get_image()))
+			/ float(maxi(_opaque_pixels(trees.canopy_for(species, "summer").get_image()), 1))
+		)
+		assert_lt(deciduous, 0.5, "%s should actually go bare in winter" % species)
+
+
+## The blossom frame is only a FLOWERING event for cherry.
+##
+## It is shown briefly in early spring now rather than across the whole of it,
+## which has to be sensible for the species that do not flower too. Measured
+## off the shipped sheets: a cherry draws pink flowers, and the nut and orchard
+## sheets draw the yellow-green flush of a bursting bud -- new leaf, which is
+## exactly what an early-spring tree looks like and reads far better in a short
+## window than it did across three months.
+func test_the_blossom_frame_is_flowers_on_a_cherry_and_new_leaf_on_the_rest():
+	assert_lt(
+		_mean_hue_degrees(trees.canopy_for("cherry", "spring").get_image()), 30.0,
+		"a cherry's blossom frame has to read pink -- it is the whole point of it"
+	)
+	for species in ["walnut", "acorn", "hazelnut", "apple"]:
+		var flush := trees.canopy_for(species, "spring").get_image()
+		assert_gt(
+			_mean_hue_degrees(flush), 40.0,
+			"%s draws new leaf in that slot, not flowers" % species
+		)
+		assert_gt(
+			_opaque_pixels(flush),
+			_opaque_pixels(trees.canopy_for(species, "winter").get_image()),
+			"%s's flush must be fuller than its bare branches" % species
+		)
+		assert_lt(
+			_green_share(flush),
+			_green_share(trees.canopy_for(species, "summer").get_image()),
+			"%s's flush must be paler than its full leaf" % species
+		)
+
+
+## How many pixels of a frame are actually drawn on. Sampled, so it is a count
+## for COMPARING frames rather than an absolute -- which is all any caller here
+## wants.
+func _opaque_pixels(image: Image) -> int:
+	var opaque := 0
+	for y in range(0, image.get_height(), 2):
+		for x in range(0, image.get_width(), 2):
+			if image.get_pixel(x, y).a > 0.5:
+				opaque += 1
+	return opaque
+
+
+## The hue of a frame's MEAN colour, in degrees. Pink sits near 0, the
+## yellow-olive of a bud flush near 50-65, full leaf higher still.
+func _mean_hue_degrees(image: Image) -> float:
+	var red := 0.0
+	var green := 0.0
+	var blue := 0.0
+	var count := 0
+	for y in range(0, image.get_height(), 2):
+		for x in range(0, image.get_width(), 2):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a <= 0.5:
+				continue
+			red += pixel.r
+			green += pixel.g
+			blue += pixel.b
+			count += 1
+	if count == 0:
+		return 0.0
+	var total := float(count)
+	return Color(red / total, green / total, blue / total).h * 360.0

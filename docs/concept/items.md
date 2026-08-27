@@ -20,6 +20,17 @@ Both tracks land in the same rarity tiers and the same underlying stat/
 affix pool, so a legendary found sword and a legendary crafted sword are
 comparable, just arrived at differently.
 
+What *names* an item once it is assembled by the player rather than picked
+from an authored table is specified separately in
+[item_identity.md](item_identity.md): an emergent item's id is a content hash
+of its canonical structure, which is what lets a crafted item survive a save
+at all.
+
+How two items of the same material in the same shape can still be a file and a
+spring is specified in [heat_treatment.md](heat_treatment.md): quench, temper
+and sharpen slide one material along a single hardness/toughness curve that no
+draw is allowed to cheat.
+
 ### Reading an item
 
 Hovering an item in the inventory is how the player learns what it is. The

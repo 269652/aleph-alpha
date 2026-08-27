@@ -147,3 +147,33 @@ func test_check_licensed_sets_the_github_user_id_flag():
 	var code := _sign_code(1, 1, 123456)
 	gate.check_licensed(code)
 	assert_eq(gate.github_user_id, 123456)
+
+
+# -- Editor Play-button runs (see docs/licensing.md, requested explicitly:
+# the check must now apply the same way whether launched via the editor's
+# Play button or a real exported build -- no bypass either way) ----------
+
+## The whole point: previously, is_editor=true short-circuited straight to
+## is_licensed=true regardless of the actual code, so an invalid/missing
+## key never failed an editor run. That bypass is gone -- is_editor no
+## longer changes the outcome at all, it's threaded through only so a
+## future "actually, bring the bypass back" request has one obvious,
+## already-tested place to reintroduce it instead of reaching for an
+## un-injectable OS.has_feature() guard again.
+func test_boot_rejects_an_invalid_code_even_when_told_it_is_running_in_the_editor():
+	gate._boot(true, "NOT-A-REAL-CODE")
+	assert_false(gate.is_licensed)
+	assert_push_error("License check failed:")
+
+
+func test_boot_accepts_a_valid_code_when_running_in_the_editor():
+	var code := _sign_code(1, 1)
+	gate._boot(true, code)
+	assert_true(gate.is_licensed)
+	assert_eq(gate.product_mask, 1)
+
+
+func test_boot_behaves_identically_outside_the_editor():
+	gate._boot(false, "NOT-A-REAL-CODE")
+	assert_false(gate.is_licensed)
+	assert_push_error("License check failed:")

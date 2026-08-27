@@ -430,13 +430,14 @@ Implemented and live-wired on `main`:
   `_ready()`, which calls `LicenseGate.require_licensed()` again from
   scratch — defense in depth, so bypassing the game requires patching
   more than the one autoload call site.
-- A deliberate, transparent development bypass:
-  `OS.has_feature("editor")` short-circuits the check to always-licensed.
-  This tag is an engine-level distinction that does not exist in exported
-  builds, so it opens no bypass in anything actually shipped — it exists
-  purely so normal in-editor development/playtesting isn't blocked by an
-  unfilled public key. It's a one-line removal if editor runs should be
-  gated too.
+- **No editor bypass** (removed by request — see "Real change made" below):
+  `_ready()` calls `_boot(OS.has_feature("editor"))`, and `_boot()` checks
+  the license the same way regardless of `is_editor`. `is_editor` is kept
+  as a parameter (rather than deleted) purely so a future "bring the
+  bypass back" request has one obvious, already-tested place to
+  reintroduce it (see `test_license_gate.gd`'s "Editor Play-button runs"
+  section) instead of reaching for an un-injectable `OS.has_feature()`
+  guard directly again.
 - `tools/generate_keypair.gd` — never-shipped CLI tool, run once by the
   key owner, to generate the real RSA-2048 keypair.
 - `tools/generate_serial.gd` — never-shipped CLI tool that mints a real
@@ -574,17 +575,14 @@ Implemented and live-wired on `main`:
   - `OS.has_feature("editor")` is true for ANY run of the Godot EDITOR
     binary -- not only an actual Play-button click, confirmed by
     launching `Godot.exe --path <repo>` (no `-e`) with every candidate
-    `license.txt` moved aside and reaching the main menu anyway. This
-    means the license-gate/GitHub-verify UI can never be exercised via a
-    raw dev launch of the editor binary, only by a real export (which
-    has no "editor" feature at all). `world.gd` now reads a
-    `--force-license-check` user arg (after `--`, e.g. `Godot.exe --path
-    <repo> -- --force-license-check`) to opt a dev launch back into the
-    real check for testing the gate itself -- deliberately does NOT
-    touch `SelfIntegrity` (which can never pass in this launch mode
-    anyway, no exported `.pck` to hash) or change anything for a real
-    shipped build, which never has this flag passed and never has the
-    editor binary at all.
+    `license.txt` moved aside and reaching the main menu anyway. At the
+    time this meant the license-gate/GitHub-verify UI could never be
+    exercised via a raw dev launch of the editor binary at all, only by a
+    real export -- `world.gd` read a `--force-license-check` user arg
+    (after `--`) to opt back into the real check for testing the gate
+    itself. **Both the bypass and this flag are gone now** (see "Real
+    change made" below): the check always runs, so the flag that used to
+    opt back into it has nothing left to opt into.
   - `_process()`/`_unhandled_input()` run every frame regardless of
     whether `_ready()` returned early for the license-gate/GitHub-verify
     path -- before this was fixed, showing the gate crashed every single
@@ -607,6 +605,26 @@ Implemented and live-wired on `main`:
     same documented limitation `LoadingOverlay` already accepts for
     chunk-loading before `update_with_progress` existed. It fixes the
     confirmation never painting at all, not the freeze itself.
+
+- **Real change made, by explicit request: the editor bypass is gone,
+  everywhere.** Both editor-exempting checks above (`license_gate.gd`'s
+  own `_ready()`, and `world.gd`'s redundant second check) always run the
+  real license check now, exactly as an exported build would -- an
+  editor Play-button run with no/an invalid `license.txt` now shows the
+  same in-game "enter your key" gate a real build would. `license_gate.gd`
+  extracted the decision into `_boot(is_editor: bool, code_override: String
+  = "")`, which no longer branches on `is_editor` at all but keeps it as a
+  parameter so a future "bring the bypass back" ask has one obvious,
+  already-tested place to do it (see `test_license_gate.gd`'s "Editor
+  Play-button runs" section, 3 new tests) rather than reaching for a
+  raw, un-injectable `OS.has_feature("editor")` guard again. `world.gd`'s
+  `--force-license-check` arg is removed along with the bypass it opted
+  back into -- there is nothing left to opt into, the check is simply
+  always on. `SelfIntegrity`'s own, separate editor bypass is UNCHANGED
+  (there's still no exported `.pck` to hash while running raw project
+  files, so it still can never pass in this launch mode regardless of any
+  real key) -- this change is scoped to the license check only, README.md
+  updated to match ("running from the editor" no longer skips it).
 
 **Not done / left to the user:**
 

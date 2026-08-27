@@ -246,12 +246,43 @@ static func head_fit_scale(headroom_px: int, head_canvas_px: int) -> float:
 	return clampf(float(headroom_px) / float(head_canvas_px), 0.0, 1.0)
 
 
+## How many buckets nectar is quantized into for the cache key below. Nectar
+## drains and refills continuously while a bloom's species/seed/withered stay
+## fixed, so keying the cache on the exact float would mint a fresh, unshared
+## Texture2D on nearly every call -- exactly the "one texture per instance"
+## problem this cache exists to fix, just moved from the sprite's identity to
+## its nectar reading. Bucketing bounds that the same way
+## ProceduralTreeSprite.CROP_LEVELS bounds its own continuous axis (ripe fruit
+## count).
+const NECTAR_LEVELS := 4
+
+
+## Which bucket this nectar reading falls in, 0 (empty) .. NECTAR_LEVELS - 1
+## (full).
+static func nectar_level_for(nectar: float) -> int:
+	return clampi(roundi(clampf(nectar, 0.0, 1.0) * float(NECTAR_LEVELS - 1)), 0, NECTAR_LEVELS - 1)
+
+
+## Finished blooms, keyed by everything that can change one. Mirrors
+## ProceduralTreeSprite's own _tree_texture_cache: a meadow of a hundred
+## tulips at the same growth stage is the same handful of pictures, not a
+## hundred separate composites, and a chunk that unloads and reloads (chunks
+## are not persisted -- see EarthChunkManager's own doc comment) asks for the
+## exact same texture back instead of repainting and re-uploading it.
+static var _flower_texture_cache := {}
+
+
 func generate_texture(
 	species_id: String, seed_value: int, nectar: float = 1.0, withered: bool = false
 ) -> ImageTexture:
-	return ImageTexture.create_from_image(
+	var key := "%s/%d/%d/%s" % [species_id, seed_value, nectar_level_for(nectar), withered]
+	if _flower_texture_cache.has(key):
+		return _flower_texture_cache[key]
+	var texture := ImageTexture.create_from_image(
 		generate_image(species_id, seed_value, nectar, withered)
 	)
+	_flower_texture_cache[key] = texture
+	return texture
 
 
 ## Which species the current paint pass is for, so the head painter can pick

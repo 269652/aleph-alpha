@@ -5,14 +5,72 @@ const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 
 
+## Width is always a full, un-inset cell (bleed only ever runs vertically,
+## row into row -- see ROW_TOP_BLEED_PX's own doc comment); height is
+## shorter than a full cell for any row whose own measured bleed inset is
+## nonzero, since that inset is cropped off the region's own top edge on
+## purpose. Seed 42 lands in row 4 (index 42 -> row 42/10 = 4), whose real
+## measured inset is 13px -- asserted against ROW_TOP_BLEED_PX directly
+## rather than a hardcoded number, so this test can't silently drift out of
+## sync with the table if it's ever remeasured.
 func test_each_seed_selects_one_tile_inside_the_delivered_10x10_atlas():
 	var rect := IllustratedGrassPatch.atlas_region_for_seed(42)
+	var expected_height := 1254 / 10 - IllustratedGrassPatch.ROW_TOP_BLEED_PX[4]
 	assert_between(rect.size.x, 125, 126)
-	assert_between(rect.size.y, 125, 126)
+	assert_between(rect.size.y, expected_height - 1, expected_height + 1)
 	assert_gte(rect.position.x, 0)
 	assert_gte(rect.position.y, 0)
 	assert_lt(rect.position.x, 1254)
 	assert_lt(rect.position.y, 1254)
+
+
+## The delivered sheet's taller "bush"/wheat-ear variants (denser rows) draw
+## their own plant art past their own cell's nominal bottom edge, bleeding
+## into the TOP of the next row's cell -- measured directly against the real
+## shipped `assets/sprites/grass_blades.png`: a solid opaque strip right at a
+## recipient cell's own top edge, then a genuine transparent gap, then that
+## cell's OWN plant starting further down. Because the shader flips root-at-
+## bottom/tip-at-top (a card's local Y=0 is the ground, WORLD_SIZE is up), a
+## region sliced with no inset puts that bled fragment at the rendered TIP --
+## the point farthest from the ground -- visibly detached from the card's own
+## body by a real transparent gap. Reported live: "the grass now has floating
+## artefacts above it" (Lüneburg-Heath-style meadow, snow made the contrast
+## bad enough to see clearly, but the bleed itself is independent of snow --
+## reproduced over both white and green backgrounds).
+##
+## This is a real property of the shipped PNG, not a synthetic case: every
+## row from 2 through 9 shows the pattern on at least one column (69 of the
+## 90 non-row-0 cells checked). `atlas_region_for_seed`'s own region must
+## therefore start far enough past its row's nominal top edge that the real
+## image is fully transparent there -- i.e. genuinely past any donor bleed --
+## for every real (row, column) combination, not just the worst one spot-
+## checked by eye.
+func test_atlas_region_for_seed_never_includes_the_previous_rows_bled_over_content():
+	var image := Image.load_from_file(IllustratedGrassPatch.ATLAS_PATH)
+	assert_not_null(image, "precondition: the real shipped atlas loads")
+	var size := image.get_size()
+
+	var checked_any := false
+	for row in range(1, IllustratedGrassPatch.ATLAS_ROWS):
+		for column in IllustratedGrassPatch.ATLAS_COLUMNS:
+			var seed_value := row * IllustratedGrassPatch.ATLAS_COLUMNS + column
+			var region := IllustratedGrassPatch.atlas_region_for_seed(seed_value, size)
+			checked_any = true
+			# Sample across the region's own top row (stride 4, matching how
+			# this bleed was originally measured): every one of the shipped
+			# atlas's real cells must be fully transparent right at the top
+			# of the region this function actually hands out, or a donor
+			# fragment is still being included.
+			for x in range(region.position.x, region.position.x + region.size.x, 4):
+				var alpha: float = image.get_pixel(x, region.position.y).a
+				assert_lt(
+					alpha, 0.05,
+					(
+						"row %d col %d: region top (y=%d) is not transparent (alpha=%.2f) -- "
+						+ "still includes the previous row's bled-over content"
+					) % [row, column, region.position.y, alpha]
+				)
+	assert_true(checked_any, "precondition: rows 1-9 were actually checked")
 
 
 func test_a_patch_has_multiple_deterministically_placed_blade_cards():

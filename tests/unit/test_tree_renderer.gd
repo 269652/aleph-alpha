@@ -480,3 +480,169 @@ func test_a_non_piece_modification_does_not_stop_a_tree_spawning():
 		"an earth tile is not a building -- it should not have uprooted the tree"
 	)
 	assert_eq(spawned.size(), without_house)
+
+
+## ## The canopy is on the clock, not on the simulation
+##
+## (see docs/concept/seasons.md, "The canopy is on the clock, not on the
+## simulation"). `season` used to be an empty String written from exactly one
+## place -- EarthChunkManager._sync_tree_season, reachable only from
+## step_fruiting, reachable only from World._process behind
+## _owns_ecosystem_simulation() and a ~1s accumulator. A tree built before
+## that ever fired had no season at all and fell through
+## IllustratedTree._FALLBACK_SEASON to summer leaf: a fresh world's first
+## chunks flashed green in the snow, and a joined multiplayer client (which
+## owns no simulation, so the tick never runs) stayed summer-green all year.
+##
+## So the renderer holds the CLOCK, and the season is derived from it. There
+## is no unset state left to fall back from.
+
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const SeasonTransition = preload("res://src/world/season_transition.gd")
+const TreePhenology = preload("res://src/world/tree_phenology.gd")
+
+var _cycle := SeasonCycle.new()
+
+
+func _clock_at(season: String) -> float:
+	return _cycle.seconds_until_season(0.0, season)
+
+
+func test_a_renderer_nobody_has_told_anything_still_has_a_real_season():
+	var state: Dictionary = renderer.canopy_state()
+
+	assert_true(
+		SeasonCycle.SEASONS.has(state["season"]),
+		"a freshly built renderer had no season at all: %s" % [state]
+	)
+
+
+## Not merely non-empty -- it must be the clock's own zero, read the way a
+## CANOPY reads it (TreePhenology, not the calendar label: the first instant
+## of spring is still bare wood). Silently reading as high summer is what let
+## the wiring bug pass for a healthy forest.
+func test_an_untouched_renderer_reads_the_clocks_own_zero_and_not_summer():
+	assert_eq(
+		renderer.canopy_state()["season"],
+		TreePhenology.canopy_state_at(_cycle.year_fraction(0.0))["from"]
+	)
+	assert_ne(
+		renderer.canopy_state()["season"],
+		"summer",
+		"an unset season must not look like a healthy summer tree"
+	)
+
+
+## ## The canopy walks its OWN schedule, off the same clock
+##
+## The reported bug (see docs/concept/seasons.md, "Winter stays bare: the
+## canopy has its own phenology"): a world that opened in winter showed pink
+## blossom and green crowns in the snow. Nothing was mis-mapped -- the last
+## third of every season already reports itself as turning into the next one,
+## which a LAWN expresses as an imperceptible colour lerp and a CANOPY
+## expresses as a fifth of a much denser, much pinker picture painted over
+## bare branches.
+##
+## So the canopy is on `TreePhenology`'s schedule and the ground stays on
+## `SeasonTransition`'s. This is the table the player actually sees, asserted
+## where the game actually reads it: winter bare, blossom a brief early-spring
+## event, leaf from late spring through summer, turning in autumn.
+const _SEASON_SECONDS := SeasonCycle.SECONDS_PER_YEAR / 4.0
+
+
+func _canopy_at(season: String, through: float) -> String:
+	renderer.set_world_age_seconds(_clock_at(season) + _SEASON_SECONDS * through)
+	return renderer.canopy_state()["season"]
+
+
+func test_the_canopy_a_tree_wears_follows_the_year():
+	assert_eq(_canopy_at("winter", 0.5), "winter", "deep winter should be bare")
+	assert_eq(_canopy_at("spring", 0.09), "spring", "early spring should be in blossom")
+	assert_eq(_canopy_at("spring", 0.6), "summer", "late spring should be in leaf")
+	assert_eq(_canopy_at("summer", 0.5), "summer")
+	assert_eq(_canopy_at("autumn", 0.5), "autumn")
+
+
+## The whole of winter, not just its middle. Winter's last third is exactly
+## where blossom used to bleed back in, because that is when the GROUND starts
+## turning toward spring.
+func test_winter_is_bare_end_to_end():
+	for step in 40:
+		var through := float(step) / 40.0
+
+		assert_eq(
+			_canopy_at("winter", through),
+			"winter",
+			"blossom bled back into winter, %d%% through it" % int(through * 100.0)
+		)
+
+
+## ...and it is bare in the strong sense: not part-way into a blend toward
+## blossom either, which would already read as pink on a canopy.
+func test_late_winter_is_not_even_part_turned_though_the_ground_is():
+	var late_winter := _clock_at("winter") + _SEASON_SECONDS * 0.9
+	var ground := SeasonTransition.state_at(_cycle.year_fraction(late_winter))
+	assert_eq(ground["to"], "spring", "precondition: the GROUND is turning by now")
+	assert_gt(float(ground["progress"]), 0.0, "precondition: and visibly so")
+
+	renderer.set_world_age_seconds(late_winter)
+
+	assert_almost_eq(float(renderer.canopy_state()["turn_progress"]), 0.0, 0.0001)
+
+
+## The renderer is the one place the canopy schedule is read (the trees
+## already loaded are dressed from this same call -- see
+## EarthChunkManager.sync_tree_season), so it has to BE the schedule rather
+## than an approximation of it that can drift.
+func test_the_renderer_reports_exactly_what_the_phenology_says():
+	for step in 48:
+		var moment := SeasonCycle.SECONDS_PER_YEAR * float(step) / 48.0
+		renderer.set_world_age_seconds(moment)
+		var state: Dictionary = renderer.canopy_state()
+		var expected := TreePhenology.canopy_state_at(_cycle.year_fraction(moment))
+
+		assert_eq(state["season"], expected["from"], "stage disagreed at step %d" % step)
+		assert_eq(state["turning_into"], expected["to"], "target disagreed at step %d" % step)
+		assert_almost_eq(
+			float(state["turn_progress"]), float(expected["progress"]), 0.001
+		)
+
+
+## The behavioural end of it: the picture a tree is actually built with.
+## A tree spawned before anyone sets a clock must not be the same picture as
+## a tree spawned in high summer -- that identity IS the reported bug.
+func test_a_tree_built_before_anyone_sets_a_clock_is_not_drawn_in_summer():
+	var untouched := renderer.spawn_tree_at(parent, Vector2(48.0, 48.0))
+	var untouched_texture: Texture2D = _canopy_texture_of(untouched)
+
+	renderer.set_world_age_seconds(_clock_at("summer"))
+	var summer := renderer.spawn_tree_at(parent, Vector2(48.0, 48.0))
+
+	assert_ne(
+		untouched_texture,
+		_canopy_texture_of(summer),
+		"a tree built with no clock set was drawn as a summer tree"
+	)
+
+
+func test_a_winter_tree_and_a_summer_tree_are_different_pictures():
+	renderer.set_world_age_seconds(_clock_at("winter"))
+	var winter_texture: Texture2D = _canopy_texture_of(
+		renderer.spawn_tree_at(parent, Vector2(48.0, 48.0))
+	)
+
+	renderer.set_world_age_seconds(_clock_at("summer"))
+
+	assert_ne(
+		winter_texture,
+		_canopy_texture_of(renderer.spawn_tree_at(parent, Vector2(48.0, 48.0))),
+		"the same canopy stood through winter and summer alike"
+	)
+
+
+## The CANOPY sprite, not the contact shadow -- _build_tree_node adds the
+## shadow first (sibling order is draw order), and a shadow is the same
+## picture in every season, so taking the first Sprite2D child would compare
+## two shadows and pass no matter what the canopy did.
+func _canopy_texture_of(tree: ChoppableTree) -> Texture2D:
+	return tree._canopy_sprite.texture

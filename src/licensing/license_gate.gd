@@ -64,22 +64,37 @@ func _init(verifier: SerialVerifier = null) -> void:
 
 
 func _ready() -> void:
-	# Godot's own "editor" feature tag exists ONLY when running via the
-	# editor's Play button -- it is never present in an exported/shipped
-	# build, so this branch creates no bypass in what actually ships; it
-	# only lets normal in-editor development/playtesting proceed without
-	# needing a real serial every time. Remove this if you'd rather the
-	# check apply in-editor too.
-	if OS.has_feature("editor"):
-		is_licensed = true
-		return
-	# Non-quitting: an invalid/missing key no longer ends the process here.
-	# world.gd's own _ready() is what actually enforces this now -- it
-	# shows an in-game "enter your key" gate instead of building the rest
-	# of the world when is_licensed is false, which is a strictly stronger
-	# gate than a quit() here would be (no gameplay code runs at all,
-	# rather than a quit() call that a patched world.gd could ignore).
-	check_licensed()
+	_boot(OS.has_feature("editor"))
+
+
+## `is_editor` is injected (Godot's real OS.has_feature("editor") result,
+## in production) rather than read live inside this function, so the
+## editor-vs-shipped-build decision has a real red/green test instead of
+## being an OS-call-guarded branch nobody can exercise from a headless
+## test (see test_license_gate.gd's "Editor Play-button runs" section).
+##
+## There is currently NO bypass here: an editor Play-button run is
+## checked exactly the same way an exported build is, by explicit
+## request -- previously, is_editor=true short-circuited straight to
+## is_licensed=true so normal in-editor development/playtesting never
+## needed a real serial. `is_editor` is kept as a parameter (rather than
+## deleted outright now that nothing branches on it) so a future "actually,
+## exempt editor runs again" request has one obvious, already-tested place
+## to reintroduce that branch, instead of reaching for an un-injectable
+## OS.has_feature() guard directly again.
+##
+## `code_override` threads through to check_licensed() the same "inject
+## what varies" shape require_licensed()/check_licensed() already use, so
+## tests never depend on a real license.txt existing on disk.
+##
+## Non-quitting: an invalid/missing key no longer ends the process here.
+## world.gd's own _ready() is what actually enforces this now -- it shows
+## an in-game "enter your key" gate instead of building the rest of the
+## world when is_licensed is false, which is a strictly stronger gate than
+## a quit() here would be (no gameplay code runs at all, rather than a
+## quit() call that a patched world.gd could ignore).
+func _boot(is_editor: bool, code_override: String = "") -> void:
+	check_licensed(code_override)
 
 
 ## The real enforcement call: read the license file, verify it, and end

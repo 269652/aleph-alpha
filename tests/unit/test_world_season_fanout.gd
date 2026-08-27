@@ -129,3 +129,140 @@ func test_the_shared_clock_actually_says_something_different_in_winter():
 		SeasonalFoliage.tint_for_world_age(summer),
 		SeasonalFoliage.tint_for_world_age(winter)
 	)
+
+
+## ## The canopy half of the same fan-out
+##
+## The ground learned the season off the world clock (above) while the canopy
+## learned it off the SIMULATION: `TreeRenderer.season` was an empty string
+## written from exactly one place, `EarthChunkManager._sync_tree_season`,
+## reachable only from `step_fruiting`, reachable only from `World._process`
+## behind `_owns_ecosystem_simulation()` and a ~1s accumulator.
+##
+## So the first awaited chunk load built its trees before that ever fired
+## (no season at all -> IllustratedTree._FALLBACK_SEASON -> summer leaf: a
+## fresh world flashed green trees in the snow), and a JOINED CLIENT, which
+## owns no simulation, never ran it at all and kept a summer-green forest in
+## every season for the whole session.
+##
+## See docs/concept/seasons.md, "The canopy is on the clock, not on the
+## simulation".
+
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+
+
+func _clock_at(season: String) -> float:
+	return SeasonCycle.new().seconds_until_season(0.0, season)
+
+
+func _canopy_season() -> String:
+	return manager._tree_renderer.canopy_state()["season"]
+
+
+## Both randomize_world_age (New Game) and load_world_clock (Load Game) go
+## through set_world_age_seconds, and both run BEFORE the first
+## update()/update_with_progress call -- so dressing the trees here is what
+## makes a chunk that loads in winter load bare trees, rather than summer
+## ones that correct themselves a moment later.
+func test_establishing_the_world_clock_dresses_the_trees_at_once():
+	manager.set_world_age_seconds(_clock_at("winter"))
+
+	assert_eq(
+		_canopy_season(),
+		"winter",
+		"the trees were still waiting on a fruiting tick to learn the season"
+	)
+
+
+## No fruiting tick, no ecology step, nothing simulated at all -- just time
+## passing, which is the only thing a canopy actually depends on.
+func test_advancing_the_clock_alone_dresses_the_trees():
+	manager.set_world_age_seconds(0.0)
+	manager.advance_world_age(_clock_at("winter"))
+
+	assert_eq(_canopy_season(), "winter")
+
+
+## /season skips the clock forward without going through
+## set_world_age_seconds (see jump_to_season), so it needs the push of its
+## own -- forcing winter and watching the wood stay green for a second is the
+## exact report this whole section exists for.
+func test_a_season_jump_dresses_the_trees_too():
+	manager.set_world_age_seconds(0.0)
+	assert_true(manager.jump_to_season("winter"), "/season winter should have moved")
+
+	assert_eq(_canopy_season(), "winter")
+
+
+## The line that makes it true while playing, on EVERY peer: _client_process
+## runs for host and joined client alike, unlike the ecology block in
+## _process. Same shape as the ground-tint assertion above -- the canopy and
+## the lawn are pushed from the same frame, off the same clock.
+func test_the_client_frame_dresses_the_canopy_as_well_as_the_ground():
+	assert_string_contains(
+		_client_process_body(),
+		"_chunk_manager.sync_tree_season(",
+		"the canopy season still depends on owning the simulation"
+	)
+
+
+## The premise the assertion above rests on: a joined client really does own
+## no simulation, so anything pushed only from the owns-gated block in
+## _process never happens there at all.
+func test_a_joined_client_owns_no_simulation_and_so_cannot_be_pushed_from_one():
+	assert_false(
+		World.owns_ecosystem_simulation_for(false, true, false),
+		"a joined client is not the simulation authority"
+	)
+
+
+## Cheap enough to sit in a per-frame push: the quantised season/turn
+## signature guard means a canopy rebuild happens a handful of times per
+## in-game year, not once a frame.
+func test_syncing_the_same_moment_twice_is_a_no_op():
+	manager.set_world_age_seconds(_clock_at("winter"))
+	var before: String = manager._last_tree_season
+
+	manager.sync_tree_season()
+
+	assert_eq(manager._last_tree_season, before)
+	assert_ne(before, "", "the guard never recorded the season it dressed")
+
+
+## ## One schedule, not two
+##
+## step_fruiting redraws the canopies of the trees near the player (it has to
+## -- the crop hanging on them is part of the same texture), and it used to
+## derive the season for that redraw ITSELF: the calendar name plus its own
+## SeasonTransition call, per tree. That is a second answer to "which canopy
+## is this tree wearing", and once the canopy moved onto TreePhenology's
+## schedule (see docs/concept/seasons.md, "Winter stays bare") the two answers
+## stop agreeing -- the trees within the fruiting radius would wear a
+## different year from the wood around them.
+const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
+
+
+func _tree_the_player_is_standing_next_to() -> ChoppableTree:
+	var tree := ChoppableTree.new()
+	var sprite := Sprite2D.new()
+	tree.add_child(sprite)
+	tree.bind_canopy(sprite)
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i.ZERO] = [tree]
+	return tree
+
+
+func test_the_fruiting_tick_draws_the_canopy_on_the_same_schedule_as_the_wood():
+	var tree := _tree_the_player_is_standing_next_to()
+	# The first instant of spring: the calendar says spring, the canopy is
+	# still bare wood, and those two disagreeing is the whole point.
+	manager.set_world_age_seconds(_clock_at("spring"))
+
+	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, Vector2.ZERO)
+
+	assert_eq(
+		tree.current_season(),
+		_canopy_season(),
+		"the tree beside the player wore a different year from the wood behind it"
+	)
+	assert_eq(tree.current_season(), "winter", "blossom on the first day of spring")

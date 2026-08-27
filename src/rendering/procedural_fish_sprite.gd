@@ -53,8 +53,30 @@ var _ramp := PixelRamp.new()
 var _form := PixelForm.new()
 
 
+## How many distinct individual looks a species has, once generate_texture
+## buckets a seed down to a cache key. Fish are chunk-spawned with
+## MAX_FISH_PER_CHUNK capping population per chunk but potentially many
+## water chunks loaded/visible at once -- an uncached generate_texture meant
+## every visible fish paid its own image-generation cost AND ended up
+## permanently unbatchable with every other fish, even of the same species,
+## since each got its own unique Texture2D object. Same bucketing philosophy
+## as ProceduralAnimalAnimation.LOOK_VARIANTS: bounded so a pond full of
+## goldfish is a handful of shared pictures, not one composite per fish.
+const LOOK_VARIANTS := 8
+
+static var _texture_cache: Dictionary = {}
+
+
+## Individuals sharing a (species, look) share one Texture2D. Instance
+## method over a static cache because FishRenderer holds its own
+## ProceduralFishSprite, so a per-instance cache would still redraw once per
+## fish -- same reasoning as ProceduralAnimalAnimation.textures_for.
 func generate_texture(species: String, seed_value: int) -> ImageTexture:
-	return ImageTexture.create_from_image(generate_image(species, seed_value))
+	var variant := absi(seed_value) % LOOK_VARIANTS
+	var key := "%s/%d" % [species, variant]
+	if not _texture_cache.has(key):
+		_texture_cache[key] = ImageTexture.create_from_image(generate_image(species, variant))
+	return _texture_cache[key]
 
 
 ## Renders `species` in its own color (falling back to "goldfish" for an

@@ -573,6 +573,29 @@ func test_herbivore_ignores_a_predator_that_is_far_out_of_sense_range():
 	assert_lt(marker.position.distance_to(marker.home), CreatureWander.WANDER_RADIUS)
 
 
+# -- performance: consolidated creature-group scan per sensing tick ----------
+
+## _nearby_threat_creatures/_nearby_prey_creatures/_nearby_herbivore_creatures
+## used to each independently call get_tree().get_nodes_in_group(GROUP_NAME)
+## and re-filter the whole population on every SENSE_INTERVAL tick -- O(n^2)
+## across however many creature markers are loaded. A single sensing tick
+## must scan the group exactly once and have every bucket accessor read from
+## that one cached classification instead. Both a predator (feeds the threat
+## bucket) and a herbivore (feeds the nonpredator/herd bucket) are nearby so
+## this tick actually exercises more than one bucket accessor.
+func test_a_single_sensing_tick_scans_the_creature_group_only_once():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	_add_stub_creature("predator", Vector2(120, 100))
+	_add_stub_creature("herbivore", Vector2(140, 100))
+
+	marker._process(0.3)  # exceeds SENSE_INTERVAL -- sensing runs for real
+
+	assert_eq(
+		marker._creature_scan_count, 1,
+		"one sensing tick should scan the creature group once, not once per bucket accessor"
+	)
+
+
 # -- behavior: predator hunting/predation -------------------------------------
 
 func test_hungry_predator_moves_toward_a_distant_herbivore():

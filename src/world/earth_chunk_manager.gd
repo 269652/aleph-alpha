@@ -351,6 +351,21 @@ var _tree_spread := TreeSpread.new()
 var _tree_maturity := TreeMaturity.new()
 var _tile_map_layer: TileMapLayer
 var _entities_parent: Node2D
+## Where ground-flush decoration (flowers, worms, desert scrub, tundra
+## lichen) is parented -- a non-y-sorted, always-behind-Entities layer, the
+## same "ground effects tier" scenes/world.tscn's WaterFx/SnowFx/HillshadeFx
+## siblings already use (z_index=-1, no y_sort_enabled), rather than
+## _entities_parent's own y_sort_enabled=true. Ground decor sits flush with
+## the floor and is always meant to draw underneath trees/creatures/the
+## player regardless of Y position, so it never needed per-sprite Y-order
+## interleaving with them in the first place -- forcing it into that
+## interleaving is what breaks draw-call batching for the whole Entities
+## group under the gl_compatibility renderer.
+##
+## Falls back to _entities_parent when the constructor isn't given one, so
+## every EarthChunkManager.new(...) call site that predates this field keeps
+## its old behaviour unchanged.
+var _ground_decor_parent: Node2D
 var _creatures_parent: Node2D
 var _loaded_chunks: Dictionary = {}  # Vector2i chunk_coord -> Chunk
 
@@ -586,7 +601,12 @@ var _world_age_seconds := 0.0
 const NEW_GAME_WORLD_AGE_RANGE_SECONDS := SeasonCycle.SECONDS_PER_YEAR
 
 
-func _init(tile_map_layer: TileMapLayer, entities_parent: Node2D, creatures_parent: Node2D) -> void:
+func _init(
+	tile_map_layer: TileMapLayer,
+	entities_parent: Node2D,
+	creatures_parent: Node2D,
+	ground_decor_parent: Node2D = null
+) -> void:
 	_tile_map_layer = tile_map_layer
 	_tile_map_layer.tile_set = _terrain_renderer.build_tile_set()
 	# Tiles are painted at ART_TILE_SIZE pixels but must span only TILE_SIZE
@@ -595,6 +615,10 @@ func _init(tile_map_layer: TileMapLayer, entities_parent: Node2D, creatures_pare
 	_tile_map_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
 	_entities_parent = entities_parent
 	_creatures_parent = creatures_parent
+	# Optional and defaulted to null (see _ground_decor_parent's own doc
+	# comment) so every pre-existing 3-argument call site keeps parenting
+	# ground decor under Entities exactly as before.
+	_ground_decor_parent = ground_decor_parent if ground_decor_parent != null else entities_parent
 
 
 ## Loads/generates chunks within LOAD_RADIUS of the player's global tile
@@ -2258,24 +2282,65 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 
 	var now := _world_age_seconds
 	var warmth := _warmth_at_pixel(player_pixel)
-	var season_name := current_season()
-	_sync_tree_season(season_name)
+	# Belt and braces only: the canopy season is the CLOCK's job now (see
+	# sync_tree_season, called from set_world_age_seconds/advance_world_age/
+	# jump_to_season and World._client_process), and the signature guard makes
+	# this a no-op whenever one of those already dressed this moment. It is not
+	# load-bearing -- a peer that never runs this tick at all still has correct
+	# trees -- but fruiting is about to redraw these canopies anyway, so it may
+	# as well redraw them in the right season.
+	#
+	# Passes player_pixel through so a season change (rare, but touches every
+	# loaded tree when it happens) respects the same FRUITING_DETAIL_RADIUS
+	# gate as the per-tree loop below -- otherwise a tree this loop has
+	# deliberately skipped for being out of range gets re-dressed right back
+	# in with its own stale cached ripe_fruit_count() the moment the season
+	# turns, and the "frozen forever" bug reappears through this door instead.
+	sync_tree_season(player_pixel)
+	# ONE answer to "which canopy is this tree wearing", read from the same
+	# place the rest of the wood was just dressed from -- and read ONCE, not
+	# per tree. This used to be the calendar season plus a SeasonTransition
+	# call inside the loop below, which is a second schedule: harmless while
+	# the canopy still turned on the ground's curve, wrong the moment it got
+	# its own (see TreePhenology), because then the trees inside the fruiting
+	# radius wear a different year from the wood around them -- blossom on the
+	# first day of spring for the handful next to the player, bare branches
+	# everywhere else.
+	var canopy := _tree_renderer.canopy_state()
+	var canopy_season: String = canopy["season"]
+	var canopy_turning_into: String = canopy["turning_into"]
+	var canopy_turn_progress: float = canopy["turn_progress"]
 	for trees in _loaded_trees.values():
 		for tree in trees:
 			if not tree.has_method("set_ripe_fruit"):
 				continue
-			# Whether this tree is close enough to DROP its fruit as real
-			# items. Showing a crop is cheap -- the textures are shared
-			# between trees of the same species, season and crop level -- but
-			# every fallen fruit is a node, so the drops stay near the player.
+			# Distance pre-filter, BEFORE any per-tree work: genome lookup,
+			# species/pollination lookups, FruitingModel.state_at, and above
+			# all tree.set_ripe_fruit's canopy texture redraw are all real
+			# per-tree cost, and this loop used to pay it for EVERY loaded
+			# tree in the whole streaming radius -- potentially thousands --
+			# roughly once a second, forever, including trees the player has
+			# never been anywhere near (reported: a real perf hit from a
+			# handful of loaded forests).
 			#
-			# This check used to skip the whole tree, so only the handful
-			# within the detail radius carried any fruit at all and the rest of
-			# the wood stood bare in the middle of autumn (reported: apples on
-			# only some trees).
-			var drops_fruit: bool = (
-				player_pixel.distance_to(tree.position) <= FRUITING_DETAIL_RADIUS
-			)
+			# FRUITING_DETAIL_RADIUS already covers the full visible
+			# viewport (1280x720 screen / Player.CAMERA_ZOOM's 4x zoom =
+			# 320x180 world px, half-diagonal ~183.6px, comfortably inside
+			# 280px), so nothing actually on screen is skipped -- and
+			# because FruitingModel.state_at is a PURE function of elapsed
+			# world time rather than a running simulation, a skipped tree is
+			# not frozen: it simply shows the correct catch-up ripeness the
+			# next time it comes back into range (see
+			# chunk_ecology_catchup.gd for the same "catch up divergent
+			# world state when it comes back into scope" pattern elsewhere
+			# in this codebase).
+			#
+			# This check used to only gate whether a tree's fruit dropped as
+			# real ground items further below, which is what let every
+			# loaded tree's canopy redraw through here regardless of
+			# distance in the first place.
+			if player_pixel.distance_to(tree.position) > FRUITING_DETAIL_RADIUS:
+				continue
 			var genome := _forage_scheduler.genome_for(tree.position)
 			# NAMED species (Walnut/Cherry/Apple -- see TreeSpecies), not the
 			# raw nut/fruit spectrum: both the canopy's ripe crop and the
@@ -2287,15 +2352,17 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			var state: Dictionary = _fruiting_model.state_at(
 				genome, now, warmth, yield_multiplier, ripening_multiplier
 			)
-			var turn := SeasonTransition.state_at(
-				_season_cycle.year_fraction(_world_age_seconds)
-			)
 			tree.set_ripe_fruit(
-				int(state.get("ripe", 0)), season_name, turn.to, turn.progress
+				int(state.get("ripe", 0)),
+				canopy_season,
+				canopy_turning_into,
+				canopy_turn_progress
 			)
 
-			if not drops_fruit:
-				continue
+			# Every tree reaching here already passed the FRUITING_DETAIL_RADIUS
+			# gate above, so it drops its fallen fruit as real ground items too
+			# -- capped below, so the ground under a tree stand never turns
+			# into a hundred clickable nodes.
 			# How many were on the tree before this step, so the ones that leave
 			# can be identified: fruit leave from the top of the crop's order
 			# (see FruitingModel.fallen_indices).
@@ -2377,6 +2444,12 @@ func set_world_age_seconds(value: float) -> void:
 	_world_age_seconds = value
 	_last_fruiting_time = value
 	_snow_world_age = value
+	# The canopies are one of those readers, and this is the earliest moment
+	# they can possibly be right: both randomize_world_age (New Game) and
+	# load_world_clock (Load Game) come through here BEFORE the first chunk
+	# load, so a world that opens in winter opens with bare trees instead of
+	# summer ones that correct themselves a tick later (see sync_tree_season).
+	sync_tree_season()
 
 
 ## Rolls a brand new world's starting point in the year, once (see
@@ -2431,6 +2504,11 @@ func jump_to_season(season: String) -> bool:
 		return false
 	_world_age_seconds += skip
 	_last_fruiting_time = _world_age_seconds
+	# /season winter should show winter trees NOW, not once the next fruiting
+	# tick comes round -- and on a peer that owns no simulation, never (see
+	# sync_tree_season). This skips the clock without going through
+	# set_world_age_seconds, so it needs the push of its own.
+	sync_tree_season()
 	return true
 
 
@@ -3203,6 +3281,11 @@ func _mature_tree_positions() -> Array:
 ## at the same multiple fills the map.
 func advance_world_age(delta_seconds: float) -> void:
 	_world_age_seconds += delta_seconds
+	# Time passing is the ONLY thing a canopy depends on, so the canopies move
+	# with the clock rather than with any simulation step (see
+	# sync_tree_season). The quantised signature guard keeps this a string
+	# compare on all but a handful of calls per in-game year.
+	sync_tree_season()
 
 
 ## Central, throttled tree spread: every SPREAD_INTERVAL of real time, a
@@ -4063,8 +4146,11 @@ func _sync_flower_sprites(chunk_coord: Vector2i) -> void:
 		# than the art canvas -- raising the canvas for detail must never
 		# change how big a flower looks (a trap this project has hit twice).
 		sprite.scale = _flower_scale_for(species, patch.growth_at(cell), seed_value)
-		# Anchor at the stem's foot so flowers Y-sort against the player like
-		# trees do, rather than sorting from their middle.
+		# Anchor at the stem's foot, matching how flowers_near/blossom_height_
+		# world measure a landing point from this same sprite's position --
+		# not for Y-sorting, since ground decor never Y-sorts (see
+		# _ground_decor_parent's own doc comment): it always draws underneath
+		# via z_index instead.
 		sprite.offset.y = -float(ProceduralFlowerSprite.SIZE.y) * 0.5
 		# Blooms nod in the wind on the shared GPU material (see WindSway).
 		sprite.material = _wind_sway.tuft_material()
@@ -4072,7 +4158,7 @@ func _sync_flower_sprites(chunk_coord: Vector2i) -> void:
 			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 		)
-		_entities_parent.add_child(sprite)
+		_ground_decor_parent.add_child(sprite)
 		sprites[cell] = sprite
 
 	# Seedlings grow, so an already-drawn bloom is re-scaled rather than left
@@ -4324,32 +4410,66 @@ func step_flowers(delta: float) -> void:
 		_sync_flower_sprites(chunk_coord)
 
 
-func _sync_tree_season(season_name: String) -> void:
-	# The TURN, not just the season name.
-	#
-	# This only ever fired when the season NAME changed, so every tree in the
-	# world swapped canopies on one frame -- which is exactly the instant
-	# change the gradual transition was built to remove, and the blend sat
-	# there unused because nothing ever passed it a progress. It now re-syncs
-	# whenever the turn advances a step (SeasonTransition quantises progress
-	# precisely so that is a handful of times, not every frame).
-	var turn := SeasonTransition.state_at(_season_cycle.year_fraction(_world_age_seconds))
-	var signature := "%s/%s/%.2f" % [season_name, turn.to, turn.progress]
+## Dresses the trees -- the renderer new ones are built from, and every tree
+## already loaded -- in the season the WORLD CLOCK says it is.
+##
+## Driven by the clock rather than by the simulation (see
+## docs/concept/seasons.md, "The canopy is on the clock, not on the
+## simulation"). This used to be private and called from step_fruiting alone,
+## which runs only behind World._owns_ecosystem_simulation() and a ~1s
+## accumulator -- so the first awaited chunk load built its trees before it
+## ever fired (no season at all -> IllustratedTree's summer fallback -> green
+## trees in the snow), and a joined client, owning no simulation, never ran it
+## at all and kept a summer-green forest all year. It is public now because
+## every path that establishes or moves the clock calls it, World's ungated
+## per-frame _client_process included.
+##
+## Cheap enough for that: the TURN, not just the season name, is the
+## signature, and SeasonTransition quantises progress precisely so a rebuild
+## happens a handful of times per in-game year rather than every frame. (That
+## quantised signature is also what stopped the whole world swapping canopies
+## on a single frame boundary, which the gradual transition exists to avoid.)
+##
+## `player_pixel` (Vector2, optional) gates the per-tree redraw below by
+## FRUITING_DETAIL_RADIUS, same as step_fruiting's own loop and for the same
+## reason: without it, every loaded tree -- potentially thousands -- gets
+## re-dressed with tree.ripe_fruit_count() (which clamps the "never touched"
+## -1 sentinel to 0) each time the signature changes, including the very
+## first-ever call, since _last_tree_season starts empty and so never
+## matches. A tree step_fruiting deliberately skipped for being out of range
+## must stay skipped here too, or it gets permanently un-skipped the moment a
+## season turns.
+##
+## Left unfiltered (the null default) for set_world_age_seconds/
+## jump_to_season: those are rare, deliberate whole-world refreshes -- a new
+## or loaded world's clock landing on a season, or a /season command -- and
+## are meant to dress every loaded tree at once, not just the ones near
+## whichever player happened to trigger them.
+func sync_tree_season(player_pixel: Variant = null) -> void:
+	_tree_renderer.set_world_age_seconds(_world_age_seconds)
+	var canopy := _tree_renderer.canopy_state()
+	var season_name: String = canopy["season"]
+	var turning_into: String = canopy["turning_into"]
+	var turn_progress: float = canopy["turn_progress"]
+	var signature := "%s/%s/%.2f" % [season_name, turning_into, turn_progress]
 	if signature == _last_tree_season:
 		return
 	_last_tree_season = signature
-	_tree_renderer.season = season_name
-	_tree_renderer.turning_into = turn.to
-	_tree_renderer.turn_progress = turn.progress
 	for trees in _loaded_trees.values():
 		for tree in trees:
-			if tree.has_method("set_ripe_fruit"):
-				tree.set_ripe_fruit(
-					tree.ripe_fruit_count(), season_name, turn.to, turn.progress
-				)
+			if not tree.has_method("set_ripe_fruit"):
+				continue
+			if (
+				player_pixel is Vector2
+				and player_pixel.distance_to(tree.position) > FRUITING_DETAIL_RADIUS
+			):
+				continue
+			tree.set_ripe_fruit(
+				tree.ripe_fruit_count(), season_name, turning_into, turn_progress
+			)
 
 
-## The season the loaded trees were last drawn for -- see _sync_tree_season.
+## The season the loaded trees were last drawn for -- see sync_tree_season.
 var _last_tree_season := ""
 
 
@@ -4814,16 +4934,17 @@ func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 		# art canvas -- raising SIZE for detail must not change how big a worm
 		# looks (a trap this project has hit twice).
 		sprite.scale = Vector2.ONE * ProceduralWormSprite.world_scale()
-		# Anchored at the worm's own footprint so it Y-sorts against the
-		# player like flowers do, rather than sorting from its middle; and
-		# starting at however far out of the ground it actually is, so a worm
-		# that has just broken the surface shows a nose rather than a body.
+		# Anchored at the worm's own footprint like flowers are, rather than
+		# sorting from its middle (not for Y-sorting -- ground decor never
+		# Y-sorts, see _ground_decor_parent's own doc comment); and starting
+		# at however far out of the ground it actually is, so a worm that has
+		# just broken the surface shows a nose rather than a body.
 		_show_worm_emerged(sprite, EarthwormPatch.emergence_for(patch.surfacing_at(cell)))
 		sprite.position = Vector2(
 			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 		)
-		_entities_parent.add_child(sprite)
+		_ground_decor_parent.add_child(sprite)
 		sprites[cell] = sprite
 
 
@@ -4945,7 +5066,7 @@ func _sync_scrub_sprites(chunk_coord: Vector2i) -> void:
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 			)
-			_entities_parent.add_child(sprite)
+			_ground_decor_parent.add_child(sprite)
 			sprites[cell] = sprite
 		# Growth multiplies onto the base world scale, never replaces it (see
 		# the matching comment in _sync_grass_sprites).
@@ -5006,7 +5127,7 @@ func _sync_lichen_sprites(chunk_coord: Vector2i) -> void:
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 			)
-			_entities_parent.add_child(sprite)
+			_ground_decor_parent.add_child(sprite)
 			sprites[cell] = sprite
 		# Growth multiplies onto the base world scale, never replaces it (see
 		# the matching comment in _sync_grass_sprites).

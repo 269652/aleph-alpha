@@ -97,6 +97,19 @@ const MINIMAP_REFRESH_INTERVAL := 1.0
 const HOVER_REFRESH_INTERVAL := 0.033
 var _hover_accumulator := 0.0
 
+## Interaction-prompt ("Talk"/"Pick") recompute cadence (~13 Hz) -- same
+## reasoning and shape as HOVER_REFRESH_INTERVAL just above: this scan chains
+## through up to three unbounded linear scans (EarthChunkManager.
+## nearest_npc_near, .nearest_liftable_stone_near, Player.
+## nearest_kickable_dropped_item_near, see _update_interaction_prompt) every
+## time the player isn't already near an NPC or holding something -- the
+## common case -- and used to run that chain on literally every frame with no
+## throttle at all. A proximity prompt needs nowhere near 60 Hz freshness;
+## pinned within the 10-15 Hz band by test_world_interaction_prompt_throttle.gd
+## rather than left an eyeballed comment-only value (see CLAUDE.md).
+const INTERACTION_PROMPT_REFRESH_INTERVAL := 0.075
+var _interaction_prompt_accumulator := 0.0
+
 ## Real seconds between Easter-egg sighting checks (docs/concept/
 ## easter_eggs.md's Mothman/Jersey Devil/Roswell/Area 51 cameos) -- these
 ## are meant to be rare, atmospheric glimpses, not a per-frame lottery, so
@@ -256,6 +269,15 @@ var _ground_tint := GroundTint.new()
 ## carved out of it (see SnowLayer).
 @onready var _snow_fx: TileMapLayer = $SnowFx
 @onready var _entities: Node2D = $Entities
+## Ground-flush decoration (flowers, worms, desert scrub, tundra lichen) --
+## not y_sort_enabled, and drawn behind Entities via z_index instead, the
+## same "ground effects tier" WaterFx/SnowFx/HillshadeFx already use. This
+## decor sits flush with the floor and never needed per-sprite Y-order
+## interleaving with trees/creatures/the player in the first place; forcing
+## it into Entities' own y_sort_enabled=true interleaving is what broke
+## draw-call batching for the whole group under the gl_compatibility
+## renderer (see EarthChunkManager._ground_decor_parent's own doc comment).
+@onready var _ground_decor: Node2D = $GroundDecor
 @onready var _creatures: Node2D = $Creatures
 @onready var _ground_items: Node2D = $GroundItems
 @onready var _roof: TileMapLayer = $Roof
@@ -558,44 +580,22 @@ func _ready() -> void:
 	# fix) -- only the license check gets a recoverable in-game path,
 	# since the fix there really is just "type/paste a valid key".
 	#
-	# Real bug found live: this redundant re-check used to run
-	# unconditionally, with no editor bypass of its own -- unlike the
-	# autoloads' own _ready(), which correctly skips both checks under
-	# OS.has_feature("editor") (true for the editor binary itself, whether
-	# launched via the Play button or a raw `--path` command line, and
-	# NEVER true in an exported build). That meant a plain dev/test launch
-	# re-failed a check the primary one had already correctly and
-	# deliberately skipped -- SelfIntegrity in particular can never pass
-	# here anyway (there's no exported .pck for it to hash while running
-	# raw project files this way), so it just produced permanent false-
-	# positive "reinstall from original source" noise on every non-editor-
-	# Play dev launch. Mirroring the same bypass here removes that noise
-	# without weakening anything for a real shipped build, where
-	# OS.has_feature("editor") is always false.
+	# SelfIntegrity keeps its own OS.has_feature("editor") bypass -- a
+	# SEPARATE, still-valid concern: there's no exported .pck to hash while
+	# running raw project files this way, so it can never pass in this
+	# launch mode regardless of any real key, and forcing it would just
+	# always hard-quit every dev/editor launch, not usefully test anything.
 	#
-	# Real discovery made live: OS.has_feature("editor") is true for ANY
-	# run of the Godot editor binary -- not only an actual Play-button
-	# click, confirmed by launching `Godot.exe --path <repo>` (no `-e`)
-	# with every candidate license.txt moved aside and reaching the main
-	# menu anyway. That means the license gate/GitHub-verify UI can never
-	# be exercised via a raw dev launch of this binary, only by a real
-	# export (which has no "editor" feature at all, so is unaffected by
-	# any of this). `--force-license-check` (a user arg after `--`, e.g.
-	# `Godot.exe --path <repo> -- --force-license-check`) opts a dev
-	# launch back into the real check for testing the gate itself,
-	# without touching SelfIntegrity (which can never pass here anyway --
-	# there's no exported .pck to hash while running raw project files,
-	# so forcing it would just always hard-quit, not usefully test
-	# anything) or changing anything for a real shipped build, which
-	# never has this flag passed and never has the editor binary at all.
-	var force_license_check := "--force-license-check" in OS.get_cmdline_user_args()
+	# The LICENSE check's own editor bypass is gone (see license_gate.gd's
+	# _boot(), removed by request): LicenseGate.check_licensed() now runs
+	# unconditionally here too, the same as an exported build, so an
+	# invalid/missing key shows the real in-game "enter your key" gate
+	# during editor Play-button runs as well. The `--force-license-check`
+	# arg this used to read is gone with it -- the check it opted back
+	# into is now simply always on.
 	if not OS.has_feature("editor"):
 		SelfIntegrity.require_verified()
-	var license_result: Dictionary = (
-		{"licensed": true, "product_mask": LicenseGate.product_mask, "github_user_id": LicenseGate.github_user_id, "reason": ""}
-		if OS.has_feature("editor") and not force_license_check
-		else LicenseGate.check_licensed()
-	)
+	var license_result: Dictionary = LicenseGate.check_licensed()
 	if not license_result.licensed:
 		_show_license_gate()
 		return
@@ -630,7 +630,7 @@ func _ready() -> void:
 	# defaults to off.
 	get_viewport().physics_object_picking = true
 
-	_chunk_manager = EarthChunkManager.new(_terrain, _entities, _creatures)
+	_chunk_manager = EarthChunkManager.new(_terrain, _entities, _creatures, _ground_decor)
 	# Streams at most one chunk per frame from here on, so stepping over a
 	# chunk boundary stops generating a whole column inside one frame (see
 	# _apply_streaming_budget). The cold initial load below still runs
@@ -2141,6 +2141,10 @@ func _update_charge_meter(local_player: Player) -> void:
 ## a pebble underfoot isn't going anywhere. All bound keys are read live
 ## from _keybindings so a rebind is reflected immediately, never a stale
 ## hardcoded letter.
+##
+## Throttled to INTERACTION_PROMPT_REFRESH_INTERVAL by the caller (see
+## _maybe_update_interaction_prompt) rather than run here every frame -- call
+## that wrapper from _client_process, not this directly.
 func _update_interaction_prompt(local_player: Player) -> void:
 	if not world_hint_visible_for(_chunk_manager != null, _any_gameplay_window_open()):
 		_interaction_prompt.visible = false
@@ -2173,6 +2177,22 @@ func _update_interaction_prompt(local_player: Player) -> void:
 		return
 
 	_interaction_prompt.visible = false
+
+
+## Gates _update_interaction_prompt behind INTERACTION_PROMPT_REFRESH_INTERVAL
+## -- the exact same accumulator shape _client_process already uses inline
+## for _hover_accumulator/_update_hover_tooltip, just pulled into its own
+## function here so the throttle itself is directly callable (and testable)
+## without also invoking the rest of _client_process's per-frame work. Skips
+## the real scan on a throttled call and leaves _interaction_prompt exactly
+## as the last real scan left it -- Control properties persist on their own,
+## so nothing needs to be cached separately for that.
+func _maybe_update_interaction_prompt(local_player: Player, delta: float) -> void:
+	_interaction_prompt_accumulator += delta
+	if _interaction_prompt_accumulator < INTERACTION_PROMPT_REFRESH_INTERVAL:
+		return
+	_interaction_prompt_accumulator = 0.0
+	_update_interaction_prompt(local_player)
 
 
 ## Shows the interaction prompt with `text`, positioned just above
@@ -4283,7 +4303,7 @@ func _client_process(delta: float) -> void:
 	# The banners keep their own text; the whole stack steps aside while a
 	# window is open (see world_hint_visible_for).
 	_message_stack.visible = world_hint_visible_for(true, _any_gameplay_window_open())
-	_update_interaction_prompt(local_player)
+	_maybe_update_interaction_prompt(local_player, delta)
 	_update_charge_meter(local_player)
 	_refresh_skill_window(local_player)
 	_autosave_step(local_player, delta)
@@ -4403,6 +4423,24 @@ func _client_process(delta: float) -> void:
 	var foliage_tint := SeasonalFoliage.tint_for_world_age(_chunk_manager.world_age_seconds())
 	_ground_tint.set_season_tint(foliage_tint)
 	_chunk_manager.set_season_tint(foliage_tint)
+	# ...and the CANOPY above that ground, off the same clock, in the same
+	# frame. This belongs here rather than in _process's ecology block because
+	# a canopy is a rendering concern, not a simulation-ownership one: the
+	# season used to reach the trees only through step_fruiting, which runs
+	# behind _owns_ecosystem_simulation(), so a JOINED CLIENT -- which owns no
+	# simulation -- kept a summer-green forest in every season for the whole
+	# session, and even a host's first chunks loaded green before the first
+	# tick corrected them. _client_process runs on every peer. Guarded to a
+	# handful of canopy rebuilds per in-game year (see
+	# EarthChunkManager.sync_tree_season); pinned by
+	# tests/unit/test_world_season_fanout.gd.
+	#
+	# Passed local_player.position so that rare full-canopy rebuild also
+	# respects FRUITING_DETAIL_RADIUS -- which already covers the whole
+	# visible viewport, so nothing on screen goes undressed, while a tree far
+	# outside it is left for step_fruiting (host) or a later, nearer sync
+	# (any peer) instead of paying a redraw nobody can see.
+	_chunk_manager.sync_tree_season(local_player.position)
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"

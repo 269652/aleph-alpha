@@ -25,6 +25,12 @@ sources feeding the same rarity/affix vocabulary, not competing systems.
 
 ### Open questions
 
+- **How parts get surfaced** — half-answered by
+  [emergent_crafting.md](emergent_crafting.md): the *part graph* a blueprint
+  would compile to is now a real, tested model (parts as `(material, geometry,
+  role)` nodes, typed joints as edges), so the target of the compilation exists
+  even though the DSL that targets it does not. Whether the player manipulates
+  that graph directly or authors intent that compiles to it is still open.
 - Exact blueprint slot taxonomy (how many modifier slots per item category,
   what governs which modifiers are compatible with which base templates).
 - ~~How station tiers gate blueprint complexity~~ — answered by

@@ -2,8 +2,23 @@ extends GutTest
 
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
+const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
 
 var catalog := ItemCatalog.new()
+
+
+## An iron-bladed, wood-gripped sword -- the same shape
+## test_crafted_item_registry.gd builds, so the two files agree about what an
+## assembly looks like.
+func _sword() -> Dictionary:
+	return {
+		"pattern": "sword",
+		"parts": [
+			{"material": "iron", "geometry": "blade", "role": "edge", "length_cm": 70.0},
+			{"material": "wood", "geometry": "rod", "role": "grip", "length_cm": 12.0},
+		],
+		"joints": [{"kind": "tang", "a": 0, "b": 1}],
+	}
 
 
 func test_has_returns_true_for_a_known_item():
@@ -319,3 +334,76 @@ func test_material_of_is_the_material_the_items_mass_was_computed_from():
 		mp.mass_kg_for(catalog.material_of("iron_sword"), ItemCatalog.IRON_SWORD_VOLUME_CM3),
 		0.0001
 	)
+
+
+# --- the crafted-item seam -------------------------------------------------
+#
+# scenes/player.gd loads inventory with `if _item_catalog.has(entry.id)`
+# (:861-862) and equipment with a matching `continue` (:868-870), so the ONE
+# place deciding whether a saved item survives a load is this catalog's has().
+# Putting the emergent fallback here rather than in player.gd is what keeps it a
+# single seam instead of a conditional spreading through a hot file -- and every
+# other caller (the shop, /give, cooking, crafting output, tile pickup) gets it
+# at the same time and for free.
+
+
+func test_a_crafted_id_is_unknown_until_a_registry_is_attached():
+	assert_false(catalog.has("asm_0000000000000000"))
+
+
+## THE regression this whole slice exists to prevent: an id the static table has
+## never heard of must survive a load once its structure is known.
+func test_a_registered_crafted_id_becomes_known_to_the_catalog():
+	var registry := CraftedItemRegistry.new()
+	var id := registry.register(_sword())
+	catalog.use_crafted_registry(registry)
+	assert_true(catalog.has(id), "the loader's `if _item_catalog.has(entry.id)` now passes")
+
+
+func test_the_catalog_builds_a_crafted_item_from_its_id():
+	var registry := CraftedItemRegistry.new()
+	var id := registry.register(_sword())
+	catalog.use_crafted_registry(registry)
+
+	var item := catalog.make(id)
+	assert_eq(item.id, id)
+	assert_eq(item.display_name, "Iron Sword")
+	assert_eq(item.kind, CraftedItemRegistry.CRAFTED_KIND)
+
+
+func test_kind_of_answers_for_a_crafted_id_too():
+	var registry := CraftedItemRegistry.new()
+	var id := registry.register(_sword())
+	catalog.use_crafted_registry(registry)
+	assert_eq(catalog.kind_of(id), CraftedItemRegistry.CRAFTED_KIND)
+
+
+## An attached registry must never shadow a shipped item. The authored table is
+## what the rest of the game has wired up (the shop prices it, recipes output
+## it), so it wins any id that somehow appears in both.
+func test_an_attached_registry_never_shadows_a_shipped_item():
+	var registry := CraftedItemRegistry.new()
+	registry.register(_sword())
+	catalog.use_crafted_registry(registry)
+	assert_eq(catalog.make("iron_sword").display_name, "Iron Sword")
+	assert_eq(catalog.make("iron_sword").kind, "weapon")
+
+
+## A registry-less catalog is the shipped default -- every existing caller
+## constructs one with a bare new(). It must behave exactly as it did before
+## this seam existed, rather than needing a registry injected first.
+func test_a_catalog_with_no_registry_still_answers_for_shipped_items():
+	assert_true(catalog.has("iron_sword"))
+	assert_eq(catalog.kind_of("iron_sword"), "weapon")
+	assert_false(catalog.has("asm_deadbeefdeadbeef"))
+	assert_eq(catalog.kind_of("asm_deadbeefdeadbeef"), "")
+
+
+## Detaching is what a New Game does -- a fresh world must not inherit the
+## previous save's crafted items through a catalog that outlived it.
+func test_clearing_the_registry_makes_its_ids_unknown_again():
+	var registry := CraftedItemRegistry.new()
+	var id := registry.register(_sword())
+	catalog.use_crafted_registry(registry)
+	catalog.use_crafted_registry(null)
+	assert_false(catalog.has(id))

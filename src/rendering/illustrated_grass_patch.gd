@@ -271,11 +271,44 @@ var _wind_strength := DEFAULT_WIND_STRENGTH
 ## been lazily built doesn't lose it (same reasoning as _wind_strength above).
 var _season_tint := Color(1.0, 1.0, 1.0)
 
+## Some of the delivered sheet's taller "bush"/wheat-ear variants (the
+## denser rows) draw their own plant art past their own cell's nominal
+## bottom edge, bleeding into the TOP of the next row down -- a real
+## property of `assets/sprites/grass_blades.png` itself, not a rendering
+## bug: a mechanically-sliced region with no inset hands a recipient card a
+## fragment of the row ABOVE's plant sitting right at its own top edge.
+## Because the shader flips root-at-bottom/tip-at-top (a card's local Y=0 is
+## the ground, growing up), that fragment renders at the TIP -- the point
+## farthest from the ground -- genuinely detached from the card's own body
+## by a real transparent gap. Reported live: "the grass now has floating
+## artefacts above it" (snow gave the white background enough contrast to
+## show it clearly, but the bleed itself is independent of snow).
+##
+## MEASURED, not eyeballed, against the real shipped sheet at its own native
+## 1254x1254 resolution: for each row, how many pixels down from that row's
+## own nominal top edge the previous row's content still shows (alpha > 0)
+## on at least one column, i.e. how far this function's own region has to
+## start past the nominal boundary to guarantee a transparent top. Index 0
+## is row 0, which has no row above it and so can never inherit a bleed.
+## Pinned by test_atlas_region_for_seed_never_includes_the_previous_rows_
+## bled_over_content, which checks every real (row, column) cell in the
+## shipped atlas directly rather than trusting this table by eye.
+const ROW_TOP_BLEED_PX := [0, 0, 3, 8, 13, 15, 17, 24, 25, 8]
+
 static func atlas_region_for_seed(seed_value: int, atlas_size: Vector2i = DEFAULT_ATLAS_SIZE) -> Rect2i:
 	var index := posmod(seed_value, ATLAS_COLUMNS * ATLAS_ROWS)
 	var column := index % ATLAS_COLUMNS
 	var row := index / ATLAS_COLUMNS
-	var from := Vector2i(column * atlas_size.x / ATLAS_COLUMNS, row * atlas_size.y / ATLAS_ROWS)
+	# The bleed table above is measured in native pixels of the REAL
+	# 1254x1254 sheet; expressed as a fraction of one cell's own height so a
+	# caller passing a differently-sized atlas_size (e.g. a smaller test
+	# fixture) still gets a proportionally correct inset rather than an
+	# oversized or negative-height region.
+	var native_cell_height := float(DEFAULT_ATLAS_SIZE.y) / float(ATLAS_ROWS)
+	var bleed_fraction := float(ROW_TOP_BLEED_PX[row]) / native_cell_height
+	var cell_height := float(atlas_size.y) / float(ATLAS_ROWS)
+	var top_inset := int(round(bleed_fraction * cell_height))
+	var from := Vector2i(column * atlas_size.x / ATLAS_COLUMNS, row * atlas_size.y / ATLAS_ROWS + top_inset)
 	var to := Vector2i((column + 1) * atlas_size.x / ATLAS_COLUMNS, (row + 1) * atlas_size.y / ATLAS_ROWS)
 	return Rect2i(from, to - from)
 

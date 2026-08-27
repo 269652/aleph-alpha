@@ -202,3 +202,65 @@ func test_the_resting_pose_is_unchanged_by_the_peck_frame_existing():
 	var perched := generator.generate_perched_image("sparrow", 7)
 	assert_eq(_lowest_beak_row(resting), _lowest_beak_row(perched),
 		"only the WING differs between resting and perched -- not the head")
+
+
+# -- generated textures are shared, not rebuilt per bird ---------------------
+#
+# generate_texture/generate_flap_textures/generate_perched_texture each built
+# a brand-new Texture2D (or, for flaps, a brand-new array of them) on every
+# call, so every spawned sparrow/robin paid its own image-generation cost AND
+# ended up permanently unbatchable with every other bird, even of the same
+# species, because each got its own unique Texture2D object -- same bug
+## ProceduralFishSprite.generate_texture was fixed for fish (see its own
+# "generated textures are shared" tests).
+
+func test_the_same_species_and_seed_share_one_cached_texture():
+	var a := generator.generate_texture("sparrow", 3)
+	var b := generator.generate_texture("sparrow", 3)
+	assert_same(a, b, "same species+seed bird should share one cached texture")
+
+
+## The cache is shared across generator INSTANCES too -- AmbientFlyerRenderer
+## holds its own ProceduralBirdSprite, so a per-instance cache would still
+## redraw once per bird.
+func test_two_generators_of_one_look_share_the_texture():
+	var a := ProceduralBirdSprite.new().generate_texture("robin", 9)
+	var b := ProceduralBirdSprite.new().generate_texture("robin", 9)
+	assert_same(a, b)
+
+
+## Individual variety survives bucketing: a species still shows more than one
+## look across many seeds, but the distinct-texture count stays bounded by
+## LOOK_VARIANTS rather than growing one-per-bird.
+func test_generate_texture_still_shows_more_than_one_look_but_stays_bounded():
+	var seen := {}
+	for seed_value in ProceduralBirdSprite.LOOK_VARIANTS * 5:
+		seen[generator.generate_texture("kingfisher", seed_value)] = true
+	assert_gt(seen.size(), 1, "individuals of one species should still show more than one look")
+	assert_lte(seen.size(), ProceduralBirdSprite.LOOK_VARIANTS)
+
+
+func test_the_same_species_and_seed_share_one_cached_flap_sequence():
+	var a := generator.generate_flap_textures("sparrow", 3)
+	var b := generator.generate_flap_textures("sparrow", 3)
+	assert_same(a, b, "same species+seed bird should share one cached flap-frame array")
+	for i in a.size():
+		assert_same(a[i], b[i], "flap frame %d should be the same cached texture instance" % i)
+
+
+func test_flap_texture_cache_is_shared_across_generator_instances():
+	var a := ProceduralBirdSprite.new().generate_flap_textures("robin", 9)
+	var b := ProceduralBirdSprite.new().generate_flap_textures("robin", 9)
+	assert_same(a, b)
+
+
+func test_the_same_species_and_seed_share_one_cached_perched_texture():
+	var a := generator.generate_perched_texture("robin", 3)
+	var b := generator.generate_perched_texture("robin", 3)
+	assert_same(a, b, "same species+seed bird should share one cached perched texture")
+
+
+func test_perched_texture_cache_is_shared_across_generator_instances():
+	var a := ProceduralBirdSprite.new().generate_perched_texture("sparrow", 9)
+	var b := ProceduralBirdSprite.new().generate_perched_texture("sparrow", 9)
+	assert_same(a, b)

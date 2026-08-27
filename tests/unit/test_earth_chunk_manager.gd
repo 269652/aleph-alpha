@@ -1305,6 +1305,110 @@ func test_step_fruiting_drops_named_species_items_near_the_player():
 	)
 
 
+## The perf fix step_fruiting's per-tree loop now applies: genome lookup,
+## species/pollination lookups, FruitingModel.state_at, and above all
+## tree.set_ripe_fruit's canopy texture redraw all used to run for EVERY
+## loaded tree in the whole streaming radius -- potentially thousands --
+## roughly once a second, forever, including trees the player has never
+## been anywhere near. A tree beyond FRUITING_DETAIL_RADIUS must now be
+## skipped entirely for the tick, and because FruitingModel.state_at is a
+## PURE function of elapsed world time rather than a running simulation,
+## that skip must not freeze the tree: it has to show the correct catch-up
+## ripeness the moment the player is back in range.
+##
+## Reads the tree's raw _ripe_count field rather than the public
+## ripe_fruit_count() getter -- that getter clamps the "never touched" -1
+## sentinel to 0, so it cannot distinguish "skipped for being out of range"
+## from "processed and genuinely bore no fruit" the way this test needs to.
+func test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_range():
+	var species_id := "apple"
+	var tree_position := _position_for_species(species_id)
+
+	var scheduler := ForageScheduler.new()
+	var genome := scheduler.genome_for(tree_position)
+	var model := FruitingModel.new()
+	# Land the world clock at genuine mid-plateau peak (same technique as
+	# test_harvest_peak_fruit_near_reports_the_real_peak_state above), so the
+	# tree actually has real hanging fruit to catch up on. Computed and set
+	# BEFORE the tree is even loaded, so establishing the clock itself -- via
+	# set_world_age_seconds's own sync_tree_season call -- cannot be what
+	# dresses it.
+	var warmth_for_window: float = manager._warmth_at_pixel(tree_position)
+	var window: Dictionary = model._window_for(genome, warmth_for_window)
+	var peak_time: float = (
+		(float(window.grow_end) + float(window.fall_start)) / 2.0 * FruitingModel.BEARING_CYCLE_SECONDS
+	)
+	manager.set_world_age_seconds(peak_time)
+
+	var tree := ChoppableTree.new()
+	tree.position = tree_position
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	var far_pixel := tree.position + Vector2(EarthChunkManager.FRUITING_DETAIL_RADIUS + 1000.0, 0.0)
+	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, far_pixel)
+
+	assert_eq(
+		tree._ripe_count, -1,
+		"a tree outside FRUITING_DETAIL_RADIUS must be skipped entirely, not dressed with a stale/default value"
+	)
+
+	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
+
+	var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id)
+	var ripening_multiplier := TreeSpecies.ripening_multiplier_for(species_id)
+	var current_warmth: float = manager._warmth_at_pixel(tree.position)
+	var expected: Dictionary = manager._fruiting_model.state_at(
+		genome, manager.world_age_seconds(), current_warmth, yield_multiplier, ripening_multiplier
+	)
+	var expected_ripe := int(expected.get("ripe", 0))
+
+	assert_gt(expected_ripe, 0, "precondition: mid-plateau should carry real ripe fruit")
+	assert_eq(
+		tree._ripe_count, expected_ripe,
+		"once back in range the tree must show the REAL catch-up ripeness for the elapsed time, not a frozen/stale value"
+	)
+
+
+# -- sync_tree_season: the second path that redraws every loaded tree's ------
+# canopy, independent of step_fruiting (see World._client_process and
+# set_world_age_seconds/jump_to_season). Must respect the same
+# FRUITING_DETAIL_RADIUS gate when it has a player_pixel to check against, or
+# a tree step_fruiting skipped for being out of range gets re-dressed right
+# back in -- with its own stale cached ripe_fruit_count() -- the moment a
+# season changes, including the very first-ever call (its tracked signature,
+# _last_tree_season, starts empty and so never matches).
+
+func test_sync_tree_season_leaves_a_far_tree_untouched():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	var far_pixel := tree.position + Vector2(EarthChunkManager.FRUITING_DETAIL_RADIUS + 1000.0, 0.0)
+	manager.sync_tree_season(far_pixel)
+
+	assert_eq(tree._ripe_count, -1, "a season sync must not dress a tree the player is nowhere near")
+	assert_eq(tree.current_season(), "", "a season sync must not dress a tree the player is nowhere near")
+
+
+func test_sync_tree_season_dresses_a_nearby_tree():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	manager.sync_tree_season(tree.position)
+
+	assert_ne(
+		tree.current_season(), "",
+		"a tree the player is standing next to should be dressed on a season sync, not skipped"
+	)
+
+
 # -- building/destruction -----------------------------------------------------
 
 func test_build_at_global_sets_a_modification_when_the_chunk_is_loaded():
@@ -3262,6 +3366,145 @@ func test_unloading_a_chunk_releases_every_departing_flyers_claim():
 		manager._forage_claims.claim_count(), 0,
 		"every unloaded flyer should have given up its claim"
 	)
+
+
+# -- ground decor gets its own non-y-sorted layer ----------------------------
+#
+# Flowers, worms, desert scrub, and tundra lichen are ground-level decoration:
+# always flush with the floor, never needing to Y-sort against a tree or a
+# creature. scenes/world.tscn already gives ground-effects layers exactly
+# this "always draws behind Entities" treatment (WaterFx/SnowFx/HillshadeFx:
+# z_index=-1, no y_sort_enabled) -- world.gd wires an equivalent "GroundDecor"
+# node through to EarthChunkManager as an optional 4th constructor argument,
+# and these four kinds parent their sprites there instead of under the
+# y_sort_enabled Entities node, so they stop forcing per-sprite Y-order
+# interleaving with everything else Entities draws (which is what breaks
+# draw-call batching under the gl_compatibility renderer).
+#
+# The argument is optional, defaulting to null, so the many other
+# EarthChunkManager.new(...) call sites across this suite (and the real one
+# in scenes/world.gd before this change) keep working unchanged; omitting it
+# falls back to the same Entities parent ground decor always used.
+
+const DesertScrub = preload("res://src/world/desert_scrub.gd")
+const TundraLichen = preload("res://src/world/tundra_lichen.gd")
+
+
+func _all_biome(cell_value: String, size: int) -> PackedStringArray:
+	var biome := PackedStringArray()
+	biome.resize(size * size)
+	for i in biome.size():
+		biome[i] = cell_value
+	return biome
+
+
+func test_flower_worm_scrub_and_lichen_sprites_parent_under_the_supplied_ground_decor_layer():
+	var ground_decor := Node2D.new()
+	ground_decor.z_index = -1
+	var decor_tile_map := TileMapLayer.new()
+	var decor_entities := Node2D.new()
+	var decor_creatures := Node2D.new()
+	var decor_manager := EarthChunkManager.new(
+		decor_tile_map, decor_entities, decor_creatures, ground_decor
+	)
+	decor_manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+
+	# Flower: plant one directly, the same way
+	# test_a_freshly_planted_seedlings_landing_point_is_not_the_mature_blossom_height does.
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, decor_manager.current_season()):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var planted := false
+	for y in 8:
+		for x in 8:
+			if decor_manager.plant_flower_at(_pixel_for(chunk_coord, Vector2i(x, y)), species):
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var flower_sprites: Dictionary = decor_manager._flower_sprites[chunk_coord]
+	assert_gt(flower_sprites.size(), 0, "precondition: the planted flower should have a sprite")
+	for sprite in flower_sprites.values():
+		assert_eq(sprite.get_parent(), ground_decor, "flower sprite should parent under GroundDecor")
+
+	# Worm: force one to the surface, the same way _surface_all_worms does
+	# (that helper reaches the file-level `manager`, not this local instance).
+	for patch in decor_manager._worm_patches.values():
+		patch.set_conditions(1.0, 1.0)
+	for i in 40:
+		for patch in decor_manager._worm_patches.values():
+			patch.advance(0.5)
+	decor_manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var checked_worm := 0
+	for sprites in decor_manager._worm_sprites.values():
+		for sprite in sprites.values():
+			assert_eq(sprite.get_parent(), ground_decor, "worm sprite should parent under GroundDecor")
+			checked_worm += 1
+	assert_gt(checked_worm, 0, "precondition: some worms were rendered")
+
+	# Desert scrub / tundra lichen: Berlin's real biome is not desert or
+	# tundra, so force an all-desert/all-tundra sim directly (this suite
+	# already reaches into manager internals the same way elsewhere) rather
+	# than hunting for a real-world tile of that biome.
+	decor_manager._scrub_sims[chunk_coord] = DesertScrub.new(
+		1, EarthChunkManager.CHUNK_SIZE, EarthChunkManager.CHUNK_SIZE,
+		_all_biome("desert", EarthChunkManager.CHUNK_SIZE)
+	)
+	decor_manager._sync_scrub_sprites(chunk_coord)
+	var scrub_sprites: Dictionary = decor_manager._scrub_sprites[chunk_coord]
+	assert_gt(scrub_sprites.size(), 0, "precondition: a forced desert biome should seed scrub")
+	for sprite in scrub_sprites.values():
+		assert_eq(sprite.get_parent(), ground_decor, "scrub sprite should parent under GroundDecor")
+
+	decor_manager._lichen_sims[chunk_coord] = TundraLichen.new(
+		1, EarthChunkManager.CHUNK_SIZE, EarthChunkManager.CHUNK_SIZE,
+		_all_biome("tundra", EarthChunkManager.CHUNK_SIZE)
+	)
+	decor_manager._sync_lichen_sprites(chunk_coord)
+	var lichen_sprites: Dictionary = decor_manager._lichen_sprites[chunk_coord]
+	assert_gt(lichen_sprites.size(), 0, "precondition: a forced tundra biome should seed lichen")
+	for sprite in lichen_sprites.values():
+		assert_eq(sprite.get_parent(), ground_decor, "lichen sprite should parent under GroundDecor")
+
+	decor_tile_map.free()
+	decor_entities.free()
+	decor_creatures.free()
+	ground_decor.free()
+
+
+## Backward compatibility: every other EarthChunkManager.new(...) call site
+## passes only 3 arguments, and must keep parenting ground decor under
+## Entities exactly as before this change.
+func test_ground_decor_falls_back_to_entities_when_not_supplied():
+	manager.update(_berlin_tile)
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, manager.current_season()):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var planted := false
+	for y in 8:
+		for x in 8:
+			if manager.plant_flower_at(_pixel_for(chunk_coord, Vector2i(x, y)), species):
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var flower_sprites: Dictionary = manager._flower_sprites[chunk_coord]
+	assert_gt(flower_sprites.size(), 0, "precondition: the planted flower should have a sprite")
+	for sprite in flower_sprites.values():
+		assert_eq(
+			sprite.get_parent(), entities_parent,
+			"with no ground_decor_parent supplied, ground decor should keep parenting under Entities"
+		)
 
 
 ## A live pollinator reaches this surface through `scent_world`, which is the
