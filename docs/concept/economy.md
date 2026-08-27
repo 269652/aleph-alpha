@@ -75,11 +75,43 @@ market, and an empty market prices at twenty times the catalog. Seeding at
 This closes the second half of this doc's own open question below — pricing
 for *market goods*. Hiring wages are still open.
 
-**Not built:** selling into the market from the shop UI. `Player`'s trade key
-already sells gathered food into a villager's `VillageMarket` as a fallback
-(see `_attempt_village_food_sale`), but there is no general "sell your goods
-at the local price" verb, and no sell-side UI. That is the remaining half of
-this doc's "Selling to the market" faucet, and it is ⬜.
+### Selling — ✅ built (2026-08-27)
+
+The other half of the faucet, and the point where what the player produces
+becomes a strategy rather than a number. `Shop.sell` pays the local price and
+pushes the goods into that village's real stock — so selling is buying's exact
+mirror: it moves the price *down* instead of up. Dump forty units on one
+village and you crash what it pays for the forty-first; carry them somewhere
+short of it and you get paid over the odds. Neither is a rule written to
+reward or punish anyone, both fall out of `Market.price_for`.
+
+**The spread.** A merchant buys low and sells high — `Shop.MERCHANT_SPREAD`.
+The number is not asserted anywhere and is not the point. What is pinned is
+the property that makes any spread legitimate:
+`test_buying_then_selling_back_always_loses_money` sweeps every stock level
+from 1 to 40 and requires the round trip to lose money at each. That sweep is
+load-bearing rather than thorough-looking: the ratio between adjacent prices
+is tightest at *low* stock (the price halves from stock 1 to stock 2), which
+is exactly where a plausible spread stops being arbitrage-proof and the shop
+becomes a money printer. Anything at or above 0.5 breaks there.
+
+**A merchant only buys what they deal in.** `Item` carries no value field, so
+`Shop.CATALOG` is the only place in the game an item has a price at all —
+paying for a hide or a log would mean inventing a number with nothing behind
+it. Today that makes `cooked_meat` the real sell-side loop: hunt, cook, sell,
+and (since `record_death` landed) pay for the hunting in the ecosystem's own
+books. **⬜ Remaining:** giving materials real values so the rest of what a
+player gathers can be sold. That is its own piece of work and wants a grounded
+source for the numbers, not a table someone typed.
+
+**The verb** is its own rebindable action (`sell`, default `Y`) rather than a
+third meaning stacked onto the trade key, which already branches two ways. It
+is registered in `Player.MOMENTARY_ACTIONS` — a tap-length verb that is not
+would be silently swallowed at the frame rates seen in real play, which is the
+bug `InputLatch` exists to fix.
+
+**⬜ Not built:** a sell-side UI. Selling picks the first catalog item in the
+bag; there is no way to choose, and no list of what a merchant wants.
 
 ### Open questions
 

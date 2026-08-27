@@ -11,6 +11,7 @@ extends PanelContainer
 signal command_submitted(command: String, args: Array)
 
 const ConsoleCommandParser = preload("res://src/gameplay/console_command_parser.gd")
+const UiTheme = preload("res://src/ui/ui_theme.gd")
 
 ## Height of the output viewport (the ScrollContainer), and the height of one
 ## rendered row in it: the shared UI theme's font (UiTheme.BASE_FONT_SIZE = 14)
@@ -39,8 +40,7 @@ const MAX_LOG_LINES := VISIBLE_ROWS * SCROLLBACK_SCREENS
 
 var _parser := ConsoleCommandParser.new()
 var _log_lines: Array[String] = []
-var _output_scroll: ScrollContainer
-var _output_label: Label
+var _output_label: RichTextLabel
 var _input: LineEdit
 
 
@@ -51,28 +51,40 @@ func _ready() -> void:
 	var root := VBoxContainer.new()
 	add_child(root)
 
-	_output_scroll = ScrollContainer.new()
-	_output_scroll.custom_minimum_size = Vector2(0, OUTPUT_HEIGHT)
-	_output_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	# The same pairing every other scrolling surface in this project uses
-	# (crafting_window.gd, settings_overlay.gd, skill_tree_window.gd,
-	# main_menu.gd): a ScrollContainer only stretches a child to its own width
-	# if that child is SIZE_EXPAND -- otherwise the child gets its own MINIMUM
-	# width, which for an autowrapping Label is ~1px, so every logged line
-	# wrapped to one word per row. Disabling horizontal scrolling keeps it that
-	# way and drops the horizontal scrollbar that was also eating log height.
-	_output_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	root.add_child(_output_scroll)
-
-	_output_label = Label.new()
-	_output_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	# A RichTextLabel that owns its OWN scrollbar, rather than a plain Label
+	# inside a ScrollContainer.
+	#
+	# The old pairing had a defect no amount of scroll-to-bottom could fix:
+	# ScrollContainer refreshes its scrollbar range in _reposition_children
+	# BEFORE fitting the child, so the range it publishes is the one from
+	# before this pass's growth -- and it never queues another sort, so it
+	# never catches up. Measured on the real class: after a burst of logging
+	# the content stood 848 px tall while the range stopped at 779. Those
+	# 69 px were the last three rows, unreachable by the scroll call AND by
+	# the mouse wheel, because a scrollbar clamps to max - page. The answer to
+	# whatever you had just typed sat permanently below the floor of the box.
+	#
+	# The previous fix aimed at the wrong thing -- it moved the scroll POSITION,
+	# and the position was already as far down as it was allowed to go. Two
+	# other repairs were measured and rejected: an awaited process frame does
+	# nothing (this is not a too-early scroll), and queue_sort() inside
+	# log_line collapsed the scroll area outright under a one-frame burst.
+	#
+	# RichTextLabel recomputes its own scrollbar from its own reshaped content,
+	# which is the exact step ScrollContainer skips, and `scroll_following`
+	# keeps the view pinned to the newest line for free.
+	_output_label = RichTextLabel.new()
+	_output_label.custom_minimum_size = Vector2(0, OUTPUT_HEIGHT)
 	_output_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	# Fires from inside ScrollContainer's own child-fitting pass, i.e. after it
-	# has already refreshed the scrollbar's max_value -- the one moment the new
-	# bottom is actually known. Deliberately NOT an awaited process frame: a
-	# coroutine that resumes after the console is freed errors out.
-	_output_label.resized.connect(_scroll_to_newest)
-	_output_scroll.add_child(_output_label)
+	_output_label.bbcode_enabled = false
+	_output_label.scroll_active = true
+	_output_label.scroll_following = true
+	_output_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	# UiTheme sets font_color for "Label"; RichTextLabel reads "default_color"
+	# instead, so without this the console text falls back to plain white
+	# rather than the shared text colour.
+	_output_label.add_theme_color_override("default_color", UiTheme.TEXT)
+	root.add_child(_output_label)
 
 	_input = LineEdit.new()
 	_input.placeholder_text = "/help"
@@ -101,19 +113,23 @@ func log_line(text: String) -> void:
 	if _log_lines.size() > MAX_LOG_LINES:
 		_log_lines.pop_front()
 	_output_label.text = "\n".join(_log_lines)
-	# Covers the case where the label did NOT change height (buffer already at
-	# MAX_LOG_LINES), so `resized` never fires.
 	_scroll_to_newest()
 
 
-## Keeps the newest line visible. Without this the ScrollContainer stayed at
-## position 0 forever and every command's answer landed below the fold -- the
-## console could not show its own output. scroll_vertical is clamped by Godot
-## to (max_value - page), so assigning max_value means "bottom".
+## Keeps the newest line visible.
+##
+## RichTextLabel's own `scroll_following` already does this whenever the view
+## is at the bottom, and it does it against a scrollbar range the control
+## recomputes from its own content -- which is the part the old
+## ScrollContainer+Label stack got wrong. This stays as the explicit nudge for
+## the one case following does not cover: a view the user has scrolled UP to
+## read, where following is suspended until they return to the bottom.
 func _scroll_to_newest() -> void:
-	if _output_scroll == null:
+	if _output_label == null:
 		return
-	_output_scroll.scroll_vertical = int(_output_scroll.get_v_scroll_bar().max_value)
+	var bar := _output_label.get_v_scroll_bar()
+	if bar != null:
+		bar.value = bar.max_value
 
 
 func _on_text_submitted(text: String) -> void:

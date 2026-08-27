@@ -75,6 +75,60 @@ func market_price_of(item_id: String, market) -> int:
 	return roundi(float(CATALOG[item_id]) * market.price_for(item_id))
 
 
+## How much of an item's local price a merchant will actually PAY for one --
+## the buy-low-sell-high spread every merchant lives on.
+##
+## The number itself is not the point and is not asserted anywhere. What is
+## pinned is the property that makes any spread legitimate:
+## `test_buying_then_selling_back_always_loses_money` sweeps every stock level
+## from 1 to 40 and requires a round trip to lose money at each one. That sweep
+## is not decoration -- the ratio between adjacent prices is tightest at LOW
+## stock (halving from stock 1 to stock 2), which is exactly where a
+## plausible-looking spread stops being arbitrage-proof and starts printing
+## money. Anything at or above 0.5 breaks there.
+const MERCHANT_SPREAD := 0.4
+
+
+## What a merchant pays for one unit of item_id here, right now.
+##
+## Derived from the same local price buying uses, so it moves with real
+## scarcity in both directions: a village short of something pays over the odds
+## for it (which is what makes carrying goods somewhere worth the walk), and a
+## village already drowning in it pays next to nothing.
+##
+## 0 for anything the merchant does not deal in. That is not a stub: `Item`
+## carries no value field, so `CATALOG` is the only place in the game an item
+## has a price at all, and paying for anything else would mean inventing a
+## number with nothing behind it (see concept/economy.md).
+func sell_price_of(item_id: String, market) -> int:
+	if not CATALOG.has(item_id):
+		return 0
+	return floori(float(market_price_of(item_id, market)) * MERCHANT_SPREAD)
+
+
+## Sells one unit of item_id out of `inventory` to the local merchant.
+##
+## The mirror of buy(), and the other half of concept/economy.md's "Selling to
+## the market" currency faucet: the player is paid the local price, and the
+## real item goes into that village's real stock where the next buyer can find
+## it. Which also means the price drops as you sell -- dump forty units on one
+## village and you crash what it pays you for the forty-first. That is the
+## strategic content, and it comes free from Market.price_for rather than from
+## a rule written to punish the player.
+##
+## False (no-op) if the merchant does not deal in it, or the player hasn't got
+## one.
+func sell(wallet, inventory, item_id: String, market = null) -> bool:
+	if not CATALOG.has(item_id):
+		return false
+	if inventory.remove(item_id, 1) < 1:
+		return false
+	wallet.add(sell_price_of(item_id, market))
+	if market != null:
+		market.add_stock(item_id, 1)
+	return true
+
+
 func can_afford(wallet_balance: int, item_id: String, market = null) -> bool:
 	return CATALOG.has(item_id) and wallet_balance >= market_price_of(item_id, market)
 

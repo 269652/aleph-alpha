@@ -799,6 +799,8 @@ static func backed_up_directories() -> PackedStringArray:
 		EarthChunkManager.PLANTED_TREES_DIR,
 		EarthChunkManager.FISH_POPULATION_DIR,
 		EarthChunkManager.ROOF_MODIFICATIONS_DIR,
+		EarthChunkManager.ECOLOGY_DIR,
+		EarthChunkManager.KEPT_ANIMALS_DIR,
 	])
 
 
@@ -851,6 +853,18 @@ func _wipe_persisted_world() -> void:
 	# never joined the wipe, so a new world loaded the PREVIOUS world's
 	# roofs hanging over ground whose walls and floors had gone.
 	_world_reset.wipe_directory(EarthChunkManager.ROOF_MODIFICATIONS_DIR)
+	# A region's land health and populations, and the animals the player tamed,
+	# are world state exactly like the four above -- a grazed-down meadow and a
+	# horse won over across an evening both belong to ONE world. Both were added
+	# to the manager after this function was written and never joined it, and
+	# the stale files are READ BACK on the next chunk load: _apply_persisted_
+	# ecology seeds the old world's herbivore, predator and land-health numbers,
+	# and _restore_kept_animals spawns the old world's tamed horses. Neither
+	# record carries a world identity, so nothing downstream can tell a previous
+	# world's file from its own -- a new world inherited the last player's
+	# overgrazed pasture and their livestock.
+	_world_reset.wipe_directory(EarthChunkManager.ECOLOGY_DIR)
+	_world_reset.wipe_directory(EarthChunkManager.KEPT_ANIMALS_DIR)
 	_player_save.wipe()
 	# The event store and memory store are two more pieces of world-scoped
 	# state that must not survive "New Game" -- the same "New Game means new"
@@ -2870,8 +2884,31 @@ func _handle_weather_command(args: Array) -> void:
 
 	var wanted := str(args[0]).to_lower()
 	if wanted == "off":
+		# "off" releases a PIN; it does not stop the weather. Saying "back to
+		# its own devices" when nothing was pinned reports a change that did
+		# not happen, and reads as a broken command to anyone who expected
+		# "off" to mean "clear skies" -- which is exactly how it was read
+		# during a play session while real autumn rain carried on falling.
+		var was_forced := _chunk_manager.is_weather_forced()
 		_chunk_manager.clear_forced_weather()
-		_dev_console.log_line("Weather back to its own devices.")
+		if was_forced:
+			# Re-read AFTER clearing. `here` above was taken while the pin was
+			# still in force, and current_weather returns the pinned state
+			# first by design -- quoting it would announce the very state this
+			# line just deleted ("back to its own devices: rain") while the
+			# natural roll was something else entirely.
+			var natural := (
+				_chunk_manager.current_weather(local_player.position)
+				if local_player != null
+				else "?"
+			)
+			_dev_console.log_line("Weather back to its own devices: %s here now." % natural)
+		else:
+			_dev_console.log_line(
+				"Weather was not pinned -- %s here is the real forecast. "
+				% here
+				+ "(/weather off releases a pin; it does not stop the weather.)"
+			)
 		return
 	if not _chunk_manager.force_weather(wanted):
 		_dev_console.log_line(

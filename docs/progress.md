@@ -5977,6 +5977,53 @@ passing) is a real, valid `EntityRef` (`"player:local"`), the same
   lore instead of dev-console text, the optional LLM rephrasing pass) --
   what actually makes this player-facing rather than a dev-console reader.
 
+### Selling, and three bugs (2026-08-27)
+
+- **Selling into the local market** (size: small) -- ✅ **Done** -- the other
+  half of `concept/economy.md`'s "Selling to the market" faucet.
+  `Shop.sell_price_of`/`Shop.sell` pay the local price and push the goods into
+  that village's real stock, so selling is buying's exact mirror: it moves the
+  price DOWN. Dump forty units on one village and you crash what it pays for
+  the next; carry them somewhere short of it and you are paid over the odds.
+  `Shop.MERCHANT_SPREAD` is never asserted as a number -- what is pinned is
+  `test_buying_then_selling_back_always_loses_money`, which sweeps stock levels
+  1..40 because the price ratio is tightest at LOW stock, exactly where a
+  plausible spread stops being arbitrage-proof. Its own rebindable `sell`
+  action (default Y), registered in `Player.MOMENTARY_ACTIONS` so a tap is not
+  swallowed at real frame rates. **⬜ Remaining:** materials have no value
+  (`Item` has no value field), so only the five catalog items can be sold; and
+  there is no sell-side UI, so it takes the first eligible item in the bag.
+- **New Game left two stores behind** (size: small) -- ✅ **Fixed** --
+  `ECOLOGY_DIR` and `KEPT_ANIMALS_DIR` were in NEITHER
+  `World.backed_up_directories()` nor `_wipe_persisted_world`. Both are written
+  on every chunk unload and read back on load, and neither record carries a
+  world identity -- so a New Game inherited the previous world's land health
+  (a lasting scar: an overgrazed meadow) and re-spawned its tamed horses, with
+  no `.bak` to recover from either. Both lists moved together, as the drift pin
+  requires. Also added `test_every_persisted_chunk_directory_is_both_backed_up_and_wiped`,
+  which reads `EarthChunkManager`'s own constant map, so the NEXT directory
+  added fails on the day it is added rather than bleeding across worlds until
+  someone notices.
+- **The dev console could not show its own last few lines** (size: small) --
+  ✅ **Fixed** -- and the previous "fix" for this was aimed at the wrong thing.
+  `ScrollContainer` refreshes its scrollbar range BEFORE fitting its child and
+  never re-sorts, so the range lagged the content permanently: measured at 848
+  px of log against a range that stopped at 779, i.e. the last three rows
+  unreachable by the scroll call AND the mouse wheel. Moving the scroll
+  POSITION could never help, because the position was already as far down as it
+  was allowed to go. Replaced with a `RichTextLabel`, which recomputes its own
+  scrollbar from its own content. **The old test was vacuous** -- it compared
+  the position against `max_value - page`, the very number that was stale, so
+  it passed for as long as the bug existed. Removed, and replaced with three
+  tests that measure against the real content height, including one at the
+  burst cadence that produced the symptom.
+- **`/weather off`** -- ⬜ **Not a bug** -- it releases a PIN, it does not stop
+  the weather, and nothing was pinned when it looked dead. What was wrong was
+  the reply: it announced "back to its own devices" when nothing had changed,
+  and in the branch where something HAD changed it quoted the weather read
+  BEFORE the pin was released -- i.e. reported the state it had just deleted.
+  Both messages corrected.
+
 ### Consequence: three seams closed (2026-08-27)
 
 Three changes built under strict red-first TDD, chosen because each one wires

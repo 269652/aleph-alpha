@@ -355,7 +355,9 @@ const BITE_BOB_SPEED := 14.0
 ## docs/progress.md's NPC section).
 var _shop := Shop.new()
 var _last_trade_input := false
+var _last_sell_input := false
 var _pending_trade_pressed := false
+var _pending_sell_pressed := false
 var _trade_attempt_count := 0
 var _trade_result_message := ""
 var _trade_result_timer := 0.0
@@ -447,7 +449,9 @@ var _last_stash_input_state := false
 ## Deliberately NOT in here: block, pickup, fish, lasso and mount. Those are
 ## read as a held LEVEL -- guard up, the pickup charge meter, the cast and
 ## reel, the rope -- and latching a level would turn a hold into one tap.
-const MOMENTARY_ACTIONS := ["attack", "build", "destroy", "kick", "stash", "talk", "trade"]
+const MOMENTARY_ACTIONS := [
+	"attack", "build", "destroy", "kick", "stash", "talk", "trade", "sell"
+]
 
 ## Rising edges seen by the input event but not yet acted on by the physics
 ## step (see _unhandled_input and _rising_edge). Local-input side only: the
@@ -2504,6 +2508,25 @@ func _shop_step(delta: float) -> void:
 	var trade_pressed := (
 		Input.is_action_pressed("trade") if _controlled_locally() else _pending_trade_pressed
 	)
+	# has_action guard, the same one _unhandled_input carries and for the same
+	# reason: there is no static [input] section in project.godot (World
+	# registers the map at runtime), so a Player stepped in isolation can
+	# legitimately be running before every action exists. Reading an
+	# unregistered action is an engine error per frame, not a false.
+	var sell_pressed := (
+		(_controlled_locally() and InputMap.has_action("sell") and Input.is_action_pressed("sell"))
+		if _controlled_locally()
+		else _pending_sell_pressed
+	)
+	if _rising_edge("sell", sell_pressed, _last_sell_input):
+		_last_sell_input = sell_pressed
+		if _chunk_manager != null and _chunk_manager.has_merchant_near(position, TRADE_RADIUS):
+			_attempt_a_sale()
+		else:
+			_trade_result_message = "No merchant nearby to sell to."
+		_trade_result_timer = TRADE_MESSAGE_DURATION
+	_last_sell_input = sell_pressed
+
 	var just_pressed := _rising_edge("trade", trade_pressed, _last_trade_input)
 	_last_trade_input = trade_pressed
 	if just_pressed:
@@ -2548,6 +2571,37 @@ func _attempt_a_purchase() -> void:
 			]
 			return
 	_trade_result_message = "Not enough gold."
+
+
+## Sells one unit of the first thing in the player's bag this merchant
+## actually deals in, at the local price (see Shop.sell_price_of).
+##
+## The other half of concept/economy.md's "Selling to the market" faucet, and
+## the point at which what the player produces becomes a strategy rather than
+## a number: the sale goes into the same real market buying draws from, so it
+## pushes that village's stock UP and what it will pay for the next one DOWN.
+## Carrying a glut somewhere short of it is the play.
+##
+## A merchant only buys what they deal in — `Item` carries no value field, so
+## `Shop.CATALOG` is the only place an item has a price at all (see
+## Shop.sell_price_of).
+func _attempt_a_sale() -> void:
+	var market = _chunk_manager.merchant_market_near(position, TRADE_RADIUS) \
+		if _chunk_manager != null else null
+	for item_id in _shop.known_item_ids():
+		if not inventory.has(item_id):
+			continue
+		# Read the price BEFORE selling: the sale itself adds stock, and
+		# therefore lowers the price, so asking afterwards would report the
+		# next seller's price rather than the one just paid.
+		var paid := _shop.sell_price_of(item_id, market)
+		if _shop.sell(wallet, inventory, item_id, market):
+			inventory_changed.emit()
+			_trade_result_message = "Sold %s for %d gold." % [
+				_item_catalog.make(item_id).display_name, paid
+			]
+			return
+	_trade_result_message = "Nothing here they want to buy."
 
 
 ## Fallback for the trade key when no merchant is near: sells one unit of the

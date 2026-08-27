@@ -66,17 +66,52 @@ func after_each():
 	console.free()
 
 
+## Geometry readers that work against EITHER output control, so the tests
+## below measure the real defect on the old ScrollContainer+Label stack rather
+## than merely erroring on a missing method.
+func _output_control():
+	return console._output_label
+
+
+func _scroll_bar():
+	return _output_control().get_v_scroll_bar()
+
+
+## How tall the log actually IS -- the number the container gets wrong.
+func _content_height() -> float:
+	var control = _output_control()
+	if control.has_method("get_content_height"):
+		return float(control.get_content_height())
+	return control.get_combined_minimum_size().y
+
+
+func _visible_height() -> float:
+	return _output_control().size.y
+
+
+## How far the view can be scrolled down. A scrollbar clamps to max - page, so
+## this is the real floor of what the user can reach.
+func _scroll_range() -> float:
+	var bar = _scroll_bar()
+	return bar.max_value - bar.page
+
+
+func _scroll_position() -> float:
+	return float(_scroll_bar().value)
+
+
 func _log_report(count: int) -> void:
 	for i in count:
 		console.log_line("  evt_%d_settlement_founded  (tick %d)" % [i, i * 3])
 
 
-func test_output_scroll_does_not_scroll_horizontally():
-	assert_eq(
-		console._output_scroll.horizontal_scroll_mode,
-		ScrollContainer.SCROLL_MODE_DISABLED,
-		"a horizontal scrollbar both lets the label stay narrow and eats height"
-	)
+## The original symptom this guards: a horizontal scrollbar both let the text
+## stay narrow (one word per row) and ate height out of an already-short box.
+## RichTextLabel has no horizontal scroll at all -- autowrap is what keeps the
+## text inside the width, so THAT is the thing worth pinning.
+func test_output_wraps_rather_than_scrolling_sideways():
+	assert_eq(console._output_label.autowrap_mode, TextServer.AUTOWRAP_WORD)
+	assert_true(console._output_label.scroll_active, "the log must scroll vertically")
 
 
 ## The load-bearing flag: without EXPAND the ScrollContainer hands the label
@@ -115,17 +150,15 @@ func test_a_long_line_wraps_into_a_few_rows_not_one_word_per_row():
 	)
 
 
-func test_logging_scrolls_to_the_newest_line():
-	_log_report(REPORT_LINES)
-	await wait_process_frames(2)
-	var bar := console._output_scroll.get_v_scroll_bar()
-	assert_gt(bar.max_value, bar.page, "precondition: the log must actually overflow")
-	assert_almost_eq(
-		float(console._output_scroll.scroll_vertical),
-		bar.max_value - bar.page,
-		2.0,
-		"the newest line must be visible without the user scrolling"
-	)
+## REMOVED: test_logging_scrolls_to_the_newest_line.
+##
+## It compared scroll_vertical against `max_value - page` -- i.e. against the
+## scrollbar's own idea of the bottom, which was the number that went stale.
+## It passed for as long as the bug existed, which is the worst thing a test
+## can do: it made "fixed and tested" and "still broken in play" both true at
+## once, and cost a session's worth of trusting it. Superseded by
+## test_the_bottom_of_the_log_is_actually_reachable and its siblings below,
+## which measure against the CONTENT height instead.
 
 
 ## The cap counts LOGICAL lines, and /history logs one per recorded event, so
@@ -179,4 +212,57 @@ func test_visible_rows_is_derived_from_the_real_font_metrics():
 	assert_eq(
 		DevConsole.MAX_LOG_LINES,
 		DevConsole.VISIBLE_ROWS * DevConsole.SCROLLBACK_SCREENS
+	)
+
+
+## The bug test_logging_scrolls_to_the_newest_line could never catch, because
+## it measures the newest line against `max_value - page` -- the very number
+## that goes stale. It is self-consistently green while the bottom of the log
+## is physically unreachable.
+##
+## Measured on the real class before this was fixed: after a burst of lines the
+## content stood 848 px tall while the scroll range stopped at 779. Those 69 px
+## are the last three rows, and nothing could reach them -- not the scroll call,
+## not the mouse wheel, because a scrollbar clamps to `max - page`. It did not
+## heal, either: the container never queued another sort, so the range was
+## never recomputed. The answer to "what did that command say" was sitting just
+## below the floor of the box, permanently.
+##
+## So this asserts against the CONTENT, which is the thing that is actually
+## true, rather than against the scrollbar's own idea of how tall it is.
+func test_the_bottom_of_the_log_is_actually_reachable():
+	_log_report(REPORT_LINES)
+	await wait_process_frames(2)
+	assert_gt(_content_height(), _visible_height(), "precondition: the log must overflow")
+	assert_almost_eq(
+		_scroll_range(),
+		_content_height() - _visible_height(),
+		2.0,
+		"the scroll range must cover the whole log, not stop short of its last rows"
+	)
+
+
+## The same defect under the cadence that actually produced it: a burst of
+## commands, several lines landing per frame, rather than one tidy batch.
+func test_the_bottom_is_reachable_after_a_burst_spread_over_frames():
+	for _batch in 12:
+		_log_report(3)
+		await wait_process_frames(1)
+	await wait_process_frames(2)
+	assert_almost_eq(
+		_scroll_range(),
+		_content_height() - _visible_height(),
+		2.0,
+		"a burst of commands must not leave its own tail out of reach"
+	)
+
+
+## And the payoff the whole thing exists for: after logging, the view is
+## actually parked at the newest line rather than somewhere above it.
+func test_the_newest_line_is_what_you_are_looking_at():
+	_log_report(REPORT_LINES)
+	await wait_process_frames(2)
+	assert_almost_eq(
+		_scroll_position(), _scroll_range(), 2.0,
+		"the view must sit at the bottom of the log after logging"
 	)

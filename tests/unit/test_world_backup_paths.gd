@@ -116,3 +116,56 @@ func test_the_roof_modification_directory_is_wiped_and_backed_up_like_its_siblin
 		World.backed_up_directories(), EarthChunkManager.ROOF_MODIFICATIONS_DIR,
 		"roof modifications are destroyed by New Game and must be backed up"
 	)
+
+
+## Land ecology and the player's kept animals are world state exactly like the
+## four directories above: a grazed-down meadow and a tamed horse both belong
+## to ONE world. Both were added to EarthChunkManager after this wipe was
+## written and never joined it, so New Game neither copied them aside nor
+## destroyed them.
+##
+## That is not a tidiness complaint. The stale files are READ BACK on the next
+## chunk load -- `_apply_persisted_ecology` seeds the old world's herbivore,
+## predator and land-health numbers, and `_restore_kept_animals` spawns the old
+## world's tamed horses -- and neither record carries a world identity, so
+## nothing can tell a previous world's file from its own. A new world inherited
+## the last player's overgrazed pasture and their livestock.
+func test_ecology_and_kept_animals_are_backed_up_like_every_other_chunk_store():
+	var dirs := World.backed_up_directories()
+	assert_true(
+		dirs.has(EarthChunkManager.ECOLOGY_DIR),
+		"a region's land health and populations survive New Game unbacked"
+	)
+	assert_true(
+		dirs.has(EarthChunkManager.KEPT_ANIMALS_DIR),
+		"the player's tamed animals survive New Game unbacked"
+	)
+
+
+## The general form of the bug above, and the part that matters in six months:
+## every `user://` directory EarthChunkManager persists must be BOTH backed up
+## and named by the wipe. Read off the script's own constant map rather than
+## restated here, so the next directory someone adds fails on the day they add
+## it instead of quietly bleeding across worlds until a player notices.
+func test_every_persisted_chunk_directory_is_both_backed_up_and_wiped():
+	var body := _wipe_body()
+	var dirs := World.backed_up_directories()
+	var checked := 0
+	# The Script OBJECT, not the class reference -- get_script_constant_map is
+	# an instance method on GDScript, so it cannot be reached through the
+	# preloaded class name.
+	var manager_script: GDScript = load("res://src/world/earth_chunk_manager.gd")
+	var constants := manager_script.get_script_constant_map()
+	for constant_name in constants:
+		var value = constants[constant_name]
+		if typeof(value) != TYPE_STRING or not str(value).begins_with("user://"):
+			continue
+		if not str(constant_name).ends_with("_DIR"):
+			continue
+		checked += 1
+		assert_true(dirs.has(value), "%s is persisted but never backed up" % constant_name)
+		# The trailing ")" makes the match unambiguous: MODIFICATIONS_DIR is a
+		# substring of ROOF_MODIFICATIONS_DIR, so a bare name would match the
+		# wrong line and pass while the real one was missing.
+		assert_string_contains(body, "EarthChunkManager.%s)" % constant_name)
+	assert_gt(checked, 0, "expected EarthChunkManager to declare some user:// directories")

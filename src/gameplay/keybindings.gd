@@ -28,6 +28,12 @@ const ACTIONS := [
 	{"action": "lasso", "label": "Throw / Release Lasso", "default": KEY_R},
 	{"action": "mount", "label": "Mount / Dismount", "default": KEY_V},
 	{"action": "trade", "label": "Trade with Merchant", "default": KEY_T},
+	# Selling is its own verb rather than another meaning stacked onto T,
+	# which already branches two ways (buy from a merchant, or sell food to a
+	# villager when there is none). Defaulted to the key next door so the two
+	# halves of trading sit together under one hand -- see
+	# docs/concept/economy.md's "Selling to the market".
+	{"action": "sell", "label": "Sell to Merchant", "default": KEY_Y},
 	{"action": "talk", "label": "Talk to Villager", "default": KEY_G},
 	{"action": "build", "label": "Place Earth", "default": KEY_B},
 	{"action": "destroy", "label": "Remove Tile", "default": KEY_Q},

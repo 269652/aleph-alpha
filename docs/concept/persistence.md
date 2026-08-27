@@ -139,7 +139,8 @@ already going up.
   world` → `WorldReset.backup_directory`/`backup_file` over
   `World.backed_up_directories()`/`backed_up_files()`), then
   wipes `PlayerSave` and every `EarthChunkManager` persistence directory
-  (`MODIFICATIONS_DIR`/`PLANTED_TREES_DIR`/`FISH_POPULATION_DIR` — read as
+  (`MODIFICATIONS_DIR`/`PLANTED_TREES_DIR`/`FISH_POPULATION_DIR`/
+  `ROOF_MODIFICATIONS_DIR`/`ECOLOGY_DIR`/`KEPT_ANIMALS_DIR` — read as
   already-public constants, not modified), plus the emergence stores (event,
   memory, household, contract, market, institution, world-boss) and the world
   clock, via a `World`-local helper, so the
@@ -326,7 +327,7 @@ variant.
   `wipe_directory`, one `.bak` generation — `BACKUP_SUFFIX`), tested
   (`test_world_reset.gd`, including the exact New Game sequence: back up,
   wipe, and the copy is still there); wired into
-  `World._wipe_persisted_world` (player save + all three `EarthChunkManager`
+  `World._wipe_persisted_world` (player save + all six `EarthChunkManager`
   persistence dirs + the seven emergence stores + the world clock) for both
   New Game and Host Game.
 - ✅ The backup list itself — `World.backed_up_directories()`/
