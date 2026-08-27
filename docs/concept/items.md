@@ -26,6 +26,11 @@ from an authored table is specified separately in
 of its canonical structure, which is what lets a crafted item survive a save
 at all.
 
+How two items of the same material in the same shape can still be a file and a
+spring is specified in [heat_treatment.md](heat_treatment.md): quench, temper
+and sharpen slide one material along a single hardness/toughness curve that no
+draw is allowed to cheat.
+
 ### Reading an item
 
 Hovering an item in the inventory is how the player learns what it is. The

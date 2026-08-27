@@ -2978,13 +2978,73 @@ only — design-only so far, no code exists for it yet:
   Nordheim's rule says an alloy should conduct *worse than both* constituents
   (the one knowingly-false statement in the file); the Cu-Sn eutectic's position
   is only qualitatively right (~88 wt% Sn vs the real 99.3 — ideal-solution
-  linearization, no activity coefficients); heat treatment/tempering is absent
-  entirely, so there is no way to make a non-brittle steel blade yet.
+  linearization, no activity coefficients). The gap this row used to name last
+  — "heat treatment/tempering is absent entirely, so there is no way to make a
+  non-brittle steel blade yet" — is **closed** as of 2026-08-27 by
+  `src/gameplay/treatment.gd` (see the Heat Treatment row below); the hardness
+  saturation is what keeps the resulting window narrow.
   **Nothing calls `blend()` outside its own test** — no tin ore (`ORE_TYPES` is
   still `["iron","copper","coal"]`), no alloy ingot item, no smelt path, no
   ratio UI. Composes with, doesn't duplicate, `concept/labor_skills.md`'s
   `ceiling_realization` multiplier; the skill→ratio-drift formula smelting.md
   asks for is still untouched.
+- **Heat Treatment (Quench / Temper / Sharpen)** (medium) — 🚧 Partial — the
+  *model* is real and tested; **nothing calls it**. New doc
+  `concept/heat_treatment.md`; `src/gameplay/treatment.gd` (32 tests) takes the
+  ordinary eight-scalar vector in and returns a new one out, same shape as a
+  `MATERIALS` row and same contract as `alloy_blend.blend()`, so the whole
+  existing pipeline is unchanged. It is the axis no part graph can express: a
+  file and a spring are the same steel in the same shape. **Anti-degeneracy is
+  structural, not conventional** — both thermal operations are literally the
+  same private `_slide_to_hardness` helper, so there is no code path that can
+  raise hardness and toughness together, and "temper to max everything" is not
+  a strategy the model can state. The conserved quantity is
+  `hardness^3.97 × toughness`, *not* a sum: a sum would mean toughness gained
+  per unit hardness lost is constant across the draw range, which every
+  published temper table contradicts, and it would add two incommensurable
+  quantities. The exponent is composed from three real relations with nothing
+  fitted (Tabor σ_y ∝ HV; AISI 4340's measured K_IC ∝ σ_y^−1.486; absorbed
+  energy ∝ K_IC²/σ_y, with Young's modulus dropping out because it is
+  structure-insensitive) and is re-derived from the stored anchor by a test.
+  Quench's drive is the published 832/180 HV martensite/annealed quotient. The
+  temper ladder is the real HRC-vs-draw data **converted to Vickers first** —
+  HRC is a depth scale, so 55/65 = 0.85 is meaningless where the true retention
+  is 0.72, and a test pins that conversion. The oxide **colour ladder** (pale
+  straw → dark straw → bronze → purple → blue → pale blue → grey) is encoded as
+  published workshop temperatures and is both accurate and the player-facing
+  surface; a test checks the model actually makes the tools each colour is
+  historically for (razor draw keen *and* still chippy, knife/file draw the
+  first that is keen and not brittle, pale blue past the edge and into spring).
+  Sharpening is ceilinged at the material's own `sharpness_capacity` and
+  quantized on `AssemblyId.TREATMENT_LEVELS` — read, not restated — so honing
+  cannot mint ids the content-addressing model says do not exist; it also fixes
+  a small pre-existing lie, in that an unworked iron bar used to read `keen`.
+  **Acceptance case, the reason the module earns its place**:
+  `AlloyBlend.blend("iron","carbon",0.006)` quenched and drawn to dark straw is
+  harder than plain iron (8.30 vs 8.0), out of the brittle band (3.17 vs the
+  shipped 3.0), and still keen — the exact hole the Alloying row above used to
+  name as unfixable.
+  **Known limits, each pinned by a named test rather than hidden**: the vector
+  carries no composition, so the model **cannot tell hardenable steel from
+  wrought iron** (real wrought iron does not quench-harden at all and real
+  bronze softens — KNOWN WRONG, test-recorded); the usable draw window is only
+  **225–240 °C wide** because the 0–10 scale saturates (iron is 8, the ceiling
+  is 10 — the same limitation the Alloying row calls its biggest, not a claim
+  about real steel); quenching a modelled carbon steel is a **no-op** for the
+  same reason; quench is envelope-conserving and therefore understates real
+  quench-and-temper; the draw table is calibrated 200–400 °C and goes **flat**
+  past it rather than extrapolating; tempered-martensite embrittlement (the
+  real 260–370 °C toughness trough) is deliberately not modelled because it
+  would break the monotonicity the design wants.
+  **Zero callers.** No forge, no quench tub, no whetstone item, no crafting UI
+  produces a draw temperature, so nothing in a running game has ever been
+  quenched, tempered or sharpened. Worse, `impact_resolver.resolve_impact()`
+  takes a material *name* and looks it up, so a treated vector cannot reach the
+  fracture model at all — widening it to accept a bare vector (as
+  `descriptors_for_vector` was widened for alloys) is the smallest change that
+  would make any of this matter in play. Nothing stores a piece's treatment
+  state either, though `assembly_id.gd` already reserves and quantizes a
+  `treatment` field on a part, so the id side is ready and the item side is not.
 
 ### Easter Eggs (`concept/easter_eggs.md`)
 
