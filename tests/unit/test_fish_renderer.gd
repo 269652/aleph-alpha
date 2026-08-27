@@ -214,3 +214,18 @@ func test_target_count_still_respects_interior_water_only():
 	for fish in spawned:
 		var tile_x := int(fish.position.x / TILE_SIZE) - CHUNK_ORIGIN.x
 		assert_ne(tile_x, land_x, "fish spawned on land itself")
+
+
+# -- texture reuse: fish share cached art instead of one unique image each --
+#
+# See ProceduralFishSprite's own cache tests for the generator-level detail;
+# this proves it end-to-end through FishRenderer's actual spawn path -- with
+# MAX_FISH_PER_CHUNK capping population per chunk but many water chunks
+# potentially loaded at once, an uncached generate_texture meant every
+# visible fish was both paying its own per-instance image-generation cost
+# and permanently unbatchable with every other fish of the same species.
+
+func test_two_fish_of_the_same_species_and_seed_share_one_texture():
+	var a := renderer.spawn_fish_at(parent, "koi", Vector2(10, 10), 5)
+	var b := renderer.spawn_fish_at(parent, "koi", Vector2(90, 40), 5)
+	assert_same(a.texture, b.texture, "same species+seed fish should share one cached texture")
