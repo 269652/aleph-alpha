@@ -74,11 +74,20 @@ inspect surfacing raw numbers for min-maxers stays a possible later affordance
 rather than the default hover text.
 
 Each descriptor's threshold is a named, calibration-tested constant on
-`MaterialProperties`, and two of the four reuse cutoffs the game had already
-fixed elsewhere — `brittle` is the same toughness line the impact model
-fractures at, `buoyant` the same water-density line raft viability uses — so a
-word in a tooltip and a behaviour in the simulation cannot come to mean
-different things. There is deliberately no "heavy" descriptor: an item's mass
+`MaterialProperties`, and **three** of the four reuse cutoffs the game had
+already fixed elsewhere — `brittle` is the same toughness line the impact model
+fractures at, `buoyant` the same water-density line raft viability uses, and as
+of 2026-08-28 `hard` is the same line the impact model refuses to let a point
+pierce (`ImpactResolver.PIERCE_HARDNESS_CAP`), so *a point cannot pierce
+anything the tooltip calls hard* — so a word in a tooltip and a behaviour in
+the simulation cannot come to mean different things.
+
+`hard` itself moved that day, from stone's hardness to **iron's**, when
+`materials.md`'s hardness column became published Vickers: on a real
+indentation scale rock is seven times harder than wrought iron, so keeping
+stone as the cutoff would have dropped iron out of the word and broken the
+`Iron — hard, keen` line this page documents. Every material's *word* is
+unchanged; only the number behind it is now a measurement. There is deliberately no "heavy" descriptor: an item's mass
 is already shown as a real number, and a vaguer word for it would be a
 downgrade.
 

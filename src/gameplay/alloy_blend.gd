@@ -209,13 +209,21 @@ const BRONZE_ANCHOR_HARDNESS_RATIO: float = 2.0
 ## anchor above SOLVED FOR, not tuned:
 ##
 ##   K = (ratio * H_copper / baseline(x) - 1) / (misfit * (x / onset)^(2/3))
-##     = (2.0 * 4.0 / 3.70 - 1) / (0.09375 * 0.92448)
-##     = 13.40902
+##     = (2.0 * 0.50 / 0.446 - 1) / (0.09375 * 0.9244817)
+##     = 14.33195
+##
+## The inputs H_copper and H_tin moved when material_properties.gd's hardness
+## column was rescaled from a placed 0-10 ordering to published Vickers (copper
+## 4.0 -> 0.50 == 50 HV, tin 1.5 -> 0.05 == 5 HV), so K moved with them -- which
+## is exactly what a solved constant is supposed to do. Note the anchor itself
+## is unchanged and so is what it means: cast 88Cu-12Sn is still twice annealed
+## copper's hardness, and 2 x 50 HV = 100 HV is now literally the published
+## ~100 HB figure for cast tin bronze rather than a ratio on an abstract scale.
 ##
 ## Re-derived from the anchors by test_the_strengthening_coefficient_is_the_
 ## measured_bronze_anchor_solved_for_k, so it cannot drift away from the
 ## measurement it encodes.
-const SOLUTION_STRENGTHENING_COEFFICIENT: float = 13.40902
+const SOLUTION_STRENGTHENING_COEFFICIENT: float = 14.33195
 
 ## How finely optimal_solute_fraction scans the composition axis. 1/10000 is
 ## fine enough to resolve the Fe-C onset (0.76%) to two significant figures,

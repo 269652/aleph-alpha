@@ -424,15 +424,30 @@ The 2026-08-24 list below still stands except where the section above resolved
 it (the curve constants are now derived and test-pinned; binary blends are the
 implemented scope). What implementing it newly exposed:
 
-- **The 0–10 hardness scale has no headroom left, and steel saturates it.** The
-  real range from annealed copper (~50 HV) to quenched tool steel (~800 HV) is a
-  factor of 16, and the existing table already spends its budget putting copper at
-  4 and iron at 8. So *any* carbon steel pins at 10 and the scale cannot tell mild
-  steel from tool steel. The model is not wrong; the scale has nowhere to put the
-  answer. This is the single biggest known limitation of the slice, and it is
-  pinned by a test rather than hidden. Fixing it means rescaling the whole table —
-  a change that touches every existing calibration — or giving hardness a
-  non-linear reading curve.
+- ~~**The 0–10 hardness scale has no headroom left, and steel saturates it.**~~
+  **RESOLVED 2026-08-28.** This was the slice's single biggest limitation: the
+  table spent its whole 0–10 budget putting copper at 4 and iron at 8, so *any*
+  carbon steel pinned at 10 and the scale could not tell mild steel from tool
+  steel. The fix was the one this bullet named as expensive — rescale the whole
+  table — done the same way conductivity was: `hardness` is now every material's
+  published **Vickers** figure through `MaterialProperties.hardness_from_hv`,
+  linear, anchored on **martensite at 1000 HV** rather than on wherever iron
+  happened to sit. Iron is 1.0 and there are nine points of headroom above it.
+  Carbon content now moves hardness across the whole range (0.2 % C → 3.79,
+  0.76 % → 7.76, 3.5 % → 8.79 as-cast), and a cast steel no longer pins the
+  ceiling, because the ceiling is a *heat treatment* and not a composition.
+  `test_carbon_content_moves_hardness_now_that_the_scale_has_headroom` replaces
+  the test that used to pin the limitation. `SOLUTION_STRENGTHENING_COEFFICIENT`
+  moved with its inputs (13.40902 → 14.33195) — it is solved from copper's and
+  tin's own hardnesses, so a rescale of those *should* move it, and the anchor
+  it encodes is unchanged: 88Cu-12Sn is still twice annealed copper, which is
+  now literally 100 HB against 50 HV rather than a ratio on an abstract scale.
+  - The one thing the rescale exposes rather than fixes: the single shared `K`
+    reproduces the bronze anchor exactly and over-states Fe-C by roughly 3×
+    (the model's as-cast eutectoid is ~776 HV against a real annealed ~180 HV).
+    Labusch with one coefficient cannot satisfy both anchors at once. It is
+    survivable because the quench clamp lands the result on martensite anyway,
+    but it is now the biggest *remaining* hardness question in this file.
 - **Conductivity mixes linearly, and real alloys do not.** Nordheim's rule says a
   solid solution scatters electrons far worse than either pure metal, so alloy
   conductivity drops **below both** constituents — the same qualitative shape as

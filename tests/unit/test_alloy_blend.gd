@@ -161,7 +161,10 @@ func test_every_scalar_not_declared_linear_actually_bends_off_the_line() -> void
 ## invented strengthening, not a guess.
 func test_a_pair_with_no_phase_data_falls_back_to_a_pure_linear_mix() -> void:
 	var mix: Dictionary = AlloyBlend.blend("wood", "stone", 0.5)
-	assert_almost_eq(float(mix["hardness"]), (3.0 + 7.0) / 2.0, 0.0001,
+	var midpoint: float = (
+		mp.property_value("wood", "hardness") + mp.property_value("stone", "hardness")
+	) / 2.0
+	assert_almost_eq(float(mix["hardness"]), midpoint, 0.0001,
 		"no solubility data means no modeled strengthening, not a made-up bonus")
 	assert_almost_eq(AlloyBlend.solution_strengthening("wood", "stone", 0.5), 0.0, 0.0001)
 
@@ -391,12 +394,18 @@ func test_hardness_climbs_all_the_way_to_the_boundary_for_every_modeled_pair() -
 ## measures roughly twice annealed copper's hardness (~100 HB against ~50 HB),
 ## so K is whatever value reproduces that, given a misfit and a solubility
 ## limit that were both already fixed by real data. This test re-derives it.
+##
+## Copper's and tin's own table hardnesses are READ rather than restated here:
+## they are published Vickers figures now (50 HV and 5 HV) and a copy of them
+## in this test would be one more thing to drift when the table is corrected.
 func test_the_strengthening_coefficient_is_the_measured_bronze_anchor_solved_for_k() -> void:
 	var x: float = AlloyBlend.BRONZE_ANCHOR_TIN_FRACTION
-	var baseline := 4.0 * (1.0 - x) + 1.5 * x
+	var copper: float = mp.property_value("copper", "hardness")
+	var tin: float = mp.property_value("tin", "hardness")
+	var baseline := copper * (1.0 - x) + tin * x
 	var misfit: float = AlloyBlend.lattice_misfit("copper", "tin")
 	var saturation: float = pow(x / AlloyBlend.second_phase_onset("copper", "tin"), AlloyBlend.LABUSCH_EXPONENT)
-	var solved: float = (AlloyBlend.BRONZE_ANCHOR_HARDNESS_RATIO * 4.0 / baseline - 1.0) / (misfit * saturation)
+	var solved: float = (AlloyBlend.BRONZE_ANCHOR_HARDNESS_RATIO * copper / baseline - 1.0) / (misfit * saturation)
 	assert_almost_eq(AlloyBlend.SOLUTION_STRENGTHENING_COEFFICIENT, solved, 0.001,
 		"K must be the bronze hardness anchor solved for, not a number that felt right")
 
@@ -595,35 +604,53 @@ func test_a_trace_of_carbon_hardens_iron_far_faster_than_tin_hardens_copper() ->
 		"0.8%% carbon must do enormously more than 0.8%% tin -- interstitial, and a 15x smaller solubility limit")
 
 
-## Honest limitation, pinned rather than hidden. The real hardness range from
-## annealed copper (~50 HV) to quenched tool steel (~800 HV) is a factor of 16,
-## and the existing table already spends its 0-10 budget putting copper at 4
-## and iron at 8. So steel saturates the scale: the model is not wrong, the
-## SCALE has no headroom left above iron. This is the single biggest known
-## limitation of this slice and is written up in smelting.md's open questions.
-func test_steel_saturates_the_games_hardness_scale() -> void:
-	var steel: Dictionary = AlloyBlend.blend("iron", "carbon", 0.008)
-	assert_almost_eq(float(steel["hardness"]), AlloyBlend.SCALE_MAX, 0.0001,
-		"steel pins the 0-10 hardness scale -- a real limitation of the scale, not of the model")
+## The limitation this test used to PIN, now gone.
+##
+## It read: "steel saturates the games hardness scale ... even 0.1% carbon pins
+## it: the scale cannot tell mild steel from tool steel", and it was true --
+## the old column was a placed ordering with iron at 8.0 and a ceiling at 10.0,
+## so every Fe-C composition clamped and carbon content bought literally
+## nothing. That was named as the single biggest known limitation of both this
+## slice and the materials slice. It is not a limitation any more:
+## material_properties.gd's hardness column is published Vickers anchored on
+## martensite (1000 HV), iron sits at 1.0 == 100 HV, and there are nine points
+## of real headroom above it.
+##
+## So the assertion is inverted. Carbon content must MOVE hardness, across the
+## whole useful range, and the ceiling must be somewhere a smelt cannot reach
+## on its own.
+func test_carbon_content_moves_hardness_now_that_the_scale_has_headroom() -> void:
 	var mild: Dictionary = AlloyBlend.blend("iron", "carbon", 0.001)
-	assert_almost_eq(float(mild["hardness"]), AlloyBlend.SCALE_MAX, 0.0001,
-		"even 0.1%% carbon pins it: the scale cannot tell mild steel from tool steel")
+	var tool: Dictionary = AlloyBlend.blend("iron", "carbon", 0.008)
+	var iron: float = mp.property_value("iron", "hardness")
+	assert_gt(float(mild["hardness"]), iron,
+		"even 0.1%% carbon must harden iron measurably")
+	assert_gt(float(tool["hardness"]), float(mild["hardness"]) * 2.0,
+		"and tool steel must be far harder than mild steel, not identical to it")
+	assert_lt(float(tool["hardness"]), AlloyBlend.SCALE_MAX,
+		"and a cast steel must NOT pin the ceiling -- the ceiling is quenched martensite,"
+		+ " which is a heat treatment, not a composition")
 
 
-## What the scale CAN still express past saturation is the cost. Hardness
-## flattens against the ceiling while toughness keeps collapsing, so more
-## carbon past the eutectoid is pure downside -- and this is now the right
-## answer about cast iron for the RIGHT reason: cementite is modeled, and the
-## toughness fall is its lever-rule volume fraction rather than an incidental
-## consequence of the hardness clamp. (smelting.md's divergence 4 previously
-## recorded that it was the right answer for the wrong reason. It no longer is.)
-func test_past_the_hardness_ceiling_extra_carbon_only_costs_toughness() -> void:
+## Past the eutectoid the trade goes bad, and it now goes bad for a reason the
+## scale can actually SHOW. This test used to assert that cast iron and
+## eutectoid steel had identical hardness "because both are clamped at the
+## ceiling" -- which was the saturation defect being mistaken for a result.
+## With a real Vickers column nothing is clamped: cementite genuinely is harder
+## than pearlite, so hardness keeps climbing, and what makes cast iron the
+## worse trade is that its toughness collapses by the lever rule far faster
+## than its hardness rises. That is the honest shape of the cast-iron problem.
+func test_past_the_eutectoid_extra_carbon_buys_hardness_at_a_ruinous_toughness_price() -> void:
 	var eutectoid: Dictionary = AlloyBlend.blend("iron", "carbon", 0.008)
 	var cast_iron: Dictionary = AlloyBlend.blend("iron", "carbon", 0.018)
-	assert_almost_eq(float(cast_iron["hardness"]), float(eutectoid["hardness"]), 0.0001,
-		"both are clamped at the ceiling -- no further hardness to be had")
+	assert_gt(float(cast_iron["hardness"]), float(eutectoid["hardness"]),
+		"cementite is harder than pearlite -- more of it really is harder")
 	assert_lt(float(cast_iron["toughness"]), float(eutectoid["toughness"]),
-		"but the extra carbon still costs toughness, so cast iron is the worse trade")
+		"but the extra carbon costs toughness, so cast iron is the worse trade")
+	var hardness_gain: float = float(cast_iron["hardness"]) / float(eutectoid["hardness"])
+	var toughness_loss: float = float(eutectoid["toughness"]) / maxf(float(cast_iron["toughness"]), 0.000001)
+	assert_gt(toughness_loss, hardness_gain,
+		"and the loss must outrun the gain, or nobody would ever stop at the eutectoid")
 
 
 ## Cast iron shatters, and feeding it to the impact model's EXISTING brittle
@@ -820,14 +847,28 @@ func test_melting_is_not_smuggled_into_the_property_vector() -> void:
 
 ## Copper on its own is notable for nothing the game has a word for. Alloy it
 ## and the SAME vocabulary calls it hard -- the discovery, surfaced.
+##
+## Read at the model's OWN optimum rather than at the anchor composition, and
+## the reason is the second half of this test: since the hardness column became
+## published Vickers, 88Cu-12Sn lands within a hair of iron's 100 HV, because
+## cast tin bronze really does measure ~100 HB and wrought iron really does
+## measure ~100 HV. That is a genuinely famous fact -- bronze weapons were not
+## beaten by early iron on hardness, they were beaten on ore abundance -- but
+## it also means the anchor composition sits exactly ON the "hard" cutoff,
+## which is not a place to hang a boolean. The smith's best bronze is a
+## comfortable way past it.
 func test_alloying_copper_produces_something_the_game_can_call_hard() -> void:
 	assert_eq(mp.descriptors_for("copper"), [] as Array[String],
 		"pure copper is unremarkable -- soft, unremarkable edge, sinks")
-	var bronze: Dictionary = AlloyBlend.blend("copper", "tin", 0.12)
+	var best: float = AlloyBlend.optimal_solute_fraction("copper", "tin")
+	var bronze: Dictionary = AlloyBlend.blend("copper", "tin", best)
 	assert_true(mp.descriptors_for_vector(bronze).has("hard"),
 		"bronze must read as hard where copper did not -- that is the emergence, in one word")
 	assert_false(mp.descriptors_for_vector(bronze).has("brittle"),
-		"but 12%% tin is still a usable tool, not a shatterable one")
+		"but the best bronze is still a usable tool, not a shatterable one")
+	var anchor: Dictionary = AlloyBlend.blend("copper", "tin", AlloyBlend.BRONZE_ANCHOR_TIN_FRACTION)
+	assert_almost_eq(float(anchor["hardness"]), mp.property_value("iron", "hardness"), 0.01,
+		"historical 12%% tin bronze and wrought iron are the same hardness, ~100 HB/HV")
 
 
 ## And the same vocabulary separates the two ferrous alloys exactly as they
