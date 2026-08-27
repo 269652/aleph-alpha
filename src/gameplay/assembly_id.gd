@@ -103,6 +103,15 @@ const DIMENSION_QUANTUM_CM := 0.1
 ## test_sharpening_across_its_full_range_mints_a_bounded_number_of_ids.
 const TREATMENT_LEVELS := 8
 
+## Real-world grounding: a balance reads to the gram, so a volume difference
+## that cannot move a scale must not mint an id. One quantum of the DENSEST
+## material the game models (iron, 7.8 g/cm^3 -- MaterialProperties.MATERIALS)
+## has to weigh under a gram for that to hold, and 0.1 cm^3 of iron is 0.78 g.
+## Derived from the material model rather than typed twice: pinned against
+## MaterialProperties' own densities by
+## test_the_volume_quantum_is_finer_than_a_balance_can_read.
+const VOLUME_QUANTUM_CM3 := 0.1
+
 ## How many candidate orderings stage 3 will enumerate before falling back to
 ## the refinement invariant.
 ##
@@ -118,10 +127,13 @@ const TREATMENT_LEVELS := 8
 ## test_past_the_budget_the_form_says_it_is_an_invariant_not_a_certificate.
 const MAX_ORBIT_PERMUTATIONS := 720
 
-## Any part/joint field whose key ends here is a real-world centimetre
-## measurement and quantizes to DIMENSION_QUANTUM_CM; every other float is a
-## 0..1 process level and quantizes to the TREATMENT_LEVELS ladder.
+## Any part/joint field whose key ends in `_cm` is a real-world centimetre
+## measurement and `_cm3` a real-world volume; every other float is a 0..1
+## process level and quantizes to the TREATMENT_LEVELS ladder. (`_cm3` is
+## checked first only for clarity -- "volume_cm3" does not end in "_cm", so the
+## two suffixes cannot actually collide.)
 const _DIMENSION_SUFFIX := "_cm"
+const _VOLUME_SUFFIX := "_cm3"
 
 ## FNV-1a, twice, over the canonical serialization's UTF-8 bytes.
 ##
@@ -157,6 +169,17 @@ const _WORD_MASK := 0xFFFFFFFF
 ## formatting becomes part of the id.
 static func quantize_dimension_cm(centimetres: float) -> int:
 	return int(round(centimetres / DIMENSION_QUANTUM_CM))
+
+
+## Real cubic centimetres -> whole VOLUME_QUANTUM_CM3 quanta.
+static func quantize_volume_cm3(cubic_centimetres: float) -> int:
+	return int(round(cubic_centimetres / VOLUME_QUANTUM_CM3))
+
+
+## The inverse, so a reader of a canonical form (CraftedItemRegistry's real
+## mass, say) never has to know the quantum to decode a stored volume.
+static func dequantize_volume_cm3(quanta: int) -> float:
+	return float(quanta) * VOLUME_QUANTUM_CM3
 
 
 ## A 0..1 process level -> its rung on the TREATMENT_LEVELS ladder. Not
@@ -202,6 +225,12 @@ static func canonical_form(assembly: Dictionary) -> Dictionary:
 			dangling.append(kept)
 			continue
 		joint_forms.append([_serialize(quantized), a, b, quantized])
+	# Carried through rather than re-derived, so canonicalising an ALREADY
+	# canonical form is a no-op. CraftedItemRegistry stores canonical forms and
+	# re-registers what it read back off disk; if a second pass dropped these,
+	# a reloaded save would mint a fresh id for an item it already had.
+	for joint in assembly.get("dangling_joints", []):
+		dangling.append(_quantized(joint, ""))
 	dangling = _sorted_by_serialization(dangling)
 
 	var colours := _refined_colours(part_keys, joint_forms)
@@ -257,6 +286,8 @@ static func _quantized(value, key_name: String):
 				items.append(_quantized(item, key_name))
 			return items
 		TYPE_FLOAT:
+			if key_name.ends_with(_VOLUME_SUFFIX):
+				return quantize_volume_cm3(float(value))
 			if key_name.ends_with(_DIMENSION_SUFFIX):
 				return quantize_dimension_cm(float(value))
 			return quantize_treatment(float(value))

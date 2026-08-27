@@ -11,6 +11,11 @@ extends GutTest
 ## save round-trip all at once.
 
 const AssemblyId = preload("res://src/gameplay/assembly_id.gd")
+const MaterialProperties = preload("res://src/gameplay/material_properties.gd")
+
+## One gram in kilograms -- the finest reading of a real balance, and so the
+## precision floor the volume quantum is calibrated against.
+const GRAM_KG := 0.001
 
 
 func _part(material: String, geometry: String, role: String) -> Dictionary:
@@ -244,6 +249,73 @@ func test_a_whole_millimetre_length_difference_does_mint_a_new_id():
 	var b := _sword()
 	b["parts"][0]["length_cm"] = 70.1
 	assert_ne(AssemblyId.assembly_id(a), AssemblyId.assembly_id(b))
+
+
+## Real grounding, DERIVED from the shipped material model rather than retyped:
+## a kitchen/apothecary balance reads to the gram, so a volume difference that
+## cannot move a scale must not be allowed to mint an id. The worst case is the
+## DENSEST material the game models, so one quantum of that material has to
+## weigh under a gram. Reading MaterialProperties' own densities (rather than
+## restating "iron is 7.8") is what stops the two from drifting: add a denser
+## material one day and this test fails, forcing the quantum to be re-derived
+## instead of quietly becoming a false claim.
+func test_the_volume_quantum_is_finer_than_a_balance_can_read():
+	var properties := MaterialProperties.new()
+	var densest_material := ""
+	var densest_density := 0.0
+	for material in MaterialProperties.MATERIALS:
+		var density := properties.property_value(material, "density")
+		if density > densest_density:
+			densest_density = density
+			densest_material = material
+	assert_eq(densest_material, "iron", "iron is still the densest material modelled")
+
+	var quantum_mass_kg := properties.mass_kg_for(densest_material, AssemblyId.VOLUME_QUANTUM_CM3)
+	assert_lt(quantum_mass_kg, GRAM_KG, "one quantum of the densest material cannot move a balance")
+
+
+## And it is not needlessly finer than that either -- a quantum ten times
+## smaller would buy no perceptible precision while multiplying the reachable
+## id space tenfold, which is the exact unbounded-id-space failure quantization
+## exists to prevent.
+func test_the_volume_quantum_is_no_finer_than_it_needs_to_be():
+	var properties := MaterialProperties.new()
+	var ten_quanta_kg := properties.mass_kg_for("iron", AssemblyId.VOLUME_QUANTUM_CM3 * 10.0)
+	assert_gt(ten_quanta_kg, GRAM_KG, "ten quanta of iron DO read on a balance")
+
+
+func test_volumes_are_quantized_to_whole_quanta():
+	assert_eq(AssemblyId.quantize_volume_cm3(120.0), 1200)
+	assert_eq(AssemblyId.quantize_volume_cm3(120.04), 1200, "rounds down within the quantum")
+	assert_eq(AssemblyId.quantize_volume_cm3(120.06), 1201, "rounds up across it")
+
+
+## A reader of a canonical form (CraftedItemRegistry's real mass) has to get
+## back the volume that went in, or a crafted item's mass would be quantization
+## error rather than physics.
+func test_a_quantized_volume_round_trips_back_to_real_cubic_centimetres():
+	assert_almost_eq(
+		AssemblyId.dequantize_volume_cm3(AssemblyId.quantize_volume_cm3(120.0)), 120.0, 0.0001
+	)
+
+
+## Volume must quantize on its OWN suffix, not fall through to the treatment
+## ladder -- 120.0 read as a 0..1 process level would land on rung 960 and two
+## swords differing by a cubic centimetre would collide.
+func test_a_volume_field_is_not_mistaken_for_a_process_level():
+	var a := _sword()
+	var b := _sword()
+	a["parts"][0]["volume_cm3"] = 120.0
+	b["parts"][0]["volume_cm3"] = 121.0
+	assert_ne(AssemblyId.assembly_id(a), AssemblyId.assembly_id(b))
+
+
+func test_sub_quantum_volume_differences_do_not_mint_a_new_id():
+	var a := _sword()
+	var b := _sword()
+	a["parts"][0]["volume_cm3"] = 120.0
+	b["parts"][0]["volume_cm3"] = 120.02
+	assert_eq(AssemblyId.assembly_id(a), AssemblyId.assembly_id(b))
 
 
 ## Real grounding: sharpening is not a continuum in practice, it is a ladder
