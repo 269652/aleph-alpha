@@ -378,11 +378,17 @@ func _build_grass() -> void:
 	mmi.z_index = -1
 	add_child(mmi)
 	var long_positions := _pick_long_grass_positions(_layout.grass_positions)
-	var cells: Array[Dictionary] = []
+	# fill_band now takes pre-expanded per-CARD specs (see
+	# IllustratedGrassPatch.cards_for_cell/fill_band's own doc comments) --
+	# this diorama has no Y-sort bands of its own (one single MultiMesh, see
+	# the z_index comment above), so every cell's cards are simply expanded
+	# and flattened into the one call.
+	var card_specs: Array[Dictionary] = []
 	for grass_position in _layout.grass_positions:
 		var growth := LONG_GRASS_GROWTH if long_positions.has(grass_position) else 1.0
-		cells.append({"seed": hash(grass_position), "ground_position": grass_position, "growth": growth})
-	patch.fill_band(mmi, mmi.position, cells)
+		var cell_spec := {"seed": hash(grass_position), "ground_position": grass_position, "growth": growth}
+		card_specs.append_array(IllustratedGrassPatch.cards_for_cell(cell_spec))
+	patch.fill_band(mmi, mmi.position, card_specs)
 	# Kept for _process (see set_walker_position's own call site there) --
 	# reported live: "the grass blades don't part when it walks through".
 	_grass_patch = patch

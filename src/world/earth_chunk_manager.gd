@@ -3873,7 +3873,7 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 
 	var origin := chunk_coord * CHUNK_SIZE
 	var half_span := _visible_half_span_tiles()
-	var cells_by_band: Dictionary = {}  # band index -> Array[Dictionary]
+	var cards_by_band: Dictionary = {}  # band index -> Array[Dictionary] of per-card specs
 	for cell in sim.get_patch_cells():
 		var tile: Vector2i = origin + cell
 		# Tile-precise cutoff on top of the coarser chunk-level _decorates
@@ -3886,31 +3886,43 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 		# player walks, not just once per chunk.
 		if not DecorationLod.keeps_decoration_tile(tile, _disturbance_center_tile, half_span, GRASS_VIEW_BUFFER_TILES):
 			continue
-		var band := IllustratedGrassPatch.band_index_for_local_y(cell.y, CHUNK_SIZE)
 		# Per-seed, not a single flat constant: IllustratedGrassPatch derives
 		# each tuft's atlas variant, card offsets and depth ordering from this
 		# same seed (card_specs_for_seed), so a meadow shows real per-tuft
 		# variety instead of identically-placed clumps.
 		var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
-		var list: Array = cells_by_band.get(band, [])
-		list.append({
+		var cell_spec := {
 			"seed": seed_value,
 			"ground_position": Vector2(
 				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(tile.y + 0.5) * TerrainRenderer.TILE_SIZE
 			),
 			"growth": sim.get_growth(cell),
-		})
-		cells_by_band[band] = list
+		}
+		# Bucketed per CARD, not per cell: each of the cell's own CARD_COUNT
+		# cards carries its own random offset from the cell's nominal ground
+		# position (see IllustratedGrassPatch.card_specs_for_seed), so a
+		# card's own REAL, offset-adjusted world Y -- not the cell's raw,
+		# un-offset row -- decides which band it Y-sorts with. Reported
+		# live, after the BAND_COUNT 8->32 fix: "y sorting works for some
+		# [tufts] but not all... it parts and bends but y ordering is
+		# correct only for some" -- see IllustratedGrassPatch.cards_for_cell
+		# and docs/concept/long_grass.md for the full mechanism.
+		for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+			var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+			var band := IllustratedGrassPatch.band_index_for_local_y(local_row, CHUNK_SIZE)
+			var list: Array = cards_by_band.get(band, [])
+			list.append(card)
+			cards_by_band[band] = list
 
 	# A band whose last patch died (grazed/built on) is freed outright
 	# rather than left holding a zero-instance MultiMesh.
 	for band in bands.keys().duplicate():
-		if not cells_by_band.has(band):
+		if not cards_by_band.has(band):
 			bands[band].queue_free()
 			bands.erase(band)
 
-	for band in cells_by_band.keys():
+	for band in cards_by_band.keys():
 		var mmi: MultiMeshInstance2D = bands.get(band)
 		if mmi == null:
 			mmi = MultiMeshInstance2D.new()
@@ -3920,7 +3932,7 @@ func _sync_grass_sprites(chunk_coord: Vector2i) -> void:
 			)
 			_entities_parent.add_child(mmi)
 			bands[band] = mmi
-		_illustrated_grass.fill_band(mmi, mmi.position, cells_by_band[band])
+		_illustrated_grass.fill_band(mmi, mmi.position, cards_by_band[band])
 
 	_grass_sprites[chunk_coord] = bands
 
