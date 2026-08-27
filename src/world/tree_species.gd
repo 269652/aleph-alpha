@@ -151,3 +151,36 @@ static func yield_multiplier_for(species_id: String) -> float:
 ## the genome's raw maturity_time alone would suggest, above 1 slower.
 static func ripening_multiplier_for(species_id: String) -> float:
 	return float(profile_for(species_id)["ripening_multiplier"])
+
+
+## Whether this species actually needs an insect to set fruit (see
+## docs/concept/flora.md, FruitingModel.pollination_factor).
+##
+## The roster already splits exactly along the real botanical line: cherry
+## and apple are real insect(bee)-pollinated orchard fruit, while pine (cones),
+## acorn and hazelnut (catkins) and walnut (catkins) are real wind-pollinated
+## species that set their crop without any insect visiting at all. So this is
+## a lookup over the existing IDS, not a new trait to author -- an unlisted or
+## unknown id defaults to false (wind/self-pollinated), matching how a species
+## with nothing special to say about itself behaves everywhere else in this
+## file.
+const _INSECT_POLLINATED := {"cherry": true, "apple": true}
+
+static func needs_pollinators_for(species_id: String) -> bool:
+	return _INSECT_POLLINATED.has(species_id)
+
+
+## Whether `species_id` is a real hard-shelled tree NUT rather than fleshy
+## fruit (see docs/concept/flora.md's disperser-vs-predator tension and
+## SquirrelNutCaching, which gates a squirrel's crack-or-cache behaviour on
+## this exact split). The same real botanical line _INSECT_POLLINATED already
+## draws -- pine/acorn/hazelnut/walnut are wind-pollinated nuts a rodent
+## cracks for the kernel, cherry/apple are insect-pollinated fleshy fruit a
+## disperser swallows whole -- so this is its own explicit lookup table
+## (matching this file's existing convention of one small dict per trait)
+## rather than an index cutoff into IDS, which would silently drift the
+## moment a species is inserted or reordered.
+const _NUT_SPECIES := {"pine": true, "acorn": true, "hazelnut": true, "walnut": true}
+
+static func is_nut(species_id: String) -> bool:
+	return _NUT_SPECIES.has(species_id)

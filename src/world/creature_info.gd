@@ -43,6 +43,10 @@ const MAX_HEALTH_BY_SPECIES := {
 	"boar": 28.0,
 	"predator": 35.0,
 	"lynx": 26.0,
+	# Real wolves are pack-hunting cursorial canids -- mid-large but built for
+	# stamina over raw power, so sits between lynx (26.0) and the big cats
+	# jaguar/mountain_lion (34.0/32.0) on the health axis.
+	"wolf": 29.0,
 	"camel": 26.0,
 	"jackal": 27.0,
 	"reindeer": 24.0,
@@ -54,6 +58,11 @@ const MAX_HEALTH_BY_SPECIES := {
 	"mountain_lion": 32.0,
 	"horse": 32.0,
 	"mouse": 6.0,
+	# A real tree squirrel is small but notably bigger and more robust than a
+	# mouse -- sits between mouse (6.0, the roster's smallest/frailest) and
+	# the generic herbivore baseline (20.0), see docs/concept/
+	# ecosystem_dynamics.md's Species roster section.
+	"squirrel": 9.0,
 	"deer": 24.0,
 	"bear": 50.0,
 	"lion": 45.0,
@@ -65,6 +74,11 @@ const MAX_STAMINA_BY_SPECIES := {
 	"boar": 25.0,
 	"predator": 25.0,
 	"lynx": 30.0,
+	# Real wolves are famous for endurance-pursuit hunting -- chasing prey
+	# over long distances rather than winning on a single burst -- so wolf is
+	# deliberately the highest-stamina species in the entire roster, above
+	# even horse's 40.0 (previously the ceiling).
+	"wolf": 42.0,
 	"camel": 30.0,
 	"jackal": 25.0,
 	"reindeer": 30.0,
@@ -76,6 +90,10 @@ const MAX_STAMINA_BY_SPECIES := {
 	"mountain_lion": 25.0,
 	"horse": 40.0,
 	"mouse": 20.0,
+	# Real squirrels are famous for speed and acrobatics -- leaping tree to
+	# tree, outrunning ground predators -- so a real-world-grounded HIGH
+	# agility stat, notably above even mouse's own already-high 20.0.
+	"squirrel": 35.0,
 	"deer": 32.0,
 	"bear": 28.0,
 	"lion": 30.0,
@@ -87,6 +105,7 @@ const MAX_MANA_BY_SPECIES := {
 	"boar": 5.0,
 	"predator": 10.0,
 	"lynx": 10.0,
+	"wolf": 10.0,
 	"camel": 5.0,
 	"jackal": 10.0,
 	"reindeer": 5.0,
@@ -98,6 +117,7 @@ const MAX_MANA_BY_SPECIES := {
 	"mountain_lion": 10.0,
 	"horse": 5.0,
 	"mouse": 5.0,
+	"squirrel": 5.0,
 	"deer": 5.0,
 	"bear": 5.0,
 	"lion": 10.0,
@@ -109,6 +129,7 @@ const DIET_BY_SPECIES := {
 	"boar": "Omnivore",
 	"predator": "Hunter",
 	"lynx": "Hunter",
+	"wolf": "Hunter",
 	"camel": "Grazer",
 	"jackal": "Hunter",
 	"reindeer": "Grazer",
@@ -120,6 +141,7 @@ const DIET_BY_SPECIES := {
 	"mountain_lion": "Hunter",
 	"horse": "Grazer",
 	"mouse": "Forager",
+	"squirrel": "Forager",
 	"deer": "Grazer",
 	"bear": "Omnivore",
 	"lion": "Hunter",
@@ -137,6 +159,7 @@ const TEMPERAMENT_BY_SPECIES := {
 	"boar": "aggressive",
 	"predator": "aggressive",
 	"lynx": "aggressive",
+	"wolf": "aggressive",
 	"camel": "calm",
 	"jackal": "aggressive",
 	"reindeer": "calm",
@@ -148,6 +171,7 @@ const TEMPERAMENT_BY_SPECIES := {
 	"mountain_lion": "aggressive",
 	"horse": "calm",
 	"mouse": "calm",
+	"squirrel": "calm",
 	"deer": "calm",
 	"bear": "aggressive",
 	"lion": "aggressive",
@@ -162,6 +186,7 @@ const TEMPERAMENT_BY_SPECIES := {
 const PREDATOR_SPECIES := {
 	"predator": true,
 	"lynx": true,
+	"wolf": true,
 	"jackal": true,
 	"arctic_fox": true,
 	"jaguar": true,

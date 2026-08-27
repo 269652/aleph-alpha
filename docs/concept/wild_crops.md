@@ -78,7 +78,10 @@ instead of one.
   takes noticeably longer to mature than a grazed grass tuft takes to grow
   back, echoing the real gap between a root crop's growing season and a
   grass's own regrowth time; the exact ratio is pinned by test, not an
-  eyeballed comment.
+  eyeballed comment. The growth increment is also scaled by
+  `SeasonCycle.growth_modifier` (2026-08-26), same as `TallGrass` — the
+  pinned ratio to `TallGrass.GROWTH_RATE` above stays intact since both
+  scale by the identical seasonal factor.
 - Mature (`growth >= 1.0`) patches spread into an adjacent, currently-empty
   `grassland` cell on a throttled interval (`SPREAD_INTERVAL`,
   `SPREAD_PER_TICK`), identical mechanism to `TallGrass._step_spread` —
@@ -171,7 +174,11 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
   friends). Swappable for real art later with no sim/marker changes needed.
 - ✅ Growth + spread simulation (`WildCropPatch`), one instance per chunk
   per crop, wired into `EarthChunkManager.step_wild_crops` on the same
-  refresh cadence as `step_tall_grass`.
+  refresh cadence as `step_tall_grass`, and (bug fixed 2026-08-26) that step
+  is now actually called from `scenes/world.gd`'s live per-frame
+  `_step_ecology_batch` alongside `step_tall_grass`, not just from tests/dev
+  console — previously it never was, so a real session's wild crops seeded
+  and rendered but never grew or spread past their initial state.
 - ✅ Visible per-patch markers (`WildCropMarker`/`WildCropRenderer`),
   spawned/despawned per chunk load same as trees/stones.
 - ✅ Animated pull harvest (`CropPull`), bound to the swing input, dropping

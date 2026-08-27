@@ -1175,3 +1175,33 @@ func test_a_scaled_piece_has_no_part_transparent_edges():
 				alpha == 0.0 or alpha == 1.0,
 				"a scaled pixel came out half-transparent (%f)" % alpha
 			)
+
+
+## A trunk reads as one solid piece of wood, not two objects with a sliver of
+## background showing between them.
+##
+## Squeezing a wide root-flare drawing sideways into the trunk's own narrow
+## box (see illustrated_trunk_box) can land a real gap between two separate
+## root "toes" of the source art on the box's own centre column. For the
+## walnut sheet specifically that centre column IS a genuine gap in the art,
+## so every walnut tree sampled there came out fully transparent
+## (test_trunk_area_is_brownish_and_opaque, reported as a missing trunk).
+##
+## Any transparent run flanked by opaque pixels on BOTH sides in the same row
+## is enclosed by the trunk itself rather than open to the background, so it
+## is filled -- the same "petals are not windows" reasoning flora.md already
+## applies to line-art holes, just row-wise instead of a full flood fill: a
+## trunk's gaps run sideways between root legs, not as pockets needing 2D
+## reachability.
+func test_close_enclosed_gaps_fills_a_gap_flanked_by_the_trunk():
+	var source := Image.create(8, 1, false, Image.FORMAT_RGBA8)
+	source.fill(Color(0.0, 0.0, 0.0, 0.0))
+	source.set_pixel(1, 0, Color(0.4, 0.25, 0.1, 1.0))
+	source.set_pixel(2, 0, Color(0.4, 0.25, 0.1, 1.0))
+	source.set_pixel(5, 0, Color(0.5, 0.3, 0.15, 1.0))
+	var closed: Image = ProceduralTreeSprite.close_enclosed_gaps(source)
+	assert_gt(closed.get_pixel(3, 0).a, 0.0, "a gap between two root legs should be filled")
+	assert_gt(closed.get_pixel(4, 0).a, 0.0, "a gap between two root legs should be filled")
+	assert_eq(closed.get_pixel(0, 0).a, 0.0, "background before the trunk starts should stay clear")
+	assert_eq(closed.get_pixel(6, 0).a, 0.0, "background after the trunk ends should stay clear")
+	assert_eq(closed.get_pixel(7, 0).a, 0.0, "background after the trunk ends should stay clear")

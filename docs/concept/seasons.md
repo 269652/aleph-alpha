@@ -32,8 +32,10 @@ Elapsed game-time is divided into a year of four equal seasons. From it we deriv
   (`FruitingModel` warmth): trees ripen and drop fruit fast in summer, slowly or
   not at all in deep winter — a compressed real bearing season.
 - **Growth modifier** `[0,1]` — how vigorously vegetation grows this season
-  (high in spring/summer, low in autumn/winter), for the vegetation/tall-grass
-  layer to scale its growth rate later.
+  (high in spring/summer, low in autumn/winter, with a raised floor so
+  nothing fully stops growing — dormancy, not death). Scales the growth
+  increment of every per-chunk vegetation patch sim (tall grass, wild
+  crops, flower seedlings, desert scrub, tundra lichen — see Status below).
 
 The year length is a tuned constant (compressed so a play session spans multiple
 seasons), pinned by tests, not eyeballed.
@@ -80,8 +82,20 @@ time-travelling on every launch.
   `WorldClockPersistence`, tested; wired at `World._wipe_persisted_world`
   (New Game) and `_spawn_local_singleplayer_from_save` (Load Game). See "A
   new world starts at a random point in the year" above.
-- ⬜ Seasonal scaling of vegetation/tall-grass growth rate.
-- ⬜ Seasonal crop viability for farming (see [farming.md](farming.md)).
+- ✅ Seasonal scaling of vegetation growth rate (2026-08-26) —
+  `growth_modifier` had zero live callers until now. `EarthChunkManager`
+  computes it once per step from `_world_age_seconds` and threads it through
+  as an extra `advance(delta, growth_modifier)` argument to every per-chunk
+  patch sim's growth increment: `TallGrass`, `WildCropPatch` (keeping its own
+  pinned ratio to `TallGrass.GROWTH_RATE` intact — both scale by the same
+  modifier), `FlowerPatch` (only its seedling `_growth` step, not the
+  unrelated nectar/seed regen in the same `advance()` call), `DesertScrub`,
+  `TundraLichen`. Spread timing (`SPREAD_INTERVAL`) is untouched by design —
+  only the growth increment scales, so a slow winter still colonises new
+  cells on the same clock, it just fills in more slowly once there.
+- ⬜ Seasonal crop viability for farming (see [farming.md](farming.md)) —
+  distinct from the wild carrot/potato patches above: this is
+  `src/gameplay/farm_plot.gd`'s player-planted crops, still unwired to season.
 - ⬜ Disaster events (drought/flood/wildfire) perturbing the season baseline
   (see [weather.md](weather.md)).
 

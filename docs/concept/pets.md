@@ -25,6 +25,30 @@ Example role categories by species:
 - **Cows**: farmed for milk.
 - **Sheep**: farmed for wool.
 
+### Fitness → in-role performance: first pass
+
+The first real wiring between [evolution.md](evolution.md)'s
+`AnimalFitness` phenotype and a player-facing role. Two mappings exist
+today, both keyed off an individual's own `wander_seed` (so the same
+individual always scores the same way, across reloads):
+
+| Fitness component | In-role effect | Where |
+| --- | --- | --- |
+| `fitness_score` (weighted blend of strength/agility/coat_vibrancy) | Mounted speed: `Taming.mounted_speed_for` lerps between 0.8x and 1.2x the `MOUNTED_SPEED` baseline, so the population median (`fitness_score` 0.5) still rides at exactly the old flat speed, and only a genuinely fitter/less-fit individual pulls away from it. | `src/gameplay/taming.gd`, wired from `Player.current_speed` |
+| `coat_vibrancy` alone (not the combined score) | A warm coat-quality tint on the creature's own sprite (`CreatureMarker.coat_tint_for`), squared so an ordinary individual reads as visually unmodified and a truly vibrant one clearly stands out — the "judge a prize animal before you buy it" tell, visible on any wild individual, tameable or not, before the player spends a carrot on it. | `src/rendering/creature_marker.gd`, applied in `_ready()` |
+
+Both apply to every land creature with a `wander_seed` — the same
+population `AnimalFitness` already covers elsewhere (mate-attractiveness
+scoring, kept-animal restore-by-seed) — rather than a species/role-based
+carve-out, so there is one population these can miss (creatures with no
+`wander_seed`) rather than several role-based edge cases to keep in sync.
+
+Still unmapped: `strength` and `agility` individually don't yet drive
+anything beyond feeding into the combined `fitness_score` above — no
+guard-dog/combat role exists yet to map, say, bite damage or alertness onto
+(dogs aren't tameable at all today; only horses are). The full
+species → role-category table below is still open.
+
 ### Pet death: respawns, doesn't permakill
 
 Unlike the player's own [nine lives](death.md), a pet that "dies" respawns
@@ -50,9 +74,11 @@ between farming and wild plant genetics.
 
 ### Open questions
 
-- Full species → role-category mapping, and which fitness stats map to
-  which in-role performance metric (guard dog: bite damage + alertness;
-  horse: speed + stamina; etc.) — needs a first-pass table.
+- Full species → role-category mapping beyond horses (guard dog: bite
+  damage + alertness; etc.) — mounted speed and coat-quality tint above are
+  the first two real entries in what this table becomes, not the whole of
+  it. No combat/guard role exists yet for `strength`/`agility` alone to
+  drive.
 - Bonding/loyalty mechanic — does a tamed animal's effectiveness also
   depend on an ongoing relationship (time spent, care given), similar to
   [players.md](players.md)'s child needs system, or is taming a one-time

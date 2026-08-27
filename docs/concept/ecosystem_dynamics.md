@@ -58,8 +58,16 @@ interval before planting a sapling elsewhere — see
 [flora.md](flora.md#bird-endozoochory-swallowing-the-seed-not-just-carrying-it)
 for the full mechanism. Ground herbivores/omnivores still only ever get the
 food-energy half (no seed dispersal from them yet), and no seed PREDATOR
-exists to create the disperser-vs-predator tension [flora.md](flora.md)'s
-DNA loop describes — both remain open extensions.
+exists yet for this fruit/nut case to create the disperser-vs-predator
+tension [flora.md](flora.md)'s DNA loop describes — both remain open
+extensions here.
+
+A seed predator DOES now exist for the other half of bird granivory: a
+sparrow eating bare ground seed (flower/grass, not fruit) destroys the large
+majority of what it eats rather than always dispersing it (see
+[flora.md](flora.md#bird-endozoochory-flowers-spread-where-birds-go) and
+`SeedEndozoochory.GRANIVORY_CONSUMED_CHANCE`) — real predation, closing that
+gap for ground seed specifically while leaving it open for fruit/nut seed.
 
 ## Animal bioenergetics and reproduction
 
@@ -72,9 +80,246 @@ animals don't breed. Each creature carries an **energy/condition** value that:
   **healthy** (high health fraction) and **well-fed** (energy above a threshold),
   and then only after a **refractory cooldown** (real inter-birth interval).
 
-When those conditions are met near the player, the individual creature spawns an
-offspring beside it (individual-scale birth), paying an energy cost. Away from
-the player the same effect is captured by the aggregate logistic growth term.
+That gate (`AnimalReproduction.can_reproduce`) is a **precondition**, not the
+whole story: an eligible creature does not spawn young by itself. It has to
+find a mate — see "Land-mammal courtship" below, the walking counterpart to
+the pollinator dance a few sections down. Only once a real, two-partner
+courtship completes does an offspring actually appear (individual-scale
+birth), paying an energy cost on both sides. Away from the player the same
+effect is captured by the aggregate logistic growth term.
+
+### Land-mammal courtship: a walk, not a solo spawn
+
+The first version of this let a single eligible creature spawn a copy of
+itself, gated only by crowding and carrying capacity — there was no mate, no
+pairing, no courtship of any kind, for anything walking on legs. Pollinators
+got a real courtship dance (see "Courtship, and where births come from"
+below) from early on; land mammals didn't, because a tight synchronized orbit
+built for a flying insect looks wrong for a walking quadruped — the same
+problem that keeps that dance off birds (`Courtship.dances()`).
+
+`MammalCourtship` (`src/gameplay/mammal_courtship.gd`) is the grounded
+equivalent: two matched individuals **walk toward each other, then stand
+together for a real duration**, before the pairing resolves. It deliberately
+reuses `Courtship`'s pairing *primitives* — `can_pair`, `pair_seed`, `mates`,
+`leads` are already id-based and species-agnostic, so "which two
+individuals, who leads, did it take" resolves the same way regardless of
+body plan — while replacing only the pollinator-specific parts (the orbiting
+`dance_offset` motion, and the `DANCING_SPECIES` gate) with a land-appropriate
+shape:
+
+- **Pairing still requires AnimalReproduction's own gate, PLUS a nearby
+  partner.** `World._pair_up_courtships` only pairs two creatures that are
+  each individually eligible (energy/health/cooldown) AND stand within
+  `NEIGHBOUR_RADIUS_PX` of each other — the same "right here" locality the
+  crowding check below already uses. No eligible same-species neighbour in
+  range means no courtship and no offspring; there is no solo fallback.
+- **Among the neighbours actually in range, the creature prefers the more
+  attractive one, not just the closest one.** `MammalCourtship.
+  most_attractive_partner_index` still applies `NEIGHBOUR_RADIUS_PX` FIRST —
+  a highly attractive mate three chunks away is not reachable, so distance
+  gates the candidate pool exactly like the plain-nearest selection it
+  replaces — and only THEN ranks whoever survives that filter by
+  `AnimalFitness.mate_attractiveness` scored against the creature's own
+  phenotype. Both phenotypes come from `AnimalFitness.phenotype_for`, keyed
+  off each individual's own `wander_seed` (already on `CreatureMarker`, so
+  nothing new has to be stored per-creature) — this is `AnimalFitness`'s
+  first real caller anywhere in the game. This is a bounded nudge to
+  candidate selection, not a redesign of it: the tuned "who's even in range"
+  baseline (`NEIGHBOUR_RADIUS_PX`) is untouched, only the tie-break rule
+  among whoever already qualifies changes.
+- **The pair is a real behaviour STATE, not a background timer.**
+  `CreatureBehavior`'s decision tree gets a `court` intent, ranked just above
+  ordinary wandering and below every survival need (flee/attack, thirst,
+  hunt, hunger) — a starving or thirsty animal does not stop to court, but an
+  otherwise-idle paired one does. While courting, a creature visibly walks
+  toward its partner (`MammalCourtship.should_approach`) and then simply
+  stands near it once close enough (`LINGER_RADIUS_PX`) — the two read as an
+  interacting pair, the same design goal the pollinator dance has, just
+  expressed as a walk-and-linger instead of an orbit.
+- **The duration has to actually elapse, together.** `World._advance_
+  courtships` ticks both partners' shared timer once per
+  `REPRODUCTION_INTERVAL`; only once `MammalCourtship.courtship_complete`
+  is true for a pair does `_resolve_courtship` run — mirroring
+  `Courtship.leads` so exactly one side of the pair resolves it, never both.
+- **Viability is re-checked at the end, not just the start.** Crowding and
+  carrying capacity can change during the linger window — a clearing that
+  filled up *while* a pair was courting must not still produce young just
+  because they started before it was full (`World.courtship_still_viable`,
+  the same "dozens of deer" bug the crowding check below was already built
+  to prevent, re-applied at resolution time). The pair must also still be
+  near each other; either partner may have wandered off, died, or been eaten
+  during the wait.
+- **A meeting is still not a pregnancy.** The mating roll itself is
+  `Courtship.mates` — the same 25%-of-meetings chance pollinators use,
+  reused directly rather than inventing a second number for mammals.
+
+### Mammal offspring grow up, live-born
+
+A mammal offspring used to appear at full adult size the instant courtship
+resolved. `MammalGrowth` (`src/gameplay/mammal_growth.gd`) is the mammal
+counterpart to `LifeCycle`'s pollinator growth stage — deliberately NOT
+`LifeCycle` reused wholesale, the same call `MammalCourtship` itself already
+made for not reusing a pollinator-shaped module when the underlying biology
+genuinely differs. A mammal is born **live**: there is no egg stage and no
+separate hatch event, so the shape is simpler than `LifeCycle`'s — just a
+starting size and a growth curve to full size:
+
+- **A newborn starts at `NEWBORN_SCALE` (0.4× adult), never zero.** Grounded
+  on a precocial ungulate newborn — a fawn or foal, the majority of this
+  game's breeding-eligible land mammals, stands and moves within hours of
+  birth already a real, substantial fraction of adult size. This knowingly
+  overstates an altricial newborn (e.g. a lynx kitten, born blind and
+  comparatively tiny) — a deliberate simplification, not a second
+  predator-only constant.
+- **Full size takes `mature_seconds_for(species)` — a per-species SIZE TIER,
+  not one flat duration.** A mouse matures in real weeks; a bear takes real
+  years — reproducing that gap literally would put a bear's whole "watch it
+  grow up" arc outside any plausible player return visit, but flattening it
+  to one number (this module's own earlier design) erased a real, visible
+  difference the game already has the data for. Duration is now a function
+  of `CreatureInfo.MAX_HEALTH_BY_SPECIES` — the SAME size/toughness signal
+  every other per-species stat in this codebase already keys off — split
+  into three tiers rather than one duration per exact species, so the
+  boundaries stay a small, testable set of numbers instead of 21 individually
+  eyeballed ones:
+  - **Small** (`max_health < 15.0`: mouse, squirrel, both snakes) — grounded
+    on a real mouse reaching sexual maturity in about 6–8 weeks. 30 real
+    days (~4.3 weeks) — exactly the OLD flat constant's value, which in
+    hindsight was really only calibrated for the roster's smallest/fastest
+    species.
+  - **Medium** (`15.0 ≤ max_health < 40.0`: deer, horse, boar, wolf, lynx,
+    and most of the roster) — grounded on real mid-size herbivores/mid
+    predators: wild boar ~8–10 months, deer ~1.5 years, horses and wolves
+    ~2 years. 90 real days, 3× the small tier, a proportionally-compressed
+    stand-in for that whole "many months to ~2 years" real band. Lynx lands
+    here rather than with the apex predators below — a real lynx is built
+    more like a large dog than a lion, and matures faster (~1–3 years,
+    commonly ~21 months) than a real apex predator does, so keying off
+    size/toughness rather than predator-vs-herbivore role gets this one
+    right.
+  - **Large** (`max_health ≥ 40.0`: lion, bear) — grounded on real apex
+    predators commonly needing 3+ years (up to 4–8 for some brown bear
+    populations) to reach full sexual maturity, the slowest real category on
+    the roster. 180 real days, 2× the medium tier, 6× the small tier —
+    preserving the real small < medium < large ordering while staying inside
+    a timeframe a returning player can still see progress in, the same
+    "compressed but liveable" trade the flat constant always made, now
+    honoring the real relative gap between tiers instead of collapsing it.
+- **Wired at three points**, `size_scale_at`/`is_mature` now taking the
+  individual's `species` alongside its age. `CreatureMarker.begin_life()` —
+  called from `World._resolve_courtship` on the newly spawned offspring,
+  mirroring `AmbientFlyerMarker.begin_life` exactly — tags the offspring
+  with `age_seconds = 0.0` and immediately shrinks its rendered scale.
+  `CreatureMarker._apply_action_scale` multiplies the species' own normal
+  scale for the current action by `MammalGrowth.size_scale_at(age_seconds,
+  species)` every frame while immature, converging back to the ordinary
+  scale once grown — the same "species scale × growth fraction" shape
+  `AmbientFlyerMarker._step_growing` already uses for pollinators.
+  `CreatureMarker.can_reproduce()` additionally requires `MammalGrowth.
+  is_mature(age_seconds, species)`, alongside (not instead of) the existing
+  energy/health/cooldown gate, so a newborn cannot pair off the moment it is
+  born.
+
+**A growing juvenile now has two real behavioural differences from an adult
+of its species**, on top of the can't-court gate above:
+
+- **Stays near home.** `CreatureWander.direction_at`/`step_position` take an
+  optional `radius` parameter (default `WANDER_RADIUS`, so every adult caller
+  is unaffected). `CreatureMarker._wander_radius()` scales it down by
+  `MammalGrowth.size_scale_at(age_seconds, species)` — the same already-
+  computed 0.4→1.0 growth fraction used for the rendered scale, reused here
+  rather than inventing a second tunable — so a newborn wanders within
+  roughly `NEWBORN_SCALE × WANDER_RADIUS` of its `home` (its actual birth
+  site, for a courtship-born individual — `home` needed no new tracking) and
+  the range widens smoothly as it grows, reaching the ordinary adult
+  `WANDER_RADIUS` exactly at maturity.
+- **More skittish, never fights.** `CreatureBehavior.decide`'s context now
+  carries an `is_mature` key (`CreatureMarker` supplies it every frame from
+  `MammalGrowth.is_mature`, the same way `is_courting`/`partner_position`
+  were added). `_will_fight` returns `false` outright whenever `is_mature` is
+  false, regardless of temperament or health — a real juvenile of even an
+  aggressive-tempered species (boar, bear, lion) flees a threat rather than
+  standing its ground; missing the key at all (every context built before
+  this change) still defaults to mature, so behaviour is unchanged wherever
+  it isn't explicitly set.
+
+Left out of this pass on purpose: no reduced perception/sense range (a
+juvenile senses threats/food/water exactly as far as an adult), no
+parent-following behaviour — just the tighter home-anchored wander range and
+the never-fights gate above.
+
+**A juvenile's `age_seconds` now DOES persist across a chunk unload
+(2026-08-26)** — `src/world/growing_juveniles.gd` (`GrowingJuveniles`),
+wired into `EarthChunkManager._save_growing_juveniles`/
+`_restore_growing_juveniles` right alongside `KeptAnimals`' own
+`_save_kept_animals`/`_restore_kept_animals`. This used to be left out under
+this doc's own two-fidelities boundary (see the note just below) on the
+theory that no individual-fidelity creature state persists across an
+unload — but with mammal maturity now a real 30–180-real-day window (see
+`mature_seconds_for` above), almost certainly longer than most chunks stay
+loaded, that boundary meant a juvenile would essentially never be seen
+actually reaching adulthood in one sitting. See the fidelity-boundary note
+below for exactly what is now the one deliberate exception to that rule,
+and what still isn't persisted (an in-progress courtship PAIRING specifically,
+a smaller and separate piece of this same gap).
+
+**Pollinator eggs are now a distinct rendered entity.** This used to be a
+named gap: from the moment a courting pair's offspring spawned until
+`LifeCycle.HATCH_SECONDS`, the rendered sprite was simply the ADULT insect's
+own procedural silhouette scaled down to `HATCHLING_SCALE` — a tiny adult,
+not anything egg-shaped, for the entire COURTING/MATED/EGG span (the
+JUVENILE-onward "growing tiny adult" look, from `HATCH_SECONDS` to
+`MATURE_SECONDS`, was already correct and is unchanged). `ProceduralEggSprite`
+(`src/rendering/procedural_egg_sprite.gd`) draws a small, pale, plain oval —
+not an insect silhouette at all — using the same house shading technique as
+every other procedural sprite here (`PixelForm`'s lit-spheroid shading
+through `PixelRamp`, `PixelPalette`'s shared outline). `AmbientFlyerMarker.
+_animate_wings` shows it (via a renderer-assigned `egg_frame`, built for
+every marker in `AmbientFlyerRenderer._build_marker`) for as long as
+`LifeCycle.stage_at(age_seconds) < LifeCycle.STAGE_JUVENILE`, then falls
+straight back to the existing scaled-adult sprite with no other change.
+**One shared egg shape/color for every pollinator species**, deliberately,
+not a species-specific egg: a real butterfly/bee egg is not identifiable by
+species to the naked eye either, and the point of this sprite is legibility
+("this is an egg, not a bug yet") rather than species identification — that
+job is already done once the animal hatches into its recognizable tiny-adult
+juvenile. Left unchanged on purpose: the offspring's *behaviour* during this
+span (it still flies/forages/wanders exactly as it did before this pass) —
+only what it looks like changed, since the wall-clock stage timing this
+section describes was never meant to gate movement, only rendering and the
+can't-court-yet rule above.
+
+**Revisited (2026-08-26), now that mammal maturity is a real 30–180-real-day
+window**: a juvenile's `age_seconds` is exactly the kind of individual-
+fidelity creature state this doc used to say never survives an unload — but
+it is now the ONE deliberate exception, via `GrowingJuveniles`
+(`src/world/growing_juveniles.gd`). That module's own doc comment explains
+at length why this does not reopen the "two fidelities" pillar above: it
+only ever covers markers that are ALREADY individually rendered at the
+moment of unload — a set already bounded globally (`World.
+MAX_LIVE_CREATURES`) and per-species-per-chunk (`CreatureRenderer.
+MAX_MARKERS_PER_SPECIES`) — narrowed further still to whichever of those are
+not yet mature (`GrowingJuveniles.is_worth_persisting`). That is a strict
+SUBSET of an already-bounded population, not the unbounded per-animal save
+this pillar rules out for an ordinary wild herd; a mature individual drops
+back out of the file on its very next save and is exactly as interchangeable
+as any other wild adult again.
+
+Everything else stands exactly as before: hunger, thirst, energy, an
+in-progress hunt, and a courting pair's in-progress linger timer (the
+PAIRING specifically — which two individuals, how long they have already
+stood together) still do not persist across an unload; only aggregate
+populations do, by the same "two fidelities" design. A courting pair's link
+is a LIVE node-instance reference (`CreatureMarker._courting_partner_id`,
+read back via `instance_from_id`), which cannot itself be written to disk —
+reconstructing it after both individuals independently respawn would need a
+new stable cross-reload identity nothing in this codebase has yet, so
+pairing quietly ends on unload exactly as it always did. This is a real,
+named simplification, not a silently-dropped one: once both individuals
+reload — now at their real preserved age, via `GrowingJuveniles` — each is
+free to re-pair with a new eligible partner once mature again, same as
+before, just no longer forced to restart its own growth clock too.
 
 ### Births are slow, and crowding stops them
 
@@ -199,6 +444,98 @@ reindeer/tapir/goat did, with no new mechanism required:
   ecological side-behaviour (which plant species end up where) is
   mouse-specific.
 
+### Wolf: a genuine second grassland/forest predator, not a reskin
+
+Wolf is a real 21st roster species, not a recolor of `predator` — it gets
+its own `AnimalAnatomy` body plan, its own illustrated sprite sheet, and its
+own `CreatureInfo` stats, and joins the pool alongside `predator`/`lynx`
+rather than replacing either.
+
+- **Real-world grounding**: grey wolves (*Canis lupus*) are the classic
+  temperate grassland/forest apex predator — genuinely widespread across
+  exactly the two biomes `wolf` now spawns in (`grassland`, `forest`), an
+  ordinary ungated roster addition like deer/nonvenomous_snake rather than a
+  difficulty-gated hazard like bear/lion/venomous_snake.
+- **Body plan**: `AnimalAnatomy`'s `"wolf"` profile is a distinct, more
+  cursorial build than `"predator"`'s generic canid shape — longer body
+  (0.54 vs 0.52), longer legs (0.28 vs 0.26) for a real wolf's long-legged
+  trotting gait, a longer bushy tail (0.20 vs 0.18), and a more pronounced
+  muzzle (0.8 vs 0.6).
+- **Art**: `IllustratedAnimalSprite` registers `wolf.png` (an 8-column walk
+  row + 8-column eat/graze row on a solid magenta ground, the same layout
+  family as sheep's sheet, but its own file at its own resolution — bands
+  hand-measured on wolf.png itself, not copied from sheep's numbers).
+- **Stats**: real wolves are pack-hunting, cursorial (long-distance
+  endurance) canid hunters — mid-large but built for stamina over raw power,
+  so wolf sits between lynx and the big cats (jaguar/mountain_lion) on the
+  health axis, but is deliberately the **highest-stamina species in the
+  entire roster** (above even horse's endurance-grazer stamina), reflecting
+  real wolves' famous endurance-pursuit hunting style. Hunter diet,
+  aggressive temperament, a real predator (`PREDATOR_SPECIES`).
+
+### Squirrel: a genuine 22nd species, and the fruit/nut seed-predator flora.md was missing
+
+Squirrel is a real roster species, not a reskin of mouse or anything else —
+its own `AnimalAnatomy` body plan, its own `ProceduralAnimalSprite` colour,
+its own `CreatureInfo` stats, and its own small ecological mechanism
+(`SquirrelNutCaching`). It closes [flora.md](flora.md)'s last open
+disperser-vs-predator gap: a real seed predator for fallen tree NUTS,
+mirroring the ground-seed predator (sparrow) pass this same session already
+built for grass/flower seed.
+
+- **Real-world grounding**: a real tree squirrel is a forest/woodland
+  specialist (unlike mouse's near-ubiquitous generalism) whose food is fallen
+  hard-shelled nuts, not fleshy fruit — and it is famous for two things: real
+  scatter-hoarding (gathering more than it eats on the spot, burying the
+  surplus, and only recovering a fraction of what it buried — which is
+  exactly how a lot of real wild nut trees actually get planted) and
+  speed/acrobatics (leaping tree to tree, outrunning ground predators).
+- **Roster**: herbivore-role (`is_predator = false`, calm temperament, flees
+  rather than fights — same category as mouse), `Forager` diet (matching
+  mouse's own label), joins the forest biome's herbivore pool ONLY (not
+  every biome the way mouse does) — see `CreatureRenderer.
+  HERBIVORE_SPECIES_POOL_BY_BIOME`.
+- **Stats**: health sits between mouse (6.0, the roster's smallest/frailest)
+  and the generic herbivore baseline (20.0) — small, but notably bigger and
+  more robust than a mouse. Stamina is deliberately HIGH (35.0, above even
+  mouse's own already-high 20.0), a real-world-grounded agility stat for a
+  species famous for speed and acrobatics.
+- **Body plan**: `AnimalAnatomy`'s `"squirrel"` profile is small and
+  short-legged like mouse's, but bigger (`world_scale` 0.45 vs mouse's
+  0.35), and defined above all by a large `TAIL_BUSHY` tail that is
+  proportionally LONGER relative to its own body than any other profile in
+  the roster, including mouse's own already-long (but thin, cord-like)
+  tail — a squirrel's tail is one of its most distinctive real-world
+  features. Reuses mouse's own `"mouse_shape"` silhouette family in
+  `ProceduralAnimalSprite` rather than a 6th hand-authored bitmap (its own
+  base coat colour keeps it visually distinct) — unlike mouse, which needed
+  a new family because nothing else read as a small round-bodied rodent at
+  any scale, a squirrel genuinely IS that same body plan, just bigger; what
+  reads as distinctly "squirrel" is the tail override, painted procedurally
+  on top of the shared bitmap, not a different silhouette.
+- **Mechanism — nut scatter-hoarding, the fruit/nut seed-predator gap
+  flora.md was still missing**: a squirrel that passes near a fallen tree
+  NUT (`TreeSpecies.is_nut` — pine/acorn/hazelnut/walnut, not cherry/apple)
+  picks it up and carries it a short ground distance while going about its
+  business, exactly the same find→carry→resolve shape `SeedCaching` already
+  established for a mouse's grass seed (`EarthChunkManager.
+  _step_squirrel_nut_caching`, gated to `species == "squirrel"` specifically,
+  wired to the SAME `fruit_near`/`take_fruit_at` world API any other land
+  forager already eats fallen fruit through). Once it has carried the nut
+  far enough, the outcome resolves: mostly it just eats the nut outright
+  (`SquirrelNutCaching.NUT_CONSUMED_CHANCE` — 0.7, real-world-grounded on
+  scatter-hoarding studies where caching is the minority outcome for a
+  handled nut, and deliberately its own constant rather than a reuse of the
+  sparrow's `GRANIVORY_CONSUMED_CHANCE` — 0.8 — since deliberate hoarding
+  effort is a stronger dispersal force than a bird's incidental gut-passage
+  survival of a tiny bare seed), but sometimes caches it into a brand-new
+  sapling via the SAME tree-seed sink robin's own fruit dispersal already
+  uses (`try_plant_seed_at`, gated to forest/rainforest). Fleshy fruit
+  (cherry/apple) is deliberately untouched by this mechanism — a squirrel
+  finding one just eats it like any other fruit-eating forager via the
+  ordinary, ungated `GrazerForaging` `FOOD_FRUIT` path, nutritionally a
+  disperser-or-nothing exactly as before this pass.
+
 ### A new aerial tier: ambient flyers and one predator
 
 Birds and butterflies don't fit the ground-quadruped mold at all —
@@ -214,9 +551,10 @@ This is an honest scope choice, not an oversight — see Open questions below
 for what a real bird/insect population model would need and why it's
 deferred.
 
-- **Butterflies** are pure ambient wildlife: real pollinators, but
-  pollination → flower/fruit-set feedback is a genuine future mechanism
-  (see Open questions), not modeled here. Movement is a fluttering,
+- **Butterflies** are pure ambient wildlife: real pollinators, but their
+  visits do not feed back into flower seed-set or tree fruit-set (see
+  [flora.md](flora.md)'s pollination feedback, which bees alone now do —
+  real fruit trees' primary pollinator). Movement is a fluttering,
   low-speed, frequently-changing-heading drift (visually distinct from a
   bird's straighter glide), confined to no particular target — just "make
   a meadow feel alive." Biome-gated to grassland/forest/rainforest (real
@@ -225,37 +563,55 @@ deferred.
 - **Songbirds** are the same ambient tier, biome-gated to forest/grassland/
   rainforest, with their own glide-and-perch movement pattern (straighter
   runs between heading changes than a butterfly's flutter). Real songbirds
-  are largely insectivore/granivore. The **insectivore half now has a real
+  are largely insectivore/granivore. The **insectivore half has a real
   feeding model** — see [soil_fauna.md](soil_fauna.md): a per-chunk earthworm
   population that surfaces with soil moisture and warmth, a per-species diet
   table, and a robin that descends onto a worm, sits down, pecks it, and
-  actually removes it from the chunk. Songbird *numbers* are still decorative
-  and capped — this is feeding behaviour, not population dynamics, and a
-  worm-rich chunk does not yet hatch more robins the way a flower-rich chunk
-  hatches more pollinators. The robin's diet now also includes a
+  actually removes it from the chunk. The robin's diet also includes a
   **frugivore half** — fallen tree fruit
   ([flora.md](flora.md#bird-endozoochory-swallowing-the-seed-not-just-carrying-it)),
   eaten through the same land/sit/peck cycle as a worm, with a real
   consequence beyond feeding: a swallowed seed gets carried and planted
-  elsewhere, the one genuinely new disperser mechanism this pass adds. The
-  **granivore half is still open**: sparrows are specified as seed eaters
-  but no seed model exists yet, so a sparrow still only drifts.
-- **Fish-eating birds** (heron/osprey-type piscivores) are the one
-  genuinely new *mechanism*, not just roster variety: a real behavioral
-  role that reaches into the aquatic population model
+  elsewhere, a genuinely new disperser mechanism. Sparrows have their own
+  **granivore half**, the same shape as the robin's worm hunt but against
+  ground seed cells instead of burrows.
+  **Update — robin/sparrow now have a real aggregate population, not just
+  feeding behaviour:** `RobinPopulationModel`/`SparrowPopulationModel`
+  (thin `PopulationModel` wrappers, the same generic logistic-growth-plus-
+  migration shape `HerbivorePopulationModel`/`PredatorPopulationModel`/
+  `AquaticPopulationModel` already share) give `EcosystemSimulation` a real
+  per-chunk `robin_population`/`sparrow_population`, with carrying capacity
+  derived from each bird's own real food-density signal — robin from
+  `EarthwormPatch.worm_cells().size()`, sparrow from the combined
+  `FlowerPatch`/`TallGrass` `ground_seed_cells().size()` — reported in via
+  `EcosystemSimulation.update_worm_density`/`update_seed_density` since that
+  density lives in `EarthChunkManager`'s own patch instances, not in the
+  static `Chunk` data the aggregate model otherwise derives everything from.
+  `AmbientFlyerRenderer.spawn_ambient_flyers` now promotes robin/sparrow from
+  that real population (one marker per rounded unit, capped for perf —
+  `MAX_ROBINS_PER_CHUNK`/`MAX_SPARROWS_PER_CHUNK` — mirroring
+  `CreatureRenderer.marker_count_for`'s exact shape) instead of a flat
+  `MIN..MAX` roll: a worm-rich chunk now genuinely hatches more robins, the
+  way a flower-rich chunk hatches more pollinators. **Deliberately still
+  missing**: an explicit death-on-eat term. Eating one specific worm/seed
+  does not instantly remove one specific bird — population responds to food
+  *density* through carrying capacity only, the same fidelity gap
+  herbivore/predator/fish lived with until their own `record_death`/
+  `record_catch` were added. See Open questions below.
+- **Fish-eating birds** (heron/osprey-type piscivores) reach into the
+  aquatic population model
   ([fishing.md](fishing.md#aquatic-population-model)) the same way a
   player's rod does. Spawn is gated to chunks with water (not a land biome
-  pool) and capped like every other decorative tier. Behavior is a small,
-  pure, testable state machine — **cruise** (ordinary ambient flight over
-  open water) → **target** (a nearby chunk's fish population is above
-  zero, so the bird commits to a dive point) → **dive** (a fast, visibly
-  different descent toward the water) → **grab-or-miss** (a probability
-  roll, not a guaranteed catch — real herons/ospreys miss most strikes) →
-  on a **grab**, the exact same `EcosystemSimulation.record_catch` the
-  player's fishing hook now calls (see
-  [fishing.md](fishing.md#aquatic-population-model)) fires for this bird's
-  catch too, so a heavily-birded cove is measurably fished down over time
-  just like a heavily-angled one → **ascend** back to cruise altitude →
+  pool). Behavior is a small, pure, testable state machine — **cruise**
+  (ordinary ambient flight over open water) → **target** (a nearby chunk's
+  fish population is above zero, so the bird commits to a dive point) →
+  **dive** (a fast, visibly different descent toward the water) →
+  **grab-or-miss** (a probability roll, not a guaranteed catch — real
+  herons/ospreys miss most strikes) → on a **grab**, the exact same
+  `EcosystemSimulation.record_catch` the player's fishing hook now calls
+  (see [fishing.md](fishing.md#aquatic-population-model)) fires for this
+  bird's catch too, so a heavily-birded cove is measurably fished down over
+  time just like a heavily-angled one → **ascend** back to cruise altitude →
   **cooldown** (real birds don't dive continuously; a real digestion/
   re-hunt interval) before it can target again. This closes the loop the
   aquatic model spec already asked for: fishing pressure was previously
@@ -263,6 +619,17 @@ deferred.
   coastline is now a second, always-on mortality source on the same
   aggregate number — exactly the kind of multi-source pressure a real
   fishery actually has.
+  **Update — the kingfisher's own presence is now aggregate too:**
+  `KingfisherPopulationModel` (same `PopulationModel`-wrapper shape as
+  above, structurally identical to `PredatorPopulationModel`) gives
+  `EcosystemSimulation` a real per-chunk `kingfisher_population`, with
+  carrying capacity derived from the EXISTING `fish_population` — no new
+  food-density signal needed on this side, since a kingfisher's prey already
+  has an aggregate number. `PiscivoreBirdRenderer.spawn_piscivore_birds` now
+  promotes from that population (still capped at `MAX_PER_CHUNK` — a special
+  sight, not filling the sky) instead of the flat `SPAWN_CHANCE` die roll it
+  used to run regardless of whether the water it hunts actually held any
+  fish.
 
 ### Open questions
 
@@ -272,21 +639,100 @@ deferred.
   feeding need); tracked here rather than invented wholesale in this pass.
   Partly overtaken since: flowers now carry real nectar state that
   pollinators deplete (see [flora.md](flora.md)), and birds now have a real
-  per-species diet (see [soil_fauna.md](soil_fauna.md)). What is still
-  missing is the FEEDBACK — pollinator visits do not yet affect fruit set,
-  and eaten worms do not yet affect bird numbers.
-- Should ambient flyers eventually graduate to their own lightweight
-  aggregate population (so, e.g., a region genuinely overhunted of insects
-  has visibly fewer songbirds), the way fish now will? Deferred — there's
-  no predation pressure on butterflies/songbirds yet to make that number
-  mean anything, unlike fish (angler + bird harvest) or land herbivores
-  (predator hunting).
-- Fish-eating-bird population itself is decorative/capped, not aggregate —
-  a real "more fish support more birds" feedback (bird carrying capacity
-  derived from local fish population, mirroring how predator capacity
-  derives from herbivore population) is a natural, grounded follow-up once
-  the aquatic model above is live and provably working with a fixed bird
-  count.
+  per-species diet (see [soil_fauna.md](soil_fauna.md)).
+  **Resolved for birds**: eaten worms/seeds now DO affect bird numbers, via
+  carrying capacity (see below).
+  **Resolved for tree fruit set**: a bee visiting a blossoming apple/cherry
+  tree now measurably nudges that tree's yield (`FruitingModel.
+  pollination_factor`, `EarthChunkManager.blossoms_near`/
+  `record_pollination_visit_at` — see [flora.md](flora.md)'s pollination
+  feedback). Still open: the reverse direction, a region light on flowers
+  hatching fewer butterflies/bees (pollinator numbers are still purely
+  decorative, not fed by what they visit).
+- ~~Should ambient flyers eventually graduate to their own lightweight
+  aggregate population...~~ **Resolved for songbirds, still open for
+  pollinators.** Robin and sparrow now have a real per-chunk aggregate
+  population (`RobinPopulationModel`/`SparrowPopulationModel`), carrying
+  capacity derived from worm burrow count and combined ground-seed-cell
+  count respectively — see the Species roster section above for the full
+  wiring. Butterflies/bees remain purely decorative: there is still no
+  predation pressure on pollinators to make an aggregate number mean
+  anything, unlike birds (which now have a real food-density ceiling) or
+  fish (angler + bird harvest).
+  **Explicit non-goal kept for this pass**: no death-on-eat term. A robin
+  eating one specific worm, a sparrow eating one specific seed, or a
+  kingfisher catching one specific fish does not directly remove one
+  specific bird from any of these three aggregates — only the region's
+  overall food DENSITY, sampled fresh each simulated day, moves the
+  carrying capacity these populations grow or decline toward. This is the
+  same fidelity gap herbivore/predator/fish briefly had before
+  `record_death`/`record_catch`/`record_birth` closed it for them; doing
+  the same for birds (an eaten worm/seed/fish instantly culling a
+  particular bird near the player, the way a wolf kill already does for
+  herbivores) is a real, separate follow-up, not done here.
+- ~~Fish-eating-bird population itself is decorative/capped, not
+  aggregate...~~ **Resolved.** `KingfisherPopulationModel` gives
+  `EcosystemSimulation` a real per-chunk `kingfisher_population`, carrying
+  capacity derived directly from the EXISTING `fish_population` (mirroring
+  how predator capacity already derives from herbivore population) —
+  `PiscivoreBirdRenderer` now promotes a kingfisher from that number instead
+  of an unconditional `SPAWN_CHANCE` roll. The death-on-eat non-goal above
+  applies here too: a kingfisher's own successful catch already calls
+  `EcosystemSimulation.record_catch` against the FISH population (unchanged,
+  pre-existing behaviour), but does not itself remove a kingfisher from the
+  kingfisher population, nor does a fished-out chunk instantly banish the
+  kingfisher standing in it — only the next carrying-capacity recompute does.
+- ~~**Persistence/catch-up gap, robin/sparrow/kingfisher**: unlike
+  herbivore/predator/fish, these three aggregate populations are NOT wired
+  into `EarthChunkManager`'s unloaded-chunk catch-up or disk persistence.~~
+  **Resolved.** `ChunkEcologyCatchup.advance` now takes three more state keys
+  (`robins`, `sparrows`, `kingfishers`) and two more capacity inputs
+  (`robin_capacity`, `sparrow_capacity`) — robin/sparrow step against their
+  own independently-supplied capacity, the same shape fish already used
+  (their food-density signal lives outside this pure function); kingfisher
+  instead mirrors predator, its capacity derived INSIDE `advance()` from the
+  freshly-advanced fish population, the same "post-step prey level" ordering
+  predator capacity already used for herbivores. `ChunkSerializer.save_ecology`/
+  `load_ecology` append `robins`/`sparrows`/`kingfishers` as three more floats
+  AFTER `land_health` (old saves default all three to 0.0 via the same
+  file-position check `land_health` itself uses). `EcosystemSimulation`
+  gained `seed_robin_population`/`seed_sparrow_population`/
+  `seed_kingfisher_population`, mirroring `seed_populations`/
+  `seed_fish_population`'s exact "install a caught-up value" role.
+  `EarthChunkManager._unload_chunk` snapshots all three into
+  `_unloaded_ecology`'s in-session record and into the on-disk ecology file
+  alongside herbivores/predators/vegetation/land_health;
+  `_apply_ecology_catchup` (in-session revisit) and `_apply_persisted_ecology`
+  (cross-session revisit) both advance and re-install them the same way they
+  already did for herbivores/predators/fish/land_health. A chunk that
+  unloads and reloads now resumes the exact robin/sparrow/kingfisher count it
+  had when the player left (evolved by however long they were away), and a
+  full game-session restart no longer resets these three to a fresh
+  bootstrap the way it never did for fish.
+- ~~**Fish never actually caught up across a session gap**: `_apply_persisted_ecology`
+  fed fish into the same `ChunkEcologyCatchup.advance()` call every other
+  population uses, and `advance()` genuinely stepped it forward for the
+  elapsed away-time — but the result was never written back via
+  `seed_fish_population`, unlike its six siblings just above. A fish
+  population left well under capacity across a real multi-day session gap
+  therefore came back frozen at exactly its pre-gap value, never having
+  caught up at all — the exact opposite of what the "it never did for fish"
+  line above meant to say (fish's raw LAST-KNOWN count did survive, via its
+  own separate `save_fish_population`/`load_fish_population` file; it just
+  never grew or declined for the time spent away).~~ **Resolved**: one
+  missing `_ecosystem.seed_fish_population(chunk_coord, float(caught_up.get("fish", 0.0)))`
+  call, mirroring the six calls it already sat alongside.
+- **Marker top-up is reload-only, not continuous, for these three (new,
+  this pass)**: `EarthChunkManager._refresh_creatures` tops up/thins land
+  creature and fish MARKERS every periodic ecosystem step so a chunk's
+  visible count tracks its aggregate population continuously while loaded.
+  Robin/sparrow/kingfisher markers are not part of that pass yet — their
+  visible count is set from the aggregate population at chunk load (and
+  stays there until the chunk unloads and reloads), even though the
+  aggregate numbers themselves keep growing/declining underneath every
+  simulated day via `_refresh_bird_food_density`/`EcosystemSimulation.step`.
+  A robin population that has genuinely doubled since load will not spawn a
+  second visible robin until the player leaves the chunk and comes back.
 
 ## Region difficulty (gating the roster by player readiness)
 
@@ -512,18 +958,37 @@ than O(all-chunks-per-frame).
   tested; named species is what's new this pass, not the phenology itself.
 - ✅ Ripe fruit rendered as canopy pixel dots on near trees, in the tree's
   own named-species colour (`ProceduralTreeSprite`/`TreeRenderer`).
-- 🚧 Condition-gated individual reproduction — `animal_reproduction.gd`.
+- ✅ Condition-gated individual reproduction — `animal_reproduction.gd`, wired
+  end to end via `CreatureMarker.can_reproduce`/`on_reproduced` and
+  `World._step_reproduction` (energy/health/birth-cooldown gate plus local
+  crowding and vegetation-capacity vetoes; see progress.md's own "Condition-
+  gated reproduction (bioenergetics)" entry for the full breakdown). This
+  entry was stale (still marked 🚧) after the code had landed fully wired.
 - ✅ Unloaded-chunk catch-up integration — `chunk_ecology_catchup.gd`, wired
   into `EarthChunkManager`'s load/unload path (`_apply_ecology_catchup`/
   `_unloaded_ecology`), tested (`test_chunk_ecology_catchup.gd`). This entry
   was stale (still marked 🚧) after the code landed.
 - ✅ Aquatic sibling of this whole doc (fish population as a water-area-
   derived carrying capacity, with an explicit fishing-harvest mortality
-  term the land model still lacks) — `aquatic_population_model.gd`,
+  term, `record_catch`) — `aquatic_population_model.gd`,
   `water_area_survey.gd`, wired into `EcosystemSimulation`/
   `ChunkEcologyCatchup`/`EarthChunkManager`, persisted across restarts
-  (`ChunkSerializer.save_fish_population`) — land ecology still isn't. See
+  (`ChunkSerializer.save_fish_population`). See
   [fishing.md](fishing.md#aquatic-population-model).
+- ✅ Land herbivore/predator mortality term — `EcosystemSimulation.record_death`
+  is `record_catch`'s land counterpart (subtracts from `_herbivore_population`
+  or `_predator_population` per `is_predator`, floored at 0.0, silent no-op on
+  an unknown region), wired through `EarthChunkManager.record_death_at` from
+  `CreatureMarker.take_damage`'s death branch — the one place a kill is
+  finalized for both a predator's own hunt and the player's weapon. Closes
+  the gap this section used to describe explicitly: killing a land animal
+  used to never touch `EcosystemSimulation` at all. See the "two fidelities
+  are one population" section above. **A working NPC `hunter` now calls the
+  same hook too** (`NpcEconomy._gather`, `is_predator=false` — see
+  [npc.md](npc.md#needs-and-the-local-production-economy) and
+  `docs/progress.md`'s NPC Needs / Local Production Economy entry), so
+  sustained village hunting, not just a predator's own hunt or the player's
+  weapon, is a real herbivore-population depletion driver.
 - 🚧 Animal-mediated seed dispersal (moved seeds germinating elsewhere) —
   ✅ for bird endozoochory specifically (`SeedEndozoochory`, a robin eating
   fallen fruit and later planting a sapling elsewhere, see
@@ -557,7 +1022,22 @@ than O(all-chunks-per-frame).
   miss/ascend/cooldown state machine), `piscivore_bird_marker.gd`/
   `piscivore_bird_renderer.gd` (water-gated kingfisher spawn), calling the
   same `EcosystemSimulation.record_catch` the player's rod uses via
-  `EarthChunkManager.fish_population_near`/`record_fish_catch_near`.
+  `EarthChunkManager.fish_population_near`/`record_fish_catch_near`. **A
+  working NPC `fisher` now calls the same `record_fish_catch_near` hook too**
+  (`NpcEconomy._deplete_discrete_unit` — see
+  [npc.md](npc.md#needs-and-the-local-production-economy) and
+  `docs/progress.md`'s NPC Needs / Local Production Economy entry), visibly
+  thinning the shoal exactly like the player's own catch or a kingfisher's
+  dive. Unlike the hunter/farmer hooks above (pure aggregate-population
+  arithmetic, safe every frame), `record_fish_catch_near` also
+  find-and-`queue_free`s one real on-screen fish per call — built for a
+  piscivore bird's one-call-per-real-catch contract, not a per-frame drip —
+  so the fisher only calls it once per whole `FOOD_UNIT` actually gathered
+  (the same accumulation gate `NpcEconomy._gather` already uses for the
+  market stock/wallet gold update), not every frame like the hunter/farmer
+  arms. An earlier version of this fix called it unconditionally every
+  frame, which stripped every fish within catch radius of the dock almost
+  instantly; caught during verification before merge.
 
 ## Simulation runs at the rate the player can perceive
 
@@ -587,6 +1067,14 @@ Reproduction used to be a number going up. Animals of the same kind now
 **notice each other, dance, and sometimes mate** — so a population growing is
 something the player can watch happen rather than something they infer from
 there being more deer than yesterday.
+
+This section covers **pollinators** specifically — the tight synchronized
+orbit below (`Courtship.dance_offset`) is a butterfly's courtship flight, and
+reads as a bird (or a horse) glitching in place on anything that doesn't fly
+that way (`Courtship.dances()` gates it to `DANCING_SPECIES` for exactly this
+reason). Land mammals get their own walking equivalent — see "Land-mammal
+courtship: a walk, not a solo spawn" above — which reuses this section's
+pairing/leader/mating *primitives* directly rather than duplicating them.
 
 - **Same kind only, and only nearby.** Two animals of one species within a
   short radius may pair off. A monarch and a swallowtail share a meadow, not a
@@ -631,6 +1119,19 @@ two separate worlds, so:
 - Only **grown** animals court, and a chunk holds only so many. A population
   with births and no bound only ever goes one way — which is exactly how the
   deer explosion started.
+- An individual death in front of the player **lowers the region's aggregate**
+  the same way a birth raises it (`EcosystemSimulation.record_death`,
+  `is_predator` selecting which population it subtracts from) — the mortality
+  counterpart of the birth rule above, and of fishing's own `record_catch`
+  (see [fishing.md](fishing.md#harvest-fishing-as-the-mortality-term)). This
+  used to be a genuine, explicitly-named gap: a predator eating a herbivore,
+  or the player's own weapon, despawned the individual marker but never told
+  the aggregate, so a hunted valley only ever emptied out cosmetically —
+  the very next chunk reload re-seeded it at fresh carrying-capacity
+  equilibrium regardless of how thoroughly it had just been hunted. The fix
+  sits at `CreatureMarker.take_damage`'s death branch, since that is the one
+  place a kill is actually finalized for both causes: a predator's own
+  hunting AI and the player's weapon both route through it.
 
 
 ## A region remembers, and animals cross between regions

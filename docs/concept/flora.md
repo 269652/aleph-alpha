@@ -232,12 +232,41 @@ seed merely rides on a grazer's coat.
   epizoochory); still open for whether other future dispersers (large
   herbivores) should use the same time-based model or a distance tied to
   their own migration/home-range behavior instead.
-- No seed PREDATORS exist yet (a squirrel-equivalent that cracks the seed
-  instead of dispersing it) — today every animal that reaches a fallen
-  fruit is nutritionally a disperser-or-nothing (herbivores/omnivores eat
-  it for body condition, see `FoodConsumption`; robins now also disperse
-  its seed), so the disperser-vs-predator TENSION this doc's "The loop"
-  section describes is not yet a real selective force in the simulation.
+- ~~No seed PREDATORS exist yet~~ — partially answered: a sparrow eating
+  bare GROUND seed (flower/grass, see [Bird endozoochory: flowers spread
+  where birds go](#bird-endozoochory-flowers-spread-where-birds-go)) now
+  destroys the large majority of what it eats rather than always
+  dispersing it (`SeedEndozoochory.GRANIVORY_CONSUMED_CHANCE`), and that
+  chance is now trait-driven per individual: each bird's own `AnimalFitness.
+  fitness_score` (its `wander_seed`-derived phenotype) nudges ITS personal
+  consumption chance a few percentage points around the flat base
+  (`SeedEndozoochory.consumption_chance_for`/`FITNESS_CHANCE_SWING`), rather
+  than every sparrow rolling against the exact same number — bounded so the
+  large-majority band holds for every individual, not just on average.
+  ~~Still open for FRUIT/nut seed specifically~~ — answered: a real squirrel
+  species (`CreatureInfo`/`AnimalAnatomy`/`ProceduralAnimalSprite`, herbivore-
+  role, forest-only) now scatter-hoards fallen tree NUTS specifically
+  (`TreeSpecies.is_nut` — pine/acorn/hazelnut/walnut, not cherry/apple)
+  exactly the way a real scatter-hoarding rodent does: it picks one up,
+  carries it a short ground distance (`SquirrelNutCaching`, the same
+  find-carry-resolve shape `SeedCaching` already established for a mouse's
+  grass seed, wired to `fruit_near`/`take_fruit_at` instead), and mostly eats
+  it outright (`SquirrelNutCaching.NUT_CONSUMED_CHANCE`, real predation) but
+  sometimes caches it into a brand-new sapling via the same tree-seed sink
+  robin's own fruit dispersal already uses (`try_plant_seed_at`). Fleshy
+  fruit is untouched by this — a squirrel finding a fallen cherry/apple just
+  eats it like any other fruit-eating forager, nutritionally a
+  disperser-or-nothing exactly as before. The disperser-vs-predator TENSION
+  this doc's "The loop" section describes is now a real selective force for
+  BOTH ground seed and fruit/nut seed. Now trait-driven per individual too,
+  exactly mirroring the sparrow's own treatment: each squirrel's own
+  `AnimalFitness.fitness_score` (its `wander_seed`-derived phenotype) nudges
+  ITS personal consumption chance a few percentage points around the flat
+  base (`SquirrelNutCaching.nut_consumption_chance_for`/
+  `NUT_FITNESS_CHANCE_SWING` — 0.06, same magnitude as the sparrow's own
+  swing), rather than every squirrel rolling against the exact same
+  `NUT_CONSUMED_CHANCE` — bounded so the majority-but-not-certainty band
+  holds for every individual, not just on average.
 - True DNA inheritance for spread saplings (ground- or bird-planted) — see
   the species-inheritance note above.
 
@@ -254,8 +283,13 @@ seed merely rides on a grazer's coat.
   `try_plant_seed_at`): a robin eats fallen fruit, carries the seed for a
   gut-passage-timed interval, and plants a sapling of whatever species its
   landing position resolves to.
-- ⬜ Seed predators (crack the seed instead of dispersing it) — no
-  predator-vs-disperser tension yet, see Open questions.
+- ✅ Seed predators for GROUND seed (flower/grass) — see the "flowers spread
+  where birds go" section's own status entry above.
+- ✅ Seed predators for FRUIT/nut seed (`SquirrelNutCaching` + a real
+  `squirrel` species): crack-or-cache tension for real tree NUTS
+  specifically (`TreeSpecies.is_nut`), mirroring the mouse's grass-seed
+  scatter-hoarding shape — see Open questions. Fleshy fruit (cherry/apple)
+  is still pure dispersal-or-nothing, untouched by this.
 - ⬜ True DNA inheritance for spread saplings (both ground- and
   bird-planted) — see Open questions.
 - ⬜ Mast fruiting, drought/climate tolerance trait, ancient-tree emergence
@@ -300,17 +334,42 @@ good while.
 
 ### Bird endozoochory: flowers spread where birds go
 
-A sparrow that eats seed carries it, and plants it where it later drops —
-the same carry-then-drop shape as the mammal epizoochory above
+A sparrow that eats seed carries it, and — most of the time — destroys it.
+A real granivorous songbird is a seed PREDATOR first: its gizzard grinds up
+the large majority of what it swallows, and only a minority survives gut
+passage to actually be planted (`SeedEndozoochory.GRANIVORY_CONSUMED_CHANCE`,
+closing the "no seed predator exists" gap named below and in
+[ecosystem_dynamics.md](ecosystem_dynamics.md)). Not every bird is an
+identical predator, either: each individual's own `AnimalFitness.
+fitness_score` (derived from its `wander_seed`, the same per-individual seed
+`AmbientFlyerMarker` already carries) nudges its personal chance a few
+points around that base (`SeedEndozoochory.consumption_chance_for`), a
+fitter forager being a slightly more efficient one — bounded so it is
+always still a large majority, for every bird, never a coin flip or a
+certainty. When a seed does survive,
+it plants where it later drops — the same carry-then-drop shape as the
+mammal epizoochory above
 ([Spread by animal seed dispersal](#spread-by-animal-seed-dispersal)) and
 the robin's tree dispersal (`SeedEndozoochory`), and for the same design
 reason: flower spread follows the ecosystem's real movement corridors
 rather than a tile-adjacency rule. The difference is range. A mammal brushes
 a bloom and carries seed a few tiles; a bird eats it, flies, and drops it
-much further, so granivorous birds are how meadows colonise ground no
-grazer walks. A seed dropped where flowers cannot root (ocean, rock, forest
-floor) is simply lost — the same honest check on spread every other
-dispersal path uses.
+much further, so a surviving seed still travels further than a grazer could
+carry one, and granivorous birds remain how meadows colonise ground no
+grazer walks — just less often than every seed eaten. A seed dropped where
+flowers cannot root (ocean, rock, forest floor) is simply lost — the same
+honest check on spread every other dispersal path uses.
+
+This predation gate is deliberately GROUND seed only (flower and grass seed
+picked bare off the ground) — it does not apply to the tree-fruit case
+above ([Bird endozoochory: swallowing the seed, not just carrying
+it](#bird-endozoochory-swallowing-the-seed-not-just-carrying-it)): a fleshy
+fruit exists specifically so the seed riding inside it is swallowed whole
+and passed unharmed, a real mutualism between the tree and its disperser,
+whereas a bare seed IS the meal for a true granivore. That is also why this
+doesn't fold into that section's own status list — it is a different
+mechanism on a different food source, even though the carry-then-drop
+machinery (`SeedEndozoochory`) is shared.
 
 ## What is visible must be what is real
 
@@ -607,6 +666,20 @@ same "ecology has consequences" thread as tree spread (see
   driven from the same throttled herbivore walk as grazing. (This entry, and
   the two below, were stale: all three had landed while the list still read
   ⬜.)
+- ✅ Seed PREDATION for ground seed (flower/grass) — `SeedEndozoochory.
+  seed_is_consumed`/`GRANIVORY_CONSUMED_CHANCE`, rolled once per seed in
+  `AmbientFlyerMarker._step_seed_carrying`: a sparrow now destroys the large
+  majority of what it eats instead of always planting it, only ever
+  dispersing a minority. Scoped to bare ground seed only — the tree-fruit
+  disperser above is deliberately untouched (see that section's own doc
+  text) — so the disperser-vs-predator tension the top-level "The loop"
+  section describes is now real for this one carrier. Fruit/nut predation
+  (a real squirrel species) is now also real — see the "Named species:
+  Cherry, Apple, Walnut" section's Open questions/Status entries above
+  (`SquirrelNutCaching`). Trait-driven per individual now too: `SeedEndozoochory.
+  consumption_chance_for` nudges each bird's chance by its own
+  `AnimalFitness.fitness_score`, bounded to keep the large-majority band for
+  every individual.
 - ✅ Flower sprites and their placement in the world — `ProceduralFlowerSprite`,
   one foot-anchored sprite per live `FlowerPatch` cell, synced with the chunk
   lifecycle.
@@ -624,9 +697,61 @@ same "ecology has consequences" thread as tree spread (see
   flowers"). It now sniffs every interval but only switches for a bloom
   closer by more than `AmbientFlyerMarker.RETARGET_IMPROVEMENT_TILES`, which
   is what keeps it from thrashing between near-ties instead of arriving.
-- ⬜ Pollination feedback: visits affecting fruit set or seed viability. The
-  flow is one-directional so far — flowers feed pollinators, pollinators do
-  not yet feed the plants back.
+- ✅ Pollination feedback, both halves. **Seed viability** (flowers) was
+  already done — `Pollination` (dioecious male/female flowers, species-
+  specific pollen, seed only set when a carrier's pollen matches), wired
+  through `FlowerPatch`.
+  **Fixed (2026-08-26): "wired through `FlowerPatch`" was not actually
+  true.** `Pollination` and `FlowerPatch.pollinate` were a complete,
+  fully-tested pure module — but `pollinate`'s only caller anywhere in the
+  live game was its own test file. Nothing a bee or butterfly did ever
+  called it, so `FlowerPatch._pollinated` stayed permanently empty and
+  `shed_seed` (which only sheds for a cell that is both past bloom AND in
+  `_pollinated`) never fired through pollination: a real meadow's flowers
+  never actually went to seed, silently, no matter how many pollinators
+  visited it. `EarthChunkManager.pollinate_flower_at` — the flower-side
+  counterpart of `record_pollination_visit_at` below — is the fix: a
+  landing bee/butterfly now actually delivers whatever pollen it is
+  carrying to the flower (`FlowerPatch.pollinate`) and picks up new pollen
+  in return (`Pollination.pollen_after_visit`), exactly the way the tree
+  side already worked. Wired from `AmbientFlyerMarker`'s existing flower
+  landing branch (alongside `drink_nectar_at`, not gated on whether it fed
+  — nectar and pollen are separate resources) via a new `_carried_pollen`
+  field that persists across visits, for every flower-foraging species
+  (bees and butterflies alike, unlike the bee-only tree-blossom branch).
+  Six tests in `test_earth_chunk_manager.gd` (`test_seeds_near_reports_seed_
+  lying_on_the_ground` and five siblings) had been failing on exactly this
+  cause the whole time, unnoticed because that file is one of two this
+  project always excludes from a full-suite check as "known-slow" — see
+  `docs/progress.md`'s "Pollinator visits now feed back into flower seed set
+  too" entry for the correction and the fix.
+  **Fruit set** (apple/cherry trees) is the half
+  this closed: bees now recognize a blossoming, insect-pollinated tree
+  (`TreeSpecies.needs_pollinators_for`) as a real food source alongside
+  flowers — `EarthChunkManager.blossoms_near` hands a bee's existing
+  targeting machinery (`PollinatorForaging.choose_target`) a tree exactly
+  shaped like a flower it already knows how to work — and a landed visit
+  (`record_pollination_visit_at`) is banked on the tree
+  (`ChoppableTree.pollination_visits_in_cycle`, scoped to one bearing
+  cycle) and composed into `FruitingModel.crop_potential`'s yield
+  multiplier via `FruitingModel.pollination_factor`: an isolated tree still
+  sets a reduced-but-real crop from self-/incidental pollination (real
+  apples/cherries are not self-sterile), rising toward the species' usual
+  ceiling as bee visits accumulate. Wind-pollinated species (pine/acorn/
+  hazelnut/walnut — real catkins/cones) are unaffected either way, by
+  design. Scoped to bees, not every nectar-feeder, since bees are fruit
+  trees' primary real-world pollinator. Known simplification: a tree's
+  visit count lives on its own node and does not persist across a chunk
+  unload/reload or a save — the same tier its other per-tree state
+  (growth, ripe count) already lives at, and not yet promoted further.
+  Individual bees are no longer interchangeable for this: each visit is now
+  weighted by the visiting bee's own `AnimalFitness.fitness_score` (its
+  `wander_seed`-derived phenotype) via `FruitingModel.
+  visit_weight_for_fitness`, a bounded 0.85..1.15 multiplier around the flat
+  1.0 an average bee still banks — a fitter bee is a modestly more effective
+  pollinator, grounded in real (modest, not order-of-magnitude) individual
+  variation in pollinator foraging efficiency, and nowhere near enough on
+  its own to meaningfully dent `POLLINATION_SATURATION_VISITS`.
 - 🚧 Illustrated head art per archetype — `IllustratedFlowerHead` +
   `ProceduralFlowerSprite._paint_illustrated_head`, tinted per species,
   nectar-driven full/spent staging. Only "cup" (crocus, tulip) has a sheet
@@ -634,6 +759,17 @@ same "ecology has consequences" thread as tree spread (see
   at sprite creation, not live-updated as an already-visible bloom depletes.
   Bud/opening frames are sliced and tested but unconsumed — no live
   "not yet in bloom" render state exists to use them for.
+- ✅ **Nectar economy is not over-subscribed any more.** A pre-claims
+  measurement found the population's drink demand 2.05x its flowers' regen
+  capacity (64.24 drinks/s against 31.30 nectar/s across 626 reachable
+  flowers) — the arithmetic behind why arrivals found a mean 0.182 nectar.
+  Re-measured now that claim-sharing (above) is wired up
+  (`tests/unit/test_nectar_economy.gd`): a real simulation of 150
+  pollinators over a 616-flower summer meadow, run to steady state, now
+  measures **0.86x** — demand 8.44 drinks/s against supply 9.87 nectar/s
+  across 592 flowers actually reached. Peer-claim demotion alone closed the
+  gap; `PollinatorForaging.NECTAR_REGEN_PER_SECOND` needed no change (see
+  its own doc comment for the same numbers).
 
 
 ## How a pollinator flies
@@ -771,6 +907,18 @@ taller trunk lifts its crown with it rather than leaving a gap.
 The two overlap by a lot, because these canopies are notched along the bottom
 exactly where the trunk is -- the artist leaves room for one. At a small
 overlap the trunk stops in that notch and the crown visibly floats above it.
+
+**A trunk is one piece of wood, not two either side of a gap.** Squeezing the
+root flare sideways into the narrow trunk box can land a real gap between two
+separate root "toes" of the source art on the box's own centre column -- the
+walnut sheet's flare happens to split exactly there, so every walnut trunk
+sampled at its centre came out fully transparent, while every other species'
+equivalent gap sits off to one side. Any transparent run flanked by opaque
+trunk pixels on both sides of the same row is enclosed by the trunk rather
+than open to the background, so it is filled -- the same "petals are not
+windows" reasoning below, applied row-wise rather than as a full flood fill,
+because a trunk's gaps run sideways between root legs rather than sitting as
+enclosed pockets.
 
 **Art is per species, and optional.** A species with sheets is drawn from them;
 one without falls back to the procedural painter unchanged. This is the same

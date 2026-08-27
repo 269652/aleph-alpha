@@ -65,10 +65,12 @@ func get_growth(cell: Vector2i) -> float:
 
 
 ## Advances growth on every patch and, on a throttled interval, lets mature
-## patches spread into adjacent desert cells.
-func advance(delta: float) -> void:
+## patches spread into adjacent desert cells. `growth_modifier` (see
+## SeasonCycle.growth_modifier) scales only the growth increment, never
+## spread timing -- mirrors TallGrass.advance.
+func advance(delta: float, growth_modifier: float) -> void:
 	for cell in _patches:
-		_patches[cell] = minf(_patches[cell] + delta * GROWTH_RATE, 1.0)
+		_patches[cell] = minf(_patches[cell] + delta * GROWTH_RATE * growth_modifier, 1.0)
 
 	_spread_accumulator += delta
 	while _spread_accumulator >= SPREAD_INTERVAL:

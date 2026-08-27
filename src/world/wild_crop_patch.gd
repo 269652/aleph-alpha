@@ -24,7 +24,7 @@ const TallGrass = preload("res://src/world/tall_grass.gd")
 ## rather than left an eyeballed comment (CLAUDE.md).
 const SEED_CHANCE := 0.03
 
-## Hard cap on patches per chunk -- lower than TallGrass.MAX_PATCHES (128),
+## Hard cap on patches per chunk -- lower than TallGrass.MAX_PATCHES (205),
 ## a wild crop population is meant to read as scattered finds, not a field.
 const MAX_PATCHES := 20
 
@@ -102,10 +102,12 @@ func get_growth(cell: Vector2i) -> float:
 
 
 ## Advances growth on every patch and, on a throttled interval, lets mature
-## patches spread into adjacent grassland cells. Mirrors TallGrass.advance.
-func advance(delta: float) -> void:
+## patches spread into adjacent grassland cells. Mirrors TallGrass.advance,
+## including how `growth_modifier` (see SeasonCycle.growth_modifier) scales
+## only the growth increment, never spread timing.
+func advance(delta: float, growth_modifier: float) -> void:
 	for cell in _patches:
-		_patches[cell] = minf(_patches[cell] + delta * GROWTH_RATE, 1.0)
+		_patches[cell] = minf(_patches[cell] + delta * GROWTH_RATE * growth_modifier, 1.0)
 
 	_spread_accumulator += delta
 	while _spread_accumulator >= SPREAD_INTERVAL:

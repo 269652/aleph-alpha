@@ -46,7 +46,8 @@ const SPECIES := [
 	"herbivore", "deer", "horse", "goat", "camel", "reindeer", "sheep",
 	"boar", "tapir", "bear",
 	"wolf", "lynx", "jaguar", "predator",
-	"mouse",
+	"jackal", "arctic_fox", "mountain_lion", "lion",
+	"mouse", "squirrel",
 	"venomous_snake", "nonvenomous_snake",
 ]
 
@@ -282,6 +283,66 @@ const _PROFILES := {
 		"tail": TAIL_BUSHY, "tail_length": 0.18,
 		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
+	# A small, lean desert/savanna canid -- notably below the wolf's
+	# world_scale, comparable to or a touch above the lynx's 0.8. Real
+	# jackals carry oversized, pointed ears and long legs relative to their
+	# small frame; the tail is a bushy brush, but shorter than a wolf's.
+	"jackal": {
+		"barrel_squareness": 0.25,
+		"world_scale": 0.85,
+		"body_length": 0.42, "body_height": 0.18, "body_y": 0.50, "shoulder_hump": 0.03,
+		"neck_length": 0.12, "neck_thickness": 0.09, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.16, "head_height": 0.10, "muzzle": 0.8, "ear_size": 0.44,
+		"leg_length": 0.30, "leg_thickness": 0.04,
+		"tail": TAIL_BUSHY, "tail_length": 0.15,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+	# The smallest, stockiest of the four -- a real arctic fox is a compact
+	# cold-climate canid that minimizes surface area: short legs and a short
+	# blunt muzzle (unlike the jackal/wolf's long snout), but a very long
+	# bushy tail relative to its small body (wraps around the fox for
+	# warmth). Lowest world_scale of the level-backed predators.
+	"arctic_fox": {
+		"barrel_squareness": 0.35,
+		"world_scale": 0.55,
+		"body_length": 0.38, "body_height": 0.19, "body_y": 0.50, "shoulder_hump": 0.02,
+		"neck_length": 0.08, "neck_thickness": 0.10, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.13, "head_height": 0.10, "muzzle": 0.4, "ear_size": 0.26,
+		"leg_length": 0.18, "leg_thickness": 0.045,
+		"tail": TAIL_BUSHY, "tail_length": 0.22,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+	# A large, LEAN big cat -- real cougars are long-bodied and lightly
+	# built compared to the stockier, more muscular jaguar. Longer/equal
+	# body_length to the jaguar's 0.56 but lower barrel_squareness and
+	# shoulder_hump (leaner, less bulky), with the same long TAIL_FLOWING
+	# tail.
+	"mountain_lion": {
+		"barrel_squareness": 0.22,
+		"world_scale": 1.05,
+		"body_length": 0.58, "body_height": 0.20, "body_y": 0.52, "shoulder_hump": 0.03,
+		"neck_length": 0.10, "neck_thickness": 0.11, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.16, "head_height": 0.12, "muzzle": 0.35, "ear_size": 0.30,
+		"leg_length": 0.25, "leg_thickness": 0.05,
+		"tail": TAIL_FLOWING, "tail_length": 0.26,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+	# The largest, most powerful predator in the roster (only the bear's
+	# creature_info.gd stats outrank it) -- the highest world_scale of any
+	# level-backed predator profile. Real male lions have manes; has_mane is
+	# genuinely wired to a visual effect (see
+	# ProceduralAnimalSprite._paint_animal / _paint_mane), so this actually
+	# renders, not just a forward-correctness flag.
+	"lion": {
+		"barrel_squareness": 0.32,
+		"world_scale": 1.3,
+		"body_length": 0.60, "body_height": 0.27, "body_y": 0.51, "shoulder_hump": 0.05,
+		"neck_length": 0.12, "neck_thickness": 0.16, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.18, "head_height": 0.15, "muzzle": 0.45, "ear_size": 0.26,
+		"leg_length": 0.27, "leg_thickness": 0.065,
+		"tail": TAIL_FLOWING, "tail_length": 0.22,
+		"headgear": HEADGEAR_NONE, "has_mane": true,
+	},
 
 	# -- serpents -----------------------------------------------------------
 	# No legs, no neck, no ears: a long low body and a very long tapering
@@ -317,6 +378,24 @@ const _PROFILES := {
 		"head_length": 0.11, "head_height": 0.10, "muzzle": 0.7, "ear_size": 0.62,
 		"leg_length": 0.07, "leg_thickness": 0.028,
 		"tail": TAIL_THIN, "tail_length": 0.30,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+	# A tree-nut forager (see docs/concept/flora.md's disperser-vs-predator
+	# tension) -- a small, short-legged rodent build like mouse's, but
+	# notably bigger (world_scale above mouse's 0.35), and defined above all
+	# by a real squirrel's single most distinctive real-world feature: a
+	# large, bushy tail that is proportionally LONGER relative to its own
+	# body than any other profile in the roster, including mouse's own
+	# already-long (but thin, cord-like) tail -- see
+	# test_squirrel_has_a_bushy_tail_longer_relative_to_its_body_than_anything_else.
+	"squirrel": {
+		"barrel_squareness": 0.2,
+		"world_scale": 0.45,
+		"body_length": 0.24, "body_height": 0.15, "body_y": 0.58, "shoulder_hump": 0.01,
+		"neck_length": 0.03, "neck_thickness": 0.08, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.11, "head_height": 0.10, "muzzle": 0.5, "ear_size": 0.36,
+		"leg_length": 0.09, "leg_thickness": 0.032,
+		"tail": TAIL_BUSHY, "tail_length": 0.30,
 		"headgear": HEADGEAR_NONE, "has_mane": false,
 	},
 }

@@ -8,6 +8,7 @@ extends GutTest
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
+const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 
 const TILE_SIZE := 16.0
 
@@ -47,6 +48,39 @@ class StubScentWorld:
 			var level: float = float(f.get("nectar", 1.0))
 			if level < 1.0:
 				f["nectar"] = minf(1.0, level + PollinatorForaging.NECTAR_REGEN_PER_SECOND * delta)
+	## Blossoming trees (see EarthChunkManager.blossoms_near) -- a bee's other
+	## food source. Empty by default, so every existing test that never sets
+	## this is unaffected.
+	var blossoms: Array = []
+	var pollination_visit_calls: Array = []
+	func blossoms_near(position: Vector2, radius_tiles: int) -> Array:
+		var out: Array = []
+		for b in blossoms:
+			if position.distance_to(b["position"]) / TILE_SIZE <= float(radius_tiles):
+				out.append(b)
+		return out
+	## Mirrors drink_nectar_at's contract for a tree instead of a flower (see
+	## EarthChunkManager.record_pollination_visit_at). `visit_weight` defaults
+	## to 1.0 to match the real signature -- the caller now passes a
+	## fitness-scaled weight (see FruitingModel.visit_weight_for_fitness).
+	func record_pollination_visit_at(position: Vector2, visit_weight: float = 1.0) -> bool:
+		pollination_visit_calls.append(position)
+		return true
+	## Flower-side pollen exchange (see EarthChunkManager.pollinate_flower_at).
+	## Records both arguments so a test can see what the marker was carrying
+	## on arrival, and hands back the visited flower's own species -- as if
+	## every stubbed flower were a pollen-giving male -- so a test can also
+	## observe the marker's carried pollen actually updating. Falls back to
+	## returning `carried_species` unchanged when the position matches no
+	## stubbed flower, the same "nothing here" contract the real
+	## EarthChunkManager.pollinate_flower_at has.
+	var pollination_calls: Array = []
+	func pollinate_flower_at(position: Vector2, carried_species: String) -> String:
+		pollination_calls.append({"position": position, "carried": carried_species})
+		for f in flowers:
+			if f["position"].distance_to(position) < 0.01:
+				return String(f["species"])
+		return carried_species
 
 
 var marker: AmbientFlyerMarker
@@ -249,6 +283,129 @@ func test_landing_on_a_flower_remembers_it_at_the_markers_own_elapsed_time():
 	marker._process(0.1)
 	assert_eq(marker._visited.size(), 1)
 	assert_almost_eq(float(marker._visited[0]["time"]), 0.1, 0.01)
+
+
+# -- landing on a flower actually exchanges pollen (see Pollination) ---------
+#
+# Pollination was a complete, fully-tested pure module with no live caller:
+# FlowerPatch.pollinate (its only caller) was itself only ever invoked from
+# its own test file, so a meadow never actually shed seed through
+# pollination. A marker landing on a flower now calls the flower-side world
+# surface (EarthChunkManager.pollinate_flower_at) exactly the way it already
+# calls drink_nectar_at, and remembers what it picked up for its next visit.
+
+func test_landing_on_a_flower_exchanges_pollen():
+	var world := StubScentWorld.new()
+	world.flowers = [{"position": Vector2(0, 0), "species": "rose", "nectar": 1.0}]
+	marker.scent_world = world
+	marker.home = Vector2.ZERO
+	marker.position = Vector2(0, 0)
+	marker.wander_seed = 1
+	marker.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker._carried_pollen = "tulip"
+	marker._forage_target = Vector2(0, 0)
+	marker._forage_flower = Vector2(0, 0)
+	marker._process(0.1)
+	assert_eq(world.pollination_calls.size(), 1, "landing on a flower should exchange pollen")
+	assert_eq(world.pollination_calls[0]["position"], Vector2(0, 0), "should exchange pollen at the flower's own position")
+	assert_eq(
+		world.pollination_calls[0]["carried"], "tulip",
+		"should hand over whatever the marker was already carrying"
+	)
+
+
+## State persists ACROSS visits on one marker -- it is not reset every
+## landing (see Pollination.pollen_after_visit's "a later male replaces it"
+## contract: nothing resets it in between).
+func test_carried_pollen_updates_and_carries_forward_into_the_next_visit():
+	var world := StubScentWorld.new()
+	world.flowers = [
+		{"position": Vector2(0, 0), "species": "rose", "nectar": 1.0},
+		{"position": Vector2(40, 0), "species": "rose", "nectar": 1.0},
+	]
+	marker.scent_world = world
+	marker.home = Vector2.ZERO
+	marker.position = Vector2(0, 0)
+	marker.wander_seed = 1
+	marker.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker._forage_target = Vector2(0, 0)
+	marker._forage_flower = Vector2(0, 0)
+	marker._process(0.1)
+	assert_eq(marker._carried_pollen, "rose", "should now carry whatever pollinate_flower_at handed back")
+
+	# Done drinking from the first bloom (DRINK_SECONDS would otherwise hold
+	# it there -- see PollinatorForaging.DRINK_SECONDS) and committed to the
+	# second flower.
+	marker._drink_remaining = 0.0
+	marker.position = Vector2(40, 0)
+	marker._forage_target = Vector2(40, 0)
+	marker._forage_flower = Vector2(40, 0)
+	marker._process(0.1)
+	assert_eq(
+		world.pollination_calls[1]["carried"], "rose",
+		"the previous visit's pollen should carry forward into the next visit, not reset"
+	)
+
+
+# -- bees recognize blossoming fruit trees too (see docs/concept/flora.md) ---
+#
+# crop_potential used to be a pure function of the genome and time, zero
+# connection to the pollinator system: bees only ever visited flowers. A
+# blossoming apple/cherry tree (see EarthChunkManager.blossoms_near) is now
+# merged straight into the same candidate list PollinatorForaging.
+# choose_target already scatters/scores/claims over -- no changes to that
+# machinery at all -- but only for BEES: real fruit trees are pollinated
+# mainly by bees, and other nectar-feeders here keep working flowers only.
+
+func test_a_bee_targets_a_blossoming_tree_when_that_is_all_thats_offered():
+	var world := StubScentWorld.new()
+	world.blossoms = [{"position": Vector2(20, 0), "species": "apple", "nectar": 1.0}]
+	marker.scent_world = world
+	marker.species = "bee"
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.wander_seed = 1
+	marker.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker._process(1.0)  # >= SCENT_SNIFF_INTERVAL, forces a sniff
+	assert_eq(marker._forage_target, Vector2(20, 0), "a bee should commit to the blossoming tree")
+
+
+## Only bees -- a butterfly here has nothing to fly to, since flowers_near is
+## empty and blossoms_near is deliberately not consulted for it.
+func test_a_non_bee_pollinator_ignores_blossoming_trees():
+	var world := StubScentWorld.new()
+	world.blossoms = [{"position": Vector2(20, 0), "species": "apple", "nectar": 1.0}]
+	marker.scent_world = world
+	marker.species = "monarch"
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.wander_seed = 1
+	marker.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker._process(1.0)
+	assert_null(marker._forage_target, "a butterfly should not target a tree")
+
+
+## Landing on a tree calls the TREE side of the world (record_pollination_
+## visit_at), never drink_nectar_at -- a blossom is not a flower patch cell.
+func test_landing_on_a_blossoming_tree_records_a_pollination_visit_not_a_drink():
+	var world := StubScentWorld.new()
+	world.blossoms = [{"position": Vector2(0, 0), "species": "apple", "nectar": 1.0}]
+	marker.scent_world = world
+	marker.species = "bee"
+	marker.home = Vector2.ZERO
+	marker.position = Vector2(0, 0)
+	marker.wander_seed = 1
+	marker.setup(AmbientFlyerMovement.new(20.0, 40.0, 1.0))
+	marker._forage_target = Vector2(0, 0)
+	marker._forage_flower = Vector2(0, 0)
+	marker._forage_target_is_tree = true
+	marker._process(0.1)
+	assert_eq(world.pollination_visit_calls.size(), 1, "should register a visit on the tree")
+	assert_eq(world.drink_calls.size(), 0, "a tree blossom is not a flower patch cell")
+	assert_eq(
+		world.pollination_calls.size(), 0,
+		"the flower-side pollen exchange must never fire for a tree-blossom visit"
+	)
 
 
 # -- a worked-out neighbourhood must recover, and must not trap the flyer ----
@@ -1236,7 +1393,14 @@ func _sparrow_on(world: StubSeedWorld) -> void:
 	marker.species = "sparrow"
 	marker.home = Vector2.ZERO
 	marker.position = Vector2.ZERO
-	marker.wander_seed = 11
+	# Chosen (not just any small int) so the FIRST seed this bird eats
+	# survives the granivory roll (see SeedEndozoochory.seed_is_consumed):
+	# tests below that check WHERE a swallowed seed lands need it to
+	# actually be planted, not destroyed. The roll's own distribution is
+	# covered separately by test_a_sparrow_mostly_destroys_the_seed_it_eats_
+	# rather_than_planting_it, which samples many wander_seeds instead of
+	# relying on this one.
+	marker.wander_seed = 4
 	marker.ground_forage = GroundForageBehavior.new()
 	marker.setup(AmbientFlyerMovement.new(24.0, 40.0, 1.0))
 
@@ -1331,6 +1495,47 @@ func test_a_sparrow_plants_the_grass_seed_it_ate_as_grass_not_a_flower():
 	assert_eq(world.planted.size(), 0, "a grass seed must establish grass, never a flower")
 
 
+# -- granivory, seed-vs-seed arbitration: nearest wins, not a fixed type ----
+# order (see docs/concept/long_grass.md: a live probe found 11/11 measured
+# dispersal events came from mice and ZERO from sparrows, because the OLD
+# fixed worm > fruit > flower-seed > grass-seed priority meant ANY flower
+# seed in range pre-empted a grass seed, however much closer the grass seed
+# actually was). Worm and fruit still unconditionally outrank both seed
+# kinds -- only the choice BETWEEN the two seed kinds is now by distance.
+
+## With the grass seed much closer than the flower seed, the sparrow must go
+## for the grass seed -- proof the old fixed flower-seed-always-first order is
+## gone.
+func test_a_sparrow_forages_the_nearer_grass_seed_over_a_farther_flower_seed():
+	var world := StubSeedWorld.new()
+	world.grass_seeds.append({"position": Vector2(1.0 * TILE_SIZE, 0.0)})
+	world.seeds.append({"position": Vector2(8.0 * TILE_SIZE, 0.0), "species": "clover"})
+	_sparrow_on(world)
+
+	for step in 400:
+		marker._process(0.1)
+
+	assert_eq(world.grass_seeds.size(), 0, "the nearer grass seed should have been eaten")
+	assert_eq(world.seeds.size(), 1, "the farther flower seed should be left alone")
+
+
+## Companion to the above, with the two seeds' distances swapped: the flower
+## seed being the closer one must still win. Together the two tests prove
+## this is a real nearest-wins distance comparison, not just the old fixed
+## order flipped the other way.
+func test_a_sparrow_still_forages_the_nearer_flower_seed_over_a_farther_grass_seed():
+	var world := StubSeedWorld.new()
+	world.seeds.append({"position": Vector2(1.0 * TILE_SIZE, 0.0), "species": "clover"})
+	world.grass_seeds.append({"position": Vector2(8.0 * TILE_SIZE, 0.0)})
+	_sparrow_on(world)
+
+	for step in 400:
+		marker._process(0.1)
+
+	assert_eq(world.seeds.size(), 0, "the nearer flower seed should have been eaten")
+	assert_eq(world.grass_seeds.size(), 1, "the farther grass seed should be left alone")
+
+
 ## A bird carries one seed at a time regardless of KIND -- eating a grass
 ## seed while a flower seed is still digesting (or vice versa) must not
 ## overwrite which one gets planted. The bird still eats the grass seed for
@@ -1379,3 +1584,110 @@ func test_carrying_fruit_after_a_flower_seed_plants_a_tree_not_a_flower():
 
 	assert_eq(fruit_world.planted.size(), 1, "the fruit's seed should plant a TREE")
 	assert_eq(seed_world.planted.size(), 1, "must not ALSO plant a second, wrong flower")
+
+
+## Real seed predation, not just dispersal (see SeedEndozoochory.
+## GRANIVORY_CONSUMED_CHANCE, and docs/concept/flora.md's "No seed
+## PREDATORS exist yet" open question, now closed for this one species): a
+## true granivore like a sparrow digests and destroys the large majority of
+## the ground seed it eats, only sometimes surviving gut passage to actually
+## be planted. Sampled across many different wander_seeds -- a single bird
+## only ever carries one seed at a time, so this cannot be observed by
+## watching one bird eat repeatedly -- the same "spreads across true and
+## false, not clustered on one side" shape
+## test_forage_roll_spreads_across_true_and_false pins for AntColony.
+## Talks to _take_targeted_seed/_step_seed_carrying directly (skipping the
+## flight simulation) so 100 samples run fast, the same shortcut
+## test_carrying_fruit_after_a_flower_seed_plants_a_tree_not_a_flower above
+## already takes.
+func test_a_sparrow_mostly_destroys_the_seed_it_eats_rather_than_planting_it():
+	var consumed := 0
+	var planted := 0
+	for w in 100:
+		var world := StubSeedWorld.new()
+		world.seeds = [{"position": Vector2(50, 0), "species": "clover"}]
+		_sparrow_on(world)
+		marker.wander_seed = w
+		marker._seed_target = Vector2(50, 0)
+		marker._take_targeted_seed()
+		marker._carry_seconds_remaining = 0.0
+		marker._step_seed_carrying(0.0)
+		if world.planted.is_empty():
+			consumed += 1
+		else:
+			planted += 1
+	assert_gt(consumed, planted, "a real granivore destroys most of what it eats, not a coin flip")
+	assert_gt(planted, 0, "but not literally every seed -- a minority still survives to be planted")
+
+
+# -- the egg sprite: distinct from the tiny-scaled-adult look --------------
+#
+# Before this, an offspring rendered as the ADULT insect's own silhouette
+# scaled down to LifeCycle.HATCHLING_SCALE from the moment it was spawned --
+# a tiny adult, not anything egg-shaped, for the ENTIRE COURTING/MATED/EGG
+# span (age_seconds < LifeCycle.HATCH_SECONDS). `egg_frame` (see
+# ProceduralEggSprite, set by AmbientFlyerRenderer._build_marker) is shown
+# instead for exactly that span; from STAGE_JUVENILE onward (age_seconds >=
+# HATCH_SECONDS) nothing changes -- the existing scaled-adult sprite keeps
+# growing via LifeCycle.size_scale_at exactly as it always has.
+#
+# Both halves are asserted by STAGE, not by a literal age value, so this
+# stays true if the stage boundaries themselves are ever retuned.
+
+
+func _pre_hatch_marker(egg: Texture2D) -> void:
+	marker.egg_frame = egg
+	marker.flap_frames = [ImageTexture.new(), ImageTexture.new()]
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.wander_seed = 3
+	marker.setup(AmbientFlyerMovement.new(16.0, 30.0, 0.7))
+
+
+func test_a_flyer_shows_its_egg_sprite_before_reaching_stage_juvenile():
+	var egg := ImageTexture.new()
+	_pre_hatch_marker(egg)
+	marker.age_seconds = 0.0
+	marker._process(1.0)
+	assert_lt(
+		LifeCycle.stage_at(marker.age_seconds), LifeCycle.STAGE_JUVENILE,
+		"precondition: still pre-hatch after this step"
+	)
+	assert_eq(
+		marker.texture, egg,
+		"before STAGE_JUVENILE it should show the egg, not a scaled-down tiny adult"
+	)
+
+
+func test_a_flyer_shows_the_ordinary_scaled_adult_sprite_from_stage_juvenile_onward():
+	var egg := ImageTexture.new()
+	_pre_hatch_marker(egg)
+	marker.age_seconds = LifeCycle.HATCH_SECONDS
+	marker._process(1.0)
+	assert_gte(
+		LifeCycle.stage_at(marker.age_seconds), LifeCycle.STAGE_JUVENILE,
+		"precondition: already hatched after this step"
+	)
+	assert_ne(
+		marker.texture, egg,
+		"from STAGE_JUVENILE onward it must be the ordinary (scaled) adult sprite, not the egg"
+	)
+	assert_true(
+		marker.flap_frames.has(marker.texture),
+		"should be animating the normal wing frames again, exactly as before this feature"
+	)
+
+
+## Without an egg_frame assigned (an older caller, or a test double), nothing
+## should break -- the marker simply falls back to leaving the texture alone
+## for that span rather than erroring, the same has_method-guard spirit every
+## other optional field in this file follows.
+func test_a_pre_hatch_flyer_with_no_egg_frame_set_does_not_error():
+	marker.flap_frames = [ImageTexture.new()]
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.wander_seed = 3
+	marker.setup(AmbientFlyerMovement.new(16.0, 30.0, 0.7))
+	marker.age_seconds = 0.0
+	marker._process(1.0)
+	assert_lt(LifeCycle.stage_at(marker.age_seconds), LifeCycle.STAGE_JUVENILE)

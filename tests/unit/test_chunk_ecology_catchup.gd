@@ -13,7 +13,8 @@ func before_each():
 
 
 func _state(
-	herbivores: float, predators: float, fruit_stock: float, vegetation: float, fish: float = 0.0
+	herbivores: float, predators: float, fruit_stock: float, vegetation: float, fish: float = 0.0,
+	robins: float = 0.0, sparrows: float = 0.0, kingfishers: float = 0.0
 ) -> Dictionary:
 	return {
 		"herbivores": herbivores,
@@ -21,16 +22,22 @@ func _state(
 		"fruit_stock": fruit_stock,
 		"vegetation": vegetation,
 		"fish": fish,
+		"robins": robins,
+		"sparrows": sparrows,
+		"kingfishers": kingfishers,
 	}
 
 
 func _capacity(
-	herbivore_capacity: float, fruit_growth_rate: float, fish_capacity: float = 0.0
+	herbivore_capacity: float, fruit_growth_rate: float, fish_capacity: float = 0.0,
+	robin_capacity: float = 0.0, sparrow_capacity: float = 0.0
 ) -> Dictionary:
 	return {
 		"herbivore_capacity": herbivore_capacity,
 		"fruit_growth_rate": fruit_growth_rate,
 		"fish_capacity": fish_capacity,
+		"robin_capacity": robin_capacity,
+		"sparrow_capacity": sparrow_capacity,
 	}
 
 
@@ -187,3 +194,85 @@ func test_land_health_defaults_to_pristine_when_absent_from_state():
 	var start := _state(5.0, 1.0, 2.0, 0.5)
 	var out := catchup.advance(start, 1.0, _capacity(20.0, 0.1))
 	assert_almost_eq(out["land_health"], 1.0, 0.0001)
+
+
+## Robin/sparrow/kingfisher parity with herbivore/predator/fish (docs/concept/
+## ecosystem_dynamics.md's "Persistence/catch-up gap, robin/sparrow/kingfisher"
+## -- now resolved). Robin/sparrow use the SAME shape as fish: an independent
+## carrying capacity supplied via the `capacity` dict (worm/seed density lives
+## outside this pure function, same reason fish_capacity is an input rather
+## than derived). Kingfisher instead mirrors PREDATOR: its capacity is derived
+## INSIDE advance() from the freshly-advanced fish population, the same
+## "post-step prey level" ordering predator_capacity already uses for
+## herbivores.
+
+func test_bird_populations_included_in_zero_elapsed_unchanged_state():
+	var start := _state(5.0, 1.0, 2.0, 0.5, 3.0, 2.0, 4.0, 0.5)
+	var out := catchup.advance(start, 0.0, _capacity(20.0, 0.1, 20.0, 10.0, 40.0))
+	assert_almost_eq(out["robins"], 2.0, 0.0001)
+	assert_almost_eq(out["sparrows"], 4.0, 0.0001)
+	assert_almost_eq(out["kingfishers"], 0.5, 0.0001)
+
+
+func test_small_robin_pop_grows_toward_but_not_past_capacity():
+	var start := _state(1.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+	var cap := _capacity(20.0, 0.0, 20.0, 20.0)
+	var out := catchup.advance(start, 100000.0, cap)
+	assert_gt(out["robins"], 1.0, "robins should grow")
+	assert_lte(out["robins"], 20.0, "logistic must not overshoot capacity")
+
+
+func test_robin_growth_is_logistic_no_overshoot_repeated():
+	var s := _state(1.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+	var cap := _capacity(20.0, 0.0, 20.0, 20.0)
+	for i in 200:
+		s = catchup.advance(s, 100000.0, cap)
+		assert_lte(s["robins"], 20.0001, "never overshoots capacity")
+	assert_gt(s["robins"], 19.0, "eventually approaches capacity")
+
+
+func test_small_sparrow_pop_grows_toward_but_not_past_capacity():
+	var start := _state(1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0)
+	var cap := _capacity(20.0, 0.0, 20.0, 0.0, 20.0)
+	var out := catchup.advance(start, 100000.0, cap)
+	assert_gt(out["sparrows"], 1.0, "sparrows should grow")
+	assert_lte(out["sparrows"], 20.0, "logistic must not overshoot capacity")
+
+
+func test_sparrow_growth_is_logistic_no_overshoot_repeated():
+	var s := _state(1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0)
+	var cap := _capacity(20.0, 0.0, 20.0, 0.0, 20.0)
+	for i in 200:
+		s = catchup.advance(s, 100000.0, cap)
+		assert_lte(s["sparrows"], 20.0001, "never overshoots capacity")
+	assert_gt(s["sparrows"], 19.0, "eventually approaches capacity")
+
+
+func test_kingfishers_rise_when_fish_abundant():
+	# Abundant fish -> new_fish stays high -> kingfisher capacity (derived
+	# from new_fish, mirroring predator's derivation from new_herbivores) is
+	# high -> kingfishers grow. Mirrors test_predators_rise_when_herbivores_abundant.
+	var start := _state(0.0, 0.0, 0.0, 1.0, 1000.0, 0.0, 0.0, 1.0)
+	var out := catchup.advance(start, 100000.0, _capacity(0.0, 0.0, 2000.0))
+	assert_gt(out["kingfishers"], 1.0, "kingfishers should rise with abundant fish")
+
+
+func test_kingfishers_fall_when_fish_scarce():
+	# Mirrors test_predators_fall_when_herbivores_scarce.
+	var start := _state(0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 50.0)
+	var out := catchup.advance(start, 100000.0, _capacity(0.0, 0.0, 20.0))
+	assert_lt(out["kingfishers"], 50.0, "kingfishers should fall when fish is scarce")
+
+
+## A state dict from before robin/sparrow/kingfisher existed (an in-session
+## `_unloaded_ecology` record, or a pre-upgrade save) defaults all three to
+## 0.0 rather than crashing on a missing key -- same convention as land_health
+## defaulting to pristine when absent.
+func test_bird_populations_default_to_zero_when_absent_from_state():
+	var start := {
+		"herbivores": 5.0, "predators": 1.0, "fruit_stock": 2.0, "vegetation": 0.5,
+	}
+	var out := catchup.advance(start, 1.0, _capacity(20.0, 0.1))
+	assert_almost_eq(out["robins"], 0.0, 0.0001)
+	assert_almost_eq(out["sparrows"], 0.0, 0.0001)
+	assert_almost_eq(out["kingfishers"], 0.0, 0.0001)

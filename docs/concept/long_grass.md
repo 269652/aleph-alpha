@@ -104,8 +104,12 @@ scene, see History) and not plain per-instance `COLOR` read directly in
 this project's `gl_compatibility` renderer, also History).
 
 Tall grass initially covers roughly one fifth of eligible grassland cells
-(`128`-patch hard chunk cap, so this stays bounded even in an all-grass
-chunk), but NOT as an independent per-cell roll -- `TallGrass.
+(`205`-patch hard chunk cap -- derived from a real chunk's own cell count,
+`EarthChunkManager.CHUNK_SIZE` squared, times this ~20% target, so it
+actually accommodates that target even in an all-grass chunk rather than
+truncating it early; see `MAX_PATCHES`'s own doc comment in `tall_grass.gd`
+for the exact derivation and the bug fixed by raising it from an earlier,
+undersized `128`), but NOT as an independent per-cell roll -- `TallGrass.
 _seed_initial_patches` thresholds `PixelNoise.smooth` (`FIELD_NOISE_SCALE`/
 `FIELD_NOISE_THRESHOLD`, tuned to land near the same ~20% coverage) instead.
 Reported live: "remove the percentage of overall grass blades instead make
@@ -199,14 +203,14 @@ differences from the flower version, both because grass has no bloom cycle:
   "species", so its ground seed carries no species field at all -- `take_
   ground_seed` returns whether a seed was taken, not a name.
 - **Slower per-patch, because there are more patches shedding at once.**
-  Every mature cell counts (up to `MAX_PATCHES` = 128), where a flower
+  Every mature cell counts (up to `MAX_PATCHES` = 205), where a flower
   meadow's shedding population is the much smaller "past bloom and
   pollinated" subset of `MAX_FLOWERS` = 40. `SECONDS_PER_SEED_FALL` is
   tuned longer than `FlowerPatch`'s so the aggregate accumulation rate
   stays the same order of magnitude rather than flooding the ground the
   moment a chunk loads.
 
-### Two carriers, two different mechanisms, and that difference is deliberate
+### Three carriers, three different mechanisms, and that difference is deliberate
 
 Three animal-seed shapes already existed before this pass, each in its own
 module: `SeedDispersal` (a grazer brushes a bloom, seed rides its coat until
@@ -215,8 +219,11 @@ fruit, seed survives a real gut-passage-timed digestion, dropped once the
 timer elapses -- endozoochory), and `FlowerPatch`'s own ground-seed granivory
 (a sparrow eats a shed flower seed off the ground and carries it the same
 gut-passage way `SeedEndozoochory` does). Grass seed dispersal reuses the
-CLOSEST fit for each of its two carriers rather than inventing a fourth shape
-or forcing both animals through one:
+CLOSEST fit for each of its carriers rather than forcing all of them through
+one shared shape -- birds and mice reuse an EXISTING carrier module, and ants
+(added in a later pass) reuse the existing per-chunk POPULATION shape
+`EarthwormPatch` established instead, since a mound is nothing like an
+individually-carrying animal:
 
 - **Birds (sparrow) eat it exactly like flower seed, because it is the same
   organ doing the same thing.** A sparrow already forages flower ground seed
@@ -227,7 +234,13 @@ or forcing both animals through one:
   `plant_grass_at`) and reuses `SeedEndozoochory.carry_distance_tiles`
   unchanged for the carry -- a sparrow's crop does not care whether what it
   swallowed came from a flower head or a grass seed head, so there is no
-  reason to model the digestion differently.
+  reason to model the digestion differently. That also means the granivory
+  predation gate added later (`SeedEndozoochory.seed_is_consumed`/
+  `GRANIVORY_CONSUMED_CHANCE`, see [flora.md](flora.md#bird-endozoochory-
+  flowers-spread-where-birds-go)) applies to grass seed exactly as it does
+  to flower seed, unchanged: the large majority of a swallowed grass seed
+  is destroyed the same way, not just flower seed -- the same crop, the
+  same gizzard, regardless of which seed head it came from.
 - **Mice do NOT get the bird treatment, on purpose.** A real scatter-hoarding
   rodent does not fly and does not digest a seed in transit -- it finds a
   seed, carries a whole one in its cheek pouch on foot for a short distance
@@ -245,8 +258,24 @@ or forcing both animals through one:
   than to the whole "Forager" diet label -- this is a real mouse behaviour,
   not a generic dietary fact that should attach to anything sharing mice's
   diet table entry.
-- **Both carriers use the SAME sink.** Whatever gets a grass seed to a new
-  position -- a sparrow's digestion timer or a mouse's cache -- calls
+- **Ants get neither the bird nor the mouse treatment, for a third,
+  different reason again.** Myrmecochory (see
+  [soil_fauna.md](soil_fauna.md#ants-myrmecochory)) is not modelled as an
+  individually-carrying animal at all -- there is no ant `CreatureMarker`,
+  because one ant mound stands in for a whole colony ranging out from a
+  fixed nest, not a single forager the way the mouse or sparrow is. A
+  per-chunk `AntColony` (the same patch-sim shape `EarthwormPatch` uses)
+  rolls a small per-step chance for each mound to reach into the SAME
+  `grass_seeds_near`/`take_grass_seed_at` pair the mouse uses, and caches
+  the result a SHORT carry away (`AntColony.CARRY_MIN_TILES`/
+  `CARRY_MAX_TILES`, shorter than even `SeedCaching`'s own minimum -- real
+  myrmecochory moves a seed centimetres to a couple of metres, the
+  shortest-range disperser of the four). The harvest and the cache resolve
+  in the same step, because there is no individual carrier walking the
+  distance over time the way the mouse's carried state does.
+- **All three carriers use the SAME sink.** Whatever gets a grass seed to a
+  new position -- a sparrow's digestion timer, a mouse's cache, or an ant's
+  mound -- calls
   `EarthChunkManager.plant_grass_at`, which establishes a brand-new,
   immature `TallGrass` patch there (`TallGrass.plant`, the grass-seed
   counterpart of `FlowerPatch.plant`) if the ground is grassland and the
@@ -391,6 +420,23 @@ framebuffer), so several of these needed a real, non-headless, off-screen
    due on any tile change, extending the existing "mark due, chunk
    crossing" mechanism to tile granularity (see its own section above for
    the cost reasoning).
+9. **`test_earth_chunk_manager.gd`'s `test_plant_grass_at_establishes_a_new_
+   patch` failed deterministically against Berlin's own real chunk (2026-08-
+   26), not a rendering bug like the others above but a density/cap mismatch
+   in the Reproduction mechanism itself.** Root cause: `MAX_PATCHES` (128)
+   was only ~12.5% of a real `CHUNK_SIZE`-square (32×32=1024-cell) chunk,
+   well under `FIELD_NOISE_THRESHOLD`'s own documented ~20% target coverage
+   (`SEED_CHANCE`). Any chunk generating mostly/fully grassland — Berlin's
+   own chunk included — hit the 128 cap from INITIAL SEEDING alone, before
+   any spread or planting, leaving `plant()` permanently unable to succeed
+   on any empty cell there (its very first check is the cap, before the
+   per-cell occupancy check). Fixed by raising `MAX_PATCHES` to 205 —
+   derived from the real chunk size and target density (32²×0.20≈204.8,
+   rounded up), not picked by feel — with the derivation and a test
+   (`test_max_patches_accommodates_the_density_target_for_a_real_full_
+   chunk` in `test_tall_grass.gd`, which independently recomputes the same
+   math against `EarthChunkManager`'s real constants) so the relationship
+   re-verifies automatically if either constant ever changes again.
 
 ## Status
 
@@ -428,22 +474,54 @@ framebuffer), so several of these needed a real, non-headless, off-screen
   flower seed via the shared `seed_world` port and `SeedEndozoochory`'s carry
   model, plants a new patch elsewhere) -- `AmbientFlyerMarker`'s fourth
   parallel ground-forage track, mechanically proven correct in isolation
-  (dedicated tests, a stub world offering ONLY grass seed). 🚧 In a real,
-  mixed meadow it is a BACKUP path today, not an equal one: the four
-  ground-forage searches try in a fixed order (worm, fruit, flower-seed,
-  grass-seed -- unchanged, grass-seed simply appended last), so with real
-  flower seed abundant nearby a sparrow commits to it first every time and
-  grass-seed foraging never gets a turn -- measured in a real-world probe
-  (see `docs/progress.md`): 11 seeds eaten over a real run, 0 by sparrows.
-  Not fixed here (reordering priority risks the already-tested flower path
-  and wasn't asked for) -- flagged as a judgment call for a future pass.
+  (dedicated tests, a stub world offering ONLY grass seed). A later pass
+  made this genuinely real granivory rather than pure dispersal: the large
+  majority of a swallowed grass seed is now destroyed in digestion instead
+  of always planted (`SeedEndozoochory.GRANIVORY_CONSUMED_CHANCE`, shared
+  unchanged with the flower-seed case -- see the "Three carriers" section
+  above), so the numbers below are now an upper bound on what actually
+  establishes a new patch, not a guarantee. ✅ Worm and fruit still
+  unconditionally outrank both seed kinds (a real robin/sparrow's protein
+  and energy needs still win over a seed snack, unchanged), but between
+  flower-seed and grass-seed specifically, `AmbientFlyerMarker` now forages
+  whichever is genuinely NEAREST to the bird right now
+  (`_grass_seed_is_nearer_than`), not a fixed type-based order. Previously
+  the four ground-forage searches tried in a fixed order (worm, fruit,
+  flower-seed, grass-seed, grass-seed simply appended last), so with real
+  flower seed abundant nearby a sparrow committed to it first EVERY time and
+  grass-seed foraging never got a turn regardless of which was actually
+  closer -- measured in a real-world probe (see `docs/progress.md`): 11
+  seeds eaten over a real run, 0 by sparrows. `_look_for_seeds` now backs off
+  (without committing) whenever a grass seed candidate is strictly closer
+  than every flower-seed candidate in range, letting `_look_for_grass_seeds`
+  -- called immediately after it in the same seeking tick -- commit instead;
+  ties keep the old flower-first behaviour, and the flower-seed path itself
+  is untouched when it is genuinely the closer option (pinned by
+  `test_a_sparrow_still_forages_the_nearer_flower_seed_over_a_farther_grass_seed`,
+  a hard regression check alongside the pre-existing flower-seed tests, all
+  of which pass unmodified). Re-verified with a quick real probe (real
+  `AmbientFlyerMarker` + `GroundForageBehavior`, one flower seed fixed at 5
+  tiles, a grass seed swept from 1 to 9 tiles, 12 different `wander_seed`s
+  per distance): the sparrow ate the grass seed in all 12 runs at every
+  distance nearer than 5 tiles and the flower seed in all 12 runs at every
+  distance farther than 5 tiles -- a clean, deterministic crossover exactly
+  at the tie point, not a coin flip or a residual bias toward either kind.
 - ✅ Rodent dispersal (mouse picks up nearby shed seed, carries a short
   ground distance, caches/plants a new patch) -- its own module
   (`src/gameplay/seed_caching.gd`), a deliberately different mechanism from
-  the bird's, gated to species == "mouse" specifically. In the same
-  real-world probe this was the ONLY carrier that actually established a new
-  patch (11 of 11 eaten seeds, 1 new patch) -- today's real-world workhorse
-  of the two dispersal paths, for the priority-order reason above.
+  the bird's, gated to species == "mouse" specifically. In the real-world
+  probe run before the nearest-wins fix above, this was the ONLY carrier
+  that actually established a new patch (11 of 11 eaten seeds, 1 new patch)
+  -- the fixed-priority-order reason is now fixed (see above), so mice are
+  expected to remain a strong but no longer sole real-world driver of new
+  distant patches; the full mixed-meadow probe (real Berlin chunk data) has
+  not been re-run since the fix to re-measure the exact split.
+- ✅ Ant dispersal (myrmecochory) -- a third, deliberately different
+  mechanism again: not a carrying individual at all, but a per-chunk mound
+  population (`src/world/ant_colony.gd`, see
+  [soil_fauna.md](soil_fauna.md#ants-myrmecochory)) that reaches into the
+  same `grass_seeds_near`/`take_grass_seed_at`/`plant_grass_at` port the
+  mouse uses, with the shortest carry range of any disperser in the game.
 - ✅ Grazing counter-pressure -- was already live before this pass
   (`EarthChunkManager._graze_by_herbivores` already ate a mature patch under
   any non-predator creature standing on it, horses/sheep included); this

@@ -23,6 +23,9 @@ class StubWorld:
 	var herbivore_population := 10.0
 	var fish_population := 8.0
 	var harvested_amount := 0.0
+	var killed_herbivore_amount := 0.0
+	var last_kill_was_a_predator = null
+	var caught_fish_amount := 0.0
 	func vegetation_density_near(_pos: Vector2) -> float:
 		return vegetation_density
 	func herbivore_population_near(_pos: Vector2) -> float:
@@ -31,13 +34,24 @@ class StubWorld:
 		return fish_population
 	func record_vegetation_harvest_near(_pos: Vector2, amount: float) -> void:
 		harvested_amount += amount
+	func record_death_at(_pos: Vector2, is_predator: bool, count: float = 1.0) -> void:
+		last_kill_was_a_predator = is_predator
+		killed_herbivore_amount += count
+	func record_fish_catch_near(_pos: Vector2, count: float) -> bool:
+		caught_fish_amount += count
+		return true
 
 
-## A world exposing only the original accessor, not the new harvest hook --
-## the exact shape an older/duck-typed caller would still have.
+## A world exposing only the original accessors, not any of the harvest/kill/
+## catch depletion hooks -- the exact shape an older/duck-typed caller would
+## still have.
 class BareWorld:
 	func vegetation_density_near(_pos: Vector2) -> float:
 		return 0.6
+	func herbivore_population_near(_pos: Vector2) -> float:
+		return 10.0
+	func fish_population_near(_pos: Vector2) -> float:
+		return 8.0
 
 
 var market: VillageMarket
@@ -219,3 +233,168 @@ func test_a_working_farmer_does_not_crash_when_world_lacks_the_harvest_hook():
 	var economy := _economy("farmer")
 	economy.step(1.0, true, BareWorld.new(), Vector2.ZERO)
 	pass_test("a working farmer against a world without the harvest hook should not crash")
+
+
+# -- a working hunter's real kill reaches the world's herbivore population ---
+#
+# Mirrors the farmer block above exactly: a hunter NPC's gathered yield
+# previously only READ herbivore_population_near, never actually removed
+# anything from it. A real hunter working must now also feed
+# EarthChunkManager's record_death_at(pixel_position, false, gathered) --
+# the same is_predator=false hook a wild predator's kill or the player's own
+# weapon already reports through -- so sustained NPC hunting is a real
+# depletion driver too, not just wild predation.
+
+func test_a_working_hunter_records_a_real_herbivore_death():
+	var economy := _economy("hunter")
+	economy.step(1.0, true, world, Vector2.ZERO)
+	assert_gt(world.killed_herbivore_amount, 0.0)
+
+
+func test_a_non_working_hunter_records_no_death():
+	var economy := _economy("hunter")
+	economy.step(1.0, false, world, Vector2.ZERO)
+	assert_eq(world.killed_herbivore_amount, 0.0)
+
+
+## A hunter NPC harvesting herbivores is not itself a predator species --
+## must report through the same is_predator=false branch a wild kill of prey
+## uses, not the predator-population branch.
+func test_a_hunters_kill_is_recorded_as_a_non_predator_death():
+	var economy := _economy("hunter")
+	economy.step(1.0, true, world, Vector2.ZERO)
+	assert_eq(world.last_kill_was_a_predator, false)
+
+
+## Dimensionally consistent with the yield actually gathered: the killed
+## amount over one step must equal yield_per_second * delta_seconds -- the
+## exact same "fraction of standing herbivore population converted to food"
+## number the hunter's own production already computes, not a separately
+## invented rate.
+func test_hunter_death_amount_matches_the_real_yield_gathered():
+	var economy := _economy("hunter")
+	var expected := NpcProduction.new().yield_per_second("hunter", world, Vector2.ZERO) * 2.5
+	economy.step(2.5, true, world, Vector2.ZERO)
+	assert_almost_eq(world.killed_herbivore_amount, expected, 0.0001)
+
+
+## Only hunter reads/depletes herbivore population -- farmer/fisher read
+## DIFFERENT resource pools (vegetation/fish), so they must not also drain it.
+func test_a_working_farmer_does_not_record_a_herbivore_death():
+	var economy := _economy("farmer")
+	economy.step(1.0, true, world, Vector2.ZERO)
+	assert_eq(world.killed_herbivore_amount, 0.0)
+
+
+func test_a_working_fisher_does_not_record_a_herbivore_death():
+	var economy := _economy("fisher")
+	economy.step(1.0, true, world, Vector2.ZERO)
+	assert_eq(world.killed_herbivore_amount, 0.0)
+
+
+## A working hunter must not drain fish either -- it only ever touches the
+## one resource pool its own occupation actually reads from. (The vegetation
+## counterpart of this check, test_a_working_hunter_does_not_record_a_
+## vegetation_harvest, already exists above.)
+func test_a_working_hunter_does_not_record_a_fish_catch():
+	var economy := _economy("hunter")
+	economy.step(1.0, true, world, Vector2.ZERO)
+	assert_eq(world.caught_fish_amount, 0.0)
+
+
+## Duck-typed fail-open, same convention as the farmer hook above.
+func test_a_working_hunter_does_not_crash_when_world_lacks_the_death_hook():
+	var economy := _economy("hunter")
+	economy.step(1.0, true, BareWorld.new(), Vector2.ZERO)
+	pass_test("a working hunter against a world without record_death_at should not crash")
+
+
+# -- a working fisher's real catch reaches the world's fish population ------
+#
+# Mirrors the farmer/hunter blocks above, with one deliberate difference:
+# unlike record_vegetation_harvest_near/record_death_at (pure aggregate-
+# population arithmetic, harmless to call every frame with a tiny fractional
+# amount), EarthChunkManager.record_fish_catch_near ALSO finds-and-
+# queue_frees one real on-screen FishMarker every single call, regardless of
+# how small `count` is -- it's built for PiscivoreBirdMarker's one-call-per-
+# real-catch contract (paced seconds apart by its own state machine), not a
+# continuous per-frame drip. Calling it unthrottled from every _gather() (one
+# per rendered frame while a fisher works) would delete a real fish roughly
+# every frame instead of at the yield-proportional pace the mechanic
+# intends. So a fisher's catch is only reported once per whole FOOD_UNIT
+# actually accumulated -- the same discrete cadence a real catch already has
+# for PiscivoreBirdMarker, and the same gate the market stock/wallet gold
+# update already uses just below it in _gather.
+
+func test_a_working_fisher_records_a_real_fish_catch():
+	var economy := _economy("fisher")
+	for i in 200:
+		economy.step(1.0, true, world, Vector2.ZERO)  # plenty of real seconds to cross a whole FOOD_UNIT
+	assert_gt(world.caught_fish_amount, 0.0)
+
+
+## A single frame's worth of fractional yield must NOT report a catch --
+## this is exactly the regression the throttling guards against (a fisher
+## used to delete a real on-screen fish almost every frame).
+func test_a_single_short_step_does_not_yet_report_a_catch():
+	var economy := _economy("fisher")
+	economy.step(1.0, true, world, Vector2.ZERO)  # one frame's yield, well under one FOOD_UNIT
+	assert_eq(world.caught_fish_amount, 0.0, "a fraction of a food unit must not report a discrete catch yet")
+
+
+func test_a_non_working_fisher_records_no_catch():
+	var economy := _economy("fisher")
+	economy.step(1.0, false, world, Vector2.ZERO)
+	assert_eq(world.caught_fish_amount, 0.0)
+
+
+## A real catch is only ever reported in lockstep with a whole FOOD_UNIT
+## actually reaching the shared market stock -- one discrete catch per one
+## whole food unit sold, never fractionally ahead of it (which is what let a
+## fisher over-report/over-delete real fish before this fix). 199 steps (not
+## a round 200) deliberately leaves a fractional remainder mid-unit, so a
+## still-continuous/unthrottled implementation would report MORE than the
+## market's whole-unit stock, not just coincidentally match it.
+func test_fisher_catch_amount_always_matches_the_whole_units_reaching_the_market():
+	var economy := _economy("fisher")
+	for i in 199:
+		economy.step(1.0, true, world, Vector2.ZERO)
+	assert_almost_eq(world.caught_fish_amount, market.stock["fish"], 0.0001)
+
+
+## Quantized to whole units, but still tracks the real yield over time --
+## never off by more than one FOOD_UNIT from the true total gathered.
+func test_fisher_catch_amount_stays_within_one_food_unit_of_the_real_total_gathered():
+	var economy := _economy("fisher")
+	var total_seconds := 200.0
+	var expected_total := NpcProduction.new().yield_per_second("fisher", world, Vector2.ZERO) * total_seconds
+	for i in 200:
+		economy.step(1.0, true, world, Vector2.ZERO)
+	assert_almost_eq(world.caught_fish_amount, expected_total, NpcProduction.FOOD_UNIT)
+
+
+## Only fisher reads/depletes fish population -- farmer/hunter must not also
+## drain it.
+func test_a_working_farmer_does_not_record_a_fish_catch():
+	var economy := _economy("farmer")
+	economy.step(1.0, true, world, Vector2.ZERO)
+	assert_eq(world.caught_fish_amount, 0.0)
+
+
+func test_a_working_fisher_does_not_record_a_vegetation_harvest():
+	var economy := _economy("fisher")
+	economy.step(1.0, true, world, Vector2.ZERO)
+	assert_eq(world.harvested_amount, 0.0)
+
+
+## Duck-typed fail-open, same convention as the farmer/hunter hooks above.
+## Loops enough real seconds to actually cross a whole FOOD_UNIT (the point
+## where the discrete catch call now fires -- see the throttling comment
+## above), so this genuinely exercises the fail-open branch rather than
+## trivially passing because the guarded call never ran at all.
+func test_a_working_fisher_does_not_crash_when_world_lacks_the_catch_hook():
+	var economy := _economy("fisher")
+	var bare_world := BareWorld.new()
+	for i in 200:
+		economy.step(1.0, true, bare_world, Vector2.ZERO)
+	pass_test("a working fisher against a world without record_fish_catch_near should not crash")

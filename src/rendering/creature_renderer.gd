@@ -1,9 +1,10 @@
 extends RefCounted
 
-## Placeholder visual promotion of a region's aggregate herbivore/predator
-## population into individually-rendered markers (Phase 1 roadmap's
-## "promotion rule"). Each marker idle-wanders (see CreatureMarker) but has
-## no real AI/pathfinding/behavior yet.
+## Visual promotion of a region's aggregate herbivore/predator population into
+## individually-rendered markers (Phase 1 roadmap's "promotion rule"). Each
+## marker now runs a real per-agent sense-decide-act AI loop (flee/hunt/graze/
+## drink, temperament-driven; see CreatureMarker + CreatureBehavior/
+## CreaturePerception/CreatureNeeds), not just idle-wandering.
 
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
@@ -51,17 +52,26 @@ const PREDATOR_SPECIES_POOL := ["predator", "predator", "predator", "lynx"]
 ## listed in a biome's pool means "ecologically plausible there", not
 ## "always spawns there" for the dangerous three (see
 ## docs/concept/ecosystem_dynamics.md's Region difficulty section).
+## Squirrel joins forest ONLY -- unlike mouse's near-ubiquitous generalism,
+## real tree squirrels are a genuine forest/woodland specialist: this is
+## where the nut trees they depend on (TreeSpecies.is_nut) actually grow
+## (see docs/concept/flora.md's disperser-vs-predator tension).
 const HERBIVORE_SPECIES_POOL_BY_BIOME := {
 	"grassland": ["herbivore", "herbivore", "herbivore", "boar", "horse", "mouse", "mouse", "deer", "nonvenomous_snake", "sheep"],
-	"forest": ["boar", "boar", "boar", "herbivore", "mouse", "mouse", "deer", "nonvenomous_snake"],
+	"forest": ["boar", "boar", "boar", "herbivore", "mouse", "mouse", "deer", "nonvenomous_snake", "squirrel", "squirrel"],
 	"desert": ["camel", "camel", "camel", "herbivore", "horse", "mouse", "nonvenomous_snake"],
 	"tundra": ["reindeer", "reindeer", "reindeer", "herbivore", "mouse", "deer"],
 	"rainforest": ["tapir", "tapir", "tapir", "herbivore", "mouse", "mouse", "nonvenomous_snake"],
 	"mountain": ["goat", "goat", "goat", "herbivore", "mouse", "sheep", "sheep"],
 }
+## wolf joins grassland's and forest's pools -- real grey wolves are the
+## classic temperate grassland/forest apex predator (see
+## docs/concept/ecosystem_dynamics.md's Species roster section). An ordinary,
+## ungated addition like deer/nonvenomous_snake, not gated by
+## MIN_DIFFICULTY_TIER_BY_SPECIES.
 const PREDATOR_SPECIES_POOL_BY_BIOME := {
-	"grassland": ["predator", "predator", "predator", "lynx", "lion"],
-	"forest": ["lynx", "lynx", "lynx", "predator", "bear"],
+	"grassland": ["predator", "predator", "predator", "lynx", "lion", "wolf"],
+	"forest": ["lynx", "lynx", "lynx", "predator", "bear", "wolf"],
 	"desert": ["jackal", "jackal", "jackal", "predator", "lion", "venomous_snake"],
 	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "predator", "bear"],
 	"rainforest": ["jaguar", "jaguar", "jaguar", "predator", "venomous_snake"],
@@ -214,10 +224,24 @@ func _spawn_species(
 ## world's own creatures, a debug-spawned individual isn't expected to look
 ## the same across sessions. `tile_size` only affects CreatureMarker's own
 ## terrain sensing (see setup()), not this marker's position.
+## `wander_seed`, when given, is used as-is instead of a fresh `randi()` roll --
+## this is what lets a restored kept animal (see KeptAnimals /
+## EarthChunkManager._restore_kept_animals) come back as the SAME individual
+## rather than having its AnimalFitness phenotype (strength/agility/
+## coat_vibrancy, all deterministic from this one seed) silently re-rolled on
+## every reload. Every other caller (a wild spawn, a courtship offspring)
+## leaves this at its default and keeps getting a fresh individual, exactly as
+## before.
 func spawn_single(
-	parent: Node2D, species_name: String, position: Vector2, world = null, tile_size: int = 16
+	parent: Node2D,
+	species_name: String,
+	position: Vector2,
+	world = null,
+	tile_size: int = 16,
+	wander_seed: int = -1
 ) -> CreatureMarker:
-	return _build_marker(parent, species_name, position, randi(), world, tile_size)
+	var seed_value := wander_seed if wander_seed >= 0 else randi()
+	return _build_marker(parent, species_name, position, seed_value, world, tile_size)
 
 
 func _build_marker(

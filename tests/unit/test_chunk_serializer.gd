@@ -178,3 +178,53 @@ func test_an_old_ecology_file_without_land_health_defaults_it_to_pristine():
 	assert_almost_eq(float(loaded["herbivores"]), 2.0, 0.001)
 	assert_almost_eq(float(loaded["land_health"]), 1.0, 0.001)
 	DirAccess.remove_absolute(path)
+
+
+# -- robin/sparrow/kingfisher survive a real restart too (parity with
+# herbivore/predator/fish -- docs/concept/ecosystem_dynamics.md's
+# "Persistence/catch-up gap, robin/sparrow/kingfisher", now resolved).
+#
+# Appended AFTER land_health, not interleaved -- same backward-compat
+# convention land_health itself used when it was added after the original
+# 4-field format, so a save written before these three fields existed still
+# loads its earlier fields correctly instead of reading past end-of-file.
+
+func test_bird_populations_round_trip_through_the_ecology_file():
+	var path := "user://test_ecology_birds.bin"
+	var state := {
+		"herbivores": 1.0, "predators": 0.0, "vegetation": 0.5,
+		"saved_at_unix": 1700000000.0, "land_health": 0.9,
+		"robins": 3.5, "sparrows": 7.25, "kingfishers": 0.75,
+	}
+	serializer.save_ecology(state, path)
+	var loaded := serializer.load_ecology(path)
+	assert_almost_eq(float(loaded["robins"]), 3.5, 0.001)
+	assert_almost_eq(float(loaded["sparrows"]), 7.25, 0.001)
+	assert_almost_eq(float(loaded["kingfishers"]), 0.75, 0.001)
+	DirAccess.remove_absolute(path)
+
+
+## Backward compatibility: an ecology file written before robin/sparrow/
+## kingfisher persistence existed (5-field format: herbivores/predators/
+## vegetation/saved_at_unix/land_health) must still load cleanly, defaulting
+## all three bird populations to 0.0 rather than reading past end-of-file --
+## mirroring test_an_old_ecology_file_without_land_health_defaults_it_to_pristine's
+## own backward-compat contract one field generation later.
+func test_an_old_ecology_file_without_bird_populations_defaults_them_to_zero():
+	var path := "user://test_ecology_old_format_no_birds.bin"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_float(2.0)  # herbivores
+	file.store_float(1.0)  # predators
+	file.store_float(0.6)  # vegetation
+	file.store_double(1700000000.0)  # saved_at_unix
+	file.store_float(0.8)  # land_health
+	file.close()
+
+	var loaded := serializer.load_ecology(path)
+
+	assert_almost_eq(float(loaded["herbivores"]), 2.0, 0.001)
+	assert_almost_eq(float(loaded["land_health"]), 0.8, 0.001)
+	assert_almost_eq(float(loaded["robins"]), 0.0, 0.001)
+	assert_almost_eq(float(loaded["sparrows"]), 0.0, 0.001)
+	assert_almost_eq(float(loaded["kingfishers"]), 0.0, 0.001)
+	DirAccess.remove_absolute(path)

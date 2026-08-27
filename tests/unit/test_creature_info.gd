@@ -94,7 +94,7 @@ func test_lynx_is_an_aggressive_predator():
 
 # -- biome-specific species (see CreatureRenderer's per-biome species pools) --
 
-const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat", "mouse", "horse", "deer", "nonvenomous_snake"]
+const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat", "mouse", "horse", "deer", "nonvenomous_snake", "squirrel"]
 const NEW_PREDATOR_SPECIES := ["jackal", "arctic_fox", "jaguar", "mountain_lion", "bear", "lion", "venomous_snake"]
 
 
@@ -251,3 +251,72 @@ func test_every_new_species_has_positive_health_stamina_and_mana_and_a_known_die
 		assert_gt(creature_info.max_stamina, 0.0, species)
 		assert_gt(creature_info.max_mana, 0.0, species)
 		assert_ne(creature_info.diet, "Unknown", species)
+
+
+# -- wolf: a genuine 21st species, not a reskin of "predator" ---------------
+#
+# Wolves are pack-hunting, cursorial (long-distance endurance) canid hunters
+# -- mid-large, built for stamina over raw power. See
+# docs/concept/ecosystem_dynamics.md's Species roster section.
+
+func test_wolf_is_an_aggressive_predator_that_hunts():
+	var wolf_info := CreatureInfo.new("wolf")
+	assert_eq(wolf_info.temperament, "aggressive")
+	assert_true(wolf_info.is_predator)
+	assert_eq(wolf_info.diet, "Hunter")
+
+
+## Real wolves sit between a lynx and a jaguar/mountain lion in raw
+## fighting power -- mid-large, but built for stamina over a single burst
+## of strength.
+func test_wolf_health_is_between_lynx_and_the_big_cats():
+	var wolf_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["wolf"]
+	assert_gt(wolf_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["lynx"])
+	assert_lt(wolf_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["jaguar"])
+	assert_lt(wolf_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["mountain_lion"])
+
+
+## Real wolves are famous for endurance-pursuit hunting (chasing prey over
+## long distances rather than winning on a single burst) -- notably higher
+## stamina than every other predator, comparable to or above horse's 40.0
+## (today's stamina ceiling).
+func test_wolf_has_the_highest_stamina_in_the_entire_roster():
+	var wolf_stamina: float = CreatureInfo.MAX_STAMINA_BY_SPECIES["wolf"]
+	for species in CreatureInfo.MAX_STAMINA_BY_SPECIES:
+		if species == "wolf":
+			continue
+		assert_gte(
+			wolf_stamina, CreatureInfo.MAX_STAMINA_BY_SPECIES[species],
+			"wolf should have real-world-grounded endurance-pursuit stamina"
+		)
+
+
+# -- squirrel: a genuine 22nd species, not a reskin of mouse -----------------
+#
+# A tree-nut forager, herbivore-role (it does not hunt other animals): see
+# docs/concept/flora.md's disperser-vs-predator tension and
+# docs/concept/ecosystem_dynamics.md's Species roster section.
+
+func test_squirrel_is_a_calm_forager_that_does_not_hunt():
+	var squirrel_info := CreatureInfo.new("squirrel")
+	assert_eq(squirrel_info.temperament, "calm")
+	assert_false(squirrel_info.is_predator)
+	assert_eq(squirrel_info.diet, "Forager")
+
+
+## A real tree squirrel is small but notably bigger and more robust than a
+## mouse -- clearly between mouse (the roster's smallest/frailest, 6.0) and
+## the generic herbivore baseline (20.0), not down at mouse's own level.
+func test_squirrel_health_is_between_mouse_and_the_herbivore_baseline():
+	var squirrel_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["squirrel"]
+	assert_gt(squirrel_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["mouse"])
+	assert_lt(squirrel_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["herbivore"])
+
+
+## Real squirrels are famous for speed and acrobatics (leaping tree to tree,
+## outrunning ground predators) -- a real-world-grounded HIGH agility stat,
+## not just "a bit above mouse". Notably above mouse's own already-high 20.0.
+func test_squirrel_has_high_agility_flavored_stamina():
+	var squirrel_stamina: float = CreatureInfo.MAX_STAMINA_BY_SPECIES["squirrel"]
+	assert_gt(squirrel_stamina, CreatureInfo.MAX_STAMINA_BY_SPECIES["mouse"])
+	assert_gte(squirrel_stamina, 30.0, "squirrel should read as a genuinely agile species")

@@ -214,6 +214,25 @@ func test_spawn_single_gives_the_marker_a_real_procedural_texture():
 	assert_not_null((marker as Sprite2D).texture)
 
 
+## A restored kept animal (see KeptAnimals/EarthChunkManager._restore_kept_animals)
+## needs to come back as the SAME individual, not a fresh randi() roll -- its
+## AnimalFitness phenotype (strength/agility/coat_vibrancy) is deterministic from
+## this seed alone, so re-rolling it on every reload would quietly re-roll the
+## animal a player spent an evening taming.
+func test_spawn_single_accepts_an_explicit_wander_seed_for_a_restored_animal():
+	var marker := renderer.spawn_single(parent, "horse", Vector2.ZERO, null, 16, 918273)
+	assert_eq(marker.wander_seed, 918273)
+
+
+## Every OTHER caller (a wild spawn, a courtship offspring) must keep getting a
+## fresh individual -- the explicit-seed parameter is additive, not a behavior
+## change for anyone who doesn't pass it.
+func test_spawn_single_still_rolls_a_fresh_seed_when_none_is_given():
+	var a := renderer.spawn_single(parent, "horse", Vector2.ZERO)
+	var b := renderer.spawn_single(parent, "horse", Vector2.ZERO)
+	assert_ne(a.wander_seed, b.wander_seed, "two unseeded spawns should not share an individual")
+
+
 # -- per-biome species pools ---------------------------------------------------
 
 
@@ -269,7 +288,7 @@ func test_grassland_biome_matches_the_original_generic_pool_identity():
 	assert_true(predator_species.has("predator"))
 	assert_true(predator_species.has("lynx"))
 	for species in predator_species:
-		assert_true(species in ["predator", "lynx", "lion"], "unexpected predator-role species: %s" % species)
+		assert_true(species in ["predator", "lynx", "lion", "wolf"], "unexpected predator-role species: %s" % species)
 
 
 func test_forest_biome_is_boar_and_lynx_dominant():
@@ -278,12 +297,12 @@ func test_forest_biome_is_boar_and_lynx_dominant():
 	assert_true(herbivore_species.has("boar"), "forest should promote boars")
 	for species in herbivore_species:
 		assert_true(
-			species in ["herbivore", "boar", "mouse", "deer", "nonvenomous_snake"],
+			species in ["herbivore", "boar", "mouse", "deer", "nonvenomous_snake", "squirrel"],
 			"unexpected herbivore-role species: %s" % species
 		)
 	assert_true(predator_species.has("lynx"), "forest should promote lynx")
 	for species in predator_species:
-		assert_true(species in ["predator", "lynx", "bear"], "unexpected predator-role species: %s" % species)
+		assert_true(species in ["predator", "lynx", "bear", "wolf"], "unexpected predator-role species: %s" % species)
 
 
 func test_desert_biome_promotes_camels_and_jackals():
@@ -445,3 +464,36 @@ func test_lion_appears_in_grassland_at_hard_difficulty():
 func test_venomous_snake_appears_in_desert_at_hard_difficulty():
 	var predator_species := _species_seen_across_chunks(0.0, 1.0, "desert", 80)
 	assert_true(predator_species.has("venomous_snake"), "desert should promote venomous snakes at HARD difficulty")
+
+
+# -- wolf: a genuine 21st species, added alongside the existing grassland/
+# forest predators (real grey wolves are the classic temperate grassland/
+# forest apex predator) -- not gated by difficulty, an ordinary roster
+# addition like deer/nonvenomous_snake.
+
+func test_wolf_appears_in_grassland_and_forest_predator_pools():
+	for biome_name in ["grassland", "forest"]:
+		var predator_species := _species_seen_across_chunks(0.0, 1.0, biome_name, 200)
+		assert_true(predator_species.has("wolf"), "%s should be able to promote wolves" % biome_name)
+
+
+func test_wolf_does_not_appear_outside_grassland_and_forest_predator_pools():
+	for biome_name in ["desert", "tundra", "rainforest", "mountain"]:
+		var predator_species := _species_seen_across_chunks(0.0, 1.0, biome_name, 200)
+		assert_false(predator_species.has("wolf"), "%s should not promote wolves" % biome_name)
+
+
+# -- squirrel: a genuine 22nd species, added to forest's herbivore pool only
+# (real tree squirrels are a forest/woodland specialist -- this is where the
+# nut trees they depend on actually grow) -- see docs/concept/flora.md's
+# disperser-vs-predator tension.
+
+func test_squirrel_appears_in_the_forest_herbivore_pool():
+	var herbivore_species := _species_seen_across_chunks(1.0, 0.0, "forest", 200)
+	assert_true(herbivore_species.has("squirrel"), "forest should be able to promote squirrels")
+
+
+func test_squirrel_does_not_appear_outside_the_forest_herbivore_pool():
+	for biome_name in ["grassland", "desert", "tundra", "rainforest", "mountain"]:
+		var herbivore_species := _species_seen_across_chunks(1.0, 0.0, biome_name, 200)
+		assert_false(herbivore_species.has("squirrel"), "%s should not promote squirrels" % biome_name)

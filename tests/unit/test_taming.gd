@@ -163,6 +163,50 @@ func test_riding_is_faster_than_walking():
 	assert_lt(Taming.MOUNTED_SPEED, Player.BASE_SPEED * 3.0)
 
 
+## Mounted speed is not one flat number for every horse -- pets.md's own
+## pillar is that the same fitness that makes a wild animal strong in the
+## ecosystem sim is what makes it good to keep, so a fitter (stronger, more
+## agile) individual horse is genuinely faster to ride than an average one.
+## MOUNTED_SPEED itself stays the baseline: the population's median
+## fitness_score (0.5, since AnimalFitness's traits are each drawn uniformly
+## in [0,1]) must still land exactly on it, so mounting an "ordinary" horse
+## is unchanged from before this individual variation existed.
+func test_mounted_speed_at_the_population_median_fitness_is_the_flat_baseline():
+	assert_eq(Taming.mounted_speed_for(0.5), Taming.MOUNTED_SPEED)
+
+
+## A fitter horse rides faster; a less fit one, slower -- real-world grounded
+## in a fitter individual's own greater physical capability.
+func test_mounted_speed_scales_up_for_a_fitter_horse_and_down_for_a_less_fit_one():
+	assert_gt(Taming.mounted_speed_for(1.0), Taming.MOUNTED_SPEED)
+	assert_lt(Taming.mounted_speed_for(0.0), Taming.MOUNTED_SPEED)
+
+
+## Never rises the wrong way: there is no fitness value where a FITTER horse
+## is slower than a less fit one.
+func test_mounted_speed_is_monotonic_in_fitness():
+	var previous := -1.0
+	for step in 21:
+		var speed: float = Taming.mounted_speed_for(float(step) / 20.0)
+		assert_gte(speed, previous - 0.0001, "mounted speed must not fall as fitness rises")
+		previous = speed
+
+
+## A real, bounded range: even the least fit horse a player can actually tame
+## is still genuinely worth riding over walking, and even the fittest horse in
+## the world never becomes absurd -- both ends pinned against the same
+## walking-speed ratio test_riding_is_faster_than_walking already uses.
+func test_mounted_speed_stays_within_a_real_bounded_range():
+	assert_gt(
+		Taming.mounted_speed_for(0.0), Player.BASE_SPEED,
+		"even a minimally-fit horse must still be worth riding"
+	)
+	assert_lt(
+		Taming.mounted_speed_for(1.0), Player.BASE_SPEED * 3.0,
+		"even a maximally-fit horse must not become absurdly fast"
+	)
+
+
 # -- what the player actually experiences: holding the animal ----------------
 #
 # The tuned quantity was the chance of breaking free on ONE attempt, which is

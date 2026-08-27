@@ -648,6 +648,12 @@ func _scaled_piece(species_id: String, season: String, role: String, size: Vecto
 	var scaled: Image = null
 	if source != null and size.x > 0 and size.y > 0:
 		scaled = scale_piece(source, size)
+		if role == "trunk":
+			# Only the trunk gets root-flare art squeezed sideways into a box
+			# far narrower than the source drawing -- the canopy and fruit
+			# pieces are scaled close to their own aspect and have no
+			# equivalent gap to close.
+			scaled = close_enclosed_gaps(scaled)
 	_scaled_cache[key] = scaled
 	return scaled
 
@@ -668,6 +674,49 @@ static func scale_piece(source: Image, size: Vector2i) -> Image:
 	var scaled := source.duplicate()
 	scaled.resize(size.x, size.y, Image.INTERPOLATE_NEAREST)
 	return scaled
+
+
+## A trunk reads as one solid piece of wood, not two objects with a sliver of
+## background showing between them.
+##
+## Squeezing a wide root-flare drawing sideways into the trunk's own narrow
+## box (see illustrated_trunk_box) can land a real gap between two separate
+## root "toes" of the source art on the box's own centre column. For the
+## walnut sheet specifically that centre column IS a genuine gap in the art,
+## so every walnut tree sampled there came out fully transparent (reported as
+## a missing trunk).
+##
+## Any transparent run flanked by opaque pixels on BOTH sides in the same row
+## is enclosed by the trunk itself rather than open to the background, so it
+## is filled -- the same "petals are not windows" reasoning flora.md already
+## applies to line-art holes, just row-wise instead of a full flood fill: a
+## trunk's gaps run sideways between root legs, not as pockets needing 2D
+## reachability.
+static func close_enclosed_gaps(image: Image) -> Image:
+	# Image.duplicate() returns an untyped Variant, not Image -- ":=" would
+	# infer `result` as Variant and every downstream ":=" off it (width,
+	# fill_color, pixel) then fails to infer a type at all. Annotated
+	# explicitly instead (see the project's other typed-Variant gotchas).
+	var result: Image = image.duplicate()
+	var width := result.get_width()
+	for y in result.get_height():
+		var left := -1
+		var right := -1
+		for x in width:
+			if result.get_pixel(x, y).a > 0.05:
+				if left < 0:
+					left = x
+				right = x
+		if left < 0:
+			continue  # an entirely empty row -- nothing to close
+		var fill_color := result.get_pixel(left, y)
+		for x in range(left, right + 1):
+			var pixel := result.get_pixel(x, y)
+			if pixel.a > 0.05:
+				fill_color = pixel
+			else:
+				result.set_pixel(x, y, fill_color)
+	return result
 
 
 func _composite_illustrated(

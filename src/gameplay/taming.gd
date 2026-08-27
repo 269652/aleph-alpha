@@ -170,6 +170,33 @@ static func next_order(order: int) -> int:
 ## test_riding_is_faster_than_walking.
 const MOUNTED_SPEED := 150.0
 
+## How far an individual horse's own fitness (see AnimalFitness.fitness_score)
+## pulls its mounted speed away from the MOUNTED_SPEED baseline -- pets.md's
+## own pillar: the same fitness dimension that makes a wild animal strong in
+## the ecosystem sim is what makes it good to keep, so a genuinely fitter,
+## more agile individual is a genuinely faster ride. Bounded to a real range
+## rather than an unbounded scale: a fit riding horse reads as noticeably
+## quicker than an average one, not a different creature entirely, so even the
+## least-fit tameable horse stays well worth riding over walking and even the
+## fittest stays well short of absurd (both ends pinned by
+## test_mounted_speed_stays_within_a_real_bounded_range).
+const MIN_FITNESS_SPEED_MULTIPLIER := 0.8
+const MAX_FITNESS_SPEED_MULTIPLIER := 1.2
+
+
+## Mounted speed for a horse with this fitness_score (see AnimalFitness). The
+## multiplier range above is centered on 1.0, so the population's median
+## fitness (0.5 -- AnimalFitness's three traits are each drawn uniformly in
+## [0,1]) lands exactly on MOUNTED_SPEED: mounting an "ordinary" horse rides
+## exactly as before this per-individual variation existed, not faster or
+## slower on average (test_mounted_speed_at_the_population_median_fitness_is_
+## the_flat_baseline).
+static func mounted_speed_for(fitness_score: float) -> float:
+	var multiplier := lerpf(
+		MIN_FITNESS_SPEED_MULTIPLIER, MAX_FITNESS_SPEED_MULTIPLIER, clampf(fitness_score, 0.0, 1.0)
+	)
+	return MOUNTED_SPEED * multiplier
+
 
 ## Orders (follow / stay / mount) are for a fully tamed animal only. A
 ## half-trusting animal is still one you are holding by a rope.

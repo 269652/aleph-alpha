@@ -1,7 +1,7 @@
 extends RefCounted
 
 ## Real hand/AI-illustrated sprite-sheet animation for species with actual
-## art (assets/sprites/*.png -- currently horse, deer, boar, sheep; see
+## art (assets/sprites/*.png -- currently horse, deer, boar, sheep, wolf; see
 ## SpriteSheetSlicer for how a hand-assembled reference sheet becomes clean,
 ## aligned frames), replacing ProceduralAnimalSprite's primitive-shape
 ## generation for just those species. Reported: "the procedural generated
@@ -151,6 +151,24 @@ const _SHEETS := {
 		# a generous per-channel tolerance also swallows the anti-aliased
 		# blend right at the wool's silhouette edge without reaching into
 		# the cream wool itself (high on every channel, not just R/B).
+		"chroma_key": Color(0.95, 0.02, 0.96),
+		"chroma_key_tolerance": 0.25,
+	},
+	# Same layout family as sheep (8-col walk row, then an 8-col eat/graze
+	# row, on a solid magenta ground) but a SEPARATE source file at a
+	# different resolution (1536x1024 vs sheep's 1774x887) -- bands measured
+	# on wolf.png itself, not copied from sheep. Scanned row-by-row for where
+	# the non-background pixel count jumps from a low "just the thin column-
+	# divider lines" baseline (~16-17 px) to a high "solid divider/border
+	# stripe" value (768 px, the full sampled width): a 5px white frame at
+	# the very top (rows 0-4) and bottom (rows 1019-1023), a 3px divider
+	# between the two rows (510-512). Background samples clustered around
+	# (241, 4, 244)/255 -- essentially the same magenta sheep uses.
+	"wolf": {
+		"path": "res://assets/sprites/animals/wolf.png",
+		"walk_bands": [Vector2i(5, 509)],
+		"eat_bands": [Vector2i(513, 1018)],
+		"alpha_threshold": 0.3,
 		"chroma_key": Color(0.95, 0.02, 0.96),
 		"chroma_key_tolerance": 0.25,
 	},

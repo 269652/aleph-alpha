@@ -213,6 +213,52 @@ func set_age(age_seconds: float) -> void:
 	_redraw_canopy()
 
 
+## How many times a bee has visited this tree so far in its CURRENT bearing
+## cycle (see FruitingModel.pollination_factor / docs/concept/flora.md), and
+## which cycle that count belongs to.
+##
+## crop_potential is a pure function of the genome and elapsed time -- there
+## is no persisted per-tree state anywhere else for a visit to land in, so
+## this is where it lives, the same tier as this node's other per-tree state
+## (growth_scale, _ripe_count). Deliberately survives only as long as this
+## node does: it does NOT persist across a chunk unload/reload or a save,
+## which is an explicit simplification for this pass (see docs/progress.md) --
+## a chunk that unloads mid-cycle loses count of visits nobody was watching
+## anyway, the same way a sapling's growth is re-derived rather than saved.
+var _pollination_visits := 0.0
+var _pollination_visits_cycle := -1
+
+
+## Records one bee visit at world time `now`, within a bearing cycle
+## `bearing_cycle_seconds` long. Rolls the count over to zero the moment `now`
+## falls in a LATER cycle than the one already being counted, so a visit from
+## last year can never go on boosting this year's crop.
+##
+## `visit_weight` defaults to a flat 1.0 (an ordinary visit) but a caller can
+## bank more or less, scaled by the visiting bee's own AnimalFitness.
+## fitness_score -- see FruitingModel.visit_weight_for_fitness. The
+## accumulator is a float rather than an int specifically to hold these
+## fractional weights.
+func record_pollination_visit(bearing_cycle_seconds: float, now: float, visit_weight: float = 1.0) -> void:
+	var cycle := int(floor(now / maxf(bearing_cycle_seconds, 0.0001)))
+	if cycle != _pollination_visits_cycle:
+		_pollination_visits_cycle = cycle
+		_pollination_visits = 0.0
+	_pollination_visits += visit_weight
+
+
+## How many visits (fitness-weighted, see record_pollination_visit) this tree
+## has banked in the bearing cycle `now` falls in. Read-only: querying a
+## cycle nothing has been recorded in yet (including the very first query on
+## a freshly-built tree) simply reads zero rather than resetting anything, so
+## this is safe to call as often as fruiting steps run.
+func pollination_visits_in_cycle(bearing_cycle_seconds: float, now: float) -> float:
+	var cycle := int(floor(now / maxf(bearing_cycle_seconds, 0.0001)))
+	if cycle != _pollination_visits_cycle:
+		return 0.0
+	return _pollination_visits
+
+
 static var _tree_growth := TreeGrowth.new()
 
 var growth_scale: float = 1.0:

@@ -28,12 +28,18 @@ const VegetationGrowthModel = preload("res://src/world/vegetation_growth_model.g
 const HerbivorePopulationModel = preload("res://src/world/herbivore_population_model.gd")
 const PredatorPopulationModel = preload("res://src/world/predator_population_model.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
+const RobinPopulationModel = preload("res://src/world/robin_population_model.gd")
+const SparrowPopulationModel = preload("res://src/world/sparrow_population_model.gd")
+const KingfisherPopulationModel = preload("res://src/world/kingfisher_population_model.gd")
 const WaterAreaSurvey = preload("res://src/world/water_area_survey.gd")
 
 var _vegetation_model := VegetationGrowthModel.new()
 var _herbivore_model := HerbivorePopulationModel.new()
 var _predator_model := PredatorPopulationModel.new()
 var _aquatic_model := AquaticPopulationModel.new()
+var _robin_model := RobinPopulationModel.new()
+var _sparrow_model := SparrowPopulationModel.new()
+var _kingfisher_model := KingfisherPopulationModel.new()
 var _water_survey := WaterAreaSurvey.new()
 
 var _chunks: Dictionary = {}  # Vector2i chunk_coord -> Chunk
@@ -45,6 +51,26 @@ var _water_area_cells: Dictionary = {}  # Vector2i chunk_coord -> float (see fis
 var _water_temperature: Dictionary = {}  # Vector2i chunk_coord -> float
 var _fish_population: Dictionary = {}  # Vector2i chunk_coord -> float
 var _land_health: Dictionary = {}  # Vector2i chunk_coord -> float, see land_health()
+## Vector2i chunk_coord -> float. Unlike vegetation/water, these are NOT
+## derived from Chunk data -- they are reported in from the outside (see
+## update_worm_density/update_seed_density) because the real food-density
+## signal (EarthwormPatch.worm_cells().size(), FlowerPatch/TallGrass's
+## combined ground_seed_cells().size()) lives in EarthChunkManager's own
+## per-chunk patch instances, not in the static Chunk this file already owns.
+var _worm_density: Dictionary = {}  # Vector2i chunk_coord -> float
+var _seed_density: Dictionary = {}  # Vector2i chunk_coord -> float
+## Vector2i chunk_coord -> float. Robin (worm-linked), sparrow (seed-linked)
+## and kingfisher (fish-linked) aggregate populations -- closes the gap named
+## in docs/concept/ecosystem_dynamics.md's Open questions: eating a worm,
+## seed or fish previously had zero effect on how many of these birds
+## existed. Same per-chunk-aggregate shape as herbivore/predator/fish, each
+## with its OWN carrying-capacity model matching its OWN real food source
+## (see RobinPopulationModel/SparrowPopulationModel/KingfisherPopulationModel)
+## -- deliberately not collapsed into one combined "bird" number, the same
+## reason herbivore/predator/fish are three separate models rather than one.
+var _robin_population: Dictionary = {}  # Vector2i chunk_coord -> float
+var _sparrow_population: Dictionary = {}  # Vector2i chunk_coord -> float
+var _kingfisher_population: Dictionary = {}  # Vector2i chunk_coord -> float
 ## Vegetation harvested (via record_vegetation_harvest) since the last step()
 ## call, per region -- consumed and reset to 0.0 by step() itself, which
 ## turns it into a per-day rate to compare against the region's own
@@ -89,6 +115,24 @@ func add_region(chunk_coord: Vector2i, chunk: Chunk) -> void:
 		_water_area_cells[chunk_coord], _water_temperature[chunk_coord]
 	)
 
+	# Robin/sparrow: unlike vegetation/water above, their food-density signal
+	# (worm burrows, ground seed cells) is not Chunk data this function can
+	# derive on its own -- it lives in EarthChunkManager's own patch instances
+	# and arrives afterward via update_worm_density/update_seed_density. So,
+	# unlike every other population above, these start at 0 rather than at a
+	# freshly-computed equilibrium; the first step() after the caller reports
+	# real density grows them toward their real capacity.
+	_worm_density[chunk_coord] = 0.0
+	_seed_density[chunk_coord] = 0.0
+	_robin_population[chunk_coord] = 0.0
+	_sparrow_population[chunk_coord] = 0.0
+	# Kingfisher is the exception: its prey signal IS the fish population just
+	# seeded above, so it can start at equilibrium the same way predator does
+	# from herbivores.
+	_kingfisher_population[chunk_coord] = _kingfisher_model.carrying_capacity(
+		_fish_population[chunk_coord]
+	)
+
 
 ## Stops simulating a region (its unloaded chunk's terrain is regenerated
 ## deterministically on revisit -- see EarthChunkManager -- so this state is
@@ -104,6 +148,11 @@ func remove_region(chunk_coord: Vector2i) -> void:
 	_fish_population.erase(chunk_coord)
 	_land_health.erase(chunk_coord)
 	_harvest_accumulator.erase(chunk_coord)
+	_worm_density.erase(chunk_coord)
+	_seed_density.erase(chunk_coord)
+	_robin_population.erase(chunk_coord)
+	_sparrow_population.erase(chunk_coord)
+	_kingfisher_population.erase(chunk_coord)
 
 
 func has_region(chunk_coord: Vector2i) -> bool:
@@ -119,6 +168,47 @@ func update_environment(chunk_coord: Vector2i, chunk: Chunk) -> void:
 		_water_access[chunk_coord] = _water_access_fraction(chunk)
 		_water_area_cells[chunk_coord] = _water_survey.interior_water_cell_count(chunk)
 		_water_temperature[chunk_coord] = _water_survey.mean_interior_water_temperature(chunk)
+
+
+## Reports this region's current earthworm burrow count (EarthwormPatch.
+## worm_cells().size()) -- the real food-density signal robin carrying
+## capacity is derived from (robins eat worms). Called from outside because,
+## unlike vegetation/water, worm burrows are not Chunk data this file already
+## owns -- see the _worm_density field doc comment. A no-op for a region that
+## isn't currently loaded, the same guard update_environment uses.
+##
+## Bootstraps robin population to the freshly-known equilibrium the first
+## time density arrives for a region (population still exactly at
+## add_region's zero-density default): logistic growth is proportional to
+## the CURRENT population, so it can never lift a population off a true zero
+## on its own (0 is a fixed point of PopulationModel.step's own formula) --
+## without this, a chunk full of worms would hold zero robins forever. This
+## is exactly add_region's own "the world already contains a mature
+## ecosystem" equilibrium seeding, just necessarily deferred to here because
+## the food-density signal itself arrives later (see the _worm_density
+## field's doc comment). A region already above zero (density updated again
+## later, or migration/growth already moved it) is left for step() to grow or
+## shrink normally instead of being snapped back to equilibrium.
+func update_worm_density(chunk_coord: Vector2i, worm_cell_count: float) -> void:
+	if not _chunks.has(chunk_coord):
+		return
+	_worm_density[chunk_coord] = maxf(0.0, worm_cell_count)
+	if _robin_population.get(chunk_coord, 0.0) <= 0.0:
+		_robin_population[chunk_coord] = _robin_model.carrying_capacity(_worm_density[chunk_coord])
+
+
+## Reports this region's current combined ground-seed-cell count
+## (FlowerPatch.ground_seed_cells().size() + TallGrass.ground_seed_cells().
+## size()) -- the real food-density signal sparrow carrying capacity is
+## derived from (sparrows eat seeds). Same out-of-band reporting reason,
+## no-op-when-unloaded guard, and zero-population equilibrium bootstrap as
+## update_worm_density.
+func update_seed_density(chunk_coord: Vector2i, seed_cell_count: float) -> void:
+	if not _chunks.has(chunk_coord):
+		return
+	_seed_density[chunk_coord] = maxf(0.0, seed_cell_count)
+	if _sparrow_population.get(chunk_coord, 0.0) <= 0.0:
+		_sparrow_population[chunk_coord] = _sparrow_model.carrying_capacity(_seed_density[chunk_coord])
 
 
 ## Advances every currently-loaded region by delta_days simulated days:
@@ -211,6 +301,54 @@ func step(delta_days: float) -> void:
 			_fish_population[chunk_coord], fish_capacities.get(chunk_coord, 0.0), delta_days
 		)
 
+	# Robin: carrying capacity from worm density (reported externally, see
+	# update_worm_density) -- same logistic-growth-plus-migration shape as
+	# every population above, an independent model because a robin's food
+	# source (soil invertebrates) is its own ecological niche, not shared
+	# with sparrow's (seeds) or kingfisher's (fish).
+	var robin_capacities: Dictionary = {}
+	for chunk_coord in _robin_population.keys():
+		robin_capacities[chunk_coord] = _robin_model.carrying_capacity(
+			_worm_density.get(chunk_coord, 0.0)
+		)
+	if not _robin_population.is_empty():
+		_robin_population = _robin_model.migrate(_robin_population, robin_capacities, delta_days)
+	for chunk_coord in _robin_population.keys():
+		_robin_population[chunk_coord] = _robin_model.step(
+			_robin_population[chunk_coord], robin_capacities.get(chunk_coord, 0.0), delta_days
+		)
+
+	# Sparrow: carrying capacity from ground-seed density (reported
+	# externally, see update_seed_density).
+	var sparrow_capacities: Dictionary = {}
+	for chunk_coord in _sparrow_population.keys():
+		sparrow_capacities[chunk_coord] = _sparrow_model.carrying_capacity(
+			_seed_density.get(chunk_coord, 0.0)
+		)
+	if not _sparrow_population.is_empty():
+		_sparrow_population = _sparrow_model.migrate(_sparrow_population, sparrow_capacities, delta_days)
+	for chunk_coord in _sparrow_population.keys():
+		_sparrow_population[chunk_coord] = _sparrow_model.step(
+			_sparrow_population[chunk_coord], sparrow_capacities.get(chunk_coord, 0.0), delta_days
+		)
+
+	# Kingfisher: carrying capacity from the FRESHLY-STEPPED fish population
+	# above -- the same "capacity derives from this step's updated prey
+	# number" ordering predator capacity already uses for herbivores.
+	var kingfisher_capacities: Dictionary = {}
+	for chunk_coord in _kingfisher_population.keys():
+		kingfisher_capacities[chunk_coord] = _kingfisher_model.carrying_capacity(
+			_fish_population.get(chunk_coord, 0.0)
+		)
+	if not _kingfisher_population.is_empty():
+		_kingfisher_population = _kingfisher_model.migrate(
+			_kingfisher_population, kingfisher_capacities, delta_days
+		)
+	for chunk_coord in _kingfisher_population.keys():
+		_kingfisher_population[chunk_coord] = _kingfisher_model.step(
+			_kingfisher_population[chunk_coord], kingfisher_capacities.get(chunk_coord, 0.0), delta_days
+		)
+
 
 func average_vegetation_density(chunk_coord: Vector2i) -> float:
 	return _average(_vegetation_density.get(chunk_coord, PackedFloat32Array()))
@@ -291,14 +429,74 @@ func seed_fish_population(chunk_coord: Vector2i, fish: float) -> void:
 
 ## Subtracts a harvest (player rod or piscivore bird catch, see
 ## docs/concept/fishing.md#harvest-fishing-as-the-mortality-term) directly
-## from this region's aggregate fish population -- the explicit mortality
-## term the land herbivore/predator population still lacks (killing one
-## today doesn't touch EcosystemSimulation at all). Never goes negative; a
+## from this region's aggregate fish population. Never goes negative; a
 ## catch against an unknown region is a silent no-op (nothing to subtract
-## from).
+## from). record_death below is this function's counterpart for land
+## herbivores/predators.
 func record_catch(chunk_coord: Vector2i, count: float) -> void:
 	if _fish_population.has(chunk_coord):
 		_fish_population[chunk_coord] = maxf(0.0, _fish_population[chunk_coord] - count)
+
+
+func robin_population(chunk_coord: Vector2i) -> float:
+	return _robin_population.get(chunk_coord, 0.0)
+
+
+## This region's robin carrying capacity K (from worm burrow density) -- same
+## role as herbivore_capacity_at/fish_capacity_at. 0.0 for an unknown region.
+func robin_capacity_at(chunk_coord: Vector2i) -> float:
+	if not _worm_density.has(chunk_coord):
+		return 0.0
+	return _robin_model.carrying_capacity(_worm_density[chunk_coord])
+
+
+## Overrides a region's robin population -- used on chunk reload to install
+## the caught-up count from ChunkEcologyCatchup, instead of add_region's/
+## update_worm_density's fresh seeding (same override pattern as
+## seed_populations/seed_fish_population). A no-op for a region that isn't
+## currently loaded, matching seed_populations's own guard.
+func seed_robin_population(chunk_coord: Vector2i, robins: float) -> void:
+	if _robin_population.has(chunk_coord):
+		_robin_population[chunk_coord] = maxf(0.0, robins)
+
+
+func sparrow_population(chunk_coord: Vector2i) -> float:
+	return _sparrow_population.get(chunk_coord, 0.0)
+
+
+## This region's sparrow carrying capacity K (from ground-seed density) --
+## same role as robin_capacity_at. 0.0 for an unknown region.
+func sparrow_capacity_at(chunk_coord: Vector2i) -> float:
+	if not _seed_density.has(chunk_coord):
+		return 0.0
+	return _sparrow_model.carrying_capacity(_seed_density[chunk_coord])
+
+
+## Overrides a region's sparrow population -- seed_robin_population's
+## counterpart for the granivore half.
+func seed_sparrow_population(chunk_coord: Vector2i, sparrows: float) -> void:
+	if _sparrow_population.has(chunk_coord):
+		_sparrow_population[chunk_coord] = maxf(0.0, sparrows)
+
+
+func kingfisher_population(chunk_coord: Vector2i) -> float:
+	return _kingfisher_population.get(chunk_coord, 0.0)
+
+
+## This region's kingfisher carrying capacity K (from the EXISTING fish
+## population -- no new food-density model needed on this side). 0.0 for an
+## unknown region.
+func kingfisher_capacity_at(chunk_coord: Vector2i) -> float:
+	if not _fish_population.has(chunk_coord):
+		return 0.0
+	return _kingfisher_model.carrying_capacity(_fish_population[chunk_coord])
+
+
+## Overrides a region's kingfisher population -- seed_robin_population's
+## counterpart for the piscivore.
+func seed_kingfisher_population(chunk_coord: Vector2i, kingfishers: float) -> void:
+	if _kingfisher_population.has(chunk_coord):
+		_kingfisher_population[chunk_coord] = maxf(0.0, kingfishers)
 
 
 ## Records a real vegetation harvest against this region -- record_catch's
@@ -346,6 +544,27 @@ func record_birth(chunk_coord: Vector2i, count: float) -> void:
 		herbivore_capacity_at(chunk_coord),
 		_herbivore_population[chunk_coord] + count
 	)
+
+
+## An animal DIED near the player -- predator eating herbivore, or the
+## player's own weapon -- so the region's aggregate population goes down to
+## match. This is record_catch's counterpart for land herbivores/predators,
+## and record_birth's counterpart in the opposite direction: it closes the
+## gap record_catch's own doc comment used to describe (killing a land
+## animal never touched EcosystemSimulation at all). Both predator-eats-
+## herbivore kills and player weapon kills route through
+## CreatureMarker.take_damage, which is what calls this.
+##
+## Subtracts count from the predator population if is_predator, otherwise
+## from the herbivore population. Never goes negative; a death against an
+## unknown region is a silent no-op, the same as record_catch/record_birth.
+func record_death(chunk_coord: Vector2i, is_predator: bool, count: float = 1.0) -> void:
+	if is_predator:
+		if _predator_population.has(chunk_coord):
+			_predator_population[chunk_coord] = maxf(0.0, _predator_population[chunk_coord] - count)
+	else:
+		if _herbivore_population.has(chunk_coord):
+			_herbivore_population[chunk_coord] = maxf(0.0, _herbivore_population[chunk_coord] - count)
 
 
 func _average(values: PackedFloat32Array) -> float:

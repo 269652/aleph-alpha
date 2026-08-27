@@ -6,6 +6,7 @@ extends GutTest
 
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 const WIDTH := 16
 const HEIGHT := 16
@@ -80,7 +81,7 @@ func test_different_crop_ids_produce_different_patch_layouts_for_the_same_seed()
 func test_patch_count_stays_within_the_per_chunk_bound():
 	var crop := WildCropPatch.new("carrot", 3, WIDTH, HEIGHT, _biome_all("grassland"))
 	for i in 400:
-		crop.advance(WildCropPatch.SPREAD_INTERVAL)
+		crop.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
 	assert_lte(crop.get_patch_cells().size(), WildCropPatch.MAX_PATCHES)
 
 
@@ -93,7 +94,7 @@ func test_advance_grows_immature_patches_toward_maturity():
 	# tick suffices.
 	var immature := Vector2i(-1, -1)
 	for i in 50:
-		crop.advance(WildCropPatch.SPREAD_INTERVAL)
+		crop.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
 		for cell in crop.get_patch_cells():
 			if crop.get_growth(cell) < 1.0:
 				immature = cell
@@ -101,7 +102,7 @@ func test_advance_grows_immature_patches_toward_maturity():
 			break
 	assert_ne(immature, Vector2i(-1, -1), "precondition: a spread tick produced an immature patch")
 	var before: float = crop.get_growth(immature)
-	crop.advance(1.0)
+	crop.advance(1.0, 1.0)
 	assert_gt(crop.get_growth(immature), before)
 
 
@@ -109,15 +110,15 @@ func test_growth_is_capped_at_one():
 	var crop := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all("grassland"))
 	assert_gt(crop.get_patch_cells().size(), 0, "precondition: at least one initial patch")
 	var cell: Vector2i = crop.get_patch_cells()[0]
-	crop.advance(1000000.0)
+	crop.advance(1000000.0, 1.0)
 	assert_eq(crop.get_growth(cell), 1.0)
 
 
 func test_no_spread_before_the_spread_interval_elapses():
 	var crop := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all("grassland"))
-	crop.advance(1000000.0)  # everything mature; some spread ticks happen too
+	crop.advance(1000000.0, 1.0)  # everything mature; some spread ticks happen too
 	var count := crop.get_patch_cells().size()
-	crop.advance(WildCropPatch.SPREAD_INTERVAL * 0.5)
+	crop.advance(WildCropPatch.SPREAD_INTERVAL * 0.5, 1.0)
 	assert_eq(crop.get_patch_cells().size(), count)
 
 
@@ -181,10 +182,54 @@ func test_spread_never_crosses_into_the_other_crops_territory():
 	var carrot := WildCropPatch.new("carrot", 4, WIDTH, HEIGHT, _biome_all("grassland"))
 	var potato := WildCropPatch.new("potato", 4, WIDTH, HEIGHT, _biome_all("grassland"))
 	for i in 100:
-		carrot.advance(WildCropPatch.SPREAD_INTERVAL)
-		potato.advance(WildCropPatch.SPREAD_INTERVAL)
+		carrot.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
+		potato.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
 	var carrot_cells := {}
 	for cell in carrot.get_patch_cells():
 		carrot_cells[cell] = true
 	for cell in potato.get_patch_cells():
 		assert_false(carrot_cells.has(cell), "cell %s claimed by both crops after spreading" % cell)
+
+
+## Lighter regression pin of the seasonal-growth contract test_tall_grass.gd
+## proves thoroughly (see its test_advance_grows_slower_in_winter_than_in_
+## summer_for_the_same_elapsed_time): growth_modifier must scale
+## WildCropPatch's own growth increment too, not just TallGrass's -- keeping
+## its deliberately-pinned ratio to TallGrass.GROWTH_RATE intact rather than
+## bypassing the seasonal gate.
+##
+## Retries spread ticks in lockstep on both instances (same seed/crop_id ->
+## an identical, deterministic outcome each tick, so they never diverge)
+## until one produces an immature patch -- territory partitioning (see
+## _in_this_crops_territory) can make a single tick land on an
+## ineligible/occupied neighbor and do nothing, same reason
+## test_advance_grows_immature_patches_toward_maturity above retries. Every
+## pre-existing patch starts already mature (capped at 1.0), so which cell
+## spreads into is unaffected by the modifier either way.
+func test_advance_grows_slower_in_winter_than_in_summer_for_the_same_elapsed_time():
+	var cycle := SeasonCycle.new()
+	var summer_modifier: float = cycle.growth_modifier(SeasonCycle.SECONDS_PER_YEAR * 0.375)
+	var winter_modifier: float = cycle.growth_modifier(SeasonCycle.SECONDS_PER_YEAR * 0.875)
+
+	var summer := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var winter := WildCropPatch.new("carrot", 1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var immature := Vector2i(-1, -1)
+	for i in 50:
+		summer.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
+		winter.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
+		for cell in summer.get_patch_cells():
+			if summer.get_growth(cell) < 1.0:
+				immature = cell
+				break
+		if immature != Vector2i(-1, -1):
+			break
+	assert_ne(immature, Vector2i(-1, -1), "precondition: a spread tick produced an immature patch")
+	assert_almost_eq(
+		summer.get_growth(immature), winter.get_growth(immature), 0.0001,
+		"precondition: both instances start from the same immature growth"
+	)
+
+	summer.advance(1.0, summer_modifier)
+	winter.advance(1.0, winter_modifier)
+
+	assert_gt(summer.get_growth(immature), winter.get_growth(immature))

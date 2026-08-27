@@ -171,6 +171,24 @@ is a creature in the ecosystem, not a vehicle.
 - ✅ Mounting (horses only): the rider stays the node the player controls and
   the mount is carried along with them, so inventory, combat and survival all
   keep working unchanged while riding
+- ✅ **Fitness-driven mounted speed and a coat-quality tell (2026-08-26):**
+  pets.md's own design pillar -- "the same fitness dimension that makes a
+  wild animal strong in the ecosystem sim is what makes it good to keep" --
+  now has its first real wiring. `Taming.mounted_speed_for` scales a ridden
+  horse's speed by *that specific individual's own* `AnimalFitness.
+  fitness_score` (read from its `wander_seed`), lerped between 0.8x and 1.2x
+  the old flat `MOUNTED_SPEED`; the population median fitness (0.5) still
+  rides at exactly 150, so an "ordinary" horse is unchanged, and only a
+  genuinely fitter/less-fit individual pulls away from that baseline in
+  either direction. Separately, `coat_vibrancy` alone (not the combined
+  score) drives a visible pre-taming tell: `CreatureMarker` tints every land
+  creature's own sprite by a warm, bounded, squared curve -- an ordinary
+  coat reads as visually unmodified, a truly vibrant one clearly stands out
+  -- so a player can judge a wild horse's coat quality before ever throwing
+  the lasso, the real-world "prize animals are visibly judged before anyone
+  commits to keeping them" pattern. See `docs/concept/pets.md`'s "Fitness →
+  in-role performance" table for the exact mapping and what is still
+  unmapped (`strength`/`agility` individually).
 - ✅ Carrots have a source: **wild carrot** (Daucus carota) is a real,
   visible meadow plant that grows, spreads, and is pulled directly --
   `WildCropPatch`/`WildCropMarker`, see [wild_crops.md](wild_crops.md) --
@@ -185,4 +203,16 @@ is a creature in the ecosystem, not a vehicle.
   capped at carrying capacity, so rolling it in there could see it culled to
   make room for wild deer. Kept animals are therefore EXTRA: carrying capacity
   governs wild animals, not the ones the player is looking after.
+  **Fixed (2026-08-26): "a particular animal" is now actually true, not just
+  its trust/position/tied state.** `_restore_kept_animals` respawned a kept
+  animal via `CreatureRenderer.spawn_single`, which always rolled a fresh
+  `randi()` seed -- silently re-rolling the individual's own
+  `AnimalFitness`-derived phenotype (strength/agility/coat_vibrancy, all
+  deterministic from that one seed) on every reload, even though everything
+  else about it was faithfully restored. `KeptAnimals` now persists
+  `wander_seed` too (format version bumped to 2; an old save is simply
+  dropped, the same "better nothing than nonsense" rule the file already used
+  for a version mismatch), and `spawn_single` takes an optional explicit seed
+  for exactly this restore path, leaving every other caller (a wild spawn, a
+  courtship offspring) rolling a fresh individual as before.
 - ⬜ The struggle is resolved silently; it has no animation of its own

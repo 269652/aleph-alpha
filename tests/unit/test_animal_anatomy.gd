@@ -171,3 +171,103 @@ func test_a_deer_is_four_fifths_the_size_of_a_horse():
 	var deer: float = AnimalAnatomy.profile_for("deer").world_scale
 	var horse: float = AnimalAnatomy.profile_for("horse").world_scale
 	assert_almost_eq(deer / horse, 0.8, 0.01)
+
+
+## Reported gap: jackal/arctic_fox/mountain_lion/lion already have tuned
+## stats (creature_info.gd) and already spawn from CreatureRenderer's biome
+## pools, but had no AnimalAnatomy profile at all -- profile_for() silently
+## fell back to the generic herbivore build (wrong world_scale/body plan for
+## a predator), and ConsoleSpecies.resolve() (which validates against
+## AnimalAnatomy.SPECIES) rejected "/spawn jackal" outright.
+func test_the_four_level_backed_predators_have_profiles():
+	for species in ["jackal", "arctic_fox", "mountain_lion", "lion"]:
+		assert_true(AnimalAnatomy.has_profile(species), species)
+
+
+## Each of the four must read as its own real-world body plan, not a copy
+## of an existing predator.
+func test_jackal_is_small_lean_and_big_eared():
+	var jackal := AnimalAnatomy.profile_for("jackal")
+	var lynx := AnimalAnatomy.profile_for("lynx")
+	var wolf := AnimalAnatomy.profile_for("wolf")
+	assert_lt(jackal.world_scale, 1.0, "a jackal is a small canid")
+	assert_gte(jackal.world_scale, lynx.world_scale, "comparable to or a touch above a lynx")
+	assert_gt(jackal.ear_size, wolf.ear_size, "jackals have notably big ears")
+	assert_lt(jackal.tail_length, wolf.tail_length, "a jackal's tail is shorter than a wolf's")
+
+
+func test_arctic_fox_is_the_smallest_and_stockiest_with_a_long_tail():
+	var fox := AnimalAnatomy.profile_for("arctic_fox")
+	for species in ["jackal", "mountain_lion", "lion"]:
+		assert_lt(
+			fox.world_scale, AnimalAnatomy.profile_for(species).world_scale,
+			"arctic fox should be the smallest of the four"
+		)
+	var wolf := AnimalAnatomy.profile_for("wolf")
+	var jackal := AnimalAnatomy.profile_for("jackal")
+	assert_lt(fox.leg_length, wolf.leg_length, "short legs minimize surface area")
+	assert_lt(fox.head_length, wolf.head_length, "short muzzle minimizes surface area")
+	assert_gt(fox.tail_length, jackal.tail_length, "a very long bushy tail relative to its small body")
+
+
+func test_mountain_lion_is_leaner_than_jaguar():
+	var cougar := AnimalAnatomy.profile_for("mountain_lion")
+	var jaguar := AnimalAnatomy.profile_for("jaguar")
+	assert_eq(cougar.tail, AnimalAnatomy.TAIL_FLOWING, "a long flowing tail like a jaguar's")
+	assert_gte(cougar.body_length, jaguar.body_length, "long-bodied, at or beyond a jaguar's")
+	assert_lt(cougar.barrel_squareness, jaguar.barrel_squareness, "leaner, less bulky than a jaguar")
+	assert_lt(cougar.shoulder_hump, jaguar.shoulder_hump, "leaner, less bulky than a jaguar")
+
+
+## Scoped to the level-backed predator profiles (bear is a separate, low
+## bulky-rooter build, not part of this family -- see the file's section
+## comments), matching the brief's "highest world_scale of any predator
+## profile".
+func test_lion_is_the_biggest_maned_predator():
+	var lion := AnimalAnatomy.profile_for("lion")
+	for species in ["wolf", "lynx", "jaguar", "predator", "jackal", "arctic_fox", "mountain_lion"]:
+		assert_gt(
+			lion.world_scale, AnimalAnatomy.profile_for(species).world_scale,
+			"a lion should be the biggest of the level-backed predators: %s" % species
+		)
+	assert_true(lion.has_mane, "real male lions have manes")
+
+
+# -- squirrel: a genuine 22nd species, not a reskin of mouse -----------------
+#
+# A real tree-nut forager (see docs/concept/flora.md's disperser-vs-predator
+# tension and docs/concept/ecosystem_dynamics.md's Species roster section):
+# small, short-legged like a mouse, but bigger, and defined above all by a
+# large expressive bushy tail -- proportionally one of the most distinctive
+# features of a real squirrel.
+
+func test_squirrel_has_a_profile():
+	assert_true(AnimalAnatomy.has_profile("squirrel"))
+	assert_true(AnimalAnatomy.SPECIES.has("squirrel"))
+
+
+func test_squirrel_is_small_and_short_legged_but_bigger_than_a_mouse():
+	var squirrel := AnimalAnatomy.profile_for("squirrel")
+	var mouse := AnimalAnatomy.profile_for("mouse")
+	assert_lt(squirrel.world_scale, 1.0, "a squirrel is a small rodent")
+	assert_gt(squirrel.world_scale, mouse.world_scale, "a squirrel is bigger than a mouse")
+	assert_lt(squirrel.leg_length, 0.15, "real squirrels have short legs relative to body")
+
+
+## A squirrel's tail is proportionally one of its most distinctive real-world
+## features -- LONGER relative to its own body than any other profile's,
+## including mouse's own already-long thin cord tail, but bushy rather than
+## thin (see AnimalAnatomy.TAIL_BUSHY).
+func test_squirrel_has_a_bushy_tail_longer_relative_to_its_body_than_anything_else():
+	var squirrel := AnimalAnatomy.profile_for("squirrel")
+	assert_eq(squirrel.tail, AnimalAnatomy.TAIL_BUSHY)
+	var squirrel_ratio: float = squirrel.tail_length / squirrel.body_length
+	for species in AnimalAnatomy.SPECIES:
+		if species == "squirrel":
+			continue
+		var other := AnimalAnatomy.profile_for(species)
+		var other_ratio: float = other.tail_length / other.body_length
+		assert_gt(
+			squirrel_ratio, other_ratio,
+			"squirrel's tail should be proportionally longer than %s's" % species
+		)

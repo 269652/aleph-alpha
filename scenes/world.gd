@@ -29,6 +29,9 @@ const CreaturePanel = preload("res://scenes/creature_panel.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const PebbleDispersion = preload("res://src/rendering/pebble_dispersion.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
+const Courtship = preload("res://src/gameplay/courtship.gd")
+const MammalCourtship = preload("res://src/gameplay/mammal_courtship.gd")
+const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const SettingsOverlay = preload("res://scenes/settings_overlay.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
@@ -1349,6 +1352,20 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# Food goes off in the pack too, on the same clock (see ItemStack.age).
 	_chunk_manager.step_carried_food(delta)
 	_chunk_manager.step_tall_grass(delta)
+	# Wild carrot/potato growth + spread (see EarthChunkManager.step_wild_crops,
+	# docs/concept/wild_crops.md) -- mirrors step_tall_grass's own throttled
+	# cadence immediately above; it existed and was fully tested but was never
+	# actually called from here, so a wild crop patch rendered on chunk load
+	# and then sat at its seeded growth forever in a real session.
+	_chunk_manager.step_wild_crops(delta)
+	# Ant mounds foraging (see AntColony, myrmecochory) -- fallen grass seed
+	# in grassland, or windfall fruit/nut in forest/rainforest where grass
+	# doesn't grow -- a background per-chunk population effect, batched here
+	# alongside the other content-adding steps rather than the cheap fine
+	# group, since it reads grass_seeds_near/fruit_near and plants new
+	# grass/saplings the same way the mouse's/squirrel's own scatter-hoarding
+	# does.
+	_chunk_manager.step_ants(delta)
 	_chunk_manager.step_flowers(delta)
 	_chunk_manager.step_desert_scrub(delta)
 	_chunk_manager.step_tundra_lichen(delta)
@@ -2344,56 +2361,193 @@ const MAX_SAME_SPECIES_NEARBY := 4
 const OFFSPRING_SCATTER := 14.0
 var _reproduction_accumulator := 0.0
 
+## Turns a creature's own wander_seed into its AnimalFitness phenotype for
+## _find_courtship_partner's mate-attractiveness ranking (see
+## MammalCourtship.most_attractive_partner_index). One shared instance --
+## AnimalFitness is stateless, so there is nothing per-creature to keep.
+var _animal_fitness := AnimalFitness.new()
 
-## Condition-gated individual reproduction (see AnimalReproduction /
-## ecosystem_dynamics.md): a healthy, well-fed creature past its birth cooldown
-## spawns an offspring of the same species beside it. Suppressed once the scene
-## is at MAX_LIVE_CREATURES (density dependence + safety bound). Offspring start
-## with fresh moderate condition (via CreatureRenderer.spawn_single).
+
+## Condition-gated, PAIRED individual reproduction (see AnimalReproduction /
+## MammalCourtship / ecosystem_dynamics.md's "Courtship, and where births come
+## from"). AnimalReproduction.can_reproduce() (energy/health/birth cooldown)
+## is a PRECONDITION, not the whole gate any more: an eligible creature with
+## no eligible same-species neighbour nearby does not reproduce at all -- it
+## has to find a partner (_pair_up_courtships), the pair has to actually walk
+## together and linger for a real duration (CreatureBehavior's "court" intent
+## drives that every frame; this only advances the shared timer -- see
+## _advance_courtships), and only once that duration completes with the pair
+## STILL viably together (_resolve_courtship) does an offspring appear.
+## There is deliberately no solo path any more: a single eligible creature
+## with nobody nearby to court just keeps wandering, exactly like the real
+## thing (previously it spawned young by itself, unconditionally on hitting
+## the gates below -- see docs/progress.md for the "no mate, no pairing" gap
+## this replaces).
 func _step_reproduction(delta: float) -> void:
 	_reproduction_accumulator += delta
 	if _reproduction_accumulator < REPRODUCTION_INTERVAL:
 		return
+	var interval := _reproduction_accumulator
 	_reproduction_accumulator = 0.0
 
 	var creatures := get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME)
-	if creatures.size() >= MAX_LIVE_CREATURES:
+	_advance_courtships(creatures, interval)
+	if get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME).size() >= MAX_LIVE_CREATURES:
+		return
+	_pair_up_courtships(creatures)
+
+
+## Pairs up newly-eligible creatures that aren't already courting. Neither
+## side spawns anything here -- this only starts the courtship STATE (see
+## CreatureMarker.begin_courtship), which CreatureBehavior's "court" intent
+## then walks toward completion frame by frame, and _advance_courtships
+## finishes once its duration is up.
+func _pair_up_courtships(creatures: Array) -> void:
+	for creature in creatures:
+		if creature.info == null or not creature.has_method("can_reproduce"):
+			continue
+		if creature.is_courting() or not creature.can_reproduce():
+			continue
+		var partner = _find_courtship_partner(creature, creatures)
+		if partner == null:
+			continue
+		creature.begin_courtship(partner)
+		partner.begin_courtship(creature)
+
+
+## The most attractive eligible same-species partner for `creature` within
+## NEIGHBOUR_RADIUS_PX -- the same "right here" locality _same_species_within
+## already uses for density-dependent crowding. Eligible means: the same
+## species, individually past AnimalReproduction's own gate, not already
+## paired with someone else, and a genuinely different individual
+## (Courtship.can_pair guards the self-pairing a scan of a group containing
+## `creature` itself would otherwise allow -- reused as-is, it is already
+## id-based and species-agnostic). No eligible neighbour in range returns
+## null: there is no fallback, that IS the "no mate, no courtship" rule.
+##
+## Ranking is by AnimalFitness.mate_attractiveness against `creature`'s own
+## phenotype (see MammalCourtship.most_attractive_partner_index), not simply
+## the closest candidate -- but distance still gates who is even a candidate
+## in the first place, unchanged: the radius filter runs first, exactly like
+## the plain-nearest version this replaces, and attractiveness only ranks
+## whoever survives it. Each creature's phenotype comes from its own
+## wander_seed (already present on CreatureMarker, reproducible without
+## storing anything new per-individual -- see AnimalFitness.phenotype_for).
+func _find_courtship_partner(creature, creatures: Array):
+	var candidate_positions: Array = []
+	var candidate_phenotypes: Array = []
+	var candidate_nodes: Array = []
+	for other in creatures:
+		if other.info == null or other.info.species != creature.info.species:
+			continue
+		if not Courtship.can_pair(creature.get_instance_id(), other.get_instance_id()):
+			continue
+		if other.is_courting() or not other.has_method("can_reproduce") or not other.can_reproduce():
+			continue
+		candidate_positions.append(other.position)
+		candidate_phenotypes.append(_animal_fitness.phenotype_for(other.wander_seed))
+		candidate_nodes.append(other)
+	var own_phenotype: Dictionary = _animal_fitness.phenotype_for(creature.wander_seed)
+	var index := MammalCourtship.most_attractive_partner_index(
+		own_phenotype, creature.position, candidate_positions, candidate_phenotypes, NEIGHBOUR_RADIUS_PX
+	)
+	return candidate_nodes[index] if index >= 0 else null
+
+
+## Advances every already-courting creature's own share of its pair's shared
+## timer by `interval` (both partners get the same increment every tick, so
+## they stay in lockstep without either one telling the other). Once a pair
+## has lingered long enough (MammalCourtship.courtship_complete), exactly one
+## side resolves it -- Courtship.leads decides which, the same "both sides
+## compute independently, only the leader acts" shape the pollinator dance
+## already uses, so a pair is never resolved twice regardless of which side
+## this loop reaches first.
+func _advance_courtships(creatures: Array, interval: float) -> void:
+	for creature in creatures:
+		if not creature.is_courting():
+			continue
+		var partner = creature.courtship_partner()
+		if partner == null:
+			continue  # courtship_partner() already ended it if the partner is gone
+		var elapsed: float = creature.advance_courtship(interval)
+		if not MammalCourtship.courtship_complete(elapsed):
+			continue
+		if not Courtship.leads(creature.get_instance_id(), partner.get_instance_id()):
+			continue
+		_resolve_courtship(creature, partner)
+
+
+## A pair's courtship duration is up: ends the courtship STATE unconditionally
+## (mate or not, the pairing is over either way -- see Courtship.COOLDOWN_
+## SECONDS's own doc for why pollinators do the same), then re-checks
+## viability at THIS moment rather than trusting the checks from when the
+## pairing began -- crowding and carrying capacity can change during the
+## linger window (see courtship_still_viable's own doc for the "dozens of
+## deer" bug this specifically guards against), and either partner may have
+## wandered off, died, or been eaten in the meantime. Only if the pair is
+## still genuinely together and the land can still support another mouth
+## does an offspring actually appear -- via the same CreatureRenderer.
+## spawn_single/on_reproduced/record_birth_at calls the old solo path used.
+func _resolve_courtship(a, b) -> void:
+	var round_index: int = a.courtship_round()
+	a.end_courtship()
+	b.end_courtship()
+	if not is_instance_valid(a) or not is_instance_valid(b) or a.info == null or b.info == null:
 		return
 
-	var births := 0
-	for creature in creatures:
-		if creatures.size() + births >= MAX_LIVE_CREATURES:
-			break
-		if creature.info == null or not creature.has_method("can_reproduce") or not creature.can_reproduce():
-			continue
-		# Density dependence, not just a global node cap. The 60-creature cap
-		# alone is a SAFETY bound, not an ecological one: it says nothing
-		# about whether THIS clearing can feed another mouth, so well-fed
-		# animals bred straight up to it and piled into one spot (reported
-		# with a screenshot: "the fruit caused dozens of deer to spawn???").
-		# Two checks, both local: how many of its own kind are already right
-		# here, and whether the land itself can support another (the same
-		# carrying capacity the unseen aggregate simulation obeys -- "two
-		# fidelities, one truth", concept/ecosystem_dynamics.md).
-		var crowd := _same_species_within(creature, NEIGHBOUR_RADIUS_PX)
-		if crowd >= MAX_SAME_SPECIES_NEARBY:
-			continue
-		if not _chunk_manager.can_support_another_herbivore(creature.position, crowd):
-			continue
-		var offset := Vector2(
-			_offset_hash(creature.position, 1), _offset_hash(creature.position, 2)
-		) * OFFSPRING_SCATTER
-		_creature_renderer.spawn_single(
-			_creatures, creature.info.species, creature.position + offset, _chunk_manager
-		)
-		creature.on_reproduced()
-		# The aggregate population owns the long-term picture, so an
-		# individual birth in front of the player has to reach it -- otherwise
-		# a herd the player watched grow evaporates on the next chunk reload,
-		# and the off-screen model goes on breeding a range that is already
-		# full (see EcosystemSimulation.record_birth).
-		_chunk_manager.record_birth_at(creature.position)
-		births += 1
+	var a_position: Vector2 = a.position
+	var b_position: Vector2 = b.position
+	var distance := a_position.distance_to(b_position)
+	var crowd := _same_species_within(a, NEIGHBOUR_RADIUS_PX)
+	var capacity_ok: bool = _chunk_manager.can_support_another_herbivore(a_position, crowd)
+	if not courtship_still_viable(distance, NEIGHBOUR_RADIUS_PX, crowd, MAX_SAME_SPECIES_NEARBY, capacity_ok):
+		return
+	if get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME).size() >= MAX_LIVE_CREATURES:
+		return
+
+	var seed_value := Courtship.pair_seed(a.get_instance_id(), b.get_instance_id(), round_index)
+	if not Courtship.mates(seed_value):
+		return
+
+	var midpoint := (a_position + b_position) * 0.5
+	var offset := Vector2(_offset_hash(midpoint, 1), _offset_hash(midpoint, 2)) * OFFSPRING_SCATTER
+	var species: String = a.info.species
+	var offspring := _creature_renderer.spawn_single(_creatures, species, midpoint + offset, _chunk_manager)
+	# Born, not spawned already grown -- see MammalGrowth/CreatureMarker.
+	# begin_life. Without this every mammal offspring would appear at full
+	# adult size the instant courtship resolves.
+	offspring.begin_life()
+	a.on_reproduced()
+	b.on_reproduced()
+	# The aggregate population owns the long-term picture, so an
+	# individual birth in front of the player has to reach it -- otherwise
+	# a herd the player watched grow evaporates on the next chunk reload,
+	# and the off-screen model goes on breeding a range that is already
+	# full (see EcosystemSimulation.record_birth).
+	_chunk_manager.record_birth_at(midpoint)
+
+
+## Whether a pair whose courtship duration just completed may still actually
+## reproduce, checked fresh at the moment it resolves rather than when it
+## began: `distance` is how far apart the two partners currently are (must
+## still be within `notice_radius`, the same locality that found them each
+## other), `crowd`/`max_crowd` is the same density-dependence check
+## _step_reproduction always applied, and `capacity_ok` is whether the land
+## itself (EarthChunkManager.can_support_another_herbivore) can still feed
+## another mouth. Pure and static so it's testable without a live scene tree
+## (see test_world_courtship_pairing.gd) -- the same style as World's other
+## static gates (always_day_for, ecology_scale_for_console_argument).
+##
+## This exists because a clearing can fill up WHILE a pair is lingering: two
+## deer that started courting in an empty clearing must not still produce a
+## fawn if three more deer wandered in and filled it during the wait --
+## exactly the "the fruit caused dozens of deer to spawn" bug that motivated
+## the crowding/capacity checks in the first place, just re-applied at the
+## END of a courtship instead of only at its start.
+static func courtship_still_viable(
+		distance: float, notice_radius: float, crowd: int, max_crowd: int, capacity_ok: bool
+) -> bool:
+	return distance <= notice_radius and crowd < max_crowd and capacity_ok
 
 
 ## How many creatures of `creature`'s own species are within `radius` of it,
