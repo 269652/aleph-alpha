@@ -171,3 +171,30 @@ func test_the_windows_panel_is_fully_opaque_so_the_world_cannot_show_through():
 	var style := window.get_theme_stylebox("panel") as StyleBoxFlat
 	assert_not_null(style)
 	assert_eq(style.bg_color.a, 1.0, "a gameplay window's panel must be fully opaque")
+
+
+# -- refresh() must no-op when nothing about the skill state changed --------
+#
+# World._client_process calls refresh() once per frame while the window is
+# open (see scenes/world.gd), not just on an actual allocation/unlock. Same
+# bug class InventoryWindow.refresh and CraftingWindow.refresh already guard
+# against with _last_refresh_signature: without a guard here, every stat-node
+# and keystone row Control (the List tab) is freed and rebuilt every single
+# frame, which starves Godot's native hover-tooltip timer (it needs the SAME
+# Control instance under the mouse continuously).
+
+func test_refresh_does_not_rebuild_rows_when_called_again_with_unchanged_state():
+	window.refresh(10, {}, {})
+	var first_row := window._list.get_child(1)
+	window.refresh(10, {}, {})
+	assert_eq(window._list.get_child(1), first_row,
+		"a refresh() with unchanged skill state must not recreate row Controls")
+
+
+## ...but a real change to the underlying skill state must still rebuild.
+func test_refresh_does_rebuild_rows_when_the_skill_state_actually_changes():
+	window.refresh(10, {}, {})
+	var first_row := window._list.get_child(1)
+	window.refresh(5, {}, {})
+	assert_ne(window._list.get_child(1), first_row,
+		"a refresh() with a real state change must still rebuild the rows")
