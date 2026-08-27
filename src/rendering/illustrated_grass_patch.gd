@@ -38,14 +38,31 @@ const WORLD_SIZE := 16.0
 ## painted straight over the player's upper body/head. Reported live, with
 ## a real screenshot.
 ##
-## Now CHUNK_SIZE tiles / BAND_COUNT bands = 1 tile/band = 16 world units,
-## for a worst-case reach of 16+16=32 -- a real, tested (see
+## THEN 32 (1 tile/band = 16 world units) -- fixed the "painted over the
+## head" symptom, but left a real, honest residual: a band still draws in
+## front of the player for as long as the player is anywhere within its own
+## full tile (band_anchor_world_y's own bottom-edge anchoring, "normal,
+## expected concealment" by design). At a whole tile per band, that grace
+## window is barely perceptible on sparse, mostly-transparent blade art but
+## reads as glaringly broken on the atlas's own dense, near-opaque "bush"
+## cards -- reported live again, the same day: "y ordering is correct only
+## for some [tufts]... should work like the lower one for all."
+##
+## Now 64 (half a tile/band = 8 world units): halves that grace window
+## again, AND (a second real effect this specific change unlocks) is now
+## fine enough that a card's own real per-card offset (up to 6.8 world
+## units, see `cards_for_cell`) CAN cross a band boundary -- so the
+## per-card banding fix landed just before this one actually starts doing
+## something at today's real production ratio, not just at a synthetic
+## test-only band_count. Worst-case reach: 8 (band_height) + 6.8 (max card
+## offset) + 16 (WORLD_SIZE) = 30.8, an 11.2-world-unit margin under the
+## player's real 42 -- a real, tested (see
 ## test_band_height_leaves_a_real_safety_margin_under_the_players_own_max_reach)
-## 10-world-unit margin under the player's own real 42. A deliberate,
-## honest 4x draw-call cost for grass specifically (8 -> 32 per chunk) --
-## correctness over raw draw-call count, given the coarser value was a real,
-## player-visible bug, not a theoretical one.
-const BAND_COUNT := 32
+## and comfortable margin again. Another deliberate, honest draw-call cost
+## for grass specifically (32 -> 64 per chunk, 8x the original pre-fix
+## count of 8) -- correctness over raw draw-call count, the same reasoning
+## every prior pass on this exact bug already used.
+const BAND_COUNT := 64
 
 ## Bend profile: how far a pixel row is displaced, as a function of
 ## top_t (0 at the root, 1 at the tip). A straight vertex shear only ever

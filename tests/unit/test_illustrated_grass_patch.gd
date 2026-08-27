@@ -119,13 +119,32 @@ func test_grass_opacity_is_never_reduced_by_the_players_own_proximity():
 ## bucket math is 17 buckets, centered to -8..8, times a 0.85 step, so the
 ## true bound is exactly 8.0 * 0.85 = 6.8, confirmed empirically across a
 ## wide seed sweep, not just algebraically assumed). Added ON TOP of the
-## existing band_height + WORLD_SIZE bound (a deliberately conservative
-## choice, not the tightest possible one -- see
+## existing band_height + WORLD_SIZE bound.
+##
+## SUPERSEDED again (2026-08-27, same day, a direct follow-up): reported
+## live, after the per-card banding fix landed: "y ordering is correct only
+## for some [tufts]... should work like the lower one for all." Per-card
+## banding was a real, necessary architectural fix, but at the THEN-real
+## BAND_COUNT=32 (band_height=16), a card's max offset (6.8) can never
+## cross a whole-tile boundary (which sits 8 units away) -- so it was a
+## correctness fix with no visible effect yet (see
 ## test_per_card_banding_matches_cell_level_banding_at_the_real_production_
-## ratio in this same file for why today's actual BAND_COUNT/CHUNK_SIZE
-## ratio never lets a card's own offset cross a band boundary at all, which
-## would make the tighter bound even smaller; this stays a safe upper bound
-## regardless of whether that ratio ever changes).
+## ratio). The ACTUAL remaining symptom is architectural, not a card-offset
+## bug: a whole band still draws in front of the player for as long as the
+## player is anywhere within it (band_anchor_world_y's own bottom-edge
+## anchoring, "normal, expected concealment" by design) -- at one full tile
+## per band, that's a full tile's worth of travel where a band which the
+## player has arguably already reached still paints in front of them. This
+## reads as barely perceptible on sparse blade art (mostly transparent
+## quad) but glaringly wrong on the atlas's own dense, near-opaque "bush"
+## cards (a big solid shape squarely over the player). BAND_COUNT raised
+## again, 32 -> 64 (band_height 16 -> 8, half a tile instead of a whole
+## one): shrinks that grace window by half, AND makes the per-card banding
+## fix landed just before this actually take effect (a card's 6.8 offset
+## CAN now cross an 8-unit boundary). Another deliberate, honest 2x
+## draw-call cost for grass (32 -> 64 per chunk, 8x the original pre-fix
+## count of 8) -- correctness over raw draw-call count, same reasoning as
+## every prior pass on this exact bug.
 func test_band_height_leaves_a_real_safety_margin_under_the_players_own_max_reach():
 	const PLAYER_MAX_REACH_ABOVE_ROOT := 42.0  # character_view.tscn's own real HeadSlot offset
 	var chunk_size := 32  # EarthChunkManager.CHUNK_SIZE
@@ -145,17 +164,17 @@ func test_band_height_leaves_a_real_safety_margin_under_the_players_own_max_reac
 
 	var band_height_world_units: float = (float(chunk_size) / float(IllustratedGrassPatch.BAND_COUNT)) * tile_size
 	var worst_case_reach: float = band_height_world_units + max_card_offset_y + IllustratedGrassPatch.WORLD_SIZE
-	assert_almost_eq(worst_case_reach, 38.8, 0.001, "pin the real number this margin is actually computed from")
+	assert_almost_eq(worst_case_reach, 30.8, 0.001, "pin the real number this margin is actually computed from")
 	assert_lt(
 		worst_case_reach, PLAYER_MAX_REACH_ABOVE_ROOT,
 		"a band's own worst-case blade, real per-card offset included, must never be able to visually reach the player's real head height"
 	)
-	# Honest: the real margin (42 - 38.8 = 3.2 world units) is real but
-	# thin -- far short of the ~10-unit margin the pre-offset accounting
-	# above claimed. Named here rather than left implicit.
+	# Honest: the real margin (42 - 30.8 = 11.2 world units) is comfortable
+	# again now that band_height itself shrank alongside the offset
+	# accounting -- named here rather than left implicit.
 	var real_margin: float = PLAYER_MAX_REACH_ABOVE_ROOT - worst_case_reach
-	assert_gt(real_margin, 3.0, "the real margin, honestly accounted for")
-	assert_lt(real_margin, 4.0, "...and it really is this thin -- not a rounding artifact of a generous bound")
+	assert_gt(real_margin, 11.0, "the real margin, honestly accounted for")
+	assert_lt(real_margin, 12.0, "...pin it, not just a floor")
 
 
 func test_shader_bends_each_pixel_row_along_a_curved_per_blade_path():
@@ -341,14 +360,24 @@ func test_band_index_is_monotonically_non_decreasing_down_the_chunk():
 		previous = band
 
 
+## SUPERSEDED (2026-08-27): now that BAND_COUNT (64) exceeds CHUNK_SIZE
+## (32), a purely INTEGER local_y can only ever land on half of the real
+## bands (band_height is 0.5 tile, so floor(local_y/0.5) skips every other
+## index) -- by design, since the other half is only reachable via a real
+## FRACTIONAL row (a cell's own true center, or a card's own further
+## offset from it -- see local_row_for_world_y/cards_for_cell). Sampling at
+## the real band_height step, not whole tiles, is what actually proves "not
+## just in-bounds, a real spread" now.
 func test_band_index_actually_uses_all_bands_across_a_full_chunk():
-	# Not just in-bounds - a real spread, or the "8 bands" is theoretical
-	# and every cell is actually landing in band 0.
 	var chunk_size := 32
+	var band_count := IllustratedGrassPatch.BAND_COUNT
+	var band_height: float = float(chunk_size) / float(band_count)
 	var seen := {}
-	for local_y in range(chunk_size):
-		seen[IllustratedGrassPatch.band_index_for_local_y(local_y, chunk_size)] = true
-	assert_eq(seen.size(), IllustratedGrassPatch.BAND_COUNT)
+	var local_y := 0.0
+	while local_y < float(chunk_size):
+		seen[IllustratedGrassPatch.band_index_for_local_y(local_y, chunk_size, band_count)] = true
+		local_y += band_height * 0.5  # oversample each band, never skip one
+	assert_eq(seen.size(), band_count)
 
 
 func test_band_anchor_world_y_orders_the_same_as_band_index():
@@ -442,11 +471,18 @@ func test_local_row_for_world_y_inverts_a_cells_own_ground_position_math():
 	assert_almost_eq(recovered, float(local_y) + 0.5, 0.001)
 
 
-func test_local_row_for_world_y_matches_the_cells_own_raw_row_for_an_unoffset_position():
-	# The invariant the whole per-card refactor's regression case depends
-	# on: with zero offset, converting a card's real world Y back through
-	# local_row_for_world_y and into band_index_for_local_y must land in the
-	# SAME band band_index_for_local_y(cell.y, ...) already gives directly.
+## SUPERSEDED (2026-08-27): this used to assert real_band == naive_band
+## unconditionally -- true only as a COINCIDENCE of BAND_COUNT=32's own
+## band_height being a whole tile (adding a cell's own +0.5-tile center
+## offset can never cross a boundary a full tile wide). Now that
+## band_height is 0.5 tile (BAND_COUNT=64), a cell's own real CENTER
+## already sits exactly ON a boundary, so even ZERO further card offset can
+## land one band ahead of the cell's raw, un-offset row -- by design, and
+## exactly why per-card banding now matters at the real production ratio
+## (see test_per_card_banding_diverges_from_cell_level_banding_at_the_real_
+## production_ratio). The real, still-true invariant: a cell's own center
+## is never more than one band ahead of its raw row, regardless of tuning.
+func test_local_row_for_world_y_lands_at_most_one_band_ahead_of_the_cells_own_raw_row():
 	var chunk_size := 32
 	var tile_size := 16.0
 	var chunk_origin_y := 0
@@ -455,7 +491,7 @@ func test_local_row_for_world_y_matches_the_cells_own_raw_row_for_an_unoffset_po
 		var real_row := IllustratedGrassPatch.local_row_for_world_y(world_y, chunk_origin_y, tile_size)
 		var real_band := IllustratedGrassPatch.band_index_for_local_y(real_row, chunk_size)
 		var naive_band := IllustratedGrassPatch.band_index_for_local_y(local_y, chunk_size)
-		assert_eq(real_band, naive_band)
+		assert_between(real_band, naive_band, naive_band + 1, "a cell's own center-based band must be its raw row's band or the very next one, never further")
 
 
 ## The direct, real proof that per-card banding differs from the OLD
@@ -502,18 +538,26 @@ func test_per_card_banding_splits_a_single_cells_cards_across_two_real_bands():
 	assert_eq(stayed, 2, "the 2 cards whose real offset.y is -6.8 must stay in the cell's own nominal band")
 
 
-## Regression, at TODAY's real production ratio: every card of every cell
-## stays in its own cell's raw-row band -- per-card banding must not
-## silently reshuffle anything under the actual live BAND_COUNT/CHUNK_SIZE
-## the game really runs with (band_height=16 world units, comfortably more
-## than double any card's real max |offset.y|=6.8), only under a
-## deliberately finer ratio like the crossing test above. Proven generally
-## (every row in a real chunk, many real cell seeds), not spot-checked.
-func test_per_card_banding_matches_cell_level_banding_at_the_real_production_ratio():
+## SUPERSEDED (2026-08-27, same day as it was written): this test used to
+## prove per-card banding was a no-op at BAND_COUNT=32 -- true then (band
+## height 16, comfortably more than double any card's real max
+## |offset.y|=6.8), but BAND_COUNT was raised again to 64 the same day for
+## a separate, real reason (see BAND_COUNT's own doc comment: the "grace
+## window" a whole tile-band spends drawing in front of the player read as
+## broken on dense grass art). At band_height=8, a cell's own real CENTER
+## (row+0.5, where every card's own root actually lives) already sits
+## exactly ON a band boundary -- so per-card banding now genuinely diverges
+## from naive cell-row banding for real cards at today's real production
+## ratio, not just under a synthetic finer ratio. Proven generally (every
+## row in a real chunk, many real cell seeds): at least one real divergence
+## exists, and every real divergence lands in an immediately-adjacent band
+## (never further), matching the crossing test just above it.
+func test_per_card_banding_diverges_from_cell_level_banding_at_the_real_production_ratio():
 	var chunk_size := 32  # EarthChunkManager.CHUNK_SIZE
 	var band_count := IllustratedGrassPatch.BAND_COUNT  # today's real value
 	var tile_size := 16.0
 	var chunk_origin_y := 0
+	var divergences := 0
 	for local_y in range(chunk_size):
 		var naive_band := IllustratedGrassPatch.band_index_for_local_y(local_y, chunk_size, band_count)
 		for seed_value in range(20):
@@ -525,7 +569,13 @@ func test_per_card_banding_matches_cell_level_banding_at_the_real_production_rat
 			for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
 				var real_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, chunk_origin_y, tile_size)
 				var real_band := IllustratedGrassPatch.band_index_for_local_y(real_row, chunk_size, band_count)
-				assert_eq(real_band, naive_band, "at the real production ratio no card's own offset can cross a band boundary")
+				if real_band != naive_band:
+					assert_almost_eq(
+						real_band, naive_band, 1,
+						"a real divergence must land in an immediately-adjacent band, never further"
+					)
+					divergences += 1
+	assert_gt(divergences, 0, "at today's real BAND_COUNT, per-card banding must genuinely differ from naive cell-row banding for at least some real cards -- confirming the fix is live, not just theoretically correct")
 
 
 ## No card is gained or lost by which band it ends up grouped into --

@@ -2407,15 +2407,25 @@ func test_grass_renders_through_banded_multimesh_instances_not_per_cell_nodes():
 			assert_true(mmi is MultiMeshInstance2D)
 			assert_eq(mmi.get_parent(), manager._entities_parent, "each band's draw call is a real child of the shared y-sorted entities parent")
 			assert_gt(mmi.multimesh.instance_count, 0)
-			# Every cell contributes exactly CARD_COUNT instances.
-			assert_eq(mmi.multimesh.instance_count % IllustratedGrassPatch.CARD_COUNT, 0)
+			# SUPERSEDED (2026-08-27): used to assert every band's instance
+			# count was a clean multiple of CARD_COUNT, back when a whole
+			# cell's cards always stayed together in one band. Now that
+			# banding is per-CARD (see IllustratedGrassPatch.cards_for_cell),
+			# a cell straddling a band boundary can genuinely split its
+			# CARD_COUNT cards across two adjacent bands -- a real,
+			# intended consequence of the fix, not something to assert away.
 			found_any_band = true
 	assert_true(found_any_band, "precondition: Berlin's grassland seeded at least one patch")
 
 
-## Every cell grouped into one band's draw call must actually belong there
+## Every card grouped into one band's draw call must actually belong there
 ## by IllustratedGrassPatch's own band math - the whole point of banding is
-## that a band's Y-sort position is representative of the cells inside it.
+## that a band's Y-sort position is representative of the cards inside it.
+## SUPERSEDED (2026-08-27): used to bucket by a whole CELL's own raw row
+## (band_index_for_local_y(cell.y, ...), a flat CARD_COUNT per cell) --
+## now mirrors _sync_grass_sprites' own real per-CARD bucketing (see its
+## own doc comment), since a cell's cards can genuinely split across two
+## bands once their own real offset-adjusted position crosses a boundary.
 func test_every_bands_instance_count_matches_its_own_cells_card_total():
 	manager.update(_berlin_tile)
 	var half_span: Vector2 = manager._visible_half_span_tiles()
@@ -2429,10 +2439,21 @@ func test_every_bands_instance_count_matches_its_own_cells_card_total():
 			# Matches _sync_grass_sprites' own tile-precise view+buffer
 			# cutoff: a chunk passing the coarser chunk-level _decorates
 			# gate does not mean every one of its cells is drawn.
-			if not DecorationLod.keeps_decoration_tile(origin + cell, player_tile, half_span, EarthChunkManager.GRASS_VIEW_BUFFER_TILES):
+			var tile: Vector2i = origin + cell
+			if not DecorationLod.keeps_decoration_tile(tile, player_tile, half_span, EarthChunkManager.GRASS_VIEW_BUFFER_TILES):
 				continue
-			var band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
-			expected_by_band[band] = int(expected_by_band.get(band, 0)) + IllustratedGrassPatch.CARD_COUNT
+			var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
+			var cell_spec := {
+				"seed": seed_value,
+				"ground_position": Vector2(
+					(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+				),
+				"growth": sim.get_growth(cell),
+			}
+			for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+				var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+				var band := IllustratedGrassPatch.band_index_for_local_y(local_row, EarthChunkManager.CHUNK_SIZE)
+				expected_by_band[band] = int(expected_by_band.get(band, 0)) + 1
 		for band in manager._grass_sprites[chunk_coord]:
 			var mmi: MultiMeshInstance2D = manager._grass_sprites[chunk_coord][band]
 			assert_eq(mmi.multimesh.instance_count, expected_by_band.get(band, 0))
@@ -2472,21 +2493,61 @@ func test_a_cell_drops_out_when_the_player_walks_far_enough_away():
 	var a_cell: Vector2i = sim.get_patch_cells()[0]
 	var a_tile := origin + a_cell
 
-	# Stand right on the cell: it must be drawn (precondition).
+	# Stand right on the cell: it must be drawn (precondition). a_cell's own
+	# CARD_COUNT cards can land in more than one real band (per-card
+	# banding, not per-cell -- see this file's other SUPERSEDED notes), so
+	# find every real band they occupy rather than assuming a single naive
+	# one derived from the cell's own raw row.
+	#
+	# update() alone only marks a grass resync as DUE (see
+	# _sync_decoration_and_grass_tracking's own doc comment) -- chunk_coord
+	# was already loaded by the very first update(_berlin_tile) above, so
+	# this second update() does not re-enter _load_chunk's synchronous
+	# _sync_grass_sprites call. Without an explicit step_tall_grass() here,
+	# _grass_sprites[chunk_coord] would still reflect that FIRST,
+	# _berlin_tile-centered sync -- which a_cell (an arbitrary patch cell,
+	# not necessarily near Berlin at all) may never have been part of in the
+	# first place, making "precondition: standing on the cell, its real
+	# bands have cards" false regardless of banding. Mirrors
+	# test_walking_within_the_same_chunk_resyncs_the_grass_view_without_
+	# waiting_for_the_refresh_timer's own real per-frame cadence.
 	manager.update(a_tile)
-	var band := IllustratedGrassPatch.band_index_for_local_y(a_cell.y, EarthChunkManager.CHUNK_SIZE)
-	var near_count: int = manager._grass_sprites[chunk_coord][band].multimesh.instance_count
-	assert_gt(near_count, 0, "precondition: standing on the cell, its band has cards")
+	manager.step_tall_grass(0.0)
+	var a_seed_value := hash("%d_%d_grass_tuft" % [a_tile.x, a_tile.y])
+	var a_cell_spec := {
+		"seed": a_seed_value,
+		"ground_position": Vector2(
+			(a_tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (a_tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+		),
+		"growth": sim.get_growth(a_cell),
+	}
+	var real_bands: Array[int] = []
+	for card in IllustratedGrassPatch.cards_for_cell(a_cell_spec):
+		var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+		var card_band := IllustratedGrassPatch.band_index_for_local_y(local_row, EarthChunkManager.CHUNK_SIZE)
+		if not real_bands.has(card_band):
+			real_bands.append(card_band)
+
+	var near_count := 0
+	for band in real_bands:
+		if manager._grass_sprites[chunk_coord].has(band):
+			near_count += manager._grass_sprites[chunk_coord][band].multimesh.instance_count
+	assert_gt(near_count, 0, "precondition: standing on the cell, its real bands have cards")
 
 	# Walk far enough away (well beyond any reasonable half_span+buffer)
 	# that the chunk itself still decorates (a village-sized hop, not a
-	# world away) but this one cell no longer falls in the view window.
+	# world away) but this one cell no longer falls in the view window. Same
+	# reasoning as above: update() alone only marks the resync due.
 	manager.update(a_tile + Vector2i(0, 200))
-	if not manager._grass_sprites.has(chunk_coord) or not manager._grass_sprites[chunk_coord].has(band):
-		assert_true(true, "the band (or whole chunk) dropped entirely once nothing in it was in view -- also correct")
+	manager.step_tall_grass(0.0)
+	if not manager._grass_sprites.has(chunk_coord):
+		assert_true(true, "the whole chunk dropped entirely once nothing in it was in view -- also correct")
 		return
-	var far_count: int = manager._grass_sprites[chunk_coord][band].multimesh.instance_count
-	assert_lt(far_count, near_count, "walking away from the cell must reduce (or zero) its band's card count")
+	var far_count := 0
+	for band in real_bands:
+		if manager._grass_sprites[chunk_coord].has(band):
+			far_count += manager._grass_sprites[chunk_coord][band].multimesh.instance_count
+	assert_lt(far_count, near_count, "walking away from the cell must reduce (or zero) its real bands' card count")
 
 
 ## The tile-precise view+buffer window is far tighter than the chunk-level
@@ -2551,16 +2612,47 @@ func test_walking_within_the_same_chunk_resyncs_the_grass_view_without_waiting_f
 	# test_every_bands_instance_count_matches_its_own_cells_card_total), and
 	# require the real multimesh to already match it. A stale sync would
 	# still reflect the OLD, _berlin_tile-relative window instead.
+	# Mirrors _sync_grass_sprites' own REAL per-CARD bucketing (see its own
+	# doc comment) -- SUPERSEDED (2026-08-27) from a cell-level shortcut
+	# (band_index_for_local_y(cell.y, ...), one flat CARD_COUNT per cell)
+	# now that a cell's own cards can genuinely split across two bands.
 	var expected_by_band: Dictionary = {}
 	for cell in sim.get_patch_cells():
 		var tile: Vector2i = origin + cell
 		if not DecorationLod.keeps_decoration_tile(tile, far_tile, half_span, EarthChunkManager.GRASS_VIEW_BUFFER_TILES):
 			continue
-		var cell_band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
-		expected_by_band[cell_band] = int(expected_by_band.get(cell_band, 0)) + IllustratedGrassPatch.CARD_COUNT
+		var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
+		var cell_spec := {
+			"seed": seed_value,
+			"ground_position": Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			),
+			"growth": sim.get_growth(cell),
+		}
+		for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+			var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+			var card_band := IllustratedGrassPatch.band_index_for_local_y(local_row, EarthChunkManager.CHUNK_SIZE)
+			expected_by_band[card_band] = int(expected_by_band.get(card_band, 0)) + 1
 
-	var far_band := IllustratedGrassPatch.band_index_for_local_y(far_cell.y, EarthChunkManager.CHUNK_SIZE)
-	assert_gt(expected_by_band.get(far_band, 0), 0, "precondition: far_cell's own band should now expect a nonzero count, standing right on it")
+	# far_cell's own real cards (not the naive raw-row shortcut, which can
+	# land a band off from where a card's real offset-adjusted position
+	# actually falls -- see this file's other SUPERSEDED notes above) must
+	# have contributed a nonzero count to at least one of the bands
+	# expected_by_band just computed.
+	var far_seed_value := hash("%d_%d_grass_tuft" % [far_tile.x, far_tile.y])
+	var far_cell_spec := {
+		"seed": far_seed_value,
+		"ground_position": Vector2(
+			(far_tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (far_tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+		),
+		"growth": sim.get_growth(far_cell),
+	}
+	var far_bands_total := 0
+	for card in IllustratedGrassPatch.cards_for_cell(far_cell_spec):
+		var far_local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+		var far_card_band := IllustratedGrassPatch.band_index_for_local_y(far_local_row, EarthChunkManager.CHUNK_SIZE)
+		far_bands_total += int(expected_by_band.get(far_card_band, 0))
+	assert_gt(far_bands_total, 0, "precondition: far_cell's own real cards' bands should now expect a nonzero count, standing right on it")
 
 	var after: Dictionary = manager._grass_sprites.get(chunk_coord, {})
 	for band in expected_by_band:
@@ -3503,27 +3595,60 @@ func test_a_grazed_tuft_stops_being_drawn_immediately():
 	# actually drawn. This test's own subject is the draw-immediacy of an
 	# on-screen tuft, so pick the first one the manager itself already drew
 	# rather than assuming grass_near's first result is on-screen.
+	# SUPERSEDED (2026-08-27): used to predict a SINGLE band via the old
+	# cell-level shortcut (band_index_for_local_y(cell.y, ...)) and assert
+	# just that one band's count dropped by a flat CARD_COUNT. Now that
+	# banding is per-CARD (see IllustratedGrassPatch.cards_for_cell), one
+	# tuft's own CARD_COUNT cards can genuinely land in two DIFFERENT real
+	# bands -- so this finds every real band the eaten tuft's own cards
+	# occupy and checks the TOTAL across all of them, mirroring
+	# _sync_grass_sprites' own real per-card bucketing exactly.
 	var eaten: Vector2
 	var chunk_coord: Vector2i
-	var band := -1
+	var real_bands: Array[int] = []
 	for tuft in tufts:
 		var tile: Vector2i = manager._world_tile_for_pixel(tuft.position)
 		var candidate_chunk: Vector2i = manager._chunk_coord_for_tile(tile)
-		var cell: Vector2i = tile - candidate_chunk * EarthChunkManager.CHUNK_SIZE
-		var candidate_band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
-		if manager._grass_sprites.get(candidate_chunk, {}).has(candidate_band):
+		var origin: Vector2i = candidate_chunk * EarthChunkManager.CHUNK_SIZE
+		var cell: Vector2i = tile - origin
+		var sim: TallGrass = manager._grass_sims.get(candidate_chunk)
+		if sim == null:
+			continue
+		var seed_value := hash("%d_%d_grass_tuft" % [tile.x, tile.y])
+		var cell_spec := {
+			"seed": seed_value,
+			"ground_position": Vector2(
+				(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+			),
+			"growth": sim.get_growth(cell),
+		}
+		var candidate_bands: Array[int] = []
+		for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+			var local_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, origin.y, TerrainRenderer.TILE_SIZE)
+			var card_band := IllustratedGrassPatch.band_index_for_local_y(local_row, EarthChunkManager.CHUNK_SIZE)
+			if not candidate_bands.has(card_band):
+				candidate_bands.append(card_band)
+		var all_drawn := true
+		for candidate_band in candidate_bands:
+			if not manager._grass_sprites.get(candidate_chunk, {}).has(candidate_band):
+				all_drawn = false
+				break
+		if all_drawn and not candidate_bands.is_empty():
 			eaten = tuft.position
 			chunk_coord = candidate_chunk
-			band = candidate_band
+			real_bands = candidate_bands
 			break
-	assert_true(band != -1, "precondition: at least one grazeable tuft is actually drawn")
-	var before: int = manager._grass_sprites[chunk_coord][band].multimesh.instance_count
+	assert_false(real_bands.is_empty(), "precondition: at least one grazeable tuft is actually drawn")
+	var before := 0
+	for band in real_bands:
+		before += manager._grass_sprites[chunk_coord][band].multimesh.instance_count
 	manager.graze_grass_at(eaten)
 	var bands: Dictionary = manager._grass_sprites[chunk_coord]
-	if bands.has(band):
-		assert_eq(bands[band].multimesh.instance_count, before - IllustratedGrassPatch.CARD_COUNT, "the eaten tuft's cards stop being drawn at once")
-	else:
-		assert_eq(before, IllustratedGrassPatch.CARD_COUNT, "the band only disappears outright if that was its only tuft")
+	var after := 0
+	for band in real_bands:
+		if bands.has(band):
+			after += bands[band].multimesh.instance_count
+	assert_eq(after, before - IllustratedGrassPatch.CARD_COUNT, "the eaten tuft's cards stop being drawn at once, across every real band they occupied")
 
 
 # -- grass seed: the granivore/rodent half of a field (see
