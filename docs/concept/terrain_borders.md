@@ -130,3 +130,26 @@ letting one silently win outright:
   of 2448 real ocean corners (the same bug, present since the ocean-corner
   system shipped, just far rarer). See "When a cell qualifies for both"
   above for the reconciliation rule.
+- ✅ **A staircase corner is found even when the cell also blends.** The
+  diagonal-only corner check needs the cell's DIAGONAL neighbours, and
+  `paint()` was gathering those only inside its no-blend fallback — passing
+  the primary `corner_direction_for` call the cardinal neighbours alone. A
+  staircase step almost always has a differing cardinal neighbour too, so
+  it took the primary path, where the branch it needed could not fire
+  because the diagonals were never handed over. The diagonal-only case
+  therefore only ever worked on cells with no blend at all, which is the
+  one situation a staircase does not produce — so grass/forest boundaries
+  kept visible hard corners through two rounds of corner work (reported a
+  third time: "the biome borders still contain hard corners"). The
+  diagonals are now gathered once, before the corner call, and used by
+  both paths. Verified by reverting just that one argument and watching
+  the regression test go red (it paints plain grassland — a hard corner),
+  then green again; and by compositing a real two-chunk region near Berlin
+  through the actual `paint()` path, where forest/grass boundaries read as
+  feathered and irregular rather than stepped.
+
+  Worth recording, since it is the reason this took three passes: the
+  underlying biome map was never the problem. Measured directly, 13.7% of
+  horizontally adjacent tiles around Berlin change biome, and the raw map
+  is visibly blobby and ragged. Every "hard corner" report has been a
+  RENDERING gap at an already-organic boundary, not a blocky world.

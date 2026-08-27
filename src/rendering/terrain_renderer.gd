@@ -1212,8 +1212,22 @@ func paint(
 				# of swapping discrete baked tiles at the 16px tile grid
 				# (the old approach's jagged shore-staircase look).
 				var blend := dominant_blend_for(biome_name, neighbors)
+				# Diagonals are needed for the DIAGONAL-ONLY corner case (two
+				# land biomes touching at a single tile-grid corner -- the
+				# outer corner of a staircase boundary, see
+				# corner_direction_for). They must be gathered BEFORE the
+				# corner call, not inside the no-blend fallback below: a
+				# staircase cell almost always has a real cardinal blend too,
+				# so gathering them only when blend came back empty meant the
+				# diagonal-only branch could never fire on exactly the cells
+				# it exists for, and a grass/forest staircase kept its hard
+				# corners (reported: "the biome borders still contain hard
+				# corners").
+				var diagonal_neighbors := _diagonal_neighbor_biomes(
+					chunk, x, y, origin, global_biome_lookup
+				)
 				var corner := _corner_directions_not_covered_by_blend(
-					corner_direction_for(biome_name, neighbors), blend
+					corner_direction_for(biome_name, neighbors, diagonal_neighbors), blend
 				)
 				if not corner.is_empty():
 					# A real tile-grid right-angle (see corner_direction_for)
@@ -1227,21 +1241,13 @@ func paint(
 						biome_name, blend.partner, blend.directions, variant
 					)
 				else:
-					# Water/land is never dither-blended (see above), but a
-					# cell whose tile-grid corner is a real right-angle
-					# (land on BOTH cardinal sides of one diagonal, from
-					# either the water side OR the land side) OR a genuine
-					# diagonal-only land/land touch (see corner_direction_for)
-					# still gets an actual carved-corner tile on this same
-					# opaque base layer, instead of a hard square notch.
-					var diagonal_neighbors := _diagonal_neighbor_biomes(chunk, x, y, origin, global_biome_lookup)
-					var fallback_corner := corner_direction_for(biome_name, neighbors, diagonal_neighbors)
-					if fallback_corner.is_empty():
-						atlas_coords = atlas_coords_for_biome(biome_name, variant)
-					else:
-						atlas_coords = atlas_coords_for_corner(
-							biome_name, fallback_corner.partner, fallback_corner.directions, variant
-						)
+					# Neither a blend nor a corner applies: a cell with no
+					# differing cardinal neighbour and no diagonal-only touch is
+					# plain interior ground. `corner` above is already computed
+					# WITH diagonals, so reaching here genuinely means
+					# corner_direction_for found nothing -- there is no second,
+					# more thorough corner check left to fall back to.
+					atlas_coords = atlas_coords_for_biome(biome_name, variant)
 			tile_map_layer.set_cell(global, 0, atlas_coords)
 
 

@@ -2475,3 +2475,71 @@ func test_paint_roofs_distinguishes_a_buildings_edge_from_its_interior():
 		tile_map_layer.get_cell_atlas_coords(Vector2i(2, 1)),
 		"the building's outer edge must carry a rim its interior does not"
 	)
+
+
+# -- a staircase corner that ALSO has a cardinal blend ------------------------
+#
+# Reported, after the land/land corner family and the blend/corner
+# reconciliation had both already landed: "the biome borders still contain
+# hard corners", with a screenshot of a grass/forest staircase.
+#
+# paint() gathered the DIAGONAL neighbours only inside its no-blend
+# fallback, and passed the primary corner_direction_for call the cardinal
+# neighbours alone. A staircase cell almost always has a differing cardinal
+# neighbour too, so it took the primary path -- where the diagonal-only
+# branch it needed could not fire, because the diagonals were never handed
+# over. The corner case therefore only ever worked on cells with no blend
+# at all, which is the one situation a staircase does not produce.
+
+func test_a_diagonal_only_corner_is_still_found_when_the_cell_also_blends():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array()
+	chunk.biome = PackedStringArray()
+	# A staircase step: grassland everywhere except forest at the NE diagonal
+	# (2,0) -- a diagonal-only touch -- AND forest due south at (1,2), which
+	# gives the centre cell a perfectly ordinary cardinal blend as well.
+	for y in 3:
+		for x in 3:
+			chunk.elevation.append(0.4)
+			var forest := (x == 2 and y == 0) or (x == 1 and y == 2)
+			chunk.biome.append("forest" if forest else "grassland")
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var centre := Vector2i(1, 1)
+	var variant := renderer.variant_index_for_position(centre.x, centre.y)
+	var painted := tile_map_layer.get_cell_atlas_coords(centre)
+	var plain := renderer.atlas_coords_for_biome("grassland", variant)
+	assert_ne(painted, plain, "the staircase corner must not paint as plain grassland")
+	var blend_only := renderer.atlas_coords_for_directional_blend(
+		"grassland", "forest", [Vector2i(0, 1)], variant
+	)
+	assert_ne(
+		painted, blend_only,
+		"blending the south edge alone leaves the NE diagonal a hard corner -- it must be carved"
+	)
+
+
+## The guarantee stated as a property rather than one hand-built case: for a
+## cell whose ONLY differing neighbour is diagonal, the corner must be found
+## whether or not an unrelated cardinal edge also blends.
+func test_the_diagonal_corner_is_found_with_and_without_an_unrelated_blend():
+	var neighbors := {
+		Vector2i(0, -1): "grassland", Vector2i(0, 1): "grassland",
+		Vector2i(-1, 0): "grassland", Vector2i(1, 0): "grassland",
+	}
+	var diagonals := {Vector2i(1, -1): "forest"}
+	var without_blend := renderer.corner_direction_for("grassland", neighbors, diagonals)
+	assert_false(without_blend.is_empty(), "a pure diagonal-only touch is a corner")
+
+	var blending := neighbors.duplicate()
+	blending[Vector2i(0, 1)] = "forest"  # an unrelated cardinal edge
+	var with_blend := renderer.corner_direction_for("grassland", blending, diagonals)
+	assert_false(
+		with_blend.is_empty(),
+		"the same diagonal corner must still be found when another edge happens to blend"
+	)
