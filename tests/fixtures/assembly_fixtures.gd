@@ -152,6 +152,34 @@ static func _saw_with_set_mm(tooth_set_mm: float) -> RefCounted:
 	return graph
 
 
+# -- the articulated one ---------------------------------------------------
+#
+# test_part_graph.gd's own scissors: two 8cm iron blades, each forge-welded to
+# its own bow, sharing ONE pivot pin. Here to pin what the compiler does NOT
+# understand -- it is a rigid-body compiler, and this is not a rigid body.
+
+static func scissors() -> RefCounted:
+	var graph: RefCounted = PartGraph.new()
+	for half in ["a", "b"]:
+		graph.add_part("blade_" + half, ItemPart.new(
+			"iron", ItemPart.GEOMETRY_EDGE, ItemPart.ROLE_WORKING,
+			{"length_cm": 8.0, "width_cm": 1.2, "thickness_cm": 0.25, "angle_deg": 30.0}
+		))
+		graph.add_part("bow_" + half, ItemPart.new(
+			"iron", ItemPart.GEOMETRY_HAFT, ItemPart.ROLE_GRIP,
+			{"length_cm": 8.0, "diameter_cm": 0.6}
+		))
+		graph.add_joint(PartJoint.new(
+			"weld_" + half, "bow_" + half, "blade_" + half,
+			PartJoint.TYPE_RIGID, PartJoint.FASTENING_WELD, "iron"
+		))
+	graph.add_joint(PartJoint.new(
+		"pivot", "blade_a", "blade_b", PartJoint.TYPE_PIVOT,
+		PartJoint.FASTENING_PIN, "iron", Vector3.FORWARD
+	))
+	return graph
+
+
 # -- the malformed one -----------------------------------------------------
 
 ## A blade and nothing to hold it by. Not a knife -- a knife has a handle. This

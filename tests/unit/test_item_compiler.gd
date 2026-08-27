@@ -276,6 +276,31 @@ func test_every_verb_is_either_a_rule_or_a_reason() -> void:
 				assert_ne(String(absences[verb]), "", "an absence with no reason is a black box")
 
 
+# -- what this compiler does NOT understand --------------------------------
+
+## An honest limit, pinned so it cannot be quietly forgotten.
+##
+## This is a RIGID-BODY compiler: it reads geometry, material and swing physics,
+## and it never reads articulation. So the pair of scissors that motivated the
+## whole typed-joint primitive compiles as though it were a stiff pair of
+## knives. It gets no SHEAR verb -- there is no such verb -- and every number in
+## its result comes from swinging it about one bow, which is not how scissors
+## work at all.
+##
+## The topological queries the missing inference needs all exist on PartGraph
+## and none of them is read here. See the ⬜ "Topological affordance inference"
+## row in docs/concept/emergent_crafting.md.
+func test_the_compiler_does_not_understand_scissors_and_says_so_here() -> void:
+	var scissors: RefCounted = Assemblies.scissors()
+	assert_false(scissors.is_rigid_body(),
+		"the fixture really is articulated -- that is the point")
+	assert_does_not_have(ItemCompiler.VERBS, "shear",
+		"there is no shear verb yet; when there is one, this test should fail")
+	var compiled: Dictionary = ItemCompiler.compile(scissors, MASTER)
+	assert_true(compiled["ok"], "it still compiles -- as a rigid body, wrongly")
+	assert_does_not_have(compiled["affordances"], "rip")
+
+
 func _rule_for(graph: RefCounted, atom: String) -> Dictionary:
 	for rule in ItemCompiler.compile(graph, MASTER)["rules"]:
 		if ((rule["pipeline"] as Array)[0] as Dictionary)["atom"] == atom:
