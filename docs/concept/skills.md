@@ -1,7 +1,12 @@
 ## Skills
 
 A unique skill system inspired by Path of Exile's passive web, layered with
-per-player DNA-driven uniqueness.
+per-player DNA-driven uniqueness. This is **combat/magic build power**,
+spent from level-up skill points — see [progression.md](progression.md) for
+how those points are earned. It is deliberately separate from
+[labor_skills.md](labor_skills.md)'s use-based practical mastery (Woodcutting,
+Smithing, Farming, ...), which levels from doing the corresponding action, not
+from allocation. A character advances both at once, independently.
 
 ### Per-archetype webs, softly gated
 
@@ -20,7 +25,13 @@ Webs connect outward into their domain's system: combat nodes feed
 [combat.md](combat.md) stats, Mage nodes unlock [magic.md](magic.md) atoms
 and raise their parameter caps, Artisan nodes unlock
 [crafting.md](crafting.md) recipes, Beastmaster nodes improve
-[pets.md](pets.md) taming/bonding, etc.
+[pets.md](pets.md) taming/bonding, etc. The same unlocked-atoms/param-caps
+state gates two things identically: *authoring* a new spell from scratch,
+and *learning* one from someone else's spell scroll — reading a scroll
+whose spell needs an atom or magnitude you haven't unlocked simply fails to
+teach it (see [magic.md](magic.md)'s spell-scrolls brainstorm), so a
+scroll's buyer has a genuine, legible reason to keep investing in this same
+web rather than a separate one.
 
 ### DNA-driven uniqueness (two layers)
 

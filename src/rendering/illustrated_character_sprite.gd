@@ -38,6 +38,7 @@ extends RefCounted
 ## to fit -- see docs/concept/character_art_brief.md).
 
 const SpriteSheetSlicer = preload("res://src/rendering/sprite_sheet_slicer.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
 ## Every registered part's frames, from a neutral idle pose to a normalized
 ## canvas with its ground-contact row on the same baseline -- mirrors
@@ -56,24 +57,15 @@ const BASELINE_Y := 90
 ## "chroma_key"/"chroma_key_tolerance" -- identical shape to
 ## IllustratedAnimalSprite's _SHEETS.
 ##
-## Measured directly from each PNG rather than guessed: torso.png and
-## leg.png are already real alpha-channel art (a single pose each, no
-## divider to find), and arms.png is 1774x887 -- exactly two 887x887 tiles
-## side by side.
-const _PARTS := {
-	"body": {
-		"path": "res://assets/sprites/player/torso.png",
-		"idle_rects": [Rect2i(0, 0, 1254, 1254)],
-	},
-	"legs": {
-		"path": "res://assets/sprites/player/leg.png",
-		"idle_rects": [Rect2i(0, 0, 1024, 1536)],
-	},
-	"arms": {
-		"path": "res://assets/sprites/player/arms.png",
-		"idle_rects": [Rect2i(0, 0, 887, 887), Rect2i(887, 0, 887, 887)],
-	},
-}
+## Empty: body/legs/arms used to source single-pose neutral art from here
+## (torso.png/leg.png/arms.png) directly, but now come from
+## hero_composite.png instead -- see "hero_composite.png" below, which needs
+## a variant+facing axis this simple part->rects shape has no room for, the
+## same reason head has its own surface rather than living here. Kept as a
+## real, working, tested mechanism (idle_rects included) for any FUTURE part
+## that only ever needs one neutral pose -- torso.png/leg.png/arms.png
+## themselves are untouched on disk, just no longer referenced.
+const _PARTS := {}
 
 var _slicer := SpriteSheetSlicer.new()
 
@@ -163,8 +155,8 @@ func trimmed_part_image(part_name: String, frame_index: int = 0, action: String 
 
 ## Same idea as trimmed_part_image, for the head's own recolored texture.
 ## Null if no head art is registered.
-func trimmed_head_image(seed_value: int, skin_tone: Color) -> Image:
-	var texture := generate_head_texture(seed_value, skin_tone)
+func trimmed_head_image(cell_index: int, skin_tone: Color) -> Image:
+	var texture := generate_head_texture(cell_index, skin_tone)
 	if texture == null:
 		return null
 	return _trimmed(texture.get_image())
@@ -209,7 +201,7 @@ func _measured_content_height(image: Image) -> float:
 
 func _load_frames(part_name: String, action: String) -> Array[Image]:
 	var part: Dictionary = _PARTS[part_name]
-	var image := Image.load_from_file(part.get("%s_path" % action, part["path"]))
+	var image := SpriteSheetLoader.load_image(part.get("%s_path" % action, part["path"]))
 	if part.has("chroma_key"):
 		image = _apply_chroma_key(image, part["chroma_key"], part.get("chroma_key_tolerance", 0.1))
 	var alpha_threshold: float = part.get("alpha_threshold", SpriteSheetSlicer.DEFAULT_ALPHA_THRESHOLD)
@@ -306,11 +298,355 @@ func _remove_background_by_flood(image: Image, step_tolerance: float) -> Image:
 	return result
 
 
-## Manhattan distance in RGB -- cheap, and all that a per-step tolerance
+## Mean per-channel RGB difference -- cheap, and all a per-step tolerance
 ## needs (unlike a masking decision, there is no hue-vs-brightness question
 ## here, just "is this neighbour close enough to still be background").
+## Averaged rather than summed so `step_tolerance` reads as "typical
+## per-channel difference" -- the same unit head_edge_probe.js measured the
+## real background-to-face ramp in (a single max-channel reading per pixel);
+## summing all three channels instead would silently need a tolerance ~3x
+## larger for the same real-world gap on a roughly-greyscale transition like
+## this sheet's, which is exactly the bug the first version of this
+## function shipped with (its own test caught it: a uniform grey step the
+## flood should clearly cross read as 0.45 distance under a raw sum, not the
+## measured 0.15).
 func _color_distance(a: Color, b: Color) -> float:
-	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
+	return (absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)) / 3.0
+
+
+## ============================================================================
+## hero_composite.png: 8 pre-colored outfits x {arms, torso, legs} --
+## what body/legs/arms now actually come from.
+## ============================================================================
+##
+## Replaces the single-pose neutral torso.png/leg.png/arms.png this class
+## used to source "body"/"legs"/"arms" from via `_PARTS` (asked directly:
+## "I added hero_composite ... use it"). Needs its own surface for the same
+## reason head does: a variant (which of 8 outfits) axis the simple
+## part->rects shape has no room for.
+##
+## REGENERATED a second time (see docs/progress.md for the full history of
+## the first regeneration and its own fixes) once the user supplied a
+## walk-cycle prompt request and delivered a NEW sheet in response ("I
+## replaced hero composite sprite .. pls wire"): still 1024x1535, still 8
+## outfit rows, but the source art itself changed shape in two real ways
+## this class has to account for:
+##
+## 1. Solid near-BLACK background (colorType 2, no alpha channel at all),
+##    not the previous version's real populated alpha -- measured directly
+##    (corner pixels read (0,0,0)/(1,1,0)), the SAME convention head.png
+##    already uses. Removed the same way: a border-connected flood fill
+##    (_remove_background_by_flood), not detect_frames' own alpha-or-pale-
+##    divider emptiness check, which a black background defeats entirely
+##    (it isn't transparent and isn't pale, so nothing would ever read as
+##    "empty" and the whole row would detect as one solid blob).
+## 2. Legs are no longer ONE fused pose per row -- each row now carries a
+##    real 5-frame WALK-CYCLE strip for the legs specifically (measured
+##    directly: every one of the 8 rows produces exactly 8 real content
+##    bands left to right -- 2 arm poses, 1 body pose, then 5 leg poses of
+##    similar width to each other -- see HERO_COMPOSITE_MIN_BAND_WIDTH's
+##    own doc comment on how "real" vs. noise is told apart). CharacterView
+##    now cycles through these 5 real frames for the walk animation instead
+##    of synthesizing motion from one static pose (see
+##    CharacterView._apply_legs/_process) -- this SUPERSEDES the hip/knee
+##    crop-and-hinge rig below (composite_leg_segments and friends), which
+##    was always documented as a compromise for exactly this gap ("no
+##    thigh/shin split baked into the source art") -- kept, not deleted,
+##    since the reasoning for why a full skinned mesh was set aside is
+##    still valid background for whoever next touches leg animation, but no
+##    longer called from CharacterView.
+##
+## Row Y-bands are NOT an even grid either (regenerated art, not a fixed
+## template) -- measured directly the same way the row-1 defect that broke
+## the FIRST hero_composite regeneration was found, a real per-row content
+## scan, not assumed from height/8 (see HERO_COMPOSITE_ROW_BANDS).
+##
+## PRE-COLORED per variant/row -- NOT neutral grey for runtime
+## modulate-tinting the way body/legs/arms used to be. A caller must
+## therefore leave `modulate` at WHITE for whatever this generates, the same
+## rule the illustrated head's own luminance recolor follows: this art is
+## already the color it should be.
+##
+## Which of the 8 outfits a hero wears is DNA-derived (asked directly, and
+## answered the same way skin/hair/eyes already are: no new player-choosable
+## axis, unlike head's own) -- see outfit_variant_for.
+##
+## Only FRONT-facing art exists at this path today (asked for all 4
+## directions; what came back both times was front-only -- see docs/
+## progress.md). `facing` stays a real parameter throughout this surface,
+## defaulting to and currently only ever resolving to "front" (see
+## _resolved_facing), so a future side/back sheet slots in without another
+## signature change.
+
+const HERO_COMPOSITE_PATH := "res://assets/sprites/player/hero_composite.png"
+
+const HERO_COMPOSITE_ROWS := 8
+
+## Which real content bands (see HERO_COMPOSITE_MIN_BAND_WIDTH), in strict
+## left-to-right order, belong to which part -- every one of the 8 rows
+## produces exactly this many real bands in exactly this order (measured
+## directly across all 8, not assumed from row 0 alone -- the exact mistake
+## that broke the FIRST hero_composite regeneration, see
+## test_every_outfit_row_produces_the_expected_frame_count). Legs keep all
+## 5 of theirs (a real walk-cycle strip, see this section's own top-level
+## doc comment); arms and body keep their own single/double band as before.
+const HERO_COMPOSITE_BAND_INDICES := {
+	"arms": [0, 1],
+	"body": [2],
+	"legs": [3, 4, 5, 6, 7],
+}
+
+## The narrowest a detect_frames band can be and still count as real
+## content, not the thin anti-aliasing sliver detect_frames sometimes finds
+## at a frame seam after the black-background flood fill -- measured
+## directly: every real band across all 8 rows is at least 50px wide, every
+## stray sliver is 4px or less, so 20 sits cleanly in the gap between the
+## two with real margin either side.
+const HERO_COMPOSITE_MIN_BAND_WIDTH := 20
+
+## The per-STEP flood tolerance for removing the sheet's own solid-black
+## background (see _remove_background_by_flood's own doc comment for what
+## "per-step" means) -- the same 0.02 HEAD_BACKGROUND_FLOOD_STEP_TOLERANCE
+## measures further down this file (a literal here, not a forward
+## reference to it -- GDScript const expressions can't reference a const
+## declared later in the same file), reused rather than swept independently
+## since both sheets share the same near-black-background-with-a-soft-blur-
+## into-content characteristic that value was originally measured against.
+const HERO_COMPOSITE_BACKGROUND_FLOOD_STEP_TOLERANCE := 0.02
+
+## Row Y-bands (art pixels, inclusive), one per outfit row, measured
+## directly against the real file the same way HERO_COMPOSITE_BAND_INDICES
+## above was -- NOT an even 1535/8 split (not even a whole number) since
+## this is hand-illustrated art with real, uneven gaps between rows, not a
+## fixed template grid.
+const HERO_COMPOSITE_ROW_BANDS: Array[Vector2i] = [
+	Vector2i(34, 145), Vector2i(195, 304), Vector2i(356, 480), Vector2i(529, 652),
+	Vector2i(702, 829), Vector2i(875, 1012), Vector2i(1058, 1197), Vector2i(1246, 1418),
+]
+
+var _hero_composite_sheet: Image = null
+
+## (part, variant, facing) key -> Array[Image] (1 entry for body/legs, 2 for
+## arms) / measured content height of frame 0 -- the composite counterpart
+## to _frame_cache/_head_content_height_cache: shared across every
+## CharacterView, since geometry and color are both fixed once the art
+## exists (nothing per-instance to lose by sharing).
+static var _composite_frames_cache: Dictionary = {}
+static var _composite_content_height_cache: Dictionary = {}
+
+
+func has_composite_part(part_name: String) -> bool:
+	return HERO_COMPOSITE_BAND_INDICES.has(part_name)
+
+
+## Which of the 8 pre-colored outfits this hero wears -- deterministic per
+## seed, same "vary by DNA, no new UI" answer skin/hair/eyes already give
+## (asked directly, unlike head's own real axis -- see HeroAppearance.AXES).
+func outfit_variant_for(seed_value: int) -> int:
+	return absi(hash("%d_outfit_variant" % seed_value)) % HERO_COMPOSITE_ROWS
+
+
+## The pre-colored texture(s) for one part of one outfit variant -- one
+## element for body/legs, two (left, right) for arms (see this section's own
+## doc comment on why arms alone splits). Empty for an unregistered part,
+## matching generate_textures' own "ask has_X first" contract.
+func generate_composite_textures(part_name: String, variant: int, facing: String = "front") -> Array[ImageTexture]:
+	var textures: Array[ImageTexture] = []
+	for image in _composite_frames(part_name, variant, facing):
+		textures.append(ImageTexture.create_from_image(image))
+	return textures
+
+
+## How much to scale the Sprite2D wearing this part/variant/facing/frame so
+## it reads at `target_world_height` world units tall -- same
+## measured-content approach as part_scale_for/head_scale_for above.
+## `frame_index` matters for arms: its two drawings are independent, not a
+## mirrored copy, so each side must be measured on its own.
+func composite_part_scale_for(
+	part_name: String, variant: int, target_world_height: float,
+	frame_index: int = 0, facing: String = "front"
+) -> float:
+	var frames := _composite_frames(part_name, variant, facing)
+	if frames.is_empty():
+		return 1.0
+	var index := clampi(frame_index, 0, frames.size() - 1)
+	var key := "%s/%d" % [_composite_key(part_name, variant, facing), index]
+	if not _composite_content_height_cache.has(key):
+		_composite_content_height_cache[key] = _measured_content_height(frames[index])
+	var content_height: float = _composite_content_height_cache[key]
+	return target_world_height / content_height if content_height > 0.0 else 1.0
+
+
+func _composite_key(part_name: String, variant: int, facing: String) -> String:
+	return "%s/%d/%s" % [part_name, variant, facing]
+
+
+## Only "front" resolves to real art today (see this section's own doc
+## comment) -- anything else falls back to it rather than to nothing, so a
+## caller asking for "side" before that art exists gets a facing hero
+## instead of a blank one.
+func _resolved_facing(part_name: String, facing: String) -> String:
+	return "front"
+
+
+## Finds and normalizes the frame(s) belonging to one part for outfit row
+## `variant` -- one frame for body, two for arms (left/right), five for
+## legs (a real walk-cycle strip -- see this section's own top-level doc
+## comment). The whole row band is background-flood-filled once, then
+## detect_frames splits it on the now-real transparent gaps between poses;
+## HERO_COMPOSITE_BAND_INDICES picks out which of the resulting bands (in
+## strict left-to-right order) belong to `part_name`.
+func _composite_frames(part_name: String, variant: int, facing: String) -> Array[Image]:
+	if not HERO_COMPOSITE_BAND_INDICES.has(part_name):
+		return []
+	var resolved := _resolved_facing(part_name, facing)
+	var key := _composite_key(part_name, variant, resolved)
+	if _composite_frames_cache.has(key):
+		return _composite_frames_cache[key]
+	if _hero_composite_sheet == null:
+		_hero_composite_sheet = SpriteSheetLoader.load_image(HERO_COMPOSITE_PATH)
+	var row := clampi(variant, 0, HERO_COMPOSITE_ROWS - 1)
+	var band: Vector2i = HERO_COMPOSITE_ROW_BANDS[row]
+	var row_crop := _hero_composite_sheet.get_region(
+		Rect2i(0, band.x, _hero_composite_sheet.get_width(), band.y - band.x + 1)
+	)
+	var keyed := _remove_background_by_flood(row_crop, HERO_COMPOSITE_BACKGROUND_FLOOD_STEP_TOLERANCE)
+	var raw_bands := _slicer.detect_frames(keyed, 0, keyed.get_height())
+	var real_bands: Array[Rect2i] = []
+	for candidate in raw_bands:
+		if candidate.size.x >= HERO_COMPOSITE_MIN_BAND_WIDTH:
+			real_bands.append(candidate)
+	var selected: Array[Rect2i] = []
+	for index in HERO_COMPOSITE_BAND_INDICES[part_name]:
+		if index < real_bands.size():
+			selected.append(real_bands[index])
+	var result: Array[Image] = _slicer.normalize_frames(keyed, selected, CANVAS_SIZE, BASELINE_Y)
+	_composite_frames_cache[key] = result
+	return result
+
+
+## The trimmed (padding-cropped) content image for one composite part/
+## variant/frame -- the raw-Image-compositing counterpart to
+## trimmed_part_image/trimmed_head_image, for ProceduralCharacterSprite's
+## portrait. Null if the part or frame_index doesn't exist.
+func trimmed_composite_image(
+	part_name: String, variant: int, facing: String = "front", frame_index: int = 0
+) -> Image:
+	var frames := _composite_frames(part_name, variant, facing)
+	if frames.is_empty():
+		return null
+	var index := clampi(frame_index, 0, frames.size() - 1)
+	return _trimmed(frames[index])
+
+
+## ============================================================================
+## Leg hip/knee segments: a real joint on the fused leg pair, from the SAME
+## pixels, no new art.
+## ============================================================================
+##
+## Reported live, directly: "add proper walk animation by morphing the leg
+## sprites and include a knee joint animated motion." The fused leg pair (see
+## this file's own doc comment on why legs.png/hero_composite.png's legs
+## column draws both legs together as one connected pose, not two
+## independently-swinging sprites) has no thigh/shin split baked into the
+## source art at all -- CharacterView cannot wear a "thigh" and "shin" that
+## were never drawn separately.
+##
+## A full weight-painted Polygon2D/Skeleton2D mesh skin (the standard Godot
+## mechanism for bending one texture smoothly around a joint with no visible
+## seam) was evaluated and set aside for this pass: Godot 4's
+## `Polygon2D.bones` property expects a specific, thinly-documented internal
+## array shape (pairs of a Bone2D NodePath and a PackedFloat32Array of
+## per-vertex weights, normally hand-painted with the editor's own UV/weight
+## tool) that has to be assembled and assigned through `set("bones", ...)`
+## from script -- with zero precedent anywhere in this codebase to build
+## from, and real risk of a subtly wrong weight paint being effectively
+## undebuggable without the editor's own visual painting tool. What this
+## builds instead is the fallback the same design brief explicitly allows: a
+## genuine two-piece CROP, hinged on a real hip+knee pivot chain
+## (CharacterView._leg_left/_leg_knee, driven by leg_gait_cycle.gd's real
+## hip_angle/knee_angle functions) -- real image content, cut rather than
+## fabricated, cruder than a smooth skin (a rigid crop shows a seam once the
+## knee actually bends, a soft skin wouldn't) but honest about being cruder,
+## and buildable/testable with ordinary Image.get_region calls this file
+## already uses everywhere else (see _trimmed).
+
+## Thigh and shank are close enough to equal length in Winter's own
+## anthropometric table (CharacterView.WINTER_THIGH_FRACTION_OF_HEIGHT ~=
+## WINTER_SHANK_FRACTION_OF_HEIGHT -- see that constant's own citation) that
+## the knee sits at essentially the leg art's own midpoint. This does NOT
+## detect where a given outfit row's artist actually drew the knee crease --
+## no such per-row pixel analysis is attempted -- it reuses the same real
+## anthropometric number the leg's own overall height is already built from,
+## rather than a second, independent eyeballed guess.
+const KNEE_LINE_FRACTION := 0.5
+
+## How far the thigh/shin crops overlap across the knee line, in raw
+## composite-canvas pixels -- a real mitigation for the seam a RIGID
+## two-piece crop-and-hinge (see this section's own doc comment on why it
+## isn't a full weight-painted skin) would otherwise show the moment the
+## knee bends even slightly. Several hero_composite.png outfit rows draw a
+## belt or a heraldic banner that visually bridges straight across the knee
+## line (verified directly: crop both rows and look -- row 0's belt sits
+## well above the knee line, but row 7's banner runs from the hip down past
+## it); a bare, non-overlapping cut would tear that shared decoration in two
+## the instant the shin piece rotates independently of the thigh. Generous
+## on purpose -- both crops carry the SAME pixels across this band at rest,
+## so it costs nothing when the knee angle is zero (the shin piece is drawn
+## on top and exactly matches what's already there), and only becomes a
+## visible trade-off (a slightly thicker knee) once the joint actually bends.
+const KNEE_OVERLAP_PX := 10
+
+
+## The thigh (top) and shin (bottom) crops of one outfit variant's fused leg
+## pair, split at KNEE_LINE_FRACTION of its own measured content height with
+## a KNEE_OVERLAP_PX overlap band shared by both -- what CharacterView wears
+## on its hip/knee pivot chain (see this section's own doc comment) instead
+## of one whole-pair sprite, so a real hip+knee gait can bend the pair at a
+## real joint instead of only ever rotating or bobbing it as one rigid
+## whole. Returns `[thigh_image, shin_image]`; empty if legs aren't
+## registered for this variant/facing (mirrors trimmed_composite_image's own
+## has-X-then-fallback contract).
+func composite_leg_segments(variant: int, facing: String = "front") -> Array[Image]:
+	var trimmed := trimmed_composite_image("legs", variant, facing)
+	if trimmed == null:
+		return []
+	var height := trimmed.get_height()
+	var width := trimmed.get_width()
+	var knee_y := clampi(roundi(height * KNEE_LINE_FRACTION), 1, height - 1)
+	var thigh_bottom := mini(height, knee_y + KNEE_OVERLAP_PX)
+	var shin_top := maxi(0, knee_y - KNEE_OVERLAP_PX)
+	var thigh := trimmed.get_region(Rect2i(0, 0, width, thigh_bottom))
+	var shin := trimmed.get_region(Rect2i(0, shin_top, width, height - shin_top))
+	var result: Array[Image] = [thigh, shin]
+	return result
+
+
+## How far down (raw, unscaled texture-pixel units -- the same convention
+## _composite_content_offset_y already uses for Sprite2D.offset elsewhere in
+## this rig) the thigh crop's own drawn texture must be offset so its TOP
+## edge -- not Sprite2D's own default CENTER -- lands on `.position` (the
+## hip pivot). Pure geometry, no image access, independently testable
+## without loading the real sheet.
+func leg_thigh_offset_y(thigh_height_px: float) -> float:
+	return thigh_height_px * 0.5
+
+
+## The knee pivot's own LOCAL Y position (raw, unscaled pixel units) as a
+## child of the hip/thigh sprite -- straight down from the hip line
+## (`.position`, the thigh's own top edge, see leg_thigh_offset_y above) by
+## however many pixels KNEE_LINE_FRACTION of the FULL trimmed leg puts the
+## knee.
+func leg_knee_pivot_local_y(trimmed_height_px: float) -> float:
+	return trimmed_height_px * KNEE_LINE_FRACTION
+
+
+## How far down the shin crop's own drawn texture must be offset so the SAME
+## knee point the thigh/knee pivot above already sits at -- not the shin
+## crop's own top edge, which is `overlap_px` pixels ABOVE that point (see
+## composite_leg_segments) -- lands on the knee pivot's own `.position`.
+func leg_shin_offset_y(shin_height_px: float, overlap_px: float) -> float:
+	return shin_height_px * 0.5 - overlap_px
 
 
 ## ============================================================================
@@ -350,10 +686,27 @@ const HEAD_BASELINE_Y := 24
 ## of black. See _remove_background_by_flood's own doc comment for why a
 ## border flood fill replaces the flat key instead. This is the per-STEP
 ## tolerance the flood walks with, not a distance from a fixed reference
-## color -- generous enough to ride the measured blur (steps up to ~0.18)
-## while stopping at the sharpest jump measured at the true edge (~0.176 in
-## the sampled ramp).
-const HEAD_BACKGROUND_FLOOD_STEP_TOLERANCE := 0.2
+## color.
+##
+## Revised once already, the hard way: a first pass at 0.2 (calibrated from
+## one cell's two scanlines, "generous enough to ride the measured blur")
+## blew straight through most of the grid once actually run against every
+## cell -- the real background-to-face contrast is not uniform across all
+## 100 faces. Swept 0.02-0.18 against 7 sample cells with a throwaway
+## harness that dumped the result at each value as a real PNG for direct
+## visual comparison (not just an opaque-pixel percentage, which alone
+## can't tell "cleanly isolated face" from "a fragment of one"): most cells
+## hold a stable ~33-42% opaque from 0.02 up to a per-cell cliff between
+## 0.06 and 0.10 where retention collapses to single digits (the flood
+## leaking through a weak point on that face's silhouette a single scanline
+## never sampled), but two of the seven (both darker-toned faces, rows 8-9
+## of the grid) show no clean plateau at all -- they lose real content
+## gradually from 0.02 upward, with no tolerance that is both fully clean
+## AND fully safe for them. 0.02 is the value that visually held a complete,
+## recognizable face on every sampled cell, including those two --
+## conservative on purpose: a faint residual edge is a far smaller defect
+## than eating into the face itself.
+const HEAD_BACKGROUND_FLOOD_STEP_TOLERANCE := 0.02
 
 ## How dark the recolor's own deepest shading is allowed to go, and the floor
 ## under the sheet's measured peak brightness -- identical role to
@@ -389,17 +742,81 @@ func has_head() -> bool:
 	return HEAD_PATH != ""
 
 
-## Which of the grid's 100 cells this hero wears -- deterministic per seed
-## (see HeroAppearance.appearance_for/appearance_from_choices carrying
-## "seed"), so a hero's face never changes from one frame, or one session, to
-## the next.
-func head_cell_index_for(seed_value: int) -> int:
-	return absi(hash("%d_head_cell" % seed_value)) % (HEAD_GRID_COLUMNS * HEAD_GRID_ROWS)
+## Minimum fraction of a generated head texture's own canvas that must
+## still be opaque for it to count as usable art, rather than a
+## background-removal failure. Measured directly across all 100 cells: 7 of
+## them (all but one landing in the sheet's own column 1, a systematic
+## pattern rather than per-cell noise, though the exact cause wasn't chased
+## down here) have their _remove_background_by_flood erode almost the
+## entire face -- opaque fraction <=0.083 for every one of the 7 -- while
+## every other cell holds comfortably above that. 0.15 sits with margin on
+## both sides of that measured gap. Left unguarded, one of these 7 cells
+## reaches the live game as a huge, near-blank, wildly oversized texture
+## (head_scale_for dividing a target height by a near-zero measured content
+## height) -- reported live as a floating translucent smear where a face
+## should be.
+const HEAD_MINIMUM_OPAQUE_FRACTION := 0.15
+
+## The flood's OTHER failure mode, found by a second full-grid survey done
+## alongside the near-empty one above: 12 of the 100 cells (a contiguous
+## block, rows 1-2 columns 3-8 of the grid) come back with opaque fraction
+## of essentially 1.0 -- the background wasn't removed AT ALL, leaving the
+## whole square cell opaque, which recolors as a flat solid block rather
+## than a face (reported live, seeing exactly this: a dark rectangle where
+## a face should be). Consistent with _remove_background_by_flood's own
+## border-flood approach: if one of these cells' face art is drawn all the
+## way to (or past) the cell's own edge with no background margin left for
+## the flood to start from, the flood never finds anywhere to begin and
+## leaves the entire cell untouched. A real face's silhouette, cropped from
+## a square cell, always leaves at least the corners transparent -- 1.0 is
+## only reachable by a flood that found nothing to remove.
+const HEAD_MAXIMUM_OPAQUE_FRACTION := 0.97
 
 
-## The recolored head texture for this seed's chosen face, tinted toward
-## `skin_tone` -- null if no head art is registered (has_head() false),
-## matching generate_textures' own "ask has_X first" contract.
+## Whether cell_index's generated (recolored) head texture is real, usable
+## art -- the head counterpart to has_action/has_composite_part's own
+## has-X-then-fallback contract, so a caller (CharacterView, the portrait)
+## can fall back to the procedural head for the cells whose flood-fill
+## failed (too little retained -- HEAD_MINIMUM_OPAQUE_FRACTION -- or too
+## much -- HEAD_MAXIMUM_OPAQUE_FRACTION, see its own doc comment), exactly
+## the same safety net body/legs/arms already apply for their own per-row
+## gaps.
+func has_usable_head(cell_index: int, skin_tone: Color) -> bool:
+	if not has_head():
+		return false
+	var texture := generate_head_texture(cell_index, skin_tone)
+	if texture == null:
+		return false
+	var image := texture.get_image()
+	var total := image.get_width() * image.get_height()
+	if total <= 0:
+		return false
+	var opaque := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > 0.05:
+				opaque += 1
+	var fraction := float(opaque) / float(total)
+	return fraction >= HEAD_MINIMUM_OPAQUE_FRACTION and fraction <= HEAD_MAXIMUM_OPAQUE_FRACTION
+
+
+## Wraps any integer into a valid [0, 100) cell index, both directions --
+## the same "cycling never goes out of range" contract HeroAppearance._wrap
+## already gives every other axis. Defense in depth: HeroAppearance is the
+## one caller expected to hand this a pre-wrapped index (see
+## appearance_from_choices' own "head_index"), but a bad index here should
+## still degrade to SOME face rather than an out-of-bounds crop.
+func _wrap_cell_index(cell_index: int) -> int:
+	var count := HEAD_GRID_COLUMNS * HEAD_GRID_ROWS
+	return ((cell_index % count) + count) % count
+
+
+## The recolored head texture for grid cell `cell_index` (see
+## HeroAppearance's "head" axis / "head_index" on the appearance dict --
+## this is a real player-chosen customization, not derived from a seed),
+## tinted toward `skin_tone` -- null if no head art is registered
+## (has_head() false), matching generate_textures' own "ask has_X first"
+## contract.
 ##
 ## Recolors by LUMINANCE ONLY, discarding the sheet's own baked hue entirely
 ## -- the same trick ProceduralFlowerSprite._paint_illustrated_head already
@@ -415,40 +832,42 @@ func head_cell_index_for(seed_value: int) -> int:
 ## whatever tone the recolor lands on -- not indistinguishable from skin, just
 ## not independently colored. A real eye-color mask is a legitimate follow-up
 ## (see the art brief), not attempted here.
-func generate_head_texture(seed_value: int, skin_tone: Color) -> ImageTexture:
+func generate_head_texture(cell_index: int, skin_tone: Color) -> ImageTexture:
 	if not has_head():
 		return null
-	var cell_index := head_cell_index_for(seed_value)
-	var cache_key := "%d_%s" % [cell_index, skin_tone.to_html()]
+	var index := _wrap_cell_index(cell_index)
+	var cache_key := "%d_%s" % [index, skin_tone.to_html()]
 	if _head_texture_cache.has(cache_key):
 		return _head_texture_cache[cache_key]
-	var recolored := _recolor_by_luminance(_load_head_cell(cell_index), skin_tone)
+	var recolored := _recolor_by_luminance(_load_head_cell(index), skin_tone)
 	var texture := ImageTexture.create_from_image(recolored)
 	_head_texture_cache[cache_key] = texture
 	return texture
 
 
-## How much to scale the Head Sprite2D so this hero's face reads at
+## How much to scale the Head Sprite2D so this cell's face reads at
 ## `target_world_height` world units tall -- the head's own counterpart to
 ## part_scale_for above, kept separate because head art goes through a
 ## different load/cache path (crop-a-grid-cell, not slice-a-sheet) and has no
-## `frame_index`/`action` axis to key on, only a seed.
-func head_scale_for(seed_value: int, target_world_height: float) -> float:
-	var cell_index := head_cell_index_for(seed_value)
-	if not _head_content_height_cache.has(cell_index):
-		_head_content_height_cache[cell_index] = _measured_content_height(_load_head_cell(cell_index))
-	var content_height: float = _head_content_height_cache[cell_index]
+## `frame_index`/`action` axis to key on, only a cell index.
+func head_scale_for(cell_index: int, target_world_height: float) -> float:
+	var index := _wrap_cell_index(cell_index)
+	if not _head_content_height_cache.has(index):
+		_head_content_height_cache[index] = _measured_content_height(_load_head_cell(index))
+	var content_height: float = _head_content_height_cache[index]
 	return target_world_height / content_height if content_height > 0.0 else 1.0
 
 
 ## Crops one grid cell out of the sheet, keys its black background to real
 ## transparency, and normalizes it onto HEAD_CANVAS_SIZE/HEAD_BASELINE_Y --
 ## everything generate_head_texture needs before the recolor pass.
+## `cell_index` must already be wrapped into range -- callers go through
+## generate_head_texture/head_scale_for, which do that.
 func _load_head_cell(cell_index: int) -> Image:
 	if _head_cell_cache.has(cell_index):
 		return _head_cell_cache[cell_index]
 	if _head_sheet == null:
-		_head_sheet = Image.load_from_file(HEAD_PATH)
+		_head_sheet = SpriteSheetLoader.load_image(HEAD_PATH)
 	var column := cell_index % HEAD_GRID_COLUMNS
 	var row := cell_index / HEAD_GRID_COLUMNS
 	# Integer division: 1254/10 = 125 with a small remainder the sheet's own

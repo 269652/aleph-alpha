@@ -48,6 +48,61 @@ func test_trunk_area_is_brownish_and_opaque():
 	assert_gt(trunk_pixel.r, trunk_pixel.b)
 
 
+# -- bare trunk (see docs/concept/woodworking.md's "canopy off first") ------
+#
+# Reported live: chopping the canopy off a felled tree dropped sticks but
+# the tree still visibly had its full canopy -- ChoppableTree flipped a
+## state flag and dropped items but never actually swapped what was drawn.
+
+func test_bare_trunk_image_is_the_expected_size():
+	var image := generator.generate_bare_trunk_image(0.5, 1)
+	assert_eq(image.get_width(), ProceduralTreeSprite.SIZE.x)
+	assert_eq(image.get_height(), ProceduralTreeSprite.SIZE.y)
+
+
+## bias 0.7 rather than this file's usual 0.5 ("walnut") -- walnut's own
+## illustrated trunk art has a separate, pre-existing rendering gap (traced
+## and flagged, not this feature's bug: EVERY other species bias renders a
+## real opaque trunk pixel here, only walnut doesn't, and the SAME gap
+## already exists in the unmodified generate_image() full-tree path).
+func test_bare_trunk_still_shows_a_brownish_trunk():
+	var image := generator.generate_bare_trunk_image(0.7, 1)
+	var trunk_pixel := image.get_pixel(ProceduralTreeSprite.SIZE.x / 2, ProceduralTreeSprite.SIZE.y - 2)
+	assert_gt(trunk_pixel.a, 0.0)
+	assert_gt(trunk_pixel.r, trunk_pixel.b)
+
+
+## The actual point: nowhere in a bare trunk's image should read as canopy
+## foliage -- a full tree has plenty of green-dominant pixels (see
+## test_canopy_area_is_greenish_and_opaque); a bare trunk should have none.
+func test_bare_trunk_has_no_canopy_foliage():
+	var full_tree := generator.generate_image(0.5, 1)
+	var bare_trunk := generator.generate_bare_trunk_image(0.5, 1)
+	var full_tree_green_pixels := 0
+	var bare_trunk_green_pixels := 0
+	for y in ProceduralTreeSprite.SIZE.y:
+		for x in ProceduralTreeSprite.SIZE.x:
+			var full_pixel := full_tree.get_pixel(x, y)
+			if full_pixel.a > 0.0 and full_pixel.g > full_pixel.r and full_pixel.g > full_pixel.b:
+				full_tree_green_pixels += 1
+			var bare_pixel := bare_trunk.get_pixel(x, y)
+			if bare_pixel.a > 0.0 and bare_pixel.g > bare_pixel.r and bare_pixel.g > bare_pixel.b:
+				bare_trunk_green_pixels += 1
+	assert_gt(full_tree_green_pixels, 0, "precondition: a full tree actually has canopy foliage")
+	assert_eq(bare_trunk_green_pixels, 0, "a bare trunk should have no canopy foliage left")
+
+
+func test_bare_trunk_image_is_deterministic():
+	var a := generator.generate_bare_trunk_image(0.5, 7)
+	var b := generator.generate_bare_trunk_image(0.5, 7)
+	assert_eq(a.get_data(), b.get_data())
+
+
+func test_bare_trunk_texture_returns_an_image_texture():
+	var texture := generator.generate_bare_trunk_texture(0.5, 1)
+	assert_eq(texture.get_width(), ProceduralTreeSprite.SIZE.x)
+
+
 func test_is_deterministic_for_the_same_inputs():
 	var a := generator.generate_image(0.5, 7)
 	var b := generator.generate_image(0.5, 7)

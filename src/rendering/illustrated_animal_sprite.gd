@@ -165,11 +165,77 @@ const _SHEETS := {
 	# between the two rows (510-512). Background samples clustered around
 	# (241, 4, 244)/255 -- essentially the same magenta sheep uses.
 	"wolf": {
+		"faces_left": true,
 		"path": "res://assets/sprites/animals/wolf.png",
 		"walk_bands": [Vector2i(5, 509)],
 		"eat_bands": [Vector2i(513, 1018)],
 		"alpha_threshold": 0.3,
 		"chroma_key": Color(0.95, 0.02, 0.96),
+		"chroma_key_tolerance": 0.25,
+	},
+
+	# -- Germany-region world bosses (docs/concept/worldbosses.md) ----------
+	# Walk-only sheets generated from docs/art/ai_sprite_prompts.md section
+	# 4 -- "attack" and "swim" fall back to this same walk cycle per
+	# has_action's own fallback chain, "eat" falls all the way through to
+	# ProceduralAnimalAnimation (no dedicated eat art for any of these).
+	# Divider lines on all 4 measured as near-pure white (mean brightness
+	# ~0.998-1.0, mean saturation <0.06) -- comfortably above the 0.7/0.3
+	# defaults, no divider_gray_min override needed, unlike horse/deer/boar.
+	# Content Y-bands measured with a small script (magenta-distance + a
+	# >50px-per-row density floor to reject the sheets' faint background
+	# grain rather than a bare "any non-magenta pixel" test), not eyeballed.
+	# Cut out on solid magenta ground, same as "sheep" above -- chroma_key is
+	# REQUIRED here (confirmed by measuring the actual generated texture:
+	# without it, a frame came back with 54.8% of its "opaque" pixels being
+	# magenta background, not creature -- this was the actual cause of
+	# "krampus doesn't appear", not a spawn/console bug). Measured background
+	# samples per sheet clustered within ~0.02 of pure (1.0, 0.0, 1.0) on
+	# every channel -- comfortably inside sheep's own 0.25 tolerance, reused
+	# as-is rather than re-deriving a slightly different tolerance per sheet.
+	"lindwurm": {
+		# Faces RIGHT -- the one sheet in this batch generated that way;
+		# verified from the actual pixels, not assumed from the others.
+		"faces_left": false,
+		"path": "res://assets/sprites/lindwurm_walk.png",
+		"walk_bands": [Vector2i(312, 479)],
+		"alpha_threshold": 0.3,
+		"chroma_key": Color(1.0, 0.0, 1.0),
+		"chroma_key_tolerance": 0.25,
+	},
+	# Rübezahl's storm-boar form -- species id/filename ASCII-normalized
+	# from the source "rübezahl" (this project's other species ids are all
+	# plain ASCII snake_case). Generated with 9 walk frames, not the
+	# requested 8 -- SpriteSheetSlicer has no fixed-frame-count assumption
+	# anywhere, so this is harmless, just noted so nobody "fixes" it later
+	# expecting exactly 8 (see test_generate_textures_returns_nine_walk_
+	# frames_for_rubezahl).
+	"rubezahl": {
+		"faces_left": true,
+		"path": "res://assets/sprites/rubezahl_walk.png",
+		"walk_bands": [Vector2i(331, 498)],
+		"alpha_threshold": 0.3,
+		"chroma_key": Color(1.0, 0.0, 1.0),
+		"chroma_key_tolerance": 0.25,
+	},
+	# Nix/Wasserfrau -- generated file/species id came back "nyx" (a
+	# distinct Greek mythological figure, not the intended German water
+	# spirit); kept as generated rather than silently renamed. Worth
+	# knowing if a future Greek-region boss ever wants "nyx" for itself.
+	"nyx": {
+		"faces_left": true,
+		"path": "res://assets/sprites/nyx_walk.png",
+		"walk_bands": [Vector2i(151, 615)],
+		"alpha_threshold": 0.3,
+		"chroma_key": Color(1.0, 0.0, 1.0),
+		"chroma_key_tolerance": 0.25,
+	},
+	"krampus": {
+		"faces_left": true,
+		"path": "res://assets/sprites/krampus_walk.png",
+		"walk_bands": [Vector2i(156, 600)],
+		"alpha_threshold": 0.3,
+		"chroma_key": Color(1.0, 0.0, 1.0),
 		"chroma_key_tolerance": 0.25,
 	},
 }

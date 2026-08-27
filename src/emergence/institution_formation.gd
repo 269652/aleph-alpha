@@ -45,5 +45,38 @@ static func should_form(store: ContractStore, party_a: String, party_b: String) 
 	return shared_contract_count(store, party_a, party_b) >= FORMATION_THRESHOLD
 
 
-static func should_dissolve(store: ContractStore, party_a: String, party_b: String) -> bool:
-	return shared_contract_count(store, party_a, party_b) <= DISSOLUTION_THRESHOLD
+## How long a real coordination window stays fresh (docs/progress.md's
+## Emergence Phase 6 gap-closing entry: `shared_contract_count` alone is
+## ALL-TIME and monotonically non-decreasing, so `should_dissolve` built
+## against it can only ever be true BEFORE formation, never after -- a real
+## structural reason automatic dissolution had no live trigger, not just an
+## unbuilt one). Tested against the behaviour it produces
+## (test_institution_formation.gd), same honesty as FORMATION_THRESHOLD's
+## own doc comment: no real economy data yet to derive a "correct" window
+## from, but real, deterministic behavior this project can pin a test to.
+const RECENT_WINDOW_SECONDS := 300.0
+
+
+## How many FULFILLED contracts two parties share, created within
+## RECENT_WINDOW_SECONDS of `now` -- unlike shared_contract_count (all-time,
+## what FORMATION reads: a strong track record should never be forgotten),
+## this can genuinely fall back toward zero if a pair stops coordinating,
+## which is what makes automatic DISSOLUTION a real, meaningful signal: an
+## institution whose members haven't worked together recently is genuinely
+## at risk, regardless of how much history they have -- the same real-world
+## distinction between "has a track record" (formation) and "is still
+## active" (staying formed).
+static func recent_shared_contract_count(store: ContractStore, party_a: String, party_b: String, now: float) -> int:
+	var count := 0
+	for contract in store.contracts_for(party_a):
+		if (
+			contract.status == Contract.FULFILLED
+			and contract.parties.has(party_b)
+			and (now - contract.created_at) <= RECENT_WINDOW_SECONDS
+		):
+			count += 1
+	return count
+
+
+static func should_dissolve(store: ContractStore, party_a: String, party_b: String, now: float) -> bool:
+	return recent_shared_contract_count(store, party_a, party_b, now) <= DISSOLUTION_THRESHOLD

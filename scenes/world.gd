@@ -6,7 +6,22 @@ const DisplayScaling = preload("res://src/rendering/display_scaling.gd")
 const RainOverlay = preload("res://src/rendering/rain_overlay.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
 const ConsoleSpecies = preload("res://src/gameplay/console_species.gd")
+const EasterEggSightings = preload("res://src/gameplay/easter_egg_sightings.gd")
+const EasterEggCreatures = preload("res://src/gameplay/easter_egg_creatures.gd")
+const WarGamesResponse = preload("res://src/gameplay/wargames_response.gd")
+const BackToTheFutureDay = preload("res://src/gameplay/back_to_the_future_day.gd")
+const RushAmbientCue = preload("res://src/gameplay/rush_ambient_cue.gd")
+const SecretD20 = preload("res://src/gameplay/secret_d20.gd")
+const AncientTerminal = preload("res://src/gameplay/ancient_terminal.gd")
+const SignedSecretRoom = preload("res://src/gameplay/signed_secret_room.gd")
+const BridgekeeperEncounter = preload("res://src/gameplay/bridgekeeper_encounter.gd")
+const ThreeFragmentsHunt = preload("res://src/gameplay/three_fragments_hunt.gd")
+const SeaCaveGuardian = preload("res://src/gameplay/sea_cave_guardian.gd")
+const JoustMatchView = preload("res://src/rendering/joust_match_view.gd")
+const RetroHandheld = preload("res://src/gameplay/retro_handheld.gd")
+const HandheldBattleView = preload("res://src/rendering/handheld_battle_view.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const SolarPosition = preload("res://src/world/solar_position.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
@@ -34,7 +49,14 @@ const MammalCourtship = preload("res://src/gameplay/mammal_courtship.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const SettingsOverlay = preload("res://scenes/settings_overlay.gd")
+const LicenseGateOverlay = preload("res://scenes/license_gate_overlay.gd")
+const LicenseStore = preload("res://src/licensing/license_store.gd")
+const GithubVerifyOverlay = preload("res://scenes/github_verify_overlay.gd")
+const GithubDeviceAuth = preload("res://src/licensing/github_device_auth.gd")
+const GithubDeviceFlow = preload("res://src/licensing/github_device_flow.gd")
+const GithubTokenStore = preload("res://src/licensing/github_token_store.gd")
 const MainMenu = preload("res://scenes/main_menu.gd")
+const LoadingOverlay = preload("res://scenes/loading_overlay.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
@@ -50,6 +72,14 @@ const EscapeAction = preload("res://src/ui/escape_action.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const WorldReset = preload("res://src/world/world_reset.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
+const Compass = preload("res://src/gameplay/compass.gd")
+const MapProjection = preload("res://src/world/map_projection.gd")
+const Spyglass = preload("res://src/gameplay/spyglass.gd")
+const WeatherForecast = preload("res://src/gameplay/weather_forecast.gd")
+const SeasonAlmanac = preload("res://src/world/season_almanac.gd")
+const FieldJournal = preload("res://src/emergence/field_journal.gd")
+const RegionalTrade = preload("res://src/emergence/regional_trade.gd")
+const Taming = preload("res://src/gameplay/taming.gd")
 
 ## How many hotbar slots the HUD row draws. Derived from Player's own
 ## hotbar size (see Player.HOTBAR_SLOT_COUNT / Hotbar) rather than duplicated,
@@ -70,6 +100,60 @@ const MINIMAP_REFRESH_INTERVAL := 1.0
 const HOVER_REFRESH_INTERVAL := 0.033
 var _hover_accumulator := 0.0
 
+## Real seconds between Easter-egg sighting checks (docs/concept/
+## easter_eggs.md's Mothman/Jersey Devil/Roswell/Area 51 cameos) -- these
+## are meant to be rare, atmospheric glimpses, not a per-frame lottery, so
+## chance_per_check in EasterEggSightings is calibrated against "a check
+## roughly every few seconds while in range", not against frame rate.
+const EASTER_EGG_CHECK_INTERVAL := 4.0
+## How long a triggered sighting message stays on screen before clearing --
+## long enough to read a short line, short enough that it's clearly a
+## glimpse, not a persistent HUD element.
+const EASTER_EGG_MESSAGE_DURATION := 6.0
+## A sighting's ink: cooler and slightly dimmer than UiTheme.TEXT, so an
+## ambient glimpse reads as something the WORLD said rather than a result of
+## something the player just did. The only per-banner difference in the
+## shared message stack (see _build_message_stack).
+const EASTER_EGG_MESSAGE_COLOR := Color(0.85, 0.85, 0.95)
+var _easter_egg_check_accumulator := 0.0
+var _easter_egg_message_timer := 0.0
+
+## How far (px) a triggered creature cameo (Squallmaw/Coilnecca/Champ, see
+## EasterEggCreatures) spawns from the player, rather than on top of them --
+## first-pass placeholder, same discipline as EASTER_EGG_CHECK_INTERVAL:
+## outside melee/interaction range (see CREATURE_PANELS_RADIUS, 220.0 --
+## "wider than melee range, meant to cover what's visibly on screen") so it
+## reads as spotted at a distance rather than materializing at the player's
+## feet, closer than SENSE_RADIUS's release range so it can still be walked
+## toward and reacted to like an ordinary creature.
+const EASTER_EGG_CREATURE_SPAWN_DISTANCE := 220.0
+
+## How long the ancient-terminal sequence (multiple prose lines joined into
+## one banner, see _check_ancient_terminal) stays on screen -- longer than
+## EASTER_EGG_MESSAGE_DURATION's single-line glimpses since there is
+## genuinely more text to read here.
+const ANCIENT_TERMINAL_MESSAGE_DURATION := 12.0
+## Same reasoning as ANCIENT_TERMINAL_MESSAGE_DURATION -- the secret room's
+## credit line gets its own brief but slightly longer read time than an
+## ordinary one-line cameo.
+const SIGNED_SECRET_ROOM_MESSAGE_DURATION := 8.0
+## docs/concept/easter_eggs.md's "Three Fragments" bonus discovery -- the
+## same "slightly longer than a one-line glimpse" reasoning as
+## SIGNED_SECRET_ROOM_MESSAGE_DURATION, since ThreeFragmentsHunt.
+## BONUS_MESSAGE is a similarly-sized short passage, not a single line.
+const THREE_FRAGMENTS_BONUS_MESSAGE_DURATION := 8.0
+## The sea cave guardian's challenge + transform lines (docs/concept/
+## easter_eggs.md's "hidden sea cave... dueling-birds cabinet" entry) are
+## two short passages joined together -- same "genuinely more text to
+## read" reasoning as ANCIENT_TERMINAL_MESSAGE_DURATION, and it fires right
+## as JoustMatchView's own transform beat begins, so it needs to outlast
+## that beat comfortably.
+const SEA_CAVE_GUARDIAN_MESSAGE_DURATION := 12.0
+## The retro handheld's own found/reopened flavor line (docs/concept/
+## easter_eggs.md's "hidden retro handheld" entry) -- a single short line,
+## same duration as every other one-line cameo cue.
+const RETRO_HANDHELD_MESSAGE_DURATION := EASTER_EGG_MESSAGE_DURATION
+
 ## Real seconds between player-state autosaves (see docs/concept/
 ## persistence.md) -- mirrors the world's own "persist eagerly, not on an
 ## explicit save action" philosophy (EarthChunkManager saves on chunk
@@ -83,6 +167,17 @@ const AUTOSAVE_INTERVAL := 60.0
 ## than melee range, meant to cover what's visibly on screen around the
 ## player.
 const CREATURE_PANELS_RADIUS := 220.0
+## Where the shared message stack starts (px from the top of the screen), and
+## how wide a banner card may get.
+##
+## ONE stack, ONE x/y: the taming and trade banners used to be pinned to the
+## same hand-picked offset_top of 144 and drew straight through each other.
+## The top is the highest of the five old offsets (the fishing banner's 120),
+## so nothing moved further down the screen than it already was; the width is
+## the widest of them (the Easter-egg banner's 520) rounded down to leave a
+## margin at 720p. See _build_message_stack.
+const MESSAGE_STACK_TOP := 120.0
+const MESSAGE_STACK_WIDTH := 460.0
 ## Real seconds between creature-panel refreshes -- rebuilding a handful of
 ## panels a couple times a second is trivial, but this still avoids doing it
 ## every frame (same reasoning as the minimap/forage/spread throttling).
@@ -100,13 +195,23 @@ const PORT := 8910
 const MAX_CLIENTS := 32
 const DEFAULT_HOST := "127.0.0.1"
 
-## Debug/dev-console override for the always-day lighting default. Day is the
-## DEFAULT in debug builds (see always_day_for) so development never waits on
-## real-world night; set this env var to "0" to opt a debug build back into
-## real UTC-driven day/night, or "1" to force day in an exported build.
+## Launch-time override that pins lighting to full day for a whole session,
+## in ANY build: set it to "1" (see always_day_for). There is no longer a
+## build-type default for it to opt out of -- debug builds run the same real
+## UTC day/night cycle the shipped game does -- so "0" now means what leaving
+## it unset means. For pinning a sky while the game is already running, use
+## the /day, /night and /time console commands instead.
 const DEBUG_ALWAYS_DAY_ENV := "AA_DEBUG_ALWAYS_DAY"
 ## Sun directly overhead -- sin(90 deg) = 1.0, i.e. maximum sunlight_intensity.
 const ALWAYS_DAY_ELEVATION := 90.0
+## Sun directly underfoot -- sin(-90 deg) = -1.0, which
+## SolarPosition.sunlight_intensity clamps to no light at all. The mirror of
+## ALWAYS_DAY_ELEVATION, for /night.
+const ALWAYS_NIGHT_ELEVATION := -90.0
+## No /time pin in force -- the clock and the sun follow real UTC. Outside
+## the [0,24) range any real clock hour lives in, so it can never collide
+## with one (see clock_hour_for_console_argument).
+const NO_FORCED_HOUR := -1.0
 
 const CONSOLE_TOGGLE_ACTION := "toggle_console"
 const INVENTORY_TOGGLE_ACTION := "toggle_inventory"
@@ -140,6 +245,12 @@ const RAIN_INTENSITY_BY_WEATHER := {
 }
 
 var _rain_overlay := RainOverlay.new()
+
+## Held only to avoid allocating one per frame -- the material it pushes to is
+## static and shared (see GroundTint._shared_material, pinned by
+## test_ground_tint.gd::test_the_shared_material_is_the_same_one_for_every_instance),
+## so which instance does the pushing is irrelevant.
+var _ground_tint := GroundTint.new()
 
 @onready var _terrain: TileMapLayer = $Terrain
 @onready var _water_fx: TileMapLayer = $WaterFx
@@ -180,6 +291,69 @@ var _last_scar_step_tile := Vector2i(-2147483648, -2147483648)
 var _scar_refresh_accumulator := 0.0
 var _geo_coordinates := GeoCoordinates.new()
 var _solar_position := SolarPosition.new()
+var _easter_egg_sightings := EasterEggSightings.new()
+var _easter_egg_creatures := EasterEggCreatures.new()
+var _wargames_response := WarGamesResponse.new()
+var _back_to_the_future_day := BackToTheFutureDay.new()
+## Once-per-session flag (see BackToTheFutureDay's own doc comment for why
+## this is enough): the cameo is only eligible one real calendar day a year,
+## so "once per session" and "once per day" are indistinguishable in
+## practice.
+var _bttf_cameo_shown_this_session := false
+var _rush_ambient_cue := RushAmbientCue.new()
+## Once-per-approach flag (see RushAmbientCue's own doc comment for the
+## same low-risk "no de-duplication guard" scope call EasterEggCreatures
+## already makes) -- fires the cue once per session rather than replaying
+## it on every check while the player lingers nearby.
+var _rush_ambient_cue_played := false
+var _secret_d20 := SecretD20.new()
+## Dedicated to SecretD20 alone -- see that module's own doc comment on why
+## this is a separate, narrowly-named RandomNumberGenerator instance rather
+## than the ambient randf() the cameo-rarity checks elsewhere in this file
+## already use: nothing else in this project should ever draw from this.
+var _secret_d20_rng := RandomNumberGenerator.new()
+var _ancient_terminal := AncientTerminal.new()
+var _signed_secret_room := SignedSecretRoom.new()
+## Rolling buffer of the last few "stash"/"lasso"/"fish"/"mount" just-pressed
+## action names (see SignedSecretRoom.ACTION_SEQUENCE/matches_sequence's own
+## doc comment) -- capped to ACTION_SEQUENCE's own length so it never grows
+## unbounded; only these four action names are ever pushed onto it, nothing
+## else the player presses touches this buffer at all.
+var _signed_secret_room_recent_actions: Array[String] = []
+var _bridgekeeper := BridgekeeperEncounter.new()
+## Session state for an in-progress riddle exchange (see
+## _check_bridgekeeper_encounter/_handle_bridgekeeper_answer_command): -1
+## means no encounter is active. Reused across encounters -- "rarely
+## encountered wandering NPC" per the doc implies this can happen more than
+## once a session, unlike the once-per-session cameos above.
+var _bridgekeeper_riddle_index := -1
+var _bridgekeeper_correct_count := 0
+## docs/concept/easter_eggs.md's "Three Fragments" hunt -- pure aggregation
+## logic over the three source eggs' own has_been_found() signals (see
+## ThreeFragmentsHunt's own doc comment). Granting each fragment item is
+## handled inline in _check_ancient_terminal/_check_signed_secret_room/the
+## /globalthermonuclearwar command handler, each gated on "was this egg NOT
+## already found before this call" so a fragment is only ever granted once
+## per source egg, no matter how many times a re-triggerable egg (the
+## terminal, the secret room) fires again later.
+var _three_fragments_hunt := ThreeFragmentsHunt.new()
+## docs/concept/easter_eggs.md's "hidden sea cave... dueling-birds cabinet"
+## entry -- SeaCaveGuardian is the pure location/challenge-state module;
+## _joust_view is the node/rendering adapter that actually plays the match
+## (built in _build_joust_view, shown/hidden by _check_sea_cave_guardian/
+## _on_joust_match_finished below). Not part of "Three Fragments" -- that
+## hunt only ever named the terminal/secret room/WarGames eggs.
+var _sea_cave_guardian := SeaCaveGuardian.new()
+var _joust_view: JoustMatchView
+## The hidden retro handheld (docs/concept/easter_eggs.md's "hidden retro
+## handheld" entry) -- RetroHandheld is the pure location/interaction-state
+## module (mirrors AncientTerminal's real-coordinate shape but, like
+## SeaCaveGuardian, is repeatable rather than a one-shot has_been_found()
+## gate on re-entry); HandheldBattleView is the actual playable battle +
+## dex screen (built in _build_handheld_view, opened/closed by
+## _check_retro_handheld/_on_handheld_closed below).
+var _retro_handheld := RetroHandheld.new()
+var _handheld_view: HandheldBattleView
 var _weather_model := WeatherModel.new()
 var _is_dedicated_server := false
 var _minimap_renderer := MinimapRenderer.new()
@@ -205,9 +379,25 @@ var _inventory_window: PanelContainer
 var _crafting_window: CraftingWindow
 var _skill_window: SkillTreeWindow
 var _settings_overlay: SettingsOverlay
+var _license_gate_overlay: LicenseGateOverlay
+var _github_verify_overlay: GithubVerifyOverlay
+## True only once _ready() has actually built the world (chunk manager,
+## menus, etc.) -- false for the entire time a license-gate/GitHub-verify
+## overlay is showing instead. _process()/_unhandled_input() guard on
+## this so they don't run against not-yet-built state (see _ready()'s
+## own doc comment on the line that sets this true).
+var _world_ready := false
 var _main_menu: MainMenu
 var _menu_backdrop: ColorRect
 var _menu_background: TextureRect
+var _loading_overlay: LoadingOverlay
+## One-shot guard around the joining-client version of the loading stall (see
+## _run_initial_client_chunk_load) -- true once that async chunk-load task has
+## actually been kicked off, so the per-frame _client_process never starts a
+## second overlapping one; _done flips true once it actually finishes, which
+## is when _client_process resumes its own plain per-frame update() calls.
+var _initial_client_chunk_load_task_running := false
+var _initial_client_chunk_load_done := false
 ## Shared dark/rounded UI theme (see UiTheme), assigned to every window/menu so
 ## the whole UI reads as one styled system rather than raw grey boxes.
 var _ui_theme := UiTheme.new().build_theme()
@@ -241,7 +431,6 @@ var _death_label: Label
 var _creature_panels_container: VBoxContainer
 var _hover_tooltip: Label
 var _hover_target_finder := HoverTargetFinder.new()
-var _talk_label: Label
 ## Floating "Talk (<key>)" prompt shown above the nearest in-range villager
 ## (see Player.TALK_RADIUS, EarthChunkManager.nearest_npc_near) -- the
 ## available-interaction hint requested alongside the talk feature itself.
@@ -267,11 +456,22 @@ var _warmth_fill: ColorRect
 var _warmth_label: Label
 var _xp_fill: ColorRect
 var _xp_label: Label
-var _fishing_label: Label
-## Taming state banner (see docs/concept/taming.md) -- sits just under the
-## fishing one, same shape.
-var _lasso_label: Label
-var _trade_label: Label
+## Naturalist "land_sense" keystone reveal (docs/concept/progression.md
+## "Ecological literacy"): real land-health/vegetation numbers near the
+## player, visible only once that keystone is unlocked -- see
+## _update_land_sense_label.
+var _land_sense_label: Label
+## The one top-centre stack every transient world message is shown in, and
+## the themed cards inside it -- see _build_message_stack for why there is
+## one stack rather than five hand-positioned, background-less Labels. The
+## taming banner (docs/concept/taming.md) sits just under the fishing one, as
+## it always did; it just cannot land ON it any more.
+var _message_stack: VBoxContainer
+var _fishing_banner: PanelContainer
+var _lasso_banner: PanelContainer
+var _trade_banner: PanelContainer
+var _talk_banner: PanelContainer
+var _easter_egg_banner: PanelContainer
 var _wallet_label: Label
 var _creature_panels_accumulator := CREATURE_PANELS_REFRESH_INTERVAL  # refresh immediately
 ## How much faster than real time the ECOLOGY runs, set by /ecotest.
@@ -296,19 +496,143 @@ static func ecology_scale_for_console_argument(current_scale: float, argument: S
 	return TimeLapse.scale_for(asked) if asked > 0.0 else current_scale
 
 
-## Set true by the /day console command -- forces daytime lighting for the
-## rest of the session, same effect as DEBUG_ALWAYS_DAY_ENV but toggled live
-## rather than only at launch.
-var _force_day := false
+## Which sky the console has pinned for the rest of the session: "" (the real
+## cycle), "day" (/day) or "night" (/night). Same effect as
+## DEBUG_ALWAYS_DAY_ENV but toggled live rather than only at launch.
+var _forced_sky := ""
+## Local clock hour pinned by /time <hh:mm>, or NO_FORCED_HOUR for the real
+## one (see clock_hour_for_console_argument).
+var _forced_local_hour := NO_FORCED_HOUR
+
+
+## How fast the streaming budget below assumes the player is travelling, in
+## TILES per second. Not the walking pace: the fastest the player can
+## actually move under their own power is a mount (Taming.MOUNTED_SPEED
+## world units per second, over TerrainRenderer.TILE_SIZE units per tile), so
+## that is what the streaming edge has to stay ahead of.
+const STREAMING_BUDGET_TILES_PER_SECOND := Taming.MOUNTED_SPEED / float(TerrainRenderer.TILE_SIZE)
+
+## ...and how many update() calls per second that pace gets, i.e. the frame
+## rate. This is deliberately the WORST rate the playtest measured -- 6 FPS,
+## the floor of the 6-8 FPS dip at a chunk boundary that this budget exists
+## to remove -- rather than the 20-26 FPS of smooth walking. Fewer frames per
+## second means fewer update() calls to spread the pending chunks over, so
+## the derivation has to allow MORE chunks per call: assuming the dip is the
+## conservative direction, and guarantees the budget itself can never be the
+## reason a chunk arrives late.
+##
+## Neither constant is a knife edge -- chunks_per_update_for returns 1 across
+## the whole 6-144 FPS band at both the walking and the mounted pace
+## (test_the_budget_is_one_across_the_whole_measured_frame_rate_band).
+const STREAMING_BUDGET_FRAMES_PER_SECOND := 6.0
+
+
+## Caps how many chunks ONE update() call may generate, so crossing a chunk
+## boundary no longer generates a whole LOAD_RADIUS column inside a single
+## frame (the measured walking stall: 20-26 FPS falling to 6-8). The manager
+## defaults to 0 == unbudgeted, which is what every test and the cold load
+## want, so this one call is what makes the budget real in the running game.
+##
+## The value is DERIVED, never picked: EarthChunkManager.chunks_per_update_for
+## is a pure, separately-tested function of pace and frame rate over the real
+## streaming geometry (see its own doc comment and
+## CHUNK_BUDGET_SAFETY_FACTOR). The cold initial load is untouched -- it goes
+## through update_with_progress' coroutine, which is the right tool there.
+func _apply_streaming_budget(manager: EarthChunkManager) -> void:
+	manager.max_chunk_loads_per_update = EarthChunkManager.chunks_per_update_for(
+		STREAMING_BUDGET_TILES_PER_SECOND, STREAMING_BUDGET_FRAMES_PER_SECOND
+	)
 
 
 func _ready() -> void:
+	# Second, independent integrity + license check (see docs/licensing.md,
+	# src/licensing/self_integrity.gd, src/licensing/license_gate.gd) --
+	# the SelfIntegrity/LicenseGate autoloads already check at boot, before
+	# this scene even loads; these re-verify from scratch rather than
+	# trusting that already ran, so bypassing the game requires patching
+	# more than one call site, not just one `if`. Integrity failures still
+	# hard-quit (a tampered install isn't something an in-game screen can
+	# fix) -- only the license check gets a recoverable in-game path,
+	# since the fix there really is just "type/paste a valid key".
+	#
+	# Real bug found live: this redundant re-check used to run
+	# unconditionally, with no editor bypass of its own -- unlike the
+	# autoloads' own _ready(), which correctly skips both checks under
+	# OS.has_feature("editor") (true for the editor binary itself, whether
+	# launched via the Play button or a raw `--path` command line, and
+	# NEVER true in an exported build). That meant a plain dev/test launch
+	# re-failed a check the primary one had already correctly and
+	# deliberately skipped -- SelfIntegrity in particular can never pass
+	# here anyway (there's no exported .pck for it to hash while running
+	# raw project files this way), so it just produced permanent false-
+	# positive "reinstall from original source" noise on every non-editor-
+	# Play dev launch. Mirroring the same bypass here removes that noise
+	# without weakening anything for a real shipped build, where
+	# OS.has_feature("editor") is always false.
+	#
+	# Real discovery made live: OS.has_feature("editor") is true for ANY
+	# run of the Godot editor binary -- not only an actual Play-button
+	# click, confirmed by launching `Godot.exe --path <repo>` (no `-e`)
+	# with every candidate license.txt moved aside and reaching the main
+	# menu anyway. That means the license gate/GitHub-verify UI can never
+	# be exercised via a raw dev launch of this binary, only by a real
+	# export (which has no "editor" feature at all, so is unaffected by
+	# any of this). `--force-license-check` (a user arg after `--`, e.g.
+	# `Godot.exe --path <repo> -- --force-license-check`) opts a dev
+	# launch back into the real check for testing the gate itself,
+	# without touching SelfIntegrity (which can never pass here anyway --
+	# there's no exported .pck to hash while running raw project files,
+	# so forcing it would just always hard-quit, not usefully test
+	# anything) or changing anything for a real shipped build, which
+	# never has this flag passed and never has the editor binary at all.
+	var force_license_check := "--force-license-check" in OS.get_cmdline_user_args()
+	if not OS.has_feature("editor"):
+		SelfIntegrity.require_verified()
+	var license_result: Dictionary = (
+		{"licensed": true, "product_mask": LicenseGate.product_mask, "github_user_id": LicenseGate.github_user_id, "reason": ""}
+		if OS.has_feature("editor") and not force_license_check
+		else LicenseGate.check_licensed()
+	)
+	if not license_result.licensed:
+		_show_license_gate()
+		return
+	# Personal/GitHub-bound key (docs/licensing.md's "Personal / GitHub-
+	# bound keys"): structurally valid (signature checks out, not
+	# expired) isn't the same as identity-verified yet -- await the real
+	# check before letting boot continue. _ready() awaiting mid-function
+	# is a normal, supported GDScript pattern; the node is still
+	# considered ready while this is pending.
+	if license_result.github_user_id != 0:
+		var identity_ok: bool = await _verify_github_identity(license_result.github_user_id)
+		if not identity_ok:
+			return
+
+	# Real bug found live: _process()/_unhandled_input() run every frame
+	# regardless of whether _ready() returned early above -- before this
+	# flag existed, an unlicensed/unverified boot's early return still
+	# left the license/GitHub-verify overlay's screen crashing every
+	# frame on _chunk_manager (built further below) being null, via
+	# _process()'s step_water_disturbances() call. Both callbacks below
+	# now no-op until this is true, set only once everything they touch
+	# has actually been built.
+	_world_ready = true
+
+	# Seeds SecretD20's OWN dedicated RandomNumberGenerator -- see that
+	# module's own doc comment for why this instance is never shared with
+	# anything else in the project.
+	_secret_d20_rng.randomize()
+
 	# Area2D's input_event (used by DroppedItem's click-to-pick-up) never
 	# fires unless the viewport's physics picking is explicitly enabled -- it
 	# defaults to off.
 	get_viewport().physics_object_picking = true
 
 	_chunk_manager = EarthChunkManager.new(_terrain, _entities, _creatures)
+	# Streams at most one chunk per frame from here on, so stepping over a
+	# chunk boundary stops generating a whole column inside one frame (see
+	# _apply_streaming_budget). The cold initial load below still runs
+	# through update_with_progress' coroutine and is unaffected.
+	_apply_streaming_budget(_chunk_manager)
 	# World-space low-frequency color drift over the whole ground layer (see
 	# GroundTint) -- soft lusher/drier patches spanning many tiles, so fields
 	# read as organic ground instead of a uniform printed carpet.
@@ -354,15 +678,16 @@ func _ready() -> void:
 	_build_crafting_window()
 	_build_skill_window()
 	_build_settings_overlay()
+	_build_loading_overlay()
 	_build_creature_panels_container()
 	_build_hover_tooltip()
 	_build_death_label()
 	_build_survival_bar()
 	_build_xp_bar()
-	_build_fishing_label()
-	_build_lasso_label()
-	_build_trade_label()
-	_build_talk_label()
+	_build_land_sense_label()
+	_build_message_stack()
+	_build_joust_view()
+	_build_handheld_view()
 	_build_interaction_prompt()
 	_build_charge_meter()
 
@@ -446,17 +771,79 @@ func _on_menu_start_requested(
 	_pending_class = chosen_class
 	_pending_appearance = appearance
 	_pending_dna_stat_modifiers = dna_stat_modifiers
+	# Shown and PAINTED before any of the real, synchronous world-setup work
+	# below starts (see _show_loading_overlay) -- that work is what was
+	# reported as the game appearing to hang (see docs/progress.md's Loading
+	# screens entry for the real measured cost).
+	await _show_loading_overlay("Preparing a new world...")
 	_wipe_persisted_world()
 	if mode == "host":
 		_start_server()
-	_spawn_local_singleplayer()
+	await _spawn_local_singleplayer()
 	_dismiss_main_menu()
 
 
+## Every user:// DIRECTORY New Game destroys -- listed here so the backup
+## below and the wipe underneath it can never disagree about what a world is
+## (pinned against the wipe's own source by test_world_backup_paths.gd).
+static func backed_up_directories() -> PackedStringArray:
+	return PackedStringArray([
+		EarthChunkManager.MODIFICATIONS_DIR,
+		EarthChunkManager.PLANTED_TREES_DIR,
+		EarthChunkManager.FISH_POPULATION_DIR,
+		EarthChunkManager.ROOF_MODIFICATIONS_DIR,
+	])
+
+
+## Every single-FILE store New Game destroys, in the order the wipe removes
+## them. Each path is read from the persistence class that owns it rather
+## than restated as a literal, so moving a store's file moves its backup too.
+static func backed_up_files() -> PackedStringArray:
+	return PackedStringArray([
+		EarthChunkManager.EventStorePersistence.SAVE_PATH,
+		EarthChunkManager.MemoryStorePersistence.SAVE_PATH,
+		EarthChunkManager.HouseholdStorePersistence.SAVE_PATH,
+		EarthChunkManager.ContractStorePersistence.SAVE_PATH,
+		EarthChunkManager.MarketStorePersistence.SAVE_PATH,
+		EarthChunkManager.InstitutionStorePersistence.SAVE_PATH,
+		EarthChunkManager.WorldBossStorePersistence.SAVE_PATH,
+		EarthChunkManager.WorldClockPersistence.SAVE_PATH,
+		PlayerSave.SAVE_PATH,
+	])
+
+
+## Copies everything the wipe below is about to destroy to `<path>.bak`
+## first (see WorldReset.backup_file/backup_directory).
+##
+## New Game is the only irreversible action in the game, and until this ran
+## it had no undo whatsoever: one click removed a whole world's chunk
+## modifications, its planted trees, its fish populations, its event, memory,
+## household, contract, market, institution and world-boss stores, its clock
+## and the player's own save -- and the 60-second autosave then wrote the new
+## character over player_save.bin, closing even the undelete window. Every
+## emergent thing a save accumulates lived in exactly those files.
+##
+## ONE generation, overwritten by the next New Game: enough to undo a
+## mis-click, not an archive. It roughly doubles the on-disk world for as
+## long as the backup sits there, which is a cheap price for an undo.
+func _backup_persisted_world() -> void:
+	for dir_path in backed_up_directories():
+		_world_reset.backup_directory(dir_path)
+	for path in backed_up_files():
+		_world_reset.backup_file(path)
+
+
 func _wipe_persisted_world() -> void:
+	_backup_persisted_world()
 	_world_reset.wipe_directory(EarthChunkManager.MODIFICATIONS_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.PLANTED_TREES_DIR)
 	_world_reset.wipe_directory(EarthChunkManager.FISH_POPULATION_DIR)
+	# Roofs are chunk modifications like any other (the same per-chunk
+	# <x>_<y>.bin shape as MODIFICATIONS_DIR, written by the same building
+	# code) -- they were just added later than the three lines above and
+	# never joined the wipe, so a new world loaded the PREVIOUS world's
+	# roofs hanging over ground whose walls and floors had gone.
+	_world_reset.wipe_directory(EarthChunkManager.ROOF_MODIFICATIONS_DIR)
 	_player_save.wipe()
 	# The event store and memory store are two more pieces of world-scoped
 	# state that must not survive "New Game" -- the same "New Game means new"
@@ -468,6 +855,7 @@ func _wipe_persisted_world() -> void:
 	_chunk_manager.wipe_contract_store()
 	_chunk_manager.wipe_market_store()
 	_chunk_manager.wipe_institution_store()
+	_chunk_manager.wipe_world_boss_store()
 	# And a brand new world clock: any previous run's persisted clock must not
 	# leak into this one either, then a fresh random starting point is rolled
 	# for THIS world (see EarthChunkManager.randomize_world_age/
@@ -483,11 +871,22 @@ func _wipe_persisted_world() -> void:
 ## docs/concept/persistence.md) -- bypasses the character creator entirely,
 ## unlike _on_menu_start_requested. Deliberately does NOT wipe anything.
 func _on_menu_load_requested() -> void:
-	_spawn_local_singleplayer_from_save()
+	await _show_loading_overlay("Loading your world...")
+	await _spawn_local_singleplayer_from_save()
 	_dismiss_main_menu()
 
 
+## A joining client's own version of the same stall (see _client_process,
+## which is where its first real EarthChunkManager.update() call actually
+## happens -- there is no single call here to wrap the way the two entry
+## points above wrap _spawn_local_singleplayer[_from_save], since a joining
+## client's player node only exists once the server's own spawn has
+## replicated in). Shown here so it's up immediately on click rather than
+## leaving a blank/frozen-looking screen for however long the connection
+## handshake plus that later freeze take; _client_process hides it once that
+## first update() call actually completes.
 func _on_menu_join_requested(address: String) -> void:
+	await _show_loading_overlay("Connecting to host...")
 	_start_client_to(address)
 	_dismiss_main_menu()
 
@@ -503,6 +902,55 @@ func _dismiss_main_menu() -> void:
 	if _menu_background != null:
 		_menu_background.queue_free()
 		_menu_background = null
+
+
+## Builds the loading overlay (see LoadingOverlay) once, hidden, ready to be
+## shown/hidden repeatedly by _show_loading_overlay/_client_process. Built
+## alongside the other menu-era overlays (_build_settings_overlay) rather than
+## lazily, so it's already in the tree -- and can be moved to the front of
+## `_ui` -- the first time New Game/Load Game/Join needs it.
+func _build_loading_overlay() -> void:
+	_loading_overlay = LoadingOverlay.new()
+	_loading_overlay.theme = _ui_theme
+	# Must keep animating/painting while the world is paused (see
+	# _show_main_menu/_toggle_settings_menu -- every other paused-but-live
+	# overlay in this file uses the same PROCESS_MODE_ALWAYS).
+	_loading_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ui.add_child(_loading_overlay)
+
+
+## Shows the loading overlay with `text` and waits for it to actually be
+## PAINTED before returning, so callers can safely follow this with a long
+## synchronous call without leaving a blank/frozen-looking frame on screen
+## first. Two frames, not one: adding a Control and making it visible in the
+## same frame queues a draw that a single `await process_frame` isn't
+## guaranteed to have been presented by (Godot can defer that first draw one
+## frame further) -- verified against a real running instance, see
+## docs/progress.md's Loading screens entry.
+func _show_loading_overlay(text: String) -> void:
+	_loading_overlay.show_with_text(text)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
+## Passed as the on_progress Callable to every EarthChunkManager.
+## update_with_progress call site (New Game/Load Game/Join) so the overlay's
+## status line shows the same real "N / M chunks" progress regardless of
+## which entry point is loading (see LoadingOverlay.set_progress).
+func _on_chunk_load_progress(loaded: int, total: int) -> void:
+	_loading_overlay.set_progress(loaded, total)
+
+
+## The joining-client (and New Game/Load Game's own second, now-cheap) chunk
+## load, run from _client_process -- see its own call site's doc comment for
+## why this is a separate fire-and-forget function rather than an inline
+## await. Hides the overlay itself once done, the same single hide point the
+## old code had, still idempotent (a no-op if already hidden).
+func _run_initial_client_chunk_load(player_tile: Vector2i) -> void:
+	await _chunk_manager.update_with_progress(player_tile, _on_chunk_load_progress)
+	_initial_client_chunk_load_done = true
+	if _loading_overlay.visible:
+		_loading_overlay.hide_overlay()
 
 
 func _start_server() -> void:
@@ -617,13 +1065,25 @@ func _on_inventory_unequip_requested(slot: String) -> void:
 		_refresh_inventory_now(local_player)
 
 
+## Hands the window everything it cannot work out for itself.
+##
+## The SEASON is the world clock's, and only EarthChunkManager has it -- food
+## shelf life is seasonal, so without it the window's per-item freshness line
+## silently never appears at all. Guarded for null because the UI is built
+## before the world is (see _refresh_inventory_now's own test).
+##
+## The APPEARANCE is the look the player authored in the creator; without it
+## the paperdoll falls back to CharacterView's default warrior, so every
+## character looked identical in their own inventory.
 func _refresh_inventory_now(local_player: Player) -> void:
 	_inventory_window.refresh(
 		local_player.inventory.stacks(),
 		_equipped_map(local_player),
 		local_player.equipment.total_armor(),
-		local_player.inventory.slot_count
+		local_player.inventory.slot_count,
+		_chunk_manager.current_season() if _chunk_manager != null else ""
 	)
+	_inventory_window.apply_appearance(local_player.appearance)
 
 
 ## slot -> worn Item for the paperdoll (see Equipment).
@@ -664,7 +1124,7 @@ func _on_craft_requested(recipe_id: String) -> void:
 
 
 ## Builds the skill-tree spend window (see SkillTreeWindow), hidden until
-## toggled with toggle_skills (default K). Clicking an affordable node/keystone
+## toggled with toggle_skills (default L). Clicking an affordable node/keystone
 ## allocates it on the local player and refreshes.
 func _build_skill_window() -> void:
 	_skill_window = SkillTreeWindow.new()
@@ -701,6 +1161,145 @@ func _refresh_skill_window(local_player: Player) -> void:
 	)
 
 
+## Shown INSTEAD OF building the rest of the world when LicenseGate finds no
+## valid key (see _ready(), docs/licensing.md's "In-game license entry").
+## Deliberately built standalone here rather than depending on anything the
+## skipped rest of _ready() would have set up -- _ui and _ui_theme are the
+## only things this needs, and both are already valid this early (_ui via
+## @onready, _ui_theme via its own field initializer -- see their
+## declarations above).
+func _show_license_gate() -> void:
+	_license_gate_overlay = LicenseGateOverlay.new()
+	_license_gate_overlay.theme = _ui_theme
+	_license_gate_overlay.set_anchors_preset(Control.PRESET_CENTER)
+	_license_gate_overlay.offset_left = -260.0
+	_license_gate_overlay.offset_top = -170.0
+	_license_gate_overlay.offset_right = 260.0
+	_license_gate_overlay.offset_bottom = 170.0
+	_ui.add_child(_license_gate_overlay)
+	_license_gate_overlay.verify_requested.connect(_on_license_gate_verify_requested)
+	_license_gate_overlay.quit_requested.connect(func(): get_tree().quit())
+
+
+## A valid key gets saved to every real candidate path (see LicenseStore.
+## write_code()'s own doc comment for why "every", not just the first) and
+## the scene reloads fresh -- _ready() runs again, LicenseGate.check_licensed()
+## re-reads the now-valid file, and this time the real world builds normally.
+## An invalid key just reports back; the player can try again without losing
+## anything (nothing else in the world has been built yet at this point).
+##
+## Real bug found live: this used to set the status label text and call
+## reload_current_scene() in the very same frame -- reported back as
+## "hangs a lot after verify and save ... appears stuck", because the
+## confirmation text was queued to draw but reload_current_scene()'s real
+## synchronous work started before the engine ever presented that frame,
+## so nothing was ever visibly shown before the freeze. Same root cause
+## and same fix _show_loading_overlay's own doc comment already documents
+## for every OTHER long synchronous call in this file: await two frames
+## (not one -- see that doc comment for why one isn't reliably enough)
+## after showing something, before starting the long call. This does NOT
+## make the reload itself faster or animate through it -- reload_current_scene()
+## is one opaque synchronous call with no incremental unit to await
+## mid-way through, so the loading screen still freezes on this one frame
+## for the reload's real duration, the same documented limitation
+## LoadingOverlay's own doc comment accepts for chunk-loading before
+## update_with_progress existed. What this fixes is the confirmation
+## never painting AT ALL first, not the freeze itself.
+func _on_license_gate_verify_requested(code: String) -> void:
+	var result := LicenseGate.check_licensed(code)
+	if not result.licensed:
+		_license_gate_overlay.show_status("That key isn't valid. Check for typos and try again.")
+		return
+	LicenseStore.write_code(LicenseStore.default_candidate_paths(), code)
+	var loading := LoadingOverlay.new()
+	loading.theme = _ui_theme
+	_ui.add_child(loading)
+	loading.show_with_text("Valid! Restarting the game...")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	get_tree().reload_current_scene()
+
+
+## The identity-verification half of a personal/GitHub-bound key (see
+## _ready(), docs/licensing.md's "Personal / GitHub-bound keys"). Shows
+## GithubVerifyOverlay for the duration, tries a cached token first (no
+## interactive step at all if it still checks out -- this is what makes
+## it a genuine per-launch identity check rather than a one-time flag,
+## without forcing a browser round-trip on every single launch), and
+## falls back to a fresh interactive device flow otherwise. A token
+## GitHub itself rejects gets cleared and the flow retries once from
+## scratch. Returns true only once GET /user's real id matches the bound
+## one; the overlay is left showing a terminal message on any failure
+## (mismatched identity, denied, expired, no network) rather than
+## auto-retrying forever.
+func _verify_github_identity(bound_user_id: int) -> bool:
+	_github_verify_overlay = GithubVerifyOverlay.new()
+	_github_verify_overlay.theme = _ui_theme
+	_github_verify_overlay.set_anchors_preset(Control.PRESET_CENTER)
+	_github_verify_overlay.offset_left = -240.0
+	_github_verify_overlay.offset_top = -150.0
+	_github_verify_overlay.offset_right = 240.0
+	_github_verify_overlay.offset_bottom = 150.0
+	_ui.add_child(_github_verify_overlay)
+
+	var auth := GithubDeviceAuth.new()
+	add_child(auth)
+	auth.user_code_ready.connect(func(user_code: String, verification_uri: String):
+		_github_verify_overlay.show_device_code(user_code, verification_uri)
+		_github_verify_overlay.show_status("Waiting for you to approve in your browser...")
+	)
+
+	var token_path := GithubTokenStore.default_path()
+	var token := GithubTokenStore.read_token(token_path)
+	# At most two passes: one retry if a cached token turns out to be
+	# stale, then a fresh interactive flow -- never an unbounded loop.
+	for attempt in 2:
+		if token.is_empty():
+			_github_verify_overlay.show_status("Starting GitHub sign-in...")
+			var flow_result: Dictionary = await auth.run_device_flow()
+			if not flow_result.ok:
+				push_error("GitHub device flow failed: %s" % flow_result.reason)
+				_github_verify_overlay.show_status("Could not verify your GitHub identity. Please restart to try again.")
+				auth.queue_free()
+				return false
+			token = flow_result.access_token
+			GithubTokenStore.write_token(token_path, token)
+
+		_github_verify_overlay.show_status("Confirming your identity...")
+		var user_result: Dictionary = await auth.run_fetch_user_id(token)
+		if not user_result.ok:
+			GithubTokenStore.clear_token(token_path)
+			token = ""
+			continue
+
+		auth.queue_free()
+		if GithubDeviceFlow.identity_satisfies_binding(bound_user_id, user_result.user_id):
+			_github_verify_overlay.queue_free()
+			return true
+		_github_verify_overlay.show_status("This key is registered to a different GitHub account.")
+		return false
+
+	_github_verify_overlay.show_status("Could not verify your GitHub identity. Please restart to try again.")
+	auth.queue_free()
+	return false
+
+
+## The already-in-game "change your license key" path (SettingsOverlay's
+## License tab), distinct from _on_license_gate_verify_requested() above --
+## that one blocks all of play with no valid key yet; this one is only
+## reachable once already playing. Saves to disk either way, but doesn't
+## reload the scene on success (nothing here needs the world rebuilt) --
+## just reports honestly that a restart is needed for it to take effect,
+## since no gameplay code today re-reads product_mask mid-session.
+func _on_settings_license_code_submitted(code: String) -> void:
+	var result := LicenseGate.check_licensed(code)
+	if result.licensed:
+		LicenseStore.write_code(LicenseStore.default_candidate_paths(), code)
+		_settings_overlay.show_license_status("Saved. Restart the game for it to take effect.")
+	else:
+		_settings_overlay.show_license_status("That key isn't valid. Check for typos and try again.")
+
+
 ## Builds the key-binding settings overlay (see SettingsOverlay), hidden until
 ## toggled with toggle_settings (default Escape). Rebinding an action re-applies
 ## the InputMap immediately and persists the override to disk.
@@ -724,6 +1323,7 @@ func _build_settings_overlay() -> void:
 	_settings_overlay.graphics_changed.connect(_on_graphics_changed)
 	_settings_overlay.graphics_option_changed.connect(_on_graphics_option_changed)
 	_settings_overlay.resume_requested.connect(_toggle_settings_menu)
+	_settings_overlay.license_code_submitted.connect(_on_settings_license_code_submitted)
 
 
 ## Opens/closes the pause menu, pausing the world while it's open so it acts
@@ -918,74 +1518,503 @@ func _build_xp_bar() -> void:
 	bar.add_child(_xp_label)
 
 
-## A centered fishing prompt/result banner (hidden when there's nothing to say).
-func _build_fishing_label() -> void:
-	_fishing_label = Label.new()
-	_fishing_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_fishing_label.offset_top = 120.0
-	_fishing_label.offset_left = -160.0
-	_fishing_label.offset_right = 160.0
-	_fishing_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_fishing_label.add_theme_font_size_override("font_size", 16)
-	_ui.add_child(_fishing_label)
+## Naturalist "land_sense" keystone reveal (docs/concept/progression.md
+## "Ecological literacy"): real EarthChunkManager.land_health_near/
+## vegetation_density_near numbers near the player, just under the XP bar.
+## Hidden until the keystone is unlocked -- see _update_land_sense_label.
+## This keystone's whole payoff IS this reveal, not a stat bump (see
+## SkillTreeWindow's own special-cased row rendering for the same keystone).
+func _build_land_sense_label() -> void:
+	_land_sense_label = Label.new()
+	_land_sense_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_land_sense_label.position = Vector2(8, 88)
+	_land_sense_label.add_theme_font_size_override("font_size", 10)
+	_land_sense_label.visible = false
+	_ui.add_child(_land_sense_label)
 
 
-func _build_lasso_label() -> void:
-	_lasso_label = Label.new()
-	_lasso_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_lasso_label.offset_top = 144.0
-	_lasso_label.offset_left = -200.0
-	_lasso_label.offset_right = 200.0
-	_lasso_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_lasso_label.add_theme_font_size_override("font_size", 16)
-	_ui.add_child(_lasso_label)
+## Every transient message the world shows the player -- fishing, taming,
+## trade, talk, Easter-egg sightings -- in ONE themed, top-centre stack.
+##
+## They used to be five independent, absolutely-positioned, background-less
+## Labels at hand-picked y offsets: unreadable over snow (reported), washed
+## out over sand, and two of them (taming and trade) pinned to the SAME
+## offset_top of 144, so a trade message and a taming message drew straight
+## through each other. A VBoxContainer makes that overlap structurally
+## impossible -- a hidden banner takes no room, so whatever is showing simply
+## stacks -- and the shared `_ui_theme` PanelContainer card (the same opaque,
+## bordered card _build_survival_bar and CreaturePanel already use) makes each
+## one legible over any terrain.
+##
+## Each _update_*_label body keeps its name and its caller; what changed is
+## that it now sets its banner's CARD (see _set_message_banner) rather than a
+## loose Label's text and visibility.
+func _build_message_stack() -> void:
+	_message_stack = VBoxContainer.new()
+	_message_stack.theme = _ui_theme
+	_message_stack.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_message_stack.offset_top = MESSAGE_STACK_TOP
+	_message_stack.offset_left = -MESSAGE_STACK_WIDTH / 2.0
+	_message_stack.offset_right = MESSAGE_STACK_WIDTH / 2.0
+	_message_stack.alignment = BoxContainer.ALIGNMENT_CENTER
+	_message_stack.add_theme_constant_override("separation", 4)
+	_message_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui.add_child(_message_stack)
+
+	# Fixed top-to-bottom order -- the same order message_banner_lines pins.
+	_fishing_banner = _make_message_banner(16)
+	_lasso_banner = _make_message_banner(16)
+	_trade_banner = _make_message_banner(16)
+	_talk_banner = _make_message_banner(14)
+	_easter_egg_banner = _make_message_banner(14)
+	# A sighting is an ambient world event rather than something the player
+	# did, and reads in its own cooler ink -- the one per-banner difference.
+	(_easter_egg_banner.get_child(0) as Label).add_theme_color_override(
+		"font_color", EASTER_EGG_MESSAGE_COLOR
+	)
+
+
+## One message banner: a themed card (UiTheme.panel_stylebox via _ui_theme --
+## the same opaque, bordered card the survival panel and CreaturePanel use)
+## wrapping a centred, wrapping Label. Hidden until it has something to say.
+func _make_message_banner(font_size: int) -> PanelContainer:
+	var banner := PanelContainer.new()
+	banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	banner.visible = false
+	var label := Label.new()
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.add_theme_font_size_override("font_size", font_size)
+	banner.add_child(label)
+	_message_stack.add_child(banner)
+	return banner
+
+
+## Sets one banner's text, hiding the whole CARD (not just blanking its text)
+## when there is nothing to say -- a hidden VBox child takes no room, so the
+## banners below it move up instead of a blank gap opening.
+func _set_message_banner(banner: PanelContainer, message: String) -> void:
+	(banner.get_child(0) as Label).text = message
+	banner.visible = message != ""
+
+
+## The banners on screen, top to bottom -- the fixed order the stack shows
+## them in, with empty ones dropped entirely, so two messages can never land
+## on the same line the way the taming and trade banners did (both were
+## pinned at offset_top 144). Pinned by test_world_hud.gd.
+static func message_banner_lines(
+	fishing: String, lasso: String, trade: String, talk: String, easter_egg: String
+) -> PackedStringArray:
+	var lines := PackedStringArray()
+	for message in [fishing, lasso, trade, talk, easter_egg]:
+		if message != "":
+			lines.append(message)
+	return lines
 
 
 func _update_lasso_label(local_player: Player) -> void:
-	_lasso_label.text = local_player.lasso_message
-	_lasso_label.visible = local_player.lasso_message != ""
+	_set_message_banner(_lasso_banner, local_player.lasso_message)
 
 
 func _update_fishing_label(local_player: Player) -> void:
-	_fishing_label.text = local_player.fishing_message
-	_fishing_label.visible = local_player.fishing_message != ""
+	_set_message_banner(_fishing_banner, local_player.fishing_message)
 
 
-## A centered shopping prompt/result banner (see Player._shop_step), same
-## shape as the fishing banner just below it.
-func _build_trade_label() -> void:
-	_trade_label = Label.new()
-	_trade_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_trade_label.offset_top = 144.0
-	_trade_label.offset_left = -160.0
-	_trade_label.offset_right = 160.0
-	_trade_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_trade_label.add_theme_font_size_override("font_size", 16)
-	_ui.add_child(_trade_label)
-
-
+## A shopping prompt/result banner (see Player._shop_step).
 func _update_trade_label(local_player: Player) -> void:
-	_trade_label.text = local_player.trade_message
-	_trade_label.visible = local_player.trade_message != ""
+	_set_message_banner(_trade_banner, local_player.trade_message)
 
 
-## A centered talk-result banner (see Player._talk_step/NpcGreeting), same
-## shape as the trade banner just above it.
-func _build_talk_label() -> void:
-	_talk_label = Label.new()
-	_talk_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_talk_label.offset_top = 168.0
-	_talk_label.offset_left = -220.0
-	_talk_label.offset_right = 220.0
-	_talk_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_talk_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_talk_label.add_theme_font_size_override("font_size", 14)
-	_ui.add_child(_talk_label)
-
-
+## A talk-result banner (see Player._talk_step/NpcGreeting).
 func _update_talk_label(local_player: Player) -> void:
-	_talk_label.text = local_player.talk_message
-	_talk_label.visible = local_player.talk_message != ""
+	_set_message_banner(_talk_banner, local_player.talk_message)
+
+
+## The joust arcade-cabinet overlay (see JoustMatchView's own doc comment)
+## -- built hidden, parented under _ui like every other overlay in this
+## file, and wired to pause/unpause the world for the duration of a match
+## (see _on_joust_match_finished and _check_sea_cave_guardian below), the
+## same "acts like a real pause screen" pattern _toggle_settings_menu
+## already uses for SettingsOverlay.
+func _build_joust_view() -> void:
+	_joust_view = JoustMatchView.new()
+	_joust_view.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ui.add_child(_joust_view)
+	_joust_view.match_finished.connect(_on_joust_match_finished)
+
+
+## The hidden retro handheld's battle + dex screen (see HandheldBattleView's
+## own doc comment) -- same "built hidden, parented under _ui, pause/unpause
+## for the duration" shape as _build_joust_view just above.
+func _build_handheld_view() -> void:
+	_handheld_view = HandheldBattleView.new()
+	_handheld_view.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ui.add_child(_handheld_view)
+	_handheld_view.closed.connect(_on_handheld_closed)
+
+
+## Undocumented on purpose (docs/concept/easter_eggs.md pillar 3 -- no
+## quest marker, no hint pointing here): once every EASTER_EGG_CHECK_
+## INTERVAL seconds, rolls each registered sighting against the player's
+## current real-world tile. The first that clears both its radius and its
+## own rarity roll shows as a brief on-screen line, same shape as the talk/
+## trade/fishing banners, then clears itself after EASTER_EGG_MESSAGE_
+## DURATION -- there is nothing left to walk up to afterward (see
+## EasterEggSightings' own doc comment: no persistent sighting object).
+func _check_easter_egg_sightings(player_tile: Vector2i, is_night: bool) -> void:
+	for id in _easter_egg_sightings.sighting_ids():
+		var message := _easter_egg_sightings.check_one(
+			id,
+			player_tile.x,
+			player_tile.y,
+			EarthChunkGenerator.WORLD_WIDTH_TILES,
+			EarthChunkGenerator.WORLD_HEIGHT_TILES,
+			randf(),
+			is_night
+		)
+		if message != "":
+			_set_message_banner(_easter_egg_banner, message)
+			_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
+			return
+
+
+## Squallmaw/Coilnecca/Champ (docs/concept/easter_eggs.md) -- unlike
+## _check_easter_egg_sightings above, a hit here is a REAL creature: rolls
+## each registered id against the player's current tile via
+## EasterEggCreatures (same reverse-geo + radius + per-check-roll shape as
+## the sightings above), and on a hit, spawns that species a short distance
+## from the player with CreatureRenderer.spawn_single -- the exact same API
+## the debug /spawn command uses (see _handle_spawn_command). Once spawned
+## it's an ordinary CreatureMarker: no despawn timer, no special
+## persistence, so "fight, flee, be tamed" is true by construction, same as
+## every other creature in the world.
+func _check_easter_egg_creature_spawns(player_tile: Vector2i, local_player: Player) -> void:
+	if local_player == null:
+		return
+	for id in _easter_egg_creatures.sighting_ids():
+		var species := _easter_egg_creatures.check_one(
+			id, player_tile.x, player_tile.y,
+			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES, randf()
+		)
+		if species != "":
+			var offset := Vector2.RIGHT.rotated(randf() * TAU) * EASTER_EGG_CREATURE_SPAWN_DISTANCE
+			_creature_renderer.spawn_single(
+				_creatures, species, local_player.position + offset, _chunk_manager, TerrainRenderer.TILE_SIZE
+			)
+			return
+
+
+## Back to the Future Day (docs/concept/easter_eggs.md) -- gated on the
+## REAL system calendar date (utc.month/utc.day, NOT SeasonCycle -- see
+## BackToTheFutureDay's own doc comment), not a rarity roll: on the one
+## real day a year this is eligible, it fires once per session via the
+## same on-screen banner (_easter_egg_label) the sightings cameos already
+## use, since there is no real car sprite/art to spawn instead.
+func _check_back_to_the_future_day(month: int, day: int) -> void:
+	if _bttf_cameo_shown_this_session:
+		return
+	if not _back_to_the_future_day.is_today(month, day):
+		return
+	_bttf_cameo_shown_this_session = true
+	_set_message_banner(_easter_egg_banner, _back_to_the_future_day.cameo_message())
+	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
+
+
+## Rush ambient nod (docs/concept/easter_eggs.md) -- LOCATION alone is the
+## trigger (see RushAmbientCue's own doc comment: no rarity roll, unlike
+## every other coordinate-triggered cameo above), fired once per session on
+## approach via the same on-screen banner the other cameos use.
+func _check_rush_ambient_cue(player_tile: Vector2i) -> void:
+	if _rush_ambient_cue_played:
+		return
+	if not _rush_ambient_cue.is_in_range(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	_rush_ambient_cue_played = true
+	_set_message_banner(_easter_egg_banner, _rush_ambient_cue.cameo_message())
+	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
+	# TODO(easter-eggs): once a real short original ambient instrumental cue
+	# exists (.ogg), attach it here via an AudioStreamPlayer2D at the
+	# player's position -- no audio-generation tool was available to this
+	# stage, so this cameo is text-only for now; see docs/progress.md.
+
+
+## The Zork-homage ancient terminal (docs/concept/easter_eggs.md, see
+## AncientTerminal's own doc comment) -- called every frame (unlike the
+## throttled _check_easter_egg_sightings/_check_rush_ambient_cue above)
+## because this needs to catch the single frame Input.is_action_just_
+## pressed("talk") is true; throttling to EASTER_EGG_CHECK_INTERVAL would
+## silently drop most real key presses. Deliberately re-triggerable (no
+## once-per-session guard) -- a terminal you can walk up to and "read"
+## again is more in the spirit of a found prop than a one-time cutscene;
+## only has_been_found's own latch is permanent.
+func _check_ancient_terminal(player_tile: Vector2i, local_player: Player) -> void:
+	if not Input.is_action_just_pressed("talk"):
+		return
+	if not _ancient_terminal.is_in_range(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	var already_found := _ancient_terminal.has_been_found()
+	_ancient_terminal.mark_found()
+	_set_message_banner(
+		_easter_egg_banner, "\n".join(_ancient_terminal.terminal_lines())
+	)
+	_easter_egg_message_timer = ANCIENT_TERMINAL_MESSAGE_DURATION
+	# "Three Fragments" hunt (docs/concept/easter_eggs.md) -- quietly leaves
+	# behind one small, unremarkable fragment item the FIRST time the
+	# terminal is found; re-reading it later (this egg is deliberately
+	# re-triggerable, see this function's own doc comment above) does not
+	# grant a second copy.
+	if not already_found:
+		_grant_fragment_and_check_three_fragments_hunt(
+			local_player, ThreeFragmentsHunt.TERMINAL_FRAGMENT_ITEM_ID
+		)
+
+
+## The signed secret room (docs/concept/easter_eggs.md, see
+## SignedSecretRoom's own doc comment) -- called every frame for the same
+## just-pressed reason _check_ancient_terminal is. Watches only the four
+## action names SignedSecretRoom.ACTION_SEQUENCE actually needs, appends
+## each to a small rolling buffer capped at the sequence's own length, and
+## reveals the credit the moment that buffer's tail matches AND the player
+## is standing at the room's own location.
+func _check_signed_secret_room(player_tile: Vector2i, local_player: Player) -> void:
+	for action_name in SignedSecretRoom.ACTION_SEQUENCE:
+		if not Input.is_action_just_pressed(action_name):
+			continue
+		_signed_secret_room_recent_actions.append(action_name)
+		var overflow := (
+			_signed_secret_room_recent_actions.size() - SignedSecretRoom.ACTION_SEQUENCE.size()
+		)
+		if overflow > 0:
+			_signed_secret_room_recent_actions = _signed_secret_room_recent_actions.slice(overflow)
+
+	if not _signed_secret_room.matches_sequence(_signed_secret_room_recent_actions):
+		return
+	if not _signed_secret_room.is_in_range(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	var already_found := _signed_secret_room.has_been_found()
+	_signed_secret_room.mark_found()
+	_set_message_banner(_easter_egg_banner, _signed_secret_room.credit_text())
+	_easter_egg_message_timer = SIGNED_SECRET_ROOM_MESSAGE_DURATION
+	# "Three Fragments" hunt (docs/concept/easter_eggs.md) -- same grant-once
+	# shape as _check_ancient_terminal above.
+	if not already_found:
+		_grant_fragment_and_check_three_fragments_hunt(
+			local_player, ThreeFragmentsHunt.SECRET_ROOM_FRAGMENT_ITEM_ID
+		)
+
+
+## The hidden sea cave's guardian (docs/concept/easter_eggs.md's "hidden
+## sea cave... dueling-birds cabinet" entry, see SeaCaveGuardian's own doc
+## comment) -- called every frame for the same just-pressed reason
+## _check_ancient_terminal is. A successful "talk" press in range shows the
+## challenge + transform banner text, starts the actual joust
+## (_joust_view.start_match), and pauses the world for the duration --
+## _on_joust_match_finished unpauses it and reports the outcome once
+## JoustMatchView's own match_finished signal fires.
+func _check_sea_cave_guardian(player_tile: Vector2i) -> void:
+	if not Input.is_action_just_pressed("talk"):
+		return
+	if not _sea_cave_guardian.can_begin_challenge(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	_sea_cave_guardian.begin_challenge()
+	_set_message_banner(
+		_easter_egg_banner,
+		_sea_cave_guardian.challenge_line() + "\n\n" + _sea_cave_guardian.transform_line()
+	)
+	_easter_egg_message_timer = SEA_CAVE_GUARDIAN_MESSAGE_DURATION
+	_joust_view.start_match()
+	get_tree().paused = true
+
+
+## JoustMatchView.match_finished's handler -- unpauses the world (mirroring
+## _toggle_settings_menu's own pause/unpause symmetry), frees the guardian
+## to be re-challenged (SeaCaveGuardian is deliberately repeatable, see its
+## own doc comment), and shows the guardian's own win/lose flavor line
+## through the shared Easter-egg banner.
+func _on_joust_match_finished(winner: String) -> void:
+	get_tree().paused = false
+	_sea_cave_guardian.end_challenge()
+	_set_message_banner(_easter_egg_banner, _sea_cave_guardian.outcome_line(winner))
+	_easter_egg_message_timer = EASTER_EGG_MESSAGE_DURATION
+
+
+## The hidden retro handheld (docs/concept/easter_eggs.md's "hidden retro
+## handheld" entry, see RetroHandheld's own doc comment) -- called every
+## frame for the same just-pressed reason _check_ancient_terminal is. A
+## successful "talk" press in range shows the found/reopened flavor line,
+## opens the actual battle+dex screen (_handheld_view.open), and pauses the
+## world for the duration -- _on_handheld_closed unpauses it once the
+## player puts the handheld away (HandheldBattleView's own closed signal).
+func _check_retro_handheld(player_tile: Vector2i) -> void:
+	if not Input.is_action_just_pressed("talk"):
+		return
+	if not _retro_handheld.can_open(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	):
+		return
+	var already_found := _retro_handheld.has_been_found()
+	_retro_handheld.mark_found()
+	_retro_handheld.open()
+	_set_message_banner(_easter_egg_banner, _retro_handheld.flavor_line(already_found))
+	_easter_egg_message_timer = RETRO_HANDHELD_MESSAGE_DURATION
+	_handheld_view.open()
+	get_tree().paused = true
+
+
+## HandheldBattleView.closed's handler -- unpauses the world (mirroring
+## _on_joust_match_finished's identical pause/unpause symmetry) and frees
+## the prop to be reopened (RetroHandheld is deliberately repeatable, see
+## its own doc comment).
+func _on_handheld_closed() -> void:
+	get_tree().paused = false
+	_retro_handheld.close()
+
+
+## Monty Python's Bridgekeeper (docs/concept/easter_eggs.md, see
+## BridgekeeperEncounter's own doc comment) -- rolled on the same throttled
+## cadence as _check_easter_egg_sightings above (a rarity roll, not a
+## per-frame check). Only rolls for a NEW encounter while none is already
+## active (_bridgekeeper_riddle_index == -1); the player answers via the
+## /answer console command (_handle_bridgekeeper_answer_command).
+func _check_bridgekeeper_encounter(player_tile: Vector2i) -> void:
+	if _bridgekeeper_riddle_index != -1:
+		return
+	if not _bridgekeeper.check(
+		player_tile.x, player_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES, randf()
+	):
+		return
+	_bridgekeeper_riddle_index = 0
+	_bridgekeeper_correct_count = 0
+	_dev_console.log_line("A robed figure blocks the narrow crossing. \"None shall pass unanswered.\"")
+	_dev_console.log_line(_bridgekeeper.riddle_text(0))
+	_dev_console.log_line("(Reply with /answer <your answer>)")
+
+
+## /answer <text> (docs/concept/easter_eggs.md's Bridgekeeper egg) --
+## deliberately never listed in /help (pillar 3), and a no-op when no
+## encounter is active (typing it on a whim outside an encounter does
+## nothing, rather than erroring). Advances the riddle index each call;
+## once all three are answered, prints passage_message and clears the
+## active-encounter state so a later roll can start a fresh one.
+func _handle_bridgekeeper_answer_command(args: Array) -> void:
+	if _bridgekeeper_riddle_index == -1:
+		_dev_console.log_line("There is no one here to answer.")
+		return
+	var answer := " ".join(args)
+	if _bridgekeeper.is_correct_answer(_bridgekeeper_riddle_index, answer):
+		_bridgekeeper_correct_count += 1
+		_dev_console.log_line("\"...Correct.\" The figure seems faintly surprised.")
+	else:
+		_dev_console.log_line("\"...Incorrect.\" The figure sighs, unbothered.")
+	_bridgekeeper_riddle_index += 1
+	if _bridgekeeper_riddle_index >= _bridgekeeper.riddle_count():
+		_dev_console.log_line(_bridgekeeper.passage_message(_bridgekeeper_correct_count))
+		_bridgekeeper_riddle_index = -1
+		return
+	_dev_console.log_line(_bridgekeeper.riddle_text(_bridgekeeper_riddle_index))
+
+
+## Forwarding getter: the clean, testable "was this found" signal a later
+## system (docs/concept/easter_eggs.md's "Three Fragments" hunt) can check
+## against, without reaching into _ancient_terminal directly.
+func has_found_ancient_terminal() -> bool:
+	return _ancient_terminal.has_been_found()
+
+
+## Forwarding getter: same purpose as has_found_ancient_terminal above, for
+## the signed secret room.
+func has_found_signed_secret_room() -> bool:
+	return _signed_secret_room.has_been_found()
+
+
+## Forwarding getter: same purpose as has_found_ancient_terminal above, for
+## the WarGames egg.
+func has_found_wargames_egg() -> bool:
+	return _wargames_response.has_been_found()
+
+
+## Forwarding getter: ThreeFragmentsHunt's own has_triggered() latch -- true
+## once the "Three Fragments" bonus discovery has fired.
+func has_triggered_three_fragments_bonus() -> bool:
+	return _three_fragments_hunt.has_triggered()
+
+
+## Forwarding getter: SeaCaveGuardian's own is_challenge_active() -- lets a
+## future system check "is a joust currently in progress" without reaching
+## into World's private field directly, the same shape as has_found_
+## ancient_terminal/has_found_signed_secret_room above. Not part of "Three
+## Fragments" (SeaCaveGuardian was never one of that hunt's three eggs).
+func is_sea_cave_challenge_active() -> bool:
+	return _sea_cave_guardian.is_challenge_active()
+
+
+## Forwarding getter: RetroHandheld's own is_open() -- the same shape as
+## is_sea_cave_challenge_active above. Not part of "Three Fragments" (the
+## handheld was never one of that hunt's three eggs).
+func is_handheld_open() -> bool:
+	return _retro_handheld.is_open()
+
+
+## Grants one fragment item of docs/concept/easter_eggs.md's "Three
+## Fragments" hunt to local_player, then checks whether the player now holds
+## all three -- called from each of the three source eggs' own find sites
+## (the ancient terminal, the signed secret room, the /globalthermonuclearwar
+## command), each already gated by its own caller on "this egg was NOT
+## already found before this call" so a fragment is only ever granted once
+## per source egg no matter how many times a re-triggerable egg fires again
+## later. A no-op with no local player to give it to (matches _handle_give_
+## command's own "no local player" guard).
+func _grant_fragment_and_check_three_fragments_hunt(
+	local_player: Player, fragment_item_id: String
+) -> void:
+	if local_player == null:
+		return
+	local_player.inventory.add(_item_catalog.make(fragment_item_id), 1)
+	_check_three_fragments_hunt(local_player)
+
+
+## docs/concept/easter_eggs.md's "Three Fragments" bonus discovery -- fires
+## the moment local_player is found to be holding all three fragment items at
+## once (ThreeFragmentsHunt.should_trigger latches permanently via
+## mark_triggered, so this can only ever actually fire once per session,
+## even though it's re-checked every time a fragment is granted). Reuses the
+## same on-screen banner every other cameo in this file uses, and grants
+## ThreeFragmentsHunt.BONUS_ITEM_ID -- see that module's own doc comment for
+## why this specific payoff was chosen.
+func _check_three_fragments_hunt(local_player: Player) -> void:
+	if local_player == null:
+		return
+	var has_terminal := local_player.inventory.has(ThreeFragmentsHunt.TERMINAL_FRAGMENT_ITEM_ID)
+	var has_secret_room := local_player.inventory.has(ThreeFragmentsHunt.SECRET_ROOM_FRAGMENT_ITEM_ID)
+	var has_wargames := local_player.inventory.has(ThreeFragmentsHunt.WARGAMES_FRAGMENT_ITEM_ID)
+	if not _three_fragments_hunt.should_trigger(has_terminal, has_secret_room, has_wargames):
+		return
+	_three_fragments_hunt.mark_triggered()
+	local_player.inventory.add(_item_catalog.make(ThreeFragmentsHunt.BONUS_ITEM_ID), 1)
+	_set_message_banner(_easter_egg_banner, _three_fragments_hunt.bonus_message())
+	_easter_egg_message_timer = THREE_FRAGMENTS_BONUS_MESSAGE_DURATION
+
+
+func _update_easter_egg_label(delta: float) -> void:
+	if _easter_egg_message_timer <= 0.0:
+		return
+	_easter_egg_message_timer -= delta
+	if _easter_egg_message_timer <= 0.0:
+		_set_message_banner(_easter_egg_banner, "")
 
 
 ## The floating "Talk (<key>)" prompt (see _interaction_prompt's own doc
@@ -1059,13 +2088,17 @@ func _update_charge_meter(local_player: Player) -> void:
 ## EarthChunkManager.nearest_liftable_stone_near, Player.PICKUP_RADIUS) and
 ## shows "Pick (<key>)" instead -- a boulder never qualifies (see
 ## StoneSize.is_liftable), only something the pickup key would actually
-## collect. An NPC to talk to takes precedence over a stone to pick up when
-## both are in range at once: talking is the rarer, more deliberate action,
-## and a pebble underfoot isn't going anywhere. Both bound keys are read
-## live from _keybindings so a rebind is reflected immediately, never a
-## stale hardcoded letter.
+## collect. Failing THAT, the same for the nearest dropped item with a
+## real, kickable-grade mass (Player.nearest_kickable_dropped_item_near) --
+## the generic-item counterpart of the stone case (docs/concept/
+## wild_crops.md's "a real physical entity" now also picks into the hand).
+## An NPC to talk to takes precedence over anything to pick up when both
+## are in range at once: talking is the rarer, more deliberate action, and
+## a pebble underfoot isn't going anywhere. All bound keys are read live
+## from _keybindings so a rebind is reflected immediately, never a stale
+## hardcoded letter.
 func _update_interaction_prompt(local_player: Player) -> void:
-	if _chunk_manager == null:
+	if not world_hint_visible_for(_chunk_manager != null, _any_gameplay_window_open()):
 		_interaction_prompt.visible = false
 		return
 
@@ -1077,14 +2110,22 @@ func _update_interaction_prompt(local_player: Player) -> void:
 	# Something already in hand: E is now dedicated to charge/release (see
 	# Player._pickup_step, the charge meter above the player's own head
 	# handles that hint) -- "Pick" would be misleading since pressing the
-	# key no longer sweeps a new stone into inventory while the hand is full.
-	if local_player.is_holding_stone():
+	# key no longer sweeps a new stone/item into inventory while the hand
+	# is full.
+	if local_player.is_holding_anything():
 		_interaction_prompt.visible = false
 		return
 
 	var stone := _chunk_manager.nearest_liftable_stone_near(local_player.position, Player.PICKUP_RADIUS)
 	if stone != null:
 		_show_interaction_prompt("Pick (%s)" % OS.get_keycode_string(_keybindings.keycode_for("pickup")), stone.position)
+		return
+
+	var dropped_item := local_player.nearest_kickable_dropped_item_near(local_player.position, Player.PICKUP_RADIUS)
+	if dropped_item != null:
+		_show_interaction_prompt(
+			"Pick (%s)" % OS.get_keycode_string(_keybindings.keycode_for("pickup")), dropped_item.position
+		)
 		return
 
 	_interaction_prompt.visible = false
@@ -1105,6 +2146,26 @@ func _update_xp_bar(local_player: Player) -> void:
 	_xp_fill.size.x = xp.progress_fraction() * SURVIVAL_BAR_WIDTH
 	var points := "  (%d pts)" % xp.unspent_points if xp.unspent_points > 0 else ""
 	_xp_label.text = "Lv %d — %s%s" % [xp.level, local_player.character_class.capitalize(), points]
+
+
+## Every frame: hidden unless the local player has unlocked the Naturalist
+## "land_sense" keystone; otherwise reads REAL EarthChunkManager.
+## land_health_near/vegetation_density_near at the player's own position --
+## the exact same numbers the simulation itself runs on (see
+## VegetationGrowthModel.effective_capacity/step_land_health), not a
+## separate display-only stat. This is the keystone's actual payoff (see
+## KeystonePassive._KEYSTONES's own doc comment on why land_sense carries no
+## stat bonus).
+func _update_land_sense_label(local_player: Player) -> void:
+	var unlocked: bool = local_player.unlocked_keystones.get("land_sense", false)
+	_land_sense_label.visible = unlocked and _chunk_manager != null
+	if not _land_sense_label.visible:
+		return
+	var land_health := _chunk_manager.land_health_near(local_player.position)
+	var vegetation := _chunk_manager.vegetation_density_near(local_player.position)
+	_land_sense_label.text = "Land health %d%%  ·  Vegetation %d%%" % [
+		int(round(land_health * 100.0)), int(round(vegetation * 100.0))
+	]
 
 
 func _make_survival_meter_row(parent: Control, fill_color: Color) -> Dictionary:
@@ -1172,12 +2233,28 @@ func _build_hover_tooltip() -> void:
 ## EarthChunkManager._sync_grass_sprites), so it is checked separately, only
 ## once nothing else claimed the cursor.
 func _update_hover_tooltip() -> void:
+	# A tooltip about whatever is behind an open window is noise -- and worse,
+	# it draws ON TOP of that window (see world_hint_visible_for). Skipping
+	# the scan entirely also saves the per-marker work while a modal is up.
+	if not world_hint_visible_for(true, _any_gameplay_window_open()):
+		_hover_tooltip.visible = false
+		return
 	var mouse_world := get_global_mouse_position()
-	# The finder only ever picks a target within HOVER_RADIUS_PX of the cursor,
-	# so skip the expensive per-marker work (get_display_name/get_hover_actions
-	# + dict alloc) for anything farther away -- turns an O(all loaded trees/
+	# The finder only ever picks a target within HOVER_RADIUS_PX of the cursor
+	# (relaxed by Spyglass.effective_hover_radius when a Spyglass is equipped
+	# -- docs/concept/wayfinding.md's Spyglass item, no new "detection" stat,
+	# just the existing hover system resolving from further away), so skip
+	# the expensive per-marker work (get_display_name/get_hover_actions +
+	# dict alloc) for anything farther away -- turns an O(all loaded trees/
 	# stones/creatures) scan into O(the handful under the cursor).
-	var scan_radius_sq := HoverTargetFinder.HOVER_RADIUS_PX * HoverTargetFinder.HOVER_RADIUS_PX
+	var local_player := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+	var has_spyglass: bool = (
+		local_player != null
+		and local_player.equipped_item != null
+		and local_player.equipped_item.id == "spyglass"
+	)
+	var scan_radius := Spyglass.effective_hover_radius(HoverTargetFinder.HOVER_RADIUS_PX, has_spyglass)
+	var scan_radius_sq := scan_radius * scan_radius
 	var candidates: Array = []
 	for marker in get_tree().get_nodes_in_group(HoverTargetFinder.GROUP_NAME):
 		if mouse_world.distance_squared_to(marker.position) > scan_radius_sq:
@@ -1187,7 +2264,7 @@ func _update_hover_tooltip() -> void:
 		)
 		candidates.append({"position": marker.position, "name": marker.get_display_name(), "actions": actions})
 
-	var info := _hover_target_finder.info_under(mouse_world, candidates)
+	var info := _hover_target_finder.info_under(mouse_world, candidates, scan_radius)
 	var found_name: String = info.get("name", "")
 	var found_actions: Array = info.get("actions", [])
 	if found_name == "":
@@ -1265,6 +2342,8 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if not _world_ready:
+		return
 	if event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
 		_dev_console.toggle()
 	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):
@@ -1328,10 +2407,14 @@ func _handle_escape() -> void:
 
 
 ## Per slice: cheap, and the things the lapse exists to show.
+##
+## The world CLOCK is deliberately not advanced here any more. It used to be,
+## once per slice, which tied the calendar to the per-FRAME slice budget --
+## and a lapse runs at a few frames a second, so the year came out several
+## times slower than the rate asked for. The clock now runs at the rate asked
+## for, once a frame, independently of how many slices a frame can afford
+## (see TimeLapse.calendar_seconds and _process).
 func _step_ecology_fine(delta: float, focus_player: Player) -> void:
-	# The clock first, and on EVERY slice: it is what seasons, ripening and
-	# growth all read.
-	_chunk_manager.advance_world_age(delta)
 	_chunk_manager.step_worms(delta)
 	if focus_player != null:
 		_chunk_manager.step_fruiting(delta, focus_player.position)
@@ -1354,9 +2437,13 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	_chunk_manager.step_tall_grass(delta)
 	# Wild carrot/potato growth + spread (see EarthChunkManager.step_wild_crops,
 	# docs/concept/wild_crops.md) -- mirrors step_tall_grass's own throttled
-	# cadence immediately above; it existed and was fully tested but was never
-	# actually called from here, so a wild crop patch rendered on chunk load
-	# and then sat at its seeded growth forever in a real session.
+	# cadence immediately above. This line was simply missing: the step
+	# existed, its own unit tests called it directly and passed, and nothing
+	# in a real session ever did -- so a wild crop patch only ever showed the
+	# maturity _seed_initial_patches handed it at chunk creation (1.0, mature)
+	# and spread never fired once. Same trap the ownership gate fell into (see
+	# test_world_simulation_ownership.gd's header), one call level further
+	# out. Independently found and fixed on both this branch and main.
 	_chunk_manager.step_wild_crops(delta)
 	# Ant mounds foraging (see AntColony, myrmecochory) -- fallen grass seed
 	# in grassland, or windfall fruit/nut in forest/rainforest where grass
@@ -1375,12 +2462,49 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# real session actually produces settlement_growing/settlement_declining
 	# events without a console command.
 	_chunk_manager.step_settlements(delta)
+	# NPCs sharing a real landmark on their real daily schedule exchange
+	# memories automatically (see EarthChunkManager.step_npc_encounters,
+	# docs/concept/npc.md "Memory, beliefs, and rumor propagation") -- the
+	# one gap that section itself named, now closed the same way
+	# step_settlements already is.
+	_chunk_manager.step_npc_encounters(delta)
+	# A settlement's own real production shortfall (see
+	# EarthChunkManager.production_shortfall_quests_for_settlement, Phase
+	# 12) can be resupplied by the nearest other real settlement's genuine
+	# surplus (see step_regional_trade, docs/concept/regional_trade.md) --
+	# the region's own most basic trade network, running automatically.
+	# Dispatch is throttled by REGIONAL_TRADE_INTERVAL internally, same
+	# accumulator shape as step_settlements above; delivery is now a real
+	# caravan trip (see step_caravans, docs/concept/trade.md), not an
+	# instant credit.
+	_chunk_manager.step_regional_trade(delta)
 	_step_herbivore_food_consumption(delta)
 	_step_reproduction(delta)
 
 
 func _any_gameplay_window_open() -> bool:
 	return _inventory_window.visible or _crafting_window.is_open() or _skill_window.is_open()
+
+
+## Whether a WORLD-SPACE floating hint -- the "Talk (G)"/"Pick (E)" prompt,
+## the hover tooltip, the message stack -- may be drawn right now.
+##
+## Every HUD node in this file is a child of the same `_ui` CanvasLayer, so
+## draw order is sibling order -- and the floaters are built AFTER the
+## inventory/crafting/skill windows in _ready(), which put "Talk (G)" and a
+## tooltip about a tree BEHIND the modal on top of the open modal (reported).
+## Hiding them is the fix rather than reordering the layers: a hint about the
+## world behind a window is noise even in the corners it does not overlap.
+##
+## `window_open` is _any_gameplay_window_open(), the same predicate
+## EscapeAction.action_for already treats as "a modal is open". Deliberately
+## NOT widened to the settings overlay (which pauses the tree, so
+## _client_process stops running and the floaters freeze rather than update)
+## or the dev console (a small bottom strip that overlaps nothing) -- and
+## widening it would change what EscapeAction means. Pinned by
+## test_world_hud.gd.
+static func world_hint_visible_for(can_show: bool, window_open: bool) -> bool:
+	return can_show and not window_open
 
 
 ## Closes every open gameplay window at once -- Escape clears the screen
@@ -1413,13 +2537,18 @@ func _on_console_command(command: String, args: Array) -> void:
 		"help":
 			_dev_console.log_line(
 				(
-					"Commands: /day  /season [name]  /weather [state|off]"
+					"Commands: /day [off]  /night [off]  /time <hh:mm>|off"
+					+ "  /season [name]  /weather [state|off]"
 					+ "  /ecotest [seconds_per_year|off]"
 					+ "  /history <entity_id>  /why <event_id>  /remember <entity_id>"
 					+ "  /household <entity_id>  /contract <entity_id>  /market <entity_id>"
-					+ "  /institution <entity_id>  /settlement <entity_id>  /emergence"
+					+ "  /institution <entity_id>  /settlement <entity_id>  /boss <entity_id>"
+					+ "  /quests <entity_id>  /emergence"
 					+ "  /spawn <species> [count]  /give <item_id> [count]"
 					+ "  /craft <recipe_id>  /gold <amount>  /village  /species  /help"
+					+ "  /compass  /map  /weatherglass  /almanac  /deed"
+					+ "  /ledger propose|accept|fulfill|breach ...  /charter found <type> <counterparty_id>"
+					+ "  /journal <entity_id>"
 				)
 			)
 		"species":
@@ -1427,8 +2556,11 @@ func _on_console_command(command: String, args: Array) -> void:
 			# listing it inline would drown the other commands.
 			_dev_console.log_line("Spawnable: %s" % ", ".join(ConsoleSpecies.spawnable()))
 		"day":
-			_force_day = true
-			_dev_console.log_line("Time forced to day.")
+			_handle_sky_command("day", args)
+		"night":
+			_handle_sky_command("night", args)
+		"time":
+			_handle_time_command(args)
 		"history":
 			_handle_history_command(args)
 		"why":
@@ -1445,6 +2577,10 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_institution_command(args)
 		"settlement":
 			_handle_settlement_command(args)
+		"boss":
+			_handle_world_boss_command(args)
+		"quests":
+			_handle_quests_command(args)
 		"emergence":
 			_handle_emergence_command()
 		"season":
@@ -1463,6 +2599,54 @@ func _on_console_command(command: String, args: Array) -> void:
 			_handle_gold_command(args, local_player)
 		"village":
 			_handle_village_command(local_player)
+		"compass":
+			_handle_compass_command(local_player)
+		"map":
+			_handle_map_command(local_player)
+		"weatherglass":
+			_handle_weatherglass_command(local_player)
+		"almanac":
+			_handle_almanac_command(local_player)
+		"deed":
+			_handle_deed_command(local_player)
+		"ledger":
+			_handle_ledger_command(args, local_player)
+		"charter":
+			_handle_charter_command(args, local_player)
+		"journal":
+			_handle_journal_command(args, local_player)
+		"globalthermonuclearwar":
+			# docs/concept/easter_eggs.md's WarGames Easter egg -- deliberately
+			# NOT listed in /help's output above (pillar 3, undocumented on
+			# purpose): a hidden command prints one original, deadpan homage
+			# line (WarGamesResponse) and does nothing else at all -- zero
+			# mechanical weight, same as every other cameo in this doc.
+			var wargames_already_found := _wargames_response.has_been_found()
+			_wargames_response.mark_found()
+			_dev_console.log_line(_wargames_response.response_line())
+			# "Three Fragments" hunt (docs/concept/easter_eggs.md) -- quietly
+			# leaves behind one small, unremarkable fragment item the first
+			# time this command is ever run, same "no fanfare" grant-once
+			# shape _check_ancient_terminal/_check_signed_secret_room use.
+			if not wargames_already_found:
+				_grant_fragment_and_check_three_fragments_hunt(
+					local_player, ThreeFragmentsHunt.WARGAMES_FRAGMENT_ITEM_ID
+				)
+		"rolld20":
+			# docs/concept/easter_eggs.md's d20 Easter egg -- also never
+			# listed in /help (pillar 3): the ONE genuinely-random moment in
+			# this entire deterministic-by-design game, deliberately drawn
+			# from SecretD20's own dedicated RNG, never the ambient randf()
+			# the cameo-rarity checks elsewhere in this file use. Harmless
+			# and silly on a natural 20; a complete no-op otherwise.
+			_handle_d20_command()
+		"answer":
+			# docs/concept/easter_eggs.md's Bridgekeeper egg -- also never
+			# listed in /help (pillar 3): the reply channel for an in-
+			# progress riddle exchange started by _check_bridgekeeper_
+			# encounter's own rare roll. A no-op line outside an active
+			# encounter, never an error.
+			_handle_bridgekeeper_answer_command(args)
 		_:
 			_dev_console.log_line("Unknown command: /%s (try /help)" % command)
 
@@ -1554,8 +2738,11 @@ func _handle_institution_command(args: Array) -> void:
 		_dev_console.log_line(line)
 
 
-## /settlement <settlement_id> -- food, capacity, households, and growth/
-## decline status (see SettlementState).
+## /settlement <settlement_id> -- food, capacity, households, growth/decline
+## status (see SettlementState), town/city tier + specialization derived
+## from real institution/production flows (see SettlementTier), and
+## governance form + legitimacy derived from real institution history and
+## food security (see Governance).
 func _handle_settlement_command(args: Array) -> void:
 	if args.size() == 0:
 		_dev_console.log_line("Usage: /settlement <settlement_id>  e.g. /settlement settlement:673_127")
@@ -1563,7 +2750,44 @@ func _handle_settlement_command(args: Array) -> void:
 	var entity_id := str(args[0])
 	var market := _chunk_manager.market_store().market_for(entity_id)
 	var household_count := _chunk_manager.household_count_for_settlement(entity_id)
-	for line in Why.explain_settlement(market, household_count, entity_id).split("
+	var active_institutions := _chunk_manager.active_institution_count_for_settlement(entity_id)
+	var production_counts := _chunk_manager.production_counts_for_settlement(entity_id)
+	var institution_type_counts := _chunk_manager.institution_type_counts_for_settlement(entity_id)
+	for line in Why.explain_settlement(
+		market, household_count, entity_id, active_institutions, production_counts, institution_type_counts
+	).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /boss <individual_id> -- every world-boss promotion a real individual has
+## ever had (see WorldBossStore, docs/concept/worldbosses.md). No live
+## gameplay trigger promotes anyone automatically yet (see
+## EarthChunkManager.attempt_world_boss_promotion's own doc comment for
+## why), so this will show nothing for an ordinary creature today -- the
+## command exists for whenever a real caller starts promoting real
+## individuals.
+func _handle_world_boss_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /boss <individual_id>  e.g. /boss creature:12345")
+		return
+	var individual_id := str(args[0])
+	for line in Why.explain_world_boss(_chunk_manager.world_boss_store(), individual_id).split("
+"):
+		_dev_console.log_line(line)
+
+
+## /quests <settlement_id> -- real, currently-discoverable production
+## shortfall quests (see Quest, docs/concept/quests.md "Supply and demand
+## quests"). A live projection over real household/market state, not a
+## stored list -- recomputed fresh every call.
+func _handle_quests_command(args: Array) -> void:
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /quests <settlement_id>  e.g. /quests settlement:673_127")
+		return
+	var settlement_id := str(args[0])
+	var quests := _chunk_manager.production_shortfall_quests_for_settlement(settlement_id)
+	for line in Why.explain_quests(quests).split("
 "):
 		_dev_console.log_line(line)
 
@@ -1641,6 +2865,46 @@ func _handle_weather_command(args: Array) -> void:
 		_dev_console.log_line("In winter this falls as snow -- try /season winter with it.")
 
 
+## /day [off] and /night [off] -- pin the sky for the rest of the session,
+## whatever the real sun is doing at the character's real-world coordinates.
+##
+## These exist because debug builds no longer default to permanent noon (see
+## always_day_for): rather than a build type silently deciding, whoever wants
+## a particular sky asks for one, and can ask for NIGHT too -- which the old
+## default made impossible to see without waiting for real nightfall.
+func _handle_sky_command(sky: String, args: Array) -> void:
+	_forced_sky = "" if is_off_argument(args) else sky
+	if _forced_sky == "":
+		_dev_console.log_line("Real day/night cycle restored.")
+		return
+	_dev_console.log_line(
+		"Sky pinned to %s (/%s off to restore the real cycle)." % [sky, sky]
+	)
+
+
+## /time <hh:mm>|off -- pins the LOCAL clock at the character's own longitude
+## (the same local-solar-time basis SolarPosition.local_hour already uses for
+## the HUD readout), so the sun really is where that hour puts it rather than
+## the readout drifting away from the sky. /time off returns to real UTC.
+func _handle_time_command(args: Array) -> void:
+	if is_off_argument(args):
+		_forced_local_hour = NO_FORCED_HOUR
+		_dev_console.log_line("Clock back on real time.")
+		return
+	if args.size() == 0:
+		_dev_console.log_line("Usage: /time <hh:mm>  e.g. /time 22:30, or /time off")
+		return
+	var hour := clock_hour_for_console_argument(str(args[0]))
+	if hour == NO_FORCED_HOUR:
+		_dev_console.log_line("Not a time: '%s'. Try /time 22:30 or /time off." % str(args[0]))
+		return
+	_forced_local_hour = hour
+	_dev_console.log_line(
+		"Local clock pinned to %02d:%02d. /time off for real time."
+		% [int(hour), int(round((hour - float(int(hour))) * 60.0))]
+	)
+
+
 ## /ecotest [seconds_per_year|off] -- runs the ECOLOGY fast so a whole year
 ## can be watched: winter into spring into summer into autumn, canopies going
 ## bare and back into leaf, fruit ripening and falling, saplings coming up and
@@ -1660,15 +2924,17 @@ func _handle_ecotest_command(args: Array) -> void:
 		if asked > 0.0:
 			seconds_per_year = asked
 	_ecology_time_scale = TimeLapse.scale_for(seconds_per_year)
-	# Reported as a TARGET, not a promise. The rate the world actually reaches
-	# depends on how much ecology a frame can get through, which depends on the
-	# machine and on how much is loaded: measured on this one, a year asked for
-	# in 45 seconds arrives in about 90.
+	# The SEASON rate is now exact at any framerate: the calendar advances by
+	# the full requested amount once a frame, while the ecology keeps its
+	# measured per-frame slice budget (see TimeLapse.calendar_seconds). What
+	# still depends on the machine is how much ecology each frame gets
+	# through -- not when the year ends.
 	_dev_console.log_line(
 		(
-			"Ecology target: a year every %.0fs (%.0fx). Actual depends on framerate."
-			% [seconds_per_year, _ecology_time_scale]
+			"Seasons now turn a year every %.0fs (%.0fx). How much ecology each"
+			+ " frame gets through still depends on the framerate."
 		)
+		% [seconds_per_year, _ecology_time_scale]
 	)
 	_dev_console.log_line(
 		"Watch the canopies -- a season should turn every half minute or so."
@@ -1781,6 +3047,267 @@ func _handle_village_command(local_player: Player) -> void:
 	_dev_console.log_line("Teleported to the nearest village.")
 
 
+## /rolld20 (docs/concept/easter_eggs.md's d20 Easter egg, undocumented on
+## purpose) -- draws one real roll from SecretD20's own dedicated RNG
+## (never the ambient randf() the cameo-rarity checks elsewhere in this
+## file already use) and prints the harmless, silly natural-20 payoff, or a
+## flat "nothing happens" for every other result.
+func _handle_d20_command() -> void:
+	var value := _secret_d20.roll(_secret_d20_rng)
+	var outcome := _secret_d20.outcome_message(value)
+	if outcome == "":
+		_dev_console.log_line("You roll a %d. Nothing happens." % value)
+	else:
+		_dev_console.log_line("You roll a %d! %s" % [value, outcome])
+
+
+## /compass -- requires "rough_compass" or (fine) "compass" (docs/concept/
+## wayfinding.md's Compass item). Bearing toward the world's own spawn point
+## (EarthChunkManager.spawn_chunk_coord(), "point me home" -- this item's own
+## natural default target before the player ever sets a waypoint). The
+## chunk-coord -> pixel conversion reuses the exact same
+## chunk_coord*CHUNK_SIZE + half-chunk-tile-offset pattern
+## EarthChunkManager already uses elsewhere (e.g. its worm-patch climate
+## sampling), fed through this file's own existing tile -> pixel-center
+## helper (_spawn_position_for_tile) rather than a third formula.
+func _handle_compass_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a compass for.")
+		return
+	var has_fine: bool = local_player.inventory.has("compass")
+	if not has_fine and not local_player.inventory.has("rough_compass"):
+		_dev_console.log_line("You don't have a compass.")
+		return
+
+	var chunk_coord := _chunk_manager.spawn_chunk_coord()
+	var centre_tile := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(
+		EarthChunkManager.CHUNK_SIZE / 2, EarthChunkManager.CHUNK_SIZE / 2
+	)
+	var target_world_position := _spawn_position_for_tile(centre_tile)
+	var bearing := Compass.bearing_degrees(local_player.position, target_world_position)
+	var reading := Compass.reading_for(bearing, has_fine)
+	_dev_console.log_line("Compass: %.1f degrees toward home." % reading)
+
+
+## /map -- requires "map" (docs/concept/wayfinding.md's Map item). Visual map
+## rendering is explicitly out of scope for this pass regardless -- a
+## text-only report is the intended MVP: how many chunks have been explored,
+## plus which real, already-founded settlements (EventStore's own
+## "settlement_founded" events -- the same real source
+## EarthChunkManager._known_settlement_ids reads internally, just read here
+## through the already-public event_store() accessor, the same "/why"
+## precedent every other command in this file follows) fall inside that
+## explored set, via MapProjection.landmarks_visible_on_map.
+func _handle_map_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a map for.")
+		return
+	if not local_player.inventory.has("map"):
+		_dev_console.log_line("You don't have a map.")
+		return
+
+	var explored: Array = _chunk_manager.explored_chunks()
+	_dev_console.log_line("Map: %d chunk(s) explored." % explored.size())
+
+	var known_landmarks: Array = []
+	for event in _chunk_manager.event_store().events_of_type("settlement_founded"):
+		if event.actors.is_empty():
+			continue
+		var settlement_id: String = event.actors[0]
+		known_landmarks.append(
+			{"chunk_coord": RegionalTrade.chunk_coord_of(settlement_id), "id": settlement_id}
+		)
+
+	var visible: Array = MapProjection.landmarks_visible_on_map(explored, known_landmarks)
+	if visible.is_empty():
+		_dev_console.log_line("No known settlements fall inside explored territory yet.")
+		return
+	var ids: Array = []
+	for landmark in visible:
+		ids.append(landmark.get("id"))
+	_dev_console.log_line("Settlements visible: %s" % ", ".join(ids))
+
+
+## /weatherglass -- requires "weather_glass" (docs/concept/wayfinding.md's
+## Weather glass item). Current sky plus WeatherForecast's own
+## instrument-grade-vague read of what's coming, never an exact-hour
+## cheat-omniscient forecast.
+func _handle_weatherglass_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a weather glass for.")
+		return
+	if not local_player.inventory.has("weather_glass"):
+		_dev_console.log_line("You don't have a weather glass.")
+		return
+
+	var current := _chunk_manager.current_weather(local_player.position)
+	var upcoming := _chunk_manager.upcoming_weather(local_player.position)
+	_dev_console.log_line(
+		"Weather glass: %s now. %s." % [current, WeatherForecast.forecast_label(current, upcoming)]
+	)
+
+
+## /almanac -- requires "star_chart" (docs/concept/wayfinding.md's Star
+## chart item). Current season, the next one, and real days remaining until
+## it turns.
+func _handle_almanac_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a star chart for.")
+		return
+	if not local_player.inventory.has("star_chart"):
+		_dev_console.log_line("You don't have a star chart.")
+		return
+
+	var current := _chunk_manager.current_season()
+	var next_season := SeasonAlmanac.next_season(current)
+	var days := SeasonAlmanac.days_until_next_season(_chunk_manager.world_age_seconds())
+	_dev_console.log_line(
+		"Almanac: %s now, %s next (%.1f days)." % [current, next_season, days]
+	)
+
+
+## /deed -- requires "deed" (docs/concept/player_citizenship.md's Deed
+## item). Claims the plot the player currently stands on -- a marked,
+## unbuilt plot is a valid Deed target per that doc's own Deed section,
+## alongside an existing structure; no "nearest structure" query exists
+## yet, a named, in-spec scoping choice for this pass, not a shortcut
+## around the design. The tile -> chunk-coord conversion replicates
+## EarthChunkManager._chunk_coord_for_tile's own real formula exactly
+## (floori(tile / CHUNK_SIZE) per axis) rather than inventing a different one.
+func _handle_deed_command(local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to claim property for.")
+		return
+	if not local_player.inventory.has("deed"):
+		_dev_console.log_line("You don't have a deed.")
+		return
+
+	var tile := local_player.current_tile()
+	var chunk := Vector2i(
+		floori(float(tile.x) / EarthChunkManager.CHUNK_SIZE),
+		floori(float(tile.y) / EarthChunkManager.CHUNK_SIZE)
+	)
+	var property_id := EntityRef.for_kind("house", "player_claim_%d_%d" % [chunk.x, chunk.y])
+	var household := _chunk_manager.claim_property_with_deed(property_id)
+	_dev_console.log_line("Claimed %s for household %s." % [property_id, household.id])
+
+
+## /ledger propose <type> <counterparty_id> <consideration> <deadline_seconds>
+## /ledger accept|fulfill|breach <contract_id>
+## -- requires "ledger" (docs/concept/player_citizenship.md's Ledger item).
+## Obligations authoring is out of scope for this pass -- propose always
+## sends an empty obligations array, a named gap, not an oversight.
+func _handle_ledger_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to use a ledger for.")
+		return
+	if not local_player.inventory.has("ledger"):
+		_dev_console.log_line("You don't have a ledger.")
+		return
+	if args.is_empty():
+		_dev_console.log_line(
+			"Usage: /ledger propose <type> <counterparty_id> <consideration> <deadline_seconds>"
+			+ "  |  /ledger accept|fulfill|breach <contract_id>"
+		)
+		return
+
+	var sub: String = args[0]
+	match sub:
+		"propose":
+			if args.size() < 5:
+				_dev_console.log_line(
+					"Usage: /ledger propose <type> <counterparty_id> <consideration> <deadline_seconds>"
+				)
+				return
+			var type: String = args[1]
+			var counterparty_id: String = args[2]
+			var consideration: String = args[3]
+			var deadline: float = str(args[4]).to_float()
+			var contract := _chunk_manager.player_propose_contract(
+				type, counterparty_id, [], consideration, deadline
+			)
+			_dev_console.log_line("Proposed contract %s." % contract.id)
+		"accept":
+			if args.size() < 2:
+				_dev_console.log_line("Usage: /ledger accept <contract_id>")
+				return
+			var contract_id: String = args[1]
+			_dev_console.log_line("Accepted: %s" % _chunk_manager.accept_contract(contract_id))
+		"fulfill":
+			if args.size() < 2:
+				_dev_console.log_line("Usage: /ledger fulfill <contract_id>")
+				return
+			var contract_id: String = args[1]
+			_dev_console.log_line("Fulfilled: %s" % _chunk_manager.fulfill_contract(contract_id))
+		"breach":
+			if args.size() < 2:
+				_dev_console.log_line("Usage: /ledger breach <contract_id>")
+				return
+			var contract_id: String = args[1]
+			_dev_console.log_line("Breached: %s" % _chunk_manager.breach_contract(contract_id))
+		_:
+			_dev_console.log_line(
+				"Unknown /ledger action '%s'. Try: propose, accept, fulfill, breach" % sub
+			)
+
+
+## /charter found <type> <counterparty_id> -- requires "charter" (docs/
+## concept/player_citizenship.md's Charter item). No craftable "charter"
+## item id exists yet -- a named, pre-existing gap (none of the other 9
+## wayfinding/citizenship items' registration pass covered this one, per
+## docs/progress.md's own Player Citizenship entry) -- so this command is
+## real and fully wired but currently unreachable by a player until that
+## item is registered.
+func _handle_charter_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to use a charter for.")
+		return
+	if not local_player.inventory.has("charter"):
+		_dev_console.log_line("You don't have a charter.")
+		return
+	if args.size() < 3 or str(args[0]) != "found":
+		_dev_console.log_line("Usage: /charter found <type> <counterparty_id>")
+		return
+
+	var type: String = args[1]
+	var counterparty_id: String = args[2]
+	var institution := _chunk_manager.player_attempt_institution_formation(type, counterparty_id)
+	if institution == null:
+		_dev_console.log_line("Not enough shared history yet.")
+		return
+	_dev_console.log_line("Founded institution %s." % institution.id)
+
+
+## /journal <entity_id> -- requires "field_journal" (docs/concept/
+## player_citizenship.md's Field Journal item). Builds the stores
+## Dictionary FieldJournal.entry_for needs directly from _chunk_manager's
+## own public store accessors (household_store()/institution_store()/
+## world_boss_store()/event_store()) -- the exact same accessors /household,
+## /institution, /boss, and /history already read directly in this file, so
+## no new coordinator method was needed on EarthChunkManager.
+func _handle_journal_command(args: Array, local_player: Player) -> void:
+	if local_player == null:
+		_dev_console.log_line("No local player to read a field journal for.")
+		return
+	if not local_player.inventory.has("field_journal"):
+		_dev_console.log_line("You don't have a field journal.")
+		return
+	if args.is_empty():
+		_dev_console.log_line("Usage: /journal <entity_id>  e.g. /journal settlement:673_127")
+		return
+
+	var entity_id: String = args[0]
+	var stores := {
+		"household_store": _chunk_manager.household_store(),
+		"institution_store": _chunk_manager.institution_store(),
+		"world_boss_store": _chunk_manager.world_boss_store(),
+		"event_store": _chunk_manager.event_store(),
+	}
+	for line in FieldJournal.entry_for(entity_id, stores).split("
+"):
+		_dev_console.log_line(line)
+
+
 ## Spawns a clickable ground item where a creature died or a tree dropped
 ## forage. Only the simulation-owning side (server/singleplayer) holds the
 ## authoritative item layer for now -- ground items aren't replicated yet.
@@ -1831,21 +3358,42 @@ func _update_player_health_bar(local_player: Player) -> void:
 		_death_label.text = "You Died\nRespawning in %d..." % ceili(maxf(remaining, 0.0))
 
 
-## Hunger/thirst bars fill up as satisfaction (1.0 - the meter, which itself
-## rises toward 1.0 as hunger/thirst worsen) so a FULL bar reads as "doing
-## fine", matching the health bar's full-is-good convention; the stamina bar
-## just shows stamina directly (already 1.0 = full/good).
+## The reserve left of a meter SurvivalMeters stores as a DEFICIT.
+##
+## hunger and thirst rise toward 1.0 as they worsen (that is how the model
+## integrates them); stamina and warmth are already stored the other way up.
+## The HUD shows all four as reserves so that one panel never means two
+## opposite things at once -- reported: "Hunger 100%" printed over an EMPTY
+## bar, two rows above "Warmth 100%" over a full one. Pinned by
+## test_world_hud.gd; see docs/concept/hud.md and docs/concept/survival.md.
+static func reserve_for_deficit(deficit: float) -> float:
+	return clampf(1.0 - deficit, 0.0, 1.0)
+
+
+## One meter's label. Takes the SAME reserve fraction the bar beside it is
+## filled with, so the number and the bar are the same value by construction
+## rather than by two lines agreeing to stay in step.
+static func meter_label_text(meter_name: String, reserve: float) -> String:
+	return "%s %d%%" % [meter_name, int(round(clampf(reserve, 0.0, 1.0) * 100.0))]
+
+
+## Every meter reads as a RESERVE: full is good, and the number always says
+## the same thing as the bar under it -- the same convention the health bar
+## has always used. Food and Water are named for what is LEFT rather than for
+## what is missing (see reserve_for_deficit).
 func _update_survival_bar(local_player: Player) -> void:
 	var s := local_player.survival
-	_hunger_fill.size.x = _health_bar.fill_width(1.0 - s.hunger, 1.0, SURVIVAL_BAR_WIDTH)
-	_hunger_label.text = "Hunger %d%%" % int(s.hunger * 100)
-	_thirst_fill.size.x = _health_bar.fill_width(1.0 - s.thirst, 1.0, SURVIVAL_BAR_WIDTH)
-	_thirst_label.text = "Thirst %d%%" % int(s.thirst * 100)
+	var food := reserve_for_deficit(s.hunger)
+	_hunger_fill.size.x = _health_bar.fill_width(food, 1.0, SURVIVAL_BAR_WIDTH)
+	_hunger_label.text = meter_label_text("Food", food)
+	var water := reserve_for_deficit(s.thirst)
+	_thirst_fill.size.x = _health_bar.fill_width(water, 1.0, SURVIVAL_BAR_WIDTH)
+	_thirst_label.text = meter_label_text("Water", water)
 	_stamina_fill.size.x = _health_bar.fill_width(s.stamina, 1.0, SURVIVAL_BAR_WIDTH)
-	_stamina_label.text = "Stamina %d%%" % int(s.stamina * 100)
+	_stamina_label.text = meter_label_text("Stamina", s.stamina)
 	_warmth_fill.size.x = _health_bar.fill_width(s.warmth, 1.0, SURVIVAL_BAR_WIDTH)
 	var warmth_state := "Freezing" if s.is_freezing() else ("Cold" if s.is_cold() else "Warmth")
-	_warmth_label.text = "%s %d%%" % [warmth_state, int(s.warmth * 100)]
+	_warmth_label.text = meter_label_text(warmth_state, s.warmth)
 	_wallet_label.text = "Gold: %d" % local_player.wallet.balance
 
 
@@ -2007,7 +3555,7 @@ func _update_minimap(player_tile: Vector2i, delta: float) -> void:
 func _on_peer_connected(peer_id: int) -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(peer_id)
-	player.position = _spawn_position_for_tile(_compute_dry_land_spawn_tile())
+	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	_players.add_child(player)
 	# So its pack ages and, once something in it turns, smells (see
@@ -2043,7 +3591,7 @@ func _stats_with_dna(base: Dictionary, dna_stat_modifiers: Dictionary) -> Dictio
 func _spawn_local_singleplayer() -> void:
 	var player := PlayerScene.instantiate()
 	player.name = str(multiplayer.get_unique_id())
-	player.position = _spawn_position_for_tile(_compute_dry_land_spawn_tile())
+	player.position = _spawn_position_for_tile(await _compute_dry_land_spawn_tile())
 	player.respawn_position = player.position
 	player.apply_class(
 		_pending_class,
@@ -2091,7 +3639,7 @@ func _spawn_local_singleplayer_from_save() -> void:
 	# own save left off, never re-roll a new random start the way New Game
 	# does).
 	_chunk_manager.load_world_clock()
-	_chunk_manager.update(_tile_for_position(saved_position))
+	await _chunk_manager.update_with_progress(_tile_for_position(saved_position), _on_chunk_load_progress)
 	player.apply_save_dict(save_data)
 	# Restores whatever history and memory a prior session recorded -- the
 	# same "Load Game means exactly where you left off" pillar the player
@@ -2102,6 +3650,7 @@ func _spawn_local_singleplayer_from_save() -> void:
 	_chunk_manager.load_contract_store()
 	_chunk_manager.load_market_store()
 	_chunk_manager.load_institution_store()
+	_chunk_manager.load_world_boss_store()
 
 
 ## The world position a player spawning on `tile` should take: the tile's
@@ -2149,6 +3698,7 @@ func _save_local_player(player: Player) -> void:
 	_chunk_manager.save_contract_store()
 	_chunk_manager.save_market_store()
 	_chunk_manager.save_institution_store()
+	_chunk_manager.save_world_boss_store()
 	# The world clock too -- without this, New Game's random starting point
 	# (see EarthChunkManager.randomize_world_age) would never actually reach
 	# disk, and a Load Game would fall back to the pre-persistence default of
@@ -2190,7 +3740,7 @@ func _compute_dry_land_spawn_tile() -> Vector2i:
 		_geo_coordinates.tile_for_longitude(SPAWN_LONGITUDE, EarthChunkGenerator.WORLD_WIDTH_TILES),
 		_geo_coordinates.tile_for_latitude(SPAWN_LATITUDE, EarthChunkGenerator.WORLD_HEIGHT_TILES)
 	)
-	_chunk_manager.update(spawn_tile)
+	await _chunk_manager.update_with_progress(spawn_tile, _on_chunk_load_progress)
 	var dry_land_tile := _find_dry_land_spawn(spawn_tile)
 	# The real dry-land spawn tile is also the center of the EASY-difficulty
 	# region (see RegionDifficulty / docs/concept/ecosystem_dynamics.md's
@@ -2206,6 +3756,8 @@ const MAX_GROUND_ITEMS := 80
 
 
 func _process(delta: float) -> void:
+	if not _world_ready:
+		return
 	# Ages every recorded water disturbance (fish/player/animal ripples) so
 	# its ring actually expands and fades -- every frame, every client, not
 	# gated behind _owns_ecosystem_simulation() like the simulation steps
@@ -2223,8 +3775,23 @@ func _process(delta: float) -> void:
 	if focus_player != null:
 		_chunk_manager.set_grass_walker_position(focus_player.position)
 	if _owns_ecosystem_simulation():
-		# Normally one slice carrying the frame's own delta; several when
-		# /ecotest is running the year fast (see TimeLapse).
+		# The CALENDAR first, at the rate actually asked for: seasons, fruit
+		# ripening and tree growth all read the clock, and they are what
+		# /ecotest exists to let someone watch. At normal speed this is
+		# exactly the frame's own delta, so nothing changes off the lapse.
+		_chunk_manager.advance_world_age(
+			TimeLapse.calendar_seconds(delta, _ecology_time_scale)
+		)
+		# Real in-flight regional-trade caravans (see docs/concept/trade.md)
+		# read the clock rather than a delta, so they belong with the clock:
+		# once, right after it moves. They used to run per slice, back when
+		# each slice moved the clock -- now every slice within a frame would
+		# see the same world age and redo identical work.
+		_chunk_manager.step_caravans()
+		# The STEPPING keeps its measured per-frame budget (see TimeLapse):
+		# normally one slice carrying the frame's own delta, several when
+		# /ecotest is running the year fast, never more than the frame can
+		# get through.
 		# Two groups, at two cadences -- see _step_ecology_fine and
 		# _step_ecology_batch.
 		var slices := TimeLapse.slices(delta, _ecology_time_scale)
@@ -2279,11 +3846,19 @@ func _step_path_scarring(delta: float) -> void:
 		if not _scarred_tiles.has(tile):
 			if _chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.EARTH_TILE_ID):
 				_scarred_tiles[tile] = true
+				# Emergence Phase 8 (see docs/concept/infrastructure.md,
+				# EarthChunkManager.record_path_worn_if_new): the same real
+				# state transition that renders a worn path also records it
+				# as a real, /why-inspectable event -- "repeated movement
+				# creates infrastructure" made concrete, not just a texture
+				# change.
+				_chunk_manager.record_path_worn_if_new(tile)
 
 	for tile in _scarred_tiles.keys().duplicate():
 		if not _path_scarring.is_worn(tile):
 			_chunk_manager.destroy_at_global(tile.x, tile.y)
 			_scarred_tiles.erase(tile)
+			_chunk_manager.record_path_reclaimed(tile)
 
 
 ## Pebble dispersion (see PebbleDispersion, docs/concept/stone.md): walking
@@ -2587,9 +4162,9 @@ func _offset_hash(position: Vector2, salt: int) -> float:
 ## from the menu HOSTS it (see _start_server), so `multiplayer_peer` is set,
 ## `_is_dedicated_server` is false, and this returned false. Measured live:
 ## `owns=false`, `age=0` -- meaning step_flowers/step_worms/step_fruiting/
-## step_tree_spread never ran at all, and because step_tree_spread is what
-## advances `_world_age_seconds`, the world clock was frozen at zero, so the
-## season and weather never changed either. That is why nothing ever grew,
+## step_tree_spread never ran at all, and because the world clock is advanced
+## from inside this same `owns` branch (see _process), `_world_age_seconds`
+## was frozen at zero, so the season and weather never changed either. That is why nothing ever grew,
 ## no worm ever surfaced ("no worms in rain" -- it had never actually
 ## rained), no fruit ever fell, and the robin had nothing to hunt. A player
 ## hosting their own world IS the authority for it.
@@ -2612,27 +4187,82 @@ func _owns_ecosystem_simulation() -> bool:
 
 
 ## Whether lighting should be pinned to full sun instead of following the real
-## UTC-driven solar elevation. Day is the DEFAULT during development: a debug
-## build that happens to be run after sunset otherwise renders a dark world
-## nothing can be evaluated in, and every dev launch would have to remember to
-## set an env var. Exported builds still follow real time, so the shipped
-## day/night cycle is unaffected. Precedence, highest first: the live console
-## toggle (/day), the env var, then the build type. Pinned by
+## UTC-driven solar elevation. Precedence, highest first: the live console
+## toggle (/day), then the env var.
+##
+## There is deliberately NO build-type default any more. This used to end in
+## `return is_debug`, so every debug build was permanent noon -- sun elevation
+## 90 at two in the morning -- and nobody developing the game ever saw the
+## night the shipped build has; AA_DEBUG_ALWAYS_DAY=0 was the only escape and
+## nobody set it. /day, /night and /time <hh:mm> put a chosen sky one
+## keystroke away, which is what that default was really providing. Pinned by
 ## test_world_daylight_default.gd.
-static func always_day_for(force_day: bool, env_value: String, is_debug: bool) -> bool:
-	if force_day:
-		return true
-	if env_value == "0":
-		return false
-	if env_value == "1":
-		return true
-	return is_debug
+static func always_day_for(force_day: bool, env_value: String) -> bool:
+	return force_day or env_value == "1"
 
 
-func _always_day() -> bool:
-	return always_day_for(
-		_force_day, OS.get_environment(DEBUG_ALWAYS_DAY_ENV), OS.is_debug_build()
-	)
+## Night's tint floor and day's tint ceiling for DayNightTint (see
+## day_night_tint_for below). Reported directly: "I can barely see at night" --
+## the old inline floor (0.2, 0.2, 0.3) was too dark to read the scene by.
+## Real-world grounding: even with the sun fully below the horizon, moonlight
+## + starlight + skyglow give real usable outdoor vision -- night is dim and
+## blue-shifted, never pitch black, the same "never fully black" floor most
+## games deliberately keep for playability. Blue sits noticeably higher than
+## red/green (a cool, moonlit cast), rather than a uniformly dimmed copy of
+## daylight. DAY_TINT is unchanged from the previous formula's sunlight=1.0
+## case (neutral, undimmed) -- only the night floor moved.
+const NIGHT_TINT := Color(0.4, 0.4, 0.55)
+const DAY_TINT := Color(1.0, 1.0, 1.0)
+
+
+## The DayNightTint color for a given sunlight_intensity() value -- a plain
+## linear interpolation between the pinned night floor and day ceiling.
+## Extracted out of the per-frame lighting step (see _client_process) so the
+## actual endpoint values are testable rather than an inline literal nobody
+## could pin (see test_world_daylight_default.gd's own day/night tint
+## section).
+static func day_night_tint_for(sunlight: float) -> Color:
+	return NIGHT_TINT.lerp(DAY_TINT, clampf(sunlight, 0.0, 1.0))
+
+
+## The elevation to light the world by: whichever sky the console pinned,
+## else the real one just computed. ONE place decides, so /day and /night can
+## never disagree about which wins -- and a live /night beats a stale
+## AA_DEBUG_ALWAYS_DAY=1 from launch, since whoever is typing now is more
+## current than whoever set the variable.
+static func forced_elevation_for(
+	forced_sky: String, env_value: String, real_elevation: float
+) -> float:
+	if forced_sky == "night":
+		return ALWAYS_NIGHT_ELEVATION
+	if always_day_for(forced_sky == "day", env_value):
+		return ALWAYS_DAY_ELEVATION
+	return real_elevation
+
+
+## Parses a /time argument -- "22:30", or a bare "22" -- into a local clock
+## hour in [0,24), or NO_FORCED_HOUR when it is not a real time. Pure and
+## separate from the live clock, the same way
+## ecology_scale_for_console_argument already is for /ecotest.
+static func clock_hour_for_console_argument(text: String) -> float:
+	var parts := text.split(":")
+	if parts.size() > 2 or not parts[0].is_valid_int():
+		return NO_FORCED_HOUR
+	var hours := int(parts[0])
+	var minutes := 0
+	if parts.size() == 2:
+		if not parts[1].is_valid_int():
+			return NO_FORCED_HOUR
+		minutes = int(parts[1])
+	if hours < 0 or hours > 23 or minutes < 0 or minutes > 59:
+		return NO_FORCED_HOUR
+	return float(hours) + float(minutes) / 60.0
+
+
+## Whether a console command's arguments say "off" -- shared by /day, /night
+## and /time so one word clears any of them.
+static func is_off_argument(args: Array) -> bool:
+	return args.size() > 0 and str(args[0]).to_lower() == "off"
 
 
 ## Every connected player gets a working chunk_manager reference so its
@@ -2665,7 +4295,29 @@ func _client_process(delta: float) -> void:
 		if player != null and not player.is_set_up():
 			player.setup(_chunk_manager, TerrainRenderer.TILE_SIZE)
 
-	_chunk_manager.update(local_player.current_tile())
+	# Covers the joining-client version of the same New Game/Load Game
+	# loading stall (see _on_menu_join_requested): unlike those two, a joining
+	# client has no single call site to wrap -- its local player only exists
+	# once the server's own spawn has replicated in, and its first real chunk
+	# load happens on whichever _client_process frame that lands on. Run via
+	# a separate fire-and-forget async task (_run_initial_client_chunk_load)
+	# rather than awaiting right here -- _client_process itself stays a plain
+	# synchronous per-frame function, so suspending across frames doesn't also
+	# suspend every per-frame UI update below. While that task is in flight,
+	# skip the plain update() below entirely: update_with_progress already
+	# owns the manager's chunk state for this stretch, and calling update()
+	# concurrently on the same EarthChunkManager instance would race it. Once
+	# done, ordinary per-frame update() calls resume exactly as before --
+	# this also correctly covers New Game/Load Game, whose local player
+	# reaches here only after their own update_with_progress call already
+	# finished, so this one-shot task just re-confirms nothing is pending and
+	# completes without ever needing to await a frame.
+	if not _initial_client_chunk_load_done:
+		if not _initial_client_chunk_load_task_running:
+			_initial_client_chunk_load_task_running = true
+			_run_initial_client_chunk_load(local_player.current_tile())
+	else:
+		_chunk_manager.update(local_player.current_tile())
 
 	var player_tile := local_player.current_tile()
 	_update_minimap(player_tile, delta)
@@ -2683,10 +4335,14 @@ func _client_process(delta: float) -> void:
 		_update_hover_tooltip()
 	_update_survival_bar(local_player)
 	_update_xp_bar(local_player)
+	_update_land_sense_label(local_player)
 	_update_fishing_label(local_player)
 	_update_lasso_label(local_player)
 	_update_trade_label(local_player)
 	_update_talk_label(local_player)
+	# The banners keep their own text; the whole stack steps aside while a
+	# window is open (see world_hint_visible_for).
+	_message_stack.visible = world_hint_visible_for(true, _any_gameplay_window_open())
 	_update_interaction_prompt(local_player)
 	_update_charge_meter(local_player)
 	_refresh_skill_window(local_player)
@@ -2697,14 +4353,56 @@ func _client_process(delta: float) -> void:
 	# Real-world UTC time drives lighting directly: day/night always matches
 	# what the sun is actually doing right now at the player's real-world
 	# latitude/longitude, not an accelerated or arbitrary in-game clock --
-	# unless overridden by DEBUG_ALWAYS_DAY_ENV for dev/testing.
+	# unless the console has pinned a sky (/day, /night) or a clock (/time),
+	# or DEBUG_ALWAYS_DAY_ENV pinned day for the whole session at launch.
 	var utc := Time.get_datetime_dict_from_system(true)
 	var day_of_year := _solar_position.day_of_year(utc.year, utc.month, utc.day)
 	var utc_hour: float = utc.hour + utc.minute / 60.0 + utc.second / 3600.0
+	# /time <hh:mm> pins the LOCAL clock, converted back here to the UTC hour
+	# that produces it (SolarPosition.utc_hour_for_local) -- so the displayed
+	# clock, the sun's elevation and its azimuth/hillshading all move
+	# together instead of the readout drifting away from the sky.
+	if _forced_local_hour != NO_FORCED_HOUR:
+		utc_hour = _solar_position.utc_hour_for_local(_forced_local_hour, longitude)
 
-	var elevation := ALWAYS_DAY_ELEVATION if _always_day() else _solar_position.elevation_degrees(
-		latitude, longitude, day_of_year, utc_hour
+	var elevation := forced_elevation_for(
+		_forced_sky,
+		OS.get_environment(DEBUG_ALWAYS_DAY_ENV),
+		_solar_position.elevation_degrees(latitude, longitude, day_of_year, utc_hour)
 	)
+	# Easter-egg sighting cameos (docs/concept/easter_eggs.md) -- gated on
+	# the same real sun elevation day/night lighting already uses, so
+	# "spookier at night" (the Jersey Devil) means the same thing here as it
+	# does for the lights overhead.
+	_easter_egg_check_accumulator += delta
+	if _easter_egg_check_accumulator >= EASTER_EGG_CHECK_INTERVAL:
+		_easter_egg_check_accumulator = 0.0
+		_check_easter_egg_sightings(player_tile, elevation <= 0.0)
+		# Squallmaw/Coilnecca/Champ -- real, rare, spawnable cameos, checked
+		# on the same cadence/roll as the flavor-text-only sightings above
+		# (see EasterEggCreatures' own doc comment for why this is a
+		# separate module rather than folded into EasterEggSightings).
+		_check_easter_egg_creature_spawns(player_tile, local_player)
+		# Back to the Future Day -- gated on the REAL system calendar
+		# date (utc.month/utc.day), not a rarity roll like every cameo
+		# above; see _check_back_to_the_future_day's own doc comment.
+		_check_back_to_the_future_day(utc.month, utc.day)
+		# Rush ambient nod -- location alone triggers this one, no roll;
+		# see _check_rush_ambient_cue's own doc comment.
+		_check_rush_ambient_cue(player_tile)
+		# Monty Python's Bridgekeeper -- a rare encounter roll, same cadence
+		# as the sightings above; see _check_bridgekeeper_encounter's own
+		# doc comment.
+		_check_bridgekeeper_encounter(player_tile)
+	# The Zork-homage terminal and the signed secret room both key off a
+	# single-frame Input.is_action_just_pressed edge (see each function's own
+	# doc comment for why they can't share the throttled block above --
+	# throttling to EASTER_EGG_CHECK_INTERVAL would drop most real presses).
+	_check_ancient_terminal(player_tile, local_player)
+	_check_signed_secret_room(player_tile, local_player)
+	_check_sea_cave_guardian(player_tile)
+	_check_retro_handheld(player_tile)
+	_update_easter_egg_label(delta)
 	# Real sun compass bearing, for hillshading (see HillshadeShader,
 	# docs/concept/terrain_relief.md) -- same real inputs as elevation just
 	# above, so mountain shading is driven by the exact same sun as day/
@@ -2720,7 +4418,7 @@ func _client_process(delta: float) -> void:
 	var local_hour_whole := int(local_hour)
 	var local_minute := int((local_hour - float(local_hour_whole)) * 60.0)
 	var sunlight := _solar_position.sunlight_intensity(elevation)
-	_day_night.color = Color(0.2 + sunlight * 0.8, 0.2 + sunlight * 0.8, 0.3 + sunlight * 0.7)
+	_day_night.color = day_night_tint_for(sunlight)
 	# Drives every creature's silhouette shadow length (see DropShadow.
 	# stretch_for_elevation / CreatureMarker.sun_elevation_deg) with the same
 	# real sun position already computed for day/night lighting above.
@@ -2753,6 +4451,18 @@ func _client_process(delta: float) -> void:
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).
 	_chunk_manager.set_sun_position(elevation, azimuth)
+	# The GROUND carries the season too, not just the canopy above it (see
+	# SeasonalFoliage / concept/seasons.md "The ground carries the season
+	# too"). Forcing winter used to give bare trees standing on a bright
+	# summer lawn, in lush grass, over green crop tops -- the season was
+	# something that happened to IllustratedTree's four canopy frames and to
+	# nothing else. Read off the same world clock every other season reader
+	# uses, so the lawn and the canopy can never disagree about the month.
+	# One shader-parameter write; invalidates no atlas (pinned by
+	# test_a_season_turn_changes_the_material_and_not_one_pixel_of_the_atlas).
+	var foliage_tint := SeasonalFoliage.tint_for_world_age(_chunk_manager.world_age_seconds())
+	_ground_tint.set_season_tint(foliage_tint)
+	_chunk_manager.set_season_tint(foliage_tint)
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"

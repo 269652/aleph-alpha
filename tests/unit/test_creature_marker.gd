@@ -9,6 +9,9 @@ const Taming = preload("res://src/gameplay/taming.gd")
 const MammalGrowth = preload("res://src/gameplay/mammal_growth.gd")
 const AnimalReproduction = preload("res://src/gameplay/animal_reproduction.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
+const Carcass = preload("res://src/rendering/carcass.gd")
+const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
+const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 
 const TILE_SIZE := 16
 
@@ -22,14 +25,30 @@ class StubWorld:
 		return biome
 
 
+## A StubWorld that also answers the herd (foot-and-mouth-like) disease
+## transmission queries CreatureMarker asks EarthChunkManager for (see
+## _herd_disease_step) -- population comfortably over capacity so
+## DiseaseModel.herd_transmission_chance rolls near-certain, keeping the
+## transmission test deterministic rather than depending on a lucky seed.
+class DiseaseCapableStubWorld:
+	extends StubWorld
+	func herbivore_population_near(_pixel_position: Vector2) -> float:
+		return 100.0
+	func herbivore_capacity_near(_pixel_position: Vector2) -> float:
+		return 1.0
+
+
 class StubPlayer:
 	extends Node2D
 	var damage_taken := 0.0
 	var venom_applications := 0
+	var disease_bites: Array = []
 	func take_damage(amount: float) -> void:
 		damage_taken += amount
 	func apply_venom() -> void:
 		venom_applications += 1
+	func apply_disease_bite(disease_id: String) -> void:
+		disease_bites.append(disease_id)
 
 
 ## A rigged CreatureWander whose "no resource in sight, range outward to
@@ -75,6 +94,12 @@ func after_each():
 	for node in _extra:
 		if is_instance_valid(node):
 			node.free()
+	# A lethal take_damage() call anywhere in this file now leaves a real
+	# Carcass sibling behind (see docs/concept/carrion.md) -- swept here
+	# rather than patched into every individual death test, so a stray one
+	# never leaks into whatever test runs next.
+	for carcass in get_tree().get_nodes_in_group(Carcass.GROUP_NAME):
+		carcass.free()
 	CreatureMarker.sun_elevation_deg = CreatureMarker.DEFAULT_SUN_ELEVATION_DEG
 	_extra = []
 
@@ -181,6 +206,44 @@ func test_take_damage_reduces_info_health():
 	var before := marker.info.health
 	marker.take_damage(5.0)
 	assert_eq(marker.info.health, before - 5.0)
+
+
+# -- world boss aggro gating (docs/concept/worldbosses.md, BossAggro) -------
+
+func test_a_weak_hit_against_an_unaggroed_world_boss_deals_no_damage():
+	marker.info = CreatureInfo.new("krampus")
+	var before := marker.info.health
+	marker.take_damage(0.01)  # far below any real fraction-of-max-health threshold
+	assert_eq(marker.info.health, before)
+
+
+func test_a_weak_hit_against_an_unaggroed_world_boss_does_not_aggro_it():
+	marker.info = CreatureInfo.new("krampus")
+	marker.take_damage(0.01)
+	assert_false(marker.info.is_aggroed)
+
+
+func test_a_real_hit_against_an_unaggroed_world_boss_damages_it_and_aggros_it():
+	marker.info = CreatureInfo.new("krampus")
+	var before := marker.info.health
+	marker.take_damage(marker.info.max_health)  # unmistakably above any threshold
+	assert_lt(marker.info.health, before)
+	assert_true(marker.info.is_aggroed)
+
+
+func test_once_aggroed_even_a_weak_hit_still_deals_damage():
+	marker.info = CreatureInfo.new("krampus")
+	marker.info.is_aggroed = true
+	var before := marker.info.health
+	marker.take_damage(0.01)
+	assert_lt(marker.info.health, before)
+
+
+func test_non_boss_species_are_unaffected_by_the_aggro_gate():
+	marker.info = CreatureInfo.new("herbivore")
+	var before := marker.info.health
+	marker.take_damage(0.01)
+	assert_lt(marker.info.health, before, "an ordinary creature takes any amount of damage, no threshold")
 
 
 func test_has_a_visible_health_bar_at_full_health():
@@ -388,11 +451,22 @@ func test_take_damage_frees_the_marker_once_health_reaches_zero():
 	assert_true(marker.is_queued_for_deletion())
 
 
-func test_dying_drops_its_species_loot_via_the_world_item_bus():
-	# A herbivore drops 2 stacks (hide + meat) -- see LootTable.
+## Dying no longer instantly sprays loot (see docs/concept/carrion.md) --
+## the exact "evaporates instead of being cut down" pattern already fixed
+## once for trees. A carcass-eligible species (herbivore has hide+meat in
+## LootTable) leaves a real Carcass behind instead; hide/meat only reach
+## the world-item bus once a player actually butchers it. Delta-based
+## rather than assuming a zero baseline -- other tests in this file kill
+## creatures too, and after_each sweeps whatever carcass each one leaves,
+## not every individual test.
+func test_dying_leaves_a_carcass_instead_of_instant_loot():
 	watch_signals(WorldItemBus)
+	var before := get_tree().get_nodes_in_group(Carcass.GROUP_NAME).size()
 	marker.take_damage(marker.info.max_health)
-	assert_signal_emit_count(WorldItemBus, "item_dropped", 2)
+	assert_signal_emit_count(WorldItemBus, "item_dropped", 0)
+	var carcasses := get_tree().get_nodes_in_group(Carcass.GROUP_NAME)
+	assert_eq(carcasses.size(), before + 1)
+	assert_eq(carcasses[carcasses.size() - 1].species, "herbivore")
 
 
 func test_a_non_lethal_hit_drops_no_loot():
@@ -663,6 +737,171 @@ func test_nonvenomous_predator_does_not_apply_venom():
 
 	assert_gt(player.damage_taken, 0.0)
 	assert_eq(player.venom_applications, 0, "an ordinary predator's bite should not apply venom")
+
+
+# -- disease (see docs/concept/disease.md / DiseaseModel) ---------------------
+
+func test_a_new_marker_starts_disease_free():
+	assert_eq(marker.disease_state, DiseaseModel.State.SUSCEPTIBLE)
+	assert_eq(marker.disease_id, "")
+	assert_eq(marker.disease_severity, 0.0)
+
+
+func test_apply_disease_bite_infects_a_susceptible_creature():
+	marker.apply_disease_bite(DiseaseModel.HERD)
+	assert_eq(marker.disease_state, DiseaseModel.State.INFECTED)
+	assert_eq(marker.disease_id, DiseaseModel.HERD)
+
+
+func test_apply_disease_bite_does_nothing_once_already_infected():
+	marker.apply_disease_bite(DiseaseModel.HERD)
+	marker._disease_step(5.0)  # let severity climb off zero
+	var severity_before: float = marker.disease_severity
+	marker.apply_disease_bite(DiseaseModel.CARRION)  # a second, different exposure
+	assert_eq(marker.disease_id, DiseaseModel.HERD, "an already-infected creature keeps its ORIGINAL disease")
+	assert_eq(marker.disease_severity, severity_before)
+
+
+func test_disease_step_does_nothing_while_susceptible():
+	marker._disease_step(5.0)
+	assert_eq(marker.disease_severity, 0.0)
+	assert_eq(marker.disease_state, DiseaseModel.State.SUSCEPTIBLE)
+
+
+func test_disease_step_increases_severity_while_infected():
+	marker.apply_disease_bite(DiseaseModel.HERD)
+	marker._disease_step(5.0)
+	assert_gt(marker.disease_severity, 0.0)
+
+
+## A disease death must route through the EXACT same carcass path a
+## predation kill already uses (docs/concept/disease.md "Feeds carrion") --
+## verified the same way test_dying_leaves_a_carcass_instead_of_instant_loot
+## verifies take_damage's own death path.
+func test_a_lethal_disease_death_leaves_a_carcass_and_frees_the_marker():
+	var before := get_tree().get_nodes_in_group(Carcass.GROUP_NAME).size()
+	marker.apply_disease_bite(DiseaseModel.CARRION)  # lethal-capable archetype
+	# A huge delta drives DiseaseModel's per-second death chance past 1.0 --
+	# deterministic regardless of seed (see test_disease_model.gd's own
+	# identical trick), not a flaky roll.
+	marker._disease_step(1000.0)
+	assert_true(marker.is_queued_for_deletion())
+	var carcasses := get_tree().get_nodes_in_group(Carcass.GROUP_NAME)
+	assert_eq(carcasses.size(), before + 1)
+
+
+func test_infected_predator_spreads_disease_when_it_bites_the_player():
+	var predator := _make_predator(Vector2(100, 100))
+	predator.apply_disease_bite(DiseaseModel.PREDATOR)
+	# HARD region pressure (2.4x) on top of the 0.5 base bite chance clamps
+	# the roll to certain -- deterministic regardless of seed, the same
+	# "push the chance past 1.0" trick test_disease_model.gd's own death-roll
+	# tests use, not a coin flip this test happens to win.
+	predator.region_tier = RegionDifficulty.Tier.HARD
+	var player := _add_stub_player(Vector2(108, 100))
+
+	predator._process(0.2)
+
+	assert_gt(player.damage_taken, 0.0, "the bite should still deal ordinary damage")
+	assert_eq(player.disease_bites, [DiseaseModel.PREDATOR])
+
+
+func test_healthy_predator_does_not_spread_disease_when_it_bites_the_player():
+	var predator := _make_predator(Vector2(100, 100))
+	var player := _add_stub_player(Vector2(108, 100))
+
+	predator._process(0.2)
+
+	assert_gt(player.damage_taken, 0.0)
+	assert_eq(player.disease_bites.size(), 0)
+
+
+## Visible symptoms (docs/concept/disease.md "What you see is what's real"):
+## reuses Sprite2D's own `modulate`, not a new rendering system.
+func test_an_infected_creature_is_visually_tinted():
+	var healthy_tint := marker.modulate
+	marker.apply_disease_bite(DiseaseModel.HERD)
+	marker._disease_step(0.1)
+	assert_ne(marker.modulate, healthy_tint, "an infected creature should visibly read as sick")
+
+
+## The doc's real "secondary effect": herd disease doesn't damage directly,
+## it makes the carrier measurably easier prey by slowing it down (see
+## DiseaseModel.movement_speed_multiplier).
+func test_herd_disease_severity_slows_an_infected_herbivores_movement():
+	var start := marker.position
+	marker.apply_disease_bite(DiseaseModel.HERD)
+	marker.disease_severity = 1.0  # full severity -- worst-case slowdown
+	marker._advance(Vector2.RIGHT, 100.0, 1.0)
+	var sick_distance := marker.position.distance_to(start)
+
+	marker.position = start
+	marker.disease_state = DiseaseModel.State.SUSCEPTIBLE
+	marker.disease_id = ""
+	marker._facing_commit_remaining = 0.0
+	marker._advance(Vector2.RIGHT, 100.0, 1.0)
+	var healthy_distance := marker.position.distance_to(start)
+
+	assert_lt(sick_distance, healthy_distance)
+
+
+func test_herd_disease_transmits_to_a_nearby_susceptible_herbivore():
+	var world := DiseaseCapableStubWorld.new()
+	marker.setup(world, TILE_SIZE)
+	marker.region_tier = RegionDifficulty.Tier.HARD
+	marker.apply_disease_bite(DiseaseModel.HERD)
+
+	var other := CreatureMarker.new()
+	other.info = CreatureInfo.new("herbivore")
+	other.position = marker.position + Vector2(5, 0)
+	other.home = other.position
+	other.wander_seed = 11
+	other.setup(world, TILE_SIZE)
+	add_child(other)
+	_extra.append(other)
+
+	marker._process(0.2)  # first _process always runs a sense tick immediately
+
+	assert_eq(other.disease_state, DiseaseModel.State.INFECTED)
+	assert_eq(other.disease_id, DiseaseModel.HERD)
+
+
+## Carrion (anthrax-like): docs/concept/disease.md's insect-vector chain ends
+## with "infecting herbivores that graze there afterward" -- simplified here
+## to direct proximity to the contaminated Carcass itself (this project has
+## no separately-tracked "contaminated patch of grass" object -- see
+## _carrion_disease_step's own doc comment).
+func test_a_herbivore_grazing_near_a_contaminated_carcass_is_exposed():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	marker.region_tier = RegionDifficulty.Tier.HARD  # clamps the graze roll to certain
+
+	var contaminated_carcass := Carcass.new()
+	contaminated_carcass.species = "boar"
+	contaminated_carcass.contaminated = true
+	contaminated_carcass.position = marker.position + Vector2(5, 0)
+	add_child(contaminated_carcass)
+	_extra.append(contaminated_carcass)
+
+	marker._process(0.2)
+
+	assert_eq(marker.disease_state, DiseaseModel.State.INFECTED)
+	assert_eq(marker.disease_id, DiseaseModel.CARRION)
+
+
+func test_a_herbivore_does_not_get_exposed_by_an_uncontaminated_carcass():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	marker.region_tier = RegionDifficulty.Tier.HARD
+
+	var clean_carcass := Carcass.new()
+	clean_carcass.species = "boar"
+	clean_carcass.contaminated = false
+	clean_carcass.position = marker.position + Vector2(5, 0)
+	add_child(clean_carcass)
+	_extra.append(clean_carcass)
+
+	marker._process(0.2)
+
+	assert_eq(marker.disease_state, DiseaseModel.State.SUSCEPTIBLE)
 
 
 func test_weakened_predator_flees_the_player_instead_of_attacking():

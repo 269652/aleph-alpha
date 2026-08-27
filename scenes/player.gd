@@ -10,13 +10,14 @@ const TileTargeting = preload("res://src/gameplay/tile_targeting.gd")
 const Item = preload("res://src/gameplay/item.gd")
 const Inventory = preload("res://src/gameplay/inventory.gd")
 const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
+const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Wallet = preload("res://src/gameplay/wallet.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ExperienceTrack = preload("res://src/gameplay/experience_track.gd")
 const SkillTree = preload("res://src/gameplay/skill_tree.gd")
 const KeystonePassive = preload("res://src/gameplay/keystone_passive.gd")
+const EcologicalLiteracy = preload("res://src/gameplay/ecological_literacy.gd")
 const Equipment = preload("res://src/gameplay/equipment.gd")
-const Smelting = preload("res://src/gameplay/smelting.gd")
 const FishingSession = preload("res://src/gameplay/fishing_session.gd")
 const MaterialDamage = preload("res://src/gameplay/material_damage.gd")
 const Block = preload("res://src/gameplay/block.gd")
@@ -25,6 +26,8 @@ const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const VenomModel = preload("res://src/gameplay/venom_model.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
+const Sickness = preload("res://src/gameplay/sickness.gd")
+const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const NpcGreeting = preload("res://src/world/npc_greeting.gd")
 const Hotbar = preload("res://src/gameplay/hotbar.gd")
@@ -37,6 +40,7 @@ const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
+const Carcass = preload("res://src/rendering/carcass.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
@@ -50,6 +54,7 @@ const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const Kick = preload("res://src/gameplay/kick.gd")
+const InputLatch = preload("res://src/gameplay/input_latch.gd")
 const Throwable = preload("res://src/gameplay/throwable.gd")
 const ChargeMeter = preload("res://src/gameplay/charge_meter.gd")
 const HeldItemThrow = preload("res://src/gameplay/held_item_throw.gd")
@@ -132,6 +137,13 @@ const INVENTORY_SLOTS := 12
 ## it, but you can't use one clear across a base either.
 const HEAT_SOURCE_RADIUS_TILES := 3
 
+## Same "standing near it" proximity range as HEAT_SOURCE_RADIUS_TILES,
+## named separately for the Sägewerk collection action (see _collect_step)
+## rather than repurposing a heat-source-specific constant name for an
+## unrelated structure -- same real tuned value, not a second invented
+## number.
+const SAGEWERK_COLLECT_RADIUS_TILES := HEAT_SOURCE_RADIUS_TILES
+
 ## How much a single eaten food item relieves hunger by (see eat_food()).
 const EAT_HUNGER_RELIEF := 0.4
 ## Thirst relief per second while standing in deep-enough water to be
@@ -201,6 +213,16 @@ var active_food_buffs: Array = []
 ## CreatureMarker._try_attack) -- DebuffStack-shaped, ticked down and
 ## dealing damage in _venom_step. Empty means not currently poisoned.
 var active_venom_debuffs: Array = []
+## Player-side disease spillover (docs/concept/disease.md "Player
+## spillover"): routed through the existing Sickness pure model (see
+## src/gameplay/sickness.gd) EXACTLY the way survival.md's own sickness
+## already works -- deliberately NOT a new VenomModel/DebuffStack-style
+## module. "" sickness_id means not currently sick. Ticked in
+## _sickness_step; set by apply_disease_bite (an infected predator's
+## zoonotic bite, or careless butchering of a contaminated carcass).
+var sickness_severity := 0.0
+var sickness_id := ""
+var sickness_diagnosed := false
 var wallet := Wallet.new()
 ## How many number-key hotbar slots exist. World derives its HUD row's slot
 ## count from this (see World.HOTBAR_SLOT_COUNT), so the two can't drift.
@@ -213,6 +235,9 @@ var hotbar := Hotbar.new(HOTBAR_SLOT_COUNT)
 var experience := ExperienceTrack.new()
 var skill_tree := SkillTree.new()
 var keystones := KeystonePassive.new()
+## XP-award arithmetic for non-combat "ecological literacy" sources (see
+## harvest_fruit_from_tree/sell_food_to_village, docs/concept/progression.md).
+var _ecological_literacy := EcologicalLiteracy.new()
 ## Worn armor (see Equipment): reduces incoming damage by its total armor.
 var equipment := Equipment.new()
 ## node_id/keystone_id -> true for every allocated skill (see SkillTree /
@@ -240,7 +265,6 @@ const XP_PER_KILL := 6
 ## mitigates, it doesn't make you invulnerable.
 const MIN_ARMORED_DAMAGE := 1.0
 var _crafting_recipe_book := CraftingRecipeBook.new()
-var _smelting := Smelting.new()
 var _fishing := FishingSession.new()
 ## Taming (see docs/concept/taming.md): the animal currently on the end of
 ## this player's lasso, and the point the rope's loose end is tied to (a tree)
@@ -359,6 +383,15 @@ var _stone_renderer := StoneRenderer.new()
 ## THAT the same way every other stone's mass is -- see StoneSize.mass_kg_for).
 var _hand_stone_diameter_cm := -1.0
 
+## The held-item concept, generalized beyond stones (reported live: "pick up
+## should put it in the hand first instead of the inventory" -- see
+## docs/concept/wild_crops.md's "a real physical entity, not just an
+## inventory grant"). null means nothing generic is held; a real ItemStack
+## is whatever's currently in hand. Mutually exclusive with
+## _hand_stone_diameter_cm -- only one thing occupies the hand at a time
+## (see is_holding_anything).
+var _hand_item_stack = null
+
 ## How long the pickup input has been continuously held THIS charge (reset
 ## on a fresh press while already holding something -- see _pickup_step).
 ## Fed to ChargeMeter.fraction_at every frame while charging.
@@ -383,6 +416,24 @@ var _last_build_input_state := false
 var _last_destroy_input_state := false
 var _last_pickup_input_state := false
 var _last_kick_input_state := false
+var _last_stash_input_state := false
+
+## The rising-edge ("tap") actions: one discrete thing per press, so losing
+## the press loses the whole action. These are the ones latched on the input
+## EVENT (see _unhandled_input / InputLatch), because a tap shorter than one
+## rendered frame is never visible to a poll of Input.is_action_pressed at
+## all -- reported live at 6-8 FPS, a 140ms tap silently swallowed.
+##
+## Deliberately NOT in here: block, pickup, fish, lasso and mount. Those are
+## read as a held LEVEL -- guard up, the pickup charge meter, the cast and
+## reel, the rope -- and latching a level would turn a hold into one tap.
+const MOMENTARY_ACTIONS := ["attack", "build", "destroy", "kick", "stash", "talk", "trade"]
+
+## Rising edges seen by the input event but not yet acted on by the physics
+## step (see _unhandled_input and _rising_edge). Local-input side only: the
+## authority's view of a REMOTE client's actions still arrives as the
+## replicated _pending_*_pressed levels below.
+var _input_latch := InputLatch.new()
 
 ## Authority-side: last input direction received from the owning client (or
 ## read directly from Input, in the no-networking singleplayer fallback).
@@ -393,6 +444,7 @@ var _pending_build_pressed := false
 var _pending_destroy_pressed := false
 var _pending_pickup_pressed := false
 var _pending_kick_pressed := false
+var _pending_stash_pressed := false
 ## Non-authority proxy side: for inferring facing/animation from replicated
 ## position deltas, since only position itself is replicated.
 var _last_position := Vector2.ZERO
@@ -495,6 +547,93 @@ func _controlled_locally() -> bool:
 	return _is_local_player_instance() and is_multiplayer_authority() and not ConsoleFocus.is_open
 
 
+## Momentary actions latch on the input EVENT, not on a poll of the level.
+##
+## Godot delivers accumulated input once per rendered frame. At 6-8 FPS the
+## gap between two flushes is 125-165ms, so a tap shorter than that has its
+## press AND its release delivered in the same flush: every physics tick that
+## polls Input.is_action_pressed sees false, and the press is not delayed, it
+## is ERASED. Reported live during a playtest: a 140ms tap silently
+## swallowed. Making the game faster narrows that window but never closes it,
+## which is why this is an input bug in its own right and not a symptom of
+## the frame rate.
+##
+## The EVENTS still arrive, whatever the frame rate. So the rising edge is
+## recorded here and consumed by the physics step (see _rising_edge), which
+## makes the poll rate irrelevant.
+##
+## _unhandled_input rather than _input on purpose: an event a focused Control
+## has already used -- typing into the dev console, driving a menu -- never
+## reaches here at all, which is the behaviour the polled path could only
+## approximate with the ConsoleFocus flag (checked below as well, since the
+## polled half still needs it).
+##
+## Gated on _is_local_player_instance, not _controlled_locally: a non-
+## authority client's own avatar reads the keyboard too (it forwards the
+## result to the server, see _physics_process), and it needs the same latch
+## or the tap is erased one hop earlier instead.
+func _unhandled_input(event: InputEvent) -> void:
+	if not _is_local_player_instance() or ConsoleFocus.is_open:
+		return
+	for action in MOMENTARY_ACTIONS:
+		# has_action guard: there is no static [input] section in
+		# project.godot (World._apply_keybindings registers the map at
+		# runtime), so an isolated Player may legitimately be running before
+		# every action exists.
+		if InputMap.has_action(action) and event.is_action_pressed(action):
+			_input_latch.press(action)
+
+
+## True on the rising edge of a momentary action, from EITHER source: a press
+## the input event latched, or the polled level going false->true.
+##
+## Both halves are kept deliberately. The latch is the only thing that sees a
+## tap shorter than one rendered frame (see _unhandled_input). The poll is
+## still what fires for a key genuinely held down across a tick, what fires
+## when the event was consumed elsewhere before reaching _unhandled_input,
+## and what the authority uses for a REMOTE client, whose actions arrive as
+## the replicated _pending_*_pressed level rather than as local events.
+##
+## The two cannot double-fire: a real press latches once and the latch is
+## cleared by the consume here, while the level half only fires on the tick
+## the level itself changes.
+##
+## The consume is UNCONDITIONAL, and only acting on it is gated on
+## _controlled_locally. A latch that is looked at but not cleared banks the
+## press indefinitely -- and "remembered forever" is a failure mode the
+## polled read never had. Concretely: press T, the dev console takes focus
+## before this tick, the press is not acted on (correctly), and then thirty
+## seconds later the console closes and the player greets an NPC out of
+## nowhere. Taking it and discarding it means a press the world never got to
+## act on is DROPPED, which is what letting go of focus should mean.
+## (On the authority simulating a REMOTE player this consume is a no-op:
+## _unhandled_input only latches for the local instance, so that node's latch
+## is always empty and its actions arrive as _pending_*_pressed instead.)
+func _rising_edge(action: String, pressed_now: bool, pressed_last_tick: bool) -> bool:
+	var latched := _input_latch.consume(action)
+	return (latched and _controlled_locally()) or (pressed_now and not pressed_last_tick)
+
+
+## What a non-authority client reports to the server for a momentary action
+## this tick (see _physics_process's _submit_* rpcs): the polled level OR a
+## press the event latch caught. Without the latch half, a tap that never
+## shows up in the level is never sent at all, so the server's own
+## rising-edge detector cannot see it either -- the same erased tap, one hop
+## further away.
+##
+## Console focus is checked here for the same reason _controlled_locally
+## checks it on the authority side: this poll reads Input directly, which
+## Godot's Control focus system does not suppress, so a client typing "b"
+## into the dev console was otherwise forwarding a build to the server on
+## every keystroke. Like _rising_edge, the latch is still consumed first --
+## a press the console interrupted is dropped, never banked for later.
+func _local_momentary_input(action: String) -> bool:
+	var latched := _input_latch.consume(action)
+	if ConsoleFocus.is_open:
+		return false
+	return latched or Input.is_action_pressed(action)
+
+
 ## Registers WASD movement actions at runtime rather than hand-editing
 ## project.godot's input map (a hand-typed InputEventKey resource literal
 ## there is an easy way to silently corrupt the whole project file).
@@ -563,6 +702,12 @@ func _respawn() -> void:
 	modulate = Color.WHITE
 	_respawn_accumulator = 0.0
 	position = respawn_position
+	# Nothing pressed while dead should replay on the first live tick: the
+	# simulation steps that would have consumed those presses never ran (see
+	# _authority_step's early-out), so the latch would otherwise be holding
+	# them. The polled half has the same property for free -- it only ever
+	# reads the CURRENT level.
+	_input_latch.clear()
 
 
 func is_set_up() -> bool:
@@ -892,6 +1037,61 @@ func _venom_step(delta: float) -> void:
 	active_venom_debuffs = _debuff_stack.advance(active_venom_debuffs, delta)
 
 
+# -- disease spillover: Sickness, not a new debuff module (see
+# docs/concept/disease.md "Player spillover") --------------------------------
+
+## A well-fed, healthy player resists infection somewhat better -- real-
+## world-grounded (malnourishment measurably weakens immune response), a
+## modest term off current health fraction rather than a new stat.
+const DISEASE_RESISTANCE_FROM_HEALTH := 0.3
+## Sickness while untreated is "not fatal outright, a real tax" (see the
+## doc): drains stamina proportional to severity rather than dealing direct
+## damage -- the same lever _food_buff_step's "sustenance" buff already
+## pulls, just in reverse.
+const SICKNESS_STAMINA_DRAIN_PER_SECOND := 0.03
+
+var _sickness := Sickness.new()
+## Counts this player's disease exposure rolls, so each one draws a
+## different, still-deterministic seed -- mirrors CreatureMarker's own
+## _disease_roll_count.
+var _disease_roll_count := 0
+
+
+## Called by an infected predator's bite (see CreatureMarker._try_attack /
+## _try_transmit_predator_disease -- the doc's zoonotic spillover path) or a
+## careless butchering of a contaminated carcass (see _butcher_step -- the
+## anthrax spillover path). Rolls real infection odds through
+## Sickness.infection_chance/attempt_infect, the SAME mechanism survival.md's
+## own sickness already uses -- not a bespoke debuff. No-op while already
+## sick: a second exposure mid-recovery isn't modeled (mirrors Sickness's
+## own single-instance scope).
+func apply_disease_bite(new_disease_id: String, exposure_level: float = 1.0) -> void:
+	if sickness_id != "":
+		return
+	_disease_roll_count += 1
+	var chance := _sickness.infection_chance(exposure_level, _disease_resistance())
+	var seed_value := hash("%d_%s_player_disease" % [_disease_roll_count, new_disease_id])
+	if _sickness.attempt_infect(chance, seed_value):
+		sickness_id = new_disease_id
+		sickness_severity = 0.01  # just infected -- _sickness_step ramps it from here
+		sickness_diagnosed = false
+
+
+func _disease_resistance() -> float:
+	return clampf(health / max_health, 0.0, 1.0) * DISEASE_RESISTANCE_FROM_HEALTH
+
+
+## Authority-only: ticks sickness_severity via Sickness.progress (always
+## untreated for now -- no cure/treatment tool exists yet, see disease.md's
+## own explicitly-deferred "management tools" scope) and taxes stamina while
+## sick, a real ongoing cost rather than a fatal one.
+func _sickness_step(delta: float) -> void:
+	if sickness_id == "":
+		return
+	sickness_severity = _sickness.progress(sickness_severity, delta, false)
+	survival.spend_stamina(SICKNESS_STAMINA_DRAIN_PER_SECOND * sickness_severity * delta)
+
+
 ## Melee damage multiplier from an active "combat" category food buff (see
 ## FoodConsumption.FISH_BUFFS's legendary_fish entry) -- 1.0 (no change) when
 ## none is active.
@@ -905,6 +1105,39 @@ func _has_structure_near_player(structure_id: String) -> bool:
 		return false
 	var tile := current_tile()
 	return _chunk_manager.has_structure_near(tile.x, tile.y, structure_id, HEAT_SOURCE_RADIUS_TILES)
+
+
+## Generic requires_structure gate (see docs/concept/production_chains.md,
+## and CraftingRecipeBook.recipe_requires_structure) -- true if recipe_id
+## has no structure gate at all (the common case). "heat_source" is the one
+## abstract category value: EITHER a campfire OR a furnace nearby satisfies
+## it, exactly as _has_heat_source already accepted for every smelt before
+## this generalization (see concept/smelting.md). Every other value names
+## one real, specific structure id, checked directly via
+## _has_structure_near_player -- e.g. the Sägewerk's own log_to_balken/
+## log_to_planke recipes require "sagewerk" nearby, no separate mechanism.
+func _meets_requires_structure(recipe_id: String) -> bool:
+	var structure_id := _crafting_recipe_book.recipe_requires_structure(recipe_id)
+	if structure_id == "":
+		return true
+	if structure_id == "heat_source":
+		return _has_heat_source()
+	return _has_structure_near_player(structure_id)
+
+
+## Generic required_skill gate (see docs/concept/production_chains.md, and
+## CraftingRecipeBook.recipe_required_skill) -- true if recipe_id has no
+## skill gate at all (the common case). Reads the live allocated-skill total
+## via SkillTree.total_bonus, the exact same pattern
+## Player._chop_step's own CARPENTRY_LEVEL_FOR_SAWING check already uses --
+## this is what makes a recipe's required_skill field actually refuse the
+## craft in practice, not just exist as unread data.
+func _meets_required_skill(recipe_id: String) -> bool:
+	var requirement := _crafting_recipe_book.recipe_required_skill(recipe_id)
+	if requirement.is_empty():
+		return true
+	var have_level := skill_tree.total_bonus(requirement["stat_name"], allocated_nodes)
+	return have_level >= requirement["level"]
 
 
 ## Equips a weapon or tool as the single held item (drawn in hand, and the
@@ -963,11 +1196,11 @@ func _inventory_counts() -> Dictionary:
 ## inputs: removes exactly the consumed amount of each input (the delta
 ## between the pre-craft count and CraftingRecipeBook's reported remaining
 ## count) and adds the output via ItemCatalog. Returns false (no-op, nothing
-## removed or added) if the recipe is unknown or inputs are insufficient.
+## removed or added) if the recipe is unknown, its requires_structure/
+## required_skill gate (see docs/concept/production_chains.md) isn't met, or
+## inputs are insufficient.
 func craft(recipe_id: String) -> bool:
-	# Smelting recipes (ore + coal -> ingot) need a heat source present, like
-	# cooking does (see Smelting / concept/smelting.md).
-	if _smelting.is_smelting_recipe(recipe_id) and not _has_heat_source():
+	if not _meets_requires_structure(recipe_id) or not _meets_required_skill(recipe_id):
 		return false
 	var counts := _inventory_counts()
 	var result := _crafting_recipe_book.craft(recipe_id, counts)
@@ -1014,9 +1247,9 @@ func _physics_process(delta: float) -> void:
 
 	if _is_local_player_instance() and not is_multiplayer_authority() and multiplayer.has_multiplayer_peer():
 		_submit_input.rpc_id(1, _read_local_input())
-		_submit_attack.rpc_id(1, Input.is_action_pressed("attack"))
-		_submit_build.rpc_id(1, Input.is_action_pressed("build"))
-		_submit_destroy.rpc_id(1, Input.is_action_pressed("destroy"))
+		_submit_attack.rpc_id(1, _local_momentary_input("attack"))
+		_submit_build.rpc_id(1, _local_momentary_input("build"))
+		_submit_destroy.rpc_id(1, _local_momentary_input("destroy"))
 
 
 ## Runs only on the authority (the server, or this same instance in the
@@ -1034,8 +1267,14 @@ func _authority_step(delta: float) -> void:
 	var tile := current_tile()
 	var water_result := _resolve_water_state(tile, delta)
 	current_mode = water_result.mode
+	# Overall condition (SurvivalMeters.fitness, driven by starving/
+	# dehydrated/cold) is a real movement debuff, not a dead meter -- see
+	# ConditionPenalty and docs/concept/survival.md's "Debuffs, not death".
 	current_speed_multiplier = (
-		water_result.speed_multiplier * _weather_speed_multiplier() * _terrain_speed_multiplier(tile)
+		water_result.speed_multiplier
+		* _weather_speed_multiplier()
+		* _terrain_speed_multiplier(tile)
+		* ConditionPenalty.speed_multiplier(survival.fitness)
 	)
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
@@ -1062,12 +1301,14 @@ func _authority_step(delta: float) -> void:
 	_attack_step(delta)
 	_pickup_step(delta)
 	_kick_step()
+	_stash_step()
 	_build_step()
 	_destroy_step()
 	_fishing_step(delta)
 	_lasso_step(delta)
 	_food_buff_step(delta)
 	_venom_step(delta)
+	_sickness_step(delta)
 	_shop_step(delta)
 	_talk_step(delta)
 
@@ -1075,7 +1316,11 @@ func _authority_step(delta: float) -> void:
 ## Combined weather + exposure movement penalty (see WeatherModel /
 ## SurvivalMeters): rain and storm slow you, and being freezing slows you
 ## further (stiff, sluggish). 1.0 when the world isn't wired (isolated tests).
-const FREEZING_SPEED_PENALTY := 0.75
+##
+## The freezing magnitude is defined once, in ConditionPenalty, and shared:
+## the continuous condition slow deliberately reuses this already-committed
+## number rather than inventing a second one (see condition_penalty.gd).
+const FREEZING_SPEED_PENALTY := ConditionPenalty.WORST_SPEED_MULTIPLIER
 func _weather_speed_multiplier() -> float:
 	var m := 1.0
 	if _chunk_manager != null:
@@ -1138,7 +1383,7 @@ func _attack_step(delta: float) -> void:
 	var attack_pressed := (
 		Input.is_action_pressed("attack") if _controlled_locally() else _pending_attack_pressed
 	)
-	var just_pressed := attack_pressed and not _last_attack_input_state
+	var just_pressed := _rising_edge("attack", attack_pressed, _last_attack_input_state)
 	_last_attack_input_state = attack_pressed
 
 	# No swinging while swimming -- the weapon is stowed in the water (see
@@ -1175,6 +1420,8 @@ func _perform_attack() -> void:
 	_smash_step()
 	_harvest_grass_step()
 	_pull_wild_crop_step()
+	_butcher_step()
+	_collect_step()
 
 
 ## Smashing/mining: a swing that reaches a rock node (shared "stone" group)
@@ -1229,6 +1476,66 @@ func _pull_wild_crop_step() -> void:
 
 	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
 		crops[index].begin_pull()
+
+
+## Butchering: a swing over a nearby carcass (see Carcass.butcher,
+## docs/concept/carrion.md) takes its next remaining part -- same shared
+## group-scan + range-sweep shape as every other harvest step above. Meat
+## yield reads the player's allocated butchering skill live (SkillTree's
+## meat_yield stat, see Butchering.meat_count) rather than caching it --
+## always in sync with allocated_nodes, no separate accumulator to drift.
+func _butcher_step() -> void:
+	var carcasses := get_tree().get_nodes_in_group(Carcass.GROUP_NAME)
+	var positions: Array = []
+	for carcass in carcasses:
+		positions.append(carcass.position)
+
+	if positions.is_empty():
+		return
+	var meat_yield_bonus := skill_tree.total_bonus("meat_yield", allocated_nodes)
+	for index in _melee_attack.targets_in_range(position, positions, ATTACK_RANGE):
+		carcasses[index].butcher(meat_yield_bonus)
+		# Anthrax-like spillover (docs/concept/disease.md): butchering a
+		# contaminated carcass without care carries real infection risk --
+		# the "careless butchering" consequence the doc names directly, a
+		# real tax on skipping caution rather than a hidden gotcha.
+		if carcasses[index].contaminated:
+			apply_disease_bite(DiseaseModel.CARRION)
+
+
+## Collecting: a swing near a real, nearby Sägewerk (see
+## EarthChunkManager.has_structure_near) withdraws whatever real beam/plank
+## stock it has piled up (StructureStock, credited by LumberjackMarker's own
+## production step -- see docs/concept/timber_construction.md's "Storage,
+## logistics, and the autonomous dependency chain" section) straight into
+## the player's own inventory. A direct pickup, not a ground find, since the
+## player is standing right at the source performing the collection
+## themselves -- the real stand-in for a player with no Storage/Logistics
+## built yet (see that section's own "What's honestly still a stand-in
+## here" gap note this closes). No-ops with nothing built up yet, or no
+## Sägewerk within reach -- same shared group-scan/proximity shape every
+## other harvest step above uses, just against a placed structure instead
+## of a creature/tree/plant.
+func _collect_step() -> void:
+	if _chunk_manager == null:
+		return
+	var tile := current_tile()
+	if not _chunk_manager.has_structure_near(tile.x, tile.y, "sagewerk", SAGEWERK_COLLECT_RADIUS_TILES):
+		return
+	var sagewerk_pixel = _chunk_manager.nearest_structure_position(
+		position, "sagewerk", float(SAGEWERK_COLLECT_RADIUS_TILES) * TerrainRenderer.TILE_SIZE
+	)
+	if sagewerk_pixel == null:
+		return
+	var sagewerk_tile := Vector2i(
+		floori(sagewerk_pixel.x / TerrainRenderer.TILE_SIZE), floori(sagewerk_pixel.y / TerrainRenderer.TILE_SIZE)
+	)
+	for item_id in ["beam", "plank"]:
+		var available: int = _chunk_manager.structure_stock_at(sagewerk_tile.x, sagewerk_tile.y, item_id)
+		if available <= 0:
+			continue
+		_chunk_manager.withdraw_from_structure_at(sagewerk_tile.x, sagewerk_tile.y, item_id, available)
+		inventory.add(_item_catalog.make(item_id), available)
 
 
 ## The held item's material-model kind (see MaterialDamage/Block), used for
@@ -1293,11 +1600,24 @@ func is_blocking() -> bool:
 	return Input.is_action_pressed("block") if _controlled_locally() else _pending_block_pressed
 
 
+## How much Carpentry (SkillTree's carpentry_1/2 nodes, summed via
+## total_bonus) it takes to saw a bare trunk into beam/plank instead of
+## bucking it into raw logs -- see docs/concept/woodworking.md. Requires
+## BOTH nodes allocated, genuine investment rather than a single point.
+const CARPENTRY_LEVEL_FOR_SAWING := 2.0
+
 ## Felling: any swing damages ChoppableTrees in range through the material
 ## damage model (see MaterialDamage), scaled by the HELD item -- an axe chops
 ## at full efficiency (3x wood multiplier), a sword hacks weakly (0.5x, so a
 ## tree takes many more swings), bare hands barely scratch bark (0.25x). Same
 ## AOE range/targeting math as creature hits (reuses MeleeAttack.targets_in_range).
+##
+## A saw + enough Carpentry tries ChoppableTree.saw_up first, on a bare
+## trunk, turning the whole remaining trunk into beam+plank in one action
+## instead of the ordinary one-log-per-swing chop -- saw_up itself is the
+## authority on whether that's actually possible right now (is the trunk
+## even bare yet?), so a swing that doesn't qualify just falls through to
+## the normal take_damage() unchanged.
 func _chop_step() -> void:
 	var damage := _material_damage.effective_damage(BASE_CHOP_DAMAGE, _held_kind(), "wood")
 	if damage <= 0.0:
@@ -1308,20 +1628,32 @@ func _chop_step() -> void:
 	for tree in trees:
 		positions.append(tree.position)
 
+	var has_saw: bool = equipped_item != null and equipped_item.is_saw()
+	var carpentry_level := skill_tree.total_bonus("carpentry_level", allocated_nodes)
+	var can_saw := has_saw and carpentry_level >= CARPENTRY_LEVEL_FOR_SAWING
+
 	var hit_indices := _melee_attack.targets_in_range(position, positions, ATTACK_RANGE)
 	for index in hit_indices:
 		var tree: ChoppableTree = trees[index]
+		if can_saw and tree.saw_up():
+			continue
 		tree.take_damage(damage)
 
 
-## Authority-only: E (pickup) is now CONTEXTUAL (see docs/concept/stone.md):
+## Authority-only: E (pickup) is now CONTEXTUAL (see docs/concept/stone.md,
+## generalized in docs/concept/wild_crops.md to any real physical object):
 ## empty-handed near a liftable stone, E picks it into the HAND instead of
-## straight to inventory (_try_pick_stone_into_hand); empty-handed with no
-## stone nearby, E still does the ordinary ground-item sweep unchanged
-## (pickup_nearby). With something already in hand, a NEW press starts a
-## charge (ChargeMeter bounces while held -- see hand_charge_fraction), and
-## releasing throws it (_throw_held_stone). Rising-edge detection throughout
-## so holding E doesn't repeat the initial action every frame.
+## straight to inventory (_try_pick_stone_into_hand); failing that, empty-
+## handed near a dropped item with a real, kickable-grade mass, E picks
+## THAT into the hand instead (_try_pick_item_into_hand); empty-handed with
+## neither nearby, E still does the ordinary ground-item sweep unchanged
+## (pickup_nearby) -- so an item with no modeled mass (most food/material
+## drops today) keeps going straight to inventory exactly as before. With
+## something already in hand, a NEW press starts a charge (ChargeMeter
+## bounces while held -- see hand_charge_fraction), and releasing throws it
+## (_throw_held_stone or _throw_held_item, whichever is actually held).
+## Rising-edge detection throughout so holding E doesn't repeat the initial
+## action every frame.
 func _pickup_step(delta: float) -> void:
 	var pickup_pressed := (
 		Input.is_action_pressed("pickup") if _controlled_locally() else _pending_pickup_pressed
@@ -1330,9 +1662,14 @@ func _pickup_step(delta: float) -> void:
 	var just_released := _last_pickup_input_state and not pickup_pressed
 	_last_pickup_input_state = pickup_pressed
 
-	if not is_holding_stone():
-		if just_pressed and not _try_pick_stone_into_hand():
-			pickup_nearby()
+	if not is_holding_anything():
+		if just_pressed and not _try_pick_stone_into_hand() and not _try_pick_item_into_hand():
+			# A direct-from-the-tree harvest (see _try_harvest_peak_fruit) only
+			# runs when the ordinary ground-item sweep found nothing -- one E
+			# press does one thing, and a windfall already underfoot takes
+			# priority over reaching for the branch.
+			if pickup_nearby() == 0:
+				_try_harvest_peak_fruit()
 		return
 
 	if just_pressed:
@@ -1346,21 +1683,38 @@ func _pickup_step(delta: float) -> void:
 
 	if just_released and _charging:
 		_charging = false
-		_throw_held_stone()
+		if is_holding_stone():
+			_throw_held_stone()
+		else:
+			_throw_held_item()
 
 
-## Whether something is currently held in hand (see _hand_stone_diameter_cm's
+## Whether a stone is currently held in hand (see _hand_stone_diameter_cm's
 ## own doc comment) -- distinct from both inventory and Equipment's worn
 ## weapon slot.
 func is_holding_stone() -> bool:
 	return _hand_stone_diameter_cm >= 0.0
 
 
+## Whether a general dropped item (not a stone) is currently held in hand
+## (see _hand_item_stack's own doc comment).
+func is_holding_item() -> bool:
+	return _hand_item_stack != null
+
+
+## Whether ANYTHING is currently held in hand -- a stone or a general item.
+## Read wherever code previously asked is_holding_stone() to gate "is the
+## hand occupied at all" (e.g. the E-pickup dispatch above, the interaction
+## prompt) now that the hand can hold either kind of object.
+func is_holding_anything() -> bool:
+	return is_holding_stone() or is_holding_item()
+
+
 ## The charge meter's current reading in [0, 1] (see ChargeMeter) -- 0.0
 ## whenever nothing is in hand, or the pickup input isn't currently held.
 ## Read by World for the strengthometer UI.
 func hand_charge_fraction() -> float:
-	if not is_holding_stone() or not _charging:
+	if not is_holding_anything() or not _charging:
 		return 0.0
 	return ChargeMeter.fraction_at(_hand_charge_elapsed)
 
@@ -1381,6 +1735,24 @@ func _try_pick_stone_into_hand() -> bool:
 	_hand_charge_elapsed = 0.0
 	_charging = false
 	stone.queue_free()
+	return true
+
+
+## Takes the nearest dropped item with a real, kickable-grade mass (the
+## SAME "physical object" set Kick already recognizes -- see
+## nearest_kickable_dropped_item_near) into the HAND, mirroring
+## _try_pick_stone_into_hand exactly. An item with no modeled mass (most
+## food/material drops today) is NOT a hand object -- it is deliberately
+## left for the caller to fall back to the ordinary pickup_nearby() sweep,
+## unchanged from before this existed.
+func _try_pick_item_into_hand() -> bool:
+	var dropped_item := nearest_kickable_dropped_item_near(position, PICKUP_RADIUS)
+	if dropped_item == null:
+		return false
+	_hand_item_stack = dropped_item.item_stack
+	_hand_charge_elapsed = 0.0
+	_charging = false
+	dropped_item.queue_free()
 	return true
 
 
@@ -1406,6 +1778,28 @@ func _throw_held_stone() -> void:
 	_resolve_thrown_stone_impact(landing_position, momentum)
 	_resolve_stone_impact_on_obstacles(landing_position, momentum)
 	_spawn_thrown_stone(landing_position, diameter_cm)
+
+
+## Throws whatever generic item is in hand -- the SAME release-power ->
+## real-momentum pipeline _throw_held_stone uses, just reading the item's
+## own real mass (Item.mass_kg) instead of deriving one from a stone
+## diameter, and spawning a plain DroppedItem at the landing spot instead
+## of rebuilding a LiftableStone.
+func _throw_held_item() -> void:
+	var item_stack = _hand_item_stack
+	_hand_item_stack = null
+
+	var power := ChargeMeter.fraction_at(_hand_charge_elapsed)
+	var release_speed := HeldItemThrow.release_speed_mps(power)
+	var mass_kg: float = item_stack.item.mass_kg
+	var momentum := _throwable.impact_knockback(mass_kg, release_speed)
+	var distance := HeldItemThrow.throw_distance_px(power)
+	var direction := _last_facing_direction if _last_facing_direction.length() > 0.01 else Vector2.DOWN
+	var landing_position := position + direction.normalized() * distance
+
+	_resolve_thrown_stone_impact(landing_position, momentum)
+	_resolve_stone_impact_on_obstacles(landing_position, momentum)
+	_spawn_thrown_item(landing_position, item_stack)
 
 
 ## How close a thrown stone's landing spot must be to a creature to count as
@@ -1473,6 +1867,16 @@ func _spawn_thrown_stone(landing_position: Vector2, diameter_cm: float) -> void:
 	get_parent().add_child(stone)
 
 
+## Materializes a real DroppedItem at `landing_position` -- the generic-item
+## counterpart of _spawn_thrown_stone, and also reused by _stash_step to
+## drop whatever doesn't fit in a full inventory rather than losing it.
+func _spawn_thrown_item(landing_position: Vector2, item_stack) -> void:
+	var dropped := DroppedItem.new()
+	dropped.item_stack = item_stack
+	dropped.position = landing_position
+	get_parent().add_child(dropped)
+
+
 ## Picks up every ground item within PICKUP_RADIUS. Returns the number of item
 ## nodes fully collected.
 func pickup_nearby() -> int:
@@ -1485,39 +1889,146 @@ func pickup_nearby() -> int:
 	return collected
 
 
+## Fallback for the pickup key when the ordinary ground sweep found nothing:
+## takes real hanging fruit straight from the nearest tree in reach (see
+## EarthChunkManager.harvest_peak_fruit_near, PICKUP_RADIUS) into inventory
+## and awards real XP (see EcologicalLiteracy.harvest_xp) -- more when the
+## harvest lands at genuine peak ripeness than off-peak (docs/concept/
+## progression.md "Ecological literacy"). Returns whether anything was
+## harvested. This is the only harvest path that can ever land AT peak: a
+## windfall item on the ground (pickup_nearby above) has, by construction,
+## already left that window (see fruiting_model.gd's is_peak_ripe).
+func _try_harvest_peak_fruit() -> bool:
+	if _chunk_manager == null:
+		return false
+	var found := _chunk_manager.harvest_peak_fruit_near(position, PICKUP_RADIUS)
+	if found.is_empty():
+		return false
+	var species_id: String = found["species_id"]
+	inventory.add(_item_catalog.make(species_id), 1)
+	inventory_changed.emit()
+	gain_experience(_ecological_literacy.harvest_xp(found.get("is_peak", false)))
+	return true
+
+
 ## Authority-only: on the rising edge of the kick input (default K -- see
 ## Keybindings), delivers a real one-time momentum (Kick.KICK_MOMENTUM_KG_M_S)
-## to the nearest liftable stone in reach (docs/concept/stone.md). Reuses
-## PICKUP_RADIUS and EarthChunkManager.nearest_liftable_stone_near -- the
-## SAME nearby-target-finding convention pickup/dispersion already use --
-## rather than a new proximity query. A stone at or above leg mass
-## (Kick.is_kickable) is too heavy for a kick to move at all; a lighter one
-## flies a distance that scales with the delivered momentum vs. its own
-## mass, exactly Throwable.impact_knockback's reasoning.
+## to the nearest kickable PHYSICAL OBJECT in reach -- a liftable stone
+## (docs/concept/stone.md) OR a dropped item with a real, modeled mass (e.g.
+## a pulled wild carrot/potato, docs/concept/wild_crops.md's "a real physical
+## entity, not just an inventory grant"), whichever is genuinely closer.
+## Reuses PICKUP_RADIUS and EarthChunkManager.nearest_liftable_stone_near --
+## the SAME nearby-target-finding convention pickup/dispersion already use --
+## rather than a new proximity query for the stone half. An object at or
+## above leg mass (Kick.is_kickable) is too heavy for a kick to move at all;
+## a lighter one flies a distance that scales with the delivered momentum
+## vs. its own mass, exactly Throwable.impact_knockback's reasoning.
 func _kick_step() -> void:
 	var kick_pressed := (
 		Input.is_action_pressed("kick") if _controlled_locally() else _pending_kick_pressed
 	)
-	var just_pressed := kick_pressed and not _last_kick_input_state
+	var just_pressed := _rising_edge("kick", kick_pressed, _last_kick_input_state)
 	_last_kick_input_state = kick_pressed
 	if not just_pressed or _chunk_manager == null:
 		return
 
 	var stone: Node2D = _chunk_manager.nearest_liftable_stone_near(position, PICKUP_RADIUS)
-	if stone == null:
+	var stone_mass := StoneSize.mass_kg_for(stone.diameter_cm) if stone != null else 0.0
+	var stone_kickable := stone != null and Kick.is_kickable(stone_mass)
+	var stone_distance := position.distance_to(stone.position) if stone_kickable else INF
+
+	var dropped_item := nearest_kickable_dropped_item_near(position, PICKUP_RADIUS)
+	var dropped_distance := position.distance_to(dropped_item.position) if dropped_item != null else INF
+
+	if not stone_kickable and dropped_item == null:
 		return
-	var mass := StoneSize.mass_kg_for(stone.diameter_cm)
-	if not Kick.is_kickable(mass):
-		return
-	var landing_position := Kick.landing_position(position, stone.position, mass)
-	# The leg's momentum is conserved into the kicked stone (see kick.gd's
-	# own doc comment: exit velocity = KICK_MOMENTUM_KG_M_S / stone mass, so
-	# the stone's own momentum at landing is exactly KICK_MOMENTUM_KG_M_S
-	# again) -- the same real momentum a thrown stone delivers via
+
+	# The leg's momentum is conserved into the kicked object (see kick.gd's
+	# own doc comment: exit velocity = KICK_MOMENTUM_KG_M_S / its own mass, so
+	# its own momentum at landing is exactly KICK_MOMENTUM_KG_M_S again) --
+	# the same real momentum a thrown stone delivers via
 	# _resolve_stone_impact_on_obstacles above, just from a kick instead of
-	# a throw.
-	_resolve_stone_impact_on_obstacles(landing_position, Kick.KICK_MOMENTUM_KG_M_S)
-	stone.position = landing_position
+	# a throw. Whichever candidate is genuinely nearer wins -- a farther
+	# stone should not always take priority over a nearer dropped item just
+	# because stones were the first kickable thing this game had.
+	if stone_kickable and stone_distance <= dropped_distance:
+		var landing_position := Kick.landing_position(position, stone.position, stone_mass)
+		_resolve_stone_impact_on_obstacles(landing_position, Kick.KICK_MOMENTUM_KG_M_S)
+		stone.position = landing_position
+	else:
+		var mass: float = dropped_item.item_stack.item.mass_kg
+		var landing_position := Kick.landing_position(position, dropped_item.position, mass)
+		_resolve_stone_impact_on_obstacles(landing_position, Kick.KICK_MOMENTUM_KG_M_S)
+		dropped_item.position = landing_position
+
+
+## Nearest DroppedItem within `radius` whose real item mass (Item.mass_kg) is
+## light enough for Kick.is_kickable -- an item with no modeled mass yet
+## (0.0, item.gd's own "not modeled" convention, still most food/material
+## items) is deliberately excluded, the same as a stone at/above leg mass:
+## kicking something with no real mass would be meaningless under the shared
+## momentum model (docs/concept/materials.md).
+func nearest_kickable_dropped_item_near(from: Vector2, radius: float) -> DroppedItem:
+	var nearest: DroppedItem = null
+	var nearest_distance := radius
+	for item in get_tree().get_nodes_in_group(DroppedItem.GROUP_NAME):
+		# Not every member of this group is a DroppedItem: LiftableStone and
+		# PickableSeed deliberately join it so the pickup sweep collects them
+		# with no special case of their own (see their own doc comments), and
+		# neither carries an item_stack -- reading one threw a runtime error
+		# per stone per frame and aborted this whole scan, so K silently
+		# stopped kicking dropped items whenever a pebble or seed was loaded.
+		# Gated by what a member actually answers to, the same way
+		# EarthChunkManager.step_ground_food gates this very group and
+		# nearest_liftable_stone_near gates the stone one.
+		if not is_instance_valid(item) or not ("item_stack" in item):
+			continue
+		if item.is_queued_for_deletion() or item.item_stack == null:
+			continue
+		var mass: float = item.item_stack.item.mass_kg
+		if mass <= 0.0 or not Kick.is_kickable(mass):
+			continue
+		var distance := from.distance_to(item.position)
+		if distance <= nearest_distance:
+			nearest = item
+			nearest_distance = distance
+	return nearest
+
+
+## Authority-only: on the rising edge of the stash input (default H -- see
+## Keybindings), puts whatever is currently held in the HAND away into the
+## inventory -- the deliberate "put this down" complement to E's "pick this
+## up into hand" (docs/concept/stone.md's held-item concept, generalized in
+## docs/concept/wild_crops.md to any real physical object). A no-op with
+## nothing in hand. Whatever doesn't fit is dropped as a real ground item at
+## the player's own feet (_spawn_thrown_item) rather than lost -- stashing
+## never silently discards anything, unlike LiftableStone.pick_up's own
+## existing "partial overflow is silently dropped" ground-pickup behavior,
+## which this deliberately does NOT copy: that shortcut is tolerable for an
+## incidental walk-up pickup, not for a player's own deliberate stash.
+func _stash_step() -> void:
+	var stash_pressed := (
+		Input.is_action_pressed("stash") if _controlled_locally() else _pending_stash_pressed
+	)
+	var just_pressed := _rising_edge("stash", stash_pressed, _last_stash_input_state)
+	_last_stash_input_state = stash_pressed
+	if not just_pressed or not is_holding_anything() or inventory == null:
+		return
+
+	if is_holding_stone():
+		var diameter_cm := _hand_stone_diameter_cm
+		_hand_stone_diameter_cm = -1.0
+		var count := StoneSize.rock_yield(diameter_cm)
+		var rock_item := Item.new("rock", "Rock", "material", 20)
+		var overflow: int = inventory.add(rock_item, count)
+		if overflow > 0:
+			_spawn_thrown_item(position, ItemStack.new(rock_item, overflow))
+	else:
+		var item_stack = _hand_item_stack
+		_hand_item_stack = null
+		var overflow: int = inventory.add(item_stack.item, item_stack.count)
+		if overflow > 0:
+			_spawn_thrown_item(position, ItemStack.new(item_stack.item, overflow))
 
 
 ## Authority-only: the fishing minigame (see FishingSession / concept/fishing.md).
@@ -1891,13 +2402,17 @@ func _shop_step(delta: float) -> void:
 	var trade_pressed := (
 		Input.is_action_pressed("trade") if _controlled_locally() else _pending_trade_pressed
 	)
-	var just_pressed := trade_pressed and not _last_trade_input
+	var just_pressed := _rising_edge("trade", trade_pressed, _last_trade_input)
 	_last_trade_input = trade_pressed
 	if just_pressed:
-		if _chunk_manager == null or not _chunk_manager.has_merchant_near(position, TRADE_RADIUS):
-			_trade_result_message = "No merchant nearby."
-		else:
+		if _chunk_manager != null and _chunk_manager.has_merchant_near(position, TRADE_RADIUS):
 			_attempt_a_purchase()
+		else:
+			# No merchant in reach -- fall back to selling real gathered food
+			# into a nearby villager's own VillageMarket (see
+			# _attempt_village_food_sale), rather than the flat "No merchant
+			# nearby." this branch used to be unconditionally.
+			_attempt_village_food_sale()
 		_trade_result_timer = TRADE_MESSAGE_DURATION
 
 	_trade_result_timer = maxf(0.0, _trade_result_timer - delta)
@@ -1922,6 +2437,60 @@ func _attempt_a_purchase() -> void:
 	_trade_result_message = "Not enough gold."
 
 
+## Fallback for the trade key when no merchant is near: sells one unit of the
+## player's own gathered food into the nearest real villager's own
+## VillageMarket (see sell_food_to_village, docs/concept/npc.md "Local trade
+## is NPC-to-NPC, not just player-to-shop" -- extended here to cover a
+## player-initiated sale) -- a real XP bonus if that village was genuinely
+## hungry (see EcologicalLiteracy, docs/concept/progression.md "Ecological
+## literacy"). Unchanged fallback message when there is truly nobody nearby
+## at all (no merchant AND no villager), matching this branch's original
+## behaviour before this feature existed.
+func _attempt_village_food_sale() -> void:
+	var npc = _chunk_manager.nearest_npc_near(position, TRADE_RADIUS) if _chunk_manager != null else null
+	if npc == null or npc.economy == null:
+		_trade_result_message = "No merchant nearby."
+		return
+	var item_id := _first_food_item_id()
+	if item_id == "":
+		_trade_result_message = "No food to sell."
+		return
+	sell_food_to_village(npc.economy.market, item_id, 1)
+	_trade_result_message = "Sold %s to the village." % _item_catalog.make(item_id).display_name
+
+
+## The first food item id the player is carrying (by inventory_counts()
+## iteration order), or "" if none -- what _attempt_village_food_sale sells
+## when the player doesn't name a specific item.
+func _first_food_item_id() -> String:
+	for item_id in inventory_counts():
+		if _item_catalog.kind_of(item_id) == "food":
+			return item_id
+	return ""
+
+
+## Sells `amount` of `item_id` from inventory into `market`'s real per-
+## village food stock (see VillageMarket). Real XP bonus (see
+## EcologicalLiteracy) only when the market was GENUINELY hungry right
+## before the sale -- VillageMarket.can_buy_meal() already means exactly
+## that ("could a hungry villager buy a meal from this stock right now"), so
+## "hungry" reuses that real boolean rather than an invented stock
+## threshold. No gold changes hands: VillageMarket has no village-side
+## wallet to pay from (see its own doc comment -- it's fed by NPC
+## production, not player commerce), and the reward for feeding a real
+## hungry settlement is the XP itself, not a shop transaction. Returns
+## false (no-op) if the player doesn't actually carry `amount` of the item.
+func sell_food_to_village(market, item_id: String, amount: int) -> bool:
+	if amount <= 0 or inventory.count_of(item_id) < amount:
+		return false
+	var was_hungry: bool = not market.can_buy_meal()
+	inventory.remove(item_id, amount)
+	inventory_changed.emit()
+	market.add_stock(item_id, float(amount))
+	gain_experience(_ecological_literacy.village_sale_xp(was_hungry))
+	return true
+
+
 ## Authority-only: press the talk key next to any villager (see
 ## EarthChunkManager.nearest_npc_near) to hear that NPC's own deterministic
 ## greeting line (see NpcGreeting) -- the minimal talk-interaction stand-in,
@@ -1930,7 +2499,7 @@ func _talk_step(delta: float) -> void:
 	var talk_pressed := (
 		Input.is_action_pressed("talk") if _controlled_locally() else _pending_talk_pressed
 	)
-	var just_pressed := talk_pressed and not _last_talk_input
+	var just_pressed := _rising_edge("talk", talk_pressed, _last_talk_input)
 	_last_talk_input = talk_pressed
 	if just_pressed:
 		var npc = _chunk_manager.nearest_npc_near(position, TALK_RADIUS) if _chunk_manager != null else null
@@ -1953,7 +2522,7 @@ func _build_step() -> void:
 	var build_pressed := (
 		Input.is_action_pressed("build") if _controlled_locally() else _pending_build_pressed
 	)
-	var just_pressed := build_pressed and not _last_build_input_state
+	var just_pressed := _rising_edge("build", build_pressed, _last_build_input_state)
 	_last_build_input_state = build_pressed
 
 	if not just_pressed or _chunk_manager == null:
@@ -1991,7 +2560,7 @@ func _destroy_step() -> void:
 	var destroy_pressed := (
 		Input.is_action_pressed("destroy") if _controlled_locally() else _pending_destroy_pressed
 	)
-	var just_pressed := destroy_pressed and not _last_destroy_input_state
+	var just_pressed := _rising_edge("destroy", destroy_pressed, _last_destroy_input_state)
 	_last_destroy_input_state = destroy_pressed
 
 	if not just_pressed or _chunk_manager == null:

@@ -301,6 +301,25 @@ func _phase_at(
 	return fposmod(elapsed_seconds, length) / length
 
 
+## Whether the crop is at genuine PEAK ripeness right now (docs/concept/
+## progression.md "Ecological literacy" -- a real, tested definition against
+## this model's own output, not an invented calendar band): the plateau after
+## the crop has fully ripened (hanging_at has reached its own crop_potential)
+## but before any of it has begun to abscise. hanging_at IS the real ripeness
+## signal (see this file's own doc comment); peak is simply the stretch where
+## it reads at its own maximum -- the instant even one fruit has left the
+## tree, ripeness is past its peak. False for an empty crop (crop_potential
+## <= 0): there is no peak for nothing to reach.
+func is_peak_ripe(
+	genome, elapsed_seconds: float, warmth: float,
+	yield_multiplier: float = 1.0, ripening_multiplier: float = 1.0
+) -> bool:
+	var crop := crop_potential(genome, yield_multiplier)
+	if crop <= 0:
+		return false
+	return hanging_at(genome, elapsed_seconds, warmth, yield_multiplier, ripening_multiplier) == crop
+
+
 ## Which fruit of a crop of `crop` left the tree, given that `count` of them
 ## did.
 ##

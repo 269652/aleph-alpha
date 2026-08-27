@@ -37,6 +37,38 @@ const MATERIALS: Dictionary = {
 		"conductivity": 1.0,
 		"decay_rate": 6.0,
 	},
+	# Worked/seasoned structural timber (see BuildingPiece.MATERIAL_TIMBER,
+	# docs/concept/timber_construction.md). Shares every property with plain
+	# "wood" -- it IS wood, just hewn/riven and seasoned at a Sägewerk, not a
+	# different substance -- except decay_rate: removing bark and sapwood
+	# (the layers with the highest moisture/nutrient content, where fungal
+	# decay establishes fastest) and seasoning down the remaining moisture
+	# content measurably slows rot relative to a raw, green, bark-on log in
+	# real vernacular construction, without approaching stone's near-
+	# permanence -- a decayed or waterlogged Balken is still exactly as
+	# flammable/soft/rot-prone as any other wood once decay conditions are
+	# actually met. 4.0 is two-thirds of wood's own 6.0 -- a real, moderate
+	# reduction (timber survives roughly 50% longer than green wood under
+	# the same exposure before reaching the same condition), not stone's
+	# near-immunity (1.0). Before this entry existed, BuildingDecay's
+	# material lookup would have silently fallen back to
+	# DEFAULT_PROPERTIES' decay_rate=1.0 (stone-like) for every timber
+	# piece in the game -- an unnoticed but real bug this entry closes.
+	# Pinned by test_timber_decay_rate_is_pinned/
+	# test_timber_decays_slower_than_raw_wood_but_faster_than_stone
+	# (test_material_properties.gd) and
+	# test_timber_decays_slower_than_raw_wood_for_the_same_elapsed_time
+	# (test_building_decay.gd).
+	"timber": {
+		"density": 0.6,
+		"hardness": 3.0,
+		"toughness": 6.0,
+		"elasticity": 5.0,
+		"sharpness_capacity": 3.0,
+		"flammability": 8.0,
+		"conductivity": 1.0,
+		"decay_rate": 4.0,
+	},
 	"flesh": {
 		"density": 1.05,
 		"hardness": 1.0,
@@ -93,6 +125,31 @@ const MATERIALS: Dictionary = {
 ## See test_iron_is_not_viable_raft_material / test_wood_is_viable_raft_material.
 const WATER_DENSITY: float = 1.0
 
+## Hardness at or above which a material reads as "hard" to the player (see
+## descriptors_for). Set at stone's own hardness (7.0): stone is the everyday
+## reference for "hard" in a hand -- a stone and everything harder (iron 8,
+## obsidian 9) is hard, wood (3) and flesh (1) are not. Pinned by
+## test_iron_and_stone_read_as_hard_but_wood_does_not.
+const HARD_HARDNESS: float = 7.0
+
+## Sharpness capacity at or above which a material reads as "keen" -- it can
+## hold a genuinely cutting edge rather than merely a worked point. Set at
+## iron's own sharpness_capacity (8.0), the material the game treats as the
+## benchmark blade: iron and obsidian (10) are keen, knapped stone (4) is not.
+## Pinned by test_obsidian_and_iron_read_as_keen_but_stone_does_not.
+const KEEN_SHARPNESS: float = 8.0
+
+## Toughness below which a material reads as "brittle". This is deliberately
+## THE SAME cutoff the impact model already fractures things at
+## (ImpactResolver.T_BRITTLE_TOUGHNESS) rather than a second opinion on the
+## same line -- a word the tooltip uses and a behaviour the physics uses must
+## mean one thing. Restated here rather than preloaded because
+## impact_resolver.gd already preloads THIS file, and the reverse preload
+## would be a cycle; the two are pinned equal by
+## test_the_brittle_descriptor_uses_the_same_toughness_cutoff_the_impact_model_does,
+## so they cannot drift apart silently.
+const BRITTLE_TOUGHNESS: float = 3.0
+
 ## Minimum toughness a material needs to serve as a GRAPPLE_ROPE. This "8-bit"
 ## vector has no separate tensile-strength scalar, so toughness (resistance
 ## to fracture under stress) stands in for it -- the closest of the 8
@@ -122,6 +179,42 @@ func property_value(material: String, property_name: String) -> float:
 func mass_kg_for(material: String, volume_cm3: float) -> float:
 	var density_g_per_cm3 := property_value(material, "density")
 	return density_g_per_cm3 * volume_cm3 / 1000.0
+
+
+## Plain-language descriptors for `material`, in a fixed order (hard, keen,
+## brittle, buoyant).
+##
+## docs/concept/materials.md's "Learning an emergent system" is explicit that
+## the player-facing default is descriptors + discovery, NOT a raw scalar
+## spreadsheet -- so this is how the 8-scalar property vector is allowed to
+## reach a tooltip. Weight is deliberately NOT among the words: an item's real
+## mass in kilograms is already shown as a real number (see
+## MaterialProperties.mass_kg_for / ItemCatalog._mass_kg_for), so "heavy"
+## would be a vaguer restatement of something the player can already read
+## exactly.
+##
+## Every threshold is a named, calibration-tested constant (HARD_HARDNESS,
+## KEEN_SHARPNESS, BRITTLE_TOUGHNESS, WATER_DENSITY), and the last two are the
+## cutoffs the game had ALREADY calibrated for fracture and for raft buoyancy,
+## reused rather than re-guessed.
+##
+## A material with no vector of its own gets NO words rather than the
+## DEFAULT_PROPERTIES fallback's: describing an unmodeled material would be
+## stating something the game has not decided (the same "not modeled yet"
+## honesty Item.mass_kg's 0.0 stands for).
+func descriptors_for(material: String) -> Array[String]:
+	var words: Array[String] = []
+	if not MATERIALS.has(material):
+		return words
+	if property_value(material, "hardness") >= HARD_HARDNESS:
+		words.append("hard")
+	if property_value(material, "sharpness_capacity") >= KEEN_SHARPNESS:
+		words.append("keen")
+	if property_value(material, "toughness") < BRITTLE_TOUGHNESS:
+		words.append("brittle")
+	if property_value(material, "density") < WATER_DENSITY:
+		words.append("buoyant")
+	return words
 
 
 ## Traversal-tool viability per docs/concept/transportation.md's "Traversal

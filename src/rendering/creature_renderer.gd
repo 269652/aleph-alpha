@@ -20,14 +20,31 @@ const PREDATOR_COLOR := Color(0.55, 0.08, 0.08)
 const LYNX_COLOR := Color(0.45, 0.48, 0.55)
 
 ## Species variety within each ecosystem role (see CreatureInfo's doc comment
-## on boar/lynx): a promoted herbivore-role individual is usually a plain
-## herbivore but sometimes a boar, deterministically per (chunk, index) --
-## weighted by simple repetition, not a probability table. Same idea for
-## predator-role individuals and lynx. This pair is also the fail-safe
-## default pool for any biome not present in the *_BY_BIOME maps below (see
-## spawn_creatures's biome_name doc), matching today's pre-biome behavior.
-const HERBIVORE_SPECIES_POOL := ["herbivore", "herbivore", "herbivore", "boar"]
-const PREDATOR_SPECIES_POOL := ["predator", "predator", "predator", "lynx"]
+## on boar/lynx): a promoted herbivore-role individual is usually a deer but
+## sometimes a boar, deterministically per (chunk, index) -- weighted by
+## simple repetition, not a probability table. Same idea for predator-role
+## individuals and jackal. This pair is also the fail-safe default pool for
+## any biome not present in the *_BY_BIOME maps below (see spawn_creatures's
+## biome_name doc) -- in practice only ocean, whose vegetation carrying
+## capacity is 0 so nothing is ever promoted there, and the empty default
+## biome_name used by isolated callers. Two of the roster's most widespread
+## species per role, making no biome claim of their own.
+##
+## These pools used to read ["herbivore" x3, "boar"] / ["predator" x3,
+## "lynx"]. "herbivore" and "predator" are this project's own ANONYMOUS
+## STAND-INS, not species -- ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY maps
+## "herbivore" to deer_shape and "predator" to wolf_shape, from before deer
+## and wolf existed as real named species with real illustrated art. Naming
+## those two never removed the stand-ins from the pools, so a promoted
+## individual could still reach the creature panel as a nameless "Herbivore
+## Lv.5" standing next to a "Boar Lv.1" (CreatureInfo.display_name is just
+## the species id capitalized). They are retired from SPAWNING here, but
+## deliberately KEPT as data-table keys everywhere else: AnimalAnatomy
+## .profile_for falls back to _PROFILES["herbivore"] and ProceduralAnimalSprite
+## resolves any unknown species to "herbivore", so those entries are the
+## never-crash-on-an-odd-id default and must not be deleted.
+const HERBIVORE_SPECIES_POOL := ["deer", "deer", "deer", "boar"]
+const PREDATOR_SPECIES_POOL := ["lynx", "lynx", "lynx", "jackal"]
 
 ## Per-biome species pools (Phase 1's "boars live where boars thrive" pillar,
 ## realized): which species a promoted herbivore/predator-role individual is
@@ -52,30 +69,50 @@ const PREDATOR_SPECIES_POOL := ["predator", "predator", "predator", "lynx"]
 ## listed in a biome's pool means "ecologically plausible there", not
 ## "always spawns there" for the dangerous three (see
 ## docs/concept/ecosystem_dynamics.md's Region difficulty section).
+## Sheep already grazed grassland and mountain; it now joins forest too,
+## alongside deer -- real prey for forest's own wolves below, not just a
+## general-purpose grazer (see docs/concept/ecosystem_dynamics.md's Species
+## roster section).
+## Deer take over grassland's dominant grazer slot from the retired
+## "herbivore" placeholder they were always the stand-in for (deer_shape),
+## and bring real illustrated art with them; every other biome simply drops
+## its single placeholder entry, each already having a dominant named
+## specialist x3 plus named fillers.
 ## Squirrel joins forest ONLY -- unlike mouse's near-ubiquitous generalism,
 ## real tree squirrels are a genuine forest/woodland specialist: this is
 ## where the nut trees they depend on (TreeSpecies.is_nut) actually grow
 ## (see docs/concept/flora.md's disperser-vs-predator tension).
 const HERBIVORE_SPECIES_POOL_BY_BIOME := {
-	"grassland": ["herbivore", "herbivore", "herbivore", "boar", "horse", "mouse", "mouse", "deer", "nonvenomous_snake", "sheep"],
-	"forest": ["boar", "boar", "boar", "herbivore", "mouse", "mouse", "deer", "nonvenomous_snake", "squirrel", "squirrel"],
-	"desert": ["camel", "camel", "camel", "herbivore", "horse", "mouse", "nonvenomous_snake"],
-	"tundra": ["reindeer", "reindeer", "reindeer", "herbivore", "mouse", "deer"],
-	"rainforest": ["tapir", "tapir", "tapir", "herbivore", "mouse", "mouse", "nonvenomous_snake"],
-	"mountain": ["goat", "goat", "goat", "herbivore", "mouse", "sheep", "sheep"],
+	"grassland": ["deer", "deer", "deer", "boar", "horse", "mouse", "mouse", "nonvenomous_snake", "sheep"],
+	"forest": ["boar", "boar", "boar", "mouse", "mouse", "deer", "sheep", "nonvenomous_snake", "squirrel", "squirrel"],
+	"desert": ["camel", "camel", "camel", "horse", "mouse", "nonvenomous_snake"],
+	"tundra": ["reindeer", "reindeer", "reindeer", "mouse", "deer"],
+	"rainforest": ["tapir", "tapir", "tapir", "mouse", "mouse", "nonvenomous_snake"],
+	"mountain": ["goat", "goat", "goat", "mouse", "sheep", "sheep"],
 }
-## wolf joins grassland's and forest's pools -- real grey wolves are the
-## classic temperate grassland/forest apex predator (see
-## docs/concept/ecosystem_dynamics.md's Species roster section). An ordinary,
-## ungated addition like deer/nonvenomous_snake, not gated by
-## MIN_DIFFICULTY_TIER_BY_SPECIES.
+## Wolf joins forest only (real wolves are the classic temperate/boreal
+## forest apex predator, and this project's own dominant-species-per-biome
+## pattern -- jackal/desert, arctic_fox/tundra, jaguar/rainforest,
+## mountain_lion/mountain -- had left forest as the one biome without a
+## dedicated named predator of its own; see
+## docs/concept/ecosystem_dynamics.md's Species roster section). Purely
+## additive to forest's existing lynx dominance/bear entries, not a
+## replacement of them -- lynx keeps its own real habitat here.
+## Jackals take grassland's dominant predator slot from the retired
+## "predator" placeholder. Real golden jackals are an open grassland/steppe
+## canid across Eurasia and Africa, not only a desert one -- an ordinary
+## roster placement, the same kind as mouse joining every biome. Wolf is NOT
+## used here despite being what "predator" was drawn as: wolves are
+## forest-exclusive by design (see docs/concept/ecosystem_dynamics.md's
+## "Forest gets its own named predator"), and reversing that would be a
+## design decision, not a placeholder cleanup.
 const PREDATOR_SPECIES_POOL_BY_BIOME := {
-	"grassland": ["predator", "predator", "predator", "lynx", "lion", "wolf"],
-	"forest": ["lynx", "lynx", "lynx", "predator", "bear", "wolf"],
-	"desert": ["jackal", "jackal", "jackal", "predator", "lion", "venomous_snake"],
-	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "predator", "bear"],
-	"rainforest": ["jaguar", "jaguar", "jaguar", "predator", "venomous_snake"],
-	"mountain": ["mountain_lion", "mountain_lion", "mountain_lion", "predator"],
+	"grassland": ["jackal", "jackal", "jackal", "lynx", "lion"],
+	"forest": ["lynx", "lynx", "lynx", "wolf", "wolf", "bear"],
+	"desert": ["jackal", "jackal", "jackal", "lion", "venomous_snake"],
+	"tundra": ["arctic_fox", "arctic_fox", "arctic_fox", "bear"],
+	"rainforest": ["jaguar", "jaguar", "jaguar", "venomous_snake"],
+	"mountain": ["mountain_lion", "mountain_lion", "mountain_lion"],
 }
 
 ## The three genuinely dangerous new additions -- everything else in the
@@ -162,13 +199,13 @@ func spawn_creatures(
 	spawned.append_array(
 		_spawn_species(
 			parent, chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
-			herbivore_population, herbivore_pool, 1, world, start_index
+			herbivore_population, herbivore_pool, 1, world, start_index, difficulty_tier
 		)
 	)
 	spawned.append_array(
 		_spawn_species(
 			parent, chunk_coord, chunk_origin_tiles, chunk_size, tile_size,
-			predator_population, predator_pool, 2, world, start_index
+			predator_population, predator_pool, 2, world, start_index, difficulty_tier
 		)
 	)
 	return spawned
@@ -196,7 +233,8 @@ func _spawn_species(
 	species_pool: Array,
 	species_salt: int,
 	world,
-	start_index: int = 0
+	start_index: int = 0,
+	difficulty_tier: int = RegionDifficulty.Tier.EASY
 ) -> Array[Node2D]:
 	var count := marker_count_for(population)
 	var spawned: Array[Node2D] = []
@@ -211,9 +249,12 @@ func _spawn_species(
 		var position := _deterministic_position(
 			chunk_coord, chunk_origin_tiles, chunk_size, tile_size, species_salt, i
 		)
-		spawned.append(
-			_build_marker(parent, species_name, position, wander_seed, world, tile_size)
-		)
+		var marker := _build_marker(parent, species_name, position, wander_seed, world, tile_size)
+		# See docs/concept/disease.md "Region pressure": carried forward so
+		# disease transmission scales with the SAME distance-from-spawn
+		# signal that already gated this individual's species pool above.
+		marker.region_tier = difficulty_tier
+		spawned.append(marker)
 	return spawned
 
 

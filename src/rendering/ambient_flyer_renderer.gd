@@ -46,6 +46,15 @@ const ProceduralEggSprite = preload("res://src/rendering/procedural_egg_sprite.g
 const Chunk = preload("res://src/world/chunk.gd")
 const FlyerDiet = preload("res://src/gameplay/flyer_diet.gd")
 const GroundForageBehavior = preload("res://src/gameplay/ground_forage_behavior.gd")
+## For FLYER_RANGE's latitude axis below. EarthChunkGenerator is preloaded for
+## one integer (WORLD_HEIGHT_TILES) rather than copying that number here,
+## because a second copy of the world's height is exactly the kind of silently
+## drifting duplicate this file has been bitten by before (see
+## FLYER_WORLD_SCALE's own warning). Its preload chain loads scripts only --
+## the elevation raster is read in EarthElevationSource._init, never at script
+## load -- so this costs nothing before a generator is actually constructed.
+const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
+const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 
 ## Butterflies flutter: fast-ish direction changes, small radius, slow speed.
 ## (Interval bumped from an earlier 0.4s -- fast enough to feel jittery
@@ -85,9 +94,50 @@ const ROBIN_SPECIES_POOL: Array[String] = ["robin"]
 const SPARROW_SPECIES_POOL: Array[String] = ["sparrow"]
 
 ## Real butterflies/songbirds are a warm/flowering-habitat presence --
-## excluded from desert/tundra/mountain/ocean as implausible.
+## excluded from desert/tundra/mountain/ocean as implausible. This is the
+## TIER-WIDE gate only ("can any flyer at all be here"); which SPECIES can be
+## here is FLYER_RANGE below, and the two are pinned consistent by
+## test_flyer_range_biomes_agree_with_the_tier_wide_biome_gates so they cannot
+## drift apart. Other files refer to these two by name (see
+## decomposer_renderer.gd, earthworm_patch.gd).
 const BUTTERFLY_BIOMES := {"grassland": true, "forest": true, "rainforest": true}
 const BIRD_BIOMES := {"grassland": true, "forest": true, "rainforest": true}
+
+## Where each flyer species can ACTUALLY live -- the aerial tier's equivalent
+## of CreatureRenderer.HERBIVORE_SPECIES_POOL_BY_BIOME ("a boar is where boars
+## can actually thrive"), with one axis the ground roster never needed: a
+## butterfly's range is set by CLIMATE BAND at least as much as by biome, and
+## biome alone cannot tell a German meadow from a Kansas one. This table is
+## why a Blue Morpho -- a Neotropical rainforest butterfly -- no longer flies
+## over Brandenburg.
+##
+## "biomes" is the same biome-name gate BUTTERFLY_BIOMES/BIRD_BIOMES applied
+## tier-wide, now per species. "abs_latitude" is degrees FROM THE EQUATOR
+## (min, max), so one band covers both hemispheres. A band is the finest cut
+## the available geography supports: this project has no biogeographic-realm
+## axis at all, so nothing here can separate Nearctic from Palearctic -- see
+## docs/concept/ecosystem_dynamics.md's Open questions.
+##
+## Real ranges, not invented numbers:
+##  - monarch (Danaus plexippus): a Nearctic breeding butterfly of open
+##    country, roughly 15-50 deg. Absent from Europe -- the reported bug.
+##  - swallowtail (Papilio machaon, the OLD WORLD swallowtail): Palearctic,
+##    Mediterranean up into the subarctic, roughly 25-70 deg. This is the
+##    swallowtail a German meadow really has.
+##  - blue_morpho (Morpho spp.): Neotropical RAINFOREST, inside the tropics,
+##    roughly 0-25 deg.
+##  - bee (Apis mellifera) / sparrow (Passer domesticus): near-cosmopolitan,
+##    every flowering/inhabited band short of the high arctic.
+##  - robin (Erithacus rubecula / Turdus migratorius): a temperate woodland
+##    and garden bird in both the Old and New World, not a rainforest species.
+const FLYER_RANGE := {
+	"monarch": {"biomes": ["grassland", "forest"], "abs_latitude": Vector2(15.0, 50.0)},
+	"swallowtail": {"biomes": ["grassland", "forest"], "abs_latitude": Vector2(25.0, 70.0)},
+	"blue_morpho": {"biomes": ["rainforest"], "abs_latitude": Vector2(0.0, 25.0)},
+	"bee": {"biomes": ["grassland", "forest", "rainforest"], "abs_latitude": Vector2(0.0, 70.0)},
+	"sparrow": {"biomes": ["grassland", "forest", "rainforest"], "abs_latitude": Vector2(0.0, 70.0)},
+	"robin": {"biomes": ["grassland", "forest"], "abs_latitude": Vector2(20.0, 70.0)},
+}
 
 ## Sparse, decorative caps -- much sparser than fish/creatures since these
 ## are pure ambience, not gameplay-relevant. A guaranteed MIN..MAX range per
@@ -129,6 +179,45 @@ var _bird_sprite := ProceduralBirdSprite.new()
 ## does not need a butterfly/bird split the way the two sprite generators
 ## above do.
 var _egg_sprite := ProceduralEggSprite.new()
+var _geo_coordinates := GeoCoordinates.new()
+
+
+## Drops any pool entry whose real range excludes this chunk -- the aerial
+## tier's mirror of CreatureRenderer._allowed_pool, which does the same job
+## for difficulty tier. A species with no FLYER_RANGE entry is unrestricted,
+## the same never-crash-on-an-odd-id convention used throughout (see
+## AnimalAnatomy.profile_for, ProceduralButterflySprite).
+func _in_range_pool(pool: Array[String], biome_name: String, abs_latitude: float) -> Array[String]:
+	var allowed: Array[String] = []
+	for species in pool:
+		if not FLYER_RANGE.has(species):
+			allowed.append(species)
+			continue
+		var species_range: Dictionary = FLYER_RANGE[species]
+		var biomes: Array = species_range["biomes"]
+		if not biomes.has(biome_name):
+			continue
+		var band: Vector2 = species_range["abs_latitude"]
+		if abs_latitude < band.x or abs_latitude > band.y:
+			continue
+		allowed.append(species)
+	return allowed
+
+
+## This chunk's real absolute latitude, derived from the global tile row this
+## renderer ALREADY receives -- the same GeoCoordinates.latitude_for_tile /
+## EarthChunkGenerator.WORLD_HEIGHT_TILES pair EarthChunkGenerator itself uses
+## for temperature and biome, so a flyer's range is measured against exactly
+## the geography that produced the biome it is flying over. No new parameter
+## and no call-site change.
+##
+## Measured at the chunk's MIDDLE row rather than its corner, so a chunk
+## straddling a band edge answers for where it mostly is (same spirit as
+## BiomeClassifier.dominant_biome). At ~32 km a chunk that is a ~0.14 deg
+## shift -- immaterial to bands tens of degrees wide.
+func _abs_latitude_for(chunk: Chunk, chunk_origin_tiles: Vector2i) -> float:
+	var mid_row := chunk_origin_tiles.y + int(chunk.height / 2)
+	return absf(_geo_coordinates.latitude_for_tile(mid_row, EarthChunkGenerator.WORLD_HEIGHT_TILES))
 
 
 ## `robin_population`/`sparrow_population` are this chunk's live aggregate
@@ -148,6 +237,10 @@ func spawn_ambient_flyers(
 	sparrow_population: float = 0.0
 ) -> Array[Node2D]:
 	var spawned: Array[Node2D] = []
+	# Which SPECIES this chunk can hold, not just whether the tier can be here
+	# at all (see FLYER_RANGE): a filtered pool may legitimately come back
+	# empty, which _spawn_species handles by spawning nothing.
+	var abs_latitude := _abs_latitude_for(chunk, chunk_origin_tiles)
 	if BUTTERFLY_BIOMES.has(biome_name):
 		# Pollinators are drawn to flowers: a chunk thick with blooms hatches
 		# proportionally more pollinators than bare grass (see
@@ -164,7 +257,8 @@ func spawn_ambient_flyers(
 		spawned.append_array(
 			_spawn_species(
 				parent, chunk, chunk_origin_tiles, tile_size, "butterfly_spawn",
-				TRUE_BUTTERFLY_SPECIES_POOL, scented_butterfly_min, scented_butterfly_max,
+				_in_range_pool(TRUE_BUTTERFLY_SPECIES_POOL, biome_name, abs_latitude),
+				scented_butterfly_min, scented_butterfly_max,
 				AmbientFlyerMovement.new(BUTTERFLY_SPEED, BUTTERFLY_RADIUS, BUTTERFLY_INTERVAL),
 				_butterfly_sprite,
 				scent_world
@@ -175,7 +269,8 @@ func spawn_ambient_flyers(
 		spawned.append_array(
 			_spawn_species(
 				parent, chunk, chunk_origin_tiles, tile_size, "bee_spawn",
-				BEE_SPECIES_POOL, scented_bee_min, scented_bee_max,
+				_in_range_pool(BEE_SPECIES_POOL, biome_name, abs_latitude),
+				scented_bee_min, scented_bee_max,
 				AmbientFlyerMovement.new(BUTTERFLY_SPEED, BUTTERFLY_RADIUS, BUTTERFLY_INTERVAL),
 				_butterfly_sprite,
 				scent_world
@@ -237,6 +332,12 @@ func _spawn_species(
 	sprite_generator,
 	scent_world = null,
 ) -> Array[Node2D]:
+	# Nothing in this pool can live here (see FLYER_RANGE and _in_range_pool):
+	# an empty pool must spawn nothing, not divide by zero on the modulo that
+	# picks a species below.
+	if species_pool.is_empty():
+		return []
+
 	var candidates: Array[Vector2i] = []
 	for y in chunk.height:
 		var global_y := chunk_origin_tiles.y + y

@@ -1,0 +1,75 @@
+extends GutTest
+
+## World's forwarding getters for the "was this found" signals two of this
+## stage's Easter eggs expose (docs/concept/easter_eggs.md's Zork-homage
+## terminal and signed secret room -- see AncientTerminal/SignedSecretRoom's
+## own doc comments) -- the clean, testable hook point a later "Three
+## Fragments" system can check "has the player found X" against, without
+## reaching into World's private fields directly.
+##
+## World itself has no direct unit tests (see test_world_persistence.gd's
+## own doc comment: "World's role is orchestration glue over already-tested
+## pieces"), but these two getters are genuinely pure/dependency-free --
+## they only read a plain (non-@onready) field, so, like test_world_
+## persistence.gd's own tests, they don't need add_child() or the real
+## scene tree.
+
+const World = preload("res://scenes/world.gd")
+
+var world: World
+
+
+func before_each():
+	world = World.new()
+
+
+func after_each():
+	world.free()
+
+
+func test_has_found_ancient_terminal_false_until_the_module_marks_it():
+	assert_false(world.has_found_ancient_terminal())
+	world._ancient_terminal.mark_found()
+	assert_true(world.has_found_ancient_terminal())
+
+
+func test_has_found_signed_secret_room_false_until_the_module_marks_it():
+	assert_false(world.has_found_signed_secret_room())
+	world._signed_secret_room.mark_found()
+	assert_true(world.has_found_signed_secret_room())
+
+
+## Same forwarding-getter shape, for the WarGames egg's own found signal
+## (added alongside the "Three Fragments" hunt -- see WarGamesResponse's own
+## doc comment for why it needed one).
+func test_has_found_wargames_egg_false_until_the_module_marks_it():
+	assert_false(world.has_found_wargames_egg())
+	world._wargames_response.mark_found()
+	assert_true(world.has_found_wargames_egg())
+
+
+## ThreeFragmentsHunt's own has_triggered() latch, forwarded the same way --
+## the "Three Fragments" bonus discovery's own "was this found" signal.
+func test_has_triggered_three_fragments_bonus_false_until_the_module_marks_it():
+	assert_false(world.has_triggered_three_fragments_bonus())
+	world._three_fragments_hunt.mark_triggered()
+	assert_true(world.has_triggered_three_fragments_bonus())
+
+
+## SeaCaveGuardian's own is_challenge_active() latch, forwarded the same
+## way (docs/concept/easter_eggs.md's "hidden sea cave... dueling-birds
+## cabinet" entry) -- not part of "Three Fragments", but the same clean
+## hook-point shape as every getter above.
+func test_is_sea_cave_challenge_active_false_until_a_challenge_begins():
+	assert_false(world.is_sea_cave_challenge_active())
+	world._sea_cave_guardian.begin_challenge()
+	assert_true(world.is_sea_cave_challenge_active())
+
+
+## RetroHandheld's own is_open() latch, forwarded the same way (docs/concept/
+## easter_eggs.md's "hidden retro handheld" entry) -- not part of "Three
+## Fragments", but the same clean hook-point shape as every getter above.
+func test_is_handheld_open_false_until_the_handheld_is_opened():
+	assert_false(world.is_handheld_open())
+	world._retro_handheld.open()
+	assert_true(world.is_handheld_open())

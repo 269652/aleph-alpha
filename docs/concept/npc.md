@@ -14,6 +14,22 @@ NPCs are individuals, not quest dispensers.
   traits, a driving need/goal, and relationships to a handful of other NPCs.
   Backstory/personal-history depth starts minimal and is allowed to grow
   organically through logged events rather than being hand-authored upfront.
+  Personality is DNA derived (`NpcGenome`, same "continuous 0..1 gene per
+  trait, seeded" shape `TreeGenome` already uses for trees): each of the 8
+  named traits gets its own independent gene, and the trait that rolls
+  highest is the NPC's expressed `personality_trait` -- a real genotype
+  underneath one visible phenotype, not a single flat categorical roll with
+  nothing behind it. Deliberately kept as a plain `String -> float`
+  Dictionary rather than fixed fields, since that shape already slots
+  directly into the existing `dna_crossover.gd` utility unchanged -- once
+  villagers can have children at all (see Lifecycle below), two parents'
+  genomes crossing into a child's is a natural follow-up, not a new
+  mechanism. This also gives other systems a continuous strength to read
+  instead of a yes/no category match -- e.g. which house blueprint a
+  villager builds (`HouseBlueprint.choose_blueprint_id`, see
+  [building.md](building.md#a-blueprint-catalog-not-one-box)) is nudged by
+  how strongly their dominant trait actually rolled, not just which name it
+  happened to land on.
 - **Planning architecture** (cost- and latency-aware by design):
   - Once per in-game day, one LLM call produces a rough schedule for that
     NPC: a sequence of `{time block, location, activity}` entries, informed
@@ -74,15 +90,22 @@ expects here, the same relationship [quests.md](quests.md) has to
   distortion accumulator.
 - **Source types** (unchanged from `02`): firsthand, witnessed, trusted
   testimony, stranger testimony, inference, written record, rumor.
-- **Propagation reuses existing NPC proximity, not a new social model.**
-  NPCs already meet at a settlement's shared landmarks (well/stall/gate) on
-  their daily schedule (`npc_schedule.gd`) — that existing contact point is
-  where memory propagates: when one NPC tells another about an event, the
-  listener gets a new memory record for the same event, confidence and
-  source type both stepping down by one hop (firsthand → the listener gets
-  trusted/stranger testimony, not firsthand), scaled by the pair's existing
-  relationship/trust. No new movement, scheduling, or social-graph code
-  required — it rides the schedule system that already exists.
+- **Propagation reuses existing NPC proximity, not a new social model —
+  built and automatic** (`EarthChunkManager.step_npc_encounters`,
+  `NpcEncounter.group_by_shared_landmark`). NPCs meet at a settlement's
+  shared landmarks (well/stall/gate) on their daily schedule
+  (`npc_schedule.gd`) — that existing contact point is where memory
+  propagates: when one NPC tells another about an event, the listener gets
+  a new memory record for the same event, confidence and source type both
+  stepping down by one hop (firsthand → the listener gets trusted/stranger
+  testimony, not firsthand). No new movement, scheduling, or social-graph
+  code required — it reads real, already-live `NpcMarker` schedule/position
+  state directly, exactly as this section originally predicted. Each
+  meeting exchanges the pair's single most-recently-formed memory
+  (bidirectional), not an exhaustive dump. Trust/relationship-weighted
+  decay is still deferred — `npc_identity.gd` has no relationships yet
+  (Phase 3's own documented scope) — so propagation currently runs at a
+  flat one-hop step regardless of who is talking to whom.
 - **Decay.** An unreinforced memory's confidence/salience fades over time,
   the same "decay unless reinforced" principle relationships already assume
   above. Shape only for now — the exact decay function is a tuned constant,
@@ -228,13 +251,19 @@ would is, mechanically, a real settlement — same representative/quorum
 quest machinery, same wealth-driven risk exposure, same ruin fate on
 failure. Full mechanism, including the migration floor and the active-invite
 option, in [quests.md](quests.md#settlement-growth-migration-and-player-founded-villages).
+This same replan-interrupt shape is what
+[timber_construction.md](timber_construction.md#deciding-what-to-build-and-who-builds-it-design-from-a-follow-up-brainstorm-session)'s
+own Builder assignment reuses — an idle NPC picking up construction duty
+ad hoc, not relocating, but the identical "a need crossing a threshold
+reassigns an NPC out-of-cycle" mechanism.
 
 ### Current implementation status (divergence note)
 
 A first real slice exists (see `docs/progress.md`'s NPC section for the full
 breakdown): procedural village placement (`settlement_generator.gd`,
 sparse/deterministic per chunk), villager identity (`npc_identity.gd`: name/
-occupation/personality/need, no relationships yet), and the planning
+occupation/personality (now DNA derived via `npc_genome.gd`, see Identity
+above)/need, no relationships yet), and the planning
 architecture's cheap-local-FSM half fully working (`npc_marker.gd` walks a
 daily schedule, sharing the player's own `CharacterView` walk cycle --
 `NpcMarker.setup(world, tile_size)` gives it the same water-awareness

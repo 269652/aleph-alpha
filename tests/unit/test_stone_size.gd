@@ -168,6 +168,24 @@ func test_a_big_boulder_pays_at_least_as_well_per_swing():
 
 # -- how big it looks --------------------------------------------------------
 
+## The player height stones are measured against is the one CharacterView
+## actually uses, rather than a second, independent copy that can drift away
+## from it -- exactly the drift ProceduralFlowerSprite.PLAYER_WORLD_HEIGHT_PX
+## was fixed to guard against (see its own
+## test_the_player_height_flowers_are_measured_against_is_the_real_one):
+## CharacterView.TARGET_HEIGHT_FRACTION_OF_TREE was raised from 2/3 to 0.85 in
+## an earlier pass, and stone_size.gd's own copy of "2/3" was never updated to
+## match.
+func test_the_player_height_stones_are_measured_against_is_the_real_one():
+	var CharacterView := load("res://scenes/character_view.gd")
+	assert_almost_eq(
+		StoneSize.PLAYER_WORLD_HEIGHT_PX,
+		-CharacterView.HEAD_TOP_Y * CharacterView.SCALE,
+		0.001,
+		"stones must be measured against the character's real height"
+	)
+
+
 ## Read against the player, like everything else in this world. A two-metre
 ## boulder stands a head above a person, because it is two metres and a person
 ## is not -- the yardstick is applied honestly rather than rounded to "as tall

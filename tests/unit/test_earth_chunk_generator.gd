@@ -125,6 +125,27 @@ func test_himalayan_terrain_is_steeper_than_a_great_plain():
 	)
 
 
+## RULE-9 pin for the hillshade path: taking the gradient once and deriving
+## both readings from it must produce EXACTLY what slope_at_global and
+## aspect_at_global return, at real coordinates spanning flat ocean, a desert
+## slope and Himalayan relief. If this holds, EarthChunkManager's hillshade
+## painter can halve its elevation sampling without any tile changing.
+func test_gradient_at_global_derives_exactly_slope_and_aspect_at_global():
+	var relief := generator.terrain_relief()
+	for tile in [Vector2i(12345, 6789), Vector2i(21600, 6900), Vector2i(9100, 5720), Vector2i(21468, 4160)]:
+		var gradient := generator.gradient_at_global(tile.x, tile.y)
+		assert_eq(
+			relief.slope_degrees_from_gradient(gradient.x, gradient.y),
+			generator.slope_at_global(tile.x, tile.y),
+			"slope at %s must not depend on how many times the gradient was sampled" % tile
+		)
+		assert_eq(
+			relief.aspect_degrees_from_gradient(gradient.x, gradient.y),
+			generator.aspect_at_global(tile.x, tile.y),
+			"aspect at %s must not depend on how many times the gradient was sampled" % tile
+		)
+
+
 func test_generated_biomes_are_all_known():
 	var chunk := generator.generate_chunk(Vector2i(100, 50), 8)
 	for biome_name in chunk.biome:
@@ -147,6 +168,62 @@ func test_chunk_moisture_and_temperature_match_direct_global_queries():
 		assert_almost_eq(
 			chunk.temperature[index], generator.temperature_at_global(global_x, global_y), 0.0001
 		)
+
+
+# -- elevation reuse: temperature no longer re-derives what the caller has ------
+
+## generate_chunk and biome_at_global both compute a cell's elevation one
+## line before asking for its temperature, and temperature_at_global used to
+## re-derive it -- four extra bilinear elevation samples (sixteen byte reads)
+## per cell for a number already sitting in a local. temperature_at_elevation
+## is the same formula taking that local, so the two must agree EXACTLY, not
+## approximately: elevation_at_global is a deterministic pure function of the
+## tile, so both paths see the identical double and any difference at all
+## would mean the formula drifted.
+func test_temperature_at_elevation_is_exactly_temperature_at_global():
+	for tile in [Vector2i(12345, 6789), Vector2i(21600, 6900), Vector2i(9100, 5720), Vector2i(0, 0)]:
+		var cell_elevation := generator.elevation_at_global(tile.x, tile.y)
+		assert_eq(
+			generator.temperature_at_elevation(tile.y, cell_elevation),
+			generator.temperature_at_global(tile.x, tile.y),
+			"temperature at %s must not depend on which of the two entry points asked" % tile
+		)
+
+
+## RULE-9 pin for the whole generation path: every cell of a real chunk must
+## be bit-for-bit what the public per-tile queries return for the same
+## coordinate. The pre-existing test_chunk_cells_match_direct_global_queries
+## samples three cells at 1e-4 tolerance; this one walks ALL of them at exact
+## equality, across an arctic chunk, the Berlin chunk and a Himalayan one, so
+## the elevation-reuse refactor cannot move terrain, climate or biomes by a
+## bit.
+##
+## The expected values are collected into PackedFloat32Arrays rather than
+## compared as loose floats, because Chunk stores them in PackedFloat32Array
+## fields: a raw double from a per-tile query is NOT equal to the same number
+## after that 32-bit round trip (measured, e.g. 0.58563596010208 vs
+## 0.5856359670667), so comparing the packed arrays is what makes "exact"
+## mean exact instead of quietly meaning "within a float32 ulp".
+func test_every_generated_cell_is_exactly_the_per_tile_query():
+	var chunk_size := 8
+	for chunk_coord in [Vector2i(2, 3), Vector2i(2683, 520), Vector2i(1235, 690)]:
+		var chunk := generator.generate_chunk(chunk_coord, chunk_size)
+		var expected_elevation := PackedFloat32Array()
+		var expected_moisture := PackedFloat32Array()
+		var expected_temperature := PackedFloat32Array()
+		var expected_biome := PackedStringArray()
+		for local_y in chunk_size:
+			for local_x in chunk_size:
+				var global_x: int = chunk_coord.x * chunk_size + local_x
+				var global_y: int = chunk_coord.y * chunk_size + local_y
+				expected_elevation.append(generator.elevation_at_global(global_x, global_y))
+				expected_moisture.append(generator.moisture_at_global(global_x, global_y))
+				expected_temperature.append(generator.temperature_at_global(global_x, global_y))
+				expected_biome.append(generator.biome_at_global(global_x, global_y))
+		assert_eq(chunk.elevation, expected_elevation, "elevation of chunk %s" % chunk_coord)
+		assert_eq(chunk.moisture, expected_moisture, "moisture of chunk %s" % chunk_coord)
+		assert_eq(chunk.temperature, expected_temperature, "temperature of chunk %s" % chunk_coord)
+		assert_eq(chunk.biome, expected_biome, "biomes of chunk %s" % chunk_coord)
 
 
 func test_chunk_moisture_and_temperature_are_normalized():

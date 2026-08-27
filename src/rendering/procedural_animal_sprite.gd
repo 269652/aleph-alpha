@@ -69,6 +69,24 @@ const SPECIES_BASE_COLORS := {
 	"lion": Color(0.78, 0.55, 0.15),
 	"nonvenomous_snake": Color(0.35, 0.42, 0.22),
 	"venomous_snake": Color(0.55, 0.22, 0.12),
+	# A cooler, darker "timber wolf" gray, distinct from predator's own
+	# blue-leaning gray (0.47, 0.47, 0.52) -- wolf is the real, named
+	# version of what "predator" always stood in for (see
+	# SPECIES_SHAPE_FAMILY's own doc comment).
+	"wolf": Color(0.42, 0.40, 0.38),
+	# Creamy wool tan, distinct from arctic_fox's near-white coat.
+	"sheep": Color(0.82, 0.76, 0.62),
+	# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) -----------
+	# Squallmaw: a stormy deep blue-green sea dragon. Coilnecca: a calm
+	# slate-green loch color. Champ: a murkier warm brown-grey lake color --
+	# distinct from Coilnecca despite the shared premise.
+	"squallmaw": Color(0.09, 0.28, 0.34),
+	"coilnecca": Color(0.24, 0.46, 0.40),
+	"champ": Color(0.36, 0.37, 0.28),
+	# Kraken: a near-black abyssal blue -- distinctly darker/colder than
+	# Squallmaw's own storm-blue-green so the doc's two ocean cameos never
+	# read as recolors of each other despite sharing the snake_shape family.
+	"kraken": Color(0.04, 0.09, 0.14),
 }
 
 ## Maps every species name to one of the 4 hand-drawn silhouette families in
@@ -114,6 +132,18 @@ const SPECIES_SHAPE_FAMILY := {
 	"lion": "lynx_shape",
 	"nonvenomous_snake": "snake_shape",
 	"venomous_snake": "snake_shape",
+	# The eponymous match: "predator" has always reused wolf_shape as this
+	# project's anonymous stand-in for a wolf. Wolf now IS that species,
+	# named and real.
+	"wolf": "wolf_shape",
+	"sheep": "deer_shape",
+	# Easter-egg cameo creatures (docs/concept/easter_eggs.md) -- legless
+	# serpentine bodies, same family as the two snakes above (see
+	# AnimalAnatomy.SERPENT_SPECIES).
+	"squallmaw": "snake_shape",
+	"coilnecca": "snake_shape",
+	"champ": "snake_shape",
+	"kraken": "snake_shape",
 }
 
 ## Jaguar (lynx-shaped) gets a scatter of dark rosette-like speckle dots so it

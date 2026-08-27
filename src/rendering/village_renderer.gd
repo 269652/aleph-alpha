@@ -25,6 +25,9 @@ const HouseBlueprint = preload("res://src/gameplay/house_blueprint.gd")
 const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const ConstructionLabor = preload("res://src/emergence/construction_labor.gd")
+const ConstructionCatchup = preload("res://src/world/construction_catchup.gd")
 
 ## Villagers are rendered with the player's own CharacterView (see
 ## _build_npc), so there are deliberately no villager-specific body size
@@ -37,12 +40,7 @@ var _character_sprite := ProceduralCharacterSprite.new()
 var _appearance := HeroAppearance.new()
 var _drop_shadow := DropShadow.new()
 var _house_blueprint := HouseBlueprint.new()
-
-## Every village house's footprint (see HouseBlueprint) -- fixed rather than
-## seeded-variable for now, a deliberate Phase 1 simplification. Comfortably
-## clear of HouseBlueprint.MINIMUM_FOOTPRINT (3) with room for a real
-## 3x2-ish interior once the wall ring is subtracted.
-const _HOUSE_FOOTPRINT := Vector2i(5, 4)
+var _construction_catchup := ConstructionCatchup.new()
 
 ## Roughly 1-in-this-many houses is stone rather than wood -- most villages
 ## read as a wood-built settlement, with the occasional stone house for
@@ -119,17 +117,18 @@ func spawn_village(
 
 	var spawned: Array[Node2D] = []
 	var house_positions: Array = settlement.house_positions
+	var npcs: Array = settlement.npcs
 	var door_positions: Array[Vector2] = []
 	var stand_positions: Array[Vector2] = []
 	for i in house_positions.size():
-		var house := _stamp_house(chunk_coord, i, house_positions[i], tile_size, world)
+		var house := _stamp_house(chunk_coord, i, house_positions[i], npcs[i], tile_size, world, npcs.size())
 		door_positions.append(house.door)
 		stand_positions.append(house.stand)
 	for landmark_id in settlement.landmarks:
 		spawned.append(_build_landmark(landmark_id, settlement.landmarks[landmark_id], parent))
-	var npcs: Array = settlement.npcs
 	for i in npcs.size():
-		spawned.append(_build_npc(settlement, i, door_positions[i], tile_size, parent, world, market))
+		var npc_marker := _build_npc(settlement, i, door_positions[i], tile_size, parent, world, market)
+		spawned.append(npc_marker)
 		# A merchant gets a second, PERSONAL trading stand at their own house,
 		# on top of the one shared village-square stall -- otherwise every
 		# merchant in the village routes to the same single stall, which reads
@@ -137,6 +136,18 @@ func spawn_village(
 		# docs/concept/npc.md).
 		if npcs[i].occupation == "merchant":
 			spawned.append(_build_landmark("stall", stand_positions[i], parent))
+		# Every OTHER occupation whose own work location isn't already one of
+		# the settlement's 3 shared landmarks (merchant/stall and guard/gate
+		# both already have something real there) gets a real prop of their
+		# own at their personal workspot -- a farmer's field, a blacksmith's
+		# forge, a fisher's dock, an herbalist's garden -- instead of an
+		# invisible position they simply stood on empty grass at (reported
+		# directly as the remaining gap after houses themselves got real
+		# variety: "no per-occupation building beyond the shared landmarks
+		# and a merchant's own stand").
+		var work_tag: String = NpcIdentity.WORK_LOCATION_BY_OCCUPATION.get(npcs[i].occupation, "")
+		if work_tag != "" and not settlement.landmarks.has(work_tag):
+			spawned.append(_build_landmark(work_tag, npc_marker.workspot_position, parent))
 	return spawned
 
 
@@ -151,10 +162,29 @@ func spawn_village(
 ## back to `anchor` when nothing is actually stamped (no world, an empty
 ## footprint, or no dry ground nearby -- see _find_dry_origin), the same
 ## fail-open shape as the rest of this function.
-func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, tile_size: int, world) -> Dictionary:
+##
+## `npc` (the villager's own NpcIdentity) is what makes the house THEIRS:
+## HouseBlueprint.choose_blueprint_id picks a real named shape from
+## `npc.occupation`'s own pool, nudged by `npc.genome`'s dominant
+## personality trait (docs/concept/npc.md's "personality should be DNA
+## derived") -- a farmer's hut, a merchant's bright manor, and everything
+## between, instead of the one fixed 5x4 box every villager used to get.
+##
+## `npc_count` (the settlement's own real villager count -- see
+## spawn_village) is what retires this function's own named anti-pattern
+## (docs/concept/timber_construction.md's "Known anti-pattern this doc
+## replaces": a house used to stamp complete, instantly and for free, the
+## moment a chunk generated). See _construction_completion_fraction for the
+## real, computed reasoning; in the near-certain case that reasoning finds
+## the house already fully buildable (see that function's own doc comment),
+## this stamps the exact same full pieces + roofs as before -- deliberately
+## behavior-preserving for the common case.
+func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, npc: NpcIdentity, tile_size: int, world, npc_count: int) -> Dictionary:
 	var seed_value := hash("%d_%d_house_%d" % [chunk_coord.x, chunk_coord.y, index])
+	var blueprint_id := _house_blueprint.choose_blueprint_id(npc.occupation, npc.genome, seed_value)
+	var footprint := _house_blueprint.footprint_for(blueprint_id)
 	var anchor_tile := Vector2i(floori(anchor.x / tile_size), floori(anchor.y / tile_size))
-	var raw_origin := anchor_tile - _HOUSE_FOOTPRINT / 2
+	var raw_origin := anchor_tile - footprint / 2
 
 	if world == null or not world.has_method("stamp_structure_at_global"):
 		return {"door": anchor, "stand": anchor}
@@ -164,40 +194,167 @@ func _stamp_house(chunk_coord: Vector2i, index: int, anchor: Vector2, tile_size:
 		if PixelNoise.value(seed_value, index, 0) % _STONE_HOUSE_CHANCE_DENOMINATOR == 0
 		else BuildingPiece.MATERIAL_WOOD
 	)
-	var pieces := _house_blueprint.build(_HOUSE_FOOTPRINT, seed_value, material)
+	var pieces := _house_blueprint.build(blueprint_id, seed_value, material)
 	if pieces.is_empty():
 		return {"door": anchor, "stand": anchor}
 
-	var origin_tile = _find_dry_origin(raw_origin, _HOUSE_FOOTPRINT, world)
+	var origin_tile = _find_dry_origin(raw_origin, footprint, world)
 	if origin_tile == null:
 		return {"door": anchor, "stand": anchor}  # no dry ground nearby -- skip rather than build in water
 
-	var roofs := _house_blueprint.build_roofs(_HOUSE_FOOTPRINT, seed_value, material)
-	world.stamp_structure_at_global(chunk_coord, origin_tile, pieces, roofs)
+	var roofs := _house_blueprint.build_roofs(blueprint_id, seed_value, material)
 
+	# The door position is derived from the FULL blueprint's own door cell
+	# regardless of how complete the house is -- a villager needs somewhere
+	# real to walk home to even while their own house is still being built
+	# (see docs/concept/timber_construction.md's NPC construction section).
 	var door_local := _door_cell(pieces)
 	var door_global: Vector2i = origin_tile + door_local
 	var door_position := Vector2((door_global.x + 0.5) * tile_size, (door_global.y + 0.5) * tile_size)
 
-	var facing := _door_facing_direction(door_local, _HOUSE_FOOTPRINT)
+	var facing := _door_facing_direction(door_local, pieces)
 	var stand_global := door_global + facing * _STAND_OFFSET_TILES
 	var stand_position := Vector2((stand_global.x + 0.5) * tile_size, (stand_global.y + 0.5) * tile_size)
+
+	var fraction := _construction_completion_fraction(pieces, npc_count)
+	var stamped_pieces := pieces
+	var stamped_roofs := roofs
+	if fraction < 1.0:
+		stamped_pieces = _partial_pieces(pieces, fraction)
+		# The roof only ever goes up once every non-roof piece is placed --
+		# Worked Example C's own "walls up, no roof yet" partial-project
+		# flavor (see docs/concept/timber_construction.md), made real.
+		if stamped_pieces.size() < pieces.size():
+			stamped_roofs = {}
+	world.stamp_structure_at_global(chunk_coord, origin_tile, stamped_pieces, stamped_roofs)
 
 	return {"door": door_position, "stand": stand_position}
 
 
-## Which way the door opens outward, from where it sits on the wall ring
-## (see HouseBlueprint._door_cell -- the door can land on any of the 4 walls,
-## seeded, so a village's houses face different directions rather than
-## reading as one hut stamped repeatedly).
-func _door_facing_direction(door_local: Vector2i, footprint: Vector2i) -> Vector2i:
-	if door_local.y == 0:
-		return Vector2i(0, -1)  # top wall -- opens north
-	if door_local.y == footprint.y - 1:
-		return Vector2i(0, 1)  # bottom wall -- opens south
-	if door_local.x == 0:
-		return Vector2i(-1, 0)  # left wall -- opens west
-	return Vector2i(1, 0)  # right wall -- opens east
+## How structurally complete a settlement house should be by the time a
+## player actually discovers it, given `npc_count` real villagers to have
+## conceivably been working on it. This is the real, computed resolution to
+## this file's own named anti-pattern (see _stamp_house's own doc comment
+## and docs/concept/timber_construction.md's "Known anti-pattern this doc
+## replaces") -- reuses the EXACT SAME offscreen labor-catch-up calculation
+## the rest of this codebase already trusts (ConstructionLabor.
+## labor_hours_required_for_pieces / ConstructionCatchup.advance -- see
+## docs/concept/timber_construction.md's "Unloaded / offscreen fidelity"
+## section) as a bare, UN-PERSISTED calculation. This deliberately does NOT
+## create a real ConstructionProject/ConstructionProjectStore entry:
+## EarthChunkManager.record_settlement_founded_if_new already grants this
+## exact house's property under its OWN chunk+villager-index house-id
+## scheme (see that function), while ConstructionProject.property_id() uses
+## a DIFFERENT scheme keyed by footprint origin (see construction_project.gd)
+## -- wiring through that ledger here would produce two divergent ownership
+## records for the same real house.
+##
+## assumed_elapsed_seconds intentionally assumes the MOST generous plausible
+## age for a settlement a player is only now discovering: the same
+## ConstructionCatchup.MAX_CATCHUP_DAYS cap ("logistic growth converges
+## anyway") every other offscreen catch-up in this codebase already treats
+## as long enough to reach a steady state -- ConstructionCatchup.
+## MAX_CATCHUP_DAYS mirrors EarthChunkManager.MAX_CATCHUP_DAYS's own exact
+## value and justification (see that constant's own doc comment; not
+## preloaded directly here to avoid pulling this small, testable module into
+## EarthChunkManager's own large, engine-dependent script) -- times
+## ConstructionCatchup's own SECONDS_PER_DAY. By the time any player
+## discovers a settlement, assume it has had at least as long to build as
+## this game's own existing "how long was I away" cap already treats as
+## enough to reach a steady state.
+##
+## In practice this returns >= 1.0 for essentially every real settlement
+## size in today's game (SettlementGenerator.POPULATION villagers against
+## any real HouseBlueprint entry -- see
+## test_every_real_blueprint_reaches_full_completion_at_the_real_settlement_
+## population), which is exactly what keeps this a deliberately
+## behavior-preserving change for the common case: a real, live, tested
+## reachable fraction < 1.0 path exists (see the oversized-piece-set tests),
+## it just essentially never fires at today's typical settlement sizes.
+func _construction_completion_fraction(pieces: Dictionary, npc_count: int) -> float:
+	var required := ConstructionLabor.labor_hours_required_for_pieces(pieces)
+	if required <= 0.0:
+		return 1.0  # an empty/zero-cost blueprint has nothing to build
+	var assumed_elapsed_seconds := ConstructionCatchup.MAX_CATCHUP_DAYS * ConstructionCatchup.SECONDS_PER_DAY
+	var caught_up := _construction_catchup.advance(
+		{"labor_hours_accumulated": 0.0, "labor_hours_required": required},
+		assumed_elapsed_seconds,
+		{"builder_count": float(npc_count)}
+	)
+	return float(caught_up.get("labor_hours_accumulated", 0.0)) / required
+
+
+## The doc's own real historical build order (floor -> load-bearing walls ->
+## infill doors/windows), sliced to a deterministic PREFIX sized by
+## `fraction` -- Worked Example C's own "walls up, no roof yet" partial-
+## project flavor, made real for the (essentially never reached at today's
+## real settlement sizes -- see _construction_completion_fraction) case
+## where a house's own assumed accumulated labor falls short of what it
+## would take to finish. No RandomNumberGenerator anywhere -- matches this
+## doc's own determinism pillar.
+func _partial_pieces(pieces: Dictionary, fraction: float) -> Dictionary:
+	var ordered := _construction_install_order(pieces)
+	var target_count := int(floor(fraction * ordered.size()))
+	var partial := {}
+	for i in target_count:
+		var cell: Vector2i = ordered[i]
+		partial[cell] = pieces[cell]
+	return partial
+
+
+## Deterministic cell ordering for _partial_pieces: every FLOOR cell first (a
+## house needs a foundation before anything stands on it), then every WALL
+## cell (load-bearing -- see BuildingPiece.is_load_bearing; every
+## CATEGORY_WALL piece in this catalog already is one, generalized past just
+## the timber tier -- see building_piece.gd's own support_capacity doc
+## comment), then every remaining cell (door/window infill -- an opening
+## punched through a wall, not a structural member). Cells within each group
+## sort by (y, x), the same deterministic top-left-to-bottom-right cell
+## ordering BuildingStatics._cell_before already establishes elsewhere in
+## this same piece-grid mechanism -- never raw Dictionary insertion order,
+## which would depend on how HouseBlueprint.build happened to walk its own
+## loops rather than on the house's own real layout.
+func _construction_install_order(pieces: Dictionary) -> Array:
+	var floor_cells: Array = []
+	var wall_cells: Array = []
+	var infill_cells: Array = []
+	for cell in pieces:
+		var piece_id: String = pieces[cell]
+		if BuildingPiece.category_of(piece_id) == BuildingPiece.CATEGORY_FLOOR:
+			floor_cells.append(cell)
+		elif BuildingPiece.is_load_bearing(piece_id):
+			wall_cells.append(cell)
+		else:
+			infill_cells.append(cell)
+	var by_row_then_column := func(a: Vector2i, b: Vector2i) -> bool:
+		return a.y < b.y or (a.y == b.y and a.x < b.x)
+	floor_cells.sort_custom(by_row_then_column)
+	wall_cells.sort_custom(by_row_then_column)
+	infill_cells.sort_custom(by_row_then_column)
+	var ordered: Array = []
+	ordered.append_array(floor_cells)
+	ordered.append_array(wall_cells)
+	ordered.append_array(infill_cells)
+	return ordered
+
+
+## Which way the door opens outward: the OPPOSITE direction from wherever
+## its one true FLOOR neighbour sits (see HouseBlueprint._wall_candidates --
+## a valid door/window cell always has exactly one floor neighbour, so this
+## is well-defined for every blueprint shape, rectangular or notched).
+## Previously assumed a plain box's 4 sides directly from the door's raw
+## (x, y) -- correct for every rectangular blueprint, but would have
+## silently defaulted to "east" for a door landing on an L-shaped
+## blueprint's own notch-exposed edge (not one of the box's outer 4 sides
+## at all), pointing a merchant's personal trading stand at a wall instead
+## of open ground.
+func _door_facing_direction(door_local: Vector2i, pieces: Dictionary) -> Vector2i:
+	var offsets: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	for offset in offsets:
+		var neighbor: Vector2i = door_local + offset
+		if BuildingPiece.category_of(pieces.get(neighbor, "")) == BuildingPiece.CATEGORY_FLOOR:
+			return -offset
+	return Vector2i(1, 0)  # never happens for a real door cell; stays safe regardless
 
 
 ## `raw_origin` if its whole footprint is dry land already; otherwise the
@@ -239,11 +396,17 @@ func _door_cell(pieces: Dictionary) -> Vector2i:
 	return Vector2i.ZERO
 
 
-## The settlement's shared well/stall/gate, previously invisible positions
-## NPC schedules walked to -- now real, visible props of the village square.
+## The settlement's shared well/stall/gate, a merchant's personal trading
+## stand, and a farmer/blacksmith/fisher/herbalist's own workspot prop --
+## previously all invisible positions NPC schedules walked to, now real,
+## visible props. Tagged with its own `landmark_id` as node metadata so a
+## caller (chiefly tests, since several distinct landmark kinds can now
+## exist side by side in the same spawned list) can tell exactly which prop
+## a given node is without resorting to comparing raw positions.
 func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D) -> Sprite2D:
 	var landmark := Sprite2D.new()
 	landmark.texture = _landmark_sprite.generate_texture(landmark_id)
+	landmark.set_meta("landmark_id", landmark_id)
 	# Art is authored DETAIL_MULTIPLIER times oversized for pixel detail;
 	# scaling it back keeps the world footprint unchanged (see
 	# docs/concept/art_resolution.md).
@@ -257,10 +420,13 @@ func _build_landmark(landmark_id: String, position: Vector2, parent: Node2D) -> 
 
 ## Each villager gets a personal workspot south of their own house, for
 ## occupations whose work tag isn't one of the settlement's 3 shared
-## landmarks (see NpcMarker._resolve_location, SettlementGenerator's scope
-## note on not modeling per-occupation buildings yet). Far enough out that
-## the villager stands clear of their own house's footprint (see
-## _HOUSE_FOOTPRINT).
+## landmarks (see NpcMarker._resolve_location, and this file's own
+## WORK_LOCATION_BY_OCCUPATION-driven prop spawning in spawn_village).
+## Houses now vary in size per-villager (see HouseBlueprint.BLUEPRINT_IDS),
+## so unlike the original fixed 5x4 box this offset is no longer guaranteed
+## to clear every possible house footprint -- fine for a decorative prop a
+## couple tiles from a door, not attempted as a hard collision guarantee the
+## way house placement's own water-avoidance is.
 const _WORKSPOT_OFFSET_TILES := 4.0
 
 

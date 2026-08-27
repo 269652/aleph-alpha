@@ -9,6 +9,8 @@ const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
 const ProceduralHillshadeSprite = preload("res://src/rendering/procedural_hillshade_sprite.gd")
+const GroundTint = preload("res://src/rendering/ground_tint.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 
 ## Shared across every test in this file (see docs/concept/
 ## art_resolution.md#boot-performance): the first build_tile_set() call
@@ -105,7 +107,7 @@ func _wipe_cache_behavior_files():
 ## "room_for_tile" errors for every grid cell beyond the fake image's
 ## bounds. Mirrors build_tile_set()'s own size math exactly.
 func _full_atlas_size() -> Vector2i:
-	var total_cells: int = renderer._land_land_corner_base_linear() + renderer._land_land_corner_family_size()
+	var total_cells: int = renderer._roof_variant_base_linear() + renderer._roof_variant_family_size()
 	var rows := int(ceil(float(total_cells) / TerrainRenderer.ATLAS_COLUMNS))
 	var art := TerrainRenderer.ART_TILE_SIZE
 	return Vector2i(TerrainRenderer.ATLAS_COLUMNS * art, rows * art)
@@ -168,6 +170,137 @@ func test_build_tile_set_ignores_a_stale_version_cache():
 	_wipe_cache_behavior_files()
 
 
+# -- the built TileSet itself is memoized per process ------------------------
+# The disk cache only skips the PIXEL PAINTING. Rebuilding the
+# TileSetAtlasSource metadata on top of it -- 10,240 atlas cells, wrapped in
+# a fresh ImageTexture -- measured 8.8s PER CALL, and EarthChunkManager._init
+# does it once per instance, i.e. once per before_each in
+# test_earth_chunk_manager.gd's ~358 tests. The TileSet is never mutated
+# anywhere in src/, scenes/ or tests/ (grep: add_source/create_tile/
+# remove_tile appear only in terrain_renderer.gd and snow_layer.gd), so one
+# instance can be shared by every TileMapLayer.
+
+
+func test_build_tile_set_returns_the_same_shared_tile_set_on_a_repeat_call():
+	assert_same(renderer.build_tile_set(), renderer.build_tile_set())
+
+
+func test_two_renderers_on_the_same_cache_share_one_tile_set():
+	var other := TerrainRenderer.new()
+	other.atlas_cache_path = SHARED_TEST_CACHE_PATH
+	other.atlas_version_path = SHARED_TEST_VERSION_PATH
+	assert_same(renderer.build_tile_set(), other.build_tile_set())
+
+
+## THE invalidation guard, and the "a different key must give a different
+## result" pin: the memo's key covers the cached atlas's own bytes, so
+## rewriting that file mid-run produces a genuinely different TileSet rather
+## than the stale memoized one. Uses two distinguishable fake atlases so the
+## assertion is about the PIXELS that came back, not merely about object
+## identity.
+func test_build_tile_set_rebuilds_after_the_cached_atlas_changes_on_disk():
+	_wipe_cache_behavior_files()
+	renderer.atlas_cache_path = CACHE_BEHAVIOR_PATH
+	renderer.atlas_version_path = CACHE_BEHAVIOR_VERSION_PATH
+	var size := _full_atlas_size()
+
+	var magenta := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	magenta.fill(Color(1.0, 0.0, 1.0, 1.0))
+	TerrainAtlasCache.new().save(
+		magenta, TerrainRenderer.ATLAS_VERSION, CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH
+	)
+	var first := renderer.build_tile_set()
+	var first_source := first.get_source(0) as TileSetAtlasSource
+	assert_eq(first_source.texture.get_image().get_pixel(0, 0), Color(1.0, 0.0, 1.0, 1.0))
+
+	var cyan := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	cyan.fill(Color(0.0, 1.0, 1.0, 1.0))
+	TerrainAtlasCache.new().save(
+		cyan, TerrainRenderer.ATLAS_VERSION, CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH
+	)
+	var second := renderer.build_tile_set()
+	var second_source := second.get_source(0) as TileSetAtlasSource
+	assert_eq(
+		second_source.texture.get_image().get_pixel(0, 0),
+		Color(0.0, 1.0, 1.0, 1.0),
+		"a rewritten atlas on disk must not be served from the memo"
+	)
+	assert_not_same(second, first)
+	_wipe_cache_behavior_files()
+
+
+## A renderer pointed at a DIFFERENT cache path must not be handed the shared
+## one's TileSet -- the path is part of the key precisely because two
+## renderers can legitimately be reading two different atlases.
+func test_a_renderer_on_a_different_cache_path_gets_its_own_tile_set():
+	_wipe_cache_behavior_files()
+	var size := _full_atlas_size()
+	var fake := Image.create(size.x, size.y, false, Image.FORMAT_RGBA8)
+	fake.fill(Color(0.0, 0.0, 1.0, 1.0))
+	TerrainAtlasCache.new().save(
+		fake, TerrainRenderer.ATLAS_VERSION, CACHE_BEHAVIOR_PATH, CACHE_BEHAVIOR_VERSION_PATH
+	)
+
+	var other := TerrainRenderer.new()
+	other.atlas_cache_path = CACHE_BEHAVIOR_PATH
+	other.atlas_version_path = CACHE_BEHAVIOR_VERSION_PATH
+	assert_not_same(other.build_tile_set(), renderer.build_tile_set())
+	_wipe_cache_behavior_files()
+
+
+# -- the season lives in the shader, NEVER in the atlas ----------------------
+# The obvious way to make the ground seasonal is to paint four grasses and
+# fold the season into ATLAS_VERSION. That is the trap this pins shut. The
+# atlas is one ~5MB disk-cached image keyed by a single version string with no
+# per-tile invalidation (see TerrainAtlasCache), and build_tile_set() also
+# returns the TileSet the live TileMapLayer is holding -- so a season in the
+# key would mean four full bakes, and one of them landing MID-SESSION at the
+# exact moment the season turned, which is precisely the boot cost the cache
+# exists to avoid. The season is a live uniform on the material the terrain
+# layer already wears instead (GroundTint.set_season_tint / SeasonalFoliage),
+# which costs one shader-parameter write and invalidates nothing.
+#
+# Stated as "a season turn changes the MATERIAL and not one pixel of the
+# atlas" rather than as "ATLAS_VERSION contains no season", so it is about the
+# behaviour and not about a string.
+
+
+func test_a_season_turn_changes_the_material_and_not_one_pixel_of_the_atlas():
+	var summer_set := renderer.build_tile_set()
+	var summer_source := summer_set.get_source(0) as TileSetAtlasSource
+	var grass := renderer.atlas_coords_for_biome("grassland")
+	var region := summer_source.get_tile_texture_region(grass)
+	var before := summer_source.texture.get_image().get_region(region).get_data()
+
+	# Turn the year all the way to deep winter, the way a live session does.
+	var tint := GroundTint.new()
+	tint.set_season_tint(SeasonalFoliage.tint_for_season("winter"))
+	assert_eq(
+		tint.shared_material().get_shader_parameter("season_tint"),
+		Vector3(
+			SeasonalFoliage.tint_for_season("winter").r,
+			SeasonalFoliage.tint_for_season("winter").g,
+			SeasonalFoliage.tint_for_season("winter").b
+		),
+		"the premise: the season really did move -- it landed on the material"
+	)
+
+	var winter_set := renderer.build_tile_set()
+	assert_same(
+		winter_set, summer_set,
+		"a season turn must not invalidate the atlas cache -- no mid-session rebake"
+	)
+	var after := (
+		(winter_set.get_source(0) as TileSetAtlasSource)
+		.texture.get_image().get_region(region).get_data()
+	)
+	assert_eq(after, before, "the baked grassland tile is the same pixels in every season")
+
+	# Leave the process-wide material as it was found (see GroundTint's static
+	# _season_tint): summer is the identity tint by construction.
+	tint.set_season_tint(SeasonalFoliage.tint_for_season("summer"))
+
+
 func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles():
 	var tile_set := renderer.build_tile_set()
 	var source := tile_set.get_source(0) as TileSetAtlasSource
@@ -186,6 +319,8 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 	# swapping discrete art. Ocean is a plain animated biome tile like any
 	# other, so this atlas has no water-specific terms anymore.
 	var n := BiomeClassifier.KNOWN_BIOMES.size()
+	# Land biomes only (ocean excluded) -- see _land_land_corner_linear's own
+	# doc comment.
 	var land_n := n - 1
 	var expected := (
 		n * TerrainRenderer.VARIANTS_PER_BIOME + 1 + ProceduralStructureSprite.STRUCTURE_IDS.size()
@@ -201,6 +336,16 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 		# two land biomes) x the same CORNER_MASK_COUNT x BLEND_VARIANTS.
 		+ 2 * n * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 		+ land_n * (land_n - 1) * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Earth-modification blend tiles (see earth_dominant_blend_for): one
+		# slot per real land biome partner (ocean excluded) x every non-empty
+		# cardinal-direction subset x BLEND_VARIANTS -- no pair indexing, since
+		# earth is always the "own"/near side and never a partner itself.
+		+ land_n * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Pitched roof variants (see RoofShape): material x pitch band x
+		# outward-edge mask. A roof cell's tile is resolved from its own
+		# context within its building at paint time, so a house reads as a
+		# pitched roof rather than one flat tile repeated across a rectangle.
+		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -220,6 +365,14 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
 		+ 2 * n * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 		+ land_n * (land_n - 1) * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Earth-modification blend tiles -- see the matching comment in
+		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
+		+ land_n * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Pitched roof variants (see RoofShape): material x pitch band x
+		# outward-edge mask. A roof cell's tile is resolved from its own
+		# context within its building at paint time, so a house reads as a
+		# pitched roof rather than one flat tile repeated across a rectangle.
+		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -343,6 +496,14 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
 		+ 2 * n * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
 		+ land_n * (land_n - 1) * TerrainRenderer.CORNER_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Earth-modification blend tiles -- see the matching comment in
+		# test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_buildable_and_structure_tiles.
+		+ land_n * TerrainRenderer.DIRECTION_MASK_COUNT * TerrainRenderer.BLEND_VARIANTS
+		# Pitched roof variants (see RoofShape): material x pitch band x
+		# outward-edge mask. A roof cell's tile is resolved from its own
+		# context within its building at paint time, so a house reads as a
+		# pitched roof rather than one flat tile repeated across a rectangle.
+		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
@@ -789,8 +950,18 @@ func test_paint_roofs_sets_a_cell_for_every_roof_modification():
 
 	renderer.paint_roofs(tile_map_layer, chunk)
 
-	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)), renderer.atlas_coords_for_modification("wood_roof"))
-	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)), renderer.atlas_coords_for_modification("stone_roof"))
+	# Both are isolated single-cell roofs: boundary on all four sides, and
+	# their own ridge, so each resolves to its material's band-0/mask-15
+	# variant (see RoofShape) rather than to the flat per-material tile
+	# paint_roofs used to set for every cell alike.
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 0, 15)
+	)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_STONE, 0, 15)
+	)
 
 
 func test_paint_roofs_only_touches_cells_with_a_roof_modification():
@@ -812,7 +983,10 @@ func test_paint_roofs_offsets_cells_by_the_given_origin():
 
 	renderer.paint_roofs(tile_map_layer, chunk, Vector2i(100, 200))
 
-	assert_eq(tile_map_layer.get_cell_atlas_coords(Vector2i(100, 200)), renderer.atlas_coords_for_modification("wood_roof"))
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(100, 200)),
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 0, 15)
+	)
 	assert_eq(tile_map_layer.get_cell_source_id(Vector2i(0, 0)), -1)
 
 
@@ -845,10 +1019,37 @@ func test_paint_roofs_restores_a_cell_that_is_no_longer_hidden():
 	assert_ne(tile_map_layer.get_cell_source_id(Vector2i(0, 0)), -1, "should repaint once no longer hidden")
 
 
+## Uses a structure id ("campfire"), not EARTH_TILE_ID: structures/building
+## pieces are deliberately man-made and always paint their flat modification
+## tile regardless of neighbors, unlike EARTH_TILE_ID -- see the dedicated
+## earth-modification-blend tests below for that cell's own (now
+## neighbor-aware) behavior.
 func test_paint_uses_the_modification_tile_when_a_cell_has_one():
 	var tile_set := renderer.build_tile_set()
 	tile_map_layer.tile_set = tile_set
 	var chunk := _make_chunk()
+	chunk.modifications[Vector2i(0, 0)] = "campfire"
+
+	renderer.paint(tile_map_layer, chunk)
+
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_modification("campfire")
+	)
+
+
+## An EARTH_TILE_ID cell with no real, unmodified neighbor to blend toward
+## (every cardinal neighbor is out of chunk with no lookup provided) still
+## falls back to the plain flat earth tile -- the pre-existing fallback
+## behavior atlas_coords_for_modification always provides.
+func test_paint_uses_the_flat_earth_tile_when_no_real_neighbor_is_available_to_blend_toward():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 1
+	chunk.height = 1
+	chunk.elevation = PackedFloat32Array([0.4])
+	chunk.biome = PackedStringArray(["grassland"])
 	chunk.modifications[Vector2i(0, 0)] = TerrainRenderer.EARTH_TILE_ID
 
 	renderer.paint(tile_map_layer, chunk)
@@ -871,6 +1072,173 @@ func test_paint_falls_back_to_the_biome_tile_when_a_cell_has_no_modification():
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
 		renderer.atlas_coords_for_biome("grassland", expected_variant)
+	)
+
+
+# -- earth-modification blend (see paint()'s modifications branch, PathScarring) --
+# Reported (screenshot): a grass/dirt-path boundary reads as a hard, unblended
+# edge, and the tile-grid corner where they meet is a hard square. Root cause:
+# paint()'s `if chunk.modifications.has(local):` branch short-circuited straight
+# to atlas_coords_for_modification BEFORE ever consulting neighbor biomes --
+# every modification tile (player-built floor as well as PathScarring's worn-
+# ground earth, see docs/progress.md and src/world/path_scarring.gd) painted one
+# dead-flat EARTH_COLOR square regardless of what real ground surrounded it,
+# completely bypassing the whole blend/corner system the four prior rounds
+# above built. Scoped to EARTH_TILE_ID only -- structures/building pieces are
+# deliberately man-made and should stay flat-edged, not organically blended
+# into the ground. No separate corner-carve family is needed here (unlike the
+# land/land and water/land families above): earth_dominant_blend_for has no
+# "same biome, stay pure" skip the way dominant_blend_for does for two real
+# biomes, so it already fires on every differing cardinal direction including
+# two-at-once (the corner shape) -- generate_multi_directional_blend_image_from
+# already dithers a shared corner between two active directions on its own
+# (see that function's own doc comment).
+
+func test_earth_dominant_blend_for_returns_the_partner_and_all_of_its_directions():
+	var result := renderer.earth_dominant_blend_for(
+		{Vector2i(0, -1): "grassland", Vector2i(1, 0): "grassland", Vector2i(-1, 0): "grassland"}
+	)
+	assert_eq(result.partner, "grassland")
+	assert_eq(result.directions.size(), 3)
+
+
+func test_earth_dominant_blend_for_returns_empty_when_no_real_neighbor_borders_it():
+	# Every neighbor excluded (see _neighbor_biomes' exclude_modified_neighbors
+	# param) -- an earth cell fully enclosed by other modified cells (a solid
+	# multi-tile built floor or worn path) must stay a plain, unblended earth
+	# tile, not dither a seam against ground that isn't actually adjacent.
+	assert_true(renderer.earth_dominant_blend_for({}).is_empty())
+
+
+## Mirrors dominant_blend_for's own "land never blends toward ocean" rule --
+## the shoreline transition stays entirely the GPU WaterFx overlay's job.
+func test_earth_dominant_blend_for_never_blends_toward_ocean():
+	var result := renderer.earth_dominant_blend_for({Vector2i(1, 0): "ocean"})
+	assert_true(result.is_empty())
+
+
+func test_earth_dominant_blend_for_picks_the_biome_covering_the_most_edges():
+	var result := renderer.earth_dominant_blend_for(
+		{Vector2i(0, -1): "desert", Vector2i(0, 1): "desert", Vector2i(1, 0): "grassland"}
+	)
+	assert_eq(result.partner, "desert")
+	assert_eq(result.directions.size(), 2)
+
+
+func test_atlas_coords_for_earth_blend_is_distinct_from_the_plain_earth_tile():
+	var blend_coords := renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1)], 0)
+	assert_ne(blend_coords, renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID))
+
+
+func test_atlas_coords_for_earth_blend_differs_by_direction_set():
+	var north := renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1)], 0)
+	var north_east := renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1), Vector2i(1, 0)], 0)
+	assert_ne(north, north_east)
+
+
+func test_atlas_coords_for_earth_blend_is_a_created_tile_in_the_atlas():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var coords := renderer.atlas_coords_for_earth_blend(
+		"mountain", [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)], TerrainRenderer.BLEND_VARIANTS - 1
+	)
+	assert_true(source.has_tile(coords), "earth blend tile %s should exist in the atlas" % coords)
+
+
+## End to end through paint(): a worn/built earth cell sitting inside plain
+## grassland (the exact real shape PathScarring produces -- a dirt patch
+## worn into a grass field) must now blend toward that real neighbor on
+## every side, not paint the old flat, context-blind earth square.
+func test_paint_blends_an_earth_modification_toward_its_real_neighbor_biome():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	chunk.biome = PackedStringArray([
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+	])
+	chunk.modifications[Vector2i(1, 1)] = TerrainRenderer.EARTH_TILE_ID
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(1, 1)
+	var all_four := [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_earth_blend("grassland", all_four, variant),
+		"an earth cell surrounded by real grassland should blend on all four sides, not paint a flat square"
+	)
+	assert_ne(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID)
+	)
+
+
+## Two adjacent earth cells (a multi-tile worn path, or a player-built floor)
+## must NOT dither a seam against each other's ORIGINAL pre-modification
+## biome -- only their outer-facing edges (touching genuinely unmodified
+## ground) should blend. A 3x3 all-grassland chunk with earth at (0,1) and
+## (1,1): cell (1,1)'s real differing neighbors are north/south/east (all
+## still plain grassland); its west neighbor (0,1) is ALSO earth-modified
+## and must be excluded, not counted as a fourth "grassland" direction.
+func test_paint_does_not_blend_an_earth_modification_toward_an_adjacent_modified_neighbor():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	chunk.biome = PackedStringArray([
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+		"grassland", "grassland", "grassland",
+	])
+	chunk.modifications[Vector2i(0, 1)] = TerrainRenderer.EARTH_TILE_ID
+	chunk.modifications[Vector2i(1, 1)] = TerrainRenderer.EARTH_TILE_ID
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(1, 1)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1), Vector2i(0, 1), Vector2i(1, 0)], variant),
+		"the shared west edge between two adjacent earth cells must not blend -- only the real 3 differing sides should"
+	)
+
+
+## Same discipline every earlier corner/blend bug round in this file already
+## established as load-bearing: an atlas COORDINATE matching what the caller
+## expects proves nothing about the PIXELS actually baked there. Confirms the
+## earth cell's real baked edge pixel is a genuine copy of grassland's own
+## real pixel, not the flat EARTH_COLOR fill straight through.
+func test_baked_atlas_pixels_for_an_earth_modification_cell_show_real_grassland_pixels_at_its_blended_edge():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	var art := TerrainRenderer.ART_TILE_SIZE
+
+	var north_coords := renderer.atlas_coords_for_earth_blend("grassland", [Vector2i(0, -1)], 0)
+	var earth_tile := image.get_region(Rect2i(Vector2i(north_coords.x * art, north_coords.y * art), Vector2i(art, art)))
+
+	var grassland_coords := renderer.atlas_coords_for_biome("grassland", 0)
+	var grassland_tile := image.get_region(
+		Rect2i(Vector2i(grassland_coords.x * art, grassland_coords.y * art), Vector2i(art, art))
+	)
+
+	var earth_color: Color = TerrainRenderer.EARTH_COLOR
+	var north_edge_pixel := earth_tile.get_pixel(art / 2, 0)
+	assert_lt(
+		_rgb_distance(north_edge_pixel, grassland_tile.get_pixel(art / 2, 0)), _rgb_distance(north_edge_pixel, earth_color),
+		"the blended north edge should read as real grassland pixels, not the flat earth fill"
+	)
+	var south_edge_pixel := earth_tile.get_pixel(art / 2, art - 1)
+	assert_lt(
+		_rgb_distance(south_edge_pixel, earth_color), _rgb_distance(south_edge_pixel, grassland_tile.get_pixel(art / 2, art - 1)),
+		"the un-blended far (south) edge of a north-only blend should still read as plain earth"
 	)
 
 
@@ -1185,6 +1553,39 @@ func test_corner_direction_for_still_carves_when_the_two_flanking_land_biomes_di
 	assert_eq(result.directions, [Vector2i(1, -1)])
 
 
+# -- land/land diagonal corners, no ocean involved at all (see
+# docs/concept/terrain_borders.md's "Land/land" corner family; reported:
+# "diagonal blend border tiles [broken] at the border of two biomes e.g.
+# grass/forest") ------------------------------------------------------------
+
+## The plain notch case: a grassland cell with forest on two perpendicular
+## cardinal sides. corner_direction_for is only ever reached by the LOWER-
+## priority side of a pair (dominant_blend_for already claims the higher-
+## priority side via ordinary cardinal dithering -- see paint()'s own doc
+## comment), so grassland (priority 3) is the one that sees this, carving
+## toward forest (priority 5).
+func test_corner_direction_for_finds_a_land_land_notch_with_the_same_biome_on_two_sides():
+	var result := renderer.corner_direction_for(
+		"grassland", {Vector2i(0, -1): "forest", Vector2i(1, 0): "forest", Vector2i(-1, 0): "grassland"}
+	)
+	assert_eq(result.partner, "forest")
+	assert_eq(result.directions, [Vector2i(1, -1)])
+
+
+## A genuine three-biome meeting point: grassland flanked by forest on one
+## cardinal side and desert on the perpendicular one, neither ocean. Used to
+## be gated to biome_name == "ocean" only and fall through as an unblended
+## hard corner for every other biome -- this is the exact gap
+## docs/concept/terrain_borders.md's Status entry describes closing.
+func test_corner_direction_for_carves_a_land_land_corner_with_two_different_flanking_biomes():
+	var result := renderer.corner_direction_for(
+		"grassland", {Vector2i(0, -1): "forest", Vector2i(1, 0): "desert"}
+	)
+	assert_false(result.is_empty(), "a mixed land/land corner is still a real corner and must carve")
+	assert_eq(result.partner, "forest", "forest (priority 5) should dominate desert (priority 1)")
+	assert_eq(result.directions, [Vector2i(1, -1)])
+
+
 func test_corner_direction_for_is_empty_for_a_straight_shore():
 	# Only one land side -- a plain straight edge, not a corner.
 	var result := renderer.corner_direction_for("ocean", {Vector2i(0, -1): "grassland"})
@@ -1380,6 +1781,128 @@ func test_atlas_coords_for_corner_differs_by_partner_biome_for_a_land_owning_pai
 	assert_ne(toward_forest, toward_desert)
 
 
+# -- land/land corner tiles occupy their own real atlas cells -----------------
+#
+# Before this, _corner_linear routed ANY non-ocean own_biome into the
+# land-owning (concave, land-vs-ocean) family purely by own_biome's own
+# ordinal, silently ignoring other_biome entirely -- so a genuine grassland/
+# forest corner collided with grassland's own land-vs-ocean corner tile and
+# painted an ocean-shaped rounded cutout on dry land. These pin that a
+# land/land pair gets a real, DISTINCT cell of its own.
+
+func test_atlas_coords_for_a_land_land_corner_differs_from_the_ocean_corner_family():
+	var land_land := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var land_vs_ocean := renderer.atlas_coords_for_corner("grassland", "ocean", [Vector2i(1, -1)], 0)
+	var ocean_vs_land := renderer.atlas_coords_for_corner("ocean", "grassland", [Vector2i(1, -1)], 0)
+	assert_ne(land_land, land_vs_ocean, "a land/land corner must not collide with own_biome's land-vs-ocean corner")
+	assert_ne(land_land, ocean_vs_land)
+
+
+func test_atlas_coords_for_a_land_land_corner_differs_by_the_other_biome():
+	var toward_forest := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var toward_mountain := renderer.atlas_coords_for_corner("grassland", "mountain", [Vector2i(1, -1)], 0)
+	assert_ne(toward_forest, toward_mountain)
+
+
+func test_atlas_coords_for_a_land_land_corner_differs_by_the_own_biome():
+	var grassland_toward_forest := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var desert_toward_forest := renderer.atlas_coords_for_corner("desert", "forest", [Vector2i(1, -1)], 0)
+	assert_ne(grassland_toward_forest, desert_toward_forest)
+
+
+## own_biome MUST be the lower-priority side (see corner_direction_for's own
+## doc comment: it is only ever reached by the lower-priority side of a
+## land/land pair) -- but the atlas index math itself must not silently
+## alias the swapped call onto the SAME cell either way, or a future caller
+## bug would paint the wrong biome's texture without any visible symptom
+## until someone happened to look at a real screenshot.
+func test_atlas_coords_for_a_land_land_corner_is_not_symmetric():
+	var grassland_owns := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var forest_owns := renderer.atlas_coords_for_corner("forest", "grassland", [Vector2i(1, -1)], 0)
+	assert_ne(grassland_owns, forest_owns)
+
+
+func test_atlas_coords_for_a_land_land_corner_is_a_created_tile_in_the_atlas():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var coords := renderer.atlas_coords_for_corner(
+		"grassland", "forest", [Vector2i(1, -1)], TerrainRenderer.VARIANTS_PER_BIOME - 1
+	)
+	assert_true(source.has_tile(coords), "land/land corner tile %s should exist in the atlas" % coords)
+
+
+## The pixel-level check the coordinate-only tests above can't give: a real
+## grassland/forest corner must actually be BAKED with forest's own texture
+## carved into the corner, not grassland's plain texture (a hard corner) and
+## not ocean's texture (the old collision bug).
+##
+## Compared against each biome's own REAL rendered average, not the flat
+## ProceduralTerrainSprite.BASE_COLORS constant the ocean/land corner tests
+## above use: grassland and forest are BOTH illustrated today (real
+## AI-illustrated ground art, not the flat-colour procedural fallback), and
+## an illustrated texture's real average colour can sit meaningfully off its
+## own bare BASE_COLORS entry (measured: illustrated grassland's real average
+## reads (0.23, 0.34, 0.06) against a flat-swatch reference of (0.36, 0.74,
+## 0.22) -- close enough to forest's OWN flat swatch to flip a
+## flat-swatch-only comparison entirely, though never yet a problem for
+## ocean, whose real texture stays procedural and close to its own swatch).
+## Also averages a small patch rather than one pixel, since any real texture
+## carries per-pixel grain a single sample can't average out.
+func test_baked_atlas_pixels_for_a_land_land_corner_are_carved_toward_the_partner():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	var art := TerrainRenderer.ART_TILE_SIZE
+
+	var coords := renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], 0)
+	var tile := image.get_region(Rect2i(Vector2i(coords.x * art, coords.y * art), Vector2i(art, art)))
+	var grassland_plain: Image = renderer._biome_frame_image("grassland", 0, 0)
+	var forest_plain: Image = renderer._biome_frame_image("forest", 0, 0)
+
+	# Region-matched, not a whole-tile average: an illustrated tile can carry
+	# real spatial structure of its own (e.g. a lighter canopy in one part of
+	# the art, darker undergrowth in another), so a small LOCAL patch isn't
+	# necessarily close to the WHOLE tile's average even when genuinely
+	# uncarved -- comparing the same region of the plain source tiles is what
+	# actually isolates "was this region carved" from "is this biome's art
+	# spatially uniform".
+	#
+	# Tight and right at the true corner point, not just "somewhere near the
+	# corner": ProceduralTerrainSprite.CORNER_RADIUS_PIXELS (8 at the
+	# generator's own 64px SIZE) scales down to a 4px radius at this 32px art
+	# tile, so only a small wedge right at the (art-1, 0) corner point is
+	# actually carved -- a wider patch mixes in real uncarved pixels just
+	# outside that wedge and silently dilutes the average back toward
+	# grassland.
+	var patch := 3
+	var corner_region := Rect2i(art - patch, 0, patch, patch)
+	var corner_average := _average_color(tile, corner_region)
+	assert_lt(
+		_rgb_distance(corner_average, _average_color(forest_plain, corner_region)),
+		_rgb_distance(corner_average, _average_color(grassland_plain, corner_region)),
+		"the carved NE corner should read forest, not grassland or ocean"
+	)
+	# The tile's centre must still be plain grassland -- the carve is one
+	# corner only.
+	var center_region := Rect2i(art / 2 - patch / 2, art / 2 - patch / 2, patch, patch)
+	var center_average := _average_color(tile, center_region)
+	assert_lt(
+		_rgb_distance(center_average, _average_color(grassland_plain, center_region)),
+		_rgb_distance(center_average, _average_color(forest_plain, center_region)),
+		"the tile's centre should still read as plain grassland"
+	)
+
+
+func _average_color(image: Image, region: Rect2i) -> Color:
+	var total := Color(0, 0, 0, 0)
+	var count := 0
+	for y in range(region.position.y, region.position.y + region.size.y):
+		for x in range(region.position.x, region.position.x + region.size.x):
+			total += image.get_pixel(x, y)
+			count += 1
+	return total / float(maxi(count, 1))
+
+
 func test_atlas_coords_for_corner_is_a_created_tile_in_the_atlas():
 	var tile_set := renderer.build_tile_set()
 	var source := tile_set.get_source(0) as TileSetAtlasSource
@@ -1461,6 +1984,126 @@ func test_paint_carves_a_convex_corner_toward_the_dominant_biome_when_flanking_l
 	assert_eq(
 		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
 		renderer.atlas_coords_for_corner("ocean", "grassland", [Vector2i(1, 1)], variant)
+	)
+
+
+## The end-to-end reproduction of the reported bug: a real chunk with a
+## grassland cell notched by forest on two perpendicular sides, no ocean
+## anywhere in the chunk at all. Before this pass this painted a plain
+## unblended grassland tile (corner_direction_for still returned a partner,
+## but _corner_linear's atlas index collided with grassland's own land-vs-
+## ocean corner family, so it silently painted the WRONG tile -- an
+## ocean-shaped cutout on dry land, not a hard corner).
+func test_paint_carves_a_land_land_corner_for_a_grassland_cell_notched_by_forest():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 2
+	chunk.height = 2
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4])
+	# (0,0) grassland, forest east (1,0) and south (0,1) -> a corner carved
+	# toward the south-east, entirely on land.
+	chunk.biome = PackedStringArray(["grassland", "forest", "forest", "forest"])
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(0, 0)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 0)),
+		renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, 1)], variant)
+	)
+
+
+# -- corner vs. blend: which wins when both apply to the same cell ----------
+
+func test_corner_survives_when_neither_flanking_edge_is_covered_by_blend():
+	var corner := {"partner": "forest", "directions": [Vector2i(1, -1)]}
+	var blend := {"partner": "desert", "directions": [Vector2i(0, 1)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, blend)
+	assert_eq(result, corner)
+
+
+## The exact configuration test_paint_blends_a_corner_toward_multiple_
+## differing_neighbors pins: a grassland cell's east+south corner toward
+## desert is the SAME fact dominant_blend_for already dithers on both of
+## those edges -- the corner must defer entirely, not carve.
+func test_corner_is_fully_dropped_when_both_flanking_edges_are_covered_by_blend():
+	var corner := {"partner": "desert", "directions": [Vector2i(1, 1)]}
+	var blend := {"partner": "desert", "directions": [Vector2i(1, 0), Vector2i(0, 1)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, blend)
+	assert_true(result.is_empty())
+
+
+## PARTIAL overlap (just one of the two flanking edges already dithered) is
+## enough to drop the direction, same as full overlap -- a corner's own
+## carved shape may pick a DIFFERENT dominant partner than that one already-
+## dithered edge (see _dominant_corner_partner), which would sit awkwardly
+## against/inside an edge already getting its own separate treatment.
+func test_corner_is_dropped_when_only_one_flanking_edge_is_covered_by_blend():
+	var corner := {"partner": "forest", "directions": [Vector2i(1, -1)]}
+	var blend := {"partner": "desert", "directions": [Vector2i(1, 0)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, blend)
+	assert_true(result.is_empty())
+
+
+## A cell with two simultaneous corners (see corner_direction_for's own
+## multi-corner support) can have ONE covered by blend and the other
+## genuinely untouched by it -- only the covered one should drop.
+func test_corner_drops_only_the_covered_direction_keeping_others():
+	var corner := {"partner": "forest", "directions": [Vector2i(1, -1), Vector2i(-1, -1)]}
+	var blend := {"partner": "forest", "directions": [Vector2i(1, 0)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, blend)
+	assert_eq(result.partner, "forest")
+	assert_eq(result.directions, [Vector2i(-1, -1)])
+
+
+func test_empty_corner_stays_empty_regardless_of_blend():
+	var result := renderer._corner_directions_not_covered_by_blend({}, {"partner": "desert", "directions": [Vector2i(1, 0)]})
+	assert_true(result.is_empty())
+
+
+func test_corner_survives_untouched_when_blend_is_empty():
+	var corner := {"partner": "ocean", "directions": [Vector2i(1, 1)]}
+	var result := renderer._corner_directions_not_covered_by_blend(corner, {})
+	assert_eq(result, corner)
+
+
+## The real bug behind a follow-up screenshot report ("still sharp corners
+## at diagonal borders" after the land/land corner family above landed): a
+## cell can have a genuinely real corner on ONE diagonal while an UNRELATED
+## cardinal side also qualifies for ordinary dithering toward some THIRD,
+## lower-priority biome -- paint() used to check dominant_blend_for FIRST
+## and only fall back to corner_direction_for when blend was entirely empty,
+## so that unrelated edge silently stole the whole tile's treatment and the
+## real corner never got painted at all. Measured directly against real
+## generated chunks near Berlin: 553 of 1065 real land/land corner-eligible
+## cells (52%) were starved this way -- not a rare edge case.
+func test_paint_still_carves_a_corner_even_when_an_unrelated_edge_also_qualifies_for_blending():
+	var tile_set := renderer.build_tile_set()
+	tile_map_layer.tile_set = tile_set
+	var chunk := Chunk.new()
+	chunk.width = 3
+	chunk.height = 3
+	chunk.elevation = PackedFloat32Array([0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4])
+	# Center (1,1) grassland, forest north (1,0) and east (2,1) -> a real
+	# land/land corner. Desert south (1,2) is UNRELATED to that corner but
+	# still a real, lower-priority (1 < grassland's 3) cardinal neighbor --
+	# exactly what used to steal the whole tile via dominant_blend_for.
+	chunk.biome = PackedStringArray(
+		[
+			"grassland", "forest", "grassland",
+			"grassland", "grassland", "forest",
+			"grassland", "desert", "grassland",
+		]
+	)
+
+	renderer.paint(tile_map_layer, chunk)
+
+	var variant := renderer.variant_index_for_position(1, 1)
+	assert_eq(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(1, 1)),
+		renderer.atlas_coords_for_corner("grassland", "forest", [Vector2i(1, -1)], variant),
+		"the real corner must still carve even though an unrelated south edge also qualifies for blending"
 	)
 
 
@@ -1719,3 +2362,116 @@ func test_hillshade_overlay_tiles_are_real_slope_aspect_data_not_a_flat_fill():
 	var flat_pixel := image.get_pixel(flat_origin.x, flat_origin.y)
 	var steep_pixel := image.get_pixel(steep_origin.x, steep_origin.y)
 	assert_lt(flat_pixel.r, steep_pixel.r, "the steep bin's tile should encode a higher slope than the flat tile")
+
+
+# -- pitched roof variants ----------------------------------------------------
+#
+# See docs/concept/building.md "How a house reads from above". A roof cell's
+# tile is resolved from its CONTEXT within its own building (RoofShape),
+# not from one flat per-material tile -- the same "appearance from
+# neighbours at paint time" shape the blend/corner families above use.
+
+const RoofShape = preload("res://src/rendering/roof_shape.gd")
+
+
+func test_roof_variant_tiles_differ_by_pitch_band():
+	var ridge := renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 0, 0)
+	var eave := renderer.atlas_coords_for_roof_variant(
+		BuildingPiece.MATERIAL_WOOD, RoofShape.TOTAL_SHADE_BANDS - 1, 0
+	)
+	assert_ne(ridge, eave, "the ridge and the far eave cannot share one tile")
+
+
+func test_roof_variant_tiles_differ_by_edge_mask():
+	var interior := renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 1, 0)
+	var cornered := renderer.atlas_coords_for_roof_variant(
+		BuildingPiece.MATERIAL_WOOD, 1, RoofShape.EDGE_NORTH | RoofShape.EDGE_WEST
+	)
+	assert_ne(interior, cornered)
+
+
+func test_roof_variant_tiles_differ_by_material():
+	assert_ne(
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 2, 3),
+		renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_STONE, 2, 3)
+	)
+
+
+## Every (material, band, mask) triple must land on its own real, created
+## atlas tile -- a collision here would silently paint some other family's
+## art onto a roof, the exact class of bug the land/land corner family
+## already shipped once (see this file's own corner-collision tests).
+func test_every_roof_variant_is_a_distinct_created_tile_in_the_atlas():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var seen := {}
+	for material in TerrainRenderer.ROOF_VARIANT_MATERIALS:
+		for band in RoofShape.TOTAL_SHADE_BANDS:
+			for mask in TerrainRenderer.ROOF_EDGE_MASK_COUNT:
+				var coords := renderer.atlas_coords_for_roof_variant(material, band, mask)
+				assert_true(source.has_tile(coords), "%s band %d mask %d missing" % [material, band, mask])
+				assert_false(seen.has(coords), "%s band %d mask %d collides" % [material, band, mask])
+				seen[coords] = true
+
+
+## Out-of-range input clamps into the family rather than indexing off the
+## end of it into whatever tile happens to sit there.
+func test_out_of_range_roof_variants_clamp_into_their_own_family():
+	var too_high := renderer.atlas_coords_for_roof_variant(BuildingPiece.MATERIAL_WOOD, 999, 999)
+	var top := renderer.atlas_coords_for_roof_variant(
+		BuildingPiece.MATERIAL_WOOD, RoofShape.TOTAL_SHADE_BANDS - 1, TerrainRenderer.ROOF_EDGE_MASK_COUNT - 1
+	)
+	assert_eq(too_high, top)
+
+
+## The real end-to-end claim: a house's roof does NOT paint one repeated
+## tile any more. Two cells on opposite slopes of the same roof must get
+## genuinely different atlas coords, or nothing about the pitch reached the
+## tilemap.
+func test_paint_roofs_gives_opposite_slopes_of_one_roof_different_tiles():
+	var chunk := Chunk.new()
+	chunk.width = 8
+	chunk.height = 8
+	chunk.elevation = PackedFloat32Array()
+	chunk.biome = PackedStringArray()
+	for y in 8:
+		for x in 8:
+			chunk.elevation.append(0.4)
+			chunk.biome.append("grassland")
+	# A 6x5 roof: horizontal ridge, so rows above and below it differ.
+	for y in range(5):
+		for x in range(6):
+			chunk.roof_modifications[Vector2i(x, y)] = "wood_roof"
+
+	renderer.paint_roofs(tile_map_layer, chunk)
+
+	var upper := tile_map_layer.get_cell_atlas_coords(Vector2i(3, 0))
+	var lower := tile_map_layer.get_cell_atlas_coords(Vector2i(3, 4))
+	assert_ne(upper, lower, "the lit and shaded slopes must not paint the same tile")
+
+
+## ...and an interior cell must differ from an outer-boundary one, which is
+## what gives the building a silhouette instead of a uniform slab.
+func test_paint_roofs_distinguishes_a_buildings_edge_from_its_interior():
+	var chunk := Chunk.new()
+	chunk.width = 8
+	chunk.height = 8
+	chunk.elevation = PackedFloat32Array()
+	chunk.biome = PackedStringArray()
+	for y in 8:
+		for x in 8:
+			chunk.elevation.append(0.4)
+			chunk.biome.append("grassland")
+	for y in range(5):
+		for x in range(6):
+			chunk.roof_modifications[Vector2i(x, y)] = "wood_roof"
+
+	renderer.paint_roofs(tile_map_layer, chunk)
+
+	# (0,1) is on the west boundary; (2,1) sits inside on the same row, so
+	# they share a pitch band and can only differ by their edge mask.
+	assert_ne(
+		tile_map_layer.get_cell_atlas_coords(Vector2i(0, 1)),
+		tile_map_layer.get_cell_atlas_coords(Vector2i(2, 1)),
+		"the building's outer edge must carry a rim its interior does not"
+	)

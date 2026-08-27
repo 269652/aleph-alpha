@@ -27,6 +27,8 @@ sources feeding the same rarity/affix vocabulary, not competing systems.
 
 - Exact blueprint slot taxonomy (how many modifier slots per item category,
   what governs which modifiers are compatible with which base templates).
-- How station tiers gate blueprint complexity — mirrors how the magic skill
-  tree gates spell-DSL access ([skills.md](skills.md)) — needs the same
-  kind of progression curve worked out.
+- ~~How station tiers gate blueprint complexity~~ — answered by
+  [labor_skills.md](labor_skills.md#tiers): the station gates what's
+  *possible* (which blueprint slots exist at all), the crafter's own labor
+  skill tier gates how *well* whatever the station allows gets realized.
+  Exact station-tier-to-slot-count numbers still need working out.

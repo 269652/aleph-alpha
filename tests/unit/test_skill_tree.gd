@@ -101,3 +101,45 @@ func test_node_info_exposes_stat_bonus_and_cost_for_display():
 
 func test_node_info_of_unknown_node_is_empty():
 	assert_true(tree.node_info("nope").is_empty())
+
+
+# -- Naturalist branch (docs/concept/progression.md "Ecological literacy") --
+
+func test_naturalist_nodes_exist_with_expected_stat_and_cost():
+	var info1 := tree.node_info("naturalist_1")
+	assert_eq(info1["stat_name"], "stamina_regen")
+	assert_eq(info1["bonus_amount"], 1.0)
+	assert_eq(info1["point_cost"], 1)
+
+	var info2 := tree.node_info("naturalist_2")
+	assert_eq(info2["stat_name"], "stamina_regen")
+	assert_eq(info2["bonus_amount"], 2.5)
+	assert_eq(info2["point_cost"], 2)
+
+
+# -- Butchering branch (docs/concept/carrion.md) -----------------------------
+
+func test_butchering_nodes_exist_with_expected_stat_and_cost():
+	var info1 := tree.node_info("butchering_1")
+	assert_eq(info1["stat_name"], "meat_yield")
+	assert_eq(info1["bonus_amount"], 1.0)
+	assert_eq(info1["point_cost"], 1)
+
+	var info2 := tree.node_info("butchering_2")
+	assert_eq(info2["stat_name"], "meat_yield")
+	assert_eq(info2["bonus_amount"], 2.0)
+	assert_eq(info2["point_cost"], 2)
+
+
+# -- Carpentry branch (docs/concept/woodworking.md) --------------------------
+
+func test_carpentry_nodes_exist_with_expected_stat_and_cost():
+	var info1 := tree.node_info("carpentry_1")
+	assert_eq(info1["stat_name"], "carpentry_level")
+	assert_eq(info1["bonus_amount"], 1.0)
+	assert_eq(info1["point_cost"], 1)
+
+	var info2 := tree.node_info("carpentry_2")
+	assert_eq(info2["stat_name"], "carpentry_level")
+	assert_eq(info2["bonus_amount"], 1.0)
+	assert_eq(info2["point_cost"], 2)

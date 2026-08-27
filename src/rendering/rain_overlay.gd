@@ -55,6 +55,7 @@ uniform float fall_speed = 620.0;
 uniform float drop_spacing = 150.0;
 uniform float min_speed_factor = 0.8;
 uniform float speed_factor_range = 0.4;
+uniform float drop_length_scale = 1.0;
 uniform vec4 drop_color : source_color = vec4(0.74, 0.85, 0.97, 0.5);
 
 float hash11(float p) {
@@ -78,6 +79,13 @@ void vertex() {
 	if (hash11(column) > intensity) {
 		VERTEX = vec2(0.0);
 	} else {
+		// Snow squashes this same quad down its length rather than swapping
+		// the mesh: the drop field is one MultiMesh built once, so the
+		// weather has to be expressible as uniforms. The quad spans y in
+		// [0, STREAK_LENGTH] (see build_drops' center_offset), so scaling y
+		// leaves the drop's HEAD where it is and only shortens the tail.
+		// Inside the gate, so a gated drop still collapses to a true point.
+		VERTEX.y *= drop_length_scale;
 		float speed = fall_speed * (min_speed_factor + speed_factor_range * INSTANCE_CUSTOM.z);
 		// Endless stream. TIME is ADDED and screen y grows downward, so drops
 		// travel DOWN the screen; getting this sign backwards shipped rain
@@ -134,6 +142,25 @@ const STREAK_LENGTH := 11.0
 ## Chunky enough to read as pixel art rather than a hairline scratch (see
 ## docs/concept/pixel_art_engine.md).
 const STREAK_WIDTH := 2.0
+
+## A flake is a FLECK, not a streak.
+##
+## Falling snow reused rain's drop field with only the colour, speed and
+## slant swapped (see set_snowing), so a snowstorm was rain's STREAK_LENGTH
+## streaks painted white -- reported as rain still falling during a
+## snowstorm. A streak IS motion blur, and a flake drifting at
+## Snowfall.FLAKE_FALL_SPEED (90 px/s against rain's 620) has none to blur.
+##
+## Lives here beside STREAK_LENGTH rather than in Snowfall with FLAKE_COLOR
+## / FLAKE_FALL_SPEED / FLAKE_SLANT because it is a dimension of the DROP
+## MESH, which is this file's to own -- and because drop_length_scale
+## divides the two, so keeping them apart is what would let them drift.
+##
+## Pinned from both sides by test_a_snowflake_is_a_fleck_not_a_falling_streak:
+## at most twice STREAK_WIDTH once drawn, so it cannot read as a falling
+## streak, and at least STREAK_WIDTH, so it stays a chunky pixel-art mark
+## rather than collapsing to a sub-pixel dot.
+const FLAKE_LENGTH := 3.0
 ## Pale blue-white and translucent -- opaque drops would punch holes through
 ## the world behind them.
 const DROP_COLOR := Color(0.74, 0.85, 0.97, 0.5)
@@ -211,6 +238,14 @@ static func drop_mesh_size() -> Vector2:
 	return Vector2(STREAK_WIDTH, STREAK_LENGTH)
 
 
+## How far the drop quad is squashed down its length while snowing: the flake
+## length the snow wants over the streak length the mesh was actually built
+## at, so the CPU constant and the GPU value cannot drift apart. 1.0 while
+## raining -- the quad is drawn at the size it was made.
+static func drop_length_scale(snowing: bool) -> float:
+	return (FLAKE_LENGTH / STREAK_LENGTH) if snowing else 1.0
+
+
 static func _hash01(value: int) -> float:
 	return float(absi(hash(value)) % 10000) / 10000.0
 
@@ -241,6 +276,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("drop_spacing", DROP_SPACING)
 	material.set_shader_parameter("min_speed_factor", MIN_SPEED_FACTOR)
 	material.set_shader_parameter("speed_factor_range", SPEED_FACTOR_RANGE)
+	material.set_shader_parameter("drop_length_scale", drop_length_scale(false))
 	material.set_shader_parameter("drop_color", DROP_COLOR)
 	return material
 
@@ -261,9 +297,14 @@ func set_intensity(intensity: float) -> void:
 ## Switches the falling weather between rain and snow.
 ##
 ## The same drop field either way -- one MultiMesh, one draw call -- with the
-## colour, speed and slant swapped. Snow is white, falls far slower and drifts
-## instead of slanting; reusing rain unchanged would give WHITE RAIN, which
-## reads as a recolour rather than as weather.
+## colour, speed, slant and drop SHAPE swapped. Snow is white, falls far
+## slower, drifts instead of slanting, and comes down as flecks rather than
+## streaks; reusing rain unchanged would give WHITE RAIN, which reads as a
+## recolour rather than as weather.
+##
+## Shape was the property this originally missed, and it is the one that most
+## says "rain": a streak IS motion blur, and a flake at FLAKE_FALL_SPEED has
+## none to blur (see FLAKE_LENGTH).
 func set_snowing(snowing: bool) -> void:
 	var material := shared_material()
 	material.set_shader_parameter(
@@ -273,6 +314,7 @@ func set_snowing(snowing: bool) -> void:
 		"fall_speed", Snowfall.FLAKE_FALL_SPEED if snowing else FALL_SPEED
 	)
 	material.set_shader_parameter("slant", Snowfall.FLAKE_SLANT if snowing else SLANT)
+	material.set_shader_parameter("drop_length_scale", drop_length_scale(snowing))
 
 
 ## The drop field: one quad per drop in flight, all in a single MultiMesh so

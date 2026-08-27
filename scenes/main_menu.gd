@@ -15,6 +15,7 @@ extends PanelContainer
 
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
+const CharacterPreviewDioramaScript = preload("res://src/rendering/character_preview_diorama.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const HeroDna = preload("res://src/gameplay/hero_dna.gd")
@@ -59,18 +60,36 @@ const AXIS_LABELS := {
 	"beard": "Beard",
 	"eyes": "Eyes",
 	"trim": "Trim Color",
+	"head": "Face",
 }
 
-## The portrait renders at ProceduralCharacterSprite.PORTRAIT_SIZE and is
-## scaled up by this much -- nearest-neighbour, so it stays crisp pixel art.
-const PORTRAIT_SCALE := 5
+## Replaced the static portrait's fixed aspect (ProceduralCharacterSprite
+## .PORTRAIT_SIZE * PORTRAIT_SCALE, a tall 130x200 headshot strip) with a
+## square live-diorama view (asked directly: "a real mini in game scene
+## with swaying grass blades; some pebbles the edge of a pond and some
+## trees where the char should stroll around" -- see docs/concept/
+## character_creator_preview_scene.md). Screen pixels, not world units --
+## the SubViewport underneath renders at exactly this resolution (no
+## up/downscale, so no nearest-neighbour filtering trick is needed the way
+## the old portrait's manual TextureRect scaling required one).
+## Bumped 220 -> 280 (reported live, alongside the containment bug above:
+## "too small") -- the footprint (CharacterPreviewDioramaScript.FOOTPRINT)
+## stays the same world-unit size, so this only changes the camera's own
+## zoom (DIORAMA_VIEW_SIZE.x / footprint.x, see _build_diorama_view) --
+## the same little scene renders bigger, not a different/larger one.
+const DIORAMA_VIEW_SIZE := Vector2i(280, 280)
 
 ## Widened/heightened for the tabbed creator (Character + Skills, see
 ## _build_create_screen) -- the old 760x520 already fit its 3-column layout
 ## tightly with nothing to spare for a tab bar or a skills grid.
 const PANEL_SIZE := Vector2(880, 620)
 
-## Emitted once the player has committed to a start mode + class.
+## Emitted once the player has committed to a start mode + class -- and, when
+## a save already existed, has explicitly confirmed overwriting it (see
+## _begin_pressed). THE SEAM: World treats this signal as authorization to
+## wipe the previous run's player save and the whole persisted world, and
+## keeps doing so unconditionally; `_emit_start_requested` is the only place
+## that emits it, so the confirmation cannot be bypassed.
 ## mode is "single" or "host"; chosen_class is a ClassArchetype name.
 ## `appearance` is the authored look (see HeroAppearance). `dna_stat_
 ## modifiers` is the rolled genome's stat swing (see HeroDna) -- World adds
@@ -104,6 +123,9 @@ var _skill_tree := SkillTree.new()
 var _root_screen: Control
 var _create_screen: Control
 var _join_screen: Control
+## Shown instead of starting whenever Begin would overwrite an existing save
+## -- see _begin_pressed.
+var _overwrite_confirm_screen: Control
 
 var _pending_mode := "single"
 var _selected_class := "warrior"
@@ -135,7 +157,15 @@ var _resonance_badges: Dictionary = {}
 ## Cached per-class mini portraits for the icon row -- generated once each
 ## (that class's own default look, seed 0), never per-frame.
 var _class_icon_textures: Dictionary = {}
-var _portrait: TextureRect
+## The live diorama's own root node (see CharacterPreviewDiorama) --
+## rebuilt (CharacterPreviewDioramaScript.build) only when the DNA seed
+## itself changes (a reroll), so cycling an appearance axis redresses the
+## SAME strolling hero rather than resetting the little scene under it.
+var _diorama: Node2D
+## Which DNA seed _diorama's world layout was last built for -- -1 so the
+## very first _refresh_appearance always builds once, regardless of
+## whatever _dna_seed's own default happens to be.
+var _diorama_built_for_seed := -1
 ## The glow ring behind the portrait, repainted to the rolled DNA's rarity
 ## color (see _refresh_dna) -- the "DNA moment" made visible, not just read.
 var _dna_glow: PanelContainer
@@ -176,7 +206,10 @@ func _ready() -> void:
 	_root_screen = _build_root_screen()
 	_create_screen = _build_create_screen()
 	_join_screen = _build_join_screen()
-	for s in [_root_screen, _create_screen, _join_screen]:
+	# Built after _create_screen: "Keep my save" goes back to it, so it has to
+	# exist first.
+	_overwrite_confirm_screen = _build_overwrite_confirm_screen()
+	for s in _screens():
 		s.set_anchors_preset(Control.PRESET_FULL_RECT)
 		stack.add_child(s)
 	_show(_root_screen)
@@ -253,6 +286,22 @@ func _build_create_screen() -> Control:
 	# cycles appearance -- see _select_class/_refresh_dna/_refresh_appearance,
 	# which now also refresh whichever tab reflects that state.
 	var tabs := TabContainer.new()
+	# EXPAND, not the default plain FILL: this TabContainer's parent is the
+	# ScrollContainer built just below, and ScrollContainer sizes a non-EXPAND
+	# child to that child's OWN combined minimum size, widening it to the
+	# container's width only when SIZE_EXPAND is set. A TabContainer's minimum
+	# width is in turn (use_hidden_tabs_for_min_size defaults to false) the
+	# minimum width of whichever tab is CURRENTLY VISIBLE -- and the Skills
+	# tab's is tiny, since autowrapping labels have near-zero minimum width.
+	# So picking Skills collapsed the whole tab body, tab strip included, to
+	# 145px inside an 836px scroll area, leaving most of the panel empty
+	# beside it and degrading the strip to one tab plus scroll arrows
+	# (reported live). The Character tab only looked acceptable by luck at
+	# 740px of the same 836. Vertical is deliberately left alone: the
+	# TabContainer must keep its own minimum HEIGHT, which is exactly what
+	# gives the outer ScrollContainer something to scroll. Pinned by
+	# test_selecting_the_skills_tab_does_not_collapse_the_tab_body.
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_tabs(tabs)
 	tabs.add_child(_build_character_tab())
 	tabs.add_child(_build_skills_tab())
@@ -280,13 +329,83 @@ func _build_create_screen() -> Control:
 	row.add_theme_constant_override("separation", 10)
 	row.alignment = BoxContainer.ALIGNMENT_END
 	row.add_child(_menu_button("Back", func(): _show(_root_screen)))
-	row.add_child(_menu_button("Begin", func():
-		start_requested.emit(
-			_pending_mode, _selected_class, current_appearance(), current_dna().stat_modifiers
-		), true))
+	# Routed through _begin_pressed rather than emitting inline: this is the
+	# one irreversible button in the game (see _begin_pressed).
+	row.add_child(_menu_button("Begin", func(): _begin_pressed(), true))
 	box.add_child(row)
 
 	_select_class(_selected_class)
+	return box
+
+
+## Begin's guard, and the only path to `start_requested`.
+##
+## New Game AND Host Game both reach here -- both route through this same
+## creator screen -- and World answers `start_requested` by wiping the player
+## save plus every world-persistence store (chunk modifications, planted
+## trees, fish populations, the event/memory/household/contract/market/
+## institution/world-boss stores and the world clock; see
+## World._on_menu_start_requested -> _wipe_persisted_world). Until this guard
+## existed, one click destroyed all of it with no prompt at all, and the 60s
+## autosave then overwrote player_save.bin so even undeleting was gone.
+##
+## "Is there anything to lose" is answered by the very same
+## `_player_save.has_save(save_path)` predicate that already decides whether
+## the root screen offers Load Game, so the one-save-slot model
+## (docs/concept/persistence.md) is read in exactly one place -- and a
+## first-ever game is never made to click through a warning about a save that
+## does not exist.
+func _begin_pressed() -> void:
+	if _player_save.has_save(save_path):
+		_show(_overwrite_confirm_screen)
+		return
+	_emit_start_requested()
+
+
+func _emit_start_requested() -> void:
+	start_requested.emit(
+		_pending_mode, _selected_class, current_appearance(), current_dna().stat_modifiers
+	)
+
+
+## The one thing standing between a click and an unrecoverable wipe.
+##
+## A plain Control screen in the same state machine as the other three, NOT a
+## `ConfirmationDialog`: every overlay in this codebase is a plain Control
+## (SettingsOverlay, LicenseGateOverlay, LoadingOverlay), and a Window-derived
+## dialog would also be awkward to drive in the headless test run.
+##
+## It names what is actually destroyed rather than asking "are you sure?":
+## World wipes the world's own persisted state as well as the character, so
+## "your character" alone would badly understate it. "Keep my save" is the
+## safe way out, listed first and drawn as the primary button.
+func _build_overwrite_confirm_screen() -> Control:
+	var box := VBoxContainer.new()
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", 10)
+
+	box.add_child(_title_label("Overwrite your saved game?", 26))
+	var body := _muted_label(
+		(
+			"Starting a new game deletes your saved character and the world they "
+			+ "lived in -- everything you built, planted, changed and were "
+			+ "remembered for.\n\nGo back and choose Load Game instead to keep "
+			+ "playing that character."
+		)
+	)
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.custom_minimum_size = Vector2(PANEL_SIZE.x * 0.7, 0)
+	body.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	box.add_child(body)
+	box.add_child(_spacer(20))
+
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	row.add_child(_menu_button("Keep my save", func(): _show(_create_screen), true))
+	row.add_child(_menu_button("Overwrite and start", func(): _emit_start_requested()))
+	box.add_child(row)
 	return box
 
 
@@ -329,10 +448,23 @@ func _build_hero_column() -> Control:
 	# cool blue, legendary a vivid pulsing gold, so a great roll is felt the
 	# instant it lands instead of only readable in the text line below it.
 	var glow_wrap := Control.new()
-	glow_wrap.custom_minimum_size = Vector2(
-		ProceduralCharacterSprite.PORTRAIT_SIZE.x * PORTRAIT_SCALE + 28,
-		ProceduralCharacterSprite.PORTRAIT_SIZE.y * PORTRAIT_SCALE + 28
-	)
+	glow_wrap.custom_minimum_size = Vector2(DIORAMA_VIEW_SIZE) + Vector2(28, 28)
+	# custom_minimum_size is only a MINIMUM -- a plain Control defaults to
+	# SIZE_FILL on both axes, so `inner` (a VBoxContainer whose own width
+	# tracks `col`'s SIZE_EXPAND_FILL card, i.e. most of the dialog) was
+	# stretching glow_wrap out to that same width. The glow ring
+	# (_dna_glow, anchored PRESET_FULL_RECT within glow_wrap) stretched
+	# right along with it -- a large, near-empty gold-at-0.35-alpha box
+	# over the card's dark background reads as flat tan -- while the actual
+	# frame/diorama (PRESET_CENTER, so it does NOT stretch) stayed its own
+	# correct small size and just anchored off-centre somewhere inside that
+	# oversized wrap (reported live, both for the diorama and, before it,
+	# the static portrait this replaced: "not contained in the panel").
+	# SHRINK_CENTER keeps glow_wrap (and everything anchored inside it) at
+	# exactly its own custom_minimum_size, centred, regardless of how wide
+	# its container is.
+	glow_wrap.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	glow_wrap.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_dna_glow = PanelContainer.new()
 	_dna_glow.set_anchors_preset(Control.PRESET_FULL_RECT)
 	var glow_style := StyleBoxFlat.new()
@@ -343,7 +475,6 @@ func _build_hero_column() -> Control:
 	glow_wrap.add_child(_dna_glow)
 
 	var frame := PanelContainer.new()
-	frame.set_anchors_preset(Control.PRESET_CENTER)
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.05, 0.055, 0.075, 0.95)
 	style.set_border_width_all(1)
@@ -352,15 +483,26 @@ func _build_hero_column() -> Control:
 	style.set_content_margin_all(10)
 	frame.add_theme_stylebox_override("panel", style)
 
-	_portrait = TextureRect.new()
-	_portrait.custom_minimum_size = Vector2(
-		ProceduralCharacterSprite.PORTRAIT_SIZE * PORTRAIT_SCALE
-	)
-	_portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	# Pixel art must not blur when scaled up.
-	_portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	frame.add_child(_portrait)
-	glow_wrap.add_child(frame)
+	frame.add_child(_build_diorama_view())
+	# CenterContainer, not frame.set_anchors_preset(PRESET_CENTER) directly
+	# (the original code here, before the diorama existed) -- an anchor
+	# preset applied to a Control BEFORE it has any child freezes its
+	# centering math against whatever size it happens to be AT THAT EXACT
+	# MOMENT (zero, since `frame` had no content yet) into fixed pixel
+	# offsets; when frame's real size appears afterward (its
+	# PanelContainer minimum size growing once the diorama view is added
+	# as a child), Godot does not recompute those offsets -- the box just
+	# grows from that frozen zero-size anchor point instead of staying
+	# centred, which reads as "hanging in a corner, not contained" (reported
+	# live, for the diorama AND, before it, in the very first screenshot
+	# of the OLD static portrait this replaced -- the same latent bug,
+	# just never fixed until now). CenterContainer keeps its child centred
+	# continuously, correctly, regardless of when/how the child's own size
+	# changes -- the robust fix, not a one-time offset calculation.
+	var centered := CenterContainer.new()
+	centered.set_anchors_preset(Control.PRESET_FULL_RECT)
+	centered.add_child(frame)
+	glow_wrap.add_child(centered)
 	inner.add_child(glow_wrap)
 
 	_class_name_label = _title_label("", 20)
@@ -383,6 +525,39 @@ func _build_hero_column() -> Control:
 	_reroll_button = _menu_button("Reroll DNA", func(): _reroll_dna())
 	inner.add_child(_reroll_button)
 	return col
+
+
+## The live diorama itself (see docs/concept/character_creator_preview_
+## scene.md): a fixed Camera2D framing CharacterPreviewDiorama's whole
+## FOOTPRINT from outside -- a diorama is watched from outside its own
+## little box, not a camera that follows the stroll -- inside a
+## SubViewport rendered at exactly DIORAMA_VIEW_SIZE (see that constant's
+## own doc comment on why that avoids needing a filter-mode trick the old
+## portrait's manual texture scaling did). UPDATE_ALWAYS, not the default
+## UPDATE_WHEN_VISIBLE -- this keeps animating (grass sway, the stroll)
+## for as long as the creator screen stays open, the same "ambient, always
+## live" the real world's own grass/water already are.
+func _build_diorama_view() -> Control:
+	var container := SubViewportContainer.new()
+	container.custom_minimum_size = Vector2(DIORAMA_VIEW_SIZE)
+	container.stretch = true
+
+	var viewport := SubViewport.new()
+	viewport.size = DIORAMA_VIEW_SIZE
+	viewport.transparent_bg = true
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	container.add_child(viewport)
+
+	var footprint: Vector2 = CharacterPreviewDioramaScript.FOOTPRINT
+	var camera := Camera2D.new()
+	camera.zoom = Vector2.ONE * (float(DIORAMA_VIEW_SIZE.x) / footprint.x)
+	camera.position = footprint * 0.5
+	viewport.add_child(camera)
+
+	_diorama = CharacterPreviewDioramaScript.new()
+	viewport.add_child(_diorama)
+
+	return container
 
 
 ## The class picker, now a horizontal strip of small icon cards sitting
@@ -491,8 +666,17 @@ func _build_skills_tab() -> Control:
 	col.add_child(_separator())
 
 	col.add_child(_section_label("SHARED SKILL POOL"))
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# Added straight to `col`, NOT wrapped in a ScrollContainer of its own:
+	# the entire TabContainer already lives inside one (see
+	# _build_create_screen), and a ScrollContainer reports a combined minimum
+	# size of ~0 on every axis it is allowed to scroll. Nested, this grid's
+	# real height therefore never propagated up to `col`, which -- having no
+	# spare height to distribute -- handed the EXPAND_FILL inner scroll its
+	# ~0 minimum instead. The measured result was a 342px-tall grid inside a
+	# 0px-tall parent: the shared skill pool was never visible at all
+	# (reported live). Un-nested, the grid's height reaches the OUTER scroll,
+	# which scrolls it while Back/Begin stay pinned outside. Pinned by
+	# test_the_shared_skill_grid_is_not_clipped_away_by_its_parent.
 	var grid := GridContainer.new()
 	grid.columns = 3
 	grid.add_theme_constant_override("h_separation", 10)
@@ -501,8 +685,7 @@ func _build_skills_tab() -> Control:
 		var card := _build_skill_node_card(node_id)
 		_skill_node_cards[node_id] = card
 		grid.add_child(card)
-	scroll.add_child(grid)
-	col.add_child(scroll)
+	col.add_child(grid)
 
 	var footer := _muted_label(
 		"Every class currently draws from this same shared pool -- full class-specific skill webs are still in development."
@@ -663,8 +846,17 @@ func current_dna() -> Dictionary:
 
 func _refresh_appearance() -> void:
 	var appearance := current_appearance()
-	if _portrait != null:
-		_portrait.texture = _char_sprite.generate_hero_portrait_texture(appearance)
+	if _diorama != null:
+		# The world layout (pond/tree/pebble/grass positions) only rebuilds
+		# when the DNA seed itself actually changed (a reroll) -- every
+		# OTHER call here (cycling an axis, switching class) just redresses
+		# the same, already-strolling hero, matching the design doc's own
+		# Determinism pillar: same seed, same little scene, not reset on
+		# every click.
+		if _diorama_built_for_seed != _dna_seed:
+			_diorama.build(_dna_seed)
+			_diorama_built_for_seed = _dna_seed
+		_diorama.apply_appearance(appearance)
 	for axis in _axis_value_labels:
 		var label: Label = _axis_value_labels[axis]
 		label.text = "%s: %s" % [AXIS_LABELS.get(axis, axis), _axis_value_text(axis, appearance)]
@@ -1022,8 +1214,16 @@ func _style_tabs(tabs: TabContainer) -> void:
 	tabs.add_theme_color_override("font_unselected_color", Color(1, 1, 1, 0.6))
 
 
+## Every screen in the menu's little state machine, in the order _ready adds
+## them to the stack. ONE list, read by both _ready and _show: while each kept
+## its own hardcoded copy, adding a screen to one and not the other either
+## never put it in the tree or left it visible on top of whatever came next.
+func _screens() -> Array:
+	return [_root_screen, _create_screen, _join_screen, _overwrite_confirm_screen]
+
+
 func _show(screen: Control) -> void:
-	for s in [_root_screen, _create_screen, _join_screen]:
+	for s in _screens():
 		s.visible = s == screen
 
 

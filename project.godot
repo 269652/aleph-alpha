@@ -27,6 +27,8 @@ run/max_fps=240
 
 WorldItemBus="*res://src/ui/world_item_bus.gd"
 ConsoleFocus="*res://src/ui/console_focus_bus.gd"
+SelfIntegrity="*res://src/licensing/self_integrity.gd"
+LicenseGate="*res://src/licensing/license_gate.gd"
 
 [display]
 

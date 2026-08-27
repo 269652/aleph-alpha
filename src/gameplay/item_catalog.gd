@@ -93,6 +93,13 @@ const _ITEMS := {
 	"carrot": ["Carrot", "food", 20, 0.0],
 	# The other wild root crop -- see docs/concept/wild_crops.md.
 	"potato": ["Potato", "food", 20, 0.0],
+	# Woodworking chain (see docs/concept/woodworking.md): a bare felled
+	# trunk bucks into logs by hand, or (saw + trained Carpentry) is sawn
+	# whole into beam/plank instead.
+	"log": ["Log", "material", 20, 0.0],
+	"beam": ["Beam", "material", 20, 0.0],
+	"plank": ["Plank", "material", 20, 0.0],
+	"saw": ["Saw", "tool", 1, 0.0],
 	"crude_blade": ["Crude Blade", "weapon", 1, 9.0],
 	# Mining chain: a stone pickaxe knocks ore out of ore-bearing boulders.
 	"stone": ["Stone", "material", 40, 0.0],
@@ -124,11 +131,61 @@ const _ITEMS := {
 	"iron_boots": ["Iron Boots", "armor", 1, 0.0, "feet", 2.0],
 	# Fishing (see concept/fishing.md): a rod cast at water lands fish.
 	"fishing_rod": ["Fishing Rod", "tool", 1, 0.0],
+	# Sägewerk (sawmill -- see docs/concept/timber_construction.md): a
+	# placeable worksite, same "kind" as campfire/furnace above, where a
+	# Lumberjack NPC shapes gathered logs into beam/plank over time.
+	"sagewerk": ["Sagewerk", "placeable", 5, 0.0],
+	# Storage (see docs/concept/timber_construction.md's "Storage, logistics,
+	# and the autonomous dependency chain" section): a placeable structure
+	# like campfire/furnace, not an inert material -- holds its own real
+	# item_id -> count stock (StructureStock) once built.
+	"storage": ["Storage", "placeable", 5, 0.0],
+	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
+	# docs/concept/player_citizenship.md): the pure-logic Compass/
+	# RoughCompass reading, ExploredTiles/MapProjection, Spyglass,
+	# WeatherForecast, SeasonAlmanac, property claiming/contracts and
+	# FieldJournal modules all now have a craftable, held item id. Instruments
+	# and documents, not consumables -- max_stack 1 like every other tool.
+	"rough_compass": ["Rough Compass", "tool", 1, 0.0],
+	"compass": ["Compass", "tool", 1, 0.0],
+	"map": ["Map", "tool", 1, 0.0],
+	"spyglass": ["Spyglass", "tool", 1, 0.0],
+	"weather_glass": ["Weather Glass", "tool", 1, 0.0],
+	"star_chart": ["Star Chart", "tool", 1, 0.0],
+	"deed": ["Deed", "tool", 1, 0.0],
+	"ledger": ["Ledger", "tool", 1, 0.0],
+	"field_journal": ["Field Journal", "tool", 1, 0.0],
+	"charter": ["Charter", "tool", 1, 0.0],
+	# "Three Fragments" hunt (docs/concept/easter_eggs.md, see
+	# ThreeFragmentsHunt for the aggregation logic): three small,
+	# unremarkable items, each quietly granted the first time its own source
+	# egg is found (signed secret room / ancient terminal / WarGames console
+	# command -- see scenes/world.gd's own granting logic), plus the bonus
+	# item granted once all three are held together. All four are purely
+	# inert "material" items with zero weapon_damage -- no fanfare, no
+	# mechanical weight, matching this whole Easter-egg family's design
+	# pillars.
+	"terminal_fragment": ["Pitted Circuit Shard", "material", 5, 0.0],
+	"secret_room_token": ["Tarnished Token", "material", 5, 0.0],
+	"wargames_punch_card": ["Scorched Punch Card", "material", 5, 0.0],
+	"curious_keepsake": ["Curious Keepsake", "material", 5, 0.0],
 }
 
 
 func has(item_id: String) -> bool:
 	return _ITEMS.has(item_id)
+
+
+## `item_id`'s category ("food", "weapon", "tool", ...) -- the same string
+## make() stamps onto the built Item's `kind`, exposed standalone so a caller
+## can classify an item id (e.g. "is this food?") without constructing a
+## whole Item first (see Player.sell_food_to_village's village-feeding
+## fallback, docs/concept/progression.md "Ecological literacy"). "" for an
+## unknown id.
+func kind_of(item_id: String) -> String:
+	if not _ITEMS.has(item_id):
+		return ""
+	return String(_ITEMS[item_id][1])
 
 
 func make(item_id: String) -> Item:
@@ -139,13 +196,49 @@ func make(item_id: String) -> Item:
 	return Item.new(item_id, spec[0], spec[1], spec[2], spec[3], equip_slot, armor, mass_kg)
 
 
-## Real mass for `item_id` (see _WEAPON_MATERIAL_AND_VOLUME's own doc
-## comment) -- 0.0 for anything with no material + volume estimate yet.
+## Real average mass of one harvested root/tuber, kilograms (see
+## docs/concept/wild_crops.md) -- a REAL reference weight for the whole
+## vegetable, not a material-density x volume estimate the way weapon mass
+## is: a carrot/potato isn't a uniform block of "carrot material" the way a
+## sword is iron, so the honest real-world number is a whole-item average
+## rather than a derived one. Real, so a pulled root can enter the same
+## momentum model (Kick/HeldItemThrow, docs/concept/materials.md) every other
+## physical object already does -- "a real physical entity, not just an
+## inventory grant" (docs/concept/wild_crops.md's own framing for the pull).
+##
+## carrot: a medium carrot averages roughly 60-70g.
+## potato: a medium potato averages roughly 150-200g.
+const _PRODUCE_MASS_KG := {
+	"carrot": 0.07,
+	"potato": 0.17,
+}
+
+
+## Real mass for `item_id` -- a real weapon (material + volume estimate, see
+## _WEAPON_MATERIAL_AND_VOLUME) or a real harvested vegetable
+## (_PRODUCE_MASS_KG); 0.0 for anything with no real mass modeled yet.
 func _mass_kg_for(item_id: String) -> float:
+	if _PRODUCE_MASS_KG.has(item_id):
+		return _PRODUCE_MASS_KG[item_id]
 	if not _WEAPON_MATERIAL_AND_VOLUME.has(item_id):
 		return 0.0
 	var material_and_volume: Array = _WEAPON_MATERIAL_AND_VOLUME[item_id]
 	return _material_properties.mass_kg_for(material_and_volume[0], material_and_volume[1])
+
+
+## Which real material `item_id` is made of (see _WEAPON_MATERIAL_AND_VOLUME),
+## or "" for any item with no material modeled yet -- the same "not modeled
+## yet" convention Item.mass_kg's 0.0 uses. Named after the existing
+## BuildingPiece.material_of rather than inventing a second spelling.
+##
+## The material was already known here (it is what _mass_kg_for derives a
+## weapon's real mass FROM), just private -- so the game could tell the player
+## how heavy a sword is but never what it is made of. Lets a tooltip name the
+## material and describe it in words (MaterialProperties.descriptors_for).
+func material_of(item_id: String) -> String:
+	if not _WEAPON_MATERIAL_AND_VOLUME.has(item_id):
+		return ""
+	return String(_WEAPON_MATERIAL_AND_VOLUME[item_id][0])
 
 
 ## Every id this catalog can build, for a /help-style listing.

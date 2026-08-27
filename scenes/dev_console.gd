@@ -12,12 +12,34 @@ signal command_submitted(command: String, args: Array)
 
 const ConsoleCommandParser = preload("res://src/gameplay/console_command_parser.gd")
 
-## Capped so a long session's console history doesn't grow its text buffer
+## Height of the output viewport (the ScrollContainer), and the height of one
+## rendered row in it: the shared UI theme's font (UiTheme.BASE_FONT_SIZE = 14)
+## measures 20px per line. Both are pinned against the real font metrics by
+## test_visible_rows_is_derived_from_the_real_font_metrics, so a theme change
+## breaks that test instead of silently making VISIBLE_ROWS a fiction.
+const OUTPUT_HEIGHT := 130.0
+const LINE_HEIGHT_PX := 20.0
+
+## How many rows the viewport shows at once: 130 / 20.
+const VISIBLE_ROWS := 6
+
+## How far back the console can be scrolled, in screens of output -- the one
+## product decision here; everything else is measured. Thirty-two screens is
+## comfortably more than one whole multi-line report: /history logs ONE line
+## per recorded event (World._handle_history_command splits Why.explain_entity
+## and calls log_line per line), and the previous cap of a dozen LOGICAL lines
+## truncated every such report to its own tail before it could be read.
+const SCROLLBACK_SCREENS := 32
+
+## Scrollback cap, so a long session's history doesn't grow the text buffer
 ## unbounded -- older lines are simply dropped, not persisted anywhere.
-const MAX_LOG_LINES := 12
+## Pinned by test_scrollback_holds_a_whole_multi_line_report (lower bound)
+## and test_scrollback_is_still_bounded (upper bound).
+const MAX_LOG_LINES := VISIBLE_ROWS * SCROLLBACK_SCREENS
 
 var _parser := ConsoleCommandParser.new()
 var _log_lines: Array[String] = []
+var _output_scroll: ScrollContainer
 var _output_label: Label
 var _input: LineEdit
 
@@ -29,14 +51,28 @@ func _ready() -> void:
 	var root := VBoxContainer.new()
 	add_child(root)
 
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 130)
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	root.add_child(scroll)
+	_output_scroll = ScrollContainer.new()
+	_output_scroll.custom_minimum_size = Vector2(0, OUTPUT_HEIGHT)
+	_output_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	# The same pairing every other scrolling surface in this project uses
+	# (crafting_window.gd, settings_overlay.gd, skill_tree_window.gd,
+	# main_menu.gd): a ScrollContainer only stretches a child to its own width
+	# if that child is SIZE_EXPAND -- otherwise the child gets its own MINIMUM
+	# width, which for an autowrapping Label is ~1px, so every logged line
+	# wrapped to one word per row. Disabling horizontal scrolling keeps it that
+	# way and drops the horizontal scrollbar that was also eating log height.
+	_output_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	root.add_child(_output_scroll)
 
 	_output_label = Label.new()
 	_output_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	scroll.add_child(_output_label)
+	_output_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Fires from inside ScrollContainer's own child-fitting pass, i.e. after it
+	# has already refreshed the scrollbar's max_value -- the one moment the new
+	# bottom is actually known. Deliberately NOT an awaited process frame: a
+	# coroutine that resumes after the console is freed errors out.
+	_output_label.resized.connect(_scroll_to_newest)
+	_output_scroll.add_child(_output_label)
 
 	_input = LineEdit.new()
 	_input.placeholder_text = "/help"
@@ -65,6 +101,19 @@ func log_line(text: String) -> void:
 	if _log_lines.size() > MAX_LOG_LINES:
 		_log_lines.pop_front()
 	_output_label.text = "\n".join(_log_lines)
+	# Covers the case where the label did NOT change height (buffer already at
+	# MAX_LOG_LINES), so `resized` never fires.
+	_scroll_to_newest()
+
+
+## Keeps the newest line visible. Without this the ScrollContainer stayed at
+## position 0 forever and every command's answer landed below the fold -- the
+## console could not show its own output. scroll_vertical is clamped by Godot
+## to (max_value - page), so assigning max_value means "bottom".
+func _scroll_to_newest() -> void:
+	if _output_scroll == null:
+		return
+	_output_scroll.scroll_vertical = int(_output_scroll.get_v_scroll_bar().max_value)
 
 
 func _on_text_submitted(text: String) -> void:

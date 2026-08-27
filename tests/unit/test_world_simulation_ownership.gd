@@ -42,3 +42,33 @@ func test_a_solo_session_with_no_peer_owns_the_simulation():
 ## the authoritative one.
 func test_a_connected_client_does_not_own_the_simulation():
 	assert_false(World.owns_ecosystem_simulation_for(false, true, false))
+
+
+## A step function with green unit tests and NO production caller. Every
+## test in test_earth_chunk_manager.gd calls step_wild_crops directly, so
+## the sim was provably correct and provably never run: in a real session
+## wild crops only ever had the maturity _seed_initial_patches gave them at
+## chunk creation, and spread never fired once. This file's own header was
+## written about exactly this shape one level further in -- so the guard
+## belongs here, next to it.
+##
+## A source-contract test rather than a behavioural one: standing up a whole
+## World node headlessly to spy the call is not worth the fight, and this
+## file is pure and instant (it only preloads scenes/world.gd), which is why
+## it is the right home rather than the 10-minute test_earth_chunk_manager.
+## Same spirit as test_ground_tint.gd's SHADER_CODE assertions, which this
+## codebase already accepts for things a headless run cannot otherwise see.
+func test_the_ecology_batch_advances_wild_crops_like_every_other_plant_sim():
+	var source := FileAccess.get_file_as_string("res://scenes/world.gd")
+	var start := source.find("func _step_ecology_batch")
+	assert_gt(start, -1, "the ecology batch must still be called that")
+	var body_end := source.find("\nfunc ", start + 1)
+	var body := source.substr(start, body_end - start)
+	assert_true(
+		body.contains("step_tall_grass"),
+		"the premise: this really is the batch that fronts the plant sims"
+	)
+	assert_true(
+		body.contains("step_wild_crops"),
+		"wild crops must be advanced by the batch, not only by their own tests"
+	)

@@ -2,7 +2,10 @@
 
 The planet is toroidal and water-heavy ([world.md](world.md)), and
 [pets.md](pets.md) currently only offers horses as a mount. Transportation
-gets its own system rather than staying an afterthought of the pet list:
+gets its own system rather than staying an afterthought of the pet list.
+This doc covers the tools a player carries; see
+[infrastructure.md](infrastructure.md) for what the land itself accumulates
+from repeated traffic — worn paths, trails, roads, and crossings:
 
 - **Boats** are a craftable/buildable mode of transport (see
   [crafting.md](crafting.md)/[building.md](building.md)) for crossing the
@@ -55,5 +58,9 @@ generically.
 
 - Fast-travel mechanic specifics — fixed waypoint network (discover/unlock
   nodes) vs. a craftable personal-portal item vs. something else?
+  [wayfinding.md](wayfinding.md)'s Waystone item is a candidate answer (a
+  player-placed, persistent, nameable waypoint) but deliberately doesn't
+  resolve this question itself — it only registers the point; whether
+  registering one grants fast travel is this open question's call to make.
 - Do boats interact with the [weather](weather.md) system (storms making
   water travel genuinely risky)?

@@ -1,6 +1,8 @@
 extends GutTest
 
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+const GroundTint = preload("res://src/rendering/ground_tint.gd")
 
 
 func test_each_seed_selects_one_tile_inside_the_delivered_10x10_atlas():
@@ -66,6 +68,35 @@ func test_card_offsets_stay_within_the_tiles_own_bounds():
 			var offset: Vector2 = spec.offset
 			assert_lte(absf(offset.x), IllustratedGrassPatch.WORLD_SIZE * 0.5)
 			assert_lte(absf(offset.y), IllustratedGrassPatch.WORLD_SIZE * 0.5)
+
+
+## Reported live (with real screenshots): "the player's head is behind the
+## long grass blades when the feet already are past it... there are none
+## [higher than the player]." band_anchor_world_y (see its own doc comment)
+## fixed the coarse per-BAND case but a single MultiMeshInstance2D draw call
+## can only Y-sort as ONE unit -- a blade whose own root the player has
+## genuinely walked past can still sit in the SAME still-ahead band as
+## others that legitimately haven't been reached yet, and the whole band
+## draws together. True per-blade precision needs a per-PIXEL decision, not
+## a coarser per-draw-call one -- the fragment shader already computes
+## `from_walker` (this blade's own root minus the live player position) and
+## `distance_to_walker` for the existing parting/push effect, so this reuses
+## them rather than adding new uniforms: any blade whose root sits behind
+## the player (from_walker.y <= 0) fades to fully transparent as the player
+## gets close enough to plausibly stand in front of it, using the SAME
+## walker_radius already established for the push effect rather than a
+## fresh tuned constant. A per-pixel alpha decision works regardless of
+## which draw call/band the blade's macro Y-sort put it in.
+func test_shader_hides_a_blade_whose_root_the_player_has_already_walked_past():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	assert_string_contains(code, "from_walker.y")
+	assert_string_contains(code, "occlusion_fade")
+	assert_string_contains(code, "COLOR.a *= occlusion_fade")
+	# The fade line itself must reuse walker_radius, not a fresh constant.
+	var fade_line_start := code.find("float occlusion_fade")
+	assert_gte(fade_line_start, 0, "occlusion_fade must be computed somewhere in the shader")
+	var fade_line := code.substr(fade_line_start, code.find(";", fade_line_start) - fade_line_start)
+	assert_string_contains(fade_line, "walker_radius")
 
 
 func test_shader_bends_each_pixel_row_along_a_curved_per_blade_path():
@@ -273,6 +304,47 @@ func test_band_anchor_world_y_orders_the_same_as_band_index():
 		previous = anchor_y
 
 
+## Reported live: "the player's head is behind the long grass blades when
+## the feet already are past it" -- a single MultiMeshInstance2D draw call
+## can only Y-sort as ONE unit against the player (see BAND_COUNT's own doc
+## comment), using this anchor as that unit's sort key. A CENTER anchor
+## means every row in the LOWER half of a band sits below (a larger world Y
+## than) the anchor -- so a player standing on one of those rows, having
+## already walked past every blade in the band's upper half, still sees the
+## WHOLE band (including blades whose own root the player is already past)
+## Y-sort in front of them, since the comparison uses the band's midpoint,
+## not any individual blade's real position. A blade card is exactly
+## WORLD_SIZE (one tile) tall (see `mesh()`), so this isn't a sub-pixel
+## rounding error -- a mid-band player can end up visibly behind a blade
+## whose root is a full tile or more BEHIND their own feet, and since the
+## card renders upward from its root, that reads exactly as "my head is
+## behind grass my feet have already passed."
+##
+## The anchor must instead sit at the band's own BOTTOM edge (its largest
+## row's world Y, not its midpoint): an entity standing anywhere within or
+## above the band then always sorts BEHIND the whole band (grass draws in
+## front while you're walking through it -- normal, expected concealment,
+## see docs/concept/combat.md's vegetation-concealment pillar), and only
+## pops in front of the entire band once genuinely past its very last row.
+## That trades "occasionally covered a beat longer than a single blade's
+## own root would justify" for "never shows a body part behind grass it has
+## unambiguously already passed" -- the same choice BAND_COUNT's own doc
+## comment already argues for ("the whole field flickering... is what
+## actually reads as broken").
+func test_band_anchor_world_y_is_never_smaller_than_any_row_actually_in_that_band():
+	var chunk_size := 32
+	var chunk_origin_y := 96  # nonzero, so this doesn't accidentally pass via origin canceling out
+	var tile_size := 16.0
+	for local_y in range(chunk_size):
+		var band := IllustratedGrassPatch.band_index_for_local_y(local_y, chunk_size)
+		var anchor_y := IllustratedGrassPatch.band_anchor_world_y(band, chunk_origin_y, chunk_size, tile_size)
+		var row_world_y := float(chunk_origin_y + local_y) * tile_size
+		assert_gte(
+			anchor_y, row_world_y,
+			"row %d (band %d)'s own world Y must never exceed its band's anchor, or a player standing on it would wrongly Y-sort in front of blades from earlier rows in the same band" % [local_y, band]
+		)
+
+
 func test_instances_for_cells_produces_one_instance_per_card_across_all_given_cells():
 	var cell_specs: Array[Dictionary] = [
 		{"seed": 11, "ground_position": Vector2(0, 0), "growth": 1.0},
@@ -354,3 +426,67 @@ func test_fill_band_rebuilds_cleanly_when_called_again_with_fewer_cells():
 	])
 	assert_lt(mmi.multimesh.instance_count, before)
 	assert_eq(mmi.multimesh.instance_count, IllustratedGrassPatch.CARD_COUNT)
+
+
+# -- a field carries the season, like the ground it stands in ----------------
+
+## The blade shader had no colour term at all -- the sampled atlas texel was
+## written straight through -- so tall grass stayed lush in deep winter while
+## the trees above it stood bare. See SeasonalFoliage / concept/seasons.md.
+func test_the_blade_shader_takes_a_season_tint_uniform():
+	assert_string_contains(IllustratedGrassPatch.SHADER_CODE, "uniform vec3 season_tint")
+
+
+## The delivered atlas already carries some dry/brown blades; those must not
+## be turned again by a season they are already wearing.
+func test_the_blade_shader_gates_the_season_tint_on_greenness_with_the_shared_gain():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	var fragment_body := code.substr(code.find("void fragment()"))
+	assert_string_contains(fragment_body, "COLOR.g - max(COLOR.r, COLOR.b)")
+	assert_string_contains(fragment_body, "* %s" % SeasonalFoliage.GREENNESS_GAIN)
+	assert_string_contains(fragment_body, "mix(COLOR.rgb, COLOR.rgb * season_tint")
+
+
+## A field and the ground under it must turn together -- a straw-coloured
+## meadow standing on a bright green lawn is the same defect one layer up.
+func test_the_blades_and_the_ground_under_them_use_the_same_greenness_gate():
+	var gate := "clamp((COLOR.g - max(COLOR.r, COLOR.b)) * %s, 0.0, 1.0)" % SeasonalFoliage.GREENNESS_GAIN
+	assert_string_contains(IllustratedGrassPatch.SHADER_CODE, gate)
+	assert_string_contains(GroundTint.SHADER_CODE, gate)
+
+
+## Mirrors set_wind_strength exactly, member re-applied at lazy build time.
+func test_set_season_tint_survives_being_called_before_the_material_is_built():
+	var patch := IllustratedGrassPatch.new()
+	var winter := SeasonalFoliage.tint_for_season("winter")
+	patch.set_season_tint(winter)
+	var parameter = patch.material().get_shader_parameter("season_tint")
+	assert_almost_eq(parameter.x, winter.r, 0.0001)
+	assert_almost_eq(parameter.y, winter.g, 0.0001)
+	assert_almost_eq(parameter.z, winter.b, 0.0001)
+
+
+## The shader source is built by ONE positional `%` array, so appending the
+## new greenness gain in the wrong slot would silently bake the wrong numbers
+## into the bend math -- a shader that still compiles and just looks wrong.
+## This pins the tuned constants that would move if that happened.
+func test_the_bend_math_still_carries_its_own_tuned_constants():
+	var code: String = IllustratedGrassPatch.SHADER_CODE
+	assert_string_contains(
+		code, "pow(clamp(UV.y, 0.0, 1.0), %s)" % IllustratedGrassPatch.BEND_CURVE_EXPONENT
+	)
+	assert_string_contains(code, "UV.x * %s" % IllustratedGrassPatch.PHASE_SPREAD)
+	assert_string_contains(
+		code,
+		"%s + %s * sin(UV.x * %s)" % [
+			IllustratedGrassPatch.AMPLITUDE_BASE,
+			IllustratedGrassPatch.AMPLITUDE_VARIATION,
+			IllustratedGrassPatch.AMPLITUDE_FREQUENCY,
+		]
+	)
+	assert_string_contains(
+		code, "* %s * wind_strength" % IllustratedGrassPatch.WIND_UV_AMPLITUDE
+	)
+	assert_string_contains(
+		code, "wake * %s" % IllustratedGrassPatch.WALKER_PUSH_UV_AMPLITUDE
+	)

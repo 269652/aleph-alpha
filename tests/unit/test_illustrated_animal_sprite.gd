@@ -399,6 +399,10 @@ func test_wolf_is_a_registered_illustrated_species():
 	assert_true(sprite.has_species("wolf"))
 
 
+func test_wolf_sheet_is_drawn_facing_left():
+	assert_true(sprite.faces_left("wolf"), "wolf art is drawn facing left")
+
+
 func test_wolf_has_walk_and_eat_art_but_no_dedicated_idle():
 	assert_true(sprite.has_action("wolf", "walk"))
 	assert_true(sprite.has_action("wolf", "eat"))
@@ -507,3 +511,90 @@ func test_loading_a_sheet_does_not_log_an_engine_warning():
 	IllustratedAnimalSprite._frame_cache.clear()
 	sprite.generate_textures("horse", "walk")
 	assert_engine_error_count(0, "loading an animal sheet should not warn")
+
+
+# -- Germany-region world bosses (docs/concept/worldbosses.md) --------------
+#
+# All 4 are magenta-chroma-key sheets, same shape as sheep above -- and the
+# missing chroma_key field was a real, shipped bug here (reported: "krampus
+# doesn't appear"): without it, a frame came back with 54.8% of its "opaque"
+# pixels being magenta background, not creature. The
+# no_leftover_magenta_background tests below are the regression coverage
+# that bug should have had from the start; mirrors
+# test_sheep_frames_have_no_leftover_magenta_background exactly.
+
+const GERMANY_BOSS_SPECIES := ["lindwurm", "rubezahl", "nyx", "krampus"]
+
+
+func test_germany_bosses_are_registered_illustrated_species():
+	for species in GERMANY_BOSS_SPECIES:
+		assert_true(sprite.has_species(species), species)
+
+
+## Lindwurm faces RIGHT -- the one sheet in this batch generated that way;
+## the other three face LEFT. Verified from the actual pixels for each, not
+## assumed uniform across the batch.
+func test_germany_boss_facing_directions():
+	assert_false(sprite.faces_left("lindwurm"))
+	assert_true(sprite.faces_left("rubezahl"))
+	assert_true(sprite.faces_left("nyx"))
+	assert_true(sprite.faces_left("krampus"))
+
+
+## Rubezahl generated with 9 walk frames, not the requested 8 --
+## SpriteSheetSlicer has no fixed-frame-count assumption anywhere, so this
+## is harmless; pinned so nobody "fixes" it later expecting exactly 8.
+func test_germany_boss_walk_frame_counts():
+	assert_eq(sprite.generate_textures("lindwurm", "walk").size(), 8)
+	assert_eq(sprite.generate_textures("rubezahl", "walk").size(), 9)
+	assert_eq(sprite.generate_textures("nyx", "walk").size(), 8)
+	assert_eq(sprite.generate_textures("krampus", "walk").size(), 8)
+
+
+## has_action's own doc comment: "attack" falls back to the walk cycle for
+## any species with no dedicated attack art -- true for all 4 (walk-only
+## sheets). Pinning it so a fight against one of these doesn't silently
+## regress to ProceduralAnimalAnimation mid-swing.
+func test_germany_boss_attack_falls_back_to_walk():
+	for species in GERMANY_BOSS_SPECIES:
+		assert_true(sprite.has_action(species, "attack"), species)
+
+
+## THE regression test for the actual shipped bug -- see this section's own
+## header comment. Mirrors test_sheep_frames_have_no_leftover_magenta_
+## background exactly, generalized across all 4 sheets.
+func test_germany_bosses_have_no_leftover_magenta_background():
+	for species in GERMANY_BOSS_SPECIES:
+		var frame: Image = sprite.generate_textures(species, "walk")[0].get_image()
+		assert_almost_eq(
+			frame.get_pixel(0, 0).a, 0.0, 0.01, "%s: top-left corner should be transparent, not magenta" % species
+		)
+		var magenta_survivors := 0
+		for y in frame.get_height():
+			for x in frame.get_width():
+				var c := frame.get_pixel(x, y)
+				if c.a > 0.5 and c.r > 0.9 and c.g < 0.1 and c.b > 0.9:
+					magenta_survivors += 1
+		assert_eq(magenta_survivors, 0, "%s: no opaque magenta pixel should survive chroma-keying" % species)
+
+
+func test_germany_bosses_have_real_content_that_survives_chroma_keying():
+	for species in GERMANY_BOSS_SPECIES:
+		var frame: Image = sprite.generate_textures(species, "walk")[0].get_image()
+		var found_content := false
+		for y in frame.get_height():
+			for x in frame.get_width():
+				if frame.get_pixel(x, y).a > 0.5:
+					found_content = true
+					break
+			if found_content:
+				break
+		assert_true(found_content, "%s: the drawing itself must survive chroma-keying, not just its background" % species)
+
+
+func test_germany_bosses_do_not_log_an_engine_warning():
+	IllustratedAnimalSprite._frame_cache.clear()
+	for species in GERMANY_BOSS_SPECIES:
+		sprite.generate_textures(species, "walk")
+	assert_engine_error_count(0, "loading a Germany-boss sheet should not warn")
+

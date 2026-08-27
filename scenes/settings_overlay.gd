@@ -1,12 +1,14 @@
 extends PanelContainer
 
-## The pause / settings menu (opened with toggle_settings, default Escape). Two
-## sections selectable by tab buttons: KEY BINDINGS (one rebindable row per
-## action from the tested Keybindings model -- click a key, press a new one)
-## and GRAPHICS (fullscreen, vsync). A Resume button closes it. Purely glue --
-## the rebinding registry/rules live in Keybindings; World owns applying the
-## InputMap, pausing the game, and persisting both keybinding and graphics
-## settings.
+## The pause / settings menu (opened with toggle_settings, default Escape).
+## Three sections selectable by tab buttons: KEY BINDINGS (one rebindable row
+## per action from the tested Keybindings model -- click a key, press a new
+## one), GRAPHICS (fullscreen, vsync), and LICENSE (paste a new key to
+## replace the current one -- see docs/licensing.md's "In-game license
+## entry"). A Resume button closes it. Purely glue -- the rebinding
+## registry/rules live in Keybindings; World owns applying the InputMap,
+## pausing the game, persisting keybinding/graphics settings, and actually
+## verifying/saving a submitted license code.
 
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
 const RenderResolution = preload("res://src/rendering/render_resolution.gd")
@@ -17,10 +19,14 @@ signal graphics_changed(setting: String, enabled: bool)
 ## Settings that are a CHOICE rather than on/off (render resolution).
 signal graphics_option_changed(setting: String, value: String)
 signal resume_requested()
+signal license_code_submitted(code: String)
 
 var _bindings: Keybindings
 var _key_section: VBoxContainer
 var _graphics_section: VBoxContainer
+var _license_section: VBoxContainer
+var _license_edit: TextEdit
+var _license_status_label: Label
 var _rows: Dictionary = {}  # action -> Button showing the key
 var _listening_action := ""
 var _listening_button: Button
@@ -69,11 +75,17 @@ func _build(fullscreen: bool, vsync: bool, resolution: String = "") -> void:
 	gfx_tab.text = "Graphics"
 	gfx_tab.pressed.connect(func(): _show_section("graphics"))
 	tabs.add_child(gfx_tab)
+	var license_tab := Button.new()
+	license_tab.text = "License"
+	license_tab.pressed.connect(func(): _show_section("license"))
+	tabs.add_child(license_tab)
 
 	_key_section = _build_key_section()
 	root.add_child(_key_section)
 	_graphics_section = _build_graphics_section(fullscreen, vsync, resolution)
 	root.add_child(_graphics_section)
+	_license_section = _build_license_section()
+	root.add_child(_license_section)
 
 	var resume := Button.new()
 	resume.text = "Resume"
@@ -174,10 +186,53 @@ func _build_graphics_section(fullscreen: bool, vsync: bool, resolution: String =
 	return section
 
 
+## Lets a player replace their current key without leaving the game or
+## hand-editing license.txt (see docs/licensing.md's "In-game license
+## entry"). Distinct from LicenseGateOverlay: that one blocks play
+## entirely with no valid key yet; this one is reachable only once
+## already playing, for "I want to swap in a different key" (e.g.
+## upgrading a trial to a full key).
+func _build_license_section() -> VBoxContainer:
+	var section := VBoxContainer.new()
+	section.add_theme_constant_override("separation", 6)
+
+	var hint := Label.new()
+	hint.text = (
+		"Paste a new license key below to replace your current one -- " +
+		"line breaks are fine."
+	)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD
+	section.add_child(hint)
+
+	_license_edit = TextEdit.new()
+	_license_edit.custom_minimum_size = Vector2(0, 140)
+	_license_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	section.add_child(_license_edit)
+
+	var submit := Button.new()
+	submit.text = "Verify & Save"
+	submit.pressed.connect(func(): license_code_submitted.emit(_license_edit.text))
+	section.add_child(submit)
+
+	_license_status_label = Label.new()
+	_license_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	section.add_child(_license_status_label)
+	return section
+
+
+## World calls this after checking a submitted code -- generic wording
+## only, never the real failure `reason` (see LicenseGateOverlay's own
+## doc comment for the same rule, restated here since this is a separate
+## Control with its own status label).
+func show_license_status(text: String) -> void:
+	_license_status_label.text = text
+
+
 func _show_section(which: String) -> void:
 	_stop_listening()
 	_key_section.visible = which == "keys"
 	_graphics_section.visible = which == "graphics"
+	_license_section.visible = which == "license"
 
 
 func _on_key_button_pressed(action: String, button: Button) -> void:

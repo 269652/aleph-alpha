@@ -55,18 +55,27 @@ func _ready() -> void:
 	add_to_group(HoverTargetFinder.GROUP_NAME)
 
 
-## For World's mouse-hover tooltip (see HoverTargetFinder). A felled trunk is
-## still choppable (see _cut_up) but is no longer a standing tree, so it says
-## so rather than keep calling itself "Tree".
+## For World's mouse-hover tooltip (see HoverTargetFinder). Names its real
+## stage (see docs/concept/woodworking.md): standing, felled-with-canopy, or
+## a bare trunk once the crown is off.
 func get_display_name() -> String:
-	return "Fallen Tree" if _felled else "Tree"
+	if not _felled:
+		return "Tree"
+	return "Bare Trunk" if _canopy_removed else "Fallen Tree"
 
 
 ## For World's mouse-hover tooltip (see HoverTargetFinder). Bound to "attack"
 ## because that is the input Player._chop_step actually reads (see
-## Player._perform_attack).
+## Player._perform_attack). A bare trunk additionally offers Saw -- shown
+## regardless of whether the player currently has a saw + enough Carpentry
+## to actually use it (informational, same "show every possible action"
+## convention every other multi-action hover already follows -- see e.g.
+## LiftableStone's Pick Up + Kick).
 func get_hover_actions() -> Array:
-	return [{"verb": "Chop", "action": "attack"}]
+	var actions := [{"verb": "Chop", "action": "attack"}]
+	if _felled and _canopy_removed:
+		actions.append({"verb": "Saw", "action": "attack"})
+	return actions
 
 
 ## Registers the canopy sprite so set_ripe_fruit can swap its texture.
@@ -133,20 +142,22 @@ func ripe_fruit_count() -> int:
 	return maxi(_ripe_count, 0)
 
 
-## Reduces health; felling drops wood into the world (via WorldItemBus, same
-## as creature loot/forage -- see world.gd's _on_item_dropped) and frees the
-## tree (its collision goes with it, same as any other queue_free()'d node).
-## A swing lands on this tree.
+## Reduces health; felling drops nothing yet (see docs/concept/woodworking.md
+## -- the tree is a real thing lying there, not a loot spray) and frees the
+## tree once fully worked up (its collision goes with it, same as any other
+## queue_free()'d node). A swing lands on this tree.
 ##
 ## Standing, it takes damage until it FALLS -- and then it is still there, on
-## its side, holding all its wood. Felling used to delete the tree and spray
-## items on the ground, which reads as the tree evaporating rather than as
-## something being cut down.
-##
-## Fallen, each further swing works a length off it until the trunk is used up.
+## its side, holding all its timber. Fallen, the FIRST swing limbs the crown
+## off (sticks); every swing after that bucks one length off the bare trunk
+## into logs, until the trunk is used up. See saw_up() for the alternative,
+## tool+skill-gated way to finish a bare trunk in one action instead.
 func take_damage(amount: float) -> void:
 	if _felled:
-		_cut_up()
+		if not _canopy_removed:
+			_remove_canopy()
+		else:
+			_cut_up()
 		return
 	health = _health.take_damage(health, amount)
 	if _health.is_dead(health):
@@ -159,12 +170,16 @@ func is_felled() -> bool:
 
 
 var _felled := false
+## Whether the crown has already been limbed off (see _remove_canopy) --
+## once true, further swings work the bare trunk itself.
+var _canopy_removed := false
 var _cuts_left := FelledTree.CUTS_TO_CLEAR
 
 
-## Topples the tree: same sprite, on its side, still carrying its wood.
+## Topples the tree: same sprite, on its side, still carrying its timber.
 func _fall() -> void:
 	_felled = true
+	_canopy_removed = false
 	_cuts_left = FelledTree.CUTS_TO_CLEAR
 	rotation = FelledTree.FALLEN_ROTATION * float(FelledTree.fall_direction(sprite_seed))
 	# A fallen trunk lies ON the ground rather than standing on it, so it stops
@@ -175,20 +190,58 @@ func _fall() -> void:
 			child.set_deferred("disabled", true)
 
 
-## Works one length off the fallen trunk.
+## The first swing on a freshly-felled tree: limbs the crown off as sticks.
+## Real forestry practice (limb before bucking), not an invented game step --
+## see docs/concept/woodworking.md. Does not consume one of the trunk's own
+## CUTS_TO_CLEAR.
+##
+## Actually swaps what's drawn, not just the state flag -- reported live: a
+## tree still showed its full canopy after this fired, since flipping
+## _canopy_removed alone never told the canopy sprite to redraw.
+func _remove_canopy() -> void:
+	_canopy_removed = true
+	var sticks_count := FelledTree.sticks_from_canopy(growth_scale)
+	WorldItemBus.item_dropped.emit(
+		ItemStack.new(Item.new("stick", "Stick", "material", 40), sticks_count), position
+	)
+	if _canopy_sprite != null:
+		_canopy_sprite.texture = _tree_sprite_generator.generate_bare_trunk_texture(
+			species_bias, sprite_seed, _season
+		)
+
+
+## Bucks one length off the bare trunk into a real log.
 func _cut_up() -> void:
-	var wood_count := FelledTree.wood_per_cut(growth_scale)
-	var sticks_count := maxi(1, wood_count / 2)
+	var log_count := FelledTree.logs_per_cut(growth_scale)
 	_cuts_left -= 1
 	WorldItemBus.item_dropped.emit(
-		ItemStack.new(Item.new("wood", "Wood", "material", 40), wood_count), position
-	)
-	WorldItemBus.item_dropped.emit(
-		ItemStack.new(Item.new("stick", "Stick", "material", 40), sticks_count),
-		position + Vector2(8, 4)
+		ItemStack.new(Item.new("log", "Log", "material", 20), log_count), position
 	)
 	if _cuts_left <= 0:
 		queue_free()
+
+
+## Saws the ENTIRE remaining bare trunk into beam + plank in one action,
+## skipping the per-swing log split -- the tool+skill-gated alternative to
+## _cut_up (see docs/concept/woodworking.md). Returns whether it happened:
+## false (a no-op) unless this is actually a bare, not-yet-fully-worked
+## trunk, so a caller (Player._chop_step) can just try this first and fall
+## back to the ordinary chop otherwise.
+func saw_up() -> bool:
+	if not _felled or not _canopy_removed or _cuts_left <= 0:
+		return false
+	var beam_count := FelledTree.beams_from_trunk(growth_scale, _cuts_left)
+	var plank_count := FelledTree.planks_from_trunk(growth_scale, _cuts_left)
+	WorldItemBus.item_dropped.emit(
+		ItemStack.new(Item.new("beam", "Beam", "material", 20), beam_count), position
+	)
+	WorldItemBus.item_dropped.emit(
+		ItemStack.new(Item.new("plank", "Plank", "material", 20), plank_count),
+		position + Vector2(8, 4)
+	)
+	_cuts_left = 0
+	queue_free()
+	return true
 
 
 ## How far grown this tree is, 0..1 (see TreeGrowth). Applied to the whole

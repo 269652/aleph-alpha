@@ -1,21 +1,28 @@
 extends RefCounted
 
-## Kick: a deliberate one-time momentum delivered to the nearest liftable
-## stone within reach (see docs/concept/stone.md, bound to K --
-## Keybindings). Reuses the SAME momentum model as impact_resolver.gd/
-## throwable.gd (momentum = mass * velocity, docs/concept/materials.md's
-## "one damage model for the whole world") rather than a parallel physics
-## system: the "leg" (StoneSize.LEG_MASS_KG) delivers momentum at a real
-## kick-swing speed, and how far a stone flies falls out of that momentum
-## vs. the stone's OWN mass -- exactly Throwable.impact_knockback's own
-## reasoning, just applied to a stone instead of a thrown item.
+## Kick: a deliberate one-time momentum delivered to the nearest kickable
+## PHYSICAL OBJECT within reach (see docs/concept/stone.md, bound to K --
+## Keybindings). Pure mass-in-distance-out math, deliberately generic --
+## everything here reads a plain `mass_kg` float, never a stone type, so
+## `Player._kick_step` can point it at a liftable stone OR at a dropped item
+## with a real modeled mass (e.g. a pulled wild carrot/potato,
+## docs/concept/wild_crops.md), whichever is genuinely closer, with no
+## changes needed here. Reuses the SAME momentum model as
+## impact_resolver.gd/throwable.gd (momentum = mass * velocity,
+## docs/concept/materials.md's "one damage model for the whole world")
+## rather than a parallel physics system: the "leg" (StoneSize.LEG_MASS_KG)
+## delivers momentum at a real kick-swing speed, and how far the object
+## flies falls out of that momentum vs. its OWN mass -- exactly
+## Throwable.impact_knockback's own reasoning, just applied to a kick
+## instead of a thrown item.
 ##
-## Only pebbles (and the lightest cobbles) are kickable, by design: a stone
-## at or above LEG_MASS_KG is too heavy for a kick's delivered momentum to
-## meaningfully move at all (the user's explicit cutoff) -- most cobbles and
-## every boulder sit above that line already (a cobble at the very top of
-## its range, ~25.6cm, already masses more than a leg), so this single mass
-## cutoff naturally excludes them with no separate per-class check needed.
+## Only light objects (pebbles/the lightest cobbles; a real vegetable is far
+## lighter still) are kickable, by design: anything at or above LEG_MASS_KG
+## is too heavy for a kick's delivered momentum to meaningfully move at all
+## (the user's explicit cutoff) -- most cobbles and every boulder sit above
+## that line already (a cobble at the very top of its range, ~25.6cm,
+## already masses more than a leg), so this single mass cutoff naturally
+## excludes them with no separate per-class check needed.
 
 const StoneSize = preload("res://src/world/stone_size.gd")
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")

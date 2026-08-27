@@ -13,11 +13,26 @@ extends RefCounted
 ## included, where the same drift reads as natural depth variation. Zero
 ## per-frame script cost; contract pinned by test_ground_tint.gd.
 
-const SHADER_CODE := """
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+
+## Built rather than a plain literal so SeasonalFoliage.GREENNESS_GAIN is the
+## ONE definition of the greenness gate and the GDScript the tests exercise
+## cannot drift from the GLSL the GPU runs. Same shape
+## IllustratedGrassPatch.SHADER_CODE already uses.
+static var SHADER_CODE: String = _build_shader_code()
+
+
+static func _build_shader_code() -> String:
+	return """
 shader_type canvas_item;
 
 uniform float tint_strength = 0.09;
 uniform float noise_scale = 0.006;
+// The season's multiplier on living green (see SeasonalFoliage), pushed in
+// live from the world clock the same way wind_strength is pushed onto the
+// grass shader. Identity by default, so a caller that never sets it renders
+// exactly today's high-summer picture.
+uniform vec3 season_tint = vec3(1.0);
 
 // The finished multiplier, computed ONCE PER VERTEX and interpolated across
 // the tile (see the note in ground_tint.gd on why that is safe here).
@@ -47,8 +62,15 @@ void vertex() {
 
 void fragment() {
 	COLOR.rgb *= tint;
+	// Only what is actually GREEN takes the season. This one material covers
+	// the WHOLE terrain layer, water included (see this file's header), so an
+	// unweighted multiply would turn the ocean and the sand brown in autumn.
+	// Same expression as SeasonalFoliage.greenness_of, with the same gain
+	// interpolated in below -- one constant, two languages.
+	float greenness = clamp((COLOR.g - max(COLOR.r, COLOR.b)) * %s, 0.0, 1.0);
+	COLOR.rgb = mix(COLOR.rgb, COLOR.rgb * season_tint, greenness);
 }
-"""
+""" % [SeasonalFoliage.GREENNESS_GAIN]
 
 ## Max brightness drift either way (+-9%): a soft meadow shift, never camo
 ## blotches. Pinned <= 0.2 by test_tint_strength_is_subtle_and_pinned.
@@ -73,7 +95,19 @@ const TINT_STRENGTH := 0.09
 ## at directly. The cost drops by roughly the number of pixels in a tile.
 const NOISE_SCALE := 0.006
 
-var _shared_material: ShaderMaterial
+## STATIC, and that is the point: the terrain TileMapLayer is handed
+## `GroundTint.new().shared_material()` once by whatever builds it, which does
+## not keep the instance. If this were per-instance, pushing the live season
+## from anywhere else would set a uniform on a material nothing renders -- a
+## silent no-op. One terrain layer, one shared material. Pinned by
+## test_the_shared_material_is_the_same_one_for_every_instance.
+static var _shared_material: ShaderMaterial
+
+## Last season tint pushed in (see set_season_tint) -- applied in
+## make_material() too, so a caller that sets the season before the material
+## has been built doesn't silently lose it. Mirrors
+## IllustratedGrassPatch._wind_strength's own reasoning.
+static var _season_tint := Color(1.0, 1.0, 1.0)
 
 
 func make_material() -> ShaderMaterial:
@@ -83,6 +117,7 @@ func make_material() -> ShaderMaterial:
 	material.shader = shader
 	material.set_shader_parameter("tint_strength", TINT_STRENGTH)
 	material.set_shader_parameter("noise_scale", NOISE_SCALE)
+	material.set_shader_parameter("season_tint", _as_vector(_season_tint))
 	return material
 
 
@@ -90,3 +125,16 @@ func shared_material() -> ShaderMaterial:
 	if _shared_material == null:
 		_shared_material = make_material()
 	return _shared_material
+
+
+## Pushes the season's tint on living green (see SeasonalFoliage, forwarded
+## from the per-frame world clock) onto the shared terrain material. The
+## GROUND carries the season too, not just the canopy above it: forcing winter
+## used to give bare trees standing on a bright summer lawn.
+func set_season_tint(tint: Color) -> void:
+	_season_tint = tint
+	shared_material().set_shader_parameter("season_tint", _as_vector(tint))
+
+
+static func _as_vector(tint: Color) -> Vector3:
+	return Vector3(tint.r, tint.g, tint.b)

@@ -39,6 +39,18 @@ var growth: float = 0.0:
 		growth = value
 		_redraw_leaves()
 
+## The season's tint on this plant's LEAVES (see SeasonalFoliage) -- pushed in
+## by the renderer on the same refresh cadence `growth` is, never read live
+## from a clock this node holds itself. A root crop's TOPS are what the season
+## touches; the tuber underground is unchanged, which is why the root sprite
+## is deliberately left alone and a mature crop stays pullable all winter (see
+## docs/concept/wild_crops.md "The season"). Identity by default, so a caller
+## that never mentions the season renders exactly today's picture.
+var season_tint := Color.WHITE:
+	set(value):
+		season_tint = value
+		_apply_season_tint()
+
 ## Invoked once, right before this marker frees itself, so whatever spawned
 ## it (WildCropRenderer) can remove this cell from its owning WildCropPatch.
 ## Left unset (a no-op) for isolated tests/callers that don't need it.
@@ -89,10 +101,24 @@ func _ready() -> void:
 	_root.texture = _illustrated.root_texture(crop_id, sprite_seed)
 	_root.scale = Vector2.ONE * _illustrated.root_world_scale(crop_id)
 	_root.region_enabled = true
+	# NOT centered: see _reveal_root's own doc comment -- the grown region
+	# has to stay pinned to the ground line by its own BOTTOM edge, not
+	# straddle the marker's origin the way a centered growing rect would.
+	_root.centered = false
+	# Horizontal centering only, set ONCE -- see CropPull.root_reveal_offset's
+	# own doc comment for why this must NOT depend on progress (the actual
+	# "huge blob behind the leaves" bug: a per-frame vertical shift here
+	# used to push the crown away from the leaves as more of the root
+	# revealed).
+	_root.offset = CropPull.root_reveal_offset(IllustratedCropSprite.ROOT_CANVAS_SIZE)
 	_lift.add_child(_root)
 	_reveal_root(0.0)
 
 	_redraw_leaves()
+	# Catches up a season set before this node was in the tree (the renderer
+	# sets crop_id/growth/season_tint before add_child), exactly the way
+	# _redraw_leaves above catches up a growth set the same way.
+	_apply_season_tint()
 
 
 func _process(delta: float) -> void:
@@ -108,9 +134,24 @@ func _process(delta: float) -> void:
 
 ## How much of the root's art is currently uncovered, 0 (nothing, still
 ## fully buried) to 1 (the whole root, fully clear of the ground).
+##
+## Reported live, twice: first "potato fruits are still rendered above soil
+## and not buried" (fixed by pinning the growing region to `centered =
+## false` -- see _ready), then "carrots/potatoes render a huge blob behind
+## the leaves" -- that first fix's own offset ALSO shifted vertically by
+## `-revealed_height` every frame, which correctly pinned the region's
+## bottom edge to the ground at any single instant, but meant the crown's
+## own drawn position climbed steadily higher as revealed_height grew,
+## since a taller revealed slice needs a bigger upward shift to keep its
+## bottom at y=0. The crown -- where the root attaches to the leaves --
+## ended up floating further and further from the leaf cluster as the pull
+## progressed instead of staying anchored to it. See
+## CropPull.root_reveal_rect/root_reveal_offset: offset is now set ONCE in
+## _ready (horizontal centering only), and only the region_rect grows here,
+## so the crown never moves -- the root now visibly hangs below the leaves
+## it's still attached to, growing more visible from that fixed point.
 func _reveal_root(progress: float) -> void:
-	var revealed_height := progress * float(IllustratedCropSprite.ROOT_CANVAS_SIZE.y)
-	_root.region_rect = Rect2(Vector2.ZERO, Vector2(IllustratedCropSprite.ROOT_CANVAS_SIZE.x, revealed_height))
+	_root.region_rect = CropPull.root_reveal_rect(IllustratedCropSprite.ROOT_CANVAS_SIZE, progress)
 
 
 ## For World's mouse-hover tooltip (see HoverTargetFinder).
@@ -149,6 +190,12 @@ func begin_pull() -> bool:
 	_pull_elapsed = 0.0
 	_soil.texture = ProceduralSoilSprite.new().generate_texture(true)
 	return true
+
+
+func _apply_season_tint() -> void:
+	if _leaves == null:
+		return  # not _ready() yet -- the end of _ready() catches up
+	_leaves.modulate = season_tint
 
 
 func _redraw_leaves() -> void:

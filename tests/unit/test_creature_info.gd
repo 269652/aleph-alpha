@@ -94,8 +94,8 @@ func test_lynx_is_an_aggressive_predator():
 
 # -- biome-specific species (see CreatureRenderer's per-biome species pools) --
 
-const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat", "mouse", "horse", "deer", "nonvenomous_snake", "squirrel"]
-const NEW_PREDATOR_SPECIES := ["jackal", "arctic_fox", "jaguar", "mountain_lion", "bear", "lion", "venomous_snake"]
+const NEW_HERBIVORE_SPECIES := ["camel", "reindeer", "tapir", "goat", "mouse", "horse", "deer", "nonvenomous_snake", "sheep", "squirrel"]
+const NEW_PREDATOR_SPECIES := ["jackal", "arctic_fox", "jaguar", "mountain_lion", "bear", "lion", "venomous_snake", "wolf"]
 
 
 func test_camel_is_a_calm_herbivore_that_is_not_a_predator():
@@ -244,6 +244,25 @@ func test_venomous_snake_is_frailer_than_bear_and_lion():
 	assert_lt(snake_health, CreatureInfo.MAX_HEALTH_BY_SPECIES["lion"])
 
 
+## Wolves are forest's own named apex predator (see CreatureRenderer's
+## PREDATOR_SPECIES_POOL_BY_BIOME forest entry, and
+## docs/concept/ecosystem_dynamics.md's Species roster section) -- real
+## wolves are pack-hunting predators, aggressive like every other predator-
+## role species.
+func test_wolf_is_an_aggressive_predator():
+	var wolf_info := CreatureInfo.new("wolf")
+	assert_eq(wolf_info.temperament, "aggressive")
+	assert_true(wolf_info.is_predator)
+
+
+## Sheep are wolf's (and deer's) forest prey -- an ordinary calm, non-
+## predator herbivore, the same role every other grazer in the roster has.
+func test_sheep_is_a_calm_herbivore_that_is_not_a_predator():
+	var sheep_info := CreatureInfo.new("sheep")
+	assert_eq(sheep_info.temperament, "calm")
+	assert_false(sheep_info.is_predator)
+
+
 func test_every_new_species_has_positive_health_stamina_and_mana_and_a_known_diet():
 	for species in NEW_HERBIVORE_SPECIES + NEW_PREDATOR_SPECIES:
 		var creature_info := CreatureInfo.new(species)
@@ -280,10 +299,18 @@ func test_wolf_health_is_between_lynx_and_the_big_cats():
 ## long distances rather than winning on a single burst) -- notably higher
 ## stamina than every other predator, comparable to or above horse's 40.0
 ## (today's stamina ceiling).
+## Scoped to the ORDINARY roster, excluding WORLD_BOSS_SPECIES -- those are
+## explicitly hand-authored placeholder stats (see their own doc comments:
+## "not this doc's real design", "not fitness-derived"), deliberately
+## inflated past whatever the ordinary roster's ceiling happens to be at the
+## time (kraken's own comment: "above this table's current max" -- a moving
+## target by design, not a real-world-grounded comparison point). Wolf's own
+## claim is about real animal endurance-pursuit hunting, not about being the
+## single toughest thing in the game.
 func test_wolf_has_the_highest_stamina_in_the_entire_roster():
 	var wolf_stamina: float = CreatureInfo.MAX_STAMINA_BY_SPECIES["wolf"]
 	for species in CreatureInfo.MAX_STAMINA_BY_SPECIES:
-		if species == "wolf":
+		if species == "wolf" or CreatureInfo.WORLD_BOSS_SPECIES.has(species):
 			continue
 		assert_gte(
 			wolf_stamina, CreatureInfo.MAX_STAMINA_BY_SPECIES[species],
@@ -320,3 +347,201 @@ func test_squirrel_has_high_agility_flavored_stamina():
 	var squirrel_stamina: float = CreatureInfo.MAX_STAMINA_BY_SPECIES["squirrel"]
 	assert_gt(squirrel_stamina, CreatureInfo.MAX_STAMINA_BY_SPECIES["mouse"])
 	assert_gte(squirrel_stamina, 30.0, "squirrel should read as a genuinely agile species")
+# -- Germany-region world bosses (docs/concept/worldbosses.md) --------------
+#
+# Debug/test-spawn stats, not the doc's real design: worldbosses.md specs
+# boss stats as *emergent* (world_boss_fitness.gd's fitness-threshold
+# promotion), not hand-authored -- that promotion mechanism doesn't exist in
+# code yet. These entries exist so `/spawn krampus` produces something
+# actually fightable (aggressive, real threat) right now rather than
+# silently falling back to CreatureInfo's calm/10hp defaults, the same way
+# every other species here is a plain hand-authored stat row (see this
+# file's MAX_HEALTH_BY_SPECIES -- bear/lion are hand-authored too, not
+# derived) -- not a violation of this project's no-eyeballed-thresholds
+# rule, which targets tuned FORMULAS/curves, not per-species flavor stats in
+# an already-precedent-setting hand-authored table.
+const GERMANY_BOSS_SPECIES := ["lindwurm", "rubezahl", "nyx", "krampus"]
+
+
+func test_every_germany_boss_is_aggressive_and_a_predator():
+	for species in GERMANY_BOSS_SPECIES:
+		var info := CreatureInfo.new(species)
+		assert_eq(info.temperament, "aggressive", species)
+		assert_true(info.is_predator, species)
+
+
+## Should read as tougher than this roster's current toughest ordinary
+## predator (bear, 50 base health) -- boss stakes, not a routine encounter.
+func test_every_germany_boss_has_more_base_health_than_a_bear():
+	var bear_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["bear"]
+	for species in GERMANY_BOSS_SPECIES:
+		assert_gt(CreatureInfo.MAX_HEALTH_BY_SPECIES[species], bear_health, species)
+
+
+## is_world_boss gates the aggro-provocation rule (see BossAggro,
+## CreatureBehavior._perceives_threats): a boss should not proactively
+## attack a low-level player, and shouldn't even flee one, until a real hit
+## lands. is_aggroed is the per-individual state that flips that on.
+func test_germany_bosses_are_flagged_as_world_bosses():
+	for species in GERMANY_BOSS_SPECIES:
+		assert_true(CreatureInfo.new(species).is_world_boss, species)
+
+
+func test_ordinary_species_are_not_world_bosses():
+	assert_false(CreatureInfo.new("bear").is_world_boss)
+	assert_false(CreatureInfo.new("herbivore").is_world_boss)
+
+
+func test_a_fresh_creature_always_starts_unaggroed():
+	assert_false(CreatureInfo.new("krampus").is_aggroed)
+	assert_false(CreatureInfo.new("herbivore").is_aggroed)
+
+
+# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) ---------------
+#
+# Squallmaw (Bermuda Triangle), Coilnecca (Loch Ness), and Champ (Lake
+# Champlain) -- real, spawnable creatures, not the flavor-text-only
+# sightings in easter_egg_sightings.gd. Debug/first-pass stats, same
+# "hand-authored table row, not a violation of the no-eyeballed-thresholds
+# rule" precedent as GERMANY_BOSS_SPECIES just above -- but deliberately
+# NOT at that roster's aggressive-tier stat scale (doc: Squallmaw "does
+# nothing a real creature doesn't already do", not a boss encounter).
+const EASTER_EGG_CREATURE_SPECIES := ["squallmaw", "coilnecca", "champ"]
+
+
+func test_every_easter_egg_creature_has_positive_health_stamina_and_mana_and_a_known_diet():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var info := CreatureInfo.new(species)
+		assert_gt(info.max_health, 0.0, species)
+		assert_gt(info.max_stamina, 0.0, species)
+		assert_gt(info.max_mana, 0.0, species)
+		assert_ne(info.diet, "Unknown", species)
+
+
+## Squallmaw is described as furious-looking and able to fight -- aggressive
+## temperament -- but explicitly NOT a world boss (doc: "does nothing a real
+## creature doesn't already do (fight, flee, be tamed)" -- ordinary creature
+## behavior, no aggro-gate mechanic).
+func test_squallmaw_is_an_aggressive_predator_but_not_a_world_boss():
+	var info := CreatureInfo.new("squallmaw")
+	assert_eq(info.temperament, "aggressive")
+	assert_true(info.is_predator)
+	assert_false(info.is_world_boss)
+
+
+## Explicitly not boss-tier: Squallmaw should read as a strong ordinary
+## predator, not a Germany-region world boss.
+func test_squallmaw_has_less_health_than_every_germany_world_boss():
+	var squallmaw_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["squallmaw"]
+	for species in GERMANY_BOSS_SPECIES:
+		assert_lt(
+			squallmaw_health, CreatureInfo.MAX_HEALTH_BY_SPECIES[species],
+			"squallmaw should be tougher than an ordinary predator but not boss-tier"
+		)
+
+
+## Doc: "calm-temperament lake serpent cameo".
+func test_coilnecca_is_a_calm_creature_that_is_not_a_predator():
+	var info := CreatureInfo.new("coilnecca")
+	assert_eq(info.temperament, "calm")
+	assert_false(info.is_predator)
+	assert_false(info.is_world_boss)
+
+
+## Doc: Champ is deliberately "skittish rather than placid" -- NOT a reskin
+## of Coilnecca's calm temperament, despite the obvious family resemblance.
+## "skittish" flees exactly like "calm" does in CreatureBehavior (only
+## "aggressive" is special-cased there -- see test_creature_behavior.gd's
+## own regression test for that), but is a distinct label so Champ never
+## reads as mechanically identical to Coilnecca.
+func test_champ_is_skittish_not_calm_and_is_not_a_predator():
+	var info := CreatureInfo.new("champ")
+	assert_eq(info.temperament, "skittish")
+	assert_ne(info.temperament, "calm")
+	assert_false(info.is_predator)
+	assert_false(info.is_world_boss)
+
+
+## The doc is explicit that Coilnecca and Champ must not be reskins of each
+## other or of Squallmaw -- pinned as distinct stat rows, not just distinct
+## flavor text.
+func test_the_three_easter_egg_creatures_have_distinct_temperaments_or_stats():
+	var squallmaw := CreatureInfo.new("squallmaw")
+	var coilnecca := CreatureInfo.new("coilnecca")
+	var champ := CreatureInfo.new("champ")
+	assert_ne(squallmaw.temperament, coilnecca.temperament)
+	assert_ne(coilnecca.temperament, champ.temperament)
+	assert_ne(coilnecca.max_health, champ.max_health, "Champ should not be a bare stat reskin of Coilnecca")
+
+
+# -- Kraken (docs/concept/easter_eggs.md's condition-triggered, higher-stakes
+# entry) ----------------------------------------------------------------
+#
+# Unlike every other Easter-egg creature above (coordinate-pinned cameos,
+# explicitly NOT boss-tier), the Kraken is the doc's one deliberate
+# exception to pillar 2's "zero mechanical weight" -- "genuinely dangerous
+# rather than purely cosmetic... actually a real fight if it notices you".
+# Debug/first-pass stats, same "hand-authored table row" precedent as
+# GERMANY_BOSS_SPECIES/EASTER_EGG_CREATURE_SPECIES above -- but deliberately
+# ABOVE that whole roster's stat scale, not below it: this is the toughest
+# thing in the game on purpose.
+
+
+func test_kraken_is_an_aggressive_predator_and_a_world_boss():
+	var info := CreatureInfo.new("kraken")
+	assert_eq(info.temperament, "aggressive")
+	assert_true(info.is_predator)
+	# is_world_boss is reused here purely for its mechanical aggro-gate
+	# effect (BossAggro/CreatureBehavior._perceives_threats: no proactive
+	# attack on an unprovoked player, but a real fight once a real hit
+	# lands) -- NOT a claim that the Kraken joins worldbosses.md's
+	# regional-mythology roster (see GERMANY_BOSS_SPECIES above, which it
+	# deliberately does not join).
+	assert_true(info.is_world_boss)
+	assert_false(GERMANY_BOSS_SPECIES.has("kraken"))
+
+
+## Doc: "genuinely dangerous... massive" -- must read as the single toughest
+## thing in the game, exceeding every existing species (including every
+## Germany-region world boss), not just every ordinary predator.
+func test_kraken_has_more_base_health_than_every_other_species():
+	var kraken_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["kraken"]
+	for species in CreatureInfo.MAX_HEALTH_BY_SPECIES:
+		if species == "kraken":
+			continue
+		assert_gt(kraken_health, CreatureInfo.MAX_HEALTH_BY_SPECIES[species], species)
+
+
+## Not just an edge-past-the-max increment: pinned as a clear multiple of
+## this roster's previous toughest species (lindwurm, 140.0), the same
+## relative-margin discipline as every other tuned threshold in this
+## project (e.g. test_easter_egg_creatures.gd's "5x rarer than" checks)
+## rather than an isolated eyeballed literal.
+func test_kraken_exceeds_the_previous_toughest_species_by_a_clear_margin():
+	var kraken_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["kraken"]
+	var lindwurm_health: float = CreatureInfo.MAX_HEALTH_BY_SPECIES["lindwurm"]
+	assert_gt(kraken_health, lindwurm_health * 1.5)
+
+
+## Doc language leans on scale/menace, not agility -- but "higher stats than
+## any existing creature" (this stage's own brief) is checked directly
+## rather than assumed: stamina too should read as the new roster max, not
+## just health.
+func test_kraken_has_more_base_stamina_than_every_other_species():
+	var kraken_stamina: float = CreatureInfo.MAX_STAMINA_BY_SPECIES["kraken"]
+	for species in CreatureInfo.MAX_STAMINA_BY_SPECIES:
+		if species == "kraken":
+			continue
+		assert_gt(kraken_stamina, CreatureInfo.MAX_STAMINA_BY_SPECIES[species], species)
+
+
+func test_kraken_has_positive_health_stamina_and_mana_and_a_known_diet():
+	var info := CreatureInfo.new("kraken")
+	assert_gt(info.max_health, 0.0)
+	assert_gt(info.max_stamina, 0.0)
+	assert_gt(info.max_mana, 0.0)
+	assert_ne(info.diet, "Unknown")
+
+
+func test_a_fresh_kraken_starts_unaggroed():
+	assert_false(CreatureInfo.new("kraken").is_aggroed)

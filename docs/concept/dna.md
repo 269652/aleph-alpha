@@ -13,7 +13,9 @@ There should be common, rare and legendary DNA traits which have a given chance 
 
 Children (see [players.md](players.md)) inherit DNA as a genetic cross of
 both parents rather than a fresh independent roll, with a small mutation
-chance for novel traits.
+chance for novel traits. [evolution.md](evolution.md)'s own "Bloodlines"
+section specifies the same real crossover mechanism applied to tamed/bred
+ANIMALS — reusing this exact inheritance shape, not a second one.
 
 ### Appearance: DNA is the base, cosmetics layer on top
 

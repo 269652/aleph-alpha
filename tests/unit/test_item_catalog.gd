@@ -1,6 +1,7 @@
 extends GutTest
 
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const Kick = preload("res://src/gameplay/kick.gd")
 
 var catalog := ItemCatalog.new()
 
@@ -94,11 +95,26 @@ func test_catalog_has_a_fishing_rod():
 	assert_eq(catalog.make("fishing_rod").kind, "tool")
 
 
-## Campfire/furnace are structures you build into the world, not inert
-## materials -- see HotbarAction.PLACE.
+## Campfire/furnace/sagewerk are structures you build into the world, not
+## inert materials -- see HotbarAction.PLACE.
 func test_campfire_and_furnace_are_placeable():
 	assert_eq(catalog.make("campfire").kind, "placeable")
 	assert_eq(catalog.make("furnace").kind, "placeable")
+
+
+## The Sägewerk (sawmill) worksite -- see docs/concept/timber_construction.md.
+## A placeable structure like campfire/furnace, not an inert material.
+func test_sagewerk_is_placeable():
+	assert_true(catalog.has("sagewerk"))
+	assert_eq(catalog.make("sagewerk").kind, "placeable")
+
+
+## Storage (see docs/concept/timber_construction.md's "Storage, logistics,
+## and the autonomous dependency chain" section) is the same placeable kind
+## as campfire/furnace -- a tile-based structure, not an inert material.
+func test_storage_is_placeable():
+	assert_true(catalog.has("storage"))
+	assert_eq(catalog.make("storage").kind, "placeable")
 
 
 ## Named fruit tree species (see docs/concept/flora.md#named-fruit-and-nut-tree-species)
@@ -134,6 +150,22 @@ func test_a_potato_is_food():
 	assert_eq(potato.kind, "food")
 
 
+# -- woodworking (see docs/concept/woodworking.md) ---------------------------
+
+func test_catalog_knows_the_woodworking_materials():
+	for item_id in ["log", "beam", "plank"]:
+		var item = catalog.make(item_id)
+		assert_not_null(item, item_id)
+		assert_eq(item.kind, "material", item_id)
+
+
+func test_a_saw_is_a_tool_that_reports_as_a_saw():
+	var saw = catalog.make("saw")
+	assert_not_null(saw)
+	assert_eq(saw.kind, "tool")
+	assert_true(saw.is_saw())
+
+
 # -- real weapon mass (see MaterialProperties.mass_kg_for, docs/concept/ -----
 # -- materials.md's momentum = mass * velocity model) ------------------------
 
@@ -157,3 +189,133 @@ func test_every_weapon_kind_item_has_a_positive_mass():
 ## volumes chosen, a real consequence of the shared density table.
 func test_the_iron_sword_masses_more_than_the_wooden_club():
 	assert_gt(catalog.make("iron_sword").mass_kg, catalog.make("wooden_club").mass_kg)
+
+
+# -- kind_of: an item's category without building a whole Item first --------
+#
+## Exposed standalone (the same "kind" make() already stamps onto the built
+## Item) so a caller can classify an item id, e.g. "is this food?", without
+## constructing one -- see Player.sell_food_to_village's village-feeding
+## fallback (docs/concept/progression.md "Ecological literacy").
+
+func test_kind_of_matches_the_kind_make_builds():
+	assert_eq(catalog.kind_of("cherry"), catalog.make("cherry").kind)
+	assert_eq(catalog.kind_of("cherry"), "food")
+	assert_eq(catalog.kind_of("iron_axe"), "tool")
+
+
+func test_kind_of_unknown_item_is_empty_string():
+	assert_eq(catalog.kind_of("not_a_real_item"), "")
+
+
+# -- real produce mass (docs/concept/wild_crops.md: a pulled root should be --
+# -- a real physical object, kickable/throwable like anything else) ---------
+
+## A medium carrot averages roughly 60-70g in the real world.
+func test_carrot_has_a_plausible_real_carrot_mass():
+	assert_between(catalog.make("carrot").mass_kg, 0.04, 0.12)
+
+
+## A medium potato averages roughly 150-200g in the real world.
+func test_potato_has_a_plausible_real_potato_mass():
+	assert_between(catalog.make("potato").mass_kg, 0.1, 0.3)
+
+
+## Both are far below Kick's leg-mass cutoff -- a real vegetable is trivially
+## light enough to kick, the same way a pebble is.
+func test_carrot_and_potato_are_both_light_enough_to_kick():
+	assert_true(Kick.is_kickable(catalog.make("carrot").mass_kg))
+	assert_true(Kick.is_kickable(catalog.make("potato").mass_kg))
+
+
+# -- wayfinding & citizenship instruments (see docs/concept/wayfinding.md, --
+# -- docs/concept/player_citizenship.md) -- Compass/RoughCompass, Map, -------
+# -- Spyglass, WeatherForecast, SeasonAlmanac, and the property/contract/ ----
+# -- journal citizenship tools all get a craftable, held item id now that ----
+# -- their pure-logic modules exist. --------------------------------------
+
+const WAYFINDING_AND_CITIZENSHIP_ITEM_IDS := [
+	"rough_compass", "compass", "map", "spyglass", "weather_glass",
+	"star_chart", "deed", "ledger", "field_journal", "charter",
+]
+
+
+func test_catalog_knows_the_wayfinding_and_citizenship_tools():
+	for item_id in WAYFINDING_AND_CITIZENSHIP_ITEM_IDS:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+		assert_eq(catalog.make(item_id).kind, "tool", item_id)
+
+
+## These are instruments/documents, not consumables -- matching the existing
+## tool-kind convention (lasso, saw, stone_pickaxe, fishing_rod all cap at 1).
+func test_wayfinding_and_citizenship_tools_do_not_stack():
+	for item_id in WAYFINDING_AND_CITIZENSHIP_ITEM_IDS:
+		assert_eq(catalog.make(item_id).max_stack, 1, item_id)
+
+
+# -- "Three Fragments" hunt items (docs/concept/easter_eggs.md) -------------
+#
+## The three fragments each source egg (signed secret room/ancient terminal/
+## WarGames) quietly leaves behind, plus the bonus item ThreeFragmentsHunt
+## grants once all three are held together -- all deliberately inert
+## ("material" kind, zero weapon_damage) matching this whole Easter-egg
+## family's zero-mechanical-weight design pillar.
+
+const ThreeFragmentsHunt = preload("res://src/gameplay/three_fragments_hunt.gd")
+
+func test_catalog_knows_the_three_fragments_and_the_bonus_item():
+	for item_id in [
+		ThreeFragmentsHunt.TERMINAL_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.SECRET_ROOM_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.WARGAMES_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.BONUS_ITEM_ID,
+	]:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+
+
+## Zero mechanical weight (pillar 2): none of these four items is a weapon,
+## and none carries any real weapon damage.
+func test_three_fragments_and_bonus_item_carry_no_weapon_damage():
+	for item_id in [
+		ThreeFragmentsHunt.TERMINAL_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.SECRET_ROOM_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.WARGAMES_FRAGMENT_ITEM_ID,
+		ThreeFragmentsHunt.BONUS_ITEM_ID,
+	]:
+		var item := catalog.make(item_id)
+		assert_false(item.is_weapon(), "%s should not be a weapon" % item_id)
+		assert_eq(item.weapon_damage, 0.0, "%s should carry no weapon damage" % item_id)
+		assert_eq(item.kind, "material", "%s should be an inert material item" % item_id)
+
+
+# -- which real material an item is made of ---------------------------------
+#
+# The catalog already derives a weapon's real mass from a material + a volume
+# estimate (see _WEAPON_MATERIAL_AND_VOLUME / _mass_kg_for), but that material
+# was private, so nothing could tell the player WHAT the sword is made of --
+# only how heavy it came out. Named after the existing
+# BuildingPiece.material_of rather than inventing a second spelling.
+
+func test_material_of_names_the_real_material_a_weapons_mass_was_derived_from():
+	assert_eq(catalog.material_of("iron_sword"), "iron")
+	assert_eq(catalog.material_of("wooden_club"), "wood")
+	assert_eq(catalog.material_of("crude_blade"), "stone")
+
+
+## Same "not modeled yet" convention Item.mass_kg's 0.0 uses -- an empty
+## string, so a caller omits the line rather than inventing a material.
+func test_material_of_is_empty_for_an_item_with_no_modeled_material():
+	assert_eq(catalog.material_of("rock"), "")
+	assert_eq(catalog.material_of("not_a_real_item"), "")
+
+
+## The material an item is named after must be the same one its mass was
+## computed from -- one fact, not two that can drift.
+func test_material_of_is_the_material_the_items_mass_was_computed_from():
+	var mp := preload("res://src/gameplay/material_properties.gd").new()
+	var sword := catalog.make("iron_sword")
+	assert_almost_eq(
+		sword.mass_kg,
+		mp.mass_kg_for(catalog.material_of("iron_sword"), ItemCatalog.IRON_SWORD_VOLUME_CM3),
+		0.0001
+	)

@@ -20,6 +20,8 @@ const Taming = preload("res://src/gameplay/taming.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
+const Keybindings = preload("res://src/gameplay/keybindings.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -253,6 +255,155 @@ func test_cook_fails_when_a_campfire_is_only_carried_not_placed():
 	var cooked := player.cook("meat")
 	assert_false(cooked)
 	assert_eq(player.inventory_counts().get("cooked_meat", 0), 0)
+
+
+# -- Player.craft's generalized recipe gating (see docs/concept/ -------------
+# -- production_chains.md): the old hardcoded "if is_smelting_recipe(...) -----
+# -- and not _has_heat_source(): return false" special case is replaced ------
+# -- by a GENERIC read of CraftingRecipeBook's own "requires_structure"/ -----
+# -- "required_skill" recipe fields -- proven here two ways: the smelting ----
+# -- heat-gate itself must keep behaving EXACTLY as before (regression), -----
+# -- and the SAME mechanism must gate a totally different recipe/structure ---
+# -- (Sägewerk log shaping) with no new hardcoded branch. ---------------------
+
+func _give(item_id: String, count: int = 1) -> void:
+	player.inventory.add(_item_catalog.make(item_id), count)
+
+
+## Regression: smelting recipes still refuse to craft with no heat source
+## nearby -- the exact behavior _has_heat_source already had, now reached
+## generically via requires_structure == "heat_source" instead of a
+## hardcoded is_smelting_recipe branch.
+func test_craft_iron_ingot_fails_with_no_heat_source_nearby():
+	_give("iron_ore")
+	_give("coal")
+
+	assert_false(player.craft("iron_ingot"))
+	assert_eq(player.inventory_counts().get("iron_ingot", 0), 0)
+	# Nothing consumed on a blocked craft.
+	assert_eq(player.inventory_counts().get("iron_ore", 0), 1)
+
+
+## Regression: a placed CAMPFIRE still counts as a heat source for smelting
+## (Player._has_heat_source accepts campfire OR furnace) -- the generalized
+## "heat_source" category must not silently narrow this to furnace-only.
+func test_craft_iron_ingot_succeeds_with_a_campfire_nearby():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "campfire")
+	_give("iron_ore")
+	_give("coal")
+
+	assert_true(player.craft("iron_ingot"))
+	assert_eq(player.inventory_counts().get("iron_ingot", 0), 1)
+
+
+## Regression: a placed FURNACE also still counts.
+func test_craft_iron_ingot_succeeds_with_a_furnace_nearby():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "furnace")
+	_give("iron_ore")
+	_give("coal")
+
+	assert_true(player.craft("iron_ingot"))
+	assert_eq(player.inventory_counts().get("iron_ingot", 0), 1)
+
+
+## A recipe with NO requires_structure/required_skill (torch) is completely
+## unaffected by the generalized gate -- proves the generalization is
+## additive, not a behavior change for every other recipe.
+func test_craft_torch_is_unaffected_by_the_generalized_gate():
+	_give("wood")
+	_give("hide")
+
+	assert_true(player.craft("torch"))
+
+
+## The SAME generic mechanism gates a totally different recipe/structure
+## pair (log_to_balken requires "sagewerk", not "heat_source") with zero
+## new code in Player.craft -- proves it's real generalization, not a
+## second hardcoded special case for the Sägewerk.
+func test_craft_log_to_balken_fails_without_a_nearby_sagewerk():
+	_give("log", 3)
+
+	assert_false(player.craft("log_to_balken"))
+	assert_eq(player.inventory_counts().get("beam", 0), 0)
+
+
+func test_craft_log_to_balken_succeeds_with_a_nearby_sagewerk():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "sagewerk")
+	_give("log", 3)
+
+	assert_true(player.craft("log_to_balken"))
+	assert_eq(player.inventory_counts().get("beam", 0), 1)
+
+
+## required_skill's first real consumer (docs/concept/timber_construction.md's
+## "generalized, not hardcoded" section): the sagewerk recipe itself needs
+## real Carpentry, read live via SkillTree.total_bonus -- with none
+## allocated, the craft is refused even though every material input is on
+## hand.
+func test_craft_sagewerk_fails_without_enough_carpentry_skill():
+	_give("log", 8)
+	_give("wood", 4)
+
+	assert_false(player.craft("sagewerk"))
+	assert_eq(player.inventory_counts().get("sagewerk", 0), 0)
+	# Nothing consumed on a blocked craft.
+	assert_eq(player.inventory_counts().get("log", 0), 8)
+
+
+## Allocating the real carpentry_1 + carpentry_2 nodes (the same total_bonus
+## read Player._chop_step's own CARPENTRY_LEVEL_FOR_SAWING check uses)
+## clears the skill gate.
+func test_craft_sagewerk_succeeds_with_enough_carpentry_skill():
+	_give("log", 8)
+	_give("wood", 4)
+	player.allocated_nodes = {"carpentry_1": true, "carpentry_2": true}
+
+	assert_true(player.craft("sagewerk"))
+	assert_eq(player.inventory_counts().get("sagewerk", 0), 1)
+
+
+# -- collecting a Sägewerk's real StructureStock straight into inventory ------
+#
+# docs/concept/timber_construction.md's "Storage, logistics, and the
+# autonomous dependency chain" section: shaped beam/plank now credits the
+# Sägewerk's own StructureStock instead of dropping on the ground (see
+# LumberjackMarker._step_production) -- a player with no Storage/Logistics
+# built yet needs a real, direct way to collect it, mirroring the swing-driven
+# interaction convention _chop_step/_butcher_step already establish.
+
+func test_collect_step_withdraws_real_beam_and_plank_stock_into_inventory():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "sagewerk")
+	chunk_manager.deposit_to_structure_at(tile.x + 1, tile.y, "beam", 3)
+	chunk_manager.deposit_to_structure_at(tile.x + 1, tile.y, "plank", 2)
+
+	player._collect_step()
+
+	assert_eq(player.inventory_counts().get("beam", 0), 3)
+	assert_eq(player.inventory_counts().get("plank", 0), 2)
+	assert_eq(chunk_manager.structure_stock_at(tile.x + 1, tile.y, "beam"), 0)
+	assert_eq(chunk_manager.structure_stock_at(tile.x + 1, tile.y, "plank"), 0)
+
+
+func test_collect_step_no_ops_with_a_nearby_sagewerk_but_nothing_stocked():
+	var tile := player.current_tile()
+	chunk_manager.build_at_global(tile.x + 1, tile.y, "sagewerk")
+
+	player._collect_step()
+
+	assert_eq(player.inventory_counts().get("beam", 0), 0)
+	assert_eq(player.inventory_counts().get("plank", 0), 0)
+
+
+func test_collect_step_no_ops_with_no_sagewerk_nearby():
+	chunk_manager.deposit_to_structure_at(0, 0, "beam", 3)  # nowhere real, no sagewerk built
+
+	player._collect_step()
+
+	assert_eq(player.inventory_counts().get("beam", 0), 0)
 
 
 # -- catching a real, visible fish flavors the catch message ------------------
@@ -593,6 +744,99 @@ func test_talking_near_a_villager_shows_that_villagers_own_greeting():
 	npc.free()
 
 
+# -- selling food into a village (see VillageMarket, docs/concept/npc.md
+# "Local trade is NPC-to-NPC, not just player-to-shop" extended here to a
+# player-initiated sale; docs/concept/progression.md "Ecological literacy") --
+
+const VillageMarket = preload("res://src/world/village_market.gd")
+const EcologicalLiteracy = preload("res://src/gameplay/ecological_literacy.gd")
+
+
+## Like _add_fake_npc_near_player, but with a real VillageMarket wired up (see
+## NpcMarker.setup_economy) -- what a producer/non-merchant villager actually
+## has, unlike the plain talk-only fixture above.
+func _add_fake_npc_with_market_near_player(seed_value: int = 3) -> NpcMarker:
+	var npc := NpcMarker.new()
+	npc.identity = NpcIdentity.new(seed_value)
+	npc.position = player.position
+	creatures_parent.add_child(npc)
+	chunk_manager._loaded_villages[Vector2i(0, 0)] = [npc]
+	npc.setup_economy(VillageMarket.new())
+	return npc
+
+
+func test_sell_food_to_village_fails_without_enough_of_the_item():
+	var market := VillageMarket.new()
+	assert_false(player.sell_food_to_village(market, "cherry", 1))
+	assert_eq(market.total_stock(), 0.0)
+
+
+func test_sell_food_to_village_moves_the_item_into_the_markets_real_stock():
+	player.inventory.add(_item_catalog.make("cherry"), 3)
+	var market := VillageMarket.new()
+
+	assert_true(player.sell_food_to_village(market, "cherry", 2))
+
+	assert_eq(player.inventory.count_of("cherry"), 1)
+	assert_almost_eq(market.stock.get("cherry", 0.0), 2.0, 0.001)
+
+
+## The real, tested claim: selling into a genuinely hungry market (can't
+## currently buy even one meal -- VillageMarket.can_buy_meal() reads false)
+## awards more XP than selling into a well-stocked one.
+func test_selling_into_a_hungry_village_awards_more_xp_than_a_well_stocked_one():
+	player.inventory.add(_item_catalog.make("cherry"), 2)
+
+	var hungry_market := VillageMarket.new()
+	assert_false(hungry_market.can_buy_meal(), "precondition: genuinely hungry, no stock at all")
+	var xp_before := player.experience.total_xp
+	player.sell_food_to_village(hungry_market, "cherry", 1)
+	var hungry_xp_gained := player.experience.total_xp - xp_before
+	assert_eq(
+		hungry_xp_gained,
+		EcologicalLiteracy.VILLAGE_SALE_XP_BASE + EcologicalLiteracy.VILLAGE_FEEDING_XP_BONUS
+	)
+
+	var stocked_market := VillageMarket.new()
+	stocked_market.add_stock("meat", 10.0)
+	assert_true(stocked_market.can_buy_meal(), "precondition: well-stocked")
+	xp_before = player.experience.total_xp
+	player.sell_food_to_village(stocked_market, "cherry", 1)
+	var stocked_xp_gained := player.experience.total_xp - xp_before
+	assert_eq(stocked_xp_gained, EcologicalLiteracy.VILLAGE_SALE_XP_BASE)
+
+	assert_gt(hungry_xp_gained, stocked_xp_gained, "feeding a genuinely hungry village should earn more")
+
+
+## The trade key (T) already buys from a MERCHANT (see _shop_step above);
+## with no merchant near but a real villager in reach, it now falls back to
+## selling the player's own food into that villager's market instead.
+func test_trade_key_sells_food_to_a_nearby_villager_when_no_merchant_is_near():
+	var npc := _add_fake_npc_with_market_near_player()
+	player.inventory.add(_item_catalog.make("cherry"), 1)
+
+	_tap_trade()
+
+	assert_eq(player.inventory.count_of("cherry"), 0)
+	assert_almost_eq(npc.economy.market.stock.get("cherry", 0.0), 1.0, 0.001)
+	assert_string_contains(player.trade_message, "Sold")
+	npc.free()
+
+
+func test_trade_key_with_a_villager_near_but_no_food_shows_a_no_food_message():
+	var npc := _add_fake_npc_with_market_near_player()
+	_tap_trade()
+	assert_string_contains(player.trade_message, "No food")
+	npc.free()
+
+
+## Unchanged from before this feature existed: no merchant AND no villager at
+## all still shows the original message.
+func test_trade_key_with_nobody_nearby_still_shows_the_original_no_merchant_message():
+	_tap_trade()
+	assert_string_contains(player.trade_message, "No merchant")
+
+
 # -- rare/legendary fish grant a real buff on eating --------------------------
 
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
@@ -700,6 +944,99 @@ func test_repeated_bites_stack_venom_up_to_the_cap():
 	for i in VenomModel.MAX_STACKS + 5:
 		player.apply_venom()
 	assert_eq(player.active_venom_debuffs[0]["stacks"], VenomModel.MAX_STACKS)
+
+
+# -- disease spillover: routed through Sickness, NOT a new debuff module
+# (see docs/concept/disease.md "Player spillover") ---------------------------
+
+const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
+const Carcass = preload("res://src/rendering/carcass.gd")
+
+
+func test_apply_disease_bite_with_zero_exposure_never_infects():
+	player.apply_disease_bite(DiseaseModel.PREDATOR, 0.0)
+	assert_eq(player.sickness_id, "")
+
+
+## Sickness.infection_chance never reaches a guaranteed 1.0 by design (real
+## exposure never means CERTAIN infection) -- retried across many rolls
+## (each apply_disease_bite call draws a fresh seed off an incrementing
+## counter) is the deterministic-enough way to prove this path CAN succeed,
+## the same shape TamingSystem's own catch-rate tests already use for a
+## chance that's real but not 100%.
+func test_apply_disease_bite_can_infect_the_player():
+	var infected := false
+	for i in 50:
+		player.sickness_id = ""
+		player.apply_disease_bite(DiseaseModel.PREDATOR, 1.0)
+		if player.sickness_id != "":
+			infected = true
+			break
+	assert_true(infected, "a full-exposure bite should eventually infect across many rolls")
+	assert_eq(player.sickness_id, DiseaseModel.PREDATOR)
+	assert_gt(player.sickness_severity, 0.0)
+
+
+func test_apply_disease_bite_does_nothing_while_already_sick():
+	player.sickness_id = "existing"
+	player.sickness_severity = 0.4
+	player.apply_disease_bite(DiseaseModel.CARRION, 1.0)
+	assert_eq(player.sickness_id, "existing")
+	assert_eq(player.sickness_severity, 0.4)
+
+
+func test_sickness_step_increases_severity_while_sick():
+	player.sickness_id = "flu_test"
+	player.sickness_severity = 0.1
+	player._sickness_step(5.0)
+	assert_gt(player.sickness_severity, 0.1)
+
+
+func test_sickness_step_does_nothing_while_healthy():
+	player._sickness_step(5.0)
+	assert_eq(player.sickness_severity, 0.0)
+
+
+## Not fatal outright (docs/concept/disease.md), a real ongoing tax instead --
+## stamina regen, the same lever _food_buff_step's own "sustenance" buff
+## already uses in reverse.
+func test_sickness_step_drains_stamina_while_sick():
+	player.sickness_id = "flu_test"
+	player.sickness_severity = 1.0
+	var before: float = player.survival.stamina
+	player._sickness_step(1.0)
+	assert_lt(player.survival.stamina, before)
+
+
+func test_butchering_a_contaminated_carcass_can_expose_the_player():
+	var carcass := Carcass.new()
+	carcass.species = "boar"
+	carcass.contaminated = true
+	carcass.position = player.position
+	add_child_autofree(carcass)
+
+	var infected := false
+	for i in 50:
+		player.sickness_id = ""
+		carcass._parts_taken = 0  # re-arm butcher() so each loop iteration takes a part
+		player._butcher_step()
+		if player.sickness_id != "":
+			infected = true
+			break
+	assert_true(infected, "butchering a contaminated carcass should eventually infect the player")
+	assert_eq(player.sickness_id, DiseaseModel.CARRION)
+
+
+func test_butchering_a_clean_carcass_never_exposes_the_player():
+	var carcass := Carcass.new()
+	carcass.species = "boar"
+	carcass.contaminated = false
+	carcass.position = player.position
+	add_child_autofree(carcass)
+
+	player._butcher_step()
+
+	assert_eq(player.sickness_id, "")
 
 
 # -- taming: throwing the lasso (see docs/concept/taming.md) ------------------
@@ -957,3 +1294,69 @@ func test_terrain_blocks_movement_agrees_with_terrain_passability_for_the_lookah
 ## loudly rather than the hook silently staying wired to "never."
 func test_has_climbing_gear_is_false_until_a_real_rope_exists():
 	assert_false(player._has_climbing_gear())
+
+
+## Wiring tests for the survival-neglect consequence (ConditionPenalty, see
+## docs/concept/survival.md's "What poor condition costs you"): fitness is the
+## single accumulator every unmet need feeds, and until now nothing read it at
+## all, so hunger and thirst had literally zero mechanical effect.
+
+## _authority_step reads the local input actions directly. World normally
+## registers every Keybindings action onto the InputMap at runtime (there is
+## no static [input] section in project.godot); these tests drive the step
+## without a World, so they register the registry themselves -- otherwise
+## every frame pushes an engine "has_action" error per action read. Same
+## trick test_player_kick.gd's before_each uses for its one action.
+func _register_all_keybindings() -> void:
+	for entry in Keybindings.ACTIONS:
+		if not InputMap.has_action(entry["action"]):
+			InputMap.add_action(entry["action"])
+
+
+## NOTE on why these compare a RATIO against a control rather than just
+## asserting "it got slower": two consecutive _authority_step calls do not
+## produce a byte-identical multiplier even with nothing changed (the
+## water/weather state settles by a fraction of a percent per frame), so a
+## bare assert_lt passes on that drift alone and would have been a false
+## green. The control run isolates the drift; the ratio is then compared to
+## what ConditionPenalty itself says the penalty should be.
+
+func test_poor_condition_slows_the_player_down():
+	_register_all_keybindings()
+	player.survival.fitness = 1.0
+	player._authority_step(0.016)
+	var healthy: float = player.current_speed_multiplier
+	player.survival.fitness = 0.0
+	player._authority_step(0.016)
+	assert_almost_eq(
+		player.current_speed_multiplier / healthy,
+		ConditionPenalty.speed_multiplier(0.0),
+		0.01,
+		"a player whose overall condition has collapsed should move slower, by exactly the penalty the module states"
+	)
+
+
+func test_unattended_hunger_eventually_slows_the_player_down_via_condition():
+	_register_all_keybindings()
+	# CONTROL: the same number of steps, well fed, to measure the drift.
+	for i in 100:
+		player.survival.hunger = 0.0
+		player.survival.thirst = 0.0
+		player.survival.warmth = 1.0
+		player.survival.fitness = 1.0
+		player._authority_step(1.0)
+	var well_fed: float = player.current_speed_multiplier
+
+	for i in 100:
+		# Isolate hunger: thirst and cold feed the same accumulator, and this
+		# test is about hunger specifically having a consequence at all.
+		player.survival.hunger = 1.0  # starving
+		player.survival.thirst = 0.0
+		player.survival.warmth = 1.0
+		player._authority_step(1.0)
+	assert_lt(player.survival.fitness, 0.5, "precondition: sustained starvation should have run condition down")
+	assert_lt(
+		player.current_speed_multiplier / well_fed,
+		ConditionPenalty.speed_multiplier(0.5),
+		"hunger left unattended must have a real mechanical consequence (docs/concept/survival.md, 'Debuffs, not death')"
+	)

@@ -49,13 +49,18 @@ const SPECIES := [
 	"jackal", "arctic_fox", "mountain_lion", "lion",
 	"mouse", "squirrel",
 	"venomous_snake", "nonvenomous_snake",
+	"lindwurm", "rubezahl", "nyx", "krampus",
+	"squallmaw", "coilnecca", "champ",
+	"kraken",
 ]
 
 ## Legless species (see the "serpents" profiles below): zero leg_length, so
 ## ProceduralAnimalAnimation's generic leg-shift walk cycle has nothing to
 ## move and must give these a whole-body slither instead (see
 ## SERPENT_SPECIES's use in procedural_animal_animation.gd).
-const SERPENT_SPECIES: Array[String] = ["venomous_snake", "nonvenomous_snake"]
+const SERPENT_SPECIES: Array[String] = [
+	"venomous_snake", "nonvenomous_snake", "squallmaw", "coilnecca", "champ", "kraken"
+]
 
 
 ## The proportions for `species`, or a safe generic build for an unknown
@@ -208,7 +213,6 @@ const _PROFILES := {
 		"tail": TAIL_TUFT, "tail_length": 0.06,
 		"headgear": HEADGEAR_ANTLERS, "has_mane": false,
 	},
-
 	# -- low, bulky rooters -------------------------------------------------
 	# Wedge-shaped: massive humped shoulders, head carried low, short legs.
 	"boar": {
@@ -366,6 +370,146 @@ const _PROFILES := {
 		"leg_length": 0.0, "leg_thickness": 0.0,
 		"tail": TAIL_THIN, "tail_length": 0.40,
 		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+
+	# -- Germany-region world bosses (docs/concept/worldbosses.md) ----------
+	# All fully-illustrated (see IllustratedAnimalSprite) -- these fields
+	# only actually draw during the rare "eat" action, the one action
+	# illustrated art has no walk-fallback for (see has_action's own doc
+	# comment). world_scale is the field that matters everywhere else: it
+	# multiplies the illustrated sprite's on-screen size directly (see
+	# IllustratedAnimalSprite.marker_scale), so it's what makes a boss
+	# actually read as bigger than an ordinary predator on screen, not just
+	# in its health bar.
+	# Legless serpentine dragon -- same "no legs, long tapering body" shape
+	# as the two snake profiles, scaled up to dragon size.
+	"lindwurm": {
+		"barrel_squareness": 0.35,
+		"world_scale": 2.4,
+		"body_length": 0.52, "body_height": 0.16, "body_y": 0.62, "shoulder_hump": 0.0,
+		"neck_length": 0.05, "neck_thickness": 0.12, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.16, "head_height": 0.11, "muzzle": 0.5, "ear_size": 0.0,
+		"leg_length": 0.10, "leg_thickness": 0.06,
+		"tail": TAIL_THIN, "tail_length": 0.34,
+		"headgear": HEADGEAR_HORNS, "has_mane": false,
+	},
+	# Storm-boar -- a scaled-up boar build (low, humped, tusked), not a new
+	# shape family.
+	"rubezahl": {
+		"barrel_squareness": 0.55,
+		"world_scale": 2.0,
+		"body_length": 0.58, "body_height": 0.32, "body_y": 0.56, "shoulder_hump": 0.14,
+		"neck_length": 0.07, "neck_thickness": 0.19, "neck_carriage": NECK_LOW,
+		"head_length": 0.21, "head_height": 0.14, "muzzle": 0.9, "ear_size": 0.20,
+		"leg_length": 0.18, "leg_thickness": 0.07,
+		"tail": TAIL_STUB, "tail_length": 0.06,
+		"headgear": HEADGEAR_TUSKS, "has_mane": false,
+	},
+	# Upright torso tapering into a long tail (no legs) -- closest existing
+	# shape is a level-backed predator's proportions with a snake-length tail.
+	"nyx": {
+		"barrel_squareness": 0.35,
+		"world_scale": 1.9,
+		"body_length": 0.40, "body_height": 0.24, "body_y": 0.48, "shoulder_hump": 0.0,
+		"neck_length": 0.14, "neck_thickness": 0.09, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.14, "head_height": 0.12, "muzzle": 0.2, "ear_size": 0.10,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.36,
+		"headgear": HEADGEAR_NONE, "has_mane": true,
+	},
+	# Tall bipedal goat-demon -- goat headgear, but noticeably taller/
+	# heavier-necked and longer-legged than the quadruped goat profile to
+	# read as an upright figure.
+	"krampus": {
+		"barrel_squareness": 0.4,
+		"world_scale": 2.1,
+		"body_length": 0.36, "body_height": 0.34, "body_y": 0.44, "shoulder_hump": 0.05,
+		"neck_length": 0.14, "neck_thickness": 0.13, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.16, "head_height": 0.13, "muzzle": 0.5, "ear_size": 0.18,
+		"leg_length": 0.34, "leg_thickness": 0.07,
+		"tail": TAIL_THIN, "tail_length": 0.14,
+		"headgear": HEADGEAR_HORNS, "has_mane": false,
+	},
+
+	# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) -----------
+	# Real, procedurally-generated serpentine creatures (ProceduralAnimalSprite
+	# -- no illustrated art, unlike the Germany bosses just above), so every
+	# proportion here actually draws on screen, not just during a rare "eat"
+	# fallback.
+	#
+	# Squallmaw: "a long, serpentine, furious-looking sea-dragon with a
+	# white, mane-like fin crest" -- a scaled-up, low-slung horizontal body
+	# plan adapted from lindwurm's legless dragon silhouette (NECK_LEVEL,
+	# low body_y), with has_mane true for the fin crest. Strong-apex-
+	# predator sized (world_scale above bear's 1.5, the roster's largest
+	# ordinary species) but explicitly below every Germany world boss's
+	# scale (1.9-2.4) -- see test_squallmaw_is_larger_than_a_bear_but_
+	# smaller_than_every_germany_boss.
+	"squallmaw": {
+		"barrel_squareness": 0.3,
+		"world_scale": 1.7,
+		"body_length": 0.58, "body_height": 0.15, "body_y": 0.58, "shoulder_hump": 0.0,
+		"neck_length": 0.10, "neck_thickness": 0.11, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.18, "head_height": 0.12, "muzzle": 0.6, "ear_size": 0.0,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.38,
+		"headgear": HEADGEAR_NONE, "has_mane": true,
+	},
+	# Coilnecca: "gentle, long-necked, placid lake serpent" -- a compact
+	# body (mostly submerged; only the neck reads above the waterline) with
+	# a long upright neck, the opposite carriage from Squallmaw's low sea-
+	# serpent build. No mane, no headgear -- Squallmaw's fin crest is
+	# deliberately its own, not shared (see test_only_squallmaw_has_a_
+	# mane_like_fin_crest).
+	"coilnecca": {
+		"barrel_squareness": 0.3,
+		"world_scale": 1.1,
+		"body_length": 0.34, "body_height": 0.17, "body_y": 0.58, "shoulder_hump": 0.0,
+		"neck_length": 0.24, "neck_thickness": 0.09, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.14, "head_height": 0.10, "muzzle": 0.4, "ear_size": 0.0,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.20,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+	# Champ: doc-explicit "family resemblance" to Coilnecca (same long-
+	# necked lake-serpent premise, same upright carriage) but deliberately
+	# NOT identical proportions -- a leaner, slightly smaller build (a
+	# shyer, less substantial-looking animal) rather than a bare recolor.
+	"champ": {
+		"barrel_squareness": 0.25,
+		"world_scale": 0.95,
+		"body_length": 0.30, "body_height": 0.14, "body_y": 0.58, "shoulder_hump": 0.0,
+		"neck_length": 0.20, "neck_thickness": 0.075, "neck_carriage": NECK_UPRIGHT,
+		"head_length": 0.12, "head_height": 0.085, "muzzle": 0.4, "ear_size": 0.0,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.24,
+		"headgear": HEADGEAR_NONE, "has_mane": false,
+	},
+
+	# -- Kraken (docs/concept/easter_eggs.md's condition-triggered, higher-
+	# stakes entry) ----------------------------------------------------------
+	# "Massive, many-tentacled" -- deliberately the single biggest creature
+	# in the game (world_scale above every Germany-region world boss's
+	# 1.9-2.4 range, see test_kraken_is_larger_than_every_germany_world_boss
+	# in test_animal_anatomy.gd), matching the doc's one deliberately
+	# higher-stakes entry. AnimalAnatomy has no per-tentacle limb primitive
+	# (every profile here is one torso + at most one tail/neck/4 legs), so
+	# "many-tentacled" is approximated rather than literally modeled: a
+	# thick, heavily-tapered, far-longer-than-usual tail (the single longest
+	# in the roster) for a trailing mass of limbs, plus has_mane -- reused
+	# here as a writhing fringe around the head/neck rather than Squallmaw's
+	# fin crest -- for a crown of shorter tentacles. A documented scope call
+	# (no new anatomy field was added for this one creature), not a claim
+	# this literally draws N separate tentacles.
+	"kraken": {
+		"barrel_squareness": 0.25,
+		"world_scale": 3.2,
+		"body_length": 0.62, "body_height": 0.20, "body_y": 0.56, "shoulder_hump": 0.0,
+		"neck_length": 0.12, "neck_thickness": 0.16, "neck_carriage": NECK_LEVEL,
+		"head_length": 0.20, "head_height": 0.15, "muzzle": 0.3, "ear_size": 0.0,
+		"leg_length": 0.0, "leg_thickness": 0.0,
+		"tail": TAIL_THIN, "tail_length": 0.46,
+		"headgear": HEADGEAR_NONE, "has_mane": true,
 	},
 
 	# -- the small exception ------------------------------------------------

@@ -3,6 +3,8 @@ extends RefCounted
 ## A chunk's worth of TallGrass cells, rendered as GPU-instanced cards from
 ## the illustrated atlas -- one MultiMeshInstance2D draw call per Y-sort
 ## band, not one Sprite2D per card. See docs/concept/long_grass.md.
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+
 const ATLAS_PATH := "res://assets/sprites/grass_blades.png"
 ## The delivered sheet is 1254×1254 and contains 10×10 blade variants. Its
 ## source art is roughly 128px per cell; regions derive from its true size.
@@ -86,12 +88,28 @@ static func band_index_for_local_y(local_y: int, chunk_size: int, band_count: in
 	return clampi(int(float(local_y) / band_height), 0, band_count - 1)
 
 ## The world Y a band's MultiMeshInstance2D should sit at for Y-sorting --
-## the band's own vertical center, so it sorts against the player/creatures
-## roughly like the tile clumps within it would individually.
+## the band's own BOTTOM edge (its largest row's world Y), not its vertical
+## center. A single draw call can only Y-sort as ONE unit (see BAND_COUNT's
+## own doc comment), and a center anchor left every row in a band's lower
+## half sitting BELOW (a larger world Y than) the anchor -- so a player
+## standing on one of those rows, having already walked past every blade in
+## the band's upper half, still Y-sorted BEHIND the whole band. Since a
+## blade card renders upward from its own root and is a full tile tall (see
+## `mesh()`'s WORLD_SIZE), that read as exactly the reported bug: "the
+## player's head is behind the long grass blades when the feet already are
+## past it." Anchoring at the bottom edge instead means any entity standing
+## anywhere within or above the band always sorts behind the whole band
+## (grass draws in front while you're walking through it -- normal,
+## expected concealment, see docs/concept/combat.md), and the band only
+## pops behind the entity once genuinely past its very last row. Trades
+## "occasionally covered a beat longer than a single blade's own root would
+## justify" for "never shows a body part behind grass it has unambiguously
+## already passed" -- pinned by
+## test_band_anchor_world_y_is_never_smaller_than_any_row_actually_in_that_band.
 static func band_anchor_world_y(band_index: int, chunk_origin_y: int, chunk_size: int, tile_size: float, band_count: int = BAND_COUNT) -> float:
 	var band_height: float = maxf(float(chunk_size) / float(band_count), 0.0001)
-	var local_y_center: float = (float(band_index) + 0.5) * band_height
-	return (float(chunk_origin_y) + local_y_center) * tile_size
+	var local_y_bottom: float = (float(band_index) + 1.0) * band_height
+	return (float(chunk_origin_y) + local_y_bottom) * tile_size
 
 static func _build_shader_code() -> String:
 	return """
@@ -105,6 +123,13 @@ uniform float wind_speed = 1.6;
 // weather and down in none. Deliberately does NOT touch the walker-push
 // term below (see `push`): parting is the walker's own reaction, not wind.
 uniform float wind_strength = 1.0;
+// The season's multiplier on living green (see SeasonalFoliage, forwarded via
+// EarthChunkManager.set_season_tint) -- the same value the terrain layer
+// under these blades wears, so a field and the ground it stands in turn
+// together instead of a green lawn showing through straw-coloured grass.
+// Identity by default, so a caller that never pushes a season renders exactly
+// today's high-summer picture.
+uniform vec3 season_tint = vec3(1.0);
 
 varying vec2 v_root;
 // Per-card atlas sub-rect (normalized), packed into MultiMesh's dedicated
@@ -161,9 +186,37 @@ void fragment() {
 	// adjacent comment trail for the empirical verification.
 	float local_x = clamp(UV.x - bend_offset, 0.0, 1.0);
 	vec2 atlas_uv = region_uv0 + vec2(local_x, 1.0 - UV.y) * region_size;
+
+	// A blade whose own root the player has already walked past must never
+	// render on top of them (reported live, with real screenshots: "the
+	// player's head is behind the long grass blades when the feet already
+	// are past it"). band_anchor_world_y fixes the coarse per-BAND case,
+	// but one MultiMeshInstance2D draw call can only Y-sort as ONE unit -
+	// a blade whose root is genuinely behind the player can still share a
+	// still-ahead band with others that legitimately haven't been reached
+	// yet, and the whole band draws together regardless. True per-blade
+	// precision needs a per-PIXEL decision: from_walker/distance_to_walker
+	// above (already computed for the parting/push effect) already carry
+	// exactly what's needed, reused rather than adding new uniforms. Any
+	// blade whose root sits behind the player (from_walker.y <= 0, i.e. a
+	// smaller/further-back world Y than the player's own) fades to fully
+	// transparent as the player gets close enough to plausibly stand in
+	// front of it - reusing walker_radius (already established for the
+	// push effect) rather than a fresh tuned constant. A per-pixel alpha
+	// decision is correct regardless of which draw call/band the blade's
+	// own coarse Y-sort happened to land in.
+	float passed_by_walker = step(from_walker.y, 0.0);
+	float occlusion_fade = 1.0 - passed_by_walker * (1.0 - smoothstep(0.0, walker_radius, distance_to_walker));
+
 	COLOR = texture(TEXTURE, atlas_uv);
+	COLOR.a *= occlusion_fade;
+	// Gated on greenness for the same reason GroundTint is, and with the same
+	// gain: the illustrated atlas already carries dry/brown blades, and those
+	// must not be turned again by a season they are already wearing.
+	float greenness = clamp((COLOR.g - max(COLOR.r, COLOR.b)) * %s, 0.0, 1.0);
+	COLOR.rgb = mix(COLOR.rgb, COLOR.rgb * season_tint, greenness);
 }
-""" % [BEND_CURVE_EXPONENT, PHASE_SPREAD, AMPLITUDE_BASE, AMPLITUDE_VARIATION, AMPLITUDE_FREQUENCY, WIND_UV_AMPLITUDE, WALKER_PUSH_UV_AMPLITUDE]
+""" % [BEND_CURVE_EXPONENT, PHASE_SPREAD, AMPLITUDE_BASE, AMPLITUDE_VARIATION, AMPLITUDE_FREQUENCY, WIND_UV_AMPLITUDE, WALKER_PUSH_UV_AMPLITUDE, SeasonalFoliage.GREENNESS_GAIN]
 
 var _material: ShaderMaterial
 var _texture: Texture2D
@@ -172,6 +225,10 @@ var _mesh: QuadMesh
 ## material() at BUILD time too, so a caller that sets the live wind before
 ## the material has been lazily built yet doesn't lose it.
 var _wind_strength := DEFAULT_WIND_STRENGTH
+## Last season tint pushed in (see set_season_tint) -- applied in material()
+## at BUILD time too, so a caller that sets the season before the material has
+## been lazily built doesn't lose it (same reasoning as _wind_strength above).
+var _season_tint := Color(1.0, 1.0, 1.0)
 
 static func atlas_region_for_seed(seed_value: int, atlas_size: Vector2i = DEFAULT_ATLAS_SIZE) -> Rect2i:
 	var index := posmod(seed_value, ATLAS_COLUMNS * ATLAS_ROWS)
@@ -205,6 +262,7 @@ func material() -> ShaderMaterial:
 		_material = ShaderMaterial.new()
 		_material.shader = shader
 		_material.set_shader_parameter("wind_strength", _wind_strength)
+		_material.set_shader_parameter("season_tint", _season_tint_vector())
 	return _material
 
 func mesh() -> QuadMesh:
@@ -230,6 +288,21 @@ func set_walker_position(world_position: Vector2) -> void:
 func set_wind_strength(strength: float) -> void:
 	_wind_strength = strength
 	material().set_shader_parameter("wind_strength", strength)
+
+
+## Pushes the season's tint on living green (see SeasonalFoliage, via
+## EarthChunkManager.set_season_tint) onto the shared blade material.
+## Deliberately does NOT touch growth or spread: this is what a field LOOKS
+## like in November, not how fast it grows then (see docs/concept/seasons.md's
+## still-open "seasonal scaling of vegetation growth rate" -- a rendering fix
+## must not smuggle a sim change in with it).
+func set_season_tint(tint: Color) -> void:
+	_season_tint = tint
+	material().set_shader_parameter("season_tint", _season_tint_vector())
+
+
+func _season_tint_vector() -> Vector3:
+	return Vector3(_season_tint.r, _season_tint.g, _season_tint.b)
 
 ## Pure data prep for fill_band, headlessly testable on its own: computes
 ## every card's instance transform (root pinned at its own ground position,

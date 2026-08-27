@@ -41,7 +41,7 @@ func decide(context: Dictionary) -> Dictionary:
 	var threats: Array = context["threats"]
 	var prey: Array = context["prey"]
 
-	if not threats.is_empty():
+	if not threats.is_empty() and _perceives_threats(context):
 		var nearest_threat := _nearest(position, threats)
 		if _will_fight(context):
 			return {"intent": "attack", "direction": _toward(position, nearest_threat)}
@@ -85,6 +85,23 @@ func _will_fight(context: Dictionary) -> bool:
 	if not context.get("is_mature", true):
 		return false
 	return context["temperament"] == "aggressive" and context["health_fraction"] >= STRONG_HEALTH_FRACTION
+
+
+## Whether this creature reacts to `threats` at all this tick (docs/concept/
+## worldbosses.md: "bosses should not attack low-level players on their
+## own, even if they attack -- only if they deal actual damage do they pull
+## aggro"). An ordinary creature always perceives threats, unchanged. A
+## world boss perceives NONE of them -- doesn't attack, and doesn't flee
+## either, which a bare "skip only the attack branch" gate would have
+## accidentally produced by falling through to the flee case -- until
+## BossAggro/CreatureMarker.take_damage has flipped is_aggroed on via a
+## real hit. `.get(..., false)` defaults both new keys to "ordinary
+## creature" so a context dict built before this feature existed (as every
+## test predating it does) keeps behaving exactly as it always did.
+func _perceives_threats(context: Dictionary) -> bool:
+	if not context.get("is_world_boss", false):
+		return true
+	return context.get("is_aggroed", false)
 
 
 func _nearest(origin: Vector2, points: Array) -> Vector2:

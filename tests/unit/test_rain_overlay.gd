@@ -226,6 +226,60 @@ func test_there_are_enough_drops_to_fill_the_screen():
 	)
 
 
+# -- snow is not rain painted white ------------------------------------------
+#
+# set_snowing swapped exactly three things -- drop_color, fall_speed, slant --
+# and the drop's SHAPE was baked into the QuadMesh at STREAK_WIDTH x
+# STREAK_LENGTH with no uniform that could touch it. So a snowstorm rendered
+# 11px falling STREAKS in white, reported as rain still falling during a
+# snowstorm. A streak is motion blur, and a flake drifting seven times slower
+# than rain has none to blur. Nothing here exercised set_snowing at all, which
+# is how it survived.
+
+
+## A flake must not read as a falling streak, in either direction.
+func test_a_snowflake_is_a_fleck_not_a_falling_streak():
+	assert_string_contains(
+		RainOverlay.SHADER_CODE, "drop_length_scale",
+		"the GPU has to be told the drop's length, or only the colour changes"
+	)
+	rain.set_snowing(true)
+	var scale = rain.shared_material().get_shader_parameter("drop_length_scale")
+	assert_not_null(scale, "snowing must drive the drop's length, not just its colour")
+	if scale == null:
+		return
+	var drawn: float = RainOverlay.STREAK_LENGTH * float(scale)
+	assert_lte(
+		drawn, RainOverlay.STREAK_WIDTH * 2.0,
+		"a flake %.2fpx long is a falling streak, not a fleck" % drawn
+	)
+	assert_gte(
+		drawn, RainOverlay.STREAK_WIDTH,
+		"and it must stay a chunky pixel-art mark, not a sub-pixel dot"
+	)
+	rain.set_snowing(false)
+	assert_eq(
+		rain.shared_material().get_shader_parameter("drop_length_scale"), 1.0,
+		"it streaks again once it warms"
+	)
+
+
+func test_the_drop_quad_starts_out_raining_not_snowing():
+	assert_eq(rain.make_material().get_shader_parameter("drop_length_scale"), 1.0)
+
+
+## The CPU constant and the value the GPU draws with cannot drift apart: the
+## scale IS the ratio, derived rather than restated.
+func test_a_flake_is_shorter_than_a_raindrops_streak():
+	assert_lt(RainOverlay.FLAKE_LENGTH, RainOverlay.STREAK_LENGTH)
+	assert_almost_eq(
+		RainOverlay.drop_length_scale(true),
+		RainOverlay.FLAKE_LENGTH / RainOverlay.STREAK_LENGTH,
+		0.0001
+	)
+	assert_eq(RainOverlay.drop_length_scale(false), 1.0, "rain draws its quad at full length")
+
+
 ## One drop's quad is a streak, the same shape the fragment shader used to
 ## carve out of the full-screen rect.
 func test_a_drop_quad_is_the_streak_shape():

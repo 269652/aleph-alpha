@@ -40,11 +40,15 @@ func test_keystone_ids_returns_at_least_three_defined_keystones():
 	assert_gte(keystone.keystone_ids().size(), 3)
 
 
+## Every keystone resolves to real info -- but that info is no longer
+## guaranteed to be a nonzero STAT bonus: a reveal-type keystone (e.g.
+## land_sense, see below) deliberately carries an empty stat_name instead
+## (its payoff is real information becoming visible, not a number going up).
 func test_keystone_ids_returns_every_defined_keystone():
 	var ids: Array = keystone.keystone_ids()
 	for id in ids:
-		var bonus: Dictionary = keystone.bonus_for(id)
-		assert_ne(bonus["stat_name"], "", "expected '%s' to resolve to a real bonus" % id)
+		var info: Dictionary = keystone.keystone_info(id)
+		assert_false(info.is_empty(), "expected '%s' to resolve to real keystone info" % id)
 
 
 func test_bonus_for_returns_correct_stat_and_amount_for_known_keystone():
@@ -73,6 +77,8 @@ func test_at_least_two_keystones_have_different_required_node_counts():
 func test_keystone_bonus_amount_is_meaningfully_larger_than_a_baseline_stat_bump():
 	for id in keystone.keystone_ids():
 		var bonus: Dictionary = keystone.bonus_for(id)
+		if bonus["stat_name"] == "":
+			continue  # reveal-type keystone (e.g. land_sense) -- deliberately no stat bump
 		assert_gt(bonus["bonus_amount"], _BASELINE_STAT_BUMP, "expected '%s' bonus_amount to exceed baseline of %f" % [id, _BASELINE_STAT_BUMP])
 
 
@@ -93,3 +99,23 @@ func test_keystone_info_exposes_gate_and_bonus_for_display():
 
 func test_keystone_info_of_unknown_is_empty():
 	assert_true(keystone.keystone_info("nope").is_empty())
+
+
+# -- land_sense: a REVEAL keystone, not a stat bump (docs/concept/
+# progression.md "Ecological literacy" -- the Naturalist branch's payoff is
+# real ecosystem info becoming visible, not a number going up) -------------
+
+func test_land_sense_keystone_carries_no_stat_bonus():
+	var bonus: Dictionary = keystone.bonus_for("land_sense")
+	assert_eq(bonus["stat_name"], "")
+	assert_eq(bonus["bonus_amount"], 0.0)
+
+
+func test_land_sense_keystone_info_carries_a_real_reveal_description():
+	var info := keystone.keystone_info("land_sense")
+	assert_eq(info["stat_name"], "")
+	assert_ne(info.get("description", ""), "", "expected a real UI description for a non-stat keystone")
+
+
+func test_land_sense_required_node_count():
+	assert_eq(_required_node_count("land_sense"), 2)

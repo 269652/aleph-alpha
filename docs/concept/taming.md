@@ -144,6 +144,10 @@ is a creature in the ecosystem, not a vehicle.
   (`CreatureNeeds.is_hungry`); this only surfaces it.
 - A **trust indicator** showing progress toward tame, so the player can tell
   that feeding is doing something.
+- A **sick indicator**, the same shape as the hunger pip, when a kept animal
+  is carrying a disease (see [disease.md](disease.md)) — an animal you've
+  invested trust in reads as sick the instant it happens, not as a silent
+  population-level stat.
 - The break-free struggle as **animation**, not just a dice roll resolving
   silently.
 
@@ -163,6 +167,9 @@ is a creature in the ecosystem, not a vehicle.
   player, so the animal grazes around its tree instead of following
 - ✅ Trust model: rises only on feeding a HUNGRY animal, decays on neglect
 - ✅ Hunger + trust indicators on the animal, and a state line in the HUD
+- ✅ A third sick pip beside them, shown while a kept animal is `INFECTED`
+  (see [disease.md](disease.md), `CreatureMarker._sick_pip`) — same
+  "already in the loop with the player" gating as the other two
 - ✅ Tamed orders: follow / stay, cycled with the lasso key once the animal is
   tame (the rope has nothing left to do at that point, so the key changes
   meaning). A tamed animal also **stops treating the player as a threat** --

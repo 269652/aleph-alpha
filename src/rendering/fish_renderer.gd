@@ -1,6 +1,7 @@
 extends RefCounted
 
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 ## How big a fish is relative to its drawn art -- a pond fish is a
 ## fraction of a land animal's bulk.
@@ -125,6 +126,20 @@ func _spawn_cell(
 	var species: String = SPECIES_POOL[seed_value % SPECIES_POOL.size()]
 	var position := Vector2((global_x + 0.5) * tile_size, (global_y + 0.5) * tile_size)
 	return _build_fish(parent, species, position, seed_value, world, tile_size)
+
+
+## Public wrapper around _build_fish -- for callers outside this renderer
+## that need one real, correctly-rendered fish materialized directly (the
+## character preview diorama's own small standalone pond, see
+## src/rendering/character_preview_diorama.gd -- not chunk-based ocean-tile
+## spawning at all) rather than reaching into a private method across
+## files, the same convention StoneRenderer.build_liftable_stone_node
+## already established for the same reason. `world` left null (its own
+## documented, supported standalone-rendering fallback -- see
+## FishMarker.setup's own doc comment) means the fish swims unconfined by
+## any water-tile check, just its own home-anchored wander.
+func spawn_fish_at(parent: Node2D, species: String, position: Vector2, seed_value: int) -> FishMarker:
+	return _build_fish(parent, species, position, seed_value, null, TerrainRenderer.TILE_SIZE)
 
 
 func _build_fish(

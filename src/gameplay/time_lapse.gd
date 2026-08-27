@@ -94,6 +94,31 @@ static func slices(delta_seconds: float, scale: float) -> Array[float]:
 	return out
 
 
+## The simulated time the CALENDAR advances this frame -- the full amount
+## asked for, uncapped.
+##
+## Deliberately NOT the sum of slices(). The slice budget is sized against
+## what a frame can SIMULATE (see SLICE_SECONDS/MAX_SLICES_PER_FRAME, both
+## measured), and tying the clock to it made the rate depend on the
+## framerate: a lapse drops the game to a few frames a second, and the cap is
+## per FRAME, so a frame asking for five thousand seconds of world time
+## received nine hundred and sixty and the year ran several times slower than
+## the number the player typed. Seasons and canopies are what /ecotest exists
+## to show, and they read the CLOCK rather than the stepping -- so the clock
+## runs at the rate asked and the ecology keeps its measured budget.
+##
+## This is the same separation EarthChunkManager.advance_world_age was split
+## out from step_tree_spread for, applied one level up: advancing the clock is
+## free, ADDING trees is not.
+##
+## A scale below one is clamped away: the lapse only ever makes the world run
+## FASTER, and nothing may quietly run the calendar slow (or backwards).
+static func calendar_seconds(delta_seconds: float, scale: float) -> float:
+	if delta_seconds <= 0.0:
+		return 0.0
+	return delta_seconds * maxf(scale, 1.0)
+
+
 ## How long one season lasts, in real seconds, at this rate -- for reporting
 ## back to whoever asked for the run.
 static func real_seconds_per_season(scale: float) -> float:

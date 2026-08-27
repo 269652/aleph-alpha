@@ -86,3 +86,26 @@ func test_buy_meal_picks_whichever_item_actually_has_a_whole_unit():
 	var wallet := Wallet.new()
 	wallet.add(100)
 	assert_eq(market.buy_meal(wallet), "meat")
+
+
+# -- remove_stock: the real draw-down VillageMarket also needs to serve as -
+# -- docs/concept/timber_construction.md's own "it holds lumber the same --
+# -- way" settlement material stock (the Settlement construction ledger's --
+# -- own live integration draws real beam/plank down from here). All-or- ---
+# -- nothing, mirroring StructureStock.remove_stock's own contract exactly -
+
+func test_remove_stock_withdraws_the_requested_amount():
+	market.add_stock("plank", 4.0)
+	assert_true(market.remove_stock("plank", 4.0))
+	assert_almost_eq(market.stock["plank"], 0.0, 0.001)
+
+
+func test_remove_stock_fails_and_does_not_mutate_when_short():
+	market.add_stock("plank", 2.0)
+	assert_false(market.remove_stock("plank", 4.0))
+	assert_almost_eq(market.stock["plank"], 2.0, 0.001)
+
+
+func test_remove_stock_fails_for_an_item_with_no_stock_at_all():
+	assert_false(market.remove_stock("beam", 1.0))
+	assert_false(market.stock.has("beam"))

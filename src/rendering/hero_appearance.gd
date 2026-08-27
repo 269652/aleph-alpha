@@ -57,6 +57,12 @@ const CLASS_PALETTES := {
 	"fisher": {
 		"tunic": Color(0.22, 0.5, 0.52), "trim": Color(0.8, 0.72, 0.5), "legs": Color(0.24, 0.3, 0.32),
 	},
+	"hunter": {
+		"tunic": Color(0.34, 0.38, 0.22), "trim": Color(0.58, 0.42, 0.24), "legs": Color(0.24, 0.22, 0.16),
+	},
+	"nurse": {
+		"tunic": Color(0.82, 0.8, 0.76), "trim": Color(0.68, 0.28, 0.32), "legs": Color(0.5, 0.48, 0.46),
+	},
 }
 const _FALLBACK_CLASS := "warrior"
 
@@ -103,7 +109,55 @@ const TRIM_COLORS := [
 ## Names in TRIM_COLORS order, for the creator's axis readout.
 const TRIM_NAMES := ["Gold", "Silver", "Copper", "Crimson", "Verdant", "Amethyst"]
 
-const AXES := ["skin", "hair_color", "hair_style", "beard", "eyes", "trim"]
+## The character rig's illustrated art (see IllustratedCharacterSprite) --
+## this class doesn't render anything itself, but "head" (below) needs to
+## know how many faces exist to offer as a customization axis, and that
+## count is a fact about the ART, not the DNA/identity layer. Read from
+## there rather than a second hardcoded 100 so the two can never drift if
+## the sheet's own grid layout ever changes.
+const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_character_sprite.gd")
+
+const AXES := ["skin", "hair_color", "hair_style", "beard", "eyes", "trim", "head"]
+
+## Only ever used for its pure seed->row roll (outfit_variant_for) and its
+## grid/row counts -- constructing one loads nothing (every sheet behind it
+## is lazily sliced on first real use).
+var _illustrated := IllustratedCharacterSprite.new()
+
+
+## Which of hero_composite.png's pre-coloured outfit rows this hero wears.
+##
+## That art is PRE-COLOURED, so the illustrated rig deliberately never tints
+## it by tunic/legs (re-tinting already-coloured art would double the colour
+## -- see ProceduralCharacterSprite._portrait_torso_image). That left the
+## class palette, which is the ONLY thing distinguishing two appearances of
+## different classes at the same DNA seed, with no channel into the
+## illustrated look at all: the character creator renders its seven class
+## icons from exactly that -- one portrait per archetype, one fixed seed --
+## and got seven byte-identical thumbnails (reported live).
+##
+## The outfit row is the one channel this art actually has for "show me a
+## different outfit", so the CLASS picks a row and the DNA SEED rotates it:
+## at any shared seed every class lands on its own row (which is what makes
+## an icon a real preview of picking that class), while within one class the
+## row still varies across all of them by seed -- keeping the "outfit is
+## DNA-derived, not a new player-choosable axis" rule
+## IllustratedCharacterSprite.outfit_variant_for was written for.
+##
+## The class offset is its index in CLASS_PALETTES -- derived from the table
+## that already defines what a class looks like, never a second hand-written
+## class->row map that could silently give a new archetype another's row.
+## The seven player archetypes occupy the first seven entries and therefore
+## seven distinct rows of the eight; that is pinned by
+## test_every_archetype_takes_its_own_outfit_row_at_a_shared_seed, which is
+## what would catch a reordering or an eighth archetype. Villager
+## occupations further down the table may share a row with an archetype --
+## they wear this palette for its colours (VillageRenderer's markers), not
+## for the composite rig.
+func outfit_variant_for(class_id: String, seed_value: int) -> int:
+	var class_offset := maxi(CLASS_PALETTES.keys().find(class_id), 0)
+	var rolled := _illustrated.outfit_variant_for(seed_value)
+	return (class_offset + rolled) % IllustratedCharacterSprite.HERO_COMPOSITE_ROWS
 
 
 ## How many options a customization axis offers. 0 for an unknown axis
@@ -122,6 +176,8 @@ func option_count(axis: String) -> int:
 			return EYE_COLORS.size()
 		"trim":
 			return TRIM_COLORS.size()
+		"head":
+			return IllustratedCharacterSprite.HEAD_GRID_COLUMNS * IllustratedCharacterSprite.HEAD_GRID_ROWS
 		_:
 			return 0
 
@@ -137,6 +193,7 @@ func appearance_for(class_id: String, dna_seed: int) -> Dictionary:
 		"beard": _roll(dna_seed, "beard", BEARD_STYLE_COUNT),
 		"eyes": _roll(dna_seed, "eyes", EYE_COLORS.size()),
 		"trim": _roll(dna_seed, "trim", TRIM_COLORS.size()),
+		"head": _roll(dna_seed, "head", option_count("head")),
 	}, dna_seed)
 
 
@@ -170,6 +227,18 @@ func appearance_from_choices(class_id: String, choices: Dictionary, seed_value: 
 		"tunic": palette.tunic,
 		"trim": TRIM_COLORS[_wrap(int(choices.get("trim", 0)), TRIM_COLORS.size())],
 		"legs": palette.legs,
+		# Which of IllustratedCharacterSprite's illustrated faces this hero
+		# wears (see CharacterView._apply_head/ProceduralCharacterSprite's
+		# portrait) -- a real index, not derived from "seed" the way it used
+		# to be, so the creator can cycle it independently of a full DNA
+		# reroll (reported: "you can't choose different heads").
+		"head_index": _wrap(int(choices.get("head", 0)), option_count("head")),
+		# Which pre-coloured outfit row the illustrated rig dresses this hero
+		# in -- carried on the appearance rather than re-rolled inside each
+		# renderer, so the creator's class icon (a composited portrait) and
+		# the live CharacterView paperdoll can never disagree about what the
+		# same hero is wearing. See outfit_variant_for.
+		"outfit_variant": outfit_variant_for(class_id, seed_value),
 	}
 
 
@@ -184,6 +253,7 @@ func choices_from_appearance(appearance: Dictionary) -> Dictionary:
 		"beard": int(appearance.get("beard", 0)),
 		"eyes": maxi(EYE_COLORS.find(appearance.get("eyes", EYE_COLORS[0])), 0),
 		"trim": maxi(TRIM_COLORS.find(appearance.get("trim", TRIM_COLORS[0])), 0),
+		"head": int(appearance.get("head_index", 0)),
 	}
 
 

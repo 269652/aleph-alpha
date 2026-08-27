@@ -95,10 +95,54 @@ func test_dissolution_threshold_is_a_real_gap_below_formation():
 func test_should_dissolve_is_false_right_at_the_formation_threshold():
 	for i in InstitutionFormation.FORMATION_THRESHOLD:
 		_fulfill_a_contract("household:1", "household:2")
-	assert_false(InstitutionFormation.should_dissolve(contracts, "household:1", "household:2"))
+	assert_false(InstitutionFormation.should_dissolve(contracts, "household:1", "household:2", 1.0))
 
 
 func test_should_dissolve_is_true_at_or_below_the_dissolution_threshold():
 	for i in InstitutionFormation.DISSOLUTION_THRESHOLD:
 		_fulfill_a_contract("household:1", "household:2")
-	assert_true(InstitutionFormation.should_dissolve(contracts, "household:1", "household:2"))
+	assert_true(InstitutionFormation.should_dissolve(contracts, "household:1", "household:2", 1.0))
+
+
+# -- recent_shared_contract_count: a real signal that CAN fall back to zero -
+
+## Unlike shared_contract_count (all-time, used for FORMATION -- a strong
+## track record should never be forgotten), recent_shared_contract_count is
+## what DISSOLUTION reads: only contracts fulfilled within the trailing
+## RECENT_WINDOW_SECONDS count, so a pair that stops coordinating genuinely
+## reads as "gone quiet" rather than being protected forever by history that
+## happened once, long ago.
+
+func test_recent_shared_contract_count_counts_a_contract_still_inside_the_window():
+	_fulfill_a_contract("household:1", "household:2")  # created_at = 1.0
+	var now := 1.0 + InstitutionFormation.RECENT_WINDOW_SECONDS
+	assert_eq(InstitutionFormation.recent_shared_contract_count(contracts, "household:1", "household:2", now), 1)
+
+
+func test_recent_shared_contract_count_excludes_a_contract_outside_the_window():
+	_fulfill_a_contract("household:1", "household:2")  # created_at = 1.0
+	var now := 1.0 + InstitutionFormation.RECENT_WINDOW_SECONDS + 1.0
+	assert_eq(InstitutionFormation.recent_shared_contract_count(contracts, "household:1", "household:2", now), 0)
+
+
+## The literal gap this closes: an institution with plenty of ALL-TIME
+## history (well above FORMATION_THRESHOLD, so shared_contract_count alone
+## would keep it "safe" forever) genuinely becomes dissolve-eligible once
+## enough real time has passed with no NEW coordination -- proving
+## should_dissolve is no longer structurally unable to fire once formed.
+func test_should_dissolve_becomes_true_after_the_window_passes_with_no_new_contracts():
+	for i in InstitutionFormation.FORMATION_THRESHOLD + 5:  # well above formation, on purpose
+		_fulfill_a_contract("household:1", "household:2")
+	var still_recent := 1.0 + InstitutionFormation.RECENT_WINDOW_SECONDS
+	assert_false(InstitutionFormation.should_dissolve(contracts, "household:1", "household:2", still_recent))
+
+	var gone_quiet := 1.0 + InstitutionFormation.RECENT_WINDOW_SECONDS + 1.0
+	assert_true(InstitutionFormation.should_dissolve(contracts, "household:1", "household:2", gone_quiet))
+
+
+## should_form still reads the all-time count -- a strong track record is
+## exactly why an institution SHOULD form, unaffected by this change.
+func test_should_form_still_uses_the_all_time_count_not_the_recent_window():
+	for i in InstitutionFormation.FORMATION_THRESHOLD:
+		_fulfill_a_contract("household:1", "household:2")
+	assert_true(InstitutionFormation.should_form(contracts, "household:1", "household:2"))

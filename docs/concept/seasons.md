@@ -16,9 +16,12 @@ flat constant.
    vigorously plants grow) smoothly rather than switching things fully on/off, so
    transitions read as a gradual warming/cooling, not a hard flip. Real ecosystems
    respond to a continuous photoperiod/temperature curve, not a step change.
-3. **One clock, many readers.** Fruiting, vegetation growth, weather, and survival
-   exposure all read the one season value, the same way loaded and unloaded chunks
-   share one population model — "two fidelities, one truth" applied to time.
+3. **One clock, many readers.** Fruiting, vegetation growth, weather, survival
+   exposure, and the player's own hunger and thirst
+   (`SurvivalMeters.SECONDS_TO_STARVE`/`SECONDS_TO_DEHYDRATE`, derived from
+   `SECONDS_PER_DAY`) all read the one season value, the same way loaded and
+   unloaded chunks share one population model — "two fidelities, one truth"
+   applied to time.
 
 ## The season cycle
 
@@ -68,6 +71,71 @@ established — see [persistence.md](persistence.md)) before its first chunk
 load, so a resumed session picks up exactly where it stopped rather than
 time-travelling on every launch.
 
+## The ground carries the season too
+
+The canopies turned and nothing underneath them did. Forcing `/season winter`
+gave bare trees standing on a bright, high-summer lawn, in tall grass that
+was still lush, over crop tops that were still green — because the season was
+something that happened to `IllustratedTree`'s four canopy frames and to
+nothing else. `ProceduralTerrainSprite.BASE_COLORS` is a flat, year-round
+table; `IllustratedGrassPatch`'s blade shader had no colour term at all.
+
+`src/rendering/seasonal_foliage.gd` is the ground-cover analogue of
+`IllustratedTree`'s canopy-frame table: **what a season multiplies living
+green by**, blended across a turn by the very same
+`SeasonTransition.state_at` the canopies turn on, so the lawn and the crown
+above it can never disagree about what month it is.
+
+**Why a tint and not four sets of art.** The ground cover is painted into a
+disk-cached atlas (`TerrainAtlasCache`) keyed by ONE version string
+(`TerrainRenderer.ATLAS_VERSION`), with no per-tile invalidation — it is
+all-or-nothing for the whole image, measured at ~5MB on a real machine, and
+`build_tile_set` hands the live `TileMapLayer` the `TileSet` built from it.
+Baking the season into those pixels would mean folding the season into
+`ATLAS_VERSION`: four separate atlases, a full `_build_atlas_pixels()` run
+the first time each season is reached, and a whole `TileSet` rebuild landing
+mid-session at the exact moment the season turned — precisely the boot cost
+the cache exists to avoid, relocated to the worst possible instant. A
+`uniform vec3 season_tint` on the `ShaderMaterial` the terrain layer already
+wears costs one parameter write and invalidates nothing.
+
+There are TWO caches between the painted pixels and the screen, and the season
+has to stay out of both. The disk atlas is keyed by `ATLAS_VERSION`, pinned by
+`test_the_season_never_enters_the_atlas_cache_key_so_a_cached_atlas_cannot_go_stale`
+(`test_ground_tint.gd`). The built `TileSet` is then memoized for the whole
+process by `TerrainRenderer._tile_set_cache_key`, which is a *separate* key —
+a season folded into it would rebuild all 10,240 atlas cells mid-session
+without ever touching `ATLAS_VERSION`, so the first guard cannot see it.
+`test_a_season_turn_changes_the_material_and_not_one_pixel_of_the_atlas`
+(`test_terrain_renderer.gd`) covers that second key, asserting behaviourally
+that a turn to winter lands on the *material* while the memoized `TileSet` and
+the baked grassland tile's pixels come back identical. Verified by mutation:
+adding the live season to `_tile_set_cache_key` makes it fail immediately.
+
+**Why it reads season NAMES and not `warmth_modifier`.** `warmth_modifier` is
+a cosine: mid-spring and mid-autumn sit at exactly the same warmth. Warmth
+alone cannot tell a greening year from a dying one, and those two must not
+share a colour — so the tint is looked up by the season `SeasonTransition`
+reports, not derived from the warmth curve.
+
+**Why the numbers are colours, not gains.** Each season names what a
+GRASSLAND TILE should look like then — new growth in spring, the shipped
+`BASE_COLORS["grassland"]` itself in summer, a senescing olive-gold in
+autumn, dead drab thatch in winter — and the multiplier is that target
+divided by summer's, channel by channel. Summer therefore comes out as the
+exact identity and high summer stays pixel-for-pixel the picture that already
+shipped; every other season is "what it takes to turn the shipped grass into
+that season's grass" rather than a tuned gain (CLAUDE.md).
+
+**Why greenness gates it.** One material covers the WHOLE terrain layer,
+water and sand included, so an unweighted multiply would turn the ocean and
+the desert brown in autumn. `SeasonalFoliage.greenness_of` scores a pixel by
+how far its green channel sits above its own red and blue; measured against
+the real palette, every green biome scores ≥0.85 and every non-green one
+scores exactly 0. The GLSL in `GroundTint` and `IllustratedGrassPatch` is
+that same expression with `GREENNESS_GAIN` interpolated in, so the tested
+GDScript and the running GLSL cannot drift apart.
+
 ## Status / mechanisms
 
 - ✅ Season cycle model (season + warmth/growth modifiers) — `src/world/season_cycle.gd`, tested.
@@ -82,17 +150,49 @@ time-travelling on every launch.
   `WorldClockPersistence`, tested; wired at `World._wipe_persisted_world`
   (New Game) and `_spawn_local_singleplayer_from_save` (Load Game). See "A
   new world starts at a random point in the year" above.
+- ✅ Seasonal tint on living green — the terrain ground cover and the
+  illustrated tall grass — `src/rendering/seasonal_foliage.gd`, applied via
+  `GroundTint.set_season_tint` / `IllustratedGrassPatch.set_season_tint`,
+  tested. Appearance only: no growth RATE changed with it via this path (see
+  below for the real rate scaling), and no terrain art is per-season. See
+  "The ground carries the season too". The SENDING half now exists too,
+  which is what makes it visible while playing:
+  `EarthChunkManager.set_season_tint` fans the live value onto every green
+  thing the manager owns (the same shape as its
+  `set_wind_strength`/`set_sun_position` setters), and
+  `World._client_process` pushes
+  `SeasonalFoliage.tint_for_world_age(world_age_seconds())` into both the
+  ground material and that fan-out once a frame, beside the existing
+  `set_sun_position` call — so the lawn and the canopy read the same world
+  clock and cannot disagree about the month. The wiring, not the tint, is
+  pinned by `tests/unit/test_world_season_fanout.gd`; it was recorded as 🚧
+  for as long as the setters had no caller, because green unit tests on a
+  setter nothing invokes are the same class of bug as `step_wild_crops`
+  below.
 - ✅ Seasonal scaling of vegetation growth rate (2026-08-26) —
   `growth_modifier` had zero live callers until now. `EarthChunkManager`
   computes it once per step from `_world_age_seconds` and threads it through
-  as an extra `advance(delta, growth_modifier)` argument to every per-chunk
-  patch sim's growth increment: `TallGrass`, `WildCropPatch` (keeping its own
-  pinned ratio to `TallGrass.GROWTH_RATE` intact — both scale by the same
-  modifier), `FlowerPatch` (only its seedling `_growth` step, not the
-  unrelated nectar/seed regen in the same `advance()` call), `DesertScrub`,
-  `TundraLichen`. Spread timing (`SPREAD_INTERVAL`) is untouched by design —
-  only the growth increment scales, so a slow winter still colonises new
-  cells on the same clock, it just fills in more slowly once there.
+  as a required extra `advance(delta, growth_modifier)` argument to every
+  per-chunk patch sim's growth increment: `TallGrass`, `WildCropPatch`
+  (keeping its own pinned ratio to `TallGrass.GROWTH_RATE` intact — both
+  scale by the same modifier), `FlowerPatch` (only its seedling `_growth`
+  step, not the unrelated nectar/seed regen in the same `advance()` call),
+  `DesertScrub`, `TundraLichen`. Spread timing (`SPREAD_INTERVAL`) is
+  untouched by design, consistently across all five sims — only the growth
+  increment scales, so a slow winter still colonises new cells on the same
+  clock, it just fills in more slowly once there. `WildCropMarker.
+  season_tint` separately puts the same foliage tint on a crop's leaves
+  (never on the pulled root, since a mature crop stays pullable in winter on
+  purpose) — see [wild_crops.md](wild_crops.md)'s "The season".
+  `EarthChunkManager.step_wild_crops` computes the modifier once per batched
+  tick and passes it into `advance`, and hands its stored `_season_tint` to
+  both `sync_markers` and `spawn_markers` so a chunk streamed in during
+  winter arrives dead-topped rather than popping in summer-green.
+  `step_wild_crops` itself is called from `World._step_ecology_batch` now
+  (bug fixed 2026-08-26/27, independently found and fixed on both this
+  branch and main — see [wild_crops.md](wild_crops.md)'s Status), which is
+  what makes any of this observable in a real session. Pinned by the
+  season-comparison tests in each patch sim's own test file.
 - ⬜ Seasonal crop viability for farming (see [farming.md](farming.md)) —
   distinct from the wild carrot/potato patches above: this is
   `src/gameplay/farm_plot.gd`'s player-planted crops, still unwired to season.

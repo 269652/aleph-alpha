@@ -133,3 +133,37 @@ func test_opposite_longitudes_at_the_same_utc_moment_can_differ_in_azimuth():
 	var here := solar.azimuth_degrees(30.0, 0.0, 80, 12.0)
 	var opposite_side_of_the_planet := solar.azimuth_degrees(30.0, 180.0, 80, 12.0)
 	assert_ne(here, opposite_side_of_the_planet)
+
+
+# -- pinning the clock (see World's /time console command) ---------------------
+
+## The exact inverse of local_hour: given the hour someone wants to read on
+## the clock HERE, which UTC hour produces it. /time <hh:mm> pins the local
+## clock, and the sun has to move with it -- so the conversion belongs beside
+## the formula it inverts rather than being re-derived by the caller.
+func test_utc_hour_for_local_is_the_inverse_of_local_hour():
+	for longitude in [0.0, 13.405, -74.0, 139.7, 180.0]:
+		for local in [0.0, 6.25, 12.0, 22.5]:
+			var utc: float = solar.utc_hour_for_local(local, longitude)
+			assert_almost_eq(solar.local_hour(utc, longitude), local, 0.0001)
+
+
+func test_a_utc_hour_for_local_is_a_real_clock_face():
+	for longitude in [0.0, 13.405, -74.0, 139.7]:
+		var utc: float = solar.utc_hour_for_local(0.5, longitude)
+		assert_gte(utc, 0.0)
+		assert_lt(utc, 24.0)
+
+
+## The point of the round trip: pinning local midnight really does put the sun
+## below the horizon, so /time 00:00 shows night rather than only relabelling
+## the readout. Berlin (52.52 N, 13.405 E) on the June solstice -- the
+## shortest night of its year, so if it is dark THERE it is dark anywhere.
+func test_a_pinned_local_midnight_puts_the_sun_below_the_horizon():
+	var utc: float = solar.utc_hour_for_local(0.0, 13.405)
+	assert_lt(solar.elevation_degrees(52.52, 13.405, 172, utc), 0.0)
+
+
+func test_a_pinned_local_noon_puts_the_sun_high():
+	var utc: float = solar.utc_hour_for_local(12.0, 13.405)
+	assert_gt(solar.elevation_degrees(52.52, 13.405, 172, utc), 45.0)

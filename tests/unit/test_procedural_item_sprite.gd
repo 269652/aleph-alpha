@@ -336,3 +336,28 @@ func test_a_carrot_reads_orange():
 ## sitting next to plant fibre in the inventory.
 func test_the_lasso_does_not_read_as_the_fibre_it_is_braided_from():
 	assert_ne(ProceduralItemSprite.color_for("lasso"), ProceduralItemSprite.color_for("plant_fibre"))
+
+
+# -- wayfinding & citizenship instruments (see docs/concept/wayfinding.md, --
+# -- docs/concept/player_citizenship.md) -------------------------------------
+
+const WAYFINDING_AND_CITIZENSHIP_ITEM_IDS := [
+	"rough_compass", "compass", "map", "spyglass", "weather_glass",
+	"star_chart", "deed", "ledger", "field_journal", "charter",
+]
+
+
+func test_wayfinding_and_citizenship_items_have_distinct_non_fallback_art():
+	var fallback: PackedByteArray = generator.generate_image("definitely_unknown_instrument").get_data()
+	for item_id in WAYFINDING_AND_CITIZENSHIP_ITEM_IDS:
+		assert_ne(generator.generate_image(item_id).get_data(), fallback, "%s needs its own art" % item_id)
+
+
+## Each of the 9 gets its own color -- not just its own shape -- so none of
+## them silently reuse another one's exact look.
+func test_wayfinding_and_citizenship_items_each_have_a_distinct_color():
+	var seen := {}
+	for item_id in WAYFINDING_AND_CITIZENSHIP_ITEM_IDS:
+		var color := ProceduralItemSprite.color_for(item_id)
+		assert_false(seen.has(color), "%s reuses another item's exact color: %s" % [item_id, color])
+		seen[color] = item_id

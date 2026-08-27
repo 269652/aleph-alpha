@@ -31,3 +31,35 @@ var roof_modifications: Dictionary = {}
 ## deterministic and regenerable, like terrain, so only these need
 ## persisting across an unload/reload.
 var planted_trees: Array = []
+
+## Real statics (see BuildingStatics / docs/concept/timber_construction.md
+## #real-statics-a-support-graph-over-the-piece-grid): how many continuous
+## real seconds each currently-unsupported piece cell (keyed like
+## `modifications`) has accumulated toward BuildingStatics.GRACE_SECONDS
+## before it topples/collapses, and the world-age each was last checked (so
+## the next check can compute a real elapsed delta rather than assuming a
+## fixed per-event tick). Only ever holds entries for cells CURRENTLY
+## unsupported -- a piece that regains its support path is dropped from
+## both, forgetting whatever instability it had built up. Not persisted
+## across an unload/reload -- an accepted gap, the same class of limitation
+## the Lumberjack's own in-progress shaping state already has (see that
+## doc's "Offscreen catch-up" status note).
+var structural_instability: Dictionary = {}
+var structural_checked_at: Dictionary = {}
+
+## Withering (see BuildingDecay / docs/concept/timber_construction.md
+## #withering-decay-as-a-bounded-closed-form-catch-up): each placed piece's
+## own `condition` (1.0 = new, decaying toward 0.0), keyed like
+## `modifications`, and the world-age each was last advanced -- the same
+## "value + last-checked-at" pairing structural_instability/
+## structural_checked_at already use above, for the same reason (the next
+## catch-up pass needs a real elapsed delta, not a fixed per-event tick).
+## Sparse like those two: a cell absent here simply hasn't decayed from 1.0
+## yet, not "unknown." Not persisted across an unload/reload -- an accepted
+## gap, the exact same class of limitation structural_instability's own doc
+## comment above already names (EarthChunkManager keeps an IN-SESSION
+## unloaded-condition record instead, the same way it does for aggregate
+## ecology, so a chunk unloaded and reloaded within one session still
+## catches up correctly; only a real app restart loses it).
+var piece_condition: Dictionary = {}
+var piece_condition_checked_at: Dictionary = {}

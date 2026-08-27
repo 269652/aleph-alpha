@@ -30,6 +30,9 @@ const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
 const EntityRef = preload("res://src/emergence/entity_ref.gd")
 const MemoryRecord = preload("res://src/emergence/memory_record.gd")
 const InstitutionFormation = preload("res://src/emergence/institution_formation.gd")
+const Event = preload("res://src/emergence/event.gd")
+const WorldBossFitness = preload("res://src/gameplay/world_boss_fitness.gd")
+const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
@@ -38,6 +41,9 @@ const AntColony = preload("res://src/world/ant_colony.gd")
 const FlyColony = preload("res://src/gameplay/fly_colony.gd")
 const FruitingModel = preload("res://src/world/fruiting_model.gd")
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
+const Strata = preload("res://src/world/strata.gd")
+const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
+const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -250,6 +256,57 @@ func test_hillshade_overlay_paints_a_real_tile_for_every_loaded_cell():
 	hillshade_layer.free()
 
 
+## RULE-9 pin for the hillshade painter's halved elevation sampling: EVERY
+## painted cell must still be exactly the atlas coordinate the old
+## slope_at_global + aspect_at_global pair produced. The painter now takes
+## ONE gradient per tile and derives both readings from it (see
+## TerrainRelief.gradient_at) -- four elevation samples per tile instead of
+## eight, on what is the largest per-chunk cost in the running game.
+##
+## Counts mismatches and asserts once rather than asserting 25,600 times:
+## the coverage is every loaded cell either way, but GUT's per-assert
+## bookkeeping across a full load radius is itself minutes of runtime.
+func test_hillshade_tiles_are_exactly_the_slope_and_aspect_atlas_coords():
+	var hillshade_layer := TileMapLayer.new()
+	manager.set_hillshade_layer(hillshade_layer)
+	manager.update(_berlin_tile)
+
+	var renderer := TerrainRenderer.new()
+	var mismatches := 0
+	var first_mismatch := ""
+	for cell in hillshade_layer.get_used_cells():
+		var expected := renderer.atlas_coords_for_hillshade(
+			manager.slope_at_global(cell.x, cell.y), manager.aspect_at_global(cell.x, cell.y)
+		)
+		if hillshade_layer.get_cell_atlas_coords(cell) != expected:
+			mismatches += 1
+			if first_mismatch == "":
+				first_mismatch = "%s painted %s, expected %s" % [
+					cell, hillshade_layer.get_cell_atlas_coords(cell), expected
+				]
+	assert_eq(mismatches, 0, "hillshade tiles must be unchanged; first: %s" % first_mismatch)
+	assert_gt(hillshade_layer.get_used_cells().size(), 0, "and there must be cells to check")
+	hillshade_layer.free()
+
+
+## The manager-level delegate the painter uses, mirroring slope_at_global /
+## aspect_at_global's own always-delegates-to-the-generator shape. Must agree
+## exactly with both, since it is the single source they are now derived from.
+func test_gradient_at_global_matches_the_generator_and_derives_slope_and_aspect():
+	var relief := manager.generator.terrain_relief()
+	for tile in [_berlin_tile, _berlin_tile + Vector2i(37, -21), Vector2i(12345, 6789)]:
+		var gradient := manager.gradient_at_global(tile.x, tile.y)
+		assert_eq(gradient, manager.generator.gradient_at_global(tile.x, tile.y))
+		assert_eq(
+			relief.slope_degrees_from_gradient(gradient.x, gradient.y),
+			manager.slope_at_global(tile.x, tile.y)
+		)
+		assert_eq(
+			relief.aspect_degrees_from_gradient(gradient.x, gradient.y),
+			manager.aspect_at_global(tile.x, tile.y)
+		)
+
+
 ## set_wind_strength must also drive SWAY -- trees, blooms/scrub/lichen tufts
 ## (WindSway), and illustrated grass's own ambient wind term -- not just the
 ## water shimmer, reusing the SAME live WeatherModel.wind_strength_for value
@@ -272,12 +329,18 @@ func test_record_water_disturbance_updates_the_installed_water_materials_uniform
 	manager.set_water_layer(water_layer)
 	manager.update(_berlin_tile)
 
-	manager.record_water_disturbance(Vector2(12.0, 34.0))
+	# Disturbances beyond DISTURBANCE_RADIUS_TILES of the update() center are
+	# silently culled (see record_water_disturbance) -- anchor near Berlin's
+	# own pixel position, not an arbitrary offset from the world origin, or
+	# this disturbance never reaches the shader at all.
+	var berlin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var disturbance_pos := berlin_pixel + Vector2(12.0, 34.0)
+	manager.record_water_disturbance(disturbance_pos)
 
 	var material := water_layer.material as ShaderMaterial
 	assert_eq(material.get_shader_parameter("disturbance_count"), 1)
 	var positions: PackedVector2Array = material.get_shader_parameter("disturbance_pos")
-	assert_eq(positions[0], Vector2(12.0, 34.0))
+	assert_eq(positions[0], disturbance_pos)
 	water_layer.free()
 
 
@@ -289,7 +352,10 @@ func test_step_water_disturbances_ages_the_installed_water_materials_ripple():
 	manager.set_water_layer(water_layer)
 	manager.update(_berlin_tile)
 
-	manager.record_water_disturbance(Vector2(1.0, 1.0))
+	# Same DISTURBANCE_RADIUS_TILES culling as the test above -- anchor near
+	# Berlin's own pixel position.
+	var berlin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	manager.record_water_disturbance(berlin_pixel + Vector2(1.0, 1.0))
 	manager.step_water_disturbances(0.5)
 
 	var material := water_layer.material as ShaderMaterial
@@ -768,6 +834,163 @@ func test_moving_far_away_evicts_the_original_chunk():
 	assert_false(manager.is_chunk_loaded(Vector2i(0, 0)))
 
 
+# -- steady-state streaming budget (see docs/concept/persistence.md's
+# "Loading screens" section). update() has always loaded every pending chunk
+# in one uninterrupted synchronous call. That is fine for the COLD load,
+# which has update_with_progress and a loading screen -- but World calls
+# update() every frame during play, and stepping across one chunk boundary
+# makes a whole LOAD_RADIUS column pending at once, all of it generated,
+# painted and populated inside that single frame. -------------------------
+
+## The guard for the ~210 existing update() call sites: the default is
+## unbudgeted, exactly as update() has always behaved.
+func test_update_loads_every_pending_chunk_when_no_budget_is_set():
+	var center_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	var expected := manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS).size()
+	manager.update(Vector2i(0, 0))
+	assert_eq(manager.loaded_chunk_count(), expected)
+	assert_eq(manager.max_chunk_loads_per_update, 0, "unbudgeted must stay the default")
+
+
+func test_update_loads_at_most_the_configured_budget_in_one_call():
+	manager.max_chunk_loads_per_update = 1
+	manager.update(Vector2i(0, 0))
+	assert_eq(manager.loaded_chunk_count(), 1)
+
+
+## With a budget it matters WHICH chunk gets loaded: chunks_in_radius is
+## row-major, so an unordered budgeted loader would start at the far
+## top-left corner rather than the ground under the player's feet.
+func test_a_budgeted_update_loads_the_nearest_pending_chunk_first():
+	manager.max_chunk_loads_per_update = 1
+	manager.update(_berlin_tile)
+	assert_true(
+		manager.is_chunk_loaded(_chunk_coord_for_tile(_berlin_tile)),
+		"the chunk the player is standing in must be loaded before any other"
+	)
+
+
+func test_repeated_budgeted_updates_eventually_load_the_whole_radius():
+	var center_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	var expected := manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS)
+	manager.max_chunk_loads_per_update = 1
+	for i in expected.size():
+		manager.update(Vector2i(0, 0))
+	for chunk_coord in expected:
+		assert_true(manager.is_chunk_loaded(chunk_coord))
+
+
+## RULE-9 for the streaming change: budgeting alters WHEN chunks load and in
+## what order, and must not alter WHICH ones end up loaded. Compares a
+## budgeted manager driven to completion against an unbudgeted one -- the
+## same comparison the game itself relies on, since both end in the same
+## steady state.
+func test_a_budgeted_manager_ends_with_exactly_the_same_chunks_as_an_unbudgeted_one():
+	manager.update(_berlin_tile)
+	var unbudgeted := manager.chunks_in_radius(
+		_chunk_coord_for_tile(_berlin_tile), EarthChunkManager.LOAD_RADIUS
+	)
+
+	var other_layer := TileMapLayer.new()
+	var other_entities := Node2D.new()
+	var other_creatures := Node2D.new()
+	var budgeted := EarthChunkManager.new(other_layer, other_entities, other_creatures)
+	budgeted.max_chunk_loads_per_update = 1
+	for i in unbudgeted.size():
+		budgeted.update(_berlin_tile)
+
+	assert_eq(budgeted.loaded_chunk_count(), manager.loaded_chunk_count())
+	for chunk_coord in unbudgeted:
+		assert_true(
+			budgeted.is_chunk_loaded(chunk_coord),
+			"%s must be loaded by the budgeted manager too" % chunk_coord
+		)
+	other_layer.free()
+	other_entities.free()
+	other_creatures.free()
+
+
+## Eviction is not part of the budget: a budgeted update still drops chunks
+## the player has left behind, or a slow loader would grow the live set.
+func test_a_budgeted_update_still_evicts_beyond_unload_radius():
+	manager.update(Vector2i(0, 0))
+	assert_true(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+	manager.max_chunk_loads_per_update = 1
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	assert_false(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+
+## The budget VALUE is a derived, tested number rather than an eyeballed
+## one. At the player's real base pace -- Player.BASE_SPEED 80 world units a
+## second over TerrainRenderer.TILE_SIZE 16, i.e. 5 tiles a second -- one
+## chunk per frame is ample: the newly pending ring is LOAD_RADIUS *
+## CHUNK_SIZE = 64 tiles ahead, so even halving that for safety leaves 6.4
+## seconds of walking, ~192 frames at 30 fps, to load a worst-case 9 chunks.
+func test_chunks_per_update_at_the_players_real_walking_pace_is_one():
+	assert_eq(EarthChunkManager.chunks_per_update_for(5.0, 30.0), 1)
+
+
+## ...and it scales rather than pretending: a player crossing the whole lead
+## in a handful of frames needs the whole pending set in one call, which is
+## exactly the unbudgeted behaviour.
+func test_chunks_per_update_for_an_impossibly_fast_player_is_the_whole_pending_set():
+	var worst_case := 2 * (2 * EarthChunkManager.LOAD_RADIUS + 1) - 1
+	assert_eq(EarthChunkManager.chunks_per_update_for(10000.0, 30.0), worst_case)
+	assert_gt(EarthChunkManager.chunks_per_update_for(200.0, 30.0), 1)
+
+
+# -- update_with_progress: chunked, frame-yielding update() variant used by
+# the initial New Game/Load Game/Join loading-screen flow (see
+# World._show_loading_overlay, LoadingOverlay, docs/concept/persistence.md's
+# "Loading screens" section) so it can show REAL per-chunk progress instead
+# of an indeterminate spinner frozen for the whole synchronous update()
+# duration. pending_load_chunks is the plain, cheap (no generation) piece
+# that makes the total knowable up front. --------------------------------
+
+func test_pending_load_chunks_lists_every_chunk_update_would_load():
+	var center_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	var expected := manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS)
+	assert_eq(manager.pending_load_chunks(Vector2i(0, 0)).size(), expected.size())
+
+
+func test_pending_load_chunks_is_empty_once_update_already_loaded_them():
+	manager.update(Vector2i(0, 0))
+	assert_eq(manager.pending_load_chunks(Vector2i(0, 0)).size(), 0)
+
+
+func test_update_with_progress_loads_the_same_chunks_update_would():
+	var center_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	var expected := manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS)
+	await manager.update_with_progress(Vector2i(0, 0))
+	for chunk_coord in expected:
+		assert_true(manager.is_chunk_loaded(chunk_coord))
+
+
+func test_update_with_progress_reports_real_progress_from_zero_to_the_true_total():
+	var total := manager.pending_load_chunks(Vector2i(0, 0)).size()
+	assert_gt(total, 0, "nothing loaded yet -- there should be chunks pending")
+	var calls := []
+	var record_progress := func(loaded: int, of_total: int) -> void:
+		calls.append([loaded, of_total])
+	await manager.update_with_progress(Vector2i(0, 0), record_progress)
+	assert_eq(calls[0], [0, total], "first call reports zero of the real total")
+	assert_eq(calls[calls.size() - 1], [total, total], "last call reports completion")
+	assert_eq(calls.size(), total + 1, "one call per chunk loaded, plus the initial zero")
+
+
+func test_update_with_progress_still_evicts_chunks_beyond_unload_radius():
+	await manager.update_with_progress(Vector2i(0, 0))
+	assert_true(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	await manager.update_with_progress(far_away_tile)
+
+	assert_false(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+
 func test_elevation_at_global_matches_the_generator_for_a_loaded_tile():
 	manager.update(Vector2i(5, 5))
 	var expected := manager.generator.elevation_at_global(5, 5)
@@ -866,6 +1089,24 @@ func test_record_death_at_lowers_the_regions_herbivore_population():
 	assert_almost_eq(manager.herbivore_population_at_chunk(center_chunk), before - 0.4, 0.001)
 
 
+## docs/concept/disease.md's herd (foot-and-mouth-like) archetype: real
+## population vs. real carrying capacity is CreatureMarker's own density
+## signal for herd disease transmission pressure (see
+## DiseaseModel.herd_transmission_chance) -- mirrors herbivore_population_
+## at_chunk/near's exact existing pair-of-accessors pattern.
+func test_herbivore_capacity_near_matches_herbivore_capacity_at_chunk():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		(center_chunk.x * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE,
+		(center_chunk.y * EarthChunkManager.CHUNK_SIZE + 5) * TerrainRenderer.TILE_SIZE
+	)
+	assert_gt(manager.herbivore_capacity_at_chunk(center_chunk), 0.0)
+	assert_almost_eq(
+		manager.herbivore_capacity_near(pixel), manager.herbivore_capacity_at_chunk(center_chunk), 0.001
+	)
+
+
 func test_update_spawns_creature_markers_for_loaded_regions_around_berlin():
 	manager.update(_berlin_tile)
 	assert_gt(creatures_parent.get_child_count(), 0)
@@ -946,6 +1187,42 @@ func test_a_configured_spawns_own_chunk_is_easy_difficulty():
 	manager.set_spawn_tile(_berlin_tile)
 	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
 	assert_eq(manager._difficulty_tier_at(center_chunk), RegionDifficulty.Tier.EASY)
+
+
+# -- explored-tiles wiring (see docs/concept/wayfinding.md's Map item) ------
+# Pure delegation to ExploredTiles -- no chunk loading involved, so these
+# stay cheap: construct a manager the same way every other fast test in
+# this file already does and call the three coordinator methods directly.
+
+func test_marking_a_chunk_explored_returns_true_the_first_time():
+	assert_true(manager.mark_chunk_explored(Vector2i(2, 3)))
+
+
+func test_marking_an_already_explored_chunk_again_returns_false():
+	manager.mark_chunk_explored(Vector2i(2, 3))
+	assert_false(manager.mark_chunk_explored(Vector2i(2, 3)))
+
+
+func test_is_chunk_explored_is_false_before_marking_and_true_after():
+	assert_false(manager.is_chunk_explored(Vector2i(4, 5)))
+	manager.mark_chunk_explored(Vector2i(4, 5))
+	assert_true(manager.is_chunk_explored(Vector2i(4, 5)))
+
+
+func test_explored_chunks_lists_every_distinct_marked_chunk():
+	manager.mark_chunk_explored(Vector2i(1, 1))
+	manager.mark_chunk_explored(Vector2i(2, 2))
+	assert_eq(manager.explored_chunks().size(), 2)
+	assert_true(manager.explored_chunks().has(Vector2i(1, 1)))
+	assert_true(manager.explored_chunks().has(Vector2i(2, 2)))
+
+
+# -- spawn chunk coord getter (Compass's "point me home" default target) ----
+
+func test_spawn_chunk_coord_reflects_the_configured_spawn_tile():
+	manager.set_spawn_tile(_berlin_tile)
+	var expected_chunk := _chunk_coord_for_tile(_berlin_tile)
+	assert_eq(manager.spawn_chunk_coord(), expected_chunk)
 
 
 func test_promoted_creatures_near_berlin_only_use_species_from_their_chunks_biome_pool():
@@ -1218,13 +1495,23 @@ func test_build_at_global_fails_when_the_chunk_is_not_loaded():
 	assert_false(success)
 
 
+## Asserts the cell actually changed rather than pinning an exact atlas
+## coordinate: a real Berlin tile almost always has at least one real,
+## unmodified land-biome cardinal neighbor, so the earth cell now blends
+## toward it (see TerrainRenderer.earth_dominant_blend_for/paint()'s
+## modifications branch) instead of always landing on the flat
+## atlas_coords_for_modification("earth") tile -- which TerrainRenderer's
+## own test suite (test_terrain_renderer.gd) already covers in detail. This
+## test's own job is just proving build_at_global -> paint() wiring fires.
 func test_build_at_global_repaints_the_tile_map_cell():
 	manager.update(_berlin_tile)
+	var before_coords := tile_map_layer.get_cell_atlas_coords(_berlin_tile)
+
 	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "earth")
-	var terrain_renderer := TerrainRenderer.new()
-	assert_eq(
-		tile_map_layer.get_cell_atlas_coords(_berlin_tile),
-		terrain_renderer.atlas_coords_for_modification("earth")
+
+	assert_ne(
+		tile_map_layer.get_cell_atlas_coords(_berlin_tile), before_coords,
+		"building earth should repaint the cell away from its original biome tile"
 	)
 
 
@@ -1300,6 +1587,149 @@ func test_has_structure_near_detects_a_structure_across_a_chunk_boundary():
 	manager.build_at_global(boundary_x + 1, 0, "campfire")  # first column of chunk (1, 0)
 
 	assert_true(manager.has_structure_near(boundary_x, 0, "campfire", 3))
+
+
+# -- nearest_structure_position (see docs/concept/timber_construction.md's --
+# -- "Storage, logistics, and the autonomous dependency chain" section: a ----
+# -- Logistics worker needs WHERE the nearest structure is, not just whether -
+# -- one exists) -------------------------------------------------------------
+
+func test_nearest_structure_position_finds_a_structure_within_range():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found = manager.nearest_structure_position(origin_pixel, "storage", 200.0)
+
+	assert_not_null(found)
+
+
+func test_nearest_structure_position_returns_null_when_out_of_range():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 50, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	assert_null(manager.nearest_structure_position(origin_pixel, "storage", 20.0))
+
+
+func test_nearest_structure_position_returns_null_when_nothing_built():
+	manager.update(_berlin_tile)
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	assert_null(manager.nearest_structure_position(origin_pixel, "storage", 2000.0))
+
+
+func test_nearest_structure_position_ignores_a_different_structure_id():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "furnace")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	assert_null(manager.nearest_structure_position(origin_pixel, "storage", 200.0))
+
+
+func test_nearest_structure_position_picks_the_closer_of_two_candidates():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 10, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var expected_near := Vector2(_berlin_tile.x + 1, _berlin_tile.y) * TerrainRenderer.TILE_SIZE + Vector2.ONE * (
+		TerrainRenderer.TILE_SIZE * 0.5
+	)
+	var found: Vector2 = manager.nearest_structure_position(origin_pixel, "storage", 2000.0)
+	assert_almost_eq(found.x, expected_near.x, 0.5)
+	assert_almost_eq(found.y, expected_near.y, 0.5)
+
+
+# -- nearby_structure_positions (see docs/concept/timber_construction.md's --
+# -- own named honest constraint this closes: "a Sägewerk pairs with only --
+# -- its single nearest Storage, not every Storage within range" -- the -----
+# -- ALL-matches counterpart to nearest_structure_position's single-closest -
+# -- answer, reusing the exact same chunk-scan loop) -------------------------
+
+func test_nearby_structure_positions_finds_a_structure_within_range():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 200.0)
+
+	assert_eq(found.size(), 1)
+
+
+func test_nearby_structure_positions_returns_every_match_within_range_not_just_the_nearest():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 10, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "storage")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 2000.0)
+
+	assert_eq(found.size(), 2, "both real Storage tiles are within range -- not just the closer one")
+
+
+func test_nearby_structure_positions_excludes_matches_beyond_max_distance():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x + 50, _berlin_tile.y, "storage")
+
+	# origin_pixel is the query tile's top-left corner, and distance is
+	# measured to the FAR structure's own tile CENTER (same convention
+	# nearest_structure_position already uses) -- at TILE_SIZE=16 that is
+	# 1*16 + 8 = 24px for the +1-tile storage, so max_distance must clear
+	# 24 to count it as in-range while still excluding the +50-tile one.
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 30.0)
+
+	assert_eq(found.size(), 1, "only the in-range Storage should be returned")
+
+
+func test_nearby_structure_positions_returns_empty_array_when_nothing_built():
+	manager.update(_berlin_tile)
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 2000.0)
+
+	assert_eq(found.size(), 0)
+
+
+func test_nearby_structure_positions_ignores_a_different_structure_id():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 1, _berlin_tile.y, "furnace")
+
+	var origin_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var found: Array = manager.nearby_structure_positions(origin_pixel, "storage", 200.0)
+
+	assert_eq(found.size(), 0)
+
+
+# -- structure stock (Storage's real inventory, and any future producer's ----
+# -- accumulated-output queue -- see StructureStock/StructureStockStore's ----
+# -- own doc comments) --------------------------------------------------------
+
+func test_structure_stock_starts_empty():
+	assert_eq(manager.structure_stock_at(10, 20, "plank"), 0)
+
+
+func test_deposit_to_structure_at_increases_its_stock():
+	manager.deposit_to_structure_at(10, 20, "plank", 5)
+	assert_eq(manager.structure_stock_at(10, 20, "plank"), 5)
+
+
+func test_deposit_to_structure_at_keys_by_position_not_shared_globally():
+	manager.deposit_to_structure_at(10, 20, "plank", 5)
+	assert_eq(manager.structure_stock_at(30, 40, "plank"), 0)
+
+
+func test_withdraw_from_structure_at_succeeds_and_deducts_when_enough_present():
+	manager.deposit_to_structure_at(10, 20, "plank", 5)
+	assert_true(manager.withdraw_from_structure_at(10, 20, "plank", 3))
+	assert_eq(manager.structure_stock_at(10, 20, "plank"), 2)
+
+
+func test_withdraw_from_structure_at_fails_when_short():
+	manager.deposit_to_structure_at(10, 20, "plank", 2)
+	assert_false(manager.withdraw_from_structure_at(10, 20, "plank", 3))
+	assert_eq(manager.structure_stock_at(10, 20, "plank"), 2)
 
 
 # -- persistence across unload/reload ------------------------------------------
@@ -1468,6 +1898,378 @@ func test_reloading_a_chunk_restores_collision_for_a_persisted_wall():
 		DirAccess.remove_absolute(path)
 
 
+# -- real statics: a support graph over the piece grid (see
+# docs/concept/timber_construction.md#real-statics-a-support-graph-over-the-
+# piece-grid, src/gameplay/building_statics.gd) -- event-driven, not
+# per-tick: build_at_global/destroy_at_global/stamp_structure_at_global each
+# trigger a recompute scoped to just the touched structure's own connected
+# piece grid.
+#
+# A single wall with all four neighbors occupied by non-load-bearing floor
+# pieces never touches bare terrain, so its only possible support is a
+# load-bearing chain that doesn't exist here -- it is unsupported the moment
+# the last floor closes it in. This is the shared fixture below.
+
+func _build_unsupported_wall_cluster(origin: Vector2i) -> void:
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+	manager.build_at_global(origin.x + 1, origin.y, "wood_floor")
+	manager.build_at_global(origin.x - 1, origin.y, "wood_floor")
+	manager.build_at_global(origin.x, origin.y + 1, "wood_floor")
+	manager.build_at_global(origin.x, origin.y - 1, "wood_floor")  # closes it in -- now unsupported
+
+
+## Re-triggers _sync_statics for the whole connected cluster _build_
+## unsupported_wall_cluster made, WITHOUT itself propping any of it back up:
+## a bare non-load-bearing floor "bridge" (bare, not itself load-bearing, so
+## it can't relay support on its own), THEN a real (independently grounded)
+## wall well past BuildingStatics.CANTILEVER_LIMIT tiles from the nearest
+## cluster floor (F1, at origin+(1,0)) -- far enough that the new wall
+## cannot rescue it. This is just "some further, unrelated edit happens
+## nearby," the same way any other real player action naturally would
+## re-touch this structure.
+func _retrigger_statics_recheck(origin: Vector2i) -> void:
+	var bridge_start := 2
+	var trigger_x := origin.x + 1 + BuildingStatics.CANTILEVER_LIMIT + 1
+	for x in range(origin.x + bridge_start, trigger_x):
+		manager.build_at_global(x, origin.y, "wood_floor")
+	manager.build_at_global(trigger_x, origin.y, "wood_wall")
+
+
+## Well inside the chunk, not tied to _berlin_tile's own (possibly
+## edge-adjacent) position -- see test_stamp_structure_at_global_writes_
+## every_ground_piece_cell's doc comment for why a multi-cell footprint
+## anchored on _berlin_tile itself is unsafe (posmod-aliasing across a
+## chunk boundary).
+func _statics_test_origin() -> Vector2i:
+	return _chunk_coord_for_tile(_berlin_tile) * EarthChunkManager.CHUNK_SIZE + Vector2i(10, 10)
+
+
+func test_a_piece_that_loses_its_support_path_does_not_collapse_immediately():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	watch_signals(WorldItemBus)
+
+	_build_unsupported_wall_cluster(origin)
+
+	assert_eq(
+		manager.modification_at_global(origin.x, origin.y), "wood_wall",
+		"a piece that just lost support should still be standing -- it needs grace time first"
+	)
+	assert_signal_emit_count(
+		WorldItemBus, "item_dropped", 0, "nothing should have collapsed/dropped yet"
+	)
+
+
+## The full flow: an unsupported piece that stays unsupported past the real
+## grace period actually collapses -- dropping its own constituent material
+## back to the ground (mirroring how a felled tree/smashed stone already
+## drops items via WorldItemBus.item_dropped) -- and the recompute this
+## triggers cascades to whatever it was (in this case, non-load-bearingly)
+## propping up, all without a second manual trigger: placing ONE more
+## nearby piece is what re-triggers the same structure's recompute, the
+## same way any further edit naturally would in real play.
+func test_a_severed_support_collapses_past_the_grace_period_and_drops_its_material():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	_build_unsupported_wall_cluster(origin)
+	watch_signals(WorldItemBus)
+
+	manager.advance_world_age(BuildingStatics.GRACE_SECONDS + 1.0)
+	_retrigger_statics_recheck(origin)
+
+	assert_eq(
+		manager.modification_at_global(origin.x, origin.y), "",
+		"the wall should have actually collapsed and been removed"
+	)
+	var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
+	assert_gt(drops, 0, "a real collapse should drop real material")
+	var found_wood_drop := false
+	for i in range(drops):
+		var params = get_signal_parameters(WorldItemBus, "item_dropped", i)
+		var stack: ItemStack = params[0]
+		if stack.item.id == "wood" and stack.count == 2:
+			found_wood_drop = true
+	assert_true(found_wood_drop, "the collapsed wall should drop exactly its own cost_of (2 wood)")
+
+
+## The dependent floors, no longer within cantilever reach of any supported
+## load-bearing cell once the wall is gone, come down too -- Worked Example
+## D's cascade, at the engine level.
+func test_a_collapse_cascades_to_the_pieces_it_was_propping_up():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	_build_unsupported_wall_cluster(origin)
+
+	manager.advance_world_age(BuildingStatics.GRACE_SECONDS + 1.0)
+	_retrigger_statics_recheck(origin)
+
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		assert_eq(
+			manager.modification_at_global(origin.x + offset.x, origin.y + offset.y), "",
+			"the floor at %s, which only ever depended on the collapsed wall, should have come down too" % offset
+		)
+
+
+func test_destroying_a_wall_removes_its_collision_body_via_collapse_too():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	_build_unsupported_wall_cluster(origin)
+	var expected_position := Vector2(
+		(origin.x + 0.5) * TerrainRenderer.TILE_SIZE, (origin.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	var before := false
+	for child in entities_parent.get_children():
+		if child is StaticBody2D and child.position == expected_position:
+			before = true
+	assert_true(before, "precondition: the still-standing wall has real collision")
+
+	manager.advance_world_age(BuildingStatics.GRACE_SECONDS + 1.0)
+	_retrigger_statics_recheck(origin)
+
+	var after := false
+	for child in entities_parent.get_children():
+		if child is StaticBody2D and child.position == expected_position:
+			after = true
+	assert_false(after, "a collapsed wall must not leave a stale collision body behind")
+
+
+# -- withering: decay as a bounded, closed-form catch-up (see
+# docs/concept/timber_construction.md#withering-decay-as-a-bounded-closed-
+# form-catch-up, src/gameplay/building_decay.gd) -- wired at the SAME
+# unload/reload catch-up boundary the ecology precedent (_apply_ecology_
+# catchup/_unloaded_ecology) already uses, and feeding the EXACT SAME
+# _collapse_piece/_sync_statics path a severed support does once condition
+# crosses BuildingDecay.RUINED_CONDITION_THRESHOLD -- decay and a severed
+# support are two INPUTS into one collapse mechanism, not two parallel ones.
+
+## Moves the player far enough away that the chunk holding _statics_test_
+## origin()'s own structures genuinely unloads (see _unload_chunk), lets
+## `elapsed_seconds` of real world-age pass while it sits unloaded, then
+## moves back so it reloads and _apply_piece_condition_catchup actually
+## runs -- the real streaming path, not a stubbed shortcut.
+func _unload_wait_and_reload(elapsed_seconds: float) -> void:
+	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+	if elapsed_seconds > 0.0:
+		manager.advance_world_age(elapsed_seconds)
+	manager.update(_berlin_tile)
+
+
+func test_a_freshly_placed_piece_starts_at_full_condition():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+	assert_almost_eq(manager.piece_condition_at_global(origin.x, origin.y), 1.0, 0.0001)
+
+
+## A piece never touched by anything, on a chunk that was never unloaded,
+## must not silently decay either -- the mechanism only runs at the real
+## unload/reload catch-up boundary (see the doc's own two-fidelity framing);
+## there is no separate per-frame decay for a chunk that stays loaded.
+func test_a_piece_on_a_chunk_that_never_unloads_does_not_decay():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+	manager.advance_world_age(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 5.0)
+	assert_almost_eq(manager.piece_condition_at_global(origin.x, origin.y), 1.0, 0.0001)
+
+
+func test_a_piece_condition_is_measurably_lower_after_a_real_simulated_absence():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 0.1)
+
+	var condition := manager.piece_condition_at_global(origin.x, origin.y)
+	assert_lt(condition, 1.0, "an exposed piece should have measurably decayed over a real unloaded absence")
+	assert_gt(condition, 0.0, "0.1 ecological day should not be anywhere near enough to ruin plain wood")
+
+
+## A wall that bounds a real enclosed, floored room (see EarthChunkManager.
+## _is_piece_roofed's own doc comment for why walls need an adjacency check
+## rather than a literal RoomDetector.is_indoors on their own cell) should
+## retain more condition than a free-standing, fully exposed wall of the
+## SAME material over the SAME elapsed absence.
+func test_a_sheltered_piece_decays_slower_than_an_exposed_one_over_the_same_absence():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var sheltered_origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(4, 4)
+	var exposed_origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(20, 20)
+
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
+			if dx == 0 and dy == 0:
+				continue
+			manager.build_at_global(sheltered_origin.x + dx, sheltered_origin.y + dy, "wood_wall")
+	manager.build_at_global(sheltered_origin.x, sheltered_origin.y, "wood_floor")
+	# The wall directly north of the floor -- an EDGE wall, orthogonally
+	# adjacent to the one-cell interior room, unlike a corner wall (which is
+	# only diagonally adjacent and would never actually register as roofed).
+	var tracked_sheltered_wall := sheltered_origin + Vector2i(0, -1)
+
+	manager.build_at_global(exposed_origin.x, exposed_origin.y, "wood_wall")
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 0.1)
+
+	var sheltered_condition := manager.piece_condition_at_global(tracked_sheltered_wall.x, tracked_sheltered_wall.y)
+	var exposed_condition := manager.piece_condition_at_global(exposed_origin.x, exposed_origin.y)
+	assert_gt(
+		sheltered_condition, exposed_condition,
+		"a wall bounding a real roofed room should retain more condition than a free-standing exposed one"
+	)
+
+
+## The full flow: a piece decayed past BuildingDecay.RUINED_CONDITION_
+## THRESHOLD during a real unloaded absence collapses via the EXACT SAME
+## path a severed support does -- removed from modifications and dropping
+## its own constituent material back to the ground (mirrors
+## test_a_severed_support_collapses_past_the_grace_period_and_drops_its_
+## material above, the model for constructing this scenario).
+func test_a_fully_decayed_piece_collapses_via_the_same_collapse_path_and_drops_its_material():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+	watch_signals(WorldItemBus)
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 2.0)
+
+	assert_eq(
+		manager.modification_at_global(origin.x, origin.y), "",
+		"a piece decayed past the ruined threshold should have actually collapsed and been removed"
+	)
+	var drops = get_signal_emit_count(WorldItemBus, "item_dropped")
+	assert_gt(drops, 0, "a real decay collapse should drop real material, same as a severed-support collapse")
+	var found_wood_drop := false
+	for i in range(drops):
+		var params = get_signal_parameters(WorldItemBus, "item_dropped", i)
+		var stack: ItemStack = params[0]
+		if stack.item.id == "wood" and stack.count == 2:
+			found_wood_drop = true
+	assert_true(found_wood_drop, "the decayed wall should drop exactly its own cost_of (2 wood)")
+
+
+func test_a_collapsed_decayed_piece_condition_is_no_longer_tracked():
+	manager.update(_berlin_tile)
+	var origin := _statics_test_origin()
+	manager.build_at_global(origin.x, origin.y, "wood_wall")
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 2.0)
+
+	# The piece is gone entirely -- piece_condition_at_global's own "1.0 for
+	# a non-piece cell" default, not a lingering near-zero value.
+	assert_almost_eq(manager.piece_condition_at_global(origin.x, origin.y), 1.0, 0.0001)
+
+
+# -- construction labor catch-up (see docs/concept/timber_construction.md's
+# "Unloaded / offscreen fidelity" subsection, construction_catchup.gd,
+# ConstructionProjectStore.advance_project_labor) -- the settlement
+# construction ledger's own real chunk-load caller. Wired at the EXACT SAME
+# unload/reload catch-up boundary the withering section directly above
+# already uses (_unload_wait_and_reload is the same helper), the same
+# "two fidelities" philosophy applied to a ConstructionProject's own
+# labor-hours accumulator instead of a piece's condition value.
+
+const ConstructionProject = preload("res://src/emergence/construction_project.gd")
+
+## A local footprint origin well inside the chunk, distinct from
+## _statics_test_origin()'s own (10, 10) -- these tests build no actual
+## wall/floor pieces, just a ConstructionProject sited at this cell, so
+## there is no real collision risk either way, but keeping it distinct
+## avoids any accidental coupling to the statics tests' own fixture cell.
+func _construction_test_local_origin() -> Vector2i:
+	return Vector2i(15, 15)
+
+
+func test_an_in_progress_projects_labor_measurably_advances_after_a_real_simulated_chunk_unload_absence():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	# 2 real households -> builder_count 2 (household_count_for_settlement,
+	# already real -- see this doc's own "do not reinvent" instruction).
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, _construction_test_local_origin(), "sagewerk", "household:construction_labor_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 1.0)
+
+	assert_gt(
+		project.labor_hours_accumulated, 0.0,
+		"a real IN_PROGRESS project's labor should measurably advance after a real simulated unloaded absence"
+	)
+
+
+## A chunk that never unloads must not advance construction labor at all --
+## mirrors test_a_piece_on_a_chunk_that_never_unloads_does_not_decay's own
+## identical regression shape: the mechanism only runs at the real
+## unload/reload catch-up boundary, there is no separate live per-frame
+## labor tick for a chunk that stays loaded the whole time.
+func test_a_chunk_that_never_unloads_does_not_advance_construction_labor_at_all():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, _construction_test_local_origin(), "sagewerk", "household:construction_labor_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	manager.advance_world_age(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 5.0)
+
+	assert_almost_eq(project.labor_hours_accumulated, 0.0, 0.0001)
+
+
+## The full flow: a project reaching COMPLETE (2 households' worth of labor
+## over 2 real unloaded days comfortably clears sagewerk's real 18-hour
+## requirement -- see ConstructionLabor.labor_hours_required) actually
+## places its own real tile at the project's own (chunk_coord, origin) --
+## closing this doc's own previously-named "completing a project today only
+## marks status + grants household property, it never actually builds
+## anything" gap for a real placeable output.
+func test_a_completed_projects_placeable_output_is_actually_placed_in_the_world():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var local_origin := _construction_test_local_origin()
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, local_origin, "sagewerk", "household:construction_labor_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 2.0)
+
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	var global_cell := chunk_coord * EarthChunkManager.CHUNK_SIZE + local_origin
+	assert_eq(
+		manager.modification_at_global(global_cell.x, global_cell.y), "sagewerk",
+		"a completed project whose recipe output is a real placeable should actually place it in the world"
+	)
+
+
+## A project whose recipe output is NOT a placeable (e.g. "log_to_balken",
+## whose real output is "beam" -- a plain material item, ItemCatalog.
+## kind_of("beam") == "material") must still reach COMPLETE (the labor
+## catch-up itself does not care what the output is), but must not attempt
+## to place anything -- no crash, no garbage tile written to the world.
+func test_a_completed_project_whose_output_is_not_placeable_places_nothing_and_does_not_crash():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	manager.update(_berlin_tile)
+	var local_origin := _construction_test_local_origin()
+	var project := manager.construction_project_store().start_project(
+		chunk_coord, local_origin, "log_to_balken", "household:construction_labor_test"
+	)
+	project.status = ConstructionProject.Status.IN_PROGRESS
+
+	_unload_wait_and_reload(EarthChunkManager.REAL_SECONDS_PER_ECOLOGICAL_DAY * 1.0)
+
+	assert_eq(project.status, ConstructionProject.Status.COMPLETE)
+	var global_cell := chunk_coord * EarthChunkManager.CHUNK_SIZE + local_origin
+	assert_eq(
+		manager.modification_at_global(global_cell.x, global_cell.y), "",
+		"a completed project whose recipe output is not a real placeable should place nothing"
+	)
+
+
 # -- bulk structure stamping (see VillageRenderer, HouseBlueprint) ------------
 #
 # Stamping a whole house one build_at_global call per cell would repaint its
@@ -1592,11 +2394,62 @@ func test_update_shows_the_roof_again_once_the_player_leaves_the_room():
 	roof_layer.free()
 
 
+# -- geology: a real per-chunk Strata sim exists for every loaded chunk ------
+# (see docs/concept/geology.md). Cave-entrance discovery/reveal itself is
+# exercised directly against GeologyRenderer (test_geology_renderer.gd) --
+# entrances are far too sparse (~1 in 500 mountain tiles) to reliably land
+# inside a small, fast real-elevation-generated test chunk, so these smoke
+# tests only cover what every loaded chunk (any biome) guarantees: a real
+# Strata instance exists, and update()'s new geology-reveal step never
+# crashes even when nothing is nearby.
+
+func test_loading_a_chunk_creates_a_real_topsoil_strata_instance():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var strata := manager.strata_at(chunk_coord)
+	assert_not_null(strata, "a loaded chunk should have a real Strata instance")
+	assert_eq(strata.layer, Strata.LAYER_TOPSOIL_REGOLITH)
+
+
+func test_unloading_a_chunk_clears_its_strata():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_not_null(manager.strata_at(chunk_coord), "precondition: chunk is loaded")
+
+	# Walk far enough away that the original chunk falls outside UNLOAD_RADIUS.
+	var far_tile := _berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 40, 0)
+	manager.update(far_tile)
+
+	assert_null(manager.strata_at(chunk_coord), "an unloaded chunk's strata should be cleared")
+
+
+func test_update_does_not_crash_the_geology_reveal_step_away_from_any_entrance():
+	# Berlin is inland, non-mountain -- exercises the "nothing nearby" path
+	# through _update_geology_reveal/_nearby_cave_entrance every frame the
+	# rest of update() already runs, the same smoke-test shape the roof
+	# visibility tests above give _update_roof_visibility.
+	manager.update(_berlin_tile)
+	manager.update(_berlin_tile + Vector2i(1, 0))
+	manager.update(_berlin_tile)
+	assert_true(true, "update() should run the geology reveal step without error")
+
+
 func _chunk_coord_for_tile(tile: Vector2i) -> Vector2i:
 	return Vector2i(
 		floori(float(tile.x) / EarthChunkManager.CHUNK_SIZE),
 		floori(float(tile.y) / EarthChunkManager.CHUNK_SIZE)
 	)
+
+
+## Deletes a modifications file a test's own unload just persisted to real
+## user:// disk (mirrors this file's existing cleanup convention, e.g.
+## test_reloading_a_chunk_restores_collision_for_a_persisted_wall) -- so a
+## sagewerk built on the shared _berlin_tile spawn point for one test does
+## not leak into unrelated tests that load the same tile later.
+func _remove_persisted_modifications(chunk_coord: Vector2i) -> void:
+	var path := "user://chunk_modifications/%d_%d.bin" % [chunk_coord.x, chunk_coord.y]
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 
 
 func _child_instance_ids(parent: Node2D) -> Array[int]:
@@ -2063,6 +2916,100 @@ func test_take_fruit_at_where_there_is_none_fails_rather_than_erroring():
 	manager.set_ground_items(ground_items)
 	assert_eq(manager.take_fruit_at(Vector2(-9000000, -9000000)), "")
 	ground_items.free()
+
+
+# -- harvest_peak_fruit_near: direct-from-the-tree harvest (docs/concept/
+# progression.md "Ecological literacy") --------------------------------------
+#
+# Distinct from fruit_near/take_fruit_at above: those cover WINDFALL already
+# on the ground. This is picking straight off a tree that still carries real
+# hanging fruit (FruitingModel.hanging_at > 0) -- the only harvest event that
+# can ever land inside FruitingModel's real "peak" plateau, since windfall by
+# definition has already left it (see fruiting_model.gd's is_peak_ripe).
+
+const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
+const FruitingModel = preload("res://src/world/fruiting_model.gd")
+
+## An integer pixel position whose deterministic genome (ForageScheduler.
+## genome_for, position-keyed -- no stored per-tree genome anywhere in this
+## codebase) resolves to `species_id` with a real nonzero crop. Same
+## brute-force-a-real-instance idiom test_fruiting_model.gd's own
+## _genome_for uses, just keyed by POSITION instead of a seed, since that is
+## what the real per-tree lookup is keyed by.
+func _position_for_species(species_id: String) -> Vector2:
+	var scheduler := ForageScheduler.new()
+	for step in 4000:
+		var position := Vector2(step * 37, step * 53)
+		var genome := scheduler.genome_for(position)
+		if TreeSpecies.species_for_bias(genome.species_bias) != species_id:
+			continue
+		if FruitingModel.new().crop_potential(genome) <= 0:
+			continue
+		return position
+	return Vector2.ZERO
+
+
+func test_harvest_peak_fruit_near_finds_nothing_with_no_trees_loaded():
+	assert_true(manager.harvest_peak_fruit_near(Vector2.ZERO, 10000.0).is_empty())
+
+
+func test_harvest_peak_fruit_near_finds_nothing_out_of_range():
+	var tree := Node2D.new()
+	tree.position = _position_for_species("apple")
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	assert_true(manager.harvest_peak_fruit_near(tree.position + Vector2(99999, 0), 10.0).is_empty())
+
+
+func test_harvest_peak_fruit_near_finds_nothing_before_anything_has_ripened():
+	var tree := Node2D.new()
+	tree.position = _position_for_species("apple")
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	manager.set_world_age_seconds(0.0)  # start of the bearing cycle: still growing
+	assert_true(manager.harvest_peak_fruit_near(tree.position, 10.0).is_empty())
+
+
+## The real, tested claim item 3 of the task asks for: a PEAK-timed harvest of
+## a tree reports is_peak true, an off-peak-but-still-hanging harvest of the
+## SAME tree reports is_peak false -- both read against the real FruitingModel
+## window for this tree's own real (position-derived) genome, not a
+## hardcoded assumption about when peak falls.
+func test_harvest_peak_fruit_near_reports_the_real_peak_state():
+	var species_id := "apple"
+	var tree := Node2D.new()
+	tree.position = _position_for_species(species_id)
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	var scheduler := ForageScheduler.new()
+	var genome := scheduler.genome_for(tree.position)
+	var model := FruitingModel.new()
+	var warmth: float = manager._warmth_at_pixel(tree.position)
+	# Window boundaries (grow_end/fall_start/fall_end, as YEAR FRACTIONS) don't
+	# depend on yield_multiplier/ripening_multiplier -- see fruiting_model.gd's
+	# own doc comments on _cycle_length/_window_for -- so computing them here
+	# without TreeSpecies' multipliers still matches what
+	# harvest_peak_fruit_near computes internally with them.
+	var window: Dictionary = model._window_for(genome, warmth)
+
+	# -- at genuine peak (mid-plateau) --
+	manager.set_world_age_seconds(
+		(float(window.grow_end) + float(window.fall_start)) / 2.0 * FruitingModel.BEARING_CYCLE_SECONDS
+	)
+	var at_peak: Dictionary = manager.harvest_peak_fruit_near(tree.position, 10.0)
+	assert_eq(at_peak.get("species_id", ""), species_id)
+	assert_true(at_peak.get("is_peak", false), "expected mid-plateau to read as genuine peak ripeness")
+
+	# -- off-peak, but still hanging (mid-abscission) --
+	manager.set_world_age_seconds(
+		(float(window.fall_start) + float(window.fall_end)) / 2.0 * FruitingModel.BEARING_CYCLE_SECONDS
+	)
+	var off_peak: Dictionary = manager.harvest_peak_fruit_near(tree.position, 10.0)
+	assert_eq(off_peak.get("species_id", ""), species_id)
+	assert_false(off_peak.get("is_peak", true), "expected mid-abscission to no longer read as peak")
 
 
 func test_try_plant_seed_at_fails_when_the_chunk_is_not_loaded():
@@ -2764,12 +3711,30 @@ func test_a_grazed_tuft_stops_being_drawn_immediately():
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
 	var tufts: Array = manager.grass_near(centre, 40)
 	assert_gt(tufts.size(), 0, "precondition: something to graze")
-	var eaten: Vector2 = tufts[0].position
-	var tile: Vector2i = manager._world_tile_for_pixel(eaten)
-	var chunk_coord: Vector2i = manager._chunk_coord_for_tile(tile)
-	var cell: Vector2i = tile - chunk_coord * EarthChunkManager.CHUNK_SIZE
-	var band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
-	assert_true(manager._grass_sprites[chunk_coord].has(band), "precondition: its band was drawn")
+
+	# grass_near's 40-tile reach is simulation-wide (a grazer may walk to an
+	# off-screen tuft -- see grass_near's own doc comment), scanned in
+	# dictionary order across a 3x3-chunk neighbourhood, NOT sorted by
+	# distance. Drawing is intentionally scoped far tighter, to the camera's
+	# own tile-precise view window (GRASS_VIEW_BUFFER_TILES/_sync_grass_
+	# sprites), so tufts[0] is not reliably one of the handful that are
+	# actually drawn. This test's own subject is the draw-immediacy of an
+	# on-screen tuft, so pick the first one the manager itself already drew
+	# rather than assuming grass_near's first result is on-screen.
+	var eaten: Vector2
+	var chunk_coord: Vector2i
+	var band := -1
+	for tuft in tufts:
+		var tile: Vector2i = manager._world_tile_for_pixel(tuft.position)
+		var candidate_chunk: Vector2i = manager._chunk_coord_for_tile(tile)
+		var cell: Vector2i = tile - candidate_chunk * EarthChunkManager.CHUNK_SIZE
+		var candidate_band := IllustratedGrassPatch.band_index_for_local_y(cell.y, EarthChunkManager.CHUNK_SIZE)
+		if manager._grass_sprites.get(candidate_chunk, {}).has(candidate_band):
+			eaten = tuft.position
+			chunk_coord = candidate_chunk
+			band = candidate_band
+			break
+	assert_true(band != -1, "precondition: at least one grazeable tuft is actually drawn")
 	var before: int = manager._grass_sprites[chunk_coord][band].multimesh.instance_count
 	manager.graze_grass_at(eaten)
 	var bands: Dictionary = manager._grass_sprites[chunk_coord]
@@ -3433,6 +4398,376 @@ func test_step_wild_crops_updates_marker_growth_too():
 	assert_eq(marker.growth, sim.get_growth(immature_cell))
 
 
+# -- wild crops and the season (see docs/concept/wild_crops.md "The season")
+#
+# WildCropPatch.advance grew a `season_growth` parameter and WildCropRenderer
+# grew a `season_tint` one, both defaulted so an untaught caller sees exactly
+# today's picture -- and step_wild_crops was that untaught caller, so both
+# halves were inert in the running game. These pin the manager actually
+# passing the season through, not the phenology itself (WildCropPatch's own
+# tests have that). Share the `wild_crops_in_season` token so one narrowed
+# -gunit_test_name run covers the set.
+
+## A tint no season could produce by accident, so a pass cannot be the
+## default Color.WHITE sitting there untouched.
+const SEASON_PROBE_TINT := Color(0.25, 0.5, 0.75)
+
+
+## Forces `cell` back to bare ground so a growth step is measurable.
+## _seed_initial_patches hands every map-generated patch 1.0 (mature, like
+## map-generated grass and trees), and clamped-at-maturity growth measures
+## nothing -- immature cells otherwise only appear once spread has fired,
+## which is a geographic accident of the run.
+func _reset_crop_growth(sim: WildCropPatch, cell: Vector2i) -> void:
+	sim._patches[cell] = 0.0
+
+
+func test_wild_crops_in_season_grow_slower_in_winter_than_in_high_summer():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var sim: WildCropPatch = manager._wild_crop_sims[chunk_coord]["carrot"]
+	var cells: Array = sim.get_patch_cells()
+	assert_gt(cells.size(), 0, "precondition: a carrot patch turned up around Berlin")
+	var cell: Vector2i = cells[0]
+	var cycle := SeasonCycle.new()
+
+	_reset_crop_growth(sim, cell)
+	manager.set_world_age_seconds(cycle.seconds_until_season(0.0, "winter"))
+	manager.step_wild_crops(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+	var winter_gain: float = sim.get_growth(cell)
+
+	_reset_crop_growth(sim, cell)
+	manager.set_world_age_seconds(cycle.seconds_until_season(0.0, "summer"))
+	manager.step_wild_crops(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+	var summer_gain: float = sim.get_growth(cell)
+
+	assert_lt(winter_gain, summer_gain, "the same tick ripened a carrot as fast in January as in July")
+	# Dormancy, not death: growth_modifier's floor is 0.2, not 0 (see
+	# docs/concept/seasons.md's "modulates, doesn't gate" rule). A winter tick
+	# that moved nothing would pass the comparison above for the wrong reason.
+	assert_gt(winter_gain, 0.0, "a root crop goes dormant in winter, it does not stop")
+
+
+func test_wild_crops_in_season_tint_their_tops_on_a_step():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var markers: Dictionary = manager._wild_crop_markers[chunk_coord]["carrot"]
+	assert_gt(markers.size(), 0, "precondition: a carrot patch turned up around Berlin")
+
+	manager.set_season_tint(SEASON_PROBE_TINT)
+	manager.step_wild_crops(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+
+	for cell in markers:
+		assert_eq(
+			markers[cell].season_tint,
+			SEASON_PROBE_TINT,
+			"a crop top already on screen never learns the season turned"
+		)
+
+
+## A chunk streamed in during winter has to arrive ALREADY dead-topped.
+## Tinting it only on the next step_wild_crops tick means it pops in summer
+## green and corrects itself up to GRASS_REFRESH_INTERVAL later, in plain
+## sight, every time the player walks over a chunk boundary.
+func test_wild_crops_in_season_spawn_already_tinted_at_chunk_load():
+	manager.set_season_tint(SEASON_PROBE_TINT)
+	manager.update(_berlin_tile)
+
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var markers: Dictionary = manager._wild_crop_markers[chunk_coord]["carrot"]
+	assert_gt(markers.size(), 0, "precondition: a carrot patch turned up around Berlin")
+	for cell in markers:
+		assert_eq(
+			markers[cell].season_tint,
+			SEASON_PROBE_TINT,
+			"a newly streamed chunk popped in summer-green in the middle of winter"
+		)
+
+
+# -- decomposers: ants, carrion bugs (see docs/concept/carrion.md) ----------
+
+func test_update_spawns_decomposers_for_loaded_regions_around_berlin():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	assert_true(manager._decomposer_markers.has(center_chunk))
+	assert_gt(manager._decomposer_markers[center_chunk].size(), 0)
+
+
+func test_evicting_old_chunks_frees_decomposer_markers():
+	manager.update(Vector2i(0, 0))
+	var old_chunk := _chunk_coord_for_tile(Vector2i(0, 0))
+	assert_true(manager._decomposer_markers.has(old_chunk), "precondition: the old chunk had decomposers")
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	assert_false(manager._decomposer_markers.has(old_chunk))
+
+
+# -- Sägewerk: "an NPC moves in" the moment the worksite exists (see
+# docs/concept/timber_construction.md) -- exactly one LumberjackMarker per
+# placed Sägewerk instance, mirroring the decomposer/wild-crop per-chunk
+# spawn/despawn lifecycle above.
+
+func test_building_a_sagewerk_spawns_a_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_true(manager._sagewerk_lumberjacks.has(chunk_coord))
+	assert_gt(manager._sagewerk_lumberjacks[chunk_coord].size(), 0)
+
+
+func test_building_a_sagewerk_twice_on_the_same_tile_spawns_only_one_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_eq(manager._sagewerk_lumberjacks[chunk_coord].size(), 1)
+
+
+func test_destroying_a_sagewerk_despawns_its_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_gt(manager._sagewerk_lumberjacks[chunk_coord].size(), 0, "precondition: a lumberjack moved in")
+
+	manager.destroy_at_global(_berlin_tile.x, _berlin_tile.y)
+
+	assert_eq(manager._sagewerk_lumberjacks[chunk_coord].size(), 0)
+
+
+func test_overwriting_a_sagewerk_with_a_different_structure_despawns_its_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "campfire")
+
+	assert_eq(manager._sagewerk_lumberjacks[chunk_coord].size(), 0)
+
+
+func test_evicting_a_chunk_frees_its_sagewerk_lumberjacks():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	assert_true(manager._sagewerk_lumberjacks.has(chunk_coord), "precondition")
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+
+	assert_false(manager._sagewerk_lumberjacks.has(chunk_coord))
+	_remove_persisted_modifications(chunk_coord)
+
+
+## A previously-built Sägewerk persists as an ordinary chunk modification
+## (see build_at_global's own doc comment) -- reloading that chunk must
+## re-staff it with a fresh Lumberjack, not leave it abandoned, the same
+## "an NPC moves in" guarantee a freshly-placed one gets.
+func test_reloading_a_chunk_with_a_persisted_sagewerk_respawns_its_lumberjack():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+
+	var far_away_tile := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far_away_tile)
+	assert_false(manager._sagewerk_lumberjacks.has(chunk_coord), "precondition: chunk was evicted")
+
+	manager.update(_berlin_tile)
+
+	assert_true(manager._sagewerk_lumberjacks.has(chunk_coord))
+	assert_gt(manager._sagewerk_lumberjacks[chunk_coord].size(), 0)
+	_remove_persisted_modifications(chunk_coord)
+
+
+# -- Storage/Logistics: "if both production buildings and storage exist, new
+# NPCs may move in which handle logistics" (docs/concept/timber_
+# construction.md's "Storage, logistics, and the autonomous dependency
+# chain" section) -- one worker-pair (one LogisticsMarker per real output
+# item id, _SAGEWERK_LOGISTICS_ITEM_IDS: beam, plank) per real Storage
+# within SAGEWERK_STORAGE_PAIR_RADIUS_TILES of a real Sägewerk -- EVERY
+# real Storage in range, not just the single nearest one (this closes this
+# doc's own previously-named honest constraint). Keyed off the Sägewerk's
+# own cell, then by each paired Storage's own identity, mirroring
+# _sagewerk_lumberjacks' per-chunk dict-of-cells shape one level deeper.
+
+## Total LogisticsMarker count across every Storage paired to the Sägewerk
+## at (chunk_coord, local_cell) -- sums each storage-keyed pair's own
+## item-keyed worker count, so a test doesn't need to know the internal
+## storage-key format to assert "N workers total."
+func _logistics_worker_count(chunk_coord: Vector2i, local_cell: Vector2i) -> int:
+	var total := 0
+	for by_item in manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).values():
+		total += by_item.size()
+	return total
+
+
+func test_a_sagewerk_with_no_nearby_storage_spawns_no_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+
+	assert_true(
+		manager._logistics_workers.get(chunk_coord, {}).is_empty(),
+		"no Storage nearby -- nothing real for a Logistics worker to carry to"
+	)
+
+
+func test_a_sagewerk_with_a_nearby_storage_spawns_exactly_two_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+
+	var by_storage: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	assert_eq(by_storage.size(), 1, "exactly one real Storage in range -- one worker-pair")
+	var by_item: Dictionary = by_storage.values()[0]
+	assert_eq(by_item.size(), 2, "one worker per real Sägewerk output item (beam, plank)")
+	assert_true(by_item.has("beam"))
+	assert_true(by_item.has("plank"))
+
+
+## Building the Storage first (before the Sägewerk exists) still ends up
+## staffed once the Sägewerk itself is placed -- the pairing doesn't depend
+## on build order.
+func test_a_storage_built_before_its_sagewerk_still_gets_paired():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2)
+
+
+func test_re_syncing_a_staffed_sagewerk_does_not_double_spawn_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+
+	# A second, redundant build on an UNRELATED nearby tile re-triggers the
+	# storage-changed resync path (see _sync_logistics_workers) without
+	# touching the Sägewerk or Storage tiles themselves.
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2)
+
+
+func test_destroying_the_sagewerk_despawns_its_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2, "precondition")
+
+	manager.destroy_at_global(_berlin_tile.x, _berlin_tile.y)
+
+	assert_true(manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).is_empty())
+
+
+func test_destroying_the_paired_storage_despawns_its_logistics_workers():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2, "precondition")
+
+	manager.destroy_at_global(_berlin_tile.x + 2, _berlin_tile.y)
+
+	assert_true(manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {}).is_empty())
+
+
+## The actual fix: TWO real Storages within range of one Sägewerk each get
+## their own real worker-pair -- four workers total, not two. This is the
+## direct test of this doc's previously-named honest constraint ("a Sägewerk
+## pairs with only its single nearest Storage, not every Storage within
+## range") now being closed.
+func test_two_storages_within_range_each_get_their_own_worker_pair():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	manager.build_at_global(_berlin_tile.x + 2, _berlin_tile.y, "storage")
+	manager.build_at_global(_berlin_tile.x - 2, _berlin_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+
+	var by_storage: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	assert_eq(by_storage.size(), 2, "both real Storages in range get their own pair")
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 4, "two workers per pair, two pairs")
+	for by_item in by_storage.values():
+		assert_true(by_item.has("beam"))
+		assert_true(by_item.has("plank"))
+
+
+## Each pair's own real deliveries land in ITS OWN paired Storage's stock --
+## not funneled to whichever Storage nearest_structure_position would pick
+## from the worker's own position, which (before this fix) would have been
+## the SAME single storage for every worker regardless of which one it was
+## nominally paired with. The far storage is placed further from the
+## Sägewerk than the near one but still within SAGEWERK_STORAGE_PAIR_RADIUS_
+## TILES -- under the old bug, its own paired worker would have delivered to
+## the NEAR storage instead (whichever nearest_structure_position picked),
+## so a delivery actually landing at the far storage is the real proof.
+func test_each_paired_storage_receives_its_own_deliveries_not_the_nearest_ones():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var near_storage_tile := _berlin_tile + Vector2i(2, 0)
+	var far_storage_tile := _berlin_tile + Vector2i(18, 0)
+	manager.build_at_global(near_storage_tile.x, near_storage_tile.y, "storage")
+	manager.build_at_global(far_storage_tile.x, far_storage_tile.y, "storage")
+	manager.deposit_to_structure_at(_berlin_tile.x, _berlin_tile.y, "beam", 8)
+
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	var by_storage: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	assert_eq(by_storage.size(), 2, "precondition: both Storages paired")
+
+	var beam_markers: Array = []
+	for by_item in by_storage.values():
+		beam_markers.append(by_item["beam"])
+
+	for i in 800:
+		for beam_marker in beam_markers:
+			beam_marker._process(0.25)
+		if (
+			manager.structure_stock_at(near_storage_tile.x, near_storage_tile.y, "beam") > 0
+			and manager.structure_stock_at(far_storage_tile.x, far_storage_tile.y, "beam") > 0
+		):
+			break
+
+	assert_gt(
+		manager.structure_stock_at(near_storage_tile.x, near_storage_tile.y, "beam"), 0,
+		"the near storage's own paired worker delivers to it"
+	)
+	assert_gt(
+		manager.structure_stock_at(far_storage_tile.x, far_storage_tile.y, "beam"), 0,
+		"the far storage's own paired worker delivers to it too -- not funneled to the nearer one"
+	)
+
+
+## Removing one of two paired Storages despawns only that Storage's own
+## worker-pair -- the other Storage's own workers keep running undisturbed.
+func test_destroying_one_of_two_paired_storages_despawns_only_its_own_pair():
+	manager.update(_berlin_tile)
+	manager.build_at_global(_berlin_tile.x, _berlin_tile.y, "sagewerk")
+	var storage_a_tile := _berlin_tile + Vector2i(2, 0)
+	var storage_b_tile := _berlin_tile + Vector2i(-2, 0)
+	manager.build_at_global(storage_a_tile.x, storage_a_tile.y, "storage")
+	manager.build_at_global(storage_b_tile.x, storage_b_tile.y, "storage")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var local_cell := manager._local_coord(_berlin_tile.x, _berlin_tile.y)
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 4, "precondition: two pairs")
+
+	manager.destroy_at_global(storage_a_tile.x, storage_a_tile.y)
+
+	var by_storage: Dictionary = manager._logistics_workers.get(chunk_coord, {}).get(local_cell, {})
+	assert_eq(by_storage.size(), 1, "only storage_a's own pair despawns")
+	assert_eq(_logistics_worker_count(chunk_coord, local_cell), 2, "storage_b's own pair keeps running")
+
+
 # -- the periodic ecosystem refresh must not rebuild the world ---------------
 #
 # step_ecosystem freed EVERY creature marker in EVERY loaded chunk once a
@@ -3668,6 +5003,54 @@ func test_record_vegetation_harvest_near_reduces_the_right_chunks_density():
 	var before := manager.vegetation_density_near(pixel)
 	manager.record_vegetation_harvest_near(pixel, 0.1)
 	assert_lt(manager.vegetation_density_near(pixel), before)
+
+
+# -- grazing (horses/sheep) is a real land-health depletion driver too, the
+# same way a working farmer NPC already is (see NpcEconomy._gather) --
+# previously TallGrass's cosmetic per-tuft sim and EcosystemSimulation's
+# aggregate land-health density never spoke, so no amount of grazing ever
+# moved vegetation_density_near/land_health_near, no matter how bare a field
+# got. Both real grazing paths (GrazerForaging's deliberate walk-to-a-tuft
+# bite via graze_grass_at, AND the ambient any-non-predator-standing-on-
+# mature-grass sweep via _graze_by_herbivores) must leave the same real mark.
+
+## Mirrors test_record_vegetation_harvest_near_reduces_the_right_chunks_
+## density's own shape, but through the real player-observed grazing bite
+## instead of an invented amount.
+func test_graze_grass_at_records_a_real_vegetation_harvest():
+	manager.update(_berlin_tile)
+	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var tufts: Array = manager.grass_near(centre, 40)
+	assert_gt(tufts.size(), 0, "precondition: something to graze")
+	var eaten: Vector2 = tufts[0].position
+	var before := manager.vegetation_density_near(eaten)
+	assert_true(manager.graze_grass_at(eaten), "precondition: the bite lands")
+	assert_lt(
+		manager.vegetation_density_near(eaten), before,
+		"a real grazing bite must leave a real mark on land health's own density field, not just the cosmetic tuft layer"
+	)
+
+
+## The other real grazing path -- ambient herbivore-standing-on-grass,
+## driven by _graze_by_herbivores rather than GrazerForaging's deliberate
+## bite -- must leave the same real mark for the same reason: a wandering
+## horse or sheep grazing where its wander happened to take it is genuine
+## herbivore pressure too, not just a horse that deliberately walked to a
+## sensed tuft.
+func test_ambient_herbivore_grazing_records_a_real_vegetation_harvest():
+	manager.update(_berlin_tile)
+	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var tufts: Array = manager.grass_near(centre, 40)
+	assert_gt(tufts.size(), 0, "precondition: something to graze")
+	var tuft_position: Vector2 = tufts[0].position
+	var tuft_tile := manager._world_tile_for_pixel(tuft_position)
+	_tame_a_horse_here(tuft_tile)
+	var before := manager.vegetation_density_near(tuft_position)
+	manager._graze_by_herbivores()
+	assert_lt(
+		manager.vegetation_density_near(tuft_position), before,
+		"a horse standing on a mature tuft must deplete land health's density field, not just the cosmetic tuft layer"
+	)
 
 
 # -- land health survives a real restart (same persistence path land ecology
@@ -4154,6 +5537,26 @@ func test_an_unknown_weather_state_is_refused():
 	assert_false(manager.is_weather_forced())
 
 
+# -- emergence: the Weather glass item reads weather one period ahead
+# (docs/concept/wayfinding.md's Weather glass item) -- upcoming_weather
+# mirrors current_weather's own internals (same day/region-seed derivation)
+# but calls WeatherForecast.upcoming_weather(_weather_model, day, seed)
+# instead of _weather_model.weather_at(day, seed) directly, one day ahead.
+
+## Proven by advancing the world clock forward exactly one weather period
+## and comparing against current_weather's own reading there -- rather than
+## re-deriving WEATHER_PERIOD_SECONDS/region-seed math in the test, which
+## would just restate the implementation instead of proving it.
+func test_upcoming_weather_matches_current_weather_one_period_later():
+	manager.set_world_age_seconds(0.0)
+	var forecast: String = manager.upcoming_weather(Vector2.ZERO)
+
+	manager.set_world_age_seconds(EarthChunkManager.WEATHER_PERIOD_SECONDS)
+	var next_periods_current := manager.current_weather(Vector2.ZERO)
+
+	assert_eq(forecast, next_periods_current)
+
+
 # -- snow keeps the world's clock, not the frame's ---------------------------
 
 ## Snow melts on WORLD time, the same clock the season is on.
@@ -4628,6 +6031,36 @@ func test_wipe_household_store_clears_both_memory_and_disk():
 	assert_false(FileAccess.file_exists(path))
 
 
+# -- emergence: the Deed item claims real property (docs/concept/
+# player_citizenship.md's Deed item) -- the same form_household/
+# grant_property mechanism NPC houses already use, keyed by the player's
+# own PlayerIdentity.PLAYER_ENTITY_ID rather than an npc id.
+
+func test_claiming_property_with_a_deed_forms_a_household_owning_it():
+	var household = manager.claim_property_with_deed("house:99_99_0")
+	assert_not_null(household)
+	assert_eq(household.members, [PlayerIdentity.PLAYER_ENTITY_ID])
+	assert_true(household.property.has("house:99_99_0"))
+
+
+## Idempotent, matching HouseholdStore.grant_property's own idempotence --
+## claiming the same property a second time does not error and the property
+## stays owned by the same household.
+func test_claiming_the_same_property_twice_stays_owned_by_the_same_household():
+	var first = manager.claim_property_with_deed("house:98_98_0")
+	var second = manager.claim_property_with_deed("house:98_98_0")
+	assert_eq(first.id, second.id)
+	assert_eq(manager.household_store().owner_of("house:98_98_0"), first.id)
+
+
+func test_claiming_property_with_a_deed_records_a_real_event():
+	var household = manager.claim_property_with_deed("house:97_97_0")
+	var claimed: Array = manager.event_store().events_of_type("player_claimed_property")
+	assert_eq(claimed.size(), 1)
+	assert_eq(claimed[0].actors, [household.id])
+	assert_eq(claimed[0].tags, ["house:97_97_0"])
+
+
 # -- emergence: contracts are coordinated with events, same as founding -----
 
 ## Proposing a contract through EarthChunkManager both creates the contract
@@ -4665,6 +6098,34 @@ func test_an_invalid_transition_records_no_event():
 	var contract = manager.propose_contract("rent", ["household:1"], [], "", -1.0)
 	assert_false(manager.fulfill_contract(contract.id))  # not active yet
 	assert_eq(manager.event_store().events_of_type("contract_fulfilled").size(), 0)
+
+
+# -- emergence: the Ledger item proposes real player contracts (docs/
+# concept/player_citizenship.md's Ledger item) -- a thin wrapper over the
+# existing propose_contract naming the player's own household as one party.
+
+func test_player_propose_contract_names_the_players_household_and_counterparty():
+	var contract = manager.player_propose_contract(
+		"trade", "household:50", ["10 wood/week"], "shelter", -1.0
+	)
+	assert_not_null(contract)
+	var player_household_id: String = manager.household_store().household_for(
+		PlayerIdentity.PLAYER_ENTITY_ID
+	).id
+	assert_true(contract.parties.has(player_household_id))
+	assert_true(contract.parties.has("household:50"))
+
+
+## The existing generic lifecycle methods already work unchanged for a
+## player-named contract -- ContractStore._transition never assumes
+## anything about WHICH entity a party is, so accept_contract/
+## fulfill_contract need no player-specific counterpart.
+func test_a_player_proposed_contract_can_be_accepted_and_fulfilled():
+	var contract = manager.player_propose_contract("trade", "household:51", [], "", -1.0)
+	assert_true(manager.accept_contract(contract.id))
+	assert_true(manager.activate_contract(contract.id))
+	assert_true(manager.fulfill_contract(contract.id))
+	assert_eq(manager.contract_store().get_contract(contract.id).status, "fulfilled")
 
 
 # -- emergence: the contract store persists alongside the others -------------
@@ -4808,6 +6269,38 @@ func test_dissolving_an_institution_records_a_real_event():
 	assert_eq(manager.institution_store().get_institution(institution.id).status, "dissolved")
 	var dissolved: Array = manager.event_store().events_of_type("institution_dissolved")
 	assert_eq(dissolved.size(), 1)
+
+
+# -- emergence: the Charter item forms real player institutions (docs/
+# concept/player_citizenship.md's Charter item) -- a thin wrapper over the
+# existing attempt_institution_formation naming the player's own household
+# as one party, gated by the SAME real InstitutionFormation.should_form
+# threshold an NPC pair is held to.
+
+func _player_fulfill_contracts_with(counterparty_id: String, count: int) -> void:
+	for i in count:
+		var contract = manager.player_propose_contract("trade", counterparty_id, [], "", -1.0)
+		manager.accept_contract(contract.id)
+		manager.activate_contract(contract.id)
+		manager.fulfill_contract(contract.id)
+
+
+func test_player_attempt_institution_formation_below_threshold_forms_nothing():
+	_player_fulfill_contracts_with("household:60", 2)
+	var institution = manager.player_attempt_institution_formation("guild", "household:60")
+	assert_null(institution)
+
+
+func test_player_attempt_institution_formation_at_threshold_forms_a_real_institution_containing_the_players_household():
+	_player_fulfill_contracts_with("household:61", InstitutionFormation.FORMATION_THRESHOLD)
+	var institution = manager.player_attempt_institution_formation("guild", "household:61")
+	assert_not_null(institution)
+
+	var player_household_id: String = manager.household_store().household_for(
+		PlayerIdentity.PLAYER_ENTITY_ID
+	).id
+	assert_true(institution.members.has(player_household_id))
+	assert_true(institution.members.has("household:61"))
 
 
 # -- emergence: the institution store persists alongside the others ---------
@@ -5021,3 +6514,1076 @@ func test_step_ground_food_ages_an_item_with_an_active_fly_colony_faster():
 		with_colony.spoilage(), no_colony.spoilage(),
 		"an item with an active fly colony should spoil measurably faster than the same item with none"
 	)
+
+
+# -- emergence: Phase 8 -- worn paths are a real, causally-grounded entity --
+
+## The literal "repeated movement creates infrastructure" exit criterion
+## (docs/emergence/04): the FIRST time a tile becomes worn, that is a real,
+## `/why`-inspectable event, not just a texture change.
+func test_recording_a_worn_path_records_a_real_event():
+	manager.record_path_worn_if_new(Vector2i(5, 5))
+	var formed: Array = manager.event_store().events_of_type("path_worn")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["path:5_5"])
+
+
+## Idempotent while already worn -- the caller (World._step_path_scarring)
+## only calls this at a real state transition, but the store itself is ALSO
+## guarded (reading real persisted event history, not the caller's own
+## in-memory transition flag) so a reload cannot record a duplicate
+## founding for a path already known to be worn.
+func test_recording_the_same_worn_path_twice_does_not_duplicate_it():
+	manager.record_path_worn_if_new(Vector2i(6, 6))
+	manager.record_path_worn_if_new(Vector2i(6, 6))
+	assert_eq(manager.event_store().events_for_entity("path:6_6").size(), 1)
+
+
+## Nature reclaiming a path (docs/emergence/04 "Infrastructure degrades") is
+## exactly as recorded as a path forming.
+func test_reclaiming_a_worn_path_records_a_real_event():
+	manager.record_path_worn_if_new(Vector2i(7, 7))
+	manager.record_path_reclaimed(Vector2i(7, 7))
+	var reclaimed: Array = manager.event_store().events_of_type("path_reclaimed")
+	assert_eq(reclaimed.size(), 1)
+	assert_eq(reclaimed[0].actors, ["path:7_7"])
+
+
+## A path that was never worn cannot be reclaimed -- there is nothing real
+## to record.
+func test_reclaiming_a_path_that_was_never_worn_records_nothing():
+	manager.record_path_reclaimed(Vector2i(8, 8))
+	assert_eq(manager.event_store().events_for_entity("path:8_8").size(), 0)
+
+
+## A path can be worn, reclaimed by nature, and worn again over a real
+## session -- each cycle is real, distinct history, not a duplicate of the
+## first.
+func test_a_reclaimed_path_can_be_worn_again():
+	manager.record_path_worn_if_new(Vector2i(9, 9))
+	manager.record_path_reclaimed(Vector2i(9, 9))
+	manager.record_path_worn_if_new(Vector2i(9, 9))
+	assert_eq(manager.event_store().events_of_type("path_worn").size(), 2)
+
+
+## The same composition contracts every other phase already demonstrated:
+## the path forms a real firsthand memory of its own founding.
+func test_a_worn_path_is_remembered():
+	manager.record_path_worn_if_new(Vector2i(10, 10))
+	var memories: Array = manager.memory_store().memories_for("path:10_10")
+	assert_eq(memories.size(), 1)
+	assert_eq(memories[0].source_type, MemoryRecord.FIRSTHAND)
+
+
+# -- emergence: Phase 9 -- town/city tier and specialization, from real flows
+
+## Crossing ALL THREE real dimensions (3 households, 1 active institution
+## via the automatic trade chain, 1 distinct produced recipe) becomes a real
+## town -- with NO manual call to anything, the whole chain running off the
+## same automatic settlement steps Phase 4/5/6 already established.
+func test_step_settlements_records_a_real_tier_change_when_crossing_town_thresholds():
+	var chunk_coord := Vector2i(63, 63)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(5), NpcIdentity.new(10), NpcIdentity.new(11)]
+	)  # seed 5 is a real hunter
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var became_town: Array = manager.event_store().events_of_type("settlement_became_town")
+	assert_eq(became_town.size(), 1)
+	assert_eq(became_town[0].actors, [settlement_id])
+
+
+## The doc's own explicit point, proven through the REAL automatic
+## mechanism rather than asserted in the abstract: high population with no
+## food means every trade breaches (Phase 4), so no institution ever forms
+## (Phase 6) and nothing is ever produced either -- population alone stays
+## a hamlet.
+func test_step_settlements_stays_a_hamlet_on_population_alone():
+	var chunk_coord := Vector2i(65, 65)
+	var npcs: Array = []
+	for i in 5:
+		npcs.append(NpcIdentity.new(100 + i))
+	manager.record_settlement_founded_if_new(chunk_coord, npcs)
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(manager.event_store().events_of_type("settlement_became_town").size(), 0)
+
+
+## Specialization is "derived from flows" made concrete: a real hunter
+## household with real meat stock produces cooked_meat, and that shows up
+## as a real, automatic settlement_specialized event.
+func test_step_settlements_records_specialization_once_grounded():
+	var chunk_coord := Vector2i(67, 67)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(5)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var specialized: Array = manager.event_store().events_of_type("settlement_specialized")
+	assert_eq(specialized.size(), 1)
+	assert_eq(specialized[0].tags, ["hunting center"])
+
+
+## A tier that has already settled is not re-recorded every step -- the same
+## "only a real CHANGE is event-sourced" discipline every other coordinator
+## here already respects.
+func test_step_settlements_does_not_repeat_an_unchanged_tier():
+	var chunk_coord := Vector2i(69, 69)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(5), NpcIdentity.new(10), NpcIdentity.new(11)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD + 1:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(manager.event_store().events_of_type("settlement_became_town").size(), 1)
+
+
+func test_active_institution_count_for_settlement_counts_real_active_institutions():
+	var chunk_coord := Vector2i(71, 71)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("guild", household_a, household_b)
+
+	assert_eq(manager.active_institution_count_for_settlement(settlement_id), 1)
+
+
+func test_active_institution_count_for_an_unfounded_settlement_is_zero():
+	assert_eq(manager.active_institution_count_for_settlement("settlement:999_999"), 0)
+
+
+func test_production_counts_for_settlement_counts_real_successes_by_recipe():
+	var settlement_id := "settlement:73_73"
+	manager.market_store().market_for(settlement_id).add_stock("meat", 3)
+	manager.attempt_production(settlement_id, "cooked_meat")
+	manager.attempt_production(settlement_id, "cooked_meat")
+
+	assert_eq(manager.production_counts_for_settlement(settlement_id), {"cooked_meat": 2})
+
+
+func test_production_counts_ignore_failed_attempts():
+	var settlement_id := "settlement:75_75"
+	manager.attempt_production(settlement_id, "cooked_meat")  # no stock -- fails
+	assert_eq(manager.production_counts_for_settlement(settlement_id), {})
+
+
+# -- emergence: Phase 10 -- ruins, formed from at least 3 independent causes -
+
+## Source 1 (docs/emergence/05 "Historical catastrophe"): a real event
+## records a real ruin, with the causing event actually LINKED as its
+## cause -- "Creation causes must be stored," made concrete and traceable,
+## not just a bare label.
+func test_record_ruin_from_settlement_decline_records_a_real_event_with_a_real_cause():
+	var cause := Event.new("settlement_declining", 1.0)
+	var cause_id := manager.event_store().append(cause)
+
+	manager.record_ruin_from_settlement_decline("settlement:77_77", cause_id)
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:settlement_77_77"])
+	var causes: Array = manager.event_store().causes_of(formed[0].id)
+	assert_eq(causes.size(), 1)
+	assert_eq(causes[0].id, cause_id)
+
+
+func test_recording_the_same_settlement_decline_ruin_twice_does_not_duplicate_it():
+	var cause_id := manager.event_store().append(Event.new("settlement_declining", 1.0))
+	manager.record_ruin_from_settlement_decline("settlement:79_79", cause_id)
+	manager.record_ruin_from_settlement_decline("settlement:79_79", cause_id)
+	assert_eq(manager.event_store().events_for_entity("ruin:settlement_79_79").size(), 1)
+
+
+## Source 2 (docs/emergence/05 "Ecological transformation... overgrown
+## ruins"): nature reclaiming a path IS this dungeon source, verbatim.
+func test_record_ruin_from_reclaimed_path_records_a_real_event_with_a_real_cause():
+	var cause_id := manager.event_store().append(Event.new("path_reclaimed", 1.0))
+	manager.record_ruin_from_reclaimed_path("path:5_5", cause_id)
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:path_5_5"])
+
+
+## Source 3 (docs/emergence/05 "Social transformation... abandoned
+## prisons"): a dissolved institution's old headquarters. Institution ids
+## are NOT EntityRef "kind:key" strings (InstitutionStore.form's own
+## "inst_<ordinal>_<type>" shape) -- used verbatim rather than run through
+## EntityRef.key_of, which only strips a colon-separated prefix.
+func test_record_ruin_from_dissolved_institution_records_a_real_event_with_a_real_cause():
+	var cause_id := manager.event_store().append(Event.new("institution_dissolved", 1.0))
+	manager.record_ruin_from_dissolved_institution("inst_3_guild", cause_id)
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:institution_inst_3_guild"])
+
+
+## The literal exit criterion: at least three INDEPENDENT causal sources,
+## proven by using the exact same raw location number ("5_5") across all
+## three source kinds without collapsing into one ruin -- each source's own
+## kind prefix keeps them genuinely independent.
+func test_three_different_ruin_sources_produce_three_independent_ruins():
+	var cause_a := manager.event_store().append(Event.new("settlement_declining", 1.0))
+	var cause_b := manager.event_store().append(Event.new("path_reclaimed", 1.0))
+	var cause_c := manager.event_store().append(Event.new("institution_dissolved", 1.0))
+
+	manager.record_ruin_from_settlement_decline("settlement:5_5", cause_a)
+	manager.record_ruin_from_reclaimed_path("path:5_5", cause_b)
+	manager.record_ruin_from_dissolved_institution("inst_5_5", cause_c)
+
+	assert_eq(manager.event_store().events_of_type("ruin_formed").size(), 3)
+
+
+## The same composition contracts every other phase already demonstrated:
+## a ruin forms a real firsthand memory of its own founding.
+func test_a_ruin_is_remembered():
+	var cause_id := manager.event_store().append(Event.new("path_reclaimed", 1.0))
+	manager.record_ruin_from_reclaimed_path("path:9_9", cause_id)
+	var memories: Array = manager.memory_store().memories_for("ruin:path_9_9")
+	assert_eq(memories.size(), 1)
+	assert_eq(memories[0].source_type, MemoryRecord.FIRSTHAND)
+
+
+# -- emergence: Phase 10's automatic triggers -------------------------------
+
+## A settlement that automatically declines (Phase 7's own real trigger)
+## automatically leaves behind a real ruin too -- with ZERO manual call to
+## record_ruin_from_settlement_decline.
+func test_step_settlements_forms_a_ruin_automatically_when_a_settlement_declines():
+	var chunk_coord := Vector2i(81, 81)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)  # no food -> declines
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:settlement_%d_%d" % [chunk_coord.x, chunk_coord.y]])
+
+	var declines: Array = manager.event_store().events_of_type("settlement_declining")
+	var causes: Array = manager.event_store().causes_of(formed[0].id)
+	assert_eq(causes[0].id, declines[0].id)
+
+
+## A path nature reclaims (Phase 8's own real trigger) automatically leaves
+## a ruin behind too -- with ZERO manual call to
+## record_ruin_from_reclaimed_path.
+func test_record_path_reclaimed_forms_a_ruin_automatically():
+	manager.record_path_worn_if_new(Vector2i(11, 11))
+	manager.record_path_reclaimed(Vector2i(11, 11))
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["ruin:path_11_11"])
+
+
+## Dissolving an institution (Phase 6's real, callable mechanism) forms a
+## real ruin too, in the same call.
+func test_dissolving_an_institution_forms_a_ruin():
+	_fulfill_contracts_between("household:9", "household:10", InstitutionFormation.FORMATION_THRESHOLD)
+	var institution := manager.attempt_institution_formation("guild", "household:9", "household:10")
+
+	manager.dissolve_institution(institution.id)
+
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1)
+
+
+# -- emergence: Phase 11 -- world bosses, promoted from real fitness data ---
+
+## Below the real, tested WorldBossFitness threshold, nothing is promoted --
+## the whole point of a real threshold rather than a bare create-on-demand
+## call.
+func test_attempting_promotion_below_threshold_promotes_nothing():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:1", "herbivore", 1, 0, 5.0, "a small boar", generator
+	)
+	assert_null(boss)
+	assert_eq(manager.event_store().events_of_type("world_boss_promoted").size(), 0)
+
+
+## At/above the real threshold, a real boss is promoted AND recorded as a
+## real event -- docs/emergence/05's own "Boss emergence... must
+## permanently affect the world" made concrete: a real, /why-inspectable
+## promotion, not a scripted one.
+func test_attempting_promotion_at_threshold_promotes_a_real_boss():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:2", "predator", 50, 200, 500000.0, "an apex wolf", generator
+	)
+	assert_not_null(boss)
+	assert_eq(boss.species, "predator")
+	assert_eq(boss.phases, generator.generate_phases("an apex wolf"))
+
+	var promoted: Array = manager.event_store().events_of_type("world_boss_promoted")
+	assert_eq(promoted.size(), 1)
+	assert_eq(promoted[0].actors, ["creature:2"])
+	assert_eq(promoted[0].tags, ["predator"])
+
+
+## Asking again once already promoted does not duplicate it -- the same
+## once-only guard every other coordinator in this file already uses.
+func test_attempting_promotion_twice_does_not_duplicate_it():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	manager.attempt_world_boss_promotion("creature:3", "predator", 50, 200, 500000.0, "x", generator)
+	manager.attempt_world_boss_promotion("creature:3", "predator", 50, 200, 500000.0, "x", generator)
+	assert_eq(manager.event_store().events_of_type("world_boss_promoted").size(), 1)
+
+
+## The phase generator (which may wrap a real, costly LLM call) is never
+## invoked for an ineligible individual -- WorldBossFitness's own guarantee,
+## still true through the coordinator.
+func test_attempting_promotion_below_threshold_never_invokes_the_phase_generator():
+	var counting_generator := _CountingPhaseGenerator.new()
+	manager.attempt_world_boss_promotion("creature:4", "herbivore", 1, 0, 5.0, "x", counting_generator)
+	assert_eq(counting_generator.call_count, 0)
+
+
+func test_defeating_a_boss_records_a_real_event():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:5", "predator", 50, 200, 500000.0, "an apex wolf", generator
+	)
+	assert_true(manager.defeat_world_boss(boss.id))
+
+	assert_eq(manager.world_boss_store().get_boss(boss.id).status, WorldBoss.DEFEATED)
+	var defeated: Array = manager.event_store().events_of_type("world_boss_defeated")
+	assert_eq(defeated.size(), 1)
+	assert_eq(defeated[0].actors, ["creature:5"])
+
+
+func test_defeating_an_unknown_boss_fails_and_records_nothing():
+	assert_false(manager.defeat_world_boss("boss_999_predator"))
+	assert_eq(manager.event_store().events_of_type("world_boss_defeated").size(), 0)
+
+
+## The same composition contracts every other phase already demonstrated:
+## the promoted individual forms a real firsthand memory of its own
+## promotion.
+func test_a_promoted_boss_is_remembered():
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	manager.attempt_world_boss_promotion("creature:6", "predator", 50, 200, 500000.0, "x", generator)
+	var memories: Array = manager.memory_store().memories_for("creature:6")
+	assert_eq(memories.size(), 1)
+	assert_eq(memories[0].source_type, MemoryRecord.FIRSTHAND)
+
+
+# -- emergence: the world-boss store persists alongside the others ---------
+
+func test_save_world_boss_store_then_load_world_boss_store_round_trips_live_state():
+	var path := "user://test_ecm_emergence_world_bosses.bin"
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:7", "predator", 50, 200, 500000.0, "x", generator
+	)
+
+	manager.save_world_boss_store(path)
+	manager.reset_world_boss_store()
+	assert_null(manager.world_boss_store().get_boss(boss.id), "precondition: reset cleared it")
+	manager.load_world_boss_store(path)
+
+	assert_eq(manager.world_boss_store().get_boss(boss.id).species, "predator")
+
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+
+func test_wipe_world_boss_store_clears_both_memory_and_disk():
+	var path := "user://test_ecm_emergence_world_bosses_wipe.bin"
+	var generator := WorldBossFitness.FakePhaseGenerator.new()
+	var boss := manager.attempt_world_boss_promotion(
+		"creature:8", "predator", 50, 200, 500000.0, "x", generator
+	)
+	manager.save_world_boss_store(path)
+	manager.wipe_world_boss_store(path)
+
+	assert_null(manager.world_boss_store().get_boss(boss.id))
+	assert_false(FileAccess.file_exists(path))
+
+
+## Test double that counts calls, matching test_world_boss_fitness.gd's own
+## _CountingPhaseGenerator convention.
+class _CountingPhaseGenerator extends WorldBossFitness.PhaseGenerator:
+	var call_count := 0
+
+	func generate_phases(_trait_description: String) -> Array:
+		call_count += 1
+		return []
+
+
+# -- gap-closing: automatic institution dissolution (Phase 6's own gap) -----
+
+## The literal gap closed: an institution with plenty of all-time
+## fulfilled-contract history (which alone would have kept the old
+## all-time-count check from ever firing) genuinely dissolves once real
+## time passes with no NEW coordination -- with a real, automatic call to
+## step_settlements, not a direct call to dissolve_institution.
+func test_step_settlements_dissolves_an_institution_that_has_gone_quiet():
+	var chunk_coord := Vector2i(83, 83)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	var institution := manager.attempt_institution_formation("cooperative", household_a, household_b)
+	assert_not_null(institution, "precondition: institution formed")
+
+	manager.set_world_age_seconds(InstitutionFormation.RECENT_WINDOW_SECONDS + 100.0)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(manager.institution_store().get_institution(institution.id).status, "dissolved")
+	assert_eq(manager.event_store().events_of_type("institution_dissolved").size(), 1)
+
+
+## An institution whose pair keeps trading every real automatic step (a
+## settlement that stays prospering, never running out of food) stays
+## active well past the recent window's length -- ongoing activity
+## genuinely protects it, proven through repeated real automatic steps
+## rather than a single isolated post-jump trade (which would only ever
+## produce exactly ONE recent contract -- itself at or below
+## DISSOLUTION_THRESHOLD, an easy false-dissolve trap this test guards
+## against by simulating real sustained activity instead).
+func test_step_settlements_does_not_dissolve_an_institution_still_actively_trading():
+	var chunk_coord := Vector2i(85, 85)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)  # keeps it prospering
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD + 5:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var institution := manager.institution_store().active_institution_for([household_a, household_b])
+	assert_not_null(institution, "precondition: institution formed")
+	assert_eq(institution.status, "active")
+	assert_eq(manager.event_store().events_of_type("institution_dissolved").size(), 0)
+
+
+# -- gap-closing: rumor auto-propagation at real NPC meetings (Phase 2) -----
+
+func _add_scheduled_npc(seed_value: int, location_tag: String) -> NpcMarker:
+	var npc := NpcMarker.new()
+	npc.identity = NpcIdentity.new(seed_value)
+	npc.schedule = [{"time_block": "midday", "location_tag": location_tag, "activity": "idle"}]
+	creatures_parent.add_child(npc)
+	return npc
+
+
+## Real end-to-end: two NPCs at the same real landmark, on their real
+## schedule, at a real shared hour derived from the world clock -- the
+## literal npc.md exit language ("NPCs already meet at a settlement's
+## shared landmarks... on their daily schedule") made concrete, with zero
+## manual calls to MemoryStore.transmit anywhere in this test.
+func test_step_npc_encounters_transmits_a_memory_between_two_npcs_at_the_same_landmark():
+	manager.set_world_age_seconds(30.0)  # hour 12 == "midday"
+	var teller := _add_scheduled_npc(1, "well")
+	var listener := _add_scheduled_npc(2, "well")
+	manager._loaded_villages[Vector2i(0, 0)] = [teller, listener]
+
+	var teller_id := EntityRef.for_npc(1)
+	var listener_id := EntityRef.for_npc(2)
+	var event := Event.new("something_happened", 1.0)
+	event.actors.append(teller_id)
+	manager.event_store().append(event)
+	manager.memory_store().witness_event(event, 1.0)
+
+	manager.step_npc_encounters(EarthChunkManager.NPC_ENCOUNTER_INTERVAL)
+
+	var listener_memories: Array = manager.memory_store().memories_for(listener_id)
+	assert_eq(listener_memories.size(), 1)
+	assert_eq(listener_memories[0].event_id, event.id)
+	assert_eq(listener_memories[0].source_type, MemoryRecord.TRUSTED_TESTIMONY)
+
+	teller.free()
+	listener.free()
+
+
+## Throttled -- the same shape every other periodic coordinator here uses.
+func test_step_npc_encounters_does_nothing_before_its_interval_elapses():
+	manager.set_world_age_seconds(30.0)
+	var teller := _add_scheduled_npc(1, "well")
+	var listener := _add_scheduled_npc(2, "well")
+	manager._loaded_villages[Vector2i(0, 0)] = [teller, listener]
+	var event := Event.new("something_happened", 1.0)
+	event.actors.append(EntityRef.for_npc(1))
+	manager.event_store().append(event)
+	manager.memory_store().witness_event(event, 1.0)
+
+	manager.step_npc_encounters(1.0)
+
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(2)).size(), 0)
+	teller.free()
+	listener.free()
+
+
+## Two NPCs at DIFFERENT landmarks never exchange -- no invented meeting.
+func test_step_npc_encounters_does_not_transmit_between_npcs_at_different_landmarks():
+	manager.set_world_age_seconds(30.0)
+	var teller := _add_scheduled_npc(1, "well")
+	var elsewhere := _add_scheduled_npc(2, "gate")
+	manager._loaded_villages[Vector2i(0, 0)] = [teller, elsewhere]
+	var event := Event.new("something_happened", 1.0)
+	event.actors.append(EntityRef.for_npc(1))
+	manager.event_store().append(event)
+	manager.memory_store().witness_event(event, 1.0)
+
+	manager.step_npc_encounters(EarthChunkManager.NPC_ENCOUNTER_INTERVAL)
+
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(2)).size(), 0)
+	teller.free()
+	elsewhere.free()
+
+
+## A meeting is bidirectional -- each npc's own most recent memory
+## transmits to the other, not just one direction.
+func test_step_npc_encounters_transmission_is_bidirectional():
+	manager.set_world_age_seconds(30.0)
+	var a := _add_scheduled_npc(1, "well")
+	var b := _add_scheduled_npc(2, "well")
+	manager._loaded_villages[Vector2i(0, 0)] = [a, b]
+
+	var event_a := Event.new("thing_a", 1.0)
+	event_a.actors.append(EntityRef.for_npc(1))
+	manager.event_store().append(event_a)
+	manager.memory_store().witness_event(event_a, 1.0)
+
+	var event_b := Event.new("thing_b", 2.0)
+	event_b.actors.append(EntityRef.for_npc(2))
+	manager.event_store().append(event_b)
+	manager.memory_store().witness_event(event_b, 2.0)
+
+	manager.step_npc_encounters(EarthChunkManager.NPC_ENCOUNTER_INTERVAL)
+
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(1)).size(), 2)
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(2)).size(), 2)
+	a.free()
+	b.free()
+
+
+## An npc with no memories yet has nothing to tell -- a real no-op, not an
+## error.
+func test_step_npc_encounters_handles_an_npc_with_no_memories_gracefully():
+	manager.set_world_age_seconds(30.0)
+	var a := _add_scheduled_npc(1, "well")
+	var b := _add_scheduled_npc(2, "well")
+	manager._loaded_villages[Vector2i(0, 0)] = [a, b]
+
+	manager.step_npc_encounters(EarthChunkManager.NPC_ENCOUNTER_INTERVAL)
+
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(1)).size(), 0)
+	assert_eq(manager.memory_store().memories_for(EntityRef.for_npc(2)).size(), 0)
+	a.free()
+	b.free()
+
+
+# -- emergence: Phase 12 -- quests as real projections, never new state ----
+
+## A real settlement with a real blacksmith household and an empty market
+## produces a real, discoverable quest -- reading straight off the same
+## household/market state every other coordinator already touches.
+func test_production_shortfall_quests_for_settlement_reads_real_state():
+	var chunk_coord := Vector2i(87, 87)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(8)])  # seed 8 is a real blacksmith
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	var quests := manager.production_shortfall_quests_for_settlement(settlement_id)
+
+	assert_eq(quests.size(), 1)
+	assert_eq(quests[0]["recipe_id"], "stone_pickaxe")
+
+
+## Once the market genuinely has what the recipe needs, the SAME query
+## reflects that immediately -- no stale quest hanging around, proving this
+## is a live projection, not recorded state.
+func test_production_shortfall_quests_disappear_once_the_market_is_stocked():
+	var chunk_coord := Vector2i(89, 89)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(8)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(manager.production_shortfall_quests_for_settlement(settlement_id).size(), 1, "precondition")
+
+	manager.market_store().market_for(settlement_id).add_stock("stick", 2)
+	manager.market_store().market_for(settlement_id).add_stock("rock", 3)
+
+	assert_eq(manager.production_shortfall_quests_for_settlement(settlement_id).size(), 0)
+
+
+func test_production_shortfall_quests_for_an_unfounded_settlement_is_empty():
+	assert_eq(manager.production_shortfall_quests_for_settlement("settlement:999_999"), [])
+
+
+# -- emergence: Phase 13 -- governance form and legitimacy, from real flows -
+
+func test_governance_form_for_settlement_reads_real_institution_history():
+	var chunk_coord := Vector2i(91, 91)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("militia", household_a, household_b)
+
+	assert_eq(manager.governance_form_for_settlement(settlement_id), "military rule")
+
+
+func test_institution_type_counts_for_settlement_counts_real_history():
+	var chunk_coord := Vector2i(101, 101)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("militia", household_a, household_b)
+
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(manager.institution_type_counts_for_settlement(settlement_id), {"militia": 1})
+
+
+func test_governance_form_for_a_settlement_with_no_institutions_is_none():
+	var chunk_coord := Vector2i(93, 93)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(manager.governance_form_for_settlement(settlement_id), "none")
+
+
+func test_legitimacy_for_settlement_reads_real_food_status():
+	var chunk_coord := Vector2i(95, 95)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+	assert_eq(manager.legitimacy_for_settlement(settlement_id), "high")
+
+
+func test_legitimacy_for_an_empty_market_settlement_is_low():
+	var chunk_coord := Vector2i(97, 97)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(manager.legitimacy_for_settlement(settlement_id), "low")
+
+
+## The real "changes actual decisions" test: a settlement with a real
+## military-rule history (a militia already formed between a DIFFERENT
+## pair of its households) has its NEXT automatic institution formation
+## attempt a militia too -- not the old hardcoded "cooperative" -- proven
+## through the real automatic step_settlements chain, not a direct call.
+func test_step_settlements_forms_the_governance_appropriate_institution_type():
+	var chunk_coord := Vector2i(99, 99)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2), NpcIdentity.new(3)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+	var household_1: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_3: String = manager.household_store().household_for(EntityRef.for_npc(3)).id
+
+	# Establish military-rule governance via a DIFFERENT pair
+	# (household:1/household:3) than the one step_settlements' own
+	# automatic trade will use (the lowest two, household:1/household:2) --
+	# so this doesn't block the automatic pair's own formation.
+	_fulfill_contracts_between(household_1, household_3, InstitutionFormation.FORMATION_THRESHOLD)
+	manager.attempt_institution_formation("militia", household_1, household_3)
+	assert_eq(manager.governance_form_for_settlement(settlement_id), "military rule", "precondition")
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var household_2: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	var new_institution := manager.institution_store().active_institution_for([household_1, household_2])
+	assert_not_null(new_institution, "precondition: the automatic pair actually formed one")
+	assert_eq(new_institution.type, "militia")
+
+
+# -- emergence: Phase 14 -- regional trade, one real edge at a time --------
+
+## A real settlement with a real production shortfall (Phase 12's own
+## Quest) has a caravan dispatched from the nearest OTHER real settlement's
+## real surplus -- the supplier's stock is gone immediately (goods really
+## in transit, real risk -- see docs/concept/trade.md), but the shortage
+## settlement isn't credited yet: that only happens once the caravan
+## actually finishes walking there (see the arrival test below).
+func test_step_regional_trade_departs_a_caravan_but_defers_the_shortage_credit():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])  # blacksmith
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var supplier_coord := Vector2i(1, 0)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+
+	# The supplier is really out this stock right away -- stone_pickaxe
+	# needs 2 stick + 3 rock.
+	assert_eq(manager.market_store().market_for(supplier_id).stock_of("rock"), 17)
+	assert_eq(manager.market_store().market_for(supplier_id).stock_of("stick"), 18)
+	# But the shortage settlement has nothing yet -- it's still on the road.
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 0)
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 0)
+
+	# stone_pickaxe needs both rock and stick -- one real caravan per missing
+	# item, each its own departure event.
+	var departed: Array = manager.event_store().events_of_type("regional_trade_departed")
+	assert_eq(departed.size(), 2)
+	for event in departed:
+		assert_eq(event.actors, [supplier_id, shortage_id])
+	assert_eq(manager.event_store().events_of_type("regional_trade_shipped").size(), 0)
+	assert_eq(manager._active_caravans.size(), 2)
+
+
+## The other real half of the same trip: once a departed caravan actually
+## finishes walking the real route to the shortage settlement's own well,
+## the shortage settlement is credited and the "shipped" event becomes
+## real -- not at the moment of departure. supplier=(-1,0) is a real fixed
+## point where actually running CaravanRaid.roll_for on both real items
+## (rock, stick) at departure_age 0.0 clears HARD tier's own chance for
+## neither -- a clean, deliberately unraided pair, contrasting with the
+## deliberately-raided one the raid test below uses.
+func test_a_departed_caravan_credits_the_shortage_settlement_on_real_arrival():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var supplier_coord := Vector2i(-1, 0)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	assert_eq(manager._active_caravans.size(), 2, "precondition: both caravans are on the road")
+
+	# Walk them all the way there -- one real chunk apart is a short enough
+	# route that a handful of seconds-sized steps comfortably clears it,
+	# whatever CaravanTrip.WALK_SPEED_PX_PER_SEC happens to be tuned to.
+	for i in 200:
+		manager.advance_world_age(1.0)
+		manager.step_caravans()
+		if manager._active_caravans.is_empty():
+			break
+
+	assert_true(manager._active_caravans.is_empty(), "both caravans should have resolved by now")
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 3)
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 2)
+
+	var shipped: Array = manager.event_store().events_of_type("regional_trade_shipped")
+	assert_eq(shipped.size(), 2)
+	for event in shipped:
+		assert_eq(event.actors, [supplier_id, shortage_id])
+
+
+## Walking a real route wears it, the same real PathScarring.step_on every
+## other repeated-traffic system in this codebase already uses (see
+## docs/concept/infrastructure.md) -- a caravan is a second real caller of
+## it, not a cosmetic-only walk.
+func test_a_caravan_wears_a_real_path_along_its_route():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var supplier_coord := Vector2i(1, 0)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	assert_eq(manager._caravan_path_scarring.tracked_tile_count(), 0, "precondition: no wear yet")
+
+	# A handful of small steps partway along the route -- enough to cross
+	# several tiles without necessarily finishing the whole trip.
+	for i in 10:
+		manager.advance_world_age(1.0)
+		manager.step_caravans()
+
+	assert_gt(manager._caravan_path_scarring.tracked_tile_count(), 0)
+
+
+## A raided trip never reaches the shortage settlement -- its carried goods
+## scatter into the world via WorldItemBus (the same real drop path a
+## felled tree or a smashed stone already uses) instead of being credited.
+## supplier=(0,1)/shortage=(0,0)/departure_age=0.0 is a real fixed point:
+## exercising the real, production CaravanRaid.roll_for with these exact
+## real inputs (not mocked, not invented) puts the ROCK trip's roll under
+## HARD tier's real chance while the STICK trip's roll clears it -- so this
+## one scenario also proves two caravans from the same shortage resolve
+## fully independently. Found once by actually running roll_for with these
+## inputs, the same "chosen coordinates that force a specific real outcome"
+## approach test_step_regional_trade_prefers_the_nearest_surplus_settlement
+## already uses for distance.
+func test_a_raided_caravan_scatters_its_goods_while_its_sibling_still_arrives():
+	var shortage_coord := Vector2i(0, 0)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])  # blacksmith
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var supplier_coord := Vector2i(0, 1)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	var dropped_stacks: Array = []
+	var dropped_positions: Array = []
+	WorldItemBus.item_dropped.connect(
+		func(item_stack, world_position): dropped_stacks.append(item_stack); dropped_positions.append(world_position)
+	)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+	assert_eq(manager._active_caravans.size(), 2, "precondition: both caravans are on the road")
+
+	for i in 200:
+		manager.advance_world_age(1.0)
+		manager.step_caravans()
+		if manager._active_caravans.is_empty():
+			break
+
+	assert_true(manager._active_caravans.is_empty(), "both caravans should have resolved by now")
+	# Rock was raided -- never arrives. Stick wasn't -- it arrives normally,
+	# exactly like the plain arrival test above.
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 0, "raided goods never arrive")
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("stick"), 2, "the unraided sibling still arrives")
+
+	var shipped: Array = manager.event_store().events_of_type("regional_trade_shipped")
+	assert_eq(shipped.size(), 1)
+	assert_eq(shipped[0].tags, ["stick"])
+
+	var raided: Array = manager.event_store().events_of_type("regional_trade_raided")
+	assert_eq(raided.size(), 1)
+	assert_eq(raided[0].actors, [supplier_id, shortage_id])
+	assert_eq(raided[0].tags, ["rock"])
+
+	assert_eq(dropped_stacks.size(), 1, "the caravan's carried rock scatters into the world exactly once")
+	assert_eq(dropped_stacks[0].item.id, "rock")
+	assert_eq(dropped_stacks[0].count, 3)
+
+
+## Given two candidate suppliers, the CLOSER one (real Euclidean distance
+## between real chunk coordinates) is chosen.
+func test_step_regional_trade_prefers_the_nearest_surplus_settlement():
+	var shortage_coord := Vector2i(10, 10)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var near_coord := Vector2i(11, 10)  # distance 1
+	manager.record_settlement_founded_if_new(near_coord, [NpcIdentity.new(1)])
+	var near_id := EntityRef.for_settlement(near_coord)
+	manager.market_store().market_for(near_id).add_stock("rock", 20)
+	manager.market_store().market_for(near_id).add_stock("stick", 20)
+
+	var far_coord := Vector2i(100, 10)  # distance 90
+	manager.record_settlement_founded_if_new(far_coord, [NpcIdentity.new(2)])
+	var far_id := EntityRef.for_settlement(far_coord)
+	manager.market_store().market_for(far_id).add_stock("rock", 20)
+	manager.market_store().market_for(far_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+
+	assert_eq(manager.market_store().market_for(near_id).stock_of("rock"), 17, "the near settlement supplied")
+	assert_eq(manager.market_store().market_for(far_id).stock_of("rock"), 20, "the far settlement untouched")
+
+
+## A settlement with SOME stock but not real surplus (below the safety
+## margin) never trades its own reserve away.
+func test_step_regional_trade_does_not_resupply_from_insufficient_surplus():
+	var shortage_coord := Vector2i(0, 2)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var shortage_id := EntityRef.for_settlement(shortage_coord)
+
+	var barely_stocked_coord := Vector2i(1, 2)
+	manager.record_settlement_founded_if_new(barely_stocked_coord, [NpcIdentity.new(1)])
+	var barely_stocked_id := EntityRef.for_settlement(barely_stocked_coord)
+	manager.market_store().market_for(barely_stocked_id).add_stock("rock", 3)  # exactly the need, no margin
+	manager.market_store().market_for(barely_stocked_id).add_stock("stick", 2)
+
+	manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+
+	assert_eq(manager.market_store().market_for(shortage_id).stock_of("rock"), 0)
+	assert_eq(manager.event_store().events_of_type("regional_trade_shipped").size(), 0)
+
+
+func test_step_regional_trade_does_nothing_before_its_interval_elapses():
+	var shortage_coord := Vector2i(0, 3)
+	manager.record_settlement_founded_if_new(shortage_coord, [NpcIdentity.new(8)])
+	var supplier_coord := Vector2i(1, 3)
+	manager.record_settlement_founded_if_new(supplier_coord, [NpcIdentity.new(1)])
+	var supplier_id := EntityRef.for_settlement(supplier_coord)
+	manager.market_store().market_for(supplier_id).add_stock("rock", 20)
+	manager.market_store().market_for(supplier_id).add_stock("stick", 20)
+
+	manager.step_regional_trade(1.0)
+
+	assert_eq(manager.event_store().events_of_type("regional_trade_shipped").size(), 0)
+
+
+# -- a building piece occupies its tile against vegetation -------------------
+#
+# Reported: a village house stamped straight over a standing tree -- trunk
+# rooted in the stone floor, canopy drawn over the masonry. Three directions,
+# not one, because _load_chunk spawns trees BEFORE it spawns the village that
+# stamps houses over them, and loads chunk.modifications from disk before
+# BOTH: (A) the house arriving second must clear what is growing where it
+# lands (stamp_structure_at_global, below), (B) the forest respawning next
+# load must skip a cell a persisted piece holds (TreeRenderer.spawn_trees,
+# covered in test_tree_renderer.gd), and (C) a spread seed must not take root
+# on a floor (_can_root_at, below). Only REAL BuildingPieces occupy -- an
+# earth path or a campfire is a chunk modification too.
+
+const _OccupancyTreeRooting = preload("res://src/world/tree_rooting.gd")
+
+
+func _tree_standing_at(tile: Vector2i) -> ChoppableTree:
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(
+		(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	entities_parent.add_child(tree)
+	manager._loaded_trees[_chunk_coord_for_tile(tile)].append(tree)
+	return tree
+
+
+func test_building_piece_occupancy_clears_trees_on_a_stamped_footprint():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(10, 10)
+	var tree := _tree_standing_at(origin)
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "stone_floor"}, {})
+
+	assert_false(
+		manager._loaded_trees[chunk_coord].has(tree),
+		"a tree was left standing inside a freshly stamped floor"
+	)
+	assert_true(tree.is_queued_for_deletion())
+
+
+## ...but only what the footprint actually covers. Clearing wider than the
+## stamp would strip a house's whole clearing bare.
+func test_building_piece_occupancy_leaves_a_tree_beside_the_footprint_standing():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(10, 10)
+	var neighbour := _tree_standing_at(origin + Vector2i(3, 0))
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "stone_floor"}, {})
+
+	assert_true(
+		manager._loaded_trees[chunk_coord].has(neighbour),
+		"a tree three tiles from the footprint should still be standing"
+	)
+	assert_false(neighbour.is_queued_for_deletion())
+
+
+## A persisted sapling under the footprint has to go from the RECORD too, or
+## it simply comes back from disk on the next load (see Chunk.planted_trees).
+func test_building_piece_occupancy_forgets_a_persisted_sapling_under_the_footprint():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var chunk = manager._loaded_chunks[chunk_coord]
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(12, 12)
+	var under := Vector2(
+		(origin.x + 0.5) * TerrainRenderer.TILE_SIZE, (origin.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	var beside := Vector2(
+		(origin.x + 3.5) * TerrainRenderer.TILE_SIZE, (origin.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	chunk.planted_trees.append({"position": under, "planted_at": 0.0})
+	chunk.planted_trees.append({"position": beside, "planted_at": 0.0})
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "wood_floor"}, {})
+
+	var kept_positions := []
+	for record in chunk.planted_trees:
+		kept_positions.append(record["position"])
+	assert_false(kept_positions.has(under), "a persisted sapling survives under the house floor")
+	assert_true(kept_positions.has(beside), "the sapling beside the house should be untouched")
+
+
+## Nothing takes root on a floor afterwards either -- TreeRooting answers the
+## BIOME question only, and occupancy is a separate refusal.
+func test_building_piece_occupancy_refuses_a_sapling_rooting_on_a_piece():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var chunk = manager._loaded_chunks[chunk_coord]
+	var rootable := Vector2i(-1, -1)
+	for y in range(4, EarthChunkManager.CHUNK_SIZE - 4):
+		for x in range(4, EarthChunkManager.CHUNK_SIZE - 4):
+			if _OccupancyTreeRooting.can_root_in(chunk.biome[y * chunk.width + x]):
+				rootable = chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(x, y)
+				break
+		if rootable != Vector2i(-1, -1):
+			break
+	if rootable == Vector2i(-1, -1):
+		pass_test("no rootable cell in Berlin's own chunk this run")
+		return
+	var position := Vector2(
+		(rootable.x + 0.5) * TerrainRenderer.TILE_SIZE,
+		(rootable.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+
+	manager.stamp_structure_at_global(chunk_coord, rootable, {Vector2i(0, 0): "wood_floor"}, {})
+	var before: int = chunk.planted_trees.size()
+	manager._plant_sapling_record(chunk, chunk_coord, position)
+
+	assert_eq(
+		chunk.planted_trees.size(), before,
+		"a sapling took root on a building piece"
+	)
+
+
+## The same rule for STONE. _load_chunk spawns boulders and mountain ore veins
+## (both land in _loaded_stones) before the village stamps its houses, so on a
+## first visit a boulder standing where a wall goes is enclosed by it exactly
+## the way a tree was. No persisted-record half here: stones carry no
+## planted_trees equivalent -- they regenerate deterministically, and the
+## respawn direction is closed in StoneRenderer.
+func _stone_standing_at(tile: Vector2i) -> Node2D:
+	var stone := Node2D.new()
+	stone.position = Vector2(
+		(tile.x + 0.5) * TerrainRenderer.TILE_SIZE, (tile.y + 0.5) * TerrainRenderer.TILE_SIZE
+	)
+	entities_parent.add_child(stone)
+	manager._loaded_stones[_chunk_coord_for_tile(tile)].append(stone)
+	return stone
+
+
+func test_building_piece_occupancy_clears_stones_on_a_stamped_footprint():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(14, 14)
+	var boulder := _stone_standing_at(origin)
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "stone_floor"}, {})
+
+	assert_false(
+		manager._loaded_stones[chunk_coord].has(boulder),
+		"a boulder was left standing inside a freshly stamped floor"
+	)
+	assert_true(boulder.is_queued_for_deletion())
+
+
+## ...and, as with trees, only what the footprint actually covers.
+func test_building_piece_occupancy_leaves_a_stone_beside_the_footprint_standing():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var origin := chunk_coord * EarthChunkManager.CHUNK_SIZE + Vector2i(14, 14)
+	var neighbour := _stone_standing_at(origin + Vector2i(3, 0))
+
+	manager.stamp_structure_at_global(chunk_coord, origin, {Vector2i(0, 0): "stone_floor"}, {})
+
+	assert_true(
+		manager._loaded_stones[chunk_coord].has(neighbour),
+		"a boulder three tiles from the footprint should still be standing"
+	)
+	assert_false(neighbour.is_queued_for_deletion())

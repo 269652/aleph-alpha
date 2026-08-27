@@ -103,9 +103,22 @@ Rules exist to stop floating nonsense, not to nag:
 - A roof must sit above a cell that is part of an enclosed room.
 - Nothing may be placed where a piece already exists; destroying returns the
   piece's material (mirroring the existing build/destroy loop).
+- **A piece occupies its tile against vegetation, in both directions.** A
+  structure stamped onto a cell fells whatever is growing there (and forgets
+  its persisted record, so it does not return from disk); a tile a real
+  piece stands on grows nothing afterwards — no map-generated tree respawns
+  onto it when the chunk reloads, and no spread or bird-dropped seed takes
+  root on it. Only a *real* `BuildingPiece` occupies: an earth path or a
+  campfire is a chunk modification too, and neither uproots a tree.
 
 Placement validity is pure logic over a grid, so it can be asked the same
 question by the player's build cursor and by the NPC village generator.
+
+That purity is also why the vegetation rule above does **not** live in
+`BuildingPlacement`: a grid of piece ids has no notion of a world with trees
+standing in it. It is enforced instead at the three world-facing seams where
+a tree and a piece can actually meet — see "One system, two builders" and
+the status list below.
 
 ### One system, two builders
 
@@ -135,6 +148,154 @@ adjacent floor) still aren't enforced for village generation. Full
 unification — the village generator asking `BuildingPlacement` the same
 question the player's build cursor does — remains a follow-up.
 
+A **second** instance of that gap has now been closed: standing vegetation.
+Reported as a tree with its trunk rooted in a village house's stone floor
+and its canopy drawn over the masonry. Unlike the water case it was *not*
+closed inside `VillageRenderer`, because nudging is the wrong answer here —
+trees only grow in forest/rainforest, so a village that avoided them would
+have nowhere to go, and a real settlement clears the wood rather than
+dodging it. It was closed on the world side instead, because the collision
+has three directions, not one, and `_load_chunk`'s ordering means no single
+site can see them all:
+
+1. **The house arrives second.** `_load_chunk` spawns trees before it spawns
+   the village that stamps houses over them, so on a fresh visit the
+   structure lands on standing trunks. `EarthChunkManager.
+   stamp_structure_at_global` now fells them (and prunes the matching
+   `Chunk.planted_trees` records).
+2. **The forest arrives second, next time.** `chunk.modifications` is loaded
+   from disk *before* trees spawn, so without a check the deterministic
+   forest respawns straight into a persisted house — including a
+   player-built one the village generator never re-stamps.
+   `TreeRenderer.spawn_trees` now skips a cell a real piece holds.
+3. **A seed arrives later still.** `EarthChunkManager._can_root_at` now
+   refuses a cell carrying a real piece, so nothing sprouts on a floor
+   afterwards.
+
+Boulders and ore have the identical bug with the identical shape, and are
+now covered in directions 2 and 3's sense but not 1's: `StoneRenderer.
+spawn_stones` (and `spawn_mountain_veins`, whose separate slope-gated
+placement runs at the same point in `_load_chunk`) now skip a cell a real
+piece holds, so stone no longer regrows inside a persisted house; nothing
+seeds a boulder, so there is no direction 3 for it. Direction 1 — a house
+stamped over a boulder that is already standing in this session — is still
+open, and needs `_loaded_stones` added to `_clear_vegetation_on_cells`'s
+loop. See the Status list below.
+
+### A blueprint catalog, not one box
+
+Reported directly: "the houses the npcs build are minimal and don't look
+neat and diverse... we want Anno 1800 like houses and villages... so maybe
+we need house blueprints which function as template/recipe for the npcs
+building their houses... there should be enough different blueprints that
+every house in a village can look different... NPCs choice though."
+
+Before this, `HouseBlueprint` generated exactly one shape: a wall ring
+around a floor interior, fixed at 5x4, with one seeded door and no windows
+at all. Every villager in every settlement built the identical box, in one
+of two materials. `HouseBlueprint` is now a real CATALOG of named shapes
+(`HouseBlueprint.BLUEPRINT_IDS`) spanning a tiny one-room hut through
+wide/tall/bright cottages to genuinely L-shaped manors — real footprint-size
+and window-count variety, plus (for the L entries) a non-rectangular
+silhouette, not just a recolour of the same box.
+
+**Built from three safe, tested geometric primitives, not hand-pixeled
+floor plans.** A blueprint recipe is a footprint size, a window count, and
+an optional corner notch — `build()` assembles it by (1) filling a plain
+wall-ring rectangle, (2) carving the notch out if the recipe declares one
+(erasing those cells entirely and upgrading any newly-exposed floor cell to
+a wall), then (3) punching a door and the requested number of windows
+through whichever wall cells qualify. A cell qualifies for a door/window
+when it has *exactly one* floor neighbour and at least one missing
+(exterior) neighbour — one rule that correctly excludes both an ordinary
+rectangle's corners (zero floor neighbours) and an L-shape's own inner
+corner (two floor neighbours at once) without any shape-specific
+special-casing. Hand-authoring each shape as raw ASCII art was considered
+and rejected: it is exactly the kind of content that can silently produce
+an unenclosed or two-door house with no obvious symptom until someone looks
+at a screenshot; every blueprint this system can produce is provably a
+real, single, enclosable room (verified by `RoomDetector` in the test
+suite, for every catalog entry, not spot-checked).
+
+**Which blueprint a villager builds is their own choice, not raw noise.**
+`choose_blueprint_id(occupation, genome, seed_value)` picks from a
+per-occupation pool (`HouseBlueprint.BLUEPRINT_POOL_BY_OCCUPATION`, ordered
+plain → showy, weighted by simple repetition the same way biome species
+pools already are) — a farmer or guard tends toward a hut or small cottage,
+a merchant toward a bright or grand one, a blacksmith toward something wide
+enough for a real workspace. The villager's `NpcGenome` (see
+[npc.md](npc.md)'s "personality should be DNA derived") then nudges *where
+in that pool* the choice lands: a bold/greedy-dominant NPC's roll is pushed
+into the showy (larger/later) half of their own occupation's pool, a
+cautious/stoic one into the plain half, a neutral trait picks uniformly.
+Occupation decides what a villager could plausibly build; personality
+colours which of those options they actually pick — the same "identity
+actually matters mechanically" pillar this project's NPC system already
+commits to elsewhere.
+
+### How a house reads from above
+
+A correct piece layout is not the same thing as a building that *looks*
+like one. Reported directly, with the blueprint catalog above already in
+place: "the buildings don't resemble houses at all... just some randomly
+placed stones and wood panels". Three separate causes, each structural
+rather than a matter of prettier textures:
+
+**1. The roof is the exterior, so it must cover the exterior.** Roofs
+originally covered only the FLOOR cells — the room interior — leaving the
+wall ring uncovered. From above that reads inside-out: a wooden ring with
+a differently-textured rectangle sitting inside it, which is a courtyard,
+not a house. A roof covers the whole footprint, walls included. Entering
+still reveals the interior, because roof-hiding keys on
+`RoomDetector.room_containing` (the room's own cells) rather than on "all
+roof cells" — so the wall cap stays while the room opens up, which is
+also what a cutaway of a real building looks like.
+
+**2. A house needs a facade, or the player cannot find the door.** A roof
+covering *everything* is geometrically honest but hides the one thing the
+player needs to see. Real top-down games solve this the same way: the roof
+stops one row short of the front, leaving a visible facade band carrying
+the door and windows. So the door is placed on the FRONT (south) wall
+rather than wherever a wall cell first qualifies, and the southernmost
+wall cell of every column stays unroofed. A villager's house therefore
+reads as roof-above-facade, with its entrance legible from outside — and
+the door is somewhere a person would actually put one.
+
+**3. A pitched roof reads as a roof; a flat one reads as a floor.** A
+single shingle texture tiled across a rectangle is, visually, a brick
+patio. What makes a roof read as a roof from above is the PITCH: a ridge
+line along the top, two slopes falling away from it, one catching the
+light and one in shade. That is per-cell context, not per-tile art, so it
+is derived the same way `TerrainRenderer` already derives biome blends and
+corners from neighbours (`dominant_blend_for`/`corner_direction_for`) —
+a pure classifier over the cell set, feeding an atlas family:
+
+- The ridge runs along the footprint's LONGER axis, because real rafters
+  span the shorter direction.
+- Each cell's shade comes from its distance to the ridge, brightest at the
+  ridge and falling toward the eaves, with the light-facing slope (up-left,
+  this project's established light direction) a full step brighter than the
+  shaded one.
+- Quantized into a small fixed number of bands rather than a continuous
+  ramp, so it stays a bounded atlas family like every other one here.
+
+**4. Per-tile rim shading is what made it read as loose panels.** Every
+piece tile drew its own bright top-left and dark bottom-right rim. Twenty
+wall tiles in a ring therefore drew twenty individually-outlined boxes —
+an internal grid over the whole building, which is precisely the "randomly
+placed panels" the report describes. A rim belongs on the STRUCTURE's
+outer boundary, not on each cell: a piece tile is rimmed only on the sides
+where it actually borders something that is not part of the same building.
+That is again neighbour context, expressed as a 4-bit edge mask over the
+cell's cardinal sides, so the atlas family is (material × band × edge
+mask) rather than one tile per piece id.
+
+None of this changes the piece vocabulary or what gets persisted — a roof
+is still one `wood_roof`/`stone_roof` chunk modification per cell (see
+Persistence below). All of the above is resolved at PAINT time from the
+neighbouring cells, exactly like terrain blending, so no new piece ids and
+no save-format change are involved.
+
 ### Persistence
 
 Pieces persist through the existing per-chunk modification system (see
@@ -152,10 +313,13 @@ modification like any other.
 - ✅ `room_detector.gd` — enclosure flood fill; rooms, and whether a given
   cell is indoors, tested. Doors block the fill while staying walkable,
   which is what makes a house enterable without ceasing to be enclosed.
-- ✅ `house_blueprint.gd` — seed + footprint → piece list, shared by the
-  player's prefabs and the village generator, tested. A generated house is
-  verified to enclose a real room, so village houses cannot silently
-  degrade back into scenery.
+- ✅ `house_blueprint.gd` — a CATALOG of named blueprints (see "A blueprint
+  catalog, not one box" above), each a seed away from a real piece list,
+  shared by the player's prefabs and the village generator, tested. Every
+  single catalog entry is verified to enclose exactly one real room, so
+  village houses cannot silently degrade back into scenery. Which blueprint
+  a villager builds is chosen from their own occupation/personality
+  (`choose_blueprint_id`), not picked uniformly at random.
 - ✅ Piece rendering, wall/window collision, door passability, roof
   hide-on-enter. `ProceduralBuildingPieceSprite` gives all 10 piece ids
   (floor/wall/door/window/roof × wood/stone) their own atlas tile, alongside
@@ -178,22 +342,84 @@ modification like any other.
   a whole structure's pieces in one call + one repaint (used by the village
   generator, see below) rather than one `build_at_global` call per cell,
   which would repaint the owning chunk once per cell.
+- ✅ A piece occupies its tile against vegetation (see "Placement rules" and
+  "One system, two builders"), tested at all three seams.
+  `stamp_structure_at_global` collects the cells it wrote a real
+  `BuildingPiece` to and hands them to `_clear_vegetation_on_cells`, which
+  `queue_free()`s any tree standing on them, drops it from `_loaded_trees`
+  in the same breath (that registry is iterated elsewhere without an
+  `is_instance_valid` guard) and prunes the matching `Chunk.planted_trees`
+  records so a persisted sapling under the footprint does not come back from
+  disk — closing direction 1, the house stamped over a standing trunk.
+  `TreeRenderer.spawn_trees` skips a cell whose `chunk.modifications` holds
+  a real piece — closing direction 2, the deterministic forest respawning
+  into a persisted house on revisit. `_can_root_at` refuses such a cell —
+  closing direction 3, a spread or bird-dropped seed sprouting on a floor.
+  `TreeRooting.can_root_in` still answers only the BIOME half of "can a tree
+  stand here"; occupancy is a separate, second refusal.
+- ✅ The same rule for boulders and ore, closed on **both** sides.
+  `StoneRenderer.spawn_stones` had the identical bug with the identical
+  shape — it iterated its cells over `chunk.biome` and never consulted
+  `chunk.modifications`, and `_load_chunk` runs it *before* the village is
+  stamped — so a boulder regrew inside a persisted house on every revisit,
+  including a player-built one. It now skips a cell a real `BuildingPiece`
+  holds, via a shared `_piece_occupies` helper, closing direction 2 for
+  stone exactly as `spawn_trees` closes it for the forest. The same guard is
+  applied to `spawn_mountain_veins`, whose placement rule is different
+  (slope-gated, see `MountainOrePlacement`) but which is called from the
+  same `_load_chunk` step into the same `_loaded_stones` list, so a
+  player-built mountain shelter no longer sprouts ore through its floor.
+  The narrowness is pinned by its own test, the same way the forest's is:
+  plain earth under a boulder is a modification too and must not clear it.
+  Direction 1 — a house stamped over an ALREADY-SPAWNED boulder in the
+  same session — is closed in `_clear_vegetation_on_cells`, which now walks
+  `_loaded_stones[chunk_coord]` alongside `_loaded_trees` and
+  `queue_free()`s (and drops from the registry) every stone the footprint
+  covers, mountain ore veins included since they land in the same list.
+  There is no persisted-record half to prune: stone has no
+  `planted_trees` equivalent, it regenerates deterministically, and the
+  respawn guard above catches it on the next load. Direction 3 does not
+  apply — nothing seeds a boulder. Pinned by
+  `test_building_piece_occupancy_clears_stones_on_a_stamped_footprint` and
+  its narrowness twin `..._leaves_a_stone_beside_the_footprint_standing`.
 - ✅ Village houses rebuilt from blueprints, replacing the decorative
-  `ProceduralHouseSprite`. `VillageRenderer._stamp_house` builds a real
-  5x4 `HouseBlueprint` structure (seeded wood/stone material) centred on
-  each villager's ring-layout anchor and stamps it via
+  `ProceduralHouseSprite`. `VillageRenderer._stamp_house` picks a real named
+  `HouseBlueprint` shape via `choose_blueprint_id` (the villager's own
+  occupation/personality, not a fixed 5x4 box any more -- see "A blueprint
+  catalog, not one box" above), builds it (seeded wood/stone material)
+  centred on each villager's ring-layout anchor, and stamps it via
   `stamp_structure_at_global`; a house is a chunk modification now, not a
   spawned node. A villager's `home_position` resolves to the house's own
   DOOR cell (found by scanning the stamped pieces for `CATEGORY_DOOR`), not
   the raw anchor point, so a villager standing "at home" is standing
   somewhere it could actually have walked to rather than the middle of a
-  wall or floor cell. Verified end-to-end against a real loaded chunk
-  (real walls, exactly one door, real floor, a roof all present), not just
-  the unit-level piece/placement/room logic. `VillageRenderer._find_dry_origin`
+  wall or floor cell. `_door_facing_direction` derives which way a door
+  opens from its own actual floor neighbour rather than assuming a plain
+  box's 4 sides, so an L-shaped blueprint's door (which can land on the
+  notch's own exposed edge, not one of the bounding rectangle's 4 sides)
+  still points a merchant's personal trading stand at open ground instead
+  of a wall. Verified end-to-end against a real loaded chunk (real walls,
+  exactly one door, real floor, a roof all present), not just the
+  unit-level piece/placement/room logic. `VillageRenderer._find_dry_origin`
   nudges a house's origin off a water pocket before stamping (see "One
   system, two builders" above), and every merchant villager gets a second,
   personal trading stand next to their own door (the same "stall" sprite as
   the shared village-square one), not just the one shared landmark.
+- ✅ Per-occupation workspot props close the gap the merchant-stand pass left
+  open (reported: "no per-occupation building beyond the shared landmarks
+  and a merchant's own stand"). `NpcIdentity.WORK_LOCATION_BY_OCCUPATION` is
+  the single shared mapping both `NpcPlanner.FakeNpcPlanner` (which
+  `location_tag` a villager's schedule sends them to by day) and
+  `VillageRenderer` (which prop, if any, actually stands there) read from,
+  so the two can't drift the way two hand-maintained copies eventually
+  would. `ProceduralLandmarkSprite` gained a field (farmer), forge
+  (blacksmith), dock (fisher) and garden (herbalist) prop alongside its
+  existing well/stall/gate; merchant and guard already had a real prop at
+  their work tag (a personal stand, the shared gate) so they're
+  intentionally skipped. `VillageRenderer.spawn_village` stamps one such
+  prop per qualifying villager at that villager's own `workspot_position`
+  (not a shared village-square point), so two herbalists in one settlement
+  each get their own garden rather than sharing one.
 - ⬜ Player-facing build cursor/piece selection UI (placing pieces by hand is
   currently only reachable via `stamp_structure_at_global`/`build_at_global`
   directly, not through the hotbar/inventory the way campfire/furnace are).

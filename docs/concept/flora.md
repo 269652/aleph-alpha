@@ -378,6 +378,17 @@ Only species actually **in bloom this season** are rendered; a planted flower
 out of its bloom window is still there and still simulated, it simply isn't
 showing a blossom — which is also what a real meadow looks like.
 
+The rule extends one step further than it currently reaches: a bloom that has
+**gone over** should be drawn as gone over. `FlowerBloom.is_withered`
+(`WITHER_PHASE`, the last quarter of a species' own window) is read LIVE
+every tick when a pollinator picks a target — a bee already refuses a flower
+past its phase — but the withered look is chosen once, at the instant the
+sprite is generated, and never refreshed. A daisy drawn early in spring
+therefore keeps fresh-bloom art right through autumn and then simply
+vanishes, while the bees have long since stopped visiting it. That is the sim
+and the picture openly disagreeing, which is exactly what this section
+forbids. Recorded as an open item below rather than silently tolerated.
+
 This is a specific instance of a general rule this project learned twice the
 hard way: **the rendered world must not advertise something the simulation
 will not honour.** Flowers were drawn year-round while `ScentField` correctly
@@ -752,6 +763,23 @@ same "ecology has consequences" thread as tree spread (see
   pollinator, grounded in real (modest, not order-of-magnitude) individual
   variation in pollinator foraging efficiency, and nowhere near enough on
   its own to meaningfully dent `POLLINATION_SATURATION_VISITS`.
+- ⬜ **A bloom that has gone over is not redrawn as withered.**
+  `FlowerBloom.is_withered` is evaluated once, at sprite creation, inside
+  `EarthChunkManager._sync_flower_sprites`, and baked into the generated
+  texture; the per-tick loop just below it already re-reads live sim state
+  for every existing sprite but only ever touches `scale`. Meanwhile the
+  pollinator path reads `is_withered` live every tick, so a bee refuses a
+  flower the world still draws as fresh (see "What is visible must be what
+  is real"). The fix is small and the refresh cadence to hang it on is
+  already paid for: remember the flag each sprite was BUILT with and
+  regenerate only when it flips — at most once per plant per year, the same
+  only-on-change guard `_sync_tree_season` uses for canopies.
+- ✅ Seasonal bloom windows themselves are correct and already live
+  (`FlowerSpecies.SPECIES[*].bloom`, `FlowerPatch.blooming_cells`,
+  re-synced on every season change) — exactly one of the eight species
+  (crocus) blooms in winter, so a winter meadow is genuinely ~7/8 empty.
+  Noted explicitly because "flowers keep blooming in winter" has been
+  reported and is not what the code does.
 - 🚧 Illustrated head art per archetype — `IllustratedFlowerHead` +
   `ProceduralFlowerSprite._paint_illustrated_head`, tinted per species,
   nectar-driven full/spent staging. Only "cup" (crocus, tulip) has a sheet
@@ -851,6 +879,15 @@ while the flowers beneath them bloomed and died on schedule, which made the
 seasons something that happened to the ground cover and not to the world. A
 bare orchard in winter is the clearest signal the game has that time is
 passing.
+
+That fix then had an exact inverse defect, and it is worth naming here
+because this paragraph is where someone will come looking: the canopies
+turned and the GROUND under them did not. Bare winter trees stood on a
+bright high-summer lawn, in still-lush tall grass, over still-green crop
+tops. The ground cover now carries the season too, on the same
+`SeasonTransition` clock these canopies turn on — see
+[seasons.md](seasons.md)'s "The ground carries the season too" and
+`src/rendering/seasonal_foliage.gd`.
 
 The frames map to seasons by MEANING, not by their order in the sheet: bare is
 winter, blossom is spring, leaf is summer, turning is autumn. Written down

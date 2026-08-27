@@ -27,6 +27,16 @@ extends RefCounted
 ## ecologically distinct instead of drawing from the same global 4-species
 ## pool. Each is its own species entry here (own stats/diet), independent of
 ## which of the 4 hand-drawn shape families it happens to render with.
+##
+## wolf/sheep are forest's own equivalent addition: forest was the one
+## biome among those six still drawing its dominant predator from the
+## anonymous "predator" placeholder rather than a real named species (see
+## CreatureRenderer's PREDATOR_SPECIES_POOL_BY_BIOME) -- "predator" was
+## always this project's own unnamed stand-in for a wolf (wolf_shape,
+## gray coat), so wolf gives that a real name, real stats, and real
+## illustrated art (see IllustratedAnimalSprite) rather than a new role.
+## Sheep is wolf's (and deer's) forest prey -- an ordinary herbivore-role
+## addition, same as deer/nonvenomous_snake.
 
 ## The 8 biome-specific species below (see CreatureRenderer's per-biome
 ## species pools -- desert/tundra/rainforest/mountain each get their own
@@ -68,6 +78,39 @@ const MAX_HEALTH_BY_SPECIES := {
 	"lion": 45.0,
 	"nonvenomous_snake": 10.0,
 	"venomous_snake": 14.0,
+	# -- Germany-region world bosses (docs/concept/worldbosses.md) ----------
+	# Debug/test-spawn stats, not this doc's real design -- see this file's
+	# GERMANY_BOSS_SPECIES-adjacent test for why these are hand-authored
+	# placeholders rather than fitness-derived. All above this roster's
+	# current toughest ordinary predator (bear, 50.0).
+	"lindwurm": 140.0,
+	"rubezahl": 110.0,
+	"nyx": 95.0,
+	"krampus": 120.0,
+	# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) -----------
+	# Debug/first-pass stats, same "hand-authored row" precedent as the
+	# Germany bosses just above -- but deliberately NOT at that roster's
+	# scale (95-140): the doc is explicit that Squallmaw "does nothing a
+	# real creature doesn't already do (fight, flee, be tamed)", an
+	# ordinary creature encounter, not a boss fight. Squallmaw reads as a
+	# strong apex predator (above bear, this roster's toughest ordinary
+	# predator at 50) without reaching world-boss stakes. Coilnecca and
+	# Champ are calm/skittish cameos, not combat encounters, so they sit at
+	# an ordinary-herbivore scale instead.
+	"squallmaw": 58.0,
+	"coilnecca": 24.0,
+	"champ": 21.0,
+	# -- Kraken (docs/concept/easter_eggs.md's condition-triggered, higher-
+	# stakes entry) ---------------------------------------------------------
+	# The doc's one deliberate exception to pillar 2's "zero mechanical
+	# weight": "genuinely dangerous... actually a real fight if it notices
+	# you". Deliberately above the whole roster's current toughest species
+	# (lindwurm, 140.0, the Germany-region world bosses) by a clear margin --
+	# see test_kraken_exceeds_the_previous_toughest_species_by_a_clear_margin
+	# in test_creature_info.gd, which pins ">1.5x lindwurm" as a relative
+	# property rather than an isolated eyeballed literal, same discipline as
+	# every other hand-authored stat row in this table.
+	"kraken": 220.0,
 }
 const MAX_STAMINA_BY_SPECIES := {
 	"herbivore": 30.0,
@@ -99,6 +142,19 @@ const MAX_STAMINA_BY_SPECIES := {
 	"lion": 30.0,
 	"nonvenomous_snake": 15.0,
 	"venomous_snake": 15.0,
+	"lindwurm": 30.0,
+	"rubezahl": 35.0,
+	"nyx": 30.0,
+	"krampus": 35.0,
+	# Squallmaw is a strong swimmer (high stamina); Coilnecca/Champ are
+	# unhurried lake dwellers, ordinary-herbivore-scale.
+	"squallmaw": 32.0,
+	"coilnecca": 26.0,
+	"champ": 26.0,
+	# A relentless deep-sea leviathan -- above this table's current max
+	# (horse, 40.0), tested by test_kraken_has_more_base_stamina_than_every_
+	# other_species in test_creature_info.gd.
+	"kraken": 45.0,
 }
 const MAX_MANA_BY_SPECIES := {
 	"herbivore": 5.0,
@@ -123,6 +179,18 @@ const MAX_MANA_BY_SPECIES := {
 	"lion": 10.0,
 	"nonvenomous_snake": 5.0,
 	"venomous_snake": 5.0,
+	"lindwurm": 10.0,
+	"rubezahl": 10.0,
+	"nyx": 10.0,
+	"krampus": 10.0,
+	"squallmaw": 10.0,
+	"coilnecca": 5.0,
+	"champ": 5.0,
+	# Mana isn't the Kraken's headline stat (no spellcasting exists to spend
+	# it on yet) -- kept at the same apex-predator-tier value every other
+	# aggressive world boss/predator here already uses, not stretched purely
+	# to claim a new max on an axis the doc never actually describes.
+	"kraken": 10.0,
 }
 const DIET_BY_SPECIES := {
 	"herbivore": "Grazer",
@@ -147,6 +215,14 @@ const DIET_BY_SPECIES := {
 	"lion": "Hunter",
 	"nonvenomous_snake": "Small-Prey Hunter",
 	"venomous_snake": "Venomous Hunter",
+	"lindwurm": "Apex Hunter",
+	"rubezahl": "Apex Hunter",
+	"nyx": "Apex Hunter",
+	"krampus": "Apex Hunter",
+	"squallmaw": "Apex Hunter",
+	"coilnecca": "Forager",
+	"champ": "Forager",
+	"kraken": "Abyssal Hunter",
 }
 ## Herbivores are calm (always flee threats); boars/predators/lynx are
 ## aggressive (fight when strong, flee when weak). See CreatureBehavior for
@@ -177,6 +253,34 @@ const TEMPERAMENT_BY_SPECIES := {
 	"lion": "aggressive",
 	"nonvenomous_snake": "calm",
 	"venomous_snake": "aggressive",
+	"lindwurm": "aggressive",
+	"rubezahl": "aggressive",
+	"nyx": "aggressive",
+	"krampus": "aggressive",
+	# Squallmaw is furious-looking and can fight (docs/concept/
+	# easter_eggs.md: "does nothing a real creature doesn't already do
+	# (fight, flee, be tamed)") -- an ordinary aggressive predator, not a
+	# world boss (see WORLD_BOSS_SPECIES below, which it deliberately does
+	# not join). Coilnecca is explicitly calm ("Deliberately calm-
+	# temperament (not aggressive like the mythology roster's kelpie)").
+	# Champ is deliberately "skittish rather than placid" in the doc's own
+	# words -- NOT a reskin of Coilnecca's calm despite the family
+	# resemblance. "skittish" is a new temperament value: CreatureBehavior
+	# only special-cases "aggressive" (see _will_fight), so anything else,
+	# including this new label, already flees exactly like "calm" does --
+	# see test_creature_behavior.gd's regression test for that. The
+	# distinct label exists so Champ never reads as a mechanical duplicate
+	# of Coilnecca, even though both currently behave the same way in
+	# CreatureBehavior (a real per-species flee-detection-radius
+	# difference, matching the doc's "visible only from a real distance"
+	# flavor more precisely, is a documented follow-up -- see
+	# docs/progress.md).
+	"squallmaw": "aggressive",
+	"coilnecca": "calm",
+	"champ": "skittish",
+	# Kraken: "actually a real fight if it notices you" -- aggressive, same
+	# as every other genuinely dangerous species here.
+	"kraken": "aggressive",
 }
 ## Only true predators (hunt herbivores/boars for food) go here -- a boar is
 ## aggressive but not a predator (see TEMPERAMENT_BY_SPECIES doc above).
@@ -194,6 +298,36 @@ const PREDATOR_SPECIES := {
 	"bear": true,
 	"lion": true,
 	"venomous_snake": true,
+	"lindwurm": true,
+	"rubezahl": true,
+	"nyx": true,
+	"krampus": true,
+	"squallmaw": true,
+	"kraken": true,
+}
+
+## Gates the aggro-provocation rule (docs/concept/worldbosses.md, see
+## BossAggro/CreatureBehavior._perceives_threats): a world boss doesn't
+## proactively attack (or flee) a nearby player at all until a real hit
+## lands, unlike every other species' proximity-based reaction. Currently
+## just the Germany-region roster; a future regional boss joins this table
+## the same way it joins PREDATOR_SPECIES above.
+##
+## Kraken (docs/concept/easter_eggs.md) also joins this table, but for a
+## different reason than the Germany bosses below: it is NOT part of
+## worldbosses.md's regional-mythology roster (no fitness-threshold
+## promotion, no regional theming) -- this flag purely gates the mechanical
+## aggro/provocation behavior above, which happens to be exactly what the
+## doc's "actually a real fight if it notices you... never a free ambush"
+## framing wants for a creature this dangerous. Reusing the existing flag
+## for its mechanical effect needs zero new code; a second, parallel
+## aggro-gate system for one creature would just be the same rule twice.
+const WORLD_BOSS_SPECIES := {
+	"lindwurm": true,
+	"rubezahl": true,
+	"nyx": true,
+	"krampus": true,
+	"kraken": true,
 }
 
 ## Levels roll in [1, LEVEL_RANGE] from the individual's seed -- a cheap,
@@ -210,6 +344,13 @@ var display_name: String
 var diet: String
 var temperament: String
 var is_predator: bool
+## See WORLD_BOSS_SPECIES above.
+var is_world_boss: bool
+## Per-individual state, not per-species data -- always starts false
+## regardless of species; BossAggro/CreatureMarker.take_damage flips it on
+## the first hit that clears the real-damage threshold. Meaningless (and
+## unread) for a non-boss creature.
+var is_aggroed: bool = false
 var level: int
 var max_health: float
 var health: float
@@ -225,6 +366,7 @@ func _init(a_species: String, seed_value: int = 0) -> void:
 	diet = DIET_BY_SPECIES.get(a_species, "Unknown")
 	temperament = TEMPERAMENT_BY_SPECIES.get(a_species, "calm")
 	is_predator = PREDATOR_SPECIES.get(a_species, false)
+	is_world_boss = WORLD_BOSS_SPECIES.get(a_species, false)
 	level = 1 + (absi(seed_value) % LEVEL_RANGE)
 	var base_max_health: float = MAX_HEALTH_BY_SPECIES.get(a_species, 10.0)
 	max_health = base_max_health * (1.0 + (level - 1) * LEVEL_HEALTH_SCALE)

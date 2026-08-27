@@ -132,8 +132,17 @@ class _FakeElevationSource:
 	var south := 0.5
 	var east := 0.5
 	var west := 0.5
+	## How many samples this source has been asked for. The whole point of
+	## exposing gradient_at is that slope and aspect are two readings of ONE
+	## gradient, and a call count is how that is pinned as a tested number
+	## rather than an eyeballed claim about speed.
+	var calls := 0
 
 	func elevation_at(latitude_deg: float, longitude_deg: float) -> float:
+		calls += 1
+		return _elevation_at(latitude_deg, longitude_deg)
+
+	func _elevation_at(latitude_deg: float, longitude_deg: float) -> float:
 		if latitude_deg > center_lat:
 			return north
 		if latitude_deg < center_lat:
@@ -189,3 +198,53 @@ func test_aspect_at_matches_the_gradient_direction():
 	fake.south = 0.3
 	var aspect := relief.aspect_at(fake, 10.0, 20.0)
 	assert_almost_eq(aspect, 180.0, 1.0)
+
+
+# -- gradient_at: slope and aspect are two readings of ONE gradient -------------
+
+## Hillshading a chunk asks for BOTH slope and aspect at every tile, and each
+## used to take its own four elevation samples through the private
+## _gradient_at -- eight samples where four suffice, on the single largest
+## per-chunk cost in the running game. Exposing the gradient is the whole
+## fix; these two pin that the exposed value is EXACTLY what slope_at and
+## aspect_at were already computing internally, not merely close to it.
+func test_slope_at_is_exactly_the_public_gradients_slope():
+	var fake := _fake_at(10.0, 20.0)
+	fake.north = 0.72
+	fake.south = 0.31
+	fake.east = 0.44
+	fake.west = 0.58
+	var gradient := relief.gradient_at(fake, 10.0, 20.0)
+	assert_eq(
+		relief.slope_at(fake, 10.0, 20.0),
+		relief.slope_degrees_from_gradient(gradient.x, gradient.y)
+	)
+
+
+func test_aspect_at_is_exactly_the_public_gradients_aspect():
+	var fake := _fake_at(10.0, 20.0)
+	fake.north = 0.72
+	fake.south = 0.31
+	fake.east = 0.44
+	fake.west = 0.58
+	var gradient := relief.gradient_at(fake, 10.0, 20.0)
+	assert_eq(
+		relief.aspect_at(fake, 10.0, 20.0),
+		relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
+	)
+
+
+## The measured win, as a call count rather than a stopwatch: one gradient is
+## four elevation samples (north/south/east/west central differences), so a
+## caller that wants both readings can pay four instead of eight.
+func test_one_gradient_is_four_samples_where_slope_plus_aspect_cost_eight():
+	var one_gradient := _fake_at(10.0, 20.0)
+	var gradient := relief.gradient_at(one_gradient, 10.0, 20.0)
+	relief.slope_degrees_from_gradient(gradient.x, gradient.y)
+	relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
+	assert_eq(one_gradient.calls, 4, "one gradient is one set of four central-difference samples")
+
+	var separately := _fake_at(10.0, 20.0)
+	relief.slope_at(separately, 10.0, 20.0)
+	relief.aspect_at(separately, 10.0, 20.0)
+	assert_eq(separately.calls, 8, "asking for slope and aspect separately samples twice over")

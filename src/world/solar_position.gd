@@ -46,6 +46,19 @@ func local_hour(utc_hour: float, longitude_deg: float) -> float:
 	return fposmod(utc_hour + longitude_deg / 15.0, 24.0)
 
 
+## The UTC hour that puts the local solar clock at `local_hour_value` here --
+## the exact inverse of local_hour just above, on the same 15-degrees-of
+## -longitude-per-hour relation.
+##
+## Exposed so the /time <hh:mm> console command can pin what the player reads
+## on the clock -- and therefore what the sun does, since elevation_degrees
+## and azimuth_degrees both go through local_hour -- without a caller
+## re-deriving the relation for itself and drifting away from it. Wraps into
+## a real 0..24 clock face, same as local_hour.
+func utc_hour_for_local(local_hour_value: float, longitude_deg: float) -> float:
+	return fposmod(local_hour_value - longitude_deg / 15.0, 24.0)
+
+
 ## Maps solar elevation to a normalized sunlight intensity [0.0, 1.0]: zero at
 ## and below the horizon, rising to 1.0 with the sun directly overhead.
 func sunlight_intensity(elevation_deg: float) -> float:

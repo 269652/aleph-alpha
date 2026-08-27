@@ -388,27 +388,43 @@ func generate_hero_portrait_image(appearance: Dictionary) -> Image:
 	var image := Image.create(PORTRAIT_SIZE.x, PORTRAIT_SIZE.y, false, Image.FORMAT_RGBA8)
 	var center_x := PORTRAIT_SIZE.x / 2
 
+	# Which of hero_composite.png's 8 pre-colored outfits this portrait wears
+	# -- taken once so body/legs/arms all match the same outfit. The
+	# appearance names it when it was built by HeroAppearance (class picks the
+	# row, DNA seed rotates it -- see HeroAppearance.outfit_variant_for); the
+	# bare seed roll stays as the fallback for a hand-assembled appearance
+	# dict that carries no row. It has to be readable from the OUTSIDE at all
+	# because this art is pre-colored and this path deliberately never tints
+	# by appearance.tunic/legs (see _portrait_torso_image), so an appearance
+	# that varies ONLY by class palette rendered byte-identically -- which is
+	# exactly what the creator's seven class icons did (reported live).
+	var outfit_variant: int = (
+		int(appearance["outfit_variant"]) if appearance.has("outfit_variant")
+		else _illustrated.outfit_variant_for(appearance.get("seed", 0))
+	)
+
 	var torso_y := _PORTRAIT_HEAD.y - 2
 	var legs_y := torso_y + _PORTRAIT_TORSO.y - 1
 
 	# Arms first, so the torso's outline overlaps them at the shoulder rather
 	# than the other way around. Left/right use frame 0/1 of the illustrated
-	# sheet's two independent poses (see IllustratedCharacterSprite's own
-	# doc comment on arms.png) rather than the same frame mirrored twice.
+	# sheet's two independent drawings (see IllustratedCharacterSprite's own
+	# doc comment on hero_composite.png's arms column) rather than the same
+	# frame mirrored twice.
 	var arm_y := torso_y + 3
 	_blend(
-		image, _portrait_arm_image(appearance, 0),
+		image, _portrait_arm_image(appearance, outfit_variant, 0),
 		Vector2i(center_x - _PORTRAIT_TORSO.x / 2 - _PORTRAIT_ARM.x + 1, arm_y)
 	)
 	_blend(
-		image, _portrait_arm_image(appearance, 1),
+		image, _portrait_arm_image(appearance, outfit_variant, 1),
 		Vector2i(center_x + _PORTRAIT_TORSO.x / 2 - 1, arm_y)
 	)
 
-	_blend_portrait_legs(image, appearance, center_x, legs_y)
+	_blend_portrait_legs(image, appearance, outfit_variant, center_x, legs_y)
 
 	_blend(
-		image, _portrait_torso_image(appearance),
+		image, _portrait_torso_image(appearance, outfit_variant),
 		Vector2i(center_x - _PORTRAIT_TORSO.x / 2, torso_y)
 	)
 	_blend(image, _portrait_head_image(appearance), Vector2i(center_x - _PORTRAIT_HEAD.x / 2, 0))
@@ -416,26 +432,31 @@ func generate_hero_portrait_image(appearance: Dictionary) -> Image:
 
 
 func _portrait_head_image(appearance: Dictionary) -> Image:
-	if _illustrated.has_head():
-		var trimmed := _illustrated.trimmed_head_image(appearance.get("seed", 0), appearance.skin)
+	var cell_index: int = appearance.get("head_index", 0)
+	if _illustrated.has_usable_head(cell_index, appearance.skin):
+		var trimmed := _illustrated.trimmed_head_image(cell_index, appearance.skin)
 		if trimmed != null:
 			return _fit_to_box(trimmed, _PORTRAIT_HEAD)
 	return generate_hero_head_image(_PORTRAIT_HEAD, appearance)
 
 
-func _portrait_torso_image(appearance: Dictionary) -> Image:
-	if _illustrated.has_action("body", "idle"):
-		var trimmed := _illustrated.trimmed_part_image("body")
+## Pre-colored by hero_composite.png itself (see IllustratedCharacterSprite's
+## own doc comment on that sheet) -- fit only, no tint, the same rule the
+## illustrated head already follows: re-tinting already-colored art would
+## double the color.
+func _portrait_torso_image(appearance: Dictionary, outfit_variant: int) -> Image:
+	if _illustrated.has_composite_part("body"):
+		var trimmed := _illustrated.trimmed_composite_image("body", outfit_variant)
 		if trimmed != null:
-			return _fit_and_tint(trimmed, _PORTRAIT_TORSO, appearance.tunic)
+			return _fit_to_box(trimmed, _PORTRAIT_TORSO)
 	return generate_hero_tunic_image(_PORTRAIT_TORSO, appearance)
 
 
-func _portrait_arm_image(appearance: Dictionary, frame_index: int) -> Image:
-	if _illustrated.has_action("arms", "idle"):
-		var trimmed := _illustrated.trimmed_part_image("arms", frame_index)
+func _portrait_arm_image(appearance: Dictionary, outfit_variant: int, frame_index: int) -> Image:
+	if _illustrated.has_composite_part("arms"):
+		var trimmed := _illustrated.trimmed_composite_image("arms", outfit_variant, "front", frame_index)
 		if trimmed != null:
-			return _fit_and_tint(trimmed, _PORTRAIT_ARM, appearance.skin)
+			return _fit_to_box(trimmed, _PORTRAIT_ARM)
 	return generate_body_part_image(_PORTRAIT_ARM, appearance.skin)
 
 
@@ -446,13 +467,30 @@ func _portrait_arm_image(appearance: Dictionary, frame_index: int) -> Image:
 ## small image blended twice. The procedural fallback still paints its own
 ## synthetic boots (`_paint_boots`); the illustrated pair already has real
 ## boots drawn into the art, so that step is skipped for it.
-func _blend_portrait_legs(image: Image, appearance: Dictionary, center_x: int, legs_y: int) -> void:
-	if _illustrated.has_action("legs", "idle"):
-		var trimmed := _illustrated.trimmed_part_image("legs")
+##
+## Anchored by its BOTTOM at the portrait canvas's own bottom edge, not by
+## its top at `legs_y` the way the procedural fallback below still is --
+## feet belong on the ground regardless of exactly how tall trimmed_
+## composite_image's aspect-fit happens to come out for a given outfit row,
+## the same "anchor the ground-contact point, not an arbitrary top" rule
+## normalize_frames' own BASELINE_Y already applies one step up the
+## pipeline (see IllustratedCharacterSprite). A fixed top anchor instead
+## left the fitted image occasionally falling short of the canvas bottom
+## whenever a row's own aspect ratio didn't happen to fill the full target
+## height -- caught by test_portrait_is_a_cohesive_figure_when_legs_are_a_
+## fused_pair once _primary_content_rect (see IllustratedCharacterSprite)
+## started returning each row's real, un-inflated content height instead of
+## one padded out by a stray fragment stacked below it.
+func _blend_portrait_legs(
+	image: Image, appearance: Dictionary, outfit_variant: int, center_x: int, legs_y: int
+) -> void:
+	if _illustrated.has_composite_part("legs"):
+		var trimmed := _illustrated.trimmed_composite_image("legs", outfit_variant)
 		if trimmed != null:
 			var span := Vector2i(_PORTRAIT_LEG.x * 2 + 2, _PORTRAIT_LEG.y)
-			var fitted := _fit_and_tint(trimmed, span, appearance.legs)
-			_blend(image, fitted, Vector2i(center_x - fitted.get_width() / 2, legs_y))
+			var fitted := _fit_to_box(trimmed, span)
+			var feet_y := PORTRAIT_SIZE.y - fitted.get_height()
+			_blend(image, fitted, Vector2i(center_x - fitted.get_width() / 2, feet_y))
 			return
 	var leg := generate_body_part_image(_PORTRAIT_LEG, appearance.legs)
 	_paint_boots(leg, _PORTRAIT_LEG, appearance)
@@ -476,21 +514,6 @@ func _fit_to_box(source: Image, target_size: Vector2i) -> Image:
 		resized.convert(Image.FORMAT_RGBA8)
 	resized.resize(width, height, Image.INTERPOLATE_LANCZOS)
 	return resized
-
-
-## _fit_to_box, then multiplies every opaque pixel by `tint` -- the manual
-## equivalent of the `modulate` tint Sprite2D applies for free, needed here
-## because this function blends raw Images onto a shared canvas instead of
-## compositing Sprite2D nodes. Body/legs/arms art is drawn neutral for
-## exactly this (see the art brief's "draw every part neutral" convention).
-func _fit_and_tint(source: Image, target_size: Vector2i, tint: Color) -> Image:
-	var fitted := _fit_to_box(source, target_size)
-	for y in fitted.get_height():
-		for x in fitted.get_width():
-			var c := fitted.get_pixel(x, y)
-			if c.a > 0.0:
-				fitted.set_pixel(x, y, Color(c.r * tint.r, c.g * tint.g, c.b * tint.b, c.a))
-	return fitted
 
 
 ## Darkens the bottom rows of a leg into a boot, so legs read as clothed

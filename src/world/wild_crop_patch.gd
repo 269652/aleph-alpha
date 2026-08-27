@@ -102,9 +102,19 @@ func get_growth(cell: Vector2i) -> float:
 
 
 ## Advances growth on every patch and, on a throttled interval, lets mature
-## patches spread into adjacent grassland cells. Mirrors TallGrass.advance,
-## including how `growth_modifier` (see SeasonCycle.growth_modifier) scales
-## only the growth increment, never spread timing.
+## patches spread into adjacent grassland cells. Mirrors TallGrass.advance
+## (and FlowerPatch/DesertScrub/TundraLichen's identical shape), including
+## how `growth_modifier` (see SeasonCycle.growth_modifier) scales only the
+## growth increment, never spread timing -- spread stays on the wall clock
+## across all five patch sims, a deliberate, tested, cross-species
+## consistency (see test_advance_grows_slower_in_winter_than_in_summer_for_
+## the_same_elapsed_time's siblings in each patch type's own test file).
+##
+## A root crop does not STOP growing in winter, it goes dormant:
+## growth_modifier's own floor is 0.2, not 0, the "modulates, doesn't gate"
+## rule docs/concept/seasons.md sets out. A crop already mature stays mature
+## and stays pullable -- the tops die back, the tuber overwinters
+## underground.
 func advance(delta: float, growth_modifier: float) -> void:
 	for cell in _patches:
 		_patches[cell] = minf(_patches[cell] + delta * GROWTH_RATE * growth_modifier, 1.0)

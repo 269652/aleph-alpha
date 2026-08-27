@@ -116,6 +116,29 @@ func generate_image(species_bias: float, seed_value: int) -> Image:
 	return generate_image_with_fruit(species_bias, seed_value, 0)
 
 
+## The trunk alone, no canopy at all -- what a felled tree looks like once
+## its crown has been limbed off (see ChoppableTree._remove_canopy,
+## docs/concept/woodworking.md). `season` only matters for a species with
+## illustrated art (the trunk piece is fetched per-season the same way the
+## canopy is, even though the trunk itself doesn't visibly change with it);
+## empty falls back the same way generate_image's own empty season does.
+func generate_bare_trunk_texture(species_bias: float, seed_value: int, season: String = "") -> ImageTexture:
+	return ImageTexture.create_from_image(generate_bare_trunk_image(species_bias, seed_value, season))
+
+
+func generate_bare_trunk_image(species_bias: float, seed_value: int, season: String = "") -> Image:
+	var species_id := _species_id_for(species_bias)
+	var image := Image.create(SIZE.x, SIZE.y, false, Image.FORMAT_RGBA8)
+	if IllustratedTree.has_art_for(species_id):
+		var trunk_box := illustrated_trunk_box(seed_value)
+		var trunk_image := _scaled_piece(species_id, season, "trunk", trunk_box.size)
+		if trunk_image != null:
+			_blend_at(image, trunk_image, trunk_box.position.x, trunk_box.position.y)
+		return image
+	_paint_trunk(image, seed_value)
+	return image
+
+
 ## The tree, with `ripe_count` ripe fruits drawn as individual warm pixel dots
 ## on the canopy (capped at MAX_FRUIT_DOTS). ripe_count 0 is exactly the plain
 ## tree. Dot positions are deterministic per seed_value so a tree's fruit

@@ -382,7 +382,27 @@ chosen from a **per-biome species pool** (grassland/forest/desert/tundra/
 rainforest/mountain each have their own herbivore+predator pair; unmapped
 biomes fall back to a generic pool), keyed off the chunk's **dominant
 biome** — the most frequent biome among its cells, since a chunk can straddle
-more than one. Every species reuses one of 4 hand-drawn silhouette shapes
+more than one.
+
+Those pools no longer contain the anonymous `"herbivore"`/`"predator"` ids.
+Those were never species: they were this project's own unnamed stand-ins —
+`ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY` maps `"herbivore"` to
+`deer_shape` and `"predator"` to `wolf_shape` — from before deer and wolf
+existed as real named species with real illustrated art. Naming those two did
+not remove the stand-ins from the pools, so a promoted individual could still
+reach the creature panel as a nameless "Herbivore Lv.5" standing beside a
+"Boar Lv.1" (`CreatureInfo.display_name` is just the species id capitalized).
+They are now retired from **spawning**: grassland's dominant grazer slot goes
+to deer (what `"herbivore"` was always drawn as), grassland's dominant
+predator slot to jackal, and every other biome simply drops its single
+placeholder entry, each already having a dominant named specialist plus named
+fillers. The generic fall-back pool for an unmapped biome is likewise named
+now (`deer`/`boar`, `lynx`/`jackal`). The two ids **remain as data keys** and
+must not be deleted: `AnimalAnatomy.profile_for` falls back to
+`_PROFILES["herbivore"]` and `ProceduralAnimalSprite` resolves any unknown
+species to `"herbivore"`, so they are the never-crash-on-an-odd-id default.
+The dev console's `/spawn` still defaults to `"herbivore"` — an explicitly
+debug path, deliberately left spawnable on demand. Every species reuses one of 4 hand-drawn silhouette shapes
 (deer-shaped, boar-shaped, wolf-shaped, lynx-shaped) in its own color rather
 than needing bespoke pixel art per species, since the ecological point is
 biome-appropriate *variety*, not bespoke art for its own sake. Temperament/
@@ -443,35 +463,6 @@ reindeer/tapir/goat did, with no new mechanism required:
   exact same aggregate machinery every herbivore uses; only this one
   ecological side-behaviour (which plant species end up where) is
   mouse-specific.
-
-### Wolf: a genuine second grassland/forest predator, not a reskin
-
-Wolf is a real 21st roster species, not a recolor of `predator` — it gets
-its own `AnimalAnatomy` body plan, its own illustrated sprite sheet, and its
-own `CreatureInfo` stats, and joins the pool alongside `predator`/`lynx`
-rather than replacing either.
-
-- **Real-world grounding**: grey wolves (*Canis lupus*) are the classic
-  temperate grassland/forest apex predator — genuinely widespread across
-  exactly the two biomes `wolf` now spawns in (`grassland`, `forest`), an
-  ordinary ungated roster addition like deer/nonvenomous_snake rather than a
-  difficulty-gated hazard like bear/lion/venomous_snake.
-- **Body plan**: `AnimalAnatomy`'s `"wolf"` profile is a distinct, more
-  cursorial build than `"predator"`'s generic canid shape — longer body
-  (0.54 vs 0.52), longer legs (0.28 vs 0.26) for a real wolf's long-legged
-  trotting gait, a longer bushy tail (0.20 vs 0.18), and a more pronounced
-  muzzle (0.8 vs 0.6).
-- **Art**: `IllustratedAnimalSprite` registers `wolf.png` (an 8-column walk
-  row + 8-column eat/graze row on a solid magenta ground, the same layout
-  family as sheep's sheet, but its own file at its own resolution — bands
-  hand-measured on wolf.png itself, not copied from sheep's numbers).
-- **Stats**: real wolves are pack-hunting, cursorial (long-distance
-  endurance) canid hunters — mid-large but built for stamina over raw power,
-  so wolf sits between lynx and the big cats (jaguar/mountain_lion) on the
-  health axis, but is deliberately the **highest-stamina species in the
-  entire roster** (above even horse's endurance-grazer stamina), reflecting
-  real wolves' famous endurance-pursuit hunting style. Hunter diet,
-  aggressive temperament, a real predator (`PREDATOR_SPECIES`).
 
 ### Squirrel: a genuine 22nd species, and the fruit/nut seed-predator flora.md was missing
 
@@ -535,6 +526,60 @@ built for grass/flower seed.
   finding one just eats it like any other fruit-eating forager via the
   ordinary, ungated `GrazerForaging` `FOOD_FRUIT` path, nutritionally a
   disperser-or-nothing exactly as before this pass.
+### Forest gets its own named predator: wolves, and their sheep prey
+
+The biome-specific pools above (desert/jackal, tundra/arctic_fox, rainforest/
+jaguar, mountain/mountain_lion) each pair a biome with one dominant NAMED
+predator of its own — except forest, which drew its dominant predator slot
+from the plain `"predator"` placeholder (wolf-shaped, gray-coated) that every
+other biome falls back to when nothing more specific applies. That
+placeholder was always this project's own anonymous stand-in for a wolf —
+see `ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY`'s `"predator": "wolf_shape"`
+and this doc's own "wolf-dominant predators" phrasing above — so giving it a
+real name, real stats, and real illustrated art closes the one gap left in
+that per-biome pattern rather than adding a new role.
+
+Naming the wolf did not by itself finish the job: the `"predator"` placeholder
+stayed in every biome's pool for a long time afterwards and kept spawning
+alongside the named species. It is retired now (see "Biome-specific species
+composition" above). Grassland's freed dominant-predator slot went to
+**jackal**, not to wolf — real golden jackals are an open grassland/steppe
+canid across Eurasia and Africa, and wolves stay **forest-exclusive** here by
+design, as this section specifies and `test_forest_promotes_wolves_alongside_
+their_sheep_and_deer_prey` asserts. Moving wolves onto grassland would be a
+deliberate reversal of that design, not a placeholder cleanup.
+
+- **Wolves** are forest-exclusive (real wolves are the classic temperate/
+  boreal forest apex predator), added to forest's predator pool alongside —
+  not in place of — its existing lynx dominance, generic `predator` filler,
+  and HARD-gated bear. An ordinary `CreatureInfo` predator-role entry
+  (`is_predator = true`, aggressive temperament, "Hunter" diet), no minimum
+  difficulty tier (like every other pre-existing roster member).
+- **Sheep** are wolves' (and deer's) real forest prey. Predation itself needs
+  no new mechanism: `is_predator` already means "hunts herbivore-role
+  creatures generically" (see CreatureInfo's own doc comment), not a
+  per-species prey list, so a wolf sharing forest with sheep and deer already
+  hunts both by construction — the roster addition alone is what makes it
+  real rather than just a name. Sheep are an ordinary calm, non-predator
+  herbivore-role entry, joining forest only (not every biome, unlike mice) —
+  they exist here specifically as wolf/deer-adjacent prey, not as a
+  general-purpose grazer.
+- Both get real illustrated art (`assets/sprites/animals/wolf.png`,
+  `sheep.png`) via `IllustratedAnimalSprite`, rather than falling back to
+  the shared procedural silhouettes deer/boar/horse used before their own
+  art existed. Their source sheets are the first illustrated-animal sheets
+  supplied on a solid **chroma-keyed magenta** ground (with a real alpha
+  channel and near-white cell dividers) instead of the plain white/
+  transparent convention deer/boar/horse use — the same "transparent
+  background was ignored by the AI image generator" situation
+  `IllustratedStoneSprite` already solved for pebbles/boulders/cobbles (see
+  that class's own doc comment). `IllustratedAnimalSprite` gained its own
+  copy of that despill-before-slice, scrub-after-normalize chroma-key logic,
+  gated per sheet behind a `"magenta_keyed"` flag so the existing white-
+  background sheets are entirely unaffected (skipped outright, not merely a
+  no-op on non-magenta pixels). Each sheet is a 2-row (walk, then eat) x
+  8-column grid; neither has a dedicated idle row, so idle synthesizes from
+  the eat cycle's own frame 0, same as deer/boar.
 
 ### A new aerial tier: ambient flyers and one predator
 
@@ -559,9 +604,11 @@ deferred.
   bird's straighter glide), confined to no particular target — just "make
   a meadow feel alive." Biome-gated to grassland/forest/rainforest (real
   butterflies are a warm/flowering-habitat presence; excluded from desert/
-  tundra/mountain/ocean as implausible).
-- **Songbirds** are the same ambient tier, biome-gated to forest/grassland/
-  rainforest, with their own glide-and-perch movement pattern (straighter
+  tundra/mountain/ocean as implausible) — but that tier-wide gate is no
+  longer the whole story; see "Where a flyer actually lives" below.
+- **Songbirds** are the same ambient tier, biome-gated tier-wide to forest/
+  grassland/rainforest and then range-gated per species (see "Where a flyer
+  actually lives" below), with their own glide-and-perch movement pattern (straighter
   runs between heading changes than a butterfly's flutter). Real songbirds
   are largely insectivore/granivore. The **insectivore half has a real
   feeding model** — see [soil_fauna.md](soil_fauna.md): a per-chunk earthworm
@@ -630,6 +677,57 @@ deferred.
   sight, not filling the sky) instead of the flat `SPAWN_CHANCE` die roll it
   used to run regardless of whether the water it hunts actually held any
   fish.
+
+#### Where a flyer actually lives
+
+The aerial tier shipped as a decorative layer and, alone among the creature
+categories, never got the per-species range treatment the ground roster got in
+"Biome-specific species composition" above: one fixed global pool per group,
+gated only by biome name. The visible result was a **Blue Morpho — a
+Neotropical rainforest butterfly — fluttering over a German meadow at 52.5°N**,
+next to a Monarch, a Nearctic one.
+
+Flyers are now range-gated per species (`AmbientFlyerRenderer.FLYER_RANGE`,
+filtered by `_in_range_pool`, the aerial mirror of
+`CreatureRenderer._allowed_pool`) on **two** axes rather than one, because
+biome alone cannot tell a German meadow from a Kansas one:
+
+- **Biome** — the same biome-name gate as before, now per species. The
+  tier-wide `BUTTERFLY_BIOMES`/`BIRD_BIOMES` constants stay (other files refer
+  to them by name) and are pinned consistent with the per-species table by
+  test, so the two cannot drift apart.
+- **Absolute latitude band** — degrees from the equator, so one band covers
+  both hemispheres. The chunk's real latitude is derived from the global tile
+  row the renderer already receives, through the same
+  `GeoCoordinates.latitude_for_tile` / `EarthChunkGenerator.WORLD_HEIGHT_TILES`
+  pair the generator itself uses for temperature and biome — so a flyer's range
+  is measured against exactly the geography that produced the biome it is
+  flying over. Measured at the chunk's middle row, not its corner.
+
+The ranges are real, not invented:
+
+| Species | Biomes | Abs. latitude | Why |
+| --- | --- | --- | --- |
+| monarch (*Danaus plexippus*) | grassland, forest | 15–50° | Nearctic butterfly of open country; absent from Europe — the reported bug |
+| swallowtail (*Papilio machaon*) | grassland, forest | 25–70° | The **Old World** swallowtail: Palearctic, Mediterranean into the subarctic. The swallowtail a German meadow really has |
+| blue_morpho (*Morpho* spp.) | rainforest | 0–25° | Neotropical rainforest, inside the tropics |
+| bee (*Apis mellifera*) | grassland, forest, rainforest | 0–70° | Near-cosmopolitan |
+| sparrow (*Passer domesticus*) | grassland, forest, rainforest | 0–70° | Near-cosmopolitan |
+| robin (*Erithacus rubecula* / *Turdus migratorius*) | grassland, forest | 20–70° | Temperate woodland and garden bird in both the Old and New World; not a rainforest species |
+
+Two consequences worth stating plainly rather than discovering later:
+
+- A filtered pool can legitimately come out **empty** (nothing at all can live
+  in a 52.5°N rainforest), so the spawn path returns nothing instead of
+  dividing by zero on the modulo that picks a species.
+- **A German meadow now shows one butterfly species (swallowtail) plus bees,
+  where it used to show three.** That is the honest state of the roster, not a
+  loosening candidate: the butterfly roster is Americas-heavy. The fix for the
+  thinness is a roster *addition* — one genuinely Palearctic species such as a
+  peacock butterfly, which is procedural art plus an entry each in the sprite
+  tables, `FLYER_WORLD_SCALE`, `FlyerDiet` and `FLYER_RANGE` — not a widening
+  of the bands.
+
 
 ### Open questions
 
@@ -733,6 +831,16 @@ deferred.
   simulated day via `_refresh_bird_food_density`/`EcosystemSimulation.step`.
   A robin population that has genuinely doubled since load will not spawn a
   second visible robin until the player leaves the chunk and comes back.
+- **No biogeographic realm axis exists anywhere in the project**, and a
+  latitude band cannot substitute for one: a band cannot separate Nearctic
+  from Palearctic, so a monarch can still appear on a 40°N Eurasian steppe,
+  and the same gap already lets `CreatureRenderer` put camels in American
+  deserts and jaguars in African rainforest. Both tiers have the identical
+  omission, so closing it once serves both. What it would take: bundling a
+  biogeographic-realm/ecoregion raster and sampling it the way
+  `EarthElevationSource` samples `assets/data/world_elevation.png` — the only
+  real geographic raster shipped today. That is feature-scale work, not a
+  filter tweak, which is why the range tables stop at biome + latitude.
 
 ## Region difficulty (gating the roster by player readiness)
 
@@ -761,7 +869,12 @@ Two tempting approaches, both worth naming and rejecting:
   importantly means directly asserting that specific real countries or
   cities are "dangerous" — a real-world value claim about actual places
   that has nothing to do with this game's own simulated ecology and is
-  uncomfortable to encode as content regardless of intent.
+  uncomfortable to encode as content regardless of intent. This is
+  specifically about *danger* claims at *country/city* granularity — it
+  doesn't extend to [worldbosses.md](worldbosses.md)'s regional-folklore
+  brainstorm, which maps a bounded set of cultural/mythological
+  macro-regions (not thousands of places) onto a *flavor* identity for an
+  already-emergent boss, not a claim about real-world danger.
 
 ### What we do instead: two signals the game already computes from real data
 
@@ -1002,6 +1115,17 @@ than O(all-chunks-per-frame).
   (`procedural_animal_sprite.gd`), stats/diet in `creature_info.gd`, wired
   into `creature_renderer.gd`'s `HERBIVORE_SPECIES_POOL_BY_BIOME` (mouse in
   every non-ocean biome, horse in grassland/desert).
+- ✅ Wolf/sheep added to forest's roster — forest's own named predator
+  (joining lynx/predator/bear, not replacing them) and its real prey (see
+  this doc's own "Forest gets its own named predator" section above): stats/
+  diet in `creature_info.gd`, `AnimalAnatomy` profiles (wolf's pre-existed;
+  sheep's is new), procedural color/shape fallback in
+  `procedural_animal_sprite.gd`, wired into `creature_renderer.gd`'s
+  `PREDATOR_SPECIES_POOL_BY_BIOME`/`HERBIVORE_SPECIES_POOL_BY_BIOME` forest
+  entries, and real illustrated art in `illustrated_animal_sprite.gd` via a
+  new per-sheet `"magenta_keyed"` chroma-key pass (own copy of
+  `IllustratedStoneSprite`'s despill logic) for their chroma-keyed-magenta
+  source sheets.
 - ✅ Ambient-flyer tier (butterflies, songbirds) — `ambient_flyer_movement.gd`
   (configurable flutter/glide), `procedural_butterfly_sprite.gd`/
   `procedural_bird_sprite.gd`, `ambient_flyer_renderer.gd` (biome-gated,

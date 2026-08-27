@@ -11,6 +11,28 @@ const _NODES := {
 	"endurance_2": {"stat_name": "stamina_regen", "bonus_amount": 3.0, "point_cost": 2},
 	"strength_1": {"stat_name": "attack_damage", "bonus_amount": 2.0, "point_cost": 1},
 	"strength_2": {"stat_name": "attack_damage", "bonus_amount": 4.0, "point_cost": 2},
+	# Naturalist branch (docs/concept/progression.md "Ecological literacy"):
+	# gates the land_sense keystone (see KeystonePassive) the same
+	# soft-cross-archetype way vitality/endurance/strength gate the other
+	# keystones. stamina_regen fits the theme (time spent outdoors reading
+	# the land) and matches the existing documented gap (Player._apply_skill_
+	# stat doesn't yet feed stamina_regen bonuses into the live meter) rather
+	# than opening a new one.
+	"naturalist_1": {"stat_name": "stamina_regen", "bonus_amount": 1.0, "point_cost": 1},
+	"naturalist_2": {"stat_name": "stamina_regen", "bonus_amount": 2.5, "point_cost": 2},
+	# Butchering branch (docs/concept/carrion.md): a trained cut wastes less --
+	# more meat off the same carcass, read fresh at butcher time via
+	# total_bonus("meat_yield", ...) rather than threaded through
+	# Player._apply_skill_stat (see that function's own doc comment on which
+	# stats it applies immediately vs. which are read on demand).
+	"butchering_1": {"stat_name": "meat_yield", "bonus_amount": 1.0, "point_cost": 1},
+	"butchering_2": {"stat_name": "meat_yield", "bonus_amount": 2.0, "point_cost": 2},
+	# Carpentry branch (docs/concept/woodworking.md): a trained carpenter
+	# with a saw can turn a bare trunk straight into beam/plank instead of
+	# raw logs. Both nodes must be allocated (total_bonus reaches
+	# CARPENTRY_LEVEL_FOR_SAWING) -- genuine investment, not one point.
+	"carpentry_1": {"stat_name": "carpentry_level", "bonus_amount": 1.0, "point_cost": 1},
+	"carpentry_2": {"stat_name": "carpentry_level", "bonus_amount": 1.0, "point_cost": 2},
 }
 
 var _nodes: Dictionary = _NODES

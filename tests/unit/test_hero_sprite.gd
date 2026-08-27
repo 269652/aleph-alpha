@@ -8,6 +8,10 @@ extends GutTest
 
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ProceduralCharacterSprite = preload("res://src/rendering/procedural_character_sprite.gd")
+const IllustratedCharacterSprite = preload("res://src/rendering/illustrated_character_sprite.gd")
+## The player archetypes the character creator actually offers -- the classes
+## whose icons must be told apart (see the class-portrait tests below).
+const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 
 var appearance_maker := HeroAppearance.new()
 var sprite := ProceduralCharacterSprite.new()
@@ -124,11 +128,11 @@ func test_missing_choices_fall_back_to_the_first_option():
 	assert_eq(a.hair_style, 0)
 
 
-## The seed drives which of IllustratedCharacterSprite's 100 illustrated
-## heads a hero gets (see head_cell_index_for) -- carried on the appearance
-## dict itself so any caller building a look, DNA-rolled or hand-picked in
-## the creator, has one available without a second parameter threaded
-## everywhere apply_appearance is called from.
+## The seed carries through onto the appearance dict for any caller that
+## wants a stable per-hero value not tied to a cyclable axis (village NPCs'
+## own DNA seed, say) -- no live consumer of the bare "seed" field remains
+## after "head" became a real axis (see below), but keeping it costs nothing
+## and other per-seed variation may want it later.
 func test_appearance_for_carries_the_seed_it_was_rolled_from():
 	var a := appearance_maker.appearance_for("warrior", 4242)
 	assert_eq(a.seed, 4242)
@@ -145,6 +149,39 @@ func test_appearance_from_choices_defaults_the_seed_when_none_is_given():
 	# produce a valid, usable appearance rather than erroring.
 	var a := appearance_maker.appearance_from_choices("warrior", {})
 	assert_eq(a.seed, 0)
+
+
+## Which of IllustratedCharacterSprite's 100 illustrated heads a hero wears
+## is a real customization axis like every other -- DNA-rolled by default,
+## directly cyclable in the creator (reported, after "derive it from the DNA
+## seed with no new UI" shipped and was actually tried: "you can't choose
+## different heads"). option_count reads the grid size from
+## IllustratedCharacterSprite rather than a second hardcoded 100, so the two
+## can never drift if the sheet's own layout ever changes.
+func test_head_is_a_real_customization_axis():
+	assert_has(HeroAppearance.AXES, "head")
+	assert_eq(
+		appearance_maker.option_count("head"),
+		IllustratedCharacterSprite.HEAD_GRID_COLUMNS * IllustratedCharacterSprite.HEAD_GRID_ROWS
+	)
+
+
+func test_appearance_for_rolls_a_head_index_in_range():
+	for seed_value in [0, 1, 4242, 99999]:
+		var a := appearance_maker.appearance_for("warrior", seed_value)
+		assert_between(a.head_index, 0, appearance_maker.option_count("head") - 1)
+
+
+func test_appearance_from_choices_uses_the_picked_head_index():
+	var a := appearance_maker.appearance_from_choices("warrior", {"head": 37})
+	assert_eq(a.head_index, 37)
+
+
+func test_head_choice_wraps_like_every_other_axis():
+	var past_end := appearance_maker.appearance_from_choices(
+		"warrior", {"head": appearance_maker.option_count("head")}
+	)
+	assert_eq(past_end.head_index, 0)
 
 
 ## A rolled hero must be resumable in the creator: reading its choices back
@@ -313,6 +350,69 @@ func test_portrait_is_a_cohesive_figure_when_legs_are_a_fused_pair():
 			if image.get_pixel(x, y).a > 0.0:
 				opaque += 1
 	assert_gt(opaque, 0, "the legs band should still show the figure's legs")
+
+
+## The character creator's class-icon row renders exactly this portrait, one
+## per archetype, at one fixed DNA seed -- so "the icon IS a tiny preview of
+## picking this class" is only true if the portraits actually differ. They
+## did not: hero_composite.png's outfit rows are PRE-COLOURED, so the
+## illustrated portrait path deliberately never tints by appearance.tunic /
+## appearance.legs (re-tinting already-coloured art would double the colour),
+## which left the class palette -- the ONLY thing that varies between these
+## seven appearances -- with no channel into the image at all. All seven
+## thumbnails came out byte-identical (reported live).
+func test_every_class_portrait_is_a_visibly_different_image():
+	var seen := {}
+	for archetype in ClassArchetype.new().archetype_names():
+		var appearance: Dictionary = appearance_maker.appearance_for(archetype, 0)
+		var key := sprite.generate_hero_portrait_image(appearance).get_data().hex_encode()
+		assert_false(
+			seen.has(key),
+			"%s renders pixel-identically to %s" % [archetype, seen.get(key, "")]
+		)
+		seen[key] = archetype
+
+
+## The outfit row a hero wears has to stay DNA-derived too (asked directly,
+## and the reason IllustratedCharacterSprite.outfit_variant_for exists) --
+## the class picks a row, the seed rotates it, so two warriors are still
+## dressed differently. The guard against "fix the icons by making every
+## warrior wear the same coat".
+func test_the_outfit_row_still_varies_with_the_dna_seed_within_one_class():
+	var seen := {}
+	for seed_value in 24:
+		seen[appearance_maker.outfit_variant_for("warrior", seed_value)] = true
+	assert_gt(seen.size(), 1, "every warrior seed picked the same outfit row")
+
+
+func test_outfit_rows_are_in_range_and_deterministic():
+	for archetype in ClassArchetype.new().archetype_names():
+		for seed_value in 12:
+			var row: int = appearance_maker.outfit_variant_for(archetype, seed_value)
+			assert_between(row, 0, IllustratedCharacterSprite.HERO_COMPOSITE_ROWS - 1)
+			assert_eq(row, appearance_maker.outfit_variant_for(archetype, seed_value))
+
+
+## Every player archetype has to land on a row of its own at a shared seed --
+## that, not the palette, is what makes the seven icons tell classes apart.
+func test_every_archetype_takes_its_own_outfit_row_at_a_shared_seed():
+	var rows := {}
+	for archetype in ClassArchetype.new().archetype_names():
+		var row: int = appearance_maker.outfit_variant_for(archetype, 0)
+		assert_false(rows.has(row), "%s reuses %s's outfit row %d" % [archetype, rows.get(row, ""), row])
+		rows[row] = archetype
+
+
+## The row travels on the appearance dict, so every renderer of that
+## appearance (portrait here, CharacterView's paperdoll in-world) dresses the
+## same hero in the same outfit instead of each re-rolling its own.
+func test_the_portrait_wears_the_outfit_row_the_appearance_carries():
+	var appearance: Dictionary = appearance_maker.appearance_for("warrior", 3)
+	assert_true(appearance.has("outfit_variant"), "the appearance should name the outfit row")
+	var as_built := sprite.generate_hero_portrait_image(appearance).get_data()
+	var moved := appearance.duplicate()
+	moved["outfit_variant"] = (int(appearance["outfit_variant"]) + 1) % IllustratedCharacterSprite.HERO_COMPOSITE_ROWS
+	assert_ne(as_built, sprite.generate_hero_portrait_image(moved).get_data())
 
 
 func _close(a: Color, b: Color) -> bool:

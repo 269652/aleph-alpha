@@ -10,7 +10,7 @@ const SPECIES := ["boar", "lynx", "herbivore", "predator"]
 ## color, per CreatureRenderer's per-biome species pools.
 const NEW_SPECIES := [
 	"camel", "jackal", "reindeer", "arctic_fox", "tapir", "jaguar", "goat", "mountain_lion", "horse",
-	"deer", "bear", "lion"
+	"deer", "bear", "lion", "wolf", "sheep"
 ]
 
 ## Maps each new species to the one of the original 4 species it should share
@@ -20,15 +20,23 @@ const NEW_SPECIES := [
 ## Bear reuses boar_shape (both heavy-bodied, low-slung quadrupeds). Lion
 ## reuses lynx_shape -- lions are cats, anatomically closer to the lynx
 ## silhouette than the wolf one (see
-## docs/concept/ecosystem_dynamics.md's Species roster section).
+## docs/concept/ecosystem_dynamics.md's Species roster section). Wolf reuses
+## "predator"'s own wolf_shape family -- the eponymous match, since "predator"
+## was always this project's anonymous stand-in for a wolf (see
+## SPECIES_SHAPE_FAMILY's "predator": "wolf_shape" and CreatureRenderer's own
+## "wolf-dominant predators" doc comment) before wolf became a real named
+## species with its own stats and art. Sheep reuses herbivore/deer_shape,
+## like goat -- a real sheep is a similar upright grazer silhouette.
 const SHAPE_MATE := {
 	"camel": "herbivore",
 	"reindeer": "herbivore",
 	"goat": "herbivore",
 	"horse": "herbivore",
 	"deer": "herbivore",
+	"sheep": "herbivore",
 	"jackal": "predator",
 	"mountain_lion": "predator",
+	"wolf": "predator",
 	"arctic_fox": "lynx",
 	"jaguar": "lynx",
 	"lion": "lynx",
@@ -658,6 +666,149 @@ func test_gait_phase_is_a_no_op_for_legless_species():
 		generator.generate_image("nonvenomous_snake", 1, 0.0).get_data(),
 		generator.generate_image("nonvenomous_snake", 1, 0.5).get_data()
 	)
+
+
+# -- Easter-egg cameo creatures (docs/concept/easter_eggs.md) ---------------
+#
+# Squallmaw (Bermuda Triangle), Coilnecca (Loch Ness), and Champ (Lake
+# Champlain) -- real, procedurally-generated serpentine creatures, no
+# illustrated art. Same "snake_shape" family the two existing snake species
+# already use (see AnimalAnatomy.SERPENT_SPECIES), each with its own color.
+
+const EASTER_EGG_CREATURE_SPECIES := ["squallmaw", "coilnecca", "champ"]
+
+
+func test_easter_egg_creatures_use_the_snake_shape_family():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		assert_eq(ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY.get(species, ""), "snake_shape", species)
+
+
+func test_easter_egg_creatures_generated_images_have_the_expected_size():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_eq(image.get_width(), ProceduralAnimalSprite.WIDTH, species)
+		assert_eq(image.get_height(), ProceduralAnimalSprite.HEIGHT, species)
+
+
+func test_easter_egg_creatures_generated_images_have_transparent_corners():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_eq(image.get_pixel(0, 0).a, 0.0, species)
+		assert_eq(image.get_pixel(ProceduralAnimalSprite.WIDTH - 1, ProceduralAnimalSprite.HEIGHT - 1).a, 0.0, species)
+
+
+func test_easter_egg_creatures_generated_images_have_a_substantial_opaque_body():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_gt(_opaque_count(image), 60, "%s should have a substantial body" % species)
+
+
+func test_easter_egg_creatures_generated_images_are_deterministic_per_seed():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var first: Image = generator.generate_image(species, 42)
+		var second: Image = generator.generate_image(species, 42)
+		assert_eq(_pixel_diff_count(first, second), 0, species)
+
+
+## Squallmaw not registered in SPECIES_BASE_COLORS would silently fall back
+## to the generic herbivore body/color -- a real regression risk given
+## generate_image's own `key = species if SPECIES_BASE_COLORS.has(species)
+## else "herbivore"` fallback.
+func test_easter_egg_creatures_do_not_fall_back_to_the_generic_herbivore_shape():
+	var herbivore: Image = generator.generate_image("herbivore", 5)
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 5)
+		assert_gt(
+			_opacity_diff_count(image, herbivore), 0,
+			"%s should have its own silhouette, not the generic herbivore's" % species
+		)
+
+
+func test_easter_egg_creatures_are_ringed_with_the_shared_dark_outline():
+	for species in EASTER_EGG_CREATURE_SPECIES:
+		var image: Image = generator.generate_image(species, 1)
+		assert_true(_has_pixel(image, PixelPalette.OUTLINE), "%s should use the shared outline" % species)
+
+
+## Every easter-egg creature, and every existing species, must have a
+## visually distinct base color -- same discipline as
+## test_every_species_has_a_visually_distinct_base_color_from_every_other.
+func test_easter_egg_creatures_have_colors_distinct_from_every_existing_species():
+	var existing_species: Array = SPECIES + NEW_SPECIES + ["mouse", "venomous_snake", "nonvenomous_snake"]
+	for new_species in EASTER_EGG_CREATURE_SPECIES:
+		var new_color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[new_species]
+		for species in existing_species:
+			var color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[species]
+			assert_gt(
+				Vector3(new_color.r, new_color.g, new_color.b).distance_to(Vector3(color.r, color.g, color.b)),
+				0.02,
+				"%s vs %s should be visually distinguishable" % [new_species, species]
+			)
+
+
+func test_easter_egg_creatures_have_colors_distinct_from_each_other():
+	for i in EASTER_EGG_CREATURE_SPECIES.size():
+		for j in range(i + 1, EASTER_EGG_CREATURE_SPECIES.size()):
+			var a: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[EASTER_EGG_CREATURE_SPECIES[i]]
+			var b: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[EASTER_EGG_CREATURE_SPECIES[j]]
+			assert_gt(
+				Vector3(a.r, a.g, a.b).distance_to(Vector3(b.r, b.g, b.b)),
+				0.02,
+				"%s vs %s should be visually distinguishable" % [EASTER_EGG_CREATURE_SPECIES[i], EASTER_EGG_CREATURE_SPECIES[j]]
+			)
+
+
+# -- Kraken (docs/concept/easter_eggs.md's condition-triggered, higher-
+# stakes entry) ----------------------------------------------------------
+
+
+func test_kraken_uses_the_snake_shape_family():
+	assert_eq(ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY.get("kraken", ""), "snake_shape")
+
+
+func test_kraken_generated_image_has_the_expected_size():
+	var image: Image = generator.generate_image("kraken", 1)
+	assert_eq(image.get_width(), ProceduralAnimalSprite.WIDTH)
+	assert_eq(image.get_height(), ProceduralAnimalSprite.HEIGHT)
+
+
+func test_kraken_generated_image_has_a_substantial_opaque_body():
+	var image: Image = generator.generate_image("kraken", 1)
+	assert_gt(_opaque_count(image), 60, "kraken should have a substantial body")
+
+
+func test_kraken_generated_image_is_deterministic_per_seed():
+	var first: Image = generator.generate_image("kraken", 42)
+	var second: Image = generator.generate_image("kraken", 42)
+	assert_eq(_pixel_diff_count(first, second), 0)
+
+
+## Kraken not registered in SPECIES_BASE_COLORS would silently fall back to
+## the generic herbivore body/color -- same regression risk noted on the
+## other Easter-egg creatures above.
+func test_kraken_does_not_fall_back_to_the_generic_herbivore_shape():
+	var herbivore: Image = generator.generate_image("herbivore", 5)
+	var kraken: Image = generator.generate_image("kraken", 5)
+	assert_gt(_opacity_diff_count(kraken, herbivore), 0)
+
+
+func test_kraken_is_ringed_with_the_shared_dark_outline():
+	var image: Image = generator.generate_image("kraken", 1)
+	assert_true(_has_pixel(image, PixelPalette.OUTLINE))
+
+
+func test_kraken_has_a_color_distinct_from_every_other_species():
+	var all_species: Array = SPECIES + NEW_SPECIES + [
+		"mouse", "venomous_snake", "nonvenomous_snake", "squallmaw", "coilnecca", "champ"
+	]
+	var kraken_color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS["kraken"]
+	for species in all_species:
+		var color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[species]
+		assert_gt(
+			Vector3(kraken_color.r, kraken_color.g, kraken_color.b).distance_to(Vector3(color.r, color.g, color.b)),
+			0.02,
+			"kraken vs %s should be visually distinguishable" % species
+		)
 
 
 ## The walking silhouette must still be a fully connected, outlined animal --
