@@ -2936,7 +2936,8 @@ yet wired into the live, still-lookup-table-shaped `material_damage.gd`/
 original "materials stay pure, no alloying" clause for the mineral track
 only — design-only so far, no code exists for it yet:
 
-- **Material Property Vector** (medium) — 🚧 Partial — `src/gameplay/material_properties.gd`: a fixed "mineral track" vector (density/hardness/toughness/elasticity/sharpness_capacity/flammability/conductivity/decay_rate) for ten named materials (wood/timber/flesh/stone/iron/obsidian/fiber, plus `copper`/`tin`/`carbon` added 2026-08-27 as the rows the alloy model blends), tested, with unknown-material/unknown-property defaults. `descriptors_for_vector()` now takes a *bare vector* rather than a material name, which is what lets a computed alloy vector reach the descriptor vocabulary at all — before it existed, materials.md's "an alloy is just one more way to arrive at a property vector" was quietly untrue in code, because every consumer took a String and looked it up. Only the doc's mineral track exists; the DNA-driven organic track (see dna.md/evolution.md) is unbuilt, and nothing in live gameplay reads this vector yet — `material_damage.gd`'s per-(weapon_kind, material)-string lookup table remains what `scenes/player.gd` actually calls.
+- **Material Property Vector** (medium) — 🚧 Partial — `src/gameplay/material_properties.gd`: a fixed "mineral track" vector (density/hardness/toughness/elasticity/sharpness_capacity/flammability/conductivity/decay_rate) for **eighteen** named materials (wood/timber/flesh/stone/iron/obsidian/fiber, plus `copper`/`tin`/`carbon` added 2026-08-27 as the rows the alloy model blends, plus `hide`/`leather`/`bone`/`sinew`/`glass`/`silver`/`gold`/`zinc` added 2026-08-28), tested, with unknown-material/unknown-property defaults.
+  **2026-08-28 correction pass, three parts.** (1) **Conductivity is now derived from published %IACS** through one anchor (`IACS_SILVER_PERCENT = 105.0` — silver is the periodic table's true maximum, so the ceiling never has to move) and one pure function `conductivity_from_iacs()`, with a sourced figure per row. It was previously *inverted where it mattered*: iron shipped at 9.0 against copper's 10.0 when real iron is 15.6% IACS against copper's 100 — a factor of six and a half, and near the bottom of the metals rather than the top — and flesh at 3.0 when wet tissue is seven orders of magnitude below any metal. This was free exactly once (a repo-wide grep confirms **nothing in `src/` or `scenes/` reads `conductivity`**), and it matters because `concept/electromagnetism.md` is written against this scalar and three of its claims were unsupported by the old numbers. Honest, test-pinned cost: on a linear silver-anchored scale every non-metal collapses to ~0, so the scale cannot rank insulators against each other (the stored %IACS figures still can). `DEFAULT_PROPERTIES`' conductivity dropped 1.0 → 0.0 for the same reason — 1.0 now means "10.5% IACS", i.e. a real metal, so the old default silently promoted every unmodeled substance to a usable conductor. (2) **A real thermal-failure column in degrees Celsius** with a failure *mode* — `thermal_failure_c`/`thermal_failure_mode`/`can_melt`/`materials_meltable_at` plus `STATION_TEMPERATURE_C`. Deliberately not a ninth vector scalar (an alloy vector must stay shape-identical to a MATERIALS row) and deliberately not a 0–10 band (the only thing it is for is being compared against real furnace and eutectic temperatures). Four modes, not the three originally specified: protein tissue needed **char**, because keratin/collagen genuinely neither melt nor sustain a flame. The metals' figures are pinned *equal to* `alloy_blend.gd`'s own published constants rather than restated. (3) **Eight missing rows**: before this, every organic part in the design resolved through `DEFAULT_PROPERTIES`' all-1.0 vector and realized *identically* — a boar hide and a pane of glass were the same material — so `concept/crafting.md`'s headline promise about a high-fitness boar hide was unreachable in code. `descriptors_for_vector()` now takes a *bare vector* rather than a material name, which is what lets a computed alloy vector reach the descriptor vocabulary at all — before it existed, materials.md's "an alloy is just one more way to arrive at a property vector" was quietly untrue in code, because every consumer took a String and looked it up. Only the doc's mineral track exists; the DNA-driven organic track (see dna.md/evolution.md) is unbuilt, and nothing in live gameplay reads this vector yet — `material_damage.gd`'s per-(weapon_kind, material)-string lookup table remains what `scenes/player.gd` actually calls.
 - **Impact Resolution (Momentum × Geometry × Material → Outcome)** (large) — 🚧 Partial — `src/gameplay/impact_resolver.gd`'s `resolve_impact()` (tested, calibration-pinned `T_CUT`/`T_PIERCE`/`T_CRUSH`/`T_BRITTLE_TOUGHNESS`/`PIERCE_HARDNESS_CAP` thresholds — the doc's own Open Questions section flags exactly these as needing calibration tests) returns cut/dent/crush/pierce/shatter/bounce from momentum + contact geometry (edge/point/blunt) + the target material's hardness/toughness. Not wired into any live combat, tree-felling, or mining path, and doesn't yet cover the doc's shape-assembly mechanics (leverage/edge+backing/balance) that would compute momentum and geometry from an actual item.
 - **Two-Track Organic vs. Mineral Materials** (large) — ⬜ Not started — no DNA-driven variable material track exists; every entry in `material_properties.gd` is a fixed mineral-style vector.
 - **Item compiler (assembly → rule program)** (large) — 🚧 Partial (model only, zero callers) — `src/gameplay/part_mechanics.gd` + `item_compiler.gd` + `affordance_notes.gd` (2026-08-28, 35 tests). An assembly compiles to a list of `event → guard → pipeline` **rules in `spell_parser.gd`'s own AST shape** — pinned key-for-key against a rule the shipped parser actually produced — so derived physics and a hand-authored enchantment are the same kind of thing and can merge into one list on one item; affordances are a *projection* over those rules, never the output. Because `_parse_guard` has no `and`, every conjunction is resolved **statically at compile time** and a named reason is kept for each absence, which is what makes "why can't this chop?" answerable (`AffordanceNotes.absence_reason`). Guard thresholds always read the shipped `ImpactResolver` symbols. The headline result: **a saw emits `rip` and not `chop`, an axe emits `chop` and not `rip`, and the two absences are independent physical failures** — the saw's 0.9 mm plate carries only 2.18 momentum against the 3.0 a chop needs (MASS), the axe's bit is a transverse wedge with no tooth pitch (GEOMETRY) — with a saw filed with no set failing a third way (it binds in its own kerf). An obsidian sword emits no `parry` rule because its toughness is under the cutoff the impact model already shatters at, and *also* loses `chop` because obsidian's density makes the same blade a third the mass — two unarranged consequences of one property vector. **Not** wired: `Item`/`ItemCatalog` are untouched and `Item.is_saw()/is_axe()/is_pickaxe()` (`scenes/player.gd`:1594/1691/1773) are still `id.contains(...)` string hacks, so a player-built saw still cannot saw. The concrete blocker is named in the concept doc: **no `PartGraph` ↔ assembly-dict conversion exists in either direction**, and `CraftedItemRegistry`'s canonical form stores a quantized volume + material per part, not geometry/dimensions/joints, so a saved assembly cannot be rehydrated into a graph to compile. That serializer is the next slice, not the `player.gd` edit.
@@ -2949,12 +2950,31 @@ only — design-only so far, no code exists for it yet:
 - **Traversal-Tool Material Viability (Raft Buoyancy / Rope Tensile Strength)** (small) — ✅ Done (basic) — `material_properties.gd`'s `is_viable_for_tool()`, tested: density-gated for `raft`, toughness-gated (standing in for tensile strength — see the doc's transportation.md cross-reference) for `grapple_rope`. No raft/rope items or transportation.md wiring exist yet to consume it — see Transportation section.
 - **Alloying (Emergent Metallurgy)** (large) — 🚧 Partial — the *computation*
   is real and tested; the *content around it* does not exist.
-  `src/gameplay/alloy_blend.gd` (45 tests) blends two mineral vectors into a
-  third by real metallurgy: solid-solution strengthening rising as
-  **sqrt(concentration)** (Fleischer's law) and peaking at the **published
-  solubility limit** rather than at an authored ratio, the
-  strengthening/embrittlement tradeoff (toughness is divided by exactly the
-  factor hardness is multiplied by), harmonic density mixing, and van 't Hoff
+  `src/gameplay/alloy_blend.gd` (55 tests) blends two mineral vectors into a
+  third by real metallurgy. **Rewritten 2026-08-28 onto a two-regime model**
+  split by each pair's *published second-phase onset* — the composition, off a
+  real binary phase diagram, where a brittle intermetallic starts coming out of
+  solution. Below it the alloy is one solid solution: hardness rises by
+  **Labusch's `c^(2/3)`** (a correction, not a preference — Fleischer's
+  `sqrt(c)`, which the previous version used, is documented as the *dilute*
+  result valid below ~1 at% solute, and 12 wt% tin is 6.8 at% while 39 wt% zinc
+  is 38 at%) and toughness simply follows the rule of mixtures, because one
+  ductile phase is still one ductile phase. Above it a **named real compound**
+  precipitates — δ-Cu₃₁Sn₈, β′-CuZn, γ-Cu₃As, cementite Fe₃C — its volume
+  fraction grows by the **lever rule**, hardness keeps climbing and **toughness
+  collapses**, because a continuous brittle network on the grain boundaries is a
+  crack highway. **The payoff test:** the optimum is defined as the richest
+  composition with no brittle network yet and is *scanned* from the model, and
+  three unrelated systems land on three real historical answers — Cu-Sn at 13.5%
+  tin (real weapons bronze 10–14%), Cu-Zn at 39% zinc (Muntz metal is 40%), Fe-C
+  at 0.76% carbon (that *is* eutectoid steel). Nothing in the formula knows any
+  of it. The **anti-wiki property** is explicitly pinned too: the onsets differ so
+  wildly per pair that bronze's ratio is ~3× wrong for brass and ~18× wrong for
+  steel, which is the whole argument for a blend *space* over a recipe list. Each
+  compound's own composition is **derived from its formula** over the molar
+  masses already present rather than looked up, and that it reproduces the
+  textbook figures (Cu₃₁Sn₈ → 32.5% vs 32.6; Fe₃C → 6.69% vs 6.67) is the check
+  that the derivation is right. Also: harmonic density mixing, and van 't Hoff
   cryoscopic melting depression with a eutectic that is *solved for* rather
   than authored. One model covers both archetypes — substitutional (Cu-Sn) and
   interstitial (Fe-C) differ only in whether misfit is measured against the host
@@ -2967,27 +2987,55 @@ only — design-only so far, no code exists for it yet:
   version of this row named.
   **Four deliberate divergences from the 2026-08-24 design, all written up in
   smelting.md**: toughness *falls* rather than peaking with hardness (the doc's
-  "harder *and* tougher" was a free lunch and is not how alloys work); the peak
-  is derived from the solubility limit rather than centred on the ~12%
-  historical ratio (which is now an emergent *output*); melting is a separate
-  `melting_point_c()` function rather than a ninth `melting_threshold` scalar
-  (half the MATERIALS table has no melting point — wood chars, graphite
-  sublimes — so a ninth key would force them all to lie); and the
-  past-the-ceiling plateau is the 0–10 scale clamping, not modeled cementite.
+  "harder *and* tougher" was a free lunch and is not how alloys work) — though
+  as of 2026-08-28 it falls only *past the onset*, not throughout, because the
+  old shape is contradicted by the most-produced copper alloy there is
+  (cartridge brass at 30% Zn is both stronger than pure copper and *more*
+  ductile than it); the optimum is derived from a published phase boundary
+  rather than centred on the ~12% historical ratio (which is now an emergent
+  *output*); melting is a separate `melting_point_c()` function rather than a
+  ninth `melting_threshold` scalar (half the MATERIALS table has no melting
+  point — wood chars, graphite sublimes — so a ninth key would force them all to
+  lie, and the real-Celsius thermal-failure column added 2026-08-28 lives beside
+  the vector for the same reason); and the past-the-ceiling plateau **was** the
+  0–10 scale clamping rather than modeled cementite — **as of 2026-08-28 it is
+  modeled cementite**, so that divergence is closed and cast iron is now the
+  right answer for the right reason.
+  **Two tests were rewritten rather than deleted** when the new model superseded
+  them, and both to a better invariant: eutectoid steel now reads *hard, keen and
+  not brittle* (normalized 0.76% pearlitic steel genuinely is the tough
+  edged-tool material — the old model calling it brittle was simply false, and
+  would have made the historical optimum nonsense) while cast iron at 4.3% C
+  reads brittle; and `test_toughness_falls_where_hardness_peaks` became
+  `test_toughness_holds_up_through_the_whole_single_phase_field`.
   **Known gaps, all test-pinned or doc-recorded, none hidden**: the 0–10
   hardness scale saturates so *any* carbon steel pins at 10 (biggest limitation
-  — the scale has no headroom above iron=8); conductivity mixes linearly where
-  Nordheim's rule says an alloy should conduct *worse than both* constituents
-  (the one knowingly-false statement in the file); the Cu-Sn eutectic's position
-  is only qualitatively right (~88 wt% Sn vs the real 99.3 — ideal-solution
-  linearization, no activity coefficients). The gap this row used to name last
+  — the scale has no headroom above iron=8); alloy conductivity still mixes
+  linearly where Nordheim's rule says a solid solution should conduct *worse
+  than both* constituents (the conductivity **column** was fixed 2026-08-28, the
+  blend **rule** was not — they are separate, and the rule is now cheap since
+  `x(1-x)` scattering applies exactly in the single-phase field the onsets
+  already delimit); the Cu-Sn eutectic's position is only qualitatively right
+  (~88 wt% Sn vs the real 99.3 — ideal-solution linearization, no activity
+  coefficients); and the lever-rule toughness collapse is a little generous to
+  high-solute alloys, because a real grain-boundary *film* sits on the crack path
+  rather than being randomly dispersed (the Cu-Sn brittleness crossover lands
+  near 25% tin where reality is nearer 20%). The gap this row used to name last
   — "heat treatment/tempering is absent entirely, so there is no way to make a
   non-brittle steel blade yet" — is **closed** as of 2026-08-27 by
-  `src/gameplay/treatment.gd` (see the Heat Treatment row below); the hardness
-  saturation is what keeps the resulting window narrow.
+  `src/gameplay/treatment.gd` (see the Heat Treatment row below), which also
+  closes the converse hole: quench now makes a steel blade that IS
+  brittle-because-quenched, and temper draws that brittleness back out. The
+  hardness saturation is what keeps the resulting window narrow.
   **Nothing calls `blend()` outside its own test** — no tin ore (`ORE_TYPES` is
-  still `["iron","copper","coal"]`), no alloy ingot item, no smelt path, no
-  ratio UI. Composes with, doesn't duplicate, `concept/labor_skills.md`'s
+  still `["iron","copper","coal"]`), no zinc or arsenic ore either, no alloy
+  ingot item, no smelt path, no ratio UI. The same is true of everything the
+  2026-08-28 pass added: `conductivity_from_iacs`, `thermal_failure_c`,
+  `thermal_failure_mode`, `can_melt`, `materials_meltable_at`,
+  `optimal_solute_fraction`, `second_phase_*` and `brittle_phase_fraction` all
+  have **zero callers outside tests**. `smelting.gd` still gates on "is a heat
+  source present" rather than on its temperature, which is the single cheapest
+  place to make the new heat model real. Composes with, doesn't duplicate, `concept/labor_skills.md`'s
   `ceiling_realization` multiplier; the skill→ratio-drift formula smelting.md
   asks for is still untouched.
 - **Heat Treatment (Quench / Temper / Sharpen)** (medium) — 🚧 Partial — the

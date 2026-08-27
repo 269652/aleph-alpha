@@ -291,10 +291,10 @@ func test_the_volume_quantum_is_finer_than_a_balance_can_read():
 
 
 ## And it is not needlessly finer than that either. A quantum ten times LARGER
-## would be perceptible -- it puts nearly nine grams of the densest material on
-## the scale -- so 0.1cm^3 is the coarsest quantum that still hides under the
-## threshold, not an arbitrarily small one multiplying the reachable id space
-## for precision no hand can use.
+## would be perceptible -- it puts nearly ten grams of the densest material on
+## the scale -- so 0.05cm^3 is close to the coarsest quantum that still hides
+## under the threshold, not an arbitrarily small one multiplying the reachable
+## id space for precision no hand can use.
 func test_the_volume_quantum_is_no_finer_than_it_needs_to_be():
 	var properties := MaterialProperties.new()
 	var densest := _densest_modelled_material()
@@ -303,9 +303,9 @@ func test_the_volume_quantum_is_no_finer_than_it_needs_to_be():
 
 
 func test_volumes_are_quantized_to_whole_quanta():
-	assert_eq(AssemblyId.quantize_volume_cm3(120.0), 1200)
-	assert_eq(AssemblyId.quantize_volume_cm3(120.04), 1200, "rounds down within the quantum")
-	assert_eq(AssemblyId.quantize_volume_cm3(120.06), 1201, "rounds up across it")
+	assert_eq(AssemblyId.quantize_volume_cm3(120.0), 2400)
+	assert_eq(AssemblyId.quantize_volume_cm3(120.02), 2400, "rounds down within the quantum")
+	assert_eq(AssemblyId.quantize_volume_cm3(120.03), 2401, "rounds up across it")
 
 
 ## A reader of a canonical form (CraftedItemRegistry's real mass) has to get
