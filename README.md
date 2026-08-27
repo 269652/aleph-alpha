@@ -336,6 +336,22 @@ Paste the whole block (line breaks are fine) into a plain-text file named
 `license.txt` next to the game executable. After it expires, contact us
 (see Contact below) for an alpha tester key.
 
+An extended key, valid through **2027-12-31**, base game only:
+
+```
+040G0000000000020000106E2SPS9ZQ7ZMY5Z6BN
+FKS1YAGH03CPYZMF1QGR0JP33S1W3S3FETB4EARA
+MPFYQYGJK2MRB6S8T9BCV4HBDJRVS3KZ48QA3WA1
+WE0D86WGZ924388T3ZD9QEV52GS83SWYZPFA3GZJ
+YX9FK5KZ80EGGA3D1Z9Q83F9Y6YH0FA792TQZBCH
+4SNDYS3W1B49VV6P044KT24CSTBBZY6XAK7MHATG
+1HRKYMANZ8BZHKQYPQYSK5GHMEF1SF1X9047ZF9R
+0SCCYHBT5EWQ7ZDT85ARYGTKVM96XCXM7E316XBK
+KFN68JF1XFDVDBWTYRWYW8ECKRKD6B6MBRCW1STQ
+0V5DH0RFVKGG1KFKVK6D636VXYTA0G5EEAQXBW3S
+60K69MG8ETM352FY523FCSQP5HXPZV28FFR9C
+```
+
 The game also verifies its own files haven't been tampered with at
 startup (see `docs/licensing.md`). **Removing or bypassing this signature
 verification is expressly prohibited** under the license terms below, in
