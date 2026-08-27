@@ -97,6 +97,19 @@ const MINIMAP_REFRESH_INTERVAL := 1.0
 const HOVER_REFRESH_INTERVAL := 0.033
 var _hover_accumulator := 0.0
 
+## Interaction-prompt ("Talk"/"Pick") recompute cadence (~13 Hz) -- same
+## reasoning and shape as HOVER_REFRESH_INTERVAL just above: this scan chains
+## through up to three unbounded linear scans (EarthChunkManager.
+## nearest_npc_near, .nearest_liftable_stone_near, Player.
+## nearest_kickable_dropped_item_near, see _update_interaction_prompt) every
+## time the player isn't already near an NPC or holding something -- the
+## common case -- and used to run that chain on literally every frame with no
+## throttle at all. A proximity prompt needs nowhere near 60 Hz freshness;
+## pinned within the 10-15 Hz band by test_world_interaction_prompt_throttle.gd
+## rather than left an eyeballed comment-only value (see CLAUDE.md).
+const INTERACTION_PROMPT_REFRESH_INTERVAL := 0.075
+var _interaction_prompt_accumulator := 0.0
+
 ## Real seconds between Easter-egg sighting checks (docs/concept/
 ## easter_eggs.md's Mothman/Jersey Devil/Roswell/Area 51 cameos) -- these
 ## are meant to be rare, atmospheric glimpses, not a per-frame lottery, so
@@ -2127,6 +2140,10 @@ func _update_charge_meter(local_player: Player) -> void:
 ## a pebble underfoot isn't going anywhere. All bound keys are read live
 ## from _keybindings so a rebind is reflected immediately, never a stale
 ## hardcoded letter.
+##
+## Throttled to INTERACTION_PROMPT_REFRESH_INTERVAL by the caller (see
+## _maybe_update_interaction_prompt) rather than run here every frame -- call
+## that wrapper from _client_process, not this directly.
 func _update_interaction_prompt(local_player: Player) -> void:
 	if not world_hint_visible_for(_chunk_manager != null, _any_gameplay_window_open()):
 		_interaction_prompt.visible = false
@@ -2159,6 +2176,22 @@ func _update_interaction_prompt(local_player: Player) -> void:
 		return
 
 	_interaction_prompt.visible = false
+
+
+## Gates _update_interaction_prompt behind INTERACTION_PROMPT_REFRESH_INTERVAL
+## -- the exact same accumulator shape _client_process already uses inline
+## for _hover_accumulator/_update_hover_tooltip, just pulled into its own
+## function here so the throttle itself is directly callable (and testable)
+## without also invoking the rest of _client_process's per-frame work. Skips
+## the real scan on a throttled call and leaves _interaction_prompt exactly
+## as the last real scan left it -- Control properties persist on their own,
+## so nothing needs to be cached separately for that.
+func _maybe_update_interaction_prompt(local_player: Player, delta: float) -> void:
+	_interaction_prompt_accumulator += delta
+	if _interaction_prompt_accumulator < INTERACTION_PROMPT_REFRESH_INTERVAL:
+		return
+	_interaction_prompt_accumulator = 0.0
+	_update_interaction_prompt(local_player)
 
 
 ## Shows the interaction prompt with `text`, positioned just above
@@ -4237,7 +4270,7 @@ func _client_process(delta: float) -> void:
 	# The banners keep their own text; the whole stack steps aside while a
 	# window is open (see world_hint_visible_for).
 	_message_stack.visible = world_hint_visible_for(true, _any_gameplay_window_open())
-	_update_interaction_prompt(local_player)
+	_maybe_update_interaction_prompt(local_player, delta)
 	_update_charge_meter(local_player)
 	_refresh_skill_window(local_player)
 	_autosave_step(local_player, delta)
