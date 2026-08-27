@@ -580,44 +580,22 @@ func _ready() -> void:
 	# fix) -- only the license check gets a recoverable in-game path,
 	# since the fix there really is just "type/paste a valid key".
 	#
-	# Real bug found live: this redundant re-check used to run
-	# unconditionally, with no editor bypass of its own -- unlike the
-	# autoloads' own _ready(), which correctly skips both checks under
-	# OS.has_feature("editor") (true for the editor binary itself, whether
-	# launched via the Play button or a raw `--path` command line, and
-	# NEVER true in an exported build). That meant a plain dev/test launch
-	# re-failed a check the primary one had already correctly and
-	# deliberately skipped -- SelfIntegrity in particular can never pass
-	# here anyway (there's no exported .pck for it to hash while running
-	# raw project files this way), so it just produced permanent false-
-	# positive "reinstall from original source" noise on every non-editor-
-	# Play dev launch. Mirroring the same bypass here removes that noise
-	# without weakening anything for a real shipped build, where
-	# OS.has_feature("editor") is always false.
+	# SelfIntegrity keeps its own OS.has_feature("editor") bypass -- a
+	# SEPARATE, still-valid concern: there's no exported .pck to hash while
+	# running raw project files this way, so it can never pass in this
+	# launch mode regardless of any real key, and forcing it would just
+	# always hard-quit every dev/editor launch, not usefully test anything.
 	#
-	# Real discovery made live: OS.has_feature("editor") is true for ANY
-	# run of the Godot editor binary -- not only an actual Play-button
-	# click, confirmed by launching `Godot.exe --path <repo>` (no `-e`)
-	# with every candidate license.txt moved aside and reaching the main
-	# menu anyway. That means the license gate/GitHub-verify UI can never
-	# be exercised via a raw dev launch of this binary, only by a real
-	# export (which has no "editor" feature at all, so is unaffected by
-	# any of this). `--force-license-check` (a user arg after `--`, e.g.
-	# `Godot.exe --path <repo> -- --force-license-check`) opts a dev
-	# launch back into the real check for testing the gate itself,
-	# without touching SelfIntegrity (which can never pass here anyway --
-	# there's no exported .pck to hash while running raw project files,
-	# so forcing it would just always hard-quit, not usefully test
-	# anything) or changing anything for a real shipped build, which
-	# never has this flag passed and never has the editor binary at all.
-	var force_license_check := "--force-license-check" in OS.get_cmdline_user_args()
+	# The LICENSE check's own editor bypass is gone (see license_gate.gd's
+	# _boot(), removed by request): LicenseGate.check_licensed() now runs
+	# unconditionally here too, the same as an exported build, so an
+	# invalid/missing key shows the real in-game "enter your key" gate
+	# during editor Play-button runs as well. The `--force-license-check`
+	# arg this used to read is gone with it -- the check it opted back
+	# into is now simply always on.
 	if not OS.has_feature("editor"):
 		SelfIntegrity.require_verified()
-	var license_result: Dictionary = (
-		{"licensed": true, "product_mask": LicenseGate.product_mask, "github_user_id": LicenseGate.github_user_id, "reason": ""}
-		if OS.has_feature("editor") and not force_license_check
-		else LicenseGate.check_licensed()
-	)
+	var license_result: Dictionary = LicenseGate.check_licensed()
 	if not license_result.licensed:
 		_show_license_gate()
 		return
