@@ -39,6 +39,7 @@ const ProceduralBobberSprite = preload("res://src/rendering/procedural_bobber_sp
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
@@ -366,6 +367,14 @@ const TRADE_MESSAGE_DURATION := 2.5
 const TRADE_RADIUS := 48.0
 var _item_catalog := ItemCatalog.new()
 
+## Structures for the emergent, content-addressed items this player is carrying
+## (see docs/concept/item_identity.md). Handed to _item_catalog so the ONE place
+## that decides whether a saved item survives a load -- apply_save_dict's
+## `if _item_catalog.has(entry.id)` below -- can answer for a crafted id at all.
+## Without it every crafted item is silently dropped on load, which is the bug
+## this exists to close.
+var crafted_items := CraftedItemRegistry.new()
+
 ## -- Talking to any villager (see NpcGreeting, EarthChunkManager.
 ## nearest_npc_near) -- a minimal stand-in for the real Live Dialogue System
 ## (docs/concept/npc.md's "Minimal talk interaction"): press the talk key
@@ -479,6 +488,9 @@ func _ready() -> void:
 	motion_mode = CharacterBody2D.MOTION_MODE_FLOATING
 	_last_position = position
 	_camera.zoom = CAMERA_ZOOM
+	# So an item crafted DURING this session resolves too, not only one restored
+	# from a save (apply_save_dict re-attaches whatever it loads).
+	_item_catalog.use_crafted_registry(crafted_items)
 	# So creature AI (CreatureMarker) can sense the player as a threat/target.
 	add_to_group("player")
 	_setup_replication()
@@ -815,6 +827,11 @@ func to_save_dict() -> Dictionary:
 		"skill_points_paid": _skill_points_paid.duplicate(),
 		"inventory": inventory_data,
 		"equipment": equipment_data,
+		# Alongside the inventory rather than inside it: an inventory entry is
+		# {id, count}, so a structure blob inlined there would be written once
+		# per stack and could come back as two different objects for one item.
+		# id -> structure is normalized, and the entry's id is the foreign key.
+		"crafted_items": crafted_items.to_dicts(),
 		"hotbar": hotbar_data,
 	}
 
@@ -855,6 +872,14 @@ func apply_save_dict(data: Dictionary) -> void:
 	for keystone_id in unlocked_keystones:
 		if unlocked_keystones[keystone_id] and skill_web.has(keystone_id):
 			allocated_nodes[keystone_id] = true
+
+	# BEFORE the inventory/equipment loops below, which is the whole point: both
+	# gate on `_item_catalog.has(...)` and silently skip anything it does not
+	# know, so the catalog has to be able to answer for this save's crafted ids
+	# before it is asked. A save written before crafted items existed has no
+	# such key and loads to an empty registry, exactly as it did.
+	crafted_items = CraftedItemRegistry.from_dicts(data.get("crafted_items", {}))
+	_item_catalog.use_crafted_registry(crafted_items)
 
 	inventory = Inventory.new(inventory.slot_count)
 	for entry in data.get("inventory", []):

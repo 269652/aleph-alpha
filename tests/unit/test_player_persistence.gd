@@ -120,3 +120,56 @@ func test_a_restored_player_keeps_hotbar_bindings():
 
 	assert_eq(restored.hotbar.item_id_at(0), "iron_sword")
 	assert_eq(restored.hotbar.item_id_at(2), "fishing_rod")
+
+
+# --- emergent, crafted items (see docs/concept/item_identity.md) ------------
+
+
+func _sword() -> Dictionary:
+	return {
+		"pattern": "sword",
+		"parts": [
+			{"material": "iron", "geometry": "blade", "role": "edge", "length_cm": 70.0},
+			{"material": "wood", "geometry": "rod", "role": "grip", "length_cm": 12.0},
+		],
+		"joints": [{"kind": "tang", "a": 0, "b": 1}],
+	}
+
+
+## THE regression this whole slice exists to prevent, at the level it actually
+## bit: apply_save_dict loads inventory with `if _item_catalog.has(entry.id)`,
+## so before the registry rode along in the same save dict, an id the static
+## catalog had never heard of was silently dropped and every crafted item
+## evaporated on load.
+func test_a_crafted_item_survives_the_save_dict_round_trip():
+	var id: String = source.crafted_items.register(_sword())
+	source.inventory.add(source.crafted_items.make_item(id), 1)
+
+	restored.apply_save_dict(source.to_save_dict())
+
+	assert_true(restored.inventory.has(id), "the crafted item is still in the inventory")
+	assert_eq(restored.inventory.count_of(id), 1)
+
+
+## And it comes back as the same OBJECT, not just the same id -- the structure
+## has to travel with it or the id names nothing on the other side.
+func test_a_restored_crafted_item_still_knows_what_it_is_made_of():
+	var id: String = source.crafted_items.register(_sword())
+	source.inventory.add(source.crafted_items.make_item(id), 1)
+
+	restored.apply_save_dict(source.to_save_dict())
+
+	assert_true(restored.crafted_items.has(id))
+	assert_eq(restored.crafted_items.get_assembly(id), source.crafted_items.get_assembly(id))
+	assert_eq(restored.inventory.stacks()[0].item.display_name, "Iron Sword")
+
+
+## A save with no crafted items at all (every save written before this existed)
+## must load exactly as it did, not fail on a missing key.
+func test_a_save_predating_crafted_items_still_loads():
+	var legacy := source.to_save_dict()
+	legacy.erase("crafted_items")
+
+	restored.apply_save_dict(legacy)
+
+	assert_eq(restored.crafted_items.size(), 0)

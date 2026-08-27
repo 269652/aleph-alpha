@@ -9,6 +9,22 @@ extends RefCounted
 
 const Item = preload("res://src/gameplay/item.gd")
 const MaterialProperties = preload("res://src/gameplay/material_properties.gd")
+const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
+
+## Optional fallback for content-addressed, emergent item ids (see
+## docs/concept/item_identity.md). Null in a fresh catalog, so a bare
+## ItemCatalog.new() behaves exactly as it did before this seam existed.
+##
+## This is deliberately THE one seam for emergent items. scenes/player.gd's
+## loader decides whether a saved item survives with `if
+## _item_catalog.has(entry.id)` (:861-862) and a matching `continue` for
+## equipment (:868-870) -- so an id this catalog does not know is silently
+## dropped, and every crafted item would evaporate on save/load. Answering for
+## crafted ids HERE fixes that at its single decision point, instead of
+## threading a second lookup through a large, concurrently-edited file; the
+## shop, /give, cooking, crafted output and tile pickup all read the same
+## has()/make() and get it at the same time.
+var _crafted_registry: CraftedItemRegistry = null
 
 ## Real weapon mass (see docs/concept/materials.md's momentum = mass *
 ## velocity model, MaterialProperties.mass_kg_for): each weapon-kind item's
@@ -172,8 +188,18 @@ const _ITEMS := {
 }
 
 
+## Attaches (or with null, detaches) the registry consulted for ids this static
+## table does not carry. Detaching matters at least as much as attaching: a New
+## Game must not inherit the previous save's crafted items through a catalog
+## that outlived the world it was loaded for.
+func use_crafted_registry(registry: CraftedItemRegistry) -> void:
+	_crafted_registry = registry
+
+
 func has(item_id: String) -> bool:
-	return _ITEMS.has(item_id)
+	if _ITEMS.has(item_id):
+		return true
+	return _crafted_registry != null and _crafted_registry.has(item_id)
 
 
 ## `item_id`'s category ("food", "weapon", "tool", ...) -- the same string
@@ -184,11 +210,26 @@ func has(item_id: String) -> bool:
 ## unknown id.
 func kind_of(item_id: String) -> String:
 	if not _ITEMS.has(item_id):
+		if _crafted_registry != null:
+			return _crafted_registry.kind_of(item_id)
 		return ""
 	return String(_ITEMS[item_id][1])
 
 
+## The authored table is checked FIRST and always wins. Every other system is
+## already wired to the shipped ids -- the shop prices them, recipes name them
+## as outputs -- so an attached registry must never be able to shadow one.
+##
+## An id neither source knows still indexes _ITEMS and fails loudly, exactly as
+## before. That is deliberate: several callers (see the un-guarded
+## `inventory.add(_item_catalog.make(item_id), ...)` in scenes/player.gd) do not
+## check has() first, and quietly handing them a null would turn a crash that
+## names its bad id into a null item propagating into an inventory.
 func make(item_id: String) -> Item:
+	if not _ITEMS.has(item_id) and _crafted_registry != null:
+		var crafted := _crafted_registry.make_item(item_id)
+		if crafted != null:
+			return crafted
 	var spec: Array = _ITEMS[item_id]
 	var equip_slot: String = spec[4] if spec.size() > 4 else ""
 	var armor: float = spec[5] if spec.size() > 5 else 0.0
@@ -241,6 +282,9 @@ func material_of(item_id: String) -> String:
 	return String(_WEAPON_MATERIAL_AND_VOLUME[item_id][0])
 
 
-## Every id this catalog can build, for a /help-style listing.
+## Every AUTHORED id this catalog can build, for a /help-style listing.
+## Deliberately excludes an attached registry's crafted ids: those are content
+## hashes, and a /give listing that printed a screenful of asm_<16 hex digits>
+## would be worse than one that admits it only lists the authored items.
 func known_ids() -> Array:
 	return _ITEMS.keys()
