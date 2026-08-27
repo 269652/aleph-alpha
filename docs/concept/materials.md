@@ -89,6 +89,13 @@ geometry that turns their properties into the effect they want.
 
 An item is a small graph of **parts**, each a (material × geometry) pair:
 
+> The part graph this section describes now exists as a real, tested data model
+> — see [emergent_crafting.md](emergent_crafting.md), which also adds the
+> primitive this section is missing: **typed joints**. The assembly model below
+> is implicitly *rigid*, which is exactly why it can express a sword but cannot
+> express a pair of scissors (two opposed edges sharing a pivot, cutting by
+> closing).
+
 - **Geometry primitives**: edge (length, angle → keenness potential), point
   (→ pierce), flat/face (→ crush/block), haft/lever (length → torque
   multiplier), bulk/head (mass concentration).
