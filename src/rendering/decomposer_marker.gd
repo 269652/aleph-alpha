@@ -20,6 +20,7 @@ const CarrionForageBehavior = preload("res://src/gameplay/carrion_forage_behavio
 const Carcass = preload("res://src/rendering/carcass.gd")
 const CarcassGuts = preload("res://src/rendering/carcass_guts.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
+const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 
 const GROUP_NAME := "decomposer"
 
@@ -68,7 +69,66 @@ func _ready() -> void:
 	add_child(sprite)
 
 
-func _process(delta: float) -> void:
+var _lod_accumulated := 0.0
+
+## Distance-based update rate (see SimulationLod) -- mirrors CreatureMarker/
+## AmbientFlyerMarker's own _lod_step exactly. Without this, the SEEKING
+## phase's _nearest_carrion group scan (see _step_seeking) ran completely
+## unthrottled: every ant/bug in the loaded world re-scanned the whole
+## Carcass/CarcassGuts groups every single frame, however far from the
+## player it was and however long it had already been since anything nearby
+## changed. Returns the time to advance by, or NEGATIVE when this frame
+## should be skipped entirely.
+##
+## Negative rather than zero as the skip signal, because zero is a
+## legitimate step -- see CreatureMarker._lod_step's own doc comment.
+##
+## The accumulated time is handed to the update when it does run, so a
+## skipped frame is never LOST time -- a decomposer far from the player
+## lives at exactly the same rate, it just does so in fewer, larger steps
+## that nobody is close enough to see.
+func _lod_step(delta: float) -> float:
+	_lod_accumulated += delta
+	var player = _nearest_player_position()
+	if player == null:
+		return _take_lod_step()  # nobody to be far from: always full rate
+	var interval := SimulationLod.update_interval(position.distance_to(player))
+	if _lod_accumulated < interval:
+		return -1.0
+	return _take_lod_step()
+
+
+func _take_lod_step() -> float:
+	var step := _lod_accumulated
+	_lod_accumulated = 0.0
+	return step
+
+
+## Cheap: the player group holds one node in solo play. Cached per frame by
+## the caller rather than scanned per creature would be better still, but
+## this is already off the hot path for everything nearby.
+func _nearest_player_position():
+	# Not in the tree (a marker built standalone in a test) means there is no
+	# player to measure against, so it runs at full rate.
+	if not is_inside_tree():
+		return null
+	if _cached_player == null or not is_instance_valid(_cached_player):
+		var players := get_tree().get_nodes_in_group("player")
+		if players.is_empty():
+			return null
+		_cached_player = players[0]
+	return _cached_player.position
+
+
+var _cached_player: Node = null
+
+
+func _process(frame_delta: float) -> void:
+	# Decomposers far from the player advance in fewer, larger steps (see
+	# SimulationLod) -- same time passes, fewer scans to pay for.
+	var delta := _lod_step(frame_delta)
+	if delta < 0.0:
+		return
 	match _behavior.phase:
 		CarrionForageBehavior.Phase.SEEKING:
 			_step_seeking(delta)
