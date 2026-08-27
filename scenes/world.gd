@@ -4390,6 +4390,24 @@ func _client_process(delta: float) -> void:
 	var foliage_tint := SeasonalFoliage.tint_for_world_age(_chunk_manager.world_age_seconds())
 	_ground_tint.set_season_tint(foliage_tint)
 	_chunk_manager.set_season_tint(foliage_tint)
+	# ...and the CANOPY above that ground, off the same clock, in the same
+	# frame. This belongs here rather than in _process's ecology block because
+	# a canopy is a rendering concern, not a simulation-ownership one: the
+	# season used to reach the trees only through step_fruiting, which runs
+	# behind _owns_ecosystem_simulation(), so a JOINED CLIENT -- which owns no
+	# simulation -- kept a summer-green forest in every season for the whole
+	# session, and even a host's first chunks loaded green before the first
+	# tick corrected them. _client_process runs on every peer. Guarded to a
+	# handful of canopy rebuilds per in-game year (see
+	# EarthChunkManager.sync_tree_season); pinned by
+	# tests/unit/test_world_season_fanout.gd.
+	#
+	# Passed local_player.position so that rare full-canopy rebuild also
+	# respects FRUITING_DETAIL_RADIUS -- which already covers the whole
+	# visible viewport, so nothing on screen goes undressed, while a tree far
+	# outside it is left for step_fruiting (host) or a later, nearer sync
+	# (any peer) instead of paying a redraw nobody can see.
+	_chunk_manager.sync_tree_season(local_player.position)
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
 		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"
