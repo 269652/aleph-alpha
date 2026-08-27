@@ -285,18 +285,30 @@ model to exactly that.
   `test_the_vector_cannot_express_hardenability_so_quench_overstates_pure_metals`
   records it as KNOWN WRONG. Fixing it needs a composition-aware caller — the
   forge would have to hand over what it is quenching, not just its vector.
-- 🚧 **The usable window is 15 °C wide (225–240 °C), because the 0–10 scale
-  saturates.** Plain iron is hardness 8 and the scale stops at 10, so a
-  quenched-and-tempered blade has two points of headroom and comes out about a
-  third of a point above iron. That is the same limitation `alloy_blend.gd`
-  already names as its biggest — the scale has no room above iron — and *not* a
-  claim that real tempered tool steel is 4 % harder than wrought iron.
-  Pinned by `test_the_useful_draw_window_is_narrow_because_the_scale_saturates`.
-- 🚧 **Quenching a modelled carbon steel is a no-op.** `alloy_blend.gd`
-  saturates hardness for *any* Fe-C composition, so a modelled steel arrives
-  with nothing left to harden — and because the toughness price is charged on
-  the hardness actually delivered, it pays nothing either. Tempering does all
-  the work for steel in this model.
+- ✅ ~~**The usable window is 15 °C wide, because the 0–10 scale saturates.**~~
+  **RESOLVED 2026-08-28** by rescaling `material_properties.gd`'s hardness
+  column to published Vickers anchored on martensite (see
+  [materials.md](materials.md)). Plain iron is 1.0 (100 HV) against a ceiling
+  of 10.0 (1000 HV), so the window is **175 °C wide** — every colour on the
+  ladder from dark straw upward makes a usable tool, and only the pale-straw
+  razor draw falls outside it, which is exactly the ladder's own claim.
+  Pinned by `test_the_useful_draw_window_is_wide_now_that_the_scale_has_headroom`.
+- ✅ ~~**Quenching a modelled carbon steel is a no-op.**~~ **RESOLVED
+  2026-08-28** by the same rescale. As-cast 0.6 % C steel arrives at 6.78 with
+  room above it; the quench takes it to 10.0 and charges the toughness price
+  (6.96 → 1.49, well under the brittle cutoff), and the ceiling it lands on is
+  the *right* ceiling because the top of the scale **is** martensite. Pinned by
+  `test_quenching_a_modelled_carbon_steel_really_hardens_it`.
+- 🚧 **As-quenched hardness is the same for every carbon content.** The fix
+  above makes the quench real but not composition-sensitive: 0.2 %, 0.76 % and
+  3.5 % carbon all clamp to 10.0 as-quenched, because
+  `MARTENSITE_HARDNESS_RATIO` is a single published figure for 0.8 % C and the
+  vector carries no composition (same root cause as the hardenability gap
+  above). Real quenched 0.2 % C reaches only ~450 HV. What *does* survive is
+  the toughness column — as-quenched toughness runs 0.15 / 2.54 / 2.25 across
+  those three — so a mild steel still cannot be tempered into a knife and a
+  eutectoid one can. The right answer emerges; the hardness number does not
+  yet show it.
 - 🚧 **Quenching is envelope-conserving, which understates it.** Real quenching
   does better than a pure trade: tempered martensite is a genuinely better
   structure than annealed pearlite, worth roughly a factor of two in

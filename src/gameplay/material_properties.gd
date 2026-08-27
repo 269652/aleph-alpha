@@ -12,17 +12,24 @@ extends RefCounted
 ## Density is expressed relative to water (water == 1.0) so buoyancy is a
 ## direct density comparison. Most other scalars are small "8-bit" numbers
 ## (roughly 0..10) per materials.md's determinism/legibility goal, placed
-## against each other rather than converted from external units -- iron sits at
-## hardness 8 and stone at 7, which is a legibility ordering, not a
-## measurement. Two columns are exceptions and say so: `density` is a real
-## g/cm^3 figure, and `conductivity` is now derived from published %IACS (see
-## conductivity_from_iacs below). Unknown materials/properties fall back to
+## against each other rather than converted from external units -- toughness,
+## elasticity, sharpness_capacity, flammability and decay_rate are legibility
+## orderings, not measurements. THREE columns are exceptions and say so:
+## `density` is a real g/cm^3 figure, `conductivity` is derived from published
+## %IACS (see conductivity_from_iacs), and `hardness` is derived from published
+## Vickers (see hardness_from_hv). Unknown materials/properties fall back to
 ## DEFAULT_PROPERTIES, mirroring material_damage.gd's existing default-fallback
 ## convention.
 
 const DEFAULT_PROPERTIES: Dictionary = {
 	"density": 1.0,
-	"hardness": 1.0,
+	# The second default that is deliberately NOT 1.0, for exactly the reason
+	# conductivity's is not. Since the Vickers rescale below, 1.0 on this column
+	# means 100 HV -- wrought iron, and the precise cutoff the "hard" descriptor
+	# uses -- so the old all-1.0 default silently promoted every unmodeled
+	# substance to a hard metal. Not having measured something is not a reason
+	# to call it iron. Pinned by test_an_unmodeled_material_is_not_assumed_to_be_hard.
+	"hardness": 0.0,
 	"toughness": 1.0,
 	"elasticity": 1.0,
 	"sharpness_capacity": 1.0,
@@ -114,10 +121,139 @@ const IACS_PERCENT: Dictionary = {
 	"glass": 1.7e-19,   # soda-lime glass at 20 C:             sigma ~ 1.0e-13
 }
 
+## The top of the 0-10 legibility scale, for the hardness column's anchor. The
+## same ceiling CONDUCTIVITY_MAX names, restated for the same cycle-avoiding
+## reason and pinned equal to AlloyBlend.SCALE_MAX by
+## test_the_hardness_ceiling_is_martensite_the_hardest_thing_a_forge_can_make.
+const HARDNESS_MAX: float = 10.0
+
+## Martensite's published Vickers hardness, and therefore the anchor of the
+## whole hardness column.
+##
+## Martensite is chosen for exactly the reason silver anchors conductivity: it
+## is the maximum of everything this game can PRODUCE. No smelting, no alloy,
+## no heat treatment modeled anywhere in this codebase makes anything harder
+## than fully martensitic carbon steel, so the top of this scale never has to
+## move again -- and unlike the old column, where iron sat at 8.0 with two
+## points of sky above it, the ceiling now means something.
+##
+## 1000 HV is the published figure for martensite as such. treatment.gd's own
+## AS_QUENCHED_HV -- 832 HV, a water-quenched 0.8 % C steel measured at HRC 65
+## and converted -- is a specific steel rather than the maximum, and it lands
+## BELOW this ceiling at 8.32. That gap is the headroom the old column did not
+## have: quenching is now an operation with room to work in rather than a
+## clamp, which is the entire defect this rescale exists to remove.
+const HARDNESS_MAX_HV: float = 1000.0
+
+## Published Vickers hardness (HV, i.e. kgf/mm^2) of every material in the
+## table -- the second column, after conductivity, that is a real measurement
+## rather than a placement.
+##
+## ## Why this column had to become real
+##
+## The old column was a 0-10 legibility ordering with iron at 8.0 and obsidian
+## at 9.0. There was essentially no room above iron, and three separate,
+## measurable defects fell straight out of that:
+##
+##  1. `alloy_blend.gd` multiplies a hardness baseline by a strengthening
+##     factor. Iron x anything past ~1.25 clamps, so EVERY Fe-C composition --
+##     0.2 % carbon and 3.5 % carbon alike -- came out at exactly 10.0. Carbon
+##     content bought nothing.
+##  2. `treatment.gd`'s quench multiplies hardness by 832/180. Applied to
+##     something already pinned at 10.0 it is a no-op, so martensite hardening
+##     -- the entire point of that file -- could not be expressed at all.
+##  3. Because the toughness trade is `hardness^n x toughness = const`, a
+##     tempered blade's toughness slid UP into the same ceiling and came out
+##     above plain iron's, which is nonsense.
+##
+## All three are one bug: a ratio-based model cannot work on a scale with no
+## headroom. Both the alloying pass and the materials pass independently named
+## it as their single biggest limitation, and neither could fix it without the
+## column becoming a measurement.
+##
+## ## What is measured and what is placed
+##
+## Metals are published annealed figures throughout -- deliberately ONE state
+## for the whole column, because treatment.gd's ANNEALED_HV (180 HV, annealed
+## 0.8 % C) is the state its own model starts from, and mixing annealed copper
+## with work-hardened iron would put a process difference into a material
+## table.
+##
+## Five rows have no published Vickers figure at all and say so: leather, hide,
+## fiber, sinew and flesh. Indentation hardness is not how any of them is
+## measured (Shore durometry is), so their figures are PLACED to preserve the
+## real ordering and pinned by
+## test_the_soft_organics_are_placed_not_measured_and_keep_their_real_ordering
+## rather than dressed up as measurements. Obsidian and stone are placed too,
+## for the narrower reasons given on their own lines.
+const HARDNESS_HV: Dictionary = {
+	# -- rock and glass ---------------------------------------------------
+	# Granite. PLACED, not looked up: a rock has no single hardness, it has a
+	# mineral-fraction-weighted one (the standard VHNR rock-hardness index used
+	# in drillability work is literally sum(mineral % x mineral VHN)). Quartz
+	# alone is ~1200 HV, but an ordinary granite is only ~30 % quartz, the rest
+	# feldspar (Mohs 6, softer) and mica (Mohs 2-4, far softer), so the rock as
+	# a whole lands well below pure quartz. 700 HV is that weighted figure;
+	# real granites run roughly 500 (mica-rich) to 1000 (quartz-rich). It is
+	# above obsidian for a real reason -- quartz is Mohs 7 against volcanic
+	# glass's 5.5 -- which is why obsidian's advantage over stone is edge
+	# FINENESS (sharpness_capacity 10.0) and never durability.
+	"stone": 700.0,
+	# Rhyolitic volcanic glass. PLACED against soda-lime glass rather than
+	# looked up: no widely published Vickers figure for natural obsidian
+	# exists, and Mohs puts the two within half a step of each other (obsidian
+	# 5-5.5, window glass 5.5). Obsidian keeps the edge because hardness in a
+	# silicate glass rises with network connectivity and obsidian is ~75 % SiO2
+	# with little alkali, where soda-lime trades ~15 % of that network away for
+	# Na2O to melt at a workable temperature. A ~10 % gap is the honest size of
+	# that claim.
+	"obsidian": 600.0,
+	# Soda-lime glass: published 500-550 HV, with 520-580 quoted elsewhere.
+	# 550 is the middle of the overlap.
+	"glass": 550.0,
+	# -- metals, all annealed ---------------------------------------------
+	# Wrought/bloomery iron. The published range for iron is wide and the
+	# reason is real: commercially pure annealed iron measures 30-80 HV5, while
+	# ferrite grains in archaeological wrought iron measure ~142 HV because
+	# wrought iron is worked and slag-bearing. 100 HV is the classical quoted
+	# figure for wrought iron bar and sits between the two. It is the single
+	# most load-bearing number in the ferrous chain -- every steel this game
+	# makes is iron times a strengthening factor -- so the range is stated here
+	# rather than hidden.
+	"iron": 100.0,
+	"copper": 50.0,   # annealed copper, ~50 HV / ~50 HB -- alloy_blend.gd's own bronze anchor
+	"bone": 45.0,     # cortical bone micro-indentation, ~45 HV (not a metal; sits here by value)
+	"zinc": 30.0,     # cast zinc, ~30 HB
+	"silver": 25.0,   # annealed fine silver
+	"gold": 20.0,     # annealed pure gold -- the softest metal here, as it should be
+	"tin": 5.0,       # pure tin, ~4-5 HB; soft enough that Mohs calls it 1.5
+	# -- the solute -------------------------------------------------------
+	# Graphite, VHN10 7-11 kgf/mm^2. Note this genuinely OUT-HARDS wood by
+	# indentation even though Mohs (graphite 1-2, wood ~2.5) says the opposite:
+	# scratch hardness and indentation hardness disagree for a layered mineral,
+	# and this column is the indentation one.
+	"carbon": 9.0,
+	# -- the organics -----------------------------------------------------
+	# Red oak, Brinell HBW 10/100 = 3.7 kgf/mm^2, and HB ~= HV this far down the
+	# scale. Real, but a real RANGE: there is no ASTM standard for Brinell on
+	# wood at all, and species run from ~1 (spruce, balsa) to ~20 (lignum
+	# vitae). Red oak is the pinned choice because it is the most-quoted figure
+	# and a fair stand-in for a generic tool/structure hardwood.
+	"wood": 3.7,
+	"timber": 3.7,    # the same substance, hewn and seasoned -- see the MATERIALS row
+	# The five with no published indentation hardness at all. Placed, ordered,
+	# and pinned; see this constant's own doc comment.
+	"leather": 3.0,   # vegetable-tanned: cross-linked collagen, the stiffest of the five
+	"hide": 2.0,      # dried rawhide: stiff, but tanning is what hardens it further
+	"fiber": 1.5,     # a bundle of bast fibres has no indentation resistance of its own
+	"sinew": 1.5,     # nor does dried tendon -- cordage is cordage
+	"flesh": 0.1,     # wet muscle, below the bottom of every indentation standard there is
+}
+
 const MATERIALS: Dictionary = {
 	"wood": {
 		"density": 0.6,
-		"hardness": 3.0,
+		"hardness": 0.037,
 		"toughness": 6.0,
 		"elasticity": 5.0,
 		"sharpness_capacity": 3.0,
@@ -149,7 +285,7 @@ const MATERIALS: Dictionary = {
 	# (test_building_decay.gd).
 	"timber": {
 		"density": 0.6,
-		"hardness": 3.0,
+		"hardness": 0.037,
 		"toughness": 6.0,
 		"elasticity": 5.0,
 		"sharpness_capacity": 3.0,
@@ -159,7 +295,7 @@ const MATERIALS: Dictionary = {
 	},
 	"flesh": {
 		"density": 1.05,
-		"hardness": 1.0,
+		"hardness": 0.001,
 		"toughness": 4.0,
 		"elasticity": 3.0,
 		"sharpness_capacity": 0.0,
@@ -169,7 +305,7 @@ const MATERIALS: Dictionary = {
 	},
 	"stone": {
 		"density": 2.5,
-		"hardness": 7.0,
+		"hardness": 7.0,  # 700 HV -- see HARDNESS_HV
 		"toughness": 5.0,
 		"elasticity": 1.0,
 		"sharpness_capacity": 4.0,
@@ -179,7 +315,7 @@ const MATERIALS: Dictionary = {
 	},
 	"iron": {
 		"density": 7.8,
-		"hardness": 8.0,
+		"hardness": 1.0,
 		"toughness": 7.0,
 		"elasticity": 2.0,
 		"sharpness_capacity": 8.0,
@@ -189,7 +325,7 @@ const MATERIALS: Dictionary = {
 	},
 	"obsidian": {
 		"density": 2.4,
-		"hardness": 9.0,
+		"hardness": 6.0,
 		"toughness": 1.0,
 		"elasticity": 0.0,
 		"sharpness_capacity": 10.0,
@@ -227,7 +363,7 @@ const MATERIALS: Dictionary = {
 	# iron ones by centuries.
 	"copper": {
 		"density": 8.96,
-		"hardness": 4.0,
+		"hardness": 0.5,
 		"toughness": 8.0,
 		"elasticity": 3.0,
 		"sharpness_capacity": 4.0,
@@ -245,7 +381,7 @@ const MATERIALS: Dictionary = {
 	# tin's oxide is passivating, which is the whole premise of tinplate.
 	"tin": {
 		"density": 7.31,
-		"hardness": 1.5,
+		"hardness": 0.05,
 		"toughness": 4.0,
 		"elasticity": 2.0,
 		"sharpness_capacity": 0.0,
@@ -266,7 +402,7 @@ const MATERIALS: Dictionary = {
 	# datable thing in a burnt archaeological layer millennia later.
 	"carbon": {
 		"density": 2.26,
-		"hardness": 1.0,
+		"hardness": 0.09,
 		"toughness": 0.5,
 		"elasticity": 0.0,
 		"sharpness_capacity": 0.0,
@@ -276,7 +412,7 @@ const MATERIALS: Dictionary = {
 	},
 	"fiber": {
 		"density": 0.3,
-		"hardness": 1.0,
+		"hardness": 0.015,
 		"toughness": 7.0,
 		"elasticity": 6.0,
 		"sharpness_capacity": 0.0,
@@ -306,7 +442,7 @@ const MATERIALS: Dictionary = {
 	# within days in the wet, which is precisely the problem tanning solves.
 	"hide": {
 		"density": 1.0,
-		"hardness": 1.5,
+		"hardness": 0.02,
 		"toughness": 7.0,
 		"elasticity": 4.0,
 		"sharpness_capacity": 0.0,
@@ -325,7 +461,7 @@ const MATERIALS: Dictionary = {
 	# pinned by test_tanning_is_what_makes_leather_outlast_a_raw_hide.
 	"leather": {
 		"density": 0.9,
-		"hardness": 2.0,
+		"hardness": 0.03,
 		"toughness": 8.0,
 		"elasticity": 4.0,
 		"sharpness_capacity": 0.0,
@@ -345,7 +481,7 @@ const MATERIALS: Dictionary = {
 	# dug up, and that is why there is a fossil record at all.
 	"bone": {
 		"density": 1.9,
-		"hardness": 3.5,
+		"hardness": 0.45,
 		"toughness": 5.0,
 		"elasticity": 3.0,
 		"sharpness_capacity": 3.0,
@@ -365,7 +501,7 @@ const MATERIALS: Dictionary = {
 	# rather than with hide.
 	"sinew": {
 		"density": 1.1,
-		"hardness": 1.0,
+		"hardness": 0.015,
 		"toughness": 9.0,
 		"elasticity": 7.0,
 		"sharpness_capacity": 0.0,
@@ -387,7 +523,7 @@ const MATERIALS: Dictionary = {
 	# which is why Roman glass comes out of the ground intact.
 	"glass": {
 		"density": 2.5,
-		"hardness": 8.0,
+		"hardness": 5.5,
 		"toughness": 0.8,
 		"elasticity": 0.0,
 		"sharpness_capacity": 9.0,
@@ -405,7 +541,7 @@ const MATERIALS: Dictionary = {
 	# copper without reaching gold's total immunity.
 	"silver": {
 		"density": 10.49,
-		"hardness": 2.5,
+		"hardness": 0.25,
 		"toughness": 8.5,
 		"elasticity": 2.5,
 		"sharpness_capacity": 2.5,
@@ -422,7 +558,7 @@ const MATERIALS: Dictionary = {
 	# bright after three thousand years.
 	"gold": {
 		"density": 19.30,
-		"hardness": 2.0,
+		"hardness": 0.2,
 		"toughness": 9.0,
 		"elasticity": 2.5,
 		"sharpness_capacity": 1.5,
@@ -442,7 +578,7 @@ const MATERIALS: Dictionary = {
 	# passivating, which is the entire premise of galvanizing.
 	"zinc": {
 		"density": 7.14,
-		"hardness": 2.5,
+		"hardness": 0.3,
 		"toughness": 3.5,
 		"elasticity": 3.0,
 		"sharpness_capacity": 1.0,
@@ -574,11 +710,22 @@ const STATION_TEMPERATURE_C: Dictionary = {
 const WATER_DENSITY: float = 1.0
 
 ## Hardness at or above which a material reads as "hard" to the player (see
-## descriptors_for). Set at stone's own hardness (7.0): stone is the everyday
-## reference for "hard" in a hand -- a stone and everything harder (iron 8,
-## obsidian 9) is hard, wood (3) and flesh (1) are not. Pinned by
+## descriptors_for). Set at IRON's own hardness (1.0 == 100 HV), the material
+## the game treats as the benchmark metal -- exactly the way KEEN_SHARPNESS
+## below is iron's own sharpness_capacity.
+##
+## It used to be stone's hardness, on the argument that a stone in the hand is
+## the everyday reference for "hard". That argument does not survive the column
+## becoming a real Vickers measurement: rock is SEVEN TIMES harder than wrought
+## iron (700 HV against 100), so keeping stone as the cutoff would have dropped
+## iron out of the word entirely -- and "Iron - hard, keen" is shipped
+## vocabulary that items.md documents. The line that keeps every shipped word
+## true is the benchmark metal: stone (7.0), obsidian (6.0) and glass (5.5) are
+## hard, copper (0.5), bone (0.45) and wood (0.037) are not, and copper failing
+## to be hard is the entire reason the Bronze Age needed tin. Pinned by
+## test_the_hard_cutoff_is_the_benchmark_metals_own_hardness and
 ## test_iron_and_stone_read_as_hard_but_wood_does_not.
-const HARD_HARDNESS: float = 7.0
+const HARD_HARDNESS: float = 1.0
 
 ## Sharpness capacity at or above which a material reads as "keen" -- it can
 ## hold a genuinely cutting edge rather than merely a worked point. Set at
@@ -663,6 +810,39 @@ func materials_meltable_at(temperature_c: float) -> Array[String]:
 ## which is the trade this column deliberately does not make.
 func conductivity_from_iacs(iacs_percent: float) -> float:
 	return CONDUCTIVITY_MAX * iacs_percent / IACS_SILVER_PERCENT
+
+
+## A published Vickers figure put onto the table's 0-10 scale. The ONLY thing
+## that may produce a value in the hardness column.
+##
+## Linear, anchored on martensite: `HARDNESS_MAX * hv / HARDNESS_MAX_HV`, which
+## reduces to the pleasantly readable "hardness is HV/100". Nothing here is
+## chosen -- the anchor is the hardest thing a forge can make, the ceiling is a
+## constant the table already had, and every input is a published figure.
+##
+## ## Why linear, and why a log map would be an outright bug here
+##
+## Not a legibility preference: it is forced. Both models that MOVE hardness
+## are built entirely out of Vickers ratios. `Treatment.quench` multiplies by
+## MARTENSITE_HARDNESS_RATIO, which is 832 HV / 180 HV. `Treatment.temper`
+## multiplies by `hardness_retention`, which is HV(draw) / HV(as-quenched).
+## `AlloyBlend.blend` multiplies a rule-of-mixtures baseline by
+## (1 + solution_strengthening). A ratio of Vickers numbers may only be
+## multiplied into a column PROPORTIONAL to Vickers; on a logarithmic column
+## the same multiplication would raise the hardness to a power instead, and
+## quenching a steel would send it through the roof. So the honest cost of
+## linearity -- that wood, hide, cordage and flesh all crush into the bottom
+## two hundredths of the range -- is a cost this column has to pay, and
+## test_the_hardness_map_is_linear_in_hv_because_the_models_are_hv_ratios pins
+## the reason rather than leaving it as a comment somebody can "fix".
+##
+## That cost is also far smaller than the conductivity column's: real hardness
+## spans about four orders of magnitude here (0.1 HV wet tissue to 1000 HV
+## martensite) against conductivity's twenty-four, and the band that actually
+## matters -- annealed copper at 50 HV to martensite at 1000 -- is a factor of
+## twenty, which a linear scale resolves perfectly well.
+func hardness_from_hv(hv: float) -> float:
+	return HARDNESS_MAX * hv / HARDNESS_MAX_HV
 
 
 ## A single named scalar from `material`'s property vector. Unknown

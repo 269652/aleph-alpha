@@ -38,8 +38,42 @@ function with a red-first test):
 
 - **Density** — with volume → **mass**. Drives momentum, throw/fall damage,
   and carry/lift gating.
-- **Hardness** — resistance to being scratched/deformed; sets edge-holding and
-  penetration.
+- **Hardness** — resistance to indentation; sets edge-holding and penetration.
+  **A real measurement, not a placement** (2026-08-28): every row is its
+  published **Vickers hardness (HV)** put through the one function
+  `MaterialProperties.hardness_from_hv`, exactly the way conductivity is its
+  published %IACS put through `conductivity_from_iacs`. The map is
+  `10 × HV / 1000` — i.e. *hardness is HV/100* — anchored on **martensite at
+  1000 HV**, the hardest thing a forge can produce, for the same reason silver
+  anchors conductivity: nothing this game can make is harder, so the ceiling
+  never has to move again. Iron lands at 1.0, copper 0.5, granite 7.0,
+  obsidian 6.0, soda-lime glass 5.5, oak 0.037.
+  - **Linear, and not by preference.** Both models that *move* hardness —
+    `alloy_blend.gd`'s solid-solution strengthening and `treatment.gd`'s
+    quench/temper — multiply by ratios of Vickers numbers. A ratio of HVs may
+    only be multiplied into a column proportional to HV; on a logarithmic
+    column the same multiplication would exponentiate the hardness. Pinned by
+    `test_the_hardness_map_is_linear_in_hv_because_the_models_are_hv_ratios`.
+  - **What it cost, and what it bought.** Linearity crushes the soft organics
+    into the bottom hundredths of the range (wood 0.037, leather 0.03, flesh
+    0.001) — but the band that matters, annealed copper (50 HV) to martensite
+    (1000 HV), is only a factor of twenty and reads perfectly well. What it
+    bought is nine points of headroom above iron, which is what makes carbon
+    content matter, quenching a real operation, and tempered toughness bounded.
+  - **What is placed rather than measured**, and says so in code: obsidian
+    (600 HV, placed just above soda-lime glass on network connectivity, since
+    natural obsidian has no widely published HV), granite (700 HV, the
+    mineral-fraction-weighted VHNR of ~30 % quartz plus feldspar and mica), and
+    the five soft organics — leather, hide, fiber, sinew, flesh — which have no
+    published indentation hardness at all because indentation is not how any of
+    them is measured. Pinned by
+    `test_the_soft_organics_are_placed_not_measured_and_keep_their_real_ordering`.
+  - **"Hard" now means "at least as hard as iron"** (`HARD_HARDNESS` = 1.0),
+    not "at least as hard as stone" as it did while the column was a placed
+    ordering. On a real Vickers column rock is seven times harder than wrought
+    iron, so keeping stone as the cutoff would have dropped iron out of the
+    shipped word. Copper failing to read as hard is not a regression, it is the
+    entire reason the Bronze Age needed tin.
 - **Toughness ↔ Brittleness** — resistance to fracture. Low toughness →
   **shatters** under stress (obsidian, glass, ceramic, ancient bone).
 - **Elasticity/Springiness** — stores and returns energy (bows, hafts that
