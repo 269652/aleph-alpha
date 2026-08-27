@@ -22,8 +22,21 @@ const SHADE_DARKEN := 0.25
 const HIGHLIGHT_LIGHTEN := 0.25
 
 
+## Finished tufts, keyed by seed_value alone -- a tuft's seed is hashed from
+## its cell, so this is naturally bounded by how many distinct cells have ever
+## drawn one, and a chunk that unloads and reloads (chunks are not persisted --
+## see EarthChunkManager's own doc comment) asks for the exact same texture
+## back instead of a fresh repaint. Mirrors ProceduralTreeSprite's own
+## _tree_texture_cache.
+static var _scrub_texture_cache := {}
+
+
 func generate_texture(seed_value: int) -> ImageTexture:
-	return ImageTexture.create_from_image(generate_image(seed_value))
+	if _scrub_texture_cache.has(seed_value):
+		return _scrub_texture_cache[seed_value]
+	var texture := ImageTexture.create_from_image(generate_image(seed_value))
+	_scrub_texture_cache[seed_value] = texture
+	return texture
 
 
 func generate_image(seed_value: int) -> Image:

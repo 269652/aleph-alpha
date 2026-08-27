@@ -3367,6 +3367,145 @@ func test_unloading_a_chunk_releases_every_departing_flyers_claim():
 	)
 
 
+# -- ground decor gets its own non-y-sorted layer ----------------------------
+#
+# Flowers, worms, desert scrub, and tundra lichen are ground-level decoration:
+# always flush with the floor, never needing to Y-sort against a tree or a
+# creature. scenes/world.tscn already gives ground-effects layers exactly
+# this "always draws behind Entities" treatment (WaterFx/SnowFx/HillshadeFx:
+# z_index=-1, no y_sort_enabled) -- world.gd wires an equivalent "GroundDecor"
+# node through to EarthChunkManager as an optional 4th constructor argument,
+# and these four kinds parent their sprites there instead of under the
+# y_sort_enabled Entities node, so they stop forcing per-sprite Y-order
+# interleaving with everything else Entities draws (which is what breaks
+# draw-call batching under the gl_compatibility renderer).
+#
+# The argument is optional, defaulting to null, so the many other
+# EarthChunkManager.new(...) call sites across this suite (and the real one
+# in scenes/world.gd before this change) keep working unchanged; omitting it
+# falls back to the same Entities parent ground decor always used.
+
+const DesertScrub = preload("res://src/world/desert_scrub.gd")
+const TundraLichen = preload("res://src/world/tundra_lichen.gd")
+
+
+func _all_biome(cell_value: String, size: int) -> PackedStringArray:
+	var biome := PackedStringArray()
+	biome.resize(size * size)
+	for i in biome.size():
+		biome[i] = cell_value
+	return biome
+
+
+func test_flower_worm_scrub_and_lichen_sprites_parent_under_the_supplied_ground_decor_layer():
+	var ground_decor := Node2D.new()
+	ground_decor.z_index = -1
+	var decor_tile_map := TileMapLayer.new()
+	var decor_entities := Node2D.new()
+	var decor_creatures := Node2D.new()
+	var decor_manager := EarthChunkManager.new(
+		decor_tile_map, decor_entities, decor_creatures, ground_decor
+	)
+	decor_manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+
+	# Flower: plant one directly, the same way
+	# test_a_freshly_planted_seedlings_landing_point_is_not_the_mature_blossom_height does.
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, decor_manager.current_season()):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var planted := false
+	for y in 8:
+		for x in 8:
+			if decor_manager.plant_flower_at(_pixel_for(chunk_coord, Vector2i(x, y)), species):
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var flower_sprites: Dictionary = decor_manager._flower_sprites[chunk_coord]
+	assert_gt(flower_sprites.size(), 0, "precondition: the planted flower should have a sprite")
+	for sprite in flower_sprites.values():
+		assert_eq(sprite.get_parent(), ground_decor, "flower sprite should parent under GroundDecor")
+
+	# Worm: force one to the surface, the same way _surface_all_worms does
+	# (that helper reaches the file-level `manager`, not this local instance).
+	for patch in decor_manager._worm_patches.values():
+		patch.set_conditions(1.0, 1.0)
+	for i in 40:
+		for patch in decor_manager._worm_patches.values():
+			patch.advance(0.5)
+	decor_manager.step_worms(EarthChunkManager.WORM_REFRESH_INTERVAL + 1.0)
+	var checked_worm := 0
+	for sprites in decor_manager._worm_sprites.values():
+		for sprite in sprites.values():
+			assert_eq(sprite.get_parent(), ground_decor, "worm sprite should parent under GroundDecor")
+			checked_worm += 1
+	assert_gt(checked_worm, 0, "precondition: some worms were rendered")
+
+	# Desert scrub / tundra lichen: Berlin's real biome is not desert or
+	# tundra, so force an all-desert/all-tundra sim directly (this suite
+	# already reaches into manager internals the same way elsewhere) rather
+	# than hunting for a real-world tile of that biome.
+	decor_manager._scrub_sims[chunk_coord] = DesertScrub.new(
+		1, EarthChunkManager.CHUNK_SIZE, EarthChunkManager.CHUNK_SIZE,
+		_all_biome("desert", EarthChunkManager.CHUNK_SIZE)
+	)
+	decor_manager._sync_scrub_sprites(chunk_coord)
+	var scrub_sprites: Dictionary = decor_manager._scrub_sprites[chunk_coord]
+	assert_gt(scrub_sprites.size(), 0, "precondition: a forced desert biome should seed scrub")
+	for sprite in scrub_sprites.values():
+		assert_eq(sprite.get_parent(), ground_decor, "scrub sprite should parent under GroundDecor")
+
+	decor_manager._lichen_sims[chunk_coord] = TundraLichen.new(
+		1, EarthChunkManager.CHUNK_SIZE, EarthChunkManager.CHUNK_SIZE,
+		_all_biome("tundra", EarthChunkManager.CHUNK_SIZE)
+	)
+	decor_manager._sync_lichen_sprites(chunk_coord)
+	var lichen_sprites: Dictionary = decor_manager._lichen_sprites[chunk_coord]
+	assert_gt(lichen_sprites.size(), 0, "precondition: a forced tundra biome should seed lichen")
+	for sprite in lichen_sprites.values():
+		assert_eq(sprite.get_parent(), ground_decor, "lichen sprite should parent under GroundDecor")
+
+	decor_tile_map.free()
+	decor_entities.free()
+	decor_creatures.free()
+	ground_decor.free()
+
+
+## Backward compatibility: every other EarthChunkManager.new(...) call site
+## passes only 3 arguments, and must keep parenting ground decor under
+## Entities exactly as before this change.
+func test_ground_decor_falls_back_to_entities_when_not_supplied():
+	manager.update(_berlin_tile)
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, manager.current_season()):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var planted := false
+	for y in 8:
+		for x in 8:
+			if manager.plant_flower_at(_pixel_for(chunk_coord, Vector2i(x, y)), species):
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var flower_sprites: Dictionary = manager._flower_sprites[chunk_coord]
+	assert_gt(flower_sprites.size(), 0, "precondition: the planted flower should have a sprite")
+	for sprite in flower_sprites.values():
+		assert_eq(
+			sprite.get_parent(), entities_parent,
+			"with no ground_decor_parent supplied, ground decor should keep parenting under Entities"
+		)
+
+
 ## A live pollinator reaches this surface through `scent_world`, which is the
 ## manager itself -- so the duck-typed contract the markers probe for with
 ## has_method must actually be present here.

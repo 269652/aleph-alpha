@@ -269,6 +269,15 @@ var _ground_tint := GroundTint.new()
 ## carved out of it (see SnowLayer).
 @onready var _snow_fx: TileMapLayer = $SnowFx
 @onready var _entities: Node2D = $Entities
+## Ground-flush decoration (flowers, worms, desert scrub, tundra lichen) --
+## not y_sort_enabled, and drawn behind Entities via z_index instead, the
+## same "ground effects tier" WaterFx/SnowFx/HillshadeFx already use. This
+## decor sits flush with the floor and never needed per-sprite Y-order
+## interleaving with trees/creatures/the player in the first place; forcing
+## it into Entities' own y_sort_enabled=true interleaving is what broke
+## draw-call batching for the whole group under the gl_compatibility
+## renderer (see EarthChunkManager._ground_decor_parent's own doc comment).
+@onready var _ground_decor: Node2D = $GroundDecor
 @onready var _creatures: Node2D = $Creatures
 @onready var _ground_items: Node2D = $GroundItems
 @onready var _roof: TileMapLayer = $Roof
@@ -643,7 +652,7 @@ func _ready() -> void:
 	# defaults to off.
 	get_viewport().physics_object_picking = true
 
-	_chunk_manager = EarthChunkManager.new(_terrain, _entities, _creatures)
+	_chunk_manager = EarthChunkManager.new(_terrain, _entities, _creatures, _ground_decor)
 	# Streams at most one chunk per frame from here on, so stepping over a
 	# chunk boundary stops generating a whole column inside one frame (see
 	# _apply_streaming_budget). The cold initial load below still runs

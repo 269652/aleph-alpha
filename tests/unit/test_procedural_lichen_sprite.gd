@@ -46,3 +46,36 @@ func test_different_seeds_produce_different_tufts():
 func test_generate_texture_returns_an_image_texture():
 	var texture := sprite.generate_texture(1)
 	assert_true(texture is ImageTexture)
+
+
+# -- texture cache ------------------------------------------------------------
+#
+# Every lichen patch used to mint a brand new Texture2D per cell, uncached --
+# unlike ProceduralTreeSprite's own _tree_texture_cache. Chunks aren't
+# persisted on eviction (see EarthChunkManager's own doc comment), and a
+# patch's seed is derived from its cell, so a reloaded chunk asks for the
+# exact same seed_value again; caching means that gets the exact same
+# Texture2D back instead of a fresh repaint.
+
+func test_the_same_seed_gets_its_texture_back_instead_of_redrawing_it():
+	assert_same(sprite.generate_texture(1), sprite.generate_texture(1))
+
+
+## The cache is shared across generator INSTANCES too -- each EarthChunkManager
+## holds its own ProceduralLichenSprite, so a per-instance cache would still
+## redraw once per instance.
+func test_two_generators_of_one_seed_share_the_texture():
+	assert_same(
+		ProceduralLichenSprite.new().generate_texture(5),
+		ProceduralLichenSprite.new().generate_texture(5)
+	)
+
+
+func test_a_different_seed_does_not_share_the_texture():
+	assert_not_same(sprite.generate_texture(1), sprite.generate_texture(2))
+
+
+func test_cached_texture_still_matches_a_freshly_drawn_one():
+	assert_eq(
+		sprite.generate_texture(3).get_image().get_data(), sprite.generate_image(3).get_data()
+	)

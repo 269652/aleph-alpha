@@ -350,6 +350,21 @@ var _tree_spread := TreeSpread.new()
 var _tree_maturity := TreeMaturity.new()
 var _tile_map_layer: TileMapLayer
 var _entities_parent: Node2D
+## Where ground-flush decoration (flowers, worms, desert scrub, tundra
+## lichen) is parented -- a non-y-sorted, always-behind-Entities layer, the
+## same "ground effects tier" scenes/world.tscn's WaterFx/SnowFx/HillshadeFx
+## siblings already use (z_index=-1, no y_sort_enabled), rather than
+## _entities_parent's own y_sort_enabled=true. Ground decor sits flush with
+## the floor and is always meant to draw underneath trees/creatures/the
+## player regardless of Y position, so it never needed per-sprite Y-order
+## interleaving with them in the first place -- forcing it into that
+## interleaving is what breaks draw-call batching for the whole Entities
+## group under the gl_compatibility renderer.
+##
+## Falls back to _entities_parent when the constructor isn't given one, so
+## every EarthChunkManager.new(...) call site that predates this field keeps
+## its old behaviour unchanged.
+var _ground_decor_parent: Node2D
 var _creatures_parent: Node2D
 var _loaded_chunks: Dictionary = {}  # Vector2i chunk_coord -> Chunk
 
@@ -585,7 +600,12 @@ var _world_age_seconds := 0.0
 const NEW_GAME_WORLD_AGE_RANGE_SECONDS := SeasonCycle.SECONDS_PER_YEAR
 
 
-func _init(tile_map_layer: TileMapLayer, entities_parent: Node2D, creatures_parent: Node2D) -> void:
+func _init(
+	tile_map_layer: TileMapLayer,
+	entities_parent: Node2D,
+	creatures_parent: Node2D,
+	ground_decor_parent: Node2D = null
+) -> void:
 	_tile_map_layer = tile_map_layer
 	_tile_map_layer.tile_set = _terrain_renderer.build_tile_set()
 	# Tiles are painted at ART_TILE_SIZE pixels but must span only TILE_SIZE
@@ -594,6 +614,10 @@ func _init(tile_map_layer: TileMapLayer, entities_parent: Node2D, creatures_pare
 	_tile_map_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
 	_entities_parent = entities_parent
 	_creatures_parent = creatures_parent
+	# Optional and defaulted to null (see _ground_decor_parent's own doc
+	# comment) so every pre-existing 3-argument call site keeps parenting
+	# ground decor under Entities exactly as before.
+	_ground_decor_parent = ground_decor_parent if ground_decor_parent != null else entities_parent
 
 
 ## Loads/generates chunks within LOAD_RADIUS of the player's global tile
@@ -4056,8 +4080,11 @@ func _sync_flower_sprites(chunk_coord: Vector2i) -> void:
 		# than the art canvas -- raising the canvas for detail must never
 		# change how big a flower looks (a trap this project has hit twice).
 		sprite.scale = _flower_scale_for(species, patch.growth_at(cell), seed_value)
-		# Anchor at the stem's foot so flowers Y-sort against the player like
-		# trees do, rather than sorting from their middle.
+		# Anchor at the stem's foot, matching how flowers_near/blossom_height_
+		# world measure a landing point from this same sprite's position --
+		# not for Y-sorting, since ground decor never Y-sorts (see
+		# _ground_decor_parent's own doc comment): it always draws underneath
+		# via z_index instead.
 		sprite.offset.y = -float(ProceduralFlowerSprite.SIZE.y) * 0.5
 		# Blooms nod in the wind on the shared GPU material (see WindSway).
 		sprite.material = _wind_sway.tuft_material()
@@ -4065,7 +4092,7 @@ func _sync_flower_sprites(chunk_coord: Vector2i) -> void:
 			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 		)
-		_entities_parent.add_child(sprite)
+		_ground_decor_parent.add_child(sprite)
 		sprites[cell] = sprite
 
 	# Seedlings grow, so an already-drawn bloom is re-scaled rather than left
@@ -4826,16 +4853,17 @@ func _sync_worm_sprites(chunk_coord: Vector2i) -> void:
 		# art canvas -- raising SIZE for detail must not change how big a worm
 		# looks (a trap this project has hit twice).
 		sprite.scale = Vector2.ONE * ProceduralWormSprite.world_scale()
-		# Anchored at the worm's own footprint so it Y-sorts against the
-		# player like flowers do, rather than sorting from its middle; and
-		# starting at however far out of the ground it actually is, so a worm
-		# that has just broken the surface shows a nose rather than a body.
+		# Anchored at the worm's own footprint like flowers are, rather than
+		# sorting from its middle (not for Y-sorting -- ground decor never
+		# Y-sorts, see _ground_decor_parent's own doc comment); and starting
+		# at however far out of the ground it actually is, so a worm that has
+		# just broken the surface shows a nose rather than a body.
 		_show_worm_emerged(sprite, EarthwormPatch.emergence_for(patch.surfacing_at(cell)))
 		sprite.position = Vector2(
 			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 		)
-		_entities_parent.add_child(sprite)
+		_ground_decor_parent.add_child(sprite)
 		sprites[cell] = sprite
 
 
@@ -4957,7 +4985,7 @@ func _sync_scrub_sprites(chunk_coord: Vector2i) -> void:
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 			)
-			_entities_parent.add_child(sprite)
+			_ground_decor_parent.add_child(sprite)
 			sprites[cell] = sprite
 		# Growth multiplies onto the base world scale, never replaces it (see
 		# the matching comment in _sync_grass_sprites).
@@ -5018,7 +5046,7 @@ func _sync_lichen_sprites(chunk_coord: Vector2i) -> void:
 				(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
 				(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
 			)
-			_entities_parent.add_child(sprite)
+			_ground_decor_parent.add_child(sprite)
 			sprites[cell] = sprite
 		# Growth multiplies onto the base world scale, never replaces it (see
 		# the matching comment in _sync_grass_sprites).
