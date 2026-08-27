@@ -5451,7 +5451,16 @@ player can train."* Replaces the old instant "die → hide+meat spray" model
   `EarthChunkManager._load_chunk`/`_unload_chunk` per chunk. Verified
   end-to-end in a real test: a decomposer finds a rotten carcass, walks to
   it, bites it repeatedly, and the carcass is actually fully consumed and
-  freed.
+  freed. **Follow-up**: `DecomposerMarker`'s SEEKING phase scanned the whole
+  `Carcass`/`CarcassGuts` groups every single `_process()` call,
+  unconditionally — the one throttle the "Variable-fidelity simulation
+  (LOD)" section's `SimulationLod` pass (see above) had covered for
+  `CreatureMarker`/`AmbientFlyerMarker` but missed here. Fixed by mirroring
+  the same `_lod_step`/`_take_lod_step`/`_nearest_player_position` shape:
+  a decomposer far from the player now advances (and re-scans) in fewer,
+  larger steps rather than every frame. Tested:
+  `test_far_from_the_player_does_not_rescan_carrion_on_every_process_call`
+  in `tests/unit/test_decomposer_marker.gd`.
 - **Universal hover tooltip coverage** (small) — ✅ Done — `Carcass`/
   `CarcassGuts` both implement `get_display_name`/`get_hover_actions` (see
   UI/presentation section's hover system): a carcass reads its species and
