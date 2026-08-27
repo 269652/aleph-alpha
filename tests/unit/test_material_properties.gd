@@ -182,3 +182,107 @@ func test_flesh_has_no_notable_descriptors() -> void:
 
 func test_an_unknown_material_has_no_descriptors() -> void:
 	assert_eq(mp.descriptors_for("not_a_material"), [] as Array[String])
+
+
+# -- copper / tin / carbon: the three rows alloy_blend.gd needs ---------------
+#
+# docs/concept/smelting.md's "Alloying: emergent metallurgy" names the gap
+# outright -- "copper itself has no property vector yet ... bronze can't be
+# computed without it" -- and tin/carbon are the two solutes that make the
+# blend space a space at all (bronze, steel). Densities are literal real
+# g/cm^3 like every other row; the 0-10 scalars are placed against the rows
+# that already exist, with the reasoning in each entry's doc comment.
+
+func test_copper_density_is_the_real_measured_value() -> void:
+	assert_almost_eq(mp.property_value("copper", "density"), 8.96, 0.0001,
+		"copper is 8.96 g/cm^3 -- denser than iron, which the density column must show")
+
+
+func test_tin_density_is_the_real_measured_value() -> void:
+	assert_almost_eq(mp.property_value("tin", "density"), 7.31, 0.0001)
+
+
+func test_graphite_carbon_density_is_the_real_measured_value() -> void:
+	assert_almost_eq(mp.property_value("carbon", "density"), 2.26, 0.0001)
+
+
+## The whole reason the Bronze Age needed tin: pure copper is too soft to hold
+## a working edge. Copper must sit below stone, or a copper knife would already
+## beat the flint one it historically did not.
+func test_pure_copper_is_softer_than_stone_and_iron() -> void:
+	assert_lt(mp.property_value("copper", "hardness"), mp.property_value("stone", "hardness"),
+		"a pure copper edge loses to a knapped flint one -- that is why the Bronze Age needed tin")
+	assert_lt(mp.property_value("copper", "hardness"), mp.property_value("iron", "hardness"))
+
+
+## Copper is the most ductile of the game's metals (annealed elongation ~45%
+## against wrought iron's ~25%) and the best conductor there is (59.6 MS/m
+## against iron's 10.0) -- it is the benchmark both columns are scaled to.
+func test_copper_is_the_toughest_and_most_conductive_metal_in_the_table() -> void:
+	assert_gt(mp.property_value("copper", "toughness"), mp.property_value("iron", "toughness"))
+	assert_gt(mp.property_value("copper", "conductivity"), mp.property_value("iron", "conductivity"))
+
+
+## Tin is soft enough to mark with a fingernail (Mohs 1.5, ~5 HB against
+## copper's ~50 HB) and takes no edge at all.
+func test_tin_is_softer_than_wood_and_takes_no_edge() -> void:
+	assert_lt(mp.property_value("tin", "hardness"), mp.property_value("wood", "hardness"))
+	assert_almost_eq(mp.property_value("tin", "sharpness_capacity"), 0.0, 0.0001)
+
+
+## Graphite is soft, friable and burns -- it is in the table as the carbon that
+## dissolves into iron, not as a structural material.
+func test_carbon_is_soft_friable_and_burns() -> void:
+	assert_lt(mp.property_value("carbon", "hardness"), mp.property_value("wood", "hardness"))
+	assert_lt(mp.property_value("carbon", "toughness"), MaterialProperties.BRITTLE_TOUGHNESS)
+	assert_gt(mp.property_value("carbon", "flammability"), mp.property_value("wood", "flammability"))
+
+
+## Charcoal survives millennia in archaeological deposits -- pure carbon does
+## not rot, which is exactly why it is the datable thing in a burnt layer.
+func test_carbon_does_not_decay() -> void:
+	assert_almost_eq(mp.property_value("carbon", "decay_rate"), 0.0, 0.0001)
+
+
+# -- descriptors from a bare vector -----------------------------------------
+#
+# materials.md's 2026-08-24 revision claims an alloy is "just one more way to
+# arrive at a property vector". That claim was not TRUE in code: every consumer
+# here took a material NAME and looked it up, so a computed vector -- which by
+# definition has no name -- could not reach any of them. descriptors_for_vector
+# is the name-free half, and descriptors_for is now a thin lookup in front of
+# it, so the two can never disagree about what a word means.
+
+func test_descriptors_from_a_vector_match_descriptors_from_the_same_named_row() -> void:
+	for material in ["iron", "obsidian", "wood", "fiber", "flesh", "copper"]:
+		assert_eq(
+			mp.descriptors_for_vector(MaterialProperties.MATERIALS[material]),
+			mp.descriptors_for(material),
+			"%s must read the same whether reached by name or by vector" % material
+		)
+
+
+## A vector assembled on the fly -- no MATERIALS row, no name -- still gets
+## words. This is the thing that was impossible before.
+func test_an_unnamed_computed_vector_still_yields_descriptors() -> void:
+	var invented: Dictionary = {
+		"density": 5.0,
+		"hardness": 9.0,
+		"toughness": 1.0,
+		"elasticity": 0.0,
+		"sharpness_capacity": 9.0,
+		"flammability": 0.0,
+		"conductivity": 5.0,
+		"decay_rate": 0.0,
+	}
+	assert_eq(mp.descriptors_for_vector(invented), ["hard", "keen", "brittle"] as Array[String])
+
+
+## Every new row must carry all eight scalars -- a missing key would silently
+## fall back to DEFAULT_PROPERTIES and read as a different material.
+func test_every_new_row_carries_the_full_eight_scalar_vector() -> void:
+	for material in ["copper", "tin", "carbon"]:
+		var vector: Dictionary = MaterialProperties.MATERIALS[material]
+		for property_name in MaterialProperties.DEFAULT_PROPERTIES:
+			assert_true(vector.has(property_name),
+				"%s is missing '%s' and would silently read as the default" % [material, property_name])

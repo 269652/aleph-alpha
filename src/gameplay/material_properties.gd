@@ -109,6 +109,80 @@ const MATERIALS: Dictionary = {
 		"conductivity": 1.0,
 		"decay_rate": 0.0,
 	},
+	# -- the mineral rows the alloy model blends (see alloy_blend.gd) ---------
+	#
+	# docs/concept/smelting.md's "Alloying: emergent metallurgy" section named
+	# copper's absence as "a real, pre-existing small gap this design needs
+	# filled as a first concrete step (bronze can't be computed without it)".
+	# Tin and carbon are the two solutes that turn the table into a blend
+	# SPACE rather than a list -- Cu-Sn (substitutional) and Fe-C
+	# (interstitial) are the two archetypes real metallurgy is built on.
+	#
+	# Density is a literal measured g/cm^3, exactly like every other row. The
+	# 0-10 scalars are placed against the rows that ALREADY exist rather than
+	# converted from external units, because the existing scale has no defined
+	# transfer function to HV/Mohs/MS-per-m -- iron sits at hardness 8 and
+	# stone at 7, which is a legibility ordering, not a measurement.
+	#
+	# Copper: 8.96 g/cm^3 (denser than iron, which surprises people and is
+	# real). Hardness 4.0 -- annealed copper is ~50 HB against wrought iron's
+	# ~150 HB, and crucially it is SOFTER THAN STONE: a copper knife loses to
+	# a flint one, which is the entire reason the Bronze Age needed tin rather
+	# than just copper. Toughness 8.0, above iron's 7.0: copper is the most
+	# ductile metal here (~45% elongation annealed vs wrought iron's ~25%).
+	# Elasticity 3.0 -- E = 110 GPa against iron's 200 GPa, so it springs and
+	# bends where iron resists. Sharpness_capacity 4.0, level with stone, for
+	# the same historical reason as hardness. Conductivity 10.0: copper is THE
+	# conductivity benchmark (59.6 MS/m against iron's 10.0) and must top the
+	# column. Decay_rate 2.0, below iron's 3.0 -- copper corrodes to a patina
+	# that then PROTECTS what is under it, which is why copper roofs outlast
+	# iron ones by centuries.
+	"copper": {
+		"density": 8.96,
+		"hardness": 4.0,
+		"toughness": 8.0,
+		"elasticity": 3.0,
+		"sharpness_capacity": 4.0,
+		"flammability": 0.0,
+		"conductivity": 10.0,
+		"decay_rate": 2.0,
+	},
+	# Tin: 7.31 g/cm^3 (white/beta tin). Hardness 1.5 -- Mohs 1.5, ~5 HB, soft
+	# enough to mark with a fingernail, so it sits BELOW wood (2.5 Mohs).
+	# Toughness 4.0: tin is weak but ductile, not brittle -- it bends and
+	# creeps rather than shattering, so it must stay above BRITTLE_TOUGHNESS.
+	# Sharpness_capacity 0.0: you cannot put a working edge on tin at all.
+	# Conductivity 8.0 -- 9.2 MS/m, just under iron's 10.0. Decay_rate 1.0:
+	# tin's oxide is passivating, which is the whole premise of tinplate.
+	"tin": {
+		"density": 7.31,
+		"hardness": 1.5,
+		"toughness": 4.0,
+		"elasticity": 2.0,
+		"sharpness_capacity": 0.0,
+		"flammability": 0.0,
+		"conductivity": 8.0,
+		"decay_rate": 1.0,
+	},
+	# Carbon (graphite): 2.26 g/cm^3. This row exists as the SOLUTE that turns
+	# iron into steel, not as a material anyone builds with -- graphite is
+	# Mohs 1-2 (softer than wood), friable enough to read as brittle, and its
+	# job in this game is to burn (flammability 9.0, above wood's 8.0: charcoal
+	# is the hotter fuel, which is why it and not firewood smelts ore).
+	# Conductivity 7.0 -- graphite conducts along its basal planes well enough
+	# to be an electrode, unlike every other non-metal here at 1.0.
+	# Decay_rate 0.0: charcoal does not rot, which is precisely why it is the
+	# datable thing in a burnt archaeological layer millennia later.
+	"carbon": {
+		"density": 2.26,
+		"hardness": 1.0,
+		"toughness": 0.5,
+		"elasticity": 0.0,
+		"sharpness_capacity": 0.0,
+		"flammability": 9.0,
+		"conductivity": 7.0,
+		"decay_rate": 0.0,
+	},
 	"fiber": {
 		"density": 0.3,
 		"hardness": 1.0,
@@ -203,16 +277,31 @@ func mass_kg_for(material: String, volume_cm3: float) -> float:
 ## stating something the game has not decided (the same "not modeled yet"
 ## honesty Item.mass_kg's 0.0 stands for).
 func descriptors_for(material: String) -> Array[String]:
-	var words: Array[String] = []
 	if not MATERIALS.has(material):
-		return words
-	if property_value(material, "hardness") >= HARD_HARDNESS:
+		return [] as Array[String]
+	return descriptors_for_vector(MATERIALS[material])
+
+
+## The same words, for a property vector that has no name.
+##
+## An alloy (alloy_blend.gd) is a computed vector, not a table row, so it can
+## never be reached by name -- and materials.md's "an alloy is just one more
+## way to arrive at a property vector" was quietly untrue in code until this
+## existed, because every consumer took a String and looked it up.
+##
+## descriptors_for is now a lookup in front of this rather than a second
+## implementation of the same four thresholds, so a named material and an
+## identical computed vector cannot drift into describing themselves
+## differently.
+func descriptors_for_vector(vector: Dictionary) -> Array[String]:
+	var words: Array[String] = []
+	if float(vector.get("hardness", DEFAULT_PROPERTIES["hardness"])) >= HARD_HARDNESS:
 		words.append("hard")
-	if property_value(material, "sharpness_capacity") >= KEEN_SHARPNESS:
+	if float(vector.get("sharpness_capacity", DEFAULT_PROPERTIES["sharpness_capacity"])) >= KEEN_SHARPNESS:
 		words.append("keen")
-	if property_value(material, "toughness") < BRITTLE_TOUGHNESS:
+	if float(vector.get("toughness", DEFAULT_PROPERTIES["toughness"])) < BRITTLE_TOUGHNESS:
 		words.append("brittle")
-	if property_value(material, "density") < WATER_DENSITY:
+	if float(vector.get("density", DEFAULT_PROPERTIES["density"])) < WATER_DENSITY:
 		words.append("buoyant")
 	return words
 
