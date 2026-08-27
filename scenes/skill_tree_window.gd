@@ -179,6 +179,16 @@ var _detail_label: Label
 var _tab_buttons: Dictionary = {}
 var _web := SkillWeb.new()
 
+## A cheap fingerprint of the last refresh() call's inputs -- World calls
+## refresh() every frame while this window is visible (see scenes/world.gd's
+## _client_process), not just on an actual allocation/unlock, so without this
+## every stat-node/keystone row Control (the List tab) would be destroyed and
+## recreated every frame, starving Godot's native hover-tooltip timer (it
+## needs the SAME Control instance under the mouse continuously) -- the same
+## bug class InventoryWindow._last_refresh_signature and
+## CraftingWindow._last_refresh_signature already guard against.
+var _last_refresh_signature := ""
+
 
 func _ready() -> void:
 	visible = false
@@ -281,9 +291,16 @@ func is_open() -> bool:
 	return visible
 
 
-## Rebuilds the rows from the player's current allocation + unspent points.
-## `allocated` and `unlocked` are the player's node/keystone -> true maps.
+## Rebuilds the rows from the player's current allocation + unspent points --
+## a no-op when nothing relevant has changed since the last call (see
+## _last_refresh_signature). `allocated` and `unlocked` are the player's
+## node/keystone -> true maps.
 func refresh(unspent_points: int, allocated: Dictionary, unlocked: Dictionary) -> void:
+	var signature := _signature_for(unspent_points, allocated, unlocked)
+	if signature == _last_refresh_signature:
+		return
+	_last_refresh_signature = signature
+
 	_points_label.text = "Unspent points: %d" % unspent_points
 	# Keystones are ordinary nodes on the web but the Player still tracks them in
 	# their own map (persistence, the land_sense HUD readout), and a save written
@@ -359,6 +376,18 @@ func _state_word(state: String) -> String:
 			return "not enough points"
 		_:
 			return "no path yet"
+
+
+## A cheap string fingerprint of everything refresh()'s output depends on --
+## two calls with an identical signature would rebuild an identical row list,
+## so the second one can just be skipped (see refresh's own doc comment and
+## _last_refresh_signature).
+func _signature_for(unspent_points: int, allocated: Dictionary, unlocked: Dictionary) -> String:
+	var allocated_keys := allocated.keys()
+	allocated_keys.sort()
+	var unlocked_keys := unlocked.keys()
+	unlocked_keys.sort()
+	return "%d|%s|%s" % [unspent_points, ",".join(allocated_keys), ",".join(unlocked_keys)]
 
 
 ## A keystone row's label: the ordinary "+bonus stat" phrasing for a stat
