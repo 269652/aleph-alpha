@@ -3209,7 +3209,16 @@ func _handle_deed_command(local_player: Player) -> void:
 		floori(float(tile.y) / EarthChunkManager.CHUNK_SIZE)
 	)
 	var property_id := EntityRef.for_kind("house", "player_claim_%d_%d" % [chunk.x, chunk.y])
-	var household := _chunk_manager.claim_property_with_deed(property_id)
+	# Claiming land inside a settlement that already exists also makes the
+	# player a MEMBER of it (see concept/player_citizenship.md's "Residency").
+	# Named from the SAME chunk the property id is derived from, so a deed can
+	# never claim land in one place and make you a citizen of another. Passed
+	# unconditionally: the "is there actually a settlement here" guard lives in
+	# record_player_settled_if_new, where the event graph is the authority --
+	# gating the claim itself would break claiming land in open wilderness,
+	# which is legitimate and should still make you a landowner.
+	var settlement_id := EntityRef.for_settlement(chunk)
+	var household := _chunk_manager.claim_property_with_deed(property_id, settlement_id)
 	_dev_console.log_line("Claimed %s for household %s." % [property_id, household.id])
 
 

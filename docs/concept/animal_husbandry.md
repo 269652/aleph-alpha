@@ -856,7 +856,32 @@ actions that feed them.
 
 ### 9. Consequence
 
-**`record_death` does not exist.** `EcosystemSimulation` has `record_catch`,
+**✅ BUILT (2026-08-27), with one divergence from what this section first
+specified.** The signature below said `record_death(chunk_coord, count)`,
+mirroring `record_birth`, which only ever touches the herbivore pool. That
+turned out to be wrong for deaths: the aggregate keeps **two** pools, and the
+predator model's own carrying capacity is *derived* from the live herbivore
+population, so booking a wolf against the herbivore pool would both
+under-count the wolves and quietly shrink what the land is said to support.
+The shipped signature therefore takes a third argument,
+`is_predator: bool = false`, and the marker passes its species' real predator
+status. Pinned by `test_a_predator_death_lowers_the_predator_population`,
+`test_a_herbivore_death_leaves_the_predator_population_alone` and its mirror.
+
+One consequence worth stating plainly, because it is a genuinely new drain the
+aggregate never had: predation runs through `_die()` too (a predator's kill
+resolves through `take_damage`), so wolves hunting near the player now draw
+the herbivore aggregate down where before nothing did. That is consistent —
+the deer really died — and there is no double-count, because the aggregate
+model has no predation consumption term of its own. But it does mean the
+region behaves differently while the player is watching it than while they are
+not, which is the same two-fidelity asymmetry `record_birth` already has.
+
+The rest of this section describes what was built, and remains accurate.
+
+---
+
+**`record_death` did not exist.** `EcosystemSimulation` has `record_catch`,
 `record_vegetation_harvest` and `record_birth`, and nothing for land mortality
 — verified by grep across the repo. Add it as `record_birth`'s exact mirror,
 with `record_catch`'s flooring:
@@ -1040,8 +1065,15 @@ other docs and are listed only so an implementer knows what not to rewrite.
   action.
 - ⬜ Animal Handling tiers as an information ladder, with Expert reading
   `AnimalGenome` rather than `AnimalFitness.phenotype_for`.
-- ⬜ `EcosystemSimulation.record_death` + `record_death_at`, wired at
-  `CreatureMarker._die()`.
+- ✅ `EcosystemSimulation.record_death` + `EarthChunkManager.record_death_at`,
+  wired at `CreatureMarker._die()` — the one place every death goes through.
+  Takes `is_predator` so the two aggregate pools stay separate (see
+  "Consequence" above for that divergence). Kept animals are exempt via the new
+  `CreatureMarker.is_player_invested()`, which `_thin_creatures` now shares so
+  the two cannot drift. 16 tests across the pure model, the middle layer and
+  the marker, plus `test_a_hunted_out_region_stops_showing_creature_markers` for
+  the composition that is the point of the whole thing: a valley hunted bare
+  now stays bare instead of restocking on the next refresh.
 - ⬜ Penned grazing counted against the pasture (the sim side already works;
   nothing is standing on it).
 - ⬜ Dev-console `/tame`, `/kept`, `/pen`, `/breed`, and a test for

@@ -2526,14 +2526,25 @@ func _shop_step(delta: float) -> void:
 ## re-buying the first affordable item), and buys the first one the wallet
 ## can afford.
 func _attempt_a_purchase() -> void:
+	# The price is the LOCAL price, from the real market of the settlement this
+	# merchant belongs to (see EarthChunkManager.merchant_market_near and
+	# Shop.market_price_of) -- a shortage here costs more here, and buying
+	# draws the item out of that village's own stock. Null when the merchant
+	# has no settlement behind them, which falls back to the flat catalog.
+	var market = _chunk_manager.merchant_market_near(position, TRADE_RADIUS) \
+		if _chunk_manager != null else null
 	var item_ids := _shop.known_item_ids()
 	for offset in item_ids.size():
 		var item_id: String = item_ids[(_trade_attempt_count + offset) % item_ids.size()]
-		if _shop.buy(wallet, inventory, _item_catalog, item_id):
+		# Read the price BEFORE buying: the purchase itself moves the stock,
+		# and therefore the price, so asking afterwards would report the next
+		# customer's price rather than the one just paid.
+		var paid := _shop.market_price_of(item_id, market)
+		if _shop.buy(wallet, inventory, _item_catalog, item_id, market):
 			_trade_attempt_count += 1
 			inventory_changed.emit()
 			_trade_result_message = "Bought %s for %d gold." % [
-				_item_catalog.make(item_id).display_name, _shop.price_of(item_id)
+				_item_catalog.make(item_id).display_name, paid
 			]
 			return
 	_trade_result_message = "Not enough gold."

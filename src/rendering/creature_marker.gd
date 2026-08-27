@@ -797,6 +797,25 @@ func is_restrained() -> bool:
 	return _restrained
 
 
+## Whether the player has a stake in this animal -- tamed, part-way tamed, or
+## on the end of a rope right now.
+##
+## This is the line between "an animal the land supports" and "an animal the
+## player is looking after", and it decides what the AGGREGATE model is allowed
+## to do. EarthChunkManager._thin_creatures already refuses to cull an invested
+## animal to make room for wild ones, and _die() refuses to book one against
+## the region's population for the same reason: carrying capacity governs wild
+## animals, and the player's stock is deliberately extra (see KeptAnimals).
+##
+## Deliberately BROADER than KeptAnimals.is_worth_keeping, which asks a
+## different question -- what survives a chunk unload, where a merely-led
+## animal is with the player anyway and needs no saving. Here the question is
+## whose books the animal is on, and a horse on a rope is already off the
+## wild ones.
+func is_player_invested() -> bool:
+	return trust > 0.0 or _restrained
+
+
 func is_tame() -> bool:
 	return Taming.is_tame(trust)
 
@@ -1872,8 +1891,31 @@ func _update_health_bar() -> void:
 ## be a real source of carrion, not a silent despawn, so it has to go
 ## through this exact same path, not a parallel one).
 func _die() -> void:
+	_book_death_against_the_region()
 	_spawn_carcass_if_eligible()
 	queue_free()
+
+
+## Tells the region's aggregate that one of its animals is gone (see
+## EcosystemSimulation.record_death).
+##
+## _die() is the single choke point EVERY death goes through -- combat,
+## disease, a predator's kill -- which is exactly why the call belongs here
+## rather than at each of those call sites. Until this existed the individual
+## and aggregate halves of the simulation disagreed about mortality in one
+## direction only: births were reported and deaths were not, so
+## _reconcile_chunk_creatures restocked whatever the player had just hunted.
+##
+## Two guards, both deliberate. An animal the player has a stake in is not on
+## the wild books at all (see is_player_invested). And the world is only asked
+## if it can answer -- CreatureMarker runs against several stub and
+## partially-built worlds, and a death is not worth a crash.
+func _book_death_against_the_region() -> void:
+	if _world == null or info == null or is_player_invested():
+		return
+	if not _world.has_method("record_death_at"):
+		return
+	_world.record_death_at(position, info.is_predator)
 
 
 func _spawn_carcass_if_eligible() -> void:

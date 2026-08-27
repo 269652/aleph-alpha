@@ -38,6 +38,7 @@ const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
 const Strata = preload("res://src/world/strata.gd")
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
+const Shop = preload("res://src/gameplay/shop.gd")
 const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
 
 var tile_map_layer: TileMapLayer
@@ -6744,3 +6745,223 @@ func test_building_piece_occupancy_leaves_a_stone_beside_the_footprint_standing(
 		"a boulder three tiles from the footprint should still be standing"
 	)
 	assert_false(neighbour.is_queued_for_deletion())
+
+
+# -- record_death_at, and what it is FOR ---------------------------------------
+#
+# The individual half of the simulation telling the aggregate half that an
+# animal is gone -- record_birth_at's mirror (see
+# EcosystemSimulation.record_death and concept/animal_husbandry.md's
+# "Consequence"). The middle layer between CreatureMarker._die() and the
+# aggregate, which is the piece with the pixel->chunk conversion in it.
+
+func test_record_death_at_lowers_the_owning_regions_herbivore_population():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		_berlin_tile.x * TerrainRenderer.TILE_SIZE, _berlin_tile.y * TerrainRenderer.TILE_SIZE
+	)
+	var before := manager.herbivore_population_at_chunk(center_chunk)
+	assert_gt(before, 0.0, "precondition: the chunk under Berlin carries some herbivores")
+
+	manager.record_death_at(pixel)
+
+	assert_almost_eq(
+		manager.herbivore_population_at_chunk(center_chunk), maxf(0.0, before - 1.0), 0.001
+	)
+
+
+## The predator pool is separate and its own capacity is derived from the
+## herbivore one, so a wolf booked against the wrong pool would both
+## under-count wolves and shrink what the land is said to support.
+func test_record_death_at_lowers_the_predator_population_for_a_predator():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var pixel := Vector2(
+		_berlin_tile.x * TerrainRenderer.TILE_SIZE, _berlin_tile.y * TerrainRenderer.TILE_SIZE
+	)
+	var herbivores_before := manager.herbivore_population_at_chunk(center_chunk)
+	var predators_before: float = manager._ecosystem.predator_population(center_chunk)
+	assert_gt(predators_before, 0.0, "precondition: the chunk under Berlin carries some predators")
+
+	manager.record_death_at(pixel, true)
+
+	assert_almost_eq(
+		manager._ecosystem.predator_population(center_chunk),
+		maxf(0.0, predators_before - 1.0),
+		0.001
+	)
+	assert_almost_eq(
+		manager.herbivore_population_at_chunk(center_chunk), herbivores_before, 0.001,
+		"a predator's death must not come off the herbivore books"
+	)
+
+
+## THE point of the whole seam, and the behaviour that did not exist before it:
+## a region hunted out has to STAY hunted out. Previously
+## _reconcile_chunk_creatures sized a chunk's markers against an aggregate that
+## never heard about the kill, so a valley emptied by the player simply
+## refilled on the next ecosystem refresh.
+##
+## Modelled on this file's own fished-out test above: every loaded chunk is
+## emptied, not just one, so there is no untouched neighbour left to migrate
+## animals back in from -- migration restocking a single emptied chunk from a
+## healthy neighbour is correct, intended behaviour and not what this asserts.
+func test_a_hunted_out_region_stops_showing_creature_markers():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var any_animals := false
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		var herbivores := manager.herbivore_population_at_chunk(chunk_coord)
+		if herbivores > 0.0:
+			any_animals = true
+		manager._ecosystem.record_death(chunk_coord, herbivores)
+		manager._ecosystem.record_death(
+			chunk_coord, manager._ecosystem.predator_population(chunk_coord), true
+		)
+	assert_true(any_animals, "precondition: some loaded chunk near Berlin carries herbivores")
+
+	manager.step_ecosystem(EarthChunkManager.SECONDS_PER_SIMULATED_DAY)
+
+	assert_eq(
+		_loaded_creature_list().size(), 0,
+		"an entirely hunted-out region should show no creature markers after the next refresh"
+	)
+
+
+# -- emergence: the player is a real member of the place they settle in -------
+#
+# Owning property and LIVING somewhere are two different facts, and only the
+# first existed. _households_in_settlement derives membership purely from
+# npc_settled, so a player holding a deed inside a village was invisible to
+# every system that asks "who lives here" -- settlement tier, institution
+# formation thresholds, the market's participant set (see
+# concept/player_citizenship.md's "Residency").
+#
+# A new player_settled event TYPE rather than reusing npc_settled: the player
+# is not an NPC, and a log that said otherwise would be a lie told to every
+# later reader of the event graph -- /why included, which exists to explain
+# that graph back to the player.
+
+func test_recording_the_player_settling_makes_them_a_member_of_that_settlement():
+	var chunk_coord := Vector2i(75, 75)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_eq(manager.household_count_for_settlement(settlement_id), 1)
+
+	assert_true(manager.record_player_settled_if_new(settlement_id))
+
+	assert_eq(manager.household_count_for_settlement(settlement_id), 2)
+
+
+func test_the_player_settling_records_a_real_event():
+	var chunk_coord := Vector2i(76, 76)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	manager.record_player_settled_if_new(settlement_id)
+
+	var settled: Array = manager.event_store().events_of_type("player_settled")
+	assert_eq(settled.size(), 1)
+	assert_eq(settled[0].witnesses, [settlement_id])
+
+
+## The event graph is the authority on what exists, the same way
+## record_settlement_founded_if_new and record_path_worn_if_new already treat
+## it. Claiming a deed out in empty wilderness makes you a landowner, not a
+## citizen -- there is no one there to be a citizen among.
+func test_the_player_cannot_settle_a_settlement_that_was_never_founded():
+	var settlement_id := EntityRef.for_settlement(Vector2i(999, 999))
+
+	assert_false(manager.record_player_settled_if_new(settlement_id))
+
+	assert_eq(manager.event_store().events_of_type("player_settled").size(), 0)
+	assert_eq(manager.household_count_for_settlement(settlement_id), 0)
+
+
+## /deed re-run in the same chunk is ordinary play, not an exploit attempt --
+## but it must not count the player twice, which would otherwise be a free way
+## to push a hamlet over a tier threshold or an institution over its own
+## formation minimum without another soul moving in.
+func test_recording_the_player_settling_twice_does_not_count_them_twice():
+	var chunk_coord := Vector2i(77, 77)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	assert_true(manager.record_player_settled_if_new(settlement_id))
+	assert_false(manager.record_player_settled_if_new(settlement_id))
+
+	assert_eq(manager.household_count_for_settlement(settlement_id), 2)
+	assert_eq(manager.event_store().events_of_type("player_settled").size(), 1)
+
+
+## The Deed is the player-facing verb; residency is what it MEANS when the
+## land you claim is inside a place that already exists.
+func test_claiming_a_deed_inside_a_real_settlement_settles_the_player_there():
+	var chunk_coord := Vector2i(78, 78)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	manager.claim_property_with_deed("house:player_claim_78_78", settlement_id)
+
+	assert_eq(manager.household_count_for_settlement(settlement_id), 2)
+	assert_eq(manager.event_store().events_of_type("player_settled").size(), 1)
+
+
+## Claiming land in the wilderness still works and still forms a household --
+## it just does not make you a member of anything.
+func test_claiming_a_deed_outside_any_settlement_still_grants_the_property():
+	var household = manager.claim_property_with_deed("house:wilderness_0")
+	assert_not_null(household)
+	assert_true(household.property.has("house:wilderness_0"))
+	assert_eq(manager.event_store().events_of_type("player_settled").size(), 0)
+
+
+# -- the merchant you are standing at belongs to a real settlement ------------
+#
+# Shop pricing is per-settlement (see Shop.market_price_of and
+# docs/emergence/03's "Do not use one global price"), so buying needs the
+# market of the place the merchant actually stands in. Same loop
+# has_merchant_near already runs, returning the market instead of a bool --
+# _loaded_villages is keyed by chunk, and a chunk is what EntityRef.for_settlement
+# names a settlement by, so the merchant's own key IS the answer.
+
+func test_merchant_market_near_returns_the_markets_of_the_settlement_it_stands_in():
+	manager.update(_berlin_tile)
+	var merchant := _add_fake_merchant(Vector2(100, 100))
+	var expected := manager.market_store().market_for(EntityRef.for_settlement(Vector2i(0, 0)))
+
+	var market = manager.merchant_market_near(Vector2(105, 100), 10.0)
+
+	assert_not_null(market)
+	assert_true(market == expected, "should be the settlement's own market, not a new one")
+	merchant.free()
+
+
+## A merchant's market is stocked with what a merchant sells, so a village the
+## player has never traded at charges the plain catalog price rather than the
+## 20x an empty market would price at (see Shop.stock_initial_goods).
+func test_a_merchants_market_is_stocked_with_the_goods_they_sell():
+	manager.update(_berlin_tile)
+	var merchant := _add_fake_merchant(Vector2(100, 100))
+
+	var market = manager.merchant_market_near(Vector2(105, 100), 10.0)
+
+	var shop := Shop.new()
+	for item_id in shop.known_item_ids():
+		assert_eq(
+			shop.market_price_of(item_id, market), shop.price_of(item_id),
+			"an untraded village should charge the plain catalog price for %s" % item_id
+		)
+	merchant.free()
+
+
+func test_merchant_market_near_is_null_with_no_merchant_in_range():
+	manager.update(_berlin_tile)
+	var merchant := _add_fake_merchant(Vector2(100, 100))
+	assert_null(manager.merchant_market_near(Vector2(500, 500), 10.0))
+	merchant.free()
+
+
+func test_merchant_market_near_is_null_with_no_settlement_loaded():
+	assert_null(manager.merchant_market_near(Vector2(100, 100), 10000.0))

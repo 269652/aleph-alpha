@@ -39,6 +39,48 @@ consistent with the rest of the design's tone: rare/optimal things are
 always earnable in-world too, premium currency just buys a faster or
 more certain path to them, never a path that doesn't otherwise exist.
 
+### Prices are local — ✅ built (2026-08-27)
+
+`docs/emergence/03-contracts-property-economy.md` says plainly: *"Markets are
+local buyer/seller matching systems... Do not use one global price."* The shop
+was the last thing violating that — one flat `Shop.CATALOG` every merchant
+everywhere sold from, while `Market` sat beside it simulating real
+supply-and-demand prices that nothing ever read.
+
+The two now meet, and the seam needed **no new number**, which is why it was
+worth doing this way round:
+
+- `Shop.CATALOG` is the **base price in absolute gold**. It always was.
+- `Market.price_for` is a **dimensionless scarcity multiplier**, exactly `1.0`
+  at `Market.REFERENCE_STOCK`. It always was.
+- So the price is `round(base × multiplier)` — `Shop.market_price_of`. A
+  village holding healthy stock charges precisely what the flat catalog charged
+  before this existed, and every deviation from that is a real shortage or a
+  real glut the NPC economy produced through `Market.produce` running real
+  `CraftingRecipeBook` recipes.
+
+Buying is a real transaction against real stock, per `03`'s invariant 4
+("Money does not create physical goods"): a purchase draws the item **out** of
+that settlement's market, and an item the market has none of cannot be bought
+at any price. A sold-out village is a real reason to travel.
+
+The merchant's market is resolved from the merchant themselves —
+`EarthChunkManager.merchant_market_near` — because `_loaded_villages` is keyed
+by chunk and a chunk is exactly what `EntityRef.for_settlement` names a
+settlement by. On first access it is stocked via `Shop.stock_initial_goods`,
+which is not flavour: `MarketStore.market_for` creates a fresh **empty**
+market, and an empty market prices at twenty times the catalog. Seeding at
+`REFERENCE_STOCK` is what makes an untraded village charge the old price.
+
+This closes the second half of this doc's own open question below — pricing
+for *market goods*. Hiring wages are still open.
+
+**Not built:** selling into the market from the shop UI. `Player`'s trade key
+already sells gathered food into a villager's `VillageMarket` as a fallback
+(see `_attempt_village_food_sale`), but there is no general "sell your goods
+at the local price" verb, and no sell-side UI. That is the remaining half of
+this doc's "Selling to the market" faucet, and it is ⬜.
+
 ### Open questions
 
 - Should premium currency ever be tradeable for regular currency between

@@ -348,6 +348,39 @@ func record_birth(chunk_coord: Vector2i, count: float) -> void:
 	)
 
 
+## An animal DIED near the player -- shot, savaged, starved or sick -- so the
+## region's aggregate population comes down to match. record_birth's mirror,
+## and the mortality term this model simply did not have: record_catch covered
+## fish and record_vegetation_harvest covered standing plants, but a land
+## animal killed in front of the player moved nothing at all. The visible
+## consequence of that gap: _reconcile_chunk_creatures sizes a chunk's markers
+## against the aggregate, so a valley hunted bare quietly restocked itself, and
+## "farm your own instead" could never be the smarter choice because hunting
+## cost the world nothing (see concept/animal_husbandry.md's "Consequence").
+##
+## Deliberately NOT symmetric with record_birth in one respect. A birth is
+## capped at carrying capacity because the land decides the ceiling; a death
+## takes no such cap, because nothing stops a region being emptied. Floored at
+## 0.0 exactly like record_catch, and a silent no-op for a region the aggregate
+## does not track -- deaths genuinely happen in chunks that were never added.
+##
+## `is_predator`: the two pools are separate and the predator model's own
+## carrying capacity is DERIVED from the herbivore one, so booking a wolf
+## against the herbivore pool would both under-count the wolves and quietly
+## shrink what the land is said to support. Callers pass the species' real
+## predator status (see CreatureInfo.PREDATOR_SPECIES).
+##
+## Kept animals are the one death this must NOT be called for: carrying
+## capacity governs WILD animals and the player's stock is deliberately extra
+## (see KeptAnimals, and _thin_creatures' refusal to cull anything the player
+## has a stake in), so a barn losing a sheep is not the land losing one.
+func record_death(chunk_coord: Vector2i, count: float, is_predator: bool = false) -> void:
+	var pool: Dictionary = _predator_population if is_predator else _herbivore_population
+	if not pool.has(chunk_coord):
+		return
+	pool[chunk_coord] = maxf(0.0, pool[chunk_coord] - count)
+
+
 func _average(values: PackedFloat32Array) -> float:
 	if values.is_empty():
 		return 0.0

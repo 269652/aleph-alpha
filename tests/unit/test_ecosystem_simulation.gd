@@ -421,3 +421,72 @@ func test_degraded_land_health_measurably_lowers_settled_vegetation_density():
 		simulation.average_vegetation_density(healthy_coord),
 		"degraded land health must settle at a lower density than untouched land under identical weather"
 	)
+
+
+# -- record_death -------------------------------------------------------------
+#
+# The mortality term the aggregate never had. record_catch does this for fish
+# and record_vegetation_harvest for standing plants, but until now killing a
+# land animal near the player moved nothing at all: _reconcile_chunk_creatures
+# sizes a chunk's markers against an aggregate that never heard about the kill,
+# so a valley hunted bare restocked itself. record_birth's mirror image.
+#
+# Deliberately NOT symmetric with record_birth in one respect: a birth is
+# capped at carrying capacity because the land decides the ceiling, but a death
+# needs no such cap, because nothing stops a region being emptied.
+
+func test_a_death_lowers_the_regions_population():
+	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
+	simulation.record_death(Vector2i.ZERO, 0.25)
+	assert_almost_eq(simulation.herbivore_population(Vector2i.ZERO), 0.75, 0.001)
+
+
+## The whole point: hunting a region out has to STAY hunted out until the
+## logistic term grows it back. Nothing may floor it at some minimum stock.
+func test_a_region_can_be_emptied_completely():
+	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
+	simulation.record_death(Vector2i.ZERO, 100000.0)
+	assert_eq(simulation.herbivore_population(Vector2i.ZERO), 0.0)
+
+
+func test_a_population_never_goes_negative():
+	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	simulation.seed_populations(Vector2i.ZERO, 0.1, 0.1)
+	simulation.record_death(Vector2i.ZERO, 5.0)
+	assert_gte(simulation.herbivore_population(Vector2i.ZERO), 0.0)
+
+
+## Matches record_catch/record_vegetation_harvest: an event in a region the
+## aggregate does not track is harmless, not a crash. Deaths happen in chunks
+## that were never added (a marker outliving its region's removal, a test
+## harness), and none of those may take the simulation down.
+func test_a_death_in_an_unknown_region_is_a_no_op():
+	simulation.record_death(Vector2i(99, 99), 1.0)
+	assert_eq(simulation.herbivore_population(Vector2i(99, 99)), 0.0)
+
+
+## A wolf is not a deer. The aggregate keeps two separate pools and the
+## predator model's carrying capacity is derived from the herbivore one, so
+## booking a predator kill against the herbivore pool would both under-count
+## the wolves and quietly shrink what the land is said to support.
+func test_a_predator_death_lowers_the_predator_population():
+	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
+	simulation.record_death(Vector2i.ZERO, 0.2, true)
+	assert_almost_eq(simulation.predator_population(Vector2i.ZERO), 0.3, 0.001)
+
+
+func test_a_herbivore_death_leaves_the_predator_population_alone():
+	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
+	simulation.record_death(Vector2i.ZERO, 0.25)
+	assert_almost_eq(simulation.predator_population(Vector2i.ZERO), 0.5, 0.001)
+
+
+func test_a_predator_death_leaves_the_herbivore_population_alone():
+	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
+	simulation.record_death(Vector2i.ZERO, 0.2, true)
+	assert_almost_eq(simulation.herbivore_population(Vector2i.ZERO), 1.0, 0.001)

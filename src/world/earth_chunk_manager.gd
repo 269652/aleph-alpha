@@ -65,6 +65,7 @@ const ContractStore = preload("res://src/emergence/contract_store.gd")
 const ContractStorePersistence = preload("res://src/emergence/contract_store_persistence.gd")
 const Market = preload("res://src/emergence/market.gd")
 const MarketStore = preload("res://src/emergence/market_store.gd")
+const Shop = preload("res://src/gameplay/shop.gd")
 const MarketStorePersistence = preload("res://src/emergence/market_store_persistence.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
 const ConstructionProject = preload("res://src/emergence/construction_project.gd")
@@ -1013,7 +1014,13 @@ func wipe_household_store(path: String = HouseholdStorePersistence.SAVE_PATH) ->
 ## same property twice is safe and does not change who owns it. Also
 ## records a real event, the same "one call, two stores kept in sync" shape
 ## every other coordinator in this file already uses.
-func claim_property_with_deed(property_id: String) -> Household:
+## `settlement_id`: when the claimed land sits inside a settlement that
+## already exists, claiming it also makes the player a MEMBER of that place
+## (see record_player_settled_if_new, and concept/player_citizenship.md's
+## "Residency"). Defaults to empty -- claiming land in open wilderness makes
+## you a landowner, not a citizen, and there is no one out there to be a
+## citizen among.
+func claim_property_with_deed(property_id: String, settlement_id: String = "") -> Household:
 	var household := _household_store.form_household(PlayerIdentity.PLAYER_ENTITY_ID)
 	_household_store.grant_property(household.id, property_id)
 
@@ -1023,7 +1030,51 @@ func claim_property_with_deed(property_id: String) -> Household:
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 
+	if settlement_id != "":
+		record_player_settled_if_new(settlement_id)
+
 	return household
+
+
+## Records that the player now LIVES in `settlement_id`, making their
+## household a real member of it -- the thing owning property alone never did
+## (see concept/player_citizenship.md's "Residency").
+##
+## A distinct `player_settled` event type rather than reusing `npc_settled`,
+## because the player is not an NPC and a log that said otherwise would be a
+## lie told to every later reader of the event graph -- `/why` included, which
+## exists to explain that graph back to the player. `_households_in_settlement`
+## reads both types, so every system that asks "who lives here" (settlement
+## tier, InstitutionFormation's thresholds, the settlement's market) picks the
+## player up without any of them learning a new concept.
+##
+## Returns true only when this actually changed something, matching the
+## record_*_if_new family. Two guards, and both are load-bearing rather than
+## defensive: a settlement with no history is not a settlement (the event graph
+## is the authority on what exists, the same way record_settlement_founded_if_new
+## and record_path_worn_if_new already treat it), and settling twice is not
+## being two people -- /deed re-run in the same chunk is ordinary play, and
+## counting it twice would be a free way to push a hamlet over a tier threshold
+## or an institution over its formation minimum with nobody moving in.
+func record_player_settled_if_new(settlement_id: String) -> bool:
+	var history := _event_store.events_for_entity(settlement_id)
+	if history.is_empty():
+		return false
+	for event in history:
+		if event.type == "player_settled":
+			return false
+
+	# The ACTOR is the player's entity id, not their household id, so
+	# _households_in_settlement can resolve it through the same
+	# household_for(actors[0]) lookup it already does for an npc_settled
+	# event. Same shape in, same shape out, one derivation for both.
+	_household_store.form_household(PlayerIdentity.PLAYER_ENTITY_ID)
+	var settled := Event.new("player_settled", _world_age_seconds)
+	settled.actors = [PlayerIdentity.PLAYER_ENTITY_ID]
+	settled.witnesses = [settlement_id]
+	_event_store.append(settled)
+	_memory_store.witness_event(settled, _world_age_seconds)
+	return true
 
 
 ## Contracts and their lifecycle (see docs/emergence/03-contracts-property-
@@ -2089,18 +2140,33 @@ func _known_settlement_ids() -> Array[String]:
 
 
 ## The households belonging to `settlement_id`, reconstructed from the
-## npc_settled events that settlement witnessed -- one more read against the
+## settling events that settlement witnessed -- one more read against the
 ## event graph rather than a second membership index to keep in sync with
 ## it. household_for returns null for an npc with no household yet, which
 ## this simply skips.
+##
+## Both settling types count. `player_settled` is the player's own (see
+## record_player_settled_if_new); it is a separate type because the player is
+## not an NPC, but it means exactly the same thing HERE, which is why the two
+## are read together rather than every caller learning the difference.
+##
+## Deduped by household id: one household is one member however many times it
+## was witnessed settling, and without this a household that settled twice
+## would inflate the settlement's own tier and institution thresholds.
+const SETTLING_EVENT_TYPES := ["npc_settled", "player_settled"]
+
+
 func _households_in_settlement(settlement_id: String) -> Array[String]:
 	var household_ids: Array[String] = []
+	var seen := {}
 	for event in _event_store.events_for_entity(settlement_id):
-		if event.type != "npc_settled" or event.actors.is_empty():
+		if not SETTLING_EVENT_TYPES.has(event.type) or event.actors.is_empty():
 			continue
 		var household := _household_store.household_for(event.actors[0])
-		if household != null:
-			household_ids.append(household.id)
+		if household == null or seen.has(household.id):
+			continue
+		seen[household.id] = true
+		household_ids.append(household.id)
 	return household_ids
 
 
@@ -4091,6 +4157,21 @@ func record_birth_at(position: Vector2, count: float = 1.0) -> void:
 	_ecosystem.record_birth(_chunk_coord_for_tile(_world_tile_for_pixel(position)), count)
 
 
+## An animal DIED at this world position -- record_birth_at's mirror, and the
+## other half of a conversation that until now only ran one way (see
+## EcosystemSimulation.record_death). Called from CreatureMarker._die(), the
+## single choke point every death goes through.
+##
+## `is_predator` travels with the death rather than being looked up here,
+## because the marker already knows what it was and the two aggregate pools
+## are separate -- booking a wolf against the herbivore pool would under-count
+## the wolves and shrink what the land is said to support.
+func record_death_at(position: Vector2, is_predator: bool = false, count: float = 1.0) -> void:
+	_ecosystem.record_death(
+		_chunk_coord_for_tile(_world_tile_for_pixel(position)), count, is_predator
+	)
+
+
 ## A courting pair produced young (see Courtship / AmbientFlyerMarker).
 ##
 ## Two things happen, and both matter. The offspring is spawned as a real
@@ -4950,7 +5031,10 @@ func _thin_creatures(alive: Array, surplus: int) -> Array:
 	var keep: Array = []
 	var removed := 0
 	for creature in alive:
-		var invested: bool = float(creature.get("trust")) > 0.0 or creature.is_restrained()
+		# One rule, one place: CreatureMarker.is_player_invested() is the same
+		# question _die() asks before booking a death against the region, so
+		# the two cannot drift into disagreeing about whose animal this is.
+		var invested: bool = creature.is_player_invested()
 		if removed < surplus and not invested:
 			creature.queue_free()
 			removed += 1
@@ -5185,15 +5269,46 @@ const BIRD_CATCH_RADIUS := 48.0
 ## is within max_distance pixels of pixel_position -- gates Player's shop
 ## interaction (see Shop).
 func has_merchant_near(pixel_position: Vector2, max_distance: float) -> bool:
-	for node_list in _loaded_villages.values():
-		for node in node_list:
+	return _merchant_chunk_near(pixel_position, max_distance) != null
+
+
+## The chunk key of the nearest in-range merchant's own village, or null.
+## Factored out of has_merchant_near so the market lookup below runs the same
+## single loop rather than a near-copy of it that could drift.
+func _merchant_chunk_near(pixel_position: Vector2, max_distance: float):
+	for chunk_coord in _loaded_villages:
+		for node in _loaded_villages[chunk_coord]:
 			if not (node is NpcMarker):
 				continue
 			if node.identity.occupation != "merchant":
 				continue
 			if pixel_position.distance_to(node.position) <= max_distance:
-				return true
-	return false
+				return chunk_coord
+	return null
+
+
+## The real market of the settlement a nearby merchant belongs to, or null if
+## no merchant is in reach.
+##
+## This is what makes shop prices local (see Shop.market_price_of and
+## docs/emergence/03-contracts-property-economy.md's "Do not use one global
+## price"). `_loaded_villages` is keyed by chunk, and a chunk coordinate is
+## exactly what EntityRef.for_settlement names a settlement by, so the
+## merchant's own key IS the settlement -- no new lookup table.
+##
+## The market is stocked with the goods a merchant sells on first access
+## (Shop.stock_initial_goods, idempotent). Without that a never-visited
+## village would hand back MarketStore's fresh EMPTY market, which prices at
+## twenty times the catalog -- so the stocking is not flavour, it is what
+## keeps an untraded village charging exactly what it charged before prices
+## became local at all.
+func merchant_market_near(pixel_position: Vector2, max_distance: float):
+	var chunk_coord = _merchant_chunk_near(pixel_position, max_distance)
+	if chunk_coord == null:
+		return null
+	var market := _market_store.market_for(EntityRef.for_settlement(chunk_coord))
+	Shop.new().stock_initial_goods(market)
+	return market
 
 
 ## The closest villager (any occupation) within max_distance pixels of

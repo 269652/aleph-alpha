@@ -5966,6 +5966,59 @@ passing) is a real, valid `EntityRef` (`"player:local"`), the same
   lore instead of dev-console text, the optional LLM rephrasing pass) --
   what actually makes this player-facing rather than a dev-console reader.
 
+### Consequence: three seams closed (2026-08-27)
+
+Three changes built under strict red-first TDD, chosen because each one wires
+up simulation that already existed and already worked, and whose only defect
+was that nothing reached the player. All three are live, not modules waiting
+for a caller -- that failure mode is exactly what this pass was answering.
+
+- **Mortality reaches the aggregate** (size: small) -- ✅ **Done** --
+  `EcosystemSimulation.record_death(chunk_coord, count, is_predator)` plus
+  `EarthChunkManager.record_death_at`, wired at `CreatureMarker._die()`, the
+  single choke point every death (combat, disease, predation) already went
+  through. Floored at 0.0 and deliberately UNcapped, unlike `record_birth`:
+  the land decides a ceiling, nothing stops a region being emptied. Kept
+  animals are exempt through the new `CreatureMarker.is_player_invested()`,
+  which `_thin_creatures` now shares instead of duplicating. **What changed in
+  play:** `_reconcile_chunk_creatures` used to size a chunk's markers against
+  an aggregate that never heard about the kill, so a valley hunted bare
+  restocked itself and hunting cost the world nothing. Pinned end to end by
+  `test_a_hunted_out_region_stops_showing_creature_markers`. 16 tests.
+  Divergence from `concept/animal_husbandry.md`'s original signature (the
+  `is_predator` argument, and predation now draining the aggregate) is recorded
+  in that doc's "Consequence" section.
+- **The player is a member of the settlement they settle in** (size: small) --
+  ✅ **Done** -- `record_player_settled_if_new` appends a real `player_settled`
+  event; `claim_property_with_deed` takes an optional `settlement_id` so the
+  Deed is the verb; `_households_in_settlement` reads `SETTLING_EVENT_TYPES`
+  (`npc_settled` + `player_settled`) and dedupes by household id. A distinct
+  event type rather than reusing `npc_settled`, because the player is not an
+  NPC and `/why` reads that graph back to them. **What changed in play:**
+  settlement membership derived only from `npc_settled`, so a player holding a
+  deed inside a village was invisible to settlement tier, `InstitutionFormation`
+  thresholds, and the settlement's market. Two guards carry the weight -- you
+  cannot settle a place that was never founded, and settling twice does not
+  count you twice (which would otherwise be a free way over a tier threshold).
+  6 tests. Spec written first as `concept/player_citizenship.md`'s new
+  "Residency" section, which the doc did not previously cover at all.
+- **Shop prices are local** (size: small) -- ✅ **Done** --
+  `Shop.market_price_of(item_id, market)` = catalog base x
+  `Market.price_for`'s scarcity multiplier, which is exactly 1.0 at
+  `Market.REFERENCE_STOCK` -- so **no new number was invented** and a
+  healthy village charges precisely the old flat price. `buy` takes the market,
+  charges the local price and draws the item out of that market's stock;
+  an item the market has none of cannot be bought at any price
+  (`docs/emergence/03`'s invariant 4). `EarthChunkManager.merchant_market_near`
+  resolves the settlement from the merchant's own `_loaded_villages` chunk key,
+  and stocks it via `Shop.stock_initial_goods` on first access -- necessary,
+  not cosmetic: `MarketStore.market_for` returns a fresh EMPTY market, which
+  prices at 20x. Wired into `Player._attempt_a_purchase` and pinned against
+  silent regression by `tests/unit/test_shop_uses_the_local_market.gd`, which
+  reads the call site from source. 28 tests. **Still ⬜:** selling into the
+  market from the shop UI -- the other half of `concept/economy.md`'s
+  "Selling to the market" faucet.
+
 ### Animal Husbandry (`concept/animal_husbandry.md`)
 
 New doc this pass. It specifies the loop **around** taming -- approach, choice,

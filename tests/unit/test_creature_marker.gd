@@ -2109,3 +2109,89 @@ func test_the_measured_catch_rate_matches_the_model():
 		rate, 0.2, 0.55,
 		"catching a healthy horse should be a real chance, neither a certainty nor a lottery"
 	)
+
+
+# -- death is booked against the region (see EcosystemSimulation.record_death) -
+#
+# _die() is the single choke point every death goes through -- combat, disease,
+# starvation alike -- so it is the one place the individual half of the
+# simulation can tell the aggregate half that an animal is gone. Without this
+# the two halves disagree and _reconcile_chunk_creatures restocks whatever the
+# player just hunted (see concept/animal_husbandry.md's "Consequence").
+
+class DeathRecordingWorld:
+	extends StubWorld
+	var deaths: Array = []
+	func record_death_at(at: Vector2, is_predator: bool) -> void:
+		deaths.append({"at": at, "is_predator": is_predator})
+
+
+func _dying(species: String, world: DeathRecordingWorld) -> CreatureMarker:
+	var dying := CreatureMarker.new()
+	dying.info = CreatureInfo.new(species, 1)
+	dying.wander_seed = 5
+	add_child_autofree(dying)
+	dying.setup(world, 16)
+	dying.position = Vector2(64, 32)
+	return dying
+
+
+func test_a_killed_animal_is_booked_against_its_region():
+	var world := DeathRecordingWorld.new()
+	var deer := _dying("herbivore", world)
+	deer.take_damage(deer.info.max_health)
+	assert_eq(world.deaths.size(), 1)
+	assert_eq(world.deaths[0]["at"], Vector2(64, 32))
+
+
+## A wolf and a deer come out of two different pools, and the predator pool's
+## own capacity is derived from the herbivore one -- so which pool a death
+## lands in has to travel with the death, not be guessed at the far end.
+func test_a_killed_predator_is_booked_as_a_predator():
+	var world := DeathRecordingWorld.new()
+	var wolf := _dying("wolf", world)
+	wolf.take_damage(wolf.info.max_health)
+	assert_eq(world.deaths.size(), 1)
+	assert_true(world.deaths[0]["is_predator"])
+
+
+func test_a_killed_herbivore_is_not_booked_as_a_predator():
+	var world := DeathRecordingWorld.new()
+	var deer := _dying("herbivore", world)
+	deer.take_damage(deer.info.max_health)
+	assert_false(world.deaths[0]["is_predator"])
+
+
+## Carrying capacity governs WILD animals; the player's stock is deliberately
+## extra (see KeptAnimals, and _thin_creatures' refusal to cull anything the
+## player has a stake in). A barn losing a sheep is not the land losing one, so
+## a tamed animal's death must not come off the region's books.
+func test_a_tamed_animals_death_is_not_booked_against_the_wild_population():
+	var world := DeathRecordingWorld.new()
+	var sheep := _dying("herbivore", world)
+	sheep.trust = 1.0
+	sheep.take_damage(sheep.info.max_health)
+	assert_eq(world.deaths.size(), 0)
+
+
+## Same rule, the other half of KeptAnimals.is_worth_keeping: an animal on the
+## end of a rope is one the player has a stake in even at zero trust.
+func test_a_restrained_animals_death_is_not_booked_against_the_wild_population():
+	var world := DeathRecordingWorld.new()
+	var horse := _dying("horse", world)
+	horse.restrain_to(Vector2(70, 32))
+	horse.take_damage(horse.info.max_health)
+	assert_eq(world.deaths.size(), 0)
+
+
+## The marker must not assume the world can take the call: plenty of stub and
+## partially-built worlds cannot, and a death is not worth a crash.
+func test_a_world_that_cannot_record_deaths_is_survivable():
+	var plain := StubWorld.new()
+	var deer := CreatureMarker.new()
+	deer.info = CreatureInfo.new("herbivore", 1)
+	deer.wander_seed = 5
+	add_child_autofree(deer)
+	deer.setup(plain, 16)
+	deer.take_damage(deer.info.max_health)
+	assert_true(true, "a death against a world with no record_death_at must not crash")

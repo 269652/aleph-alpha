@@ -69,6 +69,56 @@ real household the moment they first own something, not before, matching
 persistent economic/social unit," not a status granted at character
 creation.
 
+## Residency — being a member of the place you live in
+
+Owning property and *living somewhere* are two different facts, and until
+now this doc only specified the first. The Deed made the player a
+household; it did not make them a member of the settlement that household
+stands in. `EarthChunkManager._households_in_settlement` derives membership
+purely from `npc_settled` events, so a player household was invisible to
+every system that asks "who lives here" — settlement tier, institution
+formation thresholds, the market's own participant set, governance. The
+player could hold a deed inside a village and still not be *of* it.
+
+That is the gap this section closes, and it is deliberately the smallest
+possible change to close it: **membership is a witnessed event, exactly
+as it already is for an NPC.**
+
+- Claiming a Deed inside the chunk of an already-founded settlement
+  records a **`player_settled`** event for that settlement, and
+  `_households_in_settlement` reads both `npc_settled` and `player_settled`
+  when deriving who lives there. A new event TYPE rather than reusing
+  `npc_settled`, because the player is not an NPC and a log that says
+  otherwise would be a lie told to every later reader of the event graph —
+  including `/why`, which exists to explain that graph back to the player.
+- **You cannot settle a place that was never founded.** The event graph is
+  the authority on what exists, the same way `record_settlement_founded_if_new`
+  and `record_path_worn_if_new` already treat it; a settlement with no
+  history is not a settlement. Claiming a deed in empty wilderness makes
+  you a landowner, not a citizen.
+- **Settling twice is not being two people.** `/deed` re-run in the same
+  chunk is ordinary play, not an exploit attempt, and it must not inflate
+  the settlement's population — which would otherwise be a free way to push
+  a hamlet over a tier threshold or an institution over its formation
+  minimum. Idempotent on re-entry, like every other `_if_new` recorder here.
+
+What this switches on, all of it code that already runs and merely could
+not see the player: the settlement counts them toward its own tier;
+`InstitutionFormation`'s thresholds include them; the settlement's market
+has them as a participant; and their contracts and breaches are the history
+of a place they actually belong to rather than a private ledger. Pillar 2
+still holds throughout — none of those thresholds is lowered for the
+player, they simply now apply.
+
+**Status: ✅ built (2026-08-27).** `EarthChunkManager.record_player_settled_if_new`
+records the event; `claim_property_with_deed` gained an optional
+`settlement_id` and calls it, so the Deed is the player-facing verb;
+`_households_in_settlement` now reads `SETTLING_EVENT_TYPES` (both
+`npc_settled` and `player_settled`) and dedupes by household id, so one
+household is one member however many times it was witnessed settling. Six
+tests, including the two guards that carry the weight — you cannot settle a
+place that was never founded, and settling twice does not count you twice.
+
 ## Ledger
 
 Proposes a real `Contract` (`docs/emergence/03-contracts-property-
