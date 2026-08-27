@@ -2935,7 +2935,7 @@ yet wired into the live, still-lookup-table-shaped `material_damage.gd`/
 original "materials stay pure, no alloying" clause for the mineral track
 only — design-only so far, no code exists for it yet:
 
-- **Material Property Vector** (medium) — 🚧 Partial — `src/gameplay/material_properties.gd`: a fixed "mineral track" vector (density/hardness/toughness/elasticity/sharpness_capacity/flammability/conductivity/decay_rate) for six named materials (wood/flesh/stone/iron/obsidian/fiber), tested, with unknown-material/unknown-property defaults. Only the doc's mineral track exists; the DNA-driven organic track (see dna.md/evolution.md) is unbuilt, and nothing in live gameplay reads this vector yet — `material_damage.gd`'s per-(weapon_kind, material)-string lookup table remains what `scenes/player.gd` actually calls.
+- **Material Property Vector** (medium) — 🚧 Partial — `src/gameplay/material_properties.gd`: a fixed "mineral track" vector (density/hardness/toughness/elasticity/sharpness_capacity/flammability/conductivity/decay_rate) for ten named materials (wood/timber/flesh/stone/iron/obsidian/fiber, plus `copper`/`tin`/`carbon` added 2026-08-27 as the rows the alloy model blends), tested, with unknown-material/unknown-property defaults. `descriptors_for_vector()` now takes a *bare vector* rather than a material name, which is what lets a computed alloy vector reach the descriptor vocabulary at all — before it existed, materials.md's "an alloy is just one more way to arrive at a property vector" was quietly untrue in code, because every consumer took a String and looked it up. Only the doc's mineral track exists; the DNA-driven organic track (see dna.md/evolution.md) is unbuilt, and nothing in live gameplay reads this vector yet — `material_damage.gd`'s per-(weapon_kind, material)-string lookup table remains what `scenes/player.gd` actually calls.
 - **Impact Resolution (Momentum × Geometry × Material → Outcome)** (large) — 🚧 Partial — `src/gameplay/impact_resolver.gd`'s `resolve_impact()` (tested, calibration-pinned `T_CUT`/`T_PIERCE`/`T_CRUSH`/`T_BRITTLE_TOUGHNESS`/`PIERCE_HARDNESS_CAP` thresholds — the doc's own Open Questions section flags exactly these as needing calibration tests) returns cut/dent/crush/pierce/shatter/bounce from momentum + contact geometry (edge/point/blunt) + the target material's hardness/toughness. Not wired into any live combat, tree-felling, or mining path, and doesn't yet cover the doc's shape-assembly mechanics (leverage/edge+backing/balance) that would compute momentum and geometry from an actual item.
 - **Two-Track Organic vs. Mineral Materials** (large) — ⬜ Not started — no DNA-driven variable material track exists; every entry in `material_properties.gd` is a fixed mineral-style vector.
 - **Shape & Assembly (Leverage, Edge+Backing, Balance)** (large) — ⬜ Not started — no part-graph/geometry-composition model exists; `impact_resolver.gd` takes momentum and contact geometry as direct inputs rather than deriving them from assembled parts.
@@ -2943,24 +2943,46 @@ only — design-only so far, no code exists for it yet:
 - **Reactive Surfaces (Elemental Reaction Matrix on the Floor)** (large) — ⬜ Not started — see Magic section's Elemental Reaction Matrix row.
 - **Physical Honesty (Item Wear/Chip/Fracture Over Time)** (medium) — ⬜ Not started — no durability/wear state exists on any item.
 - **Traversal-Tool Material Viability (Raft Buoyancy / Rope Tensile Strength)** (small) — ✅ Done (basic) — `material_properties.gd`'s `is_viable_for_tool()`, tested: density-gated for `raft`, toughness-gated (standing in for tensile strength — see the doc's transportation.md cross-reference) for `grapple_rope`. No raft/rope items or transportation.md wiring exist yet to consume it — see Transportation section.
-- **Alloying (Emergent Metallurgy)** (large) — ⬜ Not started — new
-  2026-08-24 design (`concept/smelting.md`'s brainstorm extension): an
-  alloy's property vector is *computed*, not authored — a weighted blend
-  of two existing mineral vectors via real metallurgical rules (linear
-  rule-of-mixtures baseline, a solid-solution hardness/toughness bonus
-  peaking at a real historical ratio, a eutectic melting-point dip near
-  that same ratio, brittle collapse past a ceiling), flowing through this
-  doc's existing shape/assembly/threshold pipeline unchanged. Needs: a new
-  `melting_threshold` scalar on the property vector (the doc already names
-  it, code doesn't have it yet), a `copper` row in `material_properties.gd`
-  (missing today even though `copper_ore`/`copper_ingot` items already
-  exist), new `tin`/`zinc` ore types + items for bronze/brass specifically
-  (steel needs neither — see smelting.md, it reuses the existing coal fuel
-  slot as a carbon-fraction input), the blend-formula module itself, and a
-  numeric-design pass for the curve constants, pinned by property tests.
-  Composes with, doesn't duplicate, `concept/labor_skills.md`'s
-  `ceiling_realization` multiplier — see smelting.md's own 2026-08-24
-  section for exactly how the two compose.
+- **Alloying (Emergent Metallurgy)** (large) — 🚧 Partial — the *computation*
+  is real and tested; the *content around it* does not exist.
+  `src/gameplay/alloy_blend.gd` (45 tests) blends two mineral vectors into a
+  third by real metallurgy: solid-solution strengthening rising as
+  **sqrt(concentration)** (Fleischer's law) and peaking at the **published
+  solubility limit** rather than at an authored ratio, the
+  strengthening/embrittlement tradeoff (toughness is divided by exactly the
+  factor hardness is multiplied by), harmonic density mixing, and van 't Hoff
+  cryoscopic melting depression with a eutectic that is *solved for* rather
+  than authored. One model covers both archetypes — substitutional (Cu-Sn) and
+  interstitial (Fe-C) differ only in whether misfit is measured against the host
+  atom or against an octahedral hole of radius `(√2−1)·r_host`, which is pure
+  packing geometry. Validated against reality with nothing fitted: Cu-12Sn melts
+  at ~1006 °C (real ~1000 °C), Fe-4.3C at ~1197 °C (real 1147 °C), bronze
+  density 8.72 g/cm³ (real ~8.78). The single sourced anchor (cast bronze ≈ 2×
+  copper's hardness) is *solved for* and re-derived by a test. `copper`/`tin`/
+  `carbon` rows added to `material_properties.gd`, closing the gap the old
+  version of this row named.
+  **Four deliberate divergences from the 2026-08-24 design, all written up in
+  smelting.md**: toughness *falls* rather than peaking with hardness (the doc's
+  "harder *and* tougher" was a free lunch and is not how alloys work); the peak
+  is derived from the solubility limit rather than centred on the ~12%
+  historical ratio (which is now an emergent *output*); melting is a separate
+  `melting_point_c()` function rather than a ninth `melting_threshold` scalar
+  (half the MATERIALS table has no melting point — wood chars, graphite
+  sublimes — so a ninth key would force them all to lie); and the
+  past-the-ceiling plateau is the 0–10 scale clamping, not modeled cementite.
+  **Known gaps, all test-pinned or doc-recorded, none hidden**: the 0–10
+  hardness scale saturates so *any* carbon steel pins at 10 (biggest limitation
+  — the scale has no headroom above iron=8); conductivity mixes linearly where
+  Nordheim's rule says an alloy should conduct *worse than both* constituents
+  (the one knowingly-false statement in the file); the Cu-Sn eutectic's position
+  is only qualitatively right (~88 wt% Sn vs the real 99.3 — ideal-solution
+  linearization, no activity coefficients); heat treatment/tempering is absent
+  entirely, so there is no way to make a non-brittle steel blade yet.
+  **Nothing calls `blend()` outside its own test** — no tin ore (`ORE_TYPES` is
+  still `["iron","copper","coal"]`), no alloy ingot item, no smelt path, no
+  ratio UI. Composes with, doesn't duplicate, `concept/labor_skills.md`'s
+  `ceiling_realization` multiplier; the skill→ratio-drift formula smelting.md
+  asks for is still untouched.
 
 ### Easter Eggs (`concept/easter_eggs.md`)
 
