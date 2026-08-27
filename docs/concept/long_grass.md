@@ -47,9 +47,9 @@ root away from its ground position (`origin * scale == origin`, for any
 scale).
 
 **Rendering is GPU-instanced, one `MultiMeshInstance2D` draw call per
-(chunk, Y-band), not one `Sprite2D` per card.** `BAND_COUNT` is now 32 (one
-band per tile row of a `CHUNK_SIZE=32` chunk, 16 world units tall each) --
-see the constant's own doc comment for the fix history. A band's
+(chunk, Y-band), not one `Sprite2D` per card.** `BAND_COUNT` is now 64 (half
+a tile row of a `CHUNK_SIZE=32` chunk, 8 world units tall each) -- see the
+constant's own doc comment for the fix history. A band's
 `MultiMeshInstance2D.position` is anchored to its own BOTTOM edge, not its
 vertical center (`band_anchor_world_y`), so an entity standing anywhere
 within or above a band always Y-sorts behind the whole band rather than
@@ -77,22 +77,26 @@ pre-expanded per-card specs directly rather than expanding a cell itself,
 so a cell whose own cards land in two different bands can be split across
 two separate `fill_band` calls without any card drawn twice or dropped --
 one seam (`cards_for_cell`) computes a card's real position for both
-banding and final placement, so the two can never drift apart. Honest
-scope: at today's real `BAND_COUNT=32`/`CHUNK_SIZE=32` ratio (one band ==
-one full tile row == 16 world units), a card's real max offset (6.8 world
-units, well under half a band's height) can mathematically never cross a
-band boundary -- proven generally (any chunk-local row, not spot-checked),
-and confirmed by every existing `EarthChunkManager` grass test continuing
-to pass completely unmodified. The fix is a genuine architectural
-correctness improvement (a single seam that cannot drift, and one that
-stays correct even if `BAND_COUNT`/`CHUNK_SIZE`'s ratio or the offset
-formula's spread ever changed) rather than something a player can
-currently see change. The genuine per-card split IS directly demonstrated
-by test (`test_illustrated_grass_patch.gd`, at a deliberately finer
-`band_count` decoupled from production's own ratio, using real seed 7:
-6 of its 8 cards, whose real offset.y is +6.8, land in the next band over,
-while the other 2, whose real offset.y is -6.8, stay in the cell's own
-nominal band).
+banding and final placement, so the two can never drift apart. This landed
+in two stages: at `BAND_COUNT=32` (one band == one full tile row == 16
+world units) a card's real max offset (6.8 world units, well under half a
+band's height) was mathematically incapable of crossing a band boundary --
+a genuine architectural correctness improvement (a single seam that cannot
+drift) but provably a no-op at that ratio, confirmed by every existing
+`EarthChunkManager` grass test passing completely unmodified. Raising
+`BAND_COUNT` to 64 (see the constant's own doc comment) shrank a band to 8
+world units -- now smaller than a card's own 6.8-unit max offset -- so
+per-card banding genuinely diverges from cell-level banding on real
+production data, not just at a synthetic finer test-only ratio. Directly
+demonstrated by test (`test_illustrated_grass_patch.gd`'s
+`test_per_card_banding_diverges_from_cell_level_banding_at_the_real_
+production_ratio`, sweeping every chunk-local row and many real cell
+seeds: at least one real divergence exists, and every divergence lands in
+the immediately-next band, never further -- proven directly by
+`test_per_card_banding_splits_a_single_cells_cards_across_two_real_bands`,
+same mechanism, real seed 7: 6 of its 8 cards, whose real offset.y is
++6.8, land in the next band over, while the other 2, whose real offset.y
+is -6.8, stay in the cell's own nominal band).
 
 The shader's `fragment()` stage computes a bend curve
 `bend_curve(top_t) = pow(top_t, BEND_CURVE_EXPONENT)`, where `top_t` runs
@@ -434,17 +438,35 @@ framebuffer), so several of these needed a real, non-headless, off-screen
    ±6.8 world units — see `card_specs_for_seed`), computed and applied only
    AFTER the cell-level band decision was already made. Fixed by making
    banding per-CARD (see "Banding is per-CARD, not per-cell" above for the
-   mechanism). Verified, honest scope: at today's real `BAND_COUNT=32`/
-   `CHUNK_SIZE=32` ratio, this is provably a no-op on every existing chunk
-   — a card's real offset (6.8) is mathematically incapable of crossing a
+   mechanism). Verified, honest scope AT THE TIME: at `BAND_COUNT=32`/
+   `CHUNK_SIZE=32`, this was provably a no-op on every existing chunk — a
+   card's real offset (6.8) was mathematically incapable of crossing a
    16-world-unit band boundary from a cell center that starts 8 world units
    from either edge. The user-visible "only some tufts sort correctly"
    symptom itself was not independently reproduced or explained by this
-   investigation beyond this one real, verified mechanism; if it persists
-   after this fix, the next most likely cause is the SEPARATE, already-
-   named "dense bush art vs. sparse blade art" visibility difference (same
-   band-coarseness trade-off, worse on `grass_blades.png`'s denser atlas
-   rows) rather than a further banding bug.
+   investigation beyond this one real, verified mechanism — see #10, which
+   found and fixed the actual remaining cause the same day.
+10. **Same live report as #9, still visible after the per-card fix landed
+    (same day).** A second Explore investigation, on the corrected premise
+    that the report was about the atlas's existing dense "bush" rows (not a
+    separate round-shaped rendering system, an earlier wrong premise the
+    user directly corrected: "There's no round shape it's long grass like
+    the others"), found the real residual cause: even with per-card banding
+    in place, a whole `BAND_COUNT=32` band (one full tile) still draws in
+    front of the player for as long as they stand anywhere within it
+    (`band_anchor_world_y`'s own bottom-edge anchoring, see Mechanism —
+    "normal, expected concealment" by design). That grace window is barely
+    perceptible on sparse, mostly-transparent blade art but reads as
+    glaringly broken on the atlas's dense, near-opaque "bush" cards — the
+    literal "some tufts... not others" split. Fixed by raising `BAND_COUNT`
+    32→64 (halves the grace window to 8 world units), which as a direct
+    side effect also finally made #9's per-card fix start doing something
+    real: at the finer 8-unit band height, a card's own 6.8-unit max offset
+    can now genuinely cross a boundary (see "Banding is per-CARD" above).
+    New worst-case reach under the player: 8 (band_height) + 6.8 (max card
+    offset) + 16 (`WORLD_SIZE`) = 30.8, an 11.2-unit margin under the
+    player's real 42-unit max reach (`character_view.tscn`'s `HeadSlot`) —
+    comfortable again, versus a thin 3.2 at the old ratio.
 
 ## Status
 
@@ -452,13 +474,14 @@ framebuffer), so several of these needed a real, non-headless, off-screen
   curved bending, wind sway, and player wake are wired and verified with
   real (non-headless) renders at real card counts.
 - ✅ Y-sort banding is per-CARD (`IllustratedGrassPatch.cards_for_cell`/
-  `local_row_for_world_y`), not per-cell — see History #9. The player's own
-  safety margin against a band's worst-case blade, honestly including each
-  card's own real ±6.8-world-unit offset (previously omitted from the
-  margin's own math), is a real but thin 3.2 world units, not the ~10
-  units the pre-offset accounting claimed — see `test_illustrated_grass_
-  patch.gd`'s `test_band_height_leaves_a_real_safety_margin_under_the_
-  players_own_max_reach`.
+  `local_row_for_world_y`), not per-cell — see History #9. At `BAND_COUNT
+  =64` (History #10) this genuinely diverges from cell-level banding on
+  real production data, not just a synthetic finer test ratio. The
+  player's own safety margin against a band's worst-case blade, honestly
+  including each card's own real ±6.8-world-unit offset, is 11.2 world
+  units — see `test_illustrated_grass_patch.gd`'s
+  `test_band_height_leaves_a_real_safety_margin_under_the_players_own_
+  max_reach`.
 - ✅ The walker-position uniform updates every frame for every client
   (host and connected), not just whichever peer owns the ecosystem
   simulation — see History #5.
