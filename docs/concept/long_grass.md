@@ -47,19 +47,52 @@ root away from its ground position (`origin * scale == origin`, for any
 scale).
 
 **Rendering is GPU-instanced, one `MultiMeshInstance2D` draw call per
-(chunk, Y-band), not one `Sprite2D` per card.** `EarthChunkManager` groups
-each chunk's live `TallGrass` cells by `IllustratedGrassPatch.
-band_index_for_local_y` (`BAND_COUNT = 8` horizontal strips per chunk) and
-calls `fill_band` once per band on every throttled sync
-(`GRASS_REFRESH_INTERVAL`). A band's `MultiMeshInstance2D.position` is its
-own vertical center (`band_anchor_world_y`), which is what it Y-sorts
-against the player/creatures by - see pillar 2 for the granularity
-trade-off this implies. This replaced an earlier one-`Sprite2D`-per-card
-design: at the chunk/decoration-radius density this system actually runs
-at (up to several thousand simultaneous cards), that many individually
-Y-sorted, alpha-blended draw calls measured as visibly laggy, reported
-live as "super laggy" once bug fixes made the system actually render at
-its intended density for the first time.
+(chunk, Y-band), not one `Sprite2D` per card.** `BAND_COUNT` is now 32 (one
+band per tile row of a `CHUNK_SIZE=32` chunk, 16 world units tall each) --
+see the constant's own doc comment for the fix history. A band's
+`MultiMeshInstance2D.position` is anchored to its own BOTTOM edge, not its
+vertical center (`band_anchor_world_y`), so an entity standing anywhere
+within or above a band always Y-sorts behind the whole band rather than
+sometimes reading as "behind" grass its own feet have already passed --
+see that function's own doc comment for the full reasoning. This replaced
+an earlier one-`Sprite2D`-per-card design: at the chunk/decoration-radius
+density this system actually runs at (up to several thousand simultaneous
+cards), that many individually Y-sorted, alpha-blended draw calls measured
+as visibly laggy, reported live as "super laggy" once bug fixes made the
+system actually render at its intended density for the first time.
+
+**Banding is per-CARD, not per-cell** (2026-08-27, following a live report
+after the BAND_COUNT 8->32 fix: "y sorting works for some [tufts] but not
+all... it parts and bends but y ordering is correct only for some").
+`IllustratedGrassPatch.cards_for_cell` expands a `TallGrass` cell into its
+own `CARD_COUNT` real, offset-adjusted per-card positions (each card's own
+random offset from the cell's nominal ground position -- see
+`card_specs_for_seed`); `EarthChunkManager._sync_grass_sprites` buckets
+each of THOSE cards into a Y-sort band via its own real world Y
+(`IllustratedGrassPatch.local_row_for_world_y` converts a card's real
+world Y back into the same chunk-local-row space a cell's raw row already
+lived in), not the cell's own un-offset row. `IllustratedGrassPatch.
+instances_for_cards` (renamed from `instances_for_cells`) takes these
+pre-expanded per-card specs directly rather than expanding a cell itself,
+so a cell whose own cards land in two different bands can be split across
+two separate `fill_band` calls without any card drawn twice or dropped --
+one seam (`cards_for_cell`) computes a card's real position for both
+banding and final placement, so the two can never drift apart. Honest
+scope: at today's real `BAND_COUNT=32`/`CHUNK_SIZE=32` ratio (one band ==
+one full tile row == 16 world units), a card's real max offset (6.8 world
+units, well under half a band's height) can mathematically never cross a
+band boundary -- proven generally (any chunk-local row, not spot-checked),
+and confirmed by every existing `EarthChunkManager` grass test continuing
+to pass completely unmodified. The fix is a genuine architectural
+correctness improvement (a single seam that cannot drift, and one that
+stays correct even if `BAND_COUNT`/`CHUNK_SIZE`'s ratio or the offset
+formula's spread ever changed) rather than something a player can
+currently see change. The genuine per-card split IS directly demonstrated
+by test (`test_illustrated_grass_patch.gd`, at a deliberately finer
+`band_count` decoupled from production's own ratio, using real seed 7:
+6 of its 8 cards, whose real offset.y is +6.8, land in the next band over,
+while the other 2, whose real offset.y is -6.8, stay in the cell's own
+nominal band).
 
 The shader's `fragment()` stage computes a bend curve
 `bend_curve(top_t) = pow(top_t, BEND_CURVE_EXPONENT)`, where `top_t` runs
@@ -391,12 +424,41 @@ framebuffer), so several of these needed a real, non-headless, off-screen
    due on any tile change, extending the existing "mark due, chunk
    crossing" mechanism to tile granularity (see its own section above for
    the cost reasoning).
+9. **"y sorting works for some [tufts] but not all... it parts and bends
+   but y ordering is correct only for some" (reported live, after the
+   BAND_COUNT 8→32 fix).** Root cause: `EarthChunkManager._sync_grass_
+   sprites` bucketed a whole cell's `CARD_COUNT=8` cards into a Y-sort band
+   from the cell's own raw, un-offset tile row (`band_index_for_local_y
+   (cell.y, CHUNK_SIZE)`), even though each individual card carries its own
+   random offset from that nominal position (up to a real, verified
+   ±6.8 world units — see `card_specs_for_seed`), computed and applied only
+   AFTER the cell-level band decision was already made. Fixed by making
+   banding per-CARD (see "Banding is per-CARD, not per-cell" above for the
+   mechanism). Verified, honest scope: at today's real `BAND_COUNT=32`/
+   `CHUNK_SIZE=32` ratio, this is provably a no-op on every existing chunk
+   — a card's real offset (6.8) is mathematically incapable of crossing a
+   16-world-unit band boundary from a cell center that starts 8 world units
+   from either edge. The user-visible "only some tufts sort correctly"
+   symptom itself was not independently reproduced or explained by this
+   investigation beyond this one real, verified mechanism; if it persists
+   after this fix, the next most likely cause is the SEPARATE, already-
+   named "dense bush art vs. sparse blade art" visibility difference (same
+   band-coarseness trade-off, worse on `grass_blades.png`'s denser atlas
+   rows) rather than a further banding bug.
 
 ## Status
 
 - ✅ Atlas-backed, GPU-instanced (banded `MultiMeshInstance2D`), per-blade
   curved bending, wind sway, and player wake are wired and verified with
   real (non-headless) renders at real card counts.
+- ✅ Y-sort banding is per-CARD (`IllustratedGrassPatch.cards_for_cell`/
+  `local_row_for_world_y`), not per-cell — see History #9. The player's own
+  safety margin against a band's worst-case blade, honestly including each
+  card's own real ±6.8-world-unit offset (previously omitted from the
+  margin's own math), is a real but thin 3.2 world units, not the ~10
+  units the pre-offset accounting claimed — see `test_illustrated_grass_
+  patch.gd`'s `test_band_height_leaves_a_real_safety_margin_under_the_
+  players_own_max_reach`.
 - ✅ The walker-position uniform updates every frame for every client
   (host and connected), not just whichever peer owns the ecosystem
   simulation — see History #5.

@@ -56,8 +56,9 @@ const FISH_SAFE_RADIUS_FRACTION := 0.28
 ## stroll (see is_clear).
 const TREE_MARGIN := 6.0
 ## World units between grass-clump anchors -- matches roughly one ground
-## tile, since IllustratedGrassPatch.fill_band's own doc comment describes
-## one cell_specs entry as covering about one 16x16 tile.
+## tile, since each clump CharacterPreviewDiorama._build_grass expands (via
+## IllustratedGrassPatch.cards_for_cell) is rooted at one such anchor,
+## covering about one 16x16 tile of ground.
 const GRASS_CLUMP_SPACING := 16.0
 ## The noise scale the grass-clump selection below samples at -- deliberately
 ## NOT TallGrass.FIELD_NOISE_SCALE (0.12), despite reusing everything else

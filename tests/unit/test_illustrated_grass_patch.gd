@@ -111,16 +111,51 @@ func test_grass_opacity_is_never_reduced_by_the_players_own_proximity():
 ## reaches another WORLD_SIZE past that. For native Y-sort to never let
 ## that worst-case card visually reach as high as the player's own real
 ## head, band_height + WORLD_SIZE must stay comfortably under 42.
+##
+## SUPERSEDED accounting (2026-08-27): the above ignored a real term.
+## card_specs_for_seed gives every individual CARD its own random offset
+## from its cell's nominal ground position, up to a real max magnitude --
+## computed below from the live formula (never hardcoded: the formula's own
+## bucket math is 17 buckets, centered to -8..8, times a 0.85 step, so the
+## true bound is exactly 8.0 * 0.85 = 6.8, confirmed empirically across a
+## wide seed sweep, not just algebraically assumed). Added ON TOP of the
+## existing band_height + WORLD_SIZE bound (a deliberately conservative
+## choice, not the tightest possible one -- see
+## test_per_card_banding_matches_cell_level_banding_at_the_real_production_
+## ratio in this same file for why today's actual BAND_COUNT/CHUNK_SIZE
+## ratio never lets a card's own offset cross a band boundary at all, which
+## would make the tighter bound even smaller; this stays a safe upper bound
+## regardless of whether that ratio ever changes).
 func test_band_height_leaves_a_real_safety_margin_under_the_players_own_max_reach():
 	const PLAYER_MAX_REACH_ABOVE_ROOT := 42.0  # character_view.tscn's own real HeadSlot offset
 	var chunk_size := 32  # EarthChunkManager.CHUNK_SIZE
 	var tile_size := 16.0  # TerrainRenderer.TILE_SIZE
+
+	# The real max |offset.y| any card can carry -- computed from the live
+	# formula across a wide seed range, not hardcoded.
+	var max_card_offset_y := 0.0
+	for seed_value in range(500):
+		for spec in IllustratedGrassPatch.card_specs_for_seed(seed_value):
+			var offset: Vector2 = spec.offset
+			max_card_offset_y = maxf(max_card_offset_y, absf(offset.y))
+	assert_almost_eq(
+		max_card_offset_y, 8.0 * 0.85, 0.001,
+		"precondition: the empirically observed max must match the formula's own real bound (17 buckets centered to +/-8, step 0.85)"
+	)
+
 	var band_height_world_units: float = (float(chunk_size) / float(IllustratedGrassPatch.BAND_COUNT)) * tile_size
-	var worst_case_reach: float = band_height_world_units + IllustratedGrassPatch.WORLD_SIZE
+	var worst_case_reach: float = band_height_world_units + max_card_offset_y + IllustratedGrassPatch.WORLD_SIZE
+	assert_almost_eq(worst_case_reach, 38.8, 0.001, "pin the real number this margin is actually computed from")
 	assert_lt(
 		worst_case_reach, PLAYER_MAX_REACH_ABOVE_ROOT,
-		"a band's own worst-case blade must never be able to visually reach the player's real head height"
+		"a band's own worst-case blade, real per-card offset included, must never be able to visually reach the player's real head height"
 	)
+	# Honest: the real margin (42 - 38.8 = 3.2 world units) is real but
+	# thin -- far short of the ~10-unit margin the pre-offset accounting
+	# above claimed. Named here rather than left implicit.
+	var real_margin: float = PLAYER_MAX_REACH_ABOVE_ROOT - worst_case_reach
+	assert_gt(real_margin, 3.0, "the real margin, honestly accounted for")
+	assert_lt(real_margin, 4.0, "...and it really is this thin -- not a rounding artifact of a generous bound")
 
 
 func test_shader_bends_each_pixel_row_along_a_curved_per_blade_path():
@@ -369,85 +404,249 @@ func test_band_anchor_world_y_is_never_smaller_than_any_row_actually_in_that_ban
 		)
 
 
-func test_instances_for_cells_produces_one_instance_per_card_across_all_given_cells():
-	var cell_specs: Array[Dictionary] = [
-		{"seed": 11, "ground_position": Vector2(0, 0), "growth": 1.0},
-		{"seed": 22, "ground_position": Vector2(16, 0), "growth": 0.5},
-	]
-	var instances := IllustratedGrassPatch.instances_for_cells(cell_specs, Vector2.ZERO, Vector2i(1254, 1254))
-	assert_eq(instances.size(), IllustratedGrassPatch.CARD_COUNT * 2)
+# -- per-card Y-sort banding: real position, not the cell's raw row -------
+#
+# Reported live, after the BAND_COUNT 8->32 fix: "y sorting works for some
+# [tufts] but not all... it parts and bends but y ordering is correct only
+# for some." Root cause: EarthChunkManager used to bucket a whole cell's
+# CARD_COUNT cards into a Y-sort band from the cell's own raw, un-offset
+# tile row -- before any card's own random offset (card_specs_for_seed) was
+# even applied. cards_for_cell (below) is the single seam that expands a
+# cell into its real, offset-adjusted per-card positions; both
+# EarthChunkManager's own banding and instances_for_cards' own final
+# placement math read from it, so the two can never drift apart.
 
 
-func test_instances_for_cells_packs_each_instances_atlas_region_into_its_color():
-	var cell_specs: Array[Dictionary] = [{"seed": 7, "ground_position": Vector2.ZERO, "growth": 1.0}]
-	var instances := IllustratedGrassPatch.instances_for_cells(cell_specs, Vector2.ZERO, Vector2i(1254, 1254))
-	var found_a_nontrivial_region := false
-	for entry in instances:
-		var packed: Color = entry.custom_data
-		var region_uv0 := Vector2(packed.r, packed.g)
-		var region_uv1 := Vector2(packed.b, packed.a)
-		assert_gte(region_uv0.x, 0.0)
-		assert_lte(region_uv1.x, 1.0)
-		assert_gt(region_uv1.x, region_uv0.x)
-		assert_gt(region_uv1.y, region_uv0.y)
-		if region_uv1.x - region_uv0.x < 0.5:
-			found_a_nontrivial_region = true
-	assert_true(found_a_nontrivial_region, "precondition: real atlas regions are ~1/10th of the atlas width, not the whole [0,1] default")
-
-
-func test_instances_for_cells_keeps_every_cards_root_at_its_own_ground_position_regardless_of_growth():
-	# Growth scales the card, but the root (transform origin, pre-mesh-
-	# offset) must stay exactly at ground_position - never drift with scale.
+func test_cards_for_cell_expands_a_cell_into_card_count_real_per_card_specs():
 	var ground := Vector2(37.0, -12.0)
-	var cell_specs: Array[Dictionary] = [{"seed": 5, "ground_position": ground, "growth": 0.3}]
-	var instances := IllustratedGrassPatch.instances_for_cells(cell_specs, Vector2.ZERO, Vector2i(1254, 1254))
+	var cell_spec := {"seed": 5, "ground_position": ground, "growth": 0.3}
+	var cards := IllustratedGrassPatch.cards_for_cell(cell_spec)
+	assert_eq(cards.size(), IllustratedGrassPatch.CARD_COUNT)
 	var specs := IllustratedGrassPatch.card_specs_for_seed(5)
-	var offsets_seen: Dictionary = {}
-	for spec in specs:
-		offsets_seen[spec.offset] = true
-	for entry in instances:
-		var transform: Transform2D = entry.transform
-		var matched := false
-		for spec in specs:
-			var expected_root: Vector2 = ground + (spec.offset as Vector2)
-			if transform.origin.is_equal_approx(expected_root):
-				matched = true
-				break
-		assert_true(matched, "instance root %s must match ground_position + some card's own offset" % transform.origin)
+	for i in cards.size():
+		assert_eq(cards[i].atlas_seed, specs[i].seed)
+		assert_true((cards[i].position as Vector2).is_equal_approx(ground + (specs[i].offset as Vector2)))
+		assert_eq(cards[i].growth, 0.3)
 
 
-func test_instances_for_cells_scales_uniformly_by_growth_without_moving_the_root():
-	var cell_specs: Array[Dictionary] = [{"seed": 5, "ground_position": Vector2(10, 10), "growth": 0.6}]
-	var instances := IllustratedGrassPatch.instances_for_cells(cell_specs, Vector2.ZERO, Vector2i(1254, 1254))
-	for entry in instances:
-		var transform: Transform2D = entry.transform
-		assert_almost_eq(transform.x.x, 0.6, 0.001)
-		assert_almost_eq(transform.y.y, 0.6, 0.001)
+func test_local_row_for_world_y_inverts_a_cells_own_ground_position_math():
+	# A cell's own ground_position is (tile.y + 0.5) * tile_size, where
+	# tile.y = chunk_origin_y + local_y -- so feeding that same world Y back
+	# through local_row_for_world_y must recover local_y + 0.5 (the row's
+	# own center, i.e. the position a card with zero offset would sit at).
+	var tile_size := 16.0
+	var chunk_origin_y := 96  # nonzero, matches this file's own convention above
+	var local_y := 5
+	var world_y: float = float(chunk_origin_y + local_y) * tile_size + 0.5 * tile_size
+	var recovered := IllustratedGrassPatch.local_row_for_world_y(world_y, chunk_origin_y, tile_size)
+	assert_almost_eq(recovered, float(local_y) + 0.5, 0.001)
 
 
-func test_instances_for_cells_never_scales_below_the_minimum_visible_floor():
+func test_local_row_for_world_y_matches_the_cells_own_raw_row_for_an_unoffset_position():
+	# The invariant the whole per-card refactor's regression case depends
+	# on: with zero offset, converting a card's real world Y back through
+	# local_row_for_world_y and into band_index_for_local_y must land in the
+	# SAME band band_index_for_local_y(cell.y, ...) already gives directly.
+	var chunk_size := 32
+	var tile_size := 16.0
+	var chunk_origin_y := 0
+	for local_y in range(chunk_size):
+		var world_y: float = float(local_y) * tile_size + 0.5 * tile_size
+		var real_row := IllustratedGrassPatch.local_row_for_world_y(world_y, chunk_origin_y, tile_size)
+		var real_band := IllustratedGrassPatch.band_index_for_local_y(real_row, chunk_size)
+		var naive_band := IllustratedGrassPatch.band_index_for_local_y(local_y, chunk_size)
+		assert_eq(real_band, naive_band)
+
+
+## The direct, real proof that per-card banding differs from the OLD
+## cell-raw-row banding once a card's own offset genuinely crosses a band
+## boundary -- verified numbers, not assumed. Real seed 7's cell has 8
+## cards whose offset.y is either exactly +6.8 (6 cards, indices 0-5) or
+## exactly -6.8 (2 cards, indices 6-7) -- confirmed by direct inspection of
+## card_specs_for_seed(7). At today's real production BAND_COUNT=32/
+## CHUNK_SIZE=32 ratio (one band == one full tile row == 16 world units)
+## neither offset is large enough to cross a boundary (see the regression
+## test below) -- so this test deliberately uses a finer band_count (48,
+## band_height = 32/48 tile = 10.667 world units) purely to exercise the
+## underlying mechanism, the same way this file's other band_index tests
+## already use literal chunk_size/band_count values decoupled from
+## EarthChunkManager's own real ones.
+func test_per_card_banding_splits_a_single_cells_cards_across_two_real_bands():
+	var chunk_size := 32
+	var band_count := 48
+	var tile_size := 16.0
+	var chunk_origin_y := 0
+	var local_y := 0
+
+	var cell_spec := {
+		"seed": 7,
+		"ground_position": Vector2(8.0, (float(local_y) + 0.5) * tile_size),
+		"growth": 1.0,
+	}
+	var naive_band := IllustratedGrassPatch.band_index_for_local_y(local_y, chunk_size, band_count)
+
+	var cards := IllustratedGrassPatch.cards_for_cell(cell_spec)
+	assert_eq(cards.size(), 8, "precondition: CARD_COUNT is still 8")
+
+	var crossed := 0
+	var stayed := 0
+	for card in cards:
+		var real_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, chunk_origin_y, tile_size)
+		var real_band := IllustratedGrassPatch.band_index_for_local_y(real_row, chunk_size, band_count)
+		if real_band == naive_band:
+			stayed += 1
+		else:
+			assert_eq(real_band, naive_band + 1, "a crossing card must land in the immediately-next band, not further")
+			crossed += 1
+	assert_eq(crossed, 6, "the 6 cards whose real offset.y is +6.8 must cross into the next band")
+	assert_eq(stayed, 2, "the 2 cards whose real offset.y is -6.8 must stay in the cell's own nominal band")
+
+
+## Regression, at TODAY's real production ratio: every card of every cell
+## stays in its own cell's raw-row band -- per-card banding must not
+## silently reshuffle anything under the actual live BAND_COUNT/CHUNK_SIZE
+## the game really runs with (band_height=16 world units, comfortably more
+## than double any card's real max |offset.y|=6.8), only under a
+## deliberately finer ratio like the crossing test above. Proven generally
+## (every row in a real chunk, many real cell seeds), not spot-checked.
+func test_per_card_banding_matches_cell_level_banding_at_the_real_production_ratio():
+	var chunk_size := 32  # EarthChunkManager.CHUNK_SIZE
+	var band_count := IllustratedGrassPatch.BAND_COUNT  # today's real value
+	var tile_size := 16.0
+	var chunk_origin_y := 0
+	for local_y in range(chunk_size):
+		var naive_band := IllustratedGrassPatch.band_index_for_local_y(local_y, chunk_size, band_count)
+		for seed_value in range(20):
+			var cell_spec := {
+				"seed": seed_value,
+				"ground_position": Vector2(8.0, (float(local_y) + 0.5) * tile_size),
+				"growth": 1.0,
+			}
+			for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+				var real_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, chunk_origin_y, tile_size)
+				var real_band := IllustratedGrassPatch.band_index_for_local_y(real_row, chunk_size, band_count)
+				assert_eq(real_band, naive_band, "at the real production ratio no card's own offset can cross a band boundary")
+
+
+## No card is gained or lost by which band it ends up grouped into --
+## summing a chunk's bands' instance counts must always equal
+## CARD_COUNT * num_cells, whether banding is coarse (every card of every
+## cell landing in one band) or fine enough that cards from the same cell
+## genuinely split across two (mirrors the split proven above).
+func test_regrouping_cards_by_band_never_gains_or_loses_a_card():
+	var chunk_size := 32
+	var tile_size := 16.0
+	var cell_seeds := [3, 7, 42, 100]
+	for band_count in [8, 32, 48, 96]:
+		var cards_by_band: Dictionary = {}
+		for seed_value in cell_seeds:
+			var cell_spec := {
+				"seed": seed_value,
+				"ground_position": Vector2(8.0, 8.0),
+				"growth": 1.0,
+			}
+			for card in IllustratedGrassPatch.cards_for_cell(cell_spec):
+				var real_row := IllustratedGrassPatch.local_row_for_world_y(card.position.y, 0, tile_size)
+				var band := IllustratedGrassPatch.band_index_for_local_y(real_row, chunk_size, band_count)
+				var list: Array = cards_by_band.get(band, [])
+				list.append(card)
+				cards_by_band[band] = list
+		var total := 0
+		for band in cards_by_band:
+			total += (cards_by_band[band] as Array).size()
+		assert_eq(
+			total, IllustratedGrassPatch.CARD_COUNT * cell_seeds.size(),
+			"band_count=%d must not change how many cards exist in total, only their grouping" % band_count
+		)
+
+
+# -- instances_for_cards: pure placement math over pre-expanded cards -----
+#
+# Takes CARD specs directly (not cell specs) -- deliberately does NOT
+# expand a cell itself (that is cards_for_cell's own single job above), so
+# a cell whose cards straddle two bands can be split across two separate
+# calls without any card being drawn twice or silently dropped.
+
+
+func test_instances_for_cards_produces_one_instance_per_given_card_with_no_further_expansion():
+	var card_specs: Array[Dictionary] = [
+		{"atlas_seed": 11, "position": Vector2(0, 0), "growth": 1.0},
+		{"atlas_seed": 22, "position": Vector2(16, 0), "growth": 0.5},
+	]
+	var instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, Vector2i(1254, 1254))
+	assert_eq(instances.size(), 2)
+
+
+func test_instances_for_cards_packs_each_instances_atlas_region_into_its_color():
+	var card_specs: Array[Dictionary] = [{"atlas_seed": 7, "position": Vector2.ZERO, "growth": 1.0}]
+	var instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, Vector2i(1254, 1254))
+	var packed: Color = instances[0].custom_data
+	var region_uv0 := Vector2(packed.r, packed.g)
+	var region_uv1 := Vector2(packed.b, packed.a)
+	assert_gte(region_uv0.x, 0.0)
+	assert_lte(region_uv1.x, 1.0)
+	assert_gt(region_uv1.x, region_uv0.x)
+	assert_gt(region_uv1.y, region_uv0.y)
+
+
+func test_instances_for_cards_places_the_root_exactly_at_the_given_position_regardless_of_growth():
+	# Growth scales the card, but the root (transform origin, pre-mesh-
+	# offset) must stay exactly at the given position - never drift with
+	# scale.
+	var position := Vector2(37.0, -12.0)
+	var card_specs: Array[Dictionary] = [{"atlas_seed": 5, "position": position, "growth": 0.3}]
+	var instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, Vector2i(1254, 1254))
+	var transform: Transform2D = instances[0].transform
+	assert_true(transform.origin.is_equal_approx(position))
+
+
+func test_instances_for_cards_scales_uniformly_by_growth_without_moving_the_root():
+	var card_specs: Array[Dictionary] = [{"atlas_seed": 5, "position": Vector2(10, 10), "growth": 0.6}]
+	var instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, Vector2i(1254, 1254))
+	var transform: Transform2D = instances[0].transform
+	assert_almost_eq(transform.x.x, 0.6, 0.001)
+	assert_almost_eq(transform.y.y, 0.6, 0.001)
+
+
+func test_instances_for_cards_never_scales_below_the_minimum_visible_floor():
 	# maxf(0.3, growth): a barely-sprouted patch (growth near 0) must not
 	# shrink to invisible.
-	var cell_specs: Array[Dictionary] = [{"seed": 5, "ground_position": Vector2.ZERO, "growth": 0.0}]
-	var instances := IllustratedGrassPatch.instances_for_cells(cell_specs, Vector2.ZERO, Vector2i(1254, 1254))
-	for entry in instances:
-		var transform: Transform2D = entry.transform
-		assert_almost_eq(transform.x.x, 0.3, 0.001)
+	var card_specs: Array[Dictionary] = [{"atlas_seed": 5, "position": Vector2.ZERO, "growth": 0.0}]
+	var instances := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2.ZERO, Vector2i(1254, 1254))
+	var transform: Transform2D = instances[0].transform
+	assert_almost_eq(transform.x.x, 0.3, 0.001)
 
 
-func test_fill_band_rebuilds_cleanly_when_called_again_with_fewer_cells():
+## Whichever band a card ultimately lands in, its own atlas region/root
+## position/growth-derived scale must be byte-identical -- only the
+## band_anchor (a local-position offset, not a placement input) may differ.
+func test_instances_for_cards_placement_is_independent_of_which_band_anchor_it_is_drawn_relative_to():
+	var card_specs: Array[Dictionary] = [{"atlas_seed": 9, "position": Vector2(50.0, 80.0), "growth": 0.75}]
+	var instances_a := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2(0.0, 0.0), Vector2i(1254, 1254))
+	var instances_b := IllustratedGrassPatch.instances_for_cards(card_specs, Vector2(200.0, -400.0), Vector2i(1254, 1254))
+	var transform_a: Transform2D = instances_a[0].transform
+	var transform_b: Transform2D = instances_b[0].transform
+	assert_true(
+		(transform_a.origin + Vector2(0.0, 0.0)).is_equal_approx(transform_b.origin + Vector2(200.0, -400.0)),
+		"absolute placement must not depend on the band_anchor used to draw it"
+	)
+	assert_eq(instances_a[0].custom_data, instances_b[0].custom_data, "atlas region must not depend on the band_anchor")
+	assert_almost_eq(transform_a.x.x, transform_b.x.x, 0.001, "growth-derived scale must not depend on the band_anchor")
+
+
+func test_fill_band_rebuilds_cleanly_when_called_again_with_fewer_cards():
 	# A cell losing its grass (grazed, built on) must not leave stale
 	# instances behind from the previous call.
 	var patch := IllustratedGrassPatch.new()
 	var mmi: MultiMeshInstance2D = autofree(MultiMeshInstance2D.new())
-	patch.fill_band(mmi, Vector2.ZERO, [
-		{"seed": 1, "ground_position": Vector2(0, 0), "growth": 1.0},
-		{"seed": 2, "ground_position": Vector2(16, 0), "growth": 1.0},
-	])
+	var cell_a := {"seed": 1, "ground_position": Vector2(0, 0), "growth": 1.0}
+	var cell_b := {"seed": 2, "ground_position": Vector2(16, 0), "growth": 1.0}
+	var all_cards: Array[Dictionary] = []
+	all_cards.append_array(IllustratedGrassPatch.cards_for_cell(cell_a))
+	all_cards.append_array(IllustratedGrassPatch.cards_for_cell(cell_b))
+	patch.fill_band(mmi, Vector2.ZERO, all_cards)
 	var before := mmi.multimesh.instance_count
-	patch.fill_band(mmi, Vector2.ZERO, [
-		{"seed": 1, "ground_position": Vector2(0, 0), "growth": 1.0},
-	])
+	patch.fill_band(mmi, Vector2.ZERO, IllustratedGrassPatch.cards_for_cell(cell_a))
 	assert_lt(mmi.multimesh.instance_count, before)
 	assert_eq(mmi.multimesh.instance_count, IllustratedGrassPatch.CARD_COUNT)
 
