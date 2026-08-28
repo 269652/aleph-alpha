@@ -1575,6 +1575,114 @@ gradually leaf by leaf or shed their leaves or see them turn orange"*,
   homes. 33/33 in `test_character_preview_layout.gd`, 61/61 in
   `test_character_preview_diorama.gd` (unchanged, confirming no
   regression from the shared-constant move).
+- **Addendum, same session -- a real, game-wide blocker, unrelated to any
+  diorama work**: an in-progress `git merge claude/relaxed-neumann-cb1e9e
+  into main` had been left with 8 files unresolved (`UU` in `git status`),
+  including `scenes/player.gd` and `src/rendering/creature_marker.gd` --
+  `world.gd` failed to parse entirely as a result, so nothing could load,
+  diorama included. A concurrent session resolved the conflict-marker text
+  live while this was being investigated, but its own resolution of
+  `creature_marker.gd` left one real bug behind: a juvenile-wander-radius
+  call site passed `_wander_radius()` as a 6th positional argument to
+  `CreatureWander.step_position` (only 5 params) instead of setting
+  `wander_radius` as an instance property first, a hard parse error
+  blocking the whole game. Found and fixed; verified against its own
+  `test_a_growing_juvenile_wanders_tighter_to_its_home_than_an_adult`.
+- **Addendum, same session -- the bird fix above wasn't enough**: reported
+  live again after the radius-only fix ("Birds still cycle between two
+  fixed points"). Root cause of why: growing `BIRD_WANDER_RADIUS` alone
+  only brought the travel-per-interval/diameter ratio down to 102% -- a
+  bird still blew through its own circle and hit the boundary-curving
+  containment logic almost every single interval, just on a bigger
+  circle. `AmbientFlyerRenderer.build_bird` never exposed an interval
+  override the way it already did for radius, so growing the radius was
+  the only lever available -- and radius alone tops out around a 102%
+  ratio on this footprint (a comfortable ~65% ratio would need a radius
+  past 47, eating nearly this diorama's whole 96-unit short axis).
+  `build_bird` now also accepts an `interval` override (same shape/
+  precedent as `radius`); the diorama's own new `BIRD_WANDER_INTERVAL`
+  (0.9s, paired with the existing `BIRD_WANDER_RADIUS`) brings the ratio
+  to 51%. Traced directly against the live movement code (not just
+  inferred from the numbers): the bird now settles into a smooth, steady
+  orbit at roughly its own radius, rather than either the original tight
+  jitter or the first fix's wide 17-42 unit swings -- a real "circle
+  overhead," matching this scene's own original design intent. 42/42 in
+  `test_ambient_flyer_renderer.gd`, 33/33 in
+  `test_character_preview_layout.gd`. **Still not confirmed against a
+  clean live screenshot** -- six straight attempts this session were all
+  disrupted by another concurrent session's input landing on the same
+  launched window before a usable frame could be captured (see
+  `docs/concept/character_creator_preview_scene.md`'s own note); asked the
+  user whether they were looking at the diorama specifically or the real
+  world's own birds (which use the unmodified real-world radius/interval,
+  untouched by any of this).
+- **Addendum, same session -- confirmed "in the diorama", and a THIRD
+  report ("Birds still cycle between two fixed points") found the REAL
+  root cause**: neither of the two fixes above was wrong, but neither
+  touched the actual bug, because both were diagnosed off DISTANCE from
+  home, which this bug barely changes either way. Re-traced watching the
+  bird's own ANGLE relative to home at fine (0.2s) granularity instead:
+  it sweeps smoothly for under a second, then reverses, sweeps back,
+  reverses again -- a real back-and-forth along a short arc, not the
+  smooth orbit the distance-only trace suggested. Root cause, in
+  `AmbientFlyerMovement._turn_sign` (shared with the real world's own
+  birds/butterflies, not diorama-specific): it rerolled an independent
+  50/50 coin flip every single `direction_change_interval`, with zero
+  correlation to the previous interval's roll -- so a flyer settled into
+  "contained" (near-boundary, circling) mode had its sweep direction
+  reverse roughly every other interval. `BIRD_WANDER_RADIUS`/
+  `BIRD_WANDER_INTERVAL` (both diorama-only scaling constants) could
+  never have fixed this; it's a bug in the shared algorithm itself, just
+  far less visible in the real world at its own slower default interval
+  (twice as many reversals per second at this diorama's shorter one).
+  Fixed by making `_turn_sign` a pure function of `seed_value` alone --
+  each flyer now holds one persistent rotational sense for its whole
+  life, which is all a genuinely circling animal ever needs. Verified
+  directly: 0 reversals over 20 simulated seconds post-fix (was
+  reversing roughly every ~1s before). `CreatureWander` (land creatures --
+  the boar, etc.) uses a structurally different containment algorithm
+  with no turn-sign mechanism at all, so it was never affected and was
+  correctly left untouched. Pinned by two new tests in
+  `test_ambient_flyer_movement.gd` (root-cause + behavioral), 15/15 in
+  that file, 110/110 in `test_ambient_flyer_marker.gd` -- two of which
+  needed their own re-pin (a seed-dispersal-distance floor, 2.0 tiles ->
+  1.0) since a persistently-circling flyer nets somewhat less drift from
+  a fixed point than the old reversing-and-therefore-more-random-walk one
+  did, for that test's own fixed seed; see that test's own doc comment,
+  and a separately-flagged background task, for the much bigger,
+  pre-existing gap this incidentally surfaced (real bird seed dispersal
+  achieves ~1.7 tiles against a 10-40 tile design intent -- not caused by
+  this fix, just narrowly missed by a test floor that was never close to
+  the real target either way).
+
+✅ **Fifteenth live pass: the pond again, and a rounder shore.** *"can you
+add border radius to grass / water boundary and make the pond larger so
+it reaches the edges?"*
+
+- **Pond, a third growth**: `POND_RADIUS_FRACTION` 0.33 -> 0.42 -- close to
+  the real ceiling `_pond_center_near_an_edge`'s own placement algorithm
+  allows before its along-edge `randf_range` call collapses to an empty
+  range (near_edge needs to stay under half the footprint's own 96-unit
+  short axis). Paired with `POND_EDGE_MARGIN` 4.0 -> 1.5 so the pond
+  actually sits close to the frame it's nearest to, not just bigger while
+  leaving the same gap as before -- the concrete "reaches the edges" claim
+  is now itself a passing test
+  (`test_pond_boundary_reaches_within_its_margin_of_some_footprint_edge`),
+  not just a size bump. The earlier robustness fix to the grass-noise
+  centre test (gating probes on the real `is_clear` predicate instead of
+  fixed points -- see the Fourteenth pass) paid off here: it kept passing
+  with zero further changes despite the pond eating even more central
+  area, exactly the point of having fixed it that way.
+- **Pond corners, more rounded**: `POND_EROSION_SAFE_FRACTION` 0.35 ->
+  0.15, more than tripling the width of the corner band noise is allowed
+  to erode. Measured before picking, not eyeballed: average kept fraction
+  across 20 seeds moves from 0.856 to 0.815 (still comfortably above the
+  0.6 "still reads as a pond" floor the existing erosion tests already
+  guard). The real diorama's own pond grid at the new 0.42 fraction still
+  comes out to exactly the 6x4 test grid these numbers were measured
+  against.
+- 35/35 in `test_character_preview_layout.gd`, 62/62 in
+  `test_character_preview_diorama.gd`.
 
 ⬜ FOOTPRINT.y (still 96) and the overall zoom level are otherwise unchanged
 and still need a user decision on how large the hero should read. Note for
