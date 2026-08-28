@@ -2794,8 +2794,18 @@ func _handle_settlement_command(args: Array) -> void:
 	var active_institutions := _chunk_manager.active_institution_count_for_settlement(entity_id)
 	var production_counts := _chunk_manager.production_counts_for_settlement(entity_id)
 	var institution_type_counts := _chunk_manager.institution_type_counts_for_settlement(entity_id)
+	# The LIVE VillageMarket too, not just the persisted emergence Market: those
+	# are two different things both called "the market", and step_settlements /
+	# legitimacy_for_settlement classify a settlement off BOTH (see
+	# SettlementFood). Reporting off only the emergence one had /settlement
+	# printing "food: 0 (capacity 0) / declining" for a village visibly holding
+	# food -- the console contradicting the simulation that had just
+	# event-sourced it growing. Null for an unloaded chunk, which
+	# explain_settlement handles.
+	var village_market = _chunk_manager.village_market_for_settlement(entity_id)
 	for line in Why.explain_settlement(
-		market, household_count, entity_id, active_institutions, production_counts, institution_type_counts
+		market, household_count, entity_id, active_institutions, production_counts,
+		institution_type_counts, village_market
 	).split("
 "):
 		_dev_console.log_line(line)

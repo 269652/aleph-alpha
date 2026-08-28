@@ -77,6 +77,8 @@ const InstitutionStorePersistence = preload("res://src/emergence/institution_sto
 const InstitutionFormation = preload("res://src/emergence/institution_formation.gd")
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const SettlementFood = preload("res://src/emergence/settlement_food.gd")
+const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
 const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
@@ -1150,12 +1152,101 @@ func _drive_contract(contract_id: String, transitioned: bool, event_type: String
 	return true
 
 
+## Records one contract lifecycle transition as a real event, naming the
+## villagers who were there for the ones worth being there for.
+##
+## _step_settlement_trade drives this every settlement step, which makes
+## contract_proposed/accepted/active/fulfilled the highest-volume real
+## settlement activity in this file -- so witnesses land here already
+## bounded rather than as an unbounded fan-out into a persisted MemoryStore
+## (the same lesson _settlement_production_outcome and
+## SETTLEMENT_STATUS_DWELL_STEPS already carry). Two bounds, both on the
+## MEMORY side only: the events themselves are always appended in full,
+## because each contract really is its own contract and the event ledger is
+## what /why reads back.
+##
+## 1. Only the OUTCOME is witnessed (see _CONTRACT_OUTCOME_EVENTS). The
+##    whole propose -> accept -> activate -> fulfil chain runs inside a
+##    single step, so witnessing each link would hand every villager four
+##    memories of one trade; how it ended is the part a villager carries.
+## 2. A repeat of the same outcome between the same parties is not news,
+##    exactly _settlement_production_outcome's rule keyed on the pair rather
+##    than on settlement|recipe -- the same two households trade every step
+##    forever, and "they made good again" is not a thing anyone would
+##    re-learn. A CHANGE (a pair that has been fulfilling starts breaching)
+##    is news and is witnessed.
 func _record_contract_event(event_type: String, contract: Contract) -> void:
 	var event := Event.new(event_type, _world_age_seconds)
 	for party in contract.parties:
 		event.actors.append(party)
+	if _contract_outcome_is_news(event_type, event.actors):
+		event.witnesses = _villager_witnesses_of(event.actors)
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
+
+
+## How a contract ENDED -- the transitions a villager would actually carry a
+## memory of, as opposed to the bookkeeping that gets a trade to one of
+## them. Matches ContractStore's own terminal states.
+const _CONTRACT_OUTCOME_EVENTS := [
+	"contract_fulfilled", "contract_breached", "contract_defaulted", "contract_cancelled",
+]
+## "party|party|..." (sorted) -> the last outcome actually fanned to that
+## group's villagers. A session-lifetime cache only -- the answer it holds
+## is derived from the PERSISTED event history (see
+## _recorded_contract_outcome), which is what actually makes the guard
+## survive a reload. Without that seeding it was worse than no guard across
+## loads: the same two households trade every step forever, so every load
+## re-fanned one more identical MemoryRecord to every villager into a
+## persisted store, exactly the growth the guard exists to stop.
+var _contract_outcome_witnessed: Dictionary = {}
+
+
+## True when this transition is an OUTCOME these parties have not already
+## had witnessed -- and records it as witnessed, so the caller asks exactly
+## once per event.
+func _contract_outcome_is_news(event_type: String, parties: Array[String]) -> bool:
+	if not _CONTRACT_OUTCOME_EVENTS.has(event_type):
+		return false
+	var sorted_parties: Array[String] = []
+	for party in parties:
+		sorted_parties.append(party)
+	sorted_parties.sort()
+	var key := "|".join(sorted_parties)
+	# First ask of the session: what these parties last had witnessed is on
+	# disk, not gone -- read it back before treating this as their first.
+	if not _contract_outcome_witnessed.has(key):
+		_contract_outcome_witnessed[key] = _recorded_contract_outcome(sorted_parties)
+	if _contract_outcome_witnessed.get(key, "") == event_type:
+		return false
+	_contract_outcome_witnessed[key] = event_type
+	return true
+
+
+## The last contract OUTCOME actually recorded between exactly these parties,
+## read back out of the persisted event graph, or "" if they have never had
+## one. Guarded on real history rather than an in-memory flag, the same
+## convention record_path_worn_if_new and _record_ruin_from already follow.
+##
+## Walks one party's own event index backwards and keeps only the outcomes
+## whose actor set is exactly this group -- a household trades with several
+## neighbours, and "how it went with THIS partner" is the thing the caller's
+## key is about.
+func _recorded_contract_outcome(sorted_parties: Array[String]) -> String:
+	if sorted_parties.is_empty():
+		return ""
+	var history := _event_store.events_for_entity(sorted_parties[0])
+	for i in range(history.size() - 1, -1, -1):
+		var event: Event = history[i]
+		if not _CONTRACT_OUTCOME_EVENTS.has(event.type):
+			continue
+		var actors: Array[String] = []
+		for actor in event.actors:
+			actors.append(actor)
+		actors.sort()
+		if actors == sorted_parties:
+			return event.type
+	return ""
 
 
 ## Local supply/demand-driven markets, one per settlement (see
@@ -1214,19 +1305,93 @@ func wipe_market_store(path: String = MarketStorePersistence.SAVE_PATH) -> void:
 ## recorded as a success -- the Phase 5 exit criterion ("a resource shortage
 ## can... cause downstream production failure") made concrete and
 ## /why-inspectable, not a scripted event.
+##
+## ONE ATTEMPT IS NO LONGER ONE EVENT. This is public API -- the dev console
+## calls it directly -- and its contract changed when
+## _settlement_production_outcome landed: a repeated FAILURE of the same
+## settlement|recipe pair returns a perfectly real `result` and records
+## nothing at all, because the shortage is already on record and nothing
+## about it has changed. Callers get the truthful outcome of every attempt;
+## only a caller that counted EVENTS to count attempts is wrong. Successes
+## are unaffected -- every one of them is still recorded, one per attempt
+## (see _settlement_production_outcome for why that asymmetry is deliberate).
 func attempt_production(settlement_id: String, recipe_id: String) -> Dictionary:
 	var market := _market_store.market_for(settlement_id)
 	var result: Dictionary = market.produce(_recipe_book, recipe_id)
+
+	# A repeated FAILURE is not news (see _settlement_production_outcome):
+	# the shortage is already recorded and nothing about it has changed.
+	var outcome_key := "%s|%s" % [settlement_id, recipe_id]
+	# First ask of the session for this pair: how it last went is on disk,
+	# not gone -- read it back before treating this as their first attempt.
+	if not _settlement_production_outcome.has(outcome_key):
+		var recorded := _recorded_production_outcome(settlement_id, recipe_id)
+		if recorded != "":
+			_settlement_production_outcome[outcome_key] = recorded
+	var previously_failed: bool = _settlement_production_outcome.get(outcome_key, "") == "failed"
+	_settlement_production_outcome[outcome_key] = "succeeded" if result.success else "failed"
+	if not result.success and previously_failed:
+		return result
 
 	var event := Event.new(
 		"production_succeeded" if result.success else "production_failed", _world_age_seconds
 	)
 	event.actors.append(settlement_id)
 	event.tags.append(recipe_id)
+	event.witnesses = _villager_witnesses_of(event.actors)
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 
 	return result
+
+
+## settlement_id|recipe_id -> the last outcome actually event-sourced for
+## that pair, so a settlement that has been short of an input for an hour
+## says so ONCE. Exactly the guard _settlement_status already applies to
+## status labels, for exactly the same reason ("do not event-source every
+## low-level movement"): _step_settlement_production re-attempts every
+## household's recipe every SETTLEMENT_STEP_INTERVAL, so an unstocked
+## settlement was appending an identical production_failed record roughly
+## once per household per 30s forever -- within ten minutes every villager's
+## entire memory bank is one repeated non-event, with nothing left to
+## gossip about or disagree over.
+##
+## SUCCESSES are deliberately NOT guarded: each one is real goods that were
+## really made, and _production_counts_for_settlement counts them one by one
+## to infer specialization -- collapsing repeats there would silently break
+## Phase 9's tier/specialization derivation.
+##
+## A session-lifetime cache only, but not a session-lifetime memory: the
+## answer it holds is derived from the PERSISTED event history (see
+## _recorded_production_outcome), the same seeding _settlement_status and
+## _contract_outcome_witnessed already carry. Without it every load
+## re-recorded each still-failing recipe once more -- measured on a real
+## six-store reload of an unchanged one-household settlement, that plus the
+## tier hole below was +2 events and +2 MemoryRecords per villager, per
+## load, forever, into a store that only ever grows.
+var _settlement_production_outcome: Dictionary = {}
+
+
+## How `recipe_id` last actually went for `settlement_id`, read back out of
+## the persisted event history ("failed"/"succeeded", or "" if it has never
+## been attempted) -- guarded on real history rather than an in-memory flag,
+## the same convention _recorded_settlement_status and
+## _recorded_contract_outcome already follow.
+##
+## Matched on BOTH halves of the caller's key: attempt_production records
+## the recipe as the event's first tag and the settlement as its actor, and
+## a settlement runs one recipe per occupation, so "how it went" is only
+## meaningful for this settlement AND this recipe.
+func _recorded_production_outcome(settlement_id: String, recipe_id: String) -> String:
+	var history := _event_store.events_for_entity(settlement_id)
+	for i in range(history.size() - 1, -1, -1):
+		var event: Event = history[i]
+		if event.type != "production_failed" and event.type != "production_succeeded":
+			continue
+		if event.tags.is_empty() or event.tags[0] != recipe_id:
+			continue
+		return "failed" if event.type == "production_failed" else "succeeded"
+	return ""
 
 
 ## Institutions (see docs/emergence/01-society-and-institutions.md) -- one
@@ -1274,6 +1439,7 @@ func attempt_institution_formation(type: String, party_a: String, party_b: Strin
 	event.actors.append(party_a)
 	event.actors.append(party_b)
 	event.importance = 0.3
+	event.witnesses = _villager_witnesses_of(event.actors)
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 	return institution
@@ -1303,6 +1469,7 @@ func dissolve_institution(institution_id: String) -> bool:
 	var event := Event.new("institution_dissolved", _world_age_seconds)
 	for member in institution.members:
 		event.actors.append(member)
+	event.witnesses = _villager_witnesses_of(event.actors)
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 	# Emergence Phase 10, source 3 (docs/emergence/05 "Social transformation:
@@ -1333,6 +1500,17 @@ func _record_ruin_from(ruin_key: String, cause_event_id: String) -> void:
 	var event := Event.new("ruin_formed", _world_age_seconds)
 	event.actors.append(ruin_id)
 	event.importance = 0.4
+	# A ruin has no villagers of its own -- but whoever watched the
+	# settlement decline, or the institution collapse, that CAUSED it is
+	# exactly who watched the ruin appear. Inherited from the cause rather
+	# than re-derived, so the witnesses of an effect can never contradict
+	# the witnesses of the event this same call is about to link it to.
+	# A cause nobody saw (a path quietly reclaimed by the forest) leaves a
+	# ruin nobody saw either, which is the honest answer.
+	var cause := _event_store.get_event(cause_event_id)
+	if cause != null:
+		for witness_id in cause.witnesses:
+			event.witnesses.append(witness_id)
 	_event_store.append(event)
 	_event_store.link_cause(event.id, cause_event_id)
 	_memory_store.witness_event(event, _world_age_seconds)
@@ -1575,17 +1753,113 @@ var _settlement_step_accumulator := 0.0
 ## settlement_id -> last recorded SettlementState status, so a status is
 ## only ever event-sourced on a real CHANGE -- "do not event-source every
 ## low-level movement," the same principle every other coordinator in this
-## file already respects. Not persisted: a reload recomputes fresh from the
-## real (persisted) market/household state and may re-record its current
-## status once more on the first step after loading -- a known, accepted
-## rough edge, not a source of runaway duplicate events, since it can only
-## ever re-fire once per reload rather than repeatedly.
+## file already respects. A session-lifetime cache only, but NOT a
+## session-lifetime memory: the first time a settlement is assessed in a
+## session this is seeded from the settlement's own PERSISTED event history
+## (see _recorded_settlement_status), so a status that has not actually
+## changed since the last session emits nothing.
+##
+## That seeding is the whole reason the dwell below is worth anything. The
+## dwell exempts a settlement's FIRST assessment -- and without seeding,
+## EVERY settlement ever founded is first-assessed again on every load,
+## re-firing one event and one MemoryRecord per villager into stores that
+## are persisted and only ever grow. Worse still right after a load, when
+## almost no chunk is loaded and SettlementFood.village_market_for returns
+## null for nearly the whole world, so nearly the whole world would re-fire
+## settlement_declining at once.
 var _settlement_status: Dictionary = {}
+## How many consecutive assessments a NEW status has to hold before it is
+## event-sourced -- the dwell half of the guard above, added once capacity
+## started reading the LIVE VillageMarket (see SettlementFood). Before that
+## it read a Market live play never stocks, so capacity was ~always 0,
+## status was pinned DECLINING and this event effectively never re-fired;
+## now the number under it rises every time a villager gathers, falls every
+## time one eats, and collapses whenever the chunk unloads, so a settlement
+## parked on a band boundary re-crosses it every step -- appending an event
+## AND, since witnesses were wired, fanning a MemoryRecord to every villager
+## into an unbounded, persisted MemoryStore. Exactly the noise
+## _settlement_production_outcome exists to stop, multiplied by the villager
+## count.
+##
+## Not a taste number, but be honest about which number it is. It is
+## borrowed from the capacity rule, not measured against the clock: capacity
+## is floor(food / FOOD_PER_HOUSEHOLD) and a VillageMarket's smallest real
+## food move is one whole meal (its own FOOD_UNITS_PER_MEAL, the unit
+## SettlementFood counts in), so FOOD_PER_HOUSEHOLD single-meal moves is the
+## smallest food change that can shift capacity by one whole household --
+## the smallest change that is the settlement changing rather than the band
+## boundary being brushed.
+##
+## MEALS AND ASSESSMENTS ARE NOT THE SAME UNIT, and this constant does not
+## pretend they are. SETTLEMENT_STEP_INTERVAL is 30 world-seconds and
+## villagers gather and eat continuously, so many meals move between any two
+## assessments -- requiring FOOD_PER_HOUSEHOLD assessments is therefore not
+## "wait exactly as long as one household of capacity takes to move." It is
+## an ordinal taken from the one real quantity the classification is already
+## built on, so the window is derived from the same rule rather than picked,
+## and it is deliberately the loosest such number available rather than a
+## fitted one. What it actually buys is pinned in tests, not asserted here:
+## a status that flips back and forth across a band boundary never fires,
+## and one that holds for this many consecutive assessments does.
+const SETTLEMENT_STATUS_DWELL_STEPS := SettlementState.FOOD_PER_HOUSEHOLD
+## settlement_id -> {"status", "steps"}: the status currently being dwelt on
+## and how many consecutive assessments it has held. Cleared the moment the
+## settlement reads as its already-recorded status again, so a wobble never
+## accumulates across an intervening return to normal. Session-lifetime, and
+## unlike _settlement_status it needs no seeding: a settlement whose status
+## is unchanged since the last session never reaches the dwell at all, and
+## one whose status really has changed is genuinely at step one of holding
+## it. An assessment that is SKIPPED (see step_settlements' unloaded-chunk
+## guard) leaves the count frozen rather than resetting it -- no assessment
+## happened, so nothing contradicted the run so far.
+var _settlement_status_dwell: Dictionary = {}
 ## settlement_id -> last recorded SettlementTier tier / specialization,
-## same "event-source only a real CHANGE, not persisted, accepted reload
-## rough edge" reasoning as _settlement_status immediately above.
+## same "event-source only a real CHANGE" reasoning as _settlement_status
+## immediately above -- and, like it, session-lifetime caches whose first
+## answer of a session is read back out of the PERSISTED event history (see
+## _recorded_settlement_tier / _recorded_settlement_specialization).
+##
+## Unseeded, the tier one was the single largest re-fire of this whole
+## shape: EVERY settlement ever founded has a tier, always, so every load
+## re-announced one for every settlement in the world -- one event and one
+## MemoryRecord per villager apiece, into stores that only ever grow.
 var _settlement_tier: Dictionary = {}
 var _settlement_specialization: Dictionary = {}
+
+
+## The tier `settlement_id` was last actually event-sourced as, read back
+## out of its own persisted event history, or "" if it has never been
+## classified -- the same convention _recorded_settlement_status follows,
+## one event type over.
+##
+## Checked against SettlementTier.TIERS rather than trusted from the prefix,
+## so a future settlement_became_<something-else> can never be mistaken for
+## a tier the classifier would ever produce.
+func _recorded_settlement_tier(settlement_id: String) -> String:
+	var history := _event_store.events_for_entity(settlement_id)
+	for i in range(history.size() - 1, -1, -1):
+		var event: Event = history[i]
+		if not event.type.begins_with("settlement_became_"):
+			continue
+		var tier := event.type.substr("settlement_became_".length())
+		if SettlementTier.TIERS.has(tier):
+			return tier
+	return ""
+
+
+## What `settlement_id` was last actually event-sourced as specializing in,
+## read back out of its own persisted event history, or "" if it never has
+## been. The specialization itself is the event's first TAG rather than part
+## of its type (see _step_settlement_classification), so an untagged
+## settlement_specialized -- which nothing writes -- reads as never having
+## specialized rather than as an empty specialization.
+func _recorded_settlement_specialization(settlement_id: String) -> String:
+	var history := _event_store.events_for_entity(settlement_id)
+	for i in range(history.size() - 1, -1, -1):
+		var event: Event = history[i]
+		if event.type == "settlement_specialized" and not event.tags.is_empty():
+			return event.tags[0]
+	return ""
 
 
 func step_settlements(delta_seconds: float) -> void:
@@ -1599,7 +1873,17 @@ func step_settlements(delta_seconds: float) -> void:
 	for settlement_id in _known_settlement_ids():
 		var market := _market_store.market_for(settlement_id)
 		var household_ids := _households_in_settlement(settlement_id)
-		var capacity := SettlementState.carrying_capacity(market)
+		# BOTH markets, not just the persisted emergence one (see
+		# SettlementFood): live play essentially never stocks that one, while
+		# the villagers' own VillageMarket holds the food they actually
+		# gathered and actually eat -- reading only the first classified every
+		# settlement in the world DECLINING forever, which Governance then
+		# read straight back out as illegitimate.
+		var village_market = SettlementFood.village_market_for(settlement_id, _loaded_villages)
+		# BEFORE capacity is read, because this is what finally puts a real
+		# number in front of it (see _step_settlement_granary).
+		_step_settlement_granary(settlement_id, market, village_market, household_ids)
+		var capacity := SettlementFood.carrying_capacity(market, village_market)
 		var status := SettlementState.status_for(household_ids.size(), capacity)
 
 		# Emergence Phase 5/4/6's own automatic triggers, closing the gap
@@ -1615,12 +1899,72 @@ func step_settlements(delta_seconds: float) -> void:
 		_step_settlement_institution_health(household_ids)
 		_step_settlement_classification(settlement_id, household_ids)
 
+		# First assessment of this settlement THIS SESSION is not the same
+		# thing as its first assessment ever: what it was last actually
+		# event-sourced as is in the persisted event history, so read it
+		# back before the guards below decide anything (see
+		# _settlement_status).
+		if not _settlement_status.has(settlement_id):
+			var recorded := _recorded_settlement_status(settlement_id)
+			if recorded != "":
+				_settlement_status[settlement_id] = recorded
+
 		if _settlement_status.get(settlement_id, "") == status:
+			_settlement_status_dwell.erase(settlement_id)
 			continue
+		# An UNLOADED settlement has no live VillageMarket in memory at all,
+		# so its combined food reads 0 and status_for calls it DECLINING --
+		# absence of evidence, not evidence of famine. Almost the whole world
+		# is in that state at any moment, and nearly all of it right after a
+		# load. Once a settlement has a status on record, a capacity of zero
+		# read with no live market is not a reading anyone took, so the last
+		# real one stands until one can be taken again. Note what `capacity
+		# <= 0` actually tests, which is NOT "no stock at all": capacity is
+		# floor(food / FOOD_PER_HOUSEHOLD), so it is zero for anything up to
+		# FOOD_PER_HOUSEHOLD - 1 units of real persisted food -- less than
+		# one household's worth, which cannot tell a genuinely empty
+		# emergence market apart from a nearly-empty one anyway. Deliberately
+		# narrow: a settlement that has never been assessed still gets its
+		# first, honest classification; a LOADED settlement whose live market
+		# is really empty is a real famine and still declines; and an
+		# unloaded settlement whose persisted emergence market carries a
+		# household's worth of food or more is classified off that real
+		# number (capacity > 0), guard or no guard.
+		#
+		# ITS PREMISE IS WEAKER NOW, and saying so is cheaper than letting
+		# the paragraph above quietly go stale. An unloaded settlement's
+		# granary is assessed every step (see _step_settlement_granary), so
+		# a capacity of zero there is increasingly a reading somebody took
+		# rather than a reading nobody could -- and the perverse consequence
+		# is live: a village declines offscreen while it still has SOMETHING
+		# put by, and stops being able to the moment it has nothing (pinned,
+		# named, in test_an_unloaded_settlement_really_declines_by_eating_
+		# through_its_stores). What is still genuinely unevidenced is the
+		# settlement that has only just unloaded: while loaded it banks
+		# nothing, so its granary reads empty for the first assessment or
+		# two afterwards through no fault of its own. Narrowing this guard
+		# is therefore downstream of a loaded settlement banking its own
+		# surplus, not a change to make on its own.
+		if (
+			status == SettlementState.DECLINING
+			and village_market == null
+			and capacity <= 0
+			and _settlement_status.has(settlement_id)
+		):
+			continue
+		# A settlement's FIRST assessed status is news the moment it is
+		# assessed -- nothing was on record to wobble away from, the same
+		# "first failure is news" shape _settlement_production_outcome
+		# already uses. Every later flip has to hold (see
+		# SETTLEMENT_STATUS_DWELL_STEPS).
+		if _settlement_status.has(settlement_id) and not _status_change_has_dwelled(settlement_id, status):
+			continue
+		_settlement_status_dwell.erase(settlement_id)
 		_settlement_status[settlement_id] = status
 
 		var event := Event.new("settlement_%s" % status, _world_age_seconds)
 		event.actors.append(settlement_id)
+		event.witnesses = _villager_witnesses_of(event.actors)
 		_event_store.append(event)
 		_memory_store.witness_event(event, _world_age_seconds)
 
@@ -1629,6 +1973,42 @@ func step_settlements(delta_seconds: float) -> void:
 		# behind a real ruin too.
 		if status == SettlementState.DECLINING:
 			record_ruin_from_settlement_decline(settlement_id, event.id)
+
+
+## The status `settlement_id` was last actually event-sourced as, read back
+## out of its own persisted event history, or "" if it has never had one.
+## Guarded on real history rather than an in-memory flag, exactly the
+## convention record_path_worn_if_new and _record_ruin_from already follow --
+## a settlement's status, like a path's wear and a ruin's existence, IS its
+## event history, so there is no second thing to keep in sync with it.
+##
+## settlement_founded shares the "settlement_" prefix and is deliberately
+## NOT a status: only the three SettlementState.STATUSES count, so a
+## settlement that has been founded and never assessed still reads "".
+func _recorded_settlement_status(settlement_id: String) -> String:
+	var history := _event_store.events_for_entity(settlement_id)
+	for i in range(history.size() - 1, -1, -1):
+		var event: Event = history[i]
+		if not event.type.begins_with("settlement_"):
+			continue
+		var status := event.type.substr("settlement_".length())
+		if SettlementState.STATUSES.has(status):
+			return status
+	return ""
+
+
+## Counts one more consecutive assessment of `status` for this settlement
+## and answers whether it has now held long enough to be a real change
+## rather than a boundary wobble (see SETTLEMENT_STATUS_DWELL_STEPS). A
+## different status restarts the count from one, so an alternating
+## growing/stable flicker never accumulates toward either.
+func _status_change_has_dwelled(settlement_id: String, status: String) -> bool:
+	var dwell: Dictionary = _settlement_status_dwell.get(settlement_id, {})
+	var steps := 1
+	if dwell.get("status", "") == status:
+		steps = int(dwell.get("steps", 0)) + 1
+	_settlement_status_dwell[settlement_id] = {"status": status, "steps": steps}
+	return steps >= SETTLEMENT_STATUS_DWELL_STEPS
 
 
 ## The occupation of a household's founder, reconstructed from the founder's
@@ -1646,6 +2026,143 @@ func _occupation_of_household(household_id: String) -> String:
 	if EntityRef.kind_of(founder_id) != "npc":
 		return ""
 	return NpcIdentity.new(int(EntityRef.key_of(founder_id))).occupation
+
+
+## THE OFFSCREEN HALF OF A VILLAGE'S GATHERING (see SettlementGranary for
+## the model and what each side of it is anchored to).
+##
+## Nothing had ever CREATED stock in a settlement's persisted emergence
+## Market -- its only three writers all merely moved stock around -- so
+## capacity, offscreen growth, offscreen decline, caravans, raids,
+## specialization and every household's quest ask were all built on a ledger
+## that was permanently empty. Villagers really gather; it just never
+## reached the ledger the simulation reasons about.
+##
+## MEASURED on the same probe both ways -- an eight-household settlement
+## covering all eight occupations, stepped 40 times with step_settlements +
+## step_regional_trade + step_caravans (test_probe_eight_household_
+## settlement, which is the reproduction and not a summary of one):
+##   before: stock {}, production_succeeded 0, production_failed 8, capacity 0
+##   after:  stock {fish 877, meat 25, cooked_meat 1, fruit 8},
+##           production_succeeded 40, production_failed 7, capacity 227,
+##           and one real settlement_specialized ("hunting center").
+## With a second settlement to trade with, 20 caravans departed, 14 arrived
+## and 6 were raided, where the correct count before was structurally zero
+## -- RegionalTrade.has_surplus could never be true anywhere in the world.
+##
+## LOADED settlements are deliberately left alone. There the villagers' own
+## NpcMarker/NpcEconomy really is ticking, really is gathering into the
+## shared live VillageMarket and really is eating out of it every frame --
+## that IS the settlement's food, and SettlementFood already counts it
+## alongside the granary. Running this on top would be the same catch banked
+## twice.
+##
+## SAY WHAT THAT COSTS, rather than letting it read as free: while a
+## settlement is loaded its granary neither fills nor drains, so a village
+## the player camps in banks nothing into the persisted ledger and its
+## villagers' surplus goes when the chunk does -- the same "regenerates on
+## revisit, no persistence" simplification the live VillageMarket itself
+## already accepts. A skim (move the larder's surplus into the granary each
+## assessment) would close that, and is deliberately NOT built here: it
+## moves food a player can see, which is a visible gameplay change rather
+## than the substrate fix this is, and SettlementFood already sums both
+## ledgers so it would change no capacity, status or classification.
+##
+## An UNLOADED settlement has no VillageMarket and no NpcMarker at all, and
+## almost the whole world is unloaded at any moment. That is exactly the
+## population this exists for: without it a village only lives while the
+## player is standing in it, which is the difference between a world and a
+## stage set. So this is a CATCH-UP, the same shape _apply_ecology_catchup
+## and _apply_piece_condition_catchup already use one section over -- the
+## same rule the loaded villagers run, integrated over the assessment
+## interval instead of accumulated per frame.
+##
+## The sub-unit remainder is carried across steps (SettlementGranary.catchup
+## returns it) so a slow trickle banks eventually rather than truncating to
+## nothing forever. Session-lifetime and deliberately not persisted: it is
+## strictly less than one whole food unit per item, the same scope
+## NpcEconomy._accumulated_yield already accepts for exactly the same
+## quantity.
+func _step_settlement_granary(
+	settlement_id: String, market, village_market, household_ids: Array[String]
+) -> void:
+	if village_market != null or household_ids.is_empty():
+		return
+
+	var occupations: Array = []
+	for household_id in household_ids:
+		occupations.append(_occupation_of_household(household_id))
+	var has_producer := SettlementGranary.has_producer(occupations)
+
+	# A settlement with no producer among its households gathers nothing --
+	# and with an empty granary there is nothing to eat either, so there is
+	# no reading to take. Checked BEFORE _seeded_region_for, whose first call
+	# generates a chunk.
+	if not has_producer and market.stock.is_empty():
+		return
+
+	var gathered: Dictionary = {}
+	if has_producer:
+		gathered = SettlementGranary.gathered_over(
+			occupations, _seeded_region_for(settlement_id), SETTLEMENT_STEP_INTERVAL
+		)
+
+	var result: Dictionary = SettlementGranary.catchup(
+		gathered,
+		_settlement_gather_carry.get(settlement_id, {}),
+		market.stock,
+		household_ids.size(),
+		_item_catalog
+	)
+	_settlement_gather_carry[settlement_id] = result["carry"]
+	var stock_delta: Dictionary = result["stock_delta"]
+	for item_id in stock_delta:
+		market.add_stock(str(item_id), int(stock_delta[item_id]))
+
+
+## settlement_id -> the sub-unit gathering remainder carried into its next
+## assessment (see _step_settlement_granary).
+var _settlement_gather_carry: Dictionary = {}
+## settlement_id -> SettlementGranary.SeededRegion, cached for the session.
+var _settlement_seeded_region: Dictionary = {}
+
+
+## What `settlement_id`'s own region really holds, for a settlement whose
+## chunk is NOT loaded -- so its villagers gather off a real local number
+## rather than a world average.
+##
+## Not an invented number and not a second model: this runs the settlement's
+## own deterministically generated chunk through EcosystemSimulation.
+## add_region and reads the three aggregates straight back out, so it is
+## precisely what the live `_ecosystem` would hold the instant that chunk
+## loads. EcosystemSimulation's own doc comment is what makes that the right
+## reading for an unloaded region: nothing decays or grows while unloaded,
+## and add_region seeds a region at equilibrium because "the world is
+## assumed to already contain a mature ecosystem, not one growing from
+## nothing on first visit."
+##
+## Cached per settlement for the session because it is a pure function of
+## terrain, which is deterministic and does not change -- one chunk
+## generation per settlement that actually has someone to gather, ever,
+## rather than one per assessment.
+##
+## KNOWN LIMIT, stated rather than implied: a region the player HAS visited
+## and depleted (land health, a hunted-down herd) recovers into this
+## pristine baseline the moment its chunk unloads, because there is no
+## persisted per-region ecology for an unloaded chunk to read -- the same
+## simplification EcosystemSimulation.remove_region already documents.
+func _seeded_region_for(settlement_id: String):
+	if _settlement_seeded_region.has(settlement_id):
+		return _settlement_seeded_region[settlement_id]
+	var chunk_coord := RegionalTrade.chunk_coord_of(settlement_id)
+	var probe := EcosystemSimulation.new()
+	probe.add_region(chunk_coord, generator.generate_chunk(chunk_coord, CHUNK_SIZE))
+	var region = SettlementGranary.SeededRegion.new()
+	region.vegetation_density = probe.average_vegetation_density(chunk_coord)
+	region.herbivore_population = probe.herbivore_population(chunk_coord)
+	region.fish_population = probe.fish_population(chunk_coord)
+	_settlement_seeded_region[settlement_id] = region
+	return region
 
 
 ## Attempts each household's occupation-grounded recipe (see
@@ -1697,6 +2214,8 @@ func _step_settlement_trade(settlement_id: String, household_ids: Array[String],
 	sorted_ids.sort()
 	var party_a: String = sorted_ids[0]
 	var party_b: String = sorted_ids[1]
+	if not _routine_trade_is_worth_running(party_a, party_b, status):
+		return
 
 	var contract := propose_contract(
 		"trade", [party_a, party_b],
@@ -1713,6 +2232,71 @@ func _step_settlement_trade(settlement_id: String, household_ids: Array[String],
 	var governance_form := Governance.form_for(_institution_type_counts_for(household_ids))
 	var institution_type := Governance.institution_type_for_new_formation(governance_form)
 	attempt_institution_formation(institution_type, party_a, party_b)
+
+
+## Whether running the routine trade above would change anything -- the same
+## change-guard every other emitter in this file already applies, finally
+## applied to the highest-volume one.
+##
+## MEASURED before it existed: a three-household settlement appended four
+## events (proposed/accepted/active/fulfilled-or-breached) and signed one
+## fresh Contract EVERY assessment, forever. The MEMORY side was already
+## bounded (see _record_contract_event), so villagers did not re-learn what
+## they knew -- but the persisted event store and the persisted contract
+## store are not memories, and they only ever grow. The same two households,
+## the same terms, the same outcome, every thirty seconds, is not history.
+##
+## Three reasons to actually run it, and nothing else:
+##
+## 1. THE OUTCOME WOULD BE DIFFERENT from the last one on record between
+##    exactly these two (or there is no record yet). A pair that has been
+##    making good and starts breaching is the settlement's real news, and it
+##    is the one contract transition villagers are given a memory of.
+##    Read off the persisted event graph via the same _recorded_contract_
+##    outcome the memory guard already uses, so it survives a load.
+## 2. THE TRACK RECORD IS STILL BEING BUILT. InstitutionFormation.should_form
+##    needs FORMATION_THRESHOLD fulfilled contracts between the pair before
+##    an institution can exist at all, so repetition genuinely accumulates
+##    into something until it crosses that line.
+## 3. AN INSTITUTION IS ALIVE AND ITS WINDOW HAS AGED DOWN. should_dissolve
+##    is deliberately windowed rather than all-time, so a living institution
+##    genuinely requires ongoing coordination -- stop trading and it
+##    dissolves. The rate is therefore NOT invented here: it is exactly
+##    InstitutionFormation's own DISSOLUTION_THRESHOLD. We trade once the
+##    recent count has fallen to the last value that is still safe, so the
+##    window is restocked just before it can cross rather than exactly on
+##    the edge, and no more often than that.
+##
+## BE HONEST ABOUT WHAT THIS DOES NOT DO: it does not make the stores
+## bounded. Reason 3 is a real, ongoing requirement of a mechanism that
+## exists on purpose -- an institution nobody has worked with recently is
+## meant to be at risk -- so a settlement with a living institution really
+## does keep signing contracts forever. What changes is the rate: from one
+## per assessment to the minimum RECENT_WINDOW_SECONDS/DISSOLUTION_THRESHOLD
+## actually require, and to nothing at all for a settlement with no living
+## institution and no change of outcome to report. Measured over 40
+## assessments of a real eight-household settlement with a living
+## institution: 160 contract events and 40 contracts before, 52 and 13
+## after. Measured on a settlement with no institution and an unchanging
+## outcome: zero after the first, forever (both pinned by tests).
+func _routine_trade_is_worth_running(party_a: String, party_b: String, status: String) -> bool:
+	var outcome := "contract_breached" if status == SettlementState.DECLINING else "contract_fulfilled"
+	var sorted_parties: Array[String] = [party_a, party_b]
+	sorted_parties.sort()
+	if _recorded_contract_outcome(sorted_parties) != outcome:
+		return true
+	# Only a FULFILMENT builds a track record -- InstitutionFormation counts
+	# fulfilled contracts and nothing else, so a pair that is breaching is
+	# not accumulating toward anything and repeating the breach adds nothing.
+	if outcome == "contract_fulfilled" and InstitutionFormation.shared_contract_count(
+		_contract_store, party_a, party_b
+	) < InstitutionFormation.FORMATION_THRESHOLD:
+		return true
+	if _institution_store.active_institution_for([party_a, party_b]) == null:
+		return false
+	return InstitutionFormation.recent_shared_contract_count(
+		_contract_store, party_a, party_b, _world_age_seconds
+	) <= InstitutionFormation.DISSOLUTION_THRESHOLD + 1
 
 
 ## Gap-closing (docs/progress.md's Emergence Phase 6 entry): checks each of
@@ -1753,10 +2337,24 @@ func _step_settlement_classification(settlement_id: String, household_ids: Array
 	var production_counts := _production_counts_for_settlement(settlement_id)
 	var tier := SettlementTier.tier_for(household_ids.size(), institutions, production_counts.size())
 
+	# First classification of this settlement THIS SESSION is not its first
+	# ever: what it was last event-sourced as is in the persisted event
+	# history, so read it back before either guard decides anything (see
+	# _settlement_tier).
+	if not _settlement_tier.has(settlement_id):
+		var recorded_tier := _recorded_settlement_tier(settlement_id)
+		if recorded_tier != "":
+			_settlement_tier[settlement_id] = recorded_tier
+	if not _settlement_specialization.has(settlement_id):
+		var recorded_specialization := _recorded_settlement_specialization(settlement_id)
+		if recorded_specialization != "":
+			_settlement_specialization[settlement_id] = recorded_specialization
+
 	if _settlement_tier.get(settlement_id, "") != tier:
 		_settlement_tier[settlement_id] = tier
 		var tier_event := Event.new("settlement_became_%s" % tier, _world_age_seconds)
 		tier_event.actors.append(settlement_id)
+		tier_event.witnesses = _villager_witnesses_of(tier_event.actors)
 		_event_store.append(tier_event)
 		_memory_store.witness_event(tier_event, _world_age_seconds)
 
@@ -1766,6 +2364,7 @@ func _step_settlement_classification(settlement_id: String, household_ids: Array
 		var spec_event := Event.new("settlement_specialized", _world_age_seconds)
 		spec_event.actors.append(settlement_id)
 		spec_event.tags.append(specialization)
+		spec_event.witnesses = _villager_witnesses_of(spec_event.actors)
 		_event_store.append(spec_event)
 		_memory_store.witness_event(spec_event, _world_age_seconds)
 
@@ -1817,7 +2416,13 @@ func institution_type_counts_for_settlement(settlement_id: String) -> Dictionary
 func legitimacy_for_settlement(settlement_id: String) -> String:
 	var market := _market_store.market_for(settlement_id)
 	var household_count := _households_in_settlement(settlement_id).size()
-	var capacity := SettlementState.carrying_capacity(market)
+	# The same BOTH-markets stock step_settlements now assesses on (see
+	# SettlementFood): Governance reads this status as legitimacy, so
+	# leaving this one on the emergence market alone would report a
+	# settlement illegitimate that step_settlements calls GROWING.
+	var capacity := SettlementFood.carrying_capacity(
+		market, SettlementFood.village_market_for(settlement_id, _loaded_villages)
+	)
 	return Governance.legitimacy_for(SettlementState.status_for(household_count, capacity))
 
 
@@ -1935,6 +2540,10 @@ func _attempt_regional_resupply(
 	departed_event.actors.append(supplier_id)
 	departed_event.actors.append(shortage_settlement_id)
 	departed_event.tags.append(item_id)
+	# BOTH ends of the route: the village that loaded the caravan and the
+	# village waiting on it both watched this happen, which is what makes a
+	# caravan the one thing two DIFFERENT settlements can gossip about.
+	departed_event.witnesses = _villager_witnesses_of(departed_event.actors)
 	_event_store.append(departed_event)
 	_memory_store.witness_event(departed_event, _world_age_seconds)
 
@@ -1996,6 +2605,7 @@ func _resolve_caravan_arrival(trip: CaravanTrip) -> void:
 	event.actors.append(trip.supplier_id)
 	event.actors.append(trip.shortage_settlement_id)
 	event.tags.append(trip.item_id)
+	event.witnesses = _villager_witnesses_of(event.actors)
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 
@@ -2013,6 +2623,7 @@ func _resolve_caravan_raid(trip: CaravanTrip, raid_position: Vector2) -> void:
 	event.actors.append(trip.supplier_id)
 	event.actors.append(trip.shortage_settlement_id)
 	event.tags.append(trip.item_id)
+	event.witnesses = _villager_witnesses_of(event.actors)
 	_event_store.append(event)
 	_memory_store.witness_event(event, _world_age_seconds)
 
@@ -2043,6 +2654,14 @@ func active_institution_count_for_settlement(settlement_id: String) -> int:
 
 func production_counts_for_settlement(settlement_id: String) -> Dictionary:
 	return _production_counts_for_settlement(settlement_id)
+
+
+## The settlement's LIVE VillageMarket, or null when its chunk is not
+## loaded -- so a console command can explain a settlement off the same
+## both-markets food source step_settlements classifies it with (see
+## Why.explain_settlement's optional live-market argument).
+func village_market_for_settlement(settlement_id: String):
+	return SettlementFood.village_market_for(settlement_id, _loaded_villages)
 
 
 ## How many real households a settlement currently has, for a console
@@ -2126,6 +2745,90 @@ func _households_in_settlement(settlement_id: String) -> Array[String]:
 		if household != null:
 			household_ids.append(household.id)
 	return household_ids
+
+
+## Every villager of `settlement_id` -- the exact sibling of
+## _households_in_settlement above, one link earlier in the same chain: an
+## npc_settled event already names the villager as its own actor, so this
+## reads the event graph rather than adding a second membership index to
+## keep in sync with it.
+##
+## Works for an UNLOADED settlement, which is the normal case rather than
+## the exception: step_settlements assesses every settlement that has ever
+## been founded, and at any moment almost none of them have live NpcMarker
+## nodes. Reading `_loaded_villages` instead would mean a settlement's own
+## history stops being witnessed by anyone the moment the player walks away
+## from it -- exactly the settlements whose news is worth hearing later.
+func _villagers_in_settlement(settlement_id: String) -> Array[String]:
+	var npc_ids: Array[String] = []
+	for event in _event_store.events_for_entity(settlement_id):
+		if event.type != "npc_settled" or event.actors.is_empty():
+			continue
+		npc_ids.append(event.actors[0])
+	return npc_ids
+
+
+## The settlement `party_id` lives in, or "" if it has none. Households are
+## resolved through their founder (Household.for_founder keys a household by
+## its founder's own ref and members[0] IS that founder -- the same
+## reconstruction _occupation_of_household already relies on), and an npc's
+## own npc_settled event names its settlement as the witness, so no
+## npc -> settlement index has to be built or persisted for this either.
+##
+## "" for the local player's household (PlayerIdentity never settled
+## anywhere) and for any party with no founding on record -- not an error,
+## just nobody to tell.
+func _settlement_of_party(party_id: String) -> String:
+	var npc_id := party_id
+	if EntityRef.kind_of(party_id) == "household":
+		var household := _household_store.get_household(party_id)
+		if household == null or household.members.is_empty():
+			return ""
+		npc_id = household.members[0]
+	if EntityRef.kind_of(npc_id) != "npc":
+		return ""
+	for event in _event_store.events_for_entity(npc_id):
+		if event.type == "npc_settled" and not event.witnesses.is_empty():
+			return event.witnesses[0]
+	return ""
+
+
+## The villagers who were THERE for an event about `entity_ids` -- what to
+## assign to Event.witnesses just before appending, the missing half of the
+## record_settlement_founded_if_new idiom every other emitter in this file
+## had been skipping. EventStore/MemoryStore already consume it: a witnessed
+## event becomes a real WITNESSED MemoryRecord for each of them (see
+## MemoryRecord.from_event), which is what step_npc_encounters then has
+## something real to trade at a shared landmark.
+##
+## Takes the event's own `actors` rather than a settlement id so ONE helper
+## covers all three shapes the emitters actually name: a settlement directly
+## (production, status, tier, specialization), a household (institution
+## formation/dissolution), and two settlements at once (a caravan's supplier
+## and its destination -- the one case where two different villages witness
+## the same thing).
+##
+## Deduped, because a two-party institution between two households of the
+## SAME settlement would otherwise name every villager twice and index each
+## of them twice in EventStore's own reverse entity index. An entity with no
+## settlement behind it contributes nobody rather than blocking the event --
+## the same fail-open shape every other reconstruction here uses; an event
+## nobody saw is still an event that happened.
+func _villager_witnesses_of(entity_ids: Array[String]) -> Array[String]:
+	var witnesses: Array[String] = []
+	var seen := {}
+	for entity_id in entity_ids:
+		var settlement_id := entity_id
+		if EntityRef.kind_of(entity_id) != "settlement":
+			settlement_id = _settlement_of_party(entity_id)
+		if settlement_id == "":
+			continue
+		for npc_id in _villagers_in_settlement(settlement_id):
+			if seen.has(npc_id):
+				continue
+			seen[npc_id] = true
+			witnesses.append(npc_id)
+	return witnesses
 
 
 ## Persists the live event store, following the same store_var convention
