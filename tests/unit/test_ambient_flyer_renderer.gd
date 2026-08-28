@@ -499,3 +499,73 @@ func test_flyer_range_biomes_agree_with_the_tier_wide_biome_gates():
 		bird_biomes.keys(), AmbientFlyerRenderer.BIRD_BIOMES.keys(),
 		"the bird range table and BIRD_BIOMES have drifted apart"
 	)
+
+
+# -- butterflies club up; nothing else does ----------------------------------
+#
+# FlyerSpawnLayout can be measured on its own all day and still not be
+# CALLED, which is this codebase's dominant defect class. These two pin the
+# wiring: the live renderer's own output, compared against the layout module's
+# own answer.
+
+const FlyerSpawnLayout = preload("res://src/rendering/flyer_spawn_layout.gd")
+const Courtship = preload("res://src/gameplay/courtship.gd")
+
+
+func _spawn_grassland_at(origin: Vector2i) -> Array[Node2D]:
+	return renderer.spawn_ambient_flyers(
+		parent, _make_chunk("grassland"), origin, TILE_SIZE, "grassland"
+	)
+
+
+func test_a_chunks_butterflies_spawn_as_one_club_the_layout_module_placed():
+	for x in 5:
+		var origin := Vector2i(x * CHUNK_SIZE, GERMANY_ROW)
+		var butterflies: Array = []
+		for flyer in _spawn_grassland_at(origin):
+			if AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL.has(flyer.species):
+				butterflies.append(flyer.position)
+		assert_gt(butterflies.size(), 1, "precondition: this chunk has a meadow's worth")
+
+		var wanted := FlyerSpawnLayout.wanted_count(
+			origin, "butterfly_spawn",
+			AmbientFlyerRenderer.MIN_BUTTERFLIES_PER_CHUNK,
+			AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK,
+			CHUNK_SIZE * CHUNK_SIZE
+		)
+		assert_eq(
+			butterflies,
+			Array(FlyerSpawnLayout.aggregated_positions(
+				origin, CHUNK_SIZE, CHUNK_SIZE, TILE_SIZE, "butterfly_spawn", wanted
+			)),
+			"the live renderer must place butterflies where the layout module says"
+		)
+		# ...and the point of that: they can actually find each other.
+		for a in butterflies:
+			for b in butterflies:
+				assert_lte(a.distance_to(b), Courtship.NOTICE_RADIUS_PX + 0.001)
+
+
+## Bees deliberately do NOT club up: a honeybee commutes from a hive and works
+## the whole meadow, and turning the buzz into one knot would be wrong about
+## the animal as well as making the meadow look staged.
+func test_bees_are_still_scattered_across_the_whole_meadow():
+	var origin := Vector2i(3 * CHUNK_SIZE, GERMANY_ROW)
+	var bees: Array = []
+	for flyer in _spawn_grassland_at(origin):
+		if flyer.species == "bee":
+			bees.append(flyer.position)
+	assert_gt(bees.size(), 0, "precondition: a German meadow has bees")
+
+	var wanted := FlyerSpawnLayout.wanted_count(
+		origin, "bee_spawn",
+		AmbientFlyerRenderer.MIN_BEES_PER_CHUNK,
+		AmbientFlyerRenderer.MAX_BEES_PER_CHUNK,
+		CHUNK_SIZE * CHUNK_SIZE
+	)
+	var expected: Array = []
+	for cell in FlyerSpawnLayout.scattered_cells(
+		origin, CHUNK_SIZE, CHUNK_SIZE, "bee_spawn", wanted
+	):
+		expected.append(Vector2((cell.x + 0.5) * TILE_SIZE, (cell.y + 0.5) * TILE_SIZE))
+	assert_eq(bees, expected, "bees must still use the scatter, not the club")

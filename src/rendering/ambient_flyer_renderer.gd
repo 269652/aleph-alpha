@@ -41,6 +41,7 @@ const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement
 const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
 const ProceduralBirdSprite = preload("res://src/rendering/procedural_bird_sprite.gd")
 const Chunk = preload("res://src/world/chunk.gd")
+const FlyerSpawnLayout = preload("res://src/rendering/flyer_spawn_layout.gd")
 const FlyerDiet = preload("res://src/gameplay/flyer_diet.gd")
 const GroundForageBehavior = preload("res://src/gameplay/ground_forage_behavior.gd")
 ## For FLYER_RANGE's latitude axis below. EarthChunkGenerator is preloaded for
@@ -230,7 +231,11 @@ func spawn_ambient_flyers(
 				scented_butterfly_min, scented_butterfly_max,
 				AmbientFlyerMovement.new(BUTTERFLY_SPEED, BUTTERFLY_RADIUS, BUTTERFLY_INTERVAL),
 				_butterfly_sprite,
-				scent_world
+				scent_world,
+				# The one aggregating tier (see FlyerSpawnLayout): butterflies
+				# congregate at a good patch, and scattering them over a whole
+				# chunk is what made courtship unreachable.
+				true
 			)
 		)
 		var scented_bee_min := int(round(float(MIN_BEES_PER_CHUNK) * scent_multiplier))
@@ -265,12 +270,25 @@ func spawn_ambient_flyers(
 	return spawned
 
 
-## Deterministically picks between min_count and max_count of this chunk's
-## cells (ranked by a per-cell hash, so the chosen subset still reads as
-## scattered rather than clustered in raster order -- same technique as
-## FishRenderer._spawn_target_count), guaranteeing a qualifying chunk always
-## shows at least min_count, never relying on an independent per-cell
-## probability that could land on zero.
+## Deterministically places between min_count and max_count flyers in this
+## chunk, guaranteeing a qualifying chunk always shows at least min_count and
+## never relying on an independent per-cell probability that could land on
+## zero.
+##
+## WHERE they go, and what species they are, is FlyerSpawnLayout's job -- and
+## it is not the same answer for every flyer:
+##
+## - `aggregate` false (bees, birds): scattered across the chunk by a
+##   per-cell hash rank, species drawn per cell. A honeybee commutes from a
+##   hive and works a whole meadow; songbirds hold territories.
+## - `aggregate` true (true butterflies): ONE loose club, mostly one species.
+##   Butterflies really do congregate -- at nectar stands, at mud-puddling
+##   patches, at landmarks -- and the scatter made courtship arithmetically
+##   unreachable: measured over 300 real German chunks, a same-species pair
+##   that could ever meet existed in 4.4% of them and a pair close enough to
+##   meet without either flyer leaving its tether in 0.0%. See
+##   test_flyer_spawn_layout.gd for the measurement and FlyerSpawnLayout's
+##   own doc comment for why this rather than a wider notice radius.
 func _spawn_species(
 	parent: Node2D,
 	chunk: Chunk,
@@ -283,6 +301,7 @@ func _spawn_species(
 	movement: AmbientFlyerMovement,
 	sprite_generator,
 	scent_world = null,
+	aggregate: bool = false,
 ) -> Array[Node2D]:
 	# Nothing in this pool can live here (see FLYER_RANGE and _in_range_pool):
 	# an empty pool must spawn nothing, not divide by zero on the modulo that
@@ -290,34 +309,43 @@ func _spawn_species(
 	if species_pool.is_empty():
 		return []
 
-	var candidates: Array[Vector2i] = []
-	for y in chunk.height:
-		var global_y := chunk_origin_tiles.y + y
-		for x in chunk.width:
-			candidates.append(Vector2i(chunk_origin_tiles.x + x, global_y))
+	var cell_total := chunk.width * chunk.height
+	var wanted := FlyerSpawnLayout.wanted_count(
+		chunk_origin_tiles, salt, min_count, max_count, cell_total
+	)
 
-	candidates.sort_custom(func(a, b): return _spawn_rank(a.x, a.y, salt) < _spawn_rank(b.x, b.y, salt))
-
-	var count_range := maxi(1, max_count - min_count + 1)
-	var count_roll := absi(
-		hash("%d_%d_%s_count" % [chunk_origin_tiles.x, chunk_origin_tiles.y, salt])
-	) % count_range
-	var wanted := clampi(min_count + count_roll, 0, mini(max_count, candidates.size()))
+	var placements: Array = []  # [position, species, seed]
+	if aggregate:
+		var positions := FlyerSpawnLayout.aggregated_positions(
+			chunk_origin_tiles, chunk.width, chunk.height, tile_size, salt, wanted
+		)
+		for i in positions.size():
+			placements.append([
+				positions[i],
+				FlyerSpawnLayout.aggregation_species(species_pool, chunk_origin_tiles, salt, i),
+				absi(hash("%d_%d_%s_%d_member" % [
+					chunk_origin_tiles.x, chunk_origin_tiles.y, salt, i
+				])),
+			])
+	else:
+		for cell in FlyerSpawnLayout.scattered_cells(
+			chunk_origin_tiles, chunk.width, chunk.height, salt, wanted
+		):
+			placements.append([
+				Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size),
+				FlyerSpawnLayout.species_at_cell(species_pool, cell, salt),
+				absi(hash("%d_%d_%s_species" % [cell.x, cell.y, salt])),
+			])
 
 	var spawned: Array[Node2D] = []
-	for i in wanted:
-		var cell: Vector2i = candidates[i]
-		var seed_value := absi(hash("%d_%d_%s_species" % [cell.x, cell.y, salt]))
-		var species: String = species_pool[seed_value % species_pool.size()]
-		var position := Vector2((cell.x + 0.5) * tile_size, (cell.y + 0.5) * tile_size)
+	for placement in placements:
 		spawned.append(
-			_build_marker(parent, species, position, seed_value, movement, sprite_generator, scent_world)
+			_build_marker(
+				parent, placement[1], placement[0], placement[2],
+				movement, sprite_generator, scent_world
+			)
 		)
 	return spawned
-
-
-func _spawn_rank(global_x: int, global_y: int, salt: String) -> float:
-	return float(absi(hash("%d_%d_%s" % [global_x, global_y, salt])) % 10000) / 10000.0
 
 
 ## Spawns ONE flyer -- the offspring of a courting pair (see Courtship).
