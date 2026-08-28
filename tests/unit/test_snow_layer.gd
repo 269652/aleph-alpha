@@ -287,6 +287,39 @@ func test_the_drift_field_still_covers_the_ground_unevenly():
 	)
 
 
+# -- the onset field needs FINE grain too, not just a broad drift -----------
+#
+# Reported live, after the 4-to-25-illustrated-band change landed: "it's not
+# using accumulation per tile and sth like perlin noise or so instead whole
+# areas increment to next sprite without variations" -- large, visually
+# uniform AREAS were stepping to the next illustrated band all at once. This
+# is a DIFFERENT bug from the checkerboard above (that was neighbours
+# differing TOO MUCH); this is close to the opposite: a single ONSET_DRIFT_
+# TILES=12-tile-period smooth field has near-zero local slope across most of
+# any one on-screen view, so a realistic ~20-30 tile window sees only a
+# couple of distinct bands -- a plateau, not texture.
+#
+# Measured directly, not assumed: sweeping every 24x24 window across a real
+# 400x120-tile swath of the OLD single-broad-layer field, the worst case
+## (global tile origin (-42, -48), at a mid snowfall depth of 0.5) contains
+# only 3 distinct depth bands -- confirmed the worst in the whole swept area,
+# not a cherry-picked spot.
+func test_a_local_window_shows_real_per_tile_variation_not_a_uniform_plateau():
+	var origin := Vector2i(-42, -48)
+	var bands := {}
+	for dx in range(24):
+		for dy in range(24):
+			var offset: float = layer.onset_offset_for(origin.x + dx, origin.y + dy)
+			bands[layer.band_for(0.5, 0.0, offset)] = true
+	assert_gt(
+		bands.size(), 3,
+		(
+			"a realistic 24x24 local view at %s shows only %d distinct bands -- "
+			+ "a whole neighbourhood is stepping together instead of showing per-tile texture"
+		) % [origin, bands.size()]
+	)
+
+
 func _mean_alpha(image: Image) -> float:
 	var total := 0.0
 	var count := 0

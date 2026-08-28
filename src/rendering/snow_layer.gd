@@ -250,6 +250,29 @@ func _cropped_cell(column: int, row: int) -> Image:
 const ONSET_VARIANCE := 0.18
 const _ONSET_SALT := 5303
 
+## How much of ONSET_VARIANCE's budget goes to the FINE layer below, versus
+## the broad one above -- see onset_offset_for's own doc comment for why a
+## second layer exists at all.
+##
+## Measured, not eyeballed: swept every 24x24 window across a real 400x120-
+## tile swath for several broad/fine amplitude splits at ONSET_FINE_DRIFT_
+## TILES=2 (see onset_offset_for). The OLD single-broad-layer field's worst
+## window anywhere in that swath held only 3 distinct depth bands (tile
+## origin (-42, -48), the exact case test_a_local_window_shows_real_per_
+## tile_variation_not_a_uniform_plateau pins). A 0.13/0.05 broad/fine split
+## raised that SAME worst-case-anywhere window to 5 distinct bands -- a real,
+## swath-wide improvement, not a fix for one cherry-picked spot -- while only
+## raising the worst neighbour step from 0.0357 to 0.0581 (see
+## MAX_NEIGHBOUR_ONSET_STEP below). Smaller fine budgets (0.03-0.04) barely
+## moved the worst case (4 bands); larger ones (0.07+) pushed the neighbour
+## step close to double with only marginal further gain. Expressed as the
+## FINE share with broad DERIVED from it (`ONSET_VARIANCE - ONSET_FINE_
+## VARIANCE`) so the two can never drift out of sync and silently blow the
+## overall bound every other onset test depends on.
+const ONSET_FINE_VARIANCE := 0.05
+const ONSET_BROAD_VARIANCE := ONSET_VARIANCE - ONSET_FINE_VARIANCE
+const _ONSET_FINE_SALT := 9013
+
 ## How many TILES one lift of the drift field spans.
 ##
 ## This offset used to be rolled per tile with PixelNoise.range_value --
@@ -274,6 +297,19 @@ const _ONSET_SALT := 5303
 ## test_the_drift_field_still_covers_the_ground_unevenly says it has not
 ## been flattened into a constant.
 const ONSET_DRIFT_TILES := 12.0
+
+## How many TILES one lift of the FINE grain layer spans -- see
+## onset_offset_for's own doc comment for why a second layer exists.
+##
+## Measured alongside ONSET_FINE_VARIANCE (see its own doc comment for the
+## full sweep): 2 tiles gave the best real improvement in swath-wide worst-
+## case local variation (3 -> 5 distinct bands in the worst 24x24 window)
+## for the smallest neighbour-step cost among the periods tried (1.5, 2, 3
+## tiles). Deliberately much shorter than ONSET_DRIFT_TILES=12 -- the broad
+## layer still decides which general AREA catches on first (a hollow, a lee
+## side, a tree line's shade), the fine layer only adds texture WITHIN
+## whatever area the broad layer already chose.
+const ONSET_FINE_DRIFT_TILES := 2.0
 
 ## The most two edge-adjacent tiles' onsets may differ.
 ##
@@ -300,7 +336,21 @@ const ONSET_DRIFT_TILES := 12.0
 ## worst-case (0.0436), so this stays a genuine regression guard on that
 ## field rather than an unreachable target: the field itself is bounded
 ## exactly as before.
-const MAX_NEIGHBOUR_ONSET_STEP := 0.05
+##
+## RE-MEASURED again for the added fine layer (see ONSET_FINE_VARIANCE):
+## adding real per-tile texture necessarily makes neighbours differ MORE,
+## not less, so this had to move -- the question was only "by how much is
+## real, and by how much is too much". Over the same -60..60 x -6..6 sweep
+## test_neighbouring_tiles_have_nearly_the_same_onset already uses, the
+## combined broad+fine field's worst measured neighbour step is 0.0581 (was
+## 0.0357 broad-only -- note this differs slightly from the 0.0436 quoted
+## above, which was measured at a different point in this file's history;
+## re-measuring the CURRENT broad-only field over this exact sweep gives
+## 0.0357). 0.0581 is still under 1.5 depth bands (0.04 each) -- nowhere
+## close to the old checkerboard's 2 * ONSET_VARIANCE (0.36) jump, which
+## crossed the ENTIRE old 4-band range in one step. Re-pinned to 0.07 with
+## real margin over that fresh measurement.
+const MAX_NEIGHBOUR_ONSET_STEP := 0.07
 
 
 ## This tile's own onset offset, in [-ONSET_VARIANCE, ONSET_VARIANCE] --
@@ -312,13 +362,51 @@ const MAX_NEIGHBOUR_ONSET_STEP := 0.05
 ## Sampled from a SMOOTH field at ONSET_DRIFT_TILES tiles per lift rather
 ## than rolled per tile, so the bare/dusted boundary reads as a meandering
 ## snow line rather than as grid squares (see ONSET_DRIFT_TILES).
+##
+## TWO layers, not one -- reported live (after DEPTH_BANDS went 4 -> 25):
+## "it's not using accumulation per tile and sth like perlin noise or so
+## instead whole areas increment to next sprite without variations". The
+## single ONSET_DRIFT_TILES=12 broad layer above is exactly what its own doc
+## comment says it should be -- low-frequency, so a hollow or a lee side
+## catches snow as one coherent patch rather than a checkerboard -- but a
+## realistic ~20-30 tile on-screen view often sits entirely inside one lobe
+## of a 12-tile-period field, where the local slope is close to flat. Every
+## tile in that view then rounds to nearly the same band: not the
+## checkerboard bug (neighbours differing too much), closer to the opposite
+## (a whole neighbourhood reads as one flat plateau). Measured directly: the
+## worst 24x24 window found sweeping a real 400x120-tile swath of the
+## broad-only field held only 3 distinct bands at a mid snowfall (depth 0.5)
+## -- see test_a_local_window_shows_real_per_tile_variation_not_a_uniform_
+## plateau, which pins that exact case.
+##
+## PixelNoise.fractal already builds "broad shape plus fine grain" by
+## stacking doubling-frequency octaves of the SAME seed, but every octave
+## there shares one salt -- fine here needs its own salt (_ONSET_FINE_SALT)
+## so its lattice points don't correlate with the broad layer's (two octaves
+## of one seed can share zero-crossings; two independent salts can't). A
+## second, much shorter-period SMOOTH layer (ONSET_FINE_DRIFT_TILES = 2)
+## adds real tile-to-tile texture within whatever broad-scale patch the
+## first layer already chose, at a deliberately small slice of the shared
+## ONSET_VARIANCE budget (see ONSET_FINE_VARIANCE) so the broad layer still
+## dominates which general area goes first. Re-measured on the combined
+## field: that same worst window rose from 3 to 5 distinct bands, while the
+## worst neighbour step only rose from 0.0357 to 0.0581 (see MAX_NEIGHBOUR_
+## ONSET_STEP, re-pinned for this).
 func onset_offset_for(global_x: int, global_y: int) -> float:
-	var drift := PixelNoise.smooth(
+	var broad := PixelNoise.smooth(
 		_ONSET_SALT,
 		float(global_x) / ONSET_DRIFT_TILES,
 		float(global_y) / ONSET_DRIFT_TILES
 	)
-	return lerpf(-ONSET_VARIANCE, ONSET_VARIANCE, drift)
+	var fine := PixelNoise.smooth(
+		_ONSET_FINE_SALT,
+		float(global_x) / ONSET_FINE_DRIFT_TILES,
+		float(global_y) / ONSET_FINE_DRIFT_TILES
+	)
+	return (
+		lerpf(-ONSET_BROAD_VARIANCE, ONSET_BROAD_VARIANCE, broad)
+		+ lerpf(-ONSET_FINE_VARIANCE, ONSET_FINE_VARIANCE, fine)
+	)
 
 
 ## Which band a tile shows, or -1 for bare ground.

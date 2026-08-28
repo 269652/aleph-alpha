@@ -207,12 +207,37 @@ as a checkerboard of bare / dusted / covered SQUARES with a razor edge on the
 tile grid. Noise driving a per-tile decision has to be much COARSER than a
 tile, not finer. Real snow drifts and shelters in patches many metres across, a
 low-frequency shape by nature, so `onset_offset_for` samples `PixelNoise`'s
-smooth form instead: `MAX_NEIGHBOUR_ONSET_STEP` holds two touching tiles to a
-quarter of a band, so a band boundary takes at least four tiles to cross and
-the snow LINE meanders through the field. The field still spans the full
-variance -- a test pins that too, so nobody "fixes" a neighbour-step failure by
-flattening the drift to a constant and putting the whole chunk back on one
-shared threshold.
+smooth form instead: `MAX_NEIGHBOUR_ONSET_STEP` holds two edge-adjacent tiles'
+onsets close together (re-measured and re-pinned as the field itself changed --
+see the fine-grain paragraph below for the current, real number), so a band
+boundary takes several tiles to cross and the snow LINE meanders through the
+field. The field still spans the full variance -- a test pins that too, so
+nobody "fixes" a neighbour-step failure by flattening the drift to a constant
+and putting the whole chunk back on one shared threshold.
+
+**One drift layer alone reads as large flat PLATEAUS, not texture.** Reported
+live after `DEPTH_BANDS` went 4 -> 25: *"it's not using accumulation per tile
+and sth like perlin noise or so instead whole areas increment to next sprite
+without variations"*. This is not the checkerboard bug above (neighbours
+differing too much) -- closer to the opposite. `onset_offset_for`'s single
+broad layer is exactly as low-frequency as the checkerboard fix demands (a
+lift every `ONSET_DRIFT_TILES` = 12 tiles), which means a realistic ~20-30
+tile on-screen view often sits inside one near-flat lobe of that field, where
+almost every tile rounds to the same band. Measured directly: sweeping every
+24x24 window across a real 400x120-tile swath, the worst window found held
+only 3 distinct depth bands at a mid snowfall (depth 0.5) -- a whole
+neighbourhood stepping together. A second, much shorter-period smooth layer
+(`ONSET_FINE_DRIFT_TILES` = 2 tiles) now adds real tile-to-tile texture inside
+whatever broad-scale patch the first layer already chose, carrying a
+deliberately small slice of the shared `ONSET_VARIANCE` budget
+(`ONSET_FINE_VARIANCE`, with the broad share derived as the remainder so the
+two can't drift out of sync) so the broad layer still governs which general
+area -- a hollow, a lee side, a tree line's shade -- catches on first. Re-
+measured on the combined field: that same worst-case window rose from 3 to 5
+distinct bands, while the worst neighbour step rose from a measured 0.0357 to
+0.0581 -- still under 1.5 of the new fine bands (0.04 each), nowhere near the
+old checkerboard's whole-range jump -- so `MAX_NEIGHBOUR_ONSET_STEP` is
+re-pinned to 0.07 with real margin over that fresh measurement.
 
 **The repaint itself has to happen often enough to show that mix changing.**
 Onset variance alone was not sufficient: the whole-field repaint that
@@ -310,6 +335,12 @@ should reflect its own change right away.
   snow line meanders instead of rendering as hard-edged tile squares —
   `SnowLayer.ONSET_DRIFT_TILES`/`MAX_NEIGHBOUR_ONSET_STEP`, tested from both
   sides (coarse enough, and not flattened to a constant).
+- ✅ A second, fine-grained drift layer adds real per-tile texture within a
+  realistic local view, so a snowfall doesn't read as a few large uniform
+  plateaus stepping band by band — `SnowLayer.ONSET_FINE_DRIFT_TILES`/
+  `ONSET_FINE_VARIANCE`, tested (`test_a_local_window_shows_real_per_tile_
+  variation_not_a_uniform_plateau`); `MAX_NEIGHBOUR_ONSET_STEP` re-measured
+  and re-pinned for the combined field.
 - ⬜ Sideways DRIFT on falling flakes — a wobble across the fall. Flakes
   currently come down near-vertically (`Snowfall.FLAKE_SLANT` 0.05). Needs its
   own uniform and its own tested constant.
