@@ -299,6 +299,37 @@ func test_equip_weapon_sets_the_tool_slot_texture_and_marks_it_equipped():
 	assert_true(view.is_slot_equipped("tool"))
 
 
+# -- armor rendering: real slot nodes for head/chest/legs/feet ---------------
+#
+# equip_slot() above only ever drove a flat-color placeholder, and
+# Player.equip_armor() never called CharacterView at all -- worn armor was
+# purely numeric everywhere (see docs/concept/item_illustrations.md).
+# equip_armor_slot() is the real-art equivalent of equip_weapon() above, for
+# the four armor slots instead of the tool slot.
+
+func test_equip_armor_slot_sets_the_matching_slot_texture_and_marks_it_equipped():
+	var texture := ImageTexture.create_from_image(Image.create(16, 16, false, Image.FORMAT_RGBA8))
+	view.equip_armor_slot("chest", texture)
+	assert_eq(view.slot_texture("chest"), texture)
+	assert_true(view.is_slot_equipped("chest"))
+
+
+func test_equip_armor_slot_covers_every_real_equipment_slot():
+	for slot_name in ["head", "chest", "legs", "feet"]:
+		var texture := ImageTexture.create_from_image(Image.create(4, 4, false, Image.FORMAT_RGBA8))
+		view.equip_armor_slot(slot_name, texture)
+		assert_true(view.is_slot_equipped(slot_name), "%s should be equippable" % slot_name)
+
+
+func test_unequip_slot_also_hides_a_real_armor_slot():
+	var texture := ImageTexture.create_from_image(Image.create(16, 16, false, Image.FORMAT_RGBA8))
+	view.equip_armor_slot("legs", texture)
+
+	view.unequip_slot("legs")
+
+	assert_false(view.is_slot_equipped("legs"))
+
+
 ## Reported live: "the sword should be held by the actual hand" -- ToolSlot
 ## used to sit at a fixed torso-side position (_tool_slot_base_position),
 ## independent of the arm entirely. It now tracks ArmRight's own current

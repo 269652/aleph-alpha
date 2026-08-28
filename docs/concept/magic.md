@@ -286,3 +286,79 @@ write it in the first place.
 - Can an NPC "study" a scroll the same way a player does, feeding
   [npc.md](npc.md)'s instruction economy — an NPC mage that learns spells
   from what it's traded, not just what it's scripted with?
+
+---
+
+## Brainstorm extensions (2026-08-28)
+
+### Atom effects render as composite spritemaps, one per atom (2026-08-28)
+
+Resolves "how are magic-item attacks rendered" from
+[item_illustrations.md](item_illustrations.md), which this section belongs
+to conceptually — items and atoms share the same underlying illustrated-
+sprite engine (`illustrated_animal_sprite.gd`'s proven canvas/chroma-key/
+divider-line/action-fallback pattern), just keyed differently.
+
+**Per atom, not per spell.** A spell is a player-composed pipeline of atoms
+(`fire_damage |> ignite`) — open-ended in combination, since the whole point
+of the DSL is that players compose their own. A sheet per *compiled spell*
+would need one hand-drawn asset per possible composition, which doesn't
+scale. A sheet per *atom* needs exactly one per entry in
+`spell_atom_catalog.gd` (~25 today, one more whenever a new atom is added),
+and a cast plays back its pipeline's atoms' effect sheets in the same
+sequence the mechanics already resolve them in — the visual composes exactly
+the way the DSL itself composes.
+
+**Two independent halves**, mirroring the existing split in `character_view.gd`
+between the weapon sprite and its swing:
+
+- **Caster gesture** — reuses the existing `WeaponSwing`/`ToolSlot`
+  procedural rotation unchanged, no new art. Per-item swing art is a
+  separate, explicitly deferred idea (see item_illustrations.md) and isn't
+  needed for a spell to visibly resolve.
+- **Effect sheet** — a new small spritesheet per atom, played at the target/
+  impact point (or along a travel path, for a delivery method that has one —
+  none exist in the engine yet for anything, magical or not; see Open
+  questions). Same house convention as the Krampus ability sheets
+  (`docs/art/ai_sprite_prompts.md` §6): one horizontal row, solid magenta
+  `#FF00FF` chroma-key, near-white divider lines, a short wind-up/peak/
+  recovery beat structure — scaled down from that doc's 8-frame/2200×900
+  export target, since a hand-cast atom effect is a much smaller on-screen
+  element than a boss's own body.
+
+**Category groups the authoring, atom id keys the lookup.** The catalog's
+existing `category` field (damage/heal/control/movement/defense/summon/
+utility/biological/perceptual/spatial) already groups atoms that share a
+family "motion language" — every `damage` atom is a single instantaneous
+burst at the target, every `control` atom is a lingering status loop, every
+`movement` atom is a directional force at the target — which keeps the ~25
+sheets reading as one coherent set. Each atom still gets its own distinct
+sheet: `fire_damage`/`frost_damage`/`shock_damage`/`poison_damage` are all
+`damage`-category but cannot look alike.
+
+**Procedural fallback first**, the same two-track pattern every other
+subject in this engine already follows (`ProceduralItemSprite`,
+`ProceduralAnimalAnimation`, `ProceduralCharacterSprite`): every atom must
+render something correct from `category` + `tier` alone — a color per
+category, a simple shape/motion per category, size/intensity scaled by tier —
+before any hand-drawn sheet exists for it. Magic can ship playable the
+moment a runtime executor exists; illustrated sheets are then an incremental,
+atom-by-atom upgrade, never a blocker.
+
+**Explicitly out of scope here: the runtime executor itself.** Nothing in
+the engine today turns "a player pressed cast" into any effect at all,
+magical or visual — `spell_parser.gd`/`spell_atom_catalog.gd`/`spell_cost.gd`
+are pure, scene-tree-free math (see `docs/progress.md`'s magic entry). This
+section specifies only what that executor should render once it exists, not
+the executor.
+
+Open questions:
+
+- Delivery-method visuals (touch/projectile/area/self): no travel-time/
+  flight visual exists anywhere in the engine yet, for anything — even a
+  thrown rock teleports straight to its resolved landing point. A
+  projectile-delivered atom's effect sheet needs a travel-phase convention
+  this section doesn't yet specify.
+- Do reacting atoms (fire + frost → steam, per this doc's own open question
+  on elemental interactions above) need a third sheet for the reaction
+  product itself, on top of each reacting atom's own sheet? Not decided.

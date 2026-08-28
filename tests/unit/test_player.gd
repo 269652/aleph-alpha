@@ -28,6 +28,8 @@ const StoneSize = preload("res://src/world/stone_size.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
+const Item = preload("res://src/gameplay/item.gd")
+const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -473,6 +475,26 @@ func test_equipping_a_weapon_via_activate_item_id_updates_the_paperdoll():
 	assert_eq(player.equipment.equipped_in("weapon").id, "iron_sword")
 
 
+## The in-hand sprite must follow the item's sprite_id, not its raw id (see
+## docs/concept/item_illustrations.md) -- a crafted/variant item can share a
+## base item's art via a divergent sprite_id, and equip_item has to resolve
+## art through that indirection rather than hard-coding `.id`.
+func test_equipping_an_item_shows_its_sprite_id_art_not_its_raw_id():
+	var variant := Item.new(
+		"iron_sword_blessed", "Blessed Iron Sword", "weapon", 1, 25.0, "", 0.0, 0.0, "iron_sword"
+	)
+	player.inventory.add(variant, 1)
+
+	assert_true(player.equip_item(variant))
+
+	var expected := ProceduralItemSprite.new().generate_texture("iron_sword")
+	assert_eq(
+		player._character_view.tool_slot_texture().get_image().get_data(),
+		expected.get_image().get_data(),
+		"the held sprite should be iron_sword's art (the sprite_id), not iron_sword_blessed's"
+	)
+
+
 ## activate_hotbar_slot didn't special-case armor before calling equip_item
 ## (which rejects non-weapon/tool kinds outright) -- armor from the numbered
 ## hotbar always silently failed, even though the same item worked fine via
@@ -635,6 +657,51 @@ func test_resolving_a_catch_hides_the_bobber():
 ## no relation to any actually-worn armor (equip_armor never touches
 ## CharacterView at all). A fresh spawn should show no head-slot decoration.
 func test_spawning_does_not_leave_a_placeholder_head_slot_equipped():
+	assert_false(player._character_view.is_slot_equipped("head"))
+
+
+# -- equip_armor now shows real armor on the rig, not just the numeric slot --
+# (see docs/concept/item_illustrations.md and the regression comment above:
+# equip_armor never called CharacterView at all before this).
+
+func test_equipping_armor_shows_it_in_the_matching_character_view_slot():
+	var helm := _item_catalog.make("leather_helm")
+	player.inventory.add(helm, 1)
+
+	assert_true(player.equip_armor(helm))
+
+	assert_true(player._character_view.is_slot_equipped("head"))
+	var expected := ProceduralItemSprite.new().generate_texture("leather_helm")
+	assert_eq(
+		player._character_view.slot_texture("head").get_image().get_data(),
+		expected.get_image().get_data()
+	)
+
+
+func test_equipping_armor_in_each_slot_shows_up_in_that_slot():
+	var chest := _item_catalog.make("leather_chest")
+	player.inventory.add(chest, 1)
+	assert_true(player.equip_armor(chest))
+	assert_true(player._character_view.is_slot_equipped("chest"), "chest")
+
+	var legs := _item_catalog.make("leather_legs")
+	player.inventory.add(legs, 1)
+	assert_true(player.equip_armor(legs))
+	assert_true(player._character_view.is_slot_equipped("legs"), "legs")
+
+	var boots := _item_catalog.make("leather_boots")
+	player.inventory.add(boots, 1)
+	assert_true(player.equip_armor(boots))
+	assert_true(player._character_view.is_slot_equipped("feet"), "feet")
+
+
+func test_unequipping_armor_hides_its_character_view_slot():
+	var helm := _item_catalog.make("leather_helm")
+	player.inventory.add(helm, 1)
+	player.equip_armor(helm)
+
+	assert_true(player.unequip_slot("head"))
+
 	assert_false(player._character_view.is_slot_equipped("head"))
 
 

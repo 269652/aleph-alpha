@@ -15,7 +15,16 @@ position = Vector2(-3.5, -10)
 [node name="LegRight" type="Sprite2D" parent="."]
 position = Vector2(3.5, -10)
 
+[node name="FeetSlot" type="Sprite2D" parent="."]
+position = Vector2(0, -10)
+
+[node name="LegsSlot" type="Sprite2D" parent="."]
+position = Vector2(0, -10)
+
 [node name="Body" type="Sprite2D" parent="."]
+position = Vector2(0, -22)
+
+[node name="ChestSlot" type="Sprite2D" parent="."]
 position = Vector2(0, -22)
 
 [node name="ArmLeft" type="Sprite2D" parent="."]
