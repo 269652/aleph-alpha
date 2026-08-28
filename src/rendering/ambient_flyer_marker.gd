@@ -11,6 +11,7 @@ extends Sprite2D
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
+const NectaringPosture = preload("res://src/rendering/nectaring_posture.gd")
 const GroundForageBehavior = preload("res://src/gameplay/ground_forage_behavior.gd")
 const BirdDigestion = preload("res://src/gameplay/bird_digestion.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
@@ -255,6 +256,22 @@ var _forage_flower = null  # Vector2, or null
 ## keeps working flowers exclusively.
 var _forage_target_is_tree := false
 var _drink_remaining := 0.0
+
+## Where it is standing while it drinks, and where it was the instant it
+## touched down (see _step_nectaring / NectaringPosture).
+##
+## The anchor is held APART from `position` on purpose: the floret shuffle is
+## an absolute offset from it, never an accumulating step, so however long the
+## insect stands there it cannot drift off the bloom -- which is the only
+## reason micro-motion is safe to add to something the forage rule measures
+## arrival against.
+var _feed_anchor := Vector2.ZERO
+var _touchdown_from := Vector2.ZERO
+## How long it has been on this bloom, which is what the alighting eases over.
+## Counted up rather than read off _drink_remaining, because a flush cuts the
+## drink short (_drink_remaining = 0.0) without the landing ever having been
+## anything other than a landing.
+var _drink_elapsed := 0.0
 
 ## What this pollinator carries away from its last flower visit (see
 ## Pollination.pollen_after_visit): "" until it visits a male flower, and
@@ -534,11 +551,15 @@ func _process(frame_delta: float) -> void:
 
 	var before := position
 
-	# Sitting on a bloom, drinking: hold still (wings still beat) until done,
-	# then bank the visit and go looking for the next one.
+	# Standing on a bloom, drinking. NOT holding still: it alights onto the
+	# flower and then works around the head (see _step_nectaring). This branch
+	# used to be `_animate_wings(); return` with `position` untouched, which
+	# rendered a butterfly hovering, wings beating, motionless on one pixel,
+	# for the whole 2.4 seconds -- the reported "stuck in front of a flower".
 	if _drink_remaining > 0.0:
 		_drink_remaining -= delta
-		_animate_wings()
+		_drink_elapsed += delta
+		_step_nectaring()
 		return
 
 	_step_scent(delta)
@@ -547,7 +568,16 @@ func _process(frame_delta: float) -> void:
 		# Committed to a flower: fly straight at it, and land on arrival.
 		var to_target: Vector2 = _forage_target - position
 		if to_target.length() <= PollinatorForaging.LANDING_DISTANCE:
-			position = _forage_target
+			# ALIGHT, rather than teleport. This was `position = _forage_
+			# target` -- a hard snap of up to LANDING_DISTANCE onto an exact
+			# pixel, on the one frame the player is most likely to be looking
+			# at this insect. The bookkeeping below is unchanged and still
+			# fires on this frame (arrival is arrival); only the picture is,
+			# and _step_nectaring eases the body the last few pixels in over
+			# NectaringPosture.alighting_seconds.
+			_touchdown_from = position
+			_feed_anchor = _forage_target
+			_drink_elapsed = 0.0
 			# Drink from, and remember, the FLOWER -- not the blossom point
 			# it is now perched on (see _forage_flower). Remembered at this
 			# marker's OWN elapsed time, so it's actually forgotten again
@@ -2049,8 +2079,21 @@ func face_travel(direction: Vector2, delta: float = 0.0) -> void:
 ## direction slowly, only their wings should flap fast".
 var flap_frames: Array = []
 ## The folded-wing sprite shown while perched (see ProceduralBirdSprite.
-## generate_perched_texture).
+## generate_perched_texture). BIRD-ONLY: ProceduralBirdSprite is the only
+## generator in src/rendering with a generate_perched_texture at all, which is
+## precisely how a drinking butterfly ended up running the flight flap -- see
+## `settled_frames` below.
 var perched_frame: Texture2D = null
+## The wings-shut-over-the-back frames a pollinator shows while it stands on a
+## bloom and drinks (see ProceduralButterflySprite.generate_settled_textures,
+## set by AmbientFlyerRenderer._build_marker).
+##
+## A SEQUENCE rather than perched_frame's single texture, because a nectaring
+## butterfly's wings are not simply parked: they sit shut and swing open to
+## bask every few seconds (see NectaringPosture). Left empty for any generator
+## that has none -- a bird never drinks nectar, so it never reaches this at
+## all -- and the flap is then still what plays, exactly as before.
+var settled_frames: Array = []
 ## True while the flyer is sitting rather than flying.
 var perched := false
 const FLAP_SECONDS_PER_FRAME := 0.09
@@ -2064,6 +2107,55 @@ const FLAP_SECONDS_PER_FRAME := 0.09
 ## meadow flyer is never affected.
 func _is_pre_hatch() -> bool:
 	return LifeCycle.stage_at(age_seconds) < LifeCycle.STAGE_JUVENILE
+
+
+## Standing on the bloom: alight onto it, then work it.
+##
+## ## Why this moves at all
+##
+## The forage RULE was measured exhaustively and cleared -- a butterfly visits
+## 20-29 DISTINCT blooms per 600 simulated seconds, longest loiter 6.8-11.5 s.
+## What produced "butterflies get stuck in front of a single flower" was the
+## PICTURE: `position` was snapped onto an exact pixel and then never touched
+## again for the whole of PollinatorForaging.DRINK_SECONDS. A real butterfly
+## working a flower head is never motionless for 2.4 seconds -- it walks
+## around the head probing different florets with the proboscis.
+##
+## ## Why it cannot drift
+##
+## `position` is RECOMPUTED from the anchor every frame, never nudged. There
+## is no accumulator here to run away, so however long it stands there it is
+## still exactly on the bloom the forage rule sent it to, and the shuffle is
+## bounded by NectaringPosture.shuffle_reach_px -- which
+## test_a_real_monarchs_shuffle_stays_well_inside_the_landing_distance pins
+## below PollinatorForaging.LANDING_DISTANCE.
+func _step_nectaring() -> void:
+	if _movement != null:
+		var settled := NectaringPosture.alighting_ease(
+			_drink_elapsed, NectaringPosture.alighting_seconds(_movement.speed)
+		)
+		var shuffle := NectaringPosture.shuffle_offset(
+			_elapsed_time, _drawn_body_px(), wander_seed
+		)
+		# Both the last few pixels of the approach AND the shuffle fade in
+		# together over the settle, so nothing pops on the frame it lands.
+		position = _touchdown_from.lerp(_feed_anchor, settled) + shuffle * settled
+	_animate_wings()
+
+
+## This flyer's body length as actually DRAWN, in world pixels.
+##
+## Texture height times `scale`, the same yardstick WingbeatBounce's amplitude
+## is taken against -- so the floret shuffle stays the same fraction of the
+## visible insect at any size, and a juvenile that has not grown into its
+## adult scale yet (see _step_growing) shuffles proportionally less without
+## anything telling it to. Multiplied by `scale` here, unlike the bounce,
+## because this lands in `position` (world units) rather than in `offset`
+## (texture-local units, which Sprite2D scales when it draws).
+func _drawn_body_px() -> float:
+	if texture == null:
+		return 0.0
+	return float(texture.get_height()) * absf(scale.y)
 
 
 ## Advances the wing-beat. Separate from the movement step so a flyer
@@ -2092,6 +2184,22 @@ func _animate_wings() -> void:
 			texture = peck_frame
 		elif perched_frame != null:
 			texture = perched_frame
+		return
+	# Standing on a bloom, drinking. A nectaring butterfly is not hovering:
+	# hovering while feeding is a hawkmoth trait, not a butterfly one. Its
+	# wings are shut over its back and swing open only every few seconds to
+	# bask (see NectaringPosture). Running flap_frames here -- which is what
+	# happened, because `perched_frame` is bird-only and there was nothing
+	# else to fall back to -- drew a butterfly beating its wings while
+	# motionless on one pixel, and that is what "stuck in front of a flower"
+	# was describing.
+	if _drink_remaining > 0.0 and not settled_frames.is_empty():
+		# Nothing is beating, so there is no lift pulse to rise and fall on --
+		# same reasoning as the perched branch above (see WingbeatBounce).
+		offset.y = 0.0
+		texture = settled_frames[
+			NectaringPosture.frame_index(_elapsed_time, settled_frames.size(), wander_seed)
+		]
 		return
 	if flap_frames.is_empty():
 		return

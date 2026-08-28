@@ -572,6 +572,12 @@ func _build_marker(
 		marker.flap_frames = sprite_generator.generate_flap_textures(species, seed_value)
 	if sprite_generator.has_method("generate_perched_texture"):
 		marker.perched_frame = sprite_generator.generate_perched_texture(species, seed_value)
+	# The wings-shut-over-the-back frames a pollinator stands on a bloom in
+	# (see ProceduralButterflySprite.generate_settled_textures). Guarded the
+	# same way as everything else here: ProceduralBirdSprite has none, and a
+	# bird never drinks nectar, so it simply keeps its perched frame.
+	if sprite_generator.has_method("generate_settled_textures"):
+		marker.settled_frames = sprite_generator.generate_settled_textures(species, seed_value)
 	# Size comes from two factors only: the art resolution, and the species'
 	# own size relative to a fish (see FLYER_WORLD_SCALE). This used to also
 	# take a `sprite_scale` argument from the caller, which is now dead --

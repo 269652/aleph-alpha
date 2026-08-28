@@ -2745,3 +2745,300 @@ func test_a_pre_hatch_flyer_with_no_egg_frame_set_does_not_error():
 	marker.age_seconds = 0.0
 	marker._process(1.0)
 	assert_lt(LifeCycle.stage_at(marker.age_seconds), LifeCycle.STAGE_JUVENILE)
+
+
+# -- what a butterfly LOOKS like while it feeds ------------------------------
+#
+# Reported twice: "butterflies get stuck in front of a single flower". The
+# forage RULE was measured and cleared (a butterfly visits 20-29 DISTINCT
+# blooms per 600 simulated seconds, longest loiter 6.8-11.5s), so what is
+# wrong is the picture, not the plan. On arrival the marker did
+# `position = _forage_target` -- a hard snap onto an exact pixel -- and then,
+# for the whole of PollinatorForaging.DRINK_SECONDS, never touched `position`
+# again while _animate_wings ran the FLIGHT flap: `perched_frame` is generated
+# by ProceduralBirdSprite alone (it is the only generate_perched_texture in
+# src/rendering), so a butterfly had no settled frame at all and fell straight
+# through to flap_frames. Net visual: a butterfly HOVERING, wings beating,
+# motionless on one pixel, for 2.4 seconds, over and over -- which is exactly
+# what "stuck IN FRONT OF a flower" describes.
+#
+# Real butterflies do not hover to feed. They LAND on the bloom and stand on
+# it, hold the wings closed over the back and open them only slowly and
+# occasionally (basking, not flying), and shuffle around the flower head
+# working different florets with the proboscis. That is what these pin.
+
+func _drinking_butterfly() -> void:
+	marker.species = "monarch"
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.wander_seed = 11
+	marker.setup(AmbientFlyerMovement.new(16.0, 30.0, 0.7))
+	marker.flap_frames = [ImageTexture.new(), ImageTexture.new(), ImageTexture.new()]
+	marker.settled_frames = [ImageTexture.new(), ImageTexture.new()]
+	marker._drink_remaining = PollinatorForaging.DRINK_SECONDS
+
+
+func test_a_drinking_butterfly_never_runs_the_flight_flap():
+	_drinking_butterfly()
+	for step in 20:  # 2.0s, inside DRINK_SECONDS
+		marker._process(0.1)
+		assert_false(
+			marker.flap_frames.has(marker.texture),
+			"a butterfly standing on a bloom must not beat its wings as if flying"
+		)
+		assert_true(
+			marker.settled_frames.has(marker.texture),
+			"it should be showing a settled, wings-folded frame"
+		)
+
+
+const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
+const NectaringPosture = preload("res://src/rendering/nectaring_posture.gd")
+const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
+
+const BUTTERFLY_SPEED := 16.0
+
+
+## A monarch wired the way AmbientFlyerRenderer._build_marker wires one --
+## real sprite, real settled frames, real drawn size. The shuffle is a
+## fraction of the DRAWN body (see NectaringPosture.
+## FLORET_SHUFFLE_BODY_FRACTION), so a bare ImageTexture.new() with no size
+## and no scale would silently measure nothing.
+func _drawn_monarch(world) -> void:
+	var sprites := ProceduralButterflySprite.new()
+	marker.species = "monarch"
+	marker.texture = sprites.generate_texture("monarch", 3)
+	marker.flap_frames = sprites.generate_flap_textures("monarch", 3)
+	marker.settled_frames = sprites.generate_settled_textures("monarch", 3)
+	marker.scale = (
+		Vector2.ONE
+		* ArtResolution.SPRITE_SCALE
+		* FishRenderer.FISH_WORLD_SCALE
+		* float(AmbientFlyerRenderer.FLYER_WORLD_SCALE["monarch"])
+	)
+	marker.scent_world = world
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.wander_seed = 4242
+	marker.setup(AmbientFlyerMovement.new(BUTTERFLY_SPEED, 30.0, 0.7))
+
+
+## Steps until the flyer is actually drinking, and returns how far it moved on
+## the frame it arrived (0 if it never got there).
+func _step_until_drinking(step: float, budget: int) -> float:
+	for i in budget:
+		var before := marker.position
+		marker._process(step)
+		if marker._drink_remaining > 0.0:
+			return before.distance_to(marker.position)
+	return -1.0
+
+
+# -- it MOVES while it feeds ------------------------------------------------
+
+
+## The other half of "stuck in front of a flower": `position` was set once, on
+## arrival, and then not touched again for the whole 2.4-second drink. A real
+## butterfly walks around the flower head working different florets with the
+## proboscis -- it is never a frozen pixel.
+func test_a_feeding_butterfly_is_not_a_frozen_pixel():
+	var world := StubScentWorld.new()
+	world.flowers.append(
+		{"position": Vector2(60, 0), "species": "rose", "nectar": 1.0, "landing": Vector2(60, 0)}
+	)
+	_drawn_monarch(world)
+	assert_gte(_step_until_drinking(FRAME, 2000), 0.0, "precondition: it has to land first")
+
+	var seen: Array[Vector2] = []
+	while marker._drink_remaining > 0.0:
+		marker._process(FRAME)
+		seen.append(marker.position)
+	var spread := 0.0
+	for a in seen:
+		for b in seen:
+			spread = maxf(spread, a.distance_to(b))
+	assert_gt(
+		spread, 0.0,
+		"a butterfly working a flower head does not hold one pixel for 2.4 seconds"
+	)
+	assert_gt(
+		spread,
+		0.5 * NectaringPosture.shuffle_reach_px(marker._drawn_body_px()),
+		"and it works the head, not a twitch (moved across %.3f px)" % spread
+	)
+
+
+## ...but never off the bloom. The excursion is the size of a FLOWER HEAD, so
+## it has to stay well inside PollinatorForaging.LANDING_DISTANCE -- otherwise
+## "landed on this flower" and "standing on this flower" stop meaning the same
+## thing and the forage rule's own arrival test starts disagreeing with the
+## picture.
+func test_a_feeding_butterfly_never_wanders_off_the_bloom_it_is_standing_on():
+	var world := StubScentWorld.new()
+	var bloom := Vector2(60, 0)
+	world.flowers.append(
+		{"position": bloom, "species": "rose", "nectar": 1.0, "landing": bloom}
+	)
+	_drawn_monarch(world)
+	assert_gte(_step_until_drinking(FRAME, 2000), 0.0, "precondition: it has to land first")
+	var worst := 0.0
+	while marker._drink_remaining > 0.0:
+		marker._process(FRAME)
+		worst = maxf(worst, marker.position.distance_to(bloom))
+	assert_lt(
+		worst, PollinatorForaging.LANDING_DISTANCE,
+		"it must still read as standing ON that bloom (strayed %.3f px)" % worst
+	)
+
+
+# -- it LANDS, rather than teleporting --------------------------------------
+
+
+## On arrival the marker did `position = _forage_target` -- a hard snap of up
+## to LANDING_DISTANCE onto an exact pixel, on the single frame the player is
+## most likely to be watching this insect. It must now cover that last gap at
+## its own airspeed like every other stretch of the approach.
+func test_a_butterfly_alights_on_a_bloom_instead_of_teleporting_onto_it():
+	var world := StubScentWorld.new()
+	var bloom := Vector2(60, 0)
+	world.flowers.append(
+		{"position": bloom, "species": "rose", "nectar": 1.0, "landing": bloom}
+	)
+	_drawn_monarch(world)
+	var arrival_jump := _step_until_drinking(FRAME, 2000)
+	assert_gte(arrival_jump, 0.0, "precondition: it has to land first")
+	assert_lte(
+		arrival_jump, BUTTERFLY_SPEED * FRAME + 0.001,
+		"nothing may move further in one frame than the flyer's own airspeed carries it"
+	)
+	assert_gt(
+		marker.position.distance_to(bloom), 0.0,
+		"it must not be standing exactly on the bloom the instant it is declared arrived"
+	)
+
+
+func test_and_it_really_is_standing_on_the_bloom_once_the_settle_is_over():
+	var world := StubScentWorld.new()
+	var bloom := Vector2(60, 0)
+	world.flowers.append(
+		{"position": bloom, "species": "rose", "nectar": 1.0, "landing": bloom}
+	)
+	_drawn_monarch(world)
+	assert_gte(_step_until_drinking(FRAME, 2000), 0.0, "precondition: it has to land first")
+	var settle := NectaringPosture.alighting_seconds(BUTTERFLY_SPEED)
+	for i in int(ceil(settle / FRAME)) + 1:
+		marker._process(FRAME)
+	assert_lte(
+		marker.position.distance_to(bloom),
+		NectaringPosture.shuffle_reach_px(marker._drawn_body_px()) + 0.001,
+		"once it has set down it is on the flower, shuffle and all"
+	)
+
+
+# -- the wings, at the marker ------------------------------------------------
+
+
+## Nothing is beating, so there is no lift pulse to rise and fall on -- the
+## same statement the perched branch makes (see WingbeatBounce). A butterfly
+## standing on a flower and bobbing as if flying is the hovering read all over
+## again.
+func test_a_drinking_butterfly_does_not_bob_on_a_wingbeat_it_is_not_making():
+	var world := StubScentWorld.new()
+	_drawn_monarch(world)  # real, SIZED frames: a zero-height texture bobs by zero anyway
+	marker._drink_remaining = PollinatorForaging.DRINK_SECONDS
+	marker.offset.y = 3.0
+	for step in 20:
+		marker._process(0.1)
+		assert_eq(marker.offset.y, 0.0, "a settled butterfly's body sits where it is drawn")
+
+
+## The whole reason the flight flap was showing: `perched_frame` is generated
+## by ProceduralBirdSprite alone. Anything WITHOUT settled frames must still
+## behave exactly as it did before this existed rather than erroring or
+## freezing -- the same optional-field guard spirit as egg_frame/peck_frame.
+func test_a_pollinator_with_no_settled_frames_still_animates_as_it_always_did():
+	_drinking_butterfly()
+	marker.settled_frames = []
+	for step in 20:
+		marker._process(0.1)
+	assert_true(
+		marker.flap_frames.has(marker.texture),
+		"with nothing settled to show it falls back to the flap, as before"
+	)
+
+
+## Real basking is occasional. Across a whole stop the wings may swing open at
+## most once -- if they opened and shut rhythmically it would just be a slower
+## flap, which is the thing being fixed.
+func test_the_settled_wings_swing_open_at_most_once_in_a_single_stop():
+	_drinking_butterfly()
+	var openings := 0
+	var shut_frames := 0
+	var was_shut := true
+	var steps := int(PollinatorForaging.DRINK_SECONDS / FRAME)
+	for step in steps:
+		marker._process(FRAME)
+		var open: bool = marker.texture != marker.settled_frames[0]
+		if open and was_shut:
+			openings += 1
+		if not open:
+			shut_frames += 1
+		was_shut = not open
+	assert_lte(openings, 1, "a feeding butterfly basks occasionally, it does not flap slowly")
+	assert_gt(
+		float(shut_frames) / float(steps), 0.5,
+		"and the pose it HOLDS is wings-shut-over-the-back, not anything open"
+			+ " (shut for %d of %d frames)" % [shut_frames, steps]
+	)
+
+
+## Flushing off a flower is the classic flight-initiation-distance
+## measurement, and it must survive the settled pose: the moment it is
+## airborne again it is flying, wings and all.
+func test_a_butterfly_flushed_off_a_bloom_goes_straight_back_to_flying():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var shy := _butterfly_with_boldness(0.0, Vector2(200, 200) + Vector2(10.0, 0.0), parent)
+	var sprites := ProceduralButterflySprite.new()
+	shy.flap_frames = sprites.generate_flap_textures("monarch", 3)
+	shy.settled_frames = sprites.generate_settled_textures("monarch", 3)
+	shy._drink_remaining = PollinatorForaging.DRINK_SECONDS
+	shy._process(FRAME)
+	assert_true(shy._fleeing_from_player, "the player standing on it must flush it")
+	assert_eq(shy._drink_remaining, 0.0, "and end the drink")
+	assert_true(
+		shy.flap_frames.has(shy.texture),
+		"an airborne butterfly beats its wings again the instant it leaves the bloom"
+	)
+
+
+# -- the acceptance re-measurement ------------------------------------------
+#
+# The forage rule was cleared by measurement before any of this was written (a
+# butterfly visits 20-29 DISTINCT blooms per 600 simulated seconds), and the
+# whole risk of adding micro-motion to something the forage rule measures
+# arrival against is that it quietly stops finding the next flower. So the
+# same measurement runs here, over the same 600 simulated seconds, against a
+# meadow big enough that the count is not capped by the meadow.
+
+
+func test_a_butterfly_still_works_a_whole_meadow_over_ten_simulated_minutes():
+	var world := StubScentWorld.new()
+	_ring_of_flowers(world, Vector2.ZERO, 12, 3.0 * TILE_SIZE)
+	_ring_of_flowers(world, Vector2.ZERO, 18, 6.0 * TILE_SIZE)
+	_drawn_monarch(world)
+
+	for step in 6000:  # ten simulated minutes
+		marker._process(0.1)
+		world.regenerate(0.1)
+
+	var distinct := _distinct_flowers_visited(world)
+	assert_gte(
+		distinct, 20,
+		"micro-motion must not have cost the trap-line its circuit"
+			+ " (distinct visited: %d of %d, landings: %d)"
+				% [distinct, world.flowers.size(), world.drink_calls.size()]
+	)
