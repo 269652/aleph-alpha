@@ -817,3 +817,42 @@ func test_bees_are_still_scattered_across_the_whole_meadow():
 	):
 		expected.append(Vector2((cell.x + 0.5) * TILE_SIZE, (cell.y + 0.5) * TILE_SIZE))
 	assert_eq(bees, expected, "bees must still use the scatter, not the club")
+
+
+# -- the settled (nectaring) frames -----------------------------------------
+#
+# `perched_frame` above is bird-only: ProceduralBirdSprite is the only
+# generator in src/rendering with a generate_perched_texture, so a butterfly
+# standing on a bloom drinking had NO settled frame and
+# AmbientFlyerMarker._animate_wings fell straight through to the flight flap.
+# A butterfly beating its wings while motionless on one pixel for
+# PollinatorForaging.DRINK_SECONDS is exactly the reported "butterflies get
+# stuck in front of a flower", so the fix is only real if the frames actually
+# reach the marker the renderer builds.
+
+
+func test_a_built_butterfly_arrives_with_settled_frames_on_it():
+	var flyer := renderer.spawn_offspring(parent, "monarch", Vector2.ZERO, 4)
+	assert_false(
+		flyer.settled_frames.is_empty(),
+		"a pollinator must be able to show a wings-shut pose while it drinks"
+	)
+
+
+func test_two_butterflies_of_the_same_species_and_seed_share_settled_frames():
+	var first := renderer.spawn_offspring(parent, "monarch", Vector2.ZERO, 4)
+	var second := renderer.spawn_offspring(parent, "monarch", Vector2(5, 5), 4)
+	assert_same(
+		first.settled_frames, second.settled_frames,
+		"same species+seed should reuse the cached settled-frame sequence"
+	)
+
+
+## A bird has no settled frames and needs none -- it never drinks nectar (see
+## FlyerDiet), so it never reaches that branch. Pinned so the has_method guard
+## in _build_marker is not "simplified" into an unconditional call against a
+## generator that has no such method.
+func test_a_built_bird_simply_has_no_settled_frames():
+	var bird := renderer.build_bird(parent, "sparrow", Vector2.ZERO, 4)
+	assert_true(bird.settled_frames.is_empty(), "a songbird has no nectaring pose")
+	assert_not_null(bird.perched_frame, "it has a perched one, which is a different thing")

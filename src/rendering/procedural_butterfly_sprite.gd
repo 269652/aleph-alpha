@@ -59,6 +59,7 @@ const LOOK_VARIANTS := 8
 
 static var _texture_cache: Dictionary = {}
 static var _flap_cache: Dictionary = {}
+static var _settled_cache: Dictionary = {}
 
 
 ## Individuals sharing a (species, look) share one Texture2D. Instance method
@@ -160,6 +161,74 @@ func generate_flap_textures(species: String, seed_value: int) -> Array:
 			textures.append(ImageTexture.create_from_image(frame))
 		_flap_cache[key] = textures
 	return _flap_cache[key]
+
+
+## How wide a butterfly is seen from directly above with its wings SHUT over
+## its back, as a fraction of its spread wingspan.
+##
+## A real measurement, not a look: a monarch spans about 100 mm with the wings
+## open, and about 6 mm across the thorax with the wings appressed together
+## above the back -- the wings are edge-on, so what is left is the body plus
+## two wing thicknesses. Deliberately far tighter than _WING_CLOSE (the
+## tightest point of the FLIGHT stroke), because a butterfly that feeds in a
+## pose it also passes through while flying has not visibly landed.
+const SETTLED_CLOSED_SPREAD := 6.0 / 100.0
+
+## The legibility floor on that. 6/100 of a monarch's 4.76-pixel wing
+## half-extent is a third of a pixel, and a sub-pixel ellipse rasterises to
+## nothing at all -- a butterfly that VANISHES the moment it lands would be a
+## worse picture than the hovering one this pose exists to fix. One pixel of
+## half-extent is the smallest wing guaranteed to light a column whatever its
+## sub-pixel alignment, and it is exactly the same kind of floor
+## _paint_butterfly already applies to the body spindle (`maxf(w * 0.045,
+## 1.0)`).
+const MIN_VISIBLE_WING_HALF_PX := 1.0
+
+## Frames in one settled shut-open-shut swing. Frame 0 is the fully shut pose
+## a feeding butterfly holds for most of the time (see NectaringPosture.
+## closed_duty); the last is the full basking spread, with two between so the
+## swing does not pop at the ~1.7 fps the basking clock steps them at.
+const SETTLED_FRAME_COUNT := 4
+
+
+## How far open this species' wings are in the shut-over-the-back pose: the
+## real ratio, floored so the wing still rasterises to something.
+func settled_closed_openness(species: String) -> float:
+	var key: String = species if SPECIES_BASE_COLORS.has(species) else "monarch"
+	var plan: Dictionary = SPECIES_WINGS.get(key, SPECIES_WINGS["monarch"])
+	var spread_px: float = float(plan.forewing.x) * float(SIZE.x)
+	if spread_px <= 0.0:
+		return SETTLED_CLOSED_SPREAD
+	return maxf(SETTLED_CLOSED_SPREAD, MIN_VISIBLE_WING_HALF_PX / spread_px)
+
+
+## One settled swing, as images: shut first, opening to a full basking spread
+## last. The nectaring counterpart of ProceduralBirdSprite.
+## generate_perched_image -- same trick of re-running the ONE painter at a
+## different wing phase rather than authoring a second silhouette, except that
+## a butterfly's basking is a movement rather than a single resting pose, so
+## it is a sequence rather than a frame.
+func generate_settled_images(species: String, seed_value: int) -> Array:
+	var frames := []
+	var shut := settled_closed_openness(species)
+	for i in SETTLED_FRAME_COUNT:
+		var openness: float = lerp(shut, 1.0, float(i) / float(maxi(SETTLED_FRAME_COUNT - 1, 1)))
+		frames.append(_butterfly_image(species, seed_value, openness))
+	return frames
+
+
+## Cached per (species, look) as one array, exactly like generate_flap_
+## textures: a meadow full of monarchs shares a handful of pictures rather
+## than generating one settled sequence per individual.
+func generate_settled_textures(species: String, seed_value: int) -> Array:
+	var variant := absi(seed_value) % LOOK_VARIANTS
+	var key := "%s/%d" % [species, variant]
+	if not _settled_cache.has(key):
+		var textures := []
+		for frame in generate_settled_images(species, variant):
+			textures.append(ImageTexture.create_from_image(frame))
+		_settled_cache[key] = textures
+	return _settled_cache[key]
 
 
 func _butterfly_image(species: String, seed_value: int, openness: float) -> Image:

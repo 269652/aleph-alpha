@@ -1579,6 +1579,73 @@ driving. And it is still a **draw offset** — the same `position` invariant,
 the same test.
 
 
+### Butterflies perch to feed, so a drink is not a hover
+
+*"butterflies get stuck in front of a single flower"* — reported twice.
+
+The forage **rule** was measured exhaustively and cleared: a butterfly visits
+20–29 distinct blooms per 600 simulated seconds, longest loiter 6.8–11.5 s,
+and after this change 30 distinct blooms of 30 available over 600 s with 134
+landings. The plan was fine. What was wrong was the **picture**. Three things
+compounded across the 2.4 s of `PollinatorForaging.DRINK_SECONDS`:
+
+1. arrival snapped `position` onto an exact pixel, with no landing;
+2. `position` was then never touched again for the whole drink;
+3. the wings kept running the **flight flap** — `perched_frame` is generated
+   by `ProceduralBirdSprite` alone (the only `generate_perched_texture` in
+   `src/rendering`), so a butterfly had no settled frame at all and fell
+   straight through to `flap_frames`.
+
+Net: a butterfly hovering, wings beating, motionless on one pixel, repeatedly.
+Which is exactly what *in front of* a flower describes.
+
+Real butterflies do none of that. Monarchs, swallowtails and blue morphos
+**perch** to feed; hovering while nectaring is a hawkmoth trait, not a
+butterfly one. The feeding wing posture is nothing like flight — wings held
+**closed over the back**, opened only slowly and occasionally to bask. And
+they **shuffle around the flower head** constantly, working different florets
+with the proboscis; a feeding butterfly is never motionless for 2.4 seconds.
+
+`NectaringPosture` holds that, beside `FlapGlide` and `WingbeatBounce`, and
+takes the same shape: real seconds and real proportions, no free digits.
+
+- **The wings.** `ProceduralButterflySprite.generate_settled_textures` is the
+  nectaring counterpart of the bird's perched frame — the same one painter
+  re-run at a different wing phase, except that basking is a *movement*, so it
+  is a short sequence rather than a single pose. Shut is the real ratio: a
+  monarch spans ~100 mm open and ~6 mm across the appressed wings and thorax,
+  the wings being edge-on. That is sub-pixel on this canvas, so it is floored
+  at the one pixel of half-extent that is guaranteed to rasterise — the same
+  legibility floor the body spindle already carries. A butterfly that
+  *vanished* on landing would be a worse picture than the hovering one.
+- **How often.** One shut→open→shut cycle every **4 s**, the swing itself
+  **0.6 s** each way — so the shut duty (70 %) is derived rather than a second
+  free number. The cycle is deliberately longer than a whole drink, which is
+  what makes it read as *occasional basking* rather than as a slow flap: at
+  most one opening per stop, an order of magnitude slower than the 0.36 s
+  flight beat.
+- **The feet.** The excursion is the size of the **flower head**, not of the
+  meadow: a composite head (aster, clover, thistle) is ~20 mm across, ~10 mm
+  of reach, against a monarch's ~27 mm body. Read as that ratio against the
+  *drawn* body rather than through `GroundSlide.PX_PER_METER`, because ambient
+  flyers are drawn far larger than life — in metres the shuffle would be
+  sub-pixel. The wobble is `FlightIrregularity`'s, read as a bearing and a
+  radius so it walks *around* the head and is bounded exactly, and it is an
+  **offset from a fixed anchor**, never an accumulating step. That is the only
+  reason micro-motion is safe to add to something the forage rule measures
+  arrival against, and it is why the measurement above came back unchanged.
+- **Landing.** The snap is gone. The last gap is flown at the flyer's own
+  airspeed — `LANDING_DISTANCE / speed`, so a bee sets down quicker than a
+  monarch with no second number existing — and smoothstepped, so it eases onto
+  the bloom instead of arriving at full speed and stopping dead.
+
+The bob is zeroed throughout, for the same reason the perched branch zeroes
+it: nothing is beating, so there is no lift pulse to rise and fall on. And
+flushing still outranks all of it — a butterfly the player walks up to leaves
+the flower mid-drink and is beating its wings again on the next frame, which
+is the classic flight-initiation-distance measurement and stays intact.
+
+
 ## Courtship, and where births come from
 
 Reproduction used to be a number going up. Animals of the same kind now
