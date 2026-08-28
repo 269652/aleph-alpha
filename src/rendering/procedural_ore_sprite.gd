@@ -124,10 +124,29 @@ func generate_texture_from_base(base_image: Image, ore_type: String, seed_value:
 	return ImageTexture.create_from_image(generate_image_from_base(base_image, ore_type, seed_value))
 
 
+## How opaque a candidate pixel must already be before a fleck may land on
+## it. NOT 0.0 (any nonzero alpha) -- reported live (playtest, 2026-08-28)
+## as "ore illustrations get mangled": a real illustrated frame is chroma-
+## keyed from a magenta sheet with no native alpha, then Lanczos-resized
+## and despilled (IllustratedStoneSprite._scrub_magenta_fringe), a
+## pipeline that deliberately leaves a soft, PARTIALLY opaque halo of
+## edge/anti-aliasing pixels around the rock's real silhouette rather than
+## punching them to a hard alpha=0 ("a genuine soft shadow/outline stays a
+## shadow instead of being punched into a hard-edged hole"). A fleck is
+## painted fully opaque (`set_pixel` defaults to alpha=1.0), so landing on
+## one of those low-but-nonzero-alpha halo pixels stamped a solid, bright
+## dot floating in what reads as empty space around the rock. 0.5 matches
+## this same file's own existing "opaque enough to count" convention
+## (test_image_has_transparent_background_and_opaque_boulder,
+## _average_fleck_color both already use `alpha > 0.5`) rather than a
+## fresh, separately-eyeballed number.
+const FLECK_MIN_OPAQUE_ALPHA := 0.5
+
 ## Same fleck coloring as _paint_flecks, but picks each fleck's PIXEL
-## directly (seeded x/y) and keeps it only if that pixel is already opaque
-## in `image` -- a miss is simply skipped rather than retried, so this stays
-## O(FLECK_COUNT) regardless of how much of the canvas the silhouette fills.
+## directly (seeded x/y) and keeps it only if that pixel is already
+## SOLIDLY opaque in `image` (see FLECK_MIN_OPAQUE_ALPHA) -- a miss is
+## simply skipped rather than retried, so this stays O(FLECK_COUNT)
+## regardless of how much of the canvas the silhouette fills.
 func _paint_flecks_on_silhouette(image: Image, ore_type: String, seed_value: int) -> void:
 	var base_color: Color = FLECK_COLOR.get(ore_type, FLECK_COLOR["iron"])
 	var bright_color := base_color.lightened(0.25)
@@ -138,6 +157,6 @@ func _paint_flecks_on_silhouette(image: Image, ore_type: String, seed_value: int
 		var y_seed := hash("%d_%s_ore_fleck_y_%d" % [seed_value, ore_type, i])
 		var fx := absi(x_seed) % width
 		var fy := absi(y_seed) % height
-		if image.get_pixel(fx, fy).a <= 0.0:
-			continue  # off the silhouette -- leave the transparent background alone
+		if image.get_pixel(fx, fy).a <= FLECK_MIN_OPAQUE_ALPHA:
+			continue  # off the silhouette, or a soft halo pixel -- leave it alone
 		image.set_pixel(fx, fy, bright_color if (i % 3 == 0) else base_color)

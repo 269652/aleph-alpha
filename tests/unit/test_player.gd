@@ -21,6 +21,10 @@ const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
+const MinableOre = preload("res://src/rendering/minable_ore.gd")
+const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
+const Knapping = preload("res://src/gameplay/knapping.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
@@ -1549,4 +1553,95 @@ func test_unattended_hunger_eventually_slows_the_player_down_via_condition():
 		player.current_speed_multiplier / well_fed,
 		ConditionPenalty.speed_multiplier(0.5),
 		"hunger left unattended must have a real mechanical consequence (docs/concept/survival.md, 'Debuffs, not death')"
+	)
+
+
+# -- _smash_step: real Player-level integration, not just the pure yield tables -
+#
+# OreYield, Knapping, MinableOre and SmashableStone all already have thorough
+# unit coverage on their own (test_ore_yield.gd, test_knapping.gd,
+# test_minable_ore.gd, test_smashable_stone.gd) -- calling mine()/smash()
+# directly with hand-picked arguments. Nothing had ever exercised
+# Player._smash_step ITSELF: does a live swing actually compute and pass
+# through the right pickaxe_power/carrying_rock, not just "do these pure
+# functions behave correctly in isolation". Reported live (playtest,
+# 2026-08-28): "mining an ore spawns only stones" and boulders never seem to
+# yield a sharp stone.
+
+func test_smash_step_mines_ore_with_an_equipped_pickaxe_not_just_stone():
+	var ore := MinableOre.new()
+	ore.ore_type = "iron"
+	ore.ore_seed = 42
+	ore.position = player.position + Vector2(5, 5)  # well inside ATTACK_RANGE (20px)
+	add_child_autofree(ore)
+
+	_give("stone_pickaxe", 1)
+	assert_true(player.equip_item(_item_catalog.make("stone_pickaxe")))
+
+	watch_signals(WorldItemBus)
+	player._smash_step()
+
+	var dropped_ids: Array = []
+	for i in get_signal_emit_count(WorldItemBus, "item_dropped"):
+		dropped_ids.append(get_signal_parameters(WorldItemBus, "item_dropped", i)[0].item.id)
+	assert_true(
+		dropped_ids.has("iron_ore"),
+		"expected iron_ore among a pickaxe-equipped mine's drops, got %s" % [dropped_ids]
+	)
+
+
+## The documented other half of the same behavior (docs/progress.md: "with a
+## stone_pickaxe equipped ... it drops ore + stone, bare-handed only stone")
+## -- pinned here at the same Player-integration level as the equipped case
+## above, not just in OreYield's own pure-function tests.
+func test_smash_step_mines_only_stone_with_bare_hands():
+	var ore := MinableOre.new()
+	ore.ore_type = "iron"
+	ore.ore_seed = 42
+	ore.position = player.position + Vector2(5, 5)
+	add_child_autofree(ore)
+
+	watch_signals(WorldItemBus)
+	player._smash_step()
+
+	var dropped_ids: Array = []
+	for i in get_signal_emit_count(WorldItemBus, "item_dropped"):
+		dropped_ids.append(get_signal_parameters(WorldItemBus, "item_dropped", i)[0].item.id)
+	assert_eq(dropped_ids, ["stone"], "bare-handed mining should chip only stone, by design")
+
+
+func test_smash_step_yields_a_sharp_shard_when_carrying_a_rock():
+	# Deterministic per stone_seed, same scanning approach as
+	# test_smashable_stone.gd's own test_smashing_with_a_rock_in_hand_can_
+	# also_yield_sharp_shards -- pin a real success rather than accepting
+	# either outcome.
+	var knapping := Knapping.new()
+	var lucky_seed := -1
+	for candidate in 100:
+		if knapping.shard_yield(candidate) > 0:
+			lucky_seed = candidate
+			break
+	assert_gt(lucky_seed, -1, "expected at least one shard-yielding seed in 0..99")
+
+	var stone := SmashableStone.new()
+	stone.stone_seed = lucky_seed
+	stone.position = player.position + Vector2(5, 5)
+	add_child_autofree(stone)
+
+	_give("rock", 1)
+
+	watch_signals(WorldItemBus)
+	# Real repeated swings, same pacing test_smashable_stone.gd's own
+	# _hits_to_break() uses -- only the final, BREAKING strike carries the
+	# knapping roll (see SmashableStone.smash), so this still yields exactly
+	# one shard stack regardless of how many strikes the default size takes.
+	for _i in StoneSize.hits_to_smash(stone.diameter_cm):
+		player._smash_step()
+
+	var dropped_ids: Array = []
+	for i in get_signal_emit_count(WorldItemBus, "item_dropped"):
+		dropped_ids.append(get_signal_parameters(WorldItemBus, "item_dropped", i)[0].item.id)
+	assert_true(
+		dropped_ids.has("sharp_shard"),
+		"expected a sharp_shard among a rock-carrying smash's drops, got %s" % [dropped_ids]
 	)

@@ -155,3 +155,54 @@ func test_generate_texture_from_base_wraps_image():
 	var texture := generator.generate_texture_from_base(base, "iron", 42)
 	assert_not_null(texture)
 	assert_eq(texture.get_width(), base.get_width())
+
+
+## A real illustrated frame is NOT a clean two-value (opaque/transparent)
+## silhouette like _half_opaque_base above -- IllustratedStoneSprite's real
+## pipeline chroma-keys a magenta-background sheet (no native alpha channel
+## at all), then Lanczos-resizes each cropped frame down to CANVAS_SIZE
+## (_load_frames_from), then runs a second despill pass over the result
+## (_scrub_magenta_fringe) that intentionally leaves a soft, PARTIALLY
+## opaque halo of edge/anti-aliasing pixels around the rock's real
+## silhouette rather than punching them to hard alpha=0 -- "a genuine soft
+## shadow/outline stays a shadow instead of being punched into a
+## hard-edged hole" (see that function's own doc comment). This third
+## region -- ambiguous, low-but-nonzero alpha, neither "clearly inside"
+## nor "clearly outside" -- is exactly what _half_opaque_base's hard 50/50
+## split never exercises.
+func _base_with_partial_alpha_halo(size: int = 30) -> Image:
+	var image := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var third := size / 3
+	for y in size:
+		for x in size:
+			if x < third:
+				image.set_pixel(x, y, Color(0.5, 0.5, 0.5, 1.0))  # solidly inside the rock
+			elif x < third * 2:
+				image.set_pixel(x, y, Color(0.6, 0.55, 0.6, 0.3))  # soft halo -- NOT the rock
+			else:
+				image.set_pixel(x, y, Color(0, 0, 0, 0))  # fully transparent background
+	return image
+
+
+## Regression: reported live (playtest, 2026-08-28) as "ore illustrations
+## get mangled" -- confirmed by dumping real generated ore textures to PNG
+## and inspecting them directly: stray, fully-opaque fleck-colored dots
+## floating outside the illustrated boulder's visible silhouette, in what
+## should read as empty space around the rock. _paint_flecks_on_silhouette
+## only excluded a candidate pixel when `alpha <= 0.0` -- true for the
+## fully-transparent background, but false for the soft halo band real
+## illustrated art leaves at a nonzero-but-low alpha (see
+## _base_with_partial_alpha_halo's own doc comment), so a fleck (painted
+## via `set_pixel` with the default fully-opaque alpha=1.0) gets stamped
+## squarely inside that ambiguous halo, popping visibly against the
+## near-transparent margin around it.
+func test_generate_image_from_base_does_not_paint_on_a_partially_transparent_halo():
+	var base := _base_with_partial_alpha_halo()
+	var halo_x := base.get_width() / 3 + 1  # inside the halo third, not the border pixel
+	for seed_value in range(20):
+		var image := generator.generate_image_from_base(base, "iron", seed_value)
+		for y in image.get_height():
+			assert_true(
+				image.get_pixel(halo_x, y).is_equal_approx(base.get_pixel(halo_x, y)),
+				"a fleck was painted on a partially-transparent halo pixel at (%d, %d), seed %d" % [halo_x, y, seed_value]
+			)
