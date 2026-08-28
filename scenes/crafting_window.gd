@@ -203,7 +203,7 @@ func _build_card(recipe_id: String, counts: Dictionary) -> Control:
 	content.add_child(header)
 
 	var icon := TextureRect.new()
-	icon.texture = _item_sprite_generator.generate_texture(item_id)
+	icon.texture = _item_sprite_generator.generate_texture(_sprite_id_for(item_id))
 	icon.custom_minimum_size = Vector2(CARD_ICON_SIZE, CARD_ICON_SIZE)
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -258,7 +258,7 @@ func _build_material_chip(input: Dictionary, counts: Dictionary) -> Dictionary:
 	chip.tooltip_text = _display_name(item_id)
 
 	var icon := TextureRect.new()
-	icon.texture = _item_sprite_generator.generate_texture(item_id)
+	icon.texture = _item_sprite_generator.generate_texture(_sprite_id_for(item_id))
 	icon.custom_minimum_size = Vector2(MATERIAL_ICON_SIZE, MATERIAL_ICON_SIZE)
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -285,6 +285,14 @@ func _card_tooltip_text(item_id: String, recipe_id: String, counts: Dictionary) 
 func _display_name(item_id: String) -> String:
 	if _item_catalog.has(item_id):
 		return _item_catalog.make(item_id).display_name
+	return item_id
+
+
+## The sprite_id to render for `item_id` -- see docs/concept/item_illustrations.md
+## and World._sprite_id_for_item, the same guarded lookup mirrored here.
+func _sprite_id_for(item_id: String) -> String:
+	if _item_catalog.has(item_id):
+		return _item_catalog.make(item_id).sprite_id
 	return item_id
 
 

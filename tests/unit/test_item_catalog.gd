@@ -48,6 +48,14 @@ func test_make_builds_the_right_tool():
 	assert_true(item.is_axe())
 
 
+## The catalog's authored table never specifies a sprite_id (see
+## docs/concept/item_illustrations.md) -- every entry must still resolve art
+## through Item's own id-fallback rather than coming back empty.
+func test_make_defaults_sprite_id_to_the_items_own_id():
+	var item := catalog.make("iron_sword")
+	assert_eq(item.sprite_id, "iron_sword")
+
+
 func test_catalog_knows_the_craftable_output_items():
 	for item_id in ["torch", "campfire", "cooked_meat"]:
 		assert_true(catalog.has(item_id), "expected the catalog to know %s" % item_id)

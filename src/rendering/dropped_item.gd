@@ -58,18 +58,18 @@ func _ready() -> void:
 		# watched rise out of the ground during the pull, not a different
 		# fallback sprite once it lands. Checked first, ahead of the generic
 		# procedural path every other item still uses.
-		if _crop_sprite_generator.has_crop(item_stack.item.id):
-			texture = _crop_sprite_generator.root_texture(item_stack.item.id, 0)
-			scale = Vector2.ONE * _crop_sprite_generator.root_world_scale(item_stack.item.id)
+		if _crop_sprite_generator.has_crop(item_stack.item.sprite_id):
+			texture = _crop_sprite_generator.root_texture(item_stack.item.sprite_id, 0)
+			scale = Vector2.ONE * _crop_sprite_generator.root_world_scale(item_stack.item.sprite_id)
 		else:
-			texture = _sprite_generator.texture_for(item_stack.item.id)
+			texture = _sprite_generator.texture_for(item_stack.item.sprite_id)
 			# Item art is authored DETAIL_MULTIPLIER times oversized; scaling
 			# it back keeps a dropped item the right size on the ground (see
 			# docs/concept/art_resolution.md). Tree fruit additionally has its
 			# own per-species world width, because at the shared scale a
 			# fallen cherry was as wide as the tile it lay on -- see
 			# ProceduralItemSprite.world_scale_for.
-			scale = Vector2.ONE * _sprite_generator.world_scale_for(item_stack.item.id)
+			scale = Vector2.ONE * _sprite_generator.world_scale_for(item_stack.item.sprite_id)
 
 	var click_area := Area2D.new()
 	var collision_shape := CollisionShape2D.new()

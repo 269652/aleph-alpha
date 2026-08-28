@@ -1147,6 +1147,13 @@ func equip_armor(item) -> bool:
 	var displaced = equipment.equip(item)
 	if displaced != null:
 		inventory.add(displaced, 1)
+	# Real worn-armor visuals (see docs/concept/item_illustrations.md) --
+	# previously this method was purely numeric (Equipment.total_armor()),
+	# with no call into _character_view at all, so nothing ever appeared on
+	# the rig no matter what was worn.
+	_character_view.equip_armor_slot(
+		item.equip_slot_name(), _item_sprite_generator.generate_texture(item.sprite_id)
+	)
 	inventory_changed.emit()
 	return true
 
@@ -1158,6 +1165,7 @@ func unequip_slot(slot: String) -> bool:
 	if item == null:
 		return false
 	inventory.add(item, 1)
+	_character_view.unequip_slot(slot)
 	inventory_changed.emit()
 	return true
 
@@ -1362,7 +1370,7 @@ func equip_item(item) -> bool:
 		return false
 	equipped_item = item
 	equipment.equip(item)
-	_character_view.equip_weapon(_item_sprite_generator.generate_texture(item.id))
+	_character_view.equip_weapon(_item_sprite_generator.generate_texture(item.sprite_id))
 	inventory_changed.emit()
 	return true
 

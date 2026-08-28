@@ -303,6 +303,15 @@ var _pending_appearance: Dictionary = {}
 @onready var _arm_right: Sprite2D = $ArmRight
 @onready var _head_slot: Sprite2D = $HeadSlot
 @onready var _tool_slot: Sprite2D = $ToolSlot
+## Real worn-armor slots (see docs/concept/item_illustrations.md and
+## Equipment.SLOTS) -- ChestSlot/LegsSlot/FeetSlot sit alongside HeadSlot,
+## each drawn immediately after the body part(s) it covers (ChestSlot right
+## after Body, still behind Arms; FeetSlot/LegsSlot right after LegRight,
+## still behind Body -- see character_view.tscn's node order), the same
+## "draw over what it covers" rule ToolSlot's own doc comment already states.
+@onready var _chest_slot: Sprite2D = $ChestSlot
+@onready var _legs_slot: Sprite2D = $LegsSlot
+@onready var _feet_slot: Sprite2D = $FeetSlot
 
 var _leg_left_base_position: Vector2
 var _leg_right_base_position: Vector2
@@ -353,7 +362,10 @@ func _ready() -> void:
 	# pixel detail; scaling the sprites back down is what keeps the hero at
 	# their world size and keeps this scene's part positions (in world
 	# units) correct (see docs/concept/art_resolution.md).
-	for part in [_body, _head, _leg_left, _leg_right, _arm_left, _arm_right, _head_slot, _tool_slot]:
+	for part in [
+		_body, _head, _leg_left, _leg_right, _arm_left, _arm_right, _head_slot, _tool_slot,
+		_chest_slot, _legs_slot, _feet_slot,
+	]:
 		part.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
 
 	# Shrinks the whole rig (this node, not the individual parts above) down
@@ -388,6 +400,9 @@ func _ready() -> void:
 	_arm_right.visible = false
 	_head_slot.visible = false
 	_tool_slot.visible = false
+	_chest_slot.visible = false
+	_legs_slot.visible = false
+	_feet_slot.visible = false
 
 
 func _process(delta: float) -> void:
@@ -979,10 +994,40 @@ func _slot_node(slot_name: String) -> Sprite2D:
 	match slot_name:
 		"head":
 			return _head_slot
+		"chest":
+			return _chest_slot
+		"legs":
+			return _legs_slot
+		"feet":
+			return _feet_slot
 		"tool":
 			return _tool_slot
 		_:
 			return null
+
+
+## Shows `texture` -- an armor piece's own generated icon (see Item.sprite_id/
+## docs/concept/item_illustrations.md) -- in the given slot. The real-art
+## equivalent of equip_weapon() above for "head"/"chest"/"legs"/"feet" (see
+## Equipment.SLOTS), rather than equip_slot()'s flat-color placeholder: armor
+## should look like the same item art already shown everywhere else, not a
+## second, disconnected system.
+func equip_armor_slot(slot_name: String, texture: Texture2D) -> void:
+	var node := _slot_node(slot_name)
+	if node == null:
+		return
+	node.texture = texture
+	node.visible = true
+	_equipped_slots[slot_name] = true
+
+
+## The texture currently shown in `slot_name`, or null for an unknown slot or
+## one nothing has equipped into yet -- lets a caller (or a test) verify what
+## a slot is actually displaying without reaching past this class into the
+## Sprite2D node itself.
+func slot_texture(slot_name: String) -> Texture2D:
+	var node := _slot_node(slot_name)
+	return node.texture if node != null else null
 
 
 func _set_solid_texture(sprite: Sprite2D, size: Vector2i, color: Color) -> void:

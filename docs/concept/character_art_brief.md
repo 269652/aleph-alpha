@@ -401,11 +401,16 @@ overlay) is the same shape, lower priority.
 
 Mentioned alongside hair as "still missing" when this pass was scoped, but
 **what it should actually cover is not yet defined** — asked directly and
-the answer was "no idea yet." Not attempted here. Whoever picks this up next
-should pin down the concept first (small illustrated head/face accents like
-face paint or jewelry? equippable cosmetic items beyond the existing
-`HeadSlot`/`ToolSlot`? something else?) before generating art or registering
-anything.
+the answer was "no idea yet." Not attempted here.
+
+The "equippable cosmetic items beyond the existing `HeadSlot`/`ToolSlot`?"
+half of that open question is now answered: [item_illustrations.md](item_illustrations.md)
+adds real `ChestSlot`/`LegsSlot`/`FeetSlot` nodes for actual worn armor,
+following the same slot-node pattern. That covers *equipment*, not
+*decoration* — a small illustrated head/face accent (face paint, jewelry)
+that isn't a real armor piece is still undefined. Whoever picks that
+narrower question up next should pin down the concept first before
+generating art or registering anything.
 
 ## Every part gets its own measured scale, not one flat constant
 

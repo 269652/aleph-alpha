@@ -3555,13 +3555,23 @@ func _update_hotbar(local_player: Player) -> void:
 		if item_id != "" and count > 0:
 			# texture_for() hits a shared static cache keyed by id (no per-frame
 			# image build / GPU upload) -- item art is a pure function of the id.
-			_hotbar_slots[i].texture = _item_sprite_generator.texture_for(item_id)
+			_hotbar_slots[i].texture = _item_sprite_generator.texture_for(_sprite_id_for_item(item_id))
 			_hotbar_counts[i].text = str(count) if count > 1 else ""
 			_hotbar_slot_frames[i].tooltip_text = _hotbar_tooltip_text(item_id, count)
 		else:
 			_hotbar_slots[i].texture = null
 			_hotbar_counts[i].text = ""
 			_hotbar_slot_frames[i].tooltip_text = "Drag an item here to bind it"
+
+
+## The sprite_id to render for `item_id` (see docs/concept/item_illustrations.md):
+## every renderer looks up its picture via an item's sprite_id, never its raw
+## id, so a variant item can share a base item's art. Falls back to the raw id
+## for one the catalog doesn't know -- ProceduralItemSprite's own generic
+## fallback already handles an unrecognized id gracefully, same as
+## _hotbar_tooltip_text's display-name fallback just below.
+func _sprite_id_for_item(item_id: String) -> String:
+	return _item_catalog.make(item_id).sprite_id if _item_catalog.has(item_id) else item_id
 
 
 ## "Iron Sword\nx3\nRight-click to clear" -- what's bound, how many, and how
