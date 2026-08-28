@@ -4360,19 +4360,25 @@ func _client_process(delta: float) -> void:
 
 	var season := _chunk_manager.current_season().capitalize()
 	var raw_weather := _chunk_manager.current_weather(local_player.position)
-	# Water tiles react to the weather: raindrop ripples while raining,
-	# windy chop otherwise, and the whole surface paces faster/slower with
+	# Snow rather than rain when it is cold enough, and snow lying on the
+	# ground afterwards (see Snowfall). Temperature decides, not the season
+	# name -- a cold snap in autumn snows and a mild winter rains. Computed
+	# BEFORE `raining` below, since raining now needs to know about it.
+	var warmth := _chunk_manager.current_warmth()
+	var snowing := Snowfall.falls_as_snow(raw_weather, warmth)
+	# Water tiles react to the weather: raindrop ripples while raining (but
+	# NOT while snowing -- falling snow doesn't splash water the way rain
+	# does, RainOverlay below already shows flakes instead of drops once
+	# snowing is true, and the raindrop shader term is real per-fragment GPU
+	# cost across every visible water pixel: reported live, driving it
+	# during snow too dropped fps from ~30 to ~6 for no visual payoff).
+	# Windy chop otherwise, and the whole surface paces faster/slower with
 	# how energetic the weather is (calm on a clear day, hectic in a storm).
-	var raining := raw_weather == "rain" or raw_weather == "storm"
+	var raining := (raw_weather == "rain" or raw_weather == "storm") and not snowing
 	_chunk_manager.set_rain(raining)
 	# ... and the sky above them: rain you can actually see falling, heavier
 	# in a storm than in ordinary rain (see RainOverlay).
 	_rain_overlay.set_intensity(RAIN_INTENSITY_BY_WEATHER.get(raw_weather, 0.0))
-	# Snow rather than rain when it is cold enough, and snow lying on the
-	# ground afterwards (see Snowfall). Temperature decides, not the season
-	# name -- a cold snap in autumn snows and a mild winter rains.
-	var warmth := _chunk_manager.current_warmth()
-	var snowing := Snowfall.falls_as_snow(raw_weather, warmth)
 	_rain_overlay.set_snowing(snowing)
 	# Depth, tracks and repaint all live behind one call now, and it reads the
 	# WORLD clock rather than this frame's delta -- see step_snow. Accumulating

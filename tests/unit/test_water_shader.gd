@@ -97,6 +97,30 @@ func test_shader_generates_raindrop_ripples_that_feed_the_combined_wave_field():
 	assert_string_contains(code, "float wave = ")
 
 
+## Most cells are between splashes at any instant (rain_ripple_lifetime <
+## the spawn interval, i.e. a cell's drop is only "live" a fraction of the
+## time), so computing that cell's drop position (2 more hashes) and running
+## the full packet math (exp + sin) for a cell that's out of its splash
+## window right now wastes real GPU work on every fragment, every one of the
+## 9 sampled cells, every frame while it's raining -- reported live: with
+## rain or snow active, fps dropped from ~30 to ~6. The age bounds check
+## must happen BEFORE the expensive part, not after it, so an inactive
+## cell's iteration is actually cheap rather than merely reordered on paper.
+func test_raindrop_ripples_skips_the_expensive_part_for_a_cell_out_of_its_splash_window():
+	var code: String = WaterShader.SHADER_CODE
+	var fn_start := code.find("float raindrop_ripples")
+	var fn_end := code.find("\nfloat movement_ripples", fn_start)
+	var fn_body := code.substr(fn_start, fn_end - fn_start)
+	assert_string_contains(fn_body, "continue", "an out-of-window cell must skip the rest of its own iteration")
+	var continue_pos := fn_body.find("continue")
+	var drop_pos_pos := fn_body.find("drop_pos")
+	assert_gt(continue_pos, 0, "continue must actually appear in raindrop_ripples")
+	assert_lt(
+		continue_pos, drop_pos_pos,
+		"the early-out must come before drop_pos is computed, or its hashes are wasted anyway"
+	)
+
+
 func test_set_rain_intensity_updates_the_shared_materials_uniform():
 	var material := water.shared_material()
 	water.set_rain_intensity(1.0)

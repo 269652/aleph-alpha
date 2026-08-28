@@ -70,6 +70,31 @@ The rule that falls out of it, and that applies to any full-screen effect
 added later (fog, heat haze, snow): **a screen-space overlay costs what it
 rasterises.** If the effect is sparse, draw the sparse thing.
 
+**A second, unrelated cost hid in the water surface itself, not the falling
+drops** (reported live: "it takes it from 30fps to 6fps" for rain OR snow).
+`WaterShader.raindrop_ripples()` (the GPU term that makes standing water
+splash while it rains, see `water_shader.gd`) samples a 3x3 grid of
+neighboring cells per fragment so a splash crossing a cell boundary still
+renders -- but it was doing the expensive half of each cell's work (a
+second and third hash to find the drop's exact position, then the full
+`exp`+`sin` ripple-packet math) *before* checking whether that cell's
+splash was even in its active window right now, wasting it on every cell
+that wasn't. Since `rain_ripple_lifetime` is shorter than the spawn
+interval, most of the 9 cells are between splashes at any instant --
+reordering the cheap bounds check ahead of the expensive part (a `continue`
+mirroring `movement_ripples()`'s own early-out) cuts the wasted majority of
+that work with a mathematically identical result, not a visual change.
+This scales with on-screen WATER area, not falling-drop count, which is why
+it hit regardless of how sparse the rain/snow overlay itself looked.
+
+**The same shader cost was firing during snow too, for no reason.**
+`world.gd` derived `raining` from the raw weather string (`"rain"` /
+`"storm"`) alone, with no check for whether it was cold enough to actually
+be snowing instead -- so a snowy day still drove `rain_intensity` to 1.0
+and paid the full ripple cost above, even though `RainOverlay` had already
+switched the falling-precipitation visual to flakes. `raining` now excludes
+`snowing` explicitly.
+
 
 ## Snow
 
