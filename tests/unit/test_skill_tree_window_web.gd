@@ -102,6 +102,23 @@ func test_selecting_a_node_shows_what_it_is_and_what_it_would_cost():
 	assert_string_contains(window._detail_label.text, "pt")
 
 
+## World calls refresh() every frame while this window is open, so refresh()
+## skips its work when the skill-state fingerprint is unchanged (see
+## _last_refresh_signature). The SELECTION is deliberately not in that
+## fingerprint -- it moves on a click, not on an allocation -- so a skipped
+## refresh still has to refresh the detail line, or the line under the map
+## stays stuck on whatever the last real state change left there. That is the
+## ordinary case rather than an edge one: inspecting a node changes the
+## allocation and the point total not at all.
+func test_the_detail_line_follows_the_selection_on_an_otherwise_identical_refresh():
+	var start := web.start_node_for("mage")
+	window.refresh(0, {}, {})
+	window.web_view.click_at(window.web_view.world_to_view(web.position_of(start)))
+	assert_eq(window.web_view.selected_node_id, start, "the click has to select something")
+	window.refresh(0, {}, {})
+	assert_string_contains(window._detail_label.text, window.web_view.node_label(start))
+
+
 func test_the_detail_line_says_something_useful_before_anything_is_selected():
 	window.refresh(0, {}, {})
 	assert_ne(window._detail_label.text, "")
