@@ -8,6 +8,7 @@ extends GutTest
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const Chunk = preload("res://src/world/chunk.gd")
+const ScentField = preload("res://src/world/scent_field.gd")
 
 const TILE_SIZE := 16
 const CHUNK_SIZE := 32
@@ -107,6 +108,111 @@ func test_never_exceeds_the_combined_per_chunk_cap():
 		spawned.size(),
 		AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK + AmbientFlyerRenderer.MAX_BEES_PER_CHUNK
 		+ AmbientFlyerRenderer.MAX_ROBINS_PER_CHUNK + AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK
+	)
+
+
+# -- the ceiling must answer for the SAME meadow the spawn pass filled -------
+#
+# The cap above is the unscented one. Pollinator budgets, though, are scaled
+# by the local scent multiplier before they are spawned (see
+# spawn_ambient_flyers / ScentField.pollinator_spawn_multiplier), and
+# max_flyers_per_chunk was summing the RAW constants -- so a chunk thick with
+# blooms legitimately spawned more flyers than the ceiling reported, and
+# EarthChunkManager.spawn_flyer_offspring then refused every courtship birth
+# in exactly the meadows most worth breeding in.
+#
+# Two ways to close that gap, and the choice is an ecological one, not a
+# bookkeeping one:
+#
+#   a) the ceiling takes the same multiplier the spawn pass took, or
+#   b) the spawn pass clamps back down to the flat ceiling.
+#
+# (a), because the multiplier IS the carrying capacity. "A meadow supports
+# what it supports" is the ceiling's whole justification, and
+# pollinator_spawn_multiplier is precisely this project's measure of how much
+# a given meadow supports -- already saturating at MAX_SPAWN_MULTIPLIER so
+# the bound stays finite without a second, flat one bolted on top. (b) would
+# keep the number tidy by deleting the feature: the scent field exists so
+# that a bloom-rich chunk hatches proportionally more pollinators than bare
+# grass, and clamping the spawn pass to a constant is that sentence with the
+# proportionality removed. A capacity lower than what the world itself just
+# spawned is not a capacity; it is a stale number.
+
+func test_a_scented_meadow_never_spawns_more_flyers_than_its_own_ceiling():
+	var chunk := _make_chunk("grassland")
+	# Walk the whole range the scent field can actually hand the spawn pass --
+	# 1.0 on bare grass up to MAX_SPAWN_MULTIPLIER in a saturated meadow --
+	# rather than spot-checking one hand-picked value.
+	for step in 9:
+		var multiplier: float = 1.0 + (ScentField.MAX_SPAWN_MULTIPLIER - 1.0) * (float(step) / 8.0)
+		var holder := Node2D.new()
+		var spawned := renderer.spawn_ambient_flyers(
+			holder, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", multiplier, null, 500.0, 500.0
+		)
+		assert_lte(
+			spawned.size(), AmbientFlyerRenderer.max_flyers_per_chunk(multiplier),
+			"a meadow at scent x%.2f spawned %d, over its own ceiling" % [multiplier, spawned.size()]
+		)
+		holder.free()
+
+
+## Which of the two fixes was taken, stated as behaviour so it cannot be
+## quietly reverted to a tidier-looking constant: the ceiling MOVES with the
+## meadow. A chunk in full bloom carries more pollinators than bare grass
+## does, which is the entire claim ScentField makes.
+func test_a_meadow_in_full_bloom_carries_more_flyers_than_bare_ground():
+	assert_gt(
+		AmbientFlyerRenderer.max_flyers_per_chunk(ScentField.MAX_SPAWN_MULTIPLIER),
+		AmbientFlyerRenderer.max_flyers_per_chunk(1.0),
+		"a bloom-rich chunk must support more pollinators than a bare one"
+	)
+
+
+## ...and the rejected fix, pinned from the other side. Clamping the spawn
+## pass to the flat ceiling would have kept the arithmetic consistent by
+## deleting the proportionality: a saturated meadow must still actually
+## hatch more pollinators than bare grass, not merely be permitted to.
+func test_a_meadow_in_full_bloom_really_does_hatch_more_pollinators():
+	var chunk := _make_chunk("grassland")
+	var bare_holder := Node2D.new()
+	var bloom_holder := Node2D.new()
+	# No birds in either count -- they are not pollinators and are not scaled,
+	# so leaving them in would let a bird spawn mask the thing being measured.
+	var bare := renderer.spawn_ambient_flyers(
+		bare_holder, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0
+	)
+	var blooming := renderer.spawn_ambient_flyers(
+		bloom_holder, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland",
+		ScentField.MAX_SPAWN_MULTIPLIER
+	)
+	assert_gt(
+		blooming.size(), bare.size(),
+		"the scent field exists so that flowers hatch pollinators"
+	)
+	bare_holder.free()
+	bloom_holder.free()
+
+
+## The bird half stays flat on both sides of the comparison -- a robin does
+## not multiply because the grass smells good. Guards the obvious
+## over-application of the fix: scaling the WHOLE ceiling would silently
+## quadruple the songbird budget, which no aggregate population asked for.
+func test_scent_never_raises_the_bird_half_of_the_ceiling():
+	var bare := AmbientFlyerRenderer.max_flyers_per_chunk(1.0)
+	var blooming := AmbientFlyerRenderer.max_flyers_per_chunk(ScentField.MAX_SPAWN_MULTIPLIER)
+	var pollinator_rise := (
+		AmbientFlyerRenderer.scented_budget(
+			AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK, ScentField.MAX_SPAWN_MULTIPLIER
+		)
+		+ AmbientFlyerRenderer.scented_budget(
+			AmbientFlyerRenderer.MAX_BEES_PER_CHUNK, ScentField.MAX_SPAWN_MULTIPLIER
+		)
+		- AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK
+		- AmbientFlyerRenderer.MAX_BEES_PER_CHUNK
+	)
+	assert_eq(
+		blooming - bare, pollinator_rise,
+		"the whole rise must be pollinators; the bird budget must not move"
 	)
 
 

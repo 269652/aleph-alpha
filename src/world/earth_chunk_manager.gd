@@ -5203,7 +5203,18 @@ func spawn_flyer_offspring(
 	# deer explosion started, and courting butterflies breed far faster than
 	# deer do -- measured climbing steadily across a single session before
 	# this cap existed.
-	if _loaded_ambient_flyers[chunk_coord].size() >= AmbientFlyerRenderer.max_flyers_per_chunk():
+	#
+	# Asked about THIS chunk's blooms, using the very multiplier the spawn
+	# pass was handed on load (see _pollinator_multiplier_for). Against the
+	# bare-ground ceiling, a flower-rich chunk was already over capacity the
+	# moment it loaded, so courtship was refused precisely where there was
+	# most reason to breed. Re-sampled rather than remembered, so a meadow
+	# that has since bloomed harder raises its own capacity and one that has
+	# withered lowers it.
+	if (
+		_loaded_ambient_flyers[chunk_coord].size()
+		>= AmbientFlyerRenderer.max_flyers_per_chunk(_pollinator_multiplier_for(chunk_coord))
+	):
 		return
 	var offspring := _ambient_flyer_renderer.spawn_offspring(
 		_creatures_parent, species, position,

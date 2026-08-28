@@ -6005,6 +6005,28 @@ Flowering plants, scent, and pollinators (see
   year.
 - ✅ Pollinator hooks on the field: a bounded, saturating spawn multiplier and
   a normalized gradient direction for steering.
+- ✅ **The flyer ceiling reads that same multiplier.** The spawn pass scaled
+  its pollinator budgets by the scent multiplier while
+  `AmbientFlyerRenderer.max_flyers_per_chunk` summed the raw constants, so a
+  bloom-rich chunk spawned past its own reported ceiling on load — measured
+  at 24 flyers against a ceiling of 14, across the multiplier's full 1.0 →
+  `MAX_SPAWN_MULTIPLIER` range — and
+  `EarthChunkManager.spawn_flyer_offspring`'s birth guard then refused every
+  courtship birth in exactly the meadows most worth breeding in. Both sides
+  now compute their budget through one shared `AmbientFlyerRenderer.
+  scented_budget`, and the guard asks the ceiling about *this* chunk's blooms
+  (`_pollinator_multiplier_for`), re-sampled per birth so a meadow that has
+  since bloomed harder raises its own capacity. Scaling the ceiling rather
+  than clamping the spawn pass is the deliberate choice — the multiplier IS
+  this world's carrying-capacity measure, and clamping would have kept the
+  arithmetic tidy by deleting the proportionality the scent field exists to
+  provide; `test_a_meadow_in_full_bloom_really_does_hatch_more_pollinators`
+  pins the rejected alternative from the other side, and
+  `test_scent_never_raises_the_bird_half_of_the_ceiling` pins that songbirds
+  (not pollinators) stay flat. Two pre-existing failures in
+  `test_earth_chunk_manager.gd` (`test_courting_flyers_stop_breeding_once_
+  the_chunk_is_full`, `test_a_flyer_birth_is_reported_to_the_regions_
+  population`) were this same stale number measured one level up.
 - ✅ Flower sprites and their placement in the world — `ProceduralFlowerSprite`
   (a real stem+blossom sprite, per-species colour, `EarthChunkManager._sync_
   flower_sprites` keeping one per live `FlowerPatch` cell in sync with the

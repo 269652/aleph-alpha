@@ -253,8 +253,8 @@ func spawn_ambient_flyers(
 		# TRUE_BUTTERFLY_SPECIES_POOL/BEE_SPECIES_POOL) -- a bee is an
 		# ADDITION to a meadow's pollinator presence, not drawn out of the
 		# butterfly count.
-		var scented_butterfly_min := int(round(float(MIN_BUTTERFLIES_PER_CHUNK) * scent_multiplier))
-		var scented_butterfly_max := int(round(float(MAX_BUTTERFLIES_PER_CHUNK) * scent_multiplier))
+		var scented_butterfly_min := scented_budget(MIN_BUTTERFLIES_PER_CHUNK, scent_multiplier)
+		var scented_butterfly_max := scented_budget(MAX_BUTTERFLIES_PER_CHUNK, scent_multiplier)
 		spawned.append_array(
 			_spawn_species(
 				parent, chunk, chunk_origin_tiles, tile_size, "butterfly_spawn",
@@ -269,8 +269,8 @@ func spawn_ambient_flyers(
 				true
 			)
 		)
-		var scented_bee_min := int(round(float(MIN_BEES_PER_CHUNK) * scent_multiplier))
-		var scented_bee_max := int(round(float(MAX_BEES_PER_CHUNK) * scent_multiplier))
+		var scented_bee_min := scented_budget(MIN_BEES_PER_CHUNK, scent_multiplier)
+		var scented_bee_max := scented_budget(MAX_BEES_PER_CHUNK, scent_multiplier)
 		spawned.append_array(
 			_spawn_species(
 				parent, chunk, chunk_origin_tiles, tile_size, "bee_spawn",
@@ -408,22 +408,46 @@ func _spawn_species(
 	return spawned
 
 
-## Spawns ONE flyer -- the offspring of a courting pair (see Courtship).
+## One species' per-chunk budget scaled by how strongly this chunk smells of
+## flowers -- the SINGLE place that scaling is expressed.
 ##
-## Goes through the same `_build_marker` every other flyer does, so a
-## butterfly born in front of the player is in every respect an ordinary
-## butterfly: same art, same movement, same diet wiring, and it can court in
-## its turn.
-## The most flyers one chunk is ever meant to carry.
+## Both the spawn pass and max_flyers_per_chunk read their pollinator budgets
+## through here, because they must agree exactly: the two used to compute the
+## same product independently, the ceiling was quietly left unscaled, and the
+## result was a meadow that spawned 24 flyers against a ceiling reporting 14.
+## Sharing the formula makes that particular disagreement unrepresentable
+## rather than merely fixed.
+static func scented_budget(base_count: int, scent_multiplier: float) -> int:
+	return int(round(float(base_count) * scent_multiplier))
+
+
+## The most flyers one chunk is ever meant to carry, for a chunk whose blooms
+## smell this strongly (see ScentField.pollinator_spawn_multiplier; 1.0, the
+## default, is bare ground).
 ##
 ## The spawn pass fills a chunk to somewhere between its MIN and MAX per
 ## species; courtship can then add more (see Courtship), and without a
 ## ceiling that is a population with births and no bound -- measured climbing
 ## steadily in a single session, which is precisely how the deer explosion
 ## started. A meadow supports what it supports.
-static func max_flyers_per_chunk() -> int:
+##
+## And what a meadow supports is exactly what the scent field already
+## measures. Summing the raw constants made this a stale number the moment
+## pollinator spawning became scent-driven: the chunks with the most flowers
+## -- the ones a courting pair has the most reason to breed in -- were the
+## ones that spawned past the ceiling on load and so refused every birth
+## afterwards. Scaling here rather than clamping the spawn pass keeps the
+## proportionality the scent field exists to provide, and costs nothing in
+## boundedness: pollinator_spawn_multiplier already saturates at
+## MAX_SPAWN_MULTIPLIER, so this stays finite without a second flat cap.
+##
+## Birds are deliberately NOT scaled, mirroring the spawn pass exactly: a
+## robin is not a pollinator, and its numbers come from its own aggregate
+## population (see MAX_ROBINS_PER_CHUNK), not from how much nectar is around.
+static func max_flyers_per_chunk(scent_multiplier: float = 1.0) -> int:
 	return (
-		MAX_BUTTERFLIES_PER_CHUNK + MAX_BEES_PER_CHUNK
+		scented_budget(MAX_BUTTERFLIES_PER_CHUNK, scent_multiplier)
+		+ scented_budget(MAX_BEES_PER_CHUNK, scent_multiplier)
 		+ MAX_ROBINS_PER_CHUNK + MAX_SPARROWS_PER_CHUNK
 	)
 
@@ -436,6 +460,12 @@ func marker_count_for(population: float, cap: int) -> int:
 	return mini(int(roundi(population)), cap)
 
 
+## Spawns ONE flyer -- the offspring of a courting pair (see Courtship).
+##
+## Goes through the same `_build_marker` every other flyer does, so a
+## butterfly born in front of the player is in every respect an ordinary
+## butterfly: same art, same movement, same diet wiring, and it can court in
+## its turn.
 func spawn_offspring(
 	parent: Node2D,
 	species: String,

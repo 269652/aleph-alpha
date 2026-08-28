@@ -1536,6 +1536,22 @@ two separate worlds, so:
 - Only **grown** animals court, and a chunk holds only so many. A population
   with births and no bound only ever goes one way — which is exactly how the
   deer explosion started.
+- **How many "so many" is, for a flyer, is the meadow's own answer**
+  (`AmbientFlyerRenderer.max_flyers_per_chunk`). The pollinator half of that
+  ceiling is scaled by the same `ScentField.pollinator_spawn_multiplier` the
+  spawn pass is handed on load, through the one shared `scented_budget`
+  formula both read. Summing the raw per-species constants instead made the
+  ceiling a stale number the moment pollinator spawning became scent-driven:
+  a bloom-rich chunk legitimately spawned *past* it on load (measured: 24
+  flyers against a ceiling reporting 14), so the guard then refused every
+  courtship birth in precisely the meadows most worth breeding in. The fix
+  scales the ceiling rather than clamping the spawn pass, because the
+  multiplier **is** the carrying-capacity signal — a meadow supports what it
+  supports, and the scent field is how this world measures that. Boundedness
+  costs nothing here: `pollinator_spawn_multiplier` already saturates at
+  `MAX_SPAWN_MULTIPLIER`, so no second flat cap is needed on top. Birds are
+  deliberately not scaled on either side — a robin is not a pollinator, and
+  its numbers come from its own aggregate population.
 - An individual death in front of the player **lowers the region's aggregate**
   the same way a birth raises it (`EcosystemSimulation.record_death`,
   `is_predator` selecting which population it subtracts from) — the mortality
