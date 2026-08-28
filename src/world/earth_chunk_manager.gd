@@ -39,6 +39,7 @@ const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 const HillshadeShader = preload("res://src/rendering/hillshade_shader.gd")
+const EntityHillshadeShader = preload("res://src/rendering/entity_hillshade_shader.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
@@ -301,6 +302,12 @@ var _water_material: ShaderMaterial  # the water overlay's shared shader materia
 var _water_shader := WaterShader.new()  # owns _water_material's disturbance buffer, see record_water_disturbance
 var _hillshade_layer: TileMapLayer  # optional GPU relief-shading overlay, see set_hillshade_layer
 var _hillshade_shader := HillshadeShader.new()
+## Shares the same live sun position as _hillshade_shader (see
+## set_sun_position below) but shades individual ENTITY sprites (mountain
+## ore veins -- see StoneRenderer) directly rather than a ground overlay
+## layer -- see EntityHillshadeShader's own doc comment for why it's a
+## separate module rather than reusing _hillshade_shader itself.
+var _entity_hillshade_shader := EntityHillshadeShader.new()
 ## The player's own current tile, refreshed every update() call -- named for
 ## its original use (culling far-off water disturbances, see
 ## record_water_disturbance / DISTURBANCE_RADIUS_TILES) but also doubles as
@@ -3806,11 +3813,13 @@ func set_season_tint(tint: Color) -> void:
 
 ## Pushes the real, live sun position (see solar_position.gd's
 ## elevation_degrees/azimuth_degrees -- the same values already driving
-## day/night lighting in world.gd) into the shared hillshade material, the
-## same "live value pushed into a shared uniform every tick" shape
+## day/night lighting in world.gd) into the shared hillshade materials --
+## both the ground overlay's and individual entities' (mountain ore veins),
+## the same "live value pushed into a shared uniform every tick" shape
 ## set_wind_strength/set_rain above already use for weather.
 func set_sun_position(elevation_deg: float, azimuth_deg: float) -> void:
 	_hillshade_shader.set_sun_position(elevation_deg, azimuth_deg)
+	_entity_hillshade_shader.set_sun_position(elevation_deg, azimuth_deg)
 
 
 ## How far from the streaming center a disturbance may be and still be worth
