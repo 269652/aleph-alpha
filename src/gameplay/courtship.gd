@@ -1,6 +1,8 @@
 extends RefCounted
 
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
+const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
+const FlightIrregularity = preload("res://src/gameplay/flight_irregularity.gd")
 
 ## Two animals of the same kind noticing each other, dancing, and sometimes
 ## mating (see docs/concept/ecosystem_dynamics.md's "Courtship, and where
@@ -29,10 +31,40 @@ const NOTICE_RADIUS_PX := 40.0
 ## the two read as one interacting pair rather than two unrelated sprites.
 const DANCE_SECONDS := 4.5
 const DANCE_RADIUS_PX := 9.0
+const DANCE_RADIUS_M := DANCE_RADIUS_PX / GroundSlide.PX_PER_METER
 
-## Turns per second around the partner. Fast enough to read as a flutter
-## rather than a slow orbit.
-const DANCE_TURNS_PER_SECOND := 0.85
+## How fast a butterfly flies while doing this, in metres per second.
+##
+## A courtship flight is a display, not an escape: this module's own
+## description of it is "a slow wide orbit". A monarch's ordinary cruising
+## flight is around 2 m/s (its burst is 5 -- see SpiralFlight.BURST_SPEED_MPS,
+## which is what the WHIRL is flown at), so a cruise is what a display flight
+## is flown at.
+const CRUISE_SPEED_MPS := 2.0
+
+## Turns per second around the partner, DERIVED rather than chosen: a cruising
+## flight speed divided by the circumference of the circle actually being
+## flown.
+##
+## This was 0.85, described as "fast enough to read as a flutter", and that
+## number was never checked against the speed it implies. At a 9-pixel radius
+## -- about 70 cm at this world's scale -- 0.85 turns a second is 3.8 m/s,
+## three quarters of a monarch's absolute burst speed, for a manoeuvre this
+## file calls slow. Reported as "the dance is overly dramatic".
+const DANCE_TURNS_PER_SECOND := CRUISE_SPEED_MPS / (TAU * DANCE_RADIUS_M)
+
+## How far the orbit wanders off a circle, as a fraction of its radius.
+##
+## The dance used to be drawn as a fixed ellipse, squashed to 0.7 on one axis,
+## with the stated reason that "real courtship flights wander as they turn".
+## That reason is right and the shape was wrong: an ellipse is still a closed
+## figure traced identically every time round, which is what the player was
+## looking at when they said the dance is "only a circle". The departure from
+## a circle is kept at exactly the magnitude the ellipse asserted -- it is the
+## same observation -- but it is now irregular and per-pair (see
+## FlightIrregularity), so no two dances trace the same figure and none of
+## them traces a repeating one.
+const DANCE_RADIUS_SWING := 1.0 - 0.7
 
 ## After courting, neither animal courts again for a full day.
 ##
@@ -93,14 +125,25 @@ static func leads(own_id: int, partner_id: int) -> bool:
 ## Where this animal should sit relative to the dance's centre, `elapsed`
 ## seconds in. Leader and follower orbit opposite each other, so the pair
 ## reads as two animals circling rather than one sprite drawn twice.
+## Both partners are handed the SAME `seed_value`, so they compute the same
+## wandering radius and the same swept angle and stay exactly opposite each
+## other -- no message passing, the same property the fixed circle had.
+##
+## The radius is written r / (1 + k*w) and the angle is the exact integral of
+## the rate that implies, for the reason SpiralFlight.converging_orbit spells
+## out at length: a flyer holds an AIRSPEED, so on a radius that varies it
+## comes round faster where it is tighter, and accumulating that per frame
+## instead of integrating it would make the figure depend on frame rate and on
+## SimulationLod's step size.
 static func dance_offset(elapsed: float, seed_value: int, is_leader: bool) -> Vector2:
-	var phase := float(absi(hash(seed_value)) % 628) * 0.01
-	var angle := elapsed * TAU * DANCE_TURNS_PER_SECOND + phase
+	var wander := FlightIrregularity.wobble(elapsed, seed_value)
+	var swept := TAU * DANCE_TURNS_PER_SECOND * (
+		elapsed + DANCE_RADIUS_SWING * FlightIrregularity.wobble_integral(elapsed, seed_value)
+	)
+	var angle := swept + FlightIrregularity.phase(seed_value)
 	if not is_leader:
 		angle += PI
-	# Slightly elliptical, so the dance is a spiral rather than a clean circle
-	# -- real courtship flights wander as they turn.
-	return Vector2(cos(angle), sin(angle) * 0.7) * DANCE_RADIUS_PX
+	return Vector2.from_angle(angle) * (DANCE_RADIUS_PX / (1.0 + DANCE_RADIUS_SWING * wander))
 
 
 ## Whether this particular pairing produces young.

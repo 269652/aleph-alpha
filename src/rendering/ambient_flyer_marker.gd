@@ -27,6 +27,7 @@ const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const WingbeatBounce = preload("res://src/rendering/wingbeat_bounce.gd")
+const FlapGlide = preload("res://src/rendering/flap_glide.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
@@ -237,9 +238,34 @@ var _elapsed_time := 0.0
 ## random-walk the flyer clean out of the flowered, loaded part of the world.
 ## Captured lazily from `home` rather than in setup(), so it doesn't depend on
 ## whether a caller assigns home before or after wiring up movement. Re-
-## anchored wherever the flyer actually finds nectar, so its territory follows
-## the food instead of pinning it to a spawn point that may have gone barren.
+## anchored on the CIRCUIT this pollinator is currently working (see
+## PollinatorForaging.patch_centre), so its territory follows the food instead
+## of pinning it to a spawn point that may have gone barren.
+##
+## It used to snap to the single last bloom that fed it, which followed the
+## food but collapsed a circuit to a point: the whole 24-tile search leash
+## re-centred on one flower on every feed, so however many blooms the flyer
+## was really working, its world was that one flower's neighbourhood. Reported
+## as "butterflies still get stuck infront of a signle flower". Averaging the
+## stops still on this round keeps the original purpose -- a flyer whose spawn
+## point goes barren still moves its territory onto the food -- while making
+## the territory cover the round rather than its last stop.
 var _origin = null  # Vector2, or null until first needed
+
+## The blooms this pollinator has landed on that have not had time to refill
+## yet -- the stops on the round it is on (see PollinatorForaging.recent_feeds,
+## which is also what keeps this bounded). Entries are
+## {"position": Vector2, "time": float}, timed on this marker's own
+## `_elapsed_time` exactly as `_visited` is.
+var _fed_at: Array = []
+
+## The last bloom this flyer actually put its feet on, or null before its first
+## landing. The trap-line term (see PollinatorForaging.moved_on_from): a
+## forager carries on round rather than turning back on the flower it just
+## emptied. The last LANDING rather than the last successful drink, because a
+## bloom it landed on and found empty has still just been worked -- by itself,
+## a moment ago -- and is exactly as bad a bet.
+var _last_worked = null  # Vector2, or null
 
 ## Bumped every time a target is chosen, and mixed into the scatter seed so a
 ## pollinator's successive picks differ from each other while staying
@@ -494,6 +520,9 @@ func _process(frame_delta: float) -> void:
 			# ~VISIT_MEMORY_SECONDS later rather than never (or immediately).
 			var flower_position: Vector2 = _forage_flower
 			_visited = PollinatorForaging.remember_visit(_visited, flower_position, _elapsed_time)
+			# Worked, whether or not it turns out to hold anything: this is the
+			# bloom the trap-line now moves ON from (see _last_worked).
+			_last_worked = flower_position
 			_forage_target = null
 			_forage_flower = null
 			# A claim says where this flyer is GOING (see ForageClaims). It has
@@ -526,11 +555,15 @@ func _process(frame_delta: float) -> void:
 			_forage_target_is_tree = false
 			if fed:
 				_drink_remaining = PollinatorForaging.DRINK_SECONDS
-				# Somewhere that actually feeds it: make this the centre of
-				# its territory, so the relocation leash follows the food
-				# rather than holding it to a spawn point that has gone
-				# barren.
-				_origin = flower_position
+				# Somewhere that actually feeds it: bank the stop and re-centre
+				# the territory on the CIRCUIT, so the relocation leash follows
+				# the food (rather than holding it to a spawn point that has
+				# gone barren) without collapsing onto whichever single bloom
+				# it happened to feed at last -- see _origin / _fed_at.
+				_fed_at.append({"position": flower_position, "time": _elapsed_time})
+				_fed_at = PollinatorForaging.recent_feeds(_fed_at, _elapsed_time)
+				var circuit := PollinatorForaging.patch_centre(_fed_at, _elapsed_time)
+				_origin = circuit if circuit.is_finite() else flower_position
 			# Already drained: the visit is banked above, so it moves on at
 			# the next sniff instead of sitting on an empty bloom.
 			return
@@ -786,7 +819,12 @@ func _step_scent(delta: float) -> void:
 		)
 	var target := PollinatorForaging.choose_target(
 		position, blooming, _visited, _elapsed_time,
-		hash("%d_%d_forage" % [wander_seed, _forage_pick_index]), peer_claims
+		hash("%d_%d_forage" % [wander_seed, _forage_pick_index]), peer_claims,
+		# The trap-line term: carry on round rather than turning back on the
+		# bloom just worked (see PollinatorForaging.moved_on_from). Non-finite
+		# before this flyer's first landing, which the module reads as "no
+		# circuit yet" and ignores.
+		_last_worked if _last_worked != null else Vector2.INF
 	)
 	# Aim at the blossom, falling back to the flower's own position for
 	# any caller that does not publish a landing point.
@@ -1377,11 +1415,16 @@ func _step_player_reaction(delta: float) -> bool:
 			_end_player_dance()
 			return false
 		_player_dance_elapsed += delta
+		# This flyer's OWN seed: there is no pair here to agree with, and a
+		# butterfly investigating a head should trace as irregular a figure as
+		# one investigating another butterfly (see
+		# SpiralFlight.converging_orbit).
 		position = head + SpiralFlight.converging_orbit(
 			_player_dance_elapsed,
 			_player_dance_offset,
 			SpiralFlight.SPIRAL_RADIUS_PX,
-			SpiralFlight.TURNS_PER_SECOND
+			SpiralFlight.TURNS_PER_SECOND,
+			wander_seed
 		)
 		return true
 
@@ -1581,9 +1624,18 @@ func _continue_courtship(delta: float) -> bool:
 		_finish_courtship(partner)
 		return false
 	# Orbit the point between the two of them.
+	#
+	# Seeded on the PAIR, not merely on the round: the seed now shapes the
+	# dance's wandering figure as well as its phase (see
+	# Courtship.DANCE_RADIUS_SWING), and a bare round counter is shared by
+	# every pair that started on the same round -- so a meadow's dances would
+	# all trace the same figure. Courtship.pair_seed is computed identically
+	# on both sides from the two ids and the shared round, exactly as
+	# _finish_courtship already relies on, so the two partners still agree
+	# without messaging.
 	position = _courting_centre + Courtship.dance_offset(
 		_courting_elapsed,
-		_courtship_round,
+		Courtship.pair_seed(get_instance_id(), _courting_with, _courtship_round),
 		Courtship.leads(get_instance_id(), _courting_with)
 	)
 	return true
@@ -1603,7 +1655,17 @@ func _continue_spiral_flight(delta: float) -> bool:
 		# brings them back down (see AmbientFlyerMovement).
 		_end_spiral_flight()
 		return false
-	position = _spiral_centre + SpiralFlight.offset(_spiral_elapsed, _spiral_start_offset)
+	# Seeded on the PAIR: the seed shapes the whirl's breathing radius and its
+	# shared ground track (see SpiralFlight.converging_orbit / travel), so both
+	# partners must compute the same one. Courtship.pair_seed is derived from
+	# the two ids alone -- symmetric by construction -- so they agree without
+	# either reaching into the other. Round 0: a whirl has no rounds (it
+	# resolves nothing and has no cooldown to advance), unlike a courtship.
+	position = _spiral_centre + SpiralFlight.offset(
+		_spiral_elapsed,
+		_spiral_start_offset,
+		Courtship.pair_seed(get_instance_id(), _spiralling_with, 0)
+	)
 	return true
 
 
@@ -1962,8 +2024,17 @@ func _animate_wings() -> void:
 		return
 	if flap_frames.is_empty():
 		return
-	var index := int(_elapsed_time / FLAP_SECONDS_PER_FRAME) % flap_frames.size()
-	texture = flap_frames[index]
+	# Butterflies FLAP-GLIDE and songbirds flap-bound: bursts of beating with
+	# phases where the wings are not driving at all (see FlapGlide). The frame
+	# index therefore comes off the WING CLOCK, which pauses through a glide,
+	# rather than off wall time -- stepping frames at a fixed rate forever is
+	# exactly what read as mechanical ("can you add more random bounces and
+	# flaps?"). A bee's wing clock is wall time, so nothing changes for it.
+	var beats := FlapGlide.wing_cycles(
+		species, _elapsed_time, FLAP_SECONDS_PER_FRAME * float(flap_frames.size()), wander_seed
+	)
+	var index := int(beats * float(flap_frames.size())) % flap_frames.size()
+	texture = flap_frames[absi(index)]
 	_bounce_on_the_wingbeat()
 
 
@@ -1992,10 +2063,15 @@ func _animate_wings() -> void:
 func _bounce_on_the_wingbeat() -> void:
 	if texture == null:
 		return
-	offset.y = WingbeatBounce.bounce_offset(
+	# Through FlapGlide, so the body follows what the wings are actually doing:
+	# it bobs on the beat through a bout and SINKS through a glide, then
+	# climbs back. WingbeatBounce still owns how big the bob is and why -- this
+	# only decides when the wings are driving.
+	offset.y = FlapGlide.body_offset(
 		species,
 		_elapsed_time,
 		FLAP_SECONDS_PER_FRAME,
 		flap_frames.size(),
-		float(texture.get_height())
+		float(texture.get_height()),
+		wander_seed
 	)

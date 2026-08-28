@@ -1201,9 +1201,67 @@ are deliberately nothing alike:
 | Who | any two true butterflies, **cross-species** | **same species** only, plus bees |
 | Noticed from | 4 m | 3.2 m |
 | Lasts | 2 s | 4.5 s |
-| Shape | tight fast whirl that **climbs 1.5 m** | wide slow orbit, stays put |
+| Shape | tight fast whirl, up **and away** along a 1.5 m ascent | wide slow orbit, stays put |
 | Again in | 18 s | a **real day** |
 | Produces | nothing, ever | sometimes an egg |
+
+### Neither of them is a circle, and neither is flown at a speed it cannot fly
+
+Reported: *"the dance is overly dramatic and only a circle"*. Both halves were
+real, and both were the same mistake — a turn rate written down without
+checking the speed and the acceleration it implies.
+
+**The drama was a physics error.** The whirl's rate came from a monarch's
+5 m/s **burst** speed applied to the whole orbit. At a 35 cm radius that is
+`v²/r = 71 m/s²` — over **seven g**. Nothing with wings pulls seven g. The
+turn, not the wing, is what limits this, and the ceiling is one this project
+had already derived somewhere else: `WingbeatBounce` argues that a wing cannot
+pull the body *down* through its stroke, so lift swings about weight with
+depth `e ≤ 1` and peak lift is at most **twice** weight — a load factor of
+two. `ORBIT_SPEED_MPS = sqrt(2g·r)` follows, and the whirl rate roughly
+**halves**. The courtship dance had the same problem in reverse: 0.85 turns a
+second on a 9-pixel (≈70 cm) radius is 3.8 m/s, three quarters of an absolute
+burst, for a manoeuvre the module itself calls a slow wide orbit. It is now
+derived from a monarch's ordinary **cruise** (2 m/s), because a display flight
+is flown at a cruise.
+
+The whirl also **covers ground** now. A real ascending flight goes up *and
+away*; spinning on one spot is a large part of why a fast turn reads as
+frantic. The 1.5 m ascent is decomposed at 45° into a climb and a ground
+track, so the excursion — and the territory budget it was already capped
+against — is unchanged. The orbit, the climb and the ground track are three
+components of **one** velocity and their sum has to fit inside a real burst;
+the old model spent the entire burst on the orbit and then added the climb on
+top of it.
+
+**The circle was a shape error.** Real spiral flights are chaotic ascending
+chases — irregular, jagged, never a clean ellipse — and the pair's separation
+is observed as a *range* ("about half a metre to a metre"), not a number.
+Both orbits now breathe across their real band, per-pair and deterministic,
+using the **same** irregularity a butterfly's ordinary flight already had
+(`FlightIrregularity`, factored out of `PollinatorForaging`'s flutter rather
+than invented a second time). The courtship dance's fixed 0.7 ellipse is gone:
+an ellipse is still a closed figure traced identically every time round, which
+is what "only a circle" meant. The departure from a circle is kept at exactly
+the magnitude the ellipse asserted — it is the same observation — but made
+irregular.
+
+The radius is written `r₀/(1 + k·w)` rather than `r₀·(1 + k·w)`, which is not
+cosmetic: a flyer holds an **airspeed**, so on a varying radius it comes round
+faster where it is tighter, `ω = v/r`. With the reciprocal form the angular
+rate is exactly `(v/r₀)(1 + k·w)`, whose integral is closed-form — so the
+swept angle is the true integral of a real varying turn rate rather than an
+accumulation per frame. That matters: accumulating it would make the figure
+depend on frame rate and on `SimulationLod`'s step size, which is precisely
+the class of bug this system has already produced three separate ways.
+
+One projection compromise, stated rather than hidden: the ground track is
+drawn over the **upper** half-circle only. This world is top-down and draws
+height as screen-up, so climb and ground track land on the same two axes, and
+a track pointing down the screen cancels the climb exactly — measured at
+0.07 px of total shared translation over a whole whirl when it first did,
+which is a pair spinning on one spot, the very thing the ground track exists
+to stop.
 
 The spiral flight is allowed to be common precisely **because it is inert**.
 Everything that bounds the population lives in courtship and the life cycle; a
@@ -1471,6 +1529,54 @@ stylistic: `position` feeds containment, the courtship orbit, the spiral
 flight, every partner-distance check, and the whole tree's Y-sorting. A
 per-frame bob folded into it would put a wobble through all five at once. A
 test pins that `position` is untouched while the drawn offset moves.
+
+### Butterflies flap-glide, so the beat is a gait and not a metronome
+
+*"can you add more random bounces and flaps?"*
+
+A clean sinusoid at a fixed frequency, and wing frames stepped at a fixed
+seconds-per-frame, are metronomic — which is exactly what reads as mechanical.
+The real animal does not do that. Butterflies **flap-glide**: monarchs
+especially alternate bursts of flapping with gliding and soaring phases, and
+their wingbeat is genuinely irregular, unlike a bee's near-constant hum. Small
+passerines do the related thing, **flap-bounding**.
+
+`FlapGlide` holds that gait, and almost all of it is derived:
+
+- **Who alternates at all** is read off the wingbeat frequency, not a roster.
+  Above ~100 Hz an insect has **asynchronous** flight muscle — the thing that
+  lets a bee do a couple of hundred beats a second where a butterfly does ten
+  — and an animal beating that fast is not alternating with anything. A
+  species added to `WingbeatBounce.FLIGHT` gets the right answer for free,
+  the same way it already gets the right bob.
+- **How much of the time** comes out of level flight. Mean lift across a gait
+  must equal weight; the wings supply none of it while gliding, so the
+  flapping phase supplies all of it, and the most a wing can make is the same
+  `1 + e ≤ 2` ceiling the bob amplitude stands on. `(1 − f)·2W = W`, so
+  **f = ½**.
+- **How fast the beat varies inside a bout** comes out of aerodynamics.
+  Quasi-steady lift goes as the square of flapping speed, so a lift that can
+  swing by `e` corresponds to a rate that swings by `√(1+e) − 1`.
+
+The one figure *not* derived is the bout length: **two** visible beats, on the
+grounds that one beat followed by a pause is a stutter rather than a gait. The
+tests pin the properties (the flapping half is at least two visible beats; the
+whole gait repeats inside a couple of seconds so a player watching sees it)
+rather than the digit.
+
+The body follows what the wings are actually **doing**. Both the frame index
+and the bob are driven off one **wing clock** that pauses through a glide, so
+they can never disagree. Through a glide the bob stops — there is no pulse to
+rise and fall on — and the body **sinks**; through the next bout it climbs
+back while bobbing on the beat. Over a whole gait those cancel exactly: a
+sawtooth with no net drift, which is what level flap-gliding *is*, and the
+sink needs no size of its own because the height a bout gains is the height
+the glide gives back.
+
+`WingbeatBounce` is untouched by all of this and still owns how big the bob is
+and why; `FlapGlide` composes on top of it and owns only *when* the wings are
+driving. And it is still a **draw offset** — the same `position` invariant,
+the same test.
 
 
 ## Courtship, and where births come from

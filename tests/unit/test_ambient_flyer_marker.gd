@@ -547,6 +547,146 @@ func test_a_drifting_pollinator_resumes_foraging_when_a_meadow_reappears():
 	)
 
 
+# -- trap-lining: a butterfly works a CIRCUIT, not one flower ---------------
+#
+# Reported: "Butterflies still get stuck infront of a signle flower". Real
+# pollinators -- bumblebees, butterflies, hummingbirds -- forage a repeatable
+# CIRCUIT of blooms (trap-lining) rather than re-working one, because a
+# just-drained bloom is the worst bet in the patch.
+#
+# This is the acceptance measurement for that, and it is a real headless sim:
+# one butterfly, a real patch of blooms, several simulated minutes, nectar
+# regenerating exactly as FlowerPatch.advance does. What it counts is how many
+# DISTINCT blooms the flyer actually landed on.
+
+
+## A ring of `count` blooms around `centre` at `spread_px`, which is the shape
+## a real patch has (a pollinator's local flowers are around it, not in a
+## line) and the shape that makes "did it work a circuit" measurable.
+func _ring_of_flowers(world: StubScentWorld, centre: Vector2, count: int, spread_px: float) -> void:
+	for i in count:
+		var angle := TAU * float(i) / float(count)
+		var at := centre + Vector2.from_angle(angle) * spread_px
+		world.flowers.append({"position": at, "species": "rose", "nectar": 1.0, "landing": at})
+
+
+## How many different blooms this flyer put its feet on.
+func _distinct_flowers_visited(world: StubScentWorld) -> int:
+	var seen: Array = []
+	for at in world.drink_calls:
+		var known := false
+		for other in seen:
+			if at.distance_to(other) < PollinatorForaging.LANDING_DISTANCE:
+				known = true
+				break
+		if not known:
+			seen.append(at)
+	return seen.size()
+
+
+func test_a_butterfly_in_a_patch_works_several_flowers_not_one():
+	var world := StubScentWorld.new()
+	_ring_of_flowers(world, Vector2.ZERO, 6, 3.0 * TILE_SIZE)
+	marker.scent_world = world
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.species = "monarch"
+	marker.wander_seed = 4242
+	marker.setup(AmbientFlyerMovement.new(16.0, 30.0, 0.7))
+
+	for step in 3000:  # five simulated minutes
+		marker._process(0.1)
+		world.regenerate(0.1)
+
+	var distinct := _distinct_flowers_visited(world)
+	assert_ne(
+		distinct, 1,
+		"a butterfly must not spend five minutes on ONE bloom (distinct visited: %d, landings: %d)"
+			% [distinct, world.drink_calls.size()]
+	)
+	assert_gte(
+		distinct, 4,
+		"a trap-lining butterfly works a circuit (distinct visited: %d of 6, landings: %d)"
+			% [distinct, world.drink_calls.size()]
+	)
+
+
+## THE STANDING GUARD ON THIS WHOLE SYSTEM. Flutter, personality steering,
+## trap-lining, the breathing orbits and the flap-glide gait all now shape the
+## same sprite, and this file's own history is three separate ways of building
+## a heading out of components that can cancel -- every one of which showed up
+## live as "flyers stall and jitter on a fixed spot" (see
+## AmbientFlyerMovement.direction_at's notes).
+##
+## So: with every one of them composed together and running, over several
+## simulated minutes, a butterfly must never stop moving for longer than a
+## drink takes. The only thing in this game allowed to hold a flyer still is
+## sitting on a bloom.
+func test_nothing_in_this_composition_can_stall_a_butterfly():
+	var world := StubScentWorld.new()
+	_ring_of_flowers(world, Vector2.ZERO, 5, 4.0 * TILE_SIZE)
+	marker.scent_world = world
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.species = "monarch"
+	marker.wander_seed = 31337
+	marker.setup(AmbientFlyerMovement.new(16.0, 30.0, 0.7))
+
+	var still_for := 0.0
+	var worst_stall := 0.0
+	var last := marker.position
+	for step in 3000:  # five simulated minutes
+		marker._process(0.1)
+		world.regenerate(0.1)
+		# A tenth of a second at 16px/s is 1.6px; anything under a tenth of
+		# that is not travelling.
+		if marker.position.distance_to(last) < 0.16:
+			still_for += 0.1
+			worst_stall = maxf(worst_stall, still_for)
+		else:
+			still_for = 0.0
+		last = marker.position
+	assert_lte(
+		worst_stall, PollinatorForaging.DRINK_SECONDS + 1.0,
+		"only drinking may hold a flyer still (worst stall %.1fs)" % worst_stall
+	)
+
+
+## The line this fixes, at the marker. A flyer's territory centre used to snap
+## to whichever single bloom last fed it, so its whole relocation leash
+## re-centred on one flower however many it was really working. It must now
+## sit in the middle of the circuit -- which, for a ring of blooms, is the
+## middle of the ring and NOT any one of them.
+func test_a_foraging_butterflys_territory_is_its_circuit_not_its_last_flower():
+	var world := StubScentWorld.new()
+	var spread := 3.0 * TILE_SIZE
+	_ring_of_flowers(world, Vector2.ZERO, 6, spread)
+	marker.scent_world = world
+	marker.home = Vector2.ZERO
+	marker.position = Vector2.ZERO
+	marker.species = "monarch"
+	marker.wander_seed = 4242
+	marker.setup(AmbientFlyerMovement.new(16.0, 30.0, 0.7))
+
+	for step in 1800:  # three simulated minutes, long enough to work the ring
+		marker._process(0.1)
+		world.regenerate(0.1)
+
+	assert_gt(marker._fed_at.size(), 1, "precondition: it fed at more than one bloom")
+	var nearest_bloom := INF
+	for f in world.flowers:
+		nearest_bloom = minf(nearest_bloom, marker._origin.distance_to(f["position"]))
+	assert_gt(
+		nearest_bloom, 0.0,
+		"the territory centre must not be sitting exactly on one of the blooms"
+	)
+	assert_lt(
+		marker._origin.distance_to(Vector2.ZERO), spread,
+		"it should sit inside the ring it is working, not out on the rim (was %s)"
+			% marker._origin
+	)
+
+
 # -- ground foraging: a robin hunting worms ---------------------------------
 #
 # See docs/concept/soil_fauna.md. Songbirds used to have literally no
@@ -1766,16 +1906,23 @@ func test_a_spiral_flight_runs_climbs_and_then_ends():
 	assert_ne(a._spiralling_with, 0, "precondition: the whirl began")
 
 	# The two orbit offsets are exactly opposite, so they cancel at the pair's
-	# midpoint: this measures the CLIMB with the whirl taken back out.
+	# midpoint: this measures the pair's SHARED TRANSLATION -- the climb and
+	# the ground track -- with the whirl taken back out.
 	var highest := 0.0
+	var furthest := 0.0
 	var angles := {}
 	var whirled := 0.0
+	# The midpoint the whirl actually began from, which is the point both the
+	# climb and the ground track are measured off.
+	var started: Vector2 = a._spiral_centre
 	while a._spiralling_with != 0 and whirled < SpiralFlight.SPIRAL_SECONDS * 3.0:
 		a._process(FRAME)
 		b._process(FRAME)
 		whirled += FRAME
+		var midpoint := (a.position + b.position) * 0.5
 		# Screen-up is -Y, so "how high" is how far the midpoint went negative.
-		highest = maxf(highest, 100.0 - (a.position.y + b.position.y) * 0.5)
+		highest = maxf(highest, started.y - midpoint.y)
+		furthest = maxf(furthest, absf(midpoint.x - started.x))
 		angles[snappedf((a.position - a._spiral_centre).angle(), 0.3)] = true
 
 	assert_gt(angles.size(), 8, "it has to actually whirl, several times round")
@@ -1783,7 +1930,15 @@ func test_a_spiral_flight_runs_climbs_and_then_ends():
 	assert_almost_eq(
 		whirled, SpiralFlight.SPIRAL_SECONDS, 0.2, "it must last about SPIRAL_SECONDS"
 	)
-	assert_almost_eq(highest, SpiralFlight.RISE_PX, 0.5, "the pair must climb, together")
+	assert_gte(highest, SpiralFlight.RISE_PX - 0.5, "the pair must climb, together")
+	# ...and go somewhere while they do it. A whirl that spins on one spot is
+	# what read as frantic (see SpiralFlight.TRAVEL_M).
+	assert_gt(highest + furthest, SpiralFlight.RISE_PX + 0.5, "they must also cover ground")
+	assert_lte(
+		(Vector2(furthest, highest)).length(),
+		SpiralFlight.RISE_PX + SpiralFlight.TRAVEL_PX + 0.5,
+		"and no further than the climb plus the ground track between them allow"
+	)
 
 
 ## The difference from courtship that matters most for how often the player
@@ -1974,6 +2129,7 @@ const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const WingbeatBounce = preload("res://src/rendering/wingbeat_bounce.gd")
+const FlapGlide = preload("res://src/rendering/flap_glide.gd")
 
 
 func _butterfly_with_boldness(
@@ -2066,8 +2222,12 @@ func test_a_bold_butterfly_comes_and_dances_round_the_players_head():
 		bold._process(FRAME)
 	assert_true(bold._dancing_at_player, "it must actually latch on")
 	var head: Vector2 = player.position + Vector2(0.0, -StoneSize.PLAYER_WORLD_HEIGHT_PX)
-	assert_almost_eq(
-		bold.position.distance_to(head), SpiralFlight.SPIRAL_RADIUS_PX, 0.5,
+	# The orbit BREATHES rather than tracing a circle (see
+	# SpiralFlight.RADIUS_SWING), so this is the band, not a point.
+	assert_between(
+		bold.position.distance_to(head),
+		SpiralFlight.SPIRAL_RADIUS_PX / (1.0 + SpiralFlight.RADIUS_SWING) - 0.5,
+		SpiralFlight.SPIRAL_RADIUS_PX / (1.0 - SpiralFlight.RADIUS_SWING) + 0.5,
 		"and settle onto the same orbit it would hold round another butterfly"
 	)
 
@@ -2335,13 +2495,22 @@ func test_the_bounce_matches_the_wingbeat_it_is_locked_to():
 	var butterfly := _flapping_butterfly(parent)
 	for i in 10:
 		butterfly._process(FRAME)
+	# Through FlapGlide, which is what decides when the wings are driving at
+	# all; WingbeatBounce still owns the amplitude underneath it.
 	assert_almost_eq(
 		butterfly.offset.y,
-		WingbeatBounce.bounce_offset(
+		FlapGlide.body_offset(
 			"monarch", butterfly._elapsed_time, AmbientFlyerMarker.FLAP_SECONDS_PER_FRAME,
-			butterfly.flap_frames.size(), float(butterfly.texture.get_height())
+			butterfly.flap_frames.size(), float(butterfly.texture.get_height()),
+			butterfly.wander_seed
 		),
 		0.0001
+	)
+	assert_lte(
+		absf(butterfly.offset.y),
+		WingbeatBounce.amplitude_bodies("monarch")
+			* float(butterfly.texture.get_height()) * 2.0 + 0.0001,
+		"and the gait must not carry the body outside it"
 	)
 
 
