@@ -339,22 +339,24 @@ directly against the current `src/` files rather than assumed current.
   quantity gating both crossability and ore exposure, exactly as designed
   above. Wired live into `EarthChunkManager._load_chunk` via
   `StoneRenderer.spawn_mountain_veins` (tested 6/6).
-- 🚧 **Mountain ore veins — rendering: real, but not what this doc specs.**
-  This doc says above that a vein should render as a mineral-colored
-  streak following the slope direction directly on the mountain wall
-  texture, under the same hillshading pass as the rock around it — "not a
-  decal stamped on top of one." The live renderer does exactly the decal
-  this section was written to rule out: `StoneRenderer._build_mountain_vein_node`
-  spawns a discrete `MinableOre` `StaticBody2D`, positioned at the tile
-  center with a composited boulder texture — the same node shape flat-
-  ground ore already uses. Mechanically this is fully correct (the real
-  `MinableOre` mining flow, real slope-gated placement, no second mining
-  mechanic invented); visually it is the thing this doc explicitly says
-  not to do. Known and deliberately deferred, not silently resolved by
-  rewriting the spec to match the code: a 2026-08-28 playtest-driven fix
-  (`docs/progress.md`'s Terrain Relief section, same date) re-tuned this
-  same placement rule's density and explicitly left this visual mismatch
-  untouched.
+- ✅ **Mountain ore veins — rendering now matches this doc's own spec.**
+  `StoneRenderer._build_mountain_vein_node` no longer spawns the round,
+  composited boulder texture flat-ground ore uses. `src/rendering/mountain_vein_sprite.gd`
+  draws a real streak oriented along the vein's own aspect (slope-facing
+  compass bearing) — the exact shape this section calls for. `src/rendering/entity_hillshade_shader.gd`
+  gives it genuinely live hillshade participation: `sun_elevation_deg`/
+  `sun_azimuth_deg` are shared uniforms pushed by the same
+  `EarthChunkManager.set_sun_position` call already feeding the ground
+  overlay, while `slope_deg`/`aspect_deg` are Godot 4 `instance uniform`s
+  set once per sprite at spawn — one shared material for every vein, no
+  per-node update loop, and it darkens with the rock around it as the sun
+  actually moves. `MIN_LIT_FRACTION` is derived from `HillshadeShader`'s
+  own `MAX_SHADOW_ALPHA`, not a fresh number. `MinableOre`'s real mining
+  flow and real slope-gated placement are both untouched — only the
+  texture and material changed, per this doc's own original scoping
+  ("only placement and rendering are new, not a second mining mechanic").
+  Flat-ground ore is untouched too; this was a mountain-specific gap.
+  Tested: 7/7, 17/17, 34/34 (full `test_stone_renderer.gd`), 2/2.
 - ✅ **Biome classification reads slope** — beyond this doc's original
   four-piece Mechanism list, closing the Open Questions bullet of the same
   name above: `biome_classifier.gd`'s `classify()` takes an optional
