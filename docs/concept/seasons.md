@@ -182,7 +182,7 @@ unexpectedly green tree is a tree where an unexpectedly bare one reads as
 dead. But `""` was never an unknown season; it was *nobody has said yet*, and
 drawing that as high summer is precisely what let a wiring bug pass for a
 healthy forest. A renderer nobody has told anything now reads the clock's own
-zero — the first instant of spring, which for a canopy is bare wood, and for
+zero — the first instant of spring, which for a canopy is full blossom, and for
 the ground beside it is `SeasonalFoliage.tint_for_world_age(0.0)`: the same
 moment, each read the way its own schedule reads it. The empty case is gone
 upstream: `TreeRenderer` cannot be in it.
@@ -258,23 +258,20 @@ coincidence that silently rots.
 
 The schedule, season by season:
 
-- **Winter — bare, end to end.** Position pinned at 0 for the whole season.
-  **Winter's last third turns into nothing at all**: not blossom, and not a
-  bare→bare blend either — the pre-turn is simply *suppressed*. The turn
-  exists so a season arrives already saturated rather than swapping on a
-  frame boundary; but a canopy's spring **arrival state is bare**, because a
-  real tree in late winter has not moved yet. The property the pre-turn buys
-  is therefore already true, and there is nothing to blend toward. A bare→bare
-  ramp would be strictly worse than a no-op: every distinct progress value is
-  a whole tree picture to composite and cache (`ProceduralTreeSprite`), so it
-  would cost six identical images per species per variant to express a no-op.
-- **Early spring — into blossom, gradually, then briefly held.** The tree
-  comes out of bare into blossom across the first `OPENING_FRACTION` of
-  spring, then stands in full blossom for `FULL_BLOOM_FRACTION`. Blossom
-  *arriving* is a normal quantised six-step turn, so the winter/spring
-  boundary is still a gradual change and not a hard swap.
+- **Winter — bare, until its last hours.** Position pinned at 0 for all but
+  the final `OPENING_FRACTION` of the season; that last sliver runs the
+  bud-break ramp out of bare and into blossom, finishing exactly *on* the
+  winter/spring boundary. *(This bullet formerly read "bare, end to end", with
+  winter's pre-turn **suppressed** outright — see "Spring has to start in
+  spring" below for the live report that reversed it, and for why the ramp is
+  the short measured one rather than `TURN_FRACTION`.)*
+- **Early spring — full bloom, held, then leaf.** The opening ramp already
+  finished, so spring *opens* in full blossom and holds it for
+  `FULL_BLOOM_FRACTION`. The winter/spring boundary is still a gradual
+  quantised six-step change and not a hard swap; it now completes on the
+  boundary instead of starting there.
 - **Spring, after that — leaf.** Blossom gives way to leaf across
-  `LEAF_OUT_FRACTION` (again six quantised steps), and the rest of spring is
+  `LEAF_OUT_FRACTION`, measured from the end of the hold, (again six quantised steps), and the rest of spring is
   settled leaf. Spring's own last third, which used to be the blossom→leaf
   turn, is now leaf→leaf and does nothing.
 - **Summer and autumn — unchanged.** Both ride `SeasonTransition.TURN_FRACTION`
@@ -290,7 +287,10 @@ the constants; every fraction in the module is derived from them, so the
 schedule cannot be nudged without changing a claim about a real tree. A
 `SeasonCycle` year is 48 in-game days, so a season is 12, and blossom is
 visible at all (opening + hold = 12 of 92 real days) for **1.57 in-game days —
-13% of spring**, against the 34% an ordinary season turn occupies. Blossom is
+13% of a season**, against the 34% an ordinary season turn occupies. (It now
+straddles the winter/spring boundary rather than sitting wholly inside spring
+— see "Spring has to start in spring" — but the span itself is unchanged,
+which is the property that matters here.) Blossom is
 the briefest seasonal change in the game, which is what makes it an event
 rather than a wallpaper.
 
@@ -300,8 +300,8 @@ disagree — that argument was about the *clock*, and they still share it: one
 `year_fraction`, one quantiser, one set of season names. What they no longer
 share is the *curve*, because a colour lerp and a frame replacement do not
 express the same progress the same way (see the density table). Grass greens
-smoothly through late winter; the trees do not flower until spring, which is
-what both actually do.
+smoothly through late winter; the trees hold off until winter's last hours and
+then open onto spring, which is close to what both actually do.
 
 **What the other species do.** The blossom slot is only a flowering event for
 cherry. Measured the same way, the nut and orchard sheets draw it as the
@@ -320,11 +320,48 @@ tones of conifer, so moving *when* they happen changes nothing visible about
 it. Pinned by test in `test_illustrated_tree.gd` so a re-drawn pine sheet that
 went genuinely bare would be caught.
 
+### Spring has to start in spring
+
+Reported live, from a world where `/season spring` had just been typed: the HUD
+read **Spring · Cloudy** over bare brown branches and snow-capped pines —
+*"the trees show a winter sprite when I do /season spring"*.
+
+Not a regression, and not a mis-mapping: it was the **suppressed pre-turn**
+above, working as written. `/season` skips the clock to the *first instant* of
+the season it names (`World._handle_season_command` →
+`EarthChunkManager.jump_to_season`), and with winter pinned at stage 0 for its
+whole length, spring's first instant selected the bare frame. The tree would
+not open for another `OPENING_FRACTION` of spring.
+
+That made the winter→spring seam **the one season start in the year that
+arrived unsaturated**, breaking the rule `SeasonTransition` states in its own
+header — a wood should *"be fully turned by the time the season it is turning
+into actually starts"*. Every other seam already obeyed it: autumn's last third
+turns the canopy bare, so winter begins bare; summer's turns it to autumn.
+
+**The fix moves the ramp rather than lengthening it.** Bud break now runs
+against the **end of winter** instead of the start of spring, so it finishes
+exactly on the boundary and spring opens in full bloom. Nothing about how long
+a tree carries blossom changed: it is still `OPENING_FRACTION +
+FULL_BLOOM_FRACTION`, the same measured 5 + 7 real days, still a little over an
+in-game day and a half — the window merely sits early enough to *peak* at the
+boundary rather than starting there.
+
+**Why not simply give the canopy `TURN_FRACTION` back**, the way summer and
+autumn have it? Because that is the version this whole section exists to
+prevent. A third of winter ramping toward blossom is ~4 in-game days of
+visibly pink trees standing in snow — the original report — and, since blossom
+carries 2.5× the opaque pixels of bare wood, it reads as arrived long before
+its progress number does. It would also stretch total blossom to roughly 5
+in-game days, three times the real bloom record the constants are derived from,
+which stops it being an event. The short ramp buys the saturated season start
+at ~0.65 in-game days of early pink, and costs no extra cached images.
+
 ## Status / mechanisms
 
 - ✅ Season cycle model (season + warmth/growth modifiers) — `src/world/season_cycle.gd`, tested.
-- ✅ Canopy phenology — winter bare end to end, blossom a brief early-spring
-  event that gives way to leaf — `src/world/tree_phenology.gd`, tested
+- ✅ Canopy phenology — winter bare but for its last hours, blossom a brief
+  event straddling the winter/spring boundary that gives way to leaf — `src/world/tree_phenology.gd`, tested
   (`tests/unit/test_tree_phenology.gd`). Pure; shares `SeasonTransition`'s
   quantiser and its summer/autumn turn window, and replaces
   `SeasonTransition.state_at` **for canopies only** — the ground tint still
