@@ -4799,9 +4799,17 @@ func test_courting_flyers_stop_breeding_once_the_chunk_is_full():
 	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
 	for _i in 400:
 		manager.spawn_flyer_offspring("monarch", centre)
+	# Measured against the ceiling for THIS meadow, not the bare-ground one.
+	# Berlin's chunk is full of flowers, so its pollinator budget is scaled up
+	# (see AmbientFlyerRenderer.scented_budget) -- comparing a scented chunk
+	# against the unscented sum is the same stale-number mistake the guard
+	# itself used to make, and it read as "the cap leaks" when the cap was
+	# working and the yardstick was wrong.
 	assert_lte(
 		manager._loaded_ambient_flyers[chunk_coord].size(),
-		AmbientFlyerRenderer.max_flyers_per_chunk(),
+		AmbientFlyerRenderer.max_flyers_per_chunk(
+			manager._pollinator_multiplier_for(chunk_coord)
+		),
 		"a meadow supports what it supports"
 	)
 
