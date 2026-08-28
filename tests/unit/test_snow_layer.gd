@@ -60,6 +60,33 @@ func test_band_image_is_sized_for_the_atlas():
 		assert_eq(image.get_height(), art)
 
 
+## OVERLAY_ROW_BANDS/OVERLAY_COLUMN_BANDS exist specifically to crop AROUND
+## the sheet's own near-opaque divider lines (see their own doc comments for
+## the measured divider centers) -- a regression here (an asset re-export
+## that shifts the grid, or a future edit that widens a band back toward its
+## neighbour) would bake a stray light border line into a real in-game tile.
+## Guards the geometry directly rather than inspecting resized pixel alpha
+## (which would also pick up the Lanczos resize's own blending, and would
+## have to special-case cells that are legitimately near-opaque at full
+## coverage): every measured divider center must fall in the GAP between
+## two consecutive bands, never inside one.
+func test_band_crops_stay_clear_of_the_sheets_divider_lines():
+	var row_dividers := [208.5, 416.5, 624.0, 831.0]
+	var column_dividers := [291.0, 579.0, 867.5, 1156.0]
+	for divider in row_dividers:
+		for band in SnowLayer.OVERLAY_ROW_BANDS:
+			assert_true(
+				divider < float(band.x) or divider >= float(band.y),
+				"row divider at %.1f must not fall inside band %s" % [divider, band]
+			)
+	for divider in column_dividers:
+		for band in SnowLayer.OVERLAY_COLUMN_BANDS:
+			assert_true(
+				divider < float(band.x) or divider >= float(band.y),
+				"column divider at %.1f must not fall inside band %s" % [divider, band]
+			)
+
+
 ## Deeper snow is whiter: the bands have to actually differ, or the gradation
 ## is a number nobody can see.
 func test_deeper_snow_is_whiter():
