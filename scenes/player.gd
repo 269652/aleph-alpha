@@ -1573,14 +1573,15 @@ func _terrain_blocks_movement(input_direction: Vector2) -> bool:
 	return not TerrainPassability.is_passable(slope, _has_climbing_gear())
 
 
-## No item/equipment concept sets this true anywhere in live gameplay yet
-## (see docs/progress.md's Transportation section -- the climbing rope
-## `transportation.md`/`terrain_relief.md` both specify isn't built). The
-## hook exists now so terrain passability is already correct and already
-## tested for the day a real climbing rope exists, rather than needing this
-## call site touched again later.
+## Whether the player is CARRYING a real climbing rope (docs/concept/
+## transportation.md, item_catalog.gd's "climbing_rope") -- terrain_relief.md's
+## own "unless the player is carrying a climbing rope" framing, so this is a
+## raw inventory count like _has_fishing_rod(), not an equipped/wielding
+## check. Raises TerrainPassability's hard-impassable slope threshold from
+## HARD_THRESHOLD_DEG to HARD_THRESHOLD_WITH_ROPE_DEG via
+## _terrain_blocks_movement's call above.
 func _has_climbing_gear() -> bool:
-	return false
+	return _inventory_counts().get("climbing_rope", 0) > 0
 
 
 ## Authority-only: resolves a melee swing on the rising edge of the attack

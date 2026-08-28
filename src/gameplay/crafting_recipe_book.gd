@@ -235,6 +235,24 @@ const _RECIPES := {
 		"inputs": [{"item_id": "lasso", "count": 1}, {"item_id": "iron_ingot", "count": 4}],
 		"output": {"item_id": "reinforced_rope", "count": 1},
 	},
+	# Climbing rope (docs/concept/transportation.md's "Traversal tools"
+	# section: "a proper climbing rope needs high tensile strength";
+	# docs/concept/terrain_relief.md's "Passability: ask before you step").
+	# Material chosen against the real toughness column
+	# (MaterialProperties.MATERIALS/ROPE_MIN_TOUGHNESS), not eyeballed --
+	# see test_material_properties.gd's viability pin. hide's toughness is
+	# 7.0, comfortably above ROPE_MIN_TOUGHNESS's 5.0, and unlike
+	# plant_fibre (ambient meadow gathering) it is sourced only by
+	# hunting+butchering an animal (butchering.gd) -- the "materials that
+	# make a traversal tool actually good live further out on the danger
+	# gradient" transportation.md itself asks for, the same shape as its
+	# own "waterproof hide from an aquatic apex predator" diving-hull
+	# example. plant_fibre braids/binds the hide strips into an actual
+	# rope, the same role it already plays in the lasso recipe above.
+	"climbing_rope": {
+		"inputs": [{"item_id": "hide", "count": 3}, {"item_id": "plant_fibre", "count": 3}],
+		"output": {"item_id": "climbing_rope", "count": 1},
+	},
 }
 
 
