@@ -3,16 +3,19 @@
 The planet is not a painted backdrop — it's a simulation the player walks
 around inside.
 
-- **Terrain**: generated from a heightmap + hydraulic erosion pass
-  (rivers/lakes carve themselves out during generation, not hand-placed).
-  This happens *once* at world-gen time — we are not running a live
-  plate-tectonics simulation. "Realistic" means the *output* looks and
+- **Terrain**: real Earth elevation data (a bundled whole-globe raster), not
+  hand-placed. This happens *once* at world-gen time — we are not running a
+  live plate-tectonics simulation. "Realistic" means the *output* looks and
   behaves like Earth, not that we simulate continental drift. Elevation
-  itself is real data, but today only feeds a biome threshold — nothing
+  itself is real data, but mostly only feeds a biome threshold — nothing
   currently stops the player walking straight up a cliff.
   [terrain_relief.md](terrain_relief.md) is what turns that same elevation
   data into real slope: passability, visible hillshading, and mountain ore
-  exposure, all from one shared field.
+  exposure, all from one shared field. A separate procedural heightmap +
+  hydraulic-erosion pass also exists (`world_generator.gd`,
+  `hydraulic_erosion.gd`) but is kept for a future non-Earth planet, not
+  used here — real rivers on Earth are [rivers.md](rivers.md)'s curated
+  real-waterway catalog plus a procedural fallback, not erosion-carved.
 - **Climate**: Köppen-style biome banding by latitude, elevation, and
   distance from water was originally a one-shot worldgen classification,
   same as terrain above. [climate_dynamics.md](climate_dynamics.md)

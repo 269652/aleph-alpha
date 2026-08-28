@@ -9,8 +9,8 @@ from repeated traffic — worn paths, trails, roads, and crossings:
 
 - **Boats** are a craftable/buildable mode of transport (see
   [crafting.md](crafting.md)/[building.md](building.md)) for crossing the
-  rivers/lakes/oceans [world.md](world.md) generates — necessary, not
-  optional, given how much of the map is water.
+  rivers ([rivers.md](rivers.md)) and oceans [world.md](world.md) generates —
+  necessary, not optional, given how much of the map is water.
 - **Fast travel is available early**, not gated behind late-game tech —
   waypoints/portals exist from early on for convenience alongside normal
   movement, horses, and boats, rather than being withheld until

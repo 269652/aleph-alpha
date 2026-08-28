@@ -6,6 +6,8 @@ const ClimateModel = preload("res://src/world/climate_model.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const TerrainRelief = preload("res://src/world/terrain_relief.gd")
 const Chunk = preload("res://src/world/chunk.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const ProceduralRiver = preload("res://src/world/procedural_river.gd")
 
 ## World scale: ~111 tiles per degree of latitude/longitude (~1km/tile),
 ## giving a full, finite Earth of ~40,000 x 20,000 tiles -- explorable at a
@@ -40,6 +42,8 @@ var _geo_coordinates := GeoCoordinates.new()
 var _climate_model := ClimateModel.new()
 var _biome_classifier := BiomeClassifier.new()
 var _terrain_relief := TerrainRelief.new()
+var _river_catalog := RiverCatalog.new()
+var _procedural_river := ProceduralRiver.new()
 
 var _fine_detail_noise := FastNoiseLite.new()
 var _moisture_noise := FastNoiseLite.new()
@@ -203,6 +207,25 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 		cell_elevation,
 		temperature_at_elevation(global_y, cell_elevation),
 		moisture_at_global(global_x, global_y)
+	)
+
+
+## True if (global_x, global_y) should render with the water overlay as a
+## river: a curated real river's course (RiverCatalog) OR a procedural
+## fallback candidate (ProceduralRiver) everywhere else -- see
+## docs/concept/rivers.md. Deliberately NEVER changes biome_at_global's own
+## result (a river never becomes an eighth BiomeClassifier.KNOWN_BIOMES
+## entry); this is consulted only by EarthChunkManager's water overlay,
+## layered over whatever land biome is already there. The cheap curated
+## check runs first so the real elevation sample below is only paid when
+## nothing curated already answered the question, the same
+## avoid-the-expensive-sample-when-unneeded shape as _slope_override_deg_for.
+func is_river_at_global(global_x: int, global_y: int) -> bool:
+	if _river_catalog.is_river_tile(global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES):
+		return true
+	var cell_elevation := elevation_at_global(global_x, global_y)
+	return _procedural_river.is_river_candidate(
+		global_x, global_y, cell_elevation, EARTH_SEA_LEVEL, EARTH_MOUNTAIN_LEVEL
 	)
 
 

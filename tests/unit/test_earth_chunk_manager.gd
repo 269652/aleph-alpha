@@ -73,24 +73,41 @@ func after_each():
 	creatures_parent.free()
 
 
-## The GPU water overlay (see WaterShader): every loaded ocean cell gets a
-## marker cell on the dedicated water layer (which carries the animated
-## water material); unloading erases them again.
-func test_water_overlay_marks_exactly_the_loaded_ocean_cells():
+## Pure passthrough, same shape as gradient_at_global -- needs no loaded
+## chunk at all, so this is cheap (see docs/concept/rivers.md).
+func test_is_river_at_global_delegates_to_the_generator():
+	assert_eq(
+		manager.is_river_at_global(_berlin_tile.x, _berlin_tile.y),
+		manager.generator.is_river_at_global(_berlin_tile.x, _berlin_tile.y)
+	)
+
+
+## The GPU water overlay (see WaterShader): every loaded ocean OR river cell
+## gets a marker cell on the dedicated water layer (which carries the
+## animated water material); unloading erases them again. Berlin itself is
+## one of the Spree's own curated waypoints (docs/concept/rivers.md), so
+## this region is guaranteed to exercise both the ocean and the river path,
+## not just ocean.
+func test_water_overlay_marks_exactly_the_loaded_ocean_and_river_cells():
 	var water_layer := TileMapLayer.new()
 	manager.set_water_layer(water_layer)
 	manager.update(_berlin_tile)
 
-	var ocean_cells := 0
+	var water_cells := 0
+	var river_cells := 0
 	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
 	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
 		for y in EarthChunkManager.CHUNK_SIZE:
 			for x in EarthChunkManager.CHUNK_SIZE:
 				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
 				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
-				if manager.biome_at_global(global_x, global_y) == "ocean":
-					ocean_cells += 1
-	assert_eq(water_layer.get_used_cells().size(), ocean_cells)
+				var is_river := manager.is_river_at_global(global_x, global_y)
+				if is_river:
+					river_cells += 1
+				if manager.biome_at_global(global_x, global_y) == "ocean" or is_river:
+					water_cells += 1
+	assert_eq(water_layer.get_used_cells().size(), water_cells)
+	assert_gt(river_cells, 0, "Berlin sits on the Spree's own curated course -- expected at least one river cell here")
 	assert_true(water_layer.material is ShaderMaterial, "water layer should carry the animated water material")
 
 	# Moving far away unloads the original chunks -- their overlay cells go too.

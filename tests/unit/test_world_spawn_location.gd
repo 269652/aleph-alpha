@@ -19,7 +19,9 @@ extends GutTest
 const World = preload("res://scenes/world.gd")
 const EarthElevationSource = preload("res://src/world/earth_elevation_source.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const ClimateModel = preload("res://src/world/climate_model.gd")
+const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 
 
 func test_spawn_is_the_freiburg_gaskugel_on_the_dreisam():
@@ -56,3 +58,50 @@ func test_spawn_climate_is_at_least_as_warm_as_the_old_berlin_spawn():
 	var height_above_sea_level := maxf(0.0, elevation - EarthChunkGenerator.EARTH_SEA_LEVEL)
 	var temperature: float = ClimateModel.new().temperature_at(latitude_0to1, height_above_sea_level)
 	assert_gt(temperature, OLD_BERLIN_CLIMATE)
+
+
+## Real integration check (docs/concept/rivers.md): the spawn point sits
+## exactly ON the Dreisam's own curated course -- it's one of RiverCatalog's
+## own Dreisam waypoints, the whole reason this location was picked. A
+## dry-land search that didn't know about rivers would happily accept the
+## literal spawn tile even though it's the middle of the river; the fixed
+## _find_dry_land_spawn must search past it to real dry land instead.
+##
+## Not add_child()'d, same convention test_world_streaming_budget.gd/
+## test_world_inventory_wiring.gd already use for a bare World.new() that
+## only needs one plain (non-@onready) field poked directly. Needs one real
+## EarthChunkManager.update() call (the cached biome_at_global/
+## is_river_at_global read _find_dry_land_spawn relies on requires it), so
+## kept in this small file rather than test_earth_chunk_manager.gd, which
+## already takes ten-plus minutes on its own.
+func test_find_dry_land_spawn_does_not_land_in_the_river_at_the_spawn_point():
+	var world := World.new()
+	var tile_map_layer := TileMapLayer.new()
+	var entities_parent := Node2D.new()
+	var creatures_parent := Node2D.new()
+	var manager := EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
+	world._chunk_manager = manager
+
+	var geo := GeoCoordinates.new()
+	var spawn_tile := geo.tile_for_coordinate(
+		World.SPAWN_LATITUDE, World.SPAWN_LONGITUDE,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	manager.update(spawn_tile)
+
+	# Sanity: the literal spawn tile really is on the curated Dreisam course
+	# (the whole premise of this test) -- if this ever stops being true the
+	# test itself needs re-examining, not just the fix it's checking.
+	assert_true(
+		manager.is_river_at_global(spawn_tile.x, spawn_tile.y),
+		"expected the raw spawn tile to be on the Dreisam's own curated course"
+	)
+
+	var result := world._find_dry_land_spawn(spawn_tile)
+	assert_false(manager.is_river_at_global(result.x, result.y), "must not spawn inside the river")
+	assert_ne(manager.biome_at_global(result.x, result.y), "ocean")
+
+	world.free()
+	tile_map_layer.free()
+	entities_parent.free()
+	creatures_parent.free()

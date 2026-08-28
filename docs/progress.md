@@ -6882,6 +6882,67 @@ Exploration sections (referenced, not redefined, in world.md itself).
   for statics, withering, and NPC-built settlements specifically.
 - **Exploration & History-Seeded Points of Interest** (large) — ⬜ Not started (see Exploration section)
 
+### Rivers (`concept/rivers.md`)
+
+Before this, "river" existed nowhere as real geometry — only flavor text
+(a Bridgekeeper riddle answer, a kingfisher comment, a village-placement
+comment) riding on the single `"ocean"` elevation threshold. A real river
+system now exists, built curated-first at the user's own request ("can we
+do rivers next? set the spawn point to Dreisam near the Gaskugel in
+Freiburg" — see the spawn-point change in the World section's own history
+via `test_world_spawn_location.gd` — then "all big rivers but first
+germany" and a 4-tile minimum width).
+
+- **Curated real river catalog** (medium) — ✅ Done — `river_catalog.gd`:
+  11 real named rivers as simplified (source → real via-points → mouth)
+  polylines, gathered from Wikipedia/Wikimedia Commons/OpenStreetMap and
+  cross-checked the same way the spawn point was — Germany's major rivers
+  (Rhine, Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree, Isar) plus
+  the Dreisam (small, but the one this game's own spawn point sits on).
+  `distance_to_nearest_river_tiles` does real point-to-segment projection
+  in tile space (the same tradeoff `GeoCoordinates.tile_is_within_radius`
+  already makes), not just nearest-waypoint. Rest-of-world roster — ⬜ Not
+  started, an explicitly ongoing/growing table, not a closed set.
+- **Minimum river width** (small) — ✅ Done — `RiverCatalog.
+  RIVER_HALF_WIDTH_TILES := 2.0`, a tested (not eyeballed) constant giving
+  at least 4 tiles of total width, since the real Dreisam's ~10-15m would
+  be sub-tile and invisible at this world's ~1km/tile scale.
+- **Procedural fallback (everywhere a curated river doesn't reach)** (medium)
+  — ✅ Done, honestly scoped — `procedural_river.gd`: a real elevation-band
+  gate combined with a seeded noise field's zero-contour (winding threads,
+  not blobs). Explicitly a stylized proxy, NOT a flow-accumulation
+  simulation — a real one is infeasible on this chunk-streamed
+  ~40,000x20,000-tile world (no point at which a global drainage pass could
+  run), the same limit `concept/electromagnetism.md`'s water-wheel proposal
+  already accepted for flow speed specifically.
+- **Rendering** (medium) — ✅ Done — a river never becomes an eighth
+  `BiomeClassifier.KNOWN_BIOMES` entry (would multiply
+  `TerrainRenderer`'s already-combinatorial corner/edge blend-tile
+  generation for a result that doesn't even match how a river looks). A
+  river cell keeps whatever land biome it already had; `EarthChunkGenerator.
+  is_river_at_global` is consulted only by `EarthChunkManager.
+  _paint_water_overlay`, generalized from "mark ocean cells" to "mark ocean
+  OR river cells" — reusing the existing shore-blend/ripple shader
+  machinery unmodified. `_land_directions_at`/`_ring_distance_at` also
+  generalized (a river's own neighboring river cells no longer register as
+  "land"), so a several-tiles-wide river shows real shore-to-open-water
+  variation across its width instead of reading as uniformly shored.
+  Verified live: Berlin sits on the Spree's own curated course, and
+  `test_water_overlay_marks_exactly_the_loaded_ocean_and_river_cells`
+  confirms real river cells there.
+- **Dry-land spawn exclusion** (small) — ✅ Done — `World.
+  _find_dry_land_spawn` now excludes river tiles the same way it already
+  excludes ocean. Real integration case: the spawn point sits exactly ON
+  the Dreisam's own curated waypoint (the whole reason that location was
+  picked), so this is not hypothetical — `test_find_dry_land_spawn_does_
+  not_land_in_the_river_at_the_spawn_point` confirms the player spawns
+  NEAR, not literally inside, the river.
+- **Freshwater fishing, village water-avoidance, flow velocity/water wheel,
+  boats/fords/bridges, Nix water-gating, lakes** — ⬜ Not started (all
+  explicitly named as deferred in `concept/rivers.md`'s own "What this pass
+  touches" section — none of these silently regressed, they were never
+  built and still aren't).
+
 ### Farming (`concept/farming.md`)
 
 No farming system is wired into live gameplay, but its plot and breeding math now exist as tested pure logic:

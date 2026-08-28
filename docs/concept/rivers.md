@@ -1,0 +1,189 @@
+# Rivers
+
+Before this doc, "river" existed nowhere in the codebase as real geometry —
+only as flavor text (a Bridgekeeper riddle answer, a kingfisher-behaviour
+comment, a village-placement comment) riding on top of the single `"ocean"`
+biome threshold `BiomeClassifier` already computes from real elevation data.
+This doc specifies the first real river system: a **curated set of actual
+named real-world rivers**, layered over a **procedural fallback** everywhere
+a curated river doesn't reach, both rendered as an overlay on top of whatever
+land terrain is already there — not a new ground-texture biome.
+
+## Design pillars
+
+1. **Curated where it matters, procedural everywhere else.** The world's
+   bundled real elevation data (`assets/data/world_elevation.png`, ~10.4
+   km/pixel — see `docs/concept/item_illustrations.md`'s sibling honesty
+   about data limits, and `earth_elevation_source.gd`'s own encoding
+   comment) is far too coarse to resolve an actual small river's course —
+   Freiburg's own real ~278 m valley floor already reads as ~570–680 m in
+   it, blended with the Black Forest hillside next door (measured live,
+   see `test_world_spawn_location.gd`). A real named river a player should
+   be able to recognize (the Dreisam at this game's own spawn point) can
+   only be **curated data**, not derived from what's already bundled.
+   Everywhere a curated river doesn't reach, a procedural fallback grounded
+   in real elevation keeps the rest of the planet from being riverless.
+2. **Grow the roster deliberately, starting with Germany.** One river
+   (the Dreisam) is necessary for this game's own spawn point; the roster
+   is designed to grow indefinitely, but ships starting with **Germany's
+   major rivers** as the first real batch rather than attempting global
+   coverage in one pass. See Roster below.
+3. **Rendered as a water overlay on real terrain, not a new ground biome.**
+   A river doesn't turn the forest it cuts through into a different kind of
+   ground — it's a blue ribbon threading through whatever land was already
+   there. Mechanically and visually this reuses `EarthChunkManager`'s
+   existing ocean water-overlay layer (shore-blend distance, ripple
+   response to rain) rather than adding an eighth entry to
+   `BiomeClassifier.KNOWN_BIOMES`. See Rendering below for why the
+   alternative (a full peer biome) was rejected.
+4. **Gameplay-scale width, not survey accuracy.** The real Dreisam is
+   roughly 10–15 m wide. At this world's ~1 km/tile scale
+   (`EarthChunkGenerator.TILES_PER_DEGREE`), a survey-accurate width would
+   be a fraction of one tile — invisible and unwalkable-around in practice.
+   Curated rivers carve a minimum width instead, calibrated in tiles, the
+   same kind of deliberate real-scale compression this world already
+   accepts elsewhere (a single tile already stands in for a ~1 km real
+   area).
+
+## Curated rivers: real named waterways
+
+`src/world/river_catalog.gd` holds an ordered table of named rivers, each a
+simplified real-world polyline (source → a handful of real via-points a
+river actually passes through → mouth), gathered from real geographic
+sources (Wikipedia infoboxes, Wikimedia Commons geo-tags, OpenStreetMap/
+Nominatim — cross-checked against each other the same way this session
+verified the Freiburg spawn point). "Simplified" is deliberate: a handful of
+real waypoints per river, not a survey-grade centerline — consistent with
+what "curated" means throughout this doc.
+
+The core query, `distance_to_nearest_river_tiles(tile_x, tile_y, world_width,
+world_height)`, converts every waypoint to tile space with the same
+`GeoCoordinates.tile_for_coordinate` this project already uses for every
+other real-coordinate feature (Easter eggs, Bridgekeeper, the spawn point
+itself), then takes the minimum point-to-segment distance across every
+consecutive waypoint pair of every river — the same "distance in tile
+space, not real spherical distance" tradeoff `GeoCoordinates.
+tile_is_within_radius` already makes and documents.
+
+### Roster (Germany first)
+
+Phase 1 ships Germany's major rivers plus the Dreisam (small, but the one
+this game's spawn point sits on, so it ships regardless of size):
+
+Rhine, Danube, Elbe, Weser, Main, Mosel, Neckar, Oder, Spree, Isar, Dreisam.
+
+**Explicitly deferred**: every other river on Earth. The catalog structure
+places no limit on this — adding a river is adding one data entry — but
+populating "all big rivers, worldwide" is real, ongoing curation work the
+user has already signalled as the intended next phase, not attempted here.
+
+## Width
+
+`RiverCatalog.RIVER_HALF_WIDTH_TILES` is a tested constant, not an eyeballed
+one: the requirement is a curated river reads as **at least 4 tiles wide**
+in-game (real width would be sub-tile and effectively invisible at this
+world's ~1 km/tile scale — see pillar 4), so half-width is set to clear that
+total-width floor with the same tile-space distance query described above.
+A cell within `RIVER_HALF_WIDTH_TILES` of any curated river's polyline
+segment renders as river.
+
+Real rivers taper — wide near the mouth, narrow near the source — but a
+uniform width for this first pass is the honest MVP; real width-tapering
+per waypoint is a plausible later refinement, not attempted here.
+
+## Procedural fallback: everywhere else
+
+A true flow-accumulation network (tracing every upstream cell that drains
+through a given point, the way `hydraulic_erosion.gd`'s droplet carver
+works for the disused fictional-planet pipeline) is not feasible here: this
+world is chunk-streamed at ~40,000 × 20,000 tiles with only nearby chunks
+ever loaded (`docs/concept/world.md`), so there is no point at which a
+global drainage pass could run, and a per-tile on-demand upstream walk
+would be arbitrarily expensive (real rivers accumulate thousands of
+upstream cells). `docs/concept/electromagnetism.md`'s own water-wheel
+proposal already accepted this exact limit ("flow velocity isn't a
+simulated field today... rather than adding a whole new hydrological
+simulation, flow speed is derived from the water tile's own local elevation
+gradient") — this doc makes the same trade for placement, not just flow
+speed.
+
+The chosen proxy (`src/world/procedural_river.gd`) is a **stylized
+noise-contour heuristic**, not a hydrology simulation: a cell qualifies as a
+procedural river candidate when a seeded 2D noise field sampled at that
+real latitude/longitude sits within a narrow band of a fixed iso-value
+(noise contour lines read as winding, branching lines rather than blobs —
+a well-known cheap procedural-content technique) **and** the cell's real
+elevation sits in a low-lying band relative to the sea/mountain thresholds
+already computed for it (so procedural rivers still preferentially appear
+in real lowlands, not on real mountain peaks, even though they are not
+tracing real drainage). This is honestly a visual proxy for "there is
+probably a minor waterway near here," not a claim that any specific
+procedural river corresponds to a real one — the same register `moisture_at_global`'s
+own doc comment already uses ("Fully procedural for now (no real
+precipitation data sourced yet)").
+
+## Rendering: overlay, not a new biome
+
+`TerrainRenderer` already has an extensive corner/edge blend system keyed
+off `BiomeClassifier.KNOWN_BIOMES` (`BLEND_PRIORITY`, per-pair corner art) —
+adding an eighth biome there multiplies that system's already-combinatorial
+blend-tile generation and risks regressing tests built around the current
+7-biome roster, for a payoff (a river rendered as its own ground texture,
+with its own land-blend art against all 7 other biomes) that doesn't even
+match how a river actually looks: a river cutting through grassland doesn't
+turn the grassland into a different ground texture at the edges, it's water
+laid over the top.
+
+So: **a river cell keeps whatever biome `BiomeClassifier` already assigned
+it** (forest, grassland, whatever the real elevation/temperature/moisture
+say) — rivers never touch `classify()` or `KNOWN_BIOMES` at all. A new
+`EarthChunkGenerator.is_river_at_global(global_x, global_y)` query (curated
+catalog OR procedural fallback) is consulted only by
+`EarthChunkManager._paint_water_overlay`, generalized from "mark every
+`ocean` cell on the water overlay layer" to "mark every `ocean` cell **or
+river cell**" — reusing the existing shore-blend-distance/ripple-response
+shader machinery ocean already has, unmodified. The visual result: a blue,
+shore-blended, rain-rippling ribbon threading over the real ground texture
+underneath, exactly like a real river does.
+
+## What this pass touches, and what it deliberately doesn't
+
+Touches:
+- `_find_dry_land_spawn` (`scenes/world.gd`) excludes river tiles the same
+  way it already excludes ocean, so a fresh spawn search can't land a
+  player in a river.
+
+Deliberately deferred (named here so nothing pretends to be more finished
+than it is, matching this project's usual practice):
+- **Freshwater fishing** — `docs/concept/fishing.md` already scoped itself
+  to "ocean-only... v1" pending exactly this system; wiring `FishRenderer`/
+  population modelling to spawn in rivers too is real follow-up work, not
+  attempted here.
+- **Village water-avoidance** — `village_renderer.gd`'s dry-origin search
+  doesn't yet know about the new `is_river_at_global` query; a village
+  could still be placed straddling a river. Follow-up, not attempted here.
+- **Flow velocity / the water wheel** (`docs/concept/electromagnetism.md`) —
+  unchanged; still an open, unvalidated proposal.
+- **Boats, fords, ferries, bridges** (`docs/concept/transportation.md`,
+  `docs/concept/infrastructure.md`) — unchanged; both docs already scope
+  these as entirely unbuilt, and this pass adds the water they'd cross
+  without adding any way to cross it.
+- **Nix (Wasserfrau) spawn-gating on real water geometry**
+  (`docs/concept/worldbosses.md`) — Nix is still reachable only via the
+  debug `/spawn` console command; this pass does not wire the "river and
+  lake water spirit" flavor text to any actual water-proximity check.
+- **Lakes** — a freshwater body *above* sea level with no flow is a
+  genuinely different shape (closed polygon, not a polyline) from
+  everything above; not attempted here, and real-world lakes above sea
+  level remain invisible to this world exactly as before this doc.
+
+## Status
+
+- **Curated river catalog** — ✅ Done for Germany's major rivers + the
+  Dreisam (see Roster). Rest-of-world roster — ⬜ Not started, ongoing.
+- **Procedural fallback (noise-contour proxy)** — ✅ Done, honestly scoped
+  as a stylized proxy, not a flow-accumulation simulation.
+- **Rendering (water overlay reuse)** — ✅ Done.
+- **Dry-land spawn exclusion** — ✅ Done.
+- **Freshwater fishing, village avoidance, flow velocity, boats/fords/
+  bridges, Nix water-gating, lakes** — ⬜ Not started (see above).

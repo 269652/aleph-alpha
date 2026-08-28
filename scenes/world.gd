@@ -4701,11 +4701,18 @@ func _client_process(delta: float) -> void:
 ## Searches an expanding ring around a candidate spawn tile for dry land, in
 ## case the exact coordinate lands on a coastline pixel the source data
 ## rounds to ocean. Falls back to the candidate itself if nothing is found.
+## Neither ocean nor a river (docs/concept/rivers.md) -- a river never
+## changes biome_at_global's own result (it's a water-overlay concern, not
+## an eighth biome), so it's asked separately here rather than folded into
+## the biome check above.
 func _find_dry_land_spawn(candidate: Vector2i) -> Vector2i:
 	for radius in range(SPAWN_SEARCH_RADIUS + 1):
 		for dy in range(-radius, radius + 1):
 			for dx in range(-radius, radius + 1):
 				var tile := candidate + Vector2i(dx, dy)
-				if _chunk_manager.biome_at_global(tile.x, tile.y) != "ocean":
+				if (
+					_chunk_manager.biome_at_global(tile.x, tile.y) != "ocean"
+					and not _chunk_manager.is_river_at_global(tile.x, tile.y)
+				):
 					return tile
 	return candidate
