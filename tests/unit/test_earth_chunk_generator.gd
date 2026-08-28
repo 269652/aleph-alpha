@@ -146,6 +146,60 @@ func test_gradient_at_global_derives_exactly_slope_and_aspect_at_global():
 		)
 
 
+# -- slope: locally steep terrain forces mountain (real wiring) -------------
+
+## _slope_override_deg_for is the conditional gate that avoids paying
+## TerrainRelief.slope_at's four extra elevation samples for a cell whose
+## biome elevation alone has already decided the outcome (see
+## generate_chunk's own perf comment) -- verified against three real classes
+## of cell: ocean, already-elevation-mountain, and ordinary land where slope
+## genuinely can still matter.
+
+func test_slope_override_is_not_provided_for_an_ocean_cell():
+	# Mariana Trench -- same coordinate as
+	# test_a_global_tile_over_the_mariana_trench_is_ocean. Ocean's
+	# classification can't change on slope (classify() checks ocean first,
+	# unconditionally), so the four extra elevation samples must be skipped
+	# entirely rather than spent on a reading that can't matter.
+	var global_x := floori((142.0 + 180.0) / 360.0 * EarthChunkGenerator.WORLD_WIDTH_TILES)
+	var global_y := floori((90.0 - 11.0) / 180.0 * EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	var elevation := generator.elevation_at_global(global_x, global_y)
+	assert_eq(
+		generator._slope_override_deg_for(global_x, global_y, elevation),
+		BiomeClassifier.SLOPE_NOT_PROVIDED
+	)
+
+
+func test_slope_override_is_not_provided_for_an_already_elevation_mountain_cell():
+	# Everest summit -- same coordinate as
+	# test_a_global_tile_over_everest_is_classified_as_mountain. Already
+	# "mountain" by elevation alone, so slope can't change that outcome
+	# either -- skip sampling it there too.
+	var global_x := floori((86.92 + 180.0) / 360.0 * EarthChunkGenerator.WORLD_WIDTH_TILES)
+	var global_y := floori((90.0 - 27.99) / 180.0 * EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	var elevation := generator.elevation_at_global(global_x, global_y)
+	assert_eq(
+		generator._slope_override_deg_for(global_x, global_y, elevation),
+		BiomeClassifier.SLOPE_NOT_PROVIDED
+	)
+
+
+func test_slope_override_is_the_real_slope_for_an_undecided_land_cell():
+	# Annapurna flank, Nepal -- real land below EARTH_MOUNTAIN_LEVEL
+	# (elevation ~0.746 < 0.75, verified below) where the outcome is NOT
+	# already decided by elevation alone, so slope must be genuinely
+	# sampled -- not skipped, and not the sentinel.
+	var global_x := floori((84.10 + 180.0) / 360.0 * EarthChunkGenerator.WORLD_WIDTH_TILES)
+	var global_y := floori((90.0 - 28.42) / 180.0 * EarthChunkGenerator.WORLD_HEIGHT_TILES)
+	var elevation := generator.elevation_at_global(global_x, global_y)
+	assert_gte(elevation, EarthChunkGenerator.EARTH_SEA_LEVEL, "precondition: not ocean")
+	assert_lt(elevation, EarthChunkGenerator.EARTH_MOUNTAIN_LEVEL, "precondition: not already mountain")
+	assert_eq(
+		generator._slope_override_deg_for(global_x, global_y, elevation),
+		generator.slope_at_global(global_x, global_y)
+	)
+
+
 func test_generated_biomes_are_all_known():
 	var chunk := generator.generate_chunk(Vector2i(100, 50), 8)
 	for biome_name in chunk.biome:
