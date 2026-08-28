@@ -986,6 +986,67 @@ func test_update_with_progress_still_evicts_chunks_beyond_unload_radius():
 	assert_false(manager.is_chunk_loaded(Vector2i(0, 0)))
 
 
+# -- re-entrancy: _load_chunk must tolerate being called twice for the same
+# coord without leaking nodes. update()/update_with_progress() both funnel
+# every chunk through this one mutation point with no "already loaded" guard
+# AT the point of mutation (pending_load_chunks/_budgeted_load_order only
+# guard what gets SELECTED, one level up) -- so two concurrent loaders that
+# each independently decided a coord was still pending can both go on to
+# call _load_chunk on it. This is exactly what happens in
+# World._on_peer_connected, which has no re-entrancy guard around its
+# `await _compute_dry_land_spawn_tile()` / `update_with_progress()` chain
+# (contrast `_initial_client_chunk_load_task_running`, which guards the
+# solo-client cold-load path but nothing analogous exists for peer-connect):
+# two peers joining within the same multi-frame loading window, or a peer
+# joining while the host's own per-frame update() is already mid-load, both
+# reach the same spawn-adjacent chunk set concurrently. -------------------
+
+func test_load_chunk_called_twice_for_the_same_coord_does_not_leak_entity_nodes():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var entities_before := entities_parent.get_child_count()
+
+	# Simulates the race: another in-flight loader reaches the same
+	# coordinate before either call has finished.
+	manager._load_chunk(chunk_coord)
+
+	assert_eq(
+		entities_parent.get_child_count(), entities_before,
+		"a second _load_chunk for an already-loaded coord must not spawn a duplicate batch of tree/stone/decoration nodes"
+	)
+
+
+func test_load_chunk_called_twice_for_the_same_coord_does_not_leak_creature_nodes():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var creatures_before := creatures_parent.get_child_count()
+
+	manager._load_chunk(chunk_coord)
+
+	assert_eq(
+		creatures_parent.get_child_count(), creatures_before,
+		"a second _load_chunk for an already-loaded coord must not spawn a duplicate batch of creature/fish/village nodes"
+	)
+
+
+func test_load_chunk_called_twice_for_the_same_coord_keeps_the_original_tree_and_stone_records():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var trees_before: Array = manager._loaded_trees[chunk_coord]
+	var stones_before: Array = manager._loaded_stones[chunk_coord]
+
+	manager._load_chunk(chunk_coord)
+
+	assert_eq(
+		manager._loaded_trees[chunk_coord], trees_before,
+		"a second _load_chunk must not overwrite the tree record with a freshly (and redundantly) spawned batch"
+	)
+	assert_eq(
+		manager._loaded_stones[chunk_coord], stones_before,
+		"a second _load_chunk must not overwrite the stone record with a freshly (and redundantly) spawned batch"
+	)
+
+
 func test_elevation_at_global_matches_the_generator_for_a_loaded_tile():
 	manager.update(Vector2i(5, 5))
 	var expected := manager.generator.elevation_at_global(5, 5)
