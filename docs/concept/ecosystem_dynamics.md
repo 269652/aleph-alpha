@@ -735,6 +735,108 @@ steps, at a distance where nobody can see the difference. The same principle
 as drawing decoration only where it can be seen, applied to simulation.
 
 
+## Two butterflies meeting
+
+Two butterflies passing close do the most recognisable thing butterflies do:
+they fly at each other and **corkscrew rapidly upward** for a second or two
+before breaking off. Real lepidopterists call it a **spiral flight**, and it
+happens between males, between different species, and between individuals that
+have already mated. It is investigative and territorial — not courtship.
+
+That distinction is the whole design. There are **two** interactions, and they
+are deliberately nothing alike:
+
+| | Spiral flight (`SpiralFlight`) | Courtship dance (`Courtship`) |
+|---|---|---|
+| Who | any two true butterflies, **cross-species** | **same species** only, plus bees |
+| Noticed from | 4 m | 3.2 m |
+| Lasts | 2 s | 4.5 s |
+| Shape | tight fast whirl that **climbs 1.5 m** | wide slow orbit, stays put |
+| Again in | 18 s | a **real day** |
+| Produces | nothing, ever | sometimes an egg |
+
+The spiral flight is allowed to be common precisely **because it is inert**.
+Everything that bounds the population lives in courtship and the life cycle; a
+behaviour with no outcome needs no bound, so it can happen as often as the
+real thing does. There is no `mates`, no `pair_seed` and no `leads` anywhere in
+it, and a test pins their absence.
+
+Every distance and duration in it is a real figure converted through this
+project's one yardstick (world pixels per real metre, itself derived from the
+player's real height): territorial butterflies react to an intruder from 2–6 m;
+a spiral flight carries the pair 1–3 m up; the whirl rate is a real burst
+flight speed (5 m/s, a monarch at full exertion) divided by the circumference
+of the circle the flyer is actually flying, not a number that looked right.
+The gap between bouts is derived from a **time budget** — field studies put
+roughly 5–15% of a territorial butterfly's active time into aerial
+interactions, and one that spent more than that whirling would not feed enough.
+
+### Why the player never saw any of this
+
+The report was blunt: *"I never see butterfly dance and play with each other
+when they fly by close or mate"*. Three separate causes, all of them measured
+rather than guessed.
+
+**The spiral flight did not exist.** Courtship did, and it is deliberately
+rare, same-species and on a day-long cooldown — it was never going to satisfy
+"when they fly by close".
+
+**Courtship was one-sided, and always had been.** Flyers are processed one
+after another, so the first of a pair always commits first; the partner search
+then rejected any flyer already courting — including the one courting the
+searcher. What was actually on screen was **one** butterfly orbiting an empty
+midpoint while the other flew obliviously off to a flower, never two. It
+survived because courtship's own tests covered its *rules* and nothing
+anywhere drove two real flyers through real frames. That test exists now.
+
+**Courtship was geometrically starved.** A chunk's 2–4 butterflies were
+scattered over its whole 32×32 tiles, while two of them can only notice each
+other within a few metres and each stays tethered near its own spawn point.
+Measured through the real spawn geometry over 300 real chunks at the reported
+coordinate (52.5°N, Brandenburg):
+
+| | chunks where a same-species pair could **ever** meet | …close enough to meet **routinely** | any pair inside spiral-flight range |
+|---|---|---|---|
+| scattered (before) | 4.4% | 0.0% | 0.0% |
+| aggregated (after) | 100% | 100% | 100% |
+
+At 40°N, where two of the pool's species really overlap and so the *species*
+half of the problem is live as well as the geometric half: 2.2% → 89.0%, a
+40-fold change. It is not 100% on purpose — a quarter of a meadow's
+butterflies are a stray of another kind, and in a chunk holding only two of
+them one stray means no courtable pair. A meadow that could only ever hold one
+species would be a duller thing than the real one, and those meadows are
+lively anyway, because the spiral flight does not care about species.
+
+### Butterflies club up
+
+The fix for the geometry is not a wider notice radius — that number is a claim
+about a butterfly's eyesight, and inflating it to paper over a spawn problem
+would make every other distance in the system lie too. It is that **real
+butterflies congregate**: at a stand of nectar flowers, at a damp patch
+(mud-puddling clubs, where dozens crowd onto a square metre of wet ground), at
+a landmark (hilltopping and lekking). A meadow with its butterflies spread
+evenly across it is the unrealistic picture.
+
+So a chunk's true butterflies are now **one loose aggregation**, about 3 m
+across — sized so that any two members are already within noticing distance of
+one another standing still — and **mostly one species**, because a species is
+present where its larval host plant grows, one female lays dozens of eggs on
+one stand, and what emerges is a local cohort.
+
+Bees and songbirds keep the old scatter, deliberately: a honeybee commutes
+from a hive and works a whole meadow, and songbirds hold territories rather
+than clubs. Only the butterflies club up.
+
+A club is **not choreographed**. Every butterfly in a chunk comes into
+existence on the same frame, so each starts part-way through its own
+spiral-flight cooldown — uniformly, which is the stationary distribution of
+"this one last whirled at some point in the past cycle" and therefore the
+truth about an animal that did not begin existing when the chunk loaded.
+Without it a whole club would whirl on one frame, go silent together, and
+whirl together again.
+
+
 ## Courtship, and where births come from
 
 Reproduction used to be a number going up. Animals of the same kind now
@@ -744,12 +846,17 @@ there being more deer than yesterday.
 
 - **Same kind only, and only nearby.** Two animals of one species within a
   short radius may pair off. A monarch and a swallowtail share a meadow, not a
-  lineage.
+  lineage. (They do chase each other, though — see "Two butterflies meeting"
+  above, which is the common interaction and this the rare one.)
 - **They circle each other.** Leader and follower orbit a shared midpoint on
   opposite sides, so a pair reads as two animals interacting rather than two
   sprites overlapping. Neither sends the other a message: both compute who
   leads, and whether they mated, from the same two instance ids, which is also
   why a partner vanishing mid-dance is harmless.
+- **Both of them dance.** The second of a pair joins the dance the first
+  started, adopting its clock, its midpoint and its round — which is what makes
+  them end together and agree on whether they mated. This was broken for as
+  long as courtship existed; see "Why the player never saw any of this".
 - **A meeting is not a pregnancy.** Most dances are just a dance.
 
 ### On real time, and why it is so slow

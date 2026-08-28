@@ -22,10 +22,11 @@ const FlyerDiet = preload("res://src/gameplay/flyer_diet.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const Courtship = preload("res://src/gameplay/courtship.gd")
+const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
-## Own dedicated group for _look_for_a_partner's nearby-flyer search --
+## Own dedicated group for _scan_for_partners' nearby-flyer search --
 ## deliberately NOT the same group as HoverTargetFinder.GROUP_NAME below.
 ## That group now covers every hoverable entity in the loaded world
 ## (dropped items, stones, ore, trees, ...), so scanning it for courtship
@@ -227,10 +228,23 @@ var _courting_centre := Vector2.ZERO
 var _courting_elapsed := 0.0
 var _courting_cooldown := 0.0
 ## Throttle on the (whole-group) partner search after it comes up empty, so an
-## idle adult doesn't rescan every flyer every frame (see _step_courtship).
+## idle adult doesn't rescan every flyer every frame (see _scan_for_partners).
 const PARTNER_SEARCH_INTERVAL := 0.5
 var _partner_search_cooldown := 0.0
 var _courtship_round := 0
+
+## The spiral flight (see SpiralFlight): the fast, cross-species,
+## produces-nothing whirl two butterflies do when they pass close, which is
+## the behaviour the player actually reported never seeing. Same shape as the
+## courtship state above -- an instance id, not a node reference, so a partner
+## that despawns mid-whirl simply ends it -- plus the flyer's own offset from
+## the shared midpoint at the moment it started, which is what keeps the two
+## exactly opposite each other without either telling the other anything.
+var _spiralling_with := 0
+var _spiral_centre := Vector2.ZERO
+var _spiral_start_offset := Vector2.ZERO
+var _spiral_elapsed := 0.0
+var _spiral_cooldown := 0.0
 ## How old this flyer is, in real seconds. Spawned flyers start as ADULTS --
 ## the meadow is not full of newborns -- while anything born from a courting
 ## pair starts at zero and has to grow up (see LifeCycle).
@@ -309,10 +323,10 @@ func _process(frame_delta: float) -> void:
 
 	_step_growing(delta)
 
-	# Courting takes precedence over foraging: a pair mid-dance is doing that
-	# and nothing else, which is what makes it legible as an interaction
-	# rather than two flyers happening to overlap.
-	if _step_courtship(delta):
+	# Meeting another flyer takes precedence over foraging: a pair mid-dance or
+	# mid-whirl is doing that and nothing else, which is what makes it legible
+	# as an interaction rather than two flyers happening to overlap.
+	if _step_pair_interactions(delta):
 		_animate_wings()
 		return
 	if _movement == null:
@@ -986,6 +1000,15 @@ func set_adult_scale(full_size: Vector2) -> void:
 	_adult_scale = full_size
 
 
+## Starts this flyer part-way through its spiral-flight cooldown, so a chunk's
+## whole club does not whirl on the same frame and then fall silent together
+## (see SpiralFlight.stagger_seconds). Called by AmbientFlyerRenderer for
+## flyers spawned as one of a chunk's many; a marker placed by hand is
+## deliberately left ready to go.
+func stagger_first_spiral(seed_value: int) -> void:
+	_spiral_cooldown = SpiralFlight.stagger_seconds(seed_value)
+
+
 ## Starts this flyer at the beginning of its life rather than as an adult --
 ## what separates something BORN in front of the player from the adults the
 ## world seeds a meadow with.
@@ -1006,85 +1029,201 @@ func _step_growing(delta: float) -> void:
 	scale = _adult_scale * LifeCycle.size_scale_at(age_seconds)
 
 
-## One frame of courting. Returns true while this flyer is dancing, which the
-## caller treats as "busy" -- a dancing butterfly is not also foraging.
+## One frame of the two things that happen when two flyers meet: the COURTSHIP
+## dance (Courtship -- same species, rare, a real-day cooldown, sometimes an
+## egg) and the SPIRAL FLIGHT (SpiralFlight -- cross-species, common, seconds
+## of cooldown, no outcome at all). Returns true while this flyer is busy with
+## either, which the caller treats as "not foraging".
 ##
 ## Both partners run this independently and never message each other: they
 ## agree on who leads and on whether they mated by computing the same answers
-## from the same two instance ids (see Courtship.leads / pair_seed). That is
-## also why a partner disappearing mid-dance is harmless -- this side simply
-## finds it gone and stops.
-func _step_courtship(delta: float) -> bool:
+## from the same two instance ids (see Courtship.leads / pair_seed), and they
+## stay opposite each other in a whirl because their two start offsets from
+## the shared midpoint are opposite by construction. That is also why a
+## partner disappearing mid-interaction is harmless -- this side simply finds
+## it gone and stops.
+##
+## ## Why one function and one scan
+##
+## Finding a partner walks the whole flyer group, and a meadow holds hundreds
+## of them (266 butterflies were counted in one). Giving the spiral flight its
+## own independent scan and its own throttle would have doubled the cost of
+## the one thing this file was already careful about, so both questions are
+## answered by a single walk (see _scan_for_partners) behind a single
+## PARTNER_SEARCH_INTERVAL throttle.
+func _step_pair_interactions(delta: float) -> bool:
 	_courting_cooldown = maxf(0.0, _courting_cooldown - delta)
+	_spiral_cooldown = maxf(0.0, _spiral_cooldown - delta)
 
+	# Already in one of them: continue it, and never scan.
 	if _courting_with != 0:
-		var partner = instance_from_id(_courting_with)
-		if partner == null or not is_instance_valid(partner):
-			_end_courtship()
-			return false
-		_courting_elapsed += delta
-		if _courting_elapsed >= Courtship.DANCE_SECONDS:
-			_finish_courtship(partner)
-			return false
-		# Orbit the point between the two of them.
-		position = _courting_centre + Courtship.dance_offset(
-			_courting_elapsed,
-			_courtship_round,
-			Courtship.leads(get_instance_id(), _courting_with)
-		)
-		return true
+		return _continue_courtship(delta)
+	if _spiralling_with != 0:
+		return _continue_spiral_flight(delta)
+
+	if _drink_remaining > 0.0 or perched:
+		return false
 
 	# Only grown flyers court. Without an age gate the young of a watched pair
 	# would start breeding themselves, and a population with no such gate
-	# grows without bound however slow each individual step is.
-	if not LifeCycle.can_court_at(age_seconds):
+	# grows without bound however slow each individual step is. The whirl has
+	# no such gate on purpose: it produces nothing, so there is nothing to
+	# bound, and a young butterfly chases things too.
+	var wants_courtship := (
+		_courting_cooldown <= 0.0
+		and Courtship.dances(species)
+		and LifeCycle.can_court_at(age_seconds)
+	)
+	var wants_spiral := _spiral_cooldown <= 0.0 and SpiralFlight.spirals(species)
+	if not wants_courtship and not wants_spiral:
 		return false
-	if _courting_cooldown > 0.0 or _drink_remaining > 0.0:
-		return false
-	# Scanning the whole flyer group for a partner every frame is O(flyers^2)
-	# across a meadow. A flyer that comes up empty waits PARTNER_SEARCH_INTERVAL
-	# before scanning again (a real bee doesn't re-survey the whole field 60x a
-	# second) -- pairs still form within a fraction of a second.
+
+	# A flyer that comes up empty waits PARTNER_SEARCH_INTERVAL before scanning
+	# again (a real bee doesn't re-survey the whole field 60x a second) --
+	# pairs still form within a fraction of a second.
 	_partner_search_cooldown = maxf(0.0, _partner_search_cooldown - delta)
 	if _partner_search_cooldown > 0.0:
 		return false
-	var partner_found = _look_for_a_partner()
-	if partner_found == null:
-		_partner_search_cooldown = PARTNER_SEARCH_INTERVAL
+	var found := _scan_for_partners(wants_courtship, wants_spiral)
+	# Courtship first where both are on offer: it is the rarer, more meaningful
+	# one, and the whirl will still be there in eighteen seconds.
+	if found["court"] != null:
+		_begin_courtship(found["court"])
+		return true
+	if found["spiral"] != null:
+		_begin_spiral_flight(found["spiral"])
+		return true
+	_partner_search_cooldown = PARTNER_SEARCH_INTERVAL
+	return false
+
+
+## One more frame of an already-running dance.
+func _continue_courtship(delta: float) -> bool:
+	var partner = instance_from_id(_courting_with)
+	if partner == null or not is_instance_valid(partner):
+		_end_courtship()
 		return false
-	_begin_courtship(partner_found)
+	_courting_elapsed += delta
+	if _courting_elapsed >= Courtship.DANCE_SECONDS:
+		_finish_courtship(partner)
+		return false
+	# Orbit the point between the two of them.
+	position = _courting_centre + Courtship.dance_offset(
+		_courting_elapsed,
+		_courtship_round,
+		Courtship.leads(get_instance_id(), _courting_with)
+	)
 	return true
 
 
-## The nearest same-species flyer that is also free to court. Both sides find
-## each other on the same frame or on adjacent ones; whichever starts first
-## sets the shared centre, and the other adopts it when it starts too.
-func _look_for_a_partner():
+## One more frame of an already-running whirl. Nothing is resolved when it
+## ends -- there is no outcome to resolve (see SpiralFlight).
+func _continue_spiral_flight(delta: float) -> bool:
+	var partner = instance_from_id(_spiralling_with)
+	if partner == null or not is_instance_valid(partner):
+		_end_spiral_flight()
+		return false
+	_spiral_elapsed += delta
+	if _spiral_elapsed >= SpiralFlight.SPIRAL_SECONDS:
+		# Left exactly where the last frame put it: the pair break off at the
+		# top of the climb and fly on from there, and their own home tether
+		# brings them back down (see AmbientFlyerMovement).
+		_end_spiral_flight()
+		return false
+	position = _spiral_centre + SpiralFlight.offset(_spiral_elapsed, _spiral_start_offset)
+	return true
+
+
+## ONE walk of the flyer group, answering both "who would court me" and "who
+## would whirl at me". Returns {"court": marker-or-null, "spiral":
+## marker-or-null}.
+##
+## A candidate qualifies if it is free -- or if it is ALREADY in that
+## interaction WITH THIS FLYER, which is how the second half of every pair
+## joins.
+##
+## ## The bug that guard used to have, and why nothing caught it
+##
+## Markers are processed one after another, never simultaneously. So the
+## first of a pair to run always commits first, and by the time the second
+## one scans, the first is no longer "free" -- it is courting. Rejecting any
+## flyer with `_courting_with != 0` therefore rejected the one flyer that was
+## certain to be a willing partner, and the result on screen was ONE
+## butterfly orbiting an empty midpoint while the other flew obliviously off
+## to a flower. Never two. The old doc comment here claimed the opposite
+## ("both sides find each other on the same frame or on adjacent ones"),
+## which is exactly the kind of assumption-in-a-comment this file has been
+## bitten by before.
+##
+## It survived because Courtship's own tests cover the RULES and nothing
+## anywhere drove two real markers through real frames -- see
+## test_two_monarchs_side_by_side_actually_begin_a_dance, which is that test
+## and which failed on the code as shipped.
+##
+## Being in the OTHER interaction is always disqualifying, in both directions:
+## stealing one of a whirling pair into a dance would leave the other orbiting
+## nothing, which is the same one-sided failure again.
+func _scan_for_partners(wants_courtship: bool, wants_spiral: bool) -> Dictionary:
+	var found := {"court": null, "spiral": null}
 	# A flyer built standalone in a test is not in the tree and so has nobody
-	# to court, the same guard the distance LOD uses.
+	# to meet, the same guard the distance LOD uses.
 	if not is_inside_tree():
-		return null
+		return found
+	var own_id := get_instance_id()
 	for other in get_tree().get_nodes_in_group(FLOCK_GROUP):
 		if other == self or other.get("species") == null:
 			continue
-		if not Courtship.can_court(species, String(other.species)):
+		if other.get("_courting_with") == null or other.get("_spiralling_with") == null:
 			continue
-		if not Courtship.can_pair(get_instance_id(), other.get_instance_id()):
+		if not Courtship.can_pair(own_id, other.get_instance_id()):
 			continue
-		if other.get("_courting_cooldown") == null or float(other._courting_cooldown) > 0.0:
-			continue
-		if int(other._courting_with) != 0:
-			continue
-		if other.get("age_seconds") == null or not LifeCycle.can_court_at(float(other.age_seconds)):
-			continue
-		if position.distance_to(other.position) > Courtship.NOTICE_RADIUS_PX:
-			continue
-		return other
-	return null
+		var other_species := String(other.species)
+		var distance := position.distance_to(other.position)
+		var other_courting := int(other._courting_with)
+		var other_spiralling := int(other._spiralling_with)
+		if (
+			wants_courtship
+			and found["court"] == null
+			and distance <= Courtship.NOTICE_RADIUS_PX
+			and Courtship.can_court(species, other_species)
+			and other_spiralling == 0
+			# Busy with SOMEONE ELSE is a no; busy with ME is the whole point.
+			and (other_courting == 0 or other_courting == own_id)
+			and float(other._courting_cooldown) <= 0.0
+			and other.get("age_seconds") != null
+			and LifeCycle.can_court_at(float(other.age_seconds))
+		):
+			found["court"] = other
+		if (
+			wants_spiral
+			and found["spiral"] == null
+			and distance <= SpiralFlight.NOTICE_RADIUS_PX
+			and SpiralFlight.can_spiral(species, other_species)
+			and other_courting == 0
+			and (other_spiralling == 0 or other_spiralling == own_id)
+			and float(other._spiral_cooldown) <= 0.0
+		):
+			found["spiral"] = other
+		if (found["court"] != null or not wants_courtship) and (
+			found["spiral"] != null or not wants_spiral
+		):
+			break
+	return found
 
 
 func _begin_courtship(partner) -> void:
 	_courting_with = partner.get_instance_id()
+	# Joining a dance the partner has already started: adopt ITS clock, centre
+	# and round rather than starting a second, slightly different dance around
+	# a slightly different point. That is what makes the two orbit opposite
+	# each other exactly, end together, and agree on Courtship.pair_seed --
+	# and it is only reachable at all now that the guard above lets the second
+	# flyer see the first (see _scan_for_partners).
+	if int(partner._courting_with) == get_instance_id():
+		_courting_centre = partner._courting_centre
+		_courting_elapsed = partner._courting_elapsed
+		_courtship_round = partner._courtship_round
+		return
 	_courting_elapsed = 0.0
 	_courtship_round += 1
 	# The midpoint, computed identically on both sides so the pair orbits one
@@ -1112,6 +1251,35 @@ func _end_courtship() -> void:
 	_courting_with = 0
 	_courting_elapsed = 0.0
 	_courting_cooldown = Courtship.COOLDOWN_SECONDS
+
+
+## Starts a whirl (see SpiralFlight). Nothing is rolled and nothing is
+## recorded: a spiral flight has no outcome, which is exactly why it is
+## allowed to be common.
+func _begin_spiral_flight(partner) -> void:
+	_spiralling_with = partner.get_instance_id()
+	if int(partner._spiralling_with) == get_instance_id():
+		# Joining a whirl the partner already started: adopt ITS clock and
+		# midpoint rather than starting a second, slightly different whirl
+		# around a slightly different point, and take the exact mirror of its
+		# start offset. The midpoint IS the midpoint, so the two are opposite
+		# by construction -- reading it off the partner keeps them opposite to
+		# the float rather than to within a frame of drift.
+		_spiral_centre = partner._spiral_centre
+		_spiral_elapsed = partner._spiral_elapsed
+		_spiral_start_offset = -partner._spiral_start_offset
+		return
+	_spiral_centre = (position + partner.position) * 0.5
+	_spiral_elapsed = 0.0
+	# Where this flyer actually is right now, so the whirl starts without a
+	# jump and then converges (see SpiralFlight.offset).
+	_spiral_start_offset = position - _spiral_centre
+
+
+func _end_spiral_flight() -> void:
+	_spiralling_with = 0
+	_spiral_elapsed = 0.0
+	_spiral_cooldown = SpiralFlight.COOLDOWN_SECONDS
 
 
 func _step_seed_carrying(delta: float) -> void:
