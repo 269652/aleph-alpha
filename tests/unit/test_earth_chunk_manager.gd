@@ -223,6 +223,20 @@ func test_set_sun_position_updates_the_hillshade_materials_uniforms():
 	hillshade_layer.free()
 
 
+## Entity relief shading (see EntityHillshadeShader, StoneRenderer's
+## mountain-vein sprites) shares the SAME live sun position as the ground
+## overlay -- one set_sun_position call must re-shade both, not just the
+## ground layer. No layer registration needed here (unlike the ground
+## overlay test above): entity shading has no TileMapLayer of its own, only
+## the shared material StoneRenderer's vein sprites point their `material`
+## at directly.
+func test_set_sun_position_also_updates_the_entity_hillshade_materials_uniforms():
+	manager.set_sun_position(62.0, 210.0)
+	var material := manager._entity_hillshade_shader.shared_material()
+	assert_eq(material.get_shader_parameter("sun_elevation_deg"), 62.0)
+	assert_eq(material.get_shader_parameter("sun_azimuth_deg"), 210.0)
+
+
 ## Same shape as test_water_overlay_marks_exactly_the_loaded_ocean_cells,
 ## but hillshade is a GENERAL mechanism (docs/concept/terrain_relief.md:
 ## "not mountain-specific code") -- every loaded cell gets a real tile, not

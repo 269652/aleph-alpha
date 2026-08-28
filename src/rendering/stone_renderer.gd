@@ -273,7 +273,13 @@ func _ore_texture_for(ore_type: String, seed_value: int) -> ImageTexture:
 ## `diameter_cm` of 0 keeps the node at the shared art scale, which is what
 ## ore veins want -- an ore boulder is one fixed size, and only loose stone
 ## varies (see docs/concept/stone.md).
-func _attach_body_parts(body: StaticBody2D, texture: Texture2D, diameter_cm: float = 0.0) -> void:
+##
+## Returns the attached Sprite2D so a caller that needs to customize it
+## further (a mountain vein setting its own hillshade material/instance
+## uniforms -- see _build_mountain_vein_node) can do so without reaching
+## into `body`'s children. Purely additive: every pre-existing call site
+## already ignored the old `void` return.
+func _attach_body_parts(body: StaticBody2D, texture: Texture2D, diameter_cm: float = 0.0) -> Sprite2D:
 	var sprite_scale := (
 		ArtResolution.SPRITE_SCALE if diameter_cm <= 0.0 else _sprite_scale_for(diameter_cm)
 	)
@@ -289,6 +295,8 @@ func _attach_body_parts(body: StaticBody2D, texture: Texture2D, diameter_cm: flo
 	shape.size = Vector2(ProceduralStoneSprite.SIZE) * sprite_scale * COLLISION_SCALE
 	collision.shape = shape
 	body.add_child(collision)
+
+	return sprite
 
 
 ## `stone_class` defaults to CLASS_BOULDER so the existing single-argument
@@ -330,18 +338,28 @@ func _texture_for(seed_value: int, stone_class: String = StoneSize.CLASS_BOULDER
 # flat per-tile density roll grassland/forest ore uses.
 
 const MountainOrePlacement = preload("res://src/world/mountain_ore_placement.gd")
+const MountainVeinSprite = preload("res://src/rendering/mountain_vein_sprite.gd")
+const EntityHillshadeShader = preload("res://src/rendering/entity_hillshade_shader.gd")
 
 var _mountain_ore_placement := MountainOrePlacement.new()
+var _mountain_vein_sprite := MountainVeinSprite.new()
+## Shared per-entity relief-shading material (see EntityHillshadeShader's
+## own doc comment) -- one material for every vein sprite this renderer
+## spawns, each with its own slope/aspect pushed as instance uniforms (see
+## _build_mountain_vein_node), the same "one shared material" idiom
+## EarthChunkManager already uses for _hillshade_shader.
+var _entity_hillshade_shader := EntityHillshadeShader.new()
 
 
 ## Spawns a collidable ore-vein node for every mountain cell whose real
 ## local slope rolls a vein (see MountainOrePlacement). `slope_lookup` is
-## anything with a `slope_at_global(global_x, global_y)` method -- real
-## EarthChunkManager, or a test fake (see test_stone_renderer.gd's
-## _FakeSlopeLookup, the same fake-injection shape _illustrated_stones
-## already uses) -- left untyped/duck-typed so this file doesn't need to
-## import EarthChunkManager's type. Returns every spawned node, same
-## contract as spawn_stones, so the caller can free them on unload.
+## anything with `slope_at_global(global_x, global_y)`/
+## `aspect_at_global(global_x, global_y)` methods -- real EarthChunkManager,
+## or a test fake (see test_stone_renderer.gd's _FakeSlopeLookup, the same
+## fake-injection shape _illustrated_stones already uses) -- left untyped/
+## duck-typed so this file doesn't need to import EarthChunkManager's type.
+## Returns every spawned node, same contract as spawn_stones, so the caller
+## can free them on unload.
 func spawn_mountain_veins(
 	parent: Node2D, chunk: Chunk, chunk_origin_tiles: Vector2i, tile_size: int, slope_lookup
 ) -> Array[Node2D]:
@@ -362,25 +380,39 @@ func spawn_mountain_veins(
 			var slope: float = slope_lookup.slope_at_global(global_x, global_y)
 			if not _mountain_ore_placement.has_vein_at(global_x, global_y, slope):
 				continue
-			var node := _build_mountain_vein_node(global_x, global_y)
+			# Only asked for on cells that actually roll a vein (rare, see
+			# MountainOrePlacement's own landmark-rarity tuning) -- aspect is
+			# another real gradient sample (see terrain_relief.gd's
+			# gradient_at doc comment on the cost of slope+aspect together),
+			# not worth paying on every mountain cell this loop visits.
+			var aspect: float = slope_lookup.aspect_at_global(global_x, global_y)
+			var node := _build_mountain_vein_node(global_x, global_y, slope, aspect)
 			node.position = Vector2((global_x + 0.5) * tile_size, (global_y + 0.5) * tile_size)
 			parent.add_child(node)
 			spawned.append(node)
 	return spawned
 
 
-## Same shape as _build_ore_node, drawing from the exact same
-## illustrated-boulder-composited texture path (_ore_texture_for) -- a
-## mountain vein is visually and mechanically an ore node, just placed by a
-## different rule. MountainOrePlacement.ore_type_at/seed_at reuse
-## OrePlacement's own derivation exactly (see that class's own doc
-## comment), so this composes with the existing ore-texture cache/
-## compositing with no changes needed there.
-func _build_mountain_vein_node(global_x: int, global_y: int) -> StaticBody2D:
+## Unlike _build_ore_node (flat-ground ore, unchanged), a mountain vein
+## draws its OWN streak-shaped texture oriented along its real slope-facing
+## aspect (see MountainVeinSprite) rather than the round illustrated-
+## boulder-composited texture flat-ground ore uses -- docs/concept/
+## terrain_relief.md's "Mountain ore" section specifically rules out a
+## decal stamped on the mountain wall. The sprite also carries the shared
+## EntityHillshadeShader material with this vein's own fixed slope/aspect
+## pushed as instance uniforms, so it participates in the same live
+## hillshading the rock face around it gets -- one shared material for
+## every vein, no per-node update loop needed as the sun moves (see
+## EntityHillshadeShader's own doc comment).
+func _build_mountain_vein_node(global_x: int, global_y: int, slope: float, aspect: float) -> StaticBody2D:
 	var ore_type := _mountain_ore_placement.ore_type_at(global_x, global_y)
 	var seed_value := _mountain_ore_placement.seed_at(global_x, global_y)
 	var body := MinableOre.new()
 	body.ore_type = ore_type
 	body.ore_seed = seed_value
-	_attach_body_parts(body, _ore_texture_for(ore_type, seed_value))
+	var texture := _mountain_vein_sprite.generate_texture(ore_type, seed_value, aspect)
+	var sprite := _attach_body_parts(body, texture)
+	sprite.material = _entity_hillshade_shader.shared_material()
+	sprite.set_instance_shader_parameter("slope_deg", slope)
+	sprite.set_instance_shader_parameter("aspect_deg", aspect)
 	return body
