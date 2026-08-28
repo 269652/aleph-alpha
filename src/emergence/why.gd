@@ -24,6 +24,7 @@ const Market = preload("res://src/emergence/market.gd")
 const InstitutionStore = preload("res://src/emergence/institution_store.gd")
 const Institution = preload("res://src/emergence/institution.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const SettlementFood = preload("res://src/emergence/settlement_food.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
 const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
 const WorldBoss = preload("res://src/emergence/world_boss.gd")
@@ -208,16 +209,26 @@ static func explain_institutions(store: InstitutionStore, entity_id: String) -> 
 ## every existing caller keeps working unchanged -- Emergence Phase 13's
 ## governance/legitimacy are additive, the same shape Phase 9's tier/
 ## specialization params already established.
+## `village_market` is the settlement's LIVE VillageMarket (see
+## SettlementFood.village_market_for), also optional -- a settlement whose
+## chunk is not currently loaded genuinely has none, and passing nothing
+## reads the emergence Market alone exactly as before. Passing it is what
+## makes this explainer agree with the simulation: food/capacity here come
+## from SettlementFood, the same both-markets-summed source
+## EarthChunkManager.step_settlements and legitimacy_for_settlement now
+## classify with, so /settlement can no longer report DECLINING for a
+## settlement the event graph just recorded GROWING.
 static func explain_settlement(
 	market,
 	household_count: int,
 	entity_id: String,
 	active_institutions: int = 0,
 	production_counts: Dictionary = {},
-	institution_type_counts: Dictionary = {}
+	institution_type_counts: Dictionary = {},
+	village_market = null
 ) -> String:
-	var food := SettlementState.food_stock(market)
-	var capacity := SettlementState.carrying_capacity(market)
+	var food := SettlementFood.food_stock(market, village_market)
+	var capacity := SettlementFood.carrying_capacity(market, village_market)
 	var status := SettlementState.status_for(household_count, capacity)
 	var tier := SettlementTier.tier_for(household_count, active_institutions, production_counts.size())
 	var governance_form := Governance.form_for(institution_type_counts)

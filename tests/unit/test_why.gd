@@ -24,6 +24,7 @@ const Institution = preload("res://src/emergence/institution.gd")
 const SettlementState = preload("res://src/emergence/settlement_state.gd")
 const SettlementTier = preload("res://src/emergence/settlement_tier.gd")
 const WorldBossStore = preload("res://src/emergence/world_boss_store.gd")
+const VillageMarket = preload("res://src/world/village_market.gd")
 
 var store: EventStore
 
@@ -317,6 +318,50 @@ func test_explain_settlement_defaults_to_no_governance_and_stable_legitimacy():
 	var text: String = Why.explain_settlement(Market.new(), 0, "settlement:4_4")
 	assert_string_contains(text, "none")
 	assert_string_contains(text, "stable")
+
+
+## The capacity source moved to SettlementFood -- BOTH markets summed (see
+## EarthChunkManager.step_settlements and legitimacy_for_settlement, which
+## both go through it now). A settlement whose villagers gathered real food
+## into their own VillageMarket is event-sourced GROWING by the simulation,
+## so /settlement must not still report it DECLINING off the emergence
+## Market alone.
+func test_explain_settlement_counts_the_live_village_market_too():
+	var village_market := VillageMarket.new()
+	village_market.add_stock("fruit", 40.0)
+
+	var text: String = Why.explain_settlement(
+		Market.new(), 1, "settlement:5_5", 0, {}, {}, village_market
+	)
+	assert_string_contains(text, "40")
+	assert_string_contains(text, SettlementState.GROWING)
+
+
+## Both sides really are summed, not one replaced by the other -- the same
+## settlement's persisted emergence stock still counts alongside the live
+## one.
+func test_explain_settlement_sums_both_markets():
+	var market := Market.new()
+	market.add_stock("meat", 5)
+	var village_market := VillageMarket.new()
+	village_market.add_stock("fruit", 3.0)
+
+	var text: String = Why.explain_settlement(
+		market, 1, "settlement:6_6", 0, {}, {}, village_market
+	)
+	assert_string_contains(text, "food: 8")
+
+
+## The live market is OPTIONAL: a settlement whose chunk is not loaded has
+## no VillageMarket at all, and every existing caller passes nothing -- both
+## must keep reading the emergence Market exactly as before.
+func test_explain_settlement_without_a_live_market_reads_the_emergence_market_alone():
+	var market := Market.new()
+	market.add_stock("meat", 40)
+
+	var text: String = Why.explain_settlement(market, 1, "settlement:7_7")
+	assert_string_contains(text, "food: 40")
+	assert_string_contains(text, SettlementState.GROWING)
 
 
 # -- explaining a world boss's promotion state -------------------------------
