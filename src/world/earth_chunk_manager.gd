@@ -2718,19 +2718,27 @@ func _nearby_cave_entrance(player_global_tile: Vector2i):
 	return null
 
 
-## Marks every ocean cell of a loaded chunk on the water overlay layer with
-## the shore-distance tile matching its own cardinal land neighbors (empty ==
-## open water) -- the shader reads that tile as per-pixel proximity data to
-## blend and animate the shore continuously, not as art.
+## Marks every ocean OR river cell of a loaded chunk on the water overlay
+## layer with the shore-distance tile matching its own cardinal water
+## neighbors (empty == open water) -- the shader reads that tile as
+## per-pixel proximity data to blend and animate the shore continuously, not
+## as art. A river cell's own chunk.biome entry is untouched by this (see
+## docs/concept/rivers.md's "Rendering" section -- a river never becomes an
+## eighth BiomeClassifier.KNOWN_BIOMES value), so river-ness is re-asked of
+## the generator here rather than read from the chunk's own biome array.
 func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _water_layer == null:
 		return
 	var origin := chunk_coord * CHUNK_SIZE
 	for y in chunk.height:
 		for x in chunk.width:
-			if chunk.biome[y * chunk.width + x] != "ocean":
-				continue
 			var global := origin + Vector2i(x, y)
+			var is_water := (
+				chunk.biome[y * chunk.width + x] == "ocean"
+				or generator.is_river_at_global(global.x, global.y)
+			)
+			if not is_water:
+				continue
 			var land_directions := _land_directions_at(global.x, global.y)
 			# Only search farther rings when nothing touches land directly --
 			# ring 0 already answers the common case for free.
@@ -2784,27 +2792,41 @@ func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 func _land_directions_at(global_x: int, global_y: int) -> Array:
 	var land_directions := []
 	for direction in _DIRECTIONS:
-		var neighbor_biome := biome_at_global(global_x + direction.x, global_y + direction.y)
-		if neighbor_biome != "" and neighbor_biome != "ocean":
+		var neighbor_x := global_x + direction.x
+		var neighbor_y := global_y + direction.y
+		if _is_land_at(neighbor_x, neighbor_y):
 			land_directions.append(direction)
 	return land_directions
 
 
-## Distance in tiles to the nearest non-ocean, currently-loaded cell, found
-## by checking each expanding Chebyshev ring (radius 1, then 2, ...) in
-## turn -- diagonals included, since flat ring tiles (see
-## TerrainRenderer.atlas_coords_for_water_overlay) don't need cardinal
-## precision the way the direct-touching ring-0 tile does. Only called when
-## _land_directions_at already found nothing at radius 0. Returns `max_ring`
-## (== "open water") if no land is found within that range.
+## True if (global_x, global_y) is real land for water-overlay shore-blend
+## purposes -- neither ocean nor a river (see docs/concept/rivers.md). A
+## river cell's OWN chunk.biome entry reads as ordinary land (forest,
+## grassland, ...), so this re-asks the generator directly rather than
+## trusting biome_at_global alone -- otherwise a river tile's own
+## neighboring river tiles would each register as "land", and a several-
+## tiles-wide river would never show an open-water interior, only shore.
+func _is_land_at(global_x: int, global_y: int) -> bool:
+	var neighbor_biome := biome_at_global(global_x, global_y)
+	if neighbor_biome == "" or neighbor_biome == "ocean":
+		return false
+	return not generator.is_river_at_global(global_x, global_y)
+
+
+## Distance in tiles to the nearest land (neither ocean nor river),
+## currently-loaded cell, found by checking each expanding Chebyshev ring
+## (radius 1, then 2, ...) in turn -- diagonals included, since flat ring
+## tiles (see TerrainRenderer.atlas_coords_for_water_overlay) don't need
+## cardinal precision the way the direct-touching ring-0 tile does. Only
+## called when _land_directions_at already found nothing at radius 0.
+## Returns `max_ring` (== "open water") if no land is found within that range.
 func _ring_distance_at(global_x: int, global_y: int, max_ring: int) -> int:
 	for radius in range(1, max_ring):
 		for dx in range(-radius, radius + 1):
 			for dy in range(-radius, radius + 1):
 				if maxi(absi(dx), absi(dy)) != radius:
 					continue  # only this ring's perimeter, smaller radii already checked
-				var neighbor_biome := biome_at_global(global_x + dx, global_y + dy)
-				if neighbor_biome != "" and neighbor_biome != "ocean":
+				if _is_land_at(global_x + dx, global_y + dy):
 					return radius
 	return max_ring
 
@@ -5233,6 +5255,15 @@ func aspect_at_global(global_x: int, global_y: int) -> float:
 ## hillshading every tile of every chunk does, sampled twice over.
 func gradient_at_global(global_x: int, global_y: int) -> Vector2:
 	return generator.gradient_at_global(global_x, global_y)
+
+
+## Whether a global tile renders as a river on the water overlay (see
+## docs/concept/rivers.md) -- a curated real river's course or a procedural
+## fallback candidate. Same always-delegates shape as gradient_at_global
+## above; unlike biome_at_global below, needs no loaded-chunk cache since a
+## river is never stored per-chunk (see _paint_water_overlay).
+func is_river_at_global(global_x: int, global_y: int) -> bool:
+	return generator.is_river_at_global(global_x, global_y)
 
 
 func biome_at_global(global_x: int, global_y: int) -> String:

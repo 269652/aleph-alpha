@@ -232,3 +232,41 @@ func test_chunk_moisture_and_temperature_are_normalized():
 		assert_between(value, 0.0, 1.0)
 	for value in chunk.temperature:
 		assert_between(value, 0.0, 1.0)
+
+
+# -- is_river_at_global (docs/concept/rivers.md) -----------------------------
+#
+# Rivers never change biome_at_global's own result (see rivers.md's
+# "Rendering" section -- a river is an overlay over whatever land biome was
+# already there, not an eighth entry in BiomeClassifier.KNOWN_BIOMES). This
+# is a SEPARATE query, consulted only by EarthChunkManager's water overlay.
+
+func test_the_gaskugel_spawn_point_is_a_river_tile():
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_true(generator.is_river_at_global(tile.x, tile.y))
+
+
+func test_a_point_far_from_any_curated_river_and_off_the_procedural_contour_is_not_a_river():
+	# Ocean elevation both rules out the curated-river width band (too far
+	# from any curated polyline) AND the procedural gate (ocean never
+	# passes it) -- deep Pacific is a safe "definitely not a river" fixture.
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		0.0, -160.0, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_false(generator.is_river_at_global(tile.x, tile.y))
+
+
+func test_river_tiles_still_report_their_ordinary_land_biome():
+	# The core "overlay, not a new biome" guarantee: a river tile's
+	# biome_at_global is completely unaffected by is_river_at_global.
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_true(generator.is_river_at_global(tile.x, tile.y))
+	assert_ne(generator.biome_at_global(tile.x, tile.y), "river")
+	assert_true(BiomeClassifier.KNOWN_BIOMES.has(generator.biome_at_global(tile.x, tile.y)))

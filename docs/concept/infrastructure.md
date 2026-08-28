@@ -68,7 +68,10 @@ frequently-forded river spot becomes worth a ferry, then eventually a real
 bridge. This needs a real notion of "a crossing point," which the game does
 not track yet (today, crossing water is boats/swimming per
 [transportation.md](transportation.md), with no notion of a *place* where
-crossings repeatedly happen). Entirely unbuilt; a later slice.
+crossings repeatedly happen). Entirely unbuilt; a later slice. Real rivers
+now exist to actually ford ([rivers.md](rivers.md)) — this doc's own gap is
+unchanged by that: there's real water to cross, still nothing tracking
+where a crossing happens.
 
 ## Traffic heatmaps, market nodes, and trade impact
 

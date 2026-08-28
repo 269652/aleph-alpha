@@ -1,9 +1,11 @@
 ## Fishing & aquatic ecosystem
 
-[world.md](world.md)'s hydraulic-erosion pass carves real rivers and lakes,
-but nothing lives in them yet. Fishing gives water a gameplay reason to
-exist, and does it by **reusing the land ecosystem/evolution simulation**
-rather than building an unrelated bolt-on minigame.
+[rivers.md](rivers.md) now gives real rivers a distinct, queryable identity
+on top of the ocean this world's real elevation data already carves out
+(`EarthChunkGenerator.is_river_at_global`) — but nothing lives in them yet.
+Fishing gives water a gameplay reason to exist, and does it by **reusing the
+land ecosystem/evolution simulation** rather than building an unrelated
+bolt-on minigame.
 
 - **Aquatic creatures run the same sim as land animals.** Fish and other
   aquatic life follow [world.md](world.md)'s population model (reproduction/
@@ -100,13 +102,15 @@ as a capacity input, the water equivalent of land vegetation density) is a
 real future refinement but has no model to hook into yet — tracked as open
 below rather than invented wholesale here.
 
-Freshwater lakes/rivers aren't distinguished from ocean today (Earth
-worldgen uses real elevation data, and `hydraulic_erosion.gd`'s river/lake
-carving is unused for Earth per `docs/progress.md`) — v1 of this model is
-**ocean-only**, the same water detection `FishRenderer` already uses. The
+Real rivers ARE now distinguishable from ocean
+(`EarthChunkGenerator.is_river_at_global`, see [rivers.md](rivers.md)) — but
+this model doesn't consume that yet. v1 stays **ocean-only**, the same water
+detection `FishRenderer` already uses; freshwater lakes above sea level
+remain undistinguished from land entirely (rivers.md's own scope — a lake is
+a closed shape, not a polyline, and wasn't attempted there either). The
 model is keyed generically by "water region," so wiring in real freshwater
-bodies later is additive (a new water-area source per chunk), not a
-rewrite — see Open Questions.
+bodies later is additive (a new water-area source per chunk checking
+`is_river_at_global`), not a rewrite — see Open Questions.
 
 #### Seeding: base population when a chunk first loads
 
