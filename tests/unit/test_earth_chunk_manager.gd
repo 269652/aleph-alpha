@@ -5365,7 +5365,9 @@ func test_snow_coverage_advances_within_a_single_depth_band_not_only_at_band_cro
 ##
 ## Depth ~0.55 is chosen so the leading (onset=+0.18) and lagging (onset=-0.18)
 ## tiles land on opposite sides of a texture-band boundary by SnowLayer's own
-## math: lying=0.37 -> band 1, lying=0.73 -> band 2 (SnowLayer.band_for).
+## math: lying=0.37 -> band 9, lying=0.73 -> band 18 (SnowLayer.band_for at
+## DEPTH_BANDS=25). +/-0.18 is still onset_offset_for's total range -- it is
+## now reached by summing a broad + a fine PixelNoise layer instead of one.
 func test_a_realistic_step_snow_driven_snowfall_paints_more_than_one_non_bare_band():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
