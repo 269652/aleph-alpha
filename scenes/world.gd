@@ -497,6 +497,7 @@ var _lasso_banner: PanelContainer
 var _trade_banner: PanelContainer
 var _talk_banner: PanelContainer
 var _easter_egg_banner: PanelContainer
+var _cast_banner: PanelContainer
 var _wallet_label: Label
 var _creature_panels_accumulator := CREATURE_PANELS_REFRESH_INTERVAL  # refresh immediately
 ## How much faster than real time the ECOLOGY runs, set by /ecotest.
@@ -1597,6 +1598,7 @@ func _build_message_stack() -> void:
 	_trade_banner = _make_message_banner(16)
 	_talk_banner = _make_message_banner(14)
 	_easter_egg_banner = _make_message_banner(14)
+	_cast_banner = _make_message_banner(16)
 	# A sighting is an ambient world event rather than something the player
 	# did, and reads in its own cooler ink -- the one per-banner difference.
 	(_easter_egg_banner.get_child(0) as Label).add_theme_color_override(
@@ -1633,10 +1635,10 @@ func _set_message_banner(banner: PanelContainer, message: String) -> void:
 ## on the same line the way the taming and trade banners did (both were
 ## pinned at offset_top 144). Pinned by test_world_hud.gd.
 static func message_banner_lines(
-	fishing: String, lasso: String, trade: String, talk: String, easter_egg: String
+	fishing: String, lasso: String, trade: String, talk: String, easter_egg: String, cast: String
 ) -> PackedStringArray:
 	var lines := PackedStringArray()
-	for message in [fishing, lasso, trade, talk, easter_egg]:
+	for message in [fishing, lasso, trade, talk, easter_egg, cast]:
 		if message != "":
 			lines.append(message)
 	return lines
@@ -1653,6 +1655,12 @@ func _update_fishing_label(local_player: Player) -> void:
 ## A shopping prompt/result banner (see Player._shop_step).
 func _update_trade_label(local_player: Player) -> void:
 	_set_message_banner(_trade_banner, local_player.trade_message)
+
+
+## A cast result banner (see docs/concept/spell_runtime.md and
+## Player.cast_spell) -- same shared-stack shape as every other banner here.
+func _update_cast_label(local_player: Player) -> void:
+	_set_message_banner(_cast_banner, local_player.cast_message)
 
 
 ## A talk-result banner (see Player._talk_step/NpcGreeting).
@@ -4274,6 +4282,7 @@ func _client_process(delta: float) -> void:
 	_update_lasso_label(local_player)
 	_update_trade_label(local_player)
 	_update_talk_label(local_player)
+	_update_cast_label(local_player)
 	# The banners keep their own text; the whole stack steps aside while a
 	# window is open (see world_hint_visible_for).
 	_message_stack.visible = world_hint_visible_for(true, _any_gameplay_window_open())

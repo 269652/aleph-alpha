@@ -4259,6 +4259,33 @@ func step_tall_grass(delta_seconds: float) -> void:
 		_sync_grass_sprites(chunk_coord)
 
 
+## The `accelerate_growth` spell atom's real hook (see docs/concept/
+## spell_runtime.md): advances every wild crop patch in the chunk containing
+## `global_tile` by `extra_seconds` -- the exact same real
+## WildCropPatch.advance() step_wild_crops already calls on its own
+## throttled per-chunk-batch clock, just triggered instantly instead of
+## waited for. Chunk-wide, not single-plant: WildCropPatch has no per-cell
+## targeting granularity, so this is an honestly coarser scope than "the one
+## plant you're facing," not a fake finer one. Returns whether the chunk
+## even had wild crops to accelerate (false for an unloaded/crop-less one --
+## "even an affordable spell still has to land").
+func accelerate_wild_crop_growth(global_tile: Vector2i, extra_seconds: float) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(global_tile)
+	if not _wild_crop_sims.has(chunk_coord):
+		return false
+	var season_growth := _season_cycle.growth_modifier(_world_age_seconds)
+	var sims: Dictionary = _wild_crop_sims[chunk_coord]
+	var markers: Dictionary = _wild_crop_markers[chunk_coord]
+	for crop_id in sims:
+		var sim: WildCropPatch = sims[crop_id]
+		sim.advance(extra_seconds, season_growth)
+		_wild_crop_renderer.sync_markers(
+			_entities_parent, sim, crop_id, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
+			markers[crop_id], _season_tint
+		)
+	return true
+
+
 ## Wild carrot/potato growth + spread (see docs/concept/wild_crops.md) --
 ## same throttled-accumulator shape as step_tall_grass, batched for the same
 ## reason: advancing every loaded patch 60 times a second would be pure

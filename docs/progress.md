@@ -1471,6 +1471,109 @@ so it's not cut off."*
   54) and `test_main_menu.gd` (58/58, zero failures for the first time
   this whole session) suites.
 
+✅ **Fourteenth live pass: a bigger pond, fast-forwarded seasons, and
+rain.** *"are sheep and horse already wired in? and mining ores?"* --
+answered directly rather than assumed: sheep/horse are NOT wired in (only
+doc-comment mentions of a future CATCH target; the animal-rotation system
+they'd need is still the same deliberately-deferred follow-up named in the
+Thirteenth pass), and MINE IS wired in, but as the same non-destructive
+gesture as FIGHT -- it never calls the real `.mine()`/`.smash()`, so no
+ore is actually produced or consumed. Then, in the same turn: *"can you
+also make the pond slightly bigger"*, *"there should be spontaneous
+transitions between seasons in fast forward so you can see trees bloom
+gradually leaf by leaf or shed their leaves or see them turn orange"*,
+*"also wire in rain"*.
+
+- **Pond grown again**: `CharacterPreviewLayout.POND_RADIUS_FRACTION`
+  0.3 -> 0.33 (a 10% bump this time, not the first report's ~36% jump --
+  "slightly bigger" this time). Re-exposed a real test-fragility bug in
+  the process: `test_grass_field_noise_scale_lets_the_centre_actually_
+  receive_grass`'s 4 hardcoded near-centre probe points turned out to sit
+  well within the bigger pond's reach on literally every one of its 100
+  sampled seeds (0/100 eligible) -- the pond's own placement rule
+  (`_pond_center_near_an_edge`) keeps its boundary exactly
+  `POND_EDGE_MARGIN` from the centre-line regardless of radius, so a
+  bigger pond was always going to eventually swallow a fixed probe this
+  close to true centre. Fixed at the root, not by loosening the threshold
+  again: probes now gate on `result.is_clear(nc)` first (the same real
+  predicate grass generation itself is filtered by) so a probe the pond
+  already claims this seed is excluded from the count instead of counted
+  as a noise-field failure -- durably immune to the next pond tweak, not
+  just today's.
+- **Seasons, fast-forwarded**: the diorama now runs its own accelerated
+  calendar (`SEASON_YEAR_SECONDS := 90.0`, one fictional year per 90 real
+  seconds -- test-pinned, no real-world measurement answers "how fast
+  should an ambient diorama's seasons turn", same precedent as
+  `POND_RADIUS_FRACTION`) and drives the REAL seasonal-cycle stack off it
+  every `_process` tick: `TreePhenology.canopy_state_at` redraws each
+  tree's canopy via `ChoppableTree.set_ripe_fruit` (the exact call
+  `EarthChunkManager.sync_tree_season` already makes for the real world),
+  and `SeasonalFoliage.tint_at` pushes a matching tint onto both
+  `GroundTint`'s shared terrain material (now attached to every ground
+  tile) and `IllustratedGrassPatch`'s shared blade material -- the ground
+  and grass carry the season too, not just the canopy, avoiding the exact
+  "bare trees on a green lawn" bug `tree_phenology.gd`'s own header
+  documents from the real world once decoupling that. Two real bugs
+  found and fixed along the way, not just wired blind:
+  - Feeding the diorama's own accelerated `_season_age_seconds` straight
+    into `SeasonCycle.year_fraction` looked plausible but was wrong --
+    that divides by the REAL, 8-real-day `SECONDS_PER_YEAR`, giving a
+    year_fraction on the order of 0.00003 after a full simulated season
+    (visibly frozen). Fixed with a diorama-local `_year_fraction()`
+    dividing by `SEASON_YEAR_SECONDS` instead.
+  - A single dedup gate, keyed only off the tree canopy's own signature,
+    silently swallowed every later ground/grass tint change too: a
+    canopy's `TreePhenology` schedule and the ground's ordinary
+    `SeasonTransition` schedule are different CURVES on the same clock
+    (blossom finishes opening ~7% into spring and then holds flat for a
+    long settled stretch; the ground doesn't start turning until the
+    LAST third of its own quarter) -- once the canopy signature stopped
+    changing, nothing ever made the ONE shared signature differ again for
+    the rest of that long settled stretch, even though the ground's own
+    schedule kept moving underneath it. Fixed with two independent dedup
+    keys, one per schedule.
+- **Rain, wired in**: the real, pure `WeatherModel.weather_at(day,
+  region_seed)` hash now drives the diorama's own ambient weather, paced
+  by its own `WEATHER_CHANGE_SECONDS := 15.0` (independently tuned from
+  the real 600s `WEATHER_PERIOD_SECONDS` -- reusing that would make rain
+  invisible across a normal character-creation sitting), region-seeded off
+  `_dna_seed` so the same hero seed always sees the same little weather
+  story (this doc's own Determinism pillar). Drives both
+  `RainOverlay.build_overlay()`'s screen-space drop field (added once,
+  no per-frame script) and, on the same call, `WaterShader.
+  set_rain_intensity` on the pond's own kept `_water_shader` instance --
+  rain both falls AND ripples the water, the same pairing `world.gd`
+  drives together every tick for the real world.
+- New tests throughout (61/61 in `test_character_preview_diorama.gd`,
+  31/31 in `test_character_preview_layout.gd`), including two 60-
+  simulated-day statistical tests proving rain/pond-ripple intensity
+  genuinely reaches non-zero at least once, not just that the wiring
+  exists inertly.
+- **Addendum, same session**: *"Birds fly back ond forth in a curve
+  between two fixed points."* Root-caused, not just re-tuned by feel: a
+  bird's per-interval travel distance (`AmbientFlyerRenderer.BIRD_SPEED *
+  BIRD_INTERVAL` = 34.0×1.8 = 61.2 units) was 153% of the diorama's own
+  `BIRD_WANDER_RADIUS` (20.0)'s diameter — a bird blew straight through
+  its entire wander circle and hit `AmbientFlyerMovement`'s boundary-
+  curving containment logic almost immediately every single interval,
+  which reads on screen as exactly "a curve between two roughly-opposite
+  points" instead of a genuine wander. `AmbientFlyerMovement` itself
+  (shared with the real world's own birds/butterflies) was untouched —
+  the bug was purely in how tightly the diorama had scaled its own radius
+  down. Fixed by growing `BIRD_WANDER_RADIUS` to 30.0, moved to live on
+  `CharacterPreviewLayout` (not `CharacterPreviewDiorama`) since it now
+  doubles as bird-home PLACEMENT clearance too — birds were never
+  is_clear-checked against the pond/trees (they fly over both, unchanged),
+  but a wider wander radius meant a home placed right at the footprint's
+  own edge would now wander half off-frame, so home positions are now
+  clamped to stay `BIRD_WANDER_RADIUS` inside every edge. Both the new
+  radius and the clearance are test-pinned: the radius against the actual
+  `BIRD_SPEED`/`BIRD_INTERVAL` relationship it has to satisfy (not a bare
+  eyeballed number), the clearance against 20 seeds' worth of generated
+  homes. 33/33 in `test_character_preview_layout.gd`, 61/61 in
+  `test_character_preview_diorama.gd` (unchanged, confirming no
+  regression from the shared-constant move).
+
 ⬜ FOOTPRINT.y (still 96) and the overall zoom level are otherwise unchanged
 and still need a user decision on how large the hero should read. Note for
 whoever takes either further: `tree_bounds` insets by 20×26, so at footprint
@@ -3209,42 +3312,88 @@ Known gaps: none of the item/creature/combat layer is replicated in multiplayer
 
 ### Magic (`concept/magic.md`)
 
-The cost/atom foundation of the spellcrafting DSL has been started (pure,
-tested modules); everything above the cost layer (parser, validator, runtime,
-authoring UI, physics compliance) is still unbuilt. The 2026-07-15 brainstorm
-extensions (atom domains beyond the physical, material-component cost,
-caster self-danger, complexity-priced spell gems) now have a pure/tested
-foundation too, but none of it is wired into runtime casting yet — see the
-new rows below. The 2026-08-24 brainstorm (gold cost to compile a spell,
-exponential in size; sealed gems vs. teachable scrolls) is design-only so
-far — no code exists for it yet.
+**A real spell-cast runtime now exists** (see `concept/spell_runtime.md`,
+new) — a player can actually cast a spell and see 21 of the 25 catalog atoms
+take a real mechanical effect, closing the gap this section used to open
+with ("everything above the cost layer... is still unbuilt"). Still missing
+above that: a validator, an authoring UI/spell-editor, and full physics
+compliance (real projectile travel, terrain fire spread, etc. — see the
+Physical Simulation Compliance rows below, unchanged). The 2026-07-15
+brainstorm extensions (atom domains beyond the physical, material-component
+cost, caster self-danger, complexity-priced spell gems) have a pure/tested
+foundation; most of the non-physical atoms now have a real mechanical hook
+too (see Primitive Effects Catalog below) — caster self-danger specifically
+is still unwired (see its own row). The 2026-08-24 brainstorm (gold cost to
+compile a spell, exponential in size; sealed gems vs. teachable scrolls) is
+still design-only — no code exists for it yet.
 
-- **Spellcrafting DSL** (huge) — 🚧 Partial — first three of the pure
-  `RefCounted` pipeline modules exist and are test-first: `spell_atom_catalog.gd`,
-  `spell_cost.gd`, and `spell_parser.gd` (player text → canonical AST, pipeline +
-  blocks surface syntax, with human-readable parse errors). No validator/runtime/
-  UI yet; the parser is purely structural (does not check atoms against the
-  catalog — that is the validator's job).
+- **Spell Cast Runtime** (large) — ✅ Done (MVP) — see `concept/
+  spell_runtime.md` (new). A player presses a real bound key (`cast`,
+  `keybindings.gd`) to cast a fixed example spell (`spell_book.gd` — no
+  authoring UI exists yet, same "fixed table before a UI" scope
+  `item_catalog.gd` already established for crafting). `spell_executor.gd`
+  resolves affordability (a real new `Player.mana`/`max_mana` resource,
+  deliberately NOT stamina — see `concept/survival.md`'s "Stamina scope:
+  movement only, not combat" — and an explicit `when` guard if the spell
+  text writes one, via a small operand/comparison evaluator covering
+  `spell_parser.gd`'s whole guard grammar) and cost (reusing `spell_cost.gd`
+  unchanged); `spell_targeting.gd` resolves self/touch/projectile(cone)/area
+  delivery (delivery itself rides the parser's existing, previously-unused
+  `event_arg` slot on `on cast(DELIVERY):` — no grammar change needed);
+  `spell_atom_effects.gd` dispatches each atom's real effect duck-typed
+  against Player/CreatureMarker (`take_damage`/`heal`/`apply_knockback`/
+  `apply_spell_debuff`/`apply_shield` — CreatureMarker gained several of
+  these for the first time, see below). A procedural-first VFX (
+  `procedural_spell_effect_sprite.gd` + `spell_effect_marker.gd`) plays at
+  the resolved target for every atom that actually lands, same two-track
+  pattern `ProceduralItemSprite` already established for items. Honest
+  gaps, all named in `spell_runtime.md`: no real projectile flight (instant-
+  resolve-in-a-cone), `governing_stat`/`haste_stat` default to 0.0 (no
+  `evocation`/`focus` skill-web wiring yet), `portal`/`induce_mutation` cost
+  mana and play a visual but have no mechanical effect, `cast_time` is
+  computed but not enforced as an actual delay, and the "cast" key always
+  casts the same fixed spell (no selection UI).
+
+- **Spellcrafting DSL** (huge) — 🚧 Partial — the pure `RefCounted` pipeline
+  modules (`spell_atom_catalog.gd`, `spell_cost.gd`, `spell_parser.gd`) now
+  have a real runtime consuming them (`spell_executor.gd` and friends — see
+  the Spell Cast Runtime row above). Still no validator (params aren't
+  range/legality-checked against the catalog) and no authoring UI — the
+  parser remains purely structural, and every castable spell today comes
+  from a fixed authored table (`spell_book.gd`), not player-written text.
 - **Primitive Effects Catalog** (large) — 🚧 Partial — `spell_atom_catalog.gd`:
   25 atoms across 10 categories and 3 tiers, each with cost-relevant data (base
-  cost, magnitude/duration scaling refs). Pure lookup, tested. Beyond the
-  original 15 damage/heal/control/movement/defense/summon/utility atoms, it now
-  covers the brainstorm's three non-physical domains too:
-  **biological** (`accelerate_growth`, `induce_mutation`, `suppress_mutation`,
-  `blight`), **perceptual** (`illuminate`, `calm`, `fear`), and **spatial**
-  (`teleport`, `portal`, `gravity_shift`) — vocabulary-level only, with no hook
-  yet into `dna.md`'s genome/mutation systems, `creature_behavior.gd`/taming, or
-  `fast_travel.gd`/waypoints. Not yet wired into any runtime.
-- **Delivery Method System** (medium) — 🚧 Partial — delivery-method cost
-  *multipliers* (self/touch/projectile/area) exist in `spell_cost.gd`; actual
-  delivery (projectile travel, area resolution) is unbuilt.
+  cost, magnitude/duration scaling refs). Pure lookup, tested. **21 of the 25
+  now have a real mechanical hook** (`spell_atom_effects.gd`/`spell_runtime.md`
+  — damage/heal/push/pull/teleport/accelerate_growth resolve instantly;
+  ignite/blight/freeze/root/slow/shield/illuminate/calm/fear/
+  suppress_mutation/summon_wisp/reveal are real timed statuses via a new
+  generalized `spell_status_effects.gd`, reusing the existing `DebuffStack`
+  venom already proved out). `induce_mutation`/`portal` are still
+  vocabulary-only (deliberately deferred — see spell_runtime.md on why:
+  `TreeGenome.mutate()` only ever produces a *new* child genome, with no
+  supported in-place single-sapling overwrite to safely hook a spell into;
+  portal needs a two-endpoint link this pass doesn't build). Still no hook
+  into `creature_behavior.gd`'s own pure decision function directly (fear/
+  calm work by overriding the CONTEXT fed into it, not by changing it) or
+  `fast_travel.gd`/waypoints (teleport is a direct position offset instead).
+- **Delivery Method System** (medium) — 🚧 Partial — self/touch/projectile/area
+  all now actually resolve a real target (`spell_targeting.gd`), not just
+  carry a cost multiplier — projectile uses a facing-cone nearest-target
+  check, area an instant burst at a point ahead of the caster. Still no real
+  travel-time/flight visual for projectile/area (instant-resolve, matching
+  the same gap `item_illustrations.md` already named for thrown items).
 - **Shape Modifier System** (medium) — ⬜ Not started
 - **Elemental Reaction Matrix** (large) — ⬜ Not started
-- **Resource Cost Formula** (medium) — 🚧 Partial — `spell_cost.gd` derives cost
-  deterministically from atoms + params (magnitude, duration, burst radius) and
-  delivery, with a stat-driven efficiency term that discounts what the caster
-  *pays* without changing the derived power price. Property-tested. Not wired
-  into gameplay (no mana pool spends it yet).
+- **Resource Cost Formula** (medium) — ✅ Done (wired) — `spell_cost.gd` derives
+  cost deterministically from atoms + params (magnitude, duration, burst
+  radius) and delivery, with a stat-driven efficiency term that discounts what
+  the caster *pays* without changing the derived power price. Property-tested,
+  and now genuinely wired: `Player.mana`/`max_mana` (new — `class_archetype.gd`
+  had defined a `max_mana` bonus per class since before this, but nothing ever
+  read it) is spent atomically on a successful cast, refused untouched on an
+  unaffordable one. `governing_stat`/`haste_stat` still default to 0.0 (no
+  live "spell power"/"haste" stat feeds them yet).
 - **Diminishing Returns Curve** (small) — 🚧 Partial — superlinear magnitude
   exponent (`MAG_EXP`) plus a repeated-atom spam penalty in `spell_cost.gd`,
   both pinned by property tests so the constants are a tested function, not
@@ -3267,7 +3416,11 @@ far — no code exists for it yet.
 - **Projectile Travel & Interception** (medium)
 - **Area/Summon Spatial Validity** (medium)
 - **Mass-Based Push/Pull Knockback** (small)
-- **Environmental Fire Spread (Ignite)** (medium)
+- **Environmental Fire Spread (Ignite)** (medium) — 🚧 Partial — the `ignite`
+  atom now deals real damage-over-time (see the Primitive Effects Catalog row
+  above); spreading through oil-slicked/grassy terrain, the half this row was
+  actually about, is still unbuilt (no per-tile flammability/fuel state
+  exists anywhere).
 - **Freeze-to-Walkable Terrain** (medium)
 - **Shock Conduction Through Water** (medium)
 - **Skill-Tree Gating (Layer 0)** (medium)
