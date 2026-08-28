@@ -160,13 +160,35 @@ var _grass_seed_pick_index := 0
 ## a previous seed is still digesting.
 var _carried_seed_species := ""
 
-## The PixelNoise seed this particular swallowed seed's granivory roll was
-## (or will be) drawn from -- see SeedEndozoochory.seed_is_consumed, called
-## from _step_seed_carrying at the moment the carry timer elapses. Set
-## alongside _carried_seed_species by whichever _take_targeted_* method just
-## ate a GROUND seed (flower or grass; fruit does not set this, since
-## fruit's seed is never rolled for predation -- see _step_seed_carrying).
+## The PixelNoise seed this particular swallowed seed's carry (see
+## _begin_seed_carry: how far, which direction) and -- for a GROUND seed
+## only -- granivory roll (SeedEndozoochory.seed_is_consumed, called from
+## _step_seed_carrying once the carry distance is covered) were drawn from.
+## Set by _begin_seed_carry, called from whichever _take_targeted_* method
+## just ate something, for all three carried kinds alike -- fruit included,
+## even though fruit's own seed is never rolled for predation, since this
+## seed also drives _step_seed_carrying's ongoing carry_distance_tiles
+## check regardless of kind.
 var _carried_seed_carrier_seed := 0
+
+## Where this bird was when it started carrying its current seed -- lets
+## _step_seed_carrying measure ACTUAL net distance travelled rather than
+## trusting a fixed time budget to correspond to real distance covered. The
+## same carried-tiles-since-origin idiom EarthChunkManager already uses for
+## ground carriers (_step_seed_dispersal/_step_squirrel_nut_caching/
+## _step_grass_seed_caching's own carried_seed_origin/carried_nut_origin/
+## carried_grass_seed_origin), needed even more here: those creatures' own
+## wander already covers their (much shorter, 3-14 tile) carry ranges, but
+## AmbientFlyerMovement's home-tether cannot organically cover a bird's much
+## longer 10-40 tile one -- see _carry_direction below and
+## _step_seed_carrying's own doc comment.
+var _carried_seed_start_position := Vector2.ZERO
+
+## Which way this bird leans while it carries a seed, blended into ordinary
+## wander in _process -- a unit vector, or ZERO while not carrying (see
+## _begin_seed_carry/SeedEndozoochory.carry_direction and
+## CARRY_STEER_WEIGHT).
+var _carry_direction := Vector2.ZERO
 
 ## How full this bird's crop is, and how long it has been carrying whatever it
 ## swallowed (see BirdDigestion).
@@ -177,10 +199,9 @@ var _carried_seed_carrier_seed := 0
 ## half of dispersal, without which a seed simply appears somewhere a bird
 ## happened to be and the player never sees the connection.
 var _fullness := BirdDigestion.STARTING_FULLNESS
-var _carry_seconds_remaining := 0.0
 ## Whether the carried seed is a FLOWER's (planted via plant_flower_at), a
 ## grass seed's (planted via plant_grass_at), or -- if neither -- tree fruit
-## (try_plant_seed_at). All three ride the same carry timer; only one of
+## (try_plant_seed_at). All three ride the same carry distance; only one of
 ## these two flags is ever true at a time, and every _take_targeted_* method
 ## resets BOTH before setting its own, so a stale flag from a previous kind
 ## can never survive into what a later swallowed item plants (see
@@ -193,6 +214,19 @@ var _carried_seed_is_grass := false
 ## that beelines looks scripted, one that merely LEANS toward blooms while
 ## still wandering reads as foraging.
 const SCENT_STEER_WEIGHT := 0.55
+
+## How strongly a bird carrying a seed leans into _carry_direction, 0 = pure
+## wander, 1 = fly dead straight. Much stronger than SCENT_STEER_WEIGHT
+## above for a different reason than that one's own "looks scripted"
+## concern: nobody is watching a specific flower the bird is supposedly
+## beelining for, since a carry's destination is an arbitrary point in the
+## grass, not a visible landmark -- so there is no aesthetic cost to a
+## strong lean, only a real cost (see _step_seed_carrying) to a weak one:
+## the carry does not resolve until it actually crosses its target
+## distance, so a weak pull just makes birds carry seed for a very long
+## time rather than under-shooting. Still short of 1.0 so a carrying bird
+## still visibly wanders rather than snapping onto a robotic beeline.
+const CARRY_STEER_WEIGHT := 0.9
 
 ## Re-sniffing every frame would query the flower set per flyer per frame;
 ## the field barely changes at that rate, so it's cached between sniffs.
@@ -578,6 +612,16 @@ func _process(frame_delta: float) -> void:
 		return
 
 	var heading := _movement.direction_at(home, position, _elapsed_time, wander_seed)
+	if _carry_direction != Vector2.ZERO:
+		# Lean into the carry heading rather than replacing the wander
+		# outright (see CARRY_STEER_WEIGHT) -- and fall back to the wander
+		# heading, exactly like the scent blend below, on the rare frame
+		# where the two nearly cancel (see that blend's own doc comment for
+		# why the residual of two opposing vectors is not safe to use
+		# directly).
+		var carried := heading.lerp(_carry_direction, CARRY_STEER_WEIGHT)
+		if carried.length() > 0.001:
+			heading = carried.normalized()
 	if _scent_direction != Vector2.ZERO:
 		# Blend the wander heading with the scent gradient rather than
 		# replacing it, so the flyer still meanders while drifting toward
@@ -988,11 +1032,8 @@ func _fly_at_fruit(delta: float) -> void:
 
 ## Actually removes the fruit from the world (see EarthChunkManager.
 ## take_fruit_at) and, unless a seed is already being carried (see
-## _carried_seed_species), starts this bird's carry timer for the species it
-## just swallowed (see SeedEndozoochory.carry_distance_tiles) -- converted
-## from a distance to a TIME here, at this bird's own flight speed, since the
-## marker has no reliable notion of "distance travelled since eating" once
-## ordinary wander/other foraging resumes in between.
+## _carried_seed_species), starts this bird's carry for the species it just
+## swallowed (see _begin_seed_carry).
 func _take_targeted_fruit() -> void:
 	_fullness = BirdDigestion.fullness_after_meal(_fullness)
 	if fruit_world == null or _fruit_target == null:
@@ -1009,8 +1050,7 @@ func _take_targeted_fruit() -> void:
 	# shared doc comment on _carried_seed_is_flower/_carried_seed_is_grass).
 	_carried_seed_is_flower = false
 	_carried_seed_is_grass = false
-	var carry_tiles := SeedEndozoochory.carry_distance_tiles(wander_seed + _fruit_pick_index)
-	_carry_seconds_remaining = carry_tiles * float(TerrainRenderer.TILE_SIZE) / maxf(_movement.speed, 1.0)
+	_begin_seed_carry(wander_seed + _fruit_pick_index)
 
 
 ## Looks for the next worm, on a throttled interval, and commits to one.
@@ -1136,12 +1176,7 @@ func _take_targeted_seed() -> void:
 	_carried_seed_species = eaten_species
 	_carried_seed_is_flower = true
 	_carried_seed_is_grass = false  # see the shared doc comment on both flags
-	# Same carry model as fruit (see _take_targeted_fruit): a distance, not a
-	# fixed time, so a faster bird carries the seed proportionally further.
-	var carrier_seed := wander_seed + _seed_pick_index
-	_carried_seed_carrier_seed = carrier_seed
-	var carry_tiles := SeedEndozoochory.carry_distance_tiles(carrier_seed)
-	_carry_seconds_remaining = carry_tiles * float(TerrainRenderer.TILE_SIZE) / maxf(_movement.speed, 1.0)
+	_begin_seed_carry(wander_seed + _seed_pick_index)
 
 
 ## Whether a grass seed this bird can currently see is strictly closer than
@@ -1254,14 +1289,11 @@ func _take_targeted_grass_seed() -> void:
 	# No species to carry -- a chunk grows only one kind of grass -- but
 	# _carried_seed_species still has to go non-empty, since that is what
 	# every other part of the carry cycle (only-one-at-a-time, the carry
-	# timer, _step_seed_carrying) gates on.
+	# distance, _step_seed_carrying) gates on.
 	_carried_seed_species = "grass"
 	_carried_seed_is_flower = false  # see the shared doc comment on both flags
 	_carried_seed_is_grass = true
-	var carrier_seed := wander_seed + _grass_seed_pick_index
-	_carried_seed_carrier_seed = carrier_seed
-	var carry_tiles := SeedEndozoochory.carry_distance_tiles(carrier_seed)
-	_carry_seconds_remaining = carry_tiles * float(TerrainRenderer.TILE_SIZE) / maxf(_movement.speed, 1.0)
+	_begin_seed_carry(wander_seed + _grass_seed_pick_index)
 
 
 ## Looks for the next grass seed on a throttled interval, in parallel with
@@ -1837,11 +1869,49 @@ func _end_spiral_flight() -> void:
 	_spiral_cooldown = SpiralFlight.COOLDOWN_SECONDS
 
 
-func _step_seed_carrying(delta: float) -> void:
+## Starts this bird's seed-carry for whatever it just swallowed --
+## `_carried_seed_species` (and the is_flower/is_grass kind flags) are set by
+## the caller just before this; shared by all three swallow paths (fruit,
+## flower seed, grass seed), since the carry model itself is identical
+## regardless of what kind of seed it is.
+##
+## Records where the carry starts and picks a real heading to fly off in
+## (see _carried_seed_start_position/_carry_direction above and
+## SeedEndozoochory.carry_direction) rather than only a duration -- see
+## _step_seed_carrying's own doc comment for why a duration alone fell
+## short.
+func _begin_seed_carry(carrier_seed: int) -> void:
+	_carried_seed_carrier_seed = carrier_seed
+	_carried_seed_start_position = position
+	_carry_direction = SeedEndozoochory.carry_direction(carrier_seed)
+
+
+## Resolves this bird's seed carry once it has actually flown its own
+## SeedEndozoochory.carry_distance_tiles away from where it started (see
+## _carried_seed_start_position) -- the same carried-tiles-since-origin
+## idiom EarthChunkManager's ground carriers already use (see
+## _carried_seed_start_position's own doc comment), rather than the fixed
+## TIME budget this used to run on.
+##
+## The time budget assumed a bird flying that budget's whole duration in a
+## straight line, at full speed -- but ordinary wander is anchored to a home
+## point within a fairly tight radius (AmbientFlyerMovement.direction_at),
+## so a bird whose home never moved could never actually get further than
+## roughly that radius from wherever it started carrying, regardless of how
+## long the timer ran. Measured directly: capped at ~2.5 tiles for a
+## sparrow, for every one of 30 sampled wander_seeds, against an intended
+## 10-40 tile range (see docs/progress.md). Checking real displacement
+## instead -- combined with _carry_direction actually giving ordinary
+## wander somewhere to lean toward, see _begin_seed_carry/_process -- means
+## this can no longer resolve short of what SeedEndozoochory actually
+## intended for this particular bird.
+func _step_seed_carrying(_delta: float) -> void:
 	if _carried_seed_species == "":
 		return
-	_carry_seconds_remaining -= delta
-	if _carry_seconds_remaining > 0.0:
+	var carried_tiles := (
+		position.distance_to(_carried_seed_start_position) / float(TerrainRenderer.TILE_SIZE)
+	)
+	if carried_tiles < SeedEndozoochory.carry_distance_tiles(_carried_seed_carrier_seed):
 		return
 	# A bare GROUND seed (flower or grass) is the meal itself for a true
 	# granivore -- real predation destroys the large majority of it before
@@ -1885,6 +1955,7 @@ func _step_seed_carrying(delta: float) -> void:
 	_carried_seed_species = ""
 	_carried_seed_is_flower = false
 	_carried_seed_is_grass = false
+	_carry_direction = Vector2.ZERO
 
 
 ## How much closer a bloom must be than the one this flyer is already flying

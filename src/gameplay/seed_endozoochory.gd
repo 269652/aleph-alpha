@@ -55,6 +55,27 @@ static func carry_distance_tiles(carrier_seed: int) -> float:
 	return PixelNoise.range_value(carrier_seed, 0, 0, CARRY_MIN_TILES, CARRY_MAX_TILES)
 
 
+## Which way this bird flies off with its swallowed seed, as a unit vector.
+## Sampled at a PixelNoise coordinate distinct from carry_distance_tiles's
+## (0,0) so heading and range vary independently for the same carrier -- a
+## fast, far-flying bird is equally likely in any direction -- the same
+## independent-second-sample shape AntColony.carry_direction/
+## carry_distance_tiles already uses for its own carrier seed. Real
+## dispersal direction is arbitrary (a bird takes off whichever way its next
+## activity pulls it), so this is a uniform random heading, never biased
+## toward or away from the parent plant.
+##
+## Distance alone turned out not to be enough to actually disperse a seed:
+## AmbientFlyerMarker's ordinary wander is anchored to a home point within a
+## fairly tight radius (measured at a hard ~2.5-tile ceiling for a sparrow,
+## regardless of wander_seed or this module's own 10-40 tile range), so a
+## carrying bird needs an actual heading to fly off in -- see
+## AmbientFlyerMarker._step_seed_carrying's own doc comment for the full
+## story, and docs/progress.md for the measurement.
+static func carry_direction(carrier_seed: int) -> Vector2:
+	return Vector2.from_angle(PixelNoise.range_value(carrier_seed, 0, 2, 0.0, TAU))
+
+
 ## Whether a tree seed dropped on `biome_name` can sprout there at all.
 ## Delegates to TreeRooting, which is the ONE answer to "can a tree stand
 ## here".

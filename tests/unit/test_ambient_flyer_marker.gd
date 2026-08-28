@@ -1230,14 +1230,17 @@ func test_eating_fruit_eventually_plants_a_seed_of_the_same_species_elsewhere():
 	assert_eq(world.planted[0]["species"], "cherry", "planted species should match what was eaten")
 
 
-func test_carrying_a_seed_plants_it_at_the_birds_own_position_once_the_carry_timer_elapses():
+func test_carrying_a_seed_plants_it_at_the_birds_own_position_once_it_has_carried_far_enough():
 	var world := StubFruitWorld.new()
 	_make_fruit_robin(world)
 	marker._carried_seed_species = "walnut"
-	marker._carry_seconds_remaining = 0.05
 	marker.position = Vector2(123, 45)
+	# Pretend this bird already flew far enough before this frame -- further
+	# than any possible SeedEndozoochory.CARRY_MAX_TILES roll -- so the very
+	# next _process call resolves the carry at wherever it is right now.
+	marker._carried_seed_start_position = marker.position - Vector2(10000, 0)
 	var expected_position := marker.position
-	marker._process(0.1)  # covers the remaining 0.05s and then some
+	marker._process(0.1)
 	assert_eq(world.planted.size(), 1)
 	assert_eq(world.planted[0]["species"], "walnut")
 	assert_eq(world.planted[0]["position"], expected_position)
@@ -1254,13 +1257,15 @@ func test_a_robin_only_carries_one_seed_at_a_time():
 	marker._fruit_target = Vector2(80, 0)
 	marker._take_targeted_fruit()
 	assert_eq(marker._carried_seed_species, "cherry")
-	var first_carry_remaining: float = marker._carry_seconds_remaining
+	var first_carry_origin: Vector2 = marker._carried_seed_start_position
 
 	world.fruit = [{"position": Vector2(90, 0), "species": "apple"}]
 	marker._fruit_target = Vector2(90, 0)
 	marker._take_targeted_fruit()
 	assert_eq(marker._carried_seed_species, "cherry", "should still be carrying the FIRST seed eaten")
-	assert_eq(marker._carry_seconds_remaining, first_carry_remaining, "the carry timer must not reset")
+	assert_eq(
+		marker._carried_seed_start_position, first_carry_origin, "the carry origin must not reset"
+	)
 
 
 ## Worm-hunting and fruit-foraging run in parallel on the SAME shared
@@ -1491,6 +1496,8 @@ func test_a_pollinator_with_no_flowers_at_all_never_stops_moving():
 
 # -- granivory: sparrows eat seed, and plant flowers where they drop it -----
 
+const SeedEndozoochory = preload("res://src/gameplay/seed_endozoochory.gd")
+
 ## A world offering SEED (see EarthChunkManager.seeds_near/take_seed_at) and
 ## recording where flowers get planted, so the whole eat->carry->plant chain
 ## can be asserted end to end.
@@ -1577,10 +1584,63 @@ func test_a_sparrow_plants_the_seed_it_ate_somewhere_else():
 
 	assert_gt(world.planted.size(), 0, "the swallowed seed should be planted again")
 	assert_eq(world.planted[0]["species"], "clover", "it plants what it actually ate")
-	assert_gt(
-		world.planted[0]["position"].distance_to(at), 2.0 * TILE_SIZE,
-		"a bird carries seed well away from the plant it took it from"
+	# Not just "well away" -- the REAL dispersal range SeedEndozoochory
+	# intends (10-40 tiles), not the couple of tiles ordinary home-tethered
+	# wander alone can reach. See _carry_direction/_step_seed_carrying for
+	# how this is actually achieved, and the test below for the same claim
+	# pinned across many birds rather than this one convenient seed.
+	assert_gte(
+		world.planted[0]["position"].distance_to(at), SeedEndozoochory.CARRY_MIN_TILES * TILE_SIZE,
+		"a bird should carry seed the real intended dispersal range, not just a couple of tiles"
 	)
+
+
+## THE REPORTED SHORTFALL, pinned directly across many birds (not just one
+## fixed wander_seed): ordinary wander alone is tethered to
+## AmbientFlyerMovement's home-anchor radius, which is far smaller than
+## SeedEndozoochory's 10-40 tile carry range -- measured before this fix at a
+## hard ~2.5-tile ceiling for a sparrow, for every one of 30 sampled
+## wander_seeds, regardless of what carry_distance_tiles actually intended
+## for that bird (docs/progress.md has the full measurement). A bird now
+## flies off in an actual heading while it carries (see
+## SeedEndozoochory.carry_direction), and the carry resolves on REAL
+## travelled distance rather than a fixed time budget (see
+## _step_seed_carrying), so this must hold for many different birds, not
+## just a convenient one.
+func test_a_sparrows_seed_carry_reaches_the_real_dispersal_range_across_many_birds():
+	for wander_seed in range(1, 21):
+		var world := StubSeedWorld.new()
+		var at := Vector2(3.0 * TILE_SIZE, 0.0)
+		world.seeds.append({"position": at, "species": "clover"})
+
+		var bird := AmbientFlyerMarker.new()
+		bird.seed_world = world
+		bird.species = "sparrow"
+		bird.home = Vector2.ZERO
+		bird.position = Vector2.ZERO
+		bird.wander_seed = wander_seed
+		bird.ground_forage = GroundForageBehavior.new()
+		bird.setup(AmbientFlyerMovement.new(24.0, 40.0, 1.0))
+
+		var start_position = null
+		var net_tiles := -1.0
+		for step in range(8000):  # 800 simulated seconds -- generous
+			var was_carrying: bool = bird._carried_seed_species != ""
+			bird._process(0.1)
+			var is_carrying: bool = bird._carried_seed_species != ""
+			if not was_carrying and is_carrying:
+				start_position = bird.position
+			if was_carrying and not is_carrying:
+				net_tiles = start_position.distance_to(bird.position) / TILE_SIZE
+				break
+		bird.free()
+
+		assert_gte(
+			net_tiles, SeedEndozoochory.CARRY_MIN_TILES,
+			"wander_seed %d: sparrow only carried %.2f tiles, short of the %.0f-tile minimum" % [
+				wander_seed, net_tiles, SeedEndozoochory.CARRY_MIN_TILES
+			]
+		)
 
 
 ## A bird carries one seed at a time -- eating a second before dropping the
@@ -1711,7 +1771,7 @@ func test_carrying_fruit_after_a_flower_seed_plants_a_tree_not_a_flower():
 	seed_world.seeds = [{"position": Vector2(50, 0), "species": "clover"}]
 	marker._seed_target = Vector2(50, 0)
 	marker._take_targeted_seed()
-	marker._carry_seconds_remaining = 0.0
+	marker._carried_seed_start_position = marker.position - Vector2(10000, 0)
 	marker._step_seed_carrying(0.0)
 	assert_eq(seed_world.planted.size(), 1, "precondition: the flower seed got planted")
 	assert_eq(marker._carried_seed_species, "", "precondition: the crop is empty again")
@@ -1719,7 +1779,7 @@ func test_carrying_fruit_after_a_flower_seed_plants_a_tree_not_a_flower():
 	fruit_world.fruit = [{"position": Vector2(80, 0), "species": "walnut"}]
 	marker._fruit_target = Vector2(80, 0)
 	marker._take_targeted_fruit()
-	marker._carry_seconds_remaining = 0.0
+	marker._carried_seed_start_position = marker.position - Vector2(10000, 0)
 	marker._step_seed_carrying(0.0)
 
 	assert_eq(fruit_world.planted.size(), 1, "the fruit's seed should plant a TREE")
@@ -2604,7 +2664,7 @@ func test_a_sparrow_mostly_destroys_the_seed_it_eats_rather_than_planting_it():
 		marker.wander_seed = w
 		marker._seed_target = Vector2(50, 0)
 		marker._take_targeted_seed()
-		marker._carry_seconds_remaining = 0.0
+		marker._carried_seed_start_position = marker.position - Vector2(10000, 0)
 		marker._step_seed_carrying(0.0)
 		if world.planted.is_empty():
 			consumed += 1
