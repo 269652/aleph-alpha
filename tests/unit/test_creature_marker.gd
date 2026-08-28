@@ -2833,3 +2833,18 @@ func test_an_immature_predator_flees_instead_of_attacking_even_when_cornered():
 
 	assert_eq(player.damage_taken, 0.0, "an immature predator must never attack, even cornered")
 	assert_lt(predator.position.x, 100.0, "it should flee instead")
+
+
+## AnimalActions scores feeding by how badly the animal needs it, so the state
+## has to carry the DEGREE and not just the verdict -- otherwise every hungry
+## animal ranks identically and a starving one cannot outrank a peckish one.
+func test_animal_state_reports_how_badly_a_need_is_felt_not_just_whether():
+	var horse := _catchable("horse")
+	horse.set_needs_for_test(0.6, 0.6)
+	var peckish := float(horse.animal_state()["hunger_urgency"])
+	horse.set_needs_for_test(1.0, 1.0)
+	assert_gt(
+		float(horse.animal_state()["hunger_urgency"]), peckish,
+		"a starving animal should report more hunger urgency than a peckish one"
+	)
+	assert_between(float(horse.animal_state()["thirst_urgency"]), 0.0, 1.0)

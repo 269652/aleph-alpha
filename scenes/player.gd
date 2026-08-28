@@ -2820,15 +2820,41 @@ func perform_rope_verb() -> void:
 ## feed the animal is not hungry for), so a full animal never eats the stock.
 ## Returns whether anything was actually taken.
 func offer_treat_to(animal) -> bool:
-	if inventory == null or animal == null:
+	if animal == null:
 		return false
 	if position.distance_to(animal.position) > FEED_RANGE:
 		return false
-	if inventory.count_of(TAMING_TREAT_ID) <= 0:
+
+	# The HAND first, then the bag.
+	#
+	# Reported: "Carrots never end up in the inventory with a carrot in hand".
+	# A pulled carrot becomes a ground item and E picks a ground item into the
+	# HAND (see _try_pick_item_into_hand -- pickup_nearby only runs when the
+	# hand grab found nothing), so holding one IS the ordinary way to have a
+	# carrot. This spent one out of the inventory only, while AnimalActions
+	# offered Feed on exactly the held one: the prompt appeared, the press did
+	# nothing, and the player was holding the food the game was telling them to
+	# use.
+	#
+	# Hand before bag because a player holding a carrot out is offering THAT
+	# carrot -- draining the bag instead would leave the held one sitting there.
+	var holding_treat: bool = equipped_item != null and equipped_item.id == TAMING_TREAT_ID
+	if not holding_treat and inventory != null and inventory.count_of(TAMING_TREAT_ID) > 0:
+		pass
+	elif not holding_treat:
 		return false
+
+	# Ask BEFORE spending: feed_treat refuses an animal that is not hungry (see
+	# CreatureMarker.feed_treat / Taming.trust_after_feeding), and a refused
+	# offer must cost nothing.
 	if not animal.feed_treat():
 		return false
-	inventory.remove(TAMING_TREAT_ID, 1)
+
+	if holding_treat:
+		equipped_item = null
+		inventory_changed.emit()
+	else:
+		inventory.remove(TAMING_TREAT_ID, 1)
 	return true
 
 

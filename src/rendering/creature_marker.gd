@@ -994,6 +994,13 @@ func animal_state() -> Dictionary:
 		"hungry": _needs.is_hungry(),
 		"thirsty": _needs.is_thirsty(),
 		"cold": _needs.is_cold(),
+		# How BADLY, not just whether -- AnimalActions scores feeding by
+		# urgency, so a starving animal outranks a peckish one for the primary
+		# slot. Deficit-shaped (1.0 = starving) on purpose: an urgency rises as
+		# the animal gets worse, unlike the fullness/hydration fractions above
+		# which read 1.0 = fine.
+		"hunger_urgency": _needs.hunger,
+		"thirst_urgency": _needs.thirst,
 		"trust": trust,
 		"tame": is_tame(),
 		"restrained": _restrained,

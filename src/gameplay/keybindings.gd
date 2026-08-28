@@ -25,7 +25,14 @@ const ACTIONS := [
 	# is currently held into the inventory.
 	{"action": "stash", "label": "Stash Held Item", "default": KEY_H},
 	{"action": "fish", "label": "Fish / Reel", "default": KEY_F},
-	{"action": "lasso", "label": "Throw / Release Lasso", "default": KEY_R},
+	# Moved off R to make room for the primary slot, which now covers what this
+	# did: Lasso/Release/Order are scored candidates (see AnimalActions), so
+	# the key a player's hand already goes to at an animal does the obvious
+	# thing to it. Kept as its own binding rather than deleted -- the
+	# single-purpose rope key is still there for anyone who wants it, it just
+	# cannot share R, because one press firing two verbs is the bug that
+	# sharing would create.
+	{"action": "lasso", "label": "Throw / Release Lasso", "default": KEY_J},
 	{"action": "mount", "label": "Mount / Dismount", "default": KEY_V},
 	{"action": "trade", "label": "Trade with Merchant", "default": KEY_T},
 	# Selling is its own verb rather than another meaning stacked onto T,
@@ -40,8 +47,8 @@ const ACTIONS := [
 	# are holding a rope (see AnimalActions.for_animal). One key that always
 	# does the obvious thing beats a keyboard of verbs the player has to
 	# remember the applicability rules for.
-	{"action": "primary_action", "label": "Primary Action", "default": KEY_X},
-	{"action": "secondary_action", "label": "Secondary Action", "default": KEY_Z},
+	{"action": "primary_action", "label": "Primary Action", "default": KEY_R},
+	{"action": "secondary_action", "label": "Secondary Action", "default": KEY_X},
 	{"action": "talk", "label": "Talk to Villager", "default": KEY_G},
 	{"action": "build", "label": "Place Earth", "default": KEY_B},
 	{"action": "destroy", "label": "Remove Tile", "default": KEY_Q},

@@ -105,3 +105,33 @@ func test_the_lasso_prompt_names_its_key_rather_than_calling_it_the_lasso_key():
 		"the prompt should name the bound key, not the phrase 'the lasso key'"
 	)
 	assert_string_contains(body, "display_key_for")
+
+
+# -- the slots sit where the taming verbs already were -----------------------
+#
+# Reported: "R (primary) ... X (secondary)". R was the rope key, which is the
+# right home for the primary slot precisely because it is the key a player's
+# hand already goes to at an animal -- and the slot subsumes what it used to
+# do, since Lasso/Release/Order are all scored candidates now. The dedicated
+# rope binding moves aside rather than being deleted, so anyone who wants the
+# old single-purpose key can still rebind to it.
+
+func test_the_primary_slot_is_on_the_key_the_rope_verb_used_to_hold():
+	var bindings := Keybindings.new()
+	assert_eq(bindings.default_keycode_for("primary_action"), KEY_R)
+	assert_eq(bindings.default_keycode_for("secondary_action"), KEY_X)
+
+
+## The important half: nothing may share a default with the slots, or one press
+## would fire two verbs -- which is exactly what would have happened if the
+## rope key had stayed on R alongside the primary slot.
+func test_no_action_shares_a_default_key_with_a_slot():
+	var bindings := Keybindings.new()
+	var seen := {}
+	for entry in Keybindings.ACTIONS:
+		var key: int = entry["default"]
+		assert_false(
+			seen.has(key),
+			"%s and %s share a default key" % [seen.get(key, ""), entry["action"]]
+		)
+		seen[key] = entry["action"]

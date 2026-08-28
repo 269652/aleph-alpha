@@ -1171,6 +1171,29 @@ through it.
   against a creature with its own aggro/promotion state is `worldbosses.md`'s
   own open question, not one this pass should answer in passing.
 
+- ✅ **The action slots are SCORED, not a ladder** (2026-08-28, reported:
+  "by a generic mechanism which scores priority on context / item relevance").
+  Every candidate verb scores itself from two things the player can see --
+  RELEVANCE (how much what they are holding points at this verb) and URGENCY
+  (how badly the animal needs it) -- and the two highest fill the two slots.
+  A verb the player cannot carry out scores exactly zero and is never offered,
+  which is deliberately not the same as scoring low: a prompt they will press
+  and watch fail is worse than no prompt, and the need still reaches them as
+  state. Every candidate carries a `why` string, because an ordering nobody
+  can explain is an ordering nobody can tune. Tests pin which verb WINS in a
+  situation, never the weights.
+- ✅ **The primary slot sits on R**, where the rope key was, because that is
+  the key a hand already goes to at an animal -- and the slot subsumes what it
+  did, since Lasso/Release/Order are all scored candidates. Secondary on X. The
+  dedicated rope binding moved to J rather than being deleted; it could not
+  stay on R, since one press firing two verbs is the bug sharing would create.
+- ✅ **Feeding reaches the HAND before the bag** (reported: "Carrots never end
+  up in the inventory with a carrot in hand"). A pulled carrot becomes a ground
+  item and E picks a ground item into the hand, so holding one IS the ordinary
+  way to have a carrot -- while feeding spent one out of the inventory only.
+  The offer appeared and the press did nothing, with the player holding the
+  exact food the game was telling them to use.
+
 **Corrections to this document's previous claims:**
 
 - ⬜ Trust decay on neglect. `Taming.trust_after_neglect` /

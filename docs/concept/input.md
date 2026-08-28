@@ -65,6 +65,33 @@ those genuinely need to know the key is *still* down, and latching them would
 collapse a hold into one tap. A level action can still be *late* at a low
 frame rate; it cannot be erased, because there is no edge to miss.
 
+### Context slots: one key that does the obvious thing
+
+`primary_action` (R) and `secondary_action` (X) are not verbs. What they do is
+decided by whatever is under the player and the state it is in — a tied, hungry
+horse with a carrot in hand offers **Feed** on the primary; a loose one offers
+nothing until the right capture tool is in hand
+(`AnimalActions.for_animal`, [taming.md](taming.md)).
+
+They are **latched**, not polled: they are taps, and a tap at the frame rates
+this game really runs at is erased rather than delayed (see above).
+
+Two properties keep them honest, and both are the difference between a helpful
+key and a lying one:
+
+- **Only offerable actions are offered.** A candidate the player cannot carry
+  out scores zero and never appears. A prompt they will press and watch do
+  nothing is worse than no prompt; what the animal *needs* still reaches them
+  as state on the card and the tooltip.
+- **The prompt and the press read the same ranking.** The tooltip shows the
+  verbs against their slot keys from the same ordered list the router performs,
+  so a prompt can never advertise something the press would not do.
+
+A verb reachable through a slot keeps its own dedicated binding as well — the
+slot is a second way to *reach* an action, never a second copy of it. When the
+primary slot took R, the rope key moved to J rather than sharing: one press
+firing two verbs is the bug sharing creates.
+
 ### The latch is added to the poll, not swapped for it
 
 `Player._rising_edge(action, pressed_now, pressed_last_tick)` fires on either

@@ -1501,6 +1501,10 @@ func test_offering_food_to_a_full_horse_costs_no_carrots():
 	assert_eq(horse.trust, 0.0)
 
 
+## _offer_food_to puts a carrot in HAND, and feeding now reaches for the held
+## one before the bag (see Player.offer_treat_to) -- so the meal comes out of
+## the hand and the bag is untouched. That is the reported fix: a carrot picked
+## off the ground lands in the hand, not the bag.
 func test_offering_food_to_a_hungry_horse_spends_a_carrot_and_earns_trust():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
@@ -1508,7 +1512,8 @@ func test_offering_food_to_a_hungry_horse_spends_a_carrot_and_earns_trust():
 	player.inventory.add(_item_catalog.make("carrot"), 3)
 	horse._needs.hunger = 1.0
 	_offer_food_to(horse)
-	assert_eq(player.inventory.count_of("carrot"), 2, "one carrot, one meal")
+	assert_null(player.equipped_item, "the held carrot is the one eaten")
+	assert_eq(player.inventory.count_of("carrot"), 3, "the bag is untouched")
 	assert_gt(horse.trust, 0.0)
 
 
@@ -2101,3 +2106,70 @@ func test_smash_step_yields_a_sharp_shard_when_carrying_a_rock():
 		dropped_ids.has("sharp_shard"),
 		"expected a sharp_shard among a rock-carrying smash's drops, got %s" % [dropped_ids]
 	)
+
+
+## Reported: "Carrots never end up in the inventory with a carrot in hand".
+##
+## A pulled carrot becomes a GROUND item, and E picks a ground item into the
+## HAND, not the bag (see _try_pick_item_into_hand -- pickup_nearby only runs
+## when the hand grab found nothing). So the ordinary way to end up with a
+## carrot is holding one. AnimalActions offers Feed on exactly that -- a carrot
+## in hand -- while offer_treat_to spent one out of the INVENTORY, so the prompt
+## appeared and the press did nothing. The player is holding the food the game
+## is telling them to use.
+func test_feeding_spends_the_carrot_that_is_actually_in_hand():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_capture_tool()
+	horse._needs.hunger = 1.0
+	player.equipped_item = _item_catalog.make("carrot")
+
+	assert_true(player.offer_treat_to(horse), "a carrot in hand should feed")
+
+	assert_gt(horse.trust, 0.0, "and earn trust")
+	assert_null(player.equipped_item, "the carrot in hand is eaten")
+
+
+## The bag still works when that is where the carrot is -- stashed with H, or
+## bought. Whichever the player has, feeding should reach for it.
+func test_feeding_still_spends_a_carrot_from_the_bag():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_capture_tool()
+	horse._needs.hunger = 1.0
+	player.inventory.add(_item_catalog.make("carrot"), 2)
+
+	assert_true(player.offer_treat_to(horse))
+
+	assert_eq(player.inventory.count_of("carrot"), 1)
+	assert_gt(horse.trust, 0.0)
+
+
+## The hand goes first: a player holding one out is offering THAT carrot, and
+## eating from the bag instead would leave the held one sitting there while the
+## stock quietly drained.
+func test_the_held_carrot_is_offered_before_the_bag_is_opened():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_capture_tool()
+	horse._needs.hunger = 1.0
+	player.equipped_item = _item_catalog.make("carrot")
+	player.inventory.add(_item_catalog.make("carrot"), 2)
+
+	player.offer_treat_to(horse)
+
+	assert_eq(player.inventory.count_of("carrot"), 2, "the bag was not touched")
+	assert_null(player.equipped_item, "the held one was")
+
+
+## A refused feed must not eat anything, from either place.
+func test_a_refused_feed_costs_no_carrot_from_hand():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_capture_tool()
+	horse._needs.hunger = 0.0
+	player.equipped_item = _item_catalog.make("carrot")
+
+	assert_false(player.offer_treat_to(horse))
+
+	assert_not_null(player.equipped_item, "a full animal eats nothing")
