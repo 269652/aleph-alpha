@@ -29,70 +29,65 @@ func test_there_is_a_tile_for_every_depth_band():
 	assert_gte(SnowLayer.DEPTH_BANDS, 3, "bare, a dusting and cover at the very least")
 
 
-## DEPTH_BANDS is now the real illustrated sheet's own frame count (a 5x5
-## contact sheet, see snowoverlay.png), not a hand-picked number -- pinned so
-## nobody quietly drops back to a coarser hand-picked count without updating
-## this test (and OVERLAY_BAND_CELLS, which has one entry per band).
-func test_depth_bands_matches_the_illustrated_sheets_real_frame_count():
-	assert_eq(SnowLayer.DEPTH_BANDS, SnowLayer.OVERLAY_COLUMNS * SnowLayer.OVERLAY_ROWS)
-	assert_eq(SnowLayer.OVERLAY_BAND_CELLS.size(), SnowLayer.DEPTH_BANDS)
+## DEPTH_BANDS is now the real illustrated sheet's own ROW count, not
+## columns*rows: the new 10x10 sheet's ROW axis is coverage/depth (mean alpha
+## climbs row 0 -> row 9) and its COLUMN axis is a genuinely separate shape
+## VARIANT at that same depth (see variant_for below and OVERLAY_COLUMNS' own
+## doc comment) -- ten depth rungs, not a hundred, with ten real shapes drawn
+## at each one.
+func test_depth_bands_matches_the_illustrated_sheets_real_row_count():
+	assert_eq(SnowLayer.DEPTH_BANDS, SnowLayer.OVERLAY_ROWS)
 
 
-## Guards OVERLAY_ROW_BANDS/OVERLAY_COLUMN_BANDS, which are pixel positions
-## measured directly against the real PNG (see their own doc comments) --
-## if the asset is ever replaced with a differently-sized sheet, this fails
-## loudly instead of silently slicing the wrong regions.
+## Guards the sheet's real dimensions -- if the asset is ever replaced with a
+## differently-sized sheet, this fails loudly instead of silently slicing the
+## wrong regions.
 func test_the_overlay_sheet_has_the_measured_dimensions():
 	var image := SpriteSheetLoader.load_image(SnowLayer.OVERLAY_PATH)
 	assert_not_null(image, "snowoverlay.png must load from " + SnowLayer.OVERLAY_PATH)
-	assert_eq(image.get_width(), 1448)
-	assert_eq(image.get_height(), 1086)
+	assert_eq(image.get_width(), 1254)
+	assert_eq(image.get_height(), 1254)
 
 
 ## build_band_image feeds straight into build_tile_set's blit_rect at
 ## ART_TILE_SIZE -- a mismatched size would silently crop or leave the rest
-## of an atlas cell blank.
+## of an atlas cell blank. Swept across a few band/variant combinations, not
+## just variant 0, since the two are now independent axes into the same
+## sheet.
 func test_band_image_is_sized_for_the_atlas():
 	var art := TerrainRenderer.ART_TILE_SIZE
 	for band in [0, SnowLayer.DEPTH_BANDS / 2, SnowLayer.DEPTH_BANDS - 1]:
-		var image := layer.build_band_image(band)
-		assert_eq(image.get_width(), art)
-		assert_eq(image.get_height(), art)
+		for variant in [0, SnowLayer.OVERLAY_COLUMNS / 2, SnowLayer.OVERLAY_COLUMNS - 1]:
+			var image := layer.build_band_image(band, variant)
+			assert_eq(image.get_width(), art, "band %d variant %d width" % [band, variant])
+			assert_eq(image.get_height(), art, "band %d variant %d height" % [band, variant])
 
 
-## OVERLAY_ROW_BANDS/OVERLAY_COLUMN_BANDS exist specifically to crop AROUND
-## the sheet's own near-opaque divider lines (see their own doc comments for
-## the measured divider centers) -- a regression here (an asset re-export
-## that shifts the grid, or a future edit that widens a band back toward its
-## neighbour) would bake a stray light border line into a real in-game tile.
-## Guards the geometry directly rather than inspecting resized pixel alpha
-## (which would also pick up the Lanczos resize's own blending, and would
-## have to special-case cells that are legitimately near-opaque at full
-## coverage): every measured divider center must fall in the GAP between
-## two consecutive bands, never inside one.
-func test_band_crops_stay_clear_of_the_sheets_divider_lines():
-	var row_dividers := [208.5, 416.5, 624.0, 831.0]
-	var column_dividers := [291.0, 579.0, 867.5, 1156.0]
-	for divider in row_dividers:
-		for band in SnowLayer.OVERLAY_ROW_BANDS:
-			assert_true(
-				divider < float(band.x) or divider >= float(band.y),
-				"row divider at %.1f must not fall inside band %s" % [divider, band]
-			)
-	for divider in column_dividers:
-		for band in SnowLayer.OVERLAY_COLUMN_BANDS:
-			assert_true(
-				divider < float(band.x) or divider >= float(band.y),
-				"column divider at %.1f must not fall inside band %s" % [divider, band]
-			)
+## The OLD sheet needed OVERLAY_ROW_BANDS/OVERLAY_COLUMN_BANDS specifically to
+## crop around real near-opaque divider lines baked into that contact sheet
+## (a generation artifact). The new sheet has none: a min-alpha-across-every-
+## row/column sweep (the exact technique that originally found the old
+## dividers) found nothing here, and _cropped_cell no longer does any
+## divider-avoidance or centered-square cropping -- the new cells are already
+## an exact, clean 125.4x125.4 grid. That whole test premise (a divider line
+## that must not fall inside a crop band) no longer applies to this asset, so
+## the old test (test_band_crops_stay_clear_of_the_sheets_divider_lines) is
+## deleted outright rather than left checking geometry that no longer exists.
 
 
 ## Deeper snow is whiter: the bands have to actually differ, or the gradation
-## is a number nobody can see.
+## is a number nobody can see. Averaged across every variant at each band
+## (rather than pinned to one fixed column) because the row-mean is the real
+## measured monotonic axis -- a single column can wobble by a fraction of a
+## percent between two adjacent rows (real illustrated shapes, not a
+## generated ramp) even though the row as a whole is unambiguously whiter.
 func test_deeper_snow_is_whiter():
 	var previous := -1.0
 	for band in SnowLayer.DEPTH_BANDS:
-		var whiteness := _whiteness(layer.build_band_image(band))
+		var total := 0.0
+		for variant in SnowLayer.OVERLAY_COLUMNS:
+			total += _whiteness(layer.build_band_image(band, variant))
+		var whiteness := total / float(SnowLayer.OVERLAY_COLUMNS)
 		assert_gt(whiteness, previous, "band %d is no whiter than the one below" % band)
 		previous = whiteness
 
@@ -108,24 +103,67 @@ func test_snow_has_some_texture():
 	assert_gt(shades.size(), 1, "flat white is not snow")
 
 
-## A dusting is snow lying in the dips with GRASS SHOWING THROUGH. The code
-## claimed that in a comment and did the opposite: every covered pixel was
-## written fully opaque, so a 45%-coverage shallow band was 45% of the tile
-## switched hard to near-white and 55% punched out -- a 50/50 dither of
-## near-white at the finest grain the atlas can express, reported as "~50%
-## pure-white 1px noise, reads as texture corruption". The ground can only
-## show through if the layer lets it composite through, because SnowLayer
-## bakes ONE tile set for every biome and so has no ground colour to blend
-## with itself.
+## A dusting is snow lying in the dips with GRASS SHOWING THROUGH, and full
+## cover buries the ground -- for EVERY one of the ten shape variants a tile
+## might draw at that depth, not just variant 0, since which variant a given
+## tile shows is now a real per-tile choice (see variant_for) rather than
+## always the sheet's first column.
 func test_a_dusting_lets_the_ground_show_through_and_full_cover_does_not():
-	assert_lt(
-		_mean_alpha(layer.build_band_image(0)), SnowLayer.DUSTING_MAX_MEAN_ALPHA,
-		"a dusting must read as frost the ground tints through, not as opaque white specks"
-	)
-	assert_gte(
-		_mean_alpha(layer.build_band_image(SnowLayer.DEPTH_BANDS - 1)),
-		SnowLayer.FULL_COVER_MIN_MEAN_ALPHA,
-		"deep snow buries the ground -- nothing shows through the top band"
+	for variant in SnowLayer.OVERLAY_COLUMNS:
+		assert_lt(
+			_mean_alpha(layer.build_band_image(0, variant)), SnowLayer.DUSTING_MAX_MEAN_ALPHA,
+			"dusting variant %d must read as frost the ground tints through, not opaque specks" % variant
+		)
+		assert_gte(
+			_mean_alpha(layer.build_band_image(SnowLayer.DEPTH_BANDS - 1, variant)),
+			SnowLayer.FULL_COVER_MIN_MEAN_ALPHA,
+			"deep snow variant %d must bury the ground -- nothing should show through" % variant
+		)
+
+
+# -- per-tile variant: a separate shape choice at a fixed depth -------------
+#
+# The new sheet's COLUMN axis is not more depth granularity -- it is ten
+# different hand/AI-illustrated blob SHAPES at roughly the same size, so two
+# tiles at the same coverage don't all draw the identical patch (see
+# OVERLAY_COLUMNS' own doc comment). variant_for picks which one a given tile
+# shows.
+
+func test_variant_is_bounded_to_the_column_count():
+	for x in range(30):
+		var variant := layer.variant_for(x, -x * 3 + 1)
+		assert_gte(variant, 0)
+		assert_lt(variant, SnowLayer.OVERLAY_COLUMNS)
+
+
+func test_variant_is_deterministic_for_the_same_tile():
+	assert_eq(layer.variant_for(11, -42), layer.variant_for(11, -42))
+
+
+func test_variant_varies_across_tiles():
+	var seen := {}
+	for x in range(30):
+		seen[layer.variant_for(x, 0)] = true
+	assert_gt(seen.size(), 1, "every tile drawing the same variant defeats the point of having ten")
+
+
+## The whole reason variant exists: unlike onset (which must be a smooth
+## drift, see onset_offset_for), two EDGE-ADJACENT tiles at the same depth
+## should often show different shapes -- a real per-tile independent choice,
+## not a second low-frequency field. Guards against someone "fixing" a future
+## complaint by smoothing this into a drift, which would defeat the whole
+## point of having real shape variety.
+func test_neighbouring_tiles_often_show_different_variants():
+	var differing := 0
+	var total := 0
+	for x in range(-40, 40):
+		for y in range(-4, 4):
+			total += 1
+			if layer.variant_for(x, y) != layer.variant_for(x + 1, y):
+				differing += 1
+	assert_gt(
+		float(differing) / float(total), 0.5,
+		"neighbouring tiles agree on variant far too often for a genuinely per-tile choice"
 	)
 
 
@@ -304,6 +342,22 @@ func test_the_drift_field_still_covers_the_ground_unevenly():
 ## (global tile origin (-42, -48), at a mid snowfall depth of 0.5) contains
 # only 3 distinct depth bands -- confirmed the worst in the whole swept area,
 # not a cherry-picked spot.
+#
+# RE-MEASURED again for the DEPTH_BANDS 25 -> 10 asset change (onset_offset_
+# for itself is untouched -- same code, same field, same neighbour steps --
+# but there are now fewer total bands to spread across). A fresh full sweep
+# of that same swath at DEPTH_BANDS=10 finds this SAME origin is still the
+# real worst case, now showing only 2 distinct bands rather than 3 -- an
+# expected, direct consequence of a coarser 10-band ladder (a 24x24 window's
+# onset spread covers a fixed slice of the 0..1 depth range regardless of how
+# many bands that range is cut into, so fewer bands means fewer of them can
+# possibly fall inside any one window), not a sign the onset field regressed.
+# The bug this test actually guards against -- a whole neighbourhood locking
+# to ONE band with literally zero per-tile variation, the original "whole
+# areas increment... without variations" report -- is still caught by
+# requiring MORE than one distinct band; asserting a specific higher count
+# would just be chasing a number that depends on DEPTH_BANDS for reasons
+# unrelated to whether the onset field itself still works.
 func test_a_local_window_shows_real_per_tile_variation_not_a_uniform_plateau():
 	var origin := Vector2i(-42, -48)
 	var bands := {}
@@ -312,7 +366,7 @@ func test_a_local_window_shows_real_per_tile_variation_not_a_uniform_plateau():
 			var offset: float = layer.onset_offset_for(origin.x + dx, origin.y + dy)
 			bands[layer.band_for(0.5, 0.0, offset)] = true
 	assert_gt(
-		bands.size(), 3,
+		bands.size(), 1,
 		(
 			"a realistic 24x24 local view at %s shows only %d distinct bands -- "
 			+ "a whole neighbourhood is stepping together instead of showing per-tile texture"

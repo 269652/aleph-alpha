@@ -3747,6 +3747,14 @@ var _snow_dirty: Dictionary = {}
 ## does not grow without bound as a player roams.
 var _snow_onset_by_tile: Dictionary = {}
 
+## Each tile's own illustrated shape VARIANT (see SnowLayer.variant_for),
+## cached the same way and for the same reason as `_snow_onset_by_tile`
+## above: a pure function of the tile's global coordinates that never
+## changes for its whole loaded lifetime, so recomputing it on every sweep
+## would be paying the same avoidable cost onset's own doc comment already
+## measured. Cleared per-tile on chunk unload alongside the onset cache.
+var _snow_variant_by_tile: Dictionary = {}
+
 ## How often the coverage SWEEP below actually runs, independent of how often
 ## step_snow itself is called (every frame, from World._client_process).
 ##
@@ -3853,7 +3861,16 @@ func _paint_snow_tile(tile: Vector2i) -> void:
 	if band < 0:
 		_snow_layer.erase_cell(tile)
 	else:
-		_snow_layer.set_cell(tile, 0, Vector2i(band, 0))
+		# Which of SnowLayer.OVERLAY_COLUMNS illustrated shapes this tile
+		# draws -- a separate axis from `band` (see SnowLayer.variant_for's
+		# own doc comment), cached lazily here rather than computed
+		# unconditionally above alongside onset: onset feeds band_for's math
+		# even for a tile that stays bare, but variant only matters once a
+		# tile is actually about to be painted.
+		if not _snow_variant_by_tile.has(tile):
+			_snow_variant_by_tile[tile] = _snow_renderer.variant_for(tile.x, tile.y)
+		var variant: int = _snow_variant_by_tile[tile]
+		_snow_layer.set_cell(tile, 0, Vector2i(band, variant))
 
 
 ## Drops one chunk's tiles from the per-tile snow tracking dictionaries above,
@@ -3865,6 +3882,7 @@ func _forget_snow_paint_for_chunk(chunk_coord: Vector2i) -> void:
 		for local_x in CHUNK_SIZE:
 			var tile := origin + Vector2i(local_x, local_y)
 			_snow_onset_by_tile.erase(tile)
+			_snow_variant_by_tile.erase(tile)
 			_snow_painted_band_by_tile.erase(tile)
 
 

@@ -15,103 +15,71 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 
-## The illustrated coverage sheet: a 5-column x 5-row contact sheet, each
-## cell one hand/AI-illustrated coverage stage (see DEPTH_BANDS below, and
-## OVERLAY_BAND_CELLS for how those 25 cells map onto depth bands).
+## The illustrated coverage sheet: a clean 10-column x 10-row grid (this is
+## the SECOND real illustrated asset this layer has drawn from -- the user
+## replaced the first, a 5x5 contact sheet with baked-in divider lines, with
+## this one; see git history / docs/progress.md for that sheet's own
+## migration). Two independent axes, not one: ROW is coverage/depth (mean
+## alpha climbs substantially and monotonically row 0 -> row 9: measured
+## 0.037, 0.105, 0.126, 0.230, 0.256, 0.279, 0.303, 0.329, 0.398, 0.432 --
+## row 0 a tiny scattered dusting, row 9 one large puff nearly filling the
+## cell), while COLUMN is a genuinely separate hand/AI-illustrated shape
+## VARIANT at roughly (not exactly) that same depth -- real per-column spread
+## exists within a row (row 0 alone measures 0.015-0.051 across its 10
+## columns) but does not trend monotonically column to column the way rows
+## do: it is shape variety, not a second gradient (see variant_for below,
+## which picks a tile's own column independently of its depth band).
 ##
 ## Declared before DEPTH_BANDS, which is DERIVED from these -- GDScript const
 ## expressions can't reference a const declared later in the same file (see
 ## IllustratedCharacterSprite.HERO_COMPOSITE_BACKGROUND_FLOOD_STEP_TOLERANCE's
 ## own doc comment for the same constraint hit there).
 const OVERLAY_PATH := "res://assets/sprites/terrain/snowoverlay.png"
-const OVERLAY_COLUMNS := 5
-const OVERLAY_ROWS := 5
+const OVERLAY_COLUMNS := 10
+const OVERLAY_ROWS := 10
 
 ## How many depths of cover there are, from a dusting to full.
 ##
 ## Ground goes bare, dusted, covered, deep -- rather than snapping between two
 ## states, which is what makes a snowfall something you watch arrive.
 ##
-## Used to be 4 hand-picked procedural bands; now it is the real illustrated
-## sheet's own frame count (see OVERLAY_COLUMNS/OVERLAY_ROWS and
-## assets/sprites/terrain/snowoverlay.png, a 5x5 contact sheet of 25
-## real coverage stages) -- a tile's own visible transition now has 25 real
-## rungs instead of 4, closing the "hard-cuts between bands" gap
-## docs/progress.md flagged as the one thing left undone in snow's own
-## spreading fix.
-const DEPTH_BANDS := OVERLAY_COLUMNS * OVERLAY_ROWS
+## OVERLAY_ROWS, deliberately NOT OVERLAY_COLUMNS * OVERLAY_ROWS: the
+## immediately-prior sheet was a 5x5 grid where every one of its 25 cells was
+## a distinct coverage stage, so DEPTH_BANDS was the product of both axes.
+## This sheet's two axes mean two DIFFERENT things (row = depth, column =
+## shape variant at that depth, see OVERLAY_COLUMNS' own doc comment) -- a
+## variant is not a finer depth rung, it is a different PICTURE of the same
+## rung, so counting it into DEPTH_BANDS would be wrong, not just imprecise.
+## This is therefore a real, deliberate drop from 25 depth bands to 10 -- a
+## coarser depth ladder -- traded for genuine per-tile visual variety at each
+## rung (ten real illustrated shapes instead of one), which the immediately
+## prior fine-grain onset noise layer (see onset_offset_for's own doc comment,
+## and docs/progress.md's "Fifth follow-up" snow entry) existed specifically
+## to fake in the absence of real per-tile art. Ten discrete depth rungs is
+## still comfortably more than the "bare, a dusting, and cover at the very
+## least" floor (see test_there_is_a_tile_for_every_depth_band).
+const DEPTH_BANDS := OVERLAY_ROWS
 
-## Real measured Y ranges (art pixels of the SOURCE sheet, half-open [a, b))
-## for each of the sheet's 5 rows -- NOT an even 1086/5 (217.2px) grid.
+## A dusting must let its ground through; full cover must not, for EVERY one
+## of the ten shape variants a tile might draw at that depth (see
+## variant_for) -- not just one column, since which variant a given tile
+## shows is now a real per-tile choice rather than always the sheet's first.
 ##
-## The sheet is a contact sheet with a ~3-6px near-opaque near-white DIVIDER
-## LINE baked in between rows (a generation artifact, not intended snow
-## texture), and those lines sit at increasingly early offsets the deeper
-## into the sheet you go -- measured directly (a full-width/min-across-all-
-## 5-columns alpha scan, since a real divider spans every column
-## simultaneously while real snow content only lights up individual cells):
-## the row0/row1 divider centers at y~208.5, row1/row2 at y~416.5, row2/row3
-## at y~624, row3/row4 at y~831 -- versus a naive 217.2px-per-row grid, which
-## would put those dividers 9 / 18 / 28 / 38px LATER and slice a crop
-## boundary right through the middle of each one. Using a naive uniform grid
-## here bakes a stray light border line into a sliced tile and crops away
-## real content from the row below the divider. Each band below stops with a
-## few pixels of margin clear of its neighbouring divider's own antialiased
-## fade (measured: alpha is already back under 0.05 a few pixels past every
-## boundary printed above).
-const OVERLAY_ROW_BANDS: Array[Vector2i] = [
-	Vector2i(5, 205), Vector2i(213, 412), Vector2i(421, 619), Vector2i(629, 826), Vector2i(836, 1079)
-]
-
-## Real measured X ranges for each of the sheet's 5 columns -- much closer to
-## an even 1448/5 (289.6px) grid than the rows are (measured column divider
-## centers: x~291, ~579, ~867.5, ~1156, all within 2px of the naive
-## floor-based boundaries), but still given as measured bands rather than
-## computed, so a column crop never straddles its own divider line either.
-const OVERLAY_COLUMN_BANDS: Array[Vector2i] = [
-	Vector2i(5, 288), Vector2i(294, 577), Vector2i(583, 865), Vector2i(871, 1153), Vector2i(1160, 1442)
-]
-
-## Which (column, row) sheet cell each depth band draws, ascending from
-## least to most coverage.
-##
-## NOT row-major, and not the "frame 0 = top-left, frame 24 = bottom-right"
-## reading order a contact sheet might suggest at a glance: the sheet's real
-## mean coverage increases along BOTH axes AT ONCE, a genuine diagonal
-## gradient rather than a left-to-right-then-wrap one -- row 0's own
-## rightmost cell (col 4) already reads MORE covered (mean alpha 0.22) than
-## row 1's own leftmost cell (col 0, mean alpha 0.06), so naively reading the
-## sheet row-major would make band 5 LESS covered than band 4, breaking
-## band_for's whole contract (more depth never gets a shallower band -- see
-## test_deeper_snow_is_whiter). Measured directly instead: mean alpha of
-## every one of the 25 real cropped cells (see _cropped_cell), sorted
-## strictly ascending (confirmed strictly monotonic, no ties, and mean
-## whiteness*alpha sorts to the identical order) -- least-covered
-## (row 0, col 0, mean alpha ~0.01) through fullest (row 4, col 4, mean alpha
-## ~0.92).
-const OVERLAY_BAND_CELLS: Array[Vector2i] = [
-	Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(0, 1), Vector2i(1, 1),
-	Vector2i(3, 0), Vector2i(0, 2), Vector2i(2, 1), Vector2i(4, 0), Vector2i(1, 2),
-	Vector2i(0, 3), Vector2i(3, 1), Vector2i(2, 2), Vector2i(4, 1), Vector2i(1, 3),
-	Vector2i(3, 2), Vector2i(0, 4), Vector2i(2, 3), Vector2i(4, 2), Vector2i(1, 4),
-	Vector2i(3, 3), Vector2i(2, 4), Vector2i(4, 3), Vector2i(3, 4), Vector2i(4, 4),
-]
-
-## A dusting must let its ground through; full cover must not.
-##
-## Re-derived for the real illustrated sheet (was 0.35 / 0.99 against the old
-## procedural bands' own 0.28 / 1.00): the real least-covered cell (row 0,
-## col 0) measures mean alpha ~0.010 -- far more transparent than the old
-## procedural dusting ever was, because it is real hand-illustrated frost
-## rather than a coverage-percentage dither, so the ceiling drops with it.
-## The real fullest cell (row 4, col 4) measures mean alpha ~0.922 -- short
-## of the old bands' literal 1.00 (those were painted fully opaque by
-## construction), but still comfortably "buries the ground" in the sense
-## this test cares about, so the floor drops to match. Both given margin
-## either side of their measured value for the Lanczos resize's own small
-## averaging effect (see build_band_image).
+## Re-derived for the new sheet (was 0.06 / 0.80 against the old 5x5 sheet's
+## own single least/fullest CELL, ~0.010 / ~0.922): measured directly across
+## every one of the ten built variants of row 0 and row 9 through the real
+## build_band_image path (crop + Lanczos resize to ART_TILE_SIZE, the same
+## pipeline a painted tile actually uses), not assumed from the raw sheet's
+## row means, since the resize itself measurably shifts mean alpha. Row 0's
+## ten built variants measure 0.0148-0.0554 (max 0.0554); row 9's measure
+## 0.3381-0.5163 (min 0.3381) -- a real per-variant spread wider than the old
+## sheet ever had to account for, since the old constants only ever had to
+## clear ONE fixed cell's value rather than the worst of ten. Both thresholds
+## sit with real margin outside their respective measured range (see
+## test_a_dusting_lets_the_ground_show_through_and_full_cover_does_not, which
+## checks every variant, not just one).
 const DUSTING_MAX_MEAN_ALPHA := 0.06
-const FULL_COVER_MIN_MEAN_ALPHA := 0.80
+const FULL_COVER_MIN_MEAN_ALPHA := 0.32
 
 ## How much a fully trodden tile drops in depth, as a fraction of
 ## DEPTH_BANDS rather than a literal band count.
@@ -120,48 +88,59 @@ const FULL_COVER_MIN_MEAN_ALPHA := 0.80
 ## through a field, not as a trench dug to the soil. Only where the cover was
 ## thin to begin with does a boot reach the ground. The ORIGINAL intent was a
 ## literal `2.0` out of DEPTH_BANDS=4 -- half the visible depth range packed
-## down by a full tread. A literal `2.0` left unchanged at DEPTH_BANDS=25
-## would only drop 2/25 = 8% of the range, a much weaker footprint than
-## before purely because the band count grew, not because the intended
-## packing amount changed. Expressing it as a fraction of DEPTH_BANDS instead
-## preserves the same "packs down about half the visible range" behaviour at
-## any band count -- confirmed by test_a_footprint_in_a_dusting_shows_the_
-## ground and test_a_single_pass_does_not_clear_deep_snow, which both still
-## pass unchanged at DEPTH_BANDS=25 because the ratio, not the literal
-## number, is what those tests actually depend on.
+## down by a full tread. Left as a bare literal, that intent would silently
+## drift every time DEPTH_BANDS changed for an unrelated reason (25, now 10)
+## -- expressing it as a fraction of DEPTH_BANDS instead preserves the same
+## "packs down about half the visible range" behaviour at ANY band count.
+## Still the right formula at DEPTH_BANDS=10 (`TREAD_BANDS` = 5.0, half of
+## 10) for the exact same reason it was still right at 25 -- confirmed by
+## test_a_footprint_in_a_dusting_shows_the_ground and
+## test_a_single_pass_does_not_clear_deep_snow, both still passing unchanged
+## because the ratio, not the literal number, is what those tests depend on.
 const TREAD_BANDS := float(DEPTH_BANDS) / 2.0
 
-## The tile set: one tile per depth band.
+## The tile set: one tile per (depth band, shape variant) pair -- a real 2D
+## atlas now, not the old 1D strip. The old 5x5 sheet had one visual per
+## depth band; this one has OVERLAY_COLUMNS (10) real illustrated shapes at
+## EACH of the DEPTH_BANDS (10) depths, so build_tile_set produces
+## DEPTH_BANDS * OVERLAY_COLUMNS = 100 tile images, atlas-addressed at
+## Vector2i(band, variant) to match how EarthChunkManager._paint_snow_tile
+## calls set_cell (band decided by band_for, variant by variant_for).
 func build_tile_set() -> TileSet:
 	var art := TerrainRenderer.ART_TILE_SIZE
-	var sheet := Image.create(DEPTH_BANDS * art, art, false, Image.FORMAT_RGBA8)
+	var sheet := Image.create(DEPTH_BANDS * art, OVERLAY_COLUMNS * art, false, Image.FORMAT_RGBA8)
 	for band in DEPTH_BANDS:
-		sheet.blit_rect(
-			build_band_image(band), Rect2i(0, 0, art, art), Vector2i(band * art, 0)
-		)
+		for variant in OVERLAY_COLUMNS:
+			sheet.blit_rect(
+				build_band_image(band, variant), Rect2i(0, 0, art, art),
+				Vector2i(band * art, variant * art)
+			)
 	var source := TileSetAtlasSource.new()
 	source.texture = ImageTexture.create_from_image(sheet)
 	source.texture_region_size = Vector2i(art, art)
 	for band in DEPTH_BANDS:
-		source.create_tile(Vector2i(band, 0))
+		for variant in OVERLAY_COLUMNS:
+			source.create_tile(Vector2i(band, variant))
 	var tile_set := TileSet.new()
 	tile_set.tile_size = Vector2i(art, art)
 	tile_set.add_source(source, 0)
 	return tile_set
 
 
-## One band's tile: a real square crop of OVERLAY_PATH's matching cell,
-## downscaled to ART_TILE_SIZE.
+## One (band, variant) tile: a real crop of OVERLAY_PATH's matching cell,
+## downscaled to ART_TILE_SIZE. `variant` defaults to 0 so existing call
+## sites that only care about depth (most of test_snow_layer.gd's art
+## assertions) don't have to pass one.
 ##
 ## Replaces the old per-pixel procedural paint (noise-picked coverage mask +
 ## per-block grain + a flat blue-white shade curve) entirely -- the real
-## sheet's own pixels already carry coverage, grain and a faint blue tint
-## (see the sheet's own doc comment on OVERLAY_BAND_CELLS), so there is
-## nothing left for a synthetic mask to add. See build_tile_set for why this
-## being called 25 times is still a one-time cost, not a runtime one.
+## sheet's own pixels already carry coverage, grain and a faint blue tint, so
+## there is nothing left for a synthetic mask to add. See build_tile_set for
+## why this being called 100 times is still a one-time cost, not a runtime
+## one.
 ##
 ## Lanczos, not nearest-neighbour, for the downscale: this is shrinking a
-## ~200px source crop down to ART_TILE_SIZE (32 at the current
+## ~125px source crop down to ART_TILE_SIZE (32 at the current
 ## DETAIL_MULTIPLIER), the same direction IllustratedTerrainSprite/
 ## TerrainRenderer._normalized_for_compositing already establishes Lanczos
 ## for in this exact codebase -- nearest-neighbour is the right call for
@@ -171,11 +150,11 @@ func build_tile_set() -> TileSet:
 ## measured, reported bug that convention fixed). This snow art is exactly
 ## the kind of fine illustrated detail (lumpy cloud-shaped patches) that bug
 ## was about.
-func build_band_image(band: int) -> Image:
+func build_band_image(band: int, variant: int = 0) -> Image:
 	var art := TerrainRenderer.ART_TILE_SIZE
-	var clamped := clampi(band, 0, DEPTH_BANDS - 1)
-	var cell: Vector2i = OVERLAY_BAND_CELLS[clamped]
-	var cropped := _cropped_cell(cell.x, cell.y)
+	var clamped_band := clampi(band, 0, DEPTH_BANDS - 1)
+	var clamped_variant := clampi(variant, 0, OVERLAY_COLUMNS - 1)
+	var cropped := _cropped_cell(clamped_variant, clamped_band)
 	if cropped.get_format() != Image.FORMAT_RGBA8:
 		cropped.convert(Image.FORMAT_RGBA8)
 	cropped.resize(art, art, Image.INTERPOLATE_LANCZOS)
@@ -195,24 +174,57 @@ func _overlay_sheet() -> Image:
 	return _overlay_sheet_image
 
 
-## A real, square, border-free crop of sheet cell (column, row) -- the
-## largest square that fits centered within that cell's own measured content
-## band (OVERLAY_ROW_BANDS x OVERLAY_COLUMN_BANDS), which is itself already
-## clear of the sheet's own divider lines (see those constants' own doc
-## comments). The source cell is a landscape rectangle (~283px wide x
-## ~200-243px tall), not a square, so this crops to a centered square rather
-## than stretching non-uniformly onto ART_TILE_SIZE's own square canvas,
-## which would squash every illustrated patch shape sideways.
+## A real crop of sheet cell (column, row) -- no centered-square cropping or
+## divider avoidance needed, unlike the OLD 5x5 sheet's own `_cropped_cell`
+## (see OVERLAY_COLUMNS' own doc comment): this sheet's cells are ALREADY an
+## exact 125.4 x 125.4 square grid (1254px / 10), confirmed by the same
+## min-alpha-across-every-row/column sweep that originally found the old
+## sheet's divider lines -- that sweep finds nothing on this one. Cell
+## boundaries are nearest-integer-rounded rather than floored, so the ten
+## cells across a dimension partition it exactly with no 1px gap or overlap
+## anywhere (125.4 does not divide evenly, so a few cells are 125px and a few
+## 126px; get_region needs an int rect regardless).
 func _cropped_cell(column: int, row: int) -> Image:
-	var row_band: Vector2i = OVERLAY_ROW_BANDS[row]
-	var column_band: Vector2i = OVERLAY_COLUMN_BANDS[column]
-	var height := row_band.y - row_band.x
-	var width := column_band.y - column_band.x
-	var side := mini(width, height)
-	var center_x := (column_band.x + column_band.y) / 2
-	var center_y := (row_band.x + row_band.y) / 2
-	var rect := Rect2i(center_x - side / 2, center_y - side / 2, side, side)
-	return _overlay_sheet().get_region(rect)
+	var sheet := _overlay_sheet()
+	var cell_width := float(sheet.get_width()) / float(OVERLAY_COLUMNS)
+	var cell_height := float(sheet.get_height()) / float(OVERLAY_ROWS)
+	var x0 := int(round(column * cell_width))
+	var x1 := int(round((column + 1) * cell_width))
+	var y0 := int(round(row * cell_height))
+	var y1 := int(round((row + 1) * cell_height))
+	return sheet.get_region(Rect2i(x0, y0, x1 - x0, y1 - y0))
+
+
+## Which of OVERLAY_COLUMNS illustrated shape variants a tile draws at its
+## own depth band -- a SEPARATE axis from band_for's coverage decision (see
+## OVERLAY_COLUMNS' own doc comment for why the sheet has one at all): band
+## says how MUCH snow, variant says which real illustrated SHAPE draws it, so
+## neighbouring tiles at the same depth don't all show the identical blob.
+##
+## Deliberately NOT sampled like onset_offset_for's smooth drift field.
+## Onset has to be low-frequency (see that function's own doc comment: a
+## per-tile-independent onset checkerboarded the tile grid), because it
+## drives a THRESHOLD decision where two neighbours landing on opposite
+## sides of a boundary is the bug. Variant drives no threshold -- it is
+## cosmetic shape choice at a FIXED depth -- so it has no such coherence
+## requirement, and in fact wants the opposite: two edge-adjacent tiles at
+## the same depth SHOULD often show different shapes, since that variety is
+## the entire reason this axis exists (see
+## test_neighbouring_tiles_often_show_different_variants). Uses
+## PixelNoise.range_index, built on `unit` -- PixelNoise's genuinely
+## per-cell-independent form (see `smooth`'s own doc comment: "unlike
+## `unit`'s per-pixel scatter"), the opposite of the smooth field onset
+## needs.
+##
+## Seeded from GLOBAL tile coordinates, the same convention onset_offset_for
+## uses, so the pattern neither repeats nor seams at a chunk boundary, and is
+## a pure, deterministic function of the tile's own coordinates for its whole
+## loaded lifetime -- cached the same way onset is (see
+## EarthChunkManager._snow_variant_by_tile).
+const _VARIANT_SALT := 7727
+
+func variant_for(global_x: int, global_y: int) -> int:
+	return PixelNoise.range_index(_VARIANT_SALT, global_x, global_y, OVERLAY_COLUMNS)
 
 
 ## How far a tile's own snow onset can lead or lag the field's overall
@@ -247,6 +259,11 @@ func _cropped_cell(column: int, row: int) -> Image:
 ## sheet's 25 real gradient steps, reading as an even richer spread, not a
 ## broken one -- see MAX_NEIGHBOUR_ONSET_STEP below for the constant that
 ## DID need re-deriving for the new band count.
+##
+## Still true at the current DEPTH_BANDS=10 (the sheet changed again, see
+## OVERLAY_COLUMNS' own doc comment, but onset_offset_for below reads none of
+## DEPTH_BANDS/OVERLAY_COLUMNS/OVERLAY_ROWS -- literally the same field either
+## way): confirmed by re-running every onset test in this file unchanged.
 const ONSET_VARIANCE := 0.18
 const _ONSET_SALT := 5303
 
@@ -353,6 +370,20 @@ const ONSET_FINE_DRIFT_TILES := 2.0
 ## than first estimated) margin over that fresh measurement -- re-verify
 ## this margin if ONSET_FINE_VARIANCE or ONSET_FINE_DRIFT_TILES ever change
 ## again, since it is closer to the ceiling than the first pass assumed.
+##
+## Re-checked, not just re-scaled, for the DEPTH_BANDS 25 -> 10 asset change:
+## a band is now 0.1 wide (was 0.04), a much coarser grid, so it would be
+## tempting to assume this constant needs to grow with it. It does not --
+## onset_offset_for reads no DEPTH_BANDS-derived value at all, so the real
+## field this bounds is byte-for-byte unchanged, and re-running the exact
+## same sweep test_neighbouring_tiles_have_nearly_the_same_onset already uses
+## still measures the identical worst case, 0.0612. 0.0612 against a 0.1-wide
+## band is a bigger FRACTION of one band than it was against 0.04 (roughly
+## 0.6 of a band now, versus 1.53 of the old finer ones) -- coarser bands
+## mean a given absolute onset spread now covers proportionally MORE of one
+## band, not less, which is the opposite direction a naive ratio-rescale
+## would have moved this constant. Left at 0.07: still real margin over the
+## unchanged 0.0612 measurement, and still nowhere near a whole-band jump.
 const MAX_NEIGHBOUR_ONSET_STEP := 0.07
 
 

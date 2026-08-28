@@ -11,6 +11,7 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
+const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
@@ -5322,21 +5323,56 @@ func test_a_partial_snowfall_paints_a_mix_of_bare_and_covered_tiles_not_one_unif
 	snow_layer.free()
 
 
+## The new sheet's COLUMN axis is a real per-tile shape VARIANT, a separate
+## thing from the depth band (see SnowLayer.OVERLAY_COLUMNS's own doc
+## comment) -- painted tiles must actually carry it in atlas coord .y, not
+## just always draw column 0. Depth is pinned to full cover (1.0) so every
+## land tile is painted regardless of its own onset lead/lag, isolating the
+## variant axis from the band axis this test isn't about.
+func test_painted_snow_tiles_carry_a_real_per_tile_variant():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.update(_berlin_tile)
+	manager.set_snow_depth(1.0)
+
+	var reference := SnowLayer.new()
+	var variants_seen := {}
+	var checked := 0
+	for cell in snow_layer.get_used_cells():
+		if manager.biome_at_global(cell.x, cell.y) == "ocean":
+			continue
+		var atlas := snow_layer.get_cell_atlas_coords(cell)
+		assert_eq(
+			atlas.y, reference.variant_for(cell.x, cell.y),
+			"painted variant at %s does not match SnowLayer.variant_for" % [cell]
+		)
+		variants_seen[atlas.y] = true
+		checked += 1
+	assert_gt(checked, 0, "precondition: at least one land tile was painted")
+	assert_gt(
+		variants_seen.size(), 1,
+		"every painted tile drew the same variant (%s) -- the manager isn't wiring variant_for at all" % [variants_seen]
+	)
+	snow_layer.free()
+
+
 ## A companion regression to the mix test above: the whole-field repaint used
 ## to fire only when the (onset-FREE) tracked band crossed a DEPTH_BANDS
-## boundary (4 of them, back when SnowLayer.DEPTH_BANDS was 4 -- now 25, see
-## that constant's own doc comment), so within a single band's depth range --
-## easily a third of a whole snowfall at 4 bands -- NOTHING repainted at all,
-## no matter how far the global depth kept climbing. Measured live before
-## this test existed: coverage sat flat at the exact same percentage from
-## depth 0.02 clear through depth 0.25, then jumped straight to 100% at depth
-## 0.5 -- the "instant reveal" bug again, just moved to a coarser timescale.
-## More land tiles must show snow at a later depth than an earlier one even
-## when both fall inside the same depth band (at DEPTH_BANDS=25 the two
-## depths this test picks now straddle a couple of the much finer band
-## boundaries rather than sharing one wide band outright, but the property
-## under test -- coverage is never flat between two depths a repaint-gate bug
-## could otherwise merge -- is exactly the same regression check either way).
+## boundary (4 of them, back when SnowLayer.DEPTH_BANDS was 4 -- since raised
+## to 25, then deliberately dropped to today's 10 when the sheet itself
+## changed again, see that constant's own doc comment for why), so within a
+## single band's depth range -- easily a third of a whole snowfall at 4 bands
+## -- NOTHING repainted at all, no matter how far the global depth kept
+## climbing. Measured live before this test existed: coverage sat flat at the
+## exact same percentage from depth 0.02 clear through depth 0.25, then
+## jumped straight to 100% at depth 0.5 -- the "instant reveal" bug again,
+## just moved to a coarser timescale. More land tiles must show snow at a
+## later depth than an earlier one even when both fall inside the same depth
+## band (at the current, much finer DEPTH_BANDS the two depths this test
+## picks now straddle a couple of band boundaries rather than sharing one
+## wide band outright, but the property under test -- coverage is never flat
+## between two depths a repaint-gate bug could otherwise merge -- is exactly
+## the same regression check regardless of the current band count).
 func test_snow_coverage_advances_within_a_single_depth_band_not_only_at_band_crossings():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
@@ -5365,9 +5401,11 @@ func test_snow_coverage_advances_within_a_single_depth_band_not_only_at_band_cro
 ##
 ## Depth ~0.55 is chosen so the leading (onset=+0.18) and lagging (onset=-0.18)
 ## tiles land on opposite sides of a texture-band boundary by SnowLayer's own
-## math: lying=0.37 -> band 9, lying=0.73 -> band 18 (SnowLayer.band_for at
-## DEPTH_BANDS=25). +/-0.18 is still onset_offset_for's total range -- it is
-## now reached by summing a broad + a fine PixelNoise layer instead of one.
+## math: lying=0.37 -> band 3, lying=0.73 -> band 7 (SnowLayer.band_for at the
+## current DEPTH_BANDS=10; was band 9 / band 18 at the interim DEPTH_BANDS=25
+## -- still two different bands either way, which is all this test's own
+## assertion actually checks). +/-0.18 is still onset_offset_for's total
+## range -- it is reached by summing a broad + a fine PixelNoise layer.
 func test_a_realistic_step_snow_driven_snowfall_paints_more_than_one_non_bare_band():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)

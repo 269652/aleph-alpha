@@ -142,22 +142,64 @@ pixel grid is a dither, i.e. static.
 
 **Each tile's own cover is now real illustrated art, not a procedural mask, so
 those two rules are inherited from the source pixels rather than enforced by
-this layer.** `SnowLayer.build_band_image` slices a real cell out of a 5x5
-illustrated contact sheet (`assets/sprites/terrain/snowoverlay.png`, 25
-hand/AI-illustrated coverage stages) instead of painting a synthetic mask --
-the real art's own alpha and colour already carry translucency at the shallow
-end and grain throughout, so `BAND_ALPHA`/`BAND_COVERAGE`/`BAND_WHITENESS`/
-`GRAIN_BLOCK` are gone, not merely superseded. `SnowLayer.DEPTH_BANDS` is now
-the sheet's own real frame count (25, up from 4 hand-picked procedural bands),
-so an individual tile's own transition through cover is a real 25-rung
-gradient rather than a hard 4-rung ladder -- closing the one gap left open
-after the field-level spreading fix below: the FIELD already filled in tile by
-tile, but each tile's OWN visible jump between its own successive states was
-still a hard cut. The sheet's real coverage does not read row-major (row 0's
-own rightmost cell already measures more covered than row 1's own leftmost
-cell -- a genuine two-axis gradient, not a left-to-right-then-wrap one), so
-`SnowLayer.OVERLAY_BAND_CELLS` maps each depth band to its sheet cell in real
-measured ascending-coverage order rather than assumed reading order.
+this layer.** `SnowLayer.build_band_image` slices a real cell out of an
+illustrated contact sheet (`assets/sprites/terrain/snowoverlay.png`) instead
+of painting a synthetic mask -- the real art's own alpha and colour already
+carry translucency at the shallow end and grain throughout, so
+`BAND_ALPHA`/`BAND_COVERAGE`/`BAND_WHITENESS`/`GRAIN_BLOCK` are gone, not
+merely superseded.
+
+**The sheet itself has since been replaced a second time, and the two sheets'
+own grids meant two different things.** The first illustrated sheet was a 5x5
+contact sheet where all 25 cells were distinct coverage stages, so
+`SnowLayer.DEPTH_BANDS` was `OVERLAY_COLUMNS * OVERLAY_ROWS`, and reading it
+needed a measured, non-row-major `OVERLAY_BAND_CELLS` map (that sheet's real
+coverage climbed along BOTH axes diagonally, not left-to-right-then-wrap) plus
+measured `OVERLAY_ROW_BANDS`/`OVERLAY_COLUMN_BANDS` crop rectangles to dodge
+real near-opaque divider lines baked into the contact sheet as a generation
+artifact. The current sheet is a clean 10x10 grid with no divider artifacts at
+all (confirmed by the same min-alpha sweep that found the old dividers, this
+time finding nothing), and its two axes are NOT interchangeable the way the
+old sheet's were: ROW is coverage/depth (mean alpha climbs substantially and
+monotonically row 0 -> row 9), while COLUMN is a genuinely separate
+hand/AI-illustrated shape VARIANT at roughly that same depth -- real spread
+exists within a row, but it does not trend column to column the way rows do,
+it is shape variety rather than a second gradient. `SnowLayer.DEPTH_BANDS` is
+therefore `OVERLAY_ROWS` alone (10), not the product of both axes -- a real,
+deliberate drop from 25 depth bands to 10, since a variant is a different
+PICTURE of the same depth rung rather than a finer one. `OVERLAY_BAND_CELLS`,
+`OVERLAY_ROW_BANDS`, and `OVERLAY_COLUMN_BANDS` are gone along with it: the
+new sheet's cells are an exact, already-square 125.4x125.4 grid, so
+`_cropped_cell` just partitions the sheet by column and row directly.
+
+**The ten-way coarsening trades DEPTH granularity for real per-tile VARIETY,
+which the coarsening does not cost.** `SnowLayer.variant_for(global_x,
+global_y)` picks which of the ten shapes a given tile draws, independently of
+which depth band it is in, so two neighbouring tiles at the same coverage no
+longer always show the identical blob -- something the 25-single-picture-per-
+band sheet could never do regardless of its finer depth ladder. Deliberately
+NOT built like `onset_offset_for`'s smooth drift field: onset has to be
+low-frequency because it feeds a THRESHOLD decision (two neighbours on
+opposite sides of a boundary is the checkerboard bug, see below), while
+variant drives no threshold at all -- it is a cosmetic shape choice at a fixed
+depth, so neighbouring tiles SHOULD often disagree, which is the entire point
+of having ten pictures. It samples `PixelNoise.range_index` (built on `unit`,
+the genuinely per-cell-independent form the codebase already has, as opposed
+to `smooth`'s deliberately correlated one) rather than reusing onset's
+machinery. `EarthChunkManager._paint_snow_tile` caches each tile's own variant
+the same way and for the same reason it already caches onset
+(`_snow_variant_by_tile`, alongside `_snow_onset_by_tile`), and paints it into
+the second half of the tile's atlas coordinate: `set_cell(tile, 0,
+Vector2i(band, variant))`, against a real 2D `DEPTH_BANDS * OVERLAY_COLUMNS`
+(100-tile) atlas from `build_tile_set` rather than the old 1D strip.
+
+The two onset noise layers below and the new variant axis solve genuinely
+different problems and both stay: onset decides WHICH DEPTH BAND a tile shows
+relative to the field's shared coverage number (so a snowfall spreads tile by
+tile rather than everyone crossing together), while variant decides WHICH
+PICTURE draws that band once chosen -- turning off either one reintroduces a
+different flatness (a synchronized field, or every tile at a given depth
+looking identical), not the same bug twice.
 
 **It fills in tile by tile, not the whole field at once.** A single lying-snow
 DEPTH still drives the whole snowfall -- one clock, one number, exactly as
@@ -242,6 +284,21 @@ fresh measurement. (An initially-reported 0.0581 for this figure did not
 reproduce on independent re-verification the same day; 0.0612 is the real,
 deterministically-reproducible number, confirmed three times over.)
 
+**Re-checked, not re-tuned, when `DEPTH_BANDS` dropped 25 -> 10.**
+`onset_offset_for` reads neither `DEPTH_BANDS` nor either `OVERLAY_*`
+constant, so the field this whole section describes is byte-for-byte
+unchanged by the sheet replacement above -- re-running the exact same
+neighbour-step sweep still measures the identical 0.0612 worst case, and
+`MAX_NEIGHBOUR_ONSET_STEP` stays `0.07`. What DID change is how many bands
+that unchanged field's spread now falls across: a 24x24 window's worst-case
+distinct-band count dropped from 5 to 2 (same sweep, same swath, same origin
+`(-42, -48)`), simply because there are fewer bands total to land in, not
+because the onset field lost any texture. The local-window test's own
+threshold moved from "more than 3 distinct bands" to "more than 1" for
+exactly that reason -- see `SnowLayer`'s own doc comments on
+`MAX_NEIGHBOUR_ONSET_STEP` and the test's own comment in
+`test_snow_layer.gd` for the full reasoning.
+
 **The repaint itself has to happen often enough to show that mix changing.**
 Onset variance alone was not sufficient: the whole-field repaint that
 actually pushes new pixels to the tile layer only fired when the tracked
@@ -325,11 +382,22 @@ should reflect its own change right away.
   `SnowLayer.build_band_image`) whose own translucency and grain replace the
   old procedural mask entirely, pinned against the real sheet's measured mean
   alpha (`DUSTING_MAX_MEAN_ALPHA`/`FULL_COVER_MIN_MEAN_ALPHA`).
-- ✅ A tile's own transition fades through 25 real illustrated steps instead
-  of hard-cutting between 4 procedural ones — `SnowLayer.DEPTH_BANDS` is now
-  the illustrated sheet's own real frame count (`OVERLAY_COLUMNS *
-  OVERLAY_ROWS`), each band a real measured-ascending-coverage cell
-  (`OVERLAY_BAND_CELLS`) rather than a hand-picked shade curve; tested.
+- ✅ A tile's own transition fades through real illustrated depth steps
+  instead of hard-cutting between hand-picked procedural bands —
+  `SnowLayer.DEPTH_BANDS` is the illustrated sheet's own real ROW count
+  (`OVERLAY_ROWS`, currently 10, after a second asset replacement dropped it
+  from an interim 25 — see the narrative above for why row-count, not
+  row*column, is the right number for the current sheet's two independent
+  axes); tested.
+- ✅ Real per-tile shape VARIETY at a fixed depth, not just one picture per
+  band — `SnowLayer.variant_for` picks one of `OVERLAY_COLUMNS` (10)
+  illustrated shapes per tile, seeded off its global coordinates and
+  deliberately NOT smoothed (unlike onset, a shape choice has no coherence
+  requirement — see `variant_for`'s own doc comment), tested for bounds,
+  determinism, and real per-tile disagreement; wired in
+  `EarthChunkManager._paint_snow_tile` via `Vector2i(band, variant)` atlas
+  coordinates and cached per tile (`_snow_variant_by_tile`) the same way
+  onset already is.
 - ✅ Per-tile onset variance, so a field fills in as a visible spread rather
   than snapping everywhere at once — `SnowLayer.ONSET_VARIANCE`/
   `onset_offset_for`/`band_for`, tested; wired in
