@@ -546,6 +546,28 @@ func test_a_chunks_butterflies_spawn_as_one_club_the_layout_module_placed():
 				assert_lte(a.distance_to(b), Courtship.NOTICE_RADIUS_PX + 0.001)
 
 
+## A club that all whirled on the same frame and then all fell silent
+## together would read as choreography (see SpiralFlight.stagger_seconds).
+## The renderer is what knows a flyer is one of a chunk's freshly-loaded many;
+## a marker built by hand in a test is not staggered at all.
+func test_a_freshly_spawned_club_is_staggered_not_synchronised():
+	var cooldowns := {}
+	var butterflies := 0
+	for x in 10:
+		for flyer in _spawn_grassland_at(Vector2i(x * CHUNK_SIZE, GERMANY_ROW)):
+			if not AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL.has(flyer.species):
+				continue
+			butterflies += 1
+			assert_lt(flyer._spiral_cooldown, SpiralFlight.COOLDOWN_SECONDS)
+			assert_gte(flyer._spiral_cooldown, 0.0)
+			cooldowns[snappedf(flyer._spiral_cooldown, 0.5)] = true
+	assert_gt(butterflies, 10, "precondition: ten German chunks hold a few dozen butterflies")
+	assert_gt(cooldowns.size(), 5, "a meadow must not be choreographed")
+
+
+const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
+
+
 ## Bees deliberately do NOT club up: a honeybee commutes from a hive and works
 ## the whole meadow, and turning the buzz into one knot would be wrong about
 ## the animal as well as making the meadow look staged.

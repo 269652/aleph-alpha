@@ -119,6 +119,26 @@ static func spirals(species: String) -> bool:
 	return SPIRALLING_SPECIES.has(species)
 
 
+## How long after spawning this flyer is first willing to whirl.
+##
+## Every butterfly in a chunk comes into existence on the same frame, so
+## without this a whole club whirls together, falls silent for exactly
+## COOLDOWN_SECONDS together, and whirls together again -- a choreographed
+## meadow, which is the same complaint already logged against pollinator
+## routing ("not all bees and butterflies fly the same route following each
+## other").
+##
+## Uniform over the cooldown is not a fudge to break up the pattern: it is
+## the stationary distribution of "this butterfly last whirled at some point
+## in the past cycle", which is the truth about an animal that did not begin
+## existing when the chunk loaded. Applied by AmbientFlyerRenderer, which is
+## what knows a flyer is one of a chunk's freshly-loaded many -- a marker
+## built by hand (a diorama, a test) is deliberately not staggered.
+static func stagger_seconds(seed_value: int) -> float:
+	var unit := float(absi(hash("%d_spiral_stagger" % seed_value)) % 10000) / 10000.0
+	return unit * COOLDOWN_SECONDS
+
+
 ## Whether these two will whirl at each other. CROSS-SPECIES on purpose --
 ## unlike Courtship.can_court, which is same-kind-only because a monarch and a
 ## swallowtail share a meadow and not a lineage. They do very much chase each

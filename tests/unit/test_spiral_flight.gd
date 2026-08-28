@@ -246,6 +246,31 @@ func test_the_pair_converge_from_wherever_they_happened_to_meet():
 ## nothing downstream can turn one into an offspring even by mistake -- the
 ## population bound lives entirely in Courtship/LifeCycle and this behaviour
 ## is free to be as common as the real thing precisely because it is inert.
+## Every butterfly in a chunk loads at the same instant, so without a stagger
+## a whole club whirls on one frame, falls silent for exactly
+## COOLDOWN_SECONDS together, and whirls together again -- a choreographed
+## meadow, the same complaint already logged against pollinator routing ("not
+## all bees and butterflies fly the same route following each other").
+##
+## Uniform over the cooldown is not a fudge: it is the stationary
+## distribution of "this butterfly last whirled at some point in the past
+## cycle", which is the truth about an animal that did not come into
+## existence when the chunk loaded.
+func test_a_freshly_loaded_club_does_not_whirl_in_lockstep():
+	var seen := {}
+	for seed_value in 200:
+		var stagger := SpiralFlight.stagger_seconds(seed_value)
+		assert_gte(stagger, 0.0)
+		assert_lt(stagger, SpiralFlight.COOLDOWN_SECONDS)
+		seen[snappedf(stagger, 0.5)] = true
+	assert_gt(seen.size(), 20, "the stagger has to actually spread them out")
+
+
+func test_the_stagger_is_deterministic_per_flyer():
+	assert_eq(SpiralFlight.stagger_seconds(77), SpiralFlight.stagger_seconds(77))
+	assert_ne(SpiralFlight.stagger_seconds(77), SpiralFlight.stagger_seconds(78))
+
+
 func test_nothing_here_can_produce_offspring():
 	var module = SpiralFlight.new()
 	for forbidden in ["mates", "pair_seed", "leads"]:

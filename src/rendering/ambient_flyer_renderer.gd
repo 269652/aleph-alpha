@@ -339,12 +339,18 @@ func _spawn_species(
 
 	var spawned: Array[Node2D] = []
 	for placement in placements:
-		spawned.append(
-			_build_marker(
-				parent, placement[1], placement[0], placement[2],
-				movement, sprite_generator, scent_world
-			)
+		var marker := _build_marker(
+			parent, placement[1], placement[0], placement[2],
+			movement, sprite_generator, scent_world
 		)
+		# A chunk's flyers all come into existence on the same frame; without
+		# this the whole club whirls together and falls silent together (see
+		# SpiralFlight.stagger_seconds). Applied here rather than in the marker
+		# because being one of a chunk's freshly-loaded many is a fact only the
+		# spawn pass knows -- a bird placed by hand in the diorama, or a marker
+		# built in a test, is left ready to go.
+		marker.stagger_first_spiral(placement[2])
+		spawned.append(marker)
 	return spawned
 
 

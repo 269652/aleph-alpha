@@ -1000,6 +1000,15 @@ func set_adult_scale(full_size: Vector2) -> void:
 	_adult_scale = full_size
 
 
+## Starts this flyer part-way through its spiral-flight cooldown, so a chunk's
+## whole club does not whirl on the same frame and then fall silent together
+## (see SpiralFlight.stagger_seconds). Called by AmbientFlyerRenderer for
+## flyers spawned as one of a chunk's many; a marker placed by hand is
+## deliberately left ready to go.
+func stagger_first_spiral(seed_value: int) -> void:
+	_spiral_cooldown = SpiralFlight.stagger_seconds(seed_value)
+
+
 ## Starts this flyer at the beginning of its life rather than as an adult --
 ## what separates something BORN in front of the player from the adults the
 ## world seeds a meadow with.

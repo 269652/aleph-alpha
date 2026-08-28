@@ -828,6 +828,14 @@ Bees and songbirds keep the old scatter, deliberately: a honeybee commutes
 from a hive and works a whole meadow, and songbirds hold territories rather
 than clubs. Only the butterflies club up.
 
+A club is **not choreographed**. Every butterfly in a chunk comes into
+existence on the same frame, so each starts part-way through its own
+spiral-flight cooldown — uniformly, which is the stationary distribution of
+"this one last whirled at some point in the past cycle" and therefore the
+truth about an animal that did not begin existing when the chunk loaded.
+Without it a whole club would whirl on one frame, go silent together, and
+whirl together again.
+
 
 ## Courtship, and where births come from
 
