@@ -1,6 +1,7 @@
 extends RefCounted
 
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
+const FlightIrregularity = preload("res://src/gameplay/flight_irregularity.gd")
 
 ## Two butterflies meeting on a close pass and whirling round each other up
 ## into the air -- the SPIRAL FLIGHT (see
@@ -59,24 +60,82 @@ const NOTICE_RADIUS_PX := NOTICE_RADIUS_M * PX_PER_METER
 const SPIRAL_SECONDS := 2.0
 
 ## How far apart the pair hold each other while they climb, in metres.
+##
 ## Real spiral flights keep the two within about half a metre to a metre --
 ## visibly TIGHTER than the wide, slow courtship flight, which is half of
 ## what makes the two read as different behaviours at a glance.
+##
+## That "half a metre to a metre" is a RANGE, and the range is the
+## observation. Drawing it as one fixed number was drawing a perfect circle,
+## which is exactly what the player saw ("only a circle"). The nominal below
+## is the middle of the pair's working separation; the orbit breathes across
+## the whole band (see RADIUS_SWING).
+const SPIRAL_SEPARATION_MIN_M := 0.5
+const SPIRAL_SEPARATION_MAX_M := 1.0
 const SPIRAL_SEPARATION_M := 0.7
 const SPIRAL_RADIUS_M := SPIRAL_SEPARATION_M * 0.5
 const SPIRAL_RADIUS_PX := SPIRAL_RADIUS_M * PX_PER_METER
 
-## How fast a butterfly flies in one of these. A spiral flight is maximum
-## exertion, not a cruise: a monarch cruises around 2 m/s and tops out near
-## 5 m/s, and the whirl is the top end.
+## How far the radius may swing either side of nominal, as a fraction.
+##
+## DERIVED from the observed band above rather than chosen: the orbit is
+## modelled as r(t) = r0 / (1 + k*w(t)) with w in [-1, 1] (see
+## converging_orbit for why that form and not r0 * (1 + k*w)), so the widest
+## the pair ever get is r0 / (1 - k). Setting that equal to half of
+## SPIRAL_SEPARATION_MAX_M is what fixes k. The tight side then comes out at
+## r0 / (1 + k), and the test pins that this is still no closer than
+## SPIRAL_SEPARATION_MIN_M -- i.e. the swing uses the real band and does not
+## leave it at either end.
+const RADIUS_SWING := 1.0 - SPIRAL_SEPARATION_M / SPIRAL_SEPARATION_MAX_M
+
+## The tightest the pair ever whirl. The hardest moment of the turn, and so
+## the one the load ceiling below has to be honoured at.
+const TIGHTEST_RADIUS_M := SPIRAL_RADIUS_M / (1.0 + RADIUS_SWING)
+
+## How fast a butterfly flies in one of these IN A STRAIGHT LINE. A spiral
+## flight is maximum exertion, not a cruise: a monarch cruises around 2 m/s
+## and tops out near 5 m/s, and the whirl is the top end.
 const BURST_SPEED_MPS := 5.0
 
-## Turns per second, DERIVED rather than chosen: the burst speed divided by
-## the circumference of the circle the flyer is actually flying. Comes out
-## far faster than Courtship.DANCE_TURNS_PER_SECOND, which is the other half
-## of what makes the two behaviours distinguishable -- a tight fast whirl
-## that climbs, against a wide slow orbit that stays put.
-const TURNS_PER_SECOND := BURST_SPEED_MPS / (TAU * SPIRAL_RADIUS_M)
+## The hardest a butterfly can turn, as a multiple of its own weight.
+##
+## NOT a new number: it is the lift ceiling this game already derived, in
+## WingbeatBounce. A turn is flown by banking, so the wings have to make
+## enough lift to hold the body up AND supply the centripetal force; the load
+## factor is exactly how many times body weight that is. WingbeatBounce's
+## whole amplitude derivation stands on the fact that a wing cannot pull the
+## body DOWN through its stroke, so the lift swings about weight with relative
+## depth e <= 1 -- which puts peak lift at (1 + e) x weight, at most twice.
+##
+## Held here as a literal rather than imported because src/gameplay does not
+## depend on src/rendering (see PollinatorForaging's own note on the same
+## point); the two are pinned equal by
+## test_the_load_ceiling_is_the_lift_ceiling_this_game_already_derived.
+const MAX_LOAD_FACTOR := 1.0 + 1.0
+
+## How fast the flyer actually goes ROUND, in metres per second.
+##
+## The burst speed is what it can do in a straight line; this is what it can
+## do round a 35 cm circle, and they are not the same thing. Flying the full
+## 5 m/s burst round SPIRAL_RADIUS_M demands v^2/r = 71 m/s^2 of centripetal
+## acceleration -- over seven g. Nothing with wings pulls seven g, and the
+## result on screen was a butterfly whipping round a nine-pixel circle twice a
+## second: reported as "the dance is overly dramatic".
+##
+## So the TURN limits this, not the wing: v = sqrt(a_max * r), evaluated at
+## the tightest point of the breathing orbit so the ceiling holds throughout
+## rather than only on average. Comes out around half the old rate, which is
+## the drama fix -- and it is a correction rather than a taste change: the old
+## number was flying a manoeuvre the animal cannot fly.
+const ORBIT_SPEED_MPS := sqrt(MAX_LOAD_FACTOR * GroundSlide.GRAVITY_MPS2 * TIGHTEST_RADIUS_M)
+
+## Turns per second at the nominal radius, DERIVED rather than chosen: the
+## orbital speed divided by the circumference of the circle the flyer is
+## actually flying. Still comfortably faster than
+## Courtship.DANCE_TURNS_PER_SECOND, which is the other half of what makes the
+## two behaviours distinguishable -- a tight fast whirl that climbs and pulls
+## away, against a wide slow orbit that stays put.
+const TURNS_PER_SECOND := ORBIT_SPEED_MPS / (TAU * SPIRAL_RADIUS_M)
 
 ## How far the pair climb before breaking off, in metres.
 ##
@@ -89,8 +148,35 @@ const TURNS_PER_SECOND := BURST_SPEED_MPS / (TAU * SPIRAL_RADIUS_M)
 ## test_the_climb_is_real_but_stays_inside_the_butterflys_territory.
 ##
 ## Screen-up is -Y in this top-down world, so this is a NEGATIVE Y offset.
-const RISE_M := 1.5
+## How far along its ascent path the pair actually go, in metres. This is the
+## whole excursion, and it is what has to fit inside the territory.
+const ASCENT_M := 1.5
+
+## A real ascending flight goes up AND AWAY: the two chase each other off
+## across the meadow as they climb, they do not spin on one spot. Spinning on
+## the spot is a large part of why a fast turn reads as frantic rather than as
+## flight -- the second half of "overly dramatic and only a circle".
+##
+## So the ascent above is decomposed at forty-five degrees, which is the
+## statement that an ascending flight covers about as much ground as it gains.
+## The excursion is unchanged by that -- it is the same 1.5 m path, just no
+## longer a purely vertical one -- so the territory budget RISE_M was already
+## capped against still holds, and
+## test_the_whole_excursion_stays_inside_the_butterflys_territory pins it.
+##
+## Screen-up is -Y in this top-down world, so the climb is a NEGATIVE Y offset.
+##
+## Both come out well under BURST_SPEED_MPS once divided by SPIRAL_SECONDS,
+## which matters: the orbit, the climb and the ground track are three
+## components of ONE velocity, and their sum has to fit inside a real burst
+## rather than exceed it (pinned by
+## test_the_three_things_it_is_doing_at_once_fit_inside_one_burst -- the old
+## model spent the entire burst on the orbit and then added the climb on top).
+const ASCENT_COMPONENT := sqrt(0.5)
+const RISE_M := ASCENT_M * ASCENT_COMPONENT
 const RISE_PX := RISE_M * PX_PER_METER
+const TRAVEL_M := ASCENT_M * ASCENT_COMPONENT
+const TRAVEL_PX := TRAVEL_M * PX_PER_METER
 
 ## What share of its flying time a butterfly may spend doing this.
 ##
@@ -158,6 +244,32 @@ static func rise(elapsed: float) -> Vector2:
 	return Vector2(0.0, -RISE_PX * t)
 
 
+## The pair's shared GROUND TRACK `elapsed` seconds in -- the same translation
+## for both of them, exactly like `rise`, so they stay opposite each other
+## across it without agreeing on anything at runtime.
+##
+## The direction comes from the pair's own seed, so both partners compute the
+## same answer from the same input and no flyer ever reaches into the other
+## (the one place this file allows that is documented in AmbientFlyerMarker,
+## and this is not it). Different pairs in one meadow drift different ways.
+##
+## Linear for the same reason the climb is: it keeps position continuous at
+## both ends of the behaviour, so nothing jumps when the whirl starts or stops.
+## The heading is drawn from the seed over the UPPER half-circle only, and
+## that restriction is a projection decision rather than a claim about
+## butterflies. This world is top-down and draws height as screen-up (-Y), so
+## the climb and the ground track land on the same two axes. A track drawn
+## over the full circle can point straight down the screen and cancel the
+## climb exactly -- measured, when it first did: the pair's whole shared
+## translation came out at 0.07px over a full whirl, which is a pair spinning
+## on one spot, the very thing the ground track exists to stop. Going "up and
+## away" has to read as up and away.
+static func travel(elapsed: float, pair_seed: int) -> Vector2:
+	var t := clampf(elapsed / SPIRAL_SECONDS, 0.0, 1.0)
+	var heading := PI + float(absi(hash("%d_spiral_track" % pair_seed)) % 3141) * 0.001
+	return Vector2.from_angle(heading) * TRAVEL_PX * t
+
+
 ## Where this butterfly should be relative to the pair's shared midpoint,
 ## `elapsed` seconds into the whirl.
 ##
@@ -175,9 +287,13 @@ static func rise(elapsed: float) -> Vector2:
 ##   same no-message-passing property the courtship dance has;
 ## - the pair CONVERGE from however far apart they happened to meet down to
 ##   SPIRAL_RADIUS_PX, which is what "they flew at each other" looks like.
-static func offset(elapsed: float, start_offset: Vector2) -> Vector2:
+static func offset(elapsed: float, start_offset: Vector2, pair_seed: int = 0) -> Vector2:
 	var held := clampf(elapsed, 0.0, SPIRAL_SECONDS)
-	return converging_orbit(held, start_offset, SPIRAL_RADIUS_PX, TURNS_PER_SECOND) + rise(held)
+	return (
+		converging_orbit(held, start_offset, SPIRAL_RADIUS_PX, TURNS_PER_SECOND, pair_seed)
+		+ rise(held)
+		+ travel(held, pair_seed)
+	)
 
 
 ## The whirl geometry on its own, without the climb: `start_offset` swung
@@ -204,10 +320,45 @@ static func offset(elapsed: float, start_offset: Vector2) -> Vector2:
 ##   stands there, and clamping would freeze the dance at one point of the
 ##   circle with the butterfly hanging motionless on it. Only the CONVERGENCE
 ##   is time-limited, which is what makes the approach finish.
+## ## And why it is not a circle
+##
+## `seed_value` makes the orbit BREATHE, which is the "only a circle" half of
+## the report. Real spiral flights are chaotic ascending chases -- irregular,
+## jagged, and never a clean ellipse -- and the pair's separation is observed
+## as a RANGE (see SPIRAL_SEPARATION_MIN_M/MAX_M), not as one number.
+##
+## The perturbation is the SAME irregularity a butterfly's ordinary flight
+## already has in this game (FlightIrregularity, factored out of the flutter),
+## not a second wobble with its own constants. Its amplitude is RADIUS_SWING,
+## which is derived from the observed separation band rather than chosen.
+##
+## The radius is written r0 / (1 + k*w) rather than r0 * (1 + k*w) for a
+## reason that is worth stating: a flyer holds an AIRSPEED, so on a radius
+## that varies it turns at w = v/r -- tighter means faster round. With the
+## reciprocal form the angular rate is exactly (v/r0) * (1 + k*w), whose
+## integral is closed-form, so the swept angle below is the true integral of a
+## real varying turn rate rather than an approximation of one. That matters:
+## accumulating the angle per frame instead would make the figure depend on
+## frame rate and on SimulationLod's step size, which is precisely the class
+## of bug this system has already produced three separate ways.
+##
+## At elapsed 0 the perturbation cannot move anything -- `closing` is 0, so
+## the radius is exactly `start_offset.length()`, and the swept angle is
+## exactly 0 -- so nothing teleports when an orbit begins, as before.
 static func converging_orbit(
-	elapsed: float, start_offset: Vector2, radius_px: float, turns_per_second: float
+	elapsed: float,
+	start_offset: Vector2,
+	radius_px: float,
+	turns_per_second: float,
+	seed_value: int = 0
 ) -> Vector2:
 	var closing := clampf(elapsed / SPIRAL_SECONDS, 0.0, 1.0)
-	var radius := lerpf(start_offset.length(), radius_px, closing)
-	var angle := start_offset.angle() + TAU * turns_per_second * elapsed
-	return Vector2.from_angle(angle) * radius
+	var breathing := radius_px / (
+		1.0 + RADIUS_SWING * FlightIrregularity.wobble(elapsed, seed_value)
+	)
+	var radius := lerpf(start_offset.length(), breathing, closing)
+	# The exact integral of TAU * turns_per_second * (1 + k*w(t)) dt.
+	var swept := TAU * turns_per_second * (
+		elapsed + RADIUS_SWING * FlightIrregularity.wobble_integral(elapsed, seed_value)
+	)
+	return Vector2.from_angle(start_offset.angle() + swept) * radius

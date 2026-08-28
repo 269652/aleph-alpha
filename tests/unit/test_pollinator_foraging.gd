@@ -797,3 +797,153 @@ func test_a_drained_flower_is_still_worth_returning_to():
 		PollinatorForaging.is_worth_visiting(false),
 		"a drained bloom is a living bloom with an empty nectary, not a dead one"
 	)
+
+
+# -- trap-lining: a forager moves ON, and its territory is the CIRCUIT --------
+#
+# Reported: "Butterflies still get stuck infront of a signle flower."
+#
+# Real pollinators -- bumblebees, butterflies, hummingbirds -- work a
+# repeatable CIRCUIT of blooms rather than re-working one. The behaviour has a
+# name (trap-lining) and a reason: a bloom you have just drained is the worst
+# bet in the patch, and the circuit exists so that the first stop has refilled
+# by the time you come back round to it.
+#
+# Two things were missing, and both are pinned below:
+# - nothing in the choice rule preferred moving ON. Ties inside the distance
+#   band were broken by peer claims and by visit memory, neither of which
+#   knows which bloom this flyer just left;
+# - the flyer's territory centre snapped to the SINGLE last bloom it fed at,
+#   so its whole search leash re-centred on one flower on every feed instead
+#   of covering the circuit it is actually working.
+
+
+## The refill time named once, so the trap-line rules below and the memory
+## window can be stated against the same number instead of two copies of 60.
+func test_the_refill_time_is_derived_from_the_regen_rate_not_restated():
+	assert_almost_eq(
+		PollinatorForaging.NECTAR_REFILL_SECONDS,
+		1.0 / PollinatorForaging.NECTAR_REGEN_PER_SECOND,
+		0.0001,
+		"the refill time is the reciprocal of the regen rate, never a second number"
+	)
+
+
+## THE LOOP THIS CLOSES. Visit memory expiring at the same moment a bloom
+## refills is what let a flyer go straight back to the flower it just drained:
+## the two clocks agreed, so the bloom became both legal and full on the same
+## second. Memory has to OUTLAST the refill, so that a remembered flower is
+## never the first thing back on the menu.
+func test_visit_memory_outlasts_the_refill_so_a_remembered_bloom_is_never_first():
+	assert_gt(
+		PollinatorForaging.VISIT_MEMORY_SECONDS,
+		PollinatorForaging.NECTAR_REFILL_SECONDS,
+		"a bloom must have refilled well before this flyer is willing to look at it again"
+	)
+
+
+## The trap-line rule itself: given two blooms this flyer is equally happy to
+## take, it goes to the one FURTHER from the flower it just drained. That is
+## what "moving on" means, and it is the whole reason a circuit forms.
+##
+## Strictly a tie-break INSIDE the existing distance band, never across it --
+## the band is what stops a pollinator flying past flowers it has not checked,
+## and this must not be able to reintroduce that.
+func test_a_forager_moves_on_from_the_bloom_it_just_drained():
+	var drained := Vector2(0, 0)
+	var just_left := Vector2(20, 0)  # where the flyer is, a moment after leaving
+	# Both are exactly 10px from the flyer -- a pure tie on the distance rule,
+	# which is the only thing that decided this before. They differ only in
+	# which way they lie relative to the bloom it just emptied.
+	var back_toward_the_drained_one := Vector2(10, 0)
+	var onward := Vector2(30, 0)
+	var flowers := [
+		{"position": back_toward_the_drained_one, "nectar": 1.0},
+		{"position": onward, "nectar": 1.0},
+	]
+	var chosen := PollinatorForaging.choose_target(
+		just_left, flowers, [], 0.0, 0, [], drained
+	)
+	assert_eq(
+		chosen["position"], onward,
+		"a trap-liner carries on round rather than turning back on the flower it drained"
+	)
+
+
+## ...and it can never make a flyer skip a genuinely closer bloom. Distance is
+## still decided first (see SCATTER_BAND_TILES): a far bloom on the far side
+## of the meadow does not win just because it is further from the last one.
+func test_moving_on_never_outranks_a_genuinely_closer_bloom():
+	var drained := Vector2(0, 0)
+	var close_but_behind := Vector2(8, 0)
+	var far_but_away := Vector2(-400, 0)
+	var flowers := [
+		{"position": close_but_behind, "nectar": 1.0},
+		{"position": far_but_away, "nectar": 1.0},
+	]
+	var chosen := PollinatorForaging.choose_target(
+		drained, flowers, [], 0.0, 0, [], drained
+	)
+	assert_eq(
+		chosen["position"], close_but_behind,
+		"the distance band still decides who is in play; the trap-line only orders ties"
+	)
+
+
+## A flyer that has not fed yet has no bloom to move on FROM, and must behave
+## exactly as it always did.
+func test_with_nothing_drained_yet_the_choice_is_unchanged():
+	var flowers := [
+		{"position": Vector2(10, 0), "nectar": 1.0},
+		{"position": Vector2(-10, 0), "nectar": 1.0},
+	]
+	var with_trapline := PollinatorForaging.choose_target(
+		Vector2.ZERO, flowers, [], 0.0, 0, [], Vector2.INF
+	)
+	var plain := PollinatorForaging.choose_target(Vector2.ZERO, flowers, [], 0.0, 0)
+	assert_eq(with_trapline, plain, "no last feed means no trap-line term at all")
+
+
+# -- the territory is the CIRCUIT, not the last flower -----------------------
+
+
+## `patch_centre` is what a foraging flyer's territory should be anchored on:
+## the blooms it has actually been working recently, averaged. Snapping to the
+## single last one collapses a circuit to a point.
+func test_the_patch_centre_is_the_middle_of_the_circuit_not_the_last_stop():
+	var feeds := [
+		{"position": Vector2(-30, 0), "time": 1.0},
+		{"position": Vector2(30, 0), "time": 2.0},
+		{"position": Vector2(0, -30), "time": 3.0},
+		{"position": Vector2(0, 30), "time": 4.0},
+	]
+	var centre := PollinatorForaging.patch_centre(feeds, 5.0)
+	assert_almost_eq(centre.x, 0.0, 0.001)
+	assert_almost_eq(centre.y, 0.0, 0.001)
+
+
+## The window is the REFILL time, and that is not an arbitrary choice: the
+## circuit a forager is currently working is exactly the set of blooms it has
+## drained that have not yet refilled. Anything older has restocked and is no
+## longer part of the round it is on.
+func test_the_circuit_forgets_a_stop_once_that_bloom_has_refilled():
+	var feeds := [
+		{"position": Vector2(1000, 0), "time": 0.0},
+		{"position": Vector2(10, 0), "time": 100.0},
+	]
+	var centre := PollinatorForaging.patch_centre(
+		feeds, 100.0 + PollinatorForaging.NECTAR_REFILL_SECONDS * 0.5
+	)
+	assert_almost_eq(
+		centre.x, 10.0, 0.001,
+		"a stop older than the refill time has restocked and is off this round"
+	)
+
+
+## A flyer that has fed nowhere has no circuit, and the caller must be able to
+## tell -- so it can fall back to its own home rather than to the world origin.
+func test_no_feeds_yet_means_no_patch_centre():
+	assert_false(
+		PollinatorForaging.patch_centre([], 0.0).is_finite(),
+		"no feeds means no circuit, reported as a non-finite centre"
+	)

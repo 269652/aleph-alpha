@@ -575,6 +575,47 @@ anchored to wherever the flyer last actually drank, not to a fixed spawn
 point, so a pollinator's territory follows the food rather than pinning it
 to ground that has since gone barren.
 
+### Trap-lining: a forager works a circuit, not a flower
+
+Real pollinators — bumblebees, butterflies, hummingbirds — forage a
+repeatable **circuit** of blooms rather than re-working one. It has a name
+(trap-lining) and a reason: a flower you have just emptied is the worst bet
+in the patch, and the circuit exists so that the first stop has refilled by
+the time you come back round to it.
+
+Two rules make that happen, and both are strictly *tie-breaks inside the
+distance band* above — neither can make a pollinator fly past a bloom it has
+not checked:
+
+- **Don't turn back.** `PollinatorForaging.moved_on_from` drops whichever
+  tied candidate lies closest to the bloom this flyer has just worked, so it
+  carries on round instead of shuttling between two neighbours. It has no
+  distance constant of its own — "closest to the one just worked" is decided
+  by the same ordering the band already uses — and it never empties the
+  pool, because chaining beats idling.
+- **The territory is the circuit.** The leash above is anchored on
+  `PollinatorForaging.patch_centre`: the mean of the stops the flyer has
+  made that have *not yet refilled*. That window is not a choice — the round
+  a forager is currently on is exactly the set of blooms it has drained and
+  which are still empty, so it is `NECTAR_REFILL_SECONDS`, itself derived
+  from the regen rate rather than restated. Anchoring on the single **last**
+  bloom instead (which is what shipped) followed the food but collapsed the
+  circuit to a point: the whole search leash re-centred on one flower on
+  every feed, so however many blooms the flyer was really working, its world
+  was that one flower's neighbourhood. Reported as "butterflies still get
+  stuck infront of a signle flower".
+
+Visit memory also has to **outlast** the refill (90 s against 60 s), and
+that relation is now pinned rather than incidental: if the two clocks agreed,
+a bloom would become both legal and full on the same second, and the flyer
+would go straight back to the flower it had just drained.
+
+**Honest measurement.** The single-flower lock did *not* reproduce in a
+headless sim of the shipped code — see `docs/progress.md` for the numbers.
+What the sim did show is a revisit interval pinned exactly to the memory
+window in every sparse layout tried. These two rules are the trap-line made
+explicit; they are not a fix for a stall that could be measured offline.
+
 ### Pollinators scatter rather than queueing
 
 Picking the single nearest bloom is the obvious rule and the wrong one:

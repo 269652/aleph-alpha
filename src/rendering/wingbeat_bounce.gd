@@ -65,6 +65,17 @@ const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 ## wobble through all five (pinned by
 ## test_the_wingbeat_bounce_never_touches_the_flyers_position).
 
+## The `e` above, named so other things can be derived from it rather than
+## restating the argument.
+##
+## A wing cannot pull the body DOWN through its stroke, so the lift can dip to
+## zero and no further -- e <= 1, and e = 1 is the physical CEILING. Two
+## separate things stand on that. The bob amplitude here is one. The other is
+## how hard a butterfly can TURN: peak lift is (1 + e) x weight, so the
+## hardest turn it can fly is at a load factor of two (see
+## SpiralFlight.MAX_LOAD_FACTOR, which is pinned equal to 1 + this).
+const MAX_LIFT_SWING := 1.0
+
 ## Real wingbeat frequency (Hz) and real body length (m) per flyer.
 ##
 ## Body length is the BODY -- head to abdomen tip -- not the wingspan, because

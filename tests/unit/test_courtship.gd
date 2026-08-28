@@ -58,10 +58,64 @@ func test_partners_stay_on_opposite_sides_of_the_dance():
 	assert_gt(leader.distance_to(follower), Courtship.DANCE_RADIUS_PX, "they should be apart")
 
 
+## The orbit wanders rather than tracing one circle (see DANCE_RADIUS_SWING),
+## so this is a BAND -- but the band still has to keep the two reading as one
+## interacting pair rather than as two unrelated sprites.
 func test_the_dance_stays_close_enough_to_read_as_one_pair():
-	for step in 20:
-		var offset := Courtship.dance_offset(float(step) * 0.13, 5, true)
-		assert_lte(offset.length(), Courtship.DANCE_RADIUS_PX + 0.01)
+	var swing := Courtship.DANCE_RADIUS_SWING
+	var widest := 0.0
+	var tightest := INF
+	for step in 200:
+		var offset := Courtship.dance_offset(float(step) * 0.043, 5, true)
+		widest = maxf(widest, offset.length())
+		tightest = minf(tightest, offset.length())
+	assert_lte(widest, Courtship.DANCE_RADIUS_PX / (1.0 - swing) + 0.01)
+	assert_gte(tightest, Courtship.DANCE_RADIUS_PX / (1.0 + swing) - 0.01)
+	assert_lte(
+		widest, Courtship.NOTICE_RADIUS_PX * 0.5,
+		"however it wanders, the pair must still read as one pair"
+	)
+
+
+## ...and it must genuinely wander. A fixed ellipse is still a closed figure
+## traced identically every time round, which is what "only a circle" meant.
+func test_the_dance_is_not_one_repeating_figure():
+	var widest := 0.0
+	var tightest := INF
+	for step in 200:
+		var offset := Courtship.dance_offset(float(step) * 0.043, 5, true)
+		widest = maxf(widest, offset.length())
+		tightest = minf(tightest, offset.length())
+	assert_gt(
+		widest - tightest, Courtship.DANCE_RADIUS_PX * 0.15,
+		"the orbit has to breathe, not trace one circle"
+	)
+
+
+func test_no_two_pairs_dance_the_same_figure():
+	var apart := 0.0
+	for step in 200:
+		var t := float(step) * 0.023
+		apart = maxf(apart, Courtship.dance_offset(t, 1, true).distance_to(
+			Courtship.dance_offset(t, 2, true)
+		))
+	assert_gt(apart, Courtship.DANCE_RADIUS_PX, "two pairs must not trace the same dance")
+
+
+## Derived, not chosen: a display flight is flown at a cruising speed, and the
+## turn rate is that speed divided by the circumference actually being flown.
+## The old 0.85 implied 3.8 m/s -- three quarters of a monarch's absolute burst
+## -- for a manoeuvre this module calls a slow wide orbit.
+func test_the_dance_rate_is_a_real_cruising_flight_speed():
+	assert_almost_eq(
+		TAU * Courtship.DANCE_RADIUS_M * Courtship.DANCE_TURNS_PER_SECOND,
+		Courtship.CRUISE_SPEED_MPS,
+		0.0001,
+		"turns per second must BE cruise speed / circumference"
+	)
+	assert_between(
+		Courtship.CRUISE_SPEED_MPS, 1.0, 3.0, "a monarch's ordinary flight is about 2 m/s"
+	)
 
 
 # -- mating ------------------------------------------------------------------

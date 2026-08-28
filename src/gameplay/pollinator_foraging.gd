@@ -1,5 +1,7 @@
 extends RefCounted
 
+const FlightIrregularity = preload("res://src/gameplay/flight_irregularity.gd")
+
 ## How a pollinator works a meadow (see docs/concept/flora.md).
 ##
 ## Butterflies and bees used to drift back and forth over a single bloom
@@ -156,9 +158,93 @@ const NECTAR_PER_DRINK := 1.0
 ## by that number.
 const NECTAR_REGEN_PER_SECOND := 1.0 / 60.0
 
+## How long a drained bloom takes to come back, DERIVED from the regen rate
+## above rather than restated. Two separate rules are stated against it -- how
+## long visit memory has to outlast (see VISIT_MEMORY_SECONDS) and which of a
+## forager's recent stops still count as the circuit it is on (see
+## patch_centre) -- and a second literal 60 in either of them would silently
+## stop tracking the regen rate the moment anybody tuned it.
+const NECTAR_REFILL_SECONDS := 1.0 / NECTAR_REGEN_PER_SECOND
+
 
 func _init() -> void:
 	pass
+
+
+## The stops on the round a forager is CURRENTLY working: every bloom it has
+## landed on that has not yet had time to refill.
+##
+## That window is not a choice. A trap-line's whole function is that the first
+## stop has restocked by the time the forager comes back round to it, so the
+## blooms still "on this round" are exactly the ones still empty -- anything
+## older has refilled and is simply part of the meadow again. Callers assign
+## the result back over their own list, which is also what keeps it bounded:
+## it can never hold more stops than a forager can make inside one refill.
+static func recent_feeds(feeds: Array, now: float) -> Array:
+	var out: Array = []
+	for entry in feeds:
+		if now - float(entry.get("time", 0.0)) <= NECTAR_REFILL_SECONDS:
+			out.append(entry)
+	return out
+
+
+## The middle of the circuit a forager is working -- the mean position of its
+## recent_feeds -- or a NON-FINITE vector when it has fed nowhere yet, so a
+## caller can tell "no circuit" from "a circuit centred on the origin" and
+## fall back to its own home instead of to the middle of the world.
+##
+## This is what a foraging flyer's territory should be anchored on. Anchoring
+## it on the single LAST bloom instead (which is what AmbientFlyerMarker did)
+## collapses a circuit to a point: the search leash re-centred on one flower
+## on every feed, so the flyer's whole world was that flower's neighbourhood
+## no matter how many others it was actually working. Reported as
+## "butterflies still get stuck infront of a signle flower".
+##
+## Averaging rather than taking a bounding centre on purpose: a mean moves
+## smoothly as the round moves on, where a bounding box jumps whenever the
+## widest stop ages out.
+static func patch_centre(feeds: Array, now: float) -> Vector2:
+	var live := recent_feeds(feeds, now)
+	if live.is_empty():
+		return Vector2.INF
+	var total := Vector2.ZERO
+	for entry in live:
+		total += entry["position"] as Vector2
+	return total / float(live.size())
+
+
+## The candidates that carry a forager ON round its circuit: everything except
+## whichever of them lies closest to the bloom it has just worked.
+##
+## TRAP-LINING is the real behaviour here, and it is one of the best
+## documented things pollinators do -- bumblebees, butterflies and
+## hummingbirds all forage a repeatable circuit of blooms rather than
+## re-working one. The reason is depletion: a flower you have just emptied,
+## and the flowers immediately around it (which the same forager most likely
+## also just emptied), are the worst bets in the patch. So the departure rule
+## is "don't turn back", and this is that rule.
+##
+## Strictly a DEMOTION inside the distance band, exactly like peer claims (see
+## _is_claimed) and for the same reason: the band is what stops a pollinator
+## flying past blooms it has not checked, and nothing here may be able to
+## reintroduce that. It also never empties the pool -- with one candidate, or
+## with every candidate the same distance from the drained bloom, it returns
+## them all, because chaining beats idling.
+##
+## Deliberately no distance constant of its own. "Closest to the bloom just
+## worked" is decided by the same ordering the band itself uses, so this adds
+## a behaviour without adding a number anybody has to justify.
+static func moved_on_from(candidates: Array, last_worked: Vector2) -> Array:
+	if not last_worked.is_finite() or candidates.size() < 2:
+		return candidates
+	var nearest_to_it := INF
+	for flower in candidates:
+		nearest_to_it = minf(nearest_to_it, (flower["position"] as Vector2).distance_to(last_worked))
+	var onward: Array = []
+	for flower in candidates:
+		if (flower["position"] as Vector2).distance_to(last_worked) > nearest_to_it:
+			onward.append(flower)
+	return candidates if onward.is_empty() else onward
 
 
 ## The flower this pollinator should head for: the nearest one that still has
@@ -202,13 +288,22 @@ func _init() -> void:
 ## flyer skip a closer bloom (demotion happens strictly inside the distance
 ## band) nor leave it stalling with nothing to do (if every candidate is
 ## spoken for, it still picks one -- chaining beats idling).
+## `last_worked` is the bloom this flyer most recently landed on, or a
+## non-finite vector when it has not landed anywhere yet. It is the TRAP-LINE
+## term (see moved_on_from): the last tie-break inside the band, demoting
+## whichever candidate lies closest to the flower just emptied so the forager
+## carries on round its circuit instead of shuttling between two neighbours.
+## Ranked below peers and memory rather than above them, because both of those
+## are statements about whether a bloom has anything in it, and this one is
+## only about which way round to go.
 static func choose_target(
 	position: Vector2,
 	flowers: Array,
 	visited: Array,
 	now: float = 0.0,
 	seed_value: int = 0,
-	claimed: Array = []
+	claimed: Array = [],
+	last_worked: Vector2 = Vector2.INF
 ) -> Dictionary:
 	# Every bloom is a candidate REGARDLESS of how much nectar it holds. A
 	# pollinator cannot see a flower's nectar level from across the meadow --
@@ -268,6 +363,11 @@ static func choose_target(
 		# reasonable time so they can check same flowers again after a while
 		# to see if nectar restocked".
 		return {}
+	# ...and finally the trap-line: of what is left, don't turn back on the
+	# bloom just emptied (see moved_on_from). Last, because it is the only one
+	# of the three tie-breaks that says nothing about whether a flower has
+	# anything in it -- it only says which way round the circuit goes.
+	unvisited = moved_on_from(unvisited, last_worked)
 	return unvisited[absi(seed_value) % unvisited.size()]
 
 
@@ -344,7 +444,11 @@ static func unvisited_only(flowers: Array, visited: Array, now: float) -> Array:
 ## backwards is a flyer that never arrives (pinned by
 ## test_a_tumbling_flyer_always_still_makes_progress).
 const TUMBLE_STRENGTH := 0.8
-const TUMBLE_FREQUENCY := 6.5
+## Read from FlightIrregularity rather than held here: the veer in a
+## butterfly's cruising flight and the wobble in its dances are one statement
+## about one animal, and a second copy of the number is a duplicate waiting to
+## drift.
+const TUMBLE_FREQUENCY := FlightIrregularity.FAST_RADIANS_PER_SECOND
 ## The veer eases off inside this distance so the flyer settles onto the
 ## blossom instead of fluttering around it, never quite landing.
 const TUMBLE_SETTLE_DISTANCE := 28.0
@@ -365,16 +469,12 @@ static func tumbled_heading(
 	var settle := clampf(distance_to_target / TUMBLE_SETTLE_DISTANCE, 0.0, 1.0)
 	if settle <= 0.0:
 		return straight
-	# Per-flyer phase, so two butterflies in one meadow don't flutter in
-	# unison. Hash-derived like the rest of the world's per-individual
-	# variation rather than held as RNG state.
-	var phase := float(absi(hash(seed_value)) % 628) * 0.01
-	# Two frequencies rather than one: a single sine reads as a regular
-	# slalom, where a butterfly's path never repeats the same arc twice.
-	var swing := (
-		sin(elapsed_seconds * TUMBLE_FREQUENCY + phase)
-		+ 0.5 * sin(elapsed_seconds * TUMBLE_FREQUENCY * 0.37 + phase * 2.1)
-	) / 1.5
+	# Two frequencies rather than one, with a per-flyer phase so two
+	# butterflies in one meadow don't flutter in unison: a single sine reads
+	# as a regular slalom, where a butterfly's path never repeats the same arc
+	# twice. That swing is now FlightIrregularity's, shared with the spiral
+	# flight and the courtship dance rather than restated here.
+	var swing := FlightIrregularity.wobble(elapsed_seconds, seed_value)
 	var sideways := Vector2(-straight.y, straight.x)
 	return (straight + sideways * swing * TUMBLE_STRENGTH * settle).normalized()
 
