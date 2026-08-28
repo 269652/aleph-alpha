@@ -214,9 +214,17 @@ for passability/hillshading/ore. One field, at least three consumers.
 
 ## Open questions
 
-- **Exact soft/hard slope thresholds** — the ~15–20°/~45° figures above are
-  real mountaineering anchors, not tuned game constants; need their own
-  calibration pass and test, per this project's no-manual-tuning rule.
+- ~~**Exact soft/hard slope thresholds** — the ~15–20°/~45° figures above
+  are real mountaineering anchors, not tuned game constants; need their
+  own calibration pass and test, per this project's no-manual-tuning
+  rule.~~ Resolved: `terrain_passability.gd`'s `SOFT_THRESHOLD_DEG` (18°)
+  and `HARD_THRESHOLD_DEG` (45°) are real, named, tested constants sitting
+  inside/on the cited mountaineering bands, not eyeballed — see the Status
+  section below. `HARD_THRESHOLD_WITH_ROPE_DEG` (65°, what a rope buys
+  beyond the hard threshold) is a third value this bullet didn't originally
+  ask about; it's tested for shape (`test_terrain_passability.gd`) but,
+  honestly, has no real-world citation of its own the way the other two
+  do.
 - **Exact vein-probability-vs-slope curve** — tuned, deferred.
 - **Does biome classification itself ever read slope**, not just
   elevation/temperature/moisture — a plausible future tie-in to
