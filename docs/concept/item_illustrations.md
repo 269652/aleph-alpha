@@ -11,7 +11,7 @@ says which states it needs to cover.
 
 | State | Surfaces | New art needed? |
 |---|---|---|
-| **Icon** | Inventory grid, hotbar, paperdoll equip slots, drag-preview, tooltip | Eventually, per item — but see `sprite_id` below; nothing blocks on this today. |
+| **Icon** | Inventory grid, hotbar, paperdoll equip slots, drag-preview, tooltip | Eventually, per item — but see `sprite_id` below; nothing blocks on this today. Full catalog scaffolded into 11 generation-ready kits in [ai_sprite_prompts.md §9](../art/ai_sprite_prompts.md#9-general-item-icons--one-kit-per-visual-archetype-2026-08-28). |
 | **Ground** | Dropped-item sprite | No — reuse the icon, scaled via `art_resolution.gd`'s `world_scale_for`. Already the convention (`dropped_item.gd`); keep it that way rather than authoring separate ground art. |
 | **In-hand** | The equipped weapon/tool riding `ToolSlot` | No — reuse the icon. The rig is front-canonical only (no side/back art yet), so a distinct held-pose asset isn't worth authoring. |
 | **Use/swing motion** | Melee swing, rod-cast, lasso/net throw | **Deferred** — see below. |

@@ -3291,6 +3291,16 @@ describes:
   `vessel` field (`"gem"` sealed/use-only vs. `"scroll"` teachable/
   requirement-gated/consumed-on-success), the embedded AST, and author
   metadata — neither vessel is built.
+- **Item icon generation prompts** (small) — ✅ Scaffolded, ⬜ nothing
+  generated yet — `docs/art/ai_sprite_prompts.md` §9 organizes the full
+  72-item non-fruit/veg catalog into 11 shared-silhouette kits (weapons,
+  edged tools, elongated handhelds, wayfinding/citizenship instruments,
+  rope/capture gear, armor, structures, raw materials, orchard forage,
+  food/catches, curiosities) with a template prompt and per-item variation
+  table each, ready to hand to an image model. No `ItemCatalog._ITEMS`
+  entry sets a divergent `sprite_id` yet, so this is prompt scaffolding
+  only — plugging in real art still means generating the sheets, slicing
+  them, and pointing a catalog entry's `sprite_id` at the result.
 - **Spell Gem Rarity Derivation** (medium) — 🚧 Partial — `rarity_tier.gd`'s
   `tier_from_complexity(complexity)` derives a tier straight from a numeric
   complexity/cost score (e.g. `spell_cost.gd`'s `derived_base()`), reusing the
