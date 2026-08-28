@@ -352,6 +352,42 @@ func test_portrait_is_a_cohesive_figure_when_legs_are_a_fused_pair():
 	assert_gt(opaque, 0, "the legs band should still show the figure's legs")
 
 
+## The test just above only checked "some opaque pixel exists somewhere in
+## the bottom 15%" -- true even for a tiny, disconnected leg blob floating
+## well below a visible gap under the torso, which is exactly what
+## _blend_portrait_legs' own composite-legs span (reusing _PORTRAIT_LEG,
+## sized for the OLD procedural fallback's two separate small rectangles,
+## not a fused illustrated pair) was actually producing (reported live,
+## with a screenshot, alongside the blur report -- "restart it's not fixed
+## atm": the portrait's own legs read as a small disconnected shape, not
+## part of one cohesive figure). Checked properly this time: no run of
+## fully-transparent rows anywhere below the head may exceed a couple of
+## pixels -- a real gap between body parts, wherever it falls, must fail
+## this, not just an empty bottom band.
+func test_no_large_vertical_gap_appears_anywhere_below_the_head():
+	var image := sprite.generate_hero_portrait_image(appearance_maker.appearance_for("warrior", 1))
+	var width := ProceduralCharacterSprite.PORTRAIT_SIZE.x
+	var height := ProceduralCharacterSprite.PORTRAIT_SIZE.y
+	var head_height := ProceduralCharacterSprite._PORTRAIT_HEAD.y
+	var longest_gap := 0
+	var current_gap := 0
+	for y in range(head_height, height):
+		var row_has_opaque := false
+		for x in width:
+			if image.get_pixel(x, y).a > 0.0:
+				row_has_opaque = true
+				break
+		if row_has_opaque:
+			current_gap = 0
+		else:
+			current_gap += 1
+			longest_gap = maxi(longest_gap, current_gap)
+	assert_lte(
+		longest_gap, 2,
+		"a %d-row fully-transparent gap appeared below the head -- the figure isn't one cohesive body" % longest_gap
+	)
+
+
 ## The character creator's class-icon row renders exactly this portrait, one
 ## per archetype, at one fixed DNA seed -- so "the icon IS a tiny preview of
 ## picking this class" is only true if the portraits actually differ. They

@@ -86,7 +86,39 @@ const AXIS_LABELS := {
 ## character_tab, checked against real laid-out rects rather than a
 ## hardcoded guess). Still noticeably bigger than the pre-"too small" 220
 ## this replaced, just no longer bigger than its own panel has room for.
-const DIORAMA_VIEW_SIZE := Vector2i(248, 248)
+##
+## X widened 248 -> 372 once the panel itself was actually measured
+## (reported live: "the diorama is still square and does NOT span the
+## whole rectangular panel" -- a live layout dump showed glow_wrap sitting
+## at a fixed 276px inside a 528px-wide hero column, wasting roughly half
+## of it). Y deliberately left at 248 -- the height fix above is still
+## correct and untouched; only the WIDTH was ever the complaint, and
+## growing height too would only push the diorama further into the
+## pre-existing, separately-tracked scroll-clipping regression (see
+## test_the_diorama_fits_within_the_first_unscrolled_view_of_the_
+## character_tab's own current failure). X is derived from
+## CharacterPreviewDioramaScript.FOOTPRINT.x rather than written down
+## separately, at the SAME per-world-unit scale the Y axis already uses
+## (DIORAMA_VIEW_SIZE.y / FOOTPRINT.y) -- so growing the world footprint's
+## own width (see that constant's own doc comment on why it grew to
+## match) and this together keeps the camera's zoom UNIFORM across both
+## axes; deriving only one from the other, rather than picking two
+## independent numbers, is what actually guarantees that -- an
+## accidentally-mismatched pair here would stretch every sprite in the
+## scene sideways.
+##
+## X widened AGAIN when 372 was itself seen live and still fell short
+## (reported live: "it's now a rectangle but it still doesn't cover the
+## whole width of its containing panel") -- re-measured, not re-guessed:
+## the hero column's real available width is genuinely 528px (the class-
+## icon row sitting directly above the diorama already spans it in full),
+## so FOOTPRINT.x growing to 192 (see that constant's own doc comment) now
+## derives an X of 496 here -- close to that real 528px ceiling with a
+## small deliberate margin, not just "somewhat wider than before" again.
+const DIORAMA_VIEW_SIZE := Vector2i(
+	roundi(248.0 * CharacterPreviewDioramaScript.FOOTPRINT.x / CharacterPreviewDioramaScript.FOOTPRINT.y),
+	248
+)
 
 ## The "standard" portrait's own real texture (ProceduralCharacterSprite.
 ## PORTRAIT_SIZE, 26x40 -- a tall headshot strip) is a very different SHAPE

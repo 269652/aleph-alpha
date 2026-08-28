@@ -23,8 +23,28 @@ const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite
 ## random_point_in_circle is used below for the fish spawn scatter.
 const CharacterStroll = preload("res://src/rendering/character_stroll.gd")
 
-## Pond radius as a fraction of the footprint's shorter side.
-const POND_RADIUS_FRACTION := 0.22
+## Pond radius as a fraction of the footprint's shorter side. Bumped up from
+## the original 0.22 (reported live: "the pond should be bigger" -- at 0.22 a
+## ~42-unit diameter next to a full-height tree/character read closer to a
+## puddle than a pond). Test-pinned rather than derived (CLAUDE.md: tuned
+## values must be a tested function or a test-pinned constant, never just an
+## eyeballed comment) -- "how big should a decorative pond feel" has no
+## real-world measurement to check it against, the same as this file's own
+## LONG_GRASS_GROWTH/BIRD_WANDER_RADIUS precedent.
+const POND_RADIUS_FRACTION := 0.3
+## How much wider than tall the pond's own SHAPE is -- pond_radius alone only
+## ever described a circle; "not square / circle but a rectangle" (reported
+## live, alongside "bigger") needs two different half-extents, not one
+## scalar. Applied by shrinking the SHORT axis below pond_radius rather than
+## growing the long one beyond it (see Result.pond_half_size's own doc
+## comment) -- so every OTHER system that already trusts pond_radius as a
+## safe circular outer bound (is_clear, fish spawn/wander, tree placement)
+## keeps working completely unchanged; only pond_half_size, used where the
+## actual rectangular SHAPE matters (pebble placement below, and
+## CharacterPreviewDiorama's own tile grid), needs to know about it. Test-
+## pinned for the same reason POND_RADIUS_FRACTION is: a decorative aspect
+## ratio has no real-world value to derive it from.
+const POND_ASPECT_RATIO := 1.5
 const TREE_COUNT := 2
 const PEBBLE_COUNT := 5
 const FISH_COUNT := 2
@@ -103,15 +123,43 @@ const POND_EDGE_MARGIN := 4.0
 ## CharacterPreviewDiorama._build_birds).
 const BIRD_COUNT := 2
 
+## Richer scene life (reported live, alongside the character-action request
+## below: "We need flowers, butterflies, worms..."). Ground life
+## (flowers/worms) is_clear-checked the same as trees/pebbles; butterflies
+## fly, so they follow BIRD_COUNT's own "no obstacle check needed" precedent.
+## Modest counts on purpose -- accents scattered through the meadow, not a
+## second grass-density system: too many would compete with the grass/long-
+## grass accent already doing the "this is a real meadow" work.
+const FLOWER_COUNT := 6
+const BUTTERFLY_COUNT := 3
+const WORM_COUNT := 3
+
 
 class Result:
 	var pond_center: Vector2
 	var pond_radius: float
+	## The pond's own rectangular half-extents -- x (long axis) always equals
+	## pond_radius exactly, inscribing the whole rectangle inside the SAME
+	## circular envelope is_clear/fish/tree placement already safely avoid,
+	## so nothing that currently trusts pond_radius as an outer bound has to
+	## change; y (short axis) is pond_radius / POND_ASPECT_RATIO, which is
+	## what actually makes the SHAPE read as a rectangle rather than a
+	## circle. Used wherever the actual shape matters rather than just an
+	## outer bound -- pebble placement below, and CharacterPreviewDiorama's
+	## own tile grid/organic-erosion.
+	var pond_half_size: Vector2
 	var tree_positions: Array[Vector2] = []
 	var pebble_positions: Array[Vector2] = []
 	var fish_positions: Array[Vector2] = []
 	var grass_positions: Array[Vector2] = []
 	var bird_positions: Array[Vector2] = []
+	var flower_positions: Array[Vector2] = []
+	var butterfly_positions: Array[Vector2] = []
+	var worm_positions: Array[Vector2] = []
+	## Single ambient boar, not an array -- one is plenty for a corner-of-the-
+	## world diorama, and CharacterPreviewDiorama's own FIGHT action needs
+	## exactly one thing to walk toward.
+	var boar_position: Vector2
 
 	## Whether `point` is clear of every obstacle this layout placed --
 	## outside the pond and away from every tree by TREE_MARGIN. The one
@@ -133,6 +181,7 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 	var result := Result.new()
 
 	result.pond_radius = minf(footprint.x, footprint.y) * POND_RADIUS_FRACTION
+	result.pond_half_size = Vector2(result.pond_radius, result.pond_radius / POND_ASPECT_RATIO)
 	result.pond_center = _pond_center_near_an_edge(result.pond_radius, footprint, rng)
 
 	var tree_area := tree_bounds(footprint)
@@ -141,8 +190,15 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 
 	for i in PEBBLE_COUNT:
 		var angle := rng.randf_range(0.0, TAU)
-		var radius := result.pond_radius + rng.randf_range(0.0, PEBBLE_RIM_BAND)
-		result.pebble_positions.append(result.pond_center + Vector2(cos(angle), sin(angle)) * radius)
+		# The ELLIPSE matching pond_half_size's own aspect, not a uniform
+		# circle at pond_radius -- see test_pebble_positions_sit_near_the_
+		# ponds_elliptical_rim's own doc comment. band_scale grows both axes
+		# outward by the same small fraction, which reads correctly as "just
+		# past the shore" for a decorative scatter without needing an exact
+		# constant-Euclidean-distance offset off a non-circular curve.
+		var band_scale := 1.0 + rng.randf_range(0.0, PEBBLE_RIM_BAND) / result.pond_radius
+		var offset := Vector2(cos(angle) * result.pond_half_size.x, sin(angle) * result.pond_half_size.y) * band_scale
+		result.pebble_positions.append(result.pond_center + offset)
 
 	for i in FISH_COUNT:
 		# Anywhere strictly inside the pond, area-weighted (see
@@ -157,6 +213,21 @@ static func generate(seed_value: int, footprint: Vector2) -> Result:
 
 	for i in BIRD_COUNT:
 		result.bird_positions.append(Vector2(rng.randf_range(0.0, footprint.x), rng.randf_range(0.0, footprint.y)))
+
+	# Ground life -- same rejection-sampled placement _position_clear_of_pond
+	# already provides for trees, reused here rather than restated (bounds is
+	# the whole footprint: flowers/worms have no drawn-body-height concern the
+	# way a tree does, so tree_bounds' own canopy inset doesn't apply).
+	var full_bounds := Rect2(Vector2.ZERO, footprint)
+	for i in FLOWER_COUNT:
+		result.flower_positions.append(_position_clear_of_pond(result, full_bounds, rng))
+	for i in WORM_COUNT:
+		result.worm_positions.append(_position_clear_of_pond(result, full_bounds, rng))
+	result.boar_position = _position_clear_of_pond(result, full_bounds, rng)
+
+	# Butterflies fly overhead -- no obstacle avoidance needed, same as birds.
+	for i in BUTTERFLY_COUNT:
+		result.butterfly_positions.append(Vector2(rng.randf_range(0.0, footprint.x), rng.randf_range(0.0, footprint.y)))
 
 	# A clump on EVERY clear cell carpeted the whole footprint at ~100%
 	# coverage -- five times what a real meadow has -- and since each clump

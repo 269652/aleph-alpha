@@ -67,6 +67,42 @@ func test_birds_start_reasonably_within_the_footprint():
 		assert_true(generous.has_point(bird.position), "bird spawned wildly outside the diorama: %s" % bird.position)
 
 
+# -- richer scene life: flowers, butterflies, worms, a boar ------------------
+##
+## Reported live: "We need flowers, butterflies, worms..." Each follows the
+## same "reuse the real rendering, no gameplay behind it" contract the
+## diorama's fish/birds already have -- ProceduralFlowerSprite/
+## ProceduralWormSprite (thin Sprite2D wrappers, the same pattern
+## EarthChunkManager._sync_flower_sprites/_sync_worm_sprites already use) and
+## AmbientFlyerRenderer.build_flyer (already a ready-made non-bird wrapper,
+## no new rendering code at all).
+
+func test_build_creates_the_expected_number_of_flowers():
+	assert_eq(diorama.flower_nodes.size(), CharacterPreviewLayout.FLOWER_COUNT)
+	for flower in diorama.flower_nodes:
+		assert_not_null(flower.texture)
+		assert_true(flower.is_inside_tree())
+
+
+func test_build_creates_the_expected_number_of_worms():
+	assert_eq(diorama.worm_nodes.size(), CharacterPreviewLayout.WORM_COUNT)
+	for worm in diorama.worm_nodes:
+		assert_not_null(worm.texture)
+		assert_true(worm.is_inside_tree())
+
+
+func test_build_creates_the_expected_number_of_butterflies():
+	assert_eq(diorama.butterfly_nodes.size(), CharacterPreviewLayout.BUTTERFLY_COUNT)
+	for butterfly in diorama.butterfly_nodes:
+		assert_true(butterfly.is_inside_tree())
+
+
+func test_build_creates_one_ambient_boar():
+	assert_not_null(diorama.boar_node)
+	assert_true(diorama.boar_node.is_inside_tree())
+	assert_eq(diorama.boar_node.position, diorama.get("_layout").boar_position)
+
+
 ## The pond is a Node2D grouping several tile sprites now (see the grid
 ## tests below), not a single Sprite2D directly on the diorama root -- see
 ## _build_pond's own doc comment on why.
@@ -134,6 +170,98 @@ func test_a_rim_tile_still_shows_the_shore_distance_fade():
 			farthest = tile
 	var image: Image = farthest.texture.get_image()
 	assert_ne(image.get_pixel(0, 0), Color(1, 1, 1, 1), "the rim tile's own corner should read as faded, not full deep water")
+
+
+## "not square / circle but a rectangle" (reported live): the grid's own
+## column/row counts now come from CharacterPreviewLayout.pond_half_size's
+## two DIFFERENT axes (see _build_pond), not a single pond_radius doubled
+## into a square. Checked on the live diorama's own default seed (42),
+## not a hand-picked one, since a real regression here should show up on
+## whatever seed the fixture already builds.
+func test_pond_grid_is_wider_than_it_is_tall():
+	assert_gt(
+		CharacterPreviewDioramaScript._pond_columns_for(diorama.get("_layout")),
+		CharacterPreviewDioramaScript._pond_rows_for(diorama.get("_layout"))
+	)
+
+
+## No lake/organic-blob generator exists anywhere in this codebase to reuse
+## (the real world's own water silhouette comes from a bundled Earth
+## elevation DEM lookup, not synthesized shape -- see EarthChunkGenerator/
+## BiomeClassifier -- which has nothing to look up for a standalone diorama
+## pond); built from the SAME PixelNoise primitive CharacterPreviewLayout
+## already uses for its own grass-clump scatter. Pure and static, no Godot
+## nodes, so it's directly testable without a live diorama -- same split
+## this file already keeps for _pick_long_grass_positions.
+##
+## The always-kept core (POND_EROSION_SAFE_FRACTION) must never itself be
+## eroded, for any seed -- a pond that could vanish, or fray down to
+## disconnected puddles, isn't a pond.
+func test_generate_pond_cells_always_keeps_a_solid_core():
+	for seed_value in [1, 2, 3, 4, 5]:
+		var kept: Dictionary = CharacterPreviewDioramaScript._generate_pond_cells(6, 4, seed_value)
+		assert_true(kept.has(Vector2i(3, 2)), "seed %d: the centre-most cell should always be kept" % seed_value)
+
+
+func test_generate_pond_cells_is_deterministic_for_the_same_seed():
+	var a: Dictionary = CharacterPreviewDioramaScript._generate_pond_cells(6, 4, 7)
+	var b: Dictionary = CharacterPreviewDioramaScript._generate_pond_cells(6, 4, 7)
+	assert_eq(a.keys(), b.keys())
+
+
+## The actual "organic shape" property the user asked for: at least one
+## outer-ring cell must be excluded for at least one of a handful of seeds --
+## proof the grid ISN'T just re-deriving a perfect, crisp rectangle (which a
+## fixed row==0-style edge test, the OLD land_directions logic, always drew
+## regardless of seed).
+func test_generate_pond_cells_erodes_at_least_one_outer_cell_for_some_seed():
+	var columns := 6
+	var rows := 4
+	var any_erosion := false
+	for seed_value in range(20):
+		var kept: Dictionary = CharacterPreviewDioramaScript._generate_pond_cells(columns, rows, seed_value)
+		for row in rows:
+			for column in columns:
+				if not kept.has(Vector2i(column, row)):
+					any_erosion = true
+	assert_true(any_erosion, "no seed out of 20 ever eroded a single outer cell -- the shape is still a crisp rectangle")
+
+
+## The other half of the same organic-shape property: it must NOT erode so
+## much that it stops reading as a rectangle at all -- most of the grid
+## should still normally be kept.
+func test_generate_pond_cells_keeps_most_of_the_grid_on_average():
+	var columns := 6
+	var rows := 4
+	var total_kept := 0
+	var num_seeds := 20
+	for seed_value in range(num_seeds):
+		var kept: Dictionary = CharacterPreviewDioramaScript._generate_pond_cells(columns, rows, seed_value)
+		total_kept += kept.size()
+	var average_fraction := float(total_kept) / float(num_seeds * columns * rows)
+	assert_gt(average_fraction, 0.6, "average kept fraction %f -- eroding away too much of the rectangle" % average_fraction)
+
+
+## land_directions has to reflect the SHAPE actually kept, not just "is this
+## cell on the grid's own outer edge" (the old logic, correct only because
+## every cell used to be kept) -- a cell can now be interior to the GRID but
+## still border an eroded neighbour, and needs the shore fade facing that
+## neighbour too.
+func test_land_directions_for_cell_includes_an_eroded_interior_neighbor():
+	var kept := {Vector2i(1, 1): true, Vector2i(2, 1): true, Vector2i(1, 2): true}
+	# (2, 2) deliberately absent -- an "eroded" interior neighbour of (1, 2)
+	# and (2, 1), even though neither sits on the 3x3 grid's own outer rim.
+	var directions: Array[Vector2i] = CharacterPreviewDioramaScript._land_directions_for_cell(Vector2i(1, 2), kept, 3, 3)
+	assert_true(directions.has(Vector2i(1, 0)), "the cell east of (1,2) is missing from `kept` and should read as land")
+
+
+func test_land_directions_for_cell_is_empty_for_a_fully_surrounded_cell():
+	var kept := {}
+	for row in 3:
+		for column in 3:
+			kept[Vector2i(column, row)] = true
+	var directions: Array[Vector2i] = CharacterPreviewDioramaScript._land_directions_for_cell(Vector2i(1, 1), kept, 3, 3)
+	assert_eq(directions.size(), 0, "the centre of a fully-kept 3x3 grid touches no land at all")
 
 
 # -- the ground the whole scene stands on (reported live: the grass, pond,
@@ -236,6 +364,34 @@ func test_fish_move_through_their_own_real_process():
 	assert_ne(fish.position, start)
 
 
+## Reported live: "the fishes don't speed boost and they don't swim
+## naturally like in game." Measured first, not guessed: the boost
+## mechanism itself was already fully intact (glide/flap speeds matched
+## FISH_SWIM_SPEED and FISH_SWIM_SPEED*FLAP_SPEED_MULTIPLIER exactly, and a
+## burst genuinely fired several times within a realistic 30s window at the
+## new, correctly-rarer interval -- see the eleventh live pass in
+## docs/progress.md). What a live dump of real fish/pond numbers actually
+## showed: at FISH_SWIM_SPEED=4.0, a fish takes 14.4s just to cross the
+## POND's own long axis, and the pond itself is now considerably bigger
+## than when 4.0 was chosen (see FOOTPRINT's own doc comment) -- at the
+## diorama's own actual on-screen scale that reads as barely moving at all,
+## boost included, however correctly the mechanism itself was firing.
+## Checked here as a real property -- how long a fish takes to cross its
+## OWN configured wander diameter (not the whole pond, which it never tries
+## to fully cross) -- rather than the bare constant, so a future pond-size
+## or wander-fraction change is automatically re-measured against this same
+## "reads as swimming, not creeping" bar instead of silently drifting stale
+## again.
+func test_fish_swim_speed_crosses_its_own_wander_circle_briskly():
+	var layout := CharacterPreviewLayout.generate(42, CharacterPreviewDioramaScript.FOOTPRINT)
+	var wander_diameter := 2.0 * layout.pond_radius * CharacterPreviewLayout.FISH_SAFE_RADIUS_FRACTION
+	var glide_crossing_time := wander_diameter / CharacterPreviewDioramaScript.FISH_SWIM_SPEED
+	assert_lt(
+		glide_crossing_time, 3.0,
+		"a fish takes %.1fs to glide across its own roam circle -- too slow to read as swimming" % glide_crossing_time
+	)
+
+
 func test_fish_stay_within_the_ponds_real_bounds_via_shore_avoidance():
 	var bounds: Rect2 = diorama.get("_pond_bounds").grow(1.0)
 	for i in 200:
@@ -252,12 +408,30 @@ func test_fish_stay_within_the_ponds_real_bounds_via_shore_avoidance():
 ## once a fish has genuinely moved -- confirms the diorama's own duck-typed
 ## world is actually WIRED to a live fish, not just present on the diorama
 ## (reported live: "no ripples").
+## Checked as a RISING EDGE across the whole loop, not "is the buffer non-
+## empty at the very end" -- disturbances decay out of _disturbance_positions
+## after WaterShader.RIPPLE_LIFETIME (2.2s -- see advance_disturbances), far
+## shorter than a fish's own gap between ripple bursts once that gap was
+## widened to genuinely read as occasional rather than continuous (reported
+## live: "the fish still produce ripples all the time" -- see FishMarker.
+## RIPPLE_INTERVAL_MIN's own doc comment). A final-count-only check happened
+## to keep passing at the OLD, much shorter interval purely by luck (a
+## recent, undecayed ripple was almost always sitting in the buffer at
+## whatever moment the check ran) and would otherwise fail here even once a
+## burst genuinely fired mid-loop, exactly the same false-negative already
+## documented on the hero's own identical tests just below.
 func test_fish_swimming_eventually_records_a_water_disturbance():
 	var fish: Node2D = diorama.fish_nodes[0]
+	var previous_count := 0
+	var ever_recorded := false
 	for i in 300:
 		diorama._process(0.2)
 		fish._process(0.2)
-	assert_gt(diorama.get("_water_shader")._disturbance_positions.size(), 0)
+		var current_count: int = diorama.get("_water_shader")._disturbance_positions.size()
+		if current_count > previous_count:
+			ever_recorded = true
+		previous_count = current_count
+	assert_true(ever_recorded, "no water disturbance was ever recorded while the fish swam")
 
 
 func test_apply_appearance_dresses_the_live_character_view():
@@ -398,6 +572,36 @@ func test_character_swings_the_weapon_during_swing():
 	assert_gt(diorama.character_view.tool_slot_rotation(), 0.0)
 
 
+## FIGHT (reported live: "the character should do random things like fight a
+## boar"). CreatureMarker's own attack pose is gated behind real AI/
+## perception with no public trigger (confirmed: no callable "play the
+## attack pose now" method exists, unlike CharacterView.play_attack_swing --
+## rigging a fake threat to trip the real AI for one scripted beat would be
+## fragile), so the boar itself stays a passive, harmlessly ambient presence
+## -- exactly the same "reuse the real rendering, no gameplay behind it"
+## contract the diorama's fish/birds already have. What DOES reuse real,
+## already-triggerable behavior: the hero walks to sparring range and
+## genuinely swings, the same play_attack_swing SWING already uses, just
+## aimed at the boar instead of empty air.
+func test_character_walks_to_and_swings_at_the_boar_during_fight():
+	var boar_position: Vector2 = diorama.get("_layout").boar_position
+	diorama.character_view.position = boar_position + Vector2(60, 0)
+	diorama._enter_action(CharacterActionPicker.Action.FIGHT)
+	diorama.set("_action_time_remaining", 1000.0)
+	for i in 100:
+		diorama._process(0.1)
+	# Within sparring range, not on top of the boar -- CreatureMarker.ATTACK_
+	# RANGE is the real game's own idea of "close enough to fight", reused
+	# here rather than a diorama-only number.
+	var CreatureMarker = load("res://src/rendering/creature_marker.gd")
+	assert_lt(
+		diorama.character_view.position.distance_to(boar_position), CreatureMarker.ATTACK_RANGE + 4.0,
+		"the hero should have closed to sparring range of the boar"
+	)
+	diorama.character_view._process(0.05)
+	assert_gt(diorama.character_view.tool_slot_rotation(), 0.0, "the hero should genuinely swing at the boar, not just stand near it")
+
+
 ## The fishing spot sits just INSIDE the pond's own rim now (see
 ## _compute_fishing_spot's own doc comment: a shallow wade, not a shore-
 ## side stand, so the water-tinting submersion shader actually has
@@ -429,3 +633,83 @@ func test_character_walks_to_the_fishing_spot_during_fish_then_swims_in_place():
 	# Genuinely inside the pond, not just close to its centre -- the whole
 	# point of moving the spot here in the first place.
 	assert_lt(diorama.character_view.position.distance_to(diorama.get("_layout").pond_center), diorama.get("_layout").pond_radius)
+
+
+## FISH used to just stand still facing the pond once arrived -- no cast, no
+## bobber, nothing that actually reads as "fishing" (reported live,
+## alongside the request for more scene life: "the character should do
+## random things like ... fish a fish"). Player._start_cast_visuals sets the
+## precedent this diorama's own hero now follows exactly: reuse the SAME
+## swing animation as a melee attack for the rod-throw, plus a bobber
+## Sprite2D at FishingCast.cast_point -- no new animation needed, the real
+## game's own fishing has never had one either.
+func test_arriving_at_the_fishing_spot_casts_a_line_with_a_swing_and_a_bobber():
+	var fishing_spot: Vector2 = diorama.get("_fishing_spot")
+	diorama.character_view.position = fishing_spot + Vector2(30, 0)
+	diorama._enter_action(CharacterActionPicker.Action.FISH)
+	diorama.set("_action_time_remaining", 1000.0)
+	for i in 300:
+		diorama._process(0.1)
+	assert_true(diorama.get("_bobber").visible, "the bobber should be showing once the hero has actually cast a line")
+	# Mid-arc, the same check test_character_swings_the_weapon_during_swing
+	# above uses for the ordinary SWING action -- proof play_attack_swing
+	# genuinely fired for the cast, not just a flag.
+	diorama.character_view._process(0.05)
+	assert_gt(diorama.character_view.tool_slot_rotation(), 0.0, "the cast should visibly swing the rod like a real attack")
+
+
+## The real player (scenes/player.gd, _step_water_ripples) already records a
+## water disturbance while genuinely swimming/wading -- the diorama's own
+## hero, driven by its own separate movement code rather than Player, never
+## did (reported live: "player doesnt cause water ripples"). Walking TO the
+## fishing spot crosses genuinely-moving-while-in-water, exactly the case
+## the real player's own WATER_RIPPLE_MODES/input_direction gate covers.
+##
+## Checked as a RISING EDGE of the water shader's own disturbance count
+## across every step, not the count at the end of the loop -- a ripple's
+## own RIPPLE_LIFETIME (2.2s) is far shorter than this loop's full
+## simulated duration (300 * 0.1 = 30s), so by the very last step whatever
+## fired long ago has already faded back out on its own; checking only the
+## final count would make this test pass or fail on decay timing rather
+## than on whether a disturbance was ever actually recorded at all (an
+## earlier version of this test did exactly that, and failed even once the
+## real fix landed).
+func test_the_hero_records_a_water_disturbance_while_swimming_toward_the_fishing_spot():
+	var fishing_spot: Vector2 = diorama.get("_fishing_spot")
+	diorama.character_view.position = fishing_spot + Vector2(30, 0)
+	diorama._enter_action(CharacterActionPicker.Action.FISH)
+	diorama.set("_action_time_remaining", 1000.0)
+	var previous_count := 0
+	var ever_recorded := false
+	for i in 300:
+		diorama._process(0.1)
+		var current_count: int = diorama.get("_water_shader")._disturbance_positions.size()
+		if current_count > previous_count:
+			ever_recorded = true
+		previous_count = current_count
+	assert_true(ever_recorded, "no water disturbance was ever recorded while the hero swam toward the fishing spot")
+
+
+## The real player's own gate stops ripples the instant it stops moving
+## (input_direction.length() <= 0.01), even while still standing in the
+## water -- an idle float doesn't ripple, only movement does. Checked the
+## same rising-edge way as the test above, restricted to steps AFTER the
+## hero has genuinely arrived and is holding still: natural ripple decay
+## (RIPPLE_LIFETIME, far shorter than this test's own loop) would make a
+## plain "is the count now zero" check pass regardless of whether new
+## ripples kept firing or not.
+func test_the_hero_stops_rippling_once_it_holds_still_in_the_water():
+	var fishing_spot: Vector2 = diorama.get("_fishing_spot")
+	diorama.character_view.position = fishing_spot + Vector2(30, 0)
+	diorama._enter_action(CharacterActionPicker.Action.FISH)
+	diorama.set("_action_time_remaining", 1000.0)
+	var previous_count := 0
+	var new_ripple_while_still := false
+	for i in 300:
+		diorama._process(0.1)
+		var current_count: int = diorama.get("_water_shader")._disturbance_positions.size()
+		var arrived: bool = diorama.character_view.position.distance_to(fishing_spot) <= 2.5
+		if arrived and current_count > previous_count:
+			new_ripple_while_still = true
+		previous_count = current_count
+	assert_false(new_ripple_while_still, "a new ripple was recorded while the hero was holding still, already arrived, in the water")

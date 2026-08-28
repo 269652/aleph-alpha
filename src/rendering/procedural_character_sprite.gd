@@ -361,11 +361,31 @@ func _set_opaque(image: Image, size: Vector2i, x: int, y: int, color: Color) -> 
 
 ## The portrait's fixed proportions, in pixels. Composed at this size and
 ## scaled up by the UI (nearest-neighbour) so it stays crisp pixel art.
-const PORTRAIT_SIZE := Vector2i(26, 40)
-const _PORTRAIT_HEAD := Vector2i(14, 14)
-const _PORTRAIT_TORSO := Vector2i(16, 16)
-const _PORTRAIT_LEG := Vector2i(5, 9)
-const _PORTRAIT_ARM := Vector2i(4, 12)
+##
+## Doubled by _PORTRAIT_DETAIL_SCALE from the original 26x40 -- fixing the
+## blur (NEAREST instead of LANCZOS in _fit_to_box) exposed a SECOND,
+## separate problem: even a perfectly crisp resize of a still-tiny 26x40
+## canvas, magnified several times over by the UI, reads as coarse, obvious
+## square blocks rather than detailed pixel art (reported live, with a
+## screenshot, right after the blur fix landed: "now less blurry but super
+## pixelated"). NEAREST can only preserve whatever detail _fit_to_box is
+## actually handed -- a bigger target box keeps more of hero_composite
+## .png's own real source detail before any final display-scale
+## magnification ever happens (see test_fit_to_box_preserves_more_detail_
+## when_given_a_larger_target). Doubling every box here, not adding a
+## separate runtime parameter, so `_fit_to_box` computes a genuinely less
+## aggressive downscale automatically -- and it composes for free with
+## main_menu.gd's own STANDARD_PORTRAIT_SCALE, which derives its own
+## multiplier from PORTRAIT_SIZE.y at runtime: doubling the source and
+## halving the remaining display multiplier lands on the exact same final
+## on-screen size (248 / 40 -> 6x on a 40px source; 248 / 80 -> 3x on an
+## 80px source; 6*40 == 3*80), just with twice the real detail behind it.
+const _PORTRAIT_DETAIL_SCALE := 2
+const PORTRAIT_SIZE := Vector2i(26, 40) * _PORTRAIT_DETAIL_SCALE
+const _PORTRAIT_HEAD := Vector2i(14, 14) * _PORTRAIT_DETAIL_SCALE
+const _PORTRAIT_TORSO := Vector2i(16, 16) * _PORTRAIT_DETAIL_SCALE
+const _PORTRAIT_LEG := Vector2i(5, 9) * _PORTRAIT_DETAIL_SCALE
+const _PORTRAIT_ARM := Vector2i(4, 12) * _PORTRAIT_DETAIL_SCALE
 
 
 ## One cohesive standing figure -- head, torso, arms, legs, boots -- for the
@@ -403,22 +423,28 @@ func generate_hero_portrait_image(appearance: Dictionary) -> Image:
 		else _illustrated.outfit_variant_for(appearance.get("seed", 0))
 	)
 
-	var torso_y := _PORTRAIT_HEAD.y - 2
-	var legs_y := torso_y + _PORTRAIT_TORSO.y - 1
+	# The small fixed nudges below (overlap/spacing in PIXELS, at the
+	# ORIGINAL 26x40 scale) all carry their own * _PORTRAIT_DETAIL_SCALE
+	# now too -- scaling the box sizes above without ALSO scaling these
+	# would leave them relatively tinier at the bigger canvas, drifting the
+	# whole figure's proportions out of alignment (a gap here, an overlap
+	# there) instead of just rendering the same composition at more detail.
+	var torso_y := _PORTRAIT_HEAD.y - 2 * _PORTRAIT_DETAIL_SCALE
+	var legs_y := torso_y + _PORTRAIT_TORSO.y - 1 * _PORTRAIT_DETAIL_SCALE
 
 	# Arms first, so the torso's outline overlaps them at the shoulder rather
 	# than the other way around. Left/right use frame 0/1 of the illustrated
 	# sheet's two independent drawings (see IllustratedCharacterSprite's own
 	# doc comment on hero_composite.png's arms column) rather than the same
 	# frame mirrored twice.
-	var arm_y := torso_y + 3
+	var arm_y := torso_y + 3 * _PORTRAIT_DETAIL_SCALE
 	_blend(
 		image, _portrait_arm_image(appearance, outfit_variant, 0),
-		Vector2i(center_x - _PORTRAIT_TORSO.x / 2 - _PORTRAIT_ARM.x + 1, arm_y)
+		Vector2i(center_x - _PORTRAIT_TORSO.x / 2 - _PORTRAIT_ARM.x + 1 * _PORTRAIT_DETAIL_SCALE, arm_y)
 	)
 	_blend(
 		image, _portrait_arm_image(appearance, outfit_variant, 1),
-		Vector2i(center_x + _PORTRAIT_TORSO.x / 2 - 1, arm_y)
+		Vector2i(center_x + _PORTRAIT_TORSO.x / 2 - 1 * _PORTRAIT_DETAIL_SCALE, arm_y)
 	)
 
 	_blend_portrait_legs(image, appearance, outfit_variant, center_x, legs_y)
@@ -487,7 +513,23 @@ func _blend_portrait_legs(
 	if _illustrated.has_composite_part("legs"):
 		var trimmed := _illustrated.trimmed_composite_image("legs", outfit_variant)
 		if trimmed != null:
-			var span := Vector2i(_PORTRAIT_LEG.x * 2 + 2, _PORTRAIT_LEG.y)
+			# Derived from what's actually left in the canvas below the
+			# torso, NOT _PORTRAIT_LEG (sized for the procedural fallback's
+			# own two separate small rectangles just below -- see this
+			# function's own doc comment on why composite legs can't reuse
+			# it). Reusing that box starved the fused illustrated pair down
+			# to a tiny disconnected blob, floating well below a visible
+			# gap under the torso (reported live, with a screenshot,
+			# alongside the blur report: "restart it's not fixed atm" --
+			# pinned by test_no_large_vertical_gap_appears_anywhere_below_
+			# the_head). Width is deliberately generous (nearly the full
+			# canvas) rather than matched to the torso -- _fit_to_box picks
+			# whichever of width/height is more restrictive, and a
+			# too-narrow width was doubly starving the fit on top of the
+			# short height; a generous width just leaves height as the one
+			# real constraint, which is the canvas's own actual limit.
+			var available_height := PORTRAIT_SIZE.y - legs_y
+			var span := Vector2i(PORTRAIT_SIZE.x - 4 * _PORTRAIT_DETAIL_SCALE, available_height)
 			var fitted := _fit_to_box(trimmed, span)
 			var feet_y := PORTRAIT_SIZE.y - fitted.get_height()
 			_blend(image, fitted, Vector2i(center_x - fitted.get_width() / 2, feet_y))
@@ -502,6 +544,24 @@ func _blend_portrait_legs(
 ## "scale to fit, never stretch" rule normalize_frames applies one step up)
 ## -- no tint, for the head, whose skin tone is already baked in by
 ## IllustratedCharacterSprite.generate_head_texture's own luminance recolor.
+## NEAREST, not LANCZOS -- this downscales a hero_composite.png crop (large,
+## hand-drawn pixel art: flat colour blocks, not fine per-pixel photographic
+## detail) into the portrait's own tiny per-part boxes, as small as 14x14
+## (see PORTRAIT_SIZE's own doc comment: "scaled up by the UI
+## (nearest-neighbour) so it stays crisp pixel art" -- a promise this
+## function was quietly breaking one step earlier in the pipeline). LANCZOS
+## is the right call for downscaling FINE detail -- see TerrainRenderer.
+## _normalized_for_compositing's own doc comment, applied there to
+## noise-based ground textures, where nearest-neighbour aliases real detail
+## into visible noise -- but for blocky character art it does the opposite
+## of what pixel art needs: it blends flat colour regions into new, soft
+## in-between colours that never existed in the source (measured directly:
+## see test_fit_to_box_downscales_with_nearest_not_a_smoothing_filter, where
+## even LANCZOS's own edge-ringing left artifacts several pixels away from
+## the nearest colour boundary). No amount of correct NEAREST upscaling
+## downstream can undo blur already baked into these pixels (reported live,
+## with a screenshot, after the display-scale fix alone hadn't resolved it:
+## "char preview is super blurry").
 func _fit_to_box(source: Image, target_size: Vector2i) -> Image:
 	var scale := minf(
 		float(target_size.x) / float(maxi(1, source.get_width())),
@@ -512,7 +572,7 @@ func _fit_to_box(source: Image, target_size: Vector2i) -> Image:
 	var resized := source.duplicate()
 	if resized.get_format() != Image.FORMAT_RGBA8:
 		resized.convert(Image.FORMAT_RGBA8)
-	resized.resize(width, height, Image.INTERPOLATE_LANCZOS)
+	resized.resize(width, height, Image.INTERPOLATE_NEAREST)
 	return resized
 
 

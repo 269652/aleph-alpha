@@ -25,6 +25,36 @@ const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrai
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
+## Richer scene life (reported live: "We need flowers, butterflies, worms").
+## Both are plain art generators with no chunk/biome dependency (see
+## EarthChunkManager._sync_flower_sprites/_sync_worm_sprites, the same inline-
+## Sprite2D pattern _build_flowers/_build_worms below mirror) -- no dedicated
+## "spawn one at a position" renderer exists for either, unlike fish/trees/
+## birds, so this diorama builds the Sprite2D itself.
+const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
+const FlowerSpecies = preload("res://src/world/flower_species.gd")
+const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
+## An ambient boar for the hero to spar with (see the FIGHT action) --
+## CreatureRenderer.spawn_single is the real game's own "one marker, no
+## chunk/AI needed" spawn path (already used by DevConsole's /spawn and the
+## easter-egg boss cameos), reused here rather than restated.
+const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
+const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+## Fishing gets a real cast now (see the FISH action) -- both pure geometry/
+## art already used by the real Player for exactly this (Player._fishing_
+## step/_start_cast_visuals), reused as-is rather than invented for the
+## diorama.
+const FishingCast = preload("res://src/gameplay/fishing_cast.gd")
+const ProceduralBobberSprite = preload("res://src/rendering/procedural_bobber_sprite.gd")
+const ArtResolution = preload("res://src/rendering/art_resolution.gd")
+## The one reusable primitive for the pond's own organic edge (see
+## _generate_pond_cells) -- already used by CharacterPreviewLayout for its
+## own grass-clump scatter; no lake/organic-blob generator exists anywhere
+## else in this codebase to reuse instead (the real world's own water
+## silhouette comes from a bundled Earth elevation DEM lookup, not
+## synthesized shape, which has nothing to look up for a standalone diorama
+## pond).
+const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 
 ## Which weapon the diorama's hero wears for the SWING action -- any real
 ## weapon-kind item id works here (see item_catalog.gd); an iron sword is
@@ -35,7 +65,31 @@ const WEAPON_ITEM_ID := "iron_sword"
 ## the character stands ~22 tall, one grass clump covers ~one 16x16 tile):
 ## a ~6x6-tile footprint comfortably fits a couple of trees, a pond with a
 ## few pebbles at its rim, several grass clumps, and room to stroll.
-const FOOTPRINT := Vector2(96, 96)
+## Widened 96 -> 144 (9x6 tiles), height unchanged (reported live: "the
+## diorama is still a square and does NOT span the whole rectangular
+## panel" -- measured live, the diorama's own hero column in main_menu.gd
+## has real width to spare (a 276px glow_wrap sitting in a 528px column)
+## that a square viewport can never use).
+##
+## Widened AGAIN 144 -> 192 (12x6 tiles) once 144 was itself seen live and
+## still fell short (reported live: "it's now a rectangle but it still
+## doesn't cover the whole width of its containing panel"). Re-measured
+## rather than guessed a second time: the hero column's real available
+## width is genuinely 528px (the class-icon row directly above the diorama
+## already spans it in full), and growing the diorama's own glow_wrap to
+## match introduces no NEW minimum-width pressure of its own, since the
+## icon row already claims that width regardless. 192 is exactly 2x the
+## original 96 -- a whole-tile multiple, matching this constant's own
+## established "clean number of ground tiles" convention -- and, like the
+## 144 before it, chosen so `main_menu.gd`'s own DIORAMA_VIEW_SIZE.x
+## (which must scale by the SAME factor as this axis to keep the camera's
+## zoom uniform -- see _build_diorama_view's zoom formula) lands on a
+## whole pixel count (248 * 2 = 496) without rounding. Height stays 96 on
+## purpose, still: growing it too would push the diorama's own bottom edge
+## further into the pre-existing, separately-tracked scroll-clipping
+## regression (test_the_diorama_fits_within_the_first_unscrolled_view_of_
+## the_character_tab) rather than leaving it exactly as-is.
+const FOOTPRINT := Vector2(192, 96)
 ## The biome this little corner of the world is a corner OF.
 const GROUND_BIOME := "grassland"
 ## One diorama ground tile covers exactly one REAL world tile -- read from
@@ -57,13 +111,52 @@ const MAX_TARGET_ATTEMPTS := 30
 ## NOT CharacterStroll -- fish are driven by the real wander algorithm now,
 ## not a point-to-point walk (reported live: "fish don't swim like in the
 ## real game").
-const FISH_SWIM_SPEED := 4.0
+##
+## Doubled 4.0 -> 8.0 once the pond itself had grown well past the size this
+## was originally tuned against (reported live, a second time: "the fishes
+## don't speed boost and they don't swim naturally like in game"). The boost
+## mechanism itself was never broken -- measured directly: glide/flap speeds
+## matched this constant and this*FLAP_SPEED_MULTIPLIER exactly, and a burst
+## genuinely fired several times within a realistic 30s window. The real
+## gap was purely how slow 4.0 reads at the diorama's own on-screen scale
+## once measured against something concrete rather than eyeballed: a fish
+## took 4.0s just to glide across its OWN configured wander circle (not even
+## the whole, now-bigger pond) -- too close to standing still to register as
+## "swimming" at a glance, boost included. Test-pinned against that exact
+## property (test_fish_swim_speed_crosses_its_own_wander_circle_briskly),
+## not the bare number, so a future pond-size or wander-fraction change gets
+## re-measured against the same "reads as swimming" bar automatically.
+const FISH_SWIM_SPEED := 8.0
+## How often the hero spawns a water-ripple disturbance while genuinely
+## swimming/wading -- matches scenes/player.gd's own WATER_RIPPLE_INTERVAL
+## ("once per stroke, not every frame; the ring itself takes a couple of
+## seconds to fade, so anything faster would just stack redundant rings at
+## the same spot"). The real player already does this; the diorama's own
+## hero, driven by its own separate movement code rather than Player, never
+## did (reported live: "player doesnt cause water ripples").
+const HERO_WATER_RIPPLE_INTERVAL := 0.4
 ## The real world's own AmbientFlyerRenderer.BIRD_RADIUS (70 world units)
 ## comfortably exceeds this diorama's whole ~96-unit FOOTPRINT -- scaled down
 ## for the same reason FISH_SWIM_SPEED already scales fish movement for the
 ## tiny pond, so a bird's circling stays mostly on-screen instead of spending
 ## most of its time off past the frame's own edge.
 const BIRD_WANDER_RADIUS := 20.0
+## Same scaled-down reasoning as BIRD_WANDER_RADIUS -- AmbientFlyerRenderer's
+## own BUTTERFLY_RADIUS (30.0) comfortably exceeds this diorama's footprint.
+## build_flyer has no radius-override parameter the way build_bird does (see
+## the investigation this was scoped from), so butterflies fly at the real
+## BUTTERFLY_RADIUS as-is -- close enough to on-screen at this footprint size
+## that a diorama-only override isn't worth the extra surface area yet.
+##
+## How far apart the hero stands from the boar while sparring (see the FIGHT
+## action) -- CreatureMarker.ATTACK_RANGE, the real game's own idea of
+## "close enough to fight," derived rather than restated as a diorama-only
+## number.
+const FIGHT_RANGE := CreatureMarker.ATTACK_RANGE
+## How often a fresh swing lands while FIGHT holds and the hero has already
+## closed to FIGHT_RANGE -- brisker than an idle SWING's own one-off duration
+## since this has to visibly read as sparring, not one single stray swing.
+const FIGHT_SWING_INTERVAL := 0.8
 
 var character_view: Node2D = null
 ## The ground plane's own tiles (see _build_ground) -- kept so tests can
@@ -71,6 +164,12 @@ var character_view: Node2D = null
 var ground_tiles: Array[Node2D] = []
 var tree_nodes: Array[Node2D] = []
 var pebble_nodes: Array[Node2D] = []
+var flower_nodes: Array[Node2D] = []
+var worm_nodes: Array[Node2D] = []
+var butterfly_nodes: Array[Node2D] = []
+## Single ambient boar (see CharacterPreviewLayout.Result.boar_position) --
+## null only before the first build().
+var boar_node: Node2D = null
 var fish_nodes: Array[Node2D] = []
 var bird_nodes: Array[Node2D] = []
 
@@ -95,16 +194,49 @@ var _fishing_spot := Vector2.ZERO
 ## _build_grass's own doc comment on why).
 var _grass_patch: IllustratedGrassPatch = null
 var _grass_mmi: MultiMeshInstance2D = null
-## The pond's own world-space bounding rect (set in _build_pond) -- what
-## biome_at_global checks a global tile's own centre against, and the same
-## rect test_fish_stay_within_the_ponds_real_bounds_via_shore_avoidance
-## verifies fish never cross.
+## The pond's own world-space bounding rect (set in _build_pond) -- a fast
+## outer-bound reject for biome_at_global, and the same rect test_fish_stay_
+## within_the_ponds_real_bounds_via_shore_avoidance verifies fish never
+## cross. No longer sufficient BY ITSELF to decide "is this point really
+## water" now that the pond's own silhouette is irregular (see _pond_cells) --
+## a corner this rect covers can still be genuinely eroded/land.
 var _pond_bounds := Rect2()
+## The pond's own real, possibly-irregular silhouette (set in _build_pond,
+## see _generate_pond_cells) -- grid-LOCAL Vector2i cell coordinates, keyed
+## true. biome_at_global checks a global tile's centre against THIS, not
+## just _pond_bounds, so a fish never reads an eroded corner as water it
+## isn't (nothing renders there -- see _build_pond's own skip-if-not-kept).
+var _pond_cells: Dictionary = {}
+## The seed build() was called with -- kept (not just passed straight
+## through) so _build_pond can derive the pond's own organic shape from it
+## directly, independent of how many OTHER _rng draws happened first this
+## build() (see _build_pond's own doc comment on why not _rng.seed).
+var _dna_seed := 0
 ## The pond's own WaterShader instance -- kept (not just its shared
 ## material) so record_water_disturbance can forward a fish's own ripple
 ## straight to it, and _process can age those ripples every frame the same
 ## way EarthChunkManager does for the real world's own water.
 var _water_shader: WaterShader = null
+## The hero's own position the last time the water-ripple gate ran --
+## unset (null) until the first check, since "did it move" needs a prior
+## sample (see _process's own ripple block, mirroring FishMarker._step_
+## water_ripple's identical "moved" gate).
+var _last_hero_position_for_ripple: Variant = null
+var _hero_water_ripple_accumulator := 0.0
+## The FISH action's own bobber (see _build_bobber/_start_fishing_cast) --
+## one Sprite2D, hidden until a cast actually lands, top_level like Player's
+## own _bobber so its world position doesn't inherit this diorama root's
+## transform.
+var _bobber: Sprite2D = null
+## Whether the current FISH action has already cast its line -- reset by
+## _enter_action so re-ENTERING fish (a fresh cast to a fresh spot) casts
+## again, but arriving doesn't recast every frame it stays arrived.
+var _fish_has_cast := false
+## Seconds until the next swing lands while FIGHT holds and the hero has
+## already closed to sparring range (see FIGHT_SWING_INTERVAL) -- reset by
+## _enter_action so every fresh FIGHT starts with an immediate swing rather
+## than waiting out a stale countdown from whatever action came before.
+var _fight_swing_remaining := 0.0
 
 
 ## Tears down and rebuilds the whole diorama for `dna_seed` -- the WORLD
@@ -130,9 +262,20 @@ func build(dna_seed: int) -> void:
 	pebble_nodes = []
 	fish_nodes = []
 	bird_nodes = []
+	flower_nodes = []
+	worm_nodes = []
+	butterfly_nodes = []
+	boar_node = null
 	character_view = null
 	_grass_patch = null
 	_grass_mmi = null
+	_pond_cells = {}
+	_last_hero_position_for_ripple = null
+	_hero_water_ripple_accumulator = 0.0
+	_bobber = null
+	_fish_has_cast = false
+	_fight_swing_remaining = 0.0
+	_dna_seed = dna_seed
 
 	# Seeded before anything below reads _rng -- the world LAYOUT above is
 	# already independently seeded from dna_seed (CharacterPreviewLayout
@@ -151,7 +294,12 @@ func build(dna_seed: int) -> void:
 	_build_fish()
 	_build_trees()
 	_build_birds()
+	_build_flowers()
+	_build_worms()
+	_build_butterflies()
+	_build_boar()
 	_build_character()
+	_build_bobber()
 
 	_stroll_target = character_view.position
 	_fishing_spot = _compute_fishing_spot()
@@ -180,10 +328,11 @@ func _process(delta: float) -> void:
 		_action_time_remaining = next.duration
 
 	# WANDER walks and keeps re-targeting forever; FISH walks to its one
-	# fixed spot and then holds still facing the pond once it arrives;
-	# IDLE/SWING never walk at all (SWING's own animation was already
-	# triggered once in _enter_action -- see that function's own doc
-	# comment on why it can't just live here instead).
+	# fixed spot, casts once on arrival, then holds still facing the pond;
+	# FIGHT walks to sparring range of the boar and swings there
+	# periodically; IDLE/SWING never walk at all (SWING's own animation was
+	# already triggered once in _enter_action -- see that function's own
+	# doc comment on why it can't just live here instead).
 	match _current_action:
 		CharacterActionPicker.Action.WANDER:
 			if CharacterStroll.has_arrived(character_view.position, _stroll_target):
@@ -193,8 +342,22 @@ func _process(delta: float) -> void:
 			if CharacterStroll.has_arrived(character_view.position, _stroll_target):
 				character_view.set_facing(_layout.pond_center - character_view.position)
 				_hold_still()
+				if not _fish_has_cast:
+					_fish_has_cast = true
+					_start_fishing_cast()
 			else:
 				_walk_toward(_stroll_target, delta)
+		CharacterActionPicker.Action.FIGHT:
+			var boar_position: Vector2 = _layout.boar_position
+			if character_view.position.distance_to(boar_position) <= FIGHT_RANGE:
+				character_view.set_facing(boar_position - character_view.position)
+				_hold_still()
+				_fight_swing_remaining -= delta
+				if _fight_swing_remaining <= 0.0:
+					_fight_swing_remaining = FIGHT_SWING_INTERVAL
+					character_view.play_attack_swing(_facing_string(), CharacterActionPicker.SWING_DURATION)
+			else:
+				_walk_toward(boar_position, delta)
 		CharacterActionPicker.Action.IDLE, CharacterActionPicker.Action.SWING:
 			_hold_still()
 
@@ -210,6 +373,49 @@ func _process(delta: float) -> void:
 	if character_view.position.distance_to(_layout.pond_center) < _layout.pond_radius:
 		character_view.is_moving = false
 		character_view.set_movement_state(character_view.MovementState.SWIMMING)
+
+	# Water ripples: mirrors scenes/player.gd's own _step_water_ripples --
+	# gated on the hero genuinely being IN the water (SWIMMING, set just
+	# above) AND having actually moved since the last check (an idle float
+	# doesn't ripple, only movement does -- the real player's own gate is
+	# input_direction.length() > 0.01; this diorama has no input, so
+	# comparing position across frames is the equivalent "did it actually
+	# move" check), throttled to HERO_WATER_RIPPLE_INTERVAL the same way.
+	#
+	# PLUS one thing the real player doesn't need: an IMMEDIATE splash the
+	# instant the hero steps into the water at all (_last_hero_position_
+	# for_ripple still null -- see build()'s own reset, and the not-
+	# swimming branch below), not gated on the throttle interval. The real
+	# player's own water is a whole lake/ocean, so its throttled-only gate
+	# always has plenty of moving-through-water time to fire in; this
+	# diorama's own wade-in spot (_compute_fishing_spot's WADE_FRACTION)
+	# sits so close to the pond's own rim that the hero is only ever
+	# "moving while in the water" for a few tenths of a second before it
+	# arrives and holds still -- measured too short, in practice, for the
+	# real player's own 0.4s throttle to ever fire even once. A real splash
+	# doesn't wait for a timer either way.
+	if character_view.movement_state == character_view.MovementState.SWIMMING:
+		var just_entered_water := _last_hero_position_for_ripple == null
+		var moved: bool = (
+			not just_entered_water and character_view.position != _last_hero_position_for_ripple
+		)
+		_last_hero_position_for_ripple = character_view.position
+		if just_entered_water:
+			_hero_water_ripple_accumulator = 0.0
+			record_water_disturbance(character_view.position)
+		elif moved:
+			_hero_water_ripple_accumulator += delta
+			if _hero_water_ripple_accumulator >= HERO_WATER_RIPPLE_INTERVAL:
+				_hero_water_ripple_accumulator = 0.0
+				record_water_disturbance(character_view.position)
+		else:
+			_hero_water_ripple_accumulator = 0.0
+	else:
+		# Reset (not just on rebuild) so a LATER re-entry into the water
+		# is detected as "just entered" again too, not mistaken for
+		# continuous movement against a stale, long-ago in-water position.
+		_last_hero_position_for_ripple = null
+		_hero_water_ripple_accumulator = 0.0
 
 	# Grass parts near the hero as it strolls through (reported live: "the
 	# grass blades don't part when it walks through") -- purely cosmetic,
@@ -276,6 +482,24 @@ func _compute_fishing_spot() -> Vector2:
 	return _layout.pond_center
 
 
+## The FISH action's own cast (reported live, alongside more scene life:
+## "the character should do random things like ... fish a fish") -- called
+## once, the frame the hero arrives at the fishing spot (see _process's own
+## FISH branch and _fish_has_cast). Mirrors Player._start_cast_visuals
+## exactly: a rod-throw swing reusing the same animation as a melee attack,
+## plus a bobber landing at FishingCast.cast_point -- the real game's own
+## fishing has never had a dedicated cast animation either (see FishingCast/
+## ProceduralBobberSprite's own doc comments), so there is nothing new to
+## build here, only to wire in.
+func _start_fishing_cast() -> void:
+	character_view.play_attack_swing(_facing_string(), CharacterActionPicker.SWING_DURATION)
+	if _bobber == null:
+		return
+	var facing_direction: Vector2 = _layout.pond_center - character_view.position
+	_bobber.global_position = FishingCast.new().cast_point(character_view.position, facing_direction)
+	_bobber.visible = true
+
+
 ## One-time setup for a newly-entered action -- called once on the frame it
 ## starts, not every frame it's held (a SWING, for instance, must trigger
 ## exactly once, not re-trigger every frame for its own short duration).
@@ -286,8 +510,16 @@ func _enter_action(action: CharacterActionPicker.Action) -> void:
 			_stroll_target = _pick_new_target()
 		CharacterActionPicker.Action.FISH:
 			_stroll_target = _fishing_spot
+			_fish_has_cast = false
+			if _bobber != null:
+				_bobber.visible = false
 		CharacterActionPicker.Action.SWING:
 			character_view.play_attack_swing(_facing_string(), CharacterActionPicker.SWING_DURATION)
+		CharacterActionPicker.Action.FIGHT:
+			# 0.0, not FIGHT_SWING_INTERVAL -- the first frame the hero is
+			# actually within range should swing immediately, not wait out a
+			# full interval first (see _process's own FIGHT branch).
+			_fight_swing_remaining = 0.0
 		CharacterActionPicker.Action.IDLE:
 			pass
 
@@ -459,6 +691,114 @@ static func _pick_long_grass_positions(positions: Array[Vector2]) -> Array[Vecto
 ## tier (TerrainRenderer.RING_MAX/generate_ring_image) at all -- every cell
 ## is either touching the rim or fully interior.
 const POND_TILE_WORLD_SIZE := float(TerrainRenderer.TILE_SIZE)
+## How deep into a CORNER a cell must sit (its SHORTER-axis fraction from
+## centre -- see _generate_pond_cells's own "corner_frac" doc comment) before
+## the noise below can erode it at all. First tried against the LONGER axis
+## (Chebyshev distance -- a cell was eligible the instant it was far along
+## EITHER axis), which meant an entire outer row/column all shared the same
+## eligibility and, under correlated noise, could erode away TOGETHER --
+## checked directly with a rendered dump (composited the live tile grid to a
+## PNG and looked at it): one seed's pond came out a lopsided wedge with
+## nearly a whole side missing, not a rounded rectangle. Requiring BOTH axes
+## to be simultaneously far from centre keeps every pure edge-midpoint cell
+## (always low on at least one axis) permanently safe -- only genuine
+## corners, where noise can only ever nibble a small diagonal bite, are ever
+## eligible. Test-pinned (CLAUDE.md: tuned values need a tested function or
+## a pinned constant, never just an eyeballed comment) against the two
+## properties that actually matter for "reads as an organic rectangle, not a
+## crisp one or a shapeless blob": test_generate_pond_cells_erodes_at_least_
+## one_outer_cell_for_some_seed (genuinely irregular) and test_generate_
+## pond_cells_keeps_most_of_the_grid_on_average (still mostly rectangular).
+const POND_EROSION_SAFE_FRACTION := 0.35
+## Noise sampling scale, in GRID CELLS (not world units) -- small enough
+## that neighbouring rim cells still correlate (an eroded shoreline reads as
+## a few connected bites out of the rectangle, not single-cell peppering),
+## the same "structural, not eyeballed" reasoning CharacterPreviewLayout.
+## GRASS_FIELD_NOISE_SCALE documents for its own noise sampling.
+const POND_EROSION_NOISE_SCALE := 0.35
+
+
+## Column/row counts derived from `layout`'s own pond_half_size (see that
+## field's own doc comment: x is the long axis, pinned to pond_radius; y is
+## the short axis, pond_radius / POND_ASPECT_RATIO) -- two DIFFERENT axis
+## lengths, not one pond_radius doubled into a square (reported live: "not
+## square / circle but a rectangle"). Split into two tiny static functions
+## (rather than inlined in _build_pond) so test_pond_grid_is_wider_than_it_
+## is_tall can check the property directly against the live diorama's own
+## layout without needing to reach into _build_pond's local variables.
+static func _pond_columns_for(layout: CharacterPreviewLayout.Result) -> int:
+	return maxi(1, int(ceil(layout.pond_half_size.x * 2.0 / POND_TILE_WORLD_SIZE)))
+
+
+static func _pond_rows_for(layout: CharacterPreviewLayout.Result) -> int:
+	return maxi(1, int(ceil(layout.pond_half_size.y * 2.0 / POND_TILE_WORLD_SIZE)))
+
+
+## Which cells of a `columns` x `rows` grid are actually part of the pond --
+## the "rectangle with some curves (organic shape)" the tile grid renders
+## (reported live: "the pond should be ... not square / circle but a
+## rectangle with some curves"). No lake/organic-blob generator exists
+## anywhere in this codebase to reuse -- see PixelNoise's own preload
+## comment above -- so this is built from scratch, using that same primitive
+## CharacterPreviewLayout already reaches for.
+##
+## A corner-only "perturbed distance field" blob: `corner_frac` is the
+## SHORTER of a cell's two per-axis distances from the grid's own centre (0
+## at centre, up to ~1 approaching a true corner) -- deliberately the
+## SHORTER, not the longer/Chebyshev one, so a cell far along only ONE axis
+## (an ordinary edge-midpoint) always scores low and stays permanently in
+## the kept core; only a cell that's simultaneously far along BOTH axes (a
+## genuine corner) can ever reach the eroded band (see POND_EROSION_SAFE_
+## FRACTION's own doc comment on why -- a real rendered dump showed the
+## alternative eroding a whole side away at once). PixelNoise.smooth decides
+## survival within that band, weighted so cells deeper into the corner need
+## a higher roll -- the same "erodes MORE near the true corner" curve a real
+## shoreline has, rather than a uniform coin-flip that would fray every
+## eligible corner cell just as readily.
+##
+## Pure and static, no Godot nodes, so it's directly testable without a live
+## diorama -- the same split this file already keeps for
+## _pick_long_grass_positions.
+static func _generate_pond_cells(columns: int, rows: int, seed_value: int) -> Dictionary:
+	var kept := {}
+	var center := Vector2(float(columns - 1), float(rows - 1)) * 0.5
+	var half_size := Vector2(columns, rows) * 0.5
+	for row in rows:
+		for column in columns:
+			var offset := Vector2(column, row) - center
+			var x_frac := absf(offset.x) / half_size.x
+			var y_frac := absf(offset.y) / half_size.y
+			var corner_frac := minf(x_frac, y_frac)
+			if corner_frac <= POND_EROSION_SAFE_FRACTION:
+				kept[Vector2i(column, row)] = true
+				continue
+			if corner_frac > 1.0:
+				continue
+			var noise := PixelNoise.smooth(
+				seed_value, float(column) * POND_EROSION_NOISE_SCALE, float(row) * POND_EROSION_NOISE_SCALE
+			)
+			var erosion_progress := (corner_frac - POND_EROSION_SAFE_FRACTION) / (1.0 - POND_EROSION_SAFE_FRACTION)
+			if noise > erosion_progress:
+				kept[Vector2i(column, row)] = true
+	return kept
+
+
+## Which of `cell`'s 4 cardinal neighbours count as "land" for the shore-
+## fade texture -- true whenever a neighbour is either past the grid's own
+## bounds OR inside the grid but not in `kept`. The OLD logic (row == 0,
+## column == columns - 1, etc.) only ever checked the grid's own outer rim,
+## which was correct only because every cell used to be kept -- now that
+## _generate_pond_cells can erode an INTERIOR cell too, a kept cell can
+## border an eroded neighbour without being anywhere near the grid's own
+## edge, and still needs the fade facing that direction.
+static func _land_directions_for_cell(cell: Vector2i, kept: Dictionary, columns: int, rows: int) -> Array[Vector2i]:
+	var land_directions: Array[Vector2i] = []
+	for direction in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
+		var neighbor: Vector2i = cell + direction
+		var neighbor_in_grid := neighbor.x >= 0 and neighbor.x < columns and neighbor.y >= 0 and neighbor.y < rows
+		if not neighbor_in_grid or not kept.has(neighbor):
+			land_directions.append(direction)
+	return land_directions
 
 
 func _build_pond() -> void:
@@ -466,11 +806,17 @@ func _build_pond() -> void:
 	pond.name = "Pond"
 	add_child(pond)
 
-	var columns := maxi(1, int(ceil(_layout.pond_radius * 2.0 / POND_TILE_WORLD_SIZE)))
-	var rows := columns
+	var columns := _pond_columns_for(_layout)
+	var rows := _pond_rows_for(_layout)
 	var grid_size := Vector2(columns, rows) * POND_TILE_WORLD_SIZE
 	var top_left := _layout.pond_center - grid_size * 0.5
 	_pond_bounds = Rect2(top_left, grid_size)
+	# Seeded from _dna_seed directly, not the mutable _rng (whose state
+	# depends on how many OTHER draws happened first this build() -- see
+	# _dna_seed's own doc comment) -- the pond's own visual shape follows
+	# the design doc's Determinism pillar (same seed, same layout) exactly
+	# like every other placement, independent of call order.
+	_pond_cells = _generate_pond_cells(columns, rows, _dna_seed)
 
 	var shore_sprite := ProceduralShoreDistanceSprite.new()
 	# Kept as an instance (not discarded after .shared_material()) so
@@ -485,15 +831,10 @@ func _build_pond() -> void:
 
 	for row in rows:
 		for column in columns:
-			var land_directions: Array[Vector2i] = []
-			if row == 0:
-				land_directions.append(Vector2i(0, -1))
-			if row == rows - 1:
-				land_directions.append(Vector2i(0, 1))
-			if column == 0:
-				land_directions.append(Vector2i(-1, 0))
-			if column == columns - 1:
-				land_directions.append(Vector2i(1, 0))
+			var cell := Vector2i(column, row)
+			if not _pond_cells.has(cell):
+				continue
+			var land_directions := _land_directions_for_cell(cell, _pond_cells, columns, rows)
 
 			var image: Image = (
 				shore_sprite.generate_deep_water_image()
@@ -535,17 +876,26 @@ func _build_pond() -> void:
 ## fell short: "fish still don't move natural like ingame also no
 ## ripples").
 ##
-## A tile is "ocean" exactly when its own centre point falls inside the
-## pond's real world-space bounds (_pond_bounds, set in _build_pond) --
-## checked against a continuous rect rather than the pond's own internal
-## tile row/column indices, since nothing requires FishMarker's global tile
-## grid (anchored at world origin) to line up with the pond's own rendered
-## tiles (anchored at _layout.pond_center, an arbitrary seeded position).
+## A tile is "ocean" exactly when its own centre point falls on a cell the
+## pond's own grid actually KEPT (_pond_cells, set in _build_pond) -- not
+## merely inside _pond_bounds's outer rectangle, which the pond's now-
+## irregular silhouette (see _generate_pond_cells) can leave partly eroded
+## back to land. _pond_bounds is checked first purely as a cheap reject (no
+## point converting to a local cell for a point nowhere near the pond at
+## all); nothing requires FishMarker's global tile grid (anchored at world
+## origin) to line up with the pond's own rendered tiles (anchored at
+## _layout.pond_center, an arbitrary seeded position), which is why the
+## centre point is re-expressed in the pond's own LOCAL cell coordinates
+## before checking _pond_cells.
 func biome_at_global(tile_x: int, tile_y: int) -> String:
 	var tile_center := Vector2(
 		(float(tile_x) + 0.5) * POND_TILE_WORLD_SIZE, (float(tile_y) + 0.5) * POND_TILE_WORLD_SIZE
 	)
-	return "ocean" if _pond_bounds.has_point(tile_center) else GROUND_BIOME
+	if not _pond_bounds.has_point(tile_center):
+		return GROUND_BIOME
+	var local := (tile_center - _pond_bounds.position) / POND_TILE_WORLD_SIZE
+	var cell := Vector2i(floori(local.x), floori(local.y))
+	return "ocean" if _pond_cells.has(cell) else GROUND_BIOME
 
 
 ## The other half of the same duck-typed "world" contract -- a fish's own
@@ -632,6 +982,97 @@ func _build_birds() -> void:
 		var species: String = pool[absi(seed_value) % pool.size()]
 		var bird := flyer_renderer.build_bird(self, species, bird_position, seed_value, BIRD_WANDER_RADIUS)
 		bird_nodes.append(bird)
+
+
+## Flowers scattered through the meadow (reported live, alongside more scene
+## life: "We need flowers, butterflies, worms..."). ProceduralFlowerSprite has
+## no chunk/biome dependency at all -- generate_texture takes only (species_id,
+## seed_value, nectar, withered) -- so this mirrors EarthChunkManager._sync_
+## flower_sprites' own inline Sprite2D construction directly rather than
+## inventing a new pattern. No FlowerPatch/nectar-field exists here to read
+## real values from, so nectar/withered stay at their own "full bloom"
+## defaults (1.0/false) -- the same "permanently grown" convention every
+## other diorama plant (grass, trees) already follows.
+func _build_flowers() -> void:
+	var generator := ProceduralFlowerSprite.new()
+	for flower_position in _layout.flower_positions:
+		var seed_value := hash(flower_position)
+		var species: String = FlowerSpecies.IDS[absi(seed_value) % FlowerSpecies.IDS.size()]
+		var sprite := Sprite2D.new()
+		sprite.texture = generator.generate_texture(species, seed_value)
+		sprite.scale = Vector2.ONE * ProceduralFlowerSprite.plant_scale_for(species, seed_value)
+		sprite.offset.y = -float(ProceduralFlowerSprite.SIZE.y) * 0.5
+		sprite.position = flower_position
+		add_child(sprite)
+		flower_nodes.append(sprite)
+
+
+## Worms lying in the grass -- same "no chunk dependency, thin Sprite2D
+## wrapper" shape as flowers, mirroring EarthChunkManager._sync_worm_sprites
+## minus its partial-emergence region-rect trick (see EarthwormPatch.
+## emergence_for): purely decorative and always fully surfaced here, not
+## tied to any real burrow/weather state.
+func _build_worms() -> void:
+	var generator := ProceduralWormSprite.new()
+	for worm_position in _layout.worm_positions:
+		var seed_value := hash(worm_position)
+		var sprite := Sprite2D.new()
+		sprite.texture = generator.generate_texture(seed_value)
+		sprite.scale = Vector2.ONE * ProceduralWormSprite.world_scale()
+		sprite.position = worm_position
+		add_child(sprite)
+		worm_nodes.append(sprite)
+
+
+## Butterflies (and the occasional bee) drifting near the flowers --
+## AmbientFlyerRenderer.build_flyer is already a ready-made non-bird wrapper
+## (used in production for flies on carcasses), so this needs no new
+## rendering code at all -- the same "reuse the real thing" contract
+## _build_birds already follows.
+func _build_butterflies() -> void:
+	var flyer_renderer := AmbientFlyerRenderer.new()
+	for butterfly_position in _layout.butterfly_positions:
+		var seed_value := hash(butterfly_position)
+		var pool := AmbientFlyerRenderer.TRUE_BUTTERFLY_SPECIES_POOL
+		var species: String = pool[absi(seed_value) % pool.size()]
+		var butterfly := flyer_renderer.build_flyer(self, species, butterfly_position, seed_value)
+		butterfly_nodes.append(butterfly)
+
+
+## One ambient boar for the hero to spar with (see the FIGHT action) --
+## CreatureRenderer's own real "one marker, no chunk/AI needed" spawn path
+## (already used by DevConsole's /spawn and easter-egg boss cameos). Calls
+## the underlying _build_marker directly rather than the public spawn_single
+## wrapper so the boar's own wander seed is DETERMINISTIC from its position
+## (spawn_single itself rolls a fresh randi() every call -- correct for its
+## own debug-spawn use case, but not for this diorama's "same seed, same
+## scene" pillar) -- the same reasoning fish/birds already hash their own
+## spawn position for. `world` stays null (CreatureMarker's own documented
+## no-AI fallback): a real boar's attack pose is gated behind full AI/
+## perception with no public trigger to force it on cue, so this boar stays
+## a harmlessly ambient presence, exactly like the diorama's fish/birds
+## already are -- the hero's own swing (see the FIGHT action) is what
+## actually reads as "fighting", not the boar fighting back.
+func _build_boar() -> void:
+	var seed_value := hash(_layout.boar_position)
+	boar_node = CreatureRenderer.new()._build_marker(
+		self, "boar", _layout.boar_position, seed_value, null, TerrainRenderer.TILE_SIZE
+	)
+
+
+## The FISH action's own bobber (see _start_fishing_cast) -- one Sprite2D,
+## hidden until a cast actually lands, mirroring Player's own _bobber setup
+## exactly (ProceduralBobberSprite texture at ArtResolution.SPRITE_SCALE,
+## top_level so its world position doesn't inherit this diorama root's
+## transform).
+func _build_bobber() -> void:
+	_bobber = Sprite2D.new()
+	_bobber.name = "Bobber"
+	_bobber.texture = ProceduralBobberSprite.new().generate_texture()
+	_bobber.scale = Vector2.ONE * ArtResolution.SPRITE_SCALE
+	_bobber.visible = false
+	_bobber.top_level = true
+	add_child(_bobber)
 
 
 func _build_character() -> void:
