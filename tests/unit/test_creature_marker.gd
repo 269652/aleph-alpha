@@ -75,6 +75,70 @@ func before_each():
 	add_child(marker)
 
 
+# -- spell-cast status effects (docs/concept/spell_runtime.md) -- the same
+# duck-typed heal/apply_spell_debuff methods Player implements, so
+# SpellAtomEffects can target either kind of node identically.
+
+const SpellStatusEffectsForMarker = preload("res://src/gameplay/spell_status_effects.gd")
+
+
+func test_heal_restores_health_up_to_the_max():
+	marker.info.health = marker.info.max_health - 20.0
+	marker.heal(10.0)
+	assert_almost_eq(marker.info.health, marker.info.max_health - 10.0, 0.001)
+
+
+func test_heal_never_exceeds_max_health():
+	marker.heal(9999.0)
+	assert_almost_eq(marker.info.health, marker.info.max_health, 0.001)
+
+
+func test_ignite_deals_real_damage_over_time():
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.IGNITE, 3.0)
+	var health_before: float = marker.info.health
+
+	marker._spell_status_step(1.0)
+
+	assert_lt(marker.info.health, health_before)
+
+
+func test_freeze_roots_a_creature_in_place():
+	assert_false(marker.is_rooted())
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.FREEZE, 2.0)
+	assert_true(marker.is_rooted())
+
+
+func test_being_rooted_expires_on_its_own():
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.ROOT, 1.0)
+	marker._spell_status_step(1.5)
+	assert_false(marker.is_rooted())
+
+
+## `fear`/`calm` override the behavior-decision context's temperament for
+## their duration (see spell_runtime.md) rather than touching
+## creature_behavior.gd's own pure decide() -- an aggressive predator with
+## a nearby threat would normally fight; feared/calmed, it reads as
+## non-aggressive instead.
+func test_fear_overrides_temperament_to_non_aggressive_for_the_behavior_decision():
+	marker.info = CreatureInfo.new("wolf")
+	assert_eq(marker.info.temperament, "aggressive", "precondition: wolves are aggressive")
+
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.FEAR, 4.0)
+
+	assert_ne(marker._temperament_for_decision(), "aggressive")
+
+
+func test_calm_also_overrides_temperament_to_non_aggressive():
+	marker.info = CreatureInfo.new("wolf")
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.CALM, 4.0)
+	assert_ne(marker._temperament_for_decision(), "aggressive")
+
+
+func test_temperament_for_decision_is_unchanged_with_no_active_debuff():
+	marker.info = CreatureInfo.new("wolf")
+	assert_eq(marker._temperament_for_decision(), "aggressive")
+
+
 ## See World's mouse-hover animal-name tooltip (docs feature request).
 func test_get_display_name_returns_the_infos_display_name():
 	marker.info = CreatureInfo.new("herbivore")

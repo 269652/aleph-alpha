@@ -46,6 +46,8 @@ const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
+const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
+const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 
 ## Sun elevation in degrees, shared by every creature's shadow -- set once
 ## per frame by World from its real sun-position calculation (see
@@ -608,6 +610,13 @@ func _process(frame_delta: float) -> void:
 	if is_queued_for_deletion():
 		return  # died of disease this frame -- nothing below has a live marker to act on
 
+	# Same "runs unconditionally, ahead of every early-return" reasoning as
+	# disease above: an ignited/blighted creature keeps burning no matter
+	# what it's doing this frame (see docs/concept/spell_runtime.md).
+	_spell_status_step(delta)
+	if is_queued_for_deletion():
+		return  # an ignite/blight tick can kill too
+
 	if _knockback_time_remaining > 0.0:
 		var result := _knockback.step(_knockback_remaining, _knockback_time_remaining, delta)
 		position += result.step
@@ -615,6 +624,10 @@ func _process(frame_delta: float) -> void:
 		_knockback_time_remaining = result.time_remaining
 		_sync_grounded_children()
 		return  # a shove overrides normal AI movement while it plays out
+
+	if is_rooted():
+		_sync_grounded_children()
+		return  # frozen/rooted: no movement or AI decisions this frame, same precedence as a knockback
 
 	if _world == null or info == null:
 		_wander_step(delta)
@@ -696,7 +709,7 @@ func _process(frame_delta: float) -> void:
 
 	var decision := _behavior.decide({
 		"position": position,
-		"temperament": info.temperament,
+		"temperament": _temperament_for_decision(),
 		"is_predator": info.is_predator,
 		"health_fraction": info.health / info.max_health,
 		"hungry": _needs.is_hungry(),
@@ -1909,6 +1922,70 @@ func take_damage(amount: float) -> void:
 	_update_health_bar()
 	if _health.is_dead(info.health):
 		_die()
+
+
+## The `minor_heal`/`major_heal` atoms' shared target-side method (see
+## docs/concept/spell_runtime.md) -- same duck-typed-across-target-types
+## shape take_damage already is; Player.heal is the other half.
+func heal(amount: float) -> void:
+	if info == null:
+		return
+	info.health = minf(info.max_health, info.health + amount)
+
+
+# -- spell-cast status effects: ignite/blight/freeze/root/slow/fear/calm/...
+# (see docs/concept/spell_runtime.md). Mirrors Player's own DebuffStack-
+# tracked shape exactly -- this class had no equivalent before (only Player
+# could be poisoned/spell-debuffed at all).
+
+var active_spell_debuffs: Array = []
+var _debuff_stack := DebuffStack.new()
+var _spell_status_effects := SpellStatusEffects.new()
+
+
+func apply_spell_debuff(debuff_id: String, duration: float) -> void:
+	active_spell_debuffs = _debuff_stack.apply(
+		active_spell_debuffs, debuff_id, duration, SpellStatusEffects.MAX_STACKS
+	)
+
+
+func is_rooted() -> bool:
+	return (
+		_debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.FREEZE) > 0
+		or _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.ROOT) > 0
+	)
+
+
+## `fear`/`calm` don't touch creature_behavior.gd's own pure decide() at all
+## -- they override the "temperament" value fed INTO it for their duration,
+## additive at this one call site. An aggressive predator that would
+## normally fight a nearby threat reads as non-aggressive instead (flees or
+## stays passive, per CreatureBehavior's own rules), the same mechanical
+## effect for both atoms today (see spell_runtime.md's honest note on this,
+## the same "distinct atoms, identical mechanic for now" shape the four
+## damage atoms already have).
+func _temperament_for_decision() -> String:
+	if info == null:
+		return ""
+	if (
+		_debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.FEAR) > 0
+		or _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.CALM) > 0
+	):
+		return "calm"
+	return info.temperament
+
+
+## Authority-side per-frame tick: ignite/blight's real damage-over-time
+## (mirrors Player._spell_status_step line for line), then advances every
+## active spell debuff's remaining duration.
+func _spell_status_step(delta: float) -> void:
+	if info == null:
+		return
+	for debuff_id in [SpellStatusEffects.IGNITE, SpellStatusEffects.BLIGHT]:
+		var stacks := _debuff_stack.stacks_of(active_spell_debuffs, debuff_id)
+		if stacks > 0:
+			take_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
+	active_spell_debuffs = _debuff_stack.advance(active_spell_debuffs, delta)
 
 
 func _update_health_bar() -> void:

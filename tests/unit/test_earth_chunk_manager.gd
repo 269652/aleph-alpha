@@ -4243,6 +4243,33 @@ func test_evicting_old_chunks_frees_wild_crop_state():
 
 ## step_wild_crops mirrors step_tall_grass's own throttled-accumulator shape
 ## -- growth actually advances once the refresh interval elapses.
+## The `accelerate_growth` spell atom's real hook (see docs/concept/
+## spell_runtime.md) -- same WildCropPatch.advance() step_wild_crops already
+## calls on its own throttled clock, triggered instantly instead.
+func test_accelerate_wild_crop_growth_advances_every_patch_in_the_chunk():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var sim: WildCropPatch = manager._wild_crop_sims[chunk_coord]["carrot"]
+	var immature_cell := Vector2i(-1, -1)
+	for cell in sim.get_patch_cells():
+		if sim.get_growth(cell) < 1.0:
+			immature_cell = cell
+	if immature_cell == Vector2i(-1, -1):
+		pass_test("precondition unmet (no immature carrot patch nearby this run) -- nothing to regress")
+		return
+	var before: float = sim.get_growth(immature_cell)
+
+	var applied := manager.accelerate_wild_crop_growth(_berlin_tile, 500.0)
+
+	assert_true(applied)
+	assert_gt(sim.get_growth(immature_cell), before)
+
+
+func test_accelerate_wild_crop_growth_returns_false_for_an_unloaded_chunk():
+	var far_away_tile := Vector2i(5000, 5000)
+	assert_false(manager.accelerate_wild_crop_growth(far_away_tile, 500.0))
+
+
 func test_step_wild_crops_advances_growth_toward_maturity():
 	manager.update(_berlin_tile)
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)

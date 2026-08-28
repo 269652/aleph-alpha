@@ -6,6 +6,12 @@ their own spells, Morrowind-style. There's also a normal magic skill tree the
 player must progress through before they're allowed to design their own
 spells (see [Skill-tree gating](#layer-1-skill-tree-gating) below).
 
+How a parsed spell actually executes — the cast trigger, targeting, the new
+mana resource, and each atom's real mechanical effect — is specified
+separately in [spell_runtime.md](spell_runtime.md), scoped to a player
+casting a spell they already know (enchantments and NPC instructions, this
+model's other two surface forms, stay unwired).
+
 ### Primitive effects: fine-grained atoms
 
 Rather than a handful of coarse verbs, magic is built from **dozens of

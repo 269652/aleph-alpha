@@ -701,6 +701,250 @@ func test_unequipping_armor_hides_its_character_view_slot():
 	assert_false(player._character_view.is_slot_equipped("head"))
 
 
+# -- mana: a new resource for spellcasting, kept off stamina by design (see
+# docs/concept/survival.md's "Stamina scope: movement only, not combat" and
+# docs/concept/spell_runtime.md) --------------------------------------------
+
+func test_apply_class_sets_max_mana_from_the_archetypes_bonus():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_almost_eq(player.max_mana, 50.0, 0.001)
+	assert_almost_eq(player.mana, 50.0, 0.001, "a freshly applied class should start at full mana")
+
+
+func test_apply_class_gives_a_non_caster_class_zero_mana():
+	player.apply_class("warrior", {"max_mana": 0.0})
+	assert_almost_eq(player.max_mana, 0.0, 0.001)
+
+
+func test_mana_never_goes_negative_even_with_a_large_negative_bonus():
+	player.apply_class("cursed", {"max_mana": -30.0})
+	assert_almost_eq(player.max_mana, 0.0, 0.001)
+
+
+func test_spend_mana_succeeds_when_affordable():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.spend_mana(20.0))
+	assert_almost_eq(player.mana, 30.0, 0.001)
+
+
+func test_spend_mana_fails_and_changes_nothing_when_unaffordable():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_false(player.spend_mana(999.0))
+	assert_almost_eq(player.mana, 50.0, 0.001, "an unaffordable spend must not touch mana at all")
+
+
+func test_mana_regenerates_over_time():
+	player.apply_class("mage", {"max_mana": 50.0})
+	player.spend_mana(10.0)
+
+	player._regen_mana(5.0)
+
+	assert_gt(player.mana, 40.0)
+	assert_lte(player.mana, player.max_mana)
+
+
+func test_mana_regeneration_never_exceeds_max_mana():
+	player.apply_class("mage", {"max_mana": 50.0})
+	player._regen_mana(10000.0)
+	assert_almost_eq(player.mana, 50.0, 0.001)
+
+
+## Pins MANA_REGEN_PER_SECOND against the real cost of the cheapest example
+## spell (SpellBook/SpellExecutor), rather than an eyeballed number: a mage
+## should be able to recast their cheapest spell within a handful of
+## seconds of standing still, not instantly (free) and not after a long wait.
+func test_mana_regen_lets_a_mage_recast_the_cheapest_spell_within_a_few_seconds():
+	var SpellBook = preload("res://src/gameplay/spell_book.gd")
+	var SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
+	var book := SpellBook.new()
+	var executor := SpellExecutor.new()
+	var cheapest := INF
+	for spell_id in book.known_ids():
+		cheapest = minf(cheapest, executor.cost_for(executor.cast_rule(book.ast_for(spell_id))))
+
+	var seconds_to_recast := cheapest / Player.MANA_REGEN_PER_SECOND
+	assert_gt(seconds_to_recast, 0.5, "mana regen must not make casting effectively free/instant")
+	assert_lt(seconds_to_recast, 10.0, "mana regen must not make recasting an agonizing wait")
+
+
+# -- spell-cast status effects (ignite/blight/freeze/root/slow/shield) ------
+# See docs/concept/spell_runtime.md. Mirrors apply_venom/_venom_step's own
+# shape (DebuffStack-tracked, ticked once per authority frame).
+
+const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
+
+
+func test_ignite_deals_real_damage_over_time():
+	player.apply_spell_debuff(SpellStatusEffects.IGNITE, 3.0)
+	var health_before := player.health
+
+	player._spell_status_step(1.0)
+
+	assert_lt(player.health, health_before)
+
+
+func test_ignite_expires_after_its_duration():
+	player.apply_spell_debuff(SpellStatusEffects.IGNITE, 1.0)
+	player._spell_status_step(1.5)
+	var health_after_expiry := player.health
+
+	player._spell_status_step(1.0)
+
+	assert_almost_eq(
+		player.health, health_after_expiry, 0.001, "an expired ignite must deal no further damage"
+	)
+
+
+func test_freeze_roots_the_player_in_place():
+	assert_false(player.is_rooted())
+	player.apply_spell_debuff(SpellStatusEffects.FREEZE, 2.0)
+	assert_true(player.is_rooted())
+
+
+func test_root_also_roots_the_player_in_place():
+	player.apply_spell_debuff(SpellStatusEffects.ROOT, 2.0)
+	assert_true(player.is_rooted())
+
+
+func test_being_rooted_expires_on_its_own():
+	player.apply_spell_debuff(SpellStatusEffects.ROOT, 1.0)
+	player._spell_status_step(1.5)
+	assert_false(player.is_rooted())
+
+
+func test_slow_reduces_the_players_speed_multiplier():
+	assert_almost_eq(player._spell_speed_multiplier(), 1.0, 0.001)
+	player.apply_spell_debuff(SpellStatusEffects.SLOW, 3.0)
+	assert_almost_eq(player._spell_speed_multiplier(), SpellStatusEffects.SLOW_SPEED_MULTIPLIER, 0.001)
+
+
+func test_shield_absorbs_damage_before_armor_mitigation():
+	player.apply_shield(10.0, 4.0)
+	var health_before := player.health
+
+	player.take_damage(6.0)
+
+	assert_almost_eq(player.health, health_before, 0.001, "a shield with enough absorb left must block the whole hit")
+
+
+func test_shield_only_absorbs_up_to_its_remaining_pool():
+	player.apply_shield(5.0, 4.0)
+
+	player.take_damage(12.0)
+
+	assert_almost_eq(
+		player.health, player.max_health - 7.0, 0.001, "5 of the 12 damage should be absorbed, 7 should land"
+	)
+
+
+func test_shield_expires_after_its_duration():
+	player.apply_shield(10.0, 1.0)
+	player._shield_step(1.5)
+
+	player.take_damage(6.0)
+
+	assert_lt(player.health, player.max_health, "an expired shield must not still be absorbing")
+
+
+# -- heal and knockback: the shared duck-typed methods SpellAtomEffects
+# calls on ANY target (Player or CreatureMarker), same convention take_damage
+# already established (see docs/concept/spell_runtime.md). --------------------
+
+func test_heal_restores_health_up_to_the_max():
+	player.take_damage(30.0)
+	var damaged_health := player.health
+
+	player.heal(10.0)
+
+	assert_almost_eq(player.health, damaged_health + 10.0, 0.001)
+
+
+func test_heal_never_exceeds_max_health():
+	player.heal(9999.0)
+	assert_almost_eq(player.health, player.max_health, 0.001)
+
+
+func test_heal_does_nothing_to_a_dead_player():
+	player.take_damage(9999.0)
+	assert_true(player.is_dead)
+
+	player.heal(10.0)
+
+	assert_true(player.is_dead, "healing must not resurrect a dead player")
+
+
+# -- casting a spell (docs/concept/spell_runtime.md) -------------------------
+
+func test_casting_a_known_spell_spends_mana_and_hits_a_nearby_creature():
+	player.apply_class("mage", {"max_mana": 50.0})
+	var target := _creature_at("herbivore", Vector2(10, 0))
+	var health_before: float = target.info.health
+
+	assert_true(player.cast_spell("fire_bolt"))
+
+	assert_lt(player.mana, 50.0, "casting must spend real mana")
+	assert_lt(target.info.health, health_before, "Fire Bolt must actually damage the nearby target")
+
+
+func test_casting_without_enough_mana_fails_and_sets_a_message():
+	player.apply_class("mage", {"max_mana": 0.1})
+
+	assert_false(player.cast_spell("fire_bolt"))
+
+	assert_string_contains(player.cast_message.to_lower(), "mana")
+
+
+func test_casting_without_enough_mana_spends_nothing():
+	player.apply_class("mage", {"max_mana": 0.1})
+	player.cast_spell("fire_bolt")
+	assert_almost_eq(player.mana, 0.1, 0.001)
+
+
+func test_casting_an_unknown_spell_id_does_nothing_and_fails():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_false(player.cast_spell("not_a_real_spell"))
+	assert_almost_eq(player.mana, 50.0, 0.001)
+
+
+func test_casting_a_self_delivery_spell_heals_the_caster():
+	player.apply_class("mage", {"max_mana": 50.0})
+	player.take_damage(30.0)
+	var health_before := player.health
+
+	assert_true(player.cast_spell("minor_heal"))
+
+	assert_gt(player.health, health_before)
+
+
+func test_casting_with_nothing_in_range_still_spends_mana():
+	# "even an affordable spell still has to land" (magic.md) -- casting
+	# touch/projectile with no target nearby is a real, resolved cast that
+	# simply hits nothing, not a refusal.
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.cast_spell("fire_bolt"))
+	assert_lt(player.mana, 50.0)
+
+
+func test_apply_knockback_overrides_the_velocity_for_its_duration():
+	player.apply_knockback(Vector2(100, 0))
+
+	var velocity := player._knockback_velocity(Vector2.ZERO, 0.05)
+
+	assert_gt(velocity.x, 0.0, "a rightward knockback should produce a rightward velocity override")
+
+
+func test_knockback_velocity_falls_back_to_the_input_velocity_once_expired():
+	assert_eq(player._knockback_velocity(Vector2(5, 0), 0.016), Vector2(5, 0))
+
+
+func test_knockback_velocity_overrides_even_nonzero_input_while_active():
+	player.apply_knockback(Vector2(100, 0))
+
+	var velocity := player._knockback_velocity(Vector2(-999, -999), 0.05)
+
+	assert_gt(velocity.x, 0.0, "the shove must win over normal movement input while it plays out")
+
+
 func test_catching_a_fish_with_no_marker_nearby_still_shows_a_generic_message():
 	_land_a_fish()
 	player._fishing_step(0.0)
