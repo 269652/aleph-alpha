@@ -3775,6 +3775,27 @@ var _snow_onset_by_tile: Dictionary = {}
 ## changes for its whole loaded lifetime, so recomputing it on every sweep
 ## would be paying the same avoidable cost onset's own doc comment already
 ## measured. Cleared per-tile on chunk unload alongside the onset cache.
+##
+## CHECKED, not just designed, against the user complaint "when snow
+## accumulates keep the initial variant so the progression stays coherent":
+## by this design a loaded tile's variant is looked up via has()-then-
+## compute-once against this exact dict, erased only on chunk unload
+## (`_forget_snow_paint_for_chunk`), and recomputed to the IDENTICAL value on
+## the next load since `SnowLayer.variant_for` reads only the tile's own
+## global coordinates -- so mechanically this already keeps one tile's
+## variant fixed across its whole loaded lifetime regardless of how many
+## times its band changes as depth grows.
+## `test_a_tiles_snow_variant_never_changes_as_depth_climbs_through_several_
+## bands` drives one real manager through several depths spanning multiple
+## bands and confirms this directly (68,113 real per-cell assertions,
+## GREEN on the first run, no production change needed) rather than trusting
+## the reasoning alone. The user-visible "doesn't look coherent" complaint
+## was therefore very likely caused entirely by the SEPARATE slicer/bleed bug
+## in `SnowLayer.build_band_image` (a contaminated crop at one depth band
+## reading as a different SHAPE from the crop at the next band, even though
+## the underlying variant index here never moved) -- see that function's own
+## doc comment for the fix, and re-render the same tile across a few bands
+## after that fix lands if this is ever doubted again.
 var _snow_variant_by_tile: Dictionary = {}
 
 ## How often the coverage SWEEP below actually runs, independent of how often

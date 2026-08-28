@@ -169,8 +169,11 @@ therefore `OVERLAY_ROWS` alone (10), not the product of both axes -- a real,
 deliberate drop from 25 depth bands to 10, since a variant is a different
 PICTURE of the same depth rung rather than a finer one. `OVERLAY_BAND_CELLS`,
 `OVERLAY_ROW_BANDS`, and `OVERLAY_COLUMN_BANDS` are gone along with it: the
-new sheet's cells are an exact, already-square 125.4x125.4 grid, so
-`_cropped_cell` just partitions the sheet by column and row directly.
+new sheet's cells are an exact grid, so `_cropped_cell` just partitions the
+sheet by column and row directly. (Corrected in the seventh follow-up below:
+"already-square 125.4x125.4" described the sheet AT THE TIME this paragraph
+was written; the sheet has since been replaced again and its cells are not
+square.)
 
 **The ten-way coarsening trades DEPTH granularity for real per-tile VARIETY,
 which the coarsening does not cost.** `SnowLayer.variant_for(global_x,
@@ -369,6 +372,85 @@ rather than sitting invisible for up to 18 and then jumping. `set_snow_depth`
 sweeps immediately and unthrottled, since it is not a per-frame call and
 should reflect its own change right away.
 
+**Seventh follow-up: the slicer itself had real artefacts, separate from
+everything above, and a second complaint about accumulation "not staying
+coherent" turned out to be the same bug wearing a different name.** The sheet
+had been replaced a third time by now -- 1536x1024, 153.6x102.4 cells, NOT
+the square 125.4x125.4 the sixth follow-up above measured -- and that
+asymmetry is not incidental: a cell 102px tall is a tight fit for a "puff"
+shape drawn to roughly fill it, tight enough that some of the largest,
+highest-row shapes press across their own ROW boundary at real, sometimes
+near-opaque alpha, something a 125px-square cell had much more room to avoid.
+`_cropped_cell`'s partition math was confirmed exact (gap-free, overlap-free)
+-- the bug was always the ILLUSTRATED CONTENT pressing past its own nominal
+cell, in two distinct ways. First, a near-invisible one: a real, consistent
+colour persists under alpha as low as 0.004-0.02 at ordinary cell boundaries
+(measured: ~0.57/0.65/0.78 RGB at row 6's column 2/3 crossing), which
+`Image.resize`'s straight-alpha Lanczos blends into its kernel at FULL
+weight regardless of how invisible that colour actually is -- a halo/fringe
+around real edges after the shrink, 61,204 such pixels found across all 100
+built tiles in one sheet-wide scan. Second, a substantial one: `band=5,
+variant=2` rendered a disconnected ghost blob at the very top of its own
+crop (a fragment of the row-4 cell above, bleeding down); `band=9,variant=7`
+rendered a flat, un-tapered high-alpha plateau starting immediately at its
+own top edge, because that variant's real content presses UP into row 8 and
+a fixed-grid crop cannot recover pixels that live on the far side of a
+boundary.
+
+Fixed with two techniques together -- confirmed neither alone was enough,
+by rendering the same two known-bad tiles through each in isolation.
+`SnowLayer.build_band_image` now premultiplies alpha before the Lanczos
+resize and un-premultiplies after, so near-invisible colour contributes to
+the resize kernel in proportion to how invisible it actually is rather than
+at full weight; guarded (`_UNPREMULTIPLY_MIN_ALPHA = 0.02`) against dividing
+by an alpha too close to zero, which measurably amplifies ordinary 8-bit
+quantization noise into an arbitrary colour rather than fixing anything.
+Premultiply alone left both known-bad tiles visually unchanged, since their
+defects are near-OPAQUE overflow, not the near-invisible colour premultiply
+targets. The crop's own outer border is now also feathered toward
+transparent before that resize (`_feather_crop_edges`, `CROP_EDGE_
+FEATHER_PX = 8`, a smoothstep rather than linear ramp specifically because a
+linear ramp's kinked derivative measurably rang under the Lanczos resize
+that follows it) -- this discounts whatever of a neighbour's overflow lands
+within a cell's own nominal boundary, and turns a hard, un-tapered clip like
+`band=9,variant=7`'s into a genuine, if synthetic, taper instead. The width
+was swept from both sides: wide enough to matter, narrow enough that row 9
+-- "one large puff nearly filling the cell," whose real content already
+touches its own nominal edge on every one of its ten variants (measured 0px
+margin on at least one side, all ten) -- keeps real, if modest, margin over
+`FULL_COVER_MIN_MEAN_ALPHA` (worst variant measures 0.339 against the 0.32
+floor) rather than being amputated by the same fix meant to help it. Both
+known-bad tiles' own top-row mean alpha dropped roughly 87% (0.449 -> 0.028,
+0.915 -> 0.059).
+
+The SEPARATE "keep the initial variant so accumulation stays coherent"
+complaint was investigated on its own terms, not assumed fixed by the above.
+`EarthChunkManager._snow_variant_by_tile` already looked, by its own
+existing design, like it should hold one tile's variant fixed for its whole
+loaded lifetime -- has()-then-compute-once against a pure function of the
+tile's own global coordinates, erased only on unload and recomputed
+identically if reloaded. A new test drives one real manager through several
+depths spanning multiple bands and confirms directly that a tile's own
+painted variant never moves while its band does -- green on the first run,
+no production change needed. The user-visible complaint was therefore very
+likely the slicer bug above wearing a different name: a contaminated crop at
+one band reading as a different SHAPE from the crop at the next band, even
+though the underlying variant index never moved -- confirmed by re-rendering
+the same variant across several bands after the slicer fix landed, which now
+reads as one blob thickening rather than a sequence of unrelated pictures.
+
+Two pre-existing test failures were found while establishing this pass's
+baseline and are confirmed unrelated to, and unmoved by, either fix above:
+row 9 measures LESS white on average than row 8 in the current sheet's real
+content (`test_deeper_snow_is_whiter`), and row 0's variant 7 sits fractionally
+over `DUSTING_MAX_MEAN_ALPHA` (0.0659 against 0.06). Both are about the
+sheet's real per-row content, not about cross-cell bleed or slicing, and both
+measured identically before and after this pass's fix -- left open rather
+than silently tuned away, since fixing either is a different piece of work
+(re-checking the sheet's actual row order, or re-deriving the dusting
+ceiling against real new-sheet content) than the slicer this follow-up was
+about.
+
 ### Status
 
 - ✅ Snow instead of rain below freezing, falling white, slow, and as FLECKS
@@ -432,6 +514,19 @@ should reflect its own change right away.
   staying bare until the next field-wide repaint happens to reach it; an
   unloaded chunk's painted snow cells are erased along with the rest of its
   overlays (`_unload_chunk`), not left floating over nothing.
+- ✅ A built tile's own crop no longer reproduces a neighbouring cell's bleed
+  as a visible artefact — `SnowLayer.build_band_image` premultiplies alpha
+  around its Lanczos resize (`_premultiply_alpha`/`_unpremultiply_alpha`) and
+  feathers the crop's own outer border toward transparent first
+  (`_feather_crop_edges`, `CROP_EDGE_FEATHER_PX`); tested against a
+  sheet-wide near-invisible-colour guard and the two specific worst tiles
+  found by direct render, plus a guard that the fix did not amputate row 9's
+  own real coverage. The separately-reported "keep the initial variant so
+  accumulation stays coherent" complaint was confirmed, by a dedicated test,
+  to have never been a caching bug — `_snow_variant_by_tile` already held a
+  tile's variant fixed for its loaded lifetime by construction; the visible
+  symptom was this same slicer bug read as a shape change. See the seventh
+  follow-up in `docs/progress.md` for the full measurement trail.
 
 ## Pinning the weather (`/weather`)
 

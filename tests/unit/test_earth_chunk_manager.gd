@@ -5381,6 +5381,68 @@ func test_painted_snow_tiles_carry_a_real_per_tile_variant():
 	snow_layer.free()
 
 
+## User complaint: "when snow accumulates keep the initial variant so the
+## progression stays coherent." Mechanically, `_snow_variant_by_tile` already
+## looks like it should satisfy this by construction: variant is computed
+## once per tile (has()-then-compute-once), from a PURE function of the
+## tile's own global coordinates (SnowLayer.variant_for), and erased only on
+## chunk unload (_forget_snow_paint_for_chunk) -- never recomputed while a
+## tile stays loaded, and recomputed to the IDENTICAL value if it is ever
+## erased and reloaded, since nothing about variant_for depends on anything
+## but position. This test exists to CONFIRM that design intent holds against
+## the real, live code path rather than trust the reasoning alone: drives one
+## real manager through several depths spanning multiple bands and asserts
+## every tile that stays painted across all of them keeps the exact same
+## atlas.y (variant) throughout, with only atlas.x (band) allowed to move.
+##
+## This was GREEN the first time it was run, with no production change
+## needed -- see snow_layer.gd's and earth_chunk_manager.gd's own doc
+## comments on _snow_variant_by_tile for what that does and does not mean:
+## the caching/lookup wiring genuinely already had no bug, so whatever
+## "progression looks incoherent" the user actually saw both times this was
+## reported was very likely PROBLEM 1's own slicer/bleed bug instead (a
+## contaminated crop at one band looking like a different SHAPE from the
+## crop at an adjacent band, even though the underlying variant index never
+## changed) -- see this file's own snow slicer fix and test_snow_layer.gd's
+## test_known_bad_reference_tiles_no_longer_spike_at_their_own_top_edge for
+## that half of the investigation.
+func test_a_tiles_snow_variant_never_changes_as_depth_climbs_through_several_bands():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.update(_berlin_tile)
+
+	var variant_by_tile := {}
+	var bands_seen_for_a_tracked_tile := {}
+	var tracked_tile := Vector2i.ZERO
+	var have_tracked_tile := false
+
+	for depth in [0.15, 0.45, 0.75, 0.95]:
+		manager.set_snow_depth(depth)
+		for cell in snow_layer.get_used_cells():
+			if manager.biome_at_global(cell.x, cell.y) == "ocean":
+				continue
+			var atlas := snow_layer.get_cell_atlas_coords(cell)
+			if variant_by_tile.has(cell):
+				assert_eq(
+					atlas.y, variant_by_tile[cell],
+					"tile %s changed shape variant (%d -> %d) as depth climbed to %.2f -- only band should move" % [cell, variant_by_tile[cell], atlas.y, depth]
+				)
+			else:
+				variant_by_tile[cell] = atlas.y
+			if not have_tracked_tile:
+				tracked_tile = cell
+				have_tracked_tile = true
+			if cell == tracked_tile:
+				bands_seen_for_a_tracked_tile[atlas.x] = true
+
+	assert_gt(variant_by_tile.size(), 0, "precondition: at least one land tile was painted across the run")
+	assert_gt(
+		bands_seen_for_a_tracked_tile.size(), 1,
+		"precondition: the tracked tile %s never actually crossed a band boundary across these depths (%s) -- this test would prove nothing about band-vs-variant coherence" % [tracked_tile, bands_seen_for_a_tracked_tile]
+	)
+	snow_layer.free()
+
+
 ## A companion regression to the mix test above: the whole-field repaint used
 ## to fire only when the (onset-FREE) tracked band crossed a DEPTH_BANDS
 ## boundary (4 of them, back when SnowLayer.DEPTH_BANDS was 4 -- since raised

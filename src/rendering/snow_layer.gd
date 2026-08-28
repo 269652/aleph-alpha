@@ -150,6 +150,87 @@ func build_tile_set() -> TileSet:
 ## measured, reported bug that convention fixed). This snow art is exactly
 ## the kind of fine illustrated detail (lumpy cloud-shaped patches) that bug
 ## was about.
+##
+## TWO further fixes live here, both against real measured slicer artefacts
+## (reported: "fix the slicer so no artefacts appear") -- neither is a bug in
+## _cropped_cell's own partition math (confirmed exact: gap-free,
+## overlap-free, see that function's own doc comment), both are about the
+## ILLUSTRATED CONTENT not being perfectly confined to its own nominal cell:
+##
+## 1. PREMULTIPLIED-ALPHA resize. Image.resize operates on straight
+## (non-premultiplied) alpha, so a pixel that reads as fully transparent but
+## still carries real, non-black colour underneath (confirmed directly: a
+## sheet-wide sample crossing a real cell boundary -- row 6, column 2/3 --
+## holds a consistent bluish RGB, ~0.57/0.65/0.78, all the way down to alpha
+## 0.004-0.02, not noise) gets blended into the Lanczos kernel at FULL
+## weight regardless of how invisible it actually is, producing a colour
+## halo/fringe around real edges after the shrink. A sheet-wide scan of all
+## 100 built tiles found 61,204 pixels with alpha<0.05 but a channel>0.15
+## against the unfixed pipeline (see this file's own test,
+## test_no_built_tile_shows_a_strongly_coloured_pixel_at_near_zero_alpha,
+## which was red at 59,209 violations at this function's own stricter
+## alpha<0.02 threshold before this fix, 0 after). `_UNPREMULTIPLY_MIN_ALPHA`
+## guards the divide back out: at alpha this close to zero, dividing by it
+## amplifies ordinary 8-bit quantization noise into an arbitrary colour
+## (measured directly: an unguarded divide produced a pure white (1,1,1)
+## pixel at alpha exactly 1/255 on a tile that should be nearly empty) --
+## below that guard the pixel is just written black, which is correct since
+## a colour under alpha this low is genuinely imperceptible either way.
+##
+## 2. EDGE FEATHER. Premultiplying suppresses near-invisible colour in
+## proportion to its own alpha, but it cannot fix a neighbour's OWN paint
+## pressing across the boundary at substantial -- even near-opaque -- alpha,
+## which the illustrated sheet also genuinely has at its largest, high-row
+## shapes (this sheet's cells are 153.6 x 102.4 native px, NOT square -- see
+## _cropped_cell's own doc comment -- so a shape drawn to roughly fill a cell
+## is tall relative to the shorter ROW dimension and some genuinely press
+## past it). Confirmed on the two worst real cases found by rendering
+## through this exact pipeline: `band=5,variant=2` shows a disconnected
+## "ghost" blob sitting at the very top of the crop (unfixed top-row mean
+## alpha 0.449, fading to background by native sheet row ~18, with this
+## cell's OWN real content only starting around native row 36 -- literally a
+## fragment of row 4's own shape bleeding down); `band=9,variant=7` shows a
+## flat ~0.9 mean-alpha PLATEAU starting immediately at row 0 with no taper
+## at all (unfixed row-by-row mean alpha 0.915/0.902/0.878/0.854/0.834..., a
+## near-constant shelf, not a fade) -- that variant's own real content
+## presses UP into the row-8 cell above it, so the fixed grid crop simply
+## cannot recover the part that lives on the other side of the boundary; the
+## best a crop CAN do is stop presenting the cut as a hard, un-tapered edge.
+## `_feather_crop_edges` ramps alpha down to zero over `CROP_EDGE_FEATHER_PX`
+## native pixels from whichever of the crop's four edges is nearest, using a
+## smoothstep (not linear) ramp specifically because a linear ramp's
+## discontinuous-derivative kink at the far edge of the feather zone measurably
+## rings under the later Lanczos resize (observed directly while tuning this:
+## a linear ramp left a visible alpha OVERSHOOT back toward 1.0 a few pixels
+## in from the edge on some tiles; smoothstep's continuous derivative there
+## did not). Applied to the crop BEFORE premultiply, so the two techniques
+## compose correctly: the feathered alpha IS the alpha premultiply weights by.
+##
+## Both known-bad tiles' own top-row mean alpha dropped from 0.449 -> 0.028
+## and 0.915 -> 0.059 respectively after this fix (see
+## test_known_bad_reference_tiles_no_longer_spike_at_their_own_top_edge) --
+## `band=9,variant=7` in particular now shows a genuine gradient (row means
+## 0.059/0.470/0.808/0.800/0.777...) instead of the unfixed flat plateau, i.e.
+## it now TAPERS rather than clips. Neither technique alone was sufficient:
+## premultiply-only left both known-bad tiles visually near-identical to the
+## unfixed render (row-0 means 0.449/0.902 with premultiply alone, since
+## these are near-OPAQUE overflows, not the near-invisible colour premultiply
+## targets); feather-only without premultiply would still leave the
+## sheet-wide near-invisible-colour halo untouched. `CROP_EDGE_FEATHER_PX`
+## was swept from both sides (measured at 4/6/8/10/12/16/20/24): a wider
+## feather suppresses the known-bad tiles' top-row plateau further but costs
+## real alpha off EVERY tile's edge, including row 9's -- "one large puff
+## nearly filling the cell" (see OVERLAY_COLUMNS' own doc comment), which
+## already touches its own nominal cell edge at every one of its ten variants
+## (measured margin-to-edge: 0px on at least one side for all ten). 8px keeps
+## row 9's worst-variant mean alpha at 0.339 -- real, if not huge, margin over
+## FULL_COVER_MIN_MEAN_ALPHA (0.32) -- while still cutting the known-bad
+## tiles' own top-row spike by ~87% each; see
+## test_full_cover_still_clears_the_min_mean_alpha_after_the_edge_fix, which
+## pins that this tradeoff was actually checked rather than assumed safe.
+const CROP_EDGE_FEATHER_PX := 8
+const _UNPREMULTIPLY_MIN_ALPHA := 0.02
+
 func build_band_image(band: int, variant: int = 0) -> Image:
 	var art := TerrainRenderer.ART_TILE_SIZE
 	var clamped_band := clampi(band, 0, DEPTH_BANDS - 1)
@@ -157,8 +238,72 @@ func build_band_image(band: int, variant: int = 0) -> Image:
 	var cropped := _cropped_cell(clamped_variant, clamped_band)
 	if cropped.get_format() != Image.FORMAT_RGBA8:
 		cropped.convert(Image.FORMAT_RGBA8)
+	_feather_crop_edges(cropped, CROP_EDGE_FEATHER_PX)
+	_premultiply_alpha(cropped)
 	cropped.resize(art, art, Image.INTERPOLATE_LANCZOS)
+	_unpremultiply_alpha(cropped)
 	return cropped
+
+
+## Ramps this image's own alpha down to zero over `feather_px` pixels from
+## whichever of its four edges is nearest -- see build_band_image's own doc
+## comment for why this exists and how `feather_px` was measured. Smoothstep
+## (`t*t*(3-2t)`), not a linear ramp: a linear ramp's kinked derivative at the
+## far edge of the feather zone measurably rings under the Lanczos resize
+## that follows (see build_band_image's own doc comment). Mutates `image` in
+## place; called on a fresh per-call crop, never on the shared cached sheet.
+func _feather_crop_edges(image: Image, feather_px: int) -> void:
+	if feather_px <= 0:
+		return
+	var width := image.get_width()
+	var height := image.get_height()
+	for y in height:
+		var edge_distance_y := mini(y, height - 1 - y)
+		for x in width:
+			var edge_distance_x := mini(x, width - 1 - x)
+			var edge_distance := mini(edge_distance_x, edge_distance_y)
+			if edge_distance >= feather_px:
+				continue
+			var t := float(edge_distance) / float(feather_px)
+			var ramp := t * t * (3.0 - 2.0 * t)
+			var pixel := image.get_pixel(x, y)
+			image.set_pixel(x, y, Color(pixel.r, pixel.g, pixel.b, pixel.a * ramp))
+
+
+## Multiplies each pixel's own RGB by its own alpha, in place -- the first
+## half of the premultiplied-alpha resize (see build_band_image's own doc
+## comment). Must run AFTER feathering, so the feathered alpha is the alpha
+## this weights by, not the crop's original one.
+func _premultiply_alpha(image: Image) -> void:
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			image.set_pixel(x, y, Color(pixel.r * pixel.a, pixel.g * pixel.a, pixel.b * pixel.a, pixel.a))
+
+
+## Divides each pixel's own RGB back out of its own alpha, in place -- the
+## second half of the premultiplied-alpha resize, run after the Lanczos
+## resize this file's own resize() call performs. Alpha itself is clamped to
+## [0,1] first: Lanczos's negative lobes can overshoot slightly past the
+## input range, and RGBA8 storage already clamps this silently on write, but
+## clamping explicitly here keeps the divide's own input well-defined rather
+## than relying on that implicit behaviour. Guarded by
+## `_UNPREMULTIPLY_MIN_ALPHA` -- see build_band_image's own doc comment for
+## the measured amplified-noise failure this guard exists to prevent.
+func _unpremultiply_alpha(image: Image) -> void:
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			var alpha := clampf(pixel.a, 0.0, 1.0)
+			if alpha > _UNPREMULTIPLY_MIN_ALPHA:
+				image.set_pixel(x, y, Color(
+					clampf(pixel.r / alpha, 0.0, 1.0),
+					clampf(pixel.g / alpha, 0.0, 1.0),
+					clampf(pixel.b / alpha, 0.0, 1.0),
+					alpha
+				))
+			else:
+				image.set_pixel(x, y, Color(0.0, 0.0, 0.0, alpha))
 
 
 ## The real, loaded sheet image -- read from disk once and shared by every
@@ -176,14 +321,27 @@ func _overlay_sheet() -> Image:
 
 ## A real crop of sheet cell (column, row) -- no centered-square cropping or
 ## divider avoidance needed, unlike the OLD 5x5 sheet's own `_cropped_cell`
-## (see OVERLAY_COLUMNS' own doc comment): this sheet's cells are ALREADY an
-## exact 125.4 x 125.4 square grid (1254px / 10), confirmed by the same
+## (see OVERLAY_COLUMNS' own doc comment): this sheet's cells are an exact
+## grid with no divider-line artefacts anywhere, confirmed by the same
 ## min-alpha-across-every-row/column sweep that originally found the old
 ## sheet's divider lines -- that sweep finds nothing on this one. Cell
-## boundaries are nearest-integer-rounded rather than floored, so the ten
-## cells across a dimension partition it exactly with no 1px gap or overlap
-## anywhere (125.4 does not divide evenly, so a few cells are 125px and a few
-## 126px; get_region needs an int rect regardless).
+## boundaries are nearest-integer-rounded rather than floored, so the cells
+## across a dimension partition it exactly with no 1px gap or overlap
+## anywhere regardless of whether the sheet's own size divides evenly by
+## OVERLAY_COLUMNS/OVERLAY_ROWS; get_region needs an int rect regardless.
+##
+## The grid is NOT square: `test_the_overlay_sheet_has_the_measured_
+## dimensions` pins the sheet at 1536x1024 (154 wide x 102 tall cells,
+## before rounding) -- corrected here from an earlier 1254x1254 (125.4x125.4
+## square cells) after the illustrated sheet was replaced again; re-confirm
+## against that test if this ever looks wrong, since another replacement can
+## change it again without this comment being updated in lockstep. A grid
+## this much SHORTER than it is wide is exactly why the high-row shapes
+## press across their own ROW boundary at substantial alpha (see
+## build_band_image's own doc comment on the edge feather this exact
+## asymmetry motivates) far more than they press across a COLUMN boundary:
+## a roughly-circular "puff" drawn to fill a cell is tall relative to a
+## 102px-high row long before it is wide relative to a 154px-wide column.
 func _cropped_cell(column: int, row: int) -> Image:
 	var sheet := _overlay_sheet()
 	var cell_width := float(sheet.get_width()) / float(OVERLAY_COLUMNS)

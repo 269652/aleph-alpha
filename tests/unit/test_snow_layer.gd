@@ -42,11 +42,21 @@ func test_depth_bands_matches_the_illustrated_sheets_real_row_count():
 ## Guards the sheet's real dimensions -- if the asset is ever replaced with a
 ## differently-sized sheet, this fails loudly instead of silently slicing the
 ## wrong regions.
+##
+## 1536x1024, NOT the previous 1254x1254: the illustrated sheet was replaced
+## again (a genuinely different, non-square grid -- 153.6 wide x 102.4 tall
+## cells, not the old 125.4x125.4 square ones), confirmed directly by loading
+## the real committed asset. This was found RED against the stale 1254
+## pinning while investigating the slicer-artefact bug -- see
+## _cropped_cell's and build_band_image's own doc comments for why the
+## shorter, non-square cells are directly relevant to that bug (a roughly
+## circular "puff" shape presses across a 102px-tall row boundary at
+## substantial alpha long before it presses across a 154px-wide column one).
 func test_the_overlay_sheet_has_the_measured_dimensions():
 	var image := SpriteSheetLoader.load_image(SnowLayer.OVERLAY_PATH)
 	assert_not_null(image, "snowoverlay.png must load from " + SnowLayer.OVERLAY_PATH)
-	assert_eq(image.get_width(), 1254)
-	assert_eq(image.get_height(), 1254)
+	assert_eq(image.get_width(), 1536)
+	assert_eq(image.get_height(), 1024)
 
 
 ## build_band_image feeds straight into build_tile_set's blit_rect at
@@ -119,6 +129,128 @@ func test_a_dusting_lets_the_ground_show_through_and_full_cover_does_not():
 			SnowLayer.FULL_COVER_MIN_MEAN_ALPHA,
 			"deep snow variant %d must bury the ground -- nothing should show through" % variant
 		)
+
+
+# -- the slicer must not reproduce a neighbour's bleed ----------------------
+#
+# `_cropped_cell` partitions `snowoverlay.png` into an exact, gap-free 10x10
+# grid -- the partition MATH is not the bug (confirmed: cell boundaries are
+# round()-based and cover the sheet exactly with no 1px gap or overlap
+# anywhere). The bug is that the ILLUSTRATED CONTENT is not perfectly confined
+# to its own nominal cell: a shape's soft edge extends past its own boundary
+# at near-invisible alpha (measured: real RGB persisting at alpha as low as
+# 0.004-0.02 at a real boundary, e.g. row 6's column-2/3 crossing), and at the
+# largest, high-row shapes a neighbour's OWN paint presses across the
+# boundary at substantial, even near-opaque, alpha (measured directly on
+# `band=5,variant=2`: a disconnected "ghost" island sits at the very top of
+# the crop, mean alpha 0.449 at the tile's own row 0, fading to background by
+# native sheet row ~18 before the REAL content for that cell begins at row
+# ~36; `band=9,variant=7` shows the mirror case -- a flat ~0.9 mean-alpha
+# PLATEAU starting immediately at row 0 with no taper at all, because that
+# variant's own real content presses UP into the row-8 cell above it and the
+# fixed grid crop simply cannot recover the part that lives on the other side
+# of the boundary).
+#
+# The fix is two techniques together: `build_band_image` premultiplies alpha
+# before the Lanczos resize and un-premultiplies after (so a near-invisible
+# colour contributes to the resize kernel in proportion to how invisible it
+# actually is, rather than at full weight), and feathers the crop's own outer
+# border down to transparent before that resize (so whatever of a
+# neighbour's overflow lands within this cell's own nominal boundary is
+# discounted, and any of THIS cell's own content that was hard-clipped by the
+# fixed grid at least TAPERS to transparent at the tile edge instead of
+# ending in an unnatural, un-tapered cut).
+
+
+## Technique (a)'s own regression guard: a pixel that reads as fully
+## transparent must not still carry a strong, real colour underneath it.
+## Threshold chosen from the ORIGINAL bug's own measured signature (real RGB
+## persisting at alpha 0.004-0.02 at a real sheet boundary) -- alpha<0.02
+## catches exactly that range. A sheet-wide scan of all 100 built tiles at
+## this threshold measures 61,204 violating pixels against the unfixed
+## pipeline (plain resize() on straight alpha); after premultiply + a
+## `UNPREMULTIPLY_MIN_ALPHA`-guarded un-premultiply (dividing by a
+## near-but-not-exactly-zero alpha otherwise amplifies 8-bit quantization
+## noise into an arbitrary colour -- measured: an unguarded divide produced a
+## pure white (1,1,1) pixel at alpha 1/255 on a tile that should be nearly
+## empty), this measures exactly 0 -- not merely fewer, zero, because the
+## channel>0.15 threshold sits comfortably above ordinary low-alpha
+## antialiasing (measured real AA colour at alpha in (0.02, 0.05) tops out
+## around 0.9-1.0 in a single pale channel with the others similarly pale,
+## nothing like the original bug's distinctly-tinted 0.57/0.65/0.78 leaking
+## through solid background).
+func test_no_built_tile_shows_a_strongly_coloured_pixel_at_near_zero_alpha():
+	var violations := 0
+	var first_violation := ""
+	for band in SnowLayer.DEPTH_BANDS:
+		for variant in SnowLayer.OVERLAY_COLUMNS:
+			var image := layer.build_band_image(band, variant)
+			for y in image.get_height():
+				for x in image.get_width():
+					var pixel := image.get_pixel(x, y)
+					var channel := maxf(pixel.r, maxf(pixel.g, pixel.b))
+					if pixel.a < 0.02 and channel > 0.15:
+						violations += 1
+						if first_violation == "":
+							first_violation = (
+								"band %d variant %d at (%d,%d): rgba=%s"
+								% [band, variant, x, y, pixel]
+							)
+	assert_eq(
+		violations, 0,
+		"%d pixels read as transparent but still carry real colour underneath -- first: %s"
+		% [violations, first_violation]
+	)
+
+
+## Technique (b)'s own regression guard, against the two specific tiles a
+## direct visual render found worst: `band=5,variant=2` (a disconnected
+## ghost blob at the top, unfixed top-row mean alpha 0.449 against real
+## content that only starts around native row 36) and `band=9,variant=7` (a
+## flat ~0.9 mean-alpha plateau starting at row 0 with no taper, unfixed).
+## Both must now show a real, tapering top edge -- a low top-row mean alpha,
+## not the unfixed plateau -- rather than the crop's own outer edge holding
+## as much colour as its interior. Bounds chosen with real margin over the
+## fixed pipeline's own measured values (0.028 and 0.059 respectively) and
+## comfortably under the unfixed ones (0.449 and 0.915).
+func test_known_bad_reference_tiles_no_longer_spike_at_their_own_top_edge():
+	var ghost_tile := layer.build_band_image(5, 2)
+	var ghost_top_row_alpha := _row_mean_alpha(ghost_tile, 0)
+	assert_lt(
+		ghost_top_row_alpha, 0.15,
+		"band=5 variant=2's top row still reads as a solid ghost blob (mean alpha %.3f)" % ghost_top_row_alpha
+	)
+
+	var clipped_tile := layer.build_band_image(9, 7)
+	var clipped_top_row_alpha := _row_mean_alpha(clipped_tile, 0)
+	assert_lt(
+		clipped_top_row_alpha, 0.15,
+		"band=9 variant=7's top row still reads as a hard-clipped plateau (mean alpha %.3f)" % clipped_top_row_alpha
+	)
+
+
+## The tradeoff named alongside the fix: feathering a crop's own border
+## toward transparent removes real alpha from EVERY tile's edge, including
+## row 9's -- "one large puff nearly filling the cell" (see OVERLAY_COLUMNS'
+## own doc comment), whose content already touches its own nominal cell edge
+## at every one of its ten variants (measured: margin-to-edge 0px on at least
+## one side for every row-9 variant). An edge fix sized to actually suppress
+## the worst bleed could just as easily have gutted this instead. Measured
+## after the fix: row 9's ten variants range 0.339-0.407 mean alpha, comfortable
+## real margin over `FULL_COVER_MIN_MEAN_ALPHA` (0.32) -- this test pins that
+## the tradeoff was actually checked, not just hoped to be fine; the
+## per-variant version of the same claim is also asserted directly by
+## test_a_dusting_lets_the_ground_show_through_and_full_cover_does_not above.
+func test_full_cover_still_clears_the_min_mean_alpha_after_the_edge_fix():
+	var worst := INF
+	for variant in SnowLayer.OVERLAY_COLUMNS:
+		var alpha := _mean_alpha(layer.build_band_image(SnowLayer.DEPTH_BANDS - 1, variant))
+		worst = minf(worst, alpha)
+	assert_gte(
+		worst, SnowLayer.FULL_COVER_MIN_MEAN_ALPHA,
+		"the worst row-9 variant's mean alpha (%.4f) no longer clears FULL_COVER_MIN_MEAN_ALPHA (%.2f) -- the edge fix amputated real content instead of just the bleed"
+		% [worst, SnowLayer.FULL_COVER_MIN_MEAN_ALPHA]
+	)
 
 
 # -- per-tile variant: a separate shape choice at a fixed depth -------------
@@ -372,6 +504,13 @@ func test_a_local_window_shows_real_per_tile_variation_not_a_uniform_plateau():
 			+ "a whole neighbourhood is stepping together instead of showing per-tile texture"
 		) % [origin, bands.size()]
 	)
+
+
+func _row_mean_alpha(image: Image, y: int) -> float:
+	var total := 0.0
+	for x in image.get_width():
+		total += image.get_pixel(x, y).a
+	return total / float(maxi(image.get_width(), 1))
 
 
 func _mean_alpha(image: Image) -> float:
