@@ -233,9 +233,72 @@ for passability/hillshading/ore. One field, at least three consumers.
 
 ## Status
 
-Pure design, nothing implemented. Builds directly on two pieces of real,
-live, already-wired code — `earth_elevation_source.gd`'s bilinear
-elevation sampling and `solar_position.gd`'s real solar position — plus
-reuses `weather_model.gd`'s movement-speed-modifier shape and
+Real and live, not pure design — built out the same week this doc was
+written (2026-08-24). Full build detail lives in `docs/progress.md`'s own
+"Terrain Relief" section; this is the cross-aligned summary, checked here
+directly against the current `src/` files rather than assumed current.
+
+- ✅ **Slope/Aspect field, from real elevation data** —
+  `src/world/terrain_relief.gd` (`slope_at`/`aspect_at`, both thin
+  wrappers over a shared public `gradient_at` so a caller wanting both
+  readings takes one set of four elevation samples instead of two), tested
+  21/21. Exposed per-global-tile via `EarthChunkGenerator`/
+  `EarthChunkManager.slope_at_global`/`aspect_at_global` — the one field
+  the consumers below all read. Still unconsumed by
+  [climate_dynamics.md](climate_dynamics.md)'s orographic lift.
+- ✅ **Slope-gated passability (soft slow, hard refusal)** —
+  `src/gameplay/terrain_passability.gd` (`speed_multiplier`/`is_passable`,
+  tested 11/11), with real tested thresholds rather than the bare figures
+  above: `SOFT_THRESHOLD_DEG` 18°, `HARD_THRESHOLD_DEG` 45°,
+  `HARD_THRESHOLD_WITH_ROPE_DEG` 65°. Wired live into `scenes/player.gd`'s
+  `_authority_step`: `_terrain_speed_multiplier` applies the soft
+  slowdown, `_terrain_blocks_movement` refuses the frame's movement
+  outright ahead of `move_and_slide()` — the same ask-before-you-step
+  principle `creature_movement_gate.gd` established for creatures. Two
+  gaps stay open: `is_passable`'s `has_climbing_gear` parameter is real
+  and tested, but `Player._has_climbing_gear()` unconditionally returns
+  `false` — no rope item/equipment exists yet to ever set it true, so the
+  hook has nothing attached — and only the player is gated today, no
+  creature.
+- ✅ **Hillshading (real Lambertian formula, real solar position)** —
+  `src/rendering/hillshade.gd`'s `illumination()` (tested 8/8) is the
+  formula above verbatim, fed by `solar_position.gd`'s azimuth alongside
+  its existing elevation. `procedural_hillshade_sprite.gd` bakes quantized
+  slope/aspect into a real atlas (tested 14/14); `hillshade_shader.gd` is
+  a compiled `canvas_item` shader (tested 12/12). Wired live:
+  `EarthChunkManager.set_hillshade_layer`/`_paint_hillshade_overlay`/
+  `set_sun_position`, called from chunk load/unload; `scenes/world.tscn`
+  carries a real `HillshadeFx` layer and `world.gd` pushes real per-frame
+  sun azimuth into it. No automated test instantiates `world.tscn` itself,
+  so that last scene-level wire is verified only by both resources loading
+  without a structural error, not a live GUI session.
+- ✅ **Slope-gated mountain ore veins — placement** —
+  `src/world/mountain_ore_placement.gd` (tested 16/16): vein chance is
+  zero below the same `SOFT_THRESHOLD_DEG` passability uses, scaling
+  linearly to a ceiling at `HARD_THRESHOLD_WITH_ROPE_DEG` — one shared
+  quantity gating both crossability and ore exposure, exactly as designed
+  above. Wired live into `EarthChunkManager._load_chunk` via
+  `StoneRenderer.spawn_mountain_veins` (tested 6/6).
+- 🚧 **Mountain ore veins — rendering: real, but not what this doc specs.**
+  This doc says above that a vein should render as a mineral-colored
+  streak following the slope direction directly on the mountain wall
+  texture, under the same hillshading pass as the rock around it — "not a
+  decal stamped on top of one." The live renderer does exactly the decal
+  this section was written to rule out: `StoneRenderer._build_mountain_vein_node`
+  spawns a discrete `MinableOre` `StaticBody2D`, positioned at the tile
+  center with a composited boulder texture — the same node shape flat-
+  ground ore already uses. Mechanically this is fully correct (the real
+  `MinableOre` mining flow, real slope-gated placement, no second mining
+  mechanic invented); visually it is the thing this doc explicitly says
+  not to do. Known and deliberately deferred, not silently resolved by
+  rewriting the spec to match the code: a 2026-08-28 playtest-driven fix
+  (`docs/progress.md`'s Terrain Relief section, same date) re-tuned this
+  same placement rule's density and explicitly left this visual mismatch
+  untouched.
+
+Builds directly on two pieces of real, live, already-wired code —
+`earth_elevation_source.gd`'s bilinear elevation sampling and
+`solar_position.gd`'s real solar position — plus reuses
+`weather_model.gd`'s movement-speed-modifier shape and
 `creature_movement_gate.gd`'s ask-before-moving pattern as direct
-precedent rather than new mechanisms of their own.
+precedent, exactly as this doc originally planned.
