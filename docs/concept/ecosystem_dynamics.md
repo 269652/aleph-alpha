@@ -837,6 +837,192 @@ Without it a whole club would whirl on one frame, go silent together, and
 whirl together again.
 
 
+## The butterfly that knows you
+
+*"Can make butterflies dance around a players head or fly away based on
+personality (dna derived)?"*
+
+Every true butterfly now carries a **personality**: one heritable trait,
+**boldness**, on a continuum from 0 to 1. It decides one thing — what this
+individual does about the player — and that one thing is enough to turn a
+meadow from scenery into something that responds to how you behave in it.
+
+### The two ends, and the middle
+
+| Boldness | Flight initiation distance | What you see |
+|---|---|---|
+| 0.00 (shyest) | 3 m | bolts as you walk up |
+| 0.50 (typical) | 1.5 m | nothing much, unless you walk into it |
+| 0.88+ (bold) | 0 m | comes and orbits your head |
+
+**Flight initiation distance (FID)** is a real, measured quantity — how close
+a threat gets before an animal breaks and flies — and it is the standard field
+measure of boldness across taxa precisely because bolder individuals reliably
+have shorter ones. Butterfly FIDs sit in the low metres; the shyest individual
+takes the top of that band, and the bold endpoint is **zero**, because bold
+individuals of many species show no flight response to a human at all.
+
+The **dance** is not a third dance shape. It is the existing spiral flight
+aimed at a different object, at the same orbit radius and the same turn rate —
+which is exactly what the real behaviour is, since a territorial butterfly
+launches at conspecifics, passing birds, falling leaves and thrown pebbles
+alike, and a person walking through a meadow is one more such object. It is
+centred on the player's **head**, a measured place: the character's origin is
+at its feet and its height is a real 175 cm through the same yardstick every
+other distance uses.
+
+Boldness is a **continuum, not two buckets**, and the threshold between "will
+dance" and "will not" is *derived* rather than chosen: a butterfly may only be
+counted bold enough to orbit once its own FID has dropped below the radius it
+would be orbiting at. Anything shyer would be fleeing from inside its own
+dance. That lands near 0.88.
+
+The distribution is the **average of two independent halves** — the triangular
+distribution: bounded to [0,1] by construction, peaked in the middle, thin at
+both ends. So roughly 3% of a meadow will dance at you, roughly 3% will bolt
+dramatically, and the other 94% carry on as before. Both alternatives were
+rejected for measurable reasons: a single uniform roll makes the extremes as
+common as the middle, and a Gaussian has to be clamped into [0,1], which piles
+probability up on the two endpoints and makes the extremes *commoner* than the
+middle. In a meadow of 266 butterflies that is about seven of each — uncommon,
+and present.
+
+### Fleeing is a burst
+
+An escape is maximum exertion, not a cruise. The multiplier is the **ratio**
+between the two real speeds (a monarch bursts at ~5 m/s against a ~2 m/s
+cruise), never an absolute: this world's butterfly cruise is its own stylised
+number, and dropping a literal 5 m/s on top of it would read as a teleport. A
+fleeing butterfly does not stop on the line it flushed at either — in the
+escape-distance literature an animal puts about its own FID again between
+itself and the threat before settling.
+
+### The precedence order
+
+Five things can move a butterfly, and they must not fight. Highest first:
+
+1. **flee the player** — escape outranks everything, in every animal. A
+   butterfly that keeps courting while something big closes on it is a dead
+   butterfly, so a flush ends a courtship or a whirl mid-way (and charges no
+   cooldown, because the interaction did not happen — otherwise a player
+   walking through a meadow would sterilise it for a real day). The partner is
+   told directly: this is the one place one flyer reaches into another, and it
+   has to be, because "my partner bolted" is not something the other side can
+   derive, and leaving it underived is the *one butterfly orbiting an empty
+   midpoint* bug all over again.
+2. **finish a pair interaction already running** — commitment. An interaction
+   that can be interrupted by a passer-by is an interaction that flickers.
+3. **start a courtship** — the rarest and the only one with an outcome.
+4. **dance at the player**.
+5. **start a spiral flight** with another butterfly.
+6. **forage** — ground prey, a bloom, drinking.
+7. **wander**.
+
+The dance is leashed: it is centred on the player's head, so a player who
+keeps walking would otherwise tow a butterfly across the world. It lets go
+once the player has carried it more than a notice radius from the butterfly's
+own home — as far as it spotted the intruder from in the first place, which is
+about as far as a real territorial butterfly pursues one before returning to
+its perch. The leash is checked against the **orbit's centre**, not against
+the butterfly, so a player who moves a long way in one step never drags it
+there even for a frame.
+
+### The player is a selection pressure
+
+Boldness is **inherited**, through the same `DnaCrossover` that crosses
+players' children and bred livestock — see [dna.md](dna.md)'s "Wild animals
+have DNA too". That is the whole reason it is genes and not a hash of the
+flyer's seed. Who the player catches is decided by the same number the
+survivors' offspring inherit, so a player who nets what comes close leaves the
+shy ones to breed and **the meadow learns to avoid them** — with nothing
+anywhere saying so.
+
+Measured over ten generations of a 266-butterfly meadow: mean boldness falls
+from 0.496 to 0.377 under a netting player, against 0.019 of drift in the
+identical untouched control. Run the same pressure the other way round (which
+no player behaviour can do — it is there to prove the drop is selection and
+not a bias hiding in the crossover) and the meadow reaches 0.849.
+
+Two honest limits, repeated here because they decide what the player can
+actually see today: **nothing nets an ambient flyer in the live game yet**
+(the net is craftable, `CaptureTool` knows what it is for, but no interaction
+removes one from the world), and **ambient flyers are not persisted** — a
+chunk's flyers are re-derived from their cells' seeds on load, so an evolved
+meadow reverts when that chunk unloads. Boldness drifts within a session, not
+across one.
+
+
+## Butterflies do not fly in straight lines
+
+*"butterflies generaly should have more random / dancy motions rather then fly
+in a straight line"*
+
+Erratic, unpredictable flight is a genuine anti-predator adaptation —
+**protean** behaviour: a flight path a bird cannot extrapolate is a flight
+path a bird cannot intercept, and it is a large part of *why* butterflies fly
+the way they do rather than an aesthetic quirk.
+
+The tumble already existed and was already grounded — it was simply only ever
+reached on the last stretch to a bloom. Ordinary wander picked **one heading
+and held it for 0.7 s**, which is a straight line at a time, and that is what
+the player was watching. The same tumble now applies to ordinary flight at
+full strength, because out there is no bloom to settle onto.
+
+Songbirds are deliberately excluded. They share the same movement module, and
+a sparrow tumbling like a monarch reads as a bird glitching — the same failure
+that already got birds out of the courtship dance.
+
+This corner of the code has produced a *"flyers stall and jitter on a fixed
+spot"* bug three separate ways, every one of them from building a heading out
+of vector components that can cancel. Nothing can cancel here: the tumble
+keeps a full-length component along the heading and adds a strictly
+perpendicular veer of at most 0.8 of it, so the result always has a positive
+forward component. A test measures **every single step as a whole step**.
+
+
+## The wingbeat bounce
+
+*"maybe also make them bounce slightly with each wing flap"*
+
+Lift is not delivered smoothly. It arrives in **pulses**, essentially all of
+it on the downstroke, so over one beat the force holding the animal up swings
+above and below its weight and the body genuinely rises and falls once per
+wingbeat. In a butterfly — slow beat, light body — that undulation is most of
+what its flight *looks* like.
+
+The amplitude is derived, not chosen. Model the lift as swinging sinusoidally
+about body weight at the wingbeat frequency and the body's displacement has
+amplitude `e·g/ω²`. `e` is not a knob: a wing cannot pull the body *down*
+through its stroke, so lift can dip to zero and no further, `e ≤ 1`, and
+taking `e = 1` makes this the physical **ceiling** on the bob. For a monarch —
+~10 beats a second, ~25 mm of body — that is about 2.5 mm, or a fifth of its
+own body from the bottom of the cycle to the top. Which is what a monarch in
+the air actually looks like.
+
+It is expressed as a **fraction of the body** rather than a distance, and that
+divergence is deliberate: this world draws its small flyers well above life
+size, so a physically exact 2.5 mm bob would be three hundredths of a world
+pixel and would not exist on screen. The ratio is what transfers into a
+stylised world.
+
+There is **no species gate**, and none is needed. The bob goes as
+`1/(frequency² × body length)`, so a bee at ~230 Hz and a sparrow carrying
+14 cm of body fall out of it at an amplitude nothing could draw — structurally,
+without a list that would go stale the next time a species is added.
+
+The **period** comes from the wing animation and the **amplitude** from the
+physics, and the two are different on purpose: the sprite's four-frame beat is
+under three a second where a real monarch does ten, and locking the bob to the
+real frequency would give a body oscillating four times faster than the wings
+driving it — two motions at once instead of one animal.
+
+**It is a draw offset and never `position`.** That is load-bearing rather than
+stylistic: `position` feeds containment, the courtship orbit, the spiral
+flight, every partner-distance check, and the whole tree's Y-sorting. A
+per-frame bob folded into it would put a wobble through all five at once. A
+test pins that `position` is untouched while the drawn offset moves.
+
+
 ## Courtship, and where births come from
 
 Reproduction used to be a number going up. Animals of the same kind now

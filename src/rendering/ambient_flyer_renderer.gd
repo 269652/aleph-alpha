@@ -372,7 +372,12 @@ static func max_flyers_per_chunk() -> int:
 
 
 func spawn_offspring(
-	parent: Node2D, species: String, position: Vector2, seed_value: int, scent_world = null
+	parent: Node2D,
+	species: String,
+	position: Vector2,
+	seed_value: int,
+	scent_world = null,
+	inherited_traits: Dictionary = {}
 ) -> AmbientFlyerMarker:
 	# Art and flight come from the SPECIES, never from an assumption about
 	# who courts. This hardcoded the butterfly pair on the reasoning that
@@ -395,6 +400,13 @@ func spawn_offspring(
 	# full week to grow up (see LifeCycle), unlike the adults the world seeds
 	# a meadow with.
 	offspring.begin_life()
+	# ...and it is born with its PARENTS' personality rather than its own seed's
+	# (see FlyerPersonality / AmbientFlyerMarker.traits). Assigned here rather
+	# than inside _build_marker because being born of two known parents is a
+	# fact only this path has; every other flyer derives its own from its cell,
+	# which is what makes personality survive a chunk reload.
+	if not inherited_traits.is_empty():
+		offspring.traits = inherited_traits.duplicate()
 	return offspring
 
 

@@ -5004,7 +5004,15 @@ func record_birth_at(position: Vector2, count: float = 1.0) -> void:
 ## EcosystemSimulation.record_birth), so the birth is not lost the moment the
 ## chunk unloads -- the individual and aggregate halves of the simulation are
 ## the same population seen at two fidelities, not two separate worlds.
-func spawn_flyer_offspring(species: String, position: Vector2) -> void:
+## `inherited_traits` is the child's PERSONALITY, already crossed from both
+## parents by the courting pair itself (see AmbientFlyerMarker.
+## _finish_courtship / FlyerPersonality). Optional, and empty by default, so a
+## caller that has no parents to cross -- anything spawning a flyer that was
+## not born from a dance -- still gets an ordinary butterfly, which then
+## derives its own personality from its seed like every seeded adult does.
+func spawn_flyer_offspring(
+	species: String, position: Vector2, inherited_traits: Dictionary = {}
+) -> void:
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(position))
 	if not _loaded_ambient_flyers.has(chunk_coord):
 		return
@@ -5017,7 +5025,8 @@ func spawn_flyer_offspring(species: String, position: Vector2) -> void:
 	var offspring := _ambient_flyer_renderer.spawn_offspring(
 		_creatures_parent, species, position,
 		hash("%d_%d_%d_offspring" % [int(position.x), int(position.y), _loaded_ambient_flyers[chunk_coord].size()]),
-		self
+		self,
+		inherited_traits
 	)
 	if offspring == null:
 		return
