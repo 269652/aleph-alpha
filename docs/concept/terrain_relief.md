@@ -225,7 +225,20 @@ for passability/hillshading/ore. One field, at least three consumers.
   ask about; it's tested for shape (`test_terrain_passability.gd`) but,
   honestly, has no real-world citation of its own the way the other two
   do.
-- **Exact vein-probability-vs-slope curve** — tuned, deferred.
+- ~~**Exact vein-probability-vs-slope curve** — tuned, deferred.~~ Resolved:
+  `mountain_ore_placement.gd`'s `vein_chance_for_slope` is a real, tested
+  (`test_mountain_ore_placement.gd`, 16/16) linear ramp — zero at/below
+  `MIN_SLOPE_FOR_VEINS_DEG` (= passability's own `SOFT_THRESHOLD_DEG`,
+  18°), rising to a ceiling at `MAX_SLOPE_FOR_SCALING_DEG` (= passability's
+  `HARD_THRESHOLD_WITH_ROPE_DEG`, 65°) and held flat beyond it. The
+  ceiling itself, `MAX_VEIN_CHANCE`, is derived rather than eyeballed —
+  `StonePlacement.STONE_DENSITY * OrePlacement.ORE_FRACTION`, the same
+  order of magnitude as flat-ground ore's own rarity (the 2026-08-28 fix
+  covered in the Status section's mountain-ore bullets below). Honest
+  nuance, same as the bullet above: the endpoints reuse already-grounded
+  constants, but LINEAR specifically is this implementation's own choice,
+  not itself derived from a cited real-world curve — this doc only ever
+  said "scales with local slope," not what shape that scaling takes.
 - **Does biome classification itself ever read slope**, not just
   elevation/temperature/moisture — a plausible future tie-in to
   [climate_dynamics.md](climate_dynamics.md#biomes-a-live-read-not-a-worldgen-snapshot)'s
