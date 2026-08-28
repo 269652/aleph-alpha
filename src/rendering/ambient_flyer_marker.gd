@@ -26,7 +26,7 @@ const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 
-## Own dedicated group for _look_for_a_partner's nearby-flyer search --
+## Own dedicated group for _scan_for_partners' nearby-flyer search --
 ## deliberately NOT the same group as HoverTargetFinder.GROUP_NAME below.
 ## That group now covers every hoverable entity in the loaded world
 ## (dropped items, stones, ore, trees, ...), so scanning it for courtship
@@ -1209,7 +1209,7 @@ func _begin_courtship(partner) -> void:
 	# a slightly different point. That is what makes the two orbit opposite
 	# each other exactly, end together, and agree on Courtship.pair_seed --
 	# and it is only reachable at all now that the guard above lets the second
-	# flyer see the first (see _look_for_a_partner).
+	# flyer see the first (see _scan_for_partners).
 	if int(partner._courting_with) == get_instance_id():
 		_courting_centre = partner._courting_centre
 		_courting_elapsed = partner._courting_elapsed

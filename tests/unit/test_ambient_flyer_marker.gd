@@ -1661,7 +1661,7 @@ func test_a_bee_never_whirls():
 
 ## Courtship and the whirl must not fight over the same flyer: stealing one
 ## of a whirling pair into a dance leaves the other orbiting nothing, which
-## is the same one-sided failure _look_for_a_partner's guard exists to stop.
+## is the same one-sided failure _scan_for_partners' guard exists to stop.
 func test_a_butterfly_mid_whirl_is_not_stolen_into_a_courtship_dance():
 	var parent := Node2D.new()
 	add_child_autofree(parent)
