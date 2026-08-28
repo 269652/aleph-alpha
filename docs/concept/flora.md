@@ -182,16 +182,36 @@ seed merely rides on a grazer's coat.
   exactly like an earthworm does, so a fruit-eating bird goes through the
   same seek → descend → peck → resume cycle soil_fauna.md already
   specifies for worm-hunting, just aimed at a different target.
-- **Carry is TIME, not distance directly** — resolving the "how far"
-  open question below: a swallowed seed starts a carry timer sized from a
-  real small-bird gut-passage estimate (roughly 15–60 real minutes,
-  compressed to the game's timescale the same way every other real-time
-  duration in this project is), converted to elapsed flight time at the
-  bird's own speed. This deliberately carries a seed FURTHER than a
+- **Carry is a real DISTANCE, flown in an actual heading** — resolving the
+  "how far" open question below: a swallowed seed is sized a target
+  distance (`SeedEndozoochory.carry_distance_tiles`, 10–40 tiles, grounded
+  in a real small-bird gut-passage estimate of roughly 15–60 real minutes)
+  and a random heading to fly off in (`carry_direction`), and the carry
+  resolves only once the bird has actually flown that far from where it
+  ate — the same carried-tiles-since-origin idiom the mammal epizoochory
+  case below already uses. This deliberately carries a seed FURTHER than a
   grazer's epizoochory range (flower spread's 3–14 tiles) — a bird is
   airborne and takes longer to pass a seed than a grazer takes to shed one
   off its coat, so real endozoochory routinely disperses seed well beyond
   a ground animal's epizoochory range.
+  - **This used to be a fixed TIME budget instead** (distance converted to
+    elapsed flight time at the bird's own speed, then simply waited out) —
+    changed after being measured, not merely suspected: a bird's ordinary
+    wander is anchored to a home point within a fairly tight radius
+    (`AmbientFlyerMovement.direction_at`), so a bird whose home never moved
+    could never actually get further than roughly that radius from wherever
+    it started carrying, however long the timer ran. Measured directly at a
+    hard ~2.5-tile ceiling for a sparrow, for every one of 30 sampled
+    wander_seeds, against the 10–40 tile range intended above — the
+    dispersal mechanism was firing on schedule but depositing seed only a
+    couple of tiles from the parent plant almost every time. Giving the
+    carry an actual heading to lean into (blended with ordinary wander, not
+    replacing it — a carrying bird should still read as wandering, just
+    wandering with somewhere to get to) and resolving on real distance
+    travelled rather than elapsed time closes the gap without inventing a
+    new movement system: it is the exact shape ground carriers already used
+    (see below), the flying case just also needed a heading, since its
+    wander is home-tethered in a way ground wander is not.
 - **Where it can land**: forest/rainforest only — the same biomes trees
   themselves grow in, not grassland (unlike flower seed, which is a
   meadow plant). A seed digested over open grassland or ocean is simply
@@ -227,11 +247,11 @@ seed merely rides on a grazer's coat.
   disperser/predator role fixed per species-pair regardless of trait
   values?
 - ~~How far does animal-mediated dispersal actually carry a seed~~ —
-  answered for bird endozoochory above (a gut-passage TIME converted to
-  flight distance at the disperser's own speed, further than ground
-  epizoochory); still open for whether other future dispersers (large
-  herbivores) should use the same time-based model or a distance tied to
-  their own migration/home-range behavior instead.
+  answered for bird endozoochory above (a real target distance grounded in
+  gut-passage time, resolved on actual distance travelled in an actual
+  heading, further than ground epizoochory); still open for whether other
+  future dispersers (large herbivores) should use the same distance-based
+  model or one tied to their own migration/home-range behavior instead.
 - ~~No seed PREDATORS exist yet~~ — partially answered: a sparrow eating
   bare GROUND seed (flower/grass, see [Bird endozoochory: flowers spread
   where birds go](#bird-endozoochory-flowers-spread-where-birds-go)) now

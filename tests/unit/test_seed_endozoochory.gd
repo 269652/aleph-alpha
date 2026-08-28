@@ -52,6 +52,35 @@ func test_seed_always_travels_at_least_a_tile():
 	assert_gte(SeedEndozoochory.CARRY_MIN_TILES, 1.0)
 
 
+# -- carry direction: which way the bird flies off with it ------------------
+#
+# Distance alone turned out not to be enough to actually disperse a seed --
+# see AmbientFlyerMarker._step_seed_carrying's own doc comment: ordinary
+# wander is anchored to a home point within a fairly tight radius (measured
+# at a hard ~2.5-tile ceiling for a sparrow, regardless of wander_seed or the
+# 10-40 tile range intended above), so a carrying bird needs an actual
+# heading to fly off in, not just a duration that assumes it is covering
+# ground in a straight line.
+
+func test_carry_direction_is_a_unit_vector():
+	for seed_value in 20:
+		var heading := SeedEndozoochory.carry_direction(seed_value)
+		assert_almost_eq(heading.length(), 1.0, 0.001)
+
+
+func test_carry_direction_is_deterministic():
+	assert_eq(
+		SeedEndozoochory.carry_direction(11), SeedEndozoochory.carry_direction(11)
+	)
+
+
+func test_different_birds_head_off_in_different_directions():
+	var headings := {}
+	for seed_value in 30:
+		headings[snappedf(SeedEndozoochory.carry_direction(seed_value).angle(), 0.01)] = true
+	assert_gt(headings.size(), 5, "carry direction should vary between birds")
+
+
 # -- where a dispersed tree seed can root ------------------------------------
 #
 # Delegated to TreeRooting, which is the ONE answer to "can a tree stand here".
