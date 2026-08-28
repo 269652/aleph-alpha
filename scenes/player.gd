@@ -41,6 +41,7 @@ const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
@@ -384,6 +385,21 @@ const FISH_CATCH_RADIUS := 64.0
 ## shown, no reaction from nearby fish, no signal when a bite starts) --
 ## reported as "no animation of the rod being thrown into water and also
 ## doesn't attract near fish and also no animation when fish bites".
+## Ground-contact shadow (see DropShadow) -- every creature already gets one,
+## silhouette-shaped and stretched by the real sun's elevation
+## (CreatureMarker._sync_grounded_children); reported directly that the
+## player was the one thing in the world standing on nothing: "the player has
+## no silhouette shadow which should stretch with sun's elevation". A plain
+## flattened oval rather than a silhouette (DropShadow.make_silhouette_shadow
+## needs ONE flat texture to flip upside down -- CharacterView is a composite
+## rig of several parts, body/head/arms/legs, with no single texture to hand
+## it), the same shape trees/stones/villages already use
+## (TreeRenderer/StoneRenderer/VillageRenderer's own `_drop_shadow`). A plain
+## child, not top_level like a creature's: unlike CreatureMarker, Player's own
+## node never rotates or scales, so it has none of the reasons a creature's
+## shadow needs manual position/rotation syncing every frame -- ordinary
+## parent-child transform inheritance is already correct.
+var _shadow: Sprite2D
 var _fishing_cast := FishingCast.new()
 var _bobber: Sprite2D
 ## Where the line landed for the current cast -- fixed at cast time, not
@@ -569,6 +585,15 @@ func _ready() -> void:
 	_bobber.visible = false
 	_bobber.top_level = true  # world position, independent of the player's own transform
 	add_child(_bobber)
+
+	# Shadow width comes from PLAYER_SIZE -- the player's own real collision
+	# footprint -- rather than an eyeballed pixel count, the same "derive it,
+	# don't invent it" discipline the rest of this project holds itself to.
+	# Foot offset 0: record_water_disturbance(position)/_spawn_thrown_item's
+	# own "the player's own feet" already treat plain `position` as the
+	# ground-contact point, so the shadow needs no offset to match it.
+	_shadow = DropShadow.new().make_shadow(PLAYER_SIZE, 0.0)
+	add_child(_shadow)
 
 	# Keep the hotbar reconciled with what's actually carried (see
 	# sync_hotbar) from one place, rather than at every inventory mutation.
@@ -3016,6 +3041,11 @@ func _update_character_view(input_direction: Vector2) -> void:
 		_character_view.set_movement_state(CharacterView.MovementState.WALKING)
 	else:
 		_character_view.set_movement_state(CharacterView.MovementState.IDLE)
+	# The same real sun position already driving every creature's silhouette
+	# shadow (World sets CreatureMarker.sun_elevation_deg once per frame from
+	# it) -- reused rather than a second static/signal just for the player.
+	if _shadow != null:
+		_shadow.scale.y = DropShadow.stretch_for_elevation(CreatureMarker.sun_elevation_deg)
 
 
 ## Toroidal wrap: walking off any edge of the (finite, real-Earth-sized) world lands on the opposite side.

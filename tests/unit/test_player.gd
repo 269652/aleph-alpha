@@ -705,6 +705,30 @@ func test_unequipping_armor_hides_its_character_view_slot():
 	assert_false(player._character_view.is_slot_equipped("head"))
 
 
+# -- ground-contact shadow (see DropShadow) -----------------------------------
+# Reported directly: "the player has no silhouette shadow which should
+# stretch with sun's elevation" -- every creature already gets one
+# (CreatureMarker._sync_grounded_children / DropShadow.stretch_for_elevation),
+# fed every frame by World from the real sun position, but nothing ever gave
+# the player's own CharacterBody2D a shadow child at all.
+
+func test_the_player_has_a_shadow_child():
+	assert_not_null(player._shadow, "the player must have a shadow, the same as every creature")
+
+
+func test_the_shadow_stretches_with_the_shared_sun_elevation():
+	CreatureMarker.sun_elevation_deg = 90.0
+	player._update_character_view(Vector2.DOWN)
+	var overhead_stretch: float = player._shadow.scale.y
+
+	CreatureMarker.sun_elevation_deg = 10.0
+	player._update_character_view(Vector2.DOWN)
+	assert_gt(
+		player._shadow.scale.y, overhead_stretch,
+		"a lower sun must stretch the player's shadow longer, exactly like a creature's"
+	)
+
+
 func test_catching_a_fish_with_no_marker_nearby_still_shows_a_generic_message():
 	_land_a_fish()
 	player._fishing_step(0.0)
