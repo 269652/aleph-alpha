@@ -5295,23 +5295,25 @@ func test_a_partial_snowfall_paints_a_mix_of_bare_and_covered_tiles_not_one_unif
 
 
 ## A companion regression to the mix test above: the whole-field repaint used
-## to fire only when the (onset-FREE) tracked band crossed one of
-## DEPTH_BANDS' 4 boundaries, so within a single band's depth range -- easily
-## a third of a whole snowfall -- NOTHING repainted at all, no matter how far
-## the global depth kept climbing. Measured live before this test existed:
-## coverage sat flat at the exact same percentage from depth 0.02 clear
-## through depth 0.25, then jumped straight to 100% at depth 0.5 -- the
-## "instant reveal" bug again, just moved to a coarser timescale. More land
-## tiles must show snow at a later depth than an earlier one even when both
-## fall inside the SAME depth band.
+## to fire only when the (onset-FREE) tracked band crossed a DEPTH_BANDS
+## boundary (4 of them, back when SnowLayer.DEPTH_BANDS was 4 -- now 25, see
+## that constant's own doc comment), so within a single band's depth range --
+## easily a third of a whole snowfall at 4 bands -- NOTHING repainted at all,
+## no matter how far the global depth kept climbing. Measured live before
+## this test existed: coverage sat flat at the exact same percentage from
+## depth 0.02 clear through depth 0.25, then jumped straight to 100% at depth
+## 0.5 -- the "instant reveal" bug again, just moved to a coarser timescale.
+## More land tiles must show snow at a later depth than an earlier one even
+## when both fall inside the same depth band (at DEPTH_BANDS=25 the two
+## depths this test picks now straddle a couple of the much finer band
+## boundaries rather than sharing one wide band outright, but the property
+## under test -- coverage is never flat between two depths a repaint-gate bug
+## could otherwise merge -- is exactly the same regression check either way).
 func test_snow_coverage_advances_within_a_single_depth_band_not_only_at_band_crossings():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
 	manager.update(_berlin_tile)
 
-	# Both comfortably inside depth BAND 0 (SnowLayer.band_for(x, 0) == 0 for
-	# any x in (0, 0.25]) -- a repaint gated only on the band index would
-	# treat these as indistinguishable.
 	manager.set_snow_depth(0.02)
 	var covered_early := snow_layer.get_used_cells().size()
 

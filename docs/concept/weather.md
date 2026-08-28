@@ -132,15 +132,32 @@ and the first version only made it true at the deep end. A shallow band was
 written FULLY OPAQUE at 45% coverage, so a dusting was 45% of the tile switched
 hard to near-white and 55% punched out -- a 50/50 dither of near-white at the
 finest grain the atlas can express, reported as texture corruption rather than
-as snow. Two things make it true now. A thin cover is TRANSLUCENT
-(`SnowLayer.BAND_ALPHA`), so the ground tints through it instead of being
-knocked out in specks; that is the only way this layer can tint toward the
-ground at all, since one tile set is baked for every biome and so the layer has
-no ground colour of its own to blend with. And the coverage roll happens in
-blocks of `SnowLayer.GRAIN_BLOCK` art pixels rather than per art pixel: one art
-pixel is half a WORLD pixel, a shade nudge may legitimately be that fine but
-coverage is a hard present/absent mask, and a hard mask rolled below the world
+as snow. Two things made it true for that procedural art: a thin cover was
+TRANSLUCENT so the ground tinted through it instead of being knocked out in
+specks (the only way that art could tint toward the ground at all, since one
+tile set is baked for every biome and so the layer has no ground colour of its
+own to blend with), and the coverage roll happened in blocks of art pixels
+rather than per pixel, since a hard present/absent mask rolled below the world
 pixel grid is a dither, i.e. static.
+
+**Each tile's own cover is now real illustrated art, not a procedural mask, so
+those two rules are inherited from the source pixels rather than enforced by
+this layer.** `SnowLayer.build_band_image` slices a real cell out of a 5x5
+illustrated contact sheet (`assets/sprites/terrain/snowoverlay.png`, 25
+hand/AI-illustrated coverage stages) instead of painting a synthetic mask --
+the real art's own alpha and colour already carry translucency at the shallow
+end and grain throughout, so `BAND_ALPHA`/`BAND_COVERAGE`/`BAND_WHITENESS`/
+`GRAIN_BLOCK` are gone, not merely superseded. `SnowLayer.DEPTH_BANDS` is now
+the sheet's own real frame count (25, up from 4 hand-picked procedural bands),
+so an individual tile's own transition through cover is a real 25-rung
+gradient rather than a hard 4-rung ladder -- closing the one gap left open
+after the field-level spreading fix below: the FIELD already filled in tile by
+tile, but each tile's OWN visible jump between its own successive states was
+still a hard cut. The sheet's real coverage does not read row-major (row 0's
+own rightmost cell already measures more covered than row 1's own leftmost
+cell -- a genuine two-axis gradient, not a left-to-right-then-wrap one), so
+`SnowLayer.OVERLAY_BAND_CELLS` maps each depth band to its sheet cell in real
+measured ascending-coverage order rather than assumed reading order.
 
 **It fills in tile by tile, not the whole field at once.** A single lying-snow
 DEPTH still drives the whole snowfall -- one clock, one number, exactly as
@@ -275,10 +292,16 @@ should reflect its own change right away.
 - ✅ Accumulation and thaw, whitening the ground
 - ✅ Footprint displacement and snow filling tracks back in
 - ✅ Tracks rendered: snow is a per-tile overlay, so footprints carve it
-- ✅ A dusting reads as frost, not as white static — a thin cover is
-  translucent so the ground tints through it, and the coverage mask is never
-  rolled finer than one world pixel (`SnowLayer.BAND_ALPHA`/`GRAIN_BLOCK`,
-  both pinned by tests).
+- ✅ A dusting reads as frost, not as white static — real illustrated coverage
+  art (`assets/sprites/terrain/snowoverlay.png`, sliced by
+  `SnowLayer.build_band_image`) whose own translucency and grain replace the
+  old procedural mask entirely, pinned against the real sheet's measured mean
+  alpha (`DUSTING_MAX_MEAN_ALPHA`/`FULL_COVER_MIN_MEAN_ALPHA`).
+- ✅ A tile's own transition fades through 25 real illustrated steps instead
+  of hard-cutting between 4 procedural ones — `SnowLayer.DEPTH_BANDS` is now
+  the illustrated sheet's own real frame count (`OVERLAY_COLUMNS *
+  OVERLAY_ROWS`), each band a real measured-ascending-coverage cell
+  (`OVERLAY_BAND_CELLS`) rather than a hand-picked shade curve; tested.
 - ✅ Per-tile onset variance, so a field fills in as a visible spread rather
   than snapping everywhere at once — `SnowLayer.ONSET_VARIANCE`/
   `onset_offset_for`/`band_for`, tested; wired in
