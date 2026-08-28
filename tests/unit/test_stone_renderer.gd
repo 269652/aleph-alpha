@@ -443,7 +443,13 @@ class _FakeSlopeLookup:
 		return slope
 
 
-func _mountain_chunk(size: int = 16) -> Chunk:
+## Default size raised 16->64 alongside MountainOrePlacement.MAX_VEIN_CHANCE's
+## own landmark-rarity re-pin (was ~0.35, now ~0.012, see that constant's own
+## doc comment): several callers below assert `spawned.size() > 0` at the
+## steepest slope, and a 16x16=256-cell chunk at the new ~1.2% ceiling only
+## expects ~3 hits (P(zero) ~ 5% -- flaky). A 64x64=4096-cell chunk expects
+## ~49 hits, making a zero-hit draw astronomically unlikely.
+func _mountain_chunk(size: int = 64) -> Chunk:
 	var chunk := Chunk.new()
 	chunk.width = size
 	chunk.height = size

@@ -3,6 +3,7 @@ extends GutTest
 const MountainOrePlacement = preload("res://src/world/mountain_ore_placement.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const OrePlacement = preload("res://src/world/ore_placement.gd")
+const StonePlacement = preload("res://src/world/stone_placement.gd")
 
 var placement: MountainOrePlacement
 
@@ -23,6 +24,27 @@ func test_vein_chance_grows_with_slope():
 	var steep := placement.vein_chance_for_slope(MountainOrePlacement.MAX_SLOPE_FOR_SCALING_DEG - 5.0)
 	assert_gt(steep, gentle)
 	assert_gt(gentle, 0.0)
+
+
+## Regression: spawn_mountain_veins (stone_renderer.gd) checks EVERY
+## mountain-biome cell with nothing above this file's own ceiling -- unlike
+## flat ground, where StonePlacement.STONE_DENSITY gates first and
+## OrePlacement.ORE_FRACTION gates again on top of that. MAX_VEIN_CHANCE
+## was the ONLY gate a mountain vein had, and at a flat 0.35 it was ~29x
+## flat-ground ore's own ~1.2% overall rarity -- reported live (playtest,
+## 2026-08-28) as "a dense, near-uniform grid... covering most of the
+## visible ground" on a broadly steep mountainside, not a landmark. A vein
+## is still a mineral deposit, just placed by a different (slope-driven)
+## rule -- it should read about as rare as flat-ground ore, the same
+## shared-quantity reasoning this file already applies to its slope
+## thresholds (see MAX_SLOPE_FOR_SCALING_DEG's own doc comment), not a
+## second, independently-eyeballed number.
+func test_max_vein_chance_matches_flat_ground_ores_own_rarity():
+	assert_almost_eq(
+		MountainOrePlacement.MAX_VEIN_CHANCE,
+		StonePlacement.STONE_DENSITY * OrePlacement.ORE_FRACTION,
+		0.0001
+	)
 
 
 func test_vein_chance_reaches_its_ceiling_at_the_max_scaling_slope():
@@ -67,18 +89,30 @@ func test_has_vein_at_is_deterministic_for_the_same_position_and_slope():
 	assert_eq(a, b)
 
 
+## Sample count raised 200->2000 alongside MAX_VEIN_CHANCE's own
+## landmark-rarity re-pin (see that constant's doc comment): at slope 60.0
+## the roll is now ~1.07% per trial (was ~32% before that fix), so 200
+## trials risked an ~12% chance of rolling zero true outcomes by pure
+## variance -- flaky, not a real failure. 2000 trials keeps that risk
+## astronomically small while still finishing in well under a second (a
+## pure hash computation, no engine cost).
 func test_has_vein_at_varies_across_positions_at_a_steep_slope():
 	var seen := {true: false, false: false}
-	for trial in 200:
+	for trial in 2000:
 		seen[placement.has_vein_at(trial * 31, trial * 53, 60.0)] = true
-	assert_true(seen[true], "expected at least one vein to roll true across 200 steep-slope samples")
-	assert_true(seen[false], "expected at least one vein to roll false across 200 steep-slope samples")
+	assert_true(seen[true], "expected at least one vein to roll true across 2000 steep-slope samples")
+	assert_true(seen[false], "expected at least one vein to roll false across 2000 steep-slope samples")
 
 
+## Sample count raised 300->3000, same reasoning as
+## test_has_vein_at_varies_across_positions_at_a_steep_slope above -- the
+## ceiling this compares against shrank ~29x alongside MAX_VEIN_CHANCE's
+## own landmark-rarity re-pin, so 300 trials no longer gave the steep side
+## a comfortable margin over pure variance.
 func test_a_steeper_slope_produces_more_veins_across_the_same_sample_of_positions():
 	var gentle_count := 0
 	var steep_count := 0
-	for trial in 300:
+	for trial in 3000:
 		if placement.has_vein_at(trial * 17, trial * 29, MountainOrePlacement.MIN_SLOPE_FOR_VEINS_DEG + 2.0):
 			gentle_count += 1
 		if placement.has_vein_at(trial * 17, trial * 29, MountainOrePlacement.MAX_SLOPE_FOR_SCALING_DEG):

@@ -958,11 +958,421 @@ panel":
   never stuck matching whichever view happens to need more space in a given
   axis regardless of which one is actually showing.
 
-⬜ The preview's zoom/`FOOTPRINT` is unchanged and still needs a user decision
-on how large the hero should read. Note for whoever takes it: `tree_bounds`
-insets by 20×26, so at footprint 96 the tree band is 76×70, at 74 it is 54×44,
-and below ~52 the y-band collapses to zero height and every tree would stack on
-one line — any `FOOTPRINT` change must re-run `test_character_preview_layout.gd`.
+A sixth live pass, from one combined report (with a screenshot) right after
+the fifth pass's own toggle feature: "char preview is super blurry also
+player doesnt cause water ripples", then "also fill the whole panel please"
+once the first two fixes exposed a second, still-real cause of the earlier
+"fill the entire rectangle" complaint:
+
+- ✅ **The standard portrait was blurry because its display scale was
+  FRACTIONAL, not because nearest-neighbour filtering wasn't set**
+  (`scenes/main_menu.gd` `STANDARD_PORTRAIT_SCALE`). `STANDARD_PORTRAIT_
+  DISPLAY_SIZE` (the fifth pass's own fix for the letterboxing) scaled
+  `PORTRAIT_SIZE` by the exact ratio `DIORAMA_VIEW_SIZE.y / PORTRAIT_SIZE.y
+  = 248/40 = 6.2` — `TEXTURE_FILTER_NEAREST` only keeps pixel art crisp at
+  a WHOLE-number scale, where every source texel maps onto the same whole
+  number of screen pixels; at 6.2x, texels straddle destination pixel
+  boundaries unevenly and nearest-neighbour sampling shows that as soft,
+  uneven edges rather than clean blocks (reported live, with a screenshot:
+  "char preview is super blurry" — the old static portrait this replaced
+  used a clean 5x for exactly this reason, per this doc's own "Character
+  creation with pixel art" entry above). `STANDARD_PORTRAIT_SCALE` is now
+  `roundi(248.0 / 40.0) = 6`, a real whole number, pinned by
+  `test_standard_portrait_display_size_is_a_whole_number_scale_of_the_source_texture`.
+- ✅ **The gold DNA-glow ring around the portrait still didn't fill its own
+  panel — a second, still-real cause of "fill the entire rectangle" the
+  fifth pass's own frame-sizing fix hadn't reached** (`scenes/main_menu.gd`
+  `_apply_preview_mode`). That fix made `frame` itself track whichever view
+  is active, but `frame` sits centred inside `_preview_glow_wrap` (the
+  outer gold ring box), which has its OWN separate `custom_minimum_size`,
+  fixed once at construction (`DIORAMA_VIEW_SIZE + 28`) and never
+  otherwise touched — so toggling to the narrower portrait correctly
+  shrank `frame`, but left it centred inside a gold box still sized for
+  the diorama's own square, showing as an empty gold margin down both
+  sides (reported live, with a screenshot, right after the blur fix: "also
+  fill the whole panel please"). `_preview_glow_wrap`'s own size now
+  tracks the SAME active-view size `frame`'s own children already do.
+- ✅ **The hero now causes water ripples while swimming/wading, mirroring
+  `scenes/player.gd`'s own gate exactly** (`character_preview_diorama.gd`
+  `HERO_WATER_RIPPLE_INTERVAL`). The real player already records a water
+  disturbance while genuinely moving through water
+  (`_step_water_ripples`, `WATER_RIPPLE_MODES`/`input_direction` gate,
+  throttled to `WATER_RIPPLE_INTERVAL` — 0.4s, "once per stroke... anything
+  faster would just stack redundant rings at the same spot"); the diorama's
+  own hero, driven by its own separate movement code rather than `Player`,
+  never did (reported live, alongside the blur report: "player doesnt
+  cause water ripples"). `_process` now mirrors that same gate — genuinely
+  moved since the last check, throttled the same 0.4s — calling the SAME
+  `record_water_disturbance` the pond's own fish already use (see the fifth
+  pass). One real addition beyond a plain mirror: an IMMEDIATE splash the
+  instant the hero steps into the water at all, not gated on the 0.4s
+  throttle — the real player's own water is a whole lake/ocean with plenty
+  of moving-through-water time for a throttled-only gate to fire in, but
+  this diorama's own wade-in spot (`_compute_fishing_spot`'s
+  `WADE_FRACTION`) sits so close to the pond's own rim that the hero is
+  only ever "moving while in the water" for a few tenths of a second before
+  it arrives and holds still — measured too short, in practice, for a
+  throttled-only 0.4s gate to ever fire even once. Caught by the test
+  itself: the first version checked the disturbance count only at the very
+  end of a 30-second loop, which is longer than a ripple's own
+  `RIPPLE_LIFETIME` (2.2s) — so even a genuinely-working fix still read as
+  "zero disturbances", since whatever fired had already faded back out on
+  its own by the time the test looked. Both ripple tests now check a
+  RISING EDGE of the disturbance count across every step instead of a
+  single end-of-loop snapshot, immune to natural decay timing either way.
+
+A seventh live pass, from "restart it's not fixed atm" after the sixth
+pass's own scale-factor fix hadn't actually resolved the blur — the real
+cause turned out to be a pipeline step upstream of display scaling
+entirely, plus a second, more serious defect the blur had been obscuring:
+
+- ✅ **The blur was never about display scale at all — it was baked
+  straight into the portrait's own 26×40 source pixels**
+  (`procedural_character_sprite.gd` `_fit_to_box`). The sixth pass's fix
+  (a whole-number `STANDARD_PORTRAIT_SCALE`) was real and correct, but the
+  portrait still read as soft (reported live, with a screenshot: "restart
+  it's not fixed atm"). `_fit_to_box` — which downscales a `hero_composite
+  .png` crop (large, hand-drawn pixel art: flat colour blocks) into the
+  portrait's own tiny per-part boxes, as small as 14×14 — used
+  `Image.INTERPOLATE_LANCZOS`, a smoothing filter that's the *right* call
+  for downscaling fine photographic-style detail (see
+  `TerrainRenderer._normalized_for_compositing`'s own doc comment, applied
+  there to noise-based ground textures) but the *wrong* one for blocky
+  character art: it blends flat colour regions into new, soft in-between
+  colours that never existed in the source. No amount of correct
+  NEAREST-neighbour upscaling downstream can undo blur already baked into
+  those pixels — pinned directly, not just visually, by
+  `test_fit_to_box_downscales_with_nearest_not_a_smoothing_filter`
+  (resizing a hard 2-colour source down with the old filter measurably
+  produced blended THIRD colours, including several pixels away from any
+  edge — Lanczos's own ringing). Now `Image.INTERPOLATE_NEAREST`,
+  matching `PORTRAIT_SIZE`'s own doc comment's original promise ("scaled up
+  by the UI (nearest-neighbour) so it stays crisp pixel art") that this one
+  step had been quietly breaking.
+- ✅ **A second, more serious defect the blur had been visually drowning
+  out: the portrait's own legs rendered as a tiny shape disconnected from
+  the torso by a real gap** (`procedural_character_sprite.gd`
+  `_blend_portrait_legs`). Found by generating and directly viewing an
+  actual portrait image once the blur fix made the figure legible enough
+  to see clearly. Root cause: the composite/illustrated-legs branch reused
+  `_PORTRAIT_LEG` (`Vector2i(5, 9)`) for its own fit-box span — a constant
+  sized for the *procedural fallback*'s two separate small leg rectangles,
+  drawn just below in the same function, never intended for a single
+  *fused* illustrated pair. `_fit_to_box`'s own aspect-preserving
+  `min(width_scale, height_scale)` then picked whichever axis was more
+  restrictive — usually the 9px height against a source crop far taller
+  than that — and shrank the whole pair down to a small blob far short of
+  the torso's own width, anchored to the canvas's true bottom (by design)
+  but leaving a real multi-row transparent gap above it where the torso
+  ought to continue into legs. The existing regression test for this exact
+  code path
+  (`test_portrait_is_a_cohesive_figure_when_legs_are_a_fused_pair`) never
+  caught it: it only checked "at least one opaque pixel exists somewhere in
+  the bottom 15% of the canvas", which a tiny disconnected blob still
+  satisfies trivially. New
+  `test_no_large_vertical_gap_appears_anywhere_below_the_head` checks
+  properly — the longest run of fully-transparent rows anywhere below the
+  head, not just whether the very bottom band is non-empty — and caught a
+  real 5-row gap out of the 40-tall canvas before the fix. The span is now
+  derived from what's actually left in the canvas below the torso
+  (`PORTRAIT_SIZE.y - legs_y`) with a deliberately generous width (leaving
+  height, the canvas's own real limit, as the one binding constraint in
+  `_fit_to_box` rather than a doubly-restrictive too-narrow box).
+
+✅ **Eighth live pass**, from one screenshot-backed report bundling four
+things after the blur/leg-gap fix above: *"Now less blurry but super
+pixelated ... also diorama is still a square and fish should only produce
+ripples when they speed boost ... also the pond should be bigger and not
+square / circle but a rectangle with some curves (organic shape)."*
+
+- ✅ **"Super pixelated"** — NEAREST alone (the blur fix above) fixed
+  smoothing but not resolution: it can only preserve whatever detail
+  `_fit_to_box` was actually handed, and a still-tiny native `PORTRAIT_SIZE`
+  (26×40) read as coarse, obviously-square blocks once magnified several
+  times over on screen. `_PORTRAIT_DETAIL_SCALE := 2` doubles the native
+  compositing resolution (`PORTRAIT_SIZE`, `_PORTRAIT_HEAD/_TORSO/_LEG/_ARM`
+  all scale by it, `generate_hero_portrait_image`'s torso/leg/arm Y-offsets
+  too), giving `_fit_to_box` genuinely more of the source art's own detail
+  to keep — `main_menu.gd`'s existing `STANDARD_PORTRAIT_SCALE :=
+  DIORAMA_VIEW_SIZE.y / PORTRAIT_SIZE.y` formula absorbs the size change
+  automatically (halves as the source doubles), landing on the same final
+  on-screen size with more real detail in it, zero changes needed in
+  `main_menu.gd` itself. `test_fit_to_box_preserves_more_detail_when_given_
+  a_larger_target` pins the underlying property (a bigger target box keeps
+  strictly more distinct source colours); `test_portrait_size_grew_for_
+  more_detail_but_kept_its_own_aspect_ratio` pins the size change itself.
+- 🚧 **Investigated, found HALF correct: fish ripples only on speed boost.**
+  `FishMarker._step_water_ripple`'s `_wag_rings_remaining`/`_is_flapping`/
+  `TAIL_WAG_RING_COUNT`/`TAIL_WAG_RING_SPACING` do drive both the ripple-ring
+  bursts and the `FLAP_SPEED_MULTIPLIER` speed boost as the *same* event —
+  that CORRELATION was genuinely already correct, confirmed empirically at
+  the time rather than taken on faith. What that check never verified is the
+  other half of the same claim: whether flap bursts themselves are RARE
+  enough to actually read as "occasional", which they were not — see the
+  eleventh pass below, where the exact same live report came back a second
+  time (**"the fish still produce ripples all the time"**) once the
+  diorama's small, always-visible pond made the real frequency impossible to
+  miss.
+- ✅ **The pond is bigger, a genuine rectangle (not a circle), and its
+- ✅ **The pond is bigger, a genuine rectangle (not a circle), and its
+  edges are organically eroded rather than crisp.** Three real, separate
+  changes, deliberately layered so nothing already trusting the pond as a
+  plain circle had to change:
+  - `CharacterPreviewLayout.POND_RADIUS_FRACTION` 0.22 → 0.3 ("the pond
+    should be bigger" — at 0.22 a ~42-unit diameter next to a full-height
+    tree/character read closer to a puddle). Test-pinned, not derived —
+    "how big should a decorative pond feel" has no real-world measurement
+    to check it against, same as this file's own `LONG_GRASS_GROWTH`/
+    `BIRD_WANDER_RADIUS` precedent.
+  - `Result.pond_half_size: Vector2` is new — the rectangle's own
+    long/short half-extents, replacing the single scalar `pond_radius`
+    everywhere a *shape* (not just a containment envelope) is needed. The
+    long axis is pinned to `pond_radius` exactly; the short one shrinks by
+    a new `POND_ASPECT_RATIO := 1.5`. Deliberately *inscribed inside* the
+    existing circular envelope rather than grown past it, so `is_clear`,
+    fish spawn/wander, and tree placement — everything that already
+    trusted `pond_radius` as a safe outer bound — needed no changes at
+    all; only pebble placement (which needs the real *shape*, not just an
+    outer bound) was touched, switched from a uniform circle to the
+    matching ellipse so a pebble in the short-axis direction still lands
+    near the actual shore instead of stranded out in the open grass.
+  - `CharacterPreviewDiorama._build_pond`'s tile grid now derives
+    different column/row counts from `pond_half_size`'s two axes (`_pond_
+    columns_for`/`_pond_rows_for`) instead of one `pond_radius` doubled
+    into a square, and each cell's membership comes from a new
+    `_generate_pond_cells(columns, rows, seed)` rather than "every cell in
+    the rectangle." No lake/organic-blob generator existed anywhere in
+    this codebase to reuse for this — the real world's own water
+    silhouette comes from a bilinear lookup against a bundled Earth
+    elevation DEM (`EarthElevationSource`/`BiomeClassifier`), thresholded
+    at `EARTH_SEA_LEVEL`, which has nothing to look up for a standalone
+    diorama pond — so this is built from scratch on `PixelNoise.smooth`,
+    the one primitive `CharacterPreviewLayout` already reaches for
+    (its own grass-clump scatter). First tried perturbing a Chebyshev
+    (max-of-both-axes) distance field — any cell far along *either* axis
+    was eligible for erosion — and a rendered dump (composited the live
+    tile grid to a PNG and looked at it directly) showed why that's wrong
+    at this grid's actual resolution (as small as 4×3 tiles): an entire
+    outer row or column all shares the *same* Chebyshev distance from
+    centre, so correlated noise sampling could erode a whole side away
+    together, reading as a lopsided wedge rather than a rounded rectangle.
+    Fixed by switching to the *shorter*-of-both-axes ("corner") distance
+    instead: a cell far along only one axis (an ordinary edge midpoint)
+    always scores low and stays permanently in the always-kept core;
+    only a cell far along *both* axes — a genuine corner — can ever reach
+    the eroded band, so the worst case is a small diagonal nibble, never a
+    missing side. Re-verified visually the same way after the fix: every
+    sampled seed now reads as either a clean rectangle or one with softly
+    rounded/chamfered corners. `_land_directions_for_cell` (which of a
+    kept cell's 4 neighbours face "land", for the shore-fade texture) now
+    checks each neighbour against the actual kept-cell set rather than
+    just the grid's own outer rim, since an interior cell can now border
+    an eroded neighbour without being anywhere near the edge itself.
+    `biome_at_global` (the fish shore-avoidance contract) was upgraded the
+    same way — checks the real per-cell kept set, not just the outer
+    bounding `Rect2` — so a fish can no longer read a visually-eroded
+    corner as swimmable water. `POND_EROSION_SAFE_FRACTION`/`POND_EROSION_
+    NOISE_SCALE` are test-pinned constants with the same "measured against
+    what the property actually needs" reasoning `GRASS_FIELD_NOISE_SCALE`
+    already documents. One real, expected side effect: the bigger pond
+    physically reaches toward the footprint's own centre for more seed/
+    edge combinations than before, so `test_grass_field_noise_scale_lets_
+    the_centre_actually_receive_grass`'s measured rate dropped from 37/100
+    to 9/100 — still clearly non-zero (nothing like the original bug's
+    "0/100, structurally never"), just a smaller achievable rate now that
+    a real, bigger obstacle legitimately occupies more of the footprint;
+    re-measured and re-thresholded rather than silently loosened.
+
+✅ **Ninth live pass, a same-session correction of the eighth's own "diorama
+is still a square" reading.** Read the eighth pass's "diorama is still a
+square" clause as being about the POND (elaborated in the very next clause
+of that same message) and left the outer viewport itself untouched. A
+direct follow-up mid-turn corrected that: *"The diorama is still square
+and does NOT span the whole rectangular panel."* — the OUTER viewport, not
+just the pond inside it, needed to widen. Two real, connected fixes:
+
+- `CharacterPreviewDiorama.FOOTPRINT` widened 96×96 → 144×96 (height
+  unchanged on purpose — see below). `main_menu.gd`'s
+  `DIORAMA_VIEW_SIZE` — previously two independent numbers, `(248, 248)`
+  — is now `(roundi(248 * FOOTPRINT.x / FOOTPRINT.y), 248)`, DERIVED from
+  the footprint's own new aspect ratio rather than picked separately, so
+  the camera's zoom (`DIORAMA_VIEW_SIZE.x / FOOTPRINT.x`) stays uniform
+  across both axes by construction — an accidentally-mismatched pair here
+  would have stretched every sprite in the scene sideways. Chose exactly
+  1.5× (144/96) so the derived width lands on a whole pixel count (372)
+  rather than needing to round.
+- Root cause of "does not span the panel," found via a live layout dump
+  (walked the diorama's own ancestor chain printing each `Control`'s real
+  laid-out size): `glow_wrap` — the `Control` wrapping both the DNA glow
+  ring and the diorama frame — sits in a hero column with **528px of real
+  width**, but was fixed at a **276px square** the whole time (`DIORAMA_
+  VIEW_SIZE + (28, 28)`), unused width just sitting empty beside it.
+  `glow_wrap`'s own `SIZE_SHRINK_CENTER` (added earlier specifically to
+  stop it stretching to fill — see this section's own history: stretching
+  it used to wash the glow ring out into a flat, near-empty tint) was
+  never the bug and stayed untouched; the fix is the TARGET size itself —
+  widening `DIORAMA_VIEW_SIZE` is what widens `glow_wrap`'s own fixed
+  minimum size, without reintroducing the stretch-to-fill bug the shrink-
+  centering was added to prevent. Height deliberately left at 248: the
+  Character tab already has a separate, pre-existing vertical-overflow
+  regression (`test_the_diorama_fits_within_the_first_unscrolled_view_of_
+  the_character_tab`, tracked separately, NOT caused by this session's
+  own diorama work — traced to an unrelated "playtest fixes" commit that
+  restructured the tab's scroll nesting) and growing height too would
+  only push the diorama further into that same fold rather than leaving
+  it exactly as it already was.
+- Verified live (launched the actual game, reached the character
+  creator): the diorama box now visibly spans most of its own card's
+  width rather than reading as a small square with empty space beside it,
+  and the wider frame shows more of the scene at once — the pond, a bird,
+  both trees, and both grass bands (regular + long) are all visible
+  together where before several sat outside the square's own narrower
+  frame.
+
+✅ **Tenth live pass: the ninth's own widening still fell short.** Seen live
+immediately after the ninth pass landed, then reported directly: *"it's now
+a rectangle but it still doesn't cover the whole width of its containing
+panel."* `test_the_diorama_panel_covers_the_hero_columns_available_width`
+(renamed from the ninth pass's own `..._spans_most_...`) re-thresholded from
+`> 0.65×` the column's width to `> 0.9×`. A fresh live layout dump (same
+technique as the ninth pass) confirmed the hero column's real available
+width was genuinely the full 528px measured before — the class-icon row
+sitting directly above the diorama already spans that width in full, so
+widening `glow_wrap` to nearly match introduces no *new* minimum-width
+pressure of its own; the ninth pass's 372px width had simply not gone far
+enough. `FOOTPRINT.x` widened again, 144 → 192 (12×6 tiles, exactly 2× the
+*original* 96 — a whole-tile multiple, matching this constant's own
+"clean number of ground tiles" convention), deriving `DIORAMA_VIEW_SIZE.x`
+= 496 (`glow_wrap` 524px) — close to the real 528px ceiling with a small
+deliberate margin. Verified live a second time: the diorama box now runs
+edge-to-edge with the appearance column beside it, essentially spanning the
+whole card.
+
+✅ **Eleventh live pass: fish ripples really were "all the time".** Reported
+live a second time, once the diorama's pond had grown large enough and its
+fish had run through `FishMarker`'s own real `_process` long enough for the
+real frequency to become obvious: *"The fish still produce ripples all the
+time -- only fast move flap boost should produce ripples like in the real
+ingame."* This directly contradicted the eighth pass's own "already
+correct" finding above — re-investigated properly rather than trusted.
+
+- The eighth pass's check verified only that a ripple never fires OUTSIDE a
+  flap burst (true, by construction — `_emit_ripple()` has exactly one call
+  site, inside the burst logic). It never checked whether bursts themselves
+  are RARE enough, relative to how long a single ripple stays visible, for
+  the pond to read as "occasionally flapping" rather than "always mid-
+  ripple". Worked out by hand first: a burst's own last ring finishes
+  decaying `TAIL_WAG_RING_SPACING * (TAIL_WAG_RING_COUNT - 1)` after the
+  burst starts, plus a full `WaterShader.RIPPLE_LIFETIME` (2.2s) — 2.8s
+  total — while the OLD `RIPPLE_INTERVAL_MIN`/`MAX` (1.1-2.6s) scheduled
+  the next burst to start before that decay had even finished, most of the
+  time. Confirmed directly, not just estimated: a fresh empirical test
+  (`test_a_swimming_fish_actually_goes_quiet_between_bursts_most_of_the_
+  time` in `test_fish_marker.gd`, simulating several real minutes of
+  continuous swimming and sampling whether any ripple was still visible at
+  each second) measured the pond visibly quiet only **4% of the time** at
+  the old constants.
+- Fixed in the shared `fish_marker.gd`, not the diorama — `RIPPLE_INTERVAL_
+  MIN`/`MAX` widened 1.1–2.6 → 6.0–12.0, so bursts become genuinely
+  occasional rather than a near-permanent low churn. This is a real-game-
+  wide change (every fish, not just the diorama's), which is the correct
+  scope: the frequency problem was never diorama-specific, only newly
+  VISIBLE there once a small, always-on-screen pond with two fish made a
+  pre-existing shared-code frequency impossible to miss. Two tests pin the
+  new relationship rather than just its two endpoints: `test_ripples_stay_
+  occasional_not_continuous_by_the_numbers` derives the expected visible
+  fraction algebraically straight from these constants plus `WaterShader.
+  RIPPLE_LIFETIME` (so a future change to either side of the relationship —
+  burst timing, or the shader's own fade duration — gets re-checked
+  automatically instead of silently drifting back out of sync), and the
+  empirical simulation test above confirms it on a real running fish.
+- One real collateral fix the retune exposed:
+  `test_fish_swimming_eventually_records_a_water_disturbance` (`test_
+  character_preview_diorama.gd`) started failing — not because anything was
+  broken, but because it only ever checked whether `_water_shader.
+  _disturbance_positions` was non-empty at the very END of its 60s
+  simulated loop, and that buffer drops any entry older than `RIPPLE_
+  LIFETIME` (2.2s). At the old, much shorter interval a recent ripple was
+  almost always sitting in the buffer by luck whenever the check happened
+  to run; at the new, realistic interval it usually is not, even though
+  ripples genuinely fired earlier in the very same loop. Fixed the same way
+  this exact false-negative was already fixed once before, for the hero's
+  own identical tests right below it in the same file (see the seventh
+  pass): track a RISING EDGE of the disturbance count across every step of
+  the loop instead of reading the final decaying count.
+
+✅ **Twelfth live pass: more scene life, plus fish still didn't read as
+swimming.** One combined report: *"Can you make it so that the character
+does more things and the scene's livelihood increases? We need flowers,
+butterflies, worms... the character should do random things like fight a
+boar; fish a fish; play with the sword and so on ... also please use a real
+ingame world ... the fishes don't speed boost and they don't swim naturally
+like in game."*
+
+- **Fish speed, investigated before touching anything.** The eleventh
+  pass's own frequency fix was intact and firing correctly (measured: glide/
+  flap speeds matched `FISH_SWIM_SPEED` and `FISH_SWIM_SPEED * FLAP_SPEED_
+  MULTIPLIER` exactly, several bursts fired within a realistic 30s window) —
+  the real gap was that `FISH_SWIM_SPEED` (4.0) had never been re-tuned
+  against the pond's own growth across this whole session: a fish took
+  4.0s just to glide across its OWN configured wander circle, before even
+  considering the now-much-bigger pond. Doubled to 8.0, test-pinned against
+  a measured property (`test_fish_swim_speed_crosses_its_own_wander_circle_
+  briskly`: crossing time < 3.0s) rather than the bare number, so a future
+  pond-size change gets re-measured automatically.
+- **Flowers, worms, butterflies** (`CharacterPreviewLayout.FLOWER_COUNT`/
+  `WORM_COUNT`/`BUTTERFLY_COUNT`, `CharacterPreviewDiorama._build_flowers`/
+  `_build_worms`/`_build_butterflies`) — "please use a real ingame world"
+  read as this session's own established first pillar restated: reuse the
+  real rendering, add no parallel art style. Butterflies needed nothing new
+  at all — `AmbientFlyerRenderer.build_flyer` was already a ready-made non-
+  bird wrapper (used in production for flies on carcasses). Flowers/worms
+  have no standalone "spawn one" renderer the way fish/trees/birds do, so
+  `_build_flowers`/`_build_worms` build a plain `Sprite2D` each straight
+  from `ProceduralFlowerSprite`/`ProceduralWormSprite` — the exact same
+  inline pattern `EarthChunkManager._sync_flower_sprites`/`_sync_worm_
+  sprites` already use for the real world's own meadow, just without a
+  `FlowerPatch`/`EarthwormPatch` behind it (nectar/growth/emergence all sit
+  at their own permanent "fully grown, always surfaced" defaults, the same
+  convention trees already use via `age_seconds = INF`).
+- **A boar to fight.** `CreatureRenderer`'s own real single-marker spawn
+  path (already used by `/spawn` and the easter-egg boss cameos) places one
+  ambient boar, called through its underlying `_build_marker` directly
+  (not the public `spawn_single`, which rolls a non-deterministic `randi()`
+  wander seed — wrong for this diorama's own "same seed, same scene"
+  pillar) so the boar's own presentation is seeded from its position like
+  every other placement here. Investigated first whether the BOAR's own
+  attack pose could trigger on cue: it can't — `CreatureMarker`'s attack
+  state is gated behind full AI/perception with no public "play the attack
+  pose now" method, and forcing it via a fake threat target would be
+  fragile for one scripted beat. Scoped down honestly rather than built
+  fragile: the boar stays a harmlessly ambient, idle-wandering presence
+  (`world` left null, `CreatureMarker`'s own documented no-AI fallback) —
+  what actually reads as "fighting" is the HERO's own real swing, reused
+  from SWING, aimed at the boar. New `FIGHT` action on `CharacterActionPicker`
+  walks to `CreatureMarker.ATTACK_RANGE` of the boar (derived, not
+  restated) and lands a `play_attack_swing` every `FIGHT_SWING_INTERVAL`
+  while there.
+- **A real fishing cast.** FISH used to just stand still facing the pond —
+  no cast, no bobber, nothing that actually read as fishing. Investigated
+  the real game's own fishing first: `scenes/player.gd` has never had a
+  dedicated cast animation either — `_start_cast_visuals` reuses the exact
+  same `play_attack_swing` a melee attack uses for the rod-throw, plus a
+  `ProceduralBobberSprite` landing at `FishingCast.cast_point`. Nothing new
+  to build, only to wire in: the diorama's own FISH action now calls the
+  same swing + bobber once, the frame the hero arrives at the fishing spot
+  (`_fish_has_cast` gates it to once per action, not every frame held).
+- Verified live: launched the real game, reached the character creator —
+  the boar (with its own real HP bar, free from reusing genuine
+  `CreatureMarker` rendering), pink/white flowers, a worm, both fish, and a
+  bird all visible together in the same frame, no script errors.
+
+⬜ FOOTPRINT.y (still 96) and the overall zoom level are otherwise unchanged
+and still need a user decision on how large the hero should read. Note for
+whoever takes either further: `tree_bounds` insets by 20×26, so at footprint
+96 the tree band is 76×70, at 74 it is 54×44, and below ~52 the y-band
+collapses to zero height and every tree would stack on one line — any
+further `FOOTPRINT` change must re-run `test_character_preview_layout.gd`.
 
 
 ### `/ecotest` — watching a year go by
@@ -3889,7 +4299,8 @@ to slope at all. Nothing implemented — all ⬜ Not started:
 - **Slope-Gated Passability (Soft Slow, Hard Refusal)** (large) — ✅ Done and wired into live movement — `src/gameplay/terrain_passability.gd` (`speed_multiplier`/`is_passable`, tested: 11/11) plus real wiring in `scenes/player.gd`'s `_authority_step`: `current_speed_multiplier` now also factors `_terrain_speed_multiplier(tile)` (the soft case, same shape as `_weather_speed_multiplier`), and a real look-ahead check (`_terrain_blocks_movement`, same "ask before you step" principle `creature_movement_gate.gd` established for creatures) zeroes the frame's velocity outright when the tile ahead is too steep, before `move_and_slide()` ever runs. `EarthChunkGenerator`/`EarthChunkManager` both gained `slope_at_global`/`aspect_at_global` to expose `terrain_relief.gd`'s real slope/aspect field per global tile (tested: `test_earth_chunk_generator.gd` 214/216 asserts passing — the 2 "failures" are the pre-existing, unrelated image-load-warning flake, not a real failure; `test_earth_chunk_manager.gd`/`test_player.gd` verified via targeted `-gunit_test_name` runs rather than a full-file run, both too slow to complete in full — see the Godot-test-execution memory note). **Not yet wired**: no creature (only the player) is gated by slope.
 - **Climbing Rope Raises the Hard Threshold** (medium) — 🚧 Partial — `TerrainPassability.is_passable`'s `has_climbing_gear` parameter is real and tested, but `Player._has_climbing_gear()` always returns `false` — no rope item/equipment concept exists yet (`transportation.md`'s already-specified, currently-unused rope concept), so nothing can set it true. The hook is real; the payoff isn't.
 - **Hillshading (Real Lambertian Formula, Real Solar Position)** (medium) — ✅ Done and wired into live chunk load/unload — `src/rendering/hillshade.gd`'s `illumination()` is the real standard hillshade formula (tested, 8/8), fed by `solar_position.gd`'s new `azimuth_degrees()` (tested, 20/20 for the whole file) alongside its existing `elevation_degrees`. `procedural_hillshade_sprite.gd` bakes real (quantized) slope/aspect as DATA into a small atlas (8 slope bins x 8 aspect octants + one shared flat tile, tested 14/14); `hillshade_shader.gd` is a real, compile-verified `canvas_item` fragment shader (tested 12/12 — caught a genuine bug mid-development: Godot's shader language rejects an early `return` inside `fragment()`, unlike plain GLSL); `TerrainRenderer.atlas_coords_for_hillshade`/`build_hillshade_overlay_tile_set` build the atlas TileSet (tested 5/5). **Now wired live**: `EarthChunkManager.set_hillshade_layer`/`_paint_hillshade_overlay`/`set_sun_position` (mirroring `set_water_layer`/`_paint_water_overlay`/`set_wind_strength` exactly) are called from `_load_chunk`/unload and verified via a real chunk load at the Berlin spawn tile — every one of ~25,600 loaded cells got a real hillshade tile, and moving away correctly erased cells outside the new radius (25605/25606 asserts passing; the one "failure" is the same pre-existing per-sheet image-load-warning flake hit repeatedly this session, not a real defect). `scenes/world.tscn` gained a real `HillshadeFx` `TileMapLayer` node (mirroring `WaterFx`/`SnowFx`); `scenes/world.gd` now computes real sun azimuth alongside its existing elevation computation and pushes both via `set_sun_position` every frame, alongside the existing `set_wind_strength`/`set_rain` calls. **Honest verification gap**: no automated test instantiates `world.tscn`/`World` itself anywhere in this project's suite, so the scene-level wiring (the `@onready $HillshadeFx` reference, the `.tscn` node block) is verified only by confirming both resources load without structural/parse errors (a real, if partial, check), not by a live GUI session.
-- **Slope-Gated Mountain Ore Veins** (medium) — ✅ Done and wired into live chunk load/unload — `src/world/mountain_ore_placement.gd` (tested, 15/15): vein chance is zero below `terrain_passability.gd`'s own `SOFT_THRESHOLD_DEG`, scales linearly up to `MAX_VEIN_CHANCE` (0.35) at its `HARD_THRESHOLD_WITH_ROPE_DEG` — the same steepness gating passability also gates ore exposure, deliberately, one shared quantity with two consequences. Ore type/seed reuse `OrePlacement`'s own derivation exactly. `StoneRenderer.spawn_mountain_veins` (tested, 6/6 — 689/692 asserts passing across the whole file, the 3 "failures" the same pre-existing flake) spawns real `MinableOre` nodes on mountain cells that roll a vein, drawing from the exact same illustrated-boulder-composited texture path flat-ground ore already uses. **Now wired live**: `EarthChunkManager._load_chunk` concatenates `spawn_mountain_veins(..., self)` (passing itself as the duck-typed slope lookup) onto the same `_loaded_stones[chunk_coord]` array `spawn_stones` already populates — a deliberate one-line reuse rather than a parallel dictionary: mountain veins are `StaticBody2D` ore nodes exactly like flat-ground ore, so they need the exact same obstacle-avoidance (`solid_obstacles_near`) and unload-cleanup machinery `_loaded_stones` already provides, with nothing new to duplicate. Not separately re-verified against a real chunk load in this pass (Berlin, this suite's existing fixture location, isn't mountainous) — correctness rests on the already-passing `StoneRenderer`-level tests plus direct code review of the one-line change.
+- **Slope-Gated Mountain Ore Veins** (medium) — ✅ Done and wired into live chunk load/unload — `src/world/mountain_ore_placement.gd` (tested, 16/16): vein chance is zero below `terrain_passability.gd`'s own `SOFT_THRESHOLD_DEG`, scales linearly up to `MAX_VEIN_CHANCE` at its `HARD_THRESHOLD_WITH_ROPE_DEG` — the same steepness gating passability also gates ore exposure, deliberately, one shared quantity with two consequences. Ore type/seed reuse `OrePlacement`'s own derivation exactly. `StoneRenderer.spawn_mountain_veins` (tested, 6/6) spawns real `MinableOre` nodes on mountain cells that roll a vein, drawing from the exact same illustrated-boulder-composited texture path flat-ground ore already uses. **Now wired live**: `EarthChunkManager._load_chunk` concatenates `spawn_mountain_veins(..., self)` (passing itself as the duck-typed slope lookup) onto the same `_loaded_stones[chunk_coord]` array `spawn_stones` already populates — a deliberate one-line reuse rather than a parallel dictionary: mountain veins are `StaticBody2D` ore nodes exactly like flat-ground ore, so they need the exact same obstacle-avoidance (`solid_obstacles_near`) and unload-cleanup machinery `_loaded_stones` already provides, with nothing new to duplicate.
+  - 🐛 **Fixed (playtest report, 2026-08-28): `MAX_VEIN_CHANCE` had no density gate of its own.** `spawn_mountain_veins` checks every mountain-biome cell with nothing above this one ceiling — unlike flat ground, where `StonePlacement.STONE_DENSITY` gates first and `OrePlacement.ORE_FRACTION` gates again on top of that. The original value (a flat, eyeballed 0.35, "a third of cells is still a landmark find, not wallpaper") was ~29x flat-ground ore's own ~1.2% overall rarity — reported live as "a dense, near-uniform grid... covering most of the visible ground" on any broadly steep mountainside, not a landmark. Re-pinned to `StonePlacement.STONE_DENSITY * OrePlacement.ORE_FRACTION` (≈0.012) — the same order of magnitude as flat-ground ore's own rarity, since a vein is still a mineral deposit, just placed by a different (slope-driven) rule — and test-pinned (`test_max_vein_chance_matches_flat_ground_ores_own_rarity`) rather than left as a second, independently-eyeballed number. Two statistical sample sizes in `test_mountain_ore_placement.gd` and the mountain-chunk test fixture's default size in `test_stone_renderer.gd` were raised alongside it so the ~29x lower ceiling doesn't reintroduce test flakiness. Verified via the full test suite, not a live in-game screenshot — the "decal stamped on top, not a mineral streak in the wall texture" visual gap `terrain_relief.md`'s own spec already calls out is unrelated and still open.
 
 ### Building (`concept/building.md`)
 
@@ -5897,6 +6308,7 @@ New concept doc this pass -- no prior doc covered what's underground (`stone.md`
 - ✅ **`GeologyHazards.foul_air_at(layer)` / `flood_risk_at(layer, distance_to_nearest_surface_water)`** -- real, tested, per-layer hazard functions (foul air rises with depth/enclosure, a real natural-ventilation effect; flood risk is a per-layer base times a real exponential distance falloff from the nearest surface water). `test_geology_hazards.gd`. Not yet triggered as live gameplay events -- see gaps below.
 - ✅ **`CaveEntrancePlacement`** -- sparse, deterministic, mountain-biome-weighted cave-mouth placement, same coordinate-hash idiom as `StonePlacement`/`OrePlacement`. `test_cave_entrance_placement.gd`.
 - ✅ **`GeologyChamber.cells_for`** -- the small circular pocket of Strata cells a cave entrance reveals, the underground equivalent of `RoomDetector`'s room cells. `test_geology_chamber.gd`.
+  - 🐛 **Fixed (playtest report, 2026-08-28): `CHAMBER_RADIUS` was "small" only by tile count, not on screen.** At the shipped camera zoom (`Player.TARGET_TILE_SCREEN_PX` = 64px/tile) the old `CHAMBER_RADIUS := 3` (a 7-tile-diameter, ~37-cell disk) rendered at ~448px against the project's own 720px-tall default viewport — ~62% of the visible screen's shorter side. Since `Strata` cells are `SOLID`/`ORE` by default until mined (see below), the chamber fills essentially 100% on first reveal, with every rock sitting dead-center on its tile — a true grid, not a scatter — so this read live as "a dense, near-uniform grid... covering most of the visible ground" the instant a player brushed within one tile of a cave entrance, including on plain grassland (`CaveEntrancePlacement` rolls there too, just rarely). Shrunk to `CHAMBER_RADIUS := 1` (a 3x3, 9-cell pocket) — the largest radius that still clears a new screen-relative bound (`test_chamber_diameter_stays_a_small_fraction_of_the_visible_screen`) rather than the bare `< 50`-cells check that existed before and never caught this.
 - ✅ **Topsoil/regolith wired fully end-to-end and playable.** `GeologyRenderer` spawns a visible `CaveEntranceMarker` (real, if honestly-flat-fallback, procedural art -- `ProceduralCaveEntranceSprite`) at every entrance a loaded chunk rolls (`EarthChunkManager._load_chunk`'s new geology block), and `EarthChunkManager._update_geology_reveal` (called from `update()`, mirroring `_update_roof_visibility`'s reveal-on-entry shape exactly) spawns real `DiggableRock` nodes for the chamber the moment the player is within `CAVE_ENTRY_TRIGGER_RADIUS` of an entrance, and despawns them the moment the player leaves. `DiggableRock` mirrors `MinableOre`'s contract exactly (real `WorldItemBus` drops scaled by pickaxe power via the same `OreYield`, same hover-tooltip contract, same "attack"-bound swing) plus writes the mined cell permanently back into the chunk's own `Strata` instance, so a chamber re-revealed later shows real tunnels instead of resetting. `test_diggable_rock.gd`, `test_geology_renderer.gd`, `test_procedural_cave_entrance_sprite.gd`.
 - ⬜ **The physical shaft from topsoil/regolith down into bedrock, and onward through deep bedrock into the hydrothermal zone.** All three deeper layers' `Strata` configuration, ore weighting, and hazard functions are fully implemented and fully tested (see above); nothing yet lets a player physically reach them -- a deliberately scoped, honestly documented gap (see the geology doc's own Status section for the full statement).
 - ⬜ **Collapse/foul-air/flood-risk are not yet live gameplay events.** The pure hazard functions exist and are tested; nothing calls them from the reveal/mining path yet (no actual cave-in, no actual air/water damage-over-time tick).

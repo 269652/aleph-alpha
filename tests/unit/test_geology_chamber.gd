@@ -43,3 +43,35 @@ func test_no_duplicate_cells():
 	for cell in cells:
 		assert_false(seen.has(cell), "duplicate cell %s" % cell)
 		seen[cell] = true
+
+
+## Regression: "small and bounded" (this file's own header comment, and
+## geology.md's "deliberately small and bounded rather than an arbitrary
+## big reveal") was only ever checked as a bare tile COUNT
+## (test_chamber_is_small_and_bounded's `< 50`), never against what a
+## player actually sees. Reported live (playtest, 2026-08-28): at
+## CHAMBER_RADIUS=3, the revealed disk's 7-tile diameter renders at
+## Player.TARGET_TILE_SCREEN_PX (64px/tile, the shipped camera zoom) as
+## ~448px against the project's own 720px-tall default viewport
+## (project.godot's [display] section) -- ~62% of the visible screen's
+## shorter side, described as "a dense grid covering most of the visible
+## ground," not a small starter pocket. Pinning the SCREEN-relative
+## fraction rather than a tile count means a future TILE_SIZE or
+## window-size change can't silently blow this back up unnoticed the way
+## it did once already.
+func test_chamber_diameter_stays_a_small_fraction_of_the_visible_screen():
+	var diameter_tiles := 2.0 * GeologyChamber.CHAMBER_RADIUS + 1.0
+	var diameter_px := diameter_tiles * Player.TARGET_TILE_SCREEN_PX
+	var viewport_px := Vector2(
+		ProjectSettings.get_setting("display/window/size/viewport_width"),
+		ProjectSettings.get_setting("display/window/size/viewport_height")
+	)
+	var visible_shorter_side_px: float = minf(viewport_px.x, viewport_px.y)
+	var fraction: float = diameter_px / visible_shorter_side_px
+	assert_lt(
+		fraction, 0.3,
+		(
+			"chamber diameter is %.0f%% of the visible screen's shorter side -- "
+			+ "too big to read as a small starter pocket"
+		) % [fraction * 100.0]
+	)
