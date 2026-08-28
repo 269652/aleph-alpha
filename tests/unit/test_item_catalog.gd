@@ -440,3 +440,18 @@ func test_catalog_knows_the_netting_curiosity_items():
 	for item_id in NETTING_CURIOSITY_ITEM_IDS:
 		assert_true(catalog.has(item_id), "missing %s" % item_id)
 		assert_eq(catalog.make(item_id).kind, "material", item_id)
+
+
+# -- climbing rope (docs/concept/transportation.md's "Traversal tools" -----
+# -- section, docs/concept/terrain_relief.md's "Passability: ask before ----
+# -- you step") --------------------------------------------------------------
+#
+## The traversal tool terrain_relief.md's slope-gated passability actually
+## raises the hard threshold for -- held like the lasso/fishing_rod/saw, not
+## a stackable material.
+
+func test_catalog_knows_the_climbing_rope():
+	assert_true(catalog.has("climbing_rope"), "missing climbing_rope")
+	var rope := catalog.make("climbing_rope")
+	assert_eq(rope.kind, "tool")
+	assert_eq(rope.max_stack, 1, "held in hand like every other tool, not a stackable material")

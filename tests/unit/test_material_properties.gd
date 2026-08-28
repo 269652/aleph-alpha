@@ -75,6 +75,20 @@ func test_obsidian_is_not_viable_grapple_rope_material() -> void:
 	assert_false(mp.is_viable_for_tool("obsidian", "grapple_rope"))
 
 
+## The real climbing-rope item (docs/concept/transportation.md,
+## crafting_recipe_book.gd's "climbing_rope" recipe) is built from hide, not
+## fiber -- pinning that choice against the real check rather than an
+## eyeballed comment. hide's toughness is 7.0 (see MATERIALS), comfortably
+## above ROPE_MIN_TOUGHNESS's 5.0, and unlike fiber (ambient meadow
+## gathering) it is only obtained by hunting+butchering an animal
+## (butchering.gd) -- the "materials that make a traversal tool actually
+## good live further out on the danger gradient" transportation.md itself
+## asks for. If a future edit ever drops hide's toughness below the rope
+## threshold, this is the test that catches it.
+func test_hide_is_viable_grapple_rope_material_the_climbing_ropes_real_choice() -> void:
+	assert_true(mp.is_viable_for_tool("hide", "grapple_rope"))
+
+
 func test_unknown_tool_type_is_never_viable() -> void:
 	assert_false(mp.is_viable_for_tool("wood", "spaceship"))
 

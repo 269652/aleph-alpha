@@ -1470,12 +1470,20 @@ func test_terrain_blocks_movement_agrees_with_terrain_passability_for_the_lookah
 	assert_eq(player._terrain_blocks_movement(input_direction), expected)
 
 
-## Honest current state (see docs/progress.md's Transportation section): no
-## climbing-rope item/equipment concept exists yet, so this always reads
-## false. Exists so the day a real rope is built, this test starts failing
-## loudly rather than the hook silently staying wired to "never."
-func test_has_climbing_gear_is_false_until_a_real_rope_exists():
+## No rope in inventory -> no climbing gear. The default player fixture
+## starts with none, so this is the honest baseline case.
+func test_has_climbing_gear_is_false_without_a_rope_in_inventory():
 	assert_false(player._has_climbing_gear())
+
+
+## The real climbing_rope item (docs/concept/transportation.md,
+## item_catalog.gd) now exists -- carrying one (not equipping/wielding it,
+## per terrain_relief.md's own "carrying" framing) must flip
+## _has_climbing_gear() true, the same "raw inventory count" pattern
+## _has_fishing_rod() already uses rather than an equipped-item check.
+func test_has_climbing_gear_is_true_when_a_climbing_rope_is_in_inventory():
+	player.inventory.add(_item_catalog.make("climbing_rope"), 1)
+	assert_true(player._has_climbing_gear())
 
 
 ## Wiring tests for the survival-neglect consequence (ConditionPenalty, see

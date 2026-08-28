@@ -200,6 +200,14 @@ const _ITEMS := {
 	# materials, not craftable at a bench.
 	"jarred_insect": ["Jarred Insect", "material", 20, 0.0],
 	"caged_songbird": ["Caged Songbird", "material", 20, 0.0],
+	# Climbing rope (docs/concept/transportation.md's "Traversal tools"
+	# section; docs/concept/terrain_relief.md's "Passability: ask before
+	# you step"): the high-tensile traversal tool that raises the
+	# hard-impassable slope threshold from HARD_THRESHOLD_DEG to
+	# HARD_THRESHOLD_WITH_ROPE_DEG (see TerrainPassability.is_passable)
+	# once carried in inventory (Player._has_climbing_gear). Held in hand
+	# like the lasso/fishing_rod/saw -- a tool, not a stackable material.
+	"climbing_rope": ["Climbing Rope", "tool", 1, 0.0],
 }
 
 

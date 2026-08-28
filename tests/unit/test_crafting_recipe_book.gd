@@ -30,7 +30,8 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# logistics, and the autonomous dependency chain" section, 1 more).
 	# + "any animal, the right tool" (docs/concept/taming.md): snare,
 	# butterfly_net, trap, reinforced_rope (4 more).
-	assert_eq(ids.size(), 36)
+	# + transportation (docs/concept/transportation.md): climbing_rope (1 more).
+	assert_eq(ids.size(), 37)
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():
@@ -475,3 +476,36 @@ func test_capture_gear_recipes_use_only_existing_items():
 	for recipe_id in ["snare", "butterfly_net", "trap", "reinforced_rope"]:
 		for item_id in _input_item_ids(recipe_id):
 			assert_true(catalog.has(item_id), "%s recipe uses unknown material %s" % [recipe_id, item_id])
+
+
+# -- climbing rope (docs/concept/transportation.md's "Traversal tools" -----
+# -- section: "a proper climbing rope needs high tensile strength", gated ---
+# -- by material sourcing further out on the danger gradient rather than a --
+# -- unique found-treasure item) ---------------------------------------------
+#
+## hide is the real MaterialProperties.MATERIALS material chosen (see
+## test_material_properties.gd's test pinning it as a viable grapple_rope
+## material by toughness) -- it is also already a real item_id in
+## item_catalog.gd, sourced only by hunting+butchering an animal
+## (butchering.gd), not gathered ambiently the way plant_fibre is. plant_fibre
+## binds/braids the hide strips into an actual rope.
+
+func test_climbing_rope_recipe_exists_and_is_craftable_from_hide_and_plant_fibre():
+	assert_true(book.recipe_ids().has("climbing_rope"), "the climbing rope must be craftable")
+	assert_eq(book.recipe_output("climbing_rope")["item_id"], "climbing_rope")
+	assert_false(book.can_craft("climbing_rope", {"hide": 2, "plant_fibre": 3}))
+	assert_true(book.can_craft("climbing_rope", {"hide": 3, "plant_fibre": 3}))
+	var result: Dictionary = book.craft("climbing_rope", {"hide": 3, "plant_fibre": 3})
+	assert_true(result["success"])
+	assert_eq(result["output_item_id"], "climbing_rope")
+	assert_eq(result["remaining_counts"]["hide"], 0)
+	assert_eq(result["remaining_counts"]["plant_fibre"], 0)
+
+
+## The chosen material must already be a real item the catalog knows about --
+## no new raw material id invented for this recipe.
+func test_climbing_rope_recipe_uses_only_existing_items():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	for item_id in _input_item_ids("climbing_rope"):
+		assert_true(catalog.has(item_id), "climbing_rope recipe uses unknown material %s" % item_id)
