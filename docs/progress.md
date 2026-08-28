@@ -1391,6 +1391,86 @@ like in game."*
   `CreatureMarker` rendering), pink/white flowers, a worm, both fish, and a
   bird all visible together in the same frame, no script errors.
 
+✅ **Thirteenth live pass: mining, pulling/eating, catching, and a panel
+reorder.** *"Can you flesh out the diorama so there are ores / stones the
+hero can mine as action and also carrots he can pull and eat (animated) ...
+also the boar doesn't have walk animations ... the hero never attacks the
+animals... he should also have as action to catch animals (horses,
+butterfly)."*, then separately: *"swap char selector buttons with diorama
+so it's not cut off."*
+
+- **MINE** — walks to swinging range of the nearest stone/ore
+  (`CharacterPreviewLayout.STONE_COUNT`, alternating `StoneRenderer`'s own
+  `_build_ore_node`/`_build_stone_node` by index for real visual variety —
+  whichever `StoneSize`/`OrePlacement` roll for that seed) and swings
+  there periodically. Deliberately does NOT call the real `.mine()`/
+  `.smash()` — that would eventually deplete every stone in the diorama
+  over a long enough session — the same "no real destructive consequence
+  to the target" choice FIGHT already made for the boar, kept consistent
+  here too.
+- **PULL + eat** — walks to a mature carrot (a real `WildCropMarker`,
+  `CharacterPreviewLayout.CARROT_COUNT`, already fully grown — no wrapper
+  needed, it has no chunk/sim dependency at all) and calls the REAL
+  `begin_pull()` once in range: unlike MINE/FIGHT, a pull is a genuine,
+  safe, one-shot mechanic (a 0.5s tween reveal, not a multi-hit
+  depletion), driven through the marker's own real `_process` the same
+  way `_build_fish` already drives real `FishMarker`s. A real, if subtle,
+  bug surfaced building this and was caught by dumping actual per-frame
+  state rather than guessed at: once the pull's own follow-up "eat" pulse
+  finished and reset, the very next frame fell through to a still-stale
+  elapsed-time check and immediately restarted a fresh eat pulse — forever
+  cycling 0 → 1.0 → reset → 0 again, never settling. Fixed with an
+  explicit `_pull_finished` latch checked first, short-circuiting the
+  whole sequence once genuinely done. No real eating animation exists
+  anywhere in this codebase to reuse (`Player.eat_food` has no
+  `CharacterView` hook at all), so the "eat" half is a small, deliberately
+  new, art-free flourish — a sine-wave scale pulse on the hero's own
+  existing sprite, settling back to its real scale rather than a new
+  animation frame set.
+- **The boar's missing walk animation was a real `CreatureMarker` bug, not
+  diorama-only** — `_process`'s own `world == null` ambient fallback (the
+  documented no-AI path this diorama's boar, and any future world-less
+  ambient creature, deliberately uses) called `_wander_step` then returned
+  immediately, skipping the ONE call (`_animation_step()`) every other
+  branch already makes before its own return. Movement already worked
+  (already proven null-safe by an existing test); `_animation_step()`
+  itself was already null-safe too. One line added, pinned by a new
+  `test_a_world_less_marker_still_animates_while_wandering` in
+  `test_creature_marker.gd`. Real-game-wide, not diorama-scoped — the same
+  "found while working on the diorama, fixed at the real shared source"
+  pattern the fish-ripple-frequency and fish-speed fixes above both
+  already followed.
+- **CATCH** — chases the nearest butterfly's own LIVE position (unlike
+  every other fixed-layout target above, butterflies wander) and swings/
+  throws once in range. Investigated the real lasso/net flow first
+  (`Player._throw_rope_tool`/`_throw_net`): both, like every other gesture
+  built this session, turn out to just be `play_attack_swing` — there is
+  nothing further to reuse beyond aiming it at a moving target, so that's
+  all this does, the same non-destructive-gesture choice as FIGHT/MINE. A
+  future horse (see the still-open animal-rotation idea below) is a
+  natural CATCH extension once the diorama has more than one ambient land
+  species; for now the boar itself was ruled out as a land-creature CATCH
+  target on the same grounds the boar's own FIGHT investigation already
+  found — no clean way to make it visibly respond without a real `world`
+  and full AI.
+- **Diorama/class-icon-row order swapped** in `main_menu.gd`'s
+  `_build_hero_column` (reported live, directly: "swap char selector
+  buttons with diorama so it's not cut off") — the class-icon row used to
+  be added to the column FIRST, so the diorama's own vertical position (and
+  thus how much of it fit before the outer scroll's own fold) depended on
+  however tall the icon row happened to be. Simply moving WHEN the already-
+  built icon row gets `add_child`ed (right after `glow_wrap` instead of
+  before it) put the diorama in the earliest, most headroom-favourable
+  slot instead. Pinned by a new `test_the_diorama_sits_above_the_class_
+  icon_row`, and fixed the pre-existing, separately-tracked `test_the_
+  diorama_fits_within_the_first_unscrolled_view_of_the_character_tab`
+  failure as a genuine side effect — that scroll-clipping regression
+  (traced earlier to an unrelated "playtest fixes" commit, tracked as its
+  own out-of-scope background task) is now closed, not just reduced.
+- Verified live and via the full `test_character_preview_diorama.gd` (54/
+  54) and `test_main_menu.gd` (58/58, zero failures for the first time
+  this whole session) suites.
+
 ⬜ FOOTPRINT.y (still 96) and the overall zoom level are otherwise unchanged
 and still need a user decision on how large the hero should read. Note for
 whoever takes either further: `tree_bounds` insets by 20×26, so at footprint
