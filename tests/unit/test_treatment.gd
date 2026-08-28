@@ -247,10 +247,33 @@ func test_the_colour_ladder_names_the_tools_it_really_makes() -> void:
 ##
 ## Every number is read from the shipped tables (`MATERIALS["iron"]`,
 ## `BRITTLE_TOUGHNESS`, `KEEN_SHARPNESS`) rather than restated here.
+##
+## The opening assertion used to read "as-cast high-carbon steel is brittle --
+## that is the problem being solved", and it was wrong: 0.6 % carbon is BELOW
+## `AlloyBlend.SECOND_PHASE_ONSET`'s 0.76 % eutectoid, so the alloy is a single
+## ductile phase and its toughness is the rule of mixtures. alloy_blend.gd's
+## own write-up says so in as many words -- "the model says eutectoid steel is
+## tough (as normalized pearlitic steel genuinely is)" -- and normalized
+## pearlitic steel really is the classic tough edged-tool material. The claim
+## was a leftover from the single-regime alloy model that preceded the
+## two-regime rewrite, and it survived only because nothing re-read it.
+##
+## What IS the problem being solved is asserted instead, and it is the harder,
+## truer version: as-cast steel is tough but not hard enough to be a blade,
+## quenching it makes it hard and unusably brittle, and only the pair of
+## operations together produces a tool. That is exactly why tempering had to be
+## invented.
 func test_a_quenched_and_tempered_high_carbon_blade_beats_plain_iron_without_being_brittle() -> void:
 	var steel := _blade_steel()
-	assert_lt(float(steel["toughness"]), MaterialProperties.BRITTLE_TOUGHNESS,
-		"as-cast high-carbon steel is brittle -- that is the problem being solved")
+	var iron_before := _iron()
+	assert_gte(float(steel["toughness"]), MaterialProperties.BRITTLE_TOUGHNESS,
+		"as-cast steel is TOUGH -- single-phase pearlite, below the eutectoid")
+	assert_lt(float(Treatment.quench(steel)["toughness"]), MaterialProperties.BRITTLE_TOUGHNESS,
+		"and quenching it is what makes it brittle -- that is the problem being solved")
+	assert_gt(float(Treatment.quench(steel)["hardness"]), float(steel["hardness"]),
+		"the quench must actually harden it, or there would be nothing to temper")
+	assert_gt(float(steel["hardness"]), float(iron_before["hardness"]),
+		"and carbon alone must already beat plain iron on hardness")
 
 	var blade: Dictionary = Treatment.temper(
 		Treatment.quench(steel), Treatment.draw_c_for_colour("dark straw")
@@ -268,14 +291,22 @@ func test_a_quenched_and_tempered_high_carbon_blade_beats_plain_iron_without_bei
 	assert_true(mp.descriptors_for_vector(blade).has("keen"))
 
 
-## Honest scope note, pinned in code: the window that acceptance test lands in
-## is NARROW. Plain iron is hardness 8 and the scale stops at 10, so a
-## quenched-and-tempered blade has two points of headroom to work in and comes
-## out barely a third of a point above iron. That is the 0-10 legibility scale
-## saturating -- the limitation `alloy_blend.gd` already names as its biggest --
-## and not a claim that real tempered tool steel is only 4 % harder than
-## wrought iron.
-func test_the_useful_draw_window_is_narrow_because_the_scale_saturates() -> void:
+## This test used to be a pinned LIMITATION, named
+## test_the_useful_draw_window_is_narrow_because_the_scale_saturates: plain iron
+## was hardness 8.0 on a scale that stopped at 10.0, so a quenched-and-tempered
+## blade had two points of headroom, came out a third of a point above iron,
+## and the band of draws that beat iron without being brittle was tens of
+## degrees wide. That was the saturation defect measured from the far end.
+##
+## material_properties.gd's hardness column is real Vickers now (iron 100 HV,
+## ceiling 1000 HV = martensite) and the window is a hundred and seventy-five
+## degrees wide, which is what makes the colour ladder a real choice rather
+## than a needle to thread. The assertion is inverted to match, and it now also
+## checks the thing that actually matters: the ladder's named tools have to
+## land where the ladder says they do -- knives, chisels, axes and springs
+## inside the usable band, and the razor draw deliberately outside it, because
+## a straight razor really does chip.
+func test_the_useful_draw_window_is_wide_now_that_the_scale_has_headroom() -> void:
 	var quenched: Dictionary = Treatment.quench(_blade_steel())
 	var iron_hardness: float = float(_iron()["hardness"])
 	var usable: Array = []
@@ -287,8 +318,13 @@ func test_the_useful_draw_window_is_narrow_because_the_scale_saturates() -> void
 		if hard_enough and tough_enough:
 			usable.append(draw)
 	assert_gt(usable.size(), 0, "there must BE a draw that beats iron without being brittle")
-	assert_lt(float(usable[usable.size() - 1]) - float(usable[0]), 60.0,
-		"and the window is only tens of degrees wide -- the scale, not the metallurgy")
+	assert_gt(float(usable[usable.size() - 1]) - float(usable[0]), 100.0,
+		"and the window must be a real range of draws, not a needle to thread")
+	for colour in ["dark straw", "bronze", "purple", "blue", "pale blue", "grey"]:
+		assert_true(usable.has(Treatment.draw_c_for_colour(colour)),
+			"the %s draw must make a usable tool -- the ladder says it does" % colour)
+	assert_false(usable.has(Treatment.draw_c_for_colour("pale straw")),
+		"and the razor draw must NOT -- a straight razor chips, which is the price of it")
 
 
 # -- sharpening --------------------------------------------------------------
@@ -513,19 +549,30 @@ func test_re_hardening_a_tempered_blade_returns_it_to_the_as_quenched_state() ->
 			"re-hardening must land back on the as-quenched %s" % property_name)
 
 
-## An honest no-op, pinned. `alloy_blend.gd` saturates hardness at the top of
-## the scale for ANY Fe-C composition, so a modelled carbon steel arrives with
-## nothing left to harden -- and because the toughness price is charged on the
-## hardness actually delivered, it pays nothing either. Tempering, not
-## quenching, is what does the work for steel in this model.
-func test_quenching_a_modelled_carbon_steel_is_a_no_op_because_the_scale_is_full() -> void:
+## This was a pinned no-op, and it is not one any more.
+##
+## It used to read: alloy_blend.gd saturates hardness at the top of the scale
+## for ANY Fe-C composition, so a modelled carbon steel arrives with nothing
+## left to harden and quenching changes nothing at all. That was true, and it
+## meant martensite hardening -- the entire reason this module exists -- could
+## not be expressed. It was the saturation defect at its most damaging.
+##
+## With material_properties.gd's hardness column anchored on martensite
+## (1000 HV) instead of on wherever iron happened to be placed, as-cast steel
+## arrives well below the ceiling and the quench does real work: hardness up,
+## toughness down, and the top of the scale is exactly where a full quench
+## lands, because the top of the scale IS martensite.
+func test_quenching_a_modelled_carbon_steel_really_hardens_it() -> void:
 	var steel := _blade_steel()
-	assert_almost_eq(float(steel["hardness"]), Treatment.SCALE_MAX, 0.0001,
-		"alloy_blend already saturates hardness for any carbon steel")
+	assert_lt(float(steel["hardness"]), Treatment.SCALE_MAX,
+		"as-cast steel must have somewhere left to go, or the quench is a no-op")
 	var quenched: Dictionary = Treatment.quench(steel)
-	for property_name in steel:
-		assert_almost_eq(float(quenched[property_name]), float(steel[property_name]), 0.000001,
-			"quenching a saturated steel must change %s by nothing at all" % property_name)
+	assert_gt(float(quenched["hardness"]), float(steel["hardness"]) * 1.4,
+		"quenching must be a large, visible hardening -- this is martensite")
+	assert_lt(float(quenched["toughness"]), float(steel["toughness"]),
+		"and it must be paid for, on the same envelope everything else uses")
+	assert_almost_eq(float(quenched["hardness"]), Treatment.SCALE_MAX, 0.0001,
+		"a full quench lands on the ceiling because the ceiling is martensite")
 
 
 ## The limitation this file cannot fix, recorded in code rather than only in

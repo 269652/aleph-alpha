@@ -45,6 +45,10 @@ const ACTIONS := [
 	{"action": "talk", "label": "Talk to Villager", "default": KEY_G},
 	{"action": "build", "label": "Place Earth", "default": KEY_B},
 	{"action": "destroy", "label": "Remove Tile", "default": KEY_Q},
+	# Casting is a wholly new trigger, not routed through the hotbar/item
+	# system (see docs/concept/spell_runtime.md) -- it needs its own real
+	# key, not a repurposed one.
+	{"action": "cast", "label": "Cast Spell", "default": KEY_Z},
 	{"action": "hotbar_1", "label": "Hotbar Slot 1", "default": KEY_1},
 	{"action": "hotbar_2", "label": "Hotbar Slot 2", "default": KEY_2},
 	{"action": "hotbar_3", "label": "Hotbar Slot 3", "default": KEY_3},

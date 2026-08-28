@@ -20,7 +20,9 @@ const UiTheme = preload("res://src/ui/ui_theme.gd")
 ## overlap is structurally impossible rather than avoided by hand-picked
 ## constants.
 func test_two_messages_at_once_never_share_a_line():
-	var lines: PackedStringArray = World.message_banner_lines("", "Lasso thrown", "That'll be 3 gold", "", "")
+	var lines: PackedStringArray = World.message_banner_lines(
+		"", "Lasso thrown", "That'll be 3 gold", "", "", ""
+	)
 	assert_eq(lines.size(), 2)
 	assert_true("Lasso thrown" in lines)
 	assert_true("That'll be 3 gold" in lines)
@@ -29,23 +31,30 @@ func test_two_messages_at_once_never_share_a_line():
 ## A hidden banner is a hidden CARD, not an empty one: it takes no room, so
 ## the banners below it move up instead of a blank gap opening.
 func test_an_empty_message_takes_no_room_in_the_stack():
-	var lines: PackedStringArray = World.message_banner_lines("A trout!", "", "", "Good morning", "")
+	var lines: PackedStringArray = World.message_banner_lines("A trout!", "", "", "Good morning", "", "")
 	assert_eq(lines.size(), 2)
 	assert_eq(lines[0], "A trout!")
 	assert_eq(lines[1], "Good morning")
 
 
 func test_nothing_to_say_shows_no_banners():
-	assert_eq(World.message_banner_lines("", "", "", "", "").size(), 0)
+	assert_eq(World.message_banner_lines("", "", "", "", "", "").size(), 0)
 
 
 ## Fixed top-to-bottom order, so a message never moves around under the
 ## player's eye depending on which other ones happen to be showing.
 func test_the_banner_order_is_fixed():
-	var lines: PackedStringArray = World.message_banner_lines("fish", "lasso", "trade", "talk", "egg")
+	var lines: PackedStringArray = World.message_banner_lines("fish", "lasso", "trade", "talk", "egg", "cast")
 	assert_eq(
-		Array(lines), ["fish", "lasso", "trade", "talk", "egg"]
+		Array(lines), ["fish", "lasso", "trade", "talk", "egg", "cast"]
 	)
+
+
+## The cast result banner (see docs/concept/spell_runtime.md and
+## Player.cast_message) slots into the same shared stack.
+func test_a_cast_message_shows_in_the_stack():
+	var lines: PackedStringArray = World.message_banner_lines("", "", "", "", "", "Not enough mana.")
+	assert_eq(Array(lines), ["Not enough mana."])
 
 
 ## The banners must be drawn on the shared themed card rather than as bare

@@ -33,9 +33,30 @@ const T_CRUSH: float = 4.0
 ## test_edge_on_brittle_material_shatters_instead_of_cutting.
 const T_BRITTLE_TOUGHNESS: float = 3.0
 
-## A point can't pierce a material harder than this -- too hard to punch
-## through with a concentrated tip. See test_point_cannot_pierce_hard_material.
-const PIERCE_HARDNESS_CAP: float = 6.0
+## A point can't pierce a material this hard -- too hard to punch through with
+## a concentrated tip.
+##
+## RE-DERIVED, not merely rescaled, when the hardness column became published
+## Vickers (MaterialProperties.HARDNESS_HV). The old 6.0 sat in the gap between
+## copper and stone on a legibility scale that no longer exists, and it was an
+## eyeballed number besides.
+##
+## The line it was really drawing turns out to be one the game had already
+## named: MaterialProperties.HARD_HARDNESS, the cutoff at which a tooltip
+## starts calling a material "hard" -- which is iron's own hardness, the same
+## benchmark metal KEEN_SHARPNESS and ItemCompiler.BENCHMARK_BLADE_MATERIAL
+## already use. So this is now that one constant rather than a second opinion
+## about the same line, exactly the arrangement BRITTLE_TOUGHNESS and
+## T_BRITTLE_TOUGHNESS already have: **a point cannot pierce anything the
+## player is told is hard.**
+##
+## Worth recording that the re-derivation is behaviour-PRESERVING: every one of
+## the eighteen materials in the table keeps the pierce/dent verdict it had
+## under the old 6.0 (flesh, hide, leather, wood, bone, copper and the soft
+## metals pierce; iron, stone, obsidian and glass do not), which is the check
+## that the old constant was drawing this line and not some other one. Pinned
+## by test_a_point_cannot_pierce_anything_the_tooltip_calls_hard.
+const PIERCE_HARDNESS_CAP: float = MaterialProperties.HARD_HARDNESS
 
 var _materials: RefCounted = MaterialProperties.new()
 

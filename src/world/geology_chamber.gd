@@ -12,7 +12,22 @@ extends RefCounted
 ## namespace-style convention -- callers only ever need cells_for.
 
 ## Radius (tiles) of the revealed pocket around a cave entrance.
-const CHAMBER_RADIUS := 3
+##
+## Was 3 (a 7-tile-diameter, ~37-cell disk) until reported live (playtest,
+## 2026-08-28): at the shipped camera zoom (Player.TARGET_TILE_SCREEN_PX =
+## 64px/tile) that disk renders at ~448px against the project's own 720px-
+## tall default viewport -- ~62% of the visible screen's shorter side,
+## read as "a dense grid covering most of the visible ground," not the
+## small starter pocket this file's own doc comment claimed. Since Strata
+## cells are SOLID/ORE by default until mined (see strata.gd), the chamber
+## fills essentially 100% on first reveal -- there is no scatter to thin
+## it out the way StonePlacement's surface density does, so radius alone
+## is the only lever. 1 (a 3x3, 9-cell pocket) is the largest radius that
+## still clears test_chamber_diameter_stays_a_small_fraction_of_the_
+## visible_screen's screen-relative bound, while staying more than just
+## the entrance cell (test_chamber_is_small_and_bounded's own lower
+## bound).
+const CHAMBER_RADIUS := 1
 
 
 ## Local cells belonging to the chamber revealed by a cave entrance at

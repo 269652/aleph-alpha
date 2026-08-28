@@ -467,3 +467,18 @@ func test_the_paperdoll_character_holds_the_equipped_weapon_and_drops_it_when_un
 
 	window.refresh([], {}, 0.0, 12)
 	assert_false(view.is_slot_equipped("tool"), "unequipping must empty the paperdoll's hand too")
+
+
+## Mirrors the weapon test above for the four real armor slots (see
+## Equipment.SLOTS/docs/concept/item_illustrations.md) -- previously the
+## paperdoll's slot-frame icon showed what was worn but the character rig
+## itself showed no armor at all, in-world or here.
+func test_the_paperdoll_character_wears_equipped_armor_and_drops_it_when_unequipped():
+	var view := _find_character_view(window)
+
+	window.refresh([], {"head": catalog.make("leather_helm")}, 2.0, 12)
+	assert_true(view.is_slot_equipped("head"), "the paperdoll should wear the equipped helm")
+	assert_not_null(view.slot_texture("head"))
+
+	window.refresh([], {}, 0.0, 12)
+	assert_false(view.is_slot_equipped("head"), "unequipping must strip the paperdoll's armor too")

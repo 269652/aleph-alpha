@@ -432,18 +432,28 @@ func test_texture_for_does_not_collide_across_stone_classes_sharing_a_seed():
 
 # -- mountain ore veins: slope-gated placement (see docs/concept/terrain_relief.md) -
 
-## Duck-typed slope source, mirroring _FakeIllustratedStones' own fake-
-## injection shape -- real EarthChunkManager has a real slope_at_global
-## method; this stands in for it in a unit test with no real elevation
-## data or chunk-manager scene setup needed.
+## Duck-typed slope/aspect source, mirroring _FakeIllustratedStones' own
+## fake-injection shape -- real EarthChunkManager has real slope_at_global/
+## aspect_at_global methods; this stands in for both in a unit test with no
+## real elevation data or chunk-manager scene setup needed.
 class _FakeSlopeLookup:
 	var slope := 0.0
+	var aspect := 0.0
 
 	func slope_at_global(_global_x: int, _global_y: int) -> float:
 		return slope
 
+	func aspect_at_global(_global_x: int, _global_y: int) -> float:
+		return aspect
 
-func _mountain_chunk(size: int = 16) -> Chunk:
+
+## Default size raised 16->64 alongside MountainOrePlacement.MAX_VEIN_CHANCE's
+## own landmark-rarity re-pin (was ~0.35, now ~0.012, see that constant's own
+## doc comment): several callers below assert `spawned.size() > 0` at the
+## steepest slope, and a 16x16=256-cell chunk at the new ~1.2% ceiling only
+## expects ~3 hits (P(zero) ~ 5% -- flaky). A 64x64=4096-cell chunk expects
+## ~49 hits, making a zero-hit draw astronomically unlikely.
+func _mountain_chunk(size: int = 64) -> Chunk:
 	var chunk := Chunk.new()
 	chunk.width = size
 	chunk.height = size
@@ -502,13 +512,20 @@ func test_spawned_mountain_veins_are_positioned_at_their_tile_centers():
 		assert_almost_eq(node.position.y, (expected_tile.y + 0.5) * TILE_SIZE, 0.01)
 
 
-## A mountain vein draws from the same illustrated-boulder-composited
-## texture path as flat-ground ore (see _ore_texture_for) -- real
-## illustrated art, not a separate, lesser rendering for mountain ore.
-func test_a_mountain_vein_draws_from_the_same_illustrated_ore_compositing_as_flat_ground_ore():
+## A mountain vein draws its OWN streak-shaped texture (see
+## MountainVeinSprite), oriented along the vein's real local slope-facing
+## aspect, rather than the round illustrated-boulder-composited texture
+## flat-ground ore uses (_ore_texture_for) -- docs/concept/terrain_relief.md's
+## "Mountain ore" section: a vein must read as "part of a lit, exposed rock
+## face, not a decal stamped on top of one." It also carries the shared
+## EntityHillshadeShader material with this vein's own slope/aspect pushed
+## as instance uniforms, so it actually participates in live hillshading
+## instead of being a flat, unshaded decal.
+func test_a_mountain_vein_draws_its_own_oriented_streak_texture_with_hillshade_material():
 	var chunk := _mountain_chunk()
 	var fake := _FakeSlopeLookup.new()
 	fake.slope = MountainOrePlacement.MAX_SLOPE_FOR_SCALING_DEG
+	fake.aspect = 90.0
 	var spawned := renderer.spawn_mountain_veins(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, fake)
 	assert_gt(spawned.size(), 0)
 	for node in spawned:
@@ -517,6 +534,12 @@ func test_a_mountain_vein_draws_from_the_same_illustrated_ore_compositing_as_fla
 			if child is Sprite2D:
 				sprite = child
 		assert_not_null(sprite, "a mountain vein should carry a real rendered sprite child")
+		assert_true(
+			sprite.material is ShaderMaterial,
+			"a mountain vein sprite should carry the shared entity hillshade material"
+		)
+		assert_eq(sprite.get_instance_shader_parameter("slope_deg"), fake.slope)
+		assert_eq(sprite.get_instance_shader_parameter("aspect_deg"), fake.aspect)
 
 
 # -- a building piece occupies its tile against stone (see docs/concept/building.md) -

@@ -31,6 +31,7 @@ const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
 const VenomModel = preload("res://src/gameplay/venom_model.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
+const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 const Sickness = preload("res://src/gameplay/sickness.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
@@ -43,6 +44,7 @@ const HeroAppearance = preload("res://src/rendering/hero_appearance.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const CraftedItemRegistry = preload("res://src/gameplay/crafted_item_registry.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
@@ -51,6 +53,10 @@ const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
+const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
+const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
+const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
@@ -79,6 +85,21 @@ const LASSO_RANGE := 72.0
 const FEED_RANGE := 28.0
 const TIE_RANGE := 40.0
 const TAMING_TREAT_ID := "carrot"
+## Every item id that is a capture tool (see docs/concept/taming.md's "Any
+## animal, the right tool") -- what `_held_capture_tool_id` checks
+## `equipped_item.id` against, generalized from the single hardcoded "lasso"
+## string check this used to be.
+const CAPTURE_TOOL_IDS := {
+	CaptureTool.LASSO: true,
+	CaptureTool.SNARE: true,
+	CaptureTool.NET: true,
+	CaptureTool.TRAP: true,
+	CaptureTool.REINFORCED_ROPE: true,
+}
+## How far a bonded companion loosely trails the player, spread around them
+## rather than stacking on one point. Reuses TIE_RANGE rather than inventing
+## a second "how far a kept creature sits from the player" number.
+const BONDED_COMPANION_TRAIL_RADIUS := TIE_RANGE
 ## How big one world tile should read on screen once camera-zoomed, in
 ## pixels -- the actual tuned/eyeballed value (CLAUDE.md: tuned constants
 ## must be pinned, not eyeballed comments). CAMERA_ZOOM below is DERIVED
@@ -178,6 +199,21 @@ var current_speed_multiplier := 1.0
 ## docs/progress.md), just a straight reset.
 @export var max_health := 100.0
 var health := max_health
+
+## A resource for spellcasting, deliberately separate from `SurvivalMeters.
+## stamina` -- docs/concept/survival.md's "Stamina scope" section decided,
+## on purpose, that stamina is traversal-only and combat stays off it (so
+## the two systems don't fight over the same tension); casting a spell is
+## combat. See docs/concept/spell_runtime.md. Unlike health, 0 is a valid,
+## meaningful rest state (a non-caster class), so there's no floor above 0.
+var max_mana := 0.0
+var mana := 0.0
+## Chosen so a mage can recast a cheap single-atom spell (Fire Bolt, ~3 mana
+## -- see SpellBook/test_spell_book.gd) roughly every couple of seconds of
+## not casting, rather than it being effectively free (instant regen) or
+## requiring a long wait -- pinned by
+## test_mana_regen_lets_a_mage_recast_fire_bolt_within_a_few_seconds.
+const MANA_REGEN_PER_SECOND := 2.0
 var is_dead := false
 const DEAD_MODULATE := Color(0.35, 0.35, 0.35, 1.0)
 
@@ -232,6 +268,13 @@ var wallet := Wallet.new()
 ## How many number-key hotbar slots exist. World derives its HUD row's slot
 ## count from this (see World.HOTBAR_SLOT_COUNT), so the two can't drift.
 const HOTBAR_SLOT_COUNT := 5
+## How many bonded companions (see the taming Kinship path) a player may keep
+## at once. Derived from the hotbar's own slot count -- a real existing
+## anchor for "how many small extra things can the player keep readily at
+## hand" -- rather than an invented number. Explicitly a placeholder pending
+## real playtesting (same honesty convention Taming.PREDATOR_BREAK_FREE_
+## MULTIPLIER's own doc comment uses for a derived-but-unplaytested figure).
+const BONDED_COMPANION_CAP := HOTBAR_SLOT_COUNT
 ## Which item id sits on each hotbar key (see Hotbar). Explicitly assignable
 ## by dragging an item onto a slot, with empty slots auto-filled from the
 ## inventory -- so an item buried past the first few stacks can still be put
@@ -311,6 +354,25 @@ var _pending_mount_pressed := false
 var _last_lasso_input := false
 var _pending_lasso_pressed := false
 var lasso_message := ""
+## A net's catch resolves instantly (see _capture_flyer), so its result --
+## "Bonded with the sparrow." / "Caught! Kept as a curiosity." -- has to
+## OUTLIVE the same-frame call to _update_lasso_message that would otherwise
+## immediately overwrite it back to "Net ready...". Same
+## result-message-plus-timer shape _fishing_result_message/
+## _fishing_result_timer already use for exactly this reason.
+var _capture_result_message := ""
+var _capture_result_timer := 0.0
+## Bonded companions (see docs/concept/taming.md's "A bond, not an order:
+## the Kinship path" and pets.md's "Birds, butterflies, bees: decorative"):
+## a netted flyer kept as a real companion once `menagerie` is unlocked,
+## rather than a one-off curiosity item. Persisted as plain {species} dicts
+## on the player -- deliberately NOT a KeptAnimals-scale subsystem, which is
+## explicitly out of scope for this pass.
+var bonded_companions: Array[Dictionary] = []
+## Live BondedCompanionMarker nodes mirroring bonded_companions 1:1, rebuilt
+## from it after a load. Never itself persisted -- position/wander_seed are
+## runtime-only, the same split _lassoed/_tie_anchor keep from `trust`.
+var _bonded_markers: Array = []
 
 var _last_fish_input := false
 var _pending_fish_pressed := false
@@ -321,6 +383,10 @@ var _fishing_result_timer := 0.0
 var fishing_message := ""
 ## How long a caught/missed message lingers on the HUD.
 const FISH_MESSAGE_DURATION := 2.5
+## How long a net's catch result shows (see _capture_result_message).
+## Reuses FISH_MESSAGE_DURATION rather than inventing a second "how long a
+## result banner shows" number -- both are "a one-shot catch result banner".
+const CAPTURE_RESULT_MESSAGE_DURATION := FISH_MESSAGE_DURATION
 ## Fish granted per catch, scaled by the rolled rarity (see FishingMinigame).
 const FISH_REWARD_BY_RARITY := {"common": 1, "uncommon": 1, "rare": 2, "legendary": 3}
 ## Which catalog item a catch's rarity becomes -- rare/legendary get their own
@@ -337,6 +403,21 @@ const FISH_CATCH_RADIUS := 64.0
 ## shown, no reaction from nearby fish, no signal when a bite starts) --
 ## reported as "no animation of the rod being thrown into water and also
 ## doesn't attract near fish and also no animation when fish bites".
+## Ground-contact shadow (see DropShadow) -- every creature already gets one,
+## silhouette-shaped and stretched by the real sun's elevation
+## (CreatureMarker._sync_grounded_children); reported directly that the
+## player was the one thing in the world standing on nothing: "the player has
+## no silhouette shadow which should stretch with sun's elevation". A plain
+## flattened oval rather than a silhouette (DropShadow.make_silhouette_shadow
+## needs ONE flat texture to flip upside down -- CharacterView is a composite
+## rig of several parts, body/head/arms/legs, with no single texture to hand
+## it), the same shape trees/stones/villages already use
+## (TreeRenderer/StoneRenderer/VillageRenderer's own `_drop_shadow`). A plain
+## child, not top_level like a creature's: unlike CreatureMarker, Player's own
+## node never rotates or scales, so it has none of the reasons a creature's
+## shadow needs manual position/rotation syncing every frame -- ordinary
+## parent-child transform inheritance is already correct.
+var _shadow: Sprite2D
 var _fishing_cast := FishingCast.new()
 var _bobber: Sprite2D
 ## Where the line landed for the current cast -- fixed at cast time, not
@@ -371,6 +452,30 @@ const TRADE_MESSAGE_DURATION := 2.5
 ## How close a merchant villager must be to trade with.
 const TRADE_RADIUS := 48.0
 var _item_catalog := ItemCatalog.new()
+
+# -- casting a spell (see docs/concept/spell_runtime.md) ---------------------
+# Simpler than trade/fishing's own result-message pattern on purpose: cast_
+# spell() sets `cast_message` directly (no separate _cast_result_message
+# indirection), since it's the action itself, not a per-frame poll -- only
+# the auto-clear-after-a-few-seconds decay needs a per-frame tick, and that
+# tick deliberately never reads Input at all (kept separate from _cast_step,
+# so it stays testable without a real registered InputMap action).
+
+const SpellBook = preload("res://src/gameplay/spell_book.gd")
+const SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
+const SpellAtomEffects = preload("res://src/gameplay/spell_atom_effects.gd")
+const SpellTargeting = preload("res://src/gameplay/spell_targeting.gd")
+
+var _spell_book := SpellBook.new()
+var _spell_executor := SpellExecutor.new()
+var _spell_atom_effects := SpellAtomEffects.new()
+var _spell_targeting := SpellTargeting.new()
+
+## The current cast result banner ("" == nothing to show), read by the HUD --
+## same shape as trade_message/fishing_message.
+var cast_message := ""
+var _cast_message_timer := 0.0
+const CAST_MESSAGE_DURATION := 2.5
 
 ## Structures for the emergent, content-addressed items this player is carrying
 ## (see docs/concept/item_identity.md). Handed to _item_catalog so the ONE place
@@ -446,6 +551,7 @@ var _item_sprite_generator := ProceduralItemSprite.new()
 var _tile_targeting := TileTargeting.new()
 var _attack_cooldown_remaining := 0.0
 var _last_attack_input_state := false
+var _last_cast_input_state := false
 var _last_build_input_state := false
 var _last_destroy_input_state := false
 var _last_pickup_input_state := false
@@ -462,7 +568,7 @@ var _last_stash_input_state := false
 ## read as a held LEVEL -- guard up, the pickup charge meter, the cast and
 ## reel, the rope -- and latching a level would turn a hold into one tap.
 const MOMENTARY_ACTIONS := [
-	"attack", "build", "destroy", "kick", "stash", "talk", "trade", "sell",
+	"attack", "build", "destroy", "kick", "stash", "talk", "trade", "cast", "sell",
 	"primary_action", "secondary_action"
 ]
 
@@ -476,6 +582,7 @@ var _input_latch := InputLatch.new()
 ## read directly from Input, in the no-networking singleplayer fallback).
 var _pending_input_direction := Vector2.ZERO
 var _pending_attack_pressed := false
+var _pending_cast_pressed := false
 var _pending_block_pressed := false
 var _pending_build_pressed := false
 var _pending_destroy_pressed := false
@@ -528,6 +635,15 @@ func _ready() -> void:
 	_bobber.visible = false
 	_bobber.top_level = true  # world position, independent of the player's own transform
 	add_child(_bobber)
+
+	# Shadow width comes from PLAYER_SIZE -- the player's own real collision
+	# footprint -- rather than an eyeballed pixel count, the same "derive it,
+	# don't invent it" discipline the rest of this project holds itself to.
+	# Foot offset 0: record_water_disturbance(position)/_spawn_thrown_item's
+	# own "the player's own feet" already treat plain `position` as the
+	# ground-contact point, so the shadow needs no offset to match it.
+	_shadow = DropShadow.new().make_shadow(PLAYER_SIZE, 0.0)
+	add_child(_shadow)
 
 	# Keep the hotbar reconciled with what's actually carried (see
 	# sync_hotbar) from one place, rather than at every inventory mutation.
@@ -722,6 +838,14 @@ func take_damage(amount: float) -> void:
 		return
 	if is_blocking():
 		amount = _block.blocked_damage(amount, _held_kind())
+	# The `shield` spell atom (see docs/concept/spell_runtime.md): a flat
+	# absorb pool consumed before armor, on top of whatever block already
+	# stopped -- unlike armor's floor below, a shield CAN reduce a hit to
+	# exactly zero (that's the point of spending mana on one).
+	if _shield_absorb_remaining > 0.0 and amount > 0.0:
+		var absorbed := minf(_shield_absorb_remaining, amount)
+		_shield_absorb_remaining -= absorbed
+		amount -= absorbed
 	# Worn armor soaks a flat chunk of any real hit (see Equipment), but never
 	# reduces a hit to nothing -- at least MIN_ARMORED_DAMAGE always lands.
 	if amount > 0.0:
@@ -730,6 +854,24 @@ func take_damage(amount: float) -> void:
 	if _health.is_dead(health):
 		is_dead = true
 		modulate = DEAD_MODULATE
+
+
+## Spends `amount` mana, all-or-nothing -- mirrors Wallet.spend's own "never
+## mutated on failed spends" contract exactly, so a spell that can't afford
+## its cost changes nothing rather than driving mana negative.
+func spend_mana(amount: float) -> bool:
+	if amount > mana:
+		return false
+	mana -= amount
+	return true
+
+
+## Passive regen, ticked every physics frame from _authority_step with the
+## real delta -- exposed (not private-only-by-convention) the same way
+## _venom_step and every other per-tick Player helper already is, so a test
+## can drive it directly with a synthetic delta instead of waiting real time.
+func _regen_mana(delta: float) -> void:
+	mana = clampf(mana + MANA_REGEN_PER_SECOND * delta, 0.0, max_mana)
 
 
 ## Full reset back to respawn_position after RESPAWN_DELAY seconds dead (see
@@ -765,6 +907,8 @@ func apply_class(class_name_value: String, stats: Dictionary, chosen_appearance:
 	character_class = class_name_value
 	max_health = maxf(20.0, 100.0 + float(stats.get("max_health", 0.0)))
 	health = max_health
+	max_mana = maxf(0.0, float(stats.get("max_mana", 0.0)))
+	mana = max_mana
 	class_attack_bonus = float(stats.get("attack_damage", 0.0))
 	var look := chosen_appearance
 	if look.is_empty():
@@ -841,6 +985,10 @@ func to_save_dict() -> Dictionary:
 		# id -> structure is normalized, and the entry's id is the foreign key.
 		"crafted_items": crafted_items.to_dicts(),
 		"hotbar": hotbar_data,
+		# Bonded companions (docs/concept/taming.md's Kinship path): plain
+		# {species} dicts, not the live BondedCompanionMarker nodes -- see
+		# apply_save_dict, which respawns a marker per entry on load.
+		"bonded_companions": bonded_companions.duplicate(true),
 	}
 
 
@@ -909,6 +1057,19 @@ func apply_save_dict(data: Dictionary) -> void:
 	var hotbar_data: Array = data.get("hotbar", [])
 	for i in range(hotbar_data.size()):
 		hotbar.assign(i, hotbar_data[i])
+
+	# Bonded companions (docs/concept/taming.md's Kinship path): re-spawn one
+	# live BondedCompanionMarker per saved entry. Any markers from BEFORE
+	# this load (there should be none on a freshly-spawned player, but this
+	# guards a re-applied save the same way the equipment/inventory resets
+	# above do) are cleared first so a load never doubles them up.
+	for marker in _bonded_markers:
+		if is_instance_valid(marker):
+			marker.queue_free()
+	_bonded_markers.clear()
+	bonded_companions.assign(data.get("bonded_companions", []))
+	for entry in bonded_companions:
+		_spawn_bonded_marker(entry)
 
 	inventory_changed.emit()
 
@@ -1089,6 +1250,13 @@ func equip_armor(item) -> bool:
 	var displaced = equipment.equip(item)
 	if displaced != null:
 		inventory.add(displaced, 1)
+	# Real worn-armor visuals (see docs/concept/item_illustrations.md) --
+	# previously this method was purely numeric (Equipment.total_armor()),
+	# with no call into _character_view at all, so nothing ever appeared on
+	# the rig no matter what was worn.
+	_character_view.equip_armor_slot(
+		item.equip_slot_name(), _item_sprite_generator.generate_texture(item.sprite_id)
+	)
 	inventory_changed.emit()
 	return true
 
@@ -1100,6 +1268,7 @@ func unequip_slot(slot: String) -> bool:
 	if item == null:
 		return false
 	inventory.add(item, 1)
+	_character_view.unequip_slot(slot)
 	inventory_changed.emit()
 	return true
 
@@ -1185,6 +1354,123 @@ func _venom_step(delta: float) -> void:
 	if stacks > 0:
 		take_damage(_venom_model.damage_per_second(stacks) * delta)
 	active_venom_debuffs = _debuff_stack.advance(active_venom_debuffs, delta)
+
+
+# -- spell-cast status effects: ignite/blight/freeze/root/slow (see
+# docs/concept/spell_runtime.md) -- the same DebuffStack-tracked, once-per-
+# authority-frame shape as venom above, generalized via SpellStatusEffects
+# instead of one bespoke model file per atom. --------------------------------
+
+var active_spell_debuffs: Array = []
+var _spell_status_effects := SpellStatusEffects.new()
+
+
+## Applies a timed spell-status debuff to the player -- called by whatever
+## resolves a spell atom's effect against this player as its target. Mirrors
+## apply_venom's own refresh-duration-and-stack shape exactly.
+func apply_spell_debuff(debuff_id: String, duration: float) -> void:
+	active_spell_debuffs = _debuff_stack.apply(
+		active_spell_debuffs, debuff_id, duration, SpellStatusEffects.MAX_STACKS
+	)
+
+
+## True while frozen or rooted (the `freeze`/`root` atoms) -- both mean
+## "can't move for a duration" and are mechanically identical, staying
+## distinct atoms only for their cost/tier/visual (see spell_runtime.md).
+func is_rooted() -> bool:
+	return (
+		_debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.FREEZE) > 0
+		or _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.ROOT) > 0
+	)
+
+
+## The movement-speed multiplier active spell debuffs impose right now (1.0
+## = no effect) -- one more term in _authority_step's existing
+## current_speed_multiplier product chain, same shape as
+## ConditionPenalty.speed_multiplier(survival.fitness) already is.
+func _spell_speed_multiplier() -> float:
+	if _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.SLOW) > 0:
+		return SpellStatusEffects.SLOW_SPEED_MULTIPLIER
+	return 1.0
+
+
+## Authority-only: deals ignite/blight's real damage-over-time (mirrors
+## _venom_step line for line), then advances every active spell debuff's
+## remaining duration, expiring whichever run out.
+func _spell_status_step(delta: float) -> void:
+	for debuff_id in [SpellStatusEffects.IGNITE, SpellStatusEffects.BLIGHT]:
+		var stacks := _debuff_stack.stacks_of(active_spell_debuffs, debuff_id)
+		if stacks > 0:
+			take_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
+	active_spell_debuffs = _debuff_stack.advance(active_spell_debuffs, delta)
+
+
+# -- the `shield` atom: a simple bespoke absorb pool, not DebuffStack -- it
+# needs to carry a depleting AMOUNT, not just a stack count. Mirrors Block's
+# own "bespoke field, not a generic system" precedent. -----------------------
+
+var _shield_absorb_remaining := 0.0
+var _shield_time_remaining := 0.0
+
+
+## Grants (or refreshes -- a re-cast replaces rather than adds) a temporary
+## damage-absorbing shield.
+func apply_shield(absorb_amount: float, duration: float) -> void:
+	_shield_absorb_remaining = absorb_amount
+	_shield_time_remaining = duration
+
+
+func _shield_step(delta: float) -> void:
+	_shield_time_remaining = maxf(0.0, _shield_time_remaining - delta)
+	if _shield_time_remaining <= 0.0:
+		_shield_absorb_remaining = 0.0
+
+
+## The `minor_heal`/`major_heal` atoms' shared target-side method -- the same
+## duck-typed-across-both-target-types shape take_damage already is
+## (CreatureMarker gets its own heal() to match). A dead player has no
+## health to restore -- healing does not resurrect (see take_damage's own
+## symmetric is_dead guard).
+func heal(amount: float) -> void:
+	if is_dead:
+		return
+	health = minf(max_health, health + amount)
+
+
+## The `push`/`pull` spell atoms (see docs/concept/spell_runtime.md) --
+## nothing in this game has ever knocked the player back before (only
+## CreatureMarker had a sink). Mirrors CreatureMarker.apply_knockback/
+## Knockback.step's own shape exactly: a short ease-out shove converted to a
+## velocity so move_and_slide still resolves collision during it, rather
+## than a raw position jump.
+const Knockback = preload("res://src/gameplay/knockback.gd")
+const KNOCKBACK_DURATION := 0.15
+var _knockback := Knockback.new()
+var _knockback_remaining := Vector2.ZERO
+var _knockback_time_remaining := 0.0
+
+
+func apply_knockback(force: Vector2) -> void:
+	_knockback_remaining = force
+	_knockback_time_remaining = KNOCKBACK_DURATION
+
+
+## The velocity _authority_step should actually use this frame: a spell
+## knockback overrides normal input-driven movement while it plays out (the
+## same "shove wins over AI/input" precedence CreatureMarker.apply_knockback
+## already establishes), converted from a raw displacement to a velocity so
+## move_and_slide still resolves collision against walls during it.
+## `fallback_velocity` (the normal input-driven one) passes through
+## unchanged once no knockback is active. Factored out from _authority_step
+## so it's directly testable, the same boundary _venom_step/
+## _spell_status_step already keep.
+func _knockback_velocity(fallback_velocity: Vector2, delta: float) -> Vector2:
+	if _knockback_time_remaining <= 0.0:
+		return fallback_velocity
+	var result := _knockback.step(_knockback_remaining, _knockback_time_remaining, delta)
+	_knockback_remaining = result.remaining
+	_knockback_time_remaining = result.time_remaining
+	return result.step / delta if delta > 0.0 else Vector2.ZERO
 
 
 # -- disease spillover: Sickness, not a new debuff module (see
@@ -1304,7 +1590,7 @@ func equip_item(item) -> bool:
 		return false
 	equipped_item = item
 	equipment.equip(item)
-	_character_view.equip_weapon(_item_sprite_generator.generate_texture(item.id))
+	_character_view.equip_weapon(_item_sprite_generator.generate_texture(item.sprite_id))
 	inventory_changed.emit()
 	return true
 
@@ -1398,6 +1684,7 @@ func _physics_process(delta: float) -> void:
 	if _is_local_player_instance() and not is_multiplayer_authority() and multiplayer.has_multiplayer_peer():
 		_submit_input.rpc_id(1, _read_local_input())
 		_submit_attack.rpc_id(1, _local_momentary_input("attack"))
+		_submit_cast.rpc_id(1, _local_momentary_input("cast"))
 		_submit_build.rpc_id(1, _local_momentary_input("build"))
 		_submit_destroy.rpc_id(1, _local_momentary_input("destroy"))
 
@@ -1425,13 +1712,14 @@ func _authority_step(delta: float) -> void:
 		* _weather_speed_multiplier()
 		* _terrain_speed_multiplier(tile)
 		* ConditionPenalty.speed_multiplier(survival.fitness)
+		* _spell_speed_multiplier()
 	)
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
 	var desired_velocity := input_direction * current_speed() * current_speed_multiplier
-	if _terrain_blocks_movement(input_direction):
+	if _terrain_blocks_movement(input_direction) or is_rooted():
 		desired_velocity = Vector2.ZERO
-	velocity = desired_velocity
+	velocity = _knockback_velocity(desired_velocity, delta)
 	move_and_slide()
 	_wrap_position()
 
@@ -1440,6 +1728,10 @@ func _authority_step(delta: float) -> void:
 	_step_water_ripples(delta, input_direction)
 
 	survival.advance(delta)
+	_regen_mana(delta)
+	_spell_status_step(delta)
+	_shield_step(delta)
+	_cast_message_step(delta)
 	# Standing in any water (wading in the shallows or swimming) lets you drink
 	# from it -- the "drink from water tiles" option. Wading is the easy way to
 	# quench thirst without getting fully soaked.
@@ -1449,6 +1741,7 @@ func _authority_step(delta: float) -> void:
 		survival.regulate_temperature(_chunk_manager.ambient_warmth(position), wetness, delta)
 
 	_attack_step(delta)
+	_cast_step()
 	_pickup_step(delta)
 	_kick_step()
 	_stash_step()
@@ -1516,14 +1809,15 @@ func _terrain_blocks_movement(input_direction: Vector2) -> bool:
 	return not TerrainPassability.is_passable(slope, _has_climbing_gear())
 
 
-## No item/equipment concept sets this true anywhere in live gameplay yet
-## (see docs/progress.md's Transportation section -- the climbing rope
-## `transportation.md`/`terrain_relief.md` both specify isn't built). The
-## hook exists now so terrain passability is already correct and already
-## tested for the day a real climbing rope exists, rather than needing this
-## call site touched again later.
+## Whether the player is CARRYING a real climbing rope (docs/concept/
+## transportation.md, item_catalog.gd's "climbing_rope") -- terrain_relief.md's
+## own "unless the player is carrying a climbing rope" framing, so this is a
+## raw inventory count like _has_fishing_rod(), not an equipped/wielding
+## check. Raises TerrainPassability's hard-impassable slope threshold from
+## HARD_THRESHOLD_DEG to HARD_THRESHOLD_WITH_ROPE_DEG via
+## _terrain_blocks_movement's call above.
 func _has_climbing_gear() -> bool:
-	return false
+	return _inventory_counts().get("climbing_rope", 0) > 0
 
 
 ## Authority-only: resolves a melee swing on the rising edge of the attack
@@ -1541,6 +1835,25 @@ func _attack_step(delta: float) -> void:
 	# CharacterView.set_movement_state's visual stowing).
 	if just_pressed and _attack_cooldown_remaining <= 0.0 and current_mode != "swimming":
 		_perform_attack()
+
+
+## Casts, on the rising edge, whichever spell the "cast" key is bound to.
+## No spell-selection UI exists yet (see docs/concept/spell_runtime.md's
+## fixed-spellbook scope), so this always casts the same one -- a real,
+## honestly-scoped placeholder for "which spell", not a limitation of
+## cast_spell itself, which already accepts any known spell id.
+const DEFAULT_CAST_SPELL_ID := "fire_bolt"
+
+
+func _cast_step() -> void:
+	var cast_pressed := (
+		Input.is_action_pressed("cast") if _controlled_locally() else _pending_cast_pressed
+	)
+	var just_pressed := _rising_edge("cast", cast_pressed, _last_cast_input_state)
+	_last_cast_input_state = cast_pressed
+
+	if just_pressed:
+		cast_spell(DEFAULT_CAST_SPELL_ID)
 
 
 func _perform_attack() -> void:
@@ -1573,6 +1886,149 @@ func _perform_attack() -> void:
 	_pull_wild_crop_step()
 	_butcher_step()
 	_collect_step()
+
+
+## Resolves a cast of `spell_id` from the fixed SpellBook (see
+## docs/concept/spell_runtime.md's full resolution order): affordability
+## (mana, plus any explicit guard the spell text writes), then the pipeline's
+## real per-atom effects in delivery-method order. Returns false (spending
+## nothing) for an unknown spell id or a refused cast -- true for a spell
+## that actually resolved, even if delivery found nothing to hit ("even an
+## affordable spell still has to land", magic.md).
+func cast_spell(spell_id: String) -> bool:
+	var ast = _spell_book.ast_for(spell_id)
+	if ast == null:
+		return false
+	var rule = _spell_executor.cast_rule(ast)
+	if rule == null:
+		return false
+
+	var context := {"wielder": {"mana": mana, "health": health}}
+	if not _spell_executor.can_cast(rule, mana, context):
+		cast_message = "Not enough mana."
+		_cast_message_timer = CAST_MESSAGE_DURATION
+		return false
+
+	spend_mana(_spell_executor.cost_for(rule))
+	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
+
+	var delivery := _spell_executor.delivery_for(rule)
+	for step in rule.get("pipeline", []):
+		_apply_cast_step(step, delivery)
+	return true
+
+
+## One pipeline step's real effect. accelerate_growth/reveal target the
+## WORLD (a plant, a chunk), not a creature/player, so they're resolved
+## directly here against _chunk_manager rather than through
+## SpellAtomEffects; portal/induce_mutation are deferred entirely (cost and
+## visual only, see spell_runtime.md). Everything else routes through
+## SpellAtomEffects against whatever SpellTargeting resolves for the rule's
+## delivery method.
+func _apply_cast_step(step: Dictionary, delivery: String) -> void:
+	var atom_id: String = step.get("atom", "")
+	var params: Dictionary = step.get("params", {})
+
+	if atom_id == "accelerate_growth":
+		_cast_accelerate_growth(params)
+		return
+	if atom_id == "reveal":
+		_cast_reveal(params)
+		return
+	if atom_id == "portal" or atom_id == "induce_mutation":
+		return
+
+	var target = _resolve_cast_target(delivery)
+	if target is Array:
+		for one in target:
+			if _spell_atom_effects.apply_to_target(atom_id, params, one, position, _last_facing_direction):
+				_spawn_spell_effect(atom_id, one.position)
+	else:
+		if _spell_atom_effects.apply_to_target(atom_id, params, target, position, _last_facing_direction):
+			_spawn_spell_effect(atom_id, target.position if target != null else position)
+
+
+## The procedural VFX (see docs/concept/magic.md's atom-effects section) --
+## only spawned when the atom actually landed (apply_to_target returned
+## true), so a whiffed cast doesn't flash an effect over nothing.
+const SpellEffectMarker = preload("res://src/rendering/spell_effect_marker.gd")
+
+
+func _spawn_spell_effect(atom_id: String, at_position: Vector2) -> void:
+	if get_parent() == null:
+		return
+	var marker := SpellEffectMarker.new()
+	marker.position = at_position
+	get_parent().add_child(marker)
+	marker.play(atom_id)
+
+
+## The creature/player group is scanned the same way _perform_attack already
+## does (get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME)) -- PvP
+## spell targeting is out of scope, matching melee's own scope.
+func _resolve_cast_target(delivery: String):
+	if delivery == "self":
+		return self
+	var candidates := get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME)
+	var positions: Array = []
+	for candidate in candidates:
+		positions.append(candidate.position)
+
+	match delivery:
+		"area":
+			var center := _spell_targeting.area_center(position, _last_facing_direction)
+			var hit_indices := _spell_targeting.in_area(center, positions)
+			var targets: Array = []
+			for index in hit_indices:
+				targets.append(candidates[index])
+			return targets
+		"projectile":
+			var index := _spell_targeting.nearest_in_facing(position, _last_facing_direction, positions)
+			return candidates[index] if index >= 0 else null
+		_:  # touch
+			var index := _spell_targeting.nearest_touch(position, positions)
+			return candidates[index] if index >= 0 else null
+
+
+## `accelerate_growth` targets the wild crop patch(es) in the caster's
+## current chunk -- chunk-wide, not single-plant (see
+## EarthChunkManager.accelerate_wild_crop_growth's own honest note; the same
+## magnitude/duration convention every other atom reads its params with).
+func _cast_accelerate_growth(params: Dictionary) -> void:
+	if _chunk_manager == null:
+		return
+	var seconds := float(params.get("magnitude", 5.0))
+	_chunk_manager.accelerate_wild_crop_growth(current_tile(), seconds)
+
+
+## `reveal` marks every chunk within `radius` chunks of the caster explored
+## (EarthChunkManager.mark_chunk_explored -- the real, live ExploredTiles
+## wrapper, see spell_runtime.md). CHUNK_SIZE is EarthChunkManager's own
+## public constant; the chunk-coord formula matches every test file's own
+## _chunk_coord_for_tile helper exactly, since there's no public accessor
+## for it on EarthChunkManager itself (a private implementation detail this
+## doesn't need to reach into).
+func _cast_reveal(params: Dictionary) -> void:
+	if _chunk_manager == null:
+		return
+	var radius := int(params.get("radius", 1))
+	var tile := current_tile()
+	var chunk_size := EarthChunkManager.CHUNK_SIZE
+	var center_chunk := Vector2i(floori(float(tile.x) / chunk_size), floori(float(tile.y) / chunk_size))
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			_chunk_manager.mark_chunk_explored(center_chunk + Vector2i(dx, dy))
+
+
+## Per-frame decay of the cast result banner -- deliberately separate from
+## _cast_step (the input-polling wrapper) and never reads Input at all, so
+## it stays directly testable and so a cast's message shows immediately
+## (cast_spell sets `cast_message` itself) rather than waiting for a
+## propagation tick the way trade_message's own indirection needs.
+func _cast_message_step(delta: float) -> void:
+	_cast_message_timer = maxf(0.0, _cast_message_timer - delta)
+	if _cast_message_timer <= 0.0:
+		cast_message = ""
 
 
 ## Smashing/mining: a swing that reaches a rock node (shared "stone" group)
@@ -2296,13 +2752,15 @@ func _lasso_step(delta: float) -> void:
 	var just_pressed := pressed and not _last_lasso_input
 	_last_lasso_input = pressed
 
-	if just_pressed and _holding_lasso():
+	if just_pressed and _held_capture_tool_id() != "":
 		perform_rope_verb()
 
+	_capture_result_timer = maxf(0.0, _capture_result_timer - delta)
 	_hold_the_rope(delta)
 	_draw_rope()
 	_mount_input_step()
 	_step_mount_and_orders()
+	_step_bonded_companions(delta)
 	_update_lasso_message()
 
 
@@ -2332,7 +2790,7 @@ func perform_rope_verb() -> void:
 		# "change your mind about what you're doing" instead.
 		_cycle_order()
 	elif _lassoed == null:
-		_throw_lasso()
+		_throw_capture_tool()
 	elif _tie_anchor != null:
 		_tie_anchor = null
 	else:
@@ -2431,13 +2889,29 @@ func _action_slots_step() -> void:
 		_last_slot_input[slot] = pressed
 
 
-func _throw_lasso() -> void:
+## Throws whichever capture tool is held (see docs/concept/taming.md's "Any
+## animal, the right tool"). Branches because a butterfly net scans a wholly
+## different node group and resolves instantly rather than starting a
+## struggle -- see _throw_net's own doc comment.
+func _throw_capture_tool() -> void:
+	var tool_id := _held_capture_tool_id()
+	if tool_id == "":
+		return
+	if tool_id == CaptureTool.NET:
+		_throw_net()
+	else:
+		_throw_rope_tool(tool_id)
+
+
+## Lasso/snare/trap: the original struggle-and-lead loop, generalized to
+## whichever of those three is actually held rather than a hardcoded lasso.
+func _throw_rope_tool(tool_id: String) -> void:
 	var best: Node = null
 	var best_distance := LASSO_RANGE
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		if creature.info == null or creature.is_restrained():
 			continue
-		if not Taming.can_be_tamed(creature.info.species, creature.info.is_predator):
+		if not Taming.can_be_tamed(creature.info.species, tool_id):
 			continue
 		var distance := position.distance_to(creature.position)
 		if distance <= best_distance:
@@ -2447,8 +2921,110 @@ func _throw_lasso() -> void:
 		return
 	# The throw itself reuses the melee swing, the same way casting a rod does.
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
-	if best.restrain_to(position):
+	if best.restrain_to(position, false, skill_bonus("taming_affinity"), tool_id):
 		_lassoed = best
+
+
+## Netting a flyer is instant, not a struggle (see taming.md: nothing in
+## AmbientFlyerMarker models a butterfly fighting a restraint the way a
+## horse does). A landed throw scans the ambient-flyer flock -- a wholly
+## separate node group from CreatureMarker.GROUP_NAME -- and resolves
+## immediately through _capture_flyer.
+func _throw_net() -> void:
+	var best: Node = null
+	var best_distance := LASSO_RANGE
+	for flyer in get_tree().get_nodes_in_group(AmbientFlyerMarker.FLOCK_GROUP):
+		if not is_instance_valid(flyer) or flyer.is_queued_for_deletion():
+			continue
+		var distance := position.distance_to(flyer.position)
+		if distance <= best_distance:
+			best = flyer
+			best_distance = distance
+	if best == null:
+		return
+	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
+	_capture_flyer(best)
+
+
+## What a landed net throw does with `flyer` -- see docs/concept/taming.md's
+## "A bond, not an order: the Kinship path". Without `menagerie` unlocked (or
+## once the bonded-companion cap is full) it becomes a one-off curiosity
+## item; with it, a real bonded companion. Either way the flyer itself is
+## removed from the world -- there is no intermediate "netted but not yet
+## decided" state.
+func _capture_flyer(flyer: Node) -> void:
+	var species: String = flyer.species
+	if _has_menagerie() and _bond_companion(species):
+		_capture_result_message = "Bonded with the %s." % species.capitalize()
+	else:
+		var is_bird := AmbientFlyerRenderer.BIRD_SPECIES_POOL.has(species)
+		var item_id := "caged_songbird" if is_bird else "jarred_insect"
+		if inventory != null:
+			inventory.add(_item_catalog.make(item_id), 1)
+		_capture_result_message = "Caught! Kept as a curiosity."
+	_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
+	flyer.queue_free()
+
+
+## Beastmaster's `menagerie` keystone (docs/concept/taming.md's Kinship path
+## / skills.md). Checked against BOTH unlocked_keystones (the shape land_
+## sense/berserkers_fury/etc. use, via unlock_keystone -> KeystonePassive)
+## and allocated_nodes (the shape `menagerie` actually lives in TODAY:
+## skill_web.gd's beastmaster wedge already grants it a real taming_affinity
+## bonus directly via ordinary allocate_skill, and it is not currently
+## registered in KeystonePassive._KEYSTONES the way the other four keystones
+## are -- see this lane's own HANDOFF note on the divergence). Reading both
+## keeps this correct regardless of which mechanism ends up hosting
+## menagerie's capability grant.
+func _has_menagerie() -> bool:
+	return unlocked_keystones.get("menagerie", false) or allocated_nodes.get("menagerie", false)
+
+
+## Adds a new bonded companion for `species` if there is room (see
+## BONDED_COMPANION_CAP), spawning its live marker immediately. Returns
+## false, doing nothing, once the cap is reached -- _capture_flyer then
+## falls back to the ordinary curiosity-item outcome rather than silently
+## discarding the catch.
+func _bond_companion(species: String) -> bool:
+	if bonded_companions.size() >= BONDED_COMPANION_CAP:
+		return false
+	var entry := {"species": species}
+	bonded_companions.append(entry)
+	_spawn_bonded_marker(entry)
+	return true
+
+
+## A bonded companion's live node (see BondedCompanionMarker) -- a lightweight
+## Node2D, NOT a CreatureMarker: no trust/order/struggle state, since a
+## netted flyer never had an order AI to learn Follow/Stay in the first
+## place. `top_level` so it renders/moves in world space rather than
+## inheriting the player's own transform, the same reason the rope Line2D is.
+func _spawn_bonded_marker(entry: Dictionary) -> void:
+	var marker := BondedCompanionMarker.new()
+	marker.species = entry.get("species", "")
+	marker.wander_seed = hash(str(entry.get("species", "")) + str(_bonded_markers.size()))
+	marker.top_level = true
+	marker.position = position
+	add_child(marker)
+	marker.setup(_chunk_manager, _tile_size)
+	_bonded_markers.append(marker)
+
+
+## Pushes each bonded companion a spot to loosely trail toward, spread
+## around the player rather than stacking on one point -- fixed offsets
+## rather than a physically-simulated flock, which is plenty for a
+## decorative presence (see docs/concept/pets.md). The actual gated
+## movement happens in the marker's own _process, the same split
+## _step_mount_and_orders uses for a tamed animal's follow_target.
+func _step_bonded_companions(_delta: float) -> void:
+	for i in range(_bonded_markers.size()):
+		var marker = _bonded_markers[i]
+		if not is_instance_valid(marker):
+			continue
+		var angle := float(i) * TAU / float(BONDED_COMPANION_CAP)
+		marker.follow_target = (
+			position + Vector2(cos(angle), sin(angle)) * BONDED_COMPANION_TRAIL_RADIUS
+		)
 
 
 ## The nearest tree trunk worth tying off to. Trees are already solid bodies
@@ -2480,12 +3056,24 @@ func _nearest_tie_point():
 ## Taming.trust_after_feeding), so "wait until it is hungry" is real, useful
 ## information rather than flavour.
 func _update_lasso_message() -> void:
-	if not _holding_lasso():
+	var tool_id := _held_capture_tool_id()
+	if tool_id == "":
 		lasso_message = ""
 		return
 	var lasso_key := Keybindings.display_key_for("lasso")
+	if tool_id == CaptureTool.NET:
+		# A net has nothing to hold or lead -- the catch resolves instantly
+		# (see _capture_flyer), so the result banner it set outlives this
+		# same-frame call via _capture_result_timer rather than being
+		# stomped straight back to the ready prompt.
+		if _capture_result_timer > 0.0:
+			lasso_message = _capture_result_message
+		else:
+			lasso_message = "Net ready — press %s near a flyer." % lasso_key
+		return
 	if _lassoed == null:
-		lasso_message = "Lasso ready — press %s near an animal." % lasso_key
+		var tool_name: String = _item_catalog.make(tool_id).display_name
+		lasso_message = "%s ready — press %s near an animal." % [tool_name, lasso_key]
 		return
 
 	var name_text: String = _lassoed.info.display_name if _lassoed.info != null else "Animal"
@@ -2623,8 +3211,13 @@ func _mount_input_step() -> void:
 		_try_mount()
 
 
-func _holding_lasso() -> bool:
-	return equipped_item != null and equipped_item.id == "lasso"
+## Which capture tool (see docs/concept/taming.md's "Any animal, the right
+## tool") is currently held, or "" if the equipped item isn't one. The
+## generalization of what used to be a single hardcoded "== lasso" check.
+func _held_capture_tool_id() -> String:
+	if equipped_item != null and CAPTURE_TOOL_IDS.has(equipped_item.id):
+		return equipped_item.id
+	return ""
 
 
 func _has_fishing_rod() -> bool:
@@ -2931,6 +3524,13 @@ func _submit_attack(pressed: bool) -> void:
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
+func _submit_cast(pressed: bool) -> void:
+	if not is_multiplayer_authority():
+		return
+	_pending_cast_pressed = pressed
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered")
 func _submit_build(pressed: bool) -> void:
 	if not is_multiplayer_authority():
 		return
@@ -2987,6 +3587,11 @@ func _update_character_view(input_direction: Vector2) -> void:
 		_character_view.set_movement_state(CharacterView.MovementState.WALKING)
 	else:
 		_character_view.set_movement_state(CharacterView.MovementState.IDLE)
+	# The same real sun position already driving every creature's silhouette
+	# shadow (World sets CreatureMarker.sun_elevation_deg once per frame from
+	# it) -- reused rather than a second static/signal just for the player.
+	if _shadow != null:
+		_shadow.scale.y = DropShadow.stretch_for_elevation(CreatureMarker.sun_elevation_deg)
 
 
 ## Toroidal wrap: walking off any edge of the (finite, real-Earth-sized) world lands on the opposite side.

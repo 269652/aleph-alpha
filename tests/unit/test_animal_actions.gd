@@ -16,6 +16,7 @@ extends GutTest
 
 const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 
 const CARROT := "carrot"
 const LASSO := "lasso"
@@ -134,11 +135,32 @@ func test_a_held_animal_can_always_be_let_go():
 	assert_true(_verbs(actions).has("Release"))
 
 
-## Predators are not tameable at all (Taming.can_be_tamed), so a rope is not an
-## answer to one and must not be offered as though it were.
-func test_a_predator_is_not_offered_the_lasso():
-	var actions := AnimalActions.for_animal(_state({"species": "wolf"}), LASSO)
-	assert_false(_verbs(actions).has("Lasso"))
+## The RIGHT tool, not just any tool. Since "any animal, the right tool"
+## landed, capture-class is read off the body plan -- a serpent needs a snare,
+## a mouse a trap -- so offering a catch while holding the wrong one would
+## promise something that cannot happen.
+func test_the_wrong_tool_is_not_offered_as_a_catch():
+	var snake := _state({"species": "venomous_snake"})
+	assert_false(
+		_verbs(AnimalActions.for_animal(snake, LASSO)).has("Snare"),
+		"a rope is not a snare"
+	)
+	assert_eq(AnimalActions.for_animal(snake, LASSO).size(), 0)
+
+
+func test_the_right_tool_is_offered_and_named_after_itself():
+	var snake := _state({"species": "venomous_snake"})
+	var actions := AnimalActions.for_animal(snake, CaptureTool.SNARE)
+	assert_gt(actions.size(), 0, "the right tool should offer the catch")
+	assert_eq(actions[0]["verb"], "Snare", "the prompt should name the tool in hand")
+
+
+## A world boss stays refused whatever is in hand -- Taming.can_be_tamed keeps
+## that exclusion on purpose, and the offer follows it rather than second-
+## guessing it.
+func test_a_world_boss_is_never_offered_a_catch():
+	for tool in [LASSO, CaptureTool.SNARE, CaptureTool.REINFORCED_ROPE]:
+		assert_eq(AnimalActions.for_animal(_state({"species": "krampus"}), tool).size(), 0)
 
 
 # -- the contract the tooltip and the input handler both rely on -------------

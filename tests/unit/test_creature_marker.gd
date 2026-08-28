@@ -6,9 +6,11 @@ const CreatureInfo = preload("res://src/world/creature_info.gd")
 const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 
 const TILE_SIZE := 16
 
@@ -20,6 +22,19 @@ class StubWorld:
 	var biome := "grassland"
 	func biome_at_global(_x: int, _y: int) -> String:
 		return biome
+
+
+## A StubWorld that also answers slope_at_global (the real EarthChunkManager
+## does, delegating to EarthChunkGenerator -- see terrain_relief.md). Every
+## tile reports the same fixed slope regardless of x/y, which is exactly what
+## a per-tile passability check needs to be exercised deterministically
+## without a real chunk manager (mirrors test_stone_renderer.gd's own
+## slope_at_global stub).
+class StubWorldWithSlope:
+	extends StubWorld
+	var slope := 0.0
+	func slope_at_global(_x: int, _y: int) -> float:
+		return slope
 
 
 ## A StubWorld that also answers the herd (foot-and-mouth-like) disease
@@ -74,6 +89,70 @@ func before_each():
 	add_child(marker)
 
 
+# -- spell-cast status effects (docs/concept/spell_runtime.md) -- the same
+# duck-typed heal/apply_spell_debuff methods Player implements, so
+# SpellAtomEffects can target either kind of node identically.
+
+const SpellStatusEffectsForMarker = preload("res://src/gameplay/spell_status_effects.gd")
+
+
+func test_heal_restores_health_up_to_the_max():
+	marker.info.health = marker.info.max_health - 20.0
+	marker.heal(10.0)
+	assert_almost_eq(marker.info.health, marker.info.max_health - 10.0, 0.001)
+
+
+func test_heal_never_exceeds_max_health():
+	marker.heal(9999.0)
+	assert_almost_eq(marker.info.health, marker.info.max_health, 0.001)
+
+
+func test_ignite_deals_real_damage_over_time():
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.IGNITE, 3.0)
+	var health_before: float = marker.info.health
+
+	marker._spell_status_step(1.0)
+
+	assert_lt(marker.info.health, health_before)
+
+
+func test_freeze_roots_a_creature_in_place():
+	assert_false(marker.is_rooted())
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.FREEZE, 2.0)
+	assert_true(marker.is_rooted())
+
+
+func test_being_rooted_expires_on_its_own():
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.ROOT, 1.0)
+	marker._spell_status_step(1.5)
+	assert_false(marker.is_rooted())
+
+
+## `fear`/`calm` override the behavior-decision context's temperament for
+## their duration (see spell_runtime.md) rather than touching
+## creature_behavior.gd's own pure decide() -- an aggressive predator with
+## a nearby threat would normally fight; feared/calmed, it reads as
+## non-aggressive instead.
+func test_fear_overrides_temperament_to_non_aggressive_for_the_behavior_decision():
+	marker.info = CreatureInfo.new("wolf")
+	assert_eq(marker.info.temperament, "aggressive", "precondition: wolves are aggressive")
+
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.FEAR, 4.0)
+
+	assert_ne(marker._temperament_for_decision(), "aggressive")
+
+
+func test_calm_also_overrides_temperament_to_non_aggressive():
+	marker.info = CreatureInfo.new("wolf")
+	marker.apply_spell_debuff(SpellStatusEffectsForMarker.CALM, 4.0)
+	assert_ne(marker._temperament_for_decision(), "aggressive")
+
+
+func test_temperament_for_decision_is_unchanged_with_no_active_debuff():
+	marker.info = CreatureInfo.new("wolf")
+	assert_eq(marker._temperament_for_decision(), "aggressive")
+
+
 ## See World's mouse-hover animal-name tooltip (docs feature request).
 func test_get_display_name_returns_the_infos_display_name():
 	marker.info = CreatureInfo.new("herbivore")
@@ -83,6 +162,34 @@ func test_get_display_name_returns_the_infos_display_name():
 func test_get_display_name_returns_empty_string_without_info():
 	marker.info = null
 	assert_eq(marker.get_display_name(), "")
+
+
+## Reported live, from the character-creator diorama's own ambient boar (one
+## real CreatureMarker, world left null on purpose -- see this class's own
+## documented no-AI fallback): "the boar doesn't have walk animations". The
+## fallback branch of _process (world == null) calls _wander_step then
+## returns immediately -- unlike every OTHER branch (restrained/tame-order/
+## foraging/normal AI decision), it never calls _animation_step at all, so a
+## world-less marker's texture stays frozen on whatever idle frame
+## CreatureRenderer._build_marker set at spawn, however long it moves for.
+## _animation_step is already null-safe without a world (only its own swim-
+## detection is gated on `_world != null`, per its own doc comment), and
+## _advance/_terrain_speed_multiplier are already proven null-safe too (see
+## test_advance_is_slower_on_a_soft_slope_than_on_flat_ground's own
+## `marker._world = null` case just above) -- movement already worked, only
+## the animation step was missing.
+func test_a_world_less_marker_still_animates_while_wandering():
+	marker.wander_seed = 3
+	assert_true(
+		marker.get("_animation_frames").is_empty(),
+		"precondition: nothing generated yet before any _process call"
+	)
+	for i in 30:
+		marker._process(0.2)
+	assert_false(
+		marker.get("_animation_frames").is_empty(),
+		"a world-less marker should still step its own walk/idle animation, not stay frozen on its spawn frame"
+	)
 
 
 func after_each():
@@ -1978,11 +2085,82 @@ func test_feeding_a_hungry_animal_enough_times_tames_it():
 	assert_between(feeds, 4, 8)
 
 
-## A predator is not tameable with a rope and a carrot.
-func test_a_predator_shrugs_off_the_rope():
+## A predator has a neck exactly like a horse does, so it now joins the
+## Roped class like everything else with legs and a neck (see docs/concept/
+## taming.md's "Any animal, the right tool") -- what changes is how hard it
+## fights the rope, not whether a lasso is the right tool at all.
+func test_a_predator_can_now_be_restrained_with_a_lasso():
 	var lynx := _catchable("lynx")
-	lynx.restrain_to(Vector2.ZERO)
-	assert_false(lynx.is_restrained(), "a lynx does not become a pet")
+	assert_true(
+		lynx.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO),
+		"a lynx has a neck like a horse does; the lasso is now the right tool"
+	)
+	assert_true(lynx.is_restrained())
+
+
+## World-boss-scale species stay excluded regardless of tool -- the
+## reinforced rope is real and craftable, but actually resolving a capture
+## against something with its own aggro/promotion state is a documented
+## open question (worldbosses.md), not one this pass answers.
+func test_a_world_boss_species_is_never_restrained_even_with_the_reinforced_rope():
+	var boss := _catchable("krampus")
+	assert_false(
+		boss.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.REINFORCED_ROPE),
+		"a world-boss-scale species stays excluded from taming regardless of tool"
+	)
+	assert_false(boss.is_restrained())
+
+
+## The tool has to match the body plan -- a mouse offered a lasso must not
+## be caught by it (a rope loop has a real minimum practical diameter, see
+## taming.md's real-world grounding), even though the SAME mouse offered a
+## trap can be.
+func test_restrain_to_refuses_a_tool_that_does_not_fit_the_body_plan():
+	var mouse := _catchable("mouse")
+	assert_false(
+		mouse.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO),
+		"a mouse needs a trap, not a lasso"
+	)
+	assert_false(mouse.is_restrained())
+
+
+func test_restrain_to_accepts_the_tool_that_fits_the_body_plan():
+	var mouse := _catchable("mouse")
+	assert_true(mouse.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.TRAP))
+	assert_true(mouse.is_restrained())
+
+
+## A snare, not a lasso, is the right tool for a legless body (see
+## AnimalAnatomy.SERPENT_SPECIES / taming.md's real-world grounding on why a
+## rope loop is the wrong shape for a snake).
+func test_a_serpent_needs_a_snare_not_a_lasso():
+	var snake := _catchable("nonvenomous_snake")
+	assert_false(snake.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO))
+	assert_true(snake.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.SNARE))
+
+
+## restrain_to stores the handler's affinity for every subsequent struggle
+## roll (see Taming.break_free_chance) rather than dropping it on the floor.
+func test_restrain_to_stores_the_handlers_affinity_for_the_struggle_roll():
+	var horse := _catchable("horse")
+	horse.restrain_to(Vector2.ZERO, false, 7.5, CaptureTool.LASSO)
+	assert_eq(horse._capture_affinity, 7.5)
+
+
+## _step_restraint must actually pass is_predator AND affinity into
+## Taming.break_free_chance -- mirrors the exact same formula the
+## production code uses (same wander_seed/struggle-count hash), so this
+## fails the moment the call site regresses to the old condition-only form,
+## regardless of which seed happens to be in use.
+func test_step_restraint_consults_the_predator_and_affinity_aware_break_free_chance():
+	var wolf := _catchable("wolf")
+	wolf.info.health = wolf.info.max_health
+	wolf.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO)
+	var roll := float(absi(hash("%d_%d_struggle" % [wolf.wander_seed, 1])) % 10000) / 10000.0
+	var expected_chance := Taming.break_free_chance(1.0, true, 0.0)
+	var expected_still_held := roll >= expected_chance
+	wolf._step_restraint(CreatureMarker.STRUGGLE_INTERVAL)
+	assert_eq(wolf.is_restrained(), expected_still_held)
 
 
 # -- what the player can read off a caught animal ----------------------------
@@ -2329,3 +2507,102 @@ func test_the_markers_own_answer_assumes_empty_hands():
 	horse.set_needs_for_test(1.0, 0.0)
 	for action in horse.get_hover_actions():
 		assert_ne(action["verb"], "Feed", "the marker cannot know you are holding a carrot")
+
+# -- terrain slope: soft slowdown + hard refusal ------------------------------
+# Mirrors player.gd's own _terrain_speed_multiplier/_terrain_blocks_movement
+# (see docs/concept/terrain_relief.md's "Passability: ask before you step") --
+# same TerrainPassability source of truth, same two-function split, just
+# reading the creature's duck-typed _world instead of _chunk_manager.
+
+func test_terrain_speed_multiplier_matches_terrain_passability_for_the_worlds_slope():
+	var world := StubWorldWithSlope.new()
+	world.slope = 30.0
+	marker.setup(world, TILE_SIZE)
+	var expected := TerrainPassability.speed_multiplier(30.0)
+	assert_almost_eq(marker._terrain_speed_multiplier(marker._current_tile()), expected, 0.0001)
+
+
+## 1.0 (no penalty) when the world doesn't offer slope data -- the same
+## "isolated tests keep working" fallback player.gd's own version falls back
+## to when _chunk_manager is null, and the same has_method duck-typed
+## fallback _blockers_near already uses for solid_obstacles_near.
+func test_terrain_speed_multiplier_is_1_without_slope_data():
+	assert_almost_eq(marker._terrain_speed_multiplier(marker._current_tile()), 1.0, 0.0001)
+
+
+func test_terrain_blocks_movement_is_false_when_not_moving():
+	assert_false(marker._terrain_blocks_movement(Vector2.ZERO))
+
+
+func test_terrain_blocks_movement_is_false_without_slope_data():
+	assert_false(marker._terrain_blocks_movement(Vector2.RIGHT))
+
+
+func test_terrain_blocks_movement_past_the_hard_threshold():
+	var world := StubWorldWithSlope.new()
+	world.slope = TerrainPassability.HARD_THRESHOLD_DEG + 5.0
+	marker.setup(world, TILE_SIZE)
+	assert_true(marker._terrain_blocks_movement(Vector2.RIGHT))
+
+
+func test_terrain_blocks_movement_false_below_the_hard_threshold():
+	var world := StubWorldWithSlope.new()
+	world.slope = TerrainPassability.HARD_THRESHOLD_DEG - 5.0
+	marker.setup(world, TILE_SIZE)
+	assert_false(marker._terrain_blocks_movement(Vector2.RIGHT))
+
+
+## Wiring pin: _advance must scale speed by the SAME multiplier
+## TerrainPassability.speed_multiplier already computes for the creature's
+## CURRENT tile -- _advance is the single choke point every intent's movement
+## (wander/flee/seek/hunt/attack) already funnels through (see its own
+## disease-multiplier comment just above), so one multiplier here covers all
+## of them, the same way the disease multiplier already does.
+func test_advance_applies_the_terrain_speed_multiplier_from_the_current_tile():
+	var world := StubWorldWithSlope.new()
+	world.slope = 30.0  # inside the soft band: SOFT_THRESHOLD_DEG < 30 < HARD_THRESHOLD_DEG
+	marker.info = CreatureInfo.new("horse")
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(100, 100)
+
+	marker._advance(Vector2.RIGHT, 50.0, 1.0)
+
+	var expected_multiplier := TerrainPassability.speed_multiplier(30.0)
+	assert_almost_eq(marker.position.x, 100.0 + 50.0 * expected_multiplier, 0.01)
+
+
+## The soft band must slow a creature down, never stop it outright -- only
+## the hard threshold (below) refuses a step outright.
+func test_advance_is_slower_on_a_soft_slope_than_on_flat_ground():
+	var world := StubWorldWithSlope.new()
+	world.slope = 30.0
+	marker.info = CreatureInfo.new("horse")
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(100, 100)
+	marker._advance(Vector2.RIGHT, 50.0, 1.0)
+	var slowed_distance := marker.position.x - 100.0
+
+	marker.position = Vector2(100, 100)
+	marker._world = null
+	marker._advance(Vector2.RIGHT, 50.0, 1.0)
+	var flat_distance := marker.position.x - 100.0
+
+	assert_gt(slowed_distance, 0.0, "a soft slope should slow a creature, not stop it")
+	assert_lt(slowed_distance, flat_distance, "a soft slope should cover less ground than flat terrain")
+
+
+## End-to-end, mirroring test_a_creature_with_nowhere_to_go_stands_still_
+## instead_of_flipping's shape: a creature surrounded by terrain steeper than
+## HARD_THRESHOLD_DEG in every direction (StubWorldWithSlope reports the same
+## slope everywhere) must never cross onto it, however long it keeps trying.
+func test_a_creature_does_not_walk_onto_terrain_steeper_than_the_hard_threshold():
+	var world := StubWorldWithSlope.new()
+	world.slope = TerrainPassability.HARD_THRESHOLD_DEG + 10.0
+	marker.info = CreatureInfo.new("horse")
+	marker.setup(world, TILE_SIZE)
+	var start := marker.position
+
+	for i in 120:
+		marker._process(1.0 / 60.0)
+
+	assert_lt(marker.position.distance_to(start), 2.0, "should never cross onto impassable terrain")

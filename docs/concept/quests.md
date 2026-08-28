@@ -267,6 +267,59 @@ failed to save isn't a dead end, it's an input to what grows next.
   escort, investigate, vouch-for/diplomacy are plausible future shapes;
   deferred, the current set is enough to prove the mechanism end to end.
 
+## Offered in conversation: the six grounded sources
+
+[dialogue.md](dialogue.md) is where a quest actually reaches a player — not a
+quest log, not an exclamation mark, but a villager saying what they are short
+of. That doc's `QuestOffer` merges six sources into one shape:
+
+```gdscript
+{offer_id, kind, npc_id, household_id, settlement_id,
+ item_id, count, target_id, reward: {kind, amount}, deadline}
+```
+
+`offer_id` is **derived**, never allocated — `"<kind>:<item>:<count>"` — so the
+same real shortage always yields the same id and offers dedupe across
+recomputation without a registry. That is pillar 1 restated as an implementation
+constraint: an offer cannot outlive the condition it projects, because it has no
+identity of its own.
+
+| # | Source | Real state it projects |
+|---|---|---|
+| 1 | **Production shortfall, attributed to a face** | The existing shortfall query already returns `{household_id, recipe_id, missing}`. A household id is built from its founder, so `EntityRef.key_of(household_id)` *is* the villager's seed — which turns an anonymous `household:483920 needs 3 rock` into Bren asking you for three rock, with no new state. |
+| 2 | **Village hunger** | The live market cannot buy a meal and this villager is hungry. Only a real, transient, recoverable state since wages exist (see [npc.md](npc.md)); before that it was an occupation constant and carried no information. |
+| 3 | **Remembered threat** | A memory of a raid or a ruin above a confidence floor. `CaravanRaid` already drops real goods at a real world position, so "someone should go and look" has a completable objective rather than a flag to set. |
+| 4 | **Deeper need** | `NeedResolver`'s recursive walk over the real recipe graph — the "why can't you make it yourself" branch. "It's the forge. There isn't one this side of the river." |
+| 5 | **Carried news** | A memory the *player* holds that this villager does not. The player is the only entity that walks between settlements, so this is the one source no NPC can satisfy. |
+| 6 | **Hardship** | Real snow depth above a floor plus a non-producer occupation. Firewood before the cold. |
+
+Sources 1, 2 and 4 exist in the simulation today. Sources 3 and 5 became
+reachable only once event witnesses were wired (before that no villager held a
+memory of anything but their own founding). Source 6 needs no new state.
+
+## Rewards are derived, and re-derived
+
+`Contract.obligations` is `Array[String]`, `consideration` is a `String`, and
+**nothing in the codebase interprets either**; there is no deadline sweep. So the
+often-repeated claim that "accepting a quest gives you deadline, failure and
+persistence for free" is true only for persistence and traceability. The other
+two have to be built:
+
+- **Reward** comes from real state — the asking household's actual wallet, capped
+  at what they genuinely hold — and is **re-derived at fulfilment from live
+  state**, never trusted from the offer. A villager who went broke while you were
+  away pays less, and says so. That is the honest behaviour and it costs nothing
+  to implement, because the reward was never stored.
+- **Deadline** is checked **lazily at conversation open**, not by a background
+  sweep. The only observer that matters is the conversation itself, so a sweep
+  would be pure cost. A lapse records a broken promise that the settlement's
+  villagers witness — which means failing a quest changes what *other* people say
+  to you, through the gossip network that already runs, rather than through a
+  reputation number.
+
+**Tracking is the world, not a log.** The floating interaction prompt becomes
+`Talk (G) · owed 3 rock`, fed from the throttle that already exists.
+
 ## Current implementation status
 
 A narrow first slice of the **Production** need source is real

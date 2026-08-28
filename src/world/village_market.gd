@@ -17,6 +17,8 @@ extends RefCounted
 ## the player keeps using shop.gd's existing merchant-catalog purchase path,
 ## not this market.
 
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+
 ## How much food one meal costs to satisfy one NpcNeeds.is_hungry() ->
 ## feed() cycle -- a meal is one whole unit, matching how feed() resolves
 ## hunger in one shot rather than a fractional nibble.
@@ -31,8 +33,25 @@ const FOOD_UNITS_PER_MEAL := 1.0
 ## catalogs never drift into contradiction.
 const VILLAGE_LOCAL_FOOD_PRICE := 2
 
-## item_id -> float count of that food currently in stock.
+## The one real item category a meal may be drawn from -- ItemCatalog's own
+## `kind`, the SAME category SettlementFood._village_food_stock already
+## filters this stock through before a settlement counts as fed.
+const FOOD_KIND := "food"
+
+## item_id -> float count of that food currently in stock. Not only food:
+## this same stock also holds a settlement's construction lumber (see
+## remove_stock), which is exactly why the meal calls have to ask what an
+## item actually IS.
 var stock: Dictionary = {}
+
+## What decides whether a stocked id is food. Lazily filled with a bare
+## ItemCatalog on first meal query, so constructing a VillageMarket costs
+## exactly what it did before this filter existed and every existing caller
+## keeps working unchanged. Assign a catalog that also knows emergent/
+## crafted ids (an ItemCatalog with a CraftedItemRegistry attached, e.g.
+## Player._item_catalog) to have a real cooked dish the shipped table never
+## listed feed a villager too.
+var item_catalog = null
 
 
 func add_stock(item_id: String, amount: float) -> void:
@@ -63,9 +82,21 @@ func total_stock() -> float:
 	return total
 
 
+## Whether `item_id` is something a villager can actually eat, read off the
+## real ItemCatalog category rather than a second hand-maintained list of
+## food ids -- SettlementFood filters the very same stock the very same way,
+## so the two can never disagree about whether a settlement is fed. An id no
+## catalog knows reads "" and is not food: better a village that cannot feed
+## itself on a mystery id than one fed by beams.
+func _is_food(item_id: String) -> bool:
+	if item_catalog == null:
+		item_catalog = ItemCatalog.new()
+	return item_catalog.kind_of(item_id) == FOOD_KIND
+
+
 func can_buy_meal() -> bool:
 	for item_id in stock:
-		if stock[item_id] >= FOOD_UNITS_PER_MEAL:
+		if stock[item_id] >= FOOD_UNITS_PER_MEAL and _is_food(item_id):
 			return true
 	return false
 
@@ -73,14 +104,14 @@ func can_buy_meal() -> bool:
 ## Buys one meal's worth of whatever real village food is available -- a
 ## hungry villager takes whichever stock exists, not a specific item.
 ## Deterministic pick (first item_id, in insertion/iteration order, holding a
-## whole unit) rather than random, so the same market state always resolves
-## the same purchase. Returns the item_id bought, or "" if the purchase
-## failed (no item has a whole unit, or the wallet can't afford
-## VILLAGE_LOCAL_FOOD_PRICE) -- wallet and stock are both left unchanged on
-## failure (see Wallet.spend's own no-op-on-failure contract).
+## whole unit of real food) rather than random, so the same market state
+## always resolves the same purchase. Returns the item_id bought, or "" if
+## the purchase failed (no FOOD item has a whole unit, or the wallet can't
+## afford VILLAGE_LOCAL_FOOD_PRICE) -- wallet and stock are both left
+## unchanged on failure (see Wallet.spend's own no-op-on-failure contract).
 func buy_meal(wallet) -> String:
 	for item_id in stock:
-		if stock[item_id] >= FOOD_UNITS_PER_MEAL:
+		if stock[item_id] >= FOOD_UNITS_PER_MEAL and _is_food(item_id):
 			if not wallet.spend(VILLAGE_LOCAL_FOOD_PRICE):
 				return ""
 			stock[item_id] -= FOOD_UNITS_PER_MEAL

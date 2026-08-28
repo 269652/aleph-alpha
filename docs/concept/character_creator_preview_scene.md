@@ -45,14 +45,25 @@ edge of a pond and some trees where the char should stroll around."*
 
 `src/rendering/character_preview_layout.gd` (pure `RefCounted`, no Godot
 nodes) takes a seed and a diorama footprint (world units) and returns plain
-data: the pond's center/radius, tree positions, pebble positions (scattered
-near the pond's rim), grass clump positions, and the walkable bounds the
-stroll logic confines itself to (the footprint minus the pond and a margin
-around each tree). Everything is placed FROM the seed — same seed, same
-layout, matching this codebase's established "measure/derive, don't eyeball"
-convention for placement (see `StonePlacement`, `WildCropPatch` for the
-existing precedent of pure seeded placement logic kept separate from the
-nodes it describes).
+data: the pond's center/radius (the circular containment envelope every
+other placement below safely avoids — unchanged since the shape work
+below was layered on top, not in place of it), its rectangular
+`pond_half_size` (long axis pinned to `pond_radius` exactly, short axis
+scaled down by `POND_ASPECT_RATIO` — what the pond actually *looks* like,
+used wherever the real shape matters rather than just an outer bound),
+tree positions, pebble positions (scattered near the pond's elliptical
+rim, matching `pond_half_size`, not a uniform circle), grass clump
+positions, and the walkable bounds the stroll logic confines itself to
+(the footprint minus the pond and a margin around each tree). Also flower,
+worm, and butterfly positions, plus a single boar position, all following
+the same shape (flowers/worms are is_clear-checked ground life, like
+pebbles; butterflies fly overhead unchecked, like birds) — a modest count
+of each, added as scene-life accents alongside the meadow itself rather
+than a second density system of their own. Everything is placed FROM the
+seed — same seed, same layout, matching this codebase's established
+"measure/derive, don't eyeball" convention for placement (see
+`StonePlacement`, `WildCropPatch` for the existing precedent of pure
+seeded placement logic kept separate from the nodes it describes).
 
 Two placement rules deserve naming, because both were originally absent and
 both were visible the moment the scene was actually looked at:
@@ -101,10 +112,19 @@ footprint, textured through the same has-art-then-fallback seam
 .frame_for("grassland", seed)`, `ProceduralTerrainSprite` otherwise — at a
 scale derived from the art's own pixel width so 32px illustrated and 64px
 procedural tiles both cover exactly one world tile, and at a `z_index` below
-both the pond's and the grass band's), one `MultiMeshInstance2D` per grass
-band (`IllustratedGrassPatch.fill_band`), one `Sprite2D` pond
-(`ProceduralShoreDistanceSprite` +
-`WaterShader.shared_material()`), one `LiftableStone` node per pebble
+both the pond's and the grass band's), a **pond tile grid** (one `Sprite2D`
+per `TerrainRenderer.TILE_SIZE`, not one stretched texture — sized from
+`pond_half_size`'s own two axes, so the grid itself is a rectangle, not a
+square; which cells actually render is decided by
+`_generate_pond_cells`, a from-scratch seeded corner-erosion pass over
+`PixelNoise.smooth` that keeps a solid always-present core and only ever
+nibbles the four corners, giving the silhouette organically rounded edges
+rather than a crisp box; each kept cell is `ProceduralShoreDistanceSprite
+.generate_deep_water_image()` if none of its 4 neighbours were excluded,
+or `.generate_image(land_directions)` faded toward whichever neighbours
+were, all sharing one `WaterShader.shared_material()`), one
+`MultiMeshInstance2D` per grass band (`IllustratedGrassPatch.fill_band`),
+one `LiftableStone` node per pebble
 (`StoneRenderer.build_liftable_stone_node`), one `ChoppableTree` per tree
 position (`TreeRenderer.spawn_tree_at`, `age_seconds` defaulting to `INF` —
 fully grown), and one `CharacterView` (the same `.tscn` the player/NPCs
@@ -114,13 +134,48 @@ needs to animate correctly standalone (confirmed against `Player
 ._update_character_view`, its own real driver — no physics/collision/input
 required).
 
+The rest of the scene's life reuses real spawn paths the same way: real
+`FishMarker`s (`FishRenderer.spawn_fish_at`, driven through their own real
+`_process`, not a diorama-only movement system) and `AmbientFlyerMarker`s
+for both birds (`build_bird`) and butterflies (`build_flyer`, already a
+ready-made non-bird wrapper — no new rendering code needed). Flowers and
+worms have no standalone "spawn one" renderer of their own (unlike
+fish/trees/birds), so `_build_flowers`/`_build_worms` build a plain
+`Sprite2D` each directly from `ProceduralFlowerSprite`/`ProceduralWormSprite`
+— the same inline pattern `EarthChunkManager._sync_flower_sprites`/`_sync_
+worm_sprites` already use for the real world's own meadow, just without a
+`FlowerPatch`/`EarthwormPatch` behind it (nectar/growth/emergence all stay
+at their own "fully grown, always surfaced" defaults). One ambient boar
+(`CreatureRenderer`'s own real single-marker spawn path, `world` left null
+so it just idle-wanders — a real boar's attack pose is gated behind full
+AI/perception with no public trigger to force it on cue, so it stays a
+harmlessly ambient presence) gives the hero something to spar with.
+
+`src/rendering/character_action_picker.gd` (pure, injected-RNG) is the
+hero's own ambient behavior: `WANDER`/`IDLE`/`SWING`/`FISH`/`FIGHT`, weighted
+so WANDER stays the common default and the rest read as occasional flavor.
+FISH walks to a fixed wade-in spot, casts once on arrival (reusing
+`Player`'s own `play_attack_swing` rod-throw plus a `ProceduralBobberSprite`
+at `FishingCast.cast_point` — the real game has never had a dedicated cast
+animation either, so there was nothing new to build, only to wire in), then
+holds facing the pond. FIGHT walks to sparring range of the boar
+(`CreatureMarker.ATTACK_RANGE`, not a diorama-only number) and lands a real
+`play_attack_swing` there periodically for as long as the action holds.
+
 ### Embedding — the character creator's own UI
 
 `scenes/main_menu.gd`'s hero panel (`_build_hero_column`) hosts a
 `SubViewportContainer`/`SubViewport` wrapping one `CharacterPreviewDiorama`,
 with a `Camera2D` framing the whole footprint from a fixed position (a
-diorama viewed from outside, not a camera that follows the stroll).
-`_refresh_appearance()` calls `apply_appearance` on the diorama's own
+diorama viewed from outside, not a camera that follows the stroll). The
+viewport is a rectangle, not a square, WIDER than tall
+(`main_menu.gd`'s own `DIORAMA_VIEW_SIZE`) to match `FOOTPRINT`'s own
+now-rectangular shape (see the Layout section above) at a uniform
+per-world-unit scale — `DIORAMA_VIEW_SIZE.x` is *derived* from
+`FOOTPRINT`'s own aspect ratio rather than picked independently, which is
+what keeps the camera's zoom identical on both axes (an accidental
+mismatch between the two would stretch every sprite in the scene
+sideways). `_refresh_appearance()` calls `apply_appearance` on the diorama's own
 `CharacterView` — every other axis-cycling control keeps working exactly as
 it already does, now visibly redressing a live, walking hero instead of a
 static image.
@@ -148,12 +203,17 @@ off-screen.
   real bugs only visible once actually rendered, several requiring a
   second pass once the first fix's own result was seen (panel
   containment, the pond's shape/shading — reverted from a first "fix" to
-  a genuine circle back to a rectangle once actually seen — fish
-  visibility AND containment as two separate bugs, and a real hero-rig
-  width bug a concurrent session's own leg-gait rework had introduced,
-  found while chasing an "unproportional ... walks like a duck" report).
-  See `docs/progress.md`'s own entry for the full list, exact fixes, and
-  file names.
+  a genuine circle back to a rectangle once actually seen, later grown
+  and given organically eroded corners once a rendered dump of the
+  rectangle's own tile grid showed a naive erosion metric could erode an
+  entire side away at once, and separately widened alongside the OUTER
+  viewport itself once a same-session follow-up clarified that a "still a
+  square" report was about `DIORAMA_VIEW_SIZE`, not (or not only) the
+  pond inside it — fish visibility AND containment as two separate bugs,
+  and a real hero-rig width bug a concurrent session's own leg-gait
+  rework had introduced, found while chasing an "unproportional ... walks
+  like a duck" report). See `docs/progress.md`'s own entry for the full
+  list, exact fixes, and file names.
 - ✅ The diorama stands on the real world's own ground art at the real
   world's tile size (`_build_ground`). This was a genuine SPEC GAP, not a
   missed implementation: no version of this doc ever mentioned ground, so
@@ -185,7 +245,13 @@ off-screen.
   so `HeroAppearance.outfit_variant_for` has the class pick a row and the
   DNA seed rotate it, carried on the appearance dict so a renderer takes it
   rather than re-rolling its own.
-- Whether the pond should ever show a disturbance ripple (the character
-  wading in, rain) — `WaterShader.add_disturbance`/`set_rain_intensity`
-  exist and are wired for the real world, but this diorama does not call
-  them; the pond stays a still, ambient backdrop.
+- ~~Whether the pond should ever show a disturbance ripple~~ — resolved:
+  both the hero (while genuinely swimming/wading, mirroring `scenes/
+  player.gd`'s own `_step_water_ripples` gate, plus an immediate splash on
+  first entry since the diorama's own wade-in window is too short for the
+  throttle alone to ever fire) and the fish (via `FishMarker`'s own real
+  `_step_water_ripple`, once fish moved onto `FishMarker`'s real
+  `_process` — see `docs/progress.md`) now call `CharacterPreviewDiorama
+  .record_water_disturbance`, which forwards straight to the pond's own
+  `WaterShader.add_disturbance`. Rain is still not simulated in the
+  diorama at all — a real remaining gap, not answered by the above.

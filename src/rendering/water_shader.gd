@@ -163,6 +163,19 @@ float raindrop_ripples(vec2 pos) {
 			vec2 cell = floor(pos / cell_size) + vec2(float(ox), float(oy));
 			float seed = value_hash(cell);
 			float age = mod(TIME + seed * interval * 7.0, interval);
+			// age is always in [0, interval) by construction of mod() above,
+			// so the only bound ripple_packet's own age check can actually
+			// fail here is the upper one -- checking it BEFORE the drop
+			// position (2 more hashes) and the packet math (exp + sin) means
+			// a cell between splashes (most cells, most of the time, since
+			// rain_ripple_lifetime < interval) skips that work entirely
+			// instead of computing it only to have ripple_packet discard it.
+			// Mathematically identical result to the un-early-exited version
+			// -- this is a pure cost cut, not a visual change (measured live:
+			// rain/snow dropped fps from ~30 to ~6 before this).
+			if (age > rain_ripple_lifetime) {
+				continue;
+			}
 			vec2 drop_pos = (cell + vec2(value_hash(cell + 7.3), value_hash(cell + 41.7))) * cell_size;
 			total += ripple_packet(
 				distance(pos, drop_pos), age,

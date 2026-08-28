@@ -130,3 +130,21 @@ func test_mass_kg_defaults_to_zero_when_not_given():
 func test_a_weapon_item_can_carry_a_real_mass():
 	var sword := Item.new("iron_sword", "Iron Sword", "weapon", 1, 25.0, "", 0.0, 1.2)
 	assert_almost_eq(sword.mass_kg, 1.2, 0.0001)
+
+
+# -- sprite_id: which art this item's identity resolves to (see
+# docs/concept/item_illustrations.md) -- decouples "what this item is" from
+# "what picture represents it", so a variant/crafted item can share art with
+# its base without a second catalog art entry.
+
+func test_sprite_id_defaults_to_the_items_own_id_when_not_given():
+	var sword := Item.new("iron_sword", "Iron Sword", "weapon", 1, 25.0)
+	assert_eq(sword.sprite_id, "iron_sword")
+
+
+func test_sprite_id_can_be_given_explicitly_and_differ_from_id():
+	var blessed := Item.new(
+		"iron_sword_blessed", "Blessed Iron Sword", "weapon", 1, 25.0, "", 0.0, 1.2, "iron_sword"
+	)
+	assert_eq(blessed.sprite_id, "iron_sword")
+	assert_eq(blessed.id, "iron_sword_blessed", "sprite_id must not change the item's own identity")

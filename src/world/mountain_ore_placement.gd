@@ -16,6 +16,7 @@ extends RefCounted
 ## elevation source the way terrain_relief.gd itself has to.
 
 const OrePlacement = preload("res://src/world/ore_placement.gd")
+const StonePlacement = preload("res://src/world/stone_placement.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 
 ## Below this slope, a mountain face is gentle enough to accumulate soil/
@@ -34,10 +35,24 @@ const MIN_SLOPE_FOR_VEINS_DEG := TerrainPassability.SOFT_THRESHOLD_DEG
 ## not two numbers independently tuned to agree by luck.
 const MAX_SLOPE_FOR_SCALING_DEG := TerrainPassability.HARD_THRESHOLD_WITH_ROPE_DEG
 
-## Vein chance at MAX_SLOPE_FOR_SCALING_DEG and beyond -- real erosion
-## exposes a lot on the sheerest faces, but a third of cells is still a
-## landmark find, not wallpaper.
-const MAX_VEIN_CHANCE := 0.35
+## Vein chance at MAX_SLOPE_FOR_SCALING_DEG and beyond.
+##
+## Was a flat, independently-eyeballed 0.35 ("a third of cells is still a
+## landmark find, not wallpaper") until reported live (playtest,
+## 2026-08-28): spawn_mountain_veins (stone_renderer.gd) checks EVERY
+## mountain-biome cell with no density gate above this ceiling at all --
+## unlike flat ground, where StonePlacement.STONE_DENSITY gates first and
+## OrePlacement.ORE_FRACTION gates again on top of that. 0.35 was ~29x flat
+## ground ore's own ~1.2% overall rarity, so a broadly steep mountainside
+## read as a dense, near-uniform grid covering most of the visible ground,
+## not a landmark. Re-pinned to the SAME order of magnitude as flat-ground
+## ore's own rarity rather than a second, separately-eyeballed number -- a
+## mountain vein is still a mineral deposit, just placed by a different
+## (slope-driven) rule, the same "shared quantity, not coincidence"
+## reasoning MAX_SLOPE_FOR_SCALING_DEG above already applies to its own
+## threshold (see test_max_vein_chance_matches_flat_ground_ores_own_
+## rarity).
+const MAX_VEIN_CHANCE := StonePlacement.STONE_DENSITY * OrePlacement.ORE_FRACTION
 
 var _ore_placement := OrePlacement.new()
 

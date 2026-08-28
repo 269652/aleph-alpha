@@ -10,6 +10,7 @@ extends RefCounted
 ## lasso interaction) owns the world state it applies to.
 
 const CreatureInfo = preload("res://src/world/creature_info.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 
 
 # -- breaking free -----------------------------------------------------------
@@ -31,8 +32,68 @@ const MAX_BREAK_FREE_CHANCE := 0.22
 const MIN_BREAK_FREE_CHANCE := 0.05
 
 
-static func break_free_chance(condition: float) -> float:
-	return lerpf(MIN_BREAK_FREE_CHANCE, MAX_BREAK_FREE_CHANCE, clampf(condition, 0.0, 1.0))
+## How much harder a PREDATOR fights the rope at the same physical condition,
+## grounded in the real domestication-asymmetry point taming.md's "Any
+## animal, the right tool" makes: wild predators are measurably harder to
+## habituate than domesticable prey species. DERIVED, not eyeballed -- the
+## ratio of average MAX_HEALTH_BY_SPECIES across CreatureInfo.PREDATOR_SPECIES
+## to average MAX_HEALTH_BY_SPECIES across every other species in that same
+## table (see test_predator_break_free_multiplier_is_derived_from_species_health,
+## which recomputes this independently and pins the constant against it).
+##
+## GDScript consts can't call a function to initialize themselves, so this is
+## a `static var` computed once at class load rather than a `const` -- still
+## fixed for the life of the game, just not a compile-time literal.
+static var PREDATOR_BREAK_FREE_MULTIPLIER: float = _compute_predator_break_free_multiplier()
+
+
+static func _compute_predator_break_free_multiplier() -> float:
+	var predator_sum := 0.0
+	var predator_count := 0
+	var other_sum := 0.0
+	var other_count := 0
+	for a_species in CreatureInfo.MAX_HEALTH_BY_SPECIES:
+		var hp: float = CreatureInfo.MAX_HEALTH_BY_SPECIES[a_species]
+		if CreatureInfo.PREDATOR_SPECIES.has(a_species):
+			predator_sum += hp
+			predator_count += 1
+		else:
+			other_sum += hp
+			other_count += 1
+	return (predator_sum / predator_count) / (other_sum / other_count)
+
+
+## How much a fully-invested `taming_affinity` (the menagerie keystone's own
+## ceiling, 15.0 -- see skill_web.gd -- used here rather than a second,
+## invented ceiling) can reduce the break-free chance the player faces, as a
+## FRACTION of the chance itself. Derived from this file's own existing
+## MIN/MAX_BREAK_FREE_CHANCE spread rather than a fresh eyeballed number: an
+## experienced handler closes roughly the same fraction of that spread that
+## separates a fresh animal from a spent one. Deliberately < 1.0 so a
+## fully-invested handler still never reaches a guaranteed hold (0.0) --
+## "harder", per taming.md's pillars, never "impossible".
+const AFFINITY_CEILING := 15.0
+static var AFFINITY_MAX_REDUCTION_FRACTION: float = MIN_BREAK_FREE_CHANCE / MAX_BREAK_FREE_CHANCE
+
+
+## `is_predator` scales the animal's effective condition up by
+## PREDATOR_BREAK_FREE_MULTIPLIER before it enters the same MIN/MAX lerp
+## every species uses -- a predator saturates to MAX_BREAK_FREE_CHANCE at a
+## much lower condition than a herbivore does, so it stays measurably harder
+## to hold across most of a struggle even though both share the same ceiling.
+##
+## `affinity` (Player.skill_bonus("taming_affinity"), 0 with no investment up
+## to AFFINITY_CEILING at menagerie) then scales the result back DOWN by up to
+## AFFINITY_MAX_REDUCTION_FRACTION. At affinity 0 this is a no-op, so a
+## character with no investment sees byte-identical numbers to before this
+## parameter existed (see
+## test_break_free_chance_is_unchanged_with_no_predator_and_no_affinity).
+static func break_free_chance(condition: float, is_predator: bool = false, affinity: float = 0.0) -> float:
+	var predator_multiplier := PREDATOR_BREAK_FREE_MULTIPLIER if is_predator else 1.0
+	var scaled_condition := clampf(condition, 0.0, 1.0) * predator_multiplier
+	var chance := lerpf(MIN_BREAK_FREE_CHANCE, MAX_BREAK_FREE_CHANCE, clampf(scaled_condition, 0.0, 1.0))
+	var affinity_fraction := clampf(affinity, 0.0, AFFINITY_CEILING) / AFFINITY_CEILING
+	return chance * (1.0 - affinity_fraction * AFFINITY_MAX_REDUCTION_FRACTION)
 
 
 ## Stamina spent per failed struggle, and how long a rested animal takes to
@@ -190,11 +251,23 @@ static func is_mountable(species: String, trust: float) -> bool:
 	return can_be_mounted(species) and accepts_orders(trust)
 
 
-## Whether a rope and a carrot are the right tools for this animal at all.
-## Predators are not: being hunted by the thing you tied up is not taming.
-## Driven off CreatureInfo's own predator roster rather than a second list, so
-## a species added there can't quietly become tameable.
-static func can_be_tamed(species: String, is_predator: bool) -> bool:
-	if is_predator or CreatureInfo.PREDATOR_SPECIES.has(species):
+## Whether `tool_id` is the right tool to catch `species` with, AND capture
+## is currently allowed for it at all.
+##
+## Predators are no longer a categorical exclusion (see docs/concept/
+## taming.md's "Any animal, the right tool") -- a wolf has a neck exactly
+## like a horse does, so it joins the Roped class like everything else with
+## legs and a neck. What changes for a predator is how hard it fights the
+## rope once caught (see break_free_chance's predator harshness below), not
+## whether a lasso is the right tool.
+##
+## World-boss-scale species (CreatureInfo.WORLD_BOSS_SPECIES) stay excluded
+## regardless of tool, on purpose: the reinforced rope is real and craftable
+## today, but actually resolving a capture attempt against something with
+## its own aggro state and fitness-driven promotion score is a documented
+## open question (worldbosses.md), not one this function should answer in
+## passing.
+static func can_be_tamed(species: String, tool_id: String) -> bool:
+	if CreatureInfo.WORLD_BOSS_SPECIES.has(species):
 		return false
-	return true
+	return CaptureTool.required_tool_for(species) == tool_id

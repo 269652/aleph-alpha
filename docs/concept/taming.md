@@ -918,6 +918,152 @@ disease entry's "same deterministic hash-seeded roll pattern as
 `Sickness`/`TamingSystem`"), so a checklist that greps for the name and expects
 one hit will be wrong; both sites need repointing.
 
+## Any animal, the right tool
+
+Reported directly: "any animal can be caught, it may need different tools —
+anything with a neck can be caught with a lasso, small flyers with a
+Käscher, mice with a trap, a dragon maybe with magically reinforced steel
+ropes — you should be able to tame anything, however butterflies or so need
+a spell you learn at high level because they are not smart enough to learn
+commands."
+
+The system above was built around one tool for one shape of animal: a
+lasso loops over a head and neck, so it only ever made sense for a legged
+creature with one to loop it over. That is not a design choice worth
+keeping as a wall — it is the reason a mouse, a snake and a butterfly were
+never catchable at all, not a statement that they shouldn't be. The fix is
+not a second lasso with a different name; it is admitting the tool has to
+match the animal's actual body, the same way a real trapper carries more
+than one kind of gear.
+
+### Design pillars (extending the ones above)
+
+- **The tool follows the body plan, not a species allow-list.** Whether an
+  animal needs a lasso, a snare, a net or a trap falls out of properties
+  the simulation already tracks for every creature — legs, a neck to loop,
+  size — not a hand-maintained table of which species goes with which
+  tool. A new species dropped into `AnimalAnatomy` is automatically
+  catchable with the right gear the moment it exists, the same
+  derive-don't-enumerate discipline `taming.md`'s break-free rate and
+  `wild_crops.md`'s phenology already hold themselves to.
+- **Wild still means wild.** Extending capture to predators is not making
+  them easy — a wolf fights a rope harder than a horse does, for the same
+  real reason it fights everything harder: this is condition-driven
+  difficulty wearing a different multiplier, not a new mechanic.
+- **Not being able to talk to something is not the same as not being able
+  to catch it.** A butterfly can be netted the moment you have a net. What
+  it *can't* do is learn Follow/Stay, because nothing about a butterfly's
+  simulation has ever given it the AI to learn anything — it forages,
+  courts and ages, and that is the whole of it. So "tame" for a creature
+  with no command AI has to mean something else: a bond, not an order.
+
+### Real-world grounding
+
+- A rope loop has a real minimum practical diameter — you cannot lasso
+  something much smaller than the loop itself stays open. That is a fact
+  about rope, not about skill, and it is the actual reason field biologists
+  reach for a box trap on a mouse and a hoop net on an insect rather than a
+  smaller rope.
+- A snake has no limbs to hobble and nothing a rope loop settles around the
+  way it does a horse's neck — real snake handling uses a hook or tongs
+  that pin and lift rather than restrain-and-lead, which is a structurally
+  different action from "the animal follows you at rope length."
+- Wild predators are measurably harder to habituate to humans than
+  domesticable prey species — a documented asymmetry in the real
+  domestication-syndrome literature (flight/fight response strength, not
+  raw physical strength), which is the real-world reason herding species
+  were domesticated again and again independently across history while
+  wolves/big cats essentially never were by the same route. The model
+  reuses this as *harder*, never *impossible*.
+- "Magically reinforced" rope for something the size of a lindwurm is
+  flavor on top of a real engineering fact: restraining something that
+  outweighs a horse by orders of magnitude needs a genuinely stronger
+  cable, the same reason a real crane doesn't rig with garden twine.
+
+### Mechanism spec
+
+**Capture class is read off the same body-plan data `AnimalAnatomy`
+already carries for drawing the creature** — nothing new is authored per
+species:
+
+| Capture class | Reads | Tool | Species today |
+|---|---|---|---|
+| Roped | has legs, not tiny, not world-boss scale | **Lasso** (existing) | every current herbivore *and*, newly, every non-boss predator — wolf, lynx, jaguar, bear, boar |
+| Snared | `SERPENT_SPECIES` (legless) | **Snare** (new) | venomous_snake, nonvenomous_snake, and any other legless non-boss species |
+| Netted | ambient-flyer roster (butterflies, bee, small birds) | **Butterfly net** (new) | monarch, swallowtail, blue_morpho, bee, sparrow, robin |
+| Trapped | legged, at-or-below mouse's own `world_scale` | **Trap** (new) | mouse, and anything else authored that small later |
+| Boss-scale | `WORLD_BOSS_SPECIES` | **Reinforced rope** (new item, craftable) | lindwurm, krampus, nyx, kraken, rubezahl |
+
+Using the wrong tool on a creature simply does nothing — the same "nothing
+in range" read the lasso already gives today, not a new failure state.
+
+**Predators join the Roped class rather than getting a tool of their own**:
+a wolf has a neck exactly like a horse does, so a lasso is the correct
+tool. What changes is how hard it fights the rope — predator species carry
+a real, derived multiplier on `Taming.break_free_chance`'s effective
+condition (grounded in the domestication-asymmetry point above; the
+multiplier is derived from an existing predator-vs-herbivore stat already
+in `CreatureInfo`, not a new eyeballed number), so the loop the player
+already knows — throw, hold, wear it down or lose it, come back and feed —
+is exactly what catching a wolf feels like, just longer and riskier.
+
+**Boss-scale creatures get their tool now; actually holding one stays a
+follow-up.** `Taming.can_be_tamed` keeps `WORLD_BOSS_SPECIES` excluded
+regardless of tool — not because the game doesn't want a tamed lindwurm
+(`worldbosses.md` explicitly does: "a tempting, high-risk taming target...
+since a world boss's DNA is by definition exceptional"), but because
+actually resolving a capture attempt against something with its own aggro
+state and a fitness-driven promotion score is a real design question
+`worldbosses.md` leaves open, not a number this doc should invent in
+passing. The reinforced rope is real and craftable today; what it is *for*
+is written down and waiting.
+
+**Netting a flyer is instant, not a struggle.** Nothing in `flyer_diet.gd`/
+`ambient_flyer_marker.gd` models a butterfly fighting for its life against
+a rope the way a horse does — that would be inventing a mechanic the
+creature has no simulated basis for. A landed net throw simply catches it;
+the interesting choice happens after, in what you do with it.
+
+### A bond, not an order: the Kinship path
+
+A netted creature has no order AI to learn — it forages, courts and ages,
+full stop, the same as it did in the wild (see `docs/concept/ecosystem_dynamics.md`).
+By default a netted creature becomes a kept curiosity: released, or kept,
+but never given Follow/Stay the way a tamed horse is, because there is no
+command loop on the other end to receive them.
+
+**The `menagerie` keystone** (Beastmaster, ring 4 — see
+[skills.md](skills.md)) already exists, already grants `taming_affinity`,
+and its name already means exactly this: a collection of creatures ordinary
+handling can't reach. It gains a second effect, in the same
+`stat_name`-plus-`description` shape `land_sense` already established for
+"this keystone's real payoff is a capability, not a number": unlocking it
+lets a netted creature be **bonded** instead of merely kept — a real,
+persisted decorative companion (`docs/concept/pets.md`'s existing "Birds:
+decorative" role, generalized to whichever species were netted) that
+travels loosely with the player. It never takes an order, because nothing
+about what it is has changed; what changed is that the player now has the
+patience and skill — a Beastmaster's whole late-game specialty — to keep
+something around that was never going to learn Stay.
+
+**`taming_affinity` becomes a live stat for the first time** doing this: it
+has been declared and summed by `handler_1/2`/`beast_whisperer`/`menagerie`
+since the skill web shipped without a single system reading it
+(`skills.md`'s own Status admits as much). It reduces the break-free chance
+the player faces across every Roped/Snared capture — an experienced
+handler holds a struggling animal better — which gives the whole Beastmaster
+minor/notable chain leading up to `menagerie` a real payoff the moment a
+player starts walking it, not just at the keystone.
+
+This is deliberately **not** built on `magic.md`'s spellcrafting DSL, even
+though the report that prompted it said "a spell": that DSL is designed but
+has no live executor anywhere in the game yet (no system casts a real spell
+today), and standing one up as a side effect of a taming feature would be
+a second, much larger feature riding on the first. A skill-gated capability
+is the real, playable version of the same idea today; when the DSL gets an
+executor, `menagerie`'s grant is the natural first thing to re-express
+through it.
+
 ## Status / mechanisms
 
 **Built and live:**
@@ -971,6 +1117,20 @@ one hit will be wrong; both sites need repointing.
   **Known gap:** `wander_seed` is not among the saved fields, so a reloaded
   animal is a statistically different individual carrying the old trust number
   (§6). Downgraded from ✅ on that basis.
+- ⬜ The struggle is resolved silently; it has no animation of its own
+- 🚧 **Any animal, the right tool** — capture-class read directly off
+  `AnimalAnatomy` body-plan data (legs/neck, `SERPENT_SPECIES`, ambient-flyer
+  roster, mouse-scale `world_scale`), 4 new craftable tools (snare, butterfly
+  net, trap, reinforced rope), predators moved into the Roped class with a
+  real derived break-free harshness instead of a blanket exclusion, instant
+  (no-struggle) netting for flyers, `taming_affinity` wired live for the
+  first time, `menagerie` keystone gains a capability grant (bonding a netted
+  creature into a real decorative companion) alongside its existing stat, the
+  same `stat_name`-plus-`description` shape `land_sense` uses. ⬜ Boss-scale
+  creatures (`WORLD_BOSS_SPECIES`) get the reinforced-rope tool and stay
+  excluded from `can_be_tamed` on purpose — resolving a capture attempt
+  against a creature with its own aggro/promotion state is `worldbosses.md`'s
+  own open question, not one this pass should answer in passing.
 
 **Corrections to this document's previous claims:**
 
@@ -1103,3 +1263,4 @@ carried through:
    max_health are at `:351`/`:353`, not `:352-354`. Both are moot above,
    because per the arbitration this doc now cites `CreatureInfo._init` by name
    and carries no line numbers for anything that moves.
+

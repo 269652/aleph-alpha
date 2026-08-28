@@ -35,6 +35,7 @@ features.
 ✅ **Loose stone can draw from illustrated art.** `IllustratedStoneSprite` slices a hand/AI-illustrated sheet into cached, seed-picked variant frames -- the same "sheet → `SpriteSheetSlicer` → cached frames" shape as flowers/animals. Pebbles, boulders, AND cobbles each have a real 20-variant sheet registered and live (`assets/sprites/pebbles.png`/`boulders.png`/`cobbles.png`, each a 4-row x 5-column grid, rows increasing in size/complexity top-to-bottom, sliced as four independently hand-measured row bands with five auto-detected columns per band -- mirrors `IllustratedAnimalSprite`'s multi-band `walk_bands` shape). Cobbles were originally excluded by design (a fist-sized cobble isn't just a bigger pebble) -- since resolved by giving cobbles their own sheet instead. The supplied sheets are opaque solid-magenta background rather than real alpha (the AI generator ignores "transparent background" requests), so loading includes a chroma-key + despill pass: pixels close to pure magenta are keyed to real alpha 0, and remaining magenta-tinted blend pixels (antialiased edges baked directly into RGB, since there is no real alpha to separate them) have the colour cast removed rather than being deleted outright, so a soft shadow/outline survives as a shadow instead of a hard-edged hole. A real-chunk probe (6x6 grassland chunks, 8163 stones) confirmed all 20 variants of each class actually turn up among spawned nodes, not just a handful of buckets.
 
 ✅ **Ore nodes no longer show the old flat procedural look either.** Reported (2026-08-24, screenshot): "still boulders with the old design from the procedural engine" -- traced to `MinableOre`/`ProceduralOreSprite`, a code path entirely separate from the loose-stone illustration above (ore is a rarer subset of stone cells, `OrePlacement.ORE_FRACTION` 0.3 of ALL stone cells, not just boulder-class ones) that never got illustrated art of its own. Rather than requiring a brand new illustrated-ore sheet (none exists yet -- prompts for one are drafted in `docs/art/ai_sprite_prompts.md` section 5, not yet run), `ProceduralOreSprite.generate_image_from_base`/`generate_texture_from_base` now composite the ore's flecks onto a COPY of the illustrated BOULDER frame (ore always draws at boulder scale regardless of the underlying cell's rolled size, see `_attach_body_parts`'s `diameter_cm == 0` branch) instead of a freshly-drawn flat ellipse -- flecks are scattered by testing the base image's own alpha channel rather than ellipse geometry, so this works against any silhouette with no shape-specific math to keep in sync with the art. `StoneRenderer._ore_texture_for` gates this the same `has_variants()`-first-then-fallback way `_texture_for` already does for plain loose stone. The flat-ellipse `generate_image`/`_paint_flecks` stay completely unchanged as the fallback for a stone class with no illustrated sheet at all.
+  - 🐛 **Fixed (playtest report, 2026-08-28): flecks landed on the halo around the illustrated boulder, reported as "ore illustrations get mangled."** `_paint_flecks_on_silhouette` only excluded a candidate pixel when `alpha <= 0.0` -- true for genuinely transparent background, but false for the soft, partially-opaque anti-aliasing halo `IllustratedStoneSprite`'s real chroma-key -> Lanczos-resize -> despill pipeline deliberately leaves around the rock's real silhouette. A fleck paints fully opaque (`set_pixel` defaults to alpha=1.0), so one landing in that halo band stamped a solid, bright dot floating in what reads as empty space around the rock -- confirmed by dumping real generated ore textures to PNG and inspecting them directly. Raised the cutoff to `alpha > 0.5` (`FLECK_MIN_OPAQUE_ALPHA`), matching this file's own existing "opaque enough to count" convention. The existing test fixture only ever used hard 0.0/1.0 alpha, so it never exercised this; added a three-region fixture with a genuine partial-alpha halo band (`test_generate_image_from_base_does_not_paint_on_a_partially_transparent_halo`).
 
 ✅ **Pebble dispersion is mass-weighted and repeatable.** Walking within a few pixels of a loose stone rolls a per-contact chance (`PebbleDispersion.dispersion_chance`) of kicking it a fixed small distance directly away -- lighter stones roll a much better chance than heavier ones (the same footstep-momentum-vs-own-mass framing as the Kick action, just modelled as a foot at walking pace rather than a deliberate swing). A nudge that happens stays displaced rather than settling back, like real kicked gravel, but a stone is never "used up": every later contact rolls again (superseding the earlier one-shot-per-lifetime design), so it can keep drifting further across many walkovers. The roll is hash-derived from the stone's own seed and its own advancing contact counter (`LiftableStone._disperse_contact_count`, `PixelNoise`), not Godot's global RNG -- deterministic and reproducible like every other seeded pick in this codebase. Pure trigger/nudge/chance math lives in `PebbleDispersion` (tested headlessly); the per-frame "is a walker near a stone" detection is player-only scene glue in `World._step_pebble_dispersion`, mirroring `PathScarring`'s own pure/wiring split. Not wired to creatures yet -- deliberately, to avoid an O(creatures × nearby stones) scan every frame that nothing currently needs.
 
@@ -61,6 +62,8 @@ features.
 ✅ **Trees are composited from trunk + seasonal canopy + fruit** instead of being drawn procedurally, for any species with art. A species without art still paints procedurally, unchanged.
 
 ✅ **Canopies carry the season** -- bare, blossom, in leaf, turning. Trees previously wore one canopy all year while the flowers beneath them bloomed and died on schedule. Frames map to seasons by MEANING, not sheet order. Textures are cached per species AND season, and a season change redraws every loaded tree (not just the ones near enough to forage from -- a forest on the horizon still in leaf under snow is as wrong as one underfoot).
+
+✅ **A season starts already wearing itself** (`src/world/tree_phenology.gd`, `tests/unit/test_tree_phenology.gd`). Reported live with a screenshot: the HUD read **Spring** and the wood was bare brown branches and snow-capped pines — *"the trees show a winter sprite when I do /season spring"*. `/season` skips the clock to the FIRST INSTANT of the season it names, and the canopy schedule pinned winter at the bare stage for its whole length with its pre-turn deliberately **suppressed**, so the winter→spring seam was the one season start in the year that arrived unsaturated — breaking the rule `SeasonTransition` states in its own header (*"fully turned by the time the season it is turning into actually starts"*), which every other seam already kept. The bud-break ramp now runs against the **end of winter** instead of the start of spring, so it finishes on the boundary and spring opens in full bloom. The ramp was MOVED, not lengthened: total blossom is still `OPENING_FRACTION + FULL_BLOOM_FRACTION` — the same measured 5 + 7 real *Prunus* days, ~1.57 in-game days — so it costs ~0.65 in-game days of early pink rather than the ~4 days (and 3×-longer blossom) that handing the canopy `TURN_FRACTION` back would have cost, which is the "blossom in the snow" bug this schedule exists to prevent. Deliberate divergence from the concept doc's previous text, which argued for the suppression; `docs/concept/seasons.md` now records the reversal and its reasoning under "Spring has to start in spring". Every species is affected, not just cherry — all of them read `TreeRenderer.canopy_state()`, which is why the pines were snow-capped too.
 
 ✅ **Composite sheets are sliced automatically.** Drawings are found as connected blobs rather than cut on a grid or on empty rows: the autumn canopies have falling leaves that bridge every gutter, so a row/column search returns the whole sheet as one region. Regions are then read by position -- top band is the canopy strip, largest drawing below it is the trunk, rest are fruit.
 
@@ -958,11 +961,625 @@ panel":
   never stuck matching whichever view happens to need more space in a given
   axis regardless of which one is actually showing.
 
-⬜ The preview's zoom/`FOOTPRINT` is unchanged and still needs a user decision
-on how large the hero should read. Note for whoever takes it: `tree_bounds`
-insets by 20×26, so at footprint 96 the tree band is 76×70, at 74 it is 54×44,
-and below ~52 the y-band collapses to zero height and every tree would stack on
-one line — any `FOOTPRINT` change must re-run `test_character_preview_layout.gd`.
+A sixth live pass, from one combined report (with a screenshot) right after
+the fifth pass's own toggle feature: "char preview is super blurry also
+player doesnt cause water ripples", then "also fill the whole panel please"
+once the first two fixes exposed a second, still-real cause of the earlier
+"fill the entire rectangle" complaint:
+
+- ✅ **The standard portrait was blurry because its display scale was
+  FRACTIONAL, not because nearest-neighbour filtering wasn't set**
+  (`scenes/main_menu.gd` `STANDARD_PORTRAIT_SCALE`). `STANDARD_PORTRAIT_
+  DISPLAY_SIZE` (the fifth pass's own fix for the letterboxing) scaled
+  `PORTRAIT_SIZE` by the exact ratio `DIORAMA_VIEW_SIZE.y / PORTRAIT_SIZE.y
+  = 248/40 = 6.2` — `TEXTURE_FILTER_NEAREST` only keeps pixel art crisp at
+  a WHOLE-number scale, where every source texel maps onto the same whole
+  number of screen pixels; at 6.2x, texels straddle destination pixel
+  boundaries unevenly and nearest-neighbour sampling shows that as soft,
+  uneven edges rather than clean blocks (reported live, with a screenshot:
+  "char preview is super blurry" — the old static portrait this replaced
+  used a clean 5x for exactly this reason, per this doc's own "Character
+  creation with pixel art" entry above). `STANDARD_PORTRAIT_SCALE` is now
+  `roundi(248.0 / 40.0) = 6`, a real whole number, pinned by
+  `test_standard_portrait_display_size_is_a_whole_number_scale_of_the_source_texture`.
+- ✅ **The gold DNA-glow ring around the portrait still didn't fill its own
+  panel — a second, still-real cause of "fill the entire rectangle" the
+  fifth pass's own frame-sizing fix hadn't reached** (`scenes/main_menu.gd`
+  `_apply_preview_mode`). That fix made `frame` itself track whichever view
+  is active, but `frame` sits centred inside `_preview_glow_wrap` (the
+  outer gold ring box), which has its OWN separate `custom_minimum_size`,
+  fixed once at construction (`DIORAMA_VIEW_SIZE + 28`) and never
+  otherwise touched — so toggling to the narrower portrait correctly
+  shrank `frame`, but left it centred inside a gold box still sized for
+  the diorama's own square, showing as an empty gold margin down both
+  sides (reported live, with a screenshot, right after the blur fix: "also
+  fill the whole panel please"). `_preview_glow_wrap`'s own size now
+  tracks the SAME active-view size `frame`'s own children already do.
+- ✅ **The hero now causes water ripples while swimming/wading, mirroring
+  `scenes/player.gd`'s own gate exactly** (`character_preview_diorama.gd`
+  `HERO_WATER_RIPPLE_INTERVAL`). The real player already records a water
+  disturbance while genuinely moving through water
+  (`_step_water_ripples`, `WATER_RIPPLE_MODES`/`input_direction` gate,
+  throttled to `WATER_RIPPLE_INTERVAL` — 0.4s, "once per stroke... anything
+  faster would just stack redundant rings at the same spot"); the diorama's
+  own hero, driven by its own separate movement code rather than `Player`,
+  never did (reported live, alongside the blur report: "player doesnt
+  cause water ripples"). `_process` now mirrors that same gate — genuinely
+  moved since the last check, throttled the same 0.4s — calling the SAME
+  `record_water_disturbance` the pond's own fish already use (see the fifth
+  pass). One real addition beyond a plain mirror: an IMMEDIATE splash the
+  instant the hero steps into the water at all, not gated on the 0.4s
+  throttle — the real player's own water is a whole lake/ocean with plenty
+  of moving-through-water time for a throttled-only gate to fire in, but
+  this diorama's own wade-in spot (`_compute_fishing_spot`'s
+  `WADE_FRACTION`) sits so close to the pond's own rim that the hero is
+  only ever "moving while in the water" for a few tenths of a second before
+  it arrives and holds still — measured too short, in practice, for a
+  throttled-only 0.4s gate to ever fire even once. Caught by the test
+  itself: the first version checked the disturbance count only at the very
+  end of a 30-second loop, which is longer than a ripple's own
+  `RIPPLE_LIFETIME` (2.2s) — so even a genuinely-working fix still read as
+  "zero disturbances", since whatever fired had already faded back out on
+  its own by the time the test looked. Both ripple tests now check a
+  RISING EDGE of the disturbance count across every step instead of a
+  single end-of-loop snapshot, immune to natural decay timing either way.
+
+A seventh live pass, from "restart it's not fixed atm" after the sixth
+pass's own scale-factor fix hadn't actually resolved the blur — the real
+cause turned out to be a pipeline step upstream of display scaling
+entirely, plus a second, more serious defect the blur had been obscuring:
+
+- ✅ **The blur was never about display scale at all — it was baked
+  straight into the portrait's own 26×40 source pixels**
+  (`procedural_character_sprite.gd` `_fit_to_box`). The sixth pass's fix
+  (a whole-number `STANDARD_PORTRAIT_SCALE`) was real and correct, but the
+  portrait still read as soft (reported live, with a screenshot: "restart
+  it's not fixed atm"). `_fit_to_box` — which downscales a `hero_composite
+  .png` crop (large, hand-drawn pixel art: flat colour blocks) into the
+  portrait's own tiny per-part boxes, as small as 14×14 — used
+  `Image.INTERPOLATE_LANCZOS`, a smoothing filter that's the *right* call
+  for downscaling fine photographic-style detail (see
+  `TerrainRenderer._normalized_for_compositing`'s own doc comment, applied
+  there to noise-based ground textures) but the *wrong* one for blocky
+  character art: it blends flat colour regions into new, soft in-between
+  colours that never existed in the source. No amount of correct
+  NEAREST-neighbour upscaling downstream can undo blur already baked into
+  those pixels — pinned directly, not just visually, by
+  `test_fit_to_box_downscales_with_nearest_not_a_smoothing_filter`
+  (resizing a hard 2-colour source down with the old filter measurably
+  produced blended THIRD colours, including several pixels away from any
+  edge — Lanczos's own ringing). Now `Image.INTERPOLATE_NEAREST`,
+  matching `PORTRAIT_SIZE`'s own doc comment's original promise ("scaled up
+  by the UI (nearest-neighbour) so it stays crisp pixel art") that this one
+  step had been quietly breaking.
+- ✅ **A second, more serious defect the blur had been visually drowning
+  out: the portrait's own legs rendered as a tiny shape disconnected from
+  the torso by a real gap** (`procedural_character_sprite.gd`
+  `_blend_portrait_legs`). Found by generating and directly viewing an
+  actual portrait image once the blur fix made the figure legible enough
+  to see clearly. Root cause: the composite/illustrated-legs branch reused
+  `_PORTRAIT_LEG` (`Vector2i(5, 9)`) for its own fit-box span — a constant
+  sized for the *procedural fallback*'s two separate small leg rectangles,
+  drawn just below in the same function, never intended for a single
+  *fused* illustrated pair. `_fit_to_box`'s own aspect-preserving
+  `min(width_scale, height_scale)` then picked whichever axis was more
+  restrictive — usually the 9px height against a source crop far taller
+  than that — and shrank the whole pair down to a small blob far short of
+  the torso's own width, anchored to the canvas's true bottom (by design)
+  but leaving a real multi-row transparent gap above it where the torso
+  ought to continue into legs. The existing regression test for this exact
+  code path
+  (`test_portrait_is_a_cohesive_figure_when_legs_are_a_fused_pair`) never
+  caught it: it only checked "at least one opaque pixel exists somewhere in
+  the bottom 15% of the canvas", which a tiny disconnected blob still
+  satisfies trivially. New
+  `test_no_large_vertical_gap_appears_anywhere_below_the_head` checks
+  properly — the longest run of fully-transparent rows anywhere below the
+  head, not just whether the very bottom band is non-empty — and caught a
+  real 5-row gap out of the 40-tall canvas before the fix. The span is now
+  derived from what's actually left in the canvas below the torso
+  (`PORTRAIT_SIZE.y - legs_y`) with a deliberately generous width (leaving
+  height, the canvas's own real limit, as the one binding constraint in
+  `_fit_to_box` rather than a doubly-restrictive too-narrow box).
+
+✅ **Eighth live pass**, from one screenshot-backed report bundling four
+things after the blur/leg-gap fix above: *"Now less blurry but super
+pixelated ... also diorama is still a square and fish should only produce
+ripples when they speed boost ... also the pond should be bigger and not
+square / circle but a rectangle with some curves (organic shape)."*
+
+- ✅ **"Super pixelated"** — NEAREST alone (the blur fix above) fixed
+  smoothing but not resolution: it can only preserve whatever detail
+  `_fit_to_box` was actually handed, and a still-tiny native `PORTRAIT_SIZE`
+  (26×40) read as coarse, obviously-square blocks once magnified several
+  times over on screen. `_PORTRAIT_DETAIL_SCALE := 2` doubles the native
+  compositing resolution (`PORTRAIT_SIZE`, `_PORTRAIT_HEAD/_TORSO/_LEG/_ARM`
+  all scale by it, `generate_hero_portrait_image`'s torso/leg/arm Y-offsets
+  too), giving `_fit_to_box` genuinely more of the source art's own detail
+  to keep — `main_menu.gd`'s existing `STANDARD_PORTRAIT_SCALE :=
+  DIORAMA_VIEW_SIZE.y / PORTRAIT_SIZE.y` formula absorbs the size change
+  automatically (halves as the source doubles), landing on the same final
+  on-screen size with more real detail in it, zero changes needed in
+  `main_menu.gd` itself. `test_fit_to_box_preserves_more_detail_when_given_
+  a_larger_target` pins the underlying property (a bigger target box keeps
+  strictly more distinct source colours); `test_portrait_size_grew_for_
+  more_detail_but_kept_its_own_aspect_ratio` pins the size change itself.
+- 🚧 **Investigated, found HALF correct: fish ripples only on speed boost.**
+  `FishMarker._step_water_ripple`'s `_wag_rings_remaining`/`_is_flapping`/
+  `TAIL_WAG_RING_COUNT`/`TAIL_WAG_RING_SPACING` do drive both the ripple-ring
+  bursts and the `FLAP_SPEED_MULTIPLIER` speed boost as the *same* event —
+  that CORRELATION was genuinely already correct, confirmed empirically at
+  the time rather than taken on faith. What that check never verified is the
+  other half of the same claim: whether flap bursts themselves are RARE
+  enough to actually read as "occasional", which they were not — see the
+  eleventh pass below, where the exact same live report came back a second
+  time (**"the fish still produce ripples all the time"**) once the
+  diorama's small, always-visible pond made the real frequency impossible to
+  miss.
+- ✅ **The pond is bigger, a genuine rectangle (not a circle), and its
+- ✅ **The pond is bigger, a genuine rectangle (not a circle), and its
+  edges are organically eroded rather than crisp.** Three real, separate
+  changes, deliberately layered so nothing already trusting the pond as a
+  plain circle had to change:
+  - `CharacterPreviewLayout.POND_RADIUS_FRACTION` 0.22 → 0.3 ("the pond
+    should be bigger" — at 0.22 a ~42-unit diameter next to a full-height
+    tree/character read closer to a puddle). Test-pinned, not derived —
+    "how big should a decorative pond feel" has no real-world measurement
+    to check it against, same as this file's own `LONG_GRASS_GROWTH`/
+    `BIRD_WANDER_RADIUS` precedent.
+  - `Result.pond_half_size: Vector2` is new — the rectangle's own
+    long/short half-extents, replacing the single scalar `pond_radius`
+    everywhere a *shape* (not just a containment envelope) is needed. The
+    long axis is pinned to `pond_radius` exactly; the short one shrinks by
+    a new `POND_ASPECT_RATIO := 1.5`. Deliberately *inscribed inside* the
+    existing circular envelope rather than grown past it, so `is_clear`,
+    fish spawn/wander, and tree placement — everything that already
+    trusted `pond_radius` as a safe outer bound — needed no changes at
+    all; only pebble placement (which needs the real *shape*, not just an
+    outer bound) was touched, switched from a uniform circle to the
+    matching ellipse so a pebble in the short-axis direction still lands
+    near the actual shore instead of stranded out in the open grass.
+  - `CharacterPreviewDiorama._build_pond`'s tile grid now derives
+    different column/row counts from `pond_half_size`'s two axes (`_pond_
+    columns_for`/`_pond_rows_for`) instead of one `pond_radius` doubled
+    into a square, and each cell's membership comes from a new
+    `_generate_pond_cells(columns, rows, seed)` rather than "every cell in
+    the rectangle." No lake/organic-blob generator existed anywhere in
+    this codebase to reuse for this — the real world's own water
+    silhouette comes from a bilinear lookup against a bundled Earth
+    elevation DEM (`EarthElevationSource`/`BiomeClassifier`), thresholded
+    at `EARTH_SEA_LEVEL`, which has nothing to look up for a standalone
+    diorama pond — so this is built from scratch on `PixelNoise.smooth`,
+    the one primitive `CharacterPreviewLayout` already reaches for
+    (its own grass-clump scatter). First tried perturbing a Chebyshev
+    (max-of-both-axes) distance field — any cell far along *either* axis
+    was eligible for erosion — and a rendered dump (composited the live
+    tile grid to a PNG and looked at it directly) showed why that's wrong
+    at this grid's actual resolution (as small as 4×3 tiles): an entire
+    outer row or column all shares the *same* Chebyshev distance from
+    centre, so correlated noise sampling could erode a whole side away
+    together, reading as a lopsided wedge rather than a rounded rectangle.
+    Fixed by switching to the *shorter*-of-both-axes ("corner") distance
+    instead: a cell far along only one axis (an ordinary edge midpoint)
+    always scores low and stays permanently in the always-kept core;
+    only a cell far along *both* axes — a genuine corner — can ever reach
+    the eroded band, so the worst case is a small diagonal nibble, never a
+    missing side. Re-verified visually the same way after the fix: every
+    sampled seed now reads as either a clean rectangle or one with softly
+    rounded/chamfered corners. `_land_directions_for_cell` (which of a
+    kept cell's 4 neighbours face "land", for the shore-fade texture) now
+    checks each neighbour against the actual kept-cell set rather than
+    just the grid's own outer rim, since an interior cell can now border
+    an eroded neighbour without being anywhere near the edge itself.
+    `biome_at_global` (the fish shore-avoidance contract) was upgraded the
+    same way — checks the real per-cell kept set, not just the outer
+    bounding `Rect2` — so a fish can no longer read a visually-eroded
+    corner as swimmable water. `POND_EROSION_SAFE_FRACTION`/`POND_EROSION_
+    NOISE_SCALE` are test-pinned constants with the same "measured against
+    what the property actually needs" reasoning `GRASS_FIELD_NOISE_SCALE`
+    already documents. One real, expected side effect: the bigger pond
+    physically reaches toward the footprint's own centre for more seed/
+    edge combinations than before, so `test_grass_field_noise_scale_lets_
+    the_centre_actually_receive_grass`'s measured rate dropped from 37/100
+    to 9/100 — still clearly non-zero (nothing like the original bug's
+    "0/100, structurally never"), just a smaller achievable rate now that
+    a real, bigger obstacle legitimately occupies more of the footprint;
+    re-measured and re-thresholded rather than silently loosened.
+
+✅ **Ninth live pass, a same-session correction of the eighth's own "diorama
+is still a square" reading.** Read the eighth pass's "diorama is still a
+square" clause as being about the POND (elaborated in the very next clause
+of that same message) and left the outer viewport itself untouched. A
+direct follow-up mid-turn corrected that: *"The diorama is still square
+and does NOT span the whole rectangular panel."* — the OUTER viewport, not
+just the pond inside it, needed to widen. Two real, connected fixes:
+
+- `CharacterPreviewDiorama.FOOTPRINT` widened 96×96 → 144×96 (height
+  unchanged on purpose — see below). `main_menu.gd`'s
+  `DIORAMA_VIEW_SIZE` — previously two independent numbers, `(248, 248)`
+  — is now `(roundi(248 * FOOTPRINT.x / FOOTPRINT.y), 248)`, DERIVED from
+  the footprint's own new aspect ratio rather than picked separately, so
+  the camera's zoom (`DIORAMA_VIEW_SIZE.x / FOOTPRINT.x`) stays uniform
+  across both axes by construction — an accidentally-mismatched pair here
+  would have stretched every sprite in the scene sideways. Chose exactly
+  1.5× (144/96) so the derived width lands on a whole pixel count (372)
+  rather than needing to round.
+- Root cause of "does not span the panel," found via a live layout dump
+  (walked the diorama's own ancestor chain printing each `Control`'s real
+  laid-out size): `glow_wrap` — the `Control` wrapping both the DNA glow
+  ring and the diorama frame — sits in a hero column with **528px of real
+  width**, but was fixed at a **276px square** the whole time (`DIORAMA_
+  VIEW_SIZE + (28, 28)`), unused width just sitting empty beside it.
+  `glow_wrap`'s own `SIZE_SHRINK_CENTER` (added earlier specifically to
+  stop it stretching to fill — see this section's own history: stretching
+  it used to wash the glow ring out into a flat, near-empty tint) was
+  never the bug and stayed untouched; the fix is the TARGET size itself —
+  widening `DIORAMA_VIEW_SIZE` is what widens `glow_wrap`'s own fixed
+  minimum size, without reintroducing the stretch-to-fill bug the shrink-
+  centering was added to prevent. Height deliberately left at 248: the
+  Character tab already has a separate, pre-existing vertical-overflow
+  regression (`test_the_diorama_fits_within_the_first_unscrolled_view_of_
+  the_character_tab`, tracked separately, NOT caused by this session's
+  own diorama work — traced to an unrelated "playtest fixes" commit that
+  restructured the tab's scroll nesting) and growing height too would
+  only push the diorama further into that same fold rather than leaving
+  it exactly as it already was.
+- Verified live (launched the actual game, reached the character
+  creator): the diorama box now visibly spans most of its own card's
+  width rather than reading as a small square with empty space beside it,
+  and the wider frame shows more of the scene at once — the pond, a bird,
+  both trees, and both grass bands (regular + long) are all visible
+  together where before several sat outside the square's own narrower
+  frame.
+
+✅ **Tenth live pass: the ninth's own widening still fell short.** Seen live
+immediately after the ninth pass landed, then reported directly: *"it's now
+a rectangle but it still doesn't cover the whole width of its containing
+panel."* `test_the_diorama_panel_covers_the_hero_columns_available_width`
+(renamed from the ninth pass's own `..._spans_most_...`) re-thresholded from
+`> 0.65×` the column's width to `> 0.9×`. A fresh live layout dump (same
+technique as the ninth pass) confirmed the hero column's real available
+width was genuinely the full 528px measured before — the class-icon row
+sitting directly above the diorama already spans that width in full, so
+widening `glow_wrap` to nearly match introduces no *new* minimum-width
+pressure of its own; the ninth pass's 372px width had simply not gone far
+enough. `FOOTPRINT.x` widened again, 144 → 192 (12×6 tiles, exactly 2× the
+*original* 96 — a whole-tile multiple, matching this constant's own
+"clean number of ground tiles" convention), deriving `DIORAMA_VIEW_SIZE.x`
+= 496 (`glow_wrap` 524px) — close to the real 528px ceiling with a small
+deliberate margin. Verified live a second time: the diorama box now runs
+edge-to-edge with the appearance column beside it, essentially spanning the
+whole card.
+
+✅ **Eleventh live pass: fish ripples really were "all the time".** Reported
+live a second time, once the diorama's pond had grown large enough and its
+fish had run through `FishMarker`'s own real `_process` long enough for the
+real frequency to become obvious: *"The fish still produce ripples all the
+time -- only fast move flap boost should produce ripples like in the real
+ingame."* This directly contradicted the eighth pass's own "already
+correct" finding above — re-investigated properly rather than trusted.
+
+- The eighth pass's check verified only that a ripple never fires OUTSIDE a
+  flap burst (true, by construction — `_emit_ripple()` has exactly one call
+  site, inside the burst logic). It never checked whether bursts themselves
+  are RARE enough, relative to how long a single ripple stays visible, for
+  the pond to read as "occasionally flapping" rather than "always mid-
+  ripple". Worked out by hand first: a burst's own last ring finishes
+  decaying `TAIL_WAG_RING_SPACING * (TAIL_WAG_RING_COUNT - 1)` after the
+  burst starts, plus a full `WaterShader.RIPPLE_LIFETIME` (2.2s) — 2.8s
+  total — while the OLD `RIPPLE_INTERVAL_MIN`/`MAX` (1.1-2.6s) scheduled
+  the next burst to start before that decay had even finished, most of the
+  time. Confirmed directly, not just estimated: a fresh empirical test
+  (`test_a_swimming_fish_actually_goes_quiet_between_bursts_most_of_the_
+  time` in `test_fish_marker.gd`, simulating several real minutes of
+  continuous swimming and sampling whether any ripple was still visible at
+  each second) measured the pond visibly quiet only **4% of the time** at
+  the old constants.
+- Fixed in the shared `fish_marker.gd`, not the diorama — `RIPPLE_INTERVAL_
+  MIN`/`MAX` widened 1.1–2.6 → 6.0–12.0, so bursts become genuinely
+  occasional rather than a near-permanent low churn. This is a real-game-
+  wide change (every fish, not just the diorama's), which is the correct
+  scope: the frequency problem was never diorama-specific, only newly
+  VISIBLE there once a small, always-on-screen pond with two fish made a
+  pre-existing shared-code frequency impossible to miss. Two tests pin the
+  new relationship rather than just its two endpoints: `test_ripples_stay_
+  occasional_not_continuous_by_the_numbers` derives the expected visible
+  fraction algebraically straight from these constants plus `WaterShader.
+  RIPPLE_LIFETIME` (so a future change to either side of the relationship —
+  burst timing, or the shader's own fade duration — gets re-checked
+  automatically instead of silently drifting back out of sync), and the
+  empirical simulation test above confirms it on a real running fish.
+- One real collateral fix the retune exposed:
+  `test_fish_swimming_eventually_records_a_water_disturbance` (`test_
+  character_preview_diorama.gd`) started failing — not because anything was
+  broken, but because it only ever checked whether `_water_shader.
+  _disturbance_positions` was non-empty at the very END of its 60s
+  simulated loop, and that buffer drops any entry older than `RIPPLE_
+  LIFETIME` (2.2s). At the old, much shorter interval a recent ripple was
+  almost always sitting in the buffer by luck whenever the check happened
+  to run; at the new, realistic interval it usually is not, even though
+  ripples genuinely fired earlier in the very same loop. Fixed the same way
+  this exact false-negative was already fixed once before, for the hero's
+  own identical tests right below it in the same file (see the seventh
+  pass): track a RISING EDGE of the disturbance count across every step of
+  the loop instead of reading the final decaying count.
+
+✅ **Twelfth live pass: more scene life, plus fish still didn't read as
+swimming.** One combined report: *"Can you make it so that the character
+does more things and the scene's livelihood increases? We need flowers,
+butterflies, worms... the character should do random things like fight a
+boar; fish a fish; play with the sword and so on ... also please use a real
+ingame world ... the fishes don't speed boost and they don't swim naturally
+like in game."*
+
+- **Fish speed, investigated before touching anything.** The eleventh
+  pass's own frequency fix was intact and firing correctly (measured: glide/
+  flap speeds matched `FISH_SWIM_SPEED` and `FISH_SWIM_SPEED * FLAP_SPEED_
+  MULTIPLIER` exactly, several bursts fired within a realistic 30s window) —
+  the real gap was that `FISH_SWIM_SPEED` (4.0) had never been re-tuned
+  against the pond's own growth across this whole session: a fish took
+  4.0s just to glide across its OWN configured wander circle, before even
+  considering the now-much-bigger pond. Doubled to 8.0, test-pinned against
+  a measured property (`test_fish_swim_speed_crosses_its_own_wander_circle_
+  briskly`: crossing time < 3.0s) rather than the bare number, so a future
+  pond-size change gets re-measured automatically.
+- **Flowers, worms, butterflies** (`CharacterPreviewLayout.FLOWER_COUNT`/
+  `WORM_COUNT`/`BUTTERFLY_COUNT`, `CharacterPreviewDiorama._build_flowers`/
+  `_build_worms`/`_build_butterflies`) — "please use a real ingame world"
+  read as this session's own established first pillar restated: reuse the
+  real rendering, add no parallel art style. Butterflies needed nothing new
+  at all — `AmbientFlyerRenderer.build_flyer` was already a ready-made non-
+  bird wrapper (used in production for flies on carcasses). Flowers/worms
+  have no standalone "spawn one" renderer the way fish/trees/birds do, so
+  `_build_flowers`/`_build_worms` build a plain `Sprite2D` each straight
+  from `ProceduralFlowerSprite`/`ProceduralWormSprite` — the exact same
+  inline pattern `EarthChunkManager._sync_flower_sprites`/`_sync_worm_
+  sprites` already use for the real world's own meadow, just without a
+  `FlowerPatch`/`EarthwormPatch` behind it (nectar/growth/emergence all sit
+  at their own permanent "fully grown, always surfaced" defaults, the same
+  convention trees already use via `age_seconds = INF`).
+- **A boar to fight.** `CreatureRenderer`'s own real single-marker spawn
+  path (already used by `/spawn` and the easter-egg boss cameos) places one
+  ambient boar, called through its underlying `_build_marker` directly
+  (not the public `spawn_single`, which rolls a non-deterministic `randi()`
+  wander seed — wrong for this diorama's own "same seed, same scene"
+  pillar) so the boar's own presentation is seeded from its position like
+  every other placement here. Investigated first whether the BOAR's own
+  attack pose could trigger on cue: it can't — `CreatureMarker`'s attack
+  state is gated behind full AI/perception with no public "play the attack
+  pose now" method, and forcing it via a fake threat target would be
+  fragile for one scripted beat. Scoped down honestly rather than built
+  fragile: the boar stays a harmlessly ambient, idle-wandering presence
+  (`world` left null, `CreatureMarker`'s own documented no-AI fallback) —
+  what actually reads as "fighting" is the HERO's own real swing, reused
+  from SWING, aimed at the boar. New `FIGHT` action on `CharacterActionPicker`
+  walks to `CreatureMarker.ATTACK_RANGE` of the boar (derived, not
+  restated) and lands a `play_attack_swing` every `FIGHT_SWING_INTERVAL`
+  while there.
+- **The boar's missing walk animation turned out to be a real bug in
+  `CreatureMarker` itself, not a diorama-only gap** — found on a same-session
+  follow-up report ("the boar doesn't have walk animations") and fixed at
+  the source rather than worked around: `_process`'s own `world == null`
+  fallback branch (the documented no-AI ambient path this diorama's boar,
+  and any FUTURE world-less ambient creature, deliberately uses) called
+  `_wander_step` then returned immediately — every OTHER branch
+  (restrained/tame-order/foraging/normal AI decision) calls
+  `_animation_step()` before its own return, this one alone didn't. Movement
+  already worked (`_advance`/`_terrain_speed_multiplier` were already proven
+  null-safe by an existing test), and `_animation_step()` itself was already
+  null-safe too (only its own swim-detection is gated on `_world != null`)
+  — the ONE missing piece was the call itself. One line added, pinned by a
+  new `test_a_world_less_marker_still_animates_while_wandering` in
+  `test_creature_marker.gd` (checks `_animation_frames` actually populates
+  over several `_process` steps, which it structurally cannot if
+  `_animation_step` is never reached). Real-game-wide, not diorama-scoped —
+  this fixes every current and future world-less ambient `CreatureMarker`,
+  the same "found while working on the diorama, fixed at the real shared
+  source" pattern the fish-ripple-frequency fix (eleventh pass) and fish-
+  speed fix above both already followed.
+- **A real fishing cast.** FISH used to just stand still facing the pond —
+  no cast, no bobber, nothing that actually read as fishing. Investigated
+  the real game's own fishing first: `scenes/player.gd` has never had a
+  dedicated cast animation either — `_start_cast_visuals` reuses the exact
+  same `play_attack_swing` a melee attack uses for the rod-throw, plus a
+  `ProceduralBobberSprite` landing at `FishingCast.cast_point`. Nothing new
+  to build, only to wire in: the diorama's own FISH action now calls the
+  same swing + bobber once, the frame the hero arrives at the fishing spot
+  (`_fish_has_cast` gates it to once per action, not every frame held).
+- Verified live: launched the real game, reached the character creator —
+  the boar (with its own real HP bar, free from reusing genuine
+  `CreatureMarker` rendering), pink/white flowers, a worm, both fish, and a
+  bird all visible together in the same frame, no script errors.
+
+✅ **Thirteenth live pass: mining, pulling/eating, catching, and a panel
+reorder.** *"Can you flesh out the diorama so there are ores / stones the
+hero can mine as action and also carrots he can pull and eat (animated) ...
+also the boar doesn't have walk animations ... the hero never attacks the
+animals... he should also have as action to catch animals (horses,
+butterfly)."*, then separately: *"swap char selector buttons with diorama
+so it's not cut off."*
+
+- **MINE** — walks to swinging range of the nearest stone/ore
+  (`CharacterPreviewLayout.STONE_COUNT`, alternating `StoneRenderer`'s own
+  `_build_ore_node`/`_build_stone_node` by index for real visual variety —
+  whichever `StoneSize`/`OrePlacement` roll for that seed) and swings
+  there periodically. Deliberately does NOT call the real `.mine()`/
+  `.smash()` — that would eventually deplete every stone in the diorama
+  over a long enough session — the same "no real destructive consequence
+  to the target" choice FIGHT already made for the boar, kept consistent
+  here too.
+- **PULL + eat** — walks to a mature carrot (a real `WildCropMarker`,
+  `CharacterPreviewLayout.CARROT_COUNT`, already fully grown — no wrapper
+  needed, it has no chunk/sim dependency at all) and calls the REAL
+  `begin_pull()` once in range: unlike MINE/FIGHT, a pull is a genuine,
+  safe, one-shot mechanic (a 0.5s tween reveal, not a multi-hit
+  depletion), driven through the marker's own real `_process` the same
+  way `_build_fish` already drives real `FishMarker`s. A real, if subtle,
+  bug surfaced building this and was caught by dumping actual per-frame
+  state rather than guessed at: once the pull's own follow-up "eat" pulse
+  finished and reset, the very next frame fell through to a still-stale
+  elapsed-time check and immediately restarted a fresh eat pulse — forever
+  cycling 0 → 1.0 → reset → 0 again, never settling. Fixed with an
+  explicit `_pull_finished` latch checked first, short-circuiting the
+  whole sequence once genuinely done. No real eating animation exists
+  anywhere in this codebase to reuse (`Player.eat_food` has no
+  `CharacterView` hook at all), so the "eat" half is a small, deliberately
+  new, art-free flourish — a sine-wave scale pulse on the hero's own
+  existing sprite, settling back to its real scale rather than a new
+  animation frame set.
+- **The boar's missing walk animation was a real `CreatureMarker` bug, not
+  diorama-only** — `_process`'s own `world == null` ambient fallback (the
+  documented no-AI path this diorama's boar, and any future world-less
+  ambient creature, deliberately uses) called `_wander_step` then returned
+  immediately, skipping the ONE call (`_animation_step()`) every other
+  branch already makes before its own return. Movement already worked
+  (already proven null-safe by an existing test); `_animation_step()`
+  itself was already null-safe too. One line added, pinned by a new
+  `test_a_world_less_marker_still_animates_while_wandering` in
+  `test_creature_marker.gd`. Real-game-wide, not diorama-scoped — the same
+  "found while working on the diorama, fixed at the real shared source"
+  pattern the fish-ripple-frequency and fish-speed fixes above both
+  already followed.
+- **CATCH** — chases the nearest butterfly's own LIVE position (unlike
+  every other fixed-layout target above, butterflies wander) and swings/
+  throws once in range. Investigated the real lasso/net flow first
+  (`Player._throw_rope_tool`/`_throw_net`): both, like every other gesture
+  built this session, turn out to just be `play_attack_swing` — there is
+  nothing further to reuse beyond aiming it at a moving target, so that's
+  all this does, the same non-destructive-gesture choice as FIGHT/MINE. A
+  future horse (see the still-open animal-rotation idea below) is a
+  natural CATCH extension once the diorama has more than one ambient land
+  species; for now the boar itself was ruled out as a land-creature CATCH
+  target on the same grounds the boar's own FIGHT investigation already
+  found — no clean way to make it visibly respond without a real `world`
+  and full AI.
+- **Diorama/class-icon-row order swapped** in `main_menu.gd`'s
+  `_build_hero_column` (reported live, directly: "swap char selector
+  buttons with diorama so it's not cut off") — the class-icon row used to
+  be added to the column FIRST, so the diorama's own vertical position (and
+  thus how much of it fit before the outer scroll's own fold) depended on
+  however tall the icon row happened to be. Simply moving WHEN the already-
+  built icon row gets `add_child`ed (right after `glow_wrap` instead of
+  before it) put the diorama in the earliest, most headroom-favourable
+  slot instead. Pinned by a new `test_the_diorama_sits_above_the_class_
+  icon_row`, and fixed the pre-existing, separately-tracked `test_the_
+  diorama_fits_within_the_first_unscrolled_view_of_the_character_tab`
+  failure as a genuine side effect — that scroll-clipping regression
+  (traced earlier to an unrelated "playtest fixes" commit, tracked as its
+  own out-of-scope background task) is now closed, not just reduced.
+- Verified live and via the full `test_character_preview_diorama.gd` (54/
+  54) and `test_main_menu.gd` (58/58, zero failures for the first time
+  this whole session) suites.
+
+✅ **Fourteenth live pass: a bigger pond, fast-forwarded seasons, and
+rain.** *"are sheep and horse already wired in? and mining ores?"* --
+answered directly rather than assumed: sheep/horse are NOT wired in (only
+doc-comment mentions of a future CATCH target; the animal-rotation system
+they'd need is still the same deliberately-deferred follow-up named in the
+Thirteenth pass), and MINE IS wired in, but as the same non-destructive
+gesture as FIGHT -- it never calls the real `.mine()`/`.smash()`, so no
+ore is actually produced or consumed. Then, in the same turn: *"can you
+also make the pond slightly bigger"*, *"there should be spontaneous
+transitions between seasons in fast forward so you can see trees bloom
+gradually leaf by leaf or shed their leaves or see them turn orange"*,
+*"also wire in rain"*.
+
+- **Pond grown again**: `CharacterPreviewLayout.POND_RADIUS_FRACTION`
+  0.3 -> 0.33 (a 10% bump this time, not the first report's ~36% jump --
+  "slightly bigger" this time). Re-exposed a real test-fragility bug in
+  the process: `test_grass_field_noise_scale_lets_the_centre_actually_
+  receive_grass`'s 4 hardcoded near-centre probe points turned out to sit
+  well within the bigger pond's reach on literally every one of its 100
+  sampled seeds (0/100 eligible) -- the pond's own placement rule
+  (`_pond_center_near_an_edge`) keeps its boundary exactly
+  `POND_EDGE_MARGIN` from the centre-line regardless of radius, so a
+  bigger pond was always going to eventually swallow a fixed probe this
+  close to true centre. Fixed at the root, not by loosening the threshold
+  again: probes now gate on `result.is_clear(nc)` first (the same real
+  predicate grass generation itself is filtered by) so a probe the pond
+  already claims this seed is excluded from the count instead of counted
+  as a noise-field failure -- durably immune to the next pond tweak, not
+  just today's.
+- **Seasons, fast-forwarded**: the diorama now runs its own accelerated
+  calendar (`SEASON_YEAR_SECONDS := 90.0`, one fictional year per 90 real
+  seconds -- test-pinned, no real-world measurement answers "how fast
+  should an ambient diorama's seasons turn", same precedent as
+  `POND_RADIUS_FRACTION`) and drives the REAL seasonal-cycle stack off it
+  every `_process` tick: `TreePhenology.canopy_state_at` redraws each
+  tree's canopy via `ChoppableTree.set_ripe_fruit` (the exact call
+  `EarthChunkManager.sync_tree_season` already makes for the real world),
+  and `SeasonalFoliage.tint_at` pushes a matching tint onto both
+  `GroundTint`'s shared terrain material (now attached to every ground
+  tile) and `IllustratedGrassPatch`'s shared blade material -- the ground
+  and grass carry the season too, not just the canopy, avoiding the exact
+  "bare trees on a green lawn" bug `tree_phenology.gd`'s own header
+  documents from the real world once decoupling that. Two real bugs
+  found and fixed along the way, not just wired blind:
+  - Feeding the diorama's own accelerated `_season_age_seconds` straight
+    into `SeasonCycle.year_fraction` looked plausible but was wrong --
+    that divides by the REAL, 8-real-day `SECONDS_PER_YEAR`, giving a
+    year_fraction on the order of 0.00003 after a full simulated season
+    (visibly frozen). Fixed with a diorama-local `_year_fraction()`
+    dividing by `SEASON_YEAR_SECONDS` instead.
+  - A single dedup gate, keyed only off the tree canopy's own signature,
+    silently swallowed every later ground/grass tint change too: a
+    canopy's `TreePhenology` schedule and the ground's ordinary
+    `SeasonTransition` schedule are different CURVES on the same clock
+    (blossom finishes opening ~7% into spring and then holds flat for a
+    long settled stretch; the ground doesn't start turning until the
+    LAST third of its own quarter) -- once the canopy signature stopped
+    changing, nothing ever made the ONE shared signature differ again for
+    the rest of that long settled stretch, even though the ground's own
+    schedule kept moving underneath it. Fixed with two independent dedup
+    keys, one per schedule.
+- **Rain, wired in**: the real, pure `WeatherModel.weather_at(day,
+  region_seed)` hash now drives the diorama's own ambient weather, paced
+  by its own `WEATHER_CHANGE_SECONDS := 15.0` (independently tuned from
+  the real 600s `WEATHER_PERIOD_SECONDS` -- reusing that would make rain
+  invisible across a normal character-creation sitting), region-seeded off
+  `_dna_seed` so the same hero seed always sees the same little weather
+  story (this doc's own Determinism pillar). Drives both
+  `RainOverlay.build_overlay()`'s screen-space drop field (added once,
+  no per-frame script) and, on the same call, `WaterShader.
+  set_rain_intensity` on the pond's own kept `_water_shader` instance --
+  rain both falls AND ripples the water, the same pairing `world.gd`
+  drives together every tick for the real world.
+- New tests throughout (61/61 in `test_character_preview_diorama.gd`,
+  31/31 in `test_character_preview_layout.gd`), including two 60-
+  simulated-day statistical tests proving rain/pond-ripple intensity
+  genuinely reaches non-zero at least once, not just that the wiring
+  exists inertly.
+- **Addendum, same session**: *"Birds fly back ond forth in a curve
+  between two fixed points."* Root-caused, not just re-tuned by feel: a
+  bird's per-interval travel distance (`AmbientFlyerRenderer.BIRD_SPEED *
+  BIRD_INTERVAL` = 34.0×1.8 = 61.2 units) was 153% of the diorama's own
+  `BIRD_WANDER_RADIUS` (20.0)'s diameter — a bird blew straight through
+  its entire wander circle and hit `AmbientFlyerMovement`'s boundary-
+  curving containment logic almost immediately every single interval,
+  which reads on screen as exactly "a curve between two roughly-opposite
+  points" instead of a genuine wander. `AmbientFlyerMovement` itself
+  (shared with the real world's own birds/butterflies) was untouched —
+  the bug was purely in how tightly the diorama had scaled its own radius
+  down. Fixed by growing `BIRD_WANDER_RADIUS` to 30.0, moved to live on
+  `CharacterPreviewLayout` (not `CharacterPreviewDiorama`) since it now
+  doubles as bird-home PLACEMENT clearance too — birds were never
+  is_clear-checked against the pond/trees (they fly over both, unchanged),
+  but a wider wander radius meant a home placed right at the footprint's
+  own edge would now wander half off-frame, so home positions are now
+  clamped to stay `BIRD_WANDER_RADIUS` inside every edge. Both the new
+  radius and the clearance are test-pinned: the radius against the actual
+  `BIRD_SPEED`/`BIRD_INTERVAL` relationship it has to satisfy (not a bare
+  eyeballed number), the clearance against 20 seeds' worth of generated
+  homes. 33/33 in `test_character_preview_layout.gd`, 61/61 in
+  `test_character_preview_diorama.gd` (unchanged, confirming no
+  regression from the shared-constant move).
+
+⬜ FOOTPRINT.y (still 96) and the overall zoom level are otherwise unchanged
+and still need a user decision on how large the hero should read. Note for
+whoever takes either further: `tree_bounds` insets by 20×26, so at footprint
+96 the tree band is 76×70, at 74 it is 54×44, and below ~52 the y-band
+collapses to zero height and every tree would stack on one line — any
+further `FOOTPRINT` change must re-run `test_character_preview_layout.gd`.
 
 
 ### `/ecotest` — watching a year go by
@@ -1191,6 +1808,8 @@ Painted INCREMENTALLY. Repainting every loaded tile every frame is thousands of 
 
 ✅ **Correction: "patchy at the shallow end" described an INTENT the code did not implement.** Every covered pixel was written fully OPAQUE at 45% coverage, so a dusting was near-white specks punched into holes -- a 50/50 dither of near-white at the finest grain the atlas can express, reported live as texture corruption rather than as snow. Three changes made the claim true. Per-band `BAND_ALPHA` writes a thin cover translucent, so the ground tints THROUGH it -- the only way this layer can tint toward a ground colour it cannot know, since one tile set is baked for every biome. `BAND_COVERAGE` was raised (`[0.45, 0.72, 0.92, 1.0]` → `[0.62, 0.82, 0.96, 1.0]`) so the shallow band is thin-but-continuous rather than half-missing. And both the coverage roll and the shade-grain roll now key off a `GRAIN_BLOCK = ArtResolution.DETAIL_MULTIPLIER` block rather than the raw art pixel, so the smallest snow mark is one WORLD pixel -- grain finer than a world pixel is a dither, not texture. Measured mean-alpha ladder 0.28 / 0.53 / 0.82 / 1.00 and mean whiteness×alpha 0.23 / 0.47 / 0.77 / 0.99, both strictly increasing. Pinned by `DUSTING_MAX_MEAN_ALPHA` / `FULL_COVER_MIN_MEAN_ALPHA` and by a per-pixel block-uniformity walk (`test_snow_layer.gd`, 22/22).
 
+✅ **Fourth follow-up: each individual tile's own transition now fades through 25 real illustrated steps instead of hard-cutting between 4 procedural ones** -- closing the gap the third follow-up below named explicitly ("each INDIVIDUAL tile's own transition should visibly fade rather than hard-cut between bands -- not true today"). The user supplied a real illustrated asset (`assets/sprites/terrain/snowoverlay.png`, a 5x5 contact sheet of 25 hand/AI-illustrated coverage stages), and `SnowLayer.build_band_image` now slices+resizes a real cell from it instead of procedurally painting a mask -- `BAND_WHITENESS`/`BAND_COVERAGE`/`BAND_ALPHA`/`GRAIN_BLOCK` (the previous entry's own procedural machinery) are deleted outright, unused by anything else in the codebase (grepped first). `DEPTH_BANDS` is now `OVERLAY_COLUMNS * OVERLAY_ROWS = 25`, the sheet's own real frame count, not a hand-picked number. The sheet's real per-cell mean coverage does NOT read row-major (row 0's own rightmost cell already measures MORE covered, mean alpha 0.22, than row 1's own leftmost cell, 0.06 -- a genuine two-axis diagonal gradient) -- `OVERLAY_BAND_CELLS` maps each of the 25 depth bands to its sheet cell in real MEASURED ascending-coverage order (mean alpha of all 25 real cropped cells, sorted; confirmed strictly monotonic, no ties) rather than assumed reading order, which a naive row-major read would have gotten wrong (band 5 would have been LESS covered than band 4, breaking `band_for`'s core contract). The sheet's own row dividers are NOT an even grid either (measured directly: the row0/row1 divider line centers ~9px earlier than a naive 1086/5 split would put it, row3/row4's ~38px earlier) -- `OVERLAY_ROW_BANDS`/`OVERLAY_COLUMN_BANDS` are real measured pixel ranges, same "measured directly against the real PNG" convention `IllustratedTerrainSprite`'s own row_bands already use, each cropped to a centered SQUARE (the source cells are landscape rectangles) so illustrated patch shapes aren't stretched. Downscaled with **Lanczos, not nearest-neighbour**, despite nearest-neighbour being this codebase's convention for the OPPOSITE direction (upscaling small procedural art) -- this is a ~200px crop shrinking to `ART_TILE_SIZE` (32), the same direction `TerrainRenderer._normalized_for_compositing` already established Lanczos for after nearest-neighbour aliased illustrated ground art into visible "TV static" once shrunk. Two DEPTH_BANDS-dependent constants were deliberately re-derived rather than blindly substituted: `TREAD_BANDS` is now `DEPTH_BANDS / 2.0` (was a literal `2.0` out of 4) so a full tread still packs down HALF the visible range at any band count, not 8% of it. `MAX_NEIGHBOUR_ONSET_STEP` could not stay `0.25 / DEPTH_BANDS` (a literal quarter-band): the underlying onset drift field is unchanged and its own real measured worst-case neighbour step (0.0436) does not scale down with DEPTH_BANDS, so a quarter of the new, 6x-narrower band (0.01) would fail against unchanged, correct behaviour; re-pinned to `0.05` with real margin over that unchanged measurement, reasoned as "a neighbour gap of about one of the new fine bands is still visually subtle, unlike a whole band gap was at the old coarse 4." Surfaced (not introduced) a genuine pre-existing edge case in `band_for`: at `DEPTH_BANDS=4` a maximally-lagging tile's `depth + onset_offset` at true full depth (0.82) happened to round up into the top band by coincidence (one band was wider than `ONSET_VARIANCE`); at 25 finer bands it no longer does, so `band_for` now has an explicit `depth >= 1.0` guard symmetric with its existing `depth <= 0.0` one -- once genuinely fully snowed over, onset (a lead/lag on the CLIMB to full coverage) no longer applies, so no tile is left permanently a few bands short of the top. `DUSTING_MAX_MEAN_ALPHA`/`FULL_COVER_MIN_MEAN_ALPHA` re-measured against the real sheet's least/fullest cropped cells (~0.010 / ~0.922, vs. the old procedural bands' 0.28/1.00) and re-pinned (0.06/0.80) with margin for the Lanczos resize. All 24 `test_snow_layer.gd` tests green (one obsolete, procedural-only test -- grain-block quantization -- removed, three added: `DEPTH_BANDS` pinned to the sheet's real frame count, the sheet's own measured dimensions guarded, and `build_band_image`'s output size guarded), plus all 9 snow-related `test_earth_chunk_manager.gd` tests re-run and still green with zero changes to the onset/diff-sweep spread architecture itself.
+
 🚧 **Snow does not lie on open water, and that guard is still pinned only by a comment.** `EarthChunkManager._paint_snow_tile`'s ocean guard is correct and deliberate -- it was audited after a live report read as a defect and is not one -- but `test_a_partial_snowfall_...` merely SKIPS ocean cells, so the guard could be deleted and the suite would stay green. A written-out characterization test (`test_snow_never_lies_on_open_water`) exists in the F8 survey and needs an owner of `tests/unit/test_earth_chunk_manager.gd` to land it.
 
 ⬜ Water freezing over is a separate, unbuilt mechanic. "Snow does not lie on water" is a deliberate boundary, not an omission -- now stated as such in `docs/concept/weather.md`.
@@ -1368,7 +1987,7 @@ phase has been started**, with one notable scale-related caveat.
 
 | Mechanism | Status | Note | Complexity |
 |---|---|---|---|
-| Multiplayer Netcode | 🚧 Partial (unverified live) | Server-authoritative architecture built: `--server`/client bootstrap in `world.gd` (ENet) plus an in-game **main-menu Host/Join flow** (`scenes/main_menu.gd` → `World._start_server`/`_start_client_to(address)`), dynamic per-peer `Player` spawning via `MultiplayerSpawner`, RPC input-up + `MultiplayerSynchronizer` position-down in `player.gd`, client-side visual-only proxies (facing/animation inferred from replicated position deltas + local deterministic terrain lookup, no extra network traffic). Follows standard Godot high-level multiplayer patterns. LAN/direct-IP join works via the menu; internet play needs a port-forward or an external tunnel (an ngrok-style built-in relay is not implemented — it would require a hosted relay server). **Live server↔client connectivity is unverified**: a minimal bare-ENet repro (no game code at all) also hangs on this dev machine, isolating the failure to CrowdStrike Falcon (confirmed running) blocking this specific unrecognized executable's networking — not a code bug (raw TCP and UDP loopback both work fine via a trusted process in the same environment). Needs either an EDR exception from IT or testing on an unmanaged machine/network to verify live. Known scope gaps even once verified: only tracks one player's position for chunk streaming (no multi-interest-point union yet), no client-side prediction/interpolation (positions will look choppy over real latency), no interest management/culling, no persistence of connections. | huge |
+| Multiplayer Netcode | 🚧 Partial (unverified live) | Server-authoritative architecture built: `--server`/client bootstrap in `world.gd` (ENet) plus an in-game **main-menu Host/Join flow** (`scenes/main_menu.gd` → `World._start_server`/`_start_client_to(address)`), dynamic per-peer `Player` spawning via `MultiplayerSpawner`, RPC input-up + `MultiplayerSynchronizer` position-down in `player.gd`, client-side visual-only proxies (facing/animation inferred from replicated position deltas + local deterministic terrain lookup, no extra network traffic). Follows standard Godot high-level multiplayer patterns. LAN/direct-IP join works via the menu; internet play needs a port-forward or an external tunnel (an ngrok-style built-in relay is not implemented — it would require a hosted relay server). **Live server↔client connectivity is unverified**: a minimal bare-ENet repro (no game code at all) also hangs on this dev machine, isolating the failure to CrowdStrike Falcon (confirmed running) blocking this specific unrecognized executable's networking — not a code bug (raw TCP and UDP loopback both work fine via a trusted process in the same environment). Needs either an EDR exception from IT or testing on an unmanaged machine/network to verify live. Known scope gaps even once verified: only tracks one player's position for chunk streaming (no multi-interest-point union yet), no client-side prediction/interpolation (positions will look choppy over real latency), no interest management/culling, no persistence of connections. **Join-time chunk-load re-entrancy fixed (2026-08-28):** `World._on_peer_connected` awaits `_compute_dry_land_spawn_tile()`/`EarthChunkManager.update_with_progress` with no re-entrancy guard (unlike the solo-client cold-load path's `_initial_client_chunk_load_task_running` flag) — two peers joining within the same multi-frame loading window, or a peer joining while the host's own per-frame `update()` was already loading the same spawn-adjacent chunks, could both drive `_load_chunk` for the same coordinate concurrently. `_load_chunk` had no "already loaded" guard of its own either, so the second call regenerated the chunk from scratch and overwrote `_loaded_chunks`/`_loaded_trees`/`_loaded_stones`, leaking every node the first call had already added as a child (`queue_free`'d never called on them) — a real, growing node/memory leak on the host, invisible in play only because placement is fully deterministic per tile. Fixed at the shared mutation point instead of adding a second flag: `_load_chunk` now returns immediately if its coord is already in `_loaded_chunks`, which protects every caller/call path (present and future) at once. Found as a side discovery while investigating an unrelated dense-boulder-grid report, not the cause of it. Tests: `test_earth_chunk_manager.gd`'s "called twice" group (direct double-`_load_chunk` repro — node counts and the tree/stone records must be unchanged by the second call). | huge |
 | Player Economy & Society | ⬜ Not started | | huge |
 | Era Progression System | 🚧 Partial | `src/gameplay/era_progression.gd`: a tested, deterministic 4-era (medieval/industrial_revolution/ai_boom/space_exploration) progress-threshold state machine (`current_era`), plus `current_era_with_boss_defeat` letting a defeated world boss push the player one era ahead of progress alone (per `concept/worldbosses.md`'s "Era-gated bosses" section). Not wired to any live progress counter or world-boss event. | huge |
 | Reincarnation Mechanic | ⬜ Not started | | large |
@@ -2404,8 +3023,11 @@ chunks away from the player). See the concept doc for the full spec.
 - **Wild carrots and potatoes stopped growing out of a bare brown mound** (small) — ✅ Fixed — reported live: "the potatoes and carrots still render a brown blob which is not supposed to be there". The blob is `ProceduralSoilSprite`'s tilled mound. Two earlier passes read the same report as a SIZING bug and shrank the mound twice (see that file's own doc comments) — which is why the third report says "still". The mound itself was the problem: a tilled mound is a **farming** artifact, and `concept/wild_crops.md` is explicit that player-tilled farming does not exist yet, so a wild carrot in a meadow should grow straight out of the grass regardless of how well-sized the earth under it is. The sprite is kept rather than deleted, because the PULL earns it: yanking a root really does tear up the ground, and the undisturbed→disturbed swap is the ground-level feedback the whole harvest animation is built around. It now simply starts hidden and is revealed by `begin_pull`, so earth shows exactly when something has actually been pulled out of it — including the case a refused pull (an immature crop) must NOT disturb the ground, pinned by its own test.
 - **Crisp pixel-perfect presentation + ground texture rework** (medium) — ✅ Done — reported as "the graphics look coarse and grainy". Two independent causes. (1) **Presentation**: `window/stretch/mode` was `viewport`, rendering into a 1280x720 framebuffer and blitting it to the display — a 1.5x upscale at 1080p, so art pixels covered 2 screen pixels in places and 1 in others, which *is* the graininess (nearest filtering was already on and cannot fix a blit). Now `canvas_items`: world and HUD rasterise at the window's real resolution, so text is genuinely sharp. New `src/rendering/display_scaling.gd` (tested) pins that one art pixel covers a whole number of screen pixels at 720p/1080p/1440p/4K, and documents why the art size is not free: canvas scales between resolutions aren't integer multiples (1080p→1440p is 4/3), so 32 art px/tile (`DETAIL_MULTIPLIER` 2) is the unique value that survives every step. Verified live at 1920x1080: 3.000 screen px per art px, `is_pixel_perfect = true`. (2) **Ground texture**: terrain was independent per-pixel noise at 35% density — measured at a 65% transition rate between neighbouring pixels, i.e. mostly high-frequency static. Replaced with clustered *marks* (cell-sized roll plus a per-pixel edge fray) at lower density, so clean ground shows between them and the per-biome details that were drowned in noise — dune ripples, moss, cracks — now read. Four tests hold the shape, including one for **directional grain**: the first attempt drew its cell roll from Godot's string `hash()` and produced ground visibly combed along a diagonal (third time this project has been bitten by that hash; `PixelNoise` exists for it). Cost: none at a given window size — an A/B at 1280x720 measured `canvas_items` and `viewport` identical (~37-39 fps); the extra cost appears only when the window is physically bigger. Also fixed two **pre-existing stale tests** in `test_terrain_renderer` that hardcoded the old 4x multiplier and the old atlas stride.
 - **Frame-rate pass: found the real bottleneck, and it moved** (medium) — 🚧 Partial — asked to reach 120fps "through other levers before reducing resolution". Measured at 1920x1080 with **vsync off** throughout (vsync caps at the monitor's 60Hz, so nothing above that is even measurable otherwise). **Wins:** (1) the **grass blade field was never culled** — `DecorationLod` gated the sprite decoration but not the blades, so 53,454 blade quads were drawn across all 25 loaded chunks for a camera that sees less than one; culling them to the decorated radius took **19.5 → ~36 fps, the single biggest change of the pass**. (2) `GroundTint` evaluated two noise octaves — eight sin-based hashes — **per pixel** across the whole screen (~16M sin ops/frame at 1080p); it is a slowly-varying wash (a tile spans a tenth of a noise cell) so it now computes **per vertex** and interpolates. Sound in principle, but too small to distinguish from run-to-run noise on this machine. (3) `SimulationLod` (tested): the 484 ambient flyers and 25 creatures now update at a distance-dependent rate — full rate inside a radius that comfortably covers the screen, easing to 2Hz far out, with skipped time accumulated and handed to the next update so behaviour is unchanged. Worth roughly 10%. **The important finding:** after the blade fix the frame stopped responding to rendering at all — hiding the water overlay, the tint, every entity, every creature or the whole terrain each moved fps by nothing (34–42, all inside noise), draw calls 204→57 did nothing, and **rendering into a framebuffer with a ninth of the pixels did nothing**. That is CPU-bound, and it is why the resolution setting below does not currently help on this machine. ⬜ Remaining: the CPU cost is diffuse — no single hot spot found by subsystem A/B — and needs a real profiler rather than toggling. Confounded throughout by **thermal throttling**: identical scenes measured 55fps earlier the same day and ~40fps during this pass.
+- **Rain/snow water-ripple GPU cost** (small) — ✅ Fixed — reported live: "it takes it from 30fps to 6fps" with rain OR snow active. Two separate causes. (1) `WaterShader.raindrop_ripples()` samples a 3x3 neighbor-cell grid per fragment (so a splash crossing a cell boundary still renders), but was computing each cell's expensive half — a second/third hash to find the exact drop position, then the full `exp`+`sin` ripple-packet math — *before* checking whether that cell's splash was even in its active window, wasting it on every cell that wasn't (`rain_ripple_lifetime` is shorter than the spawn interval, so most cells are between splashes at any instant). Reordered the cheap bounds check ahead of the expensive part (a `continue`, mirroring `movement_ripples()`'s own early-out) — mathematically identical result, real cost cut, pinned by a new test asserting the early-out precedes `drop_pos`. Scales with on-screen water area, which is why it hit regardless of how sparse the falling-precipitation overlay looked. (2) `world.gd` derived `raining` from the raw weather string alone with no cold-weather check, so a snowy day still drove `rain_intensity` to 1.0 and paid the same ripple cost even though `RainOverlay` had already switched to flakes — `raining` now excludes `snowing` explicitly. See `docs/concept/weather.md`'s "What rain costs" section.
 - **Render resolution graphics option** (small) — ✅ Done — `src/rendering/render_resolution.gd` (tested) + an OptionButton in the settings overlay, persisted alongside the other graphics settings. `Native` uses the `canvas_items` content-scale mode (world and HUD at the window's true resolution — the sharp default); `Half` and `Third` switch to `viewport` mode and render into a framebuffer that fraction of the window, scaling up. **Only whole divisors are offered**: a 75% option was written and dropped because 1920/1440 is 1.333, so the framebuffer would scale up by a fraction of a pixel — exactly the uneven-pixel graininess the presentation pass removed. Caught by its own test, not by eye. Verified live: the framebuffer really does become 960x540 / 640x360 while the visible world stays identical. Note it buys nothing on *this* machine (see above — CPU-bound) but is the correct lever on GPU-bound hardware.
-- **Courtship, mating and a real-time life cycle** (large) — 🚧 Partial — animals of the same species now **notice each other, dance, and sometimes mate**, and the result feeds the aggregate population model. `src/gameplay/courtship.gd` (tested): same-species pairing, leader/follower orbiting a shared midpoint (both sides derive who leads and whether they mated from the same two instance ids, so nothing is messaged between animals and a partner vanishing mid-dance is harmless), and a 25% mating chance. `src/gameplay/life_cycle.gd` (tested) holds the **wall-clock timescale** the design asks for: ~1 real day before a pair will mate, 2 before eggs, 3 before hatching, 7 before a newborn is grown, with juveniles visibly smaller and growing into their adult size. The first version ran on a 40-second cooldown and produced a flying adult immediately — measured adding a butterfly every few seconds. **The two fidelities are now one population**: `EcosystemSimulation.record_birth` (tested) means an individual birth in front of the player raises the region's aggregate, capped at carrying capacity so the land decides the ceiling rather than how long somebody watched; mammal births report through it too (`World._step_reproduction`). Verified live: 2–12 pairs dancing at any moment out of ~245 butterflies, flyer count climbing before the per-chunk cap was added and holding steady at 243 after. ⬜ Remaining: only pollinators dance (mammals still use the older reproduction path without a courtship stage); eggs/hatchlings are not yet distinct entities — offspring spawn as juveniles that grow, rather than as an egg that hatches; and none of it **persists across chunk unload**, which on a 7-day timescale means a juvenile will essentially never be seen reaching adulthood. That persistence gap is the blocker for the whole timescale mattering, and is the same one tamed animals have.
+- **Courtship, mating and a real-time life cycle** (large) — 🚧 Partial — animals of the same species now **notice each other, dance, and sometimes mate**, and the result feeds the aggregate population model. `src/gameplay/courtship.gd` (tested): same-species pairing, leader/follower orbiting a shared midpoint (both sides derive who leads and whether they mated from the same two instance ids, so nothing is messaged between animals and a partner vanishing mid-dance is harmless), and a 25% mating chance. `src/gameplay/life_cycle.gd` (tested) holds the **wall-clock timescale** the design asks for: ~1 real day before a pair will mate, 2 before eggs, 3 before hatching, 7 before a newborn is grown, with juveniles visibly smaller and growing into their adult size. The first version ran on a 40-second cooldown and produced a flying adult immediately — measured adding a butterfly every few seconds. **The two fidelities are now one population**: `EcosystemSimulation.record_birth` (tested) means an individual birth in front of the player raises the region's aggregate, capped at carrying capacity so the land decides the ceiling rather than how long somebody watched; mammal births report through it too (`World._step_reproduction`). Verified live: 2–12 pairs dancing at any moment out of ~245 butterflies, flyer count climbing before the per-chunk cap was added and holding steady at 243 after. ⬜ Remaining: only pollinators dance (mammals still use the older reproduction path without a courtship stage); eggs/hatchlings are not yet distinct entities — offspring spawn as juveniles that grow, rather than as an egg that hatches; and none of it **persists across chunk unload**, which on a 7-day timescale means a juvenile will essentially never be seen reaching adulthood. That persistence gap is the blocker for the whole timescale mattering, and is the same one tamed animals have. **Update (spiral-flight pass):** the dance was additionally **one-sided in every case** — see the entry below.
+
+- **Butterflies that actually dance and play with each other** (medium) — ✅ Done — reported live: *"I never see butterfly dance and play with each other when they fly by close or mate"*. Three separate causes, each measured rather than guessed; see `concept/ecosystem_dynamics.md`'s new "Two butterflies meeting" section. (1) **Courtship was one-sided and always had been.** Flyers are processed one after another, so the first of a pair always commits first, and `_look_for_a_partner` rejected any flyer already courting — including the one courting the searcher. What was on screen was ONE butterfly orbiting an empty midpoint while the other flew off to a flower; never two. It survived because `Courtship`'s tests covered its rules and nothing anywhere drove two real markers through real frames. `test_two_monarchs_side_by_side_actually_begin_a_dance` is that test, and it failed on the code as shipped; the second of a pair now joins the first's dance, adopting its clock, midpoint and round so they end together and agree on `pair_seed`. (2) **Courtship was geometrically starved.** Measured through the real spawn geometry over 300 real chunks at the reported coordinate (52.5°N): a same-species pair that could *ever* meet existed in **4.4%** of chunks and one close enough to meet routinely in **0.0%**. New `src/rendering/flyer_spawn_layout.gd` (tested, and pinned to the live renderer's own output by `test_a_chunks_butterflies_spawn_as_one_club_the_layout_module_placed`) spawns a chunk's true butterflies as **one loose aggregation, mostly one species** — what real butterflies do at nectar stands, mud-puddling clubs and hilltopping leks — taking those numbers to **100% / 100%**; at 40°N, where two pool species overlap, 2.2% → 89.0%. Chosen over simply widening the notice radius, which is a claim about a butterfly's eyesight. Bees and songbirds keep the old scatter on purpose (a honeybee commutes from a hive; songbirds hold territories). (3) **The behaviour the player actually described did not exist at all.** "Dance and play … when they fly by close" is the investigative/territorial **spiral flight**, not courtship: new `src/gameplay/spiral_flight.gd` (tested) — cross-species, noticed from 4 m, two seconds long, a tight fast whirl that climbs 1.5 m, an 18-second cooldown, and **no offspring, ever**. Every constant is a real figure through `GroundSlide.PX_PER_METER`, with the whirl rate *derived* (a monarch's 5 m/s burst speed ÷ its own circumference) and the cooldown *derived* from a real 5–15% aerial-interaction time budget. It is inert on purpose: everything bounding the population lives in courtship/life-cycle, so a behaviour with no outcome needs no bound and may be as common as the real thing. Wired into `AmbientFlyerMarker` beside courtship behind **one shared partner scan** (`_scan_for_partners`), so a meadow of hundreds does not pay for two whole-group walks. End-to-end proof, not just unit rules: real markers in a real tree driven through real `_process` frames prove a dance and a whirl each begin, run and end, on both sides of the `SimulationLod` distance throttle. ⬜ Not done: no mutual attraction on sighting (the aggregation already puts every chunk at 100%, so it would be a second fix for a solved problem); butterflies do not turn to face their partner mid-whirl; the aggregation site is hash-placed rather than steered onto the chunk's actual blooms (the flyers relocate onto real flowers within seconds by themselves); bees and birds still have no play behaviour of their own.
 - **Flower art detail** (small) — ✅ Done — blooms were `petal_count` single-pixel RAYS from a 3×3 centre — about 58 painted pixels, which reads as an asterisk and left **all five species sharing an identical silhouette** with only hue to tell them apart (measured: one alpha mask across the lot). Each species now has its own head SHAPE built from filled lobes: a low tight crocus cup, a taller tulip cup with petal tips, a layered rose, a lavender spike of florets, a textured clover puff — plus a pollen-warm focal centre and top-left shading. Pinned by tests for painted area, petal thickness, per-species silhouette, shading tones and a distinct centre, all of which the old art failed.
 - **Land ecology persists across sessions** (medium) — ✅ Done — `ChunkSerializer.save_ecology`/`load_ecology` (tested) plus `EarthChunkManager._apply_persisted_ecology`. Only *fish* survived a restart before; herbivores, predators and vegetation lived in the in-memory `_unloaded_ecology` record, so quitting reset every region to a freshly-seeded population at full carrying capacity — a valley the player hunted out was full again next launch. On a life cycle measured in real days (see courtship above) that made the whole timescale meaningless. State is stamped in **wall-clock** time and, on a revisit with no in-session record, advanced through the *same* `ChunkEcologyCatchup` model the in-session path uses (a real hour away ≈ an ecological day, capped at 120 days since logistic growth converges anyway). "Never saved" and "saved as empty" stay distinguishable, so a hunted-out region is a fact the world keeps rather than something quietly re-seeded.
 - **Migration between regions** (small) — ✅ Verified, already existed — asked whether gradient flow between neighbouring chunks was possible; it turns out `PopulationModel.migrate` has done it all along: flow between orthogonally adjacent regions down the gradient of **surplus over carrying capacity**, each pair visited once, net flow applied after so the result is order-independent, capped at what the source actually has. **I started writing a second diffusion module and deleted it before wiring it in** — two migration mechanisms would have silently doubled the rate. What was missing was tests stating the behaviour, so those were added instead: a hunted-out region refills from its neighbour, the source actually loses them, populations stay under capacity, and non-adjacent regions never exchange.
@@ -2536,7 +3158,7 @@ No marriage/reproduction/child-rearing system exists. All ⬜ Not started:
 The Path-of-Exile-style passive **web** is now real and wired into live gameplay (`src/gameplay/skill_web.gd`, toggle L). The full spec it was built from is `concept/skills.md`:
 
 - **Archetype Passive Skill Web** (large) — ✅ Done (basic) — `src/gameplay/skill_web.gd` is one **connected graph**: 7 archetype **wedges** (11 nodes each — 1 free start node, 6 minors across two rings, 2 notables, 2 keystones) radiating from a shared centre, plus 7 **gateway** nodes sitting in the gutters between adjacent wedges that carry the graph's only cross-wedge edges. All four things this entry previously listed as absent now exist: **edges** (an intra-wedge lattice where ring `r` slot `i` reaches ring `r+1` slots `i` and `i−1`, so most notables have more than one approach route and "where does the next point go" is a real decision), **node coordinates** (derived by `position_of` from `(wedge index, ring, slot)` — not one hand-placed pixel), a **per-archetype split** of the node pool, and a real **connectivity rule** in `can_allocate` (a node must be your own class's start node or adjacent to something you already own). Proven fully connected by test from every start node, so no build is ever walled out of anything — reaching another archetype's keystone costs a countable number of points rather than being forbidden, and the far side of the circle costs three gateways' worth. The 12 pre-existing flat nodes and 4 keystones were **folded into** the web rather than duplicated: a String entry in the wedge table defers stat/bonus/cost entirely to `skill_tree.gd`/`keystone_passive.gd` (drift tests hold the tables to it), and the per-ring prices were deliberately chosen equal to what those nodes already cost, so nothing was silently repriced. `Player.allocate_skill`/`unlock_keystone`/`refund_skill` all run on the web now, and `Player.skill_bonus` is the single reader for every stat it grants (`_meets_required_skill`, butchering and carpentry all route through it). Your own class's start node is granted **free** with the class, as in PoE — paying a level-up point for "you are a mage" would be a tax on existing, and without it a level-1 character owns nothing and can path nowhere. ⬜ Still open: most of the web's wider stat vocabulary (`spell_power`, `taming_affinity`, `trade_margin`, …) is summed but not yet consumed by the system it names — only `max_health`, `attack_damage`, `meat_yield` and `carpentry_level` are read live today.
-- **Skill web view** (medium) — ✅ Done (basic) — `scenes/skill_web_view.gd`: a real pannable (drag) / zoomable (wheel, anchored so whatever sits under the cursor stays under it) graph canvas inside the skill window, which now opens on a **Web** tab with the old flat list kept behind a **List** tab (a scrolling list of named rows is the readable fallback a canvas of circles cannot be). Wedge hue is derived from the wedge's index around the circle exactly the way its angle is, so colour and geometry cannot disagree; node radius reads its tier; and four genuinely distinct states are drawn — owned, available, *reachable but unaffordable*, and *no path yet*. Those last two are deliberately different answers ("come back next level" vs "walk over there first") that a single greyed-out row cannot tell apart. Clicking any node — including a locked one, which is how a route gets planned — inspects it in a detail line; clicking a takeable one buys it; right-clicking an owned one refunds it. Hit-testing picks the *nearest* candidate and pads every node by a few pixels, so a 7px minor node is not an impossible trackpad target. ⬜ No node search and no keyboard navigation of the graph.
+- **Skill web view** (medium) — ✅ Done (basic) — `scenes/skill_web_view.gd`: a real pannable (drag) / zoomable (wheel, anchored so whatever sits under the cursor stays under it) graph canvas inside the skill window, which now opens on a **Web** tab with the old flat list kept behind a **List** tab (a scrolling list of named rows is the readable fallback a canvas of circles cannot be). Wedge hue is derived from the wedge's index around the circle exactly the way its angle is, so colour and geometry cannot disagree; node radius reads its tier; and four genuinely distinct states are drawn — owned, available, *reachable but unaffordable*, and *no path yet*. Those last two are deliberately different answers ("come back next level" vs "walk over there first") that a single greyed-out row cannot tell apart. Clicking any node — including a locked one, which is how a route gets planned — inspects it in a detail line; clicking a takeable one buys it; right-clicking an owned one refunds it. Hit-testing picks the *nearest* candidate and pads every node by a few pixels, so a 7px minor node is not an impossible trackpad target. **The inspect half of that detail line was broken in the live game until now**, though the click itself always resolved: `World._client_process` calls `refresh()` every frame while the window is open (scenes/world.gd), and `refresh()` skips its work whenever its skill-state fingerprint (`_last_refresh_signature`, the guard that stops the List tab's rows being freed and rebuilt 60 times a second) is unchanged — but the SELECTION is not part of that fingerprint, since it moves on a click rather than on an allocation. So inspecting a node that changed nothing else — a locked or unaffordable one, i.e. precisely the route-planning case this entry claims — left the line reading its “Click a node to inspect it” fallback forever; only a click that also bought something ever updated it. A skipped refresh now still refreshes the detail line: the guard exists to skip the per-frame row rebuild, not a Label's text. Pinned by `test_the_detail_line_follows_the_selection_on_an_otherwise_identical_refresh`, which also turned `test_selecting_a_node_shows_what_it_is_and_what_it_would_cost` — failing on a clean checkout — green, with the two row-rebuild guard tests in `test_skill_tree_window.gd` still holding the skip itself in place. ⬜ No node search and no keyboard navigation of the graph.
 - **Reading the map** (medium) — ✅ Done (basic) — three fixes for a live report that "the skills have no hover tooltip and it's pretty unclear what paths do what". (1) **Wedge names** painted on each archetype's own centre line out past its keystones, in that wedge's hue — without them the map was 84 unattributed circles with no way to tell which direction was which archetype. (2) **Node names on the map**: the landmarks (starts, notables, keystones, your genome net) at every zoom, the small nodes as well once you lean in past `MINOR_LABEL_ZOOM` — naming all 84 at every distance is an unreadable thicket, and the zoom they appear at is also the zoom with room for them; gateways are never named. (3) A real **hover tooltip** (`SkillWebView.node_tooltip`) giving the node's name, wedge and tier, what it grants, what it costs and what state it is in — every figure resolved for the hovering character (DNA-chosen variant, resonance-scaled bonus and price), since a tooltip quoting the table's numbers instead of the player's own would be worse than no tooltip. A genome-net node says it came from your own genome; a DNA-flavoured node says its effect was DNA-chosen.
 - **Route preview** (medium) — ✅ Done (basic) — the concrete answer to "what do these paths do": hovering a node you cannot yet reach lights the **cheapest route** to it, node by node, and the tooltip quotes the whole journey ("18 points to reach, 6 nodes away"). `SkillWeb.cheapest_path` is Dijkstra with the weight on the NODE rather than the edge — you pay to own a node, not to traverse an edge — seeded from the player's entire owned frontier at once, or from their class start if they own nothing yet. Prices along the route are the character's own, so a resonant build is quoted a cheaper journey than a dissonant one to the same destination, which is the efficiency-only bargain made visible. Tested for adjacency at every step, for never re-quoting a node you own, for crossing a gateway when it leaves the wedge, and against a hand-walked long-way-round alternative.
 - **Skill window size** (small) — ✅ Done — the window was built against a **960x540** viewport copied out of a stale comment in `world.gd`; the project's real design viewport is **1280x720**, so the map had been given barely half the room it had (reported live as "can you make the skill window bigger so the web is better visible"). `SkillTreeWindow.DESIGN_VIEWPORT` now reads that size as a constant **pinned against ProjectSettings by test**, `WINDOW_SIZE` is the viewport less a 20px margin (1240x680, up from 920x500), and `CHROME_HEIGHT` is a declared reserve for the title/points/tabs/detail row with everything left over going to the canvas — held honest by a test measuring the window's real minimum. Two further tests pin what "better visible" has to mean: the whole web including its wedge names fits the canvas at minimum zoom, and the small nodes are already named at the zoom the window opens on.
@@ -2611,6 +3233,7 @@ A first primitive-resource loop is now real and wired into live gameplay:
 - **Plant-Growth Model (world.md)** (large)
 - **World-Sim Timescale** (huge)
 - **Mining Action** (medium) — ✅ Done (basic) — a swing that reaches an ore node (`MinableOre`, shares the "stone" group) mines it: with a `stone_pickaxe` equipped (`Item.is_pickaxe()`, `Player._pickaxe_power`) it drops ore + stone (`OreYield`), bare-handed only stone. Craft the pickaxe from 2 stick + 3 rock.
+  - ✅ **Confirmed at the Player-integration level (playtest report, 2026-08-28: "mining an ore spawns only stones").** `OreYield`/`Knapping`/`MinableOre`/`SmashableStone` all already had thorough pure-function unit tests, but nothing had ever exercised `Player._smash_step` itself -- does a live swing actually compute and pass through the right `pickaxe_power`/`carrying_rock`. Three new tests in `test_player.gd` (`test_smash_step_mines_ore_with_an_equipped_pickaxe_not_just_stone`, `test_smash_step_mines_only_stone_with_bare_hands`, `test_smash_step_yields_a_sharp_shard_when_carrying_a_rock` -- the last covering the paired report that breaking a boulder should have a chance at a sharp stone, already implemented as `Sharp Shard` via rock-on-rock knapping, see `smashable_stone.gd`) all pass immediately with no production change needed. No bug found at this level -- the likely explanation for both reports is the player's equip/carry state at the time (a pickaxe must be actively equipped via its hotbar slot, not just carried; a rock must already be in inventory before the breaking strike).
 - **Crafting Blueprint DSL Material Integration** (medium)
 - **Crafting Blueprint DSL (crafting.md)** (huge)
 - **DNA-Quality-to-Material-Quality Link** (large)
@@ -2635,6 +3258,16 @@ describes:
 - **Spells as Items (Gems + Scrolls)** (large) — ⬜ Not started — no
   "spell" item kind exists yet, and `item.gd` has no sealed/forkable/
   use-only flag (`docs/concept/magic.md`'s "sealed IP" decision needs both).
+- **Item illustration groundwork (`sprite_id`)** (small) — ✅ Done — see
+  `concept/item_illustrations.md` (new). `Item` gained a real `sprite_id`
+  field, defaulting to the item's own `id` (`Item._init`) so all ~80
+  existing catalog entries render exactly as before; every render call site
+  that used to key art off `item.id` directly now goes through `sprite_id`
+  instead — inventory grid/paperdoll/drag-preview/hotbar/dropped-item/
+  crafting-card icons (`ItemCatalog._ITEMS` itself still never authors a
+  divergent one, so this is groundwork, not a visible change yet — a
+  crafted/variant item can now share a base item's art via `sprite_id`
+  without a second catalog entry, once something actually sets one).
   The 2026-08-24 design adds a second vessel on the same item kind: a
   `vessel` field (`"gem"` sealed/use-only vs. `"scroll"` teachable/
   requirement-gated/consumed-on-success), the embedded AST, and author
@@ -2679,42 +3312,88 @@ Known gaps: none of the item/creature/combat layer is replicated in multiplayer
 
 ### Magic (`concept/magic.md`)
 
-The cost/atom foundation of the spellcrafting DSL has been started (pure,
-tested modules); everything above the cost layer (parser, validator, runtime,
-authoring UI, physics compliance) is still unbuilt. The 2026-07-15 brainstorm
-extensions (atom domains beyond the physical, material-component cost,
-caster self-danger, complexity-priced spell gems) now have a pure/tested
-foundation too, but none of it is wired into runtime casting yet — see the
-new rows below. The 2026-08-24 brainstorm (gold cost to compile a spell,
-exponential in size; sealed gems vs. teachable scrolls) is design-only so
-far — no code exists for it yet.
+**A real spell-cast runtime now exists** (see `concept/spell_runtime.md`,
+new) — a player can actually cast a spell and see 21 of the 25 catalog atoms
+take a real mechanical effect, closing the gap this section used to open
+with ("everything above the cost layer... is still unbuilt"). Still missing
+above that: a validator, an authoring UI/spell-editor, and full physics
+compliance (real projectile travel, terrain fire spread, etc. — see the
+Physical Simulation Compliance rows below, unchanged). The 2026-07-15
+brainstorm extensions (atom domains beyond the physical, material-component
+cost, caster self-danger, complexity-priced spell gems) have a pure/tested
+foundation; most of the non-physical atoms now have a real mechanical hook
+too (see Primitive Effects Catalog below) — caster self-danger specifically
+is still unwired (see its own row). The 2026-08-24 brainstorm (gold cost to
+compile a spell, exponential in size; sealed gems vs. teachable scrolls) is
+still design-only — no code exists for it yet.
 
-- **Spellcrafting DSL** (huge) — 🚧 Partial — first three of the pure
-  `RefCounted` pipeline modules exist and are test-first: `spell_atom_catalog.gd`,
-  `spell_cost.gd`, and `spell_parser.gd` (player text → canonical AST, pipeline +
-  blocks surface syntax, with human-readable parse errors). No validator/runtime/
-  UI yet; the parser is purely structural (does not check atoms against the
-  catalog — that is the validator's job).
+- **Spell Cast Runtime** (large) — ✅ Done (MVP) — see `concept/
+  spell_runtime.md` (new). A player presses a real bound key (`cast`,
+  `keybindings.gd`) to cast a fixed example spell (`spell_book.gd` — no
+  authoring UI exists yet, same "fixed table before a UI" scope
+  `item_catalog.gd` already established for crafting). `spell_executor.gd`
+  resolves affordability (a real new `Player.mana`/`max_mana` resource,
+  deliberately NOT stamina — see `concept/survival.md`'s "Stamina scope:
+  movement only, not combat" — and an explicit `when` guard if the spell
+  text writes one, via a small operand/comparison evaluator covering
+  `spell_parser.gd`'s whole guard grammar) and cost (reusing `spell_cost.gd`
+  unchanged); `spell_targeting.gd` resolves self/touch/projectile(cone)/area
+  delivery (delivery itself rides the parser's existing, previously-unused
+  `event_arg` slot on `on cast(DELIVERY):` — no grammar change needed);
+  `spell_atom_effects.gd` dispatches each atom's real effect duck-typed
+  against Player/CreatureMarker (`take_damage`/`heal`/`apply_knockback`/
+  `apply_spell_debuff`/`apply_shield` — CreatureMarker gained several of
+  these for the first time, see below). A procedural-first VFX (
+  `procedural_spell_effect_sprite.gd` + `spell_effect_marker.gd`) plays at
+  the resolved target for every atom that actually lands, same two-track
+  pattern `ProceduralItemSprite` already established for items. Honest
+  gaps, all named in `spell_runtime.md`: no real projectile flight (instant-
+  resolve-in-a-cone), `governing_stat`/`haste_stat` default to 0.0 (no
+  `evocation`/`focus` skill-web wiring yet), `portal`/`induce_mutation` cost
+  mana and play a visual but have no mechanical effect, `cast_time` is
+  computed but not enforced as an actual delay, and the "cast" key always
+  casts the same fixed spell (no selection UI).
+
+- **Spellcrafting DSL** (huge) — 🚧 Partial — the pure `RefCounted` pipeline
+  modules (`spell_atom_catalog.gd`, `spell_cost.gd`, `spell_parser.gd`) now
+  have a real runtime consuming them (`spell_executor.gd` and friends — see
+  the Spell Cast Runtime row above). Still no validator (params aren't
+  range/legality-checked against the catalog) and no authoring UI — the
+  parser remains purely structural, and every castable spell today comes
+  from a fixed authored table (`spell_book.gd`), not player-written text.
 - **Primitive Effects Catalog** (large) — 🚧 Partial — `spell_atom_catalog.gd`:
   25 atoms across 10 categories and 3 tiers, each with cost-relevant data (base
-  cost, magnitude/duration scaling refs). Pure lookup, tested. Beyond the
-  original 15 damage/heal/control/movement/defense/summon/utility atoms, it now
-  covers the brainstorm's three non-physical domains too:
-  **biological** (`accelerate_growth`, `induce_mutation`, `suppress_mutation`,
-  `blight`), **perceptual** (`illuminate`, `calm`, `fear`), and **spatial**
-  (`teleport`, `portal`, `gravity_shift`) — vocabulary-level only, with no hook
-  yet into `dna.md`'s genome/mutation systems, `creature_behavior.gd`/taming, or
-  `fast_travel.gd`/waypoints. Not yet wired into any runtime.
-- **Delivery Method System** (medium) — 🚧 Partial — delivery-method cost
-  *multipliers* (self/touch/projectile/area) exist in `spell_cost.gd`; actual
-  delivery (projectile travel, area resolution) is unbuilt.
+  cost, magnitude/duration scaling refs). Pure lookup, tested. **21 of the 25
+  now have a real mechanical hook** (`spell_atom_effects.gd`/`spell_runtime.md`
+  — damage/heal/push/pull/teleport/accelerate_growth resolve instantly;
+  ignite/blight/freeze/root/slow/shield/illuminate/calm/fear/
+  suppress_mutation/summon_wisp/reveal are real timed statuses via a new
+  generalized `spell_status_effects.gd`, reusing the existing `DebuffStack`
+  venom already proved out). `induce_mutation`/`portal` are still
+  vocabulary-only (deliberately deferred — see spell_runtime.md on why:
+  `TreeGenome.mutate()` only ever produces a *new* child genome, with no
+  supported in-place single-sapling overwrite to safely hook a spell into;
+  portal needs a two-endpoint link this pass doesn't build). Still no hook
+  into `creature_behavior.gd`'s own pure decision function directly (fear/
+  calm work by overriding the CONTEXT fed into it, not by changing it) or
+  `fast_travel.gd`/waypoints (teleport is a direct position offset instead).
+- **Delivery Method System** (medium) — 🚧 Partial — self/touch/projectile/area
+  all now actually resolve a real target (`spell_targeting.gd`), not just
+  carry a cost multiplier — projectile uses a facing-cone nearest-target
+  check, area an instant burst at a point ahead of the caster. Still no real
+  travel-time/flight visual for projectile/area (instant-resolve, matching
+  the same gap `item_illustrations.md` already named for thrown items).
 - **Shape Modifier System** (medium) — ⬜ Not started
 - **Elemental Reaction Matrix** (large) — ⬜ Not started
-- **Resource Cost Formula** (medium) — 🚧 Partial — `spell_cost.gd` derives cost
-  deterministically from atoms + params (magnitude, duration, burst radius) and
-  delivery, with a stat-driven efficiency term that discounts what the caster
-  *pays* without changing the derived power price. Property-tested. Not wired
-  into gameplay (no mana pool spends it yet).
+- **Resource Cost Formula** (medium) — ✅ Done (wired) — `spell_cost.gd` derives
+  cost deterministically from atoms + params (magnitude, duration, burst
+  radius) and delivery, with a stat-driven efficiency term that discounts what
+  the caster *pays* without changing the derived power price. Property-tested,
+  and now genuinely wired: `Player.mana`/`max_mana` (new — `class_archetype.gd`
+  had defined a `max_mana` bonus per class since before this, but nothing ever
+  read it) is spent atomically on a successful cast, refused untouched on an
+  unaffordable one. `governing_stat`/`haste_stat` still default to 0.0 (no
+  live "spell power"/"haste" stat feeds them yet).
 - **Diminishing Returns Curve** (small) — 🚧 Partial — superlinear magnitude
   exponent (`MAG_EXP`) plus a repeated-atom spam penalty in `spell_cost.gd`,
   both pinned by property tests so the constants are a tested function, not
@@ -2737,7 +3416,11 @@ far — no code exists for it yet.
 - **Projectile Travel & Interception** (medium)
 - **Area/Summon Spatial Validity** (medium)
 - **Mass-Based Push/Pull Knockback** (small)
-- **Environmental Fire Spread (Ignite)** (medium)
+- **Environmental Fire Spread (Ignite)** (medium) — 🚧 Partial — the `ignite`
+  atom now deals real damage-over-time (see the Primitive Effects Catalog row
+  above); spreading through oil-slicked/grassy terrain, the half this row was
+  actually about, is still unbuilt (no per-tile flammability/fuel state
+  exists anywhere).
 - **Freeze-to-Walkable Terrain** (medium)
 - **Shock Conduction Through Water** (medium)
 - **Skill-Tree Gating (Layer 0)** (medium)
@@ -2939,8 +3622,8 @@ original "materials stay pure, no alloying" clause for the mineral track
 only — design-only so far, no code exists for it yet:
 
 - **Material Property Vector** (medium) — 🚧 Partial — `src/gameplay/material_properties.gd`: a fixed "mineral track" vector (density/hardness/toughness/elasticity/sharpness_capacity/flammability/conductivity/decay_rate) for **eighteen** named materials (wood/timber/flesh/stone/iron/obsidian/fiber, plus `copper`/`tin`/`carbon` added 2026-08-27 as the rows the alloy model blends, plus `hide`/`leather`/`bone`/`sinew`/`glass`/`silver`/`gold`/`zinc` added 2026-08-28), tested, with unknown-material/unknown-property defaults.
-  **2026-08-28 correction pass, three parts.** (1) **Conductivity is now derived from published %IACS** through one anchor (`IACS_SILVER_PERCENT = 105.0` — silver is the periodic table's true maximum, so the ceiling never has to move) and one pure function `conductivity_from_iacs()`, with a sourced figure per row. It was previously *inverted where it mattered*: iron shipped at 9.0 against copper's 10.0 when real iron is 15.6% IACS against copper's 100 — a factor of six and a half, and near the bottom of the metals rather than the top — and flesh at 3.0 when wet tissue is seven orders of magnitude below any metal. This was free exactly once (a repo-wide grep confirms **nothing in `src/` or `scenes/` reads `conductivity`**), and it matters because `concept/electromagnetism.md` is written against this scalar and three of its claims were unsupported by the old numbers. Honest, test-pinned cost: on a linear silver-anchored scale every non-metal collapses to ~0, so the scale cannot rank insulators against each other (the stored %IACS figures still can). `DEFAULT_PROPERTIES`' conductivity dropped 1.0 → 0.0 for the same reason — 1.0 now means "10.5% IACS", i.e. a real metal, so the old default silently promoted every unmodeled substance to a usable conductor. (2) **A real thermal-failure column in degrees Celsius** with a failure *mode* — `thermal_failure_c`/`thermal_failure_mode`/`can_melt`/`materials_meltable_at` plus `STATION_TEMPERATURE_C`. Deliberately not a ninth vector scalar (an alloy vector must stay shape-identical to a MATERIALS row) and deliberately not a 0–10 band (the only thing it is for is being compared against real furnace and eutectic temperatures). Four modes, not the three originally specified: protein tissue needed **char**, because keratin/collagen genuinely neither melt nor sustain a flame. The metals' figures are pinned *equal to* `alloy_blend.gd`'s own published constants rather than restated. (3) **Eight missing rows**: before this, every organic part in the design resolved through `DEFAULT_PROPERTIES`' all-1.0 vector and realized *identically* — a boar hide and a pane of glass were the same material — so `concept/crafting.md`'s headline promise about a high-fitness boar hide was unreachable in code. `descriptors_for_vector()` now takes a *bare vector* rather than a material name, which is what lets a computed alloy vector reach the descriptor vocabulary at all — before it existed, materials.md's "an alloy is just one more way to arrive at a property vector" was quietly untrue in code, because every consumer took a String and looked it up. Only the doc's mineral track exists; the DNA-driven organic track (see dna.md/evolution.md) is unbuilt, and nothing in live gameplay reads this vector yet — `material_damage.gd`'s per-(weapon_kind, material)-string lookup table remains what `scenes/player.gd` actually calls.
-- **Impact Resolution (Momentum × Geometry × Material → Outcome)** (large) — 🚧 Partial — `src/gameplay/impact_resolver.gd`'s `resolve_impact()` (tested, calibration-pinned `T_CUT`/`T_PIERCE`/`T_CRUSH`/`T_BRITTLE_TOUGHNESS`/`PIERCE_HARDNESS_CAP` thresholds — the doc's own Open Questions section flags exactly these as needing calibration tests) returns cut/dent/crush/pierce/shatter/bounce from momentum + contact geometry (edge/point/blunt) + the target material's hardness/toughness. Not wired into any live combat, tree-felling, or mining path, and doesn't yet cover the doc's shape-assembly mechanics (leverage/edge+backing/balance) that would compute momentum and geometry from an actual item.
+  **2026-08-28 correction pass, four parts.** (1) **Conductivity is now derived from published %IACS** through one anchor (`IACS_SILVER_PERCENT = 105.0` — silver is the periodic table's true maximum, so the ceiling never has to move) and one pure function `conductivity_from_iacs()`, with a sourced figure per row. It was previously *inverted where it mattered*: iron shipped at 9.0 against copper's 10.0 when real iron is 15.6% IACS against copper's 100 — a factor of six and a half, and near the bottom of the metals rather than the top — and flesh at 3.0 when wet tissue is seven orders of magnitude below any metal. This was free exactly once (a repo-wide grep confirms **nothing in `src/` or `scenes/` reads `conductivity`**), and it matters because `concept/electromagnetism.md` is written against this scalar and three of its claims were unsupported by the old numbers. Honest, test-pinned cost: on a linear silver-anchored scale every non-metal collapses to ~0, so the scale cannot rank insulators against each other (the stored %IACS figures still can). `DEFAULT_PROPERTIES`' conductivity dropped 1.0 → 0.0 for the same reason — 1.0 now means "10.5% IACS", i.e. a real metal, so the old default silently promoted every unmodeled substance to a usable conductor. (2) **A real thermal-failure column in degrees Celsius** with a failure *mode* — `thermal_failure_c`/`thermal_failure_mode`/`can_melt`/`materials_meltable_at` plus `STATION_TEMPERATURE_C`. Deliberately not a ninth vector scalar (an alloy vector must stay shape-identical to a MATERIALS row) and deliberately not a 0–10 band (the only thing it is for is being compared against real furnace and eutectic temperatures). Four modes, not the three originally specified: protein tissue needed **char**, because keratin/collagen genuinely neither melt nor sustain a flame. The metals' figures are pinned *equal to* `alloy_blend.gd`'s own published constants rather than restated. (3) **Eight missing rows**: before this, every organic part in the design resolved through `DEFAULT_PROPERTIES`' all-1.0 vector and realized *identically* — a boar hide and a pane of glass were the same material — so `concept/crafting.md`'s headline promise about a high-fitness boar hide was unreachable in code. `descriptors_for_vector()` now takes a *bare vector* rather than a material name, which is what lets a computed alloy vector reach the descriptor vocabulary at all — before it existed, materials.md's "an alloy is just one more way to arrive at a property vector" was quietly untrue in code, because every consumer took a String and looked it up. **(4) `hardness` is now derived from published Vickers**, the same move part (1) made for conductivity and for the same reason. `HARDNESS_HV` carries an HV figure per row and one pure function `hardness_from_hv()` maps it onto the scale: linear (`10 × HV / 1000`, i.e. *hardness is HV/100*), anchored on **martensite at 1000 HV** — the hardest thing a forge can produce, so like silver on the conductivity column the ceiling never has to move again. The old column was a placed 0–10 ordering with iron at 8.0 and the ceiling at 10.0, and that missing headroom was not cosmetic: it made carbon content invisible in `alloy_blend.gd` (every Fe-C composition pinned at 10.000), made `treatment.gd`'s quench a literal no-op on the one material it exists for, and let tempered toughness climb *above plain iron's*. All three are gone; see the Alloying and Heat Treatment rows for the measured before/after. **Linearity is forced, not preferred** — both models that move hardness multiply by ratios of Vickers numbers, and a log column would exponentiate them instead — and its honest cost is that the soft organics crush into the bottom hundredths (wood 0.037, flesh 0.001), which a test pins rather than hides. Metals are annealed figures throughout (iron 100, copper 50, zinc 30, silver 25, gold 20, tin 5); rock (700), obsidian (600) and the five soft organics are **placed rather than measured** and say so in code, because no published HV exists for them. `DEFAULT_PROPERTIES`' hardness dropped 1.0 → 0.0 for exactly the reason conductivity's did — 1.0 now means 100 HV, i.e. wrought iron *and* the "hard" cutoff, so the old default silently promoted every unmodeled substance to a hard metal. Two shipped assertions were corrected as genuinely wrong rather than loosened: `tin`/`carbon` are no longer claimed to be softer than *wood*, because pure tin (5 HV) and graphite (VHN10 7–11) both out-indent red oak (Brinell 3.7) — that was a Mohs *scratch* intuition standing in for an indentation measurement, and scratch and indentation genuinely disagree about a porous cellular solid and a layered mineral. Only the doc's mineral track exists; the DNA-driven organic track (see dna.md/evolution.md) is unbuilt, and nothing in live gameplay reads this vector yet — `material_damage.gd`'s per-(weapon_kind, material)-string lookup table remains what `scenes/player.gd` actually calls.
+- **Impact Resolution (Momentum × Geometry × Material → Outcome)** (large) — 🚧 Partial — `src/gameplay/impact_resolver.gd`'s `resolve_impact()` (tested, calibration-pinned `T_CUT`/`T_PIERCE`/`T_CRUSH`/`T_BRITTLE_TOUGHNESS`/`PIERCE_HARDNESS_CAP` thresholds — the doc's own Open Questions section flags exactly these as needing calibration tests) returns cut/dent/crush/pierce/shatter/bounce from momentum + contact geometry (edge/point/blunt) + the target material's hardness/toughness. **`PIERCE_HARDNESS_CAP` was re-derived 2026-08-28** when the hardness column became real Vickers: it was an eyeballed 6.0 sitting in the gap between copper and stone on a scale that no longer exists, and it is now `MaterialProperties.HARD_HARDNESS` — one constant, not two opinions about the same line, in the same arrangement `T_BRITTLE_TOUGHNESS`/`BRITTLE_TOUGHNESS` already have. The claim it now makes is legible: *a point cannot pierce anything the tooltip calls hard.* The change is behaviour-preserving — all eighteen materials keep the pierce/dent verdict they had under the old 6.0, which is the evidence it is the same line — and a test pins every one of them. Not wired into any live combat, tree-felling, or mining path, and doesn't yet cover the doc's shape-assembly mechanics (leverage/edge+backing/balance) that would compute momentum and geometry from an actual item.
 - **Two-Track Organic vs. Mineral Materials** (large) — ⬜ Not started — no DNA-driven variable material track exists; every entry in `material_properties.gd` is a fixed mineral-style vector.
 - **Item compiler (assembly → rule program)** (large) — 🚧 Partial (model only, zero callers) — `src/gameplay/part_mechanics.gd` + `item_compiler.gd` + `affordance_notes.gd` (2026-08-28, 35 tests). An assembly compiles to a list of `event → guard → pipeline` **rules in `spell_parser.gd`'s own AST shape** — pinned key-for-key against a rule the shipped parser actually produced — so derived physics and a hand-authored enchantment are the same kind of thing and can merge into one list on one item; affordances are a *projection* over those rules, never the output. Because `_parse_guard` has no `and`, every conjunction is resolved **statically at compile time** and a named reason is kept for each absence, which is what makes "why can't this chop?" answerable (`AffordanceNotes.absence_reason`). Guard thresholds always read the shipped `ImpactResolver` symbols. The headline result: **a saw emits `rip` and not `chop`, an axe emits `chop` and not `rip`, and the two absences are independent physical failures** — the saw's 0.9 mm plate carries only 2.18 momentum against the 3.0 a chop needs (MASS), the axe's bit is a transverse wedge with no tooth pitch (GEOMETRY) — with a saw filed with no set failing a third way (it binds in its own kerf). An obsidian sword emits no `parry` rule because its toughness is under the cutoff the impact model already shatters at, and *also* loses `chop` because obsidian's density makes the same blade a third the mass — two unarranged consequences of one property vector. **Not** wired: `Item`/`ItemCatalog` are untouched and `Item.is_saw()/is_axe()/is_pickaxe()` (`scenes/player.gd`:1594/1691/1773) are still `id.contains(...)` string hacks, so a player-built saw still cannot saw. The concrete blocker is named in the concept doc: **no `PartGraph` ↔ assembly-dict conversion exists in either direction**, and `CraftedItemRegistry`'s canonical form stores a quantized volume + material per part, not geometry/dimensions/joints, so a saved assembly cannot be rehydrated into a graph to compile. That serializer is the next slice, not the `player.gd` edit.
 - **Swing physics (leverage, balance, delivered momentum)** (large) — ✅ Done (model only) — `src/gameplay/part_mechanics.gd`, which closes this section's long-standing "nothing yet computes that momentum *from a part graph*" gap. Deliberately **not** materials.md's `delivered_force ∝ head_mass × lever_length × swing_speed`, because that is monotonic in mass and therefore says a 20 kg hammer is the best hammer; what is built is the rigid-body dynamics that actually govern a swing (moment of inertia by the parallel-axis theorem, signed balance point, gravity torque, and delivered momentum as `I·ω/r`, which reduces exactly to `m·v` for a point mass). The anchor test asserts delivered momentum is **unimodal in head mass with a strictly interior maximum** over a 0.2–12 kg sweep — too light carries no momentum, too heavy and holding the thing out eats the whole torque budget so `net_swing_torque` hits **zero** and the swing stops happening. One free constant (`SWING_TORQUE_NM_AT_UNIT_STRENGTH = 17.140 N·m`), **solved for** from a measured anchor (a framing hammer's striking face at 10 m/s on a 33 cm haft) and re-derived by a test rather than picked. Two independent checks it was *not* fitted to both land: the arming sword swings in 0.295 s and arrives at 3.51 kg·m/s, above the shipped `T_CUT`. Emergent consequences nobody wrote: a stronger actor's optimum head is heavier, and **removing a sword's pommel makes it 27% lighter and slower** (the balance point runs down the blade, so gravity torque *rises* while inertia barely moves). Known simplifications are listed honestly in the concept doc — no orientation (a crossguard reads as 20 cm of reach it has not got), the hand sits at the grip part's centre, no limb inertia, no fatigue/accuracy/control.
@@ -3010,9 +3693,32 @@ only — design-only so far, no code exists for it yet:
   would have made the historical optimum nonsense) while cast iron at 4.3% C
   reads brittle; and `test_toughness_falls_where_hardness_peaks` became
   `test_toughness_holds_up_through_the_whole_single_phase_field`.
-  **Known gaps, all test-pinned or doc-recorded, none hidden**: the 0–10
-  hardness scale saturates so *any* carbon steel pins at 10 (biggest limitation
-  — the scale has no headroom above iron=8); alloy conductivity still mixes
+  **The hardness saturation this row used to call its biggest limitation is
+  RESOLVED (2026-08-28).** `material_properties.gd`'s `hardness` column is now
+  every material's published **Vickers** figure through the single function
+  `hardness_from_hv` — linear, anchored on **martensite at 1000 HV** (the
+  hardest thing a forge can make, so the ceiling never has to move again), the
+  same move the `conductivity` column made from %IACS. Iron is 1.0 instead of
+  8.0 and there are nine points of headroom above it, so carbon content moves
+  hardness across the whole range instead of pinning it: 0.2 % C → 3.79,
+  0.76 % → 7.76, 3.5 % → 8.79 as-cast, where all three used to read 10.000. A
+  cast steel no longer touches the ceiling at all, because the ceiling is a
+  *heat treatment*, not a composition. `SOLUTION_STRENGTHENING_COEFFICIENT`
+  moved with its own inputs (13.40902 → 14.33195) exactly as a solved constant
+  should — it is copper's and tin's hardnesses solved for K, and the anchor it
+  encodes is unchanged and now literally dimensional: 88Cu-12Sn is twice
+  annealed copper, i.e. 100 HB against 50 HV. `HARD_HARDNESS` was re-derived
+  from stone's hardness to iron's for the same reason (on a real HV column rock
+  is 7× wrought iron, so stone as the cutoff would have dropped iron out of the
+  shipped word "hard"), and `ImpactResolver.PIERCE_HARDNESS_CAP` stopped being
+  an eyeballed 6.0 and became that same constant — *a point cannot pierce
+  anything the tooltip calls hard* — which is behaviour-preserving for all 18
+  materials and is pinned as such.
+  **Known gaps, all test-pinned or doc-recorded, none hidden**: the single
+  shared Labusch `K` reproduces the bronze anchor exactly and **over-states
+  Fe-C by roughly 3×** (as-cast eutectoid lands ~776 HV against a real annealed
+  ~180 HV) — one coefficient cannot satisfy both anchors, and this is now the
+  biggest remaining hardness question here; alloy conductivity still mixes
   linearly where Nordheim's rule says a solid solution should conduct *worse
   than both* constituents (the conductivity **column** was fixed 2026-08-28, the
   blend **rule** was not — they are separate, and the rule is now cheap since
@@ -3027,8 +3733,9 @@ only — design-only so far, no code exists for it yet:
   non-brittle steel blade yet" — is **closed** as of 2026-08-27 by
   `src/gameplay/treatment.gd` (see the Heat Treatment row below), which also
   closes the converse hole: quench now makes a steel blade that IS
-  brittle-because-quenched, and temper draws that brittleness back out. The
-  hardness saturation is what keeps the resulting window narrow.
+  brittle-because-quenched, and temper draws that brittleness back out. (That
+  window used to be narrow because of the hardness saturation; since the
+  2026-08-28 Vickers rescale above it is 175 °C wide.)
   **Nothing calls `blend()` outside its own test** — no tin ore (`ORE_TYPES` is
   still `["iron","copper","coal"]`), no zinc or arsenic ore either, no alloy
   ingot item, no smelt path, no ratio UI. The same is true of everything the
@@ -3073,17 +3780,28 @@ only — design-only so far, no code exists for it yet:
   a small pre-existing lie, in that an unworked iron bar used to read `keen`.
   **Acceptance case, the reason the module earns its place**:
   `AlloyBlend.blend("iron","carbon",0.006)` quenched and drawn to dark straw is
-  harder than plain iron (8.30 vs 8.0), out of the brittle band (3.17 vs the
+  harder than plain iron (8.30 vs 1.0), out of the brittle band (3.13 vs the
   shipped 3.0), and still keen — the exact hole the Alloying row above used to
   name as unfixable.
+  **Two limits this row used to name are RESOLVED (2026-08-28)** by the Vickers
+  hardness rescale described in the Alloying row: (a) the usable draw window was
+  15 °C wide and is now **175 °C** — every colour from dark straw upward makes a
+  usable tool and only the pale-straw razor draw falls outside, which is the
+  ladder's own claim; (b) quenching a modelled carbon steel was a **no-op** and
+  is now the largest single operation in the file (as-cast 0.6 % C steel 6.78 →
+  10.0 hardness, 6.96 → 1.49 toughness), landing on a ceiling that means
+  something because the top of the scale *is* martensite. A third,
+  **tempered toughness climbing above plain iron's**, is gone with them: dark
+  straw now reads 5.33 against iron's 7.0 where it used to peg at 10.0.
   **Known limits, each pinned by a named test rather than hidden**: the vector
   carries no composition, so the model **cannot tell hardenable steel from
   wrought iron** (real wrought iron does not quench-harden at all and real
-  bronze softens — KNOWN WRONG, test-recorded); the usable draw window is only
-  **225–240 °C wide** because the 0–10 scale saturates (iron is 8, the ceiling
-  is 10 — the same limitation the Alloying row calls its biggest, not a claim
-  about real steel); quenching a modelled carbon steel is a **no-op** for the
-  same reason; quench is envelope-conserving and therefore understates real
+  bronze softens — KNOWN WRONG, test-recorded), and for the same reason
+  **as-quenched hardness is identical for every carbon content** (0.2 %, 0.76 %
+  and 3.5 % all clamp to 10.0, where real quenched 0.2 % C reaches only ~450 HV
+  — what still separates them is the toughness column, 0.15 / 2.54 / 2.25, so a
+  mild steel genuinely cannot be tempered into a knife and a eutectoid one can);
+  quench is envelope-conserving and therefore understates real
   quench-and-temper; the draw table is calibrated 200–400 °C and goes **flat**
   past it rather than extrapolating; tempered-martensite embrittlement (the
   real 260–370 °C toughness trough) is deliberately not modelled because it
@@ -3841,20 +4559,26 @@ No map/fog-of-war/waypoint exploration mechanics exist beyond raw walking. All �
 - **Personal Portal Item (fast-travel option B)** (medium) — ⬜ Not started
 - **Fast-Travel Cost/Limitation Mechanic** (small) — 🚧 Partial — resolved per `concept/transportation.md` ("Fast travel: free for cargo, never for living stock"): `fast_travel.gd`'s cost/cooldown math is unchanged and untaxed for cargo, plus a new `can_fast_travel_with_cargo(cargo)` that allows any inanimate load but blocks the whole trip if it contains even one living creature. Tested; not yet wired to a live travel action.
 - **Boat/Weather Interaction (storm risk, open question)** (medium) — ⬜ Not started
-- **Traversal Tools (Climbing Rope, Raft, etc.)** (medium) — ⬜ Not started — `concept/terrain_relief.md` (2026-08-24) now gives the climbing rope a real purpose (raising the slope threshold at which terrain becomes impassable); no traversal tool of any kind is craftable/usable yet.
+- **Traversal Tools (Climbing Rope, Raft, etc.)** (medium) — 🚧 Partial — the climbing rope is now real and craftable (see `concept/terrain_relief.md`'s Status section); a raft or any other traversal tool is still not started.
 
 ### Terrain Relief (`concept/terrain_relief.md`)
 
-New concept doc (2026-08-24): real elevation data currently only feeds a
-biome threshold — nothing stops the player walking up a cliff, and
-mountain terrain has no ore, no visible relief shading, and no relationship
-to slope at all. Nothing implemented — all ⬜ Not started:
+New concept doc (2026-08-24): real elevation data currently only fed a
+biome threshold — nothing stopped the player walking up a cliff, and
+mountain terrain had no ore, no visible relief shading, and no relationship
+to slope at all. This line was stale even before the entries directly below
+it (several already said ✅ Done): every mechanism this doc specifies is now
+real, tested, and wired — see `concept/terrain_relief.md`'s own Status
+section for the cross-aligned, honest-gaps-included summary.
 
 - **Slope/Aspect Field (from Real Elevation Data)** (medium) — ✅ Done, and now wired into live movement — `src/world/terrain_relief.gd` (tested, 21/21): `slope_at`/`aspect_at` sample four real neighbors through any `elevation_at(lat, lon)`-shaped source (real `EarthElevationSource` or a test fake), converting to real meters and a real central-difference gradient — real degrees, real GIS aspect-bearing convention (0=north/90=east/180=south/270=west, -1 on flat ground). Exposed per-global-tile via `EarthChunkGenerator`/`EarthChunkManager.slope_at_global`/`aspect_at_global`, and consumed by the Slope-Gated Passability row below. This is also the shared field `climate_dynamics.md`'s orographic lift needs; not yet consumed there. Hillshading and mountain-ore (the rest of this section) still aren't built on top of it.
-- **Slope-Gated Passability (Soft Slow, Hard Refusal)** (large) — ✅ Done and wired into live movement — `src/gameplay/terrain_passability.gd` (`speed_multiplier`/`is_passable`, tested: 11/11) plus real wiring in `scenes/player.gd`'s `_authority_step`: `current_speed_multiplier` now also factors `_terrain_speed_multiplier(tile)` (the soft case, same shape as `_weather_speed_multiplier`), and a real look-ahead check (`_terrain_blocks_movement`, same "ask before you step" principle `creature_movement_gate.gd` established for creatures) zeroes the frame's velocity outright when the tile ahead is too steep, before `move_and_slide()` ever runs. `EarthChunkGenerator`/`EarthChunkManager` both gained `slope_at_global`/`aspect_at_global` to expose `terrain_relief.gd`'s real slope/aspect field per global tile (tested: `test_earth_chunk_generator.gd` 214/216 asserts passing — the 2 "failures" are the pre-existing, unrelated image-load-warning flake, not a real failure; `test_earth_chunk_manager.gd`/`test_player.gd` verified via targeted `-gunit_test_name` runs rather than a full-file run, both too slow to complete in full — see the Godot-test-execution memory note). **Not yet wired**: no creature (only the player) is gated by slope.
-- **Climbing Rope Raises the Hard Threshold** (medium) — 🚧 Partial — `TerrainPassability.is_passable`'s `has_climbing_gear` parameter is real and tested, but `Player._has_climbing_gear()` always returns `false` — no rope item/equipment concept exists yet (`transportation.md`'s already-specified, currently-unused rope concept), so nothing can set it true. The hook is real; the payoff isn't.
+- **Slope-Gated Passability (Soft Slow, Hard Refusal)** (large) — ✅ Done and wired into live movement — `src/gameplay/terrain_passability.gd` (`speed_multiplier`/`is_passable`, tested: 11/11) plus real wiring in `scenes/player.gd`'s `_authority_step`: `current_speed_multiplier` now also factors `_terrain_speed_multiplier(tile)` (the soft case, same shape as `_weather_speed_multiplier`), and a real look-ahead check (`_terrain_blocks_movement`, same "ask before you step" principle `creature_movement_gate.gd` established for creatures) zeroes the frame's velocity outright when the tile ahead is too steep, before `move_and_slide()` ever runs. `EarthChunkGenerator`/`EarthChunkManager` both gained `slope_at_global`/`aspect_at_global` to expose `terrain_relief.gd`'s real slope/aspect field per global tile (tested: `test_earth_chunk_generator.gd` 214/216 asserts passing — the 2 "failures" are the pre-existing, unrelated image-load-warning flake, not a real failure; `test_earth_chunk_manager.gd`/`test_player.gd` verified via targeted `-gunit_test_name` runs rather than a full-file run, both too slow to complete in full — see the Godot-test-execution memory note). **Now also wired to creatures**: `src/rendering/creature_marker.gd` gained the same `_terrain_speed_multiplier`/`_terrain_blocks_movement` pair, mirroring `player.gd`'s own reference implementation exactly and reading slope through the same duck-typed world reference `solid_obstacles_near` already uses — genuinely O(creatures), not O(creatures × terrain), since each creature samples slope at only its own single candidate destination tile per movement decision, addressing this doc's own previously-open perf question. Tested: 8 new tests plus a full `test_creature_marker.gd` regression run, 144/144 passing.
+- **Climbing Rope Raises the Hard Threshold** (medium) — ✅ Done — a real, craftable `climbing_rope` item (`item_catalog.gd`, kind "tool") now exists, recipe'd from 3 hide + 3 plant_fibre (`crafting_recipe_book.gd`). Material chosen against `MaterialProperties`' real toughness column, not eyeballed: hide's toughness (7.0) clears `ROPE_MIN_TOUGHNESS` (5.0) via the previously-orphaned `is_viable_for_tool(material, "grapple_rope")` check that already existed — hide is also non-trivial to source (hunting + butchering an animal), matching `transportation.md`'s own "further out on the danger gradient" framing, unlike the trivially-gathered `plant_fibre` alone. `Player._has_climbing_gear()` now reads real inventory state (`_inventory_counts().get("climbing_rope", 0) > 0`, the same raw-count pattern `_has_fishing_rod()` already uses) instead of its old hardcoded `false` stub — matching this doc's own "carrying," not "equipped/wielding," framing. `terrain_passability.gd` needed no changes; it was already correct. Tested: `test_item_catalog.gd` 50/50, `test_crafting_recipe_book.gd` 50/50, `test_material_properties.gd` 75/75, `test_player.gd -gunit_test_name=climbing` 2/2 — all re-verified directly against `main` post-merge, not just the branch that built it.
 - **Hillshading (Real Lambertian Formula, Real Solar Position)** (medium) — ✅ Done and wired into live chunk load/unload — `src/rendering/hillshade.gd`'s `illumination()` is the real standard hillshade formula (tested, 8/8), fed by `solar_position.gd`'s new `azimuth_degrees()` (tested, 20/20 for the whole file) alongside its existing `elevation_degrees`. `procedural_hillshade_sprite.gd` bakes real (quantized) slope/aspect as DATA into a small atlas (8 slope bins x 8 aspect octants + one shared flat tile, tested 14/14); `hillshade_shader.gd` is a real, compile-verified `canvas_item` fragment shader (tested 12/12 — caught a genuine bug mid-development: Godot's shader language rejects an early `return` inside `fragment()`, unlike plain GLSL); `TerrainRenderer.atlas_coords_for_hillshade`/`build_hillshade_overlay_tile_set` build the atlas TileSet (tested 5/5). **Now wired live**: `EarthChunkManager.set_hillshade_layer`/`_paint_hillshade_overlay`/`set_sun_position` (mirroring `set_water_layer`/`_paint_water_overlay`/`set_wind_strength` exactly) are called from `_load_chunk`/unload and verified via a real chunk load at the Berlin spawn tile — every one of ~25,600 loaded cells got a real hillshade tile, and moving away correctly erased cells outside the new radius (25605/25606 asserts passing; the one "failure" is the same pre-existing per-sheet image-load-warning flake hit repeatedly this session, not a real defect). `scenes/world.tscn` gained a real `HillshadeFx` `TileMapLayer` node (mirroring `WaterFx`/`SnowFx`); `scenes/world.gd` now computes real sun azimuth alongside its existing elevation computation and pushes both via `set_sun_position` every frame, alongside the existing `set_wind_strength`/`set_rain` calls. **Honest verification gap**: no automated test instantiates `world.tscn`/`World` itself anywhere in this project's suite, so the scene-level wiring (the `@onready $HillshadeFx` reference, the `.tscn` node block) is verified only by confirming both resources load without structural/parse errors (a real, if partial, check), not by a live GUI session.
-- **Slope-Gated Mountain Ore Veins** (medium) — ✅ Done and wired into live chunk load/unload — `src/world/mountain_ore_placement.gd` (tested, 15/15): vein chance is zero below `terrain_passability.gd`'s own `SOFT_THRESHOLD_DEG`, scales linearly up to `MAX_VEIN_CHANCE` (0.35) at its `HARD_THRESHOLD_WITH_ROPE_DEG` — the same steepness gating passability also gates ore exposure, deliberately, one shared quantity with two consequences. Ore type/seed reuse `OrePlacement`'s own derivation exactly. `StoneRenderer.spawn_mountain_veins` (tested, 6/6 — 689/692 asserts passing across the whole file, the 3 "failures" the same pre-existing flake) spawns real `MinableOre` nodes on mountain cells that roll a vein, drawing from the exact same illustrated-boulder-composited texture path flat-ground ore already uses. **Now wired live**: `EarthChunkManager._load_chunk` concatenates `spawn_mountain_veins(..., self)` (passing itself as the duck-typed slope lookup) onto the same `_loaded_stones[chunk_coord]` array `spawn_stones` already populates — a deliberate one-line reuse rather than a parallel dictionary: mountain veins are `StaticBody2D` ore nodes exactly like flat-ground ore, so they need the exact same obstacle-avoidance (`solid_obstacles_near`) and unload-cleanup machinery `_loaded_stones` already provides, with nothing new to duplicate. Not separately re-verified against a real chunk load in this pass (Berlin, this suite's existing fixture location, isn't mountainous) — correctness rests on the already-passing `StoneRenderer`-level tests plus direct code review of the one-line change.
+- **Slope-Gated Mountain Ore Veins** (medium) — ✅ Done and wired into live chunk load/unload — `src/world/mountain_ore_placement.gd` (tested, 16/16): vein chance is zero below `terrain_passability.gd`'s own `SOFT_THRESHOLD_DEG`, scales linearly up to `MAX_VEIN_CHANCE` at its `HARD_THRESHOLD_WITH_ROPE_DEG` — the same steepness gating passability also gates ore exposure, deliberately, one shared quantity with two consequences. Ore type/seed reuse `OrePlacement`'s own derivation exactly. `StoneRenderer.spawn_mountain_veins` (tested, 6/6) spawns real `MinableOre` nodes on mountain cells that roll a vein — see the rendering entry directly below for what texture/material they actually carry today. **Now wired live**: `EarthChunkManager._load_chunk` concatenates `spawn_mountain_veins(..., self)` (passing itself as the duck-typed slope lookup) onto the same `_loaded_stones[chunk_coord]` array `spawn_stones` already populates — a deliberate one-line reuse rather than a parallel dictionary: mountain veins are `StaticBody2D` ore nodes exactly like flat-ground ore, so they need the exact same obstacle-avoidance (`solid_obstacles_near`) and unload-cleanup machinery `_loaded_stones` already provides, with nothing new to duplicate.
+  - 🐛 **Fixed (playtest report, 2026-08-28): `MAX_VEIN_CHANCE` had no density gate of its own.** `spawn_mountain_veins` checks every mountain-biome cell with nothing above this one ceiling — unlike flat ground, where `StonePlacement.STONE_DENSITY` gates first and `OrePlacement.ORE_FRACTION` gates again on top of that. The original value (a flat, eyeballed 0.35, "a third of cells is still a landmark find, not wallpaper") was ~29x flat-ground ore's own ~1.2% overall rarity — reported live as "a dense, near-uniform grid... covering most of the visible ground" on any broadly steep mountainside, not a landmark. Re-pinned to `StonePlacement.STONE_DENSITY * OrePlacement.ORE_FRACTION` (≈0.012) — the same order of magnitude as flat-ground ore's own rarity, since a vein is still a mineral deposit, just placed by a different (slope-driven) rule — and test-pinned (`test_max_vein_chance_matches_flat_ground_ores_own_rarity`) rather than left as a second, independently-eyeballed number. Two statistical sample sizes in `test_mountain_ore_placement.gd` and the mountain-chunk test fixture's default size in `test_stone_renderer.gd` were raised alongside it so the ~29x lower ceiling doesn't reintroduce test flakiness. Verified via the full test suite, not a live in-game screenshot — the density fix itself is unrelated to the vein's own rendering (see directly below), which was still the old decal at the time of this fix.
+  - ✅ **Fixed (2026-08-28): the "decal stamped on top, not a mineral streak in the wall texture" visual gap is closed.** `StoneRenderer._build_mountain_vein_node` no longer draws the same round illustrated-boulder-composited texture flat-ground ore uses. New `src/rendering/mountain_vein_sprite.gd` draws a thin mineral-colored streak oriented along the vein's real aspect (slope-facing compass bearing), converted to screen space via `Vector2(sin(bearing), -cos(bearing))` — the verified inverse of `aspect_degrees_from_gradient`'s own `atan2` convention — with seeded per-column jitter so same-ore/same-aspect veins don't render identically rigid. New `src/rendering/entity_hillshade_shader.gd` gives the vein sprite genuinely LIVE hillshade participation: `sun_elevation_deg`/`sun_azimuth_deg` are regular (shared) uniforms pushed by the same `EarthChunkManager.set_sun_position` call that already feeds the ground overlay, while `slope_deg`/`aspect_deg` are Godot 4 `instance uniform`s set once per sprite at spawn — so every vein shares ONE material, no per-node per-frame update loop needed, and still darkens with the real rock face around it as the sun moves through the day. `MIN_LIT_FRACTION` (0.45) is derived from `HillshadeShader.MAX_SHADOW_ALPHA` (`1.0 - 0.55`), not a fresh eyeballed number, so a vein in shadow reads consistently with the tile beneath it. Flat-ground ore (`_build_ore_node`/`_ore_texture_for`) is untouched — this was a mountain-specific complaint. Tested: `test_mountain_vein_sprite.gd` 7/7, `test_entity_hillshade_shader.gd` 17/17, `test_stone_renderer.gd` (full file) 34/34, `test_earth_chunk_manager.gd -gunit_test_name=sun` 2/2 — all re-verified directly against `main` post-merge.
+- **Biome Classification Reads Slope** (medium) — ✅ Done and wired into live chunk generation — `biome_classifier.gd`'s `classify()` gains an optional `slope_deg` parameter (a `-1.0` "not provided" sentinel, so every pre-existing caller/test is byte-identical); a slope at/beyond `TerrainPassability.HARD_THRESHOLD_DEG` (45°, reused rather than a second independently-tuned number) now forces "mountain" even outside the elevation-based mountain band — real alpine tree-lines, the same "steepness exposes rock" logic already driving mountain-ore placement, just read from slope instead of elevation. Never overrides ocean. `EarthChunkGenerator._biome_at_global` wires this via a new `_slope_override_deg_for` gate that skips `TerrainRelief.slope_at`'s four-fresh-elevation-sample cost entirely for a cell already decided by elevation alone (ocean, or already elevation-mountain) — a real, addressed perf concern, since terrain regenerates from scratch on every chunk load rather than being cached. **Honest limitation, empirically checked, not assumed**: probing the real bundled elevation dataset (Everest/K2/Nanga Parbat/Annapurna plus a global scan) found real slope in the "undecided" elevation band never actually reaches 45° at this dataset's ~10km/pixel source resolution and the existing ~1.1km sampling offset — so no real tile in the live game currently flips to mountain via this path with today's data. The override logic itself is fully proven by pure `classify()` unit tests with synthetic slopes; the wiring tests pin the exact conditional-skip contract against real coordinates instead. Tested: `test_biome_classifier.gd` 28/28, `test_earth_chunk_generator.gd` 20/20, zero regressions, re-verified directly against `main` post-merge.
 
 ### Building (`concept/building.md`)
 
@@ -4666,7 +5390,15 @@ festival wiring, no hiring/wages yet.
 - **Daily Planning (LLM Scheduler)** (large) — 🚧 Partial — `src/world/npc_planner.gd`'s `Planner`/`FakeNpcPlanner` split (mirroring `WorldBossFitness`'s `PhaseGenerator` convention exactly): `FakeNpcPlanner` deterministically produces an occupation-keyed `{time_block, location_tag, activity}` day (work by day, home to sleep by night, a guard stays on watch through the evening instead of socializing) with zero LLM calls. The real LLM-backed planner (see intro above) isn't built yet.
 - **Local FSM/Pathfinder Plan Execution** (large) — ✅ Done (basic) — `src/rendering/npc_marker.gd`: a lightweight per-frame FSM (deliberately much lighter than `CreatureMarker`'s full sense/perceive/act AI) reads the current schedule entry for the in-game hour (`src/world/npc_schedule.gd`, paced by the same `SECONDS_PER_SIMULATED_DAY` clock as the rest of the world sim) and walks toward wherever it resolves to -- "home", a settlement's 3 shared landmarks (well/stall/gate), or a personal workspot -- now marked by a real per-occupation prop of its own (field/forge/dock/garden/hunting_ground, see `concept/building.md`'s Status section) rather than an invisible walk target. No real pathfinding (straight-line `move_toward`, no obstacle avoidance). Its bound `CharacterView` is now actually driven by that movement (previously it was bound once by `VillageRenderer._build_npc` and then never updated, so every villager's walk cycle sat frozen in `IDLE` despite visibly moving): `_update_animation` sets `is_moving`/`set_facing`/`set_movement_state` from the per-frame position delta each `_process`, and `NpcMarker.setup(world, tile_size)` (mirroring `CreatureMarker.setup`, now wired through `VillageRenderer.spawn_village`'s existing `world` param into `_build_npc`) gives it the same water-tile check `CreatureMarker` uses so a villager swims across water instead of walking on it.
 - **Interrupt System** (medium) — ⬜ Not started
-- **Live Dialogue System** (large) — ⬜ Not started — see "Basic Talk Interaction" below for the deterministic single-line placeholder standing in for this today.
+- **Conversation substrate** (large) — ✅ Done (basic) — the prerequisite slice for `concept/dialogue.md` (new doc). A survey found the blocker on real conversation was not the renderer but that the simulation emitted almost nothing a villager could *know*: of 18 `Event.new` sites only 2 called `MemoryStore.witness_event`, so `Event.witnesses` and the whole belief/rumor layer existed and sat **unused** — every villager's memory bank held identical founding trivia, with nothing to gossip about and nothing for two villagers to disagree over. Five fixes:
+  - **Witness wiring** — 11 emitters (`ruin_formed`, `settlement_growing/stable/declining`, `settlement_became_<tier>`, `settlement_specialized`, `regional_trade_*`, `production_succeeded/failed`, `institution_formed/dissolved`, contract outcomes) now set `event.witnesses` from `_villager_witnesses_of` and call `witness_event`. Villagers accumulate real witnessed `MemoryRecord`s of their own settlement's history. The enumeration reads the **event graph** (`npc_settled` actors), not `_loaded_villages`, so an unloaded settlement's history is still witnessed. Caravans are the only event two *different* settlements witness, so the only thing that can travel as foreign news.
+  - **`VillageWages`** (`src/world/village_wages.gd`, pure) — hunger was effectively an occupation constant: `NpcEconomy` only credits a `Wallet` inside `_gather()`, gated on `is_producer()`, and only 3 of `NpcIdentity.OCCUPATIONS`' 8 produce — so blacksmith/merchant/guard/herbalist/nurse started at 0 gold, could never reach `VILLAGE_LOCAL_FOOD_PRICE`, and stayed hungry forever regardless of weather or harvest. 5 of 8 villagers whose hunger carried zero information. Producers now levy into a shared village purse and non-producers draw a **subsistence wage**. The levy rate is a tested *function* of the live occupation census, not a constant: `N/(P+N)` is provably the exact point where a producer's take-home equals each non-producer's cut, so village income is neutral between producing and non-producing work; adding a 9th occupation moves the rate by itself. The wage is `VillageMarket.VILLAGE_LOCAL_FOOD_PRICE` itself — one meal at the market's own live price, so a wage feeds a villager once and leaves nothing to hoard.
+  - **`SettlementFood`** (`src/emergence/settlement_food.gd`, pure) — every settlement on Earth classified `DECLINING` forever, because two unrelated things are called "the market" and capacity read only the persisted emergence `Market`, which is never stocked. Food stock now sums **both** it and the live `VillageMarket` (filtered through `ItemCatalog.kind_of() == "food"`). `settlement_state.gd` is deliberately untouched and keeps its meaning; this is a new capacity *source* its callers use. Wired at all three call sites — `step_settlements`, `legitimacy_for_settlement`, and `Why.explain_settlement` (optional 7th arg, so existing callers are unchanged) — plus the `/settlement` console command, which had been reporting "food: 0 (capacity 0) / declining" for a village visibly holding food, contradicting the simulation that had just event-sourced it growing.
+  - **Occupation coverage 2 → 8** — `OccupationProduction._RECIPE_BY_OCCUPATION` covered only hunter and blacksmith, so three quarters of villagers could never have a production shortfall and therefore could never ask a player for anything. All 8 now map to real, distinct, **gate-free** recipes (verified against `crafting_recipe_book.gd`'s `_RECIPES`; no heat-gated ingot or sawmill-gated plank, which matters because `Market.produce` calls `craft` directly and never consults `recipe_required_skill`/`requires_structure`). Quest coverage 25% → 100% of villagers, pinned by a test that every real occupation has a recipe *and* every mapped id still resolves in the live recipe book.
+  - **News-vs-noise guards** — `production_failed` fired ~1.25 identical records per settlement per 30s forever; within ten minutes every villager's only news would be "production failed". Now change-guarded. The settlement-status path needed the same treatment once capacity started tracking live stock that rises as villagers gather and falls as they eat: `SETTLEMENT_STATUS_DWELL_STEPS := SettlementState.FOOD_PER_HOUSEHOLD` (derived, test-pinned by asserting the equality outright), and a return to the recorded status erases the dwell so a wobble never accumulates toward either side. An oscillation test collapses 5 stable + 4 growing events into 1 + 0.
+  - **Guards that survive a reload.** The change-guards above are in-memory dicts, but `_known_settlement_ids()` reads the *persisted* event store and `MemoryStore` is persisted — and a first-ever assessment is deliberately exempt from the dwell. So every game load re-assessed every settlement ever founded as if new, appending a status event plus a `MemoryRecord` **per villager**, forever; and right after a load almost no chunk is resident, so `village_market_for` returns null, capacity reads 0, and essentially every settlement in the world re-declared famine at once. Five session dicts (`_settlement_status`, `_settlement_tier`, `_settlement_specialization`, `_settlement_production_outcome`, `_contract_outcome_witnessed`) are now **seeded from the persisted event graph on first use**, each walking its own emitter's real key shape — the same convention `record_path_worn_if_new`/`_record_ruin_from` already use to dedupe against real history. Measured before/after on a real six-store reload of an unchanged settlement: **+2 to +4 MemoryRecords per villager per load → 0**. Negative controls confirm no over-suppression: a status that genuinely changed still fires, a production outcome that flipped still fires. A settlement is also no longer declared `DECLINING` purely because its chunk is out of memory — that is not a reading, it is the absence of one.
+  - 🚧 **Known gaps, not overstated.** The village purse is `Object` metadata on a `VillageMarket` that `VillageRenderer.spawn_village` recreates empty on every chunk load, so **a village's savings die whenever you walk away and return** — no persistence yet. And the arithmetic is tight: `YIELD_TO_GOLD_RATE` (1) sits deliberately below `VILLAGE_LOCAL_FOOD_PRICE` (2) as a wholesale/retail margin, so it takes ~4 gathered food units of producer income to fund one non-producer meal, with only 3 of 8 occupations producing — whether wages actually *end* hunger or merely slow it is **unmeasured in live play**. `attempt_production` can now return a result without recording an event (the change-guard suppresses it); it is public API, so callers assuming one attempt equals one event are wrong — documented on its own doc comment.
+- **Live Dialogue System** (large) — 🚧 In progress — now spec'd in its own `concept/dialogue.md`, and deliberately built as an **entirely offline** system: no LLM anywhere in the mechanism, per an explicit scope decision (see that doc's "The AI seam, deliberately not built"). The substrate it needs landed first (see **Conversation substrate** above); the pipeline itself — `NpcVoice`, `DialogueContext`, `DialogueTopic`, `DialogueMove`, `NpcSeenLedger`, `OfflineRenderer`, `ConversationWindow` — is not built yet. "Basic Talk Interaction" below remains the live single-line placeholder until it is.
 - **Persistent Memory Log** (medium) — ✅ Done (mechanism); 🚧 not yet auto-triggered off ordinary NPC proximity — `MemoryRecord`/`MemoryStore`/`Rumor` (`src/emergence/`) implement `npc.md`'s "Memory, beliefs, and rumor propagation" spec: fact stays authoritative in `EventStore`, a memory is a separate lossy per-holder projection, `Rumor` steps confidence/source-type down one hop at a time (tested against a ~3-hop "heard it from a guy" feel). Content mutation still deliberately deferred per the spec. Propagation isn't yet wired to fire automatically off NPCs' landmark-proximity schedule (`npc_schedule.gd`) — the mechanism is real and callable, the trigger isn't live yet.
 - **Self-Determination / Role Drift** (medium) — ⬜ Not started
 - **Dynamic Quest Generation** (large) — ⬜ Not started (each `NpcIdentity` already carries a `need`, but nothing turns it into a request yet)
@@ -5825,7 +6557,7 @@ New concept doc (2026-08-25), written for the one mechanism below:
 - **Item tooltips surface the stats an item really models** — ✅ Done — (`scenes/inventory_window.gd`) hovering an item now shows, in order: name, kind, material-in-words, weight in kg, weapon damage, armor + the slot it protects, food freshness and seasonal shelf life, and stack n/max. Every line is conditional on `item.gd`'s "0.0 means not modeled yet" convention, so an unmodelled stat is omitted rather than shown as a fake 0. Spec written first, in `docs/concept/items.md` § "Reading an item". Honest scope: **real weight exists for only five items today** — the three weapon-kind items with a material + volume estimate (`ItemCatalog._WEAPON_MATERIAL_AND_VOLUME`) plus carrot and potato — so most tooltips still show no weight and no material line at all. This is *not* "all items show their emergent stats".
 - **Material presented as descriptors, not a spreadsheet** — ✅ Done — (`MaterialProperties.descriptors_for`, `ItemCatalog.material_of`) a weapon reads `Iron — hard, keen`. Per `docs/concept/materials.md` § "Learning an emergent system", the raw property vector is never printed. Thresholds are named, calibration-tested constants, and `brittle`/`buoyant` deliberately reuse the cutoffs the game had already fixed for fracture (`ImpactResolver.T_BRITTLE_TOUGHNESS`, pinned equal by test) and raft buoyancy (`WATER_DENSITY`). The "deeper inspect surfacing raw numbers" that doc anticipates is still unbuilt.
 - **Food freshness in the pack is legible** — ✅ Done — the tooltip reports live freshness percent and the food's real shelf life for the current season (a cherry keeps 1.8 days in summer, a walnut 24, and that same walnut 120 days in winter — all from `FruitSpoilage`'s real keeping multipliers). `InventoryWindow.refresh` takes a trailing `season` argument and omits both lines when it is `""`. The freshness percent enters the grid-rebuild signature quantized to whole percent (**rounded, not truncated** — truncation fails the quantization guard, since a walnut aged one world second sits at 0.999998), so an aging stack cannot rebuild every slot `Control` every frame and re-break hover tooltips. Built one wave and dead in the running game the next, because its only call site is `World._refresh_inventory_now`: **that wiring has since landed and is itself tested** — `test_world_inventory_wiring.gd` swaps a recording stand-in into `World._inventory_window` and asserts the season it receives is the chunk manager's own `current_season()`.
-- **The equipment paperdoll is the real `CharacterView` rig** — 🚧 Partial — it was a 36×36 head `TextureRect` over a flat blue 36×44 rectangle: no torso, no arms, no legs, no connection to the authored look. It is now a real `character_view.tscn` in a `SubViewport` (the same wiring `main_menu.gd:_build_diorama_view` uses), with the equipped weapon mirrored into the character's actual hand; viewport height is pinned to the old 84px footprint so the window still fits World's 600×460 anchor box, and the width and camera zoom are derived from `CharacterView`'s own published geometry rather than eyeballed. `World` now calls `apply_appearance(local_player.appearance)`, so it shows the player's own look rather than `CharacterView`'s default warrior (pinned by the same `test_world_inventory_wiring.gd`). 🚧 because worn **armor is still not drawn on the rig** at all — `CharacterView._slot_node` knows only "head" and "tool" — so the paperdoll shows body + weapon and no armor.
+- **The equipment paperdoll is the real `CharacterView` rig** — 🚧 Partial — it was a 36×36 head `TextureRect` over a flat blue 36×44 rectangle: no torso, no arms, no legs, no connection to the authored look. It is now a real `character_view.tscn` in a `SubViewport` (the same wiring `main_menu.gd:_build_diorama_view` uses), with the equipped weapon mirrored into the character's actual hand; viewport height is pinned to the old 84px footprint so the window still fits World's 600×460 anchor box, and the width and camera zoom are derived from `CharacterView`'s own published geometry rather than eyeballed. `World` now calls `apply_appearance(local_player.appearance)`, so it shows the player's own look rather than `CharacterView`'s default warrior (pinned by the same `test_world_inventory_wiring.gd`). **Worn armor is now drawn on the rig** (see `concept/item_illustrations.md`) — `CharacterView._slot_node` covers real `ChestSlot`/`LegsSlot`/`FeetSlot` nodes alongside the existing `HeadSlot`/`ToolSlot`, and `equip_armor_slot(slot_name, texture)` shows the piece's own generated icon (via `sprite_id`, same real art already used everywhere else — not the older flat-color `equip_slot` placeholder, which stays as dead scaffolding). `Player.equip_armor`/`unequip_slot` now call `_character_view`, closing the gap this row itself named; `InventoryWindow.refresh` wires its own separate paperdoll-preview `CharacterView` the identical way, so the in-world rig and the character-screen preview both show worn armor now, not just the in-world one. Honest scope: slot positions (`ChestSlot`/`LegsSlot`/`FeetSlot` in `character_view.tscn`) are a reasonable starting placement, not yet visually confirmed against real armor art in a live screenshot — the same "reasoned from code and passing tests, not screenshot-confirmed" caveat the Loading-screens follow-up above already carries. Tested: `test_character_view.gd`'s "armor rendering" group, `test_player.gd`'s equip/unequip-armor group, `test_inventory_window.gd`'s paperdoll-armor group.
 - **Skill-tree window reads as prose and fits its own content** — ✅ Done — (`scenes/skill_tree_window.gd`) rows showed internal identifiers verbatim ("Vitality 1  +10.0 max_health  (1 pt)", "Berserkers Fury"); they now read "Vitality II   +10 Maximum Health" with the cost right-aligned in its own column, and keystones use written names ("Berserker's Fury"). The window widened from 320×300 to 660×400 — the longest row genuinely measures 625px and the `ScrollContainer` scrolls only vertically, so the surplus was being cut off — and its panel is now fully opaque. Honest scope: it is **still a flat scrolling list**, not the passive web README.md and `docs/concept/skills.md` promise (see the Skills section's ⬜ above). Two follow-ups: `World._build_skill_window` still pins the old 320-wide anchor box (the window renders correctly but sits left-of-centre), and the new label tables live in the UI file rather than beside the data in `skill_tree.gd`/`keystone_passive.gd`.
 - **Same-biome terrain tile seams** — ⬜ Not started — reported live and unaddressed: adjacent tiles of the *same* biome show visible seams at their shared edge, so a uniform meadow reads as a grid of squares rather than as ground. The existing blend machinery only ever runs between *different* biomes (and, since the earth-modification round, between a modification and its biome) — two grassland tiles simply abut, and each tile's own procedurally-seeded variant has no continuity with its neighbour across the shared edge. This is a different problem from the documented chunk-seam blind spot (`global_biome_lookup` cannot see a neighbouring chunk's modifications), which is about blends that exist but stop at a chunk boundary; this one is about a blend that never existed. No mechanism drafted yet.
 - **Character creation with pixel art** — ✅ Done — `scenes/main_menu.gd` is now a real **character creator**, replacing the old class picker (whose "preview" was a disembodied head floating above a flat colored rectangle): a class column with stat blurbs and a highlighted selection, a **live full-body portrait** in the middle (`ProceduralCharacterSprite.generate_hero_portrait_image` composes head/torso/arms/legs/boots into one figure, scaled 5x with nearest-neighbour filtering so it stays crisp), and an appearance column cycling **five customization axes** with ◀ ▶ arrows — skin tone (6), hair colour (7), hair style (6, named), beard (4, named), eye colour (4) — plus a Randomise button. The authored appearance now flows through `start_requested` → `World._pending_appearance` → `Player.apply_class(..., appearance)`, so the spawned hero actually wears what the creator previewed (previously the in-world look was always re-rolled from the peer id, ignoring the picker entirely). **The creator is now tabbed** (reported: "there should be tabs with character and skilltree so you can view each classes skills before creating"): a `TabContainer` splits **Character** (the class/portrait/appearance columns above, now themed card panels instead of loose Controls) from a new **Skills** tab, which previews the shared `SkillTree` node pool as a card grid and highlights whichever nodes actually synergize with the currently-picked class's own dominant stat (`_class_dominant_stat`/`_CLASS_STAT_TO_SKILL_STAT`) — live-updating as the player switches classes, before committing. Honestly scoped: `SkillTree` is one pool shared by every class (see the Soft Class System row above — full class-specific skill webs aren't built yet), so the tab previews the real shared pool plus the class's own stat lens rather than fabricating fake per-class trees; a mage-leaning pick simply highlights nothing today since no shared node grants mana yet, and the tab says so in its own footer. **Superseded 2026-08-28: that scoping note is no longer true and the tab no longer shows the shared pool.** `SkillWeb` exists now, so the Skills tab renders the real passive web framed on whichever class is being picked (`SkillWeb.archetype_bounds` + `SkillWebView.frame_archetype`), and the footer conceding "full class-specific skill webs are still in development" is gone with the grid. The card-synergy highlight went with it: it could only tint a border, and for mage it honestly tinted nothing because no shared node granted mana. Resonance is the real version of that idea and it was already built — the genome's affinity per archetype moves the actual point cost of that archetype's nodes, for every class, so the thing the highlight was gesturing at is now a number the player pays. Visual pass: the whole creator now reuses `UiTheme`'s palette (the same theme `World` already assigns every other window) instead of picking its own colors, class/skill entries are bordered card panels rather than bare Buttons/Labels, section headers got an accent underline, and the panel grew from 760x520 to 880x620 to fit the tab bar and skills grid without cramping. That still wasn't enough headroom once real theme/font metrics applied — reported: "the character creation screen overflows and is not scrollable so I can't start a new game because button is not visible" — since MainMenu is a fixed-size panel (not an auto-growing one), the overflowing tab content was silently pushing the Back/Begin row off-screen with nothing to reach it by. The tab content is now wrapped in its own `ScrollContainer`, added deliberately OUTSIDE the Back/Begin row's own container, so the middle content scrolls internally while Begin always stays visible and clickable at a fixed position regardless of how tall either tab's content gets. That scroll wrapper then exposed a second layout defect of its own (reported live: picking the Skills tab shrank the whole tab body **and its tab strip** into a narrow column, with the shared skill grid not visible at all). Two causes, both now fixed and pinned by measured-rect tests rather than size-flag reads: the `TabContainer` had no `SIZE_EXPAND_FILL` inside that `ScrollContainer`, and a `ScrollContainer` sizes a non-EXPAND child to the child's own combined minimum size — which for a `TabContainer` is (with the default `use_hidden_tabs_for_min_size == false`) the minimum width of whichever tab is *currently visible*. The Skills tab's own minimum width is tiny, since autowrapping labels have near-zero minimum width, so selecting it collapsed the body to a measured **145 px inside an 836 px scroll area**; the Character tab had only ever looked acceptable by luck, at 740 px of the same 836. Separately, the skills grid was wrapped in its **own nested `ScrollContainer`**, and a `ScrollContainer` reports a combined minimum size of ~0 on every axis it may scroll — so the grid's height never propagated up to the tab's `VBoxContainer`, which, having no spare height to distribute, handed the `EXPAND_FILL` inner scroll its ~0 minimum: a measured **342 px-tall grid inside a 0 px-tall parent**, i.e. the shared skill pool was never rendered at all. The grid is now added straight to the tab column, leaving the creator with exactly one scroll region (the outer one, with Back/Begin still deliberately outside it). Pinned by `test_selecting_the_skills_tab_does_not_collapse_the_tab_body`, `test_the_character_tab_body_also_spans_the_scroll_areas_width`, `test_the_shared_skill_grid_is_not_clipped_away_by_its_parent` and `test_the_skill_grid_is_not_nested_in_a_second_scroll_container` — the first two comparing the tab body against the scroll's content width *derived from the live vertical scrollbar's own width*, not a written-down margin. (Consequence still wanting one live look: the Character tab body widens from 740 to 828 px while `_build_appearance_column`'s card stays a fixed 230 px, so the hero column absorbs all 88 px.) **A follow-up pass made the Character tab a genuine hero showcase** (reported: "make it genuinely captivating ... I want the classes to be icons and on top over the character and more character customization options and DNA influence"): the old plain-text class name list is gone — the 7 classes are now small icon cards (`_build_class_icon_row`) sitting directly above the portrait, each icon a real miniature rendering of that class's own default look via the same portrait generator (not a placeholder glyph), so picking a class previews it before it's even selected. **Correction: that last claim was false in practice until the class-thumbnail fix landed** — the pre-coloured `hero_composite.png` outfit rows meant class tunic/leg colours never reached the illustrated portrait and every icon came from DNA seed 0, so all seven were byte-identical; each class now selects its own composite outfit row instead (see the Character creator live preview scene section above). DNA is now visible, not just readable: a glow ring behind the portrait (`_dna_glow`) repaints to the rolled genome's rarity color and, for legendary specifically, pulses via a looping `Tween` — common/rare/legendary now read as visibly different moments, not just different words in a stat line — and a "★" badge lights up on whichever class icon the current roll's `HeroDna.resonance` favors most, so DNA visibly steers the class picker itself. **A sixth customization axis, accent/trim color** (`HeroAppearance.TRIM_COLORS`, 6 named options — gold/silver/copper/crimson/verdant/amethyst), is now independently player-chosen rather than always fixed by the class palette with no choice at all — tunic/leg colors still communicate class identity, only the accent trim is free, matching dna.md's resolved "cosmetics layer on top" pillar (customization that doesn't touch what the class itself signals).
@@ -5863,6 +6595,7 @@ New concept doc this pass -- no prior doc covered what's underground (`stone.md`
 - ✅ **`GeologyHazards.foul_air_at(layer)` / `flood_risk_at(layer, distance_to_nearest_surface_water)`** -- real, tested, per-layer hazard functions (foul air rises with depth/enclosure, a real natural-ventilation effect; flood risk is a per-layer base times a real exponential distance falloff from the nearest surface water). `test_geology_hazards.gd`. Not yet triggered as live gameplay events -- see gaps below.
 - ✅ **`CaveEntrancePlacement`** -- sparse, deterministic, mountain-biome-weighted cave-mouth placement, same coordinate-hash idiom as `StonePlacement`/`OrePlacement`. `test_cave_entrance_placement.gd`.
 - ✅ **`GeologyChamber.cells_for`** -- the small circular pocket of Strata cells a cave entrance reveals, the underground equivalent of `RoomDetector`'s room cells. `test_geology_chamber.gd`.
+  - 🐛 **Fixed (playtest report, 2026-08-28): `CHAMBER_RADIUS` was "small" only by tile count, not on screen.** At the shipped camera zoom (`Player.TARGET_TILE_SCREEN_PX` = 64px/tile) the old `CHAMBER_RADIUS := 3` (a 7-tile-diameter, ~37-cell disk) rendered at ~448px against the project's own 720px-tall default viewport — ~62% of the visible screen's shorter side. Since `Strata` cells are `SOLID`/`ORE` by default until mined (see below), the chamber fills essentially 100% on first reveal, with every rock sitting dead-center on its tile — a true grid, not a scatter — so this read live as "a dense, near-uniform grid... covering most of the visible ground" the instant a player brushed within one tile of a cave entrance, including on plain grassland (`CaveEntrancePlacement` rolls there too, just rarely). Shrunk to `CHAMBER_RADIUS := 1` (a 3x3, 9-cell pocket) — the largest radius that still clears a new screen-relative bound (`test_chamber_diameter_stays_a_small_fraction_of_the_visible_screen`) rather than the bare `< 50`-cells check that existed before and never caught this.
 - ✅ **Topsoil/regolith wired fully end-to-end and playable.** `GeologyRenderer` spawns a visible `CaveEntranceMarker` (real, if honestly-flat-fallback, procedural art -- `ProceduralCaveEntranceSprite`) at every entrance a loaded chunk rolls (`EarthChunkManager._load_chunk`'s new geology block), and `EarthChunkManager._update_geology_reveal` (called from `update()`, mirroring `_update_roof_visibility`'s reveal-on-entry shape exactly) spawns real `DiggableRock` nodes for the chamber the moment the player is within `CAVE_ENTRY_TRIGGER_RADIUS` of an entrance, and despawns them the moment the player leaves. `DiggableRock` mirrors `MinableOre`'s contract exactly (real `WorldItemBus` drops scaled by pickaxe power via the same `OreYield`, same hover-tooltip contract, same "attack"-bound swing) plus writes the mined cell permanently back into the chunk's own `Strata` instance, so a chamber re-revealed later shows real tunnels instead of resetting. `test_diggable_rock.gd`, `test_geology_renderer.gd`, `test_procedural_cave_entrance_sprite.gd`.
 - ⬜ **The physical shaft from topsoil/regolith down into bedrock, and onward through deep bedrock into the hydrothermal zone.** All three deeper layers' `Strata` configuration, ore weighting, and hazard functions are fully implemented and fully tested (see above); nothing yet lets a player physically reach them -- a deliberately scoped, honestly documented gap (see the geology doc's own Status section for the full statement).
 - ⬜ **Collapse/foul-air/flood-risk are not yet live gameplay events.** The pure hazard functions exist and are tested; nothing calls them from the reveal/mining path yet (no actual cave-in, no actual air/water damage-over-time tick).

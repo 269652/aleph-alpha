@@ -26,6 +26,26 @@ const SOURCE_TYPES := [
 	INFERENCE, WRITTEN_RECORD, RUMOR,
 ]
 
+## How sure a WITNESS is at formation, against an ACTOR's 1.0 -- they were
+## there, but it happened to someone else.
+##
+## Placed on the ladder Rumor already defines rather than picked out of the
+## air: one retelling costs Rumor.CONFIDENCE_DECAY_PER_HOP (0.6), and a
+## witness sits HALF that step below an actor, i.e. sqrt(0.6). What actually
+## pins it is the ordering it has to satisfy -- strictly below firsthand, and
+## strictly ABOVE 0.6, because being TOLD by the person it happened to must
+## never outrank having watched it happen. sqrt(0.6) is the unique geometric
+## midpoint of that interval on Rumor's own multiplicative scale, so an
+## actor -> witness -> retold -> retold chain stays monotone on ONE scale
+## instead of two. The "half" is a stated modelling choice, not a measured
+## quantity: the interval is real, the midpoint of it is a decision.
+##
+## Written as a literal rather than computed from Rumor's constant because
+## preloading rumor.gd here would close a cycle -- rumor.gd already preloads
+## this file. test_memory_record.gd squares it back onto
+## Rumor.CONFIDENCE_DECAY_PER_HOP so the two cannot drift apart unnoticed.
+const WITNESS_CONFIDENCE := 0.7745966692414834
+
 ## The authoritative event this memory is ABOUT -- never mutated to match a
 ## drifted memory; check against EventStore.get_event(event_id) for ground
 ## truth.
@@ -79,10 +99,43 @@ static func from_event(event: Event, entity_id: String, tick: float) -> RefCount
 	memory.remembered_location = event.location
 	memory.remembered_actors = event.actors.duplicate()
 	memory.source_type = source
-	memory.confidence = 1.0
+	memory.confidence = formation_confidence(source, event.importance)
+	# Deliberately 0.0 for actor AND witness. distortion is how far the
+	# remembered fields have ACTUALLY drifted, and the lines above copy them
+	# exactly off the event for both -- a witness's lesser certainty is a
+	# fact about how sure they FEEL, which is confidence's job, not this
+	# field's. Content distortion at formation would need remembered_* to
+	# actually differ from the event, which npc.md defers along with
+	# Rumor's per-hop content mutation.
 	memory.distortion = 0.0
 	memory.recorded_at = tick
 	return memory
+
+
+## How sure a memory formed by being there starts out.
+##
+## An ACTOR is at the ceiling: it happened to them. A WITNESS starts at
+## WITNESS_CONFIDENCE and is lifted from there toward certainty by the
+## event's own importance -- a bystander who watched something consequential
+## attends to it and holds it far more firmly than one who watched a batch of
+## bread fail. That is the flashbulb-memory shape, and the reason it belongs
+## on confidence specifically: what a consequential event reliably raises is
+## how CERTAIN the holder is, not how ACCURATE they are, which is exactly the
+## confidence/distortion split this module already draws. The LINEAR shape is
+## a choice among the many curves sharing those two endpoints (the base at
+## importance 0, certainty at importance 1); test_memory_record.gd pins it
+## exactly, but nothing here claims it fits a measured curve.
+##
+## A lift, never a multiplication. Most Event emitters in src/ leave
+## importance at 0.0 (5 of 19 set it, all in a 0.2-0.7 band) -- the same fact
+## that made dialogue_topic.belief_strength refuse to multiply importance
+## into salience, since a product would discount most of a villager's news to
+## nothing. A lift leaves every importance-less event sitting exactly on the
+## base value instead.
+static func formation_confidence(source: String, importance: float) -> float:
+	if source == FIRSTHAND:
+		return 1.0
+	return lerpf(WITNESS_CONFIDENCE, 1.0, clampf(importance, 0.0, 1.0))
 
 
 func to_dict() -> Dictionary:

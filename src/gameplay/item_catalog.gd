@@ -185,6 +185,29 @@ const _ITEMS := {
 	"secret_room_token": ["Tarnished Token", "material", 5, 0.0],
 	"wargames_punch_card": ["Scorched Punch Card", "material", 5, 0.0],
 	"curious_keepsake": ["Curious Keepsake", "material", 5, 0.0],
+	# "Any animal, the right tool" (see docs/concept/taming.md's own section
+	# by that name): the lasso only ever fit the Roped capture class
+	# (legged, not tiny, not world-boss scale). These four tools cover the
+	# rest of the body-plan matrix -- one per capture class that had no
+	# tool of its own yet.
+	"snare": ["Snare", "tool", 1, 0.0],
+	"butterfly_net": ["Butterfly Net", "tool", 1, 0.0],
+	"trap": ["Trap", "tool", 1, 0.0],
+	"reinforced_rope": ["Reinforced Rope", "tool", 1, 0.0],
+	# Netting a flyer without the menagerie keystone unlocked yields a kept
+	# curiosity rather than a real bonded companion (see docs/concept/
+	# pets.md's "Birds, butterflies, bees" bullet) -- these are harvested
+	# materials, not craftable at a bench.
+	"jarred_insect": ["Jarred Insect", "material", 20, 0.0],
+	"caged_songbird": ["Caged Songbird", "material", 20, 0.0],
+	# Climbing rope (docs/concept/transportation.md's "Traversal tools"
+	# section; docs/concept/terrain_relief.md's "Passability: ask before
+	# you step"): the high-tensile traversal tool that raises the
+	# hard-impassable slope threshold from HARD_THRESHOLD_DEG to
+	# HARD_THRESHOLD_WITH_ROPE_DEG (see TerrainPassability.is_passable)
+	# once carried in inventory (Player._has_climbing_gear). Held in hand
+	# like the lasso/fishing_rod/saw -- a tool, not a stackable material.
+	"climbing_rope": ["Climbing Rope", "tool", 1, 0.0],
 }
 
 

@@ -19,10 +19,12 @@ const MaterialProperties = preload("res://src/gameplay/material_properties.gd")
 ## type, and nothing is ever mutated: the caller's vector comes back untouched
 ## (`test_treatment_is_pure`).
 ##
-## `alloy_blend.gd` deliberately left this out ("What comes out is an as-cast /
-## as-quenched vector ... tempering ... belongs in whatever models the forge"),
-## and its own write-up named the resulting hole plainly: as-cast steel comes
-## out brittle with **no way to fix it**. This file is that fix.
+## `alloy_blend.gd` deliberately left this out ("What comes out is an as-cast
+## vector ... tempering ... belongs in whatever models the forge"), and named
+## the resulting hole plainly: it "cannot yet say that the same steel, quenched
+## to martensite, is not [tough]". This file is that fix -- as-cast steel is
+## single-phase and tough but not hard enough to be a blade, quenching makes it
+## hard and unusable, and only the pair together is a tool.
 ##
 ##
 ## ## The one law: heat treatment slides along a curve, it never leaves it
@@ -217,11 +219,16 @@ const KEEN_STEPS: int = AssemblyId.TREATMENT_LEVELS
 ## The toughness price is charged on the hardness ACTUALLY DELIVERED, not on
 ## the drive: a material already at the top of the 0-10 scale gets no hardness
 ## from quenching and therefore pays nothing for it. That is not a special
-## case, it falls out of `_slide_to_hardness` being the only operation --
-## but it does mean quenching a modelled carbon steel is a no-op, because
-## `alloy_blend.gd` already saturates hardness for any Fe-C composition. Pinned
-## and explained by
-## test_quenching_a_modelled_carbon_steel_is_a_no_op_because_the_scale_is_full.
+## case, it falls out of `_slide_to_hardness` being the only operation.
+##
+## That clamp used to make quenching a modelled carbon steel an outright no-op,
+## because the old hardness column had iron at 8.0 on a scale stopping at 10.0
+## and `alloy_blend.gd` therefore saturated every Fe-C composition. It does not
+## any more: `MaterialProperties.HARDNESS_MAX_HV` anchors the column on
+## martensite at 1000 HV, so as-cast steel arrives with room above it and a
+## full quench lands ON the ceiling for the right reason -- the ceiling IS
+## martensite. Pinned by
+## test_quenching_a_modelled_carbon_steel_really_hardens_it.
 static func quench(vector: Dictionary) -> Dictionary:
 	var hardness := _scalar(vector, "hardness")
 	return _slide_to_hardness(vector, hardness * MARTENSITE_HARDNESS_RATIO)

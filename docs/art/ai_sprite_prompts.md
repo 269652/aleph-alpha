@@ -793,6 +793,144 @@ addendum:
 
 ---
 
+## 8. Spell atom effects — one sheet per atom, six shared families
+
+Effect sheets for the 25 atoms in `spell_atom_catalog.gd`, real and castable
+today via the procedural fallback (`procedural_spell_effect_sprite.gd`) a
+player already sees on every cast (see [spell_runtime.md](../concept/spell_runtime.md)
+and [magic.md](../concept/magic.md)'s "Atom effects render as composite
+spritemaps" section). Keyed by ATOM id, not spell/item id — an effect
+belongs to whichever atom is resolving, not to the wand or weapon that
+triggered it, so a sheet generated here replaces that ONE atom's procedural
+look everywhere it's cast from, regardless of which spell used it.
+
+Same "one kit per shared shape, not per member" efficiency this doc already
+uses for flower archetypes (section 1): the procedural generator already
+groups all 25 atoms into 6 shared silhouette families — **burst, ring,
+cross, spiral, chevron, cloud** — matching `spell_atom_catalog.gd`'s own
+category groupings (every `damage` atom is a burst, every timed/lingering
+`control` atom a ring or cloud, etc. — see that file's own category field).
+Generate one template per family, then a distinct color/detail pass per
+atom in it — 6 base sessions instead of 25 unrelated ones, and a new atom
+added later needs only a color variant of an existing family, not new art
+from scratch.
+
+**Prefix every prompt below with the shared style preamble above**, plus
+this effect-cycle addendum (a small target-centered burst, not a full
+character — much smaller canvas than the boss attack sheets in section 6):
+
+> Lay out a 6-frame effect cycle in a single horizontal row — a bright
+> gathering wind-up (frames 1-2), a peak burst at full size and brightness
+> (frames 3-4), and a fade/dissipate (frames 5-6) — each frame separated by
+> a thin 1-2px near-white divider line, generous empty magenta padding
+> around each pose so nothing touches a divider or the canvas edge. This is
+> a small magical effect hovering at roughly chest height on a target, NOT
+> a full character — keep it compact and centered in each frame, no
+> ground, no shadow, no surrounding scene. Export at least 900px wide by
+> 200px tall for the row (a much smaller canvas than a full-character
+> sheet). No text, no numbers, no UI elements anywhere in the image.
+
+### 8a. Burst family — fire_damage, frost_damage, shock_damage, ignite, induce_mutation, illuminate, fear
+
+> A pixel-art effect cycle of a radiating BURST: a bright core gathers
+> inward during the wind-up (frames 1-2), then explodes outward into sharp
+> radiating spikes at peak brightness (frames 3-4, 8 spikes evenly spaced
+> around the core, each tapering to a point), then the spikes shrink and
+> fade to nothing (frames 5-6). [COLOR/FLAVOR — see table below] Strictly
+> posterized flat-banded shading throughout, no soft glow or gradient blur.
+
+| Atom | Color/flavor variation |
+|---|---|
+| `fire_damage` | Vivid orange-red core, yellow-white spike tips, like a small fireball igniting. |
+| `frost_damage` | Pale ice-blue core with sharp angular (not rounded) spikes, faint white frost crystals at the tips instead of a soft glow. |
+| `shock_damage` | Bright yellow core, spikes drawn as jagged lightning-bolt zigzags rather than straight spikes. |
+| `ignite` | Deep red-orange core, smaller and lower than fire_damage's burst (this is a lingering flame catching, not a one-shot blast) — a few small flame-lick shapes persist faintly into frame 6 instead of fully fading. |
+| `induce_mutation` | Sickly violet-purple core, spikes drawn asymmetric and irregular (no two the same length) rather than evenly spaced, unsettling instead of triumphant. |
+| `illuminate` | Warm bright yellow-white core, soft even spikes like sunbeams, the single brightest/whitest of this family. |
+| `fear` | Very dark purple-black core with jagged spikes reading as claw-marks or cracks rather than light rays — the visual opposite of illuminate despite sharing the burst shape. |
+
+### 8b. Ring family — freeze, root, shield, reveal, suppress_mutation, calm, teleport, portal
+
+> A pixel-art effect cycle of an encircling RING forming around the target:
+> a thin ring fades in and contracts slightly (frames 1-2), holds at full
+> brightness and a settled size (frames 3-4), then fades out in place
+> (frames 5-6) — this ring does not explode outward or travel, it simply
+> appears around/at the target and later disappears. [COLOR/FLAVOR — see
+> table below] Strictly posterized flat-banded shading, no soft glow.
+
+| Atom | Color/flavor variation |
+|---|---|
+| `freeze` | Pale ice-blue ring rendered as jagged crystalline facets rather than a smooth curve, a few small icicle spikes hanging off its inner edge. |
+| `root` | Earthy brown-green ring made of small thorny vine segments rather than a smooth line, a few thin roots/tendrils reaching inward from it. |
+| `shield` | Soft translucent-reading blue ring, drawn as a clean smooth curve (the most "protective barrier"-looking of this family) with a faint hexagonal facet pattern along it. |
+| `reveal` | Pale warm yellow ring, drawn as a soft pulse/ripple (concentric, like a radar ping) rather than a solid line. |
+| `suppress_mutation` | Flat grey ring with a single diagonal bar across it (a "null/forbidden" sign read), the most graphically plain of this family on purpose. |
+| `calm` | Soft pale blue-green ring, drawn as a slow gentle ripple like calm water, the softest-edged ring in the family. |
+| `teleport` | Violet ring that reads as thin and fast rather than settled — draw it already at full size in frame 1 and let it be the frames 5-6 fade that does most of the visible work, a "blink" rather than a forming barrier. |
+| `portal` | Deep indigo-blue ring, drawn as a genuine DOUBLE ring (two concentric rings close together, both visible) with a slightly darker "window" showing inside it, distinct from every single-ring atom in this family. |
+
+### 8c. Cross family — minor_heal, major_heal, summon_wisp
+
+> A pixel-art effect cycle of a small RESTORATIVE SPARKLE: a soft four-
+> pointed cross/star shape gathers and brightens (frames 1-2), holds at
+> peak brightness with a few small satellite sparkle particles orbiting it
+> (frames 3-4), then the particles drift outward and everything fades
+> (frames 5-6). [COLOR/FLAVOR — see table below] Strictly posterized
+> flat-banded shading, warm and gentle rather than aggressive.
+
+| Atom | Color/flavor variation |
+|---|---|
+| `minor_heal` | Soft warm gold, small and modest in scale. |
+| `major_heal` | Brighter white-gold, visibly larger and with more satellite sparkles than minor_heal — the same family member, clearly the "bigger" version. |
+| `summon_wisp` | Pale cyan-white, the satellite particles read as a small orbiting cluster of tiny lights rather than sparkles — this is the closest thing to a distinct "small creature" in this family, so keep it airy and alive-looking rather than a plain heal-glow. |
+
+### 8d. Spiral family — slow, accelerate_growth, gravity_shift
+
+> A pixel-art effect cycle of an inward SPIRAL: a line of light winds
+> inward from the outer edge toward the center in a 2-turn spiral (frames
+> 1-3, the spiral visibly tightening frame to frame), holds briefly at its
+> most tightly-wound state (frame 4), then dissolves outward (frames 5-6).
+> [COLOR/FLAVOR — see table below] Strictly posterized flat-banded shading.
+
+| Atom | Color/flavor variation |
+|---|---|
+| `slow` | Muted teal-grey, drawn as a viscous, slow-moving/thick-looking line (this atom's spiral should read as the LEAST energetic of the three). |
+| `accelerate_growth` | Vivid green, drawn as a sprouting vine/tendril curling inward rather than a plain line of light — the most organic-looking member of this family. |
+| `gravity_shift` | Deep indigo-purple, drawn with a subtle warping/lensing distortion along the spiral's own curve (the space along the line reads slightly bent), the most "physics-bending" looking member of this family. |
+
+### 8e. Chevron family — push, pull
+
+> A pixel-art effect cycle of two opposed WEDGE shapes at the target: two
+> triangular chevrons pointing away from center (for an outward force) or
+> toward center (for an inward one) fade in small and close to the target
+> (frames 1-2), snap outward/inward to their full extent at peak (frames
+> 3-4, this should read as a sudden sharp motion, not a gentle drift), then
+> fade out in their extended position (frames 5-6). [DIRECTION/COLOR — see
+> table below] Strictly posterized flat-banded shading, sharp hard edges
+> throughout (no soft chevrons).
+
+| Atom | Direction/color variation |
+|---|---|
+| `push` | Chevrons point AWAY from the target's center, outward, in light cool grey — reads as a shove leaving. |
+| `pull` | Chevrons point TOWARD the target's center, inward, in a darker blue-grey — reads as a force arriving/gathering in. |
+
+### 8f. Cloud family — poison_damage, blight
+
+> A pixel-art effect cycle of a small creeping CLOUD cluster: several
+> irregular soft-edged puffs gather loosely around the target (frames 1-2),
+> thicken and darken slightly at peak (frames 3-4), then thin out and
+> disperse (frames 5-6) — this should read as something settling ONTO the
+> target rather than exploding outward, the visual opposite energy of the
+> burst family. [COLOR/FLAVOR — see table below] Strictly posterized
+> flat-banded shading, no soft airbrushed fog.
+
+| Atom | Color/flavor variation |
+|---|---|
+| `poison_damage` | Sickly yellow-green, a few small bubble/droplet shapes among the puffs. |
+| `blight` | Dark purple-brown, drawn with small crack/wither lines radiating from the puffs into the empty space around them — the more "creeping decay" looking of the two, versus poison_damage's more "toxic gas" read. |
+
+---
+
 ## Notes for whoever runs these
 
 - Run the flower archetype sheets (1b) at pale/neutral tone as specified —
@@ -836,3 +974,14 @@ addendum:
   `"attack"` action away from its current walk-cycle fallback to the
   matching new sheet (see `concept/worldbosses.md`'s Krampus Status
   sub-section for that real, open gap).
+- Spell atom effect sheets (section 8) have **no illustrated-art ingestion
+  seam built yet** — `procedural_spell_effect_sprite.gd` only ever
+  generates its own procedural image today, unlike `DroppedItem`'s
+  "check `IllustratedCropSprite` first, fall back to procedural" pattern.
+  Wiring one in means adding that same has-real-art-first check to
+  `ProceduralSpellEffectSprite.generate_image`/`texture_for` (or the
+  `SpellEffectMarker` that calls them), keyed by atom id — measure each
+  generated sheet's own chroma-key/frame Y-range fresh, the same warning
+  section 6's own note gives for Krampus's attack sheets, since a small
+  target-centered burst sits very differently on its canvas than a full
+  character does.

@@ -121,3 +121,16 @@ func test_kick_action_does_not_collide_with_any_other_default():
 			bindings.default_keycode_for("kick"), bindings.default_keycode_for(action),
 			"kick's default collides with %s" % action
 		)
+
+
+## See docs/concept/spell_runtime.md -- casting is a wholly new trigger, not
+## routed through the hotbar/item system, so it needs its own real key.
+func test_cast_action_exists_and_does_not_collide_with_any_other_default():
+	assert_true(bindings.action_names().has("cast"))
+	for action in bindings.action_names():
+		if action == "cast":
+			continue
+		assert_ne(
+			bindings.default_keycode_for("cast"), bindings.default_keycode_for(action),
+			"cast's default collides with %s" % action
+		)

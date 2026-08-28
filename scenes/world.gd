@@ -498,6 +498,7 @@ var _lasso_banner: PanelContainer
 var _trade_banner: PanelContainer
 var _talk_banner: PanelContainer
 var _easter_egg_banner: PanelContainer
+var _cast_banner: PanelContainer
 var _wallet_label: Label
 var _creature_panels_accumulator := CREATURE_PANELS_REFRESH_INTERVAL  # refresh immediately
 ## How much faster than real time the ECOLOGY runs, set by /ecotest.
@@ -1612,6 +1613,7 @@ func _build_message_stack() -> void:
 	_trade_banner = _make_message_banner(16)
 	_talk_banner = _make_message_banner(14)
 	_easter_egg_banner = _make_message_banner(14)
+	_cast_banner = _make_message_banner(16)
 	# A sighting is an ambient world event rather than something the player
 	# did, and reads in its own cooler ink -- the one per-banner difference.
 	(_easter_egg_banner.get_child(0) as Label).add_theme_color_override(
@@ -1648,10 +1650,10 @@ func _set_message_banner(banner: PanelContainer, message: String) -> void:
 ## on the same line the way the taming and trade banners did (both were
 ## pinned at offset_top 144). Pinned by test_world_hud.gd.
 static func message_banner_lines(
-	fishing: String, lasso: String, trade: String, talk: String, easter_egg: String
+	fishing: String, lasso: String, trade: String, talk: String, easter_egg: String, cast: String
 ) -> PackedStringArray:
 	var lines := PackedStringArray()
-	for message in [fishing, lasso, trade, talk, easter_egg]:
+	for message in [fishing, lasso, trade, talk, easter_egg, cast]:
 		if message != "":
 			lines.append(message)
 	return lines
@@ -1668,6 +1670,12 @@ func _update_fishing_label(local_player: Player) -> void:
 ## A shopping prompt/result banner (see Player._shop_step).
 func _update_trade_label(local_player: Player) -> void:
 	_set_message_banner(_trade_banner, local_player.trade_message)
+
+
+## A cast result banner (see docs/concept/spell_runtime.md and
+## Player.cast_spell) -- same shared-stack shape as every other banner here.
+func _update_cast_label(local_player: Player) -> void:
+	_set_message_banner(_cast_banner, local_player.cast_message)
 
 
 ## A talk-result banner (see Player._talk_step/NpcGreeting).
@@ -2856,8 +2864,18 @@ func _handle_settlement_command(args: Array) -> void:
 	var active_institutions := _chunk_manager.active_institution_count_for_settlement(entity_id)
 	var production_counts := _chunk_manager.production_counts_for_settlement(entity_id)
 	var institution_type_counts := _chunk_manager.institution_type_counts_for_settlement(entity_id)
+	# The LIVE VillageMarket too, not just the persisted emergence Market: those
+	# are two different things both called "the market", and step_settlements /
+	# legitimacy_for_settlement classify a settlement off BOTH (see
+	# SettlementFood). Reporting off only the emergence one had /settlement
+	# printing "food: 0 (capacity 0) / declining" for a village visibly holding
+	# food -- the console contradicting the simulation that had just
+	# event-sourced it growing. Null for an unloaded chunk, which
+	# explain_settlement handles.
+	var village_market = _chunk_manager.village_market_for_settlement(entity_id)
 	for line in Why.explain_settlement(
-		market, household_count, entity_id, active_institutions, production_counts, institution_type_counts
+		market, household_count, entity_id, active_institutions, production_counts,
+		institution_type_counts, village_market
 	).split("
 "):
 		_dev_console.log_line(line)
@@ -3649,13 +3667,23 @@ func _update_hotbar(local_player: Player) -> void:
 		if item_id != "" and count > 0:
 			# texture_for() hits a shared static cache keyed by id (no per-frame
 			# image build / GPU upload) -- item art is a pure function of the id.
-			_hotbar_slots[i].texture = _item_sprite_generator.texture_for(item_id)
+			_hotbar_slots[i].texture = _item_sprite_generator.texture_for(_sprite_id_for_item(item_id))
 			_hotbar_counts[i].text = str(count) if count > 1 else ""
 			_hotbar_slot_frames[i].tooltip_text = _hotbar_tooltip_text(item_id, count)
 		else:
 			_hotbar_slots[i].texture = null
 			_hotbar_counts[i].text = ""
 			_hotbar_slot_frames[i].tooltip_text = "Drag an item here to bind it"
+
+
+## The sprite_id to render for `item_id` (see docs/concept/item_illustrations.md):
+## every renderer looks up its picture via an item's sprite_id, never its raw
+## id, so a variant item can share a base item's art. Falls back to the raw id
+## for one the catalog doesn't know -- ProceduralItemSprite's own generic
+## fallback already handles an unrecognized id gracefully, same as
+## _hotbar_tooltip_text's display-name fallback just below.
+func _sprite_id_for_item(item_id: String) -> String:
+	return _item_catalog.make(item_id).sprite_id if _item_catalog.has(item_id) else item_id
 
 
 ## "Iron Sword\nx3\nRight-click to clear" -- what's bound, how many, and how
@@ -4348,6 +4376,7 @@ func _client_process(delta: float) -> void:
 	_update_lasso_label(local_player)
 	_update_trade_label(local_player)
 	_update_talk_label(local_player)
+	_update_cast_label(local_player)
 	# The banners keep their own text; the whole stack steps aside while a
 	# window is open (see world_hint_visible_for).
 	_message_stack.visible = world_hint_visible_for(true, _any_gameplay_window_open())
@@ -4434,19 +4463,25 @@ func _client_process(delta: float) -> void:
 
 	var season := _chunk_manager.current_season().capitalize()
 	var raw_weather := _chunk_manager.current_weather(local_player.position)
-	# Water tiles react to the weather: raindrop ripples while raining,
-	# windy chop otherwise, and the whole surface paces faster/slower with
+	# Snow rather than rain when it is cold enough, and snow lying on the
+	# ground afterwards (see Snowfall). Temperature decides, not the season
+	# name -- a cold snap in autumn snows and a mild winter rains. Computed
+	# BEFORE `raining` below, since raining now needs to know about it.
+	var warmth := _chunk_manager.current_warmth()
+	var snowing := Snowfall.falls_as_snow(raw_weather, warmth)
+	# Water tiles react to the weather: raindrop ripples while raining (but
+	# NOT while snowing -- falling snow doesn't splash water the way rain
+	# does, RainOverlay below already shows flakes instead of drops once
+	# snowing is true, and the raindrop shader term is real per-fragment GPU
+	# cost across every visible water pixel: reported live, driving it
+	# during snow too dropped fps from ~30 to ~6 for no visual payoff).
+	# Windy chop otherwise, and the whole surface paces faster/slower with
 	# how energetic the weather is (calm on a clear day, hectic in a storm).
-	var raining := raw_weather == "rain" or raw_weather == "storm"
+	var raining := (raw_weather == "rain" or raw_weather == "storm") and not snowing
 	_chunk_manager.set_rain(raining)
 	# ... and the sky above them: rain you can actually see falling, heavier
 	# in a storm than in ordinary rain (see RainOverlay).
 	_rain_overlay.set_intensity(RAIN_INTENSITY_BY_WEATHER.get(raw_weather, 0.0))
-	# Snow rather than rain when it is cold enough, and snow lying on the
-	# ground afterwards (see Snowfall). Temperature decides, not the season
-	# name -- a cold snap in autumn snows and a mild winter rains.
-	var warmth := _chunk_manager.current_warmth()
-	var snowing := Snowfall.falls_as_snow(raw_weather, warmth)
 	_rain_overlay.set_snowing(snowing)
 	# Depth, tracks and repaint all live behind one call now, and it reads the
 	# WORLD clock rather than this frame's delta -- see step_snow. Accumulating

@@ -212,6 +212,47 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 12}, {"item_id": "plank", "count": 4}],
 		"output": {"item_id": "storage", "count": 1},
 	},
+	# "Any animal, the right tool" (see docs/concept/taming.md's own section
+	# by that name): the lasso only ever fit the Roped capture class. These
+	# four recipes cover the rest of the body-plan matrix -- one tool per
+	# capture class that had no tool of its own yet.
+	"snare": {
+		"inputs": [{"item_id": "plant_fibre", "count": 4}, {"item_id": "stick", "count": 1}],
+		"output": {"item_id": "snare", "count": 1},
+	},
+	"butterfly_net": {
+		"inputs": [{"item_id": "stick", "count": 1}, {"item_id": "plant_fibre", "count": 3}],
+		"output": {"item_id": "butterfly_net", "count": 1},
+	},
+	"trap": {
+		"inputs": [{"item_id": "stick", "count": 2}, {"item_id": "rock", "count": 3}],
+		"output": {"item_id": "trap", "count": 1},
+	},
+	# "Magically reinforced steel ropes" for boss-scale creatures: a real
+	# upgrade of the lasso (consumes a finished one) plus iron for the
+	# strength a lindwurm-sized animal actually needs.
+	"reinforced_rope": {
+		"inputs": [{"item_id": "lasso", "count": 1}, {"item_id": "iron_ingot", "count": 4}],
+		"output": {"item_id": "reinforced_rope", "count": 1},
+	},
+	# Climbing rope (docs/concept/transportation.md's "Traversal tools"
+	# section: "a proper climbing rope needs high tensile strength";
+	# docs/concept/terrain_relief.md's "Passability: ask before you step").
+	# Material chosen against the real toughness column
+	# (MaterialProperties.MATERIALS/ROPE_MIN_TOUGHNESS), not eyeballed --
+	# see test_material_properties.gd's viability pin. hide's toughness is
+	# 7.0, comfortably above ROPE_MIN_TOUGHNESS's 5.0, and unlike
+	# plant_fibre (ambient meadow gathering) it is sourced only by
+	# hunting+butchering an animal (butchering.gd) -- the "materials that
+	# make a traversal tool actually good live further out on the danger
+	# gradient" transportation.md itself asks for, the same shape as its
+	# own "waterproof hide from an aquatic apex predator" diving-hull
+	# example. plant_fibre braids/binds the hide strips into an actual
+	# rope, the same role it already plays in the lasso recipe above.
+	"climbing_rope": {
+		"inputs": [{"item_id": "hide", "count": 3}, {"item_id": "plant_fibre", "count": 3}],
+		"output": {"item_id": "climbing_rope", "count": 1},
+	},
 }
 
 

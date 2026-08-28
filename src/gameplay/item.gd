@@ -24,6 +24,16 @@ var armor: float
 ## way Throwable.impact_knockback already reads mass for a thrown item.
 var mass_kg: float
 
+## Which art this item's identity resolves to (see docs/concept/
+## item_illustrations.md) -- every renderer (inventory/hotbar/paperdoll/
+## dropped-item) looks up its picture via THIS, never `id` directly, so an
+## item's identity and its art can diverge on purpose: a crafted/variant item
+## can share a base item's art via a shared sprite_id instead of needing a
+## second catalog art entry. Defaults to this item's own `id` (see _init)
+## when the catalog doesn't specify one, so every item renders exactly as
+## before until something actually asks for a divergent sprite_id.
+var sprite_id: String
+
 
 func _init(
 	a_id: String,
@@ -33,7 +43,8 @@ func _init(
 	a_weapon_damage: float = 0.0,
 	a_equip_slot: String = "",
 	a_armor: float = 0.0,
-	a_mass_kg: float = 0.0
+	a_mass_kg: float = 0.0,
+	a_sprite_id: String = ""
 ) -> void:
 	id = a_id
 	display_name = a_display_name
@@ -43,6 +54,7 @@ func _init(
 	equip_slot = a_equip_slot
 	armor = a_armor
 	mass_kg = a_mass_kg
+	sprite_id = a_sprite_id if a_sprite_id != "" else a_id
 
 
 func is_weapon() -> bool:

@@ -502,6 +502,47 @@ func test_the_character_tab_body_also_spans_the_scroll_areas_width():
 	)
 
 
+## "The diorama is still square and does NOT span the whole rectangular
+## panel" (reported live) -- glow_wrap is DELIBERATELY SIZE_SHRINK_CENTER,
+## not EXPAND_FILL (see _build_hero_column's own doc comment: stretching it
+## to fill used to wash the DNA glow ring out into a flat, near-empty tint),
+## so it will never fill its column's width to the pixel the way
+## test_the_character_tab_body_also_spans_the_scroll_areas_width expects of
+## an EXPAND_FILL container -- that exact assertion would be the wrong shape
+## of test here. What's actually broken is DIORAMA_VIEW_SIZE's own TARGET
+## size being a square nowhere near the hero column's real available width
+## (measured live: a 276px-wide glow_wrap sitting in a 528px-wide column,
+## the rest just empty), not the shrink-centering itself -- so this checks
+## the target size directly: wider than tall, and covering most (not
+## necessarily all) of the real column width it's centred in.
+func test_the_diorama_view_is_a_rectangle_not_a_square():
+	assert_gt(
+		MainMenu.DIORAMA_VIEW_SIZE.x, MainMenu.DIORAMA_VIEW_SIZE.y,
+		"the diorama viewport should be wider than it is tall"
+	)
+
+
+## First widened to 372 (0.65 threshold below), which measured live as
+## STILL visibly short of the column's own real width -- reported live,
+## after actually seeing it: "it's now a rectangle but it still doesn't
+## cover the whole width of its containing panel". A live re-measurement
+## (glow_wrap 400px inside a genuinely 528px-wide column -- and the class-
+## icon row directly above it already fills that full 528px, so growing
+## glow_wrap to nearly match introduces no new minimum-width pressure of
+## its own) showed real headroom the first pass left unclaimed. Re-
+## thresholded from 0.65 ("most") to 0.9 ("covers the whole width", with a
+## small margin so it doesn't literally touch the column's edges) to match
+## what was actually asked for the second time.
+func test_the_diorama_panel_covers_the_hero_columns_available_width():
+	await _lay_out_create_screen_on_tab("Character")
+	var glow_wrap := _find_diorama_glow_wrap()
+	var column: Control = glow_wrap.get_parent()
+	assert_gt(
+		glow_wrap.size.x, column.size.x * 0.9,
+		"diorama panel is %.0f wide in a %.0f-wide hero column -- still not covering the whole width" % [glow_wrap.size.x, column.size.x]
+	)
+
+
 ## The diorama (see docs/concept/character_creator_preview_scene.md) must fit
 ## inside the FIRST, unscrolled view of the Character tab, alongside the
 ## class-icon row sitting above it -- reported live, with a screenshot: the
@@ -653,6 +694,25 @@ func test_only_the_active_preview_view_has_a_nonzero_minimum_size():
 	menu._preview_toggle_button.pressed.emit()
 	assert_eq(menu._diorama_view.custom_minimum_size, Vector2.ZERO)
 	assert_ne(menu._standard_portrait.custom_minimum_size, Vector2.ZERO)
+
+
+## custom_minimum_size is only a HINT the layout engine may hand out more
+## than -- checking it alone proves the INPUT is right, not that the
+## portrait's own real, laid-out rect actually ends up that size (reported
+## live, with a screenshot, after the custom_minimum_size fix alone hadn't
+## resolved it: empty space below the character's own feet, inside the
+## portrait's own dark rectangle). Checked against the real post-layout
+## .size the same way test_the_diorama_fits_within_the_first_unscrolled_
+## view_of_the_character_tab already checks the diorama's.
+func test_the_standard_portrait_is_actually_laid_out_at_its_own_display_size():
+	await _lay_out_create_screen_on_tab("Character")
+	menu._preview_toggle_button.pressed.emit()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_eq(
+		menu._standard_portrait.size, menu.STANDARD_PORTRAIT_DISPLAY_SIZE,
+		"portrait laid out at %s, not its own %s -- something is handing it more room than its aspect ratio needs" % [menu._standard_portrait.size, menu.STANDARD_PORTRAIT_DISPLAY_SIZE]
+	)
 
 
 ## The skill grid's own parent must give it its full height. The creator has

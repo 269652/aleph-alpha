@@ -11,6 +11,7 @@ extends GutTest
 const Quest = preload("res://src/emergence/quest.gd")
 const Market = preload("res://src/emergence/market.gd")
 const CraftingRecipeBook = preload("res://src/gameplay/crafting_recipe_book.gd")
+const NpcIdentity = preload("res://src/world/npc_identity.gd")
 
 var recipe_book: CraftingRecipeBook
 
@@ -52,12 +53,26 @@ func test_a_household_with_full_stock_produces_no_quest():
 	assert_eq(quests, [])
 
 
-## An occupation with no grounded recipe (see OccupationProduction) has
-## nothing to be short of -- not forced into a quest that doesn't exist.
-func test_an_occupation_with_no_grounded_recipe_produces_no_quest():
+## An occupation OccupationProduction has no recipe for has nothing to be
+## short of -- skipped, not forced into a quest that doesn't exist.
+##
+## No REAL occupation can reach that branch any more, which is why this is
+## pinned with a string NpcIdentity does not have. It used to be pinned
+## with "merchant", back when only hunter and blacksmith were mapped; all
+## eight of NpcIdentity.OCCUPATIONS are mapped now, and that is deliberate
+## (see occupation_production.gd: an occupation with no recipe can never
+## fall short of an input, so its households can never ask a player for
+## anything). The guard itself still has to hold, because
+## production_shortfall_quests_for takes occupations as plain strings from
+## its caller: a renamed or malformed one must drop out quietly rather than
+## crash or invent a recipe. The assert_false keeps the premise honest --
+## if this name ever becomes a real occupation, this fails here instead of
+## quietly testing nothing.
+func test_an_occupation_that_does_not_exist_produces_no_quest():
+	assert_false(NpcIdentity.OCCUPATIONS.has("not_a_real_occupation"))
 	var market := Market.new()
 	var quests := Quest.production_shortfall_quests_for(
-		"settlement:0_0", {"household:1": "merchant"}, market, recipe_book
+		"settlement:0_0", {"household:1": "not_a_real_occupation"}, market, recipe_book
 	)
 	assert_eq(quests, [])
 

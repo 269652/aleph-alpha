@@ -20,7 +20,12 @@ Example role categories by species:
 - **Dogs**: guard the home, accompany the player, partake in combat.
 - **Horses**: mounts. See [transportation.md](transportation.md) for how
   horses fit alongside boats and fast travel.
-- **Birds**: decorative — perch on the player's shoulder or fly nearby.
+- **Birds, butterflies, bees**: decorative. These are netted rather than
+  lassoed (see [taming.md](taming.md)'s "Any animal, the right tool") and
+  have no order AI to learn Follow/Stay — a netted creature stays a kept
+  curiosity unless the player has unlocked Beastmaster's `menagerie`
+  keystone, which turns it into a real bonded companion instead. Still
+  never given an order; the bond is the whole of what changed.
 - **Bears, lions**: dedicated combat pets.
 - **Cows**: farmed for milk.
 - **Sheep**: farmed for wool.

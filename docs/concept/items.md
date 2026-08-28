@@ -31,6 +31,14 @@ spring is specified in [heat_treatment.md](heat_treatment.md): quench, temper
 and sharpen slide one material along a single hardness/toughness curve that no
 draw is allowed to cheat.
 
+What an item actually *looks like* — in the inventory, on the ground, in
+hand, worn as armor — is specified separately in
+[item_illustrations.md](item_illustrations.md): a real `sprite_id` on
+`Item`, and real worn-armor visuals on the character rig, both reusing the
+same composite-spritemap engine the hero and named creatures already use.
+Spell/atom attack effects are that doc's sibling concern, specified in
+[magic.md](magic.md#atom-effects-render-as-composite-spritemaps-one-per-atom-2026-08-28).
+
 ### Reading an item
 
 Hovering an item in the inventory is how the player learns what it is. The
@@ -74,11 +82,20 @@ inspect surfacing raw numbers for min-maxers stays a possible later affordance
 rather than the default hover text.
 
 Each descriptor's threshold is a named, calibration-tested constant on
-`MaterialProperties`, and two of the four reuse cutoffs the game had already
-fixed elsewhere — `brittle` is the same toughness line the impact model
-fractures at, `buoyant` the same water-density line raft viability uses — so a
-word in a tooltip and a behaviour in the simulation cannot come to mean
-different things. There is deliberately no "heavy" descriptor: an item's mass
+`MaterialProperties`, and **three** of the four reuse cutoffs the game had
+already fixed elsewhere — `brittle` is the same toughness line the impact model
+fractures at, `buoyant` the same water-density line raft viability uses, and as
+of 2026-08-28 `hard` is the same line the impact model refuses to let a point
+pierce (`ImpactResolver.PIERCE_HARDNESS_CAP`), so *a point cannot pierce
+anything the tooltip calls hard* — so a word in a tooltip and a behaviour in
+the simulation cannot come to mean different things.
+
+`hard` itself moved that day, from stone's hardness to **iron's**, when
+`materials.md`'s hardness column became published Vickers: on a real
+indentation scale rock is seven times harder than wrought iron, so keeping
+stone as the cutoff would have dropped iron out of the word and broken the
+`Iron — hard, keen` line this page documents. Every material's *word* is
+unchanged; only the number behind it is now a measurement. There is deliberately no "heavy" descriptor: an item's mass
 is already shown as a real number, and a vaguer word for it would be a
 downgrade.
 

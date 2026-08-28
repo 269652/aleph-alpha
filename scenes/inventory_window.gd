@@ -329,7 +329,19 @@ func refresh(stacks: Array, equipped: Dictionary, total_armor: float, slot_count
 	for slot in _paperdoll_icons:
 		var icon: TextureRect = _paperdoll_icons[slot]
 		var item = equipped.get(slot)
-		icon.texture = _item_sprite.generate_texture(item.id) if item != null else null
+		icon.texture = _item_sprite.generate_texture(item.sprite_id) if item != null else null
+
+	# Mirrors the weapon-in-hand wiring just below for the four real armor
+	# slots (see Equipment.SLOTS/docs/concept/item_illustrations.md) -- the
+	# slot-frame icon above already showed what was worn, but the paperdoll
+	# CHARACTER itself showed no armor at all, the same gap the in-world rig
+	# had (see Player.equip_armor).
+	for slot in ["head", "chest", "legs", "feet"]:
+		var worn_armor = equipped.get(slot)
+		if worn_armor != null:
+			_preview_view.equip_armor_slot(slot, _item_sprite.generate_texture(worn_armor.sprite_id))
+		else:
+			_preview_view.unequip_slot(slot)
 
 	# Put the equipped weapon in the paperdoll character's actual hand, the
 	# same way Player.equip_item does for the world rig -- the slot frame
@@ -337,7 +349,7 @@ func refresh(stacks: Array, equipped: Dictionary, total_armor: float, slot_count
 	# stood there empty-handed.
 	var worn_weapon = equipped.get("weapon")
 	if worn_weapon != null:
-		_preview_view.equip_weapon(_item_sprite.generate_texture(worn_weapon.id))
+		_preview_view.equip_weapon(_item_sprite.generate_texture(worn_weapon.sprite_id))
 	else:
 		_preview_view.unequip_slot("tool")
 
@@ -414,12 +426,12 @@ func _build_item_slot(stack, grid_index: int) -> Control:
 	# HUD hotbar slot to bind it to a number key -- see World).
 	var item_id: String = stack.item.id
 	box.drag_payload = {"source": DRAG_SOURCE_INVENTORY, "index": grid_index, "item_id": item_id}
-	box.make_preview = func(): return _drag_preview_for(item_id)
+	box.make_preview = func(): return _drag_preview_for(stack.item.sprite_id)
 	box.can_accept = func(payload): return _is_inventory_payload(payload)
 	box.dropped = func(payload): items_reordered.emit(int(payload["index"]), grid_index)
 
 	var icon := TextureRect.new()
-	icon.texture = _item_sprite.generate_texture(stack.item.id)
+	icon.texture = _item_sprite.generate_texture(stack.item.sprite_id)
 	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
 	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -442,9 +454,9 @@ func _is_inventory_payload(payload) -> bool:
 
 
 ## The little icon that follows the cursor while dragging.
-func _drag_preview_for(item_id: String) -> Control:
+func _drag_preview_for(sprite_id: String) -> Control:
 	var preview := TextureRect.new()
-	preview.texture = _item_sprite.generate_texture(item_id)
+	preview.texture = _item_sprite.generate_texture(sprite_id)
 	preview.custom_minimum_size = Vector2(ICON_SIZE, ICON_SIZE)
 	preview.size = Vector2(ICON_SIZE, ICON_SIZE)
 	preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED

@@ -34,6 +34,7 @@ func test_generate_is_deterministic_for_the_same_seed():
 	var b := CharacterPreviewLayout.generate(42, footprint)
 	assert_eq(a.pond_center, b.pond_center)
 	assert_eq(a.pond_radius, b.pond_radius)
+	assert_eq(a.pond_half_size, b.pond_half_size)
 	assert_eq(a.tree_positions, b.tree_positions)
 	assert_eq(a.pebble_positions, b.pebble_positions)
 
@@ -156,14 +157,59 @@ func test_bird_positions_are_placed_inside_the_footprint():
 		assert_true(bounds.has_point(bird_position), "bird position %s should start inside the footprint" % bird_position)
 
 
-func test_pebble_positions_sit_near_the_ponds_rim():
+## Pebbles used to scatter on a perfect CIRCLE at pond_radius -- fine while
+## the pond itself was one, but now that its own visual/placement shape is a
+## rectangle (pond_half_size, narrower on one axis than pond_radius alone --
+## see that field's own doc comment), a pebble placed by the old uniform
+## formula in the SHORT axis direction would land well out in the open grass,
+## nowhere near the water it's meant to sit at the edge of. Checked here by
+## normalizing each pebble's offset against pond_half_size (an ellipse
+## matching the rectangle's own aspect) rather than a bare distance against
+## one scalar radius: every pebble's normalized length should land just
+## outside 1.0 (the rim) by no more than the same PEBBLE_RIM_BAND, in EITHER
+## axis, not just the long one.
+func test_pebble_positions_sit_near_the_ponds_elliptical_rim():
 	var layout := CharacterPreviewLayout.generate(3, footprint)
 	assert_gt(layout.pebble_positions.size(), 0)
 	for pebble_position in layout.pebble_positions:
-		var distance_from_center: float = pebble_position.distance_to(layout.pond_center)
-		# At or just outside the rim -- not deep in the water, not far out
-		# in the grass.
-		assert_between(distance_from_center, layout.pond_radius, layout.pond_radius + 6.0)
+		var offset: Vector2 = pebble_position - layout.pond_center
+		var normalized := Vector2(offset.x / layout.pond_half_size.x, offset.y / layout.pond_half_size.y)
+		var band_fraction: float = CharacterPreviewLayout.PEBBLE_RIM_BAND / layout.pond_radius
+		assert_between(
+			normalized.length(), 1.0, 1.0 + band_fraction + 0.01,
+			"pebble at %s (normalized %s) should sit just outside the ELLIPTICAL rim, not a uniform circle" % [pebble_position, normalized]
+		)
+
+
+## Bigger, per direct live feedback ("the pond should be bigger"): the old
+## 0.22 fraction (pond diameter ~42 of a 96-unit footprint) read as closer to
+## a puddle than a pond next to a full-height tree/character. Test-pinned
+## (CLAUDE.md: tuned values must be a tested/pinned constant, never just an
+## eyeballed comment) rather than derived, since "how big should a decorative
+## pond feel" has no real-world measurement to check it against -- same
+## precedent as this file's own LONG_GRASS_GROWTH/BIRD_WANDER_RADIUS.
+func test_pond_radius_fraction_is_pinned_at_its_bigger_value():
+	assert_eq(CharacterPreviewLayout.POND_RADIUS_FRACTION, 0.3)
+
+
+## "not square / circle but a rectangle" (reported live): pond_half_size is
+## the rectangle's own long/short half-extents, replacing the single scalar
+## pond_radius everywhere a SHAPE (not just a containment envelope) is
+## needed -- pebble placement above, and CharacterPreviewDiorama's own tile
+## grid next. The long axis is pinned to pond_radius exactly (never wider
+## than the circular envelope every OTHER system -- is_clear, fish, trees --
+## still safely avoids), so nothing already trusting pond_radius as an outer
+## bound needs to change; only the short axis shrinks, by POND_ASPECT_RATIO,
+## which is what actually makes it read as a rectangle rather than a circle.
+func test_pond_half_size_is_a_rectangle_inscribed_in_the_circular_envelope():
+	for seed_value in [1, 2, 3]:
+		var layout := CharacterPreviewLayout.generate(seed_value, footprint)
+		assert_almost_eq(layout.pond_half_size.x, layout.pond_radius, 0.001, "seed %d: long axis should reach exactly pond_radius" % seed_value)
+		assert_almost_eq(
+			layout.pond_half_size.y, layout.pond_radius / CharacterPreviewLayout.POND_ASPECT_RATIO, 0.001,
+			"seed %d: short axis should be pond_radius scaled down by POND_ASPECT_RATIO" % seed_value
+		)
+		assert_gt(layout.pond_half_size.x, layout.pond_half_size.y, "seed %d: should be wider than tall, not square" % seed_value)
 
 
 ## The diorama is a corner of the REAL world, so its meadow has to read at
@@ -228,8 +274,18 @@ func test_grass_field_noise_scale_lets_the_centre_actually_receive_grass():
 			if result.grass_positions.has(nc):
 				seeds_with_center += 1
 				break
+	# Re-measured after POND_RADIUS_FRACTION grew (reported live: "the pond
+	# should be bigger"): a physically bigger pond legitimately reaches
+	# toward the centre for more seed/edge combinations, so the rate the
+	# noise fix alone can achieve dropped from 37/100 (at the old 0.22
+	# fraction) to 9/100 -- a real, expected consequence of two independent,
+	# deliberate changes interacting, not a regression in the noise field
+	# itself: still clearly non-zero, nothing like the OLD fix's own "0/100,
+	# structurally never" failure this test guards against. Thresholded at
+	# num_seeds/20 rather than pinned exactly to 9, so a small, unrelated
+	# future change to either constant doesn't flip this test on noise alone.
 	assert_gt(
-		seeds_with_center, num_seeds / 10,
+		seeds_with_center, num_seeds / 20,
 		"only %d/%d seeds ever placed grass near the footprint's own centre -- the noise field is still structurally excluding it" % [seeds_with_center, num_seeds]
 	)
 
@@ -312,3 +368,52 @@ func test_is_clear_accepts_a_point_far_from_the_pond_and_every_tree():
 	# centred pond and trees kept away from the pond.
 	var corner := Vector2.ZERO
 	assert_true(layout.is_clear(corner))
+
+
+# -- richer scene life: flowers, butterflies, worms, a boar ------------------
+##
+## Reported live: "Can you make it so that the character does more things and
+## the scene's livelihood increases? We need flowers, butterflies, worms...
+## the character should do random things like fight a boar; fish a fish..."
+## Each new placement below follows the exact same shape already established
+## for trees/pebbles/birds -- a COUNT constant and either is_clear-checked
+## rejection sampling (ground life) or an unchecked footprint-wide point
+## (things that fly, which don't need obstacle avoidance -- see BIRD_COUNT's
+## own doc comment).
+
+func test_flower_positions_are_placed_clear_of_the_pond_and_every_tree():
+	var layout := CharacterPreviewLayout.generate(11, footprint)
+	assert_eq(layout.flower_positions.size(), CharacterPreviewLayout.FLOWER_COUNT)
+	for flower_position in layout.flower_positions:
+		assert_true(layout.is_clear(flower_position), "flower at %s should be clear of the pond/trees" % flower_position)
+
+
+func test_worm_positions_are_placed_clear_of_the_pond_and_every_tree():
+	var layout := CharacterPreviewLayout.generate(11, footprint)
+	assert_eq(layout.worm_positions.size(), CharacterPreviewLayout.WORM_COUNT)
+	for worm_position in layout.worm_positions:
+		assert_true(layout.is_clear(worm_position), "worm at %s should be clear of the pond/trees" % worm_position)
+
+
+func test_butterfly_positions_are_placed_inside_the_footprint():
+	var layout := CharacterPreviewLayout.generate(11, footprint)
+	assert_eq(layout.butterfly_positions.size(), CharacterPreviewLayout.BUTTERFLY_COUNT)
+	var bounds := Rect2(Vector2.ZERO, footprint)
+	for butterfly_position in layout.butterfly_positions:
+		assert_true(bounds.has_point(butterfly_position), "butterfly position %s should start inside the footprint" % butterfly_position)
+
+
+## One ambient boar for the hero to (harmlessly) spar with -- see
+## CharacterPreviewDiorama's own FIGHT action.
+func test_boar_position_is_placed_clear_of_the_pond_and_every_tree():
+	var layout := CharacterPreviewLayout.generate(11, footprint)
+	assert_true(layout.is_clear(layout.boar_position), "boar at %s should be clear of the pond/trees" % layout.boar_position)
+
+
+func test_flower_butterfly_worm_boar_positions_are_deterministic_for_the_same_seed():
+	var a := CharacterPreviewLayout.generate(42, footprint)
+	var b := CharacterPreviewLayout.generate(42, footprint)
+	assert_eq(a.flower_positions, b.flower_positions)
+	assert_eq(a.butterfly_positions, b.butterfly_positions)
+	assert_eq(a.worm_positions, b.worm_positions)
+	assert_eq(a.boar_position, b.boar_position)

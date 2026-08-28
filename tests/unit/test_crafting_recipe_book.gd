@@ -28,7 +28,10 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# pinned to agree with SagewerkProduction's real cost constants.
 	# + storage (see docs/concept/timber_construction.md's "Storage,
 	# logistics, and the autonomous dependency chain" section, 1 more).
-	assert_eq(ids.size(), 32)
+	# + "any animal, the right tool" (docs/concept/taming.md): snare,
+	# butterfly_net, trap, reinforced_rope (4 more).
+	# + transportation (docs/concept/transportation.md): climbing_rope (1 more).
+	assert_eq(ids.size(), 37)
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():
@@ -415,3 +418,94 @@ func test_log_to_balken_and_log_to_planke_agree_with_sagewerk_production_costs()
 
 	assert_eq(book.recipe_requires_structure("log_to_balken"), "sagewerk")
 	assert_eq(book.recipe_requires_structure("log_to_planke"), "sagewerk")
+
+
+# -- "any animal, the right tool" gear (see docs/concept/taming.md's ---------
+# -- "Any animal, the right tool" section) -----------------------------------
+#
+## Four new capture tools -- one per capture class that had no tool of its
+## own yet (Roped already had the lasso). Every input item id already
+## exists in item_catalog.gd's _ITEMS -- no new raw material invented here.
+
+func test_snare_recipe_uses_plant_fibre_and_a_stick():
+	assert_true(book.recipe_ids().has("snare"), "the snare must be craftable")
+	assert_eq(book.recipe_output("snare")["item_id"], "snare")
+	assert_false(book.can_craft("snare", {"plant_fibre": 3, "stick": 1}))
+	assert_true(book.can_craft("snare", {"plant_fibre": 4, "stick": 1}))
+	var result: Dictionary = book.craft("snare", {"plant_fibre": 4, "stick": 1})
+	assert_true(result["success"])
+	assert_eq(result["remaining_counts"]["plant_fibre"], 0)
+	assert_eq(result["remaining_counts"]["stick"], 0)
+
+
+func test_butterfly_net_recipe_uses_a_stick_and_plant_fibre():
+	assert_true(book.recipe_ids().has("butterfly_net"), "the butterfly net must be craftable")
+	assert_eq(book.recipe_output("butterfly_net")["item_id"], "butterfly_net")
+	assert_false(book.can_craft("butterfly_net", {"stick": 1, "plant_fibre": 2}))
+	assert_true(book.can_craft("butterfly_net", {"stick": 1, "plant_fibre": 3}))
+
+
+func test_trap_recipe_uses_sticks_and_rocks():
+	assert_true(book.recipe_ids().has("trap"), "the trap must be craftable")
+	assert_eq(book.recipe_output("trap")["item_id"], "trap")
+	assert_false(book.can_craft("trap", {"stick": 2, "rock": 2}))
+	assert_true(book.can_craft("trap", {"stick": 2, "rock": 3}))
+
+
+## Reinforced rope is a real upgrade of the lasso, not a from-scratch build --
+## it consumes a finished lasso plus real iron for the "magically reinforced
+## steel ropes" the user named.
+func test_reinforced_rope_recipe_upgrades_a_lasso_with_iron_ingots():
+	assert_true(book.recipe_ids().has("reinforced_rope"), "reinforced rope must be craftable")
+	assert_eq(book.recipe_output("reinforced_rope")["item_id"], "reinforced_rope")
+	assert_false(book.can_craft("reinforced_rope", {"lasso": 1, "iron_ingot": 3}))
+	assert_true(book.can_craft("reinforced_rope", {"lasso": 1, "iron_ingot": 4}))
+	var result: Dictionary = book.craft("reinforced_rope", {"lasso": 1, "iron_ingot": 4})
+	assert_true(result["success"])
+	assert_eq(result["remaining_counts"]["lasso"], 0)
+	assert_eq(result["remaining_counts"]["iron_ingot"], 0)
+
+
+## Every input item id across all four new capture-gear recipes must already
+## exist in item_catalog.gd -- no new raw material id invented for this pass
+## (jarred_insect/caged_songbird are deliberately NOT craftable, so they are
+## excluded here).
+func test_capture_gear_recipes_use_only_existing_items():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	for recipe_id in ["snare", "butterfly_net", "trap", "reinforced_rope"]:
+		for item_id in _input_item_ids(recipe_id):
+			assert_true(catalog.has(item_id), "%s recipe uses unknown material %s" % [recipe_id, item_id])
+
+
+# -- climbing rope (docs/concept/transportation.md's "Traversal tools" -----
+# -- section: "a proper climbing rope needs high tensile strength", gated ---
+# -- by material sourcing further out on the danger gradient rather than a --
+# -- unique found-treasure item) ---------------------------------------------
+#
+## hide is the real MaterialProperties.MATERIALS material chosen (see
+## test_material_properties.gd's test pinning it as a viable grapple_rope
+## material by toughness) -- it is also already a real item_id in
+## item_catalog.gd, sourced only by hunting+butchering an animal
+## (butchering.gd), not gathered ambiently the way plant_fibre is. plant_fibre
+## binds/braids the hide strips into an actual rope.
+
+func test_climbing_rope_recipe_exists_and_is_craftable_from_hide_and_plant_fibre():
+	assert_true(book.recipe_ids().has("climbing_rope"), "the climbing rope must be craftable")
+	assert_eq(book.recipe_output("climbing_rope")["item_id"], "climbing_rope")
+	assert_false(book.can_craft("climbing_rope", {"hide": 2, "plant_fibre": 3}))
+	assert_true(book.can_craft("climbing_rope", {"hide": 3, "plant_fibre": 3}))
+	var result: Dictionary = book.craft("climbing_rope", {"hide": 3, "plant_fibre": 3})
+	assert_true(result["success"])
+	assert_eq(result["output_item_id"], "climbing_rope")
+	assert_eq(result["remaining_counts"]["hide"], 0)
+	assert_eq(result["remaining_counts"]["plant_fibre"], 0)
+
+
+## The chosen material must already be a real item the catalog knows about --
+## no new raw material id invented for this recipe.
+func test_climbing_rope_recipe_uses_only_existing_items():
+	const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+	var catalog := ItemCatalog.new()
+	for item_id in _input_item_ids("climbing_rope"):
+		assert_true(catalog.has(item_id), "climbing_rope recipe uses unknown material %s" % item_id)

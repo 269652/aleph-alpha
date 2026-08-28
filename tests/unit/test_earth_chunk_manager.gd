@@ -224,6 +224,20 @@ func test_set_sun_position_updates_the_hillshade_materials_uniforms():
 	hillshade_layer.free()
 
 
+## Entity relief shading (see EntityHillshadeShader, StoneRenderer's
+## mountain-vein sprites) shares the SAME live sun position as the ground
+## overlay -- one set_sun_position call must re-shade both, not just the
+## ground layer. No layer registration needed here (unlike the ground
+## overlay test above): entity shading has no TileMapLayer of its own, only
+## the shared material StoneRenderer's vein sprites point their `material`
+## at directly.
+func test_set_sun_position_also_updates_the_entity_hillshade_materials_uniforms():
+	manager.set_sun_position(62.0, 210.0)
+	var material := manager._entity_hillshade_shader.shared_material()
+	assert_eq(material.get_shader_parameter("sun_elevation_deg"), 62.0)
+	assert_eq(material.get_shader_parameter("sun_azimuth_deg"), 210.0)
+
+
 ## Same shape as test_water_overlay_marks_exactly_the_loaded_ocean_cells,
 ## but hillshade is a GENERAL mechanism (docs/concept/terrain_relief.md:
 ## "not mountain-specific code") -- every loaded cell gets a real tile, not
@@ -636,6 +650,10 @@ func test_clear_attraction_point_releases_every_fish():
 
 const NpcMarker = preload("res://src/rendering/npc_marker.gd")
 const NpcIdentity = preload("res://src/world/npc_identity.gd")
+const OccupationProduction = preload("res://src/emergence/occupation_production.gd")
+const SettlementState = preload("res://src/emergence/settlement_state.gd")
+const SettlementGranary = preload("res://src/emergence/settlement_granary.gd")
+const NpcProduction = preload("res://src/world/npc_production.gd")
 
 
 func _add_fake_merchant(position: Vector2) -> NpcMarker:
@@ -985,6 +1003,67 @@ func test_update_with_progress_still_evicts_chunks_beyond_unload_radius():
 	await manager.update_with_progress(far_away_tile)
 
 	assert_false(manager.is_chunk_loaded(Vector2i(0, 0)))
+
+
+# -- re-entrancy: _load_chunk must tolerate being called twice for the same
+# coord without leaking nodes. update()/update_with_progress() both funnel
+# every chunk through this one mutation point with no "already loaded" guard
+# AT the point of mutation (pending_load_chunks/_budgeted_load_order only
+# guard what gets SELECTED, one level up) -- so two concurrent loaders that
+# each independently decided a coord was still pending can both go on to
+# call _load_chunk on it. This is exactly what happens in
+# World._on_peer_connected, which has no re-entrancy guard around its
+# `await _compute_dry_land_spawn_tile()` / `update_with_progress()` chain
+# (contrast `_initial_client_chunk_load_task_running`, which guards the
+# solo-client cold-load path but nothing analogous exists for peer-connect):
+# two peers joining within the same multi-frame loading window, or a peer
+# joining while the host's own per-frame update() is already mid-load, both
+# reach the same spawn-adjacent chunk set concurrently. -------------------
+
+func test_load_chunk_called_twice_for_the_same_coord_does_not_leak_entity_nodes():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var entities_before := entities_parent.get_child_count()
+
+	# Simulates the race: another in-flight loader reaches the same
+	# coordinate before either call has finished.
+	manager._load_chunk(chunk_coord)
+
+	assert_eq(
+		entities_parent.get_child_count(), entities_before,
+		"a second _load_chunk for an already-loaded coord must not spawn a duplicate batch of tree/stone/decoration nodes"
+	)
+
+
+func test_load_chunk_called_twice_for_the_same_coord_does_not_leak_creature_nodes():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var creatures_before := creatures_parent.get_child_count()
+
+	manager._load_chunk(chunk_coord)
+
+	assert_eq(
+		creatures_parent.get_child_count(), creatures_before,
+		"a second _load_chunk for an already-loaded coord must not spawn a duplicate batch of creature/fish/village nodes"
+	)
+
+
+func test_load_chunk_called_twice_for_the_same_coord_keeps_the_original_tree_and_stone_records():
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	manager._load_chunk(chunk_coord)
+	var trees_before: Array = manager._loaded_trees[chunk_coord]
+	var stones_before: Array = manager._loaded_stones[chunk_coord]
+
+	manager._load_chunk(chunk_coord)
+
+	assert_eq(
+		manager._loaded_trees[chunk_coord], trees_before,
+		"a second _load_chunk must not overwrite the tree record with a freshly (and redundantly) spawned batch"
+	)
+	assert_eq(
+		manager._loaded_stones[chunk_coord], stones_before,
+		"a second _load_chunk must not overwrite the stone record with a freshly (and redundantly) spawned batch"
+	)
 
 
 func test_elevation_at_global_matches_the_generator_for_a_loaded_tile():
@@ -4183,6 +4262,33 @@ func test_evicting_old_chunks_frees_wild_crop_state():
 
 ## step_wild_crops mirrors step_tall_grass's own throttled-accumulator shape
 ## -- growth actually advances once the refresh interval elapses.
+## The `accelerate_growth` spell atom's real hook (see docs/concept/
+## spell_runtime.md) -- same WildCropPatch.advance() step_wild_crops already
+## calls on its own throttled clock, triggered instantly instead.
+func test_accelerate_wild_crop_growth_advances_every_patch_in_the_chunk():
+	manager.update(_berlin_tile)
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var sim: WildCropPatch = manager._wild_crop_sims[chunk_coord]["carrot"]
+	var immature_cell := Vector2i(-1, -1)
+	for cell in sim.get_patch_cells():
+		if sim.get_growth(cell) < 1.0:
+			immature_cell = cell
+	if immature_cell == Vector2i(-1, -1):
+		pass_test("precondition unmet (no immature carrot patch nearby this run) -- nothing to regress")
+		return
+	var before: float = sim.get_growth(immature_cell)
+
+	var applied := manager.accelerate_wild_crop_growth(_berlin_tile, 500.0)
+
+	assert_true(applied)
+	assert_gt(sim.get_growth(immature_cell), before)
+
+
+func test_accelerate_wild_crop_growth_returns_false_for_an_unloaded_chunk():
+	var far_away_tile := Vector2i(5000, 5000)
+	assert_false(manager.accelerate_wild_crop_growth(far_away_tile, 500.0))
+
+
 func test_step_wild_crops_advances_growth_toward_maturity():
 	manager.update(_berlin_tile)
 	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
@@ -5217,23 +5323,25 @@ func test_a_partial_snowfall_paints_a_mix_of_bare_and_covered_tiles_not_one_unif
 
 
 ## A companion regression to the mix test above: the whole-field repaint used
-## to fire only when the (onset-FREE) tracked band crossed one of
-## DEPTH_BANDS' 4 boundaries, so within a single band's depth range -- easily
-## a third of a whole snowfall -- NOTHING repainted at all, no matter how far
-## the global depth kept climbing. Measured live before this test existed:
-## coverage sat flat at the exact same percentage from depth 0.02 clear
-## through depth 0.25, then jumped straight to 100% at depth 0.5 -- the
-## "instant reveal" bug again, just moved to a coarser timescale. More land
-## tiles must show snow at a later depth than an earlier one even when both
-## fall inside the SAME depth band.
+## to fire only when the (onset-FREE) tracked band crossed a DEPTH_BANDS
+## boundary (4 of them, back when SnowLayer.DEPTH_BANDS was 4 -- now 25, see
+## that constant's own doc comment), so within a single band's depth range --
+## easily a third of a whole snowfall at 4 bands -- NOTHING repainted at all,
+## no matter how far the global depth kept climbing. Measured live before
+## this test existed: coverage sat flat at the exact same percentage from
+## depth 0.02 clear through depth 0.25, then jumped straight to 100% at depth
+## 0.5 -- the "instant reveal" bug again, just moved to a coarser timescale.
+## More land tiles must show snow at a later depth than an earlier one even
+## when both fall inside the same depth band (at DEPTH_BANDS=25 the two
+## depths this test picks now straddle a couple of the much finer band
+## boundaries rather than sharing one wide band outright, but the property
+## under test -- coverage is never flat between two depths a repaint-gate bug
+## could otherwise merge -- is exactly the same regression check either way).
 func test_snow_coverage_advances_within_a_single_depth_band_not_only_at_band_crossings():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
 	manager.update(_berlin_tile)
 
-	# Both comfortably inside depth BAND 0 (SnowLayer.band_for(x, 0) == 0 for
-	# any x in (0, 0.25]) -- a repaint gated only on the band index would
-	# treat these as indistinguishable.
 	manager.set_snow_depth(0.02)
 	var covered_early := snow_layer.get_used_cells().size()
 
@@ -6079,6 +6187,83 @@ func test_step_settlements_does_not_repeat_an_unchanged_status():
 	assert_eq(manager.event_store().events_of_type("settlement_declining").size(), 1)
 
 
+## ...but "changed" is not the same as "news". While capacity read only the
+## persisted emergence Market it was ~always 0, status was pinned DECLINING
+## and this event effectively never re-fired. It now tracks the LIVE
+## VillageMarket, which rises every time a villager gathers and falls every
+## time one eats -- so a settlement parked on a band boundary crosses it
+## again every single step, and each crossing appends an event AND fans a
+## MemoryRecord to every villager into an unbounded, persisted MemoryStore.
+## One villager's dinner is not a settlement changing its fortunes: food
+## oscillating across the STABLE/GROWING boundary is worth exactly the one
+## event its first real status already was.
+func test_step_settlements_does_not_flip_status_on_oscillating_live_food():
+	var village_market_script := preload("res://src/world/village_market.gd")
+	var chunk_coord := Vector2i(63, 63)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+
+	var village_market = village_market_script.new()
+	village_market.add_stock("meat", 4.0)  # capacity 1 for one household -> stable
+	var economy := _FakeVillagerEconomy.new()
+	economy.market = village_market
+	var villager := _FakeVillager.new()
+	villager.economy = economy
+	manager._loaded_villages[chunk_coord] = [villager]
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	for step in 8:
+		if step % 2 == 0:
+			village_market.add_stock("meat", 4.0)  # capacity 2 -> growing
+		else:
+			village_market.remove_stock("meat", 4.0)  # capacity 1 -> stable
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(manager.event_store().events_of_type("settlement_stable").size(), 1)
+	assert_eq(manager.event_store().events_of_type("settlement_growing").size(), 0)
+	assert_eq(manager.event_store().events_of_type("settlement_declining").size(), 0)
+
+	manager._loaded_villages.erase(chunk_coord)
+	villager.free()
+
+
+## The dwell is a filter, not a mute: a change that HOLDS is a real change
+## and still lands, on exactly the step it has held long enough. The window
+## is not a taste number, but it is an ordinal borrowed from the capacity
+## rule rather than a duration measured against the clock -- capacity is
+## floor(food / FOOD_PER_HOUSEHOLD) and a VillageMarket's smallest real move
+## is one whole meal, so FOOD_PER_HOUSEHOLD single-meal moves is the
+## smallest food change that can shift capacity by one whole household.
+## Meals are not assessments (many meals move between two assessments 30
+## world-seconds apart), so what this test pins is the behaviour, not an
+## equivalence: a change that has not held for the whole window is not news,
+## and one that has, is.
+func test_step_settlements_records_a_status_change_that_holds_for_the_dwell():
+	assert_eq(
+		EarthChunkManager.SETTLEMENT_STATUS_DWELL_STEPS,
+		SettlementState.FOOD_PER_HOUSEHOLD,
+		"the dwell is derived from the food it takes to move capacity, not picked"
+	)
+
+	var chunk_coord := Vector2i(65, 65)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)  # no food -> declining
+	assert_eq(manager.event_store().events_of_type("settlement_declining").size(), 1)
+
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+	for step in EarthChunkManager.SETTLEMENT_STATUS_DWELL_STEPS - 1:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("settlement_growing").size(),
+		0,
+		"a change that has not held for the whole dwell yet is not news"
+	)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(manager.event_store().events_of_type("settlement_growing").size(), 1)
+
+
 func test_household_count_for_settlement_counts_real_households():
 	var chunk_coord := Vector2i(49, 49)
 	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)])
@@ -6103,7 +6288,15 @@ func test_step_settlements_attempts_production_for_a_producer_occupation():
 	var chunk_coord := Vector2i(51, 51)
 	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(5)])
 	var settlement_id := EntityRef.for_settlement(chunk_coord)
-	manager.market_store().market_for(settlement_id).add_stock("meat", 1)
+	# One meal's worth of meat ON TOP of what the household eats this same
+	# assessment: the granary is drawn down before production runs against
+	# it (see _step_settlement_granary), so a fixture that stocks exactly
+	# the recipe's input is stocking a settlement's dinner, not its
+	# workshop. Written off SettlementGranary's own draw rather than as a
+	# larger magic number, so it tracks FOOD_PER_HOUSEHOLD if that moves.
+	manager.market_store().market_for(settlement_id).add_stock(
+		"meat", 1 + SettlementGranary.subsistence_draw(1)
+	)
 
 	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
 
@@ -6112,16 +6305,37 @@ func test_step_settlements_attempts_production_for_a_producer_occupation():
 	assert_eq(successes[0].tags, ["cooked_meat"])
 
 
-## A settlement whose only villager has no grounded recipe (see
-## OccupationProduction) attempts nothing -- no invented production for an
-## occupation with no real recipe to point at. Seed 2 is a real guard.
-func test_step_settlements_attempts_no_production_for_an_unmapped_occupation():
+## This used to pin the opposite case -- a settlement whose only villager
+## has NO grounded recipe attempts nothing -- with seed 2 (a real guard) as
+## the fixture. That premise no longer exists by design: OccupationProduction
+## now maps all eight of NpcIdentity.OCCUPATIONS, on its own reasoning that an
+## occupation with no recipe can never fall short of an input and so its
+## household can never ask a player for anything. The guard has a recipe now,
+## so what is worth pinning here is the other half of the same step: the
+## settlement's market has never held that recipe's inputs, and the FIRST
+## time a shortage is discovered it is real news -- one attempt, one
+## production_failed. A second step re-attempts and stays silent, which is
+## attempt_production's change-guard (_settlement_production_outcome) saying
+## the same shortage twice is not news.
+func test_step_settlements_records_a_first_production_shortfall_once():
+	var recipe_id := OccupationProduction.recipe_for(NpcIdentity.new(2).occupation)
+	assert_ne(recipe_id, "", "precondition: seed 2's occupation is a mapped one")
+
 	var chunk_coord := Vector2i(53, 53)
 	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(2)])
 	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
 
+	var failures: Array = manager.event_store().events_of_type("production_failed")
+	assert_eq(failures.size(), 1)
+	assert_eq(failures[0].tags, [recipe_id])
 	assert_eq(manager.event_store().events_of_type("production_succeeded").size(), 0)
-	assert_eq(manager.event_store().events_of_type("production_failed").size(), 0)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("production_failed").size(),
+		1,
+		"the same shortage a second time is not news"
+	)
 
 
 ## step_settlements also drives a settlement's own internal trade --
@@ -6153,7 +6367,15 @@ func test_step_settlements_does_not_trade_with_only_one_household():
 ## drives Phase 4's automatic outcome too, not just its status label.
 func test_step_settlements_breaches_trade_in_a_declining_settlement():
 	var chunk_coord := Vector2i(59, 59)
-	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(20), NpcIdentity.new(21)])
+	# Founders who gather NOTHING, so "no food" is a property of the
+	# settlement rather than of an arbitrary chunk index. Before the
+	# emergence market had a source this was free -- every settlement in the
+	# world was permanently declining -- and a fixture that says "no food"
+	# now has to actually mean it.
+	var founders: Array = []
+	for a_seed in _non_producer_seeds(2):
+		founders.append(NpcIdentity.new(a_seed))
+	manager.record_settlement_founded_if_new(chunk_coord, founders)
 	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)  # no food -> declining
 
 	assert_eq(manager.event_store().events_of_type("contract_breached").size(), 1)
@@ -7468,3 +7690,1104 @@ func test_merchant_market_near_is_null_with_no_merchant_in_range():
 
 func test_merchant_market_near_is_null_with_no_settlement_loaded():
 	assert_null(manager.merchant_market_near(Vector2(100, 100), 10000.0))
+
+# -- emergence: villagers actually WITNESS what happens to their settlement --
+
+## A minimal stand-in for the one thing SettlementFood.village_market_for
+## duck-types out of `_loaded_villages` (`node.economy.market`, the single
+## VillageMarket every NpcMarker of a settlement shares -- see
+## NpcMarker.setup_economy). Built here rather than spawning a real village
+## because a real one needs a loaded chunk, and a loaded chunk needs
+## manager.update(), the single slowest call in this suite.
+class _FakeVillagerEconomy:
+	extends RefCounted
+	var market
+
+
+class _FakeVillager:
+	extends Node2D
+	var economy
+
+
+## Every emitter in this file records what happened; until now only
+## settlement_founded/npc_settled recorded WHO WAS THERE, so a villager's
+## memory bank held founding trivia and nothing else. A settlement's own
+## status change is the most basic thing its villagers would all know.
+func test_a_settlement_status_change_is_witnessed_by_every_one_of_its_villagers():
+	var chunk_coord := Vector2i(131, 131)
+	# Two founders who gather nothing, so the settlement really is short of
+	# food rather than merely sitting on a ledger nothing could ever stock
+	# (see _step_settlement_granary).
+	var seeds := _non_producer_seeds(2)
+	var founders: Array = []
+	for a_seed in seeds:
+		founders.append(NpcIdentity.new(a_seed))
+	manager.record_settlement_founded_if_new(chunk_coord, founders)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var declines: Array = manager.event_store().events_of_type("settlement_declining")
+	assert_eq(declines.size(), 1)
+	assert_true(declines[0].witnesses.has(EntityRef.for_npc(seeds[0])))
+	assert_true(declines[0].witnesses.has(EntityRef.for_npc(seeds[1])))
+
+	# ...and it really is in their heads, not merely named on the event.
+	var remembered: Array = []
+	for memory in manager.memory_store().memories_for(EntityRef.for_npc(seeds[1])):
+		remembered.append(memory.remembered_type)
+	assert_true(
+		remembered.has("settlement_declining"),
+		"a villager should remember their own settlement declining"
+	)
+
+
+## Production is the settlement's daily work -- the villagers are the ones
+## doing it, so they are the ones who know how it went.
+func test_a_production_outcome_is_witnessed_by_the_settlements_villagers():
+	var chunk_coord := Vector2i(133, 133)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(11)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 1)
+
+	manager.attempt_production(settlement_id, "cooked_meat")
+
+	var successes: Array = manager.event_store().events_of_type("production_succeeded")
+	assert_eq(successes.size(), 1)
+	assert_eq(successes[0].witnesses, [EntityRef.for_npc(11)])
+
+
+## _step_settlement_production attempts every household's recipe every
+## SETTLEMENT_STEP_INTERVAL, so an unstocked settlement was appending an
+## identical production_failed record forever -- within ten minutes every
+## villager's entire news is "production failed". Event-source a real
+## CHANGE only, exactly as _settlement_status already does.
+func test_a_repeated_production_failure_is_not_witnessed_twice():
+	var chunk_coord := Vector2i(135, 135)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(5)])
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(manager.event_store().events_of_type("production_failed").size(), 1)
+
+
+## ...and the guard must not silence the settlement permanently: a run that
+## succeeded and then broke down again is genuine news the second time too.
+## Seed 5 is a real hunter (cooked_meat, one "meat" per attempt).
+func test_a_production_failure_is_witnessed_again_after_a_real_success():
+	var chunk_coord := Vector2i(137, 137)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(5)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	# One meat for the recipe, plus this household's own dinner: the granary
+	# is eaten before production runs against it (see
+	# _step_settlement_granary), so stocking exactly the recipe's input
+	# stocks a meal instead.
+	manager.market_store().market_for(settlement_id).add_stock(
+		"meat", 1 + SettlementGranary.subsistence_draw(1)
+	)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)  # the one meat
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)  # nothing left
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)  # still nothing
+
+	assert_eq(manager.event_store().events_of_type("production_succeeded").size(), 1)
+	assert_eq(manager.event_store().events_of_type("production_failed").size(), 1)
+
+
+func test_a_settlement_tier_change_is_witnessed_by_its_villagers():
+	var settlement_tier := preload("res://src/emergence/settlement_tier.gd")
+	var chunk_coord := Vector2i(139, 139)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(11)])
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var became: Array = manager.event_store().events_of_type(
+		"settlement_became_%s" % settlement_tier.HAMLET
+	)
+	assert_eq(became.size(), 1)
+	assert_eq(became[0].witnesses, [EntityRef.for_npc(11)])
+
+
+## An institution's parties are HOUSEHOLDS, not settlements -- so the
+## witnesses have to be resolved back through the household's founder to
+## the settlement they settled at.
+func test_an_institution_forming_is_witnessed_by_its_parties_villagers():
+	var chunk_coord := Vector2i(141, 141)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(1), NpcIdentity.new(2)]
+	)
+	var household_a: String = manager.household_store().household_for(EntityRef.for_npc(1)).id
+	var household_b: String = manager.household_store().household_for(EntityRef.for_npc(2)).id
+	_fulfill_contracts_between(household_a, household_b, InstitutionFormation.FORMATION_THRESHOLD)
+
+	manager.attempt_institution_formation("guild", household_a, household_b)
+
+	var formed: Array = manager.event_store().events_of_type("institution_formed")
+	assert_eq(formed.size(), 1)
+	assert_true(formed[0].witnesses.has(EntityRef.for_npc(1)))
+	assert_true(formed[0].witnesses.has(EntityRef.for_npc(2)))
+
+
+## A ruin has no villagers of its own -- but whoever watched the settlement
+## decline (or the institution collapse) that CAUSED it is exactly who
+## watched the ruin appear, and _record_ruin_from already holds that cause.
+func test_a_ruin_is_witnessed_by_whoever_witnessed_the_event_that_caused_it():
+	var cause := Event.new("settlement_declining", 1.0)
+	cause.actors.append("settlement:143_143")
+	cause.witnesses.append(EntityRef.for_npc(11))
+	var cause_id := manager.event_store().append(cause)
+
+	manager.record_ruin_from_settlement_decline("settlement:143_143", cause_id)
+
+	var ruins: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(ruins.size(), 1)
+	assert_eq(ruins[0].witnesses, [EntityRef.for_npc(11)])
+
+
+## The settlement status step read only the persisted emergence Market,
+## which live play essentially never stocks -- so every settlement was
+## classified DECLINING forever while its villagers' own VillageMarket sat
+## full of real gathered food. 8 whole meals over SettlementState.
+## FOOD_PER_HOUSEHOLD (4) is capacity 2 for one household: real headroom.
+func test_a_settlement_with_live_village_market_food_is_witnessed_growing():
+	var village_market_script := preload("res://src/world/village_market.gd")
+	var chunk_coord := Vector2i(145, 145)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(11)])
+
+	var village_market = village_market_script.new()
+	village_market.add_stock("meat", 8.0)
+	var economy := _FakeVillagerEconomy.new()
+	economy.market = village_market
+	var villager := _FakeVillager.new()
+	villager.economy = economy
+	manager._loaded_villages[chunk_coord] = [villager]
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(manager.event_store().events_of_type("settlement_growing").size(), 1)
+	assert_eq(manager.event_store().events_of_type("settlement_declining").size(), 0)
+
+	manager._loaded_villages.erase(chunk_coord)
+	villager.free()
+
+
+## Contracts are the highest-volume real settlement activity in this file --
+## _step_settlement_trade runs the whole propose/accept/activate/fulfil
+## chain for the same two households every single step -- and they were the
+## last emitter still recording nobody as having been there. Their actors
+## are HOUSEHOLDS, which _villager_witnesses_of already resolves back
+## through _settlement_of_party, so the villagers whose settlement that
+## trade IS are the ones who remember how it went.
+func test_a_fulfilled_contract_is_witnessed_by_the_settlements_villagers():
+	var chunk_coord := Vector2i(147, 147)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(10), NpcIdentity.new(11)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)  # -> fulfils
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var fulfilled: Array = manager.event_store().events_of_type("contract_fulfilled")
+	assert_eq(fulfilled.size(), 1)
+	assert_true(fulfilled[0].witnesses.has(EntityRef.for_npc(10)))
+	assert_true(fulfilled[0].witnesses.has(EntityRef.for_npc(11)))
+
+	# ...and it really is in their heads, not merely named on the event.
+	var remembered: Array = []
+	for memory in manager.memory_store().memories_for(EntityRef.for_npc(11)):
+		remembered.append(memory.remembered_type)
+	assert_true(
+		remembered.has("contract_fulfilled"),
+		"a villager should remember their own settlement's trade being made good"
+	)
+
+
+## The same guard the status path needed, for the same reason: the SAME two
+## households trade every step forever, so an unguarded fan-out would hand
+## every villager a fresh MemoryRecord of an identical outcome once per
+## step. The outcome is what a villager carries, and a repeat of it is not
+## news -- exactly _settlement_production_outcome's rule, keyed on the pair
+## instead of on settlement|recipe. The EVENTS are untouched: each contract
+## really is its own contract, and the event ledger stays the full record.
+func test_a_repeated_identical_contract_outcome_is_not_re_witnessed():
+	var chunk_coord := Vector2i(149, 149)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(10), NpcIdentity.new(11)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var fulfilled: Array = manager.event_store().events_of_type("contract_fulfilled")
+	assert_eq(fulfilled.size(), 2, "both trades really happened and are both on record")
+	assert_true(fulfilled[1].witnesses.is_empty(), "the second identical outcome is not news")
+
+	var remembered := 0
+	for memory in manager.memory_store().memories_for(EntityRef.for_npc(11)):
+		if memory.remembered_type == "contract_fulfilled":
+			remembered += 1
+	assert_eq(remembered, 1)
+
+
+## Only how a trade ENDED is fanned to the villagers. propose/accept/active
+## all fire in the same step as the outcome (see _step_settlement_trade: the
+## whole lifecycle runs within one step), so witnessing them too would hand
+## every villager four memories of one trade.
+func test_contract_bookkeeping_steps_are_not_witnessed_by_villagers():
+	var chunk_coord := Vector2i(151, 151)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(10), NpcIdentity.new(11)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	for event_type in ["contract_proposed", "contract_accepted", "contract_active"]:
+		var events: Array = manager.event_store().events_of_type(event_type)
+		assert_eq(events.size(), 1, "%s still happened and is still on record" % event_type)
+		assert_true(events[0].witnesses.is_empty(), "%s is bookkeeping, not news" % event_type)
+
+
+## Why.explain_settlement now reads food/capacity off SettlementFood, which
+## needs the LIVE VillageMarket step_settlements classifies with -- and
+## _loaded_villages is private. Public wrapper, the same "for a console
+## command to report without reaching into private reconstruction"
+## convention household_count_for_settlement already set. Null for a
+## settlement whose chunk is not loaded: the normal case for most of the
+## world, not a failure.
+func test_village_market_for_settlement_reaches_the_live_market():
+	var village_market_script := preload("res://src/world/village_market.gd")
+	var chunk_coord := Vector2i(153, 153)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	assert_null(manager.village_market_for_settlement(settlement_id))
+
+	var village_market = village_market_script.new()
+	var economy := _FakeVillagerEconomy.new()
+	economy.market = village_market
+	var villager := _FakeVillager.new()
+	villager.economy = economy
+	manager._loaded_villages[chunk_coord] = [villager]
+
+	assert_eq(manager.village_market_for_settlement(settlement_id), village_market)
+	assert_null(manager.village_market_for_settlement("settlement:999_999"))
+
+	manager._loaded_villages.erase(chunk_coord)
+	villager.free()
+
+
+# -- emergence: a session's status guards have to survive a RELOAD ----------
+#
+# _settlement_status/_contract_outcome_witnessed are in-memory session state,
+# but every store they guard writes into (_event_store, _memory_store) is
+# persisted. A guard that forgets on load is not merely weaker across loads,
+# it is WORSE than none: it re-fires once per settlement per load, straight
+# into a persisted store that only ever grows.
+
+
+## Persists every store step_settlements reads and loads them back into a
+## FRESH manager, whose in-memory session state starts empty exactly as it
+## does when World builds a new EarthChunkManager over an existing save.
+## Cleans up its own files.
+##
+## These six are exactly the six World._load_saved_game loads (see
+## scenes/world.gd) minus the world boss store, which no settlement path
+## reads. It said "the real reload path" while loading FIVE of them: the
+## institution store was missing, so attempt_institution_formation's dedupe
+## -- which asks _institution_store, not the event history -- read an empty
+## store and re-founded an institution that already existed. A harness that
+## reloads less than the game does cannot see the bug the game has, and the
+## sentence claiming otherwise is what kept it invisible.
+##
+## The world CLOCK is restored too, even though it is a scalar rather than a
+## store. It used to be left at zero, on the reasoning that it "only shifts
+## the TIMESTAMPS on events recorded after the reload, which none of the
+## change-guards below key on" -- that stopped being true the moment routine
+## trade got its own guard, which reads InstitutionFormation's
+## RECENT_WINDOW_SECONDS against the live clock (see
+## _routine_trade_is_worth_running). A harness resuming at age 0 makes every
+## contract ever signed look like it was signed moments ago, so a test built
+## on it would pass on an artifact of the harness rather than on the guard.
+##
+## Still deliberately NOT restored, and named rather than implied: the world
+## boss store, which nothing in step_settlements touches.
+func _reloaded_manager(tag: String) -> EarthChunkManager:
+	var paths: Array[String] = []
+	for store in ["events", "memories", "households", "markets", "contracts", "institutions"]:
+		paths.append("user://test_ecm_reload_%s_%s.bin" % [tag, store])
+	manager.save_event_store(paths[0])
+	manager.save_memory_store(paths[1])
+	manager.save_household_store(paths[2])
+	manager.save_market_store(paths[3])
+	manager.save_contract_store(paths[4])
+	manager.save_institution_store(paths[5])
+
+	var reloaded := EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
+	reloaded.load_event_store(paths[0])
+	reloaded.load_memory_store(paths[1])
+	reloaded.load_household_store(paths[2])
+	reloaded.load_market_store(paths[3])
+	reloaded.load_contract_store(paths[4])
+	reloaded.load_institution_store(paths[5])
+	reloaded.set_world_age_seconds(manager.world_age_seconds())
+
+	for path in paths:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
+	return reloaded
+
+
+func _remembered_count(a_manager: EarthChunkManager, npc_id: String, event_type: String) -> int:
+	var count := 0
+	for memory in a_manager.memory_store().memories_for(npc_id):
+		if memory.remembered_type == event_type:
+			count += 1
+	return count
+
+
+## The dwell deliberately exempts a settlement's FIRST assessment -- and on
+## a fresh load EVERY settlement ever founded is a first assessment, because
+## the dwell's own bookkeeping is in memory while the settlement's recorded
+## status is on disk. So every load re-fired one settlement_<status> event
+## and one MemoryRecord per villager for a settlement nothing had happened
+## to: unbounded growth in a persisted store, the exact failure the dwell
+## exists to prevent, escaping through the one door it did not cover. The
+## last status actually event-sourced is right there in the persisted event
+## history -- read it back, the same way record_path_worn_if_new and
+## _record_ruin_from already dedupe against real history rather than a flag.
+func test_step_settlements_does_not_re_fire_a_status_unchanged_since_the_last_load():
+	var chunk_coord := Vector2i(157, 157)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(11)])
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)  # no food -> declining
+	assert_eq(
+		manager.event_store().events_of_type("settlement_declining").size(),
+		1,
+		"precondition: the first real assessment is news"
+	)
+
+	var reloaded := _reloaded_manager("status")
+	var remembered_before := _remembered_count(
+		reloaded, EntityRef.for_npc(11), "settlement_declining"
+	)
+	assert_eq(remembered_before, 1, "precondition: the memory persisted too")
+
+	reloaded.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(
+		reloaded.event_store().events_of_type("settlement_declining").size(),
+		1,
+		"a status that has not changed since the last session is not news again"
+	)
+	assert_eq(
+		_remembered_count(reloaded, EntityRef.for_npc(11), "settlement_declining"),
+		remembered_before,
+		"and no villager re-learns what they already knew"
+	)
+
+
+## The same hole, one store over: _contract_outcome_witnessed is keyed on
+## the party pair and never persisted, so the same two households fulfilling
+## the same contract re-fanned a MemoryRecord to every villager once per
+## load. Smaller blast radius than the status path, identical root cause and
+## identical fix -- read the pair's last recorded outcome back out of the
+## persisted event history.
+func test_a_contract_outcome_unchanged_since_the_last_load_is_not_re_witnessed():
+	var chunk_coord := Vector2i(159, 159)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(10), NpcIdentity.new(11)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("contract_fulfilled").size(),
+		1,
+		"precondition: one real trade, witnessed once"
+	)
+
+	var reloaded := _reloaded_manager("contract")
+	var remembered_before := _remembered_count(
+		reloaded, EntityRef.for_npc(11), "contract_fulfilled"
+	)
+	assert_eq(remembered_before, 1, "precondition: the memory persisted too")
+
+	reloaded.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var fulfilled: Array = reloaded.event_store().events_of_type("contract_fulfilled")
+	assert_eq(fulfilled.size(), 2, "the second trade really happened and is still on record")
+	assert_true(
+		fulfilled[1].witnesses.is_empty(),
+		"an outcome identical to the one on record is not news again after a load"
+	)
+	assert_eq(
+		_remembered_count(reloaded, EntityRef.for_npc(11), "contract_fulfilled"),
+		remembered_before
+	)
+
+
+## A settlement whose chunk is not loaded has no live VillageMarket in
+## memory at all (SettlementFood.village_market_for returns null), so its
+## combined food reads 0 and status_for calls it DECLINING. That is the
+## market being out of memory, not the settlement starving -- and it is the
+## normal state of almost the whole world, immediately after a load most of
+## all. Once a settlement HAS a status on record, a zero-capacity reading
+## taken with no live market and no persisted stock behind it is an absence
+## of evidence, not evidence of famine: the last real reading stands until
+## something can actually be read again.
+func test_a_settlement_is_not_declared_declining_purely_because_its_chunk_unloaded():
+	var village_market_script := preload("res://src/world/village_market.gd")
+	var chunk_coord := Vector2i(161, 161)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(11)])
+
+	var village_market = village_market_script.new()
+	village_market.add_stock("meat", 8.0)  # capacity 2 for one household -> growing
+	var economy := _FakeVillagerEconomy.new()
+	economy.market = village_market
+	var villager := _FakeVillager.new()
+	villager.economy = economy
+	manager._loaded_villages[chunk_coord] = [villager]
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("settlement_growing").size(),
+		1,
+		"precondition: really growing, read off a real live market"
+	)
+
+	# The player walks away: the chunk unloads and the food goes with it.
+	manager._loaded_villages.erase(chunk_coord)
+	for step in EarthChunkManager.SETTLEMENT_STATUS_DWELL_STEPS + 2:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(
+		manager.event_store().events_of_type("settlement_declining").size(),
+		0,
+		"a market that is merely out of memory is not a famine"
+	)
+	assert_eq(
+		manager.event_store().events_of_type("ruin_formed").size(),
+		0,
+		"and no ruin is built on a reading nobody actually took"
+	)
+
+	villager.free()
+
+
+## ...and the guard is exactly that narrow. A LOADED settlement whose live
+## market is really empty is a real famine read off a real market, and it
+## still declines -- which is also the only place the delayed decline path
+## is exercised at all: record_ruin_from_settlement_decline hangs off the
+## DECLINING transition, and every other ruin test declines on a FIRST
+## assessment, which is deliberately immediate. A decline that follows an
+## already-recorded status has to hold for SETTLEMENT_STATUS_DWELL_STEPS
+## assessments first, and nothing proved the ruin still forms at the far
+## end of that wait.
+func test_a_decline_that_has_to_dwell_first_still_forms_a_ruin():
+	var village_market_script := preload("res://src/world/village_market.gd")
+	var chunk_coord := Vector2i(163, 163)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(11)])
+
+	var village_market = village_market_script.new()
+	village_market.add_stock("meat", 8.0)  # capacity 2 for one household -> growing
+	var economy := _FakeVillagerEconomy.new()
+	economy.market = village_market
+	var villager := _FakeVillager.new()
+	villager.economy = economy
+	manager._loaded_villages[chunk_coord] = [villager]
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("settlement_growing").size(),
+		1,
+		"precondition: an established status to decline away FROM"
+	)
+
+	village_market.remove_stock("meat", 8.0)  # the food is really gone, and we can see it
+	for step in EarthChunkManager.SETTLEMENT_STATUS_DWELL_STEPS - 1:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("ruin_formed").size(),
+		0,
+		"the decline has not held long enough to be real yet"
+	)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var declines: Array = manager.event_store().events_of_type("settlement_declining")
+	assert_eq(declines.size(), 1)
+	var formed: Array = manager.event_store().events_of_type("ruin_formed")
+	assert_eq(formed.size(), 1, "a decline that dwelled still leaves a real ruin")
+	assert_eq(formed[0].actors, ["ruin:settlement_%d_%d" % [chunk_coord.x, chunk_coord.y]])
+	assert_eq(manager.event_store().causes_of(formed[0].id)[0].id, declines[0].id)
+
+	manager._loaded_villages.erase(chunk_coord)
+	villager.free()
+
+
+## The same hole, three doors further along. _settlement_status and
+## _contract_outcome_witnessed were seeded from persisted history; the other
+## three change-guards in this file were not, so a settlement nothing had
+## happened to still paid a fresh event AND a fresh MemoryRecord per
+## villager on every single load. Measured on a real reload of an unchanged
+## one-household settlement: +2 events, +2 memories per villager, once per
+## load, forever, into stores that only ever grow.
+##
+## What this proves, stated at the size it actually is. A settlement with
+## nothing new to report -- unchanged tier, specialization, production
+## outcome, status AND contract outcome -- adds nothing at all across a
+## load: no event, no MemoryRecord, no contract.
+##
+## The previous version of this comment called that "the strongest possible
+## statement of the fix, so no fourth door goes unnoticed" while quietly
+## using a ONE-household settlement, which is the single configuration with
+## no trade partner and therefore the only one the sentence was true of. A
+## settlement with two or more households appended four contract events and
+## signed one fresh contract every assessment, load or no load, and the
+## sentence walked straight past it. It is a MULTI-household settlement now,
+## and the claim is a claim about the guards rather than about a fixture.
+##
+## AND HERE IS WHAT IT STILL DOES NOT COVER, because these are real activity
+## and not re-announcements: a settlement that is genuinely PRODUCING
+## appends a production_succeeded every assessment (successes are
+## deliberately unguarded -- _production_counts_for_settlement counts them
+## one by one), and a pair with a LIVING institution keeps signing contracts
+## at InstitutionFormation's own dissolution-window rate, because an
+## institution nobody has coordinated with recently is meant to be at risk.
+## Neither is a settlement repeating itself; both are pinned by their own
+## tests (test_a_settlement_specialization_unchanged_since_a_load_is_not_re_
+## recorded, test_a_living_institution_is_kept_alive_at_the_dissolution_
+## windows_own_rate). This fixture's founders gather nothing, so it has
+## neither -- which is exactly what "unchanged" has to mean.
+func test_step_settlements_adds_nothing_at_all_for_a_settlement_unchanged_since_a_load():
+	var chunk_coord := Vector2i(165, 165)
+	var seeds := _non_producer_seeds(3)
+	var founders: Array = []
+	for a_seed in seeds:
+		founders.append(NpcIdentity.new(a_seed))
+	manager.record_settlement_founded_if_new(chunk_coord, founders)
+	for step in 3:
+		manager.advance_world_age(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("settlement_became_hamlet").size(),
+		1,
+		"precondition: the tier really was assessed and recorded once"
+	)
+	assert_gt(
+		manager.event_store().events_of_type("production_failed").size(),
+		0,
+		"precondition: the shortage really was recorded"
+	)
+	assert_eq(
+		manager.event_store().events_of_type("contract_breached").size(),
+		1,
+		"precondition: this settlement really does have a trade partner, and traded once"
+	)
+
+	var reloaded := _reloaded_manager("unchanged")
+	var events_before: int = reloaded.event_store().size()
+	var contracts_before: int = reloaded.contract_store().to_dicts().size()
+	var memories_before: int = (
+		reloaded.memory_store().memories_for(EntityRef.for_npc(seeds[0])).size()
+	)
+
+	reloaded.advance_world_age(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	reloaded.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(
+		reloaded.event_store().size(),
+		events_before,
+		"nothing changed about this settlement, so nothing is news after a load"
+	)
+	assert_eq(
+		reloaded.contract_store().to_dicts().size(),
+		contracts_before,
+		"and it signs no fresh contract to say it with either"
+	)
+	assert_eq(
+		reloaded.memory_store().memories_for(EntityRef.for_npc(seeds[0])).size(),
+		memories_before,
+		"and no villager re-learns, once per load forever, what they already knew"
+	)
+
+
+## The specialization door on its own, because it is the one the blanket
+## test above cannot reach: a specialization needs real production
+## SUCCESSES, and successes are deliberately never guarded (each one is real
+## goods really made, and _production_counts_for_settlement counts them one
+## by one). So the settlement genuinely does append production_succeeded
+## again after a load -- what it must not do is re-announce that it still
+## specializes in exactly what it already specialized in.
+func test_a_settlement_specialization_unchanged_since_a_load_is_not_re_recorded():
+	var chunk_coord := Vector2i(167, 167)
+	manager.record_settlement_founded_if_new(chunk_coord, [NpcIdentity.new(5)])
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	var specialized: Array = manager.event_store().events_of_type("settlement_specialized")
+	assert_eq(specialized.size(), 1, "precondition: a real hunting center, recorded once")
+	assert_eq(specialized[0].tags, ["hunting center"])
+
+	var reloaded := _reloaded_manager("specialization")
+	var remembered_before := _remembered_count(
+		reloaded, EntityRef.for_npc(5), "settlement_specialized"
+	)
+
+	reloaded.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(
+		reloaded.event_store().events_of_type("production_succeeded").size(),
+		2,
+		"the second batch really was made and is still recorded, guard or no guard"
+	)
+	assert_eq(
+		reloaded.event_store().events_of_type("settlement_specialized").size(),
+		1,
+		"but what it specializes in has not changed, so it is not news again"
+	)
+	assert_eq(
+		_remembered_count(reloaded, EntityRef.for_npc(5), "settlement_specialized"),
+		remembered_before
+	)
+
+
+## The harness itself was lying. _reloaded_manager called itself "the real
+## reload path" while loading five of World's six stores -- the institution
+## store was missing, so attempt_institution_formation's own dedupe (which
+## reads _institution_store, not history) came back to an EMPTY store and
+## re-formed an institution that already existed: institution_formed 1 -> 2,
+## one more memory per villager per load. A test that reloads less than the
+## game does cannot see the bug the game has.
+func test_an_institution_already_formed_is_not_re_formed_after_a_load():
+	var chunk_coord := Vector2i(169, 169)
+	manager.record_settlement_founded_if_new(
+		chunk_coord, [NpcIdentity.new(5), NpcIdentity.new(10), NpcIdentity.new(11)]
+	)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+
+	for i in InstitutionFormation.FORMATION_THRESHOLD + 1:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("institution_formed").size(),
+		1,
+		"precondition: one real institution, formed off real accumulated trade"
+	)
+
+	var reloaded := _reloaded_manager("institution")
+	assert_eq(
+		reloaded.active_institution_count_for_settlement(settlement_id),
+		1,
+		"the institution survived the reload, exactly as it does in a real load"
+	)
+	var remembered_before := _remembered_count(
+		reloaded, EntityRef.for_npc(11), "institution_formed"
+	)
+
+	reloaded.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(
+		reloaded.event_store().events_of_type("institution_formed").size(),
+		1,
+		"an institution that already exists is not founded a second time"
+	)
+	assert_eq(
+		_remembered_count(reloaded, EntityRef.for_npc(11), "institution_formed"),
+		remembered_before
+	)
+	assert_eq(
+		reloaded.event_store().events_of_type("settlement_became_town").size(),
+		1,
+		"and its tier, which that institution is half the reason for, is unchanged too"
+	)
+
+
+
+# -- the emergence market's missing source (docs/concept/dialogue.md's own
+# "Substrate first" table: "capacity read the persisted emergence Market,
+# which is never stocked") --
+
+## Eight founder seeds covering all eight of NpcIdentity.OCCUPATIONS, found
+## by search rather than hardcoded: NpcIdentity._index picks an occupation by
+## a modulo of a hash, so which seed is a hunter is an implementation detail
+## that has already been reshuffled once (see NpcIdentity's own doc comment).
+func _seeds_covering_every_occupation() -> Array:
+	var by_occupation := {}
+	var seed_value := 1
+	while by_occupation.size() < NpcIdentity.OCCUPATIONS.size() and seed_value < 10000:
+		var occupation := NpcIdentity.new(seed_value).occupation
+		if not by_occupation.has(occupation):
+			by_occupation[occupation] = seed_value
+		seed_value += 1
+	var seeds: Array = []
+	for occupation in NpcIdentity.OCCUPATIONS:
+		seeds.append(by_occupation[occupation])
+	return seeds
+
+
+func _founders_covering_every_occupation() -> Array:
+	var founders: Array = []
+	for a_seed in _seeds_covering_every_occupation():
+		founders.append(NpcIdentity.new(a_seed))
+	return founders
+
+
+## The chunk a settlement founded on real inland land sits in -- the same
+## Berlin tile every other live-world test in this file uses, so the region's
+## vegetation/herbivore/fish numbers are real land numbers rather than
+## whatever an arbitrary index happens to land on (open ocean, typically).
+func _berlin_chunk() -> Vector2i:
+	return Vector2i(
+		floori(float(_berlin_tile.x) / EarthChunkManager.CHUNK_SIZE),
+		floori(float(_berlin_tile.y) / EarthChunkManager.CHUNK_SIZE)
+	)
+
+
+func _run_settlement_probe(a_manager: EarthChunkManager, steps: int) -> void:
+	for step in steps:
+		a_manager.advance_world_age(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+		a_manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+		a_manager.step_regional_trade(EarthChunkManager.REGIONAL_TRADE_INTERVAL)
+		a_manager.step_caravans()
+
+
+func test_probe_eight_household_settlement():
+	var chunk_coord := _berlin_chunk()
+	manager.record_settlement_founded_if_new(chunk_coord, _founders_covering_every_occupation())
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+
+	_run_settlement_probe(manager, 40)
+
+	var market := manager.market_store().market_for(settlement_id)
+	gut.p("PROBE stock = %s" % [market.stock])
+	gut.p("PROBE production_succeeded = %d" % manager.event_store().events_of_type("production_succeeded").size())
+	gut.p("PROBE production_failed = %d" % manager.event_store().events_of_type("production_failed").size())
+	gut.p("PROBE capacity = %d" % SettlementState.carrying_capacity(market))
+	gut.p("PROBE event_store size = %d" % manager.event_store().size())
+	gut.p("PROBE contract events = %d, contracts signed = %d" % [
+		manager.event_store().events_of_type("contract_proposed").size()
+			+ manager.event_store().events_of_type("contract_accepted").size()
+			+ manager.event_store().events_of_type("contract_active").size()
+			+ manager.event_store().events_of_type("contract_fulfilled").size()
+			+ manager.event_store().events_of_type("contract_breached").size(),
+		manager.contract_store().to_dicts().size(),
+	])
+	gut.p("PROBE specialization = %s" % [manager.event_store().events_of_type("settlement_specialized").size()])
+
+	assert_false(market.stock.is_empty(), "the emergence market has a real source")
+	assert_gt(SettlementState.carrying_capacity(market), 0, "capacity is a real number")
+
+
+## Probe B: the two consequences a single settlement cannot show on its own
+## -- a caravan needs somewhere to go AND a supplier with real surplus to
+## leave from, and RegionalTrade.has_surplus could never once be true
+## anywhere in the world.
+##
+## Both settlements sit on the same real inland land, so neither is
+## advantaged by terrain. What separates them is APPETITE: settlement B is
+## deliberately built past its own break-even -- one hunter feeding a census
+## sized, from the region's own real herbivore count, so that subsistence
+## eats the whole catch (see SettlementGranary's break-even test for the
+## same arithmetic). Its cooked_meat attempt is then a real shortage of meat
+## standing next to a real surplus of meat one chunk away, which is exactly
+## the edge RegionalTrade was written for.
+func test_probe_a_caravan_departs_between_a_real_surplus_and_a_real_shortage():
+	var rich_chunk := _berlin_chunk()
+	var hungry_chunk := rich_chunk + Vector2i(1, 0)
+	manager.record_settlement_founded_if_new(rich_chunk, _founders_covering_every_occupation())
+
+	var hunter_seed: int = _seeds_covering_every_occupation()[NpcIdentity.OCCUPATIONS.find("hunter")]
+	var region = manager._seeded_region_for(EntityRef.for_settlement(hungry_chunk))
+	var catch: float = float(
+		SettlementGranary.gathered_over(["hunter"], region, EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+			.get("meat", 0.0)
+	)
+	assert_gt(catch, 0.0, "precondition: there really is game here for the hunter to out-eat")
+	var mouths := int(ceil(catch / float(SettlementState.FOOD_PER_HOUSEHOLD))) + 1
+	var founders: Array = [NpcIdentity.new(hunter_seed)]
+	for a_seed in _non_producer_seeds(mouths - 1):
+		founders.append(NpcIdentity.new(a_seed))
+	manager.record_settlement_founded_if_new(hungry_chunk, founders)
+
+	_run_settlement_probe(manager, 40)
+
+	var rich_stock: Dictionary = manager.market_store().market_for(EntityRef.for_settlement(rich_chunk)).stock
+	var hungry_stock: Dictionary = manager.market_store().market_for(EntityRef.for_settlement(hungry_chunk)).stock
+	var departed: Array = manager.event_store().events_of_type("regional_trade_departed")
+	gut.p("PROBE B hungry census = %d households around one hunter catching %.2f/step" % [mouths, catch])
+	gut.p("PROBE B caravans departed = %d" % departed.size())
+	gut.p("PROBE B caravans shipped = %d" % manager.event_store().events_of_type("regional_trade_shipped").size())
+	gut.p("PROBE B caravans raided = %d" % manager.event_store().events_of_type("regional_trade_raided").size())
+	gut.p("PROBE B supplier stock = %s" % [rich_stock])
+	gut.p("PROBE B shortage stock = %s" % [hungry_stock])
+	for event in manager.event_store().events_of_type("settlement_specialized"):
+		gut.p("PROBE B specialized: %s -> %s" % [event.actors, event.tags])
+
+	assert_gt(departed.size(), 0, "a caravan can finally leave, because a supplier finally has surplus")
+	assert_gt(
+		manager.event_store().events_of_type("settlement_specialized").size(), 0,
+		"and a settlement can finally specialize, because production can finally succeed"
+	)
+# -- routine trade is not news the four-thousandth time --
+
+
+## MEASURED, not asserted: before this guard a settlement with more than one
+## household appended contract_proposed + contract_accepted +
+## contract_active + contract_fulfilled-or-breached EVERY assessment,
+## forever, and signed one fresh Contract to go with them -- +4.0 events and
+## +1.0 contract per step, into two stores that are persisted and only ever
+## grow. The MEMORY side was already guarded (see _record_contract_event) so
+## villagers do not re-learn what they know; the stores themselves were not.
+##
+## The same pair, the same terms, the same outcome, every thirty seconds, is
+## exactly the shape _settlement_production_outcome and the status dwell
+## already refuse to record.
+func test_routine_trade_between_the_same_pair_stops_appending_once_nothing_changes():
+	var chunk_coord := _berlin_chunk() + Vector2i(0, 3)
+	var founders: Array = []
+	for a_seed in _non_producer_seeds(3):
+		founders.append(NpcIdentity.new(a_seed))
+	manager.record_settlement_founded_if_new(chunk_coord, founders)
+
+	manager.advance_world_age(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("contract_breached").size(),
+		1,
+		"precondition: a settlement with nothing to eat really does breach, once"
+	)
+
+	var events_before: int = manager.event_store().size()
+	var contracts_before: int = manager.contract_store().to_dicts().size()
+	for step in 10:
+		manager.advance_world_age(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	gut.p("TRADE events per step = %.2f" % ((manager.event_store().size() - events_before) / 10.0))
+	gut.p("TRADE contracts per step = %.2f" % ((manager.contract_store().to_dicts().size() - contracts_before) / 10.0))
+
+	assert_eq(
+		manager.event_store().size(),
+		events_before,
+		"nothing about this settlement changed, so it says nothing at all"
+	)
+	assert_eq(
+		manager.contract_store().to_dicts().size(),
+		contracts_before,
+		"and signs no fresh contracts to say it with"
+	)
+
+
+## The guard is a change guard, not a mute button: a settlement whose
+## fortunes really turn trades again, and that turn is recorded.
+func test_a_pair_whose_outcome_really_changes_trades_again_and_says_so():
+	var chunk_coord := _berlin_chunk() + Vector2i(0, 4)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var founders: Array = []
+	for a_seed in _non_producer_seeds(2):
+		founders.append(NpcIdentity.new(a_seed))
+	manager.record_settlement_founded_if_new(chunk_coord, founders)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	var breaches_before: int = manager.event_store().events_of_type("contract_breached").size()
+	assert_eq(breaches_before, 1, "precondition: hard times, on record")
+
+	# Real food in the real ledger: the settlement can make good again.
+	manager.market_store().market_for(settlement_id).add_stock("meat", 200)
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(
+		manager.event_store().events_of_type("contract_fulfilled").size(),
+		1,
+		"a pair that can deliver again really does, and it is news"
+	)
+
+
+## The one thing routine trade genuinely has to keep doing: an institution
+## between two households dissolves if they stop coordinating (
+## InstitutionFormation.should_dissolve is windowed on purpose), so the
+## guard must keep the window stocked. It does -- at the minimum rate that
+## window requires, rather than one contract per assessment.
+func test_a_living_institution_is_kept_alive_at_the_dissolution_windows_own_rate():
+	var chunk_coord := _berlin_chunk() + Vector2i(0, 5)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var founders: Array = []
+	for a_seed in _non_producer_seeds(3):
+		founders.append(NpcIdentity.new(a_seed))
+	manager.record_settlement_founded_if_new(chunk_coord, founders)
+	manager.market_store().market_for(settlement_id).add_stock("meat", 4000)
+
+	var steps := int(
+		InstitutionFormation.RECENT_WINDOW_SECONDS / EarthChunkManager.SETTLEMENT_STEP_INTERVAL
+	) * 3
+	for step in steps:
+		manager.advance_world_age(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	var contracts: int = manager.contract_store().to_dicts().size()
+	gut.p("TRADE contracts over %d steps spanning 3 dissolution windows = %d" % [steps, contracts])
+	assert_eq(
+		manager.active_institution_count_for_settlement(settlement_id),
+		1,
+		"the institution is still alive, so the guard really did keep coordinating"
+	)
+	assert_lt(
+		contracts, steps,
+		"but not by signing one contract per assessment, which is the growth this guard is for"
+	)
+
+
+## `count` distinct founder seeds whose occupation gathers no food at all.
+func _non_producer_seeds(count: int) -> Array:
+	var production := NpcProduction.new()
+	var seeds: Array = []
+	var seed_value := 1
+	while seeds.size() < count and seed_value < 100000:
+		if not production.is_producer(NpcIdentity.new(seed_value).occupation):
+			seeds.append(seed_value)
+		seed_value += 1
+	return seeds
+
+
+# -- the two things the empty ledger made impossible --
+
+
+## Offscreen GROWTH. Before the granary had a source, capacity was
+## permanently 0 for every settlement in the world, so status_for called
+## every settlement with anybody in it DECLINING and a village could only
+## ever be doing well while the player stood in it with a live VillageMarket
+## loaded. This settlement's chunk is never loaded at all.
+##
+## It starts with nothing stored -- a newly founded village has no granary
+## -- and fills one out of its own real gathering, on its very first
+## assessment.
+func test_an_unloaded_settlement_can_grow_on_its_own_gathering():
+	# +2,+1 from the Berlin chunk: real inland land with real water in it, so
+	# all three producer occupations have something to read. Which chunk is
+	# not incidental -- see the note on NpcProduction's scale in
+	# test_an_unloaded_settlement_really_declines_by_eating_through_its_stores.
+	var chunk_coord := _berlin_chunk() + Vector2i(2, 1)
+	manager.record_settlement_founded_if_new(chunk_coord, _founders_covering_every_occupation())
+	assert_false(
+		manager._loaded_villages.has(chunk_coord), "precondition: nobody is watching this village"
+	)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+
+	assert_eq(
+		manager.event_store().events_of_type("settlement_growing").size(),
+		1,
+		"a village nobody is watching can finally be doing well, off its own work"
+	)
+	assert_eq(
+		manager.event_store().events_of_type("settlement_declining").size(),
+		0,
+		"and is not called a famine merely because nobody has walked past it"
+	)
+	assert_gt(
+		SettlementState.carrying_capacity(
+			manager.market_store().market_for(EntityRef.for_settlement(chunk_coord))
+		),
+		0,
+		"off a real, persisted number rather than a live market that is not there"
+	)
+
+
+## Offscreen DECLINE, which is the same hole from the other side and the
+## less obvious half: an empty ledger did not merely stop settlements
+## growing, it stopped them declining too. A settlement that reads DECLINING
+## on its first assessment and forever after has not declined -- it was
+## never alive. A real decline is a village that was doing well and then ate
+## through what it had, and that needs stores to eat.
+##
+## The census is DERIVED rather than picked: one fisher, plus exactly enough
+## non-producing neighbours that the settlement's subsistence draw sits just
+## above what that fisher's real regional catch brings in. A village
+## slightly outgrowing its own water is the slow-motion version of famine,
+## and slow is what the status dwell needs before it will believe it -- so
+## the test asserts up front that the deficit really is slow enough to be
+## seen, out of SettlementState's own band and FOOD_PER_HOUSEHOLD rather
+## than out of a chosen number.
+##
+## THE EDGE THIS DELIBERATELY STOPS SHORT OF, because it is real: once the
+## granary goes completely bare, capacity is 0 and step_settlements' own
+## "absence of evidence, not evidence of famine" guard suppresses the
+## decline for an unloaded settlement. So a village declines offscreen while
+## it still has SOMETHING put by and cannot once it has nothing, which is
+## the wrong way round; that guard's premise is weaker now that an unloaded
+## settlement's granary is a real reading, and narrowing it is its own
+## change.
+func test_an_unloaded_settlement_really_declines_by_eating_through_its_stores():
+	# +0,+1: real water, but a THIN catch by comparison, which is what makes
+	# the deficit small enough to watch.
+	var chunk_coord := _berlin_chunk() + Vector2i(0, 1)
+	var settlement_id := EntityRef.for_settlement(chunk_coord)
+	var region = manager._seeded_region_for(settlement_id)
+	var catch: float = float(
+		SettlementGranary.gathered_over(["fisher"], region, EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+			.get("fish", 0.0)
+	)
+	assert_gt(catch, 0.0, "precondition: there really is a catch here to fall short of")
+
+	var fisher_seed: int = _seeds_covering_every_occupation()[NpcIdentity.OCCUPATIONS.find("fisher")]
+	var draw := float(SettlementState.FOOD_PER_HOUSEHOLD)
+	var neighbours := int(ceil((catch - draw) / draw))
+	if float(SettlementGranary.subsistence_draw(1 + neighbours)) <= catch:
+		neighbours += 1
+	var founders: Array = [NpcIdentity.new(fisher_seed)]
+	for a_seed in _non_producer_seeds(neighbours):
+		founders.append(NpcIdentity.new(a_seed))
+	manager.record_settlement_founded_if_new(chunk_coord, founders)
+
+	var households := founders.size()
+	var deficit := float(SettlementGranary.subsistence_draw(households)) - catch
+	assert_gt(deficit, 0.0, "precondition: this village really does eat more than it lands")
+
+	# How much food the settlement passes through while it reads DECLINING
+	# with a capacity above zero -- the only window in which an unloaded
+	# settlement's decline is recorded at all (see the doc comment). It has to
+	# be wide enough for the dwell to run out inside it.
+	var declining_below := (
+		float(SettlementGranary.subsistence_draw(households)) / (1.0 + SettlementState.STABLE_BAND)
+	)
+	assert_gt(
+		declining_below - float(SettlementState.FOOD_PER_HOUSEHOLD),
+		deficit * float(EarthChunkManager.SETTLEMENT_STATUS_DWELL_STEPS),
+		"precondition: the fall is slow enough for the status dwell to see it happen"
+	)
+
+	# Three times over its own subsistence draw, so it starts clearly
+	# prosperous and has a long way to fall.
+	manager.market_store().market_for(settlement_id).add_stock(
+		"fish", 3 * SettlementGranary.subsistence_draw(households)
+	)
+
+	manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+	assert_eq(
+		manager.event_store().events_of_type("settlement_growing").size(),
+		1,
+		"precondition: it really was doing well, off real stored food"
+	)
+
+	var fell := false
+	for step in 400:
+		manager.step_settlements(EarthChunkManager.SETTLEMENT_STEP_INTERVAL)
+		if manager.event_store().events_of_type("settlement_declining").size() > 0:
+			fell = true
+			break
+	gut.p("DECLINE %d households eating %d against a catch of %.2f -- deficit %.2f/step" % [
+		households, SettlementGranary.subsistence_draw(households), catch, deficit
+	])
+	assert_true(
+		fell, "a village nobody was watching genuinely fell, rather than never having risen"
+	)
+	assert_eq(
+		manager.event_store().events_of_type("ruin_formed").size(),
+		1,
+		"leaving a real ruin behind it, offscreen, with no player anywhere near"
+	)

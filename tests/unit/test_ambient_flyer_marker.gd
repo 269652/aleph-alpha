@@ -1379,3 +1379,368 @@ func test_carrying_fruit_after_a_flower_seed_plants_a_tree_not_a_flower():
 
 	assert_eq(fruit_world.planted.size(), 1, "the fruit's seed should plant a TREE")
 	assert_eq(seed_world.planted.size(), 1, "must not ALSO plant a second, wrong flower")
+
+
+# -- two butterflies meeting: the whole chain, driven through real _process --
+#
+# The user, playing the real game, reported never seeing butterflies interact
+# at all. Courtship was fully wired and had unit tests for its RULES, but
+# nothing anywhere drove two real markers through real frames and asserted an
+# interaction actually happens -- so "is any of this reachable" was itself
+# untested. These are that test.
+
+const Courtship = preload("res://src/gameplay/courtship.gd")
+
+const FRAME := 1.0 / 60.0
+
+
+## A real marker, in the tree (the group scan both interactions use needs
+## that), wired the way AmbientFlyerRenderer wires one. Engine processing is
+## turned OFF so the test alone decides how much time passes -- otherwise the
+## SceneTree's own frames would silently add steps between assertions.
+func _flyer_in_tree(a_species: String, at: Vector2, parent: Node2D) -> AmbientFlyerMarker:
+	var flyer := AmbientFlyerMarker.new()
+	flyer.species = a_species
+	flyer.position = at
+	flyer.home = at
+	flyer.wander_seed = int(at.x) * 31 + int(at.y)
+	flyer.setup(AmbientFlyerMovement.new(16.0, 30.0, 0.7))
+	parent.add_child(flyer)
+	flyer.set_process(false)
+	return flyer
+
+
+func test_two_monarchs_side_by_side_actually_begin_a_dance():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(120, 100), parent)
+
+	var began := false
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._courting_with != 0 and b._courting_with != 0:
+			began = true
+			break
+	assert_true(began, "two monarchs 20px apart must actually start a dance")
+
+
+func test_a_dance_that_began_actually_runs_and_then_ends():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(120, 100), parent)
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._courting_with != 0:
+			break
+	assert_ne(a._courting_with, 0, "precondition: the dance began")
+
+	var angles := {}
+	var danced := 0.0
+	while a._courting_with != 0 and danced < Courtship.DANCE_SECONDS * 3.0:
+		a._process(FRAME)
+		b._process(FRAME)
+		danced += FRAME
+		angles[snappedf((a.position - a._courting_centre).angle(), 0.5)] = true
+
+	assert_gt(angles.size(), 4, "the pair must actually circle while dancing")
+	assert_eq(a._courting_with, 0, "the dance must end on its own")
+	assert_almost_eq(danced, Courtship.DANCE_SECONDS, 0.2, "it must last about DANCE_SECONDS")
+
+
+## The bug the two tests above were written to find: markers are processed one
+## after another, so the first of a pair always commits first, and the partner
+## search rejected any flyer that was already courting -- including one
+## courting the searcher. On screen that is ONE butterfly orbiting an empty
+## midpoint while the other flies off to a flower. Never two.
+func test_both_partners_dance_not_just_the_one_that_noticed_first():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(120, 100), parent)
+
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._courting_with != 0 and b._courting_with != 0:
+			break
+
+	assert_eq(a._courting_with, b.get_instance_id(), "a must be dancing with b")
+	assert_eq(b._courting_with, a.get_instance_id(), "...and b with a")
+	assert_eq(a._courting_centre, b._courting_centre, "one dance, one centre")
+
+	# Opposite sides of that shared centre, which is what reads as a PAIR.
+	for i in 30:
+		a._process(FRAME)
+		b._process(FRAME)
+	var from_a: Vector2 = a.position - a._courting_centre
+	var from_b: Vector2 = b.position - b._courting_centre
+	assert_lt(from_a.normalized().dot(from_b.normalized()), -0.9, "they must orbit opposite")
+
+
+## A third butterfly must not break up a pair. The relaxed guard above lets a
+## flyer join a partner that is already courting IT -- not one that is busy
+## with somebody else.
+func test_a_third_butterfly_does_not_steal_a_partner_mid_dance():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(112, 100), parent)
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._courting_with != 0 and b._courting_with != 0:
+			break
+	assert_ne(a._courting_with, 0, "precondition: a and b are a pair")
+
+	var c := _flyer_in_tree("monarch", Vector2(124, 100), parent)
+	for i in 60:
+		c._process(FRAME)
+	assert_eq(c._courting_with, 0, "a latecomer must not join an existing pair")
+
+
+# -- the spiral flight: what the player actually asked to see ----------------
+#
+# "I never see butterfly dance and play with each other when they fly by
+# close". That is the investigative/territorial SPIRAL FLIGHT, not courtship
+# (see SpiralFlight): cross-species, seconds long, seconds of cooldown, and
+# producing nothing. Courtship is same-species, rare, and on a real-day
+# cooldown -- it could never have satisfied the report.
+
+const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
+
+
+## Duck-typed courtship world: the one method a mating calls (see
+## EarthChunkManager.spawn_flyer_offspring). Used here to prove a spiral
+## NEVER calls it.
+class StubCourtshipWorld:
+	var offspring: Array = []
+	func spawn_flyer_offspring(a_species: String, at: Vector2) -> void:
+		offspring.append({"species": a_species, "position": at})
+
+
+func test_two_butterflies_passing_close_actually_begin_a_spiral_flight():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(100, 100) + Vector2(30, 0), parent)
+	# Both already bred today, so courtship is off the table and what is left
+	# is exactly the behaviour under test.
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+
+	var began := false
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with != 0 and b._spiralling_with != 0:
+			began = true
+			break
+	assert_true(began, "two monarchs 30px apart must whirl at each other")
+	assert_eq(a._spiralling_with, b.get_instance_id())
+	assert_eq(b._spiralling_with, a.get_instance_id())
+
+
+func test_a_spiral_flight_runs_climbs_and_then_ends():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(130, 100), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with != 0 and b._spiralling_with != 0:
+			break
+	assert_ne(a._spiralling_with, 0, "precondition: the whirl began")
+
+	# The two orbit offsets are exactly opposite, so they cancel at the pair's
+	# midpoint: this measures the CLIMB with the whirl taken back out.
+	var highest := 0.0
+	var angles := {}
+	var whirled := 0.0
+	while a._spiralling_with != 0 and whirled < SpiralFlight.SPIRAL_SECONDS * 3.0:
+		a._process(FRAME)
+		b._process(FRAME)
+		whirled += FRAME
+		# Screen-up is -Y, so "how high" is how far the midpoint went negative.
+		highest = maxf(highest, 100.0 - (a.position.y + b.position.y) * 0.5)
+		angles[snappedf((a.position - a._spiral_centre).angle(), 0.3)] = true
+
+	assert_gt(angles.size(), 8, "it has to actually whirl, several times round")
+	assert_eq(a._spiralling_with, 0, "the whirl must end on its own")
+	assert_almost_eq(
+		whirled, SpiralFlight.SPIRAL_SECONDS, 0.2, "it must last about SPIRAL_SECONDS"
+	)
+	assert_almost_eq(highest, SpiralFlight.RISE_PX, 0.5, "the pair must climb, together")
+
+
+## The difference from courtship that matters most for how often the player
+## sees this: a monarch and a swallowtail never court, and absolutely do
+## chase each other.
+func test_a_monarch_and_a_swallowtail_whirl_at_each_other_though_they_never_court():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("swallowtail", Vector2(128, 100), parent)
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with != 0 and b._spiralling_with != 0:
+			break
+	assert_eq(a._spiralling_with, b.get_instance_id(), "different kinds still whirl")
+	assert_eq(a._courting_with, 0, "...and must still never court")
+
+
+## The whole reason this may be common: it is inert. A pair whirling all
+## afternoon must not add a single butterfly to the meadow.
+func test_a_spiral_flight_never_produces_offspring():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var world := StubCourtshipWorld.new()
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("swallowtail", Vector2(112, 100), parent)
+	a.courtship_world = world
+	b.courtship_world = world
+
+	var whirls := 0
+	var was_whirling := false
+	for i in 60 * 90:
+		a._process(FRAME)
+		b._process(FRAME)
+		var whirling: bool = a._spiralling_with != 0
+		if whirling and not was_whirling:
+			whirls += 1
+		was_whirling = whirling
+
+	assert_gt(whirls, 1, "precondition: they whirled repeatedly over 90 seconds")
+	assert_eq(world.offspring.size(), 0, "a spiral flight must never breed")
+
+
+## The breeding cooldown is a full REAL DAY and exists to bound the
+## population. A behaviour that produces nothing must not inherit it, or the
+## player sees one interaction per butterfly per day -- which is the reported
+## bug.
+func test_the_spiral_flight_does_not_wait_on_the_day_long_breeding_cooldown():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(118, 100), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+
+	var whirls := 0
+	var was_whirling := false
+	for i in 60 * 60:
+		a._process(FRAME)
+		b._process(FRAME)
+		var whirling: bool = a._spiralling_with != 0
+		if whirling and not was_whirling:
+			whirls += 1
+		was_whirling = whirling
+
+	assert_gt(whirls, 1, "a pair that already bred must still whirl, repeatedly")
+
+
+func test_a_bee_never_whirls():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("bee", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("bee", Vector2(110, 100), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	for i in 300:
+		a._process(FRAME)
+		b._process(FRAME)
+	assert_eq(a._spiralling_with, 0, "a honeybee's aerial life is nothing like this")
+
+
+## Courtship and the whirl must not fight over the same flyer: stealing one
+## of a whirling pair into a dance leaves the other orbiting nothing, which
+## is the same one-sided failure _scan_for_partners' guard exists to stop.
+func test_a_butterfly_mid_whirl_is_not_stolen_into_a_courtship_dance():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(140, 100), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with != 0 and b._spiralling_with != 0:
+			break
+	assert_ne(a._spiralling_with, 0, "precondition: a and b are whirling")
+
+	var c := _flyer_in_tree("monarch", Vector2(104, 100), parent)
+	for i in 30:
+		c._process(FRAME)
+	assert_eq(c._courting_with, 0, "a whirling butterfly must not be pulled into a dance")
+
+
+# -- and the distance LOD does not silently switch it off --------------------
+#
+# SimulationLod throttles a creature's updates by how far it is from the
+# player, and every _process above ran with no player in the tree at all --
+# which is the FULL-RATE path. A behaviour that only works when nobody is
+# looking would be a strange thing to ship, so both sides of the throttle get
+# driven here.
+
+## A player node for the group SimulationLod measures distance against (see
+## AmbientFlyerMarker._nearest_player_position).
+func _player_at(at: Vector2, parent: Node2D) -> Node2D:
+	var player := Node2D.new()
+	player.position = at
+	parent.add_child(player)
+	player.add_to_group("player")
+	return player
+
+
+func test_a_pair_right_next_to_the_player_still_whirls():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(100, 100), parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(124, 100), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with != 0 and b._spiralling_with != 0:
+			break
+	assert_eq(a._spiralling_with, b.get_instance_id(), "the on-screen case must work")
+
+
+## Off screen a flyer updates in fewer, larger steps -- up to
+## SimulationLod.MAX_INTERVAL_SECONDS apart. Both interactions are seconds
+## long, so they still run out there; they just run in a handful of steps
+## instead of a hundred. If that ever stopped being true, a butterfly would
+## quietly stop interacting the moment it left the screen and start again when
+## it came back.
+func test_a_pair_far_from_the_player_still_dances_in_fewer_larger_steps():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(-9000, -9000), parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("monarch", Vector2(120, 100), parent)
+
+	var steps_taken := 0
+	var began := false
+	for i in 600:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._courting_with != 0 and b._courting_with != 0:
+			began = true
+			break
+	assert_true(began, "a pair nobody is watching must still pair off")
+
+	while a._courting_with != 0 and steps_taken < 3000:
+		a._process(FRAME)
+		b._process(FRAME)
+		steps_taken += 1
+	assert_eq(a._courting_with, 0, "and the dance must still finish out there")

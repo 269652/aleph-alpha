@@ -298,6 +298,13 @@ func is_open() -> bool:
 func refresh(unspent_points: int, allocated: Dictionary, unlocked: Dictionary) -> void:
 	var signature := _signature_for(unspent_points, allocated, unlocked)
 	if signature == _last_refresh_signature:
+		# The rows are unchanged, but the SELECTION is deliberately NOT part of
+		# the fingerprint: it moves on a click, not on an allocation, and
+		# inspecting a node changes neither the allocation nor the point total.
+		# So the one thing that CAN have moved since an otherwise identical
+		# refresh still gets refreshed -- setting a Label's text is not the
+		# per-frame row rebuild this guard exists to skip.
+		_refresh_detail()
 		return
 	_last_refresh_signature = signature
 

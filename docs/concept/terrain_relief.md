@@ -214,28 +214,171 @@ for passability/hillshading/ore. One field, at least three consumers.
 
 ## Open questions
 
-- **Exact soft/hard slope thresholds** — the ~15–20°/~45° figures above are
-  real mountaineering anchors, not tuned game constants; need their own
-  calibration pass and test, per this project's no-manual-tuning rule.
-- **Exact vein-probability-vs-slope curve** — tuned, deferred.
-- **Does biome classification itself ever read slope**, not just
+- ~~**Exact soft/hard slope thresholds** — the ~15–20°/~45° figures above
+  are real mountaineering anchors, not tuned game constants; need their
+  own calibration pass and test, per this project's no-manual-tuning
+  rule.~~ Resolved: `terrain_passability.gd`'s `SOFT_THRESHOLD_DEG` (18°)
+  and `HARD_THRESHOLD_DEG` (45°) are real, named, tested constants sitting
+  inside/on the cited mountaineering bands, not eyeballed — see the Status
+  section below. `HARD_THRESHOLD_WITH_ROPE_DEG` (65°, what a rope buys
+  beyond the hard threshold) is a third value this bullet didn't originally
+  ask about; it's tested for shape (`test_terrain_passability.gd`) but,
+  honestly, has no real-world citation of its own the way the other two
+  do.
+- ~~**Exact vein-probability-vs-slope curve** — tuned, deferred.~~ Resolved:
+  `mountain_ore_placement.gd`'s `vein_chance_for_slope` is a real, tested
+  (`test_mountain_ore_placement.gd`, 16/16) linear ramp — zero at/below
+  `MIN_SLOPE_FOR_VEINS_DEG` (= passability's own `SOFT_THRESHOLD_DEG`,
+  18°), rising to a ceiling at `MAX_SLOPE_FOR_SCALING_DEG` (= passability's
+  `HARD_THRESHOLD_WITH_ROPE_DEG`, 65°) and held flat beyond it. The
+  ceiling itself, `MAX_VEIN_CHANCE`, is derived rather than eyeballed —
+  `StonePlacement.STONE_DENSITY * OrePlacement.ORE_FRACTION`, the same
+  order of magnitude as flat-ground ore's own rarity (the 2026-08-28 fix
+  covered in the Status section's mountain-ore bullets below). Honest
+  nuance, same as the bullet above: the endpoints reuse already-grounded
+  constants, but LINEAR specifically is this implementation's own choice,
+  not itself derived from a cited real-world curve — this doc only ever
+  said "scales with local slope," not what shape that scaling takes.
+- ~~**Does biome classification itself ever read slope**, not just
   elevation/temperature/moisture — a plausible future tie-in to
   [climate_dynamics.md](climate_dynamics.md#biomes-a-live-read-not-a-worldgen-snapshot)'s
-  live reclassification, not decided here.
-- **Creature movement** — should steep terrain gate herbivore/predator
+  live reclassification, not decided here.~~ Resolved: `biome_classifier.gd`'s
+  `classify()` now takes an optional `slope_deg`; a slope at/beyond
+  `TerrainPassability.HARD_THRESHOLD_DEG` forces "mountain" outside the
+  elevation-based band (real alpine tree-lines), ocean always excluded.
+  Honestly, the real bundled elevation dataset never actually triggers it
+  at current sampling resolution (see the Status section's own bullet) —
+  the mechanism is real and tested, the live world just doesn't currently
+  contain a tile that exercises it. `climate_dynamics.md`'s own live
+  reclassification tie-in is still a separate, undecided question.
+- ~~**Creature movement** — should steep terrain gate herbivore/predator
   movement too, or stay player-only for now (the same scoping call
   `stone.md`'s pebble dispersion already made, deliberately player-only to
-  avoid an O(creatures × terrain) cost nothing currently needs)?
-- **Rope mechanics specifics** — how much a rope raises the hard
+  avoid an O(creatures × terrain) cost nothing currently needs)?~~ Resolved:
+  yes — `creature_marker.gd` now gates herbivore/predator movement the
+  same way, genuinely O(creatures) (one slope sample per creature's own
+  candidate tile, never a terrain scan), so the cost this question worried
+  about was never actually necessary. See the Status section below.
+- ~~**Rope mechanics specifics** — how much a rope raises the hard
   threshold, whether it's consumed or reusable, whether it can anchor for
   others to follow — genuinely open, `transportation.md`'s own open
-  questions don't cover this yet either.
+  questions don't cover this yet either.~~ Two of three now answered: a
+  rope raises the threshold from `HARD_THRESHOLD_DEG` to
+  `HARD_THRESHOLD_WITH_ROPE_DEG` (45° → 65°, already real/tested before
+  this), and it is reusable, not consumed — `Player._has_climbing_gear()`
+  is a plain inventory-count check, unaffected by crossing terrain. Still
+  genuinely open: whether a rope can anchor for others to follow —
+  unrelated to what shipped here, and multiplayer-shaped in a way this
+  pass didn't touch.
 
 ## Status
 
-Pure design, nothing implemented. Builds directly on two pieces of real,
-live, already-wired code — `earth_elevation_source.gd`'s bilinear
-elevation sampling and `solar_position.gd`'s real solar position — plus
-reuses `weather_model.gd`'s movement-speed-modifier shape and
+Real and live, not pure design — built out the same week this doc was
+written (2026-08-24). Full build detail lives in `docs/progress.md`'s own
+"Terrain Relief" section; this is the cross-aligned summary, checked here
+directly against the current `src/` files rather than assumed current.
+
+- ✅ **Slope/Aspect field, from real elevation data** —
+  `src/world/terrain_relief.gd` (`slope_at`/`aspect_at`, both thin
+  wrappers over a shared public `gradient_at` so a caller wanting both
+  readings takes one set of four elevation samples instead of two), tested
+  21/21. Exposed per-global-tile via `EarthChunkGenerator`/
+  `EarthChunkManager.slope_at_global`/`aspect_at_global` — the one field
+  the consumers below all read. Still unconsumed by
+  [climate_dynamics.md](climate_dynamics.md)'s orographic lift.
+- ✅ **Slope-gated passability (soft slow, hard refusal)** —
+  `src/gameplay/terrain_passability.gd` (`speed_multiplier`/`is_passable`,
+  tested 11/11), with real tested thresholds rather than the bare figures
+  above: `SOFT_THRESHOLD_DEG` 18°, `HARD_THRESHOLD_DEG` 45°,
+  `HARD_THRESHOLD_WITH_ROPE_DEG` 65°. Wired live into `scenes/player.gd`'s
+  `_authority_step`: `_terrain_speed_multiplier` applies the soft
+  slowdown, `_terrain_blocks_movement` refuses the frame's movement
+  outright ahead of `move_and_slide()` — the same ask-before-you-step
+  principle `creature_movement_gate.gd` established for creatures. The two
+  gaps this bullet used to note here are both closed now — see the
+  Climbing Rope and Creature Slope Gating bullets immediately below.
+- ✅ **Climbing rope — a real, craftable item** —
+  `item_catalog.gd`'s `climbing_rope` (kind "tool"), recipe'd from 3 hide +
+  3 plant_fibre (`crafting_recipe_book.gd`). Material picked against
+  `MaterialProperties`' real toughness column, not eyeballed: hide (7.0)
+  clears `ROPE_MIN_TOUGHNESS` (5.0) via the previously-orphaned
+  `is_viable_for_tool(material, "grapple_rope")` check that already
+  existed, unused, before this — and hide is non-trivial to source
+  (hunting + butchering), matching this doc's own "materials further out
+  on the danger gradient" framing rather than the trivially-gathered
+  plant_fibre alone. `Player._has_climbing_gear()` now reads real
+  inventory state (`_inventory_counts().get("climbing_rope", 0) > 0`, the
+  same raw-count pattern `_has_fishing_rod()` already used) instead of its
+  old hardcoded `false`. `terrain_passability.gd` needed no changes.
+  Tested: 50/50, 50/50, 75/75, 2/2 across the four touched files.
+- ✅ **Creature slope gating** — `src/rendering/creature_marker.gd` gained
+  `_terrain_speed_multiplier`/`_terrain_blocks_movement`, mirroring
+  `player.gd`'s own two functions exactly and reading slope through the
+  same duck-typed world reference `solid_obstacles_near` already uses.
+  Genuinely O(creatures), not O(creatures × terrain) — resolving the
+  formerly-open question below by construction, the same one-slope-sample-
+  per-candidate-tile shape `player.gd` already used, not a new technique.
+  Tested: 8 new tests plus a full `test_creature_marker.gd` regression run,
+  144/144 passing, zero regressions.
+- ✅ **Hillshading (real Lambertian formula, real solar position)** —
+  `src/rendering/hillshade.gd`'s `illumination()` (tested 8/8) is the
+  formula above verbatim, fed by `solar_position.gd`'s azimuth alongside
+  its existing elevation. `procedural_hillshade_sprite.gd` bakes quantized
+  slope/aspect into a real atlas (tested 14/14); `hillshade_shader.gd` is
+  a compiled `canvas_item` shader (tested 12/12). Wired live:
+  `EarthChunkManager.set_hillshade_layer`/`_paint_hillshade_overlay`/
+  `set_sun_position`, called from chunk load/unload; `scenes/world.tscn`
+  carries a real `HillshadeFx` layer and `world.gd` pushes real per-frame
+  sun azimuth into it. No automated test instantiates `world.tscn` itself,
+  so that last scene-level wire is verified only by both resources loading
+  without a structural error, not a live GUI session.
+- ✅ **Slope-gated mountain ore veins — placement** —
+  `src/world/mountain_ore_placement.gd` (tested 16/16): vein chance is
+  zero below the same `SOFT_THRESHOLD_DEG` passability uses, scaling
+  linearly to a ceiling at `HARD_THRESHOLD_WITH_ROPE_DEG` — one shared
+  quantity gating both crossability and ore exposure, exactly as designed
+  above. Wired live into `EarthChunkManager._load_chunk` via
+  `StoneRenderer.spawn_mountain_veins` (tested 6/6).
+- ✅ **Mountain ore veins — rendering now matches this doc's own spec.**
+  `StoneRenderer._build_mountain_vein_node` no longer spawns the round,
+  composited boulder texture flat-ground ore uses. `src/rendering/mountain_vein_sprite.gd`
+  draws a real streak oriented along the vein's own aspect (slope-facing
+  compass bearing) — the exact shape this section calls for. `src/rendering/entity_hillshade_shader.gd`
+  gives it genuinely live hillshade participation: `sun_elevation_deg`/
+  `sun_azimuth_deg` are shared uniforms pushed by the same
+  `EarthChunkManager.set_sun_position` call already feeding the ground
+  overlay, while `slope_deg`/`aspect_deg` are Godot 4 `instance uniform`s
+  set once per sprite at spawn — one shared material for every vein, no
+  per-node update loop, and it darkens with the rock around it as the sun
+  actually moves. `MIN_LIT_FRACTION` is derived from `HillshadeShader`'s
+  own `MAX_SHADOW_ALPHA`, not a fresh number. `MinableOre`'s real mining
+  flow and real slope-gated placement are both untouched — only the
+  texture and material changed, per this doc's own original scoping
+  ("only placement and rendering are new, not a second mining mechanic").
+  Flat-ground ore is untouched too; this was a mountain-specific gap.
+  Tested: 7/7, 17/17, 34/34 (full `test_stone_renderer.gd`), 2/2.
+- ✅ **Biome classification reads slope** — beyond this doc's original
+  four-piece Mechanism list, closing the Open Questions bullet of the same
+  name above: `biome_classifier.gd`'s `classify()` takes an optional
+  `slope_deg` (a `-1.0` sentinel default, every pre-existing caller/test
+  byte-identical); a slope at/beyond `HARD_THRESHOLD_DEG` forces "mountain"
+  regardless of temperature/moisture — real alpine tree-lines, never
+  overriding ocean. `EarthChunkGenerator._biome_at_global` wires it through
+  a `_slope_override_deg_for` gate that skips the four-fresh-elevation-
+  sample cost entirely for a cell elevation alone already decided (ocean,
+  or already elevation-mountain) — a real, addressed perf concern, since
+  terrain regenerates from scratch on every chunk load, never cached.
+  **Honest limitation, empirically checked**: probing the real bundled
+  elevation data (Everest/K2/Nanga Parbat/Annapurna plus a global scan)
+  found slope in the "undecided" band never actually reaches 45° at this
+  dataset's ~10km/pixel resolution and the existing ~1.1km sampling
+  offset — the mechanism is real and correctly built, no live tile
+  currently exercises it. Tested: `test_biome_classifier.gd` 28/28,
+  `test_earth_chunk_generator.gd` 20/20, zero regressions.
+
+Builds directly on two pieces of real, live, already-wired code —
+`earth_elevation_source.gd`'s bilinear elevation sampling and
+`solar_position.gd`'s real solar position — plus reuses
+`weather_model.gd`'s movement-speed-modifier shape and
 `creature_movement_gate.gd`'s ask-before-moving pattern as direct
-precedent rather than new mechanisms of their own.
+precedent, exactly as this doc originally planned.

@@ -280,9 +280,25 @@ efficiency-only bargain made visible.
   margin, rather than the stale 960x540 figure it was first built against. A
   test asserts the whole web, wedge names included, fits the canvas at minimum
   zoom, and that the small nodes are already named at the zoom it opens on.
-- ⬜ **Not built** — most of the new stat keys are *declared and summed* but not
-  yet read by their owning system (only `max_health`, `attack_damage`,
-  `meat_yield`, `carpentry_level` are live today); no atom-unlock/parameter-cap
+- ✅ **`taming_affinity` live** — reduces break-free chance across every
+  capture attempt (see [taming.md](taming.md)); the first Beastmaster stat
+  to go from declared-and-summed to actually read. `menagerie` additionally
+  carries a capability grant (bonding a netted creature into a real
+  companion) alongside its existing stat — **not** `land_sense`-shaped in
+  the end: `land_sense` is one of the four legacy flat-list keystones
+  (`KeystonePassive._KEYSTONES`), gated by a separate explicit
+  `Player.unlock_keystone` action and recorded in `unlocked_keystones`.
+  `menagerie` is an ordinary `skill_web.gd` ring-4 node with no legacy
+  entry, so it is simply "owned" the moment it is allocated, the same as
+  any other web node — no second unlock step exists for it or needs to.
+  The capability check reads `allocated_nodes.get("menagerie", false)`
+  directly (defensively also checking `unlocked_keystones`, in case a
+  future pass folds it into the legacy system the way `land_sense` itself
+  was folded in as a deferred string entry).
+- ⬜ **Not built** — most of the new stat keys are still *declared and summed*
+  but not yet read by their owning system (only `max_health`, `attack_damage`,
+  `meat_yield`, `carpentry_level`, and now `taming_affinity`, are live); no
+  atom-unlock/parameter-cap
   hook into [magic.md](magic.md)'s catalog, which is the specific integration
   this doc has always called for; no node search and no keyboard navigation in
   the view (the route preview answers "how do I get there", but you still have

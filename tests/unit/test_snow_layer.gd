@@ -7,9 +7,10 @@ extends GutTest
 ## tile is trodden and that one is not" -- the tint is one number for the world.
 ## Making it a layer of tiles is what lets a trail through a field exist at all.
 
-const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 const SnowTrail = preload("res://src/world/snow_trail.gd")
+const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 
 var layer: SnowLayer
 
@@ -26,6 +27,64 @@ func test_there_is_a_tile_for_every_depth_band():
 	var tile_set := layer.build_tile_set()
 	assert_not_null(tile_set)
 	assert_gte(SnowLayer.DEPTH_BANDS, 3, "bare, a dusting and cover at the very least")
+
+
+## DEPTH_BANDS is now the real illustrated sheet's own frame count (a 5x5
+## contact sheet, see snowoverlay.png), not a hand-picked number -- pinned so
+## nobody quietly drops back to a coarser hand-picked count without updating
+## this test (and OVERLAY_BAND_CELLS, which has one entry per band).
+func test_depth_bands_matches_the_illustrated_sheets_real_frame_count():
+	assert_eq(SnowLayer.DEPTH_BANDS, SnowLayer.OVERLAY_COLUMNS * SnowLayer.OVERLAY_ROWS)
+	assert_eq(SnowLayer.OVERLAY_BAND_CELLS.size(), SnowLayer.DEPTH_BANDS)
+
+
+## Guards OVERLAY_ROW_BANDS/OVERLAY_COLUMN_BANDS, which are pixel positions
+## measured directly against the real PNG (see their own doc comments) --
+## if the asset is ever replaced with a differently-sized sheet, this fails
+## loudly instead of silently slicing the wrong regions.
+func test_the_overlay_sheet_has_the_measured_dimensions():
+	var image := SpriteSheetLoader.load_image(SnowLayer.OVERLAY_PATH)
+	assert_not_null(image, "snowoverlay.png must load from " + SnowLayer.OVERLAY_PATH)
+	assert_eq(image.get_width(), 1448)
+	assert_eq(image.get_height(), 1086)
+
+
+## build_band_image feeds straight into build_tile_set's blit_rect at
+## ART_TILE_SIZE -- a mismatched size would silently crop or leave the rest
+## of an atlas cell blank.
+func test_band_image_is_sized_for_the_atlas():
+	var art := TerrainRenderer.ART_TILE_SIZE
+	for band in [0, SnowLayer.DEPTH_BANDS / 2, SnowLayer.DEPTH_BANDS - 1]:
+		var image := layer.build_band_image(band)
+		assert_eq(image.get_width(), art)
+		assert_eq(image.get_height(), art)
+
+
+## OVERLAY_ROW_BANDS/OVERLAY_COLUMN_BANDS exist specifically to crop AROUND
+## the sheet's own near-opaque divider lines (see their own doc comments for
+## the measured divider centers) -- a regression here (an asset re-export
+## that shifts the grid, or a future edit that widens a band back toward its
+## neighbour) would bake a stray light border line into a real in-game tile.
+## Guards the geometry directly rather than inspecting resized pixel alpha
+## (which would also pick up the Lanczos resize's own blending, and would
+## have to special-case cells that are legitimately near-opaque at full
+## coverage): every measured divider center must fall in the GAP between
+## two consecutive bands, never inside one.
+func test_band_crops_stay_clear_of_the_sheets_divider_lines():
+	var row_dividers := [208.5, 416.5, 624.0, 831.0]
+	var column_dividers := [291.0, 579.0, 867.5, 1156.0]
+	for divider in row_dividers:
+		for band in SnowLayer.OVERLAY_ROW_BANDS:
+			assert_true(
+				divider < float(band.x) or divider >= float(band.y),
+				"row divider at %.1f must not fall inside band %s" % [divider, band]
+			)
+	for divider in column_dividers:
+		for band in SnowLayer.OVERLAY_COLUMN_BANDS:
+			assert_true(
+				divider < float(band.x) or divider >= float(band.y),
+				"column divider at %.1f must not fall inside band %s" % [divider, band]
+			)
 
 
 ## Deeper snow is whiter: the bands have to actually differ, or the gradation
@@ -68,33 +127,6 @@ func test_a_dusting_lets_the_ground_show_through_and_full_cover_does_not():
 		SnowLayer.FULL_COVER_MIN_MEAN_ALPHA,
 		"deep snow buries the ground -- nothing shows through the top band"
 	)
-
-
-## Coverage is a hard present/absent MASK, not a shade nudge, and a hard mask
-## rolled finer than the world pixel grid is a dither -- i.e. static. One art
-## pixel is half a world pixel (ART_TILE_SIZE = TILE_SIZE *
-## DETAIL_MULTIPLIER), so the roll has to happen in blocks of at least
-## DETAIL_MULTIPLIER art pixels.
-func test_snow_grain_is_never_finer_than_one_world_pixel():
-	assert_gte(
-		SnowLayer.GRAIN_BLOCK, ArtResolution.DETAIL_MULTIPLIER,
-		"the smallest snow mark must be at least one WORLD pixel across"
-	)
-	var block: int = SnowLayer.GRAIN_BLOCK
-	for band in SnowLayer.DEPTH_BANDS:
-		var image := layer.build_band_image(band)
-		for y in image.get_height():
-			for x in image.get_width():
-				var anchor := image.get_pixel(x - x % block, y - y % block)
-				assert_eq(
-					image.get_pixel(x, y), anchor,
-					(
-						"band %d pixel (%d, %d) differs from its block anchor -- "
-						+ "grain finer than a world pixel is a dither, not texture"
-					) % [band, x, y]
-				)
-				if image.get_pixel(x, y) != anchor:
-					return
 
 
 # -- which band a tile gets --------------------------------------------------
@@ -205,11 +237,11 @@ func test_band_for_without_an_onset_argument_is_unchanged():
 #
 # The onset offset was rolled per tile with PixelNoise.range_value -- white
 # noise, so the offset of tile (x, y) said nothing whatever about (x + 1, y).
-# Two touching tiles could land 2 * ONSET_VARIANCE apart, which is MORE than
-# one whole depth band (1.0 / DEPTH_BANDS = 0.25), and band_for speaks for a
-# whole tile. The field therefore rendered as a checkerboard of bare / dusted
-# / covered SQUARES with a razor edge on the tile grid -- reported as texture
-# corruption rather than as snow.
+# Two touching tiles could land 2 * ONSET_VARIANCE apart, which was MORE than
+# one whole depth band at the DEPTH_BANDS=4 this was fixed under (1.0 / 4 =
+# 0.25), and band_for speaks for a whole tile. The field therefore rendered
+# as a checkerboard of bare / dusted / covered SQUARES with a razor edge on
+# the tile grid -- reported as texture corruption rather than as snow.
 #
 # Snow drifts and shelters in patches many metres across (a hollow, a lee
 # side, a tree line's shade), so the field deciding which ground catches

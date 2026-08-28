@@ -41,8 +41,14 @@ func test_unknown_material_defaults_density_to_one() -> void:
 	assert_almost_eq(mp.property_value("unobtainium", "density"), 1.0, 0.0001)
 
 
-func test_unknown_material_defaults_hardness_to_one() -> void:
-	assert_almost_eq(mp.property_value("unobtainium", "hardness"), 1.0, 0.0001)
+## Was test_unknown_material_defaults_hardness_to_one. The default moved to 0.0
+## when the hardness column became real Vickers, because 1.0 stopped meaning
+## "the bottom of a legibility scale" and started meaning 100 HV -- wrought
+## iron, and the exact "hard" cutoff. See
+## test_an_unmodeled_material_is_not_assumed_to_be_hard for the full argument;
+## it is the same one DEFAULT_PROPERTIES' conductivity entry already carries.
+func test_unknown_material_defaults_hardness_to_zero() -> void:
+	assert_almost_eq(mp.property_value("unobtainium", "hardness"), 0.0, 0.0001)
 
 
 func test_unknown_property_on_known_material_defaults_to_one() -> void:
@@ -67,6 +73,20 @@ func test_fiber_is_viable_grapple_rope_material() -> void:
 
 func test_obsidian_is_not_viable_grapple_rope_material() -> void:
 	assert_false(mp.is_viable_for_tool("obsidian", "grapple_rope"))
+
+
+## The real climbing-rope item (docs/concept/transportation.md,
+## crafting_recipe_book.gd's "climbing_rope" recipe) is built from hide, not
+## fiber -- pinning that choice against the real check rather than an
+## eyeballed comment. hide's toughness is 7.0 (see MATERIALS), comfortably
+## above ROPE_MIN_TOUGHNESS's 5.0, and unlike fiber (ambient meadow
+## gathering) it is only obtained by hunting+butchering an animal
+## (butchering.gd) -- the "materials that make a traversal tool actually
+## good live further out on the danger gradient" transportation.md itself
+## asks for. If a future edit ever drops hide's toughness below the rope
+## threshold, this is the test that catches it.
+func test_hide_is_viable_grapple_rope_material_the_climbing_ropes_real_choice() -> void:
+	assert_true(mp.is_viable_for_tool("hide", "grapple_rope"))
 
 
 func test_unknown_tool_type_is_never_viable() -> void:
@@ -143,9 +163,9 @@ func test_timber_shares_every_other_property_with_wood() -> void:
 # the game has ALREADY calibrated elsewhere are reused rather than re-guessed.
 
 func test_iron_and_stone_read_as_hard_but_wood_does_not() -> void:
-	assert_true(mp.descriptors_for("iron").has("hard"), "iron (hardness 8) should read as hard")
-	assert_true(mp.descriptors_for("stone").has("hard"), "stone (hardness 7) should read as hard")
-	assert_false(mp.descriptors_for("wood").has("hard"), "wood (hardness 3) should not read as hard")
+	assert_true(mp.descriptors_for("iron").has("hard"), "iron (100 HV) should read as hard")
+	assert_true(mp.descriptors_for("stone").has("hard"), "stone (700 HV) should read as hard")
+	assert_false(mp.descriptors_for("wood").has("hard"), "wood (3.7 HV) should not read as hard")
 
 
 func test_obsidian_and_iron_read_as_keen_but_stone_does_not() -> void:
@@ -223,17 +243,42 @@ func test_copper_is_the_toughest_and_most_conductive_metal_in_the_table() -> voi
 	assert_gt(mp.property_value("copper", "conductivity"), mp.property_value("iron", "conductivity"))
 
 
-## Tin is soft enough to mark with a fingernail (Mohs 1.5, ~5 HB against
-## copper's ~50 HB) and takes no edge at all.
-func test_tin_is_softer_than_wood_and_takes_no_edge() -> void:
-	assert_lt(mp.property_value("tin", "hardness"), mp.property_value("wood", "hardness"))
+## Tin is soft enough to mark with a fingernail (Mohs 1.5, ~5 HV against
+## copper's ~50) and takes no edge at all.
+##
+## This used to assert tin is softer than WOOD, and the real numbers say it is
+## not: pure tin measures ~5 HV against red oak's Brinell 3.7. That was a Mohs
+## intuition (tin 1.5, wood ~2.5) standing in for an indentation measurement,
+## and scratch hardness and indentation hardness genuinely disagree about a
+## porous cellular solid -- oak resists a scratch better than tin and a punch
+## worse. The claim that actually matters about tin is unchanged and is what is
+## asserted now: it is the softest METAL in the table, by a wide margin, and no
+## edge will stay on it.
+func test_tin_is_the_softest_metal_in_the_table_and_takes_no_edge() -> void:
+	for metal in ["copper", "iron", "silver", "gold", "zinc"]:
+		assert_lt(mp.property_value("tin", "hardness"), mp.property_value(metal, "hardness"),
+			"tin must be softer than %s" % metal)
 	assert_almost_eq(mp.property_value("tin", "sharpness_capacity"), 0.0, 0.0001)
 
 
 ## Graphite is soft, friable and burns -- it is in the table as the carbon that
 ## dissolves into iron, not as a structural material.
+##
+## The hardness clause used to compare it against WOOD and the real numbers say
+## the opposite: graphite's published VHN10 is 7-11 kgf/mm^2 against red oak's
+## Brinell 3.7. Mohs says graphite (1-2) is softer than wood (~2.5) because a
+## layered mineral shears along its basal planes under a scratch, but this
+## column is indentation, not scratch, and under an indenter graphite is the
+## harder of the two. What made the row soft and friable in the first place is
+## the toughness clause below -- it is under the shipped brittle cutoff, which
+## is the property that actually keeps anyone from building with it -- and that
+## is asserted unchanged. The hardness clause now says the true thing: graphite
+## is softer than every metal in the table, which is why it is a solute and
+## never a tool.
 func test_carbon_is_soft_friable_and_burns() -> void:
-	assert_lt(mp.property_value("carbon", "hardness"), mp.property_value("wood", "hardness"))
+	for metal in ["copper", "iron", "silver", "gold", "zinc"]:
+		assert_lt(mp.property_value("carbon", "hardness"), mp.property_value(metal, "hardness"),
+			"graphite must be softer than %s -- it is a solute, not a tool" % metal)
 	assert_lt(mp.property_value("carbon", "toughness"), MaterialProperties.BRITTLE_TOUGHNESS)
 	assert_gt(mp.property_value("carbon", "flammability"), mp.property_value("wood", "flammability"))
 
@@ -487,6 +532,152 @@ func test_no_non_metal_registers_at_all_on_a_conductor_scale() -> void:
 			continue
 		assert_lt(mp.property_value(material, "conductivity"), 0.1,
 			"%s is not a conductor and must not read as one" % material)
+
+
+# -- hardness: a real Vickers column, not a legibility ordering --------------
+#
+# The column used to be a placed 0-10 ordering (iron 8, obsidian 9) with almost
+# no room above iron, and the consequence was not cosmetic: alloy_blend.gd's
+# steel pinned the ceiling for EVERY carbon content, so carbon bought nothing,
+# treatment.gd's quench became a no-op on the one material it exists for, and
+# tempered toughness slid up past plain iron's. Every one of those is a
+# saturation artifact, and every one of them is gone once the column is a real
+# measurement -- exactly the move the conductivity column above already made.
+
+## The column is not assigned, it is computed. Every row must equal
+## hardness_from_hv() of its own published Vickers figure, so a value can never
+## be nudged without changing the measurement it claims. Same shape, and the
+## same guarantee, as test_conductivity_is_derived_from_real_iacs_not_assigned.
+func test_hardness_is_derived_from_real_vickers_not_assigned() -> void:
+	for material in MaterialProperties.MATERIALS:
+		assert_true(MaterialProperties.HARDNESS_HV.has(material),
+			"%s has no Vickers figure -- its hardness would be eyeballed" % material)
+		assert_relative(
+			mp.property_value(material, "hardness"),
+			mp.hardness_from_hv(float(MaterialProperties.HARDNESS_HV[material])),
+			"%s's hardness must be its HV figure put through the one function" % material
+		)
+
+
+## Why LINEAR and not logarithmic, asserted rather than only argued: both
+## models that move hardness are built out of Vickers RATIOS and nothing else.
+## Treatment.MARTENSITE_HARDNESS_RATIO is 832/180 HV, hardness_retention is
+## HV(draw)/HV(as-quenched), and AlloyBlend multiplies a baseline by
+## (1 + solution_strengthening). A ratio of HVs may only be multiplied into a
+## column that is PROPORTIONAL to HV; on a log column the same multiplication
+## would exponentiate the hardness instead. So the map has no freedom: it is
+## linear, and this test is what stops anybody "fixing" the crushed soft end by
+## making it logarithmic without also rewriting both those models.
+func test_the_hardness_map_is_linear_in_hv_because_the_models_are_hv_ratios() -> void:
+	var Treatment := preload("res://src/gameplay/treatment.gd")
+	assert_almost_eq(mp.hardness_from_hv(0.0), 0.0, 0.000001,
+		"a scale multiplied by ratios must pass through the origin")
+	for hv in [5.0, 50.0, 180.0, 400.0]:
+		assert_relative(mp.hardness_from_hv(2.0 * hv), 2.0 * mp.hardness_from_hv(hv),
+			"doubling the Vickers figure must double the scale value")
+	assert_almost_eq(
+		Treatment.MARTENSITE_HARDNESS_RATIO,
+		mp.hardness_from_hv(Treatment.AS_QUENCHED_HV) / mp.hardness_from_hv(Treatment.ANNEALED_HV),
+		0.000001,
+		"the quench ratio must mean the same thing in HV and on the game scale"
+	)
+
+
+## The anchor, and why it never has to move again -- the same argument
+## IACS_SILVER_PERCENT makes for conductivity. 1000 HV is the published Vickers
+## figure for martensite, and martensite is the hardest thing a forge can
+## produce: no smelting, alloying or heat treatment this game models can make
+## anything harder, so the top of the column is a real ceiling rather than an
+## accident of where iron happened to be placed.
+##
+## And it leaves genuine headroom, which is the whole point of the exercise:
+## treatment.gd's own AS_QUENCHED_HV (832 HV, water-quenched 0.8% C) lands
+## BELOW the ceiling rather than on it, so quenching is an operation with room
+## to work in instead of a clamp.
+func test_the_hardness_ceiling_is_martensite_the_hardest_thing_a_forge_can_make() -> void:
+	var Treatment := preload("res://src/gameplay/treatment.gd")
+	var AlloyBlend := preload("res://src/gameplay/alloy_blend.gd")
+	assert_almost_eq(mp.hardness_from_hv(MaterialProperties.HARDNESS_MAX_HV),
+		MaterialProperties.HARDNESS_MAX, 0.000001,
+		"the martensite anchor must land exactly on the top of the scale")
+	assert_eq(MaterialProperties.HARDNESS_MAX, AlloyBlend.SCALE_MAX,
+		"one legibility ceiling, not two that can drift apart")
+	assert_lt(Treatment.AS_QUENCHED_HV, MaterialProperties.HARDNESS_MAX_HV,
+		"the hardest thing the forge actually makes must fit UNDER the ceiling")
+	for material in MaterialProperties.MATERIALS:
+		assert_lte(mp.property_value(material, "hardness"), MaterialProperties.HARDNESS_MAX,
+			"%s must not sit above the top of the scale" % material)
+
+
+## The full ordering, pinned in one place. Every neighbour pair here is a real,
+## checkable relation between two published indentation figures -- and the two
+## that matter most for the game are that obsidian out-hards iron six times
+## over (which is why a knapped edge beats a bloomery one on edge-taking) and
+## that rock out-hards both (Mohs 7 quartz against Mohs 5.5 volcanic glass),
+## which is why obsidian's advantage is edge FINENESS and never durability.
+func test_the_hardness_ordering_is_the_real_vickers_ordering() -> void:
+	var real_order := [
+		"stone", "obsidian", "glass", "iron", "copper", "bone", "zinc",
+		"silver", "gold", "carbon", "tin", "wood", "leather", "hide",
+		"fiber", "flesh",
+	]
+	for index in range(real_order.size() - 1):
+		assert_gt(
+			mp.property_value(real_order[index], "hardness"),
+			mp.property_value(real_order[index + 1], "hardness"),
+			"%s must out-hard %s" % [real_order[index], real_order[index + 1]]
+		)
+
+
+## "hard" is now the benchmark-METAL line, not the stone line. On a real
+## Vickers column rock is seven times harder than wrought iron, so stone can no
+## longer be the cutoff without iron falling out of the word -- and "iron reads
+## as hard" is the shipped vocabulary items.md documents. So the cutoff moves to
+## iron's own hardness, exactly the way KEEN_SHARPNESS is iron's own
+## sharpness_capacity: hard means "at least as hard as the benchmark metal".
+func test_the_hard_cutoff_is_the_benchmark_metals_own_hardness() -> void:
+	assert_almost_eq(MaterialProperties.HARD_HARDNESS,
+		mp.property_value("iron", "hardness"), 0.000001,
+		"the hard line must be a shipped material's own figure, not a number typed in")
+	assert_true(mp.descriptors_for("iron").has("hard"))
+	assert_true(mp.descriptors_for("stone").has("hard"))
+	assert_false(mp.descriptors_for("copper").has("hard"),
+		"copper being SOFT is the whole reason the Bronze Age needed tin")
+	assert_false(mp.descriptors_for("bone").has("hard"))
+	assert_false(mp.descriptors_for("wood").has("hard"))
+
+
+## The soft organics are the honest gap in this column: there is no published
+## Vickers figure for wet muscle, rawhide or cordage, because indentation
+## hardness is not how any of them is measured. Their figures are PLACED to
+## preserve the real ordering (dry tanned leather stiffer than rawhide, both
+## stiffer than a bundle of fibres, all far above wet tissue) and this test
+## pins the placement so it cannot drift. Wood and bone, by contrast, are real
+## measurements (red oak HBW 10/100 = 3.7 kgf/mm^2; cortical bone ~45 HV).
+func test_the_soft_organics_are_placed_not_measured_and_keep_their_real_ordering() -> void:
+	for material in ["leather", "hide", "fiber", "sinew", "flesh"]:
+		assert_lt(float(MaterialProperties.HARDNESS_HV[material]),
+			float(MaterialProperties.HARDNESS_HV["wood"]),
+			"%s must sit below solid wood, the softest thing here with a real figure" % material)
+	assert_gt(float(MaterialProperties.HARDNESS_HV["leather"]),
+		float(MaterialProperties.HARDNESS_HV["hide"]),
+		"tanning stiffens collagen -- that is what tanning IS")
+	assert_almost_eq(float(MaterialProperties.HARDNESS_HV["sinew"]),
+		float(MaterialProperties.HARDNESS_HV["fiber"]), 0.000001,
+		"cordage is cordage: neither has an indentation hardness of its own")
+	assert_lt(float(MaterialProperties.HARDNESS_HV["flesh"]), 1.0,
+		"wet tissue is below the bottom of every indentation standard there is")
+
+
+## Not having measured something is not a reason to call it iron. 1.0 on this
+## column now means 100 HV -- wrought iron, and the exact cutoff the "hard"
+## descriptor uses -- so the old all-1.0 default would silently promote every
+## unmodeled substance to a hard metal. The same argument, and the same fix,
+## the conductivity default already carries.
+func test_an_unmodeled_material_is_not_assumed_to_be_hard() -> void:
+	assert_almost_eq(mp.property_value("unobtainium", "hardness"), 0.0, 0.000001)
+	assert_false(mp.descriptors_for_vector({"toughness": 9.0}).has("hard"),
+		"a vector that never said how hard it is must not read as hard")
 	assert_lt(
 		mp.property_value("flesh", "conductivity") / mp.property_value("iron", "conductivity"),
 		1.0e-6,

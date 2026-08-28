@@ -219,3 +219,166 @@ func test_a_working_farmer_does_not_crash_when_world_lacks_the_harvest_hook():
 	var economy := _economy("farmer")
 	economy.step(1.0, true, BareWorld.new(), Vector2.ZERO)
 	pass_test("a working farmer against a world without the harvest hook should not crash")
+
+
+# -- the village purse: a non-producer's first real gold source ---------------
+#
+# docs/concept/npc.md "Needs and the local production economy" says a
+# non-producer "eat[s] by buying it, out of their own wallet" but never says
+# where that wallet's gold comes from -- and NpcEconomy only ever credited a
+# wallet inside _gather(), which is gated on NpcProduction.is_producer().
+# Five of NpcIdentity.OCCUPATIONS' eight occupations therefore started at
+# zero gold, could never afford VillageMarket.VILLAGE_LOCAL_FOOD_PRICE, and
+# stayed hungry forever no matter what the weather, the harvest or the
+# market stock did: hunger was an occupation constant, not an economy.
+#
+# VillageWages closes that: a producing household's gross gold is split, the
+# village's share accrues in a shared purse, and a villager who cannot
+# afford a meal draws one subsistence wage back out of it. Everything below
+# is funded by a REAL hunter doing REAL work against the same real
+# HerbivorePopulationModel-driven yield -- no gold is ever poked in by hand,
+# so what feeds the blacksmith is literally a hunter's catch.
+
+const VillageWages = preload("res://src/world/village_wages.gd")
+
+
+## Runs a real producer on `a_market` for long enough to both stock it and
+## fund its purse, exactly the way a village actually does it.
+func _fund_village_with_a_real_hunters_work(a_market: VillageMarket, seconds: int = 60) -> NpcEconomy:
+	var hunter := NpcEconomy.new(1, "hunter", a_market)
+	for i in seconds:
+		hunter.step(1.0, true, world, Vector2.ZERO)
+	return hunter
+
+
+## THE behaviour change: a penniless non-producer in a village whose
+## producers have actually been working no longer starves.
+func test_a_non_producer_in_a_village_with_a_funded_purse_stops_starving():
+	_fund_village_with_a_real_hunters_work(market)
+	assert_true(market.can_buy_meal(), "precondition: the hunter's catch really reached the market")
+
+	var blacksmith := _economy("blacksmith")
+	blacksmith.needs.advance(100000.0)
+	assert_eq(blacksmith.wallet.balance, 0, "precondition: a non-producer owns no gold of their own")
+
+	blacksmith.step(0.01, false, world, Vector2.ZERO)
+
+	assert_false(
+		blacksmith.needs.is_hungry(),
+		"a village purse funded by a real hunter's catch must feed that village's blacksmith"
+	)
+
+
+## The other half of the same claim -- the wage is drawn from something
+## real, so a village where nobody ever produced has nothing to pay with and
+## its non-producers genuinely still starve. Stock alone is not income.
+func test_a_non_producer_in_a_village_with_an_empty_purse_still_starves():
+	market.add_stock("meat", 5.0)  # food on the shelf, but no producer ever earned for it
+	var blacksmith := _economy("blacksmith")
+	blacksmith.needs.advance(100000.0)
+
+	blacksmith.step(0.01, false, world, Vector2.ZERO)
+
+	assert_true(blacksmith.needs.is_hungry(), "an unfunded purse must not conjure a wage out of nothing")
+	assert_eq(blacksmith.wallet.balance, 0, "a village that levied nothing has nothing to pay")
+	assert_almost_eq(market.stock["meat"], 5.0, 0.001, "and the stock must be left untouched")
+
+
+## Subsistence, not savings: the wage is exactly one meal at the market's
+## own price, so it is gone again the instant it is used.
+func test_a_drawn_wage_is_spent_on_the_meal_and_leaves_no_savings():
+	_fund_village_with_a_real_hunters_work(market)
+	var blacksmith := _economy("blacksmith")
+	blacksmith.needs.advance(100000.0)
+
+	blacksmith.step(0.01, false, world, Vector2.ZERO)
+
+	assert_false(blacksmith.needs.is_hungry(), "precondition: the wage must have bought a real meal")
+	assert_eq(blacksmith.wallet.balance, 0, "a subsistence wage is one meal exactly, with nothing left to hoard")
+
+
+## The purse is per-SETTLEMENT, sharing exactly what VillageMarket already
+## shares (one instance per village, see VillageRenderer.spawn_village) --
+## a thriving village must not feed a stranger's.
+func test_a_village_purse_feeds_only_its_own_settlement():
+	_fund_village_with_a_real_hunters_work(market)
+
+	var other_market := VillageMarket.new()
+	other_market.add_stock("meat", 5.0)
+	var outsider := NpcEconomy.new(1, "blacksmith", other_market)
+	outsider.needs.advance(100000.0)
+	outsider.step(0.01, false, world, Vector2.ZERO)
+	assert_true(outsider.needs.is_hungry(), "one village's purse must never pay another village's blacksmith")
+
+	var local := _economy("blacksmith")
+	local.needs.advance(100000.0)
+	local.step(0.01, false, world, Vector2.ZERO)
+	assert_false(local.needs.is_hungry(), "...while the funded village's own blacksmith eats")
+
+
+## The funding side, anchored to VillageWages' own derived rate rather than
+## a literal: a producer now banks their take-home share, not the whole
+## gross -- and still banks something real, so the levy cannot quietly
+## swallow a producing household's entire income. Tolerance is one whole
+## gold because take-home accrues fractionally and a Wallet holds only whole
+## gold (see the carry in NpcEconomy._gather).
+func test_a_producer_keeps_only_their_take_home_share_of_what_they_earn():
+	var hunter := _economy("hunter")
+	for i in 100:
+		hunter.step(1.0, true, world, Vector2.ZERO)
+
+	# Every gathered unit went to the market -- a working hunter self-feeds
+	# for free and never buys any of it back.
+	var gross := market.total_stock() * float(NpcProduction.YIELD_TO_GOLD_RATE)
+	assert_gt(gross, 0.0, "precondition: the hunter really earned something")
+	assert_gt(hunter.wallet.balance, 0, "a producer must still earn real gold after the village takes its share")
+	assert_almost_eq(
+		float(hunter.wallet.balance),
+		VillageWages.take_home_of(gross),
+		1.0,
+		"a producer banks VillageWages' take-home share of the gross, not all of it"
+	)
+
+
+## The purse is observable, starts empty, and holds exactly VillageWages'
+## levy on what its producers really earned -- stated against the live rate
+## rather than a copied number, so NpcEconomy's split and VillageWages' own
+## definition of it can never drift apart.
+func test_a_village_purse_starts_empty_and_holds_exactly_the_levy_on_real_producer_income():
+	assert_almost_eq(NpcEconomy.purse_of(market), 0.0, 0.0001, "a village starts with no savings at all")
+
+	_fund_village_with_a_real_hunters_work(market)
+
+	var gross := market.total_stock() * float(NpcProduction.YIELD_TO_GOLD_RATE)
+	assert_almost_eq(
+		NpcEconomy.purse_of(market),
+		VillageWages.levy_on(gross),
+		0.0001,
+		"the purse must hold exactly the levy on what its producers really earned"
+	)
+
+
+## A wage buys a meal, so a village with nothing left to sell must not pay
+## one -- otherwise a famine quietly drains a settlement's savings into
+## villagers' pockets and buys nobody anything. VillageMarket.buy_meal is
+## already all-or-nothing for the same reason (see its own doc comment);
+## paying the wage first would sidestep that.
+func test_an_empty_market_does_not_pay_out_a_wage_for_a_meal_that_does_not_exist():
+	_fund_village_with_a_real_hunters_work(market)
+	market.stock.clear()  # the village has eaten through everything it had
+	var funded_purse := NpcEconomy.purse_of(market)
+	assert_gt(funded_purse, 0.0, "precondition: the purse really is funded")
+
+	var blacksmith := _economy("blacksmith")
+	blacksmith.needs.advance(100000.0)
+
+	blacksmith.step(0.01, false, world, Vector2.ZERO)
+
+	assert_true(blacksmith.needs.is_hungry(), "there is nothing to buy, so nobody gets fed")
+	assert_eq(blacksmith.wallet.balance, 0, "a wage must not be paid for a meal that does not exist")
+	assert_almost_eq(
+		NpcEconomy.purse_of(market),
+		funded_purse,
+		0.0001,
+		"a famine must not quietly drain the village's savings into pockets"
+	)

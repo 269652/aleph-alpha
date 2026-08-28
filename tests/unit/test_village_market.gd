@@ -109,3 +109,82 @@ func test_remove_stock_fails_and_does_not_mutate_when_short():
 func test_remove_stock_fails_for_an_item_with_no_stock_at_all():
 	assert_false(market.remove_stock("beam", 1.0))
 	assert_false(market.stock.has("beam"))
+
+
+# -- Only real FOOD is a meal. A VillageMarket also holds construction ------
+# -- lumber (see remove_stock above), and SettlementFood._village_food_stock -
+# -- already filters that stock through ItemCatalog.kind_of(id) == "food" ---
+# -- before a settlement counts as fed. can_buy_meal/buy_meal must read the -
+# -- SAME real category: NpcEconomy's wage gate reads can_buy_meal directly, -
+# -- so an unfiltered market would pay a subsistence wage and "feed" a beam -
+# -- to a villager in a settlement SettlementFood correctly reports starving.
+
+const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
+
+
+## A catalog that knows one id the shipped ItemCatalog never will -- stands
+## in for a real ItemCatalog with a CraftedItemRegistry attached (see
+## ItemCatalog._crafted_registry), i.e. emergent/crafted food.
+class _CraftedFoodCatalog:
+	extends RefCounted
+
+	func kind_of(item_id: String) -> String:
+		return "food" if item_id == "emergent_stew" else ""
+
+
+func test_a_market_holding_only_lumber_cannot_sell_a_meal():
+	market.add_stock("beam", 10.0)
+	market.add_stock("plank", 10.0)
+	assert_false(market.can_buy_meal(), "lumber is not a meal, however much of it is stocked")
+
+
+func test_buy_meal_refuses_lumber_and_touches_neither_wallet_nor_stock():
+	market.add_stock("beam", 10.0)
+	var wallet := Wallet.new()
+	wallet.add(100)
+	assert_eq(market.buy_meal(wallet), "")
+	assert_eq(wallet.balance, 100, "a refused purchase must not touch the wallet")
+	assert_almost_eq(market.stock["beam"], 10.0, 0.001, "a refused purchase must not touch stock")
+
+
+func test_buy_meal_skips_lumber_and_picks_the_real_food_behind_it():
+	market.add_stock("beam", 10.0)  # stocked first, so iteration reaches it first
+	market.add_stock("meat", 2.0)
+	var wallet := Wallet.new()
+	wallet.add(100)
+
+	assert_eq(market.buy_meal(wallet), "meat")
+	assert_almost_eq(market.stock["beam"], 10.0, 0.001, "lumber is never eaten")
+	assert_almost_eq(market.stock["meat"], 1.0, 0.001)
+
+
+## Pinned to the catalog itself rather than a hand-written list of "which
+## ids are food" -- the same single source SettlementFood filters on.
+func test_meal_eligibility_matches_the_item_catalogs_own_food_category():
+	var catalog := ItemCatalog.new()
+	for item_id in ["meat", "fish", "fruit", "nut", "beam", "plank", "log", "hide"]:
+		var one_item_market = VillageMarket.new()
+		one_item_market.add_stock(item_id, VillageMarket.FOOD_UNITS_PER_MEAL)
+		assert_eq(
+			one_item_market.can_buy_meal(),
+			catalog.kind_of(item_id) == "food",
+			"%s: meal eligibility must follow ItemCatalog.kind_of" % item_id
+		)
+
+
+func test_an_item_no_catalog_knows_is_not_a_meal():
+	market.add_stock("not_a_real_item", 5.0)
+	assert_false(market.can_buy_meal())
+
+
+## The seam a caller holding a catalog that knows emergent/crafted food ids
+## (Player._item_catalog, say) can hand in, so a real cooked dish the shipped
+## table never listed still feeds a villager.
+func test_an_injected_catalog_decides_what_counts_as_food():
+	market.item_catalog = _CraftedFoodCatalog.new()
+	market.add_stock("emergent_stew", 2.0)
+	assert_true(market.can_buy_meal(), "the injected catalog calls this food")
+
+	var wallet := Wallet.new()
+	wallet.add(100)
+	assert_eq(market.buy_meal(wallet), "emergent_stew")

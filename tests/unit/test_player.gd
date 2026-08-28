@@ -21,6 +21,15 @@ const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
+const MinableOre = preload("res://src/rendering/minable_ore.gd")
+const SmashableStone = preload("res://src/rendering/smashable_stone.gd")
+const Knapping = preload("res://src/gameplay/knapping.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
+const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
+const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
+const Item = preload("res://src/gameplay/item.gd")
+const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -466,6 +475,26 @@ func test_equipping_a_weapon_via_activate_item_id_updates_the_paperdoll():
 	assert_eq(player.equipment.equipped_in("weapon").id, "iron_sword")
 
 
+## The in-hand sprite must follow the item's sprite_id, not its raw id (see
+## docs/concept/item_illustrations.md) -- a crafted/variant item can share a
+## base item's art via a divergent sprite_id, and equip_item has to resolve
+## art through that indirection rather than hard-coding `.id`.
+func test_equipping_an_item_shows_its_sprite_id_art_not_its_raw_id():
+	var variant := Item.new(
+		"iron_sword_blessed", "Blessed Iron Sword", "weapon", 1, 25.0, "", 0.0, 0.0, "iron_sword"
+	)
+	player.inventory.add(variant, 1)
+
+	assert_true(player.equip_item(variant))
+
+	var expected := ProceduralItemSprite.new().generate_texture("iron_sword")
+	assert_eq(
+		player._character_view.tool_slot_texture().get_image().get_data(),
+		expected.get_image().get_data(),
+		"the held sprite should be iron_sword's art (the sprite_id), not iron_sword_blessed's"
+	)
+
+
 ## activate_hotbar_slot didn't special-case armor before calling equip_item
 ## (which rejects non-weapon/tool kinds outright) -- armor from the numbered
 ## hotbar always silently failed, even though the same item worked fine via
@@ -629,6 +658,319 @@ func test_resolving_a_catch_hides_the_bobber():
 ## CharacterView at all). A fresh spawn should show no head-slot decoration.
 func test_spawning_does_not_leave_a_placeholder_head_slot_equipped():
 	assert_false(player._character_view.is_slot_equipped("head"))
+
+
+# -- equip_armor now shows real armor on the rig, not just the numeric slot --
+# (see docs/concept/item_illustrations.md and the regression comment above:
+# equip_armor never called CharacterView at all before this).
+
+func test_equipping_armor_shows_it_in_the_matching_character_view_slot():
+	var helm := _item_catalog.make("leather_helm")
+	player.inventory.add(helm, 1)
+
+	assert_true(player.equip_armor(helm))
+
+	assert_true(player._character_view.is_slot_equipped("head"))
+	var expected := ProceduralItemSprite.new().generate_texture("leather_helm")
+	assert_eq(
+		player._character_view.slot_texture("head").get_image().get_data(),
+		expected.get_image().get_data()
+	)
+
+
+func test_equipping_armor_in_each_slot_shows_up_in_that_slot():
+	var chest := _item_catalog.make("leather_chest")
+	player.inventory.add(chest, 1)
+	assert_true(player.equip_armor(chest))
+	assert_true(player._character_view.is_slot_equipped("chest"), "chest")
+
+	var legs := _item_catalog.make("leather_legs")
+	player.inventory.add(legs, 1)
+	assert_true(player.equip_armor(legs))
+	assert_true(player._character_view.is_slot_equipped("legs"), "legs")
+
+	var boots := _item_catalog.make("leather_boots")
+	player.inventory.add(boots, 1)
+	assert_true(player.equip_armor(boots))
+	assert_true(player._character_view.is_slot_equipped("feet"), "feet")
+
+
+func test_unequipping_armor_hides_its_character_view_slot():
+	var helm := _item_catalog.make("leather_helm")
+	player.inventory.add(helm, 1)
+	player.equip_armor(helm)
+
+	assert_true(player.unequip_slot("head"))
+
+	assert_false(player._character_view.is_slot_equipped("head"))
+
+
+# -- ground-contact shadow (see DropShadow) -----------------------------------
+# Reported directly: "the player has no silhouette shadow which should
+# stretch with sun's elevation" -- every creature already gets one
+# (CreatureMarker._sync_grounded_children / DropShadow.stretch_for_elevation),
+# fed every frame by World from the real sun position, but nothing ever gave
+# the player's own CharacterBody2D a shadow child at all.
+
+func test_the_player_has_a_shadow_child():
+	assert_not_null(player._shadow, "the player must have a shadow, the same as every creature")
+
+
+func test_the_shadow_stretches_with_the_shared_sun_elevation():
+	CreatureMarker.sun_elevation_deg = 90.0
+	player._update_character_view(Vector2.DOWN)
+	var overhead_stretch: float = player._shadow.scale.y
+
+	CreatureMarker.sun_elevation_deg = 10.0
+	player._update_character_view(Vector2.DOWN)
+	assert_gt(
+		player._shadow.scale.y, overhead_stretch,
+		"a lower sun must stretch the player's shadow longer, exactly like a creature's"
+	)
+
+
+# -- mana: a new resource for spellcasting, kept off stamina by design (see
+# docs/concept/survival.md's "Stamina scope: movement only, not combat" and
+# docs/concept/spell_runtime.md) --------------------------------------------
+
+func test_apply_class_sets_max_mana_from_the_archetypes_bonus():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_almost_eq(player.max_mana, 50.0, 0.001)
+	assert_almost_eq(player.mana, 50.0, 0.001, "a freshly applied class should start at full mana")
+
+
+func test_apply_class_gives_a_non_caster_class_zero_mana():
+	player.apply_class("warrior", {"max_mana": 0.0})
+	assert_almost_eq(player.max_mana, 0.0, 0.001)
+
+
+func test_mana_never_goes_negative_even_with_a_large_negative_bonus():
+	player.apply_class("cursed", {"max_mana": -30.0})
+	assert_almost_eq(player.max_mana, 0.0, 0.001)
+
+
+func test_spend_mana_succeeds_when_affordable():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.spend_mana(20.0))
+	assert_almost_eq(player.mana, 30.0, 0.001)
+
+
+func test_spend_mana_fails_and_changes_nothing_when_unaffordable():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_false(player.spend_mana(999.0))
+	assert_almost_eq(player.mana, 50.0, 0.001, "an unaffordable spend must not touch mana at all")
+
+
+func test_mana_regenerates_over_time():
+	player.apply_class("mage", {"max_mana": 50.0})
+	player.spend_mana(10.0)
+
+	player._regen_mana(5.0)
+
+	assert_gt(player.mana, 40.0)
+	assert_lte(player.mana, player.max_mana)
+
+
+func test_mana_regeneration_never_exceeds_max_mana():
+	player.apply_class("mage", {"max_mana": 50.0})
+	player._regen_mana(10000.0)
+	assert_almost_eq(player.mana, 50.0, 0.001)
+
+
+## Pins MANA_REGEN_PER_SECOND against the real cost of the cheapest example
+## spell (SpellBook/SpellExecutor), rather than an eyeballed number: a mage
+## should be able to recast their cheapest spell within a handful of
+## seconds of standing still, not instantly (free) and not after a long wait.
+func test_mana_regen_lets_a_mage_recast_the_cheapest_spell_within_a_few_seconds():
+	var SpellBook = preload("res://src/gameplay/spell_book.gd")
+	var SpellExecutor = preload("res://src/gameplay/spell_executor.gd")
+	var book := SpellBook.new()
+	var executor := SpellExecutor.new()
+	var cheapest := INF
+	for spell_id in book.known_ids():
+		cheapest = minf(cheapest, executor.cost_for(executor.cast_rule(book.ast_for(spell_id))))
+
+	var seconds_to_recast := cheapest / Player.MANA_REGEN_PER_SECOND
+	assert_gt(seconds_to_recast, 0.5, "mana regen must not make casting effectively free/instant")
+	assert_lt(seconds_to_recast, 10.0, "mana regen must not make recasting an agonizing wait")
+
+
+# -- spell-cast status effects (ignite/blight/freeze/root/slow/shield) ------
+# See docs/concept/spell_runtime.md. Mirrors apply_venom/_venom_step's own
+# shape (DebuffStack-tracked, ticked once per authority frame).
+
+const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
+
+
+func test_ignite_deals_real_damage_over_time():
+	player.apply_spell_debuff(SpellStatusEffects.IGNITE, 3.0)
+	var health_before := player.health
+
+	player._spell_status_step(1.0)
+
+	assert_lt(player.health, health_before)
+
+
+func test_ignite_expires_after_its_duration():
+	player.apply_spell_debuff(SpellStatusEffects.IGNITE, 1.0)
+	player._spell_status_step(1.5)
+	var health_after_expiry := player.health
+
+	player._spell_status_step(1.0)
+
+	assert_almost_eq(
+		player.health, health_after_expiry, 0.001, "an expired ignite must deal no further damage"
+	)
+
+
+func test_freeze_roots_the_player_in_place():
+	assert_false(player.is_rooted())
+	player.apply_spell_debuff(SpellStatusEffects.FREEZE, 2.0)
+	assert_true(player.is_rooted())
+
+
+func test_root_also_roots_the_player_in_place():
+	player.apply_spell_debuff(SpellStatusEffects.ROOT, 2.0)
+	assert_true(player.is_rooted())
+
+
+func test_being_rooted_expires_on_its_own():
+	player.apply_spell_debuff(SpellStatusEffects.ROOT, 1.0)
+	player._spell_status_step(1.5)
+	assert_false(player.is_rooted())
+
+
+func test_slow_reduces_the_players_speed_multiplier():
+	assert_almost_eq(player._spell_speed_multiplier(), 1.0, 0.001)
+	player.apply_spell_debuff(SpellStatusEffects.SLOW, 3.0)
+	assert_almost_eq(player._spell_speed_multiplier(), SpellStatusEffects.SLOW_SPEED_MULTIPLIER, 0.001)
+
+
+func test_shield_absorbs_damage_before_armor_mitigation():
+	player.apply_shield(10.0, 4.0)
+	var health_before := player.health
+
+	player.take_damage(6.0)
+
+	assert_almost_eq(player.health, health_before, 0.001, "a shield with enough absorb left must block the whole hit")
+
+
+func test_shield_only_absorbs_up_to_its_remaining_pool():
+	player.apply_shield(5.0, 4.0)
+
+	player.take_damage(12.0)
+
+	assert_almost_eq(
+		player.health, player.max_health - 7.0, 0.001, "5 of the 12 damage should be absorbed, 7 should land"
+	)
+
+
+func test_shield_expires_after_its_duration():
+	player.apply_shield(10.0, 1.0)
+	player._shield_step(1.5)
+
+	player.take_damage(6.0)
+
+	assert_lt(player.health, player.max_health, "an expired shield must not still be absorbing")
+
+
+# -- heal and knockback: the shared duck-typed methods SpellAtomEffects
+# calls on ANY target (Player or CreatureMarker), same convention take_damage
+# already established (see docs/concept/spell_runtime.md). --------------------
+
+func test_heal_restores_health_up_to_the_max():
+	player.take_damage(30.0)
+	var damaged_health := player.health
+
+	player.heal(10.0)
+
+	assert_almost_eq(player.health, damaged_health + 10.0, 0.001)
+
+
+func test_heal_never_exceeds_max_health():
+	player.heal(9999.0)
+	assert_almost_eq(player.health, player.max_health, 0.001)
+
+
+func test_heal_does_nothing_to_a_dead_player():
+	player.take_damage(9999.0)
+	assert_true(player.is_dead)
+
+	player.heal(10.0)
+
+	assert_true(player.is_dead, "healing must not resurrect a dead player")
+
+
+# -- casting a spell (docs/concept/spell_runtime.md) -------------------------
+
+func test_casting_a_known_spell_spends_mana_and_hits_a_nearby_creature():
+	player.apply_class("mage", {"max_mana": 50.0})
+	var target := _creature_at("herbivore", Vector2(10, 0))
+	var health_before: float = target.info.health
+
+	assert_true(player.cast_spell("fire_bolt"))
+
+	assert_lt(player.mana, 50.0, "casting must spend real mana")
+	assert_lt(target.info.health, health_before, "Fire Bolt must actually damage the nearby target")
+
+
+func test_casting_without_enough_mana_fails_and_sets_a_message():
+	player.apply_class("mage", {"max_mana": 0.1})
+
+	assert_false(player.cast_spell("fire_bolt"))
+
+	assert_string_contains(player.cast_message.to_lower(), "mana")
+
+
+func test_casting_without_enough_mana_spends_nothing():
+	player.apply_class("mage", {"max_mana": 0.1})
+	player.cast_spell("fire_bolt")
+	assert_almost_eq(player.mana, 0.1, 0.001)
+
+
+func test_casting_an_unknown_spell_id_does_nothing_and_fails():
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_false(player.cast_spell("not_a_real_spell"))
+	assert_almost_eq(player.mana, 50.0, 0.001)
+
+
+func test_casting_a_self_delivery_spell_heals_the_caster():
+	player.apply_class("mage", {"max_mana": 50.0})
+	player.take_damage(30.0)
+	var health_before := player.health
+
+	assert_true(player.cast_spell("minor_heal"))
+
+	assert_gt(player.health, health_before)
+
+
+func test_casting_with_nothing_in_range_still_spends_mana():
+	# "even an affordable spell still has to land" (magic.md) -- casting
+	# touch/projectile with no target nearby is a real, resolved cast that
+	# simply hits nothing, not a refusal.
+	player.apply_class("mage", {"max_mana": 50.0})
+	assert_true(player.cast_spell("fire_bolt"))
+	assert_lt(player.mana, 50.0)
+
+
+func test_apply_knockback_overrides_the_velocity_for_its_duration():
+	player.apply_knockback(Vector2(100, 0))
+
+	var velocity := player._knockback_velocity(Vector2.ZERO, 0.05)
+
+	assert_gt(velocity.x, 0.0, "a rightward knockback should produce a rightward velocity override")
+
+
+func test_knockback_velocity_falls_back_to_the_input_velocity_once_expired():
+	assert_eq(player._knockback_velocity(Vector2(5, 0), 0.016), Vector2(5, 0))
+
+
+func test_knockback_velocity_overrides_even_nonzero_input_while_active():
+	player.apply_knockback(Vector2(100, 0))
+
+	var velocity := player._knockback_velocity(Vector2(-999, -999), 0.05)
+
+	assert_gt(velocity.x, 0.0, "the shove must win over normal movement input while it plays out")
 
 
 func test_catching_a_fish_with_no_marker_nearby_still_shows_a_generic_message():
@@ -1060,7 +1402,7 @@ func _hold_lasso() -> void:
 func test_throwing_the_lasso_catches_a_horse_within_reach():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(Player.LASSO_RANGE * 0.5, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	assert_true(horse.is_restrained(), "a horse within reach should be caught")
 
 
@@ -1069,7 +1411,7 @@ func test_throwing_the_lasso_catches_a_horse_within_reach():
 func test_a_horse_out_of_reach_is_not_caught():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(Player.LASSO_RANGE * 2.0, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	assert_false(horse.is_restrained())
 
 
@@ -1077,22 +1419,39 @@ func test_the_throw_takes_the_nearest_animal():
 	_hold_lasso()
 	var far := _horse_at(Vector2(Player.LASSO_RANGE * 0.9, 0))
 	var near := _horse_at(Vector2(Player.LASSO_RANGE * 0.2, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	assert_true(near.is_restrained())
 	assert_false(far.is_restrained(), "the rope only goes round one neck")
 
 
-## Predators are not tameable with a rope and a carrot, so the throw must not
-## even land on one.
-func test_the_lasso_does_not_catch_a_predator():
+## Predators now join the Roped class (see docs/concept/taming.md's "Any
+## animal, the right tool"): a lynx has a neck exactly like a horse does, so
+## the SAME lasso is the right tool -- what changes is how hard it fights
+## the rope once caught, tested at the taming.gd/creature_marker level, not
+## whether the throw lands here at all.
+func test_the_lasso_now_catches_a_predator_too():
 	_hold_lasso()
 	var lynx := CreatureMarker.new()
 	lynx.info = CreatureInfo.new("lynx", 1)
 	add_child_autofree(lynx)
 	lynx.setup(chunk_manager, TILE_SIZE)
 	lynx.position = player.position + Vector2(8, 0)
-	player._throw_lasso()
-	assert_false(lynx.is_restrained())
+	player._throw_capture_tool()
+	assert_true(lynx.is_restrained(), "a lynx has a neck like a horse does")
+
+
+## World-boss-scale species stay excluded regardless of tool -- see
+## docs/concept/taming.md's "Boss-scale creatures get their tool now;
+## actually holding one stays a follow-up."
+func test_the_lasso_never_catches_a_world_boss_species():
+	_hold_lasso()
+	var boss := CreatureMarker.new()
+	boss.info = CreatureInfo.new("krampus", 1)
+	add_child_autofree(boss)
+	boss.setup(chunk_manager, TILE_SIZE)
+	boss.position = player.position + Vector2(8, 0)
+	player._throw_capture_tool()
+	assert_false(boss.is_restrained())
 
 
 ## Leading is nothing more than an anchor that walks with the player: the
@@ -1104,7 +1463,7 @@ func test_a_led_horse_is_towed_along_behind_the_player():
 	# horse would usually fight the rope off partway through (which is its
 	# right, and is tested elsewhere) and leave this test asserting nothing.
 	horse.info.health = horse.info.max_health * 0.05
-	player._throw_lasso()
+	player._throw_capture_tool()
 	assert_true(horse.is_restrained(), "precondition: the throw landed")
 	for step in 400:
 		player.position = Vector2(float(step) * 0.6, 0)
@@ -1133,7 +1492,7 @@ func _offer_food_to(horse: CreatureMarker) -> void:
 func test_offering_food_to_a_full_horse_costs_no_carrots():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	player.inventory.add(_item_catalog.make("carrot"), 3)
 	horse._needs.hunger = 0.0
 	_offer_food_to(horse)
@@ -1144,7 +1503,7 @@ func test_offering_food_to_a_full_horse_costs_no_carrots():
 func test_offering_food_to_a_hungry_horse_spends_a_carrot_and_earns_trust():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	player.inventory.add(_item_catalog.make("carrot"), 3)
 	horse._needs.hunger = 1.0
 	_offer_food_to(horse)
@@ -1157,7 +1516,7 @@ func test_offering_food_to_a_hungry_horse_spends_a_carrot_and_earns_trust():
 func test_standing_next_to_a_hungry_horse_no_longer_feeds_it_by_itself():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	player.inventory.add(_item_catalog.make("carrot"), 3)
 	horse._needs.hunger = 1.0
 
@@ -1173,12 +1532,225 @@ func test_standing_next_to_a_hungry_horse_no_longer_feeds_it_by_itself():
 func test_the_primary_action_on_a_tied_hungry_horse_is_feeding_it():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	player.equipped_item = _item_catalog.make("carrot")
 	horse._needs.hunger = 1.0
 	var actions := player.animal_actions_for(horse)
 	assert_gt(actions.size(), 0, "a tied hungry horse should offer something")
 	assert_eq(actions[0]["verb"], "Feed")
+
+# -- capture tools: snare/trap/net (see docs/concept/taming.md's "Any
+# animal, the right tool") ----------------------------------------------------
+
+func _hold_tool(item_id: String) -> void:
+	player.equipped_item = _item_catalog.make(item_id)
+
+
+func _creature_at(species: String, offset: Vector2) -> CreatureMarker:
+	var marker := CreatureMarker.new()
+	marker.info = CreatureInfo.new(species, 1)
+	marker.wander_seed = 9
+	add_child_autofree(marker)
+	marker.setup(chunk_manager, TILE_SIZE)
+	marker.position = player.position + offset
+	return marker
+
+
+func _flyer_at(species: String, offset: Vector2) -> AmbientFlyerMarker:
+	var flyer := AmbientFlyerMarker.new()
+	flyer.species = species
+	add_child_autofree(flyer)
+	flyer.position = player.position + offset
+	return flyer
+
+
+func test_held_capture_tool_id_reports_whichever_of_the_five_tools_is_equipped():
+	_hold_tool("snare")
+	assert_eq(player._held_capture_tool_id(), "snare")
+
+
+func test_held_capture_tool_id_is_empty_for_a_non_capture_item():
+	player.equipped_item = _item_catalog.make("iron_sword")
+	assert_eq(player._held_capture_tool_id(), "")
+
+
+func test_held_capture_tool_id_is_empty_with_bare_hands():
+	player.equipped_item = null
+	assert_eq(player._held_capture_tool_id(), "")
+
+
+## A snare, not a lasso, is the right tool for a legless body.
+func test_a_snare_catches_a_snake_the_lasso_cannot():
+	_hold_tool("lasso")
+	var snake := _creature_at("nonvenomous_snake", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_false(snake.is_restrained(), "the lasso is the wrong tool for a legless body")
+
+	_hold_tool("snare")
+	player._throw_capture_tool()
+	assert_true(snake.is_restrained())
+
+
+## A trap, not a lasso, is the right tool at-or-below a mouse's own
+## world_scale (a rope loop has a real minimum practical diameter).
+func test_a_trap_catches_a_mouse_the_lasso_cannot():
+	_hold_tool("lasso")
+	var mouse := _creature_at("mouse", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_false(mouse.is_restrained(), "the lasso is the wrong tool for something mouse-sized")
+
+	_hold_tool("trap")
+	player._throw_capture_tool()
+	assert_true(mouse.is_restrained())
+
+
+## A snare offered to a horse does nothing -- "using the wrong tool on a
+## creature simply does nothing" (taming.md), not a new failure state.
+func test_a_snare_does_not_catch_a_horse():
+	_hold_tool("snare")
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_false(horse.is_restrained())
+
+
+# -- capture tools: the net (instant, no struggle) ----------------------------
+
+## Netting resolves instantly and removes the flyer from the world.
+func test_netting_a_butterfly_without_menagerie_removes_it_and_grants_a_curiosity():
+	_hold_tool("butterfly_net")
+	var monarch := _flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_true(monarch.is_queued_for_deletion(), "a landed net throw removes the flyer")
+	assert_eq(player.inventory.count_of("jarred_insect"), 1)
+
+
+func test_netting_a_bird_without_menagerie_grants_a_caged_songbird_instead():
+	_hold_tool("butterfly_net")
+	var sparrow := _flyer_at("sparrow", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player.inventory.count_of("caged_songbird"), 1)
+	assert_eq(player.inventory.count_of("jarred_insect"), 0)
+
+
+func test_a_flyer_out_of_net_range_is_left_alone():
+	_hold_tool("butterfly_net")
+	var monarch := _flyer_at("monarch", Vector2(Player.LASSO_RANGE * 2.0, 0))
+	player._throw_capture_tool()
+	assert_true(is_instance_valid(monarch))
+	assert_eq(player.inventory.count_of("jarred_insect"), 0)
+
+
+## Beastmaster's `menagerie` keystone turns a netted flyer into a real
+## bonded companion instead of a curiosity item (see taming.md's Kinship
+## path). Allocated directly on the web -- see this lane's own HANDOFF note
+## on why menagerie is not (yet) read through unlocked_keystones alone.
+func test_netting_a_flyer_with_menagerie_bonds_a_companion_instead_of_a_curiosity():
+	player.allocated_nodes["menagerie"] = true
+	_hold_tool("butterfly_net")
+	var monarch := _flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player.inventory.count_of("jarred_insect"), 0, "no curiosity item once bonded")
+	assert_eq(player.bonded_companions.size(), 1)
+	assert_eq(player.bonded_companions[0].get("species"), "monarch")
+
+
+## The unlocked_keystones shape (land_sense/berserkers_fury/etc.) is honored
+## too, in case menagerie ever moves fully into that mechanism.
+func test_netting_a_flyer_with_menagerie_via_unlocked_keystones_also_bonds():
+	player.unlocked_keystones["menagerie"] = true
+	_hold_tool("butterfly_net")
+	_flyer_at("robin", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player.bonded_companions.size(), 1)
+
+
+func test_bonded_companions_are_capped():
+	player.allocated_nodes["menagerie"] = true
+	for i in Player.BONDED_COMPANION_CAP:
+		_hold_tool("butterfly_net")
+		_flyer_at("bee", Vector2(8, 0))
+		player._throw_capture_tool()
+	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
+
+	# One more, past the cap: falls back to the ordinary curiosity outcome
+	# instead of silently discarding the catch.
+	_flyer_at("bee", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
+	assert_eq(player.inventory.count_of("jarred_insect"), 1)
+
+
+func test_bonding_a_companion_spawns_its_live_marker():
+	player.allocated_nodes["menagerie"] = true
+	_hold_tool("butterfly_net")
+	_flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player._bonded_markers.size(), 1)
+	assert_true(player._bonded_markers[0] is BondedCompanionMarker)
+	assert_eq(player._bonded_markers[0].species, "monarch")
+
+
+## Bonded companions survive a save/load round trip via to_save_dict /
+## apply_save_dict, the same as every other piece of persisted player state.
+func test_bonded_companions_persist_across_a_save_and_load_round_trip():
+	player.allocated_nodes["menagerie"] = true
+	_hold_tool("butterfly_net")
+	_flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	var saved := player.to_save_dict()
+
+	player.apply_save_dict(saved)
+
+	assert_eq(player.bonded_companions.size(), 1)
+	assert_eq(player.bonded_companions[0].get("species"), "monarch")
+	assert_eq(player._bonded_markers.size(), 1, "a live marker should be respawned on load")
+
+
+# -- HUD: the capture-result message (see docs/concept/taming.md) ------------
+
+func test_lasso_message_reads_a_curiosity_result_after_netting():
+	_hold_tool("butterfly_net")
+	_flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(player.lasso_message, "Caught! Kept as a curiosity.")
+
+
+## These two assert the message names the TOOL in hand, which is still the
+## point. The KEY half changed: they used to pin the literal phrase "press the
+## lasso key", which was the reported defect -- there is no key called that,
+## and a player who rebound the throw was being told to press something that
+## does not exist. The prompt now names the live binding
+## (Keybindings.display_key_for), so these read it off the InputMap the same
+## way rather than hard-coding a letter that a rebind would falsify.
+func test_lasso_message_prompts_for_a_flyer_with_the_net_held_and_nothing_caught_yet():
+	_hold_tool("butterfly_net")
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(
+		player.lasso_message,
+		"Net ready — press %s near a flyer." % Keybindings.display_key_for("lasso")
+	)
+
+
+func test_lasso_message_names_whichever_tool_is_held():
+	_hold_tool("snare")
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(
+		player.lasso_message,
+		"Snare ready — press %s near an animal." % Keybindings.display_key_for("lasso")
+	)
+
+
+## And the defect itself, pinned so it cannot come back: no prompt may name an
+## action instead of the key it is on.
+func test_no_capture_prompt_calls_a_key_by_its_action_name():
+	for tool in ["butterfly_net", "snare", "lasso"]:
+		_hold_tool(tool)
+		player._lasso_step(1.0 / 60.0)
+		assert_false(
+			player.lasso_message.contains("the lasso key"),
+			"prompt for %s still names the action instead of the key" % tool
+		)
 
 
 # -- orders and riding (see docs/concept/taming.md) --------------------------
@@ -1301,12 +1873,20 @@ func test_terrain_blocks_movement_agrees_with_terrain_passability_for_the_lookah
 	assert_eq(player._terrain_blocks_movement(input_direction), expected)
 
 
-## Honest current state (see docs/progress.md's Transportation section): no
-## climbing-rope item/equipment concept exists yet, so this always reads
-## false. Exists so the day a real rope is built, this test starts failing
-## loudly rather than the hook silently staying wired to "never."
-func test_has_climbing_gear_is_false_until_a_real_rope_exists():
+## No rope in inventory -> no climbing gear. The default player fixture
+## starts with none, so this is the honest baseline case.
+func test_has_climbing_gear_is_false_without_a_rope_in_inventory():
 	assert_false(player._has_climbing_gear())
+
+
+## The real climbing_rope item (docs/concept/transportation.md,
+## item_catalog.gd) now exists -- carrying one (not equipping/wielding it,
+## per terrain_relief.md's own "carrying" framing) must flip
+## _has_climbing_gear() true, the same "raw inventory count" pattern
+## _has_fishing_rod() already uses rather than an equipped-item check.
+func test_has_climbing_gear_is_true_when_a_climbing_rope_is_in_inventory():
+	player.inventory.add(_item_catalog.make("climbing_rope"), 1)
+	assert_true(player._has_climbing_gear())
 
 
 ## Wiring tests for the survival-neglect consequence (ConditionPenalty, see
@@ -1382,7 +1962,7 @@ func test_unattended_hunger_eventually_slows_the_player_down_via_condition():
 func test_the_release_slot_actually_lets_the_animal_go():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	assert_true(horse.is_restrained(), "precondition: caught")
 
 	var actions := player.animal_actions_for(horse)
@@ -1404,3 +1984,93 @@ func test_the_lasso_slot_actually_throws_the_rope():
 
 	player._perform_animal_action(horse, 0)
 	assert_true(horse.is_restrained(), "pressing Lasso must catch it")
+
+# -- _smash_step: real Player-level integration, not just the pure yield tables -
+#
+# OreYield, Knapping, MinableOre and SmashableStone all already have thorough
+# unit coverage on their own (test_ore_yield.gd, test_knapping.gd,
+# test_minable_ore.gd, test_smashable_stone.gd) -- calling mine()/smash()
+# directly with hand-picked arguments. Nothing had ever exercised
+# Player._smash_step ITSELF: does a live swing actually compute and pass
+# through the right pickaxe_power/carrying_rock, not just "do these pure
+# functions behave correctly in isolation". Reported live (playtest,
+# 2026-08-28): "mining an ore spawns only stones" and boulders never seem to
+# yield a sharp stone.
+
+func test_smash_step_mines_ore_with_an_equipped_pickaxe_not_just_stone():
+	var ore := MinableOre.new()
+	ore.ore_type = "iron"
+	ore.ore_seed = 42
+	ore.position = player.position + Vector2(5, 5)  # well inside ATTACK_RANGE (20px)
+	add_child_autofree(ore)
+
+	_give("stone_pickaxe", 1)
+	assert_true(player.equip_item(_item_catalog.make("stone_pickaxe")))
+
+	watch_signals(WorldItemBus)
+	player._smash_step()
+
+	var dropped_ids: Array = []
+	for i in get_signal_emit_count(WorldItemBus, "item_dropped"):
+		dropped_ids.append(get_signal_parameters(WorldItemBus, "item_dropped", i)[0].item.id)
+	assert_true(
+		dropped_ids.has("iron_ore"),
+		"expected iron_ore among a pickaxe-equipped mine's drops, got %s" % [dropped_ids]
+	)
+
+
+## The documented other half of the same behavior (docs/progress.md: "with a
+## stone_pickaxe equipped ... it drops ore + stone, bare-handed only stone")
+## -- pinned here at the same Player-integration level as the equipped case
+## above, not just in OreYield's own pure-function tests.
+func test_smash_step_mines_only_stone_with_bare_hands():
+	var ore := MinableOre.new()
+	ore.ore_type = "iron"
+	ore.ore_seed = 42
+	ore.position = player.position + Vector2(5, 5)
+	add_child_autofree(ore)
+
+	watch_signals(WorldItemBus)
+	player._smash_step()
+
+	var dropped_ids: Array = []
+	for i in get_signal_emit_count(WorldItemBus, "item_dropped"):
+		dropped_ids.append(get_signal_parameters(WorldItemBus, "item_dropped", i)[0].item.id)
+	assert_eq(dropped_ids, ["stone"], "bare-handed mining should chip only stone, by design")
+
+
+func test_smash_step_yields_a_sharp_shard_when_carrying_a_rock():
+	# Deterministic per stone_seed, same scanning approach as
+	# test_smashable_stone.gd's own test_smashing_with_a_rock_in_hand_can_
+	# also_yield_sharp_shards -- pin a real success rather than accepting
+	# either outcome.
+	var knapping := Knapping.new()
+	var lucky_seed := -1
+	for candidate in 100:
+		if knapping.shard_yield(candidate) > 0:
+			lucky_seed = candidate
+			break
+	assert_gt(lucky_seed, -1, "expected at least one shard-yielding seed in 0..99")
+
+	var stone := SmashableStone.new()
+	stone.stone_seed = lucky_seed
+	stone.position = player.position + Vector2(5, 5)
+	add_child_autofree(stone)
+
+	_give("rock", 1)
+
+	watch_signals(WorldItemBus)
+	# Real repeated swings, same pacing test_smashable_stone.gd's own
+	# _hits_to_break() uses -- only the final, BREAKING strike carries the
+	# knapping roll (see SmashableStone.smash), so this still yields exactly
+	# one shard stack regardless of how many strikes the default size takes.
+	for _i in StoneSize.hits_to_smash(stone.diameter_cm):
+		player._smash_step()
+
+	var dropped_ids: Array = []
+	for i in get_signal_emit_count(WorldItemBus, "item_dropped"):
+		dropped_ids.append(get_signal_parameters(WorldItemBus, "item_dropped", i)[0].item.id)
+	assert_true(
+		dropped_ids.has("sharp_shard"),
+		"expected a sharp_shard among a rock-carrying smash's drops, got %s" % [dropped_ids]
+	)

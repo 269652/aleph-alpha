@@ -121,18 +121,25 @@ static func canopy_position_at(year_fraction: float) -> float:
 		"autumn":
 			return float(TURNING_STAGE) + _settled_then_turn(within)
 		_:
-			# ## Winter is bare, end to end
+			# ## Winter is bare until its last hours
 			#
-			# Its pre-turn is SUPPRESSED, not redirected to a bare->bare blend.
-			# The pre-turn exists so a season arrives already saturated rather
-			# than swapping on a frame boundary -- but a canopy's spring
-			# arrival state IS bare, because a real tree in late winter has not
-			# moved yet. The property it buys is already true, so there is
-			# nothing to blend toward; and every distinct progress value is a
-			# whole tree picture to composite and cache (ProceduralTreeSprite),
-			# so a bare->bare ramp would cost six identical images per species
-			# to express a no-op.
-			return float(BARE_STAGE)
+			# The pre-turn is no longer SUPPRESSED here, only SHORTENED. It exists
+			# so a season arrives already saturated rather than swapping on a frame
+			# boundary, and spring is the one season whose arrival state is not
+			# simply what the season before it wore -- so winter is where the work
+			# has to happen. Reported live against /season spring: the HUD read
+			# Spring over bare brown branches and snow-capped pines, because this
+			# was the year's one season start that arrived unsaturated.
+			#
+			# It rides OPENING_FRACTION -- the measured bud-break span -- and NOT
+			# SeasonTransition.TURN_FRACTION. A third of winter spent visibly
+			# pinker is what put blossom in the snow in the first place: blossom
+			# carries 2.5x the opaque pixels of bare wood (docs/concept/seasons.md),
+			# so it reads as arrived long before its progress number does. Moving
+			# the same short ramp earlier costs no extra cached images and leaves
+			# the total blossom span exactly the measured 5+7 days -- it just ends
+			# on the boundary instead of starting there.
+			return _bare_then_open(within)
 
 
 ## Which two canopy frames this moment is between, and how far along, as
@@ -162,15 +169,24 @@ static func canopy_state_at(year_fraction: float) -> Dictionary:
 ## the winter/spring boundary is where a hard frame change would be most
 ## visible, so blossom arrives across it rather than at it.
 static func _spring_position(within: float) -> float:
-	if within < OPENING_FRACTION:
-		return float(BARE_STAGE) + within / OPENING_FRACTION
-	if within < BLOSSOM_FRACTION:
+	if within < FULL_BLOOM_FRACTION:
 		return float(BLOSSOM_STAGE)
-	if within < BLOSSOM_FRACTION + LEAF_OUT_FRACTION:
-		return float(BLOSSOM_STAGE) + (within - BLOSSOM_FRACTION) / LEAF_OUT_FRACTION
+	if within < FULL_BLOOM_FRACTION + LEAF_OUT_FRACTION:
+		return float(BLOSSOM_STAGE) + (within - FULL_BLOOM_FRACTION) / LEAF_OUT_FRACTION
 	# Spring's own last third used to be the blossom->leaf turn. It is now
 	# leaf->leaf and does nothing, which is why summer needs no fixing up.
 	return float(LEAF_STAGE)
+
+
+## Winter: settled bare, then the bud-break ramp against its END rather than
+## against the start of spring -- which is the whole fix. A tree finishes
+## opening exactly ON the winter/spring boundary, so the first instant of
+## spring (where /season spring puts you) is already full blossom.
+static func _bare_then_open(within: float) -> float:
+	var settled := 1.0 - OPENING_FRACTION
+	if within < settled:
+		return float(BARE_STAGE)
+	return float(BARE_STAGE) + (within - settled) / OPENING_FRACTION
 
 
 ## Summer and autumn, unchanged: settled for the first part, then turning

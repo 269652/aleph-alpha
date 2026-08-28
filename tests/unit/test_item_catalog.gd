@@ -48,6 +48,14 @@ func test_make_builds_the_right_tool():
 	assert_true(item.is_axe())
 
 
+## The catalog's authored table never specifies a sprite_id (see
+## docs/concept/item_illustrations.md) -- every entry must still resolve art
+## through Item's own id-fallback rather than coming back empty.
+func test_make_defaults_sprite_id_to_the_items_own_id():
+	var item := catalog.make("iron_sword")
+	assert_eq(item.sprite_id, "iron_sword")
+
+
 func test_catalog_knows_the_craftable_output_items():
 	for item_id in ["torch", "campfire", "cooked_meat"]:
 		assert_true(catalog.has(item_id), "expected the catalog to know %s" % item_id)
@@ -407,3 +415,51 @@ func test_clearing_the_registry_makes_its_ids_unknown_again():
 	catalog.use_crafted_registry(registry)
 	catalog.use_crafted_registry(null)
 	assert_false(catalog.has(id))
+
+
+# -- "any animal, the right tool" gear (see docs/concept/taming.md's ---------
+# -- "Any animal, the right tool" section) -----------------------------------
+#
+## Four new capture tools, one per capture class that didn't already have a
+## tool (Roped already had the lasso): Snared (snare), Netted (butterfly
+## net), Trapped (trap), Boss-scale (reinforced rope). Plus two curiosity
+## materials only obtainable by netting a flyer without menagerie unlocked.
+
+const CAPTURE_TOOL_ITEM_IDS := ["snare", "butterfly_net", "trap", "reinforced_rope"]
+const NETTING_CURIOSITY_ITEM_IDS := ["jarred_insect", "caged_songbird"]
+
+
+func test_catalog_knows_the_new_capture_tools():
+	for item_id in CAPTURE_TOOL_ITEM_IDS:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+		assert_eq(catalog.make(item_id).kind, "tool", item_id)
+
+
+## Held in hand like the lasso -- max_stack 1, not a stackable material.
+func test_new_capture_tools_do_not_stack():
+	for item_id in CAPTURE_TOOL_ITEM_IDS:
+		assert_eq(catalog.make(item_id).max_stack, 1, item_id)
+
+
+## Netting curiosities are harvested materials, the same shape as any other
+## item that only ever enters the inventory through a world interaction --
+## never crafted at a bench.
+func test_catalog_knows_the_netting_curiosity_items():
+	for item_id in NETTING_CURIOSITY_ITEM_IDS:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+		assert_eq(catalog.make(item_id).kind, "material", item_id)
+
+
+# -- climbing rope (docs/concept/transportation.md's "Traversal tools" -----
+# -- section, docs/concept/terrain_relief.md's "Passability: ask before ----
+# -- you step") --------------------------------------------------------------
+#
+## The traversal tool terrain_relief.md's slope-gated passability actually
+## raises the hard threshold for -- held like the lasso/fishing_rod/saw, not
+## a stackable material.
+
+func test_catalog_knows_the_climbing_rope():
+	assert_true(catalog.has("climbing_rope"), "missing climbing_rope")
+	var rope := catalog.make("climbing_rope")
+	assert_eq(rope.kind, "tool")
+	assert_eq(rope.max_stack, 1, "held in hand like every other tool, not a stackable material")

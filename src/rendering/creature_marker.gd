@@ -29,6 +29,7 @@ const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
@@ -44,8 +45,11 @@ const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
+const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
+const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 
 ## Sun elevation in degrees, shared by every creature's shadow -- set once
 ## per frame by World from its real sun-position calculation (see
@@ -251,6 +255,12 @@ var _struggle_fatigue := 0.0
 ## Counts this individual's struggles, so each roll is a different draw
 ## without holding an RNG on every creature in the world.
 var _struggle_count := 0
+## The handler's `taming_affinity` at the moment this animal was caught (see
+## Player.skill_bonus("taming_affinity") / Taming.break_free_chance), pushed
+## in by restrain_to and read every struggle roll. Stored rather than a live
+## reference back to the player for the same "never outlives a dangling
+## holder" reason `_rope_anchor`/`follow_target` are.
+var _capture_affinity := 0.0
 
 
 ## Active foraging (see GrazerForaging): the phase machine, the bite this
@@ -602,6 +612,13 @@ func _process(frame_delta: float) -> void:
 	if is_queued_for_deletion():
 		return  # died of disease this frame -- nothing below has a live marker to act on
 
+	# Same "runs unconditionally, ahead of every early-return" reasoning as
+	# disease above: an ignited/blighted creature keeps burning no matter
+	# what it's doing this frame (see docs/concept/spell_runtime.md).
+	_spell_status_step(delta)
+	if is_queued_for_deletion():
+		return  # an ignite/blight tick can kill too
+
 	if _knockback_time_remaining > 0.0:
 		var result := _knockback.step(_knockback_remaining, _knockback_time_remaining, delta)
 		position += result.step
@@ -610,8 +627,21 @@ func _process(frame_delta: float) -> void:
 		_sync_grounded_children()
 		return  # a shove overrides normal AI movement while it plays out
 
+	if is_rooted():
+		_sync_grounded_children()
+		return  # frozen/rooted: no movement or AI decisions this frame, same precedence as a knockback
+
 	if _world == null or info == null:
 		_wander_step(delta)
+		# Reported live, from the character-creator diorama's own ambient
+		# boar (one real CreatureMarker with world left null on purpose,
+		# per this fallback's own no-AI contract): "the boar doesn't have
+		# walk animations". Every OTHER branch below calls this before
+		# returning; this one didn't, so a world-less marker moved but its
+		# texture stayed frozen on whatever idle frame it spawned with.
+		# Already null-safe without a world (see _animation_step's own
+		# doc comment: only its swim-detection is gated on _world != null).
+		_animation_step()
 		_sync_grounded_children()
 		return
 
@@ -696,7 +726,7 @@ func _process(frame_delta: float) -> void:
 
 	var decision := _behavior.decide({
 		"position": position,
-		"temperament": info.temperament,
+		"temperament": _temperament_for_decision(),
 		"is_predator": info.is_predator,
 		"health_fraction": info.health / info.max_health,
 		"hungry": _needs.is_hungry(),
@@ -930,22 +960,33 @@ func is_tame() -> bool:
 	return Taming.is_tame(trust)
 
 
-## Catches this animal on a lasso whose other end is at `anchor`. Called again
+## Catches this animal on whichever capture tool's other end is at `anchor`
+## (see docs/concept/taming.md's "Any animal, the right tool"). Called again
 ## each frame by the holder to move the anchor (which is what "leading" is).
-## Refused outright for anything a rope and a carrot are the wrong tools for --
-## see Taming.can_be_tamed.
+## Refused outright for anything `tool_id` is the wrong tool for -- see
+## Taming.can_be_tamed, which now checks the ACTUAL tool used rather than
+## just "is taming allowed at all" (a mouse offered a lasso must not be
+## caught by it, even though a mouse offered a trap can be).
 ## `tied` distinguishes "the loose end is knotted to a tree" from "the player
 ## is holding it". Only a tied animal is somewhere the player deliberately
 ## LEFT it, which is what makes it worth keeping across a chunk unload even at
 ## zero trust (see KeptAnimals).
-func restrain_to(anchor: Vector2, tied: bool = false) -> bool:
-	if info == null or not Taming.can_be_tamed(info.species, info.is_predator):
+## `affinity` is the handler's Player.skill_bonus("taming_affinity") at the
+## moment of the catch (0.0 for an uninvested character, byte-identical to
+## the pre-affinity behaviour -- see Taming.break_free_chance), stored for
+## every subsequent struggle roll in _step_restraint.
+func restrain_to(
+	anchor: Vector2, tied: bool = false, affinity: float = 0.0,
+	tool_id: String = CaptureTool.LASSO
+) -> bool:
+	if info == null or not Taming.can_be_tamed(info.species, tool_id):
 		return false
 	if not _restrained:
 		_restrained = true
 		_struggle_elapsed = 0.0
 	_rope_anchor = anchor
 	_tied = tied
+	_capture_affinity = affinity
 	return true
 
 
@@ -997,7 +1038,7 @@ func _step_restraint(delta: float) -> void:
 	var health_fraction := info.health / info.max_health if info.max_health > 0.0 else 0.0
 	var condition := Taming.effective_condition(health_fraction, _struggle_fatigue)
 	var roll := float(absi(hash("%d_%d_struggle" % [wander_seed, _struggle_count])) % 10000) / 10000.0
-	if roll < Taming.break_free_chance(condition):
+	if roll < Taming.break_free_chance(condition, info.is_predator, _capture_affinity):
 		release()
 		# It has learned what the rope means: bolt.
 		_flee_direction = (position - _rope_anchor).normalized()
@@ -1382,6 +1423,19 @@ func _is_serpent() -> bool:
 ##   FACING_DEADZONE is the only debounce left, and it's a different,
 ##   narrower one: it only suppresses a genuinely near-vertical `desired`
 ##   (an ambiguous x-sign) from flipping at all, not a real reversal.
+## Soft terrain slowdown from real slope (see TerrainPassability.speed_
+## multiplier and player.gd's own _terrain_speed_multiplier, which this
+## mirrors) -- the same "environment scales a movement multiplier" shape the
+## disease multiplier below already uses, driven by slope instead. 1.0 when
+## the world doesn't offer slope data (StubWorld, or any other worldless/
+## stub setup) -- the same has_method duck-typed fallback _blockers_near
+## already uses for solid_obstacles_near.
+func _terrain_speed_multiplier(tile: Vector2i) -> float:
+	if _world == null or not _world.has_method("slope_at_global"):
+		return 1.0
+	return TerrainPassability.speed_multiplier(_world.slope_at_global(tile.x, tile.y))
+
+
 func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	if desired.length() < 0.001:
 		_is_moving = false
@@ -1395,6 +1449,11 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	# covers all of them.
 	if disease_id == DiseaseModel.HERD and disease_state == DiseaseModel.State.INFECTED:
 		speed *= _disease_model.movement_speed_multiplier(disease_severity)
+	# Real slope underfoot slows a creature exactly the way it slows the
+	# player (see _terrain_speed_multiplier above) -- one query for the tile
+	# this creature is CURRENTLY standing on, not a scan over any area, so
+	# this stays O(creatures) regardless of how many creatures are loaded.
+	speed *= _terrain_speed_multiplier(_current_tile())
 	_facing_commit_remaining = maxf(0.0, _facing_commit_remaining - delta)
 	var position_before := position
 	if not _is_serpent():
@@ -1623,6 +1682,34 @@ func _blocker_radius(node: Node) -> float:
 	return DEFAULT_BLOCKER_RADIUS
 
 
+## Whether the tile a creature is about to step onto is too steep to enter at
+## all (see TerrainPassability.is_passable and player.gd's own
+## _terrain_blocks_movement, which this mirrors) -- a SEPARATE ask-before-you-
+## step check layered on top of whatever heading obstacle/threat avoidance in
+## _advance_gated below already settled on, the same way player.gd keeps its
+## own terrain check independent of everything else that could refuse a
+## step. `heading` is whatever _advance_gated is about to actually move
+## along (a unit vector, or ZERO); the look-ahead reuses MOVEMENT_LOOKAHEAD
+## rather than minting a second "roughly a tile ahead" distance -- both
+## questions ("is this the tile I'm about to stand on") are the same
+## question CreatureMovementGate's own obstacle check already asks at that
+## same distance. Called at most ONCE per _advance_gated call (never per
+## candidate direction clear_direction tries internally), so this is one
+## slope query per creature per movement decision -- O(creatures), not
+## O(creatures x terrain). No climbing-gear concept exists for creatures
+## (player-only, see docs/progress.md's Transportation section), so this
+## always checks the un-roped HARD_THRESHOLD_DEG.
+func _terrain_blocks_movement(heading: Vector2) -> bool:
+	if _world == null or not _world.has_method("slope_at_global") or heading.length() < 0.01:
+		return false
+	var look_ahead := position + heading.normalized() * MOVEMENT_LOOKAHEAD
+	var tile := Vector2i(floori(look_ahead.x / _tile_size), floori(look_ahead.y / _tile_size))
+	# Explicitly typed (not :=): _world is untyped/duck-typed (see setup's own
+	# doc comment), so GDScript can't infer a type for its return value.
+	var slope: float = _world.slope_at_global(tile.x, tile.y)
+	return not TerrainPassability.is_passable(slope)
+
+
 ## Moves along `desired` only if the step is actually clear (see
 ## CreatureMovementGate) -- steering around a tree/stone when one is in the
 ## way, and standing still when nothing is open at all, rather than moving
@@ -1645,17 +1732,22 @@ func _advance_gated(desired: Vector2, speed: float, delta: float, avoid_threats:
 	# creature per frame, which at a few dozen loaded creatures is a
 	# meaningful slice of the frame budget for no behavioural gain.
 	var has_threats := avoid_threats and not _cached_caution_threats.is_empty()
+	var heading: Vector2
 	if _cached_blockers.is_empty() and not has_threats:
-		_last_gated_heading = desired
-		_advance(desired, speed, delta)
-		return
-
-	var threats: Array = _positions_of(_cached_caution_threats) if avoid_threats else []
-	var facing := 0.0 if _is_serpent() else facing_sign()
-	var heading := CreatureMovementGate.clear_direction(
-		position, desired, MOVEMENT_LOOKAHEAD, _cached_blockers, threats, SENSE_RADIUS,
-		_last_gated_heading, facing
-	)
+		heading = desired
+	else:
+		var threats: Array = _positions_of(_cached_caution_threats) if avoid_threats else []
+		var facing := 0.0 if _is_serpent() else facing_sign()
+		heading = CreatureMovementGate.clear_direction(
+			position, desired, MOVEMENT_LOOKAHEAD, _cached_blockers, threats, SENSE_RADIUS,
+			_last_gated_heading, facing
+		)
+	# Terrain is a SEPARATE ask-before-you-step check, layered on top of
+	# whatever heading obstacle/threat avoidance above already settled on --
+	# see _terrain_blocks_movement's own doc comment for why this stays a
+	# single slope query rather than one per candidate direction.
+	if heading != Vector2.ZERO and _terrain_blocks_movement(heading):
+		heading = Vector2.ZERO
 	_last_gated_heading = heading
 	if heading == Vector2.ZERO:
 		# Nowhere to go: stand still. Deliberately NOT a fallback move in some
@@ -2003,6 +2095,70 @@ func take_damage(amount: float) -> void:
 	_update_health_bar()
 	if _health.is_dead(info.health):
 		_die()
+
+
+## The `minor_heal`/`major_heal` atoms' shared target-side method (see
+## docs/concept/spell_runtime.md) -- same duck-typed-across-target-types
+## shape take_damage already is; Player.heal is the other half.
+func heal(amount: float) -> void:
+	if info == null:
+		return
+	info.health = minf(info.max_health, info.health + amount)
+
+
+# -- spell-cast status effects: ignite/blight/freeze/root/slow/fear/calm/...
+# (see docs/concept/spell_runtime.md). Mirrors Player's own DebuffStack-
+# tracked shape exactly -- this class had no equivalent before (only Player
+# could be poisoned/spell-debuffed at all).
+
+var active_spell_debuffs: Array = []
+var _debuff_stack := DebuffStack.new()
+var _spell_status_effects := SpellStatusEffects.new()
+
+
+func apply_spell_debuff(debuff_id: String, duration: float) -> void:
+	active_spell_debuffs = _debuff_stack.apply(
+		active_spell_debuffs, debuff_id, duration, SpellStatusEffects.MAX_STACKS
+	)
+
+
+func is_rooted() -> bool:
+	return (
+		_debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.FREEZE) > 0
+		or _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.ROOT) > 0
+	)
+
+
+## `fear`/`calm` don't touch creature_behavior.gd's own pure decide() at all
+## -- they override the "temperament" value fed INTO it for their duration,
+## additive at this one call site. An aggressive predator that would
+## normally fight a nearby threat reads as non-aggressive instead (flees or
+## stays passive, per CreatureBehavior's own rules), the same mechanical
+## effect for both atoms today (see spell_runtime.md's honest note on this,
+## the same "distinct atoms, identical mechanic for now" shape the four
+## damage atoms already have).
+func _temperament_for_decision() -> String:
+	if info == null:
+		return ""
+	if (
+		_debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.FEAR) > 0
+		or _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.CALM) > 0
+	):
+		return "calm"
+	return info.temperament
+
+
+## Authority-side per-frame tick: ignite/blight's real damage-over-time
+## (mirrors Player._spell_status_step line for line), then advances every
+## active spell debuff's remaining duration.
+func _spell_status_step(delta: float) -> void:
+	if info == null:
+		return
+	for debuff_id in [SpellStatusEffects.IGNITE, SpellStatusEffects.BLIGHT]:
+		var stacks := _debuff_stack.stacks_of(active_spell_debuffs, debuff_id)
+		if stacks > 0:
+			take_damage(_spell_status_effects.damage_per_second(debuff_id, stacks) * delta)
+	active_spell_debuffs = _debuff_stack.advance(active_spell_debuffs, delta)
 
 
 func _update_health_bar() -> void:

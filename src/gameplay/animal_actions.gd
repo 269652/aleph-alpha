@@ -19,12 +19,11 @@ extends RefCounted
 
 const Taming = preload("res://src/gameplay/taming.gd")
 const CreatureInfo = preload("res://src/world/creature_info.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 
 ## The treat taming runs on (see Player.TAMING_TREAT_ID, docs/concept/wild_crops.md's
 ## wild carrot -- the same meadow that supplies the rope supplies the reward).
 const TREAT_ITEM_ID := "carrot"
-
-const LASSO_ITEM_ID := "lasso"
 
 ## How many actions a player can be offered at once: one primary, one
 ## secondary. Not a display limit -- it is how many keys exist to press, and
@@ -66,8 +65,14 @@ static func for_animal(state: Dictionary, held_item_id: String) -> Array:
 		actions.append({"verb": "Order", "action": "lasso"})
 	elif restrained:
 		actions.append({"verb": "Release", "action": "lasso"})
-	elif held_item_id == LASSO_ITEM_ID and _can_be_tamed(species):
-		actions.append({"verb": "Lasso", "action": "lasso"})
+	elif Taming.can_be_tamed(species, held_item_id):
+		# The verb names the tool actually in hand, because the right tool is
+		# species-specific: a serpent needs a snare, a mouse a trap, a flyer a
+		# net (see CaptureTool.required_tool_for). Offering "Lasso" while
+		# holding a snare would name the wrong thing, and offering it while
+		# holding the WRONG tool would promise a catch that cannot happen --
+		# can_be_tamed is what decides, so the offer follows it exactly.
+		actions.append({"verb": _capture_verb_for(held_item_id), "action": "lasso"})
 
 	# The SLOT decides the key, not the verb. Every verb here also has its own
 	# dedicated binding (mount, lasso) and those keep working -- but a player
@@ -83,8 +88,15 @@ static func for_animal(state: Dictionary, held_item_id: String) -> Array:
 	return slotted
 
 
-## Predators are not tameable at all, so a rope is not an answer to one. Read
-## off Taming's own gate rather than a second list, so a species that becomes
-## a predator cannot quietly stay lassoable.
-static func _can_be_tamed(species: String) -> bool:
-	return Taming.can_be_tamed(species, CreatureInfo.PREDATOR_SPECIES.has(species))
+## What holding this tool is called, so the prompt reads as the thing the
+## player is about to do rather than a generic "capture".
+static func _capture_verb_for(tool_id: String) -> String:
+	match tool_id:
+		CaptureTool.NET:
+			return "Net"
+		CaptureTool.SNARE:
+			return "Snare"
+		CaptureTool.TRAP:
+			return "Trap"
+		_:
+			return "Lasso"
