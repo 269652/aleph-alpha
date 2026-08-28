@@ -1,6 +1,7 @@
 extends GutTest
 
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 
 var classifier: BiomeClassifier
 
@@ -113,3 +114,70 @@ func test_dominant_biome_breaks_ties_by_known_biomes_order():
 	# TerrainRenderer._is_more_dominant.
 	var biome_array := PackedStringArray(["desert", "forest"])
 	assert_eq(classifier.dominant_biome(biome_array), "forest")
+
+
+# -- slope: a locally steep face forces mountain, real alpine tree-lines ----
+
+
+func test_steep_slope_forces_mountain_outside_the_elevation_band():
+	# 0.5/0.5/0.7 is ordinary forest land at the default thresholds (see
+	# test_temperate_wet_land_is_forest above) -- well under the
+	# elevation-based mountain band. A locally steep slope must still force
+	# "mountain": the real alpine tree-line effect (bare rock/scree no
+	# vegetation-based biome can hold), independent of elevation entirely.
+	var steep_slope := TerrainPassability.HARD_THRESHOLD_DEG + 5.0
+	assert_eq(
+		classifier.classify(
+			0.5, 0.5, 0.7, BiomeClassifier.SEA_LEVEL, BiomeClassifier.MOUNTAIN_LEVEL, steep_slope
+		),
+		"mountain"
+	)
+
+
+func test_slope_at_exactly_the_threshold_forces_mountain():
+	# HARD_THRESHOLD_DEG's own doc comment says "at and beyond this" -- the
+	# override must be inclusive of the threshold itself, not strictly past it.
+	assert_eq(
+		classifier.classify(
+			0.5, 0.5, 0.7,
+			BiomeClassifier.SEA_LEVEL, BiomeClassifier.MOUNTAIN_LEVEL,
+			TerrainPassability.HARD_THRESHOLD_DEG
+		),
+		"mountain"
+	)
+
+
+func test_gentle_slope_does_not_force_mountain():
+	var gentle_slope := TerrainPassability.HARD_THRESHOLD_DEG - 5.0
+	assert_eq(
+		classifier.classify(
+			0.5, 0.5, 0.7, BiomeClassifier.SEA_LEVEL, BiomeClassifier.MOUNTAIN_LEVEL, gentle_slope
+		),
+		"forest"
+	)
+
+
+func test_omitting_slope_deg_leaves_existing_behavior_completely_unchanged():
+	# No 6th argument at all -- every pre-existing call site/test must keep
+	# behaving exactly as before this parameter existed.
+	assert_eq(classifier.classify(0.5, 0.5, 0.7), "forest")
+	assert_eq(classifier.classify(0.95, 0.9, 0.9), "mountain")
+	assert_eq(classifier.classify(0.1, 0.5, 0.5), "ocean")
+
+
+func test_ocean_stays_ocean_regardless_of_a_steep_slope():
+	var steep_slope := TerrainPassability.HARD_THRESHOLD_DEG + 20.0
+	assert_eq(
+		classifier.classify(
+			0.1, 0.5, 0.5, BiomeClassifier.SEA_LEVEL, BiomeClassifier.MOUNTAIN_LEVEL, steep_slope
+		),
+		"ocean"
+	)
+
+
+func test_slope_mountain_threshold_is_terrain_passabilitys_hard_threshold():
+	# Tuned-value pin (CLAUDE.md: thresholds must be test-pinned constants,
+	# never eyeballed) -- must be sourced from TerrainPassability's own real,
+	# already-grounded scrambling/technical-climbing line, never a re-typed
+	# literal that could silently drift out of sync with it.
+	assert_eq(BiomeClassifier.SLOPE_MOUNTAIN_THRESHOLD_DEG, TerrainPassability.HARD_THRESHOLD_DEG)

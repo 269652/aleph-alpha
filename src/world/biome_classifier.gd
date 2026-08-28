@@ -1,10 +1,30 @@
 extends RefCounted
 
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
+
 const SEA_LEVEL := 0.3
 const MOUNTAIN_LEVEL := 0.85
 const COLD_TEMPERATURE := 0.25
 const HOT_TEMPERATURE := 0.6
 const WET_MOISTURE := 0.6
+
+## Sentinel for classify()'s optional slope_deg parameter meaning "not
+## provided" -- real slope is never negative, so this is an unambiguous
+## "omitted" marker. Exposed so a caller building the value up itself (see
+## EarthChunkGenerator's own perf-conditional slope sampling) can pass it
+## explicitly rather than re-typing the same literal.
+const SLOPE_NOT_PROVIDED := -1.0
+
+## Local slope at/beyond which bare rock is exposed regardless of ambient
+## temperature/moisture -- real alpine tree-lines: even in a warm, wet
+## mountain range, sufficiently steep terrain exposes scree/rock no
+## vegetation-based biome can hold. Reuses TerrainPassability's own
+## HARD_THRESHOLD_DEG (already real-world-grounded as the
+## scrambling/technical-climbing line) rather than a second,
+## independently-tuned number -- the same "one shared quantity, not
+## coincidence" discipline mountain_ore_placement.gd's own slope thresholds
+## already follow.
+const SLOPE_MOUNTAIN_THRESHOLD_DEG := TerrainPassability.HARD_THRESHOLD_DEG
 
 const KNOWN_BIOMES: Array[String] = [
 	"ocean", "mountain", "tundra", "forest", "grassland", "rainforest", "desert"
@@ -14,16 +34,28 @@ const KNOWN_BIOMES: Array[String] = [
 ## moisture, all normalized to [0.0, 1.0]. sea_level/mountain_level default to
 ## the fictional-noise-tuned constants; callers driving real elevation data
 ## (a different scale/meaning) pass their own calibrated thresholds.
+##
+## slope_deg is optional (SLOPE_NOT_PROVIDED sentinel by default, so every
+## pre-existing caller/test is untouched). When a caller DOES provide a real
+## slope reading, a slope at/beyond SLOPE_MOUNTAIN_THRESHOLD_DEG forces
+## "mountain" even outside the normal elevation-based mountain band -- real
+## alpine tree-lines, the same "steepness exposes rock" logic already
+## driving this project's mountain-ore-vein placement, just read from slope
+## instead of elevation. Never overrides ocean, which is checked first and
+## unconditionally.
 func classify(
 	elevation: float,
 	temperature: float,
 	moisture: float,
 	sea_level: float = SEA_LEVEL,
-	mountain_level: float = MOUNTAIN_LEVEL
+	mountain_level: float = MOUNTAIN_LEVEL,
+	slope_deg: float = SLOPE_NOT_PROVIDED
 ) -> String:
 	if elevation < sea_level:
 		return "ocean"
 	if elevation >= mountain_level:
+		return "mountain"
+	if slope_deg >= 0.0 and slope_deg >= SLOPE_MOUNTAIN_THRESHOLD_DEG:
 		return "mountain"
 	if temperature < COLD_TEMPERATURE:
 		return "tundra"

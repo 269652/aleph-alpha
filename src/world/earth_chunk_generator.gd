@@ -209,6 +209,29 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 func _biome_at_global(
 	global_x: int, global_y: int, cell_elevation: float, temperature: float, moisture: float
 ) -> String:
+	var slope_deg := _slope_override_deg_for(global_x, global_y, cell_elevation)
 	return _biome_classifier.classify(
-		cell_elevation, temperature, moisture, EARTH_SEA_LEVEL, EARTH_MOUNTAIN_LEVEL
+		cell_elevation, temperature, moisture, EARTH_SEA_LEVEL, EARTH_MOUNTAIN_LEVEL, slope_deg
 	)
+
+
+## Slope reading to hand BiomeClassifier.classify() for a cell already known
+## to be at cell_elevation -- real TerrainRelief.slope_at (see
+## slope_at_global) costs four FRESH elevation samples, so this only pays
+## that cost for a cell whose biome ISN'T already decided by elevation
+## alone. An ocean cell or an already-elevation-mountain cell can't change
+## outcome on a slope reading either way (classify() checks ocean first,
+## unconditionally, and elevation>=mountain_level before ever consulting
+## slope), so sampling slope there would be pure waste -- paid on EVERY
+## cell of EVERY generated chunk, since terrain is regenerated from scratch
+## on every chunk load rather than cached. Unconditional sampling would
+## double generation's own elevation-sampling cost again, the same
+## regression temperature_at_elevation's own doc comment already fixed
+## once for temperature. Returns BiomeClassifier.SLOPE_NOT_PROVIDED for a
+## cell slope can't affect; pinned by
+## test_slope_override_is_not_provided_for_an_ocean_cell and
+## test_slope_override_is_not_provided_for_an_already_elevation_mountain_cell.
+func _slope_override_deg_for(global_x: int, global_y: int, cell_elevation: float) -> float:
+	if cell_elevation < EARTH_SEA_LEVEL or cell_elevation >= EARTH_MOUNTAIN_LEVEL:
+		return BiomeClassifier.SLOPE_NOT_PROVIDED
+	return slope_at_global(global_x, global_y)
