@@ -25,6 +25,17 @@ const Courtship = preload("res://src/gameplay/courtship.gd")
 const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
+const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
+const WingbeatBounce = preload("res://src/rendering/wingbeat_bounce.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
+const AnimalFitness = preload("res://src/world/animal_fitness.gd")
+const FruitingModel = preload("res://src/world/fruiting_model.gd")
+
+## Only bees recognize blossoming fruit trees as a food source (see
+## _step_scent) -- real apple/cherry trees are pollinated mainly by bees, so
+## this is scoped to the one species rather than every nectar-feeder.
+const TREE_POLLINATING_SPECIES := "bee"
 
 ## Own dedicated group for _scan_for_partners' nearby-flyer search --
 ## deliberately NOT the same group as HoverTargetFinder.GROUP_NAME below.
@@ -38,6 +49,31 @@ const FLOCK_GROUP := "ambient_flyer"
 var home := Vector2.ZERO
 var wander_seed := 0
 var species := "sparrow"
+
+## This individual's own personality (see FlyerPersonality) -- currently one
+## trait, boldness, which decides whether it comes and dances round the
+## player's head or bolts.
+##
+## Left EMPTY on purpose and filled in lazily from `wander_seed` the first time
+## anything asks (see personality()). That is not laziness for its own sake:
+## `wander_seed` is assigned after construction by whoever builds the marker,
+## and deriving at that moment means every flyer built by every path gets a
+## personality without each of those paths having to remember to hand one over
+## -- the chunk spawn, the fly spawned on a rotting carcass, the diorama's
+## hand-placed bird, and a marker built in a test.
+##
+## Set DIRECTLY (bypassing the lazy fill) for one flyer only: the offspring of
+## a courting pair, whose traits are crossed from its two parents rather than
+## derived from its own seed (see AmbientFlyerRenderer.spawn_offspring and
+## _finish_courtship below). That is the whole heritability path.
+var traits: Dictionary = {}
+
+## Shared AnimalFitness instance (stateless -- nothing per-individual to
+## keep here). wander_seed is assigned by AmbientFlyerRenderer AFTER this
+## node is constructed, so this individual's fitness cannot be precomputed
+## at declaration time -- see _fitness_score(), which derives it fresh from
+## wander_seed's CURRENT value on each of its (rare, throttled) call sites.
+static var _animal_fitness := AnimalFitness.new()
 
 var _movement: AmbientFlyerMovement
 
@@ -123,6 +159,14 @@ var _grass_seed_pick_index := 0
 ## a previous seed is still digesting.
 var _carried_seed_species := ""
 
+## The PixelNoise seed this particular swallowed seed's granivory roll was
+## (or will be) drawn from -- see SeedEndozoochory.seed_is_consumed, called
+## from _step_seed_carrying at the moment the carry timer elapses. Set
+## alongside _carried_seed_species by whichever _take_targeted_* method just
+## ate a GROUND seed (flower or grass; fruit does not set this, since
+## fruit's seed is never rolled for predation -- see _step_seed_carrying).
+var _carried_seed_carrier_seed := 0
+
 ## How full this bird's crop is, and how long it has been carrying whatever it
 ## swallowed (see BirdDigestion).
 ##
@@ -168,7 +212,23 @@ var _forage_target = null  # Vector2, or null while wandering
 ## two made every approach both fail to drink AND fail to register as
 ## visited, so the same flower was re-targeted forever -- the bobbing loop.
 var _forage_flower = null  # Vector2, or null
+## Whether `_forage_target`/`_forage_flower` above is a blossoming TREE (see
+## EarthChunkManager.blossoms_near) rather than a flower -- decides which
+## world call fires on arrival (see _process): record_pollination_visit_at
+## for a tree, drink_nectar_at for a flower. Only ever set true for
+## TREE_POLLINATING_SPECIES ("bee" -- see _step_scent); every other flyer
+## keeps working flowers exclusively.
+var _forage_target_is_tree := false
 var _drink_remaining := 0.0
+
+## What this pollinator carries away from its last flower visit (see
+## Pollination.pollen_after_visit): "" until it visits a male flower, and
+## then that flower's own species. A female flower leaves it alone -- a
+## single load can fertilise more than one plant, which is why one bee is
+## worth anything at all -- and a later male replaces it. This needs no
+## decay or reset logic of its own: it is exactly and only what that pure
+## function computes on each visit.
+var _carried_pollen := ""
 var _visited: Array = []
 var _elapsed_time := 0.0
 
@@ -208,6 +268,19 @@ func _ready() -> void:
 	z_index = AIRBORNE_Z_INDEX
 
 
+## This individual's own AnimalFitness fitness_score, derived from
+## wander_seed (see AnimalFitness.phenotype_for) -- AnimalFitness's first
+## real caller for this species: a bee's own fitness modestly scales its
+## pollination effectiveness (_step_scent's tree-blossom branch, via
+## FruitingModel.visit_weight_for_fitness) and a bird's own fitness modestly
+## scales its seed-predation chance (_step_seed_carrying, via
+## SeedEndozoochory.seed_is_consumed's forager_seed). Recomputed on each
+## (rare, throttled) call rather than cached at declaration time, since
+## wander_seed is only assigned by AmbientFlyerRenderer AFTER construction.
+func _fitness_score() -> float:
+	return _animal_fitness.fitness_score(_animal_fitness.phenotype_for(wander_seed))
+
+
 func setup(movement: AmbientFlyerMovement) -> void:
 	_movement = movement
 
@@ -215,6 +288,20 @@ func setup(movement: AmbientFlyerMovement) -> void:
 ## For World's mouse-hover animal-name tooltip.
 func get_display_name() -> String:
 	return species.capitalize()
+
+
+## This flyer's own trait dictionary, derived from its seed the first time it
+## is wanted (see `traits`). Deterministic, so the same butterfly is always the
+## same butterfly -- and derived rather than stored, so it survives a chunk
+## unload/reload without anything having to save it.
+func personality() -> Dictionary:
+	if traits.is_empty():
+		traits = FlyerPersonality.traits_from_seed(wander_seed)
+	return traits
+
+
+func boldness() -> float:
+	return FlyerPersonality.boldness_of(personality())
 
 
 var _lod_accumulated := 0.0
@@ -271,13 +358,22 @@ var courtship_world = null
 ## enough to see.
 func _lod_step(delta: float) -> float:
 	_lod_accumulated += delta
-	var player = _nearest_player_position()
-	if player == null:
+	# Cached for _step_player_reaction rather than looked up a second time.
+	# This is the hot path -- hundreds of flyers, every frame -- and the
+	# personality steering needs the exact same answer the LOD does.
+	_player_position = _nearest_player_position()
+	if _player_position == null:
 		return _take_lod_step()  # nobody to be far from: always full rate
-	var interval := SimulationLod.update_interval(position.distance_to(player))
+	var interval := SimulationLod.update_interval(position.distance_to(_player_position))
 	if _lod_accumulated < interval:
 		return -1.0
 	return _take_lod_step()
+
+
+## Where the player was as of this frame's _lod_step, or null when there is
+## none. See _lod_step: this exists so the personality steering below is free
+## rather than a second walk of the player group per flyer per frame.
+var _player_position = null  # Vector2, or null
 
 
 func _take_lod_step() -> float:
@@ -322,6 +418,36 @@ func _process(frame_delta: float) -> void:
 	_step_seed_carrying(delta)
 
 	_step_growing(delta)
+
+	# THE PRECEDENCE ORDER, highest first. Five things can move a flyer now,
+	# and they must not fight:
+	#
+	#   1. flee the player            (_step_player_reaction, below)
+	#   2. finish a pair interaction already running   (_step_pair_interactions)
+	#   3. start a courtship                           (_step_pair_interactions)
+	#   4. dance at the player        (_step_player_reaction, below)
+	#   5. start a spiral flight                       (_step_pair_interactions)
+	#   6. forage (ground prey, a bloom, drinking)
+	#   7. wander
+	#
+	# Escape is first because escape is first in every animal: a butterfly that
+	# goes on courting while something big closes on it is a dead butterfly.
+	# Everything below escape is ordered by COMMITMENT and then by RARITY -- an
+	# interaction already running is never interrupted by a new one (that is
+	# how a butterfly ends up orbiting an empty midpoint, a bug this file has
+	# had once already), and where two could start, the rarer, consequential
+	# one wins. Courtship therefore outranks the player dance: it has a
+	# real-day cooldown and can produce young, and the player will still be
+	# there in four and a half seconds.
+	#
+	# Both halves are in ONE branch pair rather than interleaved, and the
+	# player reaction runs first, so the ranking above is expressed by which
+	# function returns true rather than by a flag anybody has to maintain: 2/3
+	# and 5 all live inside _step_pair_interactions, and 4 is gated there on
+	# neither being active.
+	if _step_player_reaction(delta):
+		_animate_wings()
+		return
 
 	# Meeting another flyer takes precedence over foraging: a pair mid-dance or
 	# mid-whirl is doing that and nothing else, which is what makes it legible
@@ -375,7 +501,30 @@ func _process(frame_delta: float) -> void:
 			# this bloom in the table forever and route every neighbour around
 			# grass that is actually free.
 			_release_forage_claim()
-			if scent_world.drink_nectar_at(flower_position):
+			# A blossoming TREE gets the tree-side world call, never
+			# drink_nectar_at -- a blossom is not a flower patch cell (see
+			# EarthChunkManager.record_pollination_visit_at / _forage_target_
+			# is_tree).
+			var fed := false
+			if _forage_target_is_tree:
+				if scent_world.has_method("record_pollination_visit_at"):
+					# A fitter bee is a somewhat more effective pollinator --
+					# see FruitingModel.visit_weight_for_fitness for the
+					# bounded +/-15% swing this individual's own fitness
+					# nudges its visit by, around the flat 1.0 an average
+					# bee (fitness 0.5) still banks.
+					var visit_weight := FruitingModel.visit_weight_for_fitness(_fitness_score())
+					fed = scent_world.record_pollination_visit_at(flower_position, visit_weight)
+			else:
+				fed = scent_world.drink_nectar_at(flower_position)
+				# Nectar and pollen are separate resources here (FlowerPatch
+				# tracks _nectar and _pollinated as separate dicts), so this
+				# runs regardless of `fed` -- a drained bloom can still
+				# exchange pollen.
+				if scent_world.has_method("pollinate_flower_at"):
+					_carried_pollen = scent_world.pollinate_flower_at(flower_position, _carried_pollen)
+			_forage_target_is_tree = false
+			if fed:
 				_drink_remaining = PollinatorForaging.DRINK_SECONDS
 				# Somewhere that actually feeds it: make this the centre of
 				# its territory, so the relocation leash follows the food
@@ -395,28 +544,79 @@ func _process(frame_delta: float) -> void:
 		face_travel(position - before, delta)
 		return
 
-	if _scent_direction == Vector2.ZERO:
-		position = _movement.step_position(home, position, _elapsed_time, delta, wander_seed)
-	else:
+	var heading := _movement.direction_at(home, position, _elapsed_time, wander_seed)
+	if _scent_direction != Vector2.ZERO:
 		# Blend the wander heading with the scent gradient rather than
 		# replacing it, so the flyer still meanders while drifting toward
 		# the strongest bloom (see ScentField.gradient_direction).
-		var wander := _movement.direction_at(home, position, _elapsed_time, wander_seed)
-		var steered := wander.lerp(_scent_direction, SCENT_STEER_WEIGHT)
-		if steered.length() <= 0.001:
-			# The wander heading and the scent gradient pointed against each
-			# other and cancelled. Blending opposing vectors and then using
-			# the residual is ill-conditioned -- here it meant simply not
-			# moving that frame, i.e. a flyer stalling in mid-air (reported:
-			# "butterflies should only stop moving when they sit down on a
-			# flower... not during wandering"). Fall back to the wander
-			# heading: only drinking may ever hold a flyer still.
-			steered = wander
-		position += steered.normalized() * _movement.speed * delta
+		var steered := heading.lerp(_scent_direction, SCENT_STEER_WEIGHT)
+		if steered.length() > 0.001:
+			heading = steered.normalized()
+		# ...and otherwise the wander heading and the scent gradient pointed
+		# against each other and cancelled. Blending opposing vectors and then
+		# using the residual is ill-conditioned -- here it meant simply not
+		# moving that frame, i.e. a flyer stalling in mid-air (reported:
+		# "butterflies should only stop moving when they sit down on a
+		# flower... not during wandering"). Keeping the wander heading is the
+		# fallback: only drinking may ever hold a flyer still.
+	position += _fluttered(heading) * _movement.speed * delta
 	var moved := position - before
 	if moved.length() > 0.001:
 		face_travel(moved, delta)
 	_animate_wings()
+
+
+## `heading` veered off course the way a real butterfly's flight is, applied to
+## ORDINARY wander and not only to a flower approach.
+##
+## ## Why butterflies fly like that
+##
+## Erratic, unpredictable flight is a genuine anti-predator adaptation --
+## "protean" behaviour: a flight path a bird cannot extrapolate is a flight
+## path a bird cannot intercept, and it is a large part of why butterflies fly
+## the way they do rather than an aesthetic quirk. That is what makes it right
+## to apply everywhere, not just on the last stretch to a bloom.
+##
+## ## Why this is PollinatorForaging.tumbled_heading and not a second wobble
+##
+## The tumble already existed, grounded, tested and shipped -- it was simply
+## only ever reached from the flower approach (reported then as "they should
+## not fly straight to the next found but rather tumble around a bit like real
+## butterflies"). Ordinary wander went through AmbientFlyerMovement.
+## direction_at, which picks ONE heading and holds it for a whole
+## AmbientFlyerRenderer.BUTTERFLY_INTERVAL -- 0.7 seconds of dead straight
+## line at a time, which is exactly what the player was watching when they
+## asked for "more random / dancy motions rather then fly in a straight line".
+##
+## `TUMBLE_SETTLE_DISTANCE` is passed as the distance because the tumble eases
+## off as a flyer closes on its target, and out here there is no target to
+## close on: this is full strength, permanently.
+##
+## ## The trap this does NOT reintroduce
+##
+## AmbientFlyerMovement.direction_at's own notes record three separate ways
+## this system has produced a "flyers stall and jitter on a fixed spot" bug,
+## every one of them from building a heading out of vector components that can
+## cancel. Nothing can cancel here: tumbled_heading keeps a full-length
+## component along `heading` and adds a strictly PERPENDICULAR veer of at most
+## TUMBLE_STRENGTH (0.8, deliberately under 1), so the result always has a
+## positive forward component and is normalised from a vector that is never
+## shorter than 1. Pinned from this side by
+## test_the_flutter_never_stalls_a_butterfly, which measures every single step
+## as a whole step.
+##
+## Butterflies only. Songbirds glide -- they share this movement module, and a
+## sparrow tumbling like a monarch reads as a bird glitching, the same failure
+## that already got birds excluded from the courtship dance. The roster is read
+## off SpiralFlight rather than listed again here, for the same reason
+## FlyerPersonality reads it off SpiralFlight: a second copy of "which flyers
+## are butterflies" is a duplicate waiting to drift.
+func _fluttered(heading: Vector2) -> Vector2:
+	if not SpiralFlight.spirals(species):
+		return heading
+	return PollinatorForaging.tumbled_heading(
+		heading, PollinatorForaging.TUMBLE_SETTLE_DISTANCE, _elapsed_time, wander_seed
+	)
 
 
 ## How much horizontal travel is needed before the sprite mirrors. Without
@@ -520,6 +720,19 @@ func _step_scent(delta: float) -> void:
 	var blooming: Array = flowers.filter(
 		func(f): return FlowerSpecies.is_in_bloom(String(f["species"]), season)
 	)
+	# Bees alone also recognize blossoming apple/cherry trees as a food
+	# source (see TreeSpecies.needs_pollinators_for / EarthChunkManager.
+	# blossoms_near) -- real fruit trees are insect-pollinated and bees are
+	# their primary pollinator, so this is scoped to TREE_POLLINATING_SPECIES
+	# rather than every nectar-feeder here. blossoms_near already gates on
+	# "in blossom right now" (spring canopy only) at the source, so these
+	# merge straight into `blooming` with no is_in_bloom check of their own --
+	# unlike FlowerSpecies-keyed entries, a tree species isn't in that table
+	# to check against anyway.
+	if species == TREE_POLLINATING_SPECIES and scent_world.has_method("blossoms_near"):
+		blooming += scent_world.blossoms_near(
+			position, int(PollinatorForaging.FORAGE_SEARCH_TILES)
+		)
 	# Two lists, deliberately. STEERING uses only blooms that still hold
 	# nectar -- a spent flower has no reward left to advertise, and letting
 	# drained blooms keep pulling on the gradient is what made a flyer orbit
@@ -540,6 +753,7 @@ func _step_scent(delta: float) -> void:
 		_scent_direction = Vector2.ZERO
 		_forage_target = null
 		_forage_flower = null
+		_forage_target_is_tree = false
 		_release_forage_claim()
 		_relocate()
 		return
@@ -579,6 +793,7 @@ func _step_scent(delta: float) -> void:
 	if target.is_empty():
 		_forage_target = null
 		_forage_flower = null
+		_forage_target_is_tree = false
 		_release_forage_claim()
 		_relocate()
 	else:
@@ -589,6 +804,7 @@ func _step_scent(delta: float) -> void:
 			return
 		_forage_flower = target["position"]
 		_forage_target = candidate_landing
+		_forage_target_is_tree = TreeSpecies.needs_pollinators_for(String(target.get("species", "")))
 		# Announce it, so neighbours deciding in the next moment can route
 		# around this flyer instead of chaining behind it. Claiming again
 		# simply replaces this flyer's previous row, so the table stays
@@ -884,12 +1100,61 @@ func _take_targeted_seed() -> void:
 	_carried_seed_is_grass = false  # see the shared doc comment on both flags
 	# Same carry model as fruit (see _take_targeted_fruit): a distance, not a
 	# fixed time, so a faster bird carries the seed proportionally further.
-	var carry_tiles := SeedEndozoochory.carry_distance_tiles(wander_seed + _seed_pick_index)
+	var carrier_seed := wander_seed + _seed_pick_index
+	_carried_seed_carrier_seed = carrier_seed
+	var carry_tiles := SeedEndozoochory.carry_distance_tiles(carrier_seed)
 	_carry_seconds_remaining = carry_tiles * float(TerrainRenderer.TILE_SIZE) / maxf(_movement.speed, 1.0)
+
+
+## Whether a grass seed this bird can currently see is strictly closer than
+## every flower seed candidate it can also see right now -- the tie-break
+## between the two seed kinds that replaces the old fixed
+## flower-seed-always-first order (see _look_for_seeds).
+##
+## Deliberately compares raw candidate distance, not the post-scatter pick
+## GroundForageBehavior.choose_worm would land on for either list (see
+## PollinatorForaging.NEAREST_CANDIDATE_POOL): "is the grass seed genuinely
+## closer" is a question about what's actually on the ground, not about which
+## of several near-tied candidates the scatter happens to land on -- that
+## scatter still applies AFTER this decides which kind to go for, exactly as
+## before, inside whichever of _look_for_seeds/_look_for_grass_seeds ends up
+## committing.
+##
+## A tie (equal distance) keeps the flower seed, matching the old order in
+## the one case where "nearest" genuinely can't decide -- ties are not the
+## gap this exists to fix, and the two seed kinds never legitimately share
+## the exact same tile in practice.
+func _grass_seed_is_nearer_than(flower_seeds: Array) -> bool:
+	if seed_world == null or not seed_world.has_method("grass_seeds_near"):
+		return false
+	var grass_seeds: Array = seed_world.grass_seeds_near(
+		position, int(GroundForageBehavior.SEARCH_TILES)
+	)
+	if grass_seeds.is_empty():
+		return false
+	var nearest_flower := INF
+	for seed in flower_seeds:
+		nearest_flower = minf(nearest_flower, position.distance_to(seed["position"]))
+	var nearest_grass := INF
+	for seed in grass_seeds:
+		nearest_grass = minf(nearest_grass, position.distance_to(seed["position"]))
+	return nearest_grass < nearest_flower
 
 
 ## Looks for the next seed on a throttled interval, in parallel with the
 ## worm and fruit searches (see _step_ground_forage's SEEKING branch).
+##
+## Worm and fruit still unconditionally outrank both seed kinds (checked
+## earlier in that same SEEKING branch) -- protein/energy wins over a seed
+## snack regardless of distance. But between flower seed and grass seed
+## specifically, this backs off to let _look_for_grass_seeds (called right
+## after this, still in the same SEEKING branch) commit instead whenever a
+## grass seed is actually the nearer of the two -- see
+## _grass_seed_is_nearer_than for why: a live probe found a fixed
+## flower-seed-always-first order meant a sparrow with ANY flower seed in
+## range never even attempted grass seed, however much closer the grass seed
+## really was (docs/concept/long_grass.md, "11/11 dispersal events from mice,
+## zero from sparrows").
 func _look_for_seeds(delta: float) -> void:
 	if seed_world == null:
 		return
@@ -903,6 +1168,8 @@ func _look_for_seeds(delta: float) -> void:
 		position, int(GroundForageBehavior.SEARCH_TILES)
 	)
 	if seeds.is_empty():
+		return
+	if _grass_seed_is_nearer_than(seeds):
 		return
 	_seed_pick_index += 1
 	var target := GroundForageBehavior.choose_worm(
@@ -953,7 +1220,9 @@ func _take_targeted_grass_seed() -> void:
 	_carried_seed_species = "grass"
 	_carried_seed_is_flower = false  # see the shared doc comment on both flags
 	_carried_seed_is_grass = true
-	var carry_tiles := SeedEndozoochory.carry_distance_tiles(wander_seed + _grass_seed_pick_index)
+	var carrier_seed := wander_seed + _grass_seed_pick_index
+	_carried_seed_carrier_seed = carrier_seed
+	var carry_tiles := SeedEndozoochory.carry_distance_tiles(carrier_seed)
 	_carry_seconds_remaining = carry_tiles * float(TerrainRenderer.TILE_SIZE) / maxf(_movement.speed, 1.0)
 
 
@@ -994,6 +1263,15 @@ func _look_for_grass_seeds(delta: float) -> void:
 ## timer elapses, the seed is deposited at wherever the bird happens to be
 ## right now (see EarthChunkManager.try_plant_seed_at) -- a real bird doesn't
 ## pick a spot, it simply is somewhere by the time digestion finishes.
+## The pre-hatch sprite (see ProceduralEggSprite), shown in place of the
+## ordinary wing-flap texture for the entire COURTING/MATED/EGG span (see
+## _is_pre_hatch). Set by the renderer, exactly like flap_frames/
+## perched_frame -- left null for any caller that predates this, which
+## simply leaves the texture alone for that span rather than erroring (see
+## _animate_wings).
+var egg_frame: Texture2D = null
+
+
 ## Records the size this flyer is when grown, so a juvenile grows toward its
 ## own species' adult size rather than a shared assumption.
 func set_adult_scale(full_size: Vector2) -> void:
@@ -1027,6 +1305,201 @@ func _step_growing(delta: float) -> void:
 		return
 	age_seconds += delta
 	scale = _adult_scale * LifeCycle.size_scale_at(age_seconds)
+
+
+## Whether this flyer is currently bolting from the player, and whether it is
+## currently orbiting their head (see FlyerPersonality). Never both -- the two
+## are the opposite ends of one boldness continuum and
+## test_nothing_ever_both_flees_and_dances walks the whole range to prove it.
+var _fleeing_from_player := false
+var _dancing_at_player := false
+var _player_dance_elapsed := 0.0
+## This flyer's offset from the player's head when the dance began, so the
+## orbit starts exactly where the butterfly already is and converges from
+## there (see SpiralFlight.converging_orbit) rather than snapping onto a fixed
+## radius, which is a visible jump of a body length or more.
+var _player_dance_offset := Vector2.ZERO
+
+
+## One frame of what this butterfly thinks about the player: bolt, dance round
+## their head, or neither (see FlyerPersonality and
+## docs/concept/ecosystem_dynamics.md's "The butterfly that knows you").
+## Returns true while it is doing either, which the caller treats as "not
+## interacting with other flyers, not foraging".
+##
+## Ranked ABOVE the pair interactions (see _process's precedence block) because
+## escape outranks everything -- the brief put it plainly: "a butterfly fleeing
+## a player should not be mid-dance with another butterfly". The DANCE half is
+## ranked below an already-running interaction and below starting a courtship,
+## which is why it checks those two flags before it may begin.
+func _step_player_reaction(delta: float) -> bool:
+	# Structural, not a branch: a bee, a fly and a sparrow have no personality
+	# steering at all, so nothing below can fire for them.
+	if _movement == null or not FlyerPersonality.reacts_to_player(species):
+		return false
+	if _player_position == null:
+		# Nobody to react to (single player who left, or a marker built
+		# standalone in a test): drop whatever it was doing about them.
+		_fleeing_from_player = false
+		_dancing_at_player = false
+		return false
+	var player: Vector2 = _player_position
+	var own_boldness := boldness()
+	var distance := position.distance_to(player)
+
+	# 1. ESCAPE, which outranks everything including an interaction already
+	#    running.
+	if _fleeing_from_player:
+		if distance < FlyerPersonality.flee_release_distance_px(own_boldness):
+			_flee_from(player, delta)
+			return true
+		_fleeing_from_player = false
+	elif FlyerPersonality.player_response(own_boldness, distance) == FlyerPersonality.FLEE:
+		_fleeing_from_player = true
+		_abandon_pair_interaction()
+		# A butterfly sitting on a bloom is the classic flight-initiation-
+		# distance measurement: it flushes off the flower. Nothing else in this
+		# file may cut a drink short, which is why it is spelled out here.
+		_drink_remaining = 0.0
+		_flee_from(player, delta)
+		return true
+
+	# 2/3/5. Whatever pair interaction is already running finishes first, and a
+	#        courtship may still start. Both live in _step_pair_interactions --
+	#        this just declines the frame so it gets it.
+	if _courting_with != 0 or _spiralling_with != 0:
+		_dancing_at_player = false
+		return false
+
+	var head := _player_head(player)
+	if _dancing_at_player:
+		if _player_left_this_butterflys_patch(head):
+			_end_player_dance()
+			return false
+		_player_dance_elapsed += delta
+		position = head + SpiralFlight.converging_orbit(
+			_player_dance_elapsed,
+			_player_dance_offset,
+			SpiralFlight.SPIRAL_RADIUS_PX,
+			SpiralFlight.TURNS_PER_SECOND
+		)
+		return true
+
+	# 4. Start one. Gated on the SAME cooldown a whirl at another butterfly
+	#    pays: this is the same behaviour aimed at a different object, so it
+	#    comes out of the same aerial-interaction time budget (see
+	#    SpiralFlight.SPIRAL_DUTY_CYCLE -- a butterfly that spent all day
+	#    whirling would not feed). It is also what stops the dance re-latching
+	#    on the very next frame after the territory leash cut it.
+	if _spiral_cooldown > 0.0:
+		return false
+	if _player_left_this_butterflys_patch(head):
+		return false
+	if FlyerPersonality.player_response(own_boldness, distance) != FlyerPersonality.DANCE:
+		return false
+	_dancing_at_player = true
+	_player_dance_elapsed = 0.0
+	_player_dance_offset = position - head
+	return true
+
+
+## The point a butterfly orbits: the player's HEAD, not their feet.
+##
+## A character's own origin is at its feet (CharacterView, pinned by
+## test_the_characters_feet_sit_at_its_own_origin), and its height is a real
+## 175 cm expressed in world pixels by StoneSize -- the same yardstick
+## GroundSlide.PX_PER_METER is derived from. So "round the player's head" is a
+## measured place rather than an offset that looked about right.
+func _player_head(player: Vector2) -> Vector2:
+	return player + Vector2(0.0, -StoneSize.PLAYER_WORLD_HEIGHT_PX)
+
+
+## Straight away from the player, at the escape burst rather than the cruise
+## (see FlyerPersonality.ESCAPE_SPEED_MULTIPLIER).
+##
+## Deliberately NOT home-tethered: a fleeing animal leaves its territory, and
+## AmbientFlyerMovement's containment brings it back afterwards on its own.
+func _flee_from(player: Vector2, delta: float) -> void:
+	var away := position - player
+	if away.length() <= 0.001:
+		# Standing exactly on it. Normalising that is the degenerate case this
+		# whole subsystem has been bitten by three times (see
+		# AmbientFlyerMovement.direction_at), so the direction comes from the
+		# flyer's own seed instead of from a zero vector.
+		away = Vector2.from_angle(float(absi(hash(wander_seed)) % 628) * 0.01)
+	var before := position
+	position += (
+		away.normalized() * _movement.speed * FlyerPersonality.ESCAPE_SPEED_MULTIPLIER * delta
+	)
+	face_travel(position - before, delta)
+
+
+## Whether the player has carried the dance off this butterfly's patch.
+##
+## The orbit is centred on the player's head, so without a leash a player who
+## keeps walking would tow a butterfly across the world. The leash is
+## SpiralFlight.NOTICE_RADIUS_PX measured from the flyer's HOME -- reused, not
+## a new number, and real: a territorial butterfly pursues an intruder out to
+## roughly as far as it spotted it from and then returns to its perch. It is
+## deliberately wider than the flyer's own wander radius, because chasing
+## something off is exactly when a butterfly leaves its patch; the ordinary
+## homeward pull (see AmbientFlyerMovement) brings it back afterwards.
+##
+## Measured against the HEAD -- the orbit's centre -- rather than against the
+## butterfly. Checking the butterfly instead means it has already been dragged
+## there before anything notices, so a player who moves a long way in one step
+## (a teleport, or one enormous off-screen LOD step) takes the butterfly with
+## them for that frame and strands it. Checking the centre means the butterfly
+## can never be more than one orbit radius outside its leash at all.
+func _player_left_this_butterflys_patch(head: Vector2) -> bool:
+	return head.distance_to(home) > SpiralFlight.NOTICE_RADIUS_PX
+
+
+func _end_player_dance() -> void:
+	_dancing_at_player = false
+	_player_dance_elapsed = 0.0
+	_spiral_cooldown = SpiralFlight.COOLDOWN_SECONDS
+
+
+## Drops out of a courtship or a whirl mid-way because something more urgent
+## happened -- currently only a flush (see _step_player_reaction).
+##
+## Charges NO cooldown: the interaction did not happen, so nothing was spent.
+## Charging Courtship.COOLDOWN_SECONDS here would mean a player walking through
+## a meadow sterilised it for a full real day.
+##
+## The partner is told directly, which is the one place in this file where one
+## flyer reaches into another. It has to be: the whole pair system works by
+## both sides computing the same answers from the same ids WITHOUT messaging,
+## and that only holds while both sides see the same world. One of them
+## bolting is not something the other can derive -- and leaving it undone is
+## precisely the "one butterfly orbiting an empty midpoint" failure this file
+## has already shipped once (see _scan_for_partners' own notes).
+func _abandon_pair_interaction() -> void:
+	if _courting_with != 0:
+		var partner = instance_from_id(_courting_with)
+		if (
+			partner != null
+			and is_instance_valid(partner)
+			and partner.get("_courting_with") != null
+			and int(partner._courting_with) == get_instance_id()
+		):
+			partner._courting_with = 0
+			partner._courting_elapsed = 0.0
+		_courting_with = 0
+		_courting_elapsed = 0.0
+	if _spiralling_with != 0:
+		var partner = instance_from_id(_spiralling_with)
+		if (
+			partner != null
+			and is_instance_valid(partner)
+			and partner.get("_spiralling_with") != null
+			and int(partner._spiralling_with) == get_instance_id()
+		):
+			partner._spiralling_with = 0
+			partner._spiral_elapsed = 0.0
+		_spiralling_with = 0
+		_spiral_elapsed = 0.0
 
 
 ## One frame of the two things that happen when two flyers meet: the COURTSHIP
@@ -1234,6 +1707,17 @@ func _begin_courtship(partner) -> void:
 ## The dance is over. Both partners resolve the same answer from the same
 ## seed, so exactly one offspring appears rather than two (only the leader
 ## spawns it) and neither has to tell the other what happened.
+##
+## The child's PERSONALITY is crossed from both parents here, through the
+## shipped DnaCrossover (see FlyerPersonality.inherit). This is the whole
+## heritability path and the reason boldness is genes rather than a hash of the
+## seed: before it, an offspring's traits were unrelated to the pair that
+## produced it, and a player could not have been a selection pressure however
+## many butterflies they netted.
+##
+## `pair_seed` doubles as the child seed. It is already computed identically on
+## both sides and already unique per pairing per round, so the child is
+## deterministic in exactly the way the mating decision above it is.
 func _finish_courtship(partner) -> void:
 	var seed_value := Courtship.pair_seed(
 		get_instance_id(), _courting_with, _courtship_round
@@ -1241,10 +1725,19 @@ func _finish_courtship(partner) -> void:
 	var mated := Courtship.mates(seed_value)
 	var leads := Courtship.leads(get_instance_id(), _courting_with)
 	var centre := _courting_centre
+	# Read before _end_courtship, which is also where a partner that has since
+	# become invalid would stop being readable.
+	var partner_traits: Dictionary = (
+		partner.personality() if partner.has_method("personality") else {}
+	)
 	_end_courtship()
 	if mated and leads and courtship_world != null:
 		if courtship_world.has_method("spawn_flyer_offspring"):
-			courtship_world.spawn_flyer_offspring(species, centre)
+			courtship_world.spawn_flyer_offspring(
+				species,
+				centre,
+				FlyerPersonality.inherit(personality(), partner_traits, seed_value)
+			)
 
 
 func _end_courtship() -> void:
@@ -1288,21 +1781,41 @@ func _step_seed_carrying(delta: float) -> void:
 	_carry_seconds_remaining -= delta
 	if _carry_seconds_remaining > 0.0:
 		return
+	# A bare GROUND seed (flower or grass) is the meal itself for a true
+	# granivore -- real predation destroys the large majority of it before
+	# it ever gets a chance to sprout (see SeedEndozoochory.
+	# GRANIVORY_CONSUMED_CHANCE). Tree fruit is deliberately exempt: a fleshy
+	# fruit exists specifically so the seed riding inside is swallowed whole
+	# and passed unharmed, a real mutualism rather than predation, so that
+	# branch below is never gated by this roll.
+	var seed_survives := true
+	if _carried_seed_is_flower or _carried_seed_is_grass:
+		# forager_seed is THIS bird's own identity seed (wander_seed), fixed
+		# for its whole life, separate from the per-pick roll seed
+		# (_carried_seed_carrier_seed) -- a fitter individual forager is a
+		# slightly more efficient predator (see SeedEndozoochory.
+		# FITNESS_CHANCE_SWING), but each seed it eats still rolls
+		# independently.
+		seed_survives = not SeedEndozoochory.seed_is_consumed(
+			_carried_seed_carrier_seed, wander_seed
+		)
 	# Where it lands decides what grows: a swallowed FLOWER seed becomes a
 	# flower, a GRASS seed becomes a new tall-grass patch (see
 	# docs/concept/long_grass.md's "Reproduction" section), tree fruit
 	# becomes a tree (bird endozoochory -- see
 	# concept/flora.md#bird-endozoochory). All three are simply dropped
 	# where the bird happens to be, which is what ties plant spread to the
-	# ecosystem's real movement corridors rather than to a spread radius.
-	if _carried_seed_is_flower:
-		if seed_world != null and seed_world.has_method("plant_flower_at"):
-			seed_world.plant_flower_at(position, _carried_seed_species)
-	elif _carried_seed_is_grass:
-		if seed_world != null and seed_world.has_method("plant_grass_at"):
-			seed_world.plant_grass_at(position)
-	elif fruit_world != null:
-		fruit_world.try_plant_seed_at(position, _carried_seed_species)
+	# ecosystem's real movement corridors rather than to a spread radius --
+	# unless the seed was destroyed above, in which case nothing sprouts.
+	if seed_survives:
+		if _carried_seed_is_flower:
+			if seed_world != null and seed_world.has_method("plant_flower_at"):
+				seed_world.plant_flower_at(position, _carried_seed_species)
+		elif _carried_seed_is_grass:
+			if seed_world != null and seed_world.has_method("plant_grass_at"):
+				seed_world.plant_grass_at(position)
+		elif fruit_world != null:
+			fruit_world.try_plant_seed_at(position, _carried_seed_species)
 	# The dropping itself: the visible half of dispersal, so the player can see
 	# where the seedling under the perch came from.
 	if seed_world != null and seed_world.has_method("drop_guano_at"):
@@ -1410,12 +1923,33 @@ var perched := false
 const FLAP_SECONDS_PER_FRAME := 0.09
 
 
+## Whether this flyer is still in the pre-hatch span (COURTING/MATED/EGG,
+## i.e. before LifeCycle.STAGE_JUVENILE begins) -- the "an egg, not a tiny
+## adult" window. Wild-spawned flyers start at LifeCycle.MATURE_SECONDS (see
+## `age_seconds`'s own doc comment), so this is only ever true for something
+## actually BORN in front of the player (see begin_life) -- an ordinary
+## meadow flyer is never affected.
+func _is_pre_hatch() -> bool:
+	return LifeCycle.stage_at(age_seconds) < LifeCycle.STAGE_JUVENILE
+
+
 ## Advances the wing-beat. Separate from the movement step so a flyer
 ## animates even while hovering.
 func _animate_wings() -> void:
+	# Pre-hatch: an egg, not a flapping insect (see ProceduralEggSprite /
+	# _is_pre_hatch). No egg_frame set (an older caller, a test double) is a
+	# no-op rather than an error -- the texture is simply left whatever it
+	# was, matching every other optional-field guard in this file.
+	if _is_pre_hatch():
+		if egg_frame != null:
+			texture = egg_frame
+		return
 	# A perched bird holds still. Flapping while sitting on a branch reads
 	# as a glitch, not as a bird.
 	if perched:
+		# Nothing is beating, so there is no lift pulse to rise and fall on
+		# (see WingbeatBounce): the body sits exactly where it is drawn.
+		offset.y = 0.0
 		# ...except for the head, which dips into the grass and back up
 		# several times while it works a worm (see
 		# GroundForageBehavior.is_beak_down). Without this the whole "sits
@@ -1430,3 +1964,38 @@ func _animate_wings() -> void:
 		return
 	var index := int(_elapsed_time / FLAP_SECONDS_PER_FRAME) % flap_frames.size()
 	texture = flap_frames[index]
+	_bounce_on_the_wingbeat()
+
+
+## The little vertical bob that goes with each beat (see WingbeatBounce) --
+## lift arrives in pulses, so the body genuinely rises and falls once per
+## wingbeat. Asked for as "maybe also make them bounce slightly with each wing
+## flap".
+##
+## ## `offset`, and never `position`
+##
+## This is the load-bearing part. `position` feeds AmbientFlyerMovement's
+## containment, the courtship orbit, the spiral flight, every partner-distance
+## check in _scan_for_partners, and the whole tree's Y-sorting. A per-frame bob
+## folded into it would put a wobble through all five at once -- flyers would
+## drift against their own home tether, pairs would measure each other's
+## distance through two independent oscillations, and a butterfly would flicker
+## in front of and behind the flower it is visiting. `offset` is a Sprite2D
+## draw property: nothing reads it back. Pinned by
+## test_the_wingbeat_bounce_never_touches_the_flyers_position.
+##
+## The amplitude is handed the TEXTURE's height and lands in `offset`, which is
+## also in texture-local units and multiplied by `scale` when drawn. So the bob
+## stays the same fraction of the DRAWN body at any size, and a juvenile that
+## has not grown into its adult scale yet (see _step_growing) bobs by
+## proportionally less in world pixels without anything telling it to.
+func _bounce_on_the_wingbeat() -> void:
+	if texture == null:
+		return
+	offset.y = WingbeatBounce.bounce_offset(
+		species,
+		_elapsed_time,
+		FLAP_SECONDS_PER_FRAME,
+		flap_frames.size(),
+		float(texture.get_height())
+	)

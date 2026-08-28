@@ -7489,7 +7489,7 @@ func test_record_death_at_lowers_the_owning_regions_herbivore_population():
 	var before := manager.herbivore_population_at_chunk(center_chunk)
 	assert_gt(before, 0.0, "precondition: the chunk under Berlin carries some herbivores")
 
-	manager.record_death_at(pixel)
+	manager.record_death_at(pixel, false)
 
 	assert_almost_eq(
 		manager.herbivore_population_at_chunk(center_chunk), maxf(0.0, before - 1.0), 0.001
@@ -7540,7 +7540,7 @@ func test_a_hunted_out_region_stops_showing_creature_markers():
 		var herbivores := manager.herbivore_population_at_chunk(chunk_coord)
 		if herbivores > 0.0:
 			any_animals = true
-		manager._ecosystem.record_death(chunk_coord, herbivores)
+		manager._ecosystem.record_death(chunk_coord, false, herbivores)
 		manager._ecosystem.record_death(
 			chunk_coord, manager._ecosystem.predator_population(chunk_coord), true
 		)

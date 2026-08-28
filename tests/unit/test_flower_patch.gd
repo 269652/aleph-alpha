@@ -17,6 +17,7 @@ extends GutTest
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
 
 const SEASONS := ["winter", "spring", "summer", "autumn"]
 
@@ -206,8 +207,32 @@ func test_a_seedling_grows_to_full_size_and_stops():
 	if patch.has_flower(cell):
 		return
 	patch.plant(cell, "tulip")
-	patch.advance(FlowerPatch.SECONDS_TO_MATURE * 2.0)
+	patch.advance(FlowerPatch.SECONDS_TO_MATURE * 2.0, 1.0)
 	assert_almost_eq(patch.growth_at(cell), 1.0, 0.001, "growth stops at grown")
+
+
+## Lighter regression pin of the seasonal-growth contract test_tall_grass.gd
+## proves thoroughly (see its test_advance_grows_slower_in_winter_than_in_
+## summer_for_the_same_elapsed_time): growth_modifier must scale FlowerPatch's
+## own seedling growth increment too -- NOT the nectar/seed regen in the same
+## advance() call, which are unrelated resources, not "growing".
+func test_advance_grows_seedlings_slower_in_winter_than_in_summer():
+	var cycle := SeasonCycle.new()
+	var summer_modifier: float = cycle.growth_modifier(SeasonCycle.SECONDS_PER_YEAR * 0.375)
+	var winter_modifier: float = cycle.growth_modifier(SeasonCycle.SECONDS_PER_YEAR * 0.875)
+
+	var summer := FlowerPatch.new(1, 8, 8, _grassland(8, 8))
+	var winter := FlowerPatch.new(1, 8, 8, _grassland(8, 8))
+	var cell := Vector2i(3, 3)
+	if summer.has_flower(cell):
+		return  # that cell was map-seeded; nothing to plant for this check
+	assert_true(summer.plant(cell, "rose"))
+	assert_true(winter.plant(cell, "rose"))
+
+	summer.advance(FlowerPatch.SECONDS_TO_MATURE * 0.1, summer_modifier)
+	winter.advance(FlowerPatch.SECONDS_TO_MATURE * 0.1, winter_modifier)
+
+	assert_gt(summer.growth_at(cell), winter.growth_at(cell))
 
 
 func test_growth_takes_a_while_rather_than_a_moment():
@@ -216,7 +241,7 @@ func test_growth_takes_a_while_rather_than_a_moment():
 	if patch.has_flower(cell):
 		return
 	patch.plant(cell, "clover")
-	patch.advance(FlowerPatch.SECONDS_TO_MATURE * 0.25)
+	patch.advance(FlowerPatch.SECONDS_TO_MATURE * 0.25, 1.0)
 	assert_lt(patch.growth_at(cell), 0.5, "a quarter of the way is not most of the way")
 
 
@@ -240,7 +265,7 @@ func _grassland(width: int, height: int) -> PackedStringArray:
 func test_an_unpollinated_meadow_sets_no_seed():
 	var patch := FlowerPatch.new(1234, 16, 16, _grassland(16, 16))
 	for step in 200:
-		patch.advance(60.0)
+		patch.advance(60.0, 1.0)
 		patch.shed_seed(60.0, "winter")
 	assert_eq(
 		patch.ground_seed_cells().size(), 0,
@@ -256,7 +281,7 @@ func test_a_pollinated_plant_sets_seed():
 			pollinated = true
 	assert_true(pollinated, "no female flower in the whole patch to pollinate")
 	for step in 200:
-		patch.advance(60.0)
+		patch.advance(60.0, 1.0)
 		patch.shed_seed(60.0, "winter")
 	assert_gt(
 		patch.ground_seed_cells().size(), 0,
@@ -270,7 +295,7 @@ func test_the_wrong_pollen_does_not_pollinate():
 	for cell in patch.get_flower_cells():
 		patch.pollinate(cell, "not_a_species")
 	for step in 200:
-		patch.advance(60.0)
+		patch.advance(60.0, 1.0)
 		patch.shed_seed(60.0, "winter")
 	assert_eq(patch.ground_seed_cells().size(), 0, "wrong pollen should set no seed")
 

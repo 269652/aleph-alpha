@@ -173,6 +173,81 @@ func test_a_sapling_is_still_a_smaller_node():
 	assert_almost_eq(tree.scale.x, 1.0, 0.01)
 
 
+# -- pollination visits (see docs/concept/flora.md / FruitingModel.pollination_factor) --
+#
+# A bee's visit has to survive somewhere: crop_potential is a pure function of
+## the genome and time, with no persisted per-tree state anywhere -- so
+## "visits accumulate and boost yield" needs a real place to live, and this is
+## the same tier ChoppableTree's other per-tree state (growth, ripe count)
+## already lives at. Deliberately scoped to survive only while the chunk is
+## loaded (see the module doc comment on ChoppableTree) -- not persisted
+## across a save/reload in this pass.
+
+const BEARING_CYCLE_SECONDS := 100.0  # a stand-in cycle length, not the real year
+
+
+func test_a_visit_is_recorded():
+	var t := ChoppableTree.new()
+	add_child_autofree(t)
+	assert_eq(t.pollination_visits_in_cycle(BEARING_CYCLE_SECONDS, 0.0), 0.0)
+	t.record_pollination_visit(BEARING_CYCLE_SECONDS, 0.0)
+	assert_eq(t.pollination_visits_in_cycle(BEARING_CYCLE_SECONDS, 0.0), 1.0)
+
+
+func test_visits_accumulate_within_the_same_cycle():
+	var t := ChoppableTree.new()
+	add_child_autofree(t)
+	for i in 5:
+		t.record_pollination_visit(BEARING_CYCLE_SECONDS, float(i))
+	assert_eq(t.pollination_visits_in_cycle(BEARING_CYCLE_SECONDS, 5.0), 5.0)
+
+
+## The whole reason this is windowed to ONE cycle: a bee visit last year must
+## not go on boosting this year's crop forever, or "pollination feedback"
+## degenerates into a one-time permanent buff.
+func test_visits_reset_once_a_new_bearing_cycle_begins():
+	var t := ChoppableTree.new()
+	add_child_autofree(t)
+	t.record_pollination_visit(BEARING_CYCLE_SECONDS, 10.0)  # cycle 0
+	assert_eq(t.pollination_visits_in_cycle(BEARING_CYCLE_SECONDS, 10.0), 1.0)
+	# Now well into the NEXT cycle, with no visit yet this time round.
+	assert_eq(
+		t.pollination_visits_in_cycle(BEARING_CYCLE_SECONDS, BEARING_CYCLE_SECONDS + 10.0), 0.0,
+		"last cycle's visit should not still be boosting this cycle"
+	)
+
+
+func test_a_visit_in_the_new_cycle_starts_a_fresh_count():
+	var t := ChoppableTree.new()
+	add_child_autofree(t)
+	t.record_pollination_visit(BEARING_CYCLE_SECONDS, 10.0)  # cycle 0
+	t.record_pollination_visit(BEARING_CYCLE_SECONDS, BEARING_CYCLE_SECONDS + 5.0)  # cycle 1
+	assert_eq(t.pollination_visits_in_cycle(BEARING_CYCLE_SECONDS, BEARING_CYCLE_SECONDS + 5.0), 1.0)
+
+
+func test_a_freshly_built_tree_has_no_visits_yet():
+	var t := ChoppableTree.new()
+	add_child_autofree(t)
+	assert_eq(t.pollination_visits_in_cycle(BEARING_CYCLE_SECONDS, 12345.0), 0.0)
+
+
+## A fitter bee's visit should bank more than a flat 1 (see
+## FruitingModel.visit_weight_for_fitness) -- record_pollination_visit takes
+## an optional weight, defaulting to 1.0 so every call above this line is
+## unaffected.
+func test_a_visit_can_be_weighted_above_the_default():
+	var t := ChoppableTree.new()
+	add_child_autofree(t)
+	t.record_pollination_visit(BEARING_CYCLE_SECONDS, 0.0, 1.15)
+	assert_almost_eq(t.pollination_visits_in_cycle(BEARING_CYCLE_SECONDS, 0.0), 1.15, 0.001)
+
+
+func test_weighted_visits_accumulate_within_the_same_cycle():
+	var t := ChoppableTree.new()
+	add_child_autofree(t)
+	t.record_pollination_visit(BEARING_CYCLE_SECONDS, 0.0, 0.85)
+	t.record_pollination_visit(BEARING_CYCLE_SECONDS, 1.0, 1.15)
+	assert_almost_eq(t.pollination_visits_in_cycle(BEARING_CYCLE_SECONDS, 1.0), 2.0, 0.001)
 # -- canopy removal actually redraws what's shown, not just the state flag --
 #
 # Reported live: the FIRST swing on a felled tree correctly dropped sticks

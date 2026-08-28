@@ -568,6 +568,101 @@ func test_fruit_leave_from_the_top_of_the_order():
 	assert_eq(model.fallen_indices(3, 9), [2, 1, 0], "cannot drop more than it carried")
 
 
+# -- pollination feedback: bee visits nudge an insect-pollinated tree's yield -
+#
+# Fixes the one-directional flow docs/concept/flora.md flagged as open:
+# flowers fed pollinators, but pollinator visits never fed a tree's fruit set
+# back. Composes into crop_potential's existing `yield_multiplier` alongside
+# the species multiplier (TreeSpecies.yield_multiplier_for) -- it does not
+# replace it -- so a real apple/cherry visited by bees can reach the same
+# ceiling it always could, and an unvisited one still bears something (real
+# self-/incidental pollination is not zero) rather than going sterile.
+
+func test_zero_visits_still_yields_a_reduced_but_nonzero_factor():
+	var factor := FruitingModel.pollination_factor(0)
+	assert_gt(factor, 0.0, "an isolated tree is not sterile -- self/incidental pollination is real")
+	assert_lt(factor, 1.0, "but a bee-less tree should fall short of its full potential")
+
+
+func test_more_visits_raise_the_factor_toward_the_ceiling():
+	var few := FruitingModel.pollination_factor(1)
+	var many := FruitingModel.pollination_factor(FruitingModel.POLLINATION_SATURATION_VISITS)
+	assert_gt(many, few, "more bee visits this cycle should mean a better-set crop")
+
+
+func test_pollination_factor_never_exceeds_the_unpollinated_ceiling_of_one():
+	assert_almost_eq(FruitingModel.pollination_factor(FruitingModel.POLLINATION_SATURATION_VISITS), 1.0, 0.001)
+	assert_almost_eq(FruitingModel.pollination_factor(FruitingModel.POLLINATION_SATURATION_VISITS * 5), 1.0, 0.001)
+
+
+func test_pollination_factor_treats_negative_visits_as_zero():
+	assert_almost_eq(FruitingModel.pollination_factor(-3), FruitingModel.pollination_factor(0), 0.001)
+
+
+## Composes WITH the species multiplier, not instead of it -- a visited apple
+## still scales by TreeSpecies.yield_multiplier_for("apple") on top.
+func test_pollination_factor_composes_with_the_species_yield_multiplier():
+	var g := _genome(50, 0.8)
+	var species_yield: float = TreeSpecies.yield_multiplier_for("apple")
+	var unvisited: int = model.crop_potential(g, species_yield * FruitingModel.pollination_factor(0))
+	var visited: int = model.crop_potential(
+		g, species_yield * FruitingModel.pollination_factor(FruitingModel.POLLINATION_SATURATION_VISITS)
+	)
+	assert_gt(visited, unvisited, "a bee-visited apple should set a bigger crop than an unvisited one")
+
+
+# -- individual bee fitness modestly scales its visit's effectiveness -------
+#
+# AnimalFitness's first real caller here: a fitter bee (per
+# AnimalFitness.fitness_score) is a somewhat more effective pollinator, so its
+# visit counts for a bit more than a flat 1 toward pollination_factor's visit
+# accumulator -- see EarthChunkManager.record_pollination_visit_at /
+# AmbientFlyerMarker's bee-landing call site. Kept bounded and modest: real
+# per-bee pollen-transfer efficiency does vary with body condition/vigor, but
+# by a modest fraction, not an order of magnitude, and the swing must never
+# let one visit come close to POLLINATION_SATURATION_VISITS worth of effect.
+
+func test_visit_weight_for_fitness_is_close_to_but_not_pinned_at_one():
+	# A perfectly average bee (fitness 0.5) should read as an ordinary,
+	# unscaled visit -- the baseline every other pollination_factor test
+	# above already assumes a flat 1 per visit.
+	assert_almost_eq(FruitingModel.visit_weight_for_fitness(0.5), 1.0, 0.001)
+
+
+func test_visit_weight_for_fitness_increases_with_fitness():
+	var low := FruitingModel.visit_weight_for_fitness(0.0)
+	var high := FruitingModel.visit_weight_for_fitness(1.0)
+	assert_gt(high, low, "a fitter bee should be a more effective pollinator")
+
+
+func test_visit_weight_for_fitness_stays_a_modest_swing_around_one():
+	# Bounded: even a maximally fit bee's single visit must stay far short of
+	# saturating a tree's pollination_factor by itself -- a swing of a few
+	# tenths, not multiples.
+	var low := FruitingModel.visit_weight_for_fitness(0.0)
+	var high := FruitingModel.visit_weight_for_fitness(1.0)
+	assert_between(low, 0.5, 1.0)
+	assert_between(high, 1.0, 1.5)
+
+
+func test_visit_weight_for_fitness_clamps_out_of_range_input():
+	assert_almost_eq(
+		FruitingModel.visit_weight_for_fitness(-3.0), FruitingModel.visit_weight_for_fitness(0.0), 0.001
+	)
+	assert_almost_eq(
+		FruitingModel.visit_weight_for_fitness(3.0), FruitingModel.visit_weight_for_fitness(1.0), 0.001
+	)
+
+
+## The actual point of wiring this in: a higher-fitness bee's visit raises
+## the tree's visit accumulator by more than a flat 1 would -- pinning the
+## real caller-facing behaviour, not just the pure weight function above.
+func test_a_fitter_bees_visit_raises_the_accumulator_by_more_than_a_flat_increment():
+	var low_weight := FruitingModel.visit_weight_for_fitness(0.0)
+	var high_weight := FruitingModel.visit_weight_for_fitness(1.0)
+	assert_gt(high_weight, 1.0)
+	assert_lt(low_weight, 1.0)
+	assert_gt(high_weight, low_weight)
 # -- peak-timed harvest (docs/concept/progression.md "Ecological literacy") --
 #
 # "Peak ripeness" is real and tested against the model's OWN output, not an

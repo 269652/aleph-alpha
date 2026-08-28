@@ -29,8 +29,14 @@ const CRUISE_RADIUS := 60.0
 const CRUISE_INTERVAL := 1.8
 
 ## Deliberately rare -- a special sight, not filling the sky. At most one
-## per water chunk, regardless of how much water it has.
-const SPAWN_CHANCE := 0.15
+## per water chunk, regardless of how much water it has -- a perf/visual cap,
+## mirroring CreatureRenderer.MAX_MARKERS_PER_SPECIES's role, now that
+## presence is driven by the real aggregate kingfisher population
+## (EcosystemSimulation.kingfisher_population, itself derived from the
+## EXISTING fish population -- see KingfisherPopulationModel) rather than an
+## arbitrary die roll. SPAWN_CHANCE is gone: a water chunk with no fish to
+## sustain a kingfisher now genuinely spawns none, instead of spawning one
+## 15% of the time regardless of whether there was anything to hunt.
 const MAX_PER_CHUNK := 1
 
 var _sprite := ProceduralBirdSprite.new()
@@ -41,8 +47,18 @@ var _water_survey := WaterAreaSurvey.new()
 ## fish_population_near/record_fish_catch_near -- see PiscivoreBirdMarker
 ## and EarthChunkManager); pass null (default) for callers that only need a
 ## static placeholder (e.g. isolated rendering tests).
+## `kingfisher_population` is this chunk's live aggregate kingfisher
+## population (see EcosystemSimulation.kingfisher_population) -- default 0.0
+## so every pre-existing call site keeps compiling (and, correctly, keeps
+## spawning no kingfisher until a caller actually reports a real population).
 func spawn_piscivore_birds(
-	parent: Node2D, chunk_coord: Vector2i, chunk: Chunk, chunk_origin_tiles: Vector2i, tile_size: int, world = null
+	parent: Node2D,
+	chunk_coord: Vector2i,
+	chunk: Chunk,
+	chunk_origin_tiles: Vector2i,
+	tile_size: int,
+	world = null,
+	kingfisher_population: float = 0.0
 ) -> Array[Node2D]:
 	var water_cells: Array[Vector2i] = []
 	for y in chunk.height:
@@ -52,10 +68,11 @@ func spawn_piscivore_birds(
 	if water_cells.is_empty():
 		return []
 
-	var spawn_roll := float(
-		absi(hash("%d_%d_kingfisher_spawn" % [chunk_coord.x, chunk_coord.y])) % 10000
-	) / 10000.0
-	if spawn_roll > SPAWN_CHANCE:
+	# Promotion from aggregate population (mirrors CreatureRenderer.
+	# marker_count_for's "round then cap for perf" shape), not the flat
+	# SPAWN_CHANCE die roll this replaced -- a water chunk with no fish to
+	# sustain one now genuinely holds no kingfisher.
+	if mini(int(roundi(kingfisher_population)), MAX_PER_CHUNK) < 1:
 		return []
 
 	var seed_value := absi(hash("%d_%d_kingfisher" % [chunk_coord.x, chunk_coord.y]))

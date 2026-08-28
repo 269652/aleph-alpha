@@ -278,3 +278,64 @@ func test_nothing_here_can_produce_offspring():
 			module.has_method(forbidden),
 			"a spiral flight must have no %s -- it is not a pairing" % forbidden
 		)
+
+
+# -- the orbit primitive, shared with the player dance ------------------------
+
+## The whirl geometry, split out of offset() so the SAME shape can be flown
+## round something that is not another butterfly. A bold butterfly orbiting a
+## player's head (see FlyerPersonality) is this behaviour aimed at a different
+## object -- which is already this module's own grounding, since real
+## territorial butterflies launch at conspecifics, birds, leaves and thrown
+## pebbles alike. Reusing it is what stops there being a third dance shape in
+## the game with a third set of constants to justify.
+
+
+func test_the_orbit_starts_exactly_where_the_flyer_already_is():
+	var start := Vector2(11.0, -4.0)
+	var at_zero := SpiralFlight.converging_orbit(
+		0.0, start, SpiralFlight.SPIRAL_RADIUS_PX, 1.0
+	)
+	assert_almost_eq(
+		at_zero.distance_to(start), 0.0, 0.001, "nothing may teleport when an orbit begins"
+	)
+
+
+func test_the_orbit_closes_onto_the_radius_it_was_given():
+	var start := Vector2(40.0, 0.0)
+	var wanted := 7.5
+	var at_end := SpiralFlight.converging_orbit(
+		SpiralFlight.SPIRAL_SECONDS, start, wanted, 1.0
+	)
+	assert_almost_eq(at_end.length(), wanted, 0.001)
+
+
+## The one real difference from offset(): a whirl between two butterflies is
+## over in SPIRAL_SECONDS, but an orbit round a player lasts as long as the
+## player stands there. A clamped angle would freeze the dance mid-circle with
+## the butterfly hanging at one point of it.
+func test_the_orbit_keeps_turning_after_a_two_butterfly_whirl_would_have_ended():
+	var start := Vector2(10.0, 0.0)
+	var quarter_later := 0.25 / SpiralFlight.TURNS_PER_SECOND
+	var at_end := SpiralFlight.converging_orbit(
+		SpiralFlight.SPIRAL_SECONDS, start, SpiralFlight.SPIRAL_RADIUS_PX,
+		SpiralFlight.TURNS_PER_SECOND
+	)
+	var later := SpiralFlight.converging_orbit(
+		SpiralFlight.SPIRAL_SECONDS + quarter_later, start, SpiralFlight.SPIRAL_RADIUS_PX,
+		SpiralFlight.TURNS_PER_SECOND
+	)
+	assert_gt(at_end.distance_to(later), SpiralFlight.SPIRAL_RADIUS_PX, "it must still be moving")
+
+
+## The two-butterfly whirl is exactly this primitive plus the climb -- there
+## is one geometry here, not two that have to be kept in step by hand.
+func test_the_two_butterfly_whirl_is_that_orbit_plus_the_climb():
+	var start := Vector2(-6.0, 9.0)
+	for tenth in 30:
+		var elapsed := float(tenth) * 0.1
+		var held: float = clampf(elapsed, 0.0, SpiralFlight.SPIRAL_SECONDS)
+		var rebuilt: Vector2 = SpiralFlight.converging_orbit(
+			held, start, SpiralFlight.SPIRAL_RADIUS_PX, SpiralFlight.TURNS_PER_SECOND
+		) + SpiralFlight.rise(held)
+		assert_almost_eq(SpiralFlight.offset(elapsed, start).distance_to(rebuilt), 0.0, 0.0001)

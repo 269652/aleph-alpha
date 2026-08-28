@@ -22,6 +22,7 @@ func _record(species: String, position: Vector2, trust: float) -> Dictionary:
 		"order": Taming.ORDER_STAY,
 		"tied_to": Vector2.ZERO,
 		"is_tied": false,
+		"wander_seed": 0,
 	}
 
 
@@ -62,6 +63,19 @@ func test_a_kept_animal_survives_being_written_and_read():
 	assert_almost_eq(Vector2(loaded[0]["position"]).x, 123.5, 0.01)
 	assert_almost_eq(Vector2(loaded[0]["position"]).y, -64.25, 0.01)
 	assert_almost_eq(float(loaded[0]["trust"]), 0.6, 0.001)
+	DirAccess.remove_absolute(path)
+
+
+## A horse the player spent an evening winning over is a PARTICULAR animal
+## (see this file's own doc comment) -- its individuality (AnimalFitness's
+## strength/agility/coat_vibrancy phenotype, all deterministic from this one
+## seed) has to survive a reload too, not just its trust/position/tied state.
+func test_a_kept_animal_remembers_its_own_wander_seed():
+	var path := "user://test_kept_wander_seed.bin"
+	var horse := _record("horse", Vector2.ZERO, 1.0)
+	horse["wander_seed"] = 918273
+	KeptAnimals.save_all([horse], path)
+	assert_eq(int(KeptAnimals.load_all(path)[0]["wander_seed"]), 918273)
 	DirAccess.remove_absolute(path)
 
 

@@ -122,38 +122,17 @@ func step(delta_seconds: float, is_working: bool, world, pixel_position: Vector2
 		_try_eat(is_working, world, pixel_position)
 
 
-## Land health (docs/concept/world.md "Land health: overharvesting leaves a
-## lasting mark, not just a slower respawn"): only "farmer" reads/depletes
-## vegetation_density_near -- hunter/fisher read a different resource pool
-## entirely (herbivore/fish population) and must not also drain vegetation.
-const _VEGETATION_HARVESTING_OCCUPATION := "farmer"
-
-
 func _gather(delta_seconds: float, world, pixel_position: Vector2) -> void:
 	var rate := _production.yield_per_second(occupation, world, pixel_position)
 	var gathered := rate * delta_seconds
 	_accumulated_yield += gathered
-
-	# The exact same real yield just gathered ALSO leaves this region's real
-	# standing vegetation -- previously a farmer only ever READ this number,
-	# never removed anything from it (only weather ever moved it). This is
-	# what makes sustained NPC farming, not just the player's, a real
-	# land-health depletion driver (see EarthChunkManager.
-	# record_vegetation_harvest_near / EcosystemSimulation.
-	# record_vegetation_harvest). Duck-typed fail-open, matching the rest of
-	# this codebase's world-duck-typing: a world without the hook (an older
-	# double, or a caller that hasn't wired it) is a harmless no-op.
-	if (
-		occupation == _VEGETATION_HARVESTING_OCCUPATION
-		and world != null
-		and world.has_method("record_vegetation_harvest_near")
-	):
-		world.record_vegetation_harvest_near(pixel_position, gathered)
+	_deplete_continuous(world, pixel_position, gathered)
 
 	while _accumulated_yield >= NpcProduction.FOOD_UNIT:
 		_accumulated_yield -= NpcProduction.FOOD_UNIT
 		market.add_stock(_production.item_id_for(occupation), NpcProduction.FOOD_UNIT)
 		_earn(float(NpcProduction.YIELD_TO_GOLD_RATE))
+		_deplete_discrete_unit(world, pixel_position)
 
 
 ## Splits one food unit's gross gold between the village purse and this
@@ -167,6 +146,74 @@ func _earn(gross_gold: float) -> void:
 	while _take_home_carry >= 1.0:  # 1.0 == one whole coin, the only amount a Wallet can hold
 		_take_home_carry -= 1.0
 		wallet.add(1)
+
+
+## Real depletion counterpart to NpcProduction.yield_per_second's read: the
+## exact same real yield just gathered ALSO leaves this region's real
+## standing resource, not just this NPC's own food/gold. Previously only
+## "farmer" had this wired (see docs/concept/world.md "Land health:
+## overharvesting leaves a lasting mark, not just a slower respawn"); a
+## working farmer/hunter/fisher NPC only ever READ vegetation_density_near/
+## herbivore_population_near/fish_population_near, never removed anything
+## from them (only weather/predation/the player ever moved those numbers).
+## This is what makes sustained NPC production, not just the player's own
+## foraging/hunting/fishing, a real depletion driver for all three regional
+## pools.
+##
+## Split into two functions (2026-08-26 fix) because the three occupations
+## do NOT have the same real-world cost per call. farmer/hunter here call
+## EarthChunkManager hooks that are pure aggregate-population arithmetic
+## (record_vegetation_harvest_near, record_death_at) -- harmless to call
+## every single frame with the tiny fractional `gathered` amount actually
+## produced that frame, so they stay wired continuously, right where the
+## farmer depletion always was:
+## - farmer  -> vegetation_density_near   -> record_vegetation_harvest_near
+## - hunter  -> herbivore_population_near -> record_death_at(is_predator=false,
+##             the same non-predator branch a wild kill of prey or the
+##             player's own weapon already reports through)
+## fisher is handled separately by _deplete_discrete_unit below -- see its
+## own doc comment for why it can't share this per-frame path.
+## Duck-typed fail-open per occupation, matching the rest of this codebase's
+## world-duck-typing: a world missing the relevant hook (an older double, or
+## a caller that hasn't wired it) is a harmless no-op, not a crash.
+func _deplete_continuous(world, pixel_position: Vector2, gathered: float) -> void:
+	if world == null:
+		return
+	match occupation:
+		"farmer":
+			if world.has_method("record_vegetation_harvest_near"):
+				world.record_vegetation_harvest_near(pixel_position, gathered)
+		"hunter":
+			if world.has_method("record_death_at"):
+				world.record_death_at(pixel_position, false, gathered)
+
+
+## Fisher's depletion counterpart to _deplete_continuous above, deliberately
+## NOT called every frame. Unlike record_vegetation_harvest_near/
+## record_death_at (pure aggregate-population arithmetic, safe to call every
+## frame with a tiny fractional amount), EarthChunkManager.
+## record_fish_catch_near ALSO finds-and-queue_frees one real on-screen
+## FishMarker within BIRD_CATCH_RADIUS every single call, regardless of how
+## small `count` is -- it's built for PiscivoreBirdMarker's one-call-per-
+## real-catch contract (paced seconds apart by that marker's own cruise/dive/
+## cooldown state machine), not a continuous per-frame drip.
+##
+## _gather() runs once per rendered frame while a fisher works (NpcMarker.
+## _process calls NpcEconomy.step() unthrottled), so calling this from
+## _deplete_continuous the way farmer/hunter do would delete a real fish
+## roughly every frame -- far more aggressively than the yield-proportional
+## depletion this feature intends, and easily visible right at a fisher's
+## own "dock" work location where fish spawn (see npc_planner.gd). Instead
+## this is only called from _gather's existing FOOD_UNIT-accumulation loop
+## above, once per whole food unit actually gathered -- the same discrete
+## cadence a real catch already has for PiscivoreBirdMarker, and the same
+## gate that loop already uses for the market stock/wallet gold update.
+## Duck-typed fail-open, same convention as _deplete_continuous.
+func _deplete_discrete_unit(world, pixel_position: Vector2) -> void:
+	if world == null:
+		return
+	if occupation == "fisher" and world.has_method("record_fish_catch_near"):
+		world.record_fish_catch_near(pixel_position, NpcProduction.FOOD_UNIT)
 
 
 func _try_eat(is_working: bool, world, pixel_position: Vector2) -> void:

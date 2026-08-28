@@ -78,7 +78,10 @@ instead of one.
   takes noticeably longer to mature than a grazed grass tuft takes to grow
   back, echoing the real gap between a root crop's growing season and a
   grass's own regrowth time; the exact ratio is pinned by test, not an
-  eyeballed comment.
+  eyeballed comment. The growth increment is also scaled by
+  `SeasonCycle.growth_modifier` (2026-08-26), same as `TallGrass` — the
+  pinned ratio to `TallGrass.GROWTH_RATE` above stays intact since both
+  scale by the identical seasonal factor.
 - Mature (`growth >= 1.0`) patches spread into an adjacent, currently-empty
   `grassland` cell on a throttled interval (`SPREAD_INTERVAL`,
   `SPREAD_PER_TICK`), identical mechanism to `TallGrass._step_spread` —
@@ -261,27 +264,28 @@ found via `Player._pull_step`'s melee-range sweep, identical shape to
   sequence above). It simply starts hidden and is revealed by `begin_pull`.
 - ✅ Growth + spread simulation (`WildCropPatch`), one instance per chunk
   per crop, wired into `EarthChunkManager.step_wild_crops` on the same
-  refresh cadence as `step_tall_grass`.
-- ✅ `step_wild_crops` is called from `World._step_ecology_batch`, beside
-  `step_tall_grass`. For a long stretch it was not: the step existed, its
-  unit tests called it directly and passed, and nothing in a real session
-  ever invoked it — so wild crops only ever had the maturity
-  `_seed_initial_patches` handed them at chunk creation, spread never fired
-  once, and a cell created at 0.0 by a spread tick could never ripen (the
-  same class of bug as the ownership gate: green subsystem tests that call
-  the step directly, and no caller). The missing line is now guarded by
-  `tests/unit/test_world_simulation_ownership.gd`'s
-  `test_the_ecology_batch_advances_wild_crops_like_every_other_plant_sim`.
+  refresh cadence as `step_tall_grass`, and (bug fixed 2026-08-26/27,
+  independently found and fixed on both this branch and main) that step is
+  now actually called from `scenes/world.gd`'s live per-frame
+  `_step_ecology_batch` alongside `step_tall_grass`, not just from tests/dev
+  console — previously it never was, so a real session's wild crops seeded
+  and rendered but never grew or spread past their initial state (the same
+  class of bug as the ownership gate: green subsystem tests that call the
+  step directly, and no caller). Guarded by
+  `tests/unit/test_world_ecology_batch_wild_crops.gd`.
 - ✅ Senescence, not dieback (see "The season"): `WildCropPatch.advance`
-  takes a `season_growth` multiplier (`SeasonCycle.growth_modifier`) that
-  scales growth AND spread, and `WildCropMarker.season_tint` puts the
-  `SeasonalFoliage` tint on the leaves only, never the pulled root. A
-  mature crop stays pullable in winter on purpose. `step_wild_crops` passes
-  both in now — the modifier read off the world clock once per batched tick,
-  and the tint to `sync_markers` as well as to `spawn_markers`, so a chunk
-  streamed in during winter arrives dead-topped instead of popping in
-  summer-green. Pinned by the `wild_crops_in_season` tests in
-  `test_earth_chunk_manager.gd`.
+  takes a required `growth_modifier` (`SeasonCycle.growth_modifier`)
+  parameter that scales the growth increment only — spread stays on the
+  wall clock, the same choice made for `TallGrass`/`FlowerPatch`/
+  `DesertScrub`/`TundraLichen`'s identical `advance()` shape, so all five
+  patch sims share one consistent convention — and `WildCropMarker.
+  season_tint` puts the `SeasonalFoliage` tint on the leaves only, never the
+  pulled root. A mature crop stays pullable in winter on purpose.
+  `step_wild_crops` passes the modifier in, read off the world clock once
+  per batched tick, and the tint to `sync_markers` as well as to
+  `spawn_markers`, so a chunk streamed in during winter arrives dead-topped
+  instead of popping in summer-green. Pinned by the season-comparison tests
+  in `test_wild_crop_patch.gd`.
 - ✅ Visible per-patch markers (`WildCropMarker`/`WildCropRenderer`),
   spawned/despawned per chunk load same as trees/stones.
 - ✅ Animated pull harvest (`CropPull`), bound to the swing input, dropping

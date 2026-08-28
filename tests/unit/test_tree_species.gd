@@ -131,3 +131,62 @@ func test_an_unknown_species_falls_back_rather_than_crashing():
 	assert_gt(TreeSpecies.display_name_for("dragonfruit").length(), 0)
 	var c: Color = TreeSpecies.canopy_color_for("dragonfruit")
 	assert_gt(c.g, c.r)
+
+
+# -- insect- vs wind-pollination (see docs/concept/flora.md) -----------------
+#
+# The roster already splits exactly along the real botanical line: cherry and
+# apple are real insect(bee)-pollinated orchard fruit, while pine/acorn/
+# hazelnut/walnut are real wind-pollinated species (catkins/cones) that need
+# no pollinator at all. This is what lets a bee visit decide whether it is
+# worth anything to a tree's crop (see FruitingModel.pollination_factor) --
+# a pine getting "visited" would be meaningless, a real pine has no flower a
+# bee could land on.
+
+func test_apple_and_cherry_need_pollinators():
+	assert_true(TreeSpecies.needs_pollinators_for("apple"))
+	assert_true(TreeSpecies.needs_pollinators_for("cherry"))
+
+
+func test_wind_pollinated_species_do_not_need_pollinators():
+	for species in ["pine", "acorn", "hazelnut", "walnut"]:
+		assert_false(
+			TreeSpecies.needs_pollinators_for(species),
+			"%s is wind-pollinated (catkins/cones) and needs no bee" % species
+		)
+
+
+func test_an_unknown_species_does_not_need_pollinators():
+	assert_false(TreeSpecies.needs_pollinators_for("dragonfruit"))
+
+
+# -- nut vs. fleshy fruit (see docs/concept/flora.md's disperser-vs-predator
+# tension, and SquirrelNutCaching): the roster already splits along exactly
+# this line -- pine/acorn/hazelnut/walnut are real hard-shelled tree NUTS a
+# scatter-hoarding rodent cracks and caches, cherry/apple are fleshy fruit
+# a disperser swallows whole. Reuses needs_pollinators_for's exact
+# lookup-table shape rather than deriving from IDS index order, so the two
+# splits can never silently drift out of sync with each other.
+
+func test_real_nuts_are_nuts():
+	for species in ["pine", "acorn", "hazelnut", "walnut"]:
+		assert_true(TreeSpecies.is_nut(species), "%s is a real hard-shelled nut" % species)
+
+
+func test_fleshy_fruit_is_not_a_nut():
+	for species in ["cherry", "apple"]:
+		assert_false(TreeSpecies.is_nut(species), "%s is fleshy fruit, not a nut" % species)
+
+
+func test_an_unknown_species_is_not_a_nut():
+	assert_false(TreeSpecies.is_nut("dragonfruit"))
+
+
+## The nut/fruit split must match the wind-pollinated/insect-pollinated split
+## exactly -- both are the real botanical nut-vs-fruit line through this same
+## roster, so a species that needs no pollinator had better also be a nut.
+func test_nut_split_matches_the_wind_pollinated_split():
+	for species in TreeSpecies.IDS:
+		assert_eq(
+			TreeSpecies.is_nut(species), not TreeSpecies.needs_pollinators_for(species), species
+		)

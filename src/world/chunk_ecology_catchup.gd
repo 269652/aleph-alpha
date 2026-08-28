@@ -18,6 +18,9 @@ const HerbivorePopulationModel = preload("res://src/world/herbivore_population_m
 const PredatorPopulationModel = preload("res://src/world/predator_population_model.gd")
 const AquaticPopulationModel = preload("res://src/world/aquatic_population_model.gd")
 const VegetationGrowthModel = preload("res://src/world/vegetation_growth_model.gd")
+const RobinPopulationModel = preload("res://src/world/robin_population_model.gd")
+const SparrowPopulationModel = preload("res://src/world/sparrow_population_model.gd")
+const KingfisherPopulationModel = preload("res://src/world/kingfisher_population_model.gd")
 
 ## Game seconds that make up one simulated ecological "day" (the model_s unit the
 ## population models integrate in). One in-game hour of unloaded time is one
@@ -38,11 +41,22 @@ var _herbivore_model := HerbivorePopulationModel.new()
 var _predator_model := PredatorPopulationModel.new()
 var _aquatic_model := AquaticPopulationModel.new()
 var _vegetation_model := VegetationGrowthModel.new()
+var _robin_model := RobinPopulationModel.new()
+var _sparrow_model := SparrowPopulationModel.new()
+var _kingfisher_model := KingfisherPopulationModel.new()
 
 
 ## Integrate a chunk's aggregate ecology forward by `elapsed_seconds` in one step.
-## `state`    -> {herbivores, predators, fruit_stock, vegetation, fish, land_health}
-## `capacity` -> {herbivore_capacity, fruit_growth_rate, fish_capacity}
+## `state`    -> {herbivores, predators, fruit_stock, vegetation, fish, land_health,
+##                robins, sparrows, kingfishers}
+## `capacity` -> {herbivore_capacity, fruit_growth_rate, fish_capacity,
+##                robin_capacity, sparrow_capacity}
+## Robin/sparrow capacities are supplied inputs (their food-density signal --
+## worm burrows, ground seed -- lives outside this pure function, the same
+## reason fish_capacity is a supplied input rather than derived here).
+## Kingfisher has no capacity input: like predator deriving its capacity from
+## the freshly-advanced herbivore population, kingfisher capacity is derived
+## from the freshly-advanced fish population below.
 ## Pure: does not mutate `state`; returns a fresh dictionary.
 func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) -> Dictionary:
 	var elapsed := maxf(0.0, elapsed_seconds)
@@ -54,10 +68,15 @@ func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) ->
 	var vegetation: float = state.get("vegetation", 0.0)
 	var fish: float = state.get("fish", 0.0)
 	var land_health: float = state.get("land_health", 1.0)
+	var robins: float = state.get("robins", 0.0)
+	var sparrows: float = state.get("sparrows", 0.0)
+	var kingfishers: float = state.get("kingfishers", 0.0)
 
 	var herbivore_capacity: float = capacity.get("herbivore_capacity", 0.0)
 	var fruit_growth_rate: float = capacity.get("fruit_growth_rate", 0.0)
 	var fish_capacity: float = capacity.get("fish_capacity", 0.0)
+	var robin_capacity: float = capacity.get("robin_capacity", 0.0)
+	var sparrow_capacity: float = capacity.get("sparrow_capacity", 0.0)
 
 	# Vegetation regrows toward 1.0 (exponential approach, monotone, no overshoot).
 	var new_vegetation := 1.0 - (1.0 - vegetation) * exp(-VEGETATION_REGROWTH_PER_DAY * delta_days)
@@ -88,6 +107,18 @@ func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) ->
 	# else in this state -- see docs/concept/fishing.md#unloaded-chunk-catch-up.
 	var new_fish := _aquatic_model.step(fish, fish_capacity, delta_days)
 
+	# Robin/sparrow: same logistic step as fish, against their own
+	# independently-supplied capacity (worm/seed density, not derived from
+	# anything else in this state).
+	var new_robins := _robin_model.step(robins, robin_capacity, delta_days)
+	var new_sparrows := _sparrow_model.step(sparrows, sparrow_capacity, delta_days)
+
+	# Kingfisher: carrying capacity derived from the freshly-advanced fish
+	# population, the same "post-step prey level" ordering predator_capacity
+	# uses above for herbivores.
+	var kingfisher_capacity := _kingfisher_model.carrying_capacity(new_fish)
+	var new_kingfishers := _kingfisher_model.step(kingfishers, kingfisher_capacity, delta_days)
+
 	return {
 		"herbivores": new_herbivores,
 		"predators": new_predators,
@@ -95,4 +126,7 @@ func advance(state: Dictionary, elapsed_seconds: float, capacity: Dictionary) ->
 		"vegetation": new_vegetation,
 		"fish": new_fish,
 		"land_health": new_land_health,
+		"robins": new_robins,
+		"sparrows": new_sparrows,
+		"kingfishers": new_kingfishers,
 	}

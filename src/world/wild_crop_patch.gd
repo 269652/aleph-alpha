@@ -24,7 +24,7 @@ const TallGrass = preload("res://src/world/tall_grass.gd")
 ## rather than left an eyeballed comment (CLAUDE.md).
 const SEED_CHANCE := 0.03
 
-## Hard cap on patches per chunk -- lower than TallGrass.MAX_PATCHES (128),
+## Hard cap on patches per chunk -- lower than TallGrass.MAX_PATCHES (205),
 ## a wild crop population is meant to read as scattered finds, not a field.
 const MAX_PATCHES := 20
 
@@ -102,28 +102,24 @@ func get_growth(cell: Vector2i) -> float:
 
 
 ## Advances growth on every patch and, on a throttled interval, lets mature
-## patches spread into adjacent grassland cells. Mirrors TallGrass.advance.
+## patches spread into adjacent grassland cells. Mirrors TallGrass.advance
+## (and FlowerPatch/DesertScrub/TundraLichen's identical shape), including
+## how `growth_modifier` (see SeasonCycle.growth_modifier) scales only the
+## growth increment, never spread timing -- spread stays on the wall clock
+## across all five patch sims, a deliberate, tested, cross-species
+## consistency (see test_advance_grows_slower_in_winter_than_in_summer_for_
+## the_same_elapsed_time's siblings in each patch type's own test file).
 ##
-## `season_growth` is SeasonCycle.growth_modifier at the current world time --
-## how vigorously anything green grows right now. A root crop does not STOP in
-## winter, it goes dormant: growth_modifier's own floor is 0.2, not 0, which
-## is exactly the "modulates, doesn't gate" rule docs/concept/seasons.md sets
-## out and docs/concept/wild_crops.md's "The season" section applies here. A
-## crop already mature stays mature and stays pullable -- the tops die back,
-## the tuber overwinters underground.
-##
-## Defaults to 1.0 so every caller that has not been taught about the season
-## yet sees precisely the pre-season behaviour (the same convention
-## VegetationGrowthModel.effective_capacity's land_health parameter uses).
-func advance(delta: float, season_growth: float = 1.0) -> void:
-	var effective := delta * clampf(season_growth, 0.0, 1.0)
+## A root crop does not STOP growing in winter, it goes dormant:
+## growth_modifier's own floor is 0.2, not 0, the "modulates, doesn't gate"
+## rule docs/concept/seasons.md sets out. A crop already mature stays mature
+## and stays pullable -- the tops die back, the tuber overwinters
+## underground.
+func advance(delta: float, growth_modifier: float) -> void:
 	for cell in _patches:
-		_patches[cell] = minf(_patches[cell] + effective * GROWTH_RATE, 1.0)
+		_patches[cell] = minf(_patches[cell] + delta * GROWTH_RATE * growth_modifier, 1.0)
 
-	# Spread is on the SAME season clock as growth, not on raw wall time: a
-	# patch colonising new ground through a frozen January is the same
-	# mistake as one ripening through it.
-	_spread_accumulator += effective
+	_spread_accumulator += delta
 	while _spread_accumulator >= SPREAD_INTERVAL:
 		_spread_accumulator -= SPREAD_INTERVAL
 		_spread_tick += 1

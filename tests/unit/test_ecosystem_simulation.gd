@@ -240,6 +240,55 @@ func test_a_birth_in_an_unknown_region_is_harmless():
 	assert_eq(sim.herbivore_population(Vector2i(999, 999)), 0.0)
 
 
+# -- individual deaths feed back into the aggregate ---------------------------
+#
+# record_catch already does this for fish (an individual catch moving the
+# aggregate); record_birth does it for herbivore births. record_death is the
+# missing counterpart for land herbivore/predator mortality: a kill near the
+# player -- predator eating herbivore, or the player's own weapon -- used to
+# never touch EcosystemSimulation at all.
+
+func test_a_death_near_the_player_lowers_the_herbivore_population():
+	var sim = EcosystemSimulation.new()
+	sim.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	sim.seed_populations(Vector2i.ZERO, 1.0, 0.0)
+	sim.record_death(Vector2i.ZERO, false, 0.4)
+	assert_almost_eq(sim.herbivore_population(Vector2i.ZERO), 0.6, 0.001)
+
+
+func test_a_death_near_the_player_lowers_the_predator_population():
+	var sim = EcosystemSimulation.new()
+	sim.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	sim.seed_populations(Vector2i.ZERO, 1.0, 1.0)
+	sim.record_death(Vector2i.ZERO, true, 0.3)
+	assert_almost_eq(sim.predator_population(Vector2i.ZERO), 0.7, 0.001)
+
+
+func test_record_death_does_not_go_negative():
+	var sim = EcosystemSimulation.new()
+	sim.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	sim.seed_populations(Vector2i.ZERO, 1.0, 1.0)
+	sim.record_death(Vector2i.ZERO, false, 100000.0)
+	assert_eq(sim.herbivore_population(Vector2i.ZERO), 0.0)
+
+
+## Defaults count to 1.0, matching a single kill being the common case.
+func test_record_death_defaults_count_to_one():
+	var sim = EcosystemSimulation.new()
+	sim.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
+	sim.seed_populations(Vector2i.ZERO, 1.0, 0.0)
+	sim.record_death(Vector2i.ZERO, false)
+	assert_almost_eq(sim.herbivore_population(Vector2i.ZERO), 0.0, 0.001)
+
+
+## A death in a region that is not loaded is a silent no-op, matching
+## record_catch and record_birth: there is no aggregate there to move.
+func test_a_death_in_an_unknown_region_is_harmless():
+	var sim = EcosystemSimulation.new()
+	sim.record_death(Vector2i(999, 999), false, 1.0)
+	assert_eq(sim.herbivore_population(Vector2i(999, 999)), 0.0)
+
+
 # -- animals spread between neighbouring regions -----------------------------
 #
 # Every chunk used to be a sealed jar: it grew to its own capacity and
@@ -438,7 +487,7 @@ func test_degraded_land_health_measurably_lowers_settled_vegetation_density():
 func test_a_death_lowers_the_regions_population():
 	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
 	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
-	simulation.record_death(Vector2i.ZERO, 0.25)
+	simulation.record_death(Vector2i.ZERO, false, 0.25)
 	assert_almost_eq(simulation.herbivore_population(Vector2i.ZERO), 0.75, 0.001)
 
 
@@ -447,14 +496,14 @@ func test_a_death_lowers_the_regions_population():
 func test_a_region_can_be_emptied_completely():
 	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
 	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
-	simulation.record_death(Vector2i.ZERO, 100000.0)
+	simulation.record_death(Vector2i.ZERO, false, 100000.0)
 	assert_eq(simulation.herbivore_population(Vector2i.ZERO), 0.0)
 
 
 func test_a_population_never_goes_negative():
 	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
 	simulation.seed_populations(Vector2i.ZERO, 0.1, 0.1)
-	simulation.record_death(Vector2i.ZERO, 5.0)
+	simulation.record_death(Vector2i.ZERO, false, 5.0)
 	assert_gte(simulation.herbivore_population(Vector2i.ZERO), 0.0)
 
 
@@ -463,7 +512,7 @@ func test_a_population_never_goes_negative():
 ## that were never added (a marker outliving its region's removal, a test
 ## harness), and none of those may take the simulation down.
 func test_a_death_in_an_unknown_region_is_a_no_op():
-	simulation.record_death(Vector2i(99, 99), 1.0)
+	simulation.record_death(Vector2i(99, 99), false, 1.0)
 	assert_eq(simulation.herbivore_population(Vector2i(99, 99)), 0.0)
 
 
@@ -474,19 +523,178 @@ func test_a_death_in_an_unknown_region_is_a_no_op():
 func test_a_predator_death_lowers_the_predator_population():
 	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
 	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
-	simulation.record_death(Vector2i.ZERO, 0.2, true)
+	simulation.record_death(Vector2i.ZERO, true, 0.2)
 	assert_almost_eq(simulation.predator_population(Vector2i.ZERO), 0.3, 0.001)
 
 
 func test_a_herbivore_death_leaves_the_predator_population_alone():
 	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
 	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
-	simulation.record_death(Vector2i.ZERO, 0.25)
+	simulation.record_death(Vector2i.ZERO, false, 0.25)
 	assert_almost_eq(simulation.predator_population(Vector2i.ZERO), 0.5, 0.001)
 
 
 func test_a_predator_death_leaves_the_herbivore_population_alone():
 	simulation.add_region(Vector2i.ZERO, _make_chunk("grassland", 0.6, 0.6))
 	simulation.seed_populations(Vector2i.ZERO, 1.0, 0.5)
-	simulation.record_death(Vector2i.ZERO, 0.2, true)
+	simulation.record_death(Vector2i.ZERO, true, 0.2)
 	assert_almost_eq(simulation.herbivore_population(Vector2i.ZERO), 1.0, 0.001)
+
+# -- ambient bird populations: food density feedback -------------------------
+#
+# robin/sparrow/kingfisher used to have NO aggregate population at all --
+# eating a worm, a seed, or a fish had zero effect on how many birds existed
+# (see docs/concept/ecosystem_dynamics.md's Open questions). Each gets its
+# own carrying-capacity model matching its own real food source, the same
+# per-chunk-aggregate shape herbivore/predator/fish already use.
+#
+# Unlike herbivore/predator/fish, worm/seed density is NOT chunk-static data
+# EcosystemSimulation derives from the Chunk itself -- it lives in
+# EarthChunkManager's EarthwormPatch/TallGrass/FlowerPatch instances, and is
+# reported in via update_worm_density/update_seed_density. So a freshly
+# add_region-ed region starts robin/sparrow population at 0 (there is no food
+# density to seed an equilibrium from yet), unlike herbivore/predator/fish's
+# immediate-equilibrium seeding. Kingfisher is the one exception: its prey
+# signal is the fish population EcosystemSimulation already seeds internally
+# in add_region, so it CAN start at equilibrium like predator does from
+# herbivores.
+
+func test_add_region_starts_robin_and_sparrow_population_at_zero():
+	# No worm/seed density has been reported yet for a freshly-loaded region.
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	assert_eq(simulation.robin_population(Vector2i(0, 0)), 0.0)
+	assert_eq(simulation.sparrow_population(Vector2i(0, 0)), 0.0)
+
+
+func test_add_region_seeds_kingfisher_population_from_existing_fish_equilibrium():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("ocean", 0.55, 0.5))
+	assert_gt(simulation.kingfisher_population(Vector2i(0, 0)), 0.0)
+
+
+func test_update_worm_density_raises_robin_capacity():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	assert_eq(simulation.robin_capacity_at(Vector2i(0, 0)), 0.0)
+	simulation.update_worm_density(Vector2i(0, 0), 12.0)
+	assert_gt(simulation.robin_capacity_at(Vector2i(0, 0)), 0.0)
+
+
+func test_update_seed_density_raises_sparrow_capacity():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.7, 0.7))
+	assert_eq(simulation.sparrow_capacity_at(Vector2i(0, 0)), 0.0)
+	simulation.update_seed_density(Vector2i(0, 0), 20.0)
+	assert_gt(simulation.sparrow_capacity_at(Vector2i(0, 0)), 0.0)
+
+
+func test_step_grows_robin_population_toward_its_worm_linked_capacity():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	simulation.update_worm_density(Vector2i(0, 0), 12.0)
+	for i in 30:
+		simulation.step(1.0)
+	assert_gt(simulation.robin_population(Vector2i(0, 0)), 0.0)
+	assert_lte(
+		simulation.robin_population(Vector2i(0, 0)), simulation.robin_capacity_at(Vector2i(0, 0)) + 0.001
+	)
+
+
+func test_step_grows_sparrow_population_toward_its_seed_linked_capacity():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.7, 0.7))
+	simulation.update_seed_density(Vector2i(0, 0), 20.0)
+	for i in 30:
+		simulation.step(1.0)
+	assert_gt(simulation.sparrow_population(Vector2i(0, 0)), 0.0)
+	assert_lte(
+		simulation.sparrow_population(Vector2i(0, 0)), simulation.sparrow_capacity_at(Vector2i(0, 0)) + 0.001
+	)
+
+
+## A worm-free chunk (e.g. one that lost its worms, or a biome with none) must
+## NOT sustain a growing robin population -- carrying capacity, not a floor.
+func test_robin_population_declines_toward_zero_without_worms():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("forest", 0.7, 0.7))
+	simulation.update_worm_density(Vector2i(0, 0), 12.0)
+	for i in 30:
+		simulation.step(1.0)
+	simulation.update_worm_density(Vector2i(0, 0), 0.0)
+	for i in 30:
+		simulation.step(1.0)
+	assert_almost_eq(simulation.robin_population(Vector2i(0, 0)), 0.0, 0.01)
+
+
+func test_kingfisher_capacity_at_tracks_the_existing_fish_population():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("ocean", 0.55, 0.5))
+	var low_capacity := simulation.kingfisher_capacity_at(Vector2i(0, 0))
+	simulation.seed_fish_population(Vector2i(0, 0), simulation.fish_capacity_at(Vector2i(0, 0)) * 5.0 + 50.0)
+	assert_gt(simulation.kingfisher_capacity_at(Vector2i(0, 0)), low_capacity)
+
+
+func test_robin_capacity_at_is_zero_for_an_unknown_region():
+	var sim = EcosystemSimulation.new()
+	assert_eq(sim.robin_capacity_at(Vector2i(9, 9)), 0.0)
+
+
+func test_sparrow_capacity_at_is_zero_for_an_unknown_region():
+	var sim = EcosystemSimulation.new()
+	assert_eq(sim.sparrow_capacity_at(Vector2i(9, 9)), 0.0)
+
+
+func test_kingfisher_capacity_at_is_zero_for_an_unknown_region():
+	var sim = EcosystemSimulation.new()
+	assert_eq(sim.kingfisher_capacity_at(Vector2i(9, 9)), 0.0)
+
+
+func test_update_worm_density_on_an_unknown_region_is_a_harmless_no_op():
+	var sim = EcosystemSimulation.new()
+	sim.update_worm_density(Vector2i(9, 9), 5.0)
+	assert_eq(sim.robin_capacity_at(Vector2i(9, 9)), 0.0)
+
+
+func test_remove_region_clears_bird_populations():
+	var coord := Vector2i(4, 4)
+	simulation.add_region(coord, _make_chunk("ocean", 0.55, 0.5))
+	simulation.remove_region(coord)
+	assert_eq(simulation.robin_population(coord), 0.0)
+	assert_eq(simulation.sparrow_population(coord), 0.0)
+	assert_eq(simulation.kingfisher_population(coord), 0.0)
+
+
+## Parity with seed_populations/seed_fish_population: unloaded-chunk catch-up
+## (EarthChunkManager/ChunkEcologyCatchup) needs to override robin/sparrow/
+## kingfisher's own fresh seeding on revisit with the caught-up count, the
+## same override pattern herbivore/predator/fish already use (see docs/concept/
+## ecosystem_dynamics.md's "Persistence/catch-up gap, robin/sparrow/kingfisher").
+
+func test_seed_robin_population_overrides_add_regions_seeding():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.6, 0.6))
+	simulation.seed_robin_population(Vector2i(0, 0), 4.0)
+	assert_almost_eq(simulation.robin_population(Vector2i(0, 0)), 4.0, 0.001)
+
+
+func test_seed_robin_population_on_an_unknown_region_is_a_harmless_no_op():
+	var sim = EcosystemSimulation.new()
+	sim.seed_robin_population(Vector2i(9, 9), 4.0)
+	assert_eq(sim.robin_population(Vector2i(9, 9)), 0.0)
+
+
+func test_seed_sparrow_population_overrides_add_regions_seeding():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("grassland", 0.6, 0.6))
+	simulation.seed_sparrow_population(Vector2i(0, 0), 6.0)
+	assert_almost_eq(simulation.sparrow_population(Vector2i(0, 0)), 6.0, 0.001)
+
+
+func test_seed_sparrow_population_on_an_unknown_region_is_a_harmless_no_op():
+	var sim = EcosystemSimulation.new()
+	sim.seed_sparrow_population(Vector2i(9, 9), 6.0)
+	assert_eq(sim.sparrow_population(Vector2i(9, 9)), 0.0)
+
+
+func test_seed_kingfisher_population_overrides_add_regions_equilibrium():
+	simulation.add_region(Vector2i(0, 0), _make_chunk("ocean", 0.55, 0.5))
+	simulation.seed_kingfisher_population(Vector2i(0, 0), 1.5)
+	assert_almost_eq(simulation.kingfisher_population(Vector2i(0, 0)), 1.5, 0.001)
+
+
+func test_seed_kingfisher_population_on_an_unknown_region_is_a_harmless_no_op():
+	var sim = EcosystemSimulation.new()
+	sim.seed_kingfisher_population(Vector2i(9, 9), 1.5)
+	assert_eq(sim.kingfisher_population(Vector2i(9, 9)), 0.0)
+

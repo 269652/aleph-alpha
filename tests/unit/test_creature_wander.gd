@@ -92,6 +92,37 @@ func test_direction_points_fully_home_once_well_past_the_radius():
 	assert_almost_eq(direction.x, -1.0, 0.01, "should be heading straight home, with no roam left in it")
 
 
+## direction_at takes an optional radius (default WANDER_RADIUS, so every
+## existing caller above is unaffected) -- a juvenile creature passes a
+## smaller one to stay tighter to home (see CreatureMarker/MammalGrowth).
+## Omitting it must reproduce today's exact heading.
+func test_direction_at_default_radius_matches_passing_wander_radius_explicitly():
+	var home := Vector2.ZERO
+	var current := Vector2(50, 0)
+	var without_radius := wander.direction_at(home, current, 0.0, 7)
+	var with_radius := wander.direction_at(home, current, 0.0, 7, CreatureWander.WANDER_RADIUS)
+	assert_eq(without_radius, with_radius)
+
+
+## Property test (not a literal): step_position accumulated over many steps
+## with a SMALLER supplied radius should keep the creature bounded within
+## roughly that smaller radius, not the default WANDER_RADIUS -- proving the
+## radius argument actually changes the containment distance rather than
+## just being accepted and ignored.
+func test_a_smaller_supplied_radius_keeps_step_position_bounded_tighter_to_home():
+	var home := Vector2.ZERO
+	var current := Vector2.ZERO
+	var elapsed := 0.0
+	var small_radius := CreatureWander.WANDER_RADIUS * 0.25
+	for i in 200:
+		current = wander.step_position(home, current, elapsed, 0.5, 7, small_radius)
+		elapsed += 0.5
+	assert_lt(
+		current.distance_to(home), small_radius * 2.0,
+		"a smaller radius should bound wandering to roughly itself, not the default WANDER_RADIUS"
+	)
+
+
 func test_step_position_moves_by_speed_times_delta():
 	var home := Vector2.ZERO
 	var current := Vector2.ZERO

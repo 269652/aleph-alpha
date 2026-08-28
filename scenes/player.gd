@@ -57,6 +57,7 @@ const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
 const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
+const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
@@ -349,6 +350,11 @@ var _tie_anchor = null  # Vector2 once tied, null while led by hand
 ## stays the thing the player controls, which keeps every other system
 ## (inventory, combat, survival) working unchanged while mounted.
 var _mount: Node = null
+## Derives a mounted animal's own speed from its individual fitness (see
+## current_speed/Taming.mounted_speed_for) -- one shared instance since
+## AnimalFitness holds no per-call state, matching MammalCourtship's own
+## `_fitness` static instance.
+var _fitness := AnimalFitness.new()
 var _last_mount_input := false
 var _pending_mount_pressed := false
 var _last_lasso_input := false
@@ -3135,9 +3141,24 @@ func _draw_rope() -> void:
 
 # -- orders and riding --------------------------------------------------------
 
-## How fast the player is moving right now: their own legs, or the mount's.
+## How fast the player is moving right now: their own legs, or the mount's --
+## and the mount's own individual fitness (see Taming.mounted_speed_for),
+## not one flat speed shared by every horse regardless of which one is
+## actually under the saddle.
 func current_speed() -> float:
-	return Taming.MOUNTED_SPEED if is_mounted() else BASE_SPEED
+	return Taming.mounted_speed_for(_mount_fitness_score()) if is_mounted() else BASE_SPEED
+
+
+## The current mount's fitness_score (see AnimalFitness), read from its own
+## wander_seed so the exact same individual always rides at the exact same
+## speed. Falls back to the population median (0.5, i.e. the flat
+## Taming.MOUNTED_SPEED baseline) if somehow mounted on something with no
+## wander_seed of its own -- current_speed() is called every physics frame
+## and must never fail outright over a missing field on an unusual mount.
+func _mount_fitness_score() -> float:
+	if _mount == null or not ("wander_seed" in _mount):
+		return 0.5
+	return _fitness.fitness_score(_fitness.phenotype_for(_mount.wander_seed))
 
 
 func is_mounted() -> bool:

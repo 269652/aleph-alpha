@@ -29,7 +29,20 @@ const Taming = preload("res://src/gameplay/taming.gd")
 
 ## Bumped if the record layout changes, so an old save is ignored rather than
 ## read as garbage.
-const FORMAT_VERSION := 1
+##
+## Bumped to 2 to add `wander_seed`: a tamed horse's individuality
+## (AnimalFitness's strength/agility/coat_vibrancy phenotype, all
+## deterministic from this one seed) used to be discarded on every reload --
+## `_restore_kept_animals` respawned it via `spawn_single`, which always
+## rolled a fresh `randi()` seed, silently re-rolling the exact animal this
+## file's own doc comment says is "not interchangeable" the moment anything
+## (taming, rendering) ever reads that phenotype. A save from before this
+## field existed is simply dropped, matching this file's own convention for a
+## small, bounded set of animals -- unlike chunk_serializer.gd's
+## append-and-read-to-end-of-file approach, which exists because losing a
+## whole region's ecology continuity is a much bigger loss than a player's
+## handful of kept animals needing to be re-tamed once after an update.
+const FORMAT_VERSION := 2
 
 
 ## Whether this animal is one the player would expect to still be there.
@@ -60,6 +73,7 @@ static func save_all(animals: Array, path: String) -> void:
 		var tied_to: Vector2 = animal.get("tied_to", Vector2.ZERO)
 		file.store_float(tied_to.x)
 		file.store_float(tied_to.y)
+		file.store_32(int(animal.get("wander_seed", 0)))
 	file.close()
 
 
@@ -84,6 +98,7 @@ static func load_all(path: String) -> Array:
 		var is_tied := file.get_8() != 0
 		var tied_x := file.get_float()
 		var tied_y := file.get_float()
+		var wander_seed := file.get_32()
 		out.append({
 			"species": species,
 			"position": Vector2(x, y),
@@ -91,6 +106,7 @@ static func load_all(path: String) -> Array:
 			"order": order,
 			"is_tied": is_tied,
 			"tied_to": Vector2(tied_x, tied_y),
+			"wander_seed": wander_seed,
 		})
 	file.close()
 	return out

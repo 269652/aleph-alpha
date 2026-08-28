@@ -178,9 +178,10 @@ meadow never does this. In a hard frost, no worms are up and no robin lands.
 
 ### Consumption is live, end to end
 
-`DesertScrub` and `TundraLichen` shipped as fully-tested sims that nothing in
-live gameplay ever calls (see `progress.md`). This mechanic is deliberately
-wired the whole way: chunk load creates the population, `World._process` steps
+`DesertScrub` and `TundraLichen` are now both stepped live from `World._process`
+(`_chunk_manager.step_desert_scrub`/`step_tundra_lichen`, see `progress.md`).
+This mechanic is likewise deliberately wired the whole way: chunk load creates
+the population, `World._process` steps
 it under the same server/singleplayer authority gate as every other ecology
 step, a spawned robin is given the real chunk manager as its worm world, and a
 successful peck calls the real `take_worm_at`, which removes the real worm and
@@ -244,8 +245,177 @@ watched the bird peck at them.
 - ⬜ Fruit as a diet entry for robins (waits on fruit trees).
 - ⬜ Worm population dynamics / bird carrying capacity from worm density.
 - ⬜ Persistence and catch-up integration of eaten burrows (deliberate, above).
-- ⬜ Other soil fauna (insect larvae, snails) — the table and the patch-sim
-  contract both extend to them, nothing else is needed structurally.
+- ✅ Ants (mound population + myrmecochory, both grassland grass-seed AND
+  forest/rainforest windfall fruit/nut foraging) — `src/world/ant_colony.gd`
+  / `EarthChunkManager.step_ants`, see "Ants: myrmecochory" below. This
+  closes the placement half of the "other soil fauna" item above, AND the
+  "forest/rainforest mound has nothing to harvest" gap this doc used to name
+  (fixed 2026-08-26, see "Windfall foraging" in that section). The rest of
+  the original item (a rendered presence, and ants as prey or as
+  non-windfall detritivores) is still open, see that section's own scope
+  note.
+- ⬜ Insect larvae, snails, and any other soil fauna beyond ants — the table
+  and the patch-sim contract extend to them the same way ants did, nothing
+  else is needed structurally, but nothing has built one yet.
+
+
+## Ants: myrmecochory
+
+Ants close the placement half of the "other soil fauna" gap named above: a
+second soil-invertebrate population, built on the exact same per-chunk
+patch-sim contract as the earthworm burrows this doc already specifies. What
+they add mechanically is **myrmecochory** — ant-mediated seed dispersal — the
+shortest-range member of the seed-carrier family this game already has
+(`SeedDispersal`'s grazer coat-carry, `SeedEndozoochory`'s bird gut-passage
+flight, `SeedCaching`'s rodent scatter-hoard, and now this).
+
+### Real-world grounding
+
+- **Ant colonies are permanent, sited populations, exactly like earthworm
+  burrows.** A colony excavates a mound and works the ground around it for
+  as long as it survives — it is not a transient spawn. So a chunk gets a
+  fixed, deterministic set of **mounds** at construction, the same shape as
+  earthworm burrows, rather than spawning and despawning individual ants.
+- **A mound represents a whole colony, not one animal.** Unlike an earthworm
+  burrow (one worm) or a bird (one animal), one mound stands in for an
+  entire colony ranging out from a single entrance. That is why this pass
+  gives ants no individual `CreatureMarker` the way the mouse has one: an
+  ant colony is a background population effect on the ground itself, driven
+  centrally by the chunk manager, not something that needs (or would even
+  read as) an individually-pathed sprite.
+- **Ant nest density is real, and typically denser than earthworm burrow
+  density in the same soil** — a temperate hectare commonly carries many
+  dozens of nests across several species, a higher areal density than a
+  worm population usually reaches. `AntColony.MOUND_CHANCE` sits above
+  `EarthwormPatch.SEED_CHANCE` for exactly this reason (pinned as an
+  ordering, not eyeballed — see `test_mounds_are_denser_than_earthworm_burrows`).
+- **Myrmecochory moves a seed the shortest distance of any disperser in
+  nature.** A worker ant carries an elaiosome-bearing seed on foot to the
+  nest to feed the fatty appendage to larvae, then discards the seed itself
+  nearby — a real-world distance of centimetres to a couple of metres. That
+  is shorter than a scatter-hoarding rodent's cheek-pouch range, which is
+  itself shorter than a bird's gut-passage flight or a grazer's coat-carried
+  wander. `AntColony`'s carry constants are the shortest of the whole family
+  for exactly this reason (see the ordering below).
+- **Ants forage close to the mound, not across a whole territory.** A
+  worker's practical foraging radius from the entrance is a small fraction
+  of the range a mouse works its whole home range for scatter-hoarding, so
+  `AntColony.FORAGE_RADIUS_TILES` is shorter than `SeedCaching.PICKUP_RADIUS_TILES`.
+- **Ants live in far more habitats than earthworms do** (leafcutter and army
+  ants are a defining feature of rainforest, for instance), so mounds are
+  seeded across the same soil-bearing biomes as earthworms
+  (grassland/forest/rainforest) rather than grassland alone. `TallGrass`, the
+  only source of ground SEED in this game, only grows on grassland, so a
+  forest/rainforest mound cannot forage grass seed — but it now has a second,
+  real forage target instead of sitting idle (see "Windfall foraging" below).
+- **A single forager ant cannot carry off an intact fallen nut or dried
+  fruit the way a squirrel or bird can.** Real ants interacting with fallen
+  fruit/nut debris are documented almost entirely as scavengers/decomposers
+  — stripping and consuming soft pulp and residue in place — not as
+  dispersers of the hard propagule itself. True myrmecochory in nature is
+  specific to small, elaiosome-bearing seeds (the ground-seed case above);
+  a fallen tree nut is a genuinely different, far more consumption-dominant
+  case for this disperser. `AntColony.WINDFALL_CONSUMED_CHANCE` is pinned
+  ABOVE both `SquirrelNutCaching.NUT_CONSUMED_CHANCE` (0.7) and
+  `SeedEndozoochory.GRANIVORY_CONSUMED_CHANCE` (0.8) for exactly this reason
+  — ants are the least effective disperser of a large propagule of any
+  forager in this game — while still leaving a real, nonzero minority chance
+  of a genuine cache (never 1.0).
+
+### Mechanism spec
+
+**Per-chunk ant colony population** — `src/world/ant_colony.gd`. Shaped
+exactly like `EarthwormPatch` (pure `RefCounted`, `_init(seed_value, width,
+height, biome)`, `PixelNoise`-seeded — never Godot's string `hash` — hard
+`MAX_MOUNDS` cap, `advance(delta)`) rather than sharing a base class with it,
+for the same "three similar things beats a premature abstraction" reason
+`DesertScrub` gives. What is genuinely minimal by comparison: a mound has no
+`EarthwormPatch`-style surfacing value to animate, because it is not
+rendered and not itself consumed this pass (see scope below) — the only
+per-tick state is a discrete step counter, which the foraging roll and the
+carry placement below are sampled against.
+
+**The foraging roll.** Each call to `advance(delta)` increments the
+colony's step counter; each mound independently rolls a small
+`FORAGE_CHANCE` per step (`AntColony.should_forage`), seeded via
+`PixelNoise` off the mound's own cell and the current step — never `hash`,
+which correlates neighbouring inputs instead of spreading them, the
+clustering bug this project keeps re-finding. `EarthChunkManager.step_ants`
+drives this centrally, the same shape `step_worms` drives burrows: for every
+loaded chunk's colony, advance it, and for every mound whose roll succeeds
+this step, look for the nearest fallen grass seed within
+`FORAGE_RADIUS_TILES` (reusing `grass_seeds_near`/`take_grass_seed_at`, the
+same ground-seed API the mouse's own scatter-hoarding already uses — no
+duplicate seed-tracking layer). If one is there, it is taken and cached a
+short carry away (`AntColony.carry_distance_tiles`/`carry_direction`, both
+derived from a per-(mound, step) `carrier_seed_for` so a reloaded chunk at
+the same step caches identically) via `plant_grass_at` — the same sink the
+mouse's own cached seed lands in.
+
+**Carry range, in order.** Pinned by test, mirroring how `SeedCaching`
+itself is pinned below `SeedDispersal`/`SeedEndozoochory`:
+
+1. `SeedDispersal` (grazer epizoochory, coat-carried): 3.0 – 14.0 tiles.
+2. `SeedEndozoochory` (bird gut-passage, carried in flight): 10 – 40 tiles.
+3. `SeedCaching` (mouse scatter-hoard, carried on foot): 1.0 – 6.0 tiles.
+4. `AntColony` (this): 0.15 – 0.9 tiles — shorter than even `SeedCaching`'s
+   own minimum, the shortest-range disperser of the whole family.
+
+There is no individual ant walking that distance over time the way the
+mouse's carried state does: a mound is a background population effect, not
+a pathfinding creature, so the harvest and the cache resolve in the same
+step (`EarthChunkManager._forage_seed_near_mound`).
+
+**Windfall foraging (forest/rainforest).** `EarthChunkManager.step_ants`
+branches on the MOUND's own biome (a chunk can straddle a boundary, so
+different mounds in one colony can take different branches): a grassland
+mound forages grass seed exactly as above; a forest/rainforest mound instead
+calls `_forage_windfall_near_mound`, which looks within the same
+`FORAGE_RADIUS_TILES` for a fallen, named-species fruit/nut ground item via
+`fruit_near`/`take_fruit_at` — the identical ground-item API
+`SquirrelNutCaching` already reads — filtered to real NUTS
+(`TreeSpecies.is_nut`) exactly like `SquirrelNutCaching`'s own gate. A fallen
+fleshy fruit (cherry/apple) is left alone: a single forager ant cannot
+meaningfully interact with an intact fleshy fruit the way a bird or squirrel
+does, so that stays on the ordinary generic fruit-eating path. Once a nut is
+taken, the outcome resolves through `AntColony.windfall_is_consumed`
+(seeded off its own `windfall_carrier_seed_for`, salted independently of
+both the foraging roll and the grass-seed carrier roll so the three draws
+never correlate): most of the time it is consumed outright on the spot — a
+colony processing pulp/residue, not carrying off an intact propagule, see
+`WINDFALL_CONSUMED_CHANCE`'s own real-world grounding above — and only
+rarely does it survive to be cached, in which case it is carried the same
+short `carry_distance_tiles`/`carry_direction` as a grass seed and planted
+via `try_plant_seed_at`, the same tree-seed sink robin/squirrel dispersal
+already use. This is what actually closes the "forest/rainforest mound has
+nothing to harvest" gap named above — a real, tested, live-wired mechanism,
+not just a placement fact.
+
+### What is explicitly NOT in this pass
+
+- **No rendered ant or mound sprite.** Mounds are a pure simulation effect
+  this pass — real, and driving the world (a seed genuinely disappears and
+  a new grass patch genuinely appears), but nothing draws them. The
+  earthworm/robin pair went through exactly this same "logic first, sprite
+  later" split; ants stop at the logic half for now.
+- **Ants are not bird prey.** `FlyerDiet` is not extended with an insect
+  food type here — a real robin or sparrow eating ants at a mound would be
+  a genuine, well-grounded follow-on (the same insectivore mechanism this
+  doc's earthworm half already specifies), but it is a separate piece of
+  work, deliberately left for later.
+- **Ants are not detritivores of CARRION.** `fly_colony.gd`'s corpse/rot
+  decomposer loop is untouched; ants scavenging carrion or competing with
+  flies over a carcass is real and common but out of scope here. Windfall
+  foraging above is a separate, narrower thing — a fallen fruit/nut ground
+  item via the existing tree-fruit API, not the corpse/rot system.
+- **No ant population dynamics.** Mound count is fixed and deterministic
+  per chunk, exactly like earthworm burrow count; colonies do not grow,
+  split, or die out from how much they forage.
+- **Not persisted, not catch-up integrated**, for the identical reason
+  `EarthwormPatch`'s own burrows are not (see that section's Scope choices
+  above): a reloaded chunk re-seeds its mounds deterministically, and a
+  short-timescale, self-renewing local effect does not need
+  `ChunkEcologyCatchup` fidelity.
 
 
 ## Crawling out, and back down

@@ -7,6 +7,9 @@ const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
+const MammalGrowth = preload("res://src/gameplay/mammal_growth.gd")
+const AnimalReproduction = preload("res://src/gameplay/animal_reproduction.gd")
+const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
@@ -256,6 +259,54 @@ func test_two_markers_with_different_seeds_move_differently():
 
 func test_is_added_to_the_creature_group_on_ready():
 	assert_true(marker.is_in_group(CreatureMarker.GROUP_NAME))
+
+
+# -- coat-quality tell (pets.md: judge a wild individual before taming it) ---
+
+## Real prize/show animals are visibly judged by coat quality before anyone
+## commits to keeping them -- coat_tint_for is the pure, deterministic curve
+## behind that tell (see AnimalFitness.coat_vibrancy).
+func test_coat_tint_leaves_an_ordinary_coat_unmodified():
+	assert_eq(CreatureMarker.coat_tint_for(0.0), Color(1.0, 1.0, 1.0))
+
+
+## Clearly noticeable at the high end -- a truly vibrant individual must
+## visibly stand out, not just be a hair brighter.
+func test_coat_tint_is_clearly_brighter_at_maximum_vibrancy():
+	var tint: Color = CreatureMarker.coat_tint_for(1.0)
+	assert_gt(tint.r, 1.15, "a maximally vibrant individual must visibly stand out")
+
+
+## Never rises the wrong way -- there is no vibrancy value where a MORE
+## vibrant individual reads as duller.
+func test_coat_tint_is_monotonic_in_vibrancy():
+	var previous := -1.0
+	for step in 11:
+		var tint: Color = CreatureMarker.coat_tint_for(float(step) / 10.0)
+		assert_gte(tint.r, previous - 0.0001, "coat tint must not dim as vibrancy rises")
+		previous = tint.r
+
+
+## Subtle at the low end, clearly noticeable at the high end -- an ordinary
+## individual should look ordinary rather than off/desaturated, so the SAME
+## step in vibrancy must move the tint far more near the top of the range
+## than near the bottom.
+func test_coat_tint_grows_faster_near_the_top_of_the_range_than_the_bottom():
+	var low_step := CreatureMarker.coat_tint_for(0.5).r - CreatureMarker.coat_tint_for(0.0).r
+	var high_step := CreatureMarker.coat_tint_for(1.0).r - CreatureMarker.coat_tint_for(0.5).r
+	assert_gt(
+		high_step, low_step,
+		"the same-sized step in vibrancy must read as more noticeable near the top"
+	)
+
+
+## Wiring: a creature's own modulate is set from ITS OWN coat_vibrancy (see
+## AnimalFitness.phenotype_for(wander_seed)) as soon as it's ready, not left
+## at the Sprite2D default -- so a player sizing up a wild individual before
+## taming it actually sees this tell.
+func test_a_creatures_modulate_reflects_its_own_coat_vibrancy_on_ready():
+	var vibrancy: float = AnimalFitness.new().phenotype_for(marker.wander_seed)["coat_vibrancy"]
+	assert_eq(marker.modulate, CreatureMarker.coat_tint_for(vibrancy))
 
 
 func test_take_damage_reduces_info_health():
@@ -534,6 +585,47 @@ func test_a_non_lethal_hit_drops_no_loot():
 func test_take_damage_does_not_free_the_marker_while_still_alive():
 	marker.take_damage(1.0)
 	assert_false(marker.is_queued_for_deletion())
+
+
+## A world that records every reported death (the real EarthChunkManager
+## forwards it into EcosystemSimulation.record_death -- see
+## EarthChunkManager.record_death_at).
+class StubWorldRecordingDeaths:
+	extends StubWorld
+	var death_positions: Array = []
+	var death_is_predator: Array = []
+	func record_death_at(at: Vector2, is_predator: bool) -> void:
+		death_positions.append(at)
+		death_is_predator.append(is_predator)
+
+
+## A kill is FINALIZED here (take_damage is where both predator-eats-
+## herbivore kills and player weapon kills land) -- so this is where the
+## aggregate population has to hear about it, or a kill in front of the
+## player would vanish the moment the chunk unloads (see
+## EarthChunkManager.record_death_at / EcosystemSimulation.record_death).
+func test_a_lethal_hit_reports_the_death_to_the_world():
+	var world := StubWorldRecordingDeaths.new()
+	marker.setup(world, TILE_SIZE)
+	marker.take_damage(marker.info.max_health)
+	assert_eq(world.death_positions.size(), 1)
+	assert_eq(world.death_positions[0], marker.position)
+	assert_eq(world.death_is_predator[0], marker.info.is_predator)
+
+
+func test_a_non_lethal_hit_does_not_report_a_death():
+	var world := StubWorldRecordingDeaths.new()
+	marker.setup(world, TILE_SIZE)
+	marker.take_damage(1.0)
+	assert_eq(world.death_positions.size(), 0)
+
+
+## Without a world (see setup()'s own doc comment -- AI falls back to wander
+## without one), take_damage must still free the marker on death instead of
+## crashing on a null _world.
+func test_a_lethal_hit_without_a_world_still_frees_the_marker():
+	marker.take_damage(marker.info.max_health)
+	assert_true(marker.is_queued_for_deletion())
 
 
 func test_apply_knockback_does_not_teleport_instantly():
@@ -1582,11 +1674,12 @@ func test_animation_step_uses_illustrated_walk_frames_for_a_species_with_real_ar
 	assert_eq(marker._animation_frames["walk"].size(), IllustratedAnimalSprite.new().generate_textures("horse", "walk").size())
 
 
-## A species with no registered art (e.g. predator) must keep using the
-## procedural generator exactly as before -- switching horse/deer/boar to
-## real art must not silently break, or change the look of, everything else.
+## A species with no registered art (e.g. lynx) must keep using the
+## procedural generator exactly as before -- switching horse/deer/boar/wolf
+## to real art must not silently break, or change the look of, everything
+## else.
 func test_animation_step_still_uses_procedural_frames_for_a_species_without_real_art():
-	marker.info = CreatureInfo.new("predator")
+	marker.info = CreatureInfo.new("lynx")
 	marker._current_action = "walk"
 	marker._is_moving = true
 	marker._animation_step()
@@ -1767,7 +1860,7 @@ func test_the_submersion_waterline_is_released_once_it_leaves_the_water():
 ## A procedural species' swim frames already have the water baked into the
 ## pixels, so adding the shader on top would tint them twice.
 func test_a_procedural_species_does_not_also_get_the_submersion_shader():
-	marker.info = CreatureInfo.new("predator")
+	marker.info = CreatureInfo.new("lynx")
 	marker._current_action = "swim"
 	marker._is_moving = true
 
@@ -2606,3 +2699,137 @@ func test_a_creature_does_not_walk_onto_terrain_steeper_than_the_hard_threshold(
 		marker._process(1.0 / 60.0)
 
 	assert_lt(marker.position.distance_to(start), 2.0, "should never cross onto impassable terrain")
+
+
+# -- mammal offspring growth (see src/gameplay/mammal_growth.gd) -------------
+#
+# A mammal offspring born in front of the player (World._resolve_courtship)
+# starts small and grows into its species' own adult size over real time,
+# the land-mammal counterpart to AmbientFlyerMarker's pollinator-hatchling
+# growth (LifeCycle).
+
+## A marker the world seeds a chunk with (not one just born) starts already
+## grown -- mirrors AmbientFlyerMarker's own `age_seconds` default exactly:
+## the world is not full of newborns.
+func test_a_freshly_built_marker_defaults_to_already_mature():
+	assert_true(MammalGrowth.is_mature(marker.age_seconds, marker.info.species))
+
+
+## begin_life() is what separates an offspring actually BORN in front of the
+## player from the population a chunk is populated with -- captures whatever
+## scale CreatureRenderer._build_marker already set as this individual's own
+## full-grown size, then shrinks it to a newborn's.
+func test_begin_life_starts_a_newborn_at_age_zero_and_shrinks_its_scale():
+	marker.info = CreatureInfo.new("lynx")
+	marker._current_action = "walk"
+	marker._is_moving = true
+	marker._animation_step()  # establishes this species' own normal adult scale
+	var adult_scale := marker.scale
+
+	marker.begin_life()
+
+	assert_almost_eq(marker.age_seconds, 0.0, 0.0001)
+	assert_almost_eq(
+		marker.scale.x, adult_scale.x * MammalGrowth.NEWBORN_SCALE, 0.001,
+		"a newborn should render at its own species' adult size times the newborn fraction"
+	)
+
+
+## The rendered scale keeps tracking growth for as long as the individual is
+## immature, and converges back to the species' ordinary adult scale once it
+## is fully grown -- exercised through _step_growing + _animation_step
+## directly (the same two calls _process makes every frame), mirroring
+## AmbientFlyerMarker's own _step_growing test shape.
+func test_a_growing_juveniles_rendered_scale_increases_toward_the_adult_scale():
+	marker.info = CreatureInfo.new("lynx")
+	marker._current_action = "walk"
+	marker._is_moving = true
+	marker._animation_step()
+	var adult_scale := marker.scale
+
+	marker.begin_life()
+	var newborn_scale := marker.scale
+	var lynx_mature_seconds := MammalGrowth.mature_seconds_for("lynx")
+
+	marker._step_growing(lynx_mature_seconds * 0.5)
+	marker._animation_step()
+	var halfway_scale := marker.scale
+	assert_gt(halfway_scale.x, newborn_scale.x, "should have grown some by the halfway point")
+	assert_lt(halfway_scale.x, adult_scale.x, "should not be fully grown yet")
+
+	marker._step_growing(lynx_mature_seconds)
+	marker._animation_step()
+	assert_almost_eq(
+		marker.scale.x, adult_scale.x, 0.001,
+		"fully grown should converge back to the species' own normal adult scale"
+	)
+
+
+## An immature individual cannot enter courtship -- can_reproduce() is the
+## precondition World._pair_up_courtships/_find_courtship_partner both gate
+## on, so gating it here structurally excludes a newborn from pairing off
+## the moment it is born, regardless of every OTHER gate being satisfied.
+func test_can_reproduce_is_false_for_an_immature_individual_even_when_every_other_gate_is_met():
+	marker.info = CreatureInfo.new("herbivore")
+	marker.energy = 1.0
+	marker._seconds_since_birth = AnimalReproduction.REPRO_COOLDOWN * 2.0
+	marker.begin_life()  # age_seconds = 0.0: not mature yet
+
+	assert_false(
+		marker.can_reproduce(),
+		"a newborn must not be eligible to court just because energy/health/cooldown all pass"
+	)
+
+
+## The control case for the test above: an otherwise-identical MATURE
+## individual (the default -- see test_a_freshly_built_marker_defaults_to_
+## already_mature) with every other gate met is still eligible, so the new
+## maturity gate is additive, not a regression on the existing gates.
+func test_can_reproduce_is_true_for_a_mature_individual_meeting_every_other_gate():
+	marker.info = CreatureInfo.new("herbivore")
+	marker.energy = 1.0
+	marker._seconds_since_birth = AnimalReproduction.REPRO_COOLDOWN * 2.0
+
+	assert_true(marker.can_reproduce())
+
+
+# -- juvenile behaviour: stays near home, never fights (see MammalGrowth /
+# CreatureWander.direction_at's radius parameter / CreatureBehavior's
+# is_mature gate) -------------------------------------------------------
+#
+# A juvenile behaves exactly like an adult except it cannot court -- until
+# now. It should also (1) roam a tighter, home-anchored range that widens as
+# it grows, and (2) never fight even when its species is aggressive-
+# tempered and it is cornered by a weak threat.
+
+## Property test: a freshly-born juvenile (NEWBORN_SCALE fraction of the
+## adult wander radius) stays bounded to roughly THAT smaller radius over
+## many real _process steps -- not the full adult CreatureWander.WANDER_RADIUS
+## the pre-existing test_stays_within_a_bounded_range_of_home_over_many_steps
+## already covers for an adult marker.
+func test_a_growing_juvenile_wanders_tighter_to_its_home_than_an_adult():
+	marker.begin_life()  # newborn: age_seconds = 0.0
+
+	for i in 100:
+		marker._process(0.5)  # 50s elapsed: negligible growth against any real-day-scale maturation tier
+
+	var newborn_radius := CreatureWander.WANDER_RADIUS * MammalGrowth.NEWBORN_SCALE
+	assert_lt(
+		marker.position.distance_to(marker.home), newborn_radius * 2.0,
+		"a newborn should stay bounded to its own smaller radius, not the adult WANDER_RADIUS"
+	)
+
+
+## Cornered by a weak threat, an immature individual of an AGGRESSIVE species
+## must flee, never attack -- mirrors test_strong_aggressive_predator_attacks_
+## a_nearby_player exactly except begin_life() makes it immature, and the
+## assertion flips: no damage dealt, fleeing instead.
+func test_an_immature_predator_flees_instead_of_attacking_even_when_cornered():
+	var predator := _make_predator(Vector2(100, 100))
+	predator.begin_life()  # newborn: immature, cannot fight regardless of temperament/health
+	var player := _add_stub_player(Vector2(108, 100))  # within attack range if mature
+
+	predator._process(0.2)
+
+	assert_eq(player.damage_taken, 0.0, "an immature predator must never attack, even cornered")
+	assert_lt(predator.position.x, 100.0, "it should flee instead")
