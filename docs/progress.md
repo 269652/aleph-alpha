@@ -3117,7 +3117,7 @@ chunks away from the player). See the concept doc for the full spec.
 ### Planets (`concept/planets.md`)
 
 - **Multi-system / multi-galaxy structure** (huge) — ⬜ Not started
-- **Earth as shared starting planet** (medium) — ✅ Done — player spawns in Berlin at real lat/long on the real-Earth world.
+- **Earth as shared starting planet** (medium) — ✅ Done — player spawns at real lat/long on the real-Earth world: Freiburg im Breisgau's Dreisam-side Gaskugel landmark as of 2026-08-29 (`World.SPAWN_LATITUDE`/`SPAWN_LONGITUDE`, `test_world_spawn_location.gd`), Berlin before that. The many test files hardcoding Berlin's literal 52.52/13.405 directly (`test_earth_chunk_manager.gd` and others) use it as a fixed, known-good reference chunk for generic mechanics, deliberately independent of wherever this constant currently points — they did not change and do not need to.
 - **Space exploration unlock (era gate)** (medium) — ⬜ Not started
 - **Spacecraft construction** (large) — ⬜ Not started
 - **Interplanetary travel** (huge) — ⬜ Not started

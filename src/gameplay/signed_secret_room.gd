@@ -17,10 +17,11 @@ extends RefCounted
 ## coordinate cameo in this project (RushAmbientCue/AncientTerminal) -- never
 ## named or hinted at in-game, the same "quiet, factual pick, never shown to
 ## the player" register those modules' own doc comments already set.
-## Deliberately far from this game's own Berlin spawn point (World.
-## SPAWN_LATITUDE/SPAWN_LONGITUDE) -- reaching it at all takes real travel,
-## on top of the sequence below, which is the "genuinely hard-to-reach"
-## the doc asks for.
+## Deliberately far from this game's own spawn point (World.SPAWN_LATITUDE/
+## SPAWN_LONGITUDE -- Freiburg im Breisgau as of 2026-08-29, Berlin before
+## that; Sunnyvale is a different continent from either) -- reaching it at
+## all takes real travel, on top of the sequence below, which is the
+## "genuinely hard-to-reach" the doc asks for.
 ##
 ## The "obscure action sequence": stash, then lasso, then fish, then mount,
 ## each a real, existing interaction verb (scenes/player.gd's own input
