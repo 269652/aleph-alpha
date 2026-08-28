@@ -212,6 +212,29 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 12}, {"item_id": "plank", "count": 4}],
 		"output": {"item_id": "storage", "count": 1},
 	},
+	# "Any animal, the right tool" (see docs/concept/taming.md's own section
+	# by that name): the lasso only ever fit the Roped capture class. These
+	# four recipes cover the rest of the body-plan matrix -- one tool per
+	# capture class that had no tool of its own yet.
+	"snare": {
+		"inputs": [{"item_id": "plant_fibre", "count": 4}, {"item_id": "stick", "count": 1}],
+		"output": {"item_id": "snare", "count": 1},
+	},
+	"butterfly_net": {
+		"inputs": [{"item_id": "stick", "count": 1}, {"item_id": "plant_fibre", "count": 3}],
+		"output": {"item_id": "butterfly_net", "count": 1},
+	},
+	"trap": {
+		"inputs": [{"item_id": "stick", "count": 2}, {"item_id": "rock", "count": 3}],
+		"output": {"item_id": "trap", "count": 1},
+	},
+	# "Magically reinforced steel ropes" for boss-scale creatures: a real
+	# upgrade of the lasso (consumes a finished one) plus iron for the
+	# strength a lindwurm-sized animal actually needs.
+	"reinforced_rope": {
+		"inputs": [{"item_id": "lasso", "count": 1}, {"item_id": "iron_ingot", "count": 4}],
+		"output": {"item_id": "reinforced_rope", "count": 1},
+	},
 }
 
 

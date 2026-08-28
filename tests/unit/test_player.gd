@@ -21,6 +21,9 @@ const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
 const Keybindings = preload("res://src/gameplay/keybindings.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
+const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
+const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
 
 const TILE_SIZE := TerrainRenderer.TILE_SIZE
 
@@ -1060,7 +1063,7 @@ func _hold_lasso() -> void:
 func test_throwing_the_lasso_catches_a_horse_within_reach():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(Player.LASSO_RANGE * 0.5, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	assert_true(horse.is_restrained(), "a horse within reach should be caught")
 
 
@@ -1069,7 +1072,7 @@ func test_throwing_the_lasso_catches_a_horse_within_reach():
 func test_a_horse_out_of_reach_is_not_caught():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(Player.LASSO_RANGE * 2.0, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	assert_false(horse.is_restrained())
 
 
@@ -1077,22 +1080,39 @@ func test_the_throw_takes_the_nearest_animal():
 	_hold_lasso()
 	var far := _horse_at(Vector2(Player.LASSO_RANGE * 0.9, 0))
 	var near := _horse_at(Vector2(Player.LASSO_RANGE * 0.2, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	assert_true(near.is_restrained())
 	assert_false(far.is_restrained(), "the rope only goes round one neck")
 
 
-## Predators are not tameable with a rope and a carrot, so the throw must not
-## even land on one.
-func test_the_lasso_does_not_catch_a_predator():
+## Predators now join the Roped class (see docs/concept/taming.md's "Any
+## animal, the right tool"): a lynx has a neck exactly like a horse does, so
+## the SAME lasso is the right tool -- what changes is how hard it fights
+## the rope once caught, tested at the taming.gd/creature_marker level, not
+## whether the throw lands here at all.
+func test_the_lasso_now_catches_a_predator_too():
 	_hold_lasso()
 	var lynx := CreatureMarker.new()
 	lynx.info = CreatureInfo.new("lynx", 1)
 	add_child_autofree(lynx)
 	lynx.setup(chunk_manager, TILE_SIZE)
 	lynx.position = player.position + Vector2(8, 0)
-	player._throw_lasso()
-	assert_false(lynx.is_restrained())
+	player._throw_capture_tool()
+	assert_true(lynx.is_restrained(), "a lynx has a neck like a horse does")
+
+
+## World-boss-scale species stay excluded regardless of tool -- see
+## docs/concept/taming.md's "Boss-scale creatures get their tool now;
+## actually holding one stays a follow-up."
+func test_the_lasso_never_catches_a_world_boss_species():
+	_hold_lasso()
+	var boss := CreatureMarker.new()
+	boss.info = CreatureInfo.new("krampus", 1)
+	add_child_autofree(boss)
+	boss.setup(chunk_manager, TILE_SIZE)
+	boss.position = player.position + Vector2(8, 0)
+	player._throw_capture_tool()
+	assert_false(boss.is_restrained())
 
 
 ## Leading is nothing more than an anchor that walks with the player: the
@@ -1104,7 +1124,7 @@ func test_a_led_horse_is_towed_along_behind_the_player():
 	# horse would usually fight the rope off partway through (which is its
 	# right, and is tested elsewhere) and leave this test asserting nothing.
 	horse.info.health = horse.info.max_health * 0.05
-	player._throw_lasso()
+	player._throw_capture_tool()
 	assert_true(horse.is_restrained(), "precondition: the throw landed")
 	for step in 400:
 		player.position = Vector2(float(step) * 0.6, 0)
@@ -1122,7 +1142,7 @@ func test_a_led_horse_is_towed_along_behind_the_player():
 func test_feeding_a_full_horse_costs_no_carrots():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	player.inventory.add(_item_catalog.make("carrot"), 3)
 	horse._needs.hunger = 0.0
 	player._lasso_step(1.0 / 60.0)
@@ -1133,12 +1153,201 @@ func test_feeding_a_full_horse_costs_no_carrots():
 func test_feeding_a_hungry_horse_spends_a_carrot_and_earns_trust():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
-	player._throw_lasso()
+	player._throw_capture_tool()
 	player.inventory.add(_item_catalog.make("carrot"), 3)
 	horse._needs.hunger = 1.0
 	player._lasso_step(1.0 / 60.0)
 	assert_eq(player.inventory.count_of("carrot"), 2, "one carrot, one meal")
 	assert_gt(horse.trust, 0.0)
+
+
+# -- capture tools: snare/trap/net (see docs/concept/taming.md's "Any
+# animal, the right tool") ----------------------------------------------------
+
+func _hold_tool(item_id: String) -> void:
+	player.equipped_item = _item_catalog.make(item_id)
+
+
+func _creature_at(species: String, offset: Vector2) -> CreatureMarker:
+	var marker := CreatureMarker.new()
+	marker.info = CreatureInfo.new(species, 1)
+	marker.wander_seed = 9
+	add_child_autofree(marker)
+	marker.setup(chunk_manager, TILE_SIZE)
+	marker.position = player.position + offset
+	return marker
+
+
+func _flyer_at(species: String, offset: Vector2) -> AmbientFlyerMarker:
+	var flyer := AmbientFlyerMarker.new()
+	flyer.species = species
+	add_child_autofree(flyer)
+	flyer.position = player.position + offset
+	return flyer
+
+
+func test_held_capture_tool_id_reports_whichever_of_the_five_tools_is_equipped():
+	_hold_tool("snare")
+	assert_eq(player._held_capture_tool_id(), "snare")
+
+
+func test_held_capture_tool_id_is_empty_for_a_non_capture_item():
+	player.equipped_item = _item_catalog.make("iron_sword")
+	assert_eq(player._held_capture_tool_id(), "")
+
+
+func test_held_capture_tool_id_is_empty_with_bare_hands():
+	player.equipped_item = null
+	assert_eq(player._held_capture_tool_id(), "")
+
+
+## A snare, not a lasso, is the right tool for a legless body.
+func test_a_snare_catches_a_snake_the_lasso_cannot():
+	_hold_tool("lasso")
+	var snake := _creature_at("nonvenomous_snake", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_false(snake.is_restrained(), "the lasso is the wrong tool for a legless body")
+
+	_hold_tool("snare")
+	player._throw_capture_tool()
+	assert_true(snake.is_restrained())
+
+
+## A trap, not a lasso, is the right tool at-or-below a mouse's own
+## world_scale (a rope loop has a real minimum practical diameter).
+func test_a_trap_catches_a_mouse_the_lasso_cannot():
+	_hold_tool("lasso")
+	var mouse := _creature_at("mouse", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_false(mouse.is_restrained(), "the lasso is the wrong tool for something mouse-sized")
+
+	_hold_tool("trap")
+	player._throw_capture_tool()
+	assert_true(mouse.is_restrained())
+
+
+## A snare offered to a horse does nothing -- "using the wrong tool on a
+## creature simply does nothing" (taming.md), not a new failure state.
+func test_a_snare_does_not_catch_a_horse():
+	_hold_tool("snare")
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_false(horse.is_restrained())
+
+
+# -- capture tools: the net (instant, no struggle) ----------------------------
+
+## Netting resolves instantly and removes the flyer from the world.
+func test_netting_a_butterfly_without_menagerie_removes_it_and_grants_a_curiosity():
+	_hold_tool("butterfly_net")
+	var monarch := _flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_true(monarch.is_queued_for_deletion(), "a landed net throw removes the flyer")
+	assert_eq(player.inventory.count_of("jarred_insect"), 1)
+
+
+func test_netting_a_bird_without_menagerie_grants_a_caged_songbird_instead():
+	_hold_tool("butterfly_net")
+	var sparrow := _flyer_at("sparrow", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player.inventory.count_of("caged_songbird"), 1)
+	assert_eq(player.inventory.count_of("jarred_insect"), 0)
+
+
+func test_a_flyer_out_of_net_range_is_left_alone():
+	_hold_tool("butterfly_net")
+	var monarch := _flyer_at("monarch", Vector2(Player.LASSO_RANGE * 2.0, 0))
+	player._throw_capture_tool()
+	assert_true(is_instance_valid(monarch))
+	assert_eq(player.inventory.count_of("jarred_insect"), 0)
+
+
+## Beastmaster's `menagerie` keystone turns a netted flyer into a real
+## bonded companion instead of a curiosity item (see taming.md's Kinship
+## path). Allocated directly on the web -- see this lane's own HANDOFF note
+## on why menagerie is not (yet) read through unlocked_keystones alone.
+func test_netting_a_flyer_with_menagerie_bonds_a_companion_instead_of_a_curiosity():
+	player.allocated_nodes["menagerie"] = true
+	_hold_tool("butterfly_net")
+	var monarch := _flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player.inventory.count_of("jarred_insect"), 0, "no curiosity item once bonded")
+	assert_eq(player.bonded_companions.size(), 1)
+	assert_eq(player.bonded_companions[0].get("species"), "monarch")
+
+
+## The unlocked_keystones shape (land_sense/berserkers_fury/etc.) is honored
+## too, in case menagerie ever moves fully into that mechanism.
+func test_netting_a_flyer_with_menagerie_via_unlocked_keystones_also_bonds():
+	player.unlocked_keystones["menagerie"] = true
+	_hold_tool("butterfly_net")
+	_flyer_at("robin", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player.bonded_companions.size(), 1)
+
+
+func test_bonded_companions_are_capped():
+	player.allocated_nodes["menagerie"] = true
+	for i in Player.BONDED_COMPANION_CAP:
+		_hold_tool("butterfly_net")
+		_flyer_at("bee", Vector2(8, 0))
+		player._throw_capture_tool()
+	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
+
+	# One more, past the cap: falls back to the ordinary curiosity outcome
+	# instead of silently discarding the catch.
+	_flyer_at("bee", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player.bonded_companions.size(), Player.BONDED_COMPANION_CAP)
+	assert_eq(player.inventory.count_of("jarred_insect"), 1)
+
+
+func test_bonding_a_companion_spawns_its_live_marker():
+	player.allocated_nodes["menagerie"] = true
+	_hold_tool("butterfly_net")
+	_flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	assert_eq(player._bonded_markers.size(), 1)
+	assert_true(player._bonded_markers[0] is BondedCompanionMarker)
+	assert_eq(player._bonded_markers[0].species, "monarch")
+
+
+## Bonded companions survive a save/load round trip via to_save_dict /
+## apply_save_dict, the same as every other piece of persisted player state.
+func test_bonded_companions_persist_across_a_save_and_load_round_trip():
+	player.allocated_nodes["menagerie"] = true
+	_hold_tool("butterfly_net")
+	_flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	var saved := player.to_save_dict()
+
+	player.apply_save_dict(saved)
+
+	assert_eq(player.bonded_companions.size(), 1)
+	assert_eq(player.bonded_companions[0].get("species"), "monarch")
+	assert_eq(player._bonded_markers.size(), 1, "a live marker should be respawned on load")
+
+
+# -- HUD: the capture-result message (see docs/concept/taming.md) ------------
+
+func test_lasso_message_reads_a_curiosity_result_after_netting():
+	_hold_tool("butterfly_net")
+	_flyer_at("monarch", Vector2(8, 0))
+	player._throw_capture_tool()
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(player.lasso_message, "Caught! Kept as a curiosity.")
+
+
+func test_lasso_message_prompts_for_a_flyer_with_the_net_held_and_nothing_caught_yet():
+	_hold_tool("butterfly_net")
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(player.lasso_message, "Net ready — press the lasso key near a flyer.")
+
+
+func test_lasso_message_names_whichever_tool_is_held():
+	_hold_tool("snare")
+	player._lasso_step(1.0 / 60.0)
+	assert_eq(player.lasso_message, "Snare ready — press the lasso key near an animal.")
 
 
 # -- orders and riding (see docs/concept/taming.md) --------------------------

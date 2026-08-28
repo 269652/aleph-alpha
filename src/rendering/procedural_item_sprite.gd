@@ -141,6 +141,18 @@ const _ITEM_LOOKS := {
 	"ledger": {"color": Color(0.22, 0.34, 0.24), "shape": "armor"},
 	"field_journal": {"color": Color(0.5, 0.3, 0.16), "shape": "armor"},
 	"charter": {"color": Color(0.4, 0.3, 0.62), "shape": "armor"},
+	# "Any animal, the right tool" (see docs/concept/taming.md's own section
+	# by that name): the lasso only ever fit the Roped capture class. Each
+	# of these gets its own shape (not just a recolor) so a capture tool's
+	# silhouette in the hotbar tells you which class it's for.
+	"snare": {"color": Color(0.62, 0.55, 0.35), "shape": "snare"},
+	"butterfly_net": {"color": Color(0.85, 0.85, 0.8), "shape": "net"},
+	"trap": {"color": Color(0.35, 0.38, 0.42), "shape": "trap_box"},
+	"reinforced_rope": {"color": Color(0.68, 0.6, 0.5), "shape": "reinforced_rope"},
+	# Netting curiosities (see docs/concept/pets.md's "Birds, butterflies,
+	# bees" bullet): a kept flyer before menagerie is unlocked.
+	"jarred_insect": {"color": Color(0.75, 0.85, 0.85), "shape": "jar"},
+	"caged_songbird": {"color": Color(0.25, 0.22, 0.2), "shape": "cage"},
 }
 const _FALLBACK := {"color": Color(0.6, 0.6, 0.6), "shape": "round"}
 
@@ -196,6 +208,18 @@ func generate_image(item_id: String) -> Image:
 			_draw_campfire(image)
 		"furnace":
 			_draw_furnace(image, base)
+		"snare":
+			_draw_snare(image, base)
+		"net":
+			_draw_net(image, base)
+		"trap_box":
+			_draw_trap(image, base)
+		"reinforced_rope":
+			_draw_reinforced_rope(image, base)
+		"jar":
+			_draw_jar(image, base)
+		"cage":
+			_draw_cage(image, base)
 		_:
 			_draw_blob(image, base, 0.36, 0.36)
 
@@ -347,6 +371,134 @@ func _draw_axe(image: Image, base: Color) -> void:
 				continue
 			var edge := float(dx) / maxf(float(width), 1.0)
 			image.set_pixel(x, y, _shade(base, edge, -0.2))
+
+
+# -- "any animal, the right tool" capture gear (see docs/concept/taming.md's
+# -- "Any animal, the right tool" section) -----------------------------------
+
+## A thin outlined ring (unfilled ellipse) -- the shared "loop of X" motif
+## behind both the snare's cord loop and the butterfly net's hoop, so the
+## two read as kin (both are a loop on a handle) rather than two separately-
+## invented techniques.
+func _draw_ring(image: Image, base: Color, center: Vector2, rx: float, ry: float, thickness_frac: float) -> void:
+	var inner := 1.0 - thickness_frac
+	for y in SIZE:
+		for x in SIZE:
+			var dx := (x + 0.5 - center.x) / rx
+			var dy := (y + 0.5 - center.y) / ry
+			var d := dx * dx + dy * dy
+			if d > 1.0 or d < inner * inner:
+				continue
+			image.set_pixel(x, y, _shade(base, 0.3, dy))
+
+
+## A filled ellipse of a flat color, no shading -- for small accent details
+## (the insect inside its jar, the bird inside its cage) sitting on top of a
+## shape already drawn by something else.
+func _draw_filled_ellipse(image: Image, color: Color, center: Vector2, rx: float, ry: float) -> void:
+	for y in SIZE:
+		for x in SIZE:
+			var dx := (x + 0.5 - center.x) / rx
+			var dy := (y + 0.5 - center.y) / ry
+			if dx * dx + dy * dy <= 1.0:
+				image.set_pixel(x, y, color)
+
+
+## A snare: a loop of cord staked to the ground by a short peg -- the tool
+## for `AnimalAnatomy.SERPENT_SPECIES` (legless, non-boss).
+func _draw_snare(image: Image, base: Color) -> void:
+	_draw_ring(image, base, Vector2(SIZE / 2.0, SIZE * 0.42), SIZE * 0.3, SIZE * 0.22, 0.25)
+	var peg := base.darkened(0.55)
+	var peg_x := SIZE / 2
+	for y in range(int(SIZE * 0.6), SIZE - 1):
+		image.set_pixel(peg_x, y, peg)
+		image.set_pixel(peg_x + 1, y, peg)
+
+
+const NET_HANDLE_COLOR := Color(0.45, 0.32, 0.18)
+
+
+## A butterfly net: a hoop on a stick -- the tool for the ambient-flyer
+## roster (butterflies, bee, sparrow, robin), which live entirely outside
+## `AnimalAnatomy.SPECIES`.
+func _draw_net(image: Image, base: Color) -> void:
+	_draw_ring(image, base, Vector2(SIZE / 2.0, SIZE * 0.32), SIZE * 0.26, SIZE * 0.26, 0.2)
+	var handle_x := SIZE / 2
+	for y in range(int(SIZE * 0.5), SIZE - 1):
+		image.set_pixel(handle_x, y, NET_HANDLE_COLOR)
+
+
+## A small metal-cornered box -- the tool for anything legged at-or-below
+## mouse's own `world_scale`. Reuses the existing shaded-plate technique for
+## the box body, plus darker corner brackets so it reads as a metal-
+## reinforced trap rather than the plain armor-plate silhouette.
+func _draw_trap(image: Image, base: Color) -> void:
+	var x0 := 5
+	var x1 := SIZE - 5
+	var y0 := 10
+	var y1 := SIZE - 4
+	_draw_plate(image, base, x0, y0, x1, y1)
+	var bracket := base.darkened(0.7)
+	for corner in [Vector2i(x0, y0), Vector2i(x1 - 3, y0), Vector2i(x0, y1 - 3), Vector2i(x1 - 3, y1 - 3)]:
+		for dy in range(3):
+			for dx in range(3):
+				image.set_pixel(corner.x + dx, corner.y + dy, bracket)
+
+
+const REINFORCED_ROPE_CORE := Color(0.55, 0.58, 0.62)
+
+
+## A lasso-like coil with a visible metal-grey core running through it, so
+## the "magically reinforced steel ropes" upgrade reads as a lasso PLUS
+## metal rather than a wholesale new shape -- the tool for
+## `WORLD_BOSS_SPECIES`.
+func _draw_reinforced_rope(image: Image, base: Color) -> void:
+	_draw_blob(image, base, 0.42, 0.30)
+	var cy := int(SIZE / 2.0)
+	var half_width := SIZE * 0.42
+	for x in SIZE:
+		if absf(x + 0.5 - SIZE / 2.0) < half_width:
+			image.set_pixel(x, cy, REINFORCED_ROPE_CORE)
+			image.set_pixel(x, cy + 1, REINFORCED_ROPE_CORE)
+
+
+const JAR_NECK_INSET := 4
+const JARRED_INSECT_BLUR := Color(0.75, 0.85, 0.3)
+
+
+## A glass jar with a small coloured blur inside -- the kept-curiosity read
+## for netting a flyer before the `menagerie` keystone is unlocked (see
+## docs/concept/pets.md's "Birds, butterflies, bees" bullet).
+func _draw_jar(image: Image, base: Color) -> void:
+	_draw_plate(image, base, 6, 8, SIZE - 6, SIZE - 3)
+	var neck := base.darkened(OUTLINE_DARKEN)
+	for y in range(3, 8):
+		for x in range(SIZE / 2 - JAR_NECK_INSET, SIZE / 2 + JAR_NECK_INSET):
+			image.set_pixel(x, y, neck)
+	_draw_filled_ellipse(image, JARRED_INSECT_BLUR, Vector2(SIZE / 2.0, SIZE * 0.65), SIZE * 0.14, SIZE * 0.1)
+
+
+const CAGED_SONGBIRD_COLOR := Color(0.85, 0.55, 0.2)
+
+
+## A small birdcage silhouette: vertical wire bars between a domed top and a
+## base ring, with the caged bird glimpsed as a colored blur between the
+## bars -- the other kept-curiosity read alongside the jar.
+func _draw_cage(image: Image, base: Color) -> void:
+	var top_y := 4
+	var bottom_y := SIZE - 4
+	var left_x := 6
+	var right_x := SIZE - 6
+	for x in range(left_x, right_x + 1):
+		image.set_pixel(x, top_y, base)
+		image.set_pixel(x, bottom_y, base)
+	var bar_count := 5
+	for i in range(bar_count):
+		var x := left_x + int(float(i) / float(bar_count - 1) * float(right_x - left_x))
+		for y in range(top_y, bottom_y + 1):
+			image.set_pixel(x, y, base)
+	_draw_filled_ellipse(image, CAGED_SONGBIRD_COLOR, Vector2(SIZE / 2.0, SIZE * 0.55), SIZE * 0.12, SIZE * 0.1)
+
 
 
 ## Base color shaded by radial distance (outline near the rim) and vertical

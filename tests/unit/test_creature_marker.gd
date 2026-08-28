@@ -6,6 +6,7 @@ const CreatureInfo = preload("res://src/world/creature_info.gd")
 const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
@@ -1978,11 +1979,82 @@ func test_feeding_a_hungry_animal_enough_times_tames_it():
 	assert_between(feeds, 4, 8)
 
 
-## A predator is not tameable with a rope and a carrot.
-func test_a_predator_shrugs_off_the_rope():
+## A predator has a neck exactly like a horse does, so it now joins the
+## Roped class like everything else with legs and a neck (see docs/concept/
+## taming.md's "Any animal, the right tool") -- what changes is how hard it
+## fights the rope, not whether a lasso is the right tool at all.
+func test_a_predator_can_now_be_restrained_with_a_lasso():
 	var lynx := _catchable("lynx")
-	lynx.restrain_to(Vector2.ZERO)
-	assert_false(lynx.is_restrained(), "a lynx does not become a pet")
+	assert_true(
+		lynx.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO),
+		"a lynx has a neck like a horse does; the lasso is now the right tool"
+	)
+	assert_true(lynx.is_restrained())
+
+
+## World-boss-scale species stay excluded regardless of tool -- the
+## reinforced rope is real and craftable, but actually resolving a capture
+## against something with its own aggro/promotion state is a documented
+## open question (worldbosses.md), not one this pass answers.
+func test_a_world_boss_species_is_never_restrained_even_with_the_reinforced_rope():
+	var boss := _catchable("krampus")
+	assert_false(
+		boss.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.REINFORCED_ROPE),
+		"a world-boss-scale species stays excluded from taming regardless of tool"
+	)
+	assert_false(boss.is_restrained())
+
+
+## The tool has to match the body plan -- a mouse offered a lasso must not
+## be caught by it (a rope loop has a real minimum practical diameter, see
+## taming.md's real-world grounding), even though the SAME mouse offered a
+## trap can be.
+func test_restrain_to_refuses_a_tool_that_does_not_fit_the_body_plan():
+	var mouse := _catchable("mouse")
+	assert_false(
+		mouse.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO),
+		"a mouse needs a trap, not a lasso"
+	)
+	assert_false(mouse.is_restrained())
+
+
+func test_restrain_to_accepts_the_tool_that_fits_the_body_plan():
+	var mouse := _catchable("mouse")
+	assert_true(mouse.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.TRAP))
+	assert_true(mouse.is_restrained())
+
+
+## A snare, not a lasso, is the right tool for a legless body (see
+## AnimalAnatomy.SERPENT_SPECIES / taming.md's real-world grounding on why a
+## rope loop is the wrong shape for a snake).
+func test_a_serpent_needs_a_snare_not_a_lasso():
+	var snake := _catchable("nonvenomous_snake")
+	assert_false(snake.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO))
+	assert_true(snake.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.SNARE))
+
+
+## restrain_to stores the handler's affinity for every subsequent struggle
+## roll (see Taming.break_free_chance) rather than dropping it on the floor.
+func test_restrain_to_stores_the_handlers_affinity_for_the_struggle_roll():
+	var horse := _catchable("horse")
+	horse.restrain_to(Vector2.ZERO, false, 7.5, CaptureTool.LASSO)
+	assert_eq(horse._capture_affinity, 7.5)
+
+
+## _step_restraint must actually pass is_predator AND affinity into
+## Taming.break_free_chance -- mirrors the exact same formula the
+## production code uses (same wander_seed/struggle-count hash), so this
+## fails the moment the call site regresses to the old condition-only form,
+## regardless of which seed happens to be in use.
+func test_step_restraint_consults_the_predator_and_affinity_aware_break_free_chance():
+	var wolf := _catchable("wolf")
+	wolf.info.health = wolf.info.max_health
+	wolf.restrain_to(Vector2.ZERO, false, 0.0, CaptureTool.LASSO)
+	var roll := float(absi(hash("%d_%d_struggle" % [wolf.wander_seed, 1])) % 10000) / 10000.0
+	var expected_chance := Taming.break_free_chance(1.0, true, 0.0)
+	var expected_still_held := roll >= expected_chance
+	wolf._step_restraint(CreatureMarker.STRUGGLE_INTERVAL)
+	assert_eq(wolf.is_restrained(), expected_still_held)
 
 
 # -- what the player can read off a caught animal ----------------------------

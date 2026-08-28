@@ -361,3 +361,59 @@ func test_wayfinding_and_citizenship_items_each_have_a_distinct_color():
 		var color := ProceduralItemSprite.color_for(item_id)
 		assert_false(seen.has(color), "%s reuses another item's exact color: %s" % [item_id, color])
 		seen[color] = item_id
+
+
+# -- "any animal, the right tool" gear (see docs/concept/taming.md's --------
+# -- "Any animal, the right tool" section) -----------------------------------
+#
+## Four new capture tools, one per capture class that had no tool of its own
+## yet (Roped already had the lasso): a snare (a loop of cord with a peg), a
+## butterfly net (a hoop on a stick), a trap (a small metal-cornered box),
+## and a reinforced rope (a lasso-like coil with a visible metal core).
+
+const CAPTURE_TOOL_ITEM_IDS := ["snare", "butterfly_net", "trap", "reinforced_rope"]
+const NETTING_CURIOSITY_ITEM_IDS := ["jarred_insect", "caged_songbird"]
+
+
+func test_capture_tools_have_distinct_non_fallback_art():
+	var fallback: PackedByteArray = generator.generate_image("definitely_unknown_capture_tool").get_data()
+	for item_id in CAPTURE_TOOL_ITEM_IDS:
+		assert_ne(generator.generate_image(item_id).get_data(), fallback, "%s needs its own art" % item_id)
+
+
+## Each of the 4 gets its own color, distinct from every other capture tool
+## AND from the existing lasso -- so a reinforced rope never renders as an
+## indistinguishable re-skin of the plain lasso sitting next to it.
+func test_capture_tools_each_have_a_distinct_color_including_from_the_lasso():
+	var seen := {"lasso": ProceduralItemSprite.color_for("lasso")}
+	for item_id in CAPTURE_TOOL_ITEM_IDS:
+		var color := ProceduralItemSprite.color_for(item_id)
+		for other_id in seen:
+			assert_ne(color, seen[other_id], "%s reuses %s's exact color" % [item_id, other_id])
+		seen[item_id] = color
+
+
+## Reinforced rope is specced as "a lasso-like coil but with a visible
+## metal-grey core/sheen distinguishing it from the plain lasso" -- it must
+## actually render differently from a plain lasso, not just carry a
+## different id with identical art.
+func test_reinforced_rope_looks_different_from_the_plain_lasso():
+	var rope := generator.generate_image("reinforced_rope")
+	var lasso := generator.generate_image("lasso")
+	assert_ne(rope.get_data(), lasso.get_data(), "a reinforced rope should not render identically to a plain lasso")
+
+
+## The netting curiosity items (see docs/concept/pets.md's "Birds,
+## butterflies, bees" bullet) -- a jar with a coloured blur inside, and a
+## small birdcage silhouette. Harvested materials, only ever obtained by
+## netting a flyer without menagerie unlocked.
+func test_netting_curiosity_items_have_distinct_non_fallback_art():
+	var fallback: PackedByteArray = generator.generate_image("definitely_unknown_curiosity").get_data()
+	for item_id in NETTING_CURIOSITY_ITEM_IDS:
+		assert_ne(generator.generate_image(item_id).get_data(), fallback, "%s needs its own art" % item_id)
+
+
+func test_netting_curiosity_items_look_different_from_each_other():
+	var jar := generator.generate_image("jarred_insect")
+	var cage := generator.generate_image("caged_songbird")
+	assert_ne(jar.get_data(), cage.get_data())

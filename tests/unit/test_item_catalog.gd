@@ -407,3 +407,36 @@ func test_clearing_the_registry_makes_its_ids_unknown_again():
 	catalog.use_crafted_registry(registry)
 	catalog.use_crafted_registry(null)
 	assert_false(catalog.has(id))
+
+
+# -- "any animal, the right tool" gear (see docs/concept/taming.md's ---------
+# -- "Any animal, the right tool" section) -----------------------------------
+#
+## Four new capture tools, one per capture class that didn't already have a
+## tool (Roped already had the lasso): Snared (snare), Netted (butterfly
+## net), Trapped (trap), Boss-scale (reinforced rope). Plus two curiosity
+## materials only obtainable by netting a flyer without menagerie unlocked.
+
+const CAPTURE_TOOL_ITEM_IDS := ["snare", "butterfly_net", "trap", "reinforced_rope"]
+const NETTING_CURIOSITY_ITEM_IDS := ["jarred_insect", "caged_songbird"]
+
+
+func test_catalog_knows_the_new_capture_tools():
+	for item_id in CAPTURE_TOOL_ITEM_IDS:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+		assert_eq(catalog.make(item_id).kind, "tool", item_id)
+
+
+## Held in hand like the lasso -- max_stack 1, not a stackable material.
+func test_new_capture_tools_do_not_stack():
+	for item_id in CAPTURE_TOOL_ITEM_IDS:
+		assert_eq(catalog.make(item_id).max_stack, 1, item_id)
+
+
+## Netting curiosities are harvested materials, the same shape as any other
+## item that only ever enters the inventory through a world interaction --
+## never crafted at a bench.
+func test_catalog_knows_the_netting_curiosity_items():
+	for item_id in NETTING_CURIOSITY_ITEM_IDS:
+		assert_true(catalog.has(item_id), "missing %s" % item_id)
+		assert_eq(catalog.make(item_id).kind, "material", item_id)

@@ -49,6 +49,10 @@ const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
+const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
+const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
+const BondedCompanionMarker = preload("res://src/rendering/bonded_companion_marker.gd")
 const ProceduralItemSprite = preload("res://src/rendering/procedural_item_sprite.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
@@ -77,6 +81,21 @@ const LASSO_RANGE := 72.0
 const FEED_RANGE := 28.0
 const TIE_RANGE := 40.0
 const TAMING_TREAT_ID := "carrot"
+## Every item id that is a capture tool (see docs/concept/taming.md's "Any
+## animal, the right tool") -- what `_held_capture_tool_id` checks
+## `equipped_item.id` against, generalized from the single hardcoded "lasso"
+## string check this used to be.
+const CAPTURE_TOOL_IDS := {
+	CaptureTool.LASSO: true,
+	CaptureTool.SNARE: true,
+	CaptureTool.NET: true,
+	CaptureTool.TRAP: true,
+	CaptureTool.REINFORCED_ROPE: true,
+}
+## How far a bonded companion loosely trails the player, spread around them
+## rather than stacking on one point. Reuses TIE_RANGE rather than inventing
+## a second "how far a kept creature sits from the player" number.
+const BONDED_COMPANION_TRAIL_RADIUS := TIE_RANGE
 ## How big one world tile should read on screen once camera-zoomed, in
 ## pixels -- the actual tuned/eyeballed value (CLAUDE.md: tuned constants
 ## must be pinned, not eyeballed comments). CAMERA_ZOOM below is DERIVED
@@ -230,6 +249,13 @@ var wallet := Wallet.new()
 ## How many number-key hotbar slots exist. World derives its HUD row's slot
 ## count from this (see World.HOTBAR_SLOT_COUNT), so the two can't drift.
 const HOTBAR_SLOT_COUNT := 5
+## How many bonded companions (see the taming Kinship path) a player may keep
+## at once. Derived from the hotbar's own slot count -- a real existing
+## anchor for "how many small extra things can the player keep readily at
+## hand" -- rather than an invented number. Explicitly a placeholder pending
+## real playtesting (same honesty convention Taming.PREDATOR_BREAK_FREE_
+## MULTIPLIER's own doc comment uses for a derived-but-unplaytested figure).
+const BONDED_COMPANION_CAP := HOTBAR_SLOT_COUNT
 ## Which item id sits on each hotbar key (see Hotbar). Explicitly assignable
 ## by dragging an item onto a slot, with empty slots auto-filled from the
 ## inventory -- so an item buried past the first few stacks can still be put
@@ -309,6 +335,25 @@ var _pending_mount_pressed := false
 var _last_lasso_input := false
 var _pending_lasso_pressed := false
 var lasso_message := ""
+## A net's catch resolves instantly (see _capture_flyer), so its result --
+## "Bonded with the sparrow." / "Caught! Kept as a curiosity." -- has to
+## OUTLIVE the same-frame call to _update_lasso_message that would otherwise
+## immediately overwrite it back to "Net ready...". Same
+## result-message-plus-timer shape _fishing_result_message/
+## _fishing_result_timer already use for exactly this reason.
+var _capture_result_message := ""
+var _capture_result_timer := 0.0
+## Bonded companions (see docs/concept/taming.md's "A bond, not an order:
+## the Kinship path" and pets.md's "Birds, butterflies, bees: decorative"):
+## a netted flyer kept as a real companion once `menagerie` is unlocked,
+## rather than a one-off curiosity item. Persisted as plain {species} dicts
+## on the player -- deliberately NOT a KeptAnimals-scale subsystem, which is
+## explicitly out of scope for this pass.
+var bonded_companions: Array[Dictionary] = []
+## Live BondedCompanionMarker nodes mirroring bonded_companions 1:1, rebuilt
+## from it after a load. Never itself persisted -- position/wander_seed are
+## runtime-only, the same split _lassoed/_tie_anchor keep from `trust`.
+var _bonded_markers: Array = []
 
 var _last_fish_input := false
 var _pending_fish_pressed := false
@@ -319,6 +364,10 @@ var _fishing_result_timer := 0.0
 var fishing_message := ""
 ## How long a caught/missed message lingers on the HUD.
 const FISH_MESSAGE_DURATION := 2.5
+## How long a net's catch result shows (see _capture_result_message).
+## Reuses FISH_MESSAGE_DURATION rather than inventing a second "how long a
+## result banner shows" number -- both are "a one-shot catch result banner".
+const CAPTURE_RESULT_MESSAGE_DURATION := FISH_MESSAGE_DURATION
 ## Fish granted per catch, scaled by the rolled rarity (see FishingMinigame).
 const FISH_REWARD_BY_RARITY := {"common": 1, "uncommon": 1, "rare": 2, "legendary": 3}
 ## Which catalog item a catch's rarity becomes -- rare/legendary get their own
@@ -833,6 +882,10 @@ func to_save_dict() -> Dictionary:
 		# id -> structure is normalized, and the entry's id is the foreign key.
 		"crafted_items": crafted_items.to_dicts(),
 		"hotbar": hotbar_data,
+		# Bonded companions (docs/concept/taming.md's Kinship path): plain
+		# {species} dicts, not the live BondedCompanionMarker nodes -- see
+		# apply_save_dict, which respawns a marker per entry on load.
+		"bonded_companions": bonded_companions.duplicate(true),
 	}
 
 
@@ -901,6 +954,19 @@ func apply_save_dict(data: Dictionary) -> void:
 	var hotbar_data: Array = data.get("hotbar", [])
 	for i in range(hotbar_data.size()):
 		hotbar.assign(i, hotbar_data[i])
+
+	# Bonded companions (docs/concept/taming.md's Kinship path): re-spawn one
+	# live BondedCompanionMarker per saved entry. Any markers from BEFORE
+	# this load (there should be none on a freshly-spawned player, but this
+	# guards a re-applied save the same way the equipment/inventory resets
+	# above do) are cleared first so a load never doubles them up.
+	for marker in _bonded_markers:
+		if is_instance_valid(marker):
+			marker.queue_free()
+	_bonded_markers.clear()
+	bonded_companions.assign(data.get("bonded_companions", []))
+	for entry in bonded_companions:
+		_spawn_bonded_marker(entry)
 
 	inventory_changed.emit()
 
@@ -2287,13 +2353,13 @@ func _lasso_step(delta: float) -> void:
 	var just_pressed := pressed and not _last_lasso_input
 	_last_lasso_input = pressed
 
-	if just_pressed and _holding_lasso():
+	if just_pressed and _held_capture_tool_id() != "":
 		if _lassoed == null and _nearest_tamed(LASSO_RANGE) != null:
 			# Already tamed: the rope has nothing left to do, so the key means
 			# "change your mind about what you're doing" instead.
 			_cycle_order()
 		elif _lassoed == null:
-			_throw_lasso()
+			_throw_capture_tool()
 		elif _tie_anchor != null:
 			_tie_anchor = null
 		else:
@@ -2304,10 +2370,12 @@ func _lasso_step(delta: float) -> void:
 				_lassoed.release()
 				_lassoed = null
 
+	_capture_result_timer = maxf(0.0, _capture_result_timer - delta)
 	_hold_the_rope(delta)
 	_draw_rope()
 	_mount_input_step()
 	_step_mount_and_orders()
+	_step_bonded_companions(delta)
 	_update_lasso_message()
 
 
@@ -2338,13 +2406,29 @@ func _try_feed_lassoed() -> void:
 		inventory.remove(TAMING_TREAT_ID, 1)
 
 
-func _throw_lasso() -> void:
+## Throws whichever capture tool is held (see docs/concept/taming.md's "Any
+## animal, the right tool"). Branches because a butterfly net scans a wholly
+## different node group and resolves instantly rather than starting a
+## struggle -- see _throw_net's own doc comment.
+func _throw_capture_tool() -> void:
+	var tool_id := _held_capture_tool_id()
+	if tool_id == "":
+		return
+	if tool_id == CaptureTool.NET:
+		_throw_net()
+	else:
+		_throw_rope_tool(tool_id)
+
+
+## Lasso/snare/trap: the original struggle-and-lead loop, generalized to
+## whichever of those three is actually held rather than a hardcoded lasso.
+func _throw_rope_tool(tool_id: String) -> void:
 	var best: Node = null
 	var best_distance := LASSO_RANGE
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		if creature.info == null or creature.is_restrained():
 			continue
-		if not Taming.can_be_tamed(creature.info.species, creature.info.is_predator):
+		if not Taming.can_be_tamed(creature.info.species, tool_id):
 			continue
 		var distance := position.distance_to(creature.position)
 		if distance <= best_distance:
@@ -2354,8 +2438,110 @@ func _throw_lasso() -> void:
 		return
 	# The throw itself reuses the melee swing, the same way casting a rod does.
 	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
-	if best.restrain_to(position):
+	if best.restrain_to(position, false, skill_bonus("taming_affinity"), tool_id):
 		_lassoed = best
+
+
+## Netting a flyer is instant, not a struggle (see taming.md: nothing in
+## AmbientFlyerMarker models a butterfly fighting a restraint the way a
+## horse does). A landed throw scans the ambient-flyer flock -- a wholly
+## separate node group from CreatureMarker.GROUP_NAME -- and resolves
+## immediately through _capture_flyer.
+func _throw_net() -> void:
+	var best: Node = null
+	var best_distance := LASSO_RANGE
+	for flyer in get_tree().get_nodes_in_group(AmbientFlyerMarker.FLOCK_GROUP):
+		if not is_instance_valid(flyer) or flyer.is_queued_for_deletion():
+			continue
+		var distance := position.distance_to(flyer.position)
+		if distance <= best_distance:
+			best = flyer
+			best_distance = distance
+	if best == null:
+		return
+	_character_view.play_attack_swing(_facing_string(), SWING_DURATION)
+	_capture_flyer(best)
+
+
+## What a landed net throw does with `flyer` -- see docs/concept/taming.md's
+## "A bond, not an order: the Kinship path". Without `menagerie` unlocked (or
+## once the bonded-companion cap is full) it becomes a one-off curiosity
+## item; with it, a real bonded companion. Either way the flyer itself is
+## removed from the world -- there is no intermediate "netted but not yet
+## decided" state.
+func _capture_flyer(flyer: Node) -> void:
+	var species: String = flyer.species
+	if _has_menagerie() and _bond_companion(species):
+		_capture_result_message = "Bonded with the %s." % species.capitalize()
+	else:
+		var is_bird := AmbientFlyerRenderer.BIRD_SPECIES_POOL.has(species)
+		var item_id := "caged_songbird" if is_bird else "jarred_insect"
+		if inventory != null:
+			inventory.add(_item_catalog.make(item_id), 1)
+		_capture_result_message = "Caught! Kept as a curiosity."
+	_capture_result_timer = CAPTURE_RESULT_MESSAGE_DURATION
+	flyer.queue_free()
+
+
+## Beastmaster's `menagerie` keystone (docs/concept/taming.md's Kinship path
+## / skills.md). Checked against BOTH unlocked_keystones (the shape land_
+## sense/berserkers_fury/etc. use, via unlock_keystone -> KeystonePassive)
+## and allocated_nodes (the shape `menagerie` actually lives in TODAY:
+## skill_web.gd's beastmaster wedge already grants it a real taming_affinity
+## bonus directly via ordinary allocate_skill, and it is not currently
+## registered in KeystonePassive._KEYSTONES the way the other four keystones
+## are -- see this lane's own HANDOFF note on the divergence). Reading both
+## keeps this correct regardless of which mechanism ends up hosting
+## menagerie's capability grant.
+func _has_menagerie() -> bool:
+	return unlocked_keystones.get("menagerie", false) or allocated_nodes.get("menagerie", false)
+
+
+## Adds a new bonded companion for `species` if there is room (see
+## BONDED_COMPANION_CAP), spawning its live marker immediately. Returns
+## false, doing nothing, once the cap is reached -- _capture_flyer then
+## falls back to the ordinary curiosity-item outcome rather than silently
+## discarding the catch.
+func _bond_companion(species: String) -> bool:
+	if bonded_companions.size() >= BONDED_COMPANION_CAP:
+		return false
+	var entry := {"species": species}
+	bonded_companions.append(entry)
+	_spawn_bonded_marker(entry)
+	return true
+
+
+## A bonded companion's live node (see BondedCompanionMarker) -- a lightweight
+## Node2D, NOT a CreatureMarker: no trust/order/struggle state, since a
+## netted flyer never had an order AI to learn Follow/Stay in the first
+## place. `top_level` so it renders/moves in world space rather than
+## inheriting the player's own transform, the same reason the rope Line2D is.
+func _spawn_bonded_marker(entry: Dictionary) -> void:
+	var marker := BondedCompanionMarker.new()
+	marker.species = entry.get("species", "")
+	marker.wander_seed = hash(str(entry.get("species", "")) + str(_bonded_markers.size()))
+	marker.top_level = true
+	marker.position = position
+	add_child(marker)
+	marker.setup(_chunk_manager, _tile_size)
+	_bonded_markers.append(marker)
+
+
+## Pushes each bonded companion a spot to loosely trail toward, spread
+## around the player rather than stacking on one point -- fixed offsets
+## rather than a physically-simulated flock, which is plenty for a
+## decorative presence (see docs/concept/pets.md). The actual gated
+## movement happens in the marker's own _process, the same split
+## _step_mount_and_orders uses for a tamed animal's follow_target.
+func _step_bonded_companions(_delta: float) -> void:
+	for i in range(_bonded_markers.size()):
+		var marker = _bonded_markers[i]
+		if not is_instance_valid(marker):
+			continue
+		var angle := float(i) * TAU / float(BONDED_COMPANION_CAP)
+		marker.follow_target = (
+			position + Vector2(cos(angle), sin(angle)) * BONDED_COMPANION_TRAIL_RADIUS
+		)
 
 
 ## The nearest tree trunk worth tying off to. Trees are already solid bodies
@@ -2374,11 +2560,23 @@ func _nearest_tie_point():
 
 
 func _update_lasso_message() -> void:
-	if not _holding_lasso():
+	var tool_id := _held_capture_tool_id()
+	if tool_id == "":
 		lasso_message = ""
 		return
+	if tool_id == CaptureTool.NET:
+		# A net has nothing to hold or lead -- the catch resolves instantly
+		# (see _capture_flyer), so the result banner it set outlives this
+		# same-frame call via _capture_result_timer rather than being
+		# stomped straight back to the ready prompt.
+		if _capture_result_timer > 0.0:
+			lasso_message = _capture_result_message
+		else:
+			lasso_message = "Net ready — press the lasso key near a flyer."
+		return
 	if _lassoed == null:
-		lasso_message = "Lasso ready — press the lasso key near an animal."
+		var tool_name: String = _item_catalog.make(tool_id).display_name
+		lasso_message = "%s ready — press the lasso key near an animal." % tool_name
 		return
 	var name_text: String = _lassoed.info.display_name if _lassoed.info != null else "Animal"
 	if _lassoed.is_tame():
@@ -2501,8 +2699,13 @@ func _mount_input_step() -> void:
 		_try_mount()
 
 
-func _holding_lasso() -> bool:
-	return equipped_item != null and equipped_item.id == "lasso"
+## Which capture tool (see docs/concept/taming.md's "Any animal, the right
+## tool") is currently held, or "" if the equipped item isn't one. The
+## generalization of what used to be a single hardcoded "== lasso" check.
+func _held_capture_tool_id() -> String:
+	if equipped_item != null and CAPTURE_TOOL_IDS.has(equipped_item.id):
+		return equipped_item.id
+	return ""
 
 
 func _has_fishing_rod() -> bool:

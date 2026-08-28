@@ -28,6 +28,7 @@ const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const SimulationLod = preload("res://src/gameplay/simulation_lod.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
@@ -250,6 +251,12 @@ var _struggle_fatigue := 0.0
 ## Counts this individual's struggles, so each roll is a different draw
 ## without holding an RNG on every creature in the world.
 var _struggle_count := 0
+## The handler's `taming_affinity` at the moment this animal was caught (see
+## Player.skill_bonus("taming_affinity") / Taming.break_free_chance), pushed
+## in by restrain_to and read every struggle roll. Stored rather than a live
+## reference back to the player for the same "never outlives a dangling
+## holder" reason `_rope_anchor`/`follow_target` are.
+var _capture_affinity := 0.0
 
 
 ## Active foraging (see GrazerForaging): the phase machine, the bite this
@@ -818,22 +825,33 @@ func is_tame() -> bool:
 	return Taming.is_tame(trust)
 
 
-## Catches this animal on a lasso whose other end is at `anchor`. Called again
+## Catches this animal on whichever capture tool's other end is at `anchor`
+## (see docs/concept/taming.md's "Any animal, the right tool"). Called again
 ## each frame by the holder to move the anchor (which is what "leading" is).
-## Refused outright for anything a rope and a carrot are the wrong tools for --
-## see Taming.can_be_tamed.
+## Refused outright for anything `tool_id` is the wrong tool for -- see
+## Taming.can_be_tamed, which now checks the ACTUAL tool used rather than
+## just "is taming allowed at all" (a mouse offered a lasso must not be
+## caught by it, even though a mouse offered a trap can be).
 ## `tied` distinguishes "the loose end is knotted to a tree" from "the player
 ## is holding it". Only a tied animal is somewhere the player deliberately
 ## LEFT it, which is what makes it worth keeping across a chunk unload even at
 ## zero trust (see KeptAnimals).
-func restrain_to(anchor: Vector2, tied: bool = false) -> bool:
-	if info == null or not Taming.can_be_tamed(info.species, info.is_predator):
+## `affinity` is the handler's Player.skill_bonus("taming_affinity") at the
+## moment of the catch (0.0 for an uninvested character, byte-identical to
+## the pre-affinity behaviour -- see Taming.break_free_chance), stored for
+## every subsequent struggle roll in _step_restraint.
+func restrain_to(
+	anchor: Vector2, tied: bool = false, affinity: float = 0.0,
+	tool_id: String = CaptureTool.LASSO
+) -> bool:
+	if info == null or not Taming.can_be_tamed(info.species, tool_id):
 		return false
 	if not _restrained:
 		_restrained = true
 		_struggle_elapsed = 0.0
 	_rope_anchor = anchor
 	_tied = tied
+	_capture_affinity = affinity
 	return true
 
 
@@ -885,7 +903,7 @@ func _step_restraint(delta: float) -> void:
 	var health_fraction := info.health / info.max_health if info.max_health > 0.0 else 0.0
 	var condition := Taming.effective_condition(health_fraction, _struggle_fatigue)
 	var roll := float(absi(hash("%d_%d_struggle" % [wander_seed, _struggle_count])) % 10000) / 10000.0
-	if roll < Taming.break_free_chance(condition):
+	if roll < Taming.break_free_chance(condition, info.is_predator, _capture_affinity):
 		release()
 		# It has learned what the rope means: bolt.
 		_flee_direction = (position - _rope_anchor).normalized()
