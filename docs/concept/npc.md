@@ -227,12 +227,30 @@ once the production systems it depends on are built").
   is now something a village can genuinely go hungry from — the causal
   chain the Lifecycle section's famine-driven decline needs underneath it,
   even before aging/reproduction/death themselves are built.
-- **Deliberately NOT in this pass**: the instruction DSL, hiring/wages,
-  relationships/trust, memory/rumor, lifecycle (aging/reproduction/death),
-  migration, and the real LLM-backed planner all stay exactly as
-  documented above — this section is the needs/production/local-trade
-  floor those systems will eventually stand on, not a replacement for any
-  of them.
+- **Deliberately NOT in this pass**: the instruction DSL,
+  hiring/negotiated wages, relationships/trust, lifecycle
+  (aging/reproduction/death), migration, and the real LLM-backed planner all
+  stay exactly as documented above — this section is the
+  needs/production/local-trade floor those systems will eventually stand on,
+  not a replacement for any of them.
+
+  **Two items on that list have since been partly built** (see
+  [dialogue.md](dialogue.md), which needed them):
+
+  - *Wages.* `VillageWages` gives a village a shared purse: producing
+    households pay a levy into it and non-producers draw a **subsistence
+    wage** — exactly one meal at the market's own live price. This exists
+    because hunger was otherwise an occupation constant (only 3 of the 8
+    occupations have any gold source, so the other 5 were permanently broke
+    and therefore permanently hungry, which carries no information). It is
+    *not* hiring: nobody negotiates, nobody chooses an employer, and the
+    rate is derived from the occupation census rather than bargained.
+  - *Memory/rumor is now wired off this economy.* `Event.witnesses` and
+    `MemoryStore.witness_event` already existed but were set at only two of
+    eighteen event sites, so villagers held nothing but founding trivia.
+    Production outcomes, settlement status/tier/specialization changes,
+    institutions and caravans now name the settlement's villagers as
+    witnesses, which is what gives them anything to know or gossip about.
 
 ## Settlement growth: migration toward player-built structures
 
@@ -313,10 +331,12 @@ so roughly a tenth of settlements roll no producer at all and every
 resident there genuinely struggles -- a deliberate choice matching
 [world.md](world.md)'s existing "population exists wherever conditions make
 it viable" philosophy, not an oversight. Still exactly as scoped out by that
-section's own "Deliberately NOT in this pass" line: no instruction DSL, no
-hiring/wages, no relationships/trust, no memory/rumor wiring off this
-economy, no lifecycle/death consequence for sustained hunger yet, no
-migration, no real LLM-backed planning.
+section's own "Deliberately NOT in this pass" line, minus the two items
+that section now records as partly built (a subsistence wage from a shared
+village purse, and memory/rumor genuinely wired off this economy via event
+witnesses): no instruction DSL, no hiring or negotiated wages, no
+relationships/trust, no lifecycle/death consequence for sustained hunger yet,
+no migration, no real LLM-backed planning.
 
 ### Open questions
 
