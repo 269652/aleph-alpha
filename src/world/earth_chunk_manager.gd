@@ -6150,7 +6150,27 @@ func chunks_in_radius(center: Vector2i, radius: int) -> Array[Vector2i]:
 	return result
 
 
+## Idempotent on purpose: update()/update_with_progress() each snapshot their
+## own pending set up front (chunks_in_radius / pending_load_chunks) and then
+## call this per-coord across many frames (update_with_progress awaits a
+## process frame between every chunk) or, for update(), across many separate
+## per-frame calls on the same manager. Neither guards against a SECOND
+## caller reaching the same still-pending coord before the first one's call
+## here finishes -- e.g. two multiplayer peers connecting within the same
+## loading window (World._on_peer_connected has no re-entrancy guard) or a
+## peer joining while the host's own per-frame update() is already loading
+## the same spawn-adjacent chunks. Without this guard, a re-entrant call
+## regenerates the chunk from scratch and overwrites _loaded_chunks/
+## _loaded_trees/_loaded_stones/etc. with a brand-new batch of spawned
+## nodes -- silently leaking every node the first call already added as a
+## child, never queue_free'd (see the re-entrancy test group in
+## test_earth_chunk_manager.gd, right after the update_with_progress tests).
+## Bailing out here, at the actual mutation point, protects every caller/
+## call path at once rather than requiring each one to re-check
+## is_chunk_loaded itself.
 func _load_chunk(chunk_coord: Vector2i) -> void:
+	if _loaded_chunks.has(chunk_coord):
+		return
 	var chunk := generator.generate_chunk(chunk_coord, CHUNK_SIZE)
 	chunk.modifications = _chunk_serializer.load_modifications(_modifications_path(chunk_coord))
 	chunk.roof_modifications = _chunk_serializer.load_modifications(_roof_modifications_path(chunk_coord))
