@@ -1006,13 +1006,37 @@ one hit will be wrong; both sites need repointing.
   struggle is resolved silently; it has no animation of its own") and is now
   specified rather than merely admitted. `RopeTether.is_taut` (zero production
   callers) and `World._build_charge_meter` are the existing pieces it reuses.
-- ⬜ Feeding as a deliberate `offer` action with refusal, per-individual food
-  preference, ground-placed versus hand-fed, and discovery-by-offering (§4).
-  Today `Player._try_feed_lassoed` fires from proximity every frame and there
-  is no feed key at all.
-- ⬜ `CreatureMarker.get_hover_actions()` — the state-to-verb table for an
-  animal (§1). It is one of four hoverables lacking the method and the only one
-  the player has verbs for. The **selection** it feeds is
+- 🚧 Feeding as a deliberate act. **Done (2026-08-28):** it is a gesture now --
+  `Player.offer_treat_to`, reached from the primary action slot while holding
+  the food. The old `_try_feed_lassoed` fired from proximity every frame, so
+  the relationship the whole mechanic rests on reduced, in play, to standing
+  still next to a horse; a test now pins that walking past your own tied hungry
+  animal with carrots in the bag feeds it nothing.
+  **Still ⬜:** refusal, per-individual food preference, ground-placed versus
+  hand-fed, and discovery-by-offering (§4). The animal can decline a feed it is
+  not hungry for, but it cannot yet decline one it simply does not want from
+  you.
+- ✅ `CreatureMarker.get_hover_actions()` — implemented, delegating to
+  `AnimalActions.for_animal`, so hovering an animal finally offers verbs the
+  way hovering a pebble always did. The ORDERING is the substance: the primary
+  slot is whatever the animal's own state most needs -- a tied hungry horse
+  with food in your hand offers Feed ahead of Ride. Two context slots
+  (`primary_action`/`secondary_action`) reach whichever verbs are offered, and
+  every verb keeps its own dedicated key; the slot routes into the same handler
+  rather than a copy of it (`Player.perform_rope_verb`).
+- ✅ An animal's condition is readable at all — `CreatureMarker.animal_state()`,
+  one reporter feeding the creature card, the hover tooltip and the rope
+  banner. Trust, food, water and warmth all read 1.0 = fine, 0.0 = trouble,
+  including food and water, which the simulation stores the other way round as
+  deficits; a test pins that a starving animal reads LOW. The card shows the
+  full percentages only for an animal the player has a stake in
+  (`is_player_invested`), so a meadow of wild sheep stays a column of small
+  cards. Warmth is new: animals had no temperature at all while the player
+  standing beside them had a full one, so they now run the SAME
+  `SurvivalMeters` model against the same `EarthChunkManager.ambient_warmth`.
+- ✅ Prompts name their key. The banner read "press the lasso key", which is
+  not a key any keyboard has; `Keybindings.display_key_for` reads the live
+  InputMap so a rebind shows at once. The **selection** it feeds is
   [animal_husbandry.md](animal_husbandry.md)'s, pinned there by
   `test_a_verb_prefers_the_selected_animal_over_a_nearer_one`; taming's three
   "nearest" call sites are its consumers.

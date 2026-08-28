@@ -1,6 +1,8 @@
 extends CharacterBody2D
 class_name Player
 
+const Keybindings = preload("res://src/gameplay/keybindings.gd")
+const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const EquipmentMaterial = preload("res://src/gameplay/equipment_material.gd")
 const WetnessTracker = preload("res://src/gameplay/wetness_tracker.gd")
 const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
@@ -357,6 +359,7 @@ const BITE_BOB_SPEED := 14.0
 var _shop := Shop.new()
 var _last_trade_input := false
 var _last_sell_input := false
+var _last_slot_input := [false, false]
 var _pending_trade_pressed := false
 var _pending_sell_pressed := false
 var _trade_attempt_count := 0
@@ -459,7 +462,8 @@ var _last_stash_input_state := false
 ## read as a held LEVEL -- guard up, the pickup charge meter, the cast and
 ## reel, the rope -- and latching a level would turn a hold into one tap.
 const MOMENTARY_ACTIONS := [
-	"attack", "build", "destroy", "kick", "stash", "talk", "trade", "sell"
+	"attack", "build", "destroy", "kick", "stash", "talk", "trade", "sell",
+	"primary_action", "secondary_action"
 ]
 
 ## Rising edges seen by the input event but not yet acted on by the physics
@@ -1456,6 +1460,7 @@ func _authority_step(delta: float) -> void:
 	_venom_step(delta)
 	_sickness_step(delta)
 	_shop_step(delta)
+	_action_slots_step()
 	_talk_step(delta)
 
 
@@ -2292,21 +2297,7 @@ func _lasso_step(delta: float) -> void:
 	_last_lasso_input = pressed
 
 	if just_pressed and _holding_lasso():
-		if _lassoed == null and _nearest_tamed(LASSO_RANGE) != null:
-			# Already tamed: the rope has nothing left to do, so the key means
-			# "change your mind about what you're doing" instead.
-			_cycle_order()
-		elif _lassoed == null:
-			_throw_lasso()
-		elif _tie_anchor != null:
-			_tie_anchor = null
-		else:
-			var tree = _nearest_tie_point()
-			if tree != null:
-				_tie_anchor = tree
-			else:
-				_lassoed.release()
-				_lassoed = null
+		perform_rope_verb()
 
 	_hold_the_rope(delta)
 	_draw_rope()
@@ -2325,21 +2316,119 @@ func _hold_the_rope(_delta: float) -> void:
 	_lassoed.restrain_to(
 		_tie_anchor if _tie_anchor != null else position, _tie_anchor != null
 	)
-	_try_feed_lassoed()
 
 
-## A carrot in the inventory, offered whenever the animal is close enough to
-## take it and actually hungry. Consumed only when it counts (see
-## CreatureMarker.feed_treat), so a full animal never eats the player's stock.
-func _try_feed_lassoed() -> void:
-	if inventory == null or _lassoed == null:
-		return
-	if position.distance_to(_lassoed.position) > FEED_RANGE:
-		return
+## What the rope key does right now: cycle a tamed animal's orders, throw,
+## tie, untie, or let go -- whichever the current situation means.
+##
+## Extracted from _lasso_step so the ACTION SLOTS can reach the same verb.
+## They used to call _lasso_step itself, which re-reads the lasso key: the slot
+## press found that key not held, did nothing, and the prompt went on
+## advertising a verb that never happened. A second way to reach an action must
+## not be a second copy of it.
+func perform_rope_verb() -> void:
+	if _lassoed == null and _nearest_tamed(LASSO_RANGE) != null:
+		# Already tamed: the rope has nothing left to do, so the key means
+		# "change your mind about what you're doing" instead.
+		_cycle_order()
+	elif _lassoed == null:
+		_throw_lasso()
+	elif _tie_anchor != null:
+		_tie_anchor = null
+	else:
+		var tree = _nearest_tie_point()
+		if tree != null:
+			_tie_anchor = tree
+		else:
+			_lassoed.release()
+			_lassoed = null
+
+
+## Offers the treat in hand to `animal`.
+##
+## A GESTURE, not a proximity effect. This used to fire from _lasso_step every
+## frame whenever a carrot sat in the bag and the animal was in range -- so the
+## relationship the whole mechanic rests on reduced, in play, to standing still
+## next to a horse (see docs/concept/taming.md, "feeding as an offer that can
+## be refused"). Now the player holds the food out and presses.
+##
+## Consumed only when it counts (see CreatureMarker.feed_treat, which refuses a
+## feed the animal is not hungry for), so a full animal never eats the stock.
+## Returns whether anything was actually taken.
+func offer_treat_to(animal) -> bool:
+	if inventory == null or animal == null:
+		return false
+	if position.distance_to(animal.position) > FEED_RANGE:
+		return false
 	if inventory.count_of(TAMING_TREAT_ID) <= 0:
+		return false
+	if not animal.feed_treat():
+		return false
+	inventory.remove(TAMING_TREAT_ID, 1)
+	return true
+
+
+## The ordered actions this player can take on `animal` right now -- index 0 is
+## the primary, 1 the secondary (see AnimalActions.for_animal). Public so the
+## HUD and the tests can ask the same question the input router answers.
+func animal_actions_for(animal) -> Array:
+	if animal == null or not animal.has_method("animal_state"):
+		return []
+	var held := equipped_item.id if equipped_item != null else ""
+	return AnimalActions.for_animal(animal.animal_state(), held)
+
+
+## Carries out whichever slot the player pressed on `animal`.
+##
+## Routes into the SAME handlers the dedicated keys use rather than
+## reimplementing any verb -- the slot is a second way to reach an action, not
+## a second copy of it, so the two can never drift into doing different things.
+func _perform_animal_action(animal, slot: int) -> void:
+	var actions := animal_actions_for(animal)
+	if slot < 0 or slot >= actions.size():
 		return
-	if _lassoed.feed_treat():
-		inventory.remove(TAMING_TREAT_ID, 1)
+	match actions[slot]["verb"]:
+		"Feed":
+			offer_treat_to(animal)
+		"Ride":
+			_try_mount()
+		"Order":
+			_cycle_order()
+		"Release", "Lasso":
+			perform_rope_verb()
+
+
+## The animal the action slots act on: whatever is already on the rope, else
+## the nearest one in reach. The rope wins because an animal you are HOLDING is
+## unambiguously the one you meant, even when a curious sheep wanders closer.
+func _action_target():
+	if _lassoed != null and is_instance_valid(_lassoed):
+		return _lassoed
+	var best: Node = null
+	var best_distance := LASSO_RANGE
+	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
+		if creature.info == null:
+			continue
+		var distance := position.distance_to(creature.position)
+		if distance <= best_distance:
+			best = creature
+			best_distance = distance
+	return best
+
+
+## The two context slots (see Keybindings' primary_action/secondary_action).
+func _action_slots_step() -> void:
+	for slot in AnimalActions.MAX_SLOTS:
+		var action_name: String = AnimalActions.SLOT_ACTIONS[slot]
+		var pressed := (
+			_controlled_locally()
+			and InputMap.has_action(action_name)
+			and Input.is_action_pressed(action_name)
+		)
+		var was_pressed: bool = _last_slot_input[slot]
+		if _rising_edge(action_name, pressed, was_pressed):
+			_perform_animal_action(_action_target(), slot)
+		_last_slot_input[slot] = pressed
 
 
 func _throw_lasso() -> void:
@@ -2377,20 +2466,49 @@ func _nearest_tie_point():
 	return nearest
 
 
+## The banner line for whatever the rope is currently doing.
+##
+## Every branch names the KEY it wants pressed rather than the action's name.
+## The old first line read "press the lasso key", which is not a key any
+## keyboard has -- reported live, and the player had to go and find it in the
+## settings screen to use the verb the game was telling them to use. Read off
+## the live InputMap (Keybindings.display_key_for) so a rebind shows at once.
+##
+## Each line also says what the animal NEEDS, because that is the thing that
+## decides what the player should do next and it was previously invisible: a
+## tied animal that is not hungry cannot be fed toward trust at all (see
+## Taming.trust_after_feeding), so "wait until it is hungry" is real, useful
+## information rather than flavour.
 func _update_lasso_message() -> void:
 	if not _holding_lasso():
 		lasso_message = ""
 		return
+	var lasso_key := Keybindings.display_key_for("lasso")
 	if _lassoed == null:
-		lasso_message = "Lasso ready — press the lasso key near an animal."
+		lasso_message = "Lasso ready — press %s near an animal." % lasso_key
 		return
+
 	var name_text: String = _lassoed.info.display_name if _lassoed.info != null else "Animal"
 	if _lassoed.is_tame():
-		lasso_message = "%s is tame." % name_text
-	elif _tie_anchor != null:
-		lasso_message = "%s tied up — trust %d%%" % [name_text, int(_lassoed.trust * 100.0)]
+		var orders := []
+		if Taming.can_be_mounted(_lassoed.info.species if _lassoed.info != null else ""):
+			orders.append("%s to ride" % Keybindings.display_key_for("mount"))
+		orders.append("%s to change its orders" % lasso_key)
+		lasso_message = "%s is tame — %s." % [name_text, ", ".join(orders)]
+		return
+
+	var trust_text := "trust %d%%" % int(_lassoed.trust * 100.0)
+	var need_text := (
+		"hungry, feed it" if _lassoed.is_hungry() else "not hungry yet — feeding won't help"
+	)
+	if _tie_anchor != null:
+		lasso_message = "%s tied up — %s, %s (%s to untie)" % [
+			name_text, trust_text, need_text, lasso_key
+		]
 	else:
-		lasso_message = "Leading %s — trust %d%%" % [name_text, int(_lassoed.trust * 100.0)]
+		lasso_message = "Leading %s — %s, %s (%s to tie it to a tree)" % [
+			name_text, trust_text, need_text, lasso_key
+		]
 
 
 ## The rope, drawn between whatever holds it and the animal. Without it,

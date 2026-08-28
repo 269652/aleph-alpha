@@ -24,6 +24,7 @@ const CreatureInfo = preload("res://src/world/creature_info.gd")
 const AnimalAnatomy = preload("res://src/rendering/animal_anatomy.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const CreatureNeeds = preload("res://src/gameplay/creature_needs.gd")
+const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
@@ -615,6 +616,12 @@ func _process(frame_delta: float) -> void:
 		return
 
 	_needs.advance(delta)
+	# Body warmth against the LOCAL climate -- the same ambient figure the
+	# player's own meter reads (see CreatureNeeds.warmth), so an animal and the
+	# person beside it in the same storm agree about how cold it is. Guarded
+	# because plenty of stub worlds in tests cannot answer.
+	if _world.has_method("ambient_warmth"):
+		_needs.regulate_temperature(_world.ambient_warmth(position), delta)
 	if not _restrained:
 		_struggle_fatigue = Taming.fatigue_after_rest(_struggle_fatigue, delta)
 	energy = AnimalReproduction.decay(energy, delta)
@@ -831,6 +838,92 @@ func is_restrained() -> bool:
 ## wild ones.
 func is_player_invested() -> bool:
 	return trust > 0.0 or _restrained
+
+
+## Everything about this animal a player is entitled to read, in one place.
+##
+## Reported live: "it's neither visible from the horses panel nor in hover or
+## extra panel what the horses states are (hunger / cold / trust / thirst)".
+## All four were already simulated and none was readable -- and hunger is the
+## one that decides whether feeding does anything at all, since
+## Taming.trust_after_feeding only counts a HUNGRY feed. A player working a
+## tied horse could not see the single fact the whole loop turns on.
+##
+## One reporter rather than each surface reaching into private fields: the
+## creature card, the hover tooltip and the rope banner all want the same
+## facts, and three copies of `_needs.is_hungry()` would be three things to
+## keep in step. Everything is a plain 0..1 fraction or a bool, so a caller can
+## draw a bar without knowing this class.
+func animal_state() -> Dictionary:
+	return {
+		"name": get_display_name(),
+		"species": info.species if info != null else "",
+		"level": info.level if info != null else 0,
+		"health_fraction": (info.health / info.max_health) if info != null and info.max_health > 0.0 else 0.0,
+		# EVERY fraction here reads the same way round: 1.0 is the animal being
+		# fine, 0.0 is it being in trouble. CreatureNeeds stores hunger and
+		# thirst as DEFICITS (1.0 = starving), which is right for the
+		# simulation and a trap for a readout -- a bar drawn straight off
+		# `hunger` would show full and green for a starving horse, pointing the
+		# opposite way to the player's own Food bar on the same screen. Flipped
+		# once here rather than in each of the three surfaces that draw it.
+		"fullness": 1.0 - _needs.hunger,
+		"hydration": 1.0 - _needs.thirst,
+		"warmth": _needs.warmth,
+		"hungry": _needs.is_hungry(),
+		"thirsty": _needs.is_thirsty(),
+		"cold": _needs.is_cold(),
+		"trust": trust,
+		"tame": is_tame(),
+		"restrained": _restrained,
+		"tied": is_tied_up(),
+		"sick": disease_state == DiseaseModel.State.INFECTED,
+		"order": order,
+		# Whether the player has a stake in this animal -- the same predicate
+		# that decides what the aggregate model may cull. Readouts use it to
+		# stay quiet about wildlife and detailed about your own stock.
+		"invested": is_player_invested(),
+	}
+
+
+## What hovering this animal offers to do (see HoverTargetFinder, and
+## AnimalActions for the ordering rule).
+##
+## CreatureMarker was in the hover group and had get_display_name(), but was
+## one of only four hoverables that never implemented this -- so pointing at a
+## horse named it and offered nothing, while pointing at a pebble offered
+## "Pick Up (E)" and "Kick (K)".
+##
+## Answers for EMPTY HANDS: a marker cannot see what the player is holding, and
+## the held item changes the answer (a carrot turns a tied hungry animal's
+## primary action into Feed). World composes the held-item-aware version for
+## the tooltip; this is the honest fallback for any caller without a player.
+func get_hover_actions() -> Array:
+	return AnimalActions.for_animal(animal_state(), "")
+
+
+## Whether feeding this animal would actually earn any trust right now (see
+## Taming.trust_after_feeding). Public because it is the question every taming
+## surface asks, and the answer used to live behind a private field.
+func is_hungry() -> bool:
+	return _needs.is_hungry()
+
+
+func is_thirsty() -> bool:
+	return _needs.is_thirsty()
+
+
+func is_cold() -> bool:
+	return _needs.is_cold()
+
+
+## Test seam: drives the need clock straight to a value, so a test can ask
+## "what does a starving animal look like" without simulating the minutes it
+## would really take to get there.
+func set_needs_for_test(new_hunger: float, new_thirst: float, new_warmth: float = 1.0) -> void:
+	_needs.hunger = clampf(new_hunger, 0.0, 1.0)
+	_needs.thirst = clampf(new_thirst, 0.0, 1.0)
+	_needs.warmth = clampf(new_warmth, 0.0, 1.0)
 
 
 func is_tame() -> bool:

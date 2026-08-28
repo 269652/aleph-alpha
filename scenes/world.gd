@@ -27,6 +27,7 @@ const SolarPosition = preload("res://src/world/solar_position.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
+const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const MinimapRenderer = preload("res://src/rendering/minimap_renderer.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const PlayerScene = preload("res://scenes/player.tscn")
@@ -2326,11 +2327,31 @@ func _update_hover_tooltip() -> void:
 		var actions: Array = (
 			marker.get_hover_actions() if marker.has_method("get_hover_actions") else []
 		)
-		candidates.append({"position": marker.position, "name": marker.get_display_name(), "actions": actions})
+		# An animal's actions depend on what the player is HOLDING -- a carrot
+		# turns a tied, hungry horse's primary action into Feed -- and a marker
+		# cannot see the player's hands, so it answers for empty ones. Only
+		# animals care, so only animals are re-asked here.
+		var detail := ""
+		if marker.has_method("animal_state"):
+			var state: Dictionary = marker.animal_state()
+			var held := (
+				local_player.equipped_item.id
+				if local_player != null and local_player.equipped_item != null
+				else ""
+			)
+			actions = AnimalActions.for_animal(state, held)
+			detail = _animal_detail_line(state)
+		candidates.append({
+			"position": marker.position,
+			"name": marker.get_display_name(),
+			"actions": actions,
+			"detail": detail,
+		})
 
 	var info := _hover_target_finder.info_under(mouse_world, candidates, scan_radius)
 	var found_name: String = info.get("name", "")
 	var found_actions: Array = info.get("actions", [])
+	var found_detail: String = info.get("detail", "")
 	if found_name == "":
 		var grass_growth := _chunk_manager.tall_grass_growth_at(mouse_world)
 		if grass_growth >= 0.0:
@@ -2340,7 +2361,7 @@ func _update_hover_tooltip() -> void:
 
 	_hover_tooltip.visible = found_name != ""
 	if _hover_tooltip.visible:
-		_hover_tooltip.text = _hover_tooltip_text(found_name, found_actions)
+		_hover_tooltip.text = _hover_tooltip_text(found_name, found_actions, found_detail)
 		_hover_tooltip.position = get_viewport().get_mouse_position() + Vector2(14, -8)
 
 
@@ -2349,13 +2370,40 @@ func _update_hover_tooltip() -> void:
 ## rebind shows immediately -- the same pattern _show_interaction_prompt
 ## already uses for the proximity prompt). Multiple actions all show, e.g.
 ## a pebble reads "Pebble\nPick Up (E)\nKick (K)".
-func _hover_tooltip_text(entity_name: String, actions: Array) -> String:
+func _hover_tooltip_text(entity_name: String, actions: Array, detail: String = "") -> String:
 	var lines := [entity_name]
+	if detail != "":
+		lines.append(detail)
 	for action in actions:
 		lines.append(
 			"%s (%s)" % [action["verb"], OS.get_keycode_string(_keybindings.keycode_for(action["action"]))]
 		)
 	return "\n".join(lines)
+
+
+## One line of an animal's condition for the hover tooltip.
+##
+## Reported live: hovering an animal named it and said nothing else, while its
+## hunger -- the single fact deciding whether feeding it would do anything at
+## all -- was simulated the whole time and shown nowhere.
+##
+## Terse on purpose: a tooltip follows the cursor and is read in a glance, so
+## this is the SHORT form (what is wrong, and how tame it is). The full
+## percentages live on the creature card, which sits still and can be studied.
+func _animal_detail_line(state: Dictionary) -> String:
+	var parts := []
+	if bool(state.get("tame", false)):
+		parts.append("tame")
+	elif float(state.get("trust", 0.0)) > 0.0:
+		parts.append("trust %d%%" % int(round(float(state["trust"]) * 100.0)))
+	if bool(state.get("tied", false)):
+		parts.append("tied")
+	elif bool(state.get("restrained", false)):
+		parts.append("on the rope")
+	for flag in ["hungry", "thirsty", "cold", "sick"]:
+		if bool(state.get(flag, false)):
+			parts.append(flag)
+	return ", ".join(parts)
 
 
 ## Big centered "You Died / Respawning in N..." text, hidden until the local
@@ -2393,7 +2441,7 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		var distance := local_player.position.distance_to(creature.position)
 		if distance <= CREATURE_PANELS_RADIUS:
-			nearby.append({"info": creature.info, "distance": distance})
+			nearby.append({"state": creature.animal_state(), "distance": distance})
 	nearby.sort_custom(func(a, b): return a.distance < b.distance)
 
 	for child in _creature_panels_container.get_children():
@@ -2402,7 +2450,7 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 	for i in mini(nearby.size(), MAX_CREATURE_PANELS):
 		var panel := CreaturePanel.new()
 		_creature_panels_container.add_child(panel)
-		panel.set_info(nearby[i].info)
+		panel.set_state(nearby[i].state)
 
 
 func _unhandled_input(event: InputEvent) -> void:

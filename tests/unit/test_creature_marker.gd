@@ -2218,3 +2218,114 @@ func test_a_world_that_cannot_record_deaths_is_survivable():
 	deer.setup(plain, 16)
 	deer.take_damage(deer.info.max_health)
 	assert_true(true, "a death against a world with no record_death_at must not crash")
+
+
+# -- what the player is allowed to KNOW about an animal -----------------------
+#
+# Reported live: "it's neither visible from the horses panel nor in hover or
+# extra panel what the horses states are (hunger / cold / trust / thirst)".
+#
+# Every one of those was already simulated and none of it was readable. The
+# creature card showed "Sheep Lv.4 / HP 31/31" and nothing else, so a tied
+# horse's hunger -- the single fact that decides whether feeding it does
+# anything at all (Taming.trust_after_feeding only counts a HUNGRY feed) -- was
+# invisible at the exact moment the player needed it.
+#
+# One reporter rather than each surface reaching into private fields: the card,
+# the hover tooltip and the rope banner all want the same facts, and three
+# copies of `marker._needs.is_hungry()` would be three things to keep in step.
+
+func test_animal_state_reports_the_needs_the_simulation_already_tracks():
+	var horse := _catchable("horse")
+	var state := horse.animal_state()
+	for key in ["fullness", "hydration", "trust", "warmth", "health_fraction"]:
+		assert_true(state.has(key), "animal_state is missing %s" % key)
+		assert_between(float(state[key]), 0.0, 1.0, "%s should read as a 0..1 fraction" % key)
+
+
+func test_animal_state_reports_who_and_what_it_is():
+	var horse := _catchable("horse")
+	var state := horse.animal_state()
+	assert_eq(state["name"], horse.get_display_name())
+	assert_eq(state["species"], "horse")
+
+
+## The flags the surfaces branch on, and the ones a player acts on.
+func test_animal_state_reports_the_taming_situation():
+	var horse := _catchable("horse")
+	assert_false(horse.animal_state()["restrained"])
+	assert_false(horse.animal_state()["tame"])
+
+	horse.restrain_to(Vector2(20, 0))
+	assert_true(horse.animal_state()["restrained"])
+
+	horse.trust = 1.0
+	assert_true(horse.animal_state()["tame"])
+
+
+## Hunger has to be readable as BOTH a number and a verdict: the bar wants the
+## fraction, and "would feeding this animal do anything" is the threshold
+## question the player is actually asking.
+## EVERY fraction here reads the same way round: 1.0 is the animal being fine,
+## 0.0 is it being in trouble. CreatureNeeds stores hunger and thirst as
+## DEFICITS (1.0 = starving), which is right for the simulation and a trap for
+## a readout -- a bar drawn straight off `hunger` shows a full green bar for a
+## starving horse, and points the opposite way to the player's own Food bar
+## sitting on the same screen. So the reporter reports fullness and hydration,
+## and this test is the thing that stops the sign flipping back.
+func test_a_starving_animal_reads_as_LOW_not_high():
+	var horse := _catchable("horse")
+	horse.set_needs_for_test(0.9, 0.9)
+	assert_lt(float(horse.animal_state()["fullness"]), 0.2, "a starving animal is not full")
+	assert_lt(float(horse.animal_state()["hydration"]), 0.2, "a parched animal is not watered")
+
+	horse.set_needs_for_test(0.0, 0.0)
+	assert_gt(float(horse.animal_state()["fullness"]), 0.9)
+	assert_gt(float(horse.animal_state()["hydration"]), 0.9)
+
+
+func test_hunger_reads_as_a_number_and_as_a_verdict():
+	var horse := _catchable("horse")
+	horse.set_needs_for_test(0.9, 0.1)
+	assert_almost_eq(float(horse.animal_state()["fullness"]), 0.1, 0.001)
+	assert_true(horse.is_hungry())
+	assert_true(horse.animal_state()["hungry"])
+
+	horse.set_needs_for_test(0.1, 0.1)
+	assert_false(horse.is_hungry())
+	assert_false(horse.animal_state()["hungry"])
+
+
+func test_thirst_reads_the_same_way():
+	var horse := _catchable("horse")
+	horse.set_needs_for_test(0.1, 0.9)
+	assert_almost_eq(float(horse.animal_state()["hydration"]), 0.1, 0.001)
+	assert_true(horse.animal_state()["thirsty"])
+
+
+# -- animals answer the hover, like everything else in the world --------------
+#
+# CreatureMarker was in HoverTargetFinder's group and had get_display_name(),
+# but was one of only four hoverables that never implemented
+# get_hover_actions() -- so hovering an animal named it and offered nothing,
+# while a pebble offered "Pick Up (E)" and "Kick (K)".
+
+func test_a_hovered_animal_offers_actions():
+	var horse := _catchable("horse")
+	horse.trust = 1.0
+	var actions := horse.get_hover_actions()
+	assert_gt(actions.size(), 0, "a tame horse should offer something to do")
+	for action in actions:
+		assert_true(action.has("verb"), "every action needs a verb to show")
+		assert_true(action.has("action"), "every action needs an input to name a key from")
+
+
+## The marker cannot see the player's hands, so it answers for empty ones. The
+## held-item-aware ordering is World's to compose, and it is the one that
+## reaches the tooltip.
+func test_the_markers_own_answer_assumes_empty_hands():
+	var horse := _catchable("horse")
+	horse.restrain_to(horse.position)
+	horse.set_needs_for_test(1.0, 0.0)
+	for action in horse.get_hover_actions():
+		assert_ne(action["verb"], "Feed", "the marker cannot know you are holding a carrot")

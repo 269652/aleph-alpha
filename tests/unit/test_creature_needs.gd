@@ -1,6 +1,7 @@
 extends GutTest
 
 const CreatureNeeds = preload("res://src/gameplay/creature_needs.gd")
+const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
 
 var needs: CreatureNeeds
 
@@ -109,3 +110,64 @@ func test_the_herd_spreads_across_the_run_up_to_hunger():
 func test_an_unseeded_creature_still_starts_from_nothing():
 	assert_eq(CreatureNeeds.new().hunger, 0.0)
 	assert_eq(CreatureNeeds.new().thirst, 0.0)
+
+
+# -- warmth ------------------------------------------------------------------
+#
+# Reported live: a kept horse's cold was not visible anywhere. It was not
+# visible because it did not exist -- animals tracked hunger and thirst and
+# nothing about being out in weather, while the PLAYER standing next to them
+# had a full body-temperature meter.
+#
+# Deliberately the same model the player already uses (SurvivalMeters.warmth /
+# regulate_temperature): warmth eases toward a local ambient target rather than
+# snapping, and the ambient figure comes from the same
+# EarthChunkManager.ambient_warmth the player's own meter reads. One climate,
+# one answer -- an animal and the player standing on the same tile in the same
+# storm should not disagree about how cold it is there.
+
+func test_an_animal_starts_comfortable():
+	var needs := CreatureNeeds.new(1)
+	assert_almost_eq(needs.warmth, 1.0, 0.001)
+	assert_false(needs.is_cold())
+
+
+func test_standing_somewhere_cold_cools_the_animal_down():
+	var needs := CreatureNeeds.new(1)
+	needs.regulate_temperature(0.0, 10.0)
+	assert_lt(needs.warmth, 1.0)
+
+
+## Eased, not snapped -- the same reason the player's meter eases: walking one
+## step into shelter should warm an animal up over a moment, not instantly.
+func test_warmth_eases_toward_the_ambient_rather_than_snapping_to_it():
+	var needs := CreatureNeeds.new(1)
+	needs.regulate_temperature(0.0, 0.1)
+	assert_gt(needs.warmth, 0.0, "one short step should not empty the meter")
+
+
+func test_a_cold_animal_warms_back_up_somewhere_warm():
+	var needs := CreatureNeeds.new(1)
+	needs.regulate_temperature(0.0, 60.0)
+	var chilled := needs.warmth
+	needs.regulate_temperature(1.0, 60.0)
+	assert_gt(needs.warmth, chilled)
+
+
+func test_warmth_never_leaves_its_range():
+	var needs := CreatureNeeds.new(1)
+	needs.regulate_temperature(0.0, 10000.0)
+	assert_between(needs.warmth, 0.0, 1.0)
+	needs.regulate_temperature(1.0, 10000.0)
+	assert_between(needs.warmth, 0.0, 1.0)
+
+
+## The verdict the readouts branch on, at the same threshold the player's own
+## meter uses -- an animal and a person on the same tile agreeing about what
+## "cold" means is the point of sharing the model.
+func test_cold_is_the_same_threshold_the_player_uses():
+	var needs := CreatureNeeds.new(1)
+	needs.warmth = SurvivalMeters.COLD_THRESHOLD - 0.01
+	assert_true(needs.is_cold())
+	needs.warmth = SurvivalMeters.COLD_THRESHOLD + 0.01
+	assert_false(needs.is_cold())

@@ -6124,6 +6124,68 @@ passing) is a real, valid `EntityRef` (`"player:local"`), the same
   lore instead of dev-console text, the optional LLM rephrasing pass) --
   what actually makes this player-facing rather than a dev-console reader.
 
+### Taming polish: state you can read, and a primary action (2026-08-28)
+
+Reported live: "it's neither visible from the horses panel nor in hover or
+extra panel what the horses states are (hunger / cold / trust / thirst) and the
+onscreen text for lasso doesn't show hotkey it says press lassokey, not which
+... also we should implement a primary action and secondary action feature".
+
+- **An animal's condition is readable** (size: small) -- ✅ **Done** --
+  `CreatureMarker.animal_state()`, one reporter feeding the creature card, the
+  hover tooltip and the rope banner. Every fraction reads 1.0 = fine, 0.0 =
+  trouble **including food and water**, which `CreatureNeeds` stores the other
+  way round as deficits -- a bar drawn straight off `hunger` shows full and
+  green for a starving horse and points the opposite way to the player's own
+  Food bar on the same screen. Pinned by
+  `test_a_starving_animal_reads_as_LOW_not_high`. The card shows full
+  percentages only for an animal the player has a stake in
+  (`is_player_invested`), so five wild sheep in range stay a column of small
+  cards rather than a wall of bars.
+- **Animals have a body temperature at all** (size: small) -- ✅ **Done** --
+  the reported "cold" did not exist: a creature had hunger and thirst and
+  nothing about being out in weather, while the player standing next to it had
+  a full warmth meter. `CreatureNeeds.warmth` is deliberately the SAME model,
+  rates and threshold as `SurvivalMeters`, fed by the same
+  `EarthChunkManager.ambient_warmth` -- an animal and a person on one tile in
+  one storm should not disagree about how cold it is there. ⬜ No per-species
+  cold tolerance: a camel and a reindeer plainly should not chill alike, but
+  that belongs to `animal_genetics.md`'s hardiness gene, not a hand-typed
+  column.
+- **Prompts name their key** (size: small) -- ✅ **Done** --
+  `Keybindings.display_key_for` reads the LIVE InputMap (which
+  `World._apply_keybindings` writes every resolved override into), so it is
+  correct after a rebind and reachable from `Player`, which holds no
+  `Keybindings` of its own. The banner said "press the lasso key"; there is no
+  such key.
+- **Primary / secondary action** (size: medium) -- ✅ **Done** --
+  `AnimalActions.for_animal(state, held_item)`: pure, ordered, index 0 is the
+  primary. The rule is that the primary is whatever the animal's own state most
+  needs, not a fixed verb per species -- a tied hungry horse with a carrot in
+  hand offers **Feed** ahead of Ride, exactly as reported. Only ever offers what
+  the player can actually do; what the animal NEEDS is shown as state instead,
+  so "it wants feeding and you have no carrot" still reaches them without
+  masquerading as a button. Two rebindable slots (`primary_action` X /
+  `secondary_action` Z); every verb keeps its own dedicated key too, and the
+  slot routes into the SAME handler rather than a copy -- `perform_rope_verb`
+  was extracted from `_lasso_step` for exactly that reason, after the first
+  version routed Release/Lasso back through `_lasso_step`, which re-reads the
+  lasso key, found it not held, and did nothing while the prompt advertised the
+  verb. Caught by `test_the_release_slot_actually_lets_the_animal_go`.
+- **Feeding is a gesture** (size: small) -- ✅ **Done** -- `Player.offer_treat_to`,
+  reached from the primary slot while holding the food.
+  `_try_feed_lassoed` used to fire from `_lasso_step` every frame whenever a
+  carrot was in the bag, so the relationship the whole mechanic rests on
+  reduced, in play, to standing still next to a horse. Pinned by
+  `test_standing_next_to_a_hungry_horse_no_longer_feeds_it_by_itself`.
+  ⬜ Still open from `taming.md` §4: refusal, per-individual food preference,
+  hand-fed versus ground-placed, discovery-by-offering.
+- **Animals answer the hover** (size: small) -- ✅ **Done** --
+  `CreatureMarker.get_hover_actions()`; it was one of only four hoverables
+  lacking it, so pointing at a horse named it and offered nothing while a
+  pebble offered two verbs. World re-asks with the player's held item, because
+  a marker cannot see their hands and the held item changes the answer.
+
 ### Selling, and three bugs (2026-08-27)
 
 - **Selling into the local market** (size: small) -- ✅ **Done** -- the other

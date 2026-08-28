@@ -5,6 +5,8 @@ extends RefCounted
 ## (see CreatureBehavior). Kept as a plain data+logic object, no engine
 ## dependency, so it's fully unit-testable.
 
+const SurvivalMeters = preload("res://src/gameplay/survival_meters.gd")
+
 ## Per-simulated-second rise rate. Chosen so a creature crosses its need
 ## thresholds within a reasonable stretch of play, and verified behaviorally
 ## (test_becomes_hungry_once_past_the_threshold), not by asserting the number.
@@ -14,6 +16,24 @@ const THIRST_RATE_PER_SECOND := 0.03
 ## A creature actively seeks food/water once its need passes these fractions.
 const HUNGRY_THRESHOLD := 0.5
 const THIRSTY_THRESHOLD := 0.5
+
+## Body warmth, 1.0 comfortable to 0.0 freezing -- the animal half of the
+## body-temperature model the PLAYER already had (SurvivalMeters.warmth).
+##
+## Deliberately the same model and the same numbers rather than a parallel one:
+## warmth eases toward a local ambient target instead of snapping, the rate and
+## the "cold" threshold are SurvivalMeters' own, and the ambient figure comes
+## from the same EarthChunkManager.ambient_warmth the player's meter reads. An
+## animal and the person standing next to it in the same storm should not
+## disagree about how cold it is there.
+##
+## Not modelled, and named rather than silently missing: a per-species cold
+## tolerance. A camel and a reindeer plainly should not chill at the same rate,
+## but nothing in the roster carries a coat or a climate today, and inventing
+## one number per species would be exactly the eyeballed table this project
+## refuses to write. Species divergence belongs to the genome
+## (concept/animal_genetics.md's hardiness gene), not to a hand-typed column.
+var warmth := 1.0
 
 var hunger := 0.0
 var thirst := 0.0
@@ -55,6 +75,26 @@ func _stagger(seed_value: int, channel: String) -> float:
 func advance(delta_seconds: float) -> void:
 	hunger = clampf(hunger + HUNGER_RATE_PER_SECOND * delta_seconds, 0.0, 1.0)
 	thirst = clampf(thirst + THIRST_RATE_PER_SECOND * delta_seconds, 0.0, 1.0)
+
+
+## Moves body warmth toward the local ambient, the same easing
+## SurvivalMeters.regulate_temperature uses. `ambient_warmth` is "how warm is it
+## here" in [0,1] -- climate x season x weather, from
+## EarthChunkManager.ambient_warmth.
+##
+## No wetness term, unlike the player's: nothing tracks how wet an ANIMAL is
+## (WetnessTracker is the player's own), so adding one here would be inventing
+## a value rather than reading one.
+func regulate_temperature(ambient_warmth: float, delta_seconds: float) -> void:
+	warmth = move_toward(
+		warmth,
+		clampf(ambient_warmth, 0.0, 1.0),
+		SurvivalMeters.WARMTH_RATE_PER_SECOND * delta_seconds
+	)
+
+
+func is_cold() -> bool:
+	return warmth <= SurvivalMeters.COLD_THRESHOLD
 
 
 func is_hungry() -> bool:

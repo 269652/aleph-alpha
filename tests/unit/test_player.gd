@@ -1119,26 +1119,66 @@ func test_a_led_horse_is_towed_along_behind_the_player():
 
 ## A carrot only leaves the inventory when it actually bought something --
 ## walking a full horse past your carrots must not eat them.
-func test_feeding_a_full_horse_costs_no_carrots():
+## Feeding is a GESTURE now, not something that happens because you stood
+## nearby. It used to fire from _lasso_step every frame whenever a carrot was
+## in the bag and the animal was in range -- so the "relationship" the whole
+## mechanic rests on reduced, in play, to standing still (see
+## docs/concept/taming.md, "feeding as an offer that can be refused"). The
+## player now offers, on the primary action key, holding the food.
+func _offer_food_to(horse: CreatureMarker) -> void:
+	player.equipped_item = _item_catalog.make("carrot")
+	player._perform_animal_action(horse, 0)
+
+
+func test_offering_food_to_a_full_horse_costs_no_carrots():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
 	player._throw_lasso()
 	player.inventory.add(_item_catalog.make("carrot"), 3)
 	horse._needs.hunger = 0.0
-	player._lasso_step(1.0 / 60.0)
+	_offer_food_to(horse)
 	assert_eq(player.inventory.count_of("carrot"), 3)
 	assert_eq(horse.trust, 0.0)
 
 
-func test_feeding_a_hungry_horse_spends_a_carrot_and_earns_trust():
+func test_offering_food_to_a_hungry_horse_spends_a_carrot_and_earns_trust():
 	_hold_lasso()
 	var horse := _horse_at(Vector2(8, 0))
 	player._throw_lasso()
 	player.inventory.add(_item_catalog.make("carrot"), 3)
 	horse._needs.hunger = 1.0
-	player._lasso_step(1.0 / 60.0)
+	_offer_food_to(horse)
 	assert_eq(player.inventory.count_of("carrot"), 2, "one carrot, one meal")
 	assert_gt(horse.trust, 0.0)
+
+
+## The defect the gesture exists to fix: walking past your own tied, hungry
+## horse with carrots in the bag must no longer feed it by itself.
+func test_standing_next_to_a_hungry_horse_no_longer_feeds_it_by_itself():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_lasso()
+	player.inventory.add(_item_catalog.make("carrot"), 3)
+	horse._needs.hunger = 1.0
+
+	for _frame in 30:
+		player._lasso_step(1.0 / 60.0)
+
+	assert_eq(player.inventory.count_of("carrot"), 3, "nothing was offered")
+	assert_eq(horse.trust, 0.0, "and nothing was earned")
+
+
+## The primary slot is whatever the animal most needs, so on a tied hungry
+## horse with food in hand it has to BE feeding -- the reported case.
+func test_the_primary_action_on_a_tied_hungry_horse_is_feeding_it():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_lasso()
+	player.equipped_item = _item_catalog.make("carrot")
+	horse._needs.hunger = 1.0
+	var actions := player.animal_actions_for(horse)
+	assert_gt(actions.size(), 0, "a tied hungry horse should offer something")
+	assert_eq(actions[0]["verb"], "Feed")
 
 
 # -- orders and riding (see docs/concept/taming.md) --------------------------
@@ -1333,3 +1373,34 @@ func test_unattended_hunger_eventually_slows_the_player_down_via_condition():
 		ConditionPenalty.speed_multiplier(0.5),
 		"hunger left unattended must have a real mechanical consequence (docs/concept/survival.md, 'Debuffs, not death')"
 	)
+
+
+## Every slot has to actually DO its verb. Feed was easy to get right and the
+## rest were routed through _lasso_step, which reads the lasso key itself --
+## so pressing the slot re-read an input that was not down and did nothing at
+## all, while the prompt cheerfully advertised the verb.
+func test_the_release_slot_actually_lets_the_animal_go():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	player._throw_lasso()
+	assert_true(horse.is_restrained(), "precondition: caught")
+
+	var actions := player.animal_actions_for(horse)
+	var slot := -1
+	for i in actions.size():
+		if actions[i]["verb"] == "Release":
+			slot = i
+	assert_gt(slot, -1, "a held animal should offer Release")
+
+	player._perform_animal_action(horse, slot)
+	assert_false(horse.is_restrained(), "pressing Release must let it go")
+
+
+func test_the_lasso_slot_actually_throws_the_rope():
+	_hold_lasso()
+	var horse := _horse_at(Vector2(8, 0))
+	var actions := player.animal_actions_for(horse)
+	assert_eq(actions[0]["verb"], "Lasso", "precondition: a rope in hand offers the throw")
+
+	player._perform_animal_action(horse, 0)
+	assert_true(horse.is_restrained(), "pressing Lasso must catch it")
