@@ -196,9 +196,16 @@ const CREATURE_PANELS_REFRESH_INTERVAL := 0.5
 ## doesn't fill the whole screen with panels.
 const MAX_CREATURE_PANELS := 6
 
-## Berlin -- a real-world starting point (also handy given the user's timezone).
-const SPAWN_LATITUDE := 52.52
-const SPAWN_LONGITUDE := 13.405
+## Freiburg im Breisgau -- the Gaskugel landmark on the Dreisam, in the
+## Betzenhausen district (48.007669N, 7.805657E per Wikimedia Commons' geo
+## tag and OpenStreetMap/Nominatim, which agree to within a few metres).
+## Previously Berlin (52.52N, 13.405E); moved 2026-08-29. See
+## test_world_spawn_location.gd, including its real-elevation-data check
+## that the new point is dry, non-mountain land at least as climate-warm as
+## the old Berlin spawn (so mechanics tuned against Berlin's real measured
+## climate, e.g. EarthwormPatch.MILD_WARMTH, are not silently re-broken).
+const SPAWN_LATITUDE := 48.007669
+const SPAWN_LONGITUDE := 7.805657
 const SPAWN_SEARCH_RADIUS := 5
 
 const PORT := 8910
