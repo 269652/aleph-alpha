@@ -7237,19 +7237,46 @@ onscreen text for lasso doesn't show hotkey it says press lassokey, not which
   hand offers **Feed** ahead of Ride, exactly as reported. Only ever offers what
   the player can actually do; what the animal NEEDS is shown as state instead,
   so "it wants feeding and you have no carrot" still reaches them without
-  masquerading as a button. Two rebindable slots (`primary_action` X /
-  `secondary_action` Z); every verb keeps its own dedicated key too, and the
+  masquerading as a button. Two rebindable slots (`primary_action` **R** /
+  `secondary_action` **X** by default -- `keybindings.gd` is the authority, and
+  `test_no_action_shares_a_default_key_with_a_slot` keeps a slot from silently
+  stealing a verb's key, which it caught once for real: the rope was moved to Z,
+  which another session's `cast` already held, so it now sits on J.
+  `Keybindings.display_key_for` means the prompt prints whatever the InputMap
+  actually holds rather than a letter typed into a string.
+  Every verb keeps its own dedicated key too, and the
   slot routes into the SAME handler rather than a copy -- `perform_rope_verb`
   was extracted from `_lasso_step` for exactly that reason, after the first
   version routed Release/Lasso back through `_lasso_step`, which re-reads the
   lasso key, found it not held, and did nothing while the prompt advertised the
   verb. Caught by `test_the_release_slot_actually_lets_the_animal_go`.
+  The ordering is **scored, not a ladder** -- reported as "a generic mechanism
+  which scores priority on context / item relevance". Each candidate verb scores
+  itself from two things the player can see: how much what they are HOLDING
+  points at it (`HELD_ITEM_RELEVANCE`), and how badly the animal needs it
+  (`NEED_URGENCY_WEIGHT`, scaled by the real urgency fraction, so feeding climbs
+  with hunger instead of switching on at a threshold). The top two fill the
+  slots. The first version was an if/else ladder, which put the reasoning in the
+  shape of the branches: every new verb had to be hand-placed against every
+  existing one, and "why is my primary key doing THAT?" had no answer you could
+  print -- `scored_for` now returns each candidate's score AND a `why` string.
+  An action the player cannot carry out scores exactly **0.0** and is never
+  offered, which is deliberately not the same as scoring low. The tests pin
+  ORDERINGS (`test_feeding_outranks_riding_for_a_hungry_tame_mount`,
+  `test_riding_outranks_everything_once_the_animal_is_content`,
+  `test_a_hungrier_animal_ranks_feeding_higher`), never the numbers: which verb
+  wins is the design, the arithmetic is only how it is expressed.
 - **Feeding is a gesture** (size: small) -- ✅ **Done** -- `Player.offer_treat_to`,
   reached from the primary slot while holding the food.
   `_try_feed_lassoed` used to fire from `_lasso_step` every frame whenever a
   carrot was in the bag, so the relationship the whole mechanic rests on
   reduced, in play, to standing still next to a horse. Pinned by
   `test_standing_next_to_a_hungry_horse_no_longer_feeds_it_by_itself`.
+  Reported later: "carrots never end up in the inventory". True, and the feed
+  was reading the wrong container -- `E` picks a carrot into the HAND, while
+  `offer_treat_to` consumed only from the bag, so the one carrot the player was
+  visibly holding was the one carrot it would not take. It now spends the held
+  item first and falls back to the bag.
   ⬜ Still open from `taming.md` §4: refusal, per-individual food preference,
   hand-fed versus ground-placed, discovery-by-offering.
 - **Animals answer the hover** (size: small) -- ✅ **Done** --
