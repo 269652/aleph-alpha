@@ -118,6 +118,68 @@ func crop_potential(genome, yield_multiplier: float = 1.0) -> int:
 	return int(round(genome.fruit_yield * MAX_CROP * yield_multiplier))
 
 
+## -- pollination feedback (see docs/concept/flora.md) ------------------------
+##
+## Bee visits to a blossoming, insect-pollinated tree (TreeSpecies.
+## needs_pollinators_for) nudge its yield up from a reduced floor toward the
+## species' full ceiling as they accumulate over one bearing cycle -- the
+## feedback flora.md flagged as missing: flowers fed pollinators, but a visit
+## never fed anything back. Callers compose this INTO the existing
+## yield_multiplier crop_potential already takes (species_yield * this),
+## rather than this replacing that multiplier.
+
+## The floor an insect-pollinated tree with ZERO visits this cycle still sits
+## at. Real apples and cherries are not self-sterile: an isolated tree still
+## sets some fruit from self- or incidental pollination (a breeze carrying
+## pollen a short distance, a visit from something other than a bee), just far
+## below what cross-pollination by a working hive achieves. Grounded at a
+## fifth of the ceiling -- low enough that bees visibly matter, never zero.
+const UNPOLLINATED_YIELD_FLOOR := 0.2
+
+## Visits within one bearing cycle at which pollination is treated as fully
+## done -- more visits beyond this keep the yield at its ceiling rather than
+## climbing further. A single tree in blossom for a few weeks is realistically
+## worked by a hive dozens of times over that window; this is comfortably
+## inside that range; keep it below PollinatorForaging.MAX_REMEMBERED_VISITS's
+## general order of magnitude so it exercises the same real bearing-cycle
+## timescale a live game session actually reaches, not an implausible count.
+const POLLINATION_SATURATION_VISITS := 20
+
+## `visits`: how many times a bee has landed on this tree so far in the
+## current bearing cycle (see ChoppableTree.pollination_visits_in_cycle) --
+## a float, not an int, now that an individual bee's own fitness can weight
+## one visit as somewhat more or less than 1 (see visit_weight_for_fitness).
+## Negative counts (should never happen, but a caller's own bug should not
+## propagate here) are treated as zero -- the same floor as never having been
+## visited at all.
+static func pollination_factor(visits: float) -> float:
+	var progress := clampf(
+		maxf(visits, 0.0) / float(POLLINATION_SATURATION_VISITS), 0.0, 1.0
+	)
+	return lerpf(UNPOLLINATED_YIELD_FLOOR, 1.0, progress)
+
+
+## How much one bee's visit counts toward pollination_factor's visit
+## accumulator, scaled by that individual bee's own AnimalFitness.
+## fitness_score (0..1) -- AnimalFitness's first real caller here (see
+## EarthChunkManager.record_pollination_visit_at / AmbientFlyerMarker's
+## bee-landing call site).
+##
+## A fitter, more vigorous bee genuinely transfers pollen somewhat more
+## effectively per visit, but real per-individual variation in pollinator
+## foraging efficiency (body size/condition) is a modest fraction, not an
+## order of magnitude -- so this stays a gentle +/-15% swing around the flat
+## 1.0 every other pollination_factor test already assumes for an average
+## bee (fitness 0.5), never enough on its own to meaningfully dent
+## POLLINATION_SATURATION_VISITS (20): even the fittest bee's single visit
+## (1.15) is 5.75% of that saturation point, not a shortcut to it.
+const VISIT_WEIGHT_MIN := 0.85
+const VISIT_WEIGHT_MAX := 1.15
+
+static func visit_weight_for_fitness(fitness_score: float) -> float:
+	return lerpf(VISIT_WEIGHT_MIN, VISIT_WEIGHT_MAX, clampf(fitness_score, 0.0, 1.0))
+
+
 ## Length in seconds of one full grow->ripen->fall cycle: ONE YEAR, for every
 ## species, always.
 ##

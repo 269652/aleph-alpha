@@ -60,6 +60,10 @@ const SPECIES_BASE_COLORS := {
 	"mountain_lion": Color(0.62, 0.52, 0.4),
 	"horse": Color(0.5, 0.3, 0.15),
 	"mouse": Color(0.58, 0.52, 0.46),
+	# A warm rusty red-brown, like a real red/fox squirrel's coat -- clearly
+	# distinct from mouse's flatter grey-brown despite sharing mouse_shape
+	# (see SPECIES_SHAPE_FAMILY below).
+	"squirrel": Color(0.62, 0.36, 0.16),
 	"deer": Color(0.62, 0.38, 0.2),
 	"bear": Color(0.22, 0.15, 0.1),
 	"lion": Color(0.78, 0.55, 0.15),
@@ -99,6 +103,14 @@ const SPECIES_BASE_COLORS := {
 ## doesn't read as any existing silhouette at any scale (short legs, round
 ## body, long tail), so it gets its own new "mouse_shape" family instead --
 ## see docs/concept/ecosystem_dynamics.md's Species roster section.
+## Squirrel reuses mouse's own new "mouse_shape" family rather than getting a
+## 6th hand-authored silhouette: unlike mouse (which needed its own family
+## because nothing else reads as a small round-bodied short-legged rodent at
+## any scale), a squirrel genuinely IS that same body plan, just bigger --
+## what makes it read as distinctly a squirrel is AnimalAnatomy's own tail
+## override (a large TAIL_BUSHY, painted procedurally on top of the shared
+## bitmap by _paint_tail, not baked into the bitmap itself -- see
+## AnimalAnatomy's "squirrel" profile), not a different silhouette.
 const SPECIES_SHAPE_FAMILY := {
 	"boar": "boar_shape",
 	"lynx": "lynx_shape",
@@ -114,6 +126,7 @@ const SPECIES_SHAPE_FAMILY := {
 	"mountain_lion": "wolf_shape",
 	"horse": "deer_shape",
 	"mouse": "mouse_shape",
+	"squirrel": "mouse_shape",
 	"deer": "deer_shape",
 	"bear": "boar_shape",
 	"lion": "lynx_shape",

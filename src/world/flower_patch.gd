@@ -365,8 +365,11 @@ func drink(cell: Vector2i) -> bool:
 	return true
 
 
-## Refills drained blooms over time.
-func advance(delta: float) -> void:
+## Refills drained blooms over time. `growth_modifier` (see
+## SeasonCycle.growth_modifier) scales only the seedling growth step below --
+## nectar and seed regen are unrelated resources, not "growing", and stay on
+## their own flat clocks regardless of season.
+func advance(delta: float, growth_modifier: float) -> void:
 	for cell in _nectar:
 		var level: float = _nectar[cell]
 		if level < 1.0:
@@ -379,6 +382,6 @@ func advance(delta: float) -> void:
 	# tick rather than given a second one -- a plant regrowing its nectar and
 	# a plant growing up are the same plant living.
 	if SECONDS_TO_MATURE > 0.0 and delta > 0.0:
-		var growth_step := delta / SECONDS_TO_MATURE
+		var growth_step := delta / SECONDS_TO_MATURE * growth_modifier
 		for cell in _growth.keys():
 			_growth[cell] = minf(1.0, float(_growth[cell]) + growth_step)

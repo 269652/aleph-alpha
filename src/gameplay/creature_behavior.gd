@@ -10,7 +10,18 @@ extends RefCounted
 ##   2. Thirsty -> seek water (in reach) or search for it (roam) if none sensed
 ##   3. Hungry predator with prey in reach -> hunt (its way of feeding)
 ##   4. Hungry -> seek food (in reach) or search for it (roam) if none sensed
-##   5. Nothing pressing -> wander
+##   5. Paired for courtship (see MammalCourtship / World._pair_up_courtships)
+##      -> court: walk toward the partner and linger near it
+##   6. Nothing pressing -> wander
+##
+## Courtship sits ABOVE wander and BELOW every survival need on purpose: a
+## real animal does not mate while it is being hunted, dying of thirst,
+## starving, or (for a predator) mid-hunt, but an eligible, well-fed, paired
+## animal with nothing more urgent to do courts rather than wandering
+## aimlessly. The caller (CreatureMarker/World) only ever sets "is_courting"
+## once AnimalReproduction.can_reproduce() already gated eligibility AND an
+## eligible same-species neighbour was actually found nearby -- this branch
+## does not re-check either, it only decides where courtship ranks.
 ##
 ## "seek_*" heads toward a sensed resource; "search_*" means the need exists
 ## but nothing's in range, so the creature should roam to look (the caller
@@ -52,12 +63,27 @@ func decide(context: Dictionary) -> Dictionary:
 			return {"intent": "seek_food", "direction": food_direction.normalized()}
 		return {"intent": "search_food", "direction": Vector2.ZERO}
 
+	if context["is_courting"]:
+		var partner_position: Vector2 = context["partner_position"]
+		return {"intent": "court", "direction": _toward(position, partner_position)}
+
 	return {"intent": "wander", "direction": Vector2.ZERO}
 
 
 ## An aggressive creature that's still strong enough stands and fights;
 ## everything else (calm, or weakened) flees.
+##
+## An IMMATURE creature never fights, regardless of temperament or health --
+## a real juvenile of even an aggressive-tempered species (boar, bear, lion)
+## flees rather than stands its ground. "is_mature" is supplied by
+## CreatureMarker every frame (see MammalGrowth.is_mature), the same way
+## "is_courting"/"partner_position" were added to this context earlier.
+## `.get(..., true)` defaults a context that doesn't set the key at all to
+## mature -- every pre-existing caller/test that predates this key keeps
+## exercising exactly today's behaviour.
 func _will_fight(context: Dictionary) -> bool:
+	if not context.get("is_mature", true):
+		return false
 	return context["temperament"] == "aggressive" and context["health_fraction"] >= STRONG_HEALTH_FRACTION
 
 

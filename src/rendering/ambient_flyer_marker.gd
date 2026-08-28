@@ -28,6 +28,14 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const WingbeatBounce = preload("res://src/rendering/wingbeat_bounce.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
+const TreeSpecies = preload("res://src/world/tree_species.gd")
+const AnimalFitness = preload("res://src/world/animal_fitness.gd")
+const FruitingModel = preload("res://src/world/fruiting_model.gd")
+
+## Only bees recognize blossoming fruit trees as a food source (see
+## _step_scent) -- real apple/cherry trees are pollinated mainly by bees, so
+## this is scoped to the one species rather than every nectar-feeder.
+const TREE_POLLINATING_SPECIES := "bee"
 
 ## Own dedicated group for _scan_for_partners' nearby-flyer search --
 ## deliberately NOT the same group as HoverTargetFinder.GROUP_NAME below.
@@ -59,6 +67,13 @@ var species := "sparrow"
 ## derived from its own seed (see AmbientFlyerRenderer.spawn_offspring and
 ## _finish_courtship below). That is the whole heritability path.
 var traits: Dictionary = {}
+
+## Shared AnimalFitness instance (stateless -- nothing per-individual to
+## keep here). wander_seed is assigned by AmbientFlyerRenderer AFTER this
+## node is constructed, so this individual's fitness cannot be precomputed
+## at declaration time -- see _fitness_score(), which derives it fresh from
+## wander_seed's CURRENT value on each of its (rare, throttled) call sites.
+static var _animal_fitness := AnimalFitness.new()
 
 var _movement: AmbientFlyerMovement
 
@@ -144,6 +159,14 @@ var _grass_seed_pick_index := 0
 ## a previous seed is still digesting.
 var _carried_seed_species := ""
 
+## The PixelNoise seed this particular swallowed seed's granivory roll was
+## (or will be) drawn from -- see SeedEndozoochory.seed_is_consumed, called
+## from _step_seed_carrying at the moment the carry timer elapses. Set
+## alongside _carried_seed_species by whichever _take_targeted_* method just
+## ate a GROUND seed (flower or grass; fruit does not set this, since
+## fruit's seed is never rolled for predation -- see _step_seed_carrying).
+var _carried_seed_carrier_seed := 0
+
 ## How full this bird's crop is, and how long it has been carrying whatever it
 ## swallowed (see BirdDigestion).
 ##
@@ -189,7 +212,23 @@ var _forage_target = null  # Vector2, or null while wandering
 ## two made every approach both fail to drink AND fail to register as
 ## visited, so the same flower was re-targeted forever -- the bobbing loop.
 var _forage_flower = null  # Vector2, or null
+## Whether `_forage_target`/`_forage_flower` above is a blossoming TREE (see
+## EarthChunkManager.blossoms_near) rather than a flower -- decides which
+## world call fires on arrival (see _process): record_pollination_visit_at
+## for a tree, drink_nectar_at for a flower. Only ever set true for
+## TREE_POLLINATING_SPECIES ("bee" -- see _step_scent); every other flyer
+## keeps working flowers exclusively.
+var _forage_target_is_tree := false
 var _drink_remaining := 0.0
+
+## What this pollinator carries away from its last flower visit (see
+## Pollination.pollen_after_visit): "" until it visits a male flower, and
+## then that flower's own species. A female flower leaves it alone -- a
+## single load can fertilise more than one plant, which is why one bee is
+## worth anything at all -- and a later male replaces it. This needs no
+## decay or reset logic of its own: it is exactly and only what that pure
+## function computes on each visit.
+var _carried_pollen := ""
 var _visited: Array = []
 var _elapsed_time := 0.0
 
@@ -227,6 +266,19 @@ func _ready() -> void:
 	add_to_group(HoverTargetFinder.GROUP_NAME)
 	add_to_group(FLOCK_GROUP)
 	z_index = AIRBORNE_Z_INDEX
+
+
+## This individual's own AnimalFitness fitness_score, derived from
+## wander_seed (see AnimalFitness.phenotype_for) -- AnimalFitness's first
+## real caller for this species: a bee's own fitness modestly scales its
+## pollination effectiveness (_step_scent's tree-blossom branch, via
+## FruitingModel.visit_weight_for_fitness) and a bird's own fitness modestly
+## scales its seed-predation chance (_step_seed_carrying, via
+## SeedEndozoochory.seed_is_consumed's forager_seed). Recomputed on each
+## (rare, throttled) call rather than cached at declaration time, since
+## wander_seed is only assigned by AmbientFlyerRenderer AFTER construction.
+func _fitness_score() -> float:
+	return _animal_fitness.fitness_score(_animal_fitness.phenotype_for(wander_seed))
 
 
 func setup(movement: AmbientFlyerMovement) -> void:
@@ -449,7 +501,30 @@ func _process(frame_delta: float) -> void:
 			# this bloom in the table forever and route every neighbour around
 			# grass that is actually free.
 			_release_forage_claim()
-			if scent_world.drink_nectar_at(flower_position):
+			# A blossoming TREE gets the tree-side world call, never
+			# drink_nectar_at -- a blossom is not a flower patch cell (see
+			# EarthChunkManager.record_pollination_visit_at / _forage_target_
+			# is_tree).
+			var fed := false
+			if _forage_target_is_tree:
+				if scent_world.has_method("record_pollination_visit_at"):
+					# A fitter bee is a somewhat more effective pollinator --
+					# see FruitingModel.visit_weight_for_fitness for the
+					# bounded +/-15% swing this individual's own fitness
+					# nudges its visit by, around the flat 1.0 an average
+					# bee (fitness 0.5) still banks.
+					var visit_weight := FruitingModel.visit_weight_for_fitness(_fitness_score())
+					fed = scent_world.record_pollination_visit_at(flower_position, visit_weight)
+			else:
+				fed = scent_world.drink_nectar_at(flower_position)
+				# Nectar and pollen are separate resources here (FlowerPatch
+				# tracks _nectar and _pollinated as separate dicts), so this
+				# runs regardless of `fed` -- a drained bloom can still
+				# exchange pollen.
+				if scent_world.has_method("pollinate_flower_at"):
+					_carried_pollen = scent_world.pollinate_flower_at(flower_position, _carried_pollen)
+			_forage_target_is_tree = false
+			if fed:
 				_drink_remaining = PollinatorForaging.DRINK_SECONDS
 				# Somewhere that actually feeds it: make this the centre of
 				# its territory, so the relocation leash follows the food
@@ -645,6 +720,19 @@ func _step_scent(delta: float) -> void:
 	var blooming: Array = flowers.filter(
 		func(f): return FlowerSpecies.is_in_bloom(String(f["species"]), season)
 	)
+	# Bees alone also recognize blossoming apple/cherry trees as a food
+	# source (see TreeSpecies.needs_pollinators_for / EarthChunkManager.
+	# blossoms_near) -- real fruit trees are insect-pollinated and bees are
+	# their primary pollinator, so this is scoped to TREE_POLLINATING_SPECIES
+	# rather than every nectar-feeder here. blossoms_near already gates on
+	# "in blossom right now" (spring canopy only) at the source, so these
+	# merge straight into `blooming` with no is_in_bloom check of their own --
+	# unlike FlowerSpecies-keyed entries, a tree species isn't in that table
+	# to check against anyway.
+	if species == TREE_POLLINATING_SPECIES and scent_world.has_method("blossoms_near"):
+		blooming += scent_world.blossoms_near(
+			position, int(PollinatorForaging.FORAGE_SEARCH_TILES)
+		)
 	# Two lists, deliberately. STEERING uses only blooms that still hold
 	# nectar -- a spent flower has no reward left to advertise, and letting
 	# drained blooms keep pulling on the gradient is what made a flyer orbit
@@ -665,6 +753,7 @@ func _step_scent(delta: float) -> void:
 		_scent_direction = Vector2.ZERO
 		_forage_target = null
 		_forage_flower = null
+		_forage_target_is_tree = false
 		_release_forage_claim()
 		_relocate()
 		return
@@ -704,6 +793,7 @@ func _step_scent(delta: float) -> void:
 	if target.is_empty():
 		_forage_target = null
 		_forage_flower = null
+		_forage_target_is_tree = false
 		_release_forage_claim()
 		_relocate()
 	else:
@@ -714,6 +804,7 @@ func _step_scent(delta: float) -> void:
 			return
 		_forage_flower = target["position"]
 		_forage_target = candidate_landing
+		_forage_target_is_tree = TreeSpecies.needs_pollinators_for(String(target.get("species", "")))
 		# Announce it, so neighbours deciding in the next moment can route
 		# around this flyer instead of chaining behind it. Claiming again
 		# simply replaces this flyer's previous row, so the table stays
@@ -1009,12 +1100,61 @@ func _take_targeted_seed() -> void:
 	_carried_seed_is_grass = false  # see the shared doc comment on both flags
 	# Same carry model as fruit (see _take_targeted_fruit): a distance, not a
 	# fixed time, so a faster bird carries the seed proportionally further.
-	var carry_tiles := SeedEndozoochory.carry_distance_tiles(wander_seed + _seed_pick_index)
+	var carrier_seed := wander_seed + _seed_pick_index
+	_carried_seed_carrier_seed = carrier_seed
+	var carry_tiles := SeedEndozoochory.carry_distance_tiles(carrier_seed)
 	_carry_seconds_remaining = carry_tiles * float(TerrainRenderer.TILE_SIZE) / maxf(_movement.speed, 1.0)
+
+
+## Whether a grass seed this bird can currently see is strictly closer than
+## every flower seed candidate it can also see right now -- the tie-break
+## between the two seed kinds that replaces the old fixed
+## flower-seed-always-first order (see _look_for_seeds).
+##
+## Deliberately compares raw candidate distance, not the post-scatter pick
+## GroundForageBehavior.choose_worm would land on for either list (see
+## PollinatorForaging.NEAREST_CANDIDATE_POOL): "is the grass seed genuinely
+## closer" is a question about what's actually on the ground, not about which
+## of several near-tied candidates the scatter happens to land on -- that
+## scatter still applies AFTER this decides which kind to go for, exactly as
+## before, inside whichever of _look_for_seeds/_look_for_grass_seeds ends up
+## committing.
+##
+## A tie (equal distance) keeps the flower seed, matching the old order in
+## the one case where "nearest" genuinely can't decide -- ties are not the
+## gap this exists to fix, and the two seed kinds never legitimately share
+## the exact same tile in practice.
+func _grass_seed_is_nearer_than(flower_seeds: Array) -> bool:
+	if seed_world == null or not seed_world.has_method("grass_seeds_near"):
+		return false
+	var grass_seeds: Array = seed_world.grass_seeds_near(
+		position, int(GroundForageBehavior.SEARCH_TILES)
+	)
+	if grass_seeds.is_empty():
+		return false
+	var nearest_flower := INF
+	for seed in flower_seeds:
+		nearest_flower = minf(nearest_flower, position.distance_to(seed["position"]))
+	var nearest_grass := INF
+	for seed in grass_seeds:
+		nearest_grass = minf(nearest_grass, position.distance_to(seed["position"]))
+	return nearest_grass < nearest_flower
 
 
 ## Looks for the next seed on a throttled interval, in parallel with the
 ## worm and fruit searches (see _step_ground_forage's SEEKING branch).
+##
+## Worm and fruit still unconditionally outrank both seed kinds (checked
+## earlier in that same SEEKING branch) -- protein/energy wins over a seed
+## snack regardless of distance. But between flower seed and grass seed
+## specifically, this backs off to let _look_for_grass_seeds (called right
+## after this, still in the same SEEKING branch) commit instead whenever a
+## grass seed is actually the nearer of the two -- see
+## _grass_seed_is_nearer_than for why: a live probe found a fixed
+## flower-seed-always-first order meant a sparrow with ANY flower seed in
+## range never even attempted grass seed, however much closer the grass seed
+## really was (docs/concept/long_grass.md, "11/11 dispersal events from mice,
+## zero from sparrows").
 func _look_for_seeds(delta: float) -> void:
 	if seed_world == null:
 		return
@@ -1028,6 +1168,8 @@ func _look_for_seeds(delta: float) -> void:
 		position, int(GroundForageBehavior.SEARCH_TILES)
 	)
 	if seeds.is_empty():
+		return
+	if _grass_seed_is_nearer_than(seeds):
 		return
 	_seed_pick_index += 1
 	var target := GroundForageBehavior.choose_worm(
@@ -1078,7 +1220,9 @@ func _take_targeted_grass_seed() -> void:
 	_carried_seed_species = "grass"
 	_carried_seed_is_flower = false  # see the shared doc comment on both flags
 	_carried_seed_is_grass = true
-	var carry_tiles := SeedEndozoochory.carry_distance_tiles(wander_seed + _grass_seed_pick_index)
+	var carrier_seed := wander_seed + _grass_seed_pick_index
+	_carried_seed_carrier_seed = carrier_seed
+	var carry_tiles := SeedEndozoochory.carry_distance_tiles(carrier_seed)
 	_carry_seconds_remaining = carry_tiles * float(TerrainRenderer.TILE_SIZE) / maxf(_movement.speed, 1.0)
 
 
@@ -1119,6 +1263,15 @@ func _look_for_grass_seeds(delta: float) -> void:
 ## timer elapses, the seed is deposited at wherever the bird happens to be
 ## right now (see EarthChunkManager.try_plant_seed_at) -- a real bird doesn't
 ## pick a spot, it simply is somewhere by the time digestion finishes.
+## The pre-hatch sprite (see ProceduralEggSprite), shown in place of the
+## ordinary wing-flap texture for the entire COURTING/MATED/EGG span (see
+## _is_pre_hatch). Set by the renderer, exactly like flap_frames/
+## perched_frame -- left null for any caller that predates this, which
+## simply leaves the texture alone for that span rather than erroring (see
+## _animate_wings).
+var egg_frame: Texture2D = null
+
+
 ## Records the size this flyer is when grown, so a juvenile grows toward its
 ## own species' adult size rather than a shared assumption.
 func set_adult_scale(full_size: Vector2) -> void:
@@ -1628,21 +1781,41 @@ func _step_seed_carrying(delta: float) -> void:
 	_carry_seconds_remaining -= delta
 	if _carry_seconds_remaining > 0.0:
 		return
+	# A bare GROUND seed (flower or grass) is the meal itself for a true
+	# granivore -- real predation destroys the large majority of it before
+	# it ever gets a chance to sprout (see SeedEndozoochory.
+	# GRANIVORY_CONSUMED_CHANCE). Tree fruit is deliberately exempt: a fleshy
+	# fruit exists specifically so the seed riding inside is swallowed whole
+	# and passed unharmed, a real mutualism rather than predation, so that
+	# branch below is never gated by this roll.
+	var seed_survives := true
+	if _carried_seed_is_flower or _carried_seed_is_grass:
+		# forager_seed is THIS bird's own identity seed (wander_seed), fixed
+		# for its whole life, separate from the per-pick roll seed
+		# (_carried_seed_carrier_seed) -- a fitter individual forager is a
+		# slightly more efficient predator (see SeedEndozoochory.
+		# FITNESS_CHANCE_SWING), but each seed it eats still rolls
+		# independently.
+		seed_survives = not SeedEndozoochory.seed_is_consumed(
+			_carried_seed_carrier_seed, wander_seed
+		)
 	# Where it lands decides what grows: a swallowed FLOWER seed becomes a
 	# flower, a GRASS seed becomes a new tall-grass patch (see
 	# docs/concept/long_grass.md's "Reproduction" section), tree fruit
 	# becomes a tree (bird endozoochory -- see
 	# concept/flora.md#bird-endozoochory). All three are simply dropped
 	# where the bird happens to be, which is what ties plant spread to the
-	# ecosystem's real movement corridors rather than to a spread radius.
-	if _carried_seed_is_flower:
-		if seed_world != null and seed_world.has_method("plant_flower_at"):
-			seed_world.plant_flower_at(position, _carried_seed_species)
-	elif _carried_seed_is_grass:
-		if seed_world != null and seed_world.has_method("plant_grass_at"):
-			seed_world.plant_grass_at(position)
-	elif fruit_world != null:
-		fruit_world.try_plant_seed_at(position, _carried_seed_species)
+	# ecosystem's real movement corridors rather than to a spread radius --
+	# unless the seed was destroyed above, in which case nothing sprouts.
+	if seed_survives:
+		if _carried_seed_is_flower:
+			if seed_world != null and seed_world.has_method("plant_flower_at"):
+				seed_world.plant_flower_at(position, _carried_seed_species)
+		elif _carried_seed_is_grass:
+			if seed_world != null and seed_world.has_method("plant_grass_at"):
+				seed_world.plant_grass_at(position)
+		elif fruit_world != null:
+			fruit_world.try_plant_seed_at(position, _carried_seed_species)
 	# The dropping itself: the visible half of dispersal, so the player can see
 	# where the seedling under the perch came from.
 	if seed_world != null and seed_world.has_method("drop_guano_at"):
@@ -1750,9 +1923,27 @@ var perched := false
 const FLAP_SECONDS_PER_FRAME := 0.09
 
 
+## Whether this flyer is still in the pre-hatch span (COURTING/MATED/EGG,
+## i.e. before LifeCycle.STAGE_JUVENILE begins) -- the "an egg, not a tiny
+## adult" window. Wild-spawned flyers start at LifeCycle.MATURE_SECONDS (see
+## `age_seconds`'s own doc comment), so this is only ever true for something
+## actually BORN in front of the player (see begin_life) -- an ordinary
+## meadow flyer is never affected.
+func _is_pre_hatch() -> bool:
+	return LifeCycle.stage_at(age_seconds) < LifeCycle.STAGE_JUVENILE
+
+
 ## Advances the wing-beat. Separate from the movement step so a flyer
 ## animates even while hovering.
 func _animate_wings() -> void:
+	# Pre-hatch: an egg, not a flapping insect (see ProceduralEggSprite /
+	# _is_pre_hatch). No egg_frame set (an older caller, a test double) is a
+	# no-op rather than an error -- the texture is simply left whatever it
+	# was, matching every other optional-field guard in this file.
+	if _is_pre_hatch():
+		if egg_frame != null:
+			texture = egg_frame
+		return
 	# A perched bird holds still. Flapping while sitting on a branch reads
 	# as a glitch, not as a bird.
 	if perched:

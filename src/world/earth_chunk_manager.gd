@@ -15,6 +15,7 @@ const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_pat
 const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
 const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
+const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
 const ProceduralSeedSprite = preload("res://src/rendering/procedural_seed_sprite.gd")
@@ -35,6 +36,7 @@ const TundraLichen = preload("res://src/world/tundra_lichen.gd")
 const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sprite.gd")
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
+const AntColony = preload("res://src/world/ant_colony.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -113,8 +115,11 @@ const FlyColony = preload("res://src/gameplay/fly_colony.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
 const DroppedItem = preload("res://src/rendering/dropped_item.gd")
 const FruitingModel = preload("res://src/world/fruiting_model.gd")
+const Pollination = preload("res://src/gameplay/pollination.gd")
 const ChunkEcologyCatchup = preload("res://src/world/chunk_ecology_catchup.gd")
 const KeptAnimals = preload("res://src/world/kept_animals.gd")
+const GrowingJuveniles = preload("res://src/world/growing_juveniles.gd")
+const MammalGrowth = preload("res://src/gameplay/mammal_growth.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
 const TreeMaturity = preload("res://src/gameplay/tree_maturity.gd")
@@ -164,6 +169,10 @@ const ECOLOGY_DIR := "user://chunk_ecology"
 ## Animals the player has tamed or tied up -- kept individually rather
 ## than as a number in the region's aggregate (see KeptAnimals).
 const KEPT_ANIMALS_DIR := "user://chunk_kept_animals"
+## Wild mammal juveniles that are not yet fully grown -- kept individually,
+## for a different reason than KEPT_ANIMALS_DIR (see GrowingJuveniles' own
+## doc comment: nobody tamed or tied these, they simply aren't grown yet).
+const GROWING_JUVENILES_DIR := "user://chunk_growing_juveniles"
 
 ## Where roof pieces are persisted (see Chunk.roof_modifications) -- same
 ## generic Dictionary save/load ChunkSerializer already uses for
@@ -546,6 +555,10 @@ var _lichen_refresh_accumulator := 0.0
 var _worm_patches: Dictionary = {}
 var _worm_sprites: Dictionary = {}
 var _worm_sprite_generator := ProceduralWormSprite.new()
+## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
+## "Ants"). No sprite dictionary alongside it -- ants are not rendered this
+## pass (see AntColony's own doc comment on scope).
+var _ant_colonies: Dictionary = {}
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -2991,7 +3004,19 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			# fallen count scale by this species' own yield/ripening
 			# character on top of the genome's raw traits.
 			var species_id := TreeSpecies.species_for_bias(genome.species_bias)
-			var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id)
+			# Bee visits nudge an insect-pollinated tree's yield (see
+			# FruitingModel.pollination_factor / docs/concept/flora.md) --
+			# composed INTO the species' own yield multiplier, not instead of
+			# it, so a well-visited apple can still reach exactly the ceiling
+			# it always could. Wind-pollinated species (pine/acorn/hazelnut/
+			# walnut) get a flat 1.0 regardless of tree.pollination_visits_
+			# in_cycle -- a real pine sets its cone crop with no insect's help.
+			var pollination_factor := 1.0
+			if TreeSpecies.needs_pollinators_for(species_id):
+				pollination_factor = FruitingModel.pollination_factor(
+					tree.pollination_visits_in_cycle(FruitingModel.BEARING_CYCLE_SECONDS, now)
+				)
+			var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id) * pollination_factor
 			var ripening_multiplier := TreeSpecies.ripening_multiplier_for(species_id)
 			var state: Dictionary = _fruiting_model.state_at(
 				genome, now, warmth, yield_multiplier, ripening_multiplier
@@ -4204,7 +4229,17 @@ func step_ground_food(delta_seconds: float) -> void:
 			continue
 		if item.item_stack != null:
 			item.spoil_seconds = FruitSpoilage.edible_seconds(item.item_stack.item.id, season)
-		item.advance(delta_seconds)
+		var elapsed := delta_seconds
+		# Maggots eat the rot they hatched in (see FlyColony.decay_hastened_by,
+		# docs/concept/flies.md): a windfall with an active colony on it goes
+		# over sooner than the same windfall with none. decay_hastened_by
+		# answers in a FRACTION of the item's whole shelf life, so it is
+		# converted to seconds against this item's own spoil_seconds before
+		# being added on top of ordinary aging.
+		var colony: FlyColony = _fly_colonies.get(item)
+		if colony != null:
+			elapsed += colony.decay_hastened_by(delta_seconds) * item.spoil_seconds
+		item.advance(elapsed)
 
 
 ## Ages every loaded sapling, so a tree planted while you watch actually grows.
@@ -4250,8 +4285,9 @@ func step_tall_grass(delta_seconds: float) -> void:
 	# test_growth_lands_in_the_same_place_whether_batched_or_per_frame), and
 	# nothing between refreshes could observe the difference anyway: the
 	# sprites are only re-synced here too.
+	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
 	for sim in _grass_sims.values():
-		sim.advance(elapsed)
+		sim.advance(elapsed, growth_modifier)
 		sim.shed_seed(elapsed)
 
 	_graze_by_herbivores()
@@ -4301,13 +4337,13 @@ func step_wild_crops(delta_seconds: float) -> void:
 	# own floor is 0.2, not 0 (see docs/concept/wild_crops.md "The season").
 	# Computed once per batched tick rather than per patch: it is a pure
 	# function of the world clock, which does not move inside this loop.
-	var season_growth := _season_cycle.growth_modifier(_world_age_seconds)
+	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
 	for chunk_coord in _wild_crop_sims.keys():
 		var sims: Dictionary = _wild_crop_sims[chunk_coord]
 		var markers: Dictionary = _wild_crop_markers[chunk_coord]
 		for crop_id in sims:
 			var sim: WildCropPatch = sims[crop_id]
-			sim.advance(elapsed, season_growth)
+			sim.advance(elapsed, growth_modifier)
 			_wild_crop_renderer.sync_markers(
 				_entities_parent, sim, crop_id, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
 				markers[crop_id], _season_tint
@@ -4532,6 +4568,7 @@ func _graze_by_herbivores() -> void:
 				_ecosystem.record_vegetation_harvest(chunk_coord, growth)
 			_step_seed_dispersal(creature)
 			_step_grass_seed_caching(creature)
+			_step_squirrel_nut_caching(creature)
 
 
 ## Rodent scatter-hoarding (see SeedCaching / docs/concept/long_grass.md's
@@ -4582,6 +4619,70 @@ func _step_grass_seed_caching(creature) -> void:
 		return
 	plant_grass_at(creature.position)
 	creature.carried_grass_seed = false
+
+
+## Squirrel scatter-hoarding of fallen tree NUTS (see SquirrelNutCaching /
+## docs/concept/flora.md's disperser-vs-predator tension): a squirrel that
+## passes near a fallen NUT (TreeSpecies.is_nut -- pine/acorn/hazelnut/
+## walnut, not fleshy fruit) takes it and carries it a short GROUND distance
+## while it goes on foraging, exactly the same on-foot shape
+## _step_grass_seed_caching uses for a mouse. Once it has carried the nut its
+## own carry distance, the outcome resolves: mostly it just eats the nut
+## outright (SquirrelNutCaching.nut_is_consumed, the real majority outcome
+## for a scatter-hoarder), but sometimes it caches it instead, sprouting a
+## new sapling via the SAME tree-seed sink robin's own fruit dispersal
+## already uses (try_plant_seed_at, gated to forest/rainforest). Gated to
+## squirrels specifically (species == "squirrel"), not the whole "Forager"
+## diet label -- this is a real squirrel behaviour, not a generic dietary
+## fact. Fleshy fruit (cherry/apple) is deliberately left untouched here --
+## a squirrel finding one just eats it like any other fruit-eating forager
+## via GrazerForaging's ungated FOOD_FRUIT path; only a genuine hard-shelled
+## nut is a candidate for the crack-or-cache tension this mechanic models.
+func _step_squirrel_nut_caching(creature) -> void:
+	if creature.info == null or creature.info.species != "squirrel":
+		return
+	if creature.carried_nut_species == "":
+		var nearby := fruit_near(creature.position, int(SquirrelNutCaching.PICKUP_RADIUS_TILES))
+		nearby = nearby.filter(func(f): return TreeSpecies.is_nut(String(f.get("species", ""))))
+		if nearby.is_empty():
+			return
+		# The nearest nut actually within reach, not just anything in the
+		# wider query radius -- a squirrel grabs what it is standing next to.
+		var nearest_position: Vector2 = nearby[0]["position"]
+		var nearest_species: String = nearby[0]["species"]
+		var nearest_distance: float = creature.position.distance_to(nearest_position)
+		for candidate in nearby:
+			var candidate_position: Vector2 = candidate["position"]
+			var distance: float = creature.position.distance_to(candidate_position)
+			if distance < nearest_distance:
+				nearest_distance = distance
+				nearest_position = candidate_position
+				nearest_species = candidate["species"]
+		if nearest_distance > SquirrelNutCaching.PICKUP_RADIUS_TILES * TerrainRenderer.TILE_SIZE:
+			return
+		var eaten_species := take_fruit_at(nearest_position)
+		if eaten_species == "":
+			return
+		creature.carried_nut_species = eaten_species
+		creature.carried_nut_origin = creature.position
+		return
+
+	# Carrying: resolve once it has actually travelled its own (short) carry
+	# distance -- eaten outright (the majority outcome) or cached as a new
+	# sapling (the minority, real scatter-hoarding).
+	var carried_tiles: float = (
+		creature.position.distance_to(creature.carried_nut_origin) / float(TerrainRenderer.TILE_SIZE)
+	)
+	if carried_tiles < SquirrelNutCaching.carry_distance_tiles(creature.wander_seed):
+		return
+	# forager_seed is THIS squirrel's own identity seed (wander_seed) -- a
+	# fitter individual forager is a slightly more efficient predator (see
+	# SquirrelNutCaching.NUT_FITNESS_CHANCE_SWING), threaded through the same
+	# way AmbientFlyerMarker._step_seed_carrying threads its own wander_seed
+	# into SeedEndozoochory.seed_is_consumed.
+	if not SquirrelNutCaching.nut_is_consumed(creature.wander_seed, creature.wander_seed):
+		try_plant_seed_at(creature.position, creature.carried_nut_species)
+	creature.carried_nut_species = ""
 
 
 ## Flowers spread on the backs of grazing animals (see SeedDispersal /
@@ -4996,6 +5097,16 @@ func record_birth_at(position: Vector2, count: float = 1.0) -> void:
 	_ecosystem.record_birth(_chunk_coord_for_tile(_world_tile_for_pixel(position)), count)
 
 
+## An animal DIED at this world position -- predator kill or player weapon,
+## see CreatureMarker.take_damage -- tells whichever region owns that spot
+## (see EcosystemSimulation.record_death). record_birth_at's counterpart in
+## the opposite direction, for the same reason: the individual half of the
+## simulation has to report to the aggregate half, or a kill in front of the
+## player would vanish the moment the chunk unloads and reloads.
+func record_death_at(position: Vector2, is_predator: bool, count: float = 1.0) -> void:
+	_ecosystem.record_death(_chunk_coord_for_tile(_world_tile_for_pixel(position)), is_predator, count)
+
+
 ## A courting pair produced young (see Courtship / AmbientFlyerMarker).
 ##
 ## Two things happen, and both matter. The offspring is spawned as a real
@@ -5051,12 +5162,125 @@ func drink_nectar_at(pixel_position: Vector2) -> bool:
 	return patch.drink(tile - chunk_coord * CHUNK_SIZE)
 
 
+## Delivers pollen from a visiting bee/butterfly to the flower at
+## `pixel_position` (see FlowerPatch.pollinate) -- the flower-side counterpart
+## of record_pollination_visit_at for a blossoming tree. Nectar and pollen are
+## separate resources here (FlowerPatch tracks them as separate dicts), so
+## this is a wholly independent visit outcome from drink_nectar_at, not
+## conditioned on it.
+##
+## Returns what the visitor now carries afterward (see Pollination.
+## pollen_after_visit): unchanged when there is no patch or no flower here,
+## and otherwise the visited flower's own species if it just gave pollen, or
+## whatever the visitor already carried if it did not.
+func pollinate_flower_at(pixel_position: Vector2, carried_species: String) -> String:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var patch: FlowerPatch = _flower_patches.get(chunk_coord)
+	if patch == null:
+		return carried_species
+	var cell := tile - chunk_coord * CHUNK_SIZE
+	if not patch.has_flower(cell):
+		return carried_species
+	var species := patch.species_at(cell)
+	var sex := patch.sex_at(cell)
+	patch.pollinate(cell, carried_species)
+	return Pollination.pollen_after_visit(carried_species, species, sex)
+
+
+## Blossoming, insect-pollinated trees near `pixel_position` -- the tree-side
+## counterpart of flowers_near, in the exact same {position, species, nectar,
+## landing} shape so a bee's existing targeting machinery
+## (PollinatorForaging.choose_target, unvisited_only, remember_visit)
+## can treat a tree it is worth visiting exactly like a flower it already
+## knows how to work, with no changes to that machinery at all.
+##
+## Wind-pollinated species (pine/acorn/hazelnut/walnut -- see
+## TreeSpecies.needs_pollinators_for) never appear here: a real bee has
+## nothing to gain landing on a catkin or a cone, unlike an apple or cherry
+## blossom's real nectar reward.
+##
+## Blossom is a whole-world state (IllustratedTree.CANOPY_BLOSSOM only ever
+## draws in spring -- see _sync_tree_season), not a per-tree one, so this
+## gates on the season once rather than asking each tree what it is drawn as.
+##
+## Scoped to the loaded-tree chunk neighbourhood exactly like
+## solid_obstacles_near scans _loaded_trees -- cheap for the same reason: it
+## runs per bee per sniff, and _loaded_trees is already bucketed per chunk.
+func blossoms_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
+	var out: Array = []
+	if current_season() != "spring":
+		return out
+	var radius_px := float(radius_tiles) * TerrainRenderer.TILE_SIZE
+	var chunk_px := float(CHUNK_SIZE) * TerrainRenderer.TILE_SIZE
+	var min_chunk := Vector2i(
+		floori((pixel_position.x - radius_px) / chunk_px),
+		floori((pixel_position.y - radius_px) / chunk_px)
+	)
+	var max_chunk := Vector2i(
+		floori((pixel_position.x + radius_px) / chunk_px),
+		floori((pixel_position.y + radius_px) / chunk_px)
+	)
+	for chunk_y in range(min_chunk.y, max_chunk.y + 1):
+		for chunk_x in range(min_chunk.x, max_chunk.x + 1):
+			for tree in _loaded_trees.get(Vector2i(chunk_x, chunk_y), []):
+				if not is_instance_valid(tree):
+					continue
+				if tree.position.distance_to(pixel_position) > radius_px:
+					continue
+				var species_id := TreeSpecies.species_for_bias(tree.species_bias)
+				if not TreeSpecies.needs_pollinators_for(species_id):
+					continue
+				out.append({
+					"position": tree.position,
+					"species": species_id,
+					# A blossom's reward is not modelled as a depleting
+					# resource the way flower nectar is (see FlowerPatch) --
+					# out of scope for this pass (see docs/progress.md). A
+					# constant, always-present 1.0 is what makes a blossoming
+					# tree always worth checking, exactly like an unchecked
+					# flower already is regardless of how full it turns out
+					# to be (see PollinatorForaging.is_worth_visiting).
+					"nectar": 1.0,
+				})
+	return out
+
+
+## Records a bee's visit to the blossoming tree at `tree_position` (see
+## ChoppableTree.record_pollination_visit / FruitingModel.pollination_factor)
+## -- the tree-side counterpart of drink_nectar_at. Returns whether a tree was
+## actually found there, the same "did this really land on something"
+## contract drink_nectar_at already has.
+##
+## `visit_weight` defaults to a flat 1.0 (an ordinary visit) but the caller
+## (AmbientFlyerMarker) passes its own fitness-scaled weight for a real bee
+## landing -- see FruitingModel.visit_weight_for_fitness.
+func record_pollination_visit_at(tree_position: Vector2, visit_weight: float = 1.0) -> bool:
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(tree_position))
+	for tree in _loaded_trees.get(chunk_coord, []):
+		if not is_instance_valid(tree):
+			continue
+		# Same positional tolerance as flower visit-memory/claims (see
+		# PollinatorForaging._was_visited/_is_claimed) -- a tree's position is
+		# a real Node2D position rather than one rebuilt per query, but the
+		# bee only ever hands back exactly the position blossoms_near gave
+		# it, so an exact-enough tolerance is what's actually being matched.
+		if tree.position.distance_to(tree_position) >= PollinatorForaging.LANDING_DISTANCE:
+			continue
+		if not tree.has_method("record_pollination_visit"):
+			continue
+		tree.record_pollination_visit(FruitingModel.BEARING_CYCLE_SECONDS, _world_age_seconds, visit_weight)
+		return true
+	return false
+
+
 ## Refills drained nectar across every loaded meadow.
 func step_flowers(delta: float) -> void:
 	var season := current_season()
+	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
 	for chunk_coord in _flower_patches:
 		var patch: FlowerPatch = _flower_patches[chunk_coord]
-		patch.advance(delta)
+		patch.advance(delta, growth_modifier)
 		# Plants past their bloom drop seed around themselves, which lies in the
 		# grass as its own entity for a granivore to find (see
 		# FlowerPatch.shed_seed / concept/flora.md).
@@ -5525,6 +5749,125 @@ func step_worms(delta_seconds: float) -> void:
 		_sync_worm_sprites(chunk_coord)
 
 
+## Central ant-mound step (see AntColony, docs/concept/soil_fauna.md
+## "Ants"): every loaded chunk's colonies advance every call, and each mound
+## rolls its own small per-step chance (AntColony.should_forage) to send a
+## forager out for a nearby food item -- a fallen grass seed on a grassland
+## mound (myrmecochory, the shortest-range seed carrier the game has, see
+## AntColony.CARRY_MIN_TILES/CARRY_MAX_TILES's own doc comment on why), or a
+## fallen windfall fruit/nut on a forest/rainforest mound
+## (_forage_windfall_near_mound) -- TallGrass, the sole source of ground SEED
+## in this game, only grows on grassland, so a forest/rainforest mound would
+## otherwise have nothing to harvest at all (see AntColony's own doc comment).
+## Branches on the MOUND's own biome, not the colony's -- a single chunk can
+## straddle a biome boundary, so different mounds in the same colony can take
+## different branches.
+func step_ants(delta_seconds: float) -> void:
+	for chunk_coord in _ant_colonies:
+		var colony: AntColony = _ant_colonies[chunk_coord]
+		colony.advance(delta_seconds)
+		var origin: Vector2i = chunk_coord * CHUNK_SIZE
+		for cell in colony.mound_cells():
+			if not colony.should_forage(cell):
+				continue
+			var global_tile: Vector2i = origin + cell
+			if biome_at_global(global_tile.x, global_tile.y) == "grassland":
+				_forage_seed_near_mound(colony, origin, cell)
+			else:
+				_forage_windfall_near_mound(colony, origin, cell)
+
+
+## One mound's forager: look for the nearest fallen grass seed within its
+## SHORT foraging reach (AntColony.FORAGE_RADIUS_TILES, well under a mouse's
+## own SeedCaching.PICKUP_RADIUS_TILES -- an ant's range from its mound is
+## far smaller than a mouse's whole home range) and, if there is one, take
+## it and cache it a short carry away (AntColony.carry_distance_tiles /
+## carry_direction). Mirrors _step_grass_seed_caching's take-then-plant
+## shape, but there is no individual carrier here to walk the distance over
+## time -- a mound is a background population effect, not a pathfinding
+## creature, so the whole harvest-and-cache resolves in one step.
+func _forage_seed_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
+	var mound_pixel := Vector2(
+		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
+	) * float(TerrainRenderer.TILE_SIZE)
+	var nearby := grass_seeds_near(mound_pixel, int(ceil(AntColony.FORAGE_RADIUS_TILES)))
+	if nearby.is_empty():
+		return
+	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	# The nearest seed actually within reach, not just anything in the wider
+	# query radius -- the same nearest-in-reach shape
+	# _step_grass_seed_caching uses for a mouse.
+	var nearest_position: Vector2 = nearby[0]["position"]
+	var nearest_distance: float = mound_pixel.distance_to(nearest_position)
+	for candidate in nearby:
+		var candidate_position: Vector2 = candidate["position"]
+		var distance: float = mound_pixel.distance_to(candidate_position)
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest_position = candidate_position
+	if nearest_distance > reach:
+		return
+	if not take_grass_seed_at(nearest_position):
+		return
+	var carrier_seed := colony.carrier_seed_for(cell)
+	var carry_tiles := AntColony.carry_distance_tiles(carrier_seed)
+	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
+	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
+	plant_grass_at(target)
+
+
+## One mound's forager in a forest/rainforest chunk: TallGrass never grows
+## outside grassland (see AntColony's own doc comment), so a forest/
+## rainforest mound instead checks for a nearby fallen windfall fruit/nut
+## ground item -- the same fruit_near/take_fruit_at API SquirrelNutCaching
+## already uses -- gated to real NUTS (TreeSpecies.is_nut) exactly like
+## SquirrelNutCaching's own gate: a single forager ant cannot meaningfully
+## interact with an intact fleshy fruit the way a bird or squirrel does, so a
+## fallen cherry/apple is left for the ordinary generic fruit-eating path,
+## the same reasoning _step_squirrel_nut_caching's own doc comment gives.
+##
+## Mirrors _forage_seed_near_mound's find-then-carry shape exactly (same
+## FORAGE_RADIUS_TILES reach, same carrier_seed_for/carry_distance_tiles/
+## carry_direction for placing the result), but resolves through
+## AntColony.windfall_is_consumed first: most finds are consumed outright on
+## the spot (a colony scavenging soft pulp/residue, not carrying off an
+## intact propagule -- see WINDFALL_CONSUMED_CHANCE's own doc comment), and
+## only rarely does one survive to be cached as a new sapling via the SAME
+## try_plant_seed_at sink robin/squirrel dispersal already use.
+func _forage_windfall_near_mound(colony: AntColony, origin: Vector2i, cell: Vector2i) -> void:
+	var mound_pixel := Vector2(
+		float(origin.x + cell.x) + 0.5, float(origin.y + cell.y) + 0.5
+	) * float(TerrainRenderer.TILE_SIZE)
+	var nearby := fruit_near(mound_pixel, int(ceil(AntColony.FORAGE_RADIUS_TILES)))
+	nearby = nearby.filter(func(f): return TreeSpecies.is_nut(String(f.get("species", ""))))
+	if nearby.is_empty():
+		return
+	var reach := AntColony.FORAGE_RADIUS_TILES * float(TerrainRenderer.TILE_SIZE)
+	# The nearest nut actually within reach, not just anything in the wider
+	# query radius -- the same nearest-in-reach shape _forage_seed_near_mound
+	# uses for a grass seed.
+	var nearest_position: Vector2 = nearby[0]["position"]
+	var nearest_distance: float = mound_pixel.distance_to(nearest_position)
+	for candidate in nearby:
+		var candidate_position: Vector2 = candidate["position"]
+		var distance: float = mound_pixel.distance_to(candidate_position)
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest_position = candidate_position
+	if nearest_distance > reach:
+		return
+	var eaten_species := take_fruit_at(nearest_position)
+	if eaten_species == "":
+		return
+	if AntColony.windfall_is_consumed(colony.windfall_carrier_seed_for(cell)):
+		return
+	var carrier_seed := colony.carrier_seed_for(cell)
+	var carry_tiles := AntColony.carry_distance_tiles(carrier_seed)
+	var direction: Vector2 = AntColony.carry_direction(carrier_seed)
+	var target := nearest_position + direction * carry_tiles * float(TerrainRenderer.TILE_SIZE)
+	try_plant_seed_at(target, eaten_species)
+
+
 ## Inches every surfaced worm along, every frame. A worm at the surface is
 ## not a decal -- it crawls, slowly, within its own cell (see
 ## EarthwormPatch.crawl_offset for why the CELL never changes). Cheap by
@@ -5690,8 +6033,9 @@ const SCRUB_REFRESH_INTERVAL := 5.0
 ## wiring it into a harvest/forage action is a deliberate follow-up, not done
 ## here (see docs/progress.md's Flora section).
 func step_desert_scrub(delta_seconds: float) -> void:
+	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
 	for sim in _scrub_sims.values():
-		sim.advance(delta_seconds)
+		sim.advance(delta_seconds, growth_modifier)
 
 	_scrub_refresh_accumulator += delta_seconds
 	if _scrub_refresh_accumulator < SCRUB_REFRESH_INTERVAL:
@@ -5754,8 +6098,9 @@ const LICHEN_REFRESH_INTERVAL := 5.0
 ## yet -- wiring it into a harvest/forage action is a deliberate follow-up,
 ## not done here (see docs/progress.md's Flora section).
 func step_tundra_lichen(delta_seconds: float) -> void:
+	var growth_modifier := _season_cycle.growth_modifier(_world_age_seconds)
 	for sim in _lichen_sims.values():
-		sim.advance(delta_seconds)
+		sim.advance(delta_seconds, growth_modifier)
 
 	_lichen_refresh_accumulator += delta_seconds
 	if _lichen_refresh_accumulator < LICHEN_REFRESH_INTERVAL:
@@ -5818,8 +6163,33 @@ func step_ecosystem(delta_seconds: float) -> void:
 
 	var delta_days := _ecosystem_time_accumulator / SECONDS_PER_SIMULATED_DAY
 	_ecosystem_time_accumulator = 0.0
+	_refresh_bird_food_density()
 	_ecosystem.step(delta_days)
 	_refresh_creatures()
+
+
+## Reports every loaded chunk's live worm/seed density into the ecosystem
+## simulation before it steps, so robin/sparrow carrying capacity tracks the
+## real state of the soil/meadow instead of only the snapshot taken when the
+## chunk first loaded (see EcosystemSimulation.update_worm_density/
+## update_seed_density). Worm burrow count is fixed for a chunk's whole
+## lifetime (EarthwormPatch's own doc comment), so this re-reports an
+## unchanged number for robins in practice; ground-seed count genuinely
+## shifts as TallGrass/FlowerPatch grow and shed seed over time, which is
+## what sparrow capacity actually needs to track.
+func _refresh_bird_food_density() -> void:
+	for chunk_coord in _loaded_chunks.keys():
+		var worm_patch: EarthwormPatch = _worm_patches.get(chunk_coord)
+		if worm_patch != null:
+			_ecosystem.update_worm_density(chunk_coord, worm_patch.worm_cells().size())
+		var seed_count := 0
+		var grass: TallGrass = _grass_sims.get(chunk_coord)
+		if grass != null:
+			seed_count += grass.ground_seed_cells().size()
+		var flowers: FlowerPatch = _flower_patches.get(chunk_coord)
+		if flowers != null:
+			seed_count += flowers.ground_seed_cells().size()
+		_ecosystem.update_seed_density(chunk_coord, seed_count)
 
 
 ## Refreshes both creature and fish markers to match the ecosystem's current
@@ -7050,7 +7420,25 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	)
 	_worm_sprites[chunk_coord] = {}
 
+	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Not
+	# rendered this pass -- see AntColony's own doc comment on scope.
+	_ant_colonies[chunk_coord] = AntColony.new(
+		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+	)
+
 	_ecosystem.add_region(chunk_coord, chunk)
+	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
+	# lives in the patch instances just created above, not in Chunk data --
+	# report it in immediately so this chunk's robin/sparrow population
+	# bootstraps to a real equilibrium on load instead of sitting at zero
+	# until the next periodic step_ecosystem tick (see
+	# EcosystemSimulation.update_worm_density/update_seed_density).
+	_ecosystem.update_worm_density(chunk_coord, _worm_patches[chunk_coord].worm_cells().size())
+	_ecosystem.update_seed_density(
+		chunk_coord,
+		_grass_sims[chunk_coord].ground_seed_cells().size()
+		+ _flower_patches[chunk_coord].ground_seed_cells().size()
+	)
 	# In-session catch-up (elapsed time since this chunk was last unloaded,
 	# still tracked in memory) takes precedence over the disk-persisted fish
 	# population below -- it's the more accurate figure (it accounts for
@@ -7079,6 +7467,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_difficulty_tier_at(chunk_coord)
 	)
 	_restore_kept_animals(chunk_coord)
+	_restore_growing_juveniles(chunk_coord)
 	_loaded_fish[chunk_coord] = _fish_renderer.spawn_fish(
 		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,
 		_fish_target_count(chunk_coord)
@@ -7096,10 +7485,13 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		_creatures_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
 		_biome_classifier.dominant_biome(chunk.biome),
 		_pollinator_multiplier_for(chunk_coord),
-		self
+		self,
+		_ecosystem.robin_population(chunk_coord),
+		_ecosystem.sparrow_population(chunk_coord)
 	)
 	_loaded_piscivore_birds[chunk_coord] = _piscivore_bird_renderer.spawn_piscivore_birds(
-		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self
+		_creatures_parent, chunk_coord, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE, self,
+		_ecosystem.kingfisher_population(chunk_coord)
 	)
 
 	# Settlement build decision (see _apply_settlement_build_decision's own
@@ -7133,6 +7525,8 @@ func _apply_ecology_catchup(chunk_coord: Vector2i) -> void:
 		"herbivore_capacity": _ecosystem.herbivore_capacity_at(chunk_coord),
 		"fruit_growth_rate": 0.0,  # fruit stock is cosmetic here; populations are what matters
 		"fish_capacity": _ecosystem.fish_capacity_at(chunk_coord),
+		"robin_capacity": _ecosystem.robin_capacity_at(chunk_coord),
+		"sparrow_capacity": _ecosystem.sparrow_capacity_at(chunk_coord),
 	}
 	var advanced: Dictionary = _ecology_catchup.advance(record["state"], elapsed, capacity)
 	# Land health (docs/concept/world.md "Land health: overharvesting leaves a
@@ -7143,6 +7537,14 @@ func _apply_ecology_catchup(chunk_coord: Vector2i) -> void:
 	_ecosystem.seed_land_health(chunk_coord, float(advanced.get("land_health", 1.0)))
 	_ecosystem.seed_populations(chunk_coord, advanced["herbivores"], advanced["predators"])
 	_ecosystem.seed_fish_population(chunk_coord, advanced["fish"])
+	# Robin/sparrow/kingfisher (docs/concept/ecosystem_dynamics.md's
+	# "Persistence/catch-up gap, robin/sparrow/kingfisher", now resolved) --
+	# same override role as seed_populations/seed_fish_population just above,
+	# instead of add_region's/update_worm_density's/update_seed_density's
+	# fresh seeding standing.
+	_ecosystem.seed_robin_population(chunk_coord, float(advanced.get("robins", 0.0)))
+	_ecosystem.seed_sparrow_population(chunk_coord, float(advanced.get("sparrows", 0.0)))
+	_ecosystem.seed_kingfisher_population(chunk_coord, float(advanced.get("kingfishers", 0.0)))
 
 
 # -- withering: decay as a bounded, closed-form catch-up (see
@@ -7548,6 +7950,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_worm_sprites.erase(chunk_coord)
 	_worm_patches.erase(chunk_coord)
 
+	_ant_colonies.erase(chunk_coord)
+
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
 	# this chunk catch-up integrates from where it left off (see
 	# _apply_ecology_catchup).
@@ -7562,6 +7966,12 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 				"vegetation": _ecosystem.average_vegetation_density(chunk_coord),
 				"fish": fish_population,
 				"land_health": _ecosystem.land_health(chunk_coord),
+				# Robin/sparrow/kingfisher parity with herbivore/predator/fish
+				# (docs/concept/ecosystem_dynamics.md's "Persistence/catch-up
+				# gap, robin/sparrow/kingfisher", now resolved).
+				"robins": _ecosystem.robin_population(chunk_coord),
+				"sparrows": _ecosystem.sparrow_population(chunk_coord),
+				"kingfishers": _ecosystem.kingfisher_population(chunk_coord),
 			},
 		}
 		DirAccess.make_dir_recursive_absolute(FISH_POPULATION_DIR)
@@ -7572,7 +7982,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		# alongside it (docs/concept/world.md "Land health: overharvesting
 		# leaves a lasting mark, not just a slower respawn") -- this is
 		# exactly the kind of lasting change that must survive a real
-		# restart, not just an in-session unload/reload.
+		# restart, not just an in-session unload/reload. Robin/sparrow/
+		# kingfisher are saved alongside it for the same reason.
 		DirAccess.make_dir_recursive_absolute(ECOLOGY_DIR)
 		_chunk_serializer.save_ecology(
 			{
@@ -7581,6 +7992,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 				"vegetation": _ecosystem.average_vegetation_density(chunk_coord),
 				"land_health": _ecosystem.land_health(chunk_coord),
 				"saved_at_unix": Time.get_unix_time_from_system(),
+				"robins": _ecosystem.robin_population(chunk_coord),
+				"sparrows": _ecosystem.sparrow_population(chunk_coord),
+				"kingfishers": _ecosystem.kingfisher_population(chunk_coord),
 			},
 			_ecology_path(chunk_coord)
 		)
@@ -7589,6 +8003,12 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	# region's population (see KeptAnimals) -- a tamed horse is a particular
 	# animal in a particular place, not an interchangeable head of livestock.
 	_save_kept_animals(chunk_coord)
+	# A wild juvenile's own growth-in-progress is a DIFFERENT reason to keep
+	# an individual (see GrowingJuveniles) -- nobody tamed or tied it, it
+	# simply is not grown yet, and its real 30-180 real-day maturity window
+	# (see MammalGrowth) is almost certainly longer than this chunk stays
+	# loaded.
+	_save_growing_juveniles(chunk_coord)
 
 	_ecosystem.remove_region(chunk_coord)
 	for creature in _loaded_creatures.get(chunk_coord, []):
@@ -7677,12 +8097,17 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 			"fruit_stock": 0.0,
 			"fish": _ecosystem.fish_population(chunk_coord),
 			"land_health": float(saved.get("land_health", 1.0)),
+			"robins": float(saved.get("robins", 0.0)),
+			"sparrows": float(saved.get("sparrows", 0.0)),
+			"kingfishers": float(saved.get("kingfishers", 0.0)),
 		},
 		elapsed,
 		{
 			"herbivore_capacity": _ecosystem.herbivore_capacity_at(chunk_coord),
 			"fruit_growth_rate": 0.0,
 			"fish_capacity": _ecosystem.fish_capacity_at(chunk_coord),
+			"robin_capacity": _ecosystem.robin_capacity_at(chunk_coord),
+			"sparrow_capacity": _ecosystem.sparrow_capacity_at(chunk_coord),
 		}
 	)
 	_ecosystem.seed_populations(
@@ -7696,6 +8121,20 @@ func _apply_persisted_ecology(chunk_coord: Vector2i) -> void:
 	# of leaving add_region's fresh-pristine seeding stand, the same override
 	# seed_populations does for herbivores/predators just above.
 	_ecosystem.seed_land_health(chunk_coord, float(caught_up.get("land_health", 1.0)))
+	# Robin/sparrow/kingfisher parity (docs/concept/ecosystem_dynamics.md's
+	# "Persistence/catch-up gap, robin/sparrow/kingfisher", now resolved) --
+	# same override role as seed_populations/seed_land_health just above.
+	_ecosystem.seed_robin_population(chunk_coord, float(caught_up.get("robins", 0.0)))
+	_ecosystem.seed_sparrow_population(chunk_coord, float(caught_up.get("sparrows", 0.0)))
+	_ecosystem.seed_kingfisher_population(chunk_coord, float(caught_up.get("kingfishers", 0.0)))
+	# Fish parity: the raw last-known count was already installed (by the
+	# load_fish_population call at this function's own call site, before this
+	# runs), but `advance()` above steps it forward for the elapsed away-time
+	# exactly like every population above -- without this call that advanced
+	# value was computed and then silently discarded, so a fish population
+	# left under capacity across a real session gap came back frozen at its
+	# pre-gap value instead of catching up like everything else does.
+	_ecosystem.seed_fish_population(chunk_coord, float(caught_up.get("fish", 0.0)))
 
 
 func _ecology_path(chunk_coord: Vector2i) -> String:
@@ -7725,6 +8164,7 @@ func _save_kept_animals(chunk_coord: Vector2i) -> int:
 			"order": creature.order,
 			"is_tied": creature.is_tied_up(),
 			"tied_to": creature.tie_anchor(),
+			"wander_seed": creature.wander_seed,
 		})
 	DirAccess.make_dir_recursive_absolute(KEPT_ANIMALS_DIR)
 	KeptAnimals.save_all(kept, _kept_animals_path(chunk_coord))
@@ -7744,7 +8184,7 @@ func _restore_kept_animals(chunk_coord: Vector2i) -> void:
 	for record in kept:
 		var creature := _creature_renderer.spawn_single(
 			_creatures_parent, String(record["species"]), record["position"],
-			self, TerrainRenderer.TILE_SIZE
+			self, TerrainRenderer.TILE_SIZE, int(record.get("wander_seed", -1))
 		)
 		if creature == null:
 			continue
@@ -7752,6 +8192,69 @@ func _restore_kept_animals(chunk_coord: Vector2i) -> void:
 			float(record["trust"]), int(record["order"]),
 			bool(record["is_tied"]), record["tied_to"]
 		)
+		_loaded_creatures[chunk_coord].append(creature)
+
+
+func _growing_juveniles_path(chunk_coord: Vector2i) -> String:
+	return "%s/%d_%d.bin" % [GROWING_JUVENILES_DIR, chunk_coord.x, chunk_coord.y]
+
+
+## Saves the WILD juveniles standing in this chunk that are not yet fully
+## grown, and returns how many. See GrowingJuveniles' own doc comment for why
+## this bounded set does not reopen KeptAnimals' "no unbounded per-animal
+## saves" rule.
+##
+## A creature already worth keeping by KeptAnimals (tamed or tied) is
+## deliberately EXCLUDED here, so the same individual is never saved -- and
+## so never re-spawned -- by both this and _save_kept_animals at once (see
+## GrowingJuveniles' own doc comment on this exact trade-off).
+##
+## Written on every unload including an empty list, so a juvenile that grew
+## up (or died) since the last unload does not linger in the file forever.
+func _save_growing_juveniles(chunk_coord: Vector2i) -> int:
+	var growing: Array = []
+	for creature in _loaded_creatures.get(chunk_coord, []):
+		if not is_instance_valid(creature) or creature.info == null:
+			continue
+		if KeptAnimals.is_worth_keeping(float(creature.trust), creature.is_tied_up()):
+			continue
+		if not GrowingJuveniles.is_worth_persisting(creature.age_seconds, creature.info.species):
+			continue
+		growing.append({
+			"species": creature.info.species,
+			"position": creature.position,
+			"age_seconds": creature.age_seconds,
+			"wander_seed": creature.wander_seed,
+		})
+	DirAccess.make_dir_recursive_absolute(GROWING_JUVENILES_DIR)
+	GrowingJuveniles.save_all(growing, _growing_juveniles_path(chunk_coord))
+	return growing.size()
+
+
+## Re-spawns this chunk's still-growing wild juveniles, ON TOP of whatever
+## the aggregate says the region holds -- same "deliberately extra" shape as
+## _restore_kept_animals, for the same reason: carrying capacity governs an
+## ordinary wild population, and a specific juvenile already being tracked
+## individually must not be silently absorbed back into it.
+##
+## Restores the SAME individual, not a fresh one: `wander_seed` is passed
+## through to spawn_single exactly like _restore_kept_animals does, and
+## `age_seconds` is set directly afterward -- CreatureMarker's own
+## `_apply_action_scale` re-derives the rendered growth scale from
+## `age_seconds` every frame regardless of how it got set, so no separate
+## "resume growing" call is needed here.
+func _restore_growing_juveniles(chunk_coord: Vector2i) -> void:
+	var growing := GrowingJuveniles.load_all(_growing_juveniles_path(chunk_coord))
+	if growing.is_empty():
+		return
+	for record in growing:
+		var creature := _creature_renderer.spawn_single(
+			_creatures_parent, String(record["species"]), record["position"],
+			self, TerrainRenderer.TILE_SIZE, int(record.get("wander_seed", -1))
+		)
+		if creature == null:
+			continue
+		creature.age_seconds = float(record["age_seconds"])
 		_loaded_creatures[chunk_coord].append(creature)
 
 

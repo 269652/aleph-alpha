@@ -142,6 +142,18 @@ const NECTAR_PER_DRINK := 1.0
 
 ## Nectar refilled per second, so a worked-over meadow recovers rather than
 ## going permanently dead.
+##
+## Left untouched (2026-08-26) after re-measuring the whole meadow's
+## demand-vs-supply economy once ForageClaims peer-sharing landed (see
+## docs/progress.md's "Nectar economy rebalance" entry and
+## tests/unit/test_nectar_economy.gd). An earlier measurement, taken before
+## claims existed, found the population 2.05x over-subscribed; claims'
+## demotion-not-exclusion behaviour spreads demand across enough of the
+## meadow on its own that a real simulated re-measurement (150 pollinators,
+## 616 real flowers, run to steady state) now comes out at 0.86x -- demand
+## 8.44 drinks/s against supply 9.87 nectar/s across 592 flowers actually
+## reached -- i.e. slightly UNDER-subscribed. No regen change is warranted
+## by that number.
 const NECTAR_REGEN_PER_SECOND := 1.0 / 60.0
 
 

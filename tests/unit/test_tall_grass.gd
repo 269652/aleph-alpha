@@ -1,6 +1,8 @@
 extends GutTest
 
 const TallGrass = preload("res://src/world/tall_grass.gd")
+const SeasonCycle = preload("res://src/world/season_cycle.gd")
+const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 
 const WIDTH := 8
 const HEIGHT := 8
@@ -56,6 +58,24 @@ func test_field_noise_scale_and_threshold_are_pinned_to_their_measured_values():
 	assert_eq(TallGrass.FIELD_NOISE_THRESHOLD, 0.65)
 
 
+## MAX_PATCHES must actually accommodate FIELD_NOISE_THRESHOLD's own
+## documented target density (~SEED_CHANCE fraction) of a REAL, full
+## CHUNK_SIZE-square chunk (see EarthChunkManager.CHUNK_SIZE) -- not just some
+## number that happens to be bigger than an earlier, arbitrary one.
+## tall_grass.gd cannot import EarthChunkManager itself to check this
+## (EarthChunkManager already imports TallGrass -- a circular import), so this
+## test recomputes the same derivation independently here, from THIS file
+## (which can import EarthChunkManager freely), so a future change to
+## CHUNK_SIZE or SEED_CHANCE re-verifies the relationship automatically
+## instead of silently drifting back out of sync -- see
+## test_plant_succeeds_on_an_empty_cell_in_a_full_chunk_sized_dense_field
+## above for exactly what happens when it does.
+func test_max_patches_accommodates_the_density_target_for_a_real_full_chunk():
+	var real_chunk_cells := EarthChunkManager.CHUNK_SIZE * EarthChunkManager.CHUNK_SIZE
+	var target_density_patch_count := ceili(float(real_chunk_cells) * TallGrass.SEED_CHANCE)
+	assert_gte(TallGrass.MAX_PATCHES, target_density_patch_count)
+
+
 ## Reported live: "remove the percentage of overall grass blades instead
 ## make them stick more together forming fields using perlin noise /
 ## voronoi" -- the whole point of noise-thresholded seeding over the old
@@ -105,7 +125,7 @@ func test_different_seeds_produce_different_patch_layouts():
 func test_patch_count_stays_within_the_per_chunk_bound():
 	var grass := TallGrass.new(3, WIDTH, HEIGHT, _biome_all("grassland"))
 	for i in 200:
-		grass.advance(TallGrass.SPREAD_INTERVAL)
+		grass.advance(TallGrass.SPREAD_INTERVAL, 1.0)
 	assert_lte(grass.get_patch_cells().size(), TallGrass.MAX_PATCHES)
 
 
@@ -120,7 +140,7 @@ func test_advance_grows_immature_patches_toward_maturity():
 	# early doesn't have time to mature past 1.0 before this notices it.
 	var immature := Vector2i(-1, -1)
 	for i in 20:
-		grass.advance(TallGrass.SPREAD_INTERVAL)
+		grass.advance(TallGrass.SPREAD_INTERVAL, 1.0)
 		for cell in grass.get_patch_cells():
 			if grass.get_growth(cell) < 1.0:
 				immature = cell
@@ -129,22 +149,22 @@ func test_advance_grows_immature_patches_toward_maturity():
 			break
 	assert_ne(immature, Vector2i(-1, -1), "precondition: spread must have created at least one immature patch within 20 ticks")
 	var before: float = grass.get_growth(immature)
-	grass.advance(1.0)
+	grass.advance(1.0, 1.0)
 	assert_gt(grass.get_growth(immature), before)
 
 
 func test_growth_is_capped_at_one():
 	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
 	var cell: Vector2i = grass.get_patch_cells()[0]
-	grass.advance(10000.0)
+	grass.advance(10000.0, 1.0)
 	assert_eq(grass.get_growth(cell), 1.0)
 
 
 func test_no_spread_before_the_spread_interval_elapses():
 	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
-	grass.advance(10000.0)  # everything mature; also one spread tick happens
+	grass.advance(10000.0, 1.0)  # everything mature; also one spread tick happens
 	var count := grass.get_patch_cells().size()
-	grass.advance(TallGrass.SPREAD_INTERVAL * 0.5)
+	grass.advance(TallGrass.SPREAD_INTERVAL * 0.5, 1.0)
 	assert_eq(grass.get_patch_cells().size(), count)
 
 
@@ -152,21 +172,21 @@ func test_mature_patches_spread_to_adjacent_grassland_over_time():
 	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
 	var initial := grass.get_patch_cells().size()
 	for i in 50:
-		grass.advance(TallGrass.SPREAD_INTERVAL)
+		grass.advance(TallGrass.SPREAD_INTERVAL, 1.0)
 	assert_gt(grass.get_patch_cells().size(), initial)
 
 
 func test_spread_never_lands_on_non_grassland_cells():
 	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_half_grassland())
 	for i in 200:
-		grass.advance(TallGrass.SPREAD_INTERVAL)
+		grass.advance(TallGrass.SPREAD_INTERVAL, 1.0)
 	for cell in grass.get_patch_cells():
 		assert_lt(cell.x, WIDTH / 2)
 
 
 func test_new_spread_patches_start_immature():
 	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
-	grass.advance(10000.0)  # mature everything, trigger a spread tick
+	grass.advance(10000.0, 1.0)  # mature everything, trigger a spread tick
 	var found_immature := false
 	for cell in grass.get_patch_cells():
 		if grass.get_growth(cell) < 1.0:
@@ -206,8 +226,8 @@ func test_growth_lands_in_the_same_place_whether_batched_or_per_frame():
 	var stepped := TallGrass.new(4242, 8, 8, _grassland(8, 8))
 	var batched := TallGrass.new(4242, 8, 8, _grassland(8, 8))
 	for _i in 300:
-		stepped.advance(1.0 / 60.0)
-	batched.advance(300.0 / 60.0)
+		stepped.advance(1.0 / 60.0, 1.0)
+	batched.advance(300.0 / 60.0, 1.0)
 	assert_eq(stepped.get_patch_cells().size(), batched.get_patch_cells().size())
 	for cell in batched.get_patch_cells():
 		assert_almost_eq(stepped.get_growth(cell), batched.get_growth(cell), 0.0001)
@@ -216,7 +236,7 @@ func test_growth_lands_in_the_same_place_whether_batched_or_per_frame():
 func test_spread_still_happens_across_a_batched_advance():
 	var batched := TallGrass.new(99, 12, 12, _grassland(12, 12))
 	var before := batched.get_patch_cells().size()
-	batched.advance(TallGrass.SPREAD_INTERVAL * 3.0)
+	batched.advance(TallGrass.SPREAD_INTERVAL * 3.0, 1.0)
 	assert_gt(batched.get_patch_cells().size(), before, "a batched step still spreads")
 
 
@@ -326,13 +346,108 @@ func test_planting_fails_on_a_cell_that_already_has_grass():
 	assert_false(grass.plant(cell))
 
 
+## Regression reproduction for a real, deterministically-observed bug: a full
+## CHUNK_SIZE-square (see EarthChunkManager.CHUNK_SIZE), entirely-grassland
+## chunk seeds so densely under FIELD_NOISE_THRESHOLD's own documented ~20%
+## target coverage that INITIAL SEEDING ALONE already reaches the old
+## MAX_PATCHES=128 before any spread or planting happens (32*32 cells *
+## SEED_CHANCE 0.20 ~= 205 > 128) -- leaving plant() permanently unable to
+## succeed on ANY empty cell in a chunk this dense, no matter which one a
+## caller finds. This is exactly what made
+## test_earth_chunk_manager.gd's test_plant_grass_at_establishes_a_new_patch
+## fail against Berlin's own real (densely-grassland) chunk. MAX_PATCHES must
+## actually accommodate the density target for a full real chunk, not an
+## arbitrary smaller number.
+func test_plant_succeeds_on_an_empty_cell_in_a_full_chunk_sized_dense_field():
+	var size := EarthChunkManager.CHUNK_SIZE
+	var grass := TallGrass.new(1, size, size, _grassland(size, size))
+	var cell := Vector2i(-1, -1)
+	for y in size:
+		for x in size:
+			if not grass.has_grass(Vector2i(x, y)):
+				cell = Vector2i(x, y)
+				break
+		if cell != Vector2i(-1, -1):
+			break
+	assert_ne(cell, Vector2i(-1, -1), "precondition: an empty cell exists even in a dense field")
+	assert_true(
+		grass.plant(cell),
+		"planting into a genuinely empty grassland cell must succeed regardless of how dense initial seeding already made this chunk"
+	)
+
+
+## A grid sized so the cap is actually reachable via plant() calls alone --
+## MAX_PATCHES is well over WIDTH*HEIGHT (8*8=64), so the old 8x8 grid could
+## never actually hit the cap-enforcement branch (`_patches.size() >=
+## MAX_PATCHES`) inside this loop, meaning that branch never really executed.
+## A CHUNK_SIZE-square grid (matching the real chunk size the cap is derived
+## from) is guaranteed to exceed MAX_PATCHES-many grassland cells, so the
+## guard genuinely fires here.
 func test_planting_respects_the_per_chunk_cap():
-	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var size := EarthChunkManager.CHUNK_SIZE
+	var grass := TallGrass.new(1, size, size, _grassland(size, size))
 	var planted_any_beyond_cap := false
-	for y in HEIGHT:
-		for x in WIDTH:
+	for y in size:
+		for x in size:
 			if grass.get_patch_cells().size() >= TallGrass.MAX_PATCHES:
 				if grass.plant(Vector2i(x, y)):
 					planted_any_beyond_cap = true
 	assert_false(planted_any_beyond_cap)
 	assert_lte(grass.get_patch_cells().size(), TallGrass.MAX_PATCHES)
+
+
+# -- seasonal growth (see SeasonCycle.growth_modifier) -----------------------
+#
+# advance() used to grow every patch at a flat GROWTH_RATE regardless of the
+# season -- SeasonCycle.growth_modifier existed with zero live callers. The
+# same real-time advance must now grow a patch measurably less in winter than
+# in summer, with a raised floor so a dormant patch never fully stops.
+
+## A cell TallGrass has not already map-seeded, so a test can plant a
+## deliberately fresh, growth-0 shoot onto it (mirrors the scan
+## test_planting_establishes_a_new_immature_patch already does).
+func _an_unseeded_cell(grass: TallGrass) -> Vector2i:
+	for y in HEIGHT:
+		for x in WIDTH:
+			if not grass.has_grass(Vector2i(x, y)):
+				return Vector2i(x, y)
+	return Vector2i(-1, -1)
+
+
+func test_advance_grows_slower_in_winter_than_in_summer_for_the_same_elapsed_time():
+	var cycle := SeasonCycle.new()
+	var summer_modifier: float = cycle.growth_modifier(SeasonCycle.SECONDS_PER_YEAR * 0.375)
+	var winter_modifier: float = cycle.growth_modifier(SeasonCycle.SECONDS_PER_YEAR * 0.875)
+	assert_almost_eq(summer_modifier, 1.0, 0.0001, "precondition: mid-summer is full growth")
+	assert_almost_eq(winter_modifier, 0.2, 0.0001, "precondition: mid-winter is the raised floor")
+
+	var summer := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var winter := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var cell := _an_unseeded_cell(summer)
+	assert_ne(cell, Vector2i(-1, -1), "precondition: an empty cell to plant a fresh shoot into")
+	assert_true(summer.plant(cell))
+	assert_true(winter.plant(cell))
+
+	summer.advance(10.0, summer_modifier)
+	winter.advance(10.0, winter_modifier)
+
+	assert_gt(
+		summer.get_growth(cell), winter.get_growth(cell),
+		"the same 10 real seconds should grow a shoot less in winter than in summer"
+	)
+
+
+## The "raised floor" contract (see growth_modifier's own doc comment):
+## dormancy, not death -- even at winter's coldest point growth must still
+## creep forward rather than stall at zero. Pinned here at the call site too,
+## not just inside season_cycle.gd's own test.
+func test_growth_never_fully_stops_even_at_winters_seasonal_floor():
+	var winter_modifier: float = SeasonCycle.new().growth_modifier(SeasonCycle.SECONDS_PER_YEAR * 0.875)
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var cell := _an_unseeded_cell(grass)
+	assert_ne(cell, Vector2i(-1, -1), "precondition: an empty cell to plant a fresh shoot into")
+	assert_true(grass.plant(cell))
+
+	grass.advance(10.0, winter_modifier)
+
+	assert_gt(grass.get_growth(cell), 0.0, "a dormant plant still grows a little, it does not stop")

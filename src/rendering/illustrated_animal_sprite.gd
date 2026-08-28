@@ -136,24 +136,6 @@ const _SHEETS := {
 		"alpha_threshold": 0.3,
 		"divider_gray_min": 0.45,
 	},
-	# assets/sprites/animals/wolf.png: an AI-generated 2-row x 8-column grid
-	# (walk row, then eat row) on the same solid chroma-keyed magenta ground
-	# as "sheep" below, with near-white divider lines between cells. Bands
-	# measured directly from the real PNG (1536x1024): a divider row reads
-	# as near-uniform white across the full width; everything between two
-	# divider bands is one row's own content. Background sampled at
-	# (0.93, 0.03, 0.95) -- close enough to sheep's own measured background
-	# to reuse its exact chroma_key/tolerance rather than re-deriving a
-	# separate one for what is visibly the same generation batch.
-	"wolf": {
-		"faces_left": true,
-		"path": "res://assets/sprites/animals/wolf.png",
-		"walk_bands": [Vector2i(4, 511)],
-		"eat_bands": [Vector2i(512, 1020)],
-		"alpha_threshold": 0.3,
-		"chroma_key": Color(0.95, 0.02, 0.96),
-		"chroma_key_tolerance": 0.25,
-	},
 	# A single sheet, 8-column x 2-row grid (walk row, then an eat/graze
 	# row), cut out on a solid MAGENTA ground rather than real transparency
 	# or a pale divider -- see "chroma_key"/_apply_chroma_key. The gridlines
@@ -169,6 +151,25 @@ const _SHEETS := {
 		# a generous per-channel tolerance also swallows the anti-aliased
 		# blend right at the wool's silhouette edge without reaching into
 		# the cream wool itself (high on every channel, not just R/B).
+		"chroma_key": Color(0.95, 0.02, 0.96),
+		"chroma_key_tolerance": 0.25,
+	},
+	# Same layout family as sheep (8-col walk row, then an 8-col eat/graze
+	# row, on a solid magenta ground) but a SEPARATE source file at a
+	# different resolution (1536x1024 vs sheep's 1774x887) -- bands measured
+	# on wolf.png itself, not copied from sheep. Scanned row-by-row for where
+	# the non-background pixel count jumps from a low "just the thin column-
+	# divider lines" baseline (~16-17 px) to a high "solid divider/border
+	# stripe" value (768 px, the full sampled width): a 5px white frame at
+	# the very top (rows 0-4) and bottom (rows 1019-1023), a 3px divider
+	# between the two rows (510-512). Background samples clustered around
+	# (241, 4, 244)/255 -- essentially the same magenta sheep uses.
+	"wolf": {
+		"faces_left": true,
+		"path": "res://assets/sprites/animals/wolf.png",
+		"walk_bands": [Vector2i(5, 509)],
+		"eat_bands": [Vector2i(513, 1018)],
+		"alpha_threshold": 0.3,
 		"chroma_key": Color(0.95, 0.02, 0.96),
 		"chroma_key_tolerance": 0.25,
 	},

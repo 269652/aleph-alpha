@@ -21,6 +21,7 @@ const CHUNK_ORIGIN := Vector2i(64, GERMANY_ROW)
 
 const ProceduralBirdSprite = preload("res://src/rendering/procedural_bird_sprite.gd")
 const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
+const ProceduralEggSprite = preload("res://src/rendering/procedural_egg_sprite.gd")
 
 var renderer: AmbientFlyerRenderer
 var parent: Node2D
@@ -47,17 +48,21 @@ func _make_chunk(biome_name: String, size: int = CHUNK_SIZE) -> Chunk:
 
 func test_spawns_butterflies_and_birds_on_a_large_grassland_chunk():
 	var chunk := _make_chunk("grassland")
-	var spawned := renderer.spawn_ambient_flyers(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 2.0, 2.0
+	)
 	assert_gt(spawned.size(), 0)
 	assert_eq(parent.get_child_count(), spawned.size())
 
 
-## Spawn count is a guaranteed range (MIN..MAX), not an independent per-cell
-## probability roll that could plausibly land on zero for some real-world
-## coordinates -- every qualifying chunk gets at least the minimum, every
-## time, the same reliability fix already applied to fish (see
-## FishRenderer's target_count).
-func test_every_qualifying_chunk_spawns_at_least_the_minimum_of_each():
+## Butterfly/bee spawn count is a guaranteed range (MIN..MAX), not an
+## independent per-cell probability roll that could plausibly land on zero
+## for some real-world coordinates -- every qualifying chunk gets at least
+## the minimum, every time, the same reliability fix already applied to fish
+## (see FishRenderer's target_count). Robin/sparrow are population-driven
+## instead (see the "birds are promoted from their aggregate population"
+## section below) and have no such flat minimum.
+func test_every_qualifying_chunk_spawns_at_least_the_minimum_butterflies():
 	for coord_x in range(20):
 		var chunk := _make_chunk("grassland")
 		# Varying x only, so every sampled chunk stays at the SAME latitude --
@@ -66,19 +71,12 @@ func test_every_qualifying_chunk_spawns_at_least_the_minimum_of_each():
 		var origin := Vector2i(coord_x * CHUNK_SIZE, GERMANY_ROW)
 		var spawned := renderer.spawn_ambient_flyers(parent, chunk, origin, TILE_SIZE, "grassland")
 		var butterflies := 0
-		var birds := 0
 		for flyer in spawned:
 			if AmbientFlyerRenderer.BUTTERFLY_SPECIES_POOL.has(flyer.species):
 				butterflies += 1
-			else:
-				birds += 1
 		assert_gte(
 			butterflies, AmbientFlyerRenderer.MIN_BUTTERFLIES_PER_CHUNK,
 			"chunk at x=%d should have at least the minimum butterflies" % coord_x
-		)
-		assert_gte(
-			birds, AmbientFlyerRenderer.MIN_BIRDS_PER_CHUNK,
-			"chunk at x=%d should have at least the minimum birds" % coord_x
 		)
 
 
@@ -102,11 +100,79 @@ func test_spawns_nothing_on_ocean():
 
 func test_never_exceeds_the_combined_per_chunk_cap():
 	var chunk := _make_chunk("grassland")
-	var spawned := renderer.spawn_ambient_flyers(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 500.0, 500.0
+	)
 	assert_lte(
 		spawned.size(),
-		AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK + AmbientFlyerRenderer.MAX_BIRDS_PER_CHUNK
+		AmbientFlyerRenderer.MAX_BUTTERFLIES_PER_CHUNK + AmbientFlyerRenderer.MAX_BEES_PER_CHUNK
+		+ AmbientFlyerRenderer.MAX_ROBINS_PER_CHUNK + AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK
 	)
+
+
+# -- birds are promoted from their aggregate population, not a flat cap ------
+#
+# robin/sparrow used to fill up to a flat MIN..MAX range with no relation to
+# any food source at all -- eating a worm or a seed had zero effect on how
+# many birds existed. Promotion now mirrors CreatureRenderer's own
+# aggregate-population-to-marker-count shape: one marker per rounded unit of
+# THIS species' real aggregate population, capped for perf.
+
+func test_spawns_no_robins_or_sparrows_without_population():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland")
+	for flyer in spawned:
+		assert_false(flyer.species == "robin" or flyer.species == "sparrow")
+
+
+func test_spawns_one_robin_per_rounded_unit_of_robin_population():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 2.4, 0.0
+	)
+	var robins := 0
+	for flyer in spawned:
+		if flyer.species == "robin":
+			robins += 1
+	assert_eq(robins, 2)
+
+
+func test_spawns_one_sparrow_per_rounded_unit_of_sparrow_population():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 0.0, 3.2
+	)
+	var sparrows := 0
+	for flyer in spawned:
+		if flyer.species == "sparrow":
+			sparrows += 1
+	assert_eq(sparrows, 3)
+
+
+func test_caps_robin_count_for_a_very_large_population():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 500.0, 0.0
+	)
+	var robins := 0
+	for flyer in spawned:
+		if flyer.species == "robin":
+			robins += 1
+	assert_lte(robins, AmbientFlyerRenderer.MAX_ROBINS_PER_CHUNK)
+	assert_gt(robins, 0)
+
+
+func test_caps_sparrow_count_for_a_very_large_population():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland", 1.0, null, 0.0, 500.0
+	)
+	var sparrows := 0
+	for flyer in spawned:
+		if flyer.species == "sparrow":
+			sparrows += 1
+	assert_lte(sparrows, AmbientFlyerRenderer.MAX_SPARROWS_PER_CHUNK)
+	assert_gt(sparrows, 0)
 
 
 func test_positions_are_deterministic_for_the_same_inputs():
@@ -288,6 +354,37 @@ func test_a_flyer_draws_above_ground_clutter():
 	assert_gt(flyer.z_index, 0, "a flying thing must draw over the flowers it visits")
 
 
+# -- offspring are built ready for the pre-hatch egg sprite ------------------
+#
+# AmbientFlyerMarker._animate_wings shows `egg_frame` for the whole
+# COURTING/MATED/EGG span (see ProceduralEggSprite) -- every marker this
+# renderer builds must actually be handed one, or an offspring born in front
+# of the player would still render as the old tiny-scaled-adult the moment it
+# spawns, because nothing ever gave it an egg sprite to switch to.
+
+func test_offspring_are_built_with_an_egg_frame():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var chick := renderer.spawn_offspring(parent, "monarch", Vector2.ZERO, 7)
+	assert_not_null(chick.egg_frame, "an offspring needs an egg sprite ready for its pre-hatch span")
+	assert_eq(
+		chick.egg_frame.get_image().get_data(),
+		ProceduralEggSprite.new().generate_texture(7).get_image().get_data()
+	)
+
+
+## A regular chunk-spawned adult is never going to be an egg (age_seconds
+## starts at LifeCycle.MATURE_SECONDS), but it still gets the same egg_frame
+## wiring as an offspring -- one shared build path, not a special case only
+## spawn_offspring takes.
+func test_chunk_spawned_flyers_are_also_built_with_an_egg_frame():
+	var chunk := _make_chunk("grassland")
+	var spawned := renderer.spawn_ambient_flyers(
+		parent, chunk, CHUNK_ORIGIN, TILE_SIZE, "grassland"
+	)
+	assert_gt(spawned.size(), 0, "precondition: something spawned")
+	for flyer in spawned:
+		assert_not_null(flyer.egg_frame, "%s should have an egg sprite ready" % flyer.species)
 # -- where a flyer can actually live -----------------------------------------
 #
 # The aerial tier was the one creature category with no biogeography at all:
@@ -308,12 +405,24 @@ const AMAZON_ROW := 9435  #  4.99 deg N -- the Amazon basin
 ## Samples many chunks along ONE row of the world, so latitude is held fixed
 ## while the per-chunk spawn hash varies -- the same "sample many chunks"
 ## idiom as tests/unit/test_creature_renderer.gd's _species_seen_across_chunks.
-func _species_seen_along_row(row: int, biome_name: String, chunk_count: int = 40) -> Dictionary:
+##
+## `bird_population` feeds BOTH robin_population and sparrow_population --
+## unlike butterflies/bees, a bird's COUNT is promotion-from-aggregate-
+## population, not a flat min/max roll (see spawn_ambient_flyers' own doc
+## comment), so a caller that wants to see robin/sparrow show up at all (as
+## opposed to just checking they are properly range-gated OUT somewhere)
+## must hand this a real nonzero population. Defaults to 0.0 so every
+## existing butterfly/bee-focused caller here is unaffected.
+func _species_seen_along_row(
+	row: int, biome_name: String, chunk_count: int = 40, bird_population: float = 0.0
+) -> Dictionary:
 	var seen := {}
 	for coord_x in range(chunk_count):
 		var chunk := _make_chunk(biome_name)
 		var origin := Vector2i(coord_x * CHUNK_SIZE, row)
-		for flyer in renderer.spawn_ambient_flyers(parent, chunk, origin, TILE_SIZE, biome_name):
+		for flyer in renderer.spawn_ambient_flyers(
+			parent, chunk, origin, TILE_SIZE, biome_name, 1.0, null, bird_population, bird_population
+		):
 			seen[flyer.species] = true
 	return seen
 
@@ -333,7 +442,9 @@ func test_a_german_meadow_has_no_monarchs_and_no_blue_morphos():
 ## machaon, the OLD WORLD swallowtail, really is the swallowtail a German
 ## meadow has, and honeybees and both songbirds belong there too.
 func test_a_german_meadow_still_has_its_own_swallowtails_and_bees():
-	var seen := _species_seen_along_row(GERMANY_ROW, "grassland")
+	var seen := _species_seen_along_row(
+		GERMANY_ROW, "grassland", 40, float(AmbientFlyerRenderer.MAX_ROBINS_PER_CHUNK)
+	)
 	assert_true(seen.has("swallowtail"), "a German meadow should still have swallowtails")
 	assert_true(seen.has("bee"), "a German meadow should still have bees")
 	assert_true(seen.has("sparrow"), "a German meadow should still have sparrows")
@@ -399,13 +510,22 @@ func _row_for_northern_latitude(latitude: float) -> int:
 ## The tuned numbers in FLYER_RANGE are pinned as DATA, not as eyeballed
 ## comments: every species must actually be present inside its own band and
 ## actually absent outside it, in every biome it claims.
+##
+## A generous bird population is passed to every call here (harmless for the
+## butterfly/bee species this sweep also covers, which ignore it entirely):
+## robin/sparrow's COUNT is population-driven, not a flat min/max roll (see
+## spawn_ambient_flyers' own doc comment), so a population of 0.0 would fail
+## every "present inside its own band" assertion for them regardless of
+## whether the real geographic gate is correct.
 func test_every_spawned_species_is_inside_its_own_latitude_band():
+	var bird_population := float(AmbientFlyerRenderer.MAX_ROBINS_PER_CHUNK)
 	for species in AmbientFlyerRenderer.FLYER_RANGE:
 		var species_range: Dictionary = AmbientFlyerRenderer.FLYER_RANGE[species]
 		var band: Vector2 = species_range["abs_latitude"]
 		for biome_name in species_range["biomes"]:
 			var inside := _species_seen_along_row(
-				_row_for_northern_latitude((band.x + band.y) * 0.5), biome_name, BAND_PRESENCE_CHUNKS
+				_row_for_northern_latitude((band.x + band.y) * 0.5), biome_name, BAND_PRESENCE_CHUNKS,
+				bird_population
 			)
 			assert_true(
 				inside.has(species),
@@ -414,7 +534,7 @@ func test_every_spawned_species_is_inside_its_own_latitude_band():
 			if band.x - BAND_MARGIN_DEGREES > 0.0:
 				var too_far_south := _species_seen_along_row(
 					_row_for_northern_latitude(band.x - BAND_MARGIN_DEGREES), biome_name,
-					BAND_ABSENCE_CHUNKS
+					BAND_ABSENCE_CHUNKS, bird_population
 				)
 				assert_false(
 					too_far_south.has(species),
@@ -423,7 +543,7 @@ func test_every_spawned_species_is_inside_its_own_latitude_band():
 			if band.y + BAND_MARGIN_DEGREES < 90.0:
 				var too_far_north := _species_seen_along_row(
 					_row_for_northern_latitude(band.y + BAND_MARGIN_DEGREES), biome_name,
-					BAND_ABSENCE_CHUNKS
+					BAND_ABSENCE_CHUNKS, bird_population
 				)
 				assert_false(
 					too_far_north.has(species),

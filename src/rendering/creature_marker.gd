@@ -40,11 +40,15 @@ const Carcass = preload("res://src/rendering/carcass.gd")
 const Knockback = preload("res://src/gameplay/knockback.gd")
 const HealthBar = preload("res://src/gameplay/health_bar.gd")
 const AnimalReproduction = preload("res://src/gameplay/animal_reproduction.gd")
+const Courtship = preload("res://src/gameplay/courtship.gd")
+const MammalCourtship = preload("res://src/gameplay/mammal_courtship.gd")
+const MammalGrowth = preload("res://src/gameplay/mammal_growth.gd")
 const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
+const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
@@ -191,6 +195,32 @@ const ANIMATION_FRAME_DURATION := 0.3
 ## test_gait_stride_per_frame_matches_the_old_cadence_at_wander_speed).
 const GAIT_STRIDE_PER_FRAME := CreatureWander.WANDER_SPEED * ANIMATION_FRAME_DURATION
 
+## Real prize/show animals are visibly judged by coat quality before anyone
+## commits to keeping them (docs/concept/pets.md) -- a warm highlight on top
+## of the creature's own normal art, scaling with coat_vibrancy (see
+## AnimalFitness), so a player can size up a wild individual (most usefully a
+## tameable one) before spending carrots on it. Applied to every creature
+## with a wander_seed (see _ready) rather than a herbivore/tameable-only
+## carve-out -- the same population AnimalFitness already covers elsewhere
+## (MammalCourtship's mate-attractiveness, KeptAnimals' restore-by-seed), so
+## there is exactly one population this tell can miss, not a second
+## species/role list to keep in sync with CreatureInfo's own.
+const COAT_TINT_MAX_BOOST := 0.35
+static var _fitness := AnimalFitness.new()
+
+## Deterministic, bounded coat-quality tint for `coat_vibrancy` in [0,1]:
+## squared so an ordinary individual (low vibrancy) reads as visually
+## unmodified while a truly vibrant one clearly stands out (see
+## test_coat_tint_grows_faster_near_the_top_of_the_range_than_the_bottom) -- a
+## plain linear ramp made even a common individual look faintly tinted, which
+## read as an art/lighting bug rather than a deliberate tell. Warm (red/green
+## boosted, blue pulled back slightly) rather than a flat brightness
+## multiply, so it reads as a coat sheen rather than the whole creature
+## glowing white.
+static func coat_tint_for(coat_vibrancy: float) -> Color:
+	var boost := COAT_TINT_MAX_BOOST * pow(clampf(coat_vibrancy, 0.0, 1.0), 2.0)
+	return Color(1.0 + boost, 1.0 + boost * 0.6, 1.0 - boost * 0.3)
+
 var home := Vector2.ZERO
 var wander_seed := 0
 var info: CreatureInfo
@@ -274,6 +304,36 @@ var _has_forage_target := false
 ## doesn't instantly breed.
 var energy := 0.5
 var _seconds_since_birth := 0.0
+
+## How old this creature is, in real seconds (see MammalGrowth). Mirrors
+## AmbientFlyerMarker's own `age_seconds` exactly: spawned creatures (a
+## chunk's initial population, or a reconciled shortfall) start already
+## ADULT -- the world is not seeded with newborns -- while anything actually
+## BORN in front of the player (World._resolve_courtship) starts at zero and
+## has to grow up (see begin_life). Defaults to MammalGrowth.
+## DEFAULT_ADULT_AGE_SECONDS rather than a species-specific threshold --
+## `info` (and so this individual's species) isn't known yet at this point
+## in construction, and that sentinel reads as mature for every species tier.
+var age_seconds := MammalGrowth.DEFAULT_ADULT_AGE_SECONDS
+
+## The species' own full-grown scale, captured once per action (see
+## _apply_action_scale) or by begin_life() for a brand-new individual --
+## what a still-growing juvenile's rendered `scale` is a fraction of (see
+## MammalGrowth.size_scale_at).
+var _base_scale := Vector2.ONE
+
+## Courtship pairing (see MammalCourtship / World._pair_up_courtships): who
+## this creature is currently paired with, if anyone. A plain instance id
+## rather than a node reference, same reason AmbientFlyerMarker's
+## `_courting_with` is -- a partner that despawns (eaten, chunk-unloaded)
+## mid-courtship simply ends it rather than leaving a dangling reference.
+## `_courtship_round` is bumped once per NEW pairing and salts Courtship.
+## pair_seed, so a creature that courts (and fails to mate) more than once in
+## its life gets a genuinely different outcome each time rather than
+## replaying the same roll.
+var _courting_partner_id := 0
+var _courtship_elapsed := 0.0
+var _courtship_round := 0
 var _perception := CreaturePerception.new()
 var _behavior := CreatureBehavior.new()
 var _health := Health.new()
@@ -324,6 +384,19 @@ var carried_seed_origin := Vector2.ZERO
 ## state. No species field -- a chunk grows only one kind of grass.
 var carried_grass_seed := false
 var carried_grass_seed_origin := Vector2.ZERO
+
+## Tree nut a SQUIRREL is currently caching, and where it was picked up (see
+## EarthChunkManager._step_squirrel_nut_caching / SquirrelNutCaching) --
+## the fruit/nut-side counterpart of carried_grass_seed above. Independent
+## state for the same reason carried_grass_seed is independent of
+## carried_seed_species: a squirrel is a distinct carrier from both the
+## flower-epizoochory coat-rider and the mouse's grass cheek-pouch, able in
+## principle to be doing any combination of the three at once. Unlike grass
+## (which grows only one kind per chunk), a nut has a real species -- empty
+## string means empty-handed, otherwise it names which tree to plant if the
+## nut ends up cached rather than eaten.
+var carried_nut_species := ""
+var carried_nut_origin := Vector2.ZERO
 var _world = null
 var _tile_size := 16
 
@@ -382,6 +455,12 @@ func _ready() -> void:
 	# its needs can start somewhere of its own in the cycle rather than at
 	# exactly empty like every other animal in the herd.
 	_needs = CreatureNeeds.new(wander_seed)
+
+	# The coat-quality tell (see COAT_TINT_MAX_BOOST doc comment above): also
+	# keyed off wander_seed, so it's deterministic and reproducible from the
+	# same individual across sessions, just like every other AnimalFitness
+	# trait this seed already drives.
+	modulate = coat_tint_for(_fitness.phenotype_for(wander_seed)["coat_vibrancy"])
 
 	_health_bar_bg = ColorRect.new()
 	_health_bar_bg.color = HEALTH_BAR_BG_COLOR
@@ -603,7 +682,10 @@ func _process(frame_delta: float) -> void:
 		return
 	_elapsed_time += delta
 	_attack_cooldown_remaining = maxf(0.0, _attack_cooldown_remaining - delta)
-	# Runs unconditionally, ahead of every early-return branch below (rope,
+	# Always ages, regardless of which branch below this creature takes --
+	# a courting/restrained/tamed juvenile still grows up (see _step_growing).
+	_step_growing(delta)
+	# Runs unconditionally too, ahead of every early-return branch below (rope,
 	# tame order, foraging, knockback) -- a sick animal keeps getting sicker
 	# (and can still die) no matter what it's doing that frame, the same way
 	# _needs.advance never pauses for those states either.
@@ -717,6 +799,12 @@ func _process(frame_delta: float) -> void:
 		_cached_food_direction = _food_direction()
 		_cached_water_direction = _water_direction()
 
+	# Not throttled to the sensing interval like the group scans above: there
+	# is nothing to SCAN here, just a specific known partner (or none) whose
+	# live position is a single cheap instance_from_id lookup away -- reading
+	# it fresh every frame is what makes the walk read as smooth rather than
+	# stepping toward a stale point.
+	var courting_partner := courtship_partner()
 	var decision := _behavior.decide({
 		"position": position,
 		"temperament": _temperament_for_decision(),
@@ -728,6 +816,9 @@ func _process(frame_delta: float) -> void:
 		"prey": _positions_of(_cached_prey),
 		"food_direction": _cached_food_direction,
 		"water_direction": _cached_water_direction,
+		"is_courting": courting_partner != null,
+		"partner_position": courting_partner.position if courting_partner != null else Vector2.ZERO,
+		"is_mature": MammalGrowth.is_mature(age_seconds, info.species),
 		"is_world_boss": info.is_world_boss,
 		"is_aggroed": info.is_aggroed,
 	})
@@ -997,6 +1088,11 @@ func _gain_energy() -> void:
 func can_reproduce() -> bool:
 	if info == null or info.max_health <= 0.0:
 		return false
+	# A newborn cannot pair off the moment it is born -- see MammalGrowth.
+	# is_mature. A PRECONDITION added alongside the existing energy/health/
+	# cooldown gate, not a replacement for it.
+	if not MammalGrowth.is_mature(age_seconds, info.species):
+		return false
 	return AnimalReproduction.can_reproduce(energy, info.health / info.max_health, _seconds_since_birth)
 
 
@@ -1006,6 +1102,94 @@ func can_reproduce() -> bool:
 func on_reproduced() -> void:
 	energy = AnimalReproduction.energy_after_birth(energy)
 	_seconds_since_birth = 0.0
+
+
+## Starts this creature at the beginning of its life rather than as an
+## adult -- what separates an offspring actually BORN in front of the player
+## (see World._resolve_courtship) from the population a chunk is populated
+## with. Captures whatever `scale` CreatureRenderer._build_marker already
+## set as this individual's own full-grown size (so a horse's newborn grows
+## toward a horse's own adult size, not a shared assumption) and shrinks the
+## rendered scale to a newborn's immediately -- mirrors AmbientFlyerMarker's
+## set_adult_scale + begin_life pair, folded into one call since
+## CreatureMarker has no separate scale-setter to call first.
+func begin_life() -> void:
+	_base_scale = scale
+	age_seconds = 0.0
+	var newborn_scale := _base_scale * MammalGrowth.size_scale_at(age_seconds, info.species)
+	scale = newborn_scale
+	_shadow_base_scale = newborn_scale
+
+
+## Ages this creature (mirrors AmbientFlyerMarker._step_growing) -- called
+## every frame regardless of which behaviour branch _process takes below, so
+## a courting, restrained, or tamed juvenile still grows up (though it can
+## never actually reach courting until it is mature -- see can_reproduce).
+## The visible growth itself is applied lazily, in _apply_action_scale (see
+## its own doc comment), which only runs once _animation_step does; this
+## just advances the clock so that computation has a fresh age to read.
+## Runs before this marker's own `info == null` guard elsewhere in _process
+## (a bare marker still ages), so the species lookup falls back to an empty
+## string -- MammalGrowth.mature_seconds_for's own generic fallback -- rather
+## than assuming `info` is set.
+func _step_growing(delta: float) -> void:
+	var species := info.species if info != null else ""
+	if age_seconds < MammalGrowth.mature_seconds_for(species):
+		age_seconds += delta
+
+
+## Whether this creature is currently paired for courtship (see
+## MammalCourtship / World._pair_up_courtships). CreatureBehavior's decision
+## tree only enters the "court" intent while this is true.
+func is_courting() -> bool:
+	return _courting_partner_id != 0
+
+
+## This creature's current courtship partner, or null if it isn't courting
+## or the partner is gone -- freeing (predation, despawn) is handled here
+## rather than requiring every caller to check is_instance_valid itself, the
+## same self-healing shape AmbientFlyerMarker._step_courtship uses for its
+## own `_courting_with`.
+func courtship_partner() -> Node:
+	if _courting_partner_id == 0:
+		return null
+	var partner := instance_from_id(_courting_partner_id)
+	if partner == null or not is_instance_valid(partner):
+		end_courtship()
+		return null
+	return partner
+
+
+## Starts (or restarts, for a creature courting again later in life) a real
+## pairing with `partner`. Called on BOTH sides by World._pair_up_courtships
+## so each creature independently knows who it is walking toward.
+func begin_courtship(partner: Node) -> void:
+	_courting_partner_id = partner.get_instance_id()
+	_courtship_elapsed = 0.0
+	_courtship_round += 1
+
+
+## Ends the pairing, mated or not -- called once the courtship's duration is
+## up (see World._resolve_courtship) or when the partner is found gone.
+func end_courtship() -> void:
+	_courting_partner_id = 0
+	_courtship_elapsed = 0.0
+
+
+## Advances this creature's own share of the pair's shared timer by `delta`
+## and returns the new total. Both partners are advanced by the same amount
+## every tick (see World._advance_courtships), so they stay in lockstep
+## without messaging each other -- the same shape Courtship's pollinator
+## dance uses for its own elapsed/leader-resolves split.
+func advance_courtship(delta: float) -> float:
+	_courtship_elapsed += delta
+	return _courtship_elapsed
+
+
+## Which pairing attempt this is, for salting Courtship.pair_seed -- see
+## `_courtship_round`'s own doc comment.
+func courtship_round() -> int:
+	return _courtship_round
 
 
 ## Called by the world loop when this creature consumes a dropped food ground
@@ -1138,21 +1322,28 @@ func _apply_submersion(action: String, uses_illustrated: bool) -> void:
 ## _sync_grounded_children) is kept in lockstep, or it would visibly
 ## mismatch the body's new size.
 func _apply_action_scale(uses_illustrated: bool, action: String = "walk") -> void:
-	# Scale only ever changes when the ACTION changes (each action may come
-	# from its own differently-sized source file). Re-deriving it every frame
-	# for every creature was pure waste -- see marker_scale's own note on the
-	# per-frame cost this used to carry.
-	if action == _scaled_action:
-		return
-	_scaled_action = action
-	var new_scale: Vector2
-	if uses_illustrated:
-		# Per ACTION: an action may come from its own differently-sized
-		# source file (see IllustratedAnimalSprite.marker_scale).
-		new_scale = Vector2.ONE * _illustrated.marker_scale(info.species, action)
-	else:
-		var species_scale: float = AnimalAnatomy.profile_for(info.species).world_scale
-		new_scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * species_scale
+	# The BASE (fully-grown) scale only changes when the ACTION changes (each
+	# action may come from its own differently-sized source file) -- the
+	# expensive per-species/per-action lookup is skipped exactly as before
+	# whenever the action hasn't changed. GROWTH (see MammalGrowth), unlike
+	# the action, changes every frame while still immature, so it is always
+	# re-applied on top of that cached base -- the `new_scale == scale` check
+	# below is what keeps a fully-grown, action-unchanged creature just as
+	# cheap as before (one multiply and one comparison, not a re-derivation).
+	if action != _scaled_action:
+		_scaled_action = action
+		if uses_illustrated:
+			# Per ACTION: an action may come from its own differently-sized
+			# source file (see IllustratedAnimalSprite.marker_scale).
+			_base_scale = Vector2.ONE * _illustrated.marker_scale(info.species, action)
+		else:
+			var species_scale: float = AnimalAnatomy.profile_for(info.species).world_scale
+			_base_scale = Vector2.ONE * ArtResolution.SPRITE_SCALE * species_scale
+	# A juvenile renders at its species' own normal size TIMES how grown it
+	# currently is (see MammalGrowth.size_scale_at), converging to that
+	# normal size once mature -- the mammal counterpart to
+	# AmbientFlyerMarker._step_growing's own adult_scale * size_scale_at.
+	var new_scale := _base_scale * MammalGrowth.size_scale_at(age_seconds, info.species)
 	if new_scale == scale:
 		return
 	scale = new_scale
@@ -1449,8 +1640,30 @@ func _apply_decision(decision: Dictionary, threats: Array, prey: Array, delta: f
 			# "the horse and other animals... same flee hysteria the snake
 			# had at the beginning").
 			_advance_avoided(_wander.roam_direction(_elapsed_time, wander_seed), SEEK_SPEED, delta)
+		"court":
+			_step_courtship_movement(decision.direction, delta)
 		_:
 			_wander_step(delta)
+
+
+## Movement for the "court" intent: keep closing the distance to the partner
+## (obstacle-gated the same way seek_water/seek_food are, but not threat-
+## avoidant -- a courting pair is not fleeing anything) while it's still
+## farther than MammalCourtship.LINGER_RADIUS_PX away, then simply stand
+## once close enough rather than shoving into it (Vector2.ZERO through
+## _advance is the same "stand still, not moving" no-op every other intent's
+## overlap/arrival case already uses). A vanished partner (eaten, freed
+## between decide() and here) just stands too -- the next sensing pass and
+## next World tick both self-heal via courtship_partner()/is_courting().
+func _step_courtship_movement(direction: Vector2, delta: float) -> void:
+	var partner := courtship_partner()
+	if partner == null:
+		_advance(Vector2.ZERO, SEEK_SPEED, delta)
+		return
+	if MammalCourtship.should_approach(position.distance_to(partner.position)):
+		_advance_gated(direction, SEEK_SPEED, delta, false)
+	else:
+		_advance(Vector2.ZERO, SEEK_SPEED, delta)
 
 
 ## Species that inject venom on a successful bite (see VenomModel,
@@ -1684,8 +1897,34 @@ func _wander_step(delta: float) -> void:
 	# translated straight toward whatever direction CreatureWander/the bias
 	# picked -- sideways or backwards, from the sprite's own point of view,
 	# whenever that direction opposed its current heading.
+	# _wander_radius() is a PER-CALL override (juvenile vs adult, see that
+	# function's own doc comment) -- step_position itself takes no radius
+	# argument, it reads the shared _wander instance's own wander_radius
+	# property (see CreatureWander's "Per-instance override" doc comment),
+	# so the override has to land there first.
+	_wander.wander_radius = _wander_radius()
 	var candidate := _wander.step_position(home, position, _elapsed_time, delta, wander_seed)
 	_advance_avoided(candidate - position, CreatureWander.WANDER_SPEED, delta)
+
+
+## A still-growing juvenile roams a tighter, home-anchored range than an
+## adult, widening smoothly as it grows -- a real juvenile mammal stays close
+## to its birth site rather than ranging as far as a full-grown adult. `home`
+## on a courtship-born juvenile is already its actual birth position (see
+## begin_life -- CreatureRenderer never moves it), so no separate tracking is
+## needed. Scaled by MammalGrowth.size_scale_at, the same already-computed
+## 0.4..1.0 growth fraction _apply_action_scale uses for the RENDERED size --
+## reusing it here rather than inventing a second tunable means a newborn's
+## wander range and its visible size grow in lockstep, and the range reaches
+## exactly CreatureWander.WANDER_RADIUS at maturity (size_scale_at(mature) ==
+## 1.0), so every existing adult's wander is completely unaffected. Can run
+## with `info` still null (a bare marker's own wander step, called before
+## the usual `info == null` guard elsewhere in _process) -- falls back to an
+## empty species string, MammalGrowth.mature_seconds_for's own generic
+## fallback, same as _step_growing.
+func _wander_radius() -> float:
+	var species := info.species if info != null else ""
+	return CreatureWander.WANDER_RADIUS * MammalGrowth.size_scale_at(age_seconds, species)
 
 
 func _current_tile() -> Vector2i:
@@ -1960,11 +2199,12 @@ func _nearest_node(nodes: Array) -> Node:
 	return best
 
 
-## Reduces info.health; on death, leaves a real Carcass behind (see
-## docs/concept/carrion.md) for a carcass-eligible species (see LootTable --
-## the same species that used to get an instant loot spray now get a real
-## carcass instead) and frees this marker. A species with nothing to yield
-## (no LootTable entry) still just despawns, exactly like before.
+## Reduces info.health; on death, routes through the shared _die() path
+## (leaves a real Carcass behind for a carcass-eligible species -- see
+## docs/concept/carrion.md/LootTable -- and reports the death to the
+## region's aggregate population, see EarthChunkManager.record_death_at /
+## EcosystemSimulation.record_death, so a kill in front of the player does
+## not vanish the moment the chunk unloads), then frees this marker.
 ##
 ## A world boss (see BossAggro, docs/concept/worldbosses.md) filters this
 ## FIRST, before any of the above: while not yet aggroed, a hit that
@@ -2056,14 +2296,19 @@ func _update_health_bar() -> void:
 
 
 ## Shared death path: a real Carcass (see docs/concept/carrion.md) for a
-## carcass-eligible species (see LootTable), then the marker frees itself.
-## The ONE place a marker actually dies, whatever the cause -- ordinary
-## take_damage above, and a lethal disease death (_disease_step below) alike
-## (docs/concept/disease.md "Feeds carrion": a disease-driven die-off must
-## be a real source of carrion, not a silent despawn, so it has to go
-## through this exact same path, not a parallel one).
+## carcass-eligible species (see LootTable), reports the death to the
+## region's aggregate population (see EarthChunkManager.record_death_at /
+## EcosystemSimulation.record_death -- a kill must not vanish the moment the
+## chunk unloads, whether it came from combat or disease), then the marker
+## frees itself. The ONE place a marker actually dies, whatever the cause --
+## ordinary take_damage above, and a lethal disease death (_disease_step
+## below) alike (docs/concept/disease.md "Feeds carrion": a disease-driven
+## die-off must be a real source of carrion, not a silent despawn, so it has
+## to go through this exact same path, not a parallel one).
 func _die() -> void:
 	_spawn_carcass_if_eligible()
+	if _world != null and _world.has_method("record_death_at"):
+		_world.record_death_at(position, info.is_predator)
 	queue_free()
 
 

@@ -67,6 +67,6 @@ can find, which is how one ends up trailing a player carrying rotten fruit.
 - ✅ The four stages, their durations, and what each one does
 - ✅ Laying: who can, on what, how many, how often
 - ✅ Population ceilings at every level
-- ⬜ Flies, eggs and maggots as rendered entities in the world
-- ⬜ Maggots hastening the decay of what they eat
-- ⬜ Flies following a player's carried rot
+- ✅ Adult flies as rendered entities in the world, one marker per adult in a colony (`EarthChunkManager._fly_markers`/`_sync_fly_markers`) — eggs and maggots are deliberately never nodes, since they live IN the fruit
+- ✅ Maggots hastening the decay of what they eat — `EarthChunkManager.step_ground_food` looks the item up in `_fly_colonies`, converts `FlyColony.decay_hastened_by`'s fraction-of-shelf-life into seconds against that item's own `spoil_seconds`, and adds it on top of ordinary aging, so a windfall with an active colony spoils measurably faster than the same windfall with none
+- ✅ Flies following a player's carried rot — `EarthChunkManager._sync_carrier_flies`/`register_scent_carrier`, wired to the player in `world.gd`

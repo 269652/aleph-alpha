@@ -28,18 +28,21 @@ const FLYER_WORLD_SCALE := {
 
 ## Chunk-based spawn/despawn of ambient wildlife (butterflies, songbirds) --
 ## same "one node per qualifying cell, deterministic per global coordinate,
-## capped" shape as FishRenderer/CreatureRenderer, but deliberately
-## decorative/capped only: no population simulation behind these, unlike
-## herbivores/predators/fish (see
-## docs/concept/ecosystem_dynamics.md's Species roster -- "A new aerial
-## tier"). The fish-eating kingfisher is NOT spawned here -- it's a separate
-## piscivore behavior gated by water, not a land biome (see
-## piscivore_bird_renderer.gd).
+## capped" shape as FishRenderer/CreatureRenderer. Butterflies/bees are
+## still decorative/capped only, no population behind them; robin and
+## sparrow are NOT -- each is promoted from its own real aggregate
+## population (EcosystemSimulation.robin_population/sparrow_population,
+## food-linked to worm/seed density) the same way FishRenderer promotes from
+## fish_population (see docs/concept/ecosystem_dynamics.md's Species roster
+## -- "A new aerial tier"). The fish-eating kingfisher is NOT spawned here --
+## it's a separate piscivore behavior gated by water, not a land biome (see
+## piscivore_bird_renderer.gd), with its own aggregate population there.
 
 const AmbientFlyerMarker = preload("res://src/rendering/ambient_flyer_marker.gd")
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const ProceduralButterflySprite = preload("res://src/rendering/procedural_butterfly_sprite.gd")
 const ProceduralBirdSprite = preload("res://src/rendering/procedural_bird_sprite.gd")
+const ProceduralEggSprite = preload("res://src/rendering/procedural_egg_sprite.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const FlyerSpawnLayout = preload("res://src/rendering/flyer_spawn_layout.gd")
 const FlyerDiet = preload("res://src/gameplay/flyer_diet.gd")
@@ -83,6 +86,13 @@ const BEE_SPECIES_POOL: Array[String] = ["bee"]
 ## (spawn-count bookkeeping, tests) -- the union of both pools above.
 const BUTTERFLY_SPECIES_POOL: Array[String] = ["monarch", "swallowtail", "blue_morpho", "bee"]
 const BIRD_SPECIES_POOL: Array[String] = ["sparrow", "robin"]
+## Single-species pools for the population-driven spawn calls below -- robin
+## and sparrow each get their own aggregate population (see
+## EcosystemSimulation.robin_population/sparrow_population), so unlike
+## BIRD_SPECIES_POOL they must be promoted independently, not drawn at
+## random from a shared pool.
+const ROBIN_SPECIES_POOL: Array[String] = ["robin"]
+const SPARROW_SPECIES_POOL: Array[String] = ["sparrow"]
 
 ## Real butterflies/songbirds are a warm/flowering-habitat presence --
 ## excluded from desert/tundra/mountain/ocean as implausible. This is the
@@ -145,8 +155,17 @@ const MAX_BUTTERFLIES_PER_CHUNK := 4
 ## smaller (bees read as a background buzz, not the headline presence).
 const MIN_BEES_PER_CHUNK := 1
 const MAX_BEES_PER_CHUNK := 2
-const MIN_BIRDS_PER_CHUNK := 1
-const MAX_BIRDS_PER_CHUNK := 3
+## Robin/sparrow no longer have a flat MIN..MAX -- each is promoted from its
+## own real aggregate population (EcosystemSimulation.robin_population/
+## sparrow_population, food-linked to worm/seed density -- see
+## docs/concept/ecosystem_dynamics.md's Open questions). These are perf caps
+## only, mirroring CreatureRenderer.MAX_MARKERS_PER_SPECIES's exact role: a
+## region's aggregate population can be arbitrarily large, so promotion is
+## capped rather than spawning one marker per unit unconditionally. Kept
+## modest -- ambient birds are still meant to read as a light presence, not a
+## flock.
+const MAX_ROBINS_PER_CHUNK := 4
+const MAX_SPARROWS_PER_CHUNK := 4
 
 ## Butterflies render at half size -- a real scale difference from songbirds
 ## (butterflies really are much smaller), and reads better against tall
@@ -156,6 +175,11 @@ const BIRD_SCALE := 1.0
 
 var _butterfly_sprite := ProceduralButterflySprite.new()
 var _bird_sprite := ProceduralBirdSprite.new()
+## One shared generator for every species -- the egg sprite is deliberately
+## species-agnostic (see ProceduralEggSprite's class doc comment), so this
+## does not need a butterfly/bird split the way the two sprite generators
+## above do.
+var _egg_sprite := ProceduralEggSprite.new()
 var _geo_coordinates := GeoCoordinates.new()
 
 
@@ -197,6 +221,11 @@ func _abs_latitude_for(chunk: Chunk, chunk_origin_tiles: Vector2i) -> float:
 	return absf(_geo_coordinates.latitude_for_tile(mid_row, EarthChunkGenerator.WORLD_HEIGHT_TILES))
 
 
+## `robin_population`/`sparrow_population` are this chunk's live aggregate
+## populations (see EcosystemSimulation.robin_population/sparrow_population),
+## food-linked to worm/seed density -- default 0.0 so every pre-existing call
+## site keeps compiling (and, correctly, keeps spawning no robins/sparrows
+## until a caller actually reports a real population).
 func spawn_ambient_flyers(
 	parent: Node2D,
 	chunk: Chunk,
@@ -204,7 +233,9 @@ func spawn_ambient_flyers(
 	tile_size: int,
 	biome_name: String,
 	scent_multiplier: float = 1.0,
-	scent_world = null
+	scent_world = null,
+	robin_population: float = 0.0,
+	sparrow_population: float = 0.0
 ) -> Array[Node2D]:
 	var spawned: Array[Node2D] = []
 	# Which SPECIES this chunk can hold, not just whether the tier can be here
@@ -257,11 +288,34 @@ func spawn_ambient_flyers(
 		# earthworms (see FlyerDiet / docs/concept/soil_fauna.md). Songbirds
 		# used to be handed nothing at all, which is why they had literally no
 		# behaviour beyond home-tethered drift.
+		#
+		# Promotion from aggregate population, not a flat MIN..MAX roll (see
+		# MAX_ROBINS_PER_CHUNK/MAX_SPARROWS_PER_CHUNK's doc comment): robin and
+		# sparrow are ecologically distinct niches (worms vs. seeds) with their
+		# own carrying capacities, so each gets its OWN spawn call against its
+		# OWN single-species pool -- mirroring why butterflies and bees were
+		# split into separate pools/budgets above, not sharing one. Also
+		# range-filtered via _in_range_pool exactly like butterflies/bees
+		# above: FLYER_RANGE gives both a real biogeographic band (a robin
+		# is a Palearctic/temperate bird, not a tropical one), and population
+		# alone cannot express "this species cannot live here at all" -- a
+		# chunk outside the band spawns none regardless of how large its
+		# aggregate population number is.
+		var robin_count := marker_count_for(robin_population, MAX_ROBINS_PER_CHUNK)
 		spawned.append_array(
 			_spawn_species(
-				parent, chunk, chunk_origin_tiles, tile_size, "bird_spawn",
-				_in_range_pool(BIRD_SPECIES_POOL, biome_name, abs_latitude),
-				MIN_BIRDS_PER_CHUNK, MAX_BIRDS_PER_CHUNK,
+				parent, chunk, chunk_origin_tiles, tile_size, "robin_spawn",
+				_in_range_pool(ROBIN_SPECIES_POOL, biome_name, abs_latitude), robin_count, robin_count,
+				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
+				_bird_sprite,
+				scent_world
+			)
+		)
+		var sparrow_count := marker_count_for(sparrow_population, MAX_SPARROWS_PER_CHUNK)
+		spawned.append_array(
+			_spawn_species(
+				parent, chunk, chunk_origin_tiles, tile_size, "sparrow_spawn",
+				_in_range_pool(SPARROW_SPECIES_POOL, biome_name, abs_latitude), sparrow_count, sparrow_count,
 				AmbientFlyerMovement.new(BIRD_SPEED, BIRD_RADIUS, BIRD_INTERVAL),
 				_bird_sprite,
 				scent_world
@@ -368,7 +422,18 @@ func _spawn_species(
 ## steadily in a single session, which is precisely how the deer explosion
 ## started. A meadow supports what it supports.
 static func max_flyers_per_chunk() -> int:
-	return MAX_BUTTERFLIES_PER_CHUNK + MAX_BEES_PER_CHUNK + MAX_BIRDS_PER_CHUNK
+	return (
+		MAX_BUTTERFLIES_PER_CHUNK + MAX_BEES_PER_CHUNK
+		+ MAX_ROBINS_PER_CHUNK + MAX_SPARROWS_PER_CHUNK
+	)
+
+
+## How many markers one bird species' aggregate population is drawn as --
+## the promotion-from-aggregate step, mirroring
+## CreatureRenderer.marker_count_for's exact "round then cap for perf" shape
+## for herbivores/predators.
+func marker_count_for(population: float, cap: int) -> int:
+	return mini(int(roundi(population)), cap)
 
 
 func spawn_offspring(
@@ -464,6 +529,13 @@ func _build_marker(
 ) -> AmbientFlyerMarker:
 	var marker := AmbientFlyerMarker.new()
 	marker.texture = sprite_generator.generate_texture(species, seed_value)
+	# The pre-hatch sprite (see ProceduralEggSprite / AmbientFlyerMarker.
+	# _animate_wings's _is_pre_hatch branch). Built for every marker, not
+	# just offspring -- a regular chunk-spawned adult never actually shows
+	# it (age_seconds starts at LifeCycle.MATURE_SECONDS), but that keeps
+	# this one shared build path instead of a special case only
+	# spawn_offspring takes.
+	marker.egg_frame = _egg_sprite.generate_texture(seed_value)
 	# Wing-beat frames, so the flyer actually flaps rather than gliding with
 	# frozen wings (see AmbientFlyerMarker._animate_wings).
 	if sprite_generator.has_method("generate_flap_textures"):

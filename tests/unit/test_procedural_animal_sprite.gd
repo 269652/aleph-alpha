@@ -331,7 +331,7 @@ func test_new_species_have_a_base_color_distinct_from_their_shape_mate():
 
 
 func test_every_species_has_a_visually_distinct_base_color_from_every_other():
-	var all_species: Array = SPECIES + NEW_SPECIES + ["mouse", "venomous_snake", "nonvenomous_snake"]
+	var all_species: Array = SPECIES + NEW_SPECIES + ["mouse", "squirrel", "venomous_snake", "nonvenomous_snake"]
 	for i in all_species.size():
 		for j in range(i + 1, all_species.size()):
 			var a: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS[all_species[i]]
@@ -438,6 +438,66 @@ func test_mouse_has_a_smaller_silhouette_than_every_original_species():
 	for species in SPECIES:
 		var count := _opaque_count(generator.generate_image(species, 1))
 		assert_lt(mouse_count, count, "mouse should be smaller than %s" % species)
+
+
+# -- squirrel: reuses mouse's shape family, not a new one --------------------
+#
+# Unlike mouse, a squirrel DOES read as the same small-rodent silhouette at a
+# larger scale (short legs, round body) -- what makes it distinctly a
+# squirrel is AnimalAnatomy's own tail field (a large TAIL_BUSHY, drawn
+# procedurally on top of the shared bitmap by _paint_tail, not baked into the
+# bitmap itself), not a different body silhouette. So squirrel reuses
+# "mouse_shape" rather than getting a 6th hand-authored family, and gets its
+# own SPECIES_BASE_COLORS entry so it never falls through to a generic/
+## herbivore default the way jackal/arctic_fox/mountain_lion/lion once did.
+
+func test_squirrel_reuses_mouses_shape_family():
+	assert_eq(ProceduralAnimalSprite.SPECIES_SHAPE_FAMILY.get("squirrel", ""), "mouse_shape")
+
+
+func test_squirrel_has_its_own_base_color_distinct_from_mouse():
+	assert_true(ProceduralAnimalSprite.SPECIES_BASE_COLORS.has("squirrel"))
+	var squirrel_color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS["squirrel"]
+	var mouse_color: Color = ProceduralAnimalSprite.SPECIES_BASE_COLORS["mouse"]
+	assert_gt(
+		Vector3(squirrel_color.r, squirrel_color.g, squirrel_color.b).distance_to(
+			Vector3(mouse_color.r, mouse_color.g, mouse_color.b)
+		),
+		0.05,
+		"squirrel should be visually distinguishable from mouse"
+	)
+
+
+func test_squirrel_generated_image_has_the_expected_size():
+	var image: Image = generator.generate_image("squirrel", 1)
+	assert_eq(image.get_width(), ProceduralAnimalSprite.WIDTH)
+	assert_eq(image.get_height(), ProceduralAnimalSprite.HEIGHT)
+
+
+func test_squirrel_generated_image_has_transparent_corners():
+	var image: Image = generator.generate_image("squirrel", 1)
+	assert_eq(image.get_pixel(0, 0).a, 0.0)
+	assert_eq(image.get_pixel(ProceduralAnimalSprite.WIDTH - 1, ProceduralAnimalSprite.HEIGHT - 1).a, 0.0)
+
+
+func test_squirrel_generated_image_has_a_body():
+	var image: Image = generator.generate_image("squirrel", 1)
+	assert_gt(_opaque_count(image), 15, "squirrel should have a visible body")
+
+
+func test_squirrel_generated_image_is_deterministic_per_seed():
+	var first: Image = generator.generate_image("squirrel", 42)
+	var second: Image = generator.generate_image("squirrel", 42)
+	assert_eq(_pixel_diff_count(first, second), 0)
+
+
+## The whole point of squirrel's own AnimalAnatomy tail override: its bushy
+## tail is proportionally larger than mouse's own tail, so it should occupy
+## more of the shared silhouette's opaque footprint despite sharing a body.
+func test_squirrel_has_a_bigger_silhouette_than_mouse_thanks_to_its_bushy_tail():
+	var squirrel_count := _opaque_count(generator.generate_image("squirrel", 1))
+	var mouse_count := _opaque_count(generator.generate_image("mouse", 1))
+	assert_gt(squirrel_count, mouse_count, "squirrel's big bushy tail should read as more silhouette than mouse's thin one")
 
 
 # -- snakes: another genuinely new (6th) shape family, low and long ---------

@@ -108,6 +108,13 @@ func save_fish_population(fish_population: float, path: String) -> void:
 ## format's original 4 fields -- appended at the end, not interleaved, so an
 ## old save (see load_ecology) still reads its first 4 fields correctly and
 ## simply ends before this one.
+##
+## `robins`/`sparrows`/`kingfishers` (docs/concept/ecosystem_dynamics.md's
+## "Persistence/catch-up gap, robin/sparrow/kingfisher", now resolved) close
+## the same gap for these three aggregate bird populations that this file's
+## own doc comment above named for herbivores/predators/vegetation -- appended
+## AFTER land_health, same reason: an old save still reads its first 5 fields
+## correctly and simply ends before these three.
 func save_ecology(state: Dictionary, path: String) -> void:
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file == null:
@@ -117,6 +124,9 @@ func save_ecology(state: Dictionary, path: String) -> void:
 	file.store_float(float(state.get("vegetation", 0.0)))
 	file.store_double(float(state.get("saved_at_unix", 0.0)))
 	file.store_float(float(state.get("land_health", 1.0)))
+	file.store_float(float(state.get("robins", 0.0)))
+	file.store_float(float(state.get("sparrows", 0.0)))
+	file.store_float(float(state.get("kingfishers", 0.0)))
 	file.close()
 
 
@@ -129,6 +139,11 @@ func save_ecology(state: Dictionary, path: String) -> void:
 ## existed (see save_ecology's doc comment) -- checked by file position
 ## rather than assumed, so an old, shorter save loads its other 4 fields
 ## correctly instead of reading past end-of-file for a field it never wrote.
+##
+## `robins`/`sparrows`/`kingfishers` read as 0.0 for a file saved before these
+## three fields existed -- same file-position check, one field generation
+## later, so a 5-field (pre-bird-persistence) save loads its earlier fields
+## correctly instead of reading past end-of-file for fields it never wrote.
 func load_ecology(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {}
@@ -145,6 +160,14 @@ func load_ecology(path: String) -> Dictionary:
 		state["land_health"] = file.get_float()
 	else:
 		state["land_health"] = 1.0
+	if file.get_position() < file.get_length():
+		state["robins"] = file.get_float()
+		state["sparrows"] = file.get_float()
+		state["kingfishers"] = file.get_float()
+	else:
+		state["robins"] = 0.0
+		state["sparrows"] = 0.0
+		state["kingfishers"] = 0.0
 	file.close()
 	return state
 

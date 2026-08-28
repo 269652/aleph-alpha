@@ -26,8 +26,24 @@ const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 ## themselves rarer than this in their own tests) and the density the noise
 ## threshold below was empirically tuned to approximate.
 const SEED_CHANCE := 0.20
-## Hard cap on patches per chunk, so spread can't grow unbounded.
-const MAX_PATCHES := 128
+## Hard cap on patches per chunk, so spread can't grow unbounded. Must
+## actually accommodate the density target above for a REAL chunk, derived
+## from EarthChunkManager.CHUNK_SIZE (32, kept a plain literal here rather
+## than imported -- EarthChunkManager already imports TallGrass, so importing
+## it back would be circular): 32 squared * SEED_CHANCE (0.20) = 204.8,
+## rounded up to 205. The previous value (128, ~12.5% of a full chunk) was
+## well under this documented ~20% target, so on any chunk that generated
+## mostly/fully grassland, initial seeding ALONE already reached the cap
+## before any spread or planting happened, leaving plant() permanently unable
+## to succeed there (confirmed live: a real Berlin chunk dense enough in
+## grassland hit exactly this, failing
+## test_earth_chunk_manager.gd's test_plant_grass_at_establishes_a_new_patch
+## deterministically). See test_tall_grass.gd's
+## test_max_patches_accommodates_the_density_target_for_a_real_full_chunk,
+## which independently recomputes this same derivation from
+## EarthChunkManager's real constants so it re-verifies automatically if
+## either ever changes, rather than silently drifting out of sync again.
+const MAX_PATCHES := 205
 
 ## Lattice-cell size (in cells/tiles) of the smooth-noise field
 ## _seed_initial_patches thresholds: how large one noise "bump" spans.
@@ -66,7 +82,7 @@ const MAX_GROUND_SEEDS := 48
 
 ## Expected seconds between shed events for a single mature patch. Longer
 ## than FlowerPatch.SECONDS_PER_SEED_FALL (40.0) because every mature patch
-## sheds here (up to MAX_PATCHES = 128), where a flower meadow's shedding
+## sheds here (up to MAX_PATCHES = 205), where a flower meadow's shedding
 ## population is the much smaller "past bloom and pollinated" subset of
 ## MAX_FLOWERS = 40 -- tuned up so the aggregate accumulation rate stays the
 ## same order of magnitude rather than flooding the ground the moment a
@@ -114,10 +130,13 @@ func get_growth(cell: Vector2i) -> float:
 
 
 ## Advances growth on every patch and, on a throttled interval, lets mature
-## patches spread into adjacent grassland cells.
-func advance(delta: float) -> void:
+## patches spread into adjacent grassland cells. `growth_modifier` scales the
+## growth INCREMENT only (see SeasonCycle.growth_modifier) -- spread timing is
+## untouched, so a slow winter still colonises new cells on the same clock,
+## it just grows in more slowly once there.
+func advance(delta: float, growth_modifier: float) -> void:
 	for cell in _patches:
-		_patches[cell] = minf(_patches[cell] + delta * GROWTH_RATE, 1.0)
+		_patches[cell] = minf(_patches[cell] + delta * GROWTH_RATE * growth_modifier, 1.0)
 
 	_spread_accumulator += delta
 	while _spread_accumulator >= SPREAD_INTERVAL:

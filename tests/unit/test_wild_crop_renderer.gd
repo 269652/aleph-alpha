@@ -73,7 +73,7 @@ func test_spawned_markers_carry_the_crop_id_and_current_growth():
 func _advance_until_a_new_cell_appears(sim, max_ticks: int = 50) -> void:
 	var before: int = sim.get_patch_cells().size()
 	for i in max_ticks:
-		sim.advance(WildCropPatch.SPREAD_INTERVAL)
+		sim.advance(WildCropPatch.SPREAD_INTERVAL, 1.0)
 		if sim.get_patch_cells().size() > before:
 			return
 
@@ -98,7 +98,7 @@ func test_sync_markers_updates_growth_on_an_existing_marker():
 			immature_cell = cell
 	assert_ne(immature_cell, Vector2i(-1, -1), "precondition: spread produced an immature cell")
 	renderer.sync_markers(parent, sim, "carrot", CHUNK_ORIGIN, TILE_SIZE, markers)
-	sim.advance(1.0)
+	sim.advance(1.0, 1.0)
 	renderer.sync_markers(parent, sim, "carrot", CHUNK_ORIGIN, TILE_SIZE, markers)
 	var marker: WildCropMarker = markers[immature_cell]
 	assert_eq(marker.growth, sim.get_growth(immature_cell))

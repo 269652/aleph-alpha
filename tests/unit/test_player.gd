@@ -17,6 +17,7 @@ const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const CreatureInfo = preload("res://src/world/creature_info.gd")
 const RopeTether = preload("res://src/gameplay/rope_tether.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
+const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const ConditionPenalty = preload("res://src/gameplay/condition_penalty.gd")
@@ -1382,10 +1383,10 @@ func test_butchering_a_clean_carcass_never_exposes_the_player():
 
 # -- taming: throwing the lasso (see docs/concept/taming.md) ------------------
 
-func _horse_at(offset: Vector2) -> CreatureMarker:
+func _horse_at(offset: Vector2, wander_seed: int = 9) -> CreatureMarker:
 	var marker := CreatureMarker.new()
 	marker.info = CreatureInfo.new("horse", 1)
-	marker.wander_seed = 9
+	marker.wander_seed = wander_seed
 	# Added to the TEST's own node, not the bare creatures_parent: that one is
 	# never inside the SceneTree, so a marker under it never joins the
 	# creature group the throw scans.
@@ -1691,8 +1692,8 @@ func test_lasso_message_names_whichever_tool_is_held():
 
 # -- orders and riding (see docs/concept/taming.md) --------------------------
 
-func _tamed_horse_at(offset: Vector2) -> CreatureMarker:
-	var horse := _horse_at(offset)
+func _tamed_horse_at(offset: Vector2, wander_seed: int = 9) -> CreatureMarker:
+	var horse := _horse_at(offset, wander_seed)
 	horse.restrain_to(horse.position)
 	while not horse.is_tame():
 		horse._needs.hunger = 1.0
@@ -1733,8 +1734,34 @@ func test_mounting_a_tamed_horse_makes_the_player_faster():
 	assert_eq(player.current_speed(), Player.BASE_SPEED, "on foot to begin with")
 	assert_true(player._try_mount())
 	assert_true(player.is_mounted())
-	assert_eq(player.current_speed(), Taming.MOUNTED_SPEED)
+	# Wiring proof: current_speed() must consult THIS horse's own fitness
+	# (see AnimalFitness), not just reapply the flat Taming.MOUNTED_SPEED
+	# baseline regardless of which individual is under the saddle.
+	var fitness := AnimalFitness.new()
+	var expected_speed: float = Taming.mounted_speed_for(
+		fitness.fitness_score(fitness.phenotype_for(horse.wander_seed))
+	)
+	assert_eq(player.current_speed(), expected_speed)
 	assert_not_null(horse)
+
+
+## The same player, mounting two DIFFERENT individual horses, rides at two
+## different speeds -- proving mounted speed is genuinely per-individual
+## rather than the old flat constant that made every horse identical to ride.
+func test_two_different_horses_carry_the_same_player_at_different_speeds():
+	var weak_horse := _tamed_horse_at(Vector2(12, 0), 1)
+	player._try_mount()
+	var weak_speed := player.current_speed()
+	player._dismount()
+	weak_horse.position = Vector2(10000, 10000)  # well outside LASSO_RANGE
+
+	var strong_horse := _tamed_horse_at(Vector2(12, 0), 2)
+	player._try_mount()
+	var strong_speed := player.current_speed()
+
+	assert_ne(weak_speed, strong_speed, "different individuals must not ride identically")
+	assert_not_null(weak_horse)
+	assert_not_null(strong_horse)
 
 
 func test_an_untamed_horse_cannot_be_ridden():
