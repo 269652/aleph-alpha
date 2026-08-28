@@ -239,18 +239,37 @@ for passability/hillshading/ore. One field, at least three consumers.
   constants, but LINEAR specifically is this implementation's own choice,
   not itself derived from a cited real-world curve — this doc only ever
   said "scales with local slope," not what shape that scaling takes.
-- **Does biome classification itself ever read slope**, not just
+- ~~**Does biome classification itself ever read slope**, not just
   elevation/temperature/moisture — a plausible future tie-in to
   [climate_dynamics.md](climate_dynamics.md#biomes-a-live-read-not-a-worldgen-snapshot)'s
-  live reclassification, not decided here.
-- **Creature movement** — should steep terrain gate herbivore/predator
+  live reclassification, not decided here.~~ Resolved: `biome_classifier.gd`'s
+  `classify()` now takes an optional `slope_deg`; a slope at/beyond
+  `TerrainPassability.HARD_THRESHOLD_DEG` forces "mountain" outside the
+  elevation-based band (real alpine tree-lines), ocean always excluded.
+  Honestly, the real bundled elevation dataset never actually triggers it
+  at current sampling resolution (see the Status section's own bullet) —
+  the mechanism is real and tested, the live world just doesn't currently
+  contain a tile that exercises it. `climate_dynamics.md`'s own live
+  reclassification tie-in is still a separate, undecided question.
+- ~~**Creature movement** — should steep terrain gate herbivore/predator
   movement too, or stay player-only for now (the same scoping call
   `stone.md`'s pebble dispersion already made, deliberately player-only to
-  avoid an O(creatures × terrain) cost nothing currently needs)?
-- **Rope mechanics specifics** — how much a rope raises the hard
+  avoid an O(creatures × terrain) cost nothing currently needs)?~~ Resolved:
+  yes — `creature_marker.gd` now gates herbivore/predator movement the
+  same way, genuinely O(creatures) (one slope sample per creature's own
+  candidate tile, never a terrain scan), so the cost this question worried
+  about was never actually necessary. See the Status section below.
+- ~~**Rope mechanics specifics** — how much a rope raises the hard
   threshold, whether it's consumed or reusable, whether it can anchor for
   others to follow — genuinely open, `transportation.md`'s own open
-  questions don't cover this yet either.
+  questions don't cover this yet either.~~ Two of three now answered: a
+  rope raises the threshold from `HARD_THRESHOLD_DEG` to
+  `HARD_THRESHOLD_WITH_ROPE_DEG` (45° → 65°, already real/tested before
+  this), and it is reusable, not consumed — `Player._has_climbing_gear()`
+  is a plain inventory-count check, unaffected by crossing terrain. Still
+  genuinely open: whether a rope can anchor for others to follow —
+  unrelated to what shipped here, and multiplayer-shaped in a way this
+  pass didn't touch.
 
 ## Status
 
@@ -275,12 +294,32 @@ directly against the current `src/` files rather than assumed current.
   `_authority_step`: `_terrain_speed_multiplier` applies the soft
   slowdown, `_terrain_blocks_movement` refuses the frame's movement
   outright ahead of `move_and_slide()` — the same ask-before-you-step
-  principle `creature_movement_gate.gd` established for creatures. Two
-  gaps stay open: `is_passable`'s `has_climbing_gear` parameter is real
-  and tested, but `Player._has_climbing_gear()` unconditionally returns
-  `false` — no rope item/equipment exists yet to ever set it true, so the
-  hook has nothing attached — and only the player is gated today, no
-  creature.
+  principle `creature_movement_gate.gd` established for creatures. The two
+  gaps this bullet used to note here are both closed now — see the
+  Climbing Rope and Creature Slope Gating bullets immediately below.
+- ✅ **Climbing rope — a real, craftable item** —
+  `item_catalog.gd`'s `climbing_rope` (kind "tool"), recipe'd from 3 hide +
+  3 plant_fibre (`crafting_recipe_book.gd`). Material picked against
+  `MaterialProperties`' real toughness column, not eyeballed: hide (7.0)
+  clears `ROPE_MIN_TOUGHNESS` (5.0) via the previously-orphaned
+  `is_viable_for_tool(material, "grapple_rope")` check that already
+  existed, unused, before this — and hide is non-trivial to source
+  (hunting + butchering), matching this doc's own "materials further out
+  on the danger gradient" framing rather than the trivially-gathered
+  plant_fibre alone. `Player._has_climbing_gear()` now reads real
+  inventory state (`_inventory_counts().get("climbing_rope", 0) > 0`, the
+  same raw-count pattern `_has_fishing_rod()` already used) instead of its
+  old hardcoded `false`. `terrain_passability.gd` needed no changes.
+  Tested: 50/50, 50/50, 75/75, 2/2 across the four touched files.
+- ✅ **Creature slope gating** — `src/rendering/creature_marker.gd` gained
+  `_terrain_speed_multiplier`/`_terrain_blocks_movement`, mirroring
+  `player.gd`'s own two functions exactly and reading slope through the
+  same duck-typed world reference `solid_obstacles_near` already uses.
+  Genuinely O(creatures), not O(creatures × terrain) — resolving the
+  formerly-open question below by construction, the same one-slope-sample-
+  per-candidate-tile shape `player.gd` already used, not a new technique.
+  Tested: 8 new tests plus a full `test_creature_marker.gd` regression run,
+  144/144 passing, zero regressions.
 - ✅ **Hillshading (real Lambertian formula, real solar position)** —
   `src/rendering/hillshade.gd`'s `illumination()` (tested 8/8) is the
   formula above verbatim, fed by `solar_position.gd`'s azimuth alongside
@@ -316,6 +355,24 @@ directly against the current `src/` files rather than assumed current.
   (`docs/progress.md`'s Terrain Relief section, same date) re-tuned this
   same placement rule's density and explicitly left this visual mismatch
   untouched.
+- ✅ **Biome classification reads slope** — beyond this doc's original
+  four-piece Mechanism list, closing the Open Questions bullet of the same
+  name above: `biome_classifier.gd`'s `classify()` takes an optional
+  `slope_deg` (a `-1.0` sentinel default, every pre-existing caller/test
+  byte-identical); a slope at/beyond `HARD_THRESHOLD_DEG` forces "mountain"
+  regardless of temperature/moisture — real alpine tree-lines, never
+  overriding ocean. `EarthChunkGenerator._biome_at_global` wires it through
+  a `_slope_override_deg_for` gate that skips the four-fresh-elevation-
+  sample cost entirely for a cell elevation alone already decided (ocean,
+  or already elevation-mountain) — a real, addressed perf concern, since
+  terrain regenerates from scratch on every chunk load, never cached.
+  **Honest limitation, empirically checked**: probing the real bundled
+  elevation data (Everest/K2/Nanga Parbat/Annapurna plus a global scan)
+  found slope in the "undecided" band never actually reaches 45° at this
+  dataset's ~10km/pixel resolution and the existing ~1.1km sampling
+  offset — the mechanism is real and correctly built, no live tile
+  currently exercises it. Tested: `test_biome_classifier.gd` 28/28,
+  `test_earth_chunk_generator.gd` 20/20, zero regressions.
 
 Builds directly on two pieces of real, live, already-wired code —
 `earth_elevation_source.gd`'s bilinear elevation sampling and
