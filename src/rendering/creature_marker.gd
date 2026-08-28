@@ -44,6 +44,7 @@ const DropShadow = preload("res://src/rendering/drop_shadow.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const SubmersionShader = preload("res://src/rendering/submersion_shader.gd")
 const CreatureMovementGate = preload("res://src/gameplay/creature_movement_gate.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 
@@ -1288,6 +1289,19 @@ func _is_serpent() -> bool:
 ##   FACING_DEADZONE is the only debounce left, and it's a different,
 ##   narrower one: it only suppresses a genuinely near-vertical `desired`
 ##   (an ambiguous x-sign) from flipping at all, not a real reversal.
+## Soft terrain slowdown from real slope (see TerrainPassability.speed_
+## multiplier and player.gd's own _terrain_speed_multiplier, which this
+## mirrors) -- the same "environment scales a movement multiplier" shape the
+## disease multiplier below already uses, driven by slope instead. 1.0 when
+## the world doesn't offer slope data (StubWorld, or any other worldless/
+## stub setup) -- the same has_method duck-typed fallback _blockers_near
+## already uses for solid_obstacles_near.
+func _terrain_speed_multiplier(tile: Vector2i) -> float:
+	if _world == null or not _world.has_method("slope_at_global"):
+		return 1.0
+	return TerrainPassability.speed_multiplier(_world.slope_at_global(tile.x, tile.y))
+
+
 func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	if desired.length() < 0.001:
 		_is_moving = false
@@ -1301,6 +1315,11 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	# covers all of them.
 	if disease_id == DiseaseModel.HERD and disease_state == DiseaseModel.State.INFECTED:
 		speed *= _disease_model.movement_speed_multiplier(disease_severity)
+	# Real slope underfoot slows a creature exactly the way it slows the
+	# player (see _terrain_speed_multiplier above) -- one query for the tile
+	# this creature is CURRENTLY standing on, not a scan over any area, so
+	# this stays O(creatures) regardless of how many creatures are loaded.
+	speed *= _terrain_speed_multiplier(_current_tile())
 	_facing_commit_remaining = maxf(0.0, _facing_commit_remaining - delta)
 	var position_before := position
 	if not _is_serpent():
@@ -1529,6 +1548,34 @@ func _blocker_radius(node: Node) -> float:
 	return DEFAULT_BLOCKER_RADIUS
 
 
+## Whether the tile a creature is about to step onto is too steep to enter at
+## all (see TerrainPassability.is_passable and player.gd's own
+## _terrain_blocks_movement, which this mirrors) -- a SEPARATE ask-before-you-
+## step check layered on top of whatever heading obstacle/threat avoidance in
+## _advance_gated below already settled on, the same way player.gd keeps its
+## own terrain check independent of everything else that could refuse a
+## step. `heading` is whatever _advance_gated is about to actually move
+## along (a unit vector, or ZERO); the look-ahead reuses MOVEMENT_LOOKAHEAD
+## rather than minting a second "roughly a tile ahead" distance -- both
+## questions ("is this the tile I'm about to stand on") are the same
+## question CreatureMovementGate's own obstacle check already asks at that
+## same distance. Called at most ONCE per _advance_gated call (never per
+## candidate direction clear_direction tries internally), so this is one
+## slope query per creature per movement decision -- O(creatures), not
+## O(creatures x terrain). No climbing-gear concept exists for creatures
+## (player-only, see docs/progress.md's Transportation section), so this
+## always checks the un-roped HARD_THRESHOLD_DEG.
+func _terrain_blocks_movement(heading: Vector2) -> bool:
+	if _world == null or not _world.has_method("slope_at_global") or heading.length() < 0.01:
+		return false
+	var look_ahead := position + heading.normalized() * MOVEMENT_LOOKAHEAD
+	var tile := Vector2i(floori(look_ahead.x / _tile_size), floori(look_ahead.y / _tile_size))
+	# Explicitly typed (not :=): _world is untyped/duck-typed (see setup's own
+	# doc comment), so GDScript can't infer a type for its return value.
+	var slope: float = _world.slope_at_global(tile.x, tile.y)
+	return not TerrainPassability.is_passable(slope)
+
+
 ## Moves along `desired` only if the step is actually clear (see
 ## CreatureMovementGate) -- steering around a tree/stone when one is in the
 ## way, and standing still when nothing is open at all, rather than moving
@@ -1551,17 +1598,22 @@ func _advance_gated(desired: Vector2, speed: float, delta: float, avoid_threats:
 	# creature per frame, which at a few dozen loaded creatures is a
 	# meaningful slice of the frame budget for no behavioural gain.
 	var has_threats := avoid_threats and not _cached_caution_threats.is_empty()
+	var heading: Vector2
 	if _cached_blockers.is_empty() and not has_threats:
-		_last_gated_heading = desired
-		_advance(desired, speed, delta)
-		return
-
-	var threats: Array = _positions_of(_cached_caution_threats) if avoid_threats else []
-	var facing := 0.0 if _is_serpent() else facing_sign()
-	var heading := CreatureMovementGate.clear_direction(
-		position, desired, MOVEMENT_LOOKAHEAD, _cached_blockers, threats, SENSE_RADIUS,
-		_last_gated_heading, facing
-	)
+		heading = desired
+	else:
+		var threats: Array = _positions_of(_cached_caution_threats) if avoid_threats else []
+		var facing := 0.0 if _is_serpent() else facing_sign()
+		heading = CreatureMovementGate.clear_direction(
+			position, desired, MOVEMENT_LOOKAHEAD, _cached_blockers, threats, SENSE_RADIUS,
+			_last_gated_heading, facing
+		)
+	# Terrain is a SEPARATE ask-before-you-step check, layered on top of
+	# whatever heading obstacle/threat avoidance above already settled on --
+	# see _terrain_blocks_movement's own doc comment for why this stays a
+	# single slope query rather than one per candidate direction.
+	if heading != Vector2.ZERO and _terrain_blocks_movement(heading):
+		heading = Vector2.ZERO
 	_last_gated_heading = heading
 	if heading == Vector2.ZERO:
 		# Nowhere to go: stand still. Deliberately NOT a fallback move in some

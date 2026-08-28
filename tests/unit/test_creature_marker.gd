@@ -10,6 +10,7 @@ const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
 const Carcass = preload("res://src/rendering/carcass.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 
 const TILE_SIZE := 16
 
@@ -21,6 +22,19 @@ class StubWorld:
 	var biome := "grassland"
 	func biome_at_global(_x: int, _y: int) -> String:
 		return biome
+
+
+## A StubWorld that also answers slope_at_global (the real EarthChunkManager
+## does, delegating to EarthChunkGenerator -- see terrain_relief.md). Every
+## tile reports the same fixed slope regardless of x/y, which is exactly what
+## a per-tile passability check needs to be exercised deterministically
+## without a real chunk manager (mirrors test_stone_renderer.gd's own
+## slope_at_global stub).
+class StubWorldWithSlope:
+	extends StubWorld
+	var slope := 0.0
+	func slope_at_global(_x: int, _y: int) -> float:
+		return slope
 
 
 ## A StubWorld that also answers the herd (foot-and-mouth-like) disease
@@ -2204,3 +2218,103 @@ func test_the_measured_catch_rate_matches_the_model():
 		rate, 0.2, 0.55,
 		"catching a healthy horse should be a real chance, neither a certainty nor a lottery"
 	)
+
+
+# -- terrain slope: soft slowdown + hard refusal ------------------------------
+# Mirrors player.gd's own _terrain_speed_multiplier/_terrain_blocks_movement
+# (see docs/concept/terrain_relief.md's "Passability: ask before you step") --
+# same TerrainPassability source of truth, same two-function split, just
+# reading the creature's duck-typed _world instead of _chunk_manager.
+
+func test_terrain_speed_multiplier_matches_terrain_passability_for_the_worlds_slope():
+	var world := StubWorldWithSlope.new()
+	world.slope = 30.0
+	marker.setup(world, TILE_SIZE)
+	var expected := TerrainPassability.speed_multiplier(30.0)
+	assert_almost_eq(marker._terrain_speed_multiplier(marker._current_tile()), expected, 0.0001)
+
+
+## 1.0 (no penalty) when the world doesn't offer slope data -- the same
+## "isolated tests keep working" fallback player.gd's own version falls back
+## to when _chunk_manager is null, and the same has_method duck-typed
+## fallback _blockers_near already uses for solid_obstacles_near.
+func test_terrain_speed_multiplier_is_1_without_slope_data():
+	assert_almost_eq(marker._terrain_speed_multiplier(marker._current_tile()), 1.0, 0.0001)
+
+
+func test_terrain_blocks_movement_is_false_when_not_moving():
+	assert_false(marker._terrain_blocks_movement(Vector2.ZERO))
+
+
+func test_terrain_blocks_movement_is_false_without_slope_data():
+	assert_false(marker._terrain_blocks_movement(Vector2.RIGHT))
+
+
+func test_terrain_blocks_movement_past_the_hard_threshold():
+	var world := StubWorldWithSlope.new()
+	world.slope = TerrainPassability.HARD_THRESHOLD_DEG + 5.0
+	marker.setup(world, TILE_SIZE)
+	assert_true(marker._terrain_blocks_movement(Vector2.RIGHT))
+
+
+func test_terrain_blocks_movement_false_below_the_hard_threshold():
+	var world := StubWorldWithSlope.new()
+	world.slope = TerrainPassability.HARD_THRESHOLD_DEG - 5.0
+	marker.setup(world, TILE_SIZE)
+	assert_false(marker._terrain_blocks_movement(Vector2.RIGHT))
+
+
+## Wiring pin: _advance must scale speed by the SAME multiplier
+## TerrainPassability.speed_multiplier already computes for the creature's
+## CURRENT tile -- _advance is the single choke point every intent's movement
+## (wander/flee/seek/hunt/attack) already funnels through (see its own
+## disease-multiplier comment just above), so one multiplier here covers all
+## of them, the same way the disease multiplier already does.
+func test_advance_applies_the_terrain_speed_multiplier_from_the_current_tile():
+	var world := StubWorldWithSlope.new()
+	world.slope = 30.0  # inside the soft band: SOFT_THRESHOLD_DEG < 30 < HARD_THRESHOLD_DEG
+	marker.info = CreatureInfo.new("horse")
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(100, 100)
+
+	marker._advance(Vector2.RIGHT, 50.0, 1.0)
+
+	var expected_multiplier := TerrainPassability.speed_multiplier(30.0)
+	assert_almost_eq(marker.position.x, 100.0 + 50.0 * expected_multiplier, 0.01)
+
+
+## The soft band must slow a creature down, never stop it outright -- only
+## the hard threshold (below) refuses a step outright.
+func test_advance_is_slower_on_a_soft_slope_than_on_flat_ground():
+	var world := StubWorldWithSlope.new()
+	world.slope = 30.0
+	marker.info = CreatureInfo.new("horse")
+	marker.setup(world, TILE_SIZE)
+	marker.position = Vector2(100, 100)
+	marker._advance(Vector2.RIGHT, 50.0, 1.0)
+	var slowed_distance := marker.position.x - 100.0
+
+	marker.position = Vector2(100, 100)
+	marker._world = null
+	marker._advance(Vector2.RIGHT, 50.0, 1.0)
+	var flat_distance := marker.position.x - 100.0
+
+	assert_gt(slowed_distance, 0.0, "a soft slope should slow a creature, not stop it")
+	assert_lt(slowed_distance, flat_distance, "a soft slope should cover less ground than flat terrain")
+
+
+## End-to-end, mirroring test_a_creature_with_nowhere_to_go_stands_still_
+## instead_of_flipping's shape: a creature surrounded by terrain steeper than
+## HARD_THRESHOLD_DEG in every direction (StubWorldWithSlope reports the same
+## slope everywhere) must never cross onto it, however long it keeps trying.
+func test_a_creature_does_not_walk_onto_terrain_steeper_than_the_hard_threshold():
+	var world := StubWorldWithSlope.new()
+	world.slope = TerrainPassability.HARD_THRESHOLD_DEG + 10.0
+	marker.info = CreatureInfo.new("horse")
+	marker.setup(world, TILE_SIZE)
+	var start := marker.position
+
+	for i in 120:
+		marker._process(1.0 / 60.0)
+
+	assert_lt(marker.position.distance_to(start), 2.0, "should never cross onto impassable terrain")
