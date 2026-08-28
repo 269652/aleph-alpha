@@ -17,6 +17,37 @@ chance for novel traits. [evolution.md](evolution.md)'s own "Bloodlines"
 section specifies the same real crossover mechanism applied to tamed/bred
 ANIMALS — reusing this exact inheritance shape, not a second one.
 
+### Wild animals have DNA too, and the player selects on it
+
+The same `DnaCrossover` now runs on animals nobody has tamed. A butterfly
+carries one heritable trait — **boldness** — derived from its own world cell
+when the meadow seeds it, and crossed from **both parents** when a courting
+pair produces young (see
+[ecosystem_dynamics.md](ecosystem_dynamics.md)'s "The butterfly that knows
+you"). One crossover function, shared with players' children and with bred
+livestock; no second implementation.
+
+What that buys is not a stat: it is that **the player becomes a selection
+pressure without anything being written to make them one**. Boldness decides
+which butterflies come close and which flee, so who a player can catch is
+decided by the same number their offspring inherit. Net the ones that come to
+you and the shy ones are what is left to breed. Nothing in the code says "the
+meadow gets shyer" — it is arithmetic, measured across ten generations in
+`test_a_meadow_the_player_nets_the_bold_out_of_grows_shy_over_generations`
+(mean boldness 0.496 → 0.377, against 0.019 of drift in the identical
+untouched control).
+
+Two honest limits, both named rather than left to be found:
+
+- **Nothing nets a butterfly in the live game yet.** The net is craftable and
+  `CaptureTool` knows what it is for, but no interaction removes an ambient
+  flyer from the world. The pressure is real in the model and dormant in the
+  running game.
+- **Ambient flyers are not persisted.** A chunk's flyers are re-derived from
+  their cells' seeds on load, so an evolved meadow reverts to its founding
+  personalities when that chunk unloads. Boldness drifts within a session, not
+  across one.
+
 ### Appearance: DNA is the base, cosmetics layer on top
 
 DNA deterministically generates the underlying body/phenotype as described

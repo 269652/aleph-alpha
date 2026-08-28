@@ -1518,8 +1518,10 @@ const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
 ## NEVER calls it.
 class StubCourtshipWorld:
 	var offspring: Array = []
-	func spawn_flyer_offspring(a_species: String, at: Vector2) -> void:
-		offspring.append({"species": a_species, "position": at})
+	func spawn_flyer_offspring(
+		a_species: String, at: Vector2, inherited: Dictionary = {}
+	) -> void:
+		offspring.append({"species": a_species, "position": at, "traits": inherited})
 
 
 func test_two_butterflies_passing_close_actually_begin_a_spiral_flight():
@@ -1700,10 +1702,18 @@ func _player_at(at: Vector2, parent: Node2D) -> Node2D:
 	return player
 
 
+## Close enough that SimulationLod runs the pair at full rate
+## (FULL_RATE_RADIUS_PX is 420), far enough that neither butterfly reacts to
+## the player at all (FlyerPersonality / SpiralFlight.NOTICE_RADIUS_PX is
+## about 50). This used to stand the player ON one of the pair, which stopped
+## being a neutral place to put them the moment butterflies started noticing
+## players: a shy one there flees instead of whirling, which is correct
+## behaviour and would have made this test a false alarm about the LOD path it
+## is actually here to check.
 func test_a_pair_right_next_to_the_player_still_whirls():
 	var parent := Node2D.new()
 	add_child_autofree(parent)
-	_player_at(Vector2(100, 100), parent)
+	_player_at(Vector2(100, 400), parent)
 	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
 	var b := _flyer_in_tree("monarch", Vector2(124, 100), parent)
 	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
@@ -1744,3 +1754,455 @@ func test_a_pair_far_from_the_player_still_dances_in_fewer_larger_steps():
 		b._process(FRAME)
 		steps_taken += 1
 	assert_eq(a._courting_with, 0, "and the dance must still finish out there")
+
+
+# == personality: what a butterfly does about the player ======================
+#
+# "Can make butterflies dance around a players head or fly away based on
+# personality (dna derived)?" -- see FlyerPersonality, and
+# docs/concept/ecosystem_dynamics.md's "The butterfly that knows you".
+#
+# Boldness is a continuum. Most butterflies do neither of these dramatically;
+# the two ends are what the player notices, and they are uncommon.
+
+const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
+const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
+const WingbeatBounce = preload("res://src/rendering/wingbeat_bounce.gd")
+
+
+func _butterfly_with_boldness(
+	boldness: float, at: Vector2, parent: Node2D
+) -> AmbientFlyerMarker:
+	var flyer := _flyer_in_tree("monarch", at, parent)
+	flyer.traits = {FlyerPersonality.TRAIT_BOLDNESS: boldness}
+	return flyer
+
+
+## Every flyer has a personality without anything being stored: it is derived
+## from `wander_seed`, which is itself derived from the flyer's own world cell
+## (see AmbientFlyerRenderer._spawn_species). So a butterfly that leaves with
+## an unloaded chunk is the same butterfly when it comes back.
+func test_a_butterfly_derives_its_personality_from_its_own_seed():
+	marker.wander_seed = 4242
+	var mine := marker.personality()
+	assert_eq(mine, FlyerPersonality.traits_from_seed(4242))
+	assert_eq(marker.personality(), mine, "and it does not change from frame to frame")
+
+
+func test_two_butterflies_are_two_different_butterflies():
+	marker.wander_seed = 1
+	var one := marker.boldness()
+	var other := AmbientFlyerMarker.new()
+	other.wander_seed = 2
+	var second := other.boldness()
+	other.free()
+	assert_ne(one, second)
+
+
+func test_a_shy_butterfly_flies_away_from_the_player():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var player := _player_at(Vector2(200, 200), parent)
+	var shy := _butterfly_with_boldness(0.0, Vector2(200, 200) + Vector2(10.0, 0.0), parent)
+	var started := shy.position.distance_to(player.position)
+	for i in 240:
+		shy._process(FRAME)
+	assert_gt(
+		shy.position.distance_to(player.position),
+		FlyerPersonality.flight_initiation_distance_px(0.0),
+		"a shy butterfly must end up outside its own flight initiation distance"
+	)
+	assert_gt(shy.position.distance_to(player.position), started)
+
+
+## Real escape is a burst, not a cruise: the ratio between the two is
+## FlyerPersonality.ESCAPE_SPEED_MULTIPLIER, taken from the real 5 m/s
+## butterfly burst against a real 2 m/s cruise.
+func test_fleeing_is_faster_than_ordinary_flight():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var shy := _butterfly_with_boldness(0.0, Vector2(200, 200) + Vector2(10.0, 0.0), parent)
+	var before := shy.position
+	shy._process(FRAME)
+	assert_almost_eq(
+		before.distance_to(shy.position),
+		16.0 * FlyerPersonality.ESCAPE_SPEED_MULTIPLIER * FRAME,
+		0.001
+	)
+
+
+## The escape does not stop dead on the line it flushed at (see
+## FlyerPersonality.flee_release_distance_px) -- and it does stop. A butterfly
+## that fled forever would leave the meadow.
+func test_a_fled_butterfly_settles_down_again():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var shy := _butterfly_with_boldness(0.0, Vector2(200, 200) + Vector2(10.0, 0.0), parent)
+	var settled := false
+	for i in 600:
+		shy._process(FRAME)
+		if not shy._fleeing_from_player:
+			settled = true
+			break
+	assert_true(settled, "a butterfly has to calm down eventually")
+
+
+func test_a_bold_butterfly_comes_and_dances_round_the_players_head():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var player := _player_at(Vector2(200, 200), parent)
+	var bold := _butterfly_with_boldness(
+		1.0, Vector2(200, 200) + Vector2(SpiralFlight.NOTICE_RADIUS_PX * 0.8, 0.0), parent
+	)
+	for i in 300:
+		bold._process(FRAME)
+	assert_true(bold._dancing_at_player, "it must actually latch on")
+	var head: Vector2 = player.position + Vector2(0.0, -StoneSize.PLAYER_WORLD_HEIGHT_PX)
+	assert_almost_eq(
+		bold.position.distance_to(head), SpiralFlight.SPIRAL_RADIUS_PX, 0.5,
+		"and settle onto the same orbit it would hold round another butterfly"
+	)
+
+
+func test_the_dance_actually_goes_round_rather_than_hanging_at_one_point():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var bold := _butterfly_with_boldness(
+		1.0, Vector2(200, 200) + Vector2(SpiralFlight.NOTICE_RADIUS_PX * 0.8, 0.0), parent
+	)
+	for i in 300:
+		bold._process(FRAME)
+	var swept := 0.0
+	var previous := bold.position
+	for i in 60:
+		bold._process(FRAME)
+		swept += previous.distance_to(bold.position)
+		previous = bold.position
+	assert_gt(swept, TAU * SpiralFlight.SPIRAL_RADIUS_PX, "at least a full circle a second")
+
+
+## The middle of the population -- which is most of it -- does neither. This
+## is the half of the request that is easy to get wrong: a meadow where every
+## butterfly either mobs you or bolts is not "personality", it is two scripts.
+func test_an_ordinary_butterfly_neither_flees_nor_dances():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var ordinary := _butterfly_with_boldness(
+		0.5, Vector2(200, 200) + Vector2(SpiralFlight.NOTICE_RADIUS_PX * 0.9, 0.0), parent
+	)
+	for i in 120:
+		ordinary._process(FRAME)
+		assert_false(ordinary._fleeing_from_player)
+		assert_false(ordinary._dancing_at_player)
+
+
+## Butterflies, and not the whole aviary. A sparrow bolting from the player
+## would be a second flight-response system on a bird that has none.
+func test_a_sparrow_ignores_the_player_entirely():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(205, 200), parent)
+	bird.traits = {FlyerPersonality.TRAIT_BOLDNESS: 0.0}
+	for i in 60:
+		bird._process(FRAME)
+		assert_false(bird._fleeing_from_player)
+
+
+# -- precedence ---------------------------------------------------------------
+#
+# Five things can move a butterfly now (flee, court, dance-at-the-player,
+# spiral, forage/wander) and three of them are new. The order is:
+#
+#   flee > finish the pair interaction you are already in > start a courtship
+#        > dance at the player > start a spiral > forage > wander
+#
+# Escape is first because escape is first in every animal: a butterfly that
+# keeps courting while something big closes on it is a dead butterfly, and the
+# brief says it directly ("a butterfly fleeing a player should not be mid-dance
+# with another butterfly"). Everything below escape is ordered by commitment
+# and then by rarity.
+
+
+func test_fleeing_the_player_interrupts_a_whirl_already_in_progress():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(600, 600), parent)
+	var b := _flyer_in_tree("monarch", Vector2(624, 600), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	a.traits = {FlyerPersonality.TRAIT_BOLDNESS: 0.0}
+	b.traits = {FlyerPersonality.TRAIT_BOLDNESS: 0.0}
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with != 0:
+			break
+	assert_ne(a._spiralling_with, 0, "precondition: the whirl has to be running")
+
+	# Now somebody walks into the middle of it.
+	_player_at(a.position, parent)
+	a._process(FRAME)
+	assert_eq(a._spiralling_with, 0, "the whirl must end the moment it bolts")
+	assert_true(a._fleeing_from_player)
+
+
+## The other side of the same rule. A dance already under way is a commitment
+## -- being yanked out of one by a passer-by is how the game ends up with a
+## butterfly orbiting an empty midpoint, which is a bug this file has already
+## had once (see _scan_for_partners' own notes).
+func test_a_courting_butterfly_is_not_yanked_out_by_a_bold_ones_interest_in_the_player():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _butterfly_with_boldness(1.0, Vector2(600, 600), parent)
+	var b := _butterfly_with_boldness(1.0, Vector2(620, 600), parent)
+	for i in 120:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._courting_with != 0 and b._courting_with != 0:
+			break
+	assert_ne(a._courting_with, 0, "precondition: the dance has to be running")
+
+	_player_at(a.position + Vector2(20.0, 0.0), parent)
+	for i in 30:
+		a._process(FRAME)
+		b._process(FRAME)
+	assert_ne(a._courting_with, 0, "a bold butterfly finishes what it started")
+	assert_false(a._dancing_at_player)
+
+
+## A butterfly will not be led out of the world. The dance is centred on the
+## player's head, so a player who keeps walking would tow it away from home
+## forever. The leash is SpiralFlight.NOTICE_RADIUS_PX from home -- as far as
+## the butterfly saw the intruder from in the first place, which is about as
+## far as a real territorial butterfly pursues one before returning to its
+## perch -- and it is measured against the ORBIT CENTRE, so the butterfly is
+## never dragged past it even for one frame.
+func test_a_butterfly_will_not_be_led_off_its_own_territory():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var player := _player_at(Vector2(200, 200), parent)
+	var bold := _butterfly_with_boldness(1.0, Vector2(210, 200), parent)
+	for i in 120:
+		bold._process(FRAME)
+	assert_true(bold._dancing_at_player, "precondition: it has to be dancing")
+
+	var home := bold.home
+	var leash := SpiralFlight.NOTICE_RADIUS_PX + SpiralFlight.SPIRAL_RADIUS_PX
+	for i in 600:
+		player.position += Vector2(1.0, 0.0)
+		bold._process(FRAME)
+		assert_lt(
+			bold.position.distance_to(home), leash + 1.0,
+			"the dance must let go before the butterfly is towed off its patch"
+		)
+		if not bold._dancing_at_player:
+			break
+	assert_false(bold._dancing_at_player, "it has to let go at some point")
+
+
+# == the erratic flutter on ORDINARY flight ===================================
+#
+# "butterflies generaly should have more random / dancy motions rather then fly
+# in a straight line". PollinatorForaging.tumbled_heading already existed and
+# was applied ONLY on the approach to a bloom; ordinary wander held one heading
+# for a whole AmbientFlyerRenderer.BUTTERFLY_INTERVAL (0.7 s), which is a
+# straight line at a time and is what the player was watching.
+
+
+func _wander_path(flyer: AmbientFlyerMarker, steps: int) -> Array:
+	var path: Array = []
+	for i in steps:
+		flyer._process(FRAME)
+		path.append(flyer.position)
+	return path
+
+
+func test_an_ordinarily_wandering_butterfly_does_not_fly_in_a_straight_line():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var butterfly := _flyer_in_tree("monarch", Vector2(0, 0), parent)
+	# Well inside one heading interval, so a butterfly WITHOUT the flutter
+	# would be flying one dead straight line for every sample here.
+	var path := _wander_path(butterfly, 30)
+	var straight: Vector2 = (path[path.size() - 1] - path[0]).normalized()
+	var wandered := false
+	for i in range(1, path.size()):
+		var step: Vector2 = path[i] - path[i - 1]
+		if step.length() > 0.0001 and step.normalized().dot(straight) < 0.97:
+			wandered = true
+	assert_true(wandered, "a butterfly's ordinary flight must not be a straight line")
+
+
+## Songbirds glide -- they are the other half of the same movement module and
+## must NOT inherit this. A sparrow tumbling like a butterfly reads as a
+## glitching bird, the same failure that already got birds out of the
+## courtship dance.
+func test_a_songbird_still_glides_straight():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	var path := _wander_path(bird, 30)
+	var straight: Vector2 = (path[path.size() - 1] - path[0]).normalized()
+	for i in range(1, path.size()):
+		var step: Vector2 = path[i] - path[i - 1]
+		assert_gt(step.normalized().dot(straight), 0.999, "a bird holds its heading")
+
+
+## THE trap this corner of the codebase has fallen into three separate ways
+## (see AmbientFlyerMovement.direction_at's own notes): a flyer that jitters
+## on a fixed spot instead of going anywhere. Every step must be a full step,
+## and the butterfly must actually travel.
+func test_the_flutter_never_stalls_a_butterfly():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var butterfly := _flyer_in_tree("monarch", Vector2(0, 0), parent)
+	var path := _wander_path(butterfly, 600)
+	for i in range(1, path.size()):
+		var step: float = path[i].distance_to(path[i - 1])
+		assert_almost_eq(step, 16.0 * FRAME, 0.001, "every step must be a whole step")
+	# The recorded stall was 5.55 simulated seconds inside a 3px circle. Ten
+	# seconds of flight has to cover real ground.
+	var travelled := 0.0
+	for i in path.size():
+		travelled = maxf(travelled, path[0].distance_to(path[i]))
+	assert_gt(travelled, 10.0, "ten seconds of fluttering must go somewhere")
+
+
+func test_a_fluttering_butterfly_still_stays_on_its_own_patch():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var butterfly := _flyer_in_tree("monarch", Vector2(0, 0), parent)
+	var path := _wander_path(butterfly, 3600)
+	for point in path:
+		assert_lt(
+			point.distance_to(butterfly.home), 30.0 * 2.0,
+			"the flutter must not fight its way out of its own territory"
+		)
+
+
+# == the wingbeat bounce ======================================================
+#
+# "maybe also make them bounce slightly with each wing flap" (see
+# WingbeatBounce). DRAW-TIME ONLY -- see the next test for why that matters.
+
+
+## A butterfly whose wings beat but whose flight speed is zero, so that
+## anything `position` does is the bounce and nothing else. (Handing it a null
+## movement instead would stop _process before it ever animates the wings --
+## see its own early return.)
+func _flapping_butterfly(parent: Node2D) -> AmbientFlyerMarker:
+	var butterfly := _flyer_in_tree("monarch", Vector2(0, 0), parent)
+	butterfly.setup(AmbientFlyerMovement.new(0.0, 30.0, 0.7))
+	butterfly.flap_frames = [PlaceholderTexture2D.new(), PlaceholderTexture2D.new()]
+	butterfly.texture = butterfly.flap_frames[0]
+	return butterfly
+
+
+## The one that must not regress. `position` feeds containment, the courtship
+## orbit, the spiral flight, partner-distance checks and Y-sorting; a per-frame
+## bob folded into it would put a wobble through all five at once. The bounce
+## lives on `offset`, which is a draw-time property and nothing else reads.
+func test_the_wingbeat_bounce_never_touches_the_flyers_position():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var butterfly := _flapping_butterfly(parent)
+	var pinned := butterfly.position
+	var offsets: Array = []
+	for i in 40:
+		butterfly._process(FRAME)
+		assert_eq(butterfly.position, pinned, "the bob must never reach position")
+		offsets.append(butterfly.offset.y)
+	var spread := 0.0
+	for value in offsets:
+		spread = maxf(spread, absf(float(value) - float(offsets[0])))
+	assert_gt(spread, 0.0, "...but the drawn offset really does move")
+
+
+func test_the_bounce_matches_the_wingbeat_it_is_locked_to():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var butterfly := _flapping_butterfly(parent)
+	for i in 10:
+		butterfly._process(FRAME)
+	assert_almost_eq(
+		butterfly.offset.y,
+		WingbeatBounce.bounce_offset(
+			"monarch", butterfly._elapsed_time, AmbientFlyerMarker.FLAP_SECONDS_PER_FRAME,
+			butterfly.flap_frames.size(), float(butterfly.texture.get_height())
+		),
+		0.0001
+	)
+
+
+## A bird sitting on the ground working a worm is not flapping, so there is
+## nothing for the body to bob against -- and a perched bird that bobbed would
+## read as a glitch, the same reason _animate_wings freezes its wings.
+func test_a_perched_bird_sits_still():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var bird := _flyer_in_tree("sparrow", Vector2(0, 0), parent)
+	bird.flap_frames = [PlaceholderTexture2D.new(), PlaceholderTexture2D.new()]
+	bird.texture = bird.flap_frames[0]
+	for i in 10:
+		bird._process(FRAME)
+	bird.perched = true
+	for i in 10:
+		bird._process(FRAME)
+	assert_eq(bird.offset.y, 0.0)
+
+
+# == heritable personality ====================================================
+
+
+## Duck-typed courtship world that records what a mating actually hands over
+## (see EarthChunkManager.spawn_flyer_offspring). The third argument is the
+## whole point: before this, an offspring's personality was unrelated to its
+## parents'.
+class StubBreedingWorld:
+	var offspring: Array = []
+	func spawn_flyer_offspring(
+		a_species: String, at: Vector2, inherited: Dictionary = {}
+	) -> void:
+		offspring.append({"species": a_species, "position": at, "traits": inherited})
+
+
+## A courting pair's child is crossed from BOTH parents through the shipped
+## DnaCrossover, not rolled fresh. Two bold parents make a bold child, which is
+## the single fact the whole selection-pressure story rests on (see
+## test_flyer_personality.gd).
+func test_a_courting_pairs_child_inherits_from_both_parents():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var world := StubBreedingWorld.new()
+	var born := false
+	# Courtship.mates is decided by the pair's own seed, so a given pair either
+	# breeds or does not -- walk positions until one that breeds turns up.
+	for attempt in 40:
+		var at := Vector2(1000 + attempt * 40, 1000)
+		var a := _butterfly_with_boldness(0.9, at, parent)
+		var b := _butterfly_with_boldness(0.85, at + Vector2(20, 0), parent)
+		a.courtship_world = world
+		b.courtship_world = world
+		for i in 900:
+			a._process(FRAME)
+			b._process(FRAME)
+			if not world.offspring.is_empty():
+				break
+		if not world.offspring.is_empty():
+			born = true
+			break
+	assert_true(born, "precondition: some pair has to actually breed")
+	var child: Dictionary = world.offspring[0]["traits"]
+	assert_true(
+		child.has(FlyerPersonality.TRAIT_BOLDNESS), "the child must carry a personality"
+	)
+	assert_gt(
+		FlyerPersonality.boldness_of(child), 0.8,
+		"two bold parents must not produce an average child"
+	)

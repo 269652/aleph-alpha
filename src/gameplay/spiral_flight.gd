@@ -177,7 +177,37 @@ static func rise(elapsed: float) -> Vector2:
 ##   SPIRAL_RADIUS_PX, which is what "they flew at each other" looks like.
 static func offset(elapsed: float, start_offset: Vector2) -> Vector2:
 	var held := clampf(elapsed, 0.0, SPIRAL_SECONDS)
-	var t := held / SPIRAL_SECONDS
-	var radius := lerpf(start_offset.length(), SPIRAL_RADIUS_PX, t)
-	var angle := start_offset.angle() + TAU * TURNS_PER_SECOND * held
-	return Vector2.from_angle(angle) * radius + rise(held)
+	return converging_orbit(held, start_offset, SPIRAL_RADIUS_PX, TURNS_PER_SECOND) + rise(held)
+
+
+## The whirl geometry on its own, without the climb: `start_offset` swung
+## round the shared centre while it is drawn in onto a circle of `radius_px`
+## over SPIRAL_SECONDS.
+##
+## Split out of offset() so the SAME shape can be flown round something that
+## is NOT another butterfly. A bold butterfly orbiting the player's head (see
+## FlyerPersonality / AmbientFlyerMarker._step_player_dance) is this behaviour
+## aimed at a different object, which is already this module's own grounding:
+## a territorial butterfly launches at conspecifics, passing birds, falling
+## leaves and thrown pebbles alike, and a person walking through the meadow is
+## one more such object. Sharing the geometry is what keeps the game from
+## growing a third dance shape with a third set of constants to justify.
+##
+## Two differences from offset(), both deliberate:
+##
+## - no `rise`. A pair of butterflies whirl UP and break off at the top; a
+##   butterfly investigating a head is already at head height and has nowhere
+##   to climb to (the caller centres it on the head -- see
+##   StoneSize.PLAYER_WORLD_HEIGHT_PX).
+## - the angle is NOT clamped. A whirl between two butterflies is over in
+##   SPIRAL_SECONDS, but an orbit round a player lasts as long as the player
+##   stands there, and clamping would freeze the dance at one point of the
+##   circle with the butterfly hanging motionless on it. Only the CONVERGENCE
+##   is time-limited, which is what makes the approach finish.
+static func converging_orbit(
+	elapsed: float, start_offset: Vector2, radius_px: float, turns_per_second: float
+) -> Vector2:
+	var closing := clampf(elapsed / SPIRAL_SECONDS, 0.0, 1.0)
+	var radius := lerpf(start_offset.length(), radius_px, closing)
+	var angle := start_offset.angle() + TAU * turns_per_second * elapsed
+	return Vector2.from_angle(angle) * radius
