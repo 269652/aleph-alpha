@@ -262,7 +262,7 @@ const _ONSET_SALT := 5303
 ## tile_variation_not_a_uniform_plateau pins). A 0.13/0.05 broad/fine split
 ## raised that SAME worst-case-anywhere window to 5 distinct bands -- a real,
 ## swath-wide improvement, not a fix for one cherry-picked spot -- while only
-## raising the worst neighbour step from 0.0357 to 0.0581 (see
+## raising the worst neighbour step from 0.0357 to 0.0612 (see
 ## MAX_NEIGHBOUR_ONSET_STEP below). Smaller fine budgets (0.03-0.04) barely
 ## moved the worst case (4 bands); larger ones (0.07+) pushed the neighbour
 ## step close to double with only marginal further gain. Expressed as the
@@ -342,14 +342,17 @@ const ONSET_FINE_DRIFT_TILES := 2.0
 ## not less, so this had to move -- the question was only "by how much is
 ## real, and by how much is too much". Over the same -60..60 x -6..6 sweep
 ## test_neighbouring_tiles_have_nearly_the_same_onset already uses, the
-## combined broad+fine field's worst measured neighbour step is 0.0581 (was
+## combined broad+fine field's worst measured neighbour step is 0.0612 (was
 ## 0.0357 broad-only -- note this differs slightly from the 0.0436 quoted
 ## above, which was measured at a different point in this file's history;
 ## re-measuring the CURRENT broad-only field over this exact sweep gives
-## 0.0357). 0.0581 is still under 1.5 depth bands (0.04 each) -- nowhere
-## close to the old checkerboard's 2 * ONSET_VARIANCE (0.36) jump, which
-## crossed the ENTIRE old 4-band range in one step. Re-pinned to 0.07 with
-## real margin over that fresh measurement.
+## 0.0357). 0.0612 is about 1.53 depth bands (0.04 each) -- close to but
+## still under a full 2-band jump, and nowhere close to the old
+## checkerboard's 2 * ONSET_VARIANCE (0.36) jump, which crossed the ENTIRE
+## old 4-band range in one step. Re-pinned to 0.07 with real (if narrower
+## than first estimated) margin over that fresh measurement -- re-verify
+## this margin if ONSET_FINE_VARIANCE or ONSET_FINE_DRIFT_TILES ever change
+## again, since it is closer to the ceiling than the first pass assumed.
 const MAX_NEIGHBOUR_ONSET_STEP := 0.07
 
 
@@ -390,7 +393,7 @@ const MAX_NEIGHBOUR_ONSET_STEP := 0.07
 ## ONSET_VARIANCE budget (see ONSET_FINE_VARIANCE) so the broad layer still
 ## dominates which general area goes first. Re-measured on the combined
 ## field: that same worst window rose from 3 to 5 distinct bands, while the
-## worst neighbour step only rose from 0.0357 to 0.0581 (see MAX_NEIGHBOUR_
+## worst neighbour step rose from 0.0357 to 0.0612 (see MAX_NEIGHBOUR_
 ## ONSET_STEP, re-pinned for this).
 func onset_offset_for(global_x: int, global_y: int) -> float:
 	var broad := PixelNoise.smooth(

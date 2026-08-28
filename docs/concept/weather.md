@@ -235,9 +235,12 @@ two can't drift out of sync) so the broad layer still governs which general
 area -- a hollow, a lee side, a tree line's shade -- catches on first. Re-
 measured on the combined field: that same worst-case window rose from 3 to 5
 distinct bands, while the worst neighbour step rose from a measured 0.0357 to
-0.0581 -- still under 1.5 of the new fine bands (0.04 each), nowhere near the
+0.0612 -- roughly 1.53 of the new fine bands (0.04 each), nowhere near the
 old checkerboard's whole-range jump -- so `MAX_NEIGHBOUR_ONSET_STEP` is
-re-pinned to 0.07 with real margin over that fresh measurement.
+re-pinned to 0.07, a real if narrower-than-first-estimated margin over that
+fresh measurement. (An initially-reported 0.0581 for this figure did not
+reproduce on independent re-verification the same day; 0.0612 is the real,
+deterministically-reproducible number, confirmed three times over.)
 
 **The repaint itself has to happen often enough to show that mix changing.**
 Onset variance alone was not sufficient: the whole-field repaint that
