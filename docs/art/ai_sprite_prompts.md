@@ -931,6 +931,290 @@ character — much smaller canvas than the boss attack sheets in section 6):
 
 ---
 
+## 9. General item icons — one kit per visual archetype (2026-08-28)
+
+The full item catalog (`item_catalog.gd`'s `_ITEMS`, the single source of
+truth for every id in the game — 74 entries as of this writing) has never
+had illustrated icon art at all. `docs/concept/art_resolution.md` flags
+items/icons as the one art category still on its pending Phase 6; every
+item today renders through `procedural_item_sprite.gd`'s color+silhouette
+generator instead (see [item_illustrations.md](../concept/item_illustrations.md),
+which specced the `Item.sprite_id` field this section's output would
+register through — swapping an id onto real art means editing a catalog's
+`sprite_id`, never touching a renderer). `carrot`/`potato` already have real
+illustrated ground art (section 2) and are excluded below; every other item
+is scaffolded here into 11 kits by shared silhouette, the same "one kit per
+archetype, not per member" efficiency this doc uses everywhere else (see
+section 1's flower archetypes or section 8's atom shape-families). The
+"current look" column names `procedural_item_sprite.gd`'s existing
+`_ITEM_LOOKS` color/shape for continuity — matching it isn't required, but
+an item with no entry there at all (falls back to the generic grey pebble)
+is called out explicitly, since those are the items with literally no
+distinct look today, procedural or otherwise.
+
+**Prefix every prompt below with the shared style preamble from the top of
+this doc**, plus this icon-sheet addendum (a single still icon, not an
+action cycle — much simpler than every other section here):
+
+> Lay out each item as a single centered icon on the sheet, generously
+> spaced from its neighbors and from the canvas edge, at a 3/4-from-above
+> "inventory icon" angle rather than a flat side profile — the same angle
+> real items already read at in this game's UI. One sheet may hold every
+> member of a kit side by side (label positions loosely in your own notes,
+> not baked into the image) rather than one image per item. No text, no
+> numbers, no UI chrome, no ground/shadow/scene — just the object itself
+> on flat solid magenta.
+
+### 9a. Bladed & hafted weapons — wooden_club, iron_sword, crude_blade
+
+| Item | Current look | Note |
+|---|---|---|
+| `wooden_club` | Brown wood, sword silhouette | A stout haft, no blade — the starting melee weapon. |
+| `iron_sword` | Grey-blue steel, sword silhouette | Real modeled mass (~1.2kg, see `item_catalog.gd`'s own mass-derivation comment) — should read as a genuine one-handed blade, not oversized. |
+| `crude_blade` | Grey-brown stone, sword silhouette | The knapping-chain's first weapon: a flint/stone edge lashed to a stick, visibly primitive next to iron_sword. |
+
+> Three melee weapons on a shared vertical-blade-plus-grip silhouette, each
+> reading as a clear step up in craftsmanship: `wooden_club` a plain stout
+> wooden haft with no blade at all; `crude_blade` a knapped grey stone edge
+> crudely lashed with fibre cord to a short wooden stick, visibly primitive;
+> `iron_sword` a clean tapered steel blade with a proper crossguard and
+> wrapped grip. Same posterized flat-band shading throughout, muted
+> naturalistic colors (wood brown, flint grey, iron blue-grey).
+
+### 9b. Edged/wedge tools — iron_axe, stone_pickaxe
+
+| Item | Current look | Note |
+|---|---|---|
+| `iron_axe` | Grey-blue steel, axe silhouette | Felling tool — see `Item.is_axe()`. |
+| `stone_pickaxe` | Grey-brown stone, axe silhouette | Mining tool — currently shares the axe silhouette procedurally; illustrated art should differentiate a pick's narrow double point from an axe's broad single wedge. |
+
+> Two hafted mining/felling tools, deliberately NOT sharing one silhouette
+> the way the procedural fallback currently does: `iron_axe` a broad
+> asymmetric steel wedge-head on a wooden haft; `stone_pickaxe` a narrow
+> stone head tapering to points at both ends, distinctly different from an
+> axe's single broad blade. Same posterized shading, same muted materials
+> as the weapons kit above.
+
+### 9c. Handheld instruments (elongated) — torch, stick, saw, fishing_rod
+
+| Item | Current look | Note |
+|---|---|---|
+| `torch` | Warm orange, sword silhouette | No lit-flame version exists — worth a lit and unlit variant if scope allows. |
+| `stick` | Brown wood, sword silhouette | A stackable raw material, not a weapon, despite sharing the silhouette. |
+| `saw` | **No entry — falls back to the generic grey pebble today.** | The one item in this whole kit with zero distinct look at all right now. |
+| `fishing_rod` | Brown wood, sword silhouette | Held exactly like a weapon (`equip_item`), cast with the same swing animation. |
+
+> Four straight elongated handheld objects, each with a distinct head so
+> they don't collapse into "brown stick" at a glance: `torch` a bound
+> bundle of resin-soaked wood topped with a small flame (posterized
+> orange/yellow, flat-banded, not a glow effect); `stick` a plain bare
+> branch, knobby and irregular, no head at all; `saw` a wooden handle with
+> a flat toothed metal blade at a slight angle, teeth clearly visible as a
+> zigzag edge; `fishing_rod` a thin tapering wooden rod with a small reel
+> near the grip and a fine line running to the tip.
+
+### 9d. Wayfinding & citizenship instruments — rough_compass, compass, map, spyglass, weather_glass, star_chart, deed, ledger, field_journal, charter
+
+| Item | Current look | Note |
+|---|---|---|
+| `rough_compass` | Muted brown, round | A crude precursor to `compass` — see `docs/concept/wayfinding.md`. |
+| `compass` | Gold, round | The refined instrument. |
+| `map` | Pale tan, oval | Currently shares the generic paper/parchment oval read with several others below. |
+| `spyglass` | Grey, sword silhouette | Reuses the elongated-object silhouette procedurally; illustrated art should read as a collapsible brass telescope, not a stick. |
+| `weather_glass` | Pale blue, oval | A barometer-like instrument. |
+| `star_chart` | Deep indigo, round | A star map/astrolabe read. |
+| `deed` | Orange-brown, oval | A property document. |
+| `ledger` | Dark green, plate silhouette | A bound book — reuses the generic flat-rectangle "armor plate" silhouette procedurally. |
+| `field_journal` | Brown, plate silhouette | Another bound book — same generic silhouette as `ledger` today, needs its own read once illustrated (see below). |
+| `charter` | Purple, plate silhouette | A third book/document sharing that same generic silhouette. |
+
+> Ten wayfinding and record-keeping instruments, split into three real
+> shapes rather than the generic round/oval/plate blobs the procedural
+> fallback currently leans on: **round dial instruments** (`rough_compass` a
+> crude carved-wood-and-needle compass, `compass` its refined brass-and-glass
+> counterpart, `star_chart` a circular star-map disc with fine engraved
+> constellation lines); **rolled/folded paper** (`map` a partially unrolled
+> parchment map with visible drawn coastline/terrain marks, `weather_glass`
+> a small glass-and-brass barometer instrument, `deed` a folded wax-sealed
+> parchment document); **bound books**, each with a DIFFERENT cover color
+> and a small distinguishing cover emblem so the three don't read as one
+> generic book — `ledger` a dark green account-book with a ruled-lines
+> emblem, `field_journal` a worn brown journal with a small leaf/pressed-
+> plant emblem, `charter` a formal purple-bound charter with a wax seal on
+> the cover. `spyglass` breaks from all three: a collapsible brass
+> telescope, sections tapering, one end wider than the other.
+
+### 9e. Capture, restraint & rope gear — lasso, snare, butterfly_net, trap, reinforced_rope, climbing_rope, jarred_insect, caged_songbird
+
+| Item | Current look | Note |
+|---|---|---|
+| `lasso` | Pale tan, oval | Rope gone pale and dry, per `item_catalog.gd`'s own comment — not the green plant_fibre it came from. |
+| `snare` | Muted brown, snare silhouette (loop + peg) | Already has a bespoke procedural shape — see `_draw_snare`. |
+| `butterfly_net` | White, net silhouette (hoop + handle) | Already bespoke — see `_draw_net`. |
+| `trap` | Dark grey, metal-cornered box silhouette | Already bespoke — see `_draw_trap`. |
+| `reinforced_rope` | Tan with a metal-grey core, oval+core silhouette | Already bespoke — see `_draw_reinforced_rope`; "a lasso PLUS metal" read for world-boss-scale capture. |
+| `climbing_rope` | **No entry yet (added after the procedural generator was last extended) — falls back to the generic grey pebble.** | A coiled traversal rope, not a capture tool — see `docs/concept/transportation.md`. |
+| `jarred_insect` | Pale cyan-white, jar silhouette | Already bespoke — see `_draw_jar`. |
+| `caged_songbird` | Warm orange bird blur in a cage silhouette | Already bespoke — see `_draw_cage`. |
+
+> Eight rope/restraint/containment items — several already have a strong,
+> distinct procedural silhouette worth MATCHING rather than reinventing
+> (snare's staked loop, the net's hoop-on-a-handle, the trap's cornered
+> box, the reinforced rope's metal-cored coil, the insect jar, the
+> songbird cage — describe each of these exactly as named above, just
+> rendered instead of drawn pixel-by-pixel). Two need real designs from
+> scratch: `lasso` a coiled loop of pale sun-bleached rope, distinct from
+> `reinforced_rope`'s visible metal core; `climbing_rope` a neatly coiled
+> plain hemp rope with a small metal carabiner clipped through it, reading
+> as traversal gear rather than a capture tool.
+
+### 9f. Worn armor — leather_helm/chest/legs/boots, iron_helm/chest/legs/boots
+
+| Item | Slot | Current look |
+|---|---|---|
+| `leather_helm` / `iron_helm` | head | Brown / blue-grey, dome-on-top plate |
+| `leather_chest` / `iron_chest` | chest | Brown / blue-grey, broad chestplate |
+| `leather_legs` / `iron_legs` | legs | Brown / blue-grey, narrower greaves |
+| `leather_boots` / `iron_boots` | feet | Brown / blue-grey, short low boots |
+
+> Two full armor sets (leather and iron), four pieces each, all eight
+> sharing the SAME silhouette per slot so a player can tell material apart
+> at a glance without the shapes changing: a helm reads as a rounded dome
+> with a brow-line; a chestpiece a broad front torso panel with visible
+> shoulder straps; leg armor a pair of narrower shin/thigh guards; boots a
+> short low pair with a visible sole line. Render the LEATHER set first —
+> warm brown, soft creased leather texture, simple stitched seams — then
+> the IRON set as a second pass on the identical poses/silhouettes —
+> cool blue-grey metal, riveted plates, a subtle specular highlight band —
+> so the two sets read as a real material upgrade of the same armor rather
+> than two unrelated designs.
+
+### 9g. Placeable structures — campfire, furnace, sagewerk, storage
+
+| Item | Current look | Note |
+|---|---|---|
+| `campfire` | Bespoke crossed-logs-and-flame render | Already bespoke and good — see `_draw_campfire`; a real target to match, not redesign. |
+| `furnace` | Bespoke stone block with a glowing firebox | Already bespoke — see `_draw_furnace`. |
+| `sagewerk` | **No entry — falls back to the generic flat "armor plate" rectangle.** | A sawmill worksite (see `docs/concept/timber_construction.md`) — needs its own building-icon read. |
+| `storage` | **No entry — falls back to the generic flat "armor plate" rectangle.** | A stock-holding structure (see `docs/concept/timber_construction.md`) — needs its own building-icon read. |
+
+> Two placeable worksite icons, currently the least-distinguished items in
+> the whole catalog (both fall back to a plain flat rectangle today):
+> `sagewerk` a small open-sided timber-framed sawmill shed with a visible
+> saw-blade and stacked raw logs beside it; `storage` a simple wooden crate/
+> shed with visible plank construction and a barred door, reading clearly
+> as "a place things get kept" rather than "a place things get made" next
+> to sagewerk. `campfire`/`furnace` already have strong bespoke procedural
+> art (crossed burning logs; a glowing stone firebox) worth matching as
+> the reference point for this kit's overall style rather than
+> redesigning from scratch.
+
+### 9h. Raw & refined materials — hide, fang, wood, rock, sharp_shard, plant_fibre, log, beam, plank, stone, iron_ore, copper_ore, coal, iron_ingot, copper_ingot
+
+| Item | Current look |
+|---|---|
+| `hide` | Brown, oval (tanned pelt) |
+| `fang` | Pale ivory, tapering fang |
+| `wood` | **No entry — generic pebble fallback.** |
+| `rock` | Grey, round |
+| `sharp_shard` | Pale grey, fang silhouette (a knapped flake) |
+| `plant_fibre` | Green, oval |
+| `log` | **No entry — generic pebble fallback.** |
+| `beam` | **No entry — generic pebble fallback.** |
+| `plank` | **No entry — generic pebble fallback.** |
+| `stone` | Grey, round |
+| `iron_ore` | Rust-orange-brown, round |
+| `copper_ore` | Teal, round |
+| `coal` | Near-black, round |
+| `iron_ingot` | Pale steel-grey, oval bar |
+| `copper_ingot` | Warm orange-brown, oval bar |
+
+> Fifteen raw/refined crafting materials — the biggest, most heterogeneous
+> kit here, so lean on real-world reference per item rather than one shared
+> silhouette: `hide` a folded tanned animal pelt; `fang` a single curved
+> ivory-white tooth; `wood`/`log` a short cut length of round bark-covered
+> trunk (log larger/rougher than the wood scrap); `rock`/`stone` an
+> irregular grey fist-sized stone (near-identical read is fine, they are
+> the same material at two points in the gather chain); `sharp_shard` a
+> single knapped grey flint flake with a visible sharp edge;
+> `plant_fibre` a small bundle of stripped green plant strands;
+> `beam`/`plank` sawn rectangular lumber (beam thick and square-profiled,
+> plank thin and flat); `iron_ore`/`copper_ore` a raw rock chunk with
+> visible embedded metallic flecks (rust-orange for iron, teal-green
+> patina for copper); `coal` a dull matte-black irregular chunk;
+> `iron_ingot`/`copper_ingot` a smooth cast metal bar with a flat top
+> face, iron in cool blue-grey steel, copper in warm orange-brown metal.
+
+### 9i. Orchard fruit & forage — fruit, nut, cherry, apple, walnut, acorn, hazelnut, pine
+
+| Item | Current look |
+|---|---|
+| `fruit` | Red, round (generic ambient-forage fruit) |
+| `nut` | Brown, oval (generic ambient-forage nut) |
+| `cherry` | Deep red, round |
+| `apple` | Red-orange, round |
+| `walnut` | Brown, oval |
+| `acorn` | Brown, oval |
+| `hazelnut` | Brown-red, round |
+| `pine` | Dark brown, oval (pine nut) |
+
+> Eight small round fruit/nut icons matching `TreeSpecies.fruit_color_for`'s
+> own real per-species colors (see `procedural_item_sprite.gd`'s own
+> comment on this — an illustrated cherry must stay the same red the tree
+> canopy's own ripe-fruit dots already use). `cherry` small and glossy
+> deep red with a short stem; `apple` a rounder red-orange fruit with a
+> small stem dimple; `walnut`/`acorn`/`hazelnut`/`pine` four visibly
+> different nuts/seeds despite sharing a brown palette — walnut a
+> wrinkled round shell, acorn its familiar capped-teardrop shape,
+> hazelnut a smooth small round shell, pine nut a slender elongated
+> husk. `fruit`/`nut` are the unnamed ambient-forage tier (see
+> `EarthChunkManager.step_forage`) — a generic round red berry and a
+> generic round brown nut, deliberately plainer/less distinctive than
+> their named counterparts above.
+
+### 9j. Food & catches — meat, cooked_meat, fish, cooked_fish, rare_fish, legendary_fish
+
+| Item | Current look |
+|---|---|
+| `meat` | Dark red, round |
+| `cooked_meat` | Dark brown, round |
+| `fish` | Blue-grey, oval |
+| `cooked_fish` | Warm tan, oval |
+| `rare_fish` | Cool blue-violet, oval |
+| `legendary_fish` | Vivid gold, oval |
+
+> Six food/catch icons in two pairs plus two rarity variants: `meat` a raw
+> red cut of meat with visible marbling, `cooked_meat` the same cut
+> browned and seared; `fish`/`cooked_fish` a small silvery-blue whole fish
+> raw, then browned/crisped over a fire. `rare_fish`/`legendary_fish` (see
+> `FishingMinigame.fish_rarity`) reuse `fish`'s own silhouette but in
+> visibly precious materials — rare in a cool blue-violet with a faint
+> iridescent sheen, legendary in a vivid gold with warm highlights — so a
+> catch's rarity reads instantly in the creel, matching the same colors
+> the procedural fallback already committed to.
+
+### 9k. Curiosities — terminal_fragment, secret_room_token, wargames_punch_card, curious_keepsake
+
+| Item | Display name | Note |
+|---|---|---|
+| `terminal_fragment` | Pitted Circuit Shard | One of three "Three Fragments" Easter-egg pieces (see `docs/concept/easter_eggs.md`) — no procedural look registered at all. |
+| `secret_room_token` | Tarnished Token | Same hunt, second fragment — no procedural look registered. |
+| `wargames_punch_card` | Scorched Punch Card | Same hunt, third fragment — no procedural look registered. |
+| `curious_keepsake` | Curious Keepsake | The bonus item granted once all three fragments are held together — no procedural look registered. |
+
+> Four small, unremarkable-looking curiosities — deliberately NOT
+> flashy or magical-looking (see this Easter-egg family's own "no
+> fanfare, no mechanical weight" design pillar): `terminal_fragment` a
+> small pitted, corroded green-circuit-board shard; `secret_room_token`
+> a dull tarnished brass coin/token, worn smooth; `wargames_punch_card`
+> a scorched, edge-charred paper punch card with a few visible holes;
+> `curious_keepsake` a small worn trinket that reads as "assembled from
+> the other three" without literally depicting them — a simple carved
+> or welded charm shape. All four should look like unremarkable found
+> objects, not loot.
+
+---
+
 ## Notes for whoever runs these
 
 - Run the flower archetype sheets (1b) at pale/neutral tone as specified —
