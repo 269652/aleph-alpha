@@ -9,9 +9,11 @@ extends GutTest
 ## already reported "turning into spring", and the blossom frame is 2.5x as
 ## dense a picture as bare branches, so one step of six already reads as pink.
 ##
-## A canopy therefore gets its OWN schedule: bare all winter, blossom briefly
-## in early spring, then leaf. The ground keeps SeasonTransition -- a colour
-## lerp and a frame replacement do not express the same progress the same way.
+## A canopy therefore gets its OWN schedule, and a much shorter one: it stays
+## bare for all but the last hours of winter, opens across those, stands in
+## full bloom as spring BEGINS, then leafs out. The ground keeps
+## SeasonTransition -- a colour lerp and a frame replacement do not express
+## the same progress the same way.
 
 const TreePhenology = preload("res://src/world/tree_phenology.gd")
 const SeasonTransition = preload("res://src/world/season_transition.gd")
@@ -32,73 +34,133 @@ func _shows_blossom(state: Dictionary) -> bool:
 	return state.from == TreePhenology.BLOSSOM or state.to == TreePhenology.BLOSSOM
 
 
-# -- winter is bare, all of it -----------------------------------------------
+# -- a season starts already wearing itself -----------------------------------
 
-## The report, as a test: a winter world has no blossom in it anywhere.
-func test_a_winter_world_shows_no_blossom_at_any_point_in_it():
-	for step in 400:
-		var state := TreePhenology.canopy_state_at(_at("winter", float(step) / 400.0))
-		assert_false(
-			_shows_blossom(state),
-			"blossom is on screen %d/400 of the way through winter" % step
+## Reported live, with the HUD reading Spring and the wood still bare brown
+## branches under snow-capped pines: "the trees show a winter sprite when I do
+## /season spring". /season skips to the FIRST INSTANT of the season it names
+## (World._handle_season_command -> EarthChunkManager.jump_to_season), and that
+## instant was the one season start in the year that arrived unsaturated.
+##
+## Every other seam already pre-turns and so is already right: autumn's last
+## third turns the canopy bare, so winter STARTS bare; summer's turns it to
+## autumn. Only winter's pre-turn was suppressed. SeasonTransition states the
+## rule this restores in its own header -- a wood should "be fully turned by the
+## time the season it is turning into actually starts".
+func test_spring_starts_already_in_blossom_rather_than_still_bare():
+	var state := TreePhenology.canopy_state_at(_at("spring", 0.0))
+	assert_eq(
+		state.from, TreePhenology.BLOSSOM,
+		"/season spring lands the player in a bare winter wood"
+	)
+	assert_eq(
+		state.progress, 0.0,
+		"spring must ARRIVE in blossom, not begin turning into it"
+	)
+
+
+## The same rule generalised to all four seams, since winter->spring was the
+## only one breaking it: a canopy is never caught mid-turn at the instant a
+## season begins, whichever season the player jumps to.
+func test_no_season_begins_with_the_canopy_still_mid_turn():
+	for season in SeasonCycle.SEASONS:
+		var state := TreePhenology.canopy_state_at(_at(season, 0.0))
+		assert_eq(
+			state.progress, 0.0,
+			"%s begins with the canopy still part way through a turn" % season
 		)
 
 
-func test_winter_is_bare_from_end_to_end():
-	for step in 400:
-		var state := TreePhenology.canopy_state_at(_at("winter", float(step) / 400.0))
-		assert_eq(state.from, TreePhenology.BARE, "winter is not bare at %d/400" % step)
-		assert_eq(state.progress, 0.0, "winter is turning into something at %d/400" % step)
-
-
-## Winter's pre-turn is SUPPRESSED, not redirected to a bare->bare blend.
-##
-## The pre-turn exists so a season arrives already saturated instead of
-## swapping on a frame boundary -- but a canopy's spring arrival state IS bare,
-## because a real tree in late winter has not moved yet. There is nothing to
-## blend toward, and every distinct progress value is a whole tree picture to
-## composite and cache (ProceduralTreeSprite), so a bare->bare ramp would cost
-## six identical images per species to express a no-op.
-func test_the_ground_pre_turns_into_spring_and_the_canopy_does_not():
-	var late_winter := _at("winter", 1.0 - SeasonTransition.TURN_FRACTION * 0.5)
-	var ground := SeasonTransition.state_at(late_winter)
-	assert_eq(ground.from, "winter", "the premise: this moment is late winter")
-	assert_eq(ground.to, "spring", "the premise: the ground is already turning")
-	assert_gt(ground.progress, 0.0, "the premise: the ground is part way over")
-
-	var canopy := TreePhenology.canopy_state_at(late_winter)
-	assert_eq(canopy.from, TreePhenology.BARE)
-	assert_eq(canopy.progress, 0.0, "the canopy must not pre-turn out of winter")
-
-
-# -- blossom is a brief early-spring event -----------------------------------
-
-## Gradual, not a swap: the winter/spring boundary is the one place a hard
-## frame change would be most visible, and SeasonTransition exists precisely
-## because a wood that changes between one step and the next reads as a bug.
-func test_a_tree_comes_INTO_blossom_gradually_across_the_start_of_spring():
+## Where the ramp moved TO. The bud-break span is unchanged in length (it is a
+## real Prunus record, see below); it now runs against the END of winter so it
+## finishes exactly on the boundary rather than starting there.
+func test_a_tree_comes_into_blossom_gradually_across_the_END_of_winter():
 	var seen := {}
 	for step in 60:
-		var within := TreePhenology.OPENING_FRACTION * float(step) / 60.0
-		var state := TreePhenology.canopy_state_at(_at("spring", within))
+		var within := (
+			1.0 - TreePhenology.OPENING_FRACTION
+			+ TreePhenology.OPENING_FRACTION * float(step) / 60.0
+		)
+		var state := TreePhenology.canopy_state_at(_at("winter", within))
 		assert_eq(state.from, TreePhenology.BARE, "opening from the wrong frame")
 		assert_eq(state.to, TreePhenology.BLOSSOM, "opening into the wrong frame")
 		seen[state.progress] = true
 	assert_gte(seen.size(), 4, "blossom snapped on rather than opening")
 
+# -- winter is bare, all of it -----------------------------------------------
 
-func test_a_tree_then_stands_in_full_blossom_rather_than_passing_through_it():
-	var mid_hold := (TreePhenology.OPENING_FRACTION + TreePhenology.BLOSSOM_FRACTION) * 0.5
-	var state := TreePhenology.canopy_state_at(_at("spring", mid_hold))
-	assert_eq(state.from, TreePhenology.BLOSSOM)
-	assert_eq(state.progress, 0.0, "full bloom is a settled stage, not a mid-turn")
+## The original report, still true for all but the last hours of winter: a
+## winter world has no blossom standing in it. What changed is only the END --
+## the tree now opens across winter's last OPENING_FRACTION so that spring can
+## BEGIN in bloom (see the season-start tests above). That is the smallest
+## window which buys that, and the reason the ramp is the measured bud-break
+## span rather than SeasonTransition's third of a season.
+func test_a_winter_world_shows_no_blossom_until_its_last_hours():
+	var settled := 1.0 - TreePhenology.OPENING_FRACTION
+	assert_gt(settled, 0.9, "winter must stay overwhelmingly blossom-free")
+	for step in 400:
+		var state := TreePhenology.canopy_state_at(
+			_at("winter", settled * float(step) / 400.0)
+		)
+		assert_false(
+			_shows_blossom(state),
+			"blossom is on screen %d/400 of the way through settled winter" % step
+		)
+
+
+func test_winter_is_bare_and_settled_until_its_last_hours():
+	var settled := 1.0 - TreePhenology.OPENING_FRACTION
+	for step in 400:
+		var within := settled * float(step) / 400.0
+		var state := TreePhenology.canopy_state_at(_at("winter", within))
+		assert_eq(state.from, TreePhenology.BARE, "winter is not bare at %d/400" % step)
+		assert_eq(
+			state.progress, 0.0, "winter is turning into something at %d/400" % step
+		)
+
+
+## Both the ground and the canopy pre-turn into spring now -- but across
+## windows of very different length, which is the whole reason the canopy has
+## its own schedule. At the moment the ground is half way through its
+## third-of-a-season turn, the canopy has not begun to open at all: it rides
+## the measured bud-break span instead, so blossom is never spread across a
+## third of winter's snow (which is what the original report was).
+func test_the_canopy_pre_turns_on_a_far_shorter_window_than_the_ground():
+	assert_lt(
+		TreePhenology.OPENING_FRACTION, SeasonTransition.TURN_FRACTION * 0.25,
+		"the canopy's pre-turn has to be far shorter than the ground's"
+	)
+	var mid_ground_turn := _at("winter", 1.0 - SeasonTransition.TURN_FRACTION * 0.5)
+	var ground := SeasonTransition.state_at(mid_ground_turn)
+	assert_eq(ground.from, "winter", "the premise: this moment is late winter")
+	assert_eq(ground.to, "spring", "the premise: the ground is already turning")
+	assert_gt(ground.progress, 0.0, "the premise: the ground is part way over")
+
+	var canopy := TreePhenology.canopy_state_at(mid_ground_turn)
+	assert_eq(canopy.from, TreePhenology.BARE)
+	assert_eq(canopy.progress, 0.0, "the canopy must still be bare this early on")
+
+
+# -- blossom is a brief early-spring event -----------------------------------
+
+## Spring OPENS in full bloom: the opening ramp finished on the boundary, so
+## the first thing spring does is hold the flower rather than start growing it.
+func test_spring_opens_in_full_bloom_and_holds_it():
+	for step in 60:
+		var within := TreePhenology.FULL_BLOOM_FRACTION * float(step) / 60.0
+		var state := TreePhenology.canopy_state_at(_at("spring", within))
+		assert_eq(state.from, TreePhenology.BLOSSOM, "not in bloom at %d/60" % step)
+		assert_eq(
+			state.progress, 0.0,
+			"full bloom is a settled stage, not a mid-turn, at %d/60" % step
+		)
 
 
 func test_blossom_gives_way_to_leaf_gradually():
 	var seen := {}
 	for step in 60:
 		var within := (
-			TreePhenology.BLOSSOM_FRACTION
+			TreePhenology.FULL_BLOOM_FRACTION
 			+ TreePhenology.LEAF_OUT_FRACTION * float(step) / 60.0
 		)
 		var state := TreePhenology.canopy_state_at(_at("spring", within))
@@ -109,7 +171,7 @@ func test_blossom_gives_way_to_leaf_gradually():
 
 
 func test_the_rest_of_spring_is_simply_in_leaf():
-	var done := TreePhenology.BLOSSOM_FRACTION + TreePhenology.LEAF_OUT_FRACTION
+	var done := TreePhenology.FULL_BLOOM_FRACTION + TreePhenology.LEAF_OUT_FRACTION
 	assert_lt(done, 0.5, "the premise: a tree is in leaf by the middle of spring")
 	for step in 60:
 		var within := done + (1.0 - done) * float(step) / 60.0

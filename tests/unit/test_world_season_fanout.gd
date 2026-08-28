@@ -254,8 +254,11 @@ func _tree_the_player_is_standing_next_to() -> ChoppableTree:
 
 func test_the_fruiting_tick_draws_the_canopy_on_the_same_schedule_as_the_wood():
 	var tree := _tree_the_player_is_standing_next_to()
-	# The first instant of spring: the calendar says spring, the canopy is
-	# still bare wood, and those two disagreeing is the whole point.
+	# The first instant of spring -- which is now the moment the canopy has
+	# just FINISHED opening: winter's last hours run the bud-break ramp, so
+	# spring BEGINS in blossom instead of on bare wood (see TreePhenology).
+	# Reported live against /season spring: the HUD read Spring over a bare
+	# brown wood, because this was the year's one unsaturated season start.
 	manager.set_world_age_seconds(_clock_at("spring"))
 
 	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, Vector2.ZERO)
@@ -265,4 +268,4 @@ func test_the_fruiting_tick_draws_the_canopy_on_the_same_schedule_as_the_wood():
 		_canopy_season(),
 		"the tree beside the player wore a different year from the wood behind it"
 	)
-	assert_eq(tree.current_season(), "winter", "blossom on the first day of spring")
+	assert_eq(tree.current_season(), "spring", "spring did not begin in blossom")
