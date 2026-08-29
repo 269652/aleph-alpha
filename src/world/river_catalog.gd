@@ -117,6 +117,96 @@ const RIVERS := {
 
 var _geo := GeoCoordinates.new()
 
+## river name -> Array[Vector2] of TILE-space polyline points, keyed by world
+## size, shared by the whole process.
+##
+## Converting RIVERS' real lat/lon waypoints into tile space depends on
+## nothing but (world_width, world_height), and never changes -- yet this
+## used to be redone inside every distance_to_nearest_river_tiles call: ~50
+## GeoCoordinates.tile_for_coordinate conversions plus ~44 segment tests, per
+## call. That function is called PER TILE from five separate hot paths
+## (EarthChunkGenerator.generate_chunk, EarthChunkManager's water/river-flow/
+## snow painters, and _can_root_at), so one 32x32 chunk load paid the
+## conversion cost thousands of times over for an answer that is identical
+## every time. Same `static var _..._cache: Dictionary` shape
+## EarthElevationSource._decoded_cache already uses, for the same reason.
+##
+## Pinned by test_tile_polylines_are_cached_per_world_size and
+## test_caching_does_not_change_the_distance_answer.
+static var _polyline_cache: Dictionary = {}
+
+## Memo of the most recent _course_cache lookup. The world size is the same
+## on essentially every call in a running game, so the Dictionary lookup --
+## and, more expensively, the "%d_%d" String allocation used to key it --
+## are pure waste per call in the five per-tile hot paths. Measured: removing
+## them roughly halved nearest_river_at's remaining cost again on top of the
+## polyline caching itself.
+static var _last_width := -1
+static var _last_height := -1
+static var _last_courses: Dictionary = {}
+
+
+## The cached tile-space polylines for a given world size (see
+## _polyline_cache). Public so a test can assert the sharing directly, and so
+## a caller doing its own geometry over the courses need not rebuild them.
+static func tile_polylines(world_width: int, world_height: int) -> Dictionary:
+	var by_river := {}
+	for river_name in _course_cache(world_width, world_height):
+		by_river[river_name] = _course_cache(world_width, world_height)[river_name]["points"]
+	return by_river
+
+
+## Everything about a course that depends only on the world size, computed
+## once: the tile-space points, the cumulative length to each point, the
+## total length, and a bounding rectangle.
+##
+## The cumulative lengths exist so course_fraction costs no extra traversal;
+## the bounds exist so nearest_river_at can reject a whole river with one
+## rectangle test rather than walking all its segments. Most queried tiles
+## are nowhere near most of the 11 rivers, so that rejection is what keeps
+## this affordable in the five per-tile hot paths that call it.
+static func _course_cache(world_width: int, world_height: int) -> Dictionary:
+	if world_width == _last_width and world_height == _last_height:
+		return _last_courses
+
+	var key := "%d_%d" % [world_width, world_height]
+	if _polyline_cache.has(key):
+		_last_width = world_width
+		_last_height = world_height
+		_last_courses = _polyline_cache[key]
+		return _last_courses
+
+	var geo := GeoCoordinates.new()
+	var by_river := {}
+	for river_name in RIVERS:
+		var tile_points: Array[Vector2] = []
+		for waypoint in RIVERS[river_name]:
+			var t := geo.tile_for_coordinate(waypoint.x, waypoint.y, world_width, world_height)
+			tile_points.append(Vector2(t.x, t.y))
+
+		var cumulative: Array[float] = []
+		var travelled := 0.0
+		var minimum := tile_points[0]
+		var maximum := tile_points[0]
+		for i in tile_points.size():
+			cumulative.append(travelled)
+			if i < tile_points.size() - 1:
+				travelled += tile_points[i].distance_to(tile_points[i + 1])
+			minimum = Vector2(minf(minimum.x, tile_points[i].x), minf(minimum.y, tile_points[i].y))
+			maximum = Vector2(maxf(maximum.x, tile_points[i].x), maxf(maximum.y, tile_points[i].y))
+
+		by_river[river_name] = {
+			"points": tile_points,
+			"cumulative": cumulative,
+			"total_length": travelled,
+			"bounds": Rect2(minimum, maximum - minimum),
+		}
+	_polyline_cache[key] = by_river
+	_last_width = world_width
+	_last_height = world_height
+	_last_courses = by_river
+	return by_river
+
 
 ## True if (tile_x, tile_y) is within RIVER_HALF_WIDTH_TILES of any curated
 ## river's simplified course, on a world_width x world_height grid.
@@ -135,28 +225,84 @@ func is_river_tile(tile_x: int, tile_y: int, world_width: int, world_height: int
 func distance_to_nearest_river_tiles(
 	tile_x: int, tile_y: int, world_width: int, world_height: int
 ) -> float:
+	return nearest_river_at(tile_x, tile_y, world_width, world_height).distance_tiles
+
+
+## Which curated river is nearest to (tile_x, tile_y), how far away it is, and
+## how far ALONG that river's course the nearest point sits:
+##   {name: String, distance_tiles: float, course_fraction: float}
+##
+## course_fraction is 0.0 at the source waypoint and 1.0 at the mouth,
+## measured by real accumulated tile-space length along the polyline (not by
+## waypoint index -- waypoints are unevenly spaced, so index would badly
+## misreport position on a river whose via-points cluster near one city).
+## That fraction is what real discharge interpolation needs: a real river's
+## flow grows from source to mouth as its drainage area accumulates.
+##
+## Always answers, even far from every river -- the caller decides whether
+## the distance disqualifies it, exactly as is_river_tile already does.
+## Empty name and INF distance only if RIVERS itself is empty.
+func nearest_river_at(
+	tile_x: int, tile_y: int, world_width: int, world_height: int
+) -> Dictionary:
 	var point := Vector2(tile_x, tile_y)
-	var best := INF
-	for river_name in RIVERS:
-		var waypoints: Array = RIVERS[river_name]
-		var tile_points: Array[Vector2] = []
-		for waypoint in waypoints:
-			var t := _geo.tile_for_coordinate(waypoint.x, waypoint.y, world_width, world_height)
-			tile_points.append(Vector2(t.x, t.y))
+	var best_name := ""
+	var best_distance := INF
+	var best_fraction := 0.0
+
+	var courses := _course_cache(world_width, world_height)
+	for river_name in courses:
+		var course: Dictionary = courses[river_name]
+		# Reject the whole river with one rectangle test when even its
+		# closest possible point is farther than the best hit so far.
+		# Distance to the bounding rect is a true lower bound on distance to
+		# any segment inside it, so this can never change the answer -- only
+		# skip work. Pinned by test_caching_does_not_change_the_distance_answer.
+		if _distance_to_rect(point, course["bounds"]) >= best_distance:
+			continue
+
+		var tile_points: Array = course["points"]
+		var cumulative: Array = course["cumulative"]
+		var total_length: float = course["total_length"]
 		for i in range(tile_points.size() - 1):
-			var d := _distance_to_segment(point, tile_points[i], tile_points[i + 1])
-			best = minf(best, d)
-	return best
+			var a: Vector2 = tile_points[i]
+			var b: Vector2 = tile_points[i + 1]
+			var t := _projection_fraction(point, a, b)
+			var d := point.distance_to(a + (b - a) * t)
+			if d < best_distance:
+				best_distance = d
+				best_name = river_name
+				best_fraction = (
+					(cumulative[i] + a.distance_to(b) * t) / total_length
+					if total_length > 0.0 else 0.0
+				)
+
+	return {
+		"name": best_name,
+		"distance_tiles": best_distance,
+		"course_fraction": clampf(best_fraction, 0.0, 1.0),
+	}
 
 
-## Real point-to-segment distance (not just nearest-endpoint): projects
-## `point` onto the segment a-b, clamped to the segment itself, and returns
-## the distance to that projection.
-func _distance_to_segment(point: Vector2, a: Vector2, b: Vector2) -> float:
+## How far along segment a-b the perpendicular projection of `point` falls,
+## clamped to [0, 1] so it never runs off either end of the segment. Shared
+## by the distance and the along-course-position answers, which are two
+## readings of this one projection.
+func _projection_fraction(point: Vector2, a: Vector2, b: Vector2) -> float:
 	var ab := b - a
 	var length_sq := ab.length_squared()
 	if length_sq == 0.0:
-		return point.distance_to(a)
-	var t := clampf((point - a).dot(ab) / length_sq, 0.0, 1.0)
-	var projection := a + ab * t
-	return point.distance_to(projection)
+		return 0.0
+	return clampf((point - a).dot(ab) / length_sq, 0.0, 1.0)
+
+
+## Shortest distance from `point` to anywhere inside `rect` -- 0.0 when the
+## point is inside it. A true LOWER BOUND on the distance to any segment
+## contained by the rect, which is what makes nearest_river_at's early
+## rejection safe.
+func _distance_to_rect(point: Vector2, rect: Rect2) -> float:
+	var dx := maxf(maxf(rect.position.x - point.x, 0.0), point.x - rect.end.x)
+	var dy := maxf(maxf(rect.position.y - point.y, 0.0), point.y - rect.end.y)
+	return sqrt(dx * dx + dy * dy)
+
+

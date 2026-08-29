@@ -19,6 +19,139 @@ func before_each():
 	geo = GeoCoordinates.new()
 
 
+# -- cached tile-space polylines --------------------------------------------
+#
+# distance_to_nearest_river_tiles used to re-convert EVERY waypoint of EVERY
+# river through GeoCoordinates.tile_for_coordinate on EVERY call -- ~50
+# conversions plus ~44 segment tests, per call. It is called per-tile from
+# five separate hot paths (generate_chunk, _paint_water_overlay,
+# _paint_river_flow_overlay, _paint_snow_tile, _can_root_at), so a single
+# 32x32 chunk load paid it thousands of times over. The conversion depends
+# only on (world_width, world_height), so it belongs to the process, not the
+# call -- same `static var _..._cache` shape EarthElevationSource._decoded_cache
+# already uses for exactly this reason.
+
+func test_tile_polylines_are_cached_per_world_size():
+	var first := RiverCatalog.tile_polylines(1000, 500)
+	var second := RiverCatalog.tile_polylines(1000, 500)
+	assert_true(first == second, "the same world size must reuse one decoded polyline set")
+
+
+func test_a_different_world_size_gets_its_own_polylines():
+	var small := RiverCatalog.tile_polylines(1000, 500)
+	var large := RiverCatalog.tile_polylines(2000, 1000)
+	assert_ne(small["Dreisam"], large["Dreisam"])
+
+
+func test_every_river_has_a_tile_polyline_of_the_same_length_as_its_waypoints():
+	var polylines := RiverCatalog.tile_polylines(
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	for river_name in RiverCatalog.RIVERS:
+		assert_true(polylines.has(river_name), "missing polyline for %s" % river_name)
+		assert_eq(polylines[river_name].size(), RiverCatalog.RIVERS[river_name].size())
+
+
+## The cache must not change any answer -- the whole point is that it's a
+## pure speed change.
+func test_caching_does_not_change_the_distance_answer():
+	var tile := _tile_for(48.007669, 7.805657)
+	assert_almost_eq(
+		catalog.distance_to_nearest_river_tiles(
+			tile.x, tile.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		),
+		0.0, 1.0
+	)
+
+
+# -- nearest_river_at: which river, and how far along it ---------------------
+#
+# Real river discharge grows from source to mouth as drainage area
+# accumulates, so a hydraulic model needs BOTH which river a cell belongs to
+# and how far down its course the cell sits. Both fall straight out of the
+# same point-to-segment sweep distance_to_nearest_river_tiles already does,
+# so they're answered together rather than by a second traversal.
+
+func test_nearest_river_at_identifies_the_dreisam_at_the_gaskugel():
+	var tile := _tile_for(48.007669, 7.805657)
+	var found := catalog.nearest_river_at(
+		tile.x, tile.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_eq(found.name, "Dreisam")
+
+
+func test_nearest_river_at_identifies_the_spree_at_berlin():
+	var tile := _tile_for(52.52, 13.405)
+	var found := catalog.nearest_river_at(
+		tile.x, tile.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_eq(found.name, "Spree")
+
+
+func test_nearest_river_at_reports_the_same_distance_as_the_distance_query():
+	var tile := _tile_for(48.0031, 7.8238)
+	var found := catalog.nearest_river_at(
+		tile.x, tile.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_almost_eq(
+		found.distance_tiles,
+		catalog.distance_to_nearest_river_tiles(
+			tile.x, tile.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		),
+		0.0001
+	)
+
+
+## 0.0 at the source waypoint, 1.0 at the mouth -- the fraction real
+## discharge interpolation needs.
+func test_course_fraction_is_zero_at_the_source_and_one_at_the_mouth():
+	var source_tile := _tile_for(47.974167, 7.960556)  # Dreisam source, Kirchzarten
+	var mouth_tile := _tile_for(48.1475, 7.755)        # Dreisam mouth, confluence with the Elz
+	var at_source := catalog.nearest_river_at(
+		source_tile.x, source_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var at_mouth := catalog.nearest_river_at(
+		mouth_tile.x, mouth_tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_almost_eq(at_source.course_fraction, 0.0, 0.02)
+	assert_almost_eq(at_mouth.course_fraction, 1.0, 0.02)
+
+
+func test_course_fraction_increases_downstream_along_the_dreisam():
+	var waypoints: Array = RiverCatalog.RIVERS["Dreisam"]
+	var previous := -1.0
+	for waypoint in waypoints:
+		var tile := _tile_for(waypoint.x, waypoint.y)
+		var found := catalog.nearest_river_at(
+			tile.x, tile.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		)
+		assert_gt(found.course_fraction, previous, "course fraction must grow toward the mouth")
+		previous = found.course_fraction
+
+
+func test_course_fraction_always_stays_in_unit_range():
+	for lat_lon in [[48.007669, 7.805657], [52.52, 13.405], [50.93639, 6.95278], [0.0, -160.0]]:
+		var tile := _tile_for(lat_lon[0], lat_lon[1])
+		var found := catalog.nearest_river_at(
+			tile.x, tile.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		)
+		assert_between(found.course_fraction, 0.0, 1.0)
+
+
+## Far from every curated river there is still a NEAREST one -- the caller
+## decides whether the distance disqualifies it, exactly as
+## distance_to_nearest_river_tiles already leaves that to is_river_tile.
+func test_nearest_river_at_still_answers_far_from_any_river():
+	var tile := _tile_for(0.0, -160.0)
+	var found := catalog.nearest_river_at(
+		tile.x, tile.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_ne(found.name, "")
+	assert_gt(found.distance_tiles, 100.0)
+
+
 func _tile_for(lat: float, lon: float) -> Vector2i:
 	return geo.tile_for_coordinate(
 		lat, lon, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
