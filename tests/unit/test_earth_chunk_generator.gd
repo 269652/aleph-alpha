@@ -344,17 +344,25 @@ func test_a_point_far_from_any_curated_river_and_off_the_procedural_contour_is_n
 	assert_false(generator.is_river_at_global(tile.x, tile.y))
 
 
-func test_river_depth_at_global_is_deepest_at_a_curated_waypoint():
-	const RiverDepth = preload("res://src/world/river_depth.gd")
+## REPLACED a test that pinned RiverDepth.MAX_CURATED_RIVER_DEPTH_METERS
+## (2.5 m) at the centreline. That constant was an AUTHORED taper maximum --
+## a number chosen so a curated river would span the wading/swimming
+## threshold, not a number derived from anything real. Depth is now solved
+## from the Dreisam's real curated discharge, and the honest answer at the
+## Gaskugel is far shallower.
+##
+## That is the correct real answer, not a regression: the Dreisam is a small
+## Black Forest stream (mean 5.56 m3/s at Pegel Ebnet, low-flow 0.503) and
+## is genuinely wadeable through Freiburg -- which is exactly why the town
+## grew where it did. A model that made it chest-deep would be the wrong one.
+func test_river_depth_at_a_curated_waypoint_is_the_real_solved_depth():
 	var geo := GeoCoordinates.new()
 	var tile := geo.tile_for_coordinate(
 		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 	)
-	assert_almost_eq(
-		generator.river_depth_meters_at_global(tile.x, tile.y),
-		RiverDepth.MAX_CURATED_RIVER_DEPTH_METERS,
-		0.01
-	)
+	var depth := generator.river_depth_meters_at_global(tile.x, tile.y)
+	assert_gt(depth, 0.0, "the Dreisam has real water in it")
+	assert_lt(depth, 1.5, "a real small stream should be wadeable, not chest-deep")
 
 
 ## Reported directly, after playtesting: procedural rivers were "scattered
@@ -370,6 +378,101 @@ func test_procedural_fallback_is_not_live_wired_far_from_any_curated_river():
 		for y in range(7000, 7400, 41):
 			assert_false(generator.is_river_at_global(x, y), "(%d, %d) should not be a river with procedural fallback disabled" % [x, y])
 			assert_eq(generator.river_depth_meters_at_global(x, y), 0.0)
+
+
+# -- real hydraulics (docs/concept/rivers.md) --------------------------------
+#
+# Depth used to be a made-up linear taper from a centreline maximum. It is
+# now solved from the river's REAL curated discharge through Manning's
+# equation and continuity, so depth, current speed and pressure are one
+# self-consistent physical answer rather than three independent inventions.
+
+func test_river_hydraulics_at_the_gaskugel_are_physically_self_consistent():
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var flow := generator.river_hydraulics_at_global(tile.x, tile.y)
+
+	assert_gt(flow.discharge_m3_s, 0.0, "the Dreisam carries real water at the spawn point")
+	assert_gt(flow.width_m, 0.0)
+	assert_gt(flow.depth_m, 0.0)
+	assert_gt(flow.velocity_m_s, 0.0)
+	# Continuity: Q = width * depth * velocity, by construction.
+	assert_almost_eq(
+		(flow.width_m * flow.depth_m * flow.velocity_m_s) / flow.discharge_m3_s, 1.0, 0.15
+	)
+
+
+## Real-world sanity, the same spirit as this file's Everest/Mariana tests:
+## the Dreisam is a small Black Forest stream, so its numbers must land in
+## the range a real small river occupies -- not a millimetre, not an ocean.
+func test_the_dreisam_reads_like_a_real_small_river_not_a_torrent_or_a_puddle():
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var flow := generator.river_hydraulics_at_global(tile.x, tile.y)
+	# NIWA/Jowett instream-habitat survey: 0.1-0.3 m/s is "adequate",
+	# 0.3-0.5 "good" for stream life; USGS gauged flood peaks reach ~3 m/s.
+	# A real small river sits well inside that whole band.
+	assert_between(flow.velocity_m_s, 0.05, 3.0, "current speed %f m/s is not a real river" % flow.velocity_m_s)
+	assert_between(flow.depth_m, 0.05, 5.0, "depth %f m is not a real small river" % flow.depth_m)
+	assert_between(flow.width_m, 2.0, 120.0, "width %f m is not a real small river" % flow.width_m)
+
+
+## The whole point of curating discharge: a big river must actually read as
+## bigger than a small one. The Rhine carries ~267x the Dreisam's flow.
+func test_the_rhine_is_deeper_wider_and_carries_far_more_than_the_dreisam():
+	var geo := GeoCoordinates.new()
+	var dreisam := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var rhine := geo.tile_for_coordinate(
+		50.93639, 6.95278, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var small := generator.river_hydraulics_at_global(dreisam.x, dreisam.y)
+	var big := generator.river_hydraulics_at_global(rhine.x, rhine.y)
+	assert_gt(big.discharge_m3_s, small.discharge_m3_s * 50.0)
+	assert_gt(big.width_m, small.width_m)
+	assert_gt(big.depth_m, small.depth_m)
+
+
+func test_hydraulics_are_all_zero_away_from_any_river():
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		0.0, -160.0, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var flow := generator.river_hydraulics_at_global(tile.x, tile.y)
+	assert_eq(flow.depth_m, 0.0)
+	assert_eq(flow.velocity_m_s, 0.0)
+	assert_eq(flow.discharge_m3_s, 0.0)
+
+
+## Real pressure at the bed, from the real solved depth -- p = rho*g*h.
+func test_bed_pressure_follows_from_the_solved_depth():
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var flow := generator.river_hydraulics_at_global(tile.x, tile.y)
+	assert_almost_eq(flow.bed_pressure_pa, 1000.0 * 9.81 * flow.depth_m, 1.0)
+
+
+## river_depth_meters_at_global must now report the SOLVED depth -- it is the
+## number the player's wading/swimming/submersion chain already reads, so
+## real hydraulics reaching it is what makes the physics playable rather
+## than merely computed.
+func test_the_depth_query_reports_the_solved_hydraulic_depth():
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_almost_eq(
+		generator.river_depth_meters_at_global(tile.x, tile.y),
+		generator.river_hydraulics_at_global(tile.x, tile.y).depth_m,
+		0.0001
+	)
 
 
 func test_river_depth_at_global_is_zero_far_from_any_river():

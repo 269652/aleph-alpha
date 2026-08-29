@@ -7235,6 +7235,58 @@ germany" and a 4-tile minimum width).
   the Dreisam's curated centerline, and
   `test_standing_at_the_river_centerline_resolves_to_swimming_not_walking`
   confirms it.
+- **Real hydraulics: volume, pressure, current speed** (large) — ✅ Done —
+  reported directly ("implement real water flow with volume pressure current
+  speed"). Before this, depth was an AUTHORED 2.5 m linear taper, current
+  speed was faked from slope alone, and pressure did not exist — three
+  independent inventions that cannot agree, because continuity (`Q = A·v`)
+  binds them in real water. Now: `river_discharge.gd` curates real published
+  mean discharge per river from German gauging-station data (Danube 6,452
+  m³/s → Dreisam 10.86) interpolated along the course, plus real channel
+  width (curated where published, else derived by hydraulic geometry
+  `w ∝ √Q` with the coefficient fitted to those real widths);
+  `open_channel_flow.gd` implements Manning's equation, continuity,
+  closed-form normal depth `h = (n·q/√S)^(3/5)`, hydrostatic pressure/force,
+  and broad-crested weir overtopping, every constant cited to a real
+  engineering source. `EarthChunkGenerator.river_hydraulics_at_global`
+  solves it per tile.
+  **Feasible on a chunk-streamed world only because discharge is curated,
+  never integrated** — the Rhine's catchment is thousands of unloaded
+  chunks, so a locally-computed volume would be a lie dressed as physics
+  (the same escape pillar 1 already uses for the courses).
+  **The correction that mattered most**: standard Manning roughness tables
+  are measured on low-gradient channels and understate steep-channel
+  resistance 3-20x (Yochum et al. 2012 measured n=0.18 where tables say
+  ~0.05); using table n would have "substantially overestimated flow
+  velocities", so Jarrett's (1984) measured steep-channel relation is used
+  above 0.2% slope. **Two traps avoided**: rendered width (4 tiles ≈ 4 km)
+  is not real width and would have thrown speed off ~1000x; Manning's S is a
+  tangent, not an angle (~57x unit error).
+  Validated against REAL gauged data, not self-consistency: reproduces
+  USGS-measured velocities at Columbia/Vernita and Beaver Kill/Cooks Falls,
+  and lands near 9 real gauging stations. Produces the right emergent
+  behaviour — flat reaches deep and slow, steep reaches shallow and fast;
+  the Spree in Berlin solves to ~2.8 m against a real published 2-3 m.
+  **Changed existing behaviour honestly**: the spawn-point Dreisam solves to
+  ~0.31 m at 0.71 m/s, so the player now WADES where the authored taper made
+  them swim — which is what the real Dreisam is. The test pinning "swimming"
+  was pinning an invention; it now pins the real claim, with the swim path
+  proved separately against the Rhine. Also answers
+  `concept/electromagnetism.md`'s long-standing "DISCHARGE-accurate speed"
+  open question. Honest gaps: mean flow only (no flood/drought/rainfall
+  coupling — `weather_model.gd` has no rain-intensity scalar), small-river
+  widths extrapolated rather than verified, and very flat lower courses
+  solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
+  model floor.
+- **River catalog performance** (small) — ✅ Done —
+  `distance_to_nearest_river_tiles` re-converted every waypoint of every
+  river on every call, from five per-tile hot paths. Now caches tile-space
+  courses process-wide with cumulative lengths and a bounding-box rejection:
+  **4.41x faster** (~600ms → ~180ms per chunk load across all five call
+  sites), verified bit-identical over 200 real cells. Added
+  `nearest_river_at`, which also answers which river and how far along its
+  course a tile sits — what discharge interpolation needs, free from the
+  projection the distance query already computes.
 - **Procedural fallback reverted** (medium) — 🔴 Reverted from live use,
   module intact — reported directly after real play: "the rivers are
   scattered everywhere". Measured: ~6% of tiles in a curated-river-free

@@ -68,9 +68,44 @@ func test_sanity_the_fixture_tile_really_is_a_river():
 	assert_true(chunk_manager.is_river_at_global(river_tile.x, river_tile.y))
 
 
-func test_standing_at_the_river_centerline_resolves_to_swimming_not_walking():
+## Was `assert_eq(result.mode, "swimming")`, back when river depth was an
+## AUTHORED 2.5 m taper chosen so a curated river would cross the swim
+## threshold. Depth is now solved from the Dreisam's real curated discharge
+## (see EarthChunkGenerator.river_hydraulics_at_global), and the real answer
+## at Freiburg is ~0.3 m -- a wadeable stream, which is what the real
+## Dreisam is and why a town grew at that crossing.
+##
+## So the claim worth pinning is no longer "you swim here" (which was only
+## ever true of an invented number) but "the river is real water you have to
+## deal with, not dry ground" -- with the swim path itself proved against a
+## genuinely deep river below.
+func test_standing_at_the_river_centerline_puts_the_player_in_real_water():
 	var result := player._resolve_water_state(river_tile, 0.1)
-	assert_eq(result.mode, "swimming")
+	assert_ne(result.mode, "walking", "a river must not read as dry ground")
+	assert_true(
+		result.mode == "wading" or result.mode == "swimming",
+		"expected real water movement, got %s" % result.mode
+	)
+
+
+## The other end of the real range, so the depth -> movement-mode chain is
+## pinned across it rather than at one point. The Rhine at Cologne carries
+## ~267x the Dreisam's discharge in a ~560 m channel; a river that large is
+## unambiguously not wadeable, so a real big-river cell must still produce
+## real swimming. (Deliberately a BIG river rather than a merely deep spot:
+## depth varies with local slope along any one course, so picking a large
+## discharge is what makes this robust to which waypoint gets sampled.)
+func test_a_genuinely_large_river_still_resolves_to_swimming():
+	var geo := GeoCoordinates.new()
+	var rhine_tile := geo.tile_for_coordinate(
+		50.93639, 6.95278, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	chunk_manager.update(rhine_tile)
+	assert_gt(
+		chunk_manager.river_depth_meters_at_global(rhine_tile.x, rhine_tile.y), 1.5,
+		"the Rhine at Cologne is nowhere near wadeable; if this drops, the hydraulics changed"
+	)
+	assert_eq(player._resolve_water_state(rhine_tile, 0.1).mode, "swimming")
 
 
 func test_standing_at_the_river_centerline_reports_real_nonzero_depth_driven_speed():

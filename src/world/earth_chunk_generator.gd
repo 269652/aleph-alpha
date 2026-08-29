@@ -8,6 +8,8 @@ const TerrainRelief = preload("res://src/world/terrain_relief.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const RiverDepth = preload("res://src/world/river_depth.gd")
+const RiverDischarge = preload("res://src/world/river_discharge.gd")
+const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 
 ## World scale: ~111 tiles per degree of latitude/longitude (~1km/tile),
 ## giving a full, finite Earth of ~40,000 x 20,000 tiles -- explorable at a
@@ -234,19 +236,96 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 	return _river_catalog.is_river_tile(global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES)
 
 
-## Real meters of river depth at (global_x, global_y) -- see river_depth.gd.
-## Deepest at a curated river's own centerline, a flat shallower depth for a
-## procedural candidate, 0.0 everywhere else. Consulted by
-## Player._resolve_water_state (wading/swimming/submersion-tint/water-
-## ripples) exactly the way ocean depth already is -- a river never changes
-## biome_at_global's own result, so nothing else would otherwise notice it.
+## Real meters of river depth at (global_x, global_y) -- the depth SOLVED
+## from the river's real discharge (see river_hydraulics_at_global), not an
+## authored taper. Consulted by Player._resolve_water_state (wading/
+## swimming/submersion-tint/water-ripples) exactly the way ocean depth
+## already is -- a river never changes biome_at_global's own result, so
+## nothing else would otherwise notice it.
 func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
-	var distance := _river_catalog.distance_to_nearest_river_tiles(
+	return river_hydraulics_at_global(global_x, global_y).depth_m
+
+
+## The full real hydraulic state of a river cell -- see
+## docs/concept/rivers.md's "Real hydraulics" section and
+## open_channel_flow.gd for the physics:
+##   {discharge_m3_s, width_m, depth_m, velocity_m_s, bed_pressure_pa,
+##    slope, river_name, course_fraction}
+## All zero (and river_name "") away from any curated river.
+##
+## Depth, velocity and discharge are ONE self-consistent answer, not three
+## independent numbers: continuity (Q = width * depth * velocity) binds
+## them, and the normal-depth solve is what satisfies it. Depth used to be
+## an authored linear taper from a centreline maximum, with velocity
+## separately faked from slope alone and no pressure at all -- three
+## inventions that could not have agreed with each other even in principle.
+##
+## Feasible per-tile on a chunk-streamed world only because every input is
+## local or curated: discharge is real published gauge data (never
+## integrated from an upstream catchment that is not loaded), slope comes
+## from the elevation gradient already sampled here, and the normal-depth
+## solve is closed-form rather than iterated.
+func river_hydraulics_at_global(global_x: int, global_y: int) -> Dictionary:
+	var nearest := _river_catalog.nearest_river_at(
 		global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES
 	)
-	if distance <= RiverCatalog.RIVER_HALF_WIDTH_TILES:
-		return RiverDepth.curated_depth_meters(distance, RiverCatalog.RIVER_HALF_WIDTH_TILES)
-	return 0.0
+	if nearest.distance_tiles > RiverCatalog.RIVER_HALF_WIDTH_TILES:
+		return _no_flow()
+
+	var river_name: String = nearest.name
+	var course_fraction: float = nearest.course_fraction
+	var discharge := RiverDischarge.discharge_at(river_name, course_fraction)
+	var width := RiverDischarge.channel_width_m(river_name, course_fraction)
+	if discharge <= 0.0 or width <= 0.0:
+		return _no_flow()
+
+	# Manning's S is the energy-grade slope as a dimensionless rise/run, so
+	# the gradient's ANGLE has to become a tangent -- feeding degrees
+	# straight in would be a unit error of a factor of ~57.
+	var slope := tan(deg_to_rad(slope_at_global(global_x, global_y)))
+	slope = maxf(slope, MIN_HYDRAULIC_SLOPE)
+
+	# Roughness needs a hydraulic radius and the radius needs a depth, so
+	# take one cheap first pass at depth with the lowland roughness, then
+	# re-solve once with the roughness that depth implies. Two passes, not a
+	# convergence loop: the exponents are small enough that a second pass
+	# moves the answer by a few percent and a third by far less.
+	var first_depth := OpenChannelFlow.normal_depth(
+		discharge, width, slope, OpenChannelFlow.LOWLAND_MANNING_N
+	)
+	var radius := OpenChannelFlow.hydraulic_radius(first_depth, width)
+	var roughness := OpenChannelFlow.manning_n(slope, radius)
+	var depth := OpenChannelFlow.normal_depth(discharge, width, slope, roughness)
+
+	# Velocity from continuity rather than from Manning again, so
+	# Q = width * depth * velocity holds EXACTLY instead of only to within
+	# the wide-channel approximation the depth solve makes.
+	var velocity := discharge / (width * depth) if depth > 0.0 else 0.0
+
+	return {
+		"discharge_m3_s": discharge,
+		"width_m": width,
+		"depth_m": depth,
+		"velocity_m_s": velocity,
+		"bed_pressure_pa": OpenChannelFlow.hydrostatic_pressure_pa(depth),
+		"slope": slope,
+		"river_name": river_name,
+		"course_fraction": course_fraction,
+	}
+
+
+## A real river is never perfectly level -- and Manning's velocity goes to
+## zero at zero slope, which would make a flat reach infinitely deep via
+## continuity. This floor is the gentlest slope the model will admit,
+## roughly the real gradient of a very sluggish lowland river (1 cm per km).
+const MIN_HYDRAULIC_SLOPE := 0.00001
+
+
+func _no_flow() -> Dictionary:
+	return {
+		"discharge_m3_s": 0.0, "width_m": 0.0, "depth_m": 0.0, "velocity_m_s": 0.0,
+		"bed_pressure_pa": 0.0, "slope": 0.0, "river_name": "", "course_fraction": 0.0,
+	}
 
 
 func _biome_at_global(

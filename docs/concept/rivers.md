@@ -197,6 +197,106 @@ streak physics another caller might reason about does
 (`RiverFlowShader.streak_intensity`, now taking an explicit `flow_speed`
 argument instead of a shared constant, since speed is no longer uniform).
 
+## Real hydraulics: volume, pressure, current speed (2026-08-30)
+
+Reported directly: *"implement real water flow with volume pressure current
+speed"*. Before this, the three quantities were either invented or absent —
+depth was an authored linear taper from a 2.5 m centreline maximum (a number
+chosen so a river would straddle the wading/swimming threshold, not derived
+from anything), current speed was faked from local slope alone, and pressure
+did not exist. Three independent inventions that could not have agreed with
+each other even in principle, because in real water they are **not
+independent**: continuity (`Q = A·v`) binds them.
+
+### Why this is feasible here at all
+
+A real flow model normally needs the upstream catchment — the Rhine at
+Cologne drains ~185,000 km², thousands of chunks, none of them loaded. This
+doc's own "Procedural fallback" section already established that no global
+pass can ever run on this world. So a locally-integrated water volume would
+be **a lie dressed as physics**.
+
+The escape is the same one pillar 1 already uses for the courses: **curate
+the thing that can't be derived, derive everything else locally.**
+`river_discharge.gd` carries real published mean discharge (MQ) per river
+from German gauging-station data — the Danube's 6,452 m³/s down to the
+Dreisam's 10.86 — and interpolates it along the course, because real
+discharge grows source-to-mouth as drainage accumulates. Everything else is
+then a local, closed-form solve.
+
+### The model (`open_channel_flow.gd`)
+
+Real open-channel hydraulics, the formulas civil engineers actually use:
+
+- **Manning's equation** `V = (1/n)·R^(2/3)·S^(1/2)` for velocity (USGS WSP
+  1849 p.7 for the SI form; FHWA HDS-4 Metric eq. 13 for the units).
+- **Continuity** `Q = A·v` — which is what makes depth and speed one answer
+  rather than two.
+- **Normal depth**, closed form: `h = (n·q/√S)^(3/5)`, `q = Q/b`. Closed form
+  matters: the naive way to satisfy Manning and continuity together is to
+  iterate to a fixed point, and this solves it in one step — which is what
+  makes real hydraulics affordable per-tile.
+- **Hydrostatic pressure** `p = ρgh`, and **force on a dam face**
+  `F = ½ρgh²b` (note the square — doubling pooled depth *quadruples* the
+  load; that is the physical basis of dam failure, not an invented threshold).
+- **Weir overtopping** `Q = 1.4407·b·h^1.5` for a broad-crested stone crest
+  (Zachoval et al. 2014), with the real ~0.06 m surface-tension floor below
+  which the equation stops holding.
+
+**The correction that mattered most**, and which a naive implementation gets
+wrong: standard Manning roughness tables are measured on *low-gradient*
+channels and badly understate resistance in steep ones. Yochum et al. 2012
+measured average `n = 0.18` across 15 Colorado reaches at 1.5–20% slope —
+3–20× the textbook "mountain stream" value — and state plainly that using
+table `n` there yields *"substantially overestimated flow velocities."* So
+the module uses a table value only below 0.2% slope and **Jarrett's (1984)**
+measured steep-channel relation above it.
+
+### Two traps this had to avoid
+
+1. **Rendered width is not real width.** `RIVER_HALF_WIDTH_TILES` draws a
+   river 4 tiles across — at ~1 km/tile, a 4 km-wide Dreisam (a deliberate
+   visibility compression, pillar 4). Feeding that into continuity would put
+   current speed out by ~3 orders of magnitude. Real channel width is
+   separate data: curated where a real published width exists (5 rivers),
+   derived by hydraulic geometry (`w ∝ √Q`, coefficient fitted to those real
+   widths) everywhere else.
+2. **Slope is a tangent, not an angle.** Manning's `S` is dimensionless
+   rise/run; feeding degrees in directly would be a unit error of ~57×.
+
+### What it produces, checked against reality
+
+Validated against real gauged reaches rather than self-consistency:
+Manning reproduces the USGS-measured velocities at Columbia River/Vernita
+(2.49–2.64 m/s) and Beaver Kill/Cooks Falls (2.78–2.96 m/s), and the
+course-discharge model lands near 9 real gauging stations.
+
+The behaviour that falls out is right: **flat reaches run deep and slow,
+steep reaches shallow and fast** — continuity doing its job. The Spree in
+Berlin solves to ~2.8 m against its real published 2–3 m. The Dreisam at the
+spawn point solves to ~0.31 m at 0.71 m/s on its real 4% Black Forest
+gradient — a wadeable mountain stream, which is what the real Dreisam is and
+why a town grew at that crossing.
+
+That last one **changed existing behaviour honestly**: the player used to
+swim at spawn, because the authored 2.5 m taper said so. Real physics says
+wade. The test that pinned "swimming" was pinning an invention, and now pins
+the real claim (you are in real water) with the swim path proved separately
+against the Rhine.
+
+### Honest limits
+
+- Discharge is **mean** flow. No flood/drought variation, no rainfall
+  coupling — `weather_model.gd` has no rain-intensity scalar and its
+  precipitation is a flat per-region dice roll, so runoff-fed volume would be
+  building on a known-fake field. The real MNQ/MHQ extremes are known and
+  curated nowhere yet.
+- Width for small rivers is **extrapolated**, not verified — every real
+  published width in the calibration set is a large river, and no width was
+  published for any small one to check against.
+- Depth on very flat lower courses runs somewhat deep (Rhine ~11 m vs a real
+  ~9 m) because slope hits the model's floor there.
+
 ## Player interaction: wading, swimming, and the submersion tint
 
 `Player._resolve_water_state` originally only checked real elevation-
@@ -318,8 +418,16 @@ than it is, matching this project's usual practice):
   live. A future connectivity-aware redesign could reuse the module.
 - **Rendering (water overlay reuse)** — ✅ Done.
 - **Flow direction + real gradient-driven speed + turbulence (animated
-  overlay)** — ✅ Done. Discharge-accurate (not just gradient-derived)
-  speed, and the water wheel mechanic itself — ⬜ Not started.
+  overlay)** — ✅ Done.
+- **Real hydraulics: volume, pressure, current speed** — ✅ Done —
+  `river_discharge.gd` (real curated gauge data + derived width) +
+  `open_channel_flow.gd` (Manning, continuity, closed-form normal depth,
+  hydrostatic pressure/force, weir overtopping), solved per-tile by
+  `EarthChunkGenerator.river_hydraulics_at_global`. This also answers
+  `electromagnetism.md`'s long-standing "DISCHARGE-accurate speed" open
+  question — there is now a real per-cell discharge and velocity for a water
+  wheel to consume. Rainfall/flood coupling and the water wheel mechanic
+  itself — ⬜ Not started.
 - **Player wading/swimming/submersion-tint/ripples in rivers** — ✅ Done.
 - **Decoration exclusion (trees, grass, snow)** — ✅ Done.
 - **Dry-land spawn exclusion** — ✅ Done.
