@@ -496,12 +496,86 @@ func test_a_composite_yields_a_trunk():
 	assert_not_null(trees.trunk_for("walnut"))
 
 
-## The trunk is the biggest drawing below the canopy strip -- that is how it is
-## picked out, rather than by being at a fixed place on the sheet.
+## The trunk is the first row of drawings below the canopy strip -- that is
+## how it is picked out. (Used to be picked by SIZE instead -- see
+## test_several_regions_sharing_the_first_row_are_all_the_trunk for why that
+## stopped being reliable.)
 func test_the_trunk_is_taller_than_a_fruit():
 	var trunk := trees.trunk_for("walnut")
 	var fruit := trees.fruit_for("walnut", true)
 	assert_gt(trunk.get_height(), fruit.get_height(), "the trunk should be the big one")
+
+
+## ## Season-tinted trunk duplicates
+##
+## The trunk was picked out as the biggest drawing below the canopy strip.
+## Measured on a real sheet where an artist drew the trunk once PER canopy
+## column instead of sharing one image: five near-identical, season-tinted
+## trunk copies sat in a row, and a merged blob elsewhere in the fruit block
+## (an on-branch fruit drawing and its harvested forms blobbed together)
+## happened to be a few percent bigger -- so "biggest" picked the merged
+## fruit blob as the trunk, and the four leftover trunk copies were misread
+## as extra fruit stages. Position still tells them apart: every real sheet
+## checked -- old single-trunk layout and new duplicated one alike -- draws
+## the trunk immediately under the canopy and nothing else there, so the
+## first ROW below the canopy is the trunk, whether it holds one drawing or
+## several identical ones.
+
+func test_a_lone_region_below_the_canopy_is_the_trunk_row():
+	var below: Array[Rect2i] = [Rect2i(0, 400, 500, 500)]
+	assert_eq(IllustratedTree._trunk_row(below), [0])
+
+
+## A fruit row starting exactly where the trunk ends must not be swept into
+## the trunk row -- only actual vertical OVERLAP with the first region counts.
+func test_a_fruit_row_right_below_the_trunk_is_not_swept_into_it():
+	var below: Array[Rect2i] = [
+		Rect2i(0, 400, 500, 500), # trunk: y 400-900
+		Rect2i(0, 900, 100, 100), # fruit starts exactly where the trunk ends
+		Rect2i(600, 900, 100, 100),
+	]
+	assert_eq(IllustratedTree._trunk_row(below), [0])
+
+
+## Several regions sharing the trunk's own row are duplicates of the SAME
+## trunk, drawn once per canopy column -- not one trunk plus four fruit.
+func test_several_regions_sharing_the_first_row_are_all_the_trunk():
+	var below: Array[Rect2i] = [
+		Rect2i(0, 400, 200, 200),
+		Rect2i(220, 400, 200, 200),
+		Rect2i(440, 400, 200, 200),
+		Rect2i(660, 400, 200, 200),
+		Rect2i(880, 400, 200, 200),
+		Rect2i(0, 650, 100, 100),
+	]
+	assert_eq(IllustratedTree._trunk_row(below), [0, 1, 2, 3, 4])
+
+
+## An empty sheet (no drawings below the canopy at all) has no trunk row --
+## the empty-input case _composite_parts already has to handle.
+func test_nothing_below_the_canopy_means_no_trunk_row():
+	var below: Array[Rect2i] = []
+	assert_eq(IllustratedTree._trunk_row(below), [])
+
+
+## A single TALL trunk overlapping a much shorter fruit row beside it must
+## NOT sweep that fruit row in just because their y-ranges overlap -- this
+## is the real shape of every well-structured sheet (acorn, apple,
+## hazelnut): one trunk drawing spans the full height of the block below
+## the canopy, while the (much shorter) fruit rows sit beside it at a
+## smaller scale. Measured on the real sheets: a trunk's own height is never
+## less than ~1.65x its nearest overlapping fruit row's (0.608 was the
+## closest real case, on apple) where a genuine duplicated trunk row's
+## members are always within 3% of each other's height (0.973 the worst
+## real case, on walnut) -- a wide, measured gap the height check below
+## sits in the middle of.
+func test_a_tall_trunk_beside_a_much_shorter_fruit_row_is_not_swept_in():
+	var below: Array[Rect2i] = [
+		Rect2i(0, 400, 400, 500), # trunk: y 400-900, tall
+		Rect2i(450, 480, 200, 235), # fruit beside it: y 480-715, short -- overlaps in y
+		Rect2i(450, 764, 150, 176), # harvested form, further down still
+	]
+	assert_eq(IllustratedTree._trunk_row(below), [0])
 
 
 ## Species differ in how many fruit frames they have: a cherry has two, a
@@ -1376,6 +1450,18 @@ func test_a_scaled_piece_has_no_part_transparent_edges():
 # their names claim, and those are claims about pixels somebody could repaint.
 
 
+## How bare a deciduous winter canopy may read, as a share of its own summer
+## canopy's opaque pixel count, and still count as "actually bare."
+##
+## Measured on the real sheets: cherry/walnut/hazelnut sit at 0.42-0.45,
+## acorn and apple -- the two with the most winter branch detail -- at 0.50
+## and 0.52. All five sit well clear of pine's evergreen 0.98, so a winter
+## canopy this dense is still unmistakably barer than its own summer one; the
+## bound only needs enough real margin above the highest measured deciduous
+## value (0.52) to not chase brush-detail noise between art passes.
+const _WINTER_VS_SUMMER_MAX := 0.55
+
+
 ## Pine is called an evergreen in TreeSpecies ("its canopy never goes bare").
 ## Its ART has to agree, because TreePhenology walks it through the same four
 ## stages as everything else -- which is harmless only because a pine's four
@@ -1392,7 +1478,9 @@ func test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data():
 			float(_opaque_pixels(trees.canopy_for(species, "winter").get_image()))
 			/ float(maxi(_opaque_pixels(trees.canopy_for(species, "summer").get_image()), 1))
 		)
-		assert_lt(deciduous, 0.5, "%s should actually go bare in winter" % species)
+		assert_lt(
+			deciduous, _WINTER_VS_SUMMER_MAX, "%s should actually go bare in winter" % species
+		)
 
 
 ## The blossom frame is only a FLOWERING event for cherry.

@@ -267,9 +267,9 @@ func trunk_for(species: String) -> Texture2D:
 ##
 ## Read by POSITION rather than by a declared grid: the top band -- every
 ## drawing overlapping the topmost one vertically -- is the canopy strip, the
-## largest drawing below it is the trunk, and the rest are fruit in reading
-## order. Cached per sheet, because slicing is a real cost and a forest asks
-## for the same sheet for every tree in it.
+## first row below it is the trunk (see _trunk_row), and the rest are fruit
+## in reading order. Cached per sheet, because slicing is a real cost and a
+## forest asks for the same sheet for every tree in it.
 func _composite_parts(species: String) -> Dictionary:
 	var path := composite_path_for(species)
 	if _composite_cache.has(path):
@@ -288,27 +288,31 @@ func _composite_parts(species: String) -> Dictionary:
 			var band_bottom: int = regions[0].position.y + regions[0].size.y
 			for region in regions:
 				if region.position.y < band_bottom:
-					canopy.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, region)))
+					# canopy[0] is always CANOPY_BARE (see the sheet-order
+					# comment above) -- the one canopy role that never draws
+					# anything pale by design, so it is the only one keyed
+					# aggressively (see CompositeSheetSlicer.cut_out).
+					var bare := canopy.is_empty()
+					canopy.append(ImageTexture.create_from_image(
+						CompositeSheetSlicer.cut_out(sheet, region, bare)
+					))
 				else:
 					below.append(region)
 
-		# The trunk is the biggest thing under the canopy strip. Picked by size
-		# rather than position, so the lower half can be arranged freely.
-		var trunk_index := -1
-		var largest := 0
-		for index in below.size():
-			var area: int = below[index].size.x * below[index].size.y
-			if area > largest:
-				largest = area
-				trunk_index = index
+		# The trunk is the first ROW under the canopy strip (see _trunk_row).
+		# Usually one drawing; every other member of that row is a
+		# season-tinted duplicate of the very same trunk, not a fruit stage,
+		# so only the first survives.
+		var trunk_row := _trunk_row(below)
 		var fruit_regions: Array[Rect2i] = []
 		for index in below.size():
+			if trunk_row.has(index):
+				if index == trunk_row[0]:
+					trunk.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, below[index])))
+				continue
 			var texture := ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, below[index]))
-			if index == trunk_index:
-				trunk.append(texture)
-			else:
-				fruit.append(texture)
-				fruit_regions.append(below[index])
+			fruit.append(texture)
+			fruit_regions.append(below[index])
 
 		# Split the fruit into its rows: the first row is the crop on the tree,
 		# everything below it is what the crop becomes once picked.
@@ -329,6 +333,59 @@ func _composite_parts(species: String) -> Dictionary:
 	}
 	_composite_cache[path] = parts
 	return parts
+
+
+## How close two regions' heights must be to count as copies of the same
+## drawing rather than a trunk overlapping a shorter fruit row beside it.
+##
+## Measured on the real sheets, the two cases sit far apart with a wide gap
+## between them: a genuine duplicated trunk row's members are always within
+## 3% of each other's height (0.973 the worst real case, on walnut), while a
+## real trunk is never less than about 1.65x taller than the closest fruit
+## row it happens to overlap in y (0.608 the closest real case, on apple).
+## 0.85 sits in the middle of that gap with real margin either side.
+const TRUNK_ROW_HEIGHT_RATIO := 0.85
+
+
+## The trunk is the first ROW of drawings below the canopy strip -- normally
+## one drawing, but an artist may draw it once PER canopy column (season-
+## tinted) instead of sharing a single image across all of them. Every
+## region sharing that row is a duplicate of the very same trunk, not a
+## fruit stage, so `_composite_parts` keeps only the first and drops the
+## rest rather than misreading them as extra fruit.
+##
+## Position rather than size, unlike the trunk's old selection rule --
+## measured on a real sheet where a duplicated trunk row and a blob merged
+## out of an on-branch fruit drawing and its harvested forms landed within a
+## few percent of each other in AREA, so "biggest" could no longer tell them
+## apart and picked the merged fruit blob instead of any real trunk.
+##
+## Vertical overlap alone is not enough, though: a real, well-structured
+## sheet's single trunk is tall enough to overlap a shorter fruit row sitting
+## beside it (not below it), which swept that fruit row into the trunk role
+## entirely when this was tried with overlap alone. A region only joins the
+## row when it ALSO stands close to the first region's own height (see
+## TRUNK_ROW_HEIGHT_RATIO) -- true of five near-identical trunk copies drawn
+## side by side, false of a trunk and the fruit beside it.
+static func _trunk_row(below: Array[Rect2i]) -> Array[int]:
+	var row: Array[int] = []
+	if below.is_empty():
+		return row
+	var first: Rect2i = below[0]
+	for index in below.size():
+		var candidate: Rect2i = below[index]
+		var overlaps_y: bool = (
+			candidate.position.y < first.position.y + first.size.y
+			and first.position.y < candidate.position.y + candidate.size.y
+		)
+		if not overlaps_y:
+			continue
+		var height_ratio := float(mini(candidate.size.y, first.size.y)) / float(
+			maxi(candidate.size.y, first.size.y)
+		)
+		if height_ratio >= TRUNK_ROW_HEIGHT_RATIO:
+			row.append(index)
+	return row
 
 
 ## Slices a canopy sheet by FINDING its real drawings, the same blob-detection
@@ -352,7 +409,12 @@ func _canopy_frames_from_sheet(path: String) -> Array[Texture2D]:
 		return empty
 	var frames: Array[Texture2D] = []
 	for region in CompositeSheetSlicer.regions_in(sheet):
-		frames.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, region)))
+		# frames[0] is always CANOPY_BARE, same convention as the composite
+		# canopy strip -- see the aggressive-keying comment there.
+		var bare := frames.is_empty()
+		frames.append(ImageTexture.create_from_image(
+			CompositeSheetSlicer.cut_out(sheet, region, bare)
+		))
 	_frame_cache[path] = frames
 	return frames
 
