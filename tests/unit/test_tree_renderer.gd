@@ -7,6 +7,7 @@ const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const ForageScheduler = preload("res://src/gameplay/forage_scheduler.gd")
 
 var renderer: TreeRenderer
 var parent: Node2D
@@ -198,6 +199,45 @@ func test_set_wind_strength_forwards_to_the_shared_sway_material():
 				assert_eq(child.material.get_shader_parameter("wind_strength"), 1.8)
 				checked_any = true
 	assert_true(checked_any, "precondition: the forest chunk spawned at least one tree sprite")
+
+
+# -- live snow reaching a newly spawned tree ---------------------------------
+#
+# set_snow_coverage is the SPAWN-path half of canopy snow (see
+# EarthChunkManager.set_snow_depth/sync_tree_season for the other half, which
+# reaches an ALREADY-standing tree instead): a tree spawned after it is set
+# should be built already wearing the live snow depth, the same way a tree
+# spawned after set_world_age_seconds is already dressed for the right
+# season.
+
+func _position_for_species(species_id: String) -> Vector2:
+	var scheduler := ForageScheduler.new()
+	for step in 4000:
+		var position := Vector2(step * 37, step * 53)
+		if TreeSpecies.species_for_bias(scheduler.genome_for(position).species_bias) == species_id:
+			return position
+	return Vector2.ZERO
+
+
+func test_set_snow_coverage_reaches_a_freshly_spawned_snow_capable_tree():
+	var cherry_position := _position_for_species("cherry")
+	var bare := renderer._texture_for(cherry_position)
+	renderer.set_snow_coverage(0.8)
+	var snowed := renderer._texture_for(cherry_position)
+	assert_ne(
+		bare.get_image().get_data(), snowed.get_image().get_data(),
+		"a freshly spawned cherry should pick up the live snow depth"
+	)
+
+
+func test_texture_cache_still_stays_bounded_with_snow_coverage_set():
+	renderer.set_snow_coverage(0.5)
+	for i in 200:
+		renderer._texture_for(Vector2(i * 37, i * 53))
+	assert_lte(
+		renderer._texture_cache.size(), TreeSpecies.IDS.size(),
+		"snow coverage is one live value, not one bucket per tree"
+	)
 
 
 # -- art resolution (docs/concept/art_resolution.md phase 2) -----------------

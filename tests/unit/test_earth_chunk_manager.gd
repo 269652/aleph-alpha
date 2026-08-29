@@ -349,6 +349,14 @@ func test_set_wind_strength_also_drives_tree_bloom_and_grass_sway():
 	assert_eq(manager._illustrated_grass.material().get_shader_parameter("wind_strength"), 1.8)
 
 
+## set_snow_depth must also reach TreeRenderer, mirroring set_wind_strength's
+## own forward-call shape -- so a newly spawned tree picks up the live snow
+## depth (see TreeRenderer._texture_for) with no separate wiring.
+func test_set_snow_depth_forwards_to_the_tree_renderer():
+	manager.set_snow_depth(0.6)
+	assert_almost_eq(manager._tree_renderer._snow_coverage, 0.6, 0.0001)
+
+
 ## record_water_disturbance feeds the SAME shared material set_water_layer
 ## installed on the tile layer -- a fish/player/animal ripple must actually
 ## show up on the water the player sees, not on some other material.
@@ -1468,6 +1476,27 @@ func test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_ra
 	)
 
 
+## step_fruiting's own per-tree loop calls tree.set_ripe_fruit directly (not
+## through sync_tree_season's loop), so it has to pass the live snow depth
+## through too -- otherwise every fruiting tick would silently reset a
+## nearby tree's snow back to zero between sync_tree_season's own less
+## frequent redraws.
+func test_step_fruiting_also_dresses_a_nearby_tree_with_the_live_snow_depth():
+	var species_id := "apple"
+	var tree_position := _position_for_species(species_id)
+	manager.set_snow_depth(0.5)
+
+	var tree := ChoppableTree.new()
+	tree.position = tree_position
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
+
+	assert_almost_eq(tree._snow_coverage, 0.5, 0.0001)
+
+
 # -- sync_tree_season: the second path that redraws every loaded tree's ------
 # canopy, independent of step_fruiting (see World._client_process and
 # set_world_age_seconds/jump_to_season). Must respect the same
@@ -1504,6 +1533,55 @@ func test_sync_tree_season_dresses_a_nearby_tree():
 		tree.current_season(), "",
 		"a tree the player is standing next to should be dressed on a season sync, not skipped"
 	)
+
+
+# -- snow reaching an already-standing tree ----------------------------------
+#
+# TreeRenderer.set_snow_coverage only reaches a tree at the moment it is
+# SPAWNED (see test_tree_renderer.gd) -- it holds no reference to any tree
+# once built, so it cannot push a live change to one already standing.
+# sync_tree_season is the mechanism that already redraws every loaded tree's
+# canopy for season/turn; it has to carry snow the rest of the way too, or an
+# already-standing forest would never visibly whiten as it snows.
+
+func test_sync_tree_season_dresses_a_nearby_tree_with_the_live_snow_depth():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	manager.set_snow_depth(0.6)
+	manager.sync_tree_season(tree.position)
+
+	assert_almost_eq(
+		tree._snow_coverage, 0.6, 0.0001,
+		"a nearby tree should be dressed with the live snow depth, not left at zero"
+	)
+
+
+## step_snow (the real per-frame path -- see World._client_process) sets
+## _snow_depth directly rather than through set_snow_depth, so sync_tree_season
+## has to read the live field itself rather than relying on set_snow_depth
+## having been called at all.
+func test_sync_tree_season_reads_snow_depth_set_via_step_snow_not_only_set_snow_depth():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	# advance_world_age gives step_snow real elapsed time to accumulate
+	# against (see test_set_world_age_seconds_does_not_fake_a_catch_up_on_
+	# the_first_snow_step's own precedent) -- calling step_snow cold, with
+	# no elapsed time yet, would accumulate nothing.
+	manager.advance_world_age(1.0)
+	manager.step_snow(true, 0.0)  # cold and snowing
+	assert_gt(manager.snow_depth(), 0.0, "precondition: step_snow should have laid down real snow")
+
+	manager.sync_tree_season(tree.position)
+
+	assert_almost_eq(tree._snow_coverage, manager.snow_depth(), 0.0001)
 
 
 # -- building/destruction -----------------------------------------------------

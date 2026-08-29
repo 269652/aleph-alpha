@@ -54,6 +54,26 @@ const CANOPY_LEAF := 2
 const CANOPY_TURNING := 3
 const CANOPY_FRAME_COUNT := 4
 
+## ## The fifth frame: snow
+##
+## A sheet may carry ONE more drawing past the four seasons -- how much snow
+## lies on the branches. It is not a fifth entry in `_CANOPY_FRAME_BY_SEASON`
+## because it is not a season at all: which season frame a tree wears is a
+## pure function of the world clock (see docs/concept/seasons.md, "The canopy
+## is on the clock, not on the simulation"), while how much of it is under
+## snow is a live WEATHER fact -- the same simulation-driven quantity the
+## GROUND's own lying snow already is (SnowLayer/EarthChunkManager.
+## _snow_depth, accumulated from real weather via Snowfall.accumulate, and
+## forceable with `/weather`). The ground carries a real, separate snow
+## OVERLAY on top of its clock-driven season tint (see seasons.md, "The
+## ground carries the season too"); the canopy's snow frame follows that same
+## precedent rather than becoming a fifth phenology stage.
+##
+## Optional, unlike the four season frames: a species without this column
+## simply has none, and every reader of `canopy_frames_for` must keep working
+## exactly as it did before this frame could exist -- see `has_snow_frame_for`.
+const CANOPY_SNOW := 4
+
 const _CANOPY_FRAME_BY_SEASON := {
 	"winter": CANOPY_BARE,
 	"spring": CANOPY_BLOSSOM,
@@ -156,12 +176,33 @@ func canopy_for(species: String, season: String) -> Texture2D:
 	return frames[clampi(index, 0, frames.size() - 1)]
 
 
-## Every canopy frame for this species, in sheet order. Empty for a species
-## with no art, which the caller reads as "paint it procedurally".
+## Every canopy frame for this species, in sheet order: the four seasons,
+## then a fifth snow frame if the sheet has one (see CANOPY_SNOW).
+##
+## Empty for a species with no art, which the caller reads as "paint it
+## procedurally".
 func canopy_frames_for(species: String) -> Array[Texture2D]:
 	if has_composite(species):
 		return _composite_parts(species)["canopy"]
-	return _frames(canopy_path_for(species), CANOPY_FRAME_COUNT)
+	return _canopy_frames_from_sheet(canopy_path_for(species))
+
+
+## Whether this species' canopy carries a fifth, snow-covered frame past its
+## four seasons -- true for any species whose real sheet content turned out
+## to hold more than CANOPY_FRAME_COUNT drawings, composite or separate-file
+## alike, so a species gains this the moment its art does, with no roster to
+## maintain here.
+func has_snow_frame_for(species: String) -> bool:
+	return canopy_frames_for(species).size() > CANOPY_FRAME_COUNT
+
+
+## The snow-covered canopy, or null for a species whose sheet has no fifth
+## frame yet -- the fallback a caller gates a snow blend on, so a species
+## without this frame is never asked to blend toward one.
+func snow_canopy_for(species: String) -> Texture2D:
+	if not has_snow_frame_for(species):
+		return null
+	return canopy_frames_for(species)[CANOPY_SNOW]
 
 
 ## Every fruit frame this species has, in sheet order.
@@ -290,11 +331,39 @@ func _composite_parts(species: String) -> Dictionary:
 	return parts
 
 
-## Slices a sheet into `count` equal frames left to right.
+## Slices a canopy sheet by FINDING its real drawings, the same blob-detection
+## technique the composite layout's own canopy strip already uses (see
+## CompositeSheetSlicer) -- reused here rather than reimplemented, because a
+## separate canopy file is exactly the shape CompositeSheetSlicer already
+## reads: a single row of drawings of different sizes. Unlike the old
+## equal-width `_frames` cut, this survives a sheet whose frames are not all
+## the same width, which the snow frame added to the cherry sheet is not
+## (measured: 404/415/421/423/432px). It also means a species gains its
+## snow frame automatically the day its sheet grows a fifth drawing -- no
+## frame count to bump here, since none is declared.
+func _canopy_frames_from_sheet(path: String) -> Array[Texture2D]:
+	var empty: Array[Texture2D] = []
+	if path == "":
+		return empty
+	if _frame_cache.has(path):
+		return _frame_cache[path]
+	var sheet := _load_image(path)
+	if sheet == null:
+		return empty
+	var frames: Array[Texture2D] = []
+	for region in CompositeSheetSlicer.regions_in(sheet):
+		frames.append(ImageTexture.create_from_image(CompositeSheetSlicer.cut_out(sheet, region)))
+	_frame_cache[path] = frames
+	return frames
+
+
+## Slices a sheet into `count` equal frames left to right. Still used for
+## fruit (see fruit_frames_for), whose stages are not being changed here --
+## only the canopy path moved to content-based slicing (see
+## _canopy_frames_from_sheet).
 ##
 ## Equal slices, so a frame that came out a pixel wider than its neighbours
-## would drift the whole strip -- pinned by
-## test_canopy_frames_are_all_the_same_size.
+## would drift the whole strip.
 func _frames(path: String, count: int) -> Array[Texture2D]:
 	var empty: Array[Texture2D] = []
 	if path == "":

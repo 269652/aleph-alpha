@@ -57,6 +57,25 @@ func set_wind_strength(strength: float) -> void:
 	_wind_sway.set_wind_strength(strength)
 
 
+## How much snow lies on a canopy right now -- the live weather fact
+## EarthChunkManager._snow_depth already tracks for the GROUND (see
+## SnowLayer/docs/concept/seasons.md's CANOPY_SNOW section), pushed here so a
+## newly spawned tree's canopy is already dressed for it (see _texture_for).
+##
+## This is the SPAWN path only, mirroring set_wind_strength's own
+## store-and-forward shape. An already-standing tree is dressed by a
+## different mechanism entirely -- EarthChunkManager.sync_tree_season pushes
+## the same live depth straight to each loaded ChoppableTree's own
+## set_ripe_fruit, the same way it already pushes season/turn -- because
+## this renderer holds no reference to trees once they are spawned (see
+## EarthChunkManager._loaded_trees).
+var _snow_coverage := 0.0
+
+
+func set_snow_coverage(coverage: float) -> void:
+	_snow_coverage = coverage
+
+
 ## Spawns a collidable tree node (as a child of `parent`) for every forested
 ## cell in the chunk, positioned at its global tile coordinate. Returns the
 ## spawned nodes so the caller can free them again when the chunk unloads.
@@ -279,9 +298,14 @@ func _texture_for(position: Vector2) -> ImageTexture:
 	var season: String = canopy["season"]
 	var turning_into: String = canopy["turning_into"]
 	var turn_progress: float = canopy["turn_progress"]
-	var key := "%s_%s_%s_%.2f" % [species_id, season, turning_into, turn_progress]
+	# Snow belongs in the key for the same reason turn_progress does: a
+	# tree spawned mid-snowfall is a different picture from one spawned
+	# before it started, and the cache must not hand back a stale one.
+	var snow_level := ProceduralTreeSprite.snow_level(_snow_coverage)
+	var key := "%s_%s_%s_%.2f_%.2f" % [species_id, season, turning_into, turn_progress, snow_level]
 	if not _texture_cache.has(key):
 		_texture_cache[key] = _tree_sprite_generator.generate_texture_with_fruit(
-			genome.species_bias, hash(species_id), 0, season, turning_into, turn_progress
+			genome.species_bias, hash(species_id), 0, season, turning_into, turn_progress, 1.0,
+			_snow_coverage
 		)
 	return _texture_cache[key]

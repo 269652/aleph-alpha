@@ -296,7 +296,13 @@ func test_a_stage_index_is_the_canopy_frame_index_of_the_same_name():
 	var trees := IllustratedTree.new()
 	var frames := trees.canopy_frames_for("cherry")
 	assert_eq(TreePhenology.CANOPY_KEYS.size(), TreePhenology.STAGE_COUNT)
-	assert_eq(frames.size(), TreePhenology.STAGE_COUNT, "the premise: four frames")
+	# GREATER OR EQUAL, not equal: cherry now also carries a fifth, snow
+	# frame past the four named stages (see IllustratedTree.CANOPY_SNOW) --
+	# a live-weather overlay, not a phenology stage, so it is deliberately
+	# NOT one of TreePhenology's own stages. The premise this test actually
+	# needs is narrower: the first STAGE_COUNT frames are the four seasons,
+	# in order.
+	assert_gte(frames.size(), TreePhenology.STAGE_COUNT, "the premise: at least four frames")
 	for index in TreePhenology.STAGE_COUNT:
 		assert_eq(
 			trees.canopy_for("cherry", TreePhenology.CANOPY_KEYS[index]), frames[index],

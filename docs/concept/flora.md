@@ -1050,6 +1050,49 @@ species-first-then-generic lookup the flowers and the animals use, so adding a
 species costs its three sheets and one line of registration, and never touches
 anything already working.
 
+### A fifth frame: snow is not a season
+
+A canopy sheet may carry ONE more drawing past its four seasons -- how much
+snow lies on the branches. It is found the same way every other frame is
+(FINDING the real drawings on the sheet, not a declared count), so a species
+gains it the moment its art does, with no roster to maintain: `cherry`'s
+separate canopy file and every composite sheet's own top band are read by the
+exact same blob-detection code either way.
+
+**It is not a fifth season, and does not go in the bare/blossom/leaf/turning
+table.** Which of the four season frames a tree wears is a pure function of
+the world CLOCK (see [seasons.md](seasons.md)'s "The canopy is on the clock,
+not on the simulation") -- but how much of that canopy is under snow is a live
+WEATHER fact, the same one the GROUND's own lying snow already is (see
+seasons.md's "The ground carries the season too", and `SnowLayer`/`Snowfall`
+for the ground's own simulation-driven accumulation and thaw). Snow follows
+the ground's precedent, not the season frame's: a live-weather overlay layered
+ON TOP of whichever season is showing, not a new phenology stage a tree walks
+through in order. A forest can be dusted with snow while in full autumn colour,
+the same way real snow does not wait for the calendar.
+
+**It reuses the season turn's own branch-by-branch blend, rather than a new
+mechanism.** The exact same geodesic branch trace and per-tile clump jitter
+that spreads a season turn outward from the trunk (see "The canopy carries the
+season" above) blends a canopy toward its snow frame too -- seeded by the
+tree's own variant, so neighbouring trees of a species are snowed on different
+boughs rather than all wearing an identical white stamp. This is deliberately
+a reuse: the "each tree looks differently covered" property falls out of
+variance the season turn already has, not a second implementation of it.
+
+**A species without this frame renders exactly as it did before, whatever the
+snow value is.** Measured off the real cherry sheet at the time this was
+built: the sheet grew a genuine fifth column (five real, unevenly-sized
+drawings, not four sliced evenly), and the new one reads as neutral grey-white
+against every season frame's own hue -- brown bark, pink blossom, green leaf,
+orange turning. By the time the plumbing landed, a second, independent art
+pass had already added the same fifth column to every other illustrated
+species' composite sheet, so today there is no species left in the roster
+without one -- but the fallback this was built for is real and load-bearing
+for whichever species is next: it is a strict boolean gate (`has_snow_frame_for`)
+checked before a canopy image is ever touched, not a threshold or an
+assumption about the roster.
+
 
 ## Recolouring illustrated blooms
 

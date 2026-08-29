@@ -3087,11 +3087,18 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			var state: Dictionary = _fruiting_model.state_at(
 				genome, now, warmth, yield_multiplier, ripening_multiplier
 			)
+			# _snow_depth, not a value read once at the top of this function:
+			# this call site is the only one of the two per-tree redraw
+			# loops (see sync_tree_season's own) that runs on every single
+			# fruiting tick regardless of the season/turn/snow signature --
+			# leaving snow out of this call would silently reset a nearby
+			# tree's snow back to zero on the very next tick.
 			tree.set_ripe_fruit(
 				int(state.get("ripe", 0)),
 				canopy_season,
 				canopy_turning_into,
-				canopy_turn_progress
+				canopy_turn_progress,
+				_snow_depth
 			)
 
 			# Every tree reaching here already passed the FRUITING_DETAIL_RADIUS
@@ -3669,6 +3676,14 @@ func set_snow_layer(snow_layer: TileMapLayer) -> void:
 ## top of it. The ground is covered, not replaced.
 func set_snow_depth(depth: float) -> void:
 	_snow_depth = clampf(depth, 0.0, 1.0)
+	# Forwards to the canopy the same way set_wind_strength forwards to
+	# _tree_renderer -- so a tree spawned right after a deliberate depth set
+	# (this call; /weather or similar) is already dressed for it. The other,
+	# more frequent live path (step_snow, called every frame and NOT routed
+	# through this setter -- see its own body) is carried the rest of the
+	# way by sync_tree_season instead, which is what actually reaches an
+	# ALREADY-standing tree (see its own doc comment).
+	_tree_renderer.set_snow_coverage(_snow_depth)
 	_repaint_snow()
 
 
@@ -5482,11 +5497,25 @@ func step_flowers(delta: float) -> void:
 ## whichever player happened to trigger them.
 func sync_tree_season(player_pixel: Variant = null) -> void:
 	_tree_renderer.set_world_age_seconds(_world_age_seconds)
+	# Snow, alongside the clock: this is the "redraw path" that reaches a
+	# tree ALREADY standing (see TreeRenderer.set_snow_coverage's own doc
+	# comment for why that setter alone only reaches a freshly SPAWNED one).
+	# Read directly off _snow_depth rather than relying on set_snow_depth
+	# having been called -- step_snow, the real per-frame path, sets it
+	# directly and does not go through that setter (see step_snow's body).
+	_tree_renderer.set_snow_coverage(_snow_depth)
 	var canopy := _tree_renderer.canopy_state()
 	var season_name: String = canopy["season"]
 	var turning_into: String = canopy["turning_into"]
 	var turn_progress: float = canopy["turn_progress"]
-	var signature := "%s/%s/%.2f" % [season_name, turning_into, turn_progress]
+	# Snow is folded into the signature QUANTISED (see ProceduralTreeSprite.
+	# snow_level), not raw -- lying snow changes by fractions of a percent
+	# every frame, and comparing the raw value would defeat the whole point
+	# of this guard, redrawing every tree in range on every tick of a
+	# snowfall instead of a handful of times per snowfall the way a season
+	# turn already does.
+	var snow_signature := ProceduralTreeSprite.snow_level(_snow_depth)
+	var signature := "%s/%s/%.2f/%.2f" % [season_name, turning_into, turn_progress, snow_signature]
 	if signature == _last_tree_season:
 		return
 	_last_tree_season = signature
@@ -5500,7 +5529,7 @@ func sync_tree_season(player_pixel: Variant = null) -> void:
 			):
 				continue
 			tree.set_ripe_fruit(
-				tree.ripe_fruit_count(), season_name, turning_into, turn_progress
+				tree.ripe_fruit_count(), season_name, turning_into, turn_progress, _snow_depth
 			)
 
 

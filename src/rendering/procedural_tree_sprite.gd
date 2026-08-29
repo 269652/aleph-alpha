@@ -14,6 +14,7 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
+const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
@@ -87,12 +88,16 @@ func generate_texture_with_fruit(
 	season: String = "",
 	turning_into: String = "",
 	turn_progress: float = 0.0,
-	growth: float = 1.0
+	growth: float = 1.0,
+	snow_coverage: float = 0.0
 ) -> ImageTexture:
 	# The turn is part of the key: a half-turned tree is its own picture.
 	# Quantised upstream (SeasonTransition.TURN_STEPS) precisely so this stays
-	# a small, affordable set rather than one image per frame.
-	var key := "%s/%s/%s/%.2f/%d/%d/%.2f" % [
+	# a small, affordable set rather than one image per frame. Snow coverage
+	# is quantised HERE instead (see snow_level's own doc comment), since --
+	# unlike the turn -- nothing upstream already coarsens it: live snow
+	# depth changes by fractions of a percent every tick.
+	var key := "%s/%s/%s/%.2f/%d/%d/%.2f/%.2f" % [
 		_species_id_for(species_bias),
 		season,
 		turning_into,
@@ -100,12 +105,14 @@ func generate_texture_with_fruit(
 		crop_level_for(ripe_count),
 		tree_variant_for(seed_value),
 		growth_level(growth),
+		snow_level(snow_coverage),
 	]
 	if _tree_texture_cache.has(key):
 		return _tree_texture_cache[key]
 	var texture := ImageTexture.create_from_image(
 		generate_image_with_fruit(
-			species_bias, seed_value, ripe_count, season, turning_into, turn_progress, growth
+			species_bias, seed_value, ripe_count, season, turning_into, turn_progress, growth,
+			snow_coverage
 		)
 	)
 	_tree_texture_cache[key] = texture
@@ -151,6 +158,11 @@ func generate_bare_trunk_image(species_bias: float, seed_value: int, season: Str
 ## `turning_into` and `turn_progress` blend the canopy toward the next season
 ## (see SeasonTransition). Progress 0 is simply `season`, 1 is simply
 ## `turning_into`, and in between the canopy turns BRANCH BY BRANCH.
+## `snow_coverage` layers a live-weather snow blend ON TOP of whatever the
+## above already drew (see the "Snow" section below and _composite_
+## illustrated) -- 0.0, the default, is a no-op for every call site that
+## predates this parameter, and for every species without a snow frame
+## regardless of value (see IllustratedTree.has_snow_frame_for).
 func generate_image_with_fruit(
 	species_bias: float,
 	seed_value: int,
@@ -158,12 +170,14 @@ func generate_image_with_fruit(
 	season: String = "",
 	turning_into: String = "",
 	turn_progress: float = 0.0,
-	growth: float = 1.0
+	growth: float = 1.0,
+	snow_coverage: float = 0.0
 ) -> Image:
 	var species_id := _species_id_for(species_bias)
 	if IllustratedTree.has_art_for(species_id):
 		return _composite_illustrated(
-			species_id, seed_value, ripe_count, season, turning_into, turn_progress, growth
+			species_id, seed_value, ripe_count, season, turning_into, turn_progress, growth,
+			snow_coverage
 		)
 
 	var image := Image.create(SIZE.x, SIZE.y, false, Image.FORMAT_RGBA8)
@@ -645,15 +659,29 @@ static var _piece_cache := {}
 static var _scaled_cache := {}
 
 
+## A pseudo-"season" key for `_piece_image`/`_scaled_piece`, standing in for
+## the snow canopy frame rather than any real SeasonCycle.SEASONS name (it
+## collides with none of them). Reusing the trunk's own "fetch per season
+## even though it never changes" shape rather than a parallel cache is what
+## lets the snow frame share _piece_cache/_scaled_cache with every other
+## piece -- a wood asking for the same handful of scaled snow crowns is
+## exactly the case those caches already exist for.
+const SNOW_CANOPY_KEY := "snow"
+
+
 ## A sliced piece as a trimmed Image, fetched from the GPU once and kept.
 func _piece_image(species_id: String, season: String, role: String) -> Image:
 	var key := "%s/%s/%s" % [species_id, season, role]
 	if _piece_cache.has(key):
 		return _piece_cache[key]
 	var art := IllustratedTree.new()
-	var texture: Texture2D = (
-		art.trunk_for(species_id) if role == "trunk" else art.canopy_for(species_id, season)
-	)
+	var texture: Texture2D
+	if role == "trunk":
+		texture = art.trunk_for(species_id)
+	elif season == SNOW_CANOPY_KEY:
+		texture = art.snow_canopy_for(species_id)
+	else:
+		texture = art.canopy_for(species_id, season)
 	var image: Image = null
 	if texture != null:
 		image = _trimmed(texture.get_image())
@@ -749,7 +777,8 @@ func _composite_illustrated(
 	season: String,
 	turning_into: String = "",
 	turn_progress: float = 0.0,
-	growth: float = 1.0
+	growth: float = 1.0,
+	snow_coverage: float = 0.0
 ) -> Image:
 	var image := Image.create(SIZE.x, SIZE.y, false, Image.FORMAT_RGBA8)
 	var art := IllustratedTree.new()
@@ -795,6 +824,22 @@ func _composite_illustrated(
 	# the season turn already walks.
 	if canopy_image != null and growth < 1.0:
 		canopy_image = _grown_canopy(canopy_image, growth, tree_variant_for(seed_value))
+
+	# Snow: layered ON TOP of whatever season/turn/growth already drew, not
+	# instead of it -- a live-weather fact, not another phenology stage (see
+	# IllustratedTree.CANOPY_SNOW's own doc comment). Reuses the SAME
+	# branch-order blend the season turn uses (_turned_canopy): this is a
+	# reuse of the existing per-tree branch-order variance, not a new blend
+	# mechanism, which is why two trees show snow on different boughs at the
+	# same coverage. Gated on has_snow_frame_for so a species without this
+	# frame renders identically whatever snow_coverage is -- the fallback
+	# contract for every species that has not gained one yet.
+	if canopy_image != null and snow_coverage > 0.0 and art.has_snow_frame_for(species_id):
+		var snow_image := _scaled_piece(species_id, SNOW_CANOPY_KEY, "canopy", canopy_box.size)
+		if snow_image != null:
+			canopy_image = _turned_canopy(
+				canopy_image, snow_image, snow_level(snow_coverage), tree_variant_for(seed_value)
+			)
 	if canopy_image != null:
 		_blend_at(image, canopy_image, canopy_box.position.x, canopy_box.position.y)
 
@@ -934,6 +979,33 @@ const GROWTH_LEVELS := 6
 
 static func growth_level(growth: float) -> float:
 	return ceilf(clampf(growth, 0.0, 1.0) * float(GROWTH_LEVELS)) / float(GROWTH_LEVELS)
+
+
+## ## Snow: a live-weather overlay, not a season
+##
+## How much of a canopy is under snow is not one of the four season frames --
+## it is a live fact about the weather (see IllustratedTree.CANOPY_SNOW's own
+## doc comment), pushed in continuously as lying snow accumulates or thaws.
+## Left unquantised it would mean a new tree picture every time snow depth
+## ticked by a fraction of a percent -- exactly the "one image per frame"
+## cost GROWTH_LEVELS/SeasonTransition.TURN_STEPS already exist to avoid.
+##
+## Quantised to SnowLayer.DEPTH_BANDS rather than an invented number: that is
+## the real granularity the GROUND's own lying snow already steps through
+## (10 bands, one per row of the illustrated snow-overlay sheet -- see
+## SnowLayer). Reusing it means a canopy's snow response is exactly as coarse
+## or fine as the snow already lying at its own foot, so the two can never
+## visibly disagree about how gradually a snowfall settles in.
+const SNOW_LEVELS := SnowLayer.DEPTH_BANDS
+
+
+## The snow coverage LEVEL a tree draws at -- used both for the texture cache
+## key (see generate_texture_with_fruit) and as the actual blend progress
+## (see _composite_illustrated), so the two can never drift apart. Rounded UP
+## like growth_level: a barely-dusted crown should show something rather than
+## wait for a whole step to complete.
+static func snow_level(coverage: float) -> float:
+	return ceilf(clampf(coverage, 0.0, 1.0) * float(SNOW_LEVELS)) / float(SNOW_LEVELS)
 
 
 ## How much of a GROWING canopy's order comes from the branch trace rather than

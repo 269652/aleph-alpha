@@ -203,6 +203,21 @@ snow and canopy all read the start of spring. That is one bug in the clock
 rather than four in its readers, and the canopy now shares the ground's fate
 instead of having a second, worse one of its own.
 
+**This principle is about the SEASON dimension specifically, and does not
+extend to canopy snow.** Which of the four season frames a tree wears has to
+be a pure function of the clock, for exactly the reasons argued above — but
+*how much* of that canopy is under snow is legitimately a live SIMULATION
+fact, the same way the ground's own lying snow already is (see "The ground
+carries the season too" above: ground tint is clock-driven, ground snow is
+simulation-driven, `SnowLayer`/`EarthChunkManager._snow_depth`, accumulated
+from real weather via `Snowfall.accumulate` and forceable with `/weather`).
+Canopy snow is a second overlay of that same kind, layered on the canopy
+instead of the ground beneath it, pushed through the same forwarding shape
+`set_wind_strength` already uses (`TreeRenderer.set_snow_coverage`) — not a
+fifth phenology stage `TreePhenology` needs to know about. Full spec, with
+the measured sheet facts, in [flora.md](flora.md)'s "A fifth frame: snow is
+not a season".
+
 ## Winter stays bare: the canopy has its own phenology
 
 Reported from a world that started in **winter**: pink cherry blossom and

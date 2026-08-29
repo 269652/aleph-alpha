@@ -37,8 +37,12 @@ func test_a_species_with_no_art_yields_no_frames():
 
 # -- the canopy carries the season -------------------------------------------
 
+## Cherry now ALSO carries a fifth, snow-covered frame (see CANOPY_SNOW) --
+## a real column the sheet grew, not a season. The four season frames are
+## still there, unmoved, at their same indices; this is one MORE than the
+## season count, not a replacement for any of them.
 func test_a_canopy_has_one_frame_per_season():
-	assert_eq(trees.canopy_frames_for("cherry").size(), SeasonCycle.SEASONS.size())
+	assert_eq(trees.canopy_frames_for("cherry").size(), SeasonCycle.SEASONS.size() + 1)
 
 
 ## The frames map to seasons by MEANING, not by their order in the sheet.
@@ -86,6 +90,65 @@ func test_an_unknown_season_still_yields_a_canopy():
 	)
 
 
+# -- the fifth frame: snow ----------------------------------------------------
+#
+# A canopy sheet may carry a FIFTH drawing after the four seasons -- how much
+# snow lies on the branches. Unlike bare/blossom/leaf/turning this is not a
+# season: it is a live-weather overlay (see ProceduralTreeSprite's own snow
+# section and docs/concept/seasons.md), so it gets its own slot rather than a
+# fifth entry in _CANOPY_FRAME_BY_SEASON.
+
+func test_a_species_with_snow_art_reports_a_snow_frame():
+	assert_true(trees.has_snow_frame_for("cherry"))
+
+
+## has_snow_frame_for counts real frames -- it does not name a species -- so
+## an id with no registered art at all trivially has none. This is the gate
+## the "rest follows" fallback actually leans on (see ProceduralTreeSprite),
+## and it needs no roster of "which species have snow yet" to stay correct.
+func test_an_unregistered_species_has_no_snow_frame():
+	assert_false(trees.has_snow_frame_for("not_a_real_species"))
+
+
+## Every illustrated species carries a snow frame as of this writing --
+## verified against the REAL sheets on disk, not assumed from the roster.
+## The task this was built from started from "only cherry has it, the rest
+## follow" as a measured fact; by the time this landed, a second session had
+## independently added the same fifth column to every composite sheet
+## (acorn/hazelnut/apple/walnut/pine) while cherry's own separate-file one
+## was being wired up here. has_snow_frame_for needed no code change for
+## that -- it counts real frames rather than naming species -- which is
+## exactly what this test is pinning: if a future edit ever regresses one
+## sheet back to four frames, this notices.
+func test_every_illustrated_species_currently_has_a_snow_frame():
+	for species in IllustratedTree.SPECIES_WITH_ART:
+		assert_true(trees.has_snow_frame_for(species), "%s should report a snow frame" % species)
+
+
+func test_the_snow_frame_is_the_fifth_canopy_frame():
+	var frames := trees.canopy_frames_for("cherry")
+	assert_eq(frames.size(), IllustratedTree.CANOPY_SNOW + 1)
+	assert_eq(trees.snow_canopy_for("cherry"), frames[IllustratedTree.CANOPY_SNOW])
+
+
+func test_a_species_without_a_snow_frame_yields_no_snow_canopy():
+	assert_null(trees.snow_canopy_for("not_a_real_species"))
+
+
+## Snow reads as neutral grey-white, unlike every season frame, which is
+## dominated by its own hue (brown bark, pink blossom, green leaf, orange
+## turning). Measured off the real sheet: the snow region's mean colour is
+## (0.458, 0.443, 0.468) -- practically equal channels -- against the leaf
+## region's (0.212, 0.271, 0.022), which is nowhere near neutral.
+func test_the_snow_frame_reads_neutral_rather_than_a_season_hue():
+	var snow_neutral := _neutral_share(trees.snow_canopy_for("cherry").get_image())
+	var leaf_neutral := _neutral_share(trees.canopy_for("cherry", "summer").get_image())
+	assert_gt(
+		snow_neutral, leaf_neutral,
+		"the snow frame should read far greyer than a green summer canopy"
+	)
+
+
 # -- fruit -------------------------------------------------------------------
 
 ## Two frames, so a crop coming in is visible on the tree before it can be
@@ -118,13 +181,23 @@ func test_a_trunk_is_a_single_image():
 	assert_gt(trees.trunk_for("cherry").get_width(), 0)
 
 
-## Frames are equal slices of their sheet -- a frame that is a pixel wider than
-## its neighbours would drift the whole strip.
-func test_canopy_frames_are_all_the_same_size():
-	var frames := trees.canopy_frames_for("cherry")
-	for frame in frames:
-		assert_eq(frame.get_width(), frames[0].get_width())
-		assert_eq(frame.get_height(), frames[0].get_height())
+## Frames are each their OWN real content, not equal slices of the sheet --
+## exactly like the composite layout's canopy strip already is (see
+## CompositeSheetSlicer). Equal-slicing was an artefact of the old naive
+## _frames() cut, not a real requirement: nothing downstream needs same-size
+## frames (illustrated_canopy_box already re-trims and re-scales whichever
+## frame it is handed). Measured on the real sheet, the five frames are
+## 404/415/421/423/432px wide -- close, but never equal, because a bare
+## winter bough really does take up less of the sheet than a snow-laden
+## crown right beside it.
+func test_canopy_frames_keep_their_own_content_size_not_an_equal_slice():
+	var widths := {}
+	for frame in trees.canopy_frames_for("cherry"):
+		widths[frame.get_width()] = true
+	assert_gt(
+		widths.size(), 1,
+		"content-trimmed frames should not all share one width the way equal slices would"
+	)
 
 
 func test_every_frame_has_real_content():
@@ -161,6 +234,22 @@ func _green_share(image: Image) -> float:
 			if degrees > 70.0 and degrees < 170.0 and pixel.s > 0.2:
 				green += 1
 	return float(green) / float(maxi(total, 1))
+
+
+## Share of painted pixels that read as near-neutral grey/white rather than
+## any real hue -- low saturation, regardless of how light or dark.
+func _neutral_share(image: Image) -> float:
+	var neutral := 0
+	var total := 0
+	for y in range(0, image.get_height(), 4):
+		for x in range(0, image.get_width(), 4):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a <= 0.5:
+				continue
+			total += 1
+			if pixel.s < 0.15:
+				neutral += 1
+	return float(neutral) / float(maxi(total, 1))
 
 
 func _red_share(image: Image) -> float:
@@ -394,8 +483,13 @@ func test_a_composite_species_has_art():
 	assert_true(trees.has_art_for("walnut"))
 
 
+## Walnut's composite sheet now also carries a fifth, snow-covered canopy
+## drawing (see CANOPY_SNOW) -- one MORE than the four seasons, not a
+## replacement for any of them; the blob detection that already read this
+## sheet's top band needed no change to pick it up (see
+## test_every_illustrated_species_currently_has_a_snow_frame).
 func test_a_composite_yields_the_same_four_canopies():
-	assert_eq(trees.canopy_frames_for("walnut").size(), SeasonCycle.SEASONS.size())
+	assert_eq(trees.canopy_frames_for("walnut").size(), SeasonCycle.SEASONS.size() + 1)
 
 
 func test_a_composite_yields_a_trunk():
@@ -911,6 +1005,103 @@ func test_two_trees_turn_in_different_orders():
 		first.get_data(), second.get_data(),
 		"every tree in the wood turns in the same order"
 	)
+
+
+# -- snow: a live-weather overlay, composed AFTER season/turn/growth --------
+#
+# Unlike bare/blossom/leaf/turning, how much of a canopy is under snow is not
+# a season -- it is a live weather fact, the same one the ground's own lying
+## snow already is (see IllustratedTree.CANOPY_SNOW's own doc comment). It
+# reuses the exact same branch-order blend the season turn does (see
+# _turned_canopy), which is the whole point: this is a reuse, not a new
+# blend mechanism.
+
+## Coverage 0 is exactly the untouched tree -- the same picture the season/
+## turn/growth pipeline already produced, byte for byte. Every call site that
+## predates this parameter passes no ninth argument at all, which is exactly
+## this default.
+func test_zero_snow_coverage_is_the_untouched_tree():
+	var sprite := ProceduralTreeSprite.new()
+	assert_eq(
+		sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, "winter", "", 0.0, 1.0, 0.0
+		).get_data(),
+		sprite.generate_image_with_fruit(_cherry_bias(), 7, 0, "winter").get_data()
+	)
+
+
+## It covers PROGRESSIVELY, the same way a season turn advances step by step
+## rather than jumping between two states (see SNOW_LEVELS).
+func test_snow_covers_progressively_more_as_coverage_rises():
+	var sprite := ProceduralTreeSprite.new()
+	var seen := {}
+	for step in 6:
+		var coverage := float(step) / 5.0
+		var image := sprite.generate_image_with_fruit(
+			_cherry_bias(), 7, 0, "winter", "", 0.0, 1.0, coverage
+		)
+		seen[image.get_data()] = true
+	assert_eq(seen.size(), 6, "snow coverage should advance step by step, not jump")
+
+
+## Two trees at the SAME coverage are covered on DIFFERENT branches -- the
+## same per-tree branch-order variance the season turn already has (see
+## tree_variant_for), not one shared "snow" stamp applied identically to
+## every tree of a species.
+func test_two_trees_show_different_snowed_branches_at_the_same_coverage():
+	var sprite := ProceduralTreeSprite.new()
+	var seeds: Array[int] = []
+	for seed_value in 60:
+		if sprite.tree_variant_for(seed_value) not in seeds:
+			seeds.append(seed_value)
+		if seeds.size() >= 2:
+			break
+	var first := sprite.generate_image_with_fruit(
+		_cherry_bias(), seeds[0], 0, "winter", "", 0.0, 1.0, 0.6
+	)
+	var second := sprite.generate_image_with_fruit(
+		_cherry_bias(), seeds[1], 0, "winter", "", 0.0, 1.0, 0.6
+	)
+	assert_ne(
+		first.get_data(), second.get_data(),
+		"every tree in the wood should show snow on the same branches"
+	)
+
+
+## Snow layers ON TOP of the turn, rather than instead of it: a tree caught
+## mid-turn under snow should be neither the plain turned canopy nor the
+## plain snowed one.
+func test_snow_composes_on_top_of_a_season_turn_not_instead_of_it():
+	var sprite := ProceduralTreeSprite.new()
+	var turned_only := sprite.generate_image_with_fruit(
+		_cherry_bias(), 7, 0, "autumn", "winter", 0.5
+	).get_data()
+	var snowed_turn := sprite.generate_image_with_fruit(
+		_cherry_bias(), 7, 0, "autumn", "winter", 0.5, 1.0, 0.6
+	).get_data()
+	assert_ne(turned_only, snowed_turn, "snow on a mid-turn tree should change the picture")
+
+
+## The fallback guarantee -- a species without a snow frame must render
+## identically whatever snow_coverage is -- rests entirely on
+## IllustratedTree.has_snow_frame_for, which _composite_illustrated's own
+## snow block checks before ever touching a canopy image (see its doc
+## comment above). That gate is unit-tested directly in
+## test_illustrated_tree.gd's own snow section
+## (test_an_unregistered_species_has_no_snow_frame,
+## test_a_species_without_a_snow_frame_yields_no_snow_canopy).
+##
+## It cannot ALSO be demonstrated end-to-end here against a real species,
+## the way it could have been when this was written: TreeSpecies.IDS covers
+## exactly six named species and _unillustrated_bias() (below) can only ever
+## return one of them, so there is no species_bias that reaches the
+## procedural, non-illustrated branch at all -- and by the time this
+## feature landed, a second session had independently given every one of
+## those six a snow frame too (see
+## test_every_illustrated_species_currently_has_a_snow_frame), so none of
+## them can stand in for "art without snow" either. The guarantee is real
+## and holds by construction; there is simply no species left in the
+## current roster to prove it against pixel-for-pixel.
 
 
 # -- a young tree has fewer branches, not a smaller picture ------------------
