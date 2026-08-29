@@ -271,6 +271,7 @@ var _ground_tint := GroundTint.new()
 
 @onready var _terrain: TileMapLayer = $Terrain
 @onready var _water_fx: TileMapLayer = $WaterFx
+@onready var _river_flow_fx: TileMapLayer = $RiverFlowFx
 @onready var _hillshade_fx: TileMapLayer = $HillshadeFx
 ## Snow lies here rather than as a tint on the ground, so footprints can be
 ## carved out of it (see SnowLayer).
@@ -651,6 +652,10 @@ func _ready() -> void:
 	# GPU water: continuous noise-driven waves over every ocean cell,
 	# translucent so shore foam and rain ripples show through (WaterShader).
 	_chunk_manager.set_water_layer(_water_fx)
+	# Directional current over river cells only, on top of the still-water
+	# base above (see RiverFlowShader, docs/concept/rivers.md -- rivers
+	# previously looked exactly like still ocean water).
+	_chunk_manager.set_river_flow_layer(_river_flow_fx)
 	_chunk_manager.set_snow_layer(_snow_fx)
 	# GPU relief shading: real slope/aspect data shaded by the real, live sun
 	# position (see HillshadeShader, docs/concept/terrain_relief.md).

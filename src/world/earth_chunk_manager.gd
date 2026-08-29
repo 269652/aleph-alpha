@@ -39,6 +39,7 @@ const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 const HillshadeShader = preload("res://src/rendering/hillshade_shader.gd")
+const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
@@ -299,6 +300,8 @@ var _water_material: ShaderMaterial  # the water overlay's shared shader materia
 var _water_shader := WaterShader.new()  # owns _water_material's disturbance buffer, see record_water_disturbance
 var _hillshade_layer: TileMapLayer  # optional GPU relief-shading overlay, see set_hillshade_layer
 var _hillshade_shader := HillshadeShader.new()
+var _river_flow_layer: TileMapLayer  # optional GPU river-flow overlay, see set_river_flow_layer
+var _river_flow_shader := RiverFlowShader.new()
 ## The player's own current tile, refreshed every update() call -- named for
 ## its original use (culling far-off water disturbances, see
 ## record_water_disturbance / DISTURBANCE_RADIUS_TILES) but also doubles as
@@ -2561,6 +2564,20 @@ func set_hillshade_layer(hillshade_layer: TileMapLayer) -> void:
 		_paint_hillshade_overlay(chunk_coord, _loaded_chunks[chunk_coord])
 
 
+## Registers the GPU river-flow overlay layer (see RiverFlowShader,
+## TerrainRenderer.build_river_flow_tile_set, docs/concept/rivers.md) --
+## same optional, fail-open shape as set_hillshade_layer above, but the
+## layer itself is SPARSE (see _paint_river_flow_overlay): only real river
+## cells ever get a tile, everywhere else stays empty/transparent.
+func set_river_flow_layer(river_flow_layer: TileMapLayer) -> void:
+	_river_flow_layer = river_flow_layer
+	river_flow_layer.tile_set = _terrain_renderer.build_river_flow_tile_set()
+	river_flow_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	river_flow_layer.material = _river_flow_shader.shared_material()
+	for chunk_coord in _loaded_chunks:
+		_paint_river_flow_overlay(chunk_coord, _loaded_chunks[chunk_coord])
+
+
 ## Registers the roof overlay layer (see docs/concept/
 ## building.md#what-enterable-means-in-a-top-down-game): a roof piece shares
 ## its cell with the floor beneath it, so it paints onto its own TileMapLayer
@@ -2782,6 +2799,37 @@ func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
 			_hillshade_layer.set_cell(
 				global, 0, _terrain_renderer.atlas_coords_for_hillshade(slope, aspect)
+			)
+
+
+## Marks every RIVER cell of a loaded chunk (see EarthChunkGenerator.
+## is_river_at_global, docs/concept/rivers.md) with its real downhill flow
+## direction (TerrainRelief.aspect_degrees_from_gradient -- "the direction
+## water would actually flow"), and erases anything already painted at a
+## now-non-river cell. Deliberately SPARSE, unlike _paint_hillshade_overlay
+## above (which paints every cell): only water should ever show a flowing
+## current. Rivers previously looked exactly like still ocean water
+## (reported: "rivers should flow").
+func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if _river_flow_layer == null:
+		return
+	var relief := generator.terrain_relief()
+	var origin := chunk_coord * CHUNK_SIZE
+	for y in chunk.height:
+		for x in chunk.width:
+			var global := origin + Vector2i(x, y)
+			if not generator.is_river_at_global(global.x, global.y):
+				_river_flow_layer.erase_cell(global)
+				continue
+			var gradient := gradient_at_global(global.x, global.y)
+			var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
+			# Flat ground has no defined aspect (-1.0 sentinel) -- real
+			# terrain is never perfectly flat at bilinear-interpolated
+			# resolution in practice, but fall back to due-north rather
+			# than feed a negative angle into the atlas lookup if it ever is.
+			var flow_angle := aspect if aspect >= 0.0 else 0.0
+			_river_flow_layer.set_cell(
+				global, 0, _terrain_renderer.atlas_coords_for_river_flow(flow_angle)
 			)
 
 
@@ -5266,6 +5314,12 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 	return generator.is_river_at_global(global_x, global_y)
 
 
+## Same always-delegates shape as is_river_at_global above (see
+## docs/concept/rivers.md).
+func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
+	return generator.river_depth_meters_at_global(global_x, global_y)
+
+
 func biome_at_global(global_x: int, global_y: int) -> String:
 	var chunk: Chunk = _loaded_chunks.get(_chunk_coord_for_tile(Vector2i(global_x, global_y)))
 	if chunk == null:
@@ -6243,6 +6297,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_paint_water_overlay(chunk_coord, chunk)
 	_paint_hillshade_overlay(chunk_coord, chunk)
+	_paint_river_flow_overlay(chunk_coord, chunk)
 	# So a chunk streamed in mid-snowfall shows the snow already lying,
 	# instead of staying bare until the next field-wide depth change happens
 	# to repaint it (see _paint_snow_chunk's own doc comment).
@@ -6764,6 +6819,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.erase(_water_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _hillshade_layer != null:
 		_terrain_renderer.erase(_hillshade_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	if _river_flow_layer != null:
+		_terrain_renderer.erase(_river_flow_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _roof_layer != null:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _snow_layer != null:

@@ -146,12 +146,72 @@ shader machinery ocean already has, unmodified. The visual result: a blue,
 shore-blended, rain-rippling ribbon threading over the real ground texture
 underneath, exactly like a real river does.
 
+## Flow: a real direction, animated (2026-08-29)
+
+Reported directly: "rivers should flow" — a river read as visually
+identical to still ocean, since `_paint_water_overlay` treats every water
+cell alike. `EarthChunkManager._paint_river_flow_overlay` adds a SECOND,
+SPARSE overlay layer (`RiverFlowFx`, painted only where `is_river_at_global`
+is true — everywhere else stays empty/transparent, unlike the water/
+hillshade overlays which paint every loaded cell) carrying each river
+cell's real downhill direction (`TerrainRelief.
+aspect_degrees_from_gradient` — "the direction water would actually flow",
+by that function's own doc comment, the SAME real elevation-gradient
+primitive hillshading already samples). `RiverFlowShader` reads that
+direction and animates a translucent, directional streak pattern scrolling
+downstream over the base water color, the same "bake data into a small
+quantized tile atlas, animate continuously on the GPU from a live/derived
+uniform" shape hillshade's slope/aspect overlay already established
+(`ProceduralRiverFlowSprite`, 16 compass bins).
+
+This is `docs/concept/electromagnetism.md`'s own long-standing, previously-
+unvalidated water-wheel proposal ("flow speed is derived from the water
+tile's own local elevation gradient") **partially built**: direction is now
+real and driving a real visual. Speed is deliberately uniform
+(`RiverFlowShader.FLOW_SPEED`) rather than magnitude-derived — no per-river
+discharge/velocity figure is curated, so a gradient-magnitude-accurate
+speed would be precision this system doesn't have data for. The water
+wheel itself (torque, power generation) remains unbuilt; only the visual
+half of that doc's proposal is validated here.
+
+## Player interaction: wading, swimming, and the submersion tint
+
+`Player._resolve_water_state` originally only checked real elevation-
+below-sea-level (`BiomeClassifier.depth_at`), which every river tile fails
+by construction (a river never changes `biome_at_global`'s own elevation-
+derived result, per Rendering above) — so a player could walk straight
+through a river with no wading/swimming, no submersion tint
+(`SubmersionShader`, already fully built and wired for ocean via
+`character_view.gd` before this doc existed), and no water-disturbance
+ripples at all. Reported directly alongside the flow request: "char should
+be tinted for underwater."
+
+`river_depth.gd` gives rivers a real (if not survey-accurate) depth:
+curated rivers deepen toward their own centerline using the exact same
+`distance_to_nearest_river_tiles` the width band already computes (0 at
+the centerline's real deepest point, shallowing to 0 m at
+`RIVER_HALF_WIDTH_TILES`), calibrated so the range spans both
+`WaterMovementModel.WADE_DEPTH_METERS`'s wading band AND real swimming
+depth — a wide curated river genuinely offers a wadeable bank and a
+swimmable middle, not just one or the other. Procedural rivers stay a
+flat, shallower "minor stream" depth that never quite reaches swimming.
+`_resolve_water_state` now takes `maxf(ocean_depth, river_depth)`, so nothing
+about ocean's existing behavior changes. Once depth is real, the entire
+pre-existing chain (`current_mode` → `CharacterView.MovementState.SWIMMING`
+→ `SubmersionShader.set_waterline`) fires exactly as it already does for
+ocean — no new tinting code was needed, only real river depth for the
+existing mechanism to actually see.
+
 ## What this pass touches, and what it deliberately doesn't
 
 Touches:
 - `_find_dry_land_spawn` (`scenes/world.gd`) excludes river tiles the same
   way it already excludes ocean, so a fresh spawn search can't land a
   player in a river.
+- `Player._resolve_water_state` now consults real river depth (see above)
+  — wading, swimming, the submersion tint, and water-disturbance ripples
+  all now work in rivers, not just ocean.
+- A real, animated flow-direction overlay (see Flow above).
 
 Deliberately deferred (named here so nothing pretends to be more finished
 than it is, matching this project's usual practice):
@@ -162,8 +222,14 @@ than it is, matching this project's usual practice):
 - **Village water-avoidance** — `village_renderer.gd`'s dry-origin search
   doesn't yet know about the new `is_river_at_global` query; a village
   could still be placed straddling a river. Follow-up, not attempted here.
-- **Flow velocity / the water wheel** (`docs/concept/electromagnetism.md`) —
-  unchanged; still an open, unvalidated proposal.
+- **Creature water-depth awareness** — only `Player._resolve_water_state`
+  was wired to real river depth; whatever the equivalent creature-side
+  swim/depth logic is (fish population/kingfisher wading, animal swimming)
+  was not audited or touched here.
+- **The water wheel mechanic itself** (`docs/concept/electromagnetism.md`)
+  — flow DIRECTION is now real and visualized (see Flow above), but no
+  torque/power-generation mechanic exists yet; still an open proposal for
+  that half.
 - **Boats, fords, ferries, bridges** (`docs/concept/transportation.md`,
   `docs/concept/infrastructure.md`) — unchanged; both docs already scope
   these as entirely unbuilt, and this pass adds the water they'd cross
@@ -184,6 +250,10 @@ than it is, matching this project's usual practice):
 - **Procedural fallback (noise-contour proxy)** — ✅ Done, honestly scoped
   as a stylized proxy, not a flow-accumulation simulation.
 - **Rendering (water overlay reuse)** — ✅ Done.
+- **Flow direction (animated overlay)** — ✅ Done. Flow-rate-accurate speed,
+  and the water wheel mechanic itself — ⬜ Not started.
+- **Player wading/swimming/submersion-tint/ripples in rivers** — ✅ Done.
 - **Dry-land spawn exclusion** — ✅ Done.
-- **Freshwater fishing, village avoidance, flow velocity, boats/fords/
-  bridges, Nix water-gating, lakes** — ⬜ Not started (see above).
+- **Freshwater fishing, village avoidance, creature water-depth awareness,
+  boats/fords/bridges, Nix water-gating, lakes** — ⬜ Not started (see
+  above).

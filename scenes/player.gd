@@ -3337,9 +3337,16 @@ func _submit_destroy(pressed: bool) -> void:
 
 func _resolve_water_state(tile: Vector2i, delta: float) -> Dictionary:
 	var elevation := _chunk_manager.elevation_at_global(tile.x, tile.y)
-	var water_depth := _biome_classifier.depth_meters_at(
+	var ocean_depth := _biome_classifier.depth_meters_at(
 		elevation, EarthChunkGenerator.EARTH_SEA_LEVEL, EarthChunkGenerator.EARTH_OCEAN_DEPTH_RANGE_METERS
 	)
+	# A river never changes elevation/biome_at_global's own result (see
+	# docs/concept/rivers.md's "Rendering" section), so ocean_depth above is
+	# always 0.0 there -- river_depth_meters_at_global is asked separately,
+	# the same way is_river_at_global already is for the dry-land spawn
+	# search (World._find_dry_land_spawn).
+	var river_depth := _chunk_manager.river_depth_meters_at_global(tile.x, tile.y)
+	var water_depth := maxf(ocean_depth, river_depth)
 
 	var submerged := water_depth > 0.0
 	wetness = _wetness_tracker.update(wetness, worn_material, submerged, delta)

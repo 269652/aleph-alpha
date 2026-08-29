@@ -9,6 +9,7 @@ const BuildingPiece = preload("res://src/gameplay/building_piece.gd")
 const TerrainAtlasCache = preload("res://src/rendering/terrain_atlas_cache.gd")
 const ProceduralTerrainSprite = preload("res://src/rendering/procedural_terrain_sprite.gd")
 const ProceduralHillshadeSprite = preload("res://src/rendering/procedural_hillshade_sprite.gd")
+const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const GroundTint = preload("res://src/rendering/ground_tint.gd")
 const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
 
@@ -2362,6 +2363,40 @@ func test_hillshade_overlay_tiles_are_real_slope_aspect_data_not_a_flat_fill():
 	var flat_pixel := image.get_pixel(flat_origin.x, flat_origin.y)
 	var steep_pixel := image.get_pixel(steep_origin.x, steep_origin.y)
 	assert_lt(flat_pixel.r, steep_pixel.r, "the steep bin's tile should encode a higher slope than the flat tile")
+
+
+# -- river flow overlay (docs/concept/rivers.md) -----------------------------
+
+func test_river_flow_overlay_tile_set_has_one_tile_per_direction_bin():
+	var overlay_set := renderer.build_river_flow_tile_set()
+	var source := overlay_set.get_source(0) as TileSetAtlasSource
+	assert_eq(source.get_tiles_count(), ProceduralRiverFlowSprite.DIRECTION_BINS)
+
+
+func test_atlas_coords_for_river_flow_differs_by_direction_bin():
+	var north := renderer.atlas_coords_for_river_flow(0.0)
+	var east := renderer.atlas_coords_for_river_flow(90.0)
+	assert_ne(north, east)
+
+
+func test_atlas_coords_for_river_flow_wraps_at_360():
+	assert_eq(renderer.atlas_coords_for_river_flow(0.0), renderer.atlas_coords_for_river_flow(360.0))
+
+
+func test_river_flow_overlay_tiles_are_real_direction_data_not_a_flat_fill():
+	var overlay_set := renderer.build_river_flow_tile_set()
+	var source := overlay_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	var art := TerrainRenderer.ART_TILE_SIZE
+
+	var north_coords := renderer.atlas_coords_for_river_flow(0.0)
+	var east_coords := renderer.atlas_coords_for_river_flow(90.0)
+	var north_origin := Vector2i(north_coords.x * art, north_coords.y * art)
+	var east_origin := Vector2i(east_coords.x * art, east_coords.y * art)
+
+	var north_pixel := image.get_pixel(north_origin.x, north_origin.y)
+	var east_pixel := image.get_pixel(east_origin.x, east_origin.y)
+	assert_ne(north_pixel.r, east_pixel.r, "different direction bins must encode different data")
 
 
 # -- pitched roof variants ----------------------------------------------------

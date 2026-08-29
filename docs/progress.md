@@ -6354,11 +6354,48 @@ germany" and a 4-tile minimum width).
   picked), so this is not hypothetical — `test_find_dry_land_spawn_does_
   not_land_in_the_river_at_the_spawn_point` confirms the player spawns
   NEAR, not literally inside, the river.
-- **Freshwater fishing, village water-avoidance, flow velocity/water wheel,
-  boats/fords/bridges, Nix water-gating, lakes** — ⬜ Not started (all
-  explicitly named as deferred in `concept/rivers.md`'s own "What this pass
-  touches" section — none of these silently regressed, they were never
-  built and still aren't).
+- **Flow (animated, direction-only)** (medium) — ✅ Done — reported
+  directly ("rivers should flow") alongside the underwater-tint report
+  below. `_paint_river_flow_overlay` paints a SECOND, SPARSE overlay layer
+  (`RiverFlowFx`, river cells only, unlike the water/hillshade overlays
+  which paint every loaded cell) carrying each river cell's real downhill
+  direction (`TerrainRelief.aspect_degrees_from_gradient` — the same real
+  gradient primitive hillshading already samples); `RiverFlowShader`
+  animates a translucent directional streak scrolling downstream from it.
+  This is `concept/electromagnetism.md`'s own long-standing water-wheel
+  proposal ("flow speed is derived from the water tile's own local
+  elevation gradient") **partially validated**: direction is now real,
+  tested, and driving a real visual (see that doc's updated Open
+  Questions); speed stays deliberately uniform (no per-river discharge
+  data is curated), and the water wheel mechanic itself remains unbuilt.
+- **Player wading/swimming/submersion-tint/ripples in rivers** (medium) —
+  ✅ Done — reported directly ("char should be tinted for underwater").
+  Root cause: `Player._resolve_water_state` only ever checked real
+  elevation-below-sea-level, which every river tile fails by construction
+  (rivers never change `biome_at_global`'s own elevation-derived result,
+  per Rendering above) — so a player walked straight through a river with
+  no wading/swimming, no submersion tint (`SubmersionShader`, already
+  fully built and wired for ocean via `character_view.gd` well before
+  rivers existed), and no water-ripple disturbances at all. `river_depth.gd`
+  gives rivers a real (not survey-accurate) depth — curated rivers deepen
+  toward their own centerline (reusing `distance_to_nearest_river_tiles`),
+  spanning both `WaterMovementModel.WADE_DEPTH_METERS`'s wading band and
+  real swimming depth; procedural rivers stay a flat, shallower "minor
+  stream" depth that never reaches swimming. `_resolve_water_state` now
+  takes `maxf(ocean_depth, river_depth)`, so ocean's existing behavior is
+  provably unchanged. Once depth is real, the entire pre-existing chain
+  (`current_mode` → `CharacterView.MovementState.SWIMMING` →
+  `SubmersionShader.set_waterline`) fires exactly as it already did for
+  ocean — no new tinting code was needed, only real river depth for the
+  existing mechanism to see. Verified live: the spawn point itself sits on
+  the Dreisam's curated centerline, and
+  `test_standing_at_the_river_centerline_resolves_to_swimming_not_walking`
+  confirms it.
+- **Freshwater fishing, village water-avoidance, creature water-depth
+  awareness, the water wheel mechanic itself, boats/fords/bridges, Nix
+  water-gating, lakes** — ⬜ Not started (all explicitly named as deferred
+  in `concept/rivers.md`'s own "What this pass touches" section — none of
+  these silently regressed, they were never built and still aren't).
 
 ### Farming (`concept/farming.md`)
 
