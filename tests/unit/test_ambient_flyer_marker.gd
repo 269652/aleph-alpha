@@ -790,10 +790,21 @@ func test_a_robin_sits_down_on_the_worm_to_peck_it():
 		"the robin should reach the worm"
 	)
 	assert_true(marker.perched, "it sits down -- wings folded, not hovering")
+	# It SETS DOWN over the last GroundForageBehavior.LANDING_DISTANCE rather
+	# than snapping onto the worm on the frame it was declared arrived (see
+	# _begin_ground_touchdown -- that snap measured 3.52 px against the 0.567 px
+	# a robin covers in a frame). So "holds still" is what it does once it is
+	# standing, which is what this waits out first.
+	for i in 5:
+		marker._process(0.05)
 	var landed := marker.position
 	for i in 5:
 		marker._process(0.05)
 	assert_eq(marker.position, landed, "a pecking bird holds still")
+	assert_almost_eq(
+		landed, Vector2(80, 0), Vector2.ONE,
+		"and it is standing on the worm, not a few pixels off it"
+	)
 
 
 func test_a_pecking_robin_dips_its_head_and_lifts_it_again():
@@ -1983,7 +1994,12 @@ func test_a_spiral_flight_runs_climbs_and_then_ends():
 		# Screen-up is -Y, so "how high" is how far the midpoint went negative.
 		highest = maxf(highest, started.y - midpoint.y)
 		furthest = maxf(furthest, absf(midpoint.x - started.x))
-		angles[snappedf((a.position - a._spiral_centre).angle(), 0.3)] = true
+		# The WHIRL's own angle, with the pair's shared translation taken back
+		# out. Measuring the raw offset from the centre measures the whirl plus
+		# the climb plus the ground track, and once the orbit draws in to
+		# SPIRAL_RADIUS_PX the translation (up to 19 px) dwarfs the 4.4 px
+		# circle -- so the raw angle stops tracking the thing this asserts.
+		angles[snappedf((a.position - midpoint).angle(), 0.3)] = true
 
 	assert_gt(angles.size(), 8, "it has to actually whirl, several times round")
 	assert_eq(a._spiralling_with, 0, "the whirl must end on its own")
@@ -2927,7 +2943,7 @@ func test_and_it_really_is_standing_on_the_bloom_once_the_settle_is_over():
 	)
 	_drawn_monarch(world)
 	assert_gte(_step_until_drinking(FRAME, 2000), 0.0, "precondition: it has to land first")
-	var settle := NectaringPosture.alighting_seconds(BUTTERFLY_SPEED)
+	var settle := NectaringPosture.alighting_seconds(BUTTERFLY_SPEED, marker._drawn_body_px())
 	for i in int(ceil(settle / FRAME)) + 1:
 		marker._process(FRAME)
 	assert_lte(
@@ -3036,9 +3052,720 @@ func test_a_butterfly_still_works_a_whole_meadow_over_ten_simulated_minutes():
 		world.regenerate(0.1)
 
 	var distinct := _distinct_flowers_visited(world)
+	# Printed rather than only reported on failure: this is the acceptance
+	# MEASUREMENT the whole forage rule was cleared by, and every pass that
+	# touches how a flyer moves has to re-take it and show the number.
+	gut.p(
+		"FORAGE ACCEPTANCE: %d distinct blooms of %d, %d landings, over 600 simulated seconds"
+			% [distinct, world.flowers.size(), world.drink_calls.size()]
+	)
 	assert_gte(
 		distinct, 20,
 		"micro-motion must not have cost the trap-line its circuit"
 			+ " (distinct visited: %d of %d, landings: %d)"
 				% [distinct, world.flowers.size(), world.drink_calls.size()]
 	)
+
+
+# == the one invariant: nothing ever outflies itself =========================
+#
+# The player asked "can you interpolate the state transitions?" and they were
+# right: every state entry in the marker was a bare `position = <wherever the
+# new state wants me>`, and a state entry is exactly the frame the player is
+# most likely to be looking at the animal. Measured on the code as shipped, on
+# 1/60 s frames, against a butterfly's own 0.267 px per frame:
+#
+#   courtship entry     14.89 px    the dance snapped onto a fixed 9 px orbit
+#   spiral flight        3.27 px    the whirl swung the wide start radius at
+#                                   the turn rate derived for a 4.4 px one
+#   player-head dance    6.31 px    the same, round a head
+#   worm arrival         3.52 px    `position = _worm_target`
+#   fruit arrival        3.52 px    `position = _fruit_target`
+#   seed arrival         3.52 px    `position = _seed_target`
+#   grass seed arrival   3.52 px    `position = _grass_seed_target`
+#   nectaring settle     0.40 px    eased, but sized `gap / airspeed`, and a
+#                                   smoothstep runs 1.5x its average halfway
+#
+# So this section is ONE assertion, made everywhere: **nothing may move
+# further in one step than the airspeed it is flying at carries it** (see
+# FlightTransition, and AmbientFlyerMarker.airspeed_px_per_second, which is
+# what "the airspeed it is flying at" means -- a cruise ordinarily, the burst
+# while it is fleeing or flying one of the three aerial figures). That single
+# statement catches all eight sites and any future one.
+
+const FlightTransition = preload("res://src/rendering/flight_transition.gd")
+
+
+## The worst single step any of these flyers took, as a multiple of what its
+## own airspeed allowed on that step. Accumulated rather than asserted per
+## frame so one failure names the worst moment instead of the first.
+class Outflight:
+	var worst_ratio := 0.0
+	var worst_px := 0.0
+	var allowed_px := 0.0
+	var steps := 0
+
+	func record(moved: float, ceiling_px: float) -> void:
+		steps += 1
+		if ceiling_px <= 0.0:
+			return
+		var ratio := moved / ceiling_px
+		if ratio > worst_ratio:
+			worst_ratio = ratio
+			worst_px = moved
+			allowed_px = ceiling_px
+
+	func describe() -> String:
+		return (
+			"worst step %.4f px against an airspeed that allowed %.4f px (%.1fx) over %d steps"
+			% [worst_px, allowed_px, worst_ratio, steps]
+		)
+
+
+## One step of one flyer, with the step it took measured against the airspeed
+## it was flying at. The ceiling is the MORE permissive of the state it left
+## and the state it arrived in, because the frame a flyer enters a new state
+## belongs to both.
+func _step_measured(flyer: AmbientFlyerMarker, delta: float, out: Outflight) -> void:
+	var before := flyer.position
+	var ceiling := FlightTransition.step_ceiling_px(flyer.airspeed_px_per_second(), delta)
+	flyer._process(delta)
+	ceiling = maxf(
+		ceiling, FlightTransition.step_ceiling_px(flyer.airspeed_px_per_second(), delta)
+	)
+	out.record(before.distance_to(flyer.position), ceiling)
+
+
+## Floating point only: the ceilings are derived by division and multiplied
+## back out, so an exactly-at-the-limit step lands a few ULPs over.
+const OUTFLIGHT_SLACK := 1.0 + 1.0e-4
+
+
+func _assert_never_outflew(out: Outflight, what: String) -> void:
+	assert_lte(
+		out.worst_ratio, OUTFLIGHT_SLACK,
+		"%s: %s -- nothing may move further in one frame than its own airspeed carries it"
+			% [what, out.describe()]
+	)
+
+
+## Each case in the loops below gets its OWN patch of the world, far outside
+## every other case's notice radius. add_child_autofree keeps the previous
+## case's flyers alive in the tree and in FLOCK_GROUP until the test ends, and
+## a leftover pair sitting on the same coordinates is a partner scan away from
+## quietly changing what the next case measures.
+func _case_origin(index: int) -> Vector2:
+	return Vector2(1000.0 * float(index) + 100.0, 100.0)
+
+
+# -- 1. the courtship dance --------------------------------------------------
+
+
+func test_a_courtship_dance_never_outflies_the_butterflies_dancing_it():
+	# The whole band of separations a pair can notice each other across, so the
+	# widest entry the dance can ever be asked to make is covered.
+	var gaps := [8, 16, 24, 32, 39]
+	for case in gaps.size():
+		var gap: int = gaps[case]
+		var at := _case_origin(case)
+		var parent := Node2D.new()
+		add_child_autofree(parent)
+		var a := _flyer_in_tree("monarch", at, parent)
+		var b := _flyer_in_tree("monarch", at + Vector2(gap, 0), parent)
+		var out := Outflight.new()
+		var began := false
+		for i in 60 * 10:
+			_step_measured(a, FRAME, out)
+			_step_measured(b, FRAME, out)
+			# EITHER of them: the two commit on different frames (the second
+			# only scans once its own search throttle expires), so watching one
+			# of them alone can miss a dance the other is already flying.
+			if a._courting_with != 0 or b._courting_with != 0:
+				began = true
+			elif began:
+				break
+		assert_true(began, "precondition: a pair %d px apart must dance" % gap)
+		_assert_never_outflew(out, "a courtship dance entered from %d px apart" % gap)
+
+
+# -- 2. the spiral flight ----------------------------------------------------
+
+
+func test_a_whirl_never_outflies_the_butterflies_whirling_it():
+	var gaps := [10, 22, 34, 46, 50]
+	for case in gaps.size():
+		var gap: int = gaps[case]
+		var at := _case_origin(case)
+		var parent := Node2D.new()
+		add_child_autofree(parent)
+		var a := _flyer_in_tree("monarch", at, parent)
+		var b := _flyer_in_tree("swallowtail", at + Vector2(gap, 0), parent)
+		var out := Outflight.new()
+		var began := false
+		for i in 60 * 10:
+			_step_measured(a, FRAME, out)
+			_step_measured(b, FRAME, out)
+			if a._spiralling_with != 0 or b._spiralling_with != 0:
+				began = true
+			elif began:
+				break
+		assert_true(began, "precondition: a pair %d px apart must whirl" % gap)
+		_assert_never_outflew(out, "a whirl entered from %d px apart" % gap)
+
+
+# -- 3. the dance round the player's head ------------------------------------
+
+
+func test_the_dance_round_a_players_head_never_outflies_the_butterfly():
+	# Deliberately short of the notice radius at the far end: the flight
+	# initiation distance is measured from the player's FEET but the orbit is
+	# centred on their HEAD, so a butterfly standing right on the edge is
+	# already outside the leash and lets go again.
+	var reaches := [0.2, 0.4, 0.6]
+	for case in reaches.size():
+		var reach: float = reaches[case]
+		var at := _case_origin(case)
+		var parent := Node2D.new()
+		add_child(parent)
+		_player_at(at, parent)
+		var bold := _butterfly_with_boldness(
+			1.0, at + Vector2(SpiralFlight.NOTICE_RADIUS_PX * reach, 0.0), parent
+		)
+		var out := Outflight.new()
+		for i in 60 * 8:
+			_step_measured(bold, FRAME, out)
+		assert_true(bold._dancing_at_player, "precondition: it has to be dancing")
+		_assert_never_outflew(
+			out, "a dance begun from %.0f%% of the notice radius" % (reach * 100.0)
+		)
+		# Freed rather than autofreed: this case's PLAYER has to leave the tree
+		# with it. _nearest_player_position takes the first node in the "player"
+		# group, so a leftover player from an earlier case is the one every
+		# later butterfly measures itself against -- which silently puts them
+		# hundreds of pixels "away" and hands them SimulationLod's slowest
+		# update interval, in a test that measures per-frame movement.
+		parent.free()
+
+
+# -- 4-7. the four bird ground-forage arrivals -------------------------------
+
+
+## Runs a ground forager until it has actually sat down on its food and pecked
+## it, measuring every step. Returns false if it never got there.
+func _forage_until_pecked(out: Outflight, budget: int = 4000) -> bool:
+	var pecked := false
+	for i in budget:
+		_step_measured(marker, FRAME, out)
+		if marker.ground_forage.phase == GroundForageBehavior.Phase.PECKING:
+			pecked = true
+		elif pecked and marker.ground_forage.phase == GroundForageBehavior.Phase.SEEKING:
+			return true
+	return pecked
+
+
+func test_a_robin_never_outflies_itself_landing_on_a_worm():
+	var world := _world_with_one_worm()
+	_make_robin(world)
+	var out := Outflight.new()
+	assert_true(_forage_until_pecked(out), "precondition: it has to land on the worm")
+	_assert_never_outflew(out, "a robin landing on a worm")
+
+
+func test_a_robin_never_outflies_itself_landing_on_fallen_fruit():
+	var world := StubFruitWorld.new()
+	world.fruit = [{"position": Vector2(80, 0), "species": "cherry"}]
+	_make_fruit_robin(world)
+	var out := Outflight.new()
+	assert_true(_forage_until_pecked(out), "precondition: it has to land on the fruit")
+	_assert_never_outflew(out, "a robin landing on fallen fruit")
+
+
+func test_a_sparrow_never_outflies_itself_landing_on_a_seed():
+	var world := StubSeedWorld.new()
+	world.seeds = [{"position": Vector2(80, 0), "species": "rose"}]
+	_sparrow_on(world)
+	var out := Outflight.new()
+	assert_true(_forage_until_pecked(out), "precondition: it has to land on the seed")
+	_assert_never_outflew(out, "a sparrow landing on a flower seed")
+
+
+func test_a_sparrow_never_outflies_itself_landing_on_a_grass_seed():
+	var world := StubSeedWorld.new()
+	world.grass_seeds = [{"position": Vector2(80, 0)}]
+	_sparrow_on(world)
+	var out := Outflight.new()
+	assert_true(_forage_until_pecked(out), "precondition: it has to land on the grass seed")
+	_assert_never_outflew(out, "a sparrow landing on a grass seed")
+
+
+# -- 8. the nectaring settle, which was eased but not slowed for the ease ----
+
+
+## The one site that already interpolated -- and it still broke the invariant,
+## in the least obvious way there is: the settle was sized `gap / airspeed`,
+## which is the AVERAGE rate, and a smoothstep runs
+## FlightTransition.EASE_PEAK_RATE times its average halfway through.
+func test_an_alighting_butterfly_never_outflies_itself_even_mid_settle():
+	var world := StubScentWorld.new()
+	var bloom := Vector2(60, 0)
+	world.flowers.append(
+		{"position": bloom, "species": "rose", "nectar": 1.0, "landing": bloom}
+	)
+	_drawn_monarch(world)
+	var out := Outflight.new()
+	var drank := false
+	for i in 2000:
+		_step_measured(marker, FRAME, out)
+		if marker._drink_remaining > 0.0:
+			drank = true
+		elif drank:
+			break
+	assert_true(drank, "precondition: it has to land and drink")
+	_assert_never_outflew(out, "a butterfly alighting on a bloom")
+
+
+# -- and the ordinary flight it is all measured against ----------------------
+
+
+func test_ordinary_wander_never_outflies_the_flyer_either():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var moth := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var out := Outflight.new()
+	for i in 60 * 30:
+		_step_measured(moth, FRAME, out)
+	_assert_never_outflew(out, "an ordinarily wandering butterfly")
+
+
+func test_a_fleeing_butterfly_never_outflies_its_own_burst():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	_player_at(Vector2(200, 200), parent)
+	var shy := _butterfly_with_boldness(0.0, Vector2(200, 200) + Vector2(10.0, 0.0), parent)
+	var out := Outflight.new()
+	var fled := false
+	for i in 60 * 10:
+		_step_measured(shy, FRAME, out)
+		fled = fled or shy._fleeing_from_player
+	assert_true(fled, "precondition: it has to bolt")
+	_assert_never_outflew(out, "a butterfly bolting from the player")
+
+
+# == and both partners still derive the same dance, with no messaging =========
+#
+# The subtlest risk in easing a PAIR entry: both partners compute the whole
+# figure from the two ids and their own start offset, and never tell each
+# other anything. If one eased in over a different duration than the other,
+# they would converge onto different radii and stop reading as a pair. The
+# joining partner therefore adopts the initiator's convergence exactly as it
+# already adopts its clock and its centre, and their two start offsets are
+# opposite by construction because the centre IS the midpoint.
+
+
+func test_a_pair_stays_exactly_opposite_all_the_way_through_an_eased_entry():
+	var gaps := [12, 24, 36]
+	for case in gaps.size():
+		var gap: int = gaps[case]
+		var at := _case_origin(case)
+		var parent := Node2D.new()
+		add_child_autofree(parent)
+		var a := _flyer_in_tree("monarch", at, parent)
+		var b := _flyer_in_tree("monarch", at + Vector2(gap, 0), parent)
+		for i in 120:
+			a._process(FRAME)
+			b._process(FRAME)
+			if a._courting_with != 0 and b._courting_with != 0:
+				break
+		assert_ne(a._courting_with, 0, "precondition: the dance began")
+		assert_eq(b._courting_with, a.get_instance_id(), "precondition: with each other")
+		var worst_dot := -1.0
+		var worst_radius_gap := 0.0
+		while a._courting_with != 0:
+			a._process(FRAME)
+			b._process(FRAME)
+			if a._courting_with == 0:
+				break
+			var from_a: Vector2 = a.position - a._courting_centre
+			var from_b: Vector2 = b.position - b._courting_centre
+			worst_dot = maxf(worst_dot, from_a.normalized().dot(from_b.normalized()))
+			worst_radius_gap = maxf(worst_radius_gap, absf(from_a.length() - from_b.length()))
+		assert_lt(
+			worst_dot, -0.999,
+			(
+				"they must stay across the axis from each other from the first frame in"
+				+ " (worst dot %.5f, %d px apart at the start)" % [worst_dot, gap]
+			)
+		)
+		assert_lt(
+			worst_radius_gap, 0.001,
+			(
+				"...and converge onto the same radius as each other, not two"
+				+ " (worst %.5f px)" % worst_radius_gap
+			)
+		)
+
+
+func test_a_whirling_pair_stays_exactly_opposite_through_its_eased_entry():
+	var gaps := [14, 30, 46]
+	for case in gaps.size():
+		var gap: int = gaps[case]
+		var at := _case_origin(case)
+		var parent := Node2D.new()
+		add_child_autofree(parent)
+		var a := _flyer_in_tree("monarch", at, parent)
+		var b := _flyer_in_tree("swallowtail", at + Vector2(gap, 0), parent)
+		for i in 120:
+			a._process(FRAME)
+			b._process(FRAME)
+			if a._spiralling_with != 0 and b._spiralling_with != 0:
+				break
+		assert_ne(a._spiralling_with, 0, "precondition: the whirl began")
+		assert_eq(b._spiralling_with, a.get_instance_id(), "precondition: with each other")
+		var worst_dot := -1.0
+		var worst_radius_gap := 0.0
+		while a._spiralling_with != 0:
+			a._process(FRAME)
+			b._process(FRAME)
+			if a._spiralling_with == 0:
+				break
+			var from_a: Vector2 = a.position - a._spiral_centre
+			var from_b: Vector2 = b.position - b._spiral_centre
+			# The pair's shared climb and ground track move BOTH of them the
+			# same way, so it is taken back out before the two offsets are
+			# compared -- what has to stay opposite is the whirl itself.
+			var shared: Vector2 = (
+				SpiralFlight.rise(a._spiral_elapsed)
+				+ SpiralFlight.travel(
+					a._spiral_elapsed,
+					Courtship.pair_seed(a.get_instance_id(), b.get_instance_id(), 0)
+				)
+			)
+			from_a -= shared
+			from_b -= shared
+			worst_dot = maxf(worst_dot, from_a.normalized().dot(from_b.normalized()))
+			worst_radius_gap = maxf(worst_radius_gap, absf(from_a.length() - from_b.length()))
+		assert_lt(
+			worst_dot, -0.999,
+			"they must stay across the axis from each other (worst dot %.5f, gap %d)"
+				% [worst_dot, gap]
+		)
+		assert_lt(
+			worst_radius_gap, 0.001,
+			"...and on the same radius (worst %.5f px)" % worst_radius_gap
+		)
+
+
+# == the EXIT, which is the half of a transition that is easy to miss ========
+#
+# All three aerial figures now begin without a jump, and all three used to END
+# with one -- not in POSITION, which was always continuous, but in VELOCITY,
+# which is what the eye actually reads as motion. On the frame a whirl ended,
+# the flyer stopped orbiting at ~37 px/s and started wandering at 16 px/s along
+# a heading AmbientFlyerMovement.direction_at picked from its own seed, with no
+# relation to the tangent it had been flying. Measured across eight whirls on
+# the code as shipped: a mean turn of 108 degrees on one frame, worst 168.
+#
+# The ceiling is not a taste threshold: it is how hard this animal can turn.
+# A turn is flown by banking, the hardest bank it has is
+# SpiralFlight.MAX_LOAD_FACTOR times its own weight, and at speed v that is a
+# turn rate of a/v -- see SpiralFlight.turn_seconds, out of constants that
+# already existed.
+
+
+## How far a flyer's heading swings on the single frame an aerial figure ends.
+func _exit_turn_degrees(a: AmbientFlyerMarker, b: AmbientFlyerMarker, spiralling: bool) -> float:
+	var last_in := Vector2.ZERO
+	for i in 60 * 15:
+		var before := a.position
+		var was: bool = a._spiralling_with != 0 if spiralling else a._courting_with != 0
+		a._process(FRAME)
+		b._process(FRAME)
+		var moved := (a.position - before) / FRAME
+		var still: bool = a._spiralling_with != 0 if spiralling else a._courting_with != 0
+		if was and still:
+			last_in = moved
+		elif not was and not still and last_in.length() > 0.001 and moved.length() > 0.001:
+			return rad_to_deg(absf(last_in.angle_to(moved)))
+	return -1.0
+
+
+## The hardest turn this butterfly can fly in one frame, in degrees. Derived,
+## and the whole budget the exit has to fit inside.
+func _one_frames_turn_degrees() -> float:
+	return rad_to_deg(PI * FRAME / SpiralFlight.turn_seconds(PI, 16.0))
+
+
+func test_a_whirl_does_not_end_with_the_butterfly_reversing():
+	var worst := 0.0
+	var measured := 0
+	for case in 8:
+		var at := _case_origin(case)
+		var parent := Node2D.new()
+		add_child(parent)
+		var a := _flyer_in_tree("monarch", at, parent)
+		var b := _flyer_in_tree("swallowtail", at + Vector2(24, 0), parent)
+		a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+		b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+		for i in 300:
+			a._process(FRAME)
+			b._process(FRAME)
+			if a._spiralling_with != 0:
+				break
+		var turn := _exit_turn_degrees(a, b, true)
+		if turn >= 0.0:
+			worst = maxf(worst, turn)
+			measured += 1
+		parent.free()
+	assert_gt(measured, 5, "precondition: most of these pairs have to actually whirl and stop")
+	assert_lte(
+		worst, _one_frames_turn_degrees(),
+		(
+			"a butterfly coming off a whirl turned %.1f degrees on one frame,"
+			+ " and the hardest turn it can fly is %.1f"
+		) % [worst, _one_frames_turn_degrees()]
+	)
+
+
+func test_nor_does_a_dance():
+	var worst := 0.0
+	var measured := 0
+	for case in 5:
+		var at := _case_origin(case)
+		var parent := Node2D.new()
+		add_child(parent)
+		var a := _flyer_in_tree("monarch", at, parent)
+		var b := _flyer_in_tree("monarch", at + Vector2(20, 0), parent)
+		for i in 300:
+			a._process(FRAME)
+			b._process(FRAME)
+			if a._courting_with != 0:
+				break
+		var turn := _exit_turn_degrees(a, b, false)
+		if turn >= 0.0:
+			worst = maxf(worst, turn)
+			measured += 1
+		parent.free()
+	assert_gt(measured, 2, "precondition: these pairs have to actually dance and stop")
+	assert_lte(
+		worst, _one_frames_turn_degrees(),
+		"a butterfly coming off a dance turned %.1f degrees on one frame" % worst
+	)
+
+
+## The turn has to finish, not merely start: a flyer that never let go of the
+## tangent would fly off in a straight line forever, which is the opposite
+## failure and just as wrong.
+func test_and_the_turn_off_the_tangent_actually_finishes():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("swallowtail", Vector2(124, 100), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	for i in 300:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with != 0:
+			break
+	while a._spiralling_with != 0:
+		a._process(FRAME)
+		b._process(FRAME)
+	var recovery := SpiralFlight.turn_seconds(PI, 16.0)
+	for i in int(ceil(recovery / FRAME)) + 2:
+		a._process(FRAME)
+	assert_eq(
+		a._exit_recovery_seconds, 0.0,
+		"the flyer has to be back on ordinary wander once the turn is flown"
+	)
+
+
+## The bug this whole file has produced three separate ways: blending two
+## headings componentwise gives a near-zero vector where they nearly oppose,
+## and a flyer that moves by nothing is a flyer stalled in mid-air. The turn is
+## a SLERP for exactly that reason, and this walks a whole recovery to prove it.
+func test_turning_off_the_tangent_never_stalls_a_butterfly():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2(100, 100), parent)
+	var b := _flyer_in_tree("swallowtail", Vector2(124, 100), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	for i in 300:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with != 0:
+			break
+	while a._spiralling_with != 0:
+		a._process(FRAME)
+		b._process(FRAME)
+	for i in 120:
+		var before := a.position
+		a._process(FRAME)
+		assert_gt(
+			before.distance_to(a.position), 0.0,
+			"only drinking may ever hold a flyer still (frame %d after a whirl)" % i
+		)
+
+
+# == the WINGS, which swap on one frame unless something says otherwise ======
+
+
+## Landing: a butterfly alights with its wings SPREAD and folds them
+## afterwards. The settled cycle used to be read off wall time, so an insect
+## that had just been beating its wings was usually drawn fully shut on the
+## very next frame -- the same one-frame swap, in the picture rather than in
+## the position.
+func test_a_butterfly_lands_with_its_wings_open_and_folds_them():
+	var world := StubScentWorld.new()
+	var bloom := Vector2(60, 0)
+	world.flowers.append(
+		{"position": bloom, "species": "rose", "nectar": 1.0, "landing": bloom}
+	)
+	_drawn_monarch(world)
+	assert_gte(_step_until_drinking(FRAME, 2000), 0.0, "precondition: it has to land first")
+	marker._process(FRAME)
+	assert_eq(
+		marker.texture, marker.settled_frames[marker.settled_frames.size() - 1],
+		"the frame it sets down on is the fully-open one"
+	)
+	# ...and it is shut again well before the drink is over.
+	for i in int(ceil(NectaringPosture.SECONDS_PER_CYCLE / FRAME)):
+		marker._process(FRAME)
+		if marker.texture == marker.settled_frames[0]:
+			break
+	assert_eq(marker.texture, marker.settled_frames[0], "and folds them, rather than holding open")
+
+
+## Taking off: a real butterfly opens its wings and beats. The wing clock
+## free-runs, so the stroke resumed at whatever frame wall time was on -- wings
+## folded over the back to mid-downstroke on one frame. Flap frame 0 is the
+## fully-open pose by construction (ProceduralButterflySprite.
+## generate_flap_images has openness 1.0 at i = 0), so the stroke now starts
+## there.
+func test_a_butterfly_takes_off_from_the_open_winged_frame():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	# Out of range to begin with, so the insect actually gets to sit on the
+	# bloom and let its free-running wing clock drift somewhere arbitrary before
+	# anything flushes it.
+	var player := _player_at(Vector2(200, 900), parent)
+	var shy := _butterfly_with_boldness(0.0, Vector2(200, 200), parent)
+	var sprites := ProceduralButterflySprite.new()
+	shy.flap_frames = sprites.generate_flap_textures("monarch", 3)
+	shy.settled_frames = sprites.generate_settled_textures("monarch", 3)
+	shy._drink_remaining = PollinatorForaging.DRINK_SECONDS
+	for i in 37:
+		shy._process(FRAME)
+	assert_true(shy.settled_frames.has(shy.texture), "precondition: it is settled on the bloom")
+
+	player.position = shy.position + Vector2(6.0, 0.0)
+	shy._process(FRAME)
+	assert_true(shy.flap_frames.has(shy.texture), "precondition: the flush puts it back in the air")
+	assert_eq(
+		shy.texture, shy.flap_frames[0],
+		"it opens its wings and beats, rather than resuming mid-stroke"
+	)
+
+
+# == the LATE JOIN, which is the ninth entry and the one that hid ============
+#
+# Markers are processed one after another, and a flyer that scanned and came up
+# empty waits PARTNER_SEARCH_INTERVAL before scanning again -- so the second of
+# a pair routinely joins a figure its partner began up to half a second ago,
+# having flown ordinary wander the whole time. Adopting the partner's clock and
+# the mirror of its start offset therefore threw the joiner onto the far side
+# of an orbit it had never been on. Measured at the full half-second delay:
+# **17.3x its own airspeed on one frame**, on top of every entry easing that had
+# already been done. Both figures now RE-BASE on where the two actually are
+# (see _begin_spiral_flight), which moves neither of them.
+
+
+## Runs a pair that meet, with `delay` seconds of search throttle held against
+## the second one so it is forced to join late. Returns the worst step either
+## flyer took as a multiple of its own airspeed.
+func _worst_step_joining_late(delay: float, spiralling: bool) -> float:
+	var parent := Node2D.new()
+	add_child(parent)
+	var a := _flyer_in_tree("monarch", Vector2.ZERO, parent)
+	var b := _flyer_in_tree(
+		"swallowtail" if spiralling else "monarch", Vector2(24, 0), parent
+	)
+	if spiralling:
+		a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+		b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._partner_search_cooldown = delay
+	var out := Outflight.new()
+	var joined := false
+	for i in 300:
+		_step_measured(a, FRAME, out)
+		_step_measured(b, FRAME, out)
+		var busy: bool = b._spiralling_with != 0 if spiralling else b._courting_with != 0
+		if busy:
+			joined = true
+		elif joined:
+			break
+	var worst := out.worst_ratio if joined else -1.0
+	parent.free()
+	return worst
+
+
+func test_a_butterfly_joining_a_whirl_late_does_not_teleport_into_it():
+	for delay in [0.0, 0.1, 0.25, AmbientFlyerMarker.PARTNER_SEARCH_INTERVAL]:
+		var worst := _worst_step_joining_late(delay, true)
+		assert_gte(worst, 0.0, "precondition: it has to actually join (delay %.2f s)" % delay)
+		assert_lte(
+			worst, OUTFLIGHT_SLACK,
+			"joining a whirl %.2f s late moved a butterfly %.1fx its own airspeed" % [delay, worst]
+		)
+
+
+func test_nor_does_one_joining_a_dance_late():
+	for delay in [0.0, 0.1, 0.25, AmbientFlyerMarker.PARTNER_SEARCH_INTERVAL]:
+		var worst := _worst_step_joining_late(delay, false)
+		assert_gte(worst, 0.0, "precondition: it has to actually join (delay %.2f s)" % delay)
+		assert_lte(
+			worst, OUTFLIGHT_SLACK,
+			"joining a dance %.2f s late moved a butterfly %.1fx its own airspeed" % [delay, worst]
+		)
+
+
+## ...and the re-base has to leave them a PAIR. This is the property the old
+## adopt-the-mirror code was buying with that teleport, and it must survive
+## being bought a different way.
+func test_a_late_joined_pair_is_still_exactly_opposite_from_the_first_frame():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2.ZERO, parent)
+	var b := _flyer_in_tree("swallowtail", Vector2(24, 0), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._partner_search_cooldown = AmbientFlyerMarker.PARTNER_SEARCH_INTERVAL
+	for i in 300:
+		a._process(FRAME)
+		b._process(FRAME)
+		if b._spiralling_with != 0:
+			break
+	assert_eq(b._spiralling_with, a.get_instance_id(), "precondition: it joined late")
+	assert_eq(a._spiral_centre, b._spiral_centre, "one whirl, one centre")
+	assert_eq(a._spiral_elapsed, b._spiral_elapsed, "...and one clock")
+	assert_eq(
+		a._spiral_closing_seconds, b._spiral_closing_seconds,
+		"...and one convergence, or they draw onto different radii"
+	)
+	var worst_dot := -1.0
+	while a._spiralling_with != 0:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with == 0:
+			break
+		var shared: Vector2 = (
+			SpiralFlight.rise(a._spiral_elapsed)
+			+ SpiralFlight.travel(
+				a._spiral_elapsed,
+				Courtship.pair_seed(a.get_instance_id(), b.get_instance_id(), 0)
+			)
+		)
+		var from_a: Vector2 = a.position - a._spiral_centre - shared
+		var from_b: Vector2 = b.position - b._spiral_centre - shared
+		worst_dot = maxf(worst_dot, from_a.normalized().dot(from_b.normalized()))
+	assert_lt(worst_dot, -0.999, "they must whirl opposite each other (worst dot %.5f)" % worst_dot)

@@ -37,12 +37,28 @@ func test_a_pair_agrees_on_which_of_them_leads():
 
 
 # -- the dance ---------------------------------------------------------------
+#
+# The dance is entered from wherever the two animals actually met and draws in
+# from there (see dance_offset) -- it used to snap both partners onto a fixed
+# DANCE_RADIUS_PX circle on the frame it began, a jump of up to 14.9 px against
+# the 0.267 px a butterfly flies in a frame. So every call below hands it a
+# real start offset and a real convergence, exactly as AmbientFlyerMarker does.
+
+## Two animals meeting a body-length or so apart, which is what the dance is
+## entered from in practice. Deliberately not exactly DANCE_RADIUS_PX -- a
+## start offset that was already on the orbit would hide anything the
+## convergence gets wrong.
+const A_MEETING_OFFSET := Vector2(14.0, 0.0)
+const A_MEETING_CLOSE := 0.4
+
 
 func test_the_dance_is_a_circling_motion_around_the_partner():
 	var offsets := []
 	for step in 8:
 		offsets.append(
-			Courtship.dance_offset(float(step) * Courtship.DANCE_SECONDS / 8.0, 1, true)
+			Courtship.dance_offset(
+				float(step) * Courtship.DANCE_SECONDS / 8.0, 1, A_MEETING_OFFSET, A_MEETING_CLOSE
+			)
 		)
 	var angles := {}
 	for offset in offsets:
@@ -52,21 +68,53 @@ func test_the_dance_is_a_circling_motion_around_the_partner():
 
 ## Partners orbit opposite each other rather than on top of one another --
 ## that is what reads as two butterflies dancing rather than one sprite.
+##
+## Nothing tells either of them which one it is any more: their two start
+## offsets are opposite by construction, because the dance's centre IS the
+## midpoint between them, and the figure is a rigid rotation of that offset.
 func test_partners_stay_on_opposite_sides_of_the_dance():
-	var leader := Courtship.dance_offset(0.7, 1, true)
-	var follower := Courtship.dance_offset(0.7, 1, false)
-	assert_gt(leader.distance_to(follower), Courtship.DANCE_RADIUS_PX, "they should be apart")
+	for step in 40:
+		var t := float(step) * Courtship.DANCE_SECONDS / 40.0
+		var one := Courtship.dance_offset(t, 1, A_MEETING_OFFSET, A_MEETING_CLOSE)
+		var other := Courtship.dance_offset(t, 1, -A_MEETING_OFFSET, A_MEETING_CLOSE)
+		assert_lt(
+			one.normalized().dot(other.normalized()), -0.9999,
+			"the two must stay across the axis from each other, with nothing said"
+		)
+		assert_almost_eq(one.length(), other.length(), 0.0001, "and on the same radius")
+
+
+## The whole point of the start offset: at elapsed 0 the animal is exactly
+## where it already was, so beginning a dance moves nothing at all.
+func test_a_dance_begins_exactly_where_the_animal_already_is():
+	assert_eq(Courtship.dance_offset(0.0, 1, A_MEETING_OFFSET, A_MEETING_CLOSE), A_MEETING_OFFSET)
+
+
+## ...and it does not stay out there: the convergence is what makes the
+## approach finish, and after it the pair are on the dance's own radius.
+func test_and_draws_in_onto_the_dances_own_radius():
+	var band := Courtship.DANCE_RADIUS_PX / (1.0 - Courtship.DANCE_RADIUS_SWING)
+	var settled := Courtship.dance_offset(
+		A_MEETING_CLOSE * 2.0, 1, A_MEETING_OFFSET, A_MEETING_CLOSE
+	)
+	assert_lte(settled.length(), band + 0.01, "the convergence has to actually close")
 
 
 ## The orbit wanders rather than tracing one circle (see DANCE_RADIUS_SWING),
 ## so this is a BAND -- but the band still has to keep the two reading as one
 ## interacting pair rather than as two unrelated sprites.
+## Sampled from AFTER the convergence has closed, since the approach is
+## deliberately outside the band -- that is what an approach is (the entry
+## itself is pinned by test_a_dance_begins_exactly_where_the_animal_already_is
+## and test_and_draws_in_onto_the_dances_own_radius above).
 func test_the_dance_stays_close_enough_to_read_as_one_pair():
 	var swing := Courtship.DANCE_RADIUS_SWING
 	var widest := 0.0
 	var tightest := INF
 	for step in 200:
-		var offset := Courtship.dance_offset(float(step) * 0.043, 5, true)
+		var offset := Courtship.dance_offset(
+			A_MEETING_CLOSE + float(step) * 0.043, 5, A_MEETING_OFFSET, A_MEETING_CLOSE
+		)
 		widest = maxf(widest, offset.length())
 		tightest = minf(tightest, offset.length())
 	assert_lte(widest, Courtship.DANCE_RADIUS_PX / (1.0 - swing) + 0.01)
@@ -83,7 +131,9 @@ func test_the_dance_is_not_one_repeating_figure():
 	var widest := 0.0
 	var tightest := INF
 	for step in 200:
-		var offset := Courtship.dance_offset(float(step) * 0.043, 5, true)
+		var offset := Courtship.dance_offset(
+			A_MEETING_CLOSE + float(step) * 0.043, 5, A_MEETING_OFFSET, A_MEETING_CLOSE
+		)
 		widest = maxf(widest, offset.length())
 		tightest = minf(tightest, offset.length())
 	assert_gt(
@@ -92,13 +142,42 @@ func test_the_dance_is_not_one_repeating_figure():
 	)
 
 
+## Two pairs must not trace the same dance. Two things now make them differ,
+## and both are checked, because they are separately losable:
+##
+## - the SEED, which shapes the breathing radius and the swept angle. Checked
+##   with the two pairs handed identical meeting geometry, so the seed is the
+##   only thing left that can separate them.
+## - WHERE THEY MET, which now sets the dance's phase (it used to be a hash of
+##   the pair seed -- see dance_offset). Two pairs that met facing different
+##   ways trace figures that are further apart still.
 func test_no_two_pairs_dance_the_same_figure():
 	var apart := 0.0
 	for step in 200:
-		var t := float(step) * 0.023
-		apart = maxf(apart, Courtship.dance_offset(t, 1, true).distance_to(
-			Courtship.dance_offset(t, 2, true)
-		))
+		var t := A_MEETING_CLOSE + float(step) * 0.023
+		apart = maxf(
+			apart,
+			Courtship.dance_offset(t, 1, A_MEETING_OFFSET, A_MEETING_CLOSE).distance_to(
+				Courtship.dance_offset(t, 2, A_MEETING_OFFSET, A_MEETING_CLOSE)
+			)
+		)
+	assert_gt(
+		apart, 0.5 * Courtship.DANCE_RADIUS_PX,
+		"the seed alone must still separate two dances (%.2f px)" % apart
+	)
+
+
+func test_and_two_pairs_that_met_facing_different_ways_differ_further_still():
+	var elsewhere := A_MEETING_OFFSET.rotated(PI * 0.5)
+	var apart := 0.0
+	for step in 200:
+		var t := A_MEETING_CLOSE + float(step) * 0.023
+		apart = maxf(
+			apart,
+			Courtship.dance_offset(t, 1, A_MEETING_OFFSET, A_MEETING_CLOSE).distance_to(
+				Courtship.dance_offset(t, 2, elsewhere, A_MEETING_CLOSE)
+			)
+		)
 	assert_gt(apart, Courtship.DANCE_RADIUS_PX, "two pairs must not trace the same dance")
 
 

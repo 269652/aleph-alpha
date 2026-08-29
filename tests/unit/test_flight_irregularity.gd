@@ -96,3 +96,53 @@ func test_the_tumble_and_the_dances_share_one_spectrum():
 		0.000001,
 		"the flutter's own frequency IS this module's, not a second copy of it"
 	)
+
+
+# -- how fast it can change ---------------------------------------------------
+#
+# Anything that scales this by a real distance is implicitly choosing a SPEED,
+# and until something says what that speed is nobody can check it against the
+# animal's own. NectaringPosture.shuffle_offset did exactly that and had a
+# butterfly standing on a flower moving faster than one in flight.
+
+
+func test_the_wobble_never_changes_faster_than_its_stated_maximum():
+	var ceiling := FlightIrregularity.max_rate()
+	var step := 1.0 / 2000.0
+	for seed_value in [1, 7, 4242]:
+		var previous := FlightIrregularity.wobble(0.0, seed_value)
+		for i in 4000:
+			var t := float(i + 1) * step
+			var now := FlightIrregularity.wobble(t, seed_value)
+			assert_lte(
+				absf(now - previous) / step, ceiling + 0.001,
+				"the wobble outran its own stated maximum at t=%.4f" % t
+			)
+			previous = now
+
+
+## ...and the bound is the real one rather than an over-cautious guess: it is
+## the sum of the two components' amplitudes, which the sampling gets close to
+## wherever the two cosines line up.
+func test_and_that_maximum_is_actually_approached():
+	var fastest := 0.0
+	var step := 1.0 / 2000.0
+	var previous := FlightIrregularity.wobble(0.0, 7)
+	for i in 20000:
+		var now := FlightIrregularity.wobble(float(i + 1) * step, 7)
+		fastest = maxf(fastest, absf(now - previous) / step)
+		previous = now
+	assert_gt(
+		fastest, 0.8 * FlightIrregularity.max_rate(),
+		"a bound nothing gets near would be no use for budgeting a real speed"
+	)
+
+
+func test_the_maximum_is_the_two_components_amplitudes_added():
+	var fast := FlightIrregularity.FAST_RADIANS_PER_SECOND
+	var slow := fast * FlightIrregularity.SLOW_FREQUENCY_RATIO
+	assert_almost_eq(
+		FlightIrregularity.max_rate(),
+		(fast + FlightIrregularity.SLOW_WEIGHT * slow) / FlightIrregularity.NORMALISER,
+		0.0001
+	)

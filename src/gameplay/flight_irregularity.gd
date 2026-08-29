@@ -88,6 +88,24 @@ static func wobble(elapsed_seconds: float, seed_value: int) -> float:
 	) / NORMALISER
 
 
+## The fastest `wobble` can change, in units per second.
+##
+## Exact rather than sampled: the wobble is a sum of two sinusoids, so its
+## derivative is a sum of two cosines and the largest that can be is the sum of
+## their amplitudes -- reached only where both cosines peak together, which the
+## irrational-ish frequency ratio makes rare but not impossible.
+##
+## Exists because a caller that scales the wobble by a real distance is
+## implicitly choosing a SPEED, and until something says what that speed is
+## nobody can check it against the animal's own (see
+## NectaringPosture.shuffle_offset, where an unchecked one had a feeding
+## butterfly moving faster than a flying one).
+static func max_rate() -> float:
+	return (
+		FAST_RADIANS_PER_SECOND * (1.0 + SLOW_WEIGHT * SLOW_FREQUENCY_RATIO) / NORMALISER
+	)
+
+
 ## The exact integral of `wobble` from 0 to `elapsed_seconds`.
 ##
 ## Zero at t = 0 by construction (the constant of integration is chosen to

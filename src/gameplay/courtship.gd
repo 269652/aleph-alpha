@@ -3,6 +3,14 @@ extends RefCounted
 const LifeCycle = preload("res://src/gameplay/life_cycle.gd")
 const GroundSlide = preload("res://src/gameplay/ground_slide.gd")
 const FlightIrregularity = preload("res://src/gameplay/flight_irregularity.gd")
+## The orbit geometry itself lives there, because the whirl needed exactly the
+## same figure first and a second copy of it here would be a second place for
+## the "a flyer holds an airspeed, not a turn rate" argument to be got wrong
+## (see SpiralFlight.converging_orbit / orbit_clock). This module still owns
+## every NUMBER the dance is flown with -- its radius, its turn rate, its
+## breathing band -- which are what make a courtship display read as a slow
+## wide orbit rather than a tight fast whirl.
+const SpiralFlight = preload("res://src/gameplay/spiral_flight.gd")
 
 ## Two animals of the same kind noticing each other, dancing, and sometimes
 ## mating (see docs/concept/ecosystem_dynamics.md's "Courtship, and where
@@ -123,11 +131,11 @@ static func leads(own_id: int, partner_id: int) -> bool:
 
 
 ## Where this animal should sit relative to the dance's centre, `elapsed`
-## seconds in. Leader and follower orbit opposite each other, so the pair
-## reads as two animals circling rather than one sprite drawn twice.
-## Both partners are handed the SAME `seed_value`, so they compute the same
-## wandering radius and the same swept angle and stay exactly opposite each
-## other -- no message passing, the same property the fixed circle had.
+## seconds in. The two partners orbit opposite each other, so the pair reads
+## as two animals circling rather than one sprite drawn twice.
+## Both are handed the SAME `seed_value`, so they compute the same wandering
+## radius and the same swept angle and stay exactly opposite each other -- no
+## message passing, the same property the fixed circle had.
 ##
 ## The radius is written r / (1 + k*w) and the angle is the exact integral of
 ## the rate that implies, for the reason SpiralFlight.converging_orbit spells
@@ -135,15 +143,44 @@ static func leads(own_id: int, partner_id: int) -> bool:
 ## comes round faster where it is tighter, and accumulating that per frame
 ## instead of integrating it would make the figure depend on frame rate and on
 ## SimulationLod's step size.
-static func dance_offset(elapsed: float, seed_value: int, is_leader: bool) -> Vector2:
-	var wander := FlightIrregularity.wobble(elapsed, seed_value)
-	var swept := TAU * DANCE_TURNS_PER_SECOND * (
-		elapsed + DANCE_RADIUS_SWING * FlightIrregularity.wobble_integral(elapsed, seed_value)
+##
+## ## `start_offset`, and the teleport it replaced
+##
+## This used to put the animal on a fixed DANCE_RADIUS_PX circle at an angle
+## derived from the pair seed, from the first frame -- so the frame a dance
+## began, both partners jumped from wherever they actually were onto that
+## circle. Measured on the shipped constants: two monarchs meeting anywhere
+## inside NOTICE_RADIUS_PX moved up to 14.9 px on that one frame, fifty-six
+## times the 0.267 px a butterfly flies in a frame, on the exact frame the
+## player is most likely to be watching them.
+##
+## `start_offset` is this animal's OWN offset from the dance's centre at the
+## moment it began, and the orbit now starts exactly there and draws in (see
+## SpiralFlight.converging_orbit). That also makes `is_leader` unnecessary
+## rather than merely redundant: the centre IS the midpoint, so the two start
+## offsets are exactly opposite by construction, and the pair stay across the
+## axis from each other for the whole dance without either being told which one
+## it is -- the same no-message-passing property, derived rather than declared.
+## The pair-seeded phase goes with it: which way round a dance is facing is now
+## which way round the two animals actually met, which is better than a hash.
+##
+## `closing_seconds` is how long the drawing-in takes. The CALLER derives it
+## from that gap and the flyer's own airspeed (see
+## FlightTransition.crossing_seconds) and hands both partners the same one --
+## see AmbientFlyerMarker._begin_courtship, which copies it across exactly as
+## it copies the shared centre, clock and round.
+static func dance_offset(
+	elapsed: float, seed_value: int, start_offset: Vector2, closing_seconds: float
+) -> Vector2:
+	return SpiralFlight.converging_orbit(
+		elapsed,
+		start_offset,
+		DANCE_RADIUS_PX,
+		DANCE_TURNS_PER_SECOND,
+		seed_value,
+		closing_seconds,
+		DANCE_RADIUS_SWING
 	)
-	var angle := swept + FlightIrregularity.phase(seed_value)
-	if not is_leader:
-		angle += PI
-	return Vector2.from_angle(angle) * (DANCE_RADIUS_PX / (1.0 + DANCE_RADIUS_SWING * wander))
 
 
 ## Whether this particular pairing produces young.
