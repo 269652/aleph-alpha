@@ -147,7 +147,7 @@ shader machinery ocean already has, unmodified. The visual result: a blue,
 shore-blended, rain-rippling ribbon threading over the real ground texture
 underneath, exactly like a real river does.
 
-## Flow: a real direction, animated (2026-08-29)
+## Flow: real direction and speed, with turbulence (2026-08-29, updated)
 
 Reported directly: "rivers should flow" — a river read as visually
 identical to still ocean, since `_paint_water_overlay` treats every water
@@ -163,17 +163,39 @@ direction and animates a translucent, directional streak pattern scrolling
 downstream over the base water color, the same "bake data into a small
 quantized tile atlas, animate continuously on the GPU from a live/derived
 uniform" shape hillshade's slope/aspect overlay already established
-(`ProceduralRiverFlowSprite`, 16 compass bins).
+(`ProceduralRiverFlowSprite`, now a 2D `DIRECTION_BINS x SPEED_BINS` atlas).
 
 This is `docs/concept/electromagnetism.md`'s own long-standing, previously-
 unvalidated water-wheel proposal ("flow speed is derived from the water
-tile's own local elevation gradient") **partially built**: direction is now
-real and driving a real visual. Speed is deliberately uniform
-(`RiverFlowShader.FLOW_SPEED`) rather than magnitude-derived — no per-river
-discharge/velocity figure is curated, so a gradient-magnitude-accurate
-speed would be precision this system doesn't have data for. The water
-wheel itself (torque, power generation) remains unbuilt; only the visual
-half of that doc's proposal is validated here.
+tile's own local elevation gradient") **built**: both direction AND speed
+are now real and driving a real visual.
+
+**Speed, added after "can you implement more natural water flow" feedback**
+(a uniform speed everywhere read as mechanical, not like water actually
+responding to the terrain it runs through): `RiverFlowShader.
+speed_fraction_for_slope_deg` maps the SAME real gradient's magnitude
+(`TerrainRelief.slope_degrees_from_gradient` — already sampled for
+direction, so this is nearly free) to a `[0,1]` fraction between
+`MIN_FLOW_SPEED` and `MAX_FLOW_SPEED`, anchored at `TerrainPassability.
+HARD_THRESHOLD_DEG` — the same real "genuine scrambling/technical-climbing"
+steepness `BiomeClassifier.SLOPE_MOUNTAIN_THRESHOLD_DEG` already reuses for
+a different purpose, rather than inventing a second, independently-
+eyeballed cap. A steep mountain stretch now visibly rushes; a flat lowland
+stretch visibly ambles. Discharge/channel-width data still isn't curated,
+so this is real GRADIENT-driven variation, not a claim of hydraulically
+exact current speed — the water wheel MECHANIC itself (torque, power
+generation) remains unbuilt; only the visual half of that doc's proposal
+is validated here.
+
+**Turbulence**, added the same pass: two octaves of scrolling value noise
+(the exact technique `water_shader.gd`'s own wind-shimmer already proves)
+perturb the streak phase itself, so bands waver and drift rather than
+reading as a perfectly rigid scrolling barcode — real flowing water is
+never that mechanically regular. Purely cosmetic (like the wind-shimmer it
+borrows the technique from), so it has no CPU mirror — only the periodic-
+streak physics another caller might reason about does
+(`RiverFlowShader.streak_intensity`, now taking an explicit `flow_speed`
+argument instead of a shared constant, since speed is no longer uniform).
 
 ## Player interaction: wading, swimming, and the submersion tint
 
@@ -264,9 +286,9 @@ than it is, matching this project's usual practice):
   swim/depth logic is (fish population/kingfisher wading, animal swimming)
   was not audited or touched here.
 - **The water wheel mechanic itself** (`docs/concept/electromagnetism.md`)
-  — flow DIRECTION is now real and visualized (see Flow above), but no
-  torque/power-generation mechanic exists yet; still an open proposal for
-  that half.
+  — flow DIRECTION and real gradient-driven SPEED are both now real and
+  visualized (see Flow above), but no torque/power-generation mechanic
+  exists yet; still an open proposal for that half.
 - **Boats, fords, ferries, bridges** (`docs/concept/transportation.md`,
   `docs/concept/infrastructure.md`) — unchanged; both docs already scope
   these as entirely unbuilt, and this pass adds the water they'd cross
@@ -295,8 +317,9 @@ than it is, matching this project's usual practice):
   fallback: reverted after playtesting" above); curated-only is what's
   live. A future connectivity-aware redesign could reuse the module.
 - **Rendering (water overlay reuse)** — ✅ Done.
-- **Flow direction (animated overlay)** — ✅ Done. Flow-rate-accurate speed,
-  and the water wheel mechanic itself — ⬜ Not started.
+- **Flow direction + real gradient-driven speed + turbulence (animated
+  overlay)** — ✅ Done. Discharge-accurate (not just gradient-derived)
+  speed, and the water wheel mechanic itself — ⬜ Not started.
 - **Player wading/swimming/submersion-tint/ripples in rivers** — ✅ Done.
 - **Decoration exclusion (trees, grass, snow)** — ✅ Done.
 - **Dry-land spawn exclusion** — ✅ Done.

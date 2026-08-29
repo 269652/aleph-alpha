@@ -2828,8 +2828,13 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# resolution in practice, but fall back to due-north rather
 			# than feed a negative angle into the atlas lookup if it ever is.
 			var flow_angle := aspect if aspect >= 0.0 else 0.0
+			# Real speed too (reported: "more natural water flow"): the
+			# SAME gradient already sampled for direction also carries a
+			# real magnitude -- see RiverFlowShader.speed_fraction_for_slope_deg.
+			var slope := relief.slope_degrees_from_gradient(gradient.x, gradient.y)
+			var speed_fraction := RiverFlowShader.speed_fraction_for_slope_deg(slope)
 			_river_flow_layer.set_cell(
-				global, 0, _terrain_renderer.atlas_coords_for_river_flow(flow_angle)
+				global, 0, _terrain_renderer.atlas_coords_for_river_flow(flow_angle, speed_fraction)
 			)
 
 

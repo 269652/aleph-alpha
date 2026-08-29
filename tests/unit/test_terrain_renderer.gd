@@ -2366,37 +2366,58 @@ func test_hillshade_overlay_tiles_are_real_slope_aspect_data_not_a_flat_fill():
 
 
 # -- river flow overlay (docs/concept/rivers.md) -----------------------------
+# Speed added 2026-08-29 ("more natural water flow") alongside direction --
+# now a 2D atlas (DIRECTION_BINS x SPEED_BINS), mirroring
+# build_hillshade_overlay_tile_set's own (SLOPE_BINS x ASPECT_BINS) shape.
 
-func test_river_flow_overlay_tile_set_has_one_tile_per_direction_bin():
+func test_river_flow_overlay_tile_set_has_one_tile_per_direction_and_speed_bin():
 	var overlay_set := renderer.build_river_flow_tile_set()
 	var source := overlay_set.get_source(0) as TileSetAtlasSource
-	assert_eq(source.get_tiles_count(), ProceduralRiverFlowSprite.DIRECTION_BINS)
+	assert_eq(
+		source.get_tiles_count(),
+		ProceduralRiverFlowSprite.DIRECTION_BINS * ProceduralRiverFlowSprite.SPEED_BINS
+	)
 
 
 func test_atlas_coords_for_river_flow_differs_by_direction_bin():
-	var north := renderer.atlas_coords_for_river_flow(0.0)
-	var east := renderer.atlas_coords_for_river_flow(90.0)
+	var north := renderer.atlas_coords_for_river_flow(0.0, 0.5)
+	var east := renderer.atlas_coords_for_river_flow(90.0, 0.5)
 	assert_ne(north, east)
 
 
+func test_atlas_coords_for_river_flow_differs_by_speed_bin():
+	var slow := renderer.atlas_coords_for_river_flow(0.0, 0.0)
+	var fast := renderer.atlas_coords_for_river_flow(0.0, 1.0)
+	assert_ne(slow, fast)
+
+
 func test_atlas_coords_for_river_flow_wraps_at_360():
-	assert_eq(renderer.atlas_coords_for_river_flow(0.0), renderer.atlas_coords_for_river_flow(360.0))
+	assert_eq(
+		renderer.atlas_coords_for_river_flow(0.0, 0.5), renderer.atlas_coords_for_river_flow(360.0, 0.5)
+	)
 
 
-func test_river_flow_overlay_tiles_are_real_direction_data_not_a_flat_fill():
+func test_river_flow_overlay_tiles_are_real_direction_and_speed_data_not_a_flat_fill():
 	var overlay_set := renderer.build_river_flow_tile_set()
 	var source := overlay_set.get_source(0) as TileSetAtlasSource
 	var image: Image = source.texture.get_image()
 	var art := TerrainRenderer.ART_TILE_SIZE
 
-	var north_coords := renderer.atlas_coords_for_river_flow(0.0)
-	var east_coords := renderer.atlas_coords_for_river_flow(90.0)
+	var north_coords := renderer.atlas_coords_for_river_flow(0.0, 0.2)
+	var east_coords := renderer.atlas_coords_for_river_flow(90.0, 0.2)
 	var north_origin := Vector2i(north_coords.x * art, north_coords.y * art)
 	var east_origin := Vector2i(east_coords.x * art, east_coords.y * art)
-
 	var north_pixel := image.get_pixel(north_origin.x, north_origin.y)
 	var east_pixel := image.get_pixel(east_origin.x, east_origin.y)
 	assert_ne(north_pixel.r, east_pixel.r, "different direction bins must encode different data")
+
+	var slow_coords := renderer.atlas_coords_for_river_flow(45.0, 0.0)
+	var fast_coords := renderer.atlas_coords_for_river_flow(45.0, 1.0)
+	var slow_origin := Vector2i(slow_coords.x * art, slow_coords.y * art)
+	var fast_origin := Vector2i(fast_coords.x * art, fast_coords.y * art)
+	var slow_pixel := image.get_pixel(slow_origin.x, slow_origin.y)
+	var fast_pixel := image.get_pixel(fast_origin.x, fast_origin.y)
+	assert_lt(slow_pixel.g, fast_pixel.g, "different speed bins must encode different data")
 
 
 # -- pitched roof variants ----------------------------------------------------
