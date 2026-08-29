@@ -91,8 +91,17 @@ func spawn_trees(
 		var global_y := chunk_origin_tiles.y + y
 		for x in chunk.width:
 			var global_x := chunk_origin_tiles.x + x
-			var biome_name := chunk.biome[y * chunk.width + x]
+			var index := y * chunk.width + x
+			var biome_name := chunk.biome[index]
 			if not _tree_placement.has_tree_at(global_x, global_y, biome_name):
+				continue
+			# A river never changes chunk.biome itself (see
+			# docs/concept/rivers.md's Rendering section), so the forest-cell
+			# check above can't see it on its own -- reported live: "trees
+			# grow in rivers". Size-checked so a Chunk built without ever
+			# setting is_river (every pre-existing test fixture) is treated
+			# as "no rivers" rather than an index error.
+			if index < chunk.is_river.size() and chunk.is_river[index] == 1:
 				continue
 			# A cell a real building piece already stands on is not open
 			# ground. chunk.modifications is loaded from disk BEFORE this runs

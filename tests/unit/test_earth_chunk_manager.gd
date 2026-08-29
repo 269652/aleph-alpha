@@ -44,6 +44,7 @@ const Strata = preload("res://src/world/strata.gd")
 const PlayerIdentity = preload("res://src/emergence/player_identity.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const BuildingStatics = preload("res://src/gameplay/building_statics.gd")
+const Chunk = preload("res://src/world/chunk.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -74,6 +75,66 @@ func after_each():
 	tile_map_layer.free()
 	entities_parent.free()
 	creatures_parent.free()
+
+
+## Reported directly after playtesting: rivers were "still treated like
+## normal biome... grass and trees grow in rivers" -- the exact "trees
+## standing in a lake" bug class _can_root_at's own doc comment already
+## names (from when seed-spread first started travelling far enough to
+## matter), now recurring for rivers because a river's own biome is
+## untouched land (docs/concept/rivers.md's Rendering section) and
+## TreeRooting.can_root_in alone can't see it. Berlin sits on the Spree's
+## own curated course, so this is a real, not hypothetical, river cell.
+func test_a_seed_spread_sapling_cannot_root_in_a_real_river_cell():
+	manager.update(_berlin_tile)
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		for y in EarthChunkManager.CHUNK_SIZE:
+			for x in EarthChunkManager.CHUNK_SIZE:
+				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+				if not manager.is_river_at_global(global_x, global_y):
+					continue
+				var chunk: Chunk = manager._loaded_chunks[chunk_coord]
+				var position := (Vector2(global_x, global_y) + Vector2(0.5, 0.5)) * TerrainRenderer.TILE_SIZE
+				assert_false(
+					manager._can_root_at(chunk, chunk_coord, position),
+					"(%d, %d) is a real river cell -- a sapling must not root there" % [global_x, global_y]
+				)
+				return  # one real, confirmed river cell is enough to pin the fix
+	fail_test("expected at least one real river cell near Berlin (the Spree)")
+
+
+## Reported directly after playtesting: rivers were "still treated like
+## normal biome... snow falls on rivers" -- a river's OWN biome is
+## untouched land (see docs/concept/rivers.md's Rendering section), so
+## _paint_snow_tile's existing ocean-only water check never caught it. Same
+## bug class this file already regression-tests for TREES standing in a
+## lake (_can_root_at's own doc comment), just never extended to snow, and
+## now recurring for rivers specifically. Berlin sits on the Spree's own
+## curated course, so this is a real, not hypothetical, river cell.
+func test_snow_does_not_cover_a_real_river_cell_even_at_full_depth():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.update(_berlin_tile)
+	manager.set_snow_depth(1.0)  # fully covered -- the strongest case
+
+	var found_a_river_cell := false
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
+		for y in EarthChunkManager.CHUNK_SIZE:
+			for x in EarthChunkManager.CHUNK_SIZE:
+				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
+				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+				if not manager.is_river_at_global(global_x, global_y):
+					continue
+				found_a_river_cell = true
+				assert_false(
+					snow_layer.get_used_cells().has(Vector2i(global_x, global_y)),
+					"river cell (%d, %d) must not show snow" % [global_x, global_y]
+				)
+	assert_true(found_a_river_cell, "expected at least one real river cell near Berlin (the Spree)")
+	snow_layer.free()
 
 
 ## Pure passthrough, same shape as gradient_at_global -- needs no loaded

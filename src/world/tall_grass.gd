@@ -92,6 +92,7 @@ const SECONDS_PER_SEED_FALL := 60.0
 var _width: int
 var _height: int
 var _biome: PackedStringArray
+var _is_river: PackedByteArray
 var _seed_value: int
 
 ## Vector2i cell -> growth float (0..1; 1 is mature).
@@ -109,12 +110,28 @@ var _shed_accumulator := 0.0
 var _shed_index := 0
 
 
-func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
+## `is_river` (see Chunk.is_river) defaults to empty -- every pre-existing
+## 4-argument call site keeps behaving exactly as before (no rivers), the
+## same optional-trailing-parameter shape BiomeClassifier.classify's own
+## slope_deg addition already used.
+func _init(
+	seed_value: int, width: int, height: int, biome: PackedStringArray,
+	is_river: PackedByteArray = PackedByteArray()
+) -> void:
 	_seed_value = seed_value
 	_width = width
 	_height = height
 	_biome = biome
+	_is_river = is_river
 	_seed_initial_patches()
+
+
+## True if (x, y) is a real river cell -- size-checked so a caller that
+## never passed is_river (every pre-existing test fixture) is treated as
+## "no rivers" rather than an index error.
+func _is_river_at(x: int, y: int) -> bool:
+	var index := y * _width + x
+	return index < _is_river.size() and _is_river[index] == 1
 
 
 func get_patch_cells() -> Array:
@@ -232,6 +249,12 @@ func _seed_initial_patches() -> void:
 				return
 			if _biome[y * _width + x] != "grassland":
 				continue
+			# A river never changes the biome array itself (see
+			# docs/concept/rivers.md's Rendering section), so the grassland
+			# check above can't see it on its own -- reported live: "grass
+			# grows in rivers".
+			if _is_river_at(x, y):
+				continue
 			var n := PixelNoise.smooth(_seed_value, float(x) * FIELD_NOISE_SCALE, float(y) * FIELD_NOISE_SCALE)
 			if n > FIELD_NOISE_THRESHOLD:
 				_patches[Vector2i(x, y)] = 1.0  # initial grass starts mature, like map-generated trees
@@ -255,6 +278,8 @@ func _step_spread() -> void:
 		if target.x < 0 or target.x >= _width or target.y < 0 or target.y >= _height:
 			continue
 		if _biome[target.y * _width + target.x] != "grassland":
+			continue
+		if _is_river_at(target.x, target.y):
 			continue
 		if _patches.has(target):
 			continue

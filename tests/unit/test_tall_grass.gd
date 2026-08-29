@@ -30,6 +30,52 @@ func test_seeds_no_patches_when_there_is_no_grassland():
 	assert_eq(grass.get_patch_cells().size(), 0)
 
 
+## Reported directly after playtesting: rivers were "still treated like
+## normal biome... grass and trees grow in rivers" -- a river never
+## changes the biome array itself (docs/concept/rivers.md's Rendering
+## section), so the grassland-only check alone can't see it. Finds a cell
+## that actually seeded WITHOUT any river data first, so marking it as
+## river afterward is a real regression check, not a coincidence of noise.
+func test_seeds_no_patch_on_a_real_river_cell_even_if_grassland():
+	var baseline := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"))
+	var patch_cells := baseline.get_patch_cells()
+	assert_gt(patch_cells.size(), 0, "need at least one naturally-seeded cell for this test to mean anything")
+	var cell: Vector2i = patch_cells[0]
+
+	var is_river := PackedByteArray()
+	is_river.resize(WIDTH * HEIGHT)
+	is_river[cell.y * WIDTH + cell.x] = 1
+	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_all("grassland"), is_river)
+	assert_false(grass.get_patch_cells().has(cell), "a real river cell must never seed grass")
+
+
+## Every cell that did NOT naturally seed is marked river, leaving spread
+## nowhere valid to go -- if the exclusion is missing, patch count grows
+## anyway (see test_mature_patches_spread_to_adjacent_grassland_over_time,
+## which proves spread DOES happen given real room); if it's respected,
+## it can't.
+func test_spread_never_lands_on_a_real_river_cell():
+	var biome := _biome_all("grassland")
+	var baseline := TallGrass.new(5, WIDTH, HEIGHT, biome)
+	var seeded_cells := {}
+	for cell in baseline.get_patch_cells():
+		seeded_cells[cell] = true
+	assert_gt(seeded_cells.size(), 0, "need at least one naturally-seeded cell")
+
+	var is_river := PackedByteArray()
+	is_river.resize(WIDTH * HEIGHT)
+	for y in HEIGHT:
+		for x in WIDTH:
+			if not seeded_cells.has(Vector2i(x, y)):
+				is_river[y * WIDTH + x] = 1
+
+	var grass := TallGrass.new(5, WIDTH, HEIGHT, biome, is_river)
+	var before := grass.get_patch_cells().size()
+	for i in 200:
+		grass.advance(TallGrass.SPREAD_INTERVAL)
+	assert_eq(grass.get_patch_cells().size(), before, "spread must never claim a real river cell")
+
+
 func test_seeds_patches_only_on_grassland_cells():
 	var grass := TallGrass.new(1, WIDTH, HEIGHT, _biome_half_grassland())
 	assert_gt(grass.get_patch_cells().size(), 0)

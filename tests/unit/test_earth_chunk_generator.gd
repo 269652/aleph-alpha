@@ -280,6 +280,36 @@ func test_every_generated_cell_is_exactly_the_per_tile_query():
 		assert_eq(chunk.biome, expected_biome, "biomes of chunk %s" % chunk_coord)
 
 
+## New Chunk field, needed so worldgen-time decoration placement (trees,
+## grass -- see TreeRenderer.spawn_trees, TallGrass) can exclude river
+## cells without each needing its own live generator reference: they
+## already receive the whole Chunk. The Gaskugel's own chunk is used
+## specifically (not an arbitrary one) so this test has a REAL true value
+## to check, not just an all-false array that would pass by accident.
+func test_chunk_is_river_matches_is_river_at_global_including_a_real_river_cell():
+	var geo := GeoCoordinates.new()
+	var river_tile := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var chunk_size := 8
+	var chunk_coord := Vector2i(
+		floori(float(river_tile.x) / chunk_size), floori(float(river_tile.y) / chunk_size)
+	)
+	var chunk := generator.generate_chunk(chunk_coord, chunk_size)
+
+	var found_a_river_cell := false
+	for local_y in chunk_size:
+		for local_x in chunk_size:
+			var global_x := chunk_coord.x * chunk_size + local_x
+			var global_y := chunk_coord.y * chunk_size + local_y
+			var index := local_y * chunk_size + local_x
+			var expected := generator.is_river_at_global(global_x, global_y)
+			if expected:
+				found_a_river_cell = true
+			assert_eq(chunk.is_river[index] == 1, expected, "(%d, %d)" % [global_x, global_y])
+	assert_true(found_a_river_cell, "expected the Gaskugel's own chunk to contain a real river cell")
+
+
 func test_chunk_moisture_and_temperature_are_normalized():
 	var chunk := generator.generate_chunk(Vector2i(100, 50), 8)
 	for value in chunk.moisture:
@@ -325,6 +355,21 @@ func test_river_depth_at_global_is_deepest_at_a_curated_waypoint():
 		RiverDepth.MAX_CURATED_RIVER_DEPTH_METERS,
 		0.01
 	)
+
+
+## Reported directly, after playtesting: procedural rivers were "scattered
+## everywhere" and read as disconnected patches unrelated to any real
+## river -- not "one coherent stream" the way a curated, GPS-traced river
+## does. Measured before this fix: ~6% of tiles in a curated-river-free
+## region tested true via the noise-contour proxy alone (see
+## docs/concept/rivers.md's "Procedural fallback reverted" section). The
+## procedural module itself (procedural_river.gd) stays real and tested,
+## just no longer consulted live -- curated-only is what's live now.
+func test_procedural_fallback_is_not_live_wired_far_from_any_curated_river():
+	for x in range(20000, 20400, 37):
+		for y in range(7000, 7400, 41):
+			assert_false(generator.is_river_at_global(x, y), "(%d, %d) should not be a river with procedural fallback disabled" % [x, y])
+			assert_eq(generator.river_depth_meters_at_global(x, y), 0.0)
 
 
 func test_river_depth_at_global_is_zero_far_from_any_river():

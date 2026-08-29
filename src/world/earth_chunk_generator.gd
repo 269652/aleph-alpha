@@ -7,7 +7,6 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const TerrainRelief = preload("res://src/world/terrain_relief.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
-const ProceduralRiver = preload("res://src/world/procedural_river.gd")
 const RiverDepth = preload("res://src/world/river_depth.gd")
 
 ## World scale: ~111 tiles per degree of latitude/longitude (~1km/tile),
@@ -44,7 +43,6 @@ var _climate_model := ClimateModel.new()
 var _biome_classifier := BiomeClassifier.new()
 var _terrain_relief := TerrainRelief.new()
 var _river_catalog := RiverCatalog.new()
-var _procedural_river := ProceduralRiver.new()
 
 var _fine_detail_noise := FastNoiseLite.new()
 var _moisture_noise := FastNoiseLite.new()
@@ -70,6 +68,8 @@ func generate_chunk(chunk_coord: Vector2i, chunk_size: int) -> Chunk:
 	moisture.resize(chunk_size * chunk_size)
 	var temperature := PackedFloat32Array()
 	temperature.resize(chunk_size * chunk_size)
+	var is_river := PackedByteArray()
+	is_river.resize(chunk_size * chunk_size)
 
 	for local_y in chunk_size:
 		var global_y := chunk_coord.y * chunk_size + local_y
@@ -87,6 +87,7 @@ func generate_chunk(chunk_coord: Vector2i, chunk_size: int) -> Chunk:
 			biome[index] = _biome_at_global(
 				global_x, global_y, cell_elevation, temperature[index], moisture[index]
 			)
+			is_river[index] = 1 if is_river_at_global(global_x, global_y) else 0
 
 	var chunk := Chunk.new()
 	chunk.width = chunk_size
@@ -95,6 +96,7 @@ func generate_chunk(chunk_coord: Vector2i, chunk_size: int) -> Chunk:
 	chunk.biome = biome
 	chunk.moisture = moisture
 	chunk.temperature = temperature
+	chunk.is_river = is_river
 	return chunk
 
 
@@ -212,22 +214,24 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 
 
 ## True if (global_x, global_y) should render with the water overlay as a
-## river: a curated real river's course (RiverCatalog) OR a procedural
-## fallback candidate (ProceduralRiver) everywhere else -- see
+## river: a curated real river's course (RiverCatalog) -- see
 ## docs/concept/rivers.md. Deliberately NEVER changes biome_at_global's own
 ## result (a river never becomes an eighth BiomeClassifier.KNOWN_BIOMES
-## entry); this is consulted only by EarthChunkManager's water overlay,
-## layered over whatever land biome is already there. The cheap curated
-## check runs first so the real elevation sample below is only paid when
-## nothing curated already answered the question, the same
-## avoid-the-expensive-sample-when-unneeded shape as _slope_override_deg_for.
+## entry); this is consulted by EarthChunkManager's water overlay and by
+## worldgen decoration placement (trees, grass) alike, layered over/
+## excluded from whatever land biome is already there.
+##
+## Curated-only (see docs/concept/rivers.md's "Procedural fallback
+## reverted" section): a noise-contour procedural fallback (ProceduralRiver)
+## was live-wired here originally, but real playtesting reported it as
+## "scattered everywhere" -- disconnected patches with no relationship to
+## real geography, not "one coherent stream." Measured: ~6% of tiles in a
+## curated-river-free region tested true via the procedural proxy alone.
+## The module itself (procedural_river.gd) stays real and tested, just no
+## longer consulted here -- pinned by
+## test_procedural_fallback_is_not_live_wired_far_from_any_curated_river.
 func is_river_at_global(global_x: int, global_y: int) -> bool:
-	if _river_catalog.is_river_tile(global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES):
-		return true
-	var cell_elevation := elevation_at_global(global_x, global_y)
-	return _procedural_river.is_river_candidate(
-		global_x, global_y, cell_elevation, EARTH_SEA_LEVEL, EARTH_MOUNTAIN_LEVEL
-	)
+	return _river_catalog.is_river_tile(global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES)
 
 
 ## Real meters of river depth at (global_x, global_y) -- see river_depth.gd.
@@ -242,9 +246,6 @@ func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
 	)
 	if distance <= RiverCatalog.RIVER_HALF_WIDTH_TILES:
 		return RiverDepth.curated_depth_meters(distance, RiverCatalog.RIVER_HALF_WIDTH_TILES)
-	var cell_elevation := elevation_at_global(global_x, global_y)
-	if _procedural_river.is_river_candidate(global_x, global_y, cell_elevation, EARTH_SEA_LEVEL, EARTH_MOUNTAIN_LEVEL):
-		return RiverDepth.PROCEDURAL_RIVER_DEPTH_METERS
 	return 0.0
 
 
