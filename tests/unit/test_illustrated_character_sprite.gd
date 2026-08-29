@@ -4,14 +4,16 @@ extends GutTest
 ## IllustratedAnimalSprite -- see that module's tests for the exhaustive
 ## coverage of the shared slicing/chroma-key machinery.
 ##
-## body/legs/arms are real registered art now (see docs/concept/
-## character_art_brief.md): body.png and leg.png are each a single neutral
-## idle pose (no left/right split -- legs are a fused PAIR, drawn and worn as
-## one part rather than two independently-swinging sprites, see
-## CharacterView's own legs-fusion handling); arms.png is two poses side by
-## side, sliced by an exact rect pair rather than the usual divider-column
-## scan because the sheet's own divider is an OPAQUE line, not a transparent
-## gap (see idle_rects).
+## body/legs/arms USED to be registered `_PARTS` art here (see docs/concept/
+## character_art_brief.md): body.png and leg.png were each a single neutral
+## idle pose (no left/right split -- legs a fused PAIR, drawn and worn as one
+## part rather than two independently-swinging sprites, see CharacterView's
+## own legs-fusion handling); arms.png was two poses side by side, sliced by
+## an exact rect pair rather than the usual divider-column scan because that
+## sheet's own divider is an OPAQUE line, not a transparent gap (see
+## idle_rects). All three source from hero_composite.png now -- see the
+## section below, where legs is no longer ONE pose but a real 5-frame
+## WALK-CYCLE strip of the fused pair.
 ##
 ## head is still a different mechanism entirely (has_head/
 ## generate_head_texture, not has_part/generate_textures) -- see the "head
@@ -69,18 +71,69 @@ func test_different_seeds_can_pick_different_outfit_variants():
 	assert_gt(seen.size(), 1, "20 different heroes should not all wear the same outfit")
 
 
-## Body and legs are each ONE drawing per cell; arms are genuinely TWO
-## (a real transparent gap splits them, unlike the fused legs) -- see the
-## file's own doc comment on why arms alone splits.
+## Body is ONE drawing per cell; arms are genuinely TWO (a real transparent
+## gap splits them); legs are FIVE -- a real walk-cycle strip, one fused pair
+## per frame across five stride poses.
+##
+## legs' expectation here was a flat 1 until it was caught disagreeing with
+## the art: hero_composite.png's second regeneration replaced the single
+## static fused pose with a per-row walk-cycle strip (reported live, "I
+## replaced hero composite sprite"), which the source registered as
+## HERO_COMPOSITE_BAND_INDICES' five leg bands and CharacterView wired
+## straight into its walk animation, but THIS assertion was left behind
+## saying 1 -- so the suite failed against correct art rather than against a
+## real defect. See the source file's own doc comment on that regeneration,
+## and test_every_outfit_row_produces_the_expected_frame_count, which had
+## already been updated for it.
+##
+## Expected leg count comes from the registered band list rather than a bare
+## literal 5, so this stays a real check and not a restatement of the
+## registry: what it proves is that detect_frames actually FINDS every band
+## the registry asks for in this row -- a row whose bands merged would come
+## back short of the registered count and fail here.
 func test_generate_composite_textures_returns_the_right_frame_count_per_part():
-	for part_name in ["body", "legs"]:
-		var textures := sprite.generate_composite_textures(part_name, 0)
-		assert_eq(textures.size(), 1, part_name)
+	assert_eq(sprite.generate_composite_textures("body", 0).size(), 1, "body")
+
+	var leg_textures := sprite.generate_composite_textures("legs", 0)
+	assert_eq(
+		leg_textures.size(),
+		IllustratedCharacterSprite.HERO_COMPOSITE_BAND_INDICES["legs"].size(),
+		"legs"
+	)
+
 	var arm_textures := sprite.generate_composite_textures("arms", 0)
 	assert_eq(arm_textures.size(), 2)
+
+	for texture in leg_textures:
+		assert_gt(texture.get_width(), 0)
+		assert_gt(texture.get_height(), 0)
 	for texture in arm_textures:
 		assert_gt(texture.get_width(), 0)
 		assert_gt(texture.get_height(), 0)
+
+
+## The whole point of a walk-cycle strip: those five frames must be five
+## DIFFERENT stride poses, not one pose selected five times. Nothing else in
+## this file would catch that -- a regression pointing every
+## HERO_COMPOSITE_BAND_INDICES leg entry at the same band, or a band-detection
+## change slicing one pose into five near-identical slivers, would still
+## satisfy every count assertion above while CharacterView's own frame
+## cycling (see _apply_leg_frame) silently played a static leg.
+func test_the_legs_walk_strip_is_five_genuinely_different_poses():
+	var frames := sprite.generate_composite_textures("legs", 0)
+	# Compared by HASH rather than by raw get_data(): a failing assert_ne on
+	# two 64x96 RGBA buffers dumps both PackedByteArrays into the report in
+	# full (~750KB, measured against a deliberately broken registry), which
+	# buries the one line saying which pair matched.
+	var digests: Array[int] = []
+	for texture in frames:
+		digests.append(hash(texture.get_image().get_data()))
+	for i in digests.size():
+		for j in range(i + 1, digests.size()):
+			assert_ne(
+				digests[i], digests[j],
+				"legs frames %d and %d should be different stride poses" % [i, j]
+			)
 
 
 func test_generate_composite_textures_is_empty_for_an_unregistered_part():
@@ -136,7 +189,9 @@ func test_composite_part_scale_for_falls_back_to_one_for_an_unregistered_part():
 ## x-range counted as a second "body" frame (reached the live game as a
 ## malformed portrait), and row 7's legs content starting further left than
 ## an assumed lower bound, so the whole frame fell OUTSIDE the range and
-## silently vanished (see HERO_COMPOSITE_COLUMN_X's own doc comment on both).
+## silently vanished (both defects belong to the since-removed
+## HERO_COMPOSITE_COLUMN_X era, before the regeneration below moved
+## band-finding onto HERO_COMPOSITE_BAND_INDICES + detect_frames).
 ## Arms is checked more loosely -- almost every row's two arms detach
 ## cleanly into two frames, but the source art doesn't guarantee it for
 ## every one (row 6 doesn't), and CharacterView/the portrait both already
@@ -482,7 +537,7 @@ func test_has_part_does_not_report_head_head_uses_its_own_surface():
 ## tiny measured content height -- reached the live game as a floating
 ## translucent smear where a face should be. has_usable_head is the same
 ## has-X-then-fallback safety net body/legs/arms already lean on for their
-## own per-row gaps (see HERO_COMPOSITE_COLUMN_X's doc comment), applied to
+## own per-row gaps (see HERO_COMPOSITE_BAND_INDICES' doc comment), applied to
 ## head art instead of chasing down the flood-fill's own root cause per cell.
 func test_has_usable_head_is_false_for_a_known_near_empty_cell():
 	assert_false(sprite.has_usable_head(51, Color(0.5, 0.35, 0.24)))

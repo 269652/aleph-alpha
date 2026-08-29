@@ -63,27 +63,45 @@ no longer referenced — `_PARTS`' mechanism is kept working (see "Sheet
 format" below) for any future part that only ever needs one neutral pose.
 
 - **8 pre-colored outfits, one sheet.** `hero_composite.png` is
-  1024×1536 px: 3 columns (arms, body, legs, left to right) × 8 rows, each
-  row a complete, already-colored outfit variant (`HERO_COMPOSITE_ROW_HEIGHT`
-  = 192px × `HERO_COMPOSITE_ROWS` = 8). Column boundaries
-  (`HERO_COMPOSITE_COLUMN_X`) were measured directly against the real file
-  rather than assumed from an even three-way pixel split (1024 doesn't
-  divide evenly by 3, and arms' own content sits toward the left of its
-  third) — deliberately generous ranges, since `normalize_frames`' own
-  crop-to-content step finds the real boundary inside whatever range it's
-  given; a range only has to fully contain one column's content without
-  touching its neighbour's.
+  1024×1535 px: 8 rows (`HERO_COMPOSITE_ROWS`), each a complete,
+  already-colored outfit variant, and each carrying **8 real content bands**
+  left to right — 2 arm poses, 1 body pose, then a 5-frame leg walk cycle
+  (`HERO_COMPOSITE_BAND_INDICES` maps band index → part). Neither axis is an
+  even grid, and neither is assumed: row y-bands are measured directly
+  against the real file (`HERO_COMPOSITE_ROW_BANDS` — 1535 doesn't divide
+  evenly by 8, and this is hand-illustrated art with real uneven gaps
+  between rows), and the bands WITHIN a row are found at load time by
+  `detect_frames` rather than pinned to fixed x-ranges at all. That last
+  part is a change: the first version of this sheet was sliced by fixed
+  per-column x-ranges (`HERO_COMPOSITE_COLUMN_X`, since removed), which is
+  what the "Column ranges needed real per-row verification" bullet below is
+  the history of. Band-finding needs the sheet's solid near-black background
+  removed first by a border flood fill — `detect_frames`' own
+  alpha-or-pale-divider emptiness check finds nothing on a black background,
+  so the whole row would otherwise read as one solid blob. Bands narrower
+  than `HERO_COMPOSITE_MIN_BAND_WIDTH` (20px) are discarded as
+  anti-aliasing slivers; every real band across all 8 rows measures at least
+  50px, every sliver 4px or less.
 - **Which outfit a hero wears is DNA-derived** (`outfit_variant_for(seed)`,
   `hash % 8`) — asked directly, and answered the same way skin/hair/eyes
   already are: vary by DNA, no new player-choosable axis. This is the
   opposite answer from the HEAD axis below (a real per-player choice) —
   worth remembering as a real asymmetry in this rig, not an inconsistency to
   "fix": a face is a personal identity choice, a class outfit's color isn't.
-- **Legs are still a fused pair**, exactly as the original `leg.png` was:
-  both legs drawn together as one connected pose, worn as ONE sprite
-  covering both `LegLeft`/`LegRight` world slots (`LegLeft` repositioned to
-  the midpoint, `LegRight` hidden — `CharacterView._apply_legs`,
-  `legs_are_fused()`).
+- **Legs are still a fused pair, but no longer a single pose.** Fused in
+  the sense the original `leg.png` was: both legs drawn together in one
+  connected drawing, worn as ONE sprite covering both `LegLeft`/`LegRight`
+  world slots (`LegLeft` repositioned to the midpoint, `LegRight` hidden —
+  `CharacterView._apply_legs`, `legs_are_fused()`). What changed in this
+  sheet's SECOND regeneration (reported live: "I replaced hero composite
+  sprite .. pls wire") is that each row now draws **five** stride frames of
+  that fused pair rather than one static pose — a real walk cycle, stepped
+  through by `CharacterView._apply_leg_frame` (frame 0 is the neutral
+  standing pose, shown at rest). Row 7's band detection measures 4 rather
+  than 5, where two adjacent poses' content touches closely enough after the
+  flood fill to read as one band — the same accepted per-row art variance
+  arms' own 1-or-2 count already tolerates, since the frame cycling degrades
+  gracefully to however many frames actually come back.
 - **Arms are still two independent drawings** side by side with real
   transparent space between them (unlike the fused legs) — found the same
   way `detect_frames`' column-emptiness scan already splits any other
@@ -121,8 +139,15 @@ format" below) for any future part that only ever needs one neutral pose.
   quietly left stale. Whoever generates back/side art next should write that
   prompt into section 4 properly rather than relying on it having survived
   in chat history.
-- **The walk-cycle gap this doc used to flag now has a real hip+knee
-  joint**, not just a whole-pair bob/rock. Timeline: the original `leg.png`
+- **The walk-cycle gap this doc used to flag is closed by real drawn art
+  now** — read this whole bullet as HISTORY plus a still-useful design
+  record, not as what runs today. The hip+knee crop-and-hinge rig described
+  below was the answer before `hero_composite.png`'s second regeneration
+  delivered a genuine 5-frame leg walk cycle per outfit row; that art
+  SUPERSEDED it (see the closing note), and `CharacterView` no longer calls
+  it. It is kept, still tested, and still documented here because its
+  reasoning — above all why a weight-painted mesh skin was set aside — is
+  the best starting point for whoever next touches leg animation. Timeline: the original `leg.png`
   version of this doc recorded "illustrated legs stay static while walking"
   as an honest gap; a later pass added a whole-pair vertical bob
   (`FUSED_LEG_BOB_AMPLITUDE`) plus a small hip-pivot rock
@@ -147,6 +172,18 @@ format" below) for any future part that only ever needs one neutral pose.
   single-hump rectified-sine knee curve, not the full biomechanical
   double-hump, see that file's own doc comment) instead of a flat-amplitude
   rock.
+
+  **SUPERSEDED by real art.** Asked for a proper walk-cycle sheet, the user
+  regenerated `hero_composite.png` a second time ("I replaced hero composite
+  sprite .. pls wire"), and it carries five real leg stride frames per outfit
+  row. Real drawn poses beat synthesizing motion from one static pose, so
+  `CharacterView._apply_legs` now loads all five into `_leg_walk_frames` and
+  `_apply_leg_frame`/`_process` step through them; `LegLeftKnee`/`LegLeftShin`
+  remain in the `.tscn` but are permanently hidden, and
+  `composite_leg_segments`/`leg_gait_cycle.gd` are no longer called from
+  `CharacterView`. The one thing the new art also gives for free: real poses
+  differ slightly in drawn height, so re-measuring the scale per frame
+  produces a natural vertical bob without a synthetic bob layered on top.
   - **A full weight-painted Polygon2D/Skeleton2D mesh skin was evaluated and
     set aside**, not attempted blind: Godot 4's `Polygon2D.bones` property
     needs a specific, thinly-documented per-vertex weight array format
@@ -156,8 +193,10 @@ format" below) for any future part that only ever needs one neutral pose.
     see `IllustratedCharacterSprite`'s own "Leg hip/knee segments" section
     for the fuller reasoning.
   - **Still a single FUSED rig, not two independently-alternating legs.**
-    The source art draws both legs as one connected pose (see this doc's own
-    "hero_composite.png" section above) — there was no way to rig genuine
+    This outlived the supersession above and is the one genuinely open gap
+    here: the source art draws both legs as one connected pair in every
+    frame, walk cycle included (see this doc's own "hero_composite.png"
+    section above) — there was no way to rig genuine
     left-leg-forward/right-leg-back alternation out of it this pass, on a
     front-facing-only character, without either new art or attempting the
     same visual-breakage risk a rigid X-split into two independent leg
@@ -169,9 +208,9 @@ format" below) for any future part that only ever needs one neutral pose.
     scale) — a genuine two-joint skeletal animation, just still one whole
     pair moving together rather than two alternating legs. A true
     independently-alternating per-leg gait is still a real, explicit future
-    gap — it needs either new split-leg source art, or a second attempt at
-    the weight-painted skin now that a real hip/knee joint exists to hang
-    it from.
+    gap — it needs new split-leg source art. (The "second attempt at the
+    weight-painted skin now that a real hip/knee joint exists to hang it
+    from" this used to suggest no longer applies: that joint is retired.)
 - **A procedural Neck bridges Head and Body**, since neither part's own art
   draws one and both are positioned by their own measured content (see
   "Every part gets its own measured scale" below), which varies per outfit

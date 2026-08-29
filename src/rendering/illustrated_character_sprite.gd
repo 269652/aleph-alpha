@@ -426,8 +426,9 @@ const HERO_COMPOSITE_ROW_BANDS: Array[Vector2i] = [
 
 var _hero_composite_sheet: Image = null
 
-## (part, variant, facing) key -> Array[Image] (1 entry for body/legs, 2 for
-## arms) / measured content height of frame 0 -- the composite counterpart
+## (part, variant, facing) key -> Array[Image] (1 entry for body, 2 for arms,
+## 5 for legs' walk strip) / measured content height of frame 0 -- the
+## composite counterpart
 ## to _frame_cache/_head_content_height_cache: shared across every
 ## CharacterView, since geometry and color are both fixed once the art
 ## exists (nothing per-instance to lose by sharing).
@@ -447,9 +448,10 @@ func outfit_variant_for(seed_value: int) -> int:
 
 
 ## The pre-colored texture(s) for one part of one outfit variant -- one
-## element for body/legs, two (left, right) for arms (see this section's own
-## doc comment on why arms alone splits). Empty for an unregistered part,
-## matching generate_textures' own "ask has_X first" contract.
+## element for body, two (left, right) for arms, five for legs (a real
+## walk-cycle strip; see this section's own doc comment for why each part
+## has the count it does). Empty for an unregistered part, matching
+## generate_textures' own "ask has_X first" contract.
 func generate_composite_textures(part_name: String, variant: int, facing: String = "front") -> Array[ImageTexture]:
 	var textures: Array[ImageTexture] = []
 	for image in _composite_frames(part_name, variant, facing):

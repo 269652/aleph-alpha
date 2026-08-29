@@ -626,7 +626,7 @@ func _apply_body(appearance: Dictionary) -> void:
 	# registered part can still come back empty for one specific outfit row
 	# if that row's content doesn't land where expected (measured across
 	# every row after exactly this happened live -- see
-	# HERO_COMPOSITE_COLUMN_X's own doc comment); falling back to procedural
+	# HERO_COMPOSITE_BAND_INDICES' own doc comment); falling back to procedural
 	# here is a safety net against a FUTURE such gap, not a fix for a known
 	# one (the known one is fixed at the source).
 	if not textures.is_empty():
@@ -746,7 +746,7 @@ func _apply_arms(appearance: Dictionary) -> void:
 		# Almost every row's two arms are detached enough to split into two
 		# frames, but not a guarantee the source art makes for every one --
 		# a row whose art happens to fuse them (found by checking all 8, see
-		# HERO_COMPOSITE_COLUMN_X's own doc comment on the same class of
+		# HERO_COMPOSITE_BAND_INDICES' own doc comment on the same class of
 		# gap) falls back to ArmRight wearing the same single frame as
 		# ArmLeft, which is a real cheat but a way smaller one than leaving
 		# ArmRight showing whatever texture it happened to have before.
