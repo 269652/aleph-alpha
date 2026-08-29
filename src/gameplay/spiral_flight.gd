@@ -97,6 +97,12 @@ const TIGHTEST_RADIUS_M := SPIRAL_RADIUS_M / (1.0 + RADIUS_SWING)
 ## and tops out near 5 m/s, and the whirl is the top end.
 const BURST_SPEED_MPS := 5.0
 
+## The same burst in this world's own units -- the ceiling every motion an
+## ambient flyer makes has to fit under, whichever state it is in (see
+## AmbientFlyerMarker.airspeed_px_per_second). A conversion of a constant that
+## already exists, not a new number.
+const BURST_SPEED_PX_PER_SECOND := BURST_SPEED_MPS * PX_PER_METER
+
 ## The hardest a butterfly can turn, as a multiple of its own weight.
 ##
 ## NOT a new number: it is the lift ceiling this game already derived, in
@@ -287,10 +293,30 @@ static func travel(elapsed: float, pair_seed: int) -> Vector2:
 ##   same no-message-passing property the courtship dance has;
 ## - the pair CONVERGE from however far apart they happened to meet down to
 ##   SPIRAL_RADIUS_PX, which is what "they flew at each other" looks like.
-static func offset(elapsed: float, start_offset: Vector2, pair_seed: int = 0) -> Vector2:
+##
+## `closing_seconds` is how long the pair take to draw in from where they met
+## to SPIRAL_RADIUS_PX. Derived by the caller from that gap and the flyer's own
+## airspeed, so the approach is flown rather than swept (see converging_orbit
+## and FlightTransition.crossing_seconds); both partners are handed the same
+## one (see AmbientFlyerMarker._begin_spiral_flight). It defaults to the whole
+## whirl, which is the longest it can usefully be -- a convergence that
+## outlasted the whirl would never finish.
+static func offset(
+	elapsed: float,
+	start_offset: Vector2,
+	pair_seed: int = 0,
+	closing_seconds: float = SPIRAL_SECONDS
+) -> Vector2:
 	var held := clampf(elapsed, 0.0, SPIRAL_SECONDS)
 	return (
-		converging_orbit(held, start_offset, SPIRAL_RADIUS_PX, TURNS_PER_SECOND, pair_seed)
+		converging_orbit(
+			held,
+			start_offset,
+			SPIRAL_RADIUS_PX,
+			TURNS_PER_SECOND,
+			pair_seed,
+			minf(closing_seconds, SPIRAL_SECONDS)
+		)
 		+ rise(held)
 		+ travel(held, pair_seed)
 	)
@@ -345,20 +371,134 @@ static func offset(elapsed: float, start_offset: Vector2, pair_seed: int = 0) ->
 ## At elapsed 0 the perturbation cannot move anything -- `closing` is 0, so
 ## the radius is exactly `start_offset.length()`, and the swept angle is
 ## exactly 0 -- so nothing teleports when an orbit begins, as before.
+##
+## ## ...and why the START of the convergence needed the same argument
+##
+## The reciprocal form above says a flyer holds an airspeed rather than a turn
+## rate, and then the convergence ignored it: whatever radius the pair happened
+## to meet at, the orbit swung them round it at the rate derived for
+## `radius_px`. Measured on the shipped constants, two monarchs meeting 50 px
+## apart were swung round a 25 px radius at 1.045 turns a second -- 164 px/s,
+## eleven times the 16 px/s the animal flies at, on the exact frame the player
+## is watching it. Same law, same fix: `orbit_clock` below slows the orbit by
+## r1/r(t) while it is still wide, so the airspeed round the figure is the
+## same whatever radius it is currently flying, and the closed form survives.
+##
+## `closing_seconds` is how long the convergence takes, which the CALLER
+## derives from the gap and its own airspeed (see
+## FlightTransition.crossing_seconds) rather than this module picking a number.
+## Both partners of a pair must be handed the same one -- see
+## AmbientFlyerMarker._begin_spiral_flight, which copies it across exactly as
+## it copies the shared centre and clock.
+##
+## `swing` is how far the radius breathes either side of nominal, as a
+## fraction, so the courtship dance can fly this same geometry with its own
+## observed band (Courtship.DANCE_RADIUS_SWING) rather than a second copy of
+## the maths existing to hold one different constant.
 static func converging_orbit(
 	elapsed: float,
 	start_offset: Vector2,
 	radius_px: float,
 	turns_per_second: float,
-	seed_value: int = 0
+	seed_value: int = 0,
+	closing_seconds: float = SPIRAL_SECONDS,
+	swing: float = RADIUS_SWING
 ) -> Vector2:
-	var closing := clampf(elapsed / SPIRAL_SECONDS, 0.0, 1.0)
-	var breathing := radius_px / (
-		1.0 + RADIUS_SWING * FlightIrregularity.wobble(elapsed, seed_value)
-	)
-	var radius := lerpf(start_offset.length(), breathing, closing)
-	# The exact integral of TAU * turns_per_second * (1 + k*w(t)) dt.
+	var start_radius := start_offset.length()
+	var closing := 1.0 if closing_seconds <= 0.0 else clampf(elapsed / closing_seconds, 0.0, 1.0)
+	# The orbit's OWN clock: real time once it has drawn in, slower than real
+	# time while it is still wide (see orbit_clock).
+	var flown := orbit_clock(elapsed, start_radius, radius_px, closing_seconds)
+	var breathing := radius_px / (1.0 + swing * FlightIrregularity.wobble(flown, seed_value))
+	var radius := lerpf(start_radius, breathing, closing)
+	# The exact integral of TAU * turns_per_second * (1 + k*w(t)) dt, on that
+	# clock.
 	var swept := TAU * turns_per_second * (
-		elapsed + RADIUS_SWING * FlightIrregularity.wobble_integral(elapsed, seed_value)
+		flown + swing * FlightIrregularity.wobble_integral(flown, seed_value)
 	)
 	return Vector2.from_angle(start_offset.angle() + swept) * radius
+
+
+## How long this flyer needs to turn through `radians`, flying as hard as it
+## can, in seconds.
+##
+## NOT a new number: a turn is flown by banking, the hardest bank this animal
+## has is MAX_LOAD_FACTOR times its own weight (the lift ceiling this game
+## already derived -- see that constant), and at speed v a centripetal
+## acceleration a is a turn rate of a/v. So the time for an angle is
+## `radians * v / a`, out of constants that already exist.
+##
+## Exists because a flyer LEAVING one of these figures had nothing bounding how
+## fast it changed direction: measured across eight whirls, the heading swung a
+## mean of 108 degrees -- worst 168 -- on the single frame the whirl ended,
+## which is a butterfly reversing instantaneously. Position was continuous
+## across that frame; velocity was not, and velocity is what the eye reads as
+## motion.
+static func turn_seconds(radians: float, speed_px_per_second: float) -> float:
+	if speed_px_per_second <= 0.0:
+		return 0.0
+	var acceleration_px := MAX_LOAD_FACTOR * GroundSlide.GRAVITY_MPS2 * PX_PER_METER
+	if acceleration_px <= 0.0:
+		return 0.0
+	return absf(radians) * speed_px_per_second / acceleration_px
+
+
+## How far the convergence might actually have to carry this flyer: from where
+## it started to the FAR SIDE of the breathing band it is joining, not merely
+## to the nominal radius.
+##
+## The difference is not a nicety. A pair meeting almost exactly one dance
+## radius apart has nothing to close by that measure -- and then the breathing
+## can still swing the orbit out to radius / (1 - swing), which for the
+## courtship dance is 12.9 px against a nominal 9. Sizing the convergence on
+## the nominal gap alone gave those pairs a 0.06-second approach that moved
+## them 4.9 px, measured: 1.21 px on one frame against the 1.05 px a monarch's
+## burst carries it. The band is what has to be crossed, so the band is what
+## the duration is derived from.
+static func closing_gap_px(
+	start_radius_px: float, radius_px: float, swing: float = RADIUS_SWING
+) -> float:
+	var start_radius := maxf(start_radius_px, 0.0)
+	var tightest := radius_px / (1.0 + swing)
+	var widest := radius_px / maxf(1.0 - swing, 0.001)
+	return maxf(absf(start_radius - tightest), absf(start_radius - widest))
+
+
+## The orbit's own clock, `elapsed` real seconds into a convergence from
+## `start_radius_px` onto `radius_px` over `closing_seconds`.
+##
+## ## Why an orbit needs a clock of its own at all
+##
+## A flyer holds an AIRSPEED, not a turn rate. On a circle of radius r it
+## comes round at v/r, so a wide orbit turns slowly and a tight one quickly --
+## which is exactly what this module already says about the breathing radius,
+## and exactly what the CONVERGENCE used to ignore.
+##
+## Integrating v/r(t) per frame would put the figure back on an accumulator
+## and make it depend on frame rate and on SimulationLod's step size, which is
+## the class of bug this system has produced three separate ways. So the whole
+## orbit is played on a STRETCHED CLOCK instead: one second of orbit clock is
+## one second of real time once converged, and `radius_px / R(t)` of a second
+## while the orbit is still wide. Because the nominal radius closes LINEARLY,
+## that stretch has a closed form:
+##
+##     R(s)   = r0 + (r1 - r0) * s / T          the nominal radius
+##     tau(t) = INTEGRAL[0..t] r1/R(s) ds  =  r1 * T / (r1 - r0) * ln(R(t)/r0)
+##
+## and once the convergence closes it simply runs on at real time. tau(0) is 0,
+## so nothing jumps when an orbit begins.
+static func orbit_clock(
+	elapsed: float, start_radius_px: float, radius_px: float, closing_seconds: float
+) -> float:
+	var held := maxf(elapsed, 0.0)
+	var start_radius := maxf(start_radius_px, 0.0)
+	# Nothing to stretch: no convergence, no orbit, or a flyer standing exactly
+	# on the point it is about to orbit (which has no wide circle to slow down).
+	if closing_seconds <= 0.0 or radius_px <= 0.0 or start_radius <= 0.0:
+		return held
+	var closing := minf(held, closing_seconds)
+	var swept_time := closing
+	if absf(radius_px - start_radius) > 0.000001:
+		var rate := (radius_px - start_radius) / closing_seconds
+		swept_time = (radius_px / rate) * log((start_radius + rate * closing) / start_radius)
+	return swept_time + maxf(held - closing_seconds, 0.0)

@@ -557,3 +557,190 @@ func test_the_two_butterfly_whirl_is_that_orbit_plus_the_climb_and_the_ground_tr
 		assert_almost_eq(
 			SpiralFlight.offset(elapsed, start, 4242).distance_to(rebuilt), 0.0, 0.0001
 		)
+
+
+# == the entry: a flyer holds an airspeed, not a turn rate ===================
+#
+# The reciprocal radius above already says so about the BREATHING. The
+# convergence used not to: whatever radius a pair happened to meet at, the
+# orbit swung them round it at the turns-per-second derived for
+# SPIRAL_RADIUS_PX. Measured on the shipped constants, two monarchs meeting
+# 50 px apart were carried 164 px/s -- eleven times the 16 px/s the animal
+# flies at -- on the frame the player is most likely to be watching them.
+# orbit_clock is the same law applied to the same thing.
+
+const AN_AIRSPEED := 16.0
+
+
+## The orbit speed the reciprocal form holds constant once converged: the
+## nominal turn rate times the nominal radius, which is ORBIT_SPEED_MPS in this
+## world's units.
+func _orbit_px_per_second() -> float:
+	return TAU * SpiralFlight.TURNS_PER_SECOND * SpiralFlight.SPIRAL_RADIUS_PX
+
+
+func _fastest_step(start_radius: float, closing_seconds: float, seed_value: int) -> float:
+	var start_offset := Vector2(start_radius, 0.0)
+	var step := 1.0 / 600.0
+	var fastest := 0.0
+	var previous := SpiralFlight.converging_orbit(
+		0.0,
+		start_offset,
+		SpiralFlight.SPIRAL_RADIUS_PX,
+		SpiralFlight.TURNS_PER_SECOND,
+		seed_value,
+		closing_seconds
+	)
+	var t := 0.0
+	while t < SpiralFlight.SPIRAL_SECONDS:
+		t += step
+		var now := SpiralFlight.converging_orbit(
+			t,
+			start_offset,
+			SpiralFlight.SPIRAL_RADIUS_PX,
+			SpiralFlight.TURNS_PER_SECOND,
+			seed_value,
+			closing_seconds
+		)
+		fastest = maxf(fastest, previous.distance_to(now) / step)
+		previous = now
+	return fastest
+
+
+## The whole invariant, at this module's own level: however wide the orbit is
+## entered from, nothing goes faster than flying round it plus closing in on
+## it -- a triangle-inequality bound with nothing fudged in it.
+func test_however_wide_it_is_entered_from_the_orbit_is_flown_not_swept():
+	var ceiling := _orbit_px_per_second() + AN_AIRSPEED
+	for start in [1.0, 5.0, 12.0, 25.3]:
+		var closing := SpiralFlight.closing_gap_px(
+			start, SpiralFlight.SPIRAL_RADIUS_PX
+		) / AN_AIRSPEED
+		var fastest := _fastest_step(start, closing, 7)
+		assert_lte(
+			fastest, ceiling,
+			(
+				"entered from %.1f px it must fly at most %.2f px/s, not %.2f"
+				% [start, ceiling, fastest]
+			)
+		)
+
+
+## ...and that ceiling is not a formality: the orbit really does hold its own
+## speed rather than crawling, so the whirl still reads as a whirl.
+func test_and_it_really_does_fly_the_orbit_rather_than_crawling_round_it():
+	var closing := SpiralFlight.closing_gap_px(
+		25.3, SpiralFlight.SPIRAL_RADIUS_PX
+	) / AN_AIRSPEED
+	assert_gte(
+		_fastest_step(25.3, closing, 7), _orbit_px_per_second() * 0.9,
+		"a converging orbit is still flown at the orbit's own speed"
+	)
+
+
+func test_the_orbit_clock_starts_at_nought_so_nothing_jumps_when_one_begins():
+	assert_eq(SpiralFlight.orbit_clock(0.0, 25.0, SpiralFlight.SPIRAL_RADIUS_PX, 1.3), 0.0)
+
+
+func test_the_orbit_clock_only_ever_runs_forwards():
+	var previous := -1.0
+	for i in 400:
+		var now := SpiralFlight.orbit_clock(
+			float(i) * 0.01, 25.0, SpiralFlight.SPIRAL_RADIUS_PX, 1.3
+		)
+		assert_gt(now, previous, "an orbit never unwinds")
+		previous = now
+
+
+## Once the convergence has closed there is nothing left to stretch, so the
+## orbit runs at real time again -- which is what keeps the converged figure
+## exactly the one this module's other tests measure.
+func test_once_it_has_drawn_in_the_orbit_clock_is_real_time_again():
+	var closing := 1.3
+	var a := SpiralFlight.orbit_clock(closing + 0.5, 25.0, SpiralFlight.SPIRAL_RADIUS_PX, closing)
+	var b := SpiralFlight.orbit_clock(closing + 1.5, 25.0, SpiralFlight.SPIRAL_RADIUS_PX, closing)
+	assert_almost_eq(b - a, 1.0, 0.0001, "one second of real time, one second of orbit")
+
+
+## A WIDE orbit turns slowly (v/r), so the clock runs slower than real time
+## while the pair are still drawing in -- that is the whole mechanism.
+func test_a_wide_orbit_runs_slower_than_real_time():
+	assert_lt(
+		SpiralFlight.orbit_clock(1.0, 25.0, SpiralFlight.SPIRAL_RADIUS_PX, 1.3), 1.0,
+		"a flyer 25 px out cannot come round as fast as one 4.4 px out"
+	)
+
+
+## ...and a TIGHT one faster, for exactly the same reason. The law has no
+## preferred direction, and a flyer that meets its partner inside the orbit
+## radius is a real case (see AmbientFlyerMarker's own entry, which is
+## whatever distance the two happened to pass at).
+func test_and_a_tight_one_faster():
+	assert_gt(
+		SpiralFlight.orbit_clock(0.2, 1.0, SpiralFlight.SPIRAL_RADIUS_PX, 1.3), 0.2,
+		"a flyer inside the orbit radius comes round quicker, not slower"
+	)
+
+
+func test_an_orbit_entered_from_its_own_radius_needs_no_stretch_at_all():
+	var radius := SpiralFlight.SPIRAL_RADIUS_PX
+	assert_almost_eq(SpiralFlight.orbit_clock(0.7, radius, radius, 1.3), 0.7, 0.0001)
+
+
+func test_a_flyer_standing_exactly_on_the_centre_does_not_divide_by_its_radius():
+	assert_eq(SpiralFlight.orbit_clock(0.7, 0.0, SpiralFlight.SPIRAL_RADIUS_PX, 1.3), 0.7)
+	assert_eq(SpiralFlight.orbit_clock(0.7, 25.0, 0.0, 1.3), 0.7)
+	assert_eq(SpiralFlight.orbit_clock(0.7, 25.0, SpiralFlight.SPIRAL_RADIUS_PX, 0.0), 0.7)
+
+
+# -- and how far the convergence actually has to carry it --------------------
+
+
+## The gap is to the far side of the BAND, not to the nominal radius. A pair
+## meeting almost exactly one radius apart has nothing to close by the nominal
+## measure -- and the breathing can still swing them out to radius/(1 - swing).
+func test_the_closing_gap_is_the_whole_band_not_the_nominal_radius():
+	var radius := SpiralFlight.SPIRAL_RADIUS_PX
+	assert_gt(
+		SpiralFlight.closing_gap_px(radius, radius), 0.0,
+		"an orbit entered from its own nominal radius still has a band to cross"
+	)
+	assert_almost_eq(
+		SpiralFlight.closing_gap_px(radius, radius),
+		radius / (1.0 - SpiralFlight.RADIUS_SWING) - radius,
+		0.0001,
+		"...and the band is exactly how far the breathing can carry it"
+	)
+
+
+func test_the_closing_gap_covers_a_far_entry_too():
+	assert_gte(
+		SpiralFlight.closing_gap_px(25.3, SpiralFlight.SPIRAL_RADIUS_PX),
+		25.3 - SpiralFlight.SPIRAL_RADIUS_PX / (1.0 + SpiralFlight.RADIUS_SWING) - 0.0001,
+		"a distant entry has at least the whole way in to fly"
+	)
+
+
+## Whatever the orbit's radius does over the whole whirl, the convergence was
+## sized to cover it -- which is the property the per-frame ceiling stands on.
+func test_the_radius_never_travels_further_than_the_closing_gap_allowed():
+	for start in [1.0, 4.5, 12.0, 25.3]:
+		var start_offset := Vector2(start, 0.0)
+		var gap := SpiralFlight.closing_gap_px(start, SpiralFlight.SPIRAL_RADIUS_PX)
+		var closing := gap / AN_AIRSPEED
+		var worst := 0.0
+		for i in 400:
+			var here := SpiralFlight.converging_orbit(
+				float(i) * 0.005,
+				start_offset,
+				SpiralFlight.SPIRAL_RADIUS_PX,
+				SpiralFlight.TURNS_PER_SECOND,
+				11,
+				closing
+			)
+			worst = maxf(worst, absf(here.length() - start))
+		assert_lte(
+			worst, gap + 0.0001,
+			"entered from %.1f px, the radius moved %.3f px against a %.3f px budget"
+				% [start, worst, gap]
+		)

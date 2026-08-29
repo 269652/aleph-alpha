@@ -16,6 +16,7 @@ const ProceduralButterflySprite = preload("res://src/rendering/procedural_butter
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
+const FlightTransition = preload("res://src/rendering/flight_transition.gd")
 
 const SEED := 4242
 
@@ -222,13 +223,20 @@ func test_a_flyer_with_no_drawn_body_yet_simply_does_not_shuffle():
 
 
 ## The snap this replaced was `position = _forage_target`, a hard jump of up
-## to LANDING_DISTANCE. The settle is exactly as long as covering that last
-## gap takes at the flyer's OWN airspeed -- derived, so a bee (faster) sets
-## down quicker than a monarch without a second tuned number existing.
+## to LANDING_DISTANCE. The settle is as long as covering that last gap takes
+## at the flyer's OWN airspeed -- derived, so a bee (faster) sets down quicker
+## than a monarch without a second tuned number existing.
+##
+## It was `LANDING_DISTANCE / airspeed` exactly, and that was half a right
+## answer: that is the AVERAGE rate, and the settle is smoothstepped, so the
+## insect flew FlightTransition.EASE_PEAK_RATE times its own airspeed halfway
+## through the very move that exists to stop it teleporting (measured on a
+## monarch: 0.467 px on a frame that carries it 0.267). The crossing is now
+## stretched by exactly that factor, so the PEAK is the airspeed.
 func test_the_alighting_takes_the_last_gap_at_the_flyers_own_airspeed():
 	assert_almost_eq(
 		NectaringPosture.alighting_seconds(16.0),
-		PollinatorForaging.LANDING_DISTANCE / 16.0,
+		FlightTransition.EASE_PEAK_RATE * PollinatorForaging.LANDING_DISTANCE / 16.0,
 		0.0001,
 		"the settle is the last gap flown, not an invented duration"
 	)
@@ -275,3 +283,125 @@ func test_the_alighting_ease_is_smooth_at_both_ends():
 
 func test_a_zero_length_settle_is_simply_already_landed():
 	assert_eq(NectaringPosture.alighting_ease(0.0, 0.0), 1.0)
+
+
+# -- the feet, at a walking pace ---------------------------------------------
+#
+# The shuffle is a WALK around a flower head, and it was read straight off
+# FlightIrregularity -- a FLYING insect's wobble, about one veer a second. On a
+# real drawn monarch that carried it 0.338 px per frame, against the 0.267 px
+# its own airspeed carries it: a butterfly standing on a flower was outrunning
+# a butterfly in flight, which on screen is a vibration rather than an insect
+# working a bloom. It now runs on the settled clock instead (see
+# SHUFFLE_TIME_SCALE), which is the same clock the wings bask on.
+
+const FlightIrregularity = preload("res://src/gameplay/flight_irregularity.gd")
+
+const A_BUTTERFLY_AIRSPEED := 16.0
+
+
+func _drawn_monarch_body_px() -> float:
+	return (
+		float(ProceduralButterflySprite.SIZE.y)
+		* ArtResolution.SPRITE_SCALE
+		* FishRenderer.FISH_WORLD_SCALE
+		* float(AmbientFlyerRenderer.FLYER_WORLD_SCALE["monarch"])
+	)
+
+
+func _fastest_shuffle_px_per_second(body_px: float, seed_value: int) -> float:
+	var step := 1.0 / 600.0
+	var fastest := 0.0
+	var previous := NectaringPosture.shuffle_offset(0.0, body_px, seed_value)
+	for i in 24000:
+		var now := NectaringPosture.shuffle_offset(float(i + 1) * step, body_px, seed_value)
+		fastest = maxf(fastest, previous.distance_to(now) / step)
+		previous = now
+	return fastest
+
+
+func test_the_shuffle_is_a_walk_not_a_flight():
+	assert_lt(
+		NectaringPosture.SHUFFLE_TIME_SCALE, 1.0,
+		"a standing insect works the head slower than a flying one veers"
+	)
+
+
+## The bug, at the site it was measured: a real drawn monarch on a real flower.
+func test_a_real_monarch_shuffles_slower_than_it_flies():
+	var body := _drawn_monarch_body_px()
+	assert_lt(
+		_fastest_shuffle_px_per_second(body, SEED), A_BUTTERFLY_AIRSPEED,
+		"a butterfly standing on a flower must not outrun one in flight"
+	)
+
+
+func test_and_its_stated_peak_bounds_what_it_actually_does():
+	var body := _drawn_monarch_body_px()
+	assert_lte(
+		_fastest_shuffle_px_per_second(body, SEED),
+		NectaringPosture.shuffle_peak_px_per_second(body),
+		"the budget the alighting is sized against has to actually bound the walk"
+	)
+
+
+## ...and still MOVES. The whole reason the shuffle exists is that a butterfly
+## motionless on one pixel for 2.4 seconds is what "stuck in front of a flower"
+## described, so slowing it must not have frozen it again.
+func test_a_slower_shuffle_still_works_the_whole_flower_head():
+	var body := _drawn_monarch_body_px()
+	var seen: Array[Vector2] = []
+	for i in 60:
+		seen.append(NectaringPosture.shuffle_offset(float(i) * 0.04, body, SEED))
+	var spread := 0.0
+	for a in seen:
+		for b in seen:
+			spread = maxf(spread, a.distance_to(b))
+	assert_gt(
+		spread, 0.5 * NectaringPosture.shuffle_reach_px(body),
+		"within one drink it must still work different florets (%.3f px)" % spread
+	)
+
+
+## The alighting has to pay for the walk it fades in, or the two spend the same
+## airspeed twice -- which is exactly what put a settling butterfly at 0.469 px
+## on a frame that carries it 0.267.
+func test_the_alighting_is_sized_for_the_walk_it_fades_in_as_well():
+	var body := _drawn_monarch_body_px()
+	assert_gt(
+		NectaringPosture.alighting_seconds(A_BUTTERFLY_AIRSPEED, body),
+		NectaringPosture.alighting_seconds(A_BUTTERFLY_AIRSPEED),
+		"a settle that also brings a shuffle in has further to go and less to go on"
+	)
+
+
+func test_and_it_is_still_a_moment_at_the_start_of_the_stop():
+	assert_lt(
+		NectaringPosture.alighting_seconds(A_BUTTERFLY_AIRSPEED, _drawn_monarch_body_px()),
+		0.5 * PollinatorForaging.DRINK_SECONDS,
+		"landing must not eat the drink it is the start of"
+	)
+
+
+## Neither the settle NOR the walk on top of it may outrun the animal. This is
+## the module-level half of the marker's own invariant test.
+func test_the_settle_and_the_walk_together_never_outrun_the_flyer():
+	var body := _drawn_monarch_body_px()
+	var span := NectaringPosture.alighting_seconds(A_BUTTERFLY_AIRSPEED, body)
+	var anchor := Vector2(PollinatorForaging.LANDING_DISTANCE, 0.0)
+	var step := 1.0 / 600.0
+	var fastest := 0.0
+	var previous := Vector2.ZERO
+	for i in 6000:
+		var t := float(i + 1) * step
+		var settled := NectaringPosture.alighting_ease(t, span)
+		var now := (
+			Vector2.ZERO.lerp(anchor, settled)
+			+ NectaringPosture.shuffle_offset(t, body, SEED) * settled
+		)
+		fastest = maxf(fastest, previous.distance_to(now) / step)
+		previous = now
+	assert_lte(
+		fastest, A_BUTTERFLY_AIRSPEED,
+		"the alighting plus the shuffle it fades in reached %.3f px/s" % fastest
+	)

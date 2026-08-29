@@ -1635,15 +1635,133 @@ takes the same shape: real seconds and real proportions, no free digits.
   reason micro-motion is safe to add to something the forage rule measures
   arrival against, and it is why the measurement above came back unchanged.
 - **Landing.** The snap is gone. The last gap is flown at the flyer's own
-  airspeed — `LANDING_DISTANCE / speed`, so a bee sets down quicker than a
-  monarch with no second number existing — and smoothstepped, so it eases onto
-  the bloom instead of arriving at full speed and stopping dead.
+  airspeed — so a bee sets down quicker than a monarch with no second number
+  existing — and smoothstepped, so it eases onto the bloom instead of arriving
+  at full speed and stopping dead. The duration is
+  `FlightTransition.settling_seconds`, which stretches the crossing by the
+  ease's own peak-to-mean ratio: sizing an eased settle as `gap / airspeed`
+  sizes its *average* rate, and a smoothstep runs half again that fast halfway
+  through. See "Nothing outflies itself" below.
 
 The bob is zeroed throughout, for the same reason the perched branch zeroes
 it: nothing is beating, so there is no lift pulse to rise and fall on. And
 flushing still outranks all of it — a butterfly the player walks up to leaves
 the flower mid-drink and is beating its wings again on the next frame, which
 is the classic flight-initiation-distance measurement and stays intact.
+
+
+## Nothing outflies itself
+
+Asked as a question, which is the same thing: *"can you interpolate the state
+transitions?"*
+
+Every state entry a flyer had was a bare `position = <wherever the new state
+wants me>`, and a state entry is exactly the frame a player is most likely to
+be looking at the animal. Measured against the shipped constants on 1/60 s
+frames, where a butterfly flies **0.267 px per frame**:
+
+| entry | jump | |
+|---|---|---|
+| courtship dance | **14.9 px** | snapped onto a fixed 9 px orbit |
+| spiral flight | **3.27 px** | wide start radius swung at a 4.4 px orbit's turn rate |
+| dance at the player's head | **6.31 px** | the same, round a head |
+| worm / fruit / seed / grass-seed arrival | **3.5 px** each | `position = <the food>` |
+| nectaring settle | **0.47 px** | eased — but sized by its *mean* rate, not its peak |
+
+So there is one statement, made everywhere, and it needs **no tuned number at
+all**: *nothing may move further in one step than the airspeed it is flying at
+carries it.* The time to cross a gap is that gap over the animal's own
+airspeed. `AmbientFlyerMarker.airspeed_px_per_second` is what "the airspeed it
+is flying at" means — its wander cruise ordinarily, that cruise ×
+`FlyerPersonality.ESCAPE_SPEED_MULTIPLIER` while bolting, and
+`SpiralFlight.BURST_SPEED_PX_PER_SECOND` while flying one of the three aerial
+figures, whose geometry is derived in metres per second from a real monarch
+rather than from the wander speed.
+
+`FlightTransition` holds the shared duration model, beside `NectaringPosture`,
+`FlapGlide` and `WingbeatBounce` — the nectaring landing derived it first, for
+one fixed gap, and every other entry needed the same idea with the distance
+left as a parameter.
+
+**A flyer holds an airspeed, not a turn rate.** The orbits already said so
+about their *breathing* radius and not about their *convergence*, so a pair
+meeting 50 px apart was swept round a 25 px circle at the rate derived for a
+4.4 px one — 164 px/s, eleven times what the animal flies at.
+`SpiralFlight.orbit_clock` applies the same `v/r` law to the approach, as a
+closed form (a stretched clock, whose integral is a logarithm because the
+nominal radius closes linearly) rather than a per-frame accumulator — which
+would make the figure depend on frame rate and on `SimulationLod`'s step size,
+a bug this system has produced three separate ways. The courtship dance now
+flies that same primitive with its own radius, turn rate and breathing band,
+so there is one implementation of the geometry and not two.
+
+**Both partners of a pair still agree without messaging.** A pair derives its
+whole dance from the two instance ids and each partner's own offset from the
+shared midpoint. The midpoint *is* the midpoint, so the two start offsets are
+exactly opposite by construction — which is also what made `is_leader`
+unnecessary rather than merely redundant — and the joining partner reads the
+convergence duration across from the initiator exactly as it already reads the
+clock and the centre. Two partners easing in over different durations would
+converge onto different radii and stop reading as a pair; that is the subtlest
+risk in the whole change, and it is closed by construction rather than by a
+tolerance.
+
+**The exit is the half that is easy to miss.** Position was always continuous
+when a figure *ended*; velocity was not. On the frame a whirl ended the flyer
+stopped orbiting at ~37 px/s and started wandering at 16 px/s along a heading
+picked from its own seed — measured across eight whirls, a mean turn of **108°
+on one frame, worst 168°**: a butterfly reversing instantaneously. The wander
+heading now starts from the figure's own tangent and turns off it as hard as
+the animal can turn and no harder, which is *derived*: a turn is flown by
+banking, the hardest bank is `SpiralFlight.MAX_LOAD_FACTOR` times body weight,
+and at speed `v` that is a turn rate of `a/v` (`SpiralFlight.turn_seconds`).
+Measured after: mean **8.3°**, worst **12.0°**, against a physical single-frame
+budget of 14.8°. The turn is a **slerp**, never a componentwise blend — two
+nearly-opposed headings blended componentwise give a near-zero vector, which is
+the "flyers stall and jitter on a fixed spot" bug this system has produced
+three times. The *speed* is left to drop on its own: coming off a burst and
+settling to a cruise is a deceleration, which an animal does abruptly in a way
+that reversing direction is not.
+
+Ending a courtship now also charges the whirl cooldown, which
+`_end_player_dance` already did and this did not. `SPIRAL_DUTY_CYCLE` is
+derived from a real *time budget* — roughly 5–15 % of a territorial
+butterfly's active time goes into aerial interactions — and a 4.5 s dance is
+aerial-interaction time by any reading, so falling straight out of a dance into
+a whirl spent that budget twice. It was also the one figure-to-figure handover
+this system could produce, and the velocity turned 57° across it however
+carefully each figure eased its own entry.
+
+**The wings swap on one frame too.** Two cheap, exact fixes, and no crossfade:
+
+- **Landing.** A butterfly alights with its wings **spread** and folds them
+  afterwards. The settled cycle was read off wall time, so an insect that had
+  just been beating its wings was usually drawn fully shut on the very next
+  frame. It now starts at the top of the basking swing
+  (`NectaringPosture.seconds_to_open`) and closes from there, over the
+  `OPENING_SECONDS` that already existed.
+- **Take-off.** A real butterfly opens its wings and beats. The wing clock
+  free-runs, so the stroke resumed at whatever frame wall time was on — folded
+  over the back to mid-downstroke in one frame. Flap frame 0 is the fully-open
+  pose *by construction* (`ProceduralButterflySprite.generate_flap_images` has
+  openness 1.0 at `i = 0`), so the clock is re-based there on take-off. Scoped
+  to flyers that have a settled pose, because frame 0's meaning is a property
+  of the butterfly generator and a bird's sequence makes no such promise.
+
+A frame-level **crossfade** was considered and rejected: blending two pixel-art
+sprites produces semi-transparent ghosting that reads as a rendering artefact
+rather than as motion, and it would want a second `Sprite2D` or a shader per
+flyer across hundreds of them, in a project that has just been through a
+performance pass.
+
+**Left alone, deliberately: the flee onset.** `ESCAPE_SPEED_MULTIPLIER` applies
+instantly — 16 → 40 px/s on one frame, measured, alongside a 151° turn away
+from the player. The turn *is* the behaviour rather than an artefact: that is
+what a flush is, and it is the whole flight-initiation-distance model. The
+speed step is a fifth of a second's worth of real acceleration compressed into
+17 ms, against a simultaneous 151° turn that nobody could see past; and easing
+it would need an acceleration constant this game has no grounding for, which is
+exactly the eyeballed number the process forbids.
 
 
 ## Courtship, and where births come from

@@ -29,6 +29,7 @@ const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const FlyerPersonality = preload("res://src/gameplay/flyer_personality.gd")
 const WingbeatBounce = preload("res://src/rendering/wingbeat_bounce.gd")
 const FlapGlide = preload("res://src/rendering/flap_glide.gd")
+const FlightTransition = preload("res://src/rendering/flight_transition.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
@@ -362,6 +363,118 @@ func setup(movement: AmbientFlyerMovement) -> void:
 	_movement = movement
 
 
+## The airspeed this flyer is flying at RIGHT NOW, in world pixels per second.
+##
+## The one number every motion in this file has to fit inside: **nothing may
+## move further in one step than the airspeed it is flying at carries it** (see
+## FlightTransition, and the invariant section in
+## test_ambient_flyer_marker.gd). Every state entry here used to break it --
+## the courtship dance by 56x, the four bird ground-forage arrivals by 6x.
+##
+## Three speeds, none of them new:
+##
+## - ORDINARILY, its wander cruise. That is what every straight approach in
+##   this file already multiplies delta by.
+## - BOLTING, that cruise times FlyerPersonality.ESCAPE_SPEED_MULTIPLIER,
+##   which is exactly what _flee_from moves at.
+## - Flying one of the three AERIAL FIGURES -- a courtship dance, a whirl, or
+##   an orbit round the player's head -- its burst. Those three are the one
+##   part of a flyer's life that is not flown at the wander cruise at all:
+##   they are geometry derived in metres per second from a real monarch (see
+##   SpiralFlight.ORBIT_SPEED_MPS, Courtship.DANCE_TURNS_PER_SECOND), and the
+##   burst those are bounded by is SpiralFlight.BURST_SPEED_PX_PER_SECOND. A
+##   display flight is flown at a cruise and a whirl at a burst, but the
+##   CEILING is the same for both, because a ceiling is what the animal can
+##   fly rather than what it usually does.
+func airspeed_px_per_second() -> float:
+	if _movement == null:
+		return 0.0
+	if _courting_with != 0 or _spiralling_with != 0 or _dancing_at_player:
+		return SpiralFlight.BURST_SPEED_PX_PER_SECOND
+	if _fleeing_from_player:
+		return _movement.speed * FlyerPersonality.ESCAPE_SPEED_MULTIPLIER
+	return _movement.speed
+
+
+## The heading this flyer was actually travelling on the last frame of an
+## aerial figure, and how far through turning off it the flyer is.
+##
+## ## The exit, which is the half of a transition that is easy to miss
+##
+## All three figures now ENTER without a jump, and all three used to LEAVE
+## with one -- not in position, which stays continuous, but in VELOCITY, which
+## is what the eye actually reads as motion. On the frame a whirl ended, the
+## flyer stopped orbiting at ~37 px/s and started wandering at 16 px/s along a
+## heading picked by AmbientFlyerMovement.direction_at from its own seed, with
+## no relation to the tangent it had been flying. Measured across eight
+## whirls: a mean turn of 108 degrees on one frame, worst 168 -- a butterfly
+## reversing instantaneously.
+##
+## So the wander heading now starts from the figure's own tangent and turns off
+## it, as hard as the animal can turn and no harder (see
+## SpiralFlight.turn_seconds). The SPEED is left to drop on its own: a flyer
+## coming off a burst and settling to a cruise is decelerating, and stopping
+## flying hard is something an animal does instantly in a way that reversing
+## direction is not.
+var _figure_heading := Vector2.ZERO
+var _exit_heading := Vector2.ZERO
+var _exit_recovery_elapsed := 0.0
+var _exit_recovery_seconds := 0.0
+
+
+## Remembers which way an aerial figure just carried this flyer, so that when
+## the figure ends there is a real tangent to turn off rather than nothing.
+func _remember_figure_travel(travelled: Vector2) -> void:
+	if travelled.length() > 0.001:
+		_figure_heading = travelled.normalized()
+
+
+## Starts the turn off that tangent. Called wherever one of the three figures
+## ends -- including the abandon path, since a flush is the one exit that is
+## MORE abrupt than the others rather than less.
+func _begin_exit_recovery() -> void:
+	if _movement == null or _figure_heading == Vector2.ZERO:
+		return
+	_exit_heading = _figure_heading
+	_figure_heading = Vector2.ZERO
+	_exit_recovery_elapsed = 0.0
+	# A half turn is the worst case, and sizing every exit by the worst case
+	# rather than by the angle actually needed keeps this from having to know
+	# where the flyer is about to go before it has decided.
+	_exit_recovery_seconds = SpiralFlight.turn_seconds(PI, _movement.speed)
+
+
+## `heading` turned off the exit tangent rather than snapped onto, for as long
+## as the turn physically takes.
+##
+## A SLERP, never a lerp of components: rotating between two unit headings
+## preserves length by construction, where blending them componentwise can
+## produce a near-zero vector when they nearly oppose -- which is exactly the
+## "flyers stall and jitter on a fixed spot" bug this file has produced three
+## separate ways (see AmbientFlyerMovement.direction_at's own notes).
+func _turned_off_the_exit(heading: Vector2, delta: float) -> Vector2:
+	if _exit_recovery_seconds <= 0.0 or heading.length() <= 0.001:
+		return heading
+	_exit_recovery_elapsed += delta
+	var turned := _exit_heading.slerp(
+		heading.normalized(),
+		FlightTransition.eased_progress(_exit_recovery_elapsed, _exit_recovery_seconds)
+	)
+	if _exit_recovery_elapsed >= _exit_recovery_seconds:
+		_exit_recovery_seconds = 0.0
+	if turned.length() <= 0.001:
+		return heading
+	return turned.normalized() * heading.length()
+
+
+## This flyer's ordinary cruise -- what every straight approach in this file
+## multiplies delta by, and so what every eased state entry sizes itself
+## against (see FlightTransition). Zero for a marker nothing called setup() on,
+## which then simply arrives already-arrived rather than dividing by nothing.
+func _cruise_px_per_second() -> float:
+	return _movement.speed if _movement != null else 0.0
+
+
 ## For World's mouse-hover animal-name tooltip.
 func get_display_name() -> String:
 	return species.capitalize()
@@ -391,6 +504,13 @@ var _courting_with := 0
 var _courting_centre := Vector2.ZERO
 var _courting_elapsed := 0.0
 var _courting_cooldown := 0.0
+## This flyer's own offset from the dance's centre at the moment it began, and
+## how long the pair take to draw in from there onto the dance's own radius
+## (see Courtship.dance_offset). Both partners hold the SAME closing duration
+## and exactly OPPOSITE start offsets, which is what lets them ease in without
+## agreeing on anything at runtime -- see _begin_courtship.
+var _courting_start_offset := Vector2.ZERO
+var _courting_closing_seconds := 0.0
 ## Throttle on the (whole-group) partner search after it comes up empty, so an
 ## idle adult doesn't rescan every flyer every frame (see _scan_for_partners).
 const PARTNER_SEARCH_INTERVAL := 0.5
@@ -409,6 +529,12 @@ var _spiral_centre := Vector2.ZERO
 var _spiral_start_offset := Vector2.ZERO
 var _spiral_elapsed := 0.0
 var _spiral_cooldown := 0.0
+## How long the pair take to draw in from where they met onto
+## SpiralFlight.SPIRAL_RADIUS_PX -- that gap flown at this flyer's own airspeed
+## rather than swept round at the rate a 4.4 px orbit implies (see
+## SpiralFlight.orbit_clock). Held by BOTH partners identically, exactly like
+## the centre and the clock above -- see _begin_spiral_flight.
+var _spiral_closing_seconds := 0.0
 ## How old this flyer is, in real seconds. Spawned flyers start as ADULTS --
 ## the meadow is not full of newborns -- while anything born from a courting
 ## pair starts at zero and has to grow up (see LifeCycle).
@@ -634,8 +760,11 @@ func _process(frame_delta: float) -> void:
 		# Tumbling rather than tracking a straight line at the bloom (see
 		# PollinatorForaging.tumbled_heading): real butterfly flight is
 		# erratic, and it steadies up only as it closes in to land.
-		var heading := PollinatorForaging.tumbled_heading(
-			to_target, to_target.length(), _elapsed_time, wander_seed
+		var heading := _turned_off_the_exit(
+			PollinatorForaging.tumbled_heading(
+				to_target, to_target.length(), _elapsed_time, wander_seed
+			),
+			delta
 		)
 		position += heading * _movement.speed * delta
 		face_travel(position - before, delta)
@@ -666,7 +795,16 @@ func _process(frame_delta: float) -> void:
 		# "butterflies should only stop moving when they sit down on a
 		# flower... not during wandering"). Keeping the wander heading is the
 		# fallback: only drinking may ever hold a flyer still.
-	position += _fluttered(heading) * _movement.speed * delta
+	# Just off one of the three aerial figures: turn off the tangent it was
+	# flying rather than snapping onto a heading unrelated to it (see
+	# _turned_off_the_exit). A no-op at every other moment of a flyer's life.
+	#
+	# Applied to the TUMBLED heading, not to the one underneath it: the tumble
+	# is itself a deviation of tens of degrees from where the flyer is
+	# nominally going (see _fluttered), so turning off the tangent underneath
+	# it still leaves the tumble's own swing to be taken in one frame. Faded in
+	# with the rest, the exit turn drops from 22 degrees to a few.
+	position += _turned_off_the_exit(_fluttered(heading), delta) * _movement.speed * delta
 	var moved := position - before
 	if moved.length() > 0.001:
 		face_travel(moved, delta)
@@ -989,9 +1127,14 @@ func _step_ground_forage(delta: float) -> bool:
 					_take_targeted_seed()
 				elif _grass_seed_target != null:
 					_take_targeted_grass_seed()
+			# The last few pixels of the descent, eased in rather than snapped
+			# on the frame the bird was declared arrived (see
+			# _begin_ground_touchdown). A no-op once it has set down.
+			_step_ground_touchdown(delta)
 			_animate_wings()
 			return true
 		GroundForageBehavior.Phase.RESUMING:
+			_step_ground_touchdown(delta)
 			_animate_wings()
 			return true
 
@@ -1012,6 +1155,60 @@ func _step_ground_forage(delta: float) -> bool:
 	return false
 
 
+## Where the bird was when the forage rule declared it had arrived, where it is
+## setting down, how far into the set-down it is and how long that takes.
+##
+## The bird is `perched` for the whole of it -- arrival IS arrival, and all the
+## bookkeeping still fires on the frame it lands. What changed is only the
+## PICTURE: it covers the last GroundForageBehavior.LANDING_DISTANCE at its own
+## airspeed instead of on one frame. Kept apart from the nectaring landing's
+## own `_touchdown_from`/`_feed_anchor` because the two are different states of
+## different animals -- a robin never nectars -- and sharing a field between
+## them would only couple them.
+var _ground_touchdown_from := Vector2.ZERO
+var _ground_touchdown_to := Vector2.ZERO
+var _ground_touchdown_elapsed := 0.0
+var _ground_touchdown_seconds := 0.0
+
+
+## Begins the set-down. Shared by all four ground foods, since a bird's legs do
+## not care what it is landing next to.
+func _begin_ground_touchdown(anchor: Vector2) -> void:
+	_ground_touchdown_from = position
+	_ground_touchdown_to = anchor
+	_ground_touchdown_elapsed = 0.0
+	# Eased, so it decelerates onto the grass rather than arriving at full
+	# speed and stopping dead -- which is what settling_seconds (rather than
+	# crossing_seconds) pays for: the PEAK of the ease is the airspeed, not its
+	# mean.
+	_ground_touchdown_seconds = FlightTransition.settling_seconds(
+		position.distance_to(anchor), _cruise_px_per_second()
+	)
+
+
+## One frame of that set-down, run for as long as the bird is on the ground.
+##
+## Recomputed from the two anchors every frame, never nudged -- the same reason
+## _step_nectaring is written that way: there is no accumulator here to run
+## away, so the bird ends up exactly on what it is eating however the frames
+## fall, and a peck strike cannot be defeated by drift.
+func _step_ground_touchdown(delta: float) -> void:
+	if _ground_touchdown_seconds <= 0.0:
+		return
+	_ground_touchdown_elapsed += delta
+	position = FlightTransition.eased_position(
+		_ground_touchdown_from,
+		_ground_touchdown_to,
+		_ground_touchdown_elapsed,
+		_ground_touchdown_seconds
+	)
+	if _ground_touchdown_elapsed >= _ground_touchdown_seconds:
+		# Standing on it. Stop touching position at all, so a perched bird is
+		# once again a bird that does not move (see
+		# test_a_perched_bird_does_not_drift).
+		_ground_touchdown_seconds = 0.0
+
+
 ## Flies straight at the committed worm, landing on arrival. Aborts if the
 ## target vanished (the chunk unloaded mid-approach), so the bird returns to
 ## the air rather than descending onto nothing.
@@ -1022,9 +1219,12 @@ func _fly_at_worm(delta: float) -> void:
 	var before := position
 	var to_target: Vector2 = _worm_target - position
 	if to_target.length() <= GroundForageBehavior.LANDING_DISTANCE:
-		# Snap onto the worm, so the bird is standing ON what it eats rather
-		# than pecking at empty grass a few pixels away.
-		position = _worm_target
+		# SET DOWN onto the worm, so the bird is standing ON what it eats
+		# rather than pecking at empty grass a few pixels away -- but over the
+		# time flying that last gap takes, not on one frame. This was
+		# `position = _worm_target`, a hard snap of up to LANDING_DISTANCE
+		# measured at 3.52 px against the 0.567 px a robin covers in a frame.
+		_begin_ground_touchdown(_worm_target)
 		ground_forage.arrive()
 		perched = true
 		return
@@ -1052,7 +1252,7 @@ func _fly_at_fruit(delta: float) -> void:
 	var before := position
 	var to_target: Vector2 = _fruit_target - position
 	if to_target.length() <= GroundForageBehavior.LANDING_DISTANCE:
-		position = _fruit_target
+		_begin_ground_touchdown(_fruit_target)
 		ground_forage.arrive()
 		perched = true
 		return
@@ -1186,7 +1386,7 @@ func _fly_at_seed(delta: float) -> void:
 	var before := position
 	var to_target: Vector2 = _seed_target - position
 	if to_target.length() <= GroundForageBehavior.LANDING_DISTANCE:
-		position = _seed_target
+		_begin_ground_touchdown(_seed_target)
 		ground_forage.arrive()
 		perched = true
 		return
@@ -1297,7 +1497,7 @@ func _fly_at_grass_seed(delta: float) -> void:
 	var before := position
 	var to_target: Vector2 = _grass_seed_target - position
 	if to_target.length() <= GroundForageBehavior.LANDING_DISTANCE:
-		position = _grass_seed_target
+		_begin_ground_touchdown(_grass_seed_target)
 		ground_forage.arrive()
 		perched = true
 		return
@@ -1419,6 +1619,10 @@ var _player_dance_elapsed := 0.0
 ## there (see SpiralFlight.converging_orbit) rather than snapping onto a fixed
 ## radius, which is a visible jump of a body length or more.
 var _player_dance_offset := Vector2.ZERO
+## How long that convergence takes: the gap flown at this butterfly's own
+## airspeed (see FlightTransition.crossing_seconds), so the orbit is not swung
+## round a 50 px start radius at the rate derived for a 4.4 px one.
+var _player_dance_closing_seconds := 0.0
 
 
 ## One frame of what this butterfly thinks about the player: bolt, dance round
@@ -1481,13 +1685,16 @@ func _step_player_reaction(delta: float) -> bool:
 		# butterfly investigating a head should trace as irregular a figure as
 		# one investigating another butterfly (see
 		# SpiralFlight.converging_orbit).
+		var before := position
 		position = head + SpiralFlight.converging_orbit(
 			_player_dance_elapsed,
 			_player_dance_offset,
 			SpiralFlight.SPIRAL_RADIUS_PX,
 			SpiralFlight.TURNS_PER_SECOND,
-			wander_seed
+			wander_seed,
+			_player_dance_closing_seconds
 		)
+		_remember_figure_travel(position - before)
 		return true
 
 	# 4. Start one. Gated on the SAME cooldown a whirl at another butterfly
@@ -1505,6 +1712,17 @@ func _step_player_reaction(delta: float) -> bool:
 	_dancing_at_player = true
 	_player_dance_elapsed = 0.0
 	_player_dance_offset = position - head
+	# The approach is FLOWN, at this butterfly's own airspeed, rather than swept
+	# round the head at the rate a 4.4 px orbit implies -- which from 50 px out
+	# was 6.31 px on a frame that carries it 0.267 (see
+	# SpiralFlight.orbit_clock). No partner to agree with here, so nothing has
+	# to be copied across; it is the same derivation either way.
+	_player_dance_closing_seconds = FlightTransition.crossing_seconds(
+		SpiralFlight.closing_gap_px(
+			_player_dance_offset.length(), SpiralFlight.SPIRAL_RADIUS_PX
+		),
+		_cruise_px_per_second()
+	)
 	return true
 
 
@@ -1564,6 +1782,7 @@ func _end_player_dance() -> void:
 	_dancing_at_player = false
 	_player_dance_elapsed = 0.0
 	_spiral_cooldown = SpiralFlight.COOLDOWN_SECONDS
+	_begin_exit_recovery()
 
 
 ## Drops out of a courtship or a whirl mid-way because something more urgent
@@ -1593,6 +1812,7 @@ func _abandon_pair_interaction() -> void:
 			partner._courting_elapsed = 0.0
 		_courting_with = 0
 		_courting_elapsed = 0.0
+		_begin_exit_recovery()
 	if _spiralling_with != 0:
 		var partner = instance_from_id(_spiralling_with)
 		if (
@@ -1605,6 +1825,7 @@ func _abandon_pair_interaction() -> void:
 			partner._spiral_elapsed = 0.0
 		_spiralling_with = 0
 		_spiral_elapsed = 0.0
+		_begin_exit_recovery()
 
 
 ## One frame of the two things that happen when two flyers meet: the COURTSHIP
@@ -1695,11 +1916,17 @@ func _continue_courtship(delta: float) -> bool:
 	# on both sides from the two ids and the shared round, exactly as
 	# _finish_courtship already relies on, so the two partners still agree
 	# without messaging.
+	var before := position
 	position = _courting_centre + Courtship.dance_offset(
 		_courting_elapsed,
 		Courtship.pair_seed(get_instance_id(), _courting_with, _courtship_round),
-		Courtship.leads(get_instance_id(), _courting_with)
+		_courting_start_offset,
+		_courting_closing_seconds
 	)
+	# The tangent it is on, kept for when the dance ends (see
+	# _begin_exit_recovery) -- position is continuous across that frame and
+	# velocity was not.
+	_remember_figure_travel(position - before)
 	return true
 
 
@@ -1723,11 +1950,14 @@ func _continue_spiral_flight(delta: float) -> bool:
 	# the two ids alone -- symmetric by construction -- so they agree without
 	# either reaching into the other. Round 0: a whirl has no rounds (it
 	# resolves nothing and has no cooldown to advance), unlike a courtship.
+	var before := position
 	position = _spiral_centre + SpiralFlight.offset(
 		_spiral_elapsed,
 		_spiral_start_offset,
-		Courtship.pair_seed(get_instance_id(), _spiralling_with, 0)
+		Courtship.pair_seed(get_instance_id(), _spiralling_with, 0),
+		_spiral_closing_seconds
 	)
+	_remember_figure_travel(position - before)
 	return true
 
 
@@ -1820,12 +2050,33 @@ func _begin_courtship(partner) -> void:
 		_courting_centre = partner._courting_centre
 		_courting_elapsed = partner._courting_elapsed
 		_courtship_round = partner._courtship_round
+		# ...and the EASED ENTRY, which is the subtlest thing the two have to
+		# agree on. The midpoint IS the midpoint, so taking the exact mirror of
+		# the partner's start offset keeps them opposite to the float rather
+		# than to within a frame of drift; and a convergence of a different
+		# length on each side would draw the two onto different radii, which
+		# stops reading as a pair. Read across, never recomputed -- the same
+		# reasoning _begin_spiral_flight already spells out.
+		_courting_start_offset = -partner._courting_start_offset
+		_courting_closing_seconds = partner._courting_closing_seconds
 		return
 	_courting_elapsed = 0.0
 	_courtship_round += 1
 	# The midpoint, computed identically on both sides so the pair orbits one
 	# shared centre rather than two slightly different ones.
 	_courting_centre = (position + partner.position) * 0.5
+	# Where this flyer actually is right now, so the dance starts without a
+	# jump and then draws in -- over however long covering that gap takes at
+	# its own airspeed (see Courtship.dance_offset / FlightTransition).
+	_courting_start_offset = position - _courting_centre
+	_courting_closing_seconds = FlightTransition.crossing_seconds(
+		SpiralFlight.closing_gap_px(
+			_courting_start_offset.length(),
+			Courtship.DANCE_RADIUS_PX,
+			Courtship.DANCE_RADIUS_SWING
+		),
+		_cruise_px_per_second()
+	)
 
 
 ## The dance is over. Both partners resolve the same answer from the same
@@ -1868,6 +2119,21 @@ func _end_courtship() -> void:
 	_courting_with = 0
 	_courting_elapsed = 0.0
 	_courting_cooldown = Courtship.COOLDOWN_SECONDS
+	# ...and the WHIRL cooldown too, which _end_player_dance already charged and
+	# this did not. Two reasons, and the first is the real one:
+	#
+	# - SpiralFlight.COOLDOWN_SECONDS is derived from a time BUDGET
+	#   (SPIRAL_DUTY_CYCLE: field studies put roughly 5-15% of a territorial
+	#   butterfly's active time into aerial interactions, and a flyer doing this
+	#   is not feeding). A four-and-a-half-second dance is aerial-interaction
+	#   time by any reading, so spending it and then whirling immediately spends
+	#   the same budget twice.
+	# - it is also the one figure-to-figure handover this file could produce:
+	#   the pair fell straight out of a dance into a whirl round a new centre,
+	#   and the velocity turned 57 degrees on that frame however carefully each
+	#   figure eased its own entry.
+	_spiral_cooldown = SpiralFlight.COOLDOWN_SECONDS
+	_begin_exit_recovery()
 
 
 ## Starts a whirl (see SpiralFlight). Nothing is rolled and nothing is
@@ -1885,18 +2151,32 @@ func _begin_spiral_flight(partner) -> void:
 		_spiral_centre = partner._spiral_centre
 		_spiral_elapsed = partner._spiral_elapsed
 		_spiral_start_offset = -partner._spiral_start_offset
+		# Same argument for the convergence: a drawing-in of a different length
+		# on each side would put the two on different radii, which stops
+		# reading as a pair. Read across, never recomputed.
+		_spiral_closing_seconds = partner._spiral_closing_seconds
 		return
 	_spiral_centre = (position + partner.position) * 0.5
 	_spiral_elapsed = 0.0
 	# Where this flyer actually is right now, so the whirl starts without a
 	# jump and then converges (see SpiralFlight.offset).
 	_spiral_start_offset = position - _spiral_centre
+	# And how long that drawing-in takes: the gap FLOWN at its own airspeed,
+	# rather than swung round at the rate a 4.4 px orbit implies -- which, from
+	# a 25 px start radius, was 164 px/s (see SpiralFlight.orbit_clock).
+	_spiral_closing_seconds = FlightTransition.crossing_seconds(
+		SpiralFlight.closing_gap_px(
+			_spiral_start_offset.length(), SpiralFlight.SPIRAL_RADIUS_PX
+		),
+		_cruise_px_per_second()
+	)
 
 
 func _end_spiral_flight() -> void:
 	_spiralling_with = 0
 	_spiral_elapsed = 0.0
 	_spiral_cooldown = SpiralFlight.COOLDOWN_SECONDS
+	_begin_exit_recovery()
 
 
 ## Starts this bird's seed-carry for whatever it just swallowed --
@@ -2098,6 +2378,15 @@ var settled_frames: Array = []
 var perched := false
 const FLAP_SECONDS_PER_FRAME := 0.09
 
+## Whether the last frame drawn was the settled, wings-folded pose, and how far
+## into the free-running wing clock the flap was re-based when it last took off
+## (see _animate_wings). Together they are the WING half of a state transition:
+## position now eases everywhere, and the picture used to swap on one frame
+## regardless -- an insect with its wings shut over its back becoming an insect
+## mid-downstroke, and the reverse on the way down.
+var _wings_were_settled := false
+var _wing_cycle_offset := 0.0
+
 
 ## Whether this flyer is still in the pre-hatch span (COURTING/MATED/EGG,
 ## i.e. before LifeCycle.STAGE_JUVENILE begins) -- the "an egg, not a tiny
@@ -2132,7 +2421,8 @@ func _is_pre_hatch() -> bool:
 func _step_nectaring() -> void:
 	if _movement != null:
 		var settled := NectaringPosture.alighting_ease(
-			_drink_elapsed, NectaringPosture.alighting_seconds(_movement.speed)
+			_drink_elapsed,
+			NectaringPosture.alighting_seconds(_movement.speed, _drawn_body_px())
 		)
 		var shuffle := NectaringPosture.shuffle_offset(
 			_elapsed_time, _drawn_body_px(), wander_seed
@@ -2197,9 +2487,20 @@ func _animate_wings() -> void:
 		# Nothing is beating, so there is no lift pulse to rise and fall on --
 		# same reasoning as the perched branch above (see WingbeatBounce).
 		offset.y = 0.0
+		# Read from the TOUCHDOWN rather than off wall time, and started at the
+		# top of the basking swing (see NectaringPosture.seconds_to_open): a
+		# butterfly alights with its wings spread and folds them afterwards. On
+		# wall time the insect was usually drawn fully shut on the very frame
+		# after it had been beating its wings, which is a pop in the other
+		# direction from the take-off one below.
 		texture = settled_frames[
-			NectaringPosture.frame_index(_elapsed_time, settled_frames.size(), wander_seed)
+			NectaringPosture.frame_index(
+				NectaringPosture.seconds_to_open(wander_seed) + _drink_elapsed,
+				settled_frames.size(),
+				wander_seed
+			)
 		]
+		_wings_were_settled = true
 		return
 	if flap_frames.is_empty():
 		return
@@ -2212,7 +2513,23 @@ func _animate_wings() -> void:
 	var beats := FlapGlide.wing_cycles(
 		species, _elapsed_time, FLAP_SECONDS_PER_FRAME * float(flap_frames.size()), wander_seed
 	)
-	var index := int(beats * float(flap_frames.size())) % flap_frames.size()
+	if _wings_were_settled:
+		# TAKING OFF from a bloom. The wing clock free-runs, so the stroke
+		# resumed at whatever frame wall time happened to be on -- an insect
+		# with its wings folded over its back became an insect mid-downstroke
+		# on one frame. A real butterfly opens its wings and beats: flap frame
+		# 0 is the fully-open pose by construction (see
+		# ProceduralButterflySprite.generate_flap_images, whose openness is
+		# 1.0 at i = 0), so re-basing the clock here starts the stroke there.
+		#
+		# Scoped to flyers that HAVE a settled pose, which is the pollinators:
+		# frame 0's meaning is a property of the butterfly generator, and a
+		# bird's flap sequence makes no such promise.
+		_wing_cycle_offset = beats
+		_wings_were_settled = false
+	var index := (
+		int((beats - _wing_cycle_offset) * float(flap_frames.size())) % flap_frames.size()
+	)
 	texture = flap_frames[absi(index)]
 	_bounce_on_the_wingbeat()
 

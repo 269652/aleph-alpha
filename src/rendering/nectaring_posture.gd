@@ -32,6 +32,13 @@ extends RefCounted
 
 const FlightIrregularity = preload("res://src/gameplay/flight_irregularity.gd")
 const PollinatorForaging = preload("res://src/gameplay/pollinator_foraging.gd")
+## The alighting below was the first thing in this game to derive a transition
+## duration from the flyer's own airspeed instead of picking one. It turned out
+## not to be only about nectaring -- every other state entry in
+## AmbientFlyerMarker needed the same idea with a different gap -- so the two
+## functions at the bottom of this file are now the LANDING_DISTANCE
+## specialisation of FlightTransition rather than a second implementation of it.
+const FlightTransition = preload("res://src/rendering/flight_transition.gd")
 
 
 ## How long one full shut -> open -> shut of the wings takes, in seconds.
@@ -80,6 +87,25 @@ const FLORET_SHUFFLE_BODY_FRACTION := 10.0 / 27.0
 ## sets of numbers to keep in step.
 const _SHUFFLE_RADIUS_SALT := 7919
 
+## The shuffle runs on the SETTLED clock, not the flight one.
+##
+## FlightIrregularity is a FLYING insect's wobble: its fast component turns at
+## FAST_RADIANS_PER_SECOND, about one veer a second, which is what a butterfly
+## crossing a meadow does. Read at that rate against a flower head's radius, the
+## floret shuffle carried a real drawn monarch 0.338 px per frame -- against the
+## 0.267 px its own airspeed carries it. A butterfly STANDING on a flower was
+## outrunning a butterfly in flight, and on screen that is a vibration rather
+## than an insect working a bloom.
+##
+## A nectaring insect does everything on the order of seconds, which is exactly
+## what SECONDS_PER_CYCLE already says about its wings. So the shuffle is read
+## on that clock instead: one period of the flight wobble becomes one nectaring
+## cycle. Derived from the two constants that already exist, which is why there
+## is no walking speed here to tune.
+const SHUFFLE_TIME_SCALE := (
+	(TAU / FlightIrregularity.FAST_RADIANS_PER_SECOND) / SECONDS_PER_CYCLE
+)
+
 
 func _init() -> void:
 	pass
@@ -116,6 +142,22 @@ static func openness_fraction(elapsed_seconds: float, seed_value: int) -> float:
 	return sin(PI * (phase - duty) / span)
 
 
+## Where in the cycle this individual's wings are fully open -- the top of the
+## basking swing -- as seconds from the start of the cycle.
+##
+## Exists so a LANDING can begin there. A butterfly alights on a flower with
+## its wings spread and folds them afterwards; the settled cycle used to be
+## read off wall time, so an insect that had just been beating its wings in
+## flight was usually drawn fully shut on the very next frame. Starting the
+## cycle at the open peak makes the landing play the fold it actually does, and
+## it costs nothing: the swing, the phase and the duty are all already here.
+static func seconds_to_open(seed_value: int) -> float:
+	var own := FlightIrregularity.phase(seed_value) / TAU
+	var duty := closed_duty()
+	var peak := duty + 0.5 * (1.0 - duty)
+	return fposmod(peak - own, 1.0) * SECONDS_PER_CYCLE
+
+
 ## Which of `frame_count` settled frames to show, where frame 0 is the fully
 ## shut pose and the last is fully open (see
 ## ProceduralButterflySprite.generate_settled_textures).
@@ -143,35 +185,77 @@ static func shuffle_offset(elapsed_seconds: float, body_px: float, seed_value: i
 	var reach := shuffle_reach_px(body_px)
 	if reach <= 0.0:
 		return Vector2.ZERO
+	# On the SETTLED clock, not the flight one -- see SHUFFLE_TIME_SCALE.
+	var walked := elapsed_seconds * SHUFFLE_TIME_SCALE
 	# Read as a BEARING and a RADIUS rather than as x and y, so the result is
 	# bounded by `reach` exactly (two independent axes would reach
 	# sqrt(2) x reach at the corners) and so it reads as walking AROUND the
 	# head rather than as sliding along a diagonal.
-	var bearing := FlightIrregularity.wobble(elapsed_seconds, seed_value) * PI
+	var bearing := FlightIrregularity.wobble(walked, seed_value) * PI
 	var radius := (
 		0.5
-		* (1.0 + FlightIrregularity.wobble(elapsed_seconds, seed_value ^ _SHUFFLE_RADIUS_SALT))
+		* (1.0 + FlightIrregularity.wobble(walked, seed_value ^ _SHUFFLE_RADIUS_SALT))
 		* reach
 	)
 	return Vector2.from_angle(bearing) * radius
 
 
-## How long the alighting takes, in seconds: exactly as long as it takes this
-## flyer, at its own airspeed, to cover the LANDING_DISTANCE gap it still had
-## when the forage rule declared it arrived. Derived rather than picked, so a
-## bee (faster) sets down quicker than a monarch without a second tuned number
+## The fastest that walk can carry the insect, in world pixels per second.
+##
+## Bounded rather than sampled, and derived rather than measured: the offset is
+## a bearing swung over +/-PI and a radius swung over the reach, both driven by
+## FlightIrregularity, so the worst case is the sum of the tangential term
+## (radius x bearing rate, at most `reach` x PI x the wobble's own max rate)
+## and the radial one (half the reach x that same rate) -- on the settled clock.
+##
+## Exists so the ALIGHTING can be sized against what is left of the flyer's
+## airspeed once the walk it fades in has taken its share, rather than
+## spending the whole budget on the approach and then adding a walk on top
+## (which is exactly how a butterfly ended up moving 0.469 px on a frame that
+## carries it 0.267).
+static func shuffle_peak_px_per_second(body_px: float) -> float:
+	return (
+		shuffle_reach_px(body_px)
+		* (PI + 0.5)
+		* FlightIrregularity.max_rate()
+		* SHUFFLE_TIME_SCALE
+	)
+
+
+## How long the alighting takes, in seconds: as long as it takes this flyer, at
+## its own airspeed, to cover the LANDING_DISTANCE gap it still had when the
+## forage rule declared it arrived. Derived rather than picked, so a bee
+## (faster) sets down quicker than a monarch without a second tuned number
 ## having to exist.
-static func alighting_seconds(airspeed_px_per_second: float) -> float:
-	if airspeed_px_per_second <= 0.0:
+##
+## This used to be that gap over that airspeed exactly, and that was half a
+## right answer: it is the AVERAGE rate, and the settle is smoothstepped, so
+## the insect was flying FlightTransition.EASE_PEAK_RATE times its own airspeed
+## halfway through the very move that exists to stop it teleporting -- 0.467 px
+## on a frame that carries it 0.267, measured. settling_seconds pays for the
+## ease by stretching the crossing, so the PEAK is the airspeed rather than the
+## mean.
+##
+## `body_px` is this individual as actually drawn, and it is here because the
+## settle does not only close the LANDING_DISTANCE gap -- it also fades the
+## floret shuffle in (see AmbientFlyerMarker._step_nectaring). So the distance
+## crossed is that gap PLUS the shuffle's reach, and the speed available for
+## crossing it is the airspeed LESS what the walk itself is already using
+## (shuffle_peak_px_per_second). Both are derived; between them they are what
+## makes the whole alighting, walk included, fit inside one airspeed instead of
+## spending the budget twice. Left at zero for a caller that has no drawn body
+## to measure, which then simply gets the bare last-gap settle.
+static func alighting_seconds(airspeed_px_per_second: float, body_px: float = 0.0) -> float:
+	var spare := airspeed_px_per_second - shuffle_peak_px_per_second(body_px)
+	if spare <= 0.0:
 		return 0.0
-	return PollinatorForaging.LANDING_DISTANCE / airspeed_px_per_second
+	return FlightTransition.settling_seconds(
+		PollinatorForaging.LANDING_DISTANCE + shuffle_reach_px(body_px), spare
+	)
 
 
 ## How far through the settle it is: 0 the instant it touched down, 1 once it
 ## is standing on the bloom. Smoothstepped, so it eases onto the flower
 ## instead of arriving at full speed and stopping dead.
 static func alighting_ease(seconds_since_touchdown: float, settle_seconds: float) -> float:
-	if settle_seconds <= 0.0:
-		return 1.0
-	var t := clampf(seconds_since_touchdown / settle_seconds, 0.0, 1.0)
-	return t * t * (3.0 - 2.0 * t)
+	return FlightTransition.eased_progress(seconds_since_touchdown, settle_seconds)
