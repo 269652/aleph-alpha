@@ -72,7 +72,7 @@ func test_spread_never_lands_on_a_real_river_cell():
 	var grass := TallGrass.new(5, WIDTH, HEIGHT, biome, is_river)
 	var before := grass.get_patch_cells().size()
 	for i in 200:
-		grass.advance(TallGrass.SPREAD_INTERVAL)
+		grass.advance(TallGrass.SPREAD_INTERVAL, 1.0)
 	assert_eq(grass.get_patch_cells().size(), before, "spread must never claim a real river cell")
 
 
