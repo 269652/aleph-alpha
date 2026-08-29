@@ -16,6 +16,12 @@ const CATEGORY_WALL := "wall"
 const CATEGORY_DOOR := "door"
 const CATEGORY_WINDOW := "window"
 const CATEGORY_ROOF := "roof"
+## A barrier built across flowing water to pond it (see
+## docs/concept/rivers.md). Its own category rather than a wall variant
+## because the questions it answers are different: it must be placed IN
+## water rather than on buildable ground, it holds back a real hydraulic
+## head, and it must stay out of the building span solver.
+const CATEGORY_DAM := "dam"
 
 ## Materials, in progression order along the existing gather -> craft ->
 ## smelt chain.
@@ -34,6 +40,9 @@ const PIECE_IDS: Array[String] = [
 	# docs/concept/woodworking.md's own "beam/plank have no consumers yet"
 	# gap). Appended, not interleaved, per this file's existing convention.
 	"timber_wall", "timber_floor",
+	# Water infrastructure (see docs/concept/rivers.md). Appended, not
+	# interleaved, per this file's existing convention.
+	"stone_dam",
 ]
 
 ## Per-piece definition.
@@ -133,6 +142,25 @@ const _PIECES := {
 		"category": CATEGORY_FLOOR, "material": MATERIAL_TIMBER,
 		"encloses": false, "walkable": true, "durability": 70.0,
 		"cost": {"plank": 2}, "support_capacity": 0.0,
+	},
+	# A dry-stacked stone check dam (see docs/concept/rivers.md's "Dams").
+	#
+	# Costs `rock`, NOT `stone`: rock is what picking up a pebble and
+	# smashing a boulder both yield, so a dam is buildable from what a river
+	# bank actually offers, whereas `stone` is the MINED output and would
+	# gate dams behind a pickaxe for no good reason. 6 of them because a
+	# hand-stacked dam is a real pile of rock, not a token.
+	#
+	# support_capacity 0.0 keeps it out of BuildingStatics' span solver: a
+	# dam holds back water, not a roof, and a run of them across a channel
+	# must never be mistaken for an unsupported cantilever and collapsed.
+	# Its real failure mode is hydraulic instead -- see
+	# DamImpoundment.failure_depth_m, where sliding is derived from the
+	# stone's own weight and friction.
+	"stone_dam": {
+		"category": CATEGORY_DAM, "material": MATERIAL_STONE,
+		"encloses": true, "walkable": false, "durability": 140.0,
+		"cost": {"rock": 6}, "support_capacity": 0.0,
 	},
 }
 

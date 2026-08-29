@@ -385,6 +385,96 @@ against the Rhine.
 - Depth on very flat lower courses runs somewhat deep (Rhine ~11 m vs a real
   ~9 m) because slope hits the model's floor there.
 
+## Dams: building one from stones (2026-08-30)
+
+Reported directly: *"i want to be able to build a dam from stones"*. Now
+that the hydraulics are real (above), a dam is real physics rather than a
+special case — the weir equation, hydrostatic force and sliding friction
+were all already needed, so the dam mostly *consumes* physics that exists.
+
+### The piece
+
+`stone_dam` is a **`BuildingPiece`** (new `CATEGORY_DAM`), not a
+`"placeable"` structure like a campfire. A piece gets, for free: collision,
+tile-atlas registration, persistence in `chunk.modifications`,
+boulder-respawn suppression, participation in the connected-structure flood
+fill, and material drop-back on collapse. A placeable gets none of those,
+and a dam wants all of them.
+
+The item id and the piece id are **deliberately the same string**.
+`build_at_global` writes whatever id it is handed, so one string means the
+existing placeable-arming path places it *and* `BuildingPiece.has_piece`
+lights up collision/atlas/persistence — no new plumbing on either side, and
+`_destroy_step` refunds it because the catalog knows the id.
+
+It costs `rock` (6), **not** `stone`: rock is what picking up a pebble and
+smashing a boulder both yield, so damming a stream needs only what its own
+banks offer, whereas `stone` is the *mined* output and would gate dams
+behind a pickaxe for no good reason. No skill or structure gate either —
+heaping rock across a shallow stream is the least technological
+construction there is.
+
+`support_capacity` is 0, keeping it out of `BuildingStatics`' span solver: a
+dam holds back water, not a roof, and a run of them across a channel must
+never be mistaken for an unsupported cantilever and collapsed. Its real
+failure mode is hydraulic instead (below).
+
+### The impoundment is derived, never stored
+
+Water pools behind a dam at **steady state**: the pool rises until what
+spills over the crest equals what the river brings in, and that balance is
+closed-form from the weir equation
+(`OpenChannelFlow.equilibrium_weir_head_m`). So the pool depth is
+`crest height + equilibrium head`, computed on demand.
+
+Nothing about the pool is stored. It is re-derived every time from the dam's
+presence in `chunk.modifications` (which already persists), the river's real
+curated discharge, and the real terrain. That is what lets an impoundment
+survive a chunk unload, cross a chunk seam, and need no catch-up
+integration — it is a pure function of state that already persists. It also
+means destroying the dam releases the pool immediately and correctly, with
+no cleanup code.
+
+**Deliberately not modelled: the transient fill.** A real reservoir takes
+time to fill. Modelling that would need per-dam stored volume, unloaded-chunk
+catch-up, and cross-seam bookkeeping — the exact apparatus the steady-state
+formulation avoids entirely — in exchange for a few seconds of one-off
+animation. Not attempted.
+
+### The one honest compression
+
+A real 1.2 m hand-built check dam ponds water some *tens of metres*
+upstream. At this world's ~1 km/tile that is a few hundredths of one tile —
+and on the Dreisam's real 4% gradient at the spawn point, one tile upstream
+is already ~40 m above the dam, so a physically literal pool **could never
+reach even the next cell**. It would be invisible.
+
+So the pool's **extent** is compressed (`MAX_BACKWATER_TILES`, tapering by
+`backwater_falloff`) while its **depth stays real**, straight from the weir
+equation and the river's real discharge. This is the same trade pillar 4
+already makes for channel width — a real ~15 m Dreisam is drawn 4 km wide,
+because a survey-accurate river would be sub-pixel. Stated plainly here
+rather than buried, because it is the one place the dam stops being literal
+physics.
+
+### Failure is derived, not a threshold
+
+Dry-stacked stone fails by **sliding**, when the water's push beats the
+friction holding the stone down:
+
+```
+push       = ½·ρ_water·g·h²·b        (hydrostatic force)
+resistance = μ·ρ_stone·g·H·t·b       (friction × weight)
+```
+
+The dam's own width `b` cancels, leaving a pure depth limit
+`h_max = √(2·μ·ρ_stone·H·t / ρ_water)` ≈ **1.66 m** for a 1.2 m dam of
+loose stone. Because the push goes as depth **squared** while resistance is
+fixed, this is a genuine threshold rather than gradual weakening — which is
+why a dam that has held for ages gives way suddenly when the water rises a
+little further. Real constants throughout (loose-stone bulk density
+~1600 kg/m³ at 20–40% voids; μ = 0.6 rock-on-rock).
+
 ## Player interaction: wading, swimming, and the submersion tint
 
 `Player._resolve_water_state` originally only checked real elevation-
@@ -510,6 +600,10 @@ than it is, matching this project's usual practice):
   `scenes/world.tscn` sibling-order bug (`HillshadeFx` drawing on top of
   `RiverFlowFx`) until the z-order fix above — now fixed and regression-
   tested against the real scene file (`test_world_ground_layer_order.gd`).
+- **Dams (buildable stone check dam)** — ✅ Done — `stone_dam`
+  BuildingPiece + `dam_impoundment.gd`. Real weir-equation pool depth,
+  real sliding-failure physics, derived-not-stored impoundment. Transient
+  fill, multi-piece dam runs, and dam-break flooding — ⬜ Not started.
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —
   `river_discharge.gd` (real curated gauge data + derived width) +
   `open_channel_flow.gd` (Manning, continuity, closed-form normal depth,

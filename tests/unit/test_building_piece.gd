@@ -191,3 +191,54 @@ func test_wall_support_capacity_matches_the_wood_timber_stone_progression():
 func test_unknown_piece_is_not_load_bearing_and_carries_no_capacity():
 	assert_false(BuildingPiece.is_load_bearing("mystery"), "an unknown id must never silently carry load")
 	assert_eq(BuildingPiece.support_capacity_of("mystery"), 0.0)
+
+
+# -- the stone dam (docs/concept/rivers.md) ----------------------------------
+#
+# A player-built check dam is a real BuildingPiece rather than a "placeable"
+# structure, deliberately: a piece already gets collision, atlas
+# registration, persistence in chunk.modifications, boulder-respawn
+# suppression, participation in the connected-structure flood fill, and
+# material drop-back on collapse -- every one of which a dam wants, and none
+# of which a placeable gets.
+
+func test_the_stone_dam_is_a_real_piece():
+	assert_true(BuildingPiece.has_piece("stone_dam"))
+	assert_true(BuildingPiece.PIECE_IDS.has("stone_dam"))
+
+
+func test_the_stone_dam_is_its_own_category():
+	assert_eq(BuildingPiece.category_of("stone_dam"), BuildingPiece.CATEGORY_DAM)
+
+
+## A dam is a barrier: you cannot walk through it, and it stops the
+## enclosure flood fill exactly as a wall does.
+func test_the_stone_dam_blocks_movement_and_encloses():
+	assert_false(BuildingPiece.is_walkable("stone_dam"))
+	assert_true(BuildingPiece.encloses("stone_dam"))
+
+
+## It costs the stone the player can actually GET from the world: `rock` is
+## what picking up a pebble and smashing a boulder both yield, whereas
+## `stone` is the MINED output and would gate dams behind a pickaxe.
+func test_the_stone_dam_costs_gatherable_rock_not_mined_stone():
+	var cost := BuildingPiece.cost_of("stone_dam")
+	assert_true(cost.has("rock"), "a dam should be buildable from gathered rock")
+	assert_false(cost.has("stone"), "a dam should not require mined stone")
+	assert_gt(cost["rock"], 0)
+
+
+## Stone durability, matching the other stone pieces' tier -- a dam is
+## dry-stacked rock, and its real failure mode is hydraulic (see
+## DamImpoundment.failure_depth_m), not something that should also make it
+## unusually fragile to hits.
+func test_the_stone_dam_is_as_durable_as_other_stone_work():
+	assert_eq(BuildingPiece.material_of("stone_dam"), BuildingPiece.MATERIAL_STONE)
+	assert_gt(BuildingPiece.durability_of("stone_dam"), 0.0)
+
+
+## It holds back water, not a roof. Keeping it out of the span solver means
+## BuildingStatics never treats a dam run as an unsupported cantilever and
+## collapses it for a reason that has nothing to do with dams.
+func test_the_stone_dam_is_not_load_bearing():
+	assert_false(BuildingPiece.is_load_bearing("stone_dam"))

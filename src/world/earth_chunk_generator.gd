@@ -158,6 +158,14 @@ func gradient_at_global(global_x: int, global_y: int) -> Vector2:
 ## The shared TerrainRelief this generator derives slope/aspect with -- so a
 ## caller holding a gradient from gradient_at_global above can derive the two
 ## readings through the same instance rather than constructing its own.
+## The shared RiverCatalog this generator resolves courses through -- so a
+## caller needing the same course geometry (EarthChunkManager's dam-ponding
+## walk) reuses this instance and its cached tile-space polylines rather
+## than building a second one. Same reasoning as terrain_relief() below.
+func river_catalog() -> RiverCatalog:
+	return _river_catalog
+
+
 func terrain_relief() -> TerrainRelief:
 	return _terrain_relief
 

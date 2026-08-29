@@ -76,6 +76,8 @@ func generate_image(piece_id: String) -> Image:
 			return _window_image(base, is_stone)
 		BuildingPiece.CATEGORY_ROOF:
 			return _roof_image(is_stone)
+		BuildingPiece.CATEGORY_DAM:
+			return _dam_image(base)
 		_:
 			return _floor_image(base, is_stone)
 
@@ -114,6 +116,46 @@ func _floor_image(base: Color, is_stone: bool) -> Image:
 	# Deliberately NOT rim-shaded -- see _rim_shade's own doc comment: a
 	# floor is a continuous surface, and rimming each cell drew a grid over
 	# every room.
+	return image
+
+
+## A dry-stacked check dam: irregular boulders piled across the channel,
+## deliberately NOT the wall's neat running-bond courses. The whole point is
+## that this is rock a player gathered and heaped, not masonry -- so the
+## "bricks" are hash-jittered in size and position, and the gaps between
+## them are visible (which is also honest about the real thing: a rubble dam
+## leaks through its own voids).
+const _RUBBLE_CELL := 7
+
+
+func _dam_image(base: Color) -> Image:
+	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
+	var gap := _palette.shade(_palette.shade(base))
+	image.fill(gap)
+	var highlight := _palette.highlight(base)
+	# One rough boulder per lattice cell, jittered off-grid so the stack
+	# never reads as a tiled pattern. Deterministic from the cell index --
+	# no RNG, matching this file's other generators.
+	for cell_y in range(-1, SIZE / _RUBBLE_CELL + 1):
+		for cell_x in range(-1, SIZE / _RUBBLE_CELL + 1):
+			var h := absi(hash("dam_%d_%d" % [cell_x, cell_y]))
+			var jitter_x := (h % 5) - 2
+			var jitter_y := ((h / 5) % 5) - 2
+			var radius := 2 + (h / 25) % 2
+			var centre_x := cell_x * _RUBBLE_CELL + _RUBBLE_CELL / 2 + jitter_x
+			var centre_y := cell_y * _RUBBLE_CELL + _RUBBLE_CELL / 2 + jitter_y
+			for y in range(centre_y - radius, centre_y + radius + 1):
+				for x in range(centre_x - radius, centre_x + radius + 1):
+					if x < 0 or y < 0 or x >= SIZE or y >= SIZE:
+						continue
+					var dx := x - centre_x
+					var dy := y - centre_y
+					if dx * dx + dy * dy > radius * radius:
+						continue
+					# Lit from the top-left, the same convention every other
+					# generator in this project uses.
+					var lit := dx + dy <= -radius
+					image.set_pixel(x, y, highlight if lit else base)
 	return image
 
 

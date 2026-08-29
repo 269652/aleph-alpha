@@ -212,6 +212,16 @@ const _RECIPES := {
 		"inputs": [{"item_id": "wood", "count": 12}, {"item_id": "plank", "count": 4}],
 		"output": {"item_id": "storage", "count": 1},
 	},
+	# A stone check dam (see docs/concept/rivers.md's "Dams"). Costs `rock`
+	# -- what picking up a pebble and smashing a boulder both yield -- and
+	# NOT mined `stone`, so damming a stream needs only what its own banks
+	# offer rather than a pickaxe first. No structure or skill gate for the
+	# same reason: heaping rock across a shallow stream is the least
+	# technological construction there is.
+	"stone_dam": {
+		"inputs": [{"item_id": "rock", "count": 6}],
+		"output": {"item_id": "stone_dam", "count": 1},
+	},
 	# "Any animal, the right tool" (see docs/concept/taming.md's own section
 	# by that name): the lasso only ever fit the Roped capture class. These
 	# four recipes cover the rest of the body-plan matrix -- one tool per

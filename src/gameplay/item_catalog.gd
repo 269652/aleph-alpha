@@ -156,6 +156,14 @@ const _ITEMS := {
 	# like campfire/furnace, not an inert material -- holds its own real
 	# item_id -> count stock (StructureStock) once built.
 	"storage": ["Storage", "placeable", 5, 0.0],
+	# A stone check dam (see docs/concept/rivers.md). The id is deliberately
+	# the SAME string as its BuildingPiece id: build_at_global writes
+	# whatever id it is handed into chunk.modifications, so sharing one
+	# string means the existing placeable-arming path places it while
+	# BuildingPiece.has_piece("stone_dam") simultaneously lights up
+	# collision, the tile atlas, statics exclusion, boulder-respawn
+	# suppression and destroy-refund -- with no new plumbing on either side.
+	"stone_dam": ["Stone Dam", "placeable", 5, 0.0],
 	# Wayfinding & citizenship instruments (see docs/concept/wayfinding.md,
 	# docs/concept/player_citizenship.md): the pure-logic Compass/
 	# RoughCompass reading, ExploredTiles/MapProjection, Spyglass,

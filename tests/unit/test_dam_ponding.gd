@@ -1,0 +1,134 @@
+extends GutTest
+
+## A built stone dam actually ponds the river behind it -- the wiring that
+## turns DamImpoundment's physics into something the player can see and
+## swim in. See docs/concept/rivers.md's "Dams" section.
+##
+## Its own small file rather than living in test_earth_chunk_manager.gd,
+## which already takes ten-plus minutes: this needs one real
+## EarthChunkManager.update() at the real spawn area, and every other test
+## in that file would have to pay for a fixture it does not use.
+
+const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
+const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
+const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
+
+var tile_map_layer: TileMapLayer
+var entities_parent: Node2D
+var creatures_parent: Node2D
+var manager: EarthChunkManager
+var river_tile: Vector2i
+
+
+func before_each():
+	tile_map_layer = TileMapLayer.new()
+	entities_parent = Node2D.new()
+	creatures_parent = Node2D.new()
+	manager = EarthChunkManager.new(tile_map_layer, entities_parent, creatures_parent)
+
+	var geo := GeoCoordinates.new()
+	# The Gaskugel on the Dreisam -- this game's own spawn point, and a real
+	# curated river cell.
+	river_tile = geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	manager.update(river_tile)
+
+
+func after_each():
+	tile_map_layer.free()
+	entities_parent.free()
+	creatures_parent.free()
+
+
+func test_the_fixture_really_is_an_undammed_river_cell():
+	assert_true(manager.is_river_at_global(river_tile.x, river_tile.y))
+	assert_false(manager.has_dam_at_global(river_tile.x, river_tile.y))
+
+
+func test_building_a_dam_registers_it():
+	assert_true(manager.build_at_global(river_tile.x, river_tile.y, "stone_dam"))
+	assert_true(manager.has_dam_at_global(river_tile.x, river_tile.y))
+
+
+## The whole point: water backs up BEHIND the dam. An upstream cell must
+## get measurably deeper than it was before the dam existed.
+func test_a_dam_ponds_the_river_upstream_of_it():
+	var upstream := manager.upstream_river_tile(river_tile, 2)
+	assert_ne(upstream, river_tile, "expected to find a real upstream cell to measure")
+
+	var before := manager.river_depth_meters_at_global(upstream.x, upstream.y)
+	manager.build_at_global(river_tile.x, river_tile.y, "stone_dam")
+	var after := manager.river_depth_meters_at_global(upstream.x, upstream.y)
+
+	assert_gt(after, before, "a dam must pond the water upstream of it")
+
+
+## A dam raises water; it never lowers it. Nowhere on the river may get
+## shallower because a dam was built.
+func test_a_dam_never_makes_any_cell_shallower():
+	var samples: Array[Vector2i] = []
+	for back in range(0, 6):
+		samples.append(manager.upstream_river_tile(river_tile, back))
+
+	var before: Array[float] = []
+	for tile in samples:
+		before.append(manager.river_depth_meters_at_global(tile.x, tile.y))
+
+	manager.build_at_global(river_tile.x, river_tile.y, "stone_dam")
+
+	for i in samples.size():
+		var after := manager.river_depth_meters_at_global(samples[i].x, samples[i].y)
+		assert_gte(after, before[i] - 0.0001, "cell %s got shallower after damming" % samples[i])
+
+
+## Removing the dam must release the pool -- the impoundment is derived from
+## the dam's presence, so destroying it has to restore the natural river
+## rather than leaving a permanent puddle.
+func test_destroying_the_dam_releases_the_pool():
+	var upstream := manager.upstream_river_tile(river_tile, 2)
+	var natural := manager.river_depth_meters_at_global(upstream.x, upstream.y)
+
+	manager.build_at_global(river_tile.x, river_tile.y, "stone_dam")
+	assert_gt(manager.river_depth_meters_at_global(upstream.x, upstream.y), natural)
+
+	manager.destroy_at_global(river_tile.x, river_tile.y)
+	assert_false(manager.has_dam_at_global(river_tile.x, river_tile.y))
+	assert_almost_eq(
+		manager.river_depth_meters_at_global(upstream.x, upstream.y), natural, 0.0001
+	)
+
+
+## The pooling is bounded -- far enough upstream, the river is its natural
+## self again. An unbounded backwater is exactly what a chunk-streamed world
+## cannot afford.
+func test_the_pool_does_not_reach_indefinitely_upstream():
+	var far := manager.upstream_river_tile(river_tile, DamImpoundment.MAX_BACKWATER_TILES + 8)
+	var natural := manager.river_depth_meters_at_global(far.x, far.y)
+	manager.build_at_global(river_tile.x, river_tile.y, "stone_dam")
+	assert_almost_eq(
+		manager.river_depth_meters_at_global(far.x, far.y), natural, 0.0001,
+		"pooling reached past its own bound"
+	)
+
+
+## Downstream of a dam the river runs on -- at steady state a dam delays
+## water, it does not consume it, so the reach below is unchanged.
+func test_the_river_below_a_dam_is_unchanged():
+	var downstream := manager.upstream_river_tile(river_tile, -3)
+	var before := manager.river_depth_meters_at_global(downstream.x, downstream.y)
+	manager.build_at_global(river_tile.x, river_tile.y, "stone_dam")
+	assert_almost_eq(
+		manager.river_depth_meters_at_global(downstream.x, downstream.y), before, 0.0001
+	)
+
+
+## A dam on dry land is not a dam. It can still be built (it is just stacked
+## rock), but it must not invent water where there is no river.
+func test_a_dam_away_from_any_river_ponds_nothing():
+	var dry := river_tile + Vector2i(0, 40)
+	if manager.is_river_at_global(dry.x, dry.y):
+		return  # geographic accident; nothing to prove here
+	manager.build_at_global(dry.x, dry.y, "stone_dam")
+	assert_eq(manager.river_depth_meters_at_global(dry.x, dry.y), 0.0)

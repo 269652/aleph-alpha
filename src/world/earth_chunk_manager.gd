@@ -1,6 +1,14 @@
 extends RefCounted
 
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
+
+## The BuildingPiece id a player-built check dam is stored as (see
+## docs/concept/rivers.md). One string is deliberately both the item id and
+## the piece id, so the existing placeable-arming path places it while
+## BuildingPiece.has_piece lights up collision/atlas/persistence.
+const DAM_PIECE_ID := "stone_dam"
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
 const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
@@ -6599,10 +6607,139 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 	return generator.is_river_at_global(global_x, global_y)
 
 
-## Same always-delegates shape as is_river_at_global above (see
-## docs/concept/rivers.md).
+## Real river depth at a global tile -- the natural solved depth (see
+## EarthChunkGenerator.river_hydraulics_at_global), raised where a
+## player-built dam downstream is ponding this cell (see
+## docs/concept/rivers.md's "Dams").
+##
+## Unlike is_river_at_global above this can NOT just delegate: whether a
+## cell is ponded depends on placed dams, which live in chunk.modifications
+## and so are the manager's knowledge, not the generator's.
 func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
-	return generator.river_depth_meters_at_global(global_x, global_y)
+	var natural := generator.river_depth_meters_at_global(global_x, global_y)
+	if natural <= 0.0:
+		return natural  # not a river cell; a dam here ponds nothing
+	return _impounded_depth_at(global_x, global_y, natural)
+
+
+## True if a player-built dam stands on this tile.
+func has_dam_at_global(global_x: int, global_y: int) -> bool:
+	return modification_at_global(global_x, global_y) == DAM_PIECE_ID
+
+
+## The river tile `tiles_back` steps UPSTREAM of `from` along its own
+## curated course -- negative walks downstream instead. Returns `from`
+## itself when there is no river there to walk along.
+##
+## Upstream is "toward the source", i.e. toward a smaller course fraction
+## (see RiverCatalog.nearest_river_at), and one tile of course is stepped by
+## converting that fraction change back through the river's own tile-space
+## polyline. Exposed because both the ponding search and its tests need the
+## same notion of "further up this river".
+func upstream_river_tile(from: Vector2i, tiles_back: int) -> Vector2i:
+	return _course_tile_offset(from, float(tiles_back))
+
+
+## The tile `tiles_upstream` along the course from `from` -- fractional, so
+## a caller can step finer than one tile. Negative walks downstream.
+##
+## Fractional steps matter for the dam search: the walk rounds to integer
+## tiles, so stepping a whole tile at a time can skip straight past the cell
+## a dam actually stands on.
+func _course_tile_offset(from: Vector2i, tiles_upstream: float) -> Vector2i:
+	var here := generator.river_catalog().nearest_river_at(
+		from.x, from.y, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	if here.name == "":
+		return from
+	var polylines := RiverCatalog.tile_polylines(
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var points: Array = polylines[here.name]
+	var total := 0.0
+	for i in range(points.size() - 1):
+		total += points[i].distance_to(points[i + 1])
+	if total <= 0.0:
+		return from
+	# A real tile distance along the course, expressed as the fraction of
+	# the whole river that distance represents.
+	var target_fraction := clampf(here.course_fraction - tiles_upstream / total, 0.0, 1.0)
+	return _tile_at_course_fraction(points, target_fraction)
+
+
+## The tile sitting `fraction` of the way along a course polyline.
+func _tile_at_course_fraction(points: Array, fraction: float) -> Vector2i:
+	var total := 0.0
+	for i in range(points.size() - 1):
+		total += points[i].distance_to(points[i + 1])
+	var want := total * clampf(fraction, 0.0, 1.0)
+	var travelled := 0.0
+	for i in range(points.size() - 1):
+		var a: Vector2 = points[i]
+		var b: Vector2 = points[i + 1]
+		var segment := a.distance_to(b)
+		if travelled + segment >= want and segment > 0.0:
+			var t := (want - travelled) / segment
+			var p := a + (b - a) * t
+			return Vector2i(roundi(p.x), roundi(p.y))
+		travelled += segment
+	var last: Vector2 = points[points.size() - 1]
+	return Vector2i(roundi(last.x), roundi(last.y))
+
+
+## The real depth at a river cell once any downstream dam's pool is taken
+## into account.
+##
+## Walks DOWNSTREAM along this cell's own river looking for a dam within
+## MAX_BACKWATER_TILES. Downstream rather than upstream because a dam ponds
+## what is BEHIND it, so the cell being asked about is the one upstream of
+## the dam -- and bounded because an unbounded walk is exactly what a
+## chunk-streamed world cannot afford (see rivers.md's own "no global pass"
+## constraint).
+##
+## Nothing is stored: the pool is re-derived from the dam's presence, the
+## river's real discharge and the real terrain every time it is asked for.
+## That is what lets an impoundment persist across an unload, survive a
+## chunk seam, and need no catch-up integration -- it is a pure function of
+## state that already persists.
+func _impounded_depth_at(global_x: int, global_y: int, natural_depth: float) -> float:
+	var here := Vector2i(global_x, global_y)
+
+	# Half-tile steps, not whole ones: the course walk rounds to integer
+	# tiles, so stepping a whole tile at a time can skip straight over the
+	# very cell the dam stands on and miss it entirely. Stepping finer and
+	# de-duplicating visits every tile the course actually passes through.
+	var seen := {}
+	for step in range(0, DamImpoundment.MAX_BACKWATER_TILES * 2 + 1):
+		var tiles_downstream := step * 0.5
+		var downstream := _course_tile_offset(here, -tiles_downstream)
+		if seen.has(downstream):
+			continue
+		seen[downstream] = true
+		if not has_dam_at_global(downstream.x, downstream.y):
+			continue
+
+		var flow := generator.river_hydraulics_at_global(downstream.x, downstream.y)
+		if flow.discharge_m3_s <= 0.0:
+			continue
+		# Pool depth AT THE DAM FACE, from real weir physics: its own crest
+		# height plus the head the river's real discharge needs to spill
+		# over that crest.
+		var dam_bed := generator.terrain_relief().elevation_meters(
+			generator.macro_elevation_at_global(downstream.x, downstream.y)
+		)
+		var face_depth := DamImpoundment.pooled_depth_m(
+			dam_bed,
+			DamImpoundment.pool_surface_elevation_m(dam_bed, flow.discharge_m3_s, flow.width_m)
+		)
+		# Thinning upstream along the (compressed) backwater -- see
+		# DamImpoundment.MAX_BACKWATER_TILES for why the EXTENT is
+		# represented rather than measured against real elevations, while
+		# the DEPTH above stays real.
+		var pooled := face_depth * DamImpoundment.backwater_falloff(tiles_downstream)
+		# A dam raises water and never lowers it.
+		return maxf(natural_depth, pooled)
+	return natural_depth
 
 
 func biome_at_global(global_x: int, global_y: int) -> String:

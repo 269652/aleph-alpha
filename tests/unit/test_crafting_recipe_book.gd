@@ -31,7 +31,8 @@ func test_recipe_ids_returns_all_defined_recipes():
 	# + "any animal, the right tool" (docs/concept/taming.md): snare,
 	# butterfly_net, trap, reinforced_rope (4 more).
 	# + transportation (docs/concept/transportation.md): climbing_rope (1 more).
-	assert_eq(ids.size(), 37)
+	# + rivers (docs/concept/rivers.md): stone_dam (1 more).
+	assert_eq(ids.size(), 38)
 
 
 func test_can_craft_true_when_inventory_has_enough_inputs():

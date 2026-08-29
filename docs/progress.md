@@ -7299,6 +7299,42 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Dams: buildable stone check dam** (large) — ✅ Done — reported
+  directly ("i want to be able to build a dam from stones"). `stone_dam` is
+  a real `BuildingPiece` (new `CATEGORY_DAM`), NOT a "placeable" structure:
+  a piece already gets collision, atlas registration, persistence in
+  `chunk.modifications`, boulder-respawn suppression, connected-structure
+  flood-fill membership and material drop-back on collapse — every one of
+  which a dam wants and a placeable gets none of. The item id and piece id
+  are deliberately ONE string, so the existing placeable-arming path places
+  it while `BuildingPiece.has_piece` lights up all of the above, with no new
+  plumbing on either side. Costs `rock` (gatherable by hand from pebbles and
+  smashed boulders), not mined `stone`, so damming a stream needs only what
+  its banks offer rather than a pickaxe first.
+  **The impoundment is derived, never stored**: steady state (the pool rises
+  until overtopping equals inflow) is closed-form from the weir equation, so
+  pool depth is re-derived on demand from the dam's presence + the river's
+  real discharge + real terrain. That is what lets it survive a chunk
+  unload, cross a seam, and need no catch-up integration — it is a pure
+  function of state that already persists — and destroying the dam releases
+  the pool correctly with no cleanup code. Transient reservoir fill
+  deliberately NOT modelled (it would need per-dam stored volume, unloaded
+  catch-up and cross-seam bookkeeping for a few seconds of animation).
+  **Failure is derived, not a threshold**: dry-stacked stone slides when
+  hydrostatic push beats friction; the dam's width cancels from both sides
+  leaving `h_max = sqrt(2*mu*rho_stone*H*t/rho_water)` ≈ 1.66 m for a 1.2 m
+  dam. Push goes as depth SQUARED while resistance is fixed, so it is a
+  genuine sudden threshold. Real constants (loose-stone bulk density
+  ~1600 kg/m3 at 20-40% voids, mu = 0.6 rock-on-rock).
+  **One honest compression, stated plainly**: a real 1.2 m check dam ponds
+  water tens of metres upstream — a few hundredths of one 1 km tile, and on
+  the Dreisam's real 4% spawn-area gradient one tile upstream is already
+  ~40 m ABOVE the dam, so a literal pool could never reach even the next
+  cell. So the pool's EXTENT is compressed (`MAX_BACKWATER_TILES`, tapering
+  via `backwater_falloff`) while its DEPTH stays real from the weir
+  equation — the same trade pillar 4 already makes for channel width.
+  Multi-piece dam runs, dam-break flooding, and NPC/creature reaction to
+  impoundments — ⬜ Not started.
 - **River catalog performance** (small) — ✅ Done —
   `distance_to_nearest_river_tiles` re-converted every waypoint of every
   river on every call, from five per-tile hot paths. Now caches tile-space
