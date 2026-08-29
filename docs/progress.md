@@ -7189,19 +7189,28 @@ germany" and a 4-tile minimum width).
   picked), so this is not hypothetical — `test_find_dry_land_spawn_does_
   not_land_in_the_river_at_the_spawn_point` confirms the player spawns
   NEAR, not literally inside, the river.
-- **Flow (animated, direction-only)** (medium) — ✅ Done — reported
-  directly ("rivers should flow") alongside the underwater-tint report
-  below. `_paint_river_flow_overlay` paints a SECOND, SPARSE overlay layer
-  (`RiverFlowFx`, river cells only, unlike the water/hillshade overlays
-  which paint every loaded cell) carrying each river cell's real downhill
-  direction (`TerrainRelief.aspect_degrees_from_gradient` — the same real
-  gradient primitive hillshading already samples); `RiverFlowShader`
-  animates a translucent directional streak scrolling downstream from it.
-  This is `concept/electromagnetism.md`'s own long-standing water-wheel
-  proposal ("flow speed is derived from the water tile's own local
-  elevation gradient") **partially validated**: direction is now real,
-  tested, and driving a real visual (see that doc's updated Open
-  Questions); speed stays deliberately uniform (no per-river discharge
+- **Flow (animated direction + real gradient-driven speed + turbulence)**
+  (medium) — ✅ Done — reported directly ("rivers should flow") alongside
+  the underwater-tint report below, then extended after "can you implement
+  more natural water flow" (a uniform speed everywhere, and perfectly
+  regular streak bands, both read as mechanical). `_paint_river_flow_overlay`
+  paints a SECOND, SPARSE overlay layer (`RiverFlowFx`, river cells only,
+  unlike the water/hillshade overlays which paint every loaded cell)
+  carrying each river cell's real downhill direction (`TerrainRelief.
+  aspect_degrees_from_gradient`) AND real local slope magnitude
+  (`slope_degrees_from_gradient` — the exact same gradient sample already
+  taken for direction, so speed is nearly free); `RiverFlowShader.
+  speed_fraction_for_slope_deg` maps slope to a `[0,1]` fraction anchored
+  at `TerrainPassability.HARD_THRESHOLD_DEG` (the same real steepness
+  `BiomeClassifier.SLOPE_MOUNTAIN_THRESHOLD_DEG` already reuses elsewhere,
+  not a second eyeballed cap), and the shader now also perturbs the streak
+  phase with two octaves of scrolling value noise (the same technique
+  `WaterShader`'s own wind-shimmer already proves) so bands waver rather
+  than reading as a rigid barcode. This is `concept/electromagnetism.md`'s
+  own long-standing water-wheel proposal ("flow speed is derived from the
+  water tile's own local elevation gradient") **now built** for both
+  direction and gradient-driven speed (see that doc's updated Open
+  Questions) — still not discharge-accurate (no per-river real water-volume
   data is curated), and the water wheel mechanic itself remains unbuilt.
 - **Player wading/swimming/submersion-tint/ripples in rivers** (medium) —
   ✅ Done — reported directly ("char should be tinted for underwater").

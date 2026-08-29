@@ -6,6 +6,7 @@ const TreePlacement = preload("res://src/world/tree_placement.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
@@ -386,8 +387,25 @@ func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
 	var painted_cells := flow_layer.get_used_cells()
 	assert_gt(painted_cells.size(), 0, "expected at least one real river cell near Berlin (the Spree)")
 	assert_lt(painted_cells.size(), total_loaded_cells, "flow must not paint every loaded cell -- it is sparse, not general like hillshade")
+
+	var terrain_renderer := TerrainRenderer.new()
+	var relief := manager.generator.terrain_relief()
 	for cell in painted_cells:
 		assert_true(manager.is_river_at_global(cell.x, cell.y), "every painted flow cell must actually be a river cell")
+		# Reported directly: "more natural water flow" -- speed must now
+		# come from the SAME real gradient direction already does, not a
+		# uniform value. Recomputed independently from the real gradient
+		# and compared to what the manager actually painted.
+		var gradient := manager.gradient_at_global(cell.x, cell.y)
+		var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
+		var slope := relief.slope_degrees_from_gradient(gradient.x, gradient.y)
+		var expected_angle := aspect if aspect >= 0.0 else 0.0
+		var expected_speed_fraction := RiverFlowShader.speed_fraction_for_slope_deg(slope)
+		assert_eq(
+			flow_layer.get_cell_atlas_coords(cell),
+			terrain_renderer.atlas_coords_for_river_flow(expected_angle, expected_speed_fraction),
+			"(%d, %d) flow tile must reflect its own real gradient" % [cell.x, cell.y]
+		)
 
 	# Moving far away unloads the original chunks -- their overlay cells go too.
 	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))

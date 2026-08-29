@@ -209,16 +209,20 @@ this doc. The lit bulb is emergent, not authored.
 
 ## Open questions
 
-- **River flow DIRECTION as elevation gradient is now validated**, ahead of
-  any water wheel: [rivers.md](rivers.md)'s `RiverFlowShader`/
-  `_paint_river_flow_overlay` (2026-08-29) actually computes
-  `TerrainRelief.aspect_degrees_from_gradient` per river cell and drives a
-  real, tested, animated visual from it. **Flow SPEED as elevation-
-  gradient MAGNITUDE remains unvalidated** — the visual keeps a uniform
-  speed rather than deriving one from gradient steepness, since no water
-  wheel yet exists to consume that number and no per-river discharge data
-  is curated to ground it against. Still needs a real formula and a test
-  once a water wheel is actually built, the same "tuned function, not
+- **River flow DIRECTION and SPEED as elevation gradient are now both
+  validated visually**, ahead of any water wheel: [rivers.md](rivers.md)'s
+  `RiverFlowShader`/`_paint_river_flow_overlay` (2026-08-29, speed added
+  2026-08-29 after "more natural water flow" feedback) computes both
+  `TerrainRelief.aspect_degrees_from_gradient` (direction) and
+  `slope_degrees_from_gradient` (speed, via `RiverFlowShader.
+  speed_fraction_for_slope_deg`, anchored at `TerrainPassability.
+  HARD_THRESHOLD_DEG`) per river cell and drives a real, tested, animated
+  visual from both. **Still not validated: DISCHARGE-accurate speed** —
+  the visual's speed is real GRADIENT-derived, not derived from actual
+  water volume/channel width, since no per-river discharge data is
+  curated to ground it against and no water wheel yet exists to consume a
+  torque number either way. Still needs a real discharge formula and a
+  test once a water wheel is actually built, the same "tuned function, not
   eyeballed constant" discipline every other threshold in this project's
   docs already commits to.
 - **AC vs. DC.** Real generators produce alternating current; real
