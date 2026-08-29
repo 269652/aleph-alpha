@@ -3665,3 +3665,107 @@ func test_a_butterfly_takes_off_from_the_open_winged_frame():
 		shy.texture, shy.flap_frames[0],
 		"it opens its wings and beats, rather than resuming mid-stroke"
 	)
+
+
+# == the LATE JOIN, which is the ninth entry and the one that hid ============
+#
+# Markers are processed one after another, and a flyer that scanned and came up
+# empty waits PARTNER_SEARCH_INTERVAL before scanning again -- so the second of
+# a pair routinely joins a figure its partner began up to half a second ago,
+# having flown ordinary wander the whole time. Adopting the partner's clock and
+# the mirror of its start offset therefore threw the joiner onto the far side
+# of an orbit it had never been on. Measured at the full half-second delay:
+# **17.3x its own airspeed on one frame**, on top of every entry easing that had
+# already been done. Both figures now RE-BASE on where the two actually are
+# (see _begin_spiral_flight), which moves neither of them.
+
+
+## Runs a pair that meet, with `delay` seconds of search throttle held against
+## the second one so it is forced to join late. Returns the worst step either
+## flyer took as a multiple of its own airspeed.
+func _worst_step_joining_late(delay: float, spiralling: bool) -> float:
+	var parent := Node2D.new()
+	add_child(parent)
+	var a := _flyer_in_tree("monarch", Vector2.ZERO, parent)
+	var b := _flyer_in_tree(
+		"swallowtail" if spiralling else "monarch", Vector2(24, 0), parent
+	)
+	if spiralling:
+		a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+		b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._partner_search_cooldown = delay
+	var out := Outflight.new()
+	var joined := false
+	for i in 300:
+		_step_measured(a, FRAME, out)
+		_step_measured(b, FRAME, out)
+		var busy: bool = b._spiralling_with != 0 if spiralling else b._courting_with != 0
+		if busy:
+			joined = true
+		elif joined:
+			break
+	var worst := out.worst_ratio if joined else -1.0
+	parent.free()
+	return worst
+
+
+func test_a_butterfly_joining_a_whirl_late_does_not_teleport_into_it():
+	for delay in [0.0, 0.1, 0.25, AmbientFlyerMarker.PARTNER_SEARCH_INTERVAL]:
+		var worst := _worst_step_joining_late(delay, true)
+		assert_gte(worst, 0.0, "precondition: it has to actually join (delay %.2f s)" % delay)
+		assert_lte(
+			worst, OUTFLIGHT_SLACK,
+			"joining a whirl %.2f s late moved a butterfly %.1fx its own airspeed" % [delay, worst]
+		)
+
+
+func test_nor_does_one_joining_a_dance_late():
+	for delay in [0.0, 0.1, 0.25, AmbientFlyerMarker.PARTNER_SEARCH_INTERVAL]:
+		var worst := _worst_step_joining_late(delay, false)
+		assert_gte(worst, 0.0, "precondition: it has to actually join (delay %.2f s)" % delay)
+		assert_lte(
+			worst, OUTFLIGHT_SLACK,
+			"joining a dance %.2f s late moved a butterfly %.1fx its own airspeed" % [delay, worst]
+		)
+
+
+## ...and the re-base has to leave them a PAIR. This is the property the old
+## adopt-the-mirror code was buying with that teleport, and it must survive
+## being bought a different way.
+func test_a_late_joined_pair_is_still_exactly_opposite_from_the_first_frame():
+	var parent := Node2D.new()
+	add_child_autofree(parent)
+	var a := _flyer_in_tree("monarch", Vector2.ZERO, parent)
+	var b := _flyer_in_tree("swallowtail", Vector2(24, 0), parent)
+	a._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._courting_cooldown = Courtship.COOLDOWN_SECONDS
+	b._partner_search_cooldown = AmbientFlyerMarker.PARTNER_SEARCH_INTERVAL
+	for i in 300:
+		a._process(FRAME)
+		b._process(FRAME)
+		if b._spiralling_with != 0:
+			break
+	assert_eq(b._spiralling_with, a.get_instance_id(), "precondition: it joined late")
+	assert_eq(a._spiral_centre, b._spiral_centre, "one whirl, one centre")
+	assert_eq(a._spiral_elapsed, b._spiral_elapsed, "...and one clock")
+	assert_eq(
+		a._spiral_closing_seconds, b._spiral_closing_seconds,
+		"...and one convergence, or they draw onto different radii"
+	)
+	var worst_dot := -1.0
+	while a._spiralling_with != 0:
+		a._process(FRAME)
+		b._process(FRAME)
+		if a._spiralling_with == 0:
+			break
+		var shared: Vector2 = (
+			SpiralFlight.rise(a._spiral_elapsed)
+			+ SpiralFlight.travel(
+				a._spiral_elapsed,
+				Courtship.pair_seed(a.get_instance_id(), b.get_instance_id(), 0)
+			)
+		)
+		var from_a: Vector2 = a.position - a._spiral_centre - shared
+		var from_b: Vector2 = b.position - b._spiral_centre - shared
+		worst_dot = maxf(worst_dot, from_a.normalized().dot(from_b.normalized()))
+	assert_lt(worst_dot, -0.999, "they must whirl opposite each other (worst dot %.5f)" % worst_dot)

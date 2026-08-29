@@ -2046,24 +2046,17 @@ func _begin_courtship(partner) -> void:
 	# each other exactly, end together, and agree on Courtship.pair_seed --
 	# and it is only reachable at all now that the guard above lets the second
 	# flyer see the first (see _scan_for_partners).
-	if int(partner._courting_with) == get_instance_id():
-		_courting_centre = partner._courting_centre
-		_courting_elapsed = partner._courting_elapsed
-		_courtship_round = partner._courtship_round
-		# ...and the EASED ENTRY, which is the subtlest thing the two have to
-		# agree on. The midpoint IS the midpoint, so taking the exact mirror of
-		# the partner's start offset keeps them opposite to the float rather
-		# than to within a frame of drift; and a convergence of a different
-		# length on each side would draw the two onto different radii, which
-		# stops reading as a pair. Read across, never recomputed -- the same
-		# reasoning _begin_spiral_flight already spells out.
-		_courting_start_offset = -partner._courting_start_offset
-		_courting_closing_seconds = partner._courting_closing_seconds
-		return
+	var joining_late := int(partner._courting_with) == get_instance_id()
 	_courting_elapsed = 0.0
-	_courtship_round += 1
-	# The midpoint, computed identically on both sides so the pair orbits one
-	# shared centre rather than two slightly different ones.
+	# The round is the partner's where there is one to join, so both sides
+	# compute the same Courtship.pair_seed and resolve the same mating.
+	if joining_late:
+		_courtship_round = partner._courtship_round
+	else:
+		_courtship_round += 1
+	# The midpoint of where the two ACTUALLY are, computed identically on both
+	# sides so the pair orbits one shared centre rather than two slightly
+	# different ones.
 	_courting_centre = (position + partner.position) * 0.5
 	# Where this flyer actually is right now, so the dance starts without a
 	# jump and then draws in -- over however long covering that gap takes at
@@ -2077,6 +2070,20 @@ func _begin_courtship(partner) -> void:
 		),
 		_cruise_px_per_second()
 	)
+	if joining_late:
+		# Joining a dance the partner already started -- see
+		# _begin_spiral_flight, which spells this out at length. The short
+		# version: the partner may have committed up to PARTNER_SEARCH_INTERVAL
+		# ago and this flyer has been wandering since, so adopting the
+		# partner's clock and the mirror of its start offset threw this one
+		# onto the far side of an orbit it was never on. Re-basing the dance on
+		# where the two actually are now moves NEITHER of them, keeps their two
+		# offsets opposite to the float, and keeps the whole no-messaging
+		# derivation intact.
+		partner._courting_centre = _courting_centre
+		partner._courting_elapsed = 0.0
+		partner._courting_start_offset = -_courting_start_offset
+		partner._courting_closing_seconds = _courting_closing_seconds
 
 
 ## The dance is over. Both partners resolve the same answer from the same
@@ -2141,21 +2148,10 @@ func _end_courtship() -> void:
 ## allowed to be common.
 func _begin_spiral_flight(partner) -> void:
 	_spiralling_with = partner.get_instance_id()
-	if int(partner._spiralling_with) == get_instance_id():
-		# Joining a whirl the partner already started: adopt ITS clock and
-		# midpoint rather than starting a second, slightly different whirl
-		# around a slightly different point, and take the exact mirror of its
-		# start offset. The midpoint IS the midpoint, so the two are opposite
-		# by construction -- reading it off the partner keeps them opposite to
-		# the float rather than to within a frame of drift.
-		_spiral_centre = partner._spiral_centre
-		_spiral_elapsed = partner._spiral_elapsed
-		_spiral_start_offset = -partner._spiral_start_offset
-		# Same argument for the convergence: a drawing-in of a different length
-		# on each side would put the two on different radii, which stops
-		# reading as a pair. Read across, never recomputed.
-		_spiral_closing_seconds = partner._spiral_closing_seconds
-		return
+	var joining_late := int(partner._spiralling_with) == get_instance_id()
+	# The midpoint of where the two ACTUALLY are, this frame. Computed identically
+	# on both sides so the pair orbits one shared centre rather than two
+	# slightly different ones.
 	_spiral_centre = (position + partner.position) * 0.5
 	_spiral_elapsed = 0.0
 	# Where this flyer actually is right now, so the whirl starts without a
@@ -2170,6 +2166,35 @@ func _begin_spiral_flight(partner) -> void:
 		),
 		_cruise_px_per_second()
 	)
+	if joining_late:
+		# JOINING a whirl the partner already started, which is the case that
+		# used to teleport. Markers are processed one after another and a flyer
+		# that scanned and came up empty waits PARTNER_SEARCH_INTERVAL before
+		# scanning again, so this one can be joining a whirl begun up to half a
+		# second ago -- having flown ordinary wander the whole time. Adopting
+		# the partner's clock and the mirror of its start offset therefore
+		# threw this flyer onto the far side of an orbit it was never on:
+		# measured at 17x its own airspeed on one frame, at the full delay.
+		#
+		# So the whirl is RE-BASED on where the two actually are now, rather
+		# than this one being dragged onto where it would have been. At elapsed
+		# 0 a converging orbit is exactly its own start offset, so NEITHER
+		# flyer moves; and the midpoint is the midpoint, so the two offsets are
+		# opposite to the float by construction -- the same no-teleport,
+		# no-messaging properties a fresh start has, and the reason this is the
+		# whole fix rather than an easing on top of the old one.
+		#
+		# Writing into the partner is the second of the two places this file
+		# allows it (see _abandon_pair_interaction for the first), and for the
+		# same reason: "my partner has drifted since you committed" is not
+		# something the partner can derive, and a pair holding two different
+		# centres is the one-butterfly-orbiting-an-empty-midpoint failure again.
+		# The clock restarting is the price, and it is the right one -- a whirl
+		# properly begins when both butterflies are in it.
+		partner._spiral_centre = _spiral_centre
+		partner._spiral_elapsed = 0.0
+		partner._spiral_start_offset = -_spiral_start_offset
+		partner._spiral_closing_seconds = _spiral_closing_seconds
 
 
 func _end_spiral_flight() -> void:

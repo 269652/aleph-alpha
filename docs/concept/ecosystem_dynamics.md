@@ -1699,12 +1699,28 @@ so there is one implementation of the geometry and not two.
 whole dance from the two instance ids and each partner's own offset from the
 shared midpoint. The midpoint *is* the midpoint, so the two start offsets are
 exactly opposite by construction — which is also what made `is_leader`
-unnecessary rather than merely redundant — and the joining partner reads the
-convergence duration across from the initiator exactly as it already reads the
-clock and the centre. Two partners easing in over different durations would
-converge onto different radii and stop reading as a pair; that is the subtlest
-risk in the whole change, and it is closed by construction rather than by a
-tolerance.
+unnecessary rather than merely redundant. Two partners easing in over different
+durations would converge onto different radii and stop reading as a pair; that
+is the subtlest risk in the whole change, and it is closed by construction
+rather than by a tolerance.
+
+**The ninth entry, which hid behind the other eight: the late join.** Markers
+are processed one after another, and a flyer that scanned and came up empty
+waits `PARTNER_SEARCH_INTERVAL` before scanning again — so the *second* of a
+pair routinely joins a figure its partner began up to half a second ago, having
+flown ordinary wander the whole time. It adopted the partner's clock and the
+mirror of its start offset, which threw it onto the far side of an orbit it had
+never been on: **17.3× its own airspeed on one frame**, measured at the full
+delay, on top of every entry easing above. Both figures now **re-base** on
+where the two actually are at that moment — at elapsed 0 a converging orbit is
+exactly its own start offset, so *neither* flyer moves, and the midpoint is the
+midpoint, so the two offsets stay opposite to the float. The clock restarting is
+the price, and it is the right one: a whirl properly begins when both
+butterflies are in it. This is the second of the two places one flyer writes
+into another (the first is a flush telling its partner it bolted), and for the
+same reason: "my partner has drifted since you committed" is not derivable, and
+a pair holding two different centres is the one-butterfly-orbiting-an-empty-
+midpoint failure all over again.
 
 **The exit is the half that is easy to miss.** Position was always continuous
 when a figure *ended*; velocity was not. On the frame a whirl ended the flyer
