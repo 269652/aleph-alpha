@@ -462,6 +462,27 @@ func test_no_tree_spawns_on_a_cell_a_building_piece_occupies():
 	assert_eq(spawned.size(), without_house - 1)
 
 
+## Reported directly after playtesting: rivers were "still treated like
+## normal biome... grass and trees grow in rivers" -- a river never
+## changes chunk.biome itself (docs/concept/rivers.md's Rendering
+## section), so the forest-cell check alone can't see it; chunk.is_river
+## is the new field that lets this be excluded without spawn_trees needing
+## its own live generator reference.
+func test_no_tree_spawns_on_a_river_cell():
+	var chunk := _make_forest_chunk()
+	var cell := _first_tree_cell(chunk)
+	assert_ne(cell, Vector2i(-1, -1), "this chunk rolled no trees at all")
+	var without_river := _expected_tree_count(chunk)
+
+	chunk.is_river = PackedByteArray()
+	chunk.is_river.resize(chunk.width * chunk.height)
+	chunk.is_river[cell.y * chunk.width + cell.x] = 1
+	var spawned := renderer.spawn_trees(parent, chunk, CHUNK_ORIGIN, TILE_SIZE)
+
+	assert_false(_spawned_on_cell(spawned, cell), "a tree spawned on a real river cell")
+	assert_eq(spawned.size(), without_river - 1)
+
+
 ## The rule is narrow on purpose: an earth path or a campfire is a chunk
 ## modification too, and neither of those uproots a tree. Only a real
 ## BuildingPiece occupies its tile -- the same distinction

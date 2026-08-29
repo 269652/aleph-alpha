@@ -3100,8 +3100,10 @@ func _paint_snow_chunk(chunk_coord: Vector2i) -> void:
 func _paint_snow_tile(tile: Vector2i) -> void:
 	var band := -1
 	# Water does not take snow -- it freezes or it does not, which is a
-	# different thing and not this one.
-	if biome_at_global(tile.x, tile.y) != "ocean":
+	# different thing and not this one. A river's own biome is untouched
+	# land (see docs/concept/rivers.md's Rendering section), so it must be
+	# asked separately -- reported live: "snow falls on rivers".
+	if biome_at_global(tile.x, tile.y) != "ocean" and not is_river_at_global(tile.x, tile.y):
 		# Every tile used to read the exact same _snow_depth, so a whole
 		# loaded chunk snapped to whatever band the clock said the instant it
 		# was evaluated (reported: "snow covers a whole chunk instantly
@@ -3342,6 +3344,12 @@ func _can_root_at(chunk: Chunk, chunk_coord: Vector2i, position: Vector2) -> boo
 	# other two directions of the same rule live in stamp_structure_at_global
 	# and TreeRenderer.spawn_trees.
 	if BuildingPiece.has_piece(chunk.modifications.get(local, "")):
+		return false
+	# A river's own biome is untouched land (see docs/concept/rivers.md's
+	# Rendering section), so TreeRooting.can_root_in alone can't see it --
+	# the same "trees standing in a lake" bug class this function's own
+	# doc comment already names, now recurring for rivers specifically.
+	if is_river_at_global(tile.x, tile.y):
 		return false
 	var biome_name: String = chunk.biome[local.y * chunk.width + local.x]
 	return TreeRooting.can_root_in(biome_name)
@@ -6343,7 +6351,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	)
 
 	_grass_sims[chunk_coord] = TallGrass.new(
-		hash("%d_%d_tall_grass" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
+		hash("%d_%d_tall_grass" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
+		chunk.is_river
 	)
 	_grass_sprites[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)

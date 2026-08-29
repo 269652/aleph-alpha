@@ -6391,6 +6391,34 @@ germany" and a 4-tile minimum width).
   the Dreisam's curated centerline, and
   `test_standing_at_the_river_centerline_resolves_to_swimming_not_walking`
   confirms it.
+- **Procedural fallback reverted** (medium) — 🔴 Reverted from live use,
+  module intact — reported directly after real play: "the rivers are
+  scattered everywhere". Measured: ~6% of tiles in a curated-river-free
+  region tested true via the noise-contour proxy alone, and being an
+  independent per-tile test with no connectivity guarantee, that 6% read
+  as disconnected patches unrelated to real geography rather than "one
+  coherent stream". `EarthChunkGenerator.is_river_at_global`/
+  `river_depth_meters_at_global` are now curated-only;
+  `procedural_river.gd` itself and its own tests are untouched, just no
+  longer called.
+- **Decoration exclusion (trees, grass, snow)** (medium) — ✅ Done —
+  reported directly: "it's still treated like normal biome... grass and
+  trees grow in rivers and snow falls on rivers". Root cause: a river
+  never changes `chunk.biome` (see Rendering above), so every system that
+  places decoration from biome alone had no way to know a river was
+  there — the exact "trees standing in a lake" bug class this project had
+  already hit and fixed once (`_can_root_at`'s own doc comment), now
+  recurring for rivers specifically. New `Chunk.is_river` field
+  (populated once in `generate_chunk`) lets `TreeRenderer.spawn_trees` and
+  `TallGrass` (seeding AND spread) exclude river cells without either
+  needing its own live generator reference — both checks size-guarded so
+  every pre-existing test fixture (built without ever setting `is_river`)
+  keeps behaving exactly as before. `EarthChunkManager._can_root_at`
+  (seed-spread saplings) and `_paint_snow_tile` (snow) are manager methods
+  with direct `is_river_at_global` access already, so each just gained one
+  more excluding condition alongside their existing ocean check. Not
+  swept: a `planted_trees` entry an existing save already persisted from
+  before this fix.
 - **Freshwater fishing, village water-avoidance, creature water-depth
   awareness, the water wheel mechanic itself, boats/fords/bridges, Nix
   water-gating, lakes** — ⬜ Not started (all explicitly named as deferred

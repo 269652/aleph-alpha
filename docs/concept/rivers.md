@@ -91,7 +91,7 @@ Real rivers taper — wide near the mouth, narrow near the source — but a
 uniform width for this first pass is the honest MVP; real width-tapering
 per waypoint is a plausible later refinement, not attempted here.
 
-## Procedural fallback: everywhere else
+## Procedural fallback: reverted after playtesting (2026-08-29)
 
 A true flow-accumulation network (tracing every upstream cell that drains
 through a given point, the way `hydraulic_erosion.gd`'s droplet carver
@@ -101,26 +101,27 @@ ever loaded (`docs/concept/world.md`), so there is no point at which a
 global drainage pass could run, and a per-tile on-demand upstream walk
 would be arbitrarily expensive (real rivers accumulate thousands of
 upstream cells). `docs/concept/electromagnetism.md`'s own water-wheel
-proposal already accepted this exact limit ("flow velocity isn't a
-simulated field today... rather than adding a whole new hydrological
-simulation, flow speed is derived from the water tile's own local elevation
-gradient") — this doc makes the same trade for placement, not just flow
-speed.
+proposal already accepted this exact limit for flow SPEED specifically.
 
-The chosen proxy (`src/world/procedural_river.gd`) is a **stylized
-noise-contour heuristic**, not a hydrology simulation: a cell qualifies as a
-procedural river candidate when a seeded 2D noise field sampled at that
-real latitude/longitude sits within a narrow band of a fixed iso-value
-(noise contour lines read as winding, branching lines rather than blobs —
-a well-known cheap procedural-content technique) **and** the cell's real
-elevation sits in a low-lying band relative to the sea/mountain thresholds
-already computed for it (so procedural rivers still preferentially appear
-in real lowlands, not on real mountain peaks, even though they are not
-tracing real drainage). This is honestly a visual proxy for "there is
-probably a minor waterway near here," not a claim that any specific
-procedural river corresponds to a real one — the same register `moisture_at_global`'s
-own doc comment already uses ("Fully procedural for now (no real
-precipitation data sourced yet)").
+The chosen proxy (`src/world/procedural_river.gd`) was a **stylized
+noise-contour heuristic**: a cell qualified as a procedural river candidate
+when a seeded 2D noise field sampled at that real latitude/longitude sat
+within a narrow band of a fixed iso-value, and the cell's real elevation
+sat in a low-lying band. **Reported directly after real play: "the rivers
+are scattered everywhere"** — measured, ~6% of tiles in a curated-river-free
+region tested true via this proxy alone, and because each cell is an
+independent per-tile test with no connectivity guarantee, that 6% reads as
+disconnected patches with no relationship to real geography, not "one
+coherent stream" the way a curated, GPS-traced river does — the opposite of
+what "can we do rivers next" was asking for.
+
+`is_river_at_global` is now **curated-only** — the procedural module stays
+real, tested, and intact (a future connectivity-aware redesign, e.g. a
+real accumulation pass over a bounded region rather than per-tile noise,
+could reuse it), but nothing calls it live. Everywhere on Earth without a
+curated river is simply riverless, the honest tradeoff for "the rivers you
+see are real, named, and shaped like a real river," which is what was
+actually asked for.
 
 ## Rendering: overlay, not a new biome
 
@@ -193,14 +194,44 @@ the centerline's real deepest point, shallowing to 0 m at
 `RIVER_HALF_WIDTH_TILES`), calibrated so the range spans both
 `WaterMovementModel.WADE_DEPTH_METERS`'s wading band AND real swimming
 depth — a wide curated river genuinely offers a wadeable bank and a
-swimmable middle, not just one or the other. Procedural rivers stay a
-flat, shallower "minor stream" depth that never quite reaches swimming.
+swimmable middle, not just one or the other. (`RiverDepth.
+PROCEDURAL_RIVER_DEPTH_METERS` still exists for a flat, shallower "minor
+stream" reading, but is now dead code in practice — the procedural
+fallback it was paired with was reverted, see above.)
 `_resolve_water_state` now takes `maxf(ocean_depth, river_depth)`, so nothing
 about ocean's existing behavior changes. Once depth is real, the entire
 pre-existing chain (`current_mode` → `CharacterView.MovementState.SWIMMING`
 → `SubmersionShader.set_waterline`) fires exactly as it already does for
 ocean — no new tinting code was needed, only real river depth for the
 existing mechanism to actually see.
+
+## Decoration exclusion: trees, grass, and snow (2026-08-29)
+
+Reported directly, alongside "the rivers are scattered everywhere": **"it's
+still treated like normal biome... grass and trees grow in rivers and snow
+falls on rivers."** This is the direct, predictable cost of Rendering's own
+decision above (a river cell keeps its ordinary land biome) — every system
+that decorates land from `chunk.biome` alone had no way to know a river was
+there at all, since nothing in `chunk.biome` ever says so. Three real,
+independent placement bugs, all the exact same shape as an existing one
+this project had already hit and fixed once before for lakes
+(`EarthChunkManager._can_root_at`'s own doc comment: "the first thing the
+fix produced was trees standing in a lake") — now recurring for rivers
+specifically, because rivers are a new water concept none of these systems
+knew existed:
+
+- **Worldgen tree placement** (`TreeRenderer.spawn_trees`) and **tall-grass
+  seeding/spread** (`TallGrass`) both only ever received `chunk.biome` — a
+  new `Chunk.is_river` field (populated once in `generate_chunk`, alongside
+  `biome`/`elevation`/etc.) gives them something to exclude against without
+  either needing its own live `EarthChunkGenerator` reference. Both checks
+  are size-guarded so a `Chunk`/`TallGrass` built without ever setting
+  `is_river` (every pre-existing test fixture) is treated as "no rivers"
+  rather than an index error — additive, not a breaking signature change.
+- **Seed-spread saplings** (`EarthChunkManager._can_root_at`) and **snow**
+  (`EarthChunkManager._paint_snow_tile`) are both manager methods with
+  direct access to `is_river_at_global` already, so each just gained one
+  more excluding condition alongside their existing ocean check.
 
 ## What this pass touches, and what it deliberately doesn't
 
@@ -212,6 +243,12 @@ Touches:
   — wading, swimming, the submersion tint, and water-disturbance ripples
   all now work in rivers, not just ocean.
 - A real, animated flow-direction overlay (see Flow above).
+- Worldgen tree placement, tall-grass seeding/spread, seed-spread saplings,
+  and snow all exclude real river cells now (see Decoration exclusion
+  above) — a river no longer grows a forest or a lawn or gathers a
+  snowdrift through it.
+- The procedural fallback is no longer live-wired (curated-only; see
+  Procedural fallback above).
 
 Deliberately deferred (named here so nothing pretends to be more finished
 than it is, matching this project's usual practice):
@@ -242,18 +279,27 @@ than it is, matching this project's usual practice):
   genuinely different shape (closed polygon, not a polyline) from
   everything above; not attempted here, and real-world lakes above sea
   level remain invisible to this world exactly as before this doc.
+- **Already-spread saplings in an existing save** — the decoration
+  exclusion stops FUTURE tree spread/worldgen placement from landing in a
+  river; a `planted_trees` entry a save already persisted from before this
+  fix is not retroactively swept. The deterministic map-generated forest
+  itself isn't affected by this gap (it regenerates fresh from
+  `generate_chunk`/`spawn_trees` on every chunk load, never persisted).
 
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
   Dreisam (see Roster). Rest-of-world roster — ⬜ Not started, ongoing.
-- **Procedural fallback (noise-contour proxy)** — ✅ Done, honestly scoped
-  as a stylized proxy, not a flow-accumulation simulation.
+- **Procedural fallback (noise-contour proxy)** — ✅ Built, tested, and
+  intact as a module — 🔴 **Reverted from live use** (see "Procedural
+  fallback: reverted after playtesting" above); curated-only is what's
+  live. A future connectivity-aware redesign could reuse the module.
 - **Rendering (water overlay reuse)** — ✅ Done.
 - **Flow direction (animated overlay)** — ✅ Done. Flow-rate-accurate speed,
   and the water wheel mechanic itself — ⬜ Not started.
 - **Player wading/swimming/submersion-tint/ripples in rivers** — ✅ Done.
+- **Decoration exclusion (trees, grass, snow)** — ✅ Done.
 - **Dry-land spawn exclusion** — ✅ Done.
 - **Freshwater fishing, village avoidance, creature water-depth awareness,
-  boats/fords/bridges, Nix water-gating, lakes** — ⬜ Not started (see
-  above).
+  boats/fords/bridges, Nix water-gating, lakes, already-persisted stale
+  saplings** — ⬜ Not started (see above).

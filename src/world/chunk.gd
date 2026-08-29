@@ -9,6 +9,13 @@ var elevation: PackedFloat32Array
 var biome: PackedStringArray
 var moisture: PackedFloat32Array
 var temperature: PackedFloat32Array
+## 1 where EarthChunkGenerator.is_river_at_global is true, 0 otherwise --
+## never folded into `biome` itself (see docs/concept/rivers.md's
+## Rendering section: a river never becomes an eighth biome). Lets
+## worldgen-time decoration placement (TreeRenderer.spawn_trees, TallGrass)
+## exclude river cells without each needing its own live generator
+## reference -- they already receive the whole Chunk.
+var is_river: PackedByteArray
 
 ## Player edits keyed by local tile coordinate (Vector2i) to a tile/structure id.
 var modifications: Dictionary = {}
