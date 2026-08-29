@@ -373,8 +373,17 @@ var _water_ripple_accumulator := 0.0
 ## (see EarthChunkManager._step_seed_dispersal / SeedDispersal). Empty string
 ## means empty-handed. State lives on the marker rather than in the chunk
 ## manager so it travels with the animal across chunk boundaries.
+##
+## carried_seed_direction is a real heading (SeedDispersal.carry_direction)
+## to lean into while carrying -- see _wander_step's own doc comment for why
+## ordinary wander alone cannot be trusted to cover this carrier's real
+## range. Vector2.ZERO (its default, and what EarthChunkManager resets it to
+## on resolve) means "no active lean", which is also the harmless default
+## for every existing caller/test that only ever set carried_seed_species/
+## _origin before this field existed.
 var carried_seed_species := ""
 var carried_seed_origin := Vector2.ZERO
+var carried_seed_direction := Vector2.ZERO
 
 ## Grass seed a MOUSE is currently caching, and where it picked it up (see
 ## EarthChunkManager._step_grass_seed_caching / SeedCaching). Separate from
@@ -383,8 +392,11 @@ var carried_seed_origin := Vector2.ZERO
 ## principle be doing both at once (brushing a bloom while also caching a
 ## grass seed it actively picked up), so the two carriers need independent
 ## state. No species field -- a chunk grows only one kind of grass.
+## carried_grass_seed_direction mirrors carried_seed_direction above (see
+## SeedCaching.carry_direction).
 var carried_grass_seed := false
 var carried_grass_seed_origin := Vector2.ZERO
+var carried_grass_seed_direction := Vector2.ZERO
 
 ## Tree nut a SQUIRREL is currently caching, and where it was picked up (see
 ## EarthChunkManager._step_squirrel_nut_caching / SquirrelNutCaching) --
@@ -395,9 +407,11 @@ var carried_grass_seed_origin := Vector2.ZERO
 ## principle to be doing any combination of the three at once. Unlike grass
 ## (which grows only one kind per chunk), a nut has a real species -- empty
 ## string means empty-handed, otherwise it names which tree to plant if the
-## nut ends up cached rather than eaten.
+## nut ends up cached rather than eaten. carried_nut_direction mirrors
+## carried_seed_direction above (see SquirrelNutCaching.carry_direction).
 var carried_nut_species := ""
 var carried_nut_origin := Vector2.ZERO
+var carried_nut_direction := Vector2.ZERO
 var _world = null
 var _tile_size := 16
 
@@ -1998,6 +2012,19 @@ func _advance_avoided(raw: Vector2, speed: float, delta: float) -> void:
 	_advance_gated(step.normalized(), speed * surviving, delta, true)
 
 
+## How strongly a creature carrying a seed/nut leans into that carry's own
+## direction (SeedDispersal/SeedCaching/SquirrelNutCaching.carry_direction),
+## 0 = pure ordinary wander, 1 = ignore wander and fly straight there.
+## Mirrors AmbientFlyerMarker.CARRY_STEER_WEIGHT exactly, same value and same
+## reasoning: CreatureWander is the SAME home-tethered containment shape
+## AmbientFlyerMovement uses for birds (measured at a hard ~2.6-tile ceiling
+## on distance from home regardless of wander_seed, see docs/progress.md),
+## so a weak lean risks the same "silently short of the real range" bug --
+## and unlike a visibly-scripted-looking steer, the only real cost of a
+## STRONG one here is a longer carry, never a shorter one.
+const CARRY_STEER_WEIGHT := 0.9
+
+
 func _wander_step(delta: float) -> void:
 	# Grazing pause: some wander intervals are deliberate stands (see
 	# CreatureWander.is_pausing) -- continuous never-resting drift read as
@@ -2017,13 +2044,41 @@ func _wander_step(delta: float) -> void:
 	# picked -- sideways or backwards, from the sprite's own point of view,
 	# whenever that direction opposed its current heading.
 	# _wander_radius() is a PER-CALL override (juvenile vs adult, see that
-	# function's own doc comment) -- step_position itself takes no radius
+	# function's own doc comment) -- direction_at itself takes no radius
 	# argument, it reads the shared _wander instance's own wander_radius
 	# property (see CreatureWander's "Per-instance override" doc comment),
 	# so the override has to land there first.
 	_wander.wander_radius = _wander_radius()
-	var candidate := _wander.step_position(home, position, _elapsed_time, delta, wander_seed)
+	# direction_at (not the higher-level step_position convenience) so the
+	# heading can be leaned toward an active carry direction below BEFORE it
+	# becomes a position delta -- exactly how AmbientFlyerMarker blends
+	# _carry_direction into its own bird's wander heading. A creature can in
+	# principle be carrying on more than one of the three independent slots
+	# at once (see carried_seed_direction's own doc comment), so each active
+	# one gets its own sequential lean, the same "chain multiple steers"
+	# shape AmbientFlyerMarker already uses for its carry-then-scent blend.
+	var heading := _wander.direction_at(home, position, _elapsed_time, wander_seed)
+	heading = _leaned_toward_carry(heading, carried_seed_direction)
+	heading = _leaned_toward_carry(heading, carried_grass_seed_direction)
+	heading = _leaned_toward_carry(heading, carried_nut_direction)
+	var candidate := position + heading * CreatureWander.WANDER_SPEED * delta
 	_advance_avoided(candidate - position, CreatureWander.WANDER_SPEED, delta)
+
+
+## Leans `heading` toward `carry_direction` by CARRY_STEER_WEIGHT -- a no-op
+## when `carry_direction` is ZERO (the default, meaning nothing is being
+## carried on that particular slot). Falls back to the UNLEANED heading on
+## the rare frame where the two nearly cancel outright (heading pointing
+## almost exactly opposite the carry direction), the same "residual of two
+## opposing vectors is not safe to use directly" reasoning
+## AmbientFlyerMarker's own carry/scent blends document.
+func _leaned_toward_carry(heading: Vector2, carry_direction: Vector2) -> Vector2:
+	if carry_direction == Vector2.ZERO:
+		return heading
+	var leaned := heading.lerp(carry_direction, CARRY_STEER_WEIGHT)
+	if leaned.length() > 0.001:
+		return leaned.normalized()
+	return heading
 
 
 ## A still-growing juvenile roams a tighter, home-anchored range than an

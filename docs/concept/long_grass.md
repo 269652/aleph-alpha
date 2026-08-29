@@ -282,6 +282,18 @@ or forcing both animals through one:
   than to the whole "Forager" diet label -- this is a real mouse behaviour,
   not a generic dietary fact that should attach to anything sharing mice's
   diet table entry.
+  - **A mouse's own ordinary wander could not actually cover this range on
+    its own, the identical bug `flora.md`'s bird-endozoochory section had.**
+    `CreatureMarker`'s wander (`CreatureWander`) is home-tethered within a
+    fairly tight radius, the SAME containment shape `AmbientFlyerMovement`
+    uses for birds -- measured directly at a hard ~2.6-tile ceiling across
+    30 sampled `wander_seed`s regardless of what `carry_distance_tiles`
+    intended, only reaching this module's own short end (targets under
+    ~2.7 of the 1-6 tile range) 11 times out of 30. Fixed the same shape
+    the bird case was: `SeedCaching.carry_direction`, a seeded heading
+    picked at pickup and leaned into by ordinary wander
+    (`CreatureMarker._wander_step`). See `docs/progress.md` for the full
+    measurement.
 - **Both carriers use the SAME sink.** Whatever gets a grass seed to a new
   position -- a sparrow's digestion timer or a mouse's cache -- calls
   `EarthChunkManager.plant_grass_at`, which establishes a brand-new,

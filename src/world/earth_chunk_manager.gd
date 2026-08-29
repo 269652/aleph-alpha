@@ -4749,6 +4749,13 @@ func _step_grass_seed_caching(creature) -> void:
 			return
 		creature.carried_grass_seed = true
 		creature.carried_grass_seed_origin = creature.position
+		# A real heading to lean into while caching (see CreatureMarker.
+		# _wander_step) -- ordinary wander alone (CreatureWander, the SAME
+		# home-tethered containment shape AmbientFlyerMovement uses for
+		# birds) is measured at a hard ~2.6-tile ceiling regardless of
+		# wander_seed, short of this module's own 1-6 tile range without it
+		# (see docs/progress.md).
+		creature.carried_grass_seed_direction = SeedCaching.carry_direction(creature.wander_seed)
 		return
 
 	# Carrying: cache once it has actually travelled its own (short) carry
@@ -4761,6 +4768,7 @@ func _step_grass_seed_caching(creature) -> void:
 		return
 	plant_grass_at(creature.position)
 	creature.carried_grass_seed = false
+	creature.carried_grass_seed_direction = Vector2.ZERO
 
 
 ## Squirrel scatter-hoarding of fallen tree NUTS (see SquirrelNutCaching /
@@ -4807,6 +4815,14 @@ func _step_squirrel_nut_caching(creature) -> void:
 			return
 		creature.carried_nut_species = eaten_species
 		creature.carried_nut_origin = creature.position
+		# A real heading to lean into while carrying (see CreatureMarker.
+		# _wander_step) -- ordinary wander alone (CreatureWander, the SAME
+		# home-tethered containment shape AmbientFlyerMovement uses for
+		# birds) cannot be trusted to reach this module's own 2-9 tile
+		# range, the same measured ~2.6-tile ceiling its siblings
+		# (SeedDispersal/SeedCaching) needed this fix for (see
+		# docs/progress.md).
+		creature.carried_nut_direction = SquirrelNutCaching.carry_direction(creature.wander_seed)
 		return
 
 	# Carrying: resolve once it has actually travelled its own (short) carry
@@ -4825,6 +4841,7 @@ func _step_squirrel_nut_caching(creature) -> void:
 	if not SquirrelNutCaching.nut_is_consumed(creature.wander_seed, creature.wander_seed):
 		try_plant_seed_at(creature.position, creature.carried_nut_species)
 	creature.carried_nut_species = ""
+	creature.carried_nut_direction = Vector2.ZERO
 
 
 ## Flowers spread on the backs of grazing animals (see SeedDispersal /
@@ -4846,6 +4863,15 @@ func _step_seed_dispersal(creature) -> void:
 		if picked != "":
 			creature.carried_seed_species = picked
 			creature.carried_seed_origin = creature.position
+			# A real heading to lean into while carrying (see CreatureMarker.
+			# _wander_step) -- ordinary wander alone (CreatureWander, the
+			# SAME home-tethered containment shape AmbientFlyerMovement uses
+			# for birds) is measured at a hard ~2.6-tile ceiling regardless
+			# of wander_seed, well short of this module's own 3-14 tile
+			# range without it -- the worst-affected of the three ground
+			# carriers (0/30 sampled seeds ever reached it under pure
+			# wander, see docs/progress.md).
+			creature.carried_seed_direction = SeedDispersal.carry_direction(creature.wander_seed)
 		return
 
 	# Carrying: drop once it has actually travelled its own carry distance,
@@ -4857,6 +4883,7 @@ func _step_seed_dispersal(creature) -> void:
 		return
 	plant_flower_at(creature.position, creature.carried_seed_species)
 	creature.carried_seed_species = ""
+	creature.carried_seed_direction = Vector2.ZERO
 
 
 ## Adds/removes tuft sprites so the rendered layer matches the sim's patch

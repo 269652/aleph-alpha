@@ -50,6 +50,45 @@ func test_rodent_carry_range_is_shorter_than_grazer_epizoochory():
 	assert_lt(SeedCaching.CARRY_MAX_TILES, SeedDispersal.CARRY_MAX_TILES)
 
 
+# -- which way it heads off while carrying -----------------------------------
+#
+# CreatureWander (ordinary ground-creature wander, shared by mice) is the SAME
+# home-tethered containment shape AmbientFlyerMovement uses for birds --
+# measured at a hard ~2.6-tile ceiling regardless of wander_seed (see
+# docs/progress.md), which the TOP of this module's own 1-6 tile range
+# already exceeds. A mouse needs an actual heading to lean into while
+# carrying, not just a distance it hasn't covered yet -- mirrors
+# SeedEndozoochory.carry_direction exactly.
+
+func test_carry_direction_is_a_unit_vector():
+	for seed_value in 20:
+		var heading := SeedCaching.carry_direction(seed_value)
+		assert_almost_eq(heading.length(), 1.0, 0.001)
+
+
+func test_carry_direction_is_deterministic():
+	assert_eq(SeedCaching.carry_direction(11), SeedCaching.carry_direction(11))
+
+
+func test_different_mice_head_off_in_different_directions():
+	var headings := {}
+	for seed_value in 30:
+		headings[snappedf(SeedCaching.carry_direction(seed_value).angle(), 0.01)] = true
+	assert_gt(headings.size(), 5, "carry direction should vary between individual mice")
+
+
+## Sampled at a different PixelNoise coordinate than carry_distance_tiles's,
+## so a far-caching mouse is equally likely in any direction.
+func test_carry_direction_varies_independently_of_carry_distance():
+	var direction_values := {}
+	var distance_values := {}
+	for seed_value in 30:
+		direction_values[snappedf(SeedCaching.carry_direction(seed_value).angle(), 0.01)] = true
+		distance_values[snappedf(SeedCaching.carry_distance_tiles(seed_value), 0.01)] = true
+	assert_gt(direction_values.size(), 5)
+	assert_gt(distance_values.size(), 5)
+
+
 # -- noticing a fallen seed while foraging -----------------------------------
 
 ## Tight, like SeedDispersal's own brushing radius -- a mouse grabs a seed it

@@ -68,6 +68,53 @@ func test_squirrel_carry_range_is_shorter_than_bird_endozoochory():
 	assert_lt(SquirrelNutCaching.CARRY_MAX_TILES, SeedEndozoochory.CARRY_MIN_TILES)
 
 
+# -- which way it heads off while carrying -----------------------------------
+#
+# CreatureWander (ordinary ground-creature wander, shared by squirrels) is the
+# SAME home-tethered containment shape AmbientFlyerMovement uses for birds --
+# measured at a hard ~2.6-tile ceiling regardless of wander_seed (see
+# docs/progress.md), which most of this module's own 2-9 tile range already
+# exceeds. A squirrel needs an actual heading to lean into while carrying,
+# not just a distance it hasn't covered yet -- mirrors
+# SeedEndozoochory.carry_direction exactly. Sampled at PixelNoise coordinate
+# (0, 2), distinct from BOTH carry_distance_tiles's (0, 0) and
+# nut_is_consumed's (0, 1), so all three rolls vary independently.
+
+func test_carry_direction_is_a_unit_vector():
+	for seed_value in 20:
+		var heading := SquirrelNutCaching.carry_direction(seed_value)
+		assert_almost_eq(heading.length(), 1.0, 0.001)
+
+
+func test_carry_direction_is_deterministic():
+	assert_eq(
+		SquirrelNutCaching.carry_direction(11), SquirrelNutCaching.carry_direction(11)
+	)
+
+
+func test_different_squirrels_head_off_in_different_directions():
+	var headings := {}
+	for seed_value in 30:
+		headings[snappedf(SquirrelNutCaching.carry_direction(seed_value).angle(), 0.01)] = true
+	assert_gt(headings.size(), 5, "carry direction should vary between individual squirrels")
+
+
+## Sampled at a coordinate distinct from BOTH carry_distance_tiles's and
+## nut_is_consumed's, so a far-caching squirrel is equally likely in any
+## direction regardless of whether it ends up eating or caching the nut.
+func test_carry_direction_varies_independently_of_carry_distance_and_consumption():
+	var direction_values := {}
+	var distance_values := {}
+	var consumed_values := {}
+	for seed_value in 30:
+		direction_values[snappedf(SquirrelNutCaching.carry_direction(seed_value).angle(), 0.01)] = true
+		distance_values[snappedf(SquirrelNutCaching.carry_distance_tiles(seed_value), 0.01)] = true
+		consumed_values[SquirrelNutCaching.nut_is_consumed(seed_value)] = true
+	assert_gt(direction_values.size(), 5)
+	assert_gt(distance_values.size(), 5)
+	assert_eq(consumed_values.size(), 2)
+
+
 # -- noticing a fallen nut while foraging ------------------------------------
 
 func test_pickup_radius_is_a_close_range():

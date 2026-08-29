@@ -209,9 +209,12 @@ seed merely rides on a grazer's coat.
     replacing it — a carrying bird should still read as wandering, just
     wandering with somewhere to get to) and resolving on real distance
     travelled rather than elapsed time closes the gap without inventing a
-    new movement system: it is the exact shape ground carriers already used
-    (see below), the flying case just also needed a heading, since its
-    wander is home-tethered in a way ground wander is not.
+    new movement system: resolving on real distance is the exact shape
+    ground carriers already used (see below) — but it turned out ground
+    wander (`CreatureWander`) is home-tethered the SAME way flying wander
+    is, not exempt from this bug the way this section used to claim. Ground
+    carriers needed (and got) the identical heading-to-lean-into fix; see
+    "Spread by animal seed dispersal" below for the measurement.
 - **Where it can land**: forest/rainforest only — the same biomes trees
   themselves grow in, not grassland (unlike flower seed, which is a
   meadow plant). A seed digested over open grassland or ocean is simply
@@ -728,6 +731,30 @@ follows the actual movement corridors of the ecosystem's herbivores, and a
 region that loses its grazers slowly stops spreading flowers. This reuses the
 same "ecology has consequences" thread as tree spread (see
 [ecosystem_dynamics.md](ecosystem_dynamics.md)).
+
+**"Carries it while it wanders" needed a real heading, the same fix the bird
+endozoochory section above got, and for the identical reason.**
+`CreatureMarker`'s ordinary wander (`CreatureWander`) is home-tethered within
+a fairly tight radius -- the SAME containment shape `AmbientFlyerMovement`
+uses for birds (same 40px/2.5-tile radius, same pull-fully-home factor) --
+so an animal whose home never moves cannot reach this carrier's own 3-14
+tile range by wander alone, and the bird section's own claim that ground
+wander was exempt from this was never actually checked. Measured directly:
+30 sampled `wander_seed`s driving a bare marker (pure wander, no AI) all
+plateaued at a hard ~2.6-tile net displacement from the pickup point,
+regardless of what `carry_distance_tiles` intended -- 0 of 30 ever reached
+the real range. A REAL grazer's other movement (hunger, foraging) helps but
+does not close the gap on its own: across a 15-simulated-minute window in a
+real `EarthChunkManager`, only 2 of those 30 seeds' carries actually
+resolved. Fixed identically to the bird case: `SeedDispersal.carry_direction`
+(a seeded heading, independent of `carry_distance_tiles`) is picked at
+pickup and leaned into by ordinary wander (`CreatureMarker._wander_step`,
+`CARRY_STEER_WEIGHT = 0.9`, same value and reasoning as the bird's own). The
+mouse (`SeedCaching`, see [long_grass.md](long_grass.md#reproduction-seed-and-how-a-field-colonises-ground-it-never-touches))
+and squirrel (`SquirrelNutCaching`, above) ground carriers share the exact
+same `CreatureWander` movement and got the same fix --
+see `docs/progress.md` for the full measurement and all three real-range
+regression tests.
 
 ### Status
 

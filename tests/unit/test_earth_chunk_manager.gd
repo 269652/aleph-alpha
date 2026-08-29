@@ -18,6 +18,8 @@ const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
 const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
+const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
+const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
@@ -4267,6 +4269,215 @@ func test_a_mouse_does_not_cache_before_travelling_its_carry_distance():
 
 	assert_false(sim.has_grass(target_cell), "too soon to cache -- it hasn't gone anywhere yet")
 	assert_true(mouse.carried_grass_seed, "still carrying")
+
+
+# -- ground carriers actually reach their own real carry range --------------
+#
+# CreatureWander (ordinary wander, shared by every ground creature) is the
+# SAME home-tethered containment shape AmbientFlyerMovement uses for birds --
+# measured at a hard ~2.6-tile ceiling on distance from home regardless of
+# wander_seed, well short of any of these three carriers' own real ranges
+# (see docs/progress.md for the full measurement: 0/30 sampled seeds ever
+# reached SeedDispersal's range under pure wander, and only 11/30 reached
+# SeedCaching's shorter one). Fixed the same shape AmbientFlyerMarker's own
+# bird carry was: pickup now also picks a real heading
+# (SeedDispersal/SeedCaching/SquirrelNutCaching.carry_direction), leaned
+# into by CreatureMarker._wander_step.
+
+## Pickup must set the new direction, not just the existing flag/origin --
+## otherwise it stays at its Vector2.ZERO default and the mouse is right
+## back to pure, capped wander.
+func test_a_mouse_picking_up_a_grass_seed_also_picks_a_real_carry_direction():
+	manager.update(_berlin_tile)
+	for i in 40:
+		manager.step_tall_grass(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var seeds: Array = manager.grass_seeds_near(centre, 40)
+	assert_gt(seeds.size(), 0, "precondition: something for the mouse to find")
+	var at: Vector2 = seeds[0]["position"]
+	var mouse := manager._creature_renderer.spawn_single(
+		creatures_parent, "mouse", at, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_grass_seed_caching(mouse)
+
+	assert_almost_eq(
+		mouse.carried_grass_seed_direction.length(), 1.0, 0.001,
+		"pickup should set a real unit-length carry direction, not leave it at its zero default"
+	)
+
+
+## Mirrors AmbientFlyerMarker's own bird range test
+## (test_a_sparrows_seed_carry_reaches_the_real_dispersal_range_across_many_
+## birds) -- must hold for many different mice, not just a convenient one.
+## World left null (a bare marker, not spawn_single's real EarthChunkManager
+## world) so this proves the STEERING alone is enough -- not reliant on
+## hunger/foraging luck, which real measurement found rescues only some
+## individuals and only slowly (see docs/progress.md).
+func test_a_mouses_grass_seed_carry_reaches_the_real_range_across_many_mice():
+	# creatures_parent (unlike every OTHER test in this file) needs to be in
+	# the LIVE tree here: _process is driven for real below, which calls
+	# _sync_grounded_children -- that needs _ready to have actually run
+	# (health-bar/shadow child nodes are built there), which needs the
+	# marker inside a live tree at all.
+	add_child(creatures_parent)
+	for wander_seed in range(1, 21):
+		var mouse: CreatureMarker = manager._creature_renderer.spawn_single(
+			creatures_parent, "mouse", Vector2.ZERO, null, TerrainRenderer.TILE_SIZE, wander_seed
+		)
+		mouse.carried_grass_seed = true
+		mouse.carried_grass_seed_origin = mouse.position
+		mouse.carried_grass_seed_direction = SeedCaching.carry_direction(wander_seed)
+
+		for step in range(3000):  # 900 simulated seconds -- generous
+			mouse._process(0.3)
+			manager._step_grass_seed_caching(mouse)
+			if not mouse.carried_grass_seed:
+				break
+		var net_tiles := mouse.position.length() / float(TerrainRenderer.TILE_SIZE)
+		var still_carrying := mouse.carried_grass_seed
+		creatures_parent.remove_child(mouse)
+		mouse.free()
+
+		assert_false(
+			still_carrying,
+			"wander_seed %d: mouse never cached its grass seed within the step budget" % wander_seed
+		)
+		assert_gte(
+			net_tiles, SeedCaching.CARRY_MIN_TILES,
+			"wander_seed %d: mouse only carried %.2f tiles, short of the %.1f-tile minimum" % [
+				wander_seed, net_tiles, SeedCaching.CARRY_MIN_TILES
+			]
+		)
+	remove_child(creatures_parent)
+
+
+## Same pickup-sets-a-real-direction proof, for the OTHER ground carrier that
+## needed it: flower epizoochory, gated to no particular species (any
+## non-predator grazer -- see _step_seed_dispersal's own doc comment).
+func test_a_grazer_picking_up_a_flower_seed_also_picks_a_real_carry_direction():
+	manager.update(_berlin_tile)
+	var season := manager.current_season()
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, season):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var at := Vector2.ZERO
+	var planted := false
+	for y in 8:
+		for x in 8:
+			var candidate_at := _pixel_for(chunk_coord, Vector2i(x, y))
+			if manager.plant_flower_at(candidate_at, species):
+				at = candidate_at
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var horse := manager._creature_renderer.spawn_single(
+		creatures_parent, "horse", at, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_seed_dispersal(horse)
+
+	assert_almost_eq(
+		horse.carried_seed_direction.length(), 1.0, 0.001,
+		"pickup should set a real unit-length carry direction, not leave it at its zero default"
+	)
+
+
+## Flower epizoochory's own range (3-14 tiles) is the LARGEST of the three
+## ground carriers -- measured as the worst-affected under pure wander (0/30
+## sampled seeds ever reached it, see docs/progress.md). World left null for
+## the same steering-alone isolation as the mouse test above.
+func test_a_grazers_flower_seed_carry_reaches_the_real_range_across_many_grazers():
+	add_child(creatures_parent)  # see the mouse test above's own doc comment
+	for wander_seed in range(1, 21):
+		var horse: CreatureMarker = manager._creature_renderer.spawn_single(
+			creatures_parent, "horse", Vector2.ZERO, null, TerrainRenderer.TILE_SIZE, wander_seed
+		)
+		horse.carried_seed_species = "rose"
+		horse.carried_seed_origin = horse.position
+		horse.carried_seed_direction = SeedDispersal.carry_direction(wander_seed)
+
+		for step in range(3000):  # 900 simulated seconds -- generous
+			horse._process(0.3)
+			manager._step_seed_dispersal(horse)
+			if horse.carried_seed_species == "":
+				break
+		var net_tiles := horse.position.length() / float(TerrainRenderer.TILE_SIZE)
+		var remaining_species := horse.carried_seed_species
+		creatures_parent.remove_child(horse)
+		horse.free()
+
+		assert_eq(
+			remaining_species, "",
+			"wander_seed %d: grazer never dropped its flower seed within the step budget" % wander_seed
+		)
+		assert_gte(
+			net_tiles, SeedDispersal.CARRY_MIN_TILES,
+			"wander_seed %d: grazer only carried %.2f tiles, short of the %.1f-tile minimum" % [
+				wander_seed, net_tiles, SeedDispersal.CARRY_MIN_TILES
+			]
+		)
+	remove_child(creatures_parent)
+
+
+## Third and last ground carrier -- fixed by analogy rather than separately
+## measured broken (see SquirrelNutCaching.carry_direction's own doc
+## comment), but genuinely verified here rather than assumed fixed.
+func test_a_squirrel_picking_up_a_nut_also_picks_a_real_carry_direction():
+	var ground_items := Node2D.new()
+	manager.set_ground_items(ground_items)
+	var pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	ground_items.add_child(_make_ground_fruit(pixel, "walnut"))
+	var squirrel := manager._creature_renderer.spawn_single(
+		creatures_parent, "squirrel", pixel, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_squirrel_nut_caching(squirrel)
+
+	assert_almost_eq(
+		squirrel.carried_nut_direction.length(), 1.0, 0.001,
+		"pickup should set a real unit-length carry direction, not leave it at its zero default"
+	)
+	ground_items.free()
+
+
+func test_a_squirrels_nut_carry_reaches_the_real_range_across_many_squirrels():
+	add_child(creatures_parent)  # see the mouse test above's own doc comment
+	for wander_seed in range(1, 21):
+		var squirrel: CreatureMarker = manager._creature_renderer.spawn_single(
+			creatures_parent, "squirrel", Vector2.ZERO, null, TerrainRenderer.TILE_SIZE, wander_seed
+		)
+		squirrel.carried_nut_species = "walnut"
+		squirrel.carried_nut_origin = squirrel.position
+		squirrel.carried_nut_direction = SquirrelNutCaching.carry_direction(wander_seed)
+
+		for step in range(3000):  # 900 simulated seconds -- generous
+			squirrel._process(0.3)
+			manager._step_squirrel_nut_caching(squirrel)
+			if squirrel.carried_nut_species == "":
+				break
+		var net_tiles := squirrel.position.length() / float(TerrainRenderer.TILE_SIZE)
+		var remaining_species := squirrel.carried_nut_species
+		creatures_parent.remove_child(squirrel)
+		squirrel.free()
+
+		assert_eq(
+			remaining_species, "",
+			"wander_seed %d: squirrel never resolved its nut within the step budget" % wander_seed
+		)
+		assert_gte(
+			net_tiles, SquirrelNutCaching.CARRY_MIN_TILES,
+			"wander_seed %d: squirrel only carried %.2f tiles, short of the %.1f-tile minimum" % [
+				wander_seed, net_tiles, SquirrelNutCaching.CARRY_MIN_TILES
+			]
+		)
+	remove_child(creatures_parent)
 
 
 # -- hover tooltip: is there a grass patch under the cursor, and how grown --
