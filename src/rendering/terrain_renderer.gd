@@ -13,6 +13,7 @@ const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
 const IllustratedTerrainSprite = preload("res://src/rendering/illustrated_terrain_sprite.gd")
 const ProceduralHillshadeSprite = preload("res://src/rendering/procedural_hillshade_sprite.gd")
+const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 
 ## How many WORLD UNITS one tile occupies. Every gameplay system is built on
 ## this -- player movement/collision, spawn placement, chunk streaming,
@@ -165,6 +166,7 @@ var _structure_sprite_generator := ProceduralStructureSprite.new()
 var _building_piece_sprite_generator := ProceduralBuildingPieceSprite.new()
 var _shore_distance_generator := ProceduralShoreDistanceSprite.new()
 var _hillshade_generator := ProceduralHillshadeSprite.new()
+var _river_flow_generator := ProceduralRiverFlowSprite.new()
 var _atlas_cache := TerrainAtlasCache.new()
 var _illustrated_terrain = IllustratedTerrainSprite.new()
 
@@ -1544,3 +1546,38 @@ func build_hillshade_overlay_tile_set() -> TileSet:
 	hillshade_tile_set.tile_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
 	hillshade_tile_set.add_source(hillshade_source, 0)
 	return hillshade_tile_set
+
+
+## Atlas coordinate for a real flow-direction compass bearing -- see
+## ProceduralRiverFlowSprite.direction_bin_for and docs/concept/rivers.md.
+func atlas_coords_for_river_flow(angle_deg: float) -> Vector2i:
+	return Vector2i(ProceduralRiverFlowSprite.direction_bin_for(angle_deg), 0)
+
+
+## A small, separate TileSet for the GPU river-flow overlay layer: one tile
+## per compass direction bin, each holding real quantized flow-direction
+## DATA (see ProceduralRiverFlowSprite) rather than art. river_flow_shader.gd
+## samples it as a texture channel and animates a directional streak
+## continuously on the GPU -- same "bake data once, animate from a live
+## uniform" shape build_hillshade_overlay_tile_set already established.
+func build_river_flow_tile_set() -> TileSet:
+	var total := ProceduralRiverFlowSprite.DIRECTION_BINS
+	var flow_image := Image.create(total * ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	for bin in total:
+		var angle_deg := ProceduralRiverFlowSprite.angle_for_bin(bin)
+		var tile_image := _river_flow_generator.generate_image(angle_deg)
+		flow_image.blit_rect(
+			tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),
+			Vector2i(bin * ART_TILE_SIZE, 0)
+		)
+
+	var flow_source := TileSetAtlasSource.new()
+	flow_source.texture = ImageTexture.create_from_image(flow_image)
+	flow_source.texture_region_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
+	for i in total:
+		flow_source.create_tile(Vector2i(i, 0))
+
+	var flow_tile_set := TileSet.new()
+	flow_tile_set.tile_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
+	flow_tile_set.add_source(flow_source, 0)
+	return flow_tile_set

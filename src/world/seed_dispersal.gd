@@ -71,6 +71,28 @@ static func carry_distance_tiles(carrier_seed: int) -> float:
 	return CARRY_MIN_TILES + (CARRY_MAX_TILES - CARRY_MIN_TILES) * unit
 
 
+## Which way this carrier moves off with its picked-up seed, as a unit
+## vector. Sampled at a PixelNoise coordinate distinct from
+## carry_distance_tiles's (0, 0) so heading and range vary independently for
+## the same carrier -- the same independent-second-sample shape
+## SeedEndozoochory.carry_direction/AntColony.carry_direction already use for
+## their own carrier seeds.
+##
+## Needed for the same reason SeedEndozoochory needed one: ordinary wander
+## (CreatureWander.direction_at) is anchored to a home point within a fairly
+## tight radius -- the SAME home-tethered containment shape
+## AmbientFlyerMovement uses for birds -- so a carrier whose home never moves
+## cannot reach this module's own CARRY_MIN_TILES..CARRY_MAX_TILES range by
+## wander alone. Measured directly, not assumed: a hard ~2.6-tile ceiling
+## across 30 sampled wander_seeds regardless of what carry_distance_tiles
+## actually intended, and real hunger/foraging movement alone rescued only
+## 2 of those 30 within a 15-simulated-minute window (see docs/progress.md).
+## Blended into ordinary wander by CreatureMarker._wander_step, not used to
+## override it outright -- see that function's own doc comment.
+static func carry_direction(carrier_seed: int) -> Vector2:
+	return Vector2.from_angle(PixelNoise.range_value(carrier_seed, 0, 1, 0.0, TAU))
+
+
 ## Whether a seed dropped on `biome_name` can sprout there at all. Unknown
 ## biomes deliberately return false: a new biome should have to opt in to
 ## growing flowers rather than silently inheriting them.

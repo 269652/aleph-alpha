@@ -40,6 +40,15 @@ var _season := ""
 ## happen all at once.
 var _turning_into := ""
 var _turn_progress := 0.0
+## How much snow lies on this tree's canopy right now (see TreeRenderer.
+## set_snow_coverage / EarthChunkManager._snow_depth) -- pushed in alongside
+## season/turn because it is the SAME shape of fact: a live value for the
+## whole world at once, not an independent per-tree one the way growth_scale
+## is. Deliberately NOT a season: docs/concept/seasons.md's "canopy is on
+## the clock" reasoning is about which of the four SEASON frames a tree
+## wears, and does not extend to how much of it is under snow -- that stays
+## a live-weather quantity, same as the ground's own lying snow.
+var _snow_coverage := 0.0
 ## How much of its canopy this tree has actually put out.
 ##
 ## Part of the DRAWN state, not just the node scale: a young tree has fewer
@@ -83,14 +92,22 @@ func bind_canopy(sprite: Sprite2D) -> void:
 	_canopy_sprite = sprite
 
 
-## Shows `count` ripe fruits on the canopy, drawn for `season`.
+## Shows `count` ripe fruits on the canopy, drawn for `season`, under
+## `snow_coverage` of snow (see the field's own doc comment -- a live
+## weather fact, not another season).
 ##
 ## No-op unless something actually changed (avoids regenerating the texture
 ## every tick) or the canopy isn't bound. Season and crop share one entry
 ## point because they share one texture: regenerating for a new season would
-## otherwise silently drop the fruit already on the tree.
+## otherwise silently drop the fruit already on the tree. Snow is compared
+## by its QUANTISED level (see ProceduralTreeSprite.snow_level), not the raw
+## float: lying snow accumulates continuously, and comparing raw values
+## would redraw every tree in range on every single accumulation tick --
+## the same cost class as the compositing slowdown this codebase already
+## fixed once (see ProceduralTreeSprite's own "why these caches exist").
 func set_ripe_fruit(
-	count: int, for_season: String = "", turning_into: String = "", turn_progress: float = 0.0
+	count: int, for_season: String = "", turning_into: String = "", turn_progress: float = 0.0,
+	snow_coverage: float = 0.0
 ) -> void:
 	if _canopy_sprite == null:
 		return
@@ -100,12 +117,17 @@ func set_ripe_fruit(
 		and turning_into == _turning_into
 		and is_equal_approx(turn_progress, _turn_progress)
 		and is_equal_approx(_canopy_growth(), _drawn_growth)
+		and is_equal_approx(
+			ProceduralTreeSprite.snow_level(snow_coverage),
+			ProceduralTreeSprite.snow_level(_snow_coverage)
+		)
 	):
 		return
 	_ripe_count = count
 	_season = for_season
 	_turning_into = turning_into
 	_turn_progress = turn_progress
+	_snow_coverage = snow_coverage
 	_redraw_canopy()
 
 
@@ -128,7 +150,8 @@ func _redraw_canopy() -> void:
 		_season,
 		_turning_into,
 		_turn_progress,
-		_drawn_growth
+		_drawn_growth,
+		_snow_coverage
 	)
 
 

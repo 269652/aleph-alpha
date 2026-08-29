@@ -451,6 +451,95 @@ than silently tuned away, since fixing either is a different piece of work
 ceiling against real new-sheet content) than the slicer this follow-up was
 about.
 
+**Eighth follow-up: an independent re-check found the seventh follow-up's
+edge feather had NOT actually fixed either known-bad tile -- it had
+relabelled them -- and this pass replaces it with a third technique that
+does.** Measured directly against the seventh follow-up's own committed
+code, not assumed: `band=5,variant=2`'s "fixed" row-0 mean alpha (0.028) was
+low only because the whole bleed profile had shifted down two rows, not
+because any of it was removed -- the feathered pipeline's row 2
+(0.449) equals the UNFIXED pipeline's row 0 (0.449) almost exactly. A full
+render confirmed the disconnected ghost blob was still clearly visible,
+just two rows lower. `band=9,variant=7`'s left-edge stray fragment was not
+addressed by the feather at all (it sits well inside the crop's own left
+edge, outside the 8px feather zone) -- only that tile's TOP hard clip, a
+genuinely separate defect, was actually fixed. Also corrected: a prior
+summary of the seventh follow-up claimed 0 violations of the near-invisible-
+colour halo guard at a looser alpha<0.05 threshold in the final committed
+code; re-measured directly against that exact code, the real figure is
+2,104 (the PINNED test's own alpha<0.02 threshold genuinely was, and still
+is, 0 -- this correction is about an unpinned, looser figure quoted in prose,
+the same kind of correction this file's own fifth follow-up made for its
+0.0581-vs-0.0612 neighbour-step figure).
+
+A uniform edge feather cannot fix this in principle: `band=9,variant=7`'s
+real content already touches its own nominal cell edge with zero margin on
+at least one side on every one of its ten variants, so widening the feather
+enough to reach the real bleed depth (measured up to ~36 native px, more
+than four times `CROP_EDGE_FEATHER_PX`) would amputate real, edge-touching
+content on row 9 rather than just the bleed -- a feather cannot tell the two
+apart, since both are simply "paint near this crop's edge."
+
+The real fix reuses `CompositeSheetSlicer`'s own "blobs not gutters"
+technique (see that file's own doc comment) rather than inventing a new one:
+a shape is found by CONNECTIVITY, not by distance from an edge. After
+cropping the nominal cell, `SnowLayer._discard_disconnected_bleed` finds
+every connected run of painted pixels (`_connected_components`,
+eight-connected, `BLEED_COMPONENT_ALPHA = 0.3`) and, for every one that
+isn't the cell's own dominant (largest) content, checks whether it keeps
+growing once the crop's own boundary is lifted (`BLEED_NEIGHBOUR_PAD_PX =
+45` native px of padding in every direction, re-using a real neighbouring
+region of the same sheet). A piece of this cell's own content -- however
+many separate touching puffs it is legitimately split into (confirmed by
+direct render: `band=6,variant=0`'s real content IS two separate cloud
+clumps) -- is already complete within its own nominal rectangle and does not
+grow when the window widens. A piece of a NEIGHBOUR's content that merely
+presses across the boundary keeps growing, because most of the shape it
+belongs to is still on the other side. Any component whose size at least
+doubles under this test (`BLEED_GROWTH_RATIO = 2.0` -- "more than half of
+this shape's real extent turned out to sit outside our own nominal cell") is
+discarded.
+
+This is NOT a clean binary split -- measured across every non-largest
+component on the real sheet, growth ratios form a smooth continuum from
+1.000 (a component that never touches a single pixel of padding) past 10,
+with no natural gap to draw a line through; this sheet genuinely has shapes
+that brush against their neighbours by every degree. `2.0` is a deliberately
+conservative line through that continuum, chosen to protect every measured
+self-contained shape (including `band=6,variant=0`'s own real second cloud
+lobe, ratio 1.190) while still catching both known-bad tiles' dominant
+fragments (ratios 7.47-29.25 and 11.51) and, as a measured side effect, a
+further batch of real bleed elsewhere on the sheet (confirmed by direct
+render on `band=4,variant=5`: a genuine lobe of `band=3`'s own cloud
+pressing down across the row boundary, the identical shape of defect as the
+two originally-named tiles, just never previously singled out).
+
+**Honest result, not a full fix:** `band=9,variant=7`'s left-edge fragment is
+now completely gone (a direct connectivity check on the crop finds exactly
+1 component where there were 2). `band=5,variant=2`'s ghost blob is
+substantially, not completely, gone -- two of its three original fragments
+(654 and 167 of 1024 native px, ~80% of the ghost blob's total mass) are
+removed, but the third (203px) never grows even at 150px of padding, so by
+this exact test it is indistinguishable from a genuine small separate puff
+and is deliberately left rather than guessed at -- a named, honest
+limitation. Measured sheet-wide (all 100 tiles, not just the two
+known-bad ones, per this fix's own governing instruction to check for
+exactly this): total painted mass retained is 88.25% (554,440 native px
+before, 489,282 after), and the single worst-hit tile (`band=4,variant=5`,
+the newly-found bleed above) loses 30.3% of its own content -- confirmed by
+render to be genuinely a neighbour's lobe, not a severed tendril of its own
+drawing.
+
+The prior pass's own reference-tile test was replaced rather than patched,
+since a row-0 mean is exactly what let the shifted-not-removed bug through:
+`test_known_bad_reference_tiles_have_no_substantial_stray_component` now
+counts connected components on the raw crop instead (a shifted row cannot
+fool a component count), backed by a companion test on the final built tile
+checking a RANGE of rows/columns rather than one, and a new sheet-wide test
+pinning the 88.25%-retained/30.3%-worst-loss measurements above as a real
+regression guard against a future re-tuning being far more aggressive than
+measured here.
+
 ### Status
 
 - ✅ Snow instead of rain below freezing, falling white, slow, and as FLECKS
@@ -516,17 +605,29 @@ about.
   overlays (`_unload_chunk`), not left floating over nothing.
 - ✅ A built tile's own crop no longer reproduces a neighbouring cell's bleed
   as a visible artefact — `SnowLayer.build_band_image` premultiplies alpha
-  around its Lanczos resize (`_premultiply_alpha`/`_unpremultiply_alpha`) and
+  around its Lanczos resize (`_premultiply_alpha`/`_unpremultiply_alpha`),
   feathers the crop's own outer border toward transparent first
-  (`_feather_crop_edges`, `CROP_EDGE_FEATHER_PX`); tested against a
-  sheet-wide near-invisible-colour guard and the two specific worst tiles
-  found by direct render, plus a guard that the fix did not amputate row 9's
-  own real coverage. The separately-reported "keep the initial variant so
-  accumulation stays coherent" complaint was confirmed, by a dedicated test,
-  to have never been a caching bug — `_snow_variant_by_tile` already held a
-  tile's variant fixed for its loaded lifetime by construction; the visible
-  symptom was this same slicer bug read as a shape change. See the seventh
-  follow-up in `docs/progress.md` for the full measurement trail.
+  (`_feather_crop_edges`, `CROP_EDGE_FEATHER_PX`), and (eighth follow-up)
+  discards any painted content that is connected to a neighbouring cell
+  rather than to this cell's own dominant content
+  (`_discard_disconnected_bleed`, reusing `CompositeSheetSlicer`'s own
+  connected-blob technique) — a uniform feather alone could taper an edge
+  but not delete a neighbour's paint several pixels deep. Tested against a
+  sheet-wide near-invisible-colour guard, a connected-component guard on the
+  two known-worst tiles (immune to the row-shift that let the feather-only
+  fix pass its own earlier version of this test unfixed), a companion guard
+  on the final built tile, a guard that the fix did not amputate row 9's own
+  real coverage, and a sheet-wide guard that no OTHER tile lost an
+  implausible fraction of its own content. Honest, not total: `band=9,
+  variant=7`'s stray fragment is fully gone; `band=5,variant=2`'s ghost blob
+  is ~80% gone, with a small (~20%) self-contained residual named as a known
+  limitation rather than silently left. The separately-reported "keep the
+  initial variant so accumulation stays coherent" complaint was confirmed,
+  by a dedicated test, to have never been a caching bug — `_snow_variant_by_
+  tile` already held a tile's variant fixed for its loaded lifetime by
+  construction; the visible symptom was this same slicer bug read as a shape
+  change. See the seventh and eighth follow-ups in `docs/progress.md` for
+  the full measurement trail.
 
 ## Pinning the weather (`/weather`)
 

@@ -18,6 +18,8 @@ const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const TallGrass = preload("res://src/world/tall_grass.gd")
 const SeedCaching = preload("res://src/gameplay/seed_caching.gd")
+const SeedDispersal = preload("res://src/world/seed_dispersal.gd")
+const SquirrelNutCaching = preload("res://src/gameplay/squirrel_nut_caching.gd")
 const IllustratedGrassPatch = preload("res://src/rendering/illustrated_grass_patch.gd")
 const DecorationLod = preload("res://src/rendering/decoration_lod.gd")
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
@@ -284,6 +286,60 @@ func test_hillshade_overlay_paints_a_real_tile_for_every_loaded_cell():
 	hillshade_layer.free()
 
 
+# -- river flow overlay (docs/concept/rivers.md) -----------------------------
+#
+# Rivers previously looked exactly like still ocean water (reported:
+# "rivers should flow"). Unlike the water/hillshade overlays above, this
+# layer is deliberately SPARSE: only river cells get a tile at all (see
+# _paint_river_flow_overlay's own doc comment for why -- it reuses
+# is_river_at_global the same way _paint_water_overlay already does, never
+# touching chunk.biome). Berlin sits on the Spree's own curated course
+# (river_catalog.gd), so this fixture is guaranteed to exercise real river
+# cells, not just a hypothetical one.
+
+func test_set_river_flow_layer_assigns_a_real_tile_set():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	assert_not_null(flow_layer.tile_set)
+	flow_layer.free()
+
+
+func test_set_river_flow_layer_assigns_the_shared_shader_material():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	assert_true(flow_layer.material is ShaderMaterial)
+	flow_layer.free()
+
+
+func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	manager.update(_berlin_tile)
+
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var total_loaded_cells := manager.chunks_in_radius(
+		center_chunk, EarthChunkManager.LOAD_RADIUS
+	).size() * EarthChunkManager.CHUNK_SIZE * EarthChunkManager.CHUNK_SIZE
+
+	var painted_cells := flow_layer.get_used_cells()
+	assert_gt(painted_cells.size(), 0, "expected at least one real river cell near Berlin (the Spree)")
+	assert_lt(painted_cells.size(), total_loaded_cells, "flow must not paint every loaded cell -- it is sparse, not general like hillshade")
+	for cell in painted_cells:
+		assert_true(manager.is_river_at_global(cell.x, cell.y), "every painted flow cell must actually be a river cell")
+
+	# Moving far away unloads the original chunks -- their overlay cells go too.
+	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+	for cell in flow_layer.get_used_cells():
+		var still_loaded_chunk := _chunk_coord_for_tile(cell)
+		var new_center := _chunk_coord_for_tile(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+		var delta := (still_loaded_chunk - new_center).abs()
+		assert_true(
+			maxi(delta.x, delta.y) <= EarthChunkManager.LOAD_RADIUS,
+			"overlay cells outside the loaded radius must be erased on unload"
+		)
+	flow_layer.free()
+
+
 ## RULE-9 pin for the hillshade painter's halved elevation sampling: EVERY
 ## painted cell must still be exactly the atlas coordinate the old
 ## slope_at_global + aspect_at_global pair produced. The painter now takes
@@ -347,6 +403,14 @@ func test_set_wind_strength_also_drives_tree_bloom_and_grass_sway():
 	)
 	assert_eq(manager._tree_renderer._wind_sway.shared_material().get_shader_parameter("wind_strength"), 1.8)
 	assert_eq(manager._illustrated_grass.material().get_shader_parameter("wind_strength"), 1.8)
+
+
+## set_snow_depth must also reach TreeRenderer, mirroring set_wind_strength's
+## own forward-call shape -- so a newly spawned tree picks up the live snow
+## depth (see TreeRenderer._texture_for) with no separate wiring.
+func test_set_snow_depth_forwards_to_the_tree_renderer():
+	manager.set_snow_depth(0.6)
+	assert_almost_eq(manager._tree_renderer._snow_coverage, 0.6, 0.0001)
 
 
 ## record_water_disturbance feeds the SAME shared material set_water_layer
@@ -1453,7 +1517,20 @@ func test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_ra
 
 	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
 
-	var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id)
+	# Apple is insect-pollinated (TreeSpecies._INSECT_POLLINATED) and this tree
+	# was never visited by a bee, so step_fruiting's own yield_multiplier
+	# composes FruitingModel.pollination_factor(0) -- the UNPOLLINATED_YIELD_
+	# FLOOR, a fifth of the ceiling -- on top of the species multiplier (see
+	# step_fruiting's own pollination_factor block). Leaving that out here
+	# used to overstate "expected" by 5x (10 instead of the real 2): this is
+	# the REAL catch-up ripeness the test's own name promises, not a second,
+	# looser opinion about it.
+	var pollination_factor := 1.0
+	if TreeSpecies.needs_pollinators_for(species_id):
+		pollination_factor = FruitingModel.pollination_factor(
+			tree.pollination_visits_in_cycle(FruitingModel.BEARING_CYCLE_SECONDS, manager.world_age_seconds())
+		)
+	var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id) * pollination_factor
 	var ripening_multiplier := TreeSpecies.ripening_multiplier_for(species_id)
 	var current_warmth: float = manager._warmth_at_pixel(tree.position)
 	var expected: Dictionary = manager._fruiting_model.state_at(
@@ -1466,6 +1543,27 @@ func test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_ra
 		tree._ripe_count, expected_ripe,
 		"once back in range the tree must show the REAL catch-up ripeness for the elapsed time, not a frozen/stale value"
 	)
+
+
+## step_fruiting's own per-tree loop calls tree.set_ripe_fruit directly (not
+## through sync_tree_season's loop), so it has to pass the live snow depth
+## through too -- otherwise every fruiting tick would silently reset a
+## nearby tree's snow back to zero between sync_tree_season's own less
+## frequent redraws.
+func test_step_fruiting_also_dresses_a_nearby_tree_with_the_live_snow_depth():
+	var species_id := "apple"
+	var tree_position := _position_for_species(species_id)
+	manager.set_snow_depth(0.5)
+
+	var tree := ChoppableTree.new()
+	tree.position = tree_position
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
+
+	assert_almost_eq(tree._snow_coverage, 0.5, 0.0001)
 
 
 # -- sync_tree_season: the second path that redraws every loaded tree's ------
@@ -1504,6 +1602,55 @@ func test_sync_tree_season_dresses_a_nearby_tree():
 		tree.current_season(), "",
 		"a tree the player is standing next to should be dressed on a season sync, not skipped"
 	)
+
+
+# -- snow reaching an already-standing tree ----------------------------------
+#
+# TreeRenderer.set_snow_coverage only reaches a tree at the moment it is
+# SPAWNED (see test_tree_renderer.gd) -- it holds no reference to any tree
+# once built, so it cannot push a live change to one already standing.
+# sync_tree_season is the mechanism that already redraws every loaded tree's
+# canopy for season/turn; it has to carry snow the rest of the way too, or an
+# already-standing forest would never visibly whiten as it snows.
+
+func test_sync_tree_season_dresses_a_nearby_tree_with_the_live_snow_depth():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	manager.set_snow_depth(0.6)
+	manager.sync_tree_season(tree.position)
+
+	assert_almost_eq(
+		tree._snow_coverage, 0.6, 0.0001,
+		"a nearby tree should be dressed with the live snow depth, not left at zero"
+	)
+
+
+## step_snow (the real per-frame path -- see World._client_process) sets
+## _snow_depth directly rather than through set_snow_depth, so sync_tree_season
+## has to read the live field itself rather than relying on set_snow_depth
+## having been called at all.
+func test_sync_tree_season_reads_snow_depth_set_via_step_snow_not_only_set_snow_depth():
+	var tree := ChoppableTree.new()
+	tree.position = Vector2(500, 500)
+	tree.bind_canopy(Sprite2D.new())
+	entities_parent.add_child(tree)
+	manager._loaded_trees[Vector2i(0, 0)] = [tree]
+
+	# advance_world_age gives step_snow real elapsed time to accumulate
+	# against (see test_set_world_age_seconds_does_not_fake_a_catch_up_on_
+	# the_first_snow_step's own precedent) -- calling step_snow cold, with
+	# no elapsed time yet, would accumulate nothing.
+	manager.advance_world_age(1.0)
+	manager.step_snow(true, 0.0)  # cold and snowing
+	assert_gt(manager.snow_depth(), 0.0, "precondition: step_snow should have laid down real snow")
+
+	manager.sync_tree_season(tree.position)
+
+	assert_almost_eq(tree._snow_coverage, manager.snow_depth(), 0.0001)
 
 
 # -- building/destruction -----------------------------------------------------
@@ -4189,6 +4336,215 @@ func test_a_mouse_does_not_cache_before_travelling_its_carry_distance():
 
 	assert_false(sim.has_grass(target_cell), "too soon to cache -- it hasn't gone anywhere yet")
 	assert_true(mouse.carried_grass_seed, "still carrying")
+
+
+# -- ground carriers actually reach their own real carry range --------------
+#
+# CreatureWander (ordinary wander, shared by every ground creature) is the
+# SAME home-tethered containment shape AmbientFlyerMovement uses for birds --
+# measured at a hard ~2.6-tile ceiling on distance from home regardless of
+# wander_seed, well short of any of these three carriers' own real ranges
+# (see docs/progress.md for the full measurement: 0/30 sampled seeds ever
+# reached SeedDispersal's range under pure wander, and only 11/30 reached
+# SeedCaching's shorter one). Fixed the same shape AmbientFlyerMarker's own
+# bird carry was: pickup now also picks a real heading
+# (SeedDispersal/SeedCaching/SquirrelNutCaching.carry_direction), leaned
+# into by CreatureMarker._wander_step.
+
+## Pickup must set the new direction, not just the existing flag/origin --
+## otherwise it stays at its Vector2.ZERO default and the mouse is right
+## back to pure, capped wander.
+func test_a_mouse_picking_up_a_grass_seed_also_picks_a_real_carry_direction():
+	manager.update(_berlin_tile)
+	for i in 40:
+		manager.step_tall_grass(EarthChunkManager.GRASS_REFRESH_INTERVAL)
+	var centre := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var seeds: Array = manager.grass_seeds_near(centre, 40)
+	assert_gt(seeds.size(), 0, "precondition: something for the mouse to find")
+	var at: Vector2 = seeds[0]["position"]
+	var mouse := manager._creature_renderer.spawn_single(
+		creatures_parent, "mouse", at, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_grass_seed_caching(mouse)
+
+	assert_almost_eq(
+		mouse.carried_grass_seed_direction.length(), 1.0, 0.001,
+		"pickup should set a real unit-length carry direction, not leave it at its zero default"
+	)
+
+
+## Mirrors AmbientFlyerMarker's own bird range test
+## (test_a_sparrows_seed_carry_reaches_the_real_dispersal_range_across_many_
+## birds) -- must hold for many different mice, not just a convenient one.
+## World left null (a bare marker, not spawn_single's real EarthChunkManager
+## world) so this proves the STEERING alone is enough -- not reliant on
+## hunger/foraging luck, which real measurement found rescues only some
+## individuals and only slowly (see docs/progress.md).
+func test_a_mouses_grass_seed_carry_reaches_the_real_range_across_many_mice():
+	# creatures_parent (unlike every OTHER test in this file) needs to be in
+	# the LIVE tree here: _process is driven for real below, which calls
+	# _sync_grounded_children -- that needs _ready to have actually run
+	# (health-bar/shadow child nodes are built there), which needs the
+	# marker inside a live tree at all.
+	add_child(creatures_parent)
+	for wander_seed in range(1, 21):
+		var mouse: CreatureMarker = manager._creature_renderer.spawn_single(
+			creatures_parent, "mouse", Vector2.ZERO, null, TerrainRenderer.TILE_SIZE, wander_seed
+		)
+		mouse.carried_grass_seed = true
+		mouse.carried_grass_seed_origin = mouse.position
+		mouse.carried_grass_seed_direction = SeedCaching.carry_direction(wander_seed)
+
+		for step in range(3000):  # 900 simulated seconds -- generous
+			mouse._process(0.3)
+			manager._step_grass_seed_caching(mouse)
+			if not mouse.carried_grass_seed:
+				break
+		var net_tiles := mouse.position.length() / float(TerrainRenderer.TILE_SIZE)
+		var still_carrying := mouse.carried_grass_seed
+		creatures_parent.remove_child(mouse)
+		mouse.free()
+
+		assert_false(
+			still_carrying,
+			"wander_seed %d: mouse never cached its grass seed within the step budget" % wander_seed
+		)
+		assert_gte(
+			net_tiles, SeedCaching.CARRY_MIN_TILES,
+			"wander_seed %d: mouse only carried %.2f tiles, short of the %.1f-tile minimum" % [
+				wander_seed, net_tiles, SeedCaching.CARRY_MIN_TILES
+			]
+		)
+	remove_child(creatures_parent)
+
+
+## Same pickup-sets-a-real-direction proof, for the OTHER ground carrier that
+## needed it: flower epizoochory, gated to no particular species (any
+## non-predator grazer -- see _step_seed_dispersal's own doc comment).
+func test_a_grazer_picking_up_a_flower_seed_also_picks_a_real_carry_direction():
+	manager.update(_berlin_tile)
+	var season := manager.current_season()
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, season):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var at := Vector2.ZERO
+	var planted := false
+	for y in 8:
+		for x in 8:
+			var candidate_at := _pixel_for(chunk_coord, Vector2i(x, y))
+			if manager.plant_flower_at(candidate_at, species):
+				at = candidate_at
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var horse := manager._creature_renderer.spawn_single(
+		creatures_parent, "horse", at, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_seed_dispersal(horse)
+
+	assert_almost_eq(
+		horse.carried_seed_direction.length(), 1.0, 0.001,
+		"pickup should set a real unit-length carry direction, not leave it at its zero default"
+	)
+
+
+## Flower epizoochory's own range (3-14 tiles) is the LARGEST of the three
+## ground carriers -- measured as the worst-affected under pure wander (0/30
+## sampled seeds ever reached it, see docs/progress.md). World left null for
+## the same steering-alone isolation as the mouse test above.
+func test_a_grazers_flower_seed_carry_reaches_the_real_range_across_many_grazers():
+	add_child(creatures_parent)  # see the mouse test above's own doc comment
+	for wander_seed in range(1, 21):
+		var horse: CreatureMarker = manager._creature_renderer.spawn_single(
+			creatures_parent, "horse", Vector2.ZERO, null, TerrainRenderer.TILE_SIZE, wander_seed
+		)
+		horse.carried_seed_species = "rose"
+		horse.carried_seed_origin = horse.position
+		horse.carried_seed_direction = SeedDispersal.carry_direction(wander_seed)
+
+		for step in range(3000):  # 900 simulated seconds -- generous
+			horse._process(0.3)
+			manager._step_seed_dispersal(horse)
+			if horse.carried_seed_species == "":
+				break
+		var net_tiles := horse.position.length() / float(TerrainRenderer.TILE_SIZE)
+		var remaining_species := horse.carried_seed_species
+		creatures_parent.remove_child(horse)
+		horse.free()
+
+		assert_eq(
+			remaining_species, "",
+			"wander_seed %d: grazer never dropped its flower seed within the step budget" % wander_seed
+		)
+		assert_gte(
+			net_tiles, SeedDispersal.CARRY_MIN_TILES,
+			"wander_seed %d: grazer only carried %.2f tiles, short of the %.1f-tile minimum" % [
+				wander_seed, net_tiles, SeedDispersal.CARRY_MIN_TILES
+			]
+		)
+	remove_child(creatures_parent)
+
+
+## Third and last ground carrier -- fixed by analogy rather than separately
+## measured broken (see SquirrelNutCaching.carry_direction's own doc
+## comment), but genuinely verified here rather than assumed fixed.
+func test_a_squirrel_picking_up_a_nut_also_picks_a_real_carry_direction():
+	var ground_items := Node2D.new()
+	manager.set_ground_items(ground_items)
+	var pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	ground_items.add_child(_make_ground_fruit(pixel, "walnut"))
+	var squirrel := manager._creature_renderer.spawn_single(
+		creatures_parent, "squirrel", pixel, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_squirrel_nut_caching(squirrel)
+
+	assert_almost_eq(
+		squirrel.carried_nut_direction.length(), 1.0, 0.001,
+		"pickup should set a real unit-length carry direction, not leave it at its zero default"
+	)
+	ground_items.free()
+
+
+func test_a_squirrels_nut_carry_reaches_the_real_range_across_many_squirrels():
+	add_child(creatures_parent)  # see the mouse test above's own doc comment
+	for wander_seed in range(1, 21):
+		var squirrel: CreatureMarker = manager._creature_renderer.spawn_single(
+			creatures_parent, "squirrel", Vector2.ZERO, null, TerrainRenderer.TILE_SIZE, wander_seed
+		)
+		squirrel.carried_nut_species = "walnut"
+		squirrel.carried_nut_origin = squirrel.position
+		squirrel.carried_nut_direction = SquirrelNutCaching.carry_direction(wander_seed)
+
+		for step in range(3000):  # 900 simulated seconds -- generous
+			squirrel._process(0.3)
+			manager._step_squirrel_nut_caching(squirrel)
+			if squirrel.carried_nut_species == "":
+				break
+		var net_tiles := squirrel.position.length() / float(TerrainRenderer.TILE_SIZE)
+		var remaining_species := squirrel.carried_nut_species
+		creatures_parent.remove_child(squirrel)
+		squirrel.free()
+
+		assert_eq(
+			remaining_species, "",
+			"wander_seed %d: squirrel never resolved its nut within the step budget" % wander_seed
+		)
+		assert_gte(
+			net_tiles, SquirrelNutCaching.CARRY_MIN_TILES,
+			"wander_seed %d: squirrel only carried %.2f tiles, short of the %.1f-tile minimum" % [
+				wander_seed, net_tiles, SquirrelNutCaching.CARRY_MIN_TILES
+			]
+		)
+	remove_child(creatures_parent)
 
 
 # -- hover tooltip: is there a grass patch under the cursor, and how grown --

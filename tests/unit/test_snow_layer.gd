@@ -203,29 +203,155 @@ func test_no_built_tile_shows_a_strongly_coloured_pixel_at_near_zero_alpha():
 	)
 
 
-## Technique (b)'s own regression guard, against the two specific tiles a
-## direct visual render found worst: `band=5,variant=2` (a disconnected
-## ghost blob at the top, unfixed top-row mean alpha 0.449 against real
-## content that only starts around native row 36) and `band=9,variant=7` (a
-## flat ~0.9 mean-alpha plateau starting at row 0 with no taper, unfixed).
-## Both must now show a real, tapering top edge -- a low top-row mean alpha,
-## not the unfixed plateau -- rather than the crop's own outer edge holding
-## as much colour as its interior. Bounds chosen with real margin over the
-## fixed pipeline's own measured values (0.028 and 0.059 respectively) and
-## comfortably under the unfixed ones (0.449 and 0.915).
-func test_known_bad_reference_tiles_no_longer_spike_at_their_own_top_edge():
-	var ghost_tile := layer.build_band_image(5, 2)
-	var ghost_top_row_alpha := _row_mean_alpha(ghost_tile, 0)
+## Technique (b) (the edge feather alone) turned out NOT to fix either
+## known-bad tile -- an independent re-check found this exact test passing
+## by ACCIDENT. Feathering pushes the whole alpha profile down a couple of
+## rows without deleting any of it: measured directly, the feather-only row
+## means for `band=5,variant=2` are 0.028/0.266/0.449/0.344/0.130/0.012 (rows
+## 0-5) -- row 2 equals the UNFIXED row 0 (0.449) almost exactly, so the
+## "top row" this test used to check just moved, carrying the ghost blob
+## with it. `band=9,variant=7`'s left-edge stray fragment was not addressed
+## by the feather AT ALL (it sits well inside the crop's own left edge,
+## outside the 8px feather zone) -- the feather only ever fixed that tile's
+## TOP hard-clip, a genuinely separate issue. See `_discard_disconnected_
+## bleed`'s own doc comment on `build_band_image` for the real, third fix
+## (a connectivity check, reusing CompositeSheetSlicer's own "blobs not
+## gutters" technique) this test now guards.
+##
+## Replaced with a connected-component count instead of a row/column mean,
+## specifically because a mean can be moved without being reduced (see
+## above) while a component count cannot: it asks whether a genuinely
+## SEPARATE run of paint survives anywhere in the crop, not which row or
+## column it happens to sit in. Checked on the RAW crop, immediately after
+## `_discard_disconnected_bleed` runs, at the same native resolution the
+## bleed was originally measured at -- checking the final resized tile
+## instead would understate a survivor (measured: the same fragment that is
+## 203 native px here is only 11px after the 32x32 resize).
+##
+## `band=9,variant=7`'s stray fragment is now fully gone: exactly 1
+## component remains (its own real content, 7118px). `band=5,variant=2`'s
+## ghost blob is NOT fully gone -- one of its original three fragments
+## (203px) never grows even when the crop's own boundary is lifted 150
+## native px in every direction (confirmed directly, see BLEED_NEIGHBOUR_
+## PAD_PX's own doc comment), so by the same connectivity test that removes
+## genuine bleed elsewhere this one is indistinguishable from a real small
+## separate puff (like band=6,variant=0's own second cloud lobe) and is left
+## in place -- a named, honest limitation (see docs/progress.md's own
+## follow-up entry), not a silently missed bug. 300 sits with real margin
+## above that known survivor (203) and real margin below the two DOMINANT
+## fragments this fix does remove (654px and 167px) -- so this test is red
+## against the crop before `_discard_disconnected_bleed` runs (which leaves
+## a 654px fragment, comfortably over 300) and green after.
+func test_known_bad_reference_tiles_have_no_substantial_stray_component():
+	var ghost := layer._cropped_cell(2, 5)
+	if ghost.get_format() != Image.FORMAT_RGBA8:
+		ghost.convert(Image.FORMAT_RGBA8)
+	layer._discard_disconnected_bleed(ghost, 2, 5)
+	var ghost_worst_stray := _largest_non_dominant_component(ghost, SnowLayer.BLEED_COMPONENT_ALPHA)
 	assert_lt(
-		ghost_top_row_alpha, 0.15,
-		"band=5 variant=2's top row still reads as a solid ghost blob (mean alpha %.3f)" % ghost_top_row_alpha
+		ghost_worst_stray, 300,
+		"band=5 variant=2 still has a substantial disconnected fragment (%d native px) after bleed removal" % ghost_worst_stray
+	)
+
+	var clipped := layer._cropped_cell(7, 9)
+	if clipped.get_format() != Image.FORMAT_RGBA8:
+		clipped.convert(Image.FORMAT_RGBA8)
+	layer._discard_disconnected_bleed(clipped, 7, 9)
+	var clipped_worst_stray := _largest_non_dominant_component(clipped, SnowLayer.BLEED_COMPONENT_ALPHA)
+	assert_eq(
+		clipped_worst_stray, 0,
+		"band=9 variant=7's left-edge stray fragment (%d native px) is still present after bleed removal" % clipped_worst_stray
+	)
+
+
+## Belt-and-braces companion to the component test above, checked on the
+## FINAL built (resized) tile so a regression introduced downstream in
+## feather/premultiply/resize would also be caught, not only one inside
+## `_discard_disconnected_bleed` itself. Checks a RANGE of rows/columns
+## rather than a single one, deliberately: a single fixed row (row 0) is
+## exactly what the previous version of this test got away with checking
+## (see this function's own doc comment above) -- a range wide enough to
+## cover where a shifted peak would land is what actually holds up.
+##
+## Bounds: measured post-fix maxima are 0.108 (band=5,variant=2's own rows
+## 0-10, i.e. everything before its real content starts ramping up at row
+## 11) and 0.0068 (band=9,variant=7's own left four columns' mean). Both
+## bounds below sit with real margin above those measured-fixed values and
+## real margin below the pre-fix pipeline's own values at the same exact
+## locations (0.449 and 0.1155 respectively).
+func test_known_bad_reference_tiles_stay_clean_through_the_full_pipeline():
+	var ghost_tile := layer.build_band_image(5, 2)
+	var ghost_worst_row := 0.0
+	for y in range(11):
+		ghost_worst_row = maxf(ghost_worst_row, _row_mean_alpha(ghost_tile, y))
+	assert_lt(
+		ghost_worst_row, 0.2,
+		"band=5 variant=2 still shows real ghost content somewhere in rows 0-10 (worst row mean %.3f)" % ghost_worst_row
 	)
 
 	var clipped_tile := layer.build_band_image(9, 7)
-	var clipped_top_row_alpha := _row_mean_alpha(clipped_tile, 0)
+	var clipped_left_edge := 0.0
+	for x in range(4):
+		clipped_left_edge += _col_mean_alpha(clipped_tile, x)
+	clipped_left_edge /= 4.0
 	assert_lt(
-		clipped_top_row_alpha, 0.15,
-		"band=9 variant=7's top row still reads as a hard-clipped plateau (mean alpha %.3f)" % clipped_top_row_alpha
+		clipped_left_edge, 0.05,
+		"band=9 variant=7's left edge still carries real stray content (mean alpha %.4f across columns 0-3)" % clipped_left_edge
+	)
+
+
+## The connectivity fix could, in principle, sever a real tendril of a
+## legitimately lobed or irregular blob rather than just a neighbour's
+## bleed -- checked directly here across every one of the 100 real
+## (band,variant) tiles, not just the two known-bad ones (the task this fix
+## was built against explicitly asked for this: "measure it against all 100
+## real tiles ... confirm no OTHER tile regresses").
+##
+## Measured: total painted mass retained sheet-wide is 88.25% (554,440
+## native px before `_discard_disconnected_bleed`, 489,282 after), and the
+## single worst-hit tile (band=4,variant=5) loses 30.3% of its own content --
+## confirmed by direct render that this is a real lobe of band=3's own cloud
+## pressing down across the row boundary (the exact same shape of defect as
+## the two known-bad tiles, just not previously singled out), not a severed
+## tendril of band=4,variant=5's own drawing. Bounds below sit with real
+## margin on the safe side of both figures, so this is a genuine regression
+## guard against a future re-tuning being far more aggressive than measured
+## here, not a target dressed up as a guard.
+func test_bleed_removal_does_not_gut_the_sheets_own_content():
+	var total_before := 0
+	var total_after := 0
+	var worst_loss_fraction := 0.0
+	var worst_tile := ""
+	for band in SnowLayer.DEPTH_BANDS:
+		for variant in SnowLayer.OVERLAY_COLUMNS:
+			var before := layer._cropped_cell(variant, band)
+			if before.get_format() != Image.FORMAT_RGBA8:
+				before.convert(Image.FORMAT_RGBA8)
+			var before_mass := _painted_pixel_count(before, SnowLayer.BLEED_COMPONENT_ALPHA)
+
+			var after := layer._cropped_cell(variant, band)
+			if after.get_format() != Image.FORMAT_RGBA8:
+				after.convert(Image.FORMAT_RGBA8)
+			layer._discard_disconnected_bleed(after, variant, band)
+			var after_mass := _painted_pixel_count(after, SnowLayer.BLEED_COMPONENT_ALPHA)
+
+			total_before += before_mass
+			total_after += after_mass
+			if before_mass > 0:
+				var loss := float(before_mass - after_mass) / float(before_mass)
+				if loss > worst_loss_fraction:
+					worst_loss_fraction = loss
+					worst_tile = "band=%d variant=%d" % [band, variant]
+
+	var retained := float(total_after) / float(total_before)
+	assert_gt(
+		retained, 0.8,
+		"bleed removal retained only %.1f%% of the sheet's total painted mass -- too aggressive" % (retained * 100.0)
+	)
+	assert_lt(
+		worst_loss_fraction, 0.5,
+		"%s lost %.1f%% of its own content to bleed removal -- likely a severed real tendril, not bleed"
+		% [worst_tile, worst_loss_fraction * 100.0]
 	)
 
 
@@ -532,3 +658,68 @@ func _whiteness(image: Image) -> float:
 			total += pixel.v * pixel.a
 			count += 1
 	return total / float(maxi(count, 1))
+
+
+func _col_mean_alpha(image: Image, x: int) -> float:
+	var total := 0.0
+	for y in image.get_height():
+		total += image.get_pixel(x, y).a
+	return total / float(maxi(image.get_height(), 1))
+
+
+## Every eight-connected run of `image`'s own painted (alpha > `threshold`)
+## pixels -- an independent re-implementation in the TEST file on purpose
+## (rather than reusing `SnowLayer._connected_components`), so this test
+## cannot pass merely because production and test share one buggy notion of
+## "connected".
+func _connected_component_sizes(image: Image, threshold: float) -> Array:
+	var width := image.get_width()
+	var height := image.get_height()
+	var visited := {}
+	var sizes: Array = []
+	var offsets := [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+		Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1),
+	]
+	for y in height:
+		for x in width:
+			var start := Vector2i(x, y)
+			if visited.has(start) or image.get_pixel(x, y).a <= threshold:
+				continue
+			var queue: Array[Vector2i] = [start]
+			visited[start] = true
+			var size := 0
+			while not queue.is_empty():
+				var at: Vector2i = queue.pop_back()
+				size += 1
+				for offset in offsets:
+					var next: Vector2i = at + offset
+					if next.x < 0 or next.x >= width or next.y < 0 or next.y >= height:
+						continue
+					if visited.has(next) or image.get_pixel(next.x, next.y).a <= threshold:
+						continue
+					visited[next] = true
+					queue.append(next)
+			sizes.append(size)
+	return sizes
+
+
+## The size of the second-biggest connected blob of painted content in
+## `image`, or 0 if there is at most one -- "how big is the worst stray
+## fragment that isn't this cell's own dominant content".
+func _largest_non_dominant_component(image: Image, threshold: float) -> int:
+	var sizes := _connected_component_sizes(image, threshold)
+	sizes.sort()
+	sizes.reverse()
+	if sizes.size() <= 1:
+		return 0
+	return sizes[1]
+
+
+func _painted_pixel_count(image: Image, threshold: float) -> int:
+	var count := 0
+	for y in image.get_height():
+		for x in image.get_width():
+			if image.get_pixel(x, y).a > threshold:
+				count += 1
+	return count

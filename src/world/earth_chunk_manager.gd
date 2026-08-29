@@ -42,6 +42,7 @@ const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
 const HillshadeShader = preload("res://src/rendering/hillshade_shader.gd")
 const EntityHillshadeShader = preload("res://src/rendering/entity_hillshade_shader.gd")
+const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const FishRenderer = preload("res://src/rendering/fish_renderer.gd")
 const AmbientFlyerRenderer = preload("res://src/rendering/ambient_flyer_renderer.gd")
@@ -318,6 +319,8 @@ var _hillshade_shader := HillshadeShader.new()
 ## layer -- see EntityHillshadeShader's own doc comment for why it's a
 ## separate module rather than reusing _hillshade_shader itself.
 var _entity_hillshade_shader := EntityHillshadeShader.new()
+var _river_flow_layer: TileMapLayer  # optional GPU river-flow overlay, see set_river_flow_layer
+var _river_flow_shader := RiverFlowShader.new()
 ## The player's own current tile, refreshed every update() call -- named for
 ## its original use (culling far-off water disturbances, see
 ## record_water_disturbance / DISTURBANCE_RADIUS_TILES) but also doubles as
@@ -3087,11 +3090,18 @@ func step_fruiting(delta_seconds: float, player_pixel: Vector2) -> void:
 			var state: Dictionary = _fruiting_model.state_at(
 				genome, now, warmth, yield_multiplier, ripening_multiplier
 			)
+			# _snow_depth, not a value read once at the top of this function:
+			# this call site is the only one of the two per-tree redraw
+			# loops (see sync_tree_season's own) that runs on every single
+			# fruiting tick regardless of the season/turn/snow signature --
+			# leaving snow out of this call would silently reset a nearby
+			# tree's snow back to zero on the very next tick.
 			tree.set_ripe_fruit(
 				int(state.get("ripe", 0)),
 				canopy_season,
 				canopy_turning_into,
-				canopy_turn_progress
+				canopy_turn_progress,
+				_snow_depth
 			)
 
 			# Every tree reaching here already passed the FRUITING_DETAIL_RADIUS
@@ -3362,6 +3372,20 @@ func set_hillshade_layer(hillshade_layer: TileMapLayer) -> void:
 		_paint_hillshade_overlay(chunk_coord, _loaded_chunks[chunk_coord])
 
 
+## Registers the GPU river-flow overlay layer (see RiverFlowShader,
+## TerrainRenderer.build_river_flow_tile_set, docs/concept/rivers.md) --
+## same optional, fail-open shape as set_hillshade_layer above, but the
+## layer itself is SPARSE (see _paint_river_flow_overlay): only real river
+## cells ever get a tile, everywhere else stays empty/transparent.
+func set_river_flow_layer(river_flow_layer: TileMapLayer) -> void:
+	_river_flow_layer = river_flow_layer
+	river_flow_layer.tile_set = _terrain_renderer.build_river_flow_tile_set()
+	river_flow_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	river_flow_layer.material = _river_flow_shader.shared_material()
+	for chunk_coord in _loaded_chunks:
+		_paint_river_flow_overlay(chunk_coord, _loaded_chunks[chunk_coord])
+
+
 ## Registers the roof overlay layer (see docs/concept/
 ## building.md#what-enterable-means-in-a-top-down-game): a roof piece shares
 ## its cell with the floor beneath it, so it paints onto its own TileMapLayer
@@ -3586,6 +3610,37 @@ func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			)
 
 
+## Marks every RIVER cell of a loaded chunk (see EarthChunkGenerator.
+## is_river_at_global, docs/concept/rivers.md) with its real downhill flow
+## direction (TerrainRelief.aspect_degrees_from_gradient -- "the direction
+## water would actually flow"), and erases anything already painted at a
+## now-non-river cell. Deliberately SPARSE, unlike _paint_hillshade_overlay
+## above (which paints every cell): only water should ever show a flowing
+## current. Rivers previously looked exactly like still ocean water
+## (reported: "rivers should flow").
+func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if _river_flow_layer == null:
+		return
+	var relief := generator.terrain_relief()
+	var origin := chunk_coord * CHUNK_SIZE
+	for y in chunk.height:
+		for x in chunk.width:
+			var global := origin + Vector2i(x, y)
+			if not generator.is_river_at_global(global.x, global.y):
+				_river_flow_layer.erase_cell(global)
+				continue
+			var gradient := gradient_at_global(global.x, global.y)
+			var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
+			# Flat ground has no defined aspect (-1.0 sentinel) -- real
+			# terrain is never perfectly flat at bilinear-interpolated
+			# resolution in practice, but fall back to due-north rather
+			# than feed a negative angle into the atlas lookup if it ever is.
+			var flow_angle := aspect if aspect >= 0.0 else 0.0
+			_river_flow_layer.set_cell(
+				global, 0, _terrain_renderer.atlas_coords_for_river_flow(flow_angle)
+			)
+
+
 ## Cardinal directions from (global_x, global_y) that hold a non-ocean,
 ## currently-loaded neighbor. A neighbor in an unloaded chunk (streaming
 ## edge) is treated as unknown, not land -- avoids false shore-marking right
@@ -3669,6 +3724,14 @@ func set_snow_layer(snow_layer: TileMapLayer) -> void:
 ## top of it. The ground is covered, not replaced.
 func set_snow_depth(depth: float) -> void:
 	_snow_depth = clampf(depth, 0.0, 1.0)
+	# Forwards to the canopy the same way set_wind_strength forwards to
+	# _tree_renderer -- so a tree spawned right after a deliberate depth set
+	# (this call; /weather or similar) is already dressed for it. The other,
+	# more frequent live path (step_snow, called every frame and NOT routed
+	# through this setter -- see its own body) is carried the rest of the
+	# way by sync_tree_season instead, which is what actually reaches an
+	# ALREADY-standing tree (see its own doc comment).
+	_tree_renderer.set_snow_coverage(_snow_depth)
 	_repaint_snow()
 
 
@@ -4734,6 +4797,13 @@ func _step_grass_seed_caching(creature) -> void:
 			return
 		creature.carried_grass_seed = true
 		creature.carried_grass_seed_origin = creature.position
+		# A real heading to lean into while caching (see CreatureMarker.
+		# _wander_step) -- ordinary wander alone (CreatureWander, the SAME
+		# home-tethered containment shape AmbientFlyerMovement uses for
+		# birds) is measured at a hard ~2.6-tile ceiling regardless of
+		# wander_seed, short of this module's own 1-6 tile range without it
+		# (see docs/progress.md).
+		creature.carried_grass_seed_direction = SeedCaching.carry_direction(creature.wander_seed)
 		return
 
 	# Carrying: cache once it has actually travelled its own (short) carry
@@ -4746,6 +4816,7 @@ func _step_grass_seed_caching(creature) -> void:
 		return
 	plant_grass_at(creature.position)
 	creature.carried_grass_seed = false
+	creature.carried_grass_seed_direction = Vector2.ZERO
 
 
 ## Squirrel scatter-hoarding of fallen tree NUTS (see SquirrelNutCaching /
@@ -4792,6 +4863,14 @@ func _step_squirrel_nut_caching(creature) -> void:
 			return
 		creature.carried_nut_species = eaten_species
 		creature.carried_nut_origin = creature.position
+		# A real heading to lean into while carrying (see CreatureMarker.
+		# _wander_step) -- ordinary wander alone (CreatureWander, the SAME
+		# home-tethered containment shape AmbientFlyerMovement uses for
+		# birds) cannot be trusted to reach this module's own 2-9 tile
+		# range, the same measured ~2.6-tile ceiling its siblings
+		# (SeedDispersal/SeedCaching) needed this fix for (see
+		# docs/progress.md).
+		creature.carried_nut_direction = SquirrelNutCaching.carry_direction(creature.wander_seed)
 		return
 
 	# Carrying: resolve once it has actually travelled its own (short) carry
@@ -4810,6 +4889,7 @@ func _step_squirrel_nut_caching(creature) -> void:
 	if not SquirrelNutCaching.nut_is_consumed(creature.wander_seed, creature.wander_seed):
 		try_plant_seed_at(creature.position, creature.carried_nut_species)
 	creature.carried_nut_species = ""
+	creature.carried_nut_direction = Vector2.ZERO
 
 
 ## Flowers spread on the backs of grazing animals (see SeedDispersal /
@@ -4831,6 +4911,15 @@ func _step_seed_dispersal(creature) -> void:
 		if picked != "":
 			creature.carried_seed_species = picked
 			creature.carried_seed_origin = creature.position
+			# A real heading to lean into while carrying (see CreatureMarker.
+			# _wander_step) -- ordinary wander alone (CreatureWander, the
+			# SAME home-tethered containment shape AmbientFlyerMovement uses
+			# for birds) is measured at a hard ~2.6-tile ceiling regardless
+			# of wander_seed, well short of this module's own 3-14 tile
+			# range without it -- the worst-affected of the three ground
+			# carriers (0/30 sampled seeds ever reached it under pure
+			# wander, see docs/progress.md).
+			creature.carried_seed_direction = SeedDispersal.carry_direction(creature.wander_seed)
 		return
 
 	# Carrying: drop once it has actually travelled its own carry distance,
@@ -4842,6 +4931,7 @@ func _step_seed_dispersal(creature) -> void:
 		return
 	plant_flower_at(creature.position, creature.carried_seed_species)
 	creature.carried_seed_species = ""
+	creature.carried_seed_direction = Vector2.ZERO
 
 
 ## Adds/removes tuft sprites so the rendered layer matches the sim's patch
@@ -5482,11 +5572,25 @@ func step_flowers(delta: float) -> void:
 ## whichever player happened to trigger them.
 func sync_tree_season(player_pixel: Variant = null) -> void:
 	_tree_renderer.set_world_age_seconds(_world_age_seconds)
+	# Snow, alongside the clock: this is the "redraw path" that reaches a
+	# tree ALREADY standing (see TreeRenderer.set_snow_coverage's own doc
+	# comment for why that setter alone only reaches a freshly SPAWNED one).
+	# Read directly off _snow_depth rather than relying on set_snow_depth
+	# having been called -- step_snow, the real per-frame path, sets it
+	# directly and does not go through that setter (see step_snow's body).
+	_tree_renderer.set_snow_coverage(_snow_depth)
 	var canopy := _tree_renderer.canopy_state()
 	var season_name: String = canopy["season"]
 	var turning_into: String = canopy["turning_into"]
 	var turn_progress: float = canopy["turn_progress"]
-	var signature := "%s/%s/%.2f" % [season_name, turning_into, turn_progress]
+	# Snow is folded into the signature QUANTISED (see ProceduralTreeSprite.
+	# snow_level), not raw -- lying snow changes by fractions of a percent
+	# every frame, and comparing the raw value would defeat the whole point
+	# of this guard, redrawing every tree in range on every tick of a
+	# snowfall instead of a handful of times per snowfall the way a season
+	# turn already does.
+	var snow_signature := ProceduralTreeSprite.snow_level(_snow_depth)
+	var signature := "%s/%s/%.2f/%.2f" % [season_name, turning_into, turn_progress, snow_signature]
 	if signature == _last_tree_season:
 		return
 	_last_tree_season = signature
@@ -5500,7 +5604,7 @@ func sync_tree_season(player_pixel: Variant = null) -> void:
 			):
 				continue
 			tree.set_ripe_fruit(
-				tree.ripe_fruit_count(), season_name, turning_into, turn_progress
+				tree.ripe_fruit_count(), season_name, turning_into, turn_progress, _snow_depth
 			)
 
 
@@ -6480,6 +6584,12 @@ func gradient_at_global(global_x: int, global_y: int) -> Vector2:
 ## river is never stored per-chunk (see _paint_water_overlay).
 func is_river_at_global(global_x: int, global_y: int) -> bool:
 	return generator.is_river_at_global(global_x, global_y)
+
+
+## Same always-delegates shape as is_river_at_global above (see
+## docs/concept/rivers.md).
+func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
+	return generator.river_depth_meters_at_global(global_x, global_y)
 
 
 func biome_at_global(global_x: int, global_y: int) -> String:
@@ -7490,6 +7600,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_terrain_renderer.paint(_tile_map_layer, chunk, chunk_coord * CHUNK_SIZE, generator.biome_at_global)
 	_paint_water_overlay(chunk_coord, chunk)
 	_paint_hillshade_overlay(chunk_coord, chunk)
+	_paint_river_flow_overlay(chunk_coord, chunk)
 	# So a chunk streamed in mid-snowfall shows the snow already lying,
 	# instead of staying bare until the next field-wide depth change happens
 	# to repaint it (see _paint_snow_chunk's own doc comment).
@@ -8043,6 +8154,8 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.erase(_water_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _hillshade_layer != null:
 		_terrain_renderer.erase(_hillshade_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
+	if _river_flow_layer != null:
+		_terrain_renderer.erase(_river_flow_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _roof_layer != null:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _snow_layer != null:

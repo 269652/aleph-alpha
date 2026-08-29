@@ -209,9 +209,12 @@ seed merely rides on a grazer's coat.
     replacing it — a carrying bird should still read as wandering, just
     wandering with somewhere to get to) and resolving on real distance
     travelled rather than elapsed time closes the gap without inventing a
-    new movement system: it is the exact shape ground carriers already used
-    (see below), the flying case just also needed a heading, since its
-    wander is home-tethered in a way ground wander is not.
+    new movement system: resolving on real distance is the exact shape
+    ground carriers already used (see below) — but it turned out ground
+    wander (`CreatureWander`) is home-tethered the SAME way flying wander
+    is, not exempt from this bug the way this section used to claim. Ground
+    carriers needed (and got) the identical heading-to-lean-into fix; see
+    "Spread by animal seed dispersal" below for the measurement.
 - **Where it can land**: forest/rainforest only — the same biomes trees
   themselves grow in, not grassland (unlike flower seed, which is a
   meadow plant). A seed digested over open grassland or ocean is simply
@@ -729,6 +732,30 @@ region that loses its grazers slowly stops spreading flowers. This reuses the
 same "ecology has consequences" thread as tree spread (see
 [ecosystem_dynamics.md](ecosystem_dynamics.md)).
 
+**"Carries it while it wanders" needed a real heading, the same fix the bird
+endozoochory section above got, and for the identical reason.**
+`CreatureMarker`'s ordinary wander (`CreatureWander`) is home-tethered within
+a fairly tight radius -- the SAME containment shape `AmbientFlyerMovement`
+uses for birds (same 40px/2.5-tile radius, same pull-fully-home factor) --
+so an animal whose home never moves cannot reach this carrier's own 3-14
+tile range by wander alone, and the bird section's own claim that ground
+wander was exempt from this was never actually checked. Measured directly:
+30 sampled `wander_seed`s driving a bare marker (pure wander, no AI) all
+plateaued at a hard ~2.6-tile net displacement from the pickup point,
+regardless of what `carry_distance_tiles` intended -- 0 of 30 ever reached
+the real range. A REAL grazer's other movement (hunger, foraging) helps but
+does not close the gap on its own: across a 15-simulated-minute window in a
+real `EarthChunkManager`, only 2 of those 30 seeds' carries actually
+resolved. Fixed identically to the bird case: `SeedDispersal.carry_direction`
+(a seeded heading, independent of `carry_distance_tiles`) is picked at
+pickup and leaned into by ordinary wander (`CreatureMarker._wander_step`,
+`CARRY_STEER_WEIGHT = 0.9`, same value and reasoning as the bird's own). The
+mouse (`SeedCaching`, see [long_grass.md](long_grass.md#reproduction-seed-and-how-a-field-colonises-ground-it-never-touches))
+and squirrel (`SquirrelNutCaching`, above) ground carriers share the exact
+same `CreatureWander` movement and got the same fix --
+see `docs/progress.md` for the full measurement and all three real-range
+regression tests.
+
 ### Status
 
 - ✅ Species catalog with per-species bloom season, colour, and scent strength
@@ -1044,11 +1071,80 @@ windows" reasoning below, applied row-wise rather than as a full flood fill,
 because a trunk's gaps run sideways between root legs rather than sitting as
 enclosed pockets.
 
+**Some sheets arrive with an opaque background rather than real
+transparency**, and that background has to be found and keyed out rather
+than assumed away. Acorn's and apple's composite sheets are the two left in
+the roster with this problem -- pine, hazelnut, walnut and cherry have all
+since been re-exported with real alpha. Colour alone cannot tell a real
+opaque sheet's white background from real near-white content on it (a
+snow-covered bough, the same near-white a species' fifth canopy frame
+carries -- see "A fifth frame: snow is not a season" below), so the
+background is found by REACHABILITY instead: flooded inward from the crop's
+own edges, so anything truly enclosed by the drawing survives whatever
+colour it is.
+
+Reachability alone is not enough on the one frame that is allowed to be
+aggressive about it: the bare-winter canopy, which never draws anything
+pale by design, so it is safe to key every background-coloured pixel
+there regardless of whether the flood fill reached it, plus the thin
+anti-aliasing halo every branch edge carries against an opaque background
+(a bare tree's branch network has enough total edge length that this halo,
+left in, was measured making the frame read as dense as its own summer
+canopy rather than bare). Every other frame on these sheets -- the other
+three seasons, the fifth snow frame, the trunk, every fruit stage -- keeps
+the conservative, reachability-only behaviour, so a real pale drawing
+anywhere else is exactly as protected as it always was. See
+`CompositeSheetSlicer.cut_out`'s own doc comments for the measurements
+behind this.
+
 **Art is per species, and optional.** A species with sheets is drawn from them;
 one without falls back to the procedural painter unchanged. This is the same
 species-first-then-generic lookup the flowers and the animals use, so adding a
 species costs its three sheets and one line of registration, and never touches
 anything already working.
+
+### A fifth frame: snow is not a season
+
+A canopy sheet may carry ONE more drawing past its four seasons -- how much
+snow lies on the branches. It is found the same way every other frame is
+(FINDING the real drawings on the sheet, not a declared count), so a species
+gains it the moment its art does, with no roster to maintain: `cherry`'s
+separate canopy file and every composite sheet's own top band are read by the
+exact same blob-detection code either way.
+
+**It is not a fifth season, and does not go in the bare/blossom/leaf/turning
+table.** Which of the four season frames a tree wears is a pure function of
+the world CLOCK (see [seasons.md](seasons.md)'s "The canopy is on the clock,
+not on the simulation") -- but how much of that canopy is under snow is a live
+WEATHER fact, the same one the GROUND's own lying snow already is (see
+seasons.md's "The ground carries the season too", and `SnowLayer`/`Snowfall`
+for the ground's own simulation-driven accumulation and thaw). Snow follows
+the ground's precedent, not the season frame's: a live-weather overlay layered
+ON TOP of whichever season is showing, not a new phenology stage a tree walks
+through in order. A forest can be dusted with snow while in full autumn colour,
+the same way real snow does not wait for the calendar.
+
+**It reuses the season turn's own branch-by-branch blend, rather than a new
+mechanism.** The exact same geodesic branch trace and per-tile clump jitter
+that spreads a season turn outward from the trunk (see "The canopy carries the
+season" above) blends a canopy toward its snow frame too -- seeded by the
+tree's own variant, so neighbouring trees of a species are snowed on different
+boughs rather than all wearing an identical white stamp. This is deliberately
+a reuse: the "each tree looks differently covered" property falls out of
+variance the season turn already has, not a second implementation of it.
+
+**A species without this frame renders exactly as it did before, whatever the
+snow value is.** Measured off the real cherry sheet at the time this was
+built: the sheet grew a genuine fifth column (five real, unevenly-sized
+drawings, not four sliced evenly), and the new one reads as neutral grey-white
+against every season frame's own hue -- brown bark, pink blossom, green leaf,
+orange turning. By the time the plumbing landed, a second, independent art
+pass had already added the same fifth column to every other illustrated
+species' composite sheet, so today there is no species left in the roster
+without one -- but the fallback this was built for is real and load-bearing
+for whichever species is next: it is a strict boolean gate (`has_snow_frame_for`)
+checked before a canopy image is ever touched, not a threshold or an
+assumption about the roster.
 
 
 ## Recolouring illustrated blooms

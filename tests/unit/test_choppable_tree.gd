@@ -3,6 +3,7 @@ extends GutTest
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const TreeGrowth = preload("res://src/gameplay/tree_growth.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
+const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 
 
 ## A tree of an illustrated species, which is what the branch-by-branch growth
@@ -171,6 +172,56 @@ func test_a_sapling_is_still_a_smaller_node():
 	assert_lt(tree.scale.x, 1.0)
 	tree.set_age(TreeGrowth.MATURITY_SECONDS * 2.0)
 	assert_almost_eq(tree.scale.x, 1.0, 0.01)
+
+
+# -- snow, a live-weather overlay pushed alongside season/turn --------------
+#
+# Unlike season/turn, snow coverage is not the world clock's business -- it
+# is EarthChunkManager._snow_depth, forwarded here the same way season and
+# turn already are (see set_ripe_fruit), because it changes for the whole
+# world at once, the same way season does, rather than being an independent
+## per-tree fact the way growth_scale is.
+
+func test_snow_coverage_reaches_the_drawn_canopy():
+	var tree := _tree()
+	tree.set_ripe_fruit(0, "winter")
+	var bare := tree._canopy_sprite.texture
+	tree.set_ripe_fruit(0, "winter", "", 0.0, 0.7)
+	assert_ne(
+		tree._canopy_sprite.texture.get_image().get_data(),
+		bare.get_image().get_data(),
+		"snow coverage should redraw the canopy"
+	)
+
+
+## The redraw guard must not fire on every fractional change in live snow
+## depth -- lying snow accumulates continuously, and redrawing every tick
+## would reintroduce the exact "160ms per tree, froze the game" class of
+## cost this codebase has already hit once (see ProceduralTreeSprite's own
+## compositing-cost history). Two coverages landing in the same SNOW_LEVELS
+## band must be treated as no change.
+func test_a_fractional_snow_change_within_the_same_band_does_not_redraw():
+	var tree := _tree()
+	tree.set_ripe_fruit(0, "winter", "", 0.0, 0.61)
+	var first := tree._canopy_sprite.texture
+	tree.set_ripe_fruit(0, "winter", "", 0.0, 0.615)
+	assert_eq(
+		tree._canopy_sprite.texture, first,
+		"a change within the same quantised snow band should not trigger a redraw"
+	)
+
+
+## Snow coverage defaults to zero -- every existing call site written before
+## this parameter existed keeps its exact current behaviour.
+func test_snow_coverage_defaults_to_none():
+	var tree := _tree()
+	tree.set_ripe_fruit(0, "winter")
+	assert_eq(
+		tree._canopy_sprite.texture.get_image().get_data(),
+		ProceduralTreeSprite.new().generate_image_with_fruit(
+			tree.species_bias, tree.sprite_seed, 0, "winter"
+		).get_data()
+	)
 
 
 # -- pollination visits (see docs/concept/flora.md / FruitingModel.pollination_factor) --

@@ -81,6 +81,44 @@ func test_seed_always_travels_at_least_a_tile():
 	assert_gte(SeedDispersal.CARRY_MIN_TILES, 1.0)
 
 
+# -- which way it heads off while carrying -----------------------------------
+#
+# CreatureWander (ordinary ground-creature wander) is the SAME home-tethered
+# containment shape AmbientFlyerMovement uses for birds -- measured at a hard
+# ~2.6-tile ceiling regardless of wander_seed (see docs/progress.md), well
+# short of this module's own 3-14 tile range. A carrier needs an actual
+# heading to lean into while carrying, not just a distance to be told it
+# hasn't covered yet -- mirrors SeedEndozoochory.carry_direction exactly.
+
+func test_carry_direction_is_a_unit_vector():
+	for seed_value in 20:
+		var heading := SeedDispersal.carry_direction(seed_value)
+		assert_almost_eq(heading.length(), 1.0, 0.001)
+
+
+func test_carry_direction_is_deterministic():
+	assert_eq(SeedDispersal.carry_direction(11), SeedDispersal.carry_direction(11))
+
+
+func test_different_animals_head_off_in_different_directions():
+	var headings := {}
+	for seed_value in 30:
+		headings[snappedf(SeedDispersal.carry_direction(seed_value).angle(), 0.01)] = true
+	assert_gt(headings.size(), 5, "carry direction should vary between animals")
+
+
+## Sampled at a different PixelNoise coordinate than carry_distance_tiles's,
+## so a fast/far-carrying animal is equally likely in any direction.
+func test_carry_direction_varies_independently_of_carry_distance():
+	var direction_values := {}
+	var distance_values := {}
+	for seed_value in 30:
+		direction_values[snappedf(SeedDispersal.carry_direction(seed_value).angle(), 0.01)] = true
+		distance_values[snappedf(SeedDispersal.carry_distance_tiles(seed_value), 0.01)] = true
+	assert_gt(direction_values.size(), 5)
+	assert_gt(distance_values.size(), 5)
+
+
 # -- where it can root -------------------------------------------------------
 
 func test_seed_roots_on_grassland():

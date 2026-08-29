@@ -15,10 +15,24 @@ func _has_pixel(image: Image, target: Color) -> bool:
 	return false
 
 
+## A generator forced onto the plain PROCEDURAL painter (see
+## ProceduralTreeSprite.force_procedural). Every real species_bias now
+## resolves to one of TreeSpecies.IDS' six named species, and every one of
+## those has illustrated art (IllustratedTree.SPECIES_WITH_ART), so nothing
+## a real caller passes can reach the procedural branch any more -- the tests
+## below that are actually ABOUT that painter (not about a named species'
+## look) go through this seam instead of hunting for a bias that happens to
+## have no art.
+func _procedural_generator() -> ProceduralTreeSprite:
+	var procedural := ProceduralTreeSprite.new()
+	procedural.force_procedural = true
+	return procedural
+
+
 ## Art-direction pass: the tree silhouette is ringed with the shared near-black
 ## cool outline so it pops against the ground.
 func test_tree_uses_the_shared_dark_outline():
-	var image := generator.generate_image(0.5, 1)
+	var image := _procedural_generator().generate_image(0.5, 1)
 	assert_true(_has_pixel(image, PixelPalette.OUTLINE), "tree should use the shared outline color")
 
 
@@ -145,8 +159,9 @@ func test_ripe_fruit_adds_warm_fruit_dots_to_the_canopy():
 
 
 func test_more_ripe_fruit_shows_at_least_as_many_dots_up_to_the_cap():
-	var few := _fruit_dot_pixel_count(generator.generate_image_with_fruit(1.0, 7, 1))
-	var many := _fruit_dot_pixel_count(generator.generate_image_with_fruit(1.0, 7, 6))
+	var procedural := _procedural_generator()
+	var few := _fruit_dot_pixel_count(procedural.generate_image_with_fruit(1.0, 7, 1))
+	var many := _fruit_dot_pixel_count(procedural.generate_image_with_fruit(1.0, 7, 6))
 	assert_gte(many, few, "more ripe fruit should render at least as many dots")
 	assert_gt(many, 0)
 
@@ -166,8 +181,9 @@ func test_fruit_rendering_is_deterministic():
 ## Walnut's ripe "fruit" is a green-brown husk, not a bright warm red -- it
 ## should not trip the same red-dot detector an apple/cherry's fruit does.
 func test_a_walnut_leaning_trees_fruit_is_not_the_same_bright_red_as_an_apples():
-	var walnut := generator.generate_image_with_fruit(0.1, 7, 6)  # walnut bucket
-	var apple := generator.generate_image_with_fruit(0.9, 7, 6)  # apple bucket
+	var procedural := _procedural_generator()
+	var walnut := procedural.generate_image_with_fruit(0.1, 7, 6)  # walnut bucket
+	var apple := procedural.generate_image_with_fruit(0.9, 7, 6)  # apple bucket
 	assert_eq(
 		_fruit_dot_pixel_count(walnut), 0,
 		"a walnut husk should not read as the same bright warm-red as apple/cherry fruit"
@@ -197,7 +213,7 @@ func test_the_three_named_species_buckets_each_have_a_distinct_canopy():
 ## the leaf test below), not in a broken edge. Measured as: the row-width
 ## profile rises then falls with almost no direction reversals.
 func test_canopy_silhouette_stays_round():
-	var image := generator.generate_image(0.5, 7)
+	var image := _procedural_generator().generate_image(0.5, 7)
 	var widths := []
 	var canopy_bottom := int(ProceduralTreeSprite.SIZE.y * ProceduralTreeSprite.CANOPY_HEIGHT_FRAC)
 	for y in range(4, canopy_bottom - 4):
@@ -220,13 +236,14 @@ func test_canopy_silhouette_stays_round():
 ## exists to carry (docs/concept/art_resolution.md). Counted as separate
 ## horizontal runs of leaf-highlight pixels: one run per leaf edge crossed.
 func test_canopy_renders_many_individual_leaves():
-	var image := generator.generate_image(0.5, 7)
+	var procedural := _procedural_generator()
+	var image := procedural.generate_image(0.5, 7)
 	var canopy_bottom := int(ProceduralTreeSprite.SIZE.y * ProceduralTreeSprite.CANOPY_HEIGHT_FRAC)
 	var runs := 0
 	for y in canopy_bottom:
 		var in_run := false
 		for x in ProceduralTreeSprite.SIZE.x:
-			var is_leaf := generator.is_leaf_highlight(image.get_pixel(x, y))
+			var is_leaf := procedural.is_leaf_highlight(image.get_pixel(x, y))
 			if is_leaf and not in_run:
 				runs += 1
 			in_run = is_leaf
