@@ -228,8 +228,97 @@ func build_tile_set() -> TileSet:
 ## tiles' own top-row spike by ~87% each; see
 ## test_full_cover_still_clears_the_min_mean_alpha_after_the_edge_fix, which
 ## pins that this tradeoff was actually checked rather than assumed safe.
+##
+## THIS WAS STILL NOT ENOUGH -- an independent re-check measured the feather
+## alone directly against the two known-bad tiles' own actual pixels (not
+## just their row-0 mean) and found the "top-row spike" test above passes by
+## ACCIDENT, not by fixing anything: feathering pushes the whole alpha
+## profile down a couple of rows without deleting any of it, so row 0 reads
+## low while the ghost content is now sitting, fully intact, at row 2
+## (measured: unfixed row means 0.449/0.487/0.460/0.342/0.131/0.012, feather-
+## only row means 0.028/0.266/0.449/0.344/0.130/0.012 -- feather-only's row 2
+## equals unfixed row 0 almost exactly). `band=9,variant=7`'s left-edge stray
+## fragment (see this comment's own EDGE FEATHER section above) was not
+## addressed by the feather AT ALL: it sits well inside the crop's own left
+## edge, entirely outside the 8px feather zone. See
+## `_discard_disconnected_bleed`'s own doc comment below for the real fix.
 const CROP_EDGE_FEATHER_PX := 8
 const _UNPREMULTIPLY_MIN_ALPHA := 0.02
+
+## Alpha a pixel must clear to count as "painted" for `_discard_disconnected_
+## bleed`'s own connected-component search -- see that function's own doc
+## comment for why a THIRD technique is needed at all (the feather above
+## tapers an edge, it cannot delete a neighbour's content that survives
+## several pixels deep).
+##
+## Not the same threshold as `_UNPREMULTIPLY_MIN_ALPHA` (0.02) -- that one
+## exists to avoid amplifying 8-bit quantization noise into colour, an
+## entirely different concern. This one has to sit ABOVE the sheet-wide
+## near-invisible colour halo (measured at alpha 0.004-0.02, see this file's
+## own PREMULTIPLIED-ALPHA doc comment above) so that halo can never bridge
+## two genuinely separate drawings into one false connected blob, while
+## sitting comfortably BELOW the real paint of every actual drawing on this
+## sheet (measured: swept 0.05/0.1/0.15/0.2/0.3/0.5/0.7 against both
+## known-bad tiles' own raw crops -- every value in that range gives the
+## IDENTICAL component split, gap-free real margin on both sides). 0.3 is
+## the middle of that measured-stable range.
+const BLEED_COMPONENT_ALPHA := 0.3
+
+## How far, in native sheet px, `_discard_disconnected_bleed` looks PAST a
+## crop's own nominal boundary to tell a genuine neighbour intrusion apart
+## from a small shape that merely touches this cell's own edge. See that
+## function's own doc comment for the full reasoning.
+##
+## Measured, not guessed: the worst bleed depth found across all 100 tiles
+## (band=5,variant=2's ghost blob, see this file's own EDGE FEATHER doc
+## comment above) reaches about 36 native px past its own boundary. 45 clears
+## that with real margin, confirmed by re-running the same growth check at
+## 60/77/102/120/150px against several real components and finding the
+## classification never changes past 45 -- a genuinely self-contained shape
+## stays exactly the same size no matter how far the window is widened
+## (measured directly: one of band=5,variant=2's own three top fragments
+## holds at precisely 222px from 45px of padding all the way to 150px),
+## while a genuine bleed fragment keeps growing as more of its real owner
+## comes into view. 45 also stays safely inside a single neighbouring cell in
+## both directions (half a cell is ~51px row-wise, ~77px column-wise, see
+## _cropped_cell's own doc comment on the sheet's non-square cells) rather
+## than reaching a second cell over.
+const BLEED_NEIGHBOUR_PAD_PX := 45
+
+## How much a component must grow, once the crop's boundary is lifted, to
+## count as belonging mostly to a neighbour rather than to this cell.
+##
+## Expressed as a growth RATIO (grown-size / original-size) rather than an
+## absolute pixel count, so it means the same thing for a tiny fragment and a
+## large one. 2.0 is "more than half of this shape's real extent turned out
+## to sit outside our own nominal cell" (ratio 2.0 <=> exactly half outside;
+## see this function's own doc comment for the derivation) -- the plainest
+## version of "this more plausibly belongs next door than here".
+##
+## NOT a clean bimodal split: measured across every non-largest component on
+## the real sheet, growth ratios form a smooth continuum from 1.000 (never
+## reaches a pixel of padding, e.g. band=6,variant=0's own second cloud lobe,
+## a real deliberate second puff confirmed by direct render, ratio 1.190) up
+## past 10 (e.g. band=5,variant=2's worst ghost fragment, ratio 29.25) with
+## no gap to pick a threshold out of -- this sheet genuinely has shapes that
+## brush against their neighbours by every degree, not just "clean" or
+## "bled". 2.0 is a deliberately CONSERVATIVE line through that continuum:
+## it protects every measured case that stays under 2x (including
+## band=6,variant=0's real second lobe at 1.190, and one of band=5,variant=2's
+## OWN three ghost fragments, which -- confirmed directly, swept up to 150px
+## of padding -- never grows past 222px and so is kept rather than deleted;
+## see _discard_disconnected_bleed's own doc comment for why that specific
+## leftover speck is a known, named limitation rather than a silently missed
+## bug), while still catching both tiles' DOMINANT, most visually damaging
+## fragments (ratios 7.47-29.25 and 11.51 respectively) and, measured as a
+## side effect, a further batch of real bleed elsewhere on the sheet (e.g.
+## band=4,variant=5, confirmed by direct render: a real lobe of band=3's own
+## cloud pressing down across the row boundary). Sheet-wide, this keeps
+## 88.25% of the sheet's total painted mass (total measured before: 554,440
+## px; after: 489,282 px) -- the worst SINGLE tile's own loss is band=4,
+## variant=5 at 30.3% (its one dropped component IS that band=3 lobe, not a
+## fragment of its own drawing, confirmed by the same render).
+const BLEED_GROWTH_RATIO := 2.0
 
 func build_band_image(band: int, variant: int = 0) -> Image:
 	var art := TerrainRenderer.ART_TILE_SIZE
@@ -238,11 +327,150 @@ func build_band_image(band: int, variant: int = 0) -> Image:
 	var cropped := _cropped_cell(clamped_variant, clamped_band)
 	if cropped.get_format() != Image.FORMAT_RGBA8:
 		cropped.convert(Image.FORMAT_RGBA8)
+	_discard_disconnected_bleed(cropped, clamped_variant, clamped_band)
 	_feather_crop_edges(cropped, CROP_EDGE_FEATHER_PX)
 	_premultiply_alpha(cropped)
 	cropped.resize(art, art, Image.INTERPOLATE_LANCZOS)
 	_unpremultiply_alpha(cropped)
 	return cropped
+
+
+## Zeroes out any painted content in `cropped` that is NOT connected to this
+## cell's own dominant content, when a neighbour's paint has pressed far
+## enough across a cell boundary to survive as a substantial, separate blob
+## rather than a thin edge fringe -- the case the edge feather above cannot
+## reach (see this file's own "THIS WAS STILL NOT ENOUGH" doc comment).
+##
+## Reuses CompositeSheetSlicer's own core idea (see that file's own "Why
+## blobs and not gutters" doc comment): a drawing is a connected run of
+## content, and a stray mark is a SEPARATE blob, not a fainter continuation
+## of the real one. That file finds and keeps every blob above a size floor
+## because its sheet lays several independent, non-overlapping drawings out
+## with real gutters between them. This sheet is different -- every cell
+## shares its rectangle with exactly one drawing that's expected to nearly
+## fill it (see OVERLAY_COLUMNS' own doc comment), so "keep every blob above
+## a size floor" is the wrong rule here: band=6,variant=0's own real content
+## is legitimately TWO separate touching-but-disconnected cloud puffs (
+## confirmed by direct render), and a light dusting band's real content is
+## legitimately MANY small separate specks (confirmed by direct render on
+## band=1). Blindly discarding every blob but the largest would gut both.
+##
+## So this asks a different question per blob: not "is it big enough to be a
+## drawing", but "does it keep growing once you look past this cell's own
+## boundary". A piece of THIS cell's own content -- however small, however
+## many separate touching puffs it is split into -- is already complete
+## within its own nominal rectangle and does not grow when the window
+## widens. A piece of a NEIGHBOUR's content that merely presses across the
+## boundary keeps growing, because most of the shape it belongs to is still
+## sitting on the other side. Confirmed directly on both known-bad tiles and
+## on band=6,variant=0's real second lobe -- see BLEED_GROWTH_RATIO's own doc
+## comment for the actual measured numbers.
+##
+## KNOWN LIMITATION, named rather than silently missed: one of band=5,
+## variant=2's own three top fragments (the smallest, ~203px) never grows
+## even at 150px of padding (see BLEED_NEIGHBOUR_PAD_PX's own doc comment) --
+## by this function's own test it is indistinguishable from a genuine small
+## separate puff (like band=6,variant=0's own second lobe), so it is left in
+## place rather than guessed at. It is real, but a small minority of the
+## original ghost blob's total mass (~20%, 203 of 1024px across the three
+## fragments) -- the two dominant fragments (~80%) are removed. See
+## docs/progress.md's own follow-up entry for this named honestly.
+func _discard_disconnected_bleed(cropped: Image, column: int, row: int) -> void:
+	var components := _connected_components(cropped, BLEED_COMPONENT_ALPHA)
+	if components.size() <= 1:
+		return
+	components.sort_custom(func(a, b): return a.pixels.size() > b.pixels.size())
+
+	var sheet := _overlay_sheet()
+	var bounds := _cell_bounds(column, row)
+	var pad_x0 := maxi(0, bounds.position.x - BLEED_NEIGHBOUR_PAD_PX)
+	var pad_y0 := maxi(0, bounds.position.y - BLEED_NEIGHBOUR_PAD_PX)
+	var pad_x1 := mini(sheet.get_width(), bounds.position.x + bounds.size.x + BLEED_NEIGHBOUR_PAD_PX)
+	var pad_y1 := mini(sheet.get_height(), bounds.position.y + bounds.size.y + BLEED_NEIGHBOUR_PAD_PX)
+	var padded := sheet.get_region(Rect2i(pad_x0, pad_y0, pad_x1 - pad_x0, pad_y1 - pad_y0))
+	var offset_in_padded := Vector2i(bounds.position.x - pad_x0, bounds.position.y - pad_y0)
+
+	# Component 0 is this cell's own dominant content and is never a removal
+	# candidate -- every other component is tested on its own.
+	for i in range(1, components.size()):
+		var pixels: Array = components[i].pixels
+		var seed_in_padded: Vector2i = pixels[0] + offset_in_padded
+		var grown_size := _flood_fill_size(padded, BLEED_COMPONENT_ALPHA, seed_in_padded)
+		if float(grown_size) / float(pixels.size()) >= BLEED_GROWTH_RATIO:
+			for pixel in pixels:
+				cropped.set_pixel(pixel.x, pixel.y, Color(0.0, 0.0, 0.0, 0.0))
+
+
+## Every connected run of `image`'s own painted (alpha > `threshold`) pixels,
+## eight-connected (a diagonal-only touch still counts as one blob -- same
+## convention CompositeSheetSlicer._blob_boxes uses and for the same reason:
+## a real illustrated edge can touch corner-to-corner without a cardinal
+## connection). Returns each blob's own pixel list, unsorted; the caller
+## decides what "biggest" or "keep" means for its own purpose.
+func _connected_components(image: Image, threshold: float) -> Array:
+	var width := image.get_width()
+	var height := image.get_height()
+	var visited := {}
+	var components: Array = []
+	var offsets: Array[Vector2i] = [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+		Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1),
+	]
+	for y in height:
+		for x in width:
+			var start := Vector2i(x, y)
+			if visited.has(start) or image.get_pixel(x, y).a <= threshold:
+				continue
+			var queue: Array[Vector2i] = [start]
+			visited[start] = true
+			var pixels: Array[Vector2i] = []
+			while not queue.is_empty():
+				var at: Vector2i = queue.pop_back()
+				pixels.append(at)
+				for offset in offsets:
+					var next := at + offset
+					if next.x < 0 or next.x >= width or next.y < 0 or next.y >= height:
+						continue
+					if visited.has(next) or image.get_pixel(next.x, next.y).a <= threshold:
+						continue
+					visited[next] = true
+					queue.append(next)
+			components.append({"pixels": pixels})
+	return components
+
+
+## The size of the single connected blob of `image`'s own painted (alpha >
+## `threshold`) pixels that contains `seed` -- eight-connected, same
+## convention as `_connected_components`. Returns 0 if `seed` itself is out
+## of bounds or not painted (defensive: every real call site's seed is
+## already a painted pixel from the source image, so this only guards
+## against a coordinate mistake rather than a case expected in practice).
+func _flood_fill_size(image: Image, threshold: float, seed: Vector2i) -> int:
+	var width := image.get_width()
+	var height := image.get_height()
+	if seed.x < 0 or seed.x >= width or seed.y < 0 or seed.y >= height:
+		return 0
+	if image.get_pixel(seed.x, seed.y).a <= threshold:
+		return 0
+	var offsets: Array[Vector2i] = [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+		Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1),
+	]
+	var visited := {seed: true}
+	var queue: Array[Vector2i] = [seed]
+	var size := 0
+	while not queue.is_empty():
+		var at: Vector2i = queue.pop_back()
+		size += 1
+		for offset in offsets:
+			var next := at + offset
+			if next.x < 0 or next.x >= width or next.y < 0 or next.y >= height:
+				continue
+			if visited.has(next) or image.get_pixel(next.x, next.y).a <= threshold:
+				continue
+			visited[next] = true
+			queue.append(next)
+	return size
 
 
 ## Ramps this image's own alpha down to zero over `feather_px` pixels from
@@ -344,13 +572,24 @@ func _overlay_sheet() -> Image:
 ## 102px-high row long before it is wide relative to a 154px-wide column.
 func _cropped_cell(column: int, row: int) -> Image:
 	var sheet := _overlay_sheet()
+	return sheet.get_region(_cell_bounds(column, row))
+
+
+## `_cropped_cell`'s own partition math, factored out so
+## `_discard_disconnected_bleed` can pad OUT from the exact same rectangle
+## rather than risk a second, drifting copy of this arithmetic (see this
+## file's own GDScript typed-array/const-ordering conventions elsewhere for
+## why a shared source of truth matters here). Returns the cell's bounds in
+## SHEET (not crop-local) pixel coordinates.
+func _cell_bounds(column: int, row: int) -> Rect2i:
+	var sheet := _overlay_sheet()
 	var cell_width := float(sheet.get_width()) / float(OVERLAY_COLUMNS)
 	var cell_height := float(sheet.get_height()) / float(OVERLAY_ROWS)
 	var x0 := int(round(column * cell_width))
 	var x1 := int(round((column + 1) * cell_width))
 	var y0 := int(round(row * cell_height))
 	var y1 := int(round((row + 1) * cell_height))
-	return sheet.get_region(Rect2i(x0, y0, x1 - x0, y1 - y0))
+	return Rect2i(x0, y0, x1 - x0, y1 - y0)
 
 
 ## Which of OVERLAY_COLUMNS illustrated shape variants a tile draws at its
