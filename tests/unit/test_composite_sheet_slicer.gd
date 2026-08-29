@@ -24,10 +24,11 @@ func _sheet() -> Image:
 
 # -- finding the drawings ----------------------------------------------------
 
-## The walnut sheet holds four canopies, a trunk and four fruit.
+## The walnut sheet holds five canopies (four seasons plus the CANOPY_SNOW
+## frame -- see IllustratedTree), a trunk and four fruit.
 func test_it_finds_every_drawing_on_the_sheet():
 	var regions := CompositeSheetSlicer.regions_in(_sheet())
-	assert_eq(regions.size(), 9, "expected 4 canopies + 1 trunk + 4 fruit")
+	assert_eq(regions.size(), 10, "expected 5 canopies + 1 trunk + 4 fruit")
 
 
 ## Regions come back in reading order -- top to bottom, then left to right
