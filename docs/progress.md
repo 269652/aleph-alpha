@@ -7212,6 +7212,27 @@ germany" and a 4-tile minimum width).
   direction and gradient-driven speed (see that doc's updated Open
   Questions) — still not discharge-accurate (no per-river real water-volume
   data is curated), and the water wheel mechanic itself remains unbuilt.
+  **Update (2026-08-30): was invisible in live play, root-caused and fixed.**
+  Reported directly ("the flow animations [aren't] visibly working") the day
+  after this shipped — live play showed a dark, grooved, static pattern over
+  rivers instead of the streaks. Root cause was NOT the shader, the atlas,
+  or the wiring (all independently re-verified, including a new live-
+  SceneTree shader-compile smoke test, `test_river_flow_render_smoke.gd`):
+  it was `scenes/world.tscn`'s ground-effects layer ORDER — `RiverFlowFx`
+  was a sibling BEFORE `HillshadeFx`/`SnowFx` at the same `z_index=-1`, so
+  hillshade's own near-black, every-cell overlay (up to alpha 0.55) drew on
+  top of and completely swamped river-flow's paler streaks (max alpha
+  0.35) — the "dark grooved pattern" actually seen WAS the hillshade
+  overlay, not a separate static water texture as first suspected. Fixed by
+  reordering `RiverFlowFx` to draw last among that tier; no `.gd` code
+  changed. Confirmed with a new regression test that loads the real
+  `scenes/world.tscn` and checks sibling order directly
+  (`test_world_ground_layer_order.gd`) — failed red at the real broken
+  indices before the fix, green after. Full writeup: `concept/rivers.md`'s
+  "Flow overlay invisible in live play" section, including why a live
+  screenshot confirmation was attempted but blocked (the interactive
+  desktop session was locked at the OS level at the time) rather than
+  simply skipped.
 - **Player wading/swimming/submersion-tint/ripples in rivers** (medium) —
   ✅ Done — reported directly ("char should be tinted for underwater").
   Root cause: `Player._resolve_water_state` only ever checked real

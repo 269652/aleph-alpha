@@ -197,6 +197,94 @@ streak physics another caller might reason about does
 (`RiverFlowShader.streak_intensity`, now taking an explicit `flow_speed`
 argument instead of a shared constant, since speed is no longer uniform).
 
+## Flow overlay invisible in live play: a z-order bug, not a shader bug (2026-08-30)
+
+Reported directly, the day after Flow shipped: "the flow animations [aren't]
+visibly working." Live play showed a dark, grooved, tile-boundary-aligned
+static pattern over rivers instead of the pale, glinting streak pattern
+`RiverFlowShader.SHADER_CODE` describes — unmoving across two screenshots
+~7 seconds apart, while a nearby, unrelated rain-ripple effect visibly
+changed in the same two screenshots, proving the game clock genuinely
+advanced and this specific pattern was still real, not a too-fast-to-see
+motion artifact.
+
+Everything upstream of rendering checked out on inspection, and each was
+then confirmed rather than assumed: `EarthChunkGenerator.is_river_at_global`
+correctly classifies the spawn tile; `EarthChunkManager.set_river_flow_layer`/
+`_paint_river_flow_overlay` wire a real tile_set and the shared
+`ShaderMaterial` onto a real `$RiverFlowFx` `TileMapLayer` exactly as
+designed; and the atlas itself already had dedicated pixel-level tests
+(`test_procedural_river_flow_sprite.gd`, `test_terrain_renderer.gd`'s
+river-flow atlas tests) proving it carries real, non-flat (direction, speed)
+data, not a blank fill. None of that was the bug.
+
+**The actual cause was in `scenes/world.tscn`, not in any `.gd` file.** Its
+five ground-effects layers share draw order rules: `Terrain` is `z_index=-2`,
+and `WaterFx`/`RiverFlowFx`/`SnowFx`/`HillshadeFx` are all `z_index=-1` —
+Godot breaks a `z_index` tie by scene-tree sibling order, later sibling on
+top. `RiverFlowFx` had been inserted as a sibling *before* `SnowFx` and
+`HillshadeFx`. `HillshadeShader` paints a near-black overlay (alpha up to
+`MAX_SHADOW_ALPHA` = 0.55) over **every** loaded cell with no river
+exclusion — already pinned by
+`test_hillshade_overlay_paints_a_real_tile_for_every_loaded_cell` in
+`test_earth_chunk_manager.gd`, this is intentional general behavior, not a
+hillshade bug — so on any river tile with real slope/aspect, `HillshadeFx`'s
+darker, higher-alpha, per-tile-quantized shading painted directly on top of
+`RiverFlowFx`'s paler, more translucent (max alpha 0.35) streaks, visually
+swamping them. **The dark, grooved, tile-boundary-aligned, unmoving pattern
+actually seen in live play IS the hillshade overlay itself** — static
+because the sun position advances slowly relative to a few seconds of play,
+grooved/blocky because hillshade bakes one uniform slope/aspect value per
+tile — not a separate pre-existing water texture, as first suspected from
+the screenshots alone.
+
+Confirmed with a real, headless-checkable regression test rather than by
+eye or by live screenshot: `test_world_ground_layer_order.gd` loads the
+actual `scenes/world.tscn` `PackedScene` (the file this game really ships)
+and asserts `RiverFlowFx.get_index() > HillshadeFx.get_index()` (and
+`> SnowFx.get_index()`). Run against the real committed scene file before
+any fix, both assertions failed **red** at the real indices — `(2, 4)` and
+`(2, 3)` — proving the z-order bug existed in the actual shipped scene, not
+merely in theory.
+
+Two other named hypotheses were checked with real evidence and ruled out,
+not just reasoned past:
+- **Shader compile failure.** `test_river_flow_render_smoke.gd` builds the
+  exact `TileMapLayer` + `tile_set` + shared `ShaderMaterial` combination
+  `scenes/world.gd` wires for real, adds it to a *live* `SceneTree`, and
+  runs it for several real frames. No engine error or warning surfaced (GUT
+  itself fails a test on an unhandled script error during a run, and none
+  fired). Godot 4.7 does apply a `ShaderMaterial` via `TileMapLayer.material`
+  the same way it would on any other `CanvasItem` — confirmed independently
+  by the fact hillshade, wired through the identical `set_*_layer` pattern,
+  visibly renders (that render IS the pattern actually seen in live play).
+- **Atlas data wrong or blank.** Already covered by the existing
+  `test_procedural_river_flow_sprite.gd` / `test_terrain_renderer.gd`
+  pixel-level tests referenced above; not re-litigated here.
+- **Missing per-frame trigger.** Not applicable — the shader animates
+  purely from the live `TIME` uniform once a cell is painted; no per-frame
+  CPU re-paint is needed for the streak pattern itself to move.
+  `_paint_river_flow_overlay` only needs to re-run when a cell's underlying
+  terrain data changes (chunk load), which it already does.
+
+**The fix**: reorder `scenes/world.tscn` so `RiverFlowFx` is the *last*
+`z_index=-1` sibling — after `SnowFx` and `HillshadeFx`, not before them —
+so its streaks draw on top of whatever those two paint instead of being
+occluded by it. No `.gd` file changed; this was purely a scene-file
+draw-order bug.
+
+**Live visual confirmation was attempted and blocked by the environment,
+not skipped**: a real game process was launched for a live screenshot check,
+but the interactive desktop session was locked at the OS level at the time
+(confirmed directly — a screen capture of the game window's own rect
+returned the Windows lock screen, not the game), so no window could be
+brought to the foreground or captured regardless of process/focus tricks.
+The process was killed rather than left running blind. The fix's evidence
+is therefore the real, headless-checkable regression test above (which
+reproduces the exact z-order bug against the actual shipped scene file and
+now passes against the fixed one) plus the two ruled-out-with-evidence
+hypotheses, not a live screenshot.
+
 ## Real hydraulics: volume, pressure, current speed (2026-08-30)
 
 Reported directly: *"implement real water flow with volume pressure current
@@ -418,7 +506,10 @@ than it is, matching this project's usual practice):
   live. A future connectivity-aware redesign could reuse the module.
 - **Rendering (water overlay reuse)** — ✅ Done.
 - **Flow direction + real gradient-driven speed + turbulence (animated
-  overlay)** — ✅ Done.
+  overlay)** — ✅ Done. Was silently occluded in live play by an unrelated
+  `scenes/world.tscn` sibling-order bug (`HillshadeFx` drawing on top of
+  `RiverFlowFx`) until the z-order fix above — now fixed and regression-
+  tested against the real scene file (`test_world_ground_layer_order.gd`).
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —
   `river_discharge.gd` (real curated gauge data + derived width) +
   `open_channel_flow.gd` (Manning, continuity, closed-form normal depth,
