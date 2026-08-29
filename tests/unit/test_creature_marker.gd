@@ -242,6 +242,44 @@ func test_stays_within_a_bounded_range_of_home_over_many_steps():
 	assert_lt(marker.position.distance_to(marker.home), CreatureWander.WANDER_RADIUS * 2.0)
 
 
+## A carrying creature must break past the bound the test right above this
+## one pins for ORDINARY wander -- CreatureWander is the SAME home-tethered
+## containment shape AmbientFlyerMovement uses for birds (measured at a hard
+## ~2.6-tile/41.6px ceiling on distance from home regardless of wander_seed,
+## see docs/progress.md), which is well short of SeedDispersal/SeedCaching/
+## SquirrelNutCaching's own real carry ranges. Mirrors AmbientFlyerMarker's
+## own _carry_direction/CARRY_STEER_WEIGHT blend: lean into an actual
+## heading while carrying instead of only ever having a boundary to orbit.
+func test_wandering_while_carrying_a_grass_seed_breaks_past_the_pure_wander_ceiling():
+	marker.carried_grass_seed = true
+	marker.carried_grass_seed_direction = Vector2.RIGHT
+	for i in 200:
+		marker._process(0.3)
+	assert_gt(
+		marker.position.distance_to(marker.home), CreatureWander.WANDER_RADIUS * 1.5,
+		"a carrying creature should travel well past the pure-wander ceiling"
+	)
+
+
+## Same steering, the other two independent carry slots (see
+## carried_seed_direction/carried_nut_direction's own doc comments on
+## CreatureMarker for why all three are separate state).
+func test_wandering_while_carrying_a_flower_seed_breaks_past_the_pure_wander_ceiling():
+	marker.carried_seed_species = "rose"
+	marker.carried_seed_direction = Vector2.RIGHT
+	for i in 200:
+		marker._process(0.3)
+	assert_gt(marker.position.distance_to(marker.home), CreatureWander.WANDER_RADIUS * 1.5)
+
+
+func test_wandering_while_carrying_a_nut_breaks_past_the_pure_wander_ceiling():
+	marker.carried_nut_species = "walnut"
+	marker.carried_nut_direction = Vector2.RIGHT
+	for i in 200:
+		marker._process(0.3)
+	assert_gt(marker.position.distance_to(marker.home), CreatureWander.WANDER_RADIUS * 1.5)
+
+
 func test_two_markers_with_different_seeds_move_differently():
 	var other := CreatureMarker.new()
 	other.home = Vector2(100, 100)

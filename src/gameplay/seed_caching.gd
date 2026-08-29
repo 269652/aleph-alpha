@@ -63,3 +63,23 @@ func _init() -> void:
 static func carry_distance_tiles(carrier_seed: int) -> float:
 	var unit := PixelNoise.unit(carrier_seed, 0, 0)
 	return CARRY_MIN_TILES + (CARRY_MAX_TILES - CARRY_MIN_TILES) * unit
+
+
+## Which way this mouse moves off with its cached seed, as a unit vector.
+## Sampled at a PixelNoise coordinate distinct from carry_distance_tiles's
+## (0, 0) so heading and range vary independently -- the same
+## independent-second-sample shape SeedEndozoochory.carry_direction/
+## SeedDispersal.carry_direction already use.
+##
+## Needed for the same reason SeedDispersal's own carry_direction is:
+## ordinary wander (CreatureWander.direction_at, shared by mice) is anchored
+## to a home point within a fairly tight radius -- the SAME home-tethered
+## containment shape AmbientFlyerMovement uses for birds -- so a mouse whose
+## home never moves cannot reach this module's own CARRY_MIN_TILES..
+## CARRY_MAX_TILES range by wander alone. Measured directly: a hard ~2.6-tile
+## ceiling regardless of wander_seed, against a 1-6 tile intended range (see
+## docs/progress.md); real hunger/foraging movement alone rescued most of the
+## SHORT end of that range but not the top ~20%. Blended into ordinary wander
+## by CreatureMarker._wander_step, not used to override it outright.
+static func carry_direction(carrier_seed: int) -> Vector2:
+	return Vector2.from_angle(PixelNoise.range_value(carrier_seed, 0, 1, 0.0, TAU))

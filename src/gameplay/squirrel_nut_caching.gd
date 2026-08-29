@@ -97,6 +97,28 @@ static func carry_distance_tiles(carrier_seed: int) -> float:
 	return CARRY_MIN_TILES + (CARRY_MAX_TILES - CARRY_MIN_TILES) * unit
 
 
+## Which way this squirrel moves off with its picked-up nut, as a unit
+## vector. Sampled at PixelNoise coordinate (0, 2) -- distinct from BOTH
+## carry_distance_tiles's (0, 0) and nut_is_consumed's (0, 1) -- so heading,
+## range, and the eaten-vs-cached roll all vary independently. Same
+## independent-second-sample shape SeedEndozoochory.carry_direction/
+## SeedDispersal.carry_direction/SeedCaching.carry_direction already use.
+##
+## Needed for the same reason those siblings' own carry_direction is:
+## ordinary wander (CreatureWander.direction_at, shared by squirrels) is
+## anchored to a home point within a fairly tight radius -- the SAME
+## home-tethered containment shape AmbientFlyerMovement uses for birds -- so
+## a squirrel whose home never moves cannot reach this module's own
+## CARRY_MIN_TILES..CARRY_MAX_TILES range by wander alone. Not separately
+## measured the way SeedDispersal/SeedCaching were (see docs/progress.md) --
+## fixed by analogy, since it shares the identical CreatureWander/
+## CreatureMarker movement substrate and a similarly-out-of-reach range
+## (2-9 tiles against the same measured ~2.6-tile ceiling) -- but IS covered
+## by the same real-range regression test the other two carriers get.
+static func carry_direction(carrier_seed: int) -> Vector2:
+	return Vector2.from_angle(PixelNoise.range_value(carrier_seed, 0, 2, 0.0, TAU))
+
+
 ## This forager's own personal consumption chance: NUT_CONSUMED_CHANCE
 ## nudged by its AnimalFitness.fitness_score (see NUT_FITNESS_CHANCE_SWING).
 ## `forager_seed` is the squirrel's own per-individual identity seed (see
