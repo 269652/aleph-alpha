@@ -83,7 +83,9 @@ features.
 
 ✅ **A fifth "snow" canopy frame is found and rendered like the season turn, per docs/concept/flora.md's "A fifth frame: snow is not a season"** (`IllustratedTree.CANOPY_SNOW`/`has_snow_frame_for`/`snow_canopy_for`, `ProceduralTreeSprite.snow_level`/`SNOW_LEVELS`, `TreeRenderer.set_snow_coverage`, `EarthChunkManager.set_snow_depth`/`sync_tree_season`/`step_fruiting`). `canopy_cherry.png` grew a real fifth column -- measured on the raw file (a stale, pre-edit `.godot/imported/` cache briefly made blob detection see only four; re-`--import`ing showed the real content), five genuine drawings of 404/415/421/423/432px separated by real gaps, the last reading as neutral grey-white (mean colour ~(0.46, 0.44, 0.47), essentially zero saturation) against every season frame's own hue. The separate-file canopy loader (cherry's own path) was switched from equal-width slicing to the SAME blob-detection `CompositeSheetSlicer.regions_in` the composite layout's canopy strip already used, which needed no change at all to pick up a fifth composite-sheet blob when one exists. `ProceduralTreeSprite` threads a `snow_coverage` parameter through the same `_turned_canopy` branch-order blend the season turn uses (reuse, not a new mechanism -- two trees show snow on different boughs at the same coverage because they already turn seasons in different orders), composed AFTER season/turn/growth, gated on `has_snow_frame_for` so a species without the frame is unaffected whatever the value is. Quantised to `SnowLayer.DEPTH_BANDS` (10 -- the ground's own lying-snow band count) rather than an invented number, so canopy snow is exactly as coarse or fine as the snow already at its own foot. Plumbed on the SAME `set_wind_strength` forwarding shape from `EarthChunkManager` to `TreeRenderer`, but that alone only reaches a freshly SPAWNED tree (`TreeRenderer` holds no reference to a tree once built) -- an ALREADY-standing tree is dressed by `sync_tree_season`/`step_fruiting`, the two loops that already push season/turn to every loaded `ChoppableTree`, now also carrying `_snow_depth` (folded into `sync_tree_season`'s own quantised redraw-guard signature, so a snowfall redraws a handful of times rather than every frame, the same cost shape the season turn already has). By the time this landed, a second, independent session had added the same fifth column to every other composite sheet (acorn/hazelnut/apple/walnut/pine) -- so the "rest follows" fallback this was built for is verified as a strict, tested gate rather than against a real species still missing the frame, since none remain in the roster.
 
-🚧 **Pre-existing, unrelated test failures surfaced while re-verifying the sheets above** (not caused by this work -- confirmed by tracing the exact code paths, none of which this change touches): `test_illustrated_tree.gd`'s `test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data` (acorn/apple no longer read as bare enough in winter), `test_unripe_and_ripe_are_the_first_two_frames_whatever_the_count` (walnut fruit_for no longer matches fruit_frames_for[0]/[1]), `test_on_tree_and_harvested_frames_are_told_apart` and `test_pine_has_more_stages_than_the_nut_trees` (pine's harvest/on-tree region counts dropped) -- all downstream of the same concurrent session's edits to the composite sheets' fruit/trunk regions, unrelated to the new canopy-snow column. `test_procedural_tree_sprite.gd` also has five failures from an older, separate cause: its fixture species_bias values (1.0/0.8/0.9/0.1 etc.) were written to reach the PROCEDURAL painter, but `TreeSpecies.species_for_bias` can no longer return anything outside the six now-fully-illustrated species, so those tests exercise the illustrated compositor instead of the procedural one they were written against. And `test_earth_chunk_manager.gd`'s `test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_range` fails reproducibly (2 vs an expected 10 ripe fruit) with no snow involved at all. None of the four groups touch snow_coverage or anything this change edited; flagged for separate follow-up rather than fixed here.
+🚧 **Pre-existing, unrelated test failures surfaced while re-verifying the sheets above** (not caused by this work -- confirmed by tracing the exact code paths, none of which this change touches): `test_illustrated_tree.gd`'s `test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data` (acorn/apple no longer read as bare enough in winter) is still open -- its sibling failures from the same investigation are fixed below. `test_procedural_tree_sprite.gd` also has five failures from an older, separate cause: its fixture species_bias values (1.0/0.8/0.9/0.1 etc.) were written to reach the PROCEDURAL painter, but `TreeSpecies.species_for_bias` can no longer return anything outside the six now-fully-illustrated species, so those tests exercise the illustrated compositor instead of the procedural one they were written against. And `test_earth_chunk_manager.gd`'s `test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_range` fails reproducibly (2 vs an expected 10 ripe fruit) with no snow involved at all. None of these touch snow_coverage or anything this change edited; flagged for separate follow-up rather than fixed here.
+
+✅ **Walnut and pine's on-tree/harvested rows were restored after a concurrent regeneration overwrote them.** The same pass that gave every species its fifth snow-canopy column apparently redrew `composite_walnut.png` and `composite_pine.png` in full rather than only adding that column: their below-canopy area came out as one drawing per canopy season instead of the documented fixed two-row layout -- confirmed by measuring each below-canopy blob's centre against its aligned canopy column's centre (within a few px on both sheets). Walnut ballooned to 24 detected regions, its "on-tree" row alone matching all 5 canopy columns instead of 2; pine collapsed to a single row of 4 with no second (harvested) row at all -- exactly why `on_tree_frames_for`/`harvest_frames_for`/`test_unripe_and_ripe_are_the_first_two_frames_whatever_the_count`/`test_on_tree_and_harvested_frames_are_told_apart`/`test_pine_has_more_stages_than_the_nut_trees` came out wrong. `CompositeSheetSlicer`/`IllustratedTree._composite_parts` were reading the sheets correctly throughout -- the sheets themselves no longer matched the layout the code (and the doc comment above `SEPARATE_FRUIT_FRAME_COUNT`) describes. Fixed at the asset level, not the code: each current sheet's canopy strip (which legitimately carries the new fifth frame) was grafted onto the last-known-good (pre-regeneration) trunk/fruit content below it, restoring walnut's two-on-tree/two-harvested rows and pine's three-on-tree/four-harvested rows without losing the snow frame. `test_illustrated_tree.gd` is back to 90/91, the one remaining failure being the acorn/apple bare-winter issue noted above.
 
 ⬜ Superseded: pine/acorn/hazelnut now exist as species; this note is kept only to record that they once did not.
 
@@ -7145,11 +7147,48 @@ germany" and a 4-tile minimum width).
   picked), so this is not hypothetical — `test_find_dry_land_spawn_does_
   not_land_in_the_river_at_the_spawn_point` confirms the player spawns
   NEAR, not literally inside, the river.
-- **Freshwater fishing, village water-avoidance, flow velocity/water wheel,
-  boats/fords/bridges, Nix water-gating, lakes** — ⬜ Not started (all
-  explicitly named as deferred in `concept/rivers.md`'s own "What this pass
-  touches" section — none of these silently regressed, they were never
-  built and still aren't).
+- **Flow (animated, direction-only)** (medium) — ✅ Done — reported
+  directly ("rivers should flow") alongside the underwater-tint report
+  below. `_paint_river_flow_overlay` paints a SECOND, SPARSE overlay layer
+  (`RiverFlowFx`, river cells only, unlike the water/hillshade overlays
+  which paint every loaded cell) carrying each river cell's real downhill
+  direction (`TerrainRelief.aspect_degrees_from_gradient` — the same real
+  gradient primitive hillshading already samples); `RiverFlowShader`
+  animates a translucent directional streak scrolling downstream from it.
+  This is `concept/electromagnetism.md`'s own long-standing water-wheel
+  proposal ("flow speed is derived from the water tile's own local
+  elevation gradient") **partially validated**: direction is now real,
+  tested, and driving a real visual (see that doc's updated Open
+  Questions); speed stays deliberately uniform (no per-river discharge
+  data is curated), and the water wheel mechanic itself remains unbuilt.
+- **Player wading/swimming/submersion-tint/ripples in rivers** (medium) —
+  ✅ Done — reported directly ("char should be tinted for underwater").
+  Root cause: `Player._resolve_water_state` only ever checked real
+  elevation-below-sea-level, which every river tile fails by construction
+  (rivers never change `biome_at_global`'s own elevation-derived result,
+  per Rendering above) — so a player walked straight through a river with
+  no wading/swimming, no submersion tint (`SubmersionShader`, already
+  fully built and wired for ocean via `character_view.gd` well before
+  rivers existed), and no water-ripple disturbances at all. `river_depth.gd`
+  gives rivers a real (not survey-accurate) depth — curated rivers deepen
+  toward their own centerline (reusing `distance_to_nearest_river_tiles`),
+  spanning both `WaterMovementModel.WADE_DEPTH_METERS`'s wading band and
+  real swimming depth; procedural rivers stay a flat, shallower "minor
+  stream" depth that never reaches swimming. `_resolve_water_state` now
+  takes `maxf(ocean_depth, river_depth)`, so ocean's existing behavior is
+  provably unchanged. Once depth is real, the entire pre-existing chain
+  (`current_mode` → `CharacterView.MovementState.SWIMMING` →
+  `SubmersionShader.set_waterline`) fires exactly as it already did for
+  ocean — no new tinting code was needed, only real river depth for the
+  existing mechanism to see. Verified live: the spawn point itself sits on
+  the Dreisam's curated centerline, and
+  `test_standing_at_the_river_centerline_resolves_to_swimming_not_walking`
+  confirms it.
+- **Freshwater fishing, village water-avoidance, creature water-depth
+  awareness, the water wheel mechanic itself, boats/fords/bridges, Nix
+  water-gating, lakes** — ⬜ Not started (all explicitly named as deferred
+  in `concept/rivers.md`'s own "What this pass touches" section — none of
+  these silently regressed, they were never built and still aren't).
 
 ### Farming (`concept/farming.md`)
 

@@ -113,10 +113,13 @@ mechanic, only new piece types with real physical properties.
 
 - **Water wheel.** Spans a flowing-water tile; converts local flow momentum
   into torque via the leverage formula above. **Flow velocity isn't a
-  simulated field today** (`hydraulic_erosion.gd` carves a river's
-  *geometry*, not a per-tile current speed) — rather than adding a whole
-  new hydrological simulation, flow speed is derived from the water tile's
-  own local elevation gradient (steeper drop → faster flow), reusing
+  simulated field today** (real river *geometry* now exists —
+  [rivers.md](rivers.md)'s curated+procedural catalog, plus a real,
+  animated flow DIRECTION reusing the exact gradient primitive this
+  section already proposed — but no per-tile current SPEED/discharge
+  figure is curated) — rather than adding a whole new hydrological
+  simulation, flow speed would be derived from the water tile's own local
+  elevation gradient (steeper drop → faster flow), reusing
   [world.md](world.md)'s already-real elevation data instead of a new
   field. A real river's steepest stretches become the valuable mill sites,
   the same way real historical mills sited themselves on real gradients.
@@ -206,10 +209,18 @@ this doc. The lit bulb is emergent, not authored.
 
 ## Open questions
 
-- **River flow as elevation gradient** is a proposed proxy, not a validated
-  one — needs a real formula and a test once a water wheel is actually
-  built, the same "tuned function, not eyeballed constant" discipline every
-  other threshold in this project's docs already commits to.
+- **River flow DIRECTION as elevation gradient is now validated**, ahead of
+  any water wheel: [rivers.md](rivers.md)'s `RiverFlowShader`/
+  `_paint_river_flow_overlay` (2026-08-29) actually computes
+  `TerrainRelief.aspect_degrees_from_gradient` per river cell and drives a
+  real, tested, animated visual from it. **Flow SPEED as elevation-
+  gradient MAGNITUDE remains unvalidated** — the visual keeps a uniform
+  speed rather than deriving one from gradient steepness, since no water
+  wheel yet exists to consume that number and no per-river discharge data
+  is curated to ground it against. Still needs a real formula and a test
+  once a water wheel is actually built, the same "tuned function, not
+  eyeballed constant" discipline every other threshold in this project's
+  docs already commits to.
 - **AC vs. DC.** Real generators produce alternating current; real
   batteries store direct current, and real electronics care about the
   difference. This doc deliberately flattens both to one scalar "current"

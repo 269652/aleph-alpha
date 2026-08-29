@@ -8,6 +8,7 @@ const TerrainRelief = preload("res://src/world/terrain_relief.gd")
 const Chunk = preload("res://src/world/chunk.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const ProceduralRiver = preload("res://src/world/procedural_river.gd")
+const RiverDepth = preload("res://src/world/river_depth.gd")
 
 ## World scale: ~111 tiles per degree of latitude/longitude (~1km/tile),
 ## giving a full, finite Earth of ~40,000 x 20,000 tiles -- explorable at a
@@ -227,6 +228,24 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 	return _procedural_river.is_river_candidate(
 		global_x, global_y, cell_elevation, EARTH_SEA_LEVEL, EARTH_MOUNTAIN_LEVEL
 	)
+
+
+## Real meters of river depth at (global_x, global_y) -- see river_depth.gd.
+## Deepest at a curated river's own centerline, a flat shallower depth for a
+## procedural candidate, 0.0 everywhere else. Consulted by
+## Player._resolve_water_state (wading/swimming/submersion-tint/water-
+## ripples) exactly the way ocean depth already is -- a river never changes
+## biome_at_global's own result, so nothing else would otherwise notice it.
+func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
+	var distance := _river_catalog.distance_to_nearest_river_tiles(
+		global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES
+	)
+	if distance <= RiverCatalog.RIVER_HALF_WIDTH_TILES:
+		return RiverDepth.curated_depth_meters(distance, RiverCatalog.RIVER_HALF_WIDTH_TILES)
+	var cell_elevation := elevation_at_global(global_x, global_y)
+	if _procedural_river.is_river_candidate(global_x, global_y, cell_elevation, EARTH_SEA_LEVEL, EARTH_MOUNTAIN_LEVEL):
+		return RiverDepth.PROCEDURAL_RIVER_DEPTH_METERS
+	return 0.0
 
 
 func _biome_at_global(

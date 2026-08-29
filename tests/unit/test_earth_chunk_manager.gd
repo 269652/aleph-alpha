@@ -286,6 +286,60 @@ func test_hillshade_overlay_paints_a_real_tile_for_every_loaded_cell():
 	hillshade_layer.free()
 
 
+# -- river flow overlay (docs/concept/rivers.md) -----------------------------
+#
+# Rivers previously looked exactly like still ocean water (reported:
+# "rivers should flow"). Unlike the water/hillshade overlays above, this
+# layer is deliberately SPARSE: only river cells get a tile at all (see
+# _paint_river_flow_overlay's own doc comment for why -- it reuses
+# is_river_at_global the same way _paint_water_overlay already does, never
+# touching chunk.biome). Berlin sits on the Spree's own curated course
+# (river_catalog.gd), so this fixture is guaranteed to exercise real river
+# cells, not just a hypothetical one.
+
+func test_set_river_flow_layer_assigns_a_real_tile_set():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	assert_not_null(flow_layer.tile_set)
+	flow_layer.free()
+
+
+func test_set_river_flow_layer_assigns_the_shared_shader_material():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	assert_true(flow_layer.material is ShaderMaterial)
+	flow_layer.free()
+
+
+func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	manager.update(_berlin_tile)
+
+	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
+	var total_loaded_cells := manager.chunks_in_radius(
+		center_chunk, EarthChunkManager.LOAD_RADIUS
+	).size() * EarthChunkManager.CHUNK_SIZE * EarthChunkManager.CHUNK_SIZE
+
+	var painted_cells := flow_layer.get_used_cells()
+	assert_gt(painted_cells.size(), 0, "expected at least one real river cell near Berlin (the Spree)")
+	assert_lt(painted_cells.size(), total_loaded_cells, "flow must not paint every loaded cell -- it is sparse, not general like hillshade")
+	for cell in painted_cells:
+		assert_true(manager.is_river_at_global(cell.x, cell.y), "every painted flow cell must actually be a river cell")
+
+	# Moving far away unloads the original chunks -- their overlay cells go too.
+	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+	for cell in flow_layer.get_used_cells():
+		var still_loaded_chunk := _chunk_coord_for_tile(cell)
+		var new_center := _chunk_coord_for_tile(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))
+		var delta := (still_loaded_chunk - new_center).abs()
+		assert_true(
+			maxi(delta.x, delta.y) <= EarthChunkManager.LOAD_RADIUS,
+			"overlay cells outside the loaded radius must be erased on unload"
+		)
+	flow_layer.free()
+
+
 ## RULE-9 pin for the hillshade painter's halved elevation sampling: EVERY
 ## painted cell must still be exactly the atlas coordinate the old
 ## slope_at_global + aspect_at_global pair produced. The painter now takes

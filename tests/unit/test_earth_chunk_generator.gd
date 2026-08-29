@@ -314,6 +314,27 @@ func test_a_point_far_from_any_curated_river_and_off_the_procedural_contour_is_n
 	assert_false(generator.is_river_at_global(tile.x, tile.y))
 
 
+func test_river_depth_at_global_is_deepest_at_a_curated_waypoint():
+	const RiverDepth = preload("res://src/world/river_depth.gd")
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		48.007669, 7.805657, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_almost_eq(
+		generator.river_depth_meters_at_global(tile.x, tile.y),
+		RiverDepth.MAX_CURATED_RIVER_DEPTH_METERS,
+		0.01
+	)
+
+
+func test_river_depth_at_global_is_zero_far_from_any_river():
+	var geo := GeoCoordinates.new()
+	var tile := geo.tile_for_coordinate(
+		0.0, -160.0, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_eq(generator.river_depth_meters_at_global(tile.x, tile.y), 0.0)
+
+
 func test_river_tiles_still_report_their_ordinary_land_biome():
 	# The core "overlay, not a new biome" guarantee: a river tile's
 	# biome_at_global is completely unaffected by is_river_at_global.

@@ -12,6 +12,9 @@ z_index = -2
 [node name="WaterFx" type="TileMapLayer" parent="."]
 z_index = -1
 
+[node name="RiverFlowFx" type="TileMapLayer" parent="."]
+z_index = -1
+
 [node name="SnowFx" type="TileMapLayer" parent="."]
 z_index = -1
 
