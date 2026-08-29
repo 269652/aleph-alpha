@@ -1463,7 +1463,20 @@ func test_step_fruiting_skips_a_far_tree_then_shows_its_real_ripeness_once_in_ra
 
 	manager.step_fruiting(EarthChunkManager.FRUITING_INTERVAL, tree.position)
 
-	var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id)
+	# Apple is insect-pollinated (TreeSpecies._INSECT_POLLINATED) and this tree
+	# was never visited by a bee, so step_fruiting's own yield_multiplier
+	# composes FruitingModel.pollination_factor(0) -- the UNPOLLINATED_YIELD_
+	# FLOOR, a fifth of the ceiling -- on top of the species multiplier (see
+	# step_fruiting's own pollination_factor block). Leaving that out here
+	# used to overstate "expected" by 5x (10 instead of the real 2): this is
+	# the REAL catch-up ripeness the test's own name promises, not a second,
+	# looser opinion about it.
+	var pollination_factor := 1.0
+	if TreeSpecies.needs_pollinators_for(species_id):
+		pollination_factor = FruitingModel.pollination_factor(
+			tree.pollination_visits_in_cycle(FruitingModel.BEARING_CYCLE_SECONDS, manager.world_age_seconds())
+		)
+	var yield_multiplier := TreeSpecies.yield_multiplier_for(species_id) * pollination_factor
 	var ripening_multiplier := TreeSpecies.ripening_multiplier_for(species_id)
 	var current_warmth: float = manager._warmth_at_pixel(tree.position)
 	var expected: Dictionary = manager._fruiting_model.state_at(
