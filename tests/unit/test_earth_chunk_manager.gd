@@ -36,6 +36,7 @@ const Event = preload("res://src/emergence/event.gd")
 const WorldBossFitness = preload("res://src/gameplay/world_boss_fitness.gd")
 const WorldBoss = preload("res://src/emergence/world_boss.gd")
 const FlowerSpecies = preload("res://src/world/flower_species.gd")
+const FlowerPatch = preload("res://src/world/flower_patch.gd")
 const ProceduralFlowerSprite = preload("res://src/rendering/procedural_flower_sprite.gd")
 const WildCropPatch = preload("res://src/world/wild_crop_patch.gd")
 const WildCropMarker = preload("res://src/rendering/wild_crop_marker.gd")
@@ -4545,6 +4546,385 @@ func test_a_squirrels_nut_carry_reaches_the_real_range_across_many_squirrels():
 			]
 		)
 	remove_child(creatures_parent)
+
+
+# -- flower epizoochory / squirrel nut caching: the edge-case battery mouse
+# grass-seed caching already has (pickup radius, species/predator gating,
+# resolve timing, eaten-vs-cached branches, species fidelity), backfilled
+# for its two ground-carrier siblings, which had none of it (see
+# docs/progress.md's ground-carrier entry). Pure coverage backfill: these
+# pin EXISTING behaviour, not new behaviour.
+
+## Mirrors SeedDispersal's own test_an_animal_far_from_any_flower_picks_up_
+## nothing, but through the real EarthChunkManager wiring: planted exactly
+## 2 tiles away, straight-line -- inside flowers_near's own wider 2-tile
+## candidate net (so this is not merely "too far to be found at all"), but
+## beyond SeedDispersal.PICKUP_RADIUS_TILES (1.5). Pins the real pickup
+## gate, not just the wider candidate-search radius around it.
+func test_a_grazer_two_tiles_from_a_flower_does_not_pick_up_its_seed():
+	manager.update(_berlin_tile)
+	var season := manager.current_season()
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, season):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var flower_cell := Vector2i(-1, -1)
+	var planted := false
+	for y in 8:
+		for x in 8:
+			var candidate_cell := Vector2i(x, y)
+			if manager.plant_flower_at(_pixel_for(chunk_coord, candidate_cell), species):
+				flower_cell = candidate_cell
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var horse := manager._creature_renderer.spawn_single(
+		creatures_parent, "horse", _pixel_for(chunk_coord, flower_cell + Vector2i(2, 0)),
+		manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_seed_dispersal(horse)
+
+	assert_eq(
+		horse.carried_seed_species, "",
+		"2 tiles away is beyond PICKUP_RADIUS_TILES (1.5) -- too far to have brushed against it"
+	)
+
+
+## The EarthChunkManager wiring's own version of SeedDispersal's
+## test_nothing_is_picked_up_from_a_species_out_of_season -- that test
+## covers SeedDispersal.pickup_species in isolation; this confirms
+## _step_seed_dispersal's real flowers_near/current_season plumbing
+## actually reaches and respects it.
+func test_a_grazer_standing_on_an_out_of_season_flower_does_not_pick_up_its_seed():
+	manager.update(_berlin_tile)
+	var season := manager.current_season()
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if not FlowerSpecies.is_in_bloom(candidate, season):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be out of bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var at := Vector2.ZERO
+	var planted := false
+	for y in 8:
+		for x in 8:
+			var candidate_at := _pixel_for(chunk_coord, Vector2i(x, y))
+			if manager.plant_flower_at(candidate_at, species):
+				at = candidate_at
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var horse := manager._creature_renderer.spawn_single(
+		creatures_parent, "horse", at, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_seed_dispersal(horse)
+
+	assert_eq(
+		horse.carried_seed_species, "",
+		"a plant not currently in bloom offers no seed to brush against"
+	)
+
+
+## _step_seed_dispersal itself has no predator gate at all -- the gate is
+## enforced only by the caller, _graze_by_herbivores' own
+## "creature.info.is_predator: continue" (see that function's own doc
+## comment). Driving _step_seed_dispersal directly, as every test above
+## does, would never reproduce that gate -- this drives the real caller.
+func test_a_predator_does_not_disperse_flower_seed_while_grazing():
+	manager.update(_berlin_tile)
+	var season := manager.current_season()
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, season):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var at := Vector2.ZERO
+	var planted := false
+	for y in 8:
+		for x in 8:
+			var candidate_at := _pixel_for(chunk_coord, Vector2i(x, y))
+			if manager.plant_flower_at(candidate_at, species):
+				at = candidate_at
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var wolf := manager._creature_renderer.spawn_single(
+		creatures_parent, "wolf", at, manager, TerrainRenderer.TILE_SIZE
+	)
+	assert_true(wolf.info.is_predator, "precondition: a wolf is a predator")
+	manager._loaded_creatures[chunk_coord].append(wolf)
+
+	manager._graze_by_herbivores()
+
+	assert_eq(
+		wolf.carried_seed_species, "",
+		"a predator standing right on a bloom must not disperse its seed"
+	)
+
+
+## Symmetric to the mouse's own test_a_mouse_does_not_cache_before_
+## travelling_its_carry_distance: a grazer that has not yet gone its own
+## carry distance keeps carrying rather than dropping on the spot.
+func test_a_grazer_does_not_drop_its_flower_seed_before_travelling_its_carry_distance():
+	manager.update(_berlin_tile)
+	var season := manager.current_season()
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, season):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var patch: FlowerPatch = manager._flower_patches[chunk_coord]
+	var target_cell := Vector2i(-1, -1)
+	for y in EarthChunkManager.CHUNK_SIZE:
+		for x in EarthChunkManager.CHUNK_SIZE:
+			var cell := Vector2i(x, y)
+			if not patch.has_flower(cell) and manager.biome_at_global(
+				(chunk_coord.x * EarthChunkManager.CHUNK_SIZE) + x,
+				(chunk_coord.y * EarthChunkManager.CHUNK_SIZE) + y
+			) == "grassland":
+				target_cell = cell
+				break
+		if target_cell != Vector2i(-1, -1):
+			break
+	assert_ne(target_cell, Vector2i(-1, -1), "precondition: an empty grassland cell exists in this chunk")
+	var at := _pixel_for(chunk_coord, target_cell)
+	var horse := manager._creature_renderer.spawn_single(
+		creatures_parent, "horse", at, manager, TerrainRenderer.TILE_SIZE
+	)
+	horse.carried_seed_species = species
+	horse.carried_seed_origin = at  # has not moved at all yet
+
+	manager._step_seed_dispersal(horse)
+
+	assert_false(patch.has_flower(target_cell), "too soon to drop -- it hasn't gone anywhere yet")
+	assert_eq(horse.carried_seed_species, species, "still carrying")
+
+
+## Mirrors AmbientFlyerMarker's own test_eating_fruit_eventually_plants_a_
+## seed_of_the_same_species_elsewhere: what actually gets planted once the
+## carry resolves must be the species that was picked up, not merely "some
+## roll of FlowerSpecies.IDS".
+func test_a_grazers_dispersed_flower_seed_plants_the_same_species_it_picked_up():
+	manager.update(_berlin_tile)
+	var season := manager.current_season()
+	var species := ""
+	for candidate in FlowerSpecies.IDS:
+		if FlowerSpecies.is_in_bloom(candidate, season):
+			species = candidate
+			break
+	assert_ne(species, "", "precondition: some species should be in bloom this season")
+	var chunk_coord := _chunk_coord_for_tile(_berlin_tile)
+	var pickup_at := Vector2.ZERO
+	var planted := false
+	for y in 8:
+		for x in 8:
+			var candidate_at := _pixel_for(chunk_coord, Vector2i(x, y))
+			if manager.plant_flower_at(candidate_at, species):
+				pickup_at = candidate_at
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "precondition: should find a plantable grassland cell near Berlin")
+	var patch: FlowerPatch = manager._flower_patches[chunk_coord]
+	# An empty grassland cell distinct from the pickup spot, so a match below
+	# proves the RESOLVED planting actually names the picked-up species,
+	# rather than trivially re-reading the original bloom, which was never
+	# disturbed.
+	var drop_cell := Vector2i(-1, -1)
+	for y in EarthChunkManager.CHUNK_SIZE:
+		for x in EarthChunkManager.CHUNK_SIZE:
+			var cell := Vector2i(x, y)
+			if not patch.has_flower(cell) and manager.biome_at_global(
+				(chunk_coord.x * EarthChunkManager.CHUNK_SIZE) + x,
+				(chunk_coord.y * EarthChunkManager.CHUNK_SIZE) + y
+			) == "grassland":
+				drop_cell = cell
+				break
+		if drop_cell != Vector2i(-1, -1):
+			break
+	assert_ne(drop_cell, Vector2i(-1, -1), "precondition: a second empty grassland cell exists to drop into")
+	var horse := manager._creature_renderer.spawn_single(
+		creatures_parent, "horse", pickup_at, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_seed_dispersal(horse)
+	assert_eq(horse.carried_seed_species, species, "precondition: picked up the planted species")
+
+	horse.position = _pixel_for(chunk_coord, drop_cell)
+	horse.carried_seed_origin = horse.position - Vector2(
+		(SeedDispersal.CARRY_MAX_TILES + 5.0) * TerrainRenderer.TILE_SIZE, 0.0
+	)
+	manager._step_seed_dispersal(horse)
+
+	assert_eq(horse.carried_seed_species, "", "dropping empties the carried species")
+	assert_eq(patch.species_at(drop_cell), species, "the planted species must match what was picked up")
+
+
+## Same "too far to notice" gate SeedDispersal/SeedCaching's own siblings
+## get, driven through the real EarthChunkManager wiring rather than just
+## SquirrelNutCaching's own already-tested PICKUP_RADIUS_TILES constant.
+func test_a_squirrel_too_far_from_a_fallen_nut_does_not_pick_it_up():
+	var ground_items := Node2D.new()
+	manager.set_ground_items(ground_items)
+	var nut_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	ground_items.add_child(_make_ground_fruit(nut_pixel, "walnut"))
+	var far_pixel := nut_pixel + Vector2(
+		(SquirrelNutCaching.PICKUP_RADIUS_TILES + 2.0) * TerrainRenderer.TILE_SIZE, 0.0
+	)
+	var squirrel := manager._creature_renderer.spawn_single(
+		creatures_parent, "squirrel", far_pixel, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_squirrel_nut_caching(squirrel)
+
+	assert_eq(squirrel.carried_nut_species, "", "too far away to notice the fallen nut")
+	var still_there := false
+	for fruit in manager.fruit_near(nut_pixel, 10):
+		if fruit["position"].distance_to(nut_pixel) < 1.0:
+			still_there = true
+	assert_true(still_there, "a nut out of pickup range must be left on the ground")
+	ground_items.free()
+
+
+## Mirrors test_a_non_mouse_creature_does_not_cache_grass_seed -- only
+## squirrels do this, not the whole "Forager" diet label (mice share that
+## label but scatter-hoard grass seed, not nuts).
+func test_a_non_squirrel_creature_does_not_cache_a_fallen_nut():
+	var ground_items := Node2D.new()
+	manager.set_ground_items(ground_items)
+	var pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	ground_items.add_child(_make_ground_fruit(pixel, "walnut"))
+	var horse := manager._creature_renderer.spawn_single(
+		creatures_parent, "horse", pixel, manager, TerrainRenderer.TILE_SIZE
+	)
+
+	manager._step_squirrel_nut_caching(horse)
+
+	assert_eq(horse.carried_nut_species, "", "only squirrels cache nuts")
+	var still_there := false
+	for fruit in manager.fruit_near(pixel, 5):
+		if fruit["position"].distance_to(pixel) < 1.0:
+			still_there = true
+	assert_true(still_there, "a horse must not take a fallen nut off the ground")
+	ground_items.free()
+
+
+## Symmetric to the mouse's own test_a_mouse_does_not_cache_before_
+## travelling_its_carry_distance -- needs no loaded chunk at all: the
+## too-early branch returns before touching any chunk state.
+func test_a_squirrel_does_not_resolve_its_nut_before_travelling_its_carry_distance():
+	var pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	var squirrel := manager._creature_renderer.spawn_single(
+		creatures_parent, "squirrel", pixel, manager, TerrainRenderer.TILE_SIZE
+	)
+	squirrel.carried_nut_species = "walnut"
+	squirrel.carried_nut_origin = pixel  # has not moved at all yet
+
+	manager._step_squirrel_nut_caching(squirrel)
+
+	assert_eq(squirrel.carried_nut_species, "walnut", "too soon to resolve -- it hasn't gone anywhere yet")
+
+
+## The majority branch (SquirrelNutCaching.NUT_CONSUMED_CHANCE, 0.7): a
+## consumed nut must resolve WITHOUT also planting a sapling -- confirms
+## try_plant_seed_at is genuinely skipped on this branch, not just that the
+## pouch empties either way. Tried across several real forested tiles (see
+## test_a_surviving_nut_plants_a_sapling_somewhere_forested_near_berlin,
+## which confirms at least one of them accepts a planting) rather than a
+## single position -- a lone untested tile might simply have had no room
+## (try_plant_seed_at's own spacing/per-tile cap), which would make "nothing
+## got planted" prove nothing about the consumed branch at all.
+func test_a_consumed_nut_resolves_without_planting_a_sapling():
+	manager.update(_berlin_tile)
+	var consumed_seed := -1
+	for candidate in range(60):
+		if SquirrelNutCaching.nut_is_consumed(candidate, candidate):
+			consumed_seed = candidate
+			break
+	assert_ne(consumed_seed, -1, "precondition: some seed should roll consumed")
+	var before := entities_parent.get_child_count()
+	var forested_tiles_tried := 0
+	for dy in range(-10, 11):
+		for dx in range(-10, 11):
+			if forested_tiles_tried >= 10:
+				break
+			var tile := _berlin_tile + Vector2i(dx, dy)
+			if not ["forest", "rainforest"].has(manager.biome_at_global(tile.x, tile.y)):
+				continue
+			forested_tiles_tried += 1
+			var pixel := Vector2(tile) * TerrainRenderer.TILE_SIZE
+			var squirrel := manager._creature_renderer.spawn_single(
+				creatures_parent, "squirrel", pixel, manager, TerrainRenderer.TILE_SIZE, consumed_seed
+			)
+			squirrel.carried_nut_species = "walnut"
+			squirrel.carried_nut_origin = pixel - Vector2(
+				(SquirrelNutCaching.CARRY_MAX_TILES + 5.0) * TerrainRenderer.TILE_SIZE, 0.0
+			)
+			manager._step_squirrel_nut_caching(squirrel)
+			assert_eq(squirrel.carried_nut_species, "", "resolving empties the pouch either way")
+		if forested_tiles_tried >= 10:
+			break
+	assert_gt(forested_tiles_tried, 0, "precondition: some forest/rainforest biome should be loaded near Berlin")
+	assert_eq(
+		entities_parent.get_child_count(), before,
+		"a consumed nut must never plant a sapling, even across several real forested tiles"
+	)
+
+
+## The minority branch: a nut that survives handling must actually sprout a
+## sapling via try_plant_seed_at -- confirms it is genuinely called, not
+## just that the pouch empties either way. Tries several forested tiles near
+## Berlin (mirrors test_try_plant_seed_at_plants_a_sapling_somewhere_
+## forested_near_berlin) since not every forested tile has room -- a real
+## forest is already dense with trees close to each other.
+func test_a_surviving_nut_plants_a_sapling_somewhere_forested_near_berlin():
+	manager.update(_berlin_tile)
+	var surviving_seed := -1
+	for candidate in range(60):
+		if not SquirrelNutCaching.nut_is_consumed(candidate, candidate):
+			surviving_seed = candidate
+			break
+	assert_ne(surviving_seed, -1, "precondition: some seed should roll surviving")
+	var before := entities_parent.get_child_count()
+	var planted := false
+	for dy in range(-10, 11):
+		for dx in range(-10, 11):
+			var tile := _berlin_tile + Vector2i(dx, dy)
+			if not ["forest", "rainforest"].has(manager.biome_at_global(tile.x, tile.y)):
+				continue
+			var pixel := Vector2(tile) * TerrainRenderer.TILE_SIZE
+			var squirrel := manager._creature_renderer.spawn_single(
+				creatures_parent, "squirrel", pixel, manager, TerrainRenderer.TILE_SIZE, surviving_seed
+			)
+			squirrel.carried_nut_species = "walnut"
+			squirrel.carried_nut_origin = pixel - Vector2(
+				(SquirrelNutCaching.CARRY_MAX_TILES + 5.0) * TerrainRenderer.TILE_SIZE, 0.0
+			)
+			manager._step_squirrel_nut_caching(squirrel)
+			assert_eq(squirrel.carried_nut_species, "", "resolving empties the pouch either way")
+			if entities_parent.get_child_count() > before:
+				planted = true
+				break
+		if planted:
+			break
+	assert_true(planted, "a surviving nut should sprout a sapling somewhere forested near Berlin")
 
 
 # -- hover tooltip: is there a grass patch under the cursor, and how grown --
