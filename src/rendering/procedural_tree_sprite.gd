@@ -54,6 +54,27 @@ var _palette := PixelPalette.new()
 const CANOPY_HEIGHT_FRAC := 0.7  # fraction of SIZE.y the canopy occupies, from the top
 
 
+## Test seam: forces the plain PROCEDURAL painter below even for a species
+## with illustrated art. TreeSpecies.IDS and IllustratedTree.SPECIES_WITH_ART
+## now list the exact same six species, so every real species_bias --
+## TreeGenome.species_bias, continuous over 0..1 -- resolves to a species
+## that HAS art, and no real caller (TreeRenderer, ChoppableTree) can reach
+## the procedural branch any more. It stays as the deliberate fallback for a
+## species added to IDS before its art exists (see "Everything else is
+## procedural" in illustrated_tree.gd), matching the procedural-baseline
+## pattern every other renderer here (creature/item/character) already
+## follows -- so tests exercising the painter itself set this rather than
+## hunting for a bias that happens to have no art.
+var force_procedural := false
+
+
+## Whether `species_id` should be drawn from its illustrated art rather than
+## painted procedurally. The one place both generate_image_with_fruit and
+## generate_bare_trunk_image decide that, so they can't drift apart.
+func _uses_illustrated_art(species_id: String) -> bool:
+	return not force_procedural and IllustratedTree.has_art_for(species_id)
+
+
 ## How many individual ripe fruits can be shown as pixel dots on a canopy at
 ## once -- a real crop of dozens is visually summarized by up to this many
 ## dots (see FruitingModel/ecosystem_dynamics.md's phenology).
@@ -136,7 +157,7 @@ func generate_bare_trunk_texture(species_bias: float, seed_value: int, season: S
 func generate_bare_trunk_image(species_bias: float, seed_value: int, season: String = "") -> Image:
 	var species_id := _species_id_for(species_bias)
 	var image := Image.create(SIZE.x, SIZE.y, false, Image.FORMAT_RGBA8)
-	if IllustratedTree.has_art_for(species_id):
+	if _uses_illustrated_art(species_id):
 		var trunk_box := illustrated_trunk_box(seed_value)
 		var trunk_image := _scaled_piece(species_id, season, "trunk", trunk_box.size)
 		if trunk_image != null:
@@ -174,7 +195,7 @@ func generate_image_with_fruit(
 	snow_coverage: float = 0.0
 ) -> Image:
 	var species_id := _species_id_for(species_bias)
-	if IllustratedTree.has_art_for(species_id):
+	if _uses_illustrated_art(species_id):
 		return _composite_illustrated(
 			species_id, seed_value, ripe_count, season, turning_into, turn_progress, growth,
 			snow_coverage
