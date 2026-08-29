@@ -1453,12 +1453,17 @@ func test_a_scaled_piece_has_no_part_transparent_edges():
 ## How bare a deciduous winter canopy may read, as a share of its own summer
 ## canopy's opaque pixel count, and still count as "actually bare."
 ##
-## Measured on the real sheets: cherry/walnut/hazelnut sit at 0.42-0.45,
-## acorn and apple -- the two with the most winter branch detail -- at 0.50
-## and 0.52. All five sit well clear of pine's evergreen 0.98, so a winter
-## canopy this dense is still unmistakably barer than its own summer one; the
-## bound only needs enough real margin above the highest measured deciduous
-## value (0.52) to not chase brush-detail noise between art passes.
+## Measured on the real sheets, all five now sit in the same 0.42-0.47 band:
+## cherry 0.45, walnut 0.42, hazelnut 0.43, acorn 0.44, apple 0.47 -- acorn
+## and apple used to read closer to 0.50-0.53 (see
+## `CompositeSheetSlicer.cut_out`'s "Two more bugs found keying acorn and
+## apple" doc comment for why: their sheets decode with no alpha channel,
+## and colour-only background keying still left an anti-aliased halo along
+## every branch edge before an erosion pass caught it too). All five sit
+## well clear of pine's evergreen 0.98, so a winter canopy this dense is
+## still unmistakably barer than its own summer one; the bound keeps real
+## margin above the highest measured deciduous value (0.47) without
+## chasing brush-detail noise between art passes.
 const _WINTER_VS_SUMMER_MAX := 0.55
 
 

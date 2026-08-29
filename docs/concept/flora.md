@@ -1071,6 +1071,32 @@ windows" reasoning below, applied row-wise rather than as a full flood fill,
 because a trunk's gaps run sideways between root legs rather than sitting as
 enclosed pockets.
 
+**Some sheets arrive with an opaque background rather than real
+transparency**, and that background has to be found and keyed out rather
+than assumed away. Acorn's and apple's composite sheets are the two left in
+the roster with this problem -- pine, hazelnut, walnut and cherry have all
+since been re-exported with real alpha. Colour alone cannot tell a real
+opaque sheet's white background from real near-white content on it (a
+snow-covered bough, the same near-white a species' fifth canopy frame
+carries -- see "A fifth frame: snow is not a season" below), so the
+background is found by REACHABILITY instead: flooded inward from the crop's
+own edges, so anything truly enclosed by the drawing survives whatever
+colour it is.
+
+Reachability alone is not enough on the one frame that is allowed to be
+aggressive about it: the bare-winter canopy, which never draws anything
+pale by design, so it is safe to key every background-coloured pixel
+there regardless of whether the flood fill reached it, plus the thin
+anti-aliasing halo every branch edge carries against an opaque background
+(a bare tree's branch network has enough total edge length that this halo,
+left in, was measured making the frame read as dense as its own summer
+canopy rather than bare). Every other frame on these sheets -- the other
+three seasons, the fifth snow frame, the trunk, every fruit stage -- keeps
+the conservative, reachability-only behaviour, so a real pale drawing
+anywhere else is exactly as protected as it always was. See
+`CompositeSheetSlicer.cut_out`'s own doc comments for the measurements
+behind this.
+
 **Art is per species, and optional.** A species with sheets is drawn from them;
 one without falls back to the procedural painter unchanged. This is the same
 species-first-then-generic lookup the flowers and the animals use, so adding a
