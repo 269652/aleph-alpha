@@ -595,3 +595,74 @@ func test_the_bend_is_anchored_to_the_bed_not_carried_with_the_water():
 	assert_true(
 		RiverFlowShader.SHADER_CODE.contains("float across_w = across + bend * turbulence_strength;")
 	)
+
+
+# -- turbulence you can actually see -----------------------------------------
+#
+# The first standing-eddy pass was measurably correct and visually
+# invisible: one smooth octave at ~6 line widths mostly shifts neighbouring
+# lines TOGETHER, which locally reads as translation, not bending. The
+# screenshot showed ruler-straight satin bands again.
+#
+# Visible curvature needs the bend to CHANGE within a line's own length --
+# structure at more than one scale, like the surface field itself.
+
+## The bend field must have a second, finer octave, and the total must
+## still clear the no-fold sweep above -- which is the real ceiling on how
+## hard it can be turned up.
+func test_the_bend_has_structure_at_two_scales():
+	assert_gt(RiverFlowShader.EDDY_DETAIL_WEIGHT, 0.0)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("eddy_p * 2.6"),
+		"the second eddy octave is missing from the shader"
+	)
+
+
+## A straight line drawn through the warp must come out visibly wavy: the
+## bend sampled along one line must VARY by a real fraction of a line width
+## within a couple of line lengths -- variation is what curves it, a
+## constant shift only moves it.
+func test_a_streakline_visibly_curves_within_its_own_length():
+	# One feature length downstream is 1/LINE_STRETCH across-units.
+	var line_length := 1.0 / RiverFlowShader.LINE_STRETCH
+	var worst := 999.0
+	for j in range(12):
+		var across := float(j) * 1.7
+		var lowest := 999.0
+		var highest := -999.0
+		for i in range(24):
+			var d := RiverFlowShader.bend_displacement(
+				float(i) / 24.0 * 2.0 * line_length, across
+			)
+			lowest = minf(lowest, d)
+			highest = maxf(highest, d)
+		worst = minf(worst, highest - lowest)
+	assert_gte(
+		worst, 0.5,
+		"the flattest streakline curves only %.2f line widths over two lengths" % worst
+	)
+
+
+# -- melting the tile grid ----------------------------------------------------
+#
+# From the same screenshot: adjacent water tiles still met in razor-straight
+# full-band colour jumps at their shared edge. The dither can only bridge a
+# ONE-band difference; adjacent tiles across a 5-band channel routinely
+# differ by two. The step boundaries themselves have to go soft -- realism
+# never needed them hard, that was a stylized-era leftover.
+
+func test_band_boundaries_are_gradients_not_hard_steps():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("smoothstep(0.5 - band_softness, 0.5 + band_softness, band)"),
+		"band boundaries must blend across band_softness"
+	)
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("band1_color, step("),
+		"no band may still switch on a hard step"
+	)
+
+
+## Soft enough to melt a boundary, small enough that the cross-section still
+## darkens toward the centreline rather than averaging into one colour.
+func test_band_softness_blends_without_erasing_the_cross_section():
+	assert_between(RiverFlowShader.BAND_SOFTNESS, 0.3, 0.75)

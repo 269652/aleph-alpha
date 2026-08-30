@@ -53,6 +53,8 @@ uniform float surface_contrast = 0.50;
 uniform float line_stretch = 0.13;
 uniform float turbulence_strength = 1.4;
 uniform float eddy_scale = 0.16;
+uniform float eddy_detail_weight = 0.5;
+uniform float band_softness = 0.55;
 uniform float band_dither = 1.9;
 uniform float glint_threshold = 0.70;
 uniform float glint_strength = 0.55;
@@ -155,7 +157,14 @@ void fragment() {
 	// deform WHILE they travel. A bend carried with the water would slide
 	// rigidly along with the very lines it bends, which is exactly the
 	// stiffness being fixed.
-	float bend = value_noise(vec2(along_raw, across) * eddy_scale) - 0.5;
+	// Two octaves, like the surface itself: the coarse one swings whole
+	// bundles of lines, the fine one puts kinks WITHIN a line's own length.
+	// One smooth coarse octave alone shifts neighbouring lines together,
+	// which locally reads as translation -- the ruler-straight satin look
+	// this replaces.
+	vec2 eddy_p = vec2(along_raw, across) * eddy_scale;
+	float bend = value_noise(eddy_p) - 0.5
+		+ (value_noise(eddy_p * 2.6 + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight;
 	float across_w = across + bend * turbulence_strength;
 
 	// The drag is purely DOWNSTREAM -- water is carried along the channel,
@@ -176,12 +185,17 @@ void fragment() {
 	// they draw the tilemap grid straight across the river. Perturbing the
 	// index lets each edge wander over half a band, breaking it into a
 	// ragged, moving line that no longer coincides with the lattice.
+	// Soft boundaries, because the dither alone cannot melt the tile grid:
+	// it bridges at most ONE band, and adjacent tiles across a 5-band
+	// channel routinely differ by two, which left razor-straight full-band
+	// jumps on their shared edge. Hard steps were a stylized-era leftover
+	// -- realism never wanted them.
 	float band = depth_band + (n - 0.5) * band_dither;
 	vec3 body = band0_color;
-	body = mix(body, band1_color, step(0.5, band));
-	body = mix(body, band2_color, step(1.5, band));
-	body = mix(body, band3_color, step(2.5, band));
-	body = mix(body, band4_color, step(3.5, band));
+	body = mix(body, band1_color, smoothstep(0.5 - band_softness, 0.5 + band_softness, band));
+	body = mix(body, band2_color, smoothstep(1.5 - band_softness, 1.5 + band_softness, band));
+	body = mix(body, band3_color, smoothstep(2.5 - band_softness, 2.5 + band_softness, band));
+	body = mix(body, band4_color, smoothstep(3.5 - band_softness, 3.5 + band_softness, band));
 
 	// The advecting surface modulates brightness -- this is the moving
 	// water itself, not a mark drawn on top of it.
@@ -197,7 +211,7 @@ void fragment() {
 	// Whitewater at the shallow bank, where a real river breaks over its
 	// own edge -- driven by the SAME advecting field, so the foam travels
 	// with the water instead of sitting still.
-	float at_edge = 1.0 - step(0.5, band);
+	float at_edge = 1.0 - smoothstep(0.5 - band_softness, 0.5 + band_softness, band);
 	float foam = smoothstep(foam_threshold, foam_threshold + 0.12, n) * at_edge;
 	body = mix(body, foam_color, foam);
 
@@ -269,6 +283,20 @@ const LINE_STRETCH := 0.13
 const TURBULENCE_STRENGTH := 1.4
 const EDDY_SCALE := 0.16
 
+## The bend's second, finer octave (2.6x the eddy scale). The coarse octave
+## alone was measurably correct and visually invisible: it shifts
+## neighbouring lines TOGETHER, which locally reads as translation. Kinks a
+## viewer can see need bend variation WITHIN a line's own length -- pinned
+## by test_a_streakline_visibly_curves_within_its_own_length.
+const EDDY_DETAIL_WEIGHT := 0.5
+
+## Half-width of a band boundary's blend, in bands. The dither alone cannot
+## melt the tile grid -- it bridges at most one band, and adjacent tiles
+## routinely differ by two -- so the boundaries themselves are gradients.
+## Big enough to melt a tile edge, small enough that the cross-section still
+## darkens toward the centreline instead of averaging out.
+const BAND_SOFTNESS := 0.55
+
 ## How far the surface field perturbs the depth-band lookup, in bands.
 ##
 ## Also a measured relation rather than a taste: wide enough that a band
@@ -325,6 +353,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("line_stretch", LINE_STRETCH)
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
 	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
+	material.set_shader_parameter("eddy_detail_weight", EDDY_DETAIL_WEIGHT)
+	material.set_shader_parameter("band_softness", BAND_SOFTNESS)
 	material.set_shader_parameter("band_dither", BAND_DITHER)
 	material.set_shader_parameter("glint_threshold", GLINT_THRESHOLD)
 	material.set_shader_parameter("glint_strength", GLINT_STRENGTH)
@@ -452,10 +482,11 @@ static func field_roughness(distance: float, downstream: bool) -> float:
 ## the shader's `bend * turbulence_strength`. Anchored to unadvected
 ## coordinates, exactly as the shader anchors it to the bed.
 static func bend_displacement(along_raw: float, across: float) -> float:
-	return (
-		(value_noise(along_raw * EDDY_SCALE, across * EDDY_SCALE) - 0.5)
-		* TURBULENCE_STRENGTH
-	)
+	var px := along_raw * EDDY_SCALE
+	var py := across * EDDY_SCALE
+	var coarse := value_noise(px, py) - 0.5
+	var fine := value_noise(px * 2.6 + 19.7, py * 2.6 + 7.3) - 0.5
+	return (coarse + fine * EDDY_DETAIL_WEIGHT) * TURBULENCE_STRENGTH
 
 
 ## Where a point's across-coordinate lands after the bend.
