@@ -7233,6 +7233,38 @@ germany" and a 4-tile minimum width).
   screenshot confirmation was attempted but blocked (the interactive
   desktop session was locked at the OS level at the time) rather than
   simply skipped.
+  **Update (2026-08-30): made more visible.** Reported directly ("make the
+  flow effect more visible") -- even after the z-order fix above, the streak
+  still read as a subtle, easy-to-miss glint. Two measured causes:
+  `STREAK_ALPHA` (0.35) was faint even in isolation and now sits directly
+  under `HillshadeFx`'s own up-to-0.55-alpha overlay on the same tile; and
+  `STREAK_SHARPNESS` (4.0) -- by the closed-form duty-cycle fraction
+  `(pi - 2*asin(0.5^(1/n))) / (2*pi)` -- kept the bright part of each cycle
+  to only ~18.2% of the period. A headless sweep of `streak_intensity()`
+  (the shader's own CPU mirror) across 30,000 (position, time) samples at
+  the real `MAX_FLOW_SPEED` quantifies the before/after: bright duty
+  fraction 18.4% -> 24.8%, mean effective on-screen alpha (intensity x
+  `STREAK_ALPHA`) 0.0656 -> 0.1250 (nearly double), peak effective alpha
+  0.35 -> 0.50. Tuned `STREAK_ALPHA` 0.35 -> 0.5 (still below both
+  `HillshadeShader.MAX_SHADOW_ALPHA`=0.55 and `WaterShader.WATER_ALPHA`=0.6,
+  this project's own established "never fully opaque" overlay precedents),
+  `STREAK_SHARPNESS` 4.0 -> 2.0 (broadens the bright duty fraction to a
+  measured ~25%, between a 22% floor and a 45% ceiling so it still reads as
+  a streak, not a flat tint), and brightened `STREAK_COLOR` toward its
+  already-maxed blue channel (a second, alpha-independent lever, since a
+  brighter source color blends lighter at the same alpha over a dark
+  hillshade tile). A real headless `SubViewport` shader-render attempt was
+  tried first for even more rigorous pixel-level evidence and abandoned
+  after one clean, conclusive failure -- Godot's `--headless` mode has no
+  real GPU/software rasterizer (the dummy driver errors on texture readback
+  rather than producing pixels) -- so the CPU-mirror sweep, already this
+  project's own sanctioned fallback for exactly this shader, is the
+  evidence this change rests on. Regression-tested:
+  `test_river_flow_shader.gd`'s new "make the flow effect more visible"
+  tests pin both the raised alpha (with the alpha-precedent ceiling), the
+  broadened sharpness (with real trig-derived bounds), and the
+  brightened-not-saturated color. Full writeup: `concept/rivers.md`'s "Flow
+  effect made more visible" section.
 - **Player wading/swimming/submersion-tint/ripples in rivers** (medium) —
   ✅ Done — reported directly ("char should be tinted for underwater").
   Root cause: `Player._resolve_water_state` only ever checked real

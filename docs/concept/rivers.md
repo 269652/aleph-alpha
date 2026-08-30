@@ -285,6 +285,89 @@ reproduces the exact z-order bug against the actual shipped scene file and
 now passes against the fixed one) plus the two ruled-out-with-evidence
 hypotheses, not a live screenshot.
 
+## Flow effect made more visible (2026-08-30)
+
+Reported directly, after the z-order fix above made the streaks actually
+reach the screen: "make the flow effect more visible" — it still read as a
+subtle, easy-to-miss glint rather than obviously flowing water. Two real,
+measured causes, not a single "raise the alpha" guess:
+
+1. `STREAK_ALPHA` = 0.35 was faint even in isolation, and — per the z-order
+   fix above — now sits directly on top of a `HillshadeFx` overlay that can
+   paint up to alpha 0.55 of near-black on the very same river tile
+   (`HillshadeShader.MAX_SHADOW_ALPHA`). The streak needs enough contrast to
+   punch through that darkening, not just be visible against a blank
+   background.
+2. `STREAK_SHARPNESS` = 4.0 raises a clamped sine to the 4th power, which
+   (by the closed form `(pi - 2*asin(0.5^(1/n))) / (2*pi)` for the fraction
+   of one period where `pow(max(sin(phase*TAU),0), n) > 0.5`) keeps the
+   bright part of each cycle to only ~18.2% of the period — a thin, sparse
+   band rather than a current that visibly covers the water's surface at any
+   given instant.
+
+**Headless measurement (primary evidence).** `streak_intensity()` (the
+existing CPU mirror of the shader's exact periodic-streak math) was swept
+across a dense grid — 5,000 positions spanning 500 world units, at 6
+distinct time instants (30,000 samples per configuration) — comparing the
+prior shipped constants (`eae510d`: alpha 0.35, sharpness 4.0) against the
+new ones, both at the real `MAX_FLOW_SPEED` and `STREAK_FREQUENCY`:
+
+| metric | OLD (0.35 / 4.0) | NEW (0.5 / 2.0) |
+|---|---|---|
+| mean raw streak intensity | 0.1875 | 0.2500 |
+| bright duty fraction (intensity > 0.5) | 18.4% | 24.8% |
+| mean effective on-screen alpha (intensity × `STREAK_ALPHA`) | 0.0656 | 0.1250 |
+| peak effective on-screen alpha | 0.35 | 0.50 |
+| fraction of surface with effective alpha > 0.1 | 24.0% | 35.2% |
+
+The combined change makes the streak field cover a measurably wider slice of
+the river at any instant (bright duty fraction up ~35% relative) at
+measurably higher contrast (peak alpha up ~43% relative), for an effective
+on-screen opacity that is nearly double (mean effective alpha 0.0656 →
+0.1250) — a real, quantified "more visible," not an eyeballed adjustment.
+
+**The three changes, each reasoned against this codebase's own precedent:**
+
+- `STREAK_ALPHA`: 0.35 → **0.5**. Placed with real reasoning relative to
+  this project's own existing overlay-alpha ceilings, not picked in a
+  vacuum: still below `HillshadeShader.MAX_SHADOW_ALPHA` (0.55, the very
+  overlay it now needs to be visible against) and below
+  `WaterShader.WATER_ALPHA` (0.6, the base water tile itself) — a sparse,
+  pulsing highlight must stay under both, never becoming the dominant layer
+  in the stack. Regression-tested (`test_streak_alpha_stays_under_this_
+  projects_own_overlay_alpha_precedents`).
+- `STREAK_SHARPNESS`: 4.0 → **2.0**. Halving it broadens the bright duty
+  fraction from a derived ~18.2% to a measured ~25% of the period —
+  comfortably clear of a 22% floor, while staying well under a 45% ceiling
+  so it still reads as a periodic streak rather than dissolving into a flat,
+  motionless tint. Regression-tested
+  (`test_streak_bright_duty_fraction_is_measurably_broader_than_the_prior_sharpness`).
+- `STREAK_COLOR`: `(0.75, 0.88, 1.0)` → **`(0.85, 0.94, 1.0)`**. A second,
+  alpha-independent lever: `COLOR = vec4(streak_color, streak*streak_alpha)`
+  blends toward whatever sits underneath, so brightening the source color
+  (red/green raised toward the already-maxed blue channel) lands lighter at
+  the same alpha — the effect that matters most on top of a near-black
+  hillshade tile. Every channel stays within [0.7, 1.0] (pale, not
+  saturated/neon) and blue remains the dominant channel — a water highlight,
+  not a warm tint. Regression-tested (`test_streak_color_was_brightened_
+  without_turning_saturated_or_neon`).
+
+All three land in `src/rendering/river_flow_shader.gd`
+(`STREAK_ALPHA`/`STREAK_SHARPNESS`/`STREAK_COLOR`), covered by
+`tests/unit/test_river_flow_shader.gd`. A real headless viewport-rendering
+attempt (`ShaderMaterial` on a `TextureRect` in a `SubViewport`, read back
+via `get_texture().get_image()`) was tried first and abandoned immediately
+after one clean, conclusive failure — Godot's `--headless` mode runs the
+dummy rendering driver with no real GPU/software rasterizer, so
+`texture_2d_get` errors on a null backing texture rather than producing
+real pixels; the CPU-mirror sweep above is this project's own
+already-established, explicitly-sanctioned fallback for exactly this case
+(see `RiverFlowShader.streak_intensity`'s own doc comment). Live in-game
+screenshot verification was not attempted for this pass, consistent with
+the environment's well-documented desktop-lock/window-focus unreliability
+noted in the z-order fix above — the headless measurement is the real
+evidence this change rests on.
+
 ## Real hydraulics: volume, pressure, current speed (2026-08-30)
 
 Reported directly: *"implement real water flow with volume pressure current

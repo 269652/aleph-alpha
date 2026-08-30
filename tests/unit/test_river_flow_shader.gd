@@ -4,6 +4,8 @@ extends GutTest
 
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
+const HillshadeShader = preload("res://src/rendering/hillshade_shader.gd")
+const WaterShader = preload("res://src/rendering/water_shader.gd")
 
 var flow: RiverFlowShader
 
@@ -125,3 +127,96 @@ func test_streak_intensity_is_deterministic():
 		RiverFlowShader.streak_intensity(12.0, 4.0, RiverFlowShader.MAX_FLOW_SPEED),
 		RiverFlowShader.streak_intensity(12.0, 4.0, RiverFlowShader.MAX_FLOW_SPEED)
 	)
+
+
+# -- "make the flow effect more visible" (2026-08-30) --
+#
+# Reported directly, after the z-order fix above made the effect actually
+# reach the screen: it still reads as a subtle, easy-to-miss glint rather
+# than obviously flowing water. Two real, measured causes, not a single
+# "raise the alpha" guess:
+#   1. STREAK_ALPHA=0.35 was faint even in isolation, and now sits UNDER a
+#      hillshade overlay that can paint up to alpha 0.55 of near-black on
+#      the very same tile (HillshadeShader.MAX_SHADOW_ALPHA) -- the streak
+#      needs to punch through that darkness, not just be visible in a
+#      vacuum.
+#   2. STREAK_SHARPNESS=4.0 raises a clamped sine to the 4th power, which
+#      keeps the bright (>0.5 intensity) part of each cycle to only ~18% of
+#      the period (see the derivation below) -- a thin, sparse band, not a
+#      current that visibly covers the water.
+#
+# These two tests measure both causes directly against real trig, not an
+# eyeballed "looks better" judgment, and are RED against the prior
+# STREAK_ALPHA=0.35 / STREAK_SHARPNESS=4.0 baseline.
+
+## Prior baseline this pass is measured against (the exact values shipped
+## by the z-order fix in eae510d, before this visibility pass).
+const _PRIOR_STREAK_ALPHA := 0.35
+const _PRIOR_STREAK_SHARPNESS := 4.0
+const _PRIOR_STREAK_COLOR := Color(0.75, 0.88, 1.0)
+
+func test_streak_alpha_was_raised_above_the_reported_too_faint_baseline():
+	assert_gt(RiverFlowShader.STREAK_ALPHA, _PRIOR_STREAK_ALPHA,
+		"STREAK_ALPHA must be raised from the 0.35 baseline that read as an easy-to-miss glint")
+	assert_eq(RiverFlowShader.STREAK_ALPHA, 0.5, "tuned value pinned, not left to drift")
+
+
+## The "never fully opaque" ceiling this project's own overlays already
+## establish: WaterShader.WATER_ALPHA (0.6, the base water tile itself) and
+## HillshadeShader.MAX_SHADOW_ALPHA (0.55, the darkening overlay river-flow
+## now draws on top of) are this codebase's own real precedent for "visible
+## but not overwhelming." River-flow is a SPARSE, pulsing highlight on top
+## of both -- it must stay under both, never becoming the dominant layer in
+## the stack or reading as opaque/UI-like.
+func test_streak_alpha_stays_under_this_projects_own_overlay_alpha_precedents():
+	assert_lt(RiverFlowShader.STREAK_ALPHA, HillshadeShader.MAX_SHADOW_ALPHA,
+		"river-flow highlight must stay under hillshade's own established overlay ceiling")
+	assert_lt(RiverFlowShader.STREAK_ALPHA, WaterShader.WATER_ALPHA,
+		"river-flow highlight must stay under the base water overlay's own opacity")
+
+
+## Real derivation, not an eyeballed number: for streak_intensity's
+## pow(max(sin(phase*TAU), 0), STREAK_SHARPNESS), the fraction of one full
+## period where intensity exceeds 0.5 is (pi - 2*asin(0.5^(1/n))) / (2*pi).
+## At the prior n=4 that's ~18.1% of the period -- a thin band. At the new,
+## broadened sharpness it must be at least ~22%, a real, measurably wider
+## current at any instant, while a lower bound (not just "bigger is better")
+## keeps it reading as a streak rather than dissolving into a flat, motion-
+## less tint (a lower bound of 0 would trivially pass at STREAK_SHARPNESS=0,
+## which is a constant, not a streak at all).
+func test_streak_bright_duty_fraction_is_measurably_broader_than_the_prior_sharpness():
+	var period := 1.0 / RiverFlowShader.STREAK_FREQUENCY
+	var samples := 2000
+	var bright_count := 0
+	for i in range(samples):
+		var along := (float(i) / float(samples)) * period
+		if RiverFlowShader.streak_intensity(along, 0.0, RiverFlowShader.MAX_FLOW_SPEED) > 0.5:
+			bright_count += 1
+	var bright_fraction := float(bright_count) / float(samples)
+	assert_gt(bright_fraction, 0.22,
+		"the bright (>0.5) part of the streak cycle must cover a measurably broader fraction of the water than the prior sharpness=4.0's ~18%%")
+	assert_lt(bright_fraction, 0.45,
+		"must still read as a periodic streak, not broaden into a constant, motionless-looking tint")
+	assert_lt(RiverFlowShader.STREAK_SHARPNESS, _PRIOR_STREAK_SHARPNESS,
+		"STREAK_SHARPNESS must be lowered from the prior 4.0 to broaden the visible band")
+
+
+## The pale highlight color itself was raised too -- brightening the color
+## increases the blended result's luminance at the SAME alpha (lerp(dark
+## background, brighter color, alpha) lands lighter), which is the second,
+## alpha-independent lever for punching through a near-black hillshade tile
+## sitting underneath, not just "brighter in isolation." Every channel must
+## move up (never darken), and it must stay a pale water-toned highlight,
+## not a saturated/neon hue -- still all channels close to 1.0, blue
+## remaining the brightest channel exactly as the prior color already was.
+func test_streak_color_was_brightened_without_turning_saturated_or_neon():
+	var prior := _PRIOR_STREAK_COLOR
+	var new_color := RiverFlowShader.STREAK_COLOR
+	assert_gte(new_color.r, prior.r, "red channel must not darken")
+	assert_gte(new_color.g, prior.g, "green channel must not darken")
+	assert_gte(new_color.b, prior.b, "blue channel must not darken")
+	assert_true(new_color.r > prior.r or new_color.g > prior.g,
+		"at least one channel must genuinely brighten, not just hold steady")
+	for channel in [new_color.r, new_color.g, new_color.b]:
+		assert_between(channel, 0.7, 1.0, "must stay a pale highlight, not a saturated/neon hue")
+	assert_gte(new_color.b, new_color.r, "blue stays the dominant channel -- a water highlight, not a warm/neutral tint")

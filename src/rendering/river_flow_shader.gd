@@ -55,9 +55,9 @@ shader_type canvas_item;
 uniform float min_flow_speed = 8.0;
 uniform float max_flow_speed = 32.0;
 uniform float streak_frequency = 0.12;
-uniform float streak_sharpness = 4.0;
-uniform float streak_alpha = 0.35;
-uniform vec3 streak_color : source_color = vec3(0.75, 0.88, 1.0);
+uniform float streak_sharpness = 2.0;
+uniform float streak_alpha = 0.5;
+uniform vec3 streak_color : source_color = vec3(0.85, 0.94, 1.0);
 uniform float turbulence_strength = 30.0;
 uniform float turbulence_scale = 0.035;
 uniform float turbulence_speed = 0.6;
@@ -130,15 +130,42 @@ const MAX_FLOW_SPEED := 32.0
 const STREAK_FREQUENCY := 0.12
 ## Raising the clamped sine to this power narrows the bright band into a
 ## crisp streak rather than a broad, soft glow -- higher = thinner streaks.
-const STREAK_SHARPNESS := 4.0
+## Reported "make the flow effect more visible" (2026-08-30): the prior
+## 4.0 kept the bright (>0.5 intensity) part of each cycle to only ~18.2%
+## of the period (see test_river_flow_shader.gd's own derivation from
+## pow(max(sin(phase*TAU),0), n) -- bright fraction is
+## (pi - 2*asin(0.5^(1/n))) / (2*pi)), reading as a thin, sparse glint
+## rather than a current that visibly covers the water. Halving it to 2.0
+## broadens that to a measured 25% of the period -- comfortably clear of
+## the 22% floor the regression test pins, while staying well short of a
+## flat, motionless-looking tint (a duty fraction near 50%).
+const STREAK_SHARPNESS := 2.0
 ## Overlay opacity ceiling: translucent enough that the base water
 ## color/ripples beneath always stay visible -- the same "never opaque"
 ## bound WaterShader.WATER_ALPHA/HillshadeShader.MAX_SHADOW_ALPHA already
-## keep for their own overlays.
-const STREAK_ALPHA := 0.35
+## keep for their own overlays. Reported "make the flow effect more
+## visible" (2026-08-30): the prior 0.35 read as an easy-to-miss glint,
+## particularly once layered under HillshadeShader's own overlay (up to
+## MAX_SHADOW_ALPHA=0.55 of near-black on the same tile, per the z-order
+## fix in eae510d) -- the streak needs enough contrast to punch through
+## that darkening, not just be visible in isolation. Raised to 0.5: a real
+## step up from 0.35, but still genuinely translucent and placed below
+## BOTH of this codebase's own overlay-alpha precedents -- under
+## HillshadeShader.MAX_SHADOW_ALPHA (0.55) so the flow highlight never
+## outweighs the shading it sits on top of, and under WaterShader.
+## WATER_ALPHA (0.6) so the sparse, pulsing streak never becomes as
+## dominant as the base water tile it's decorating.
+const STREAK_ALPHA := 0.5
 ## Pale, glinting -- a highlight riding on the water's own blue, not a
-## competing hue.
-const STREAK_COLOR := Color(0.75, 0.88, 1.0)
+## competing hue. Reported "make the flow effect more visible"
+## (2026-08-30): brightened red and green toward the already-maxed blue
+## channel (0.75->0.85, 0.88->0.94) as a second, alpha-independent lever --
+## COLOR = vec4(streak_color, streak*streak_alpha) blends toward whatever
+## sits underneath, so a brighter source color lands lighter at the same
+## alpha, which matters most on top of a near-black hillshade tile. Still
+## every channel within [0.7, 1.0] (pale, not saturated/neon) and blue
+## stays the highest channel -- a water highlight, not a warm tint.
+const STREAK_COLOR := Color(0.85, 0.94, 1.0)
 ## How far (in world units) the turbulence noise can shift the streak
 ## phase's effective position -- large enough to visibly bend/waver a
 ## band, small enough that streaks still read as flowing roughly downstream
