@@ -49,7 +49,9 @@ uniform float advect_rate = 0.35;
 uniform float advect_strength = 1.15;
 uniform float noise_scale = 0.028;
 uniform float detail_scale = 2.7;
-uniform float surface_contrast = 0.13;
+uniform float surface_contrast = 0.50;
+uniform float line_stretch = 0.16;
+uniform float band_dither = 1.9;
 uniform float glint_threshold = 0.70;
 uniform float glint_strength = 0.55;
 uniform float foam_threshold = 0.62;
@@ -84,16 +86,26 @@ float value_noise(vec2 p) {
 	);
 }
 
-// Two octaves: a broad swell plus finer surface detail riding on it. Real
-// water has structure at several scales at once -- a single octave reads as
-// a lava lamp.
-float surface(vec2 p) {
-	return value_noise(p) * 0.65 + value_noise(p * detail_scale) * 0.35;
+// The surface field, sampled in the channel's OWN frame: `along` runs
+// downstream, `across` runs bank to bank.
+//
+// ANISOTROPIC on purpose, and this is what makes the water read as flowing
+// LINES rather than as drifting blobs. Compressing the along-flow axis by
+// line_stretch makes every feature roughly 1/line_stretch times longer
+// downstream than it is wide, so the field is naturally filamentary --
+// streaklines, the way a real current shows itself.
+//
+// Two octaves, because real water has structure at several scales at once;
+// a single octave reads as a lava lamp.
+float line_field(float along, float across) {
+	vec2 q = vec2(along * line_stretch, across);
+	return value_noise(q) * 0.65 + value_noise(q * detail_scale) * 0.35;
 }
 
 void fragment() {
 	vec4 data = texture(TEXTURE, UV);
 	vec2 flow_dir = normalize(data.gb * 2.0 - 1.0 + vec2(1e-6, 0.0));
+	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
 	float combined = floor(data.a * packed_levels);
 	float is_fast = mod(combined, speed_levels);
 	float depth_band = floor(combined / speed_levels);
@@ -119,11 +131,14 @@ void fragment() {
 	// what the old baked phase channel was -- would make the noise jump at
 	// every tile boundary, a grid of seams across the river. World position
 	// already decorrelates every reach continuously and for free.
-	vec2 base = world_pos * noise_scale;
-	vec2 drag = flow_dir * advect_strength;
+	vec2 world = world_pos * noise_scale;
+	float along = dot(world, flow_dir);
+	float across = dot(world, flow_perp);
 
-	float sample_a = surface(base - drag * phase_a);
-	float sample_b = surface(base - drag * phase_b);
+	// The drag is purely DOWNSTREAM -- water is carried along the channel,
+	// never sideways across it.
+	float sample_a = line_field(along - advect_strength * phase_a, across);
+	float sample_b = line_field(along - advect_strength * phase_b, across);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n = mix(sample_a, sample_b, blend);
@@ -131,11 +146,19 @@ void fragment() {
 	// Depth colour: the channel's real parabolic cross-section (see
 	// OpenChannelFlow.cross_channel_depth_fraction), light at the shallow
 	// bank, dark down the deep centreline.
+	//
+	// DITHERED by the same advecting field, and that is not decoration. The
+	// depth band is decided per TILE, so undithered band edges fall exactly
+	// on tile boundaries -- and a tile is tens of screen pixels here, so
+	// they draw the tilemap grid straight across the river. Perturbing the
+	// index lets each edge wander over half a band, breaking it into a
+	// ragged, moving line that no longer coincides with the lattice.
+	float band = depth_band + (n - 0.5) * band_dither;
 	vec3 body = band0_color;
-	body = mix(body, band1_color, step(0.5, depth_band));
-	body = mix(body, band2_color, step(1.5, depth_band));
-	body = mix(body, band3_color, step(2.5, depth_band));
-	body = mix(body, band4_color, step(3.5, depth_band));
+	body = mix(body, band1_color, step(0.5, band));
+	body = mix(body, band2_color, step(1.5, band));
+	body = mix(body, band3_color, step(2.5, band));
+	body = mix(body, band4_color, step(3.5, band));
 
 	// The advecting surface modulates brightness -- this is the moving
 	// water itself, not a mark drawn on top of it.
@@ -151,7 +174,7 @@ void fragment() {
 	// Whitewater at the shallow bank, where a real river breaks over its
 	// own edge -- driven by the SAME advecting field, so the foam travels
 	// with the water instead of sitting still.
-	float at_edge = 1.0 - step(0.5, depth_band);
+	float at_edge = 1.0 - step(0.5, band);
 	float foam = smoothstep(foam_threshold, foam_threshold + 0.12, n) * at_edge;
 	body = mix(body, foam_color, foam);
 
@@ -178,10 +201,32 @@ const ADVECT_STRENGTH := 1.15
 const NOISE_SCALE := 0.028
 const DETAIL_SCALE := 2.7
 
-## How strongly the advecting field brightens and darkens the water. Small:
-## this is a surface, not a pattern painted on one. Scaled up on fast
-## reaches, which is how speed reads now that nothing translates.
-const SURFACE_CONTRAST := 0.13
+## How strongly the advecting field brightens and darkens the water.
+##
+## Sized by a MEASURED RELATION, not by eye: the moving surface must swing
+## at least as far in brightness as the whole bank-to-centreline depth
+## profile does. Below that parity the static, per-tile depth colour
+## dominates any still frame and the river reads as a flat blocky mosaic --
+## which is exactly what the first screenshot of this shader showed, with
+## the surface at 0.070 against the profile's 0.26. See
+## test_the_moving_surface_is_at_least_as_strong_as_the_depth_profile.
+const SURFACE_CONTRAST := 0.50
+
+## How far the surface field is stretched ALONG the flow relative to across
+## it -- 0.16 makes every feature about six times longer downstream than it
+## is wide, so the field is filamentary and reads as flowing LINES rather
+## than as drifting blobs. Requested in exactly those terms ("can you
+## flowing lines that morph"): the lines come from this, the morphing from
+## the two-phase advection.
+const LINE_STRETCH := 0.16
+
+## How far the surface field perturbs the depth-band lookup, in bands.
+##
+## Also a measured relation rather than a taste: wide enough that a band
+## edge can wander at least half a band, which is what stops it lying along
+## a straight tile boundary and drawing the tilemap grid. See
+## test_band_edges_are_dithered_enough_to_break_the_tile_grid.
+const BAND_DITHER := 1.9
 
 ## Where crest glints begin, and how bright they get. Glints appear and
 ## vanish with the surface rather than sliding across it, which is what
@@ -228,6 +273,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("noise_scale", NOISE_SCALE)
 	material.set_shader_parameter("detail_scale", DETAIL_SCALE)
 	material.set_shader_parameter("surface_contrast", SURFACE_CONTRAST)
+	material.set_shader_parameter("line_stretch", LINE_STRETCH)
+	material.set_shader_parameter("band_dither", BAND_DITHER)
 	material.set_shader_parameter("glint_threshold", GLINT_THRESHOLD)
 	material.set_shader_parameter("glint_strength", GLINT_STRENGTH)
 	material.set_shader_parameter("glint_color", GLINT_COLOR)
@@ -320,9 +367,34 @@ static func value_noise(x: float, y: float) -> float:
 	)
 
 
-## Two octaves, exactly as the shader mixes them.
-static func surface_value(x: float, y: float) -> float:
-	return value_noise(x, y) * 0.65 + value_noise(x * DETAIL_SCALE, y * DETAIL_SCALE) * 0.35
+## Two octaves in the channel's own frame, exactly as the shader mixes
+## them: `along` runs downstream, `across` runs bank to bank.
+static func surface_value(along: float, across: float) -> float:
+	var qx := along * LINE_STRETCH
+	return (
+		value_noise(qx, across) * 0.65
+		+ value_noise(qx * DETAIL_SCALE, across * DETAIL_SCALE) * 0.35
+	)
+
+
+## Mean absolute change in the field over a step of `distance`, taken either
+## downstream or bank-to-bank. A filamentary field changes far more slowly
+## along the flow than across it -- which is the measurable difference
+## between flowing lines and drifting blobs.
+static func field_roughness(distance: float, downstream: bool) -> float:
+	var total := 0.0
+	var count := 0
+	for i in range(90):
+		for j in range(90):
+			var a := float(i) * 0.37
+			var c := float(j) * 0.41
+			var b := (
+				surface_value(a + distance, c) if downstream
+				else surface_value(a, c + distance)
+			)
+			total += absf(b - surface_value(a, c))
+			count += 1
+	return total / float(count)
 
 
 ## Fraction of the water surface whose field exceeds `threshold` -- i.e. how
@@ -338,3 +410,26 @@ static func surface_coverage_above(threshold: float, samples: int = 120) -> floa
 			if surface_value(x, y) > threshold:
 				hits += 1
 	return float(hits) / float(samples * samples)
+
+
+## The surface field's real p05..p95 swing -- how much of a brightness range
+## the moving water actually covers in practice.
+##
+## NOT its 0..1 theoretical range, which is what makes this worth measuring:
+## two averaged octaves cluster hard around the middle, so the field only
+## spans about half its nominal range. Sizing the contrast against 0..1
+## instead is exactly how the moving surface ended up 3.7x weaker than the
+## static banding and the river rendered as a flat mosaic.
+static func surface_swing(samples: int = 140) -> float:
+	var values: Array[float] = []
+	for i in samples:
+		for j in samples:
+			values.append(surface_value(float(i) * 0.37, float(j) * 0.41))
+	values.sort()
+	return values[int(values.size() * 0.95)] - values[int(values.size() * 0.05)]
+
+
+## Brightness span of the depth profile, bank to centreline -- the static,
+## per-tile signal the moving surface has to compete with.
+static func depth_profile_span() -> float:
+	return BAND_COLORS[0].v - BAND_COLORS[BAND_COLORS.size() - 1].v

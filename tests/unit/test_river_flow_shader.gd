@@ -147,8 +147,8 @@ func test_the_surface_is_actually_dragged_within_a_phase():
 func test_the_shader_samples_two_advected_phases():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_a"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_b"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("drag * phase_a"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("drag * phase_b"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_a"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_b"))
 
 
 ## THE seam bug the advection switch introduces if left alone. The surface
@@ -161,7 +161,7 @@ func test_the_shader_samples_two_advected_phases():
 ## free and continuously, so no per-tile offset is needed or wanted.
 func test_the_surface_field_is_keyed_to_world_position_alone():
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("vec2 base = world_pos * noise_scale;"),
+		RiverFlowShader.SHADER_CODE.contains("vec2 world = world_pos * noise_scale;"),
 		"a per-tile offset added here would seam the noise at every tile edge"
 	)
 	assert_false(
@@ -348,3 +348,102 @@ func test_the_surface_mirror_stays_in_the_shaders_own_range():
 	for i in range(60):
 		for j in range(60):
 			assert_between(RiverFlowShader.surface_value(float(i) * 0.7, float(j) * 0.9), 0.0, 1.0)
+
+
+# -- water, not a mosaic -----------------------------------------------------
+#
+# Both of these come from looking at the running game rather than reasoning
+# about it, and they share one root cause: EVERY per-tile quantity drawn as
+# a flat fill reads as a blocky mosaic at this camera zoom, because a tile
+# is tens of screen pixels. The same root cause already claimed the old bank
+# outline (a near-black block eating half the channel).
+#
+# The first screenshot of the advection shader showed a river of perfectly
+# uniform tile-sized blocks with no visible surface at all. Measured, the
+# moving surface swung 0.070 in brightness against the depth banding's 0.26
+# -- the static mosaic was 3.7x stronger than the water.
+
+## So the moving surface must be at least as strong a signal as the entire
+## depth profile. Below parity a still frame is dominated by flat per-tile
+## colour, which is precisely the "blocky, not water" failure -- and it is a
+## RELATION between two measured quantities, so it cannot be satisfied by
+## quietly restyling either one alone.
+func test_the_moving_surface_is_at_least_as_strong_as_the_depth_profile():
+	var swing := RiverFlowShader.surface_swing() * RiverFlowShader.SURFACE_CONTRAST
+	var profile := RiverFlowShader.depth_profile_span()
+	assert_gte(
+		swing, profile,
+		"surface swings %.3f against a %.3f depth profile -- the static banding wins"
+			% [swing, profile]
+	)
+
+
+## And the band boundaries themselves must be dithered by the surface field,
+## or they land on straight tile edges and draw the mosaic's grid lines.
+##
+## The dither has to be wide enough for a boundary to wander at least half a
+## band, which is what stops it aligning with the tile grid at all.
+func test_band_edges_are_dithered_enough_to_break_the_tile_grid():
+	var wander := RiverFlowShader.surface_swing() * 0.5 * RiverFlowShader.BAND_DITHER
+	assert_gte(
+		wander, 0.5,
+		"band edges wander only %.3f of a band -- not enough to leave the tile grid" % wander
+	)
+
+
+func test_the_shader_actually_dithers_the_band_lookup():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float band = depth_band + (n - 0.5) * band_dither;"),
+		"the band index must be perturbed by the same advecting field"
+	)
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("step(0.5, depth_band)"),
+		"the bands must step on the dithered index, not the raw per-tile one"
+	)
+
+
+# -- flowing lines, not blobs ------------------------------------------------
+#
+# Requested in exactly those words: "can you flowing lines that morph". The
+# two halves come from two different places, and both have to hold.
+#
+# The MORPHING is the two-phase advection above. The LINES are anisotropy:
+# the field is compressed along the flow axis, so its features come out far
+# longer downstream than they are wide -- streaklines, the way a real
+# current shows itself. An isotropic field advected just as correctly still
+# reads as drifting blobs, which is why this is pinned separately.
+
+## The measurable difference between a line and a blob: the field must stay
+## coherent much further ALONG the flow than ACROSS it.
+func test_the_field_forms_lines_along_the_flow_not_blobs():
+	var step := 0.45
+	var along := RiverFlowShader.field_roughness(step, true)
+	var across := RiverFlowShader.field_roughness(step, false)
+	assert_gt(
+		across, along * 2.0,
+		"field changes %.4f across vs %.4f along -- too round to read as flowing lines"
+			% [across, along]
+	)
+
+
+## The stretch is what produces that, so it must genuinely stretch. At 1.0
+## the field is isotropic and the lines are gone.
+func test_the_line_stretch_actually_elongates_the_field():
+	assert_lt(RiverFlowShader.LINE_STRETCH, 0.5)
+	assert_gt(RiverFlowShader.LINE_STRETCH, 0.0)
+
+
+## And the shader must sample in the channel's own frame, or "along the
+## flow" has no meaning -- a world-axis-aligned stretch would draw lines
+## pointing the same way regardless of which way the river runs.
+func test_the_shader_samples_in_the_channels_own_frame():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("dot(world, flow_dir)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("dot(world, flow_perp)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_perp = vec2(-flow_dir.y, flow_dir.x)"))
+
+
+## Water is carried DOWNSTREAM. Dragging the field sideways as well would
+## make the lines crab across the channel instead of running along it.
+func test_the_drag_is_purely_downstream():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_a, across)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_b, across)"))
