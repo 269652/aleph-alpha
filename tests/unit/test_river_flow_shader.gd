@@ -1060,3 +1060,62 @@ func test_the_shader_switches_ink_hard_never_blending_to_the_body():
 		RiverFlowShader.SHADER_CODE.contains("mix(line_color_deep, line_color, step("),
 		"the ink must snap between deep and pale -- a smooth blend passes through the body colour"
 	)
+
+
+# -- moonlit strokes ----------------------------------------------------------
+#
+# The world clock follows the REAL clock, so an evening player lives in
+# permanent in-game night -- and the night CanvasModulate multiplies every
+# canvas pixel, crushing the stroke contrast below visibility exactly when
+# it matters most (reported repeatedly via night screenshots of lineless
+# water). Nothing inside the canvas can exceed the modulate, so the ceiling
+# IS the play: as the sky darkens, the strokes lift toward near-white at
+# near-full alpha -- a moonlit gleam, which is also what real rivers do at
+# night (they reflect skylight and read brighter than the land).
+
+## The lift curve: fully off in daylight, fully on in darkness, monotone in
+## between -- so the gleam fades in with dusk instead of snapping.
+func test_night_lift_is_off_by_day_and_full_by_night():
+	assert_almost_eq(RiverFlowShader.night_lift_for_sunlight(1.0), 0.0, 0.0001)
+	assert_almost_eq(RiverFlowShader.night_lift_for_sunlight(0.4), 0.0, 0.0001)
+	assert_almost_eq(RiverFlowShader.night_lift_for_sunlight(0.0), 1.0, 0.0001)
+	var previous := 1.1
+	for step in 40:
+		var lift := RiverFlowShader.night_lift_for_sunlight(float(step) / 39.0)
+		assert_lte(lift, previous + 0.0001, "the lift must fade monotonically with sunlight")
+		previous = lift
+
+
+## At full night a full stroke must SATURATE -- reach the modulate ceiling
+## -- or the boost is not actually buying the visibility it exists for.
+func test_a_full_stroke_saturates_at_full_night():
+	assert_gte(
+		RiverFlowShader.LINE_STRENGTH * RiverFlowShader.NIGHT_STROKE_BOOST, 1.0,
+		"the night boost cannot reach the modulate ceiling"
+	)
+
+
+## And the ink goes moonlight at night for EVERY cel -- including the
+## shallow rim, whose adaptive DEEP ink would otherwise vanish first under
+## the dimming.
+func test_the_ink_turns_moonlight_at_night_on_every_cel():
+	for level in RiverFlowShader.CEL_LEVELS:
+		var cel_t := float(level) / float(RiverFlowShader.CEL_LEVELS - 1)
+		var night_ink := RiverFlowShader.stroke_ink_at(cel_t, 1.0)
+		assert_gte(night_ink.v, 0.9, "cel %d stroke ink stays dark at night" % level)
+		var day_ink := RiverFlowShader.stroke_ink_at(cel_t, 0.0)
+		assert_eq(day_ink, RiverFlowShader.stroke_ink_for(cel_t))
+
+
+## Structural: the shader must apply the lift to both the ink and the
+## stroke alpha, and the alpha must clamp at the ceiling.
+func test_the_shader_lifts_strokes_by_the_night_uniform():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("mix(stroke_ink, moonlight_ink, night_lift)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("mix(1.0, night_stroke_boost, night_lift)"))
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("min(wave * line_strength * mix(1.0, night_stroke_boost, night_lift), 1.0)")
+	)
+
+
+func test_the_night_lift_defaults_to_day():
+	assert_eq(flow.shared_material().get_shader_parameter("night_lift"), 0.0)

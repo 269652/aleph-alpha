@@ -4617,6 +4617,12 @@ func _client_process(delta: float) -> void:
 	var local_minute := int((local_hour - float(local_hour_whole)) * 60.0)
 	var sunlight := _solar_position.sunlight_intensity(elevation)
 	_day_night.color = day_night_tint_for(sunlight)
+	# The river strokes lift toward moonlight from the SAME sunlight -- the
+	# CanvasModulate above multiplies every canvas pixel, and without the
+	# lift the current marks fall below visibility exactly when the world
+	# clock (which follows the real clock) holds evening players in
+	# permanent night. Real rivers gleam after dark: they reflect the sky.
+	_chunk_manager.set_river_flow_night_lift(sunlight)
 	# Drives every creature's silhouette shadow length (see DropShadow.
 	# stretch_for_elevation / CreatureMarker.sun_elevation_deg) with the same
 	# real sun position already computed for day/night lighting above.

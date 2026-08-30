@@ -3382,6 +3382,17 @@ func set_hillshade_layer(hillshade_layer: TileMapLayer) -> void:
 		_paint_hillshade_overlay(chunk_coord, _loaded_chunks[chunk_coord])
 
 
+## Feeds the river strokes the same sunlight that drives the day/night
+## tint, each frame -- the night CanvasModulate multiplies every canvas
+## pixel, so the flow shader lifts its strokes toward the moonlit ceiling
+## as the sky darkens (see RiverFlowShader.night_lift_for_sunlight).
+## Safe with no layer registered: the shared material exists regardless.
+func set_river_flow_night_lift(sunlight: float) -> void:
+	_river_flow_shader.shared_material().set_shader_parameter(
+		"night_lift", RiverFlowShader.night_lift_for_sunlight(sunlight)
+	)
+
+
 ## Registers the GPU river-flow overlay layer (see RiverFlowShader,
 ## TerrainRenderer.build_river_flow_tile_set, docs/concept/rivers.md) --
 ## same optional, fail-open shape as set_hillshade_layer above, but the

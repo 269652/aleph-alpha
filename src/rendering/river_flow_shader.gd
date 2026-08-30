@@ -59,6 +59,9 @@ uniform float line_width = 0.045;
 uniform float line_strength = 0.7;
 uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
 uniform vec3 line_color_deep : source_color = vec3(0.07, 0.26, 0.48);
+uniform float night_lift = 0.0;
+uniform float night_stroke_boost = 2.2;
+uniform vec3 moonlight_ink : source_color = vec3(0.92, 0.96, 1.0);
 uniform float shore_pos = 0.88;
 uniform float shore_width = 0.025;
 uniform float smear_spacing = 0.8;
@@ -272,14 +275,24 @@ void fragment() {
 	// step, never a blend -- halfway between the two inks lies the body
 	// colour itself, and a stroke drawn in the body colour is invisible.
 	vec3 stroke_ink = mix(line_color_deep, line_color, step(0.28, cel_t));
-	body = mix(body, stroke_ink, wave * line_strength);
+
+	// MOONLIT AT NIGHT. The night CanvasModulate multiplies every canvas
+	// pixel, so nothing here can exceed it -- the ceiling is the play: as
+	// the sky darkens (night_lift, fed each frame from the same sunlight
+	// that drives the tint), the ink lifts to moonlight white and the
+	// stroke alpha boosts to saturation. A full stroke at full night IS
+	// the modulate ceiling: the gleam of a real river reflecting skylight,
+	// the brightest thing the night allows.
+	stroke_ink = mix(stroke_ink, moonlight_ink, night_lift);
+	float wave_alpha = min(wave * line_strength * mix(1.0, night_stroke_boost, night_lift), 1.0);
+	body = mix(body, stroke_ink, wave_alpha);
 
 	// The SHORE HIGHLIGHT: one constant pale line tracing the bank just
 	// inside the ink -- pinned to the reconstructed geometry, not to any
 	// field, so it is exactly as smooth as the shoreline itself. The most
 	// illustrated mark of all.
 	float shore = 1.0 - smoothstep(shore_width * 0.5, shore_width, abs(rr - shore_pos));
-	body = mix(body, line_color, shore * 0.5);
+	body = mix(body, line_color, shore * mix(0.5, 0.85, night_lift));
 
 	// The comic INK line: a dark outline hugging the real bank curve, just
 	// inside the waterline. The old stylized attempt drew its outline per
@@ -419,6 +432,15 @@ const LINE_COLOR := Color(0.85, 0.97, 1.0)
 ## mid-depth, because any smooth blend passes through the body colour.
 const LINE_COLOR_DEEP := Color(0.07, 0.26, 0.48)
 
+## The moonlit night gleam. The night CanvasModulate multiplies every
+## canvas pixel, so at night nothing can exceed the modulate itself -- the
+## strokes therefore lift toward near-white at boosted alpha, saturating a
+## full stroke at full night (LINE_STRENGTH x NIGHT_STROKE_BOOST >= 1, by
+## test). Physically honest: a real river at night reads BRIGHTER than the
+## land, because it reflects the sky.
+const NIGHT_STROKE_BOOST := 2.2
+const MOONLIGHT_INK := Color(0.92, 0.96, 1.0)
+
 ## The constant shore highlight, in across-fraction units: where it sits
 ## (inside the ink line, by test) and how wide it draws. Dimmed to half
 ## strength after the first live look -- at full strength it stacked with
@@ -479,6 +501,9 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("line_strength", LINE_STRENGTH)
 	material.set_shader_parameter("line_color", LINE_COLOR)
 	material.set_shader_parameter("line_color_deep", LINE_COLOR_DEEP)
+	material.set_shader_parameter("night_lift", 0.0)
+	material.set_shader_parameter("night_stroke_boost", NIGHT_STROKE_BOOST)
+	material.set_shader_parameter("moonlight_ink", MOONLIGHT_INK)
 	material.set_shader_parameter("shore_pos", SHORE_POS)
 	material.set_shader_parameter("shore_width", SHORE_WIDTH)
 	for i in BAND_COLORS.size():
@@ -526,6 +551,21 @@ static func stroke_mask(n: float, is_fast: bool) -> float:
 	var stroke := 1.0 - smoothstep(LINE_WIDTH * 0.5, LINE_WIDTH, dist_n)
 	var parity := fposmod(floor(n * LINE_COUNT), 2.0)
 	return stroke * lerpf(0.75, 1.0, parity) * (1.1 if is_fast else 0.8)
+
+
+## How far the strokes lift toward moonlight for a given sunlight
+## intensity (SolarPosition.sunlight_intensity, 0 below the horizon).
+## Fully off through daylight, fully on in darkness, fading in through the
+## low-sun band so the gleam arrives with dusk instead of snapping.
+static func night_lift_for_sunlight(sunlight: float) -> float:
+	return 1.0 - smoothstep(0.0, 0.25, clampf(sunlight, 0.0, 1.0))
+
+
+## The stroke ink at a given night lift -- moonlight overrides the adaptive
+## day ink as the sky darkens, on every cel: at night even the deep rim ink
+## would vanish under the dimming.
+static func stroke_ink_at(cel_t: float, lift: float) -> Color:
+	return stroke_ink_for(cel_t).lerp(MOONLIGHT_INK, clampf(lift, 0.0, 1.0))
 
 
 ## The adaptive stroke ink for a body cel: deep over light water, pale

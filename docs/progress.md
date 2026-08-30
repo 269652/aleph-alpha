@@ -7345,6 +7345,19 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: moonlit strokes at night** (small) — ✅ Done — the decisive
+  observation: the world clock follows the REAL clock, so an evening
+  player lives in permanent in-game night, and every "no current lines"
+  screenshot was a night screenshot. The night CanvasModulate multiplies
+  every canvas pixel, so nothing in-canvas can exceed it -- the ceiling IS
+  the play: as sunlight falls (same value that drives the tint, fed per
+  frame via EarthChunkManager.set_river_flow_night_lift), the stroke ink
+  lifts to moonlight white ON EVERY CEL (the adaptive deep rim ink would
+  vanish first) and the stroke alpha boosts to saturation
+  (LINE_STRENGTH x NIGHT_STROKE_BOOST >= 1 by test) -- a full stroke at
+  full night IS the modulate ceiling, the gleam of a river reflecting
+  skylight. Lift curve pinned monotone, off through daylight. Shader
+  suite 72 + GPU smoke green.
 - **Rivers: strokes that survive zoom and light cels** (small) — ✅ Done —
   reported from the Rhine cross-Alps straight ("the long straight section
   shows no current lines at all"; probed headlessly: pure flow overlay,
