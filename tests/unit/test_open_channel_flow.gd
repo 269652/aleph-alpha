@@ -228,3 +228,51 @@ func test_equilibrium_head_round_trips_through_the_weir_equation():
 	for discharge in [0.5, 5.56, 60.0]:
 		var head := OpenChannelFlow.equilibrium_weir_head_m(discharge, 4.0)
 		assert_almost_eq(OpenChannelFlow.weir_overflow_m3_s(head, 4.0), discharge, 0.01)
+
+
+# -- cross-channel depth profile --------------------------------------------
+#
+# A real river is not a slab of uniform depth: its bed is roughly parabolic,
+# deepest mid-stream and shallowing to nothing at each bank. Manning's
+# normal-depth solve gives the channel's MEAN depth, so this is what turns
+# that one number into a real cross-section.
+
+func test_the_channel_is_deepest_at_its_centreline():
+	assert_almost_eq(OpenChannelFlow.cross_channel_depth_fraction(0.0), 1.0, 0.0001)
+
+
+func test_the_channel_has_no_depth_at_the_bank():
+	assert_eq(OpenChannelFlow.cross_channel_depth_fraction(1.0), 0.0)
+
+
+func test_depth_falls_monotonically_from_centreline_to_bank():
+	var previous := 2.0
+	for step in 21:
+		var here := OpenChannelFlow.cross_channel_depth_fraction(float(step) / 20.0)
+		assert_lte(here, previous, "depth must not increase toward the bank")
+		previous = here
+
+
+func test_the_profile_is_parabolic_not_linear():
+	# Halfway out, a parabola retains 1 - 0.25 = 0.75 of centre depth, where
+	# a straight taper would give 0.5. That difference is the whole point:
+	# a real channel has a broad deep middle, not a V.
+	assert_almost_eq(OpenChannelFlow.cross_channel_depth_fraction(0.5), 0.75, 0.0001)
+
+
+func test_the_profile_stays_in_unit_range_even_outside_the_channel():
+	for offset in [-2.0, 0.0, 0.5, 1.0, 5.0]:
+		assert_between(OpenChannelFlow.cross_channel_depth_fraction(offset), 0.0, 1.0)
+
+
+## Averaged across the full width, a parabolic channel holds 2/3 of what a
+## same-depth rectangular one would -- so using the mean depth AS the
+## centreline depth would systematically overstate the water. Scaling by 1.5
+## keeps the cross-section's mean equal to the solved mean depth.
+func test_the_centreline_scale_conserves_the_solved_mean_depth():
+	var samples := 2000
+	var total := 0.0
+	for i in range(samples):
+		var r := float(i) / float(samples)
+		total += OpenChannelFlow.cross_channel_depth_fraction(r) * OpenChannelFlow.CENTRELINE_DEPTH_SCALE
+	assert_almost_eq(total / float(samples), 1.0, 0.01)

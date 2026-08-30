@@ -8,6 +8,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
+const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
@@ -404,15 +405,16 @@ func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
 		var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
 		var expected_angle := aspect if aspect >= 0.0 else 0.0
 		var hydraulics := manager.generator.river_hydraulics_at_global(cell.x, cell.y)
-		var depth := manager.river_depth_meters_at_global(cell.x, cell.y)
 		var nearest := manager.generator.river_catalog().nearest_river_at(
 			cell.x, cell.y,
 			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 		)
+		var across: float = nearest.distance_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 		var expected_style := ProceduralRiverFlowSprite.style_index_for(
-			RiverFlowShader.depth_band_for(depth),
-			RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s),
-			RiverFlowShader.is_bank_cell(nearest.distance_tiles, RiverCatalog.RIVER_HALF_WIDTH_TILES)
+			RiverFlowShader.cross_section_band_for(
+				OpenChannelFlow.cross_channel_depth_fraction(across)
+			),
+			RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
 		)
 		var expected_phase := 0.0
 		if hydraulics.river_name != "":

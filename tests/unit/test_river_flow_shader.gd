@@ -11,7 +11,7 @@ extends GutTest
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
-const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
+const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 
 var flow: RiverFlowShader
 
@@ -33,8 +33,8 @@ func test_default_uniforms_match_the_tuned_constants():
 	assert_eq(material.get_shader_parameter("wavelength_px"), RiverFlowShader.WAVELENGTH_PX)
 	assert_eq(material.get_shader_parameter("streak_rate_hz"), RiverPhaseField.STREAK_RATE_HZ)
 	assert_eq(material.get_shader_parameter("line_thickness"), RiverFlowShader.LINE_THICKNESS)
-	assert_eq(material.get_shader_parameter("shallow_color"), RiverFlowShader.SHALLOW_COLOR)
-	assert_eq(material.get_shader_parameter("bank_color"), RiverFlowShader.BANK_COLOR)
+	assert_eq(material.get_shader_parameter("band0_color"), RiverFlowShader.BAND_COLORS[0])
+	assert_eq(material.get_shader_parameter("band4_color"), RiverFlowShader.BAND_COLORS[4])
 
 
 # -- the art direction, asserted as negatives --------------------------------
@@ -69,57 +69,70 @@ func test_the_shader_outputs_a_fully_opaque_colour():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("wave_color, line), 1.0)"))
 
 
-## The palette must be small and its bands clearly separated, or the flat
-## bands read as a gradient someone forgot to smooth.
-func test_the_depth_bands_are_clearly_separated_not_a_gradient():
-	var shallow: Color = RiverFlowShader.SHALLOW_COLOR
-	var mid: Color = RiverFlowShader.MID_COLOR
-	var deep: Color = RiverFlowShader.DEEP_COLOR
-	assert_gt(shallow.v - mid.v, 0.08, "shallow and mid must be visibly distinct")
-	assert_gt(mid.v - deep.v, 0.08, "mid and deep must be visibly distinct")
-
-
-## The bank outline must be darker than every water band, or it does not
-## read as an outline.
-func test_the_bank_outline_is_darker_than_any_water_band():
-	for band in [RiverFlowShader.SHALLOW_COLOR, RiverFlowShader.MID_COLOR, RiverFlowShader.DEEP_COLOR]:
-		assert_lt(RiverFlowShader.BANK_COLOR.v, band.v)
-
-
-func test_the_wave_lines_are_brighter_than_every_water_band():
-	for band in [RiverFlowShader.SHALLOW_COLOR, RiverFlowShader.MID_COLOR, RiverFlowShader.DEEP_COLOR]:
-		assert_gt(RiverFlowShader.WAVE_COLOR.v, band.v)
-
-
-# -- depth bands carry real gameplay meaning ---------------------------------
+# -- the channel cross-section ----------------------------------------------
 #
-# The first threshold is WaterMovementModel.WADE_DEPTH_METERS itself, so the
-# colour a player sees and what they can actually do never disagree.
+# THE fix for "doesn't look natural": the river used to be one flat slab of
+# colour. It now draws its real parabolic cross-section in flat bands --
+# light at the shallow edge, dark at the deep centreline -- which is what
+# makes it read as a channel. Banded by cross-channel FRACTION, not
+# absolute metres, so a small stream shows structure too.
 
-func test_a_wadeable_depth_is_the_shallow_band():
-	assert_eq(RiverFlowShader.depth_band_for(WaterMovementModel.WADE_DEPTH_METERS - 0.1), 0)
-
-
-func test_a_swimmable_depth_leaves_the_shallow_band():
-	assert_eq(RiverFlowShader.depth_band_for(WaterMovementModel.WADE_DEPTH_METERS + 0.1), 1)
-
-
-func test_a_deep_river_is_the_deepest_band():
-	assert_eq(RiverFlowShader.depth_band_for(10.0), 2)
+func test_the_shallow_edge_is_the_first_band():
+	assert_eq(RiverFlowShader.cross_section_band_for(0.0), 0)
 
 
-func test_the_shallow_to_mid_boundary_is_exactly_the_wading_threshold():
-	assert_eq(RiverFlowShader.MID_BAND_DEPTH_M, WaterMovementModel.WADE_DEPTH_METERS)
+func test_the_deep_centreline_is_the_last_band():
+	assert_eq(
+		RiverFlowShader.cross_section_band_for(1.0),
+		ProceduralRiverFlowSprite.DEPTH_BANDS - 1
+	)
 
 
-func test_depth_bands_never_leave_their_valid_range():
-	for depth in [-5.0, 0.0, 0.9, 1.5, 3.0, 100.0]:
+func test_bands_deepen_monotonically_toward_the_centreline():
+	var previous := -1
+	for step in 21:
+		var band := RiverFlowShader.cross_section_band_for(float(step) / 20.0)
+		assert_gte(band, previous, "bands must not lighten toward the centreline")
+		previous = band
+
+
+func test_every_band_is_reachable_across_a_real_channel():
+	# Walking bank to centreline through the real parabolic profile must
+	# actually visit every band -- otherwise the cross-section collapses
+	# back toward a flat slab.
+	var seen := {}
+	for i in range(200):
+		var across := float(i) / 199.0
+		seen[RiverFlowShader.cross_section_band_for(
+			OpenChannelFlow.cross_channel_depth_fraction(across)
+		)] = true
+	assert_eq(
+		seen.size(), ProceduralRiverFlowSprite.DEPTH_BANDS,
+		"a real channel crossing should show every band, saw %d" % seen.size()
+	)
+
+
+func test_bands_never_leave_their_valid_range():
+	for fraction in [-1.0, 0.0, 0.5, 1.0, 5.0]:
 		assert_between(
-			RiverFlowShader.depth_band_for(depth), 0, ProceduralRiverFlowSprite.DEPTH_BANDS - 1
+			RiverFlowShader.cross_section_band_for(fraction),
+			0, ProceduralRiverFlowSprite.DEPTH_BANDS - 1
 		)
 
 
-# -- fast flow and the bank flag ---------------------------------------------
+## The palette must step evenly and darken monotonically, or the section
+## reads as a gradient someone forgot to smooth rather than as banding.
+func test_the_band_palette_darkens_evenly_toward_the_centreline():
+	var colors: Array[Color] = RiverFlowShader.BAND_COLORS
+	assert_eq(colors.size(), ProceduralRiverFlowSprite.DEPTH_BANDS)
+	for i in range(colors.size() - 1):
+		assert_gt(
+			colors[i].v - colors[i + 1].v, 0.05,
+			"band %d and %d are too close to read as separate" % [i, i + 1]
+		)
+
+
+# -- fast flow ---------------------------------------------------------------
 
 func test_a_still_pool_is_not_fast():
 	assert_false(RiverFlowShader.is_fast_flow(0.0))
@@ -135,18 +148,6 @@ func test_a_real_moving_river_is_fast():
 func test_the_fast_threshold_sits_between_real_habitat_flow_and_a_flood_peak():
 	assert_gt(RiverFlowShader.FAST_FLOW_M_S, 0.5)
 	assert_lt(RiverFlowShader.FAST_FLOW_M_S, 3.0)
-
-
-func test_the_channel_centre_is_not_bank():
-	assert_false(RiverFlowShader.is_bank_cell(0.0, 2.0))
-
-
-func test_the_channel_edge_is_bank():
-	assert_true(RiverFlowShader.is_bank_cell(2.0, 2.0))
-
-
-func test_bank_detection_survives_a_zero_width_channel():
-	assert_false(RiverFlowShader.is_bank_cell(1.0, 0.0))
 
 
 # -- wave lines: hard-edged by construction ----------------------------------
@@ -218,3 +219,9 @@ func test_the_lines_scroll_over_time():
 ## than the old soft streaks if this regressed.
 func test_the_scroll_rate_still_cannot_alias():
 	assert_lt(RiverPhaseField.STREAK_RATE_HZ / 7.0, 0.5)
+
+
+## The dashes must stay brighter than every band they are drawn over.
+func test_the_wave_dashes_are_brighter_than_every_band():
+	for band in RiverFlowShader.BAND_COLORS:
+		assert_gt(RiverFlowShader.WAVE_COLOR.v, band.v)

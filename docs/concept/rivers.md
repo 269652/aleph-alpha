@@ -620,6 +620,40 @@ that a single dimension rather than three.
 exists anywhere in the game today, so it is net-new content (a biome or
 hazard, with placement and damage) rather than a restyle.
 
+### Iteration from real screenshots (2026-08-30)
+
+The stylized look took two corrective passes, both driven by seeing it in
+the running game rather than by reasoning about it. Recording them because
+the same root cause produced both:
+
+**Root cause: designing for a 16 px tile while forgetting the camera zoom
+makes each tile tens of screen pixels.** Everything called "thin" was huge.
+
+1. **Wave lines ran unbroken across the whole channel** — bounded only
+   along the flow, so each mark became a continuous diagonal band reading
+   as hazard tape. Fixed by bounding marks on *both* axes into short
+   dashes, with alternate rows brick-offset so they never form a grid.
+2. **The bank outline was a solid dark block** — bank-ness is decided per
+   *tile*, so a near-black outline colour filled whole tiles, ate half a
+   four-tile channel, and made a navy staircase. Removed entirely.
+3. **The river was still a flat slab of one colour**, with no sense of
+   being a channel. Fixed by drawing its real **cross-section**.
+
+The cross-section is the change that mattered most, and it is real physics
+rather than decoration: a natural riverbed is roughly **parabolic**,
+deepest mid-stream and shallowing to each bank
+(`OpenChannelFlow.cross_channel_depth_fraction`). Manning's normal-depth
+solve gives the channel's *mean* depth, so the profile is what turns that
+one number into a shape — scaled so the section's own mean still equals the
+solved mean depth, rather than silently adding water.
+
+Rendered as five flat bands from light at the edge to dark at the
+centreline. Because the bands follow distance from the centreline, they
+**curve with the river**, which is what makes it read as a channel. Banded
+by cross-channel *fraction* rather than absolute metres, so a small stream
+shows structure too — an absolute scale would paint the whole Dreisam
+(0.31 m mean) a single colour and put the flat slab straight back.
+
 ## Flow rendering: the phase-field rewrite (2026-08-30)
 
 Reported directly: *"overhaul the flow shader and animations they should

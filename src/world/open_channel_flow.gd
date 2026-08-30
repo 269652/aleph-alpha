@@ -184,3 +184,27 @@ static func equilibrium_weir_head_m(discharge_m3_s: float, crest_width_m: float)
 	if discharge_m3_s <= 0.0 or crest_width_m <= 0.0:
 		return 0.0
 	return pow(discharge_m3_s / (WEIR_FLOW_COEFFICIENT * crest_width_m), 2.0 / 3.0)
+
+
+## Scales the solved MEAN depth up to the centreline depth of a parabolic
+## channel. A parabola averages 2/3 of its peak across the width, so the
+## peak must be 3/2 of the mean for the cross-section to hold the same
+## water the mean depth describes -- pinned by
+## test_the_centreline_scale_conserves_the_solved_mean_depth.
+const CENTRELINE_DEPTH_SCALE := 1.5
+
+
+## Fraction of the centreline depth remaining at `offset_fraction` across
+## the channel: 0.0 mid-stream, 1.0 at the bank.
+##
+## Real natural channels are roughly parabolic in cross-section -- a broad
+## deep middle shallowing to nothing at each bank -- not the flat slab a
+## single Manning normal-depth number describes on its own. That one number
+## is the channel MEAN; this is what turns it into a real cross-section.
+##
+## Parabolic rather than a straight taper because the difference is exactly
+## what a channel looks like: halfway out a parabola still holds 75% of the
+## centre depth, where a V-shaped taper would be down to 50%.
+static func cross_channel_depth_fraction(offset_fraction: float) -> float:
+	var r := clampf(absf(offset_fraction), 0.0, 1.0)
+	return 1.0 - r * r

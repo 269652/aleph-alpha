@@ -4,8 +4,9 @@ const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
 const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 
-## Stylized cartoon river water: flat colour bands, a bold darker bank
-## outline, and hard-edged white wave lines scrolling downstream. See
+## Stylized cartoon river water: the channel's CROSS-SECTION drawn as five
+## flat colour bands (light at the shallow edge, dark at the deep
+## centreline) with hard-edged white dashes scrolling downstream. See
 ## docs/concept/rivers.md's "Flow rendering" section.
 ##
 ## ART DIRECTION, and why it changed. Earlier passes chased photoreal water
@@ -21,15 +22,26 @@ const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_
 ##   * NO noise          -- there is not a single hash or value_noise call
 ##   * NO soft edges     -- every boundary is a step(), never a smoothstep()
 ## and positively:
-##   * flat body colour, quantised by real depth
-##   * one bold darker outline colour at the bank
-##   * two or three crisp white wave lines that scroll downstream
+##   * the channel's real parabolic cross-section, in flat bands
+##   * short crisp white dashes scrolling downstream, offset row to row
+##
+## The cross-section is what took this from "a flat slab of colour" to
+## something that reads as a channel -- and it is real, not decorative: a
+## natural riverbed genuinely IS roughly parabolic, deepest mid-stream (see
+## OpenChannelFlow.cross_channel_depth_fraction). Because the bands follow
+## distance from the centreline, they curve with the river.
+##
+## A separate dark BANK OUTLINE was tried and removed. Bank-ness is decided
+## per TILE, and one tile is tens of screen pixels at this camera zoom, so a
+## near-black outline colour did not draw a line -- it filled whole tiles,
+## ate half a four-tile channel and turned the river into a navy staircase.
+## The outermost cross-section band is the edge now, which cannot block up.
 ##
 ## The real physics still drives all of it -- this is a restyle of the
-## OUTPUT, not a retreat from the simulation. The colour band comes from the
-## real solved depth (so damming a river visibly darkens it), the wave lines
-## follow the real flow direction along the real course phase, and fast
-## reaches get an extra line.
+## OUTPUT, not a retreat from the simulation. The bands come from the real
+## solved depth through the real bed profile, the dashes follow the real
+## flow direction along the real course phase, and genuinely fast reaches
+## get a second mark.
 ##
 ## OPAQUE, unlike this project's other overlays. WaterShader/HillshadeShader
 ## deliberately stay translucent so what is underneath shows through, and
@@ -52,14 +64,13 @@ uniform float line_thickness = 0.16;
 uniform float fast_line_offset = 0.5;
 uniform float dash_row_px = 13.0;
 uniform float dash_coverage = 0.55;
-uniform float bank_darkening = 0.35;
-uniform vec3 shallow_color : source_color = vec3(0.35, 0.71, 0.76);
-uniform vec3 mid_color : source_color = vec3(0.18, 0.46, 0.62);
-uniform vec3 deep_color : source_color = vec3(0.10, 0.29, 0.48);
-uniform vec3 bank_color : source_color = vec3(0.09, 0.27, 0.44);
+uniform vec3 band0_color : source_color = vec3(0.46, 0.78, 0.80);
+uniform vec3 band1_color : source_color = vec3(0.32, 0.64, 0.74);
+uniform vec3 band2_color : source_color = vec3(0.21, 0.50, 0.66);
+uniform vec3 band3_color : source_color = vec3(0.14, 0.37, 0.56);
+uniform vec3 band4_color : source_color = vec3(0.09, 0.26, 0.45);
 uniform vec3 wave_color : source_color = vec3(0.93, 0.98, 1.0);
 uniform float packed_levels = 12.0;
-uniform float bank_levels = 2.0;
 uniform float speed_levels = 2.0;
 
 varying vec2 world_pos;
@@ -79,26 +90,24 @@ void fragment() {
 	vec2 flow_dir = normalize(data.gb * 2.0 - 1.0 + vec2(1e-6, 0.0));
 
 	float combined = floor(data.a * packed_levels);
-	float at_bank = mod(combined, bank_levels);
-	float is_fast = mod(floor(combined / bank_levels), speed_levels);
-	float depth_band = floor(combined / (bank_levels * speed_levels));
+	float is_fast = mod(combined, speed_levels);
+	float depth_band = floor(combined / speed_levels);
 
-	// Flat body colour by real depth -- three bands, hard-selected. No
-	// mixing between them: a gradient here is exactly what the art
-	// direction excludes.
-	vec3 body = shallow_color;
-	body = mix(body, mid_color, step(0.5, depth_band));
-	body = mix(body, deep_color, step(1.5, depth_band));
+	// The channel's CROSS-SECTION, in five flat bands: light at the shallow
+	// edge, darkening to the deep centreline. This is what makes a river
+	// read as a channel rather than a flat slab -- and it is real, not
+	// decorative, coming from the parabolic bed profile
+	// (OpenChannelFlow.cross_channel_depth_fraction). Because the bands
+	// follow distance from the centreline, they curve with the river.
+	//
+	// Hard-selected, never mixed between: a gradient here is exactly what
+	// the art direction excludes.
+	vec3 body = band0_color;
+	body = mix(body, band1_color, step(0.5, depth_band));
+	body = mix(body, band2_color, step(1.5, depth_band));
+	body = mix(body, band3_color, step(2.5, depth_band));
+	body = mix(body, band4_color, step(3.5, depth_band));
 
-	// The bank cell is drawn slightly darker -- but only slightly. An
-	// earlier pass used a near-black outline here and it was the single
-	// worst thing on screen: bank-ness is decided PER TILE, and one tile is
-	// tens of screen pixels at this camera zoom, so a "thin outline" became
-	// a solid dark block eating half the channel and turning the river into
-	// a staircase. A real thin outline needs per-PIXEL bank distance, which
-	// this layer does not carry (the water overlay beneath does -- see
-	// rivers.md). Until then it is a gentle darkening, not an outline.
-	body = mix(body, bank_color, at_bank * bank_darkening);
 
 	// Short DASHES, not continuous bands. The first attempt drew an
 	// unbroken line across the whole channel wherever the phase came round,
@@ -152,13 +161,6 @@ const LINE_THICKNESS := 0.13
 const DASH_ROW_PX := 13.0
 const DASH_COVERAGE := 0.55
 
-## How strongly a bank cell darkens. Deliberately partial: bank-ness is a
-## PER-TILE flag and a tile is tens of screen pixels at the game's camera
-## zoom, so a full-strength dark outline reads as a solid block rather than
-## a line (it was the worst artefact of the first attempt). See the
-## shader's own note.
-const BANK_DARKENING := 0.35
-
 ## Where the fast-water second line sits within the cycle -- half a cycle
 ## on, so the two lines are evenly spaced rather than crowding.
 const FAST_LINE_OFFSET := 0.5
@@ -167,10 +169,17 @@ const FAST_LINE_OFFSET := 0.5
 ## steps (HSV value 0.76 / 0.62 / 0.48 -- 0.14 apart) so the bands read as
 ## distinct choices rather than as a gradient someone forgot to smooth. Blue-teal throughout, darkening with depth, with the bank
 ## outline darker still than any water band so it reads as an outline.
-const SHALLOW_COLOR := Color(0.35, 0.71, 0.76)
-const MID_COLOR := Color(0.18, 0.46, 0.62)
-const DEEP_COLOR := Color(0.10, 0.29, 0.48)
-const BANK_COLOR := Color(0.09, 0.27, 0.44)
+## Five flat bands drawing the channel's cross-section, light at the
+## shallow edge through to dark at the deep centreline. Even steps in
+## brightness so the section reads as deliberate banding rather than a
+## gradient someone forgot to smooth.
+const BAND_COLORS: Array[Color] = [
+	Color(0.46, 0.78, 0.80),
+	Color(0.32, 0.64, 0.74),
+	Color(0.21, 0.50, 0.66),
+	Color(0.14, 0.37, 0.56),
+	Color(0.09, 0.26, 0.45),
+]
 const WAVE_COLOR := Color(0.93, 0.98, 1.0)
 
 ## Real current speed at or above which a reach gets its second wave line.
@@ -178,16 +187,6 @@ const WAVE_COLOR := Color(0.93, 0.98, 1.0)
 ## habitat guidance calls 0.3-0.5 m/s "good" flow for stream life, so 0.6
 ## is comfortably a visibly-moving river rather than a pond.
 const FAST_FLOW_M_S := 0.6
-
-## Depth band thresholds, in real metres -- and these carry real gameplay
-## meaning rather than being decorative. The first is
-## WaterMovementModel.WADE_DEPTH_METERS itself, so the colour tells you
-## whether you can wade across or must swim; the second is simply deeper
-## again. Reusing the existing movement threshold rather than inventing a
-## second one keeps what the player SEES and what the player CAN DO from
-## ever disagreeing.
-const MID_BAND_DEPTH_M := WaterMovementModel.WADE_DEPTH_METERS
-const DEEP_BAND_DEPTH_M := 3.0
 
 var _shared_material: ShaderMaterial
 
@@ -202,15 +201,11 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("line_thickness", LINE_THICKNESS)
 	material.set_shader_parameter("dash_row_px", DASH_ROW_PX)
 	material.set_shader_parameter("dash_coverage", DASH_COVERAGE)
-	material.set_shader_parameter("bank_darkening", BANK_DARKENING)
 	material.set_shader_parameter("fast_line_offset", FAST_LINE_OFFSET)
-	material.set_shader_parameter("shallow_color", SHALLOW_COLOR)
-	material.set_shader_parameter("mid_color", MID_COLOR)
-	material.set_shader_parameter("deep_color", DEEP_COLOR)
-	material.set_shader_parameter("bank_color", BANK_COLOR)
+	for i in BAND_COLORS.size():
+		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
 	material.set_shader_parameter("wave_color", WAVE_COLOR)
 	material.set_shader_parameter("packed_levels", float(ProceduralRiverFlowSprite.PACKED_LEVELS))
-	material.set_shader_parameter("bank_levels", float(ProceduralRiverFlowSprite.BANK_LEVELS))
 	material.set_shader_parameter("speed_levels", float(ProceduralRiverFlowSprite.SPEED_LEVELS))
 	return material
 
@@ -221,37 +216,21 @@ func shared_material() -> ShaderMaterial:
 	return _shared_material
 
 
-## Which flat colour band a real depth falls in: 0 wadeable, 1 swimmable,
-## 2 deep. See MID_BAND_DEPTH_M for why these are the movement thresholds
-## rather than decorative ones.
-static func depth_band_for(depth_m: float) -> int:
-	if depth_m >= DEEP_BAND_DEPTH_M:
-		return 2
-	if depth_m >= MID_BAND_DEPTH_M:
-		return 1
-	return 0
+## Which cross-section band a point across the channel falls in: 0 at the
+## shallow edge, DEPTH_BANDS-1 at the deep centreline.
+##
+## Banded by the cross-channel depth FRACTION rather than absolute metres,
+## so every river shows a real cross-section -- an absolute scale would
+## paint the whole Dreisam (0.31 m mean) a single colour and put the look
+## straight back to the flat slab this replaced.
+static func cross_section_band_for(depth_fraction: float) -> int:
+	var bands := ProceduralRiverFlowSprite.DEPTH_BANDS
+	return clampi(int(clampf(depth_fraction, 0.0, 0.999999) * bands), 0, bands - 1)
 
 
 ## Whether a real current is quick enough to earn the second wave line.
 static func is_fast_flow(velocity_m_s: float) -> bool:
 	return velocity_m_s >= FAST_FLOW_M_S
-
-
-## Whether a cell sits on the river's outer edge and should be drawn as the
-## bank outline. Derived from the cross-channel distance
-## RiverCatalog.nearest_river_at already computes and previously discarded,
-## so the outline costs no new geometry work at all.
-##
-## A hard boundary rather than a falloff, matching the art direction: the
-## outermost BANK_OUTLINE_FRACTION of the channel's half-width is outline,
-## everything inside it is water.
-const BANK_OUTLINE_FRACTION := 0.62
-
-
-static func is_bank_cell(distance_tiles: float, half_width_tiles: float) -> bool:
-	if half_width_tiles <= 0.0:
-		return false
-	return (distance_tiles / half_width_tiles) >= BANK_OUTLINE_FRACTION
 
 
 ## The CPU mirror of the shader's wave-line test, for headless testing:

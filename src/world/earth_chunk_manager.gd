@@ -3,6 +3,7 @@ extends RefCounted
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
+const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
 
@@ -3660,12 +3661,19 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				global.x, global.y,
 				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 			)
+			# Where this cell sits ACROSS the channel, through the real
+			# parabolic bed profile -- a natural riverbed is deepest
+			# mid-stream and shallows to its banks, so this is the river's
+			# real cross-section rather than a decorative gradient. It is
+			# what makes the water read as a channel instead of a slab.
+			var across := 0.0
+			if RiverCatalog.RIVER_HALF_WIDTH_TILES > 0.0:
+				across = nearest.distance_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 			var style_index := ProceduralRiverFlowSprite.style_index_for(
-				RiverFlowShader.depth_band_for(depth),
-				RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s),
-				RiverFlowShader.is_bank_cell(
-					nearest.distance_tiles, RiverCatalog.RIVER_HALF_WIDTH_TILES
-				)
+				RiverFlowShader.cross_section_band_for(
+					OpenChannelFlow.cross_channel_depth_fraction(across)
+				),
+				RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
 			)
 
 			# The continuous course phase -- without it the hard-edged wave

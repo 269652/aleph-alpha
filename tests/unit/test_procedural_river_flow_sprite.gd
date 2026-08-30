@@ -97,19 +97,17 @@ func test_phase_for_bin_round_trips():
 
 # -- style packing ----------------------------------------------------------
 #
-# The three coarse per-cell style values share ONE atlas dimension and ONE
+# The two coarse per-cell style values share ONE atlas dimension and ONE
 # channel. They must survive the round trip exactly, or a cell would render
-# with another cell's depth, speed or bank flag.
+# with another cell's cross-section band or speed.
 
 func test_every_style_combination_round_trips_through_the_alpha_channel():
-	for depth in ProceduralRiverFlowSprite.DEPTH_BANDS:
+	for band in ProceduralRiverFlowSprite.DEPTH_BANDS:
 		for fast in [false, true]:
-			for bank in [false, true]:
-				var index := ProceduralRiverFlowSprite.style_index_for(depth, fast, bank)
-				var alpha := ProceduralRiverFlowSprite.alpha_for_style(index)
-				assert_eq(ProceduralRiverFlowSprite.unpack_depth_band(alpha), depth)
-				assert_eq(ProceduralRiverFlowSprite.unpack_is_fast(alpha), fast)
-				assert_eq(ProceduralRiverFlowSprite.unpack_at_bank(alpha), bank)
+			var index := ProceduralRiverFlowSprite.style_index_for(band, fast)
+			var alpha := ProceduralRiverFlowSprite.alpha_for_style(index)
+			assert_eq(ProceduralRiverFlowSprite.unpack_depth_band(alpha), band)
+			assert_eq(ProceduralRiverFlowSprite.unpack_is_fast(alpha), fast)
 
 
 ## And it must survive the 8-BIT quantisation an actual baked tile applies,
@@ -126,13 +124,18 @@ func test_the_style_survives_real_eight_bit_quantisation():
 
 func test_every_style_index_is_unique():
 	var seen := {}
-	for depth in ProceduralRiverFlowSprite.DEPTH_BANDS:
+	for band in ProceduralRiverFlowSprite.DEPTH_BANDS:
 		for fast in [false, true]:
-			for bank in [false, true]:
-				var index := ProceduralRiverFlowSprite.style_index_for(depth, fast, bank)
-				assert_false(seen.has(index), "style index collision at %d" % index)
-				seen[index] = true
+			var index := ProceduralRiverFlowSprite.style_index_for(band, fast)
+			assert_false(seen.has(index), "style index collision at %d" % index)
+			seen[index] = true
 	assert_eq(seen.size(), ProceduralRiverFlowSprite.PACKED_LEVELS)
+
+
+## Five bands is what draws a channel's cross-section; three was too coarse
+## to describe a shape across a four-tile river.
+func test_there_are_enough_bands_to_draw_a_cross_section():
+	assert_gte(ProceduralRiverFlowSprite.DEPTH_BANDS, 5)
 
 
 # -- atlas packing ----------------------------------------------------------

@@ -35,22 +35,30 @@ const SIZE := 32
 const PHASE_BINS := 12
 const DIRECTION_BINS := 16
 
-## Flat colour bands, by real depth -- three because they carry a real
-## gameplay meaning rather than a decorative gradient (wadeable, swimmable,
-## deep; see RiverFlowShader.depth_band_for).
-const DEPTH_BANDS := 3
+## Flat colour bands ACROSS the channel, from its shallow edge to its deep
+## centreline. Five rather than three because these draw the river's
+## CROSS-SECTION -- the thing that makes it read as a channel rather than a
+## flat slab -- and three steps across a four-tile river is too coarse to
+## describe a shape.
+##
+## Banded by the cross-channel depth FRACTION, not by absolute metres: a
+## small stream and a great river must both show structure, and an absolute
+## scale would paint the whole Dreisam a single colour.
+const DEPTH_BANDS := 5
 
-## 12 phase * 16 direction * 12 style = 2304 tiles, laid out as a 2D grid.
-## A single row would be 73,728 px wide, vastly past the 16,384
+## 12 phase * 16 direction * 10 style = 1920 tiles, laid out as a 2D grid.
+## A single row would be 61,440 px wide, vastly past the 16,384
 ## GL_MAX_TEXTURE_SIZE common on the integrated GPUs this game targets.
 ## At 48 columns the atlas is 1536x1536 -- measured cheap to build.
 const ATLAS_COLUMNS := 48
 
-## Both flags are binary on purpose. The bank outline is a hard-edged line,
-## not a shaded falloff -- levels between "outline" and "not outline" would
-## be exactly the gradient this art direction excludes -- and speed reads as
-## "an extra wave line or not" rather than as a continuum.
-const BANK_LEVELS := 2
+## Speed reads as "an extra wave mark or not" rather than as a continuum.
+##
+## The separate bank flag is GONE: it used to paint a whole tile near-black
+## and, because bank-ness is decided per tile and a tile is tens of screen
+## pixels, that read as a solid block eating half the channel rather than an
+## outline. The outermost cross-section band now IS the channel's edge, which
+## needs no extra dimension and cannot block up.
 const SPEED_LEVELS := 2
 
 
@@ -72,7 +80,7 @@ static func angle_for_bin(bin: int) -> float:
 
 
 ## Total distinct values the alpha channel carries.
-const PACKED_LEVELS := DEPTH_BANDS * SPEED_LEVELS * BANK_LEVELS
+const PACKED_LEVELS := DEPTH_BANDS * SPEED_LEVELS
 
 
 static func unpack_combined(packed: float) -> int:
@@ -80,15 +88,11 @@ static func unpack_combined(packed: float) -> int:
 
 
 static func unpack_depth_band(packed: float) -> int:
-	return unpack_combined(packed) / (SPEED_LEVELS * BANK_LEVELS)
+	return unpack_combined(packed) / SPEED_LEVELS
 
 
 static func unpack_is_fast(packed: float) -> bool:
-	return (unpack_combined(packed) / BANK_LEVELS) % SPEED_LEVELS == 1
-
-
-static func unpack_at_bank(packed: float) -> bool:
-	return unpack_combined(packed) % BANK_LEVELS == 1
+	return unpack_combined(packed) % SPEED_LEVELS == 1
 
 
 ## Flat index of a (phase, direction) combination, and its position in the
@@ -100,9 +104,8 @@ static func atlas_index_for(phase_bin: int, direction_bin: int, style_index: int
 
 ## The style index a (depth band, fast flag, bank flag) triple maps to --
 ## the single atlas dimension all three share.
-static func style_index_for(depth_band: int, is_fast: bool, at_bank: bool) -> int:
-	var depth := clampi(depth_band, 0, DEPTH_BANDS - 1)
-	return depth * SPEED_LEVELS * BANK_LEVELS + (1 if is_fast else 0) * BANK_LEVELS + (1 if at_bank else 0)
+static func style_index_for(depth_band: int, is_fast: bool) -> int:
+	return clampi(depth_band, 0, DEPTH_BANDS - 1) * SPEED_LEVELS + (1 if is_fast else 0)
 
 
 ## The alpha value a style index bakes to -- the centre of its slot, so
