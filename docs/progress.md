@@ -7345,6 +7345,20 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: the pale wash and the too-many strokes** (small) — ✅ Done —
+  reported: "now there are too many and the straight sections now show a
+  pale blue color without currents". One root cause for the wash: the
+  contour levels sat at n = m/count, which INCLUDES the 0 and 1 rails the
+  gain clamp pegs saturated field regions to -- every saturated plateau
+  rendered as one solid stroke-coloured fill. Levels moved to half-steps
+  ((m+0.5)/count) so the rails can never be stroke levels, pinned by
+  stroke_mask(0)==stroke_mask(1)==0. "Too many": the fast flag widened
+  strokes x1.6 and big rivers are fast nearly everywhere, near-doubling
+  coverage -- fast now brightens instead of widening. Coverage band
+  retargeted 6-20%; the blank-water pin reformalized in 2D (no water
+  point farther than 6 noise cells from a stroke in any direction --
+  the 1D transect version overstated gaps that a stroke one cell to the
+  side fills perceptually). Shader suite 64 + GPU smoke green.
 - **Rivers: currents everywhere** (small) — ✅ Done — reported: "most of
   the stream doesnt show any currents and looks like its not flowing".
   The two fixed contour levels fired only where the field happened to

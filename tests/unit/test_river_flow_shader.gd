@@ -782,11 +782,26 @@ func test_the_body_cels_are_static_depth_only():
 ## the moving surface. Two fixed levels were tried first and most of the
 ## channel simply never crossed them: long flat stretches with no stroke
 ## at all, reported as "most of the stream doesnt show any currents".
+##
+## The levels sit at HALF-steps -- (m + 0.5) / count -- and that offset is
+## load-bearing: at whole steps the level set includes 0 and 1, exactly
+## the values the gain clamp pegs saturated field regions to, and every
+## such plateau rendered as one SOLID stroke-coloured fill ("the straight
+## sections now show a pale blue color without currents").
 func test_the_wave_strokes_are_periodic_contours_of_the_field():
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("fract(n * line_count + 0.5)"),
-		"strokes must fire at every level crossing, not at one or two"
+		RiverFlowShader.SHADER_CODE.contains("fract(n * line_count) - 0.5"),
+		"strokes must fire at half-step level crossings"
 	)
+
+
+## THE wash pin: the clamp rails must never be stroke levels. A saturated
+## plateau of the field draws NO stroke -- quiet water, not a pale film.
+func test_the_clamp_rails_are_not_stroke_levels():
+	assert_lt(RiverFlowShader.stroke_mask(0.0, false), 0.05)
+	assert_lt(RiverFlowShader.stroke_mask(1.0, false), 0.05)
+	assert_lt(RiverFlowShader.stroke_mask(0.0, true), 0.05)
+	assert_lt(RiverFlowShader.stroke_mask(1.0, true), 0.05)
 
 
 ## Smooth lines need a smooth field: the fine detail octave is gone from
@@ -815,36 +830,58 @@ func test_wave_strokes_cover_a_readable_fraction_of_the_water():
 			count += 1
 	var coverage := float(covered) / float(count)
 	assert_between(
-		coverage, 0.10, 0.30,
+		coverage, 0.06, 0.20,
 		"strokes cover %.1f%% of the water" % (coverage * 100.0)
 	)
 
 
 ## THE complaint, pinned directly: "most of the stream doesnt show any
-## currents". Walking a long transect down the water, the longest stretch
-## with no stroke at all must stay short -- a reader should never see a
-## screenfull of blank water.
-func test_no_wide_stretch_of_water_lacks_strokes():
-	var longest_gap := 0
-	for row in 4:
-		var py := 6.0 + float(row) * 5.7
-		var gap := 0
-		for i in range(400):
+## currents". Formalized in 2D, the way a viewer actually reads water: no
+## water point may sit far from the NEAREST stroke in any direction. (A
+## 1D transect version came first and overstated gaps -- a stroke a cell
+## or two to the side fills a downstream gap perceptually, and the
+## saturated plateaus that break a 1D walk are always flanked by strokes
+## on their slopes.)
+func test_every_water_point_is_near_a_current_mark():
+	var step := 0.5
+	var cols := 160
+	var rows := 44
+	var marked: Array[bool] = []
+	marked.resize(cols * rows)
+	for j in range(rows):
+		for i in range(cols):
 			var n := RiverFlowShader.animated_field_value(
-				float(i) * 0.5, py, Vector2(1, 0), 1.1
+				float(i) * step, float(j) * step, Vector2(1, 0), 1.1
 			)
-			if RiverFlowShader.stroke_mask(n, false) > 0.5:
-				gap = 0
-			else:
-				gap += 1
-				longest_gap = maxi(longest_gap, gap)
-	# 400 samples x 0.5 cells: a gap of 40 samples is 20 noise cells --
-	# 250 world px, about one and a half screens of a channel's width,
-	# and roughly three stroke lengths.
-	assert_lt(
-		longest_gap, 40,
-		"a %d-sample stretch (%.0f cells) of water shows no current at all"
-			% [longest_gap, float(longest_gap) * 0.5]
+			marked[j * cols + i] = RiverFlowShader.stroke_mask(n, false) > 0.5
+	# For every unmarked interior point, the nearest marked point within a
+	# window must exist -- window radius IS the bound, in cells.
+	var radius_cells := 6.0
+	var window := int(ceil(radius_cells / step))
+	var worst_ok := true
+	var worst_at := Vector2i.ZERO
+	for j in range(window, rows - window):
+		for i in range(window, cols - window):
+			if marked[j * cols + i]:
+				continue
+			var found := false
+			for dj in range(-window, window + 1):
+				for di in range(-window, window + 1):
+					if marked[(j + dj) * cols + (i + di)]:
+						found = true
+						break
+				if found:
+					break
+			if not found:
+				worst_ok = false
+				worst_at = Vector2i(i, j)
+				break
+		if not worst_ok:
+			break
+	assert_true(
+		worst_ok,
+		"water at %s cells has no current mark within %.0f cells in any direction"
+			% [Vector2(worst_at) * step, radius_cells]
 	)
 
 
@@ -859,23 +896,28 @@ func test_strokes_fire_at_several_distinct_levels():
 				float(i) * 0.47, float(j) * 0.61, Vector2(1, 0), 0.4
 			)
 			if RiverFlowShader.stroke_mask(n, false) > 0.5:
-				levels[int(floor(n * RiverFlowShader.LINE_COUNT + 0.5))] = true
+				levels[int(floor(n * RiverFlowShader.LINE_COUNT))] = true
 	assert_gte(levels.size(), 3, "only %d contour levels ever fire" % levels.size())
 
 
-## Fast reaches draw heavier strokes -- speed must still read somewhere now
-## that the body is static.
-func test_fast_reaches_draw_heavier_strokes():
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("line_width * mix(1.0, 1.6, is_fast)"),
-		"the stroke width must widen on genuinely fast water"
+## Fast reaches draw BRIGHTER strokes, not wider ones. Widening was tried
+## (x1.6) and on a big river -- where nearly every cell is genuinely fast
+## -- it nearly doubled the coverage everywhere: "now there are too many".
+## Width changes how much water the marks eat; brightness changes only how
+## hard they read.
+func test_fast_reaches_draw_brighter_not_wider_strokes():
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("line_width * mix"),
+		"the stroke width must not scale with the fast flag"
 	)
-	# Just off a contour level, the wider fast stroke still covers the
-	# point while the normal one has already faded.
-	var near_level := (0.5 + 0.5) / RiverFlowShader.LINE_COUNT + RiverFlowShader.LINE_WIDTH * 0.7
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("mix(0.8, 1.1, is_fast)"),
+		"fast water must brighten the strokes instead"
+	)
+	var on_level := 0.5 / RiverFlowShader.LINE_COUNT
 	assert_gt(
-		RiverFlowShader.stroke_mask(near_level, true),
-		RiverFlowShader.stroke_mask(near_level, false)
+		RiverFlowShader.stroke_mask(on_level, true),
+		RiverFlowShader.stroke_mask(on_level, false)
 	)
 
 

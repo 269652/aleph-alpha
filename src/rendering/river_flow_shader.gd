@@ -55,13 +55,13 @@ uniform float dither_strength = 0.5;
 uniform float ink_width = 0.06;
 uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
 uniform float line_count = 4.0;
-uniform float line_width = 0.028;
+uniform float line_width = 0.020;
 uniform float line_strength = 0.7;
 uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
 uniform float shore_pos = 0.88;
 uniform float shore_width = 0.025;
 uniform float smear_spacing = 0.8;
-uniform float smear_gain = 2.1;
+uniform float smear_gain = 2.0;
 uniform float turbulence_strength = 1.4;
 uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.5;
@@ -252,12 +252,19 @@ void fragment() {
 	// long blank stretches, reported as "most of the stream doesnt show
 	// any currents". Level parity alternates the ink strength for a
 	// hand-drawn unevenness.
-	float stroke_width = line_width * mix(1.0, 1.6, is_fast);
-	float level_frac = fract(n * line_count + 0.5) - 0.5;
+	// Levels at HALF-steps -- (m + 0.5) / count -- never at whole steps:
+	// whole steps include 0 and 1, exactly where the gain clamp pegs
+	// saturated field regions, and every such plateau rendered as one
+	// SOLID stroke-coloured fill (the reported pale structureless wash on
+	// straight reaches). At half-steps a saturated plateau simply draws
+	// no stroke: quiet water. Fast reaches brighten the strokes rather
+	// than widening them -- widening nearly doubled coverage on big
+	// rivers, where almost every cell is genuinely fast.
+	float level_frac = fract(n * line_count) - 0.5;
 	float dist_n = abs(level_frac) / line_count;
-	float stroke = 1.0 - smoothstep(stroke_width * 0.5, stroke_width, dist_n);
-	float parity = mod(floor(n * line_count + 0.5), 2.0);
-	float wave = stroke * mix(0.75, 1.0, parity);
+	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
+	float parity = mod(floor(n * line_count), 2.0);
+	float wave = stroke * mix(0.75, 1.0, parity) * mix(0.8, 1.1, is_fast);
 	body = mix(body, line_color, wave * line_strength);
 
 	// The SHORE HIGHLIGHT: one constant pale line tracing the bank just
@@ -330,7 +337,7 @@ const NOISE_SCALE := 0.08
 ## same tests that pinned the old field.
 const SMEAR_TAPS := 9
 const SMEAR_SPACING := 0.7
-const SMEAR_GAIN := 2.6
+const SMEAR_GAIN := 2.0
 
 ## One ART pixel, in world px -- TILE_SIZE world px carry ART_TILE_SIZE art
 ## px, so this is their ratio, pinned against TerrainRenderer rather than
@@ -395,7 +402,7 @@ const BANK_FEATHER := 0.03
 ## sides, and a transect test caps the longest strokeless stretch -- the
 ## direct pin of "most of the stream doesnt show any currents".
 const LINE_COUNT := 4.0
-const LINE_WIDTH := 0.028
+const LINE_WIDTH := 0.020
 const LINE_STRENGTH := 0.7
 const LINE_COLOR := Color(0.85, 0.97, 1.0)
 
@@ -500,12 +507,11 @@ static func bank_alpha(across_magnitude: float) -> float:
 ## lands inside either contour family. What the coverage, morphing and
 ## fast-reach tests all measure.
 static func stroke_mask(n: float, is_fast: bool) -> float:
-	var width := LINE_WIDTH * (1.6 if is_fast else 1.0)
-	var level_frac := fposmod(n * LINE_COUNT + 0.5, 1.0) - 0.5
+	var level_frac := fposmod(n * LINE_COUNT, 1.0) - 0.5
 	var dist_n := absf(level_frac) / LINE_COUNT
-	var stroke := 1.0 - smoothstep(width * 0.5, width, dist_n)
-	var parity := fposmod(floor(n * LINE_COUNT + 0.5), 2.0)
-	return stroke * lerpf(0.75, 1.0, parity)
+	var stroke := 1.0 - smoothstep(LINE_WIDTH * 0.5, LINE_WIDTH, dist_n)
+	var parity := fposmod(floor(n * LINE_COUNT), 2.0)
+	return stroke * lerpf(0.75, 1.0, parity) * (1.1 if is_fast else 0.8)
 
 
 ## The cel quantizer, mirroring the shader exactly: shade in [0, 1],
