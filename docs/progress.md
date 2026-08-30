@@ -7345,6 +7345,16 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: currents everywhere** (small) — ✅ Done — reported: "most of
+  the stream doesnt show any currents and looks like its not flowing".
+  The two fixed contour levels fired only where the field happened to
+  cross them; most of the channel never did. Strokes are now PERIODIC
+  contours -- a line at every one of LINE_COUNT evenly spaced levels, a
+  topographic map of the moving surface, with parity-alternating ink for
+  hand-drawn unevenness. Pinned directly against the complaint: a
+  4-transect sweep caps the longest strokeless stretch (< 20 noise cells,
+  ~250 world px), plus a from-both-sides coverage band (10-30%) and a
+  several-distinct-levels check. Shader suite 63 + GPU smoke green.
 - **Rivers: strokes not shading** (medium) — ✅ Done — reported: "still
   looks like a gas animation and not stylized illustrated smooth lines
   morphing 16bit". Exact diagnosis: field-shaded fragments = amorphous

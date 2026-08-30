@@ -1113,7 +1113,10 @@ amorphous drifting patches: vapour. Illustrated water is the opposite:
 - **The body is STATIC** — flat cels of pure reconstructed depth, dithered
   at their (static) boundaries. No field term in the body shade at all.
 - **All motion lives in drawn WAVE STROKES**: each stroke is a CONTOUR
-  (level set) of the smooth advected field. A level set of a smooth field
+  (level set) of the smooth advected field -- PERIODIC contours at every
+  one of LINE_COUNT evenly spaced levels (two fixed levels left most of
+  the channel blank: "most of the stream doesnt show any currents"), with
+  a transect test capping the longest strokeless stretch. A level set of a smooth field
   is by construction a smooth curve; because the field underneath advects,
   crossfades and bends through the standing eddies, the strokes snake,
   merge and split — morphing wave lines, drawn rather than shaded. Two

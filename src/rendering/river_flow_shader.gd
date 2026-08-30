@@ -54,9 +54,8 @@ uniform float cel_levels = 6.0;
 uniform float dither_strength = 0.5;
 uniform float ink_width = 0.06;
 uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
-uniform float line_level_a = 0.60;
-uniform float line_level_b = 0.80;
-uniform float line_width = 0.05;
+uniform float line_count = 4.0;
+uniform float line_width = 0.028;
 uniform float line_strength = 0.7;
 uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
 uniform float shore_pos = 0.88;
@@ -245,12 +244,20 @@ void fragment() {
 	// smooth field is by construction a smooth curve, and because the
 	// field underneath advects, crossfades and bends through the standing
 	// eddies, the strokes snake, merge and split -- morphing illustrated
-	// wave lines. Two families: the main lines and a sparser, thinner
-	// highlight set that twinkles in and out on the crests.
+	// wave lines.
+	//
+	// PERIODIC contours -- a line at every one of line_count evenly spaced
+	// levels, a topographic map of the moving surface. Two fixed levels
+	// were tried first and most of the channel simply never crossed them:
+	// long blank stretches, reported as "most of the stream doesnt show
+	// any currents". Level parity alternates the ink strength for a
+	// hand-drawn unevenness.
 	float stroke_width = line_width * mix(1.0, 1.6, is_fast);
-	float stroke_a = 1.0 - smoothstep(stroke_width * 0.5, stroke_width, abs(n - line_level_a));
-	float stroke_b = 1.0 - smoothstep(stroke_width * 0.3, stroke_width * 0.7, abs(n - line_level_b));
-	float wave = max(stroke_a, stroke_b * 0.85);
+	float level_frac = fract(n * line_count + 0.5) - 0.5;
+	float dist_n = abs(level_frac) / line_count;
+	float stroke = 1.0 - smoothstep(stroke_width * 0.5, stroke_width, dist_n);
+	float parity = mod(floor(n * line_count + 0.5), 2.0);
+	float wave = stroke * mix(0.75, 1.0, parity);
 	body = mix(body, line_color, wave * line_strength);
 
 	// The SHORE HIGHLIGHT: one constant pale line tracing the bank just
@@ -382,13 +389,13 @@ const TILE_PX := 16.0
 ## clipped by the last painted cell and the straight edge returns.
 const BANK_FEATHER := 0.03
 
-## The wave strokes: two contour levels of the advected field (the main
-## family and a sparser highlight set), stroke width in field units, and
-## the pale ink they are drawn with. Coverage is held to a measured sparse
-## band -- strokes on flat water, not a field of patches.
-const LINE_LEVEL_A := 0.60
-const LINE_LEVEL_B := 0.80
-const LINE_WIDTH := 0.05
+## The wave strokes: periodic contours at LINE_COUNT evenly spaced levels
+## of the advected field, stroke half-width in field units, and the pale
+## ink they are drawn with. Coverage is held to a measured band from both
+## sides, and a transect test caps the longest strokeless stretch -- the
+## direct pin of "most of the stream doesnt show any currents".
+const LINE_COUNT := 4.0
+const LINE_WIDTH := 0.028
 const LINE_STRENGTH := 0.7
 const LINE_COLOR := Color(0.85, 0.97, 1.0)
 
@@ -447,8 +454,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
 	material.set_shader_parameter("tile_px", TILE_PX)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
-	material.set_shader_parameter("line_level_a", LINE_LEVEL_A)
-	material.set_shader_parameter("line_level_b", LINE_LEVEL_B)
+	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("line_width", LINE_WIDTH)
 	material.set_shader_parameter("line_strength", LINE_STRENGTH)
 	material.set_shader_parameter("line_color", LINE_COLOR)
@@ -495,9 +501,11 @@ static func bank_alpha(across_magnitude: float) -> float:
 ## fast-reach tests all measure.
 static func stroke_mask(n: float, is_fast: bool) -> float:
 	var width := LINE_WIDTH * (1.6 if is_fast else 1.0)
-	var a := 1.0 - smoothstep(width * 0.5, width, absf(n - LINE_LEVEL_A))
-	var b := 1.0 - smoothstep(width * 0.3, width * 0.7, absf(n - LINE_LEVEL_B))
-	return maxf(a, b * 0.85)
+	var level_frac := fposmod(n * LINE_COUNT + 0.5, 1.0) - 0.5
+	var dist_n := absf(level_frac) / LINE_COUNT
+	var stroke := 1.0 - smoothstep(width * 0.5, width, dist_n)
+	var parity := fposmod(floor(n * LINE_COUNT + 0.5), 2.0)
+	return stroke * lerpf(0.75, 1.0, parity)
 
 
 ## The cel quantizer, mirroring the shader exactly: shade in [0, 1],

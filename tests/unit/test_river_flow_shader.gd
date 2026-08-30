@@ -35,7 +35,7 @@ func test_default_uniforms_match_the_tuned_constants():
 	assert_eq(material.get_shader_parameter("advect_rate"), RiverFlowShader.ADVECT_RATE)
 	assert_eq(material.get_shader_parameter("advect_strength"), RiverFlowShader.ADVECT_STRENGTH)
 	assert_eq(material.get_shader_parameter("noise_scale"), RiverFlowShader.NOISE_SCALE)
-	assert_eq(material.get_shader_parameter("line_level_a"), RiverFlowShader.LINE_LEVEL_A)
+	assert_eq(material.get_shader_parameter("line_count"), RiverFlowShader.LINE_COUNT)
 	assert_eq(material.get_shader_parameter("line_width"), RiverFlowShader.LINE_WIDTH)
 	assert_eq(material.get_shader_parameter("shore_pos"), RiverFlowShader.SHORE_POS)
 	assert_eq(material.get_shader_parameter("band0_color"), RiverFlowShader.BAND_COLORS[0])
@@ -777,11 +777,16 @@ func test_the_body_cels_are_static_depth_only():
 	)
 
 
-## The strokes are contours of the advected field -- structural, both
-## families.
-func test_the_wave_strokes_are_contours_of_the_advected_field():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("abs(n - line_level_a)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("abs(n - line_level_b)"))
+## The strokes are PERIODIC contours of the advected field -- a line at
+## every one of LINE_COUNT evenly spaced levels, like a topographic map of
+## the moving surface. Two fixed levels were tried first and most of the
+## channel simply never crossed them: long flat stretches with no stroke
+## at all, reported as "most of the stream doesnt show any currents".
+func test_the_wave_strokes_are_periodic_contours_of_the_field():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("fract(n * line_count + 0.5)"),
+		"strokes must fire at every level crossing, not at one or two"
+	)
 
 
 ## Smooth lines need a smooth field: the fine detail octave is gone from
@@ -794,9 +799,10 @@ func test_the_contour_field_is_one_smooth_scale():
 	)
 
 
-## Sparse: strokes on flat water, not a field of patches. Coverage of the
-## stroke mask over the real animated field, measured.
-func test_wave_strokes_cover_a_sparse_fraction_of_the_water():
+## Strokes on flat water, not a field of patches -- but dense enough that
+## the water everywhere carries current marks. Coverage of the stroke mask
+## over the real animated field, measured.
+func test_wave_strokes_cover_a_readable_fraction_of_the_water():
 	var covered := 0
 	var count := 0
 	for i in range(80):
@@ -809,26 +815,52 @@ func test_wave_strokes_cover_a_sparse_fraction_of_the_water():
 			count += 1
 	var coverage := float(covered) / float(count)
 	assert_between(
-		coverage, 0.04, 0.18,
+		coverage, 0.10, 0.30,
 		"strokes cover %.1f%% of the water" % (coverage * 100.0)
 	)
 
 
-## Both stroke families must genuinely fire somewhere.
-func test_both_stroke_families_appear():
-	var seen_a := false
-	var seen_b := false
-	for i in range(120):
-		for j in range(40):
+## THE complaint, pinned directly: "most of the stream doesnt show any
+## currents". Walking a long transect down the water, the longest stretch
+## with no stroke at all must stay short -- a reader should never see a
+## screenfull of blank water.
+func test_no_wide_stretch_of_water_lacks_strokes():
+	var longest_gap := 0
+	for row in 4:
+		var py := 6.0 + float(row) * 5.7
+		var gap := 0
+		for i in range(400):
 			var n := RiverFlowShader.animated_field_value(
-				float(i) * 0.53, float(j) * 0.47, Vector2(1, 0), 0.3
+				float(i) * 0.5, py, Vector2(1, 0), 1.1
 			)
-			if absf(n - RiverFlowShader.LINE_LEVEL_A) < RiverFlowShader.LINE_WIDTH * 0.5:
-				seen_a = true
-			if absf(n - RiverFlowShader.LINE_LEVEL_B) < RiverFlowShader.LINE_WIDTH * 0.4:
-				seen_b = true
-	assert_true(seen_a, "the main wave-line family never fires")
-	assert_true(seen_b, "the sparse highlight family never fires")
+			if RiverFlowShader.stroke_mask(n, false) > 0.5:
+				gap = 0
+			else:
+				gap += 1
+				longest_gap = maxi(longest_gap, gap)
+	# 400 samples x 0.5 cells: a gap of 40 samples is 20 noise cells --
+	# 250 world px, about one and a half screens of a channel's width,
+	# and roughly three stroke lengths.
+	assert_lt(
+		longest_gap, 40,
+		"a %d-sample stretch (%.0f cells) of water shows no current at all"
+			% [longest_gap, float(longest_gap) * 0.5]
+	)
+
+
+## Several distinct contour levels must actually fire across the field
+## range -- one level firing repeatedly is the old two-level failure with
+## extra steps.
+func test_strokes_fire_at_several_distinct_levels():
+	var levels := {}
+	for i in range(200):
+		for j in range(30):
+			var n := RiverFlowShader.animated_field_value(
+				float(i) * 0.47, float(j) * 0.61, Vector2(1, 0), 0.4
+			)
+			if RiverFlowShader.stroke_mask(n, false) > 0.5:
+				levels[int(floor(n * RiverFlowShader.LINE_COUNT + 0.5))] = true
+	assert_gte(levels.size(), 3, "only %d contour levels ever fire" % levels.size())
 
 
 ## Fast reaches draw heavier strokes -- speed must still read somewhere now
@@ -838,8 +870,13 @@ func test_fast_reaches_draw_heavier_strokes():
 		RiverFlowShader.SHADER_CODE.contains("line_width * mix(1.0, 1.6, is_fast)"),
 		"the stroke width must widen on genuinely fast water"
 	)
-	assert_gt(RiverFlowShader.stroke_mask(RiverFlowShader.LINE_LEVEL_A + RiverFlowShader.LINE_WIDTH * 0.7, true),
-		RiverFlowShader.stroke_mask(RiverFlowShader.LINE_LEVEL_A + RiverFlowShader.LINE_WIDTH * 0.7, false))
+	# Just off a contour level, the wider fast stroke still covers the
+	# point while the normal one has already faded.
+	var near_level := (0.5 + 0.5) / RiverFlowShader.LINE_COUNT + RiverFlowShader.LINE_WIDTH * 0.7
+	assert_gt(
+		RiverFlowShader.stroke_mask(near_level, true),
+		RiverFlowShader.stroke_mask(near_level, false)
+	)
 
 
 ## The strokes MORPH: the same world points must show a meaningfully
