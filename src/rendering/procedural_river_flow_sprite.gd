@@ -4,9 +4,8 @@ extends RefCounted
 ## "bake a data channel into a texture, sample it as data in the fragment
 ## shader" shape. See docs/concept/rivers.md's "Flow rendering" section.
 ##
-## Four channels:
-##   R  wrapped streak phase   -- the continuous phase potential along the
-##                               river's own course (see RiverPhaseField).
+## Channels:
+##   R  unused                 -- see the phase note below
 ##   G  flow direction x       -- as a VECTOR COMPONENT, not a bearing
 ##   B  flow direction y       -- ditto
 ##   A  packed (depth band, fast flag, bank proximity) -- see pack_edge()
@@ -27,12 +26,21 @@ extends RefCounted
 const SIZE := 32
 
 ## Quantisation of each baked dimension. Total atlas tiles is the product,
-## so these are a real budget.
+## so these are a real budget -- and a dimension the shader does not read is
+## paid for in full and returns nothing.
 ##
-## PHASE_BINS trades directly against quality: the phase is continuous in
-## principle, and binning to 12 caps the worst seam between neighbouring
-## tiles at 1/24 of a cycle.
-const PHASE_BINS := 12
+## There used to be a third dimension here: a 12-bin scrolling PHASE, baked
+## per tile so the old streak pattern would not break at tile edges. The
+## switch to two-phase flow-map advection removed the need for it entirely,
+## because the shader now advects continuously over TIME on the GPU and
+## needs no baked phase at all.
+##
+## Keeping it would have been actively harmful, not merely wasteful: a
+## per-tile offset applied to a NOISE field makes the noise jump at every
+## tile boundary -- a grid of seams straight across the river. World
+## position already decorrelates every reach continuously and for free.
+##
+## Dropping it took the atlas from 1920 tiles to 160.
 const DIRECTION_BINS := 16
 
 ## Flat colour bands ACROSS the channel, from its shallow edge to its deep
@@ -46,10 +54,10 @@ const DIRECTION_BINS := 16
 ## scale would paint the whole Dreisam a single colour.
 const DEPTH_BANDS := 5
 
-## 12 phase * 16 direction * 10 style = 1920 tiles, laid out as a 2D grid.
-## A single row would be 61,440 px wide, vastly past the 16,384
-## GL_MAX_TEXTURE_SIZE common on the integrated GPUs this game targets.
-## At 48 columns the atlas is 1536x1536 -- measured cheap to build.
+## 16 direction * 10 style = 160 tiles, laid out as a 2D grid. A single row
+## would be 5,120 px wide -- within the 16,384 GL_MAX_TEXTURE_SIZE common on
+## the integrated GPUs this game targets, but a grid keeps headroom if a
+## dimension is ever added back. At 48 columns the atlas is 1536x128.
 const ATLAS_COLUMNS := 48
 
 ## Speed reads as "an extra wave mark or not" rather than as a continuum.
@@ -60,14 +68,6 @@ const ATLAS_COLUMNS := 48
 ## outline. The outermost cross-section band now IS the channel's edge, which
 ## needs no extra dimension and cannot block up.
 const SPEED_LEVELS := 2
-
-
-static func phase_bin_for(wrapped_phase: float) -> int:
-	return int(clampf(fposmod(wrapped_phase, 1.0), 0.0, 0.999999) * PHASE_BINS)
-
-
-static func phase_for_bin(bin: int) -> float:
-	return (float(bin) + 0.5) / float(PHASE_BINS)
 
 
 static func direction_bin_for(angle_deg: float) -> int:
@@ -95,11 +95,11 @@ static func unpack_is_fast(packed: float) -> bool:
 	return unpack_combined(packed) % SPEED_LEVELS == 1
 
 
-## Flat index of a (phase, direction) combination, and its position in the
+## Flat index of a (direction, style) combination, and its position in the
 ## 2D atlas grid. One function owns the packing so the tile-set builder and
 ## the per-cell lookup can never disagree about it.
-static func atlas_index_for(phase_bin: int, direction_bin: int, style_index: int) -> int:
-	return (style_index * PHASE_BINS * DIRECTION_BINS) + (phase_bin * DIRECTION_BINS) + direction_bin
+static func atlas_index_for(direction_bin: int, style_index: int) -> int:
+	return (style_index * DIRECTION_BINS) + direction_bin
 
 
 ## The style index a (depth band, fast flag, bank flag) triple maps to --
@@ -119,22 +119,22 @@ static func atlas_cell_for_index(index: int) -> Vector2i:
 
 
 static func total_tiles() -> int:
-	return PHASE_BINS * DIRECTION_BINS * PACKED_LEVELS
+	return DIRECTION_BINS * PACKED_LEVELS
 
 
-func generate_texture(angle_deg: float, wrapped_phase: float, packed_edge: float) -> ImageTexture:
-	return ImageTexture.create_from_image(generate_image(angle_deg, wrapped_phase, packed_edge))
+func generate_texture(angle_deg: float, packed_edge: float) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_image(angle_deg, packed_edge))
 
 
 ## One data tile, uniform across its whole area like
 ## ProceduralHillshadeSprite's own tiles.
-func generate_image(angle_deg: float, wrapped_phase: float, packed_edge: float) -> Image:
+func generate_image(angle_deg: float, packed_edge: float) -> Image:
 	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
 	var radians := deg_to_rad(fposmod(angle_deg, 360.0))
 	# Godot 2D: +X east, +Y DOWN (screen space), so "north" is -Y.
 	var direction := Vector2(sin(radians), -cos(radians))
 	image.fill(Color(
-		clampf(fposmod(wrapped_phase, 1.0), 0.0, 1.0),
+		0.0,
 		direction.x * 0.5 + 0.5,
 		direction.y * 0.5 + 0.5,
 		clampf(packed_edge, 0.0, 1.0)

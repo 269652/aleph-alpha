@@ -7331,8 +7331,57 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
-- **Flow rendering: stylized cartoon art direction** (medium) — ✅ Done —
-  requested directly after seeing the realistic version in play ("can you
+- **Flow rendering: back to realism, two-phase flow-map advection**
+  (large) — ✅ Done — reported directly of the stylized version below:
+  "but uts just some moving strokes not realistic water flow". Accurate, and
+  the reversal is mine to own: going stylized was my own recommendation
+  after the realistic version disappointed, and it made the water worse.
+  Three separate "doesn't look realistic" reports preceded it.
+  **The failure was STRUCTURAL, not tuning.** A periodic shape TRANSLATED
+  downstream can only read as marks sliding past a window, however styled or
+  timed, because real water does not translate -- it continuously DEFORMS.
+  No wavelength/dash/rate adjustment could have fixed it.
+  Fixed with the standard technique for exactly that problem: the surface
+  field is DRAGGED backward along the flow by an amount growing with each
+  phase's age (so water stretches as it moves); two phases run half a cycle
+  apart and are CROSSFADED so distortion never exceeds half a cycle; and the
+  crossfade weight is triangular, peaking exactly when a phase RESETS, so
+  the phase being reset always has zero weight and the reset is invisible.
+  No repeating period is ever visible -- which a scrolling pattern cannot
+  achieve by construction. All three properties are pinned as tests rather
+  than tuned, and the suite was verified to genuinely FAIL when reverted to
+  a single translating phase (drag ran away to 40 units, crossfade died).
+  **Survived the reversal**: the channel CROSS-SECTION (real physics -- a
+  natural riverbed is parabolic -- and what makes a river read as a channel
+  in any style), opacity, and the simulation driving depth band and fast
+  flag from the real solved depth/current. Its five bands now sit closer
+  together, being a depth CUE under a moving surface rather than the whole
+  look.
+  **Did not survive**: the "no noise/gradients/soft edges" rules (exactly
+  what stylization needs and what realistic water cannot do without), and
+  the baked per-tile PHASE channel -- the sharpest lesson here. Under the
+  old streak pattern that phase was load-bearing; under advection it is
+  worse than useless, because a per-tile offset applied to a NOISE field
+  makes the noise jump at every tile boundary. Keeping the fix would have
+  reintroduced the exact tilemap-lattice artefact the phase field was built
+  to remove. World position already decorrelates every reach continuously
+  and for free, so `river_phase_field.gd` was DELETED rather than left as a
+  module nothing calls.
+  **This paid for itself in performance**: the phase was a 12-bin ATLAS
+  dimension (a TileMapLayer cell can only select a tile, so every baked
+  dimension multiplies tile count), so dropping it took the atlas from
+  **1920 tiles to 160** -- a 12x cut in generation work and texture memory,
+  on a game already measured at ~7 fps.
+  `ADVECT_RATE` 0.35 Hz = 0.05 cycles/frame at the ~7 fps floor, far inside
+  the 0.5 Nyquist limit; speed is expressed as surface CONTRAST, never a
+  faster time term, so the old "fast rivers flow backwards" aliasing cannot
+  return. Verified compiling and running on a REAL GPU
+  (`test_river_flow_render_smoke.gd`), not only headless.
+  Ocean still uses the older realistic `water_shader.gd` -- unifying the two
+  looks is ⬜ not started, as is lava (which exists nowhere in the game).
+- **Flow rendering: stylized cartoon art direction** (medium) — 🔴
+  **REVERTED** (see the entry above) — requested directly after seeing the
+  realistic version in play ("can you
   make it look like the water and lava in disenchantment? It doesn't look
   realistic atm"). Clarified with the user first, because the brief pulled
   two ways: Disenchantment is a flat cel-animated cartoon, i.e. the OPPOSITE
@@ -7371,9 +7420,19 @@ germany" and a 4-tile minimum width).
   is not started); LAVA was raised in the same request and deliberately
   deferred -- none exists anywhere in the game, so it is net-new content
   (biome/hazard with placement and damage), not a restyle.
-- **Flow rendering: the phase-field rewrite** (large) — ✅ Done — reported
-  directly ("overhaul the flow shader and animations they should look
-  realistic and natural"). Research turned up THREE QUANTIFIED defects in
+  **Reverted the same day**: the negatives above (no noise, no gradients,
+  hard edges) are precisely what realistic moving water cannot do without,
+  and the crisp scrolling wave lines were the "moving strokes" the user
+  reported. Only the channel cross-section survived.
+- **Flow rendering: the phase-field rewrite** (large) — 🔴 **Partly
+  superseded** — `river_phase_field.gd` no longer exists; defect (1)'s fix
+  was deleted (see the advection entry above for why keeping it would have
+  reintroduced the very artefact it removed). Defects (2) and (3) are still
+  fixed, by the same reasoning, in the shader that replaced this one; the
+  analysis is kept because its arithmetic is what makes the current design's
+  constraints non-negotiable. Reported directly ("overhaul the flow shader
+  and animations they should look realistic and natural"). Research turned
+  up THREE QUANTIFIED defects in
   the old streak shader, not matters of taste:
   (1) **Phase reset at every tile boundary** — the dominant one. Phase was
   `dot(world_pos, flow_dir)` with world_pos absolute (~639,000 units) and

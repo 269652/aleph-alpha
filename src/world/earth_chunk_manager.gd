@@ -2,7 +2,6 @@ extends RefCounted
 
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
-const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
@@ -3676,21 +3675,9 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
 			)
 
-			# The continuous course phase -- without it the hard-edged wave
-			# lines would visibly break at every tile edge (see
-			# RiverPhaseField for the arithmetic on why).
-			var wrapped_phase := 0.0
-			if hydraulics.river_name != "":
-				wrapped_phase = RiverPhaseField.wrapped_phase(
-					hydraulics.course_fraction,
-					_course_length_tiles_cached(hydraulics.river_name)
-				)
-
 			_river_flow_layer.set_cell(
 				global, 0,
-				_terrain_renderer.atlas_coords_for_river_flow(
-					flow_angle, wrapped_phase, style_index
-				)
+				_terrain_renderer.atlas_coords_for_river_flow(flow_angle, style_index)
 			)
 
 
@@ -6705,23 +6692,6 @@ func _course_tile_offset(from: Vector2i, tiles_upstream: float) -> Vector2i:
 	# the whole river that distance represents.
 	var target_fraction := clampf(here.course_fraction - tiles_upstream / total, 0.0, 1.0)
 	return _tile_at_course_fraction(points, target_fraction)
-
-
-## Course length in tiles for a river, memoised.
-##
-## The river-flow painter needs it for EVERY river cell it paints, and it
-## depends only on the world size -- so recomputing it per cell would walk
-## every polyline segment thousands of times per chunk, exactly the class of
-## waste RiverCatalog's own tile-space cache exists to avoid.
-var _course_length_cache: Dictionary = {}
-
-
-func _course_length_tiles_cached(river_name: String) -> float:
-	if not _course_length_cache.has(river_name):
-		_course_length_cache[river_name] = RiverPhaseField.course_length_tiles(
-			river_name, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-		)
-	return _course_length_cache[river_name]
 
 
 ## The tile sitting `fraction` of the way along a course polyline.

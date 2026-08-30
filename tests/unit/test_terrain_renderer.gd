@@ -2367,10 +2367,12 @@ func test_hillshade_overlay_tiles_are_real_slope_aspect_data_not_a_flat_fill():
 
 # -- river flow overlay (docs/concept/rivers.md) -----------------------------
 #
-# Rebuilt for the phase-field rewrite: the atlas is now keyed on
-# (phase, direction, speed) and laid out as a 2D GRID, because a single row
-# of 768 tiles would be 24,576 px wide -- past the 16,384 GL_MAX_TEXTURE_SIZE
-# common on the integrated GPUs this game targets.
+# Keyed on (direction, packed style) and laid out as a 2D GRID. The phase
+# dimension this atlas used to carry is gone: the shader now advects the
+# water surface continuously over TIME on the GPU and reads no baked phase,
+# so keeping it would have multiplied the tile count 12x for nothing -- and
+# worse, a per-tile offset applied to a noise field seams the noise at every
+# tile edge. See river_flow_shader.gd and docs/concept/rivers.md.
 
 func test_river_flow_overlay_tile_set_has_one_tile_per_binned_combination():
 	var overlay_set := renderer.build_river_flow_tile_set()
@@ -2386,67 +2388,65 @@ func test_the_river_flow_atlas_is_a_grid_not_an_unuploadable_single_row():
 	var image: Image = source.texture.get_image()
 	assert_lte(image.get_width(), 4096, "atlas too wide to upload safely")
 	assert_gt(image.get_height(), TerrainRenderer.ART_TILE_SIZE, "should span multiple rows")
+	assert_lte(image.get_height(), 4096, "atlas too tall to upload safely")
 
 
 func test_atlas_coords_for_river_flow_differs_by_direction_bin():
 	assert_ne(
-		renderer.atlas_coords_for_river_flow(0.0, 0.25, 0),
-		renderer.atlas_coords_for_river_flow(90.0, 0.25, 0)
+		renderer.atlas_coords_for_river_flow(0.0, 0),
+		renderer.atlas_coords_for_river_flow(90.0, 0)
 	)
 
 
 func test_atlas_coords_for_river_flow_differs_by_style():
 	assert_ne(
-		renderer.atlas_coords_for_river_flow(0.0, 0.25, 0),
-		renderer.atlas_coords_for_river_flow(0.0, 0.25, 4)
-	)
-
-
-func test_atlas_coords_for_river_flow_differs_by_phase_bin():
-	assert_ne(
-		renderer.atlas_coords_for_river_flow(0.0, 0.0, 0),
-		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0)
+		renderer.atlas_coords_for_river_flow(0.0, 0),
+		renderer.atlas_coords_for_river_flow(0.0, 4)
 	)
 
 
 func test_atlas_coords_for_river_flow_wraps_at_360():
 	assert_eq(
-		renderer.atlas_coords_for_river_flow(0.0, 0.25, 0),
-		renderer.atlas_coords_for_river_flow(360.0, 0.25, 0)
+		renderer.atlas_coords_for_river_flow(0.0, 0),
+		renderer.atlas_coords_for_river_flow(360.0, 0)
 	)
 
 
-## Each baked channel must carry its own real datum -- R the course phase,
-## G/B the direction vector, A the speed fraction. A tile whose channels
-## did not vary with their inputs would silently draw every reach alike.
+## Each baked channel must carry its own real datum -- G/B the direction
+## vector, A the packed style. A tile whose channels did not vary with their
+## inputs would silently draw every reach alike.
 func test_river_flow_tiles_encode_real_per_channel_data():
 	var overlay_set := renderer.build_river_flow_tile_set()
 	var source := overlay_set.get_source(0) as TileSetAtlasSource
 	var image: Image = source.texture.get_image()
 	var art := TerrainRenderer.ART_TILE_SIZE
 
-	var early_phase := renderer.atlas_coords_for_river_flow(0.0, 0.05, 0) * art
-	var late_phase := renderer.atlas_coords_for_river_flow(0.0, 0.95, 0) * art
-	assert_lt(
-		image.get_pixel(early_phase.x, early_phase.y).r,
-		image.get_pixel(late_phase.x, late_phase.y).r,
-		"the red channel must carry the course phase"
-	)
-
-	var slow := renderer.atlas_coords_for_river_flow(0.0, 0.25, 0) * art
-	var fast := renderer.atlas_coords_for_river_flow(0.0, 0.25, 8) * art
+	var slow := renderer.atlas_coords_for_river_flow(0.0, 0) * art
+	var fast := renderer.atlas_coords_for_river_flow(0.0, 8) * art
 	assert_lt(
 		image.get_pixel(slow.x, slow.y).a, image.get_pixel(fast.x, fast.y).a,
 		"the alpha channel must carry the packed style"
 	)
 
-	var north := renderer.atlas_coords_for_river_flow(0.0, 0.25, 0) * art
-	var east := renderer.atlas_coords_for_river_flow(90.0, 0.25, 0) * art
+	var north := renderer.atlas_coords_for_river_flow(0.0, 0) * art
+	var east := renderer.atlas_coords_for_river_flow(90.0, 0) * art
 	var north_pixel := image.get_pixel(north.x, north.y)
 	var east_pixel := image.get_pixel(east.x, east.y)
 	assert_true(
 		north_pixel.g != east_pixel.g or north_pixel.b != east_pixel.b,
 		"the green/blue channels must carry the direction vector"
+	)
+
+
+## The dimension that is NOT there any more. 160 tiles, not 1920 -- a
+## dimension the shader does not read is paid for in full and returns
+## nothing, and this atlas is rebuilt on a game already at ~7 fps.
+func test_the_river_flow_atlas_no_longer_pays_for_a_phase_dimension():
+	var overlay_set := renderer.build_river_flow_tile_set()
+	var source := overlay_set.get_source(0) as TileSetAtlasSource
+	assert_eq(
+		source.get_tiles_count(),
+		ProceduralRiverFlowSprite.DIRECTION_BINS * ProceduralRiverFlowSprite.PACKED_LEVELS
 	)
 
 

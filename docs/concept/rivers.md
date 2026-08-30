@@ -558,7 +558,13 @@ why a dam that has held for ages gives way suddenly when the water rises a
 little further. Real constants throughout (loose-stone bulk density
 ~1600 kg/m³ at 20–40% voids; μ = 0.6 rock-on-rock).
 
-## Art direction: stylized, not realistic (2026-08-30)
+## Art direction: stylized, not realistic (2026-08-30) — SUPERSEDED
+
+> **This direction was tried and reversed the same day.** It is kept
+> because the reversal is the instructive part; see "Art direction:
+> back to realism" at the end of this document for what is live now.
+> Everything below describes a state the code is no longer in — with one
+> exception, the channel cross-section, which survived and is still live.
 
 Requested directly, after seeing the realistic version in play: make the
 water read like flat cel-animated cartoon water instead. **This supersedes
@@ -654,7 +660,16 @@ by cross-channel *fraction* rather than absolute metres, so a small stream
 shows structure too — an absolute scale would paint the whole Dreisam
 (0.31 m mean) a single colour and put the flat slab straight back.
 
-## Flow rendering: the phase-field rewrite (2026-08-30)
+## Flow rendering: the phase-field rewrite (2026-08-30) — SUPERSEDED
+
+> **`river_phase_field.gd` no longer exists.** Defects 2 and 3 below are
+> still fixed, by the same reasoning, in the advection shader that replaced
+> this one. Defect 1's fix — a baked per-tile phase — became *actively
+> harmful* under advection and was deleted; see "Art direction: back to
+> realism" for why. The analysis is kept because the arithmetic is what
+> makes the current design's constraints non-negotiable.
+
+
 
 Reported directly: *"overhaul the flow shader and animations they should
 look realistic and natural"*. The old streak shader read as "a tilemap with
@@ -860,6 +875,90 @@ than it is, matching this project's usual practice):
   itself isn't affected by this gap (it regenerates fresh from
   `generate_chunk`/`spawn_trees` on every chunk load, never persisted).
 
+## Art direction: back to realism (2026-08-30)
+
+Reported directly, of the stylized version above: *"but uts just some
+moving strokes not realistic water flow"*. That is an accurate description
+of what the shader did, and the reversal is on me — going stylized was my
+own recommendation, offered after the realistic version disappointed, and
+it made the water worse rather than better. Three separate reports of "not
+realistic" preceded it.
+
+**The failure was structural, not a matter of tuning.** A periodic shape
+*translated* downstream can only ever read as marks sliding past a window,
+however it is styled or timed — because real water does not translate. It
+continuously **deforms**. No amount of adjusting a scrolling pattern's
+wavelength, dash length or rate could have fixed that; the technique itself
+was wrong for the thing being depicted.
+
+### Two-phase flow-map advection
+
+The standard solution to exactly this problem, and now the core of
+`river_flow_shader.gd`:
+
+1. The surface field is **dragged backward along the flow** by an amount
+   that grows with each phase's age, so the water genuinely stretches as it
+   moves rather than sliding rigidly.
+2. Left alone that distortion would smear without bound, so **two phases
+   run half a cycle apart** and are crossfaded, each resetting while the
+   other carries the image. Distortion never exceeds half a cycle.
+3. The crossfade weight is **triangular, peaking exactly when a phase
+   resets** — so the phase being reset always has zero weight, and the
+   reset is invisible. This is why **no repeating period is ever visible**,
+   which a scrolling pattern cannot avoid by construction.
+
+All three are pinned as tests (`test_the_crossfade_weight_is_zero_when_a_
+phase_resets`, `test_advection_distortion_is_bounded_and_never_accumulates`,
+`test_the_shader_samples_two_advected_phases`) rather than left to tuning,
+and the suite was verified to genuinely fail when the technique is reverted
+to a single translating phase.
+
+### What survived the reversal, and what did not
+
+**Survived: the channel cross-section.** It is real physics — a natural
+riverbed is parabolic, deepest mid-stream — and it is what makes a river
+read as a channel rather than a slab *in any style*. It is now a depth
+**cue beneath a moving surface** rather than the whole look, so its five
+bands sit closer together; hard banding would fight the water.
+
+**Survived: opacity, and the simulation driving everything.** Depth band
+still comes from the real solved depth including dam ponding; the fast flag
+still comes from the real solved current.
+
+**Did not survive: the "no noise, no gradients, no soft edges" rules.**
+Those are exactly what a stylized look needs and exactly what realistic
+moving water cannot do without.
+
+**Did not survive: the baked per-tile phase channel** — and this is the
+sharpest lesson of the reversal. Under the old streak pattern a baked phase
+was load-bearing (see the superseded section above). Under advection it is
+worse than useless: a per-tile offset applied to a **noise** field makes
+the noise jump at every tile boundary, which would have put a grid of seams
+straight across the river — the *same* tilemap-lattice artefact the phase
+field was originally built to remove, reintroduced by keeping its fix.
+
+World position already decorrelates every reach continuously and for free,
+so the offset is simply gone, and with it `river_phase_field.gd` (deleted
+rather than left as a module nothing calls).
+
+**This paid for itself in performance too.** The phase was a 12-bin *atlas
+dimension* — a TileMapLayer cell can only select an atlas tile, so every
+baked dimension multiplies the tile count. Dropping it took the atlas from
+**1920 tiles to 160**, a 12× cut in generation work and texture memory, on
+a game already measured at ~7 fps. A dimension the shader does not read is
+paid for in full and returns nothing.
+
+Atlas now: (direction 16 × style 10) = 160 tiles, style packing depth band
+and fast flag together.
+
+### Aliasing, still non-negotiable
+
+`ADVECT_RATE = 0.35 Hz` is 0.05 cycles/frame at the measured ~7 fps floor,
+far inside the 0.5 Nyquist limit — the same constraint that made the old
+shader's fastest rivers flow *backwards* (superseded Defect 2). Speed is
+expressed as **surface contrast**, never as a faster time term, so it
+cannot reintroduce aliasing no matter how fast a reach runs.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -869,20 +968,30 @@ than it is, matching this project's usual practice):
   fallback: reverted after playtesting" above); curated-only is what's
   live. A future connectivity-aware redesign could reuse the module.
 - **Rendering (water overlay reuse)** — ✅ Done.
-- **Flow rendering: stylized cartoon look** — ✅ Done — flat depth-banded
-  colour, bold bank outline, hard-edged scrolling wave lines, no gradients
-  or noise anywhere; supersedes the realism direction (see "Art direction"
-  above). Ocean is untouched and still realistic — applying the same
-  treatment there is ⬜ Not started, as is lava (which does not exist yet).
-- **Flow rendering (phase-field rewrite, retained under the restyle)** — ✅ Done — continuous course
-  phase (kills the per-tile phase reset), one global temporal rate (kills
-  the Nyquist aliasing that made fast rivers flow backwards), turbulence
-  capped below the fold threshold, speed read from the real solved current,
-  whitewater speckle on fast reaches. Deceleration-driven foam, bank foam
-  from the shore-distance channel, and depth-driven colour — ⬜ Not started. Was silently occluded in live play by an unrelated
-  `scenes/world.tscn` sibling-order bug (`HillshadeFx` drawing on top of
-  `RiverFlowFx`) until the z-order fix above — now fixed and regression-
+- **Flow rendering: realistic advected water** — ✅ Done — two-phase
+  flow-map advection over the real parabolic cross-section, with crest
+  glints and bank whitewater that travel with the water. Supersedes the
+  stylized direction, which was tried and reversed (see "Art direction:
+  back to realism"). Verified to compile and run on a real GPU
+  (`test_river_flow_render_smoke.gd`), not only headless.
+- **Flow rendering: stylized cartoon look** — 🔴 **Reverted.** Reported as
+  "just some moving strokes, not realistic water flow"; the failure was
+  structural (a translated periodic shape cannot read as water). Its
+  channel cross-section survived and is still live.
+- **Flow rendering: baked phase field** — 🔴 **Removed**
+  (`river_phase_field.gd` deleted). Load-bearing under the old streak
+  pattern, actively harmful under advection (it would seam the noise at
+  every tile edge), and a 12× atlas multiplier for a channel the shader no
+  longer reads.
+- **Ocean water** — ⬜ Not started. Still uses the older realistic
+  `water_shader.gd`; unifying the two looks is open. Lava likewise ⬜ Not
+  started (it does not exist anywhere in the game yet).
+- **Flow rendering z-order** — ✅ Done. The overlay was silently occluded in
+  live play by an unrelated `scenes/world.tscn` sibling-order bug
+  (`HillshadeFx` drawing on top of `RiverFlowFx`); fixed and regression-
   tested against the real scene file (`test_world_ground_layer_order.gd`).
+  Deceleration-driven foam and bank foam from the shore-distance channel —
+  ⬜ Not started.
 - **Dams (buildable stone check dam)** — ✅ Done — `stone_dam`
   BuildingPiece + `dam_impoundment.gd`. Real weir-equation pool depth,
   real sliding-failure physics, derived-not-stored impoundment. Transient

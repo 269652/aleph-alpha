@@ -1,76 +1,66 @@
 extends RefCounted
 
-const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
-const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 
-## Stylized cartoon river water: the channel's CROSS-SECTION drawn as five
-## flat colour bands (light at the shallow edge, dark at the deep
-## centreline) with hard-edged white dashes scrolling downstream. See
-## docs/concept/rivers.md's "Flow rendering" section.
+## Realistic flowing river water: a surface field advected downstream in
+## two crossfaded phases, over the channel's real parabolic cross-section,
+## with moving glints and bank whitewater. See docs/concept/rivers.md's
+## "Flow rendering" section.
 ##
-## ART DIRECTION, and why it changed. Earlier passes chased photoreal water
-## -- noise-driven turbulence, soft power-curve streaks, alpha gradients,
-## speckled foam -- and it kept disappointing, because realism is the wrong
-## target for a 16 px top-down pixel-art canvas: every soft gradient and
-## noise field fights the chunky, high-contrast, hard-outlined look the rest
-## of this game's art already commits to. Requested directly: make it read
-## like the flat cel-animated water of a cartoon instead.
+## ART DIRECTION, and its history -- worth recording because it went the
+## wrong way once and came back.
 ##
-## So the rules here are deliberate NEGATIVES as much as positives:
-##   * NO gradients      -- colour is chosen from a small set of flat bands
-##   * NO noise          -- there is not a single hash or value_noise call
-##   * NO soft edges     -- every boundary is a step(), never a smoothstep()
-## and positively:
-##   * the channel's real parabolic cross-section, in flat bands
-##   * short crisp white dashes scrolling downstream, offset row to row
+## An earlier pass took this fully stylized: flat cel bands, hard edges, no
+## noise, crisp drawn dashes. That was tried on a recommendation of mine and
+## was reported plainly as "just some moving strokes, not realistic water
+## flow" -- an accurate description, and the fault was structural rather
+## than a matter of tuning. A periodic shape TRANSLATED downstream can only
+## ever read as marks sliding past, because real water does not translate:
+## it continuously DEFORMS.
 ##
-## The cross-section is what took this from "a flat slab of colour" to
-## something that reads as a channel -- and it is real, not decorative: a
-## natural riverbed genuinely IS roughly parabolic, deepest mid-stream (see
-## OpenChannelFlow.cross_channel_depth_fraction). Because the bands follow
-## distance from the centreline, they curve with the river.
+## So the core technique here is two-phase flow-map advection, the standard
+## solution to exactly that problem:
+##   * the surface field is dragged backward along the flow by an amount
+##     growing with each phase's age, so water genuinely stretches as it
+##     moves
+##   * two phases run half a cycle apart and are crossfaded, so distortion
+##     never accumulates past half a cycle
+##   * the fade weight peaks exactly when a phase resets, which is what
+##     hides the reset -- no repeating period is ever visible
 ##
-## A separate dark BANK OUTLINE was tried and removed. Bank-ness is decided
-## per TILE, and one tile is tens of screen pixels at this camera zoom, so a
-## near-black outline colour did not draw a line -- it filled whole tiles,
-## ate half a four-tile channel and turned the river into a navy staircase.
-## The outermost cross-section band is the edge now, which cannot block up.
+## What survived from the stylized pass, because it was right on its own
+## merits: the channel's real parabolic CROSS-SECTION (light at the shallow
+## bank, dark down the deep centreline). That is genuine physics -- a
+## natural riverbed is deepest mid-stream -- and it is what makes a river
+## read as a channel rather than a slab, in any style.
 ##
-## The real physics still drives all of it -- this is a restyle of the
-## OUTPUT, not a retreat from the simulation. The bands come from the real
-## solved depth through the real bed profile, the dashes follow the real
-## flow direction along the real course phase, and genuinely fast reaches
-## get a second mark.
+## What did NOT survive: the "no noise, no gradients, no soft edges" rules.
+## Those are exactly what a stylized look needs and exactly what realistic
+## moving water cannot do without.
 ##
 ## OPAQUE, unlike this project's other overlays. WaterShader/HillshadeShader
-## deliberately stay translucent so what is underneath shows through, and
-## that is right for a decoration -- but this layer IS the river's surface,
-## not a decoration on it, and the base water layer beneath is full of the
-## very noise and gradients the art direction excludes. A translucent
-## stylized layer over a noisy realistic one would read as neither.
-##
-## The continuous phase field is retained from the previous pass and is
-## still load-bearing: hard-edged lines make a phase discontinuity MORE
-## obvious, not less, so the wave lines would visibly break at every tile
-## edge without it (see RiverPhaseField for the arithmetic).
+## stay translucent because they decorate what is beneath, but this layer IS
+## the river's surface.
 
 const SHADER_CODE := """
 shader_type canvas_item;
 
-uniform float wavelength_px = 8.8;
-uniform float streak_rate_hz = 0.75;
-uniform float line_thickness = 0.16;
-uniform float fast_line_offset = 0.5;
-uniform float dash_row_px = 13.0;
-uniform float dash_coverage = 0.55;
-uniform vec3 band0_color : source_color = vec3(0.46, 0.78, 0.80);
-uniform vec3 band1_color : source_color = vec3(0.32, 0.64, 0.74);
-uniform vec3 band2_color : source_color = vec3(0.21, 0.50, 0.66);
-uniform vec3 band3_color : source_color = vec3(0.14, 0.37, 0.56);
-uniform vec3 band4_color : source_color = vec3(0.09, 0.26, 0.45);
-uniform vec3 wave_color : source_color = vec3(0.93, 0.98, 1.0);
-uniform float packed_levels = 12.0;
+uniform float advect_rate = 0.35;
+uniform float advect_strength = 1.15;
+uniform float noise_scale = 0.028;
+uniform float detail_scale = 2.7;
+uniform float surface_contrast = 0.13;
+uniform float glint_threshold = 0.70;
+uniform float glint_strength = 0.55;
+uniform float foam_threshold = 0.62;
+uniform vec3 glint_color : source_color = vec3(0.88, 0.96, 1.0);
+uniform vec3 foam_color : source_color = vec3(0.95, 0.99, 1.0);
+uniform vec3 band0_color : source_color = vec3(0.30, 0.60, 0.66);
+uniform vec3 band1_color : source_color = vec3(0.22, 0.50, 0.62);
+uniform vec3 band2_color : source_color = vec3(0.16, 0.40, 0.56);
+uniform vec3 band3_color : source_color = vec3(0.11, 0.31, 0.48);
+uniform vec3 band4_color : source_color = vec3(0.07, 0.23, 0.40);
+uniform float packed_levels = 10.0;
 uniform float speed_levels = 2.0;
 
 varying vec2 world_pos;
@@ -79,113 +69,150 @@ void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 0.0, 1.0)).xy;
 }
 
-void fragment() {
-	// R = wrapped course phase, G/B = flow direction as a unit vector
-	// mapped from [-1,1], A = packed style (depth band, fast flag, bank
-	// flag). Style has to travel per-cell, and a TileMapLayer cell can only
-	// select an atlas tile -- so it is an atlas dimension, baked into alpha
-	// here for the shader to read back.
-	vec4 data = texture(TEXTURE, UV);
-	float baked_phase = data.r;
-	vec2 flow_dir = normalize(data.gb * 2.0 - 1.0 + vec2(1e-6, 0.0));
+float value_hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
 
+float value_noise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	f = f * f * (3.0 - 2.0 * f);
+	return mix(
+		mix(value_hash(i), value_hash(i + vec2(1.0, 0.0)), f.x),
+		mix(value_hash(i + vec2(0.0, 1.0)), value_hash(i + vec2(1.0, 1.0)), f.x),
+		f.y
+	);
+}
+
+// Two octaves: a broad swell plus finer surface detail riding on it. Real
+// water has structure at several scales at once -- a single octave reads as
+// a lava lamp.
+float surface(vec2 p) {
+	return value_noise(p) * 0.65 + value_noise(p * detail_scale) * 0.35;
+}
+
+void fragment() {
+	vec4 data = texture(TEXTURE, UV);
+	vec2 flow_dir = normalize(data.gb * 2.0 - 1.0 + vec2(1e-6, 0.0));
 	float combined = floor(data.a * packed_levels);
 	float is_fast = mod(combined, speed_levels);
 	float depth_band = floor(combined / speed_levels);
 
-	// The channel's CROSS-SECTION, in five flat bands: light at the shallow
-	// edge, darkening to the deep centreline. This is what makes a river
-	// read as a channel rather than a flat slab -- and it is real, not
-	// decorative, coming from the parabolic bed profile
-	// (OpenChannelFlow.cross_channel_depth_fraction). Because the bands
-	// follow distance from the centreline, they curve with the river.
+	// TWO-PHASE FLOW-MAP ADVECTION -- the technique that makes this read as
+	// water rather than as a pattern sliding past.
 	//
-	// Hard-selected, never mixed between: a gradient here is exactly what
-	// the art direction excludes.
+	// The previous version translated a periodic shape downstream, which is
+	// exactly what "just some moving strokes" describes: real water does not
+	// TRANSLATE, it continuously DEFORMS. Here the surface field is dragged
+	// backward along the flow by an amount that grows with each phase's age,
+	// so the water genuinely stretches as it moves. Left alone that
+	// distortion would smear without bound, so two phases run half a cycle
+	// apart and are crossfaded, each resetting while the other carries the
+	// image -- distortion never exceeds half a cycle, and because the fade
+	// weight peaks exactly when a phase resets, the reset itself is
+	// invisible. No repeating period is ever visible.
+	float t = TIME * advect_rate;
+	float phase_a = fract(t);
+	float phase_b = fract(t + 0.5);
+
+	// Keyed to WORLD POSITION alone. A per-tile offset here -- which is
+	// what the old baked phase channel was -- would make the noise jump at
+	// every tile boundary, a grid of seams across the river. World position
+	// already decorrelates every reach continuously and for free.
+	vec2 base = world_pos * noise_scale;
+	vec2 drag = flow_dir * advect_strength;
+
+	float sample_a = surface(base - drag * phase_a);
+	float sample_b = surface(base - drag * phase_b);
+	// Triangular weight: 1 at a phase's birth, 0 at its death.
+	float blend = abs(1.0 - 2.0 * phase_a);
+	float n = mix(sample_a, sample_b, blend);
+
+	// Depth colour: the channel's real parabolic cross-section (see
+	// OpenChannelFlow.cross_channel_depth_fraction), light at the shallow
+	// bank, dark down the deep centreline.
 	vec3 body = band0_color;
 	body = mix(body, band1_color, step(0.5, depth_band));
 	body = mix(body, band2_color, step(1.5, depth_band));
 	body = mix(body, band3_color, step(2.5, depth_band));
 	body = mix(body, band4_color, step(3.5, depth_band));
 
+	// The advecting surface modulates brightness -- this is the moving
+	// water itself, not a mark drawn on top of it.
+	float contrast = surface_contrast * mix(0.7, 1.35, is_fast);
+	body += vec3((n - 0.5) * contrast);
 
-	// Short DASHES, not continuous bands. The first attempt drew an
-	// unbroken line across the whole channel wherever the phase came round,
-	// which at this camera zoom read as diagonal hazard tape rather than
-	// water -- real cartoon water is made of short ticks with gaps, never
-	// full-width stripes.
-	//
-	// So the mark is bounded on BOTH axes: thin along the flow (the line's
-	// thickness) and short across it (the dash's length), with alternate
-	// rows offset half a step like brickwork so the marks never line up
-	// into a visible grid. Brick offset rather than a random jitter keeps
-	// this entirely noise-free.
-	vec2 across_dir = vec2(-flow_dir.y, flow_dir.x);
-	float along = dot(world_pos, flow_dir);
-	float across = dot(world_pos, across_dir);
+	// Specular glints on the crests. They appear and vanish with the
+	// surface rather than sliding across it, which is what real moving
+	// water does to reflected light.
+	float glint = smoothstep(glint_threshold, glint_threshold + 0.10, n);
+	body = mix(body, glint_color, glint * glint_strength);
 
-	float row = floor(across / dash_row_px);
-	float row_offset = mod(row, 2.0) * 0.5;
+	// Whitewater at the shallow bank, where a real river breaks over its
+	// own edge -- driven by the SAME advecting field, so the foam travels
+	// with the water instead of sitting still.
+	float at_edge = 1.0 - step(0.5, depth_band);
+	float foam = smoothstep(foam_threshold, foam_threshold + 0.12, n) * at_edge;
+	body = mix(body, foam_color, foam);
 
-	float phase = baked_phase + along / wavelength_px + row_offset - TIME * streak_rate_hz;
-	float cycle = fract(phase);
-	float along_hit = step(cycle, line_thickness);
-	// A second mark half a cycle on, only where the flow is genuinely fast.
-	float second = step(cycle, fast_line_offset + line_thickness) * step(fast_line_offset, cycle);
-	along_hit = max(along_hit, second * is_fast);
-
-	// The gap across the flow is what turns a stripe into a dash.
-	float across_hit = step(fract(across / dash_row_px), dash_coverage);
-
-	float line = along_hit * across_hit;
-
-	COLOR = vec4(mix(body, wave_color, line), 1.0);
+	COLOR = vec4(body, 1.0);
 }
 """
 
-## Streak wavelength in WORLD PIXELS, derived from the course-space
-## wavelength the phase field is built on rather than picked independently
-## -- the two must agree or the pattern would advance at one scale and
-## repeat at another.
-const TILE_SIZE_PX := 16.0
-const WAVELENGTH_PX := RiverPhaseField.STREAK_WAVELENGTH_TILES * TILE_SIZE_PX
+## How fast the advection phase cycles, in Hz. Deliberately slow: this is
+## the rate at which the surface renews, not the speed water appears to
+## travel (that comes from ADVECT_STRENGTH). It also has to stay well clear
+## of aliasing -- at this game's measured ~7 fps floor, 0.35 Hz is 0.05
+## cycles/frame, far inside the 0.5 Nyquist limit.
+const ADVECT_RATE := 0.35
 
-## What fraction of each cycle is drawn as a wave mark, ALONG the flow.
-## Thin enough to read as a drawn tick rather than a band.
-const LINE_THICKNESS := 0.13
+## How far the surface field is dragged along the flow over one phase, in
+## noise-space units. This is what reads as the water's speed. Above ~1.5
+## the stretch becomes a visible smear within a single phase.
+const ADVECT_STRENGTH := 1.15
 
-## How far apart the dash rows sit ACROSS the flow, in world pixels, and how
-## much of each row is mark rather than gap. Together these are what make a
-## short dash instead of a stripe running the full width of the channel --
-## the single worst problem with the first stylized attempt.
-const DASH_ROW_PX := 13.0
-const DASH_COVERAGE := 0.55
+## Spatial scale of the surface field, and the second octave's multiplier.
+## At 0.028 the broad swell is roughly two tiles across -- big enough to
+## read as water rather than static, small enough that a river shows
+## several features at once.
+const NOISE_SCALE := 0.028
+const DETAIL_SCALE := 2.7
 
-## Where the fast-water second line sits within the cycle -- half a cycle
-## on, so the two lines are evenly spaced rather than crowding.
-const FAST_LINE_OFFSET := 0.5
+## How strongly the advecting field brightens and darkens the water. Small:
+## this is a surface, not a pattern painted on one. Scaled up on fast
+## reaches, which is how speed reads now that nothing translates.
+const SURFACE_CONTRAST := 0.13
 
-## The flat palette. Deliberately few colours, in EVEN, clearly-separated
-## steps (HSV value 0.76 / 0.62 / 0.48 -- 0.14 apart) so the bands read as
-## distinct choices rather than as a gradient someone forgot to smooth. Blue-teal throughout, darkening with depth, with the bank
-## outline darker still than any water band so it reads as an outline.
-## Five flat bands drawing the channel's cross-section, light at the
-## shallow edge through to dark at the deep centreline. Even steps in
-## brightness so the section reads as deliberate banding rather than a
-## gradient someone forgot to smooth.
+## Where crest glints begin, and how bright they get. Glints appear and
+## vanish with the surface rather than sliding across it, which is what
+## moving water does to reflected light.
+const GLINT_THRESHOLD := 0.70
+const GLINT_STRENGTH := 0.55
+const GLINT_COLOR := Color(0.88, 0.96, 1.0)
+
+## Where bank whitewater begins. Driven by the same advecting field as the
+## surface, so foam travels WITH the water instead of sitting still -- a
+## static foam texture is one of the clearest tells of fake water.
+const FOAM_THRESHOLD := 0.62
+const FOAM_COLOR := Color(0.95, 0.99, 1.0)
+
+## Five bands drawing the channel's real parabolic cross-section, light at
+## the shallow bank through to dark at the deep centreline. Closer together
+## than the stylized pass used them: here they are a depth CUE under a
+## moving surface, not the whole look, so hard banding would fight the
+## water rather than support it.
 const BAND_COLORS: Array[Color] = [
-	Color(0.46, 0.78, 0.80),
-	Color(0.32, 0.64, 0.74),
-	Color(0.21, 0.50, 0.66),
-	Color(0.14, 0.37, 0.56),
-	Color(0.09, 0.26, 0.45),
+	Color(0.30, 0.60, 0.66),
+	Color(0.22, 0.50, 0.62),
+	Color(0.16, 0.40, 0.56),
+	Color(0.11, 0.31, 0.48),
+	Color(0.07, 0.23, 0.40),
 ]
-const WAVE_COLOR := Color(0.93, 0.98, 1.0)
 
-## Real current speed at or above which a reach gets its second wave line.
-## Anchored to a real figure rather than eyeballed: NIWA/Jowett's instream
-## habitat guidance calls 0.3-0.5 m/s "good" flow for stream life, so 0.6
-## is comfortably a visibly-moving river rather than a pond.
+## Real current speed at or above which a reach reads as fast -- it gets a
+## stronger, higher-contrast surface. Anchored to a real figure rather than
+## eyeballed: NIWA/Jowett instream-habitat guidance calls 0.3-0.5 m/s "good"
+## flow, so 0.6 is comfortably a visibly-moving river rather than a pond.
 const FAST_FLOW_M_S := 0.6
 
 var _shared_material: ShaderMaterial
@@ -196,17 +223,20 @@ func make_material() -> ShaderMaterial:
 	shader.code = SHADER_CODE
 	var material := ShaderMaterial.new()
 	material.shader = shader
-	material.set_shader_parameter("wavelength_px", WAVELENGTH_PX)
-	material.set_shader_parameter("streak_rate_hz", RiverPhaseField.STREAK_RATE_HZ)
-	material.set_shader_parameter("line_thickness", LINE_THICKNESS)
-	material.set_shader_parameter("dash_row_px", DASH_ROW_PX)
-	material.set_shader_parameter("dash_coverage", DASH_COVERAGE)
-	material.set_shader_parameter("fast_line_offset", FAST_LINE_OFFSET)
-	for i in BAND_COLORS.size():
-		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
-	material.set_shader_parameter("wave_color", WAVE_COLOR)
+	material.set_shader_parameter("advect_rate", ADVECT_RATE)
+	material.set_shader_parameter("advect_strength", ADVECT_STRENGTH)
+	material.set_shader_parameter("noise_scale", NOISE_SCALE)
+	material.set_shader_parameter("detail_scale", DETAIL_SCALE)
+	material.set_shader_parameter("surface_contrast", SURFACE_CONTRAST)
+	material.set_shader_parameter("glint_threshold", GLINT_THRESHOLD)
+	material.set_shader_parameter("glint_strength", GLINT_STRENGTH)
+	material.set_shader_parameter("glint_color", GLINT_COLOR)
+	material.set_shader_parameter("foam_threshold", FOAM_THRESHOLD)
+	material.set_shader_parameter("foam_color", FOAM_COLOR)
 	material.set_shader_parameter("packed_levels", float(ProceduralRiverFlowSprite.PACKED_LEVELS))
 	material.set_shader_parameter("speed_levels", float(ProceduralRiverFlowSprite.SPEED_LEVELS))
+	for i in BAND_COLORS.size():
+		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
 	return material
 
 
@@ -228,26 +258,83 @@ static func cross_section_band_for(depth_fraction: float) -> int:
 	return clampi(int(clampf(depth_fraction, 0.0, 0.999999) * bands), 0, bands - 1)
 
 
-## Whether a real current is quick enough to earn the second wave line.
+## Whether a real current is quick enough to read as fast-moving -- such a
+## reach gets a higher-contrast surface, which is how speed shows now that
+## nothing translates across the screen.
 static func is_fast_flow(velocity_m_s: float) -> bool:
 	return velocity_m_s >= FAST_FLOW_M_S
 
 
-## The CPU mirror of the shader's wave-line test, for headless testing:
-## true where a wave line is drawn. Hard-edged by construction -- this
-## returns a bool, not an intensity, because the stylized look has no
-## partial coverage anywhere.
-static func is_wave_line(
-	baked_phase: float, along_px: float, time_seconds: float, across_px: float = 0.0
-) -> bool:
-	var row: float = floor(across_px / DASH_ROW_PX)
-	var row_offset: float = fmod(row, 2.0) * 0.5
-	var phase := (
-		baked_phase + along_px / WAVELENGTH_PX + row_offset
-		- time_seconds * RiverPhaseField.STREAK_RATE_HZ
+## The CPU mirror of the shader's two-phase crossfade, for headless testing.
+##
+## Returns the weight given to PHASE B -- the one running half a cycle ahead
+## -- with phase A taking 1.0 minus it. Read the direction carefully: this
+## is 1.0 at the moment phase A resets, which is precisely when phase A must
+## contribute NOTHING.
+##
+## That is the property the whole technique rests on. A phase resetting
+## snaps back to zero drag, a discontinuity in the image it carries; the
+## triangular weight lands a zero on whichever phase is resetting, so the
+## discontinuity is multiplied out and the reset is invisible. It is why
+## the water has no visible period at all, which a scrolling pattern cannot
+## manage by construction.
+static func crossfade_weight(time_seconds: float) -> float:
+	return absf(1.0 - 2.0 * fposmod(time_seconds * ADVECT_RATE, 1.0))
+
+
+## How far the surface has been dragged along the flow at a given time, in
+## noise-space units -- bounded by ADVECT_STRENGTH by construction, which
+## is what stops distortion accumulating into a smear.
+static func advection_offset(time_seconds: float) -> float:
+	return fposmod(time_seconds * ADVECT_RATE, 1.0) * ADVECT_STRENGTH
+
+
+## The CPU mirror of the shader's `value_hash`/`value_noise`/`surface`, so
+## the glint and foam thresholds can be MEASURED rather than eyeballed.
+##
+## Those two thresholds decide what fraction of the water sparkles and what
+## fraction of the bank breaks white, and a threshold picked by eye can be
+## wrong in a way that is invisible in a still frame and ruinous in motion:
+## set too high nothing ever fires and the surface goes flat again, too low
+## and the whole river whites out. `surface_coverage_above` turns that into
+## a number a test can hold to a range.
+##
+## GDScript runs 64-bit floats where the shader runs 32-bit, so individual
+## samples can differ in the last places -- this mirrors the DISTRIBUTION,
+## which is what the coverage bounds are about, not any single pixel.
+static func value_hash(x: float, y: float) -> float:
+	return fposmod(sin(x * 127.1 + y * 311.7) * 43758.5453, 1.0)
+
+
+static func value_noise(x: float, y: float) -> float:
+	var ix: float = floor(x)
+	var iy: float = floor(y)
+	var fx: float = x - ix
+	var fy: float = y - iy
+	fx = fx * fx * (3.0 - 2.0 * fx)
+	fy = fy * fy * (3.0 - 2.0 * fy)
+	return lerpf(
+		lerpf(value_hash(ix, iy), value_hash(ix + 1.0, iy), fx),
+		lerpf(value_hash(ix, iy + 1.0), value_hash(ix + 1.0, iy + 1.0), fx),
+		fy
 	)
-	if fposmod(phase, 1.0) > LINE_THICKNESS:
-		return false
-	# Bounded ACROSS the flow too -- this is what makes it a dash rather
-	# than a stripe spanning the whole channel.
-	return fposmod(across_px / DASH_ROW_PX, 1.0) <= DASH_COVERAGE
+
+
+## Two octaves, exactly as the shader mixes them.
+static func surface_value(x: float, y: float) -> float:
+	return value_noise(x, y) * 0.65 + value_noise(x * DETAIL_SCALE, y * DETAIL_SCALE) * 0.35
+
+
+## Fraction of the water surface whose field exceeds `threshold` -- i.e. how
+## much of the river a threshold at that level actually lights up.
+static func surface_coverage_above(threshold: float, samples: int = 120) -> float:
+	var hits := 0
+	for i in samples:
+		for j in samples:
+			# Spread over many noise cells so this measures the field's own
+			# distribution rather than one lucky patch of it.
+			var x := float(i) * 0.37
+			var y := float(j) * 0.41
+			if surface_value(x, y) > threshold:
+				hits += 1
+	return float(hits) / float(samples * samples)

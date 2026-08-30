@@ -1548,29 +1548,24 @@ func build_hillshade_overlay_tile_set() -> TileSet:
 	return hillshade_tile_set
 
 
-## Atlas coordinate for a real (flow-direction compass bearing, flow-speed
-## fraction) pair -- see ProceduralRiverFlowSprite.direction_bin_for/
-## speed_bin_for and docs/concept/rivers.md. Speed added 2026-08-29 ("more
-## natural water flow"), same (bin_a x bin_b) indexing shape
+## Atlas coordinate for a real (flow-direction compass bearing, packed
+## style) pair -- see ProceduralRiverFlowSprite.direction_bin_for and
+## docs/concept/rivers.md, same (bin_a x bin_b) indexing shape
 ## atlas_coords_for_hillshade already established.
-func atlas_coords_for_river_flow(
-	angle_deg: float, wrapped_phase: float, style_index: int
-) -> Vector2i:
+func atlas_coords_for_river_flow(angle_deg: float, style_index: int) -> Vector2i:
 	return ProceduralRiverFlowSprite.atlas_cell_for_index(
 		ProceduralRiverFlowSprite.atlas_index_for(
-			ProceduralRiverFlowSprite.phase_bin_for(wrapped_phase),
-			ProceduralRiverFlowSprite.direction_bin_for(angle_deg),
-			style_index
+			ProceduralRiverFlowSprite.direction_bin_for(angle_deg), style_index
 		)
 	)
 
 
 ## A small, separate TileSet for the GPU river-flow overlay layer:
-## DIRECTION_BINS x SPEED_BINS tiles, each holding real quantized
-## (flow-direction, flow-speed) DATA (see ProceduralRiverFlowSprite) rather
-## than art. river_flow_shader.gd samples it as texture channels and
-## animates a directional, speed-varying streak continuously on the GPU --
-## same "bake data once, animate from a live uniform" shape
+## DIRECTION_BINS x PACKED_LEVELS tiles, each holding real quantized
+## (flow-direction, depth-band, fast-flag) DATA (see
+## ProceduralRiverFlowSprite) rather than art. river_flow_shader.gd samples
+## it as texture channels and advects the water surface continuously on the
+## GPU -- same "bake data once, animate from TIME" shape
 ## build_hillshade_overlay_tile_set already established.
 func build_river_flow_tile_set() -> TileSet:
 	var total := ProceduralRiverFlowSprite.total_tiles()
@@ -1584,21 +1579,17 @@ func build_river_flow_tile_set() -> TileSet:
 		columns * ART_TILE_SIZE, rows * ART_TILE_SIZE, false, Image.FORMAT_RGBA8
 	)
 	for style_index in ProceduralRiverFlowSprite.PACKED_LEVELS:
-		for phase_bin in ProceduralRiverFlowSprite.PHASE_BINS:
-			for direction_bin in ProceduralRiverFlowSprite.DIRECTION_BINS:
-				var index := ProceduralRiverFlowSprite.atlas_index_for(
-					phase_bin, direction_bin, style_index
-				)
-				var cell := ProceduralRiverFlowSprite.atlas_cell_for_index(index)
-				var tile_image := _river_flow_generator.generate_image(
-					ProceduralRiverFlowSprite.angle_for_bin(direction_bin),
-					ProceduralRiverFlowSprite.phase_for_bin(phase_bin),
-					ProceduralRiverFlowSprite.alpha_for_style(style_index)
-				)
-				flow_image.blit_rect(
-					tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),
-					cell * ART_TILE_SIZE
-				)
+		for direction_bin in ProceduralRiverFlowSprite.DIRECTION_BINS:
+			var index := ProceduralRiverFlowSprite.atlas_index_for(direction_bin, style_index)
+			var cell := ProceduralRiverFlowSprite.atlas_cell_for_index(index)
+			var tile_image := _river_flow_generator.generate_image(
+				ProceduralRiverFlowSprite.angle_for_bin(direction_bin),
+				ProceduralRiverFlowSprite.alpha_for_style(style_index)
+			)
+			flow_image.blit_rect(
+				tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),
+				cell * ART_TILE_SIZE
+			)
 
 	var flow_source := TileSetAtlasSource.new()
 	flow_source.texture = ImageTexture.create_from_image(flow_image)

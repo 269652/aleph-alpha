@@ -7,7 +7,6 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
-const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
@@ -397,10 +396,10 @@ func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
 	for cell in painted_cells:
 		assert_true(manager.is_river_at_global(cell.x, cell.y), "every painted flow cell must actually be a river cell")
 		# Every painted tile must carry that cell's OWN real data --
-		# direction from the real gradient, and the stylized style index
-		# from the real solved depth (including dam ponding), the real
-		# current, and the cross-channel bank position. Recomputed
-		# independently here and compared against what was painted.
+		# direction from the real gradient, and the style index from the
+		# real solved depth (including dam ponding), the real current, and
+		# the cross-channel bank position. Recomputed independently here and
+		# compared against what was painted.
 		var gradient := manager.gradient_at_global(cell.x, cell.y)
 		var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
 		var expected_angle := aspect if aspect >= 0.0 else 0.0
@@ -416,20 +415,9 @@ func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
 			),
 			RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
 		)
-		var expected_phase := 0.0
-		if hydraulics.river_name != "":
-			expected_phase = RiverPhaseField.wrapped_phase(
-				hydraulics.course_fraction,
-				RiverPhaseField.course_length_tiles(
-					hydraulics.river_name,
-					EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-				)
-			)
 		assert_eq(
 			flow_layer.get_cell_atlas_coords(cell),
-			terrain_renderer.atlas_coords_for_river_flow(
-				expected_angle, expected_phase, expected_style
-			),
+			terrain_renderer.atlas_coords_for_river_flow(expected_angle, expected_style),
 			"(%d, %d) flow tile must reflect its own real flow data" % [cell.x, cell.y]
 		)
 
