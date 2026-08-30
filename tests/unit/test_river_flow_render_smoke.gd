@@ -37,7 +37,7 @@ func test_a_real_tile_map_layer_with_the_shared_river_flow_material_runs_several
 
 	# A real river cell, painted exactly the way
 	# EarthChunkManager._paint_river_flow_overlay does.
-	var atlas_coords := renderer.atlas_coords_for_river_flow(135.0, 0.6)
+	var atlas_coords := renderer.atlas_coords_for_river_flow(135.0, 0.6, 0.25)
 	layer.set_cell(Vector2i(0, 0), 0, atlas_coords)
 
 	assert_true(layer.material is ShaderMaterial, "precondition: a real ShaderMaterial is assigned")

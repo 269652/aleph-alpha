@@ -7299,6 +7299,49 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Flow rendering: the phase-field rewrite** (large) — ✅ Done — reported
+  directly ("overhaul the flow shader and animations they should look
+  realistic and natural"). Research turned up THREE QUANTIFIED defects in
+  the old streak shader, not matters of taste:
+  (1) **Phase reset at every tile boundary** — the dominant one. Phase was
+  `dot(world_pos, flow_dir)` with world_pos absolute (~639,000 units) and
+  flow_dir quantised to 16 bins, so one bin of change between adjacent
+  cells shifted phase by ~30,000 cycles: an arbitrary reset on a 16px
+  lattice, i.e. the tilemap made visible. Fixed by baking a continuous
+  phase potential along each river's course (`river_phase_field.gd`), so
+  neighbouring cells differ by exactly the wavelengths between them;
+  12 phase bins cap the residual seam at 1/24 cycle (15 degrees).
+  (2) **Temporal aliasing** — the time term was `TIME * flow_speed *
+  freq` = 3.84 Hz at top speed, which at the measured ~7 fps floor is
+  0.549 cycles/frame, PAST the 0.5 Nyquist limit: the fastest rivers
+  visibly flowed BACKWARDS. Fixed with one global rate (0.75 Hz, 0.107
+  cycles/frame at 7 fps) so speed never enters the time term — aliasing is
+  now impossible rather than unlikely, pinned by a test against the worst
+  measured frame rate.
+  (3) **Turbulence past the fold threshold** — displaced phase by +/-1.8
+  WAVELENGTHS, decorrelating bands rather than bending them (the old code's
+  own comment claimed it was "small enough"; the arithmetic disagreed), with
+  a second octave at ~1.5x the streak's own frequency shredding it for 4
+  extra sin() per fragment. Now expressed as a FRACTION of a wavelength
+  (0.22), one octave.
+  Speed can no longer drive streak geometry (that is what buys 1 and 2), so
+  it drives contrast and whitewater instead — and now reads the REAL solved
+  current velocity rather than the old slope proxy. Channel layout reworked:
+  R = course phase, G/B = direction as a unit VECTOR (saves a
+  radians/sin/cos per fragment and removes the 0/360 wrap hazard), A = speed.
+  Atlas is now (phase x direction x speed) = 768 tiles in a 2D GRID — a
+  single row would be 24,576 px wide, past the 16,384 GL_MAX_TEXTURE_SIZE
+  common on the integrated GPUs this game targets, i.e. it would fail to
+  upload. Measured: 1024x768 atlas built in 9 ms, so the boot-cost worry did
+  not materialise. Verified by a real GPU-compile smoke test running the
+  live TileMapLayer + material several frames, not only unit tests.
+  Honest gap: real whitewater tracks flow DECELERATION, not speed (a
+  uniformly fast chute is glassy; the hydraulic jump is what goes white) --
+  that needs an upstream sample this pass does not carry, so what ships is
+  the cheap proxy (speckle on fast reaches, hash-quantised to the art-pixel
+  grid so it does not crawl). Deceleration foam, bank foam from the
+  shore-distance channel already sampled, and depth-driven colour — ⬜ Not
+  started.
 - **Dams: buildable stone check dam** (large) — ✅ Done — reported
   directly ("i want to be able to build a dam from stones"). `stone_dam` is
   a real `BuildingPiece` (new `CATEGORY_DAM`), NOT a "placeable" structure:

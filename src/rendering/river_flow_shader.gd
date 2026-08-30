@@ -1,66 +1,66 @@
 extends RefCounted
 
+const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
 const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 
-## GPU river flow: a translucent, directional streak pattern scrolling
-## downstream over river cells only -- rivers previously looked exactly
-## like still ocean water (reported: "rivers should flow"). Layered the
-## same way hillshade is layered over land (see hillshade_shader.gd): the
-## base water overlay (water_shader.gd, ocean's shore-blend/ripple physics)
-## is completely untouched, this is purely an ADDITIONAL sparse overlay
-## painted only where EarthChunkGenerator.is_river_at_global is true (see
-## EarthChunkManager._paint_river_flow_overlay).
+## GPU river flow: a directional streak pattern advecting downstream over
+## river cells, with whitewater where the flow is fast. Layered over the
+## base water overlay the same way hillshade layers over land, so
+## water_shader.gd (ocean waves, rain ripples, shore blending) is untouched.
+## See docs/concept/rivers.md's "Flow rendering" section.
 ##
-## Flow DIRECTION is real: the same downhill direction
-## TerrainRelief.aspect_degrees_from_gradient already computes for
-## hillshading -- "the direction water would actually flow", by that
-## function's own doc comment -- which is exactly
-## docs/concept/electromagnetism.md's own long-standing, previously-
-## unvalidated water-wheel proposal ("flow speed is derived from the water
-## tile's own local elevation gradient"), now actually built.
+## THIS IS A REWRITE of the original streak shader, which read as
+## "a tilemap with a filter on it". Three quantified defects, all fixed
+## here by construction rather than by tuning:
 ##
-## Flow SPEED is now real too (reported: "more natural water flow" -- a
-## uniform speed everywhere read as mechanical, not like water actually
-## responding to the terrain it's running through). speed_fraction_for_
-## slope_deg maps the SAME real gradient's magnitude
-## (TerrainRelief.slope_degrees_from_gradient) to a [0,1] fraction between
-## MIN_FLOW_SPEED and MAX_FLOW_SPEED, anchored at
-## TerrainPassability.HARD_THRESHOLD_DEG -- the same real "genuine
-## scrambling/technical-climbing" steepness BiomeClassifier's own
-## SLOPE_MOUNTAIN_THRESHOLD_DEG already reuses for a different purpose,
-## rather than inventing a second, independently-eyeballed cap. Discharge/
-## channel-width data still isn't curated, so this is real GRADIENT-driven
-## variation, not a claim of hydraulically exact current speed.
+## 1. PHASE RESET AT EVERY TILE BOUNDARY -- the dominant one. The phase was
+##    `dot(world_pos, flow_dir)`, with world_pos absolute (up to ~639,000
+##    units) and flow_dir quantised to 16 bins. One bin of direction change
+##    between adjacent cells shifted the phase by ~30,000 cycles, i.e. an
+##    arbitrary reset, on a 16 px lattice -- and that lattice IS the
+##    tilemap, made visible. Now the phase comes from a continuous
+##    per-course potential baked per tile (see RiverPhaseField), so
+##    neighbouring cells differ by exactly the wavelengths between them.
 ##
-## Turbulence is new too: two octaves of scrolling value noise (the exact
-## technique water_shader.gd's own wind-shimmer already proves) perturb the
-## streak phase itself, so bands waver and drift rather than reading as a
-## perfectly rigid scrolling barcode. Purely cosmetic, so -- like
-## water_shader.gd's own wind-shimmer -- it has no CPU mirror; only the
-## periodic-streak physics another caller might reason about does.
+## 2. TEMPORAL ALIASING -- the old phase advanced at flow_speed *
+##    streak_frequency = 3.84 Hz at top speed, which at this game's measured
+##    ~7 fps floor is 0.549 cycles/frame: past the 0.5 Nyquist limit, so the
+##    fastest rivers visibly flowed BACKWARDS. The pattern now advances at
+##    ONE global rate everywhere (RiverPhaseField.STREAK_RATE_HZ = 0.75 Hz,
+##    0.107 cycles/frame at 7 fps), which makes aliasing impossible at any
+##    speed rather than merely unlikely.
 ##
-## The overlay tile's own texture carries real per-tile (direction, speed)
-## DATA (see procedural_river_flow_sprite.gd), sampled here exactly the way
-## hillshade_shader.gd samples (slope, aspect) -- this shader reads a
-## channel, not art.
+## 3. TURBULENCE PAST THE FOLD THRESHOLD -- the old field displaced the
+##    phase by +/-15 world units against an 8.33-unit wavelength: +/-1.8
+##    WAVELENGTHS. That does not waver a band, it decorrelates it; the
+##    iso-phase map folded back on itself and the bands were being
+##    scrambled. (The old code's own comment claimed the displacement was
+##    "small enough that streaks still read as flowing roughly downstream";
+##    the arithmetic said otherwise.) Turbulence is now expressed as a
+##    fraction of a wavelength and capped below the fold threshold.
 ##
-## streak_intensity() below is the CPU mirror of exactly what the shader's
-## periodic-streak math computes, kept in sync by hand -- the same
-## relationship water_shader.gd's ripple_amplitude has to ripple_packet,
-## and for the same reason: a fragment shader can't be asserted headless.
+## Speed no longer drives the streak GEOMETRY at all -- one global
+## wavelength and rate is what buys defects 1 and 2 -- so it is expressed
+## through whitewater and contrast instead, which is also the more
+## legible cue at 16 px.
 
 const SHADER_CODE := """
 shader_type canvas_item;
 
-uniform float min_flow_speed = 8.0;
-uniform float max_flow_speed = 32.0;
-uniform float streak_frequency = 0.12;
-uniform float streak_sharpness = 4.0;
-uniform float streak_alpha = 0.35;
-uniform vec3 streak_color : source_color = vec3(0.75, 0.88, 1.0);
-uniform float turbulence_strength = 30.0;
-uniform float turbulence_scale = 0.035;
-uniform float turbulence_speed = 0.6;
+uniform float wavelength_px = 8.8;
+uniform float streak_rate_hz = 0.75;
+uniform float streak_sharpness = 3.0;
+uniform float streak_alpha = 0.30;
+uniform vec3 streak_color : source_color = vec3(0.78, 0.90, 1.0);
+uniform float turbulence_wavelengths = 0.22;
+uniform float turbulence_scale = 0.02;
+uniform float turbulence_speed = 0.35;
+uniform float foam_speed_floor = 0.45;
+uniform float foam_speed_ceiling = 0.95;
+uniform float foam_coverage = 0.55;
+uniform vec3 foam_color : source_color = vec3(0.97, 0.99, 1.0);
+uniform float foam_alpha = 0.85;
+uniform float art_pixel_size = 8.0;
 
 varying vec2 world_pos;
 
@@ -84,72 +84,103 @@ float value_noise(vec2 p) {
 }
 
 void fragment() {
-	// Red = compass bearing [0,1] -> [0,360), green = real local slope
-	// magnitude mapped to a [0,1] speed fraction (see
-	// speed_fraction_for_slope_deg, procedural_river_flow_sprite.gd) -- the
-	// same encoding/convention hillshade_shader.gd's (slope, aspect)
-	// channels already use.
-	vec2 data = texture(TEXTURE, UV).rg;
-	float angle_deg = data.r * 360.0;
-	float angle_rad = radians(angle_deg);
-	// Godot 2D: +X east, +Y DOWN (screen space) -- "north" is -Y.
-	vec2 flow_dir = vec2(sin(angle_rad), -cos(angle_rad));
-	float flow_speed = mix(min_flow_speed, max_flow_speed, data.g);
+	// R = wrapped course phase, G/B = flow direction as a unit vector
+	// mapped from [-1,1], A = speed fraction. Direction as a vector rather
+	// than a bearing saves a radians/sin/cos here and removes the 0/360
+	// wrap hazard entirely.
+	vec4 data = texture(TEXTURE, UV);
+	float baked_phase = data.r;
+	vec2 flow_dir = normalize(data.gb * 2.0 - 1.0 + vec2(1e-6, 0.0));
+	float speed = data.a;
 
-	float along = dot(world_pos, flow_dir);
-	float across = dot(world_pos, vec2(-flow_dir.y, flow_dir.x));
+	// Position WITHIN this tile, along the flow. The baked phase is the
+	// course phase at the tile; this carries it continuously across the
+	// tile's own span so the pattern is a ribbon, not a per-tile constant.
+	vec2 tile_local = fract(world_pos / art_pixel_size) * art_pixel_size;
+	float along = dot(tile_local, flow_dir);
 
-	// Turbulence: two octaves of scrolling value noise perturb the ALONG
-	// position itself (in world units) before the periodic streak phase is
-	// computed, so streak bands waver and bend rather than reading as
-	// perfectly straight, rigid lines -- real flowing water is never that
-	// regular. Sampled in (along, across) space, not world_pos directly, so
-	// the wobble is consistent along the flow's own axis regardless of the
-	// river's real-world orientation.
-	float turb_a = value_noise(vec2(along, across) * turbulence_scale + vec2(TIME * turbulence_speed, 0.0));
-	float turb_b = value_noise(vec2(along, across) * turbulence_scale * 2.3 - vec2(0.0, TIME * turbulence_speed * 0.7));
-	float turbulence = (turb_a * 0.65 + turb_b * 0.35 - 0.5) * turbulence_strength;
+	// Turbulence, expressed as a FRACTION OF A WAVELENGTH so it can never
+	// again be set past the fold threshold where bands stop wavering and
+	// start scrambling. One octave, not two: the old second octave sat at
+	// ~1.5x the streak's own frequency, which shreds the pattern it is
+	// meant to perturb.
+	float turb = value_noise(world_pos * turbulence_scale + vec2(TIME * turbulence_speed, 0.0)) - 0.5;
+	float turbulence_cycles = turb * turbulence_wavelengths;
 
-	float phase = (along + turbulence) * streak_frequency - TIME * flow_speed * streak_frequency;
-	// A clamped sine raised to a power: cheap, crisp, periodic bright bands
-	// (streaks) separated by near-zero troughs -- not constant brightness,
-	// which would just read as a flat tint, not motion.
+	// ONE global temporal rate -- this is what makes aliasing impossible.
+	float phase = baked_phase + along / wavelength_px + turbulence_cycles - TIME * streak_rate_hz;
+
 	float wave = sin(phase * 6.28318530718);
 	float streak = pow(max(wave, 0.0), streak_sharpness);
 
-	COLOR = vec4(streak_color, streak * streak_alpha);
+	// Contrast carries speed now that geometry does not: a slow reach shows
+	// soft, low-contrast lines, a fast one hard bright ones.
+	float contrast = mix(0.55, 1.0, speed);
+	vec3 color = streak_color;
+	float alpha = streak * streak_alpha * contrast;
+
+	// Whitewater. Real foam tracks flow DECELERATION rather than speed --
+	// a uniformly fast chute is glassy, and it is the hydraulic jump where
+	// fast meets slow that goes white -- but deceleration needs an upstream
+	// sample this pass does not carry, so this is the honest cheap proxy:
+	// broken speckle on the fastest reaches only. Hash is quantised to the
+	// ART PIXEL grid, so the speckle sits still against nearest-filtered
+	// ground instead of crawling.
+	float foam_drive = smoothstep(foam_speed_floor, foam_speed_ceiling, speed);
+	if (foam_drive > 0.0) {
+		vec2 art_cell = floor(world_pos / art_pixel_size);
+		float h = value_hash(art_cell);
+		// Threshold, not multiply: foam is broken flecks, not a wash.
+		float foam = step(1.0 - foam_drive * foam_coverage * streak, h);
+		color = mix(color, foam_color, foam);
+		alpha = max(alpha, foam * foam_alpha * foam_drive);
+	}
+
+	COLOR = vec4(color, alpha);
 }
 """
 
-## Slowest a river flows visually -- a gentle lowland stretch.
-const MIN_FLOW_SPEED := 8.0
-## Fastest a river flows visually -- a steep mountain stretch, at/beyond
-## TerrainPassability.HARD_THRESHOLD_DEG.
-const MAX_FLOW_SPEED := 32.0
-## Spatial frequency of streaks along the flow axis (cycles per world unit).
-const STREAK_FREQUENCY := 0.12
-## Raising the clamped sine to this power narrows the bright band into a
-## crisp streak rather than a broad, soft glow -- higher = thinner streaks.
-const STREAK_SHARPNESS := 4.0
-## Overlay opacity ceiling: translucent enough that the base water
-## color/ripples beneath always stay visible -- the same "never opaque"
-## bound WaterShader.WATER_ALPHA/HillshadeShader.MAX_SHADOW_ALPHA already
-## keep for their own overlays.
-const STREAK_ALPHA := 0.35
-## Pale, glinting -- a highlight riding on the water's own blue, not a
-## competing hue.
-const STREAK_COLOR := Color(0.75, 0.88, 1.0)
-## How far (in world units) the turbulence noise can shift the streak
-## phase's effective position -- large enough to visibly bend/waver a
-## band, small enough that streaks still read as flowing roughly downstream
-## rather than dissolving into pure noise.
-const TURBULENCE_STRENGTH := 30.0
-## Spatial scale of the turbulence noise field -- lower than a ripple's own
-## noise_scale (WaterShader.SHADER_CODE's 0.045), since turbulence should
-## read as broad, slow-shifting waver, not fine chop.
-const TURBULENCE_SCALE := 0.035
-## How fast the turbulence noise field itself drifts over time.
-const TURBULENCE_SPEED := 0.6
+## Streak wavelength in WORLD PIXELS, derived from the course-space
+## wavelength the phase field is built on rather than picked independently
+## -- the two must agree or the pattern would advance at one scale and
+## repeat at another. RiverPhaseField works in tiles; TerrainRenderer's
+## TILE_SIZE is 16 world px.
+const TILE_SIZE_PX := 16.0
+const WAVELENGTH_PX := RiverPhaseField.STREAK_WAVELENGTH_TILES * TILE_SIZE_PX
+
+## Raising a clamped sine to this power narrows each band into a streak.
+## Lower than the old 4.0: with the phase now continuous, the bands read as
+## real lines rather than needing extra crispness to survive the noise.
+const STREAK_SHARPNESS := 3.0
+
+## Overlay opacity ceiling -- translucent enough that the base water colour
+## and its ripples always show through, the same "never opaque" bound
+## WaterShader.WATER_ALPHA and HillshadeShader.MAX_SHADOW_ALPHA keep.
+const STREAK_ALPHA := 0.30
+const STREAK_COLOR := Color(0.78, 0.90, 1.0)
+
+## Turbulence displacement as a FRACTION OF ONE WAVELENGTH. The fold
+## threshold -- where the iso-phase map starts folding back on itself and
+## bands scramble instead of wavering -- is at 1/(2*pi) ~= 0.159 per unit of
+## noise gradient; well under a quarter wavelength is safely inside it while
+## still visibly bending the bands. The old shader ran at the equivalent of
+## 1.8 wavelengths.
+const TURBULENCE_WAVELENGTHS := 0.22
+const TURBULENCE_SCALE := 0.02
+const TURBULENCE_SPEED := 0.35
+
+## Whitewater appears only on the fastest reaches (see the shader's own note
+## on why real foam tracks deceleration, and why this is the honest proxy).
+const FOAM_SPEED_FLOOR := 0.45
+const FOAM_SPEED_CEILING := 0.95
+const FOAM_COVERAGE := 0.55
+const FOAM_COLOR := Color(0.97, 0.99, 1.0)
+const FOAM_ALPHA := 0.85
+
+## One art pixel in world units -- the grid the foam speckle is quantised to
+## so it sits still against nearest-filtered ground rather than crawling.
+## TILE_SIZE 16 / ArtResolution.DETAIL_MULTIPLIER 2.
+const ART_PIXEL_SIZE := 8.0
 
 var _shared_material: ShaderMaterial
 
@@ -159,15 +190,20 @@ func make_material() -> ShaderMaterial:
 	shader.code = SHADER_CODE
 	var material := ShaderMaterial.new()
 	material.shader = shader
-	material.set_shader_parameter("min_flow_speed", MIN_FLOW_SPEED)
-	material.set_shader_parameter("max_flow_speed", MAX_FLOW_SPEED)
-	material.set_shader_parameter("streak_frequency", STREAK_FREQUENCY)
+	material.set_shader_parameter("wavelength_px", WAVELENGTH_PX)
+	material.set_shader_parameter("streak_rate_hz", RiverPhaseField.STREAK_RATE_HZ)
 	material.set_shader_parameter("streak_sharpness", STREAK_SHARPNESS)
 	material.set_shader_parameter("streak_alpha", STREAK_ALPHA)
 	material.set_shader_parameter("streak_color", STREAK_COLOR)
-	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
+	material.set_shader_parameter("turbulence_wavelengths", TURBULENCE_WAVELENGTHS)
 	material.set_shader_parameter("turbulence_scale", TURBULENCE_SCALE)
 	material.set_shader_parameter("turbulence_speed", TURBULENCE_SPEED)
+	material.set_shader_parameter("foam_speed_floor", FOAM_SPEED_FLOOR)
+	material.set_shader_parameter("foam_speed_ceiling", FOAM_SPEED_CEILING)
+	material.set_shader_parameter("foam_coverage", FOAM_COVERAGE)
+	material.set_shader_parameter("foam_color", FOAM_COLOR)
+	material.set_shader_parameter("foam_alpha", FOAM_ALPHA)
+	material.set_shader_parameter("art_pixel_size", ART_PIXEL_SIZE)
 	return material
 
 
@@ -177,23 +213,41 @@ func shared_material() -> ShaderMaterial:
 	return _shared_material
 
 
-## Maps a real local slope magnitude (TerrainRelief.slope_degrees_from_
-## gradient) to a [0,1] visual flow-speed fraction: 0.0 on flat ground,
-## 1.0 at or beyond TerrainPassability.HARD_THRESHOLD_DEG (real "genuine
-## scrambling/technical-climbing" steepness -- reused here as "about as
-## dramatic as this world's terrain scale gets" rather than an
-## independently-eyeballed cap), linear in between.
+## Maps a real local slope magnitude to a [0,1] speed fraction, anchored at
+## TerrainPassability.HARD_THRESHOLD_DEG -- the same real
+## "scrambling/technical-climbing" steepness BiomeClassifier already reuses,
+## rather than a second independently-eyeballed cap.
+##
+## Kept for callers that have only terrain. The painter prefers
+## speed_fraction_for_velocity below, which reads the REAL solved current
+## speed now that the hydraulics exist.
 static func speed_fraction_for_slope_deg(slope_deg: float) -> float:
 	return clampf(slope_deg / TerrainPassability.HARD_THRESHOLD_DEG, 0.0, 1.0)
 
 
-## The exact math the shader's fragment() runs to shape a streak, mirrored
-## on the CPU for headless testing. `along_world_units` is the signed
-## distance along the flow direction; `time_seconds` is the shader's TIME;
-## `flow_speed` is the real per-cell speed (mix(MIN_FLOW_SPEED,
-## MAX_FLOW_SPEED, speed_fraction), computed by the caller). Turbulence is
-## NOT mirrored -- see this file's own doc comment for why.
-static func streak_intensity(along_world_units: float, time_seconds: float, flow_speed: float) -> float:
-	var phase := along_world_units * STREAK_FREQUENCY - time_seconds * flow_speed * STREAK_FREQUENCY
-	var wave := sin(phase * TAU)
-	return pow(maxf(wave, 0.0), STREAK_SHARPNESS)
+## The fastest real current the visual scale tops out at, in m/s. Real
+## rivers: NIWA/Jowett call 0.3-0.5 m/s "good" habitat flow; USGS-gauged
+## FLOOD peaks on real reaches reach ~3 m/s. 2.5 puts a genuinely fast
+## river at the top of the scale without every ordinary reach saturating.
+const MAX_DISPLAYED_VELOCITY_M_S := 2.5
+
+
+## The [0,1] speed fraction for a REAL solved current velocity (see
+## EarthChunkGenerator.river_hydraulics_at_global) -- what the flow visual
+## should read now that current speed is real physics rather than a
+## slope proxy.
+static func speed_fraction_for_velocity(velocity_m_s: float) -> float:
+	return clampf(velocity_m_s / MAX_DISPLAYED_VELOCITY_M_S, 0.0, 1.0)
+
+
+## The CPU mirror of the shader's periodic-streak math, for headless
+## testing. `along_px` is distance along the flow within a tile;
+## `baked_phase` is the course phase there. Turbulence and foam are
+## deliberately NOT mirrored -- like water_shader.gd's own wind shimmer,
+## they are cosmetic, and only the physics another caller might reason
+## about gets a CPU twin.
+static func streak_intensity(baked_phase: float, along_px: float, time_seconds: float) -> float:
+	var phase := (
+		baked_phase + along_px / WAVELENGTH_PX - time_seconds * RiverPhaseField.STREAK_RATE_HZ
+	)
+	return pow(maxf(sin(phase * TAU), 0.0), STREAK_SHARPNESS)

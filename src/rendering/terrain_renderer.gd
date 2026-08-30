@@ -1553,10 +1553,16 @@ func build_hillshade_overlay_tile_set() -> TileSet:
 ## speed_bin_for and docs/concept/rivers.md. Speed added 2026-08-29 ("more
 ## natural water flow"), same (bin_a x bin_b) indexing shape
 ## atlas_coords_for_hillshade already established.
-func atlas_coords_for_river_flow(angle_deg: float, speed_fraction: float) -> Vector2i:
-	var direction_bin := ProceduralRiverFlowSprite.direction_bin_for(angle_deg)
-	var speed_bin := ProceduralRiverFlowSprite.speed_bin_for(speed_fraction)
-	return Vector2i(speed_bin * ProceduralRiverFlowSprite.DIRECTION_BINS + direction_bin, 0)
+func atlas_coords_for_river_flow(
+	angle_deg: float, speed_fraction: float, wrapped_phase: float
+) -> Vector2i:
+	return ProceduralRiverFlowSprite.atlas_cell_for_index(
+		ProceduralRiverFlowSprite.atlas_index_for(
+			ProceduralRiverFlowSprite.phase_bin_for(wrapped_phase),
+			ProceduralRiverFlowSprite.direction_bin_for(angle_deg),
+			ProceduralRiverFlowSprite.speed_bin_for(speed_fraction)
+		)
+	)
 
 
 ## A small, separate TileSet for the GPU river-flow overlay layer:
@@ -1567,24 +1573,38 @@ func atlas_coords_for_river_flow(angle_deg: float, speed_fraction: float) -> Vec
 ## same "bake data once, animate from a live uniform" shape
 ## build_hillshade_overlay_tile_set already established.
 func build_river_flow_tile_set() -> TileSet:
-	var total := ProceduralRiverFlowSprite.DIRECTION_BINS * ProceduralRiverFlowSprite.SPEED_BINS
-	var flow_image := Image.create(total * ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	var total := ProceduralRiverFlowSprite.total_tiles()
+	var columns := ProceduralRiverFlowSprite.ATLAS_COLUMNS
+	var rows := int(ceil(float(total) / float(columns)))
+	# A 2D grid, not a single row: laid out in one row this atlas would be
+	# 768 * 32 = 24,576 px wide, past the 16,384 GL_MAX_TEXTURE_SIZE common
+	# on the integrated GPUs this game targets -- it would simply fail to
+	# upload.
+	var flow_image := Image.create(
+		columns * ART_TILE_SIZE, rows * ART_TILE_SIZE, false, Image.FORMAT_RGBA8
+	)
 	for speed_bin in ProceduralRiverFlowSprite.SPEED_BINS:
-		for direction_bin in ProceduralRiverFlowSprite.DIRECTION_BINS:
-			var index := speed_bin * ProceduralRiverFlowSprite.DIRECTION_BINS + direction_bin
-			var angle_deg := ProceduralRiverFlowSprite.angle_for_bin(direction_bin)
-			var speed_fraction := ProceduralRiverFlowSprite.speed_for_bin(speed_bin)
-			var tile_image := _river_flow_generator.generate_image(angle_deg, speed_fraction)
-			flow_image.blit_rect(
-				tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),
-				Vector2i(index * ART_TILE_SIZE, 0)
-			)
+		for phase_bin in ProceduralRiverFlowSprite.PHASE_BINS:
+			for direction_bin in ProceduralRiverFlowSprite.DIRECTION_BINS:
+				var index := ProceduralRiverFlowSprite.atlas_index_for(
+					phase_bin, direction_bin, speed_bin
+				)
+				var cell := ProceduralRiverFlowSprite.atlas_cell_for_index(index)
+				var tile_image := _river_flow_generator.generate_image(
+					ProceduralRiverFlowSprite.angle_for_bin(direction_bin),
+					ProceduralRiverFlowSprite.speed_for_bin(speed_bin),
+					ProceduralRiverFlowSprite.phase_for_bin(phase_bin)
+				)
+				flow_image.blit_rect(
+					tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),
+					cell * ART_TILE_SIZE
+				)
 
 	var flow_source := TileSetAtlasSource.new()
 	flow_source.texture = ImageTexture.create_from_image(flow_image)
 	flow_source.texture_region_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)
 	for i in total:
-		flow_source.create_tile(Vector2i(i, 0))
+		flow_source.create_tile(ProceduralRiverFlowSprite.atlas_cell_for_index(i))
 
 	var flow_tile_set := TileSet.new()
 	flow_tile_set.tile_size = Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)

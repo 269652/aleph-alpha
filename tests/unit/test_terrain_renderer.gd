@@ -2366,58 +2366,88 @@ func test_hillshade_overlay_tiles_are_real_slope_aspect_data_not_a_flat_fill():
 
 
 # -- river flow overlay (docs/concept/rivers.md) -----------------------------
-# Speed added 2026-08-29 ("more natural water flow") alongside direction --
-# now a 2D atlas (DIRECTION_BINS x SPEED_BINS), mirroring
-# build_hillshade_overlay_tile_set's own (SLOPE_BINS x ASPECT_BINS) shape.
+#
+# Rebuilt for the phase-field rewrite: the atlas is now keyed on
+# (phase, direction, speed) and laid out as a 2D GRID, because a single row
+# of 768 tiles would be 24,576 px wide -- past the 16,384 GL_MAX_TEXTURE_SIZE
+# common on the integrated GPUs this game targets.
 
-func test_river_flow_overlay_tile_set_has_one_tile_per_direction_and_speed_bin():
+func test_river_flow_overlay_tile_set_has_one_tile_per_binned_combination():
 	var overlay_set := renderer.build_river_flow_tile_set()
 	var source := overlay_set.get_source(0) as TileSetAtlasSource
-	assert_eq(
-		source.get_tiles_count(),
-		ProceduralRiverFlowSprite.DIRECTION_BINS * ProceduralRiverFlowSprite.SPEED_BINS
-	)
+	assert_eq(source.get_tiles_count(), ProceduralRiverFlowSprite.total_tiles())
+
+
+## The reason the grid exists at all -- a regression here would mean an
+## atlas that silently fails to upload on the target hardware.
+func test_the_river_flow_atlas_is_a_grid_not_an_unuploadable_single_row():
+	var overlay_set := renderer.build_river_flow_tile_set()
+	var source := overlay_set.get_source(0) as TileSetAtlasSource
+	var image: Image = source.texture.get_image()
+	assert_lte(image.get_width(), 4096, "atlas too wide to upload safely")
+	assert_gt(image.get_height(), TerrainRenderer.ART_TILE_SIZE, "should span multiple rows")
 
 
 func test_atlas_coords_for_river_flow_differs_by_direction_bin():
-	var north := renderer.atlas_coords_for_river_flow(0.0, 0.5)
-	var east := renderer.atlas_coords_for_river_flow(90.0, 0.5)
-	assert_ne(north, east)
+	assert_ne(
+		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.25),
+		renderer.atlas_coords_for_river_flow(90.0, 0.5, 0.25)
+	)
 
 
 func test_atlas_coords_for_river_flow_differs_by_speed_bin():
-	var slow := renderer.atlas_coords_for_river_flow(0.0, 0.0)
-	var fast := renderer.atlas_coords_for_river_flow(0.0, 1.0)
-	assert_ne(slow, fast)
+	assert_ne(
+		renderer.atlas_coords_for_river_flow(0.0, 0.0, 0.25),
+		renderer.atlas_coords_for_river_flow(0.0, 1.0, 0.25)
+	)
+
+
+func test_atlas_coords_for_river_flow_differs_by_phase_bin():
+	assert_ne(
+		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.0),
+		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.5)
+	)
 
 
 func test_atlas_coords_for_river_flow_wraps_at_360():
 	assert_eq(
-		renderer.atlas_coords_for_river_flow(0.0, 0.5), renderer.atlas_coords_for_river_flow(360.0, 0.5)
+		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.25),
+		renderer.atlas_coords_for_river_flow(360.0, 0.5, 0.25)
 	)
 
 
-func test_river_flow_overlay_tiles_are_real_direction_and_speed_data_not_a_flat_fill():
+## Each baked channel must carry its own real datum -- R the course phase,
+## G/B the direction vector, A the speed fraction. A tile whose channels
+## did not vary with their inputs would silently draw every reach alike.
+func test_river_flow_tiles_encode_real_per_channel_data():
 	var overlay_set := renderer.build_river_flow_tile_set()
 	var source := overlay_set.get_source(0) as TileSetAtlasSource
 	var image: Image = source.texture.get_image()
 	var art := TerrainRenderer.ART_TILE_SIZE
 
-	var north_coords := renderer.atlas_coords_for_river_flow(0.0, 0.2)
-	var east_coords := renderer.atlas_coords_for_river_flow(90.0, 0.2)
-	var north_origin := Vector2i(north_coords.x * art, north_coords.y * art)
-	var east_origin := Vector2i(east_coords.x * art, east_coords.y * art)
-	var north_pixel := image.get_pixel(north_origin.x, north_origin.y)
-	var east_pixel := image.get_pixel(east_origin.x, east_origin.y)
-	assert_ne(north_pixel.r, east_pixel.r, "different direction bins must encode different data")
+	var early_phase := renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.05) * art
+	var late_phase := renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.95) * art
+	assert_lt(
+		image.get_pixel(early_phase.x, early_phase.y).r,
+		image.get_pixel(late_phase.x, late_phase.y).r,
+		"the red channel must carry the course phase"
+	)
 
-	var slow_coords := renderer.atlas_coords_for_river_flow(45.0, 0.0)
-	var fast_coords := renderer.atlas_coords_for_river_flow(45.0, 1.0)
-	var slow_origin := Vector2i(slow_coords.x * art, slow_coords.y * art)
-	var fast_origin := Vector2i(fast_coords.x * art, fast_coords.y * art)
-	var slow_pixel := image.get_pixel(slow_origin.x, slow_origin.y)
-	var fast_pixel := image.get_pixel(fast_origin.x, fast_origin.y)
-	assert_lt(slow_pixel.g, fast_pixel.g, "different speed bins must encode different data")
+	var slow := renderer.atlas_coords_for_river_flow(0.0, 0.05, 0.25) * art
+	var fast := renderer.atlas_coords_for_river_flow(0.0, 0.95, 0.25) * art
+	assert_lt(
+		image.get_pixel(slow.x, slow.y).a, image.get_pixel(fast.x, fast.y).a,
+		"the alpha channel must carry the speed fraction"
+	)
+
+	var north := renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.25) * art
+	var east := renderer.atlas_coords_for_river_flow(90.0, 0.5, 0.25) * art
+	var north_pixel := image.get_pixel(north.x, north.y)
+	var east_pixel := image.get_pixel(east.x, east.y)
+	assert_true(
+		north_pixel.g != east_pixel.g or north_pixel.b != east_pixel.b,
+		"the green/blue channels must carry the direction vector"
+	)
 
 
 # -- pitched roof variants ----------------------------------------------------
