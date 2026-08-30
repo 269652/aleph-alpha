@@ -57,10 +57,10 @@ uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
 uniform float line_level_a = 0.60;
 uniform float line_level_b = 0.80;
 uniform float line_width = 0.05;
-uniform float line_strength = 0.9;
+uniform float line_strength = 0.7;
 uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
 uniform float shore_pos = 0.88;
-uniform float shore_width = 0.035;
+uniform float shore_width = 0.025;
 uniform float smear_spacing = 0.8;
 uniform float smear_gain = 2.1;
 uniform float turbulence_strength = 1.4;
@@ -258,7 +258,7 @@ void fragment() {
 	// field, so it is exactly as smooth as the shoreline itself. The most
 	// illustrated mark of all.
 	float shore = 1.0 - smoothstep(shore_width * 0.5, shore_width, abs(rr - shore_pos));
-	body = mix(body, line_color, shore * 0.85);
+	body = mix(body, line_color, shore * 0.5);
 
 	// The comic INK line: a dark outline hugging the real bank curve, just
 	// inside the waterline. The old stylized attempt drew its outline per
@@ -389,13 +389,15 @@ const BANK_FEATHER := 0.03
 const LINE_LEVEL_A := 0.60
 const LINE_LEVEL_B := 0.80
 const LINE_WIDTH := 0.05
-const LINE_STRENGTH := 0.9
+const LINE_STRENGTH := 0.7
 const LINE_COLOR := Color(0.85, 0.97, 1.0)
 
 ## The constant shore highlight, in across-fraction units: where it sits
-## (inside the ink line, by test) and how wide it draws.
+## (inside the ink line, by test) and how wide it draws. Dimmed to half
+## strength after the first live look -- at full strength it stacked with
+## the ink, the lightest cel and the strokes into one glowing bank margin.
 const SHORE_POS := 0.88
-const SHORE_WIDTH := 0.035
+const SHORE_WIDTH := 0.025
 
 ## Five RAMP STOPS -- no longer bands -- drawing the channel's real
 ## parabolic cross-section as one continuous gradient, light at the shallow
