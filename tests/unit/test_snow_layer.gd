@@ -425,6 +425,160 @@ func test_neighbouring_tiles_often_show_different_variants():
 	)
 
 
+# -- per-tile transform: breaking up "wallpaper" at the highest bands -------
+#
+# Reported live, with screenshots: a field of deep/near-full snow renders as
+# an obviously artificial, grid-aligned repeating pattern -- the same
+# rounded double-lobed blob in the same on-screen position and orientation,
+# tile after tile. Investigated directly: this is NOT a variant_for or
+# band_for bug (both independently confirmed to spread genuinely across a
+# real 10x10 tile grid, no repetition pattern, and byte-identical painted-
+# pixel counts against a pre-bleed-removal-fix reconstruction of this file at
+# band 9). It is a real property of the illustrated ART at the highest
+# coverage band: "one large puff nearly filling the cell" (see
+# OVERLAY_COLUMNS' own doc comment) leaves little room for silhouette
+# variety across its ten variants, so several of them read as visually
+# similar ROUNDED BLOBS at a glance even though their pixels genuinely
+# differ. Two identically-POSITIONED, identically-ORIENTED similar blobs
+# read as "the same tile repeated"; two mirrored copies of the same blob do
+# not -- so this axis breaks up the wallpaper look by varying ORIENTATION,
+# independent of which variant/band is shown (see transform_for's own doc
+# comment).
+#
+# Only flip_h, flip_v, and flip_h+flip_v are used -- NOT transpose. Checked
+# directly by rendering real built tiles (band 9's own "puff nearly filling
+# the cell" shapes) through all four orthogonal-group members: transpose
+# visibly distorts a wide, roughly-oval mound into a tall, narrow one --
+# rotating a shape's own aspect ratio is a much bigger, more obviously wrong
+# change than mirroring it, and several bands' own real content is not
+# top/bottom symmetric (band 9's built tiles measure top-half alpha mass
+# roughly 30x their own bottom half, e.g. variant 0: 363.7 vs 10.3) in a way
+# a simple flip preserves (a mirrored mound is still a mound) but a
+# transpose does not (it turns "wide, short at the bottom" into "tall,
+# narrow on one side").
+const _TRANSFORM_FLIP_H := 4096  # TileSetAtlasSource.TRANSFORM_FLIP_H
+const _TRANSFORM_FLIP_V := 8192  # TileSetAtlasSource.TRANSFORM_FLIP_V
+const _TRANSFORM_TRANSPOSE := 16384  # TileSetAtlasSource.TRANSFORM_TRANSPOSE
+
+
+func test_transform_matches_the_engines_own_flip_constants():
+	# Confirms this file's own local mirrors of TileSetAtlasSource's real
+	# engine constants (used above so this test file does not have to
+	# instantiate one just to read three integers) have not drifted from the
+	# actual engine values.
+	assert_eq(_TRANSFORM_FLIP_H, TileSetAtlasSource.TRANSFORM_FLIP_H)
+	assert_eq(_TRANSFORM_FLIP_V, TileSetAtlasSource.TRANSFORM_FLIP_V)
+	assert_eq(_TRANSFORM_TRANSPOSE, TileSetAtlasSource.TRANSFORM_TRANSPOSE)
+
+
+func test_transform_is_one_of_the_four_flip_combinations_and_never_transposes():
+	var valid := [
+		0,
+		_TRANSFORM_FLIP_H,
+		_TRANSFORM_FLIP_V,
+		_TRANSFORM_FLIP_H | _TRANSFORM_FLIP_V,
+	]
+	for x in range(40):
+		var transform := layer.transform_for(x, -x * 5 + 2)
+		assert_true(
+			valid.has(transform),
+			"transform_for returned %d, not one of the four meaningful flip combinations %s" % [transform, valid]
+		)
+		assert_eq(
+			transform & _TRANSFORM_TRANSPOSE, 0,
+			"transform_for set the TRANSPOSE bit -- excluded deliberately, see this section's own doc comment"
+		)
+
+
+func test_transform_is_deterministic_for_the_same_tile():
+	assert_eq(layer.transform_for(23, -9), layer.transform_for(23, -9))
+
+
+func test_transform_varies_across_tiles():
+	var seen := {}
+	for x in range(40):
+		seen[layer.transform_for(x, 0)] = true
+	assert_gt(seen.size(), 1, "every tile getting the same transform defeats the point of having four")
+
+
+## The whole reason this axis exists: two tiles that land on the exact same
+## (band, variant) pair -- i.e. would draw the IDENTICAL picture -- must not
+## also draw it in the identical orientation, or the wallpaper look this was
+## built to fix comes right back. transform_for is intentionally a SEPARATE
+## noise field from variant_for/band_for (different salt, see transform_for's
+## own doc comment), so this checks that independence holds in practice, not
+## just by construction: find two tiles that genuinely share a band+variant
+## pair on a real sweep, and confirm they render as different PIXELS once the
+## transform is applied -- not just that the two transform ints differ.
+func test_two_tiles_sharing_the_same_band_and_variant_render_visually_distinguishable():
+	var tiles_by_key := {}
+	for x in range(-80, 80):
+		for y in range(-15, 15):
+			var band := layer.band_for(1.0, 0.0, layer.onset_offset_for(x, y))
+			if band < 0:
+				continue
+			var key := Vector2i(band, layer.variant_for(x, y))
+			if not tiles_by_key.has(key):
+				tiles_by_key[key] = []
+			tiles_by_key[key].append(Vector2i(x, y))
+
+	var checked_a_pair := false
+	for key in tiles_by_key:
+		var tiles: Array = tiles_by_key[key]
+		if tiles.size() < 2:
+			continue
+		var transform_by_tile := {}
+		for tile in tiles:
+			transform_by_tile[tile] = layer.transform_for(tile.x, tile.y)
+		var tile_a: Vector2i = tiles[0]
+		var transform_a: int = transform_by_tile[tile_a]
+		var tile_b = null
+		for tile in tiles:
+			if transform_by_tile[tile] != transform_a:
+				tile_b = tile
+				break
+		if tile_b == null:
+			continue  # This bucket happened to land on one transform for every tile -- try the next.
+
+		checked_a_pair = true
+		var base_image: Image = layer.build_band_image(key.x, key.y)
+		var image_a := _rendered_with_transform(base_image, transform_a)
+		var image_b := _rendered_with_transform(base_image, transform_by_tile[tile_b])
+		var differing_pixels := 0
+		for py in image_a.get_height():
+			for px in image_a.get_width():
+				if absf(image_a.get_pixel(px, py).a - image_b.get_pixel(px, py).a) > 0.01:
+					differing_pixels += 1
+		assert_gt(
+			differing_pixels, 0,
+			(
+				"tiles %s and %s share band=%d variant=%d with different transforms (%d vs %d) " +
+				"but rendered byte-identical -- transform isn't actually breaking up the wallpaper look"
+			) % [tile_a, tile_b, key.x, key.y, transform_a, transform_by_tile[tile_b]]
+		)
+		break
+
+	assert_true(
+		checked_a_pair,
+		"precondition: never found two tiles across the sweep sharing a (band, variant) pair with different transforms -- can't check the wallpaper claim without this"
+	)
+
+
+## Mirrors what TileMapLayer itself does with a TileSetAtlasSource
+## alternative_tile carrying flip bits -- confirmed directly against a real
+## TileSetAtlasSource/TileMapLayer render (an asymmetric probe tile's marked
+## quadrant moved from top-left to top-right under a raw FLIP_H
+## alternative_tile, with no explicit create_alternative_tile call needed;
+## see docs/progress.md's own entry on this investigation).
+func _rendered_with_transform(image: Image, transform: int) -> Image:
+	var out := image.duplicate()
+	if transform & _TRANSFORM_FLIP_H:
+		out.flip_x()
+	if transform & _TRANSFORM_FLIP_V:
+		out.flip_y()
+	return out
+
+
 # -- which band a tile gets --------------------------------------------------
 
 func test_bare_ground_gets_no_snow():
