@@ -64,7 +64,7 @@ uniform float eddy_detail_weight = 0.5;
 uniform float across_range = 1.4;
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
-uniform float bank_feather = 0.08;
+uniform float bank_feather = 0.03;
 uniform float glint_threshold = 0.70;
 uniform float glint_strength = 0.55;
 uniform float foam_threshold = 0.62;
@@ -370,12 +370,15 @@ const EDDY_DETAIL_WEIGHT := 0.5
 ## wrong doubles or halves every reconstructed offset.
 const TILE_PX := 16.0
 
-## Half-width of the waterline's feather, in across-fraction units --
-## 0.08 of a 2-tile half-width is ~2.5 world px of soft edge. Must stay
-## inside the painter's apron (test_the_feather_fits_inside_the_painted_
-## apron) or the fade gets clipped by the last painted cell and the
-## straight edge returns.
-const BANK_FEATHER := 0.08
+## Half-width of the waterline's feather, in across-fraction units. Small
+## since the comic pass: the ink line lives right at the bank, and a wide
+## feather rendered it at half opacity -- a washed-out outline instead of
+## a drawn one. 0.03 of a 2-tile half-width is ~1 world px (2 art px) of
+## soft edge, so the ink prints at effectively full strength and the
+## pixel-snap keeps the line crisp. Must stay inside the painter's apron
+## (test_the_feather_fits_inside_the_painted_apron) or the fade gets
+## clipped by the last painted cell and the straight edge returns.
+const BANK_FEATHER := 0.03
 
 ## Where crest glints begin, and how bright they get. Glints appear and
 ## vanish with the surface rather than sliding across it, which is what
