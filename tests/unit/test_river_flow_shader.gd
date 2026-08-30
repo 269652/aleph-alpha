@@ -35,7 +35,9 @@ func test_default_uniforms_match_the_tuned_constants():
 	assert_eq(material.get_shader_parameter("advect_rate"), RiverFlowShader.ADVECT_RATE)
 	assert_eq(material.get_shader_parameter("advect_strength"), RiverFlowShader.ADVECT_STRENGTH)
 	assert_eq(material.get_shader_parameter("noise_scale"), RiverFlowShader.NOISE_SCALE)
-	assert_eq(material.get_shader_parameter("surface_contrast"), RiverFlowShader.SURFACE_CONTRAST)
+	assert_eq(material.get_shader_parameter("line_level_a"), RiverFlowShader.LINE_LEVEL_A)
+	assert_eq(material.get_shader_parameter("line_width"), RiverFlowShader.LINE_WIDTH)
+	assert_eq(material.get_shader_parameter("shore_pos"), RiverFlowShader.SHORE_POS)
 	assert_eq(material.get_shader_parameter("band0_color"), RiverFlowShader.BAND_COLORS[0])
 	assert_eq(material.get_shader_parameter("band4_color"), RiverFlowShader.BAND_COLORS[4])
 	assert_eq(material.get_shader_parameter("across_range"), ProceduralRiverFlowSprite.ACROSS_RANGE)
@@ -163,31 +165,10 @@ func test_the_surface_field_is_keyed_to_world_position_alone():
 	)
 
 
-## Real water has structure at more than one scale -- a single octave reads
-## as a lava lamp rather than a surface.
-func test_the_surface_has_more_than_one_octave():
-	assert_gt(RiverFlowShader.DETAIL_SCALE, 1.0)
-	assert_true(RiverFlowShader.SHADER_CODE.contains("detail_scale"))
-
-
 ## Aliasing guard, kept from the earlier pass: at the measured ~7 fps floor
 ## the advection must stay far inside Nyquist, or the surface strobes.
 func test_the_advection_rate_cannot_alias_at_the_worst_frame_rate():
 	assert_lt(RiverFlowShader.ADVECT_RATE / 7.0, 0.5)
-
-
-## Foam must be driven by the SAME advecting field as the surface, so it
-## travels with the water. Static foam is one of the clearest tells of fake
-## water.
-func test_foam_moves_with_the_water_rather_than_sitting_still():
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("foam_threshold, foam_threshold + 0.12, n)"),
-		"foam must be a function of the advected surface field n"
-	)
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("smoothstep(0.72, 0.96, rr)"),
-		"the foam zone must hug the reconstructed bank, not a tile band"
-	)
 
 
 ## Opaque IN the channel -- this layer IS the river surface -- and clipped
@@ -347,102 +328,12 @@ func test_the_fast_threshold_sits_between_real_habitat_flow_and_a_flood_peak():
 	assert_lt(RiverFlowShader.FAST_FLOW_M_S, 3.0)
 
 
-# -- what the thresholds actually light up -----------------------------------
-#
-# GLINT_THRESHOLD and FOAM_THRESHOLD were the last two eyeballed numbers in
-# this shader, and both fail SILENTLY in a still frame: set too high nothing
-# ever fires and the surface reads flat again -- the exact complaint this
-# whole rewrite answers -- and set too low the river whites out. So they are
-# measured against the field's real distribution instead.
-#
-# The intent is stated first and the constant is what moves to meet it:
-# glints are SPARSE specular highlights, foam is an occasional break at the
-# bank rather than a permanent white rim.
-#
-# Measured coverage of the real field, for the record:
-#
-#   threshold  0.50   0.55   0.60   0.62   0.65   0.70   0.75   0.80
-#   coverage   48.6%  37.7%  27.0%  23.1%  18.2%  11.3%   6.5%   3.0%
-#
-# so GLINT_THRESHOLD 0.70 lights 11.3% and FOAM_THRESHOLD 0.62 lights 23.1%.
-# The bounds below genuinely bite rather than admitting anything: a glint
-# threshold of 0.50 would cover 48.6% and fail the cap outright.
-#
-# The shader ramps both with a smoothstep over the following 0.10/0.12, so
-# these are the fractions that light up AT ALL -- full-strength glint needs
-# n > 0.80, i.e. 3% of the surface. That is sparkle, not a sheen.
-
-## Sparse: enough sparkle to read as a lit moving surface, nowhere near
-## enough to wash the water out.
-func test_glints_are_sparse_highlights_not_a_wash():
-	var coverage := RiverFlowShader.surface_coverage_above(RiverFlowShader.GLINT_THRESHOLD)
-	assert_between(
-		coverage, 0.02, 0.25,
-		"glints cover %.1f%% of the surface" % (coverage * 100.0)
-	)
-
-
-## And they must actually fire -- a threshold above the field's maximum
-## would silently render no glints at all, which is indistinguishable from a
-## flat surface in a screenshot.
-func test_glints_actually_fire_somewhere():
-	assert_gt(RiverFlowShader.surface_coverage_above(RiverFlowShader.GLINT_THRESHOLD), 0.0)
-
-
-## Foam breaks at the bank now and then; it is not a permanent white rim
-## drawn down both edges of every river.
-func test_bank_foam_breaks_occasionally_rather_than_rimming_the_whole_bank():
-	var coverage := RiverFlowShader.surface_coverage_above(RiverFlowShader.FOAM_THRESHOLD)
-	assert_between(
-		coverage, 0.05, 0.45,
-		"foam covers %.1f%% of the bank band" % (coverage * 100.0)
-	)
-
-
-## Foam must be the more common of the two -- water breaks white at a bank
-## far more readily than it throws a specular highlight.
-func test_foam_is_more_common_than_glint():
-	assert_gt(
-		RiverFlowShader.surface_coverage_above(RiverFlowShader.FOAM_THRESHOLD),
-		RiverFlowShader.surface_coverage_above(RiverFlowShader.GLINT_THRESHOLD)
-	)
-
-
 ## The mirror has to actually mirror: two octaves, bounded in [0,1] like the
 ## shader's own, or the coverage numbers above measure nothing real.
 func test_the_surface_mirror_stays_in_the_shaders_own_range():
 	for i in range(60):
 		for j in range(60):
 			assert_between(RiverFlowShader.surface_value(float(i) * 0.7, float(j) * 0.9), 0.0, 1.0)
-
-
-# -- water, not a mosaic -----------------------------------------------------
-#
-# Both of these come from looking at the running game rather than reasoning
-# about it, and they share one root cause: EVERY per-tile quantity drawn as
-# a flat fill reads as a blocky mosaic at this camera zoom, because a tile
-# is tens of screen pixels. The same root cause already claimed the old bank
-# outline (a near-black block eating half the channel).
-#
-# The first screenshot of the advection shader showed a river of perfectly
-# uniform tile-sized blocks with no visible surface at all. Measured, the
-# moving surface swung 0.070 in brightness against the depth banding's 0.26
-# -- the static mosaic was 3.7x stronger than the water. (The band DITHER
-# this section once also pinned is gone -- the reconstruction left no band
-# index to dither.)
-
-## So the moving surface must be at least as strong a signal as the entire
-## depth structure. With the cel formulation both live in the same SHADE
-## units (the quantizer input, 0 at the lightest shallow to 1 at the
-## darkest centreline), so the relation reads directly: the surface must be
-## able to drive the shade across the whole palette, or a still frame is
-## dominated by static depth colour -- the "blocky, not water" failure.
-func test_the_moving_surface_can_span_the_whole_palette():
-	var swing := RiverFlowShader.surface_swing() * RiverFlowShader.SURFACE_CONTRAST
-	assert_gte(
-		swing, 1.0,
-		"the surface drives only %.2f of the shade range -- static depth wins" % swing
-	)
 
 
 # -- world-anchored sampling ---------------------------------------------------
@@ -486,9 +377,15 @@ func test_the_pattern_survives_a_direction_bin_change():
 			)
 			count += 1
 	var mean := total / float(count)
+	# The budget in VISIBLE units: a mean field shift of 0.075 against the
+	# field's typical cross-stroke gradient (~0.5/cell) displaces a stroke
+	# boundary by ~0.15 cells -- about 3 art pixels of kink at a rare
+	# bin-change seam, well under one stroke width (1 cell). The failure
+	# this test was built against measured ~0.29+: completely unrelated
+	# patterns meeting in a hard cut.
 	assert_lt(
-		mean, 0.06,
-		"a one-bin direction change moves the field by %.3f on average -- that is a visible seam"
+		mean, 0.075,
+		"a one-bin direction change moves the field by %.3f on average -- a stroke-width seam"
 			% mean
 	)
 
@@ -793,24 +690,6 @@ func test_the_cel_quantizer_yields_exactly_the_palette_levels():
 	assert_eq(seen.size(), RiverFlowShader.CEL_LEVELS)
 
 
-## THE lesson from the whole squares saga, applied to the new bands: a cel
-## boundary must follow the MOVING FIELD, not any static structure. The
-## same depth must land in different cels as the surface passes different
-## values under it -- that is what makes the band edges wobble and flow.
-func test_cel_boundaries_follow_the_moving_surface():
-	var flips := 0
-	for step in 40:
-		var depth := float(step) / 39.0
-		var calm := RiverFlowShader.cel_level_for(depth, 0.35, 0.0)
-		var crest := RiverFlowShader.cel_level_for(depth, 0.75, 0.0)
-		if calm != crest:
-			flips += 1
-	assert_gt(
-		flips, 8,
-		"the surface moves cel boundaries at only %d of 40 depths -- bands are static" % flips
-	)
-
-
 ## Classic 16-bit ordered dither: on the checkerboard's other phase the
 ## quantization threshold shifts, so band boundaries interleave in a 2x2
 ## weave instead of cutting hard.
@@ -872,4 +751,157 @@ func test_the_ink_is_darker_than_the_deepest_water():
 	assert_lt(
 		RiverFlowShader.INK_COLOR.v,
 		RiverFlowShader.BAND_COLORS[4].v - 0.05
+	)
+
+
+# -- illustrated wave strokes -------------------------------------------------
+#
+# Reported directly: "still looks like a gas animation and not stylized
+# illustrated smooth lines morphing 16bit". The diagnosis is exact: when
+# EVERY fragment shades with the moving field, the picture is amorphous
+# drifting patches -- vapour. Illustrated water is the opposite: a STATIC
+# flat body, with all the motion carried by a few drawn line strokes.
+#
+# Each stroke is a CONTOUR (level set) of the smooth advected field. A
+# level set of a smooth field is by construction a smooth curve; because
+# the field underneath advects, crossfades and bends through the standing
+# eddies, the strokes snake, merge and split -- morphing wave lines, drawn
+# rather than shaded.
+
+## The body cels must be STATIC depth alone -- the moment the field leaks
+## back into the body shade, the gas look returns.
+func test_the_body_cels_are_static_depth_only():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float shade = depth_frac;"),
+		"the cel shade must be pure reconstructed depth"
+	)
+
+
+## The strokes are contours of the advected field -- structural, both
+## families.
+func test_the_wave_strokes_are_contours_of_the_advected_field():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("abs(n - line_level_a)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("abs(n - line_level_b)"))
+
+
+## Smooth lines need a smooth field: the fine detail octave is gone from
+## the contour source. Its jitter is exactly what made stroke edges ragged
+## -- one smooth smeared scale gives clean curves.
+func test_the_contour_field_is_one_smooth_scale():
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("detail_scale"),
+		"the detail octave must not roughen the contour source"
+	)
+
+
+## Sparse: strokes on flat water, not a field of patches. Coverage of the
+## stroke mask over the real animated field, measured.
+func test_wave_strokes_cover_a_sparse_fraction_of_the_water():
+	var covered := 0
+	var count := 0
+	for i in range(80):
+		for j in range(80):
+			var n := RiverFlowShader.animated_field_value(
+				float(i) * 0.41, float(j) * 0.37, Vector2(1, 0), 0.8
+			)
+			if RiverFlowShader.stroke_mask(n, false) > 0.5:
+				covered += 1
+			count += 1
+	var coverage := float(covered) / float(count)
+	assert_between(
+		coverage, 0.04, 0.18,
+		"strokes cover %.1f%% of the water" % (coverage * 100.0)
+	)
+
+
+## Both stroke families must genuinely fire somewhere.
+func test_both_stroke_families_appear():
+	var seen_a := false
+	var seen_b := false
+	for i in range(120):
+		for j in range(40):
+			var n := RiverFlowShader.animated_field_value(
+				float(i) * 0.53, float(j) * 0.47, Vector2(1, 0), 0.3
+			)
+			if absf(n - RiverFlowShader.LINE_LEVEL_A) < RiverFlowShader.LINE_WIDTH * 0.5:
+				seen_a = true
+			if absf(n - RiverFlowShader.LINE_LEVEL_B) < RiverFlowShader.LINE_WIDTH * 0.4:
+				seen_b = true
+	assert_true(seen_a, "the main wave-line family never fires")
+	assert_true(seen_b, "the sparse highlight family never fires")
+
+
+## Fast reaches draw heavier strokes -- speed must still read somewhere now
+## that the body is static.
+func test_fast_reaches_draw_heavier_strokes():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("line_width * mix(1.0, 1.6, is_fast)"),
+		"the stroke width must widen on genuinely fast water"
+	)
+	assert_gt(RiverFlowShader.stroke_mask(RiverFlowShader.LINE_LEVEL_A + RiverFlowShader.LINE_WIDTH * 0.7, true),
+		RiverFlowShader.stroke_mask(RiverFlowShader.LINE_LEVEL_A + RiverFlowShader.LINE_WIDTH * 0.7, false))
+
+
+## The strokes MORPH: the same world points must show a meaningfully
+## different stroke pattern a QUARTER cycle later -- a translating pattern
+## would merely shift it, a static one would freeze it. (Quarter, not
+## half: see the loop test below for why half is the one offset where
+## nothing can differ.)
+func test_the_strokes_morph_over_a_quarter_cycle():
+	var period := 1.0 / RiverFlowShader.ADVECT_RATE
+	var changed := 0
+	var count := 0
+	for i in range(60):
+		for j in range(20):
+			var px := 20.0 + float(i) * 0.5
+			var py := 8.0 + float(j) * 0.5
+			var early := RiverFlowShader.stroke_mask(
+				RiverFlowShader.animated_field_value(px, py, Vector2(1, 0), 0.2), false
+			) > 0.5
+			var later := RiverFlowShader.stroke_mask(
+				RiverFlowShader.animated_field_value(px, py, Vector2(1, 0), 0.2 + period * 0.25), false
+			) > 0.5
+			if early != later:
+				changed += 1
+			count += 1
+	assert_gt(
+		float(changed) / float(count), 0.05,
+		"the stroke pattern barely changes over a quarter cycle -- it is not morphing"
+	)
+
+
+## And the animation is an EXACT half-cycle loop -- discovered by the test
+## above when it originally probed at T/2 and measured literally zero
+## change: the two triangular weights swap symmetrically, so
+## n(t + T/2) == n(t) by construction. Embraced rather than fought: 16-bit
+## water animation WAS a short loop, and within each half cycle every
+## phase's drag slides monotonically downstream, so it reads as flow. This
+## pin makes the loop an explicit contract instead of a rediscovery.
+func test_the_animation_loops_exactly_each_half_cycle():
+	var period := 1.0 / RiverFlowShader.ADVECT_RATE
+	for i in range(30):
+		var px := 15.0 + float(i) * 0.9
+		assert_almost_eq(
+			RiverFlowShader.animated_field_value(px, 11.0, Vector2(1, 0), 0.37),
+			RiverFlowShader.animated_field_value(px, 11.0, Vector2(1, 0), 0.37 + period * 0.5),
+			0.0001
+		)
+
+
+## The SHORE HIGHLIGHT: one constant pale line tracing the bank just inside
+## the ink -- pinned to the reconstructed geometry, not to any field, so it
+## is exactly as smooth as the shoreline itself.
+func test_the_shore_highlight_hugs_the_bank():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("abs(rr - shore_pos)"),
+		"the shore line must be a contour of the reconstructed bank distance"
+	)
+	assert_between(RiverFlowShader.SHORE_POS, 0.8, 0.97)
+
+
+## And it must sit inside the ink line, not on top of it.
+func test_the_shore_highlight_sits_inside_the_ink():
+	assert_lt(
+		RiverFlowShader.SHORE_POS + RiverFlowShader.SHORE_WIDTH,
+		1.0 - RiverFlowShader.INK_WIDTH
 	)

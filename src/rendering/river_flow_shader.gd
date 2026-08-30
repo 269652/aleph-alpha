@@ -49,13 +49,18 @@ shader_type canvas_item;
 uniform float advect_rate = 0.35;
 uniform float advect_strength = 1.15;
 uniform float noise_scale = 0.08;
-uniform float detail_scale = 2.7;
-uniform float surface_contrast = 1.9;
 uniform float pixel_snap = 0.5;
 uniform float cel_levels = 6.0;
 uniform float dither_strength = 0.5;
 uniform float ink_width = 0.06;
 uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
+uniform float line_level_a = 0.60;
+uniform float line_level_b = 0.80;
+uniform float line_width = 0.05;
+uniform float line_strength = 0.9;
+uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
+uniform float shore_pos = 0.88;
+uniform float shore_width = 0.035;
 uniform float smear_spacing = 0.8;
 uniform float smear_gain = 2.1;
 uniform float turbulence_strength = 1.4;
@@ -65,11 +70,6 @@ uniform float across_range = 1.4;
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
 uniform float bank_feather = 0.03;
-uniform float glint_threshold = 0.70;
-uniform float glint_strength = 0.55;
-uniform float foam_threshold = 0.62;
-uniform vec3 glint_color : source_color = vec3(0.88, 0.96, 1.0);
-uniform vec3 foam_color : source_color = vec3(0.95, 0.99, 1.0);
 uniform vec3 band0_color : source_color = vec3(0.30, 0.60, 0.66);
 uniform vec3 band1_color : source_color = vec3(0.22, 0.50, 0.62);
 uniform vec3 band2_color : source_color = vec3(0.16, 0.40, 0.56);
@@ -112,19 +112,20 @@ float value_noise(vec2 p) {
 // Two scales, because real water has structure at several at once; the
 // fine octave stays unsmeared -- isotropic sparkle riding on the streaks.
 float line_field(vec2 q, vec2 flow_dir) {
+	// Triangle-weighted taps: the outer taps sit furthest along the
+	// direction vector, so they pay the most at a direction-bin change --
+	// weighting the centre keeps the stroke shape while cutting the seam
+	// budget roughly in half.
 	float total = 0.0;
 	for (int k = -4; k <= 4; k++) {
-		total += value_noise(q + flow_dir * (float(k) * smear_spacing));
+		float w = 5.0 - abs(float(k));
+		total += value_noise(q + flow_dir * (float(k) * smear_spacing)) * w;
 	}
-	float streak = clamp((total / 9.0 - 0.5) * smear_gain + 0.5, 0.0, 1.0);
-	// The fine octave gets its own short stroke -- fully isotropic detail
-	// would dilute the anisotropy the main smear just built.
-	float detail = (
-		value_noise(q * detail_scale)
-		+ value_noise(q * detail_scale + flow_dir * (smear_spacing * detail_scale))
-		+ value_noise(q * detail_scale - flow_dir * (smear_spacing * detail_scale))
-	) / 3.0;
-	return streak * 0.8 + detail * 0.2;
+	// ONE smooth scale, deliberately: the strokes below are contours of
+	// this field, and a level set is only as smooth as the field it cuts.
+	// The fine detail octave an earlier pass mixed in here is exactly what
+	// made stroke edges ragged.
+	return clamp((total / 25.0 - 0.5) * smear_gain + 0.5, 0.0, 1.0);
 }
 
 void fragment() {
@@ -215,16 +216,13 @@ void fragment() {
 	// they draw the tilemap grid straight across the river. Perturbing the
 	// index lets each edge wander over half a band, breaking it into a
 	// ragged, moving line that no longer coincides with the lattice.
-	// THE COMIC / 16-BIT PASS. One continuous shade -- the reconstructed
-	// depth pushed around by the advecting surface -- quantized into a
-	// handful of flat cel levels. Because the shade rides the moving
-	// field, the cel boundaries wobble, flow and morph like hand-animated
-	// water; because everything upstream of the quantizer is continuous
-	// and world-anchored, no boundary can ever fall along the tile grid.
-	// (The first stylized attempt died of a translating pattern UNDER the
-	// flat colours -- the flat colours were never the problem.)
-	float contrast = surface_contrast * mix(0.7, 1.35, is_fast);
-	float shade = clamp(depth_frac - (n - 0.5) * contrast * 0.5, 0.0, 1.0);
+	// THE COMIC / 16-BIT BODY: static flat cels of pure reconstructed
+	// depth. Deliberately NOT shaded by the moving field -- that was tried
+	// and read as "a gas animation": when every fragment shades with the
+	// field, the picture is amorphous drifting patches. Illustrated water
+	// keeps its body still and lets the drawn strokes below carry ALL the
+	// motion.
+	float shade = depth_frac;
 
 	// Classic ordered dither: the checkerboard's other phase shifts the
 	// quantization threshold half a step, so band boundaries interleave in
@@ -242,18 +240,25 @@ void fragment() {
 	body = mix(body, band3_color, clamp(sramp - 2.0, 0.0, 1.0));
 	body = mix(body, band4_color, clamp(sramp - 3.0, 0.0, 1.0));
 
-	// Specular glints on the crests. They appear and vanish with the
-	// surface rather than sliding across it, which is what real moving
-	// water does to reflected light.
-	float glint = smoothstep(glint_threshold, glint_threshold + 0.10, n);
-	body = mix(body, glint_color, glint * glint_strength);
+	// WAVE STROKES -- the motion, drawn rather than shaded. Each stroke is
+	// a CONTOUR (level set) of the smooth advected field: a level set of a
+	// smooth field is by construction a smooth curve, and because the
+	// field underneath advects, crossfades and bends through the standing
+	// eddies, the strokes snake, merge and split -- morphing illustrated
+	// wave lines. Two families: the main lines and a sparser, thinner
+	// highlight set that twinkles in and out on the crests.
+	float stroke_width = line_width * mix(1.0, 1.6, is_fast);
+	float stroke_a = 1.0 - smoothstep(stroke_width * 0.5, stroke_width, abs(n - line_level_a));
+	float stroke_b = 1.0 - smoothstep(stroke_width * 0.3, stroke_width * 0.7, abs(n - line_level_b));
+	float wave = max(stroke_a, stroke_b * 0.85);
+	body = mix(body, line_color, wave * line_strength);
 
-	// Whitewater hugging the real reconstructed bank, where a river breaks
-	// over its own edge -- driven by the SAME advecting field, so the foam
-	// travels with the water instead of sitting still.
-	float at_edge = smoothstep(0.72, 0.96, rr);
-	float foam = smoothstep(foam_threshold, foam_threshold + 0.12, n) * at_edge;
-	body = mix(body, foam_color, foam);
+	// The SHORE HIGHLIGHT: one constant pale line tracing the bank just
+	// inside the ink -- pinned to the reconstructed geometry, not to any
+	// field, so it is exactly as smooth as the shoreline itself. The most
+	// illustrated mark of all.
+	float shore = 1.0 - smoothstep(shore_width * 0.5, shore_width, abs(rr - shore_pos));
+	body = mix(body, line_color, shore * 0.85);
 
 	// The comic INK line: a dark outline hugging the real bank curve, just
 	// inside the waterline. The old stylized attempt drew its outline per
@@ -281,10 +286,19 @@ void fragment() {
 const ADVECT_RATE := 0.35
 
 ## How far the surface travels along the flow over one phase, in noise
-## CELLS. Sized against the smear length so each line travels a bit over
-## its own length per phase (see drag_in_feature_lengths) -- that is what
-## reads as the water speed.
-const ADVECT_STRENGTH := 5.5
+## CELLS. Sized against the smear length so each line travels a real
+## fraction of its own length per phase (see drag_in_feature_lengths) --
+## that is what reads as the water speed. Also bounded above by the seam
+## budget: the drag is one of the few direction-steered offsets, so a
+## bigger drag costs more at every direction-bin change.
+##
+## NOTE the animation is an EXACT half-cycle loop: the two triangular
+## crossfade weights swap symmetrically, so n(t + T/2) == n(t) by
+## construction. Deliberate and embraced -- 16-bit water animation WAS a
+## short loop -- and within every half cycle each phase's drag grows
+## monotonically DOWNSTREAM, which is why it still reads as flow, not as
+## oscillation. Pinned by test_the_animation_loops_exactly_each_half_cycle.
+const ADVECT_STRENGTH := 4.5
 
 ## Spatial scale of the surface field, and the second octave's multiplier.
 ##
@@ -299,7 +313,6 @@ const ADVECT_STRENGTH := 5.5
 ## scale that means anything here: see
 ## test_flow_lines_are_narrow_enough_that_several_fit_across_a_channel.
 const NOISE_SCALE := 0.08
-const DETAIL_SCALE := 2.7
 
 ## The line-integral-convolution stroke: how many world-anchored taps are
 ## averaged along the flow, and how far apart (in noise cells). Taps closer
@@ -311,17 +324,6 @@ const DETAIL_SCALE := 2.7
 const SMEAR_TAPS := 9
 const SMEAR_SPACING := 0.7
 const SMEAR_GAIN := 2.6
-
-## How strongly the advecting field pushes the cel shade around, in SHADE
-## units (the quantizer input, 0 lightest to 1 darkest).
-##
-## Sized by a MEASURED RELATION, not by eye: the surface's real p05..p95
-## swing times this must reach 1.0 -- the surface can drive the shade
-## across the WHOLE palette. Anything less and static depth colour
-## dominates every still frame, which is the "blocky, not water" failure
-## this shader crawled out of. See
-## test_the_moving_surface_can_span_the_whole_palette.
-const SURFACE_CONTRAST := 1.9
 
 ## One ART pixel, in world px -- TILE_SIZE world px carry ART_TILE_SIZE art
 ## px, so this is their ratio, pinned against TerrainRenderer rather than
@@ -380,18 +382,20 @@ const TILE_PX := 16.0
 ## clipped by the last painted cell and the straight edge returns.
 const BANK_FEATHER := 0.03
 
-## Where crest glints begin, and how bright they get. Glints appear and
-## vanish with the surface rather than sliding across it, which is what
-## moving water does to reflected light.
-const GLINT_THRESHOLD := 0.70
-const GLINT_STRENGTH := 0.55
-const GLINT_COLOR := Color(0.88, 0.96, 1.0)
+## The wave strokes: two contour levels of the advected field (the main
+## family and a sparser highlight set), stroke width in field units, and
+## the pale ink they are drawn with. Coverage is held to a measured sparse
+## band -- strokes on flat water, not a field of patches.
+const LINE_LEVEL_A := 0.60
+const LINE_LEVEL_B := 0.80
+const LINE_WIDTH := 0.05
+const LINE_STRENGTH := 0.9
+const LINE_COLOR := Color(0.85, 0.97, 1.0)
 
-## Where bank whitewater begins. Driven by the same advecting field as the
-## surface, so foam travels WITH the water instead of sitting still -- a
-## static foam texture is one of the clearest tells of fake water.
-const FOAM_THRESHOLD := 0.62
-const FOAM_COLOR := Color(0.95, 0.99, 1.0)
+## The constant shore highlight, in across-fraction units: where it sits
+## (inside the ink line, by test) and how wide it draws.
+const SHORE_POS := 0.88
+const SHORE_WIDTH := 0.035
 
 ## Five RAMP STOPS -- no longer bands -- drawing the channel's real
 ## parabolic cross-section as one continuous gradient, light at the shallow
@@ -427,8 +431,6 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("advect_rate", ADVECT_RATE)
 	material.set_shader_parameter("advect_strength", ADVECT_STRENGTH)
 	material.set_shader_parameter("noise_scale", NOISE_SCALE)
-	material.set_shader_parameter("detail_scale", DETAIL_SCALE)
-	material.set_shader_parameter("surface_contrast", SURFACE_CONTRAST)
 	material.set_shader_parameter("pixel_snap", PIXEL_SNAP)
 	material.set_shader_parameter("cel_levels", float(CEL_LEVELS))
 	material.set_shader_parameter("dither_strength", DITHER_STRENGTH)
@@ -443,11 +445,13 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
 	material.set_shader_parameter("tile_px", TILE_PX)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
-	material.set_shader_parameter("glint_threshold", GLINT_THRESHOLD)
-	material.set_shader_parameter("glint_strength", GLINT_STRENGTH)
-	material.set_shader_parameter("glint_color", GLINT_COLOR)
-	material.set_shader_parameter("foam_threshold", FOAM_THRESHOLD)
-	material.set_shader_parameter("foam_color", FOAM_COLOR)
+	material.set_shader_parameter("line_level_a", LINE_LEVEL_A)
+	material.set_shader_parameter("line_level_b", LINE_LEVEL_B)
+	material.set_shader_parameter("line_width", LINE_WIDTH)
+	material.set_shader_parameter("line_strength", LINE_STRENGTH)
+	material.set_shader_parameter("line_color", LINE_COLOR)
+	material.set_shader_parameter("shore_pos", SHORE_POS)
+	material.set_shader_parameter("shore_width", SHORE_WIDTH)
 	for i in BAND_COLORS.size():
 		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
 	return material
@@ -484,6 +488,16 @@ static func bank_alpha(across_magnitude: float) -> float:
 	return 1.0 - smoothstep(1.0 - BANK_FEATHER, 1.0 + BANK_FEATHER, across_magnitude)
 
 
+## The stroke mask, mirroring the shader: how strongly a field value n
+## lands inside either contour family. What the coverage, morphing and
+## fast-reach tests all measure.
+static func stroke_mask(n: float, is_fast: bool) -> float:
+	var width := LINE_WIDTH * (1.6 if is_fast else 1.0)
+	var a := 1.0 - smoothstep(width * 0.5, width, absf(n - LINE_LEVEL_A))
+	var b := 1.0 - smoothstep(width * 0.3, width * 0.7, absf(n - LINE_LEVEL_B))
+	return maxf(a, b * 0.85)
+
+
 ## The cel quantizer, mirroring the shader exactly: shade in [0, 1],
 ## checker 0.0 or 1.0 (the 2x2 dither phase), out comes the flat level.
 static func cel_level(shade: float, checker: float) -> int:
@@ -492,11 +506,6 @@ static func cel_level(shade: float, checker: float) -> int:
 		0, CEL_LEVELS - 1
 	)
 
-
-## The full shade pipeline for one (depth, surface) pair -- what the cel
-## boundary tests sweep to prove the bands follow the MOVING field.
-static func cel_level_for(depth_fraction: float, n: float, checker: float) -> int:
-	return cel_level(depth_fraction - (n - 0.5) * SURFACE_CONTRAST * 0.5, checker)
 
 
 ## Whether a real current is quick enough to read as fast-moving -- such a
@@ -567,17 +576,9 @@ static func line_field_value(px: float, py: float, dir: Vector2) -> float:
 	var total := 0.0
 	for k in range(-4, 5):
 		var offset := dir * (float(k) * SMEAR_SPACING)
-		total += value_noise(px + offset.x, py + offset.y)
-	var streak := clampf((total / float(SMEAR_TAPS) - 0.5) * SMEAR_GAIN + 0.5, 0.0, 1.0)
-	var dx := px * DETAIL_SCALE
-	var dy := py * DETAIL_SCALE
-	var stroke := dir * (SMEAR_SPACING * DETAIL_SCALE)
-	var detail := (
-		value_noise(dx, dy)
-		+ value_noise(dx + stroke.x, dy + stroke.y)
-		+ value_noise(dx - stroke.x, dy - stroke.y)
-	) / 3.0
-	return streak * 0.8 + detail * 0.2
+		var weight := 5.0 - absf(float(k))
+		total += value_noise(px + offset.x, py + offset.y) * weight
+	return clampf((total / 25.0 - 0.5) * SMEAR_GAIN + 0.5, 0.0, 1.0)
 
 
 ## The field flowing east -- the direction-free convenience the coverage
@@ -646,44 +647,6 @@ static func warped_across(world_x: float, world_y: float) -> float:
 ## fragment shows for an eastward flow at time zero.
 static func warped_surface_value(world_x: float, world_y: float) -> float:
 	return surface_value(world_x, warped_across(world_x, world_y))
-
-
-## Fraction of the water surface whose field exceeds `threshold` -- i.e. how
-## much of the river a threshold at that level actually lights up.
-static func surface_coverage_above(threshold: float, samples: int = 120) -> float:
-	var hits := 0
-	for i in samples:
-		for j in samples:
-			# Spread over many noise cells so this measures the field's own
-			# distribution rather than one lucky patch of it.
-			var x := float(i) * 0.37
-			var y := float(j) * 0.41
-			if surface_value(x, y) > threshold:
-				hits += 1
-	return float(hits) / float(samples * samples)
-
-
-## The surface field's real p05..p95 swing -- how much of a brightness range
-## the moving water actually covers in practice.
-##
-## NOT its 0..1 theoretical range, which is what makes this worth measuring:
-## two averaged octaves cluster hard around the middle, so the field only
-## spans about half its nominal range. Sizing the contrast against 0..1
-## instead is exactly how the moving surface ended up 3.7x weaker than the
-## static banding and the river rendered as a flat mosaic.
-static func surface_swing(samples: int = 140) -> float:
-	var values: Array[float] = []
-	for i in samples:
-		for j in samples:
-			values.append(surface_value(float(i) * 0.37, float(j) * 0.41))
-	values.sort()
-	return values[int(values.size() * 0.95)] - values[int(values.size() * 0.05)]
-
-
-## Brightness span of the depth profile, bank to centreline -- the static,
-## per-tile signal the moving surface has to compete with.
-static func depth_profile_span() -> float:
-	return BAND_COLORS[0].v - BAND_COLORS[BAND_COLORS.size() - 1].v
 
 
 ## How wide one flow line is, in world pixels -- one noise cell across the

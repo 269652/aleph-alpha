@@ -1103,6 +1103,34 @@ units (the quantizer input), pinned so the surface's real p05..p95 swing
 can drive the shade across the WHOLE palette -- the same
 surface-vs-static-structure relation as before, in the new units.
 
+### Strokes, not shading (2026-08-30)
+
+Reported directly, of the cel pass: *"still looks like a gas animation and
+not stylized illustrated smooth lines morphing 16bit"*. The diagnosis is
+exact — when EVERY fragment shades with the moving field, the picture is
+amorphous drifting patches: vapour. Illustrated water is the opposite:
+
+- **The body is STATIC** — flat cels of pure reconstructed depth, dithered
+  at their (static) boundaries. No field term in the body shade at all.
+- **All motion lives in drawn WAVE STROKES**: each stroke is a CONTOUR
+  (level set) of the smooth advected field. A level set of a smooth field
+  is by construction a smooth curve; because the field underneath advects,
+  crossfades and bends through the standing eddies, the strokes snake,
+  merge and split — morphing wave lines, drawn rather than shaded. Two
+  families (main lines + sparser twinkling highlights), heavier on fast
+  reaches. The fine detail octave is GONE — its jitter is what made
+  contour edges ragged.
+- **A constant shore highlight line** traces the bank just inside the ink,
+  pinned to the reconstructed geometry — the most illustrated mark of all.
+- **The animation is an exact half-cycle loop** (the two triangular
+  crossfade weights swap symmetrically, so n(t+T/2) == n(t) — discovered
+  when a morph test probed T/2 and measured literally zero change).
+  Embraced, not fought: 16-bit water animation WAS a short loop, and each
+  phase's drag slides monotonically downstream within it, so it reads as
+  flow. Pinned as an explicit contract.
+- Glint and foam are folded into the stroke families; the smear taps are
+  triangle-weighted (outer taps pay the most at a direction-bin change).
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1124,8 +1152,9 @@ surface-vs-static-structure relation as before, in the new units.
   feather, painted out to an apron; base water overlay is ocean-only now.
   Sub-tile GROUND blending at the bank (sand/mud strip under the
   waterline) — ⬜ Not started.
-- **Comic / 16-bit presentation** — ✅ Done — cel posterization + art-pixel
-  snapping + ordered dither + bank ink line over the untouched physics.
+- **Comic / 16-bit presentation** — ✅ Done — static depth cels + art-pixel
+  snapping + ordered dither + bank ink line + contour wave strokes carrying
+  all the motion (see "Strokes, not shading").
 - **World-anchored field + smoothed courses + round caps** — ✅ Done — the
   LIC smear keeps the streak pattern continuous across direction-bin
   changes (the "hard cuts", pinned by a world-magnitude seam test),

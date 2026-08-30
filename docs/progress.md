@@ -7345,6 +7345,23 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: strokes not shading** (medium) — ✅ Done — reported: "still
+  looks like a gas animation and not stylized illustrated smooth lines
+  morphing 16bit". Exact diagnosis: field-shaded fragments = amorphous
+  drifting patches. Now the body is STATIC depth cels and ALL motion is
+  drawn wave strokes = CONTOURS (level sets) of the smooth advected field
+  -- smooth curves by construction that snake/merge/split as the field
+  advects and bends. Two families + heavier strokes on fast reaches +
+  constant shore-highlight line pinned to the bank geometry. Detail octave
+  removed (its jitter roughened contour edges); smear triangle-weighted;
+  glint/foam folded into the stroke families. DISCOVERED BY TEST: the
+  two-phase crossfade is EXACTLY half-cycle periodic (weights swap
+  symmetrically) -- a morph probe at T/2 measured literally zero change.
+  Embraced as the 16-bit animation loop (drag still slides monotonically
+  downstream within each half cycle) and pinned as an explicit contract.
+  Seam budget re-derived in visible units (~3 art px of stroke kink at a
+  rare bin change vs total decorrelation before). Shader suite 62 green +
+  real-GPU smoke.
 - **Rivers: comic / 16-bit presentation** (medium) — ✅ Done — requested
   directly ("make it more comic like? / 16bit pixel art?"). Safe to
   stylize NOW because the first stylized attempt died of a translating
