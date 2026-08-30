@@ -2390,29 +2390,29 @@ func test_the_river_flow_atlas_is_a_grid_not_an_unuploadable_single_row():
 
 func test_atlas_coords_for_river_flow_differs_by_direction_bin():
 	assert_ne(
-		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.25),
-		renderer.atlas_coords_for_river_flow(90.0, 0.5, 0.25)
+		renderer.atlas_coords_for_river_flow(0.0, 0.25, 0),
+		renderer.atlas_coords_for_river_flow(90.0, 0.25, 0)
 	)
 
 
-func test_atlas_coords_for_river_flow_differs_by_speed_bin():
+func test_atlas_coords_for_river_flow_differs_by_style():
 	assert_ne(
-		renderer.atlas_coords_for_river_flow(0.0, 0.0, 0.25),
-		renderer.atlas_coords_for_river_flow(0.0, 1.0, 0.25)
+		renderer.atlas_coords_for_river_flow(0.0, 0.25, 0),
+		renderer.atlas_coords_for_river_flow(0.0, 0.25, 4)
 	)
 
 
 func test_atlas_coords_for_river_flow_differs_by_phase_bin():
 	assert_ne(
-		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.0),
-		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.5)
+		renderer.atlas_coords_for_river_flow(0.0, 0.0, 0),
+		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0)
 	)
 
 
 func test_atlas_coords_for_river_flow_wraps_at_360():
 	assert_eq(
-		renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.25),
-		renderer.atlas_coords_for_river_flow(360.0, 0.5, 0.25)
+		renderer.atlas_coords_for_river_flow(0.0, 0.25, 0),
+		renderer.atlas_coords_for_river_flow(360.0, 0.25, 0)
 	)
 
 
@@ -2425,23 +2425,23 @@ func test_river_flow_tiles_encode_real_per_channel_data():
 	var image: Image = source.texture.get_image()
 	var art := TerrainRenderer.ART_TILE_SIZE
 
-	var early_phase := renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.05) * art
-	var late_phase := renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.95) * art
+	var early_phase := renderer.atlas_coords_for_river_flow(0.0, 0.05, 0) * art
+	var late_phase := renderer.atlas_coords_for_river_flow(0.0, 0.95, 0) * art
 	assert_lt(
 		image.get_pixel(early_phase.x, early_phase.y).r,
 		image.get_pixel(late_phase.x, late_phase.y).r,
 		"the red channel must carry the course phase"
 	)
 
-	var slow := renderer.atlas_coords_for_river_flow(0.0, 0.05, 0.25) * art
-	var fast := renderer.atlas_coords_for_river_flow(0.0, 0.95, 0.25) * art
+	var slow := renderer.atlas_coords_for_river_flow(0.0, 0.25, 0) * art
+	var fast := renderer.atlas_coords_for_river_flow(0.0, 0.25, 8) * art
 	assert_lt(
 		image.get_pixel(slow.x, slow.y).a, image.get_pixel(fast.x, fast.y).a,
-		"the alpha channel must carry the speed fraction"
+		"the alpha channel must carry the packed style"
 	)
 
-	var north := renderer.atlas_coords_for_river_flow(0.0, 0.5, 0.25) * art
-	var east := renderer.atlas_coords_for_river_flow(90.0, 0.5, 0.25) * art
+	var north := renderer.atlas_coords_for_river_flow(0.0, 0.25, 0) * art
+	var east := renderer.atlas_coords_for_river_flow(90.0, 0.25, 0) * art
 	var north_pixel := image.get_pixel(north.x, north.y)
 	var east_pixel := image.get_pixel(east.x, east.y)
 	assert_true(

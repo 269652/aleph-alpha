@@ -7331,6 +7331,46 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Flow rendering: stylized cartoon art direction** (medium) — ✅ Done —
+  requested directly after seeing the realistic version in play ("can you
+  make it look like the water and lava in disenchantment? It doesn't look
+  realistic atm"). Clarified with the user first, because the brief pulled
+  two ways: Disenchantment is a flat cel-animated cartoon, i.e. the OPPOSITE
+  of realism. Confirmed direction: go stylized, water only.
+  **This supersedes the realism goal**, and the reason is worth recording:
+  realism is the wrong target for a 16px top-down pixel-art canvas, where
+  every soft gradient and noise field fights the chunky, hard-outlined art
+  the rest of the game commits to. The physics was never the problem and
+  is unchanged — only the OUTPUT is restyled.
+  The shader's rules are now deliberate NEGATIVES (no gradients, no noise --
+  not a single hash or noise call remains -- no soft edges: every boundary
+  is a step(), never a smoothstep()) plus positives: flat body colour
+  quantised by real depth, one bold darker bank outline, crisp white wave
+  lines scrolling downstream, a second line on fast reaches. Several tests
+  assert the ABSENCE of the excluded techniques, which is what stops the
+  shader drifting back toward realism.
+  **The simulation still drives all of it**: the colour band comes from the
+  real solved depth INCLUDING dam ponding (so damming a river visibly
+  darkens it), and the band thresholds ARE
+  `WaterMovementModel.WADE_DEPTH_METERS` -- so the colour tells you whether
+  you can wade or must swim, and what the player sees can never disagree
+  with what the player can do. The bank outline reuses the cross-channel
+  distance `nearest_river_at` already computed and discarded, costing no new
+  geometry work.
+  The layer is now OPAQUE, a deliberate departure from this project's
+  translucent-overlay convention: other overlays decorate what is beneath,
+  but this one IS the river surface, and the base water under it carries
+  exactly the noise/gradients the direction excludes. The continuous phase
+  field is RETAINED and still load-bearing -- hard edges make a phase
+  discontinuity MORE obvious, so wave lines would visibly break at every
+  tile edge without it. Atlas grew to (phase 12 x direction 16 x style 12) =
+  2304 tiles; all three style values must be atlas dimensions because a
+  TileMapLayer cell can only select a tile (there is no per-cell uniform),
+  so they are packed into one index rather than three dimensions.
+  Ocean is untouched and still realistic (applying the same treatment there
+  is not started); LAVA was raised in the same request and deliberately
+  deferred -- none exists anywhere in the game, so it is net-new content
+  (biome/hazard with placement and damage), not a restyle.
 - **Flow rendering: the phase-field rewrite** (large) — ✅ Done — reported
   directly ("overhaul the flow shader and animations they should look
   realistic and natural"). Research turned up THREE QUANTIFIED defects in

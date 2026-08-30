@@ -1554,13 +1554,13 @@ func build_hillshade_overlay_tile_set() -> TileSet:
 ## natural water flow"), same (bin_a x bin_b) indexing shape
 ## atlas_coords_for_hillshade already established.
 func atlas_coords_for_river_flow(
-	angle_deg: float, speed_fraction: float, wrapped_phase: float
+	angle_deg: float, wrapped_phase: float, style_index: int
 ) -> Vector2i:
 	return ProceduralRiverFlowSprite.atlas_cell_for_index(
 		ProceduralRiverFlowSprite.atlas_index_for(
 			ProceduralRiverFlowSprite.phase_bin_for(wrapped_phase),
 			ProceduralRiverFlowSprite.direction_bin_for(angle_deg),
-			ProceduralRiverFlowSprite.speed_bin_for(speed_fraction)
+			style_index
 		)
 	)
 
@@ -1577,23 +1577,23 @@ func build_river_flow_tile_set() -> TileSet:
 	var columns := ProceduralRiverFlowSprite.ATLAS_COLUMNS
 	var rows := int(ceil(float(total) / float(columns)))
 	# A 2D grid, not a single row: laid out in one row this atlas would be
-	# 768 * 32 = 24,576 px wide, past the 16,384 GL_MAX_TEXTURE_SIZE common
-	# on the integrated GPUs this game targets -- it would simply fail to
+	# 73,728 px wide, vastly past the 16,384 GL_MAX_TEXTURE_SIZE common on
+	# the integrated GPUs this game targets -- it would simply fail to
 	# upload.
 	var flow_image := Image.create(
 		columns * ART_TILE_SIZE, rows * ART_TILE_SIZE, false, Image.FORMAT_RGBA8
 	)
-	for speed_bin in ProceduralRiverFlowSprite.SPEED_BINS:
+	for style_index in ProceduralRiverFlowSprite.PACKED_LEVELS:
 		for phase_bin in ProceduralRiverFlowSprite.PHASE_BINS:
 			for direction_bin in ProceduralRiverFlowSprite.DIRECTION_BINS:
 				var index := ProceduralRiverFlowSprite.atlas_index_for(
-					phase_bin, direction_bin, speed_bin
+					phase_bin, direction_bin, style_index
 				)
 				var cell := ProceduralRiverFlowSprite.atlas_cell_for_index(index)
 				var tile_image := _river_flow_generator.generate_image(
 					ProceduralRiverFlowSprite.angle_for_bin(direction_bin),
-					ProceduralRiverFlowSprite.speed_for_bin(speed_bin),
-					ProceduralRiverFlowSprite.phase_for_bin(phase_bin)
+					ProceduralRiverFlowSprite.phase_for_bin(phase_bin),
+					ProceduralRiverFlowSprite.alpha_for_style(style_index)
 				)
 				flow_image.blit_rect(
 					tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),

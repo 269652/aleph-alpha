@@ -558,6 +558,68 @@ why a dam that has held for ages gives way suddenly when the water rises a
 little further. Real constants throughout (loose-stone bulk density
 ~1600 kg/m³ at 20–40% voids; μ = 0.6 rock-on-rock).
 
+## Art direction: stylized, not realistic (2026-08-30)
+
+Requested directly, after seeing the realistic version in play: make the
+water read like flat cel-animated cartoon water instead. **This supersedes
+the realism goal**, and the reason is worth stating because it was learned
+the hard way over several passes:
+
+**Realism is the wrong target for this canvas.** At 16 px, top-down, in a
+game whose art already commits to chunky shapes, hard outlines and a small
+palette, every soft gradient and noise field fights the surrounding art
+rather than adding to it. The realistic water kept disappointing not
+because the physics was wrong — it is real and stays — but because
+photoreal shading and pixel art are pulling in opposite directions.
+
+So the shader's rules are now deliberate **negatives** as much as positives:
+
+| Excluded | Why |
+|---|---|
+| Gradients | Colour comes from a small set of flat bands, chosen hard |
+| Noise | Not a single hash or noise call remains in the shader |
+| Soft edges | Every boundary is a `step()`, never a `smoothstep()` |
+
+and positively: a flat body colour quantised by real depth, one bold darker
+outline at the bank, and crisp white wave lines scrolling downstream.
+
+**The simulation still drives all of it** — this is a restyle of the
+OUTPUT, not a retreat from the physics:
+
+- the **flat colour band** comes from the real solved depth *including dam
+  ponding*, so damming a river visibly darkens it
+- the **band thresholds are the movement thresholds** —
+  `WaterMovementModel.WADE_DEPTH_METERS` itself is the shallow/mid boundary,
+  so the colour tells you whether you can wade across or must swim, and what
+  the player sees can never disagree with what the player can do
+- the **wave lines** follow the real flow direction along the real course
+  phase, and a **second line** appears on genuinely fast reaches
+- the **bank outline** comes from the cross-channel distance
+  `nearest_river_at` already computed and previously discarded — so it costs
+  no new geometry work at all
+
+The layer is **opaque**, unlike this project's other overlays. That is a
+deliberate departure: `WaterShader`/`HillshadeShader` stay translucent
+because they decorate what is beneath, but this layer *is* the river's
+surface, and the base water under it is full of exactly the noise and
+gradients this direction excludes. A translucent stylized layer over a
+noisy realistic one would read as neither.
+
+The continuous phase field from the previous pass is **retained and still
+load-bearing** — hard-edged lines make a phase discontinuity *more*
+obvious, not less, so without it the wave lines would visibly break at
+every tile edge.
+
+Atlas: (phase 12 × direction 16 × style 12) = 2304 tiles in a 2D grid. The
+style dimension packs depth band, fast flag and bank flag together — all
+three must be atlas dimensions, because a TileMapLayer cell can only select
+a tile and there is no per-cell uniform; packing them into one index keeps
+that a single dimension rather than three.
+
+**Lava** was raised in the same request and deliberately deferred: none
+exists anywhere in the game today, so it is net-new content (a biome or
+hazard, with placement and damage) rather than a restyle.
+
 ## Flow rendering: the phase-field rewrite (2026-08-30)
 
 Reported directly: *"overhaul the flow shader and animations they should
@@ -773,7 +835,12 @@ than it is, matching this project's usual practice):
   fallback: reverted after playtesting" above); curated-only is what's
   live. A future connectivity-aware redesign could reuse the module.
 - **Rendering (water overlay reuse)** — ✅ Done.
-- **Flow rendering (phase-field rewrite)** — ✅ Done — continuous course
+- **Flow rendering: stylized cartoon look** — ✅ Done — flat depth-banded
+  colour, bold bank outline, hard-edged scrolling wave lines, no gradients
+  or noise anywhere; supersedes the realism direction (see "Art direction"
+  above). Ocean is untouched and still realistic — applying the same
+  treatment there is ⬜ Not started, as is lava (which does not exist yet).
+- **Flow rendering (phase-field rewrite, retained under the restyle)** — ✅ Done — continuous course
   phase (kills the per-tile phase reset), one global temporal rate (kills
   the Nyquist aliasing that made fast rivers flow backwards), turbulence
   capped below the fold threshold, speed read from the real solved current,
