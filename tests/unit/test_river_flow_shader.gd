@@ -446,8 +446,8 @@ func test_the_shader_samples_in_the_channels_own_frame():
 ## Water is carried DOWNSTREAM. Dragging the field sideways as well would
 ## make the lines crab across the channel instead of running along it.
 func test_the_drag_is_purely_downstream():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_a, across)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_b, across)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_a, across_w)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_b, across_w)"))
 
 
 # -- the size of a flow line -------------------------------------------------
@@ -501,4 +501,97 @@ func test_the_water_visibly_travels_within_each_phase():
 		RiverFlowShader.drag_in_feature_lengths(), 0.5,
 		"the surface travels only %.2f of a line per phase -- reads as still water"
 			% RiverFlowShader.drag_in_feature_lengths()
+	)
+
+
+# -- standing turbulence -----------------------------------------------------
+#
+# Reported directly: "better but still no fluid like animation no
+# turbulences streams flows". Accurate again -- the lines ran ruler-straight
+# and rigid, because a uniformly-stretched field advected uniformly can do
+# nothing else.
+#
+# Real turbulence over a rough riverbed organises into quasi-STATIONARY
+# structures: boils and standing eddies shed from bedforms hold their
+# station while the water pours through them (Jackson 1976, J. Fluid Mech.
+# 77 -- the classic boil-periodicity paper). So the bend field is anchored
+# to the BED (unadvected channel coordinates), not carried with the water:
+# the surface streams past and is continuously RE-BENT as it goes.
+#
+# That anchoring is also exactly what makes the deformation visible DURING
+# translation rather than only at the crossfade -- a bend carried with the
+# water would slide rigidly along with the lines it bends.
+
+## The bend must genuinely displace the streaklines -- zero bend is the
+## ruler-straight failure -- but stay coherent: RMS displacement is held to
+## a band measured in line widths.
+func test_streaklines_are_bent_by_a_real_measured_amount():
+	var total := 0.0
+	var count := 0
+	for i in range(70):
+		for j in range(70):
+			var d := RiverFlowShader.bend_displacement(float(i) * 0.31, float(j) * 0.29)
+			total += d * d
+			count += 1
+	var rms := sqrt(total / float(count))
+	assert_between(
+		rms, 0.15, 0.75,
+		"streaklines bend an RMS of %.3f line widths" % rms
+	)
+
+
+## The old defect-3 lesson, re-applied: displacement past the fold threshold
+## does not bend a pattern, it SHREDS it. The warp must never fold -- the
+## warped across-coordinate must stay strictly monotonic in the real one.
+## Measured over the real field, not derived from a formula.
+func test_the_bend_never_folds_the_surface_over_itself():
+	for i in range(40):
+		var along := float(i) * 0.47
+		var previous := RiverFlowShader.warped_across(along, 0.0)
+		for j in range(1, 160):
+			var here := RiverFlowShader.warped_across(along, float(j) * 0.05)
+			assert_gt(here, previous, "the warp folds at along=%.2f" % along)
+			previous = here
+
+
+## Eddies must be coarser than the lines they bend, or neighbouring lines
+## bend independently and the field turns to static instead of curling.
+func test_eddies_span_several_line_widths():
+	assert_lte(RiverFlowShader.EDDY_SCALE, 0.5)
+	assert_gte(RiverFlowShader.EDDY_SCALE, 0.08)
+
+
+## Bent, the field must still read as LINES -- the roughness anisotropy has
+## to survive the warp. This is the constraint that stops the turbulence
+## being turned up until the lines dissolve.
+func test_the_warped_field_still_forms_lines():
+	var step := 0.45
+	var total_along := 0.0
+	var total_across := 0.0
+	var count := 0
+	for i in range(70):
+		for j in range(70):
+			var a := float(i) * 0.37
+			var c := float(j) * 0.41
+			var here := RiverFlowShader.warped_surface_value(a, c)
+			total_along += absf(RiverFlowShader.warped_surface_value(a + step, c) - here)
+			total_across += absf(RiverFlowShader.warped_surface_value(a, c + step) - here)
+			count += 1
+	assert_gt(
+		total_across / float(count), (total_along / float(count)) * 1.6,
+		"the warp has dissolved the lines into blobs"
+	)
+
+
+## Structural: the bend is anchored to the bed. It must be computed from the
+## UNADVECTED coordinates (along_raw), and the warped across must feed both
+## phase samples -- that is what makes the water deform as it streams
+## through the standing eddies.
+func test_the_bend_is_anchored_to_the_bed_not_carried_with_the_water():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("vec2(along_raw, across) * eddy_scale"),
+		"the eddy field must be sampled at unadvected channel coordinates"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float across_w = across + bend * turbulence_strength;")
 	)

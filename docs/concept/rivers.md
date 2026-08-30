@@ -959,6 +959,38 @@ shader's fastest rivers flow *backwards* (superseded Defect 2). Speed is
 expressed as **surface contrast**, never as a faster time term, so it
 cannot reintroduce aliasing no matter how fast a reach runs.
 
+### Iteration from screenshots, round two (2026-08-30)
+
+Three live reports against the advection shader, each fixed by measurement:
+
+1. **"Still doesn't look lik water ... can you flowing lines that morph?"**
+   The isotropic field read as a flat mosaic (surface swing 0.070 vs the
+   depth banding's 0.26 -- the static banding was 3.7x stronger), and even
+   made visible it would have been blobs. Now: contrast is pinned to at
+   least match the depth profile's span, band edges are dithered off the
+   tile grid, and the field is ANISOTROPIC -- compressed along the flow so
+   features are ~8x longer downstream than wide. Streaklines: the lines
+   come from the stretch, the morphing from the advection.
+2. **Scale.** The first lines were ~14 tiles long and 2 wide -- correct
+   technique, wrong scale, read as vast soft gradients. Feature size is now
+   pinned in TILES (0.4 wide, ~3 long); note a tile is 32 world px, not 16.
+   The drag is measured in the field's own feature lengths
+   (`drag_in_feature_lengths`), after the stretch-order bug made 1.15 units
+   come out as 0.18 features -- near-still water.
+3. **"better but still no fluid like animation no turbulences streams
+   flows."** Two causes. The flow DIRECTION was the terrain aspect --
+   bilinear DEM gradient, visibly unrelated to the channel -- so lines ran
+   diagonally across the river; it is now the course polyline's own
+   downstream tangent (`course_bearing_deg`). And the lines were rigid:
+   a uniformly-stretched field advected uniformly can only translate.
+   Now a STANDING-EDDY field bends them -- anchored to the bed (unadvected
+   coordinates), the way real boils shed by bedforms hold station while
+   the water pours through (Jackson 1976), so the surface is continuously
+   re-bent as it streams past and visibly deforms WHILE it travels. The
+   old defect-3 fold lesson is re-applied as a measured no-fold test, and
+   a lines-survive-the-warp test stops the turbulence being turned up
+   until the field dissolves.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the

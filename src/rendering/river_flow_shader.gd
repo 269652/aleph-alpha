@@ -51,6 +51,8 @@ uniform float noise_scale = 0.08;
 uniform float detail_scale = 2.7;
 uniform float surface_contrast = 0.50;
 uniform float line_stretch = 0.13;
+uniform float turbulence_strength = 1.4;
+uniform float eddy_scale = 0.16;
 uniform float band_dither = 1.9;
 uniform float glint_threshold = 0.70;
 uniform float glint_strength = 0.55;
@@ -138,13 +140,28 @@ void fragment() {
 	// the water travels per phase". Applied the other way round, a drag of
 	// 1.15 came out as 0.18 of a feature and the river looked still.
 	vec2 world = world_pos * noise_scale;
-	float along = dot(world, flow_dir) * line_stretch;
+	float along_raw = dot(world, flow_dir);
+	float along = along_raw * line_stretch;
 	float across = dot(world, flow_perp);
+
+	// STANDING TURBULENCE -- what makes this fluid rather than a conveyor.
+	//
+	// Real turbulence over a rough riverbed organises into quasi-stationary
+	// structures: boils and standing eddies shed from bedforms hold their
+	// station while the water pours through them (Jackson 1976). So the
+	// bend field is anchored to the BED -- unadvected channel coordinates
+	// -- not carried with the water. The surface streams past and is
+	// continuously re-bent as it goes, so the lines visibly snake, curl and
+	// deform WHILE they travel. A bend carried with the water would slide
+	// rigidly along with the very lines it bends, which is exactly the
+	// stiffness being fixed.
+	float bend = value_noise(vec2(along_raw, across) * eddy_scale) - 0.5;
+	float across_w = across + bend * turbulence_strength;
 
 	// The drag is purely DOWNSTREAM -- water is carried along the channel,
 	// never sideways across it.
-	float sample_a = line_field(along - advect_strength * phase_a, across);
-	float sample_b = line_field(along - advect_strength * phase_b, across);
+	float sample_a = line_field(along - advect_strength * phase_a, across_w);
+	float sample_b = line_field(along - advect_strength * phase_b, across_w);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n = mix(sample_a, sample_b, blend);
@@ -238,6 +255,20 @@ const SURFACE_CONTRAST := 0.50
 ## the two-phase advection.
 const LINE_STRETCH := 0.13
 
+## How hard the standing eddies bend the streaklines, in line widths of
+## across-displacement at full noise swing, and how coarse the eddies are
+## relative to the lines (0.16 = one eddy spans about six line widths, so
+## neighbouring lines bend TOGETHER -- curling, not shredding).
+##
+## Bounded from both sides by measurement: RMS displacement is held to a
+## band (test_streaklines_are_bent_by_a_real_measured_amount), the warp is
+## verified never to fold the surface over itself -- the re-applied
+## defect-3 lesson: past the fold threshold displacement does not bend a
+## pattern, it destroys it -- and the bent field must still read as lines
+## (test_the_warped_field_still_forms_lines).
+const TURBULENCE_STRENGTH := 1.4
+const EDDY_SCALE := 0.16
+
 ## How far the surface field perturbs the depth-band lookup, in bands.
 ##
 ## Also a measured relation rather than a taste: wide enough that a band
@@ -292,6 +323,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("detail_scale", DETAIL_SCALE)
 	material.set_shader_parameter("surface_contrast", SURFACE_CONTRAST)
 	material.set_shader_parameter("line_stretch", LINE_STRETCH)
+	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
+	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
 	material.set_shader_parameter("band_dither", BAND_DITHER)
 	material.set_shader_parameter("glint_threshold", GLINT_THRESHOLD)
 	material.set_shader_parameter("glint_strength", GLINT_STRENGTH)
@@ -413,6 +446,27 @@ static func field_roughness(distance: float, downstream: bool) -> float:
 			total += absf(b - surface_value(a, c))
 			count += 1
 	return total / float(count)
+
+
+## The standing-eddy bend at a point, in line widths -- the CPU mirror of
+## the shader's `bend * turbulence_strength`. Anchored to unadvected
+## coordinates, exactly as the shader anchors it to the bed.
+static func bend_displacement(along_raw: float, across: float) -> float:
+	return (
+		(value_noise(along_raw * EDDY_SCALE, across * EDDY_SCALE) - 0.5)
+		* TURBULENCE_STRENGTH
+	)
+
+
+## Where a point's across-coordinate lands after the bend.
+static func warped_across(along_raw: float, across: float) -> float:
+	return across + bend_displacement(along_raw, across)
+
+
+## The full surface pipeline as one function: bend, then the anisotropic
+## line field -- what a fragment actually shows at rest.
+static func warped_surface_value(along_raw: float, across: float) -> float:
+	return surface_value(along_raw, warped_across(along_raw, across))
 
 
 ## Fraction of the water surface whose field exceeds `threshold` -- i.e. how
