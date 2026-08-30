@@ -3,6 +3,7 @@ extends RefCounted
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
+const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
 
 ## The BuildingPiece id a player-built check dam is stored as (see
@@ -3646,24 +3647,30 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# than feed a negative angle into the atlas lookup if it ever is.
 			var flow_angle := aspect if aspect >= 0.0 else 0.0
 
-			# Speed is the REAL solved current now (see
-			# EarthChunkGenerator.river_hydraulics_at_global) rather than
-			# the old slope proxy -- the hydraulics exist, so the visual
-			# should read them. Falls back to the slope proxy only where
-			# the cell has no curated discharge to solve from.
+			# Everything the stylized look needs comes from REAL simulation
+			# state (see RiverFlowShader's art-direction note): the flat
+			# colour band from the real solved depth INCLUDING any dam
+			# ponding -- so damming a river visibly darkens it -- the extra
+			# wave line from the real solved current, and the bank outline
+			# from the cross-channel distance nearest_river_at already
+			# computes and used to discard.
 			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
-			var speed_fraction := (
-				RiverFlowShader.speed_fraction_for_velocity(hydraulics.velocity_m_s)
-				if hydraulics.discharge_m3_s > 0.0
-				else RiverFlowShader.speed_fraction_for_slope_deg(
-					relief.slope_degrees_from_gradient(gradient.x, gradient.y)
+			var depth := river_depth_meters_at_global(global.x, global.y)
+			var nearest := generator.river_catalog().nearest_river_at(
+				global.x, global.y,
+				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+			)
+			var style_index := ProceduralRiverFlowSprite.style_index_for(
+				RiverFlowShader.depth_band_for(depth),
+				RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s),
+				RiverFlowShader.is_bank_cell(
+					nearest.distance_tiles, RiverCatalog.RIVER_HALF_WIDTH_TILES
 				)
 			)
 
-			# The continuous course phase -- THE fix for the old shader's
-			# per-tile phase resets (see RiverPhaseField's own doc comment
-			# for the arithmetic on why the old construction reset
-			# arbitrarily at every tile edge).
+			# The continuous course phase -- without it the hard-edged wave
+			# lines would visibly break at every tile edge (see
+			# RiverPhaseField for the arithmetic on why).
 			var wrapped_phase := 0.0
 			if hydraulics.river_name != "":
 				wrapped_phase = RiverPhaseField.wrapped_phase(
@@ -3674,7 +3681,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			_river_flow_layer.set_cell(
 				global, 0,
 				_terrain_renderer.atlas_coords_for_river_flow(
-					flow_angle, speed_fraction, wrapped_phase
+					flow_angle, wrapped_phase, style_index
 				)
 			)
 

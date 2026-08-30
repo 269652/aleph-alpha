@@ -8,6 +8,8 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
+const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
@@ -394,20 +396,23 @@ func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
 	for cell in painted_cells:
 		assert_true(manager.is_river_at_global(cell.x, cell.y), "every painted flow cell must actually be a river cell")
 		# Every painted tile must carry that cell's OWN real data --
-		# direction from the real gradient, speed from the REAL solved
-		# current (not the old slope proxy), and the continuous course
-		# phase. Recomputed independently here and compared against what
-		# the manager actually painted.
+		# direction from the real gradient, and the stylized style index
+		# from the real solved depth (including dam ponding), the real
+		# current, and the cross-channel bank position. Recomputed
+		# independently here and compared against what was painted.
 		var gradient := manager.gradient_at_global(cell.x, cell.y)
 		var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
 		var expected_angle := aspect if aspect >= 0.0 else 0.0
 		var hydraulics := manager.generator.river_hydraulics_at_global(cell.x, cell.y)
-		var expected_speed := (
-			RiverFlowShader.speed_fraction_for_velocity(hydraulics.velocity_m_s)
-			if hydraulics.discharge_m3_s > 0.0
-			else RiverFlowShader.speed_fraction_for_slope_deg(
-				relief.slope_degrees_from_gradient(gradient.x, gradient.y)
-			)
+		var depth := manager.river_depth_meters_at_global(cell.x, cell.y)
+		var nearest := manager.generator.river_catalog().nearest_river_at(
+			cell.x, cell.y,
+			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		)
+		var expected_style := ProceduralRiverFlowSprite.style_index_for(
+			RiverFlowShader.depth_band_for(depth),
+			RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s),
+			RiverFlowShader.is_bank_cell(nearest.distance_tiles, RiverCatalog.RIVER_HALF_WIDTH_TILES)
 		)
 		var expected_phase := 0.0
 		if hydraulics.river_name != "":
@@ -421,7 +426,7 @@ func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
 		assert_eq(
 			flow_layer.get_cell_atlas_coords(cell),
 			terrain_renderer.atlas_coords_for_river_flow(
-				expected_angle, expected_speed, expected_phase
+				expected_angle, expected_phase, expected_style
 			),
 			"(%d, %d) flow tile must reflect its own real flow data" % [cell.x, cell.y]
 		)

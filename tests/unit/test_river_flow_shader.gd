@@ -1,10 +1,17 @@
 extends GutTest
 
-## GPU river flow -- see river_flow_shader.gd and docs/concept/rivers.md.
+## Stylized cartoon river water -- see river_flow_shader.gd and
+## docs/concept/rivers.md's "Flow rendering" section.
+##
+## The art direction is expressed as much by NEGATIVES as positives (no
+## gradients, no noise, no soft edges), so several of these tests assert the
+## ABSENCE of things -- which is what stops the shader drifting back toward
+## the realism it deliberately moved away from.
 
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
-const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
+const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
+const WaterMovementModel = preload("res://src/gameplay/water_movement_model.gd")
 
 var flow: RiverFlowShader
 
@@ -14,8 +21,7 @@ func before_each():
 
 
 func test_make_material_uses_the_real_shader_code():
-	var material := flow.make_material()
-	assert_eq(material.shader.code, RiverFlowShader.SHADER_CODE)
+	assert_eq(flow.make_material().shader.code, RiverFlowShader.SHADER_CODE)
 
 
 func test_shared_material_is_the_same_instance_every_call():
@@ -26,187 +32,169 @@ func test_default_uniforms_match_the_tuned_constants():
 	var material := flow.shared_material()
 	assert_eq(material.get_shader_parameter("wavelength_px"), RiverFlowShader.WAVELENGTH_PX)
 	assert_eq(material.get_shader_parameter("streak_rate_hz"), RiverPhaseField.STREAK_RATE_HZ)
-	assert_eq(material.get_shader_parameter("streak_sharpness"), RiverFlowShader.STREAK_SHARPNESS)
-	assert_eq(material.get_shader_parameter("streak_alpha"), RiverFlowShader.STREAK_ALPHA)
-	assert_eq(material.get_shader_parameter("turbulence_wavelengths"), RiverFlowShader.TURBULENCE_WAVELENGTHS)
-	assert_eq(material.get_shader_parameter("foam_coverage"), RiverFlowShader.FOAM_COVERAGE)
+	assert_eq(material.get_shader_parameter("line_thickness"), RiverFlowShader.LINE_THICKNESS)
+	assert_eq(material.get_shader_parameter("shallow_color"), RiverFlowShader.SHALLOW_COLOR)
+	assert_eq(material.get_shader_parameter("bank_color"), RiverFlowShader.BANK_COLOR)
 
 
-# -- the three fixed defects ------------------------------------------------
+# -- the art direction, asserted as negatives --------------------------------
 
-## DEFECT 3: the old turbulence displaced the phase by +/-1.8 WAVELENGTHS,
-## which decorrelates bands rather than wavering them -- the iso-phase map
-## folds back on itself. Expressing displacement as a fraction of a
-## wavelength makes that error impossible to reintroduce by accident.
-func test_turbulence_cannot_fold_the_phase_map():
-	assert_lt(
-		RiverFlowShader.TURBULENCE_WAVELENGTHS, 0.5,
-		"turbulence past half a wavelength scrambles the bands instead of bending them"
-	)
-	assert_gt(RiverFlowShader.TURBULENCE_WAVELENGTHS, 0.0, "some waver is the point")
+## No noise anywhere. The realism passes used value_noise/hash fields for
+## turbulence and foam speckle; a flat cel look has no place for either, and
+## their return would be the clearest sign of drift.
+func test_the_shader_contains_no_noise_at_all():
+	for banned in ["value_noise", "value_hash", "turbulence"]:
+		assert_false(
+			RiverFlowShader.SHADER_CODE.contains(banned),
+			"%s is noise -- the stylized look excludes it entirely" % banned
+		)
 
 
-## DEFECT 2: one global temporal rate. Speed must NOT appear in the phase's
-## time term at all -- that is what made the fastest rivers alias past
-## Nyquist and visibly flow backwards.
-func test_the_streak_advances_at_one_rate_regardless_of_speed():
-	# streak_intensity takes no speed argument by design; the same phase and
-	# time must give the same answer whatever a cell's current is.
-	var a := RiverFlowShader.streak_intensity(0.3, 12.0, 0.4)
-	var b := RiverFlowShader.streak_intensity(0.3, 12.0, 0.4)
-	assert_eq(a, b)
+## Every boundary must be a hard step(); a smoothstep is a gradient by
+## another name.
+## Checks for the CALL form specifically -- the shader's own comments
+## mention smoothstep to explain why it is absent, and a bare substring
+## match would flag that as a violation.
+func test_the_shader_uses_no_smoothstep():
 	assert_false(
-		RiverFlowShader.SHADER_CODE.contains("TIME * flow_speed"),
-		"a per-cell speed in the time term is exactly what caused the aliasing"
+		RiverFlowShader.SHADER_CODE.contains("smoothstep("),
+		"a soft edge reads as a gradient, which this look excludes"
 	)
 
 
-## DEFECT 1: the phase must come from the BAKED course phase, not from
-## projecting an absolute world position onto a per-tile direction.
-func test_the_shader_reads_a_baked_phase_rather_than_projecting_world_position():
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("baked_phase"),
-		"the continuous course phase is the whole fix"
-	)
-	assert_false(
-		RiverFlowShader.SHADER_CODE.contains("dot(world_pos, flow_dir)"),
-		"projecting absolute world position is what reset the phase every tile"
-	)
+## Opaque. Unlike this project's other overlays, this layer IS the river's
+## surface -- a translucent stylized layer over the noisy realistic water
+## beneath would read as neither.
+func test_the_shader_outputs_a_fully_opaque_colour():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("wave_color, line), 1.0)"))
 
 
-## Two cells one wavelength apart along the flow must be at the same point
-## in the streak cycle -- the continuity the whole rewrite exists for.
-func test_points_one_wavelength_apart_are_in_phase():
-	var here := RiverFlowShader.streak_intensity(0.2, 0.0, 0.0)
-	var one_on := RiverFlowShader.streak_intensity(0.2, RiverFlowShader.WAVELENGTH_PX, 0.0)
-	assert_almost_eq(here, one_on, 0.0001)
+## The palette must be small and its bands clearly separated, or the flat
+## bands read as a gradient someone forgot to smooth.
+func test_the_depth_bands_are_clearly_separated_not_a_gradient():
+	var shallow: Color = RiverFlowShader.SHALLOW_COLOR
+	var mid: Color = RiverFlowShader.MID_COLOR
+	var deep: Color = RiverFlowShader.DEEP_COLOR
+	assert_gt(shallow.v - mid.v, 0.08, "shallow and mid must be visibly distinct")
+	assert_gt(mid.v - deep.v, 0.08, "mid and deep must be visibly distinct")
 
 
-## The shader's wavelength and the phase field's must agree, or the pattern
-## would advance at one scale and repeat at another.
-func test_the_shader_wavelength_agrees_with_the_phase_field():
-	assert_almost_eq(
-		RiverFlowShader.WAVELENGTH_PX,
-		RiverPhaseField.STREAK_WAVELENGTH_TILES * RiverFlowShader.TILE_SIZE_PX,
-		0.0001
-	)
+## The bank outline must be darker than every water band, or it does not
+## read as an outline.
+func test_the_bank_outline_is_darker_than_any_water_band():
+	for band in [RiverFlowShader.SHALLOW_COLOR, RiverFlowShader.MID_COLOR, RiverFlowShader.DEEP_COLOR]:
+		assert_lt(RiverFlowShader.BANK_COLOR.v, band.v)
 
 
-# -- speed now reads through the REAL solved current -------------------------
-
-func test_a_still_reach_reads_as_no_speed():
-	assert_eq(RiverFlowShader.speed_fraction_for_velocity(0.0), 0.0)
-
-
-func test_a_fast_real_current_saturates_the_speed_scale():
-	assert_eq(RiverFlowShader.speed_fraction_for_velocity(50.0), 1.0)
+func test_the_wave_lines_are_brighter_than_every_water_band():
+	for band in [RiverFlowShader.SHALLOW_COLOR, RiverFlowShader.MID_COLOR, RiverFlowShader.DEEP_COLOR]:
+		assert_gt(RiverFlowShader.WAVE_COLOR.v, band.v)
 
 
-## Calibrated against real river speeds: NIWA/Jowett call 0.3-0.5 m/s "good"
-## habitat flow and USGS-gauged flood peaks reach ~3 m/s, so an ordinary
-## river must land mid-scale rather than saturating.
-func test_an_ordinary_real_current_lands_mid_scale():
-	assert_between(RiverFlowShader.speed_fraction_for_velocity(0.7), 0.15, 0.6)
-
-
-func test_speed_fraction_rises_with_real_velocity():
-	assert_gt(
-		RiverFlowShader.speed_fraction_for_velocity(2.0),
-		RiverFlowShader.speed_fraction_for_velocity(0.5)
-	)
-
-
-# -- speed_fraction_for_slope_deg: real terrain steepness -> visual flow speed
-
-## Reported directly: "more natural water flow" -- flow speed was uniform
-## everywhere, real rivers run faster where the terrain is steeper. Reuses
-## TerrainPassability.HARD_THRESHOLD_DEG (already the real "genuine
-## scrambling/technical-climbing" anchor BiomeClassifier's own
-## SLOPE_MOUNTAIN_THRESHOLD_DEG reuses for a different purpose) as the top
-## of the range, rather than inventing a second, independently-eyeballed
-## steepness cap.
-func test_speed_fraction_is_zero_on_flat_ground():
-	assert_eq(RiverFlowShader.speed_fraction_for_slope_deg(0.0), 0.0)
-
-
-func test_speed_fraction_is_one_at_or_beyond_the_hard_threshold():
-	assert_eq(RiverFlowShader.speed_fraction_for_slope_deg(TerrainPassability.HARD_THRESHOLD_DEG), 1.0)
-	assert_eq(RiverFlowShader.speed_fraction_for_slope_deg(TerrainPassability.HARD_THRESHOLD_DEG + 30.0), 1.0)
-
-
-func test_speed_fraction_increases_monotonically_with_slope():
-	var previous := 0.0
-	for slope_deg in range(0, int(TerrainPassability.HARD_THRESHOLD_DEG), 5):
-		var fraction := RiverFlowShader.speed_fraction_for_slope_deg(float(slope_deg))
-		assert_gte(fraction, previous, "speed fraction must never decrease as slope increases")
-		previous = fraction
-
-
-func test_speed_fraction_stays_in_unit_range():
-	for slope_deg in [-5.0, 0.0, 10.0, 45.0, 90.0, 500.0]:
-		assert_between(RiverFlowShader.speed_fraction_for_slope_deg(slope_deg), 0.0, 1.0)
-
-
-# -- streak_intensity: the CPU mirror of the shader's periodic-streak math --
+# -- depth bands carry real gameplay meaning ---------------------------------
 #
-# Signature changed with the rewrite: (baked_phase, along_px, time). Speed
-# is deliberately GONE from it -- a per-cell speed in the time term is
-# exactly what aliased. Turbulence and foam are not mirrored, for the same
-# reason WaterShader never mirrors its own wind shimmer: only physics
-# another caller might reason about gets a CPU twin, not decoration.
+# The first threshold is WaterMovementModel.WADE_DEPTH_METERS itself, so the
+# colour a player sees and what they can actually do never disagree.
 
-func test_streak_intensity_stays_in_unit_range():
-	for along in [0.0, 3.7, 50.0, -22.0]:
-		for t in [0.0, 0.5, 1.3, 10.0]:
-			assert_between(RiverFlowShader.streak_intensity(0.4, along, t), 0.0, 1.0)
+func test_a_wadeable_depth_is_the_shallow_band():
+	assert_eq(RiverFlowShader.depth_band_for(WaterMovementModel.WADE_DEPTH_METERS - 0.1), 0)
 
 
-## A set of parallel streaks, not constant brightness -- a real scan along
-## the flow axis at a fixed instant must find both bright peaks and
-## near-zero troughs, not read as a flat glow.
-func test_streak_intensity_is_not_uniform_along_the_flow_axis():
-	var found_bright := false
-	var found_dark := false
-	for i in range(200):
-		var value := RiverFlowShader.streak_intensity(0.0, float(i) * 0.25, 0.0)
-		if value > 0.5:
-			found_bright = true
-		if value < 0.05:
-			found_dark = true
-	assert_true(found_bright, "expected at least one bright streak peak")
-	assert_true(found_dark, "expected at least one dark trough between streaks")
+func test_a_swimmable_depth_leaves_the_shallow_band():
+	assert_eq(RiverFlowShader.depth_band_for(WaterMovementModel.WADE_DEPTH_METERS + 0.1), 1)
 
 
-## The pattern must actually move over time.
-func test_streak_intensity_advances_with_time():
-	assert_ne(
-		RiverFlowShader.streak_intensity(0.1, 10.0, 0.0),
-		RiverFlowShader.streak_intensity(0.1, 10.0, 0.6)
-	)
+func test_a_deep_river_is_the_deepest_band():
+	assert_eq(RiverFlowShader.depth_band_for(10.0), 2)
 
 
-## Advancing time by exactly one period must return the pattern to where it
-## started -- the period being 1/STREAK_RATE_HZ, one global constant.
-func test_the_pattern_repeats_after_exactly_one_period():
-	var period := 1.0 / RiverPhaseField.STREAK_RATE_HZ
-	assert_almost_eq(
-		RiverFlowShader.streak_intensity(0.1, 10.0, 0.0),
-		RiverFlowShader.streak_intensity(0.1, 10.0, period),
-		0.0001
-	)
+func test_the_shallow_to_mid_boundary_is_exactly_the_wading_threshold():
+	assert_eq(RiverFlowShader.MID_BAND_DEPTH_M, WaterMovementModel.WADE_DEPTH_METERS)
 
 
-## The baked course phase must genuinely shift the pattern -- it is the
-## whole mechanism by which neighbouring tiles line up.
-func test_the_baked_phase_shifts_the_pattern():
-	assert_ne(
-		RiverFlowShader.streak_intensity(0.0, 5.0, 0.0),
-		RiverFlowShader.streak_intensity(0.5, 5.0, 0.0)
-	)
+func test_depth_bands_never_leave_their_valid_range():
+	for depth in [-5.0, 0.0, 0.9, 1.5, 3.0, 100.0]:
+		assert_between(
+			RiverFlowShader.depth_band_for(depth), 0, ProceduralRiverFlowSprite.DEPTH_BANDS - 1
+		)
 
 
-func test_streak_intensity_is_deterministic():
+# -- fast flow and the bank flag ---------------------------------------------
+
+func test_a_still_pool_is_not_fast():
+	assert_false(RiverFlowShader.is_fast_flow(0.0))
+
+
+func test_a_real_moving_river_is_fast():
+	assert_true(RiverFlowShader.is_fast_flow(1.2))
+
+
+## Calibrated against real figures rather than eyeballed: NIWA/Jowett call
+## 0.3-0.5 m/s "good" instream flow, so the threshold sits above that band
+## and well under a real flood peak (~3 m/s).
+func test_the_fast_threshold_sits_between_real_habitat_flow_and_a_flood_peak():
+	assert_gt(RiverFlowShader.FAST_FLOW_M_S, 0.5)
+	assert_lt(RiverFlowShader.FAST_FLOW_M_S, 3.0)
+
+
+func test_the_channel_centre_is_not_bank():
+	assert_false(RiverFlowShader.is_bank_cell(0.0, 2.0))
+
+
+func test_the_channel_edge_is_bank():
+	assert_true(RiverFlowShader.is_bank_cell(2.0, 2.0))
+
+
+func test_bank_detection_survives_a_zero_width_channel():
+	assert_false(RiverFlowShader.is_bank_cell(1.0, 0.0))
+
+
+# -- wave lines: hard-edged by construction ----------------------------------
+
+## The CPU mirror returns a BOOL, not an intensity -- there is no partial
+## coverage anywhere in this look, and a float return would invite one back.
+func test_a_wave_line_is_present_at_the_start_of_a_cycle():
+	assert_true(RiverFlowShader.is_wave_line(0.0, 0.0, 0.0))
+
+
+func test_there_is_no_wave_line_mid_cycle():
+	assert_false(RiverFlowShader.is_wave_line(0.5, 0.0, 0.0))
+
+
+## Lines must be a minority of the water, or they stop reading as lines.
+func test_wave_lines_cover_only_a_small_fraction_of_the_water():
+	var samples := 1000
+	var hits := 0
+	for i in range(samples):
+		var along := (float(i) / float(samples)) * RiverFlowShader.WAVELENGTH_PX
+		if RiverFlowShader.is_wave_line(0.0, along, 0.0):
+			hits += 1
+	var coverage := float(hits) / float(samples)
+	assert_between(coverage, 0.05, 0.3, "wave lines should be crisp lines, not stripes")
+
+
+## The lines must be continuous ALONG the course -- one wavelength on is the
+## same point in the cycle. This is what the phase field buys, and hard
+## edges make a discontinuity MORE obvious, not less.
+func test_points_one_wavelength_apart_are_in_phase():
 	assert_eq(
-		RiverFlowShader.streak_intensity(0.3, 12.0, 4.0),
-		RiverFlowShader.streak_intensity(0.3, 12.0, 4.0)
+		RiverFlowShader.is_wave_line(0.2, 0.0, 0.0),
+		RiverFlowShader.is_wave_line(0.2, RiverFlowShader.WAVELENGTH_PX, 0.0)
 	)
+
+
+func test_the_lines_scroll_over_time():
+	var moved := false
+	for i in range(20):
+		var later := RiverFlowShader.is_wave_line(0.0, 2.0, float(i) * 0.1)
+		if later != RiverFlowShader.is_wave_line(0.0, 2.0, 0.0):
+			moved = true
+			break
+	assert_true(moved, "the wave lines must actually travel downstream")
+
+
+## Still one global rate, so the scroll can never alias at low frame rates
+## (see RiverPhaseField) -- hard-edged lines would strobe far more visibly
+## than the old soft streaks if this regressed.
+func test_the_scroll_rate_still_cannot_alias():
+	assert_lt(RiverPhaseField.STREAK_RATE_HZ / 7.0, 0.5)
