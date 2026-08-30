@@ -271,7 +271,7 @@ void fragment() {
 	// the ink snaps DEEP over light water and pale over dark. A hard
 	// step, never a blend -- halfway between the two inks lies the body
 	// colour itself, and a stroke drawn in the body colour is invisible.
-	vec3 stroke_ink = mix(line_color_deep, line_color, step(0.45, cel_t));
+	vec3 stroke_ink = mix(line_color_deep, line_color, step(0.28, cel_t));
 	body = mix(body, stroke_ink, wave * line_strength);
 
 	// The SHORE HIGHLIGHT: one constant pale line tracing the bank just
@@ -531,7 +531,10 @@ static func stroke_mask(n: float, is_fast: bool) -> float:
 ## The adaptive stroke ink for a body cel: deep over light water, pale
 ## over dark, snapped hard at mid-depth.
 static func stroke_ink_for(cel_t: float) -> Color:
-	return LINE_COLOR if cel_t >= 0.45 else LINE_COLOR_DEEP
+	# Deep ink ONLY on the two lightest shallow cels -- everywhere else the
+	# pale ink wins, because the night modulate dims everything
+	# multiplicatively and dark strokes lose their absolute contrast first.
+	return LINE_COLOR if cel_t >= 0.28 else LINE_COLOR_DEEP
 
 
 ## The cel quantizer, mirroring the shader exactly: shade in [0, 1],
