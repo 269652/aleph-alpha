@@ -7345,6 +7345,19 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: strokes that survive zoom and light cels** (small) — ✅ Done —
+  reported from the Rhine cross-Alps straight ("the long straight section
+  shows no current lines at all"; probed headlessly: pure flow overlay,
+  2.16 m/s). Two compounding causes: strokes were ~1.4 world px wide
+  (sub-pixel at a zoomed-out camera) and pale ink sat on bright shallow
+  cels with no contrast. Now: coarser pattern (2 half-step levels, scale
+  0.07, width 0.045 -- measured on the live field: mean stroke ~2.5-9
+  world px thick, ~12-42 px apart, pinned from both sides) and ADAPTIVE
+  ink -- deep over light cels, pale over dark, snapped by a hard step
+  because any smooth blend passes through the body colour itself. The
+  contrast pin sweeps every cel the quantizer can produce (>= 0.18 in V).
+  The distinct-levels pin generalized to "every declared level fires".
+  Shader suite 67 + GPU smoke green.
 - **Rivers: the pale wash and the too-many strokes** (small) — ✅ Done —
   reported: "now there are too many and the straight sections now show a
   pale blue color without currents". One root cause for the wash: the

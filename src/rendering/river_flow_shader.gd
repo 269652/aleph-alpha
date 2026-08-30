@@ -48,16 +48,17 @@ shader_type canvas_item;
 
 uniform float advect_rate = 0.35;
 uniform float advect_strength = 1.15;
-uniform float noise_scale = 0.08;
+uniform float noise_scale = 0.07;
 uniform float pixel_snap = 0.5;
 uniform float cel_levels = 6.0;
 uniform float dither_strength = 0.5;
 uniform float ink_width = 0.06;
 uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
-uniform float line_count = 4.0;
-uniform float line_width = 0.020;
+uniform float line_count = 2.0;
+uniform float line_width = 0.045;
 uniform float line_strength = 0.7;
 uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
+uniform vec3 line_color_deep : source_color = vec3(0.07, 0.26, 0.48);
 uniform float shore_pos = 0.88;
 uniform float shore_width = 0.025;
 uniform float smear_spacing = 0.8;
@@ -265,7 +266,13 @@ void fragment() {
 	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
 	float parity = mod(floor(n * line_count), 2.0);
 	float wave = stroke * mix(0.75, 1.0, parity) * mix(0.8, 1.1, is_fast);
-	body = mix(body, line_color, wave * line_strength);
+	// ADAPTIVE INK: pale strokes vanish on the bright shallow cels
+	// (reported from the Rhine straight: "no current lines at all"), so
+	// the ink snaps DEEP over light water and pale over dark. A hard
+	// step, never a blend -- halfway between the two inks lies the body
+	// colour itself, and a stroke drawn in the body colour is invisible.
+	vec3 stroke_ink = mix(line_color_deep, line_color, step(0.45, cel_t));
+	body = mix(body, stroke_ink, wave * line_strength);
 
 	// The SHORE HIGHLIGHT: one constant pale line tracing the bank just
 	// inside the ink -- pinned to the reconstructed geometry, not to any
@@ -326,7 +333,7 @@ const ADVECT_STRENGTH := 4.5
 ## Pinned in TILES rather than as a raw constant, because tiles are the only
 ## scale that means anything here: see
 ## test_flow_lines_are_narrow_enough_that_several_fit_across_a_channel.
-const NOISE_SCALE := 0.08
+const NOISE_SCALE := 0.07
 
 ## The line-integral-convolution stroke: how many world-anchored taps are
 ## averaged along the flow, and how far apart (in noise cells). Taps closer
@@ -401,10 +408,16 @@ const BANK_FEATHER := 0.03
 ## ink they are drawn with. Coverage is held to a measured band from both
 ## sides, and a transect test caps the longest strokeless stretch -- the
 ## direct pin of "most of the stream doesnt show any currents".
-const LINE_COUNT := 4.0
-const LINE_WIDTH := 0.020
+const LINE_COUNT := 2.0
+const LINE_WIDTH := 0.045
 const LINE_STRENGTH := 0.7
 const LINE_COLOR := Color(0.85, 0.97, 1.0)
+
+## The dark half of the adaptive stroke ink -- drawn over the light shallow
+## cels, where the pale ink was invisible. Deeper than every light cel by
+## the contrast test; the switch between the two inks is a hard step at
+## mid-depth, because any smooth blend passes through the body colour.
+const LINE_COLOR_DEEP := Color(0.07, 0.26, 0.48)
 
 ## The constant shore highlight, in across-fraction units: where it sits
 ## (inside the ink line, by test) and how wide it draws. Dimmed to half
@@ -465,6 +478,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("line_width", LINE_WIDTH)
 	material.set_shader_parameter("line_strength", LINE_STRENGTH)
 	material.set_shader_parameter("line_color", LINE_COLOR)
+	material.set_shader_parameter("line_color_deep", LINE_COLOR_DEEP)
 	material.set_shader_parameter("shore_pos", SHORE_POS)
 	material.set_shader_parameter("shore_width", SHORE_WIDTH)
 	for i in BAND_COLORS.size():
@@ -512,6 +526,12 @@ static func stroke_mask(n: float, is_fast: bool) -> float:
 	var stroke := 1.0 - smoothstep(LINE_WIDTH * 0.5, LINE_WIDTH, dist_n)
 	var parity := fposmod(floor(n * LINE_COUNT), 2.0)
 	return stroke * lerpf(0.75, 1.0, parity) * (1.1 if is_fast else 0.8)
+
+
+## The adaptive stroke ink for a body cel: deep over light water, pale
+## over dark, snapped hard at mid-depth.
+static func stroke_ink_for(cel_t: float) -> Color:
+	return LINE_COLOR if cel_t >= 0.45 else LINE_COLOR_DEEP
 
 
 ## The cel quantizer, mirroring the shader exactly: shade in [0, 1],

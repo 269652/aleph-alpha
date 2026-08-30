@@ -885,10 +885,10 @@ func test_every_water_point_is_near_a_current_mark():
 	)
 
 
-## Several distinct contour levels must actually fire across the field
-## range -- one level firing repeatedly is the old two-level failure with
-## extra steps.
-func test_strokes_fire_at_several_distinct_levels():
+## EVERY declared contour level must actually fire across the field range
+## -- a level that never fires is paid for in spacing and returns nothing,
+## and one level firing alone is the old fixed-level failure again.
+func test_strokes_fire_at_every_declared_level():
 	var levels := {}
 	for i in range(200):
 		for j in range(30):
@@ -897,7 +897,10 @@ func test_strokes_fire_at_several_distinct_levels():
 			)
 			if RiverFlowShader.stroke_mask(n, false) > 0.5:
 				levels[int(floor(n * RiverFlowShader.LINE_COUNT))] = true
-	assert_gte(levels.size(), 3, "only %d contour levels ever fire" % levels.size())
+	assert_gte(
+		levels.size(), int(RiverFlowShader.LINE_COUNT),
+		"only %d of %d contour levels ever fire" % [levels.size(), int(RiverFlowShader.LINE_COUNT)]
+	)
 
 
 ## Fast reaches draw BRIGHTER strokes, not wider ones. Widening was tried
@@ -983,4 +986,77 @@ func test_the_shore_highlight_sits_inside_the_ink():
 	assert_lt(
 		RiverFlowShader.SHORE_POS + RiverFlowShader.SHORE_WIDTH,
 		1.0 - RiverFlowShader.INK_WIDTH
+	)
+
+
+# -- strokes that survive the zoom and the light cels -------------------------
+#
+# Reported from the Rhine's long straight cross-Alps segment (probed: pure
+# flow overlay, 2.16 m/s, fast everywhere): "the long straight section
+# shows no current lines at all". Two compounding causes, both measured:
+# the strokes were ~1.4 world px wide -- sub-pixel at a zoomed-out camera
+# -- and their pale ink sat on the bright shallow cels with almost no
+# contrast.
+
+## The pattern's real spatial scale, measured across the flow on the live
+## field: strokes must be wide enough to survive low zoom, and spaced far
+## enough apart to read as separate drawn lines rather than a texture.
+func test_strokes_are_wide_and_spaced_like_drawn_lines():
+	var in_stroke := false
+	var run := 0
+	var runs: Array[int] = []
+	var onsets: Array[float] = []
+	var step := 0.05
+	for i in range(4000):
+		var y := float(i) * step
+		var n := RiverFlowShader.animated_field_value(7.3, y, Vector2(1, 0), 0.9)
+		var hit := RiverFlowShader.stroke_mask(n, false) > 0.5
+		if hit and not in_stroke:
+			onsets.append(y)
+		if hit:
+			run += 1
+		elif in_stroke:
+			runs.append(run)
+			run = 0
+		in_stroke = hit
+	assert_gt(runs.size(), 8, "too few strokes crossed to measure the pattern")
+	var total := 0
+	for r in runs:
+		total += r
+	var mean_width_cells := float(total) / float(runs.size()) * step
+	var mean_width_px := mean_width_cells / RiverFlowShader.NOISE_SCALE
+	assert_between(
+		mean_width_px, 2.5, 9.0,
+		"a stroke is %.1f world px thick -- under ~2.5 it vanishes at low zoom" % mean_width_px
+	)
+	var gap_total := 0.0
+	for k in range(1, onsets.size()):
+		gap_total += onsets[k] - onsets[k - 1]
+	var mean_spacing_px := gap_total / float(onsets.size() - 1) / RiverFlowShader.NOISE_SCALE
+	assert_between(
+		mean_spacing_px, 12.0, 42.0,
+		"strokes are %.0f world px apart -- too close reads as texture, too far as still water"
+			% mean_spacing_px
+	)
+
+
+## Adaptive ink: over LIGHT cels the strokes must be drawn dark, over dark
+## cels pale -- and never a mid-blend that matches the body. Contrast is
+## the pin, for EVERY body cel the quantizer can produce.
+func test_stroke_ink_contrasts_with_every_body_cel():
+	for level in RiverFlowShader.CEL_LEVELS:
+		var cel_t := float(level) / float(RiverFlowShader.CEL_LEVELS - 1)
+		var body := RiverFlowShader.depth_color(cel_t)
+		var ink := RiverFlowShader.stroke_ink_for(cel_t)
+		assert_gte(
+			absf(ink.v - body.v), 0.18,
+			"stroke ink barely differs from the body at cel %d (%.2f vs %.2f)"
+				% [level, ink.v, body.v]
+		)
+
+
+func test_the_shader_switches_ink_hard_never_blending_to_the_body():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("mix(line_color_deep, line_color, step("),
+		"the ink must snap between deep and pale -- a smooth blend passes through the body colour"
 	)
