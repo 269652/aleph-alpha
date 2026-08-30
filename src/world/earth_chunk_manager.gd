@@ -3901,6 +3901,21 @@ var _snow_onset_by_tile: Dictionary = {}
 ## after that fix lands if this is ever doubted again.
 var _snow_variant_by_tile: Dictionary = {}
 
+## Each tile's own flip transform (see SnowLayer.transform_for), cached the
+## same way and for the same reason as `_snow_variant_by_tile` above: a pure
+## function of the tile's own global coordinates, so it never needs
+## recomputing while a tile stays loaded. Reported live, with screenshots:
+## deep/near-full snow renders as an obviously artificial, grid-aligned
+## repeating pattern -- the same rounded blob, tile after tile, in the same
+## on-screen position and orientation, because neither `band` nor `variant`
+## alone (both independently confirmed to spread genuinely, see
+## SnowLayer.transform_for's own doc comment for the full investigation) can
+## fix two similar-looking illustrated variants converging at the highest
+## coverage band. This is what makes two such tiles actually READ as
+## different once painted -- see that function's own doc comment for why the
+## fix is orientation, not more variant/band work.
+var _snow_transform_by_tile: Dictionary = {}
+
 ## How often the coverage SWEEP below actually runs, independent of how often
 ## step_snow itself is called (every frame, from World._client_process).
 ##
@@ -4018,7 +4033,18 @@ func _paint_snow_tile(tile: Vector2i) -> void:
 		if not _snow_variant_by_tile.has(tile):
 			_snow_variant_by_tile[tile] = _snow_renderer.variant_for(tile.x, tile.y)
 		var variant: int = _snow_variant_by_tile[tile]
-		_snow_layer.set_cell(tile, 0, Vector2i(band, variant))
+		# This tile's own flip transform -- a THIRD axis independent of band
+		# and variant (see SnowLayer.transform_for's own doc comment), cached
+		# lazily here for the same reason variant is: it only matters once a
+		# tile is actually about to be painted. Passed as `set_cell`'s
+		# `alternative_tile` argument directly -- confirmed against a real
+		# TileSetAtlasSource/TileMapLayer that a raw flip-bit value works
+		# there with no separate registration needed (see transform_for's own
+		# doc comment).
+		if not _snow_transform_by_tile.has(tile):
+			_snow_transform_by_tile[tile] = _snow_renderer.transform_for(tile.x, tile.y)
+		var transform: int = _snow_transform_by_tile[tile]
+		_snow_layer.set_cell(tile, 0, Vector2i(band, variant), transform)
 
 
 ## Drops one chunk's tiles from the per-tile snow tracking dictionaries above,
@@ -4031,6 +4057,7 @@ func _forget_snow_paint_for_chunk(chunk_coord: Vector2i) -> void:
 			var tile := origin + Vector2i(local_x, local_y)
 			_snow_onset_by_tile.erase(tile)
 			_snow_variant_by_tile.erase(tile)
+			_snow_transform_by_tile.erase(tile)
 			_snow_painted_band_by_tile.erase(tile)
 
 

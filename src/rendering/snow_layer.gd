@@ -840,6 +840,80 @@ func onset_offset_for(global_x: int, global_y: int) -> float:
 	)
 
 
+## Which of four flip transforms a tile's snow overlay renders with -- an
+## axis independent of variant_for/band_for entirely (own salt, reads only
+## the tile's own global coordinates), so it can break up a "wallpaper" look
+## that neither of those two axes can fix on their own.
+##
+## Reported live, with screenshots: a field of deep/near-full snow renders as
+## an obviously artificial, grid-aligned repeating pattern -- the same
+## rounded double-lobed blob, tile after tile, in the same on-screen
+## position and orientation. Investigated directly rather than assumed a
+## regression: variant_for and band_for both independently confirmed to
+## spread genuinely across a real 10x10 tile grid (all 10 variants present,
+## no repetition pattern), and build_band_image's painted-pixel counts at
+## band 9 measured BYTE-IDENTICAL against a reconstruction of this file from
+## before this session's two rounds of cross-cell bleed-removal fixes (see
+## build_band_image's own "EDGE FEATHER"/"THIS WAS STILL NOT ENOUGH" doc
+## comments) -- so this was never a variant-selection, band-selection, or
+## slicing bug. It is a real property of the illustrated ART at the highest
+## coverage band: "one large puff nearly filling the cell" (see
+## OVERLAY_COLUMNS' own doc comment) leaves little room for silhouette
+## variety across ten hand/AI-illustrated variants, so several of them read
+## as visually similar rounded blobs at a glance even though a duplicate-pair
+## sweep across all 45 pairs at bands 7/8/9 found zero exact pixel
+## duplicates -- the pixels genuinely differ, the SILHOUETTE reads the same.
+##
+## Two tiles showing a similar-looking blob in the identical on-screen
+## POSITION and ORIENTATION read as "the same tile repeated" -- the actual
+## wallpaper look. Two mirrored/rotated copies of that same similar-looking
+## blob do not, even though the underlying art convergence at this band is
+## unchanged: orientation is a genuinely separate axis of visual variety from
+## "which picture is shown", the same way variant_for is separate from
+## band_for's depth.
+##
+## Combines TileSetAtlasSource's own TRANSFORM_FLIP_H/TRANSFORM_FLIP_V bit
+## constants (bitwise OR) and returns the result directly as a
+## TileMapLayer.set_cell `alternative_tile` argument -- confirmed against a
+## real, minimal TileSetAtlasSource/TileMapLayer instead of assumed from
+## memory: a raw flip-bit value works as `alternative_tile` with NO
+## `create_alternative_tile` registration call needed at all
+## (`TileSetAtlasSource.has_alternative_tile` already reports one of these as
+## present without ever creating it, and `create_alternative_tile` called
+## with one is a no-op that returns the same id back), and a real render of
+## an asymmetric probe tile confirmed the pixels actually move (a marked
+## quadrant shifted from top-left to top-right under a raw FLIP_H value) --
+## so `build_tile_set` needs no changes to register anything, and
+## `EarthChunkManager._paint_snow_tile` can pass this function's return value
+## straight through as `set_cell`'s fourth argument.
+##
+## Deliberately only FOUR combinations -- identity, flip_h, flip_v, and both
+## together -- NOT the full eight-member orthogonal group TileSetAtlasSource
+## also exposes via TRANSFORM_TRANSPOSE. Checked directly, not assumed safe,
+## by rendering real built band-9 tiles (the exact "puff nearly filling the
+## cell" shapes this axis exists for) through all four orthogonal-group
+## members side by side: transpose visibly distorts a wide, roughly-oval
+## mound into a tall, narrow one -- swapping x/y rotates a shape's own aspect
+## ratio, a much bigger and more obviously wrong change than mirroring it.
+## Several bands' real content is markedly NOT top/bottom symmetric (band 9's
+## built tiles measure top-half alpha mass roughly 30x their own bottom half,
+## e.g. variant 0: 363.7 vs 10.3, variant 5: 374.2 vs 12.5) in a way a simple
+## flip preserves -- a mirrored mound is still a mound, just facing the other
+## way -- but a transpose does not: it turns "wide and short at the bottom"
+## into "tall and narrow along one side", which reads as a different, wrong
+## shape rather than the same puff seen differently.
+const _TRANSFORM_SALT := 4271
+
+func transform_for(global_x: int, global_y: int) -> int:
+	var combinations := [
+		0,
+		TileSetAtlasSource.TRANSFORM_FLIP_H,
+		TileSetAtlasSource.TRANSFORM_FLIP_V,
+		TileSetAtlasSource.TRANSFORM_FLIP_H | TileSetAtlasSource.TRANSFORM_FLIP_V,
+	]
+	return combinations[PixelNoise.range_index(_TRANSFORM_SALT, global_x, global_y, combinations.size())]
+
+
 ## Which band a tile shows, or -1 for bare ground.
 ##
 ## `depth` is how much snow is lying overall (see Snowfall), `tread` how much

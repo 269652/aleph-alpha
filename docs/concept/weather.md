@@ -540,6 +540,62 @@ pinning the 88.25%-retained/30.3%-worst-loss measurements above as a real
 regression guard against a future re-tuning being far more aggressive than
 measured here.
 
+**Ninth follow-up: reported live again, with screenshots, after the above
+landed -- "the snow is still broken," this time a field of deep/near-full
+snow rendering as an obviously artificial, grid-aligned repeating
+"wallpaper" of the same rounded double-lobed blob.** Investigated directly
+rather than assumed a regression of the fix above: `build_band_image(9, 0)`,
+`(9, 1)`, and `(9, 5)` rendered through both the current code and a
+reconstruction of the code from before this session's bleed-removal work
+produced BYTE-IDENTICAL painted-pixel counts against the same real sheet
+asset -- that work touched zero pixels at band 9 for these variants.
+`variant_for` was re-confirmed to spread genuinely (all ten values present
+across a real 10x10 tile grid, no repetition pattern), and a duplicate-pair
+sweep across all 45 pairs at bands 7/8/9 found zero exact pixel duplicates.
+
+What does NOT genuinely differ is the overall SILHOUETTE: row 9 -- "one
+large puff nearly filling the cell" -- leaves little room for shape variety
+across its ten variants, so several read as the same rounded mound at a
+glance even though their pixels differ. The real bug was never
+variant/band selection or slicing: every tile painted its (genuinely
+similar-looking) blob in the exact same on-screen POSITION and ORIENTATION,
+which is what turns "several similar-looking blobs" into an obviously
+grid-aligned wallpaper.
+
+The fix is a third, independent per-tile axis, `SnowLayer.transform_for`
+(own salt `_TRANSFORM_SALT`, reads only the tile's global coordinates),
+returning one of four flip combinations -- identity, flip_h, flip_v, or
+both -- painted as the `TileMapLayer.set_cell` `alternative_tile` argument.
+Two mirrored copies of a similar-looking blob do not read as "the same tile
+repeated" the way two identically-oriented copies do. The real Godot 4.7 API
+was confirmed with a minimal headless probe rather than assumed from memory:
+a raw `TileSetAtlasSource.TRANSFORM_FLIP_H`/`TRANSFORM_FLIP_V` value
+(bitwise-OR'd) works as `alternative_tile` with NO `create_alternative_tile`
+registration needed -- `has_alternative_tile` already reports one present
+without it ever being created, and a real render confirmed the pixels
+actually move (a marked quadrant shifted from top-left to top-right under a
+raw `TRANSFORM_FLIP_H` value). `build_tile_set` needed no changes.
+
+Only four of the full eight-member orthogonal group are used --
+`TRANSFORM_TRANSPOSE` is deliberately excluded, checked rather than assumed
+safe: rendering real built band-9 tiles through all four group members
+showed transpose visibly distorting a wide, roughly-oval mound into a tall,
+narrow one, since several bands' real content is markedly NOT top/bottom
+symmetric (band 9's built tiles carry roughly 30x more alpha mass in their
+own top half than their bottom) in a way a simple flip preserves but a
+90-degree axis swap does not. Wired into
+`EarthChunkManager._paint_snow_tile` the same way onset/variant already are
+-- `_snow_transform_by_tile`, cleared alongside those caches on chunk
+unload. Pinned by five new `test_snow_layer.gd` tests (bounded to the four
+valid combinations and never carrying the transpose bit, deterministic,
+varies across tiles, and -- the test that matters for this specific bug --
+two tiles sharing the exact same `(band, variant)` pair with different
+transforms render as measurably different pixels, not byte-identical) plus a
+new `test_painted_snow_tiles_carry_a_real_per_tile_transform` in
+`test_earth_chunk_manager.gd`, run red against the pre-wiring manager code
+first. See `docs/progress.md`'s own ninth-follow-up entry for the full
+measurement trail.
+
 ### Status
 
 - ✅ Snow instead of rain below freezing, falling white, slow, and as FLECKS
@@ -569,6 +625,19 @@ measured here.
   `EarthChunkManager._paint_snow_tile` via `Vector2i(band, variant)` atlas
   coordinates and cached per tile (`_snow_variant_by_tile`) the same way
   onset already is.
+- ✅ Real per-tile ORIENTATION at a fixed (band, variant), so two tiles that
+  land on the same illustrated picture at the highest coverage bands don't
+  paint as an obviously grid-aligned repeating "wallpaper" — see the ninth
+  follow-up in the narrative above. `SnowLayer.transform_for` picks one of
+  four flip combinations (identity/flip_h/flip_v/both, deliberately
+  excluding `TRANSFORM_TRANSPOSE`), seeded independently of band and variant
+  (own salt, `_TRANSFORM_SALT`), and painted directly as the TileMapLayer
+  cell's own `alternative_tile` — confirmed against a real Godot 4.7
+  `TileSetAtlasSource`/`TileMapLayer` that no `create_alternative_tile`
+  registration is needed for a raw flip-bit value; wired in
+  `EarthChunkManager._paint_snow_tile` and cached per tile
+  (`_snow_transform_by_tile`) the same way onset and variant already are;
+  tested.
 - ✅ Per-tile onset variance, so a field fills in as a visible spread rather
   than snapping everywhere at once — `SnowLayer.ONSET_VARIANCE`/
   `onset_offset_for`/`band_for`, tested; wired in

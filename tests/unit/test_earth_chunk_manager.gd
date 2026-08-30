@@ -6210,6 +6210,44 @@ func test_painted_snow_tiles_carry_a_real_per_tile_variant():
 	snow_layer.free()
 
 
+## Reported live, with screenshots: deep/near-full snow reads as an obviously
+## artificial, grid-aligned repeating pattern -- the same rounded blob, tile
+## after tile, in the same on-screen position and orientation. Neither `band`
+## nor `variant` is the bug (both spread genuinely, see the test above and
+## SnowLayer.transform_for's own doc comment for the full investigation) --
+## the fix is a third, independent per-tile ORIENTATION axis
+## (SnowLayer.transform_for), painted as the TileMapLayer cell's own
+## `alternative_tile`. This is the manager-level half of that fix: confirms
+## `_paint_snow_tile` actually passes `transform_for`'s real value through to
+## `set_cell` rather than leaving every tile at the implicit default (0,
+## identity) `alternative_tile` it used to get.
+func test_painted_snow_tiles_carry_a_real_per_tile_transform():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.update(_berlin_tile)
+	manager.set_snow_depth(1.0)
+
+	var reference := SnowLayer.new()
+	var transforms_seen := {}
+	var checked := 0
+	for cell in snow_layer.get_used_cells():
+		if manager.biome_at_global(cell.x, cell.y) == "ocean":
+			continue
+		var alternative := snow_layer.get_cell_alternative_tile(cell)
+		assert_eq(
+			alternative, reference.transform_for(cell.x, cell.y),
+			"painted alternative_tile (transform) at %s does not match SnowLayer.transform_for" % [cell]
+		)
+		transforms_seen[alternative] = true
+		checked += 1
+	assert_gt(checked, 0, "precondition: at least one land tile was painted")
+	assert_gt(
+		transforms_seen.size(), 1,
+		"every painted tile carried the same alternative_tile (%s) -- the manager isn't wiring transform_for at all" % [transforms_seen]
+	)
+	snow_layer.free()
+
+
 ## User complaint: "when snow accumulates keep the initial variant so the
 ## progression stays coherent." Mechanically, `_snow_variant_by_tile` already
 ## looks like it should satisfy this by construction: variant is computed
