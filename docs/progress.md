@@ -7345,6 +7345,22 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: comic / 16-bit presentation** (medium) — ✅ Done — requested
+  directly ("make it more comic like? / 16bit pixel art?"). Safe to
+  stylize NOW because the first stylized attempt died of a translating
+  pattern under the flat colours, not of the flat colours: this pass
+  quantizes only PRESENTATION over untouched physics. Cel posterization
+  (6 flat levels of one shade = reconstructed depth pushed by the
+  advecting surface -- boundaries ride the moving field, wobble like
+  hand-animated water, and cannot fall on the tile grid), art-pixel
+  snapping (all sampling from the position snapped to one ART pixel,
+  TILE_SIZE/ART_TILE_SIZE, pinned against TerrainRenderer), classic 2x2
+  ordered dither at band boundaries, a comic ink line hugging the real
+  bank curve (bounded 1.5-5 art px by test -- the old per-tile outline
+  became a black block), and a punchier saturated palette with the same
+  pinned shallow-to-deep darkening. SURFACE_CONTRAST re-pinned in shade
+  units: the surface swing must span the WHOLE palette. Shader suite 60
+  green + real-GPU smoke.
 - **Rivers: world-anchored sampling, Chaikin courses, round caps**
   (large) — ✅ Done — reported: "there are still hard cuts / misalignments
   and the curve could be smoother" + "a sharp alignment error in the

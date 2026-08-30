@@ -154,7 +154,7 @@ func test_the_shader_samples_two_advected_phases():
 ## free and continuously, so no per-tile offset is needed or wanted.
 func test_the_surface_field_is_keyed_to_world_position_alone():
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("vec2 p = world_pos * noise_scale;"),
+		RiverFlowShader.SHADER_CODE.contains("vec2 p = wp * noise_scale;"),
 		"a per-tile offset added here would seam the noise at every tile edge"
 	)
 	assert_false(
@@ -257,7 +257,7 @@ func test_fragments_within_one_tile_get_their_own_across_offset():
 ## position against the real tile grid, and project it on the same
 ## flow-perpendicular the catalog's sign convention uses.
 func test_the_shader_reconstructs_from_the_real_tile_grid():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("floor(world_pos / tile_px)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("floor(wp / tile_px)"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("dot(delta_tiles, flow_perp) / half_width_tiles"))
 
 
@@ -432,17 +432,16 @@ func test_the_surface_mirror_stays_in_the_shaders_own_range():
 # index to dither.)
 
 ## So the moving surface must be at least as strong a signal as the entire
-## depth profile. Below parity a still frame is dominated by flat per-tile
-## colour, which is precisely the "blocky, not water" failure -- and it is a
-## RELATION between two measured quantities, so it cannot be satisfied by
-## quietly restyling either one alone.
-func test_the_moving_surface_is_at_least_as_strong_as_the_depth_profile():
+## depth structure. With the cel formulation both live in the same SHADE
+## units (the quantizer input, 0 at the lightest shallow to 1 at the
+## darkest centreline), so the relation reads directly: the surface must be
+## able to drive the shade across the whole palette, or a still frame is
+## dominated by static depth colour -- the "blocky, not water" failure.
+func test_the_moving_surface_can_span_the_whole_palette():
 	var swing := RiverFlowShader.surface_swing() * RiverFlowShader.SURFACE_CONTRAST
-	var profile := RiverFlowShader.depth_profile_span()
 	assert_gte(
-		swing, profile,
-		"surface swings %.3f against a %.3f depth profile -- the static banding wins"
-			% [swing, profile]
+		swing, 1.0,
+		"the surface drives only %.2f of the shade range -- static depth wins" % swing
 	)
 
 
@@ -503,8 +502,8 @@ func test_no_sample_coordinate_rotates_the_world_position():
 	)
 	assert_false(RiverFlowShader.SHADER_CODE.contains("dot(world, flow_perp)"))
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("vec2 p = world_pos * noise_scale;"),
-		"samples must be anchored at the fragment's own world position"
+		RiverFlowShader.SHADER_CODE.contains("vec2 p = wp * noise_scale;"),
+		"samples must be anchored at the fragment's own (snapped) world position"
 	)
 
 
@@ -770,3 +769,107 @@ func test_a_streakline_visibly_curves_within_its_own_length():
 	)
 
 
+# -- the comic / 16-bit pass ---------------------------------------------------
+#
+# Requested directly: "make it more comic like? / 16bit pixel art?" -- and
+# this time stylization can work, because the thing that killed the FIRST
+# stylized attempt was never the flat colours: it was a translating pattern
+# underneath them. The quantization below rides the world-anchored,
+# advected, turbulence-bent field, so the cel bands wobble and morph like
+# hand-animated water. Only the PRESENTATION is quantized; every physical
+# quantity (reconstruction, advection, bend, bank curve) is untouched.
+
+## A 16-bit water palette is a handful of flat shades -- enough to draw the
+## cross-section and the moving surface, few enough to read as cel art.
+func test_the_palette_is_a_16bit_handful_of_shades():
+	assert_between(RiverFlowShader.CEL_LEVELS, 4, 8)
+
+
+## The quantizer must genuinely produce exactly that many flat levels.
+func test_the_cel_quantizer_yields_exactly_the_palette_levels():
+	var seen := {}
+	for step in 400:
+		seen[RiverFlowShader.cel_level(float(step) / 399.0, 0.0)] = true
+	assert_eq(seen.size(), RiverFlowShader.CEL_LEVELS)
+
+
+## THE lesson from the whole squares saga, applied to the new bands: a cel
+## boundary must follow the MOVING FIELD, not any static structure. The
+## same depth must land in different cels as the surface passes different
+## values under it -- that is what makes the band edges wobble and flow.
+func test_cel_boundaries_follow_the_moving_surface():
+	var flips := 0
+	for step in 40:
+		var depth := float(step) / 39.0
+		var calm := RiverFlowShader.cel_level_for(depth, 0.35, 0.0)
+		var crest := RiverFlowShader.cel_level_for(depth, 0.75, 0.0)
+		if calm != crest:
+			flips += 1
+	assert_gt(
+		flips, 8,
+		"the surface moves cel boundaries at only %d of 40 depths -- bands are static" % flips
+	)
+
+
+## Classic 16-bit ordered dither: on the checkerboard's other phase the
+## quantization threshold shifts, so band boundaries interleave in a 2x2
+## weave instead of cutting hard.
+func test_band_boundaries_are_ordered_dithered():
+	var moved := 0
+	for step in 400:
+		var shade := float(step) / 399.0
+		if RiverFlowShader.cel_level(shade, 0.0) != RiverFlowShader.cel_level(shade, 1.0):
+			moved += 1
+	assert_gt(moved, 20, "the checker phase moves almost no boundaries -- no dither weave")
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("mod(floor(wp.x / pixel_snap) + floor(wp.y / pixel_snap), 2.0)"),
+		"the shader must derive the dither phase from the snapped pixel grid"
+	)
+
+
+## Pixel art renders on the ART-PIXEL grid: the shader snaps its sampling
+## to exactly one art pixel, derived from the real tile sizes rather than
+## guessed -- sub-pixel gradients are what make water look painted-on next
+## to chunky terrain art.
+func test_the_water_renders_on_the_art_pixel_grid():
+	assert_eq(
+		RiverFlowShader.PIXEL_SNAP,
+		float(TerrainRenderer.TILE_SIZE) / float(TerrainRenderer.ART_TILE_SIZE),
+		"one art pixel, in world px -- not an invented chunkiness"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("floor(world_pos / pixel_snap) * pixel_snap"),
+		"all sampling must start from the snapped position"
+	)
+
+
+## The comic INK line: a dark outline hugging the real bank curve. The old
+## stylized attempt's outline failed because it was per-TILE (a near-black
+## block eating half the channel); this one is a function of the
+## reconstructed |across|, so it is as smooth as the shoreline itself.
+func test_the_bank_ink_line_is_a_few_art_pixels_wide():
+	var width_art_px := (
+		RiverFlowShader.INK_WIDTH * RiverCatalog.RIVER_HALF_WIDTH_TILES
+		* RiverFlowShader.TILE_PX / RiverFlowShader.PIXEL_SNAP
+	)
+	assert_between(
+		width_art_px, 1.5, 5.0,
+		"the ink line is %.1f art pixels -- too thin reads as noise, too fat as the old block"
+			% width_art_px
+	)
+
+
+func test_the_ink_line_sits_just_inside_the_waterline():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("smoothstep(1.0 - ink_width, 1.0 - ink_width * 0.4, rr)"),
+		"the ink band must be keyed to the reconstructed bank distance"
+	)
+
+
+## The ink must be visibly darker than the deepest water shade, or it is
+## not an outline.
+func test_the_ink_is_darker_than_the_deepest_water():
+	assert_lt(
+		RiverFlowShader.INK_COLOR.v,
+		RiverFlowShader.BAND_COLORS[4].v - 0.05
+	)

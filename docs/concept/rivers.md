@@ -1071,6 +1071,38 @@ each with its own fix:
    tributary mouth mid-confluence — as ragged mid-channel water. The across
    offset is radial there now, capping each end in a clean semicircle.
 
+### The comic / 16-bit pass (2026-08-30)
+
+Requested directly: *"make it more comic like? / 16bit pixel art?"* -- and
+this time stylization is safe, because the thing that killed the FIRST
+stylized attempt was never the flat colours: it was the translating
+pattern underneath them. This pass quantizes ONLY the presentation; every
+physical quantity (per-fragment reconstruction, advection, standing
+turbulence, the bank curve) is untouched underneath it.
+
+- **Cel posterization**: one continuous shade (reconstructed depth pushed
+  around by the advecting surface) quantized into 6 flat levels. The cel
+  boundaries ride the moving field, so they wobble and morph like
+  hand-animated water -- and can never fall along the tile grid, because
+  everything upstream of the quantizer is continuous and world-anchored.
+- **Art-pixel snapping**: all sampling starts from the position snapped to
+  one ART pixel (TILE_SIZE / ART_TILE_SIZE world px, pinned against
+  TerrainRenderer) -- no gradient is ever smoother than the surrounding
+  sprite art's own pixels.
+- **Ordered dither**: the 2x2 checker phase shifts the quantization
+  threshold half a step, weaving band boundaries the classic 16-bit way.
+- **Comic ink line**: a dark outline hugging the real bank curve, a few
+  art pixels wide. The old stylized attempt drew its outline per TILE and
+  it became a black block; this one is a function of the reconstructed
+  |across|, exactly as smooth as the shoreline.
+- **Punchier palette**: the five ramp stops go saturated-ink rather than
+  atmospheric grey, same shallow-to-deep order, same pinned darkening.
+
+SURFACE_CONTRAST changes meaning with this pass: it now works in SHADE
+units (the quantizer input), pinned so the surface's real p05..p95 swing
+can drive the shade across the WHOLE palette -- the same
+surface-vs-static-structure relation as before, in the new units.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1092,6 +1124,8 @@ each with its own fix:
   feather, painted out to an apron; base water overlay is ocean-only now.
   Sub-tile GROUND blending at the bank (sand/mud strip under the
   waterline) — ⬜ Not started.
+- **Comic / 16-bit presentation** — ✅ Done — cel posterization + art-pixel
+  snapping + ordered dither + bank ink line over the untouched physics.
 - **World-anchored field + smoothed courses + round caps** — ✅ Done — the
   LIC smear keeps the streak pattern continuous across direction-bin
   changes (the "hard cuts", pinned by a world-magnitude seam test),

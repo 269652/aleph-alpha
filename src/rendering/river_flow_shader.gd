@@ -50,7 +50,12 @@ uniform float advect_rate = 0.35;
 uniform float advect_strength = 1.15;
 uniform float noise_scale = 0.08;
 uniform float detail_scale = 2.7;
-uniform float surface_contrast = 0.50;
+uniform float surface_contrast = 1.9;
+uniform float pixel_snap = 0.5;
+uniform float cel_levels = 6.0;
+uniform float dither_strength = 0.5;
+uniform float ink_width = 0.06;
+uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
 uniform float smear_spacing = 0.8;
 uniform float smear_gain = 2.1;
 uniform float turbulence_strength = 1.4;
@@ -128,14 +133,21 @@ void fragment() {
 	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
 	float is_fast = step(0.5, data.a);
 
+	// PIXEL ART renders on the art-pixel grid: every sample below starts
+	// from the snapped position, so no gradient is ever smoother than one
+	// art pixel -- sub-pixel shading is what makes shader water look
+	// painted-on next to chunky sprite terrain. pixel_snap is one ART
+	// pixel derived from the real tile sizes, not an invented chunkiness.
+	vec2 wp = floor(world_pos / pixel_snap) * pixel_snap + vec2(pixel_snap * 0.5);
+
 	// CONTINUOUS CROSS-SECTION -- the fix for "still a lot of individual
 	// squares". The tile bakes only its CENTRE's signed cross-channel
 	// offset (R); every fragment reconstructs its own by adding where it
 	// sits WITHIN the tile, projected on the flow perpendicular. Depth is
 	// then a per-pixel quantity: the parabola glides straight through tile
 	// boundaries instead of jumping a whole quantized band at each edge.
-	vec2 cell_center = (floor(world_pos / tile_px) + vec2(0.5)) * tile_px;
-	vec2 delta_tiles = (world_pos - cell_center) / tile_px;
+	vec2 cell_center = (floor(wp / tile_px) + vec2(0.5)) * tile_px;
+	vec2 delta_tiles = (wp - cell_center) / tile_px;
 	float frag_across = (data.r * 2.0 - 1.0) * across_range
 		+ dot(delta_tiles, flow_perp) / half_width_tiles;
 	float rr = abs(frag_across);
@@ -165,7 +177,7 @@ void fragment() {
 	// times its distance from the origin, which out here is thousands of
 	// tiles per direction bin. Every sample below starts from p itself;
 	// direction only steers offsets a fraction of a cell long.
-	vec2 p = world_pos * noise_scale;
+	vec2 p = wp * noise_scale;
 
 	// STANDING TURBULENCE -- what makes this fluid rather than a conveyor.
 	//
@@ -203,18 +215,32 @@ void fragment() {
 	// they draw the tilemap grid straight across the river. Perturbing the
 	// index lets each edge wander over half a band, breaking it into a
 	// ragged, moving line that no longer coincides with the lattice.
-	// The five palette stops now blend as one CONTINUOUS ramp over the
-	// reconstructed depth -- there is no band index left to jump.
-	float sramp = depth_frac * 4.0;
+	// THE COMIC / 16-BIT PASS. One continuous shade -- the reconstructed
+	// depth pushed around by the advecting surface -- quantized into a
+	// handful of flat cel levels. Because the shade rides the moving
+	// field, the cel boundaries wobble, flow and morph like hand-animated
+	// water; because everything upstream of the quantizer is continuous
+	// and world-anchored, no boundary can ever fall along the tile grid.
+	// (The first stylized attempt died of a translating pattern UNDER the
+	// flat colours -- the flat colours were never the problem.)
+	float contrast = surface_contrast * mix(0.7, 1.35, is_fast);
+	float shade = clamp(depth_frac - (n - 0.5) * contrast * 0.5, 0.0, 1.0);
+
+	// Classic ordered dither: the checkerboard's other phase shifts the
+	// quantization threshold half a step, so band boundaries interleave in
+	// a 2x2 weave -- the 16-bit way to suggest a gradient with flat inks.
+	float checker = mod(floor(wp.x / pixel_snap) + floor(wp.y / pixel_snap), 2.0);
+	float level = clamp(
+		floor(shade * cel_levels + (checker - 0.5) * dither_strength),
+		0.0, cel_levels - 1.0
+	);
+	float cel_t = level / (cel_levels - 1.0);
+
+	float sramp = cel_t * 4.0;
 	vec3 body = mix(band0_color, band1_color, clamp(sramp, 0.0, 1.0));
 	body = mix(body, band2_color, clamp(sramp - 1.0, 0.0, 1.0));
 	body = mix(body, band3_color, clamp(sramp - 2.0, 0.0, 1.0));
 	body = mix(body, band4_color, clamp(sramp - 3.0, 0.0, 1.0));
-
-	// The advecting surface modulates brightness -- this is the moving
-	// water itself, not a mark drawn on top of it.
-	float contrast = surface_contrast * mix(0.7, 1.35, is_fast);
-	body += vec3((n - 0.5) * contrast);
 
 	// Specular glints on the crests. They appear and vanish with the
 	// surface rather than sliding across it, which is what real moving
@@ -228,6 +254,14 @@ void fragment() {
 	float at_edge = smoothstep(0.72, 0.96, rr);
 	float foam = smoothstep(foam_threshold, foam_threshold + 0.12, n) * at_edge;
 	body = mix(body, foam_color, foam);
+
+	// The comic INK line: a dark outline hugging the real bank curve, just
+	// inside the waterline. The old stylized attempt drew its outline per
+	// TILE and it became a black block eating half the channel; this one
+	// is a function of the reconstructed |across|, so it is exactly as
+	// smooth as the shoreline itself.
+	float ink = smoothstep(1.0 - ink_width, 1.0 - ink_width * 0.4, rr);
+	body = mix(body, ink_color, ink);
 
 	// The SHORELINE: opaque water inside the channel, a short feather at
 	// the bank curve, nothing past it -- the ground simply shows through.
@@ -278,16 +312,35 @@ const SMEAR_TAPS := 9
 const SMEAR_SPACING := 0.7
 const SMEAR_GAIN := 2.6
 
-## How strongly the advecting field brightens and darkens the water.
+## How strongly the advecting field pushes the cel shade around, in SHADE
+## units (the quantizer input, 0 lightest to 1 darkest).
 ##
-## Sized by a MEASURED RELATION, not by eye: the moving surface must swing
-## at least as far in brightness as the whole bank-to-centreline depth
-## profile does. Below that parity the static, per-tile depth colour
-## dominates any still frame and the river reads as a flat blocky mosaic --
-## which is exactly what the first screenshot of this shader showed, with
-## the surface at 0.070 against the profile's 0.26. See
-## test_the_moving_surface_is_at_least_as_strong_as_the_depth_profile.
-const SURFACE_CONTRAST := 0.50
+## Sized by a MEASURED RELATION, not by eye: the surface's real p05..p95
+## swing times this must reach 1.0 -- the surface can drive the shade
+## across the WHOLE palette. Anything less and static depth colour
+## dominates every still frame, which is the "blocky, not water" failure
+## this shader crawled out of. See
+## test_the_moving_surface_can_span_the_whole_palette.
+const SURFACE_CONTRAST := 1.9
+
+## One ART pixel, in world px -- TILE_SIZE world px carry ART_TILE_SIZE art
+## px, so this is their ratio, pinned against TerrainRenderer rather than
+## invented. All sampling snaps to this grid: sub-pixel gradients are what
+## make shader water look painted-on next to chunky sprite terrain.
+const PIXEL_SNAP := 0.5
+
+## The 16-bit palette: how many flat cel levels the shade quantizes into,
+## and how far the 2x2 checker phase shifts the threshold (the classic
+## ordered-dither weave at every band boundary).
+const CEL_LEVELS := 6
+const DITHER_STRENGTH := 0.5
+
+## The comic ink outline at the waterline: width as a fraction of the
+## half-width (bounded in ART pixels by test -- too thin reads as noise,
+## too fat becomes the old per-tile black block), and its colour, darker
+## than the deepest water so it reads as a drawn line.
+const INK_WIDTH := 0.06
+const INK_COLOR := Color(0.05, 0.13, 0.25)
 
 ## How hard the standing eddies bend the streaklines, in line widths of
 ## across-displacement at full noise swing, and how coarse the eddies are
@@ -343,12 +396,15 @@ const FOAM_COLOR := Color(0.95, 0.99, 1.0)
 ## still read as per-tile rectangles, because the band INDEX was a per-tile
 ## quantity; the ramp is evaluated per fragment from the reconstructed
 ## depth, so there is no index left to jump at a tile edge.
+## Punchier than the realistic pass used -- comic water is saturated inks,
+## not atmospheric greys -- while keeping the same shallow-to-deep order
+## the darken test pins.
 const BAND_COLORS: Array[Color] = [
-	Color(0.30, 0.60, 0.66),
-	Color(0.22, 0.50, 0.62),
-	Color(0.16, 0.40, 0.56),
-	Color(0.11, 0.31, 0.48),
-	Color(0.07, 0.23, 0.40),
+	Color(0.42, 0.76, 0.80),
+	Color(0.28, 0.62, 0.74),
+	Color(0.18, 0.47, 0.66),
+	Color(0.12, 0.34, 0.56),
+	Color(0.08, 0.23, 0.44),
 ]
 
 ## Real current speed at or above which a reach reads as fast -- it gets a
@@ -370,6 +426,11 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("noise_scale", NOISE_SCALE)
 	material.set_shader_parameter("detail_scale", DETAIL_SCALE)
 	material.set_shader_parameter("surface_contrast", SURFACE_CONTRAST)
+	material.set_shader_parameter("pixel_snap", PIXEL_SNAP)
+	material.set_shader_parameter("cel_levels", float(CEL_LEVELS))
+	material.set_shader_parameter("dither_strength", DITHER_STRENGTH)
+	material.set_shader_parameter("ink_width", INK_WIDTH)
+	material.set_shader_parameter("ink_color", INK_COLOR)
 	material.set_shader_parameter("smear_spacing", SMEAR_SPACING)
 	material.set_shader_parameter("smear_gain", SMEAR_GAIN)
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
@@ -418,6 +479,21 @@ static func depth_color(depth_fraction: float) -> Color:
 ## over BANK_FEATHER either side of |across| == 1.
 static func bank_alpha(across_magnitude: float) -> float:
 	return 1.0 - smoothstep(1.0 - BANK_FEATHER, 1.0 + BANK_FEATHER, across_magnitude)
+
+
+## The cel quantizer, mirroring the shader exactly: shade in [0, 1],
+## checker 0.0 or 1.0 (the 2x2 dither phase), out comes the flat level.
+static func cel_level(shade: float, checker: float) -> int:
+	return clampi(
+		int(floor(clampf(shade, 0.0, 1.0) * float(CEL_LEVELS) + (checker - 0.5) * DITHER_STRENGTH)),
+		0, CEL_LEVELS - 1
+	)
+
+
+## The full shade pipeline for one (depth, surface) pair -- what the cel
+## boundary tests sweep to prove the bands follow the MOVING field.
+static func cel_level_for(depth_fraction: float, n: float, checker: float) -> int:
+	return cel_level(depth_fraction - (n - 0.5) * SURFACE_CONTRAST * 0.5, checker)
 
 
 ## Whether a real current is quick enough to read as fast-moving -- such a
