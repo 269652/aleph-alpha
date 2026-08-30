@@ -10,6 +10,7 @@ extends GutTest
 ## reported "just some moving strokes" straight back.
 
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
+const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 
@@ -447,3 +448,57 @@ func test_the_shader_samples_in_the_channels_own_frame():
 func test_the_drag_is_purely_downstream():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_a, across)"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_b, across)"))
+
+
+# -- the size of a flow line -------------------------------------------------
+#
+# From the second screenshot: the lines were real but ENORMOUS -- about 14
+# tiles long and two wide, so they read as vast soft gradients sweeping over
+# the river rather than as its surface. A correct technique at the wrong
+# scale looks nothing like water.
+#
+# So the feature size is pinned in TILES, which is the only scale that means
+# anything here: what matters is how many lines fit across a channel that is
+# a handful of tiles wide, not what the noise constant happens to be.
+
+## Several lines must fit ACROSS the channel. The rivers here run about four
+## to six tiles bank to bank, so a feature wider than a tile leaves barely
+## two lines across the whole river and the surface goes back to flat.
+func test_flow_lines_are_narrow_enough_that_several_fit_across_a_channel():
+	var width_tiles := RiverFlowShader.feature_width_px() / float(TerrainRenderer.ART_TILE_SIZE)
+	assert_lte(
+		width_tiles, 1.0,
+		"a flow line is %.2f tiles wide -- too few fit across a 4-6 tile river" % width_tiles
+	)
+
+
+## But not so fine it dissolves into static. Below a few pixels the lines
+## alias against the pixel grid instead of reading as structure.
+func test_flow_lines_are_not_so_fine_they_become_static():
+	assert_gte(RiverFlowShader.feature_width_px(), 4.0)
+
+
+## And they must be LINES -- clearly longer than they are wide, but still
+## short enough to see a line begin and end within a screen of river.
+func test_flow_lines_are_a_few_tiles_long():
+	var length_tiles := RiverFlowShader.feature_length_px() / float(TerrainRenderer.ART_TILE_SIZE)
+	assert_between(
+		length_tiles, 2.0, 6.0,
+		"a flow line is %.2f tiles long" % length_tiles
+	)
+
+
+## The water has to visibly MOVE. The drag is what carries the surface
+## downstream, so measured in the field's own feature lengths it must cover
+## a real fraction of a line per phase -- below that the surface deforms
+## almost in place and the river looks still.
+##
+## This is the trap the first version fell into: the drag was applied before
+## the anisotropic stretch, so 1.15 "units" came out as 0.18 of a feature --
+## nearly motionless.
+func test_the_water_visibly_travels_within_each_phase():
+	assert_gte(
+		RiverFlowShader.drag_in_feature_lengths(), 0.5,
+		"the surface travels only %.2f of a line per phase -- reads as still water"
+			% RiverFlowShader.drag_in_feature_lengths()
+	)

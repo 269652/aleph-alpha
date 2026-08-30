@@ -47,10 +47,10 @@ shader_type canvas_item;
 
 uniform float advect_rate = 0.35;
 uniform float advect_strength = 1.15;
-uniform float noise_scale = 0.028;
+uniform float noise_scale = 0.08;
 uniform float detail_scale = 2.7;
 uniform float surface_contrast = 0.50;
-uniform float line_stretch = 0.16;
+uniform float line_stretch = 0.13;
 uniform float band_dither = 1.9;
 uniform float glint_threshold = 0.70;
 uniform float glint_strength = 0.55;
@@ -98,7 +98,7 @@ float value_noise(vec2 p) {
 // Two octaves, because real water has structure at several scales at once;
 // a single octave reads as a lava lamp.
 float line_field(float along, float across) {
-	vec2 q = vec2(along * line_stretch, across);
+	vec2 q = vec2(along, across);
 	return value_noise(q) * 0.65 + value_noise(q * detail_scale) * 0.35;
 }
 
@@ -131,8 +131,14 @@ void fragment() {
 	// what the old baked phase channel was -- would make the noise jump at
 	// every tile boundary, a grid of seams across the river. World position
 	// already decorrelates every reach continuously and for free.
+	// The channel's own frame, with the along-axis ALREADY compressed by
+	// line_stretch. Doing the stretch here rather than inside line_field
+	// matters more than it looks: it puts `along` in the field's own
+	// feature units, so advect_strength below means "how many line-lengths
+	// the water travels per phase". Applied the other way round, a drag of
+	// 1.15 came out as 0.18 of a feature and the river looked still.
 	vec2 world = world_pos * noise_scale;
-	float along = dot(world, flow_dir);
+	float along = dot(world, flow_dir) * line_stretch;
 	float across = dot(world, flow_perp);
 
 	// The drag is purely DOWNSTREAM -- water is carried along the channel,
@@ -189,16 +195,28 @@ void fragment() {
 ## cycles/frame, far inside the 0.5 Nyquist limit.
 const ADVECT_RATE := 0.35
 
-## How far the surface field is dragged along the flow over one phase, in
-## noise-space units. This is what reads as the water's speed. Above ~1.5
-## the stretch becomes a visible smear within a single phase.
+## How far the surface travels along the flow over one phase, measured in
+## the field's OWN feature lengths -- so 1.15 means each line moves a little
+## over its own length before its phase resets. This is what reads as the
+## water's speed. Above ~1.5 the stretch becomes a visible smear within a
+## single phase.
 const ADVECT_STRENGTH := 1.15
 
 ## Spatial scale of the surface field, and the second octave's multiplier.
-## At 0.028 the broad swell is roughly two tiles across -- big enough to
-## read as water rather than static, small enough that a river shows
-## several features at once.
-const NOISE_SCALE := 0.028
+##
+## Sized so a flow line comes out about four tenths of a tile wide (a tile
+## is 32 world px here, NOT 16 -- getting that wrong is what made the first
+## correction land at half the intended length). That puts roughly ten lines
+## across a four-to-six-tile river. The first attempt used 0.028 -- features
+## two tiles wide and fourteen long -- and
+## the result read as vast soft gradients sweeping over the water rather
+## than as the water itself. A correct technique at the wrong scale looks
+## nothing like what it is modelling.
+##
+## Pinned in TILES rather than as a raw constant, because tiles are the only
+## scale that means anything here: see
+## test_flow_lines_are_narrow_enough_that_several_fit_across_a_channel.
+const NOISE_SCALE := 0.08
 const DETAIL_SCALE := 2.7
 
 ## How strongly the advecting field brightens and darkens the water.
@@ -213,12 +231,12 @@ const DETAIL_SCALE := 2.7
 const SURFACE_CONTRAST := 0.50
 
 ## How far the surface field is stretched ALONG the flow relative to across
-## it -- 0.16 makes every feature about six times longer downstream than it
+## it -- 0.13 makes every feature about eight times longer downstream than it
 ## is wide, so the field is filamentary and reads as flowing LINES rather
 ## than as drifting blobs. Requested in exactly those terms ("can you
 ## flowing lines that morph"): the lines come from this, the morphing from
 ## the two-phase advection.
-const LINE_STRETCH := 0.16
+const LINE_STRETCH := 0.13
 
 ## How far the surface field perturbs the depth-band lookup, in bands.
 ##
@@ -433,3 +451,23 @@ static func surface_swing(samples: int = 140) -> float:
 ## per-tile signal the moving surface has to compete with.
 static func depth_profile_span() -> float:
 	return BAND_COLORS[0].v - BAND_COLORS[BAND_COLORS.size() - 1].v
+
+
+## How wide one flow line is, in world pixels -- one noise cell across the
+## channel. This and the length below are what the feature-size tests hold
+## to a real number of tiles.
+static func feature_width_px() -> float:
+	return 1.0 / NOISE_SCALE
+
+
+## And how long, downstream: the same cell stretched by 1/LINE_STRETCH.
+static func feature_length_px() -> float:
+	return 1.0 / (NOISE_SCALE * LINE_STRETCH)
+
+
+## How far the water travels per phase, in its own line lengths. The number
+## that decides whether the river reads as moving or as still -- and the one
+## that silently came out 6x too small when the anisotropic stretch was
+## applied after the drag instead of before it.
+static func drag_in_feature_lengths() -> float:
+	return ADVECT_STRENGTH
