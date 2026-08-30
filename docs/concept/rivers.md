@@ -558,6 +558,101 @@ why a dam that has held for ages gives way suddenly when the water rises a
 little further. Real constants throughout (loose-stone bulk density
 ~1600 kg/m³ at 20–40% voids; μ = 0.6 rock-on-rock).
 
+## Flow rendering: the phase-field rewrite (2026-08-30)
+
+Reported directly: *"overhaul the flow shader and animations they should
+look realistic and natural"*. The old streak shader read as "a tilemap with
+a filter on it", and research into why turned up **three quantified
+defects** — not matters of taste, but arithmetic. All three are now fixed
+*by construction* rather than by tuning, which is why they cannot silently
+come back.
+
+### Defect 1 — the phase reset at every tile boundary (the dominant one)
+
+The phase was `dot(world_pos, flow_dir)`: `world_pos` is absolute canvas
+space (up to ~639,000 units across this world) and `flow_dir` was quantised
+to 16 compass bins, constant per tile. At any tile edge where the bearing
+changed bin, the chord between the two directions is `2·sin(11.25°) = 0.390`,
+so the phase differed by
+
+```
+639,000 × 0.390 × 0.12 ≈ 30,000 cycles
+```
+
+which, wrapped by the sine, is a **uniformly random phase reset** at that
+edge. Adjacent river cells routinely land in different bins, so the pattern
+restarted on a 16 px lattice — and that lattice *is* the tilemap, made
+visible. It was the single biggest reason the water looked artificial.
+
+**The fix** (`river_phase_field.gd`): bake a continuous phase potential
+along each river's own course instead. Two cells' baked phase now differ by
+exactly the number of streak cycles between them, so the bands are one
+ribbon following the channel with no basis to disagree at an edge. The
+phase is quantised to 12 bins, capping the worst residual seam at 1/24 of a
+cycle (15° of the sine) — versus an arbitrary reset before.
+
+### Defect 2 — fast rivers aliased and flowed backwards
+
+The phase's time term was `TIME · flow_speed · streak_frequency`, giving
+`32 × 0.12 = 3.84 Hz` at top speed. At this game's measured ~7 fps floor
+that is **0.549 cycles/frame — past the 0.5 Nyquist limit**, so the
+fundamental reversed: the fastest rivers visibly flowed *upstream*. The
+parameter carrying "this water is fast" was the one broken hardest by speed.
+
+**The fix**: one global temporal rate everywhere
+(`STREAK_RATE_HZ = 0.75`, i.e. 0.107 cycles/frame at 7 fps, with headroom
+for the streak's own harmonics). Speed no longer appears in the time term
+at all, which makes aliasing impossible at any speed rather than merely
+unlikely — pinned by a test that asserts it against the worst measured
+frame rate.
+
+### Defect 3 — turbulence was scrambling the bands, not wavering them
+
+The old field displaced the phase by ±15 world units against an 8.33-unit
+wavelength: **±1.8 wavelengths**. Past ~1/(2π) the iso-phase map folds back
+on itself, so the bands were being decorrelated rather than bent. The old
+code's own comment claimed the displacement was "small enough that streaks
+still read as flowing roughly downstream"; the arithmetic said otherwise.
+A second octave sat at ~1.5× the streak's own frequency, shredding the very
+pattern it was meant to perturb, for four extra `sin()` per fragment.
+
+**The fix**: turbulence is now expressed as a **fraction of a wavelength**
+(0.22), which makes the error impossible to reintroduce by accident, and
+uses one octave instead of two.
+
+### What speed reads as now
+
+Because one global wavelength and rate is what buys defects 1 and 2, speed
+can no longer drive the streak *geometry*. It drives **contrast** and
+**whitewater** instead, which is the more legible cue at 16 px anyway.
+
+Honest note on the foam: real whitewater tracks flow **deceleration**, not
+speed — a uniformly fast chute is glassy and green, and it is the hydraulic
+jump where fast meets slow that goes white. Computing that needs an
+upstream sample this pass does not carry, so what ships is the cheap proxy:
+broken speckle on the fastest reaches, hash-quantised to the art-pixel grid
+so it sits still against nearest-filtered ground instead of crawling.
+Deceleration-driven foam is the named refinement.
+
+### Data layout
+
+The overlay tile's four channels each earn their place: **R** the wrapped
+course phase, **G/B** the flow direction as a unit *vector* (not a bearing —
+which saves a `radians`/`sin`/`cos` per fragment and removes the 0°/360°
+wrap hazard entirely), **A** the speed fraction — which now comes from the
+**real solved current velocity** (see "Real hydraulics" above) rather than
+the old slope proxy.
+
+The atlas is keyed on (phase × direction × speed) = 12 × 16 × 4 = 768 tiles,
+laid out as a **2D grid**: a single row would be 24,576 px wide, past the
+16,384 `GL_MAX_TEXTURE_SIZE` common on the integrated GPUs this game
+targets — it would simply fail to upload. Measured cost: a 1024×768 atlas
+built in **9 ms**, so the boot-time worry did not materialise.
+
+Verified by a real GPU compile check (`test_river_flow_render_smoke.gd`
+builds the exact live TileMapLayer + material + tile-set combination and
+runs it several frames), not only by unit tests on the uniforms.
+
 ## Player interaction: wading, swimming, and the submersion tint
 
 `Player._resolve_water_state` originally only checked real elevation-
@@ -678,8 +773,12 @@ than it is, matching this project's usual practice):
   fallback: reverted after playtesting" above); curated-only is what's
   live. A future connectivity-aware redesign could reuse the module.
 - **Rendering (water overlay reuse)** — ✅ Done.
-- **Flow direction + real gradient-driven speed + turbulence (animated
-  overlay)** — ✅ Done. Was silently occluded in live play by an unrelated
+- **Flow rendering (phase-field rewrite)** — ✅ Done — continuous course
+  phase (kills the per-tile phase reset), one global temporal rate (kills
+  the Nyquist aliasing that made fast rivers flow backwards), turbulence
+  capped below the fold threshold, speed read from the real solved current,
+  whitewater speckle on fast reaches. Deceleration-driven foam, bank foam
+  from the shore-distance channel, and depth-driven colour — ⬜ Not started. Was silently occluded in live play by an unrelated
   `scenes/world.tscn` sibling-order bug (`HillshadeFx` drawing on top of
   `RiverFlowFx`) until the z-order fix above — now fixed and regression-
   tested against the real scene file (`test_world_ground_layer_order.gd`).

@@ -1,72 +1,105 @@
 extends RefCounted
 
-## Per-pixel (flow-DIRECTION, flow-SPEED) data, not art -- mirrors
-## procedural_hillshade_sprite.gd's exact "bake a data channel into a
-## texture, sample it as data in the fragment shader" shape: direction in
-## red, speed fraction in green, the same two-channel layout hillshade
-## uses for (slope, aspect).
+## Per-pixel river-flow DATA, not art -- mirrors
+## procedural_hillshade_sprite.gd's "bake a data channel into a texture,
+## sample it as data in the fragment shader" shape. See
+## docs/concept/rivers.md's "Flow rendering" section.
 ##
-## Real flow direction is continuous per tile (the same
-## TerrainRelief.aspect_degrees_from_gradient every river tile already
-## computes for hillshading -- "the direction water would actually flow",
-## by that function's own doc comment), so this quantizes into a small,
-## honestly-coarse set of compass bins -- the same kind of simplification
-## procedural_hillshade_sprite.gd already accepts for aspect. Speed
-## (added 2026-08-29, "more natural water flow") is likewise a continuous
-## [0,1] fraction (see RiverFlowShader.speed_fraction_for_slope_deg),
-## quantized the same way.
+## Four channels, each earning its place:
+##   R  wrapped streak phase   -- the continuous phase potential along the
+##                               river's own course (see RiverPhaseField).
+##                               THE fix for the old shader's tile-lattice
+##                               phase resets.
+##   G  flow direction x       -- as a VECTOR COMPONENT, not a bearing
+##   B  flow direction y       -- ditto
+##   A  speed fraction         -- drives foam and contrast
+##
+## Direction is stored as a vector rather than the compass angle it used to
+## be for two real reasons: it saves the shader a `radians` + `sin` + `cos`
+## per fragment, and it removes the 0/360 wrap hazard entirely (a bearing
+## interpolates catastrophically across north; a unit vector does not).
 
 const SIZE := 32
 
-## 16 compass sectors (22.5 deg each) -- finer than hillshade's 8 aspect
-## bins, since a directional streak's exact angle is more visually
-## noticeable than a shading band's.
+## Quantisation of each baked dimension. Total atlas tiles is the product,
+## so these are a real budget: every extra tile is another `create_tile`
+## call at boot, and the atlas texture grows with it.
+##
+## PHASE_BINS is the one that trades directly against visual quality: the
+## phase is continuous in principle, and binning it to 12 caps the worst
+## seam between neighbouring tiles at 1/24 of a cycle (15 degrees of the
+## streak's sine) -- far below the old construction's arbitrary reset, and
+## small enough not to read as a lattice.
+##
+## SPEED_BINS is only 4 because speed no longer drives the streak GEOMETRY
+## (see RiverPhaseField.STREAK_WAVELENGTH_TILES); it drives foam and
+## contrast, where four steps is plenty.
+const PHASE_BINS := 12
 const DIRECTION_BINS := 16
+const SPEED_BINS := 4
 
-## 6 speed bands -- coarser than direction, since "how fast" reads as a
-## gradient of pacing rather than a sharply distinguishable value the way
-## direction is; plenty to tell a lazy lowland stretch from a rushing
-## mountain one without needing hundreds of atlas tiles for a difference
-## too subtle to see at this pixel scale anyway (the same reasoning
-## ProceduralHillshadeSprite.SLOPE_BINS's own comment already gives).
-const SPEED_BINS := 6
+## 12 * 16 * 4 = 768 tiles. Laid out as a 2D grid rather than one row: a
+## single row would be 768 * 32 = 24,576 px wide, past the 16,384
+## GL_MAX_TEXTURE_SIZE common on the integrated GPUs this game targets.
+const ATLAS_COLUMNS := 32
 
 
-## Which compass sector a real bearing in degrees falls into.
+static func phase_bin_for(wrapped_phase: float) -> int:
+	return int(clampf(fposmod(wrapped_phase, 1.0), 0.0, 0.999999) * PHASE_BINS)
+
+
+static func phase_for_bin(bin: int) -> float:
+	return (float(bin) + 0.5) / float(PHASE_BINS)
+
+
 static func direction_bin_for(angle_deg: float) -> int:
 	var wrapped := fposmod(angle_deg, 360.0)
 	return int(clampf(wrapped / 360.0, 0.0, 0.999999) * DIRECTION_BINS)
 
 
-## The representative (bin-center) bearing this bin bakes.
 static func angle_for_bin(bin: int) -> float:
 	return (float(bin) + 0.5) / float(DIRECTION_BINS) * 360.0
 
 
-## Which speed band a real [0,1] speed fraction falls into. Clamped at
-## both ends, so a value outside [0,1] (shouldn't happen given
-## RiverFlowShader.speed_fraction_for_slope_deg's own clamp, but cheap
-## insurance) still lands in a real bin rather than going undrawable.
 static func speed_bin_for(speed_fraction: float) -> int:
-	var clamped := clampf(speed_fraction, 0.0, 0.999999)
-	return int(clamped * SPEED_BINS)
+	return int(clampf(speed_fraction, 0.0, 0.999999) * SPEED_BINS)
 
 
-## The representative (bin-center) speed fraction this bin bakes.
 static func speed_for_bin(bin: int) -> float:
 	return (float(bin) + 0.5) / float(SPEED_BINS)
 
 
-func generate_texture(angle_deg: float, speed_fraction: float) -> ImageTexture:
-	return ImageTexture.create_from_image(generate_image(angle_deg, speed_fraction))
+## Flat index of a (phase, direction, speed) combination, and its position
+## in the 2D atlas grid. One function owns the packing so the tile-set
+## builder and the per-cell lookup can never disagree about it.
+static func atlas_index_for(phase_bin: int, direction_bin: int, speed_bin: int) -> int:
+	return (speed_bin * PHASE_BINS * DIRECTION_BINS) + (phase_bin * DIRECTION_BINS) + direction_bin
 
 
-## One data tile: red = normalized compass bearing [0,1], green = speed
-## fraction [0,1], uniform across the whole tile, like
-## ProceduralHillshadeSprite's own tiles.
-func generate_image(angle_deg: float, speed_fraction: float) -> Image:
+static func atlas_cell_for_index(index: int) -> Vector2i:
+	return Vector2i(index % ATLAS_COLUMNS, index / ATLAS_COLUMNS)
+
+
+static func total_tiles() -> int:
+	return PHASE_BINS * DIRECTION_BINS * SPEED_BINS
+
+
+func generate_texture(angle_deg: float, speed_fraction: float, wrapped_phase: float) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_image(angle_deg, speed_fraction, wrapped_phase))
+
+
+## One data tile, uniform across its whole area like
+## ProceduralHillshadeSprite's own tiles. Direction is encoded as a unit
+## vector mapped from [-1,1] into the [0,1] a colour channel can hold.
+func generate_image(angle_deg: float, speed_fraction: float, wrapped_phase: float) -> Image:
 	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
-	var red := clampf(fposmod(angle_deg, 360.0) / 360.0, 0.0, 1.0)
-	var green := clampf(speed_fraction, 0.0, 1.0)
-	image.fill(Color(red, green, 0.0, 1.0))
+	var radians := deg_to_rad(fposmod(angle_deg, 360.0))
+	# Godot 2D: +X east, +Y DOWN (screen space), so "north" is -Y.
+	var direction := Vector2(sin(radians), -cos(radians))
+	image.fill(Color(
+		clampf(fposmod(wrapped_phase, 1.0), 0.0, 1.0),
+		direction.x * 0.5 + 0.5,
+		direction.y * 0.5 + 0.5,
+		clampf(speed_fraction, 0.0, 1.0)
+	))
 	return image

@@ -2,6 +2,7 @@ extends RefCounted
 
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
 const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
 
 ## The BuildingPiece id a player-built check dam is stored as (see
@@ -3644,13 +3645,37 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# resolution in practice, but fall back to due-north rather
 			# than feed a negative angle into the atlas lookup if it ever is.
 			var flow_angle := aspect if aspect >= 0.0 else 0.0
-			# Real speed too (reported: "more natural water flow"): the
-			# SAME gradient already sampled for direction also carries a
-			# real magnitude -- see RiverFlowShader.speed_fraction_for_slope_deg.
-			var slope := relief.slope_degrees_from_gradient(gradient.x, gradient.y)
-			var speed_fraction := RiverFlowShader.speed_fraction_for_slope_deg(slope)
+
+			# Speed is the REAL solved current now (see
+			# EarthChunkGenerator.river_hydraulics_at_global) rather than
+			# the old slope proxy -- the hydraulics exist, so the visual
+			# should read them. Falls back to the slope proxy only where
+			# the cell has no curated discharge to solve from.
+			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
+			var speed_fraction := (
+				RiverFlowShader.speed_fraction_for_velocity(hydraulics.velocity_m_s)
+				if hydraulics.discharge_m3_s > 0.0
+				else RiverFlowShader.speed_fraction_for_slope_deg(
+					relief.slope_degrees_from_gradient(gradient.x, gradient.y)
+				)
+			)
+
+			# The continuous course phase -- THE fix for the old shader's
+			# per-tile phase resets (see RiverPhaseField's own doc comment
+			# for the arithmetic on why the old construction reset
+			# arbitrarily at every tile edge).
+			var wrapped_phase := 0.0
+			if hydraulics.river_name != "":
+				wrapped_phase = RiverPhaseField.wrapped_phase(
+					hydraulics.course_fraction,
+					_course_length_tiles_cached(hydraulics.river_name)
+				)
+
 			_river_flow_layer.set_cell(
-				global, 0, _terrain_renderer.atlas_coords_for_river_flow(flow_angle, speed_fraction)
+				global, 0,
+				_terrain_renderer.atlas_coords_for_river_flow(
+					flow_angle, speed_fraction, wrapped_phase
+				)
 			)
 
 
@@ -6665,6 +6690,23 @@ func _course_tile_offset(from: Vector2i, tiles_upstream: float) -> Vector2i:
 	# the whole river that distance represents.
 	var target_fraction := clampf(here.course_fraction - tiles_upstream / total, 0.0, 1.0)
 	return _tile_at_course_fraction(points, target_fraction)
+
+
+## Course length in tiles for a river, memoised.
+##
+## The river-flow painter needs it for EVERY river cell it paints, and it
+## depends only on the world size -- so recomputing it per cell would walk
+## every polyline segment thousands of times per chunk, exactly the class of
+## waste RiverCatalog's own tile-space cache exists to avoid.
+var _course_length_cache: Dictionary = {}
+
+
+func _course_length_tiles_cached(river_name: String) -> float:
+	if not _course_length_cache.has(river_name):
+		_course_length_cache[river_name] = RiverPhaseField.course_length_tiles(
+			river_name, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		)
+	return _course_length_cache[river_name]
 
 
 ## The tile sitting `fraction` of the way along a course polyline.

@@ -7,6 +7,7 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
+const RiverPhaseField = preload("res://src/world/river_phase_field.gd")
 const ChoppableTree = preload("res://src/rendering/choppable_tree.gd")
 const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
@@ -392,19 +393,37 @@ func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
 	var relief := manager.generator.terrain_relief()
 	for cell in painted_cells:
 		assert_true(manager.is_river_at_global(cell.x, cell.y), "every painted flow cell must actually be a river cell")
-		# Reported directly: "more natural water flow" -- speed must now
-		# come from the SAME real gradient direction already does, not a
-		# uniform value. Recomputed independently from the real gradient
-		# and compared to what the manager actually painted.
+		# Every painted tile must carry that cell's OWN real data --
+		# direction from the real gradient, speed from the REAL solved
+		# current (not the old slope proxy), and the continuous course
+		# phase. Recomputed independently here and compared against what
+		# the manager actually painted.
 		var gradient := manager.gradient_at_global(cell.x, cell.y)
 		var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
-		var slope := relief.slope_degrees_from_gradient(gradient.x, gradient.y)
 		var expected_angle := aspect if aspect >= 0.0 else 0.0
-		var expected_speed_fraction := RiverFlowShader.speed_fraction_for_slope_deg(slope)
+		var hydraulics := manager.generator.river_hydraulics_at_global(cell.x, cell.y)
+		var expected_speed := (
+			RiverFlowShader.speed_fraction_for_velocity(hydraulics.velocity_m_s)
+			if hydraulics.discharge_m3_s > 0.0
+			else RiverFlowShader.speed_fraction_for_slope_deg(
+				relief.slope_degrees_from_gradient(gradient.x, gradient.y)
+			)
+		)
+		var expected_phase := 0.0
+		if hydraulics.river_name != "":
+			expected_phase = RiverPhaseField.wrapped_phase(
+				hydraulics.course_fraction,
+				RiverPhaseField.course_length_tiles(
+					hydraulics.river_name,
+					EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+				)
+			)
 		assert_eq(
 			flow_layer.get_cell_atlas_coords(cell),
-			terrain_renderer.atlas_coords_for_river_flow(expected_angle, expected_speed_fraction),
-			"(%d, %d) flow tile must reflect its own real gradient" % [cell.x, cell.y]
+			terrain_renderer.atlas_coords_for_river_flow(
+				expected_angle, expected_speed, expected_phase
+			),
+			"(%d, %d) flow tile must reflect its own real flow data" % [cell.x, cell.y]
 		)
 
 	# Moving far away unloads the original chunks -- their overlay cells go too.
