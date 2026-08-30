@@ -3568,10 +3568,12 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	for y in chunk.height:
 		for x in chunk.width:
 			var global := origin + Vector2i(x, y)
-			var is_water := (
-				chunk.biome[y * chunk.width + x] == "ocean"
-				or generator.is_river_at_global(global.x, global.y)
-			)
+			# Ocean ONLY. Rivers used to be painted here too, but this
+			# translucent per-tile overlay is exactly what put square water
+			# tiles under the flow layer's smooth bank curve -- the flow
+			# overlay is now the river's entire water surface, clipped at
+			# the real bank line, with the ground showing past it.
+			var is_water: bool = chunk.biome[y * chunk.width + x] == "ocean"
 			if not is_water:
 				continue
 			var land_directions := _land_directions_at(global.x, global.y)
@@ -3631,57 +3633,45 @@ func _paint_hillshade_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	if _river_flow_layer == null:
 		return
-	var relief := generator.terrain_relief()
 	var origin := chunk_coord * CHUNK_SIZE
+	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	for y in chunk.height:
 		for x in chunk.width:
 			var global := origin + Vector2i(x, y)
-			if not generator.is_river_at_global(global.x, global.y):
-				_river_flow_layer.erase_cell(global)
-				continue
-			# Everything the look needs comes from REAL simulation state
-			# (see RiverFlowShader's art-direction note): the colour band
-			# from the real solved depth INCLUDING any dam ponding -- so
-			# damming a river visibly darkens it -- the surface contrast
-			# from the real solved current, and the cross-channel position
-			# from the distance nearest_river_at already computes.
-			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
-			var depth := river_depth_meters_at_global(global.x, global.y)
 			var nearest := generator.river_catalog().nearest_river_at(
 				global.x, global.y,
 				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 			)
+			# Painted out past the bank line (the apron): the shader clips
+			# the water at the REAL bank curve, |across| == 1, and that
+			# curve runs through cells whose centres sit beyond the
+			# half-width -- a fragment can only be clipped smooth if its
+			# cell was painted at all. Gated on the euclidean distance, not
+			# |signed across|: past a course's endpoints the perpendicular
+			# component goes small while the distance does not, and cells
+			# off the end of a river must not be painted as water.
+			if nearest.distance_tiles > apron:
+				_river_flow_layer.erase_cell(global)
+				continue
 
-			# Water flows along its CHANNEL, not down the local hillside.
-			#
-			# This used to be the terrain aspect -- the steepest-descent
-			# direction of the elevation field -- which is a plausible-
-			# sounding proxy and visibly wrong: elevation here is bilinear-
-			# interpolated from a coarse DEM, so its local gradient has
-			# little to do with the mapped course, and the flow lines came
-			# out running diagonally ACROSS a channel that runs down the
-			# screen. The course polyline is stored source-to-mouth, so its
-			# own tangent is the real downstream direction and needs no
-			# proxy at all.
-			var flow_angle: float = nearest.course_bearing_deg
-			# Where this cell sits ACROSS the channel, through the real
-			# parabolic bed profile -- a natural riverbed is deepest
-			# mid-stream and shallows to its banks, so this is the river's
-			# real cross-section rather than a decorative gradient. It is
-			# what makes the water read as a channel instead of a slab.
-			var across := 0.0
-			if RiverCatalog.RIVER_HALF_WIDTH_TILES > 0.0:
-				across = nearest.distance_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-			var style_index := ProceduralRiverFlowSprite.style_index_for(
-				RiverFlowShader.cross_section_band_for(
-					OpenChannelFlow.cross_channel_depth_fraction(across)
-				),
-				RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
+			# Everything the look needs comes from REAL simulation state:
+			# the flow direction is the course polyline's own downstream
+			# tangent (water flows along its CHANNEL, not down the local
+			# DEM hillside), the signed cross-channel offset drives the
+			# continuous per-fragment cross-section and the smooth
+			# waterline, and the fast flag comes from the real solved
+			# current.
+			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
+			var across_fraction: float = (
+				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 			)
-
 			_river_flow_layer.set_cell(
 				global, 0,
-				_terrain_renderer.atlas_coords_for_river_flow(flow_angle, style_index)
+				_terrain_renderer.atlas_coords_for_river_flow(
+					nearest.course_bearing_deg,
+					across_fraction,
+					RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
+				)
 			)
 
 

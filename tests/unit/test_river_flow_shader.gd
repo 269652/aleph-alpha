@@ -11,6 +11,7 @@ extends GutTest
 
 const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 
@@ -37,21 +38,12 @@ func test_default_uniforms_match_the_tuned_constants():
 	assert_eq(material.get_shader_parameter("surface_contrast"), RiverFlowShader.SURFACE_CONTRAST)
 	assert_eq(material.get_shader_parameter("band0_color"), RiverFlowShader.BAND_COLORS[0])
 	assert_eq(material.get_shader_parameter("band4_color"), RiverFlowShader.BAND_COLORS[4])
-
-
-## The atlas packing is what carries per-cell depth and speed into the
-## shader -- a TileMapLayer cell can only pick an atlas tile, so these two
-## must agree or every cell decodes to the wrong band.
-func test_the_packing_uniforms_match_the_sprite_atlas():
-	var material := flow.shared_material()
+	assert_eq(material.get_shader_parameter("across_range"), ProceduralRiverFlowSprite.ACROSS_RANGE)
 	assert_eq(
-		material.get_shader_parameter("packed_levels"),
-		float(ProceduralRiverFlowSprite.PACKED_LEVELS)
+		material.get_shader_parameter("half_width_tiles"),
+		RiverCatalog.RIVER_HALF_WIDTH_TILES
 	)
-	assert_eq(
-		material.get_shader_parameter("speed_levels"),
-		float(ProceduralRiverFlowSprite.SPEED_LEVELS)
-	)
+	assert_eq(material.get_shader_parameter("tile_px"), RiverFlowShader.TILE_PX)
 
 
 # -- the advection technique -------------------------------------------------
@@ -192,76 +184,149 @@ func test_foam_moves_with_the_water_rather_than_sitting_still():
 		RiverFlowShader.SHADER_CODE.contains("foam_threshold, foam_threshold + 0.12, n)"),
 		"foam must be a function of the advected surface field n"
 	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("smoothstep(0.72, 0.96, rr)"),
+		"the foam zone must hug the reconstructed bank, not a tile band"
+	)
 
 
-## Still opaque: this layer IS the river surface, not a decoration over the
-## noisy base water layer.
-func test_the_shader_outputs_a_fully_opaque_colour():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("COLOR = vec4(body, 1.0)"))
+## Opaque IN the channel -- this layer IS the river surface -- and clipped
+## to nothing past the bank curve, which is what frees the shoreline from
+## the tile grid. The alpha is a mask, not translucency.
+func test_the_shader_is_the_water_inside_and_nothing_outside():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("COLOR = vec4(body, wet)"))
 
 
-# -- the channel cross-section ----------------------------------------------
+# -- the continuous cross-section --------------------------------------------
 #
-# THE fix for "doesn't look natural": the river used to be one flat slab of
-# colour. It now draws its real parabolic cross-section in flat bands --
-# light at the shallow edge, dark at the deep centreline -- which is what
-# makes it read as a channel. Banded by cross-channel FRACTION, not
-# absolute metres, so a small stream shows structure too.
+# THE fix for "still a lot of individual squares". Depth used to be a
+# per-tile quantized band, so every water tile broadcast one flat colour
+# over its whole area -- at this camera zoom, a mosaic of rectangles, and no
+# amount of softening the band MIXING could hide that the underlying value
+# jumped at every tile edge.
+#
+# Now the tile bakes its centre's SIGNED across-offset and every FRAGMENT
+# reconstructs its own: centre offset + (position within the tile projected
+# on the flow perpendicular). The parabola is shaded from that, per pixel,
+# so the cross-section glides straight through tile boundaries.
 
-func test_the_shallow_edge_is_the_first_band():
-	assert_eq(RiverFlowShader.cross_section_band_for(0.0), 0)
-
-
-func test_the_deep_centreline_is_the_last_band():
-	assert_eq(
-		RiverFlowShader.cross_section_band_for(1.0),
-		ProceduralRiverFlowSprite.DEPTH_BANDS - 1
+## The reconstruction identity, at the exact worst spot: a shared tile edge
+## evaluated from BOTH sides. The only disagreement allowed is the across
+## quantisation step -- the full-band jumps are structurally gone.
+func test_reconstruction_is_continuous_across_a_tile_edge():
+	var worst := 0.0
+	for step in 160:
+		# A straight channel: the true field is x / HALF_WIDTH. Two tile
+		# centres one tile apart, their baked (quantized) centre values,
+		# and the shared edge halfway between them, seen from each side.
+		var left_centre := lerpf(-2.4, 1.4, float(step) / 159.0)
+		var right_centre := left_centre + 1.0
+		var left_baked := ProceduralRiverFlowSprite.fraction_for_bin(
+			ProceduralRiverFlowSprite.across_bin_for(
+				left_centre / RiverCatalog.RIVER_HALF_WIDTH_TILES
+			)
+		)
+		var right_baked := ProceduralRiverFlowSprite.fraction_for_bin(
+			ProceduralRiverFlowSprite.across_bin_for(
+				right_centre / RiverCatalog.RIVER_HALF_WIDTH_TILES
+			)
+		)
+		var from_left := RiverFlowShader.reconstructed_across(left_baked, 0.5)
+		var from_right := RiverFlowShader.reconstructed_across(right_baked, -0.5)
+		worst = maxf(worst, absf(from_left - from_right))
+	var bin_step := (
+		2.0 * ProceduralRiverFlowSprite.ACROSS_RANGE
+		/ float(ProceduralRiverFlowSprite.ACROSS_BINS)
+	)
+	assert_lte(
+		worst, bin_step + 0.0001,
+		"tile edges disagree by %.4f -- more than one quantisation step" % worst
 	)
 
 
-func test_bands_deepen_monotonically_toward_the_centreline():
-	var previous := -1
-	for step in 21:
-		var band := RiverFlowShader.cross_section_band_for(float(step) / 20.0)
-		assert_gte(band, previous, "bands must not lighten toward the centreline")
-		previous = band
-
-
-func test_every_band_is_reachable_across_a_real_channel():
-	# Walking bank to centreline through the real parabolic profile must
-	# actually visit every band -- otherwise the cross-section collapses
-	# back toward a flat slab.
-	var seen := {}
-	for i in range(200):
-		var across := float(i) / 199.0
-		seen[RiverFlowShader.cross_section_band_for(
-			OpenChannelFlow.cross_channel_depth_fraction(across)
-		)] = true
-	assert_eq(
-		seen.size(), ProceduralRiverFlowSprite.DEPTH_BANDS,
-		"a real channel crossing should show every band, saw %d" % seen.size()
+## The within-tile refinement must actually refine: a fragment half a tile
+## toward the bank sits measurably farther across than its tile centre.
+func test_fragments_within_one_tile_get_their_own_across_offset():
+	assert_gt(
+		RiverFlowShader.reconstructed_across(0.5, 0.5),
+		RiverFlowShader.reconstructed_across(0.5, 0.0)
 	)
 
 
-func test_bands_never_leave_their_valid_range():
-	for fraction in [-1.0, 0.0, 0.5, 1.0, 5.0]:
-		assert_between(
-			RiverFlowShader.cross_section_band_for(fraction),
-			0, ProceduralRiverFlowSprite.DEPTH_BANDS - 1
-		)
+## Structural: the shader must derive the within-tile delta from world
+## position against the real tile grid, and project it on the same
+## flow-perpendicular the catalog's sign convention uses.
+func test_the_shader_reconstructs_from_the_real_tile_grid():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("floor(world_pos / tile_px)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("dot(delta_tiles, flow_perp) / half_width_tiles"))
 
 
-## The cross-section survives the return to realism -- it is real physics
-## and reads as a channel in any style -- but its bands are subtler now:
-## here they are a depth CUE under a moving surface, not the whole look.
-func test_the_band_palette_darkens_evenly_toward_the_centreline():
-	var colors: Array[Color] = RiverFlowShader.BAND_COLORS
-	assert_eq(colors.size(), ProceduralRiverFlowSprite.DEPTH_BANDS)
-	for i in range(colors.size() - 1):
-		assert_gt(
-			colors[i].v - colors[i + 1].v, 0.03,
-			"band %d and %d must still darken toward the centreline" % [i, i + 1]
+## The tile size baked into the shader must be the world's real tile size --
+## the layer is scaled, so this is TILE_SIZE (16), NOT ART_TILE_SIZE (32).
+## Getting this wrong halves or doubles every reconstructed offset.
+func test_the_shader_tile_size_is_the_world_tile_size():
+	assert_eq(RiverFlowShader.TILE_PX, float(TerrainRenderer.TILE_SIZE))
+
+
+## The colour ramp is continuous: swept from bank to centreline in small
+## steps, no step may jump -- a jump IS a band edge, the exact square-maker
+## this replaces.
+func test_the_depth_ramp_has_no_jumps():
+	var previous := RiverFlowShader.depth_color(0.0)
+	for step in range(1, 101):
+		var here := RiverFlowShader.depth_color(float(step) / 100.0)
+		assert_lt(
+			absf(here.v - previous.v), 0.035,
+			"the ramp jumps at %.2f -- that is a band edge" % (float(step) / 100.0)
 		)
+		previous = here
+
+
+func test_the_depth_ramp_still_darkens_toward_the_centreline():
+	assert_gt(
+		RiverFlowShader.depth_color(0.0).v,
+		RiverFlowShader.depth_color(1.0).v + 0.2,
+		"the cross-section must still visibly deepen"
+	)
+
+
+# -- the smooth waterline -----------------------------------------------------
+#
+# The other half of "soften / blend the shoreline": the water's outer edge
+# is now the real bank curve (|across| == 1), drawn with a short feather,
+# instead of the painted tile rectangle. Past the bank the overlay is
+# transparent and the ground shows through.
+
+func test_the_water_is_opaque_in_the_channel_and_gone_past_the_bank():
+	assert_almost_eq(RiverFlowShader.bank_alpha(0.0), 1.0, 0.0001)
+	assert_almost_eq(RiverFlowShader.bank_alpha(0.8), 1.0, 0.0001)
+	assert_almost_eq(RiverFlowShader.bank_alpha(1.0), 0.5, 0.01)
+	assert_almost_eq(RiverFlowShader.bank_alpha(1.0 + RiverFlowShader.BANK_FEATHER), 0.0, 0.0001)
+
+
+func test_the_waterline_fades_monotonically():
+	var previous := 1.1
+	for step in 60:
+		var here := RiverFlowShader.bank_alpha(0.7 + float(step) / 59.0 * 0.5)
+		assert_lte(here, previous + 0.0001)
+		previous = here
+
+
+## The feather must live inside the painter's apron, or the fade gets
+## clipped by the last painted tile and the straight edge returns.
+func test_the_feather_fits_inside_the_painted_apron():
+	var apron_fraction := RiverCatalog.RIVER_BANK_APRON_TILES / RiverCatalog.RIVER_HALF_WIDTH_TILES
+	assert_lte(RiverFlowShader.BANK_FEATHER, apron_fraction - 0.05)
+
+
+## And the sprite's encodable range must cover every painted cell's centre,
+## out to the far corner of the outermost apron tile.
+func test_the_across_range_covers_the_painted_apron():
+	var needed := (
+		(RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES)
+		/ RiverCatalog.RIVER_HALF_WIDTH_TILES
+	)
+	assert_gte(ProceduralRiverFlowSprite.ACROSS_RANGE, needed)
 
 
 # -- fast flow ---------------------------------------------------------------
@@ -362,7 +427,9 @@ func test_the_surface_mirror_stays_in_the_shaders_own_range():
 # The first screenshot of the advection shader showed a river of perfectly
 # uniform tile-sized blocks with no visible surface at all. Measured, the
 # moving surface swung 0.070 in brightness against the depth banding's 0.26
-# -- the static mosaic was 3.7x stronger than the water.
+# -- the static mosaic was 3.7x stronger than the water. (The band DITHER
+# this section once also pinned is gone -- the reconstruction left no band
+# index to dither.)
 
 ## So the moving surface must be at least as strong a signal as the entire
 ## depth profile. Below parity a still frame is dominated by flat per-tile
@@ -376,30 +443,6 @@ func test_the_moving_surface_is_at_least_as_strong_as_the_depth_profile():
 		swing, profile,
 		"surface swings %.3f against a %.3f depth profile -- the static banding wins"
 			% [swing, profile]
-	)
-
-
-## And the band boundaries themselves must be dithered by the surface field,
-## or they land on straight tile edges and draw the mosaic's grid lines.
-##
-## The dither has to be wide enough for a boundary to wander at least half a
-## band, which is what stops it aligning with the tile grid at all.
-func test_band_edges_are_dithered_enough_to_break_the_tile_grid():
-	var wander := RiverFlowShader.surface_swing() * 0.5 * RiverFlowShader.BAND_DITHER
-	assert_gte(
-		wander, 0.5,
-		"band edges wander only %.3f of a band -- not enough to leave the tile grid" % wander
-	)
-
-
-func test_the_shader_actually_dithers_the_band_lookup():
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("float band = depth_band + (n - 0.5) * band_dither;"),
-		"the band index must be perturbed by the same advecting field"
-	)
-	assert_false(
-		RiverFlowShader.SHADER_CODE.contains("step(0.5, depth_band)"),
-		"the bands must step on the dithered index, not the raw per-tile one"
 	)
 
 
@@ -465,7 +508,9 @@ func test_the_drag_is_purely_downstream():
 ## to six tiles bank to bank, so a feature wider than a tile leaves barely
 ## two lines across the whole river and the surface goes back to flat.
 func test_flow_lines_are_narrow_enough_that_several_fit_across_a_channel():
-	var width_tiles := RiverFlowShader.feature_width_px() / float(TerrainRenderer.ART_TILE_SIZE)
+	# The WORLD tile (16 px -- the layer is scaled), not the 32 px art tile:
+	# world_pos in the shader is in final world pixels.
+	var width_tiles := RiverFlowShader.feature_width_px() / float(TerrainRenderer.TILE_SIZE)
 	assert_lte(
 		width_tiles, 1.0,
 		"a flow line is %.2f tiles wide -- too few fit across a 4-6 tile river" % width_tiles
@@ -481,10 +526,10 @@ func test_flow_lines_are_not_so_fine_they_become_static():
 ## And they must be LINES -- clearly longer than they are wide, but still
 ## short enough to see a line begin and end within a screen of river.
 func test_flow_lines_are_a_few_tiles_long():
-	var length_tiles := RiverFlowShader.feature_length_px() / float(TerrainRenderer.ART_TILE_SIZE)
+	var length_tiles := RiverFlowShader.feature_length_px() / float(TerrainRenderer.TILE_SIZE)
 	assert_between(
-		length_tiles, 2.0, 6.0,
-		"a flow line is %.2f tiles long" % length_tiles
+		length_tiles, 4.0, 8.0,
+		"a flow line is %.2f world tiles long" % length_tiles
 	)
 
 
@@ -643,26 +688,3 @@ func test_a_streakline_visibly_curves_within_its_own_length():
 	)
 
 
-# -- melting the tile grid ----------------------------------------------------
-#
-# From the same screenshot: adjacent water tiles still met in razor-straight
-# full-band colour jumps at their shared edge. The dither can only bridge a
-# ONE-band difference; adjacent tiles across a 5-band channel routinely
-# differ by two. The step boundaries themselves have to go soft -- realism
-# never needed them hard, that was a stylized-era leftover.
-
-func test_band_boundaries_are_gradients_not_hard_steps():
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("smoothstep(0.5 - band_softness, 0.5 + band_softness, band)"),
-		"band boundaries must blend across band_softness"
-	)
-	assert_false(
-		RiverFlowShader.SHADER_CODE.contains("band1_color, step("),
-		"no band may still switch on a hard step"
-	)
-
-
-## Soft enough to melt a boundary, small enough that the cross-section still
-## darkens toward the centreline rather than averaging into one colour.
-func test_band_softness_blends_without_erasing_the_cross_section():
-	assert_between(RiverFlowShader.BAND_SOFTNESS, 0.3, 0.75)

@@ -156,12 +156,16 @@ func test_is_river_at_global_delegates_to_the_generator():
 ## one of the Spree's own curated waypoints (docs/concept/rivers.md), so
 ## this region is guaranteed to exercise both the ocean and the river path,
 ## not just ocean.
-func test_water_overlay_marks_exactly_the_loaded_ocean_and_river_cells():
+## Ocean ONLY -- rivers used to be painted here too, and that translucent
+## per-tile overlay is exactly what kept square water tiles visible under
+## the flow layer's smooth bank curve. The flow overlay is now the river's
+## entire water surface.
+func test_water_overlay_marks_exactly_the_loaded_ocean_cells_and_no_river():
 	var water_layer := TileMapLayer.new()
 	manager.set_water_layer(water_layer)
 	manager.update(_berlin_tile)
 
-	var water_cells := 0
+	var ocean_cells := 0
 	var river_cells := 0
 	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
 	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
@@ -169,12 +173,11 @@ func test_water_overlay_marks_exactly_the_loaded_ocean_and_river_cells():
 			for x in EarthChunkManager.CHUNK_SIZE:
 				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
 				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
-				var is_river := manager.is_river_at_global(global_x, global_y)
-				if is_river:
+				if manager.is_river_at_global(global_x, global_y):
 					river_cells += 1
-				if manager.biome_at_global(global_x, global_y) == "ocean" or is_river:
-					water_cells += 1
-	assert_eq(water_layer.get_used_cells().size(), water_cells)
+				if manager.biome_at_global(global_x, global_y) == "ocean":
+					ocean_cells += 1
+	assert_eq(water_layer.get_used_cells().size(), ocean_cells)
 	assert_gt(river_cells, 0, "Berlin sits on the Spree's own curated course -- expected at least one river cell here")
 	assert_true(water_layer.material is ShaderMaterial, "water layer should carry the animated water material")
 
@@ -377,7 +380,7 @@ func test_set_river_flow_layer_assigns_the_shared_shader_material():
 	flow_layer.free()
 
 
-func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
+func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 	var flow_layer := TileMapLayer.new()
 	manager.set_river_flow_layer(flow_layer)
 	manager.update(_berlin_tile)
@@ -392,35 +395,45 @@ func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
 	assert_lt(painted_cells.size(), total_loaded_cells, "flow must not paint every loaded cell -- it is sparse, not general like hillshade")
 
 	var terrain_renderer := TerrainRenderer.new()
-	var relief := manager.generator.terrain_relief()
+	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
 	for cell in painted_cells:
-		assert_true(manager.is_river_at_global(cell.x, cell.y), "every painted flow cell must actually be a river cell")
-		# Every painted tile must carry that cell's OWN real data --
-		# direction from the real gradient, and the style index from the
-		# real solved depth (including dam ponding), the real current, and
-		# the cross-channel bank position. Recomputed independently here and
-		# compared against what was painted.
-		var hydraulics := manager.generator.river_hydraulics_at_global(cell.x, cell.y)
+		# Painted out past the bank line by the apron: the shader clips the
+		# water at the REAL bank curve, and that curve runs through cells
+		# whose centres sit beyond the half-width. Nothing farther than the
+		# apron may be painted.
 		var nearest := manager.generator.river_catalog().nearest_river_at(
 			cell.x, cell.y,
 			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 		)
-		# Water follows its CHANNEL, not the local hillside -- the direction
-		# is the course polyline's own downstream tangent, not the terrain
-		# aspect it used to be (which ran diagonally across the channel).
-		var expected_angle: float = nearest.course_bearing_deg
-		var across: float = nearest.distance_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-		var expected_style := ProceduralRiverFlowSprite.style_index_for(
-			RiverFlowShader.cross_section_band_for(
-				OpenChannelFlow.cross_channel_depth_fraction(across)
-			),
-			RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
+		assert_lte(
+			nearest.distance_tiles, apron,
+			"(%d, %d) painted but %f tiles from any channel" % [cell.x, cell.y, nearest.distance_tiles]
 		)
+		# Every painted tile must carry that cell's OWN real data --
+		# direction from the course's downstream tangent (water follows its
+		# CHANNEL, not the local hillside), the signed across-offset the
+		# per-fragment reconstruction runs on, and the fast flag from the
+		# real solved current. Recomputed independently here and compared
+		# against what was painted.
+		var hydraulics := manager.generator.river_hydraulics_at_global(cell.x, cell.y)
 		assert_eq(
 			flow_layer.get_cell_atlas_coords(cell),
-			terrain_renderer.atlas_coords_for_river_flow(expected_angle, expected_style),
+			terrain_renderer.atlas_coords_for_river_flow(
+				nearest.course_bearing_deg,
+				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES,
+				RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
+			),
 			"(%d, %d) flow tile must reflect its own real flow data" % [cell.x, cell.y]
 		)
+
+	# And the apron genuinely extends the paint past the strict channel:
+	# somewhere near Berlin there must be a painted cell whose centre sits
+	# beyond the half-width -- that is where the smooth waterline lives.
+	var apron_cells := 0
+	for cell in painted_cells:
+		if not manager.is_river_at_global(cell.x, cell.y):
+			apron_cells += 1
+	assert_gt(apron_cells, 0, "no apron cells painted -- the bank curve would clip at tile edges")
 
 	# Moving far away unloads the original chunks -- their overlay cells go too.
 	manager.update(_berlin_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0))

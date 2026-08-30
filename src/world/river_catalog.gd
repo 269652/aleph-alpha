@@ -17,6 +17,15 @@ const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 ## test_half_width_gives_at_least_four_tiles_of_total_width.
 const RIVER_HALF_WIDTH_TILES := 2.0
 
+## How far past the bank line the flow overlay still paints cells, in
+## tiles. The shader clips the water at the real bank curve (|across| == 1)
+## and feathers it out just past that -- but a fragment can only be clipped
+## if its CELL was painted at all, and the smooth curve passes through
+## cells whose centres sit beyond the half-width. 0.75 covers a tile whose
+## centre is just outside while its inner corner still holds water
+## (half a tile diagonal is ~0.71).
+const RIVER_BANK_APRON_TILES := 0.75
+
 ## name -> ordered Array[Vector2] of (latitude_deg, longitude_deg) waypoints,
 ## source to mouth -- NOT engine (x, y); x holds latitude here, matching how
 ## every real-world coordinate in this project is written left-to-right
@@ -250,6 +259,7 @@ func nearest_river_at(
 	var best_distance := INF
 	var best_fraction := 0.0
 	var best_tangent := Vector2(0.0, -1.0)
+	var best_signed_across := 0.0
 
 	var courses := _course_cache(world_width, world_height)
 	for river_name in courses:
@@ -278,6 +288,15 @@ func nearest_river_at(
 				# b - a already points the way the water goes.
 				if not b.is_equal_approx(a):
 					best_tangent = (b - a).normalized()
+				# The perpendicular component of (point - closest), SIGNED
+				# by which bank side -- the cross product's z with the unit
+				# tangent gives exactly that in one step. This is the field
+				# the flow shader's per-fragment reconstruction refines, so
+				# it must be the perpendicular COMPONENT (smooth through
+				# clamped segment ends at bends), not sign * euclidean
+				# distance (which kinks there).
+				var closest := a + (b - a) * t
+				best_signed_across = best_tangent.cross(point - closest)
 				best_fraction = (
 					(cumulative[i] + a.distance_to(b) * t) / total_length
 					if total_length > 0.0 else 0.0
@@ -288,6 +307,7 @@ func nearest_river_at(
 		"distance_tiles": best_distance,
 		"course_fraction": clampf(best_fraction, 0.0, 1.0),
 		"course_bearing_deg": bearing_degrees(best_tangent),
+		"signed_across_tiles": best_signed_across,
 	}
 
 

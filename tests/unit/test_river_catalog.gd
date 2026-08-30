@@ -309,3 +309,136 @@ func test_a_bearing_is_always_in_range_even_with_no_river():
 		10, 10, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 	)
 	assert_between(result.course_bearing_deg, 0.0, 360.0)
+
+
+# -- the signed across-offset ------------------------------------------------
+#
+# What the smooth-shoreline rendering runs on: not just HOW FAR a tile sits
+# from the centreline but WHICH SIDE, as one signed perpendicular component.
+# The flow shader reconstructs every fragment's own offset as
+# (tile centre's signed offset) + (within-tile delta projected on the flow
+# perpendicular), so the sign convention here and the shader's perp must be
+# the same rotation -- pinned by the reconstruction identity test below.
+
+## The two banks of one reach must carry opposite signs.
+func test_opposite_banks_have_opposite_signs():
+	var catalog := RiverCatalog.new()
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var courses := RiverCatalog.tile_polylines(width, height)
+	var points: Array = courses["Rhine"]
+	var checked := 0
+	for index in range(2, points.size() - 2):
+		var a: Vector2 = points[index]
+		var b: Vector2 = points[index + 1]
+		if a.distance_to(b) < 3.0:
+			continue
+		var mid := (a + b) * 0.5
+		var tangent := (b - a).normalized()
+		var perp := Vector2(-tangent.y, tangent.x)
+		var left := catalog.nearest_river_at(
+			int(mid.x + perp.x * 1.5), int(mid.y + perp.y * 1.5), width, height
+		)
+		var right := catalog.nearest_river_at(
+			int(mid.x - perp.x * 1.5), int(mid.y - perp.y * 1.5), width, height
+		)
+		if left.name != "Rhine" or right.name != "Rhine":
+			continue
+		if absf(left.signed_across_tiles) < 0.5 or absf(right.signed_across_tiles) < 0.5:
+			continue
+		assert_lt(
+			left.signed_across_tiles * right.signed_across_tiles, 0.0,
+			"both banks at %s carry the same sign" % mid
+		)
+		checked += 1
+	assert_gt(checked, 3, "found too few probe pairs to trust the sweep")
+
+
+## THE identity the shader's per-fragment reconstruction depends on: the
+## signed offset must BE the projection of (point - centreline) onto the
+## rotated-90 tangent of the reported bearing. If the two rotations ever
+## disagree, every reconstructed bank flips sides.
+func test_signed_across_matches_the_bearing_perpendicular():
+	var catalog := RiverCatalog.new()
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var courses := RiverCatalog.tile_polylines(width, height)
+	var checked := 0
+	for river_name in courses:
+		var points: Array = courses[river_name]
+		for index in range(1, points.size() - 1):
+			var a: Vector2 = points[index]
+			var b: Vector2 = points[index + 1]
+			if a.distance_to(b) < 6.0:
+				continue
+			var mid := (a + b) * 0.5
+			var tangent := (b - a).normalized()
+			var perp := Vector2(-tangent.y, tangent.x)
+			var probe := mid + perp * 1.7
+			# nearest_river_at takes integer tiles, so the ACTUAL queried
+			# point is the truncated one -- the expectation must be built
+			# from that same point or truncation alone eats a tile of slack.
+			var queried := Vector2(float(int(probe.x)), float(int(probe.y)))
+			var hit := catalog.nearest_river_at(int(probe.x), int(probe.y), width, height)
+			if hit.name != river_name:
+				continue
+			var radians := deg_to_rad(hit.course_bearing_deg)
+			var bearing_dir := Vector2(sin(radians), -cos(radians))
+			var bearing_perp := Vector2(-bearing_dir.y, bearing_dir.x)
+			var agreement := bearing_perp.dot(perp)
+			if absf(agreement) < 0.99:
+				continue  # bearing snapped to a neighbouring segment at a joint
+			# This segment's own exact perpendicular component of the
+			# queried point -- the identity says the catalog must report
+			# exactly this (sign included).
+			var expected := tangent.cross(queried - a)
+			assert_almost_eq(
+				hit.signed_across_tiles, expected, 0.35,
+				"reconstruction identity broken at %s near %s" % [queried, river_name]
+			)
+			checked += 1
+	assert_gt(checked, 3, "found too few probes to trust the identity sweep")
+
+
+## Far from every river the answer must still be well-formed (the painter
+## calls this for every cell of every chunk). NOTE: far beyond a course's
+## endpoints the closest point clamps and the perpendicular COMPONENT is
+## legitimately much smaller than the euclidean distance -- which is exactly
+## why the painter must gate painting on distance_tiles, never on
+## |signed_across_tiles|.
+func test_signed_across_is_finite_everywhere():
+	var catalog := RiverCatalog.new()
+	var result := catalog.nearest_river_at(
+		10, 10, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_true(is_finite(result.signed_across_tiles))
+
+
+## Beside a reach (an interior projection), the two must agree -- there the
+## residual IS the perpendicular.
+func test_beside_a_reach_signed_magnitude_equals_the_distance():
+	var catalog := RiverCatalog.new()
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var courses := RiverCatalog.tile_polylines(width, height)
+	var checked := 0
+	for river_name in courses:
+		var points: Array = courses[river_name]
+		for index in range(1, points.size() - 1):
+			var a: Vector2 = points[index]
+			var b: Vector2 = points[index + 1]
+			if a.distance_to(b) < 6.0:
+				continue
+			var mid := (a + b) * 0.5
+			var tangent := (b - a).normalized()
+			var perp := Vector2(-tangent.y, tangent.x)
+			var probe := mid + perp * 1.4
+			var hit := catalog.nearest_river_at(int(probe.x), int(probe.y), width, height)
+			if hit.name != river_name:
+				continue
+			assert_almost_eq(
+				absf(hit.signed_across_tiles), hit.distance_tiles, 0.05,
+				"beside a reach at %s the perp component IS the distance" % probe
+			)
+			checked += 1
+	assert_gt(checked, 3, "too few interior probes")

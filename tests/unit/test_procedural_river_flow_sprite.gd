@@ -1,7 +1,13 @@
 extends GutTest
 
-## Per-tile (flow-DIRECTION, style) data, not art -- see
-## procedural_river_flow_sprite.gd and docs/concept/rivers.md.
+## Per-tile (flow-DIRECTION, signed ACROSS-offset, fast flag) data, not art
+## -- see procedural_river_flow_sprite.gd and docs/concept/rivers.md.
+##
+## The across dimension is what killed the "individual squares": the shader
+## reconstructs every FRAGMENT's own distance to the centreline from the
+## tile centre's baked signed offset plus the within-tile delta, so the
+## cross-section shades continuously through tiles and the water clips at
+## the real bank curve instead of the tile grid.
 
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 
@@ -36,88 +42,117 @@ func test_angle_for_bin_round_trips_through_direction_bin_for():
 func test_generate_image_bakes_the_direction_as_a_unit_vector():
 	# Due east: Godot 2D has +X east and +Y DOWN, so east is (1, 0),
 	# encoded from [-1,1] into [0,1] as (1.0, 0.5).
-	var east := sprite.generate_image(90.0, 0.5).get_pixel(0, 0)
+	var east := sprite.generate_image(90.0, 0.0, 0.25).get_pixel(0, 0)
 	assert_almost_eq(east.g, 1.0, 0.01)
 	assert_almost_eq(east.b, 0.5, 0.01)
-	var north := sprite.generate_image(0.0, 0.5).get_pixel(0, 0)
+	var north := sprite.generate_image(0.0, 0.0, 0.25).get_pixel(0, 0)
 	assert_almost_eq(north.g, 0.5, 0.01)
 	assert_almost_eq(north.b, 0.0, 0.01)
 
 
 func test_the_encoded_direction_decodes_back_to_a_unit_vector():
 	for angle in [0.0, 45.0, 137.0, 250.0, 359.0]:
-		var pixel := sprite.generate_image(angle, 0.5).get_pixel(0, 0)
+		var pixel := sprite.generate_image(angle, 0.0, 0.25).get_pixel(0, 0)
 		var decoded := Vector2(pixel.g * 2.0 - 1.0, pixel.b * 2.0 - 1.0)
 		assert_almost_eq(decoded.length(), 1.0, 0.02, "angle %f decoded to a non-unit vector" % angle)
 
 
 func test_generate_image_is_uniform_across_the_whole_tile():
-	var image := sprite.generate_image(200.0, 0.5)
+	var image := sprite.generate_image(200.0, 0.3, 0.25)
 	var corner := image.get_pixel(0, 0)
 	var center := image.get_pixel(ProceduralRiverFlowSprite.SIZE / 2, ProceduralRiverFlowSprite.SIZE / 2)
 	assert_eq(corner, center)
 
 
 func test_generate_texture_returns_a_real_texture_of_the_right_size():
-	var texture := sprite.generate_texture(45.0, 0.5)
+	var texture := sprite.generate_texture(45.0, 0.3, 0.25)
 	assert_eq(texture.get_width(), ProceduralRiverFlowSprite.SIZE)
 	assert_eq(texture.get_height(), ProceduralRiverFlowSprite.SIZE)
 
 
-# -- style packing ----------------------------------------------------------
+# -- across binning -----------------------------------------------------------
 #
-# The two coarse per-cell style values share ONE atlas dimension and ONE
-# channel. They must survive the round trip exactly, or a cell would render
-# with another cell's cross-section band or speed.
+# The tile centre's SIGNED cross-channel offset, in half-widths: negative on
+# one bank, positive on the other, |1| exactly at the bank line, out to
+# ACROSS_RANGE so the painter's apron cells (just past the bank, where the
+# smooth waterline runs) still carry real data.
 
-func test_every_style_combination_round_trips_through_the_alpha_channel():
-	for band in ProceduralRiverFlowSprite.DEPTH_BANDS:
-		for fast in [false, true]:
-			var index := ProceduralRiverFlowSprite.style_index_for(band, fast)
-			var alpha := ProceduralRiverFlowSprite.alpha_for_style(index)
-			assert_eq(ProceduralRiverFlowSprite.unpack_depth_band(alpha), band)
-			assert_eq(ProceduralRiverFlowSprite.unpack_is_fast(alpha), fast)
+func test_across_bins_cover_the_whole_signed_range():
+	var bins := {}
+	for step in 400:
+		var fraction := lerpf(
+			-ProceduralRiverFlowSprite.ACROSS_RANGE + 0.001,
+			ProceduralRiverFlowSprite.ACROSS_RANGE - 0.001,
+			float(step) / 399.0
+		)
+		bins[ProceduralRiverFlowSprite.across_bin_for(fraction)] = true
+	assert_eq(bins.size(), ProceduralRiverFlowSprite.ACROSS_BINS)
 
 
-## And it must survive the 8-BIT quantisation an actual baked tile applies,
-## not merely the float round trip -- that is where a naive packing breaks.
-func test_the_style_survives_real_eight_bit_quantisation():
-	for style_index in ProceduralRiverFlowSprite.PACKED_LEVELS:
-		var alpha := ProceduralRiverFlowSprite.alpha_for_style(style_index)
-		var baked := sprite.generate_image(0.0, alpha).get_pixel(0, 0).a
+func test_across_bin_round_trips_through_its_own_centre():
+	for bin in ProceduralRiverFlowSprite.ACROSS_BINS:
 		assert_eq(
-			ProceduralRiverFlowSprite.unpack_combined(baked), style_index,
-			"style %d did not survive being baked into 8 bits" % style_index
+			ProceduralRiverFlowSprite.across_bin_for(
+				ProceduralRiverFlowSprite.fraction_for_bin(bin)
+			),
+			bin
 		)
 
 
-func test_every_style_index_is_unique():
-	var seen := {}
-	for band in ProceduralRiverFlowSprite.DEPTH_BANDS:
-		for fast in [false, true]:
-			var index := ProceduralRiverFlowSprite.style_index_for(band, fast)
-			assert_false(seen.has(index), "style index collision at %d" % index)
-			seen[index] = true
-	assert_eq(seen.size(), ProceduralRiverFlowSprite.PACKED_LEVELS)
+func test_across_bins_clamp_rather_than_wrap_outside_the_range():
+	assert_eq(ProceduralRiverFlowSprite.across_bin_for(-99.0), 0)
+	assert_eq(
+		ProceduralRiverFlowSprite.across_bin_for(99.0),
+		ProceduralRiverFlowSprite.ACROSS_BINS - 1
+	)
 
 
-## Five bands is what draws a channel's cross-section; three was too coarse
-## to describe a shape across a four-tile river.
-func test_there_are_enough_bands_to_draw_a_cross_section():
-	assert_gte(ProceduralRiverFlowSprite.DEPTH_BANDS, 5)
+## The quantisation step is the worst tile-to-tile seam the reconstruction
+## can show -- it must stay well under what a full depth band used to jump.
+func test_the_across_quantisation_step_is_small():
+	var step := 2.0 * ProceduralRiverFlowSprite.ACROSS_RANGE / float(ProceduralRiverFlowSprite.ACROSS_BINS)
+	assert_lte(step, 0.1, "across bins step %f of a half-width" % step)
+
+
+## The encoded red channel must survive the real 8-bit bake for EVERY bin.
+func test_every_across_bin_survives_eight_bit_quantisation():
+	for bin in ProceduralRiverFlowSprite.ACROSS_BINS:
+		var fraction := ProceduralRiverFlowSprite.fraction_for_bin(bin)
+		var baked := sprite.generate_image(0.0, fraction, 0.25).get_pixel(0, 0).r
+		var decoded := (baked * 2.0 - 1.0) * ProceduralRiverFlowSprite.ACROSS_RANGE
+		# One full 8-bit step of slack, not half: Godot's float-to-byte
+		# conversion truncates rather than rounds, measured here.
+		var lsb := 2.0 * ProceduralRiverFlowSprite.ACROSS_RANGE / 255.0
+		assert_almost_eq(
+			decoded, fraction, lsb + 0.0001,
+			"across bin %d did not survive being baked into 8 bits" % bin
+		)
+
+
+# -- fast-flag packing --------------------------------------------------------
+#
+# The alpha channel now carries ONLY the fast flag -- the depth band it used
+# to pack is gone, replaced by the continuous per-fragment reconstruction.
+
+func test_the_fast_flag_round_trips_through_the_alpha_channel():
+	for fast in [false, true]:
+		var alpha := ProceduralRiverFlowSprite.alpha_for_fast(fast)
+		var baked := sprite.generate_image(0.0, 0.0, alpha).get_pixel(0, 0).a
+		assert_eq(ProceduralRiverFlowSprite.unpack_is_fast(baked), fast)
 
 
 # -- atlas packing ----------------------------------------------------------
 
 func test_every_binned_combination_gets_a_unique_atlas_cell():
 	var seen := {}
-	for style_index in ProceduralRiverFlowSprite.PACKED_LEVELS:
-		for direction_bin in ProceduralRiverFlowSprite.DIRECTION_BINS:
-			var cell := ProceduralRiverFlowSprite.atlas_cell_for_index(
-				ProceduralRiverFlowSprite.atlas_index_for(direction_bin, style_index)
-			)
-			assert_false(seen.has(cell), "atlas cell collision at %s" % cell)
-			seen[cell] = true
+	for fast in ProceduralRiverFlowSprite.SPEED_LEVELS:
+		for across_bin in ProceduralRiverFlowSprite.ACROSS_BINS:
+			for direction_bin in ProceduralRiverFlowSprite.DIRECTION_BINS:
+				var cell := ProceduralRiverFlowSprite.atlas_cell_for_index(
+					ProceduralRiverFlowSprite.atlas_index_for(direction_bin, across_bin, fast)
+				)
+				assert_false(seen.has(cell), "atlas cell collision at %s" % cell)
+				seen[cell] = true
 	assert_eq(seen.size(), ProceduralRiverFlowSprite.total_tiles())
 
 
@@ -132,23 +167,11 @@ func test_the_atlas_stays_within_a_safe_texture_width():
 ## and nothing more. A TileMapLayer cell can only select an atlas tile, so
 ## every dimension here multiplies the number of tiles that must be
 ## generated and uploaded -- a dimension the shader ignores is paid for in
-## full and returns nothing.
-##
-## This is why the old scrolling-phase dimension had to go with the switch
-## to advection: the shader now advects continuously over TIME on the GPU,
-## so it needs no baked phase at all. Dropping it took the atlas from 1920
-## tiles to 160 -- a 12x cut in generation work and texture memory on a game
-## already measured at ~7 fps.
-func test_the_atlas_carries_only_direction_and_style():
+## full and returns nothing (the lesson the removed phase dimension left).
+func test_the_atlas_carries_direction_across_and_speed_and_nothing_else():
 	assert_eq(
 		ProceduralRiverFlowSprite.total_tiles(),
-		ProceduralRiverFlowSprite.DIRECTION_BINS * ProceduralRiverFlowSprite.PACKED_LEVELS
+		ProceduralRiverFlowSprite.DIRECTION_BINS
+			* ProceduralRiverFlowSprite.ACROSS_BINS
+			* ProceduralRiverFlowSprite.SPEED_LEVELS
 	)
-
-
-func test_every_direction_and_style_pair_gets_its_own_distinct_tile():
-	var seen := {}
-	for style in ProceduralRiverFlowSprite.PACKED_LEVELS:
-		for direction in ProceduralRiverFlowSprite.DIRECTION_BINS:
-			seen[ProceduralRiverFlowSprite.atlas_index_for(direction, style)] = true
-	assert_eq(seen.size(), ProceduralRiverFlowSprite.total_tiles())

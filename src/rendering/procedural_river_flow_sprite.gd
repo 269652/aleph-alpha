@@ -5,10 +5,17 @@ extends RefCounted
 ## shader" shape. See docs/concept/rivers.md's "Flow rendering" section.
 ##
 ## Channels:
-##   R  unused                 -- see the phase note below
+##   R  signed across-offset   -- the tile CENTRE's cross-channel offset in
+##                               half-widths, encoded over +/-ACROSS_RANGE.
+##                               The shader adds each fragment's own
+##                               within-tile delta to this, which is what
+##                               makes the cross-section continuous and the
+##                               shoreline the real bank curve.
 ##   G  flow direction x       -- as a VECTOR COMPONENT, not a bearing
 ##   B  flow direction y       -- ditto
-##   A  packed (depth band, fast flag, bank proximity) -- see pack_edge()
+##   A  fast flag              -- and nothing else; the depth band it used
+##                               to pack is gone, replaced by the
+##                               continuous reconstruction above
 ##
 ## Direction is a vector rather than the compass angle it once was because
 ## it saves the shader a `radians`/`sin`/`cos` per fragment and removes the
@@ -40,33 +47,29 @@ const SIZE := 32
 ## tile boundary -- a grid of seams straight across the river. World
 ## position already decorrelates every reach continuously and for free.
 ##
-## Dropping it took the atlas from 1920 tiles to 160.
-const DIRECTION_BINS := 16
+## Dropping it took the atlas from 1920 tiles to 160. The across dimension
+## added later brought it to 1536 -- but that one the shader READS every
+## fragment, so it pays rent.
+const DIRECTION_BINS := 24
 
-## Flat colour bands ACROSS the channel, from its shallow edge to its deep
-## centreline. Five rather than three because these draw the river's
-## CROSS-SECTION -- the thing that makes it read as a channel rather than a
-## flat slab -- and three steps across a four-tile river is too coarse to
-## describe a shape.
+## The signed across-offset dimension: the tile centre's cross-channel
+## position in half-widths, negative on one bank, positive on the other,
+## |1| exactly at the bank line. The range runs past 1 so the painter's
+## apron cells (whose centres sit beyond the bank while their inner corners
+## still hold water) encode honestly rather than clamping to the bank.
 ##
-## Banded by the cross-channel depth FRACTION, not by absolute metres: a
-## small stream and a great river must both show structure, and an absolute
-## scale would paint the whole Dreisam a single colour.
-const DEPTH_BANDS := 5
+## 32 bins over +/-1.4 is a 0.0875 step -- the worst tile-to-tile seam the
+## reconstruction can show, versus the FULL BAND a tile used to jump.
+const ACROSS_BINS := 32
+const ACROSS_RANGE := 1.4
 
-## 16 direction * 10 style = 160 tiles, laid out as a 2D grid. A single row
-## would be 5,120 px wide -- within the 16,384 GL_MAX_TEXTURE_SIZE common on
-## the integrated GPUs this game targets, but a grid keeps headroom if a
-## dimension is ever added back. At 48 columns the atlas is 1536x128.
+## 24 direction * 32 across * 2 speed = 1536 tiles in a 2D grid. A single
+## row would be 49,152 px wide, vastly past the 16,384 GL_MAX_TEXTURE_SIZE
+## common on the integrated GPUs this game targets. At 48 columns the atlas
+## is 1536x1024.
 const ATLAS_COLUMNS := 48
 
-## Speed reads as "an extra wave mark or not" rather than as a continuum.
-##
-## The separate bank flag is GONE: it used to paint a whole tile near-black
-## and, because bank-ness is decided per tile and a tile is tens of screen
-## pixels, that read as a solid block eating half the channel rather than an
-## outline. The outermost cross-section band now IS the channel's edge, which
-## needs no extra dimension and cannot block up.
+## Speed reads as a higher-contrast surface rather than as a continuum.
 const SPEED_LEVELS := 2
 
 
@@ -79,39 +82,40 @@ static func angle_for_bin(bin: int) -> float:
 	return (float(bin) + 0.5) / float(DIRECTION_BINS) * 360.0
 
 
-## Total distinct values the alpha channel carries.
-const PACKED_LEVELS := DEPTH_BANDS * SPEED_LEVELS
-
-
-static func unpack_combined(packed: float) -> int:
-	return clampi(int(floor(packed * float(PACKED_LEVELS))), 0, PACKED_LEVELS - 1)
-
-
-static func unpack_depth_band(packed: float) -> int:
-	return unpack_combined(packed) / SPEED_LEVELS
-
-
 static func unpack_is_fast(packed: float) -> bool:
-	return unpack_combined(packed) % SPEED_LEVELS == 1
+	return packed > 0.5
 
 
-## Flat index of a (direction, style) combination, and its position in the
-## 2D atlas grid. One function owns the packing so the tile-set builder and
-## the per-cell lookup can never disagree about it.
-static func atlas_index_for(direction_bin: int, style_index: int) -> int:
-	return (style_index * DIRECTION_BINS) + direction_bin
+## Which across bin a signed cross-channel fraction falls in -- clamped,
+## never wrapped: past the encodable range is simply "at the range edge",
+## and those cells are transparent in the shader anyway.
+static func across_bin_for(signed_fraction: float) -> int:
+	var normalized := (clampf(signed_fraction, -ACROSS_RANGE, ACROSS_RANGE) / ACROSS_RANGE + 1.0) / 2.0
+	return clampi(int(normalized * float(ACROSS_BINS)), 0, ACROSS_BINS - 1)
 
 
-## The style index a (depth band, fast flag, bank flag) triple maps to --
-## the single atlas dimension all three share.
-static func style_index_for(depth_band: int, is_fast: bool) -> int:
-	return clampi(depth_band, 0, DEPTH_BANDS - 1) * SPEED_LEVELS + (1 if is_fast else 0)
+## The signed fraction at a bin's centre -- what the baked tile actually
+## says, and what the reconstruction tests quantize through.
+static func fraction_for_bin(bin: int) -> float:
+	return ((float(bin) + 0.5) / float(ACROSS_BINS) * 2.0 - 1.0) * ACROSS_RANGE
 
 
-## The alpha value a style index bakes to -- the centre of its slot, so
-## 8-bit quantisation cannot round it into a neighbouring style.
-static func alpha_for_style(style_index: int) -> float:
-	return (float(clampi(style_index, 0, PACKED_LEVELS - 1)) + 0.5) / float(PACKED_LEVELS)
+## The red-channel value a signed fraction encodes to.
+static func red_for_fraction(signed_fraction: float) -> float:
+	return (clampf(signed_fraction, -ACROSS_RANGE, ACROSS_RANGE) / ACROSS_RANGE + 1.0) / 2.0
+
+
+## Flat index of a (direction, across, speed) combination, and its position
+## in the 2D atlas grid. One function owns the packing so the tile-set
+## builder and the per-cell lookup can never disagree about it.
+static func atlas_index_for(direction_bin: int, across_bin: int, speed_index: int) -> int:
+	return ((speed_index * ACROSS_BINS) + across_bin) * DIRECTION_BINS + direction_bin
+
+
+## The alpha value the fast flag bakes to -- slot centres, so 8-bit
+## quantisation cannot round one flag into the other.
+static func alpha_for_fast(is_fast: bool) -> float:
+	return 0.75 if is_fast else 0.25
 
 
 static func atlas_cell_for_index(index: int) -> Vector2i:
@@ -119,24 +123,24 @@ static func atlas_cell_for_index(index: int) -> Vector2i:
 
 
 static func total_tiles() -> int:
-	return DIRECTION_BINS * PACKED_LEVELS
+	return DIRECTION_BINS * ACROSS_BINS * SPEED_LEVELS
 
 
-func generate_texture(angle_deg: float, packed_edge: float) -> ImageTexture:
-	return ImageTexture.create_from_image(generate_image(angle_deg, packed_edge))
+func generate_texture(angle_deg: float, across_fraction: float, packed_alpha: float) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_image(angle_deg, across_fraction, packed_alpha))
 
 
 ## One data tile, uniform across its whole area like
 ## ProceduralHillshadeSprite's own tiles.
-func generate_image(angle_deg: float, packed_edge: float) -> Image:
+func generate_image(angle_deg: float, across_fraction: float, packed_alpha: float) -> Image:
 	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
 	var radians := deg_to_rad(fposmod(angle_deg, 360.0))
 	# Godot 2D: +X east, +Y DOWN (screen space), so "north" is -Y.
 	var direction := Vector2(sin(radians), -cos(radians))
 	image.fill(Color(
-		0.0,
+		red_for_fraction(across_fraction),
 		direction.x * 0.5 + 0.5,
 		direction.y * 0.5 + 0.5,
-		clampf(packed_edge, 0.0, 1.0)
+		clampf(packed_alpha, 0.0, 1.0)
 	))
 	return image

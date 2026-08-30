@@ -991,6 +991,54 @@ Three live reports against the advection shader, each fixed by measurement:
    a lines-survive-the-warp test stops the turbulence being turned up
    until the field dissolves.
 
+### The continuous cross-section and the smooth shoreline (2026-08-30)
+
+Reported directly, of the advected version: *"still a lot of individual
+squares ... soften / blend the shoreline and make water feel like real
+fluid / flowing water"*. The squares had a STRUCTURAL cause no amount of
+band-softening could fix: depth was a per-tile quantized band, so every
+water tile broadcast one flat colour over its whole 32 px, and the
+shoreline was the rectangle of whichever cells were painted.
+
+**The fix: reconstruct, per fragment.** The atlas now bakes each tile
+centre's **signed cross-channel offset** (R channel, ±1.4 half-widths in
+32 bins), and the shader adds every fragment's own within-tile delta,
+projected on the flow perpendicular, over the half-width:
+
+```
+frag_across = decode(R) + dot(fragment - tile_centre, flow_perp) / half_width
+```
+
+Depth is then a per-pixel quantity — `1 - across²`, the same real parabola
+— shaded through a **continuous five-stop ramp** (no band index exists any
+more, so there is nothing left to jump at a tile edge). The worst
+tile-to-tile disagreement is one across-quantisation step (0.0875 of a
+half-width), pinned by a both-sides-of-the-edge continuity test, versus
+the full band a tile used to jump.
+
+**The shoreline is now the real bank curve.** The water clips at
+`|across| == 1` with a short feather (±0.08), so its outline is the smooth
+analytic curve through the middles of tiles, not the tile grid. Three
+things had to move together:
+
+- the catalog reports `signed_across_tiles` — the perpendicular component
+  of (tile − centreline), signed by bank side, whose rotation convention is
+  pinned to the bearing's perp by a reconstruction-identity test
+- the painter paints an **apron** (`RIVER_BANK_APRON_TILES` = 0.75 past the
+  half-width): the bank curve runs through cells whose centres sit beyond
+  it, and a fragment can only be clipped smooth if its cell was painted at
+  all. Gated on euclidean distance, never on |signed| — past a course's
+  endpoints the perpendicular component goes small while the distance does
+  not
+- the translucent base water overlay **no longer paints river cells**
+  (ocean only): it was per-tile square water showing through under the
+  smooth curve. The flow overlay is now the river's entire water surface,
+  and past the bank the ground simply shows through
+
+Atlas: direction 24 × across 32 × speed 2 = 1536 tiles. The 16-px world
+tile (`TILE_SIZE`, the layer is scaled — NOT the 32 px art tile) is what
+the reconstruction divides by, pinned against TerrainRenderer by test.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1006,6 +1054,12 @@ Three live reports against the advection shader, each fixed by measurement:
   stylized direction, which was tried and reversed (see "Art direction:
   back to realism"). Verified to compile and run on a real GPU
   (`test_river_flow_render_smoke.gd`), not only headless.
+- **Continuous cross-section + smooth shoreline** — ✅ Done — per-fragment
+  reconstruction from the baked signed across-offset kills the per-tile
+  squares structurally; the waterline is the real bank curve with a
+  feather, painted out to an apron; base water overlay is ocean-only now.
+  Sub-tile GROUND blending at the bank (sand/mud strip under the
+  waterline) — ⬜ Not started.
 - **Flow rendering: stylized cartoon look** — 🔴 **Reverted.** Reported as
   "just some moving strokes, not realistic water flow"; the failure was
   structural (a translated periodic shape cannot read as water). Its

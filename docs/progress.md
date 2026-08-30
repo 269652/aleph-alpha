@@ -7345,6 +7345,30 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: continuous cross-section + smooth shoreline** (large) — ✅
+  Done — reported directly: "still a lot of individual squares ... soften /
+  blend the shoreline and make water feel like real fluid / flowing water".
+  The squares had a STRUCTURAL cause: depth was a per-tile quantized band,
+  so every tile broadcast one flat colour, and the shoreline was the
+  rectangle of painted cells. Fixed by baking each tile centre's SIGNED
+  cross-channel offset (new catalog field `signed_across_tiles`, rotation
+  convention pinned to the bearing perp by a reconstruction-identity test)
+  and reconstructing every FRAGMENT's own offset in the shader
+  (centre + within-tile delta projected on the flow perp), shading the real
+  parabola through a continuous ramp -- no band index exists to jump, and
+  the worst tile seam is one quantisation step (0.0875 half-widths), pinned
+  by a both-sides-of-the-edge continuity sweep. The waterline clips at the
+  real bank curve (|across| = 1, feather 0.08) with the painter extending
+  an apron (0.75 tiles) past the bank so the curve never hits an unpainted
+  cell -- gated on euclidean distance, never |signed| (past course
+  endpoints the perp component shrinks while distance does not). The
+  translucent base water overlay is OCEAN-ONLY now: its per-tile squares
+  were showing through under the smooth curve. Atlas 24 dir x 32 across x
+  2 speed = 1536 tiles; the reconstruction divides by the 16 px WORLD tile
+  (the layer is scaled; assuming the 32 px art tile would double every
+  offset -- pinned against TerrainRenderer). All suites green + real-GPU
+  smoke; water overlay/manager tests updated to the ocean-only and
+  channel+apron contracts.
 - **Flow rendering: back to realism, two-phase flow-map advection**
   (large) — ✅ Done — reported directly of the stylized version below:
   "but uts just some moving strokes not realistic water flow". Accurate, and

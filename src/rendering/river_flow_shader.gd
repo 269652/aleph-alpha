@@ -1,6 +1,7 @@
 extends RefCounted
 
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
 
 ## Realistic flowing river water: a surface field advected downstream in
 ## two crossfaded phases, over the channel's real parabolic cross-section,
@@ -54,8 +55,10 @@ uniform float line_stretch = 0.13;
 uniform float turbulence_strength = 1.4;
 uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.5;
-uniform float band_softness = 0.55;
-uniform float band_dither = 1.9;
+uniform float across_range = 1.4;
+uniform float half_width_tiles = 2.0;
+uniform float tile_px = 16.0;
+uniform float bank_feather = 0.08;
 uniform float glint_threshold = 0.70;
 uniform float glint_strength = 0.55;
 uniform float foam_threshold = 0.62;
@@ -66,8 +69,6 @@ uniform vec3 band1_color : source_color = vec3(0.22, 0.50, 0.62);
 uniform vec3 band2_color : source_color = vec3(0.16, 0.40, 0.56);
 uniform vec3 band3_color : source_color = vec3(0.11, 0.31, 0.48);
 uniform vec3 band4_color : source_color = vec3(0.07, 0.23, 0.40);
-uniform float packed_levels = 10.0;
-uniform float speed_levels = 2.0;
 
 varying vec2 world_pos;
 
@@ -110,9 +111,20 @@ void fragment() {
 	vec4 data = texture(TEXTURE, UV);
 	vec2 flow_dir = normalize(data.gb * 2.0 - 1.0 + vec2(1e-6, 0.0));
 	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
-	float combined = floor(data.a * packed_levels);
-	float is_fast = mod(combined, speed_levels);
-	float depth_band = floor(combined / speed_levels);
+	float is_fast = step(0.5, data.a);
+
+	// CONTINUOUS CROSS-SECTION -- the fix for "still a lot of individual
+	// squares". The tile bakes only its CENTRE's signed cross-channel
+	// offset (R); every fragment reconstructs its own by adding where it
+	// sits WITHIN the tile, projected on the flow perpendicular. Depth is
+	// then a per-pixel quantity: the parabola glides straight through tile
+	// boundaries instead of jumping a whole quantized band at each edge.
+	vec2 cell_center = (floor(world_pos / tile_px) + vec2(0.5)) * tile_px;
+	vec2 delta_tiles = (world_pos - cell_center) / tile_px;
+	float frag_across = (data.r * 2.0 - 1.0) * across_range
+		+ dot(delta_tiles, flow_perp) / half_width_tiles;
+	float rr = abs(frag_across);
+	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
 
 	// TWO-PHASE FLOW-MAP ADVECTION -- the technique that makes this read as
 	// water rather than as a pattern sliding past.
@@ -185,17 +197,13 @@ void fragment() {
 	// they draw the tilemap grid straight across the river. Perturbing the
 	// index lets each edge wander over half a band, breaking it into a
 	// ragged, moving line that no longer coincides with the lattice.
-	// Soft boundaries, because the dither alone cannot melt the tile grid:
-	// it bridges at most ONE band, and adjacent tiles across a 5-band
-	// channel routinely differ by two, which left razor-straight full-band
-	// jumps on their shared edge. Hard steps were a stylized-era leftover
-	// -- realism never wanted them.
-	float band = depth_band + (n - 0.5) * band_dither;
-	vec3 body = band0_color;
-	body = mix(body, band1_color, smoothstep(0.5 - band_softness, 0.5 + band_softness, band));
-	body = mix(body, band2_color, smoothstep(1.5 - band_softness, 1.5 + band_softness, band));
-	body = mix(body, band3_color, smoothstep(2.5 - band_softness, 2.5 + band_softness, band));
-	body = mix(body, band4_color, smoothstep(3.5 - band_softness, 3.5 + band_softness, band));
+	// The five palette stops now blend as one CONTINUOUS ramp over the
+	// reconstructed depth -- there is no band index left to jump.
+	float sramp = depth_frac * 4.0;
+	vec3 body = mix(band0_color, band1_color, clamp(sramp, 0.0, 1.0));
+	body = mix(body, band2_color, clamp(sramp - 1.0, 0.0, 1.0));
+	body = mix(body, band3_color, clamp(sramp - 2.0, 0.0, 1.0));
+	body = mix(body, band4_color, clamp(sramp - 3.0, 0.0, 1.0));
 
 	// The advecting surface modulates brightness -- this is the moving
 	// water itself, not a mark drawn on top of it.
@@ -208,14 +216,20 @@ void fragment() {
 	float glint = smoothstep(glint_threshold, glint_threshold + 0.10, n);
 	body = mix(body, glint_color, glint * glint_strength);
 
-	// Whitewater at the shallow bank, where a real river breaks over its
-	// own edge -- driven by the SAME advecting field, so the foam travels
-	// with the water instead of sitting still.
-	float at_edge = 1.0 - smoothstep(0.5 - band_softness, 0.5 + band_softness, band);
+	// Whitewater hugging the real reconstructed bank, where a river breaks
+	// over its own edge -- driven by the SAME advecting field, so the foam
+	// travels with the water instead of sitting still.
+	float at_edge = smoothstep(0.72, 0.96, rr);
 	float foam = smoothstep(foam_threshold, foam_threshold + 0.12, n) * at_edge;
 	body = mix(body, foam_color, foam);
 
-	COLOR = vec4(body, 1.0);
+	// The SHORELINE: opaque water inside the channel, a short feather at
+	// the bank curve, nothing past it -- the ground simply shows through.
+	// This is what frees the water's outline from the tile grid: the edge
+	// is |across| == 1, a smooth curve through the middle of tiles, not
+	// the rectangle of whichever cells happened to be painted.
+	float wet = 1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr);
+	COLOR = vec4(body, wet);
 }
 """
 
@@ -290,20 +304,19 @@ const EDDY_SCALE := 0.16
 ## by test_a_streakline_visibly_curves_within_its_own_length.
 const EDDY_DETAIL_WEIGHT := 0.5
 
-## Half-width of a band boundary's blend, in bands. The dither alone cannot
-## melt the tile grid -- it bridges at most one band, and adjacent tiles
-## routinely differ by two -- so the boundaries themselves are gradients.
-## Big enough to melt a tile edge, small enough that the cross-section still
-## darkens toward the centreline instead of averaging out.
-const BAND_SOFTNESS := 0.55
+## The world tile size the reconstruction divides by -- the layer is
+## scaled by TerrainRenderer.LAYER_SCALE, so world_pos in the shader is in
+## FINAL world pixels where a tile is TerrainRenderer.TILE_SIZE (16), NOT
+## the 32 px art tile. Pinned against TerrainRenderer by test; getting it
+## wrong doubles or halves every reconstructed offset.
+const TILE_PX := 16.0
 
-## How far the surface field perturbs the depth-band lookup, in bands.
-##
-## Also a measured relation rather than a taste: wide enough that a band
-## edge can wander at least half a band, which is what stops it lying along
-## a straight tile boundary and drawing the tilemap grid. See
-## test_band_edges_are_dithered_enough_to_break_the_tile_grid.
-const BAND_DITHER := 1.9
+## Half-width of the waterline's feather, in across-fraction units --
+## 0.08 of a 2-tile half-width is ~2.5 world px of soft edge. Must stay
+## inside the painter's apron (test_the_feather_fits_inside_the_painted_
+## apron) or the fade gets clipped by the last painted cell and the
+## straight edge returns.
+const BANK_FEATHER := 0.08
 
 ## Where crest glints begin, and how bright they get. Glints appear and
 ## vanish with the surface rather than sliding across it, which is what
@@ -318,11 +331,12 @@ const GLINT_COLOR := Color(0.88, 0.96, 1.0)
 const FOAM_THRESHOLD := 0.62
 const FOAM_COLOR := Color(0.95, 0.99, 1.0)
 
-## Five bands drawing the channel's real parabolic cross-section, light at
-## the shallow bank through to dark at the deep centreline. Closer together
-## than the stylized pass used them: here they are a depth CUE under a
-## moving surface, not the whole look, so hard banding would fight the
-## water rather than support it.
+## Five RAMP STOPS -- no longer bands -- drawing the channel's real
+## parabolic cross-section as one continuous gradient, light at the shallow
+## bank through to dark at the deep centreline. The last banded version
+## still read as per-tile rectangles, because the band INDEX was a per-tile
+## quantity; the ramp is evaluated per fragment from the reconstructed
+## depth, so there is no index left to jump at a tile edge.
 const BAND_COLORS: Array[Color] = [
 	Color(0.30, 0.60, 0.66),
 	Color(0.22, 0.50, 0.62),
@@ -354,15 +368,15 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
 	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
 	material.set_shader_parameter("eddy_detail_weight", EDDY_DETAIL_WEIGHT)
-	material.set_shader_parameter("band_softness", BAND_SOFTNESS)
-	material.set_shader_parameter("band_dither", BAND_DITHER)
+	material.set_shader_parameter("across_range", ProceduralRiverFlowSprite.ACROSS_RANGE)
+	material.set_shader_parameter("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
+	material.set_shader_parameter("tile_px", TILE_PX)
+	material.set_shader_parameter("bank_feather", BANK_FEATHER)
 	material.set_shader_parameter("glint_threshold", GLINT_THRESHOLD)
 	material.set_shader_parameter("glint_strength", GLINT_STRENGTH)
 	material.set_shader_parameter("glint_color", GLINT_COLOR)
 	material.set_shader_parameter("foam_threshold", FOAM_THRESHOLD)
 	material.set_shader_parameter("foam_color", FOAM_COLOR)
-	material.set_shader_parameter("packed_levels", float(ProceduralRiverFlowSprite.PACKED_LEVELS))
-	material.set_shader_parameter("speed_levels", float(ProceduralRiverFlowSprite.SPEED_LEVELS))
 	for i in BAND_COLORS.size():
 		material.set_shader_parameter("band%d_color" % i, BAND_COLORS[i])
 	return material
@@ -374,16 +388,29 @@ func shared_material() -> ShaderMaterial:
 	return _shared_material
 
 
-## Which cross-section band a point across the channel falls in: 0 at the
-## shallow edge, DEPTH_BANDS-1 at the deep centreline.
-##
-## Banded by the cross-channel depth FRACTION rather than absolute metres,
-## so every river shows a real cross-section -- an absolute scale would
-## paint the whole Dreisam (0.31 m mean) a single colour and put the look
-## straight back to the flat slab this replaced.
-static func cross_section_band_for(depth_fraction: float) -> int:
-	var bands := ProceduralRiverFlowSprite.DEPTH_BANDS
-	return clampi(int(clampf(depth_fraction, 0.0, 0.999999) * bands), 0, bands - 1)
+## A fragment's reconstructed signed across-offset: the tile centre's baked
+## value plus the fragment's own within-tile delta (in tiles, along the
+## flow perpendicular) over the half-width. The CPU mirror of the shader's
+## reconstruction, and what the tile-edge continuity test sweeps.
+static func reconstructed_across(center_fraction: float, delta_perp_tiles: float) -> float:
+	return center_fraction + delta_perp_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+
+
+## The continuous depth ramp -- the five palette stops blended by the
+## reconstructed depth fraction, exactly as the shader mixes them. No band
+## index exists any more, which is precisely the point.
+static func depth_color(depth_fraction: float) -> Color:
+	var sramp := clampf(depth_fraction, 0.0, 1.0) * 4.0
+	var body := BAND_COLORS[0].lerp(BAND_COLORS[1], clampf(sramp, 0.0, 1.0))
+	body = body.lerp(BAND_COLORS[2], clampf(sramp - 1.0, 0.0, 1.0))
+	body = body.lerp(BAND_COLORS[3], clampf(sramp - 2.0, 0.0, 1.0))
+	return body.lerp(BAND_COLORS[4], clampf(sramp - 3.0, 0.0, 1.0))
+
+
+## The waterline: 1 inside the channel, 0 past the bank curve, feathered
+## over BANK_FEATHER either side of |across| == 1.
+static func bank_alpha(across_magnitude: float) -> float:
+	return 1.0 - smoothstep(1.0 - BANK_FEATHER, 1.0 + BANK_FEATHER, across_magnitude)
 
 
 ## Whether a real current is quick enough to read as fast-moving -- such a
