@@ -161,26 +161,46 @@ func test_there_is_no_wave_line_mid_cycle():
 	assert_false(RiverFlowShader.is_wave_line(0.5, 0.0, 0.0))
 
 
-## Lines must be a minority of the water, or they stop reading as lines.
-func test_wave_lines_cover_only_a_small_fraction_of_the_water():
-	var samples := 1000
+## Marks must be a minority of the water, or they stop reading as marks.
+func test_wave_marks_cover_only_a_small_fraction_of_the_water():
 	var hits := 0
-	for i in range(samples):
-		var along := (float(i) / float(samples)) * RiverFlowShader.WAVELENGTH_PX
-		if RiverFlowShader.is_wave_line(0.0, along, 0.0):
-			hits += 1
-	var coverage := float(hits) / float(samples)
-	assert_between(coverage, 0.05, 0.3, "wave lines should be crisp lines, not stripes")
+	var total := 0
+	for i in range(120):
+		for j in range(40):
+			var along := (float(i) / 120.0) * RiverFlowShader.WAVELENGTH_PX
+			var across := (float(j) / 40.0) * RiverFlowShader.DASH_ROW_PX * 2.0
+			total += 1
+			if RiverFlowShader.is_wave_line(0.0, along, 0.0, across):
+				hits += 1
+	var coverage := float(hits) / float(total)
+	assert_between(coverage, 0.02, 0.2, "wave marks should be sparse ticks, not stripes")
 
 
-## The lines must be continuous ALONG the course -- one wavelength on is the
-## same point in the cycle. This is what the phase field buys, and hard
-## edges make a discontinuity MORE obvious, not less.
-func test_points_one_wavelength_apart_are_in_phase():
-	assert_eq(
-		RiverFlowShader.is_wave_line(0.2, 0.0, 0.0),
-		RiverFlowShader.is_wave_line(0.2, RiverFlowShader.WAVELENGTH_PX, 0.0)
-	)
+## THE fix for the first stylized attempt, whose lines ran unbroken across
+## the whole channel and read as diagonal hazard tape. A mark must be
+## bounded ACROSS the flow as well as along it -- so at a fixed point in
+## the cycle, moving sideways must eventually leave the mark.
+func test_a_wave_mark_is_a_dash_not_a_stripe_spanning_the_channel():
+	var found_gap := false
+	for j in range(200):
+		var across := (float(j) / 200.0) * RiverFlowShader.DASH_ROW_PX * 3.0
+		if not RiverFlowShader.is_wave_line(0.0, 0.0, 0.0, across):
+			found_gap = true
+			break
+	assert_true(found_gap, "a mark that never ends across the flow is a stripe, not a dash")
+
+
+## Alternate dash rows are offset half a step, so marks never line up into a
+## visible grid. Brick offset rather than random jitter keeps this entirely
+## noise-free while still breaking the regularity.
+func test_alternate_dash_rows_are_offset_from_each_other():
+	var row_a: Array[bool] = []
+	var row_b: Array[bool] = []
+	for i in range(60):
+		var along := (float(i) / 60.0) * RiverFlowShader.WAVELENGTH_PX
+		row_a.append(RiverFlowShader.is_wave_line(0.0, along, 0.0, 0.0))
+		row_b.append(RiverFlowShader.is_wave_line(0.0, along, 0.0, RiverFlowShader.DASH_ROW_PX))
+	assert_ne(row_a, row_b, "adjacent dash rows must not be in phase, or they form a grid")
 
 
 func test_the_lines_scroll_over_time():

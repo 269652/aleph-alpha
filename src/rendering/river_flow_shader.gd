@@ -50,10 +50,13 @@ uniform float wavelength_px = 8.8;
 uniform float streak_rate_hz = 0.75;
 uniform float line_thickness = 0.16;
 uniform float fast_line_offset = 0.5;
+uniform float dash_row_px = 13.0;
+uniform float dash_coverage = 0.55;
+uniform float bank_darkening = 0.35;
 uniform vec3 shallow_color : source_color = vec3(0.35, 0.71, 0.76);
 uniform vec3 mid_color : source_color = vec3(0.18, 0.46, 0.62);
 uniform vec3 deep_color : source_color = vec3(0.10, 0.29, 0.48);
-uniform vec3 bank_color : source_color = vec3(0.05, 0.16, 0.30);
+uniform vec3 bank_color : source_color = vec3(0.09, 0.27, 0.44);
 uniform vec3 wave_color : source_color = vec3(0.93, 0.98, 1.0);
 uniform float packed_levels = 12.0;
 uniform float bank_levels = 2.0;
@@ -87,24 +90,45 @@ void fragment() {
 	body = mix(body, mid_color, step(0.5, depth_band));
 	body = mix(body, deep_color, step(1.5, depth_band));
 
-	// One bold darker outline at the bank. step()/mix() on a hard flag,
-	// never a smoothstep falloff -- a soft edge would read as a gradient.
-	body = mix(body, bank_color, at_bank);
+	// The bank cell is drawn slightly darker -- but only slightly. An
+	// earlier pass used a near-black outline here and it was the single
+	// worst thing on screen: bank-ness is decided PER TILE, and one tile is
+	// tens of screen pixels at this camera zoom, so a "thin outline" became
+	// a solid dark block eating half the channel and turning the river into
+	// a staircase. A real thin outline needs per-PIXEL bank distance, which
+	// this layer does not carry (the water overlay beneath does -- see
+	// rivers.md). Until then it is a gentle darkening, not an outline.
+	body = mix(body, bank_color, at_bank * bank_darkening);
 
-	// Hard-edged wave lines scrolling downstream. fract() of the phase
-	// gives a sawtooth; step() turns it into a crisp band with no falloff
-	// at all, which is what makes this read as drawn rather than shaded.
+	// Short DASHES, not continuous bands. The first attempt drew an
+	// unbroken line across the whole channel wherever the phase came round,
+	// which at this camera zoom read as diagonal hazard tape rather than
+	// water -- real cartoon water is made of short ticks with gaps, never
+	// full-width stripes.
+	//
+	// So the mark is bounded on BOTH axes: thin along the flow (the line's
+	// thickness) and short across it (the dash's length), with alternate
+	// rows offset half a step like brickwork so the marks never line up
+	// into a visible grid. Brick offset rather than a random jitter keeps
+	// this entirely noise-free.
+	vec2 across_dir = vec2(-flow_dir.y, flow_dir.x);
 	float along = dot(world_pos, flow_dir);
-	float phase = baked_phase + along / wavelength_px - TIME * streak_rate_hz;
+	float across = dot(world_pos, across_dir);
+
+	float row = floor(across / dash_row_px);
+	float row_offset = mod(row, 2.0) * 0.5;
+
+	float phase = baked_phase + along / wavelength_px + row_offset - TIME * streak_rate_hz;
 	float cycle = fract(phase);
-	float line = step(cycle, line_thickness);
-	// A second line on fast water only -- the stylized way to say "this is
-	// moving quickly", replacing the old continuous speed gradient.
+	float along_hit = step(cycle, line_thickness);
+	// A second mark half a cycle on, only where the flow is genuinely fast.
 	float second = step(cycle, fast_line_offset + line_thickness) * step(fast_line_offset, cycle);
-	line = max(line, second * is_fast);
-	// No wave lines drawn on the bank outline -- the outline reads as the
-	// edge of the water, and lines crossing it would break that.
-	line *= (1.0 - at_bank);
+	along_hit = max(along_hit, second * is_fast);
+
+	// The gap across the flow is what turns a stripe into a dash.
+	float across_hit = step(fract(across / dash_row_px), dash_coverage);
+
+	float line = along_hit * across_hit;
 
 	COLOR = vec4(mix(body, wave_color, line), 1.0);
 }
@@ -117,9 +141,23 @@ void fragment() {
 const TILE_SIZE_PX := 16.0
 const WAVELENGTH_PX := RiverPhaseField.STREAK_WAVELENGTH_TILES * TILE_SIZE_PX
 
-## What fraction of each cycle is drawn as a wave line. Thin enough to read
-## as a drawn line rather than a stripe, thick enough to survive at 16 px.
-const LINE_THICKNESS := 0.16
+## What fraction of each cycle is drawn as a wave mark, ALONG the flow.
+## Thin enough to read as a drawn tick rather than a band.
+const LINE_THICKNESS := 0.13
+
+## How far apart the dash rows sit ACROSS the flow, in world pixels, and how
+## much of each row is mark rather than gap. Together these are what make a
+## short dash instead of a stripe running the full width of the channel --
+## the single worst problem with the first stylized attempt.
+const DASH_ROW_PX := 13.0
+const DASH_COVERAGE := 0.55
+
+## How strongly a bank cell darkens. Deliberately partial: bank-ness is a
+## PER-TILE flag and a tile is tens of screen pixels at the game's camera
+## zoom, so a full-strength dark outline reads as a solid block rather than
+## a line (it was the worst artefact of the first attempt). See the
+## shader's own note.
+const BANK_DARKENING := 0.35
 
 ## Where the fast-water second line sits within the cycle -- half a cycle
 ## on, so the two lines are evenly spaced rather than crowding.
@@ -132,7 +170,7 @@ const FAST_LINE_OFFSET := 0.5
 const SHALLOW_COLOR := Color(0.35, 0.71, 0.76)
 const MID_COLOR := Color(0.18, 0.46, 0.62)
 const DEEP_COLOR := Color(0.10, 0.29, 0.48)
-const BANK_COLOR := Color(0.05, 0.16, 0.30)
+const BANK_COLOR := Color(0.09, 0.27, 0.44)
 const WAVE_COLOR := Color(0.93, 0.98, 1.0)
 
 ## Real current speed at or above which a reach gets its second wave line.
@@ -162,6 +200,9 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("wavelength_px", WAVELENGTH_PX)
 	material.set_shader_parameter("streak_rate_hz", RiverPhaseField.STREAK_RATE_HZ)
 	material.set_shader_parameter("line_thickness", LINE_THICKNESS)
+	material.set_shader_parameter("dash_row_px", DASH_ROW_PX)
+	material.set_shader_parameter("dash_coverage", DASH_COVERAGE)
+	material.set_shader_parameter("bank_darkening", BANK_DARKENING)
 	material.set_shader_parameter("fast_line_offset", FAST_LINE_OFFSET)
 	material.set_shader_parameter("shallow_color", SHALLOW_COLOR)
 	material.set_shader_parameter("mid_color", MID_COLOR)
@@ -217,8 +258,17 @@ static func is_bank_cell(distance_tiles: float, half_width_tiles: float) -> bool
 ## true where a wave line is drawn. Hard-edged by construction -- this
 ## returns a bool, not an intensity, because the stylized look has no
 ## partial coverage anywhere.
-static func is_wave_line(baked_phase: float, along_px: float, time_seconds: float) -> bool:
+static func is_wave_line(
+	baked_phase: float, along_px: float, time_seconds: float, across_px: float = 0.0
+) -> bool:
+	var row: float = floor(across_px / DASH_ROW_PX)
+	var row_offset: float = fmod(row, 2.0) * 0.5
 	var phase := (
-		baked_phase + along_px / WAVELENGTH_PX - time_seconds * RiverPhaseField.STREAK_RATE_HZ
+		baked_phase + along_px / WAVELENGTH_PX + row_offset
+		- time_seconds * RiverPhaseField.STREAK_RATE_HZ
 	)
-	return fposmod(phase, 1.0) <= LINE_THICKNESS
+	if fposmod(phase, 1.0) > LINE_THICKNESS:
+		return false
+	# Bounded ACROSS the flow too -- this is what makes it a dash rather
+	# than a stripe spanning the whole channel.
+	return fposmod(across_px / DASH_ROW_PX, 1.0) <= DASH_COVERAGE
