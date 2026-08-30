@@ -51,7 +51,8 @@ uniform float advect_strength = 1.15;
 uniform float noise_scale = 0.08;
 uniform float detail_scale = 2.7;
 uniform float surface_contrast = 0.50;
-uniform float line_stretch = 0.13;
+uniform float smear_spacing = 0.8;
+uniform float smear_gain = 2.1;
 uniform float turbulence_strength = 1.4;
 uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.5;
@@ -91,20 +92,34 @@ float value_noise(vec2 p) {
 	);
 }
 
-// The surface field, sampled in the channel's OWN frame: `along` runs
-// downstream, `across` runs bank to bank.
+// The surface field: an isotropic, WORLD-ANCHORED noise smeared along the
+// local flow direction -- a line-integral-convolution stroke.
 //
-// ANISOTROPIC on purpose, and this is what makes the water read as flowing
-// LINES rather than as drifting blobs. Compressing the along-flow axis by
-// line_stretch makes every feature roughly 1/line_stretch times longer
-// downstream than it is wide, so the field is naturally filamentary --
-// streaklines, the way a real current shows itself.
+// The smear is what makes the water read as flowing LINES rather than as
+// drifting blobs, and doing it by averaging taps (instead of compressing a
+// rotated frame axis, as an earlier version did) is what keeps the field
+// CONTINUOUS when the direction changes between tiles: direction only
+// steers offsets a fraction of a cell long, never a rotation of a
+// world-sized coordinate. Averaging squeezes the value distribution toward
+// the middle, so smear_gain re-stretches it -- the contrast, glint and
+// foam thresholds all assume the field genuinely spans its range.
 //
-// Two octaves, because real water has structure at several scales at once;
-// a single octave reads as a lava lamp.
-float line_field(float along, float across) {
-	vec2 q = vec2(along, across);
-	return value_noise(q) * 0.65 + value_noise(q * detail_scale) * 0.35;
+// Two scales, because real water has structure at several at once; the
+// fine octave stays unsmeared -- isotropic sparkle riding on the streaks.
+float line_field(vec2 q, vec2 flow_dir) {
+	float total = 0.0;
+	for (int k = -4; k <= 4; k++) {
+		total += value_noise(q + flow_dir * (float(k) * smear_spacing));
+	}
+	float streak = clamp((total / 9.0 - 0.5) * smear_gain + 0.5, 0.0, 1.0);
+	// The fine octave gets its own short stroke -- fully isotropic detail
+	// would dilute the anisotropy the main smear just built.
+	float detail = (
+		value_noise(q * detail_scale)
+		+ value_noise(q * detail_scale + flow_dir * (smear_spacing * detail_scale))
+		+ value_noise(q * detail_scale - flow_dir * (smear_spacing * detail_scale))
+	) / 3.0;
+	return streak * 0.8 + detail * 0.2;
 }
 
 void fragment() {
@@ -143,46 +158,37 @@ void fragment() {
 	float phase_a = fract(t);
 	float phase_b = fract(t + 0.5);
 
-	// Keyed to WORLD POSITION alone. A per-tile offset here -- which is
-	// what the old baked phase channel was -- would make the noise jump at
-	// every tile boundary, a grid of seams across the river. World position
-	// already decorrelates every reach continuously and for free.
-	// The channel's own frame, with the along-axis ALREADY compressed by
-	// line_stretch. Doing the stretch here rather than inside line_field
-	// matters more than it looks: it puts `along` in the field's own
-	// feature units, so advect_strength below means "how many line-lengths
-	// the water travels per phase". Applied the other way round, a drag of
-	// 1.15 came out as 0.18 of a feature and the river looked still.
-	vec2 world = world_pos * noise_scale;
-	float along_raw = dot(world, flow_dir);
-	float along = along_raw * line_stretch;
-	float across = dot(world, flow_perp);
+	// Keyed to WORLD POSITION alone -- per-tile offsets would seam the
+	// noise at every tile boundary, and (the harder-won lesson) so would
+	// any coordinate built by PROJECTING the world position onto the flow
+	// frame: a rotation about the world origin moves a point by angle
+	// times its distance from the origin, which out here is thousands of
+	// tiles per direction bin. Every sample below starts from p itself;
+	// direction only steers offsets a fraction of a cell long.
+	vec2 p = world_pos * noise_scale;
 
 	// STANDING TURBULENCE -- what makes this fluid rather than a conveyor.
 	//
 	// Real turbulence over a rough riverbed organises into quasi-stationary
 	// structures: boils and standing eddies shed from bedforms hold their
 	// station while the water pours through them (Jackson 1976). So the
-	// bend field is anchored to the BED -- unadvected channel coordinates
-	// -- not carried with the water. The surface streams past and is
-	// continuously re-bent as it goes, so the lines visibly snake, curl and
-	// deform WHILE they travel. A bend carried with the water would slide
-	// rigidly along with the very lines it bends, which is exactly the
-	// stiffness being fixed.
-	// Two octaves, like the surface itself: the coarse one swings whole
-	// bundles of lines, the fine one puts kinks WITHIN a line's own length.
-	// One smooth coarse octave alone shifts neighbouring lines together,
-	// which locally reads as translation -- the ruler-straight satin look
-	// this replaces.
-	vec2 eddy_p = vec2(along_raw, across) * eddy_scale;
-	float bend = value_noise(eddy_p) - 0.5
-		+ (value_noise(eddy_p * 2.6 + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight;
-	float across_w = across + bend * turbulence_strength;
+	// bend field is anchored to the BED -- unadvected world coordinates --
+	// not carried with the water. The surface streams past and is
+	// continuously re-bent as it goes, so the lines visibly snake, curl
+	// and deform WHILE they travel.
+	//
+	// Two octaves: the coarse one swings whole bundles of lines, the fine
+	// one puts kinks WITHIN a line's own length.
+	vec2 eddy_p = p * eddy_scale;
+	float bend = (value_noise(eddy_p) - 0.5
+		+ (value_noise(eddy_p * 2.6 + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
+		* turbulence_strength;
+	vec2 q = p + flow_perp * bend;
 
 	// The drag is purely DOWNSTREAM -- water is carried along the channel,
 	// never sideways across it.
-	float sample_a = line_field(along - advect_strength * phase_a, across_w);
-	float sample_b = line_field(along - advect_strength * phase_b, across_w);
+	float sample_a = line_field(q - flow_dir * (advect_strength * phase_a), flow_dir);
+	float sample_b = line_field(q - flow_dir * (advect_strength * phase_b), flow_dir);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n = mix(sample_a, sample_b, blend);
@@ -240,20 +246,17 @@ void fragment() {
 ## cycles/frame, far inside the 0.5 Nyquist limit.
 const ADVECT_RATE := 0.35
 
-## How far the surface travels along the flow over one phase, measured in
-## the field's OWN feature lengths -- so 1.15 means each line moves a little
-## over its own length before its phase resets. This is what reads as the
-## water's speed. Above ~1.5 the stretch becomes a visible smear within a
-## single phase.
-const ADVECT_STRENGTH := 1.15
+## How far the surface travels along the flow over one phase, in noise
+## CELLS. Sized against the smear length so each line travels a bit over
+## its own length per phase (see drag_in_feature_lengths) -- that is what
+## reads as the water speed.
+const ADVECT_STRENGTH := 5.5
 
 ## Spatial scale of the surface field, and the second octave's multiplier.
 ##
-## Sized so a flow line comes out about four tenths of a tile wide (a tile
-## is 32 world px here, NOT 16 -- getting that wrong is what made the first
-## correction land at half the intended length). That puts roughly ten lines
-## across a four-to-six-tile river. The first attempt used 0.028 -- features
-## two tiles wide and fourteen long -- and
+## Sized so a flow line comes out under a world tile wide, which puts
+## several lines across a four-to-six-tile river. The first attempt used
+## 0.028 -- features two tiles wide and fourteen long -- and
 ## the result read as vast soft gradients sweeping over the water rather
 ## than as the water itself. A correct technique at the wrong scale looks
 ## nothing like what it is modelling.
@@ -263,6 +266,17 @@ const ADVECT_STRENGTH := 1.15
 ## test_flow_lines_are_narrow_enough_that_several_fit_across_a_channel.
 const NOISE_SCALE := 0.08
 const DETAIL_SCALE := 2.7
+
+## The line-integral-convolution stroke: how many world-anchored taps are
+## averaged along the flow, and how far apart (in noise cells). Taps closer
+## than a cell overlap into one continuous streak; the smear length,
+## (SMEAR_TAPS - 1) * SMEAR_SPACING + 1 cells, is what feature_length_px
+## reports. Averaging compresses the value distribution, so SMEAR_GAIN
+## re-stretches it -- held to the measured coverage and swing bands by the
+## same tests that pinned the old field.
+const SMEAR_TAPS := 9
+const SMEAR_SPACING := 0.7
+const SMEAR_GAIN := 2.6
 
 ## How strongly the advecting field brightens and darkens the water.
 ##
@@ -274,14 +288,6 @@ const DETAIL_SCALE := 2.7
 ## the surface at 0.070 against the profile's 0.26. See
 ## test_the_moving_surface_is_at_least_as_strong_as_the_depth_profile.
 const SURFACE_CONTRAST := 0.50
-
-## How far the surface field is stretched ALONG the flow relative to across
-## it -- 0.13 makes every feature about eight times longer downstream than it
-## is wide, so the field is filamentary and reads as flowing LINES rather
-## than as drifting blobs. Requested in exactly those terms ("can you
-## flowing lines that morph"): the lines come from this, the morphing from
-## the two-phase advection.
-const LINE_STRETCH := 0.13
 
 ## How hard the standing eddies bend the streaklines, in line widths of
 ## across-displacement at full noise swing, and how coarse the eddies are
@@ -364,7 +370,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("noise_scale", NOISE_SCALE)
 	material.set_shader_parameter("detail_scale", DETAIL_SCALE)
 	material.set_shader_parameter("surface_contrast", SURFACE_CONTRAST)
-	material.set_shader_parameter("line_stretch", LINE_STRETCH)
+	material.set_shader_parameter("smear_spacing", SMEAR_SPACING)
+	material.set_shader_parameter("smear_gain", SMEAR_GAIN)
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
 	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
 	material.set_shader_parameter("eddy_detail_weight", EDDY_DETAIL_WEIGHT)
@@ -475,32 +482,67 @@ static func value_noise(x: float, y: float) -> float:
 	)
 
 
-## Two octaves in the channel's own frame, exactly as the shader mixes
-## them: `along` runs downstream, `across` runs bank to bank.
-static func surface_value(along: float, across: float) -> float:
-	var qx := along * LINE_STRETCH
-	return (
-		value_noise(qx, across) * 0.65
-		+ value_noise(qx * DETAIL_SCALE, across * DETAIL_SCALE) * 0.35
+## The CPU mirror of the shader's line_field: the LIC smear along an
+## arbitrary direction plus the unsmeared detail octave, world-anchored.
+static func line_field_value(px: float, py: float, dir: Vector2) -> float:
+	var total := 0.0
+	for k in range(-4, 5):
+		var offset := dir * (float(k) * SMEAR_SPACING)
+		total += value_noise(px + offset.x, py + offset.y)
+	var streak := clampf((total / float(SMEAR_TAPS) - 0.5) * SMEAR_GAIN + 0.5, 0.0, 1.0)
+	var dx := px * DETAIL_SCALE
+	var dy := py * DETAIL_SCALE
+	var stroke := dir * (SMEAR_SPACING * DETAIL_SCALE)
+	var detail := (
+		value_noise(dx, dy)
+		+ value_noise(dx + stroke.x, dy + stroke.y)
+		+ value_noise(dx - stroke.x, dy - stroke.y)
+	) / 3.0
+	return streak * 0.8 + detail * 0.2
+
+
+## The field flowing east -- the direction-free convenience the coverage
+## and swing measurements sample (the distribution is direction-invariant;
+## the seam test is where direction sensitivity is measured).
+static func surface_value(px: float, py: float) -> float:
+	return line_field_value(px, py, Vector2(1, 0))
+
+
+## The whole animated pipeline at one world point (in noise cells): the
+## standing bend, both advected phases, the crossfade. What the seam test
+## compares across a direction-bin change.
+static func animated_field_value(px: float, py: float, dir: Vector2, time_seconds: float) -> float:
+	var perp := Vector2(-dir.y, dir.x)
+	var b := bend_displacement(px * EDDY_SCALE, py * EDDY_SCALE)
+	var qx := px + perp.x * b
+	var qy := py + perp.y * b
+	var phase_a := fposmod(time_seconds * ADVECT_RATE, 1.0)
+	var phase_b := fposmod(time_seconds * ADVECT_RATE + 0.5, 1.0)
+	var sample_a := line_field_value(
+		qx - dir.x * ADVECT_STRENGTH * phase_a, qy - dir.y * ADVECT_STRENGTH * phase_a, dir
 	)
+	var sample_b := line_field_value(
+		qx - dir.x * ADVECT_STRENGTH * phase_b, qy - dir.y * ADVECT_STRENGTH * phase_b, dir
+	)
+	return lerpf(sample_a, sample_b, absf(1.0 - 2.0 * phase_a))
 
 
 ## Mean absolute change in the field over a step of `distance`, taken either
-## downstream or bank-to-bank. A filamentary field changes far more slowly
-## along the flow than across it -- which is the measurable difference
-## between flowing lines and drifting blobs.
-static func field_roughness(distance: float, downstream: bool) -> float:
+## along `dir` or perpendicular to it. A filamentary field changes far more
+## slowly along the flow than across it -- the measurable difference
+## between flowing lines and drifting blobs, for ANY bearing.
+static func field_roughness(distance: float, dir: Vector2, downstream: bool) -> float:
+	var perp := Vector2(-dir.y, dir.x)
+	var step := (dir if downstream else perp) * distance
 	var total := 0.0
 	var count := 0
 	for i in range(90):
 		for j in range(90):
 			var a := float(i) * 0.37
 			var c := float(j) * 0.41
-			var b := (
-				surface_value(a + distance, c) if downstream
-				else surface_value(a, c + distance)
+			total += absf(
+				line_field_value(a + step.x, c + step.y, dir) - line_field_value(a, c, dir)
 			)
-			total += absf(b - surface_value(a, c))
 			count += 1
 	return total / float(count)
 
@@ -508,23 +550,23 @@ static func field_roughness(distance: float, downstream: bool) -> float:
 ## The standing-eddy bend at a point, in line widths -- the CPU mirror of
 ## the shader's `bend * turbulence_strength`. Anchored to unadvected
 ## coordinates, exactly as the shader anchors it to the bed.
-static func bend_displacement(along_raw: float, across: float) -> float:
-	var px := along_raw * EDDY_SCALE
-	var py := across * EDDY_SCALE
-	var coarse := value_noise(px, py) - 0.5
-	var fine := value_noise(px * 2.6 + 19.7, py * 2.6 + 7.3) - 0.5
+static func bend_displacement(eddy_x: float, eddy_y: float) -> float:
+	var coarse := value_noise(eddy_x, eddy_y) - 0.5
+	var fine := value_noise(eddy_x * 2.6 + 19.7, eddy_y * 2.6 + 7.3) - 0.5
 	return (coarse + fine * EDDY_DETAIL_WEIGHT) * TURBULENCE_STRENGTH
 
 
-## Where a point's across-coordinate lands after the bend.
-static func warped_across(along_raw: float, across: float) -> float:
-	return across + bend_displacement(along_raw, across)
+## Where a point lands, on the axis the bend pushes along, after the bend
+## -- the no-fold sweep runs on this: if it ever decreases while the input
+## increases, the warp has folded the surface over itself.
+static func warped_across(world_x: float, world_y: float) -> float:
+	return world_y + bend_displacement(world_x * EDDY_SCALE, world_y * EDDY_SCALE)
 
 
-## The full surface pipeline as one function: bend, then the anisotropic
-## line field -- what a fragment actually shows at rest.
-static func warped_surface_value(along_raw: float, across: float) -> float:
-	return surface_value(along_raw, warped_across(along_raw, across))
+## The full at-rest pipeline: bend, then the smeared line field -- what a
+## fragment shows for an eastward flow at time zero.
+static func warped_surface_value(world_x: float, world_y: float) -> float:
+	return surface_value(world_x, warped_across(world_x, world_y))
 
 
 ## Fraction of the water surface whose field exceeds `threshold` -- i.e. how
@@ -566,20 +608,18 @@ static func depth_profile_span() -> float:
 
 
 ## How wide one flow line is, in world pixels -- one noise cell across the
-## channel. This and the length below are what the feature-size tests hold
-## to a real number of tiles.
+## channel (the smear elongates along the flow only). This and the length
+## below are what the feature-size tests hold to a real number of tiles.
 static func feature_width_px() -> float:
 	return 1.0 / NOISE_SCALE
 
 
-## And how long, downstream: the same cell stretched by 1/LINE_STRETCH.
+## And how long, downstream: the base cell plus the smear stroke.
 static func feature_length_px() -> float:
-	return 1.0 / (NOISE_SCALE * LINE_STRETCH)
+	return (1.0 + float(SMEAR_TAPS - 1) * SMEAR_SPACING) / NOISE_SCALE
 
 
 ## How far the water travels per phase, in its own line lengths. The number
-## that decides whether the river reads as moving or as still -- and the one
-## that silently came out 6x too small when the anisotropic stretch was
-## applied after the drag instead of before it.
+## that decides whether the river reads as moving or as still.
 static func drag_in_feature_lengths() -> float:
-	return ADVECT_STRENGTH
+	return ADVECT_STRENGTH / (1.0 + float(SMEAR_TAPS - 1) * SMEAR_SPACING)

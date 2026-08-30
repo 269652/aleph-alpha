@@ -1039,6 +1039,38 @@ Atlas: direction 24 × across 32 × speed 2 = 1536 tiles. The 16-px world
 tile (`TILE_SIZE`, the layer is scaled — NOT the 32 px art tile) is what
 the reconstruction divides by, pinned against TerrainRenderer by test.
 
+### World-anchored sampling, smoothed courses, round caps (2026-08-30)
+
+Reported directly, of the continuous-reconstruction build: *"there are
+still hard cuts / misalignments and the curve could be smoother"*, then
+*"theres also a sharp alignment error in the straight part"*. Three causes,
+each with its own fix:
+
+1. **The pattern seams (the dominant one, including on straights).** The
+   field was sampled in each tile's rotated channel frame
+   (`along = dot(world, flow_dir)`), and a rotation about the WORLD ORIGIN
+   moves a point by angle × its distance from the origin — thousands of
+   tiles per direction bin out here. Two neighbouring tiles in different
+   bins showed simply unrelated noise: a hard cut, firing even mid-straight
+   whenever the course drifted past a bin edge. Now every sample is
+   anchored at the fragment's own world position; the lines are oriented by
+   **smearing** — a 9-tap line-integral-convolution stroke along the flow —
+   so direction only steers offsets a fraction of a cell long. Pinned by a
+   seam test at real world magnitudes (~25,000 noise cells out, where the
+   old formulation exploded): a one-bin direction change may move the field
+   by at most 0.06 mean. Direction bins 48 → 96 to shrink the last trace.
+2. **The kinked curve.** The curated waypoints are city-to-city straight
+   lines, so every vertex was a sharp corner the bank inherited. Courses
+   are now Chaikin corner-cut (two global passes plus targeted cuts on any
+   vertex still turning past 45°), endpoints pinned, length preserved
+   within 6% (the Rhine gives up ~4% rounding its knee — the straight-line
+   roster was already an underestimate of the real winding length).
+3. **The junction patchwork.** Past a course's very tips the perpendicular
+   component degenerates (shrinks while the real distance does not), which
+   painted the region around every source and mouth — most visibly a
+   tributary mouth mid-confluence — as ragged mid-channel water. The across
+   offset is radial there now, capping each end in a clean semicircle.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1060,6 +1092,13 @@ the reconstruction divides by, pinned against TerrainRenderer by test.
   feather, painted out to an apron; base water overlay is ocean-only now.
   Sub-tile GROUND blending at the bank (sand/mud strip under the
   waterline) — ⬜ Not started.
+- **World-anchored field + smoothed courses + round caps** — ✅ Done — the
+  LIC smear keeps the streak pattern continuous across direction-bin
+  changes (the "hard cuts", pinned by a world-magnitude seam test),
+  Chaikin-smoothed courses un-kink the banks, radial tips clean up
+  confluences. A fragment-continuous along-course coordinate (for
+  perfectly stationary streaks under very long observation) — ⬜ Not
+  needed so far.
 - **Flow rendering: stylized cartoon look** — 🔴 **Reverted.** Reported as
   "just some moving strokes, not realistic water flow"; the failure was
   structural (a translated periodic shape cannot read as water). Its

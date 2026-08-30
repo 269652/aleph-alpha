@@ -43,13 +43,19 @@ func test_a_different_world_size_gets_its_own_polylines():
 	assert_ne(small["Dreisam"], large["Dreisam"])
 
 
-func test_every_river_has_a_tile_polyline_of_the_same_length_as_its_waypoints():
+func test_every_river_has_a_smoothed_polyline_grown_from_its_waypoints():
 	var polylines := RiverCatalog.tile_polylines(
 		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 	)
 	for river_name in RiverCatalog.RIVERS:
 		assert_true(polylines.has(river_name), "missing polyline for %s" % river_name)
-		assert_eq(polylines[river_name].size(), RiverCatalog.RIVERS[river_name].size())
+		# Chaikin corner-cutting roughly quadruples the point count over
+		# two passes -- MORE points than waypoints is the smoothing
+		# actually having run; the exact count is its own business.
+		assert_gt(
+			polylines[river_name].size(), RiverCatalog.RIVERS[river_name].size(),
+			"%s polyline was not corner-smoothed" % river_name
+		)
 
 
 ## The cache must not change any answer -- the whole point is that it's a
@@ -442,3 +448,117 @@ func test_beside_a_reach_signed_magnitude_equals_the_distance():
 			)
 			checked += 1
 	assert_gt(checked, 3, "too few interior probes")
+
+
+# -- corner-smoothed courses --------------------------------------------------
+#
+# Reported: "there are still hard cuts / misalignments and the curve could
+# be smoother". The curated waypoints are city-to-city straight lines, so
+# every vertex was a sharp corner: the bank (an offset of the course)
+# inherited each kink, adjacent tiles near a vertex snapped to different
+# segments with visibly different tangents, and the outside of every bend
+# was a patch of endpoint-clamped cells. Chaikin corner-cutting fixes the
+# whole family at the source.
+
+## No bend anywhere in the smoothed roster may turn sharply between
+## consecutive segments -- each Chaikin pass quarters the turn angle, so
+## two passes bring even a hairpin under this bound.
+func test_no_course_turns_sharply_between_consecutive_segments():
+	var courses := RiverCatalog.tile_polylines(
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var worst := 0.0
+	for river_name in courses:
+		var points: Array = courses[river_name]
+		for index in range(points.size() - 2):
+			var ab: Vector2 = points[index + 1] - points[index]
+			var bc: Vector2 = points[index + 2] - points[index + 1]
+			if ab.length() < 0.5 or bc.length() < 0.5:
+				continue
+			worst = maxf(worst, absf(rad_to_deg(ab.angle_to(bc))))
+	assert_lt(
+		worst, 45.0,
+		"a course still turns %.1f degrees at one vertex -- the bank kinks there" % worst
+	)
+
+
+## Smoothing must not meaningfully shorten a course -- corner cutting trims
+## only the sharp tips, and the discharge interpolation runs on fractions of
+## this length.
+func test_smoothing_preserves_course_length():
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var smoothed := RiverCatalog.tile_polylines(width, height)
+	var raw := RiverCatalog.raw_tile_polylines(width, height)
+	for river_name in smoothed:
+		var smoothed_length := _polyline_length(smoothed[river_name])
+		var raw_length := _polyline_length(raw[river_name])
+		# Chaikin genuinely shortens at corners -- the Rhine gives up ~4%
+		# rounding its knee -- and the curated straight lines were already
+		# an UNDERestimate of the real winding course, so a small further
+		# shortening is honest geometry, not damage. 6% is the measured
+		# worst case with headroom; a collapsing-smoother bug would blow
+		# far past it.
+		assert_almost_eq(
+			smoothed_length, raw_length, raw_length * 0.06,
+			"%s changed length by more than 6%% in smoothing" % river_name
+		)
+
+
+## And both endpoints stay exactly where the source data puts them -- a
+## river must still rise at its real source and end at its real mouth.
+func test_smoothing_pins_both_endpoints():
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var smoothed := RiverCatalog.tile_polylines(width, height)
+	var raw := RiverCatalog.raw_tile_polylines(width, height)
+	for river_name in smoothed:
+		var s_points: Array = smoothed[river_name]
+		var r_points: Array = raw[river_name]
+		assert_eq(s_points[0], r_points[0], "%s source moved" % river_name)
+		assert_eq(s_points[-1], r_points[-1], "%s mouth moved" % river_name)
+
+
+func _polyline_length(points: Array) -> float:
+	var total := 0.0
+	for index in range(points.size() - 1):
+		var a: Vector2 = points[index]
+		var b: Vector2 = points[index + 1]
+		total += a.distance_to(b)
+	return total
+
+
+# -- round end caps -----------------------------------------------------------
+#
+# Past a course's very tip the perpendicular component degenerates (it
+# shrinks while the real distance does not), which painted the region
+# around every source and mouth as mid-channel water in a ragged patch --
+# most visibly at confluences, where a tributary's mouth tip sits in the
+# middle of the junction. Radial distance at the tips caps each end in a
+# clean semicircle instead.
+
+func test_past_a_river_tip_the_across_offset_is_radial():
+	var catalog := RiverCatalog.new()
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var courses := RiverCatalog.tile_polylines(width, height)
+	var checked := 0
+	for river_name in courses:
+		var points: Array = courses[river_name]
+		var tip: Vector2 = points[-1]
+		var prev: Vector2 = points[-2]
+		if tip.is_equal_approx(prev):
+			continue
+		var out_dir: Vector2 = (tip - prev).normalized()
+		# A probe clearly PAST the mouth tip, a little off-axis.
+		var perp := Vector2(-out_dir.y, out_dir.x)
+		var probe := tip + out_dir * 2.0 + perp * 0.8
+		var hit := catalog.nearest_river_at(int(probe.x), int(probe.y), width, height)
+		if hit.name != river_name:
+			continue  # another river is closer to this mouth (a confluence)
+		assert_almost_eq(
+			absf(hit.signed_across_tiles), hit.distance_tiles, 0.02,
+			"past the %s tip the across must be the radial distance" % river_name
+		)
+		checked += 1
+	assert_gt(checked, 2, "too few free-standing river tips to trust the sweep")

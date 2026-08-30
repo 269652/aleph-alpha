@@ -7345,6 +7345,25 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: world-anchored sampling, Chaikin courses, round caps**
+  (large) — ✅ Done — reported: "there are still hard cuts / misalignments
+  and the curve could be smoother" + "a sharp alignment error in the
+  straight part". The dominant cause: the streak field was sampled in each
+  tile's ROTATED channel frame, and rotation about the world origin moves a
+  point by angle x distance-from-origin -- thousands of tiles per direction
+  bin at this world's coordinates, so tiles in different bins showed
+  unrelated noise (hard cuts even on straights). Now all sampling is
+  world-anchored; lines come from a 9-tap LIC smear along the flow;
+  direction steers only sub-cell offsets. Seam pinned at real world
+  magnitudes: one-bin change moves the field < 0.06 mean (the old
+  formulation: complete decorrelation). Courses are Chaikin corner-cut
+  (2 passes + targeted cuts to a 45-degree max-turn bound, endpoints
+  pinned, length within 6%), which un-kinks the banks and calms
+  segment-snapping. Past course tips the across-offset is radial, so
+  sources/mouths cap in semicircles instead of the confluence patchwork.
+  DIRECTION_BINS 48 -> 96 (atlas 9216 uniform-fill tiles, 3072x3072).
+  Shader suite 52, sprite 16, renderer 158, catalog 30, manager river 3,
+  spawn 4, real-GPU smoke -- all green.
 - **Rivers: continuous cross-section + smooth shoreline** (large) — ✅
   Done — reported directly: "still a lot of individual squares ... soften /
   blend the shoreline and make water feel like real fluid / flowing water".

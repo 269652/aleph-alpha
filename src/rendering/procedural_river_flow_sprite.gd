@@ -50,7 +50,7 @@ const SIZE := 32
 ## Dropping it took the atlas from 1920 tiles to 160. The across dimension
 ## added later brought it to 1536 -- but that one the shader READS every
 ## fragment, so it pays rent.
-const DIRECTION_BINS := 24
+const DIRECTION_BINS := 96
 
 ## The signed across-offset dimension: the tile centre's cross-channel
 ## position in half-widths, negative on one bank, positive on the other,
@@ -58,16 +58,23 @@ const DIRECTION_BINS := 24
 ## apron cells (whose centres sit beyond the bank while their inner corners
 ## still hold water) encode honestly rather than clamping to the bank.
 ##
-## 32 bins over +/-1.4 is a 0.0875 step -- the worst tile-to-tile seam the
+## 48 bins over +/-1.4 is a 0.058 step -- the worst tile-to-tile seam the
 ## reconstruction can show, versus the FULL BAND a tile used to jump.
-const ACROSS_BINS := 32
+## Raised from 32 alongside the direction-bin increases after "there are
+## still hard cuts / misalignments": at bends, neighbouring tiles snapping
+## to coarse bins made their reconstructions visibly disagree at the shared
+## edge.
+const ACROSS_BINS := 48
 const ACROSS_RANGE := 1.4
 
-## 24 direction * 32 across * 2 speed = 1536 tiles in a 2D grid. A single
-## row would be 49,152 px wide, vastly past the 16,384 GL_MAX_TEXTURE_SIZE
-## common on the integrated GPUs this game targets. At 48 columns the atlas
-## is 1536x1024.
-const ATLAS_COLUMNS := 48
+## 96 direction * 48 across * 2 speed = 9216 tiles in a 2D grid. A single
+## row would be 294,912 px wide, vastly past the 16,384 GL_MAX_TEXTURE_SIZE
+## common on the integrated GPUs this game targets. At 96 columns the atlas
+## is 3072x3072 -- each tile is a uniform fill, measured cheap to build.
+## Direction went 48 -> 96 with the world-anchored field: the remaining
+## seam at a bin change is (drag + smear) x the bin angle, so halving the
+## angle halves the last visible trace of it.
+const ATLAS_COLUMNS := 96
 
 ## Speed reads as a higher-contrast surface rather than as a continuum.
 const SPEED_LEVELS := 2

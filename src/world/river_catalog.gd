@@ -165,6 +165,68 @@ static func tile_polylines(world_width: int, world_height: int) -> Dictionary:
 	return by_river
 
 
+## The UNsmoothed tile-space waypoints, straight from the curated lat/lon
+## data -- what tile_polylines starts from before Chaikin. Exists so tests
+## can hold the smoothing to its contract (length preserved, endpoints
+## pinned) against the genuine source rather than a copy of the answer.
+static func raw_tile_polylines(world_width: int, world_height: int) -> Dictionary:
+	var geo := GeoCoordinates.new()
+	var by_river := {}
+	for river_name in RIVERS:
+		var raw_points: Array[Vector2] = []
+		for waypoint in RIVERS[river_name]:
+			var t := geo.tile_for_coordinate(waypoint.x, waypoint.y, world_width, world_height)
+			raw_points.append(Vector2(t.x, t.y))
+		by_river[river_name] = raw_points
+	return by_river
+
+
+## Targeted follow-up to the two global Chaikin passes: a near-hairpin in
+## the source data (the Rhine knee) still turns ~56 degrees after two
+## passes, and a third GLOBAL pass would double every river's point count
+## -- and nearest_river_at walks those segments in five per-tile hot paths
+## -- to fix a handful of vertices. So only vertices still turning past 45
+## degrees get their corner cut again, locally.
+static func _cut_remaining_sharp_corners(points: Array[Vector2]) -> Array[Vector2]:
+	var current := points
+	for _round in 4:
+		var sharpest := 0.0
+		var result: Array[Vector2] = []
+		result.append(current[0])
+		for i in range(1, current.size() - 1):
+			var ab := current[i] - current[i - 1]
+			var bc := current[i + 1] - current[i]
+			var turn := absf(rad_to_deg(ab.angle_to(bc)))
+			sharpest = maxf(sharpest, turn)
+			if turn > 45.0:
+				result.append(current[i - 1].lerp(current[i], 0.75))
+				result.append(current[i].lerp(current[i + 1], 0.25))
+			else:
+				result.append(current[i])
+		result.append(current[-1])
+		current = result
+		if sharpest <= 45.0:
+			break
+	return current
+
+
+## One pass of Chaikin corner cutting: every interior segment (a, b) is
+## replaced by the two points 1/4 and 3/4 of the way along it, which slices
+## the tip off every corner. Endpoints are kept exactly.
+static func _chaikin_smoothed(points: Array[Vector2]) -> Array[Vector2]:
+	if points.size() < 3:
+		return points.duplicate()
+	var smoothed: Array[Vector2] = []
+	smoothed.append(points[0])
+	for i in range(points.size() - 1):
+		var a := points[i]
+		var b := points[i + 1]
+		smoothed.append(a.lerp(b, 0.25))
+		smoothed.append(a.lerp(b, 0.75))
+	smoothed.append(points[-1])
+	return smoothed
+
+
 ## Everything about a course that depends only on the world size, computed
 ## once: the tile-space points, the cumulative length to each point, the
 ## total length, and a bounding rectangle.
@@ -188,10 +250,22 @@ static func _course_cache(world_width: int, world_height: int) -> Dictionary:
 	var geo := GeoCoordinates.new()
 	var by_river := {}
 	for river_name in RIVERS:
-		var tile_points: Array[Vector2] = []
+		var raw_points: Array[Vector2] = []
 		for waypoint in RIVERS[river_name]:
 			var t := geo.tile_for_coordinate(waypoint.x, waypoint.y, world_width, world_height)
-			tile_points.append(Vector2(t.x, t.y))
+			raw_points.append(Vector2(t.x, t.y))
+		# Chaikin corner-cutting, twice. The curated waypoints are
+		# city-to-city straight lines, so every vertex was a sharp corner:
+		# the bank (an offset of this course) inherited each kink, adjacent
+		# tiles near a vertex snapped to different segments with visibly
+		# different tangents ("hard cuts / misalignments"), and the outside
+		# of every bend was a patch of endpoint-clamped cells. Each pass
+		# quarters the turn angle at every vertex; two passes bring even a
+		# hairpin under 45 degrees. Endpoints are pinned -- a river must
+		# still rise at its real source and end at its real mouth.
+		var tile_points := _cut_remaining_sharp_corners(
+			_chaikin_smoothed(_chaikin_smoothed(raw_points))
+		)
 
 		var cumulative: Array[float] = []
 		var travelled := 0.0
@@ -295,8 +369,22 @@ func nearest_river_at(
 				# it must be the perpendicular COMPONENT (smooth through
 				# clamped segment ends at bends), not sign * euclidean
 				# distance (which kinks there).
+				#
+				# EXCEPT past the course's very tips: beyond the source or
+				# mouth the perpendicular component degenerates (it shrinks
+				# while the real distance does not), which painted the
+				# region around every tip as mid-channel water in a ragged
+				# patch -- most visibly at confluences, where a tributary
+				# mouth sits mid-junction. Radial distance there caps each
+				# end in a clean semicircle instead.
 				var closest := a + (b - a) * t
-				best_signed_across = best_tangent.cross(point - closest)
+				var past_source := i == 0 and t <= 0.0
+				var past_mouth := i == tile_points.size() - 2 and t >= 1.0
+				if past_source or past_mouth:
+					var side := signf(best_tangent.cross(point - closest))
+					best_signed_across = (1.0 if side == 0.0 else side) * d
+				else:
+					best_signed_across = best_tangent.cross(point - closest)
 				best_fraction = (
 					(cumulative[i] + a.distance_to(b) * t) / total_length
 					if total_length > 0.0 else 0.0

@@ -140,8 +140,8 @@ func test_the_surface_is_actually_dragged_within_a_phase():
 func test_the_shader_samples_two_advected_phases():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_a"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_b"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_a"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("advect_strength * phase_b"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_a)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_b)"))
 
 
 ## THE seam bug the advection switch introduces if left alone. The surface
@@ -154,7 +154,7 @@ func test_the_shader_samples_two_advected_phases():
 ## free and continuously, so no per-tile offset is needed or wanted.
 func test_the_surface_field_is_keyed_to_world_position_alone():
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("vec2 world = world_pos * noise_scale;"),
+		RiverFlowShader.SHADER_CODE.contains("vec2 p = world_pos * noise_scale;"),
 		"a per-tile offset added here would seam the noise at every tile edge"
 	)
 	assert_false(
@@ -446,6 +446,68 @@ func test_the_moving_surface_is_at_least_as_strong_as_the_depth_profile():
 	)
 
 
+# -- world-anchored sampling ---------------------------------------------------
+#
+# THE fix for "there are still hard cuts / misalignments ... a sharp
+# alignment error in the straight part". The field used to be sampled in
+# each tile's rotated channel frame -- along = dot(world, flow_dir) -- and
+# a rotation about the WORLD ORIGIN moves a point by (angle x its distance
+# from the origin). This world is ~40,000 tiles wide, so when two
+# neighbouring tiles snapped to direction bins even 7.5 degrees apart,
+# their sample coordinates differed by THOUSANDS of tiles: the two patterns
+# at the seam were simply unrelated noise. That fired on straight reaches
+# too, whenever the course drifted past a bin boundary mid-reach.
+#
+# Now every sample is anchored at the fragment's own world position, and
+# direction only steers SMALL offsets (the drag, the smear taps, the bend's
+# perpendicular) -- never a rotation of a world-sized vector.
+
+## Sampled at real world magnitudes (this is essential -- the bug is
+## invisible near the origin), the field must stay nearly identical when
+## the direction changes by one whole bin.
+func test_the_pattern_survives_a_direction_bin_change():
+	var angle_a := ProceduralRiverFlowSprite.angle_for_bin(3)
+	var angle_b := ProceduralRiverFlowSprite.angle_for_bin(4)
+	var dir_a := Vector2(sin(deg_to_rad(angle_a)), -cos(deg_to_rad(angle_a)))
+	var dir_b := Vector2(sin(deg_to_rad(angle_b)), -cos(deg_to_rad(angle_b)))
+	# The Dreisam's real neighbourhood: ~20,800 tiles east, ~4,600 down,
+	# 16 px tiles, NOISE_SCALE cells -- coordinates in the tens of
+	# thousands of noise cells, exactly where a frame rotation explodes.
+	var base_x := 20800.0 * 16.0 * RiverFlowShader.NOISE_SCALE
+	var base_y := 4600.0 * 16.0 * RiverFlowShader.NOISE_SCALE
+	var total := 0.0
+	var count := 0
+	for i in range(24):
+		for j in range(24):
+			var px := base_x + float(i) * 0.43
+			var py := base_y + float(j) * 0.39
+			total += absf(
+				RiverFlowShader.animated_field_value(px, py, dir_a, 1.3)
+				- RiverFlowShader.animated_field_value(px, py, dir_b, 1.3)
+			)
+			count += 1
+	var mean := total / float(count)
+	assert_lt(
+		mean, 0.06,
+		"a one-bin direction change moves the field by %.3f on average -- that is a visible seam"
+			% mean
+	)
+
+
+## And the structural half: the shader must never build a sample coordinate
+## by projecting the world position onto the flow frame.
+func test_no_sample_coordinate_rotates_the_world_position():
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("dot(world, flow_dir)"),
+		"projecting world onto the flow frame rotates around the world origin"
+	)
+	assert_false(RiverFlowShader.SHADER_CODE.contains("dot(world, flow_perp)"))
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("vec2 p = world_pos * noise_scale;"),
+		"samples must be anchored at the fragment's own world position"
+	)
+
+
 # -- flowing lines, not blobs ------------------------------------------------
 #
 # Requested in exactly those words: "can you flowing lines that morph". The
@@ -458,11 +520,13 @@ func test_the_moving_surface_is_at_least_as_strong_as_the_depth_profile():
 # reads as drifting blobs, which is why this is pinned separately.
 
 ## The measurable difference between a line and a blob: the field must stay
-## coherent much further ALONG the flow than ACROSS it.
+## coherent much further ALONG the flow than ACROSS it -- now produced by
+## the smear, so it holds for ANY direction, not just the frame axes.
 func test_the_field_forms_lines_along_the_flow_not_blobs():
 	var step := 0.45
-	var along := RiverFlowShader.field_roughness(step, true)
-	var across := RiverFlowShader.field_roughness(step, false)
+	var dir := Vector2(1, 0)
+	var along := RiverFlowShader.field_roughness(step, dir, true)
+	var across := RiverFlowShader.field_roughness(step, dir, false)
 	assert_gt(
 		across, along * 2.0,
 		"field changes %.4f across vs %.4f along -- too round to read as flowing lines"
@@ -470,27 +534,37 @@ func test_the_field_forms_lines_along_the_flow_not_blobs():
 	)
 
 
-## The stretch is what produces that, so it must genuinely stretch. At 1.0
-## the field is isotropic and the lines are gone.
-func test_the_line_stretch_actually_elongates_the_field():
-	assert_lt(RiverFlowShader.LINE_STRETCH, 0.5)
-	assert_gt(RiverFlowShader.LINE_STRETCH, 0.0)
+## And the same anisotropy must hold on a DIAGONAL flow -- a frame-free
+## formulation earns its keep only if the lines follow every bearing.
+func test_the_lines_follow_a_diagonal_flow_too():
+	var step := 0.45
+	var dir := Vector2(1, 1).normalized()
+	var along := RiverFlowShader.field_roughness(step, dir, true)
+	var across := RiverFlowShader.field_roughness(step, dir, false)
+	assert_gt(across, along * 2.0)
 
 
-## And the shader must sample in the channel's own frame, or "along the
-## flow" has no meaning -- a world-axis-aligned stretch would draw lines
-## pointing the same way regardless of which way the river runs.
-func test_the_shader_samples_in_the_channels_own_frame():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("dot(world, flow_dir)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("dot(world, flow_perp)"))
+## The smear is what produces that: enough taps that they overlap into a
+## continuous stroke (gaps read as dashes), spaced to a real elongation.
+func test_the_smear_taps_overlap_into_a_continuous_stroke():
+	assert_lte(RiverFlowShader.SMEAR_SPACING, 1.0, "taps further than a cell apart leave gaps")
+	assert_gte(RiverFlowShader.SMEAR_TAPS, 5)
+
+
+## The lines must still run along each reach's own flow -- but oriented by
+## SMEARING along the direction (a line-integral-convolution stroke),
+## never by rotating the sample frame. The perpendicular still exists for
+## the bend and the across-reconstruction.
+func test_the_lines_are_oriented_by_smearing_not_frame_rotation():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (float(k) * smear_spacing)"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_perp = vec2(-flow_dir.y, flow_dir.x)"))
 
 
 ## Water is carried DOWNSTREAM. Dragging the field sideways as well would
 ## make the lines crab across the channel instead of running along it.
 func test_the_drag_is_purely_downstream():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_a, across_w)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("line_field(along - advect_strength * phase_b, across_w)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_a)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_b)"))
 
 
 # -- the size of a flow line -------------------------------------------------
@@ -569,13 +643,17 @@ func test_the_water_visibly_travels_within_each_phase():
 
 ## The bend must genuinely displace the streaklines -- zero bend is the
 ## ruler-straight failure -- but stay coherent: RMS displacement is held to
-## a band measured in line widths.
+## a band measured in line widths. (The bend field is WORLD-anchored now,
+## like everything else; only its push direction is the flow perp.)
 func test_streaklines_are_bent_by_a_real_measured_amount():
 	var total := 0.0
 	var count := 0
 	for i in range(70):
 		for j in range(70):
-			var d := RiverFlowShader.bend_displacement(float(i) * 0.31, float(j) * 0.29)
+			var d := RiverFlowShader.bend_displacement(
+				float(i) * 0.31 * RiverFlowShader.EDDY_SCALE,
+				float(j) * 0.29 * RiverFlowShader.EDDY_SCALE
+			)
 			total += d * d
 			count += 1
 	var rms := sqrt(total / float(count))
@@ -634,11 +712,12 @@ func test_the_warped_field_still_forms_lines():
 ## through the standing eddies.
 func test_the_bend_is_anchored_to_the_bed_not_carried_with_the_water():
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("vec2(along_raw, across) * eddy_scale"),
-		"the eddy field must be sampled at unadvected channel coordinates"
+		RiverFlowShader.SHADER_CODE.contains("p * eddy_scale"),
+		"the eddy field must be sampled at unadvected world coordinates"
 	)
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("float across_w = across + bend * turbulence_strength;")
+		RiverFlowShader.SHADER_CODE.contains("vec2 q = p + flow_perp * bend;"),
+		"the bend must push the sample point across the flow"
 	)
 
 
@@ -668,16 +747,19 @@ func test_the_bend_has_structure_at_two_scales():
 ## within a couple of line lengths -- variation is what curves it, a
 ## constant shift only moves it.
 func test_a_streakline_visibly_curves_within_its_own_length():
-	# One feature length downstream is 1/LINE_STRETCH across-units.
-	var line_length := 1.0 / RiverFlowShader.LINE_STRETCH
+	# One feature length downstream, in noise cells -- the smear stroke.
+	var line_length := 1.0 + float(RiverFlowShader.SMEAR_TAPS - 1) * RiverFlowShader.SMEAR_SPACING
 	var worst := 999.0
 	for j in range(12):
 		var across := float(j) * 1.7
 		var lowest := 999.0
 		var highest := -999.0
 		for i in range(24):
+			# bend_displacement takes eddy-scaled coordinates, exactly as
+			# the shader feeds it.
 			var d := RiverFlowShader.bend_displacement(
-				float(i) / 24.0 * 2.0 * line_length, across
+				float(i) / 24.0 * 2.0 * line_length * RiverFlowShader.EDDY_SCALE,
+				across * RiverFlowShader.EDDY_SCALE
 			)
 			lowest = minf(lowest, d)
 			highest = maxf(highest, d)
