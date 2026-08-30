@@ -249,6 +249,7 @@ func nearest_river_at(
 	var best_name := ""
 	var best_distance := INF
 	var best_fraction := 0.0
+	var best_tangent := Vector2(0.0, -1.0)
 
 	var courses := _course_cache(world_width, world_height)
 	for river_name in courses:
@@ -272,6 +273,11 @@ func nearest_river_at(
 			if d < best_distance:
 				best_distance = d
 				best_name = river_name
+				# The winning segment's own direction IS the downstream
+				# tangent -- course points are stored source-to-mouth, so
+				# b - a already points the way the water goes.
+				if not b.is_equal_approx(a):
+					best_tangent = (b - a).normalized()
 				best_fraction = (
 					(cumulative[i] + a.distance_to(b) * t) / total_length
 					if total_length > 0.0 else 0.0
@@ -281,7 +287,17 @@ func nearest_river_at(
 		"name": best_name,
 		"distance_tiles": best_distance,
 		"course_fraction": clampf(best_fraction, 0.0, 1.0),
+		"course_bearing_deg": bearing_degrees(best_tangent),
 	}
+
+
+## Compass bearing of a tile-space direction, in the convention
+## ProceduralRiverFlowSprite bakes and the flow shader reads: 0 is north,
+## 90 is east, and +Y is DOWN because this is screen space, not a map.
+static func bearing_degrees(direction: Vector2) -> float:
+	if direction.is_zero_approx():
+		return 0.0
+	return fposmod(rad_to_deg(atan2(direction.x, -direction.y)), 360.0)
 
 
 ## How far along segment a-b the perpendicular projection of `point` falls,

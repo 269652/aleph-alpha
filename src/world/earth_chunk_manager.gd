@@ -3639,27 +3639,31 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			if not generator.is_river_at_global(global.x, global.y):
 				_river_flow_layer.erase_cell(global)
 				continue
-			var gradient := gradient_at_global(global.x, global.y)
-			var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
-			# Flat ground has no defined aspect (-1.0 sentinel) -- real
-			# terrain is never perfectly flat at bilinear-interpolated
-			# resolution in practice, but fall back to due-north rather
-			# than feed a negative angle into the atlas lookup if it ever is.
-			var flow_angle := aspect if aspect >= 0.0 else 0.0
-
-			# Everything the stylized look needs comes from REAL simulation
-			# state (see RiverFlowShader's art-direction note): the flat
-			# colour band from the real solved depth INCLUDING any dam
-			# ponding -- so damming a river visibly darkens it -- the extra
-			# wave line from the real solved current, and the bank outline
-			# from the cross-channel distance nearest_river_at already
-			# computes and used to discard.
+			# Everything the look needs comes from REAL simulation state
+			# (see RiverFlowShader's art-direction note): the colour band
+			# from the real solved depth INCLUDING any dam ponding -- so
+			# damming a river visibly darkens it -- the surface contrast
+			# from the real solved current, and the cross-channel position
+			# from the distance nearest_river_at already computes.
 			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
 			var depth := river_depth_meters_at_global(global.x, global.y)
 			var nearest := generator.river_catalog().nearest_river_at(
 				global.x, global.y,
 				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 			)
+
+			# Water flows along its CHANNEL, not down the local hillside.
+			#
+			# This used to be the terrain aspect -- the steepest-descent
+			# direction of the elevation field -- which is a plausible-
+			# sounding proxy and visibly wrong: elevation here is bilinear-
+			# interpolated from a coarse DEM, so its local gradient has
+			# little to do with the mapped course, and the flow lines came
+			# out running diagonally ACROSS a channel that runs down the
+			# screen. The course polyline is stored source-to-mouth, so its
+			# own tangent is the real downstream direction and needs no
+			# proxy at all.
+			var flow_angle: float = nearest.course_bearing_deg
 			# Where this cell sits ACROSS the channel, through the real
 			# parabolic bed profile -- a natural riverbed is deepest
 			# mid-stream and shallows to its banks, so this is the river's

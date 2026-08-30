@@ -238,3 +238,74 @@ func test_every_waypoint_is_a_plausible_real_coordinate():
 		for waypoint in waypoints:
 			assert_between(waypoint.x, -90.0, 90.0, "%s latitude out of range" % river_name)
 			assert_between(waypoint.y, -180.0, 180.0, "%s longitude out of range" % river_name)
+
+
+# -- the downstream tangent --------------------------------------------------
+#
+# The flow overlay used to take its direction from the terrain ASPECT -- the
+# steepest-descent direction of the elevation field. That sounds physical
+# and is visibly wrong here: elevation is bilinear-interpolated from a
+# coarse DEM, so its local gradient has little to do with the mapped course,
+# and the flow lines came out running diagonally ACROSS a channel that runs
+# straight down the screen.
+#
+# The course polyline is stored source-to-mouth, so its own tangent IS the
+# downstream direction. No proxy needed.
+
+## Bearing convention, shared with ProceduralRiverFlowSprite: 0 is north,
+## 90 is east, +Y is DOWN because this is screen space and not a map. Getting
+## this wrong flips every river's flow.
+func test_bearing_degrees_uses_the_screen_space_compass():
+	assert_almost_eq(RiverCatalog.bearing_degrees(Vector2(0, -1)), 0.0, 0.001)
+	assert_almost_eq(RiverCatalog.bearing_degrees(Vector2(1, 0)), 90.0, 0.001)
+	assert_almost_eq(RiverCatalog.bearing_degrees(Vector2(0, 1)), 180.0, 0.001)
+	assert_almost_eq(RiverCatalog.bearing_degrees(Vector2(-1, 0)), 270.0, 0.001)
+
+
+## THE property that matters, and it is checked against the course itself
+## rather than any hard-coded heading: stepping along the reported bearing
+## from a river tile must carry you FURTHER DOWN the course, and stepping
+## back against it must carry you up.
+func test_the_reported_bearing_actually_points_downstream():
+	var catalog := RiverCatalog.new()
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var checked := 0
+	# Walk real course points, straight out of the catalog itself.
+	var courses := RiverCatalog.tile_polylines(width, height)
+	var points: Array = courses["Rhine"]
+	for index in range(2, points.size() - 2):
+		var probe: Vector2 = points[index]
+		var here := catalog.nearest_river_at(int(probe.x), int(probe.y), width, height)
+		if here.name == "" or here.distance_tiles > 2.0:
+			continue
+		# course_fraction is degenerate at the very ends of a polyline.
+		if here.course_fraction < 0.02 or here.course_fraction > 0.98:
+			continue
+		var radians := deg_to_rad(here.course_bearing_deg)
+		var forward := Vector2(sin(radians), -cos(radians)) * 3.0
+		var ahead := catalog.nearest_river_at(
+			int(probe.x + forward.x), int(probe.y + forward.y), width, height
+		)
+		var behind := catalog.nearest_river_at(
+			int(probe.x - forward.x), int(probe.y - forward.y), width, height
+		)
+		if ahead.name != here.name or behind.name != here.name:
+			continue
+		assert_gt(
+			ahead.course_fraction, behind.course_fraction,
+			"bearing %.1f at %s does not run downstream"
+				% [here.course_bearing_deg, probe]
+		)
+		checked += 1
+	assert_gt(checked, 0, "found no river tiles to check the bearing on")
+
+
+## A tile off in the ocean has no course to follow -- it must still report a
+## usable bearing rather than something the atlas lookup would choke on.
+func test_a_bearing_is_always_in_range_even_with_no_river():
+	var catalog := RiverCatalog.new()
+	var result := catalog.nearest_river_at(
+		10, 10, EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_between(result.course_bearing_deg, 0.0, 360.0)

@@ -400,14 +400,15 @@ func test_river_flow_overlay_paints_only_river_cells_not_every_loaded_cell():
 		# real solved depth (including dam ponding), the real current, and
 		# the cross-channel bank position. Recomputed independently here and
 		# compared against what was painted.
-		var gradient := manager.gradient_at_global(cell.x, cell.y)
-		var aspect := relief.aspect_degrees_from_gradient(gradient.x, gradient.y)
-		var expected_angle := aspect if aspect >= 0.0 else 0.0
 		var hydraulics := manager.generator.river_hydraulics_at_global(cell.x, cell.y)
 		var nearest := manager.generator.river_catalog().nearest_river_at(
 			cell.x, cell.y,
 			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
 		)
+		# Water follows its CHANNEL, not the local hillside -- the direction
+		# is the course polyline's own downstream tangent, not the terrain
+		# aspect it used to be (which ran diagonally across the channel).
+		var expected_angle: float = nearest.course_bearing_deg
 		var across: float = nearest.distance_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 		var expected_style := ProceduralRiverFlowSprite.style_index_for(
 			RiverFlowShader.cross_section_band_for(
