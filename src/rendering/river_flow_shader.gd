@@ -48,14 +48,14 @@ shader_type canvas_item;
 
 uniform float advect_rate = 0.35;
 uniform float advect_strength = 1.15;
-uniform float noise_scale = 0.07;
+uniform float noise_scale = 0.08;
 uniform float pixel_snap = 0.5;
 uniform float cel_levels = 6.0;
 uniform float dither_strength = 0.5;
 uniform float ink_width = 0.06;
 uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
-uniform float line_count = 2.0;
-uniform float line_width = 0.045;
+uniform float line_count = 4.0;
+uniform float line_width = 0.022;
 uniform float line_strength = 0.7;
 uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
 uniform vec3 line_color_deep : source_color = vec3(0.07, 0.26, 0.48);
@@ -359,7 +359,7 @@ const ADVECT_STRENGTH := 4.5
 ## Pinned in TILES rather than as a raw constant, because tiles are the only
 ## scale that means anything here: see
 ## test_flow_lines_are_narrow_enough_that_several_fit_across_a_channel.
-const NOISE_SCALE := 0.07
+const NOISE_SCALE := 0.08
 
 ## The line-integral-convolution stroke: how many world-anchored taps are
 ## averaged along the flow, and how far apart (in noise cells). Taps closer
@@ -369,7 +369,7 @@ const NOISE_SCALE := 0.07
 ## re-stretches it -- held to the measured coverage and swing bands by the
 ## same tests that pinned the old field.
 const SMEAR_TAPS := 9
-const SMEAR_SPACING := 0.7
+const SMEAR_SPACING := 0.85
 const SMEAR_GAIN := 2.0
 
 ## One ART pixel, in world px -- TILE_SIZE world px carry ART_TILE_SIZE art
@@ -431,11 +431,14 @@ const BANK_FEATHER := 0.03
 
 ## The wave strokes: periodic contours at LINE_COUNT evenly spaced levels
 ## of the advected field, stroke half-width in field units, and the pale
-## ink they are drawn with. Coverage is held to a measured band from both
-## sides, and a transect test caps the longest strokeless stretch -- the
-## direct pin of "most of the stream doesnt show any currents".
-const LINE_COUNT := 2.0
-const LINE_WIDTH := 0.045
+## ink they are drawn with. Fine, long and dense by explicit request
+## ("finer, longer lines which merge and unmerge ... just everywhere") --
+## a fatter, sparser pass pooled into voronoi-cell blobs wherever the
+## field flattened, because a stroke's spatial width is its n-band over
+## the local gradient. Coverage and the measured width/spacing bands hold
+## the look from both sides.
+const LINE_COUNT := 4.0
+const LINE_WIDTH := 0.022
 const LINE_STRENGTH := 0.7
 const LINE_COLOR := Color(0.85, 0.97, 1.0)
 

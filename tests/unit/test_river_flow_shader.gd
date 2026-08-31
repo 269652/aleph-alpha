@@ -999,8 +999,14 @@ func test_the_shore_highlight_sits_inside_the_ink():
 # contrast.
 
 ## The pattern's real spatial scale, measured across the flow on the live
-## field: strokes must be wide enough to survive low zoom, and spaced far
-## enough apart to read as separate drawn lines rather than a texture.
+## field. The bounds are set to the look the user picked EXPLICITLY --
+## "finer, longer lines which merge and unmerge" -- after a fatter pass
+## pooled into voronoi-cell blobs wherever the field's gradient flattened.
+## (The fat width was itself a misdiagnosis: the invisibility it "fixed"
+## was the float32-dead hash, not thin strokes.) The lower width bound now
+## guards only against sub-art-pixel lines; the upper bound is what keeps
+## the blobs from returning, since a stroke's spatial width scales with
+## the n-band width over the local gradient.
 func test_strokes_are_wide_and_spaced_like_drawn_lines():
 	var in_stroke := false
 	var run := 0
@@ -1026,15 +1032,16 @@ func test_strokes_are_wide_and_spaced_like_drawn_lines():
 	var mean_width_cells := float(total) / float(runs.size()) * step
 	var mean_width_px := mean_width_cells / RiverFlowShader.NOISE_SCALE
 	assert_between(
-		mean_width_px, 2.5, 9.0,
-		"a stroke is %.1f world px thick -- under ~2.5 it vanishes at low zoom" % mean_width_px
+		mean_width_px, 1.0, 4.5,
+		"a stroke is %.1f world px thick -- fatter pools into blobs, thinner is sub-art-pixel"
+			% mean_width_px
 	)
 	var gap_total := 0.0
 	for k in range(1, onsets.size()):
 		gap_total += onsets[k] - onsets[k - 1]
 	var mean_spacing_px := gap_total / float(onsets.size() - 1) / RiverFlowShader.NOISE_SCALE
 	assert_between(
-		mean_spacing_px, 12.0, 42.0,
+		mean_spacing_px, 6.0, 30.0,
 		"strokes are %.0f world px apart -- too close reads as texture, too far as still water"
 			% mean_spacing_px
 	)
