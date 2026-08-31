@@ -4,6 +4,7 @@ const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const StonePlacement = preload("res://src/world/stone_placement.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
+const OrePlacement = preload("res://src/world/ore_placement.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
@@ -21,6 +22,7 @@ const BOULDER_PIECE_ID := "boulder"
 ## The same deterministic stone roll StoneRenderer spawns from -- so the
 ## water bends around exactly the boulders the player can see.
 var _flow_stone_placement := StonePlacement.new()
+var _flow_ore_placement := OrePlacement.new()
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
 const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
@@ -3405,6 +3407,14 @@ const RIVER_FLOW_BOULDER_SLOTS := 24
 
 
 func river_flow_boulder_positions() -> PackedVector2Array:
+	# Prune first: a chunk that unloaded takes its boulders with it, and a
+	# stale far-away rock must not hold one of the limited uniform slots.
+	var stale: Array = []
+	for tile in _river_flow_boulder_tiles:
+		if not _loaded_chunks.has(_chunk_coord_for_tile(tile)):
+			stale.append(tile)
+	for tile in stale:
+		_river_flow_boulder_tiles.erase(tile)
 	var positions := PackedVector2Array()
 	for tile in _river_flow_boulder_tiles:
 		if positions.size() >= RIVER_FLOW_BOULDER_SLOTS:
@@ -3745,6 +3755,11 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 					RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
 				)
 			)
+	# Every paint re-syncs the shader's boulder set -- found live: only
+	# layer setup and build/destroy synced, so a fresh session's NATURAL
+	# river boulders were collected here but never reached the uniform,
+	# and the water bent around nothing.
+	sync_river_flow_boulders()
 
 
 ## Cardinal directions from (global_x, global_y) that hold a non-ocean,
@@ -6760,6 +6775,11 @@ func flow_boulder_at_global(global_x: int, global_y: int) -> bool:
 		return false
 	if not _flow_stone_placement.has_stone_at(global_x, global_y, biome):
 		return false
+	# An ore deposit rides the same stone roll (OrePlacement.is_ore_at) and
+	# spawns a chunky minable rock -- it bends the water exactly like a
+	# boulder ("ore should also bend the water").
+	if _flow_ore_placement.is_ore_at(global_x, global_y, biome):
+		return true
 	var diameter := StoneSize.diameter_for(_flow_stone_placement.seed_at(global_x, global_y))
 	return StoneSize.class_for(diameter) == StoneSize.CLASS_BOULDER
 

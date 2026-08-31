@@ -7345,6 +7345,17 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: natural rocks reach the shader + ore bends too** (small) — ✅
+  Done — reported with a three-rock screenshot: "current lines don't part
+  around the boulder". The feed only synced at layer setup and on
+  build/destroy, so a fresh session's NATURAL river boulders were
+  collected during chunk paints but never reached the uniform -- pinned
+  red by a no-build-call test (9 synced vs 11 collected), fixed by
+  syncing at the end of every overlay paint, with stale unloaded-chunk
+  rocks pruned so they release their uniform slots. Also requested: "ore
+  should also bend the water" -- ore deposits ride the same stone roll
+  (OrePlacement.is_ore_at) and now count as flow obstacles like boulders.
+  Ponding suite 13 green, GPU smoke green.
 - **Rivers: boulder deflection moved to the fragment** (medium) — ✅ Done
   — reported of the tile-baked version: "Boulders don't seem to affect the
   current flow lines? also squares are now much more visible then before

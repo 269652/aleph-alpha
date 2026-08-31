@@ -206,3 +206,51 @@ func test_a_closed_boulder_row_ponds_the_river_upstream():
 		ponded, natural + 0.05,
 		"the closed row must pond the river (%.3f m -> %.3f m)" % [natural, ponded]
 	)
+
+
+## THE regression path found live ("current lines don't part around the
+## boulder", three natural rocks in frame): the boulder set fills during
+## chunk paints, but only layer setup and build/destroy pushed the
+## uniform -- a session that loaded its chunks normally never synced, and
+## the shader bent around nothing. Both halves pinned below: the built
+## boulder surviving a reload, and -- the half that was actually broken --
+## NATURAL boulders reaching the uniform with no build call ever made.
+func test_a_persisted_boulder_still_bends_the_water_after_reload():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	assert_true(manager.build_at_global(river_tile.x, river_tile.y, "boulder"))
+	var far := river_tile + Vector2i(EarthChunkManager.CHUNK_SIZE * 20, 0)
+	manager.update(far)
+	manager.update(river_tile)
+	var expected := Vector2(
+		float(river_tile.x) * 16.0 + 8.0, float(river_tile.y) * 16.0 + 8.0
+	)
+	assert_true(
+		manager.river_flow_boulder_positions().has(expected),
+		"the persisted boulder must be re-collected by the chunk repaint"
+	)
+	var material: ShaderMaterial = flow_layer.material
+	var count: int = material.get_shader_parameter("boulder_count")
+	assert_gt(count, 0, "the chunk reload must sync the shader uniform itself")
+	flow_layer.free()
+
+
+## The natural half: after nothing but layer setup and chunk loads, every
+## collected natural river boulder must already be in the shader uniform.
+## No build call, no manual sync -- exactly a fresh play session.
+func test_natural_river_boulders_reach_the_shader_without_any_build():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	manager.update(river_tile + Vector2i(EarthChunkManager.CHUNK_SIZE, 0))
+	var positions := manager.river_flow_boulder_positions()
+	assert_gt(
+		positions.size(), 0,
+		"expected at least one natural boulder on a river tile near the Dreisam"
+	)
+	var material: ShaderMaterial = flow_layer.material
+	var count: int = material.get_shader_parameter("boulder_count")
+	assert_eq(
+		count, positions.size(),
+		"chunk paints must sync the uniform themselves -- a fresh session never builds"
+	)
+	flow_layer.free()
