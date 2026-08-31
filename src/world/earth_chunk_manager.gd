@@ -3493,6 +3493,17 @@ func set_river_flow_night_lift(sunlight: float) -> void:
 	)
 
 
+## The wading player as a live flow obstacle ("a player walking through the
+## stream should cause realistic current displacement") -- world.gd feeds
+## the player's pixel position and in-water state every frame, same shape
+## as set_river_flow_night_lift above; the shader stretches the push
+## downstream into a trailing wake (see RiverFlowShader.wader_across_push).
+func set_river_flow_wader(world_pos: Vector2, in_water: bool) -> void:
+	var material := _river_flow_shader.shared_material()
+	material.set_shader_parameter("wader_active", 1.0 if in_water else 0.0)
+	material.set_shader_parameter("wader_pos", world_pos)
+
+
 ## Registers the GPU river-flow overlay layer (see RiverFlowShader,
 ## TerrainRenderer.build_river_flow_tile_set, docs/concept/rivers.md) --
 ## same optional, fail-open shape as set_hillshade_layer above, but the

@@ -380,6 +380,22 @@ func test_set_river_flow_layer_assigns_the_shared_shader_material():
 	flow_layer.free()
 
 
+## "a player walking through the stream should cause realistic current
+## displacement" -- world.gd feeds the player's position and in-water state
+## every frame (same shape as set_river_flow_night_lift); the shared shader
+## material carries them to every river fragment.
+func test_set_river_flow_wader_feeds_the_shared_material():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	manager.set_river_flow_wader(Vector2(320.0, 176.0), true)
+	var material: ShaderMaterial = flow_layer.material
+	assert_almost_eq(float(material.get_shader_parameter("wader_active")), 1.0, 0.0001)
+	assert_eq(material.get_shader_parameter("wader_pos"), Vector2(320.0, 176.0))
+	manager.set_river_flow_wader(Vector2(320.0, 176.0), false)
+	assert_almost_eq(float(material.get_shader_parameter("wader_active")), 0.0, 0.0001)
+	flow_layer.free()
+
+
 func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 	var flow_layer := TileMapLayer.new()
 	manager.set_river_flow_layer(flow_layer)

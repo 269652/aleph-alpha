@@ -26,6 +26,12 @@ const RIVER_HALF_WIDTH_TILES := 2.0
 ## (half a tile diagonal is ~0.71).
 const RIVER_BANK_APRON_TILES := 0.75
 
+## How close the second-nearest segment must be (beyond the nearest) for
+## the corner blend to engage -- see the CORNER BLEND note in
+## nearest_river_at. Small: only the neighbourhood of a flip line blends;
+## everywhere else the hard winner stands alone.
+const SEGMENT_BLEND_BAND_TILES := 1.5
+
 ## name -> ordered Array[Vector2] of (latitude_deg, longitude_deg) waypoints,
 ## source to mouth -- NOT engine (x, y); x holds latitude here, matching how
 ## every real-world coordinate in this project is written left-to-right
@@ -334,6 +340,7 @@ func nearest_river_at(
 	var best_fraction := 0.0
 	var best_tangent := Vector2(0.0, -1.0)
 	var best_signed_across := 0.0
+	var _projection_is_cap := false
 
 	var courses := _course_cache(world_width, world_height)
 	for river_name in courses:
@@ -383,12 +390,63 @@ func nearest_river_at(
 				if past_source or past_mouth:
 					var side := signf(best_tangent.cross(point - closest))
 					best_signed_across = (1.0 if side == 0.0 else side) * d
+					_projection_is_cap = true
 				else:
 					best_signed_across = best_tangent.cross(point - closest)
+					_projection_is_cap = false
 				best_fraction = (
 					(cumulative[i] + a.distance_to(b) * t) / total_length
 					if total_length > 0.0 else 0.0
 				)
+
+	# CORNER SMOOTHING -- the fix for "parts of the stream are mirrored and
+	# connect wrongly". At the Voronoi boundary between two segments the
+	# hard winner flips, and the across field jumped a full measured tile
+	# mid-channel. Instead of one winner, every segment of the winning
+	# river within SEGMENT_BLEND_BAND_TILES of the best distance
+	# contributes to a smoothly weighted average -- weights fade to zero as
+	# a segment leaves the band and as its tangent disagrees with the
+	# winner (the far bank of a hairpin must not pull), so the field is
+	# continuous through every corner BY CONSTRUCTION. Past-tip radial
+	# caps keep the hard answer: a cap is a line end, and its radial value
+	# is pinned exact by test.
+	if best_name != "" and not _projection_is_cap:
+		var course: Dictionary = _course_cache(world_width, world_height)[best_name]
+		var tile_points: Array = course["points"]
+		var cumulative: Array = course["cumulative"]
+		var total_length: float = course["total_length"]
+		var weight_sum := 0.0
+		var across_sum := 0.0
+		var fraction_sum := 0.0
+		var tangent_sum := Vector2.ZERO
+		for i in range(tile_points.size() - 1):
+			var a: Vector2 = tile_points[i]
+			var b: Vector2 = tile_points[i + 1]
+			if b.is_equal_approx(a):
+				continue
+			var t := _projection_fraction(point, a, b)
+			var closest := a + (b - a) * t
+			var d := point.distance_to(closest)
+			if d - best_distance >= SEGMENT_BLEND_BAND_TILES:
+				continue
+			var tangent := (b - a).normalized()
+			var agreement := clampf((tangent.dot(best_tangent) - 0.2) / 0.3, 0.0, 1.0)
+			if agreement <= 0.0:
+				continue
+			var band_weight := 1.0 - (d - best_distance) / SEGMENT_BLEND_BAND_TILES
+			var weight := band_weight * band_weight * agreement
+			weight_sum += weight
+			across_sum += weight * tangent.cross(point - closest)
+			fraction_sum += weight * (
+				(cumulative[i] + a.distance_to(b) * t) / total_length
+				if total_length > 0.0 else 0.0
+			)
+			tangent_sum += weight * tangent
+		if weight_sum > 0.0:
+			best_signed_across = across_sum / weight_sum
+			best_fraction = fraction_sum / weight_sum
+			if tangent_sum.length() > 0.0001:
+				best_tangent = tangent_sum.normalized()
 
 	return {
 		"name": best_name,

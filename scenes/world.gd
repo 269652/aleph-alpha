@@ -4623,6 +4623,10 @@ func _client_process(delta: float) -> void:
 	# clock (which follows the real clock) holds evening players in
 	# permanent night. Real rivers gleam after dark: they reflect the sky.
 	_chunk_manager.set_river_flow_night_lift(sunlight)
+	_chunk_manager.set_river_flow_wader(
+		local_player.position,
+		local_player.current_mode in ["wading", "swimming", "drowning"]
+	)
 	# Drives every creature's silhouette shadow length (see DropShadow.
 	# stretch_for_elevation / CreatureMarker.sun_elevation_deg) with the same
 	# real sun position already computed for day/night lighting above.

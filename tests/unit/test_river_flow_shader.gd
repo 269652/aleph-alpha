@@ -1181,3 +1181,80 @@ func test_the_map_lookup_wraps_toroidally():
 		RiverFlowShader.SHADER_CODE.contains("vec2 map_uv = (wp / tile_px) / flow_map_tiles;"),
 		"the lookup must be world tiles over map size, with repeat wrapping"
 	)
+
+
+# -- the wader's wake ---------------------------------------------------------
+#
+# "a player walking through the stream should cause realistic current
+# displacement": the water's across-field bends around the wader exactly the
+# way it bends around a boulder -- same radial push, softer and smaller --
+# and the displacement TRAILS DOWNSTREAM, because pushed water is carried
+# away by the current, not left hanging symmetrically around the legs.
+# Unlike a boulder, a wader never dries the water: no eyot.
+
+func test_the_wader_push_is_softer_and_smaller_than_a_boulders():
+	assert_lt(RiverFlowShader.WADER_PUSH, RiverFlowShader.BOULDER_PUSH)
+	assert_lt(RiverFlowShader.WADER_REACH_PX, RiverFlowShader.BOULDER_REACH_PX)
+
+
+func test_the_wader_push_repels_both_sides_and_fades_out():
+	var flow := Vector2(1.0, 0.0)
+	var left := RiverFlowShader.wader_across_push(Vector2(0.0, -8.0), flow)
+	var right := RiverFlowShader.wader_across_push(Vector2(0.0, 8.0), flow)
+	assert_true(
+		left * right < 0.0,
+		"opposite sides of the wader must be pushed to opposite banks"
+	)
+	assert_gt(
+		absf(RiverFlowShader.wader_across_push(Vector2(0.0, 5.0), flow)),
+		absf(RiverFlowShader.wader_across_push(Vector2(0.0, 20.0), flow)),
+		"the push must fade with distance"
+	)
+	assert_almost_eq(
+		RiverFlowShader.wader_across_push(
+			Vector2(0.0, RiverFlowShader.WADER_REACH_PX + 1.0), flow
+		),
+		0.0, 0.0001,
+		"nothing sideways beyond the reach"
+	)
+
+
+func test_the_wake_trails_downstream_not_upstream():
+	var flow := Vector2(1.0, 0.0)
+	var beyond := RiverFlowShader.WADER_REACH_PX * 1.3
+	var downstream := RiverFlowShader.wader_across_push(Vector2(beyond, 6.0), flow)
+	var upstream := RiverFlowShader.wader_across_push(Vector2(-beyond, 6.0), flow)
+	assert_gt(
+		absf(downstream), 0.0,
+		"the wake must persist past the base reach on the downstream side"
+	)
+	assert_almost_eq(
+		upstream, 0.0, 0.0001,
+		"upstream of the wader the water has not met the legs yet"
+	)
+	assert_gte(
+		absf(RiverFlowShader.wader_across_push(Vector2(15.0, 6.0), flow)),
+		absf(RiverFlowShader.wader_across_push(Vector2(-15.0, 6.0), flow)),
+		"at mirrored offsets the downstream push must never be the weaker one"
+	)
+
+
+## A wader displaces the current but never dries the channel: eyot carving
+## stays exclusive to boulders. Structural: exactly one place in the whole
+## fragment shader narrows eyot_dry, and it is the boulder loop.
+func test_only_the_boulder_loop_carves_dry_eyots():
+	assert_eq(
+		RiverFlowShader.SHADER_CODE.count("eyot_dry = min("), 1,
+		"a second eyot writer means something besides boulders dries the water"
+	)
+	var wader_block_start: int = RiverFlowShader.SHADER_CODE.find("wader_active")
+	assert_gt(wader_block_start, 0, "the fragment shader must consult the wader")
+
+
+func test_the_material_starts_with_the_wader_inactive():
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(float(material.get_shader_parameter("wader_active")), 0.0, 0.0001)
+	assert_almost_eq(
+		float(material.get_shader_parameter("wader_push")),
+		RiverFlowShader.WADER_PUSH, 0.0001
+	)

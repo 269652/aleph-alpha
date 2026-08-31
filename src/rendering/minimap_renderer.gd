@@ -21,12 +21,26 @@ var _has_built_before := false
 var _last_built_tile := Vector2i.ZERO
 var _last_built_image: Image
 
+## Remembered river answers (Vector2i -> bool). A river never moves, and a
+## one-tile step shares ~99% of its window with the previous build, so
+## re-walking the catalog's polylines for every one of the 81x81 tiles each
+## rebuild would be a per-second hitch for nothing. Cleared when it grows
+## past the cap so a long hike can't hold the whole world in memory.
+const RIVER_MEMO_TILE_CAP := 250_000
+var _river_memo := {}
+
 
 func build_image(biome_source, center_tile: Vector2i) -> Image:
 	if _has_built_before and center_tile == _last_built_tile:
 		return _last_built_image
 
 	var size := SAMPLE_RADIUS_TILES * 2 + 1
+
+	# Rivers read as water on the minimap ("rivers should show up on
+	# minimap"). The lookup stays optional -- build_image is duck-typed on
+	# purpose, and plenty of sources (tests, tools) carry only biomes.
+	var knows_rivers: bool = biome_source.has_method("is_river_at_global")
+	var water_color: Color = TerrainRenderer.BIOME_COLORS["ocean"]
 
 	# FORMAT_RGBA8 packs 4 bytes per pixel, R/G/B/A in that order, row-major --
 	# filling that buffer directly and uploading it in one Image.set_data()
@@ -42,11 +56,22 @@ func build_image(biome_source, center_tile: Vector2i) -> Image:
 			var global_x := center_tile.x - SAMPLE_RADIUS_TILES + local_x
 			var biome_name: String = biome_source.biome_at_global(global_x, global_y)
 			var color := _color_for_biome(biome_name)
+			if knows_rivers:
+				var tile := Vector2i(global_x, global_y)
+				var is_river = _river_memo.get(tile)
+				if is_river == null:
+					is_river = biome_source.is_river_at_global(global_x, global_y)
+					_river_memo[tile] = is_river
+				if is_river:
+					color = water_color
 			var idx := (row_offset + local_x) * 4
 			bytes[idx] = _channel_byte(color.r)
 			bytes[idx + 1] = _channel_byte(color.g)
 			bytes[idx + 2] = _channel_byte(color.b)
 			bytes[idx + 3] = _channel_byte(color.a)
+
+	if _river_memo.size() > RIVER_MEMO_TILE_CAP:
+		_river_memo.clear()
 
 	var image := Image.create_from_data(size, size, false, Image.FORMAT_RGBA8, bytes)
 

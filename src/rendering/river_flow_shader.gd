@@ -83,6 +83,14 @@ uniform vec2 boulders[24];
 uniform float boulder_reach_px = 40.0;
 uniform float boulder_push = 0.5;
 uniform float boulder_radius_px = 11.0;
+
+// The wading player -- one soft moving obstacle, fed per frame by
+// EarthChunkManager.set_river_flow_wader. Never dries the water.
+uniform float wader_active = 0.0;
+uniform vec2 wader_pos = vec2(0.0);
+uniform float wader_reach_px = 26.0;
+uniform float wader_push = 0.3;
+uniform float wader_wake_trail = 0.8;
 uniform vec3 band0_color : source_color = vec3(0.30, 0.60, 0.66);
 uniform vec3 band1_color : source_color = vec3(0.22, 0.50, 0.62);
 uniform vec3 band2_color : source_color = vec3(0.16, 0.40, 0.56);
@@ -207,6 +215,21 @@ void fragment() {
 		float falloff = 1.0 - d / boulder_reach_px;
 		frag_across += side * boulder_push * falloff * falloff;
 		eyot_dry = min(eyot_dry, smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d));
+	}
+	// The wading player: the same radial push, softer, and stretched
+	// DOWNSTREAM -- displaced water is carried off by the current, so the
+	// wake trails behind the legs instead of ringing them symmetrically.
+	if (wader_active > 0.5) {
+		vec2 to_wader_frag = wp - wader_pos;
+		float along = dot(to_wader_frag, flow_dir);
+		float reach = wader_reach_px
+			* (1.0 + wader_wake_trail * clamp(along / wader_reach_px, 0.0, 1.0));
+		float wd = length(to_wader_frag);
+		if (wd < reach) {
+			float wside = dot(to_wader_frag, flow_perp) >= 0.0 ? 1.0 : -1.0;
+			float wfalloff = 1.0 - wd / reach;
+			frag_across += wside * wader_push * wfalloff * wfalloff;
+		}
 	}
 	float rr = abs(frag_across);
 	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
@@ -499,6 +522,14 @@ const BOULDER_REACH_PX := 40.0
 const BOULDER_PUSH := 0.5
 const BOULDER_RADIUS_PX := 11.0
 
+## The wading player as a flow obstacle: softer and smaller than a boulder
+## (legs, not a rock face), with the displacement stretched downstream by
+## the current -- WAKE_TRAIL is how much farther the reach extends directly
+## downstream (0.8 = nearly double). No eyot: a wader never dries the water.
+const WADER_REACH_PX := 26.0
+const WADER_PUSH := 0.3
+const WADER_WAKE_TRAIL := 0.8
+
 ## The organic smoothing jitter: swing (in across-fraction units, capped
 ## near one across-bin step by test -- it masks the per-tile quantisation,
 ## never reshapes the channel) and the wavelength of the world-anchored
@@ -608,6 +639,10 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("boulder_reach_px", BOULDER_REACH_PX)
 	material.set_shader_parameter("boulder_push", BOULDER_PUSH)
 	material.set_shader_parameter("boulder_radius_px", BOULDER_RADIUS_PX)
+	material.set_shader_parameter("wader_active", 0.0)
+	material.set_shader_parameter("wader_reach_px", WADER_REACH_PX)
+	material.set_shader_parameter("wader_push", WADER_PUSH)
+	material.set_shader_parameter("wader_wake_trail", WADER_WAKE_TRAIL)
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
 	material.set_shader_parameter("line_wobble", LINE_WOBBLE)
@@ -651,6 +686,25 @@ static func boulder_across_push(offset_px: Vector2, flow_perp: Vector2) -> float
 	var side := 1.0 if offset_px.dot(flow_perp) >= 0.0 else -1.0
 	var falloff := 1.0 - d / BOULDER_REACH_PX
 	return side * BOULDER_PUSH * falloff * falloff
+
+
+## The wading player's across-push at a fragment `offset_px` from the
+## wader, given the flow direction -- the CPU mirror of the shader block.
+## The reach stretches downstream (positive along-flow offsets) so the
+## wake trails behind the legs; directly upstream it is just the base
+## radial falloff, and beyond it, nothing.
+static func wader_across_push(offset_px: Vector2, flow_dir: Vector2) -> float:
+	var perp := Vector2(-flow_dir.y, flow_dir.x)
+	var along := offset_px.dot(flow_dir)
+	var reach := WADER_REACH_PX * (
+		1.0 + WADER_WAKE_TRAIL * clampf(along / WADER_REACH_PX, 0.0, 1.0)
+	)
+	var d := offset_px.length()
+	if d >= reach:
+		return 0.0
+	var side := 1.0 if offset_px.dot(perp) >= 0.0 else -1.0
+	var falloff := 1.0 - d / reach
+	return side * WADER_PUSH * falloff * falloff
 
 
 ## How dry the eyot leaves a fragment `distance_px` from the rock centre:

@@ -562,3 +562,83 @@ func test_past_a_river_tip_the_across_offset_is_radial():
 		)
 		checked += 1
 	assert_gt(checked, 2, "too few free-standing river tips to trust the sweep")
+
+
+## The across field must be CONTINUOUS between adjacent tiles, including
+## through segment corners -- found live twice as "parts of the stream are
+## mirrored and connect wrongly": at the Voronoi boundary between two
+## course segments the winning segment flips, and the hard pick jumped a
+## full tile of across mid-channel (measured 1.006 tiles at a real Dreisam
+## bend). The catalog now blends the two nearest corner-adjacent segments
+## where their distances are comparable, so the flip line carries equal
+## values from both sides.
+func test_adjacent_tiles_never_jump_across_a_segment_flip():
+	var catalog := RiverCatalog.new()
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	# The real bend that showed the artefact, plus margin.
+	var center := Vector2i(20835, 4662)
+	# The metric subtracts the EXPECTED gradient: stepping one tile
+	# perpendicular to the flow legitimately moves across by a full tile,
+	# so raw deltas cannot distinguish a seam from the channel itself. A
+	# first version of this test pinned the raw delta and failed on
+	# perfectly smooth water.
+	var worst := 0.0
+	for dy in range(-12, 13):
+		for dx in range(-12, 13):
+			var a := catalog.nearest_river_at(center.x + dx, center.y + dy, width, height)
+			if a.distance_tiles > 2.75:
+				continue
+			for offset in [Vector2i(1, 0), Vector2i(0, 1)]:
+				var b := catalog.nearest_river_at(
+					center.x + dx + offset.x, center.y + dy + offset.y, width, height
+				)
+				if b.distance_tiles > 2.75 or b.name != a.name:
+					continue
+				var radians := deg_to_rad(a.course_bearing_deg)
+				var perp := Vector2(cos(radians), sin(radians))
+				var expected := perp.dot(Vector2(offset))
+				var residual: float = absf(
+					(b.signed_across_tiles - a.signed_across_tiles) - expected
+				)
+				worst = maxf(worst, residual)
+	assert_lt(
+		worst, 0.4,
+		"adjacent same-river tiles deviate %.3f tiles from the smooth gradient" % worst
+	)
+
+
+## Where two rivers MEET, the handoff between their fields must happen at
+## equal channel depth: the winner at a name-flip boundary is whichever
+## river claims the tile DEEPER (smaller |across|), so the waterline and
+## cel bands match across the flip and no mirrored rectangle appears --
+## the artefact reported twice from the Rhine-Dreisam confluence corridor.
+func test_the_confluence_handoff_matches_depth_across_the_name_flip():
+	var catalog := RiverCatalog.new()
+	var width := EarthChunkGenerator.WORLD_WIDTH_TILES
+	var height := EarthChunkGenerator.WORLD_HEIGHT_TILES
+	var center := Vector2i(20835, 4662)
+	var flips := 0
+	var worst := 0.0
+	for dy in range(-16, 17):
+		for dx in range(-16, 17):
+			var a := catalog.nearest_river_at(center.x + dx, center.y + dy, width, height)
+			if a.distance_tiles > 2.5:
+				continue
+			for offset in [Vector2i(1, 0), Vector2i(0, 1)]:
+				var b := catalog.nearest_river_at(
+					center.x + dx + offset.x, center.y + dy + offset.y, width, height
+				)
+				if b.distance_tiles > 2.5 or b.name == a.name:
+					continue
+				flips += 1
+				worst = maxf(worst, absf(
+					absf(a.signed_across_tiles) - absf(b.signed_across_tiles)
+				))
+	if flips == 0:
+		pass_test("no wet name-flip boundary in this window")
+		return
+	assert_lt(
+		worst, 1.2,
+		"a name flip hands off with %.2f tiles of depth mismatch -- a mirrored seam" % worst
+	)

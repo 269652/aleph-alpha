@@ -1171,6 +1171,31 @@ rock never dams a river. The engineered `stone_dam` piece keeps its
 one-piece behaviour — it IS a constructed full-channel weir; loose
 boulders must genuinely span the water.
 
+## The wader's wake (2026-09-01)
+
+A player walking through the stream displaces the current the same way a
+boulder does — one soft moving obstacle, fed to the shared shader
+material every frame (position + in-water state, the same per-frame shape
+as the moonlight lift). The push is softer and smaller than a boulder's
+(legs, not a rock face: `WADER_PUSH 0.3` vs `0.5`, reach 26px vs 40px),
+and it is stretched DOWNSTREAM: displaced water is carried off by the
+current, so the wake trails behind the legs up to ~1.8× the base reach
+instead of ringing them symmetrically (`wader_across_push`, mirrored on
+CPU and pinned by `test_the_wake_trails_downstream_not_upstream`). A
+wader never dries the water — no eyot; exactly one place in the fragment
+shader may carve dry ground and it is the boulder loop (structural pin).
+Active whenever the player's mode is wading, swimming, or drowning.
+
+## Rivers on the minimap (2026-09-01)
+
+River tiles paint water-blue over whatever biome they cross
+(`MinimapRenderer`, duck-typed optional `is_river_at_global` lookup so
+biome-only sources keep working). The catalog polyline walk is too heavy
+for 81×81 queries per rebuild, so the renderer memoises answers per tile
+— rivers never move — re-querying only the freshly exposed edge when the
+window steps (`test_river_lookups_are_remembered_across_builds`), with a
+250k-tile cap so a cross-country hike cannot hold the world in memory.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1229,6 +1254,11 @@ boulders must genuinely span the water.
   untouched), and a full boulder row across the channel ponds via the
   same weir physics. Pushing/carrying an intact boulder (rather than
   building one from rock) — ⬜ Not started.
+- **The wader's wake** — ✅ Done — the wading/swimming player displaces
+  the current lines with a downstream-trailing wake (see section above);
+  never dries the channel. NPC/animal waders — ⬜ Not started.
+- **Rivers on the minimap** — ✅ Done — water-blue over any biome, memoised
+  per tile so the polyline walk never hitches the rebuild.
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —
   `river_discharge.gd` (real curated gauge data + derived width) +
   `open_channel_flow.gd` (Manning, continuity, closed-form normal depth,
