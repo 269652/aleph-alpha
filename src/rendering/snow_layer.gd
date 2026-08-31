@@ -321,13 +321,31 @@ const BLEED_NEIGHBOUR_PAD_PX := 45
 const BLEED_GROWTH_RATIO := 2.0
 
 func build_band_image(band: int, variant: int = 0) -> Image:
-	var art := TerrainRenderer.ART_TILE_SIZE
 	var clamped_band := clampi(band, 0, DEPTH_BANDS - 1)
 	var clamped_variant := clampi(variant, 0, OVERLAY_COLUMNS - 1)
-	var cropped := _cropped_cell(clamped_variant, clamped_band)
+	var image := _build_puff_image(clamped_band, clamped_variant)
+	_composite_base_beneath(image, clamped_band)
+	return image
+
+
+## The illustrated-puff pipeline alone, with no base tint composited under it
+## -- exactly what `build_band_image` returned before the base tint existed
+## (see this file's own "a continuous base tint" section below). Factored out
+## so `_composite_base_beneath` has something real to composite onto, and so
+## tests can compare the tint's effect against a real puff-only baseline (see
+## test_dusting_band_still_shows_real_transparent_gaps and
+## test_puff_detail_remains_distinguishable_over_the_base_tint in
+## test_snow_layer.gd) rather than assuming what "no base tint" would have
+## looked like.
+##
+## Takes ALREADY-CLAMPED band/variant -- build_band_image does the clamping
+## once, at the public boundary, the same way it always did.
+func _build_puff_image(band: int, variant: int) -> Image:
+	var art := TerrainRenderer.ART_TILE_SIZE
+	var cropped := _cropped_cell(variant, band)
 	if cropped.get_format() != Image.FORMAT_RGBA8:
 		cropped.convert(Image.FORMAT_RGBA8)
-	_discard_disconnected_bleed(cropped, clamped_variant, clamped_band)
+	_discard_disconnected_bleed(cropped, variant, band)
 	_feather_crop_edges(cropped, CROP_EDGE_FEATHER_PX)
 	_premultiply_alpha(cropped)
 	cropped.resize(art, art, Image.INTERPOLATE_LANCZOS)
@@ -983,3 +1001,234 @@ func band_for(depth: float, tread: float, onset_offset: float = 0.0) -> int:
 	var band := int(ceil(lying * float(DEPTH_BANDS))) - 1
 	band -= int(round(clampf(tread, 0.0, 1.0) * TREAD_BANDS))
 	return clampi(band, -1, DEPTH_BANDS - 1)
+
+
+## -- a continuous base tint beneath the puff, so tiles meet edge to edge ----
+##
+## REAL, user-visible complaint, with a screenshot: a field of piled snow
+## reads as a GRID of separate white blobs, each with a visible transparent
+## gap to its neighbours on every side, not a continuous blanket. This is a
+## real, correct description of a real architectural limit, not a bug in any
+## of the fixes above: the illustrated puff `build_band_image` crops has REAL
+## transparent padding around it within its own cell (deliberate, correct art
+## -- see OVERLAY_COLUMNS' own doc comment), so two neighbouring tiles' puffs
+## never actually touch. Every fix above (variant selection, bleed removal,
+## the flip transform) operates entirely WITHIN one puff's own crop and
+## cannot paint anything in the gap BETWEEN two tiles, because nothing is
+## painted there at all -- there is no amount of per-puff cleanup that closes
+## a gap between two SEPARATE puffs.
+##
+## The fix is a second, flat tint painted BENEATH the existing puff so a
+## tile's own coverage reaches all four of its edges, closing the gap to its
+## neighbours, while the puff keeps riding on top for real texture -- see
+## `_composite_base_beneath`.
+##
+## WHERE this lives: baked directly into `build_band_image`'s own output
+## (`_build_puff_image` + `_composite_base_beneath`, both feeding the same
+## public `build_band_image`), not a second TileMapLayer/shader painted
+## underneath, even though this codebase has real precedent for a separate
+## shader-driven overlay layer (`GroundTint`, `SeasonalFoliage`; see
+## `EarthChunkManager.set_snow_layer`'s own neighbourhood of overlay-layer
+## setters). Two things rule that precedent out here rather than confirming
+## it fits:
+##
+## 1. TESTABILITY. This project's own house convention for a canvas_item
+## shader layer is "contract tests only -- the visual result can't be
+## asserted headless" (see test_ground_tint.gd's own header comment) --
+## GUT's headless runner has no GPU pixel readback. The actual claim this
+## fix has to prove ("no fully-transparent pixel run along a shared tile
+## border", "the puff stays visually distinguishable from the base") is a
+## REAL PIXEL measurement, which only the CPU-side Image pipeline this file
+## already uses can deliver in a real, run, deterministic test rather than a
+## structural "the shader code contains this snippet" guard.
+##
+## 2. The band-driven design below (see `base_alpha_for_band`) needs no
+## per-exact-tile-POSITION value at all -- only the tile's own `band`, which
+## `build_tile_set` already bakes a fixed (DEPTH_BANDS x OVERLAY_COLUMNS)
+## atlas for. A tint that DID need a genuinely continuous, unique-per-exact-
+## position value could not be expressed by that finite, baked-once atlas
+## (`build_tile_set` bakes 100 images ONE time and every tile of a given
+## (band, variant) reuses the identical bitmap -- see that function's own
+## doc comment) without an unbounded number of baked combinations, which
+## WOULD be a real, concrete reason to prefer a shader layer instead. That
+## case does not arise here: see `base_alpha_for_band`'s own doc comment for
+## why `band` alone -- not the raw continuous depth+onset value -- is both
+## sufficient and the provably safer choice.
+##
+## Given both, baking into the existing image pipeline is not merely the
+## simpler option assumed sufficient -- it is the only one of the two that
+## can actually be verified by the tests this fix needs.
+
+
+## Cold, pale blue-white -- measured, not eyeballed: the average RGB of every
+## near-opaque (alpha > 0.9) pixel across all ten of the deepest band's real
+## built variants, i.e. the illustrated art's own real "fully covered" colour,
+## sampled directly through `build_band_image` (post-resize, the same pixels a
+## painted tile actually shows). Grounded in the real committed art rather
+## than a guessed "snowy blue-white" so the base tint reads as the SAME snow,
+## not a mismatched colour peeking out from underneath it.
+const BASE_TINT_COLOR := Color(0.68, 0.745, 0.865)
+
+## The base tint's own interior alpha at the first band beyond dusting (band
+## 1) and at the deepest band (DEPTH_BANDS - 1) -- see `base_alpha_for_band`
+## for the curve between them.
+##
+## Band 0 is deliberately excluded from this curve entirely (`base_alpha_for_
+## band(0)` returns exactly 0.0, and `_composite_base_beneath` is a no-op at
+## band 0) rather than given a very small value: band 0 is the sheet's own
+## dusting rung, and `DUSTING_MAX_MEAN_ALPHA` is already pinned specifically
+## against THIS band's own measured range (see that constant's own doc
+## comment) precisely because a dusting is snow lying in the dips with real
+## ground showing through, not a blanket -- see
+## test_dusting_band_still_shows_real_transparent_gaps. Any base alpha at
+## band 0, however small, would put a floor under band 0's own alpha and
+## remove real gaps a dusting is supposed to keep.
+##
+## Values chosen so the tint stays clearly BELOW the puff's own near-opaque
+## interior (measured: real painted puff content sits close to full alpha
+## within its own shape, see BASE_TINT_COLOR's own >0.9 sampling threshold) at
+## every band, so a base-filled gap and a puff-covered pixel remain visually
+## distinct rather than the tint approaching the puff's own opacity and
+## washing the two together -- see
+## test_puff_detail_remains_distinguishable_over_the_base_tint, which checks
+## this by real measured alpha range rather than by eye.
+const BASE_TINT_MIN_ALPHA := 0.10
+const BASE_TINT_MAX_ALPHA := 0.30
+
+## How much of the interior curve's own value survives at a tile's outer edge
+## -- see `_base_edge_alpha_for_band`. 0.5 halves the worst realistic
+## adjacent-band step at the one place two tiles' base tints actually meet
+## (their shared border), which is the whole point of feathering it at all:
+## see test_base_edge_alpha_softens_the_interior_step, which confirms this is
+## a real reduction against the SAME interior curve, not just a differently
+## shaped one.
+const BASE_EDGE_ALPHA_COMPRESSION := 0.5
+
+## How far, in ART_TILE_SIZE pixels, `_composite_base_beneath` ramps from a
+## tile's own compressed edge value in to its full interior value. 4 out of
+## ART_TILE_SIZE=32 (12.5% in from each side) gives a real, visible gradient
+## across the feather zone without eating the tile's own interior, where the
+## curve's full value is what actually needs to show through gaps in the puff
+## for the tint to read as tracking real depth rather than one flat wash.
+const BASE_EDGE_FEATHER_PX := 4
+
+
+## This band's own base tint alpha, BEFORE the per-tile edge feather in
+## `_composite_base_beneath` -- a plain linear ramp from BASE_TINT_MIN_ALPHA
+## at band 1 to BASE_TINT_MAX_ALPHA at the deepest band, climbing with depth
+## the same direction the puff's own real coverage does (see
+## test_base_alpha_increases_monotonically_from_band_1_up), and exactly 0.0 at
+## band 0 (see BASE_TINT_MIN_ALPHA's own doc comment for why that band is
+## excluded rather than merely small).
+##
+## Driven by `band` -- the SAME already-quantised value `build_band_image`
+## uses to pick the puff -- rather than the raw continuous `depth +
+## onset_offset` ("lying") value `band_for` computes on the way to it. This
+## was investigated, not assumed: `build_tile_set` bakes one fixed image per
+## (band, variant) pair ONCE and every tile of that pair reuses the identical
+## bitmap for as long as the tile set lives, so a tint that needed a
+## genuinely unique alpha per exact tile POSITION could not be baked into
+## this atlas at all -- see this section's own header comment, "WHERE this
+## lives", for the two real reasons that possibility is ruled out here rather
+## than assumed away.
+##
+## Reusing `band` is not merely convenient, it is PROVABLY safe against the
+## exact re-quantisation risk a coarser band-driven tint could otherwise
+## reintroduce: `MAX_NEIGHBOUR_ONSET_STEP` (0.07) already sits under one
+## band's own width (1.0 / DEPTH_BANDS = 0.1) -- confirmed by
+## test_worst_realistic_neighbour_band_difference_is_at_most_one, which
+## sweeps real `band_for`/`onset_offset_for` calls across a real range of
+## depths and coordinates rather than trusting the arithmetic alone -- so two
+## edge-adjacent tiles' bands can never differ by more than exactly one. The
+## worst this curve's own re-quantisation can ever cost a real tile border is
+## therefore bounded to ONE step of this curve (at most (BASE_TINT_MAX_ALPHA
+## - BASE_TINT_MIN_ALPHA) / (DEPTH_BANDS - 2) alone, before
+## `_base_edge_alpha_for_band`'s own compression shrinks it further) -- a
+## small, known, one-band-wide quantity, not an unbounded "coarser gridline"
+## risk.
+func base_alpha_for_band(band: int) -> float:
+	if band <= 0:
+		return 0.0
+	var clamped := clampi(band, 1, DEPTH_BANDS - 1)
+	if DEPTH_BANDS <= 2:
+		return BASE_TINT_MAX_ALPHA
+	var t := float(clamped - 1) / float(DEPTH_BANDS - 2)
+	return lerpf(BASE_TINT_MIN_ALPHA, BASE_TINT_MAX_ALPHA, t)
+
+
+## This band's own base alpha at a tile's OUTER EDGE, where it actually meets
+## a neighbour -- `base_alpha_for_band`'s own curve compressed toward the
+## curve's midpoint by BASE_EDGE_ALPHA_COMPRESSION, so a real step between two
+## adjacent bands (bounded to exactly one band, see `base_alpha_for_band`'s
+## own doc comment) reads as a SOFTER step right at the border than it does
+## through the tile's own interior.
+##
+## This is the "genuine edge-softening" a flat, uniform-alpha rectangle
+## cannot provide on its own: two neighbours whose interiors differ by a full
+## band's worth of curve would, painted as flat rectangles, meet at a hard,
+## perfectly straight edge -- exactly the gridline complaint this whole
+## section exists to fix, in a new form. Compressing toward the curve's own
+## midpoint (rather than toward either endpoint) keeps the reduction
+## symmetric regardless of which direction a real neighbour's band differs,
+## since a single baked tile cannot know which side a given neighbour sits on
+## -- see test_base_edge_alpha_softens_the_interior_step, which confirms the
+## resulting edge-to-edge step is measurably smaller than the interior one,
+## not merely reshaped.
+##
+## Band 0 still returns exactly 0.0 -- there is no edge to soften on a band
+## that carries no base tint at all.
+func _base_edge_alpha_for_band(band: int) -> float:
+	if band <= 0:
+		return 0.0
+	var mid := (BASE_TINT_MIN_ALPHA + BASE_TINT_MAX_ALPHA) / 2.0
+	return mid + (base_alpha_for_band(band) - mid) * BASE_EDGE_ALPHA_COMPRESSION
+
+
+## Paints `BASE_TINT_COLOR` beneath `image`'s own existing content, in place,
+## at an alpha that ramps from `_base_edge_alpha_for_band`'s compressed value
+## at the image's outer edge to `base_alpha_for_band`'s full interior value
+## over `BASE_EDGE_FEATHER_PX` pixels (same smoothstep ramp
+## `_feather_crop_edges` uses, for the same reason: a linear ramp's kinked
+## derivative rings under later resampling, though this tint is painted
+## AFTER `build_band_image`'s own Lanczos resize, so that particular risk
+## does not apply here -- smoothstep is used anyway for the same soft,
+## continuous-derivative shape).
+##
+## A no-op at band 0 (`base_alpha_for_band`/`_base_edge_alpha_for_band` both
+## return exactly 0.0 there, but this still short-circuits explicitly rather
+## than relying on that, so `test_dusting_band_still_shows_real_transparent_
+## gaps`'s byte-identical claim holds by construction rather than by a chain
+## of zeros happening to multiply out to nothing).
+##
+## Standard "puff over base" alpha compositing (source-over): wherever the
+## existing pixel is already opaque, the base contributes nothing visible
+## (`out_a` saturates at the puff's own alpha, `inv` -> 0); wherever the puff
+## is fully transparent, the pixel becomes the base tint alone at `base_a`.
+func _composite_base_beneath(image: Image, band: int) -> void:
+	if band <= 0:
+		return
+	var width := image.get_width()
+	var height := image.get_height()
+	var interior := base_alpha_for_band(band)
+	var edge := _base_edge_alpha_for_band(band)
+	for y in height:
+		var edge_distance_y := mini(y, height - 1 - y)
+		for x in width:
+			var edge_distance_x := mini(x, width - 1 - x)
+			var edge_distance := mini(edge_distance_x, edge_distance_y)
+			var t := clampf(float(edge_distance) / float(BASE_EDGE_FEATHER_PX), 0.0, 1.0)
+			var ramp := t * t * (3.0 - 2.0 * t)
+			var base_a := lerpf(edge, interior, ramp)
+			if base_a <= 0.0:
+				continue
+			var top := image.get_pixel(x, y)
+			var out_a := top.a + base_a * (1.0 - top.a)
+			if out_a <= 0.0:
+				continue
+			var inv := 1.0 - top.a
+			image.set_pixel(x, y, Color(
+				(top.r * top.a + BASE_TINT_COLOR.r * base_a * inv) / out_a,
+				(top.g * top.a + BASE_TINT_COLOR.g * base_a * inv) / out_a,
+				(top.b * top.a + BASE_TINT_COLOR.b * base_a * inv) / out_a,
+				out_a
+			))
