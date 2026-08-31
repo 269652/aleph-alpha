@@ -7361,6 +7361,39 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: wader wake** (small) — ✅ Done — "a player walking through the
+  stream should cause realistic current displacement": the shared shader
+  material now carries the player as one soft moving obstacle (position +
+  in-water state fed per frame, same shape as the moonlight lift; active
+  for wading/swimming/drowning). Softer and smaller than a boulder
+  (push 0.3 vs 0.5, reach 26 px vs 40) and stretched DOWNSTREAM up to
+  ~1.8x the base reach — displaced water is carried off by the current,
+  so the wake trails the legs instead of ringing them. CPU mirror
+  `wader_across_push` + structural pin that ONLY the boulder loop may
+  carve dry eyots (a wader never dries the channel). Shader suite 83 +
+  GPU smoke green.
+- **Rivers on the minimap** (small) — ✅ Done — river tiles paint
+  water-blue over any biome via an OPTIONAL duck-typed
+  `is_river_at_global` on the minimap's biome source (biome-only sources
+  keep working, pinned). The catalog polyline walk is too heavy for
+  81x81 queries each rebuild, so answers are memoised per tile — rivers
+  never move — and a one-tile step re-queries only the freshly exposed
+  edge (pinned: <= 2x window edge, was 6561 calls), 250k-tile cap
+  against unbounded growth on a cross-country hike. Minimap suite 10
+  green.
+- **Rivers: the across-field is smooth through corners and confluences**
+  (small) — ✅ Done — "the parts of the stream are mirrored and connect
+  wrongly": adjacent tiles could land on different polyline segments and
+  reconstruct from both sides of a sharp corner (nearest-segment
+  Voronoi flip). `nearest_river_at` now smooths across ALL of the
+  winning river's in-band segments (band-weight squared x tangent
+  agreement, radial end caps exempt so mouth/source stay round). The
+  seam TEST subtracts the expected gradient first — stepping one tile
+  perpendicular legitimately moves across by a full tile, so a raw
+  delta cannot tell a seam from the channel itself (the first draft of
+  the test failed on perfectly smooth water); plus a confluence pin at
+  the Rhine-Dreisam corridor bounding the depth mismatch where two
+  rivers' fields hand off. Catalog suite 32 green.
 - **Rivers: the bilinear across map** (large, the definitive one) — ✅
   Done — reported (third bin artefact in a row): "there are a lot of
   individual squares visible because of misalignment". Root cause was
