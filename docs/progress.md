@@ -7361,6 +7361,28 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: the full bilinear frame + forward drift + round obstacles +
+  animal waders** (large) — ✅ Done — four live reports in one round.
+  (1) "still individual square river tiles": direction (96 atlas bins,
+  per-tile) and the binary fast flag were the last per-tile inputs; the
+  flow texel is now FORMAT_RGBAF carrying across + downstream unit vector
+  + real current speed, all bilinear (`texture(TEXTURE` gone from the
+  shader, pinned). (2) "more of a forward motion": linear downstream
+  drift at DRIFT_PX_PER_MPS(9) x the texel speed; bed-anchored eddies
+  deliberately hold station; retires the half-cycle loop pin for a
+  measured travel-correlation pin. (3) "boulders/player behave like a
+  singularity": both now use the real cylinder midplane displacement
+  sqrt(lateral^2+R^2)-|lateral| (R on the stagnation line, R=11px rock /
+  6px legs), via the catalog-pinned half-width. (4) "animals should also
+  displace": wader uniform became an 8-slot array; world feeds player +
+  creature markers through a memoised river filter
+  (river_wader_positions). Fallout fixed red-first: the boulder-row crest
+  verdict now flood-fills the connected wall chain and asks if it reaches
+  both waterlines — two window-based verdicts broke against the smoothed
+  course (found live: the impound walk visited a wall tile whose window
+  slid ~0.7 tiles and the pond never formed); pinned closed from every
+  wall tile. Suites: shader 88, ponding 14, manager wader/texel 3, GPU
+  smoke 2 — all green.
 - **Rivers: wader wake** (small) — ✅ Done — "a player walking through the
   stream should cause realistic current displacement": the shared shader
   material now carries the player as one soft moving obstacle (position +

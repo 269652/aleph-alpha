@@ -118,14 +118,16 @@ func _stroke_pixel_fraction_at(world_offset: Vector2) -> float:
 	# map, so the harness builds one the way the manager does -- exact
 	# per-tile values -- and hands it to the material.
 	var side := RiverFlowShader.FLOW_MAP_TILES
-	var map_image := Image.create(side, side, false, Image.FORMAT_RF)
+	var map_image := Image.create(side, side, false, Image.FORMAT_RGBAF)
 	var origin_tile := Vector2i(world_offset / 16.0)
 	for y in range(-2, 10):
 		for x in range(-2, 10):
 			var across := (float(y) - 3.5) / 3.5 * 0.9
+			# Flow south (bearing 180): dir = (sin, -cos) = (0, 1); a real
+			# brisk current speed so the drift and fast-gate paths execute.
 			map_image.set_pixel(
 				posmod(origin_tile.x + x, side), posmod(origin_tile.y + y, side),
-				Color(across, 0.0, 0.0)
+				Color(across, 0.0, 1.0, 1.5)
 			)
 	var map_texture := ImageTexture.create_from_image(map_image)
 	flow_shader.shared_material().set_shader_parameter("flow_across_map", map_texture)

@@ -81,16 +81,21 @@ uniform float jitter_scale = 2.0;
 uniform int boulder_count = 0;
 uniform vec2 boulders[24];
 uniform float boulder_reach_px = 40.0;
-uniform float boulder_push = 0.5;
 uniform float boulder_radius_px = 11.0;
 
-// The wading player -- one soft moving obstacle, fed per frame by
-// EarthChunkManager.set_river_flow_wader. Never dries the water.
-uniform float wader_active = 0.0;
-uniform vec2 wader_pos = vec2(0.0);
+// The waders -- the player and any creatures standing in river water,
+// fed per frame by EarthChunkManager.set_river_flow_waders. Soft moving
+// obstacles that never dry the water.
+uniform int wader_count = 0;
+uniform vec2 waders[8];
 uniform float wader_reach_px = 26.0;
-uniform float wader_push = 0.3;
+uniform float wader_radius_px = 6.0;
 uniform float wader_wake_trail = 0.8;
+
+// Continuous downstream travel, px/s per m/s of real current.
+uniform float drift_px_per_mps = 9.0;
+// The real-speed threshold above which strokes brighten (m/s).
+uniform float fast_flow_m_s = 0.6;
 uniform vec3 band0_color : source_color = vec3(0.30, 0.60, 0.66);
 uniform vec3 band1_color : source_color = vec3(0.22, 0.50, 0.62);
 uniform vec3 band2_color : source_color = vec3(0.16, 0.40, 0.56);
@@ -163,11 +168,6 @@ float line_field(vec2 q, vec2 flow_dir) {
 }
 
 void fragment() {
-	vec4 data = texture(TEXTURE, UV);
-	vec2 flow_dir = normalize(data.gb * 2.0 - 1.0 + vec2(1e-6, 0.0));
-	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
-	float is_fast = step(0.5, data.a);
-
 	// PIXEL ART renders on the art-pixel grid: every sample below starts
 	// from the snapped position, so no gradient is ever smoother than one
 	// art pixel -- sub-pixel shading is what makes shader water look
@@ -185,7 +185,18 @@ void fragment() {
 	// (repeat wrapping) so chunk streaming never re-anchors the map: a
 	// loaded chunk overwrites the stale block its coordinates alias to.
 	vec2 map_uv = (wp / tile_px) / flow_map_tiles;
-	float frag_across = texture(flow_across_map, map_uv).r;
+	// The texel carries the WHOLE reconstruction frame -- across (R), the
+	// course's downstream unit vector (GB, raw signed floats) and the real
+	// solved current speed in m/s (A) -- so direction and speed interpolate
+	// between tiles exactly like across does. Per-tile direction bins and
+	// the binary fast flag were the last square-tile artefacts ("there are
+	// still individual square river tiles visible").
+	vec4 map_data = texture(flow_across_map, map_uv);
+	float frag_across = map_data.r;
+	vec2 flow_dir = normalize(map_data.gb + vec2(1e-6, 0.0));
+	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
+	float speed_mps = map_data.a;
+	float is_fast = step(fast_flow_m_s, speed_mps);
 	// THE SMOOTHING PASS ("it's still visible that the base are square
 	// tiles"): the baked across is quantized per tile, so lines, cel
 	// boundaries and the waterline all side-step together on the same
@@ -207,29 +218,48 @@ void fragment() {
 	float eyot_dry = 1.0;
 	for (int b = 0; b < boulder_count; b++) {
 		vec2 to_frag = wp - boulders[b];
+		float lateral = dot(to_frag, flow_perp);
 		float d = length(to_frag);
 		if (d >= boulder_reach_px) {
 			continue;
 		}
-		float side = dot(to_frag, flow_perp) >= 0.0 ? 1.0 : -1.0;
-		float falloff = 1.0 - d / boulder_reach_px;
-		frag_across += side * boulder_push * falloff * falloff;
+		// The REAL midplane streamline displacement around a cylinder of
+		// this radius: sqrt(lateral^2 + R^2) - |lateral|. Exactly R on the
+		// stagnation line -- the parting streamline clears the actual rock
+		// -- decaying smoothly to the sides. The old falloff-squared kick
+		// peaked at a POINT ("boulders behave like a singularity and don't
+		// have a radius around which the water flows").
+		float displaced = sqrt(lateral * lateral + boulder_radius_px * boulder_radius_px)
+			- abs(lateral);
+		float envelope = 1.0 - clamp(
+			(d - boulder_radius_px) / max(boulder_reach_px - boulder_radius_px, 0.001),
+			0.0, 1.0);
+		envelope *= envelope;
+		float side = lateral >= 0.0 ? 1.0 : -1.0;
+		frag_across += side * displaced * envelope / (half_width_tiles * tile_px);
 		eyot_dry = min(eyot_dry, smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d));
 	}
-	// The wading player: the same radial push, softer, and stretched
+	// The waders -- player AND creatures: the same round-core displacement
+	// as a boulder, softer and smaller (legs, not a rock face), stretched
 	// DOWNSTREAM -- displaced water is carried off by the current, so the
 	// wake trails behind the legs instead of ringing them symmetrically.
-	if (wader_active > 0.5) {
-		vec2 to_wader_frag = wp - wader_pos;
-		float along = dot(to_wader_frag, flow_dir);
+	for (int w = 0; w < wader_count; w++) {
+		vec2 to_frag = wp - waders[w];
+		float lateral = dot(to_frag, flow_perp);
+		float along = dot(to_frag, flow_dir);
 		float reach = wader_reach_px
 			* (1.0 + wader_wake_trail * clamp(along / wader_reach_px, 0.0, 1.0));
-		float wd = length(to_wader_frag);
-		if (wd < reach) {
-			float wside = dot(to_wader_frag, flow_perp) >= 0.0 ? 1.0 : -1.0;
-			float wfalloff = 1.0 - wd / reach;
-			frag_across += wside * wader_push * wfalloff * wfalloff;
+		float d = length(to_frag);
+		if (d >= reach) {
+			continue;
 		}
+		float displaced = sqrt(lateral * lateral + wader_radius_px * wader_radius_px)
+			- abs(lateral);
+		float envelope = 1.0 - clamp(
+			(d - wader_radius_px) / max(reach - wader_radius_px, 0.001), 0.0, 1.0);
+		envelope *= envelope;
+		float side = lateral >= 0.0 ? 1.0 : -1.0;
+		frag_across += side * displaced * envelope / (half_width_tiles * tile_px);
 	}
 	float rr = abs(frag_across);
 	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
@@ -279,9 +309,16 @@ void fragment() {
 	vec2 q = p + flow_perp * bend;
 
 	// The drag is purely DOWNSTREAM -- water is carried along the channel,
-	// never sideways across it.
-	float sample_a = line_field(q - flow_dir * (advect_strength * phase_a), flow_dir);
-	float sample_b = line_field(q - flow_dir * (advect_strength * phase_b), flow_dir);
+	// never sideways across it. On top of the bounded two-phase morph, a
+	// LINEAR drift keyed to the reach's real current speed makes the whole
+	// pattern genuinely TRAVEL ("there should be more of a forward
+	// motion") -- unbounded translation is safe because the value noise is
+	// homogeneous and its hash is fract-first at any coordinate. The bend
+	// field above deliberately does NOT drift: boils hold station over the
+	// bed while the surface pours through them.
+	float drift = TIME * drift_px_per_mps * speed_mps * noise_scale;
+	float sample_a = line_field(q - flow_dir * (advect_strength * phase_a + drift), flow_dir);
+	float sample_b = line_field(q - flow_dir * (advect_strength * phase_b + drift), flow_dir);
 	// Triangular weight: 1 at a phase's birth, 0 at its death.
 	float blend = abs(1.0 - 2.0 * phase_a);
 	float n = mix(sample_a, sample_b, blend);
@@ -519,16 +556,25 @@ const TILE_PX := 16.0
 ## across-push at the rock face (falloff-squared to zero at the reach),
 ## and the dry-eyot radius under the rock itself.
 const BOULDER_REACH_PX := 40.0
-const BOULDER_PUSH := 0.5
 const BOULDER_RADIUS_PX := 11.0
 
-## The wading player as a flow obstacle: softer and smaller than a boulder
-## (legs, not a rock face), with the displacement stretched downstream by
-## the current -- WAKE_TRAIL is how much farther the reach extends directly
-## downstream (0.8 = nearly double). No eyot: a wader never dries the water.
+## A wader as a flow obstacle: a smaller round core than a boulder (legs,
+## not a rock face), with the displacement stretched downstream by the
+## current -- WAKE_TRAIL is how much farther the reach extends directly
+## downstream (0.8 = nearly double). No eyot: a wader never dries the
+## water. Up to WADER_SLOTS waders (player + creatures) displace at once.
 const WADER_REACH_PX := 26.0
-const WADER_PUSH := 0.3
+const WADER_RADIUS_PX := 6.0
 const WADER_WAKE_TRAIL := 0.8
+const WADER_SLOTS := 8
+
+## px of world width per unit of across-fraction -- the channel half-width,
+## pinned against RiverCatalog.RIVER_HALF_WIDTH_TILES by test.
+const HALF_WIDTH_PX := 32.0
+
+## Continuous downstream pattern travel, px/s per m/s of real current --
+## linear in the reach's solved speed, pinned by drift tests.
+const DRIFT_PX_PER_MPS := 9.0
 
 ## The organic smoothing jitter: swing (in across-fraction units, capped
 ## near one across-bin step by test -- it masks the per-tile quantisation,
@@ -637,12 +683,13 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("jitter_scale", JITTER_SCALE)
 	material.set_shader_parameter("boulder_count", 0)
 	material.set_shader_parameter("boulder_reach_px", BOULDER_REACH_PX)
-	material.set_shader_parameter("boulder_push", BOULDER_PUSH)
 	material.set_shader_parameter("boulder_radius_px", BOULDER_RADIUS_PX)
-	material.set_shader_parameter("wader_active", 0.0)
+	material.set_shader_parameter("wader_count", 0)
 	material.set_shader_parameter("wader_reach_px", WADER_REACH_PX)
-	material.set_shader_parameter("wader_push", WADER_PUSH)
+	material.set_shader_parameter("wader_radius_px", WADER_RADIUS_PX)
 	material.set_shader_parameter("wader_wake_trail", WADER_WAKE_TRAIL)
+	material.set_shader_parameter("drift_px_per_mps", DRIFT_PX_PER_MPS)
+	material.set_shader_parameter("fast_flow_m_s", FAST_FLOW_M_S)
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
 	material.set_shader_parameter("line_wobble", LINE_WOBBLE)
@@ -677,15 +724,37 @@ static func depth_color(depth_fraction: float) -> Color:
 	return body.lerp(BAND_COLORS[4], clampf(sramp - 3.0, 0.0, 1.0))
 
 
-## A boulder's across-push at a fragment `offset_px` from the rock, given
-## the flow perpendicular -- the CPU mirror of the shader loop body.
-static func boulder_across_push(offset_px: Vector2, flow_perp: Vector2) -> float:
+## The round-core obstacle displacement, in px of lateral shift -- the CPU
+## mirror of both the boulder and wader shader loops. The magnitude is the
+## REAL midplane streamline displacement around a cylinder of radius R
+## (sqrt(lateral^2 + R^2) - |lateral|): exactly R on the stagnation line,
+## decaying smoothly to the sides, nonzero everywhere inside the reach --
+## an obstacle with a genuine radius, never a point spike. `wake_trail`
+## stretches the reach downstream (0 for boulders; waders trail a wake).
+static func obstacle_lateral_shift_px(
+	offset_px: Vector2, flow_perp: Vector2,
+	radius_px: float, reach_px: float, wake_trail: float
+) -> float:
+	var flow_dir := Vector2(flow_perp.y, -flow_perp.x)
+	var lateral := offset_px.dot(flow_perp)
+	var along := offset_px.dot(flow_dir)
+	var reach := reach_px * (1.0 + wake_trail * clampf(along / reach_px, 0.0, 1.0))
 	var d := offset_px.length()
-	if d >= BOULDER_REACH_PX:
+	if d >= reach:
 		return 0.0
-	var side := 1.0 if offset_px.dot(flow_perp) >= 0.0 else -1.0
-	var falloff := 1.0 - d / BOULDER_REACH_PX
-	return side * BOULDER_PUSH * falloff * falloff
+	var displaced := sqrt(lateral * lateral + radius_px * radius_px) - absf(lateral)
+	var envelope := 1.0 - clampf((d - radius_px) / maxf(reach - radius_px, 0.001), 0.0, 1.0)
+	envelope *= envelope
+	var side := 1.0 if lateral >= 0.0 else -1.0
+	return side * displaced * envelope
+
+
+## A boulder's across-push at a fragment `offset_px` from the rock, given
+## the flow perpendicular -- the round core in across-fraction units.
+static func boulder_across_push(offset_px: Vector2, flow_perp: Vector2) -> float:
+	return obstacle_lateral_shift_px(
+		offset_px, flow_perp, BOULDER_RADIUS_PX, BOULDER_REACH_PX, 0.0
+	) / HALF_WIDTH_PX
 
 
 ## The wading player's across-push at a fragment `offset_px` from the
@@ -695,16 +764,9 @@ static func boulder_across_push(offset_px: Vector2, flow_perp: Vector2) -> float
 ## radial falloff, and beyond it, nothing.
 static func wader_across_push(offset_px: Vector2, flow_dir: Vector2) -> float:
 	var perp := Vector2(-flow_dir.y, flow_dir.x)
-	var along := offset_px.dot(flow_dir)
-	var reach := WADER_REACH_PX * (
-		1.0 + WADER_WAKE_TRAIL * clampf(along / WADER_REACH_PX, 0.0, 1.0)
-	)
-	var d := offset_px.length()
-	if d >= reach:
-		return 0.0
-	var side := 1.0 if offset_px.dot(perp) >= 0.0 else -1.0
-	var falloff := 1.0 - d / reach
-	return side * WADER_PUSH * falloff * falloff
+	return obstacle_lateral_shift_px(
+		offset_px, perp, WADER_RADIUS_PX, WADER_REACH_PX, WADER_WAKE_TRAIL
+	) / HALF_WIDTH_PX
 
 
 ## How dry the eyot leaves a fragment `distance_px` from the rock centre:
@@ -868,20 +930,28 @@ static func surface_value(px: float, py: float) -> float:
 ## The whole animated pipeline at one world point (in noise cells): the
 ## standing bend, both advected phases, the crossfade. What the seam test
 ## compares across a direction-bin change.
-static func animated_field_value(px: float, py: float, dir: Vector2, time_seconds: float) -> float:
+static func animated_field_value(
+	px: float, py: float, dir: Vector2, time_seconds: float, speed_mps := 0.0
+) -> float:
 	var perp := Vector2(-dir.y, dir.x)
 	var b := bend_displacement(px * EDDY_SCALE, py * EDDY_SCALE)
 	var qx := px + perp.x * b
 	var qy := py + perp.y * b
 	var phase_a := fposmod(time_seconds * ADVECT_RATE, 1.0)
 	var phase_b := fposmod(time_seconds * ADVECT_RATE + 0.5, 1.0)
-	var sample_a := line_field_value(
-		qx - dir.x * ADVECT_STRENGTH * phase_a, qy - dir.y * ADVECT_STRENGTH * phase_a, dir
-	)
-	var sample_b := line_field_value(
-		qx - dir.x * ADVECT_STRENGTH * phase_b, qy - dir.y * ADVECT_STRENGTH * phase_b, dir
-	)
+	var drift := drift_cells(speed_mps, time_seconds)
+	var shift_a := ADVECT_STRENGTH * phase_a + drift
+	var shift_b := ADVECT_STRENGTH * phase_b + drift
+	var sample_a := line_field_value(qx - dir.x * shift_a, qy - dir.y * shift_a, dir)
+	var sample_b := line_field_value(qx - dir.x * shift_b, qy - dir.y * shift_b, dir)
 	return lerpf(sample_a, sample_b, absf(1.0 - 2.0 * phase_a))
+
+
+## How far the pattern has travelled downstream, in noise cells: linear in
+## the reach's real current speed and in time -- unbounded, because the
+## water does not loop back.
+static func drift_cells(speed_mps: float, seconds: float) -> float:
+	return DRIFT_PX_PER_MPS * speed_mps * seconds * NOISE_SCALE
 
 
 ## Mean absolute change in the field over a step of `distance`, taken either

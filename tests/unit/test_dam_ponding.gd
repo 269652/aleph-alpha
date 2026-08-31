@@ -201,6 +201,16 @@ func test_a_closed_boulder_row_ponds_the_river_upstream():
 		manager.boulder_row_blocks_at_global(river_tile.x, river_tile.y),
 		"the closed row must read as a crest"
 	)
+	# The verdict must hold from EVERY tile of the wall, not just the tile
+	# the wall was planned from: the impound walk follows the smoothed
+	# centreline, which can pass any of them (found live: the walk visited
+	# a wall tile whose own slice window had slid ~0.7 tiles downstream,
+	# traded away half the wall, and read the river as open).
+	for tile in row:
+		assert_true(
+			manager.boulder_row_blocks_at_global(tile.x, tile.y),
+			"the wall must read closed from its own tile %s" % tile
+		)
 	var ponded := manager.river_depth_meters_at_global(upstream.x, upstream.y)
 	assert_gt(
 		ponded, natural + 0.05,

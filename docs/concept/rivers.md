@@ -1196,6 +1196,58 @@ for 81×81 queries per rebuild, so the renderer memoises answers per tile
 window steps (`test_river_lookups_are_remembered_across_builds`), with a
 250k-tile cap so a cross-country hike cannot hold the world in memory.
 
+## The full bilinear frame, forward drift, round obstacles (2026-09-01)
+
+Four reports, one round:
+
+**"there are still individual square river tiles visible"** -- the across
+map fixed across, but flow DIRECTION still rode the atlas texel (96
+quantized bins, constant per tile) and speed was a binary per-tile flag.
+Both fed the advected noise, so strokes broke at every bearing or speed
+change. The flow texel is now FORMAT_RGBAF and carries the whole
+reconstruction frame -- R across, GB the course's downstream unit vector,
+A the real solved current speed (m/s) -- all interpolated bilinearly by
+the sampler. The atlas sprite is now only the painted canvas; the shader
+never samples it (`texture(TEXTURE` absent, pinned). Painted apron texels
+carry their reach's real bearing/speed too, so bank-adjacent blends stay
+sane (bank speed dilutes toward zero -- banks ARE slower).
+
+**"there should be more of a forward motion"** -- the two-phase advection
+morphs but never travels. A linear drift term now translates the sampled
+noise domain downstream at `DRIFT_PX_PER_MPS (9) x` the texel's real
+current speed -- the Rhine at 2.2 m/s visibly travels ~1.2 tiles/s, a
+sluggish lower course crawls. The bed-anchored eddy field deliberately
+does NOT drift (boils hold station; the surface pours through them). This
+retires the half-cycle loop contract -- a pattern that loops in place
+cannot also travel; the new pin measures that the t+dt field correlates
+better with the t field sampled a drift-length upstream than with itself
+in place. Unbounded TIME translation is safe because the noise hash is
+fract-first at any coordinate (the Basel lesson).
+
+**"player and boulders behave like a singularity and don't have a radius"**
+-- the falloff-squared push peaked at a point. Both boulders and waders
+now displace via the real cylinder midplane streamline shift:
+`sqrt(lateral^2 + R^2) - |lateral|` -- exactly R on the stagnation line
+(the parting streamline clears the actual rock/legs), decaying smoothly,
+nonzero everywhere inside the reach, converted to across-fraction through
+the channel's real half-width. Boulders R=11px, waders R=6px.
+
+**"animals should also cause water displacement like the player"** -- the
+single wader uniform became an array (8 slots): world.gd hands the player
+plus every creature marker to `river_wader_positions`, which memoises a
+per-tile river lookup and keeps only candidates actually standing in
+river water; survivors reach the shader each frame and part the current
+with the same round core and downstream-trailing wake.
+
+**Crest closure is now the wall itself** -- the boulder-row verdict
+flood-fills the connected chain of blocked wet tiles from seeds near the
+asked course position and asks whether the CHAIN reaches both waterlines
+(one tile footprint short of the bank line). Two window-based versions
+broke against the smoothed course -- what falls in a window is an
+accident of the asking tile's bearing -- and adjacency doubles as the
+watertightness rule: a one-tile hole breaks the chain. Pinned from every
+tile of the wall by test.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1254,9 +1306,9 @@ window steps (`test_river_lookups_are_remembered_across_builds`), with a
   untouched), and a full boulder row across the channel ponds via the
   same weir physics. Pushing/carrying an intact boulder (rather than
   building one from rock) — ⬜ Not started.
-- **The wader's wake** — ✅ Done — the wading/swimming player displaces
-  the current lines with a downstream-trailing wake (see section above);
-  never dries the channel. NPC/animal waders — ⬜ Not started.
+- **The wader's wake** — ✅ Done — player AND creatures (8 slots, river
+  filter memoised) displace the current with a round-core,
+  downstream-trailing wake; never dries the channel.
 - **Rivers on the minimap** — ✅ Done — water-blue over any biome, memoised
   per tile so the polyline walk never hitches the rebuild.
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —
