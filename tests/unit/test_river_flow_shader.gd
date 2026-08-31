@@ -1119,3 +1119,20 @@ func test_the_shader_lifts_strokes_by_the_night_uniform():
 
 func test_the_night_lift_defaults_to_day():
 	assert_eq(flow.shared_material().get_shader_parameter("night_lift"), 0.0)
+
+
+## The float32 landmine, pinned structurally: the classic sin-based hash
+## collapses under float32 range reduction at this game's world
+## coordinates (~millions of radians into sin), going regionally
+## near-constant -- whole reaches lost their current strokes while every
+## float64 CPU mirror statistic still passed. The GPU-side proof lives in
+## test_river_flow_render_smoke.gd; this keeps the hash trig-free.
+func test_the_hash_is_trig_free_for_float32_world_coordinates():
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("43758.5453"),
+		"the sin-hash magic number is back"
+	)
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("sin(dot("),
+		"no hash may run world-scale values through sin"
+	)

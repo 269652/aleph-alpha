@@ -7345,6 +7345,23 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: the float32 hash landmine** (small, nasty) — ✅ Done — the
+  daylight report "No currents visible in game at long straight sections"
+  finally exposed a bug NO CPU mirror could catch: the classic
+  sine-times-large-constant lattice hash feeds float32 sin ~4.6 million
+  radians at this world's coordinates (Basel: world_pos ~334,000 px), GPU
+  range-reduction collapses, the hash goes regionally near-constant, the
+  field rails, and whole reaches lose every contour stroke -- while all
+  float64 mirror statistics pass. PROVEN by a new real-GPU test that
+  renders the shared material at the exact Basel coordinates, reads the
+  frame back, and counts stroke pixels (control at origin): red measured
+  0.3% at Basel vs a healthy origin; green after swapping to a trig-free
+  Hoskins-style hash (fract-first keeps every intermediate small at any
+  coordinate). Structural pin keeps the hash trig-free -- worded so a
+  COMMENT cannot trip it, the comment-vs-code trap the old no-smoothstep
+  test fell into. Turbulence re-tuned to the new hash distribution
+  (strength 1.6, detail 0.7) against the same measured pins. Shader suite
+  73 + both GPU tests green.
 - **Rivers: moonlit strokes at night** (small) — ✅ Done — the decisive
   observation: the world clock follows the REAL clock, so an evening
   player lives in permanent in-game night, and every "no current lines"

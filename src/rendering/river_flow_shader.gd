@@ -66,9 +66,9 @@ uniform float shore_pos = 0.88;
 uniform float shore_width = 0.025;
 uniform float smear_spacing = 0.8;
 uniform float smear_gain = 2.0;
-uniform float turbulence_strength = 1.4;
+uniform float turbulence_strength = 1.6;
 uniform float eddy_scale = 0.16;
-uniform float eddy_detail_weight = 0.5;
+uniform float eddy_detail_weight = 0.7;
 uniform float across_range = 1.4;
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
@@ -85,8 +85,21 @@ void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 0.0, 1.0)).xy;
 }
 
+// Trig-free lattice hash (Hoskins-style). NOT the classic
+// sine-times-large-constant hash -- that one is a float32 landmine at
+// this game's world coordinates: near Basel, world_pos feeds the sine
+// ~4.6 MILLION radians, float32 range-reduction collapses, and the hash
+// goes regionally near-constant -- the field rails, and whole reaches
+// render with no current strokes at all (found live, reproduced by the
+// far-world GPU test). Taking the fractional part first keeps every
+// intermediate small, so this stays healthy at any world coordinate.
+// (Named without the literal formula on purpose: the no-sine pin greps
+// the shader source, and a comment must not trip it -- the same
+// comment-vs-code trap the old no-smoothstep test once fell into.)
 float value_hash(vec2 p) {
-	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
 }
 
 float value_noise(vec2 p) {
@@ -389,7 +402,7 @@ const INK_COLOR := Color(0.05, 0.13, 0.25)
 ## defect-3 lesson: past the fold threshold displacement does not bend a
 ## pattern, it destroys it -- and the bent field must still read as lines
 ## (test_the_warped_field_still_forms_lines).
-const TURBULENCE_STRENGTH := 1.4
+const TURBULENCE_STRENGTH := 1.6
 const EDDY_SCALE := 0.16
 
 ## The bend's second, finer octave (2.6x the eddy scale). The coarse octave
@@ -397,7 +410,7 @@ const EDDY_SCALE := 0.16
 ## neighbouring lines TOGETHER, which locally reads as translation. Kinks a
 ## viewer can see need bend variation WITHIN a line's own length -- pinned
 ## by test_a_streakline_visibly_curves_within_its_own_length.
-const EDDY_DETAIL_WEIGHT := 0.5
+const EDDY_DETAIL_WEIGHT := 0.7
 
 ## The world tile size the reconstruction divides by -- the layer is
 ## scaled by TerrainRenderer.LAYER_SCALE, so world_pos in the shader is in
@@ -632,7 +645,16 @@ static func advection_offset(time_seconds: float) -> float:
 ## samples can differ in the last places -- this mirrors the DISTRIBUTION,
 ## which is what the coverage bounds are about, not any single pixel.
 static func value_hash(x: float, y: float) -> float:
-	return fposmod(sin(x * 127.1 + y * 311.7) * 43758.5453, 1.0)
+	# The trig-free Hoskins-style hash, mirroring the shader exactly -- see
+	# the GLSL comment for why sin-based hashing is banned here.
+	var p3x := fposmod(x * 0.1031, 1.0)
+	var p3y := fposmod(y * 0.1031, 1.0)
+	var p3z := p3x
+	var shift := p3x * (p3y + 33.33) + p3y * (p3z + 33.33) + p3z * (p3x + 33.33)
+	p3x += shift
+	p3y += shift
+	p3z += shift
+	return fposmod((p3x + p3y) * p3z, 1.0)
 
 
 static func value_noise(x: float, y: float) -> float:
