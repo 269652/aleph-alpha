@@ -596,6 +596,42 @@ new `test_painted_snow_tiles_carry_a_real_per_tile_transform` in
 first. See `docs/progress.md`'s own ninth-follow-up entry for the full
 measurement trail.
 
+**Tenth follow-up: reported live, with a screenshot, after the flip-transform
+fix above landed -- "the bigger the snow tiles get the wronger they become,"
+alongside two unrelated near-black diamond-shaped patches in the same
+shot.** Residual cross-cell bleed at the highest bands (7/8/9) was checked
+directly and ruled out -- 29 of the 30 real tiles in that range resolve to a
+single connected component through the exact same tooling
+`_discard_disconnected_bleed` uses, and the one exception's stray fragment is
+a negligible 2.6% of its own dominant blob. The real defect was
+`transform_for` itself: it included `TRANSFORM_FLIP_V` alongside `FLIP_H`,
+reasoning ("a mirrored mound is still a mound") that in fact only holds for a
+LEFT-RIGHT mirror. A fresh top/bottom alpha-mass sweep across every band
+found real, substantial, per-band-consistent asymmetry from band 1 up, with
+the direction flipping partway through the ladder -- bottom-heavy through
+band 8, then dramatically TOP-heavy at band 9 (up to 69.5x, worse than the
+30x already known when `TRANSPOSE` was excluded). `FLIP_V` inverts exactly
+that axis: a rendered side-by-side confirmed band-9 tiles flipped vertically
+read as a visibly smaller, sparser patch adrift from the tile's bottom edge,
+not the same mound facing the other way -- so the very tiles meant to show
+the FULLEST cover were the ones the flip damaged most, which is the report in
+one sentence. Fixed by dropping `FLIP_V` (and `FLIP_H|FLIP_V`) from
+`transform_for`'s combinations, leaving identity and `FLIP_H` -- excluded for
+the same class of reason `TRANSPOSE` already was. Left/right asymmetry was
+checked too and stayed comparatively safe (an order of magnitude milder,
+consistently one direction), so `FLIP_H` alone remains.
+The two dark diamond-shaped patches were investigated separately and ruled
+OUT as snow-related: a pixel scan of all 100 real tiles, raw and fully
+built, found zero pixels anywhere in the sheet with substantial opacity and
+near-black colour. Snow is definitively not their source; the most plausible
+in-codebase candidate is the hillshade terrain-relief overlay (a genuine
+translucent black overlay keyed to real slope, known to darken land sharply
+near water -- see the rivers section's "Flow overlay invisible in live play"
+entry above), but this is circumstantial and was not chased further here --
+flagged as a separate, out-of-scope finding rather than fixed. See
+`docs/progress.md`'s own tenth-follow-up entry for the full measurement
+trail.
+
 ### Status
 
 - ✅ Snow instead of rain below freezing, falling white, slow, and as FLECKS
@@ -629,15 +665,16 @@ measurement trail.
   land on the same illustrated picture at the highest coverage bands don't
   paint as an obviously grid-aligned repeating "wallpaper" — see the ninth
   follow-up in the narrative above. `SnowLayer.transform_for` picks one of
-  four flip combinations (identity/flip_h/flip_v/both, deliberately
-  excluding `TRANSFORM_TRANSPOSE`), seeded independently of band and variant
-  (own salt, `_TRANSFORM_SALT`), and painted directly as the TileMapLayer
-  cell's own `alternative_tile` — confirmed against a real Godot 4.7
-  `TileSetAtlasSource`/`TileMapLayer` that no `create_alternative_tile`
-  registration is needed for a raw flip-bit value; wired in
-  `EarthChunkManager._paint_snow_tile` and cached per tile
-  (`_snow_transform_by_tile`) the same way onset and variant already are;
-  tested.
+  TWO flip combinations (identity/flip_h only — `TRANSFORM_FLIP_V` and
+  `TRANSFORM_TRANSPOSE` are both deliberately excluded; see the tenth
+  follow-up above for why `FLIP_V` was dropped after shipping), seeded
+  independently of band and variant (own salt, `_TRANSFORM_SALT`), and
+  painted directly as the TileMapLayer cell's own `alternative_tile` —
+  confirmed against a real Godot 4.7 `TileSetAtlasSource`/`TileMapLayer`
+  that no `create_alternative_tile` registration is needed for a raw
+  flip-bit value; wired in `EarthChunkManager._paint_snow_tile` and cached
+  per tile (`_snow_transform_by_tile`) the same way onset and variant
+  already are; tested.
 - ✅ Per-tile onset variance, so a field fills in as a visible spread rather
   than snapping everywhere at once — `SnowLayer.ONSET_VARIANCE`/
   `onset_offset_for`/`band_for`, tested; wired in

@@ -445,17 +445,73 @@ func test_neighbouring_tiles_often_show_different_variants():
 # independent of which variant/band is shown (see transform_for's own doc
 # comment).
 #
-# Only flip_h, flip_v, and flip_h+flip_v are used -- NOT transpose. Checked
-# directly by rendering real built tiles (band 9's own "puff nearly filling
-# the cell" shapes) through all four orthogonal-group members: transpose
-# visibly distorts a wide, roughly-oval mound into a tall, narrow one --
-# rotating a shape's own aspect ratio is a much bigger, more obviously wrong
-# change than mirroring it, and several bands' own real content is not
+# Only flip_h, flip_v, and flip_h+flip_v were used at first -- NOT transpose.
+# Checked directly by rendering real built tiles (band 9's own "puff nearly
+# filling the cell" shapes) through all four orthogonal-group members:
+# transpose visibly distorts a wide, roughly-oval mound into a tall, narrow
+# one -- rotating a shape's own aspect ratio is a much bigger, more obviously
+# wrong change than mirroring it, and several bands' own real content is not
 # top/bottom symmetric (band 9's built tiles measure top-half alpha mass
 # roughly 30x their own bottom half, e.g. variant 0: 363.7 vs 10.3) in a way
 # a simple flip preserves (a mirrored mound is still a mound) but a
 # transpose does not (it turns "wide, short at the bottom" into "tall,
 # narrow on one side").
+#
+# FOLLOW-UP (vertical flip removed too): reported live, with a screenshot,
+# after the flip-transform fix above had already shipped -- "the bigger the
+# snow tiles get the wronger they become". Investigated directly rather than
+# assumed:
+#
+# 1. NOT a residual-bleed regression -- rendering all 30 real (band,variant)
+#    tiles at bands 7/8/9 through the current pipeline and running the same
+#    connected-component tooling `_discard_disconnected_bleed` itself uses
+#    finds 29 of 30 with a single component; the one exception
+#    (band=8,variant=4) has a stray fragment only 2.6% the size of its own
+#    dominant blob, far under any real flag threshold. Bleed removal at
+#    these bands is clean.
+#
+# 2. IS a real defect in transform_for's own vertical flip. The original
+#    TRANSPOSE exclusion above was justified by real top/bottom asymmetry
+#    (band 9's ~30x figure), but that same asymmetry evidence was only ever
+#    checked against transpose, never against FLIP_V -- the one transform
+#    that inverts top and bottom. A fresh sweep of top/bottom alpha-mass
+#    ratio through build_band_image, EVERY band, all 10 variants each, finds
+#    real, substantial, per-band-CONSISTENT asymmetry everywhere except band
+#    0 (worst deviation-from-1 by band: 3.34, 6.86, 9.24, 2.53, 26.25, 9.27,
+#    3.22, 2.38, 5.44, 69.51 for bands 0-9) -- and the DIRECTION flips
+#    partway through the ladder: bands 1-8 are bottom-heavy (content
+#    anchored low, tapering upward -- a mound resting on the ground), while
+#    band 9 is dramatically TOP-heavy (up to 69.5x), the one band whose
+#    content is known to press UP past its own cell into row 8 (see
+#    build_band_image's own EDGE FEATHER doc comment). A rendered
+#    side-by-side of real band 7/8/9 tiles through all four transforms
+#    confirms this by eye: FLIP_H siblings both still read as the same
+#    coherent mound facing a different way (the "still a mound" case the
+#    original TRANSPOSE exclusion described), but FLIP_V siblings at band 9
+#    read as a visibly SMALLER, sparser patch floating away from the bottom
+#    of the tile with an empty gap above it -- not "the same mound facing
+#    the other way" but a mound that no longer reads as full, deep coverage.
+#    That is exactly what "the bigger the snow tiles get, the wronger they
+#    become" describes: the tiles meant to show the FULLEST cover are the
+#    ones a vertical flip damages most, and the damage scales with how
+#    asymmetric that band's real content is -- worst at band 9, the deepest
+#    band.
+#
+#    Left/right asymmetry was checked the same way and is comparatively
+#    safe to keep (worst deviation-from-1 by band: 6.43, 4.98, 3.65, 4.04,
+#    2.59, 2.74, 2.73, 2.50, 1.95, 1.68 for bands 0-9) -- an order of
+#    magnitude milder than top/bottom's worst case, consistently in ONE
+#    direction (content generally sits right-of-centre at every band, not a
+#    "must face this way" ground-anchoring the way vertical position is),
+#    and confirmed by the same rendered comparison to stay a coherent,
+#    still-a-mound shape under FLIP_H at every band checked.
+#
+#    Fix: TRANSFORM_FLIP_V and TRANSFORM_FLIP_H|TRANSFORM_FLIP_V are dropped
+#    from transform_for's combinations, leaving identity and FLIP_H only --
+#    two safe orientations instead of four, excluded for the same kind of
+#    reason TRANSPOSE was already excluded down to zero: a flip that
+#    inverts a shape's own real, ground-anchored orientation reads as
+#    broken, not just "facing a different way".
 const _TRANSFORM_FLIP_H := 4096  # TileSetAtlasSource.TRANSFORM_FLIP_H
 const _TRANSFORM_FLIP_V := 8192  # TileSetAtlasSource.TRANSFORM_FLIP_V
 const _TRANSFORM_TRANSPOSE := 16384  # TileSetAtlasSource.TRANSFORM_TRANSPOSE
@@ -471,23 +527,66 @@ func test_transform_matches_the_engines_own_flip_constants():
 	assert_eq(_TRANSFORM_TRANSPOSE, TileSetAtlasSource.TRANSFORM_TRANSPOSE)
 
 
-func test_transform_is_one_of_the_four_flip_combinations_and_never_transposes():
+func test_transform_is_one_of_the_two_safe_flip_combinations():
 	var valid := [
 		0,
 		_TRANSFORM_FLIP_H,
-		_TRANSFORM_FLIP_V,
-		_TRANSFORM_FLIP_H | _TRANSFORM_FLIP_V,
 	]
 	for x in range(40):
 		var transform := layer.transform_for(x, -x * 5 + 2)
 		assert_true(
 			valid.has(transform),
-			"transform_for returned %d, not one of the four meaningful flip combinations %s" % [transform, valid]
+			"transform_for returned %d, not one of the two safe combinations %s" % [transform, valid]
 		)
 		assert_eq(
 			transform & _TRANSFORM_TRANSPOSE, 0,
 			"transform_for set the TRANSPOSE bit -- excluded deliberately, see this section's own doc comment"
 		)
+
+
+## Direct regression driver for the "bigger snow tiles get wronger" report --
+## see this section's own FOLLOW-UP doc comment above for the full
+## measurement. TRANSFORM_FLIP_V inverts top and bottom, which every band
+## from 1-9's real content asymmetry makes unsafe (worst case: band 9 at up
+## to 69.5x), so transform_for must never set that bit, regardless of which
+## combination it picks it from.
+func test_transform_never_flips_vertically():
+	for x in range(-80, 80):
+		for y in range(-15, 15):
+			var transform := layer.transform_for(x, y)
+			assert_eq(
+				transform & _TRANSFORM_FLIP_V, 0,
+				(
+					"transform_for(%d, %d) = %d sets the vertical flip bit -- " +
+					"excluded, see this section's own FOLLOW-UP doc comment"
+				) % [x, y, transform]
+			)
+
+
+## Pins the actual measured top/bottom alpha-mass asymmetry that justifies
+## excluding FLIP_V -- see this section's own FOLLOW-UP doc comment for the
+## full per-band figures this reproduces the worst two of. Guards against a
+## future re-tuning silently re-adding FLIP_V once the numbers backing this
+## exclusion are only prose nobody re-checks.
+func test_band_9_content_is_severely_top_bottom_asymmetric():
+	var ratio := _top_bottom_ratio(layer.build_band_image(9, 0))
+	assert_gt(
+		ratio, 10.0,
+		"band 9 variant 0's top/bottom alpha-mass ratio (%.2f) is no longer severely asymmetric -- re-check whether FLIP_V is still unsafe to re-add" % ratio
+	)
+
+
+func _top_bottom_ratio(image: Image) -> float:
+	var top := 0.0
+	var bottom := 0.0
+	for y in image.get_height():
+		for x in image.get_width():
+			var a: float = image.get_pixel(x, y).a
+			if y < image.get_height() / 2:
+				top += a
+			else:
+				bottom += a
+	return top / bottom if bottom > 0.001 else INF
 
 
 func test_transform_is_deterministic_for_the_same_tile():
