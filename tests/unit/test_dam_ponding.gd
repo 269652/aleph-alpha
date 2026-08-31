@@ -13,6 +13,7 @@ const EarthChunkManager = preload("res://src/world/earth_chunk_manager.gd")
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
 
 var tile_map_layer: TileMapLayer
 var entities_parent: Node2D
@@ -132,3 +133,85 @@ func test_a_dam_away_from_any_river_ponds_nothing():
 		return  # geographic accident; nothing to prove here
 	manager.build_at_global(dry.x, dry.y, "stone_dam")
 	assert_eq(manager.river_depth_meters_at_global(dry.x, dry.y), 0.0)
+
+
+# -- boulders shape the flow (see docs/concept/rivers.md) ---------------------
+
+func _nearest_at(tile: Vector2i) -> Dictionary:
+	return manager.generator.river_catalog().nearest_river_at(
+		tile.x, tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+
+
+## Every wet tile in the channel cross-section -- the manager owns the
+## slice (see wet_row_tiles_at_global) so the test builds boulders on
+## exactly the tiles the crest check will inspect.
+func _wet_row_through(tile: Vector2i) -> Array:
+	return manager.wet_row_tiles_at_global(tile.x, tile.y)
+
+
+## A dropped boulder rails its own tile past the waterline -- a dry eyot
+## the water parts around -- and pushes a neighbouring tile's baked across
+## away from itself.
+func test_a_dropped_boulder_makes_an_eyot_and_deflects_its_neighbours():
+	var before := manager.flow_across_fraction_at(
+		river_tile.x, river_tile.y, _nearest_at(river_tile)
+	)
+	assert_lt(absf(before), 1.0, "precondition: the fixture tile is wet")
+	assert_true(manager.build_at_global(river_tile.x, river_tile.y, "boulder"))
+	var after := manager.flow_across_fraction_at(
+		river_tile.x, river_tile.y, _nearest_at(river_tile)
+	)
+	assert_gte(absf(after), 1.0, "the boulder tile must rail past the waterline")
+
+	var neighbour := Vector2i(river_tile.x + 1, river_tile.y)
+	var neighbour_nearest := _nearest_at(neighbour)
+	var neighbour_across := manager.flow_across_fraction_at(
+		neighbour.x, neighbour.y, neighbour_nearest
+	)
+	var neighbour_base: float = (
+		neighbour_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+	)
+	assert_ne(neighbour_across, neighbour_base, "a touching neighbour must be deflected")
+
+
+## One rock never dams a river: a partial row is not a crest and raises no
+## pool.
+func test_a_partial_boulder_row_does_not_pond():
+	var upstream := manager.upstream_river_tile(river_tile, 2)
+	var natural := manager.river_depth_meters_at_global(upstream.x, upstream.y)
+	assert_true(manager.build_at_global(river_tile.x, river_tile.y, "boulder"))
+	assert_false(
+		manager.boulder_row_blocks_at_global(river_tile.x, river_tile.y),
+		"one boulder must not read as a closed row"
+	)
+	assert_almost_eq(
+		manager.river_depth_meters_at_global(upstream.x, upstream.y), natural, 0.0001,
+		"a single boulder must not pond the river"
+	)
+
+
+## THE feature: close the row -- a boulder on every wet tile across the
+## channel -- and the pool rises upstream, from the same real weir physics
+## the stone_dam uses.
+func test_a_closed_boulder_row_ponds_the_river_upstream():
+	var upstream := manager.upstream_river_tile(river_tile, 2)
+	var natural := manager.river_depth_meters_at_global(upstream.x, upstream.y)
+	var row := _wet_row_through(river_tile)
+	assert_gte(row.size(), 2, "expected a real multi-tile wet row to close")
+	for tile in row:
+		if not manager.flow_boulder_at_global(tile.x, tile.y):
+			assert_true(
+				manager.build_at_global(tile.x, tile.y, "boulder"),
+				"failed to drop a boulder at %s" % tile
+			)
+	assert_true(
+		manager.boulder_row_blocks_at_global(river_tile.x, river_tile.y),
+		"the closed row must read as a crest"
+	)
+	var ponded := manager.river_depth_meters_at_global(upstream.x, upstream.y)
+	assert_gt(
+		ponded, natural + 0.05,
+		"the closed row must pond the river (%.3f m -> %.3f m)" % [natural, ponded]
+	)

@@ -43,6 +43,7 @@ const PIECE_IDS: Array[String] = [
 	# Water infrastructure (see docs/concept/rivers.md). Appended, not
 	# interleaved, per this file's existing convention.
 	"stone_dam",
+	"boulder",
 ]
 
 ## Per-piece definition.
@@ -161,6 +162,17 @@ const _PIECES := {
 		"category": CATEGORY_DAM, "material": MATERIAL_STONE,
 		"encloses": true, "walkable": false, "durability": 140.0,
 		"cost": {"rock": 6}, "support_capacity": 0.0,
+	},
+	# A dropped boulder: quarried rock stacked into a boulder-sized cairn
+	# where you stand -- how "dropping boulders into the river" is built.
+	# Cheaper per tile than the engineered stone_dam because one boulder is
+	# a rock in the water, not a constructed weir: it deflects the flow and
+	# raises an eyot, but ponding a river takes a full ROW of them across
+	# the channel (see docs/concept/rivers.md "Boulders shape the flow").
+	"boulder": {
+		"category": CATEGORY_DAM, "material": MATERIAL_STONE,
+		"encloses": false, "walkable": false, "durability": 180.0,
+		"cost": {"rock": 4}, "support_capacity": 0.0,
 	},
 }
 

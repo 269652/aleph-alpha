@@ -75,6 +75,8 @@ uniform float across_range = 1.4;
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
 uniform float bank_feather = 0.03;
+uniform float across_jitter = 0.075;
+uniform float jitter_scale = 3.2;
 uniform vec3 band0_color : source_color = vec3(0.30, 0.60, 0.66);
 uniform vec3 band1_color : source_color = vec3(0.22, 0.50, 0.62);
 uniform vec3 band2_color : source_color = vec3(0.16, 0.40, 0.56);
@@ -169,6 +171,15 @@ void fragment() {
 	vec2 delta_tiles = (wp - cell_center) / tile_px;
 	float frag_across = (data.r * 2.0 - 1.0) * across_range
 		+ dot(delta_tiles, flow_perp) / half_width_tiles;
+	// THE SMOOTHING PASS ("it's still visible that the base are square
+	// tiles"): the baked across is quantized per tile, so lines, cel
+	// boundaries and the waterline all side-step together on the same
+	// straight lattice edges. This jitter is WORLD-anchored -- continuous
+	// across every tile boundary -- so it owes nothing to the grid and
+	// turns each systematic step into organic raggedness, for every
+	// consumer of frag_across at once. Its swing is capped near one
+	// quantisation step by test: a mask, never a reshaping.
+	frag_across += (value_noise(wp * noise_scale * jitter_scale) - 0.5) * across_jitter;
 	float rr = abs(frag_across);
 	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
 
@@ -442,6 +453,14 @@ const EDDY_DETAIL_WEIGHT := 0.7
 ## wrong doubles or halves every reconstructed offset.
 const TILE_PX := 16.0
 
+## The organic smoothing jitter: swing (in across-fraction units, capped
+## near one across-bin step by test -- it masks the per-tile quantisation,
+## never reshapes the channel) and the wavelength of the world-anchored
+## noise that drives it (in multiples of the base field scale; a few
+## pixels -- finer than a current line, coarser than an art pixel).
+const ACROSS_JITTER := 0.075
+const JITTER_SCALE := 3.2
+
 ## Half-width of the waterline's feather, in across-fraction units. Small
 ## since the comic pass: the ink line lives right at the bank, and a wide
 ## feather rendered it at half opacity -- a washed-out outline instead of
@@ -537,6 +556,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
 	material.set_shader_parameter("tile_px", TILE_PX)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
+	material.set_shader_parameter("across_jitter", ACROSS_JITTER)
+	material.set_shader_parameter("jitter_scale", JITTER_SCALE)
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
 	material.set_shader_parameter("line_wobble", LINE_WOBBLE)

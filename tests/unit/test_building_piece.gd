@@ -242,3 +242,19 @@ func test_the_stone_dam_is_as_durable_as_other_stone_work():
 ## collapses it for a reason that has nothing to do with dams.
 func test_the_stone_dam_is_not_load_bearing():
 	assert_false(BuildingPiece.is_load_bearing("stone_dam"))
+
+
+## "Dropping a boulder into the river": stacking quarried rock into a
+## boulder-sized cairn where you stand -- a real building piece, so it
+## persists, occupies its tile, and can be placed in water like the dam.
+## Cheaper than the engineered stone_dam per tile, because one boulder is
+## a rock in the water, not a constructed weir -- ponding needs a whole
+## row of them (see test_dam_ponding.gd).
+func test_the_droppable_boulder_is_a_dam_category_stone_piece():
+	assert_true(BuildingPiece.has_piece("boulder"))
+	assert_eq(BuildingPiece.category_of("boulder"), BuildingPiece.CATEGORY_DAM)
+	assert_eq(BuildingPiece.material_of("boulder"), BuildingPiece.MATERIAL_STONE)
+	assert_false(BuildingPiece.is_walkable("boulder"))
+	var cost := BuildingPiece.cost_of("boulder")
+	assert_true(cost.has("rock"))
+	assert_lt(int(cost["rock"]), int(BuildingPiece.cost_of("stone_dam")["rock"]))

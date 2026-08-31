@@ -1134,6 +1134,43 @@ amorphous drifting patches: vapour. Illustrated water is the opposite:
 - Glint and foam are folded into the stroke families; the smear taps are
   triangle-weighted (outer taps pay the most at a direction-bin change).
 
+## Boulders shape the flow (2026-08-31)
+
+Requested directly: *"boulders that are layed in or exist from the
+beginning should properly affect path and flow of the water so that it's
+possible to build a pond by dropping boulders into the river"*. Two
+mechanisms, both riding systems that already exist:
+
+**An in-channel boulder is a flow obstacle.** Two kinds, one predicate:
+- *natural*: the procedural stone roll (`StonePlacement.has_stone_at` +
+  `StoneSize.class_for`) lands a boulder-class stone on a river tile —
+  these have always spawned mid-river; now the water knows about them
+- *dropped*: a new `boulder` BuildingPiece (category DAM, built from
+  quarried rock — "dropping a boulder" is stacking your rock into a
+  boulder-sized cairn where you stand). Persists exactly like every other
+  building modification.
+
+**Visual: the water parts around the rock.** Entirely through the baked
+per-tile across-offset — the shader is untouched. Each painted tile's
+across is pushed AWAY from nearby boulder tiles
+(`DamImpoundment.obstacle_across_shift`, linear falloff over ~2.5 tiles),
+and the boulder's own tile is railed past the waterline
+(`DamImpoundment.eyot_across`, beyond 1 + the bank feather by test): the
+boulder becomes a dry eyot, the waterline necks around it, and the guided
+current lines bend past — streamlines around an obstacle, from the same
+reconstruction that draws everything else.
+
+**Mechanical: a boulder row is a crest.** The impoundment walk (the same
+one `stone_dam` uses, with the same real weir head and backwater falloff)
+now also recognises a course position where EVERY wet tile across the
+channel holds a flow boulder — placed, natural, or a mix. Drop boulders
+until the row closes and the pool rises upstream: a pond, from the
+existing dam physics. A partial row deflects but does not pond
+(`test_a_partial_boulder_row_does_not_pond`), so a single mid-channel
+rock never dams a river. The engineered `stone_dam` piece keeps its
+one-piece behaviour — it IS a constructed full-channel weir; loose
+boulders must genuinely span the water.
+
 ## Status
 
 - **Curated river catalog** — ✅ Done for Germany's major rivers + the
@@ -1187,6 +1224,11 @@ amorphous drifting patches: vapour. Illustrated water is the opposite:
   BuildingPiece + `dam_impoundment.gd`. Real weir-equation pool depth,
   real sliding-failure physics, derived-not-stored impoundment. Transient
   fill, multi-piece dam runs, and dam-break flooding — ⬜ Not started.
+- **Boulders shape the flow** — ✅ Done — natural and dropped boulders
+  deflect the waterline and current lines (eyot + across push, shader
+  untouched), and a full boulder row across the channel ponds via the
+  same weir physics. Pushing/carrying an intact boulder (rather than
+  building one from rock) — ⬜ Not started.
 - **Real hydraulics: volume, pressure, current speed** — ✅ Done —
   `river_discharge.gd` (real curated gauge data + derived width) +
   `open_channel_flow.gd` (Manning, continuity, closed-form normal depth,

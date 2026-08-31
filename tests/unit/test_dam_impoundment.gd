@@ -156,3 +156,42 @@ func test_the_pool_thins_monotonically_upstream():
 func test_falloff_never_leaves_the_unit_range():
 	for tiles in [-1.0, 0.0, 1.5, 4.0, 100.0]:
 		assert_between(DamImpoundment.backwater_falloff(tiles), 0.0, 1.0)
+
+
+# -- boulders as flow obstacles ----------------------------------------------
+#
+# "boulders ... should properly affect path and flow of the water" -- the
+# pure geometry half: how a boulder pushes the water's across-field around
+# itself. The painter bakes these shifts per tile; the shader then draws
+# the deflected waterline and current lines with no changes of its own.
+
+## The push points AWAY from the boulder and fades with distance -- nothing
+## beyond the radius, full strength against a touching neighbour.
+func test_the_obstacle_push_repels_and_fades():
+	var toward_bank := DamImpoundment.obstacle_across_shift(0.6, 0.2, 1.0)
+	assert_gt(toward_bank, 0.0, "a tile outside the boulder must be pushed further out")
+	var toward_centre := DamImpoundment.obstacle_across_shift(-0.1, 0.2, 1.0)
+	assert_lt(toward_centre, 0.0, "a tile inside the boulder must be pushed further in")
+	assert_almost_eq(
+		DamImpoundment.obstacle_across_shift(0.6, 0.2, DamImpoundment.OBSTACLE_PUSH_RADIUS_TILES + 0.1),
+		0.0, 0.0001
+	)
+	assert_gt(
+		absf(DamImpoundment.obstacle_across_shift(0.6, 0.2, 0.5)),
+		absf(DamImpoundment.obstacle_across_shift(0.6, 0.2, 2.0))
+	)
+
+
+## The boulder's own tile rails past the waterline -- a dry eyot the water
+## visibly parts around -- keeping its bank side, and landing beyond the
+## waterline's feather so the rock never renders half-wet.
+func test_the_boulder_tile_becomes_a_dry_eyot():
+	var RiverFlowShader = load("res://src/rendering/river_flow_shader.gd")
+	assert_gt(
+		DamImpoundment.eyot_across(0.3), 1.0 + RiverFlowShader.BANK_FEATHER
+	)
+	assert_lt(
+		DamImpoundment.eyot_across(-0.3), -1.0 - RiverFlowShader.BANK_FEATHER
+	)
+	# Dead centre still picks a side rather than staying wet.
+	assert_gte(absf(DamImpoundment.eyot_across(0.0)), 1.0 + RiverFlowShader.BANK_FEATHER)

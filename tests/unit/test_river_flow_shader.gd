@@ -1142,3 +1142,44 @@ func test_the_water_still_travels_at_a_real_speed():
 		cells_per_second, 1.0, 2.6,
 		"the surface travels %.2f cells/s" % cells_per_second
 	)
+
+
+# -- the organic smoothing pass ----------------------------------------------
+#
+# Reported: "run a smoothing pass? so small lines stay coherent over tiles?
+# it's still visible that the base are square tiles". The residual
+# tile-ness is the QUANTIZED per-tile across (48 bins, plus the direction
+# bin's perp) taking a small systematic side-step at every tile edge --
+# lines, cel boundaries and the waterline all jog together on the same
+# straight lattice lines, which is what betrays the grid.
+#
+# The atlas caps how many bins are affordable, so the fix is a small
+# WORLD-ANCHORED jitter added to the reconstructed across: continuous
+# across tile boundaries (world position owes nothing to the grid), it
+# turns each straight systematic step into organic raggedness -- for every
+# consumer of frag_across at once, at one extra noise call.
+
+func test_the_across_jitter_is_wired_into_the_reconstruction():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("frag_across += (value_noise(wp * noise_scale * jitter_scale) - 0.5) * across_jitter;"),
+		"the jitter must perturb the reconstructed across itself, before every consumer"
+	)
+
+
+## The jitter exists to MASK the quantisation, never to reshape the
+## channel: its full swing stays within a bin step and a half of the baked
+## across, and comfortably inside the painted apron.
+func test_the_jitter_only_masks_the_quantisation():
+	var bin_step := (
+		2.0 * ProceduralRiverFlowSprite.ACROSS_RANGE
+		/ float(ProceduralRiverFlowSprite.ACROSS_BINS)
+	)
+	assert_lte(RiverFlowShader.ACROSS_JITTER, bin_step * 1.5)
+	assert_gt(RiverFlowShader.ACROSS_JITTER, 0.0)
+
+
+## Finer than the current lines, coarser than a pixel: the jitter must
+## roughen edges, not redraw them.
+func test_the_jitter_wavelength_sits_between_pixel_and_line():
+	var wavelength_px := 1.0 / (RiverFlowShader.NOISE_SCALE * RiverFlowShader.JITTER_SCALE)
+	assert_between(wavelength_px, 2.0, 10.0, "jitter wavelength %.1f px" % wavelength_px)

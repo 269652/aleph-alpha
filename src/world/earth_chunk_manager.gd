@@ -2,6 +2,8 @@ extends RefCounted
 
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const StonePlacement = preload("res://src/world/stone_placement.gd")
+const StoneSize = preload("res://src/world/stone_size.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
 const ProceduralRiverFlowSprite = preload("res://src/rendering/procedural_river_flow_sprite.gd")
 const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
@@ -11,6 +13,14 @@ const DamImpoundment = preload("res://src/world/dam_impoundment.gd")
 ## the piece id, so the existing placeable-arming path places it while
 ## BuildingPiece.has_piece lights up collision/atlas/persistence.
 const DAM_PIECE_ID := "stone_dam"
+
+## The droppable boulder piece (see BuildingPiece "boulder" and
+## docs/concept/rivers.md "Boulders shape the flow").
+const BOULDER_PIECE_ID := "boulder"
+
+## The same deterministic stone roll StoneRenderer spawns from -- so the
+## water bends around exactly the boulders the player can see.
+var _flow_stone_placement := StonePlacement.new()
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
 const TreeRenderer = preload("res://src/rendering/tree_renderer.gd")
 const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
@@ -3673,9 +3683,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# waterline, and the fast flag comes from the real solved
 			# current.
 			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
-			var across_fraction: float = (
-				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-			)
+			var across_fraction := flow_across_fraction_at(global.x, global.y, nearest)
 			_river_flow_layer.set_cell(
 				global, 0,
 				_terrain_renderer.atlas_coords_for_river_flow(
@@ -6681,6 +6689,153 @@ func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
 	return _impounded_depth_at(global_x, global_y, natural)
 
 
+## Whether this tile holds a boulder the water must flow around: a dropped
+## boulder piece, or the natural stone roll landing a boulder-class stone
+## on a river cell (the same roll StoneRenderer spawns, so the water bends
+## around exactly the rocks the player sees). Any OTHER real piece on the
+## tile means the ground is built over -- no stone spawns there.
+func flow_boulder_at_global(global_x: int, global_y: int) -> bool:
+	var piece := modification_at_global(global_x, global_y)
+	if piece == BOULDER_PIECE_ID:
+		return true
+	if BuildingPiece.has_piece(piece):
+		return false
+	if not generator.is_river_at_global(global_x, global_y):
+		return false
+	var biome := biome_at_global(global_x, global_y)
+	if not StonePlacement.STONE_BIOMES.has(biome):
+		return false
+	if not _flow_stone_placement.has_stone_at(global_x, global_y, biome):
+		return false
+	var diameter := StoneSize.diameter_for(_flow_stone_placement.seed_at(global_x, global_y))
+	return StoneSize.class_for(diameter) == StoneSize.CLASS_BOULDER
+
+
+## The signed across-fraction the flow overlay bakes for a tile: the
+## catalog's real offset, bent around any nearby boulders (see
+## DamImpoundment.obstacle_across_shift) -- and railed to a dry eyot on a
+## boulder's own tile. ONE function owns this so the painter and the test
+## that recomputes painted tiles can never disagree.
+func flow_across_fraction_at(global_x: int, global_y: int, nearest: Dictionary) -> float:
+	var base: float = nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+	if flow_boulder_at_global(global_x, global_y):
+		return DamImpoundment.eyot_across(base)
+	var shifted := base
+	var radius := int(ceil(DamImpoundment.OBSTACLE_PUSH_RADIUS_TILES))
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			if dx == 0 and dy == 0:
+				continue
+			var distance := Vector2(dx, dy).length()
+			if distance >= DamImpoundment.OBSTACLE_PUSH_RADIUS_TILES:
+				continue
+			if not flow_boulder_at_global(global_x + dx, global_y + dy):
+				continue
+			var boulder_nearest := generator.river_catalog().nearest_river_at(
+				global_x + dx, global_y + dy,
+				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+			)
+			var boulder_across: float = (
+				boulder_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+			)
+			shifted += DamImpoundment.obstacle_across_shift(base, boulder_across, distance)
+	return shifted
+
+
+## Whether the channel is dammed at this course position, scanning the
+## perpendicular wet row rather than the single walked tile -- the course
+## polyline is Chaikin-smoothed, so the walked line can pass a tile BESIDE
+## a built dam (found live: the ponding tests went red the moment the
+## smoothing landed, because the exact-tile check missed the piece).
+##
+## Two ways to be a crest:
+##   * an engineered stone_dam piece ANYWHERE in the row -- it is a
+##     constructed full-channel weir, one piece blocks the channel
+##   * loose boulders on EVERY wet tile of the row (at least two) -- one
+##     mid-channel rock never dams a river; a closed row does. This is
+##     what lets "dropping boulders into the river" build a pond.
+func crest_blocks_at_global(global_x: int, global_y: int) -> bool:
+	var verdict := _row_crest_verdict(global_x, global_y)
+	return verdict.dam_piece or verdict.boulders_closed
+
+
+## The boulder half of the crest rule alone -- exposed for tests that pin
+## "a partial row must not pond" without a stone_dam muddying the answer.
+func boulder_row_blocks_at_global(global_x: int, global_y: int) -> bool:
+	return _row_crest_verdict(global_x, global_y).boulders_closed
+
+
+## Every wet tile in the channel CROSS-SECTION through this course
+## position: tiles in the surrounding box whose along-course offset stays
+## under a tolerance. A box-and-slice, deliberately not a walked
+## perpendicular line -- on a diagonal reach the wet row is a STAIRCASE of
+## tiles, and a rounded perpendicular walk steps over half of them (found
+## live: a dam one tile off the walked diagonal was invisible to the
+## crest check).
+func wet_row_tiles_at_global(global_x: int, global_y: int) -> Array:
+	var nearest := generator.river_catalog().nearest_river_at(
+		global_x, global_y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var row: Array = []
+	if nearest.distance_tiles > RiverCatalog.RIVER_HALF_WIDTH_TILES:
+		return row
+	var radians := deg_to_rad(nearest.course_bearing_deg)
+	var along_dir := Vector2(sin(radians), -cos(radians))
+	var reach := int(ceil(RiverCatalog.RIVER_HALF_WIDTH_TILES)) + 2
+	for dy in range(-reach, reach + 1):
+		for dx in range(-reach, reach + 1):
+			if absf(along_dir.dot(Vector2(dx, dy))) > 0.75:
+				continue
+			var tile := Vector2i(global_x + dx, global_y + dy)
+			var tile_nearest := generator.river_catalog().nearest_river_at(
+				tile.x, tile.y,
+				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+			)
+			var across: float = absf(
+				tile_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+			)
+			if across < 0.97:
+				row.append(tile)
+	return row
+
+
+func _row_crest_verdict(global_x: int, global_y: int) -> Dictionary:
+	var verdict := {"dam_piece": false, "boulders_closed": false}
+	var row := wet_row_tiles_at_global(global_x, global_y)
+	if row.is_empty():
+		return verdict
+	# Closure is judged by LATERAL POSITION, not by tile membership: on a
+	# diagonal reach the slice window catches a two-column staircase, and a
+	# perfectly good one-column boulder row would fail a per-tile check on
+	# the second column. Water cannot pass any across-band that holds a
+	# boulder, whichever staircase column the boulder sits in -- so bucket
+	# the slice by across and require every wet band blocked.
+	var wet_bands := {}
+	var blocked_bands := {}
+	for tile in row:
+		if modification_at_global(tile.x, tile.y) == DAM_PIECE_ID:
+			verdict.dam_piece = true
+		var tile_nearest := generator.river_catalog().nearest_river_at(
+			tile.x, tile.y,
+			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		)
+		var across: float = (
+			tile_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+		)
+		var band := int(floor((across + 1.0) / 0.25))
+		wet_bands[band] = true
+		if flow_boulder_at_global(tile.x, tile.y):
+			blocked_bands[band] = true
+	var closed := wet_bands.size() >= 2
+	for band in wet_bands:
+		if not blocked_bands.has(band):
+			closed = false
+			break
+	verdict.boulders_closed = closed
+	return verdict
+
+
 ## True if a player-built dam stands on this tile.
 func has_dam_at_global(global_x: int, global_y: int) -> bool:
 	return modification_at_global(global_x, global_y) == DAM_PIECE_ID
@@ -6775,7 +6930,7 @@ func _impounded_depth_at(global_x: int, global_y: int, natural_depth: float) -> 
 		if seen.has(downstream):
 			continue
 		seen[downstream] = true
-		if not has_dam_at_global(downstream.x, downstream.y):
+		if not crest_blocks_at_global(downstream.x, downstream.y):
 			continue
 
 		var flow := generator.river_hydraulics_at_global(downstream.x, downstream.y)

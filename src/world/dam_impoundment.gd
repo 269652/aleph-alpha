@@ -145,3 +145,49 @@ static func impounded_volume_m3(mean_depth_m: float, flooded_area_m2: float) -> 
 	if mean_depth_m <= 0.0 or flooded_area_m2 <= 0.0:
 		return 0.0
 	return mean_depth_m * flooded_area_m2
+
+
+# -- boulders as flow obstacles ----------------------------------------------
+#
+# "boulders ... should properly affect path and flow of the water". The
+# water's across-field bends around an in-channel boulder: nearby tiles are
+# pushed away, the boulder's own tile rails past the waterline into a dry
+# eyot. Pure geometry here; EarthChunkManager finds the boulders and bakes
+# the shifted across per tile, and the flow shader draws the deflected
+# waterline and current lines completely unchanged.
+
+## How far the push reaches, in tiles, and how hard it pushes at zero
+## distance, in across-fraction units. 2.5 tiles is a little over the
+## half-width: the necking is visible a boulder-length up- and downstream
+## without rearranging the whole reach.
+const OBSTACLE_PUSH_RADIUS_TILES := 2.5
+const OBSTACLE_PUSH_STRENGTH := 0.55
+
+## Where a boulder's own tile lands: past the waterline AND its feather
+## (pinned against RiverFlowShader.BANK_FEATHER by test), so the rock
+## stands on dry ground with the water necking around it.
+const EYOT_ACROSS := 1.12
+
+
+## The across-shift a boulder at `boulder_across` applies to a tile at
+## `tile_across`, `distance_tiles` away: straight repulsion with linear
+## falloff, zero at and beyond the radius.
+static func obstacle_across_shift(
+	tile_across: float, boulder_across: float, distance_tiles: float
+) -> float:
+	if distance_tiles >= OBSTACLE_PUSH_RADIUS_TILES:
+		return 0.0
+	var side := signf(tile_across - boulder_across)
+	if side == 0.0:
+		side = 1.0
+	var falloff := 1.0 - distance_tiles / OBSTACLE_PUSH_RADIUS_TILES
+	return side * OBSTACLE_PUSH_STRENGTH * falloff
+
+
+## The signed across a boulder tile itself is railed to -- keeps its bank
+## side, dead-centre picks one.
+static func eyot_across(boulder_across: float) -> float:
+	var side := signf(boulder_across)
+	if side == 0.0:
+		side = 1.0
+	return side * EYOT_ACROSS

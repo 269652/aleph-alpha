@@ -7345,6 +7345,35 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: boulders shape the flow + smoothing jitter + crest fix**
+  (large) — ✅ Done — three deliverables in one round.
+  (1) Requested: "boulders that are layed in or exist from the beginning
+  should properly affect path and flow of the water so that it's possible
+  to build a pond by dropping boulders into the river." Natural
+  boulder-class stones on river tiles (same deterministic roll
+  StoneRenderer spawns) and a new droppable `boulder` BuildingPiece
+  (CATEGORY_DAM, 4 rock) are flow obstacles: the painter bends each
+  tile's baked across away from nearby boulders
+  (DamImpoundment.obstacle_across_shift) and rails the boulder's own tile
+  past the waterline+feather into a dry eyot -- waterline and guided
+  current lines part around the rock, shader untouched. A CLOSED row of
+  boulders across the channel is a crest: the impoundment walk ponds it
+  with the same real weir physics as stone_dam; a partial row deflects
+  but never ponds (pinned both ways).
+  (2) FOUND AND FIXED a regression the feature exposed: the Chaikin course
+  smoothing had silently broken stone_dam ponding -- the impoundment walk
+  checked only the exact walked course tile, and the smoothed course now
+  passes one tile beside built dams (test_dam_ponding had not run since).
+  Crest detection now scans the channel CROSS-SECTION (box + along-course
+  tolerance -- a walked perpendicular line steps over half a diagonal
+  reach's staircase tiles), judging boulder closure by LATERAL BAND, not
+  tile membership. All 11 ponding tests green.
+  (3) Requested: "run a smoothing pass? ... it's still visible that the
+  base are square tiles." A world-anchored across-jitter (swing capped
+  near one quantisation bin by test, wavelength between art pixel and
+  current line) roughens the systematic per-tile side-steps of lines, cel
+  edges and waterline into organic raggedness -- one noise call, every
+  frag_across consumer at once. Shader suite 77 + both GPU tests green.
 - **Rivers: flow-guided current lines** (medium) — ✅ Done — reported:
   "Before it was longer; flowing lines; they merged and unmerged, now they
   are more like perlin noise cells.. can you restore natural currents
