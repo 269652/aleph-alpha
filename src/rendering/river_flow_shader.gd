@@ -46,8 +46,8 @@ const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const SHADER_CODE := """
 shader_type canvas_item;
 
-uniform float advect_rate = 0.35;
-uniform float advect_strength = 1.15;
+uniform float advect_rate = 0.22;
+uniform float advect_strength = 7.2;
 uniform float noise_scale = 0.08;
 uniform float pixel_snap = 0.5;
 uniform float cel_levels = 6.0;
@@ -295,7 +295,14 @@ void fragment() {
 	float dist_n = abs(level_frac) / line_count;
 	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
 	float parity = mod(floor(s_field * line_count), 2.0);
-	float wave = stroke * mix(0.75, 1.0, parity) * mix(0.8, 1.1, is_fast);
+	// STREAMING PULSES -- the downstream-travel cue. The guided lines only
+	// SWAY as the wobble advects ("still looks like still water"); the
+	// pulse rides the same advected field, so bright and dim segments
+	// visibly stream ALONG every line at the advection speed. Free: n is
+	// already computed.
+	float pulse = smoothstep(0.35, 0.75, n);
+	float wave = stroke * mix(0.75, 1.0, parity) * mix(0.8, 1.1, is_fast)
+		* mix(0.55, 1.0, pulse);
 	// ADAPTIVE INK: pale strokes vanish on the bright shallow cels
 	// (reported from the Rhine straight: "no current lines at all"), so
 	// the ink snaps DEEP over light water and pale over dark. A hard
@@ -341,10 +348,12 @@ void fragment() {
 
 ## How fast the advection phase cycles, in Hz. Deliberately slow: this is
 ## the rate at which the surface renews, not the speed water appears to
-## travel (that comes from ADVECT_STRENGTH). It also has to stay well clear
-## of aliasing -- at this game's measured ~7 fps floor, 0.35 Hz is 0.05
-## cycles/frame, far inside the 0.5 Nyquist limit.
-const ADVECT_RATE := 0.35
+## travel (that comes from ADVECT_STRENGTH; the product is pinned by
+## test_the_water_still_travels_at_a_real_speed). Lowered from 0.35 so the
+## exact half-cycle animation loop stretches to ~2.3 s -- at 0.35 the
+## repeat was short enough to read as shimmering in place. Still far
+## inside Nyquist at the measured fps floor.
+const ADVECT_RATE := 0.22
 
 ## How far the surface travels along the flow over one phase, in noise
 ## CELLS. Sized against the smear length so each line travels a real
@@ -359,7 +368,7 @@ const ADVECT_RATE := 0.35
 ## short loop -- and within every half cycle each phase's drag grows
 ## monotonically DOWNSTREAM, which is why it still reads as flow, not as
 ## oscillation. Pinned by test_the_animation_loops_exactly_each_half_cycle.
-const ADVECT_STRENGTH := 4.5
+const ADVECT_STRENGTH := 7.2
 
 ## Spatial scale of the surface field, and the second octave's multiplier.
 ##
@@ -583,6 +592,12 @@ static func bank_alpha(across_magnitude: float) -> float:
 ## the advected wobble -- the thing whose level sets ARE the current lines.
 static func stroke_field(across_fraction: float, n: float) -> float:
 	return across_fraction * ACROSS_LINE_SCALE + (n - 0.5) * LINE_WOBBLE
+
+
+## Full stroke brightness at a point: the mask times the streaming pulse
+## riding the advected field -- what actually travels down the lines.
+static func stroke_intensity(s_value: float, n: float, is_fast: bool) -> float:
+	return stroke_mask(s_value, is_fast) * lerpf(0.55, 1.0, smoothstep(0.35, 0.75, n))
 
 
 static func stroke_mask(s_value: float, is_fast: bool) -> float:

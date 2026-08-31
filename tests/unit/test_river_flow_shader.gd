@@ -1073,3 +1073,72 @@ func test_fast_reaches_draw_brighter_not_wider_strokes():
 		RiverFlowShader.stroke_mask(s_on_level, true),
 		RiverFlowShader.stroke_mask(s_on_level, false)
 	)
+
+
+# -- visible downstream travel ------------------------------------------------
+#
+# Reported of the guided lines: "it still looks like still water not
+# flowing water". Two reasons, one of them fixable in the shader: the
+# lines only SWAYED laterally as the wobble advected -- nothing on the
+# line itself visibly travelled downstream. Now each line carries
+# brightness PULSES driven by the same advected field, so bright and dim
+# segments stream along every line at the advection speed -- the classic
+# "water is going that way" cue -- at zero extra noise cost.
+
+func test_the_lines_carry_streaming_brightness_pulses():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float pulse = smoothstep(0.35, 0.75, n);"),
+		"the pulse must ride the advected field"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("mix(0.55, 1.0, pulse)"),
+		"the pulse must modulate the stroke brightness, dim never to zero"
+	)
+
+
+## Measured: at fixed points sitting ON a line, the stroke intensity must
+## genuinely change over a quarter cycle -- pulses passing through -- for
+## a real fraction of the line.
+func test_the_pulses_actually_travel_through_the_lines():
+	var period := 1.0 / RiverFlowShader.ADVECT_RATE
+	var moved := 0
+	var on_line := 0
+	for column in 90:
+		var x := 3.0 + float(column) * 1.13
+		for row in 9:
+			var across := -0.8 + float(row) / 8.0 * 1.6
+			var n_early := RiverFlowShader.animated_field_value(
+				x, across * 2.56, Vector2(1, 0), 0.3
+			)
+			var n_later := RiverFlowShader.animated_field_value(
+				x, across * 2.56, Vector2(1, 0), 0.3 + period * 0.25
+			)
+			var early := RiverFlowShader.stroke_intensity(
+				RiverFlowShader.stroke_field(across, n_early), n_early, false
+			)
+			var later := RiverFlowShader.stroke_intensity(
+				RiverFlowShader.stroke_field(across, n_later), n_later, false
+			)
+			# Only points that genuinely sit on a line can show a pulse.
+			if early < 0.2 and later < 0.2:
+				continue
+			on_line += 1
+			if absf(early - later) > 0.08:
+				moved += 1
+	assert_gt(on_line, 40, "too few on-line probes to trust the sweep")
+	assert_gt(
+		float(moved) / float(on_line), 0.35,
+		"pulses pass through only %d of %d on-line points" % [moved, on_line]
+	)
+
+
+## The loop lengthens so the repeat is harder to spot, without giving up
+## travel speed -- the strength rises to match. Both halves pinned: the
+## per-second travel stays real, and the drag still covers most of a
+## feature length per phase.
+func test_the_water_still_travels_at_a_real_speed():
+	var cells_per_second := RiverFlowShader.ADVECT_STRENGTH * RiverFlowShader.ADVECT_RATE
+	assert_between(
+		cells_per_second, 1.0, 2.6,
+		"the surface travels %.2f cells/s" % cells_per_second
+	)
