@@ -7345,6 +7345,22 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: boulder deflection moved to the fragment** (medium) — ✅ Done
+  — reported of the tile-baked version: "Boulders don't seem to affect the
+  current flow lines? also squares are now much more visible then before
+  and lines less coherent". Exactly right: baking the deflection into
+  per-tile across values put up to half a channel of shift on single
+  tiles (vs the 0.058 quantisation step the reconstruction tolerates) and
+  railed whole square tiles dry -- the tile is far too coarse a brush for
+  a bump the size of a rock. Now the manager feeds up to 24 in-river
+  boulder WORLD positions (natural + dropped, synced on chunk paint and
+  on build/destroy) to the shader, which bends frag_across radially per
+  fragment and cuts a ROUND soft dry eyot under each rock -- continuous
+  everywhere, anchored to the sprite. The pond mechanics (band-closure
+  crest + weir walk) are untouched and stay green. The new across-jitter
+  was also softened (0.045 swing, ~6px wavelength) after "lines less
+  coherent". Shader suite 80, ponding 11, manager river 3, both GPU
+  tests -- green.
 - **Rivers: boulders shape the flow + smoothing jitter + crest fix**
   (large) — ✅ Done — three deliverables in one round.
   (1) Requested: "boulders that are layed in or exist from the beginning

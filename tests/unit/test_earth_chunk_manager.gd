@@ -420,7 +420,7 @@ func test_river_flow_overlay_paints_only_channel_and_apron_cells():
 			flow_layer.get_cell_atlas_coords(cell),
 			terrain_renderer.atlas_coords_for_river_flow(
 				nearest.course_bearing_deg,
-				manager.flow_across_fraction_at(cell.x, cell.y, nearest),
+				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES,
 				RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
 			),
 			"(%d, %d) flow tile must reflect its own real flow data" % [cell.x, cell.y]

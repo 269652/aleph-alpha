@@ -151,29 +151,20 @@ func _wet_row_through(tile: Vector2i) -> Array:
 	return manager.wet_row_tiles_at_global(tile.x, tile.y)
 
 
-## A dropped boulder rails its own tile past the waterline -- a dry eyot
-## the water parts around -- and pushes a neighbouring tile's baked across
-## away from itself.
-func test_a_dropped_boulder_makes_an_eyot_and_deflects_its_neighbours():
-	var before := manager.flow_across_fraction_at(
-		river_tile.x, river_tile.y, _nearest_at(river_tile)
-	)
-	assert_lt(absf(before), 1.0, "precondition: the fixture tile is wet")
+## A dropped boulder reaches the shader as a world position, so the water
+## can bend around the ROCK, not its tile -- the tile-baked eyot was tried
+## and painted square grass holes.
+func test_a_dropped_boulder_is_fed_to_the_flow_shader():
 	assert_true(manager.build_at_global(river_tile.x, river_tile.y, "boulder"))
-	var after := manager.flow_across_fraction_at(
-		river_tile.x, river_tile.y, _nearest_at(river_tile)
+	manager.sync_river_flow_boulders()
+	var positions := manager.river_flow_boulder_positions()
+	var expected := Vector2(
+		float(river_tile.x) * 16.0 + 8.0, float(river_tile.y) * 16.0 + 8.0
 	)
-	assert_gte(absf(after), 1.0, "the boulder tile must rail past the waterline")
-
-	var neighbour := Vector2i(river_tile.x + 1, river_tile.y)
-	var neighbour_nearest := _nearest_at(neighbour)
-	var neighbour_across := manager.flow_across_fraction_at(
-		neighbour.x, neighbour.y, neighbour_nearest
+	assert_true(
+		positions.has(expected),
+		"the dropped boulder's world position must be in the shader feed"
 	)
-	var neighbour_base: float = (
-		neighbour_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-	)
-	assert_ne(neighbour_across, neighbour_base, "a touching neighbour must be deflected")
 
 
 ## One rock never dams a river: a partial row is not a crest and raises no

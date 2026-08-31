@@ -1183,3 +1183,39 @@ func test_the_jitter_only_masks_the_quantisation():
 func test_the_jitter_wavelength_sits_between_pixel_and_line():
 	var wavelength_px := 1.0 / (RiverFlowShader.NOISE_SCALE * RiverFlowShader.JITTER_SCALE)
 	assert_between(wavelength_px, 2.0, 10.0, "jitter wavelength %.1f px" % wavelength_px)
+
+
+# -- boulders bend the water --------------------------------------------------
+#
+# Per FRAGMENT, around the rock's world position -- the tile-baked attempt
+# put half a channel of across-shift on single tiles and painted square
+# grass holes ("squares are now much more visible"). The shader receives
+# up to 24 boulder positions and bends the field radially: continuous
+# everywhere, round everywhere.
+
+func test_the_boulder_push_repels_from_the_rock_side_and_fades():
+	var perp := Vector2(0, 1)
+	assert_gt(RiverFlowShader.boulder_across_push(Vector2(4, 9), perp), 0.0)
+	assert_lt(RiverFlowShader.boulder_across_push(Vector2(4, -9), perp), 0.0)
+	assert_almost_eq(
+		RiverFlowShader.boulder_across_push(Vector2(RiverFlowShader.BOULDER_REACH_PX + 1, 0), perp),
+		0.0, 0.0001
+	)
+	assert_gt(
+		absf(RiverFlowShader.boulder_across_push(Vector2(0, 6), perp)),
+		absf(RiverFlowShader.boulder_across_push(Vector2(0, 30), perp))
+	)
+
+
+## The dry patch under the rock is round and smaller than the push reach --
+## an island inside a parting current, not a hole as big as the bend.
+func test_the_eyot_is_round_soft_and_inside_the_push_reach():
+	assert_almost_eq(RiverFlowShader.eyot_dry_factor(0.0), 0.0, 0.0001)
+	assert_almost_eq(RiverFlowShader.eyot_dry_factor(RiverFlowShader.BOULDER_RADIUS_PX + 1.0), 1.0, 0.0001)
+	assert_lt(RiverFlowShader.BOULDER_RADIUS_PX * 2.0, RiverFlowShader.BOULDER_REACH_PX)
+
+
+func test_the_shader_bends_and_dries_around_the_boulder_uniforms():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("for (int b = 0; b < boulder_count; b++)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("frag_across += side * boulder_push * falloff * falloff;"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("* eyot_dry;"))

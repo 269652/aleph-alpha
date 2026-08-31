@@ -75,8 +75,13 @@ uniform float across_range = 1.4;
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
 uniform float bank_feather = 0.03;
-uniform float across_jitter = 0.075;
-uniform float jitter_scale = 3.2;
+uniform float across_jitter = 0.045;
+uniform float jitter_scale = 2.0;
+uniform int boulder_count = 0;
+uniform vec2 boulders[24];
+uniform float boulder_reach_px = 40.0;
+uniform float boulder_push = 0.5;
+uniform float boulder_radius_px = 11.0;
 uniform vec3 band0_color : source_color = vec3(0.30, 0.60, 0.66);
 uniform vec3 band1_color : source_color = vec3(0.22, 0.50, 0.62);
 uniform vec3 band2_color : source_color = vec3(0.16, 0.40, 0.56);
@@ -180,6 +185,27 @@ void fragment() {
 	// consumer of frag_across at once. Its swing is capped near one
 	// quantisation step by test: a mask, never a reshaping.
 	frag_across += (value_noise(wp * noise_scale * jitter_scale) - 0.5) * across_jitter;
+
+	// BOULDERS BEND THE WATER -- per fragment, around the rock's actual
+	// world position, never through baked tiles: a tile is far too coarse
+	// a brush for a bump the size of a rock, and the tile-baked attempt
+	// painted exactly the square artefacts it was meant to prevent. Each
+	// boulder pushes the across-field away from its own side with a
+	// smooth radial falloff, so the current lines and the waterline part
+	// around it; eyot_dry below then cuts a ROUND dry patch under the
+	// rock itself.
+	float eyot_dry = 1.0;
+	for (int b = 0; b < boulder_count; b++) {
+		vec2 to_frag = wp - boulders[b];
+		float d = length(to_frag);
+		if (d >= boulder_reach_px) {
+			continue;
+		}
+		float side = dot(to_frag, flow_perp) >= 0.0 ? 1.0 : -1.0;
+		float falloff = 1.0 - d / boulder_reach_px;
+		frag_across += side * boulder_push * falloff * falloff;
+		eyot_dry = min(eyot_dry, smoothstep(boulder_radius_px * 0.6, boulder_radius_px, d));
+	}
 	float rr = abs(frag_across);
 	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
 
@@ -352,7 +378,7 @@ void fragment() {
 	// This is what frees the water's outline from the tile grid: the edge
 	// is |across| == 1, a smooth curve through the middle of tiles, not
 	// the rectangle of whichever cells happened to be painted.
-	float wet = 1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr);
+	float wet = (1.0 - smoothstep(1.0 - bank_feather, 1.0 + bank_feather, rr)) * eyot_dry;
 	COLOR = vec4(body, wet);
 }
 """
@@ -453,13 +479,21 @@ const EDDY_DETAIL_WEIGHT := 0.7
 ## wrong doubles or halves every reconstructed offset.
 const TILE_PX := 16.0
 
+## How boulders bend the water, all in world px so the bump hugs the
+## SPRITE rather than any tile: the push reach (2.5 tiles), the maximum
+## across-push at the rock face (falloff-squared to zero at the reach),
+## and the dry-eyot radius under the rock itself.
+const BOULDER_REACH_PX := 40.0
+const BOULDER_PUSH := 0.5
+const BOULDER_RADIUS_PX := 11.0
+
 ## The organic smoothing jitter: swing (in across-fraction units, capped
 ## near one across-bin step by test -- it masks the per-tile quantisation,
 ## never reshapes the channel) and the wavelength of the world-anchored
 ## noise that drives it (in multiples of the base field scale; a few
 ## pixels -- finer than a current line, coarser than an art pixel).
-const ACROSS_JITTER := 0.075
-const JITTER_SCALE := 3.2
+const ACROSS_JITTER := 0.045
+const JITTER_SCALE := 2.0
 
 ## Half-width of the waterline's feather, in across-fraction units. Small
 ## since the comic pass: the ink line lives right at the bank, and a wide
@@ -558,6 +592,10 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
 	material.set_shader_parameter("across_jitter", ACROSS_JITTER)
 	material.set_shader_parameter("jitter_scale", JITTER_SCALE)
+	material.set_shader_parameter("boulder_count", 0)
+	material.set_shader_parameter("boulder_reach_px", BOULDER_REACH_PX)
+	material.set_shader_parameter("boulder_push", BOULDER_PUSH)
+	material.set_shader_parameter("boulder_radius_px", BOULDER_RADIUS_PX)
 	material.set_shader_parameter("line_count", LINE_COUNT)
 	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
 	material.set_shader_parameter("line_wobble", LINE_WOBBLE)
@@ -598,6 +636,23 @@ static func depth_color(depth_fraction: float) -> Color:
 	body = body.lerp(BAND_COLORS[2], clampf(sramp - 1.0, 0.0, 1.0))
 	body = body.lerp(BAND_COLORS[3], clampf(sramp - 2.0, 0.0, 1.0))
 	return body.lerp(BAND_COLORS[4], clampf(sramp - 3.0, 0.0, 1.0))
+
+
+## A boulder's across-push at a fragment `offset_px` from the rock, given
+## the flow perpendicular -- the CPU mirror of the shader loop body.
+static func boulder_across_push(offset_px: Vector2, flow_perp: Vector2) -> float:
+	var d := offset_px.length()
+	if d >= BOULDER_REACH_PX:
+		return 0.0
+	var side := 1.0 if offset_px.dot(flow_perp) >= 0.0 else -1.0
+	var falloff := 1.0 - d / BOULDER_REACH_PX
+	return side * BOULDER_PUSH * falloff * falloff
+
+
+## How dry the eyot leaves a fragment `distance_px` from the rock centre:
+## 0 under the rock, 1 outside its radius, soft-edged and ROUND.
+static func eyot_dry_factor(distance_px: float) -> float:
+	return smoothstep(BOULDER_RADIUS_PX * 0.6, BOULDER_RADIUS_PX, distance_px)
 
 
 ## The waterline: 1 inside the channel, 0 past the bank curve, feathered

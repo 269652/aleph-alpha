@@ -3392,6 +3392,52 @@ func set_hillshade_layer(hillshade_layer: TileMapLayer) -> void:
 		_paint_hillshade_overlay(chunk_coord, _loaded_chunks[chunk_coord])
 
 
+## In-river boulder tiles currently painted, keyed by global tile -- fed
+## to the flow shader as world positions so it can bend the current lines
+## and cut a round dry eyot around each rock PER FRAGMENT. Baking the
+## deflection into per-tile across values was tried first and produced
+## exactly the square artefacts it was meant to prevent: a tile is far too
+## coarse a brush for a bump the size of a rock.
+var _river_flow_boulder_tiles: Dictionary = {}
+
+## How many boulders the shader accepts -- mirrors the uniform array size.
+const RIVER_FLOW_BOULDER_SLOTS := 24
+
+
+func river_flow_boulder_positions() -> PackedVector2Array:
+	var positions := PackedVector2Array()
+	for tile in _river_flow_boulder_tiles:
+		if positions.size() >= RIVER_FLOW_BOULDER_SLOTS:
+			break
+		positions.append(Vector2(
+			float(tile.x) * TerrainRenderer.TILE_SIZE + TerrainRenderer.TILE_SIZE * 0.5,
+			float(tile.y) * TerrainRenderer.TILE_SIZE + TerrainRenderer.TILE_SIZE * 0.5
+		))
+	return positions
+
+
+## Re-evaluates one tile against the flow-boulder predicate and pushes the
+## set to the shader -- called from build/destroy so a dropped boulder
+## bends the water the moment it lands, and stops the moment it is
+## demolished, without waiting for a chunk repaint.
+func _sync_flow_boulder(tile: Vector2i) -> void:
+	if flow_boulder_at_global(tile.x, tile.y):
+		_river_flow_boulder_tiles[tile] = true
+	else:
+		_river_flow_boulder_tiles.erase(tile)
+	sync_river_flow_boulders()
+
+
+## Pushes the current boulder set into the shared flow material -- called
+## after chunk paints and after building/destroying pieces so a dropped
+## boulder bends the water the moment it lands.
+func sync_river_flow_boulders() -> void:
+	var positions := river_flow_boulder_positions()
+	var material := _river_flow_shader.shared_material()
+	material.set_shader_parameter("boulder_count", positions.size())
+	material.set_shader_parameter("boulders", positions)
+
+
 ## Feeds the river strokes the same sunlight that drives the day/night
 ## tint, each frame -- the night CanvasModulate multiplies every canvas
 ## pixel, so the flow shader lifts its strokes toward the moonlit ceiling
@@ -3415,6 +3461,7 @@ func set_river_flow_layer(river_flow_layer: TileMapLayer) -> void:
 	river_flow_layer.material = _river_flow_shader.shared_material()
 	for chunk_coord in _loaded_chunks:
 		_paint_river_flow_overlay(chunk_coord, _loaded_chunks[chunk_coord])
+	sync_river_flow_boulders()
 
 
 ## Registers the roof overlay layer (see docs/concept/
@@ -3683,7 +3730,13 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# waterline, and the fast flag comes from the real solved
 			# current.
 			var hydraulics := generator.river_hydraulics_at_global(global.x, global.y)
-			var across_fraction := flow_across_fraction_at(global.x, global.y, nearest)
+			var across_fraction: float = (
+				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+			)
+			if flow_boulder_at_global(global.x, global.y):
+				_river_flow_boulder_tiles[global] = true
+			else:
+				_river_flow_boulder_tiles.erase(global)
 			_river_flow_layer.set_cell(
 				global, 0,
 				_terrain_renderer.atlas_coords_for_river_flow(
@@ -6711,37 +6764,6 @@ func flow_boulder_at_global(global_x: int, global_y: int) -> bool:
 	return StoneSize.class_for(diameter) == StoneSize.CLASS_BOULDER
 
 
-## The signed across-fraction the flow overlay bakes for a tile: the
-## catalog's real offset, bent around any nearby boulders (see
-## DamImpoundment.obstacle_across_shift) -- and railed to a dry eyot on a
-## boulder's own tile. ONE function owns this so the painter and the test
-## that recomputes painted tiles can never disagree.
-func flow_across_fraction_at(global_x: int, global_y: int, nearest: Dictionary) -> float:
-	var base: float = nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-	if flow_boulder_at_global(global_x, global_y):
-		return DamImpoundment.eyot_across(base)
-	var shifted := base
-	var radius := int(ceil(DamImpoundment.OBSTACLE_PUSH_RADIUS_TILES))
-	for dy in range(-radius, radius + 1):
-		for dx in range(-radius, radius + 1):
-			if dx == 0 and dy == 0:
-				continue
-			var distance := Vector2(dx, dy).length()
-			if distance >= DamImpoundment.OBSTACLE_PUSH_RADIUS_TILES:
-				continue
-			if not flow_boulder_at_global(global_x + dx, global_y + dy):
-				continue
-			var boulder_nearest := generator.river_catalog().nearest_river_at(
-				global_x + dx, global_y + dy,
-				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-			)
-			var boulder_across: float = (
-				boulder_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-			)
-			shifted += DamImpoundment.obstacle_across_shift(base, boulder_across, distance)
-	return shifted
-
-
 ## Whether the channel is dammed at this course position, scanning the
 ## perpendicular wet row rather than the single walked tile -- the course
 ## polyline is Chaikin-smoothed, so the walked line can pass a tile BESIDE
@@ -7298,6 +7320,7 @@ func build_at_global(global_x: int, global_y: int, tile_id: String) -> bool:
 		chunk.structural_instability.erase(local)
 		chunk.structural_checked_at.erase(local)
 	_sync_statics(chunk_coord, chunk, local)
+	_sync_flow_boulder(Vector2i(global_x, global_y))
 	return true
 
 
@@ -7318,6 +7341,7 @@ func destroy_at_global(global_x: int, global_y: int) -> bool:
 	_remove_piece_collision(Vector2i(global_x, global_y))
 	_sync_sagewerk_lumberjack(chunk_coord, local, previous_tile_id, "")
 	_sync_logistics_workers(chunk_coord, local, previous_tile_id, "")
+	_sync_flow_boulder(Vector2i(global_x, global_y))
 	# This cell no longer holds a piece at all -- its own statics tracking
 	# (if any) belonged to whatever WAS here, not to bare ground. Clear it
 	# before recomputing, or a piece rebuilt on this exact cell later could
