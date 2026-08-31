@@ -3402,6 +3402,13 @@ func set_hillshade_layer(hillshade_layer: TileMapLayer) -> void:
 ## coarse a brush for a bump the size of a rock.
 var _river_flow_boulder_tiles: Dictionary = {}
 
+## The float across map the flow shader samples bilinearly -- one texel
+## per world tile over the loaded span, addressed toroidally (tile mod
+## size), so streaming never re-anchors it. This is what replaced the
+## atlas across bins after three rounds of quantization artefacts.
+var _flow_across_image: Image
+var _flow_across_texture: ImageTexture
+
 ## How many boulders the shader accepts -- mirrors the uniform array size.
 const RIVER_FLOW_BOULDER_SLOTS := 24
 
@@ -3436,6 +3443,33 @@ func _sync_flow_boulder(tile: Vector2i) -> void:
 	else:
 		_river_flow_boulder_tiles.erase(tile)
 	sync_river_flow_boulders()
+
+
+## One texel of the across map, written toroidally -- see
+## _flow_across_image. Stored as a REAL float (FORMAT_RF): no encode
+## range, no quantisation beyond float32 itself.
+func _write_flow_across_texel(global: Vector2i, across_fraction: float) -> void:
+	if _flow_across_image == null:
+		var side := RiverFlowShader.FLOW_MAP_TILES
+		_flow_across_image = Image.create(side, side, false, Image.FORMAT_RF)
+	var side := RiverFlowShader.FLOW_MAP_TILES
+	_flow_across_image.set_pixel(
+		posmod(global.x, side), posmod(global.y, side),
+		Color(across_fraction, 0.0, 0.0)
+	)
+
+
+## Pushes the filled map into the shared flow material after a paint pass.
+func _push_flow_across_map() -> void:
+	if _flow_across_image == null:
+		return
+	if _flow_across_texture == null:
+		_flow_across_texture = ImageTexture.create_from_image(_flow_across_image)
+	else:
+		_flow_across_texture.update(_flow_across_image)
+	_river_flow_shader.shared_material().set_shader_parameter(
+		"flow_across_map", _flow_across_texture
+	)
 
 
 ## Pushes the current boulder set into the shared flow material -- called
@@ -3730,6 +3764,12 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# off the end of a river must not be painted as water.
 			if nearest.distance_tiles > apron:
 				_river_flow_layer.erase_cell(global)
+				# Still write the texel: a dry cell one tile past the apron
+				# is a bilinear NEIGHBOUR of a wet one, and an unwritten
+				# texel there would bleed garbage into the waterline.
+				_write_flow_across_texel(
+					global, nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+				)
 				continue
 
 			# Everything the look needs comes from REAL simulation state:
@@ -3743,6 +3783,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			var across_fraction: float = (
 				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 			)
+			_write_flow_across_texel(global, across_fraction)
 			if flow_boulder_at_global(global.x, global.y):
 				_river_flow_boulder_tiles[global] = true
 			else:
@@ -3751,7 +3792,6 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				global, 0,
 				_terrain_renderer.atlas_coords_for_river_flow(
 					nearest.course_bearing_deg,
-					across_fraction,
 					RiverFlowShader.is_fast_flow(hydraulics.velocity_m_s)
 				)
 			)
@@ -3760,6 +3800,7 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	# river boulders were collected here but never reached the uniform,
 	# and the water bent around nothing.
 	sync_river_flow_boulders()
+	_push_flow_across_map()
 
 
 ## Cardinal directions from (global_x, global_y) that hold a non-ocean,

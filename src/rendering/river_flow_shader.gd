@@ -71,7 +71,8 @@ uniform float smear_gain = 2.0;
 uniform float turbulence_strength = 1.6;
 uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.7;
-uniform float across_range = 1.4;
+uniform sampler2D flow_across_map : filter_linear, repeat_enable;
+uniform float flow_map_tiles = 160.0;
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
 uniform float bank_feather = 0.03;
@@ -166,16 +167,17 @@ void fragment() {
 	// pixel derived from the real tile sizes, not an invented chunkiness.
 	vec2 wp = floor(world_pos / pixel_snap) * pixel_snap + vec2(pixel_snap * 0.5);
 
-	// CONTINUOUS CROSS-SECTION -- the fix for "still a lot of individual
-	// squares". The tile bakes only its CENTRE's signed cross-channel
-	// offset (R); every fragment reconstructs its own by adding where it
-	// sits WITHIN the tile, projected on the flow perpendicular. Depth is
-	// then a per-pixel quantity: the parabola glides straight through tile
-	// boundaries instead of jumping a whole quantized band at each edge.
-	vec2 cell_center = (floor(wp / tile_px) + vec2(0.5)) * tile_px;
-	vec2 delta_tiles = (wp - cell_center) / tile_px;
-	float frag_across = (data.r * 2.0 - 1.0) * across_range
-		+ dot(delta_tiles, flow_perp) / half_width_tiles;
+	// THE ACROSS MAP -- the final form of the cross-channel field, after
+	// three rounds of quantization artefacts ("individual squares ...
+	// misalignment"). Across used to ride the atlas, and an atlas
+	// dimension must be quantized; now the manager writes each tile's
+	// EXACT catalog across into this float texture and bilinear filtering
+	// interpolates between tiles natively. No bins, no per-tile
+	// reconstruction, no seams -- by construction. Addressed toroidally
+	// (repeat wrapping) so chunk streaming never re-anchors the map: a
+	// loaded chunk overwrites the stale block its coordinates alias to.
+	vec2 map_uv = (wp / tile_px) / flow_map_tiles;
+	float frag_across = texture(flow_across_map, map_uv).r;
 	// THE SMOOTHING PASS ("it's still visible that the base are square
 	// tiles"): the baked across is quantized per tile, so lines, cel
 	// boundaries and the waterline all side-step together on the same
@@ -472,7 +474,11 @@ const EDDY_SCALE := 0.16
 ## by test_a_streakline_visibly_curves_within_its_own_length.
 const EDDY_DETAIL_WEIGHT := 0.7
 
-## The world tile size the reconstruction divides by -- the layer is
+## The across map's side length in tiles: the full loaded span (5 chunks
+## of 32) -- one texel per world tile, addressed toroidally.
+const FLOW_MAP_TILES := 160
+
+## The world tile size the map lookup divides by -- the layer is
 ## scaled by TerrainRenderer.LAYER_SCALE, so world_pos in the shader is in
 ## FINAL world pixels where a tile is TerrainRenderer.TILE_SIZE (16), NOT
 ## the 32 px art tile. Pinned against TerrainRenderer by test; getting it
@@ -586,7 +592,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("turbulence_strength", TURBULENCE_STRENGTH)
 	material.set_shader_parameter("eddy_scale", EDDY_SCALE)
 	material.set_shader_parameter("eddy_detail_weight", EDDY_DETAIL_WEIGHT)
-	material.set_shader_parameter("across_range", ProceduralRiverFlowSprite.ACROSS_RANGE)
+	material.set_shader_parameter("flow_map_tiles", float(FLOW_MAP_TILES))
 	material.set_shader_parameter("half_width_tiles", RiverCatalog.RIVER_HALF_WIDTH_TILES)
 	material.set_shader_parameter("tile_px", TILE_PX)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
@@ -617,14 +623,6 @@ func shared_material() -> ShaderMaterial:
 	if _shared_material == null:
 		_shared_material = make_material()
 	return _shared_material
-
-
-## A fragment's reconstructed signed across-offset: the tile centre's baked
-## value plus the fragment's own within-tile delta (in tiles, along the
-## flow perpendicular) over the half-width. The CPU mirror of the shader's
-## reconstruction, and what the tile-edge continuity test sweeps.
-static func reconstructed_across(center_fraction: float, delta_perp_tiles: float) -> float:
-	return center_fraction + delta_perp_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 
 
 ## The continuous depth ramp -- the five palette stops blended by the

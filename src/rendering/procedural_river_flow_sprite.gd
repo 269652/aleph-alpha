@@ -5,17 +5,15 @@ extends RefCounted
 ## shader" shape. See docs/concept/rivers.md's "Flow rendering" section.
 ##
 ## Channels:
-##   R  signed across-offset   -- the tile CENTRE's cross-channel offset in
-##                               half-widths, encoded over +/-ACROSS_RANGE.
-##                               The shader adds each fragment's own
-##                               within-tile delta to this, which is what
-##                               makes the cross-section continuous and the
-##                               shoreline the real bank curve.
+##   R  unused                 -- the signed across-offset lived here for a
+##                               while; it now travels as a bilinear float
+##                               map (EarthChunkManager._flow_across_image)
+##                               because an atlas dimension must be
+##                               quantized, and every quantisation of
+##                               across drew visible tile seams
 ##   G  flow direction x       -- as a VECTOR COMPONENT, not a bearing
 ##   B  flow direction y       -- ditto
-##   A  fast flag              -- and nothing else; the depth band it used
-##                               to pack is gone, replaced by the
-##                               continuous reconstruction above
+##   A  fast flag
 ##
 ## Direction is a vector rather than the compass angle it once was because
 ## it saves the shader a `radians`/`sin`/`cos` per fragment and removes the
@@ -52,28 +50,10 @@ const SIZE := 32
 ## fragment, so it pays rent.
 const DIRECTION_BINS := 96
 
-## The signed across-offset dimension: the tile centre's cross-channel
-## position in half-widths, negative on one bank, positive on the other,
-## |1| exactly at the bank line. The range runs past 1 so the painter's
-## apron cells (whose centres sit beyond the bank while their inner corners
-## still hold water) encode honestly rather than clamping to the bank.
-##
-## 48 bins over +/-1.4 is a 0.058 step -- the worst tile-to-tile seam the
-## reconstruction can show, versus the FULL BAND a tile used to jump.
-## Raised from 32 alongside the direction-bin increases after "there are
-## still hard cuts / misalignments": at bends, neighbouring tiles snapping
-## to coarse bins made their reconstructions visibly disagree at the shared
-## edge.
-const ACROSS_BINS := 48
-const ACROSS_RANGE := 1.4
 
-## 96 direction * 48 across * 2 speed = 9216 tiles in a 2D grid. A single
-## row would be 294,912 px wide, vastly past the 16,384 GL_MAX_TEXTURE_SIZE
-## common on the integrated GPUs this game targets. At 96 columns the atlas
-## is 3072x3072 -- each tile is a uniform fill, measured cheap to build.
-## Direction went 48 -> 96 with the world-anchored field: the remaining
-## seam at a bin change is (drag + smear) x the bin angle, so halving the
-## angle halves the last visible trace of it.
+## 96 direction * 2 speed = 192 tiles -- the across dimension left for
+## the bilinear map, taking 48x of the atlas with it. At 96 columns the
+## atlas is a slim 3072x64.
 const ATLAS_COLUMNS := 96
 
 ## Speed reads as a higher-contrast surface rather than as a continuum.
@@ -93,30 +73,13 @@ static func unpack_is_fast(packed: float) -> bool:
 	return packed > 0.5
 
 
-## Which across bin a signed cross-channel fraction falls in -- clamped,
-## never wrapped: past the encodable range is simply "at the range edge",
-## and those cells are transparent in the shader anyway.
-static func across_bin_for(signed_fraction: float) -> int:
-	var normalized := (clampf(signed_fraction, -ACROSS_RANGE, ACROSS_RANGE) / ACROSS_RANGE + 1.0) / 2.0
-	return clampi(int(normalized * float(ACROSS_BINS)), 0, ACROSS_BINS - 1)
-
-
-## The signed fraction at a bin's centre -- what the baked tile actually
-## says, and what the reconstruction tests quantize through.
-static func fraction_for_bin(bin: int) -> float:
-	return ((float(bin) + 0.5) / float(ACROSS_BINS) * 2.0 - 1.0) * ACROSS_RANGE
-
-
-## The red-channel value a signed fraction encodes to.
-static func red_for_fraction(signed_fraction: float) -> float:
-	return (clampf(signed_fraction, -ACROSS_RANGE, ACROSS_RANGE) / ACROSS_RANGE + 1.0) / 2.0
 
 
 ## Flat index of a (direction, across, speed) combination, and its position
 ## in the 2D atlas grid. One function owns the packing so the tile-set
 ## builder and the per-cell lookup can never disagree about it.
-static func atlas_index_for(direction_bin: int, across_bin: int, speed_index: int) -> int:
-	return ((speed_index * ACROSS_BINS) + across_bin) * DIRECTION_BINS + direction_bin
+static func atlas_index_for(direction_bin: int, speed_index: int) -> int:
+	return (speed_index * DIRECTION_BINS) + direction_bin
 
 
 ## The alpha value the fast flag bakes to -- slot centres, so 8-bit
@@ -130,22 +93,22 @@ static func atlas_cell_for_index(index: int) -> Vector2i:
 
 
 static func total_tiles() -> int:
-	return DIRECTION_BINS * ACROSS_BINS * SPEED_LEVELS
+	return DIRECTION_BINS * SPEED_LEVELS
 
 
-func generate_texture(angle_deg: float, across_fraction: float, packed_alpha: float) -> ImageTexture:
-	return ImageTexture.create_from_image(generate_image(angle_deg, across_fraction, packed_alpha))
+func generate_texture(angle_deg: float, packed_alpha: float) -> ImageTexture:
+	return ImageTexture.create_from_image(generate_image(angle_deg, packed_alpha))
 
 
 ## One data tile, uniform across its whole area like
 ## ProceduralHillshadeSprite's own tiles.
-func generate_image(angle_deg: float, across_fraction: float, packed_alpha: float) -> Image:
+func generate_image(angle_deg: float, packed_alpha: float) -> Image:
 	var image := Image.create(SIZE, SIZE, false, Image.FORMAT_RGBA8)
 	var radians := deg_to_rad(fposmod(angle_deg, 360.0))
 	# Godot 2D: +X east, +Y DOWN (screen space), so "north" is -Y.
 	var direction := Vector2(sin(radians), -cos(radians))
 	image.fill(Color(
-		red_for_fraction(across_fraction),
+		0.0,
 		direction.x * 0.5 + 0.5,
 		direction.y * 0.5 + 0.5,
 		clampf(packed_alpha, 0.0, 1.0)

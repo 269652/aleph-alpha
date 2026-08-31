@@ -40,7 +40,7 @@ func test_default_uniforms_match_the_tuned_constants():
 	assert_eq(material.get_shader_parameter("shore_pos"), RiverFlowShader.SHORE_POS)
 	assert_eq(material.get_shader_parameter("band0_color"), RiverFlowShader.BAND_COLORS[0])
 	assert_eq(material.get_shader_parameter("band4_color"), RiverFlowShader.BAND_COLORS[4])
-	assert_eq(material.get_shader_parameter("across_range"), ProceduralRiverFlowSprite.ACROSS_RANGE)
+	assert_eq(material.get_shader_parameter("flow_map_tiles"), float(RiverFlowShader.FLOW_MAP_TILES))
 	assert_eq(
 		material.get_shader_parameter("half_width_tiles"),
 		RiverCatalog.RIVER_HALF_WIDTH_TILES
@@ -178,70 +178,6 @@ func test_the_shader_is_the_water_inside_and_nothing_outside():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("COLOR = vec4(body, wet)"))
 
 
-# -- the continuous cross-section --------------------------------------------
-#
-# THE fix for "still a lot of individual squares". Depth used to be a
-# per-tile quantized band, so every water tile broadcast one flat colour
-# over its whole area -- at this camera zoom, a mosaic of rectangles, and no
-# amount of softening the band MIXING could hide that the underlying value
-# jumped at every tile edge.
-#
-# Now the tile bakes its centre's SIGNED across-offset and every FRAGMENT
-# reconstructs its own: centre offset + (position within the tile projected
-# on the flow perpendicular). The parabola is shaded from that, per pixel,
-# so the cross-section glides straight through tile boundaries.
-
-## The reconstruction identity, at the exact worst spot: a shared tile edge
-## evaluated from BOTH sides. The only disagreement allowed is the across
-## quantisation step -- the full-band jumps are structurally gone.
-func test_reconstruction_is_continuous_across_a_tile_edge():
-	var worst := 0.0
-	for step in 160:
-		# A straight channel: the true field is x / HALF_WIDTH. Two tile
-		# centres one tile apart, their baked (quantized) centre values,
-		# and the shared edge halfway between them, seen from each side.
-		var left_centre := lerpf(-2.4, 1.4, float(step) / 159.0)
-		var right_centre := left_centre + 1.0
-		var left_baked := ProceduralRiverFlowSprite.fraction_for_bin(
-			ProceduralRiverFlowSprite.across_bin_for(
-				left_centre / RiverCatalog.RIVER_HALF_WIDTH_TILES
-			)
-		)
-		var right_baked := ProceduralRiverFlowSprite.fraction_for_bin(
-			ProceduralRiverFlowSprite.across_bin_for(
-				right_centre / RiverCatalog.RIVER_HALF_WIDTH_TILES
-			)
-		)
-		var from_left := RiverFlowShader.reconstructed_across(left_baked, 0.5)
-		var from_right := RiverFlowShader.reconstructed_across(right_baked, -0.5)
-		worst = maxf(worst, absf(from_left - from_right))
-	var bin_step := (
-		2.0 * ProceduralRiverFlowSprite.ACROSS_RANGE
-		/ float(ProceduralRiverFlowSprite.ACROSS_BINS)
-	)
-	assert_lte(
-		worst, bin_step + 0.0001,
-		"tile edges disagree by %.4f -- more than one quantisation step" % worst
-	)
-
-
-## The within-tile refinement must actually refine: a fragment half a tile
-## toward the bank sits measurably farther across than its tile centre.
-func test_fragments_within_one_tile_get_their_own_across_offset():
-	assert_gt(
-		RiverFlowShader.reconstructed_across(0.5, 0.5),
-		RiverFlowShader.reconstructed_across(0.5, 0.0)
-	)
-
-
-## Structural: the shader must derive the within-tile delta from world
-## position against the real tile grid, and project it on the same
-## flow-perpendicular the catalog's sign convention uses.
-func test_the_shader_reconstructs_from_the_real_tile_grid():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("floor(wp / tile_px)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("dot(delta_tiles, flow_perp) / half_width_tiles"))
-
-
 ## The tile size baked into the shader must be the world's real tile size --
 ## the layer is scaled, so this is TILE_SIZE (16), NOT ART_TILE_SIZE (32).
 ## Getting this wrong halves or doubles every reconstructed offset.
@@ -298,16 +234,6 @@ func test_the_waterline_fades_monotonically():
 func test_the_feather_fits_inside_the_painted_apron():
 	var apron_fraction := RiverCatalog.RIVER_BANK_APRON_TILES / RiverCatalog.RIVER_HALF_WIDTH_TILES
 	assert_lte(RiverFlowShader.BANK_FEATHER, apron_fraction - 0.05)
-
-
-## And the sprite's encodable range must cover every painted cell's centre,
-## out to the far corner of the outermost apron tile.
-func test_the_across_range_covers_the_painted_apron():
-	var needed := (
-		(RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES)
-		/ RiverCatalog.RIVER_HALF_WIDTH_TILES
-	)
-	assert_gte(ProceduralRiverFlowSprite.ACROSS_RANGE, needed)
 
 
 # -- fast flow ---------------------------------------------------------------
@@ -1166,15 +1092,11 @@ func test_the_across_jitter_is_wired_into_the_reconstruction():
 	)
 
 
-## The jitter exists to MASK the quantisation, never to reshape the
-## channel: its full swing stays within a bin step and a half of the baked
-## across, and comfortably inside the painted apron.
-func test_the_jitter_only_masks_the_quantisation():
-	var bin_step := (
-		2.0 * ProceduralRiverFlowSprite.ACROSS_RANGE
-		/ float(ProceduralRiverFlowSprite.ACROSS_BINS)
-	)
-	assert_lte(RiverFlowShader.ACROSS_JITTER, bin_step * 1.5)
+## The jitter is a small organic roughening, never a reshaping: with the
+## bilinear map there is no quantisation left to mask, so the cap is a
+## plain strength bound -- well under a tenth of the half-width.
+func test_the_jitter_only_roughens_never_reshapes():
+	assert_lte(RiverFlowShader.ACROSS_JITTER, 0.09)
 	assert_gt(RiverFlowShader.ACROSS_JITTER, 0.0)
 
 
@@ -1219,3 +1141,43 @@ func test_the_shader_bends_and_dries_around_the_boulder_uniforms():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("for (int b = 0; b < boulder_count; b++)"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("frag_across += side * boulder_push * falloff * falloff;"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("* eyot_dry;"))
+
+
+# -- the bilinear across map --------------------------------------------------
+#
+# Reported (third bin artefact in a row): "there are a lot of individual
+# squares visible because of misalignment". The root cause was structural:
+# across rode the ATLAS, and an atlas dimension must be quantized -- 48
+# bins meant every tile's water sat on a slightly wrong lane, side-stepping
+# at each boundary. The across now lives in a small float DATA TEXTURE the
+# manager fills with each tile's EXACT catalog value; the shader samples
+# it with bilinear filtering, so the GPU interpolates between tiles
+# natively -- no bins, no reconstruction, no seams, by construction.
+
+func test_the_shader_samples_the_across_map_bilinearly():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("uniform sampler2D flow_across_map : filter_linear, repeat_enable;"),
+		"the across must come from a linearly filtered map"
+	)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float frag_across = texture(flow_across_map, map_uv).r;"),
+		"the fragment across is the sampled map value, nothing reconstructed"
+	)
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("across_range"),
+		"no encode range may survive -- the map stores real signed floats"
+	)
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("floor(wp / tile_px)"),
+		"the tile-centre reconstruction is gone with the bins that forced it"
+	)
+
+
+## The map is addressed toroidally -- tile mod map size -- so chunk
+## streaming never copies or re-anchors it: a newly loaded chunk simply
+## overwrites the stale block its coordinates alias to.
+func test_the_map_lookup_wraps_toroidally():
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("vec2 map_uv = (wp / tile_px) / flow_map_tiles;"),
+		"the lookup must be world tiles over map size, with repeat wrapping"
+	)

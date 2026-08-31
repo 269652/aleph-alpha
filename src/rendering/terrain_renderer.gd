@@ -1552,13 +1552,10 @@ func build_hillshade_overlay_tile_set() -> TileSet:
 ## cross-channel offset, fast flag) triple -- see ProceduralRiverFlowSprite
 ## and docs/concept/rivers.md, same binned-dimensions indexing shape
 ## atlas_coords_for_hillshade already established.
-func atlas_coords_for_river_flow(
-	angle_deg: float, across_fraction: float, is_fast: bool
-) -> Vector2i:
+func atlas_coords_for_river_flow(angle_deg: float, is_fast: bool) -> Vector2i:
 	return ProceduralRiverFlowSprite.atlas_cell_for_index(
 		ProceduralRiverFlowSprite.atlas_index_for(
 			ProceduralRiverFlowSprite.direction_bin_for(angle_deg),
-			ProceduralRiverFlowSprite.across_bin_for(across_fraction),
 			1 if is_fast else 0
 		)
 	)
@@ -1583,21 +1580,17 @@ func build_river_flow_tile_set() -> TileSet:
 		columns * ART_TILE_SIZE, rows * ART_TILE_SIZE, false, Image.FORMAT_RGBA8
 	)
 	for speed_index in ProceduralRiverFlowSprite.SPEED_LEVELS:
-		for across_bin in ProceduralRiverFlowSprite.ACROSS_BINS:
-			for direction_bin in ProceduralRiverFlowSprite.DIRECTION_BINS:
-				var index := ProceduralRiverFlowSprite.atlas_index_for(
-					direction_bin, across_bin, speed_index
-				)
-				var cell := ProceduralRiverFlowSprite.atlas_cell_for_index(index)
-				var tile_image := _river_flow_generator.generate_image(
-					ProceduralRiverFlowSprite.angle_for_bin(direction_bin),
-					ProceduralRiverFlowSprite.fraction_for_bin(across_bin),
-					ProceduralRiverFlowSprite.alpha_for_fast(speed_index == 1)
-				)
-				flow_image.blit_rect(
-					tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),
-					cell * ART_TILE_SIZE
-				)
+		for direction_bin in ProceduralRiverFlowSprite.DIRECTION_BINS:
+			var index := ProceduralRiverFlowSprite.atlas_index_for(direction_bin, speed_index)
+			var cell := ProceduralRiverFlowSprite.atlas_cell_for_index(index)
+			var tile_image := _river_flow_generator.generate_image(
+				ProceduralRiverFlowSprite.angle_for_bin(direction_bin),
+				ProceduralRiverFlowSprite.alpha_for_fast(speed_index == 1)
+			)
+			flow_image.blit_rect(
+				tile_image, Rect2i(Vector2i.ZERO, Vector2i(ART_TILE_SIZE, ART_TILE_SIZE)),
+				cell * ART_TILE_SIZE
+			)
 
 	var flow_source := TileSetAtlasSource.new()
 	flow_source.texture = ImageTexture.create_from_image(flow_image)

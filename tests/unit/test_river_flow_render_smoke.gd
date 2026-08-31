@@ -37,7 +37,7 @@ func test_a_real_tile_map_layer_with_the_shared_river_flow_material_runs_several
 
 	# A real river cell, painted exactly the way
 	# EarthChunkManager._paint_river_flow_overlay does.
-	var atlas_coords := renderer.atlas_coords_for_river_flow(135.0, 0.4, true)
+	var atlas_coords := renderer.atlas_coords_for_river_flow(135.0, true)
 	layer.set_cell(Vector2i(0, 0), 0, atlas_coords)
 
 	assert_true(layer.material is ShaderMaterial, "precondition: a real ShaderMaterial is assigned")
@@ -114,12 +114,23 @@ func _stroke_pixel_fraction_at(world_offset: Vector2) -> float:
 	viewport.add_child(camera)
 	camera.make_current()
 
-	# A real cross-section of cells: the guided lines are laid out by the
-	# across-position, so a slab of identical across values would test only
-	# one sliver of the family.
+	# A real cross-section: the across now comes from the bilinear float
+	# map, so the harness builds one the way the manager does -- exact
+	# per-tile values -- and hands it to the material.
+	var side := RiverFlowShader.FLOW_MAP_TILES
+	var map_image := Image.create(side, side, false, Image.FORMAT_RF)
+	var origin_tile := Vector2i(world_offset / 16.0)
+	for y in range(-2, 10):
+		for x in range(-2, 10):
+			var across := (float(y) - 3.5) / 3.5 * 0.9
+			map_image.set_pixel(
+				posmod(origin_tile.x + x, side), posmod(origin_tile.y + y, side),
+				Color(across, 0.0, 0.0)
+			)
+	var map_texture := ImageTexture.create_from_image(map_image)
+	flow_shader.shared_material().set_shader_parameter("flow_across_map", map_texture)
+	var atlas_coords := renderer.atlas_coords_for_river_flow(180.0, true)
 	for y in range(8):
-		var across := (float(y) - 3.5) / 3.5 * 0.9
-		var atlas_coords := renderer.atlas_coords_for_river_flow(180.0, across, true)
 		for x in range(8):
 			layer.set_cell(Vector2i(x, y), 0, atlas_coords)
 

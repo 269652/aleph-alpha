@@ -7345,6 +7345,24 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: the bilinear across map** (large, the definitive one) — ✅
+  Done — reported (third bin artefact in a row): "there are a lot of
+  individual squares visible because of misalignment". Root cause was
+  structural: across rode the ATLAS, and an atlas dimension must be
+  quantized -- 48 bins meant every tile's water sat on a slightly wrong
+  lane, side-stepping at each boundary, and no bin count the atlas budget
+  allows could fix it. The across now travels as a small float DATA
+  TEXTURE (FORMAT_RF, one texel per tile over the 160-tile loaded span,
+  addressed toroidally so chunk streaming never re-anchors it -- a loaded
+  chunk overwrites the stale block its coordinates alias to). The painter
+  writes each tile's EXACT catalog across (dry apron neighbours included,
+  so bilinear never bleeds garbage into the waterline); the shader
+  samples with filter_linear and the GPU interpolates between tiles
+  natively -- no bins, no tile-centre reconstruction, no seams, by
+  construction. The atlas across dimension left with it (9216 -> 192
+  tiles, a 48x cut); the sin-era jitter cap re-derived as a plain
+  strength bound (nothing left to mask). Suites: shader 78, sprite 11,
+  renderer 157, manager river 3, ponding 13, both GPU tests -- green.
 - **Rivers: natural rocks reach the shader + ore bends too** (small) — ✅
   Done — reported with a three-rock screenshot: "current lines don't part
   around the boulder". The feed only synced at layer setup and on

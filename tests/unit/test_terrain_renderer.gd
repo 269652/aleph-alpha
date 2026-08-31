@@ -2390,58 +2390,44 @@ func test_the_river_flow_atlas_is_a_grid_not_an_unuploadable_single_row():
 
 func test_atlas_coords_for_river_flow_differs_by_direction_bin():
 	assert_ne(
-		renderer.atlas_coords_for_river_flow(0.0, 0.3, false),
-		renderer.atlas_coords_for_river_flow(90.0, 0.3, false)
-	)
-
-
-func test_atlas_coords_for_river_flow_differs_by_across_offset():
-	assert_ne(
-		renderer.atlas_coords_for_river_flow(0.0, -0.8, false),
-		renderer.atlas_coords_for_river_flow(0.0, 0.8, false)
+		renderer.atlas_coords_for_river_flow(0.0, false),
+		renderer.atlas_coords_for_river_flow(90.0, false)
 	)
 
 
 func test_atlas_coords_for_river_flow_differs_by_speed():
 	assert_ne(
-		renderer.atlas_coords_for_river_flow(0.0, 0.3, false),
-		renderer.atlas_coords_for_river_flow(0.0, 0.3, true)
+		renderer.atlas_coords_for_river_flow(0.0, false),
+		renderer.atlas_coords_for_river_flow(0.0, true)
 	)
 
 
 func test_atlas_coords_for_river_flow_wraps_at_360():
 	assert_eq(
-		renderer.atlas_coords_for_river_flow(0.0, 0.3, false),
-		renderer.atlas_coords_for_river_flow(360.0, 0.3, false)
+		renderer.atlas_coords_for_river_flow(0.0, false),
+		renderer.atlas_coords_for_river_flow(360.0, false)
 	)
 
 
-## Each baked channel must carry its own real datum -- R the signed across
-## offset, G/B the direction vector, A the fast flag. A tile whose channels
-## did not vary with their inputs would silently draw every reach alike.
+## Each baked channel must carry its own real datum -- G/B the direction
+## vector, A the fast flag (the across offset now travels as the bilinear
+## float map, not an atlas channel). A tile whose channels did not vary
+## with their inputs would silently draw every reach alike.
 func test_river_flow_tiles_encode_real_per_channel_data():
 	var overlay_set := renderer.build_river_flow_tile_set()
 	var source := overlay_set.get_source(0) as TileSetAtlasSource
 	var image: Image = source.texture.get_image()
 	var art := TerrainRenderer.ART_TILE_SIZE
 
-	var near_bank := renderer.atlas_coords_for_river_flow(0.0, -1.0, false) * art
-	var far_bank := renderer.atlas_coords_for_river_flow(0.0, 1.0, false) * art
-	assert_lt(
-		image.get_pixel(near_bank.x, near_bank.y).r,
-		image.get_pixel(far_bank.x, far_bank.y).r,
-		"the red channel must carry the signed across offset"
-	)
-
-	var slow := renderer.atlas_coords_for_river_flow(0.0, 0.3, false) * art
-	var fast := renderer.atlas_coords_for_river_flow(0.0, 0.3, true) * art
+	var slow := renderer.atlas_coords_for_river_flow(0.0, false) * art
+	var fast := renderer.atlas_coords_for_river_flow(0.0, true) * art
 	assert_lt(
 		image.get_pixel(slow.x, slow.y).a, image.get_pixel(fast.x, fast.y).a,
 		"the alpha channel must carry the fast flag"
 	)
 
-	var north := renderer.atlas_coords_for_river_flow(0.0, 0.3, false) * art
-	var east := renderer.atlas_coords_for_river_flow(90.0, 0.3, false) * art
+	var north := renderer.atlas_coords_for_river_flow(0.0, false) * art
+	var east := renderer.atlas_coords_for_river_flow(90.0, false) * art
 	var north_pixel := image.get_pixel(north.x, north.y)
 	var east_pixel := image.get_pixel(east.x, east.y)
 	assert_true(
