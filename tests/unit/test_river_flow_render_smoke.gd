@@ -114,9 +114,12 @@ func _stroke_pixel_fraction_at(world_offset: Vector2) -> float:
 	viewport.add_child(camera)
 	camera.make_current()
 
-	# Mid-channel cells: across 0 -> deep body, fully wet, no bank clipping.
-	var atlas_coords := renderer.atlas_coords_for_river_flow(180.0, 0.0, true)
+	# A real cross-section of cells: the guided lines are laid out by the
+	# across-position, so a slab of identical across values would test only
+	# one sliver of the family.
 	for y in range(8):
+		var across := (float(y) - 3.5) / 3.5 * 0.9
+		var atlas_coords := renderer.atlas_coords_for_river_flow(180.0, across, true)
 		for x in range(8):
 			layer.set_cell(Vector2i(x, y), 0, atlas_coords)
 

@@ -54,8 +54,10 @@ uniform float cel_levels = 6.0;
 uniform float dither_strength = 0.5;
 uniform float ink_width = 0.06;
 uniform vec3 ink_color : source_color = vec3(0.05, 0.13, 0.25);
-uniform float line_count = 4.0;
-uniform float line_width = 0.022;
+uniform float line_count = 3.0;
+uniform float across_line_scale = 1.0;
+uniform float line_wobble = 0.6;
+uniform float line_width = 0.03;
 uniform float line_strength = 0.7;
 uniform vec3 line_color : source_color = vec3(0.85, 0.97, 1.0);
 uniform vec3 line_color_deep : source_color = vec3(0.07, 0.26, 0.48);
@@ -277,10 +279,22 @@ void fragment() {
 	// no stroke: quiet water. Fast reaches brighten the strokes rather
 	// than widening them -- widening nearly doubled coverage on big
 	// rivers, where almost every cell is genuinely fast.
-	float level_frac = fract(n * line_count) - 0.5;
+	// FLOW-GUIDED LINES -- the field whose contours the strokes trace is
+	// the channel's own across-position plus advected wobble. Because the
+	// across ramp dominates (across_line_scale >= line_wobble, by test),
+	// the field is monotone bank-to-bank and every level set is an OPEN
+	// curve running along the river: long flowing lines by construction,
+	// wobbling, pinching together and separating as the noise underneath
+	// advects -- and they can NEVER close into a cell, which is exactly
+	// what contours of the raw noise always eventually did ("more like
+	// perlin noise cells"): level sets of any healthy scalar field close
+	// around its extrema. The guide also survives a railed field -- a
+	// dead-flat n still draws the full family of lines.
+	float s_field = frag_across * across_line_scale + (n - 0.5) * line_wobble;
+	float level_frac = fract(s_field * line_count) - 0.5;
 	float dist_n = abs(level_frac) / line_count;
 	float stroke = 1.0 - smoothstep(line_width * 0.5, line_width, dist_n);
-	float parity = mod(floor(n * line_count), 2.0);
+	float parity = mod(floor(s_field * line_count), 2.0);
 	float wave = stroke * mix(0.75, 1.0, parity) * mix(0.8, 1.1, is_fast);
 	// ADAPTIVE INK: pale strokes vanish on the bright shallow cels
 	// (reported from the Rhine straight: "no current lines at all"), so
@@ -429,16 +443,18 @@ const TILE_PX := 16.0
 ## clipped by the last painted cell and the straight edge returns.
 const BANK_FEATHER := 0.03
 
-## The wave strokes: periodic contours at LINE_COUNT evenly spaced levels
-## of the advected field, stroke half-width in field units, and the pale
-## ink they are drawn with. Fine, long and dense by explicit request
-## ("finer, longer lines which merge and unmerge ... just everywhere") --
-## a fatter, sparser pass pooled into voronoi-cell blobs wherever the
-## field flattened, because a stroke's spatial width is its n-band over
-## the local gradient. Coverage and the measured width/spacing bands hold
-## the look from both sides.
-const LINE_COUNT := 4.0
-const LINE_WIDTH := 0.022
+## The flow-guided current lines: contours of (across ramp + advected
+## wobble). The guide/wobble ratio is the whole design -- the ramp
+## dominating is what makes every line an OPEN curve along the river (the
+## noise-contour design always closed into "perlin noise cells" around the
+## field extrema, because level sets of any healthy field do); the wobble
+## is what makes the lines wander, pinch together and separate as the
+## field advects. LINE_COUNT lines per unit of the guided field; width in
+## field units.
+const LINE_COUNT := 3.0
+const ACROSS_LINE_SCALE := 1.0
+const LINE_WOBBLE := 0.6
+const LINE_WIDTH := 0.03
 const LINE_STRENGTH := 0.7
 const LINE_COLOR := Color(0.85, 0.97, 1.0)
 
@@ -513,6 +529,8 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("tile_px", TILE_PX)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
 	material.set_shader_parameter("line_count", LINE_COUNT)
+	material.set_shader_parameter("across_line_scale", ACROSS_LINE_SCALE)
+	material.set_shader_parameter("line_wobble", LINE_WOBBLE)
 	material.set_shader_parameter("line_width", LINE_WIDTH)
 	material.set_shader_parameter("line_strength", LINE_STRENGTH)
 	material.set_shader_parameter("line_color", LINE_COLOR)
@@ -561,11 +579,17 @@ static func bank_alpha(across_magnitude: float) -> float:
 ## The stroke mask, mirroring the shader: how strongly a field value n
 ## lands inside either contour family. What the coverage, morphing and
 ## fast-reach tests all measure.
-static func stroke_mask(n: float, is_fast: bool) -> float:
-	var level_frac := fposmod(n * LINE_COUNT, 1.0) - 0.5
-	var dist_n := absf(level_frac) / LINE_COUNT
-	var stroke := 1.0 - smoothstep(LINE_WIDTH * 0.5, LINE_WIDTH, dist_n)
-	var parity := fposmod(floor(n * LINE_COUNT), 2.0)
+## The guided stroke field for one fragment: signed across-fraction plus
+## the advected wobble -- the thing whose level sets ARE the current lines.
+static func stroke_field(across_fraction: float, n: float) -> float:
+	return across_fraction * ACROSS_LINE_SCALE + (n - 0.5) * LINE_WOBBLE
+
+
+static func stroke_mask(s_value: float, is_fast: bool) -> float:
+	var level_frac := fposmod(s_value * LINE_COUNT, 1.0) - 0.5
+	var dist_s := absf(level_frac) / LINE_COUNT
+	var stroke := 1.0 - smoothstep(LINE_WIDTH * 0.5, LINE_WIDTH, dist_s)
+	var parity := fposmod(floor(s_value * LINE_COUNT), 2.0)
 	return stroke * lerpf(0.75, 1.0, parity) * (1.1 if is_fast else 0.8)
 
 

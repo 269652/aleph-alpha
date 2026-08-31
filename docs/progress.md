@@ -7345,6 +7345,26 @@ germany" and a 4-tile minimum width).
   widths extrapolated rather than verified, and very flat lower courses
   solve somewhat deep (Rhine ~11 m vs a real ~9 m) where slope hits the
   model floor.
+- **Rivers: flow-guided current lines** (medium) — ✅ Done — reported:
+  "Before it was longer; flowing lines; they merged and unmerged, now they
+  are more like perlin noise cells.. can you restore natural currents
+  every where?" The root cause was TOPOLOGICAL, not tunable: level sets of
+  any healthy scalar field close into loops around its extrema, so every
+  contour-of-noise variant eventually celled up (the long open lines of an
+  earlier build were partly the float32-degenerate hash accidentally
+  striping the noise). Diagnosed with a new offline A/B rig (renders the
+  real material at world coordinates to PNGs; parameter variants proved
+  weights/gain were NOT the cause before any code changed). The stroke
+  field is now GUIDED BY THE CHANNEL: s = across-position * scale +
+  advected wobble. The ramp dominating (scale >= wobble, pinned) makes s
+  monotone bank-to-bank, so every level set is an OPEN curve running along
+  the river -- long flowing lines BY CONSTRUCTION that wobble, pinch and
+  separate as the field advects, never a cell; a dead-railed field still
+  draws the full family (the old strokeless failure mode dissolves,
+  pinned). Measured pins: <15% across-step foldbacks (pinches allowed --
+  they ARE the merge/unmerge), >=4 lines on a dead field, ~2 px width,
+  6-26 px spacing, quarter-cycle morphing. Far-world GPU test repainted as
+  a real cross-section. Shader suite 71 + both GPU tests green.
 - **Rivers: the float32 hash landmine** (small, nasty) — ✅ Done — the
   daylight report "No currents visible in game at long straight sections"
   finally exposed a bug NO CPU mirror could catch: the classic

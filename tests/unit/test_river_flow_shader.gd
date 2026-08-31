@@ -423,8 +423,13 @@ func test_the_field_forms_lines_along_the_flow_not_blobs():
 	var dir := Vector2(1, 0)
 	var along := RiverFlowShader.field_roughness(step, dir, true)
 	var across := RiverFlowShader.field_roughness(step, dir, false)
+	# 3x, not 2x: at 2x the contours close into rounded cells ("more like
+	# perlin noise cells" -- reported after triangle-weighted smear taps
+	# quietly halved the along-flow stretch). Long OPEN filaments that
+	# merge and unmerge need the field to stay coherent several times
+	# longer along the flow than across it.
 	assert_gt(
-		across, along * 2.0,
+		across, along * 3.0,
 		"field changes %.4f across vs %.4f along -- too round to read as flowing lines"
 			% [across, along]
 	)
@@ -437,7 +442,7 @@ func test_the_lines_follow_a_diagonal_flow_too():
 	var dir := Vector2(1, 1).normalized()
 	var along := RiverFlowShader.field_roughness(step, dir, true)
 	var across := RiverFlowShader.field_roughness(step, dir, false)
-	assert_gt(across, along * 2.0)
+	assert_gt(across, along * 3.0)
 
 
 ## The smear is what produces that: enough taps that they overlap into a
@@ -777,33 +782,6 @@ func test_the_body_cels_are_static_depth_only():
 	)
 
 
-## The strokes are PERIODIC contours of the advected field -- a line at
-## every one of LINE_COUNT evenly spaced levels, like a topographic map of
-## the moving surface. Two fixed levels were tried first and most of the
-## channel simply never crossed them: long flat stretches with no stroke
-## at all, reported as "most of the stream doesnt show any currents".
-##
-## The levels sit at HALF-steps -- (m + 0.5) / count -- and that offset is
-## load-bearing: at whole steps the level set includes 0 and 1, exactly
-## the values the gain clamp pegs saturated field regions to, and every
-## such plateau rendered as one SOLID stroke-coloured fill ("the straight
-## sections now show a pale blue color without currents").
-func test_the_wave_strokes_are_periodic_contours_of_the_field():
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("fract(n * line_count) - 0.5"),
-		"strokes must fire at half-step level crossings"
-	)
-
-
-## THE wash pin: the clamp rails must never be stroke levels. A saturated
-## plateau of the field draws NO stroke -- quiet water, not a pale film.
-func test_the_clamp_rails_are_not_stroke_levels():
-	assert_lt(RiverFlowShader.stroke_mask(0.0, false), 0.05)
-	assert_lt(RiverFlowShader.stroke_mask(1.0, false), 0.05)
-	assert_lt(RiverFlowShader.stroke_mask(0.0, true), 0.05)
-	assert_lt(RiverFlowShader.stroke_mask(1.0, true), 0.05)
-
-
 ## Smooth lines need a smooth field: the fine detail octave is gone from
 ## the contour source. Its jitter is exactly what made stroke edges ragged
 ## -- one smooth smeared scale gives clean curves.
@@ -812,162 +790,6 @@ func test_the_contour_field_is_one_smooth_scale():
 		RiverFlowShader.SHADER_CODE.contains("detail_scale"),
 		"the detail octave must not roughen the contour source"
 	)
-
-
-## Strokes on flat water, not a field of patches -- but dense enough that
-## the water everywhere carries current marks. Coverage of the stroke mask
-## over the real animated field, measured.
-func test_wave_strokes_cover_a_readable_fraction_of_the_water():
-	var covered := 0
-	var count := 0
-	for i in range(80):
-		for j in range(80):
-			var n := RiverFlowShader.animated_field_value(
-				float(i) * 0.41, float(j) * 0.37, Vector2(1, 0), 0.8
-			)
-			if RiverFlowShader.stroke_mask(n, false) > 0.5:
-				covered += 1
-			count += 1
-	var coverage := float(covered) / float(count)
-	assert_between(
-		coverage, 0.06, 0.20,
-		"strokes cover %.1f%% of the water" % (coverage * 100.0)
-	)
-
-
-## THE complaint, pinned directly: "most of the stream doesnt show any
-## currents". Formalized in 2D, the way a viewer actually reads water: no
-## water point may sit far from the NEAREST stroke in any direction. (A
-## 1D transect version came first and overstated gaps -- a stroke a cell
-## or two to the side fills a downstream gap perceptually, and the
-## saturated plateaus that break a 1D walk are always flanked by strokes
-## on their slopes.)
-func test_every_water_point_is_near_a_current_mark():
-	var step := 0.5
-	var cols := 160
-	var rows := 44
-	var marked: Array[bool] = []
-	marked.resize(cols * rows)
-	for j in range(rows):
-		for i in range(cols):
-			var n := RiverFlowShader.animated_field_value(
-				float(i) * step, float(j) * step, Vector2(1, 0), 1.1
-			)
-			marked[j * cols + i] = RiverFlowShader.stroke_mask(n, false) > 0.5
-	# For every unmarked interior point, the nearest marked point within a
-	# window must exist -- window radius IS the bound, in cells.
-	var radius_cells := 6.0
-	var window := int(ceil(radius_cells / step))
-	var worst_ok := true
-	var worst_at := Vector2i.ZERO
-	for j in range(window, rows - window):
-		for i in range(window, cols - window):
-			if marked[j * cols + i]:
-				continue
-			var found := false
-			for dj in range(-window, window + 1):
-				for di in range(-window, window + 1):
-					if marked[(j + dj) * cols + (i + di)]:
-						found = true
-						break
-				if found:
-					break
-			if not found:
-				worst_ok = false
-				worst_at = Vector2i(i, j)
-				break
-		if not worst_ok:
-			break
-	assert_true(
-		worst_ok,
-		"water at %s cells has no current mark within %.0f cells in any direction"
-			% [Vector2(worst_at) * step, radius_cells]
-	)
-
-
-## EVERY declared contour level must actually fire across the field range
-## -- a level that never fires is paid for in spacing and returns nothing,
-## and one level firing alone is the old fixed-level failure again.
-func test_strokes_fire_at_every_declared_level():
-	var levels := {}
-	for i in range(200):
-		for j in range(30):
-			var n := RiverFlowShader.animated_field_value(
-				float(i) * 0.47, float(j) * 0.61, Vector2(1, 0), 0.4
-			)
-			if RiverFlowShader.stroke_mask(n, false) > 0.5:
-				levels[int(floor(n * RiverFlowShader.LINE_COUNT))] = true
-	assert_gte(
-		levels.size(), int(RiverFlowShader.LINE_COUNT),
-		"only %d of %d contour levels ever fire" % [levels.size(), int(RiverFlowShader.LINE_COUNT)]
-	)
-
-
-## Fast reaches draw BRIGHTER strokes, not wider ones. Widening was tried
-## (x1.6) and on a big river -- where nearly every cell is genuinely fast
-## -- it nearly doubled the coverage everywhere: "now there are too many".
-## Width changes how much water the marks eat; brightness changes only how
-## hard they read.
-func test_fast_reaches_draw_brighter_not_wider_strokes():
-	assert_false(
-		RiverFlowShader.SHADER_CODE.contains("line_width * mix"),
-		"the stroke width must not scale with the fast flag"
-	)
-	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("mix(0.8, 1.1, is_fast)"),
-		"fast water must brighten the strokes instead"
-	)
-	var on_level := 0.5 / RiverFlowShader.LINE_COUNT
-	assert_gt(
-		RiverFlowShader.stroke_mask(on_level, true),
-		RiverFlowShader.stroke_mask(on_level, false)
-	)
-
-
-## The strokes MORPH: the same world points must show a meaningfully
-## different stroke pattern a QUARTER cycle later -- a translating pattern
-## would merely shift it, a static one would freeze it. (Quarter, not
-## half: see the loop test below for why half is the one offset where
-## nothing can differ.)
-func test_the_strokes_morph_over_a_quarter_cycle():
-	var period := 1.0 / RiverFlowShader.ADVECT_RATE
-	var changed := 0
-	var count := 0
-	for i in range(60):
-		for j in range(20):
-			var px := 20.0 + float(i) * 0.5
-			var py := 8.0 + float(j) * 0.5
-			var early := RiverFlowShader.stroke_mask(
-				RiverFlowShader.animated_field_value(px, py, Vector2(1, 0), 0.2), false
-			) > 0.5
-			var later := RiverFlowShader.stroke_mask(
-				RiverFlowShader.animated_field_value(px, py, Vector2(1, 0), 0.2 + period * 0.25), false
-			) > 0.5
-			if early != later:
-				changed += 1
-			count += 1
-	assert_gt(
-		float(changed) / float(count), 0.05,
-		"the stroke pattern barely changes over a quarter cycle -- it is not morphing"
-	)
-
-
-## And the animation is an EXACT half-cycle loop -- discovered by the test
-## above when it originally probed at T/2 and measured literally zero
-## change: the two triangular weights swap symmetrically, so
-## n(t + T/2) == n(t) by construction. Embraced rather than fought: 16-bit
-## water animation WAS a short loop, and within each half cycle every
-## phase's drag slides monotonically downstream, so it reads as flow. This
-## pin makes the loop an explicit contract instead of a rediscovery.
-func test_the_animation_loops_exactly_each_half_cycle():
-	var period := 1.0 / RiverFlowShader.ADVECT_RATE
-	for i in range(30):
-		var px := 15.0 + float(i) * 0.9
-		assert_almost_eq(
-			RiverFlowShader.animated_field_value(px, 11.0, Vector2(1, 0), 0.37),
-			RiverFlowShader.animated_field_value(px, 11.0, Vector2(1, 0), 0.37 + period * 0.5),
-			0.0001
-		)
 
 
 ## The SHORE HIGHLIGHT: one constant pale line tracing the bank just inside
@@ -986,64 +808,6 @@ func test_the_shore_highlight_sits_inside_the_ink():
 	assert_lt(
 		RiverFlowShader.SHORE_POS + RiverFlowShader.SHORE_WIDTH,
 		1.0 - RiverFlowShader.INK_WIDTH
-	)
-
-
-# -- strokes that survive the zoom and the light cels -------------------------
-#
-# Reported from the Rhine's long straight cross-Alps segment (probed: pure
-# flow overlay, 2.16 m/s, fast everywhere): "the long straight section
-# shows no current lines at all". Two compounding causes, both measured:
-# the strokes were ~1.4 world px wide -- sub-pixel at a zoomed-out camera
-# -- and their pale ink sat on the bright shallow cels with almost no
-# contrast.
-
-## The pattern's real spatial scale, measured across the flow on the live
-## field. The bounds are set to the look the user picked EXPLICITLY --
-## "finer, longer lines which merge and unmerge" -- after a fatter pass
-## pooled into voronoi-cell blobs wherever the field's gradient flattened.
-## (The fat width was itself a misdiagnosis: the invisibility it "fixed"
-## was the float32-dead hash, not thin strokes.) The lower width bound now
-## guards only against sub-art-pixel lines; the upper bound is what keeps
-## the blobs from returning, since a stroke's spatial width scales with
-## the n-band width over the local gradient.
-func test_strokes_are_wide_and_spaced_like_drawn_lines():
-	var in_stroke := false
-	var run := 0
-	var runs: Array[int] = []
-	var onsets: Array[float] = []
-	var step := 0.05
-	for i in range(4000):
-		var y := float(i) * step
-		var n := RiverFlowShader.animated_field_value(7.3, y, Vector2(1, 0), 0.9)
-		var hit := RiverFlowShader.stroke_mask(n, false) > 0.5
-		if hit and not in_stroke:
-			onsets.append(y)
-		if hit:
-			run += 1
-		elif in_stroke:
-			runs.append(run)
-			run = 0
-		in_stroke = hit
-	assert_gt(runs.size(), 8, "too few strokes crossed to measure the pattern")
-	var total := 0
-	for r in runs:
-		total += r
-	var mean_width_cells := float(total) / float(runs.size()) * step
-	var mean_width_px := mean_width_cells / RiverFlowShader.NOISE_SCALE
-	assert_between(
-		mean_width_px, 1.0, 4.5,
-		"a stroke is %.1f world px thick -- fatter pools into blobs, thinner is sub-art-pixel"
-			% mean_width_px
-	)
-	var gap_total := 0.0
-	for k in range(1, onsets.size()):
-		gap_total += onsets[k] - onsets[k - 1]
-	var mean_spacing_px := gap_total / float(onsets.size() - 1) / RiverFlowShader.NOISE_SCALE
-	assert_between(
-		mean_spacing_px, 6.0, 30.0,
-		"strokes are %.0f world px apart -- too close reads as texture, too far as still water"
-			% mean_spacing_px
 	)
 
 
@@ -1142,4 +906,170 @@ func test_the_hash_is_trig_free_for_float32_world_coordinates():
 	assert_false(
 		RiverFlowShader.SHADER_CODE.contains("sin(dot("),
 		"no hash may run world-scale values through sin"
+	)
+
+
+# -- flow-guided current lines ------------------------------------------------
+#
+# Reported, after every contour-of-noise variant: "now they are more like
+# perlin noise cells.. can you restore natural currents everywhere?" -- and
+# the root cause is topological, not tunable: level sets of ANY healthy
+# scalar field close into loops around its extrema. (The long open lines of
+# an earlier build were partly an accident of the float32-degenerate hash
+# striping the noise.)
+#
+# So the stroke field is now GUIDED BY THE CHANNEL: s = across-position
+# plus advected wobble. Because the across ramp dominates, s is monotone
+# bank-to-bank, and every level set is an OPEN curve running along the
+# river -- long flowing lines by construction, which wobble, pinch
+# together and separate as the noise underneath advects, and can never
+# close into a cell.
+
+## THE cells-killer, structurally: the guide must dominate the wobble, or
+## the monotonicity that keeps every line an open curve is gone.
+func test_the_channel_guide_dominates_the_wobble():
+	assert_gte(RiverFlowShader.ACROSS_LINE_SCALE, RiverFlowShader.LINE_WOBBLE)
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("frag_across * across_line_scale + (n - 0.5) * line_wobble"),
+		"the stroke field must be the across ramp plus advected wobble"
+	)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("fract(s_field * line_count) - 0.5"))
+
+
+## And measured: walking bank to bank through the REAL animated field, the
+## stroke field must rise monotonically at nearly every step -- occasional
+## pinches are the wanted merge-and-unmerge, a cell field would violate
+## this everywhere.
+func test_the_stroke_field_is_monotone_across_with_rare_pinches():
+	var violations := 0
+	var steps := 0
+	for column in 24:
+		var x := float(column) * 3.7
+		var previous := -99.0
+		for row in 80:
+			var across := -1.0 + float(row) / 79.0 * 2.0
+			var n := RiverFlowShader.animated_field_value(x, across * 2.56, Vector2(1, 0), 0.9)
+			var s_value := RiverFlowShader.stroke_field(across, n)
+			if previous > -99.0:
+				steps += 1
+				if s_value <= previous:
+					violations += 1
+			previous = s_value
+	assert_lt(
+		float(violations) / float(steps), 0.15,
+		"%.0f%% of across-steps fold back -- cells, not pinching lines"
+			% (float(violations) / float(steps) * 100.0)
+	)
+
+
+## The lines exist EVERYWHERE the water is -- including where the noise
+## rails flat. With the field frozen dead constant, the guide alone still
+## draws the full family of lines across the channel. (The old
+## noise-contour design went strokeless on railed reaches -- this is the
+## failure mode dissolving, pinned.)
+func test_the_lines_survive_a_completely_dead_field():
+	var crossings := 0
+	var was_in := false
+	for row in 400:
+		var across := -1.0 + float(row) / 399.0 * 2.0
+		var inside := RiverFlowShader.stroke_mask(
+			RiverFlowShader.stroke_field(across, 0.5), false
+		) > 0.5
+		if inside and not was_in:
+			crossings += 1
+		was_in = inside
+	assert_gte(
+		crossings, 4,
+		"only %d lines cross a dead-field channel -- the guide is not drawing" % crossings
+	)
+
+
+## The pattern scale, measured bank to bank through the real field: fine
+## lines a couple of pixels thick, spaced tightly enough to read as
+## current everywhere but never merging into texture. (Across-units:
+## 1.0 = the half-width = 2 tiles = 32 world px.)
+func test_lines_are_fine_and_evenly_spaced_across_the_channel():
+	var runs: Array[int] = []
+	var onsets: Array[float] = []
+	var in_stroke := false
+	var run := 0
+	for row in 1600:
+		var across := -1.0 + float(row) / 1599.0 * 2.0
+		var n := RiverFlowShader.animated_field_value(11.3, across * 2.56, Vector2(1, 0), 0.7)
+		var hit := RiverFlowShader.stroke_mask(RiverFlowShader.stroke_field(across, n), false) > 0.5
+		if hit and not in_stroke:
+			onsets.append(across)
+		if hit:
+			run += 1
+		elif in_stroke:
+			runs.append(run)
+			run = 0
+		in_stroke = hit
+	assert_gt(runs.size(), 3, "too few lines crossed to measure")
+	var total := 0
+	for r in runs:
+		total += r
+	var step_px := 2.0 / 1599.0 * 32.0
+	var mean_width_px := float(total) / float(runs.size()) * step_px
+	assert_between(
+		mean_width_px, 0.8, 4.5,
+		"a line is %.1f world px thick" % mean_width_px
+	)
+	var gap_total := 0.0
+	for k in range(1, onsets.size()):
+		gap_total += (onsets[k] - onsets[k - 1]) * 32.0
+	var mean_spacing_px := gap_total / float(onsets.size() - 1)
+	assert_between(
+		mean_spacing_px, 6.0, 26.0,
+		"lines are %.0f world px apart" % mean_spacing_px
+	)
+
+
+## The lines MORPH: at a fixed spot the stroke pattern must differ a
+## quarter advection cycle later -- the wobble travels, so lines wander,
+## pinch and release.
+func test_the_lines_morph_over_a_quarter_cycle():
+	var period := 1.0 / RiverFlowShader.ADVECT_RATE
+	var changed := 0
+	var count := 0
+	for column in 40:
+		var x := 5.0 + float(column) * 1.1
+		for row in 30:
+			var across := -0.9 + float(row) / 29.0 * 1.8
+			var early := RiverFlowShader.stroke_mask(RiverFlowShader.stroke_field(
+				across, RiverFlowShader.animated_field_value(x, across * 2.56, Vector2(1, 0), 0.2)
+			), false) > 0.5
+			var later := RiverFlowShader.stroke_mask(RiverFlowShader.stroke_field(
+				across, RiverFlowShader.animated_field_value(x, across * 2.56, Vector2(1, 0), 0.2 + period * 0.25)
+			), false) > 0.5
+			if early != later:
+				changed += 1
+			count += 1
+	assert_gt(
+		float(changed) / float(count), 0.04,
+		"the line pattern barely changes over a quarter cycle"
+	)
+
+
+## The half-cycle loop contract, restated on the guided field.
+func test_the_animation_loops_exactly_each_half_cycle():
+	var period := 1.0 / RiverFlowShader.ADVECT_RATE
+	for i in range(30):
+		var px := 15.0 + float(i) * 0.9
+		assert_almost_eq(
+			RiverFlowShader.animated_field_value(px, 11.0, Vector2(1, 0), 0.37),
+			RiverFlowShader.animated_field_value(px, 11.0, Vector2(1, 0), 0.37 + period * 0.5),
+			0.0001
+		)
+
+
+## Fast reaches draw BRIGHTER lines, not wider ones -- widening is the blob
+## knob (learned twice now).
+func test_fast_reaches_draw_brighter_not_wider_strokes():
+	assert_false(RiverFlowShader.SHADER_CODE.contains("line_width * mix"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("mix(0.8, 1.1, is_fast)"))
+	var s_on_level := RiverFlowShader.stroke_field(0.5 / (RiverFlowShader.ACROSS_LINE_SCALE * RiverFlowShader.LINE_COUNT), 0.5)
+	assert_gt(
+		RiverFlowShader.stroke_mask(s_on_level, true),
+		RiverFlowShader.stroke_mask(s_on_level, false)
 	)
