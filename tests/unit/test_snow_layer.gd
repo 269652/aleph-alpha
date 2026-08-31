@@ -131,6 +131,213 @@ func test_a_dusting_lets_the_ground_show_through_and_full_cover_does_not():
 		)
 
 
+# -- a continuous base tint beneath the puff, so tiles meet edge to edge ----
+#
+# Real, user-visible complaint with a screenshot: a field of piled snow reads
+# as a GRID of separate white blobs, not a continuous blanket -- every tile's
+# own illustrated puff carries real, deliberate transparent padding within its
+# own cell (see OVERLAY_COLUMNS' own doc comment), so two neighbouring tiles'
+# puffs never actually touch. Every fix so far (variant selection, the bleed
+# removal, the flip transform) operates entirely WITHIN one puff's own crop
+# and cannot paint anything in the gap BETWEEN two tiles, because nothing is
+# painted there at all.
+#
+# The fix is a second, flat tint composited BENEATH the existing puff, baked
+# directly into build_band_image's own output (see base_alpha_for_band's own
+# doc comment for why this reuses the existing (band, variant) atlas rather
+# than adding a new layer or a finer discretisation).
+#
+# `band`, not the raw continuous (depth + onset_offset) value, drives the
+# tint's own alpha -- investigated, not assumed: the finite (band, variant)
+# atlas `build_tile_set` bakes ONCE and reuses for every tile of that band, so
+# a tint that needed a genuinely unique value per exact tile POSITION could
+# not be expressed by it at all (that would need either an unbounded number
+# of baked combinations or a shader-driven layer whose actual pixels this
+# project's own house convention already can't assert in a headless GUT test
+# -- see test_ground_tint.gd's own header comment, "Contract tests only -- the
+# visual result can't be asserted headless"). Reusing `band` costs nothing
+# extra AND is provably safe: `MAX_NEIGHBOUR_ONSET_STEP` (0.07) already sits
+# under one band's own width (1.0 / DEPTH_BANDS = 0.1), so two edge-adjacent
+# tiles' bands can never differ by more than exactly one
+# (test_worst_realistic_neighbour_band_difference_is_at_most_one confirms
+# this by direct sweep, not just arithmetic) -- the "coarser gridline" risk a
+# naive re-band-quantisation could reintroduce is bounded to one curve step,
+# which base_alpha_for_band's own shallow slope plus edge compression (see
+# `_base_edge_alpha_for_band`) keeps small in absolute terms.
+
+
+## Band 0 is the sheet's own dusting rung (`DUSTING_MAX_MEAN_ALPHA` is pinned
+## against exactly this band's real measured range -- see that constant's own
+## doc comment) -- real gaps are still allowed there by design (a dusting is
+## snow lying in the dips, not a blanket), so the base tint must leave it
+## completely untouched rather than paint a first, thin coverage over it.
+func test_base_alpha_is_absent_at_the_dusting_band():
+	assert_eq(layer.base_alpha_for_band(0), 0.0)
+
+
+## From the first band beyond dusting up, the tint has to actually climb with
+## depth -- a flat value at every band would still close the gap but would
+## read as a single uniform wash rather than tracking real coverage.
+func test_base_alpha_increases_monotonically_from_band_1_up():
+	var previous := 0.0
+	for band in range(1, SnowLayer.DEPTH_BANDS):
+		var alpha := layer.base_alpha_for_band(band)
+		assert_gt(alpha, previous, "band %d's base alpha is no higher than the one below" % band)
+		previous = alpha
+
+
+## Pins the two ends of the curve so a future edit cannot silently drift it
+## far enough to wash out the puff (see the contrast tests below) or too
+## faint to close a gap at all.
+func test_base_alpha_curve_endpoints_are_pinned():
+	assert_eq(layer.base_alpha_for_band(1), SnowLayer.BASE_TINT_MIN_ALPHA)
+	assert_eq(layer.base_alpha_for_band(SnowLayer.DEPTH_BANDS - 1), SnowLayer.BASE_TINT_MAX_ALPHA)
+
+
+## The provable bound base_alpha_for_band's own doc comment leans on: swept
+## directly (not just derived from the arithmetic) across a real range of
+## depths and coordinates, using the exact same band_for/onset_offset_for a
+## painted tile actually goes through.
+func test_worst_realistic_neighbour_band_difference_is_at_most_one():
+	assert_lt(
+		SnowLayer.MAX_NEIGHBOUR_ONSET_STEP, 1.0 / float(SnowLayer.DEPTH_BANDS),
+		"the onset step no longer sits under one band's width -- the base tint's band-driven design assumes it does"
+	)
+	var worst := 0
+	for depth_step in range(1, 20):
+		var depth := float(depth_step) / 20.0
+		for x in range(-60, 60):
+			for y in range(-6, 6):
+				var here := layer.band_for(depth, 0.0, layer.onset_offset_for(x, y))
+				var across := layer.band_for(depth, 0.0, layer.onset_offset_for(x + 1, y))
+				var down := layer.band_for(depth, 0.0, layer.onset_offset_for(x, y + 1))
+				worst = maxi(worst, maxi(absi(here - across), absi(here - down)))
+	assert_lte(worst, 1, "two edge-adjacent tiles' bands differed by %d, not at most 1" % worst)
+
+
+## The actual gap-closing claim, at the single-tile level: from band 1 up,
+## EVERY pixel of a built tile -- edges included -- must carry some real
+## alpha, for every shape variant. A tile that individually reaches full
+## coverage on all four of its own edges cannot leave a fully-transparent
+## seam against ANY neighbour, whatever band that neighbour happens to be in.
+func test_built_tile_has_no_fully_transparent_pixel_from_band_1_up():
+	for band in range(1, SnowLayer.DEPTH_BANDS):
+		for variant in SnowLayer.OVERLAY_COLUMNS:
+			var image := layer.build_band_image(band, variant)
+			var worst_alpha := 1.0
+			for y in image.get_height():
+				for x in image.get_width():
+					worst_alpha = minf(worst_alpha, image.get_pixel(x, y).a)
+			assert_gt(
+				worst_alpha, 0.0,
+				"band %d variant %d has a fully-transparent pixel -- the base tint did not reach every edge" % [band, variant]
+			)
+
+
+## Regression guard the other direction: band 0 must render byte-identical to
+## the base-tint-free pipeline, so a dusting still shows the real gaps it
+## always has (see this section's own header comment).
+func test_dusting_band_still_shows_real_transparent_gaps():
+	for variant in SnowLayer.OVERLAY_COLUMNS:
+		var image := layer.build_band_image(0, variant)
+		var puff_only := layer._build_puff_image(0, variant)
+		for y in image.get_height():
+			for x in image.get_width():
+				assert_eq(
+					image.get_pixel(x, y), puff_only.get_pixel(x, y),
+					"band 0 variant %d pixel (%d,%d) changed -- the base tint must not touch the dusting band" % [variant, x, y]
+				)
+
+
+## `_base_edge_alpha_for_band` exists specifically so a real curve step
+## between two adjacent bands reads as a softer gradient at the shared tile
+## edge than it does tile-interior -- confirmed here as an actual measured
+## reduction, not merely a differently-shaped formula.
+func test_base_edge_alpha_softens_the_interior_step():
+	for band in range(1, SnowLayer.DEPTH_BANDS - 1):
+		var interior_step := absf(layer.base_alpha_for_band(band + 1) - layer.base_alpha_for_band(band))
+		var edge_step := absf(layer._base_edge_alpha_for_band(band + 1) - layer._base_edge_alpha_for_band(band))
+		assert_lt(
+			edge_step, interior_step,
+			"band %d->%d: edge step (%.4f) is not softer than the interior step (%.4f)" % [band, band + 1, edge_step, interior_step]
+		)
+
+
+## The real, end-to-end claim: build a small strip of ADJACENT real tiles
+## (real global coordinates, real onset/band/variant/transform, the same
+## pipeline EarthChunkManager._paint_snow_tile drives) at a realistic partial
+## snowfall, assemble them side by side the way they'd actually render, and
+## confirm there is no fully-transparent column at any shared border once
+## both sides of it are beyond the dusting band -- the actual "seamless
+## piling" claim, measured rather than eyeballed.
+func test_adjacent_real_tiles_show_no_transparent_seam_at_their_shared_border():
+	var art := TerrainRenderer.ART_TILE_SIZE
+	var depth := 0.6
+	var origin_y := 100
+	var checked_a_real_seam := false
+	for origin_x in range(-40, 40):
+		var left_band := layer.band_for(depth, 0.0, layer.onset_offset_for(origin_x, origin_y))
+		var right_band := layer.band_for(depth, 0.0, layer.onset_offset_for(origin_x + 1, origin_y))
+		if left_band < 1 or right_band < 1:
+			continue  # Dusting (or bare) legitimately still shows gaps -- not this test's claim.
+		checked_a_real_seam = true
+		var left := layer.build_band_image(left_band, layer.variant_for(origin_x, origin_y))
+		var right := layer.build_band_image(right_band, layer.variant_for(origin_x + 1, origin_y))
+		for y in art:
+			var seam_alpha := left.get_pixel(art - 1, y).a + right.get_pixel(0, y).a
+			assert_gt(
+				seam_alpha, 0.0,
+				"tiles at x=%d/%d: both sides of the shared border are fully transparent at row %d" % [origin_x, origin_x + 1, y]
+			)
+	assert_true(checked_a_real_seam, "precondition: never found a real adjacent pair both beyond the dusting band to check")
+
+
+## Item 3's own concern: compositing a base UNDER the puff must not wash the
+## puff's own texture into a flat, feature-less field. Measured as the
+## STANDARD DEVIATION of alpha across the tile, not raw min-max range: range
+## is the wrong metric here on purpose, because raising the minimum alpha
+## above 0 (closing a previously-fully-transparent gap) is this whole
+## feature's own INTENDED effect, not a sign of washing out -- a metric that
+## penalises exactly that would fail by design, not by a real regression
+## (confirmed directly: an earlier version of this test used range and failed
+## at bands 5 and 9 purely from filling real gaps, not from any loss of
+## texture). Stddev instead captures whether the puff's own lumpy variation
+## survives, independent of where the floor sits.
+##
+## 0.6 is a real, measured floor, not a guess: swept directly across bands
+## 1/5/9 (variant 0) through this exact pipeline, the composite/puff-only
+## stddev ratio measures 0.889/0.799/0.720 respectively -- 0.6 sits with real
+## margin under the worst of those (0.720) while still catching a tint strong
+## enough to flatten the puff toward a uniform wash.
+func test_puff_detail_remains_distinguishable_over_the_base_tint():
+	for band in [1, SnowLayer.DEPTH_BANDS / 2, SnowLayer.DEPTH_BANDS - 1]:
+		var composite := layer.build_band_image(band, 0)
+		var puff_only := layer._build_puff_image(band, 0)
+		var composite_stddev := _alpha_stddev(composite)
+		var puff_stddev := _alpha_stddev(puff_only)
+		assert_gt(
+			composite_stddev, puff_stddev * 0.6,
+			"band %d: compositing the base tint shrank the puff's own alpha stddev from %.3f to %.3f -- texture is washing out" % [band, puff_stddev, composite_stddev]
+		)
+
+
+func _alpha_stddev(image: Image) -> float:
+	var width := image.get_width()
+	var height := image.get_height()
+	var n := width * height
+	var sum := 0.0
+	for y in height:
+		for x in width:
+			sum += image.get_pixel(x, y).a
+	var mean := sum / float(n)
+	var squared_diff := 0.0
+	for y in height:
+		for x in width:
+			var d: float = image.get_pixel(x, y).a - mean
+			squared_diff += d * d
+	return sqrt(squared_diff / float(n))
+
+
 # -- the slicer must not reproduce a neighbour's bleed ----------------------
 #
 # `_cropped_cell` partitions `snowoverlay.png` into an exact, gap-free 10x10
@@ -279,8 +486,17 @@ func test_known_bad_reference_tiles_have_no_substantial_stray_component():
 ## bounds below sit with real margin above those measured-fixed values and
 ## real margin below the pre-fix pipeline's own values at the same exact
 ## locations (0.449 and 0.1155 respectively).
+##
+## Checked against `_build_puff_image` (the illustrated-art pipeline alone),
+## not the public `build_band_image` -- since the base tint was added
+## (see this file's own "a continuous base tint" section), `build_band_image`
+## deliberately paints real, nonzero alpha at every edge of every band >= 1,
+## including band 5's and band 9's, which would otherwise fail THIS
+## bleed-cleanliness claim for a reason that has nothing to do with bleed.
+## The claim this test exists to protect -- the SLICER does not reproduce a
+## neighbour's bleed -- is a claim about the illustrated art alone.
 func test_known_bad_reference_tiles_stay_clean_through_the_full_pipeline():
-	var ghost_tile := layer.build_band_image(5, 2)
+	var ghost_tile := layer._build_puff_image(5, 2)
 	var ghost_worst_row := 0.0
 	for y in range(11):
 		ghost_worst_row = maxf(ghost_worst_row, _row_mean_alpha(ghost_tile, y))
@@ -289,7 +505,7 @@ func test_known_bad_reference_tiles_stay_clean_through_the_full_pipeline():
 		"band=5 variant=2 still shows real ghost content somewhere in rows 0-10 (worst row mean %.3f)" % ghost_worst_row
 	)
 
-	var clipped_tile := layer.build_band_image(9, 7)
+	var clipped_tile := layer._build_puff_image(9, 7)
 	var clipped_left_edge := 0.0
 	for x in range(4):
 		clipped_left_edge += _col_mean_alpha(clipped_tile, x)
@@ -568,8 +784,19 @@ func test_transform_never_flips_vertically():
 ## full per-band figures this reproduces the worst two of. Guards against a
 ## future re-tuning silently re-adding FLIP_V once the numbers backing this
 ## exclusion are only prose nobody re-checks.
+##
+## Checked against `_build_puff_image`, not `build_band_image`: the claim is
+## about the illustrated ART's own real asymmetry, which is what makes
+## flipping it vertically look wrong. The base tint added since (see this
+## file's own "a continuous base tint" section) is a uniform, edge-symmetric
+## fill by construction, so compositing it under the puff can only ever pull
+## a real top/bottom ratio TOWARD 1 (confirmed directly: measured 2.63 through
+## `build_band_image` at this exact band/variant, comfortably under this
+## test's own 10.0 floor, purely from adding an equal amount of mass to both
+## halves) -- that would make this guard fail for a reason that has nothing
+## to do with whether FLIP_V is still unsafe.
 func test_band_9_content_is_severely_top_bottom_asymmetric():
-	var ratio := _top_bottom_ratio(layer.build_band_image(9, 0))
+	var ratio := _top_bottom_ratio(layer._build_puff_image(9, 0))
 	assert_gt(
 		ratio, 10.0,
 		"band 9 variant 0's top/bottom alpha-mass ratio (%.2f) is no longer severely asymmetric -- re-check whether FLIP_V is still unsafe to re-add" % ratio

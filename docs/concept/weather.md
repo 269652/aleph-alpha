@@ -632,6 +632,108 @@ flagged as a separate, out-of-scope finding rather than fixed. See
 `docs/progress.md`'s own tenth-follow-up entry for the full measurement
 trail.
 
+**Eleventh follow-up: reported live, with a screenshot, of a winter storm at
+deep snow -- "snow still piles only on tiles... can you make it so it
+seamlessly piles everywhere? without gridlines."** The screenshot showed
+exactly what it says: a field of separate white blobs, one per tile, each
+with a visible gap of bare ground to its neighbours on every side, not a
+continuous blanket. This is a REAL, correct description of a real
+architectural limit, not a bug in any of the ten follow-ups above -- every one
+of them (variant selection, bleed removal, the flip transform) operates
+entirely WITHIN one puff's own crop, and every one of the illustrated sheet's
+puffs carries real, deliberate transparent padding within its own cell (see
+`OVERLAY_COLUMNS`' own doc comment) so two neighbouring tiles' puffs never
+actually touch. No amount of cleanup inside a puff's own crop can paint
+anything in the gap BETWEEN two puffs, because nothing was ever painted there
+at all.
+
+The fix is a second, flat tint painted BENEATH the existing puff
+(`SnowLayer._composite_base_beneath`, baked directly into
+`build_band_image`'s own output via a new `_build_puff_image` +
+`_composite_base_beneath` split) so a tile's own coverage reaches all four of
+its edges, closing the gap to its neighbours, while the puff keeps riding on
+top for real texture -- "covered, not replaced" (see this section's own
+opening paragraphs) now also means the BASE never fully substitutes for the
+puff's own lumpy detail.
+
+Four real design questions had to be answered with measurement, not
+assumption, before landing this:
+
+1. **Should the tint's alpha be driven by `band` (the same quantised value
+the puff already uses) or by the raw continuous `depth + onset_offset`
+("lying") value underneath it?** The continuous value was the instinctive
+first answer -- re-quantising a second thing the same coarse way the puff
+already is looked like it could reintroduce a coarser version of the same
+gridline complaint at band boundaries. Investigated directly rather than
+assumed: the atlas `build_tile_set` bakes is FIXED (one image per (band,
+variant) pair, baked once, reused by every tile of that pair for the tile
+set's whole lifetime -- see that function's own doc comment) and cannot
+express a tint that needed a genuinely unique alpha per exact tile POSITION
+without either an unbounded number of baked combinations or a shader-driven
+layer instead -- and this project's own `GroundTint`/`test_ground_tint.gd`
+already establish that a shader layer's pixels cannot be asserted in a
+headless GUT test at all ("Contract tests only -- the visual result can't be
+asserted headless"), which the actual claims this fix needs to prove (no
+fully-transparent seam; the puff stays visually distinguishable) genuinely
+require pixel measurement to check. `band` was the only one of the two that
+could be verified at all, and it turned out to be provably safe besides:
+`MAX_NEIGHBOUR_ONSET_STEP` (0.07) already sits under one band's own width
+(1.0 / `DEPTH_BANDS` = 0.1), so two edge-adjacent tiles' bands can never
+differ by more than exactly one -- confirmed by a real sweep of
+`band_for`/`onset_offset_for` across a range of depths and coordinates
+(`test_worst_realistic_neighbour_band_difference_is_at_most_one`), not just
+derived from the arithmetic. The worst this design can ever cost a real tile
+border is bounded to one step of a shallow, chosen curve
+(`base_alpha_for_band`), not an unbounded re-quantisation risk.
+
+2. **A flat, uniform-alpha rectangle would create its own new hard edge at
+every tile boundary.** `_base_edge_alpha_for_band` compresses the interior
+curve's own value toward its midpoint (`BASE_EDGE_ALPHA_COMPRESSION = 0.5`)
+specifically at a tile's outer edge, ramping back up to the full interior
+value over `BASE_EDGE_FEATHER_PX` (4) pixels inward -- confirmed as a real
+measured reduction, not just a differently-shaped formula
+(`test_base_edge_alpha_softens_the_interior_step`).
+
+3. **Does compositing a base UNDER the puff wash the puff's own texture into
+a flat field?** Measured directly as alpha standard deviation (not raw
+min-max range -- range is the wrong metric here on purpose, since raising the
+floor above 0 is this fix's own INTENDED effect, and an earlier version of
+this exact test failed for exactly that non-reason before being corrected):
+swept across bands 1/5/9 through the real pipeline, the composite/puff-only
+stddev ratio measures 0.889/0.799/0.720 -- real, if real, degradation, but
+nowhere near a flat wash, and `BASE_TINT_MAX_ALPHA` (0.30) was chosen to sit
+clearly under real illustrated content's own near-opaque interior alpha
+(measured: real painted puff pixels average close to full opacity within
+their own shape) so a base-filled gap and a puff-covered pixel stay visually
+distinct.
+
+4. **Where does this live?** Baked into `build_band_image`'s own output
+(reusing the existing (band, variant) atlas, `_paint_snow_tile`, and all
+existing per-tile caching unchanged) rather than a second TileMapLayer/shader
+-- not assumed simpler, but the only option of the two answerable by real,
+run, deterministic pixel tests (see point 1 above).
+
+`BASE_TINT_COLOR` (a pale cold blue-white) was itself measured, not guessed:
+the average RGB of every real near-opaque (alpha > 0.9) pixel across all ten
+of the deepest band's built variants, sampled directly through
+`build_band_image`, so the tint reads as the SAME snow rather than a
+mismatched colour peeking out from underneath it. Band 0 (the sheet's own
+dusting rung, which `DUSTING_MAX_MEAN_ALPHA` is already pinned against) is
+deliberately excluded from the tint entirely -- a dusting is snow lying in
+the dips with real ground showing through, not a blanket, and any base alpha
+there, however small, would remove that real gap
+(`test_dusting_band_still_shows_real_transparent_gaps`).
+
+Confirmed end to end, not just per-constant: a real strip of adjacent tiles
+at a realistic partial snowfall (real `onset_offset_for`/`band_for`/
+`variant_for` at real global coordinates, the exact values
+`EarthChunkManager._paint_snow_tile` computes) was built and assembled side
+by side exactly as they would render in the world, and no fully-transparent
+column exists at any shared border once both sides are beyond the dusting
+band (`test_adjacent_real_tiles_show_no_transparent_seam_at_their_shared_
+border`). See `docs/progress.md`'s own eleventh-follow-up entry for the full
+measurement trail.
+
 ### Status
 
 - ✅ Snow instead of rain below freezing, falling white, slow, and as FLECKS
@@ -734,6 +836,28 @@ trail.
   construction; the visible symptom was this same slicer bug read as a shape
   change. See the seventh and eighth follow-ups in `docs/progress.md` for
   the full measurement trail.
+- ✅ Tiles pile SEAMLESSLY, not as a grid of separate blobs with a gap of
+  bare ground to every neighbour — reported live, with a screenshot, of a
+  storm at deep snow (eleventh follow-up above). Every fix above operates
+  entirely within one puff's own crop and cannot paint anything in the real,
+  deliberate transparent padding BETWEEN two puffs. `SnowLayer.
+  _build_puff_image` (the illustrated-art pipeline, unchanged) now composites
+  under a second, flat tint (`_composite_base_beneath`, `BASE_TINT_COLOR`
+  measured from the sheet's own real near-opaque pixels) so a tile's own
+  coverage reaches all four of its edges — driven by `band`, not the raw
+  continuous depth+onset value, since the fixed (band, variant) atlas cannot
+  express a genuinely per-position-unique alpha and a shader layer's pixels
+  cannot be asserted headless (see the eleventh follow-up's own reasoning);
+  provably bounded to at most a one-band step by the same
+  `MAX_NEIGHBOUR_ONSET_STEP` the onset system already guarantees, and
+  softened further at each tile's own edge (`_base_edge_alpha_for_band`,
+  `BASE_EDGE_ALPHA_COMPRESSION`). Band 0 (the dusting rung) is left
+  completely untouched, so a real dusting still shows real gaps. Tested for
+  the actual gap-closing claim (no fully-transparent pixel from band 1 up,
+  both per-tile and across a real assembled strip of adjacent tiles), that
+  the puff's own texture stays statistically distinguishable from the base
+  alone, and that the edge compression is a real measured softening of the
+  interior step, not just a differently-shaped curve.
 
 ## Pinning the weather (`/weather`)
 
