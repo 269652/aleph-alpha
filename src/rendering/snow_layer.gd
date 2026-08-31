@@ -840,7 +840,7 @@ func onset_offset_for(global_x: int, global_y: int) -> float:
 	)
 
 
-## Which of four flip transforms a tile's snow overlay renders with -- an
+## Which of two flip transforms a tile's snow overlay renders with -- an
 ## axis independent of variant_for/band_for entirely (own salt, reads only
 ## the tile's own global coordinates), so it can break up a "wallpaper" look
 ## that neither of those two axes can fix on their own.
@@ -887,11 +887,11 @@ func onset_offset_for(global_x: int, global_y: int) -> float:
 ## `EarthChunkManager._paint_snow_tile` can pass this function's return value
 ## straight through as `set_cell`'s fourth argument.
 ##
-## Deliberately only FOUR combinations -- identity, flip_h, flip_v, and both
-## together -- NOT the full eight-member orthogonal group TileSetAtlasSource
-## also exposes via TRANSFORM_TRANSPOSE. Checked directly, not assumed safe,
-## by rendering real built band-9 tiles (the exact "puff nearly filling the
-## cell" shapes this axis exists for) through all four orthogonal-group
+## Deliberately only TWO combinations -- identity and flip_h -- NOT the full
+## eight-member orthogonal group TileSetAtlasSource also exposes via
+## TRANSFORM_TRANSPOSE and TRANSFORM_FLIP_V. Checked directly, not assumed
+## safe, by rendering real built band-9 tiles (the exact "puff nearly filling
+## the cell" shapes this axis exists for) through all four orthogonal-group
 ## members side by side: transpose visibly distorts a wide, roughly-oval
 ## mound into a tall, narrow one -- swapping x/y rotates a shape's own aspect
 ## ratio, a much bigger and more obviously wrong change than mirroring it.
@@ -902,14 +902,47 @@ func onset_offset_for(global_x: int, global_y: int) -> float:
 ## way -- but a transpose does not: it turns "wide and short at the bottom"
 ## into "tall and narrow along one side", which reads as a different, wrong
 ## shape rather than the same puff seen differently.
+##
+## FOLLOW-UP -- FLIP_V removed too: originally included alongside FLIP_H on
+## the reasoning above ("a mirrored mound is still a mound"), but that
+## reasoning only actually holds for FLIP_H. Reported live, with a
+## screenshot, after this axis had already shipped: "the bigger the snow
+## tiles get the wronger they become". Investigated directly: NOT a
+## residual-bleed regression (rendering every real (band,variant) tile at
+## bands 7/8/9 -- the "bigger" tiles -- through the current pipeline and
+## running the same connected-component check `_discard_disconnected_bleed`
+## itself uses finds 29 of 30 tiles a single component, the one exception's
+## stray fragment only 2.6% of its own dominant blob's size). It IS a real
+## defect in FLIP_V specifically: a fresh sweep of top/bottom alpha-mass
+## ratio through build_band_image, every band, all 10 variants each, finds
+## real, substantial, per-band-CONSISTENT asymmetry from band 1 up (worst
+## deviation-from-1 by band: 3.34, 6.86, 9.24, 2.53, 26.25, 9.27, 3.22, 2.38,
+## 5.44, 69.51 for bands 0-9) -- and the DIRECTION flips partway through the
+## ladder: bands 1-8 are bottom-heavy (a mound anchored low, tapering
+## upward), band 9 is dramatically TOP-heavy (up to 69.5x -- the one band
+## whose content is known to press UP past its own cell into row 8, see
+## build_band_image's own EDGE FEATHER doc comment). FLIP_V inverts exactly
+## this axis. A rendered side-by-side of real band 7/8/9 tiles through all
+## four transforms confirmed this is not merely a number: FLIP_H siblings
+## both still read as the same coherent mound facing a different way, but
+## FLIP_V siblings at band 9 read as a visibly smaller, sparser patch
+## floating away from the bottom of the tile with an empty gap above it --
+## the tiles meant to show the FULLEST cover are exactly the ones a vertical
+## flip damages most, which is the live report's "bigger... wronger" in one
+## sentence. Left/right asymmetry was re-checked the same way and stayed
+## comparatively safe (worst deviation-from-1 by band: 6.43, 4.98, 3.65,
+## 4.04, 2.59, 2.74, 2.73, 2.50, 1.95, 1.68 for bands 0-9 -- an order of
+## magnitude milder, and consistently one direction rather than flipping),
+## so FLIP_H alone stays. See test_snow_layer.gd's own "per-tile transform"
+## section for the full write-up and the regression tests
+## (test_transform_never_flips_vertically,
+## test_band_9_content_is_severely_top_bottom_asymmetric).
 const _TRANSFORM_SALT := 4271
 
 func transform_for(global_x: int, global_y: int) -> int:
 	var combinations := [
 		0,
 		TileSetAtlasSource.TRANSFORM_FLIP_H,
-		TileSetAtlasSource.TRANSFORM_FLIP_V,
-		TileSetAtlasSource.TRANSFORM_FLIP_H | TileSetAtlasSource.TRANSFORM_FLIP_V,
 	]
 	return combinations[PixelNoise.range_index(_TRANSFORM_SALT, global_x, global_y, combinations.size())]
 
