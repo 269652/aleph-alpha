@@ -254,3 +254,16 @@ func test_natural_river_boulders_reach_the_shader_without_any_build():
 		"chunk paints must sync the uniform themselves -- a fresh session never builds"
 	)
 	flow_layer.free()
+
+
+## THE aliasing regression pin ("the parts of the stream are mirrored and
+## connect wrongly"): the toroidal across map must be strictly larger than
+## the WIDEST tile span the manager can transiently hold loaded -- during
+## a chunk-row transition the old row is still rendered while the new one
+## paints, six rows in flight, and a map exactly one loaded-span wide lets
+## the new row alias onto the old one and overwrite its across data with
+## another reach entirely.
+func test_the_across_map_outsizes_any_transient_loaded_span():
+	var RiverFlowShader = load("res://src/rendering/river_flow_shader.gd")
+	var widest_transient := (2 * EarthChunkManager.LOAD_RADIUS + 2) * EarthChunkManager.CHUNK_SIZE
+	assert_gt(RiverFlowShader.FLOW_MAP_TILES, widest_transient)

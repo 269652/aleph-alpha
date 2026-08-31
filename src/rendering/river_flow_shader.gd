@@ -72,7 +72,7 @@ uniform float turbulence_strength = 1.6;
 uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.7;
 uniform sampler2D flow_across_map : filter_linear, repeat_enable;
-uniform float flow_map_tiles = 160.0;
+uniform float flow_map_tiles = 256.0;
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
 uniform float bank_feather = 0.03;
@@ -474,9 +474,15 @@ const EDDY_SCALE := 0.16
 ## by test_a_streakline_visibly_curves_within_its_own_length.
 const EDDY_DETAIL_WEIGHT := 0.7
 
-## The across map's side length in tiles: the full loaded span (5 chunks
-## of 32) -- one texel per world tile, addressed toroidally.
-const FLOW_MAP_TILES := 160
+## The across map's side length in tiles -- one texel per world tile,
+## addressed toroidally. STRICTLY larger than the widest tile span the
+## manager can transiently hold (six chunk rows during a row transition =
+## 192): at exactly one loaded-span the freshly loaded row aliased onto a
+## still-rendered row 160 tiles away and overwrote its across data with
+## another reach entirely ("the parts of the stream are mirrored and
+## connect wrongly"). 256 gives two spare rows of headroom and wraps on a
+## power of two.
+const FLOW_MAP_TILES := 256
 
 ## The world tile size the map lookup divides by -- the layer is
 ## scaled by TerrainRenderer.LAYER_SCALE, so world_pos in the shader is in
