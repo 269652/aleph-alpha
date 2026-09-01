@@ -334,9 +334,9 @@ func build_band_image(band: int, variant: int = 0) -> Image:
 ## so `_composite_base_beneath` has something real to composite onto, and so
 ## tests can compare the tint's effect against a real puff-only baseline (see
 ## test_dusting_band_still_shows_real_transparent_gaps and
-## test_puff_detail_remains_distinguishable_over_the_base_tint in
-## test_snow_layer.gd) rather than assuming what "no base tint" would have
-## looked like.
+## test_puff_visibly_pops_against_the_base_tint_once_composited_over_real_
+## ground in test_snow_layer.gd) rather than assuming what "no base tint"
+## would have looked like.
 ##
 ## Takes ALREADY-CLAMPED band/variant -- build_band_image does the clamping
 ## once, at the public boundary, the same way it always did.
