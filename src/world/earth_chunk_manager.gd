@@ -3445,17 +3445,24 @@ func _sync_flow_boulder(tile: Vector2i) -> void:
 	sync_river_flow_boulders()
 
 
-## One texel of the across map, written toroidally -- see
-## _flow_across_image. Stored as a REAL float (FORMAT_RF): no encode
-## range, no quantisation beyond float32 itself.
-func _write_flow_across_texel(global: Vector2i, across_fraction: float) -> void:
+## One texel of the flow map, written toroidally -- see _flow_across_image.
+## Carries the WHOLE per-tile reconstruction frame as REAL floats
+## (FORMAT_RGBAF, no encode range): R the signed across-fraction, GB the
+## course's downstream unit vector (same sin/-cos convention the atlas
+## sprite bakes), A the real solved current speed in m/s -- so the shader
+## interpolates direction and speed bilinearly exactly like across, and no
+## per-tile quantity is left to draw the tile grid.
+func _write_flow_across_texel(
+	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float
+) -> void:
 	if _flow_across_image == null:
 		var side := RiverFlowShader.FLOW_MAP_TILES
-		_flow_across_image = Image.create(side, side, false, Image.FORMAT_RF)
+		_flow_across_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
 	var side := RiverFlowShader.FLOW_MAP_TILES
+	var radians := deg_to_rad(bearing_deg)
 	_flow_across_image.set_pixel(
 		posmod(global.x, side), posmod(global.y, side),
-		Color(across_fraction, 0.0, 0.0)
+		Color(across_fraction, sin(radians), -cos(radians), speed_mps)
 	)
 
 
@@ -3498,10 +3505,41 @@ func set_river_flow_night_lift(sunlight: float) -> void:
 ## the player's pixel position and in-water state every frame, same shape
 ## as set_river_flow_night_lift above; the shader stretches the push
 ## downstream into a trailing wake (see RiverFlowShader.wader_across_push).
-func set_river_flow_wader(world_pos: Vector2, in_water: bool) -> void:
+func set_river_flow_waders(positions: PackedVector2Array) -> void:
 	var material := _river_flow_shader.shared_material()
-	material.set_shader_parameter("wader_active", 1.0 if in_water else 0.0)
-	material.set_shader_parameter("wader_pos", world_pos)
+	var capped := positions.slice(0, RiverFlowShader.WADER_SLOTS)
+	var padded := capped.duplicate()
+	padded.resize(RiverFlowShader.WADER_SLOTS)
+	material.set_shader_parameter("wader_count", capped.size())
+	material.set_shader_parameter("waders", padded)
+
+
+## Filters wader candidates (pixel positions: the player plus any creature
+## markers) down to the ones actually standing in river water, capped at
+## the shader's wader slots. The river lookup walks real polylines, so
+## answers are memoised per tile -- rivers never move -- with a cap so a
+## migrating herd cannot hold the whole world in memory.
+const RIVER_WADER_MEMO_CAP := 50_000
+var _wader_river_memo := {}
+
+
+func river_wader_positions(candidates: Array) -> PackedVector2Array:
+	var kept := PackedVector2Array()
+	var tile_px := float(TerrainRenderer.TILE_SIZE)
+	for candidate in candidates:
+		if kept.size() >= RiverFlowShader.WADER_SLOTS:
+			break
+		var pos: Vector2 = candidate
+		var tile := Vector2i(floori(pos.x / tile_px), floori(pos.y / tile_px))
+		var in_river = _wader_river_memo.get(tile)
+		if in_river == null:
+			in_river = is_river_at_global(tile.x, tile.y)
+			if _wader_river_memo.size() > RIVER_WADER_MEMO_CAP:
+				_wader_river_memo.clear()
+			_wader_river_memo[tile] = in_river
+		if in_river:
+			kept.append(pos)
+	return kept
 
 
 ## Registers the GPU river-flow overlay layer (see RiverFlowShader,
@@ -3778,8 +3816,14 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 				# Still write the texel: a dry cell one tile past the apron
 				# is a bilinear NEIGHBOUR of a wet one, and an unwritten
 				# texel there would bleed garbage into the waterline.
+				var apron_hydraulics := generator.river_hydraulics_at_global(
+					global.x, global.y
+				)
 				_write_flow_across_texel(
-					global, nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+					global,
+					nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES,
+					nearest.course_bearing_deg,
+					apron_hydraulics.velocity_m_s
 				)
 				continue
 
@@ -3794,7 +3838,10 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			var across_fraction: float = (
 				nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
 			)
-			_write_flow_across_texel(global, across_fraction)
+			_write_flow_across_texel(
+				global, across_fraction,
+				nearest.course_bearing_deg, hydraulics.velocity_m_s
+			)
 			if flow_boulder_at_global(global.x, global.y):
 				_river_flow_boulder_tiles[global] = true
 			else:
@@ -6896,8 +6943,11 @@ func wet_row_tiles_at_global(global_x: int, global_y: int) -> Array:
 
 func _row_crest_verdict(global_x: int, global_y: int) -> Dictionary:
 	var verdict := {"dam_piece": false, "boulders_closed": false}
-	var row := wet_row_tiles_at_global(global_x, global_y)
-	if row.is_empty():
+	var nearest := generator.river_catalog().nearest_river_at(
+		global_x, global_y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	if nearest.distance_tiles > RiverCatalog.RIVER_HALF_WIDTH_TILES:
 		return verdict
 	# Closure is judged by LATERAL POSITION, not by tile membership: on a
 	# diagonal reach the slice window catches a two-column staircase, and a
@@ -6905,29 +6955,99 @@ func _row_crest_verdict(global_x: int, global_y: int) -> Dictionary:
 	# the second column. Water cannot pass any across-band that holds a
 	# boulder, whichever staircase column the boulder sits in -- so bucket
 	# the slice by across and require every wet band blocked.
-	var wet_bands := {}
-	var blocked_bands := {}
-	for tile in row:
-		if modification_at_global(tile.x, tile.y) == DAM_PIECE_ID:
-			verdict.dam_piece = true
-		var tile_nearest := generator.river_catalog().nearest_river_at(
-			tile.x, tile.y,
-			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-		)
-		var across: float = (
-			tile_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
-		)
-		var band := int(floor((across + 1.0) / 0.25))
-		wet_bands[band] = true
-		if flow_boulder_at_global(tile.x, tile.y):
-			blocked_bands[band] = true
-	var closed := wet_bands.size() >= 2
-	for band in wet_bands:
-		if not blocked_bands.has(band):
-			closed = false
-			break
-	verdict.boulders_closed = closed
+	#
+	# And the along-window SLIDES: the window is re-anchored to each asking
+	# tile, so a wall a fraction of a tile up- or downstream of the asked
+	# course position would slide half out of a fixed window and read as
+	# open (found live: the impound walk visited a wall tile whose own
+	# window had slid ~0.7 tiles, traded away half the wall, and the pond
+	# never formed). A wall anywhere within one window-width of this tile
+	# dams the water AT this tile, so the closure is tried at three window
+	# anchors and any closed one counts.
+	# Closure is judged from the WALL ITSELF -- the connected chain of
+	# blocked wet tiles -- not from windows around the asking tile. Two
+	# earlier versions judged windows ("every wet band in the window must
+	# be blocked", then "the blocked tiles in a fixed along-window must
+	# cover the width") and both broke, because what falls in a window is
+	# an accident of the asking tile's own bearing and anchor: a diagonal
+	# wall asked from its end tile extends ~2 along-tiles away and slid
+	# half out of every window. The wall is the only stable object here,
+	# so: seed from blocked tiles near this course position, flood-fill
+	# through 8-adjacent blocked wet tiles, and ask whether the CHAIN
+	# reaches both waterlines. Adjacency is also the honest watertightness
+	# rule -- a one-tile hole breaks the chain, so no separate gap logic.
+	var radians := deg_to_rad(nearest.course_bearing_deg)
+	var along_dir := Vector2(sin(radians), -cos(radians))
+	var reach := int(ceil(RiverCatalog.RIVER_HALF_WIDTH_TILES)) + 2
+	var seeds: Array = []
+	for dy in range(-reach, reach + 1):
+		for dx in range(-reach, reach + 1):
+			var along := along_dir.dot(Vector2(dx, dy))
+			if absf(along) > 0.75:
+				continue
+			var tile := Vector2i(global_x + dx, global_y + dy)
+			if modification_at_global(tile.x, tile.y) == DAM_PIECE_ID:
+				var dam_nearest := generator.river_catalog().nearest_river_at(
+					tile.x, tile.y,
+					EarthChunkGenerator.WORLD_WIDTH_TILES,
+					EarthChunkGenerator.WORLD_HEIGHT_TILES
+				)
+				var dam_across: float = (
+					dam_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+				)
+				if absf(dam_across) < 0.97:
+					verdict.dam_piece = true
+				continue
+			if _blocked_wet_across_at(tile) != null:
+				seeds.append(tile)
+	if seeds.is_empty():
+		return verdict
+	var component := {}
+	var frontier := seeds.duplicate()
+	var min_across := INF
+	var max_across := -INF
+	while not frontier.is_empty():
+		var tile: Vector2i = frontier.pop_back()
+		if component.has(tile):
+			continue
+		var across = _blocked_wet_across_at(tile)
+		if across == null:
+			continue
+		component[tile] = true
+		min_across = minf(min_across, across)
+		max_across = maxf(max_across, across)
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				if dx == 0 and dy == 0:
+					continue
+				frontier.append(tile + Vector2i(dx, dy))
+	if component.size() < 2:
+		return verdict
+	# How close to each waterline the chain's end boulders must reach: one
+	# tile's lateral footprint short of the bank line, derived from the
+	# real channel geometry and pinned by the closed-row / partial-row
+	# ponding tests.
+	var end_reach := 0.97 - 1.0 / RiverCatalog.RIVER_HALF_WIDTH_TILES
+	verdict.boulders_closed = min_across <= -end_reach and max_across >= end_reach
 	return verdict
+
+
+## The signed across-fraction of a tile IF it is a wet, flow-blocking tile
+## (a dropped or natural boulder standing in the channel) -- null
+## otherwise. The flood-fill's single membership test.
+func _blocked_wet_across_at(tile: Vector2i):
+	if not flow_boulder_at_global(tile.x, tile.y):
+		return null
+	var tile_nearest := generator.river_catalog().nearest_river_at(
+		tile.x, tile.y,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	var across: float = (
+		tile_nearest.signed_across_tiles / RiverCatalog.RIVER_HALF_WIDTH_TILES
+	)
+	if absf(across) >= 0.97:
+		return null
+	return across
 
 
 ## True if a player-built dam stands on this tile.

@@ -734,6 +734,56 @@ band (`test_adjacent_real_tiles_show_no_transparent_seam_at_their_shared_
 border`). See `docs/progress.md`'s own eleventh-follow-up entry for the full
 measurement trail.
 
+**Twelfth follow-up: an independent verifier re-checked the eleventh
+follow-up above and found the real gap only PARTIALLY closed, even though
+every one of its own tests passed.** A real 12x12 field of real tiles, built
+through the exact live pipeline at a realistic partial-cover depth (0.55)
+and at full cover, still strongly read as a grid of separate white puffs on
+a visibly distinct background -- especially between vertically-adjacent
+tiles and at low-to-mid depths. The eleventh follow-up's own tests were
+real, not tautological (its own mutation check genuinely proved that
+raising the alpha ceiling would collapse its stddev-based contrast metric --
+see that follow-up's own design question 3), they simply measured a PROXY
+("no exactly-zero pixel", "statistically distinguishable by alpha stddev")
+for the real, user-facing claim ("reads as continuous coverage"), and the
+two came apart once the actual composited alpha values were checked against
+a real ground colour.
+
+**Root cause: `BASE_TINT_MAX_ALPHA` (0.30) is a real, non-zero floor, but
+low enough that a base-only pixel composited over real ground still reads
+as tinted ground, not as snow.** Composited swatches of `BASE_TINT_COLOR`
+over the REAL grass green (`SeasonalFoliage.GRASSLAND_BY_SEASON["summer"]`)
+stay green-dominant through roughly alpha 0.7, only crossing to a
+blue-toned, snow-like mix from there up. The worst real composited alpha
+found anywhere along a real shared tile border, swept across a realistic
+range of depths and coordinates in both horizontal and vertical directions,
+measured only 0.1490 under the old constants.
+
+**Fix, part 1: the alpha ceiling moved to 0.65/0.90**, chosen from that real
+swatch observation and confirmed against the worst realistic case (the same
+swept-border measurement now gives 0.7098, past the real green/blue
+crossover). **Fix, part 2, the harder half: raising alpha alone was checked
+directly and genuinely washes the puff out**, exactly as the eleventh
+follow-up's own mutation check predicted -- keeping the OLD flat-average
+`BASE_TINT_COLOR` at the new ceiling measures a real puff-vs-base contrast
+that goes NEGATIVE at the deepest band (the puff would be no brighter than
+the plain base fill around it at the band meant to show the fullest snow).
+`BASE_TINT_COLOR` was therefore moved from the puff's own flat average
+near-opaque tone to the mean RGB of its own darkest decile of near-opaque
+pixels -- measured, not guessed, from the real illustrated art's own
+substantial internal shading range, and physically plausible besides: the
+recessed ground between two raised puffs sits in more shadow and receives
+more indirect, bluer sky light than the puffs' own sunlit surfaces, the same
+way real snow drifts show bluer shadows in their troughs. With both changes
+together, the puff-vs-base contrast, composited over real ground, is
+comfortably positive at every band checked, with a HIGHER worst case than
+the design this follow-up replaces (whose own real contrast, checked against
+the actual ground colour rather than an invented swatch, turned out to be
+thinner than its own doc comment had claimed -- a genuinely wrong
+measurement caught and corrected within this same pass rather than shipped).
+See `docs/progress.md`'s own twelfth-follow-up entry for the full numbers,
+including the corrected-in-place measurement mistake.
+
 ### Status
 
 - ✅ Snow instead of rain below freezing, falling white, slow, and as FLECKS
@@ -852,12 +902,26 @@ measurement trail.
   `MAX_NEIGHBOUR_ONSET_STEP` the onset system already guarantees, and
   softened further at each tile's own edge (`_base_edge_alpha_for_band`,
   `BASE_EDGE_ALPHA_COMPRESSION`). Band 0 (the dusting rung) is left
-  completely untouched, so a real dusting still shows real gaps. Tested for
-  the actual gap-closing claim (no fully-transparent pixel from band 1 up,
-  both per-tile and across a real assembled strip of adjacent tiles), that
-  the puff's own texture stays statistically distinguishable from the base
-  alone, and that the edge compression is a real measured softening of the
-  interior step, not just a differently-shaped curve.
+  completely untouched, so a real dusting still shows real gaps.
+  TWELFTH FOLLOW-UP: an independent verifier found the eleventh follow-up's
+  own alpha ceiling (0.30) real but insufficient — a base-only pixel
+  composited over real ground still read as tinted ground, not snow, so the
+  field still looked like a grid at a glance despite every test passing.
+  `BASE_TINT_MIN_ALPHA`/`BASE_TINT_MAX_ALPHA` raised to 0.65/0.90 (chosen
+  from a real swatch-over-grass measurement, confirmed against the worst
+  real edge alpha found across a full depth/coordinate sweep, 0.7098), and
+  `BASE_TINT_COLOR` moved from the puff's own flat average tone to its
+  measured darkest-decile ("shadow") tone, since alpha contrast alone could
+  no longer carry the puff-distinguishability claim at the new ceiling
+  (checked directly: raising alpha alone measured a NEGATIVE contrast at the
+  deepest band). Tested for the real gap-closing claim (the worst
+  composited alpha along a real shared border, both axes, clears a real
+  perceptual floor, not merely nonzero) and that the puff still visibly
+  pops against the base once composited over real ground colours
+  (`SeasonalFoliage`'s grass, `ProceduralSoilSprite`'s soil) by luminance,
+  not raw alpha stddev (which stops meaning anything once the base's own
+  alpha dominates the tile). See the twelfth follow-up above for the full
+  numbers.
 
 ## Pinning the weather (`/weather`)
 

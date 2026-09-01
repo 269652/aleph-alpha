@@ -142,8 +142,8 @@ func test_the_surface_is_actually_dragged_within_a_phase():
 func test_the_shader_samples_two_advected_phases():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_a"))
 	assert_true(RiverFlowShader.SHADER_CODE.contains("phase_b"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_a)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_b)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_a + drift)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("(advect_strength * phase_b + drift)"))
 
 
 ## THE seam bug the advection switch introduces if left alone. The surface
@@ -390,8 +390,10 @@ func test_the_lines_are_oriented_by_smearing_not_frame_rotation():
 ## Water is carried DOWNSTREAM. Dragging the field sideways as well would
 ## make the lines crab across the channel instead of running along it.
 func test_the_drag_is_purely_downstream():
-	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_a)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_b)"))
+	# The drift rides the same flow_dir vector, so the travel stays purely
+	# downstream too.
+	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_a + drift)"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("flow_dir * (advect_strength * phase_b + drift)"))
 
 
 # -- the size of a flow line -------------------------------------------------
@@ -977,16 +979,55 @@ func test_the_lines_morph_over_a_quarter_cycle():
 	)
 
 
-## The half-cycle loop contract, restated on the guided field.
-func test_the_animation_loops_exactly_each_half_cycle():
-	var period := 1.0 / RiverFlowShader.ADVECT_RATE
-	for i in range(30):
-		var px := 15.0 + float(i) * 0.9
-		assert_almost_eq(
-			RiverFlowShader.animated_field_value(px, 11.0, Vector2(1, 0), 0.37),
-			RiverFlowShader.animated_field_value(px, 11.0, Vector2(1, 0), 0.37 + period * 0.5),
-			0.0001
-		)
+## FORWARD MOTION ("there should be more of a forward motion"): the field
+## no longer just breathes in place -- it TRAVELS downstream at a drift
+## speed keyed to the reach's real current. Measured, not asserted from
+## structure: the pattern at t+dt correlates better with the t pattern
+## sampled a drift-length UPSTREAM than with the unshifted t pattern. With
+## no drift this fails (the compensating shift only decorrelates), which is
+## exactly the old always-loop behaviour this replaces -- the half-cycle
+## loop contract is deliberately retired: a pattern that loops in place
+## cannot also travel.
+func test_the_pattern_travels_downstream_not_just_morphs():
+	var dir := Vector2(1, 0)
+	var speed := 1.5
+	var dt := 2.0
+	var shift := RiverFlowShader.drift_cells(speed, dt)
+	var moved := 0.0
+	var stayed := 0.0
+	var count := 0
+	for i in range(24):
+		for j in range(14):
+			var px := 4.0 + float(i) * 0.83
+			var py := -2.0 + float(j) * 0.31
+			var before := RiverFlowShader.animated_field_value(px, py, dir, 3.0, speed)
+			var after_here := RiverFlowShader.animated_field_value(px, py, dir, 3.0 + dt, speed)
+			var after_downstream := RiverFlowShader.animated_field_value(
+				px + shift * dir.x, py + shift * dir.y, dir, 3.0 + dt, speed
+			)
+			moved += absf(after_downstream - before)
+			stayed += absf(after_here - before)
+			count += 1
+	assert_lt(
+		moved / float(count), stayed / float(count),
+		"the drifted comparison must beat the in-place one -- the pattern must travel"
+	)
+
+
+## The drift is a tested function of the reach's REAL current speed --
+## linear in speed and time, and paced so a brisk river visibly travels
+## (order of a tile per second) without strobing.
+func test_the_drift_is_pinned_to_the_real_current_speed():
+	assert_almost_eq(
+		RiverFlowShader.drift_cells(2.0, 1.0),
+		RiverFlowShader.drift_cells(1.0, 1.0) * 2.0, 0.0001
+	)
+	assert_almost_eq(
+		RiverFlowShader.drift_cells(1.0, 3.0),
+		RiverFlowShader.drift_cells(1.0, 1.0) * 3.0, 0.0001
+	)
+	assert_almost_eq(RiverFlowShader.drift_cells(0.0, 9.0), 0.0, 0.0001)
+	assert_between(RiverFlowShader.DRIFT_PX_PER_MPS, 5.0, 20.0)
 
 
 ## Fast reaches draw BRIGHTER lines, not wider ones -- widening is the blob
@@ -1115,32 +1156,108 @@ func test_the_jitter_wavelength_sits_between_pixel_and_line():
 # up to 24 boulder positions and bends the field radially: continuous
 # everywhere, round everywhere.
 
-func test_the_boulder_push_repels_from_the_rock_side_and_fades():
+func test_the_obstacle_shift_matches_potential_flow_around_a_round_core():
+	# "player and boulders behave like a singularity and don't have a
+	# radius around which the water flows". The shift is now the REAL
+	# midplane streamline displacement around a cylinder of radius R:
+	# sqrt(lateral^2 + R^2) - |lateral| -- R exactly on the stagnation
+	# line (the parting streamline clears the actual rock), decaying
+	# smoothly to the sides, never a point spike.
 	var perp := Vector2(0, 1)
-	assert_gt(RiverFlowShader.boulder_across_push(Vector2(4, 9), perp), 0.0)
-	assert_lt(RiverFlowShader.boulder_across_push(Vector2(4, -9), perp), 0.0)
+	var r := RiverFlowShader.BOULDER_RADIUS_PX
+	var reach := RiverFlowShader.BOULDER_REACH_PX
+	var on_axis := RiverFlowShader.obstacle_lateral_shift_px(
+		Vector2(r, 0.0), perp, r, reach, 0.0
+	)
+	assert_almost_eq(on_axis, r, 0.01, "the parting streamline must clear the full radius")
+	var at_rim := RiverFlowShader.obstacle_lateral_shift_px(
+		Vector2(0.0, r), perp, r, reach, 0.0
+	)
 	assert_almost_eq(
-		RiverFlowShader.boulder_across_push(Vector2(RiverFlowShader.BOULDER_REACH_PX + 1, 0), perp),
+		at_rim, (sqrt(2.0) - 1.0) * r, 0.01,
+		"the rim streamline displacement is the cylinder midplane value"
+	)
+	var near := RiverFlowShader.obstacle_lateral_shift_px(Vector2(0.0, 8.0), perp, r, reach, 0.0)
+	var far := RiverFlowShader.obstacle_lateral_shift_px(Vector2(0.0, 20.0), perp, r, reach, 0.0)
+	assert_gt(near, far, "the shift must decay with lateral distance")
+	assert_gt(
+		RiverFlowShader.obstacle_lateral_shift_px(Vector2(0.0, 30.0), perp, r, reach, 0.0),
+		0.0,
+		"outer streamlines inside the reach still feel the obstacle -- no dead ring"
+	)
+	assert_almost_eq(
+		RiverFlowShader.obstacle_lateral_shift_px(Vector2(0.0, reach + 1.0), perp, r, reach, 0.0),
 		0.0, 0.0001
 	)
-	assert_gt(
-		absf(RiverFlowShader.boulder_across_push(Vector2(0, 6), perp)),
-		absf(RiverFlowShader.boulder_across_push(Vector2(0, 30), perp))
+	var below := RiverFlowShader.obstacle_lateral_shift_px(Vector2(0.0, -8.0), perp, r, reach, 0.0)
+	assert_lt(below, 0.0, "the other bank side must be pushed the other way")
+
+
+## Boulder and wader ride the SAME round-core model, differing only in
+## their real radii -- and both convert px to across-fraction through the
+## channel's actual half-width, itself pinned to the catalog.
+func test_the_boulder_and_wader_shifts_ride_the_same_round_core():
+	assert_almost_eq(
+		RiverFlowShader.boulder_across_push(
+			Vector2(RiverFlowShader.BOULDER_RADIUS_PX, 0.0), Vector2(0, 1)
+		),
+		RiverFlowShader.BOULDER_RADIUS_PX / RiverFlowShader.HALF_WIDTH_PX, 0.001
 	)
+	assert_almost_eq(
+		RiverFlowShader.wader_across_push(
+			Vector2(RiverFlowShader.WADER_RADIUS_PX, 0.0), Vector2(1, 0)
+		),
+		RiverFlowShader.WADER_RADIUS_PX / RiverFlowShader.HALF_WIDTH_PX, 0.001
+	)
+	assert_lt(RiverFlowShader.WADER_RADIUS_PX, RiverFlowShader.BOULDER_RADIUS_PX)
 
 
-## The dry patch under the rock is round and smaller than the push reach --
-## an island inside a parting current, not a hole as big as the bend.
-func test_the_eyot_is_round_soft_and_inside_the_push_reach():
-	assert_almost_eq(RiverFlowShader.eyot_dry_factor(0.0), 0.0, 0.0001)
-	assert_almost_eq(RiverFlowShader.eyot_dry_factor(RiverFlowShader.BOULDER_RADIUS_PX + 1.0), 1.0, 0.0001)
-	assert_lt(RiverFlowShader.BOULDER_RADIUS_PX * 2.0, RiverFlowShader.BOULDER_REACH_PX)
+func test_the_half_width_px_matches_the_catalog():
+	var RiverCatalog = load("res://src/world/river_catalog.gd")
+	assert_almost_eq(
+		RiverFlowShader.HALF_WIDTH_PX,
+		RiverFlowShader.TILE_PX * RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.0001
+	)
 
 
 func test_the_shader_bends_and_dries_around_the_boulder_uniforms():
 	assert_true(RiverFlowShader.SHADER_CODE.contains("for (int b = 0; b < boulder_count; b++)"))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("frag_across += side * boulder_push * falloff * falloff;"))
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains(
+			"sqrt(lateral * lateral + boulder_radius_px * boulder_radius_px)"
+		),
+		"the boulder must displace via the round-core potential-flow formula"
+	)
 	assert_true(RiverFlowShader.SHADER_CODE.contains("* eyot_dry;"))
+
+
+## The flow frame and speed come from the BILINEAR map, not the atlas
+## texel: per-tile direction bins and a binary fast flag were the last
+## square-tile artefacts ("there are still individual square river tiles
+## visible"). The atlas sprite is now only the painted canvas.
+func test_the_flow_frame_and_speed_ride_the_bilinear_map():
+	# The atlas texel must not be sampled AT ALL any more -- direction and
+	# speed both rode it once, and a substring check on "data.gb" would trip
+	# on the map decode itself ("map_data.gb"), so the pin is the sample
+	# call: no texture(TEXTURE, ...) means no per-tile source left.
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("texture(TEXTURE"),
+		"per-tile atlas data would seam every bearing and reach change"
+	)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("normalize(map_data.gb"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("float speed_mps = map_data.a;"))
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("step(fast_flow_m_s, speed_mps)"),
+		"the brightness gate must come from the mapped real speed"
+	)
+
+
+func test_the_material_carries_the_fast_threshold_constant():
+	var material := RiverFlowShader.new().make_material()
+	assert_almost_eq(
+		float(material.get_shader_parameter("fast_flow_m_s")),
+		RiverFlowShader.FAST_FLOW_M_S, 0.0001
+	)
 
 
 # -- the bilinear across map --------------------------------------------------
@@ -1160,7 +1277,7 @@ func test_the_shader_samples_the_across_map_bilinearly():
 		"the across must come from a linearly filtered map"
 	)
 	assert_true(
-		RiverFlowShader.SHADER_CODE.contains("float frag_across = texture(flow_across_map, map_uv).r;"),
+		RiverFlowShader.SHADER_CODE.contains("float frag_across = map_data.r;"),
 		"the fragment across is the sampled map value, nothing reconstructed"
 	)
 	assert_false(
@@ -1193,7 +1310,7 @@ func test_the_map_lookup_wraps_toroidally():
 # Unlike a boulder, a wader never dries the water: no eyot.
 
 func test_the_wader_push_is_softer_and_smaller_than_a_boulders():
-	assert_lt(RiverFlowShader.WADER_PUSH, RiverFlowShader.BOULDER_PUSH)
+	assert_lt(RiverFlowShader.WADER_RADIUS_PX, RiverFlowShader.BOULDER_RADIUS_PX)
 	assert_lt(RiverFlowShader.WADER_REACH_PX, RiverFlowShader.BOULDER_REACH_PX)
 
 
@@ -1247,14 +1364,25 @@ func test_only_the_boulder_loop_carves_dry_eyots():
 		RiverFlowShader.SHADER_CODE.count("eyot_dry = min("), 1,
 		"a second eyot writer means something besides boulders dries the water"
 	)
-	var wader_block_start: int = RiverFlowShader.SHADER_CODE.find("wader_active")
-	assert_gt(wader_block_start, 0, "the fragment shader must consult the wader")
+	var wader_block_start: int = RiverFlowShader.SHADER_CODE.find("wader_count")
+	assert_gt(wader_block_start, 0, "the fragment shader must consult the waders")
 
 
-func test_the_material_starts_with_the_wader_inactive():
+func test_the_material_starts_with_no_waders():
 	var material := RiverFlowShader.new().make_material()
-	assert_almost_eq(float(material.get_shader_parameter("wader_active")), 0.0, 0.0001)
+	assert_eq(int(material.get_shader_parameter("wader_count")), 0)
 	assert_almost_eq(
-		float(material.get_shader_parameter("wader_push")),
-		RiverFlowShader.WADER_PUSH, 0.0001
+		float(material.get_shader_parameter("wader_radius_px")),
+		RiverFlowShader.WADER_RADIUS_PX, 0.0001
+	)
+
+
+## "animals should also cause water displacement like the player": the
+## wader is an ARRAY now, same shape as the boulders -- the player plus
+## every in-river creature the world feeds each frame.
+func test_the_shader_loops_over_a_wader_array():
+	assert_true(RiverFlowShader.SHADER_CODE.contains("uniform vec2 waders["))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("uniform int wader_count"))
+	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("for (int w = 0; w < wader_count; w++)")
 	)

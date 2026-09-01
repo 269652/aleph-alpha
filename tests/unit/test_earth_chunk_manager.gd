@@ -381,18 +381,86 @@ func test_set_river_flow_layer_assigns_the_shared_shader_material():
 
 
 ## "a player walking through the stream should cause realistic current
-## displacement" -- world.gd feeds the player's position and in-water state
-## every frame (same shape as set_river_flow_night_lift); the shared shader
-## material carries them to every river fragment.
-func test_set_river_flow_wader_feeds_the_shared_material():
+## displacement ... animals should also cause water displacement like the
+## player" -- world.gd hands over EVERY candidate (player + creatures) each
+## frame; the manager filters to the ones actually standing in river water
+## and feeds the survivors to the shared material as an array.
+func test_set_river_flow_waders_feeds_positions_and_count():
 	var flow_layer := TileMapLayer.new()
 	manager.set_river_flow_layer(flow_layer)
-	manager.set_river_flow_wader(Vector2(320.0, 176.0), true)
+	var fed := PackedVector2Array([Vector2(320.0, 176.0), Vector2(400.0, 208.0)])
+	manager.set_river_flow_waders(fed)
 	var material: ShaderMaterial = flow_layer.material
-	assert_almost_eq(float(material.get_shader_parameter("wader_active")), 1.0, 0.0001)
-	assert_eq(material.get_shader_parameter("wader_pos"), Vector2(320.0, 176.0))
-	manager.set_river_flow_wader(Vector2(320.0, 176.0), false)
-	assert_almost_eq(float(material.get_shader_parameter("wader_active")), 0.0, 0.0001)
+	assert_eq(int(material.get_shader_parameter("wader_count")), 2)
+	var positions: PackedVector2Array = material.get_shader_parameter("waders")
+	assert_eq(positions[0], Vector2(320.0, 176.0))
+	assert_eq(positions[1], Vector2(400.0, 208.0))
+	manager.set_river_flow_waders(PackedVector2Array())
+	assert_eq(int(material.get_shader_parameter("wader_count")), 0)
+	flow_layer.free()
+
+
+func test_river_wader_positions_keeps_only_candidates_in_river_water():
+	manager.update(_berlin_tile)
+	var wet_tile := Vector2i.ZERO
+	var found := false
+	for dy in range(-40, 41):
+		if found:
+			break
+		for dx in range(-40, 41):
+			var tile := _berlin_tile + Vector2i(dx, dy)
+			if manager.is_river_at_global(tile.x, tile.y):
+				wet_tile = tile
+				found = true
+				break
+	assert_true(found, "expected a Spree river tile near Berlin")
+	var tile_px := float(TerrainRenderer.TILE_SIZE)
+	var wet_pos := (Vector2(wet_tile) + Vector2(0.5, 0.5)) * tile_px
+	var dry_tile := _berlin_tile
+	while manager.is_river_at_global(dry_tile.x, dry_tile.y):
+		dry_tile += Vector2i(1, 1)
+	var dry_pos := (Vector2(dry_tile) + Vector2(0.5, 0.5)) * tile_px
+	var kept := manager.river_wader_positions([dry_pos, wet_pos, dry_pos])
+	assert_eq(kept.size(), 1, "only the in-river candidate may displace the water")
+	assert_eq(kept[0], wet_pos)
+
+
+## The flow texel carries the whole reconstruction frame now -- across,
+## the course's downstream unit vector, and the real solved current speed
+## -- so the shader interpolates ALL of them bilinearly between tiles and
+## no per-tile quantity is left to draw the tile grid.
+func test_the_flow_texel_carries_direction_and_speed():
+	var flow_layer := TileMapLayer.new()
+	manager.set_river_flow_layer(flow_layer)
+	manager.update(_berlin_tile)
+	var painted := flow_layer.get_used_cells()
+	assert_gt(painted.size(), 0)
+	# Probe a genuinely WET cell: painted apron cells past the half-width
+	# solve zero hydraulic speed (banks are slower -- the bilinear blend
+	# toward them is physically right), so the speed claim needs a cell
+	# inside the channel.
+	var cell := Vector2i.ZERO
+	var nearest := {}
+	var found_wet := false
+	for candidate in painted:
+		var candidate_nearest := manager.generator.river_catalog().nearest_river_at(
+			candidate.x, candidate.y,
+			EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+		)
+		if candidate_nearest.distance_tiles <= RiverCatalog.RIVER_HALF_WIDTH_TILES:
+			cell = candidate
+			nearest = candidate_nearest
+			found_wet = true
+			break
+	assert_true(found_wet, "expected at least one wet channel cell among the painted set")
+	var side := RiverFlowShader.FLOW_MAP_TILES
+	var texel: Color = manager._flow_across_image.get_pixel(
+		posmod(cell.x, side), posmod(cell.y, side)
+	)
+	var radians := deg_to_rad(nearest.course_bearing_deg)
+	assert_almost_eq(texel.g, sin(radians), 0.001, "G must carry the downstream x")
+	assert_almost_eq(texel.b, -cos(radians), 0.001, "B must carry the downstream y")
+	assert_gt(texel.a, 0.0, "A must carry the real current speed in m/s")
 	flow_layer.free()
 
 

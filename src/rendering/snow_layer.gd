@@ -334,9 +334,9 @@ func build_band_image(band: int, variant: int = 0) -> Image:
 ## so `_composite_base_beneath` has something real to composite onto, and so
 ## tests can compare the tint's effect against a real puff-only baseline (see
 ## test_dusting_band_still_shows_real_transparent_gaps and
-## test_puff_detail_remains_distinguishable_over_the_base_tint in
-## test_snow_layer.gd) rather than assuming what "no base tint" would have
-## looked like.
+## test_puff_visibly_pops_against_the_base_tint_once_composited_over_real_
+## ground in test_snow_layer.gd) rather than assuming what "no base tint"
+## would have looked like.
 ##
 ## Takes ALREADY-CLAMPED band/variant -- build_band_image does the clamping
 ## once, at the public boundary, the same way it always did.
@@ -1060,14 +1060,50 @@ func band_for(depth: float, tread: float, onset_offset: float = 0.0) -> int:
 ## can actually be verified by the tests this fix needs.
 
 
-## Cold, pale blue-white -- measured, not eyeballed: the average RGB of every
-## near-opaque (alpha > 0.9) pixel across all ten of the deepest band's real
-## built variants, i.e. the illustrated art's own real "fully covered" colour,
-## sampled directly through `build_band_image` (post-resize, the same pixels a
-## painted tile actually shows). Grounded in the real committed art rather
-## than a guessed "snowy blue-white" so the base tint reads as the SAME snow,
-## not a mismatched colour peeking out from underneath it.
-const BASE_TINT_COLOR := Color(0.68, 0.745, 0.865)
+## A cooler, DARKER blue than the puff's own average tone -- measured, not
+## eyeballed, but re-measured for the SECOND follow-up below (see
+## BASE_TINT_MIN_ALPHA's own doc comment for why alpha alone moved first):
+## the mean RGB of the DARKEST DECILE of every near-opaque (alpha > 0.9)
+## pixel across all ten of the deepest band's real built variants, sampled
+## directly through `_build_puff_image` (post-resize, the same pixels a
+## painted tile actually shows) and sorted by luminance.
+##
+## The FIRST version of this constant used the whole near-opaque
+## population's flat AVERAGE (0.68, 0.745, 0.865) rather than its darkest
+## decile. That was real and grounded, but once BASE_TINT_MAX_ALPHA had to
+## rise for real coverage (see that constant's own doc comment), it stopped
+## working: an average-toned base at high alpha reads almost identically to
+## the puff's own average appearance, so raw colour similarity -- not just
+## raw alpha similarity -- started washing the two together. Measured
+## directly against the REAL grass colour (`SeasonalFoliage`'s own summer
+## tone -- an earlier draft of this measurement used an invented, dimmer
+## swatch and had to be corrected): keeping this average colour at the new
+## alpha measures a puff-vs-base luminance "pop" of 0.0108/0.0816/-0.0027 at
+## bands 1/5/9 -- band 9, the deepest, most-covered band, is NEGATIVE, i.e.
+## the puff would be no brighter than the plain base tint around it at the
+## exact band meant to show the fullest, most obvious snow. This is the real
+## measured proof the colour had to move, not just the alpha -- see
+## test_puff_visibly_pops_against_the_base_tint_once_composited_over_real_
+## ground's own doc comment for the full comparison.
+##
+## The puff's OWN real art already has substantial internal shading to draw
+## a better colour from, not just a flat highlight: measured directly, the
+## near-opaque population's luminance spans 0.349-1.000 (5th/95th percentile
+## 0.471/0.953) -- a real bright-highlight-to-dark-shadow range, not sampling
+## noise. The darkest decile's own mean RGB is this constant's value; the
+## brightest decile's own mean RGB is (0.934, 0.957, 0.990), close to pure
+## white. Using the SHADOW end for the base tint is not just a number that
+## happened to pass a contrast test -- it is also the physically plausible
+## reading: the recessed ground between two raised puffs sits in more shadow
+## and receives more indirect (bluer) sky light than the puffs' own sunlit
+## surfaces, the same way real snow drifts show bluer shadows in their
+## troughs. Re-measured with this colour at the new alpha, against the same
+## real grass, the pop rises to 0.1672/0.2813/0.2292 at bands 1/5/9 (and
+## 0.2524/0.3455/0.2650 over `ProceduralSoilSprite.SOIL_COLOR`) -- comfortably
+## positive everywhere, and its worst case (0.1672) is actually HIGHER than
+## the pre-this-pass shipped design's own worst case over the same real grass
+## (0.0908) -- see that same test for the full comparison.
+const BASE_TINT_COLOR := Color(0.3747, 0.4706, 0.6566)
 
 ## The base tint's own interior alpha at the first band beyond dusting (band
 ## 1) and at the deepest band (DEPTH_BANDS - 1) -- see `base_alpha_for_band`
@@ -1084,16 +1120,50 @@ const BASE_TINT_COLOR := Color(0.68, 0.745, 0.865)
 ## band 0, however small, would put a floor under band 0's own alpha and
 ## remove real gaps a dusting is supposed to keep.
 ##
-## Values chosen so the tint stays clearly BELOW the puff's own near-opaque
-## interior (measured: real painted puff content sits close to full alpha
-## within its own shape, see BASE_TINT_COLOR's own >0.9 sampling threshold) at
-## every band, so a base-filled gap and a puff-covered pixel remain visually
-## distinct rather than the tint approaching the puff's own opacity and
-## washing the two together -- see
-## test_puff_detail_remains_distinguishable_over_the_base_tint, which checks
-## this by real measured alpha range rather than by eye.
-const BASE_TINT_MIN_ALPHA := 0.10
-const BASE_TINT_MAX_ALPHA := 0.30
+## SECOND FOLLOW-UP -- these two values were originally 0.10/0.30. An
+## independent verifier rendered a real field of adjacent tiles through this
+## exact pipeline (not a synthetic test fixture) at a realistic partial
+## cover depth (0.55) and at full cover, and found the field still strongly
+## read as a GRID of separate white puffs on a visibly distinct background,
+## not a continuous blanket -- confirmed directly by reproducing the same
+## render (see docs/progress.md's own follow-up entry for the full
+## write-up). 0.30 was real margin BELOW the puff's own near-opaque
+## interior, exactly as the FIRST version of this comment intended, but that
+## framing measured the wrong thing: distinguishability from the puff is not
+## the same claim as "reads as real ground coverage", and composited over
+## real ground, alpha 0.30 is nowhere near opaque enough to read as snow
+## rather than tinted ground.
+##
+## Re-measured directly against the REAL grass colour
+## (`SeasonalFoliage.GRASSLAND_BY_SEASON["summer"]`, 0.36/0.74/0.22 --
+## notably brighter and more saturated than an invented "grass-like" swatch
+## this pass first measured against and had to correct): compositing
+## BASE_TINT_COLOR over that real green at a sweep of alpha values shows the
+## mix stays GREEN-DOMINANT through roughly alpha 0.7, and only crosses over
+## to a blue-toned, snow-like mix from there up (the green/blue channels
+## cross at approximately alpha 0.72; see
+## test_worst_real_tile_edge_alpha_clears_a_real_coverage_floor's own doc
+## comment for the exact swept numbers this informed). 0.65/0.90 were chosen
+## from that real observation, then confirmed against the worst realistic
+## case: the worst composited alpha found anywhere along a real shared tile
+## border, swept across depths and coordinates through the actual
+## band_for/onset_offset_for/variant_for pipeline, is 0.7098 (band 1, the
+## lightest non-dusting band) -- comfortably past the real green/blue
+## crossover point, not a thin wash.
+##
+## Raising these alone would wash the puff out if BASE_TINT_COLOR stayed the
+## puff's flat average tone -- confirmed directly, not assumed: doing exactly
+## that measures a puff-vs-base pop of only 0.0108/0.0816/-0.0027 across
+## bands 1/5/9 over the same real grass, NEGATIVE at band 9 (see that
+## constant's own doc comment for the full numbers). Moving the colour too
+## (see BASE_TINT_COLOR's own doc comment) restores a real, comfortably
+## positive pop everywhere (0.1672-0.2813 over grass, 0.2524-0.3455 over
+## soil) -- see
+## test_puff_visibly_pops_against_the_base_tint_once_composited_over_real_
+## ground for the full measurement, including the comparison against the
+## originally-shipped design's own (thinner than first assumed) contrast.
+const BASE_TINT_MIN_ALPHA := 0.65
+const BASE_TINT_MAX_ALPHA := 0.90
 
 ## How much of the interior curve's own value survives at a tile's outer edge
 ## -- see `_base_edge_alpha_for_band`. 0.5 halves the worst realistic

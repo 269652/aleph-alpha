@@ -11,6 +11,8 @@ const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 const SnowTrail = preload("res://src/world/snow_trail.gd")
 const SpriteSheetLoader = preload("res://src/rendering/sprite_sheet_loader.gd")
 const TerrainRenderer = preload("res://src/rendering/terrain_renderer.gd")
+const SeasonalFoliage = preload("res://src/rendering/seasonal_foliage.gd")
+const ProceduralSoilSprite = preload("res://src/rendering/procedural_soil_sprite.gd")
 
 var layer: SnowLayer
 
@@ -215,11 +217,21 @@ func test_worst_realistic_neighbour_band_difference_is_at_most_one():
 	assert_lte(worst, 1, "two edge-adjacent tiles' bands differed by %d, not at most 1" % worst)
 
 
-## The actual gap-closing claim, at the single-tile level: from band 1 up,
-## EVERY pixel of a built tile -- edges included -- must carry some real
-## alpha, for every shape variant. A tile that individually reaches full
-## coverage on all four of its own edges cannot leave a fully-transparent
-## seam against ANY neighbour, whatever band that neighbour happens to be in.
+## The gap-closing claim, at the single-tile level: from band 1 up, EVERY
+## pixel of a built tile -- edges included -- must carry some real alpha,
+## for every shape variant. A tile that individually reaches full coverage
+## on all four of its own edges cannot leave a fully-transparent seam
+## against ANY neighbour, whatever band that neighbour happens to be in.
+##
+## NECESSARY BUT NOT SUFFICIENT, named honestly: an independent verifier
+## found this exact test green while a real rendered field still visually
+## read as a grid of separate puffs, because "nonzero" and "reads as
+## continuous coverage" are different claims -- see
+## test_worst_real_tile_edge_alpha_clears_a_real_coverage_floor below for
+## the real, measured-floor version of this same claim. Kept as-is because
+## it is still true and still a real regression guard against the original
+## bug (a literal exactly-zero-alpha seam) recurring, just not the whole
+## story on its own.
 func test_built_tile_has_no_fully_transparent_pixel_from_band_1_up():
 	for band in range(1, SnowLayer.DEPTH_BANDS):
 		for variant in SnowLayer.OVERLAY_COLUMNS:
@@ -270,7 +282,7 @@ func test_base_edge_alpha_softens_the_interior_step():
 ## confirm there is no fully-transparent column at any shared border once
 ## both sides of it are beyond the dusting band -- the actual "seamless
 ## piling" claim, measured rather than eyeballed.
-func test_adjacent_real_tiles_show_no_transparent_seam_at_their_shared_border():
+func test_adjacent_real_tiles_show_no_transparent_seam_at_their_shared_horizontal_border():
 	var art := TerrainRenderer.ART_TILE_SIZE
 	var depth := 0.6
 	var origin_y := 100
@@ -292,50 +304,213 @@ func test_adjacent_real_tiles_show_no_transparent_seam_at_their_shared_border():
 	assert_true(checked_a_real_seam, "precondition: never found a real adjacent pair both beyond the dusting band to check")
 
 
-## Item 3's own concern: compositing a base UNDER the puff must not wash the
-## puff's own texture into a flat, feature-less field. Measured as the
-## STANDARD DEVIATION of alpha across the tile, not raw min-max range: range
-## is the wrong metric here on purpose, because raising the minimum alpha
-## above 0 (closing a previously-fully-transparent gap) is this whole
-## feature's own INTENDED effect, not a sign of washing out -- a metric that
-## penalises exactly that would fail by design, not by a real regression
-## (confirmed directly: an earlier version of this test used range and failed
-## at bands 5 and 9 purely from filling real gaps, not from any loss of
-## texture). Stddev instead captures whether the puff's own lumpy variation
-## survives, independent of where the floor sits.
+## The horizontal test above was, for a while, this file's ONLY seam check --
+## an independent verifier's own re-check pointed out directly that nothing
+## here ever exercised VERTICAL adjacency (two tiles stacked, not side by
+## side). The compositing math (`_composite_base_beneath`) treats x and y
+## identically, so a defect isolated to one axis was not expected, but "not
+## expected" is exactly the kind of assumption this codebase's own house
+## rule is to check rather than trust (see this file's own FLIP_V follow-up,
+## where an axis assumed safe by symmetry with FLIP_H turned out not to be).
+func test_adjacent_real_tiles_show_no_transparent_seam_at_their_shared_vertical_border():
+	var art := TerrainRenderer.ART_TILE_SIZE
+	var depth := 0.6
+	var origin_x := 100
+	var checked_a_real_seam := false
+	for origin_y in range(-40, 40):
+		var top_band := layer.band_for(depth, 0.0, layer.onset_offset_for(origin_x, origin_y))
+		var bottom_band := layer.band_for(depth, 0.0, layer.onset_offset_for(origin_x, origin_y + 1))
+		if top_band < 1 or bottom_band < 1:
+			continue
+		checked_a_real_seam = true
+		var top := layer.build_band_image(top_band, layer.variant_for(origin_x, origin_y))
+		var bottom := layer.build_band_image(bottom_band, layer.variant_for(origin_x, origin_y + 1))
+		for x in art:
+			var seam_alpha := top.get_pixel(x, art - 1).a + bottom.get_pixel(x, 0).a
+			assert_gt(
+				seam_alpha, 0.0,
+				"tiles at y=%d/%d: both sides of the shared border are fully transparent at column %d" % [origin_y, origin_y + 1, x]
+			)
+	assert_true(checked_a_real_seam, "precondition: never found a real adjacent pair both beyond the dusting band to check")
+
+
+## SECOND FOLLOW-UP -- the "nonzero" floor above was real but not enough. An
+## independent verifier built a real 12x12 field of real tiles through this
+## exact pipeline at a realistic partial depth (0.55) and at full cover, and
+## found the field still strongly read as a GRID of separate white puffs on
+## a visibly distinct background, not a continuous blanket -- especially
+## between vertically-adjacent tiles and at low-to-mid depths. The technical
+## claim ("no exactly-zero-alpha pixel") held; the real, user-facing claim
+## ("reads as continuous coverage, not a thin wash") did not, because the
+## FIRST pass's own BASE_TINT_MAX_ALPHA (0.30) is low enough that a
+## base-only pixel composited over real ground still reads clearly as
+## tinted ground, not as snow.
 ##
-## 0.6 is a real, measured floor, not a guess: swept directly across bands
-## 1/5/9 (variant 0) through this exact pipeline, the composite/puff-only
-## stddev ratio measures 0.889/0.799/0.720 respectively -- 0.6 sits with real
-## margin under the worst of those (0.720) while still catching a tint strong
-## enough to flatten the puff toward a uniform wash.
-func test_puff_detail_remains_distinguishable_over_the_base_tint():
-	for band in [1, SnowLayer.DEPTH_BANDS / 2, SnowLayer.DEPTH_BANDS - 1]:
-		var composite := layer.build_band_image(band, 0)
-		var puff_only := layer._build_puff_image(band, 0)
-		var composite_stddev := _alpha_stddev(composite)
-		var puff_stddev := _alpha_stddev(puff_only)
-		assert_gt(
-			composite_stddev, puff_stddev * 0.6,
-			"band %d: compositing the base tint shrank the puff's own alpha stddev from %.3f to %.3f -- texture is washing out" % [band, puff_stddev, composite_stddev]
-		)
+## Re-measured directly against the REAL grass colour (`SeasonalFoliage`'s
+## own summer tone, 0.36/0.74/0.22 -- notably brighter and more saturated
+## than an earlier, invented "grass-like" swatch this pass first measured
+## against and had to correct): composited swatches of `BASE_TINT_COLOR`
+## over that real green stay green-DOMINANT through roughly alpha 0.7, and
+## only cross over to a blue-toned, snow-like mix from there up (the
+## green/blue channels cross at approximately alpha 0.72). BASE_TINT_MIN_
+## ALPHA/BASE_TINT_MAX_ALPHA were re-tuned against that real observation
+## (see their own doc comment) rather than by picking a bigger number and
+## hoping the old contrast test still happened to pass.
+##
+## This test replaces the old "nonzero" floor with the real claim: the
+## WORST composited alpha found anywhere along a real shared tile border --
+## swept across a realistic range of depths and coordinates through the
+## exact band_for/onset_offset_for/variant_for pipeline a painted tile
+## actually goes through, both horizontal AND vertical (the verifier's own
+## re-check specifically named that the seam tests above, at the time,
+## only ever exercised one axis) -- must clear a real perceptual floor, not
+## merely exceed zero.
+##
+## 0.6 is pinned with real margin under the measured worst case: swept over
+## depths 0.1-0.95 and a 30-wide coordinate range in both axes, the worst
+## real edge alpha found is 0.7098 -- always at band 1 (the lightest
+## non-dusting band), at a tile edge column the puff's own art does not
+## reach at all, matching `_base_edge_alpha_for_band(1)` exactly (0.7125,
+## the same value 8-bit-quantised). 0.6 leaves real margin below that
+## measured floor so a future re-tuning that erodes it is still caught,
+## without pinning this test to today's exact number.
+func test_worst_real_tile_edge_alpha_clears_a_real_coverage_floor():
+	var art := TerrainRenderer.ART_TILE_SIZE
+	var worst := 1.0
+	var worst_desc := ""
+	var pairs_checked := 0
+	for depth_step in range(2, 20):
+		var depth := float(depth_step) / 20.0
+		for origin_x in range(-15, 15):
+			var origin_y := 300
+			var band_l := layer.band_for(depth, 0.0, layer.onset_offset_for(origin_x, origin_y))
+			var band_r := layer.band_for(depth, 0.0, layer.onset_offset_for(origin_x + 1, origin_y))
+			if band_l >= 1 and band_r >= 1:
+				pairs_checked += 1
+				var left := layer.build_band_image(band_l, layer.variant_for(origin_x, origin_y))
+				var right := layer.build_band_image(band_r, layer.variant_for(origin_x + 1, origin_y))
+				for y in art:
+					var a_l: float = left.get_pixel(art - 1, y).a
+					var a_r: float = right.get_pixel(0, y).a
+					if a_l < worst:
+						worst = a_l
+						worst_desc = "H-left x=%d y=%d band=%d" % [origin_x, y, band_l]
+					if a_r < worst:
+						worst = a_r
+						worst_desc = "H-right x=%d y=%d band=%d" % [origin_x + 1, y, band_r]
+			var band_t := layer.band_for(depth, 0.0, layer.onset_offset_for(origin_x, origin_y))
+			var band_b := layer.band_for(depth, 0.0, layer.onset_offset_for(origin_x, origin_y + 1))
+			if band_t >= 1 and band_b >= 1:
+				pairs_checked += 1
+				var top := layer.build_band_image(band_t, layer.variant_for(origin_x, origin_y))
+				var bottom := layer.build_band_image(band_b, layer.variant_for(origin_x, origin_y + 1))
+				for x in art:
+					var a_t: float = top.get_pixel(x, art - 1).a
+					var a_b: float = bottom.get_pixel(x, 0).a
+					if a_t < worst:
+						worst = a_t
+						worst_desc = "V-top x=%d y=%d band=%d" % [x, origin_y, band_t]
+					if a_b < worst:
+						worst = a_b
+						worst_desc = "V-bottom x=%d y=%d band=%d" % [x, origin_y + 1, band_b]
+	assert_gt(pairs_checked, 0, "precondition: never found a real adjacent pair both beyond the dusting band to check")
+	assert_gt(
+		worst, 0.6,
+		"worst real shared-border alpha found anywhere in the sweep is only %.4f (%s) -- reads as a thin wash, not real coverage" % [worst, worst_desc]
+	)
 
 
-func _alpha_stddev(image: Image) -> float:
-	var width := image.get_width()
-	var height := image.get_height()
-	var n := width * height
-	var sum := 0.0
-	for y in height:
-		for x in width:
-			sum += image.get_pixel(x, y).a
-	var mean := sum / float(n)
-	var squared_diff := 0.0
-	for y in height:
-		for x in width:
-			var d: float = image.get_pixel(x, y).a - mean
-			squared_diff += d * d
-	return sqrt(squared_diff / float(n))
+## Item 3's own concern: compositing a base UNDER the puff must not wash the
+## puff's own texture into a flat, feature-less field.
+##
+## RE-DERIVED for the second follow-up above: the FIRST version of this test
+## (see git history) measured this as the ratio of alpha standard deviation
+## between the composite and the puff alone. That metric stops meaning
+## anything once the alpha ceiling is raised for real coverage (see the
+## worst-edge-alpha test above): re-measured directly against the new
+## 0.65/0.90 ceiling, the old stddev ratio COLLAPSES to 0.13-0.36 at bands
+## 1/5/9 (was pinned at 0.6) -- not because texture is washing out, but
+## because the composite's own alpha is now dominated everywhere by the
+## base's own high, near-uniform floor, so alpha variation alone can no
+## longer see puff detail at all. This is the exact trap this whole pass
+## was asked not to fall into: a metric that measures a proxy (raw alpha
+## variance), not the real claim (does the puff still visibly stand out).
+##
+## The real claim -- does a player, looking at an actual rendered tile,
+## still see the puff as visibly denser/brighter than the gaps around it --
+## is reframed as a real LUMINANCE comparison, composited over real ground
+## colours the way a player actually sees them (`SeasonalFoliage`'s own
+## summer grassland green, `ProceduralSoilSprite`'s own soil brown -- both
+## real, already-shipped ground tones, not guessed), between pixels clearly
+## INSIDE the puff's own shape (puff alpha > 0.6) and pixels clearly
+## OUTSIDE it, base tint only (puff alpha < 0.05).
+##
+## Measured against the REAL ground colours, not a guessed swatch -- this
+## matters here specifically, because the first draft of this fix measured
+## its own numbers against an invented, much dimmer "grass-like" colour and
+## drew conclusions from it that did not hold once corrected. Against the
+## ACTUAL `SeasonalFoliage.GRASSLAND_BY_SEASON["summer"]` (a notably more
+## saturated, brighter green than that invented swatch):
+##
+## - The CURRENTLY-SHIPPED (pre-this-pass) design's own real pop over grass
+##   is only 0.0908-0.1729 across bands 1/5/9 -- thinner than it first
+##   appeared, because that first measurement used the wrong background.
+## - Raising the alpha ceiling alone, keeping the OLD flat-average
+##   BASE_TINT_COLOR, was checked directly and collapses this further: pop
+##   over grass measures 0.0108/0.0816/-0.0027 at bands 1/5/9 -- band 9 is
+##   NEGATIVE, meaning the puff would be no brighter than the gaps around it
+##   at the very band meant to show the fullest, most obvious cover. This is
+##   the real, measured proof that the colour had to move, not just the
+##   alpha (see BASE_TINT_COLOR's own doc comment for why it moved to the
+##   puff's own measured SHADOW tone rather than its average).
+## - The actual shipped fix (new alpha AND new colour together) measures pop
+##   0.1672/0.2813/0.2292 over grass and 0.2524/0.3455/0.2650 over soil --
+##   worst case 0.1672, which is HIGHER than the pre-this-pass design's own
+##   worst case (0.0908), not merely comparable to it.
+##
+## 0.12 is pinned with real margin under that measured floor (0.1672) --
+## the same "real margin below the worst measured case" convention this
+## file already uses elsewhere.
+func test_puff_visibly_pops_against_the_base_tint_once_composited_over_real_ground():
+	var grounds := [SeasonalFoliage.GRASSLAND_BY_SEASON["summer"], ProceduralSoilSprite.SOIL_COLOR]
+	for ground in grounds:
+		for band in [1, SnowLayer.DEPTH_BANDS / 2, SnowLayer.DEPTH_BANDS - 1]:
+			var composite := layer.build_band_image(band, 0)
+			var puff_only := layer._build_puff_image(band, 0)
+			var puff_lum_sum := 0.0
+			var puff_n := 0
+			var base_lum_sum := 0.0
+			var base_n := 0
+			for y in composite.get_height():
+				for x in composite.get_width():
+					var top_alpha: float = puff_only.get_pixel(x, y).a
+					var shown := _composited_over(composite.get_pixel(x, y), ground)
+					var lum := _luminance(shown)
+					if top_alpha > 0.6:
+						puff_lum_sum += lum
+						puff_n += 1
+					elif top_alpha < 0.05:
+						base_lum_sum += lum
+						base_n += 1
+			assert_gt(puff_n, 0, "band %d: no clearly-puff-covered pixel found to compare" % band)
+			assert_gt(base_n, 0, "band %d: no clearly-base-only pixel found to compare" % band)
+			var pop: float = (puff_lum_sum / puff_n) - (base_lum_sum / base_n)
+			assert_gt(
+				pop, 0.12,
+				"band %d over ground %s: puff pop is only %.3f -- the puff no longer reads as visibly denser than the gaps around it" % [band, ground, pop]
+			)
+
+
+func _composited_over(top: Color, ground: Color) -> Color:
+	return Color(
+		top.r * top.a + ground.r * (1.0 - top.a),
+		top.g * top.a + ground.g * (1.0 - top.a),
+		top.b * top.a + ground.b * (1.0 - top.a),
+	)
+
+
+func _luminance(c: Color) -> float:
+	return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b
 
 
 # -- the slicer must not reproduce a neighbour's bleed ----------------------
