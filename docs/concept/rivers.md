@@ -225,7 +225,10 @@ Godot breaks a `z_index` tie by scene-tree sibling order, later sibling on
 top. `RiverFlowFx` had been inserted as a sibling *before* `SnowFx` and
 `HillshadeFx`. `HillshadeShader` paints a near-black overlay (alpha up to
 `MAX_SHADOW_ALPHA` = 0.55) over **every** loaded cell with no river
-exclusion — already pinned by
+exclusion (2026-09-01 update: only on genuinely steep terrain now — see
+`terrain_relief.md`'s "Hillshading" section — but river tiles themselves
+still get no exclusion, and this z-order bug's own cause was never about
+river tiles specifically) — already pinned by
 `test_hillshade_overlay_paints_a_real_tile_for_every_loaded_cell` in
 `test_earth_chunk_manager.gd`, this is intentional general behavior, not a
 hillshade bug — so on any river tile with real slope/aspect, `HillshadeFx`'s

@@ -7317,6 +7317,51 @@ germany" and a 4-tile minimum width).
   broadened sharpness (with real trig-derived bounds), and the
   brightened-not-saturated color. Full writeup: `concept/rivers.md`'s "Flow
   effect made more visible" section.
+- **Hillshade could paint ordinary ground as a near-opaque black cliff**
+  (medium) — ✅ Done — reported live: "distinctly odd, near-black... roughly
+  diamond/blob-shaped patches lying flat on grass near a riverbank" (Spring,
+  Rain — turned out incidental; hillshade reads only real slope/aspect and
+  the real sun position, neither touched by season or weather). Snow
+  (`snow_layer.gd`) and drop-shadows were ruled out first by direct pixel
+  evidence from that session's own investigation (no near-black opaque
+  content in any of the 100 real snow tiles; shadows cap at alpha 0.26 and
+  are ellipse-shaped). Reproduced live (`--solo`, `/day`, `/weather rain` at
+  the real Dreisam spawn) and confirmed the ground there reads normally at
+  realistic sun angles; a new headless tool
+  (`tools/scan_riverbank_hillshade.gd`) then walked every curated river's
+  REAL course and found the actual mechanism: every one of this project's 11
+  curated rivers measures a real bank slope of only 1-5 degrees (nowhere
+  near a cliff), yet `Hillshade.illumination`'s clamp-to-zero self-shadow
+  case is trivially reached by a slope that shallow whenever the sun is low
+  — measured `shadow_alpha` >= 0.53 (effectively the full 0.55
+  `MAX_SHADOW_ALPHA` ceiling) on every one of those rivers at a real
+  `sun_elevation_deg` of just 1-2, i.e. ordinary dawn/dusk, not a rare sun
+  angle. A river meander compounds it into an isolated patch rather than a
+  blanket: the two banks of one bend face close to opposite compass
+  directions, so one bank can hit the clamp while the immediately adjacent
+  far bank stays lit, and `procedural_hillshade_sprite.gd`'s per-tile
+  flat-fill atlas turns that transition into a hard-edged step rather than a
+  soft gradient (measured directly: real alpha grades smoothly 0.27 -> 0.24
+  across a transect; the quantized atlas the game actually paints jumps
+  0.28 -> 0.25 with a hard line). Fixed the same way this doc's own
+  "Mountain ore" already gates vein chance — not a fresh eyeballed cutoff:
+  `HillshadeShader.slope_darkening_weight` scales how much of
+  `MAX_SHADOW_ALPHA` a slope is even entitled to by how far past
+  `TerrainPassability.SOFT_THRESHOLD_DEG` ("ordinary ground") it is, ramping
+  to full strength at `HARD_THRESHOLD_DEG` ("genuine scrambling terrain"),
+  reusing `TerrainPassability.speed_multiplier`'s own linear-ramp shape for
+  those same two thresholds — below `SOFT_THRESHOLD_DEG`, hillshade now
+  contributes nothing, at any aspect or sun angle. `Hillshade.illumination`
+  itself (the pure physics) is untouched; only the ground-overlay alpha
+  mapping changed, and `entity_hillshade_shader.gd` (mountain veins) needed
+  no change — veins only ever spawn on already-steep, already-gated terrain.
+  Tested: 6 new tests in `test_hillshade_shader.gd` (18/18 total, TDD
+  red->green), plus `test_hillshade.gd` (61 asserts), `test_terrain_passability.gd`,
+  `test_terrain_relief.gd`, `test_world_ground_layer_order.gd`,
+  `test_stone_renderer.gd` (34/34), and the hillshade-named slice of
+  `test_earth_chunk_manager.gd` (6/6) all re-verified green. Full writeup:
+  `concept/terrain_relief.md`'s "Hillshading" section; `concept/rivers.md`'s
+  z-order writeup updated with a pointer rather than restated.
 - **Player wading/swimming/submersion-tint/ripples in rivers** (medium) —
   ✅ Done — reported directly ("char should be tinted for underwater").
   Root cause: `Player._resolve_water_state` only ever checked real

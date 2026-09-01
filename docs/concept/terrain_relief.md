@@ -153,8 +153,11 @@ true for free because it reads from the same shared solar truth everything
 else already does, not a separate lighting rig for terrain.
 
 This is a general mechanism — every tile has *some* slope, even a gentle
-one — not mountain-specific code. It just reads as dramatic specifically
-where slope is high, which is exactly where a player would expect it to.
+one — not mountain-specific code. It reads as dramatic specifically where
+slope is high, which is exactly where a player would expect it to — see
+"Hillshading" in the status list below for why that wasn't true until a
+2026-09-01 fix (ordinary ground could briefly read as dramatically as a
+cliff at low sun).
 
 ### Mountain ore: steepness exposes it
 
@@ -332,6 +335,47 @@ directly against the current `src/` files rather than assumed current.
   sun azimuth into it. No automated test instantiates `world.tscn` itself,
   so that last scene-level wire is verified only by both resources loading
   without a structural error, not a live GUI session.
+  **Update (2026-09-01): ordinary ground could read as a self-shadowed
+  cliff.** Reported live: "distinctly odd, near-black... diamond/blob-
+  shaped patches lying flat on grass near a riverbank" in Spring rain (the
+  season/weather turned out to be incidental — hillshade reads only real
+  slope/aspect and the real sun, neither of which season/weather touches).
+  Root-caused with a new headless scan tool
+  (`tools/scan_riverbank_hillshade.gd`) that walks every curated river's
+  REAL course and reports the real slope/aspect/alpha `_paint_hillshade_overlay`
+  would paint there: every one of this project's 11 curated rivers measures
+  a real bank slope of only 1-5 degrees (nowhere near a cliff) at this
+  world's elevation-data resolution, yet `Hillshade.illumination`'s
+  clamp-to-zero self-shadow case is trivially reached by a slope that
+  shallow whenever the sun is low — measured `shadow_alpha` >= 0.53
+  (essentially the full 0.55 `MAX_SHADOW_ALPHA` ceiling) on every one of
+  those rivers at a `sun_elevation_deg` of just 1-2, i.e. ordinary dawn/dusk,
+  not a rare sun angle. A real river meander compounds it: the two banks of
+  one bend face close to opposite compass directions, so at low sun one
+  bank can hit the clamp while the immediately adjacent far bank stays lit
+  — an isolated, sharp-edged dark patch next to normal-looking ground,
+  worsened by `procedural_hillshade_sprite.gd`'s per-tile flat-fill atlas
+  turning what should be a soft gradient into a hard-edged step at the bin
+  boundary (measured directly: the real underlying alpha grades smoothly
+  0.27 -> 0.24 across a transect; the quantized atlas the game actually
+  paints jumps 0.28 -> 0.25 with a hard line). Fixed the same way this
+  section's own "Mountain ore" gates vein chance — not a fresh eyeballed
+  cutoff: `HillshadeShader.slope_darkening_weight` scales how much of
+  `MAX_SHADOW_ALPHA` a slope is even entitled to by how far past
+  `TerrainPassability.SOFT_THRESHOLD_DEG` ("ordinary ground -- no penalty
+  at all") it is, ramping to full strength at `HARD_THRESHOLD_DEG`
+  ("genuine scrambling terrain" — exactly where dramatic shading is real
+  and expected), the identical linear-ramp shape
+  `TerrainPassability.speed_multiplier` already established for those same
+  two thresholds. Below `SOFT_THRESHOLD_DEG`, hillshade now contributes
+  nothing at all, regardless of aspect or how low the sun is. Tested: 6 new
+  tests in `test_hillshade_shader.gd` (18/18 total), plus the existing
+  `test_hillshade.gd`/`test_earth_chunk_manager.gd` hillshade suites
+  re-verified green (the raw `Hillshade.illumination` physics itself is
+  untouched — only the ground-overlay alpha mapping changed).
+  `entity_hillshade_shader.gd` (mountain veins) is deliberately untouched:
+  veins only ever spawn on already-steep, already-gated terrain (see
+  "Slope-gated mountain ore veins" below), so it never had this defect.
 - ✅ **Slope-gated mountain ore veins — placement** —
   `src/world/mountain_ore_placement.gd` (tested 16/16): vein chance is
   zero below the same `SOFT_THRESHOLD_DEG` passability uses, scaling

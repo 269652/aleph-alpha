@@ -21,6 +21,7 @@ extends RefCounted
 ## same reason: a fragment shader can't be asserted headless.
 
 const Hillshade = preload("res://src/rendering/hillshade.gd")
+const TerrainPassability = preload("res://src/gameplay/terrain_passability.gd")
 
 const SHADER_CODE := """
 shader_type canvas_item;
@@ -57,7 +58,17 @@ void fragment() {
 			+ sin(zenith_rad) * sin(slope_rad) * cos(relative_azimuth_rad);
 		illumination = clamp(illumination, 0.0, 1.0);
 
-		COLOR = vec4(0.0, 0.0, 0.0, (1.0 - illumination) * max_shadow_alpha);
+		// How much of max_shadow_alpha this slope is even entitled to --
+		// mirrors slope_darkening_weight (GDScript) by hand, same as the
+		// illumination formula above. Ordinary ground (real-world river
+		// valleys measure 1-5 degrees) must not read as a self-shadowed
+		// cliff just because it faces away from a low dawn/dusk sun --
+		// reported live as "near-black... diamond/blob-shaped patches...
+		// on grass near a riverbank". 18.0/45.0 are
+		// TerrainPassability.SOFT_THRESHOLD_DEG/HARD_THRESHOLD_DEG.
+		float slope_weight = clamp((slope_deg - 18.0) / (45.0 - 18.0), 0.0, 1.0);
+
+		COLOR = vec4(0.0, 0.0, 0.0, (1.0 - illumination) * max_shadow_alpha * slope_weight);
 	}
 }
 """
@@ -103,6 +114,42 @@ func set_sun_position(elevation_deg: float, azimuth_deg: float) -> void:
 	material.set_shader_parameter("sun_azimuth_deg", azimuth_deg)
 
 
+## How much of MAX_SHADOW_ALPHA a slope is even entitled to, regardless of
+## aspect/sun angle -- ordinary ground gets NONE, no matter how directly it
+## faces away from the sun.
+##
+## Root cause of a live report ("distinctly odd, near-black... diamond/blob-
+## shaped patches lying flat on grass near a riverbank"): a headless scan of
+## every curated river's REAL course (see tools/scan_riverbank_hillshade.gd)
+## measured real riverbank slopes of only 1-5 degrees everywhere -- nowhere
+## near a cliff -- yet Hillshade.illumination's clamp-to-zero self-shadow
+## case is trivially reached by a slope that shallow whenever the sun is low
+## (measured: every one of those rivers hit alpha >= 0.53, effectively the
+## full 0.55 ceiling, at a sun_elevation_deg of just 1-2 -- ordinary dawn/
+## dusk, not a rare or extreme sun angle). The formula was applying a genuine
+## CLIFF's full darkening ceiling to plain grass merely for facing away from
+## a low sun.
+##
+## Scaled by how far past TerrainPassability.SOFT_THRESHOLD_DEG ("ordinary
+## ground -- no penalty at all", the same real-world-grounded threshold
+## BiomeClassifier.SLOPE_MOUNTAIN_THRESHOLD_DEG and the river-flow shader's
+## own speed mapping already reuse) a slope is, ramping to full strength at
+## HARD_THRESHOLD_DEG ("genuine scrambling/technical-climbing terrain" --
+## exactly where dramatic relief shading is real and expected). Not a fresh
+## eyeballed cutoff: the same linear-ramp shape TerrainPassability.
+## speed_multiplier already established for the identical two thresholds.
+## Pinned by test_slope_darkening_weight_is_zero_on_ordinary_ground and
+## siblings.
+static func slope_darkening_weight(slope_deg: float) -> float:
+	return clampf(
+		(
+			(slope_deg - TerrainPassability.SOFT_THRESHOLD_DEG)
+			/ (TerrainPassability.HARD_THRESHOLD_DEG - TerrainPassability.SOFT_THRESHOLD_DEG)
+		),
+		0.0, 1.0
+	)
+
+
 ## The CPU mirror of exactly what the shader's fragment() draws -- see that
 ## function's own comments for why night contributes zero rather than
 ## MAX_SHADOW_ALPHA, and Hillshade.illumination for the shared formula
@@ -114,4 +161,4 @@ static func shadow_alpha(
 	if sun_elevation_deg <= 0.0:
 		return 0.0
 	var illumination := Hillshade.illumination(slope_deg, aspect_deg, sun_elevation_deg, sun_azimuth_deg)
-	return (1.0 - illumination) * MAX_SHADOW_ALPHA
+	return (1.0 - illumination) * MAX_SHADOW_ALPHA * slope_darkening_weight(slope_deg)
