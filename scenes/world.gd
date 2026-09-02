@@ -2578,6 +2578,11 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# does.
 	_chunk_manager.step_ants(delta)
 	_chunk_manager.step_flowers(delta)
+	# The sward between the tussocks (see GroundCover,
+	# docs/concept/ground_cover.md) -- grazing memory decays and the visible
+	# rosettes are rebuilt, on the same throttle step_tall_grass uses so the
+	# two plant layers appear and disappear together.
+	_chunk_manager.step_ground_cover(delta)
 	_chunk_manager.step_desert_scrub(delta)
 	_chunk_manager.step_tundra_lichen(delta)
 	# Every founded settlement is reassessed against its own food stock (see

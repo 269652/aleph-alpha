@@ -30,6 +30,8 @@ const StructureStockStore = preload("res://src/emergence/structure_stock_store.g
 ## How much of a tile a ground-cover tuft (grass, scrub, lichen) covers.
 ## Well under 1: a clump of grass sits ON the ground, it is not the ground.
 const TUFT_WORLD_SCALE := 0.5
+const GroundCover = preload("res://src/world/ground_cover.gd")
+const ProceduralSwardSprite = preload("res://src/rendering/procedural_sward_sprite.gd")
 const DesertScrub = preload("res://src/world/desert_scrub.gd")
 const ProceduralScrubSprite = preload("res://src/rendering/procedural_scrub_sprite.gd")
 const TundraLichen = preload("res://src/world/tundra_lichen.gd")
@@ -547,6 +549,22 @@ const _SAGEWERK_LOGISTICS_ITEM_IDS := ["beam", "plank"]
 ## would be a real worker that can never actually find its destination.
 const SAGEWERK_STORAGE_PAIR_RADIUS_TILES := 20
 
+## ## The sward (see GroundCover, docs/concept/ground_cover.md)
+##
+## One simulation per loaded chunk, but -- unlike every other decoration layer
+## here -- only FOUR MultiMeshInstance2D nodes in total, one per species,
+## holding every visible rosette across every chunk at once.
+##
+## Per-chunk nodes would be the obvious shape to copy, and it is the wrong one
+## here: the sward is the majority of the ground rather than a sparse scatter,
+## so it is already scoped to the tile-precise camera window (the same one
+## grass uses) rather than to whole chunks. Once the visible set is the unit of
+## work, splitting it by chunk only multiplies draw calls.
+var _ground_cover_sims: Dictionary = {}  # Vector2i chunk_coord -> GroundCover
+var _sward_layers: Dictionary = {}  # species index -> MultiMeshInstance2D
+var _sward_generator := ProceduralSwardSprite.new()
+var _sward_refresh_accumulator := 0.0
+
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
 var _scrub_refresh_accumulator := 0.0
@@ -688,6 +706,13 @@ func _sync_decoration_and_grass_tracking(player_global_tile: Vector2i, center_ch
 		# ground that is visibly bare. Sprite creation stays where it always
 		# was, in the step_* functions.
 		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
+		# The sward rides the same trigger, for the same reason and on the same
+		# throttle (see step_ground_cover): it is drawn against the tile window
+		# below, so without this the ground at the leading edge of the screen
+		# stays bare for up to GRASS_REFRESH_INTERVAL seconds after it comes
+		# into view, and the two plant layers visibly disagree about where the
+		# meadow is.
+		_sward_refresh_accumulator = GRASS_REFRESH_INTERVAL
 		_worm_refresh_accumulator = WORM_REFRESH_INTERVAL
 		_decoration_dirty = false
 
@@ -705,6 +730,9 @@ func _sync_decoration_and_grass_tracking(player_global_tile: Vector2i, center_ch
 	if player_global_tile != _grass_view_synced_tile:
 		_grass_view_synced_tile = player_global_tile
 		_grass_refresh_accumulator = GRASS_REFRESH_INTERVAL
+		# ...and so is the sward, which is culled against the very same tile
+		# window (see _sync_sward).
+		_sward_refresh_accumulator = GRASS_REFRESH_INTERVAL
 
 
 ## The chunks THIS update() call will load, in the order it will load them.
@@ -4405,6 +4433,111 @@ func step_tree_growth() -> void:
 ## advance every call; only the node churn is throttled.
 const GRASS_REFRESH_INTERVAL := 5.0
 
+## World size of one sward rosette, in pixels. Well under a tile: these are
+## ankle-high plants lying flat on the ground, and at anything approaching a
+## full tile they read as bushes.
+const SWARD_WORLD_SIZE := 7.0
+
+
+## Central sward step (see GroundCover, docs/concept/ground_cover.md).
+##
+## Throttled on the same GRASS_REFRESH_INTERVAL the tall-grass layer uses, and
+## for the same two reasons: the grazing memory decays linearly enough that a
+## batched step lands where per-frame steps would, and nothing between
+## refreshes could observe the difference because the rosettes are only
+## redrawn here anyway.
+func step_ground_cover(delta_seconds: float) -> void:
+	_sward_refresh_accumulator += delta_seconds
+	if _sward_refresh_accumulator < GRASS_REFRESH_INTERVAL:
+		return
+	var elapsed := _sward_refresh_accumulator
+	_sward_refresh_accumulator = 0.0
+	for sim in _ground_cover_sims.values():
+		sim.advance(elapsed)
+	_sync_sward()
+
+
+## Rebuilds every visible rosette into the four per-species MultiMeshes.
+##
+## Walks the TILE window rather than the chunks: the sward reaches nearly every
+## grassland cell, so iterating whole chunks would build tens of thousands of
+## instances for a camera that shows a few hundred tiles. The window is the
+## same one grass uses (DecorationLod.keeps_decoration_tile with
+## GRASS_VIEW_BUFFER_TILES), so the two layers appear and disappear together
+## rather than the sward popping in a beat behind the tussocks.
+func _sync_sward() -> void:
+	if _ground_decor_parent == null:
+		return
+	var half_span := _visible_half_span_tiles()
+	var transforms_by_species: Dictionary = {}
+	var centre := _disturbance_center_tile
+	var reach_x: int = half_span.x + GRASS_VIEW_BUFFER_TILES
+	var reach_y: int = half_span.y + GRASS_VIEW_BUFFER_TILES
+	for dy in range(-reach_y, reach_y + 1):
+		for dx in range(-reach_x, reach_x + 1):
+			var tile := Vector2i(centre.x + dx, centre.y + dy)
+			var chunk_coord := _chunk_coord_for_tile(tile)
+			var sward: GroundCover = _ground_cover_sims.get(chunk_coord)
+			if sward == null:
+				continue
+			var cell: Vector2i = tile - chunk_coord * CHUNK_SIZE
+			# The LIVE tall-grass growth on this very cell -- the shade half of
+			# the readout. Read here rather than pushed into GroundCover so
+			# that layer never has to be told about grass (see its own doc
+			# comment on why the ecology is one pure function).
+			var grass_sim: TallGrass = _grass_sims.get(chunk_coord)
+			var growth := grass_sim.get_growth(cell) if grass_sim != null else 0.0
+			for plant in sward.plants_at(cell, growth):
+				var offset: Vector2 = plant["offset"]
+				var world_position := Vector2(
+					(float(tile.x) + offset.x) * TerrainRenderer.TILE_SIZE,
+					(float(tile.y) + offset.y) * TerrainRenderer.TILE_SIZE
+				)
+				var transform := Transform2D(float(plant["rotation"]), world_position)
+				transform = transform.scaled_local(Vector2.ONE * float(plant["scale"]))
+				var species: int = plant["species"]
+				var list: Array = transforms_by_species.get(species, [])
+				list.append(transform)
+				transforms_by_species[species] = list
+	for species in GroundCover.SPECIES.size():
+		_fill_sward_layer(species, transforms_by_species.get(species, []))
+
+
+## Thin engine glue over the placement math above. MultiMesh per-instance
+## transform storage is backed by the dummy renderer under `--headless` and
+## silently does not round-trip there, which is why the tested part is
+## GroundCover.plants_for_cell and not this -- the same split
+## IllustratedGrassPatch.instances_for_cards / fill_band already uses.
+func _fill_sward_layer(species: int, transforms: Array) -> void:
+	var mmi: MultiMeshInstance2D = _sward_layers.get(species)
+	if transforms.is_empty():
+		if mmi != null:
+			mmi.multimesh.instance_count = 0
+		return
+	if mmi == null:
+		mmi = MultiMeshInstance2D.new()
+		var mesh := QuadMesh.new()
+		mesh.size = Vector2(SWARD_WORLD_SIZE, SWARD_WORLD_SIZE)
+		var multimesh := MultiMesh.new()
+		multimesh.mesh = mesh
+		multimesh.transform_format = MultiMesh.TRANSFORM_2D
+		mmi.multimesh = multimesh
+		# One texture per species, seeded per species so all of a species
+		# shares one silhouette. Per-plant variety comes from the transform
+		# (rotation and scale), not from a texture each -- one texture per
+		# plant would defeat the whole point of instancing them.
+		mmi.texture = _sward_generator.generate_texture(species, species)
+		# Under everything: a rosette lies ON the ground, and drawing it in
+		# the Y-sorted entity group would make it fight with the things
+		# standing on top of it for no gain (see _ground_decor_parent).
+		_ground_decor_parent.add_child(mmi)
+		_sward_layers[species] = mmi
+	var multimesh: MultiMesh = mmi.multimesh
+	multimesh.instance_count = transforms.size()
+	for index in transforms.size():
+		multimesh.set_instance_transform_2d(index, transforms[index])
+
+
 ## Central tall-grass step (see TallGrass): every loaded chunk's grass sim
 ## grows/spreads, and on a throttled interval (1) any herbivore-role creature
 ## standing on a mature patch eats it, and (2) the tuft sprites are re-synced
@@ -4605,6 +4738,13 @@ func graze_grass_at(pixel_position: Vector2) -> bool:
 		return false
 	if not sim.graze(cell):
 		return false
+	# The bite that took the tussock's growing point merely trimmed the
+	# rosettes underneath it, so the sward is released here (see GroundCover:
+	# this is the whole "grazing lawn" effect, and it is the one live input
+	# that layer has).
+	var sward: GroundCover = _ground_cover_sims.get(chunk_coord)
+	if sward != null:
+		sward.record_graze(cell)
 	_ecosystem.record_vegetation_harvest(chunk_coord, growth)
 	# Refresh THIS chunk immediately rather than waiting for the next
 	# throttled step, the same reasoning as take_worm_at/take_seed_at: the
@@ -7632,6 +7772,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_seed_sprites[chunk_coord] = {}
 	_sync_flower_sprites(chunk_coord)
 
+	_ground_cover_sims[chunk_coord] = GroundCover.new(
+		hash("%d_%d_ground_cover" % [chunk_coord.x, chunk_coord.y]),
+		chunk.width,
+		chunk.height,
+		chunk.biome
+	)
 	_scrub_sims[chunk_coord] = DesertScrub.new(
 		hash("%d_%d_desert_scrub" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
@@ -8168,6 +8314,10 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_seed_sprites.erase(chunk_coord)
 	_flower_patches.erase(chunk_coord)
 
+	# The sward's own nodes are global rather than per chunk (see
+	# _sward_layers), so unloading a chunk drops only its simulation -- the
+	# next refresh rebuilds the visible set without this chunk in it.
+	_ground_cover_sims.erase(chunk_coord)
 	for sprite in _scrub_sprites.get(chunk_coord, {}).values():
 		sprite.free()
 	_scrub_sprites.erase(chunk_coord)

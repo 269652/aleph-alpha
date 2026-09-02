@@ -405,6 +405,12 @@ no life cycle, and nothing that reacts to it. This makes flowers a real part
 of the ecosystem, and gives butterflies and bees a reason to be where they
 are instead of wandering uniformly.
 
+The same rule is why the SWARD -- the low rosette layer that fills the ground
+between the tussocks (see [ground_cover.md](ground_cover.md)) -- is drawn as
+**leaves and never as blooms**. A clover trefoil or a plantain rosette promises
+nothing to a pollinator, so the two layers can sit on the same cell without
+either lying about the other; blooms stay this doc's job.
+
 ### Illustrated head art: one kit per archetype, not per species
 
 Procedural pixel art hit a real quality ceiling here, the same one animal art
