@@ -76,6 +76,7 @@ const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
 const Compass = preload("res://src/gameplay/compass.gd")
 const MapProjection = preload("res://src/world/map_projection.gd")
 const Spyglass = preload("res://src/gameplay/spyglass.gd")
+const WindScent = preload("res://src/world/wind_scent.gd")
 const WeatherForecast = preload("res://src/gameplay/weather_forecast.gd")
 const SeasonAlmanac = preload("res://src/world/season_almanac.gd")
 const FieldJournal = preload("res://src/emergence/field_journal.gd")
@@ -4639,7 +4640,14 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.step_snow(snowing, warmth)
 	# Walking packs the snow down, which is what leaves a trail.
 	_chunk_manager.tread_snow_at(local_player.position)
-	_chunk_manager.set_wind_strength(_weather_model.wind_strength_for(raw_weather))
+	var raw_wind_strength := _weather_model.wind_strength_for(raw_weather)
+	_chunk_manager.set_wind_strength(raw_wind_strength)
+	# ...and the wind now has a DIRECTION the simulation reads, not just an
+	# energy the visuals do. Every animal with a nose smells the player further
+	# off downwind than upwind (see WindScent, CreatureMarker._smells_a_player,
+	# docs/concept/olfaction.md "The wind carries it"), which is what makes
+	# which side you approach an animal from a decision.
+	_chunk_manager.refresh_wind(local_player.position, raw_wind_strength)
 	# Real relief shading, lit by the exact same sun already computed above
 	# for day/night (elevation) and now also its compass bearing (azimuth).
 	_chunk_manager.set_sun_position(elevation, azimuth)
@@ -4675,7 +4683,7 @@ func _client_process(delta: float) -> void:
 	_chunk_manager.sync_tree_season(local_player.position)
 	var weather := raw_weather.capitalize()
 	_debug_label.text = (
-		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%"
+		"FPS %d   Lat %.1f Lon %.1f   Local %02d:%02d   Sun elev %.1f°   %s · %s   Mode: %s   Speed: %d%%   %s"
 		% [
 			Engine.get_frames_per_second(),
 			latitude,
@@ -4687,8 +4695,23 @@ func _client_process(delta: float) -> void:
 			weather,
 			local_player.current_mode,
 			local_player.current_speed_multiplier * 100,
+			status_line_wind(_chunk_manager.wind_direction()),
 		]
 	)
+
+
+## How the status line names the wind, or "" in still air.
+##
+## The wind is a real gameplay input now, not weather flavour: it decides which
+## side of an animal gives the player away (see WindScent,
+## CreatureMarker._smells_a_player, docs/concept/olfaction.md "The wind carries
+## it"). A mechanic the player cannot read is one they cannot play around, so
+## it goes where they are already looking.
+##
+## Static and pure so the naming is testable without a running world.
+static func status_line_wind(wind_direction: Vector2) -> String:
+	var name := WindScent.wind_name(wind_direction)
+	return "" if name.is_empty() else "Wind: %s" % name
 
 
 ## Searches an expanding ring around a candidate spawn tile for dry land, in

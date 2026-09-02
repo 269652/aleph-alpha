@@ -123,6 +123,8 @@ const GrowingJuveniles = preload("res://src/world/growing_juveniles.gd")
 const MammalGrowth = preload("res://src/gameplay/mammal_growth.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const WeatherModel = preload("res://src/world/weather_model.gd")
+const WindScent = preload("res://src/world/wind_scent.gd")
+const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const TreeMaturity = preload("res://src/gameplay/tree_maturity.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const SeedEndozoochory = preload("res://src/gameplay/seed_endozoochory.gd")
@@ -3968,6 +3970,59 @@ func step_water_disturbances(delta: float) -> void:
 	_water_shader.advance_disturbances(delta)
 
 
+## ## The wind, as a real quantity in the world
+##
+## `WeatherModel.wind_direction_for` had existed, documented and tested, since
+## the weather model was written and -- verified across every `.gd` in `src/`
+## and `scenes/` -- had **no production caller at all**. The world had a wind
+## direction that nothing in the running game ever asked for: seeds dispersed,
+## grass swayed and flowers advertised without one.
+##
+## This is where it enters. One owner of "which way is it blowing here", asked
+## by every creature that has a nose (see `CreatureMarker._smells_a_player`,
+## `WindScent`), so the answer cannot differ between two animals standing in
+## the same meadow.
+var _wind_direction := Vector2.ZERO
+var _wind_advection := 0.0
+var _wind_day := -1
+var _wind_region := 0
+
+
+## Brings the live wind up to date. Called once per weather update (see
+## World._client_process's weather block), beside the visual `set_wind_strength` it complements
+## -- `raw_wind_strength` is the same `WeatherModel.wind_strength_for(...)`
+## value that call already receives.
+##
+## The DIRECTION is cached against the day and region it was derived for.
+## `wind_direction_for` walks the whole day history to get today's heading, and
+## this feeds a per-creature, per-frame path -- recomputing it on every ask
+## would be an O(days) loop per animal per frame.
+func refresh_wind(player_pixel: Vector2, raw_wind_strength: float) -> void:
+	_wind_advection = WindScent.advection_strength(raw_wind_strength)
+	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(player_pixel))
+	# The same day and region-seed derivation current_weather uses, so the wind
+	# and the weather can never disagree about which day it is.
+	var day := int(_world_age_seconds / WEATHER_PERIOD_SECONDS)
+	var region := hash("%d_%d" % [chunk_coord.x, chunk_coord.y])
+	if day == _wind_day and region == _wind_region:
+		return
+	_wind_day = day
+	_wind_region = region
+	_wind_direction = _weather_model.wind_direction_for(day, region)
+
+
+## Which way the wind is blowing, as a unit vector. Zero until the first
+## refresh_wind -- still air, which leaves every smell exactly where the
+## geometry puts it (see WindScent.effective_distance_tiles).
+func wind_direction() -> Vector2:
+	return _wind_direction
+
+
+## How hard it is blowing, 0..1 (see WindScent.advection_strength).
+func wind_advection_strength() -> float:
+	return _wind_advection
+
+
 func current_weather(player_pixel: Vector2) -> String:
 	var chunk_coord := _chunk_coord_for_tile(_world_tile_for_pixel(player_pixel))
 	# Weather turns over several times a DAY, not once per day.
@@ -5701,11 +5756,54 @@ func smells_near(pixel_position: Vector2, radius_tiles: float) -> Array:
 		if item.has_method("spoilage"):
 			freshness = 1.0 - item.spoilage()
 		out.append({
+			# The item's OWN mixture, not a fruit-shaped stand-in. fruit_mixture
+			# ignores its item id (the parameter is literally named with a
+			# leading underscore), so every food on the ground used to emit the
+			# same smell and WHAT a player put down decided nothing -- which
+			# makes baiting a gesture rather than a choice. See
+			# Olfaction.bait_mixture and docs/concept/animal_husbandry.md.
 			"position": item.position,
-			"mixture": Olfaction.fruit_mixture(item.item_stack.item.id, freshness),
+			"mixture": Olfaction.bait_mixture(item.item_stack.item.id, freshness),
 			"species": item.item_stack.item.id,
 		})
 	return out
+
+
+## Takes the food lying at `pixel_position`, whatever it is, and returns its
+## item id ("" if there was nothing edible there).
+##
+## The mutation counterpart of `smells_near`, and the sibling `take_fruit_at`
+## could not be: that one only removes ids in `TreeSpecies.IDS`, so an animal
+## drawn across a field by a dropped CARROT arrived and stood over it forever
+## -- the bait could be smelled and walked to and never eaten. See
+## docs/concept/animal_husbandry.md "The approach", and
+## `CreatureMarker._take_forage_bite`'s FOOD_BAIT branch.
+##
+## Deliberately "any item of kind food" rather than a second hardcoded list:
+## a food added to `ItemCatalog` later is baitable without anything being told
+## about it, the same way `smells_near` already publishes it.
+## How close a bite has to be to count as "here". Not a fresh number: it is
+## `ScentForaging.EAT_DISTANCE_PX`, the constant that already answers "how
+## close must an animal be to actually take the food", so the distance an
+## animal walks to and the distance the world hands the food over at cannot
+## drift apart.
+const FORAGE_BITE_RADIUS_PX := ScentForaging.EAT_DISTANCE_PX
+
+
+func take_bait_at(pixel_position: Vector2) -> String:
+	if _ground_items == null:
+		return ""
+	for item in _ground_items.get_children():
+		if item.is_queued_for_deletion() or item.item_stack == null:
+			continue
+		if item.item_stack.item.kind != "food":
+			continue
+		if item.position.distance_to(pixel_position) > FORAGE_BITE_RADIUS_PX:
+			continue
+		var taken: String = item.item_stack.item.id
+		item.queue_free()
+		return taken
+	return ""
 
 
 ## Eats the named-species fruit item standing at `pixel_position`, if there is

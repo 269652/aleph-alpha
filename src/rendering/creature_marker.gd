@@ -27,6 +27,9 @@ const CreatureNeeds = preload("res://src/gameplay/creature_needs.gd")
 const AnimalActions = preload("res://src/gameplay/animal_actions.gd")
 const GrazerForaging = preload("res://src/gameplay/grazer_foraging.gd")
 const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
+const FlightDistance = preload("res://src/gameplay/flight_distance.gd")
+const Wariness = preload("res://src/gameplay/wariness.gd")
+const WindScent = preload("res://src/world/wind_scent.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
@@ -266,6 +269,19 @@ var _disease_roll_count := 0
 ## -- and is pushed in each frame by the holder rather than stored as a node
 ## reference, so a marker never outlives a dangling holder.
 var trust := 0.0
+
+## How rattled THIS individual is, 0..1 (see Wariness, and
+## docs/concept/animal_husbandry.md "The approach").
+##
+## Raised when the animal is made to run and while the player's scent is on it,
+## decaying by absence. It widens this animal's own flight radius, so chasing
+## an animal costs the player something and leaving it alone is a real verb.
+var wariness := Wariness.INITIAL
+
+## Whether the player's smell was reaching this animal at the last throttled
+## check (see _step_wariness). Cached rather than recomputed per frame.
+var _scent_alarm := false
+var _scent_accumulator := 0.0
 ## What a tamed animal has been told to do, and where the thing it is
 ## following currently is. `follow_target` is pushed in by the owner each
 ## frame rather than held as a node reference, the same way the rope anchor
@@ -738,6 +754,12 @@ func _process(frame_delta: float) -> void:
 		_struggle_fatigue = Taming.fatigue_after_rest(_struggle_fatigue, delta)
 	energy = AnimalReproduction.decay(energy, delta)
 	_seconds_since_birth += delta
+	# Placed here, ABOVE the foraging/restraint/order early-returns below, so a
+	# grazing animal still settles. Wariness decays by absence, and an animal
+	# with its head down is the clearest case of nothing happening to it --
+	# putting this after those returns would have left a spooked grazer
+	# permanently jumpy for as long as it kept eating.
+	_step_wariness(delta)
 	_current_action = "walk"  # overridden below by whatever the AI actually does
 
 	# Active foraging comes BEFORE _satisfy_needs_in_place, which is now the
@@ -790,7 +812,13 @@ func _process(frame_delta: float) -> void:
 		# A tamed animal is not afraid of people any more (see fears_players):
 		# players are sensed as threats, so leaving this alone would have a
 		# horse the player just tamed spend the rest of its life fleeing them.
-		var sensed_players := _nearby_in_group(PLAYER_GROUP, threat_radius) if fears_players() else []
+		#
+		# The radius a PLAYER is sensed at is no longer the flat SENSE_RADIUS
+		# every other threat uses -- it is this individual's own composed
+		# flight distance (see _sensed_players, FlightDistance). Creature-vs-
+		# creature sensing above is deliberately untouched: a wolf does not
+		# care whether the deer trusts anyone.
+		var sensed_players := _sensed_players(threat_radius) if fears_players() else []
 		_cached_threats = sensed_players + _nearby_threat_creatures()
 		_cached_caution_threats = (
 			_nearby_in_group(PLAYER_GROUP, CAUTION_RADIUS) if fears_players() else []
@@ -888,6 +916,118 @@ func set_order(new_order: int) -> bool:
 ## carrots taming would spend the rest of its life fleeing from them.
 func fears_players() -> bool:
 	return not is_tame()
+
+
+## ## The approach (see docs/concept/animal_husbandry.md)
+##
+## How close a player gets before THIS animal breaks. Composed per individual
+## rather than read off one flat constant: its body size, how rattled it is,
+## how much it trusts the player, and whether that player is crouching.
+##
+## `crouched` is asked of the player rather than assumed, so a stub player in a
+## test (and the character-creator diorama's world-less marker) simply counts
+## as standing.
+func flight_radius(crouched: bool = false) -> float:
+	var species := info.species if info != null else ""
+	return FlightDistance.radius(species, wariness, trust, crouched)
+
+
+## The players this animal can actually sense right now.
+##
+## `fallback_radius` is the Schmitt-widened radius the rest of the threat scan
+## uses (FLEE_RELEASE_RADIUS while already fleeing, SENSE_RADIUS otherwise).
+## While fleeing it is used AS the radius, unchanged, so the hysteresis that
+## fixed the measured flee-dithering bug keeps working exactly as it did; only
+## the ACQUIRE side becomes per-individual.
+func _sensed_players(fallback_radius: float) -> Array:
+	var widened := fallback_radius > SENSE_RADIUS
+	var found: Array = []
+	for node in get_tree().get_nodes_in_group(PLAYER_GROUP):
+		if node == self:
+			continue
+		var radius := fallback_radius if widened else flight_radius(_is_crouching(node))
+		if position.distance_to(node.position) <= radius:
+			found.append(node)
+	return found
+
+
+## Whether this player node is crouching. Duck-typed like every other player
+## query in this file: a stub without the method is simply standing.
+static func _is_crouching(player: Node) -> bool:
+	return player.has_method("is_crouching") and player.is_crouching()
+
+
+## ## Wariness: what chasing an animal costs, and what leaving it alone buys
+##
+## Two inputs, both of them the player's doing:
+##
+##   Being MADE TO RUN is a sharp step up (`Wariness.after_spook`), applied on
+##   the leading edge of a flee episode in _apply_decision so one long flee
+##   costs one spook rather than one per frame.
+##
+##   The player's SCENT on the wind is a slow climb (`Wariness.after_scent`) --
+##   a whiff does not make an animal bolt, it makes it jumpy. Routing the wind
+##   through wariness rather than through a second flee trigger is what keeps
+##   FlightDistance the single owner of "when does this animal run", and it is
+##   the truer behaviour: a deer that catches your scent across a meadow does
+##   not sprint, it stops trusting the meadow.
+##
+## Everything else is decay by ABSENCE. The input for that is nothing at all --
+## the player leaves, and the animal gets over it.
+func _step_wariness(delta: float) -> void:
+	if not fears_players():
+		wariness = Wariness.after_calm(wariness, delta)
+		return
+	# The scent verdict is THROTTLED on the same interval the group scans are,
+	# and for the same reason: it walks the player group and does real vector
+	# maths, and this runs for every creature every frame. Wariness is a ramp
+	# with a multi-second half-life, so a quarter-second-stale verdict is
+	# invisible. Deliberately its own accumulator rather than folded into the
+	# sensing block below, because that block sits after the foraging/restraint
+	# early-returns -- and an animal grazing with its head down is exactly the
+	# one that should still be catching the player's scent.
+	_scent_accumulator += delta
+	if _scent_accumulator >= SENSE_INTERVAL:
+		_scent_accumulator = 0.0
+		_scent_alarm = _smells_a_player()
+	if _scent_alarm:
+		wariness = Wariness.after_scent(wariness, delta)
+		return
+	wariness = Wariness.after_calm(wariness, delta)
+
+
+## Whether the player's own smell is reaching this animal right now, with the
+## wind taken into account (see WindScent, Olfaction.PLAYER_MIXTURE).
+##
+## The world is asked for the wind rather than the weather: a stub world that
+## cannot answer reports still air, which leaves the geometry alone and makes
+## this exactly the still-air case every pre-existing test already assumes.
+func _smells_a_player() -> bool:
+	var species := info.species if info != null else ""
+	if species.is_empty() or not Olfaction.has_nose(species):
+		return false
+	var wind_direction := Vector2.ZERO
+	var wind_strength := 0.0
+	if _world != null and _world.has_method("wind_direction"):
+		wind_direction = _world.wind_direction()
+	if _world != null and _world.has_method("wind_advection_strength"):
+		wind_strength = _world.wind_advection_strength()
+	var tile_size := float(maxi(_tile_size, 1))
+	for node in get_tree().get_nodes_in_group(PLAYER_GROUP):
+		if node == self:
+			continue
+		var tiles := WindScent.effective_distance_tiles(
+			node.position, position, wind_direction, wind_strength, tile_size
+		)
+		# The Schmitt state is the alarm ITSELF, not the wariness it feeds: an
+		# animal currently smelling the player keeps smelling them slightly
+		# further out (MUSK_RELEASE_STRENGTH), which is what stops the verdict
+		# flickering for one parked at exactly the alarm threshold. Keying it
+		# off `wariness > 0.0` instead would have latched permanently, since an
+		# exponential decay never quite reaches zero.
+		if FlightDistance.smells_player(species, tiles, _scent_alarm):
+			return true
+	return false
 
 
 ## Movement for a tamed, un-roped animal carrying out its order.
@@ -1702,7 +1842,14 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 
 
 func _apply_decision(decision: Dictionary, threats: Array, prey: Array, delta: float) -> void:
+	var was_fleeing := _is_fleeing
 	_is_fleeing = decision.intent == "flee"
+	# The LEADING EDGE of a flee episode, not every frame of one: being made to
+	# run once costs one spook, however long the run lasts (see Wariness,
+	# _step_wariness). An animal you have flushed four times is warier than one
+	# you startled once -- but it is the flushing that counts, not the running.
+	if _is_fleeing and not was_fleeing:
+		wariness = Wariness.after_spook(wariness)
 	if not _is_fleeing:
 		# A flee episode's committed heading/timer must not leak into a
 		# LATER, separate flee episode -- _flee_commit_remaining only ever
@@ -2162,14 +2309,20 @@ func _seek_by_smell() -> bool:
 	var species := info.species if info != null else ""
 	if not ScentForaging.forages_by_smell(species):
 		return false
-	if not _forage_kinds().has(GrazerForaging.FOOD_FRUIT):
-		return false
 	var sources: Array = _world.smells_near(position, Olfaction.MAX_RANGE_TILES)
 	var target := ScentForaging.best_source(species, position, sources)
 	if target.is_empty():
 		return false
 	_forage_target = target["position"]
-	_forage_kind = GrazerForaging.FOOD_FRUIT
+	# An animal whose ordinary diet includes fruit takes what it smells AS
+	# fruit, so the seed inside it still travels the way endozoochory expects
+	# (see take_fruit_at, SeedEndozoochory). Everything else -- every plain
+	# grazer, whose whole diet is FOOD_GRASS -- takes it as BAIT: a thing a
+	# person put down, which it would never have foraged for and is crossing a
+	# field for anyway. That distinction is the whole of what baiting is, and
+	# without it nothing anyone put on the ground existed for a sheep.
+	var forages_fruit := _forage_kinds().has(GrazerForaging.FOOD_FRUIT)
+	_forage_kind = GrazerForaging.FOOD_FRUIT if forages_fruit else GrazerForaging.FOOD_BAIT
 	_has_forage_target = true
 	_forage.begin_approach()
 	return true
@@ -2212,6 +2365,8 @@ func _take_forage_bite() -> void:
 			got = _world.has_method("take_seed_at") and _world.take_seed_at(_forage_target) != ""
 		GrazerForaging.FOOD_WORM:
 			got = _world.has_method("take_worm_at") and _world.take_worm_at(_forage_target)
+		GrazerForaging.FOOD_BAIT:
+			got = _world.has_method("take_bait_at") and _world.take_bait_at(_forage_target) != ""
 	if got:
 		_needs.feed()
 		_gain_energy()

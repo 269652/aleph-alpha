@@ -2848,3 +2848,302 @@ func test_animal_state_reports_how_badly_a_need_is_felt_not_just_whether():
 		"a starving animal should report more hunger urgency than a peckish one"
 	)
 	assert_between(float(horse.animal_state()["thirst_urgency"]), 0.0, 1.0)
+
+
+# -- the approach: flight distance, crouch, wariness, and the wind ------------
+#
+# See docs/concept/animal_husbandry.md "The approach". Until this, the player
+# half of SENSE_RADIUS was one flat 80 px constant for every creature in the
+# world and nothing the player did changed it -- so the only way inside it was
+# to be faster than the animal, which on an ordinary wet afternoon the player
+# is not.
+
+const FlightDistance = preload("res://src/gameplay/flight_distance.gd")
+const WindScent = preload("res://src/world/wind_scent.gd")
+const Olfaction = preload("res://src/gameplay/olfaction.gd")
+const Wariness = preload("res://src/gameplay/wariness.gd")
+
+
+## A player who can crouch, which the real Player now can.
+class StubCrouchingPlayer:
+	extends StubPlayer
+	var crouching := false
+	func is_crouching() -> bool:
+		return crouching
+
+
+## A StubWorld that also answers the wind queries the real EarthChunkManager
+## now does, so the scent channel can be exercised deterministically.
+class WindyStubWorld:
+	extends StubWorld
+	var direction := Vector2.RIGHT
+	var advection := 1.0
+	func wind_direction() -> Vector2:
+		return direction
+	func wind_advection_strength() -> float:
+		return advection
+
+
+func _add_crouching_player(at: Vector2) -> StubCrouchingPlayer:
+	var player := StubCrouchingPlayer.new()
+	player.position = at
+	add_child(player)
+	player.add_to_group(CreatureMarker.PLAYER_GROUP)
+	_extra.append(player)
+	return player
+
+
+## The payoff of the whole stalk layer: a distance that makes a standing player
+## a threat leaves a crouched one unnoticed.
+func test_a_crouched_player_gets_closer_before_a_sheep_flees():
+	marker.info = CreatureInfo.new("sheep")
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	var standing_radius := FlightDistance.radius("sheep", 0.0, 0.0, false)
+	var crouched_radius := FlightDistance.radius("sheep", 0.0, 0.0, true)
+	var between := (standing_radius + crouched_radius) * 0.5
+	var player := _add_crouching_player(Vector2(100 + between, 100))
+
+	# Asserted on whether the animal BREAKS, not on gross displacement: a
+	# crouched player inside CAUTION_RADIUS is still avoided by the wander bias
+	# (that radius is deliberately unchanged -- see _sensed_players), so an
+	# animal edging away from a crouch and an animal bolting from a stander
+	# both move. What the stalk buys is that the second one is not happening.
+	player.crouching = true
+	for step in 8:
+		marker._process(0.3)
+	assert_false(marker._is_fleeing, "a crouched player at this range should not be a threat")
+
+	# Re-placed at the same GAP from wherever the animal has drifted to, so the
+	# two halves compare stance and nothing else.
+	player.position = marker.position + Vector2(between, 0.0)
+	player.crouching = false
+	marker._process(0.3)
+	marker._process(0.3)
+	assert_true(marker._is_fleeing, "standing up at the same range should send it running")
+
+
+## A mouse now lets the player far closer than a horse does, which one flat
+## radius for every creature in the world could never express. Asserted on the
+## marker's OWN composed radius rather than on whether it happened to run,
+## because whether an animal runs also depends on whether it was mid-graze.
+func test_a_mouse_lets_the_player_closer_than_a_horse_does():
+	marker.info = CreatureInfo.new("mouse")
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	var mouse_radius := marker.flight_radius()
+
+	var horse := CreatureMarker.new()
+	horse.home = Vector2(600, 600)
+	horse.position = Vector2(600, 600)
+	horse.wander_seed = 5
+	horse.info = CreatureInfo.new("horse")
+	add_child(horse)
+	_extra.append(horse)
+	horse.setup(StubWorld.new(), TILE_SIZE)
+
+	assert_lt(mouse_radius, horse.flight_radius())
+
+
+## Trust is what taming BUYS here: the animal you spent five carrots on lets
+## you walk up to it, and the wild one beside it does not.
+func test_a_trusted_animal_has_a_smaller_flight_radius_than_a_wild_one():
+	marker.info = CreatureInfo.new("horse")
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	var wild := marker.flight_radius()
+
+	marker.trust = Taming.TAME_TRUST * 0.5
+	assert_lt(marker.flight_radius(), wild)
+
+
+## And a rattled animal's radius is wider, which is what makes chasing cost
+## something rather than being free.
+func test_a_rattled_animal_has_a_wider_flight_radius():
+	marker.info = CreatureInfo.new("sheep")
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	var calm := marker.flight_radius()
+
+	marker.wariness = 1.0
+	assert_gt(marker.flight_radius(), calm)
+
+
+## Wariness is a real per-individual quantity that the marker carries, raised
+## by being made to run -- so chasing an animal costs the player something.
+func test_being_made_to_run_leaves_an_animal_warier():
+	marker.info = CreatureInfo.new("sheep")
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	assert_eq(marker.wariness, Wariness.INITIAL)
+
+	_add_stub_player(Vector2(110, 100))
+	marker._process(0.3)
+
+	assert_gt(marker.wariness, Wariness.INITIAL, "being flushed should leave it rattled")
+
+
+## ...and it decays by ABSENCE. The input is leaving the animal alone, which is
+## the one mechanic in this game whose correct play is to walk away.
+func test_wariness_decays_while_nothing_threatens():
+	marker.info = CreatureInfo.new("sheep")
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	marker.wariness = 1.0
+
+	for step in 20:
+		marker._process(0.5)
+
+	assert_lt(marker.wariness, 1.0, "an animal left alone should settle")
+
+
+## The headline of the wind layer. Two identical approaches at the same
+## distance, differing only in which side of the animal the wind is on: the
+## upwind one gives the player away and the downwind one does not.
+func test_standing_upwind_of_an_animal_makes_it_warier_than_standing_downwind():
+	var upwind_world := WindyStubWorld.new()
+	upwind_world.direction = Vector2.RIGHT  # blowing east, from the player toward the animal
+
+	marker.info = CreatureInfo.new("deer")
+	marker.setup(upwind_world, TILE_SIZE)
+	var range_px := FlightDistance.radius("deer", 0.0, 0.0, false) * 1.4
+	_add_stub_player(marker.position - Vector2(range_px, 0.0))  # player to the WEST
+	for step in 10:
+		marker._process(0.4)
+	var upwind_wariness: float = marker.wariness
+
+	var downwind := CreatureMarker.new()
+	downwind.home = Vector2(600, 600)
+	downwind.position = Vector2(600, 600)
+	downwind.wander_seed = 5
+	downwind.info = CreatureInfo.new("deer")
+	add_child(downwind)
+	_extra.append(downwind)
+	var downwind_world := WindyStubWorld.new()
+	downwind_world.direction = Vector2.LEFT  # blowing west, away from the animal
+	downwind.setup(downwind_world, TILE_SIZE)
+	var second := StubPlayer.new()
+	second.position = downwind.position - Vector2(range_px, 0.0)
+	add_child(second)
+	second.add_to_group(CreatureMarker.PLAYER_GROUP)
+	_extra.append(second)
+	for step in 10:
+		downwind._process(0.4)
+
+	assert_gt(
+		upwind_wariness,
+		downwind.wariness,
+		"the wind should give an upwind player away and cover a downwind one"
+	)
+
+
+# -- bait (see docs/concept/animal_husbandry.md "The approach") ---------------
+#
+# `EarthChunkManager.smells_near` already published every ground food as an
+# olfaction source and `_seek_by_smell` already walked an animal up the
+# gradient -- but only for a species whose ordinary diet includes FOOD_FRUIT,
+# which excludes every plain grazer (horse, sheep, goat, camel, reindeer). An
+# animal crossing a field for something it would not normally forage for IS
+# what baiting means, so it needs its own forage kind.
+
+
+## A stub world that answers the smell queries, and remembers what was taken.
+class BaitedStubWorld:
+	extends StubWorld
+	# Bare ground on purpose: on grassland an animal crops what is under its
+	# feet (see _satisfy_needs_in_place) and is never hungry enough to cross a
+	# field for anything, which would make every assertion here vacuous.
+	func _init() -> void:
+		biome = "desert"
+	var bait_position := Vector2.ZERO
+	var bait_id := "carrot"
+	var taken: Array = []
+	func smells_near(_pixel: Vector2, _radius_tiles: float) -> Array:
+		var Olfaction = load("res://src/gameplay/olfaction.gd")
+		if bait_id.is_empty():
+			return []
+		return [{
+			"position": bait_position,
+			"mixture": Olfaction.bait_mixture(bait_id, 1.0),
+			"species": bait_id,
+		}]
+	func take_bait_at(at: Vector2) -> String:
+		taken.append(at)
+		var was := bait_id
+		bait_id = ""
+		return was
+
+
+## The headline: a sheep is a plain grazer whose whole diet is FOOD_GRASS, and
+## it must still cross a field for a carrot somebody put down. Without this the
+## approach layer's first and most important verb does nothing at all for the
+## five species it is most needed for.
+func test_a_baited_grazer_walks_to_a_carrot_it_would_never_forage_for():
+	var world := BaitedStubWorld.new()
+	world.bait_position = Vector2(220, 100)
+	marker.info = CreatureInfo.new("sheep")
+	marker.setup(world, TILE_SIZE)
+	marker._needs.hunger = 1.0  # hungry enough to go looking
+
+	var started := marker.position.distance_to(world.bait_position)
+	for step in 40:
+		# Thirst outranks hunger in CreatureBehavior.decide, and there is no
+		# water in a bare-ground stub -- left alone the animal would spend the
+		# run roaming to SEARCH for water instead of doing the thing under
+		# test. Kept quenched so this measures the bait and nothing else.
+		marker._needs.thirst = 0.0
+		marker._process(0.2)
+	assert_lt(
+		marker.position.distance_to(world.bait_position),
+		started,
+		"a sheep should walk toward a carrot it can smell"
+	)
+
+
+## The reason bait is FIRST in the approach layer: it is the one verb whose
+## viability does not depend on the player's speed multiplier at all. The
+## animal comes to the food; nobody has to outrun anything.
+func test_bait_works_with_no_player_involved_at_all():
+	var world := BaitedStubWorld.new()
+	world.bait_position = Vector2(160, 100)
+	marker.info = CreatureInfo.new("horse")
+	marker.setup(world, TILE_SIZE)
+	marker._needs.hunger = 1.0
+
+	for step in 60:
+		marker._needs.thirst = 0.0  # see the note in the test above
+		marker._process(0.2)
+
+	assert_false(world.taken.is_empty(), "the horse should have reached and eaten the bait")
+
+
+## ...and it is really the SMELL doing it, not proximity: bait an animal
+## cannot smell draws nothing.
+func test_bait_beyond_smelling_range_draws_nothing():
+	var world := BaitedStubWorld.new()
+	world.bait_position = Vector2(100, 100) + Vector2(
+		(Olfaction.MAX_RANGE_TILES + 4.0) * TILE_SIZE, 0.0
+	)
+	marker.info = CreatureInfo.new("sheep")
+	marker.setup(world, TILE_SIZE)
+	marker._needs.hunger = 1.0
+
+	for step in 20:
+		marker._needs.thirst = 0.0
+		marker._process(0.2)
+
+	assert_true(world.taken.is_empty(), "bait out of smelling range must not be reachable")
+
+
+## An animal that eats fruit anyway keeps its own path, so the seed a fruit
+## carries still goes where endozoochory expects (see take_fruit_at,
+## SeedEndozoochory) rather than being swallowed by the generic bait path.
+func test_a_fruit_eater_still_takes_fruit_as_fruit():
+	var world := BaitedStubWorld.new()
+	world.bait_position = Vector2(140, 100)
+	world.bait_id = "apple"
+	marker.info = CreatureInfo.new("boar")
+	marker.setup(world, TILE_SIZE)
+	marker._needs.hunger = 1.0
+
+	# Long enough for the forage cycle to leave SEEKING and commit to a bite
+	# (see GrazerForaging.REGRAZE_SECONDS), which is when the kind is chosen.
+	for step in 12:
+		marker._needs.thirst = 0.0
+		marker._process(0.2)
+
+	assert_eq(marker._forage_kind, GrazerForaging.FOOD_FRUIT)

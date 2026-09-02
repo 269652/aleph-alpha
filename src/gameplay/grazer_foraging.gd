@@ -34,6 +34,17 @@ const FOOD_GRASS := "grass"
 const FOOD_FRUIT := "fruit"
 const FOOD_SEED := "seed"
 const FOOD_WORM := "worm"
+## Food a PERSON put on the ground for this animal (see
+## docs/concept/animal_husbandry.md "The approach").
+##
+## Its own kind rather than a reuse of FOOD_FRUIT, because it is the one kind
+## that is NOT part of any species' ordinary diet: an animal crossing a field
+## for something it would not normally forage for is exactly what baiting
+## means, and it is what lets a plain grazer -- whose whole diet is
+## FOOD_GRASS -- be drawn by a carrot at all. Deliberately absent from
+## FORAGE_KINDS_BY_DIET below: nothing forages for bait by default, an animal
+## only ever arrives at it by SMELL.
+const FOOD_BAIT := "bait"
 
 ## The fallback "bite": whatever is growing on the tile the animal already
 ## stands on, with no entity behind it. Not a diet entry -- an animal that can

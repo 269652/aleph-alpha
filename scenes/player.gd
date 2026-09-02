@@ -70,6 +70,7 @@ const InputLatch = preload("res://src/gameplay/input_latch.gd")
 const Throwable = preload("res://src/gameplay/throwable.gd")
 const ChargeMeter = preload("res://src/gameplay/charge_meter.gd")
 const HeldItemThrow = preload("res://src/gameplay/held_item_throw.gd")
+const FlightDistance = preload("res://src/gameplay/flight_distance.gd")
 const ImpactResolver = preload("res://src/gameplay/impact_resolver.gd")
 const StoneRenderer = preload("res://src/rendering/stone_renderer.gd")
 const CollapsedPassage = preload("res://src/rendering/collapsed_passage.gd")
@@ -129,6 +130,8 @@ const PROXY_MOVEMENT_EPSILON := 0.5
 ## trading" Phase 3's definition of done asks for. Damage comes from the
 ## equipped weapon (UNARMED_DAMAGE if empty-handed).
 const ATTACK_RANGE := 20.0
+## The rebindable action this player's crouch is held on (see Keybindings).
+const CROUCH_ACTION := "crouch"
 const UNARMED_DAMAGE := 5.0
 const ATTACK_COOLDOWN := 0.5
 const KNOCKBACK_FORCE := 60.0
@@ -189,6 +192,22 @@ signal inventory_changed
 
 var wetness := 0.0
 var current_mode := "walking"
+
+## Whether the player is holding the crouch key right now (see
+## docs/concept/animal_husbandry.md "The approach").
+##
+## A stance, not a toggle: it lasts exactly as long as the key is held, which
+## is what makes it a thing the player DOES during an approach rather than a
+## mode they forget they are in. Read by CreatureMarker (duck-typed, via
+## is_crouching) to shrink the animal's own flight radius, and it costs
+## movement speed so it can never be a free permanent state.
+##
+## Single-player only for now, and deliberately: it is read from the local
+## InputMap, and `_submit_input` replicates the movement VECTOR and nothing
+## else, so a remote player never reads as crouched to the server's creatures.
+## Widening the replicated input to carry a stance is real work with no
+## single-player payoff, and this game is single-player-first (see README).
+var _crouching := false
 var current_speed_multiplier := 1.0
 
 ## Aggressive/healthy predators and boars attack the player back (see
@@ -1709,7 +1728,10 @@ func _authority_step(delta: float) -> void:
 
 	var tile := current_tile()
 	var water_result := _resolve_water_state(tile, delta)
-	current_mode = water_result.mode
+	# The stance is read once per step and cached, so every consumer this frame
+	# (speed, the HUD mode line, an animal's flight radius) agrees about it.
+	_crouching = _controlled_locally() and _crouch_held()
+	current_mode = movement_mode_for(water_result.mode, _crouching)
 	# Overall condition (SurvivalMeters.fitness, driven by starving/
 	# dehydrated/cold) is a real movement debuff, not a dead meter -- see
 	# ConditionPenalty and docs/concept/survival.md's "Debuffs, not death".
@@ -1719,6 +1741,7 @@ func _authority_step(delta: float) -> void:
 		* _terrain_speed_multiplier(tile)
 		* ConditionPenalty.speed_multiplier(survival.fitness)
 		* _spell_speed_multiplier()
+		* _crouch_speed_multiplier()
 	)
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
@@ -2483,6 +2506,52 @@ func _spawn_thrown_stone(landing_position: Vector2, diameter_cm: float) -> void:
 ## Materializes a real DroppedItem at `landing_position` -- the generic-item
 ## counterpart of _spawn_thrown_stone, and also reused by _stash_step to
 ## drop whatever doesn't fit in a full inventory rather than losing it.
+## Puts ONE unit of the best bait carried onto the ground at the player's feet.
+##
+## One, not the stack: a bait is a considered act, not tipping out the bag --
+## and one carrot is what the hand-fed `feed_treat` costs too, so putting one
+## down and offering one by hand cost the same.
+func _put_a_bait_down() -> void:
+	var carried: Array = []
+	for stack in inventory.stacks():
+		carried.append(stack.item.id)
+	var bait_id := bait_item_id_from(carried)
+	if bait_id.is_empty():
+		return
+	var item = _item_catalog.make(bait_id)
+	if item == null or inventory.remove(bait_id, 1) < 1:
+		return
+	_spawn_thrown_item(position, ItemStack.new(item, 1))
+	inventory_changed.emit()
+
+
+## Which of the carried items goes down as bait.
+##
+## The taming treat wins when it is carried, so the common case -- a player
+## with carrots and a haunch of meat, standing at a sheep -- puts down the
+## thing the sheep actually wants. Otherwise the first food carried, which is
+## right for a player who only has one kind anyway.
+##
+## Static and pure so the rule is testable without an inventory, and so the
+## same rule can back a prompt later.
+##
+## Known limit, and the reason this is a rule rather than a choice: there is no
+## selected-item concept yet (`animal_husbandry.md` §2 specs the click-latched
+## selection this should read once it exists). A player carrying carrots and
+## apples cannot yet choose to bait with the apples.
+static func bait_item_id_from(carried_item_ids: Array) -> String:
+	var catalog := ItemCatalog.new()
+	var first_food := ""
+	for item_id in carried_item_ids:
+		if catalog.kind_of(String(item_id)) != "food":
+			continue
+		if String(item_id) == AnimalActions.TREAT_ITEM_ID:
+			return String(item_id)
+		if first_food.is_empty():
+			first_food = String(item_id)
+	return first_food
+
+
 func _spawn_thrown_item(landing_position: Vector2, item_stack) -> void:
 	var dropped := DroppedItem.new()
 	dropped.item_stack = item_stack
@@ -2625,7 +2694,20 @@ func _stash_step() -> void:
 	)
 	var just_pressed := _rising_edge("stash", stash_pressed, _last_stash_input_state)
 	_last_stash_input_state = stash_pressed
-	if not just_pressed or not is_holding_anything() or inventory == null:
+	if not just_pressed or inventory == null:
+		return
+	if not is_holding_anything():
+		# Contextual, exactly the way E is (see docs/concept/stone.md's
+		# held-item concept): with something in hand this key stashes it, and
+		# with an EMPTY hand it puts a BAIT down (see
+		# docs/concept/animal_husbandry.md "The approach").
+		#
+		# Bait needed a gesture. The simulation half was live -- ground food is
+		# published as a smell, a grazer walks up the gradient, take_bait_at
+		# lets it eat what it reached -- and a live session found there was no
+		# way for a player to put food on the ground at all: the inventory
+		# window's drag-out-to-the-world drop does nothing (verified in play).
+		_put_a_bait_down()
 		return
 
 	if is_holding_stone():
@@ -3554,6 +3636,36 @@ func _proxy_step() -> void:
 
 func _read_local_input() -> Vector2:
 	return Input.get_vector("move_left", "move_right", "move_up", "move_down")
+
+
+## Whether this player is crouched right now. Duck-typed on purpose: this is
+## the method CreatureMarker asks any player node for (see
+## CreatureMarker._is_crouching), so a test double without it simply stands.
+func is_crouching() -> bool:
+	return _crouching
+
+
+func _crouch_held() -> bool:
+	return InputMap.has_action(CROUCH_ACTION) and Input.is_action_pressed(CROUCH_ACTION)
+
+
+## What crouching costs. Held in FlightDistance rather than here because the
+## same number pins the shy threshold (a crouched pace must never read as a
+## rush), and one constant cannot live in two files.
+func _crouch_speed_multiplier() -> float:
+	return FlightDistance.CROUCH_SPEED_MULTIPLIER if _crouching else 1.0
+
+
+## What the HUD calls how the player is moving.
+##
+## Crouching is a STANCE layered on ordinary walking, so it only shows when
+## nothing more consequential is going on: you cannot stalk anything while you
+## are swimming, and drowning is not a posture. Static and pure so the
+## precedence is testable without a step.
+static func movement_mode_for(water_mode: String, crouching: bool) -> String:
+	if water_mode != "walking":
+		return water_mode
+	return "crouching" if crouching else water_mode
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")

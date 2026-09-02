@@ -2173,3 +2173,96 @@ func test_a_refused_feed_costs_no_carrot_from_hand():
 	assert_false(player.offer_treat_to(horse))
 
 	assert_not_null(player.equipped_item, "a full animal eats nothing")
+
+
+# -- the stalk (see docs/concept/animal_husbandry.md "The approach") ----------
+#
+# A hold-to-crouch that scales an animal's effective flight distance down (see
+# FlightDistance.CROUCH_MULTIPLIER, CreatureMarker._sensed_players). It has to
+# cost movement speed, or it is a free permanent state and there is no decision
+# in it.
+
+const FlightDistanceForPlayer = preload("res://src/gameplay/flight_distance.gd")
+
+
+func test_a_player_starts_upright():
+	assert_false(player.is_crouching())
+
+
+func test_holding_the_crouch_key_crouches():
+	_register_all_keybindings()
+	Input.action_press("crouch")
+	player._authority_step(0.016)
+	Input.action_release("crouch")
+
+	assert_true(player.is_crouching())
+
+
+func test_letting_go_stands_back_up():
+	_register_all_keybindings()
+	Input.action_press("crouch")
+	player._authority_step(0.016)
+	Input.action_release("crouch")
+	player._authority_step(0.016)
+
+	assert_false(player.is_crouching())
+
+
+## The cost. Asserted as a RATIO against a control run, for the same reason
+## the condition-penalty tests above are: two consecutive steps do not produce
+## a byte-identical multiplier even with nothing changed.
+func test_crouching_is_slower_than_walking():
+	_register_all_keybindings()
+	player._authority_step(0.016)
+	var upright: float = player.current_speed_multiplier
+
+	Input.action_press("crouch")
+	player._authority_step(0.016)
+	Input.action_release("crouch")
+
+	assert_almost_eq(
+		player.current_speed_multiplier / upright,
+		FlightDistanceForPlayer.CROUCH_SPEED_MULTIPLIER,
+		0.01,
+		"crouching should cost exactly the penalty FlightDistance states"
+	)
+
+
+## A crouched pace must stay below the shy threshold, or crouching would still
+## read as a rush and the whole layer would cancel itself out.
+func test_a_crouched_pace_is_never_a_rush():
+	assert_false(
+		FlightDistanceForPlayer.is_a_rush(
+			Player.BASE_SPEED * FlightDistanceForPlayer.CROUCH_SPEED_MULTIPLIER
+		)
+	)
+
+
+## The HUD has to say so, or the player cannot tell a state they are holding a
+## key for from one they are not.
+##
+## Compared against what movement_mode_for says for whatever the player is
+## standing in, rather than against the literal "crouching": these tests run
+## wherever the chunk manager put the origin, and the point being pinned is
+## that the stance reaches the readout at all -- the precedence between the two
+## is pinned separately, and purely, below.
+func test_the_movement_mode_reads_as_crouching():
+	_register_all_keybindings()
+	player._authority_step(0.016)
+	var upright_mode: String = player.current_mode
+
+	Input.action_press("crouch")
+	player._authority_step(0.016)
+	Input.action_release("crouch")
+
+	assert_eq(player.current_mode, Player.movement_mode_for(upright_mode, true))
+
+
+## ...but never at the expense of a mode that matters more: you cannot stalk
+## anything while you are swimming, and drowning is not a stance.
+func test_swimming_outranks_crouching_in_the_mode_readout():
+	_register_all_keybindings()
+	Input.action_press("crouch")
+	player.current_mode = "swimming"
+	assert_eq(Player.movement_mode_for("swimming", true), "swimming")
+	Input.action_release("crouch")

@@ -28,7 +28,7 @@ const MIN_INTEREST := 0.02
 
 ## Whether this species hunts for food by smell at all.
 static func forages_by_smell(species: String) -> bool:
-	return Olfaction.RECEPTORS.has(species)
+	return Olfaction.has_nose(species)
 
 
 ## The most appealing smell in reach, as the source dictionary itself, or an

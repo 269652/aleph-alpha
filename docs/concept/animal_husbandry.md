@@ -999,30 +999,111 @@ be where the real work is.
 
 ## Status
 
-Everything this doc specifies is unbuilt. The ✅ entries in the second list are
-foundations already in the tree that this design *reuses* — they belong to
-other docs and are listed only so an implementer knows what not to rewrite.
+**Section 1, "The approach", is now built** (2026-09-02). The rest of this doc
+— pens, keeping, breeding, production, work, mastery, consequence — is still
+unbuilt. The ✅ entries in the second list are foundations already in the tree
+that this design *reuses*; they belong to other docs and are listed only so an
+implementer knows what not to rewrite.
 
 **This doc's mechanisms**
 
-- ⬜ `FlightDistance.radius(species, wariness, trust, crouched)` — one composed
-  function replacing the single `CreatureMarker.SENSE_RADIUS` threat radius,
-  with `test_a_graded_flight_radius_never_dithers` as the sole owner of the
-  `FLEE_RELEASE_RADIUS` invariant.
-- ⬜ The speed-truth pin:
-  `test_a_player_slowed_by_weather_and_terrain_cannot_outpace_a_fleeing_animal`,
-  and the HUD readout that makes it legible in play. **This is the highest-value
-  single item in the doc** — it is the verified cause of the live session's
-  failure, and it is currently unnamed anywhere in the codebase or its tests.
-- ⬜ Wariness: spooking raises flight distance, calm decays it.
-- ⬜ Crouch/stalk action and its speed cost; `FlightDistance.SHY_SPEED`.
-- 🚧 Bait. The scent plumbing is genuinely live — `EarthChunkManager.smells_near`
-  publishes ground food as olfaction sources, `CreatureMarker._seek_by_smell`
-  walks the gradient, and a boar really does walk to a dropped apple — but four
-  verified gaps stop it working as a husbandry verb: `Olfaction.fruit_mixture`
-  ignores its item id, `RECEPTORS` covers only five species, `_seek_by_smell`
-  is gated on a fruit diet, and `take_fruit_at` cannot remove a non-tree food
-  item.
+- ✅ `FlightDistance.radius(species, wariness, trust, crouched)` — one composed
+  function replacing the single flat `CreatureMarker.SENSE_RADIUS` for the
+  PLAYER half of the threat scan (creature-vs-creature sensing is deliberately
+  untouched: a wolf does not care whether the deer trusts anyone). The species
+  term is read from `AnimalAnatomy.profile_for(species)["world_scale"]` — the
+  same number that decides how big the animal is *drawn* — rather than from a
+  second hand-authored size table that could drift away from the art, which is
+  what makes `test_a_larger_prey_animal_flees_earlier_than_a_smaller_one`
+  (mouse < sheep < goat < deer < horse) true by construction rather than by
+  tuning. `test_a_graded_flight_radius_never_dithers` is the sole owner of the
+  `FLEE_RELEASE_RADIUS` invariant and sweeps every legal combination of the
+  four inputs across the whole roster.
+  - **Calibration, recorded so it is not mistaken for coincidence:**
+    `SCALE_SATURATION` is set so a HORSE lands just *above* the flat 80 px it
+    replaces (`test_a_horse_is_no_warier_than_the_flat_radius_it_replaces`).
+    The big animals keep behaving as they always did; what the player feels is
+    small animals letting them much closer
+    (`test_a_mouse_lets_the_player_much_closer_than_the_flat_radius_did`).
+    The change opens play up rather than taking it away.
+  - **Known limit:** `CAUTION_RADIUS` (160 px, the "should I even consider
+    wandering toward them" band) is deliberately left flat and is NOT shrunk by
+    a crouch. So a crouched player is still edged away from at wander pace —
+    the stalk shortens the *break*, not the unease. That is a real difference
+    the player can feel and work with (they close faster than the animal
+    drifts), but it is a divergence from a naive reading of this section and is
+    recorded rather than hidden.
+- ✅ Wariness (`Wariness`, `CreatureMarker.wariness`,
+  `CreatureMarker._step_wariness`): a per-individual 0..1 ramp raised on the
+  LEADING EDGE of a flee episode (one flushing costs one spook, however long
+  the run lasts), raised more slowly while the player's scent is on the animal,
+  and decaying by absence with a half-life of exactly one grazing bout
+  (`GrazerForaging.GRAZE_SECONDS + REGRAZE_SECONDS`) — so the recovery time is
+  a ratio against the grazing cycle rather than an eyeballed number of seconds,
+  and stays correct if grazing is retuned.
+- ✅ Crouch/stalk (`Player.is_crouching`, `Keybindings` `crouch` on Ctrl,
+  `FlightDistance.CROUCH_MULTIPLIER` / `CROUCH_SPEED_MULTIPLIER`) with a real
+  speed cost, and `FlightDistance.SHY_SPEED` pinned by ordering against
+  `Player.BASE_SPEED` and `Taming.MOUNTED_SPEED` rather than as a number
+  (`test_a_crouched_approach_is_never_a_rush`,
+  `test_a_mounted_approach_is_always_a_rush`). The HUD mode line reads
+  `crouching`, with swimming/drowning outranking it
+  (`Player.movement_mode_for`).
+  - **Divergence from this section as written:** it named `KEY_X`/`KEY_Z` as
+    free. Both have since been taken (`secondary_action`, `cast`), so crouch is
+    on `KEY_CTRL` — where a player's hand already goes for it, and the only
+    unclaimed modifier left in the registry.
+- ✅ Bait, all four verified gaps closed:
+  `Olfaction.bait_mixture` gives each food its own mixture (and adds an `OIL`
+  molecule so a nut is not a fruit); `Olfaction.receptors_for` gives every
+  species in `AnimalAnatomy.SPECIES` a nose by inheriting its diet's receptors;
+  `CreatureMarker._seek_by_smell` no longer requires a fruit diet and tags a
+  non-fruit-eater's find as the new `GrazerForaging.FOOD_BAIT`; and
+  `EarthChunkManager.take_bait_at` removes any ground item of kind `food`, so
+  an animal that walked to a carrot can actually eat it instead of standing
+  over it. Pinned by
+  `test_a_baited_grazer_walks_to_a_carrot_it_would_never_forage_for` and
+  `test_bait_beyond_smelling_range_draws_nothing`.
+  - **A fruit-eater still takes fruit AS fruit**
+    (`test_a_fruit_eater_still_takes_fruit_as_fruit`), so the seed inside a
+    windfall still travels the way endozoochory expects rather than being
+    swallowed by the generic bait path.
+  - **A fifth gap, found in play rather than by reading: bait had no gesture.**
+    `inventory_window.gd`'s own header claims an item can be dropped "onto the
+    world to throw it away"; it cannot — verified twice in a live session with
+    a slow drag whose payload was visibly attached to the cursor, and the
+    window's on-screen label says only "drag to move". A player therefore had
+    no way to put food on the ground at all, which would have left this whole
+    layer unreachable. Closed by giving the **stash key a second, contextual
+    meaning**, exactly the way `E` already has one (see
+    [stone.md](stone.md)'s held-item concept): with something in hand it still
+    stashes, and with an EMPTY hand it puts one bait down at the player's feet.
+    `Player.bait_item_id_from` decides which food — the taming treat if carried,
+    otherwise the first food — pure, static and tested.
+    - **Known limit, and why it is a rule rather than a choice:** there is no
+      selected-item concept yet (§2 of this doc specs the click-latched
+      selection it should read once it exists), so a player carrying carrots
+      and apples cannot yet choose to bait with the apples.
+    - One unit per press, not the stack: a bait is a considered act, and one
+      carrot is exactly what the hand-fed `feed_treat` costs too.
+- ✅ **The wind** — not specified in this doc when it was written, and the
+  piece that makes the stalk a decision rather than a stat. Owned by
+  [olfaction.md](olfaction.md)'s "The wind carries it": the player emits musk,
+  `WindScent` stretches its reach downwind and compresses it upwind, and what
+  the animal does about it is `Wariness.after_scent` — so approaching from
+  upwind costs you the animal's patience before you are anywhere near its
+  flight radius. `World.status_line_wind` puts the wind's name in the HUD,
+  because a mechanic the player cannot read is one they cannot play around.
+- 🚧 The speed-truth pin. The relationship test
+  (`test_a_player_slowed_by_weather_and_terrain_cannot_outpace_a_fleeing_animal`)
+  is still unwritten, and the HUD still shows a bare `Speed: %d%%` that never
+  says *you are now slower than a sheep*. The 2026-09-02 session re-measured
+  the problem in play (36% in a spring storm, 56% in forest, 23-24% swimming,
+  75% at noon in the clear — against a fleeing animal's effective 50%) and
+  could not close on a sheep in a long deliberate session. **Downgraded from
+  "highest-value item" to 🚧 rather than closed**: bait and the stalk now make
+  the loop playable *without* winning the foot race, which was the real fix, but
+  the HUD still does not tell the player why chasing fails.
 - ⬜ Click-latched `Player.selected_animal` + selection ring;
   `CreatureMarker.get_hover_actions()`.
 - ⬜ `wood_fence` / `wood_gate` building pieces; the gate as an openable.
