@@ -254,6 +254,45 @@ func test_a_river_tapers_in_from_its_source_instead_of_starting_full_width():
 	assert_eq(slope.probe(38, 41, 0.75)["kind"], "", "nothing upstream of the source")
 
 
+## A main channel down column 3 (weight 2 per cell, so it is the mainstem)
+## and a tributary along row 3 from the west joining it at cell (3,3).
+func _confluence_field() -> HydrologyField:
+	var heights := PackedFloat32Array()
+	heights.resize(49)
+	heights.fill(0.8)
+	for x in 7:
+		heights[x] = 0.2
+	for y in range(1, 7):
+		heights[y * 7 + 3] = 0.6
+	for x in range(0, 3):
+		heights[3 * 7 + x] = 0.7
+	var network = DrainageNetwork.new().build(heights, 7, 7, SEA_LEVEL)
+	var weights := PackedFloat32Array()
+	weights.resize(49)
+	weights.fill(1.0)
+	for y in range(1, 7):
+		weights[y * 7 + 3] = 2.0
+	var data := HydrologyData.new()
+	data.build_from_network(network, network.accumulate_weighted(weights))
+	var built := HydrologyField.new(data, WORLD_TILES, WORLD_TILES)
+	built.river_min_discharge = 3.0
+	return built
+
+
+func test_a_tributary_reaches_the_main_channels_centreline():
+	# Cell (2,3) is the tributary's last cell (Q=3); the main channel's
+	# centreline runs down x=35. The tributary must run all the way to the
+	# main cell's centre (35, 34.5), not stop at the midpoint x=30 -- first
+	# playtest: "one of the rivers doesn't flow into the other anymore".
+	var confluence := _confluence_field()
+	assert_eq(confluence.probe(32, 34, 0.6)["kind"], "river", "between the midpoint and the main centreline")
+	assert_eq(confluence.probe(28, 34, 0.6)["kind"], "river", "before the midpoint")
+	var main: Dictionary = confluence.nearest_channel_geometry(35, 24)
+	var tributary: Dictionary = confluence.nearest_channel_geometry(25, 34)
+	assert_gt(main["discharge"], tributary["discharge"], "column 3 carries the mainstem")
+	assert_almost_eq(tributary["course_bearing_deg"], 90.0, 1e-6, "the tributary flows east")
+
+
 func test_the_spring_is_narrower_than_the_thinnest_river():
 	assert_lt(HydrologyField.SPRING_HALF_WIDTH_TILES, HydrologyField.MIN_LEGIBLE_WIDTH_TILES / 2.0)
 

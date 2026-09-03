@@ -420,16 +420,23 @@ Per rivers.md's rendering decision (see "Relationship to rivers.md"), a
 water tile keeps its land biome. `Chunk.is_lake` sits beside the existing
 `Chunk.is_river`, both written by `generate_chunk` from the same probe,
 and `Chunk.blocks_ground_cover(index)` is the one predicate trees, tall
-grass, snow presence and rooting read. **Lakes and rivers are one water
-surface**: both ride the river flow overlay. A river tile writes its
-signed across-channel offset over its own half-width; a lake tile writes
-`1 + (elevation − spill) / LAKE_SHORE_BAND` with zero current, so the
-waterline is the elevation contour at the spill, drawn with the same
-smooth bank curve, ink line and feather a river gets, and still water
-keeps a quarter of the surface morph as ripple but never drifts (the
-first draft put lakes on the ocean's shore-distance overlay; the first
-playtest read its square tiles as "a very different art style"). The
-player's water depth is the maximum of ocean, river and lake depth.
+grass, snow presence and rooting read. **Lakes, rivers and the sea are
+one water surface**: all three ride the river flow overlay. A river tile
+writes its signed across-channel offset over its own half-width (a mouth
+keeps flowing into the sea cells it reaches); a lake tile writes
+`1 + (elevation − spill) / LAKE_SHORE_BAND` and a sea tile the same with
+sea level as the surface, both with zero current, so every waterline is
+an elevation contour drawn with the same smooth bank curve, ink line and
+feather a river gets, and still water keeps a quarter of the surface
+morph as ripple but never drifts. The ocean's old shore-distance overlay
+stays wired only as the fallback for a scene without a flow layer (the
+first draft put lakes on it; the first playtest read its square tiles as
+"a very different art style", and the same tiles were every coastal
+"pond"). Below-sea-level pockets not connected to the ocean are lakes at
+sea level (`inland_sea` in the bake), and the fine-detail texture may
+never move a tile across sea level, so the coastline is the macro
+contour and nothing else. The player's water depth is the maximum of
+ocean, river and lake depth.
 Salinity and lake id (phase 3) become per-cell side fields on `Chunk`,
 never biome names: salt is a property of the water, not a kind of ground.
 

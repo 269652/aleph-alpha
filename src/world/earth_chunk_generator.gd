@@ -224,11 +224,27 @@ func elevation_at_global(global_x: int, global_y: int) -> float:
 	return _blend_elevation(global_x, global_y, macro, _hydrology_for(global_x, global_y, macro))
 
 
+## The fine detail is texture, never geography (see FINE_DETAIL_AMPLITUDE
+## and slope_at_global's doc comment), so it may not move a tile across
+## sea level: land stays land, sea stays sea, and the coastline is the
+## macro data's own contour. Before this clamp every coastal plain within
+## +-432 m of sea level was a speckle of ocean-biome tiles (first
+## playtest: "dozens of small ponds to the sides of rivers"). The carve
+## is applied after the clamp: a channel may cut into land, never below
+## the sea. Pinned by test_fine_detail_never_flips_land_to_sea_or_sea_to_land.
+const SEA_LEVEL_MARGIN := 1e-6
+
+
 func _blend_elevation(global_x: int, global_y: int, macro: float, probe: Dictionary) -> float:
 	var fine_detail := _fine_detail_noise.get_noise_2d(global_x, global_y) * FINE_DETAIL_AMPLITUDE
 	var scale: float = probe["fine_detail_scale"]
 	var carve: float = probe["carve"]
-	return clampf(macro + fine_detail * scale - carve, 0.0, 1.0)
+	var textured := macro + fine_detail * scale
+	if macro >= EARTH_SEA_LEVEL:
+		textured = maxf(textured - carve, EARTH_SEA_LEVEL + SEA_LEVEL_MARGIN)
+	else:
+		textured = minf(textured, EARTH_SEA_LEVEL - SEA_LEVEL_MARGIN)
+	return clampf(textured, 0.0, 1.0)
 
 
 ## Real slope in degrees at a global tile (see terrain_relief.gd's slope_at,

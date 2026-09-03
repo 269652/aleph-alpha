@@ -343,8 +343,13 @@ func _curve_for_cell(cell: int, near: Vector2) -> Dictionary:
 	var downstream := _downstream(cell)
 	if downstream >= 0:
 		var downstream_center := _nearest_wrapped(_center_of(downstream), near)
-		if _data.is_sea(downstream):
-			end = downstream_center  # the mouth runs to the sea cell's centre
+		if _data.is_sea(downstream) or _mainstem_upstream(downstream, true) != cell:
+			# The mouth runs to the sea cell's centre; a TRIBUTARY runs to
+			# the main cell's centre, where the mainstem's own curve passes
+			# -- the mainstem's curve starts toward ITS upstream, not toward
+			# this one, so stopping at the midpoint left a gap ("one of the
+			# rivers doesn't flow into the other anymore").
+			end = downstream_center
 		else:
 			end = (center + downstream_center) / 2.0
 			end_half = (own_half + width_tiles_for_discharge(_data.discharge_at(downstream)) / 2.0) / 2.0

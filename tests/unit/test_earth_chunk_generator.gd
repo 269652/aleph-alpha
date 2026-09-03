@@ -543,6 +543,29 @@ func _synthetic_field() -> HydrologyField:
 	return field
 
 
+func test_fine_detail_never_flips_land_to_sea_or_sea_to_land():
+	# The procedural fine detail is +-432 m of texture; near a coast it used
+	# to scatter below-sea-level tiles across every plain within reach of
+	# sea level -- "dozens of small ponds to the sides of rivers", each an
+	# ocean-biome speckle. Land stays land, sea stays sea; only the macro
+	# data decides the coastline.
+	generator.set_hydrology(null)
+	var sea_level := EarthChunkGenerator.EARTH_SEA_LEVEL
+	var flips := 0
+	var checked := 0
+	# A band across the Loire estuary and the Vendee coast, where the
+	# macro elevation hugs sea level.
+	for y in range(4700, 4900, 7):
+		for x in range(19600, 19900, 11):
+			var macro := generator.macro_elevation_at_global(x, y)
+			var blended := generator.elevation_at_global(x, y)
+			checked += 1
+			if (macro < sea_level) != (blended < sea_level):
+				flips += 1
+	assert_gt(checked, 500)
+	assert_eq(flips, 0)
+
+
 func test_a_generator_without_a_bake_reports_no_hydrology():
 	generator.set_hydrology(null)
 	assert_false(generator.has_hydrology())

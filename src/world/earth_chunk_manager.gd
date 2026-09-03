@@ -1,6 +1,7 @@
 extends RefCounted
 
 const EarthChunkGenerator = preload("res://src/world/earth_chunk_generator.gd")
+const HydrologyField = preload("res://src/world/hydrology_field.gd")
 const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const StonePlacement = preload("res://src/world/stone_placement.gd")
 const StoneSize = preload("res://src/world/stone_size.gd")
@@ -3734,15 +3735,18 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# tiles under the flow layer's smooth bank curve -- the flow
 			# overlay is now the river's entire water surface, clipped at
 			# the real bank line, with the ground showing past it.
-			# Lakes are NOT painted here either: they ride the river flow
-			# overlay as still water, so their shoreline is the same smooth
-			# elevation contour a river bank gets (first playtest: this
-			# overlay's square tiles read as "a very different art style").
-			# That includes a below-sea-level pocket the bake flagged as an
-			# inland sea: ocean by biome, lake by flag, drawn as a lake.
-			var cell_index := y * chunk.width + x
-			var is_water: bool = chunk.biome[cell_index] == "ocean"
-			if not is_water or chunk.blocks_ground_cover(cell_index):
+			# NOTHING is painted here any more when the river flow overlay is
+			# wired: rivers, lakes AND the sea ride that one overlay as one
+			# water surface (docs/concept/hydrology.md "Water kinds"; first
+			# playtest: this overlay's square tiles read as "a very
+			# different art style" beside the river's contour lines). This
+			# layer stays as the fallback for a scene that never registers a
+			# flow layer, exactly as it drew before.
+			if _river_flow_layer != null:
+				_water_layer.erase_cell(origin + Vector2i(x, y))
+				continue
+			var is_water: bool = chunk.biome[y * chunk.width + x] == "ocean"
+			if not is_water:
 				continue
 			var land_directions := _land_directions_at(global.x, global.y)
 			# Only search farther rings when nothing touches land directly --
@@ -3812,16 +3816,27 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	for y in chunk.height:
 		for x in chunk.width:
 			var global := origin + Vector2i(x, y)
-			# LAKES first (docs/concept/hydrology.md): a lake tile, or a dry
-			# tile inside its shoreline's paint band, writes the elevation-
-			# contour across with ZERO current, so the shader draws the same
-			# smooth waterline, ink and feather it gives a river bank and
-			# nothing moves -- first playtest: "ponds have a very different
-			# art style, make them more like the rivers' contour lines".
+			# ONE WATER SURFACE (docs/concept/hydrology.md): rivers, lakes
+			# and the sea all ride this overlay. A river tile (including a
+			# mouth reaching into sea cells, so the current visibly runs
+			# into the sea) takes the flowing branch below. Otherwise a lake
+			# tile, a sea tile, or a dry tile inside either shoreline's
+			# paint band writes the elevation-contour across -- the spill
+			# for a lake, sea level for the sea -- with ZERO current, so the
+			# shader draws the same smooth waterline, ink and feather it
+			# gives a river bank, and only ripples. First playtest: "ponds
+			# have a very different art style", "unify river and pond water".
 			var probe := generator.hydrology_at_global(global.x, global.y)
-			var lake_across: float = probe["lake_across"]
-			if probe["kind"] == "lake" or lake_across < LAKE_PAINT_ACROSS:
-				_write_flow_across_texel(global, lake_across, 0.0, 0.0)
+			var cell_index := y * chunk.width + x
+			var still_across: float = minf(
+				probe["lake_across"],
+				HydrologyField.lake_across(chunk.elevation[cell_index], EarthChunkGenerator.EARTH_SEA_LEVEL)
+			)
+			var still_water: bool = (
+				probe["kind"] == "lake" or chunk.biome[cell_index] == "ocean" or still_across < LAKE_PAINT_ACROSS
+			)
+			if probe["kind"] != "river" and still_water:
+				_write_flow_across_texel(global, still_across, 0.0, 0.0)
 				_river_flow_boulder_tiles.erase(global)
 				_river_flow_layer.set_cell(
 					global, 0, _terrain_renderer.atlas_coords_for_river_flow(0.0, false)
