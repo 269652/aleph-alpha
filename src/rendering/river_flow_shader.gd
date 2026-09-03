@@ -88,6 +88,16 @@ uniform float boulder_radius_px = 11.0;
 // obstacles that never dry the water.
 uniform int wader_count = 0;
 uniform vec2 waders[16];
+// Expanding rings from water disturbances (a fish's tail flap, the
+// player's stroke -- EarthChunkManager.record_water_disturbance), each
+// (x, y, birth time): a travelling bulge in the across field, so the
+// contour strokes ring outward from the source and fade.
+uniform int ripple_count = 0;
+uniform vec3 ripples[24];
+uniform float ripple_speed_px = 18.0;
+uniform float ripple_width_px = 4.0;
+uniform float ripple_amplitude_px = 5.0;
+uniform float ripple_lifetime = 2.5;
 uniform float wader_reach_px = 26.0;
 uniform float wader_radius_px = 6.0;
 uniform float wader_wake_trail = 0.8;
@@ -273,6 +283,24 @@ void fragment() {
 		envelope *= envelope;
 		float side = lateral >= 0.0 ? 1.0 : -1.0;
 		frag_across += side * displaced * envelope / (half_width_tiles * tile_px);
+	}
+	// RIPPLE RINGS -- the reimplementation of the old overlay's disturbance
+	// rings inside the contour system: each ring is a Gaussian band of
+	// across-displacement travelling outward at ripple_speed_px and fading
+	// over ripple_lifetime, so every stroke it crosses bulges away from the
+	// source and the same push that bends a river's lines rings a pond.
+	for (int i = 0; i < ripple_count; i++) {
+		vec2 to_frag = wp - ripples[i].xy;
+		float age = TIME - ripples[i].z;
+		if (age < 0.0 || age > ripple_lifetime) {
+			continue;
+		}
+		float radius = age * ripple_speed_px;
+		float d = length(to_frag);
+		float band = (d - radius) / ripple_width_px;
+		float push = exp(-band * band) * (1.0 - age / ripple_lifetime) * ripple_amplitude_px;
+		float side = dot(to_frag, flow_perp) >= 0.0 ? 1.0 : -1.0;
+		frag_across += side * push / (half_width_tiles * tile_px);
 	}
 	float rr = abs(frag_across);
 	float depth_frac = clamp(1.0 - rr * rr, 0.0, 1.0);
@@ -708,6 +736,10 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("tile_px", TILE_PX)
 	material.set_shader_parameter("still_flow_m_s", STILL_FLOW_M_S)
 	material.set_shader_parameter("still_ripple", STILL_RIPPLE)
+	material.set_shader_parameter("ripple_speed_px", RIPPLE_SPEED_PX)
+	material.set_shader_parameter("ripple_width_px", RIPPLE_WIDTH_PX)
+	material.set_shader_parameter("ripple_amplitude_px", RIPPLE_AMPLITUDE_PX)
+	material.set_shader_parameter("ripple_lifetime", RIPPLE_LIFETIME)
 	material.set_shader_parameter("bank_feather", BANK_FEATHER)
 	material.set_shader_parameter("across_jitter", ACROSS_JITTER)
 	material.set_shader_parameter("jitter_scale", JITTER_SCALE)
@@ -894,6 +926,30 @@ static func is_still_water(velocity_m_s: float) -> bool:
 ## far too little to read as a current. Strictly between none and a
 ## river's full morph, by test.
 const STILL_RIPPLE := 0.25
+
+
+## Disturbance rings (docs/concept/hydrology.md, "fish ripples reimplemented
+## with the river contour system"): a ring born at a fish's flap or a
+## swimmer's stroke travels outward at RIPPLE_SPEED_PX, is RIPPLE_WIDTH_PX
+## wide, displaces the across field by up to RIPPLE_AMPLITUDE_PX at birth
+## and is gone after RIPPLE_LIFETIME seconds -- about three tiles of
+## travel, a pond ring, not a wave. RIPPLE_SLOTS rings live at once; the
+## oldest is dropped first.
+const RIPPLE_SLOTS := 24
+const RIPPLE_SPEED_PX := 18.0
+const RIPPLE_WIDTH_PX := 4.0
+const RIPPLE_AMPLITUDE_PX := 5.0
+const RIPPLE_LIFETIME := 2.5
+
+
+## CPU mirror of one ring's across-displacement (pixels) at `distance_px`
+## from its source, `age` seconds after birth -- the exact shader formula,
+## for tests and any caller reasoning about where a ring is.
+static func ripple_push_px(distance_px: float, age: float) -> float:
+	if age < 0.0 or age > RIPPLE_LIFETIME:
+		return 0.0
+	var band := (distance_px - age * RIPPLE_SPEED_PX) / RIPPLE_WIDTH_PX
+	return exp(-band * band) * (1.0 - age / RIPPLE_LIFETIME) * RIPPLE_AMPLITUDE_PX
 
 
 ## The CPU mirror of the shader's two-phase crossfade, for headless testing.

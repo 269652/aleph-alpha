@@ -1418,6 +1418,24 @@ func test_still_water_ripples_without_flowing():
 	assert_lt(RiverFlowShader.STILL_RIPPLE, 0.5)
 
 
+## Disturbance rings live in the contour system now (the old overlay's
+## rings vanished with it): a ring travels outward, peaks on its own
+## radius, and is gone after its lifetime.
+func test_disturbance_rings_travel_outward_and_fade():
+	var age := 1.0
+	var on_ring := RiverFlowShader.ripple_push_px(age * RiverFlowShader.RIPPLE_SPEED_PX, age)
+	var inside := RiverFlowShader.ripple_push_px(age * RiverFlowShader.RIPPLE_SPEED_PX - 3.0 * RiverFlowShader.RIPPLE_WIDTH_PX, age)
+	assert_gt(on_ring, inside * 10.0, "the push is a band on the ring, not a disc")
+	assert_almost_eq(on_ring, RiverFlowShader.RIPPLE_AMPLITUDE_PX * (1.0 - age / RiverFlowShader.RIPPLE_LIFETIME), 1e-9)
+	assert_eq(RiverFlowShader.ripple_push_px(10.0, RiverFlowShader.RIPPLE_LIFETIME + 0.1), 0.0)
+	assert_eq(RiverFlowShader.ripple_push_px(10.0, -0.1), 0.0, "a ring from the future is nothing yet")
+	assert_true(RiverFlowShader.SHADER_CODE.contains("uniform vec3 ripples[24];"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("for (int i = 0; i < ripple_count; i++)"))
+	assert_eq(RiverFlowShader.RIPPLE_SLOTS, 24)
+	var material := flow.shared_material()
+	assert_almost_eq(float(material.get_shader_parameter("ripple_lifetime")), RiverFlowShader.RIPPLE_LIFETIME, 1e-9)
+
+
 ## Fish join the player and the animals as waders, and in still water the
 ## wake must ring the wader instead of trailing "downstream".
 func test_waders_have_room_for_fish_and_ring_still_water():

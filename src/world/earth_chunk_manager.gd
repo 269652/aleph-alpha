@@ -4274,19 +4274,44 @@ const DISTURBANCE_RADIUS_TILES := 14
 ## Disturbances too far from the streaming center are dropped (see
 ## DISTURBANCE_RADIUS_TILES). Callers are responsible for their own
 ## throttling (e.g. once per swim step, not every frame).
+## Live disturbance rings for the river flow overlay, each (x, y, birth
+## seconds on the engine clock the shader's TIME runs on); newest last.
+var _flow_ripples: Array[Vector3] = []
+
+
 func record_water_disturbance(world_pos: Vector2) -> void:
 	var tile := _world_tile_for_pixel(world_pos)
 	var offset := tile - _disturbance_center_tile
 	if maxi(absi(offset.x), absi(offset.y)) > DISTURBANCE_RADIUS_TILES:
 		return
 	_water_shader.add_disturbance(world_pos)
+	# The same event rings the flow overlay, where every water surface now
+	# lives (docs/concept/hydrology.md): the ring is a travelling bulge in
+	# the contour strokes, born now, dropped when it has faded.
+	_flow_ripples.append(Vector3(world_pos.x, world_pos.y, Time.get_ticks_msec() / 1000.0))
+	while _flow_ripples.size() > RiverFlowShader.RIPPLE_SLOTS:
+		_flow_ripples.pop_front()
+	_push_flow_ripples()
 
 
 ## Ages every live water disturbance so its ring actually expands/fades on
 ## screen (see WaterShader.advance_disturbances) -- must run every frame,
-## not just when a new disturbance is recorded.
+## not just when a new disturbance is recorded. The flow overlay's rings
+## age on the shader's own clock; here they are only pruned once faded.
 func step_water_disturbances(delta: float) -> void:
 	_water_shader.advance_disturbances(delta)
+	var now := Time.get_ticks_msec() / 1000.0
+	var live := _flow_ripples.size()
+	while not _flow_ripples.is_empty() and now - _flow_ripples[0].z > RiverFlowShader.RIPPLE_LIFETIME:
+		_flow_ripples.pop_front()
+	if _flow_ripples.size() != live:
+		_push_flow_ripples()
+
+
+func _push_flow_ripples() -> void:
+	var material := _river_flow_shader.shared_material()
+	material.set_shader_parameter("ripple_count", _flow_ripples.size())
+	material.set_shader_parameter("ripples", PackedVector3Array(_flow_ripples))
 
 
 func current_weather(player_pixel: Vector2) -> String:
