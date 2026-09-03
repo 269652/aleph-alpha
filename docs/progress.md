@@ -3650,6 +3650,31 @@ describes:
   real source pixels to write a meaningful test against, the same sequencing
   `IllustratedCharacterSprite._PARTS` already follows (stays empty until
   hair/beard art exists) — not an oversight, the established order here.
+- **Item durability: wear and fatigue failure** (medium) — ✅ Done (basic),
+  see `concept/item_durability.md` (new). Closes the half of materials.md's
+  "Physical honesty over time" pillar that was `emergent_crafting.md`'s own
+  named ⬜ ("nothing degrades, nothing breaks") -- for the three catalog
+  weapons with a real modeled material (`wooden_club`/`iron_sword`/
+  `crude_blade`, the same set weapon mass already covers), a connecting
+  attack or a block that absorbs a real hit now costs the held item one unit
+  of wear (`item_wear.gd`, `max_wear`/`is_broken`/`condition_for`, 18
+  tests); a broken item reads as bare hands for both damage and block
+  efficiency (`Player._held_weapon`/`_held_kind`), with no separate fallback
+  path needed anywhere else. `Item` gained a `wear: float` field -- the one
+  deliberate, documented exception to its own "identity/stats shared by
+  every stack" framing, needed because `Equipment._worn` stores a bare
+  `Item`, not a stack, so wear has to live where it survives that
+  transition. Deliberately combat-only (attack/block) this pass, not
+  chopping/mining; deliberately a step function (full performance until
+  broken, then zero), not a gradual falloff; deliberately scoped to the
+  three items with modeled material, same as mass. Cross-linked from
+  `materials.md`, `heat_treatment.md` (whose own "Edge wear" ⬜ is a
+  *different*, still-open gap -- gradual `sharpness_capacity` dulling
+  affecting per-swing damage, not whether the item still works at all) and
+  `emergent_crafting.md` (whose `weakest_link` still isn't wired to this).
+  Not built: repair, tool-use wear, wear beyond the three modeled weapons, a
+  tooltip line, rarity-driven wear resistance -- all named explicitly in the
+  concept doc's own Status section rather than left implicit.
 - **Spell Gem Rarity Derivation** (medium) — 🚧 Partial — `rarity_tier.gd`'s
   `tier_from_complexity(complexity)` derives a tier straight from a numeric
   complexity/cost score (e.g. `spell_cost.gd`'s `derived_base()`), reusing the

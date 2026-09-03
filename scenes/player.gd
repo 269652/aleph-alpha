@@ -26,6 +26,7 @@ const Equipment = preload("res://src/gameplay/equipment.gd")
 const FishingSession = preload("res://src/gameplay/fishing_session.gd")
 const MaterialDamage = preload("res://src/gameplay/material_damage.gd")
 const Block = preload("res://src/gameplay/block.gd")
+const ItemWear = preload("res://src/gameplay/item_wear.gd")
 const HotbarAction = preload("res://src/gameplay/hotbar_action.gd")
 const CampfireCooking = preload("res://src/gameplay/campfire_cooking.gd")
 const FoodConsumption = preload("res://src/gameplay/food_consumption.gd")
@@ -551,6 +552,7 @@ var _hand_charge_elapsed := 0.0
 var _charging := false
 var _material_damage := MaterialDamage.new()
 var _block := Block.new()
+var _item_wear := ItemWear.new()
 var _hotbar_action := HotbarAction.new()
 var _campfire_cooking := CampfireCooking.new()
 var _item_sprite_generator := ProceduralItemSprite.new()
@@ -843,6 +845,8 @@ func take_damage(amount: float) -> void:
 	if is_dead:
 		return
 	if is_blocking():
+		if amount > 0.0:
+			_wear_equipped_item()  # a real hit was actually absorbed, see docs/concept/item_durability.md
 		amount = _block.blocked_damage(amount, _held_kind())
 	# The `shield` spell atom (see docs/concept/spell_runtime.md): a flat
 	# absorb pool consumed before armor, on top of whatever block already
@@ -1881,6 +1885,7 @@ func _perform_attack() -> void:
 		)
 		creature.apply_knockback(knockback)
 		creature.take_damage(damage)
+		_wear_equipped_item()  # a real connecting hit, see docs/concept/item_durability.md
 		# A hit that kills the creature awards XP scaled by its level (see
 		# ExperienceTrack / concept/progression.md).
 		if creature.is_queued_for_deletion() and creature.info != null:
@@ -2156,8 +2161,11 @@ func _collect_step() -> void:
 ## that matters: an axe chops wood fast (and blocks/cuts like an axe), a sword
 ## chops slowly but blocks best, bare hands (or a non-weapon tool like a
 ## pickaxe) are weakest at both.
+## "unarmed" for bare hands AND for an item broken from accumulated combat
+## fatigue (see docs/concept/item_durability.md) -- a broken sword blocks/
+## attacks exactly like empty hands, not like a still-functional sword.
 func _held_kind() -> String:
-	if equipped_item == null:
+	if equipped_item == null or _equipped_item_is_broken():
 		return "unarmed"
 	if equipped_item.is_axe():
 		return "axe"
@@ -2165,9 +2173,32 @@ func _held_kind() -> String:
 
 
 ## The held item as an attack weapon, or null if it isn't one (bare-hands /
-## holding a tool) -- feeds MeleeAttack.attack_damage.
+## holding a tool) OR it's broken from fatigue (see docs/concept/
+## item_durability.md) -- feeds MeleeAttack.attack_damage, which already
+## falls back to UNARMED_DAMAGE for null, so a broken weapon needs no
+## separate damage path of its own.
 func _held_weapon():
-	return equipped_item if equipped_item != null and equipped_item.is_weapon() else null
+	if equipped_item == null or not equipped_item.is_weapon():
+		return null
+	return null if _equipped_item_is_broken() else equipped_item
+
+
+func _equipped_item_is_broken() -> bool:
+	return _item_wear.is_broken(equipped_item.wear, _item_catalog.material_of(equipped_item.id))
+
+
+## Adds one use's worth of combat wear to the currently equipped item, if it
+## has a real modeled material (see docs/concept/item_durability.md) --
+## items with none (item_catalog.gd's own "not guessed at here" convention,
+## the same one mass_kg already follows) never accrue wear and so can never
+## break from it. Called once per connecting attack target and once per
+## block that actually absorbs a real hit.
+func _wear_equipped_item() -> void:
+	if equipped_item == null:
+		return
+	if _item_catalog.material_of(equipped_item.id) == "":
+		return
+	equipped_item.wear += ItemWear.WEAR_PER_USE
 
 
 ## A swing's knockback force, fed by the held weapon's REAL mass through the

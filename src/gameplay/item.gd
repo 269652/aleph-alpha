@@ -1,8 +1,9 @@
 extends RefCounted
 
-## An item definition: immutable identity/stats shared by every stack of that
-## item. Kinds today: "weapon" (has weapon_damage), "tool" (e.g. an axe --
-## see is_axe()), "material"/"food" (loot).
+## An item definition: identity/stats shared by every stack of that item.
+## Kinds today: "weapon" (has weapon_damage), "tool" (e.g. an axe -- see
+## is_axe()), "material"/"food" (loot). One field, `wear`, is a deliberate
+## exception to "shared" -- see its own doc comment below.
 
 var id: String
 var display_name: String
@@ -33,6 +34,17 @@ var mass_kg: float
 ## when the catalog doesn't specify one, so every item renders exactly as
 ## before until something actually asks for a divergent sprite_id.
 var sprite_id: String
+
+## Accumulated combat fatigue (see docs/concept/item_durability.md) -- the
+## one deliberate exception to this file's own "immutable identity/stats"
+## framing above. It has to survive the ItemStack -> Equipment transition
+## (Equipment._worn stores a bare Item, not a stack), so it lives here
+## rather than on ItemStack the way food's age_seconds does. Not a
+## constructor parameter: unlike every field above, wear isn't part of an
+## item's catalog definition, it's state that accumulates from zero over
+## one specific item's own lifetime. 0.0 for every item today -- nothing
+## mutates it yet outside Player's combat wiring.
+var wear: float = 0.0
 
 
 func _init(

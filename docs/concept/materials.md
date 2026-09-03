@@ -229,6 +229,12 @@ disarm), not just a punishment. Maintenance/repair is a real loop, and
 material choice is a durability-vs-performance decision (keen brittle glass vs.
 dependable dull iron).
 
+The **fatigue** half of that (a tough-enough material that never shatters but
+still shouldn't last forever) is now real — see
+[item_durability.md](item_durability.md). Single-hit brittle **shatter**
+stays exactly as specified above and already built
+(`impact_resolver.gd`); repair is still not.
+
 ## Learning an emergent system
 
 Legibility is the real risk of any emergent model. Approach: **learn by
