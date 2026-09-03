@@ -555,6 +555,11 @@ const CURRENT_FULL_M_S := 0.8
 const UPSTREAM_FLAP_SHORTENING := 0.7
 
 var _upstream_effort := 0.0
+## The current is a property of the TILE, so it is asked once per tile the
+## fish crosses, not once per frame per fish -- found live as a collapse
+## to a few frames per second with a few dozen fish in view.
+var _current_tile := Vector2i(2147483647, 2147483647)
+var _current_cached := {"direction": Vector2.ZERO, "speed_m_s": 0.0}
 
 
 ## The current at a pixel position, as {direction: Vector2 (tile-space
@@ -563,9 +568,11 @@ var _upstream_effort := 0.0
 func _current_at(pixel_position: Vector2) -> Dictionary:
 	if _world == null or not _world.has_method("river_current_at_global"):
 		return {"direction": Vector2.ZERO, "speed_m_s": 0.0}
-	var tile_x := int(floor(pixel_position.x / _tile_size))
-	var tile_y := int(floor(pixel_position.y / _tile_size))
-	return _world.river_current_at_global(tile_x, tile_y)
+	var tile := Vector2i(int(floor(pixel_position.x / _tile_size)), int(floor(pixel_position.y / _tile_size)))
+	if tile != _current_tile:
+		_current_tile = tile
+		_current_cached = _world.river_current_at_global(tile.x, tile.y)
+	return _current_cached
 
 
 ## Multiplier on swim speed for a heading against/with a current.
