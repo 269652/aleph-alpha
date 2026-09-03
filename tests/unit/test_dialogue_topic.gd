@@ -540,6 +540,30 @@ func _emitted_event_types() -> Dictionary:
 	return types
 
 
+## The concrete gap the census test above catches in the abstract:
+## record_player_settled_if_new (EarthChunkManager) emits `player_settled`
+## with the player as actor and the settlement as witness -- structurally
+## identical to npc_settled (see _settled_event below), so it belongs where
+## npc_settled already lives, not in village_history. Folding it into
+## village_history instead would let the player's own arrival stand in for
+## whether the village's actual fortunes are being witnessed at all --
+## exactly the hazard MEMORY_TOPIC_EVENT_TYPES's own doc comment already
+## names as the reason npc_settled was split off in the first place.
+func test_player_settled_joins_arrival_alongside_npc_settled_not_village_history():
+	var memory_store := MemoryStore.new()
+	var event := _remember(memory_store, SETTLEMENT, "player_settled", 15.0)
+
+	var frame := _frame({"memory_store": memory_store, "settlement_id": SETTLEMENT})
+
+	assert_eq(DialogueTopic.memory_topic_for("player_settled"), DialogueTopic.TOPIC_ARRIVAL)
+	assert_true(DialogueTopic.is_available(DialogueTopic.TOPIC_ARRIVAL, frame))
+	assert_eq(DialogueTopic.facts_for(DialogueTopic.TOPIC_ARRIVAL, frame)["top_memory"]["event_id"], event.id)
+	assert_false(
+		DialogueTopic.is_available(DialogueTopic.TOPIC_VILLAGE_HISTORY, frame),
+		"the player's own arrival must not read as village-fortune news"
+	)
+
+
 # -- who else is standing here -----------------------------------------------
 
 
