@@ -14,7 +14,8 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
-const SnowLayer = preload("res://src/rendering/snow_layer.gd")
+# SnowLayer used to be preloaded here for SNOW_LEVELS below; see that
+# constant's own doc comment -- the file it pointed to no longer exists.
 
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
@@ -1011,13 +1012,26 @@ static func growth_level(growth: float) -> float:
 ## ticked by a fraction of a percent -- exactly the "one image per frame"
 ## cost GROWTH_LEVELS/SeasonTransition.TURN_STEPS already exist to avoid.
 ##
-## Quantised to SnowLayer.DEPTH_BANDS rather than an invented number: that is
-## the real granularity the GROUND's own lying snow already steps through
-## (10 bands, one per row of the illustrated snow-overlay sheet -- see
-## SnowLayer). Reusing it means a canopy's snow response is exactly as coarse
-## or fine as the snow already lying at its own foot, so the two can never
-## visibly disagree about how gradually a snowfall settles in.
-const SNOW_LEVELS := SnowLayer.DEPTH_BANDS
+## Quantised to the same granularity the GROUND's own lying snow steps
+## through, so a canopy's snow response is exactly as coarse or fine as the
+## snow already lying at its own foot and the two can never visibly disagree
+## about how gradually a snowfall settles in.
+##
+## STOPGAP, unrelated to this file's own change history: this used to read
+## `SnowLayer.DEPTH_BANDS`, but `src/rendering/snow_layer.gd` was deleted when
+## the GPU texture-bombing shader replaced it (SnowBombShader/SnowStampAtlas,
+## see docs/progress.md), which this file's own canopy-snow work never picked
+## up -- confirmed broken on `origin/main` right now, not something this
+## worktree caused (`git show origin/main:src/rendering/procedural_tree_
+## sprite.gd` still preloads the deleted file), and it parse-errors every GUT
+## run project-wide since GUT parses every script under tests/unit regardless
+## of which test file is selected. Inlined at 10, `SnowLayer.DEPTH_BANDS`'s
+## own last real value before deletion (`git show fc646e2^:src/rendering/
+## snow_layer.gd`), rather than invented, so canopy snow keeps its exact
+## existing granularity unchanged. The real fix -- wiring this to whatever
+## depth signal the new GPU snow system exposes, if any -- is a separate,
+## dedicated follow-up, not a one-line guess made in passing here.
+const SNOW_LEVELS := 10
 
 
 ## The snow coverage LEVEL a tree draws at -- used both for the texture cache
