@@ -3,10 +3,12 @@ extends Sprite2D
 ## A butterfly/songbird ambient wildlife marker -- pure decorative presence
 ## (see docs/concept/ecosystem_dynamics.md's Species roster), driven by
 ## AmbientFlyerMovement's idle-flight drift. Deliberately lighter than
-## FishMarker/CreatureMarker: no needs/perception/behavior AI, no water
-## confinement (flyers roam freely over both land and water), and no
-## population simulation behind it -- a fixed, capped, decorative presence
-## like the game's original static tree/grass-tuft layers.
+## FishMarker/CreatureMarker: no needs system and no full behavior-tree AI
+## (beyond noticing and getting away from the player -- FlyerPersonality for
+## true butterflies, _step_songbird_flight_response for ground-foraging
+## songbirds), no water confinement (flyers roam freely over both land and
+## water), and no population simulation behind it -- a fixed, capped,
+## decorative presence like the game's original static tree/grass-tuft layers.
 
 const AmbientFlyerMovement = preload("res://src/rendering/ambient_flyer_movement.gd")
 const ScentField = preload("res://src/world/scent_field.gd")
@@ -34,6 +36,8 @@ const StoneSize = preload("res://src/world/stone_size.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const FruitingModel = preload("res://src/world/fruiting_model.gd")
+const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
+const ThreatAvoidantWander = preload("res://src/gameplay/threat_avoidant_wander.gd")
 
 ## Only bees recognize blossoming fruit trees as a food source (see
 ## _step_scent) -- real apple/cherry trees are pollinated mainly by bees, so
@@ -77,6 +81,12 @@ var traits: Dictionary = {}
 ## at declaration time -- see _fitness_score(), which derives it fresh from
 ## wander_seed's CURRENT value on each of its (rare, throttled) call sites.
 static var _animal_fitness := AnimalFitness.new()
+
+## Shared CreaturePerception instance (also stateless) -- reused by
+## _step_songbird_flight_response for the SAME radius-sensing primitive the
+## ground creature roster (CreatureMarker) already senses threats through,
+## rather than a second "is the player within this radius" implementation.
+static var _perception := CreaturePerception.new()
 
 var _movement: AmbientFlyerMovement
 
@@ -622,19 +632,27 @@ func _process(frame_delta: float) -> void:
 
 	_step_growing(delta)
 
-	# THE PRECEDENCE ORDER, highest first. Five things can move a flyer now,
+	# THE PRECEDENCE ORDER, highest first. Six things can move a flyer now,
 	# and they must not fight:
 	#
 	#   1. flee the player            (_step_player_reaction, below)
-	#   2. finish a pair interaction already running   (_step_pair_interactions)
-	#   3. start a courtship                           (_step_pair_interactions)
-	#   4. dance at the player        (_step_player_reaction, below)
-	#   5. start a spiral flight                       (_step_pair_interactions)
-	#   6. forage (ground prey, a bloom, drinking)
-	#   7. wander
+	#   2. scatter off the ground     (_step_songbird_flight_response, below --
+	#                                   ground-foraging songbirds only)
+	#   3. finish a pair interaction already running   (_step_pair_interactions)
+	#   4. start a courtship                           (_step_pair_interactions)
+	#   5. dance at the player        (_step_player_reaction, below)
+	#   6. start a spiral flight                       (_step_pair_interactions)
+	#   7. forage (ground prey, a bloom, drinking)
+	#   8. wander
 	#
 	# Escape is first because escape is first in every animal: a butterfly that
 	# goes on courting while something big closes on it is a dead butterfly.
+	# The same is true of a songbird, which is why its own escape sits right
+	# beside item 1 rather than below the pair-interaction items it must also
+	# outrank -- the two checks never actually compete for the same
+	# individual (FlyerPersonality.reacts_to_player and FlyerDiet.
+	# forages_on_the_ground are disjoint species sets), so their relative
+	# order is a readability choice, not a precedence decision.
 	# Everything below escape is ordered by COMMITMENT and then by RARITY -- an
 	# interaction already running is never interrupted by a new one (that is
 	# how a butterfly ends up orbiting an empty midpoint, a bug this file has
@@ -645,10 +663,14 @@ func _process(frame_delta: float) -> void:
 	#
 	# Both halves are in ONE branch pair rather than interleaved, and the
 	# player reaction runs first, so the ranking above is expressed by which
-	# function returns true rather than by a flag anybody has to maintain: 2/3
-	# and 5 all live inside _step_pair_interactions, and 4 is gated there on
+	# function returns true rather than by a flag anybody has to maintain: 3/4
+	# and 6 all live inside _step_pair_interactions, and 5 is gated there on
 	# neither being active.
 	if _step_player_reaction(delta):
+		_animate_wings()
+		return
+
+	if _step_songbird_flight_response(delta):
 		_animate_wings()
 		return
 
@@ -1755,6 +1777,93 @@ func _flee_from(player: Vector2, delta: float) -> void:
 		away.normalized() * _movement.speed * FlyerPersonality.ESCAPE_SPEED_MULTIPLIER * delta
 	)
 	face_travel(position - before, delta)
+
+
+## How far off the ground-foraging songbirds notice the player and scatter
+## (see FlyerDiet.forages_on_the_ground -- currently robin and sparrow). Real
+## small passerines have a measured flight initiation distance commonly
+## further out than the butterflies' own shyest 3 m endpoint (see
+## FlyerPersonality.SHYEST_FLUSH_DISTANCE_M) -- a bird's predator-vigilance is
+## sharper than an insect's. One shared distance, not a boldness continuum:
+## that individuality is deliberately kept butterfly-only (see
+## FlyerPersonality.reacts_to_player's own "structural, not a branch"
+## reasoning) -- this is the plainer reaction every real sparrow/robin shows
+## regardless of "personality" (see docs/concept/ecosystem_dynamics.md's
+## "Songbirds notice you too").
+const SONGBIRD_FLUSH_DISTANCE_M := 6.0
+const SONGBIRD_FLUSH_DISTANCE_PX := SONGBIRD_FLUSH_DISTANCE_M * FlyerPersonality.PX_PER_METER
+
+## Whether a ground-foraging songbird is currently scattered off the player
+## (see _step_songbird_flight_response). Separate from `_fleeing_from_player`
+## above -- that flag's release-distance/burst-speed math is FlyerPersonality's
+## own and stays butterfly-scoped. The two never fight over the same
+## individual: FlyerPersonality.reacts_to_player and FlyerDiet.
+## forages_on_the_ground are disjoint species sets.
+var _flushed_by_player := false
+
+
+## The ground-foraging songbird counterpart of _step_player_reaction, for the
+## species that mechanism structurally excludes (see FlyerPersonality.
+## reacts_to_player). Reuses the SAME two pure modules the ground creature
+## roster (CreatureMarker/CreatureBehavior) already senses/avoids threats
+## through -- CreaturePerception for "is the player close enough to notice"
+## and ThreatAvoidantWander for "which way is actually away" -- rather than a
+## second bespoke perception/avoidance system.
+func _step_songbird_flight_response(delta: float) -> bool:
+	if _movement == null or not FlyerDiet.forages_on_the_ground(species):
+		return false
+	if _player_position == null:
+		_flushed_by_player = false
+		return false
+	var player: Vector2 = _player_position
+	var distance := position.distance_to(player)
+	if _flushed_by_player:
+		# Released further out than it was noticed at -- the same hysteresis
+		# shape FlyerPersonality already uses for butterflies (its own
+		# constant, reused directly rather than a second "how much further"
+		# number), so a player parked right at the flush distance doesn't make
+		# the bird dither in and out of scattering every other frame.
+		if distance >= SONGBIRD_FLUSH_DISTANCE_PX * FlyerPersonality.FLEE_RELEASE_FACTOR:
+			_flushed_by_player = false
+			return false
+	elif _perception.nearby(position, [player], SONGBIRD_FLUSH_DISTANCE_PX).is_empty():
+		return false
+	else:
+		_flushed_by_player = true
+		# A threat outranks a meal (see docs/concept/ecosystem_dynamics.md's
+		# "Grazing is an act, not an aura", the same rule ground grazers
+		# already follow) -- a bird flushed off the ground mid-peck abandons
+		# it rather than finishing the strike, and a bird already
+		# mid-courtship breaks it off exactly as a fleeing butterfly does.
+		_abandon_ground_forage()
+		_abandon_pair_interaction()
+
+	var before := position
+	var candidate := (
+		_movement.direction_at(home, position, _elapsed_time, wander_seed)
+		* _cruise_px_per_second() * delta
+	)
+	position += ThreatAvoidantWander.away_biased_step(candidate, player - position)
+	var moved := position - before
+	if moved.length() > 0.001:
+		face_travel(moved, delta)
+	return true
+
+
+## Gives up an in-progress ground-forage strike and returns to plain flight --
+## called when a player flush interrupts it (see
+## _step_songbird_flight_response). A no-op for a flyer with no ground-forage
+## brain at all (every non-ground-feeding species, and any ground feeder built
+## without a scent_world -- see AmbientFlyerRenderer._build_marker).
+func _abandon_ground_forage() -> void:
+	if ground_forage == null:
+		return
+	ground_forage.abort()
+	perched = false
+	_worm_target = null
+	_fruit_target = null
+	_seed_target = null
+	_grass_seed_target = null
 
 
 ## Whether the player has carried the dance off this butterfly's patch.

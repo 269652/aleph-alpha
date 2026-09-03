@@ -1459,6 +1459,48 @@ chunk's flyers are re-derived from their cells' seeds on load, so an evolved
 meadow reverts when that chunk unloads. Boldness drifts within a session, not
 across one.
 
+### Songbirds notice you too
+
+The boldness/FID continuum above is deliberately butterfly-only —
+`FlyerPersonality.reacts_to_player` gates on `SpiralFlight.spirals`, and that
+module's own doc comment is explicit: "a bee, a fly and a sparrow have no
+personality steering at all". A real sparrow's flight response has nothing to
+do with a corkscrewing insect's, and giving every species one shared
+personality trait would blur a distinction this project already draws
+carefully. But a real ground-foraging songbird still does the one plain thing
+every other sensed creature in this project already does when something
+looms: it notices and gets away.
+
+Real house sparrows and robins have a measured flight initiation distance in
+the low-single-digit-to-several-metres band — commonly further out than a
+shy butterfly's own 3 m endpoint (`FlyerPersonality.SHYEST_FLUSH_DISTANCE_M`),
+which fits: a bird's predator-vigilance is sharper than an insect's.
+
+Rather than a second boldness system, `AmbientFlyerMarker.
+_step_songbird_flight_response` reuses the SAME two pure modules the ground
+creature roster (`CreatureMarker`/`CreatureBehavior`) already senses/avoids
+threats through — `CreaturePerception.nearby` (is the player within notice
+range) and `ThreatAvoidantWander.away_biased_step` (bias the flight heading
+away from whatever was sensed, keeping the sideways component) — rather than
+inventing a second perception/avoidance system. Both existed, tested, and
+had no production caller anywhere in the game until this.
+
+- **One shared flush distance** (`AmbientFlyerMarker.
+  SONGBIRD_FLUSH_DISTANCE_M`), not an inherited trait — that individuality is
+  deliberately left where it already lives, on the butterflies.
+- **Gated on `FlyerDiet.forages_on_the_ground`** (currently robin and
+  sparrow) rather than a third species list, so a future ground-feeding
+  species inherits the reaction automatically instead of needing to be added
+  to yet another roster.
+- **A threat outranks a meal here too.** A bird flushed mid-peck abandons the
+  strike (`GroundForageBehavior.abort`) — the same rule "Grazing is an act,
+  not an aura" above already states for ground grazers — and a bird already
+  mid-courtship breaks it off, exactly as a fleeing butterfly does.
+- **Released further out than it was noticed at** — the same hysteresis
+  shape as the butterflies' own `FLEE_RELEASE_FACTOR` (reused directly, not a
+  second "how much further" number), so a player parked right at the flush
+  distance does not make the bird dither in and out of scattering.
+
 
 ## Butterflies do not fly in straight lines
 
