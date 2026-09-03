@@ -16,12 +16,17 @@ orders at all.
 
 ## Status
 
-Concept stage. Nothing here is built — no parser, no primitive catalog, no
-cost derivation, no executor, no wiring into `NpcMarker`. `npc.md`'s own
-divergence note already says so twice ("no instruction DSL," listed both at
-the top-level and again under "Needs and the local production economy").
-This doc is the spec, written first, exactly as [dialogue.md](dialogue.md)
-was before anything in its pipeline existed.
+**Updated — a first slice is real.** This doc was written first, exactly as
+[dialogue.md](dialogue.md) was before anything in its pipeline existed, and
+`npc.md`'s own divergence note (still accurate about everything *outside*
+this doc) is what motivated it. Since then, the parser, the primitive
+registry, cost derivation, the rule evaluator, and the `NpcMarker` wiring
+have actually been built, red-first, with two real, deliberate divergences
+from what this doc originally specified — see Grammar, Execution / wiring,
+and the final Status checklist below for exactly what shipped, under what
+names, and why. Still entirely unbuilt: the impure effects dispatch, the
+hiring gate, the script book, and anything the two open trust/relationship
+questions were already blocking.
 
 ## Design pillars
 
@@ -131,6 +136,18 @@ first rule whose condition holds wins. A rule with `condition: null` is the
 - `gather(resource_tag)` — go to the nearest instance of `resource_tag` and
   perform its default gather action.
 
+**Built as `src/world/npc_instruction_primitives.gd`** — a pure static
+module (no instance state, `creature_behavior.gd`/`dialogue_context.gd`'s
+static-module convention rather than the parser's instance-based one, since
+there's nothing to carry between calls) holding both condition functions
+(`inventory_at_least`/`need_above`, each `(args, frame) -> bool`) and both
+action functions (`haul`/`gather`, each `(args) -> Dictionary`, an
+unexecuted action descriptor), plus `evaluate_condition`/`resolve_action`
+dispatchers that fail closed to `false`/`{}` on an unrecognised `fn`. This
+is the module the doc's original "primitive table" language was pointing at
+before the weights split out into `npc_instruction_cost.gd` below — there is
+no separate `npc_instruction_catalog.gd`.
+
 **Worked example**, the same routine `npc.md`'s own paragraph describes:
 
 ```
@@ -160,17 +177,25 @@ actually consumes — no object references, matching `spell_parser.gd`'s own
 }
 ```
 
-**Parser reuse is deliberately left open.** `spell_parser.gd`'s
-`_BLOCK_KINDS` already lists `"instruct"` as a structurally-parseable block
-kind (per [spell_runtime.md](spell_runtime.md), which scopes wiring it as
-explicitly out of scope for *that* doc, not for this one) — but that
-parser's actual grammar shape, `on EVENT(ARG): when GUARD: PIPELINE`, is a
-single trigger/guard/pipeline triple, not the ordered-rule-list shape above.
-Whether the instruction body extends that same parser's grammar productions
-or ships as a small sibling parser reusing only its tokenizer is an
-implementation decision, not specified here — the AST *shape* above is the
-actual contract every other module in this doc is written against, the same
-role the beat contract plays in [dialogue.md](dialogue.md).
+**Parser reuse — resolved.** `spell_parser.gd`'s `_BLOCK_KINDS` lists
+`"instruct"` as a structurally-parseable block kind, but its actual grammar
+shape (`on EVENT(ARG): when GUARD: PIPELINE`, a single trigger/guard/pipeline
+triple) never matched the ordered-rule-list shape above, so it was not
+extended. `src/world/npc_instruction_parser.gd` ships as a small sibling
+parser instead, tokenizer/cursor/`_expect`/`_fail` conventions borrowed from
+`spell_parser.gd`'s house style but with its own grammar productions. One
+detail worth recording here rather than only in the code: the surface syntax
+above takes *positional* arguments (`inventory_at_least(wood, 20)`) but the
+AST needs *named* ones (`{"item": "wood", "count": 20}`), so the parser owns
+a private per-primitive signature table (name → ordered `{name, type}`
+params) to do that conversion — currently living inside
+`npc_instruction_parser.gd` itself, not in `npc_instruction_catalog.gd`
+(see Complexity budget below for why that module didn't end up existing as
+such). The AST *shape* above remains the actual contract every other module
+in this doc is written against, the same role the beat contract plays in
+[dialogue.md](dialogue.md); `NpcInstructionParser.parse(source) -> {ok, ast,
+errors}` fails closed (never a crash) on an unknown primitive name, a
+primitive used in the wrong slot, wrong arg count, or wrong arg type.
 
 ## Complexity budget
 
@@ -197,10 +222,21 @@ directly:
 There is no `mag_ref`/`dur_ref` pair to borrow from the spell side, because
 an instruction has no single-cast magnitude or duration — rule-count and
 primitive-rarity are this domain's own reference dimensions, not a reuse of
-the spell ones under different names. **Exact weights are left unspecified
-here on purpose** — per `CLAUDE.md`'s no-eyeballed-tuning rule, they become
-test-pinned constants in `npc_instruction_cost.gd` once this is implemented,
-not numbers asserted in a design doc.
+the spell ones under different names.
+
+**Built as `src/world/npc_instruction_cost.gd`**, with the weights this
+section originally left open now real, test-pinned constants (not asserted
+here — `test_npc_instruction_cost.gd` pins two full worked-example totals,
+e.g. this doc's own `haul_and_forage` script costs exactly `8.5`, and fails
+if any constant drifts): `RULE_WEIGHT = 1.0`, `CONDITION_WEIGHT = 0.5`,
+`ACTION_WEIGHT = 1.5` (three times a condition's weight, per "actions weigh
+more than conditions" above), and a `_RESOURCE_RARITY` table
+(`wood`/`berries` = `1.0`, `stone` = `1.2`, `iron` = `1.5`, `gold` = `2.0`,
+anything unlisted defaulting to `1.0` — common, not free, not an error).
+There is no separate `npc_instruction_catalog.gd`: this rarity/weight table
+lives inline in `npc_instruction_cost.gd` with a doc comment naming it as
+that future module's stand-in, so if `npc_instruction_catalog.gd` is ever
+actually split out, this is the table that moves there.
 
 **What the number gates against is not a per-cast resource.** Mana recharges
 and is spent per cast; an instruction doesn't "cast," it runs continuously,
@@ -231,24 +267,42 @@ stepping `economy` with `entry.get("activity", "") == "work"` as the working
 flag.
 
 An instruction script overrides that lookup, not the walking or the economy
-step underneath it:
+step underneath it. **Built, with one deliberate contract change from what
+this section originally specified** — recorded here rather than left as a
+silent mismatch between doc and code:
 
 - `NpcMarker` gains a new nullable field, `instruction_script` — parallel to
   the already-`null`-checked `economy` field's own pattern, so a marker with
-  no assigned instruction is byte-for-byte unaffected.
-- At the top of `_process`, `if instruction_script != null:` calls a new
-  pure function, `NpcInstructionExecutor.evaluate(instruction_script.rules,
-  context) -> Dictionary`, which walks the rule list top to bottom exactly
-  as specified above and returns a Dictionary in the **same
-  `{location_tag, activity}` shape** an ordinary schedule entry already has
-  — so `_resolve_location` and `economy.step`'s `activity == "work"` read
-  both keep working completely unmodified. When `instruction_script` is
-  `null`, execution falls straight through to the existing
-  `NpcSchedule.current_entry` path, unchanged.
-- `context` is a flat Dictionary built the same way `SpellExecutor`'s
-  caster-context is built for `evaluate_guard` — inventory counts, the
-  NPC's own `NpcNeeds`-shaped hunger, nothing that isn't already live state
-  — so `NpcInstructionExecutor` itself never touches a node.
+  no assigned instruction is byte-for-byte unaffected. Holds the parsed AST
+  `NpcInstructionParser.parse(source)["ast"]` produces directly.
+- At the top of `_process`, `if instruction_script != null:` calls
+  **`NpcInstructionEvaluator.evaluate(instruction_script, frame) ->
+  action_or_null`** (`src/world/npc_instruction_evaluator.gd`) — **not**
+  the `NpcInstructionExecutor.evaluate(rules, context) -> {location_tag,
+  activity}` this section originally named. The evaluator walks the rule
+  list top to bottom exactly as specified above, but returns the matched
+  rule's *raw primitive action descriptor* (`npc_instruction_primitives.gd`'s
+  own `{"fn": "haul"/"gather", ...}` shape) rather than an already-adapted
+  schedule entry, or `null` if nothing matched (including the
+  no-`otherwise` case). Renamed deliberately, not accidentally: the shape
+  genuinely differs, and reusing this doc's planned `executor` name for a
+  different contract would have left doc and code silently disagreeing.
+  `NpcMarker` itself does the `{location_tag, activity}` adaptation, in a
+  new private helper, `_entry_for_instructed_action(action) -> Dictionary`,
+  right next to `_resolve_location` — reusing its existing tag lookup, no
+  new spatial-query layer — so `_resolve_location` and `economy.step`'s
+  `activity == "work"` read both keep working completely unmodified either
+  way. A `null` `instruction_script`, or a `null` `evaluate()` result, falls
+  straight through to the existing `NpcSchedule.current_entry` path,
+  unchanged — the fallback contract this section promised is intact even
+  though the module boundary moved.
+- The `frame` passed in (named `context` in this section's first draft) is
+  built by a new `NpcMarker._instruction_frame()` helper: `{"inventory": {},
+  "needs": {"hunger": economy.needs.hunger}}` — `inventory` is honestly left
+  empty rather than stubbed, since no per-NPC/household inventory system
+  exists anywhere in the codebase yet (the primitives already fail-open on a
+  missing key, so an always-empty `inventory` is truthful, not a workaround).
+  Building that inventory system is real, separate, unbuilt scope.
 - This is exactly the shape `NpcMarker.set_planner` already establishes as
   this codebase's own convention for "swap in a different behavior source,
   default preserves old behavior for anyone who doesn't opt in" — a
@@ -368,23 +422,52 @@ Stated plainly, matching this project's own honest-scope-cut convention:
 
 ## Status
 
-- ⬜ `npc_instruction_catalog.gd` — the 2-condition/2-action primitive
-  table with per-primitive base weights.
-- ⬜ `npc_instruction_cost.gd` — deterministic complexity derivation over a
-  parsed script; test-pinned weight constants.
-- ⬜ `npc_instruction_executor.gd` — pure top-to-bottom rule evaluator,
-  `evaluate(rules, context) -> {location_tag, activity}`.
+- ✅ `npc_instruction_parser.gd` — the ordered-rule-list grammar, shipped
+  as a small sibling parser (not an extension of `spell_parser.gd`, see
+  Grammar above); positional surface syntax → named-arg AST, fails closed
+  on any malformed input. `test_npc_instruction_parser.gd`, 28 tests.
+- ✅ `npc_instruction_primitives.gd` — the 2-condition/2-action registry
+  (`inventory_at_least`, `need_above`, `haul`, `gather`) plus dispatchers.
+  **There is no separate `npc_instruction_catalog.gd`** — this module holds
+  the primitive functions; their weights live in `npc_instruction_cost.gd`
+  instead (see below). `test_npc_instruction_primitives.gd`, 20 tests.
+- ✅ `npc_instruction_cost.gd` — deterministic complexity derivation over a
+  parsed script; test-pinned weight constants (`RULE_WEIGHT`,
+  `CONDITION_WEIGHT`, `ACTION_WEIGHT`, a resource-rarity table) — see
+  Complexity budget above for the actual values. No cap/reject enforcement
+  yet — this file only derives the number; a ceiling check is still
+  `hiring_gate.gd`, below. `test_npc_instruction_cost.gd`, 11 tests.
+- ✅ `npc_instruction_evaluator.gd` — pure top-to-bottom rule evaluator.
+  **Not `npc_instruction_executor.gd`, and not this section's originally
+  planned `evaluate(rules, context) -> {location_tag, activity}` contract**
+  — the real, shipped contract is `evaluate(parsed_script, frame) ->
+  action_or_null`, returning a raw primitive action descriptor; the
+  `{location_tag, activity}` adaptation happens in `NpcMarker` itself (see
+  Execution / wiring above for the full reasoning).
+  `test_npc_instruction_evaluator.gd`, 6 tests, including this doc's own
+  worked example end to end.
+- ✅ `NpcMarker.instruction_script` field and the `_process` override
+  branch — built exactly as described (with the evaluator-contract change
+  above), plus `_instruction_frame()` and `_entry_for_instructed_action()`
+  helpers. Regression-gated against `test_npc_planner.gd` (12/12) and
+  `test_npc_economy.gd` (39/39) — an NPC with no instruction script is
+  unaffected. `test_npc_marker.gd`, 17/17 (4 new, 13 pre-existing).
 - ⬜ `npc_instruction_effects.gd` — the impure `haul`/`gather` dispatch
-  layer against live `NpcMarker`/`World`/`EarthChunkManager` state.
+  layer against live `NpcMarker`/`World`/`EarthChunkManager` state, with
+  real nearest-X spatial queries (today's `_entry_for_instructed_action` is
+  a tag-lookup stand-in, not this). Also where `haul`'s flagged
+  fetch/carry-phase state needs an actual home.
 - ⬜ `hiring_gate.gd` — wage + trust-threshold `can_hire` check, and the
-  separate trust-threshold complexity ceiling.
+  separate trust-threshold complexity ceiling. Blocked on the open question
+  below.
 - ⬜ `npc_instruction_book.gd` — a fixed table of pre-authored example
   scripts, standing in for a real authoring UI.
-- ⬜ Parser support for the ordered-rule-list grammar (extending
-  `spell_parser.gd` or a sibling parser — undecided, see Grammar above).
-- ⬜ `NpcMarker.instruction_script` field and the `_process` override
-  branch described under Execution / wiring.
 - ⬜ NPC relationships/trust state itself (`npc_identity.gd`) — a hard
-  prerequisite this doc depends on but does not build.
+  prerequisite this doc depends on but does not build; both `hiring_gate.gd`
+  and the complexity ceiling stay unbuildable until it lands.
+- ⬜ A real per-NPC/household inventory system — `_instruction_frame()`
+  today always reports an empty `inventory`, honestly rather than stubbed
+  (see Execution / wiring above), so `inventory_at_least` cannot yet be
+  truthfully exercised against real held items in a live game.
 - ⬜ Hiring UI, script-editor UI, and any integration with
   `companion_server.md`'s Tier 2 Instruction queue.
