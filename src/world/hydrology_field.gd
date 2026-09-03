@@ -3,26 +3,34 @@ extends RefCounted
 ## The tile read of docs/concept/hydrology.md ("Layer 5: what a chunk
 ## actually gets", plus "Valleys are read back into the elevation"): given
 ## a game tile's global coordinate and its own macro elevation, answers
-## whether it is in a lake or on a river channel, how deep the water is in
-## real metres, how wide the channel is right there, and how much the
-## valley suppresses procedural fine detail and lowers the ground. Reads
-## only the baked HydrologyData (the tile's asset cell and its 3x3
-## neighbourhood), so a chunk stays a pure slice of one global function --
-## no chunk-relative state, no seams.
+## whether it is sea, lake or river, how deep the water is in real metres,
+## how wide the channel is right there, how far a river's current reaches
+## into the still water it empties into, and how much the valley
+## suppresses procedural fine detail and lowers the ground. Reads only the
+## baked HydrologyData (the tile's asset cell and the cells around it), so
+## a chunk stays a pure slice of one global function -- no chunk-relative
+## state, no seams.
 ##
 ## Channel geometry (first playtest, 2026-09-03: "make curves smoother",
 ## "springs -- rivers just start out of nothing", "two rivers flowing into
 ## each other should produce the combined volume"):
 ##   - each channel cell owns one quadratic Bezier from the midpoint toward
 ##     its mainstem upstream, through its own centre, to the midpoint toward
-##     its downstream; adjacent cells share endpoints and tangents, so the
-##     centreline is smooth through every corner by construction;
+##     its downstream (or to the downstream's centre when this cell is a
+##     tributary or a mouth); adjacent cells share endpoints and tangents;
 ##   - width is hydraulic geometry of the cell's own discharge, interpolated
-##     along the curve, so a confluence widens exactly where the discharges
-##     add up;
-##   - a headwater cell's curve starts at its SOURCE (the cell that drains
-##     into it, even below the river threshold) at spring width, so a river
-##     tapers in from a point rather than appearing full-width.
+##     along the curve, so a confluence widens where the discharges add up;
+##   - a headwater cell's curve starts at its SOURCE at spring width.
+##
+## Shorelines (third playtest: "circle-ish, derived from the contour path
+## of the basin, not a folded-up snake"): the sea's and every lake's
+## footprint is the bake's own cell mask, and the waterline is the
+## half-coverage contour of that mask under a smooth kernel about a cell
+## and a half wide. A binary mask blurred that way has rounded, blob-like
+## level sets (the metaball construction), and the same field decides
+## both what is drawn and what the player swims in. The bilinear elevation
+## contour this replaced was, on 8-bit ~10 km data, a staircase of
+## pixel-edge hyperbolas.
 ##
 ## Phase 1 stand-ins: every lake candidate is filled to its spill (the live
 ## lake balance is phase 3) and discharge is the bake's latitude-rain
@@ -78,14 +86,30 @@ const CURVE_SEGMENTS := 6
 const VALLEY_HALF_WIDTH_TILES := 3.0
 const VALLEY_CARVE_METERS_PER_DOUBLING := 6.0
 
-## A lake's shoreline is the real elevation contour at its spill, and the
-## flow overlay draws it from an "across" field exactly like a river bank
-## (|across| == 1 at the waterline): across = 1 + (elevation - spill) /
-## LAKE_SHORE_BAND, so the shore band is this many real metres of depth
-## from the waterline to full deep-water colour.
-const LAKE_SHORE_BAND_M := 20.0
-## across value handed back where no lake is anywhere near: dry.
+## The shoreline kernel: radius in asset cells of the smooth bump each
+## water cell contributes to the coverage field. A cell and a half rounds
+## a square footprint's corners without swallowing a one-cell gap between
+## two basins.
+const COVERAGE_KERNEL_RADIUS_CELLS := 1.6
+## How much coverage one unit of the flow overlay's across spans on either
+## side of the half-coverage waterline: across = 1 + (0.5 - coverage) /
+## COVERAGE_BAND, so deep water (coverage 0.85+) reads 0 and open ground
+## (0.15-) reads the dry ceiling. Pinned by
+## test_the_waterline_is_the_half_coverage_contour.
+const COVERAGE_BAND := 0.35
+## across value handed back where no water is anywhere near: dry.
 const LAKE_ACROSS_DRY := 2.0
+## A tile inside a lake's footprint whose own macro elevation sits at or
+## above the spill still swims: real lakes are never shallower than this
+## at the shore-side of their footprint.
+const LAKE_MIN_DEPTH_M := 1.0
+
+## A river's current keeps running into the still water it empties into,
+## fading to nothing over this many tiles from the mouth, at this speed at
+## the mouth itself (the slowest reach the Manning solve admits) -- third
+## playtest: "inflow doesn't reach into the sea as currents".
+const PLUME_TILES := 20.0
+const PLUME_SPEED_M_S := 0.4
 
 const NO_LAKE := -1.0
 
@@ -116,6 +140,14 @@ func pixel_of_tile(global_x: int, global_y: int) -> Vector2:
 	)
 
 
+## Continuous asset-pixel coordinate of a tile's centre.
+func pixel_of_tile_center(global_x: int, global_y: int) -> Vector2:
+	return Vector2(
+		(float(global_x) + 0.5) / float(_world_width) * float(_data.width),
+		(float(global_y) + 0.5) / float(_world_height - 1) * float(_data.height)
+	)
+
+
 ## Continuous tile coordinate of an asset cell's centre.
 func tile_of_pixel_center(pixel_x: int, pixel_y: int) -> Vector2:
 	return Vector2(
@@ -135,41 +167,57 @@ func cell_of_tile(global_x: int, global_y: int) -> int:
 	return cell_index_at(floori(pixel.x), floori(pixel.y))
 
 
-## --- lakes ---
+## --- shorelines: sea and lake coverage ---
 
 
-## Water-surface elevation (normalized) that could cover this tile: the
-## highest spill among the depressions of its own asset cell and the eight
-## around it, else NO_LAKE. The 3x3 read matters: a depression's cells are
-## the ones whose CENTRE sits below the spill, but the bilinear elevation
-## dips below the spill inside neighbouring cells too, and water covers
-## everything lower that touches it -- so the shoreline follows the real
-## contour instead of stopping at the cell edge. Phase 1: every candidate
-## sits at its spill.
-func lake_surface_at_global(global_x: int, global_y: int) -> float:
-	var pixel := pixel_of_tile(global_x, global_y)
-	var pixel_x := floori(pixel.x)
-	var pixel_y := floori(pixel.y)
+## The smoothed water masks at a tile, as {sea, lake, surface}: sea and
+## lake are 0..1 coverages of the bake's ocean cells and lake cells under
+## the shoreline kernel (they sum to at most 1; the rest is land), surface
+## the highest spill among the lake cells that contributed (NO_LAKE if
+## none). A below-sea-level pocket the bake flagged inland_sea counts as a
+## lake, never as sea.
+func water_coverage(global_x: int, global_y: int) -> Dictionary:
+	var pixel := pixel_of_tile_center(global_x, global_y)
+	var cell_x := floori(pixel.x)
+	var cell_y := floori(pixel.y)
+	var total := 0.0
+	var sea := 0.0
+	var lake := 0.0
 	var surface := NO_LAKE
-	for dy in range(-1, 2):
-		var y := pixel_y + dy
+	for dy in range(-2, 3):
+		var y := cell_y + dy
 		if y < 0 or y >= _data.height:
 			continue
-		for dx in range(-1, 2):
-			var depression := _data.depression_at(cell_index_at(pixel_x + dx, y))
-			if depression == DrainageNetwork.NO_DEPRESSION:
+		for dx in range(-2, 3):
+			var center := Vector2(float(cell_x + dx) + 0.5, float(y) + 0.5)
+			var distance := pixel.distance_to(center) / COVERAGE_KERNEL_RADIUS_CELLS
+			if distance >= 1.0:
 				continue
-			surface = maxf(surface, _data.depressions[depression]["spill_elevation"])
-	return surface
+			var falloff := 1.0 - distance * distance
+			var weight := falloff * falloff
+			total += weight
+			var cell := cell_index_at(cell_x + dx, y)
+			var depression := _data.depression_at(cell)
+			if depression != DrainageNetwork.NO_DEPRESSION:
+				lake += weight
+				surface = maxf(surface, _data.depressions[depression]["spill_elevation"])
+			elif _data.is_sea(cell):
+				sea += weight
+	if total <= 0.0:
+		return {"sea": 0.0, "lake": 0.0, "surface": NO_LAKE}
+	return {"sea": sea / total, "lake": lake / total, "surface": surface}
 
 
-## The flow overlay's across value for a lake shoreline (see
-## LAKE_SHORE_BAND_M): below 1 is water, 1 is the waterline, above is dry.
-static func lake_across(macro_elevation: float, surface: float) -> float:
-	if surface == NO_LAKE:
-		return LAKE_ACROSS_DRY
-	var depth_m := (surface - macro_elevation) * METERS_PER_ELEVATION_UNIT
-	return clampf(1.0 - depth_m / LAKE_SHORE_BAND_M, 0.0, LAKE_ACROSS_DRY)
+## The flow overlay's across value for a shoreline: below 1 is water, 1 is
+## the waterline (half coverage), above is dry, capped at LAKE_ACROSS_DRY.
+static func shore_across(coverage: float) -> float:
+	return clampf(1.0 + (0.5 - coverage) / COVERAGE_BAND, 0.0, LAKE_ACROSS_DRY)
+
+
+## Kept for callers that still think in elevation: the spill (or NO_LAKE)
+## that could cover this tile.
+func lake_surface_at_global(global_x: int, global_y: int) -> float:
+	return water_coverage(global_x, global_y)["surface"]
 
 
 ## --- hydraulic geometry ---
@@ -197,33 +245,51 @@ func _carve_for_discharge(discharge: float) -> float:
 ## --- the read ---
 
 
-## Everything the chunk generator needs for one tile, in one pass:
+## Everything the chunk generator and the water painter need for one tile:
 ##   kind               "lake" | "river" | ""
-##   depth_m            real metres of water over the tile (0 when dry)
+##   sea                true where sea coverage passes half: the tile IS sea
+##   depth_m            real metres of water over the tile (0 when dry; sea
+##                      depth comes from the bathymetry, not from here)
 ##   discharge          the channel's discharge when kind is "river"
 ##   half_width_tiles   the channel's half-width at this tile's nearest point
-##   lake_across        the lake shoreline field (LAKE_ACROSS_DRY when none near)
+##   lake_across        the still-water shoreline field (sea or lake,
+##                      whichever is nearer; LAKE_ACROSS_DRY when none near)
+##   plume_factor       0..1 strength of a river mouth's current here
+##   plume_bearing_deg  the direction that current runs
 ##   fine_detail_scale  0..1 multiplier on EarthChunkGenerator's noise term
 ##   carve              normalized elevation to subtract along the channel
+## A lake outranks a river (a channel entering a lake disappears under
+## it); a river outranks the sea (a mouth keeps flowing into the sea).
 func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
-	var surface := lake_surface_at_global(global_x, global_y)
-	var across := lake_across(macro_elevation, surface)
-	if surface != NO_LAKE and macro_elevation < surface:
+	var coverage := water_coverage(global_x, global_y)
+	var lake_coverage: float = coverage["lake"]
+	var sea_coverage: float = coverage["sea"]
+	var still_across := minf(shore_across(lake_coverage), shore_across(sea_coverage))
+	var is_sea := sea_coverage > 0.5
+
+	if lake_coverage > 0.5:
+		var surface: float = coverage["surface"]
+		var plume := mouth_plume(global_x, global_y)
 		return {
 			"kind": "lake",
-			"depth_m": (surface - macro_elevation) * METERS_PER_ELEVATION_UNIT,
+			"sea": false,
+			"depth_m": maxf((surface - macro_elevation) * METERS_PER_ELEVATION_UNIT, LAKE_MIN_DEPTH_M),
 			"discharge": 0.0,
 			"half_width_tiles": 0.0,
-			"lake_across": across,
+			"lake_across": still_across,
+			"plume_factor": plume["factor"],
+			"plume_bearing_deg": plume["bearing_deg"],
 			"fine_detail_scale": 0.0,
 			"carve": 0.0,
 		}
 
 	var channel := _nearest_channel(global_x, global_y)
 	if channel.is_empty():
+		var plume := mouth_plume(global_x, global_y) if is_sea else {"factor": 0.0, "bearing_deg": 0.0}
 		return {
-			"kind": "", "depth_m": 0.0, "discharge": 0.0, "half_width_tiles": 0.0,
-			"lake_across": across, "fine_detail_scale": 1.0, "carve": 0.0,
+			"kind": "", "sea": is_sea, "depth_m": 0.0, "discharge": 0.0, "half_width_tiles": 0.0,
+			"lake_across": still_across, "plume_factor": plume["factor"],
+			"plume_bearing_deg": plume["bearing_deg"], "fine_detail_scale": 1.0, "carve": 0.0,
 		}
 
 	var discharge: float = channel["discharge"]
@@ -233,23 +299,66 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 	if distance <= half_width:
 		return {
 			"kind": "river",
+			"sea": is_sea,
 			"depth_m": depth_meters_for_discharge(discharge),
 			"discharge": discharge,
 			"half_width_tiles": half_width,
-			"lake_across": across,
+			"lake_across": still_across,
+			"plume_factor": 0.0,
+			"plume_bearing_deg": 0.0,
 			"fine_detail_scale": 0.0,
 			"carve": full_carve,
 		}
 	var shoulder := clampf((distance - half_width) / VALLEY_HALF_WIDTH_TILES, 0.0, 1.0)
+	var plume := mouth_plume(global_x, global_y) if is_sea else {"factor": 0.0, "bearing_deg": 0.0}
 	return {
 		"kind": "",
+		"sea": is_sea,
 		"depth_m": 0.0,
 		"discharge": 0.0,
 		"half_width_tiles": half_width,
-		"lake_across": across,
-		"fine_detail_scale": shoulder,
-		"carve": full_carve * (1.0 - shoulder),
+		"lake_across": still_across,
+		"plume_factor": plume["factor"],
+		"plume_bearing_deg": plume["bearing_deg"],
+		"fine_detail_scale": shoulder if not is_sea else 0.0,
+		"carve": full_carve * (1.0 - shoulder) if not is_sea else 0.0,
 	}
+
+
+## How strongly, and in which direction, a river mouth's current still
+## runs at this tile: {factor 0..1, bearing_deg}. The nearest mouth within
+## PLUME_TILES of the tile wins; a mouth is where a channel cell drains
+## into a sea cell or a lake cell, at that cell's centre (the end of the
+## channel's own curve), running the way the last piece of channel ran.
+func mouth_plume(global_x: int, global_y: int) -> Dictionary:
+	var tile_center := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
+	var pixel := pixel_of_tile(global_x, global_y)
+	var cell_x := floori(pixel.x)
+	var cell_y := floori(pixel.y)
+	var best_factor := 0.0
+	var best_bearing := 0.0
+	for dy in range(-2, 3):
+		var y := cell_y + dy
+		if y < 0 or y >= _data.height:
+			continue
+		for dx in range(-2, 3):
+			var cell := cell_index_at(cell_x + dx, y)
+			if _data.is_sea(cell) or _data.discharge_at(cell) < river_min_discharge:
+				continue
+			var downstream := _downstream(cell)
+			if downstream < 0:
+				continue
+			var into_still_water := _data.is_sea(downstream) or _data.depression_at(downstream) != DrainageNetwork.NO_DEPRESSION
+			if not into_still_water:
+				continue
+			var mouth := _nearest_wrapped(_center_of(downstream), tile_center)
+			var from := _nearest_wrapped(_center_of(cell), tile_center)
+			var factor := clampf(1.0 - tile_center.distance_to(mouth) / PLUME_TILES, 0.0, 1.0)
+			if factor <= best_factor:
+				continue
+			best_factor = factor
+			best_bearing = RiverCatalog.bearing_degrees(mouth - from)
+	return {"factor": best_factor, "bearing_deg": best_bearing}
 
 
 ## The nearest channel's geometry in exactly the shape

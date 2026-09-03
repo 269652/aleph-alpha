@@ -566,6 +566,21 @@ func test_fine_detail_never_flips_land_to_sea_or_sea_to_land():
 	assert_eq(flips, 0)
 
 
+func test_the_coastline_is_the_bakes_sea_contour():
+	# With a bake, sea is where the smoothed baked sea mask passes half,
+	# not where the bilinear elevation dips: the synthetic bake's sea row
+	# covers the far north, so a tile over Greenland's ice (real macro
+	# elevation far above sea level) is sea, and a tile in the synthetic
+	# plateau over the real South China Sea is land.
+	generator.set_hydrology(_synthetic_field())
+	var greenland := Vector2i(19980, 1110)
+	assert_eq(generator.biome_at_global(greenland.x, greenland.y), "ocean")
+	assert_lt(generator.elevation_at_global(greenland.x, greenland.y), EarthChunkGenerator.EARTH_SEA_LEVEL)
+	var south_china_sea := Vector2i(32745, 8325)
+	assert_ne(generator.biome_at_global(south_china_sea.x, south_china_sea.y), "ocean")
+	assert_gt(generator.elevation_at_global(south_china_sea.x, south_china_sea.y), EarthChunkGenerator.EARTH_SEA_LEVEL)
+
+
 func test_a_generator_without_a_bake_reports_no_hydrology():
 	generator.set_hydrology(null)
 	assert_false(generator.has_hydrology())

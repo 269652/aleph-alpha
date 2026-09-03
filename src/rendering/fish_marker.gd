@@ -185,6 +185,9 @@ func get_display_name() -> String:
 
 func _ready() -> void:
 	add_to_group(HoverTargetFinder.GROUP_NAME)
+	# World gathers every fish each frame as a flow-overlay wader, so a
+	# fish ripples the still water it swims in (docs/concept/hydrology.md).
+	add_to_group("fish")
 
 
 func set_attraction(target: Vector2) -> void:

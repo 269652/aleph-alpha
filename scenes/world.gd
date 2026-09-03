@@ -4630,6 +4630,10 @@ func _client_process(delta: float) -> void:
 	var wader_candidates: Array = [local_player.position]
 	for creature in get_tree().get_nodes_in_group(CreatureMarker.GROUP_NAME):
 		wader_candidates.append(creature.position)
+	# Fish ring the water they swim in, through the same displacement the
+	# player and the animals get (see EarthChunkManager.river_wader_positions).
+	for fish in get_tree().get_nodes_in_group("fish"):
+		wader_candidates.append(fish.position)
 	_chunk_manager.set_river_flow_waders(
 		_chunk_manager.river_wader_positions(wader_candidates)
 	)

@@ -73,16 +73,15 @@ func test_ten_tiles_span_one_asset_cell():
 func test_a_tile_on_the_crater_floor_is_a_lake_filled_to_the_spill():
 	var probe: Dictionary = field.probe(35, 45, 0.3)
 	assert_eq(probe["kind"], "lake")
+	assert_false(probe["sea"])
 	var expected_depth := 0.3 * (TerrainRelief.ELEVATION_MAX_M - TerrainRelief.ELEVATION_MIN_M)
 	assert_almost_eq(probe["depth_m"], expected_depth, 2.0, "depth is spill minus the tile's own elevation, in metres")
 
 
-func test_a_tile_above_the_spill_inside_the_basin_footprint_is_dry():
-	# A crater cell (2,4), but the tile's own (bilinear) elevation sits
-	# above the spill: the shoreline follows the real contour, not the cell
-	# edge. (Cell (3,4) is avoided here: the crater's own inflow channel
-	# through (3,3) reaches into it, which is a river question, not a lake one.)
-	assert_eq(field.probe(25, 45, 0.65)["kind"], "")
+func test_a_tile_just_outside_the_footprint_is_dry():
+	# Cell (1,4) is plateau beside the crater: well inside it, the lake
+	# coverage is below half whatever the tile's own elevation says.
+	assert_eq(field.probe(12, 45, 0.55)["kind"], "")
 
 
 ## --- rivers ---
@@ -326,22 +325,53 @@ func test_a_lake_bed_reads_as_deep_water_in_the_across_field():
 	assert_eq(field.probe(35, 45, 0.3)["lake_across"], 0.0)
 
 
-func test_the_waterline_sits_at_across_one_and_dry_ground_beyond_it():
-	var spill := field.lake_surface_at_global(35, 45)
-	assert_almost_eq(HydrologyField.lake_across(spill, spill), 1.0, 1e-9)
-	var one_metre_under := spill - 1.0 / HydrologyField.METERS_PER_ELEVATION_UNIT
-	assert_lt(HydrologyField.lake_across(one_metre_under, spill), 1.0)
-	assert_gt(HydrologyField.lake_across(spill + 0.01, spill), 1.0)
-	assert_eq(HydrologyField.lake_across(0.5, HydrologyField.NO_LAKE), HydrologyField.LAKE_ACROSS_DRY)
+func test_the_waterline_is_the_half_coverage_contour():
+	assert_almost_eq(HydrologyField.shore_across(0.5), 1.0, 1e-9)
+	assert_eq(HydrologyField.shore_across(1.0), 0.0, "fully surrounded by water is the deep ceiling")
+	assert_eq(HydrologyField.shore_across(0.0), HydrologyField.LAKE_ACROSS_DRY)
+	assert_lt(HydrologyField.shore_across(0.6), 1.0)
+	assert_gt(HydrologyField.shore_across(0.4), 1.0)
 
 
-func test_the_shoreline_follows_the_contour_into_a_neighbouring_cell():
-	# Cell (1,4) is plateau, not a depression, but it touches the crater:
-	# a tile there whose own bilinear elevation dips below the spill is
-	# under water, because water covers everything lower that it touches.
-	assert_eq(field.probe(15, 45, 0.55)["kind"], "lake")
-	assert_eq(field.probe(15, 45, 0.7)["kind"], "")
+func test_a_lake_footprint_is_rounded_not_cut_square():
+	# The crater is a 3x3 block of cells. Under the shoreline kernel its
+	# corner is outside the waterline while the middle of a side, the same
+	# distance from the nearest cell centre, is inside: the level set of a
+	# blurred square is a rounded blob ("circle-ish, not a folded snake").
+	assert_eq(field.probe(21, 44, 0.3)["kind"], "lake", "middle of the west side")
+	assert_eq(field.probe(20, 29, 0.3)["kind"], "", "the north-west corner")
+	var side_coverage: float = field.water_coverage(21, 44)["lake"]
+	var corner_coverage: float = field.water_coverage(20, 29)["lake"]
+	assert_gt(side_coverage, 0.5)
+	assert_lt(corner_coverage, 0.5)
 
 
-func test_far_from_any_lake_the_across_field_is_dry():
+func test_a_tile_inside_the_footprint_above_the_spill_still_has_water_to_swim():
+	var probe: Dictionary = field.probe(35, 45, 0.65)
+	assert_eq(probe["kind"], "lake")
+	assert_almost_eq(probe["depth_m"], HydrologyField.LAKE_MIN_DEPTH_M, 1e-6)
+
+
+func test_the_sea_is_the_half_coverage_contour_of_the_baked_sea_cells():
+	# Row 0 is sea. A tile just past the row boundary is mostly surrounded
+	# by sea cells; a tile a third of the way into row 1 is not.
+	assert_true(field.probe(35, 9, 0.2)["sea"])
+	assert_false(field.probe(35, 12, 0.6)["sea"])
+	assert_lt(field.probe(35, 9, 0.2)["lake_across"], 1.0)
+	assert_gt(field.probe(35, 12, 0.6)["lake_across"], 1.0)
+
+
+func test_a_river_mouth_runs_on_into_the_sea_and_fades():
+	# The crater's outlet empties into sea cell (3,0), whose centre is at
+	# tile (35, 4.9); the current is strongest at the mouth and gone twenty
+	# tiles out, always running north (the outlet's own direction).
+	var near_mouth: Dictionary = field.probe(35, 2, 0.2)
+	assert_true(near_mouth["sea"])
+	assert_gt(near_mouth["plume_factor"], 0.8)
+	assert_almost_eq(near_mouth["plume_bearing_deg"], 0.0, 1e-6)
+	assert_eq(field.probe(65, 45, 0.8)["plume_factor"], 0.0, "dry ground carries no plume")
+
+
+func test_far_from_any_water_the_across_field_is_dry():
 	assert_eq(field.probe(65, 15, 0.8)["lake_across"], HydrologyField.LAKE_ACROSS_DRY)
+	assert_false(field.probe(65, 15, 0.8)["sea"])

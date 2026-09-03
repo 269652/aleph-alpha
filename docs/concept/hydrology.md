@@ -339,15 +339,20 @@ answered from the baked rasters, the 3×3 fine-cell neighborhood, and the
 coarse cell's live state, so a chunk stays computable from its own global
 coordinates alone -- no chunk-relative state, no seams.
 
-**Is this tile in a lake?** The depressions of the fine cell *and its
-eight neighbors* resolve to live levels; the tile is lake if its *macro*
-elevation is below the highest of them. The 3×3 read is not a
-convenience: a depression's cells are the ones whose *center* sits below
-the spill, but the bilinear elevation dips below the spill inside
-neighboring cells too, and water covers everything lower that it touches,
-so the shoreline follows the real contour instead of stopping at a cell
-edge. Shorelines therefore follow the bilinear contour of the basin and
-move as h moves. **Which basins hold water at all** is, in phase 1, a
+**Is this tile in a lake, or in the sea?** The bake's water cells are the
+footprint; the shoreline is the **half-coverage contour** of that cell
+mask under a smooth kernel about a cell and a half wide (the metaball
+construction: a blurred binary mask has rounded, blob-like level sets).
+The same field decides what the water painter draws and what the player
+swims in, and the generator's sea classification reads it too, so the
+coastline is one line. This replaced an elevation-contour shoreline
+after the third playtest: on 8-bit, 10-km data the bilinear contour is a
+staircase of pixel-edge hyperbolas ("a folded-up snake"), while the
+kernel contour is "circle-ish, derived from the contour path of the
+basin". A lake tile's depth is spill minus macro elevation, never less
+than a metre inside the footprint. A river mouth's current runs on into
+the still water it empties into and fades over `PLUME_TILES`, so the
+flow lines continue out of the mouth and settle into ripples. **Which basins hold water at all** is, in phase 1, a
 stand-in for Layer 4's balance: the bake drops basins shallower than one
 and a half asset steps (the first real bake found 8,794 of its 10,776
 depressions exactly one 8-bit step deep, one flat plain after another

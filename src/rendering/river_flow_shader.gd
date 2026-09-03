@@ -87,7 +87,7 @@ uniform float boulder_radius_px = 11.0;
 // fed per frame by EarthChunkManager.set_river_flow_waders. Soft moving
 // obstacles that never dry the water.
 uniform int wader_count = 0;
-uniform vec2 waders[8];
+uniform vec2 waders[16];
 uniform float wader_reach_px = 26.0;
 uniform float wader_radius_px = 6.0;
 uniform float wader_wake_trail = 0.8;
@@ -257,8 +257,11 @@ void fragment() {
 		vec2 to_frag = wp - waders[w];
 		float lateral = dot(to_frag, flow_perp);
 		float along = dot(to_frag, flow_dir);
+		// In STILL water there is no current to carry the wake, so the
+		// push rings the wader symmetrically -- a fish or a swimmer in a
+		// lake makes a ripple, not a trail.
 		float reach = wader_reach_px
-			* (1.0 + wader_wake_trail * clamp(along / wader_reach_px, 0.0, 1.0));
+			* (1.0 + wader_wake_trail * moving * clamp(along / wader_reach_px, 0.0, 1.0));
 		float d = length(to_frag);
 		if (d >= reach) {
 			continue;
@@ -577,7 +580,7 @@ const BOULDER_RADIUS_PX := 11.0
 const WADER_REACH_PX := 26.0
 const WADER_RADIUS_PX := 6.0
 const WADER_WAKE_TRAIL := 0.8
-const WADER_SLOTS := 8
+const WADER_SLOTS := 16
 
 ## px of world width per unit of across-fraction -- the channel half-width,
 ## pinned against RiverCatalog.RIVER_HALF_WIDTH_TILES by test.

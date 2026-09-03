@@ -3534,7 +3534,15 @@ func river_wader_positions(candidates: Array) -> PackedVector2Array:
 		var tile := Vector2i(floori(pos.x / tile_px), floori(pos.y / tile_px))
 		var in_river = _wader_river_memo.get(tile)
 		if in_river == null:
-			in_river = is_river_at_global(tile.x, tile.y)
+			# Any water, not only rivers: a fish or a swimmer in a lake or
+			# the sea rings the still water (the shader's wake stays
+			# symmetric there) -- third playtest: "pond fish ripples need
+			# to be reimplemented with the river contour system".
+			in_river = (
+				is_river_at_global(tile.x, tile.y)
+				or is_lake_at_global(tile.x, tile.y)
+				or biome_at_global(tile.x, tile.y) == "ocean"
+			)
 			if _wader_river_memo.size() > RIVER_WADER_MEMO_CAP:
 				_wader_river_memo.clear()
 			_wader_river_memo[tile] = in_river
@@ -3827,19 +3835,23 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# gives a river bank, and only ripples. First playtest: "ponds
 			# have a very different art style", "unify river and pond water".
 			var probe := generator.hydrology_at_global(global.x, global.y)
-			var cell_index := y * chunk.width + x
-			var still_across: float = minf(
-				probe["lake_across"],
-				HydrologyField.lake_across(chunk.elevation[cell_index], EarthChunkGenerator.EARTH_SEA_LEVEL)
-			)
+			var still_across: float = probe["lake_across"]
 			var still_water: bool = (
-				probe["kind"] == "lake" or chunk.biome[cell_index] == "ocean" or still_across < LAKE_PAINT_ACROSS
+				probe["kind"] == "lake" or probe.get("sea", false) or still_across < LAKE_PAINT_ACROSS
 			)
 			if probe["kind"] != "river" and still_water:
-				_write_flow_across_texel(global, still_across, 0.0, 0.0)
+				# A river mouth's current runs on into the still water and
+				# fades (HydrologyField.mouth_plume): the texel carries the
+				# mouth's bearing and a fading speed, so the flow lines
+				# continue out of the mouth and settle into ripples.
+				var plume_speed: float = HydrologyField.PLUME_SPEED_M_S * probe["plume_factor"]
+				_write_flow_across_texel(global, still_across, probe["plume_bearing_deg"], plume_speed)
 				_river_flow_boulder_tiles.erase(global)
 				_river_flow_layer.set_cell(
-					global, 0, _terrain_renderer.atlas_coords_for_river_flow(0.0, false)
+					global, 0,
+					_terrain_renderer.atlas_coords_for_river_flow(
+						probe["plume_bearing_deg"], RiverFlowShader.is_fast_flow(plume_speed)
+					)
 				)
 				continue
 			# The generator's own nearest_river_at: the curated answer

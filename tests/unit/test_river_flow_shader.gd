@@ -1413,3 +1413,11 @@ func test_still_water_neither_advects_nor_drifts():
 func test_still_water_ripples_without_flowing():
 	assert_gt(RiverFlowShader.STILL_RIPPLE, 0.0)
 	assert_lt(RiverFlowShader.STILL_RIPPLE, 0.5)
+
+
+## Fish join the player and the animals as waders, and in still water the
+## wake must ring the wader instead of trailing "downstream".
+func test_waders_have_room_for_fish_and_ring_still_water():
+	assert_gte(RiverFlowShader.WADER_SLOTS, 16)
+	assert_true(RiverFlowShader.SHADER_CODE.contains("uniform vec2 waders[16];"))
+	assert_true(RiverFlowShader.SHADER_CODE.contains("wader_wake_trail * moving * clamp(along / wader_reach_px, 0.0, 1.0)"))

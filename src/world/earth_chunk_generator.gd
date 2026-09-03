@@ -78,9 +78,11 @@ static var _shared_hydrology_data: HydrologyData = null
 static var _hydrology_load_attempted := false
 
 ## What hydrology_at_global reports without a bake: dry ground, full fine
-## detail, nothing carved.
+## detail, nothing carved, no sea verdict (the macro elevation decides).
 const _NO_HYDROLOGY := {
-	"kind": "", "depth_m": 0.0, "discharge": 0.0, "fine_detail_scale": 1.0, "carve": 0.0
+	"kind": "", "depth_m": 0.0, "discharge": 0.0, "half_width_tiles": 0.0,
+	"lake_across": 2.0, "plume_factor": 0.0, "plume_bearing_deg": 0.0,
+	"fine_detail_scale": 1.0, "carve": 0.0,
 }
 
 var _hydrology: HydrologyField = null
@@ -226,12 +228,16 @@ func elevation_at_global(global_x: int, global_y: int) -> float:
 
 ## The fine detail is texture, never geography (see FINE_DETAIL_AMPLITUDE
 ## and slope_at_global's doc comment), so it may not move a tile across
-## sea level: land stays land, sea stays sea, and the coastline is the
-## macro data's own contour. Before this clamp every coastal plain within
-## +-432 m of sea level was a speckle of ocean-biome tiles (first
-## playtest: "dozens of small ponds to the sides of rivers"). The carve
-## is applied after the clamp: a channel may cut into land, never below
-## the sea. Pinned by test_fine_detail_never_flips_land_to_sea_or_sea_to_land.
+## sea level: land stays land, sea stays sea. Before this clamp every
+## coastal plain within +-432 m of sea level was a speckle of ocean-biome
+## tiles (first playtest: "dozens of small ponds to the sides of rivers").
+## WHICH side a tile is on comes from the hydrology bake's smoothed sea
+## coverage when there is one (HydrologyField.probe's "sea": the rounded
+## half-coverage contour of the baked sea cells, the same line the water
+## painter draws), else from the macro elevation. The carve is applied
+## after the clamp: a channel may cut into land, never below the sea.
+## Pinned by test_fine_detail_never_flips_land_to_sea_or_sea_to_land and
+## test_the_coastline_is_the_bakes_sea_contour.
 const SEA_LEVEL_MARGIN := 1e-6
 
 
@@ -240,10 +246,11 @@ func _blend_elevation(global_x: int, global_y: int, macro: float, probe: Diction
 	var scale: float = probe["fine_detail_scale"]
 	var carve: float = probe["carve"]
 	var textured := macro + fine_detail * scale
-	if macro >= EARTH_SEA_LEVEL:
-		textured = maxf(textured - carve, EARTH_SEA_LEVEL + SEA_LEVEL_MARGIN)
-	else:
+	var is_sea: bool = probe.get("sea", macro < EARTH_SEA_LEVEL)
+	if is_sea:
 		textured = minf(textured, EARTH_SEA_LEVEL - SEA_LEVEL_MARGIN)
+	else:
+		textured = maxf(textured - carve, EARTH_SEA_LEVEL + SEA_LEVEL_MARGIN)
 	return clampf(textured, 0.0, 1.0)
 
 
