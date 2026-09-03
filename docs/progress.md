@@ -2246,17 +2246,26 @@ backported to herbivores/predators/vegetation.
 
 ### Phase 2 — NPC AI MVP
 
-Goal per roadmap: prove the daily-plan NPC architecture at small scale.
-**Nothing in this phase has been started.**
+Goal per roadmap: prove the daily-plan NPC architecture at small scale
+(5-10 NPCs, one village). **This table used to read "nothing in this phase
+has been started" — stale by the time of this correction (2026-09-03) and
+directly contradicted by this doc's own detailed "NPC (`concept/npc.md`)"
+section below, which had been kept current all along. A first real slice
+has existed for a while and is live, tested, and wired into the actual
+running game** (`scenes/world.gd` → `EarthChunkManager` →
+`VillageRenderer.spawn_village` on ordinary chunk load, exactly like trees/
+creatures/fish — see `EarthChunkManager._load_chunk`). This table is now
+kept in sync with the detailed section below rather than standing as a
+second, independent (and, as just found, silently-diverging) account.
 
 | Mechanism | Status | Note | Complexity |
 |---|---|---|---|
-| NPC Data Model | ⬜ Not started | No NPCs of any kind exist. | medium |
-| LLM Daily Planner | ⬜ Not started | Zero LLM API wiring exists anywhere in the codebase. | medium |
-| Local Schedule Executor | ⬜ Not started | | large |
-| Interrupt/Replan Handling | ⬜ Not started | | medium |
-| Live Dialogue System | ⬜ Not started | | large |
-| LLM Backend Abstraction | ⬜ Not started | No LLM integration whatsoever. | medium |
+| NPC Data Model | ✅ Done | Real, deterministic per-seed `NpcIdentity` (name/occupation/DNA-derived personality via `NpcGenome`/driving need) plus real `NpcNeeds` (hunger, rises per second, `is_hungry()`/`feed()`) — see the NPC section below. Relationships and an actual persistent memory *log* keyed per-NPC are the two Identity-adjacent pieces still open (the memory/rumor *propagation mechanism* itself IS built — see that section). | medium |
+| LLM Daily Planner | 🚧 Partial (deterministic stand-in, by design) | `src/world/npc_planner.gd`'s `Planner`/`FakeNpcPlanner` split (mirrors `worldbosses.md`'s `PhaseGenerator`/`FakePhaseGenerator` convention) produces a real occupation-keyed `{time_block, location_tag, activity}` day with zero LLM calls — this proves the "cheap local FSM" half of the architecture at real scale. The roadmap's own "**one LLM call per NPC per in-game day**" half is a deliberately deferred follow-up (see the NPC section below), not silently dropped — `Planner` is the real seam a local-model-backed implementation (Ollama, per the design brainstorm) or a hosted API drops into unchanged. | medium |
+| Local Schedule Executor | ✅ Done (basic) | `src/rendering/npc_marker.gd`: a real per-frame FSM walks a daily schedule (home / shared landmark / personal workspot), zero LLM calls mid-day, live for every settlement `EarthChunkManager` loads. No real pathfinding yet (straight-line movement, no obstacle avoidance). | large |
+| Interrupt/Replan Handling | ⬜ Not started | No out-of-cycle replan trigger (combat, meeting a notable NPC, a need crossing a threshold) exists yet — today's schedule always runs to completion and only re-plans on day rollover. Investigated and scoped (not attempted) in the roadmap.md gap-closing pass: "a new periodic co-location check comparable in size to Phase 8/9/10's own steps." | medium |
+| Live Dialogue System | 🚧 Partial | No LLM-backed live dialogue yet, but a real, explicitly-scoped placeholder exists and is live: "Basic Talk Interaction" (proximity prompt + one deterministic personality/need-flavored greeting line, `npc_greeting.gd`) — see npc.md's "Minimal talk interaction" section and the NPC section below for the real offline (non-LLM) dialogue substrate now landed underneath it. | large |
+| LLM Backend Abstraction | ⬜ Not started | No LLM API wiring exists anywhere in the codebase yet. `Planner`'s base/fake-subclass split (see LLM Daily Planner above) is the seam a real backend will implement, but no backend — local or hosted — is wired. | medium |
 
 ### Phase 3 — Core gameplay loop
 
@@ -5775,6 +5784,54 @@ festival wiring, no hiring/wages yet.
 - **NPC Needs / Local Production Economy** (large) — ✅ Done — implements npc.md's "Needs and the local production economy" section in full: real per-NPC hunger (`src/world/npc_needs.gd`, mirrors `creature_needs.gd`'s shape -- hash-seeded stagger, `HUNGER_RATE_PER_SECOND=0.02` matching `CreatureNeeds`, `is_hungry()`/`feed()` -- deliberately hunger-only, no thirst, per the spec's own scope); real production (`src/world/npc_production.gd`) where farmer/hunter/fisher read the SAME weather-tied numbers the wild ecosystem already runs on via 2 new `EarthChunkManager` accessors mirroring `fish_population_near`'s exact existing pattern (`vegetation_density_near` for farmer, `herbivore_population_near` for hunter, the pre-existing `fish_population_near` reused as-is for fisher) -- a real drought (lower moisture, same biome/temperature) measured 93.8% lower farmer AND hunter yield in a real probe (`PRODUCTION_RATE_PER_SECOND=0.05`, a shared fraction-of-standing-resource rate, tested behaviorally rather than pinned to a magnitude, matching this codebase's existing fraction-per-time-unit tuned-rate convention); a real per-settlement `VillageMarket` (`src/world/village_market.gd`, one instance per `VillageRenderer.spawn_village` call, shared by every villager of that settlement) holding real stock keyed by real `ItemCatalog` ids (farmer→"fruit", hunter→"meat", fisher→"fish" -- no invented item ids) at a tested `VILLAGE_LOCAL_FOOD_PRICE=2` (below `shop.gd`'s `cooked_meat` price of 4, a deliberately distinct informal villager-to-villager price, NOT the player-facing global catalog); `src/world/npc_economy.gd` ties needs+`Wallet`+production+market together per NPC and is driven once per frame from `NpcMarker._process` (`NpcMarker.setup_economy`, wired by `VillageRenderer._build_npc`). **Judgment calls made and documented in-code**: (1) a producer self-feeds for FREE from their own currently-active production (no market/gold transaction) rather than buying from the market like a non-producer -- gated on genuinely nonzero real yield right now, so total ecological collapse can still starve a producer too, not just everyone else; (2) gold is a real two-faucet flow (`docs/concept/economy.md`), not a closed loop -- a producer earns `YIELD_TO_GOLD_RATE=1` gold per unit the instant it's gathered (independent of whether it's ever bought), a buyer spends `VILLAGE_LOCAL_FOOD_PRICE=2`, and the two rates deliberately differ (a real wholesale-vs-retail margin) rather than round-tripping the same number; (3) the market is NPC-only -- npc.md's own framing never extends it to the player, so the player still only uses `shop.gd`'s existing global catalog; (4) nurse's `FakeNpcPlanner` work tag resolves to the shared "well" landmark (a village-care role tending the square) rather than a new dedicated building; (5) settlement occupation balance is left to chance, not guaranteed (see Procedural NPC Population Generation above). **Real probe** (`godot --headless -s <standalone script>`, not GUT, run against the actual production code -- `EcosystemSimulation`/`NpcProduction`/`NpcEconomy`/`VillageMarket`, not hand-traced): a real settlement (chunk (30,1) in one run) with a real hunter and real blacksmith -- the hunter gathered 34 real "meat" units and earned 34 real gold over a simulated 300-second workday reading a real `herbivore_population` of 2.304 in a lush region; the blacksmith, forced hungry with 50 gold, spent 2 gold buying 1 unit from that same real stock and was fed (hunger 1.0→0.0, stock 34→33); a stranded merchant with an empty market and no gold stayed genuinely hungry (hunger→1.0, no crash, no free pass) after 100 simulated seconds. **Known gaps**: `VillageMarket` is freshly created per `spawn_village` call, so a chunk reload resets village stock to empty -- the same "regenerates identically on revisit, no persistence" limitation trees/creatures/houses already accept, not novel to this system; no wiring yet from sustained hunger to any lifecycle/death consequence (deliberately out of scope this pass, see npc.md's own "Deliberately NOT in this pass" line); `HeroAppearance` outfit palette gap for hunter/nurse (see NPC Identity System above). **Update**: a working farmer's yield now also depletes the real land it comes from — see world.md's "Land Health" entry above — so a village worked too hard by its own farmers, not just a drought, can genuinely go hungry over time. **Update (2026-08-26)**: hunter and fisher now carry the exact same real depletion counterpart farmer already had, closing a gap where only farmer's `_gather` actually removed anything from the regional number it read for income — a working hunter's gathered amount now also calls `EarthChunkManager.record_death_at(pixel_position, false, gathered)` (the same `is_predator=false` non-predator branch a wild kill of prey or the player's own weapon already reports through), and a working fisher's now calls `EarthChunkManager.record_fish_catch_near(pixel_position, gathered)` (the same hook the player's rod and a piscivore bird's successful dive already use, which also visibly thins the shoal by removing a real nearby `FishMarker`) — both the same exact "gathered" amount already computed for food/gold, no separately invented conversion. `NpcEconomy._gather`'s single farmer-only special case became a `_deplete` match with one arm per producer occupation, each still duck-typed fail-open on `has_method` per hook. So sustained NPC hunting/fishing, not just NPC farming or the player's own hunting/fishing, is now a real herbivore/fish population depletion driver — tested in `test_npc_economy.gd` (a working hunter/fisher measurably reduces `world`'s tracked kill/catch amount by exactly `yield_per_second * delta_seconds`; farmer/hunter/fisher each only ever touch their own one resource pool, never another's; fail-open confirmed against a world lacking the hook). **Correction (2026-08-26, caught in verification before merge)**: the fisher arm above was calling `record_fish_catch_near` unconditionally every single frame while a fisher works (`NpcEconomy._gather` runs once per rendered frame, unthrottled, from `NpcMarker._process`) — unlike `record_vegetation_harvest_near`/`record_death_at` (pure aggregate-population arithmetic, harmless every frame), `record_fish_catch_near` *also* finds-and-`queue_free`s one real on-screen `FishMarker` per call, built for a piscivore bird's one-call-per-real-catch contract (paced seconds apart). At ~60 calls/sec a working fisher — stationed at "dock", adjacent to water — would strip every fish within catch radius almost instantly, invisible to the unit tests because the stub double doesn't model that node-deletion side effect. Fixed by splitting `_deplete` into `_deplete_continuous` (farmer/hunter, unchanged, still called every frame) and `_deplete_discrete_unit` (fisher only, called once per whole `FOOD_UNIT` actually accumulated — the same accumulation gate `_gather` already uses for the market stock/wallet gold update, mirroring the real discrete-catch cadence `PiscivoreBirdMarker` already has). A fisher's real catch is now quantized to whole food units rather than matching `yield_per_second * delta_seconds` exactly per frame — verified in `test_npc_economy.gd` that it never runs ahead of the whole units actually reaching the market stock, stays within one `FOOD_UNIT` of the true total gathered over time, and a single short step (well under one food unit) reports no catch at all.
 - **Basic Talk Interaction** (small) — ✅ Done (basic) — spec'd in `concept/npc.md`'s "Minimal talk interaction" section: an explicit placeholder for the real Live Dialogue System below, not a cut-down version of it. `src/world/npc_greeting.gd` turns an `NpcIdentity` into one deterministic line flavored by its own personality trait and need (8 trait templates × 6 need phrases); `EarthChunkManager.nearest_npc_near` finds the closest villager (any occupation) within range; `Player._talk_step` (talk key, default G, new `Keybindings` entry) shows that villager's line as a HUD banner on press. A proximity prompt ("Talk (<bound key>)", reading the live keybinding so a rebind is never stale) floats above whichever villager is in range (`World._update_interaction_prompt`, world-to-screen via the viewport's canvas transform), shown even before the key is pressed -- the general "nearby-interaction hint" affordance requested for NPCs. No memory of the exchange, no branching, no quest hooks.
 - **Settlement Growth via Migration** (large) — ⬜ Not started — spec'd in `concept/npc.md`'s new "Settlement growth" section and `concept/quests.md`'s Settlement growth section: player-built structures as a habitability pull, migration as a new replan-interrupt resolution, and unification of player-grown settlements with procedurally-seeded ones. Depends on Village-Endangerment Attractor Mechanism below for its preferred migration source (settlements that lost that fight).
+- **Real-village population integration test** (small) — ✅ Done —
+  (2026-09-03) a workflow stage tasked with "NPC identity + needs, real
+  village" set out to build exactly that; reading the actual code first
+  (per this doc's and this repo's own "verify, don't trust a summary"
+  rule) found it already real, live, and reachable from the running game —
+  everything the stage's own goal named (`npc_identity.gd`, `npc_needs.gd`,
+  `npc_genome.gd`, `settlement_generator.gd`, `village_finder.gd`,
+  `npc_marker.gd`) was already wired end to end (see every entry above).
+  What was missing was the one proof tying them together through their
+  real production entry points rather than trusting each piece's own
+  isolated test: new `tests/unit/test_village_npc_population.gd` locates a
+  real settlement via `VillageFinder.find_nearest` searching over
+  `SettlementGenerator`'s own deterministic placement (not a hand-authored
+  test-only village or a hardcoded chunk), spawns it via
+  `VillageRenderer.spawn_village` (the exact call `EarthChunkManager` makes
+  on ordinary chunk load), and asserts the specific combination roadmap.md
+  Phase 2 and this section both call for: the population lands within
+  Phase 2's 5-10 NPC target; every villager is a genuinely distinct
+  individual (`NpcIdentity.seed_value` never repeats within one
+  settlement, and at least two distinct display names appear in the
+  roster); and every villager's own real `NpcNeeds` hunger measurably and
+  *independently* rises as simulated time passes through
+  `NpcMarker._process` — the same per-frame loop driving every villager in
+  the live, running game (a control confirms one villager's rise never
+  leaks into another's). 6/6 tests, 37 asserts, all green, with **zero
+  production-code changes** — this slice already existed before this stage
+  started; the Phase 2 table above (which had gone stale, now corrected)
+  was the only thing actually out of date. To be explicit about what this
+  is deliberately NOT claiming, so a later stage reads a named follow-up
+  rather than a silently-dropped gap: this remains the **deterministic
+  scheduler/needs skeleton** (`FakeNpcPlanner`) roadmap.md's own divergence
+  note already describes — the real "**one LLM call per NPC per in-game
+  day**" daily planner Phase 2's own definition of done calls for is not
+  built, and neither is interrupt/replan handling, an LLM-backed live
+  dialogue system, or an LLM backend abstraction (see the corrected Phase 2
+  table above for the per-mechanism breakdown). Side finding worth
+  recording for whoever runs tests here next: this repo's documented "fast
+  loop" command (`-gtest=res://tests/unit/test_X.gd -gexit`) does NOT
+  scope a run to just that file — `.gutconfig.json`'s `dirs`/
+  `include_subdirs` are applied unconditionally alongside `-gtest`
+  (`gut_config.gd`'s `_apply_options` calls `add_directory` for the config
+  dirs and `add_script` for `-gtest` unconditionally, additively), so every
+  invocation silently also runs the entire `tests/unit` suite (hundreds of
+  files, several minutes) unless `-gconfig=` is also passed to disable
+  loading the config file. Confirmed as the actual cause of a very slow
+  first run in this stage (it was quietly running everything, not hanging)
+  — add `-gconfig=` for a genuinely single-file run:
+  `-gconfig= -gtest=res://tests/unit/test_X.gd -gexit`.
 
 ### Quests (`concept/quests.md`)
 
