@@ -3628,6 +3628,28 @@ describes:
   entry sets a divergent `sprite_id` yet, so this is prompt scaffolding
   only — plugging in real art still means generating the sheets, slicing
   them, and pointing a catalog entry's `sprite_id` at the result.
+- **Composite item sheets: the "placed" surface, formalized** (small) —
+  ✅ Spec'd (2026-09-03), ⬜ nothing generated/wired — `item_illustrations.md`'s
+  states table never named "placed in the world" as an item art surface at
+  all. In reality `campfire`/`furnace`/`sagewerk`/`storage` already render
+  through TWO independent generators (`procedural_item_sprite.gd` for the
+  inventory icon, `procedural_structure_sprite.gd` for the placed tile baked
+  into `TerrainRenderer`'s own atlas) and nothing previously said so. The doc
+  now specs a second sheet per structure — a seeded-variant grid mirroring
+  `boulders.png`/ore rather than a walk cycle, since `ProceduralStructureSprite`
+  already takes a `variant_seed` — plus a wiring plan
+  (`IllustratedStructureSprite`, mirroring `IllustratedStoneSprite`/
+  `IllustratedTerrainSprite`'s `has_variants()`/`frame_for()` shape).
+  `ai_sprite_prompts.md` §10 adds four ready-to-run generation prompts
+  (campfire/furnace/sagewerk/storage). Also corrected in this pass: the
+  `sprite_id` and armor-on-rig sections of `item_illustrations.md` still read
+  as open proposals ("Today `Item` has no icon/texture field at all") when
+  both had already shipped — updated to past tense with a pointer to this
+  file, so the doc doesn't contradict itself once the placed-structure
+  section leans on `sprite_id` existing. Not built: the wiring class needs
+  real source pixels to write a meaningful test against, the same sequencing
+  `IllustratedCharacterSprite._PARTS` already follows (stays empty until
+  hair/beard art exists) — not an oversight, the established order here.
 - **Spell Gem Rarity Derivation** (medium) — 🚧 Partial — `rarity_tier.gd`'s
   `tier_from_complexity(complexity)` derives a tier straight from a numeric
   complexity/cost score (e.g. `spell_cost.gd`'s `derived_base()`), reusing the
