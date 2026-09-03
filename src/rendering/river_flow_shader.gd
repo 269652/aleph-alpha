@@ -97,8 +97,8 @@ uniform vec2 waders[16];
 uniform int ripple_count = 0;
 uniform vec3 ripples[24];
 uniform float ripple_speed_px = 18.0;
-uniform float ripple_width_px = 4.0;
-uniform float ripple_amplitude_px = 5.0;
+uniform float ripple_width_px = 10.0;
+uniform float ripple_amplitude_px = 1.5;
 uniform float ripple_lifetime = 2.5;
 uniform float wader_reach_px = 26.0;
 uniform float wader_radius_px = 6.0;
@@ -953,6 +953,25 @@ const STILL_RIPPLE := 0.25
 ## and is gone after RIPPLE_LIFETIME seconds -- about three tiles of
 ## travel, a pond ring, not a wave. RIPPLE_SLOTS rings live at once; the
 ## oldest is dropped first.
+##
+## A ring must BEND the existing strokes, never spawn new ones: the strokes
+## are contours of the across field, so a bump steeper than the channel's
+## own cross-gradient (one across unit over a half-width, ~0.03 per px on
+## a two-tile river) crowds extra contour lines into the band. The first
+## values (5 px over a 4 px band) did exactly that -- with dozens of fish
+## flapping, the channel filled with dense concentric arcs, seen in play as
+## "all zig zags and artifacts". 1.5 px over a 10 px band is a visible
+## bulge and no new lines. Pinned by
+## test_a_ring_bends_strokes_without_adding_any.
+const RIPPLE_SLOTS := 24
+const RIPPLE_SPEED_PX := 18.0
+const RIPPLE_WIDTH_PX := 10.0
+const RIPPLE_AMPLITUDE_PX := 1.5
+const RIPPLE_LIFETIME := 2.5
+## The across field's own cross-gradient on a two-tile-half-width river,
+## in across units per pixel: one unit over 32 px.
+const CHANNEL_ACROSS_GRADIENT_PER_PX := 1.0 / (2.0 * 16.0)
+
 ## Whirl (third playtest, "more natural whirly turbulences in curves"):
 ## the standing eddies rotate the stroke smear by up to EDDY_SWIRL of the
 ## bend, so lines curl through a boil, and turbulence grows by BANK_SHEAR
@@ -960,12 +979,6 @@ const STILL_RIPPLE := 0.25
 ## and where a bend's outer bank sweeps the water.
 const EDDY_SWIRL := 0.35
 const BANK_SHEAR := 0.6
-
-const RIPPLE_SLOTS := 24
-const RIPPLE_SPEED_PX := 18.0
-const RIPPLE_WIDTH_PX := 4.0
-const RIPPLE_AMPLITUDE_PX := 5.0
-const RIPPLE_LIFETIME := 2.5
 
 
 ## CPU mirror of one ring's across-displacement (pixels) at `distance_px`

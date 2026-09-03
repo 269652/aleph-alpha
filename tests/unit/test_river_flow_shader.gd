@@ -1453,6 +1453,20 @@ func test_disturbance_rings_travel_outward_and_fade():
 	assert_eq(RiverFlowShader.RIPPLE_SLOTS, 24)
 	var material := flow.shared_material()
 	assert_almost_eq(float(material.get_shader_parameter("ripple_lifetime")), RiverFlowShader.RIPPLE_LIFETIME, 1e-9)
+	assert_almost_eq(float(material.get_shader_parameter("ripple_width_px")), RiverFlowShader.RIPPLE_WIDTH_PX, 1e-9)
+	assert_almost_eq(float(material.get_shader_parameter("ripple_amplitude_px")), RiverFlowShader.RIPPLE_AMPLITUDE_PX, 1e-9)
+
+
+## A ring bends the strokes it crosses and never spawns new ones: its
+## steepest slope, in across units per pixel on a two-tile river, stays
+## under the channel's own cross-gradient (found in play as dense
+## concentric arcs filling a river full of flapping fish).
+func test_a_ring_bends_strokes_without_adding_any():
+	# Steepest slope of a Gaussian band of amplitude A and width w is
+	# A * sqrt(2) * exp(-0.5) / w, in px of displacement per px.
+	var steepest_px_per_px := RiverFlowShader.RIPPLE_AMPLITUDE_PX * sqrt(2.0) * exp(-0.5) / RiverFlowShader.RIPPLE_WIDTH_PX
+	var steepest_across_per_px := steepest_px_per_px / (2.0 * 16.0)
+	assert_lt(steepest_across_per_px, RiverFlowShader.CHANNEL_ACROSS_GRADIENT_PER_PX * 0.5)
 
 
 ## Fish join the player and the animals as waders, and in still water the
