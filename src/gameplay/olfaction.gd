@@ -33,7 +33,19 @@ const SMOKE := "smoke"  # fire
 ## own to prefer.
 const OIL := "oil"
 
-const MOLECULES: Array[String] = [SUGAR, DECAY, GREEN, MUSK, SMOKE, OIL]
+## Fresh mammalian blood, and specifically the thing predators actually track:
+## real blood scent is dominated by trans-4,5-epoxy-(E)-2-decenal, a single
+## aldehyde carnivores respond to on its own, which is why "the smell of blood"
+## is a behavioural trigger rather than a figure of speech.
+##
+## Its OWN molecule rather than a shade of DECAY. Fresh blood and carrion are
+## different signals with different meanings -- collapsing them would make a
+## live wounded deer smell like a week-old carcass, and would leave nothing for
+## a scavenger and a hunter to disagree about. See docs/concept/olfaction.md,
+## "Blood: the trail a wounded animal leaves".
+const BLOOD := "blood"
+
+const MOLECULES: Array[String] = [SUGAR, DECAY, GREEN, MUSK, SMOKE, OIL, BLOOD]
 
 ## How far a smell carries at all, in tiles.
 const MAX_RANGE_TILES := 20.0
@@ -78,28 +90,28 @@ const RECEPTORS := {
 	# Rooting omnivore: excellent nose, eats fruit and is untroubled by a
 	# little rot -- which is most of what a boar's nose is for.
 	"boar": {
-		"sensitivity": {SUGAR: 1.0, DECAY: 0.9, GREEN: 0.5, MUSK: 0.6, SMOKE: 0.8, OIL: 1.0},
-		"response": {SUGAR: 1.0, DECAY: 0.3, GREEN: 0.2, MUSK: -0.1, SMOKE: -1.0, OIL: 0.8},
+		"sensitivity": {SUGAR: 1.0, DECAY: 0.9, GREEN: 0.5, MUSK: 0.6, SMOKE: 0.8, OIL: 1.0, BLOOD: 0.7},
+		"response": {SUGAR: 1.0, DECAY: 0.3, GREEN: 0.2, MUSK: -0.1, SMOKE: -1.0, OIL: 0.8, BLOOD: 0.35},
 	},
 	# Browser: wants fruit and foliage, avoids anything dead.
 	"deer": {
-		"sensitivity": {SUGAR: 0.8, DECAY: 0.7, GREEN: 1.0, MUSK: 0.9, SMOKE: 0.9, OIL: 0.4},
-		"response": {SUGAR: 0.8, DECAY: -0.6, GREEN: 0.9, MUSK: -0.5, SMOKE: -1.0, OIL: 0.15},
+		"sensitivity": {SUGAR: 0.8, DECAY: 0.7, GREEN: 1.0, MUSK: 0.9, SMOKE: 0.9, OIL: 0.4, BLOOD: 0.95},
+		"response": {SUGAR: 0.8, DECAY: -0.6, GREEN: 0.9, MUSK: -0.5, SMOKE: -1.0, OIL: 0.15, BLOOD: -0.9},
 	},
 	# Grazer: it is the grass it is after.
 	"horse": {
-		"sensitivity": {SUGAR: 0.7, DECAY: 0.6, GREEN: 1.0, MUSK: 0.7, SMOKE: 0.9, OIL: 0.3},
-		"response": {SUGAR: 0.6, DECAY: -0.5, GREEN: 1.0, MUSK: -0.2, SMOKE: -1.0, OIL: 0.05},
+		"sensitivity": {SUGAR: 0.7, DECAY: 0.6, GREEN: 1.0, MUSK: 0.7, SMOKE: 0.9, OIL: 0.3, BLOOD: 0.9},
+		"response": {SUGAR: 0.6, DECAY: -0.5, GREEN: 1.0, MUSK: -0.2, SMOKE: -1.0, OIL: 0.05, BLOOD: -0.9},
 	},
 	# Fruit-eating bird: takes ripe fruit, ignores what has gone over.
 	"robin": {
-		"sensitivity": {SUGAR: 0.9, DECAY: 0.4, GREEN: 0.3, MUSK: 0.5, SMOKE: 0.7, OIL: 0.6},
-		"response": {SUGAR: 1.0, DECAY: -0.2, GREEN: 0.1, MUSK: -0.3, SMOKE: -0.8, OIL: 0.4},
+		"sensitivity": {SUGAR: 0.9, DECAY: 0.4, GREEN: 0.3, MUSK: 0.5, SMOKE: 0.7, OIL: 0.6, BLOOD: 0.4},
+		"response": {SUGAR: 1.0, DECAY: -0.2, GREEN: 0.1, MUSK: -0.3, SMOKE: -0.8, OIL: 0.4, BLOOD: 0.05},
 	},
 	# The one that wants what everything else avoids.
 	"fly": {
-		"sensitivity": {SUGAR: 0.5, DECAY: 1.0, GREEN: 0.1, MUSK: 0.6, SMOKE: 0.2, OIL: 0.4},
-		"response": {SUGAR: 0.3, DECAY: 1.0, GREEN: 0.0, MUSK: 0.2, SMOKE: -0.4, OIL: 0.1},
+		"sensitivity": {SUGAR: 0.5, DECAY: 1.0, GREEN: 0.1, MUSK: 0.6, SMOKE: 0.2, OIL: 0.4, BLOOD: 0.9},
+		"response": {SUGAR: 0.3, DECAY: 1.0, GREEN: 0.0, MUSK: 0.2, SMOKE: -0.4, OIL: 0.1, BLOOD: 0.9},
 	},
 }
 
@@ -118,44 +130,44 @@ const RECEPTORS := {
 const RECEPTORS_BY_DIET := {
 	# Eats foliage; keenly aware of anything that eats IT.
 	"Grazer": {
-		"sensitivity": {SUGAR: 0.7, DECAY: 0.6, GREEN: 1.0, MUSK: 0.9, SMOKE: 0.9, OIL: 0.3},
-		"response": {SUGAR: 0.6, DECAY: -0.5, GREEN: 1.0, MUSK: -0.6, SMOKE: -1.0, OIL: 0.05},
+		"sensitivity": {SUGAR: 0.7, DECAY: 0.6, GREEN: 1.0, MUSK: 0.9, SMOKE: 0.9, OIL: 0.3, BLOOD: 0.95},
+		"response": {SUGAR: 0.6, DECAY: -0.5, GREEN: 1.0, MUSK: -0.6, SMOKE: -1.0, OIL: 0.05, BLOOD: -0.9},
 	},
 	# Nuts, seeds and kernels -- the diet OIL exists for.
 	"Forager": {
-		"sensitivity": {SUGAR: 0.7, DECAY: 0.5, GREEN: 0.4, MUSK: 0.9, SMOKE: 0.8, OIL: 1.0},
-		"response": {SUGAR: 0.5, DECAY: -0.2, GREEN: 0.1, MUSK: -0.7, SMOKE: -0.9, OIL: 1.0},
+		"sensitivity": {SUGAR: 0.7, DECAY: 0.5, GREEN: 0.4, MUSK: 0.9, SMOKE: 0.8, OIL: 1.0, BLOOD: 0.8},
+		"response": {SUGAR: 0.5, DECAY: -0.2, GREEN: 0.1, MUSK: -0.7, SMOKE: -0.9, OIL: 1.0, BLOOD: -0.7},
 	},
 	# Takes what is going: fruit, mast, carrion, and the odd nest.
 	"Omnivore": {
-		"sensitivity": {SUGAR: 1.0, DECAY: 0.9, GREEN: 0.5, MUSK: 0.7, SMOKE: 0.8, OIL: 0.8},
-		"response": {SUGAR: 0.9, DECAY: 0.3, GREEN: 0.2, MUSK: 0.1, SMOKE: -0.9, OIL: 0.6},
+		"sensitivity": {SUGAR: 1.0, DECAY: 0.9, GREEN: 0.5, MUSK: 0.7, SMOKE: 0.8, OIL: 0.8, BLOOD: 0.85},
+		"response": {SUGAR: 0.9, DECAY: 0.3, GREEN: 0.2, MUSK: 0.1, SMOKE: -0.9, OIL: 0.6, BLOOD: 0.5},
 	},
 	# Follows other animals, not plants: musk is the signal, and a carcass
 	# still counts as a meal.
 	"Hunter": {
-		"sensitivity": {SUGAR: 0.3, DECAY: 0.9, GREEN: 0.2, MUSK: 1.0, SMOKE: 0.8, OIL: 0.6},
-		"response": {SUGAR: 0.05, DECAY: 0.5, GREEN: 0.0, MUSK: 0.9, SMOKE: -0.8, OIL: 0.3},
+		"sensitivity": {SUGAR: 0.3, DECAY: 0.9, GREEN: 0.2, MUSK: 1.0, SMOKE: 0.8, OIL: 0.6, BLOOD: 1.0},
+		"response": {SUGAR: 0.05, DECAY: 0.5, GREEN: 0.0, MUSK: 0.9, SMOKE: -0.8, OIL: 0.3, BLOOD: 1.0},
 	},
 	# A snake hunting mice: the same musk-led nose, dulled to everything
 	# vegetable, and far less troubled by smoke than a mammal is.
 	"Small-Prey Hunter": {
-		"sensitivity": {SUGAR: 0.15, DECAY: 0.7, GREEN: 0.1, MUSK: 1.0, SMOKE: 0.4, OIL: 0.4},
-		"response": {SUGAR: 0.0, DECAY: 0.2, GREEN: 0.0, MUSK: 0.9, SMOKE: -0.5, OIL: 0.1},
+		"sensitivity": {SUGAR: 0.15, DECAY: 0.7, GREEN: 0.1, MUSK: 1.0, SMOKE: 0.4, OIL: 0.4, BLOOD: 0.9},
+		"response": {SUGAR: 0.0, DECAY: 0.2, GREEN: 0.0, MUSK: 0.9, SMOKE: -0.5, OIL: 0.1, BLOOD: 0.8},
 	},
 	"Venomous Hunter": {
-		"sensitivity": {SUGAR: 0.15, DECAY: 0.7, GREEN: 0.1, MUSK: 1.0, SMOKE: 0.4, OIL: 0.4},
-		"response": {SUGAR: 0.0, DECAY: 0.2, GREEN: 0.0, MUSK: 0.9, SMOKE: -0.5, OIL: 0.1},
+		"sensitivity": {SUGAR: 0.15, DECAY: 0.7, GREEN: 0.1, MUSK: 1.0, SMOKE: 0.4, OIL: 0.4, BLOOD: 0.9},
+		"response": {SUGAR: 0.0, DECAY: 0.2, GREEN: 0.0, MUSK: 0.9, SMOKE: -0.5, OIL: 0.1, BLOOD: 0.8},
 	},
 	# Nothing hunts it, so nothing about the world reads as a warning -- not
 	# even fire. The one nose with no negative response to SMOKE at all.
 	"Apex Hunter": {
-		"sensitivity": {SUGAR: 0.2, DECAY: 0.8, GREEN: 0.2, MUSK: 1.0, SMOKE: 0.6, OIL: 0.5},
-		"response": {SUGAR: 0.0, DECAY: 0.4, GREEN: 0.0, MUSK: 1.0, SMOKE: 0.0, OIL: 0.2},
+		"sensitivity": {SUGAR: 0.2, DECAY: 0.8, GREEN: 0.2, MUSK: 1.0, SMOKE: 0.6, OIL: 0.5, BLOOD: 1.0},
+		"response": {SUGAR: 0.0, DECAY: 0.4, GREEN: 0.0, MUSK: 1.0, SMOKE: 0.0, OIL: 0.2, BLOOD: 1.0},
 	},
 	"Abyssal Hunter": {
-		"sensitivity": {SUGAR: 0.2, DECAY: 0.9, GREEN: 0.1, MUSK: 1.0, SMOKE: 0.1, OIL: 0.5},
-		"response": {SUGAR: 0.0, DECAY: 0.6, GREEN: 0.0, MUSK: 1.0, SMOKE: 0.0, OIL: 0.2},
+		"sensitivity": {SUGAR: 0.2, DECAY: 0.9, GREEN: 0.1, MUSK: 1.0, SMOKE: 0.1, OIL: 0.5, BLOOD: 1.0},
+		"response": {SUGAR: 0.0, DECAY: 0.6, GREEN: 0.0, MUSK: 1.0, SMOKE: 0.0, OIL: 0.2, BLOOD: 1.0},
 	},
 }
 

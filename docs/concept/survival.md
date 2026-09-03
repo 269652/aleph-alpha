@@ -120,7 +120,8 @@ Status:
 - 🚧 Weather/freezing movement slow; warmth bar in the HUD.
 - ⬜ Warmth as a distinct stacking debuff feeding a unified debuff model
   (`debuff_stack.gd` is built but not yet the survival backbone).
-- ⬜ Prolonged-cold sickness trigger (see Sickness & medicine below).
+- ✅ Prolonged-cold sickness trigger — `cold_exposure.gd`, see "The four
+  triggers" below. Cold now has a memory as well as a cost.
 
 ### Sickness & medicine
 
@@ -148,7 +149,9 @@ far, via `Player.apply_disease_bite`/`Sickness` (`src/gameplay/sickness.gd`)
 works, it just has one caller. The other three are that same model's
 remaining, previously-unspecified triggers, not a new sickness system:
 
-- **Open wounds, not just HP.** A hit above a real damage threshold — from
+- **Open wounds, not just HP.** ✅ **Built 2026-09-03**
+  (`src/gameplay/wound_model.gd`, `Player.step_wounds`,
+  `CreatureMarker.step_wounds`). A hit above a real damage threshold — from
   a creature's `_try_attack` (`CreatureMarker`) or a botched swing on
   `Player._butcher_step` — leaves a real, visible wound distinct from raw
   health loss: a `DebuffStack`-tracked bleed that drains a little extra
@@ -163,18 +166,57 @@ remaining, previously-unspecified triggers, not a new sickness system:
   one, not an invented game abstraction. A combat gash and a butchering cut
   become mechanically the same real thing, which is the honest answer to
   this project's own earlier open question about whether they should be.
-- **Prolonged cold, as a real duration clock.** The warmth meter above
-  already tracks `is_cold()`/`is_freezing()` from real ambient-temperature
-  data (`WeatherModel.warmth_factor` via `EarthChunkManager.ambient_warmth`)
-  and already accelerates fitness loss while cold — but nothing currently
-  reads that signal for sickness. This adds the missing piece: an
-  accumulating exposure timer that only advances while genuinely cold, and
-  crosses into a real, diagnosable hypothermia sickness (its own
-  shivering/fumbling symptom profile) once it runs out — not an instant
-  temperature threshold. Real grounding: clinical hypothermia staging is a
-  duration effect, not a pass/fail temperature check — the same reason real
-  wind-chill charts post "time to hypothermia" in minutes, distinct from
-  frostbite's separate, faster, extremity-specific mechanism.
+
+  As built, and two places it diverged from the text above. **The sepsis clock
+  is not the bleed clock.** A wound stops bleeding in minutes and stays *open*
+  for days, and it is the open wound rather than the bleeding one that gets
+  infected — so `Player.seconds_wounded` keeps running after the `DebuffStack`
+  entry has expired, and only `bandage_wounds()` clears it. Letting a wound
+  clot is therefore not the same as binding it, which is what makes carrying a
+  bandage worth doing; with the two clocks tied together a single wound could
+  never go septic at all, because `DURATION_SECONDS` is deliberately shorter
+  than `SECONDS_UNTIL_SEPSIS`. **And the same model runs on both sides**: a
+  struck animal carries the identical stacks, bleeds by the identical rule, and
+  is slowed by `WoundModel.speed_multiplier` at the same single movement choke
+  point the herd-disease slow uses — which is what makes tracking a wounded
+  animal worth doing (see [olfaction.md](olfaction.md)'s blood trail).
+
+  `wounds.gd` is **superseded** by this and remains uncalled. It predates the
+  spec, holds its own severity instead of riding the generic stack, and heals
+  itself five times faster than it bleeds — so a wound there lasted about two
+  seconds and cost about a fifth of a hit point. Left in place rather than
+  deleted (this repo is co-edited by concurrent sessions); removing it is a
+  tidy-up, not a behaviour change.
+- **Prolonged cold, as a real duration clock.** ✅ **Built 2026-09-03**
+  (`src/gameplay/cold_exposure.gd`, `Player.step_cold_exposure`). The warmth
+  meter above already tracked `is_cold()`/`is_freezing()` from real
+  ambient-temperature data (`WeatherModel.warmth_factor` via
+  `EarthChunkManager.ambient_warmth`) and already accelerated fitness loss
+  while cold — but nothing read that signal for sickness, so exposure had no
+  MEMORY: warm up, and the afternoon in the sleet never happened. `ColdExposure`
+  is the missing piece: an accumulating exposure clock that only advances while
+  genuinely cold, advances `FREEZING_MULTIPLIER` times faster while freezing,
+  and sheds at `RECOVERY_MULTIPLIER` of that rate while warm — below 1.0
+  deliberately, because rewarming a chilled body runs at roughly half the rate
+  cold strips heat from it, and that asymmetry is what gives the mechanic its
+  memory. Real grounding: clinical hypothermia staging is a duration effect,
+  not a pass/fail temperature check — the same reason real wind-chill charts
+  post "time to hypothermia" in minutes, distinct from frostbite's separate,
+  faster, extremity-specific mechanism.
+
+  Because it is staged, the risk is too. `RISK_THRESHOLD` is the mild/moderate
+  boundary: through the mild stage there is **no roll at all** — being chilly
+  is not a small chance of hypothermia, it is no chance of it — and past it the
+  exposure handed to `Sickness.infection_chance` *ramps*, so there is no single
+  instant at which the player becomes at risk and staying out is genuinely
+  worse than having just crossed the line. `SECONDS_TO_FULL_EXPOSURE` is not
+  eyeballed against "how long before this nags a player" (the two-clocks
+  mistake `SurvivalMeters`' own header documents) but bracketed as an ordering:
+  far inside `SurvivalMeters.SECONDS_TO_STARVE`, because you die of cold in
+  hours and of hunger in weeks, and still long enough to be weather you have to
+  sit in rather than weather you walk through. The roll reuses the exact call
+  the bite trigger already makes rather than inventing a second illness path,
+  and respects the same one-sickness-at-a-time contract.
 - **Dirty water, as a situational hazard, not a flat rule.** Every water
   tile is equally safe to drink from today. This makes SOME water actually
   dangerous: drinking near a [carcass](carrion.md) `disease.md`'s own
@@ -208,10 +250,17 @@ remaining, previously-unspecified triggers, not a new sickness system:
 
 Status:
 
-- ⬜ All four triggers above — design spec only, not yet implemented. The
-  underlying `Sickness`/`DiseaseModel`/`DebuffStack` machinery each trigger
-  reuses is real and already proven by the one trigger (creature bite)
-  `disease.md` wired up this pass.
+- ✅ **Prolonged cold** — `cold_exposure.gd` + `Player.step_cold_exposure`,
+  stepped every frame alongside `_sickness_step`. Hypothermia is reachable,
+  a mild chill never reaches it however long it goes on, and warming up in
+  time is a real escape rather than a delay.
+- ✅ **Open wounds** — `wound_model.gd`, wired on both sides
+  (`Player.take_damage`/`step_wounds`/`bandage_wounds`,
+  `CreatureMarker.take_damage`/`step_wounds`). Bleeds, slows, clots on its own,
+  and goes septic if left unbound.
+- ⬜ The other two triggers (dirty water, dietary resistance) — design spec
+  only. The underlying `Sickness`/`DiseaseModel`/`DebuffStack` machinery each
+  reuses is real and now proven by three triggers.
 
 ### Stamina scope: movement only, not combat
 

@@ -40,6 +40,7 @@ const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
 const AntTraffic = preload("res://src/gameplay/ant_traffic.gd")
+const BloodTrail = preload("res://src/gameplay/blood_trail.gd")
 const ProceduralAntMoundSprite = preload("res://src/rendering/procedural_ant_mound_sprite.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
@@ -5896,10 +5897,25 @@ func fruit_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 ## a thing to avoid for a deer.
 func smells_near(pixel_position: Vector2, radius_tiles: float) -> Array:
 	var out: Array = []
+	var radius_px := radius_tiles * TerrainRenderer.TILE_SIZE
+	# A wounded animal's trail (see drop_blood_at, and
+	# docs/concept/olfaction.md's blood section). Emitted here rather than
+	# through a second lookup, so anything that already reads this field reads
+	# the trail for free -- and ABOVE the ground-items guard below, because a
+	# trail is not an item: blood on the grass exists whether or not this world
+	# has anything lying on it.
+	for mark in _blood_marks:
+		var mark_position: Vector2 = mark["position"]
+		if mark_position.distance_to(pixel_position) > radius_px:
+			continue
+		out.append({
+			"position": mark_position,
+			"mixture": BloodTrail.mixture_for(BloodTrail.freshness_after(float(mark["age"]))),
+			"species": "",
+		})
 	if _ground_items == null:
 		return out
 	var season := current_season()
-	var radius_px := radius_tiles * TerrainRenderer.TILE_SIZE
 	# A player carrying something that has gone over smells of it, which is
 	# what lets flies follow them (see Inventory.rot_freshness).
 	for carrier in _scent_carriers:
@@ -6488,6 +6504,82 @@ func _guano_texture() -> ImageTexture:
 	image.set_pixel(2, 1, Color(0.88, 0.88, 0.84, 0.8))
 	_guano_cached = ImageTexture.create_from_image(image)
 	return _guano_cached
+
+
+## How many blood marks the world keeps at once (see drop_blood_at, and
+## docs/concept/olfaction.md's "Blood: the trail a wounded animal leaves").
+## Bounded like every other decoration, and for the same reason drop_guano_at
+## gives: scenery that accumulates forever is a leak with a sprite. Generous
+## against MAX_GUANO because a single wounded animal lays a whole line of these
+## and one trail must not be able to eat itself.
+const MAX_BLOOD_MARKS := 120
+
+## The marks themselves: {"position": Vector2, "age": float, "node": Node2D}.
+## Ordered oldest-first, so the cap drops the oldest and a fresh trail is never
+## eaten by a stale one.
+var _blood_marks: Array[Dictionary] = []
+var _blood_texture: ImageTexture = null
+
+
+## Leaves a drop of blood on the ground here.
+##
+## Visible AND smellable: the mark emits into the same `smells_near` field
+## baits and carried food already use (see BloodTrail.mixture_for), so a
+## predator's nose needs to be told nothing new about it.
+func drop_blood_at(pixel_position: Vector2) -> void:
+	while _blood_marks.size() >= MAX_BLOOD_MARKS:
+		var oldest: Dictionary = _blood_marks.pop_front()
+		var node = oldest.get("node")
+		if node != null and is_instance_valid(node):
+			node.queue_free()
+	var mark: Dictionary = {"position": pixel_position, "age": 0.0, "node": null}
+	if _ground_decor_parent != null:
+		var sprite := Sprite2D.new()
+		sprite.texture = _blood_texture_for()
+		sprite.position = pixel_position
+		# Flat on the ground, under everything standing on it -- a drop of
+		# blood is on the ground, not an object in the world.
+		_ground_decor_parent.add_child(sprite)
+		mark["node"] = sprite
+	_blood_marks.append(mark)
+
+
+## Ages every mark and drops the ones that have gone past following.
+func step_blood_marks(delta_seconds: float) -> void:
+	var kept: Array[Dictionary] = []
+	for mark in _blood_marks:
+		var aged: float = float(mark["age"]) + delta_seconds
+		if BloodTrail.freshness_after(aged) <= 0.0:
+			var node = mark.get("node")
+			if node != null and is_instance_valid(node):
+				node.queue_free()
+			continue
+		mark["age"] = aged
+		var node2 = mark.get("node")
+		if node2 != null and is_instance_valid(node2):
+			# Drying and soaking in: an old mark is fainter as well as
+			# smelling different.
+			node2.modulate.a = maxf(BloodTrail.freshness_after(aged), 0.25)
+		kept.append(mark)
+	_blood_marks = kept
+
+
+func blood_mark_count() -> int:
+	return _blood_marks.size()
+
+
+## Three dark-red pixels, the same shape and technique _guano_texture uses --
+## a drop of blood is the same scale of ground mark as a bird dropping.
+func _blood_texture_for() -> ImageTexture:
+	if _blood_texture != null:
+		return _blood_texture
+	var image := Image.create(3, 2, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	image.set_pixel(1, 0, Color(0.42, 0.05, 0.05, 0.95))
+	image.set_pixel(0, 1, Color(0.34, 0.04, 0.04, 0.85))
+	image.set_pixel(2, 1, Color(0.30, 0.03, 0.03, 0.8))
+	_blood_texture = ImageTexture.create_from_image(image)
+	return _blood_texture
 
 
 func plant_flower_at(pixel_position: Vector2, species: String) -> bool:

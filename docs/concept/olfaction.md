@@ -134,6 +134,52 @@ the one thing that decides the player's line — which side of the animal the
 wind is on — at the same fidelity `ScentField` chose for floral scent, and for
 the same reason.
 
+## Blood: the trail a wounded animal leaves
+
+Added 2026-09-03, and the counterpart to "The wind carries it" above: that
+section made the **player** smellable, this one makes a **wounded animal**
+smellable, and between them scent stops being only an input to foraging.
+
+**The problem it solves.** A struck animal runs. `FlightDistance` makes it run
+early and `AnimalAnatomy`'s own `world_scale` makes big animals fast, so a
+single hit that does not kill outright usually means the animal is simply gone
+— and the hunt ends not because the player failed but because the world stopped
+representing what happened. There was no third state between "dead" and
+"untouched".
+
+**What blood adds.** A wound bleeds, and bleeding leaves marks on the ground:
+
+- **`BLOOD` is a seventh molecule.** Real, and specifically the thing predators
+  actually track — mammalian blood scent is dominated by
+  *trans*-4,5-epoxy-(E)-2-decenal, a single aldehyde that carnivores respond to
+  on its own, which is why "the smell of blood" is a real behavioural trigger
+  rather than a figure of speech. It is nothing like `DECAY`: fresh blood and
+  carrion are different signals with different meanings, and collapsing them
+  would make a live wounded deer smell like a week-old carcass.
+- **A bleeding creature drops marks along the path it actually ran.** Not a
+  radius around where it was hit — the marks are where it *went*, which is what
+  makes them a trail rather than a stain. They are visible (dark, small,
+  ground-flush, bounded like guano) and they emit `BLOOD` into the same
+  `smells_near` field baits and carried food already use, so nothing new has to
+  be taught about them.
+- **The trail fades.** Marks thin and stop as the wound clots, and the world
+  drops the oldest once there are too many — so a trail is a *window*, not a
+  permanent map annotation. Following it is a thing you do now.
+
+**What it costs the animal.** A wounded animal moves slower, which is the
+mechanism that makes tracking worth doing: the trail is only useful because the
+thing at the end of it is catchable. Real — blood loss is a genuine
+performance cost long before it is fatal, and it is why a hunted animal is
+followed rather than outrun.
+
+**Who else reads it.** Nothing yet, deliberately, but the field is shared: a
+predator's receptors already have a `BLOOD` row, so a wolf drawn to another
+hunter's wounded deer is a consumer away rather than a system away.
+
+Cross-references [survival.md](survival.md)'s open-wound trigger, which is the
+same wound model seen from the player's side — a gash on a deer and a gash on
+the player are mechanically the same real thing.
+
 ## Status
 
 - ✅ Molecules, mixtures, and fruit's ripe-to-rotten shift
@@ -163,6 +209,13 @@ the same reason.
   told that.
 - ✅ **Musk: the player emits it** (`PLAYER_MIXTURE`), and the wind carries it
   (`WindScent`) — see "The wind carries it" above.
+- ✅ **`BLOOD` as a seventh molecule, and a wounded animal that leaves a trail
+  of it** — see "Blood: the trail a wounded animal leaves" above. A struck
+  animal bleeds, slows, and drops visible marks along the path it actually ran;
+  the marks emit into the same `smells_near` field baits already use, and fade
+  as the wound clots.
+- ⬜ Predators reading that blood field — the receptor row exists and the marks
+  are emitted; nothing hunts by them yet.
 - ⬜ Carrion and smoke emitting into the same field (a campfire that actually
   pushes animals off a meadow; a carcass that draws hunters). Both molecules
   and both receptor rows exist; nothing in the world emits either yet.

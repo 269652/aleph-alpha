@@ -33,6 +33,8 @@ const VenomModel = preload("res://src/gameplay/venom_model.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
 const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 const Sickness = preload("res://src/gameplay/sickness.gd")
+const ColdExposure = preload("res://src/gameplay/cold_exposure.gd")
+const WoundModel = preload("res://src/gameplay/wound_model.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const NpcGreeting = preload("res://src/world/npc_greeting.gd")
@@ -284,6 +286,17 @@ var active_venom_debuffs: Array = []
 var sickness_severity := 0.0
 var sickness_id := ""
 var sickness_diagnosed := false
+## Accumulated cold exposure in [0,1] (see ColdExposure, and
+## docs/concept/survival.md's "Prolonged cold, as a real duration clock").
+## Rises only while genuinely cold, falls more slowly while warm, and once it
+## is past ColdExposure.RISK_THRESHOLD it starts rolling for hypothermia.
+##
+## This is what gives cold a MEMORY. Warmth alone has none: warm up and the
+## afternoon in the sleet never happened.
+var cold_exposure := 0.0
+## Seconds since the last hypothermia roll -- a cadence, not a per-frame
+## probability (see ColdExposure.ROLL_INTERVAL_SECONDS).
+var _cold_roll_accumulator := 0.0
 var wallet := Wallet.new()
 ## How many number-key hotbar slots exist. World derives its HUD row's slot
 ## count from this (see World.HOTBAR_SLOT_COUNT), so the two can't drift.
@@ -875,10 +888,93 @@ func take_damage(amount: float) -> void:
 	# reduces a hit to nothing -- at least MIN_ARMORED_DAMAGE always lands.
 	if amount > 0.0:
 		amount = maxf(MIN_ARMORED_DAMAGE, amount - equipment.total_armor())
+	# A real blow -- after block, shield and armor have had their say, so what
+	# opens a wound is the damage that actually LANDS -- leaves a gash as well
+	# as taking health (see WoundModel, and docs/concept/survival.md's
+	# open-wound trigger).
+	if WoundModel.opens_a_wound(amount):
+		open_wound()
 	health = _health.take_damage(health, amount)
 	if _health.is_dead(health):
 		is_dead = true
 		modulate = DEAD_MODULATE
+
+
+# -- open wounds (docs/concept/survival.md, "The four triggers") --------------
+# The SAME model a struck deer carries (CreatureMarker.step_wounds): a gash on
+# the player and a gash on an animal are mechanically the same real thing,
+# which is the honest answer to this project's own earlier open question about
+# whether a combat gash and a butchering cut should be.
+
+## Open wounds, tracked in the generic DebuffStack the way venom already is --
+## deliberately NOT `wounds.gd`, which predates this spec, holds its own
+## severity rather than riding the stack, and heals itself five times faster
+## than it bleeds. Empty means unwounded.
+var active_wound_debuffs: Array = []
+## How long the player has been carrying an unbound wound. The sepsis clock:
+## an untreated wound is a real infection vector, and that is a DURATION rather
+## than an event (see WoundModel.infection_exposure).
+##
+## Deliberately NOT tied to whether the wound is still bleeding. A cut stops
+## bleeding in minutes and stays OPEN for days, and it is the open wound rather
+## than the bleeding one that gets infected -- so the bleed debuff expiring
+## does not stop this clock. Only binding it does, which is what makes carrying
+## a bandage worth doing (test_an_untreated_wound_eventually_goes_septic).
+var seconds_wounded := 0.0
+var _has_unbound_wound := false
+var _wound_roll_accumulator := 0.0
+
+
+func open_wound() -> void:
+	active_wound_debuffs = _debuff_stack.apply(
+		active_wound_debuffs, WoundModel.DEBUFF_ID, WoundModel.DURATION_SECONDS, WoundModel.MAX_STACKS
+	)
+	_has_unbound_wound = true
+
+
+func wound_stacks() -> int:
+	return _debuff_stack.stacks_of(active_wound_debuffs, WoundModel.DEBUFF_ID)
+
+
+## Binds every open wound and clears the sepsis clock with it -- so bandaging
+## really does take the infection risk away rather than only pausing it, which
+## is what makes it worth carrying a bandage.
+func bandage_wounds() -> void:
+	active_wound_debuffs = []
+	seconds_wounded = 0.0
+	_has_unbound_wound = false
+	_wound_roll_accumulator = 0.0
+
+
+## Authority-only: bleeds, clots, and rolls for sepsis on an unbound wound.
+##
+## Bleeding cannot kill by itself (it floors at WoundModel.BLEED_HEALTH_FLOOR),
+## the same "debuffs, not death" rule the pillar states for every other unmet
+## need -- what an untreated wound eventually does is make you ILL.
+func step_wounds(delta: float) -> void:
+	if not _has_unbound_wound:
+		return
+	var stacks := wound_stacks()
+	if stacks > 0:
+		health = maxf(
+			health - WoundModel.damage_per_second(stacks) * delta, WoundModel.BLEED_HEALTH_FLOOR
+		)
+		active_wound_debuffs = _debuff_stack.advance(active_wound_debuffs, delta)
+	# Runs whether or not it is still BLEEDING -- see seconds_wounded.
+	seconds_wounded += delta
+	var exposure := WoundModel.infection_exposure(seconds_wounded)
+	if exposure <= 0.0 or sickness_id != "":
+		return
+	_wound_roll_accumulator += delta
+	if _wound_roll_accumulator < ColdExposure.ROLL_INTERVAL_SECONDS:
+		return
+	_wound_roll_accumulator = 0.0
+	_disease_roll_count += 1
+	var chance := _sickness.infection_chance(exposure, _disease_resistance())
+	if _sickness.attempt_infect(chance, hash("%d_wound_sepsis" % _disease_roll_count)):
+		sickness_id = WoundModel.SICKNESS_ID
+		sickness_severity = 0.01
+		sickness_diagnosed = false
 
 
 ## Spends `amount` mana, all-or-nothing -- mirrors Wallet.spend's own "never
@@ -1553,6 +1649,42 @@ func _sickness_step(delta: float) -> void:
 	survival.spend_stamina(SICKNESS_STAMINA_DRAIN_PER_SECOND * sickness_severity * delta)
 
 
+## Authority-only: advances the prolonged-cold exposure clock and, once it is
+## far enough along, rolls for hypothermia (docs/concept/survival.md, "The four
+## triggers").
+##
+## The warmth meter and its is_cold()/is_freezing() staging have existed since
+## the meter was written, and cold has always accelerated fitness loss -- but
+## nothing read that signal for sickness, so exposure had no memory. This is
+## the missing consumer, and it deliberately reuses the exact call the bite
+## trigger already makes (Sickness.infection_chance -> attempt_infect) rather
+## than inventing a second illness path.
+func step_cold_exposure(delta: float) -> void:
+	cold_exposure = ColdExposure.advance(
+		cold_exposure, survival.is_cold(), survival.is_freezing(), delta
+	)
+	var exposure := ColdExposure.infection_exposure(cold_exposure)
+	if exposure <= 0.0:
+		_cold_roll_accumulator = 0.0
+		return
+	# One sickness at a time, the same single-instance contract
+	# apply_disease_bite respects -- but the clock keeps running, so stepping
+	# out of the cold is still what saves you.
+	if sickness_id != "":
+		return
+	_cold_roll_accumulator += delta
+	if _cold_roll_accumulator < ColdExposure.ROLL_INTERVAL_SECONDS:
+		return
+	_cold_roll_accumulator = 0.0
+	_disease_roll_count += 1
+	var chance := _sickness.infection_chance(exposure, _disease_resistance())
+	var seed_value := hash("%d_cold_exposure" % _disease_roll_count)
+	if _sickness.attempt_infect(chance, seed_value):
+		sickness_id = ColdExposure.SICKNESS_ID
+		sickness_severity = 0.01  # just chilled through -- _sickness_step ramps it
+		sickness_diagnosed = false
+
+
 ## Melee damage multiplier from an active "combat" category food buff (see
 ## FoodConsumption.FISH_BUFFS's legendary_fish entry) -- 1.0 (no change) when
 ## none is active.
@@ -1780,6 +1912,8 @@ func _authority_step(delta: float) -> void:
 	_lasso_step(delta)
 	_food_buff_step(delta)
 	_venom_step(delta)
+	step_cold_exposure(delta)
+	step_wounds(delta)
 	_sickness_step(delta)
 	_shop_step(delta)
 	_action_slots_step()

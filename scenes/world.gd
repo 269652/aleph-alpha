@@ -2577,6 +2577,10 @@ func _step_ecology_batch(delta: float, _focus_player: Player) -> void:
 	# grass/saplings the same way the mouse's/squirrel's own scatter-hoarding
 	# does.
 	_chunk_manager.step_ants(delta)
+	# Blood marks age out of being followable (see EarthChunkManager.
+	# drop_blood_at, docs/concept/olfaction.md's blood trail) -- a trail is a
+	# window, not a permanent annotation on the map.
+	_chunk_manager.step_blood_marks(delta)
 	_chunk_manager.step_flowers(delta)
 	# The sward between the tussocks (see GroundCover,
 	# docs/concept/ground_cover.md) -- grazing memory decays and the visible

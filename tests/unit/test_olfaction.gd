@@ -239,3 +239,44 @@ func test_the_player_smells_of_musk():
 ## whole reason a stalk has to be downwind.
 func test_a_grazer_is_repelled_by_the_players_smell():
 	assert_lt(Olfaction.attraction_to("sheep", Olfaction.player_mixture(), 1.0), 0.0)
+
+
+# -- blood: the trail a wounded animal leaves --------------------------------
+# See docs/concept/olfaction.md, "Blood: the trail a wounded animal leaves".
+
+
+## Blood is its OWN molecule, not a shade of decay. Real: mammalian blood
+## scent is dominated by one aldehyde (trans-4,5-epoxy-(E)-2-decenal) that
+## carnivores respond to on its own -- and a live wounded deer must not smell
+## like a week-old carcass, which is exactly what folding it into DECAY would
+## do.
+func test_blood_is_its_own_molecule():
+	assert_true(Olfaction.MOLECULES.has(Olfaction.BLOOD))
+	assert_ne(Olfaction.BLOOD, Olfaction.DECAY)
+
+
+## The whole point of separating them: something that wants fresh blood and
+## something that wants carrion are different animals, and the two smells have
+## to be able to disagree.
+func test_fresh_blood_and_carrion_are_read_differently():
+	var blood := {Olfaction.BLOOD: 1.0}
+	var carrion := {Olfaction.DECAY: 1.0}
+	var disagreement := 0
+	for species in ["deer", "fly", "wolf", "boar"]:
+		var to_blood := Olfaction.attraction_to(species, blood, 1.0)
+		var to_carrion := Olfaction.attraction_to(species, carrion, 1.0)
+		if absf(to_blood - to_carrion) > 0.1:
+			disagreement += 1
+	assert_gt(disagreement, 1, "blood and carrion read as the same smell to everything")
+
+
+## A prey animal is alarmed by blood -- it is the smell of what happens to
+## animals like it. Nothing about it should read as food.
+func test_blood_does_not_attract_a_grazer():
+	assert_lt(Olfaction.attraction_to("horse", {Olfaction.BLOOD: 1.0}, 1.0), 0.0)
+
+
+## ...and a predator is drawn to it, which is what makes the trail a shared
+## field rather than a private one for the player.
+func test_blood_draws_a_predator():
+	assert_gt(Olfaction.attraction_to("wolf", {Olfaction.BLOOD: 1.0}, 1.0), 0.0)

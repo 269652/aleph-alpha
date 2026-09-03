@@ -56,6 +56,8 @@ const AnimalFitness = preload("res://src/world/animal_fitness.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
+const WoundModel = preload("res://src/gameplay/wound_model.gd")
+const BloodTrail = preload("res://src/gameplay/blood_trail.gd")
 const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 
 ## Sun elevation in degrees, shared by every creature's shadow -- set once
@@ -714,6 +716,8 @@ func _process(frame_delta: float) -> void:
 	# disease above: an ignited/blighted creature keeps burning no matter
 	# what it's doing this frame (see docs/concept/spell_runtime.md).
 	_spell_status_step(delta)
+	# Bleeding, clotting, and laying the trail (see step_wounds).
+	step_wounds(delta)
 	if is_queued_for_deletion():
 		return  # an ignite/blight tick can kill too
 
@@ -1792,6 +1796,11 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	# this creature is CURRENTLY standing on, not a scan over any area, so
 	# this stays O(creatures) regardless of how many creatures are loaded.
 	speed *= _terrain_speed_multiplier(_current_tile())
+	# An open wound is a real performance cost long before it is fatal, which
+	# is why a hunted animal is followed rather than outrun (see WoundModel).
+	# Applied at the same single choke point the disease slow uses, so it
+	# covers every intent rather than only fleeing.
+	speed *= wound_speed_multiplier()
 	_facing_commit_remaining = maxf(0.0, _facing_commit_remaining - delta)
 	var position_before := position
 	if not _is_serpent():
@@ -2493,10 +2502,62 @@ func take_damage(amount: float) -> void:
 		if not _boss_aggro.deals_real_damage(amount, info.max_health):
 			return
 		info.is_aggroed = true
+	# A real blow opens a wound as well as taking health -- the slow threat
+	# layered on the acute one (see WoundModel, and docs/concept/olfaction.md's
+	# blood trail). Applied BEFORE the damage so a blow that kills outright
+	# does not also leave a phantom wound on a corpse.
+	if WoundModel.opens_a_wound(amount):
+		_open_wound()
 	info.health = _health.take_damage(info.health, amount)
 	_update_health_bar()
 	if _health.is_dead(info.health):
 		_die()
+
+
+# -- open wounds, and the trail they leave -----------------------------------
+# See docs/concept/olfaction.md's "Blood: the trail a wounded animal leaves"
+# and docs/concept/survival.md's open-wound trigger -- the SAME model from the
+# animal's side, because a gash on a deer and a gash on the player are
+# mechanically the same real thing.
+
+## Open wounds, tracked in the generic DebuffStack exactly the way venom and
+## spell statuses already are -- not a bespoke severity field. Empty means
+## unwounded.
+var active_wound_debuffs: Array = []
+var _blood_trail := BloodTrail.new()
+
+
+func _open_wound() -> void:
+	active_wound_debuffs = _debuff_stack.apply(
+		active_wound_debuffs, WoundModel.DEBUFF_ID, WoundModel.DURATION_SECONDS, WoundModel.MAX_STACKS
+	)
+
+
+func wound_stacks() -> int:
+	return _debuff_stack.stacks_of(active_wound_debuffs, WoundModel.DEBUFF_ID)
+
+
+## What this animal's wounds cost it in speed. The reason tracking a wounded
+## animal is worth doing at all: the thing at the end of the trail is
+## catchable.
+func wound_speed_multiplier() -> float:
+	return WoundModel.speed_multiplier(wound_stacks())
+
+
+## Bleeds, clots, and lays the trail. Bleeding deliberately cannot finish the
+## animal off by itself (it floors at a sliver of health): it is what lets you
+## catch the animal, not what kills it for you -- the same "debuffs, not death"
+## rule the player's own condition penalty follows.
+func step_wounds(delta: float) -> void:
+	var stacks := wound_stacks()
+	if stacks > 0 and info != null:
+		var bleed := WoundModel.damage_per_second(stacks) * delta
+		info.health = maxf(info.health - bleed, WoundModel.BLEED_HEALTH_FLOOR)
+		_update_health_bar()
+	if _world != null and _world.has_method("drop_blood_at"):
+		if _blood_trail.step(position, stacks, delta):
+			_world.drop_blood_at(position)
+	active_wound_debuffs = _debuff_stack.advance(active_wound_debuffs, delta)
 
 
 ## The `minor_heal`/`major_heal` atoms' shared target-side method (see
