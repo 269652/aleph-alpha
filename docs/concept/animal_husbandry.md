@@ -765,22 +765,27 @@ the `ORDER_*` cycle `Taming.next_order` already rotates (today a two-state
 flip between `ORDER_FOLLOW` and `ORDER_STAY`). The player selects the dog and
 presses the order key until it reads Guard; the dog holds the position it was
 standing on and `_will_fight` does the rest against anything that comes near.
-Guard is a *higher trust tier* than follow — see below — so it is something
+Guard is a *stricter tier* than follow — see below — so it is something
 earned rather than toggled. Driven by
 `test_a_guarding_dog_holds_its_post_while_a_following_one_leaves_it`,
 `test_a_guarding_dog_engages_what_a_staying_sheep_ignores`, and the regression
 guard the widened cycle needs,
 `test_the_order_cycle_returns_to_follow_after_guard`.
 
-**One loyalty scale, not two.** `src/gameplay/pet_loyalty.gd` is complete,
-tested, and has zero callers; it defines its own [0,1] scale with
+**One loyalty scale, not two — resolved.** `src/gameplay/pet_loyalty.gd` was
+complete, tested, and had zero callers; it defined its own [0,1] scale with
 `FOLLOW_THRESHOLD` 0.4 and `GUARD_THRESHOLD` 0.75, while `Taming.accepts_orders`
-has exactly one flat gate at `TAME_TRUST`. Wiring `pet_loyalty` would give kept
-animals two independent relationship numbers, which is precisely the parallel
-system this project's process rules forbid. **Taking its idea into `Taming` and
-retiring the file is [taming.md](taming.md)'s to specify** — it is a trust
-concern, and trust is that doc's. This doc only depends on the outcome: a
-tiered order gate exists, and Guard sits above Follow on it.
+has exactly one flat gate at `TAME_TRUST`. Wiring it in as-is would have given
+kept animals two independent relationship numbers, which is precisely the
+parallel system this project's process rules forbid, so it was folded and
+deleted instead. **[taming.md](taming.md) specified the resolution** — it was
+a trust concern, and trust is that doc's: guarding is gated by
+`Taming.accepts_guard_order(trust, kept_seconds)`, an axis orthogonal to trust
+(how long the animal has been kept) rather than a second point on the trust
+scale, since `accepts_orders` already sits at trust's own ceiling with no
+headroom left for a stricter trust gate. This doc only depended on the
+outcome and still does not re-specify it: a tiered order gate exists, and
+Guard sits above Follow on it.
 
 **Draught.** Hitch a horse or reindeer to a `FelledTree`
 (`src/rendering/felled_tree.gd`, already a real world entity) and it drags what
@@ -1059,8 +1064,9 @@ other docs and are listed only so an implementer knows what not to rewrite.
 - ⬜ Products: `milk` and `wool` items, `Husbandry.yield_fraction` **including
   its heritable term**, the hold-to-milk/shear act, fleece regrowth, the season
   gate.
-- ⬜ `dog` species entry; `ORDER_GUARD` as a third order. (Tiered trust gates
-  and retiring `pet_loyalty.gd` are [taming.md](taming.md)'s.)
+- ⬜ `dog` species entry; `ORDER_GUARD` as a third order. (The tiered order
+  gate and retiring `pet_loyalty.gd` are [taming.md](taming.md)'s — both done;
+  `Taming.accepts_guard_order` is what `ORDER_GUARD` should read.)
 - ⬜ Draught hitching to `FelledTree`; pack `Inventory`; the call/whistle
   action.
 - ⬜ Animal Handling tiers as an information ladder, with Expert reading

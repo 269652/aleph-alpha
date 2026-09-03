@@ -198,6 +198,38 @@ func test_a_tamed_animal_takes_orders():
 	assert_true(Taming.accepts_orders(Taming.TAME_TRUST))
 
 
+## Guarding is PetLoyalty's one idea this repo kept (docs/concept/taming.md
+## "Retiring pet_loyalty.gd"): fighting for an owner should need more than
+## merely following them. Trust itself has no headroom for a second, stricter
+## gate -- accepts_orders already sits at TAME_TRUST, trust's own ceiling
+## (test_trust_never_climbs_past_tame) -- so guarding is gated on an
+## orthogonal measure, how long the animal has been kept, instead of a second
+## point on the trust scale.
+func test_guarding_needs_more_than_bare_taming():
+	var trust := Taming.TAME_TRUST
+	assert_true(Taming.accepts_orders(trust), "bare taming already accepts FOLLOW/STAY")
+	assert_false(Taming.accepts_guard_order(trust, 0.0), "but not GUARD the instant it happens")
+	assert_true(
+		Taming.accepts_guard_order(trust, Taming.GUARD_KEPT_SECONDS),
+		"GUARD unlocks once kept long enough"
+	)
+
+
+## The trust gate still applies on top of kept time -- an animal that has
+## fallen back below TAME_TRUST (neglect, see test_a_neglected_animal_loses_trust)
+## never guards no matter how long ago it was first caught.
+func test_guarding_is_never_available_below_full_trust_no_matter_how_long_kept():
+	var trust := Taming.TAME_TRUST * 0.9
+	assert_false(Taming.accepts_guard_order(trust, Taming.GUARD_KEPT_SECONDS * 100.0))
+
+
+## Not eyeballed: a single forgotten afternoon must never retroactively make
+## an animal guard-worthy, so the threshold is derived from NEGLECT_SECONDS
+## rather than picked as a bare literal.
+func test_guard_kept_seconds_is_several_neglect_periods():
+	assert_gt(Taming.GUARD_KEPT_SECONDS, Taming.NEGLECT_SECONDS)
+
+
 ## Only animals that could plausibly carry a person are mounts. A tamed boar
 ## follows and stays; it is not a horse.
 func test_only_a_ridable_species_can_be_mounted():
