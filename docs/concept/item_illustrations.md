@@ -153,16 +153,69 @@ one — mirrors `IllustratedStoneSprite`/`IllustratedTerrainSprite`'s existing
   are ready now ([ai_sprite_prompts.md §10](../art/ai_sprite_prompts.md#10-placed-structures--seeded-variant-grids-2026-09-03));
   wiring is the follow-up once real art lands.
 
-### Deferred: per-item use/swing art
+### Combat sheets: attack, defense, condition — wooden_club
 
-Out of scope for this pass. `WeaponSwing`/`ToolSlot`'s existing procedural
-rotation (a 60°-either-side pendulum over 0.2s) stays the swing for every
-weapon and tool, mundane or magical, including a spell cast — see magic.md
-below — and the new armor slots don't swing at all. Real per-frame swing art
-(matching the boss-ability grid convention in
-`docs/art/ai_sprite_prompts.md` §6) is a plausible later upgrade for
-signature/legendary weapons specifically, not the whole catalog, and isn't
-needed to ship `sprite_id` or armor visuals.
+A real defense mechanic (`block.gd`'s weapon-dependent damage reduction) and
+a real condition mechanic ([item_durability.md](item_durability.md)'s
+`pristine`/`worn`/`broken`) both exist now, which the "Deferred" section
+below did not have to draw on when it first ruled per-item swing art out.
+This section is the concrete pilot for drawing them — `wooden_club`
+specifically, the only item this spec authors art for, proving the sheet
+shape before `iron_sword`/`crude_blade` (the only other items
+item_durability.md currently covers) or the rest of the catalog follow it.
+
+**Four surfaces, not the full action × condition cross-product:**
+
+| Surface | Shows | Frames |
+|---|---|---|
+| Attack | The club alone, mid-swing | 8, one row (wind-up 1-3, release 4-5, recovery 6-8) — the same beat `ai_sprite_prompts.md` §6's boss attack-cycle addendum already uses, scaled down for a hand-sized object. |
+| Defense | The club alone, held in a guard pose | 1, static — `is_blocking()` is a held LEVEL, not a momentary swing (see `Player.MOMENTARY_ACTIONS`' own block-is-polled-not-latched note), so a single pose is the right resolution, not a cycle. |
+| Worn | The club alone, showing accumulated wear | 1, static. |
+| Broken | The club alone, actually broken | 1, static. |
+
+**Not built**: worn/broken variants of the attack cycle or the defense pose
+— a worn club still swings using the pristine attack frames. 11 cells covers
+this pilot; 11 × 3 full condition-variant coverage is a natural, explicitly
+named future refinement, not attempted here.
+
+Every frame draws the **item alone, no hand or arm** — the same convention
+`ai_sprite_prompts.md` §2f's held-crop item prompts already establish
+("produces the ITEM only... the engine layers this over the existing player
+sprite"), for the same reason: the rig is front-canonical only, and a
+per-item swing has to compose onto whatever facing/pose the character is
+already in rather than bring its own character art.
+
+**Sheet layout** — one file, two rows, mirroring `sheep.png`/`wolf.png`'s
+existing two-action-one-file shape (a walk row + an eat row, each its own
+measured Y-band):
+
+- Row 1 — attack, 8 frames.
+- Row 2 — 3 cells, fixed order: defense, worn, broken.
+
+Registered the same shape `illustrated_animal_sprite.gd`'s `_SHEETS` dict
+already uses: `attack_bands`/`attack_path` for row 1 (mirroring
+`eat_bands`/`eat_path` on deer/boar), a new `condition_bands`/
+`condition_path` pair for row 2, with a fixed-position read (defense = index
+0, worn = 1, broken = 2) rather than a second lookup table.
+
+**Wiring**: a new `IllustratedItemSprite` (mirrors `IllustratedAnimalSprite`'s
+shape, not a reuse of it directly — an item has no gait/facing axis to
+carry). `Player` already computes both real inputs this needs:
+`equipped_item` itself (what `_wear_equipped_item` mutates) and
+`ItemWear.condition_for(equipped_item.wear, material)`; `is_blocking()` and
+`_character_view.play_attack_swing` already mark the two action states. Not
+built in this pass — the same "needs real source pixels for a meaningful
+test" reason every other pending illustrated surface in this doc gives.
+
+### Deferred: per-item use/swing art, catalog-wide
+
+Still out of scope for the **catalog as a whole**: `WeaponSwing`/`ToolSlot`'s
+existing procedural rotation (a 60°-either-side pendulum over 0.2s) stays
+the swing for every weapon and tool that hasn't opted in, mundane or
+magical, including a spell cast — see magic.md below — and the new armor
+slots don't swing at all. `wooden_club` above is the one exception, not a
+reversal of this: real per-frame swing art for the rest of the catalog is
+still a plausible later upgrade, not something this pass commits to.
 
 ### Attack effects live in magic.md, not here
 
