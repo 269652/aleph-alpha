@@ -409,10 +409,13 @@ void fragment() {
 	// motion.
 	float shade = depth_frac;
 
-	// Classic ordered dither: the checkerboard's other phase shifts the
-	// quantization threshold half a step, so band boundaries interleave in
-	// a 2x2 weave -- the 16-bit way to suggest a gradient with flat inks.
-	float checker = mod(floor(wp.x / pixel_snap) + floor(wp.y / pixel_snap), 2.0);
+	// Dither: a WORLD-ANCHORED per-art-pixel hash shifts the quantization
+	// threshold, so band boundaries dissolve into grain. This replaced the
+	// classic 2x2 checkerboard: on a DIAGONAL depth gradient (every bend
+	// of an emergent river) the checker's phases lined up into vertical
+	// dashes across the whole dither band, read in play as a sawtooth on
+	// every stroke. A hash has no lattice to line up with.
+	float checker = value_hash(floor(wp / pixel_snap));
 	float level = clamp(
 		floor(shade * cel_levels + (checker - 0.5) * dither_strength),
 		0.0, cel_levels - 1.0

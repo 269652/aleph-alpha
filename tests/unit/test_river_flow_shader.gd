@@ -623,19 +623,26 @@ func test_the_cel_quantizer_yields_exactly_the_palette_levels():
 	assert_eq(seen.size(), RiverFlowShader.CEL_LEVELS)
 
 
-## Classic 16-bit ordered dither: on the checkerboard's other phase the
-## quantization threshold shifts, so band boundaries interleave in a 2x2
-## weave instead of cutting hard.
-func test_band_boundaries_are_ordered_dithered():
+## Dither: the quantization threshold shifts per art pixel, so band
+## boundaries dissolve into grain instead of cutting hard. The phase is a
+## world-anchored HASH of the snapped pixel, not the 2x2 checkerboard it
+## used to be: on a diagonal depth gradient the checker's phases lined up
+## into vertical dashes across the whole dither band (playtest: "the
+## sawtooth is clearly there"), and a hash has no lattice to line up with.
+func test_band_boundaries_are_dithered_by_a_pixel_hash():
 	var moved := 0
 	for step in 400:
 		var shade := float(step) / 399.0
 		if RiverFlowShader.cel_level(shade, 0.0) != RiverFlowShader.cel_level(shade, 1.0):
 			moved += 1
-	assert_gt(moved, 20, "the checker phase moves almost no boundaries -- no dither weave")
+	assert_gt(moved, 20, "the phase extremes move almost no boundaries -- no dither")
 	assert_true(
+		RiverFlowShader.SHADER_CODE.contains("float checker = value_hash(floor(wp / pixel_snap));"),
+		"the shader must derive the dither phase from a hash of the snapped pixel"
+	)
+	assert_false(
 		RiverFlowShader.SHADER_CODE.contains("mod(floor(wp.x / pixel_snap) + floor(wp.y / pixel_snap), 2.0)"),
-		"the shader must derive the dither phase from the snapped pixel grid"
+		"the checkerboard is gone"
 	)
 
 
