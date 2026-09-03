@@ -190,6 +190,17 @@ func test_channel_geometry_reports_distance_side_and_downstream_bearing():
 	assert_gt(east["discharge"], 0.0)
 
 
+func test_signed_across_has_the_true_distance_as_its_magnitude_everywhere():
+	# Along a curve, |signed across| must equal the distance at every tile
+	# -- the cross product alone undershoots near joints (the sawtooth).
+	for y in range(6, 30):
+		for x in [33, 34, 36, 37]:
+			var geometry: Dictionary = field.nearest_channel_geometry(x, y)
+			if geometry.is_empty():
+				continue
+			assert_almost_eq(absf(geometry["signed_across_tiles"]), geometry["distance_tiles"], 1e-6)
+
+
 func test_channel_geometry_is_empty_away_from_any_channel():
 	assert_true(field.nearest_channel_geometry(65, 45).is_empty())
 

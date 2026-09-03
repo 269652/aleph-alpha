@@ -378,9 +378,16 @@ func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
 		return {}
 	var tangent: Vector2 = channel["tangent"]
 	var point := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
+	# The MAGNITUDE is the true distance to the curve; only the SIDE comes
+	# from the cross product. The cross product alone equals the distance
+	# only where the tile sits exactly perpendicular to a piece; near every
+	# joint it undershoots, and with joints under a tile apart that aliased
+	# into a one-tile sawtooth on every stroke (third playtest).
+	var side := tangent.cross(point - channel["closest"])
+	var distance: float = channel["distance_tiles"]
 	return {
-		"distance_tiles": channel["distance_tiles"],
-		"signed_across_tiles": tangent.cross(point - channel["closest"]),
+		"distance_tiles": distance,
+		"signed_across_tiles": distance if side >= 0.0 else -distance,
 		"course_bearing_deg": RiverCatalog.bearing_degrees(tangent),
 		"discharge": channel["discharge"],
 		"half_width_tiles": channel["half_width_tiles"],
@@ -393,6 +400,23 @@ func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
 ## bank terms (distance minus local half-width) so a big river's valley
 ## wins over a tributary's beside it.
 func _nearest_channel(global_x: int, global_y: int) -> Dictionary:
+	# Asked twice per tile (the probe, then the painter's geometry), so
+	# the answer is kept per tile.
+	var key := Vector2i(global_x, global_y)
+	var cached = _channel_cache.get(key)
+	if cached != null:
+		return cached
+	if _channel_cache.size() >= CURVE_CACHE_CAP:
+		_channel_cache.clear()
+	var answer := _nearest_channel_uncached(global_x, global_y)
+	_channel_cache[key] = answer
+	return answer
+
+
+var _channel_cache: Dictionary = {}
+
+
+func _nearest_channel_uncached(global_x: int, global_y: int) -> Dictionary:
 	var tile_center := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
 	var pixel := pixel_of_tile(global_x, global_y)
 	var pixel_x := floori(pixel.x)
@@ -503,6 +527,19 @@ func _cached_curve(cell: int) -> Dictionary:
 	if _curve_cache.size() >= CURVE_CACHE_CAP:
 		_curve_cache.clear()
 	var curve := _curve_for_cell(cell, _center_of(cell))
+	# The curve's bounding box, grown by the farthest any tile can be
+	# affected (valley shoulder plus the widest half-width): a tile outside
+	# it skips the segment loop entirely, which most of a tile's nine
+	# neighbouring cells do.
+	var points: PackedVector2Array = curve["points"]
+	var low := points[0]
+	var high := points[0]
+	for point in points:
+		low = Vector2(minf(low.x, point.x), minf(low.y, point.y))
+		high = Vector2(maxf(high.x, point.x), maxf(high.y, point.y))
+	var reach := VALLEY_HALF_WIDTH_TILES + MAX_WIDTH_TILES / 2.0 + 1.0
+	curve["low"] = low - Vector2(reach, reach)
+	curve["high"] = high + Vector2(reach, reach)
 	_curve_cache[cell] = curve
 	return curve
 
@@ -521,6 +558,10 @@ func _nearest_on_curve(point: Vector2, cell: int) -> Dictionary:
 	var best := {
 		"distance": INF, "closest": points[0] - shift, "tangent": Vector2(0.0, -1.0), "half_width": half_widths[0]
 	}
+	var low: Vector2 = curve["low"]
+	var high: Vector2 = curve["high"]
+	if local.x < low.x or local.y < low.y or local.x > high.x or local.y > high.y:
+		return best
 	for i in points.size() - 1:
 		var a := points[i]
 		var b := points[i + 1]

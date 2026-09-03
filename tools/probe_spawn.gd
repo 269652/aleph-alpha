@@ -32,6 +32,20 @@ func _initialize() -> void:
 		nearest.name, nearest.distance_tiles, nearest.course_bearing_deg, nearest.signed_across_tiles
 	])
 	print("hydraulics: %s" % generator.river_hydraulics_at_global(spawn.x, spawn.y))
+	# How long one streamed chunk costs to generate here, cold and warm.
+	var chunk_coord := Vector2i(floori(float(spawn.x) / 32.0), floori(float(spawn.y) / 32.0))
+	var started := Time.get_ticks_usec()
+	generator.generate_chunk(chunk_coord, 32)
+	var cold_ms := (Time.get_ticks_usec() - started) / 1000.0
+	started = Time.get_ticks_usec()
+	generator.generate_chunk(chunk_coord, 32)
+	var warm_ms := (Time.get_ticks_usec() - started) / 1000.0
+	started = Time.get_ticks_usec()
+	generator.set_hydrology(null)
+	generator.generate_chunk(chunk_coord, 32)
+	var bare_ms := (Time.get_ticks_usec() - started) / 1000.0
+	generator.set_hydrology(generator._shared_hydrology_field())
+	print("generate_chunk 32x32 at spawn: %.0f ms cold, %.0f ms memoized, %.0f ms without hydrology" % [cold_ms, warm_ms, bare_ms])
 	# World._find_dry_land_spawn, emulated on the generator alone: the same
 	# expanding-square scan, the same three rejections.
 	var found := spawn
