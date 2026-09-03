@@ -2,19 +2,18 @@ extends GutTest
 
 ## Where a fresh single-player game (and a fresh multiplayer host) starts.
 ##
-## Real-world Freiburg im Breisgau, Germany -- the Gaskugel landmark on the
-## Dreisam, in the Betzenhausen district (48.007669N, 7.805657E; see
-## Wikimedia Commons' geo-tag on Category:Gaskugel_(Freiburg_im_Breisgau)
-## and OpenStreetMap/Nominatim, which agree to within a few metres).
-## Previously Berlin (52.52N, 13.405E) -- moved 2026-08-29. Nothing else
-## reads these two numbers except World._compute_dry_land_spawn_tile(), so
-## this is the one place that needed to change; see the many test files
-## that preload("res://scenes/world.gd") as `World` and separately hardcode
-## the literal 52.52/13.405 (test_earth_chunk_manager.gd,
-## test_world_ecology_batch_wild_crops.gd) -- those exercise generic
-## chunk-loading/fish/flyer/tree mechanics against Berlin as a known-good
-## REFERENCE chunk, independent of wherever the live spawn constant points,
-## and are deliberately left alone here.
+## The Loire at Nantes (47.2031N, 1.5469W): an EMERGENT river -- a channel
+## of the baked drainage network (docs/concept/hydrology.md), not a curated
+## RiverCatalog course. Chosen from tools/probe_hydrology.gd's output on
+## 2026-09-03: the strongest baked channel in western France more than 400
+## tiles from every curated river, at the asset cell whose centre the
+## channel's centreline passes through. Previously the Freiburg Gaskugel
+## on the curated Dreisam (48.007669N, 7.805657E, 2026-08-29) and before
+## that Berlin (52.52N, 13.405E). Nothing else reads these two numbers
+## except World._compute_dry_land_spawn_tile(); the test files that
+## hardcode the literal 52.52/13.405 (test_earth_chunk_manager.gd,
+## test_world_ecology_batch_wild_crops.gd) use Berlin as a known-good
+## REFERENCE chunk independent of the live spawn and are left alone.
 
 const World = preload("res://scenes/world.gd")
 const EarthElevationSource = preload("res://src/world/earth_elevation_source.gd")
@@ -24,9 +23,26 @@ const ClimateModel = preload("res://src/world/climate_model.gd")
 const GeoCoordinates = preload("res://src/world/geo_coordinates.gd")
 
 
-func test_spawn_is_the_freiburg_gaskugel_on_the_dreisam():
-	assert_almost_eq(World.SPAWN_LATITUDE, 48.007669, 0.0001)
-	assert_almost_eq(World.SPAWN_LONGITUDE, 7.805657, 0.0001)
+func test_spawn_is_the_loire_at_nantes():
+	assert_almost_eq(World.SPAWN_LATITUDE, 47.2031, 0.0001)
+	assert_almost_eq(World.SPAWN_LONGITUDE, -1.5469, 0.0001)
+
+
+## The spawn is on an EMERGENT river: a baked hydrology channel, which the
+## generator reports as a river with an empty name (no curated course
+## anywhere near it), fed by the shipped bake in assets/data/hydrology.
+func test_spawn_is_on_an_emergent_river_not_a_curated_one():
+	var generator := EarthChunkGenerator.new()
+	assert_true(generator.has_hydrology(), "the shipped bake must load")
+	var geo := GeoCoordinates.new()
+	var spawn_tile := geo.tile_for_coordinate(
+		World.SPAWN_LATITUDE, World.SPAWN_LONGITUDE,
+		EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
+	)
+	assert_true(generator.is_river_at_global(spawn_tile.x, spawn_tile.y))
+	var nearest := generator.nearest_river_at(spawn_tile.x, spawn_tile.y)
+	assert_eq(nearest.name, "", "no curated river reaches Nantes")
+	assert_gt(generator.river_depth_meters_at_global(spawn_tile.x, spawn_tile.y), 0.0)
 
 
 ## A factual check against the real bundled elevation data (assets/data/
@@ -60,11 +76,10 @@ func test_spawn_climate_is_at_least_as_warm_as_the_old_berlin_spawn():
 	assert_gt(temperature, OLD_BERLIN_CLIMATE)
 
 
-## Real integration check (docs/concept/rivers.md): the spawn point sits
-## exactly ON the Dreisam's own curated course -- it's one of RiverCatalog's
-## own Dreisam waypoints, the whole reason this location was picked. A
-## dry-land search that didn't know about rivers would happily accept the
-## literal spawn tile even though it's the middle of the river; the fixed
+## Real integration check (docs/concept/rivers.md, hydrology.md): the spawn
+## point sits ON the Loire's baked channel -- the whole reason this location
+## was picked. A dry-land search that didn't know about rivers would happily
+## accept the literal spawn tile even though it's the middle of the river;
 ## _find_dry_land_spawn must search past it to real dry land instead.
 ##
 ## Not add_child()'d, same convention test_world_streaming_budget.gd/
@@ -89,12 +104,12 @@ func test_find_dry_land_spawn_does_not_land_in_the_river_at_the_spawn_point():
 	)
 	manager.update(spawn_tile)
 
-	# Sanity: the literal spawn tile really is on the curated Dreisam course
+	# Sanity: the literal spawn tile really is on the Loire's baked channel
 	# (the whole premise of this test) -- if this ever stops being true the
 	# test itself needs re-examining, not just the fix it's checking.
 	assert_true(
 		manager.is_river_at_global(spawn_tile.x, spawn_tile.y),
-		"expected the raw spawn tile to be on the Dreisam's own curated course"
+		"expected the raw spawn tile to be on the Loire's emergent channel"
 	)
 
 	var result := world._find_dry_land_spawn(spawn_tile)
