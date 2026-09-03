@@ -268,3 +268,84 @@ func test_a_working_hunter_gathers_real_food_through_process():
 
 	assert_gt(market.total_stock(), 0.0)
 	assert_gt(marker.economy.wallet.balance, 0)
+
+
+# -- instruction scripts (docs/concept/npc_instructions.md "Execution /
+# wiring"): NpcMarker.instruction_script, when assigned, overrides the
+# planner-produced schedule entry for this tick -- via
+# NpcInstructionEvaluator.evaluate -- falling back to the ordinary
+# NpcSchedule.current_entry path when unset, or when the evaluator finds no
+# matching rule that tick. --
+
+const NpcInstructionParser = preload("res://src/world/npc_instruction_parser.gd")
+
+
+func _instruction_ast(source: String) -> Dictionary:
+	var parser := NpcInstructionParser.new()
+	var result: Dictionary = parser.parse(source)
+	assert_true(result["ok"], "expected parse to succeed, errors: %s" % [result["errors"]])
+	return result["ast"]
+
+
+func test_default_instruction_script_is_null():
+	assert_null(marker.instruction_script)
+
+
+## Regression: an NPC with no instruction_script assigned must walk the
+## planner-produced entry exactly as before this change -- the same
+## landmark-resolution behavior test_resolves_a_landmark_tag_to_the_shared_
+## landmark_position already pins, just re-asserted here alongside the new
+## instruction-script tests as the explicit "untouched" proof.
+func test_no_instruction_script_walks_the_planner_entry_unchanged():
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+
+
+func test_instruction_script_overrides_the_planner_entry_when_a_rule_matches():
+	marker.instruction_script = _instruction_ast(
+		"instruct \"X\" {\n"
+		+ "    otherwise: haul(wood, well)\n"
+		+ "}"
+	)
+	# The planner would send this NPC to "stall"; the instruction script's
+	# unconditional otherwise rule must win instead, sending it to "well".
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["well"]), 1.0)
+	assert_gt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)
+
+
+func test_instruction_script_falls_back_to_the_planner_entry_when_no_rule_matches():
+	marker.instruction_script = _instruction_ast(
+		"instruct \"X\" {\n"
+		+ "    if inventory_at_least(wood, 999): haul(wood, well)\n"
+		+ "}"
+	)
+	# No otherwise, and the lone condition never holds (the built frame's
+	# inventory is always empty) -- the evaluator returns null every tick, so
+	# the planner's own "stall" entry must still win.
+	marker.schedule = [
+		{"time_block": "morning", "location_tag": "stall", "activity": "work"},
+		{"time_block": "midday", "location_tag": "stall", "activity": "work"},
+		{"time_block": "evening", "location_tag": "stall", "activity": "work"},
+		{"time_block": "night", "location_tag": "stall", "activity": "work"},
+	]
+	marker.position = Vector2(0, 0)
+	for i in 200:
+		marker._process(1.0)
+	assert_lt(marker.position.distance_to(marker.landmarks["stall"]), 1.0)

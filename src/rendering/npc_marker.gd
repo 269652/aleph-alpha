@@ -12,6 +12,7 @@ const NpcIdentity = preload("res://src/world/npc_identity.gd")
 const NpcPlanner = preload("res://src/world/npc_planner.gd")
 const NpcSchedule = preload("res://src/world/npc_schedule.gd")
 const NpcEconomy = preload("res://src/world/npc_economy.gd")
+const NpcInstructionEvaluator = preload("res://src/world/npc_instruction_evaluator.gd")
 const CharacterView = preload("res://scenes/character_view.gd")
 const CreaturePerception = preload("res://src/gameplay/creature_perception.gd")
 
@@ -54,6 +55,15 @@ var _perception := CreaturePerception.new()
 ## rather than crashing.
 var economy: NpcEconomy = null
 
+## An optional standing instruction script (docs/concept/
+## npc_instructions.md, "Execution / wiring") -- null for every NPC by
+## default, parallel to `economy`'s own null-checked pattern above, so a
+## marker with no assigned instruction is byte-for-byte unaffected. When
+## set, holds the parsed AST Dictionary NpcInstructionParser.parse(source)
+## ["ast"] produces ({"kind": "instruct", "rules": [...]}) -- the same shape
+## NpcInstructionEvaluator.evaluate consumes directly.
+var instruction_script = null
+
 
 ## Swaps in a different planner (e.g. a future real LLM-backed one) -- see
 ## NpcPlanner.Planner. Defaults to the deterministic FakeNpcPlanner.
@@ -81,6 +91,10 @@ func _process(delta: float) -> void:
 		schedule = _planner.plan_day(identity, _day_index)
 
 	var entry := NpcSchedule.current_entry(schedule, _current_hour())
+	if instruction_script != null:
+		var action: Variant = NpcInstructionEvaluator.evaluate(instruction_script, _instruction_frame())
+		if action != null:
+			entry = _entry_for_instructed_action(action)
 	var target := _resolve_location(entry.get("location_tag", "home"))
 	var before := position
 	position = position.move_toward(target, WALK_SPEED * delta)
@@ -121,6 +135,38 @@ func _is_in_water() -> bool:
 func _current_hour() -> int:
 	var day_fraction := fmod(_elapsed_time / SECONDS_PER_SIMULATED_DAY, 1.0)
 	return int(day_fraction * 24.0)
+
+
+## Builds the flat context Dictionary NpcInstructionEvaluator's condition
+## primitives read (docs/concept/npc_instructions.md, "Execution / wiring":
+## "context is a flat Dictionary ... nothing that isn't already live
+## state") -- currently just this NPC's own hunger need, the one live need
+## signal NpcMarker already carries via `economy`. `inventory` stays empty
+## (the primitives' own fail-open/empty-is-not-an-error convention, see
+## npc_instruction_primitives.gd) until a real per-NPC/household inventory
+## exists -- out of this step's scope.
+func _instruction_frame() -> Dictionary:
+	var needs := {}
+	if economy != null:
+		needs["hunger"] = economy.needs.hunger
+	return {"inventory": {}, "needs": needs}
+
+
+## Adapts an instruction action descriptor (NpcInstructionPrimitives' own
+## {"fn": "haul"/"gather", ...} shape) into the same {location_tag, activity}
+## shape an ordinary schedule entry already has, reusing _resolve_location's
+## existing tag lookup (home/landmark/workspot fallback) rather than a new
+## spatial-query layer -- the real nearest-X spatial query
+## npc_instruction_effects.gd will eventually use is a later step (docs/
+## concept/npc_instructions.md, "Execution / wiring"). Both v1 actions read
+## as "work" for the economy step underneath, same as any other work entry.
+func _entry_for_instructed_action(action: Dictionary) -> Dictionary:
+	match action.get("fn", ""):
+		"haul":
+			return {"location_tag": action.get("destination_tag", "home"), "activity": "work"}
+		"gather":
+			return {"location_tag": action.get("resource_tag", "home"), "activity": "work"}
+	return {"location_tag": "home", "activity": "idle"}
 
 
 ## "home" is this NPC's own house; a shared landmark tag (well/stall/gate)
