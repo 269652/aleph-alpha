@@ -2262,7 +2262,7 @@ second, independent (and, as just found, silently-diverging) account.
 |---|---|---|---|
 | NPC Data Model | ✅ Done | Real, deterministic per-seed `NpcIdentity` (name/occupation/DNA-derived personality via `NpcGenome`/driving need) plus real `NpcNeeds` (hunger, rises per second, `is_hungry()`/`feed()`) — see the NPC section below. Relationships and an actual persistent memory *log* keyed per-NPC are the two Identity-adjacent pieces still open (the memory/rumor *propagation mechanism* itself IS built — see that section). | medium |
 | LLM Daily Planner | 🚧 Partial (deterministic stand-in, by design) | `src/world/npc_planner.gd`'s `Planner`/`FakeNpcPlanner` split (mirrors `worldbosses.md`'s `PhaseGenerator`/`FakePhaseGenerator` convention) produces a real occupation-keyed `{time_block, location_tag, activity}` day with zero LLM calls — this proves the "cheap local FSM" half of the architecture at real scale. The roadmap's own "**one LLM call per NPC per in-game day**" half is a deliberately deferred follow-up (see the NPC section below), not silently dropped — `Planner` is the real seam a local-model-backed implementation (Ollama, per the design brainstorm) or a hosted API drops into unchanged. | medium |
-| Local Schedule Executor | ✅ Done (basic) | `src/rendering/npc_marker.gd`: a real per-frame FSM walks a daily schedule (home / shared landmark / personal workspot), zero LLM calls mid-day, live for every settlement `EarthChunkManager` loads. No real pathfinding yet (straight-line movement, no obstacle avoidance). | large |
+| Local Schedule Executor | ✅ Done (basic) | `src/rendering/npc_marker.gd`: a real per-frame FSM walks a daily schedule (home / shared landmark / personal workspot), zero LLM calls mid-day, live for every settlement `EarthChunkManager` loads. **Day-shape now proven end to end**: `test_npc_daily_schedule_walk.gd` runs real elapsed process time forward and confirms a real NPC is observably in a different, correct place at dawn/midday/dusk, driven by its own (lazily planner-generated, never hand-set) schedule — see the NPC section below. No real pathfinding yet (straight-line movement, no obstacle avoidance). | large |
 | Interrupt/Replan Handling | ⬜ Not started | No out-of-cycle replan trigger (combat, meeting a notable NPC, a need crossing a threshold) exists yet — today's schedule always runs to completion and only re-plans on day rollover. Investigated and scoped (not attempted) in the roadmap.md gap-closing pass: "a new periodic co-location check comparable in size to Phase 8/9/10's own steps." | medium |
 | Live Dialogue System | 🚧 Partial | No LLM-backed live dialogue yet, but a real, explicitly-scoped placeholder exists and is live: "Basic Talk Interaction" (proximity prompt + one deterministic personality/need-flavored greeting line, `npc_greeting.gd`) — see npc.md's "Minimal talk interaction" section and the NPC section below for the real offline (non-LLM) dialogue substrate now landed underneath it. | large |
 | LLM Backend Abstraction | ⬜ Not started | No LLM API wiring exists anywhere in the codebase yet. `Planner`'s base/fake-subclass split (see LLM Daily Planner above) is the seam a real backend will implement, but no backend — local or hosted — is wired. | medium |
@@ -5832,6 +5832,62 @@ festival wiring, no hiring/wages yet.
   first run in this stage (it was quietly running everything, not hanging)
   — add `-gconfig=` for a genuinely single-file run:
   `-gconfig= -gtest=res://tests/unit/test_X.gd -gexit`.
+- **Deterministic daily schedule + local executor: day-shape proof** (small) — ✅ Done —
+  (2026-09-03) a workflow stage tasked with "deterministic daily schedule +
+  local executor" set out to build `npc_schedule.gd`/`npc_planner.gd`
+  producing a real schedule from an NPC's identity, plus a local executor
+  that walks it across in-game time-of-day. Reading the actual code first
+  (the same "verify, don't trust a summary" rule the entry above already
+  applied to itself, now applied to this stage's own task framing too)
+  found this ALSO already real, live, and unit-tested — `npc_schedule.gd`
+  (`time_block_for_hour`/`current_entry`), `npc_planner.gd`'s
+  `FakeNpcPlanner` (occupation-keyed, deterministic — see Daily Planning
+  entry above), and `npc_marker.gd`'s per-frame FSM (see Local FSM/
+  Pathfinder Plan Execution entry above) already implemented exactly this,
+  wired end to end and live in the running game since before this stage
+  started. What was missing was this stage's own specifically named
+  minimum bar: a test running real world time forward and proving a real
+  NPC is observably in a different place at dawn vs. midday vs. dusk,
+  driven by its own schedule — every existing `NpcMarker` movement test
+  (`test_npc_marker.gd`) hand-sets a schedule pinning all 4 time blocks to
+  the SAME location_tag, which proves "moves toward a target" but never
+  that a schedule actually relocates an NPC across the day. New
+  `tests/unit/test_npc_daily_schedule_walk.gd` closes that gap: a real
+  `NpcMarker`, given a real `NpcIdentity` and its default
+  `NpcPlanner.FakeNpcPlanner` (never a hand-set schedule — it exercises
+  `NpcMarker._process`'s own lazy `if schedule.is_empty(): schedule =
+  _planner.plan_day(...)` path), advanced through real elapsed process
+  time via the exact `SECONDS_PER_SIMULATED_DAY` clock every live villager
+  runs on (plus its own guard test pinning that the fixture's timing
+  budget genuinely covers `WALK_SPEED`, not an eyeballed assumption):
+  a farmer lands at three genuinely distinct, correct positions (home at
+  dawn, field at midday, well at dusk — each confirmed *arrived at*, not
+  just moved toward); a merchant's midday spot is the stall instead,
+  proving the schedule genuinely depends on the NPC's own identity rather
+  than one hardcoded walk; a guard stays on watch at the gate through dusk
+  instead of socializing at the well, the one documented occupation
+  exception in `FakeNpcPlanner` — previously asserted nowhere, now also
+  pinned at the schedule-shape level by a new `test_npc_planner.gd` case
+  (`test_fake_planner_guard_stays_on_watch_at_the_gate_through_the_evening`).
+  5 new tests, 17 new asserts, all green on the first run, with **zero
+  production-code changes** — like the entry above, this slice already
+  existed; only its end-to-end day-shape proof did not. The full NPC/
+  village test cluster (18 files, including this new one) was re-run
+  together as a regression check: 280/280 tests, 3804 asserts, all green.
+  `waypoint_network.gd` (named as candidate pathfinding logic to build on)
+  turned out to be a different subsystem entirely — global fast-travel
+  waypoint unlocking, not village-internal NPC movement — so it is not
+  used here; `npc_marker.gd`'s own straight-line `move_toward` (no
+  obstacle avoidance, already documented above) remains the real executor.
+  **To be explicit about what this is deliberately NOT claiming**, matching
+  the entry above: the real "one LLM call per NPC per in-game day" daily
+  planner — informed by personality/needs/relationships/memory per
+  npc.md's own Planning architecture section — is still a named, deferred
+  follow-up, not silently dropped, and neither is interrupt/replan
+  handling; the LLM backend choice itself is still an open question
+  (`concept/overview.md`), which is exactly why this slice deliberately
+  stayed a tested, deterministic rule instead of a speculative LLM
+  integration.
 
 ### Quests (`concept/quests.md`)
 
