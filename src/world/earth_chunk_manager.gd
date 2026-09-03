@@ -123,7 +123,7 @@ const CaravanMarker = preload("res://src/rendering/caravan_marker.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
 const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const WorldClockPersistence = preload("res://src/world/world_clock_persistence.gd")
-const SnowLayer = preload("res://src/rendering/snow_layer.gd")
+const SnowBombShader = preload("res://src/rendering/snow_bomb_shader.gd")
 const RoofShape = preload("res://src/rendering/roof_shape.gd")
 const PickableSeed = preload("res://src/rendering/pickable_seed.gd")
 const SnowTrail = preload("res://src/world/snow_trail.gd")
@@ -3916,33 +3916,52 @@ func current_warmth() -> float:
 	return _warmth_at_pixel(_disturbance_center_tile * TerrainRenderer.TILE_SIZE)
 
 
-## The overlay snow is painted onto (see SnowLayer). Registered like the water
-## overlay, and optional: a caller that never sets one simply gets no snow.
+## The overlay snow is painted onto (see SnowBombShader). Registered like the
+## water overlay, and optional: a caller that never sets one simply gets no
+## snow. Its cells now carry only PRESENCE (see set_snow_layer) -- the actual
+## coverage/variant/level art is read per pixel by the shader itself, off
+## world position and the two uniforms this class pushes (snow_depth, the
+## trail mask), not painted per tile any more.
 var _snow_layer: TileMapLayer = null
-var _snow_renderer := SnowLayer.new()
+var _snow_shader := SnowBombShader.new()
+var _snow_material: ShaderMaterial = null
 ## Footprints, and how much snow is lying (see SnowTrail / Snowfall).
 var _snow_trail := SnowTrail.new()
 var _snow_depth := 0.0
+## The last tile tread_snow_at was called with -- the trail mask window (see
+## _refresh_snow_trail_mask) is centred here, since SnowTrail's own
+## dictionary carries no notion of "where the player is" by itself.
+var _snow_trail_center_tile := Vector2i.ZERO
+
+## How wide, in TILES, the trail mask window pushed to the shader is. Matches
+## SHADER_CODE's own trail_world_size uniform DEFAULT (1024.0 world units)
+## exactly, divided by TerrainRenderer.TILE_SIZE (16) -- not load-bearing
+## (set_trail_mask always pushes the real world_size alongside the texture,
+## so a mismatch could not silently misalign anything), just keeping the two
+## numbers honestly in sync rather than picking an unrelated one.
+const SNOW_TRAIL_WINDOW_TILES := 64
 
 
 func set_snow_layer(snow_layer: TileMapLayer) -> void:
 	_snow_layer = snow_layer
-	snow_layer.tile_set = _snow_renderer.build_tile_set()
+	snow_layer.tile_set = SnowBombShader.build_presence_tile_set()
 	# Must match the terrain layer's scale exactly, or the cover drifts out of
 	# alignment with the ground it lies on.
 	snow_layer.scale = Vector2.ONE * TerrainRenderer.LAYER_SCALE
+	_snow_material = _snow_shader.shared_material()
+	snow_layer.material = _snow_material
+	_snow_shader.set_snow_depth(_snow_depth)
+	if _snow_depth > 0.0:
+		_paint_all_loaded_snow_presence()
 
 
-## How much snow is lying, 0 bare to 1 covered (see Snowfall).
-##
-## Painted as TILES rather than as a tint on the ground layer. A tint is one
-## number for the whole world and cannot express "this tile is trodden and that
-## one is not", so footprints could not exist at all -- which is exactly what
-## this was before.
-##
-## Only the ground is covered: the grass, stones and trees keep their shape on
-## top of it. The ground is covered, not replaced.
+## How much snow is lying, 0 bare to 1 covered (see Snowfall). Pushed to the
+## shader as one float uniform -- see step_snow's own doc comment for why
+## this no longer means touching the TileMapLayer per DEPTH change. Presence
+## itself still needs syncing on the rarer bare<->lying transition -- see
+## _sync_snow_presence.
 func set_snow_depth(depth: float) -> void:
+	var previous := _snow_depth
 	_snow_depth = clampf(depth, 0.0, 1.0)
 	# Forwards to the canopy the same way set_wind_strength forwards to
 	# _tree_renderer -- so a tree spawned right after a deliberate depth set
@@ -3952,7 +3971,9 @@ func set_snow_depth(depth: float) -> void:
 	# way by sync_tree_season instead, which is what actually reaches an
 	# ALREADY-standing tree (see its own doc comment).
 	_tree_renderer.set_snow_coverage(_snow_depth)
-	_repaint_snow()
+	if _snow_layer != null:
+		_snow_shader.set_snow_depth(_snow_depth)
+		_sync_snow_presence(previous)
 
 
 ## How much snow is lying, 0 bare to 1 covered.
@@ -3964,13 +3985,14 @@ func snow_depth() -> float:
 	return _snow_depth
 
 
-## Marks a tile as walked on, packing the snow down (see SnowTrail).
+## Marks a tile as walked on, packing the snow down (see SnowTrail). The
+## actual GPU-facing mask texture is rebuilt once per step_snow call, not
+## here -- see _refresh_snow_trail_mask.
 func tread_snow_at(pixel_position: Vector2) -> void:
 	if _snow_depth <= 0.0:
 		return
-	var tile := _world_tile_for_pixel(pixel_position)
-	_snow_trail.step_on(tile)
-	_snow_dirty[tile] = true
+	_snow_trail_center_tile = _world_tile_for_pixel(pixel_position)
+	_snow_trail.step_on(_snow_trail_center_tile)
 
 
 ## The world clock as of the last snow step, so snow can advance on the same
@@ -3979,7 +4001,7 @@ var _snow_world_age := 0.0
 
 
 ## Accumulates or melts the lying snow, fills tracks back in while it is
-## snowing, and repaints.
+## snowing, and pushes both to the shader.
 ##
 ## Takes NO delta: it reads the world clock itself. Snow used to be advanced by
 ## the real frame delta while the season ran on the world clock, which is two
@@ -3991,254 +4013,135 @@ var _snow_world_age := 0.0
 ##
 ## Reading the clock here rather than being handed a delta is what makes that
 ## impossible to reintroduce: there is one clock, not two kept in step by hand.
+##
+## Used to end with a diff-aware sweep over every loaded tile, throttled to
+## once every 2 real seconds so an unconditional per-tile scan would not cost
+## the ~40-50ms/pass it was measured at (see git history). SnowBombShader
+## deletes that PER-TILE cost outright by moving coverage/level/variant into
+## the fragment shader, read per PIXEL off world position and the one
+## `snow_depth` uniform below -- so the DEPTH push itself is now continuous
+## and unthrottled, the same shape `set_rain`'s own `rain_intensity` push
+## already is a few lines down. Presence still needs syncing on the rarer
+## bare<->lying transition (see _sync_snow_presence), and the TRAIL mask is
+## a real GPU texture upload rather than a uniform float, so it keeps its
+## own throttle too -- see _refresh_snow_trail_mask.
 func step_snow(snowing: bool, warmth: float) -> void:
 	var elapsed: float = maxf(_world_age_seconds - _snow_world_age, 0.0)
 	_snow_world_age = _world_age_seconds
+	var previous_depth := _snow_depth
 	_snow_depth = Snowfall.accumulate(_snow_depth, snowing, warmth, elapsed)
-
-	# The painting is optional -- a headless server has no snow layer but still
-	# has weather, so the depth above has to be kept either way.
-	if _snow_layer == null:
-		return
-	if snowing:
-		# Filling in changes every track at once, so they all need repainting.
-		for tile in _snow_trail.trodden_tiles(0.0):
-			_snow_dirty[tile] = true
 	_snow_trail.advance(elapsed, snowing)
 
-	if _snow_depth <= 0.0:
-		_repaint_snow()  # cheap fast-clear path, see below -- no sweep needed.
-		return
-
-	# Footprints repaint immediately every call regardless of the sweep
-	# cadence below -- a footstep should show up the instant it happens, not
-	# wait for the next scheduled sweep.
-	for tile in _snow_dirty:
-		_paint_snow_tile(tile)
-	_snow_dirty.clear()
-
-	if _world_age_seconds - _snow_swept_world_age >= SNOW_SWEEP_INTERVAL_SECONDS:
-		_sweep_snow_field()
-		_snow_swept_world_age = _world_age_seconds
-
-
-## Every tile's own last-painted band (Vector2i tile -> int band, -1 for
-## bare/ocean), and the tiles whose tread has changed since the last sweep.
-##
-## This is what makes repainting cheap: `_paint_snow_tile` below only ever
-## touches the actual TileMapLayer (a real `set_cell`/`erase_cell` call) for a
-## tile whose computed band differs from what is tracked here -- so calling it
-## for every loaded tile costs a scan plus a dictionary lookup per tile, not
-## thousands of set_cell calls, for the (typical) case where most of the field
-## hasn't changed. A tile absent from this dict is treated as already bare
-## (`.get(tile, -1)`), so a genuinely untouched tile whose computed band is
-## also -1 costs nothing -- there is nothing to erase that was never set.
-var _snow_painted_band_by_tile: Dictionary = {}
-var _snow_dirty: Dictionary = {}
-
-## Each tile's own onset lead/lag (see SnowLayer.onset_offset_for), cached the
-## first time that tile is painted.
-##
-## Onset is a PURE function of the tile's global coordinates -- it never
-## changes for a tile's whole loaded lifetime -- but recomputing it (a
-## PixelNoise.smooth call, several hashed lookups) for every tile on every
-## sweep dominates the sweep's cost far more than the cheap band_for
-## arithmetic that actually varies with depth. Measured live against the real
-## ~22,700-tile field a LOAD_RADIUS=2 chunk radius loads: recomputing onset
-## fresh every sweep cost ~200ms/pass; reading it from this cache instead cost
-## ~42ms/pass for the exact same sweep -- roughly 5x, and the difference
-## between a cadence tight enough to trickle being affordable at all or not.
-## Cleared per-tile on chunk unload (`_forget_snow_paint_for_chunk`) so this
-## does not grow without bound as a player roams.
-var _snow_onset_by_tile: Dictionary = {}
-
-## Each tile's own illustrated shape VARIANT (see SnowLayer.variant_for),
-## cached the same way and for the same reason as `_snow_onset_by_tile`
-## above: a pure function of the tile's global coordinates that never
-## changes for its whole loaded lifetime, so recomputing it on every sweep
-## would be paying the same avoidable cost onset's own doc comment already
-## measured. Cleared per-tile on chunk unload alongside the onset cache.
-##
-## CHECKED, not just designed, against the user complaint "when snow
-## accumulates keep the initial variant so the progression stays coherent":
-## by this design a loaded tile's variant is looked up via has()-then-
-## compute-once against this exact dict, erased only on chunk unload
-## (`_forget_snow_paint_for_chunk`), and recomputed to the IDENTICAL value on
-## the next load since `SnowLayer.variant_for` reads only the tile's own
-## global coordinates -- so mechanically this already keeps one tile's
-## variant fixed across its whole loaded lifetime regardless of how many
-## times its band changes as depth grows.
-## `test_a_tiles_snow_variant_never_changes_as_depth_climbs_through_several_
-## bands` drives one real manager through several depths spanning multiple
-## bands and confirms this directly (68,113 real per-cell assertions,
-## GREEN on the first run, no production change needed) rather than trusting
-## the reasoning alone. The user-visible "doesn't look coherent" complaint
-## was therefore very likely caused entirely by the SEPARATE slicer/bleed bug
-## in `SnowLayer.build_band_image` (a contaminated crop at one depth band
-## reading as a different SHAPE from the crop at the next band, even though
-## the underlying variant index here never moved) -- see that function's own
-## doc comment for the fix, and re-render the same tile across a few bands
-## after that fix lands if this is ever doubted again.
-var _snow_variant_by_tile: Dictionary = {}
-
-## Each tile's own flip transform (see SnowLayer.transform_for), cached the
-## same way and for the same reason as `_snow_variant_by_tile` above: a pure
-## function of the tile's own global coordinates, so it never needs
-## recomputing while a tile stays loaded. Reported live, with screenshots:
-## deep/near-full snow renders as an obviously artificial, grid-aligned
-## repeating pattern -- the same rounded blob, tile after tile, in the same
-## on-screen position and orientation, because neither `band` nor `variant`
-## alone (both independently confirmed to spread genuinely, see
-## SnowLayer.transform_for's own doc comment for the full investigation) can
-## fix two similar-looking illustrated variants converging at the highest
-## coverage band. This is what makes two such tiles actually READ as
-## different once painted -- see that function's own doc comment for why the
-## fix is orientation, not more variant/band work.
-var _snow_transform_by_tile: Dictionary = {}
-
-## How often the coverage SWEEP below actually runs, independent of how often
-## step_snow itself is called (every frame, from World._client_process).
-##
-## The sweep is a real O(loaded tiles) scan -- cheap per tile thanks to the
-## onset cache above, but not free, so running it unconditionally every frame
-## would reintroduce the same shape of cost SNOW_REPAINT_DEPTH_STEP originally
-## existed to avoid (see git history: a ~200ms/frame stall the first time
-## fast-forward repainted everything every frame). This throttle is what
-## bounds that.
-##
-## MEASURED, not guessed: a full diff-aware sweep over the real ~22,700-tile
-## LOAD_RADIUS=2 field costs ~38-52ms once the onset cache is warm (see
-## `_snow_onset_by_tile`'s own doc comment and the probe this was measured
-## with). The OLD whole-field-repaint gate (SNOW_REPAINT_DEPTH_STEP=0.05
-## against SECONDS_TO_COVER=360s) fired an unconditional, non-diffed repaint
-## -- ~426ms measured, because it called set_cell/erase_cell for every one of
-## ~22,700 tiles regardless of whether that tile had actually changed -- about
-## once every 18 real seconds, so nothing changed at all in between and then a
-## whole batch changed together in one frame the instant it fired. 2.0 seconds
-## keeps this new mechanism's average CPU cost roughly the SAME order as the
-## old one's (~45ms every 2s vs ~426ms every 18s is ~2.1% vs ~2.4% of
-## wall-clock time) while being 9x more frequent, so a real crossing shows up
-## within ~2s of happening rather than sitting invisible for up to 18s and
-## then jumping. Pinned functionally, not by timing (timing varies by
-## hardware): see
-## test_step_snow_driven_coverage_changes_trickle_in_rather_than_batching_every_18_seconds
-## in test_earth_chunk_manager.gd, which asserts the real worst-case gap
-## between two visible changes stays well under the old ~18s cadence when
-## driven through this exact constant.
-const SNOW_SWEEP_INTERVAL_SECONDS := 2.0
-var _snow_swept_world_age := -INF
-
-
-## Paints the tiles that need it. Used directly by `set_snow_depth` (a rare,
-## deliberate call -- e.g. `/weather`, or a test setting depth outright) for
-## an immediate, unthrottled sweep; `step_snow`'s own per-frame path uses the
-## throttled call site above instead, for exactly the reason described on
-## SNOW_SWEEP_INTERVAL_SECONDS.
-func _repaint_snow() -> void:
+	# Pushing shader uniforms is optional -- a headless server has no snow
+	# layer but still has weather, so the depth/trail state above has to be
+	# kept either way.
 	if _snow_layer == null:
 		return
-	if _snow_depth <= 0.0:
-		# A single clear() beats diff-erasing every previously-painted tile
-		# one at a time, and resets the per-tile paint tracking to match --
-		# the onset cache is left alone, since it is still correct for
-		# whenever it next snows.
-		if not _snow_painted_band_by_tile.is_empty():
-			_snow_layer.clear()
-			_snow_painted_band_by_tile.clear()
-			_snow_dirty.clear()
-		return
-	_sweep_snow_field()
-	_snow_swept_world_age = _world_age_seconds
+	_snow_shader.set_snow_depth(_snow_depth)
+	_sync_snow_presence(previous_depth)
+	_refresh_snow_trail_mask()
 
 
-## Diff-aware pass over every loaded tile: `_paint_snow_tile` below only
-## actually touches the TileMapLayer for a tile whose band changed, so this is
-## the sweep SNOW_SWEEP_INTERVAL_SECONDS gates -- see both constants' own doc
-## comments for the measured cost that makes running this often affordable.
-func _sweep_snow_field() -> void:
+## Presence cells are what make the SnowFx TileMapLayer have anything to
+## draw at all -- see build_presence_tile_set's own doc comment: an erased
+## cell submits no quad and never runs fragment(), so a layer with NOTHING
+## painted costs exactly what it did before this shader existed, which
+## matters every bit as much as the per-pixel cost does. Painting every
+## land tile unconditionally, at every chunk load, regardless of season,
+## was the actual cause of a real, measured slowdown even in full summer
+## with snow_depth at a flat 0.0 -- the old per-tile mechanism this
+## replaces painted NOTHING while it wasn't snowing (a genuinely empty
+## layer), where presence-always-painted instead has the entire visible
+## ground submitting real quads to a custom-shader material, always, whether
+## or not there is any snow to show.
+##
+## Fixed at a coarser grain than the deleted per-tile sweep: presence is
+## painted for every currently loaded chunk on the RARE 0 -> nonzero
+## transition (a real snowfall beginning) and the whole layer is cleared on
+## the equally rare nonzero -> 0 one (a full thaw) -- not diffed per tile,
+## not re-touched for any depth change strictly between those two, so this
+## costs nothing on the vast majority of step_snow calls, which report no
+## transition at all.
+func _sync_snow_presence(previous_depth: float) -> void:
+	if previous_depth <= 0.0 and _snow_depth > 0.0:
+		_paint_all_loaded_snow_presence()
+	elif previous_depth > 0.0 and _snow_depth <= 0.0:
+		_snow_layer.clear()
+
+
+func _paint_all_loaded_snow_presence() -> void:
 	for chunk_coord in _loaded_chunks:
-		_paint_snow_chunk(chunk_coord)
+		_paint_snow_presence(chunk_coord, _loaded_chunks[chunk_coord])
 
 
-## Paints every tile of one chunk. Shared by _sweep_snow_field (every loaded
-## chunk, whenever the sweep above runs) and _load_chunk (this one chunk
-## alone, immediately -- see _load_chunk's own comment: without this, a chunk
-## streamed in mid-snowfall stayed bare until the next sweep happened to reach
-## it).
-func _paint_snow_chunk(chunk_coord: Vector2i) -> void:
-	var origin: Vector2i = chunk_coord * CHUNK_SIZE
-	var chunk: Chunk = _loaded_chunks[chunk_coord]
-	for local_y in chunk.height:
-		for local_x in chunk.width:
-			_paint_snow_tile(origin + Vector2i(local_x, local_y))
+## The tile the currently-pushed trail mask texture is centred on, and when
+## it was last rebuilt -- see _refresh_snow_trail_mask.
+var _snow_trail_mask_center_tile := Vector2i.ZERO
+var _snow_trail_refreshed_age := -INF
+
+## How often the trail mask is allowed to rebuild, at minimum -- also rebuilt
+## immediately whenever the player crosses into a new tile, so the window
+## never visibly lags behind them.
+##
+## ImageTexture.create_from_image is a real GPU upload, discarding whatever
+## texture was there before -- unlike set_snow_depth's plain uniform push,
+## this is NOT free to do unconditionally every frame. Measured live: doing
+## it every step_snow call (i.e. every frame, same as the depth push) was
+## the actual cause of a 60fps -> single-digit-fps collapse the instant snow
+## started actually lying (fragment()'s own early-out means nothing pays for
+## the shader at all before then, which is why it only showed up once snow
+## was on screen). SnowTrail.build_mask_texture's own cost is bounded by
+## tracked footprints and stays cheap; the upload itself is what needed
+## bounding, the same lesson SNOW_SWEEP_INTERVAL_SECONDS already encoded for
+## the deleted per-tile sweep.
+const SNOW_TRAIL_REFRESH_INTERVAL_SECONDS := 0.25
 
 
-## Computes this tile's current band and touches the TileMapLayer only if that
-## differs from what is already tracked as painted -- see
-## `_snow_painted_band_by_tile`'s own doc comment for why that is what keeps
-## calling this for every loaded tile affordable.
-func _paint_snow_tile(tile: Vector2i) -> void:
-	var band := -1
-	# Water does not take snow -- it freezes or it does not, which is a
-	# different thing and not this one. A river's own biome is untouched
-	# land (see docs/concept/rivers.md's Rendering section), so it must be
-	# asked separately -- reported live: "snow falls on rivers".
-	if biome_at_global(tile.x, tile.y) != "ocean" and not is_river_at_global(tile.x, tile.y):
-		# Every tile used to read the exact same _snow_depth, so a whole
-		# loaded chunk snapped to whatever band the clock said the instant it
-		# was evaluated (reported: "snow covers a whole chunk instantly
-		# instead of spreading progressively"). This tile's own onset offset
-		# (seeded from its GLOBAL coordinates, see SnowLayer.onset_offset_for)
-		# makes it lead or lag the shared depth by a bounded amount, so a
-		# partial snowfall paints a genuine mix of bare and covered land
-		# rather than one uniform state. Cached rather than recomputed every
-		# call -- see _snow_onset_by_tile's own doc comment.
-		if not _snow_onset_by_tile.has(tile):
-			_snow_onset_by_tile[tile] = _snow_renderer.onset_offset_for(tile.x, tile.y)
-		var onset: float = _snow_onset_by_tile[tile]
-		band = _snow_renderer.band_for(_snow_depth, _snow_trail.tread_at(tile), onset)
-
-	if _snow_painted_band_by_tile.get(tile, -1) == band:
+## Rebuilds and pushes the GPU-facing trail mask, centred on wherever
+## tread_snow_at was last called (the player's own tile) -- but only when the
+## window actually needs to move or enough time has passed to catch newly
+## packed/refilled tread, not unconditionally every call (see this
+## constant's own doc comment).
+func _refresh_snow_trail_mask() -> void:
+	var due := _world_age_seconds - _snow_trail_refreshed_age >= SNOW_TRAIL_REFRESH_INTERVAL_SECONDS
+	if not due and _snow_trail_center_tile == _snow_trail_mask_center_tile:
 		return
-	_snow_painted_band_by_tile[tile] = band
-	if band < 0:
-		_snow_layer.erase_cell(tile)
-	else:
-		# Which of SnowLayer.OVERLAY_COLUMNS illustrated shapes this tile
-		# draws -- a separate axis from `band` (see SnowLayer.variant_for's
-		# own doc comment), cached lazily here rather than computed
-		# unconditionally above alongside onset: onset feeds band_for's math
-		# even for a tile that stays bare, but variant only matters once a
-		# tile is actually about to be painted.
-		if not _snow_variant_by_tile.has(tile):
-			_snow_variant_by_tile[tile] = _snow_renderer.variant_for(tile.x, tile.y)
-		var variant: int = _snow_variant_by_tile[tile]
-		# This tile's own flip transform -- a THIRD axis independent of band
-		# and variant (see SnowLayer.transform_for's own doc comment), cached
-		# lazily here for the same reason variant is: it only matters once a
-		# tile is actually about to be painted. Passed as `set_cell`'s
-		# `alternative_tile` argument directly -- confirmed against a real
-		# TileSetAtlasSource/TileMapLayer that a raw flip-bit value works
-		# there with no separate registration needed (see transform_for's own
-		# doc comment).
-		if not _snow_transform_by_tile.has(tile):
-			_snow_transform_by_tile[tile] = _snow_renderer.transform_for(tile.x, tile.y)
-		var transform: int = _snow_transform_by_tile[tile]
-		_snow_layer.set_cell(tile, 0, Vector2i(band, variant), transform)
+	var window := SNOW_TRAIL_WINDOW_TILES
+	var half := window / 2
+	var origin := Vector2(_snow_trail_center_tile - Vector2i(half, half)) * TerrainRenderer.TILE_SIZE
+	_snow_shader.set_trail_mask(
+		_snow_trail.build_mask_texture(_snow_trail_center_tile, window),
+		origin, float(window) * TerrainRenderer.TILE_SIZE
+	)
+	_snow_trail_mask_center_tile = _snow_trail_center_tile
+	_snow_trail_refreshed_age = _world_age_seconds
 
 
-## Drops one chunk's tiles from the per-tile snow tracking dictionaries above,
-## so a player roaming far and wide does not grow them without bound -- called
-## from _unload_chunk alongside the matching TileMapLayer erase.
-func _forget_snow_paint_for_chunk(chunk_coord: Vector2i) -> void:
+## Marks every non-ocean cell of a loaded chunk with the single presence tile
+## SnowBombShader.build_presence_tile_set provides -- see set_snow_layer for
+## why a painted cell means nothing but "snow may render here" now. Painted
+## ONCE, at chunk load (mirrors _paint_water_overlay's own shape), and never
+## revisited: unlike the deleted per-tile band mechanism this replaces,
+## coverage no longer depends on which cells are painted, only on the
+## snow_depth uniform, so there is nothing here for a later depth change to
+## invalidate.
+func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
+	if _snow_layer == null:
+		return
 	var origin: Vector2i = chunk_coord * CHUNK_SIZE
-	for local_y in CHUNK_SIZE:
-		for local_x in CHUNK_SIZE:
-			var tile := origin + Vector2i(local_x, local_y)
-			_snow_onset_by_tile.erase(tile)
-			_snow_variant_by_tile.erase(tile)
-			_snow_transform_by_tile.erase(tile)
-			_snow_painted_band_by_tile.erase(tile)
+	for y in chunk.height:
+		for x in chunk.width:
+			var global := origin + Vector2i(x, y)
+			# Water does not take snow -- it freezes or it does not, which is
+			# a different thing and not this one. A river's own biome is
+			# untouched land (see docs/concept/rivers.md's Rendering
+			# section), so it must be excluded separately from ocean --
+			# reported live: "snow falls on rivers".
+			if chunk.biome[y * chunk.width + x] == "ocean":
+				continue
+			if is_river_at_global(global.x, global.y):
+				continue
+			_snow_layer.set_cell(global, 0, SnowBombShader.PRESENCE_ATLAS_COORD)
 
 
 func set_rain(raining: bool) -> void:
@@ -8182,10 +8085,14 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	_paint_hillshade_overlay(chunk_coord, chunk)
 	_paint_river_flow_overlay(chunk_coord, chunk)
 	# So a chunk streamed in mid-snowfall shows the snow already lying,
-	# instead of staying bare until the next field-wide depth change happens
-	# to repaint it (see _paint_snow_chunk's own doc comment).
-	if _snow_layer != null and _snow_depth > 0.0:
-		_paint_snow_chunk(chunk_coord)
+	# instead of staying bare until the next 0->nonzero transition happens
+	# to paint it (see _sync_snow_presence). Gated on _snow_depth, unlike
+	# the old _paint_snow_tile this replaces once painted a real per-tile
+	# band regardless -- an empty layer while it is not snowing is the whole
+	# point (see _sync_snow_presence's own doc comment), and a freshly
+	# loaded chunk must not undo that by painting presence nobody asked for.
+	if _snow_depth > 0.0:
+		_paint_snow_presence(chunk_coord, chunk)
 	# Restores collision for every wall/window piece PERSISTED from a
 	# previous session -- fresh village-stamped pieces get their collision
 	# immediately inside stamp_structure_at_global instead, further below in
@@ -8741,7 +8648,6 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 		_terrain_renderer.erase(_roof_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
 	if _snow_layer != null:
 		_terrain_renderer.erase(_snow_layer, CHUNK_SIZE, chunk_coord * CHUNK_SIZE)
-		_forget_snow_paint_for_chunk(chunk_coord)
 	if _hidden_roof_chunk_coord == chunk_coord:
 		_hidden_roof_chunk_coord = null
 		_hidden_roof_room_cells = []

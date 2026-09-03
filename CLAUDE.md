@@ -10,6 +10,40 @@ Implement everything using strict Test-Driven Development (TDD): red first.
 - Never write implementation code without a failing test driving it.
 - Tuned values/thresholds must be tested functions or test-pinned constants, never eyeballed comments.
 
+## Branch and push BEFORE working, then commit every sound change set
+
+**Mandatory, before writing a single line:** create the feature branch and
+push it to `origin`. Then commit and push again at every point the work is
+sound — not at the end.
+
+This is not bookkeeping. Work in this repo has already been lost outright:
+a session built a GPU snow shader with texture bombing that ran at 60+fps,
+never branched or committed, and the entire implementation vanished — no
+branch, no reflog, nothing recoverable from any ref. It had to be
+reimplemented from scratch. Uncommitted work is work that does not exist.
+
+- **Branch first.** `git switch -c <name>` and `git push -u origin <name>`
+  before starting, so the branch exists remotely from the outset. Do not
+  wait until there is "something worth pushing" — the push that matters is
+  the one that happens before the crash, not after.
+- **Commit every sound change set.** A passing red→green cycle, a working
+  mechanism, a completed refactor: each is a commit. If it would hurt to
+  lose it, it is already overdue for a commit.
+- **Push after every commit.** A local commit still dies with the
+  checkout. Pushing is what makes the work recoverable by anyone,
+  including a later session that has to pick it up.
+- Commit work in progress rather than leaving it uncommitted; a WIP commit
+  on a pushed branch is recoverable, and a perfect uncommitted tree is not.
+- This applies to sessions that end early, get interrupted, or hand off —
+  which is every session, since none of them know in advance that they
+  will.
+- **If `origin` is not reachable, never let that block committing.** A push
+  to an unconfigured remote hangs on a credential prompt that a
+  non-interactive session cannot answer. Branch and commit locally on the
+  same cadence regardless, and push as soon as the remote works — a local
+  commit is recoverable from the checkout; an uncommitted tree is not
+  recoverable from anywhere.
+
 ## Merge to main before calling a feature done
 
 A feature is not verified once its tests pass in isolation — it must be

@@ -15,7 +15,6 @@ const BiomeClassifier = preload("res://src/world/biome_classifier.gd")
 const SeasonCycle = preload("res://src/world/season_cycle.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const Snowfall = preload("res://src/world/snowfall.gd")
-const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 const ProceduralTreeSprite = preload("res://src/rendering/procedural_tree_sprite.gd")
 const CreatureRenderer = preload("res://src/rendering/creature_renderer.gd")
 const CreatureMarker = preload("res://src/rendering/creature_marker.gd")
@@ -6236,347 +6235,154 @@ func test_snow_accumulates_while_it_falls():
 	assert_almost_eq(manager.snow_depth(), 1.0, 0.02)
 
 
-## The bug this exists to catch: every painted tile used to read the SAME
-## global `_snow_depth`, so a whole loaded chunk snapped to whatever band the
-## clock said the instant it was evaluated (reported: "snow covers a whole
-## chunk instantly instead of spreading progressively"). A partial snowfall
-## should paint a genuine MIX of bare and snow-covered land tiles -- proof
-## that different tiles are now crossing their own threshold at different
-## points, not all reading the one shared number (see SnowLayer.onset_offset_for).
-func test_a_partial_snowfall_paints_a_mix_of_bare_and_covered_tiles_not_one_uniform_state():
+## The five tests that used to live here (a partial snowfall paints a MIX of
+## bare/covered tiles; painted tiles carry a real per-tile variant; coverage
+## advances within a single depth band; a realistic step_snow-driven
+## snowfall paints more than one band; coverage trickles in rather than
+## batching every ~18s) all asserted the OLD per-tile band+variant painting
+## mechanism -- SnowLayer, and the atlas coords _paint_snow_tile wrote from
+## it. SnowBombShader deletes that mechanism outright: coverage, variant,
+## level and onset are now read per PIXEL, straight from world position, by
+## the shader itself (see docs/concept/snow_cover.md). There is no longer a
+## painted band or variant for a test to inspect, and no sweep cadence to
+## time, because there is no sweep -- every one of those five tests' own
+## claims is either meaningless against the new mechanism or true by
+## construction of it. The tests below assert what the TileMapLayer's
+## narrower remaining job actually is.
+
+## SnowBombShader's fragment() never reads TEXTURE -- it writes COLOR
+## unconditionally from its own stamp_atlas/trail_mask samplers -- so the
+## ONLY thing a painted cell still means is "snow may render here at all".
+## Water never takes snow (freezing is a different, unbuilt mechanic, not
+## this one), so ocean tiles must stay unpainted -- an erased cell draws no
+## quad and never runs fragment() at all, which is what keeps snow off water
+## without the shader needing to know what a biome is.
+func test_snow_presence_is_painted_on_land_and_never_on_ocean():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
 	manager.update(_berlin_tile)
+	# Presence is gated on snow actually lying (see _sync_snow_presence) --
+	# an empty layer while it is not snowing is deliberate, not a bug this
+	# test should catch; the 0 -> nonzero transition is what paints it.
+	manager.set_snow_depth(0.5)
 
-	manager.set_snow_depth(0.1)  # partway into a snowfall, not fully covered
-
-	var states := {}  # "bare" or the painted band index -> true
+	var land_painted := 0
+	var ocean_painted := 0
 	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
-	var used_cells := {}
-	for cell in snow_layer.get_used_cells():
-		used_cells[cell] = true
 	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
 		for y in EarthChunkManager.CHUNK_SIZE:
 			for x in EarthChunkManager.CHUNK_SIZE:
 				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
 				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
+				var painted := snow_layer.get_cell_source_id(Vector2i(global_x, global_y)) != -1
 				if manager.biome_at_global(global_x, global_y) == "ocean":
-					continue  # water never takes snow -- not part of this claim
-				var cell := Vector2i(global_x, global_y)
-				if used_cells.has(cell):
-					states[snow_layer.get_cell_atlas_coords(cell).x] = true
-				else:
-					states["bare"] = true
-	assert_gt(
-		states.size(), 1,
-		"a partial snowfall painted every land tile the same way (%s) -- the whole-chunk-snaps bug is back" % [states]
+					if painted:
+						ocean_painted += 1
+				elif painted:
+					land_painted += 1
+	assert_gt(land_painted, 0, "precondition: at least one land tile got a presence cell")
+	assert_eq(ocean_painted, 0, "water must never carry a snow presence cell")
+	snow_layer.free()
+
+
+## Presence painted unconditionally, regardless of season, was a real
+## reported regression: it means the entire visible ground always submits
+## real quads to a custom-shader material -- the old per-tile mechanism
+## this replaces painted NOTHING while it was not snowing (a genuinely
+## empty layer, costing what it did before this shader existed at all), and
+## a full summer with snow_depth flat at 0.0 must cost the same today.
+func test_snow_presence_is_empty_while_nothing_is_snowing():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.update(_berlin_tile)
+	assert_eq(
+		snow_layer.get_used_cells().size(), 0,
+		"the snow layer must have nothing painted while snow_depth is 0"
 	)
 	snow_layer.free()
 
 
-## The new sheet's COLUMN axis is a real per-tile shape VARIANT, a separate
-## thing from the depth band (see SnowLayer.OVERLAY_COLUMNS's own doc
-## comment) -- painted tiles must actually carry it in atlas coord .y, not
-## just always draw column 0. Depth is pinned to full cover (1.0) so every
-## land tile is painted regardless of its own onset lead/lag, isolating the
-## variant axis from the band axis this test isn't about.
-func test_painted_snow_tiles_carry_a_real_per_tile_variant():
+## The other half of the same regression: presence must actually clear back
+## to empty on a full thaw, not stay painted forever once a snowfall has
+## happened once.
+func test_snow_presence_clears_on_a_full_thaw():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
 	manager.update(_berlin_tile)
-	manager.set_snow_depth(1.0)
+	manager.set_snow_depth(0.8)
+	assert_gt(snow_layer.get_used_cells().size(), 0, "precondition: presence painted while lying")
 
-	var reference := SnowLayer.new()
-	var variants_seen := {}
-	var checked := 0
-	for cell in snow_layer.get_used_cells():
-		if manager.biome_at_global(cell.x, cell.y) == "ocean":
-			continue
-		var atlas := snow_layer.get_cell_atlas_coords(cell)
-		assert_eq(
-			atlas.y, reference.variant_for(cell.x, cell.y),
-			"painted variant at %s does not match SnowLayer.variant_for" % [cell]
-		)
-		variants_seen[atlas.y] = true
-		checked += 1
-	assert_gt(checked, 0, "precondition: at least one land tile was painted")
-	assert_gt(
-		variants_seen.size(), 1,
-		"every painted tile drew the same variant (%s) -- the manager isn't wiring variant_for at all" % [variants_seen]
+	manager.set_snow_depth(0.0)
+	assert_eq(
+		snow_layer.get_used_cells().size(), 0,
+		"presence should clear back to an empty layer once the snow has fully thawed"
 	)
 	snow_layer.free()
 
 
-## Reported live, with screenshots: deep/near-full snow reads as an obviously
-## artificial, grid-aligned repeating pattern -- the same rounded blob, tile
-## after tile, in the same on-screen position and orientation. Neither `band`
-## nor `variant` is the bug (both spread genuinely, see the test above and
-## SnowLayer.transform_for's own doc comment for the full investigation) --
-## the fix is a third, independent per-tile ORIENTATION axis
-## (SnowLayer.transform_for), painted as the TileMapLayer cell's own
-## `alternative_tile`. This is the manager-level half of that fix: confirms
-## `_paint_snow_tile` actually passes `transform_for`'s real value through to
-## `set_cell` rather than leaving every tile at the implicit default (0,
-## identity) `alternative_tile` it used to get.
-func test_painted_snow_tiles_carry_a_real_per_tile_transform():
+## The direct behavioural contrast with the deleted mechanism: presence used
+## to be repainted (or at least diffed) on every depth change, which is
+## exactly the class of bug ("a whole chunk snaps instantly", "nothing
+## repaints for ~18s then a batch pops") the five deleted tests existed to
+## catch. Coverage is the shader's job now, keyed off snow_depth alone --
+## presence is painted once, at chunk load, and never again.
+func test_snow_presence_does_not_change_with_depth():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
 	manager.update(_berlin_tile)
-	manager.set_snow_depth(1.0)
+	manager.set_snow_depth(0.5)  # something already painted under the old mechanism too
+	var before := snow_layer.get_used_cells().size()
+	assert_gt(before, 0, "precondition: something is painted to watch for a change")
 
-	var reference := SnowLayer.new()
-	var transforms_seen := {}
-	var checked := 0
-	for cell in snow_layer.get_used_cells():
-		if manager.biome_at_global(cell.x, cell.y) == "ocean":
-			continue
-		var alternative := snow_layer.get_cell_alternative_tile(cell)
-		assert_eq(
-			alternative, reference.transform_for(cell.x, cell.y),
-			"painted alternative_tile (transform) at %s does not match SnowLayer.transform_for" % [cell]
-		)
-		transforms_seen[alternative] = true
-		checked += 1
-	assert_gt(checked, 0, "precondition: at least one land tile was painted")
-	assert_gt(
-		transforms_seen.size(), 1,
-		"every painted tile carried the same alternative_tile (%s) -- the manager isn't wiring transform_for at all" % [transforms_seen]
-	)
-	snow_layer.free()
-
-
-## User complaint: "when snow accumulates keep the initial variant so the
-## progression stays coherent." Mechanically, `_snow_variant_by_tile` already
-## looks like it should satisfy this by construction: variant is computed
-## once per tile (has()-then-compute-once), from a PURE function of the
-## tile's own global coordinates (SnowLayer.variant_for), and erased only on
-## chunk unload (_forget_snow_paint_for_chunk) -- never recomputed while a
-## tile stays loaded, and recomputed to the IDENTICAL value if it is ever
-## erased and reloaded, since nothing about variant_for depends on anything
-## but position. This test exists to CONFIRM that design intent holds against
-## the real, live code path rather than trust the reasoning alone: drives one
-## real manager through several depths spanning multiple bands and asserts
-## every tile that stays painted across all of them keeps the exact same
-## atlas.y (variant) throughout, with only atlas.x (band) allowed to move.
-##
-## This was GREEN the first time it was run, with no production change
-## needed -- see snow_layer.gd's and earth_chunk_manager.gd's own doc
-## comments on _snow_variant_by_tile for what that does and does not mean:
-## the caching/lookup wiring genuinely already had no bug, so whatever
-## "progression looks incoherent" the user actually saw both times this was
-## reported was very likely PROBLEM 1's own slicer/bleed bug instead (a
-## contaminated crop at one band looking like a different SHAPE from the
-## crop at an adjacent band, even though the underlying variant index never
-## changed) -- see this file's own snow slicer fix and test_snow_layer.gd's
-## test_known_bad_reference_tiles_no_longer_spike_at_their_own_top_edge for
-## that half of the investigation.
-func test_a_tiles_snow_variant_never_changes_as_depth_climbs_through_several_bands():
-	var snow_layer := TileMapLayer.new()
-	manager.set_snow_layer(snow_layer)
-	manager.update(_berlin_tile)
-
-	var variant_by_tile := {}
-	var bands_seen_for_a_tracked_tile := {}
-	var tracked_tile := Vector2i.ZERO
-	var have_tracked_tile := false
-
-	for depth in [0.15, 0.45, 0.75, 0.95]:
-		manager.set_snow_depth(depth)
-		for cell in snow_layer.get_used_cells():
-			if manager.biome_at_global(cell.x, cell.y) == "ocean":
-				continue
-			var atlas := snow_layer.get_cell_atlas_coords(cell)
-			if variant_by_tile.has(cell):
-				assert_eq(
-					atlas.y, variant_by_tile[cell],
-					"tile %s changed shape variant (%d -> %d) as depth climbed to %.2f -- only band should move" % [cell, variant_by_tile[cell], atlas.y, depth]
-				)
-			else:
-				variant_by_tile[cell] = atlas.y
-			if not have_tracked_tile:
-				tracked_tile = cell
-				have_tracked_tile = true
-			if cell == tracked_tile:
-				bands_seen_for_a_tracked_tile[atlas.x] = true
-
-	assert_gt(variant_by_tile.size(), 0, "precondition: at least one land tile was painted across the run")
-	assert_gt(
-		bands_seen_for_a_tracked_tile.size(), 1,
-		"precondition: the tracked tile %s never actually crossed a band boundary across these depths (%s) -- this test would prove nothing about band-vs-variant coherence" % [tracked_tile, bands_seen_for_a_tracked_tile]
-	)
-	snow_layer.free()
-
-
-## A companion regression to the mix test above: the whole-field repaint used
-## to fire only when the (onset-FREE) tracked band crossed a DEPTH_BANDS
-## boundary (4 of them, back when SnowLayer.DEPTH_BANDS was 4 -- since raised
-## to 25, then deliberately dropped to today's 10 when the sheet itself
-## changed again, see that constant's own doc comment for why), so within a
-## single band's depth range -- easily a third of a whole snowfall at 4 bands
-## -- NOTHING repainted at all, no matter how far the global depth kept
-## climbing. Measured live before this test existed: coverage sat flat at the
-## exact same percentage from depth 0.02 clear through depth 0.25, then
-## jumped straight to 100% at depth 0.5 -- the "instant reveal" bug again,
-## just moved to a coarser timescale. More land tiles must show snow at a
-## later depth than an earlier one even when both fall inside the same depth
-## band (at the current, much finer DEPTH_BANDS the two depths this test
-## picks now straddle a couple of band boundaries rather than sharing one
-## wide band outright, but the property under test -- coverage is never flat
-## between two depths a repaint-gate bug could otherwise merge -- is exactly
-## the same regression check regardless of the current band count).
-func test_snow_coverage_advances_within_a_single_depth_band_not_only_at_band_crossings():
-	var snow_layer := TileMapLayer.new()
-	manager.set_snow_layer(snow_layer)
-	manager.update(_berlin_tile)
-
+	# Deliberately no 0.0 in this sweep -- the OLD mechanism cleared the whole
+	# layer at zero depth, which would make this pass by coincidence (0 == 0)
+	# rather than for the real reason.
 	manager.set_snow_depth(0.02)
-	var covered_early := snow_layer.get_used_cells().size()
+	manager.set_snow_depth(1.0)
+	manager.set_snow_depth(0.13)
 
-	manager.set_snow_depth(0.2)
-	var covered_later := snow_layer.get_used_cells().size()
-
-	assert_gt(
-		covered_later, covered_early,
-		"depth 0.02 painted %d covered tiles and depth 0.2 also painted %d -- the field is frozen within a band" % [covered_early, covered_later]
+	assert_eq(
+		snow_layer.get_used_cells().size(), before,
+		"presence cells changed with depth -- coverage should be the shader's job now, not the tile grid's"
 	)
 	snow_layer.free()
 
 
-## The two tests above both jump straight to a target depth with a single
-## set_snow_depth call. Real play never does that -- scenes/world.gd's own
-## _process loop drives snow through repeated step_snow calls as the world
-## clock advances a little at a time (see step_snow's own doc comment) -- so
-## this drives the SAME per-tile spread through that real path instead, to
-## prove the mix survives being reached incrementally rather than only when
-## set directly.
-##
-## Depth ~0.55 is chosen so the leading (onset=+0.18) and lagging (onset=-0.18)
-## tiles land on opposite sides of a texture-band boundary by SnowLayer's own
-## math: lying=0.37 -> band 3, lying=0.73 -> band 7 (SnowLayer.band_for at the
-## current DEPTH_BANDS=10; was band 9 / band 18 at the interim DEPTH_BANDS=25
-## -- still two different bands either way, which is all this test's own
-## assertion actually checks). +/-0.18 is still onset_offset_for's total
-## range -- it is reached by summing a broad + a fine PixelNoise layer.
-func test_a_realistic_step_snow_driven_snowfall_paints_more_than_one_non_bare_band():
+## Depth reaches the GPU through the shared material's uniform now, not
+## through any per-tile atlas coord -- there is nothing else left to read it
+## from.
+func test_snow_depth_reaches_the_shared_shader_material():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
-	manager.update(_berlin_tile)
-
-	var step := 2.0
-	var target := Snowfall.SECONDS_TO_COVER * 0.55
-	var elapsed := 0.0
-	while elapsed < target:
-		manager.advance_world_age(step)
-		manager.step_snow(true, 0.0)  # cold and snowing throughout
-		elapsed += step
-
-	var bands := {}  # painted atlas band index -> true; bare tiles excluded
-	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
-	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
-		for y in EarthChunkManager.CHUNK_SIZE:
-			for x in EarthChunkManager.CHUNK_SIZE:
-				var global_x := chunk_coord.x * EarthChunkManager.CHUNK_SIZE + x
-				var global_y := chunk_coord.y * EarthChunkManager.CHUNK_SIZE + y
-				if manager.biome_at_global(global_x, global_y) == "ocean":
-					continue
-				var cell := Vector2i(global_x, global_y)
-				if snow_layer.get_cell_source_id(cell) != -1:
-					bands[snow_layer.get_cell_atlas_coords(cell).x] = true
-
-	assert_gt(
-		bands.size(), 1,
-		"a step_snow-driven snowfall at depth ~0.55 painted only one non-bare band (%s) across the field -- the field is not spreading tile by tile through the real production code path" % [bands]
-	)
+	manager.set_snow_depth(0.42)
+	var material := snow_layer.material as ShaderMaterial
+	assert_almost_eq(float(material.get_shader_parameter("snow_depth")), 0.42, 0.0001)
 	snow_layer.free()
 
 
-## The whole-field repaint used to fire only when the tracked depth had moved
-## by SNOW_REPAINT_DEPTH_STEP (0.05) since the last one -- against
-## Snowfall.SECONDS_TO_COVER (360s) that is one checkpoint roughly every 18
-## real seconds. Between two such checkpoints NOTHING repainted for coverage
-## tiles at all, even though individual tiles' own onset-adjusted bands kept
-## crossing thresholds continuously underneath -- then every tile that
-## crossed sometime in that whole ~18s window all repainted TOGETHER in the
-## single frame the checkpoint finally fired. Reported a third time, in the
-## user's own words: "doesn't correctly fall and accumulate gradually on
-## individual tiles instead after a time a whole chunk get's every tile
-## covered" -- exactly this shape: nothing, then a batch pop.
-##
-## Driven through the real step_snow path in small real-world-age increments
-## (the way World._client_process actually calls it every frame, not one big
-## jump), the gap between two consecutive moments the painted field visibly
-## changes must stay well under that old ~18s cadence -- a genuine trickle,
-## not a slower batch pop.
-func test_step_snow_driven_coverage_changes_trickle_in_rather_than_batching_every_18_seconds():
+## Footprints reach the GPU as a real trail mask texture keyed to world
+## position -- the bridge SnowTrail.build_mask_texture exists for (see its
+## own doc comment). Read back through the exact origin/world_size the
+## shader itself would use, not just "some texture changed".
+func test_treading_snow_reaches_the_shared_trail_mask():
 	var snow_layer := TileMapLayer.new()
 	manager.set_snow_layer(snow_layer)
-	manager.update(_berlin_tile)
+	manager.set_snow_depth(1.0)
 
-	# A STRIDED sample spread across the whole loaded 5x5-chunk field, not one
-	# compact box -- onset is a deliberately LOW-FREQUENCY drift field
-	# (SnowLayer.ONSET_DRIFT_TILES=12), so a small box near one point samples
-	# mostly-correlated onset values and can show a real but coincidental
-	# local quiet patch even while the field elsewhere keeps changing every
-	# sweep (confirmed live: a compact ~22x14 box showed a genuine ~20s local
-	# gap while the mechanism itself is unconditionally sweeping every
-	# SNOW_SWEEP_INTERVAL_SECONDS). Striding across the whole field instead
-	# means the sample spans many independent onset neighbourhoods, so it
-	# reflects the field's real aggregate change rate rather than one patch's.
-	var center_chunk := _chunk_coord_for_tile(_berlin_tile)
-	var stride := 8
-	var sample: Array[Vector2i] = []
-	for chunk_coord in manager.chunks_in_radius(center_chunk, EarthChunkManager.LOAD_RADIUS):
-		var origin: Vector2i = chunk_coord * EarthChunkManager.CHUNK_SIZE
-		for local_y in range(0, EarthChunkManager.CHUNK_SIZE, stride):
-			for local_x in range(0, EarthChunkManager.CHUNK_SIZE, stride):
-				var tile := origin + Vector2i(local_x, local_y)
-				if manager.biome_at_global(tile.x, tile.y) != "ocean":
-					sample.append(tile)
-	assert_gt(sample.size(), 200, "precondition: a real, spatially-spread sample of land tiles to watch")
+	var trodden_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(trodden_pixel)
+	manager.step_snow(false, 0.0)
 
-	var previous := {}
-	for tile in sample:
-		previous[tile] = -1
-
-	var checkpoint_ages: Array[float] = []
-	var step := 1.0
-	var elapsed := 0.0
-	var target := 90.0
-	while elapsed < target:
-		manager.advance_world_age(step)
-		manager.step_snow(true, 0.0)  # cold and snowing throughout
-		elapsed += step
-
-		var changed := false
-		for tile in sample:
-			var band := -1
-			if snow_layer.get_cell_source_id(tile) != -1:
-				band = snow_layer.get_cell_atlas_coords(tile).x
-			if band != previous[tile]:
-				changed = true
-				previous[tile] = band
-		if changed:
-			checkpoint_ages.append(elapsed)
-
+	var material := snow_layer.material as ShaderMaterial
+	var mask: Texture2D = material.get_shader_parameter("trail_mask")
+	var origin: Vector2 = material.get_shader_parameter("trail_origin")
+	var world_size: float = material.get_shader_parameter("trail_world_size")
+	var image := mask.get_image()
+	var uv := (trodden_pixel - origin) / world_size
+	var pixel := Vector2i(uv * Vector2(image.get_width(), image.get_height()))
 	assert_gt(
-		checkpoint_ages.size(), 3,
-		"expected several distinct repaint checkpoints across a %.0fs snowfall, saw %s" % [target, checkpoint_ages]
-	)
-
-	var max_gap: float = target
-	if not checkpoint_ages.is_empty():
-		max_gap = checkpoint_ages[0]
-		for i in range(1, checkpoint_ages.size()):
-			max_gap = maxf(max_gap, checkpoint_ages[i] - checkpoint_ages[i - 1])
-
-	# The OLD mechanism's own real cadence (SNOW_REPAINT_DEPTH_STEP 0.05 of
-	# depth against SECONDS_TO_COVER 360s) is ~18 real seconds between
-	# whole-field repaints -- asserting well under a THIRD of that is a
-	# direct, meaningful improvement, not just barely faster.
-	var old_cadence_seconds := 0.05 * Snowfall.SECONDS_TO_COVER
-	assert_lt(
-		max_gap, old_cadence_seconds / 3.0,
-		"the longest gap between visible snow changes was %.1fs -- not meaningfully tighter than the old ~%.0fs batch-repaint cadence (checkpoints at %s)" % [max_gap, old_cadence_seconds, checkpoint_ages]
+		image.get_pixel(pixel.x, pixel.y).r, 0.0,
+		"the trodden tile should show up, at its own real position, in the mask pushed to the shader"
 	)
 	snow_layer.free()
 

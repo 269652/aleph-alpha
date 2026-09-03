@@ -1109,8 +1109,8 @@ func build_tile_set() -> TileSet:
 ##
 ## Safe to share because nothing in this codebase ever mutates a built
 ## TileSet -- add_source/create_tile/remove_tile appear only in this file and
-## in snow_layer.gd, on their own freshly built sets -- so every TileMapLayer
-## can point at one instance. Same process-level-memo shape
+## in snow_bomb_shader.gd, on their own freshly built sets -- so every
+## TileMapLayer can point at one instance. Same process-level-memo shape
 ## IllustratedAnimalSprite._frame_cache and IllustratedCropSprite already use.
 ##
 ## Costs ~42 MB of RGBA8 per distinct key held for the process lifetime. In

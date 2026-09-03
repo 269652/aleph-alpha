@@ -178,8 +178,8 @@ func test_build_tile_set_ignores_a_stale_version_cache():
 # does it once per instance, i.e. once per before_each in
 # test_earth_chunk_manager.gd's ~358 tests. The TileSet is never mutated
 # anywhere in src/, scenes/ or tests/ (grep: add_source/create_tile/
-# remove_tile appear only in terrain_renderer.gd and snow_layer.gd), so one
-# instance can be shared by every TileMapLayer.
+# remove_tile appear only in terrain_renderer.gd and snow_bomb_shader.gd), so
+# one instance can be shared by every TileMapLayer.
 
 
 func test_build_tile_set_returns_the_same_shared_tile_set_on_a_repeat_call():
