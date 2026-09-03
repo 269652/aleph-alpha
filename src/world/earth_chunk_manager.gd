@@ -6829,7 +6829,7 @@ func river_current_at_global(global_x: int, global_y: int) -> Dictionary:
 	var speed := 0.0
 	if generator.is_river_at_global(global_x, global_y):
 		bearing_deg = generator.nearest_river_at(global_x, global_y).course_bearing_deg
-		speed = river_hydraulics_at_global(global_x, global_y).velocity_m_s
+		speed = generator.river_hydraulics_at_global(global_x, global_y).velocity_m_s
 	elif probe["plume_factor"] > 0.0:
 		bearing_deg = probe["plume_bearing_deg"]
 		speed = HydrologyField.PLUME_SPEED_M_S * probe["plume_factor"]
