@@ -3410,6 +3410,23 @@ var _river_flow_boulder_tiles: Dictionary = {}
 var _flow_across_image: Image
 var _flow_across_texture: ImageTexture
 
+## A SEPARATE single-purpose map for each tile's real local half-width.
+## Width used to ride the direction vector's own magnitude (a direction's
+## length otherwise carrying no information) -- but bilinear filtering
+## blends GB by ordinary vector addition, and two texels whose BEARINGS
+## differ (exactly what neighbouring texels do on a bend) partially
+## CANCEL when summed, collapsing the blended magnitude toward zero
+## independent of either texel's real width. That corrupted both the
+## decoded width (dividing a push by a near-zero half-width) and the
+## decoded direction (normalizing a near-zero vector is numerically
+## unstable) -- worst exactly on curves, reported as "this huge zigzag
+## still persists" after the direction-vector encoding otherwise measurably
+## helped. A scalar has no such failure mode: bilinearly blending two
+## widths always lands between them. Pinned by
+## test_the_scale_map_is_a_real_separate_texture_not_packed_into_direction.
+var _flow_scale_image: Image
+var _flow_scale_texture: ImageTexture
+
 ## How many boulders the shader accepts -- mirrors the uniform array size.
 const RIVER_FLOW_BOULDER_SLOTS := 24
 
@@ -3449,41 +3466,29 @@ func _sync_flow_boulder(tile: Vector2i) -> void:
 ## One texel of the flow map, written toroidally -- see _flow_across_image.
 ## Carries the WHOLE per-tile reconstruction frame as REAL floats
 ## (FORMAT_RGBAF, no encode range): R the signed across-fraction, GB the
-## course's downstream unit vector SCALED BY half_width_tiles (same
-## sin/-cos convention the atlas sprite bakes; a unit vector's own length
-## carries no information, so its magnitude is repurposed to carry the
-## tile's real local half-width rather than spending a fifth channel on
-## it), A the real solved current speed in m/s -- so the shader
-## interpolates direction, half-width and speed bilinearly exactly like
-## across, and no per-tile quantity is left to draw the tile grid.
-##
-## The local half-width matters beyond drawing the channel: a boulder's or
-## a ripple's push is computed in real pixels and then divided by the
-## half-width to become a fraction of the channel's own width. Before this
-## the shader divided by one FIXED uniform (the curated rivers' constant
-## 2.0 tiles) regardless of the actual reach -- a hydrology channel's width
-## now runs 0.5 to 6 tiles, so a wide bend's true half-width was
-## understated by up to 3x and every ripple/boulder push landed 3x
-## stronger, relative to that reach, than intended. Reported as "artifacts
-## in curves" (wide bends are exactly where a river slows, gathers fish,
-## and gets many overlapping ripples).
+## course's downstream UNIT vector (same sin/-cos convention the atlas
+## sprite bakes), A the real solved current speed in m/s -- so the shader
+## interpolates direction and speed bilinearly exactly like across, and no
+## per-tile quantity is left to draw the tile grid. half_width_tiles goes
+## into the SEPARATE _flow_scale_image (see that field's own doc comment
+## for why it may never share a channel with a vector that gets bilinearly
+## filtered).
 func _write_flow_across_texel(
 	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float, half_width_tiles: float
 ) -> void:
-	if _flow_across_image == null:
-		var side := RiverFlowShader.FLOW_MAP_TILES
-		_flow_across_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
 	var side := RiverFlowShader.FLOW_MAP_TILES
+	if _flow_across_image == null:
+		_flow_across_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
+	if _flow_scale_image == null:
+		_flow_scale_image = Image.create(side, side, false, Image.FORMAT_RGBAF)
+	var x := posmod(global.x, side)
+	var y := posmod(global.y, side)
 	var radians := deg_to_rad(bearing_deg)
-	_flow_across_image.set_pixel(
-		posmod(global.x, side), posmod(global.y, side),
-		Color(
-			across_fraction, sin(radians) * half_width_tiles, -cos(radians) * half_width_tiles, speed_mps
-		)
-	)
+	_flow_across_image.set_pixel(x, y, Color(across_fraction, sin(radians), -cos(radians), speed_mps))
+	_flow_scale_image.set_pixel(x, y, Color(half_width_tiles, 0.0, 0.0, 0.0))
 
 
-## Pushes the filled map into the shared flow material after a paint pass.
+## Pushes the filled maps into the shared flow material after a paint pass.
 func _push_flow_across_map() -> void:
 	if _flow_across_image == null:
 		return
@@ -3491,9 +3496,13 @@ func _push_flow_across_map() -> void:
 		_flow_across_texture = ImageTexture.create_from_image(_flow_across_image)
 	else:
 		_flow_across_texture.update(_flow_across_image)
-	_river_flow_shader.shared_material().set_shader_parameter(
-		"flow_across_map", _flow_across_texture
-	)
+	if _flow_scale_texture == null:
+		_flow_scale_texture = ImageTexture.create_from_image(_flow_scale_image)
+	else:
+		_flow_scale_texture.update(_flow_scale_image)
+	var material := _river_flow_shader.shared_material()
+	material.set_shader_parameter("flow_across_map", _flow_across_texture)
+	material.set_shader_parameter("flow_scale_map", _flow_scale_texture)
 
 
 ## Pushes the current boulder set into the shared flow material -- called

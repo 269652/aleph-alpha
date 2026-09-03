@@ -1557,9 +1557,8 @@ func test_ripples_fade_out_before_they_reach_the_bank():
 ## (a direction's length otherwise carries no information).
 func test_boulder_wader_and_ripple_pushes_divide_by_the_real_local_width():
 	assert_true(RiverFlowShader.SHADER_CODE.contains(
-		"float half_width_local = max(length(map_data.gb), 0.05);"
+		"float half_width_local = max(texture(flow_scale_map, map_uv).r, 0.05);"
 	))
-	assert_true(RiverFlowShader.SHADER_CODE.contains("vec2 flow_dir = map_data.gb / half_width_local;"))
 	assert_eq(
 		RiverFlowShader.SHADER_CODE.count("/ (half_width_local * tile_px)"), 3,
 		"boulder, wader and ripple must all divide by the LOCAL width"
@@ -1567,6 +1566,30 @@ func test_boulder_wader_and_ripple_pushes_divide_by_the_real_local_width():
 	assert_false(
 		RiverFlowShader.SHADER_CODE.contains("/ (half_width_tiles * tile_px)"),
 		"none of the three may still read the fixed uniform"
+	)
+
+
+## The structural fix for "this huge zigzag still persists": width and
+## direction must live on SEPARATE maps. Packing width into the direction
+## vector's own magnitude broke under bilinear filtering -- two texels
+## whose BEARINGS differ (exactly what neighbouring texels do on a bend)
+## partially cancel when summed as vectors, collapsing the blended
+## magnitude toward zero regardless of either texel's real width, which
+## corrupted both the decoded width and (normalizing a near-zero vector)
+## the decoded direction. GB must be restored to a genuine unit vector
+## (numerically stable under any blend) and the width sampled from its
+## own scalar texture, which blends safely by construction: bilinearly
+## interpolating two SCALARS always lands between them, never collapses.
+func test_direction_and_width_are_never_packed_into_the_same_vector():
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"uniform sampler2D flow_scale_map : filter_linear, repeat_enable;"
+	))
+	assert_true(RiverFlowShader.SHADER_CODE.contains(
+		"vec2 flow_dir = normalize(map_data.gb + vec2(1e-6, 0.0));"
+	), "GB must be a plain unit vector again, safe to bilinearly blend")
+	assert_false(
+		RiverFlowShader.SHADER_CODE.contains("map_data.gb / half_width_local"),
+		"direction may never be derived by dividing by a length riding the same vector"
 	)
 
 

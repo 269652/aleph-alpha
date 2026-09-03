@@ -456,23 +456,22 @@ func test_the_flow_texel_carries_direction_and_speed():
 	var texel: Color = manager._flow_across_image.get_pixel(
 		posmod(cell.x, side), posmod(cell.y, side)
 	)
-	# GB is the downstream direction SCALED by the tile's real local
-	# half-width (docs/concept/hydrology.md) -- a direction's own length
-	# carries no information, so its magnitude carries the width instead
-	# of a fifth channel; the shader recovers direction by normalizing and
-	# recovers the width from the magnitude.
 	var radians := deg_to_rad(nearest.course_bearing_deg)
-	assert_almost_eq(
-		texel.g, sin(radians) * RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.001, "G must carry the scaled downstream x"
-	)
-	assert_almost_eq(
-		texel.b, -cos(radians) * RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.001, "B must carry the scaled downstream y"
-	)
-	assert_almost_eq(
-		Vector2(texel.g, texel.b).length(), RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.001,
-		"the magnitude must recover the real local half-width"
-	)
+	assert_almost_eq(texel.g, sin(radians), 0.001, "G must carry the downstream x")
+	assert_almost_eq(texel.b, -cos(radians), 0.001, "B must carry the downstream y")
 	assert_gt(texel.a, 0.0, "A must carry the real current speed in m/s")
+
+	# The real local half-width lives on its OWN scalar map, never packed
+	# into GB's magnitude: bilinear filtering blends a vector by ordinary
+	# addition, and two texels whose bearings differ (exactly what
+	# neighbouring texels do on a bend) partially cancel when summed,
+	# collapsing a magnitude riding that vector toward zero regardless of
+	# either texel's real width -- reported live as "this huge zigzag
+	# still persists" once width first rode the direction vector.
+	var scale_texel: Color = manager._flow_scale_image.get_pixel(
+		posmod(cell.x, side), posmod(cell.y, side)
+	)
+	assert_almost_eq(scale_texel.r, RiverCatalog.RIVER_HALF_WIDTH_TILES, 0.001, "the scale map must carry the real local half-width")
 	flow_layer.free()
 
 

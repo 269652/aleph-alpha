@@ -74,6 +74,7 @@ uniform float eddy_detail_weight = 0.7;
 uniform float eddy_swirl = 0.0;
 uniform float bank_shear = 0.25;
 uniform sampler2D flow_across_map : filter_linear, repeat_enable;
+uniform sampler2D flow_scale_map : filter_linear, repeat_enable;
 uniform float flow_map_tiles = 256.0;
 // No longer read inside fragment(): every per-fragment normalization now
 // decodes the tile's REAL local half-width from the direction vector's own
@@ -208,28 +209,32 @@ void fragment() {
 	// loaded chunk overwrites the stale block its coordinates alias to.
 	vec2 map_uv = (wp / tile_px) / flow_map_tiles;
 	// The texel carries the WHOLE reconstruction frame -- across (R), the
-	// course's downstream direction (GB) and the real solved current speed
-	// in m/s (A) -- so direction and speed interpolate between tiles
+	// course's downstream UNIT direction (GB) and the real solved current
+	// speed in m/s (A) -- so direction and speed interpolate between tiles
 	// exactly like across does. Per-tile direction bins and the binary
 	// fast flag were the last square-tile artefacts ("there are still
 	// individual square river tiles visible").
-	//
-	// GB is NOT a unit vector: a direction's own length carries no
-	// information, so its magnitude is spent carrying the tile's REAL
-	// local half-width in tiles instead of a fifth channel. Every
-	// boulder/wader/ripple push below is computed in real pixels and must
-	// divide by THIS local width, not a single fixed guess -- a fixed
-	// divisor (the curated rivers' constant 2.0 tiles) understated a wide
-	// hydrology reach's true half-width by up to 3x, so the same push
-	// landed 3x stronger, relative to that reach, than intended ("artifacts
-	// in curves": a wide bend is exactly where a river slows, gathers
-	// fish, and racks up overlapping ripples).
 	vec4 map_data = texture(flow_across_map, map_uv);
 	float frag_across = map_data.r;
-	float half_width_local = max(length(map_data.gb), 0.05);
-	vec2 flow_dir = map_data.gb / half_width_local;
+	vec2 flow_dir = normalize(map_data.gb + vec2(1e-6, 0.0));
 	vec2 flow_perp = vec2(-flow_dir.y, flow_dir.x);
 	float speed_mps = map_data.a;
+	// The tile's REAL local half-width, from its OWN scalar map -- never
+	// packed into the direction vector above. Bilinear filtering blends a
+	// vector by ordinary addition, and two texels whose BEARINGS differ
+	// (exactly what neighbouring texels do on a bend) partially CANCEL
+	// when summed, so a magnitude riding that vector collapses toward
+	// zero independent of either texel's real width -- corrupting both
+	// the decoded width and (dividing a near-zero vector to normalize it)
+	// the decoded direction, worst exactly on curves ("this huge zigzag
+	// still persists"). A lone scalar has no such failure: bilinearly
+	// blending two widths always lands between them. Every
+	// boulder/wader/ripple push below divides by THIS, not a single fixed
+	// guess -- a fixed divisor (the curated rivers' constant 2.0 tiles)
+	// understated a wide hydrology reach's true half-width by up to 3x, so
+	// the same push landed up to 3x stronger, relative to that reach, than
+	// intended.
+	float half_width_local = max(texture(flow_scale_map, map_uv).r, 0.05);
 	float is_fast = step(fast_flow_m_s, speed_mps);
 	// STILL WATER: a lake is painted through this same overlay (its
 	// shoreline is the real elevation contour, written as an across field
