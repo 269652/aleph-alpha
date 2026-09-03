@@ -169,7 +169,7 @@ sickness triggers, and `src/gameplay/sickness.gd` already exists as the
 real, tested, pure model for it — `infection_chance`/`attempt_infect`
 (exposure vs. resistance), `progress`/`is_recovered` (worsens untreated,
 recovers under treatment), and `diagnose` (skill- and severity-weighted,
-matching `TamingSystem.taming_chance`'s own shape). That doc explicitly
+matching `Taming.break_free_chance`'s own shape). That doc explicitly
 scoped OUT wildlife-to-wildlife contagion as "an undecided open
 question" — this spec is exactly that missing piece, not a competing
 system: the SIRS wildlife model above is the real exposure SOURCE, and an
@@ -207,7 +207,7 @@ loop rather than the two systems merely coexisting.
   (`is_lethal_capable`/`death_chance_per_second` — herd never kills
   directly, predator/carrion do). Deterministic hash-seeded rolls
   (`attempt_transmit`/`attempt_infect`), same pattern as `Sickness`/
-  `TamingSystem`.
+  `Taming`.
 - ✅ **Herd (foot-and-mouth-like)** (medium) — Done —
   `CreatureMarker._herd_disease_step`: runs on the existing throttled
   sensing tick, checks the nearest susceptible herbivore-role creature

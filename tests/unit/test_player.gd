@@ -1488,8 +1488,9 @@ func test_apply_disease_bite_with_zero_exposure_never_infects():
 ## exposure never means CERTAIN infection) -- retried across many rolls
 ## (each apply_disease_bite call draws a fresh seed off an incrementing
 ## counter) is the deterministic-enough way to prove this path CAN succeed,
-## the same shape TamingSystem's own catch-rate tests already use for a
-## chance that's real but not 100%.
+## the same shape test_the_measured_catch_rate_matches_the_model
+## (test_creature_marker.gd) already uses for a chance that's real but not
+## 100%.
 func test_apply_disease_bite_can_infect_the_player():
 	var infected := false
 	for i in 50:

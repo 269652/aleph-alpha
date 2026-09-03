@@ -9,7 +9,7 @@ extends RefCounted
 ## rates. Callers own the actual state (state: State, disease_id: String,
 ## severity: float, state_seconds: float) per creature/player -- this module
 ## holds nothing itself, the same "caller owns data, pure module owns rules"
-## contract Sickness/TamingSystem/DebuffStack already use.
+## contract Sickness/Taming/DebuffStack already use.
 ##
 ## This is the WILDLIFE-side model, distinct from Sickness (survival.md's
 ## single-instance player illness). Player disease spillover (see
@@ -191,8 +191,9 @@ func carrion_graze_transmission_chance(region_tier: int, fly_count: int = 0) -> 
 
 
 ## Deterministic hash-fraction roll against `chance`, given a seed -- same
-## pattern as Sickness.attempt_infect/TamingSystem.attempt_tame, so every
-## caller's (chance, seed_value) pair always yields the same result.
+## pattern as Sickness.attempt_infect/CreatureMarker._step_restraint's
+## struggle roll, so every caller's (chance, seed_value) pair always yields
+## the same result.
 func attempt_transmit(chance: float, seed_value: int) -> bool:
 	var roll := float(absi(hash("%d_disease_transmit" % seed_value)) % 10000) / 10000.0
 	return roll < chance
