@@ -16,17 +16,24 @@ orders at all.
 
 ## Status
 
-**Updated — a first slice is real.** This doc was written first, exactly as
+**Updated — a first slice is real, and a second slice has closed most of
+what it left open.** This doc was written first, exactly as
 [dialogue.md](dialogue.md) was before anything in its pipeline existed, and
 `npc.md`'s own divergence note (still accurate about everything *outside*
-this doc) is what motivated it. Since then, the parser, the primitive
-registry, cost derivation, the rule evaluator, and the `NpcMarker` wiring
-have actually been built, red-first, with two real, deliberate divergences
-from what this doc originally specified — see Grammar, Execution / wiring,
-and the final Status checklist below for exactly what shipped, under what
-names, and why. Still entirely unbuilt: the impure effects dispatch, the
-hiring gate, the script book, and anything the two open trust/relationship
-questions were already blocking.
+this doc) is what motivated it. The first pass built the parser, the
+primitive registry, cost derivation, the rule evaluator, and the `NpcMarker`
+wiring, red-first, with two real, deliberate divergences from what this doc
+originally specified — see Grammar, Execution / wiring, and the final
+Status checklist below for exactly what shipped, under what names, and why.
+A second pass then built `npc_trust.gd` (a minimal, deliberately
+player-only trust scalar — not the full NPC-NPC relationship web), a real
+per-NPC `npc_inventory.gd` wired into `NpcMarker`, `hiring_gate.gd`, and
+`npc_instruction_effects.gd` (the impure `haul`/`gather` dispatch, real for
+stone/iron/gold/berries, honestly unsupported for wood — see its own Status
+entry below for why). Still unbuilt: the script book, any actual
+wage-payment flow, hiring/script-editor UI, and — the reason none of the
+above is reachable in a live game yet — nowhere on a real `NpcIdentity`/
+`NpcMarker` actually holds a live trust value for `hiring_gate.gd` to read.
 
 ## Design pillars
 
@@ -358,14 +365,19 @@ Stated plainly, matching this project's own honest-scope-cut convention:
   `spell_book.gd` already used for magic —
   `npc_instruction_book.gd` would hold a small table of pre-authored
   example scripts, assignable before any real authoring tool exists.
-- **No hiring UI.** `hiring_gate.gd`'s pure `can_hire` check is specified;
-  the screen/flow a player uses to actually offer a wage and assign a
-  script is not.
-- **No relationships/trust system for NPCs.** `npc_identity.gd` has no
-  relationships field today — this doc specifies the DSL that will consume
-  that state once it exists; it does not build the state itself. Both the
-  hiring gate and the complexity ceiling above are written against a trust
-  value that is not yet real anywhere outside `Taming`'s animal-only trust.
+- **No hiring UI.** `hiring_gate.gd`'s pure `can_hire`/`can_assign_script`
+  checks are now built and tested (see Status below); the screen/flow a
+  player uses to actually offer a wage and assign a script is not.
+- **No full relationships system for NPCs, and no LIVE trust value yet.**
+  `npc_trust.gd` now exists (see Status below) as the smallest real thing
+  that can unblock hiring — a single player-trust scalar both gates read —
+  but it is a pure model taking `trust` as a plain float parameter, not a
+  field anywhere on a real NPC: `npc_identity.gd` still has no
+  `trust`/relationships field today, and nothing yet raises or lowers
+  trust through quests or dialogue. `npc.md`'s full "relationships to
+  other NPCs" web remains entirely unbuilt and out of this doc's scope, as
+  originally noted — this doc's own trust scalar is deliberately narrower
+  (player-only, single-player game, no relationship graph).
 - **No integration with `companion_server.md`'s Tier 2 Instruction queue.**
   That doc's own feature is explicit that it has "no floor to stand on"
   until this DSL exists — this doc is that floor, not the consumer built
@@ -397,17 +409,26 @@ Stated plainly, matching this project's own honest-scope-cut convention:
   (magic.md 2026-08-24), on top of the ongoing wage, or is the wage the
   only cost an instruction ever carries? Left open above.
 - **Where does the trust scalar this doc's two gates both read actually
-  live?** `Taming.trust` is real today but is animal-only; NPC
-  relationships are unbuilt. This doc can't name a concrete file for it
-  because that file doesn't exist yet — blocked on relationships landing
-  first, not a design gap in this doc.
+  live, on a real NPC?** `npc_trust.gd` (see Status below) is now the real
+  pure model both gates read, resolving *what* the scalar means and how
+  it's thresholded — but it still doesn't answer *where a live value is
+  stored*: `NpcIdentity`/`NpcMarker` carry no `trust` field, so every
+  caller today has to supply `trust` as a plain float from nowhere in
+  particular. `Taming.trust` remains real but animal-only. Narrowed from
+  "blocked on relationships landing first" to a smaller, more concrete
+  remaining gap: a `trust: float` field on `NpcIdentity` (or `NpcMarker`)
+  plus whatever raises/lowers it through quests/dialogue — not a design
+  gap in this doc, just genuinely unbuilt.
 - **Per-NPC script instance, or a reusable named template** assignable to
   many hired NPCs at once (the `spell_book.gd` shape, vs. a personally
   bound spell)? `npc.md`'s brief doesn't say either way.
-- **`haul`'s carry-phase state** — flagged under Execution / wiring above —
-  needs an actual home once `npc_instruction_effects.gd` exists; likely a
-  small carrying field mirroring how `economy`'s own per-frame state
-  already persists on `NpcMarker`, but not designed here.
+- **`haul`'s carry-phase state** — flagged under Execution / wiring above.
+  `npc_instruction_effects.gd` now exists (see Status below) but
+  deliberately only implements the FETCH half (find a real source, collect
+  it into inventory); actually carrying the result on to `destination_tag`
+  across multiple ticks still needs an actual home, likely a small
+  carrying field mirroring how `economy`'s own per-frame state already
+  persists on `NpcMarker` — still not designed, let alone built.
 - **What happens when no rule matches** (no authored `otherwise`)? Falling
   back to the ordinary planner-produced schedule entry for that tick (the
   same graceful-degrade shape a `null` `instruction_script` already gets)
@@ -452,22 +473,103 @@ Stated plainly, matching this project's own honest-scope-cut convention:
   helpers. Regression-gated against `test_npc_planner.gd` (12/12) and
   `test_npc_economy.gd` (39/39) — an NPC with no instruction script is
   unaffected. `test_npc_marker.gd`, 17/17 (4 new, 13 pre-existing).
-- ⬜ `npc_instruction_effects.gd` — the impure `haul`/`gather` dispatch
-  layer against live `NpcMarker`/`World`/`EarthChunkManager` state, with
-  real nearest-X spatial queries (today's `_entry_for_instructed_action` is
-  a tag-lookup stand-in, not this). Also where `haul`'s flagged
-  fetch/carry-phase state needs an actual home.
-- ⬜ `hiring_gate.gd` — wage + trust-threshold `can_hire` check, and the
-  separate trust-threshold complexity ceiling. Blocked on the open question
-  below.
+- ✅ `npc_trust.gd` — a minimal player-NPC trust scalar (docs/concept/
+  npc_instructions.md's own Design pillar 5), built as the smallest real
+  thing that can unblock hiring: a single `[0,1]` scalar for how much ONE
+  NPC trusts THE PLAYER, not `npc.md`'s full "relationships to other NPCs"
+  web (this is a single-player game — no NPC-NPC relationship graph is
+  needed or built). Mirrors `pet_loyalty.gd`'s shape (a baseline const,
+  named thresholds, pure functions) but deliberately not its numbers:
+  `BASELINE_TRUST := 0.2` sits BELOW `HIRE_THRESHOLD := 0.5` (the opposite
+  relationship `pet_loyalty.gd`'s `BASELINE_LOYALTY`/`FOLLOW_THRESHOLD`
+  have), because `npc.md` is explicit "a stranger won't work for you at any
+  price" — a freshly-met NPC must never itself clear the hire gate.
+  `complexity_ceiling_for(trust)` implements the Complexity budget section's
+  ceiling as an actual CONTINUOUS function of trust (linear from
+  `MIN_COMPLEXITY_CEILING := 3.0`, grounded in
+  `npc_instruction_cost.gd`'s own `RULE_WEIGHT+CONDITION_WEIGHT+ACTION_WEIGHT`
+  for one trivial rule, at `HIRE_THRESHOLD`, up to
+  `MAX_COMPLEXITY_CEILING := 10.0`, comfortably above this doc's own
+  8.5-cost worked example, at full trust) rather than a second boolean
+  gate, per this section's own "a stranger... tolerates only a trivial
+  one-or-two-rule script... tolerates something closer to the worked
+  example" language. `test_npc_trust.gd`, 9 tests, pinning
+  baseline-is-not-hireable and 3+ points on the ceiling curve.
+- ✅ `npc_inventory.gd` — the smallest real per-NPC/household inventory:
+  a plain `item_id -> int` Dictionary plus pure static `add`/`remove`/
+  `count_of` helpers (mirroring `npc_instruction_primitives.gd`'s own
+  pattern), NOT a general-purpose inventory system (no capacity, stacking,
+  UI, or shop/crafting integration). `add`/`remove` are pure (return a new
+  Dictionary) and `remove` fails closed — clamped at 0, never negative,
+  never crashes on removing more than held. `test_npc_inventory.gd`, 12
+  tests. **Wired into `NpcMarker`**: a new `inventory := {}` field —
+  deliberately NOT null-checked like `economy`/`instruction_script`, since
+  an empty inventory is a valid real state, not an absence — that
+  `_instruction_frame()` now reads directly instead of always reporting
+  `{}`. `inventory_at_least` can finally be truthfully exercised against
+  real held items in a live `NpcMarker`. `test_npc_marker.gd`, 20/20 (3 new
+  tests plus a stale-comment fix on the pre-existing no-rule-matches test);
+  regression-checked against `test_npc_planner.gd` (12/12) and
+  `test_npc_economy.gd` (39/39).
+- ✅ `hiring_gate.gd` — the wage + trust-threshold `can_hire` check, and
+  the separate trust-threshold `can_assign_script` complexity-ceiling
+  check, both pure and reading the same underlying `npc_trust.gd` scalar
+  at two independent thresholds. `can_hire(trust, wage_offered,
+  minimum_wage)` is true only if trust clears `NpcTrust.HIRE_THRESHOLD` AND
+  `wage_offered` clears `minimum_wage` — a stranger cannot be bought at any
+  wage, and a hireable NPC still won't work for nothing.
+  `can_assign_script(trust, script_cost)` is true only if the caller's own
+  `npc_instruction_cost.gd`-derived `script_cost` fits under
+  `NpcTrust.complexity_ceiling_for(trust)` — this module never re-derives
+  cost, only checks it. `default_minimum_wage()` is a documented fallback
+  floor anchored to `VillageWages.subsistence_wage() * 2`, so a negotiated
+  hire wage always clears mere subsistence (`npc.md`: hiring is "a
+  genuinely new, negotiated payment, not `VillageWages`'s existing flat
+  subsistence draw"). `test_hiring_gate.gd`, 9 tests, including
+  below-threshold trust unable to hire at any wage and an over-budget
+  script rejected even at full trust. **Not wired to a live NPC yet** — see
+  the honest gap list below.
+- 🚧 `npc_instruction_effects.gd` — the impure `haul`/`gather` dispatch
+  layer against live `world`/`EarthChunkManager` state, for the resource
+  ids that DO have a real backing spatial query: stone/iron/gold via
+  `EarthChunkManager.nearest_liftable_stone_near` (consumed via
+  `stone.queue_free()` directly — the SAME convention `scenes/player.gd`'s
+  own `_try_pick_stone_into_hand` already uses, not `LiftableStone.pick_up`,
+  which expects an Item/Inventory-class picker `NpcMarker.inventory`'s
+  plain Dictionary doesn't satisfy), and berries via
+  `EarthChunkManager.harvest_peak_fruit_near` (no separate consume step
+  needed at all — that query is read-only by design, since `hanging_at` is
+  a pure function of elapsed time, not a depletable stock). **Wood is
+  deliberately UNSUPPORTED**: no real nearest-tree/wood query exists
+  anywhere in this codebase (`ChoppableTree`/`TreeRenderer` carry no
+  chunk-coordinate or `EarthChunkManager` reference at all — the same gap
+  `docs/progress.md`'s "Land Health" entry already documents for a
+  different feature), so `dispatch()` returns a clear
+  `{"ok": false, "reason": "unsupported_resource"}` for wood rather than
+  crashing or silently no-op'ing — meaning this doc's own canonical worked
+  example (`haul(wood, base)`) still cannot execute against live world
+  state through this module. `dispatch()` also only implements `haul`'s
+  FETCH half (find a real source, collect it into inventory) — carrying
+  the result on to `destination_tag` is still the flagged, unresolved
+  multi-tick carry-phase question below, not attempted.
+  `test_npc_instruction_effects.gd`, 10 tests, covering the stone and
+  berries paths against a duck-typed stub world, wood failing closed via
+  both `gather` and `haul`, a null-world crash guard, and a purity check.
+  **Not yet wired into `NpcMarker._process` or anywhere else live** —
+  `_entry_for_instructed_action`'s tag-lookup stand-in is still what
+  actually runs; this module exists and is tested but nothing calls it yet.
 - ⬜ `npc_instruction_book.gd` — a fixed table of pre-authored example
   scripts, standing in for a real authoring UI.
-- ⬜ NPC relationships/trust state itself (`npc_identity.gd`) — a hard
-  prerequisite this doc depends on but does not build; both `hiring_gate.gd`
-  and the complexity ceiling stay unbuildable until it lands.
-- ⬜ A real per-NPC/household inventory system — `_instruction_frame()`
-  today always reports an empty `inventory`, honestly rather than stubbed
-  (see Execution / wiring above), so `inventory_at_least` cannot yet be
-  truthfully exercised against real held items in a live game.
-- ⬜ Hiring UI, script-editor UI, and any integration with
-  `companion_server.md`'s Tier 2 Instruction queue.
+- 🚧 NPC relationships/trust state itself (`npc_identity.gd`) — `npc_trust.gd`
+  above is real and tested, but nothing actually HOLDS a live trust value
+  anywhere: `NpcIdentity`/`NpcMarker` carry no `trust` field, both
+  `npc_trust.gd` and `hiring_gate.gd` take `trust` as a plain float
+  parameter today, not read from any real NPC, and nothing yet raises or
+  lowers it through quests/dialogue (`npc.md`: "an NPC whose quest you
+  completed... will [work for you]"). Full NPC-NPC relationships (the
+  "relationships to other NPCs" web `npc.md`'s Identity section wants)
+  remain entirely unbuilt and out of this doc's scope, as originally noted.
+- ⬜ Hiring UI, script-editor UI, an actual wage-PAYMENT flow (an ongoing
+  negotiated draw distinct from `VillageWages`'s subsistence levy — nothing
+  pays it out even though `hiring_gate.gd`'s check is real), and any
+  integration with `companion_server.md`'s Tier 2 Instruction queue.
