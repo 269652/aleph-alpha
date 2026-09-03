@@ -339,34 +339,58 @@ answered from the baked rasters, the 3×3 fine-cell neighborhood, and the
 coarse cell's live state, so a chunk stays computable from its own global
 coordinates alone -- no chunk-relative state, no seams.
 
-**Is this tile in a lake?** The fine cell's depression id resolves to a
-live level h. The tile is lake if its *macro* elevation is below h. Lake
-shorelines therefore follow the real (bilinear) contour of the basin and
-move as h moves.
+**Is this tile in a lake?** The depressions of the fine cell *and its
+eight neighbors* resolve to live levels; the tile is lake if its *macro*
+elevation is below the highest of them. The 3×3 read is not a
+convenience: a depression's cells are the ones whose *center* sits below
+the spill, but the bilinear elevation dips below the spill inside
+neighboring cells too, and water covers everything lower that it touches,
+so the shoreline follows the real contour instead of stopping at a cell
+edge. Shorelines therefore follow the bilinear contour of the basin and
+move as h moves. **Which basins hold water at all** is, in phase 1, a
+stand-in for Layer 4's balance: the bake drops basins shallower than one
+and a half asset steps (the first real bake found 8,794 of its 10,776
+depressions exactly one 8-bit step deep, one flat plain after another
+reading as ponds) and basins whose catchment delivers under
+`LAKE_MIN_INFLOW_PER_CELL` of full rain per lake cell (a subtropical
+pocket fed only by itself dries out; a basin with a catchment a few times
+its size holds). "Ponds only where water flows and rain accumulates."
 
 **Is this tile in a river channel?** The fine cell's live discharge is
 `Q_fine = Q_coarse * (acc_fine / acc_outlet)`, the coarse cell's discharge
 scaled by catchment share. A channel exists where
-`Q_fine >= RIVER_MIN_DISCHARGE`. Its centerline within the fine cell is a
-polyline from the upstream neighbor's center through this cell's center to
-the downstream neighbor's, with a seeded meander of wavelength `11 * w`
-and amplitude `MEANDER_AMPLITUDE_RATIO * λ`, phase from
-`PixelNoise` on the fine cell's coordinates. A tile is channel if its
-distance to that polyline is within `w / 2`, where
+`Q_fine >= RIVER_MIN_DISCHARGE`. Each channel cell owns one piece of the
+centerline: a **quadratic Bezier** from the midpoint toward its mainstem
+upstream cell, through its own center (the control point), to the
+midpoint toward its downstream cell. Adjacent cells share endpoints and
+tangents, so the line is smooth through every corner by construction (the
+first playtest's "make curves smoother"); the seeded meander of
+wavelength `11 * w` the first draft described is still a follow-up. A
+**headwater** cell's piece starts instead at its *source*, the cell that
+drains into it below the threshold, at `SPRING_HALF_WIDTH_TILES`, so a
+river tapers in from a point rather than appearing full-width ("springs:
+rivers just start out of nothing"). A tile is channel if its distance to
+the curve is within the local half-width, where the width is the cell's
+own discharge interpolated along the curve:
 
 ```
-w_tiles = max(1, MIN_LEGIBLE_WIDTH + WIDTH_PER_LOG2_Q * log2(Q_fine / RIVER_MIN_DISCHARGE))
-depth_m = DEPTH_COEFFICIENT * Q_fine ^ 0.4
+w_tiles = clamp(MIN_LEGIBLE_WIDTH + WIDTH_PER_DOUBLING * log2(Q_fine / RIVER_MIN_DISCHARGE), 1, 12)
+depth_m = DEPTH_COEFFICIENT * Q_fine ^ 0.4     (field); Manning normal depth (generator)
 ```
 
-The width formula is hydraulic geometry with the same **monotone
-exaggeration toward legibility** [stone.md](stone.md) already applies to
-pebbles: a real 300 m river is narrower than one 1 km tile and would be
-invisible, so widths are stretched at the small end without ever
-reordering them. Depth is *not* exaggerated: it feeds
-`water_movement_model.gd`'s wade/swim decision and
+Because width follows discharge and discharge sums at a confluence, two
+rivers meeting produce one reach that is wider exactly where they meet,
+and the Manning solve on the combined discharge conserves `Q = w * d * v`
+("combined volume, width times depth"). The width formula is hydraulic
+geometry with the same **monotone exaggeration toward legibility**
+[stone.md](stone.md) already applies to pebbles: a real 300 m river is
+narrower than one 1 km tile and would be invisible, so widths are
+stretched at the small end without ever reordering them. Depth is *not*
+exaggerated: it feeds `water_movement_model.gd`'s wade/swim decision and
 [infrastructure.md](infrastructure.md)'s ford → ferry → bridge ladder, and
-those want real meters.
+those want real meters. A boulder on the bank apron, not only mid-stream,
+is an obstacle the waterline parts around ("wrap shorelines around edge
+boulders").
 
 A channel with `Q_fine` below the threshold is **not** absent, it is
 **dry**: an accumulation-bearing cell with no discharge is a wadi, and it
@@ -396,11 +420,18 @@ Per rivers.md's rendering decision (see "Relationship to rivers.md"), a
 water tile keeps its land biome. `Chunk.is_lake` sits beside the existing
 `Chunk.is_river`, both written by `generate_chunk` from the same probe,
 and `Chunk.blocks_ground_cover(index)` is the one predicate trees, tall
-grass, snow presence and rooting read. The shore-distance water overlay
-paints lake cells as it paints ocean; the player's water depth is the
-maximum of ocean, river and lake depth. Salinity and lake id (phase 3)
-become per-cell side fields on `Chunk`, never biome names: salt is a
-property of the water, not a kind of ground.
+grass, snow presence and rooting read. **Lakes and rivers are one water
+surface**: both ride the river flow overlay. A river tile writes its
+signed across-channel offset over its own half-width; a lake tile writes
+`1 + (elevation − spill) / LAKE_SHORE_BAND` with zero current, so the
+waterline is the elevation contour at the spill, drawn with the same
+smooth bank curve, ink line and feather a river gets, and still water
+keeps a quarter of the surface morph as ripple but never drifts (the
+first draft put lakes on the ocean's shore-distance overlay; the first
+playtest read its square tiles as "a very different art style"). The
+player's water depth is the maximum of ocean, river and lake depth.
+Salinity and lake id (phase 3) become per-cell side fields on `Chunk`,
+never biome names: salt is a property of the water, not a kind of ground.
 
 ### Equilibrium bake and catch-up
 
@@ -488,6 +519,13 @@ where names appear.
   because it decides where rivers cross plains. Everything else in this
   doc is indifferent to it. Whether to also move to the 21,600×10,800
   source resolution is a separate, later size-versus-fidelity call.
+- **Meander.** The centerline is smooth but follows cell centers; the
+  seeded meander (wavelength `11 * w`) on top of the Bezier is still to
+  do.
+- **Boulder push scale.** The flow shader scales a boulder's displacement
+  by one uniform half-width (the catalog's two tiles); a one-tile stream
+  gets a push a quarter as strong as it should. The texel has no free
+  channel for a per-tile half-width; packing one is a follow-up.
 - **Sub-cell water** (ponds, small lakes, first-order streams) is below
   the data's resolution. A plausible extension: within a climate cell
   whose soil is at capacity, tile-scale depressions in the *blended*
