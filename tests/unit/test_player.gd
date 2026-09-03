@@ -73,6 +73,7 @@ func after_each():
 	Input.action_release("destroy")
 	Input.action_release("trade")
 	Input.action_release("talk")
+	Input.action_release("fish")
 
 
 ## The tile the player is facing (see TileTargeting.facing_tile), matching
@@ -978,6 +979,98 @@ func test_catching_a_fish_with_no_marker_nearby_still_shows_a_generic_message():
 	_land_a_fish()
 	player._fishing_step(0.0)
 
+	assert_string_contains(player.fishing_message, "Caught")
+
+
+# -- the real "fish" input action is the whole loop's entry point ------------
+#
+# Every fishing test above deliberately bypasses the near-water input gate
+# (see the "fishing visuals" section's own comment above) by driving
+# FishingSession directly. This section goes through the REAL entry point
+# instead -- the "fish" action (Keybindings.ACTIONS, default key F) -- forcing
+# a real ocean tile next to the player so _near_water() is genuinely true,
+# then taps the actual input action through the whole cast -> bite -> react ->
+# caught cycle, the same call shape a real playthrough makes, all the way to a
+# real item landing in the inventory (docs/concept/fishing.md's fishing loop).
+
+const FishingMinigame = preload("res://src/gameplay/fishing_minigame.gd")
+
+
+## Overwrites one tile's biome directly on the loaded chunk -- the same
+## reach-into-the-chunk convention test_stone_renderer.gd/test_fish_renderer.gd
+## already use, rather than depending on where real Earth terrain happens to
+## put land/ocean at this fixed test spawn point (see the "fishing visuals"
+## section's own comment on exactly that risk).
+func _set_biome_at(global_tile: Vector2i, biome_name: String) -> void:
+	var chunk_coord := Vector2i(
+		floori(float(global_tile.x) / EarthChunkManager.CHUNK_SIZE),
+		floori(float(global_tile.y) / EarthChunkManager.CHUNK_SIZE)
+	)
+	var chunk = chunk_manager._loaded_chunks[chunk_coord]
+	var local := Vector2i(
+		posmod(global_tile.x, EarthChunkManager.CHUNK_SIZE),
+		posmod(global_tile.y, EarthChunkManager.CHUNK_SIZE)
+	)
+	chunk.biome[local.y * EarthChunkManager.CHUNK_SIZE + local.x] = biome_name
+
+
+## Sums every fish-family item id a catch can reward (see
+## Player.FISH_ITEM_ID_BY_RARITY) -- the exact rarity is a deterministic hash
+## roll off position/cast-count, not something a caller should have to
+## predict just to prove a catch reached the inventory.
+func _fish_item_count(counts: Dictionary) -> int:
+	return counts.get("fish", 0) + counts.get("rare_fish", 0) + counts.get("legendary_fish", 0)
+
+
+func test_pressing_fish_away_from_water_does_not_start_a_session():
+	# Land on every cardinal neighbor, overriding whatever the real terrain
+	# there actually is -- _near_water() must read false regardless.
+	var tile := player.current_tile()
+	_set_biome_at(tile, "grassland")
+	for offset in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		_set_biome_at(tile + offset, "grassland")
+	assert_false(player._near_water(), "precondition: forced land on every side")
+
+	Input.action_press("fish")
+	player._fishing_step(0.0)
+	Input.action_release("fish")
+
+	assert_eq(player._fishing.phase(), "idle", "no water nearby -- the fish key must not start a cast")
+
+
+func test_the_real_fish_key_entry_point_lands_a_caught_fish_in_the_inventory():
+	_set_biome_at(player.current_tile() + Vector2i(1, 0), "ocean")
+	assert_true(player._near_water(), "precondition: a forced ocean neighbor should satisfy _near_water")
+	assert_true(player._has_fishing_rod(), "precondition: a fresh player already carries a fishing rod")
+	var before := _fish_item_count(player.inventory_counts())
+
+	# Cast: a real key press, gated by the real near-water/has-rod checks,
+	# starting the real FishingSession.
+	Input.action_press("fish")
+	player._fishing_step(0.0)
+	Input.action_release("fish")
+	assert_eq(player._fishing.phase(), "waiting", "the fish key next to water should start a real cast")
+
+	# Wait for the bite: a delta past the maximum possible bite delay forces
+	# WAITING -> BITING in one step deterministically, without needing to
+	# predict the unbiased (bait_quality 0.0, see Player._fishing_step's own
+	# cast call) roll a real cast makes through this entry point.
+	player._fishing_step(FishingMinigame.MAX_BITE_DELAY + 1.0)
+	assert_eq(player._fishing.phase(), "biting", "should be biting once the bite delay has fully elapsed")
+
+	# React: a second real key press within the bite window lands the fish.
+	Input.action_press("fish")
+	player._fishing_step(0.0)
+	Input.action_release("fish")
+	assert_eq(player._fishing.phase(), "caught", "reacting during BITING should land the fish")
+
+	# Resolve: the reward is granted at the TOP of the *next* step (see
+	# _fishing_step's own CAUGHT branch) -- the same two-call shape
+	# _land_a_fish's own callers already use throughout this file.
+	player._fishing_step(0.0)
+
+	var after := _fish_item_count(player.inventory_counts())
+	assert_gt(after, before, "a real catch through the fish key should add a real fish item to the inventory")
 	assert_string_contains(player.fishing_message, "Caught")
 
 
