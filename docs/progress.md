@@ -8492,6 +8492,16 @@ for a caller -- that failure mode is exactly what this pass was answering.
   count you twice (which would otherwise be a free way over a tier threshold).
   6 tests. Spec written first as `concept/player_citizenship.md`'s new
   "Residency" section, which the doc did not previously cover at all.
+- **`player_settled` reaches dialogue too** (size: tiny) -- ✅ **Done** --
+  the event above landed in the graph but not in `DialogueTopic`:
+  `test_every_event_type_the_substrate_really_emits_is_claimed_by_some_topic`
+  (`test_dialogue_topic.gd`) caught the gap by scanning the real emitters,
+  the same census the eleven memory topics are built to pass. Joins
+  `TOPIC_ARRIVAL` alongside `npc_settled` rather than `village_history`: it
+  is one person's own firsthand, undistorted arrival (see
+  `DialogueTopic.MEMORY_TOPIC_EVENT_TYPES`'s own doc comment on why
+  `npc_settled` was already split off for exactly that reason), not real
+  news about the village's fortunes. 1 new test.
 - **Shop prices are local** (size: small) -- ✅ **Done** --
   `Shop.market_price_of(item_id, market)` = catalog base x
   `Market.price_for`'s scarcity multiplier, which is exactly 1.0 at
