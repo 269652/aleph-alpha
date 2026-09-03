@@ -39,6 +39,8 @@ const ProceduralLichenSprite = preload("res://src/rendering/procedural_lichen_sp
 const EarthwormPatch = preload("res://src/world/earthworm_patch.gd")
 const ProceduralWormSprite = preload("res://src/rendering/procedural_worm_sprite.gd")
 const AntColony = preload("res://src/world/ant_colony.gd")
+const AntTraffic = preload("res://src/gameplay/ant_traffic.gd")
+const ProceduralAntMoundSprite = preload("res://src/rendering/procedural_ant_mound_sprite.gd")
 const ForageClaims = preload("res://src/gameplay/forage_claims.gd")
 const WindSway = preload("res://src/rendering/wind_sway.gd")
 const WaterShader = preload("res://src/rendering/water_shader.gd")
@@ -577,9 +579,24 @@ var _worm_patches: Dictionary = {}
 var _worm_sprites: Dictionary = {}
 var _worm_sprite_generator := ProceduralWormSprite.new()
 ## Vector2i chunk_coord -> AntColony (see step_ants, docs/concept/soil_fauna.md
-## "Ants"). No sprite dictionary alongside it -- ants are not rendered this
-## pass (see AntColony's own doc comment on scope).
+## "Ants").
 var _ant_colonies: Dictionary = {}
+## Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}. The drawn mounds
+## (see _sync_mound_sprites, docs/concept/soil_fauna.md's "What the player
+## sees"). Mounds never move or change -- a colony's entrances are fixed at
+## chunk construction -- so unlike the worm layer this only ever churns when a
+## chunk enters or leaves decoration range.
+var _mound_sprites: Dictionary = {}
+var _mound_sprite_generator := ProceduralAntMoundSprite.new()
+## The workers, as ONE MultiMeshInstance2D for the whole world rather than a
+## node per ant (see _sync_ant_workers). They move every frame, and ten mounds
+## a chunk times a crew each is exactly the sprite count DecorationLod exists
+## to prevent.
+var _ant_worker_layer: MultiMeshInstance2D = null
+## Seconds of ant traffic elapsed. Its own clock rather than _world_age_seconds
+## because it must advance with step_ants and nothing else, so a test can step
+## the traffic without moving the world's season on.
+var _ant_traffic_seconds := 0.0
 var _loaded_creatures: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_fish: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
 var _loaded_ambient_flyers: Dictionary = {}  # Vector2i chunk_coord -> Array[Node2D]
@@ -714,6 +731,19 @@ func _sync_decoration_and_grass_tracking(player_global_tile: Vector2i, center_ch
 		# meadow is.
 		_sward_refresh_accumulator = GRASS_REFRESH_INTERVAL
 		_worm_refresh_accumulator = WORM_REFRESH_INTERVAL
+		# Mounds are the one decoration layer with nothing to throttle: a
+		# colony's entrances are fixed at chunk construction and never move, so
+		# whether the chunk is drawn AT ALL is the only thing that can change
+		# -- and this is exactly the moment it changes. Re-synced here rather
+		# than on a step_* accumulator, which would otherwise have to walk
+		# every loaded chunk every few seconds to notice nothing had happened.
+		#
+		# Without it, a chunk that leaves decoration range and comes back stays
+		# permanently bare, because _load_chunk is the only other place mounds
+		# are built and the chunk is still loaded
+		# (test_mounds_come_back_when_the_player_returns).
+		for chunk_coord in _ant_colonies:
+			_sync_mound_sprites(chunk_coord)
 		_decoration_dirty = false
 
 	# Grass ALONE is also tile-precise culled (see _grass_view_synced_tile's
@@ -6115,6 +6145,121 @@ func step_ants(delta_seconds: float) -> void:
 			else:
 				_forage_windfall_near_mound(colony, origin, cell)
 
+	# The traffic on the mounds. Unthrottled, unlike every other decoration
+	# layer here, and deliberately: a worker's whole job is to be MOVING, so
+	# there is no node churn to throttle -- the workers are instances in one
+	# MultiMesh, and a five-second refresh would draw ants that teleport.
+	_ant_traffic_seconds += delta_seconds
+	_sync_ant_workers()
+
+
+## Adds/removes mound sprites so the drawn colonies match the simulated ones.
+##
+## `AntColony` seeds its mounds once at chunk construction and never moves
+## them, so unlike the worm layer this has nothing to track over time: the only
+## thing that changes is whether the chunk is close enough to draw at all.
+func _sync_mound_sprites(chunk_coord: Vector2i) -> void:
+	if not _decorates(chunk_coord):
+		_drop_decoration(_mound_sprites, chunk_coord)
+		return
+	var colony: AntColony = _ant_colonies.get(chunk_coord)
+	if colony == null:
+		return
+	# Stored back, not just read: Dictionary.get's default is a fresh temporary,
+	# and sprites parented into it would be in the scene tree with nothing
+	# holding a reference to free them.
+	if not _mound_sprites.has(chunk_coord):
+		_mound_sprites[chunk_coord] = {}
+	var sprites: Dictionary = _mound_sprites[chunk_coord]
+
+	var origin := chunk_coord * CHUNK_SIZE
+	for cell in colony.mound_cells():
+		if sprites.has(cell):
+			continue
+		var sprite := Sprite2D.new()
+		sprite.texture = _mound_sprite_generator.generate_texture(_mound_seed(origin, cell))
+		# World scale from a world-space constant, never re-derived from the
+		# art canvas (see ProceduralAntMoundSprite.world_scale).
+		sprite.scale = Vector2.ONE * ProceduralAntMoundSprite.world_scale()
+		sprite.position = Vector2(
+			(origin.x + cell.x + 0.5) * TerrainRenderer.TILE_SIZE,
+			(origin.y + cell.y + 0.5) * TerrainRenderer.TILE_SIZE
+		)
+		# No wind material: a mound is bare soil, and soil does not sway.
+		_ground_decor_parent.add_child(sprite)
+		sprites[cell] = sprite
+
+
+## A mound's art seed, from its GLOBAL tile -- so the same mound redraws the
+## same dome after a chunk unloads and reloads, and two mounds in one chunk are
+## not the same stamp twice.
+func _mound_seed(origin: Vector2i, cell: Vector2i) -> int:
+	return hash("%d_%d_ant_mound" % [origin.x + cell.x, origin.y + cell.y])
+
+
+## Where every drawn worker is right now, in world pixels.
+##
+## Split out from the MultiMesh fill because per-instance MultiMesh transforms
+## do not round-trip under `--headless` (the dummy renderer), so this is the
+## part the tests can see -- the same split GroundCover.plants_for_cell /
+## _fill_sward_layer already uses.
+##
+## Every worker is measured from its own mound's drawn ENTRANCE rather than
+## from the tile centre: soil_fauna.md's second honesty rule is that a trip
+## starts and ends at the entrance, and the player can see where that hole is.
+func visible_ant_workers() -> Array[Vector2]:
+	var positions: Array[Vector2] = []
+	for chunk_coord in _mound_sprites:
+		var origin: Vector2i = chunk_coord * CHUNK_SIZE
+		for cell in _mound_sprites[chunk_coord]:
+			var mound_seed := _mound_seed(origin, cell)
+			var entrance: Vector2 = (
+				_mound_sprites[chunk_coord][cell].position
+				+ ProceduralAntMoundSprite.entrance_offset(mound_seed)
+				* ProceduralAntMoundSprite.world_scale()
+			)
+			for index in AntTraffic.WORKERS_PER_MOUND:
+				positions.append(
+					entrance
+					+ AntTraffic.worker_offset(
+						AntTraffic.worker_seed(mound_seed, index), _ant_traffic_seconds
+					)
+				)
+	return positions
+
+
+## Thin engine glue over the placement math above: one MultiMesh for every ant
+## in the world, refilled each frame.
+func _fill_ant_worker_layer(positions: Array[Vector2]) -> void:
+	if positions.is_empty():
+		if _ant_worker_layer != null:
+			_ant_worker_layer.multimesh.instance_count = 0
+		return
+	if _ant_worker_layer == null:
+		if _ground_decor_parent == null:
+			return
+		_ant_worker_layer = MultiMeshInstance2D.new()
+		var mesh := QuadMesh.new()
+		# Size owned by the art module, like every other world-space sprite
+		# constant here (see ProceduralAntMoundSprite.worker_world_scale).
+		mesh.size = Vector2.ONE * ProceduralAntMoundSprite.WORKER_WORLD_WIDTH_PX
+		var multimesh := MultiMesh.new()
+		multimesh.mesh = mesh
+		multimesh.transform_format = MultiMesh.TRANSFORM_2D
+		_ant_worker_layer.multimesh = multimesh
+		# One texture for every ant alive: a worker is five dark pixels, so
+		# there is nothing to vary and everything to gain from one binding.
+		_ant_worker_layer.texture = _mound_sprite_generator.worker_texture()
+		_ground_decor_parent.add_child(_ant_worker_layer)
+	var multimesh: MultiMesh = _ant_worker_layer.multimesh
+	multimesh.instance_count = positions.size()
+	for index in positions.size():
+		multimesh.set_instance_transform_2d(index, Transform2D(0.0, positions[index]))
+
+
+func _sync_ant_workers() -> void:
+	_fill_ant_worker_layer(visible_ant_workers())
+
 
 ## One mound's forager: look for the nearest fallen grass seed within its
 ## SHORT foraging reach (AntColony.FORAGE_RADIUS_TILES, well under a mouse's
@@ -7799,11 +7944,12 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 	)
 	_worm_sprites[chunk_coord] = {}
 
-	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants"). Not
-	# rendered this pass -- see AntColony's own doc comment on scope.
+	# Ant mounds in the soil (see docs/concept/soil_fauna.md "Ants").
 	_ant_colonies[chunk_coord] = AntColony.new(
 		hash("%d_%d_ants" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome
 	)
+	_mound_sprites[chunk_coord] = {}
+	_sync_mound_sprites(chunk_coord)
 
 	_ecosystem.add_region(chunk_coord, chunk)
 	# Robin/sparrow's food-density signal (worm burrows, ground seed cells)
@@ -8333,6 +8479,9 @@ func _unload_chunk(chunk_coord: Vector2i) -> void:
 	_worm_sprites.erase(chunk_coord)
 	_worm_patches.erase(chunk_coord)
 
+	for sprite in _mound_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_mound_sprites.erase(chunk_coord)
 	_ant_colonies.erase(chunk_coord)
 
 	# Snapshot the aggregate ecology before dropping the region, so revisiting
