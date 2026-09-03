@@ -484,15 +484,39 @@ static func centerline_curve(a: Vector2, control: Vector2, b: Vector2, segments:
 	return points
 
 
+## A cell's curve is a property of the cell, and every tile within reach
+## asks for it (nine cells per tile, a thousand tiles per chunk), so it
+## is built once and kept -- in the cell's OWN frame (its centre
+## unwrapped), with the seam wrap applied to the query point instead.
+## Found live as chunk streaming crawling at a chunk every few seconds.
+const CURVE_CACHE_CAP := 16384
+var _curve_cache: Dictionary = {}
+
+
+func _cached_curve(cell: int) -> Dictionary:
+	var cached = _curve_cache.get(cell)
+	if cached != null:
+		return cached
+	if _curve_cache.size() >= CURVE_CACHE_CAP:
+		_curve_cache.clear()
+	var curve := _curve_for_cell(cell, _center_of(cell))
+	_curve_cache[cell] = curve
+	return curve
+
+
 ## The closest point on a channel cell's centreline curve to `point`, as
 ## {distance, closest, tangent, half_width} with the tangent pointing
 ## DOWNSTREAM and the half-width interpolated along the curve.
 func _nearest_on_curve(point: Vector2, cell: int) -> Dictionary:
-	var curve := _curve_for_cell(cell, point)
+	var curve := _cached_curve(cell)
 	var points: PackedVector2Array = curve["points"]
 	var half_widths: PackedFloat32Array = curve["half_widths"]
+	# Into the cell's frame: shift the point by whole world widths to sit
+	# nearest the cell's centre, and shift the answer back the same way.
+	var shift := _nearest_wrapped(point, _center_of(cell)) - point
+	var local := point + shift
 	var best := {
-		"distance": INF, "closest": points[0], "tangent": Vector2(0.0, -1.0), "half_width": half_widths[0]
+		"distance": INF, "closest": points[0] - shift, "tangent": Vector2(0.0, -1.0), "half_width": half_widths[0]
 	}
 	for i in points.size() - 1:
 		var a := points[i]
@@ -501,15 +525,15 @@ func _nearest_on_curve(point: Vector2, cell: int) -> Dictionary:
 		var length_squared := ab.length_squared()
 		var t := 0.0
 		if length_squared > 0.0:
-			t = clampf((point - a).dot(ab) / length_squared, 0.0, 1.0)
+			t = clampf((local - a).dot(ab) / length_squared, 0.0, 1.0)
 		var closest := a + ab * t
-		var distance := point.distance_to(closest)
+		var distance := local.distance_to(closest)
 		if distance >= best["distance"]:
 			continue
 		var tangent: Vector2 = ab.normalized() if length_squared > 0.0 else best["tangent"]
 		best = {
 			"distance": distance,
-			"closest": closest,
+			"closest": closest - shift,
 			"tangent": tangent,
 			"half_width": lerpf(half_widths[i], half_widths[i + 1], t),
 		}

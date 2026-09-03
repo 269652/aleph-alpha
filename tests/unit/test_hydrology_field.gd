@@ -168,6 +168,9 @@ func test_a_lake_bed_has_no_fine_detail_and_no_carve():
 func test_probe_is_a_pure_function_of_the_tile():
 	assert_eq(field.probe(35, 14, 0.6), field.probe(35, 14, 0.6))
 	assert_eq(field.probe(35, 45, 0.3), _field_for(TEST_MIN_DISCHARGE).probe(35, 45, 0.3))
+	# The curve cache is transparent: a warm field and a cold one agree on
+	# a river tile's geometry to the bit.
+	assert_eq(field.nearest_channel_geometry(34, 14), _field_for(TEST_MIN_DISCHARGE).nearest_channel_geometry(34, 14))
 
 
 ## --- geometry for the river flow overlay (RiverCatalog.nearest_river_at's shape) ---
