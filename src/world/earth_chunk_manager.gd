@@ -3988,11 +3988,25 @@ func snow_depth() -> float:
 ## Marks a tile as walked on, packing the snow down (see SnowTrail). The
 ## actual GPU-facing mask texture is rebuilt once per step_snow call, not
 ## here -- see _refresh_snow_trail_mask.
-func tread_snow_at(pixel_position: Vector2) -> void:
+##
+## move_trail_window controls whether THIS call also re-centres the trail
+## mask window (see _snow_trail_center_tile's own doc comment) -- true by
+## default, which is what the player's own per-frame call wants: the window
+## has to follow wherever the player is standing. World.gd calls this for
+## every individually-simulated CreatureMarker too (see docs/concept/
+## snow_cover.md's "Footprints" section) with move_trail_window = false, so a
+## creature packs down the exact same SnowTrail data and reaches the exact
+## same shared mask the player's own tread does, WITHOUT relocating the
+## window to wherever the last-processed creature happens to be -- which
+## would risk carrying the player's own nearby tracks right out of the
+## window the instant a creature updates after them in the same frame.
+func tread_snow_at(pixel_position: Vector2, move_trail_window: bool = true) -> void:
 	if _snow_depth <= 0.0:
 		return
-	_snow_trail_center_tile = _world_tile_for_pixel(pixel_position)
-	_snow_trail.step_on(_snow_trail_center_tile)
+	var tile := _world_tile_for_pixel(pixel_position)
+	_snow_trail.step_on(tile)
+	if move_trail_window:
+		_snow_trail_center_tile = tile
 
 
 ## The world clock as of the last snow step, so snow can advance on the same

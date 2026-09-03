@@ -171,6 +171,23 @@ the window read as untrodden rather than clamping to the window's edge
 value, which would smear the last row of footprints across the rest of the
 world.
 
+**Tracks are not player-only.** Every individually-simulated `CreatureMarker`
+treads the same way, once per frame, right beside the player's own call in
+`World`'s per-frame loop — packing down the exact same `SnowTrail`
+dictionary and reaching the exact same trail mask, not a second, parallel
+trail system (the caravan/`PathScarring` precedent this deliberately does
+*not* repeat — that one forked into its own instance because merging it
+into the player's rendered pass was real, separate work; `SnowTrail` had no
+such obstacle, since it was already one shared instance on
+`EarthChunkManager` rather than one scoped inside the player-tracking
+`World` node). The one thing a creature's own tread does *not* do is move
+the window above: the window has to keep following the player, so
+`EarthChunkManager.tread_snow_at` takes a `move_trail_window` argument —
+true (its default) for the player's own call, false for every creature's.
+Leaving that false out would let the window snap to wherever the
+last-processed creature of the frame happens to be standing, potentially
+carrying the player's own nearby tracks right out of view.
+
 Tread reduces both the coverage and the level a site draws — packed snow
 is thinner snow, and only where cover was thin to begin with does a boot
 reach the ground.
@@ -252,6 +269,13 @@ for, and why both exist.
   pixels, rebuilt once per `step_snow` call and pushed via
   `SnowBombShader.set_trail_mask` — bounded by tracked footprints, not
   window size, so cheap enough to do unconditionally.
+- ✅ **Tracks are not player-only.** Every individually-simulated
+  `CreatureMarker` treads the same `SnowTrail` and reaches the same mask
+  the player's own footsteps do — `EarthChunkManager.tread_snow_at` grew a
+  `move_trail_window` argument (true for the player, false for every
+  creature) so a creature's own tread cannot relocate the mask window away
+  from the player. See this section's own "Tracks are not player-only"
+  paragraph above.
 - ⬜ **Far-world precision** — the no-`sin(` structural pin exists
   (`SHADER_CODE` greps clean), but there is no real-GPU readback test yet at
   far-world coordinates; add one, since that is exactly where the old river

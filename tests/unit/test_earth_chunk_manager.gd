@@ -6387,6 +6387,62 @@ func test_treading_snow_reaches_the_shared_trail_mask():
 	snow_layer.free()
 
 
+## Individually-simulated creatures (deer, boar, wolves, ...) must leave the
+## SAME kind of trail mark the player's own footsteps do -- tread_snow_at's
+## new move_trail_window argument is exactly what lets World.gd call it for
+## every CreatureMarker too (see its own doc comment): the player anchors the
+## trail window (move_trail_window left at its true default), and a creature
+## treads a NEIGHBOURING tile with move_trail_window = false, well within
+## that same window but distinct from the player's own tile, so this proves
+## the creature's OWN mark reaches the shared mask rather than coincidentally
+## reusing the player's.
+func test_creature_treading_snow_reaches_the_shared_trail_mask_the_same_way_the_player_does():
+	var snow_layer := TileMapLayer.new()
+	manager.set_snow_layer(snow_layer)
+	manager.set_snow_depth(1.0)
+
+	var player_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(player_pixel)
+
+	var creature_tile := _berlin_tile + Vector2i(5, 0)
+	var creature_pixel := Vector2(creature_tile) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(creature_pixel, false)
+	manager.step_snow(false, 0.0)
+
+	var material := snow_layer.material as ShaderMaterial
+	var mask: Texture2D = material.get_shader_parameter("trail_mask")
+	var origin: Vector2 = material.get_shader_parameter("trail_origin")
+	var world_size: float = material.get_shader_parameter("trail_world_size")
+	var image := mask.get_image()
+	var uv := (creature_pixel - origin) / world_size
+	var pixel := Vector2i(uv * Vector2(image.get_width(), image.get_height()))
+	assert_gt(
+		image.get_pixel(pixel.x, pixel.y).r, 0.0,
+		"a creature's own tread should show up, at its own real position, in the same shared mask the player's does"
+	)
+	snow_layer.free()
+
+
+## The trail mask WINDOW has to keep following the player, not snap to
+## wherever a creature happens to be standing -- see tread_snow_at's own
+## doc comment on move_trail_window. Several creatures updating after the
+## player in the same frame must not relocate _snow_trail_center_tile away
+## from wherever the player's own last tread put it, or the window could
+## carry the player's own nearby tracks right out of view.
+func test_creature_treading_snow_does_not_move_the_trail_window():
+	manager.set_snow_depth(1.0)
+	var player_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(player_pixel)
+
+	var far_creature_pixel := Vector2(_berlin_tile + Vector2i(40, 40)) * TerrainRenderer.TILE_SIZE
+	manager.tread_snow_at(far_creature_pixel, false)
+
+	assert_eq(
+		manager._snow_trail_center_tile, _berlin_tile,
+		"a creature's own tread should not relocate the trail mask window away from the player"
+	)
+
+
 ## A fallen fruit is ONE fruit, landing under where it hung.
 ##
 ## Windfall used to be spawned as up to five arbitrary stacks scattered by a
