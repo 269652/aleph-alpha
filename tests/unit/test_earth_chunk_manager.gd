@@ -326,6 +326,18 @@ func test_set_sun_position_also_updates_the_entity_hillshade_materials_uniforms(
 	assert_eq(material.get_shader_parameter("sun_azimuth_deg"), 210.0)
 
 
+## set_sun_position is also this manager's only live source of "what is the
+## sun doing right now" for a settlement chunk streaming in later (see
+## VillageRenderer.spawn_village's own sun_elevation_deg -- night village
+## window lighting, docs/concept/housing.md#night-lighting-ambient). Stored
+## here rather than re-derived, so a house lit at the moment its chunk loads
+## reflects the SAME real elevation this exact call already pushed into the
+## hillshade materials above, not a second, separately-computed value.
+func test_set_sun_position_stores_the_elevation_for_village_night_lighting():
+	manager.set_sun_position(-12.0, 210.0)
+	assert_eq(manager._current_sun_elevation_deg, -12.0)
+
+
 ## Same shape as test_water_overlay_marks_exactly_the_loaded_ocean_cells,
 ## but hillshade is a GENERAL mechanism (docs/concept/terrain_relief.md:
 ## "not mountain-specific code") -- every loaded cell gets a real tile, not

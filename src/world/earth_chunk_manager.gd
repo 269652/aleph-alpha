@@ -367,6 +367,14 @@ var _fish_renderer := FishRenderer.new()
 var _ambient_flyer_renderer := AmbientFlyerRenderer.new()
 var _piscivore_bird_renderer := PiscivoreBirdRenderer.new()
 var _village_renderer := VillageRenderer.new()
+## The most recent real sun elevation pushed in by set_sun_position below --
+## a settlement chunk streaming in later (see _load_chunk's own
+## spawn_village call) reads this to decide whether its houses' windows
+## light up for the night (VillageRenderer.is_night, docs/concept/
+## housing.md#night-lighting-ambient), rather than a second, independently
+## -computed elevation. Starts at bright daylight, the same "nothing pinned
+## yet" default spawn_village itself falls back to.
+var _current_sun_elevation_deg := VillageRenderer.DEFAULT_SUN_ELEVATION_DEG
 var _biome_classifier := BiomeClassifier.new()
 var _region_difficulty := RegionDifficulty.new()
 ## Separate from _village_renderer's own internal instance -- SettlementGenerator
@@ -4201,6 +4209,7 @@ func set_season_tint(tint: Color) -> void:
 func set_sun_position(elevation_deg: float, azimuth_deg: float) -> void:
 	_hillshade_shader.set_sun_position(elevation_deg, azimuth_deg)
 	_entity_hillshade_shader.set_sun_position(elevation_deg, azimuth_deg)
+	_current_sun_elevation_deg = elevation_deg
 
 
 ## How far from the streaming center a disturbance may be and still be worth
@@ -8279,7 +8288,8 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 		CHUNK_SIZE,
 		TerrainRenderer.TILE_SIZE,
 		_biome_classifier.dominant_biome(chunk.biome),
-		self
+		self,
+		_current_sun_elevation_deg
 	)
 	_loaded_ambient_flyers[chunk_coord] = _ambient_flyer_renderer.spawn_ambient_flyers(
 		_creatures_parent, chunk, chunk_coord * CHUNK_SIZE, TerrainRenderer.TILE_SIZE,
