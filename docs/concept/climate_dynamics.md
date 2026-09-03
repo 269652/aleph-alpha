@@ -249,6 +249,16 @@ own worked-example shape — nothing below is scripted for a named place:
 
 ## Open questions
 
+Three of the questions below are now decided in
+[hydrology.md](hydrology.md#layer-1-the-climate-grid-climate_dynamicsmd-made-concrete),
+which needs them settled to route water: cell size (`CLIMATE_CELL_DEGREES`
+1.0), tick cadence (`CLIMATE_TICK_SECONDS` = `WEATHER_PERIOD_SECONDS`), and
+fixed-sweep relaxation rather than iteration to convergence. That doc also
+answers the reversibility question for lakes, the `weather_model.gd`
+presentation-layer question (the lean below is confirmed), and the `Event`
+question for the hydrological events. The bullets are kept as written so
+the reasoning behind each stays here.
+
 - **Coarse-grid cell size and climate-tick cadence** — needs real
   profiling once built; a tuned constant, not an eyeballed one, per this
   project's no-manual-tuning rule.
