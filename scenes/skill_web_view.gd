@@ -17,6 +17,7 @@ const SkillWeb = preload("res://src/gameplay/skill_web.gd")
 const ClassArchetype = preload("res://src/gameplay/class_archetype.gd")
 const SkillTreeWindow = preload("res://scenes/skill_tree_window.gd")
 const UiTheme = preload("res://src/ui/ui_theme.gd")
+const KeystonePassive = preload("res://src/gameplay/keystone_passive.gd")
 
 ## Emitted when the player clicks a node they can actually take. Inspection
 ## (selected_node_id) happens for any node, including locked ones.
@@ -105,6 +106,11 @@ var preview_path: Array = []
 var _hover_point := Vector2.ZERO
 
 var _web: SkillWeb
+## The four legacy keystones' own required_node_count floor (docs/concept/
+## skills.md "a keystone is the end of a real investment") -- a fixed rules
+## table, not per-character config, so it is built once rather than on every
+## state_of() call.
+var _keystones := KeystonePassive.new()
 var _archetype := ""
 var _resonance: Dictionary = {}
 var _dna_seed := 0
@@ -234,6 +240,18 @@ func state_of(node_id: String) -> String:
 		return STATE_ALLOCATED
 	if not _web.is_reachable(node_id, _allocated, _archetype):
 		return STATE_LOCKED
+	if _web.node_info(node_id)["kind"] == SkillWeb.KIND_KEYSTONE:
+		# Path adjacency alone can satisfy this well before the keystone's own
+		# required_node_count floor does -- a cheap gateway hop can make a
+		# neighbouring wedge's keystone reachable and affordable on far fewer
+		# total nodes than the keystone itself demands. Player.unlock_keystone
+		# already refuses that (KeystonePassive.can_unlock), so reporting
+		# TAKEABLE here would light up a node whose click does nothing -- it
+		# is really LOCKED for a different reason. Non-legacy keystone-ring
+		# nodes (e.g. archmage) carry no such floor and fall through untouched.
+		var gate := _keystones.keystone_info(node_id)
+		if not gate.is_empty() and not _keystones.can_unlock(node_id, _allocated.size()):
+			return STATE_LOCKED
 	if _web.point_cost(node_id, _resonance) > _unspent_points:
 		return STATE_UNAFFORDABLE
 	return STATE_TAKEABLE
