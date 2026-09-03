@@ -2619,7 +2619,10 @@ func _carrion_disease_step() -> void:
 	if nearest == null:
 		return
 	_disease_roll_count += 1
-	var chance := _disease_model.carrion_graze_transmission_chance(region_tier)
+	# A fly-blown carcass (see Carcass.fly_count/docs/concept/flies.md) is a
+	# measurably bigger local hazard than a fly-free one, not just as big --
+	# see DiseaseModel.FLY_BLOWN_GRAZE_RISK_BONUS_PER_FLY.
+	var chance := _disease_model.carrion_graze_transmission_chance(region_tier, nearest.fly_count())
 	if _disease_model.attempt_infect(
 		chance, hash("%d_%d_carrion_graze" % [wander_seed, _disease_roll_count])
 	):

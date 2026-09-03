@@ -1072,6 +1072,30 @@ func test_a_herbivore_does_not_get_exposed_by_an_uncontaminated_carcass():
 	assert_eq(marker.disease_state, DiseaseModel.State.SUSCEPTIBLE)
 
 
+## Fly-blown carrion risk (docs/concept/disease.md, docs/concept/flies.md):
+## a real founder fly on the carcass raises graze risk enough to matter even
+## at EASY region pressure, where the base 0.55 chance alone is nowhere near
+## certain -- proves _carrion_disease_step actually reads the real
+## Carcass.fly_count(), not just region pressure/contaminated.
+func test_a_fly_blown_carcass_raises_graze_risk_even_at_easy_region_pressure():
+	marker.setup(StubWorld.new(), TILE_SIZE)
+	marker.region_tier = RegionDifficulty.Tier.EASY
+
+	var blown_carcass := Carcass.new()
+	blown_carcass.species = "boar"
+	blown_carcass.position = marker.position + Vector2(5, 0)
+	add_child(blown_carcass)
+	_extra.append(blown_carcass)
+	blown_carcass._process(Carcass.FLY_ATTRACTION_DELAY_SECONDS + 1.0)  # a founder fly finds it
+	blown_carcass.contaminated = true  # isolate from the separate, already-covered contamination roll
+	assert_gt(blown_carcass.fly_count(), 0, "sanity: a fly should have found it by now")
+
+	marker._process(0.2)
+
+	assert_eq(marker.disease_state, DiseaseModel.State.INFECTED)
+	assert_eq(marker.disease_id, DiseaseModel.CARRION)
+
+
 func test_weakened_predator_flees_the_player_instead_of_attacking():
 	var predator := _make_predator(Vector2(100, 100))
 	predator.info.health = 1.0  # health_fraction well below the fight threshold

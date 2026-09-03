@@ -16,6 +16,7 @@ const ItemCatalog = preload("res://src/gameplay/item_catalog.gd")
 const ItemStack = preload("res://src/gameplay/item_stack.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
+const FlyColony = preload("res://src/gameplay/fly_colony.gd")
 
 const GROUP_NAME := "carcass"
 
@@ -33,11 +34,27 @@ const ROT_SECONDS := 180.0
 ## carcass, regardless of what parts (if any) remain.
 const DECOMPOSE_HEALTH := 20.0
 
+## How long after death flies start finding a carcass -- see docs/concept/
+## flies.md. Real blowflies locate a body within minutes, long before it is
+## rotten enough for decomposers to actually feed on it (ROT_SECONDS): flies
+## are an EARLY tell, not a symptom of full decomposition, so this is a real
+## fraction of that clock rather than equal to (or longer than) it.
+const FLY_ATTRACTION_DELAY_SECONDS := ROT_SECONDS / 3.0
+
 var species := ""
 var _age := 0.0
 var _parts_taken := 0
 var _decompose_health := DECOMPOSE_HEALTH
 var _sprite: Sprite2D
+
+## A carcass is rot the same way a windfall is (docs/concept/olfaction.md's
+## shared DECAY molecule) -- it grows a real FlyColony (docs/concept/
+## flies.md) rather than a fake counter, the same breeding loop a rotting
+## apple already gets. One founder settles once FLY_ATTRACTION_DELAY_SECONDS
+## has passed; everything after that is bred, not conjured, exactly like
+## EarthChunkManager.step_flies' own "one founder, not a swarm" rule.
+var _fly_colony := FlyColony.new()
+var _flies_found_it := false
 
 ## Disease (see docs/concept/disease.md's anthrax-like CARRION archetype):
 ## which RegionDifficulty tier this carcass rotted in (set by whoever spawns
@@ -66,9 +83,34 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_age += delta
+	_step_flies(delta)
 	if not _was_rotten and is_rotten():
 		_was_rotten = true
 		_roll_contamination()
+
+
+## Advances this carcass's own fly colony -- run BEFORE the rot check above,
+## so a founder that arrives in this same call is already reflected in
+## fly_count() for anything that reads it afterward this frame (a live
+## nearby CreatureMarker's own graze-exposure roll, see docs/concept/
+## disease.md's fly-blown risk bump, or a decomposer's target scoring).
+func _step_flies(delta: float) -> void:
+	if not _flies_found_it:
+		if _age < FLY_ATTRACTION_DELAY_SECONDS:
+			return
+		_flies_found_it = true
+		# ONE founder, not a whole swarm -- see FlyColony.settle's own doc
+		# comment; a pile that starts full has no loop in it.
+		_fly_colony.settle(1)
+	_fly_colony.advance(delta, true)  # a carcass is real food for as long as it exists
+
+
+## How many adult flies are currently swarming this carcass -- see
+## FlyColony.adults. Only adults, the same "only the flying stage is what a
+## player (or a scavenger) actually sees" rule flies.md draws everywhere
+## else: eggs and maggots live IN the carcass and are never visible.
+func fly_count() -> int:
+	return _fly_colony.adults()
 
 
 func is_rotten() -> bool:
