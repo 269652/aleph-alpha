@@ -3937,6 +3937,12 @@ var _snow_material: ShaderMaterial = null
 ## Footprints, and how much snow is lying (see SnowTrail / Snowfall).
 var _snow_trail := SnowTrail.new()
 var _snow_depth := 0.0
+## Whether precipitation is actively falling as snow RIGHT NOW, as of the
+## last step_snow call -- distinct from _snow_depth, which is how much has
+## already piled up. Cached here (rather than recomputed by each reader) so
+## every reader agrees with what the ground is accumulating against; see
+## is_snowing.
+var _snowing := false
 ## The last tile tread_snow_at was called with -- the trail mask window (see
 ## _refresh_snow_trail_mask) is centred here, since SnowTrail's own
 ## dictionary carries no notion of "where the player is" by itself.
@@ -3994,6 +4000,16 @@ func snow_depth() -> float:
 	return _snow_depth
 
 
+## Whether it is actively snowing right now, as of the last step_snow call --
+## see docs/concept/weather.md's "Weather feeds creature behaviour". The same
+## boolean World already computes each frame to accumulate _snow_depth
+## against (see step_snow below); a second reader (CreatureMarker) reads
+## THIS rather than deriving its own answer, so an animal can never disagree
+## with the ground about whether it's snowing right now.
+func is_snowing() -> bool:
+	return _snowing
+
+
 ## Marks a tile as walked on, packing the snow down (see SnowTrail). The
 ## actual GPU-facing mask texture is rebuilt once per step_snow call, not
 ## here -- see _refresh_snow_trail_mask.
@@ -4035,6 +4051,7 @@ var _snow_world_age := 0.0
 ## a real GPU texture upload rather than a uniform float, so it keeps its
 ## own throttle too -- see _refresh_snow_trail_mask.
 func step_snow(snowing: bool, warmth: float) -> void:
+	_snowing = snowing
 	var elapsed: float = maxf(_world_age_seconds - _snow_world_age, 0.0)
 	_snow_world_age = _world_age_seconds
 	var previous_depth := _snow_depth

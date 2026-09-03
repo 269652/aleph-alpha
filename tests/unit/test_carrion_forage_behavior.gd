@@ -88,3 +88,40 @@ func test_advance_bites_repeatedly_across_multiple_intervals():
 		if behavior.advance(CarrionForageBehavior.BITE_INTERVAL):
 			bites += 1
 	assert_eq(bites, 5)
+
+
+# -- target preference: a fly-blown carcass reads as closer (docs/concept/ --
+# carrion.md, docs/concept/flies.md) -- real scavengers really do cue off
+# circling flies as a sign something worth investigating is there, so a
+# decomposer should be measurably more likely to path toward a fly-blown
+# carcass than an equally-close fresh one. Pure and static: no target
+# selection happens here, only the score DecomposerMarker._nearest_carrion
+# picks the smallest of.
+
+func test_effective_distance_equals_real_distance_with_no_flies():
+	assert_eq(CarrionForageBehavior.effective_distance(50.0, 0), 50.0)
+
+
+func test_effective_distance_shrinks_with_more_flies():
+	var no_flies := CarrionForageBehavior.effective_distance(50.0, 0)
+	var some_flies := CarrionForageBehavior.effective_distance(50.0, 3)
+	assert_lt(some_flies, no_flies)
+
+
+func test_effective_distance_shrinks_further_with_even_more_flies():
+	var some_flies := CarrionForageBehavior.effective_distance(50.0, 2)
+	var more_flies := CarrionForageBehavior.effective_distance(50.0, 5)
+	assert_lt(more_flies, some_flies)
+
+
+func test_effective_distance_never_drops_below_the_floor():
+	var effective := CarrionForageBehavior.effective_distance(5.0, 100)
+	assert_eq(effective, CarrionForageBehavior.MIN_EFFECTIVE_DISTANCE_PX)
+
+
+func test_effective_distance_can_read_as_closer_than_a_real_nearer_target():
+	# The whole point: a farther fly-blown carcass can out-score a nearer
+	# fresh one once the discount is applied.
+	var nearer_fresh := CarrionForageBehavior.effective_distance(20.0, 0)
+	var farther_blown := CarrionForageBehavior.effective_distance(26.0, 1)
+	assert_lt(farther_blown, nearer_fresh)

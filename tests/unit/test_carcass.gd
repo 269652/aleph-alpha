@@ -11,6 +11,8 @@ const Butchering = preload("res://src/gameplay/butchering.gd")
 const HoverTargetFinder = preload("res://src/rendering/hover_target_finder.gd")
 const CarcassGuts = preload("res://src/rendering/carcass_guts.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
+const FlyColony = preload("res://src/gameplay/fly_colony.gd")
+const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 
 var carcass: Carcass
 var _drops: Array = []
@@ -187,3 +189,73 @@ func test_contamination_is_only_rolled_once_per_carcass():
 	carcass.contaminated = false  # simulate it having been "cleared" somehow
 	carcass._process(1.0)  # still rotten, but the one-time roll already happened
 	assert_false(carcass.contaminated, "contamination should only be rolled once, at the rot transition")
+
+
+# -- flies: a corpse draws its own swarm (see docs/concept/flies.md) ---------
+#
+# A carcass is rot the same way a windfall is (docs/concept/olfaction.md's
+# shared DECAY molecule) -- it grows a real FlyColony rather than a fake
+# counter, the same breeding loop a rotting apple gets.
+
+func test_a_fresh_carcass_has_no_flies_yet():
+	assert_eq(carcass.fly_count(), 0)
+
+
+func test_flies_have_not_found_it_just_before_the_attraction_delay():
+	carcass._process(Carcass.FLY_ATTRACTION_DELAY_SECONDS - 1.0)
+	assert_eq(carcass.fly_count(), 0)
+
+
+func test_a_founder_fly_finds_the_carcass_once_the_attraction_delay_passes():
+	carcass._process(Carcass.FLY_ATTRACTION_DELAY_SECONDS + 1.0)
+	assert_eq(carcass.fly_count(), 1)
+
+
+## Real blowflies find a body within minutes -- long before it is rotten
+## enough for decomposers to actually feed on it (ROT_SECONDS). Flies are
+## the EARLY tell, not a symptom of full decomposition, so the delay must be
+## a real fraction of that clock, not equal to (or longer than) it.
+func test_fly_attraction_delay_is_well_before_the_carcass_is_rotten():
+	assert_lt(Carcass.FLY_ATTRACTION_DELAY_SECONDS, Carcass.ROT_SECONDS)
+
+
+func test_fly_attraction_delay_is_pinned_to_a_third_of_the_rot_clock():
+	assert_eq(Carcass.FLY_ATTRACTION_DELAY_SECONDS, Carcass.ROT_SECONDS / 3.0)
+
+
+## A carcass nobody touches keeps breeding rather than sitting at one
+## founder forever -- the same real FlyColony/FlyLifeCycle laying loop a
+## rotting apple already gets, proven here rather than assumed just because
+## the module is reused.
+func test_the_colony_keeps_growing_the_longer_an_untouched_carcass_sits():
+	carcass._process(Carcass.FLY_ATTRACTION_DELAY_SECONDS + 1.0)
+	var founder_count := carcass.fly_count()
+	var peak := founder_count
+	for i in 20:
+		carcass._process(FlyColony.LAYING_INTERVAL_SECONDS + 1.0)
+		peak = maxi(peak, carcass.fly_count())
+	assert_gt(peak, founder_count, "an ignored carcass should eventually breed past its founder")
+
+
+# -- end to end: corpse age -> flies -> disease risk (see docs/concept/ -----
+# disease.md's fly-blown carrion risk bump) -- the whole chain in one test,
+# not three unit tests that never touch each other.
+
+func test_corpse_age_drives_fly_count_which_measurably_raises_local_disease_risk():
+	var model := DiseaseModel.new()
+	var fresh_risk: float = model.carrion_graze_transmission_chance(
+		RegionDifficulty.Tier.EASY, carcass.fly_count()
+	)
+	assert_eq(carcass.fly_count(), 0, "sanity: nothing has found this corpse yet")
+
+	carcass._process(Carcass.FLY_ATTRACTION_DELAY_SECONDS + 1.0)
+	var blown_fly_count := carcass.fly_count()
+	assert_gt(blown_fly_count, 0, "sanity: a fly should have found the corpse by now")
+
+	var blown_risk: float = model.carrion_graze_transmission_chance(
+		RegionDifficulty.Tier.EASY, blown_fly_count
+	)
+	assert_gt(
+		blown_risk, fresh_risk,
+		"a fly-blown corpse should carry measurably higher local disease risk than a fresh one"
+	)

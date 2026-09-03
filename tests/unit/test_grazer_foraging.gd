@@ -182,6 +182,89 @@ func test_arrival_matches_how_close_the_world_lets_an_animal_eat():
 	assert_almost_eq(GrazerForaging.ARRIVAL_DISTANCE, FoodConsumption.EAT_RADIUS, 0.001)
 
 
+# -- weather: active snowfall slows grazing (see docs/concept/weather.md's
+# "Weather feeds creature behaviour") --------------------------------------
+#
+# A grazer isn't just cropping a tuft while snow is actively coming down --
+# every bite is being buried as fast as it's found, on top of whatever the
+# ground already held, so the animal has to work through it to keep its
+# muzzle in the grass. This is the ONE hook this pass builds (see the
+# concept doc for why not ThreatAvoidantWander or a shelter-seeking drive
+# too): `snowing` scales the head-down bout (GRAZE_SECONDS) only.
+
+func test_snowing_defaults_to_off_so_old_timing_is_unchanged():
+	var forage = GrazerForaging.new()
+	assert_false(forage.snowing, "a caller that never sets it keeps today's exact timing")
+
+
+## The core claim: the SAME creature logic, run under two weather states from
+## an identical start, produces a real behavioural difference -- not a
+## cosmetic one. A clear-weather bout is finished well before an otherwise
+## identical snowing one.
+func test_snowing_makes_a_graze_bout_take_measurably_longer():
+	var clear = _approaching()
+	clear.arrive()
+	var snowy = _approaching()
+	snowy.snowing = true
+	snowy.arrive()
+
+	# Exactly one clear-weather bout's worth of time, fed to both.
+	clear.advance(GrazerForaging.GRAZE_SECONDS + 0.01)
+	snowy.advance(GrazerForaging.GRAZE_SECONDS + 0.01)
+
+	assert_eq(clear.phase, GrazerForaging.Phase.SEEKING, "a clear bout finishes on schedule")
+	assert_eq(
+		snowy.phase, GrazerForaging.Phase.GRAZING,
+		"a snowing bout is still going -- the same food takes longer to hold onto"
+	)
+
+
+## Pinned to the exact tuned threshold, not just "longer than clear weather":
+## a snowing bout finishes at GRAZE_SECONDS * SNOW_GRAZE_MULTIPLIER, checked
+## from both sides so the constant is a real, tested value and not a comment.
+func test_a_snowing_bout_finishes_at_exactly_the_scaled_duration():
+	var scaled: float = GrazerForaging.GRAZE_SECONDS * GrazerForaging.SNOW_GRAZE_MULTIPLIER
+
+	var short_of_it = _approaching()
+	short_of_it.snowing = true
+	short_of_it.arrive()
+	short_of_it.advance(scaled - 0.05)
+	assert_eq(
+		short_of_it.phase, GrazerForaging.Phase.GRAZING, "not done yet, just short of the scaled duration"
+	)
+
+	var past_it = _approaching()
+	past_it.snowing = true
+	past_it.arrive()
+	past_it.advance(scaled + 0.05)
+	assert_eq(past_it.phase, GrazerForaging.Phase.SEEKING, "done once the scaled duration has elapsed")
+
+
+## The mouthful is still taken at the bout's own HALFWAY point, scaled along
+## with the rest of the bout -- so a snowy bout is uniformly slower
+## throughout (digging in, then eating), not fast to reach the food and then
+## idling with nothing left to do.
+func test_the_swallow_point_scales_with_the_snow_bout_too():
+	var forage = _approaching()
+	forage.snowing = true
+	forage.arrive()
+	var half: float = GrazerForaging.GRAZE_SECONDS * GrazerForaging.SNOW_GRAZE_MULTIPLIER * GrazerForaging.SWALLOW_FRACTION
+	assert_false(forage.advance(half - 0.05), "not swallowed just short of the scaled halfway point")
+	assert_true(forage.advance(0.1), "swallowed once the scaled halfway point passes")
+
+
+## Scope check: this hook touches GRAZE_SECONDS only. The walk between bites
+## and the give-up timeout are untouched by weather -- snow makes eating what
+## you've found slower, it does not make an animal step faster between bites
+## or abandon a target sooner, and this doc does not claim either.
+func test_snow_does_not_change_the_walk_between_bites():
+	var forage = GrazerForaging.new()
+	forage.snowing = true
+	assert_false(forage.can_commit(), "hasn't stepped yet")
+	forage.advance(GrazerForaging.REGRAZE_SECONDS)
+	assert_true(forage.can_commit(), "the regraze interval is unaffected by snow")
+
+
 func _approaching():
 	var forage = GrazerForaging.new()
 	forage.advance(GrazerForaging.REGRAZE_SECONDS)
