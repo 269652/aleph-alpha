@@ -74,6 +74,7 @@ func after_each():
 	Input.action_release("trade")
 	Input.action_release("talk")
 	Input.action_release("fish")
+	Input.action_release("block")
 
 
 ## The tile the player is facing (see TileTargeting.facing_tile), matching
@@ -495,6 +496,96 @@ func test_equipping_an_item_shows_its_sprite_id_art_not_its_raw_id():
 		expected.get_image().get_data(),
 		"the held sprite should be iron_sword's art (the sprite_id), not iron_sword_blessed's"
 	)
+
+
+## -- item wear: accumulated combat fatigue (see docs/concept/item_durability.md) --
+## Scoped to items with a real modeled material only (today: wooden_club/
+## iron_sword/crude_blade -- ItemCatalog._WEAPON_MATERIAL_AND_VOLUME, the
+## same gate weapon mass already uses), the same "not guessed at here"
+## convention every other real-mass/real-material field in this codebase
+## follows.
+
+func test_a_connecting_attack_wears_the_held_weapon_with_modeled_material():
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	player.equip_item(sword)
+	_creature_at("herbivore", Vector2(10, 0))
+
+	player._perform_attack()
+
+	assert_gt(sword.wear, 0.0, "a connecting attack must wear a real-material weapon")
+
+
+func test_a_whiffed_attack_does_not_wear_the_weapon():
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	player.equip_item(sword)
+	# No creature anywhere nearby -- this swing cannot connect.
+
+	player._perform_attack()
+
+	assert_almost_eq(sword.wear, 0.0, 0.0001, "a swing that hits nothing must not wear the weapon")
+
+
+func test_attacking_with_an_unmodeled_material_item_never_accrues_wear():
+	var axe := _item_catalog.make("iron_axe")  # no material modeled -- see item_catalog.gd
+	player.inventory.add(axe, 1)
+	player.equip_item(axe)
+	_creature_at("herbivore", Vector2(10, 0))
+
+	player._perform_attack()
+
+	assert_almost_eq(axe.wear, 0.0, 0.0001, "an item with no modeled material must never accrue wear")
+
+
+func test_blocking_a_real_hit_wears_the_equipped_weapon():
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	player.equip_item(sword)
+	Input.action_press("block")
+
+	player.take_damage(6.0)
+
+	assert_gt(sword.wear, 0.0, "a block that actually absorbs a hit must wear the weapon")
+
+
+func test_blocking_with_no_incoming_damage_does_not_wear_the_weapon():
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	player.equip_item(sword)
+	Input.action_press("block")
+
+	player.take_damage(0.0)
+
+	assert_almost_eq(sword.wear, 0.0, 0.0001, "nothing was actually blocked, so nothing should wear")
+
+
+func test_a_broken_weapon_is_no_longer_returned_by_held_weapon():
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	player.equip_item(sword)
+	sword.wear = 9999.0
+
+	assert_null(player._held_weapon(), "a weapon broken from fatigue must stop counting as held")
+
+
+func test_a_broken_weapon_is_held_as_unarmed():
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	player.equip_item(sword)
+	sword.wear = 9999.0
+
+	assert_eq(player._held_kind(), "unarmed", "a broken sword must block/attack as bare hands, not as a sword")
+
+
+func test_a_weapon_below_max_wear_is_still_held_normally():
+	var sword := _item_catalog.make("iron_sword")
+	player.inventory.add(sword, 1)
+	player.equip_item(sword)
+	sword.wear = 1.0  # far below iron's max_wear (56.0)
+
+	assert_eq(player._held_weapon(), sword)
+	assert_eq(player._held_kind(), "sword")
 
 
 ## activate_hotbar_slot didn't special-case armor before calling equip_item

@@ -568,10 +568,16 @@ else, which is a fair description of a glass knife.
 - ⬜ **Edge-and-backing.** materials.md names it and nothing implements it: an
   edge's support against its own backing material is not modelled, so an obsidian
   blade bonded to a tough spine behaves exactly like a bare one.
-- ⬜ **Wear, chipping and durability.** `weakest_link` is computed and the
-  compiler ignores it. Nothing degrades, nothing breaks, and no rule is emitted
-  for either — so the serviceability/strength trade-off the joint vocabulary
-  exists to express still has no consequence in play.
+- ⬜ **Wear, chipping and durability, for EMERGENT/crafted items specifically.**
+  `weakest_link` is computed and the compiler still ignores it — so the
+  serviceability/strength trade-off the joint vocabulary exists to express
+  still has no consequence in play for anything assembled through this part
+  graph. [`item_durability.md`](item_durability.md) built the general
+  mechanism (toughness-derived fatigue wear, real for the three base
+  catalog weapons with a modeled material), but nothing connects it to
+  `weakest_link` or to a crafted item's own computed vector yet — a crafted
+  sword still doesn't wear any differently for being assembled from a
+  weaker joint.
 - ⬜ **Effect magnitudes.** The compiler emits *which* rules fire and under what
   guard; the pipelines carry the physical facts (keenness, kerf, delivered
   momentum) but no damage number. What an atom like `cut_damage` actually does

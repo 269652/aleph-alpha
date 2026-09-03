@@ -83,6 +83,8 @@ features.
 
 ✅ **A fifth "snow" canopy frame is found and rendered like the season turn, per docs/concept/flora.md's "A fifth frame: snow is not a season"** (`IllustratedTree.CANOPY_SNOW`/`has_snow_frame_for`/`snow_canopy_for`, `ProceduralTreeSprite.snow_level`/`SNOW_LEVELS`, `TreeRenderer.set_snow_coverage`, `EarthChunkManager.set_snow_depth`/`sync_tree_season`/`step_fruiting`). `canopy_cherry.png` grew a real fifth column -- measured on the raw file (a stale, pre-edit `.godot/imported/` cache briefly made blob detection see only four; re-`--import`ing showed the real content), five genuine drawings of 404/415/421/423/432px separated by real gaps, the last reading as neutral grey-white (mean colour ~(0.46, 0.44, 0.47), essentially zero saturation) against every season frame's own hue. The separate-file canopy loader (cherry's own path) was switched from equal-width slicing to the SAME blob-detection `CompositeSheetSlicer.regions_in` the composite layout's canopy strip already used, which needed no change at all to pick up a fifth composite-sheet blob when one exists. `ProceduralTreeSprite` threads a `snow_coverage` parameter through the same `_turned_canopy` branch-order blend the season turn uses (reuse, not a new mechanism -- two trees show snow on different boughs at the same coverage because they already turn seasons in different orders), composed AFTER season/turn/growth, gated on `has_snow_frame_for` so a species without the frame is unaffected whatever the value is. Quantised to `SnowLayer.DEPTH_BANDS` (10 -- the ground's own lying-snow band count) rather than an invented number, so canopy snow is exactly as coarse or fine as the snow already at its own foot. Plumbed on the SAME `set_wind_strength` forwarding shape from `EarthChunkManager` to `TreeRenderer`, but that alone only reaches a freshly SPAWNED tree (`TreeRenderer` holds no reference to a tree once built) -- an ALREADY-standing tree is dressed by `sync_tree_season`/`step_fruiting`, the two loops that already push season/turn to every loaded `ChoppableTree`, now also carrying `_snow_depth` (folded into `sync_tree_season`'s own quantised redraw-guard signature, so a snowfall redraws a handful of times rather than every frame, the same cost shape the season turn already has). By the time this landed, a second, independent session had added the same fifth column to every other composite sheet (acorn/hazelnut/apple/walnut/pine) -- so the "rest follows" fallback this was built for is verified as a strict, tested gate rather than against a real species still missing the frame, since none remain in the roster.
 
+✅ **Follow-up: the `SnowLayer.DEPTH_BANDS` borrow above went dangling and is now `ProceduralTreeSprite.SNOW_LEVELS := 10`, a standalone constant.** `SnowLayer` (the CPU-side ground snow system referenced throughout this entry) was deleted outright when `SnowBombShader` replaced it, but the preload borrowing its `DEPTH_BANDS` for canopy-snow quantisation was left behind -- a hard GDScript parse error (`Preload file "res://src/rendering/snow_layer.gd" does not exist`) that failed to compile `procedural_tree_sprite.gd` and, transitively, most of the project (`player.gd`, `character_view.gd`, every GUT test that touches a tree). `SnowBombShader` has no equivalent "how many discrete bands" constant to borrow instead (`level_count()` counts hand-illustrated art sheets -- 3 today -- not a rendering granularity, and is filesystem-backed rather than a compile-time constant), so `SNOW_LEVELS` is now pinned standalone at the same real value (10) canopy snow already quantised to, preserving its behaviour exactly (`test_snow_levels_is_a_real_pinned_constant`, `test_snow_level_quantises_up_to_the_next_of_ten_bands`). **Separately, unblocking `test_illustrated_tree.gd`/`test_choppable_tree.gd` for the first time in a while surfaced a real, PRE-EXISTING regression this fix does not touch**: composite canopy sheets now slice to 4 frames instead of 5, so `has_snow_frame_for` reads false for every species and canopy snow silently never renders (`test_snow_coverage_reaches_the_drawn_canopy` and 9 others in `test_illustrated_tree.gd` fail) -- traced to the concurrent composite-item-sheet work, not to this preload or to `SnowBombShader`, and left for a dedicated follow-up rather than folded into this fix.
+
 ✅ **`test_pine_is_an_evergreen_in_its_art_and_not_only_in_its_data`'s acorn/apple failure is resolved** at the source, in `CompositeSheetSlicer.cut_out` -- see its own doc comments ("Two more bugs found keying acorn and apple") for the full measurements. Two bugs, not one. First: acorn's and apple's composite sheets decode as FORMAT_RGB8 (no alpha channel at all), and `Image.set_pixel` cannot store a non-1 alpha without one -- the existing reachability keying ran, correctly found the background, and then every write to key it out silently did nothing (measured: 92140/92140 pixels stayed opaque after cut_out, identical to before it ran). `cut_out` now converts the cropped piece to FORMAT_RGBA8 first. Second, once alpha writes actually worked: a bare tree's real branch gaps that do not touch the crop's own edge stayed protected by design (reachability exists to protect real enclosed content, like the sheets' own snow frames), which still left the bare-winter frame denser than its own summer canopy (measured ratio 0.591/0.549, need `< 0.5`). `cut_out` takes an `aggressive` flag, used ONLY for the bare-winter frame by `IllustratedTree` (the one canopy role that never draws anything pale by design), that keys every background-coloured pixel regardless of reachability AND erodes the thin anti-aliasing halo every branch edge carries against an opaque background one ring at a time -- colour-based removal alone still left the ratio at 0.500/0.525, and the halo turned out to account for the rest. Final measured ratio: cherry 0.452, walnut 0.418, hazelnut 0.434, acorn 0.440, apple 0.467, against pine's evergreen 0.981 -- acorn and apple now sit in the same 0.42-0.47 band as every species that never needed keying at all. A second, concurrent session recalibrated the test's bound from an eyeballed inline `0.5` to a documented, tested `_WINTER_VS_SUMMER_MAX := 0.55` against the intermediate (colour-only) numbers above; it remains a real, safe bound after the halo-erosion pass, just with more headroom than it strictly needs. Regression coverage against the real danger this invites -- eroding real near-white content elsewhere on the same two sheets -- lives in `test_composite_sheet_slicer.gd`: default (non-aggressive) keying leaves each sheet's own real snow-covered canopy frame (`IllustratedTree.CANOPY_SNOW`) mostly opaque (0.55 acorn, 0.59 apple), and a test running `aggressive` on that same frame demonstrates it would erode that content hard (down to ~0.23) -- proof of why the flag is never asked for anywhere but the bare-winter frame.
 
 ✅ **Walnut and pine's on-tree/harvested rows were restored after a concurrent regeneration overwrote them.** The same pass that gave every species its fifth snow-canopy column apparently redrew `composite_walnut.png` and `composite_pine.png` in full rather than only adding that column: their below-canopy area came out as one drawing per canopy season instead of the documented fixed two-row layout -- confirmed by measuring each below-canopy blob's centre against its aligned canopy column's centre (within a few px on both sheets). Walnut ballooned to 24 detected regions, its "on-tree" row alone matching all 5 canopy columns instead of 2; pine collapsed to a single row of 4 with no second (harvested) row at all -- exactly why `on_tree_frames_for`/`harvest_frames_for`/`test_unripe_and_ripe_are_the_first_two_frames_whatever_the_count`/`test_on_tree_and_harvested_frames_are_told_apart`/`test_pine_has_more_stages_than_the_nut_trees` came out wrong. `CompositeSheetSlicer`/`IllustratedTree._composite_parts` were reading the sheets correctly throughout -- the sheets themselves no longer matched the layout the code (and the doc comment above `SEPARATE_FRUIT_FRAME_COUNT`) describes. Fixed at the asset level, not the code: each current sheet's canopy strip (which legitimately carries the new fifth frame) was grafted onto the last-known-good (pre-regeneration) trunk/fruit content below it, restoring walnut's two-on-tree/two-harvested rows and pine's three-on-tree/four-harvested rows without losing the snow frame. Combined with the acorn/apple fix above, `test_illustrated_tree.gd` is 96/96.
@@ -3629,6 +3631,66 @@ describes:
   entry sets a divergent `sprite_id` yet, so this is prompt scaffolding
   only — plugging in real art still means generating the sheets, slicing
   them, and pointing a catalog entry's `sprite_id` at the result.
+- **Composite item sheets: the "placed" surface, formalized** (small) —
+  ✅ Spec'd (2026-09-03), ⬜ nothing generated/wired — `item_illustrations.md`'s
+  states table never named "placed in the world" as an item art surface at
+  all. In reality `campfire`/`furnace`/`sagewerk`/`storage` already render
+  through TWO independent generators (`procedural_item_sprite.gd` for the
+  inventory icon, `procedural_structure_sprite.gd` for the placed tile baked
+  into `TerrainRenderer`'s own atlas) and nothing previously said so. The doc
+  now specs a second sheet per structure — a seeded-variant grid mirroring
+  `boulders.png`/ore rather than a walk cycle, since `ProceduralStructureSprite`
+  already takes a `variant_seed` — plus a wiring plan
+  (`IllustratedStructureSprite`, mirroring `IllustratedStoneSprite`/
+  `IllustratedTerrainSprite`'s `has_variants()`/`frame_for()` shape).
+  `ai_sprite_prompts.md` §10 adds four ready-to-run generation prompts
+  (campfire/furnace/sagewerk/storage). Also corrected in this pass: the
+  `sprite_id` and armor-on-rig sections of `item_illustrations.md` still read
+  as open proposals ("Today `Item` has no icon/texture field at all") when
+  both had already shipped — updated to past tense with a pointer to this
+  file, so the doc doesn't contradict itself once the placed-structure
+  section leans on `sprite_id` existing. Not built: the wiring class needs
+  real source pixels to write a meaningful test against, the same sequencing
+  `IllustratedCharacterSprite._PARTS` already follows (stays empty until
+  hair/beard art exists) — not an oversight, the established order here.
+- **Item durability: wear and fatigue failure** (medium) — ✅ Done (basic),
+  see `concept/item_durability.md` (new). Closes the half of materials.md's
+  "Physical honesty over time" pillar that was `emergent_crafting.md`'s own
+  named ⬜ ("nothing degrades, nothing breaks") -- for the three catalog
+  weapons with a real modeled material (`wooden_club`/`iron_sword`/
+  `crude_blade`, the same set weapon mass already covers), a connecting
+  attack or a block that absorbs a real hit now costs the held item one unit
+  of wear (`item_wear.gd`, `max_wear`/`is_broken`/`condition_for`, 18
+  tests); a broken item reads as bare hands for both damage and block
+  efficiency (`Player._held_weapon`/`_held_kind`), with no separate fallback
+  path needed anywhere else. `Item` gained a `wear: float` field -- the one
+  deliberate, documented exception to its own "identity/stats shared by
+  every stack" framing, needed because `Equipment._worn` stores a bare
+  `Item`, not a stack, so wear has to live where it survives that
+  transition. Deliberately combat-only (attack/block) this pass, not
+  chopping/mining; deliberately a step function (full performance until
+  broken, then zero), not a gradual falloff; deliberately scoped to the
+  three items with modeled material, same as mass. Cross-linked from
+  `materials.md`, `heat_treatment.md` (whose own "Edge wear" ⬜ is a
+  *different*, still-open gap -- gradual `sharpness_capacity` dulling
+  affecting per-swing damage, not whether the item still works at all) and
+  `emergent_crafting.md` (whose `weakest_link` still isn't wired to this).
+  Not built: repair, tool-use wear, wear beyond the three modeled weapons, a
+  tooltip line, rarity-driven wear resistance -- all named explicitly in the
+  concept doc's own Status section rather than left implicit.
+- **Composite item sheet: attack/defense/condition, wooden_club pilot**
+  (small) — ✅ Spec'd (2026-09-03), ⬜ nothing generated/wired —
+  `item_illustrations.md`'s per-item swing art was flatly "Deferred, not
+  needed" until this pass; now that block.gd (defense) and item_durability.md
+  (worn/broken) both give it something real to draw, `wooden_club` is spec'd
+  as the concrete pilot: one sheet, two rows (an 8-frame attack cycle, a
+  3-cell defense/worn/broken row), item-alone art with no hand/arm (same
+  convention section 2f's held-crop item prompts already use), wired the
+  same `_SHEETS`/`has_action` shape `IllustratedAnimalSprite` already uses.
+  `ai_sprite_prompts.md` §11 adds the four ready-to-run generation prompts.
+  Deliberately one item, not the whole catalog -- iron_sword/crude_blade
+  (the only other items item_durability.md covers) are the named next step
+  once this shape is validated, not attempted here.
 - **Spell Gem Rarity Derivation** (medium) — 🚧 Partial — `rarity_tier.gd`'s
   `tier_from_complexity(complexity)` derives a tier straight from a numeric
   complexity/cost score (e.g. `spell_cost.gd`'s `derived_base()`), reusing the
@@ -8473,6 +8535,16 @@ for a caller -- that failure mode is exactly what this pass was answering.
   count you twice (which would otherwise be a free way over a tier threshold).
   6 tests. Spec written first as `concept/player_citizenship.md`'s new
   "Residency" section, which the doc did not previously cover at all.
+- **`player_settled` reaches dialogue too** (size: tiny) -- ✅ **Done** --
+  the event above landed in the graph but not in `DialogueTopic`:
+  `test_every_event_type_the_substrate_really_emits_is_claimed_by_some_topic`
+  (`test_dialogue_topic.gd`) caught the gap by scanning the real emitters,
+  the same census the eleven memory topics are built to pass. Joins
+  `TOPIC_ARRIVAL` alongside `npc_settled` rather than `village_history`: it
+  is one person's own firsthand, undistorted arrival (see
+  `DialogueTopic.MEMORY_TOPIC_EVENT_TYPES`'s own doc comment on why
+  `npc_settled` was already split off for exactly that reason), not real
+  news about the village's fortunes. 1 new test.
 - **Shop prices are local** (size: small) -- ✅ **Done** --
   `Shop.market_price_of(item_id, market)` = catalog base x
   `Market.price_for`'s scarcity multiplier, which is exactly 1.0 at

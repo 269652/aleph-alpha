@@ -148,3 +148,23 @@ func test_sprite_id_can_be_given_explicitly_and_differ_from_id():
 	)
 	assert_eq(blessed.sprite_id, "iron_sword")
 	assert_eq(blessed.id, "iron_sword_blessed", "sprite_id must not change the item's own identity")
+
+
+# -- wear: accumulated combat fatigue (see docs/concept/item_durability.md) --
+# The one deliberate exception to this file's own "immutable identity/stats"
+# framing at the top -- it has to survive the ItemStack -> Equipment
+# transition (Equipment._worn stores a bare Item, not a stack), so it lives
+# here rather than on ItemStack the way age_seconds does. Not a constructor
+# parameter on purpose: unlike every other field above, wear is not part of
+# an item's catalog definition, it is state that accumulates from zero over
+# one specific item's own lifetime.
+
+func test_wear_starts_at_zero():
+	var club := Item.new("wooden_club", "Wooden Club", "weapon", 1, 8.0)
+	assert_almost_eq(club.wear, 0.0, 0.0001)
+
+
+func test_wear_can_be_mutated_after_construction():
+	var club := Item.new("wooden_club", "Wooden Club", "weapon", 1, 8.0)
+	club.wear += 1.0
+	assert_almost_eq(club.wear, 1.0, 0.0001)
