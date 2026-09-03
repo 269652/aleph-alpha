@@ -8,7 +8,7 @@ extends GutTest
 ## individual homes.
 
 const ProceduralHouseSprite = preload("res://src/rendering/procedural_house_sprite.gd")
-const VillageRenderer = preload("res://src/rendering/village_renderer.gd")
+const CharacterView = preload("res://scenes/character_view.gd")
 
 var generator := ProceduralHouseSprite.new()
 
@@ -23,11 +23,13 @@ func test_image_size_matches_size_for_and_comes_from_the_pinned_pool():
 
 ## The report: houses were smaller than the NPC standing next to them. Every
 ## house size must comfortably exceed a villager (body + head, see
-## VillageRenderer.BODY_SIZE/HEAD_SIZE).
+## CharacterView.BODY_SIZE/HEAD_SIZE -- villagers render with the player's
+## own CharacterView; VillageRenderer deliberately keeps no villager-size
+## constants of its own, see that file's own doc comment).
 func test_every_house_size_is_clearly_bigger_than_a_villager():
-	var villager_height := VillageRenderer.BODY_SIZE.y + VillageRenderer.HEAD_SIZE.y
+	var villager_height := CharacterView.BODY_SIZE.y + CharacterView.HEAD_SIZE.y
 	for size in ProceduralHouseSprite.SIZES:
-		assert_gte(size.x, VillageRenderer.BODY_SIZE.x * 2, "house should be at least twice as wide as a villager")
+		assert_gte(size.x, CharacterView.BODY_SIZE.x * 2, "house should be at least twice as wide as a villager")
 		assert_gte(size.y, villager_height, "house should be at least as tall as a full villager")
 
 
