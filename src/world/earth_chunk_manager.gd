@@ -6817,6 +6817,28 @@ func is_lake_at_global(global_x: int, global_y: int) -> bool:
 	return generator.is_lake_at_global(global_x, global_y)
 
 
+## The water current at a tile, as {direction: Vector2 (tile-space unit
+## vector pointing downstream), speed_m_s}: the river's solved current on
+## a river tile, a mouth's fading plume in the still water it empties
+## into, zero elsewhere. What a fish swims against (FishMarker.
+## current_speed_factor) -- the same bearing and speed the flow overlay
+## draws, so the fish and the strokes agree.
+func river_current_at_global(global_x: int, global_y: int) -> Dictionary:
+	var probe := generator.hydrology_at_global(global_x, global_y)
+	var bearing_deg := 0.0
+	var speed := 0.0
+	if generator.is_river_at_global(global_x, global_y):
+		bearing_deg = generator.nearest_river_at(global_x, global_y).course_bearing_deg
+		speed = river_hydraulics_at_global(global_x, global_y).velocity_m_s
+	elif probe["plume_factor"] > 0.0:
+		bearing_deg = probe["plume_bearing_deg"]
+		speed = HydrologyField.PLUME_SPEED_M_S * probe["plume_factor"]
+	if speed <= 0.0:
+		return {"direction": Vector2.ZERO, "speed_m_s": 0.0}
+	var radians := deg_to_rad(bearing_deg)
+	return {"direction": Vector2(sin(radians), -cos(radians)), "speed_m_s": speed}
+
+
 ## Real metres of lake water over a tile, 0.0 off a lake. Unlike river
 ## depth this delegates directly: nothing a player builds ponds a lake.
 func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:

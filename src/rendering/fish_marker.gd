@@ -281,7 +281,10 @@ func _step_water_ripple(delta: float) -> void:
 		_water_ripple_accumulator = ripple_phase_offset(wander_seed)
 		_water_ripple_interval = ripple_interval(wander_seed, 0)
 	_water_ripple_accumulator += delta
-	if _water_ripple_accumulator < _water_ripple_interval:
+	# Swimming upstream shortens the wait between flap bursts (see
+	# UPSTREAM_FLAP_SHORTENING): more flapping, more rings in the current.
+	var interval := _water_ripple_interval * (1.0 - UPSTREAM_FLAP_SHORTENING * _upstream_effort)
+	if _water_ripple_accumulator < interval:
 		_is_flapping = false
 		return
 	_water_ripple_accumulator = 0.0
@@ -461,6 +464,12 @@ func _process(frame_delta: float) -> void:
 	# fish onto its real _process for the first time: "fish still don't
 	# move natural like ingame").
 	var speed := _wander.wander_speed * (FLAP_SPEED_MULTIPLIER if _is_flapping else 1.0)
+	# Against the current a fish is slower and works harder (see
+	# current_speed_factor / upstream_effort); the effort is read by the
+	# next frame's flap cadence.
+	var current := _current_at(position)
+	speed *= current_speed_factor(_current_heading, current["direction"], current["speed_m_s"])
+	_upstream_effort = upstream_effort(_current_heading, current["direction"], current["speed_m_s"])
 	if _bolt_remaining > 0.0:
 		speed = BOLT_SPEED  # the dash that makes an escape read as an escape
 
@@ -516,4 +525,63 @@ func _has_water_clearance(center: Vector2) -> bool:
 func _is_water(pixel_position: Vector2) -> bool:
 	var tile_x := int(floor(pixel_position.x / _tile_size))
 	var tile_y := int(floor(pixel_position.y / _tile_size))
-	return _world.biome_at_global(tile_x, tile_y) == "ocean"
+	if _world.biome_at_global(tile_x, tile_y) == "ocean":
+		return true
+	# Rivers and lakes are overlay flags on land biome (docs/concept/
+	# hydrology.md), asked separately; a world that has neither (the
+	# character preview diorama's pond) simply has neither.
+	if _world.has_method("is_river_at_global") and _world.is_river_at_global(tile_x, tile_y):
+		return true
+	return _world.has_method("is_lake_at_global") and _world.is_lake_at_global(tile_x, tile_y)
+
+
+## --- swimming against the current (docs/concept/hydrology.md) ---
+## "fish should also swim in rivers, also upstream just slower and more
+## flapping": the current's push along the fish's own heading slows an
+## upstream swim and speeds a downstream one, and an upstream swim flaps
+## more often (see _step_water_ripple), which is also what rings the
+## current's contour lines around it (World feeds every fish to the flow
+## overlay as a wader).
+
+## Fraction of speed lost swimming straight into a full-strength current,
+## and gained swimming straight with it.
+const UPSTREAM_SLOWDOWN := 0.6
+const DOWNSTREAM_BOOST := 0.4
+## The current speed (m/s) that counts as full strength -- a fast reach
+## (RiverFlowShader.FAST_FLOW_M_S is 0.6); still water is 0.
+const CURRENT_FULL_M_S := 0.8
+## How much shorter the wait between flap bursts gets at full upstream
+## effort: a fish holding station against a current flaps continuously.
+const UPSTREAM_FLAP_SHORTENING := 0.7
+
+var _upstream_effort := 0.0
+
+
+## The current at a pixel position, as {direction: Vector2 (tile-space
+## unit vector, downstream), speed_m_s}, zero where the world has no
+## current query or no current there.
+func _current_at(pixel_position: Vector2) -> Dictionary:
+	if _world == null or not _world.has_method("river_current_at_global"):
+		return {"direction": Vector2.ZERO, "speed_m_s": 0.0}
+	var tile_x := int(floor(pixel_position.x / _tile_size))
+	var tile_y := int(floor(pixel_position.y / _tile_size))
+	return _world.river_current_at_global(tile_x, tile_y)
+
+
+## Multiplier on swim speed for a heading against/with a current.
+static func current_speed_factor(heading: Vector2, current_direction: Vector2, current_speed_m_s: float) -> float:
+	var along := _along_current(heading, current_direction)
+	var strength := clampf(current_speed_m_s / CURRENT_FULL_M_S, 0.0, 1.0)
+	return 1.0 + strength * (DOWNSTREAM_BOOST * maxf(along, 0.0) - UPSTREAM_SLOWDOWN * maxf(-along, 0.0))
+
+
+## 0 with or across the current, rising to 1 straight into a full one.
+static func upstream_effort(heading: Vector2, current_direction: Vector2, current_speed_m_s: float) -> float:
+	var strength := clampf(current_speed_m_s / CURRENT_FULL_M_S, 0.0, 1.0)
+	return strength * maxf(-_along_current(heading, current_direction), 0.0)
+
+
+static func _along_current(heading: Vector2, current_direction: Vector2) -> float:
+	if heading.is_zero_approx() or current_direction.is_zero_approx():
+		return 0.0
+	return heading.normalized().dot(current_direction.normalized())

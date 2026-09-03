@@ -19,12 +19,19 @@ const _NEIGHBOR_OFFSETS: Array[Vector2i] = [
 func is_interior_water(chunk: Chunk, x: int, y: int) -> bool:
 	if x <= 0 or y <= 0 or x >= chunk.width - 1 or y >= chunk.height - 1:
 		return false
-	if chunk.biome[y * chunk.width + x] != "ocean":
+	if not is_water_cell(chunk, y * chunk.width + x):
 		return false
 	for offset in _NEIGHBOR_OFFSETS:
-		if chunk.biome[(y + offset.y) * chunk.width + (x + offset.x)] != "ocean":
+		if not is_water_cell(chunk, (y + offset.y) * chunk.width + (x + offset.x)):
 			return false
 	return true
+
+
+## Ocean by biome, or a river or lake cell (docs/concept/hydrology.md:
+## overlay flags on land biome) -- fish live in all three ("fish should
+## also swim in rivers").
+func is_water_cell(chunk: Chunk, index: int) -> bool:
+	return chunk.biome[index] == "ocean" or chunk.blocks_ground_cover(index)
 
 
 ## Count of interior-water cells in this chunk -- the aquatic model's "water

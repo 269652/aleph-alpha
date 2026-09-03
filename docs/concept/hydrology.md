@@ -485,6 +485,16 @@ the threshold, which is what stops a single wet week relabeling a desert.
 | `weather.md` floods and droughts | listed, unbuilt | **flood**: `Q_fine > FLOOD_RATIO * Q_climatology` puts tiles within the channel's floodplain (macro elevation within `FLOODPLAIN_RISE_M` of the channel) under water for the duration; **drought**: soil below `DROUGHT_FRACTION` of climatology for `DROUGHT_MIN_DAYS`. Both are threshold readings of state this doc already keeps, no disaster roller |
 | `src/emergence/event.gd` | -- | flood onset, drought onset, a lake crossing its spill in either direction, and a river running dry each emit an `Event`, per [00-emergence-architecture.md](../emergence/00-emergence-architecture.md); this is the concrete answer to climate_dynamics.md's "should a storm be an Event" question, for the hydrological events |
 
+**Fish** live in all three water kinds (`WaterAreaSurvey.is_water_cell`
+counts river and lake cells; `FishMarker` reads the river and lake flags
+beside the ocean biome). A fish swims against the same current the flow
+overlay draws (`EarthChunkManager.river_current_at_global`: the solved
+river velocity, or a mouth's fading plume): slower upstream, faster
+downstream, and flapping more often upstream, and every fish is fed to
+the flow shader as a wader so its flaps ring the current's contour lines
+(playtest: "fish should also swim in rivers, upstream just slower and
+more flapping, and produce ripples in the current contour lines").
+
 Vegetation density feeding transpiration closes a loop with
 [flora.md](flora.md): a forest a player clears sheds more runoff, its
 river floods higher, and its soil dries faster between rains, with no
