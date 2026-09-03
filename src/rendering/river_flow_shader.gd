@@ -75,12 +75,12 @@ uniform float eddy_swirl = 0.0;
 uniform float bank_shear = 0.25;
 uniform sampler2D flow_across_map : filter_linear, repeat_enable;
 uniform float flow_map_tiles = 256.0;
-## No longer read inside fragment(): every per-fragment normalization now
-## decodes the tile's REAL local half-width from the direction vector's own
-## magnitude (see map_data's doc comment below). Kept declared, with its
-## default still set from _apply_defaults, only so nothing external
-## resolving this material's parameters by name breaks; harmless as an
-## unused uniform.
+// No longer read inside fragment(): every per-fragment normalization now
+// decodes the tile's REAL local half-width from the direction vector's own
+// magnitude (see map_data's own comment below). Kept declared, with its
+// default still set from _apply_defaults, only so nothing external
+// resolving this material's parameters by name breaks; harmless as an
+// unused uniform.
 uniform float half_width_tiles = 2.0;
 uniform float tile_px = 16.0;
 uniform float bank_feather = 0.03;
