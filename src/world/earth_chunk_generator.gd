@@ -10,6 +10,8 @@ const RiverCatalog = preload("res://src/world/river_catalog.gd")
 const RiverDepth = preload("res://src/world/river_depth.gd")
 const RiverDischarge = preload("res://src/world/river_discharge.gd")
 const OpenChannelFlow = preload("res://src/world/open_channel_flow.gd")
+const HydrologyData = preload("res://src/world/hydrology_data.gd")
+const HydrologyField = preload("res://src/world/hydrology_field.gd")
 
 ## World scale: ~111 tiles per degree of latitude/longitude (~1km/tile),
 ## giving a full, finite Earth of ~40,000 x 20,000 tiles -- explorable at a
@@ -49,12 +51,101 @@ var _river_catalog := RiverCatalog.new()
 var _fine_detail_noise := FastNoiseLite.new()
 var _moisture_noise := FastNoiseLite.new()
 
+## --- hydrology (docs/concept/hydrology.md, phase 1) ---
+
+## Whether hydrology channels count as rivers everywhere a curated river
+## does not reach -- the connectivity-aware procedural fallback rivers.md's
+## "Procedural fallback" section asked for after the noise-contour proxy
+## was reverted ("scattered everywhere"). OFF until the bake has been run
+## over the real asset and looked at in play, exactly the gate that proxy
+## should have had; lakes and the valley carve do not wait on it. Pinned
+## by test_hydrology_rivers_are_off_by_default_even_with_a_bake.
+const HYDROLOGY_RIVERS_ENABLED := false
+
+## Real m^3/s per stand-in discharge unit. One unit is one asset cell
+## (~108 km^2 at ~10.4 km/px) receiving a full year of the wettest belt's
+## rain: ~2,000 mm/yr at a ~0.4 runoff coefficient is 0.8 m over 1.08e8 m^2,
+## 8.6e7 m^3/yr, 2.7 m^3/s. Phase 3 replaces the stand-in with the live
+## climate grid and this constant with it.
+const STAND_IN_DISCHARGE_M3_S_PER_UNIT := 2.7
+
+## The baked drainage network, read once per process like the elevation
+## decode -- null when no bake is shipped, in which case every query below
+## behaves exactly as it did before hydrology existed. Pinned by
+## test_a_generator_without_a_bake_reports_no_hydrology.
+static var _shared_hydrology_data: HydrologyData = null
+static var _hydrology_load_attempted := false
+
+## What hydrology_at_global reports without a bake: dry ground, full fine
+## detail, nothing carved.
+const _NO_HYDROLOGY := {
+	"kind": "", "depth_m": 0.0, "discharge": 0.0, "fine_detail_scale": 1.0, "carve": 0.0
+}
+
+var _hydrology: HydrologyField = null
+var hydrology_rivers_enabled := HYDROLOGY_RIVERS_ENABLED
+
 
 func _init() -> void:
 	_fine_detail_noise.seed = FINE_DETAIL_SEED
 	_fine_detail_noise.frequency = FINE_DETAIL_FREQUENCY
 	_moisture_noise.seed = MOISTURE_SEED
 	_moisture_noise.frequency = MOISTURE_FREQUENCY
+	_hydrology = _shared_hydrology_field()
+
+
+static func _shared_hydrology_field() -> HydrologyField:
+	if not _hydrology_load_attempted:
+		_hydrology_load_attempted = true
+		var data := HydrologyData.new()
+		if data.load_from(HydrologyData.DEFAULT_DIRECTORY):
+			_shared_hydrology_data = data
+	if _shared_hydrology_data == null:
+		return null
+	return HydrologyField.new(_shared_hydrology_data, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES)
+
+
+## Replaces (or, with null, removes) the hydrology this generator reads --
+## a test injects a synthetic bake this way; the game never calls it.
+func set_hydrology(field: HydrologyField) -> void:
+	_hydrology = field
+
+
+func has_hydrology() -> bool:
+	return _hydrology != null
+
+
+## HydrologyField.probe for a tile (see that doc comment for the keys), or
+## _NO_HYDROLOGY without a bake.
+func hydrology_at_global(global_x: int, global_y: int) -> Dictionary:
+	return _hydrology_for(global_x, global_y, macro_elevation_at_global(global_x, global_y))
+
+
+func _hydrology_for(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
+	if _hydrology == null:
+		return _NO_HYDROLOGY
+	return _hydrology.probe(global_x, global_y, macro_elevation)
+
+
+## A tile under the water surface of a depression the bake found, filled
+## to its spill (hydrology.md Layer 5). An overlay flag exactly like
+## is_river_at_global: the tile's biome is untouched land.
+func is_lake_at_global(global_x: int, global_y: int) -> bool:
+	return hydrology_at_global(global_x, global_y)["kind"] == "lake"
+
+
+## Real metres of lake water over a tile (spill minus the tile's own
+## macro elevation), 0.0 off a lake -- Player._resolve_water_state reads it
+## beside ocean and river depth.
+func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:
+	var probe := hydrology_at_global(global_x, global_y)
+	if probe["kind"] != "lake":
+		return 0.0
+	return probe["depth_m"]
+
+
+func _is_hydrology_river(probe: Dictionary) -> bool:
+	return hydrology_rivers_enabled and probe["kind"] == "river"
 
 
 ## Generates one chunk_size x chunk_size chunk at chunk_coord (in units of
@@ -72,6 +163,8 @@ func generate_chunk(chunk_coord: Vector2i, chunk_size: int) -> Chunk:
 	temperature.resize(chunk_size * chunk_size)
 	var is_river := PackedByteArray()
 	is_river.resize(chunk_size * chunk_size)
+	var is_lake := PackedByteArray()
+	is_lake.resize(chunk_size * chunk_size)
 
 	for local_y in chunk_size:
 		var global_y := chunk_coord.y * chunk_size + local_y
@@ -79,7 +172,13 @@ func generate_chunk(chunk_coord: Vector2i, chunk_size: int) -> Chunk:
 			var global_x := chunk_coord.x * chunk_size + local_x
 			var index := local_y * chunk_size + local_x
 
-			var cell_elevation := elevation_at_global(global_x, global_y)
+			# One hydrology probe per cell, shared by the elevation blend
+			# (valley carve, fine-detail suppression), the lake flag and
+			# the river flag -- the same "compute once, hand the value
+			# along" rule temperature_at_elevation's doc comment established.
+			var macro := macro_elevation_at_global(global_x, global_y)
+			var probe := _hydrology_for(global_x, global_y, macro)
+			var cell_elevation := _blend_elevation(global_x, global_y, macro, probe)
 			elevation[index] = cell_elevation
 			moisture[index] = moisture_at_global(global_x, global_y)
 			# Reuses the elevation computed one line above rather than making
@@ -89,7 +188,8 @@ func generate_chunk(chunk_coord: Vector2i, chunk_size: int) -> Chunk:
 			biome[index] = _biome_at_global(
 				global_x, global_y, cell_elevation, temperature[index], moisture[index]
 			)
-			is_river[index] = 1 if is_river_at_global(global_x, global_y) else 0
+			is_river[index] = 1 if _is_river_for(global_x, global_y, probe) else 0
+			is_lake[index] = 1 if probe["kind"] == "lake" else 0
 
 	var chunk := Chunk.new()
 	chunk.width = chunk_size
@@ -99,6 +199,7 @@ func generate_chunk(chunk_coord: Vector2i, chunk_size: int) -> Chunk:
 	chunk.moisture = moisture
 	chunk.temperature = temperature
 	chunk.is_river = is_river
+	chunk.is_lake = is_lake
 	return chunk
 
 
@@ -112,10 +213,21 @@ func macro_elevation_at_global(global_x: int, global_y: int) -> float:
 
 ## Real macro elevation blended with procedural fine detail, for any global
 ## tile coordinate -- the single source of truth generate_chunk() slices.
+## With a hydrology bake, the fine detail is scaled to nothing on a river
+## channel or lake bed and the channel is carved a few metres into the
+## macro surface (hydrology.md "Valleys are read back into the
+## elevation"): the same function, so slope, hillshade and passability all
+## see the valley. Without a bake this is exactly macro + fine detail.
 func elevation_at_global(global_x: int, global_y: int) -> float:
 	var macro := macro_elevation_at_global(global_x, global_y)
+	return _blend_elevation(global_x, global_y, macro, _hydrology_for(global_x, global_y, macro))
+
+
+func _blend_elevation(global_x: int, global_y: int, macro: float, probe: Dictionary) -> float:
 	var fine_detail := _fine_detail_noise.get_noise_2d(global_x, global_y) * FINE_DETAIL_AMPLITUDE
-	return clampf(macro + fine_detail, 0.0, 1.0)
+	var scale: float = probe["fine_detail_scale"]
+	var carve: float = probe["carve"]
+	return clampf(macro + fine_detail * scale - carve, 0.0, 1.0)
 
 
 ## Real slope in degrees at a global tile (see terrain_relief.gd's slope_at,
@@ -240,8 +352,46 @@ func biome_at_global(global_x: int, global_y: int) -> String:
 ## The module itself (procedural_river.gd) stays real and tested, just no
 ## longer consulted here -- pinned by
 ## test_procedural_fallback_is_not_live_wired_far_from_any_curated_river.
+##
+## With HYDROLOGY_RIVERS_ENABLED (see that constant), a channel of the
+## baked drainage network (docs/concept/hydrology.md) is a river too --
+## the connectivity-aware fallback that section asked for -- but a curated
+## river is authoritative wherever it reaches.
 func is_river_at_global(global_x: int, global_y: int) -> bool:
-	return _river_catalog.is_river_tile(global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES)
+	if _river_catalog.is_river_tile(global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES):
+		return true
+	return _is_hydrology_river(hydrology_at_global(global_x, global_y))
+
+
+func _is_river_for(global_x: int, global_y: int, probe: Dictionary) -> bool:
+	if _river_catalog.is_river_tile(global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES):
+		return true
+	return _is_hydrology_river(probe)
+
+
+## RiverCatalog.nearest_river_at, extended: the curated answer wherever a
+## curated river is within its bank apron, otherwise (with hydrology
+## rivers enabled) the nearest baked channel in the same dictionary shape
+## with an empty name, so EarthChunkManager._paint_river_flow_overlay draws
+## both through one code path. Far from everything, the curated answer
+## (a large distance) is returned as before.
+func nearest_river_at(global_x: int, global_y: int) -> Dictionary:
+	var curated := _river_catalog.nearest_river_at(
+		global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES
+	)
+	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES
+	if curated.distance_tiles <= apron or _hydrology == null or not hydrology_rivers_enabled:
+		return curated
+	var channel := _hydrology.nearest_channel_geometry(global_x, global_y)
+	if channel.is_empty() or channel["distance_tiles"] >= curated.distance_tiles:
+		return curated
+	return {
+		"name": "",
+		"distance_tiles": channel["distance_tiles"],
+		"course_fraction": 0.0,
+		"course_bearing_deg": channel["course_bearing_deg"],
+		"signed_across_tiles": channel["signed_across_tiles"],
+	}
 
 
 ## Real meters of river depth at (global_x, global_y) -- the depth SOLVED
@@ -273,17 +423,30 @@ func river_depth_meters_at_global(global_x: int, global_y: int) -> float:
 ## integrated from an upstream catchment that is not loaded), slope comes
 ## from the elevation gradient already sampled here, and the normal-depth
 ## solve is closed-form rather than iterated.
+##
+## A hydrology channel (HYDROLOGY_RIVERS_ENABLED, no curated river in
+## reach) goes through the same solve with its stand-in discharge scaled to
+## m^3/s (STAND_IN_DISCHARGE_M3_S_PER_UNIT) and a width derived from that
+## discharge (RiverDischarge.derived_width_m), river_name "".
 func river_hydraulics_at_global(global_x: int, global_y: int) -> Dictionary:
 	var nearest := _river_catalog.nearest_river_at(
 		global_x, global_y, WORLD_WIDTH_TILES, WORLD_HEIGHT_TILES
 	)
-	if nearest.distance_tiles > RiverCatalog.RIVER_HALF_WIDTH_TILES:
-		return _no_flow()
-
-	var river_name: String = nearest.name
-	var course_fraction: float = nearest.course_fraction
-	var discharge := RiverDischarge.discharge_at(river_name, course_fraction)
-	var width := RiverDischarge.channel_width_m(river_name, course_fraction)
+	var river_name := ""
+	var course_fraction := 0.0
+	var discharge := 0.0
+	var width := 0.0
+	if nearest.distance_tiles <= RiverCatalog.RIVER_HALF_WIDTH_TILES:
+		river_name = nearest.name
+		course_fraction = nearest.course_fraction
+		discharge = RiverDischarge.discharge_at(river_name, course_fraction)
+		width = RiverDischarge.channel_width_m(river_name, course_fraction)
+	else:
+		var probe := hydrology_at_global(global_x, global_y)
+		if not _is_hydrology_river(probe):
+			return _no_flow()
+		discharge = probe["discharge"] * STAND_IN_DISCHARGE_M3_S_PER_UNIT
+		width = RiverDischarge.derived_width_m(discharge)
 	if discharge <= 0.0 or width <= 0.0:
 		return _no_flow()
 

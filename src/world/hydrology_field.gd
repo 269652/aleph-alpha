@@ -17,6 +17,15 @@ extends RefCounted
 const HydrologyData = preload("res://src/world/hydrology_data.gd")
 const DrainageNetwork = preload("res://src/world/drainage_network.gd")
 const TerrainRelief = preload("res://src/world/terrain_relief.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
+
+## A hydrology channel is exactly as wide as a curated river
+## (docs/concept/rivers.md "Width": one uniform, tested half-width, the
+## honest MVP until the flow overlay takes a per-cell width), so the
+## overlay that draws the water and the read that decides "in the river"
+## agree tile for tile. width_tiles_for_discharge below shapes only the
+## VALLEY around the channel, not the water itself.
+const CHANNEL_HALF_WIDTH_TILES := RiverCatalog.RIVER_HALF_WIDTH_TILES
 
 ## Real metres per unit of the normalized elevation encoding
 ## (EarthElevationSource: 0.0 = -8000m, 1.0 = +6400m).
@@ -160,7 +169,7 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 		return {"kind": "", "depth_m": 0.0, "discharge": 0.0, "fine_detail_scale": 1.0, "carve": 0.0}
 
 	var discharge: float = channel["discharge"]
-	var half_width: float = channel["width_tiles"] / 2.0
+	var half_width := CHANNEL_HALF_WIDTH_TILES
 	var distance: float = channel["distance_tiles"]
 	var full_carve := _carve_for_discharge(discharge)
 	if distance <= half_width:
@@ -181,18 +190,39 @@ func probe(global_x: int, global_y: int, macro_elevation: float) -> Dictionary:
 	}
 
 
+## The nearest channel's geometry in exactly the shape
+## RiverCatalog.nearest_river_at answers with, so the river flow overlay
+## can draw a hydrology channel through the same code path as a curated
+## river: {distance_tiles, signed_across_tiles, course_bearing_deg,
+## discharge}, or empty when no channel within valley reach. Sign and
+## bearing follow the catalog's own conventions (tangent.cross(point -
+## closest); compass bearing of the downstream tangent).
+func nearest_channel_geometry(global_x: int, global_y: int) -> Dictionary:
+	var channel := _nearest_channel(global_x, global_y)
+	if channel.is_empty():
+		return {}
+	var segment: Dictionary = channel["segment"]
+	var tangent: Vector2 = segment["tangent"]
+	var point := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
+	return {
+		"distance_tiles": channel["distance_tiles"],
+		"signed_across_tiles": tangent.cross(point - segment["closest"]),
+		"course_bearing_deg": RiverCatalog.bearing_degrees(tangent),
+		"discharge": channel["discharge"],
+	}
+
+
 ## The channel whose centreline is nearest this tile, in valley reach, as
-## {discharge, width_tiles, distance_tiles}; empty when none of the 3x3
-## surrounding cells carries a river. A tile inside several channels'
-## reach takes the one it is closest to, measured in channel-edge terms,
-## so a big river's valley wins over a tributary's beside it.
+## {discharge, width_tiles, distance_tiles, segment}; empty when none of
+## the 3x3 surrounding cells carries a river. A tile inside several
+## channels' reach takes the one it is closest to.
 func _nearest_channel(global_x: int, global_y: int) -> Dictionary:
 	var tile_center := Vector2(float(global_x) + 0.5, float(global_y) + 0.5)
 	var pixel := pixel_of_tile(global_x, global_y)
 	var pixel_x := floori(pixel.x)
 	var pixel_y := floori(pixel.y)
 	var best := {}
-	var best_reach := INF
+	var best_distance := INF
 	for dy in range(-1, 2):
 		var y := pixel_y + dy
 		if y < 0 or y >= _data.height:
@@ -204,35 +234,55 @@ func _nearest_channel(global_x: int, global_y: int) -> Dictionary:
 			var discharge := _data.discharge_at(cell)
 			if discharge < river_min_discharge:
 				continue
-			var width_tiles := width_tiles_for_discharge(discharge)
-			var distance := _distance_to_centerline(tile_center, cell)
-			var reach := distance - width_tiles / 2.0
-			if reach > VALLEY_HALF_WIDTH_TILES or reach >= best_reach:
+			var segment := _nearest_segment(tile_center, cell)
+			var distance: float = segment["distance"]
+			if distance - CHANNEL_HALF_WIDTH_TILES > VALLEY_HALF_WIDTH_TILES or distance >= best_distance:
 				continue
-			best_reach = reach
-			best = {"discharge": discharge, "width_tiles": width_tiles, "distance_tiles": distance}
+			best_distance = distance
+			best = {
+				"discharge": discharge,
+				"width_tiles": width_tiles_for_discharge(discharge),
+				"distance_tiles": distance,
+				"segment": segment,
+			}
 	return best
 
 
-## Distance (tiles) from a point to a channel cell's centreline: the
-## polyline mainstem-upstream centre -> this centre -> downstream centre
-## (the downstream may be the sea cell: that segment is the river mouth).
-## Every polyline point is shifted by whole world widths to sit nearest
-## the point, so a channel crossing the date-line seam measures correctly.
-func _distance_to_centerline(point: Vector2, cell: int) -> float:
+## The closest point on a channel cell's centreline to `point`, as
+## {distance, closest, tangent} with the tangent pointing DOWNSTREAM. The
+## centreline is the polyline mainstem-upstream centre -> this centre ->
+## downstream centre (the downstream may be the sea cell: that segment is
+## the river mouth). Every polyline point is shifted by whole world
+## widths to sit nearest the point, so a channel crossing the date-line
+## seam measures correctly.
+func _nearest_segment(point: Vector2, cell: int) -> Dictionary:
 	var center := _nearest_wrapped(tile_of_pixel_center(cell % _data.width, _cell_y(cell)), point)
-	var best := INF
+	var best := {"distance": INF, "closest": center, "tangent": Vector2(0.0, -1.0)}
 	var upstream := _mainstem_upstream(cell)
 	if upstream >= 0:
 		var upstream_center := _nearest_wrapped(tile_of_pixel_center(upstream % _data.width, _cell_y(upstream)), point)
-		best = minf(best, _distance_to_segment(point, upstream_center, center))
+		best = _closer_segment(best, point, upstream_center, center)
 	var downstream := _downstream(cell)
 	if downstream >= 0:
 		var downstream_center := _nearest_wrapped(tile_of_pixel_center(downstream % _data.width, _cell_y(downstream)), point)
-		best = minf(best, _distance_to_segment(point, center, downstream_center))
-	if best == INF:
-		best = point.distance_to(center)
+		best = _closer_segment(best, point, center, downstream_center)
+	if best["distance"] == INF:
+		best["distance"] = point.distance_to(center)
 	return best
+
+
+## `best` or the point's projection onto segment a->b, whichever is closer.
+static func _closer_segment(best: Dictionary, point: Vector2, a: Vector2, b: Vector2) -> Dictionary:
+	var ab := b - a
+	var length_squared := ab.length_squared()
+	if length_squared == 0.0:
+		return best
+	var t := clampf((point - a).dot(ab) / length_squared, 0.0, 1.0)
+	var closest := a + ab * t
+	var distance := point.distance_to(closest)
+	if distance >= best["distance"]:
+		return best
+	return {"distance": distance, "closest": closest, "tangent": ab.normalized()}
 
 
 func _nearest_wrapped(candidate: Vector2, point: Vector2) -> Vector2:
@@ -243,15 +293,6 @@ func _nearest_wrapped(candidate: Vector2, point: Vector2) -> Vector2:
 	elif dx < -world_width / 2.0:
 		candidate.x += world_width
 	return candidate
-
-
-static func _distance_to_segment(point: Vector2, a: Vector2, b: Vector2) -> float:
-	var ab := b - a
-	var length_squared := ab.length_squared()
-	if length_squared == 0.0:
-		return point.distance_to(a)
-	var t := clampf((point - a).dot(ab) / length_squared, 0.0, 1.0)
-	return point.distance_to(a + ab * t)
 
 
 func _cell_y(cell: int) -> int:

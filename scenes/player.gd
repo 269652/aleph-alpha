@@ -3602,7 +3602,10 @@ func _resolve_water_state(tile: Vector2i, delta: float) -> Dictionary:
 	# the same way is_river_at_global already is for the dry-land spawn
 	# search (World._find_dry_land_spawn).
 	var river_depth := _chunk_manager.river_depth_meters_at_global(tile.x, tile.y)
-	var water_depth := maxf(ocean_depth, river_depth)
+	# Lakes are the third kind of water, asked the same way (see
+	# docs/concept/hydrology.md): standing water over untouched land biome.
+	var lake_depth := _chunk_manager.lake_depth_meters_at_global(tile.x, tile.y)
+	var water_depth := maxf(maxf(ocean_depth, river_depth), lake_depth)
 
 	var submerged := water_depth > 0.0
 	wetness = _wetness_tracker.update(wetness, worn_material, submerged, delta)

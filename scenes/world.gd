@@ -4731,6 +4731,7 @@ func _find_dry_land_spawn(candidate: Vector2i) -> Vector2i:
 				if (
 					_chunk_manager.biome_at_global(tile.x, tile.y) != "ocean"
 					and not _chunk_manager.is_river_at_global(tile.x, tile.y)
+					and not _chunk_manager.is_lake_at_global(tile.x, tile.y)
 				):
 					return tile
 	return candidate

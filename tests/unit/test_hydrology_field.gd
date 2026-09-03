@@ -78,9 +78,11 @@ func test_a_tile_on_the_crater_floor_is_a_lake_filled_to_the_spill():
 
 
 func test_a_tile_above_the_spill_inside_the_basin_footprint_is_dry():
-	# Same cell, but the tile's own (bilinear) elevation sits above the
-	# spill: the shoreline follows the real contour, not the cell edge.
-	assert_eq(field.probe(35, 45, 0.65)["kind"], "")
+	# A crater cell (2,4), but the tile's own (bilinear) elevation sits
+	# above the spill: the shoreline follows the real contour, not the cell
+	# edge. (Cell (3,4) is avoided here: the crater's own inflow channel
+	# through (3,3) reaches into it, which is a river question, not a lake one.)
+	assert_eq(field.probe(25, 45, 0.65)["kind"], "")
 
 
 ## --- rivers ---
@@ -167,3 +169,31 @@ func test_a_lake_bed_has_no_fine_detail_and_no_carve():
 func test_probe_is_a_pure_function_of_the_tile():
 	assert_eq(field.probe(35, 14, 0.6), field.probe(35, 14, 0.6))
 	assert_eq(field.probe(35, 45, 0.3), _field_for(TEST_MIN_DISCHARGE).probe(35, 45, 0.3))
+
+
+## --- geometry for the river flow overlay (RiverCatalog.nearest_river_at's shape) ---
+
+
+func test_channel_geometry_reports_distance_side_and_downstream_bearing():
+	# The outlet channel runs north (toward the sea row) down column x=35.
+	var west: Dictionary = field.nearest_channel_geometry(34, 14)
+	var east: Dictionary = field.nearest_channel_geometry(35, 14)
+	assert_almost_eq(west["distance_tiles"], 0.5, 1e-6)
+	assert_almost_eq(east["distance_tiles"], 0.5, 1e-6)
+	assert_almost_eq(west["course_bearing_deg"], 0.0, 1e-6, "flow is due north")
+	# Same convention as the catalog: tangent.cross(point - closest), so the
+	# two banks have opposite signs and equal magnitude.
+	assert_almost_eq(west["signed_across_tiles"], -east["signed_across_tiles"], 1e-6)
+	assert_almost_eq(absf(east["signed_across_tiles"]), 0.5, 1e-6)
+	assert_gt(east["discharge"], 0.0)
+
+
+func test_channel_geometry_is_empty_away_from_any_channel():
+	assert_true(field.nearest_channel_geometry(65, 45).is_empty())
+
+
+func test_a_channel_is_exactly_as_wide_as_a_curated_river():
+	# rivers.md's uniform half-width, so the overlay and the read agree.
+	assert_eq(field.probe(36, 14, 0.6)["kind"], "river", "inside the half-width")
+	assert_eq(field.probe(38, 14, 0.6)["kind"], "", "outside it")
+	assert_almost_eq(HydrologyField.CHANNEL_HALF_WIDTH_TILES, 2.0, 1e-9)

@@ -3734,7 +3734,15 @@ func _paint_water_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# tiles under the flow layer's smooth bank curve -- the flow
 			# overlay is now the river's entire water surface, clipped at
 			# the real bank line, with the ground showing past it.
-			var is_water: bool = chunk.biome[y * chunk.width + x] == "ocean"
+			# ...plus lakes (docs/concept/hydrology.md): standing water with
+			# a real shoreline, which is exactly what this shore-distance
+			# overlay draws well -- the square-tile objection above was
+			# about a river's smooth bank curve, which a lake has no need of.
+			var cell_index := y * chunk.width + x
+			var is_water: bool = (
+				chunk.biome[cell_index] == "ocean"
+				or (cell_index < chunk.is_lake.size() and chunk.is_lake[cell_index] == 1)
+			)
 			if not is_water:
 				continue
 			var land_directions := _land_directions_at(global.x, global.y)
@@ -3799,10 +3807,11 @@ func _paint_river_flow_overlay(chunk_coord: Vector2i, chunk: Chunk) -> void:
 	for y in chunk.height:
 		for x in chunk.width:
 			var global := origin + Vector2i(x, y)
-			var nearest := generator.river_catalog().nearest_river_at(
-				global.x, global.y,
-				EarthChunkGenerator.WORLD_WIDTH_TILES, EarthChunkGenerator.WORLD_HEIGHT_TILES
-			)
+			# The generator's own nearest_river_at: the curated answer
+			# wherever a curated river reaches, else (when enabled) the
+			# nearest baked hydrology channel in the same shape -- see
+			# docs/concept/hydrology.md's relationship to rivers.md.
+			var nearest := generator.nearest_river_at(global.x, global.y)
 			# Painted out past the bank line (the apron): the shader clips
 			# the water at the REAL bank curve, |across| == 1, and that
 			# curve runs through cells whose centres sit beyond the
@@ -3885,6 +3894,8 @@ func _land_directions_at(global_x: int, global_y: int) -> Array:
 func _is_land_at(global_x: int, global_y: int) -> bool:
 	var neighbor_biome := biome_at_global(global_x, global_y)
 	if neighbor_biome == "" or neighbor_biome == "ocean":
+		return false
+	if generator.is_lake_at_global(global_x, global_y):
 		return false
 	return not generator.is_river_at_global(global_x, global_y)
 
@@ -4139,7 +4150,9 @@ func _paint_snow_presence(chunk_coord: Vector2i, chunk: Chunk) -> void:
 			# reported live: "snow falls on rivers".
 			if chunk.biome[y * chunk.width + x] == "ocean":
 				continue
-			if is_river_at_global(global.x, global.y):
+			# Rivers AND lakes (docs/concept/hydrology.md) -- both are
+			# overlay flags on land biome, both read from the one predicate.
+			if chunk.blocks_ground_cover(y * chunk.width + x):
 				continue
 			_snow_layer.set_cell(global, 0, SnowBombShader.PRESENCE_ATLAS_COORD)
 
@@ -4357,6 +4370,10 @@ func _can_root_at(chunk: Chunk, chunk_coord: Vector2i, position: Vector2) -> boo
 	# the same "trees standing in a lake" bug class this function's own
 	# doc comment already names, now recurring for rivers specifically.
 	if is_river_at_global(tile.x, tile.y):
+		return false
+	# A lake bed is the original "trees standing in a lake" case, now with
+	# real lakes (docs/concept/hydrology.md) -- same overlay flag shape.
+	if chunk.blocks_ground_cover(local.y * chunk.width + local.x):
 		return false
 	var biome_name: String = chunk.biome[local.y * chunk.width + local.x]
 	return TreeRooting.can_root_in(biome_name)
@@ -6744,6 +6761,29 @@ func is_river_at_global(global_x: int, global_y: int) -> bool:
 	return generator.is_river_at_global(global_x, global_y)
 
 
+## A tile under a baked lake's surface (docs/concept/hydrology.md) -- an
+## overlay flag on land biome exactly like is_river_at_global.
+func is_lake_at_global(global_x: int, global_y: int) -> bool:
+	return generator.is_lake_at_global(global_x, global_y)
+
+
+## Real metres of lake water over a tile, 0.0 off a lake. Unlike river
+## depth this delegates directly: nothing a player builds ponds a lake.
+func lake_depth_meters_at_global(global_x: int, global_y: int) -> float:
+	return generator.lake_depth_meters_at_global(global_x, global_y)
+
+
+## One byte per cell, 1 where a river or lake covers the ground -- the
+## per-chunk form of Chunk.blocks_ground_cover, for consumers that take a
+## whole flag array (TallGrass) rather than a Chunk.
+func _ground_cover_blockers(chunk: Chunk) -> PackedByteArray:
+	var blockers := PackedByteArray()
+	blockers.resize(chunk.width * chunk.height)
+	for index in blockers.size():
+		blockers[index] = 1 if chunk.blocks_ground_cover(index) else 0
+	return blockers
+
+
 ## Real river depth at a global tile -- the natural solved depth (see
 ## EarthChunkGenerator.river_hydraulics_at_global), raised where a
 ## player-built dam downstream is ponding this cell (see
@@ -8134,7 +8174,7 @@ func _load_chunk(chunk_coord: Vector2i) -> void:
 
 	_grass_sims[chunk_coord] = TallGrass.new(
 		hash("%d_%d_tall_grass" % [chunk_coord.x, chunk_coord.y]), chunk.width, chunk.height, chunk.biome,
-		chunk.is_river
+		_ground_cover_blockers(chunk)
 	)
 	_grass_sprites[chunk_coord] = {}
 	_sync_grass_sprites(chunk_coord)
