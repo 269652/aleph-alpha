@@ -374,6 +374,11 @@ func test_river_depth_at_a_curated_waypoint_is_the_real_solved_depth():
 ## procedural module itself (procedural_river.gd) stays real and tested,
 ## just no longer consulted live -- curated-only is what's live now.
 func test_procedural_fallback_is_not_live_wired_far_from_any_curated_river():
+	# The NOISE-CONTOUR proxy (procedural_river.gd) is what must stay
+	# unwired. The hydrology bake is a different, connectivity-aware
+	# fallback (docs/concept/hydrology.md); it is switched off here so this
+	# test keeps asking only its original question.
+	generator.hydrology_rivers_enabled = false
 	for x in range(20000, 20400, 37):
 		for y in range(7000, 7400, 41):
 			assert_false(generator.is_river_at_global(x, y), "(%d, %d) should not be a river with procedural fallback disabled" % [x, y])
@@ -573,11 +578,16 @@ func test_generated_chunk_is_lake_matches_is_lake_at_global():
 			assert_eq(chunk.is_lake[y * chunk_size + x], expected)
 
 
-func test_hydrology_rivers_are_off_by_default_even_with_a_bake():
-	# The fallback stays gated until the real bake has been looked at in
-	# play -- the gate the reverted noise-contour proxy should have had.
-	assert_false(EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED)
+func test_hydrology_rivers_are_on_by_default():
+	# Switched on the day the spawn moved onto an emergent river; the
+	# instance flag still lets a test (or a rollback) turn them off.
+	assert_true(EarthChunkGenerator.HYDROLOGY_RIVERS_ENABLED)
+	assert_true(generator.hydrology_rivers_enabled)
+
+
+func test_with_hydrology_rivers_disabled_a_channel_tile_is_not_a_river():
 	generator.set_hydrology(_synthetic_field())
+	generator.hydrology_rivers_enabled = false
 	assert_false(generator.is_river_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y))
 	assert_eq(generator.river_depth_meters_at_global(GREENWICH_TILE.x, GREENWICH_TILE.y), 0.0)
 	var apron := RiverCatalog.RIVER_HALF_WIDTH_TILES + RiverCatalog.RIVER_BANK_APRON_TILES

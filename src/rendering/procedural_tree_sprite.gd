@@ -14,7 +14,6 @@ const PixelPalette = preload("res://src/rendering/pixel_palette.gd")
 const TreeSpecies = preload("res://src/world/tree_species.gd")
 const IllustratedTree = preload("res://src/rendering/illustrated_tree.gd")
 const PixelNoise = preload("res://src/rendering/pixel_noise.gd")
-const SnowLayer = preload("res://src/rendering/snow_layer.gd")
 
 const ArtResolution = preload("res://src/rendering/art_resolution.gd")
 
@@ -1017,7 +1016,11 @@ static func growth_level(growth: float) -> float:
 ## SnowLayer). Reusing it means a canopy's snow response is exactly as coarse
 ## or fine as the snow already lying at its own foot, so the two can never
 ## visibly disagree about how gradually a snowfall settles in.
-const SNOW_LEVELS := SnowLayer.DEPTH_BANDS
+## SnowLayer itself no longer exists (the GPU texture-bombing snow replaced
+## it and deleted the script, but this preload survived on another branch
+## and broke every script depending on the tree sprite at launch -- found
+## live). Its DEPTH_BANDS was 10; kept here as the same number.
+const SNOW_LEVELS := 10
 
 
 ## The snow coverage LEVEL a tree draws at -- used both for the texture cache

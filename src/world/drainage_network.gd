@@ -36,7 +36,13 @@ const DEFAULT_MIN_DEPRESSION_DEPTH := 0.001
 ## D8 neighbours, clockwise from north. Index is the direction code.
 const NEIGHBOR_DX: Array[int] = [0, 1, 1, 1, 0, -1, -1, -1]
 const NEIGHBOR_DY: Array[int] = [-1, -1, 0, 1, 1, 1, 0, -1]
-const NEIGHBOR_DISTANCE: Array[float] = [1.0, SQRT2, 1.0, SQRT2, 1.0, SQRT2, 1.0, SQRT2]
+## Diagonal steps are sqrt(2) long. Spelled out: a typed const array must
+## be a constant expression, and the engine's SQRT2 is not one to the
+## parser (found live on the first launch).
+const DIAGONAL_STEP := 1.4142135623730951
+const NEIGHBOR_DISTANCE: Array[float] = [
+	1.0, DIAGONAL_STEP, 1.0, DIAGONAL_STEP, 1.0, DIAGONAL_STEP, 1.0, DIAGONAL_STEP
+]
 
 var width: int
 var height: int

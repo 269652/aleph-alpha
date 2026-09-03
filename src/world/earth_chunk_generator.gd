@@ -56,11 +56,12 @@ var _moisture_noise := FastNoiseLite.new()
 ## Whether hydrology channels count as rivers everywhere a curated river
 ## does not reach -- the connectivity-aware procedural fallback rivers.md's
 ## "Procedural fallback" section asked for after the noise-contour proxy
-## was reverted ("scattered everywhere"). OFF until the bake has been run
-## over the real asset and looked at in play, exactly the gate that proxy
-## should have had; lakes and the valley carve do not wait on it. Pinned
-## by test_hydrology_rivers_are_off_by_default_even_with_a_bake.
-const HYDROLOGY_RIVERS_ENABLED := false
+## was reverted ("scattered everywhere"). Shipped off until the bake had
+## been run over the real asset; switched on 2026-09-03 when the spawn
+## moved onto an emergent river (see World.SPAWN_LATITUDE). Lakes and the
+## valley carve never depended on it. Pinned by
+## test_hydrology_rivers_are_on_by_default.
+const HYDROLOGY_RIVERS_ENABLED := true
 
 ## Real m^3/s per stand-in discharge unit. One unit is one asset cell
 ## (~108 km^2 at ~10.4 km/px) receiving a full year of the wettest belt's
