@@ -68,7 +68,20 @@ const HOME_CONTAINMENT_BAND_FRACTION := 0.25
 ## component is gone, the remaining heading and the inward pull are at worst
 ## perpendicular, never opposed. Shared by fish too (FishMarker), which had
 ## the same latent chatter.
-func direction_at(home: Vector2, current: Vector2, elapsed_time: float, seed_value: int) -> Vector2:
+## `radius` is a PER-CALL override of the instance's own wander_radius --
+## negative (the default) means "not supplied", falling back to
+## wander_radius so every existing caller (which never passes this
+## argument at all) reproduces today's exact heading. A caller that wants a
+## containment distance that changes call-to-call (a juvenile widening its
+## range as it grows, see CreatureMarker._wander_radius) passes it here
+## instead of writing it into the shared instance field first, which would
+## be indistinguishable from a genuine persistent override like
+## FishMarker.configure_wander's (see wander_radius's own "Per-instance
+## override" doc comment above).
+func direction_at(
+	home: Vector2, current: Vector2, elapsed_time: float, seed_value: int, radius: float = -1.0
+) -> Vector2:
+	var effective_radius := wander_radius if radius < 0.0 else radius
 	var roam := roam_direction(elapsed_time, seed_value)
 	var to_home := home - current
 	var distance := to_home.length()
@@ -77,8 +90,8 @@ func direction_at(home: Vector2, current: Vector2, elapsed_time: float, seed_val
 	var inward := to_home / distance
 	var outward := -inward
 
-	var band := wander_radius * HOME_CONTAINMENT_BAND_FRACTION
-	var containment := clampf((distance - (wander_radius - band)) / band, 0.0, 1.0)
+	var band := effective_radius * HOME_CONTAINMENT_BAND_FRACTION
+	var containment := clampf((distance - (effective_radius - band)) / band, 0.0, 1.0)
 	var outward_amount := maxf(0.0, roam.dot(outward))
 	var contained := roam - outward * outward_amount * containment
 	if contained.length() < 0.001:
@@ -86,11 +99,11 @@ func direction_at(home: Vector2, current: Vector2, elapsed_time: float, seed_val
 		# along the boundary rather than stalling.
 		contained = Vector2(-outward.y, outward.x)
 
-	if distance <= wander_radius:
+	if distance <= effective_radius:
 		return contained.normalized()
 
-	var pull_span := wander_radius * (HOME_PULL_FULL_RADIUS_FACTOR - 1.0)
-	var pull := clampf((distance - wander_radius) / pull_span, 0.0, 1.0)
+	var pull_span := effective_radius * (HOME_PULL_FULL_RADIUS_FACTOR - 1.0)
+	var pull := clampf((distance - effective_radius) / pull_span, 0.0, 1.0)
 	# Safe to lerp here: `contained` has no outward component left at this
 	# distance (containment is already 1.0), so it and `inward` are at worst
 	# perpendicular -- they cannot cancel.
@@ -126,8 +139,10 @@ func roam_direction(elapsed_time: float, seed_value: int) -> Vector2:
 
 
 ## Advances `current` by one step of wander motion over `delta` seconds.
+## `radius` is forwarded to direction_at as-is -- see its own doc comment.
 func step_position(
-	home: Vector2, current: Vector2, elapsed_time: float, delta: float, seed_value: int
+	home: Vector2, current: Vector2, elapsed_time: float, delta: float, seed_value: int,
+	radius: float = -1.0
 ) -> Vector2:
-	var direction := direction_at(home, current, elapsed_time, seed_value)
+	var direction := direction_at(home, current, elapsed_time, seed_value, radius)
 	return current + direction * wander_speed * delta
