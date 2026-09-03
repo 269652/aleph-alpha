@@ -108,7 +108,7 @@ const FULL_COVER_MIN_MEAN_ALPHA := 0.75
 static var _levels_cache: PackedInt32Array = PackedInt32Array()
 
 
-func levels() -> PackedInt32Array:
+static func levels() -> PackedInt32Array:
 	if _levels_cache.is_empty():
 		var found := PackedInt32Array()
 		for level in range(1, LEVEL_SEARCH_MAX + 1):
