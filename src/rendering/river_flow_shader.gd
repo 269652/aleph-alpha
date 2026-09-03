@@ -1082,15 +1082,30 @@ const RIPPLE_LIFETIME := 2.5
 const CHANNEL_ACROSS_GRADIENT_PER_PX := 1.0 / (2.0 * 16.0)
 
 ## Whirl (third playtest, "more natural whirly turbulences in curves"):
-## turbulence grows by BANK_SHEAR from the centreline to the waterline,
-## where real shear sheds eddies. EDDY_SWIRL, which rotated the stroke
-## smear by the eddy field, is ZERO: it sawed every stroke into a regular
-## zig-zag with the eddy noise's period ("both artifacts still exist"),
-## because smearing along a direction that oscillates every few tiles
-## folds the level sets. Pinned at zero by
+## BOTH attempts at it broke the base rendering and are reverted to
+## zero, the same way and for the same class of reason.
+##
+## EDDY_SWIRL rotated the stroke smear by the eddy field: it sawed every
+## stroke into a regular zig-zag with the eddy noise's own period
+## (smearing along a direction that oscillates every few tiles folds the
+## level sets). Pinned at zero by
 ## test_the_smear_follows_the_flow_and_never_the_eddies.
+##
+## BANK_SHEAR grew the turbulence displacement itself by up to 25% near
+## the waterline. TURBULENCE_STRENGTH alone is calibrated right up against
+## a real, TESTED fold threshold (test_the_bend_never_folds_the_surface_
+## over_itself: past it, displacement does not bend the noise pattern, it
+## tears it) -- but that test's CPU mirror (bend_displacement/
+## warped_across) never multiplied by any shear factor, so it kept passing
+## while the LIVE shader, with shear applied, silently crossed the real
+## threshold across the wide band near a hydrology river's bank (a
+## channel several tiles wide has a lot of "near the bank"). The result
+## was a sharp, chunky, torn-looking zigzag -- reported as "this huge
+## zigzag still persists" through two rounds of an unrelated fix, because
+## it was never the width-texture bug at all. Reverted to zero so the
+## live formula and its tested CPU mirror agree exactly again.
 const EDDY_SWIRL := 0.0
-const BANK_SHEAR := 0.25
+const BANK_SHEAR := 0.0
 
 
 ## CPU mirror of one ring's across-displacement (pixels) at `distance_px`

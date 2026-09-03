@@ -1482,11 +1482,27 @@ func test_still_water_ripples_without_flowing():
 ## a regular zig-zag with the eddy noise's own period (found in play).
 func test_the_smear_follows_the_flow_and_never_the_eddies():
 	assert_eq(RiverFlowShader.EDDY_SWIRL, 0.0)
-	assert_gt(RiverFlowShader.BANK_SHEAR, 0.0)
-	assert_lt(RiverFlowShader.BANK_SHEAR, 0.5)
 	assert_true(RiverFlowShader.SHADER_CODE.contains("float shear = 1.0 + bank_shear * clamp(abs(frag_across), 0.0, 1.0);"))
 	var material := flow.shared_material()
 	assert_eq(float(material.get_shader_parameter("eddy_swirl")), 0.0)
+
+
+## bank_shear amplified the turbulence displacement by up to 25% near the
+## waterline, and TURBULENCE_STRENGTH alone already sits right against a
+## real, tested fold threshold (test_the_bend_never_folds_the_surface_
+## over_itself) that this CPU mirror never accounted for the shear
+## multiplier in the first place -- so that test kept passing while the
+## live GPU formula, WITH shear applied, silently crossed the threshold
+## across the wide band near a hydrology river's bank, tearing the noise
+## pattern into a sharp, chunky zigzag ("this huge zigzag still
+## persists", reported through two rounds of an unrelated fix). Zero is
+## the only value that keeps the live formula and its tested CPU mirror
+## identical -- any nonzero value here needs the fold test itself
+## extended to cover the shear-amplified case FIRST.
+func test_bank_shear_is_zero_so_the_fold_test_covers_the_live_formula():
+	assert_eq(RiverFlowShader.BANK_SHEAR, 0.0)
+	var material := flow.shared_material()
+	assert_eq(float(material.get_shader_parameter("bank_shear")), 0.0)
 
 
 ## Disturbance rings live in the contour system now (the old overlay's
