@@ -330,13 +330,75 @@ func _label_depressions(
 			for member in members:
 				depression_id[member] = NO_DEPRESSION
 			continue
+		var outlets := _outlets_of(members, id)
 		depressions.append({
 			"id": id,
 			"cell_count": members.size(),
 			"spill_elevation": spill_elevation,
-			"spill_index": spill_index,
+			"spill_index": _principal_outlet(outlets, spill_index),
+			"outlet_indices": outlets,
 			"floor_elevation": floor_elevation,
 		})
+
+
+## Every member cell water LEAVES the depression through: those whose D8
+## downstream steps outside it, or stops (the sea, or a terminal lake).
+##
+## There is usually more than one, because a filled depression's lip is
+## FLAT -- the flood raises every member to exactly the spill elevation,
+## so the outflow can split across it. The test crater splits three ways.
+##
+## That flatness is also why the labelling loop cannot find the outlet on
+## its own: it tracks the member with the lowest `filled`, a comparison
+## that never fires past the first cell once they are all equal, so
+## `spill_index` used to come out as whichever member the raster scan
+## happened to reach first -- an arbitrary interior cell.
+func _outlets_of(members: PackedInt32Array, id: int) -> PackedInt32Array:
+	var outlets := PackedInt32Array()
+	for member in members:
+		var down := downstream_index(member)
+		if down >= 0 and depression_id[down] == id:
+			continue
+		outlets.append(member)
+	return outlets
+
+
+## The one outlet carrying the most accumulated flow: the basin's main
+## mouth, and a stable single point to name a depression by. Ties keep
+## the earliest, so a bake is reproducible. `fallback` is returned only
+## if nothing drains out, which a routed depression should never manage.
+func _principal_outlet(outlets: PackedInt32Array, fallback: int) -> int:
+	var best := -1
+	var best_flow := -1
+	for outlet in outlets:
+		var flow := accumulation[outlet]
+		if flow > best_flow:
+			best_flow = flow
+			best = outlet
+	return best if best >= 0 else fallback
+
+
+## How much of `values` -- an accumulate_weighted result -- passes through
+## depression `id`, summed across its whole spill lip.
+##
+## This, and not the value at any single cell, is a basin's throughput.
+## bake_hydrology decides whether a basin holds water from it; reading one
+## outlet instead understated the answer by however many ways the lip
+## splits (13 of 30 in the test crater) and dried out lakes that should
+## have filled.
+##
+## The same sum answers for a terminal inland sea, where every member is
+## an outlet because flow simply stops there: summing them is summing
+## everything the lake receives.
+func outflow_of(id: int, values: PackedFloat32Array) -> float:
+	for depression in depressions:
+		if int(depression["id"]) != id:
+			continue
+		var total := 0.0
+		for outlet in depression["outlet_indices"] as PackedInt32Array:
+			total += values[outlet]
+		return total
+	return 0.0
 
 
 ## Below-sea-level cells that do not touch the ocean: the flood treats
@@ -390,7 +452,11 @@ func _label_inland_seas(heights: PackedFloat32Array, min_cells: int) -> void:
 			"id": depression_index,
 			"cell_count": members.size(),
 			"spill_elevation": sea_level,
-			"spill_index": members[0],
+			"spill_index": _principal_outlet(members, members[0]),
+			# A terminal lake has no way out, so flow stops at every one
+			# of its cells: the whole lake is its own spill lip, and
+			# outflow_of sums what it receives rather than what leaves.
+			"outlet_indices": members,
 			"floor_elevation": floor_elevation,
 			"inland_sea": true,
 		})

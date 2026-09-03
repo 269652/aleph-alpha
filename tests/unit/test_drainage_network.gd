@@ -6,7 +6,12 @@ extends GutTest
 
 const DrainageNetwork = preload("res://src/world/drainage_network.gd")
 
-const SEA_LEVEL := 0.5
+## Must sit BETWEEN the fixtures' sea row (0.2) and their lowest LAND
+## cell (the crater floor, 0.3). At 0.5 the crater was itself below sea
+## level, so once _label_inland_seas started picking the largest sea
+## component as the ocean, the 9-cell crater outvoted the 7-cell sea row
+## and the fixtures stopped meaning what their docstrings say.
+const SEA_LEVEL := 0.25
 
 
 func _grid(width: int, height: int, value: float) -> PackedFloat32Array:
@@ -105,8 +110,68 @@ func test_a_crater_spills_at_its_lowest_rim():
 	var depression: Dictionary = network.depressions[0]
 	assert_almost_eq(depression["spill_elevation"], 0.6, 1e-4)
 	assert_almost_eq(depression["floor_elevation"], 0.3, 1e-6)
-	# The spill cell is the crater cell directly below the notch.
-	assert_eq(depression["spill_index"], 3 * 7 + 3)
+	# The spill cell is the outlet carrying the MOST flow, which is not
+	# the one directly below the notch: see the flat-lip test below.
+	var spill: int = depression["spill_index"]
+	assert_eq(network.depression_id[spill], 0, "the spill cell is a member")
+	assert_ne(
+		network.depression_id[network.downstream_index(spill)], 0,
+		"and it drains out of the depression"
+	)
+	assert_eq(spill, 3 * 7 + 2)
+
+
+## A filled depression's lip is FLAT: the flood raises every member to
+## exactly the spill elevation, so the outflow can and usually does split
+## across several cells. Here three crater cells step into the notch,
+## carrying 13, 4 and 13 of the 30 the basin collects -- and the "obvious"
+## one directly below the notch is the weakest of the three.
+##
+## This is why a lake's throughput cannot be read off any single cell.
+## bake_hydrology used to do exactly that when deciding whether a basin
+## held water, so it saw a fraction of the real inflow and dried out
+## lakes that should have filled.
+func test_a_flat_spill_lip_drains_through_several_cells():
+	var network = DrainageNetwork.new().build(_crater_with_north_notch(), 7, 7, SEA_LEVEL)
+	var outlets: PackedInt32Array = network.depressions[0]["outlet_indices"]
+	assert_eq(outlets.size(), 3, "the 0.6 lip is three cells wide")
+	for outlet in outlets:
+		assert_eq(network.depression_id[outlet], 0, "an outlet is a member")
+		assert_ne(
+			network.depression_id[network.downstream_index(outlet)], 0,
+			"and its downstream is not"
+		)
+
+
+func test_a_basins_outflow_sums_its_whole_spill_lip():
+	var network = DrainageNetwork.new().build(_crater_with_north_notch(), 7, 7, SEA_LEVEL)
+	var unit: PackedFloat32Array = network.accumulate_weighted(_grid(7, 7, 1.0))
+	# 9 crater cells plus the 21 plateau cells draining into them.
+	assert_almost_eq(network.outflow_of(0, unit), 30.0, 1e-4)
+	var spill: int = network.depressions[0]["spill_index"]
+	assert_lt(
+		float(network.accumulation[spill]), 30.0,
+		"no single outlet carries the basin's whole throughput"
+	)
+
+
+## An inland sea has no way out at all -- every one of its cells is where
+## flow stops. Summing over them is therefore summing everything the lake
+## receives, so the same call answers for a terminal lake and a
+## through-flowing basin alike.
+func test_a_terminal_inland_sea_counts_every_cell_as_its_own_outlet():
+	var heights := _grid(9, 7, 0.8)
+	for x in 9:
+		heights[x] = 0.2
+	heights[4 * 9 + 4] = 0.1
+	heights[4 * 9 + 5] = 0.1
+	var network = DrainageNetwork.new().build(heights, 9, 7, SEA_LEVEL)
+	var pocket: Dictionary = network.depressions[0]
+	assert_true(pocket["inland_sea"])
+	var outlets: PackedInt32Array = pocket["outlet_indices"]
+	assert_eq(outlets.size(), int(pocket["cell_count"]), "a terminal lake is all outlet")
+	var unit: PackedFloat32Array = network.accumulate_weighted(_grid(9, 7, 1.0))
+	assert_gt(network.outflow_of(int(pocket["id"]), unit), 0.0)
 
 
 func test_crater_cells_are_filled_to_the_spill_and_still_reach_the_sea():
@@ -213,18 +278,20 @@ func test_an_inland_sea_pocket_is_a_lake_at_sea_level_and_the_ocean_is_not():
 	# enclosed by land are a pocket the flood treats as sea but the world
 	# should draw as a lake: real estuary marshes read this way in the
 	# asset, and the first playtest saw them as blocky ocean squares.
+	# The pocket floor is under SEA_LEVEL and the sea row is the LARGER
+	# component, so the row is the ocean and the pocket is the lake.
 	var heights := _grid(9, 7, 0.8)
 	for x in 9:
 		heights[x] = 0.2
-	heights[4 * 9 + 4] = 0.45
-	heights[4 * 9 + 5] = 0.45
+	heights[4 * 9 + 4] = 0.1
+	heights[4 * 9 + 5] = 0.1
 	var network = DrainageNetwork.new().build(heights, 9, 7, SEA_LEVEL)
 	assert_eq(network.depressions.size(), 1)
 	var pocket: Dictionary = network.depressions[0]
 	assert_true(pocket["inland_sea"])
 	assert_eq(pocket["cell_count"], 2)
 	assert_almost_eq(pocket["spill_elevation"], SEA_LEVEL, 1e-9, "its surface is sea level")
-	assert_almost_eq(pocket["floor_elevation"], 0.45, 1e-6)
+	assert_almost_eq(pocket["floor_elevation"], 0.1, 1e-6)
 	assert_eq(network.depression_id[4 * 9 + 4], 0)
 	assert_eq(network.depression_id[3], DrainageNetwork.NO_DEPRESSION, "the ocean is never a lake")
 	assert_true(network.is_sea(4 * 9 + 4), "still sea to the routing")
@@ -234,7 +301,7 @@ func test_an_inland_sea_pocket_respects_the_minimum_cell_count():
 	var heights := _grid(9, 7, 0.8)
 	for x in 9:
 		heights[x] = 0.2
-	heights[4 * 9 + 4] = 0.45
+	heights[4 * 9 + 4] = 0.1
 	var network = DrainageNetwork.new().build(
 		heights, 9, 7, SEA_LEVEL, false, DrainageNetwork.DEFAULT_MIN_DEPRESSION_DEPTH, 2
 	)

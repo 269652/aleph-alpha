@@ -65,11 +65,18 @@ func _initialize() -> void:
 
 	# The stand-in lake balance: a basin whose catchment delivers too
 	# little rain per lake cell is dry ground, not a lake. Its inflow is
-	# the accumulated discharge at its spill cell, where everything the
-	# basin collects passes on its way out.
+	# what passes through its whole spill lip.
+	#
+	# This used to read the discharge at the single spill cell, on the
+	# assumption that everything the basin collects passes through it.
+	# That assumption is false: the flood raises every member to exactly
+	# the spill elevation, so the lip is flat and the outflow splits
+	# across it -- three ways in the test crater, where one cell carries
+	# 13 of the 30 collected and another carries 4. Basins were being
+	# judged on a fraction of their real inflow and dried out for it.
 	var dry := PackedInt32Array()
 	for depression in network.depressions:
-		var inflow: float = discharge[int(depression["spill_index"])]
+		var inflow: float = network.outflow_of(int(depression["id"]), discharge)
 		if not StandInPrecipitation.lake_holds_water(inflow, int(depression["cell_count"])):
 			dry.append(int(depression["id"]))
 	network.drop_depressions(dry)

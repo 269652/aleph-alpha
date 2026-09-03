@@ -9,7 +9,11 @@ extends GutTest
 const HydrologyData = preload("res://src/world/hydrology_data.gd")
 const DrainageNetwork = preload("res://src/world/drainage_network.gd")
 
-const SEA_LEVEL := 0.5
+## Must sit BETWEEN the fixture sea row (0.2) and its lowest LAND cell
+## (the crater floor, 0.3). At 0.5 the crater was itself sub-sea, and
+## once the largest sea component started counting as the ocean the
+## 9-cell crater outvoted the 7-cell row and swapped their roles.
+const SEA_LEVEL := 0.25
 const TEST_DIRECTORY := "user://test_hydrology_data"
 
 
@@ -56,7 +60,10 @@ func test_discharge_encoding_round_trips_within_one_log_step():
 	# river's width actually reads (hydrology.md's width is log2 of Q).
 	for q in [0.5, 1.0, 3.0, 40.0, 1000.0, 250000.0, 3.0e6]:
 		var decoded: float = HydrologyData.decode_discharge(HydrologyData.encode_discharge(q))
-		var ratio := decoded / q
+		# q comes from an untyped literal array, so the division is Variant
+		# and needs the annotation -- without it this whole script failed to
+		# parse and GUT skipped it silently.
+		var ratio: float = decoded / float(q)
 		assert_between(ratio, 0.9, 1.1, "q=%f decoded to %f" % [q, decoded])
 
 
