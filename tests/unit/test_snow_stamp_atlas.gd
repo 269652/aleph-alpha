@@ -151,6 +151,16 @@ func test_the_sparsest_level_lets_the_ground_through_and_the_fullest_does_not():
 ## The ten variants at one level are real, different illustrated shapes --
 ## not ten copies of one blob. This is what stops a field of stamps reading
 ## as wallpaper.
+##
+## The threshold is measured, and deliberately low enough to hold for the
+## FULLEST level. Real pairwise mean-alpha differences, every pair at every
+## level: level 1 ranges 0.2436-0.4259, level 5 ranges 0.2923-0.4260, but
+## level 6 ranges only 0.0696-0.1137 -- expected and not a defect, because
+## level 6's ten variants are all near-solid squares (measured mean alpha
+## 0.806-0.825), so they differ mainly in INTERIOR shading and edge raggedness
+## rather than in silhouette. 0.05 keeps real margin under that worst case
+## (0.0696) while still catching the failure this guards: a sheet exported
+## with one shape repeated ten times.
 func test_the_variants_at_one_level_are_genuinely_different_shapes():
 	for level in atlas.levels():
 		for variant in SnowStampAtlas.VARIANTS_PER_LEVEL - 1:
