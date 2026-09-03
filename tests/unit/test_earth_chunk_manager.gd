@@ -428,6 +428,32 @@ func test_river_wader_positions_keeps_only_candidates_in_river_water():
 ## the course's downstream unit vector, and the real solved current speed
 ## -- so the shader interpolates ALL of them bilinearly between tiles and
 ## no per-tile quantity is left to draw the tile grid.
+## "Only around bends and where the water is deeper at the edge": traced
+## with a real line-probe to every chunk cell getting a texel written even
+## when it is genuinely far from any river -- EarthChunkGenerator.
+## nearest_river_at then falls back to whichever curated river is nearest
+## ANYWHERE ON THE PLANET, which can be hundreds of tiles away with a
+## totally unrelated width, so across_fraction (that distance divided by
+## an unrelated river's width) can run into the hundreds. Bilinearly
+## blended against a real neighbouring texel a few tiles away, that is an
+## unbounded cliff. The write must clamp it, regardless of how the
+## extreme value arose.
+func test_the_written_across_is_always_bounded():
+	manager._write_flow_across_texel(Vector2i(500, 500), 900.0, 45.0, 0.0, 2.0)
+	var side := RiverFlowShader.FLOW_MAP_TILES
+	var texel: Color = manager._flow_across_image.get_pixel(500 % side, 500 % side)
+	assert_almost_eq(texel.r, EarthChunkManager.CLAMP_MAGNITUDE, 1e-6)
+
+	manager._write_flow_across_texel(Vector2i(501, 501), -900.0, 45.0, 0.0, 2.0)
+	var negative_texel: Color = manager._flow_across_image.get_pixel(501 % side, 501 % side)
+	assert_almost_eq(negative_texel.r, -EarthChunkManager.CLAMP_MAGNITUDE, 1e-6)
+
+	# An ordinary in-channel value must pass through completely unclamped.
+	manager._write_flow_across_texel(Vector2i(502, 502), 0.4, 45.0, 1.0, 2.0)
+	var ordinary_texel: Color = manager._flow_across_image.get_pixel(502 % side, 502 % side)
+	assert_almost_eq(ordinary_texel.r, 0.4, 1e-6)
+
+
 func test_the_flow_texel_carries_direction_and_speed():
 	var flow_layer := TileMapLayer.new()
 	manager.set_river_flow_layer(flow_layer)

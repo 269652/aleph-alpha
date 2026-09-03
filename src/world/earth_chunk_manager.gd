@@ -3473,6 +3473,28 @@ func _sync_flow_boulder(tile: Vector2i) -> void:
 ## into the SEPARATE _flow_scale_image (see that field's own doc comment
 ## for why it may never share a channel with a vector that gets bilinearly
 ## filtered).
+## every chunk cell no matter how far from any river ever gets a texel
+## written here (for the far cell's bilinear neighbours), and its `nearest`
+## comes from EarthChunkGenerator.nearest_river_at -- which, once no
+## channel (curated or hydrology) is close enough to matter, falls back to
+## WHICHEVER curated river is nearest ANYWHERE ON THE PLANET. A cell deep
+## in a continent's interior can be 900+ tiles from that river, with a
+## totally unrelated width and bearing, and `across_fraction` (that
+## distance divided by that river's width) can run into the hundreds --
+## bilinearly blended against a real neighbouring texel a few tiles away
+## with a normal-sized value, that is an unbounded cliff, not a smooth
+## fade. Reported live as a torn, chunky zigzag ("only around bends and
+## where the water is deeper at the edge" -- a huge |across| clamps the
+## depth shading to its darkest band, and the true-vs-fallback boundary is
+## least stable exactly where a bend's curve departs most from a
+## straight-line extrapolation). CLAMP_MAGNITUDE is comfortably beyond the
+## largest across a channel's OWN real apron+bleed zone can ever produce
+## even at HydrologyField.SPRING_HALF_WIDTH_TILES (~12.5), so no genuine
+## reading is ever clipped -- only the unrelated-planet-away fallback is.
+## Pinned by test_the_written_across_is_always_bounded.
+const CLAMP_MAGNITUDE := 16.0
+
+
 func _write_flow_across_texel(
 	global: Vector2i, across_fraction: float, bearing_deg: float, speed_mps: float, half_width_tiles: float
 ) -> void:
@@ -3484,7 +3506,8 @@ func _write_flow_across_texel(
 	var x := posmod(global.x, side)
 	var y := posmod(global.y, side)
 	var radians := deg_to_rad(bearing_deg)
-	_flow_across_image.set_pixel(x, y, Color(across_fraction, sin(radians), -cos(radians), speed_mps))
+	var clamped_across := clampf(across_fraction, -CLAMP_MAGNITUDE, CLAMP_MAGNITUDE)
+	_flow_across_image.set_pixel(x, y, Color(clamped_across, sin(radians), -cos(radians), speed_mps))
 	_flow_scale_image.set_pixel(x, y, Color(half_width_tiles, 0.0, 0.0, 0.0))
 
 

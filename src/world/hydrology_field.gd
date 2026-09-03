@@ -86,7 +86,21 @@ const CURVE_SEGMENTS := 24
 ## along the channel is lowered by a few metres per doubling of discharge
 ## so slope, hillshade and passability all see a valley with the river at
 ## its floor.
-const VALLEY_HALF_WIDTH_TILES := 3.0
+## MUST stay >= RiverCatalog.RIVER_BANK_APRON_TILES (0.75) +
+## RiverFlowShader.SHORE_BLEED_TILES (3.0) -- the painter's own total
+## paint reach beyond a channel's bank. When this constant was smaller
+## than that sum, _channel_hits (below) reported "no channel here" for a
+## band of tiles the painter was STILL actively painting; EarthChunkGenerator.
+## nearest_river_at then fell back to whatever curated river exists
+## ANYWHERE ON THE PLANET (in one real case, 900+ tiles away, with a
+## wildly different width and bearing), and that garbage texel bilinearly
+## blended against its real neighbour -- the torn, chunky zigzag reported
+## "only around bends and where the water is deeper at the edge" (a huge
+## |across| clamps the depth shading to its darkest band, and the reach
+## boundary is least stable exactly where a bend's curve departs most
+## from a straight-line extrapolation). Pinned by
+## test_the_geometry_reach_covers_the_painters_full_bleed.
+const VALLEY_HALF_WIDTH_TILES := 4.0
 const VALLEY_CARVE_METERS_PER_DOUBLING := 6.0
 
 ## The shoreline kernel: radius in asset cells of the smooth bump each

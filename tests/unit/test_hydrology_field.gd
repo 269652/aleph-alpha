@@ -8,6 +8,8 @@ extends GutTest
 ## asset cell).
 
 const HydrologyField = preload("res://src/world/hydrology_field.gd")
+const RiverCatalog = preload("res://src/world/river_catalog.gd")
+const RiverFlowShader = preload("res://src/rendering/river_flow_shader.gd")
 const HydrologyData = preload("res://src/world/hydrology_data.gd")
 const DrainageNetwork = preload("res://src/world/drainage_network.gd")
 const TerrainRelief = preload("res://src/world/terrain_relief.gd")
@@ -331,6 +333,31 @@ func test_inside_the_main_river_the_main_decides_depth_and_width():
 	assert_eq(probe["kind"], "river")
 	var main: Dictionary = confluence.nearest_channel_geometry(35, 24)
 	assert_almost_eq(probe["discharge"], main["discharge"], 1e-6)
+
+
+## "Only around bends and where the water is deeper at the edge": traced
+## with a real line-probe to a mismatch between two independently-tuned
+## constants. HydrologyField's own channel-geometry reach must cover
+## every tile EarthChunkManager's painter ever asks about (its bank apron
+## plus its shore bleed), or the geometry query reports "no channel here"
+## for a band the painter is still painting, and the generator falls back
+## to an unrelated, possibly-distant curated river -- a garbage texel that
+## bilinearly tears the strokes at exactly that boundary.
+func test_the_geometry_reach_covers_the_painters_full_bleed():
+	var painter_reach := RiverCatalog.RIVER_BANK_APRON_TILES + RiverFlowShader.SHORE_BLEED_TILES
+	assert_gte(
+		HydrologyField.VALLEY_HALF_WIDTH_TILES, painter_reach,
+		"the geometry query must still answer everywhere the painter still paints"
+	)
+
+
+## The real regression, reproduced directly: a tile just past the OLD
+## (3.0) reach but within the painter's actual bleed must still get a
+## real channel answer, not an empty one.
+func test_a_tile_just_past_the_old_reach_still_gets_real_channel_geometry():
+	var beyond_old_reach := int(ceil(field.width_tiles_for_discharge(TEST_MIN_DISCHARGE) / 2.0 + 3.1))
+	var geometry: Dictionary = field.nearest_channel_geometry(35 + beyond_old_reach, 14)
+	assert_false(geometry.is_empty(), "the old 3.0 reach cut off a tile the painter's bleed still reaches")
 
 
 func test_the_spring_is_narrower_than_the_thinnest_river():
