@@ -24,6 +24,19 @@ const REHUNT_SECONDS := 2.0
 ## How often a bite actually lands while feeding.
 const BITE_INTERVAL := 1.0
 
+## How much a candidate's effective distance shrinks per adult fly already
+## on it (see docs/concept/flies.md's Carcass.fly_count) -- real scavengers
+## really do cue off circling flies as a sign something worth investigating
+## is there (docs/concept/carrion.md), so a fly-blown carcass should read as
+## closer to a decomposer than an identically-placed fresh one, not just
+## equally close. See effective_distance.
+const FLY_ATTRACTION_DISCOUNT_PX_PER_FLY := 8.0
+
+## The effective-distance floor -- even a heavily fly-blown carcass cannot
+## read as closer than this, so a genuinely distant one still never beats a
+## real nearby target that is already closer than the floor itself.
+const MIN_EFFECTIVE_DISTANCE_PX := 4.0
+
 var phase := Phase.SEEKING
 
 var _phase_elapsed := 0.0
@@ -79,3 +92,14 @@ func _enter(next_phase: int) -> void:
 	phase = next_phase
 	_phase_elapsed = 0.0
 	_bite_elapsed = 0.0
+
+
+## How far away a carcass with `fly_count` adult flies on it EFFECTIVELY
+## reads to a decomposer scanning at `real_distance_px` -- lower reads as
+## more attractive. Static and pure (no target selection happens here, only
+## the score DecomposerMarker._nearest_carrion picks the smallest of), so it
+## is unit-testable without a live scene, matching every other tuned
+## formula in this codebase.
+static func effective_distance(real_distance_px: float, fly_count: int) -> float:
+	var discount := float(maxi(fly_count, 0)) * FLY_ATTRACTION_DISCOUNT_PX_PER_FLY
+	return maxf(real_distance_px - discount, MIN_EFFECTIVE_DISTANCE_PX)
