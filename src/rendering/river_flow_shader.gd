@@ -71,8 +71,8 @@ uniform float smear_gain = 2.0;
 uniform float turbulence_strength = 1.6;
 uniform float eddy_scale = 0.16;
 uniform float eddy_detail_weight = 0.7;
-uniform float eddy_swirl = 0.35;
-uniform float bank_shear = 0.6;
+uniform float eddy_swirl = 0.0;
+uniform float bank_shear = 0.25;
 uniform sampler2D flow_across_map : filter_linear, repeat_enable;
 uniform float flow_map_tiles = 256.0;
 uniform float half_width_tiles = 2.0;
@@ -356,10 +356,12 @@ void fragment() {
 		+ (value_noise(eddy_p * 2.6 + vec2(19.7, 7.3)) - 0.5) * eddy_detail_weight)
 		* turbulence_strength * shear;
 	vec2 q = p + flow_perp * bend;
-	// The eddies also SWIRL the smear direction, not only shift the field
-	// sideways: a stroke smeared along a locally rotated direction curls
-	// through the boil instead of stepping across it ("more natural
-	// whirly turbulences in curves").
+	// The smear direction is the FLOW direction and nothing else. Rotating
+	// it by the eddy field (an attempt at whirlier bends) sawed every
+	// stroke into a regular zig-zag with the eddy noise's own period,
+	// because a smear along a direction that oscillates every few tiles
+	// folds the level sets; eddy_swirl is kept at zero and the taps below
+	// follow flow_dir.
 	vec2 swirl_dir = normalize(flow_dir + flow_perp * (bend * eddy_swirl));
 
 	// The drag is purely DOWNSTREAM -- water is carried along the channel,
@@ -973,12 +975,15 @@ const RIPPLE_LIFETIME := 2.5
 const CHANNEL_ACROSS_GRADIENT_PER_PX := 1.0 / (2.0 * 16.0)
 
 ## Whirl (third playtest, "more natural whirly turbulences in curves"):
-## the standing eddies rotate the stroke smear by up to EDDY_SWIRL of the
-## bend, so lines curl through a boil, and turbulence grows by BANK_SHEAR
-## from the centreline to the waterline, where real shear sheds eddies --
-## and where a bend's outer bank sweeps the water.
-const EDDY_SWIRL := 0.35
-const BANK_SHEAR := 0.6
+## turbulence grows by BANK_SHEAR from the centreline to the waterline,
+## where real shear sheds eddies. EDDY_SWIRL, which rotated the stroke
+## smear by the eddy field, is ZERO: it sawed every stroke into a regular
+## zig-zag with the eddy noise's period ("both artifacts still exist"),
+## because smearing along a direction that oscillates every few tiles
+## folds the level sets. Pinned at zero by
+## test_the_smear_follows_the_flow_and_never_the_eddies.
+const EDDY_SWIRL := 0.0
+const BANK_SHEAR := 0.25
 
 
 ## CPU mirror of one ring's across-displacement (pixels) at `distance_px`
