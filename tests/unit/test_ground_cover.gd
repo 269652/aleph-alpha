@@ -400,3 +400,120 @@ func test_the_sward_and_the_tussocks_come_due_together():
 	manager.update(Vector2i(0, 1))
 
 	assert_eq(manager._sward_refresh_accumulator, manager._grass_refresh_accumulator)
+
+
+# -- the sward as feed (docs/concept/ground_cover.md, "The grazing lawn is
+# food") -----------------------------------------------------------------
+
+
+## A grassland sward with real cover on it, at the size the cropping tests use.
+func _grassland_sward() -> GroundCover:
+	return GroundCover.new(7, 4, 4, _grassland(4, 4))
+
+
+func _biome_of(name: String, width: int, height: int) -> PackedStringArray:
+	var biome := PackedStringArray()
+	for index in width * height:
+		biome.append(name)
+	return biome
+
+
+## The loop this closes. `FOOD_UNDERFOOT` used to be a free lunch -- an animal
+## standing on grassland was fed forever and the world lost nothing -- so a
+## meadow had no carrying capacity at all. Cropping takes real leaf off the
+## cell.
+func test_cropping_the_sward_takes_it_down():
+	var sward := _grassland_sward()
+	var before := sward.cover_at(Vector2i(1, 1), 0.0)
+	sward.record_crop(Vector2i(1, 1))
+	assert_lt(sward.cover_at(Vector2i(1, 1), 0.0), before)
+
+
+## ...and only on the cell that was actually cropped.
+func test_cropping_one_cell_leaves_its_neighbour_alone():
+	var sward := _grassland_sward()
+	var before := sward.cover_at(Vector2i(2, 2), 0.0)
+	sward.record_crop(Vector2i(1, 1))
+	assert_eq(sward.cover_at(Vector2i(2, 2), 0.0), before)
+
+
+## Grazing the TUSSOCK and cropping the SWARD are opposite acts on the same
+## cell, and the whole grazing-lawn effect depends on the difference: taking
+## the tall grass off releases the rosettes underneath, taking the rosettes
+## themselves sets them back. Collapsing the two would make a grazed meadow
+## either grow forever or die forever.
+func test_grazing_the_tussock_and_cropping_the_sward_pull_opposite_ways():
+	var released := _grassland_sward()
+	released.record_graze(Vector2i(1, 1))
+	var cropped := _grassland_sward()
+	cropped.record_crop(Vector2i(1, 1))
+	assert_gt(released.cover_at(Vector2i(1, 1), 0.0), cropped.cover_at(Vector2i(1, 1), 0.0))
+
+
+## A bare cell cannot be cropped: that is what stops an animal feeding forever
+## on ground it has already eaten, and it is where carrying capacity comes
+## from.
+func test_a_cell_eaten_bare_cannot_be_cropped_again():
+	var sward := _grassland_sward()
+	var cell := Vector2i(1, 1)
+	for bite in 40:
+		sward.record_crop(cell)
+	assert_false(sward.can_crop(cell, 0.0), "a cell eaten bare still offers a bite")
+
+
+func test_a_full_cell_can_be_cropped():
+	assert_true(_grassland_sward().can_crop(Vector2i(1, 1), 0.0))
+
+
+## Nothing to crop where nothing grows.
+func test_bare_ground_offers_no_bite():
+	var stone := GroundCover.new(7, 4, 4, _biome_of("mountain", 4, 4))
+	assert_false(stone.can_crop(Vector2i(1, 1), 0.0))
+
+
+## Under a mature tussock there is less down there to crop -- which is why a
+## rested meadow feeds an animal through its TALL grass and an overgrazed one
+## through its sward.
+##
+## Less, not nothing: SHADE_SUPPRESSION is deliberately below 1.0, because a
+## tussock suppresses the rosettes under it rather than annihilating them, and
+## a real pasture keeps some clover through the hay crop.
+func test_deep_shade_leaves_less_to_crop():
+	var sward := _grassland_sward()
+	assert_lt(sward.cover_at(Vector2i(1, 1), 1.0), sward.cover_at(Vector2i(1, 1), 0.0))
+
+
+## On POOR soil the shade really does take it all: a thin cell under a mature
+## tussock offers no bite, which is what makes where an animal stands matter.
+func test_a_poor_cell_under_a_tussock_offers_no_bite():
+	assert_lt(
+		GroundCover.cover_for(POOR, FULL_TUSSOCK, UNGRAZED),
+		GroundCover.MIN_COVER_TO_CROP
+	)
+
+
+## The sward grows back, or a meadow would be eaten to nothing once and stay
+## that way. Expressed against the same TallGrass.SPREAD_INTERVAL clock the
+## grazing memory already uses, so the two layers keep step.
+func test_a_cropped_sward_grows_back():
+	var sward := _grassland_sward()
+	var cell := Vector2i(1, 1)
+	for bite in 40:
+		sward.record_crop(cell)
+	var eaten := sward.cover_at(cell, 0.0)
+	sward.advance(TallGrass.SPREAD_INTERVAL * GroundCover.RECOVERY_SPREADS)
+	assert_gt(sward.cover_at(cell, 0.0), eaten)
+
+
+## A rosette regrows from a crown pressed flat against the soil -- which is
+## why grazing selects for it -- but it regrows from LEAF, not from nothing.
+## Recovery has to be slower than a bite, or cropping costs the world nothing.
+func test_the_sward_grows_back_slower_than_it_is_eaten():
+	var sward := _grassland_sward()
+	var cell := Vector2i(1, 1)
+	var before := sward.cover_at(cell, 0.0)
+	sward.record_crop(cell)
+	var eaten := sward.cover_at(cell, 0.0)
+	sward.advance(1.0)
+	assert_lt(sward.cover_at(cell, 0.0), before, "one second of regrowth undid a whole bite")
+	assert_gte(sward.cover_at(cell, 0.0), eaten)

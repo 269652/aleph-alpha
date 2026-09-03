@@ -93,3 +93,60 @@ func test_advance_with_zero_delta_changes_nothing() -> void:
 	var before: float = scarring.wear_at(Vector2i(6, 6))
 	scarring.advance(0.0)
 	assert_eq(scarring.wear_at(Vector2i(6, 6)), before)
+
+
+# -- what a path is FOR (docs/concept/infrastructure.md) ---------------------
+
+
+## Paths have worn in and rendered as earth since PathScarring was written,
+## and they did nothing: walking the same line every day changed the picture
+## and not the walk. A trodden path is faster than rough ground -- that is why
+## real desire paths form at all -- and without the benefit the loop is open at
+## both ends: habit makes a path, and the path makes nothing.
+func test_untouched_ground_gives_no_advantage():
+	assert_eq(PathScarring.speed_multiplier(0.0), 1.0)
+
+
+func test_a_worn_path_is_faster_than_rough_ground():
+	assert_gt(PathScarring.speed_multiplier(PathScarring.WORN_THRESHOLD), 1.0)
+
+
+## Continuous rather than a switch at the threshold: real ground compacts
+## progressively under repeated use, so a half-worn track already helps a
+## little. That is also what makes the loop reinforce smoothly instead of
+## paying out all at once.
+func test_the_advantage_grows_with_use():
+	assert_gt(
+		PathScarring.speed_multiplier(PathScarring.WORN_THRESHOLD * 0.8),
+		PathScarring.speed_multiplier(PathScarring.WORN_THRESHOLD * 0.3)
+	)
+
+
+## A path is a real convenience, not a highway: bracketed from both sides so
+## neither edge can drift into "pointless" or "the only way to travel".
+func test_the_advantage_is_worth_having_and_not_absurd():
+	assert_between(PathScarring.speed_multiplier(PathScarring.MAX_WEAR), 1.05, 1.5)
+
+
+## Wear is capped, so the multiplier is too -- walking one tile forever must
+## not compound into a slipstream.
+func test_the_advantage_stops_climbing_once_the_ground_is_fully_compacted():
+	assert_eq(
+		PathScarring.speed_multiplier(PathScarring.MAX_WEAR),
+		PathScarring.speed_multiplier(PathScarring.MAX_WEAR * 10.0)
+	)
+
+
+func test_a_path_never_slows_you():
+	for wear in [0.0, 0.1, 0.5, 1.0, 1.5, 99.0]:
+		assert_gte(PathScarring.speed_multiplier(wear), 1.0)
+
+
+## And it really is the SAME wear the renderer reads, not a parallel number:
+## a tile the world has drawn as a path is a tile that carries the advantage.
+func test_the_tile_the_world_drew_as_a_path_is_the_one_that_is_faster():
+	var scarring := PathScarring.new()
+	var tile := Vector2i(3, 4)
+	while not scarring.is_worn(tile):
+		scarring.step_on(tile)
+	assert_gt(PathScarring.speed_multiplier(scarring.wear_at(tile)), 1.0)

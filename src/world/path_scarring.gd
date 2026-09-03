@@ -8,6 +8,30 @@ const WORN_THRESHOLD := 1.0
 const DECAY_PER_SECOND := 0.01
 const MAX_WEAR := 1.5
 
+## How much faster fully compacted ground is to walk than rough ground.
+##
+## Paths have worn in and rendered as earth since this module was written, and
+## they did NOTHING: walking the same line every day changed the picture and
+## not the walk. A trodden path is faster than rough ground -- that is why real
+## desire paths form at all -- and without the benefit the loop is open at both
+## ends, since habit makes a path and the path makes nothing.
+##
+## A real convenience rather than a highway. Bracketed from both sides by
+## test_the_advantage_is_worth_having_and_not_absurd, so neither edge can drift
+## into "pointless" or "the only way to travel".
+const WORN_SPEED_BONUS := 0.18
+
+
+## What ground worn to `wear` does to how fast it is crossed.
+##
+## Continuous rather than a switch at WORN_THRESHOLD: real ground compacts
+## progressively under repeated use, so a half-worn track already helps a
+## little -- which is also what makes the loop reinforce smoothly instead of
+## paying out all at once. Never below 1.0: a path is never a hindrance.
+static func speed_multiplier(wear: float) -> float:
+	var compacted := clampf(wear, 0.0, MAX_WEAR) / MAX_WEAR
+	return 1.0 + WORN_SPEED_BONUS * compacted
+
 var _wear: Dictionary = {}
 
 

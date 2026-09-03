@@ -35,6 +35,7 @@ const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 const Sickness = preload("res://src/gameplay/sickness.gd")
 const ColdExposure = preload("res://src/gameplay/cold_exposure.gd")
 const WoundModel = preload("res://src/gameplay/wound_model.gd")
+const PathScarring = preload("res://src/world/path_scarring.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const NpcGreeting = preload("res://src/world/npc_greeting.gd")
@@ -1509,6 +1510,25 @@ func is_rooted() -> bool:
 ## = no effect) -- one more term in _authority_step's existing
 ## current_speed_multiplier product chain, same shape as
 ## ConditionPenalty.speed_multiplier(survival.fitness) already is.
+## How worn the ground the player is standing on is (see PathScarring).
+##
+## Pushed in by World rather than queried: the wear model lives there, next to
+## the step that feeds it, and World already reads this player's tile every
+## frame to wear the path in -- so this is the same data flow turned around
+## rather than a second one.
+var ground_wear := 0.0
+
+
+## What that worn ground does to the player's speed.
+##
+## Closes the loop the path model has always been missing half of: repeated
+## movement wears a path, the path is quicker to walk, and being quicker to
+## walk is what makes it worth using again. Until this, wearing a path in cost
+## the player time and bought them nothing but a texture change.
+func _path_speed_multiplier() -> float:
+	return PathScarring.speed_multiplier(ground_wear)
+
+
 func _spell_speed_multiplier() -> float:
 	if _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.SLOW) > 0:
 		return SpellStatusEffects.SLOW_SPEED_MULTIPLIER
@@ -1874,6 +1894,7 @@ func _authority_step(delta: float) -> void:
 		* ConditionPenalty.speed_multiplier(survival.fitness)
 		* _spell_speed_multiplier()
 		* _crouch_speed_multiplier()
+		* _path_speed_multiplier()
 	)
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction

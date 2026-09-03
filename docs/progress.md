@@ -1752,6 +1752,31 @@ Reported live, looking at a real grassland chunk at noon: *"the bare grass parts
 ✅ Ant mounds are no longer invisible -- see "Ant mounds, and the traffic on them" below, which closed this the same day.
 
 
+### Three loops that were open at one end (2026-09-03)
+
+Each of these had a system built correctly and a consumer missing, so the world simulated something the player could never act on or be affected by.
+
+#### The grazing lawn is food
+
+✅ **`FOOD_UNDERFOOT` was the one bite in the game that could never fail.** Its implementation read, in full: `got = true  # it is standing in its food; there is nothing to remove`. A hungry animal standing on grassland was fed, the world lost nothing, and **a meadow therefore had no carrying capacity at all** — any number of animals could live on any patch of green forever. The underfoot bite now crops the sward (`GroundCover.record_crop`, `EarthChunkManager.crop_sward_at`), so a patch can be eaten bare, the bite is refused below `MIN_COVER_TO_CROP`, and the animal has to move on. Carrying capacity is emergent from how fast the sward regrows rather than a number anyone set.
+
+✅ **Grazing and cropping pull opposite ways, deliberately.** Taking the *tussock* off a cell releases the rosettes underneath (the shade is gone); taking the *rosettes* sets them back. `cover_for` carries both terms because collapsing them would make a grazed meadow either grow forever or die forever. This is the grazing lawn stated mechanically: hard grazing converts a meadow to clover and plantain rather than killing it, and only sustained cropping on top of that takes it down. Cropped leaf regrows on a slower clock than grazing memory fades (`CROP_RECOVERY_SPREADS` above 1.0) — a rosette regrows from its crown, but from *leaf*, not from nothing, so recovery faster than a bite would make cropping free.
+
+⬜ **Forage quality is still flat.** A sward bite feeds exactly as much as a tussock bite, though a clover lawn is genuinely better feed per mouthful and far less bulk. Blocked on `CreatureNeeds.feed()`, which zeroes hunger outright and has no notion of a partial meal — a needs-model change, not a sward change.
+
+#### A predator that hunts you by nose
+
+✅ **The wind was only ever an advantage.** `WindScent` made the player smellable and prey flees earlier when the player is upwind — a tool the player manages to get close to a deer. `PredatorScent` is the other edge: a predator downwind of the player acquires them as prey from well beyond sight (`CreatureMarker.smells_a_player_to_hunt`). Predators had never hunted the player at all — `_nearby_prey_creatures` only ever returned other *creatures*, so the player was something a predator bumped into rather than something it came looking for.
+
+✅ **Who hunts by nose is read off the receptor table**, not a second list of hunters: what makes an animal a scent hunter is that it reads musk as a *meal* rather than a warning, which `Olfaction` already knows for every species — including ones added later that inherit their diet's nose. The range is bracketed rather than picked (it must beat `CreatureMarker.SENSE_RADIUS` or nothing changes, and must not exceed `Olfaction.MAX_RANGE_TILES`), and it reuses the identical `WindScent.effective_distance_tiles` call the prey side makes, so the two halves cannot disagree about which way the wind blows. A tamed predator is exempt, the same way `fears_players` already exempts one.
+
+#### A path that pays you back
+
+✅ **Paths have worn in and rendered as earth since `PathScarring` was written, and they did nothing.** Walking the same line every day changed the picture and not the walk, so wearing a path in cost the player time and bought them a texture change — a desire path nobody desired. `PathScarring.speed_multiplier` makes worn ground quicker to cross and `World._step_path_scarring` pushes the wear onto the player it already reads a tile from each frame. Continuous in the wear rather than switching on at the threshold, because real ground compacts progressively and the loop should reinforce smoothly rather than pay out all at once; bracketed from both sides so it drifts into neither "pointless" nor "the only way to travel"; capped with the wear so one tile cannot compound into a slipstream; never below 1.0.
+
+📝 **Correction to an earlier audit note.** `path_wear.gd` was listed among the "tested modules with zero production callers" — it does not exist. The real module is `src/world/path_scarring.gd` and it was always wired; what was missing was the benefit, not the caller.
+
+
 ### Cold that remembers, and wounds that bleed (2026-09-03)
 
 Two of `survival.md`'s "four triggers" — design spec only since they were written, with the `Sickness`/`DebuffStack` machinery they reuse already proven by the one wired trigger (a creature bite).

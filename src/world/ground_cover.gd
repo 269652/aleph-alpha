@@ -91,6 +91,10 @@ var _seed_value: int
 ## Vector2i cell -> grazing memory (0..1). Only cells that have actually been
 ## grazed appear, so an untouched meadow costs nothing to store.
 var _grazing: Dictionary = {}
+## Vector2i cell -> 0..1 of how much of this cell's rosette leaf has been eaten
+## off. The counterpart to _grazing, and its opposite: grazing the tussock
+## RELEASES the sward, cropping the sward SETS IT BACK (see cover_for).
+var _cropping: Dictionary = {}
 
 
 func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -> void:
@@ -106,13 +110,21 @@ func _init(seed_value: int, width: int, height: int, biome: PackedStringArray) -
 ## clamped rather than trusted: `tall_grass_growth` in particular is read live
 ## from another simulation, and an out-of-range value must never reach
 ## `plant_count_for` and produce an instance count the renderer cannot honour.
-static func cover_for(base: float, tall_grass_growth: float, grazing: float) -> float:
+static func cover_for(
+	base: float, tall_grass_growth: float, grazing: float, cropping: float = 0.0
+) -> float:
 	var richness := clampf(base, 0.0, 1.0)
 	var shade := clampf(tall_grass_growth, 0.0, 1.0)
 	var grazed := clampf(grazing, 0.0, 1.0)
+	var cropped := clampf(cropping, 0.0, 1.0)
 	var ground := lerpf(MIN_BASE_COVER, MAX_BASE_COVER, richness)
 	var shaded := ground * (1.0 - SHADE_SUPPRESSION * shade)
-	return clampf(shaded + GRAZING_RELEASE * grazed, 0.0, 1.0)
+	# Grazing the TUSSOCK releases the rosettes underneath; cropping the
+	# ROSETTES sets them back. Opposite acts on the same cell, and the whole
+	# grazing-lawn effect is the difference between them -- collapsing the two
+	# would make a grazed meadow either grow forever or die forever.
+	var released := shaded + GRAZING_RELEASE * grazed
+	return clampf(released * (1.0 - cropped), 0.0, 1.0)
 
 
 ## How many rosettes that much cover draws. Cover drives how MANY plants a cell
@@ -140,7 +152,9 @@ func base_at(cell: Vector2i) -> float:
 func cover_at(cell: Vector2i, tall_grass_growth: float) -> float:
 	if not _is_sward_cell(cell):
 		return 0.0
-	return cover_for(base_at(cell), tall_grass_growth, _grazing.get(cell, 0.0))
+	return cover_for(
+		base_at(cell), tall_grass_growth, _grazing.get(cell, 0.0), _cropping.get(cell, 0.0)
+	)
 
 
 func plant_count_at(cell: Vector2i, tall_grass_growth: float) -> int:
@@ -165,21 +179,88 @@ func record_graze(cell: Vector2i) -> void:
 const GRAZE_FRACTION := 0.5
 
 
+## ## The sward as feed
+##
+## `FOOD_UNDERFOOT` used to be a free lunch: a hungry animal standing on
+## grassland was fed, the world lost nothing, and a meadow therefore had no
+## carrying capacity at all. Cropping is what that bite actually takes.
+##
+## Real: this is what a grazing lawn is FOR. Every species here grows from a
+## crown pressed flat against the soil, so a bite trims leaf it will replace
+## rather than removing the growing point -- which is exactly why hard grazing
+## converts a meadow to clover and plantain instead of killing it. But leaf
+## regrows FROM leaf, so cropping still costs the cell something and a lawn
+## eaten bare stops feeding until it comes back.
+
+## How much of a cell's remaining sward one bite takes. Smaller than
+## GRAZE_FRACTION: a rosette bite is a mouthful of short leaf, where a bite of
+## tussock is a mouthful of standing hay.
+const CROP_FRACTION := 0.25
+
+## The cover a cell must still carry for there to be a bite in it at all.
+##
+## This is where carrying capacity comes from: below this an animal standing
+## here gets nothing and has to move on, which is the whole loop overgrazing is
+## supposed to close. Pinned by test_a_cell_eaten_bare_cannot_be_cropped_again
+## and test_deep_shade_leaves_nothing_to_crop.
+const MIN_COVER_TO_CROP := 0.12
+
+## How much slower cropped leaf comes back than grazing memory fades.
+##
+## Above 1.0 deliberately: regrowth is the slow half. A rosette regrows from
+## its crown, but from LEAF rather than from nothing, so a cropped cell must
+## not refill inside a bite or cropping would cost the world nothing at all
+## (test_the_sward_grows_back_slower_than_it_is_eaten).
+const CROP_RECOVERY_SPREADS := 2.0
+
+const _CROPPED_EPSILON := 0.01
+
+
+## A herbivore cropped the rosettes on this cell (see
+## EarthChunkManager.crop_sward_at, which a CreatureMarker reaches through
+## _take_forage_bite's FOOD_UNDERFOOT branch).
+func record_crop(cell: Vector2i) -> void:
+	if not _is_sward_cell(cell):
+		return
+	var current: float = _cropping.get(cell, 0.0)
+	_cropping[cell] = current + (1.0 - current) * CROP_FRACTION
+
+
+## Whether there is a real bite of sward on this cell right now.
+func can_crop(cell: Vector2i, tall_grass_growth: float) -> bool:
+	return cover_at(cell, tall_grass_growth) >= MIN_COVER_TO_CROP
+
+
 ## The tussocks come back, and the sward closes again. Exponential so it is
 ## frame-rate independent by construction: two half-steps land exactly where
 ## one whole step does, which a `value - rate * delta` ramp does not guarantee
 ## once it clamps at zero.
 func advance(delta_seconds: float) -> void:
-	if delta_seconds <= 0.0 or _grazing.is_empty():
+	if delta_seconds <= 0.0:
 		return
-	var half_life := TallGrass.SPREAD_INTERVAL * RECOVERY_SPREADS / 4.0
-	var factor := pow(0.5, delta_seconds / half_life)
-	for cell in _grazing.keys().duplicate():
-		var decayed: float = _grazing[cell] * factor
-		if decayed < GRAZED_EPSILON:
-			_grazing.erase(cell)
-		else:
-			_grazing[cell] = decayed
+	if not _grazing.is_empty():
+		var half_life := TallGrass.SPREAD_INTERVAL * RECOVERY_SPREADS / 4.0
+		var factor := pow(0.5, delta_seconds / half_life)
+		for cell in _grazing.keys().duplicate():
+			var decayed: float = _grazing[cell] * factor
+			if decayed < GRAZED_EPSILON:
+				_grazing.erase(cell)
+			else:
+				_grazing[cell] = decayed
+	# Cropped leaf grows back on its own, slower clock -- see
+	# CROP_RECOVERY_SPREADS. Without this a meadow is eaten to nothing once and
+	# stays that way, which is a desert rather than a pasture.
+	if not _cropping.is_empty():
+		var crop_half_life := (
+			TallGrass.SPREAD_INTERVAL * RECOVERY_SPREADS * CROP_RECOVERY_SPREADS / 4.0
+		)
+		var crop_factor := pow(0.5, delta_seconds / crop_half_life)
+		for cell in _cropping.keys().duplicate():
+			var regrown: float = _cropping[cell] * crop_factor
+			if regrown < _CROPPED_EPSILON:
+				_cropping.erase(cell)
+			else:
+				_cropping[cell] = regrown
 
 
 ## ## The species, and where each plant goes

@@ -4031,6 +4031,12 @@ func _step_path_scarring(delta: float) -> void:
 			_last_scar_step_tile = tile
 			if PATH_SCAR_BIOMES.has(_chunk_manager.biome_at_global(tile.x, tile.y)):
 				_path_scarring.step_on(tile)
+		# ...and the path pays the walker back: worn ground is quicker to
+		# cross, which is what makes wearing one in worth doing (see
+		# PathScarring.speed_multiplier, Player._path_speed_multiplier). Pushed
+		# rather than queried because the wear model lives here, next to the
+		# step that feeds it -- the same data flow turned around.
+		local_player.ground_wear = _path_scarring.wear_at(tile)
 
 	_scar_refresh_accumulator += delta
 	if _scar_refresh_accumulator < PATH_SCAR_REFRESH_INTERVAL:

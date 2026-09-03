@@ -30,6 +30,7 @@ const ScentForaging = preload("res://src/gameplay/scent_foraging.gd")
 const FlightDistance = preload("res://src/gameplay/flight_distance.gd")
 const Wariness = preload("res://src/gameplay/wariness.gd")
 const WindScent = preload("res://src/world/wind_scent.gd")
+const PredatorScent = preload("res://src/gameplay/predator_scent.gd")
 const Olfaction = preload("res://src/gameplay/olfaction.gd")
 const Taming = preload("res://src/gameplay/taming.gd")
 const CaptureTool = preload("res://src/gameplay/capture_tool.gd")
@@ -827,7 +828,12 @@ func _process(frame_delta: float) -> void:
 		_cached_caution_threats = (
 			_nearby_in_group(PLAYER_GROUP, CAUTION_RADIUS) if fears_players() else []
 		)
-		_cached_prey = _nearby_prey_creatures()
+		# A predator that has the player's scent comes looking for them, from
+		# well beyond what it can see (see smells_a_player_to_hunt). Predators
+		# have never hunted the player at all: _nearby_prey_creatures only ever
+		# returned other CREATURES, so the player was something a predator
+		# bumped into rather than something it came for.
+		_cached_prey = _players_stalked_by_scent() + _nearby_prey_creatures()
 		_cached_blockers = _blockers_near(BLOCKER_SCAN_RADIUS)
 		_cached_nearby_herbivores = _nearby_herbivore_creatures()
 		_herd_disease_step()
@@ -1032,6 +1038,61 @@ func _smells_a_player() -> bool:
 		if FlightDistance.smells_player(species, tiles, _scent_alarm):
 			return true
 	return false
+
+
+## Whether this predator has the player's scent and is coming to look (see
+## PredatorScent, docs/concept/olfaction.md's "The wind carries it").
+##
+## The other edge of the stalking mechanic. The wind already let the player
+## approach a deer from downwind; this is what it costs them -- a wolf downwind
+## of the player knows they are there from well beyond what it could see, so
+## the wind is an exposure as well as an advantage.
+##
+## Reuses `_smells_a_player`'s exact wind plumbing rather than a second copy,
+## so the two halves cannot disagree about which way the wind blows.
+func smells_a_player_to_hunt() -> bool:
+	if info == null or not info.is_predator:
+		return false
+	# A tamed predator does not stalk the person who tamed it -- the same
+	# exemption fears_players makes on the prey side, for the same reason.
+	if is_tame():
+		return false
+	if not PredatorScent.hunts_by_scent(info.species):
+		return false
+	return _nearest_player_scent_tiles() <= PredatorScent.HUNT_RANGE_TILES
+
+
+## The wind-effective distance in tiles to the nearest player, or INF if there
+## is none. Wind-effective rather than true: a player downwind is effectively
+## closer, which is the whole mechanic.
+func _nearest_player_scent_tiles() -> float:
+	var wind_direction := Vector2.ZERO
+	var wind_strength := 0.0
+	if _world != null and _world.has_method("wind_direction"):
+		wind_direction = _world.wind_direction()
+	if _world != null and _world.has_method("wind_advection_strength"):
+		wind_strength = _world.wind_advection_strength()
+	var tile_size := float(maxi(_tile_size, 1))
+	var nearest := INF
+	for node in get_tree().get_nodes_in_group(PLAYER_GROUP):
+		if node == self:
+			continue
+		nearest = minf(nearest, WindScent.effective_distance_tiles(
+			node.position, position, wind_direction, wind_strength, tile_size
+		))
+	return nearest
+
+
+## The players this predator is actively coming to look for, as prey. Empty
+## unless it has actually caught the scent.
+func _players_stalked_by_scent() -> Array:
+	if not smells_a_player_to_hunt():
+		return []
+	var found: Array = []
+	for node in get_tree().get_nodes_in_group(PLAYER_GROUP):
+		if node != self:
+			found.append(node)
+	return found
 
 
 ## Movement for a tamed, un-roped animal carrying out its order.
@@ -2365,7 +2426,18 @@ func _take_forage_bite() -> void:
 	var got := false
 	match _forage_kind:
 		GrazerForaging.FOOD_UNDERFOOT:
-			got = true  # it is standing in its food; there is nothing to remove
+			# The sward it is standing on, and cropping it takes real leaf off
+			# the ground (see EarthChunkManager.crop_sward_at,
+			# docs/concept/ground_cover.md's "The grazing lawn is food").
+			#
+			# This used to read "it is standing in its food; there is nothing
+			# to remove" -- the one bite in the game that could never fail. A
+			# hungry animal on grassland was fed, the world lost nothing, and
+			# a meadow therefore had no carrying capacity at all. Now ground
+			# that has been eaten bare refuses the bite and the animal has to
+			# move on, which is what makes a pasture something that can be
+			# overstocked.
+			got = _world.has_method("crop_sward_at") and _world.crop_sward_at(_forage_target)
 		GrazerForaging.FOOD_GRASS:
 			got = _world.has_method("graze_grass_at") and _world.graze_grass_at(_forage_target)
 		GrazerForaging.FOOD_FRUIT:

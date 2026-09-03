@@ -26,6 +26,15 @@ class StubWorld:
 	func biome_at_global(_x: int, _y: int) -> String:
 		return biome
 
+	## The sward underfoot (see EarthChunkManager.crop_sward_at). A stub world
+	## is LIVING ground by construction, so a bite off it always lands -- which
+	## is what these tests mean by "standing on food terrain". A real world can
+	## refuse the bite once a patch has been eaten bare, and that is covered by
+	## test_underfoot_grazing.gd rather than here.
+	var sward_underfoot := true
+	func crop_sward_at(_pixel: Vector2) -> bool:
+		return sward_underfoot
+
 
 ## A StubWorld that also answers slope_at_global (the real EarthChunkManager
 ## does, delegating to EarthChunkGenerator -- see terrain_relief.md). Every
@@ -1914,6 +1923,12 @@ func _make_predator(at: Vector2) -> CreatureMarker:
 
 class ForageWorld:
 	extends RefCounted
+	## The sward underfoot (see EarthChunkManager.crop_sward_at). Living ground
+	## by construction, the same as StubWorld's -- a bare-ground refusal is
+	## covered by test_underfoot_grazing.gd.
+	var sward_underfoot := true
+	func crop_sward_at(_pixel: Vector2) -> bool:
+		return sward_underfoot
 	var grass: Array = []
 	var fruit: Array = []
 	var seeds: Array = []

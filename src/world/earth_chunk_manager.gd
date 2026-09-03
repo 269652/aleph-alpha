@@ -4757,6 +4757,56 @@ func grass_near(pixel_position: Vector2, radius_tiles: int = 8) -> Array:
 ## `growth` is always 1.0 here (only mature patches are ever offered by
 ## grass_near/grazed here), read live off the sim rather than hardcoded, so
 ## this stays correct if TallGrass ever grows a partial-bite mechanic.
+## What an animal standing here would get from cropping the sward, 0..1 (see
+## GroundCover). Zero anywhere the sward does not grow.
+func sward_cover_at(pixel_position: Vector2) -> float:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var sward: GroundCover = _ground_cover_sims.get(chunk_coord)
+	if sward == null:
+		return 0.0
+	var cell: Vector2i = tile - chunk_coord * CHUNK_SIZE
+	return sward.cover_at(cell, _tall_grass_growth_in(chunk_coord, cell))
+
+
+## A herbivore crops the rosettes it is standing on, and the ground loses them
+## (see docs/concept/ground_cover.md, "The grazing lawn is food"). Returns
+## whether there was actually a bite here.
+##
+## This is what closes the grazing loop. `FOOD_UNDERFOOT` used to answer "it is
+## standing in its food; there is nothing to remove" -- so an animal on
+## grassland was fed forever, the world lost nothing, and a meadow had no
+## carrying capacity at all. Now a patch can be eaten bare, which is what makes
+## a meadow something that can be overstocked.
+func crop_sward_at(pixel_position: Vector2) -> bool:
+	var tile := _world_tile_for_pixel(pixel_position)
+	var chunk_coord := _chunk_coord_for_tile(tile)
+	var sward: GroundCover = _ground_cover_sims.get(chunk_coord)
+	if sward == null:
+		return false
+	var cell: Vector2i = tile - chunk_coord * CHUNK_SIZE
+	var growth := _tall_grass_growth_in(chunk_coord, cell)
+	if not sward.can_crop(cell, growth):
+		return false
+	sward.record_crop(cell)
+	# Cropping is a real vegetation harvest, the same way grazing a tussock is
+	# -- so an overstocked meadow shows up in the ecosystem's own land-health
+	# accounting rather than only in the sward layer.
+	_ecosystem.record_vegetation_harvest(chunk_coord, sward.cover_at(cell, growth))
+	# The rosettes just went; redraw them now rather than at the next throttled
+	# refresh, the same reasoning graze_grass_at/take_worm_at give -- the player
+	# watched the animal eat them.
+	_sync_sward()
+	return true
+
+
+## The live tall-grass growth on one cell, which is the shade half of the
+## sward's readout. Zero where no grass sim is loaded.
+func _tall_grass_growth_in(chunk_coord: Vector2i, cell: Vector2i) -> float:
+	var grass_sim: TallGrass = _grass_sims.get(chunk_coord)
+	return grass_sim.get_growth(cell) if grass_sim != null else 0.0
+
+
 func graze_grass_at(pixel_position: Vector2) -> bool:
 	var tile := _world_tile_for_pixel(pixel_position)
 	var chunk_coord := _chunk_coord_for_tile(tile)

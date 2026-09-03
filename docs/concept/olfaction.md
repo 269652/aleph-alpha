@@ -134,6 +134,37 @@ the one thing that decides the player's line — which side of the animal the
 wind is on — at the same fidelity `ScentField` chose for floral scent, and for
 the same reason.
 
+## The other edge: a predator that hunts you by nose
+
+Added 2026-09-03. "The wind carries it" above made the player smellable and
+gave prey a reason to flee earlier when the player is upwind — which made the
+wind a **tool**, something the player manages in order to get close to a deer.
+This is what it costs them.
+
+A predator with a hunting nose that is **downwind of the player acquires them
+as prey**, from well beyond anything it could see. Three things make it work,
+and none of them are new machinery:
+
+- **Who hunts by nose is read off the receptor table**, not a second list of
+  hunters. What makes an animal a scent hunter is that it reads musk as a
+  *meal* rather than as a warning — a real positive `MUSK` response — which
+  `Olfaction` already knows for every species in the roster, including ones
+  added later that inherit their diet's nose. A grazer still smells the player
+  perfectly well; smelling and stalking are just different verbs.
+- **The range is bracketed, not picked.** It has to beat the eyes or nothing
+  changes at all (`CreatureMarker.SENSE_RADIUS`), and it must not reach across
+  the map (`Olfaction.MAX_RANGE_TILES`). Both edges are pinned by test.
+- **The wind is the same wind.** It reuses `WindScent.effective_distance_tiles`
+  — the identical call the prey side makes — so the two halves of the mechanic
+  cannot disagree about which way the wind blows. The same gap that is safe
+  upwind of a wolf is not safe downwind of it, and that single sentence is the
+  whole feature.
+
+Predators had never hunted the player at all: `_nearby_prey_creatures` only
+ever returned other *creatures*, so the player was something a predator bumped
+into rather than something it came looking for. A tamed predator is exempt, the
+same way `fears_players` already exempts one on the prey side.
+
 ## Blood: the trail a wounded animal leaves
 
 Added 2026-09-03, and the counterpart to "The wind carries it" above: that
@@ -209,6 +240,10 @@ the player are mechanically the same real thing.
   told that.
 - ✅ **Musk: the player emits it** (`PLAYER_MIXTURE`), and the wind carries it
   (`WindScent`) — see "The wind carries it" above.
+- ✅ **And it carries the other way too** (`src/gameplay/predator_scent.gd`,
+  `CreatureMarker.smells_a_player_to_hunt`): a predator downwind of the player
+  acquires them as prey from beyond sight. Predators had never hunted the
+  player at all before this.
 - ✅ **`BLOOD` as a seventh molecule, and a wounded animal that leaves a trail
   of it** — see "Blood: the trail a wounded animal leaves" above. A struck
   animal bleeds, slows, and drops visible marks along the path it actually ran;

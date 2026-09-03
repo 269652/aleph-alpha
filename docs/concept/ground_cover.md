@@ -159,11 +159,8 @@ painting; the `MultiMesh` fill itself is thin glue, the same split
 - **Grassland only.** A forest herb layer is real and is the obvious next
   biome, but the reported problem is the meadow and the species table above is
   a pasture sward.
-- **Not food.** Grazers do not eat the sward yet. They plainly should — it is
-  what a real grazing lawn is *for* — but `FOOD_GRASS` currently means the
-  tussock, and giving herbivores a second, denser food source is an ecology
-  balance change that deserves its own pass rather than riding in on a
-  rendering fix.
+- ~~**Not food.**~~ **Closed 2026-09-03** — see "The grazing lawn is food"
+  below. It got its own pass, as this note asked for.
 - **No spread, no species competition.** Cover is a function of shade and
   grazing, not a population that colonises. Clover really does spread by
   stolon and really does out-compete plantain on fertile soil; neither is
@@ -171,6 +168,55 @@ painting; the `MultiMesh` fill itself is thin glue, the same split
 - **Not persisted.** A reloaded chunk re-derives its base cover from the same
   seed, and grazing memory is short-lived by construction — the same reasoning
   `EarthwormPatch` and `AntColony` give for theirs.
+
+## The grazing lawn is food
+
+Added 2026-09-03, and the pass the scope note above asked for. This is what
+turns the sward from a *picture* of grazing into a *participant* in it.
+
+**The free lunch.** `GrazerForaging.FOOD_UNDERFOOT` is the fallback bite — what
+an animal crops when it can see nothing to walk to. Its implementation read, in
+full: `got = true  # it is standing in its food; there is nothing to remove`.
+It was the one bite in the game that could never fail. A hungry animal standing
+on grassland was fed, the world lost nothing, and **a meadow therefore had no
+carrying capacity at all** — you could keep any number of animals on any patch
+of green forever.
+
+**What cropping is.** The underfoot bite now takes real leaf off the cell
+(`EarthChunkManager.crop_sward_at` → `GroundCover.record_crop`). Two
+consequences, and they are the loop:
+
+- A patch can be **eaten bare**. Below `MIN_COVER_TO_CROP` the bite is refused,
+  the animal stays hungry and has to move on. That is where carrying capacity
+  comes from, and it is emergent rather than a number anyone set: how many
+  animals a meadow supports falls out of how fast its sward regrows.
+- Cropped leaf **grows back**, on a slower clock than grazing memory fades
+  (`CROP_RECOVERY_SPREADS`, above 1.0 deliberately). A rosette regrows from a
+  crown pressed flat against the soil — which is exactly why grazing selects
+  for it — but it regrows from *leaf*, not from nothing. Without this the
+  meadow is a desert after one pass; with recovery faster than a bite, cropping
+  would cost the world nothing at all.
+
+**Grazing and cropping pull opposite ways, on purpose.** Taking the *tussock*
+off a cell releases the rosettes underneath (`record_graze` — the shade is
+gone). Taking the *rosettes* sets them back (`record_crop`). They are opposite
+acts on the same cell and `cover_for` carries both terms, because collapsing
+them would make a grazed meadow either grow forever or die forever. This is
+the grazing lawn stated mechanically: hard grazing converts a meadow to clover
+and plantain rather than killing it, and only sustained cropping on top of that
+takes it down.
+
+A cropped cell is also a real `record_vegetation_harvest`, so an overstocked
+meadow shows up in the ecosystem's own land-health accounting rather than only
+in this layer.
+
+**What it does not do.** Nutrition is unchanged: a bite is a bite, and a sward
+bite feeds exactly as much as a tussock bite. Real forage quality differs
+sharply — a clover-rich lawn is *better* feed per mouthful and much less bulk —
+but `CreatureNeeds.feed()` zeroes hunger outright and has no notion of a
+partial meal, so making the two differ means giving hunger a magnitude first.
+That is a needs-model change, not a sward change, and it is the obvious next
+step here.
 
 ## Status
 
@@ -199,7 +245,14 @@ painting; the `MultiMesh` fill itself is thin glue, the same split
   evenly-spaced angles with a bright midrib, which is a snowflake. The angular
   jitter is now wide enough that leaves genuinely crowd and gap, and
   `HIGHLIGHT_LIGHTEN` is a shading rather than a flash.
-- ⬜ Not food (see Scope choices). Grazers do not eat the sward.
+- ✅ **The sward is food** — `GroundCover.record_crop`/`can_crop`,
+  `EarthChunkManager.crop_sward_at`, and `CreatureMarker._take_forage_bite`'s
+  `FOOD_UNDERFOOT` branch. A patch can be eaten bare and grows back, so a
+  meadow has a real carrying capacity for the first time.
+- ⬜ **Forage QUALITY is still flat.** A sward bite feeds exactly as much as a
+  tussock bite, though a clover lawn is genuinely better feed per mouthful and
+  far less bulk. Blocked on `CreatureNeeds.feed()`, which zeroes hunger
+  outright and has no notion of a partial meal.
 - ⬜ Grassland only; no forest herb layer.
 - ⬜ No spread, no species competition, not persisted.
 - ⬜ **No seasonal response.** A real sward browns off in a drought and stays
