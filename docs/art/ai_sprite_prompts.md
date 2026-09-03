@@ -1215,6 +1215,184 @@ action cycle — much simpler than every other section here):
 
 ---
 
+## 10. Placed structures — seeded-variant grids (2026-09-03)
+
+The illustrated-art gap [item_illustrations.md](../concept/item_illustrations.md#placed-structures-a-second-surface-this-doc-never-named)
+names: what a placed `campfire`/`furnace`/`sagewerk`/`storage` looks like
+BUILT IN THE WORLD, as opposed to its inventory icon (section 9g above — a
+different surface entirely, drawn by a different generator).
+`ProceduralStructureSprite` (`src/rendering/procedural_structure_sprite.gd`)
+already draws all four placed tiles today: two already strong bespoke
+designs (`campfire`, `furnace`) and two with no distinguishing shape at all
+(`sagewerk`/`storage` — both currently just a generic rounded rim outline,
+the same "reads as *a* building, not *this* building" gap section 9g's icon
+prompts already named for the same two items, just on the OTHER surface).
+Same shape as section 5's ore sheets, not section 6/7's walk cycles: each
+structure already takes a seeded `variant_seed`
+(`procedural_structure_sprite.gd:97,184,267,338`), so illustrated art wants a
+GRID of interchangeable variants, not an animation.
+
+**Prefix every prompt below with the shared style preamble from the top of
+this doc**, plus this variant-grid addendum (same shape as section 5's ore
+template, reworded for architecture instead of ore):
+
+> A pixel-art sprite sheet of 25 individual instances of the same structure
+> (see below), laid out as a strict 5x5 grid, each cell separated by a thin
+> 1–2px near-white divider line, generous empty magenta padding around each
+> structure so nothing touches a divider or the canvas edge. Every instance
+> is recognizably the SAME structure — same footprint, same function, same
+> overall silhouette — but a genuinely different arrangement of its own
+> secondary details (log placement, weathering, small clutter). Viewed
+> top-down/near-top-down, matching this game's existing structure tiles.
+> Rows progress from a cleaner/newer-looking instance at the top to a more
+> weathered/lived-in instance at the bottom. [ingestion format]
+
+If 5×5 doesn't hold cleanly for a boxier architectural silhouette the way it
+does for an ore boulder, drop to section 3's 3×3 fallback rather than
+forcing it — try 5×5 first (section 5's ore sheets held it on the first
+attempt; there's no a-priori reason architecture won't).
+
+### 10a. Campfire — match the existing bespoke procedural design
+
+> [STRUCTURE]: a simple campfire — three or four logs arranged in a
+> teepee/crossed pile over a ring of dark fire-scorched earth, a small
+> licking orange-yellow flame at the center rendered in the same flat
+> posterized bands as everything else (not a soft glow), a light scatter of
+> ash around the ring's edge.
+
+### 10b. Furnace — match the existing bespoke procedural design
+
+> [STRUCTURE]: a squat stone-and-brick furnace block, roughly cubic, with a
+> dark arched firebox opening in its front face glowing warm orange-red from
+> within, a few soot streaks above the opening, rough mortared stone
+> construction on every visible face.
+
+### 10c. Sagewerk (sawmill) — no distinguishing shape today
+
+> [STRUCTURE]: a small open-sided timber-framed sawmill shed — a simple
+> peaked roof on four corner posts with no walls, a large flat saw-blade
+> mounted vertically at working height under the roof, one or two raw felled
+> logs resting on trestles beside/beneath it, a scatter of sawdust and
+> offcut planks on the ground nearby. Should read unmistakably as "a place
+> logs get cut," distinct from storage's "a place things get kept" below.
+
+### 10d. Storage — no distinguishing shape today
+
+> [STRUCTURE]: a small enclosed wooden storage shed — visible horizontal
+> plank wall construction, a simple peaked roof, one barred/planked door on
+> the front face (closed), no windows. Should read unmistakably as "a place
+> things get kept," distinct from sagewerk's open-sided workshop above.
+
+### File naming + wiring, once generated
+
+A new folder — none of the existing `assets/sprites/` subfolders fit a
+placed structure (`terrain/` is ground tiles, root-level flat files are
+walk-cycle species):
+
+```
+assets/sprites/structures/campfire.png
+assets/sprites/structures/furnace.png
+assets/sprites/structures/sagewerk.png
+assets/sprites/structures/storage.png
+```
+
+Wiring needs a new `IllustratedStructureSprite`
+(`src/rendering/illustrated_structure_sprite.gd`), mirroring
+`IllustratedStoneSprite`/`IllustratedTerrainSprite`'s exact
+`has_variants()`/`frame_for()` shape, and a `has_variants()`-gated preference
+for it in `TerrainRenderer` ahead of `ProceduralStructureSprite` — see
+[item_illustrations.md](../concept/item_illustrations.md#sheet-spec-placed-structures-get-a-seeded-variant-grid-not-a-strip)
+for the full spec. Not attempted here: per this project's TDD rule, that
+class needs real source pixels to write a meaningful test against, the same
+reason `IllustratedCharacterSprite._PARTS` stays unpopulated until hair/beard
+art exists.
+
+---
+
+## 11. Item combat sheets — attack, defense, condition (2026-09-03)
+
+The pilot [item_illustrations.md](../concept/item_illustrations.md#combat-sheets-attack-defense-condition--wooden_club)
+specs: `wooden_club` alone, proving the shape before `iron_sword`/
+`crude_blade` (the only other items [item_durability.md](../concept/item_durability.md)
+covers) or the rest of the catalog follow it. Every frame below is the
+**object alone — no hand, no arm, no character** — same convention as
+section 2f's held-crop prompts; the engine composes it onto whichever
+facing/pose the character is already in.
+
+### 11a. Attack cycle, 8 frames
+
+**Prefix with the shared style preamble**, plus this addendum (the same
+wind-up/release/recovery beat section 6's boss attack cycles use, scaled
+down for a hand-sized object rather than a full creature):
+
+> Lay out an 8-frame attack-swing cycle in a single horizontal row — a clear
+> wind-up (frames 1-3), a release/peak (frames 4-5), and a follow-through/
+> recovery (frames 6-8) — each frame separated by a thin 1-2px near-white
+> divider line, generous empty magenta padding around each pose so nothing
+> touches a divider or the canvas edge. Frames do not need uniform width.
+> Export at least 1600px wide by 300px tall for the row. The object reads
+> at a consistent scale and pivot point across all 8 frames — it should not
+> grow, shrink, or drift, only rotate/swing around a fixed grip point near
+> one end. [ingestion format]
+
+> A pixel-art attack-swing cycle of a WOODEN CLUB ALONE — no hand, no arm,
+> no character, just the object — a plain stout wooden haft with no blade,
+> warm brown wood, subtle grain texture. It winds up by rotating back and up
+> around a fixed grip point near its narrow end (frames 1-3), whips forward
+> through a fast arcing swing to full extension (frames 4-5, the peak of the
+> arc — a few short motion-blur-style speed lines trailing it, flat
+> posterized style, not a soft blur), then settles back toward a neutral
+> ready position (frames 6-8).
+
+### 11b. Defense pose, single frame
+
+> A single pixel-art sprite of a WOODEN CLUB ALONE — no hand, no arm, no
+> character — held up in a raised guard/blocking orientation, angled
+> diagonally across the frame as if warding off a blow rather than resting
+> or swinging. Same plain stout wooden haft, warm brown wood, subtle grain
+> texture, matching the attack cycle's own design exactly. Isolated subject,
+> generous empty magenta padding, nothing touching the canvas edge.
+
+### 11c. Worn condition, single frame
+
+> A single pixel-art sprite of a WOODEN CLUB ALONE, showing real accumulated
+> wear from hard use — same plain haft shape and warm brown wood as the
+> pristine version, but with visible surface scuffing, a few small chips and
+> dents along the striking end, and the grain roughened rather than smooth.
+> Not broken or splintered — still clearly a whole, usable club, just
+> visibly worked hard. Isolated subject, generous empty magenta padding,
+> nothing touching the canvas edge.
+
+### 11d. Broken condition, single frame
+
+> A single pixel-art sprite of a WOODEN CLUB ALONE, now broken from
+> accumulated fatigue — a real crack running most of the way through the
+> haft near its midpoint, the wood visibly splintered and separated along
+> the crack, though the two halves still hang together as one object (not
+> two separate pieces), pale raw broken wood showing at the fracture line
+> against the haft's darker worn surface. Reads unmistakably as "this no
+> longer works" without literally falling apart into pieces. Isolated
+> subject, generous empty magenta padding, nothing touching the canvas edge.
+
+### File naming + wiring, once generated
+
+```
+assets/sprites/items/wooden_club_combat.png
+```
+
+A new folder (`assets/sprites/items/`) — the first item art of any kind to
+actually exist as a file rather than be procedurally generated, so nothing
+existing fits. Wiring needs a new `IllustratedItemSprite`
+(`src/rendering/illustrated_item_sprite.gd`), mirroring
+`IllustratedAnimalSprite`'s `_SHEETS`/`has_action` shape with
+`attack_bands`/`attack_path` for row 1 and a new `condition_bands`/
+`condition_path` pair for row 2 (defense/worn/broken by fixed index) — see
+[item_illustrations.md](../concept/item_illustrations.md#combat-sheets-attack-defense-condition--wooden_club)
+for the full spec. Not attempted here: same TDD-needs-real-pixels reason
+every other pending illustrated surface in this doc gives.
+
+---
+
 ## Notes for whoever runs these
 
 - Run the flower archetype sheets (1b) at pale/neutral tone as specified —
@@ -1258,6 +1436,13 @@ action cycle — much simpler than every other section here):
   `"attack"` action away from its current walk-cycle fallback to the
   matching new sheet (see `concept/worldbosses.md`'s Krampus Status
   sub-section for that real, open gap).
+- Placed-structure sheets (section 10) have **no illustrated-art ingestion
+  seam built yet either** — same gap as spell atoms below, for the same
+  reason (no source pixels exist yet to write a real test against). Once
+  generated, wiring them in is a new `IllustratedStructureSprite` plus a
+  `has_variants()`-gated preference in `TerrainRenderer`, not a change to
+  `ProceduralStructureSprite` itself — see section 10's own "File naming +
+  wiring" note.
 - Spell atom effect sheets (section 8) have **no illustrated-art ingestion
   seam built yet** — `procedural_spell_effect_sprite.gd` only ever
   generates its own procedural image today, unlike `DroppedItem`'s

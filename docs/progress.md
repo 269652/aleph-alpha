@@ -3639,6 +3639,66 @@ describes:
   entry sets a divergent `sprite_id` yet, so this is prompt scaffolding
   only — plugging in real art still means generating the sheets, slicing
   them, and pointing a catalog entry's `sprite_id` at the result.
+- **Composite item sheets: the "placed" surface, formalized** (small) —
+  ✅ Spec'd (2026-09-03), ⬜ nothing generated/wired — `item_illustrations.md`'s
+  states table never named "placed in the world" as an item art surface at
+  all. In reality `campfire`/`furnace`/`sagewerk`/`storage` already render
+  through TWO independent generators (`procedural_item_sprite.gd` for the
+  inventory icon, `procedural_structure_sprite.gd` for the placed tile baked
+  into `TerrainRenderer`'s own atlas) and nothing previously said so. The doc
+  now specs a second sheet per structure — a seeded-variant grid mirroring
+  `boulders.png`/ore rather than a walk cycle, since `ProceduralStructureSprite`
+  already takes a `variant_seed` — plus a wiring plan
+  (`IllustratedStructureSprite`, mirroring `IllustratedStoneSprite`/
+  `IllustratedTerrainSprite`'s `has_variants()`/`frame_for()` shape).
+  `ai_sprite_prompts.md` §10 adds four ready-to-run generation prompts
+  (campfire/furnace/sagewerk/storage). Also corrected in this pass: the
+  `sprite_id` and armor-on-rig sections of `item_illustrations.md` still read
+  as open proposals ("Today `Item` has no icon/texture field at all") when
+  both had already shipped — updated to past tense with a pointer to this
+  file, so the doc doesn't contradict itself once the placed-structure
+  section leans on `sprite_id` existing. Not built: the wiring class needs
+  real source pixels to write a meaningful test against, the same sequencing
+  `IllustratedCharacterSprite._PARTS` already follows (stays empty until
+  hair/beard art exists) — not an oversight, the established order here.
+- **Item durability: wear and fatigue failure** (medium) — ✅ Done (basic),
+  see `concept/item_durability.md` (new). Closes the half of materials.md's
+  "Physical honesty over time" pillar that was `emergent_crafting.md`'s own
+  named ⬜ ("nothing degrades, nothing breaks") -- for the three catalog
+  weapons with a real modeled material (`wooden_club`/`iron_sword`/
+  `crude_blade`, the same set weapon mass already covers), a connecting
+  attack or a block that absorbs a real hit now costs the held item one unit
+  of wear (`item_wear.gd`, `max_wear`/`is_broken`/`condition_for`, 18
+  tests); a broken item reads as bare hands for both damage and block
+  efficiency (`Player._held_weapon`/`_held_kind`), with no separate fallback
+  path needed anywhere else. `Item` gained a `wear: float` field -- the one
+  deliberate, documented exception to its own "identity/stats shared by
+  every stack" framing, needed because `Equipment._worn` stores a bare
+  `Item`, not a stack, so wear has to live where it survives that
+  transition. Deliberately combat-only (attack/block) this pass, not
+  chopping/mining; deliberately a step function (full performance until
+  broken, then zero), not a gradual falloff; deliberately scoped to the
+  three items with modeled material, same as mass. Cross-linked from
+  `materials.md`, `heat_treatment.md` (whose own "Edge wear" ⬜ is a
+  *different*, still-open gap -- gradual `sharpness_capacity` dulling
+  affecting per-swing damage, not whether the item still works at all) and
+  `emergent_crafting.md` (whose `weakest_link` still isn't wired to this).
+  Not built: repair, tool-use wear, wear beyond the three modeled weapons, a
+  tooltip line, rarity-driven wear resistance -- all named explicitly in the
+  concept doc's own Status section rather than left implicit.
+- **Composite item sheet: attack/defense/condition, wooden_club pilot**
+  (small) — ✅ Spec'd (2026-09-03), ⬜ nothing generated/wired —
+  `item_illustrations.md`'s per-item swing art was flatly "Deferred, not
+  needed" until this pass; now that block.gd (defense) and item_durability.md
+  (worn/broken) both give it something real to draw, `wooden_club` is spec'd
+  as the concrete pilot: one sheet, two rows (an 8-frame attack cycle, a
+  3-cell defense/worn/broken row), item-alone art with no hand/arm (same
+  convention section 2f's held-crop item prompts already use), wired the
+  same `_SHEETS`/`has_action` shape `IllustratedAnimalSprite` already uses.
+  `ai_sprite_prompts.md` §11 adds the four ready-to-run generation prompts.
+  Deliberately one item, not the whole catalog -- iron_sword/crude_blade
+  (the only other items item_durability.md covers) are the named next step
+  once this shape is validated, not attempted here.
 - **Spell Gem Rarity Derivation** (medium) — 🚧 Partial — `rarity_tier.gd`'s
   `tier_from_complexity(complexity)` derives a tier straight from a numeric
   complexity/cost score (e.g. `spell_cost.gd`'s `derived_base()`), reusing the
@@ -8682,6 +8742,16 @@ for a caller -- that failure mode is exactly what this pass was answering.
   count you twice (which would otherwise be a free way over a tier threshold).
   6 tests. Spec written first as `concept/player_citizenship.md`'s new
   "Residency" section, which the doc did not previously cover at all.
+- **`player_settled` reaches dialogue too** (size: tiny) -- ✅ **Done** --
+  the event above landed in the graph but not in `DialogueTopic`:
+  `test_every_event_type_the_substrate_really_emits_is_claimed_by_some_topic`
+  (`test_dialogue_topic.gd`) caught the gap by scanning the real emitters,
+  the same census the eleven memory topics are built to pass. Joins
+  `TOPIC_ARRIVAL` alongside `npc_settled` rather than `village_history`: it
+  is one person's own firsthand, undistorted arrival (see
+  `DialogueTopic.MEMORY_TOPIC_EVENT_TYPES`'s own doc comment on why
+  `npc_settled` was already split off for exactly that reason), not real
+  news about the village's fortunes. 1 new test.
 - **Shop prices are local** (size: small) -- ✅ **Done** --
   `Shop.market_price_of(item_id, market)` = catalog base x
   `Market.price_for`'s scarcity multiplier, which is exactly 1.0 at
