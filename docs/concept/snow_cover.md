@@ -162,14 +162,72 @@ this constraint is a *pin*, not a preference:
 
 Walking packs snow down rather than clearing it, so a trail reads as tracks
 through a field rather than a trench dug to soil. `SnowTrail` still owns
-that per-tile bookkeeping on the CPU — it is driven by footstep events, so
+that bookkeeping on the CPU — it is driven by real footstep *events*, so
 its cost is per *footstep*, not per tile of loaded ground.
+
+**A footstep is a place and a facing, not a tile.** The first version keyed
+tread by `Vector2i` game tile and stepped it on every call — and the caller
+called it *every rendered frame the player stood in snow*, not once per real
+stride. `TREAD_PER_STEP` reached `MAX_TREAD` in three frames regardless of
+whether the player was walking or merely standing still, so the whole tile
+saturated to "as trodden as it will ever be" within a fraction of a second
+of first arriving, and — because the tile was the unit — one visit packed
+the *entire* tile uniformly: there was no way to tell "walked through the
+corner" from "walked wall to wall", and no way to distinguish one crossing
+from a hundred. That is the literal mechanism behind two reports that turned
+out to share one root cause: "footprints don't look like footprints, just a
+soft depression" and "walking back and forth doesn't deepen a path."
+
+The fix is the same discipline pillar 1 already states — stop having rungs
+the player can see — applied to the trail the way it was already applied to
+coverage itself. A mark is recorded only when the player has moved at least
+`STRIDE_PX` since the last one (`SnowTrail.step`, the same distance-gated
+shape `BloodTrail.step` already uses for a wounded animal's drops — real
+human stride length, not a frame count), and it carries the exact world
+position and facing at that moment, not a tile index.
+
+What a point on the ground reads as (`tread_at`) is the SUM of every live
+mark whose shape reaches it, clamped to `MAX_TREAD` — not the single
+deepest one. This is deliberate, not an approximation: real repeated
+treading of one spot has to actually deepen it toward the full depth, which
+is the literal original complaint, and a max would have reproduced the same
+defect in a new shape — every spot capped at whatever one footstep's own
+mark is worth, however many times it was really stepped on. Two marks that
+do not overlap still contribute nothing to each other's ground, so this is
+real accumulated overlap, not every step ever taken leaking into everywhere
+else. Repeated walking over one *line* now deepens it two ways at once:
+standing and shuffling packs one exact spot toward full depth by summed
+overlap, while walking a rough, never-quite-repeating line lays down many
+distinct marks that widen the trodden width as they go — exactly how a real
+desire path is worn by many feet landing in slightly different places along
+the same rough line. A game tile that used to go uniformly trodden the
+instant anyone crossed a corner of it now shows a real footpath's width and
+depth through it and stays untouched everywhere else — the "big tile, one
+scalar" failure and the "split into finer units" fix are the same change
+seen from two sides.
+
+**Orientation and displacement are real, not a texture trick.** Each mark
+carries the facing it was placed at (this game's own 4-directional character
+model — `Player._facing_string`'s own convention, reused rather than a new
+one invented here) and is rasterized as an oriented, elongated mark rather
+than a round blob — a footprint, not a puddle — with its own value graded
+across its shape rather than flat, so it reads as a compression (deep at the
+centre, tapering at the edge) rather than a stencil cutout. This costs
+nothing new the shader does not already have: `lying_at`'s `tread * 
+tread_depth` subtraction is *already* "how much snow this exact point has
+displaced" — the only change is that the value sampled at a point is now
+shaped like a boot instead of flat across a whole tile, so the pillar 4
+claim ("only where the cover was thin to begin with does a boot reach the
+ground") is something the player can actually see the shape of.
 
 It reaches the GPU as a **world-space trail mask texture**: a small R8
 window that follows the player, sampled by world position. Points outside
 the window read as untrodden rather than clamping to the window's edge
 value, which would smear the last row of footprints across the rest of the
-world.
+world. The window now packs several texels per tile (`MASK_TEXELS_PER_TILE`)
+rather than one — a single texel per tile is exactly the granularity that
+made a boot-shaped mark impossible to express at all, whatever the CPU-side
+math wanted to draw into it.
 
 Tread reduces both the coverage and the level a site draws — packed snow
 is thinner snow, and only where cover was thin to begin with does a boot
@@ -247,11 +305,19 @@ for, and why both exist.
   diff-aware sweep and its 2-second throttle are gone along with the cost
   they existed to bound. **Confirmed rendering in a real running
   instance**, not just green tests.
-- ✅ **Footprints reach the GPU.** `SnowTrail.build_mask_texture` bridges
-  its own tile->float dictionary to a real R8 window texture in world
-  pixels, rebuilt once per `step_snow` call and pushed via
-  `SnowBombShader.set_trail_mask` — bounded by tracked footprints, not
-  window size, so cheap enough to do unconditionally.
+- 🚧 **Footprints reach the GPU, corrected 2026-09-03.** The first version
+  bridged a tile→float dictionary to a real R8 window texture, but the
+  caller stepped it every rendered frame rather than once per real stride,
+  and the tile was the unit — so a whole tile saturated within three frames
+  of first entering it, however far the player then walked, and one crossing
+  looked identical to a hundred. `SnowTrail.step` now gates on real distance
+  moved (`STRIDE_PX`, mirroring `BloodTrail.step`'s own distance-spaced
+  shape) and records a place-and-facing mark rather than a tile, rasterized
+  as an oriented, graded footprint at several texels per tile
+  (`MASK_TEXELS_PER_TILE`) instead of one flat texel per tile — see
+  "Footprints" above for the full mechanism and why both reported failures
+  were one root cause. Still bounded by tracked marks, not window size, so
+  still cheap enough to rebuild unconditionally.
 - ⬜ **Far-world precision** — the no-`sin(` structural pin exists
   (`SHADER_CODE` greps clean), but there is no real-GPU readback test yet at
   far-world coordinates; add one, since that is exactly where the old river

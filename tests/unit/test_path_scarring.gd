@@ -150,3 +150,82 @@ func test_the_tile_the_world_drew_as_a_path_is_the_one_that_is_faster():
 	while not scarring.is_worn(tile):
 		scarring.step_on(tile)
 	assert_gt(PathScarring.speed_multiplier(scarring.wear_at(tile)), 1.0)
+
+
+# -- the trail tier: sustained, heavier use of an already-worn path --------
+#
+# docs/concept/infrastructure.md's own "path -> trail -> road" escalation:
+# "Trail -- sustained, heavier use of an already-worn path over a longer
+# window." Found missing by playing: a path re-textures once at
+# WORN_THRESHOLD and then NOTHING further is perceptible, however much more
+# it is walked -- the wear number keeps climbing underneath (pinned above,
+# test_wear_is_capped_at_max_wear), but nothing distinguishes a path crossed
+# once from one walked to the ground. Trail is that second, real tier: it
+# reaches the existing ceiling (MAX_WEAR) rather than inventing a new one,
+# so "trail" means "as compacted as this ground can ever get."
+
+func test_trail_threshold_is_the_max_wear_itself():
+	# Not a separately-chosen number: MAX_WEAR is already "as compacted as
+	# ground gets" (test_wear_is_capped_at_max_wear), so a second, higher
+	# threshold would either be unreachable (above MAX_WEAR) or redundant
+	# with the existing ceiling. Trail IS that ceiling, seen as a tier.
+	assert_eq(PathScarring.TRAIL_THRESHOLD, PathScarring.MAX_WEAR)
+
+
+func test_fresh_tile_is_not_a_trail():
+	assert_false(scarring.is_trail(Vector2i(3, 4)))
+
+
+## A tile that is merely WORN (crossed the first threshold) is not yet a
+## trail -- the two tiers have to be genuinely distinguishable, not the same
+## gate under two names.
+func test_a_merely_worn_tile_is_not_yet_a_trail():
+	var tile := Vector2i(1, 1)
+	var steps_to_worn := int(ceil(PathScarring.WORN_THRESHOLD / PathScarring.WEAR_PER_STEP))
+	for i in steps_to_worn:
+		scarring.step_on(tile)
+	assert_true(scarring.is_worn(tile), "precondition: the tile is worn")
+	assert_false(scarring.is_trail(tile), "worn once is not yet a trail")
+
+
+func test_a_tile_walked_to_the_ceiling_is_a_trail():
+	var tile := Vector2i(2, 2)
+	for i in 1000:
+		scarring.step_on(tile)
+	assert_true(scarring.is_trail(tile))
+
+
+## Trail tiles are also worn tiles -- a strictly deeper tier of the same
+## thing, not a separate, disjoint state.
+func test_every_trail_tile_is_also_worn():
+	var tile := Vector2i(4, 4)
+	for i in 1000:
+		scarring.step_on(tile)
+	assert_true(scarring.is_worn(tile))
+	assert_true(scarring.is_trail(tile))
+
+
+func test_trail_tiles_returns_only_tiles_at_the_ceiling():
+	var trodden := Vector2i(0, 0)
+	var trailed := Vector2i(9, 9)
+	var steps_to_worn := int(ceil(PathScarring.WORN_THRESHOLD / PathScarring.WEAR_PER_STEP))
+	for i in steps_to_worn:
+		scarring.step_on(trodden)
+	for i in 1000:
+		scarring.step_on(trailed)
+	var trails: Array = scarring.trail_tiles()
+	assert_true(trails.has(trailed))
+	assert_false(trails.has(trodden))
+
+
+## Decaying back down below the ceiling demotes a trail back to an ordinary
+## worn path -- the tiers track the SAME live wear number in both
+## directions, not a one-way ratchet.
+func test_decaying_below_the_ceiling_demotes_a_trail_to_an_ordinary_path():
+	var tile := Vector2i(6, 6)
+	for i in 1000:
+		scarring.step_on(tile)
+	assert_true(scarring.is_trail(tile), "precondition: reached trail")
+	scarring.advance(1.0)
+	assert_true(scarring.is_worn(tile), "still worn -- one second of decay is not a full recovery")
+	assert_false(scarring.is_trail(tile), "no longer compacted enough to be a trail")

@@ -2508,6 +2508,17 @@ func test_a_crouched_pace_is_never_a_rush():
 	)
 
 
+## SnowTrail needs the direction actually walked, not just a position, to
+## orient the footprint it leaves (see EarthChunkManager.tread_snow_at). A
+## real public accessor rather than a caller reaching for the `_`-prefixed
+## field directly, the same convention wound_stacks()/current_speed_
+## multiplier already establish for everything else external code reads off
+## a Player.
+func test_facing_direction_reports_the_last_real_facing():
+	player._last_facing_direction = Vector2.LEFT
+	assert_eq(player.facing_direction(), Vector2.LEFT)
+
+
 ## The HUD has to say so, or the player cannot tell a state they are holding a
 ## key for from one they are not.
 ##

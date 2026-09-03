@@ -2939,12 +2939,21 @@ func record_path_worn_if_new(tile: Vector2i) -> void:
 ## one forming. NOT once-only the way founding is: a path can be worn,
 ## reclaimed, and worn again over a real session, and each cycle is real,
 ## distinct history. Only fires while the path's most recent event actually
-## IS a formation -- reclaiming a path that was never worn (or is already
-## reclaimed) would not be a real transition, so nothing is recorded.
+## IS a currently-worn state -- reclaiming a path that was never worn (or is
+## already reclaimed) would not be a real transition, so nothing is
+## recorded.
+##
+## Accepts "trail_formed" alongside "path_worn" as a valid predecessor: a
+## tile can decay straight from Trail past Path to bare ground within one
+## real gap (a long absence, a big delta) without an intermediate refresh
+## ever observing the plain "worn but not a trail" state in between --
+## record_path_reclaimed still has to recognize that as a real reclaim
+## rather than silently refusing it because the last-seen tier was the
+## deeper one.
 func record_path_reclaimed(tile: Vector2i) -> void:
 	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
 	var history := _event_store.events_for_entity(path_id)
-	if history.is_empty() or history.back().type != "path_worn":
+	if history.is_empty() or not _CURRENTLY_WORN_EVENTS.has(history.back().type):
 		return
 	var event := Event.new("path_reclaimed", _world_age_seconds)
 	event.actors.append(path_id)
@@ -2955,6 +2964,45 @@ func record_path_reclaimed(tile: Vector2i) -> void:
 	# transformation... overgrown ruins"): nature reclaiming a path IS this
 	# dungeon source, verbatim.
 	record_ruin_from_reclaimed_path(path_id, event.id)
+
+
+## Which event types mean "this path entity is, as of its last recorded
+## event, in some currently-worn state" -- read by record_path_reclaimed so
+## a full reclaim is recognized whether the tile's last-seen tier was the
+## base Path or the deeper Trail (see that function's own doc comment).
+const _CURRENTLY_WORN_EVENTS := ["path_worn", "trail_formed"]
+
+
+## Sustained, heavier use of an already-worn path (docs/concept/
+## infrastructure.md's "path -> trail -> road", PathScarring.
+## TRAIL_THRESHOLD/is_trail) -- the SAME real path entity deepening, not a
+## new kind of thing. Same idempotency shape as record_path_worn_if_new:
+## only fires on the actual formation transition.
+func record_trail_formed_if_new(tile: Vector2i) -> void:
+	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
+	var history := _event_store.events_for_entity(path_id)
+	if not history.is_empty() and history.back().type == "trail_formed":
+		return
+	var event := Event.new("trail_formed", _world_age_seconds)
+	event.actors.append(path_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
+
+
+## Tapering from Trail back down to an ordinary worn Path -- a real,
+## distinct transition from record_path_reclaimed's "reclaimed by nature
+## entirely": the ground is still a path, just less intensely used, so this
+## does NOT chain into ruin formation the way a full path reclaim does. Only
+## fires while the path's most recent event actually IS a trail formation.
+func record_trail_reclaimed(tile: Vector2i) -> void:
+	var path_id := EntityRef.for_kind("path", "%d_%d" % [tile.x, tile.y])
+	var history := _event_store.events_for_entity(path_id)
+	if history.is_empty() or history.back().type != "trail_formed":
+		return
+	var event := Event.new("trail_reclaimed", _world_age_seconds)
+	event.actors.append(path_id)
+	_event_store.append(event)
+	_memory_store.witness_event(event, _world_age_seconds)
 
 
 ## Every settlement that has ever recorded a founding -- read back out of the
@@ -4103,10 +4151,12 @@ var _snow_depth := 0.0
 ## every reader agrees with what the ground is accumulating against; see
 ## is_snowing.
 var _snowing := false
-## The last tile tread_snow_at was called with -- the trail mask window (see
-## _refresh_snow_trail_mask) is centred here, since SnowTrail's own
-## dictionary carries no notion of "where the player is" by itself.
-var _snow_trail_center_tile := Vector2i.ZERO
+## The last WORLD POSITION tread_snow_at was called with -- the trail mask
+## window (see _refresh_snow_trail_mask) is centred here. A real pixel
+## position now, not a tile: SnowTrail records footsteps at their exact
+## place and facing (docs/concept/snow_cover.md's "Footprints"), and a tile
+## index would throw away exactly the precision that exists to record.
+var _snow_trail_last_position := Vector2.ZERO
 
 ## How wide, in TILES, the trail mask window pushed to the shader is. Matches
 ## SHADER_CODE's own trail_world_size uniform DEFAULT (1024.0 world units)
@@ -4170,14 +4220,16 @@ func is_snowing() -> bool:
 	return _snowing
 
 
-## Marks a tile as walked on, packing the snow down (see SnowTrail). The
-## actual GPU-facing mask texture is rebuilt once per step_snow call, not
-## here -- see _refresh_snow_trail_mask.
-func tread_snow_at(pixel_position: Vector2) -> void:
+## Called every frame the player exists, regardless of movement -- the
+## distance/stride gate that used to have to live in the CALLER now lives
+## inside SnowTrail.step itself (see its own header for why that was the
+## actual defect, not the tread numbers). `facing` is the direction actually
+## walked, so the mark left behind faces the way it was made, not a default.
+func tread_snow_at(pixel_position: Vector2, facing: Vector2) -> void:
 	if _snow_depth <= 0.0:
 		return
-	_snow_trail_center_tile = _world_tile_for_pixel(pixel_position)
-	_snow_trail.step_on(_snow_trail_center_tile)
+	_snow_trail_last_position = pixel_position
+	_snow_trail.step(pixel_position, facing, 0.0)
 
 
 ## The world clock as of the last snow step, so snow can advance on the same
@@ -4260,8 +4312,15 @@ func _paint_all_loaded_snow_presence() -> void:
 		_paint_snow_presence(chunk_coord, _loaded_chunks[chunk_coord])
 
 
-## The tile the currently-pushed trail mask texture is centred on, and when
-## it was last rebuilt -- see _refresh_snow_trail_mask.
+## The TILE the currently-pushed trail mask texture was last rebuilt near,
+## and when -- see _refresh_snow_trail_mask. Deliberately still tile-grained
+## even though the mask itself now carries real sub-tile positions: this is
+## only the REBUILD-TRIGGER granularity (did the player move far enough that
+## the window should recentre before its next scheduled refresh), and tile
+## granularity is the exact cadence the original throttle was measured
+## against -- recentring on every sub-tile texel of movement instead would
+## reintroduce the every-frame GPU upload that collapsed 60fps to single
+## digits in the first place (see SNOW_TRAIL_REFRESH_INTERVAL_SECONDS).
 var _snow_trail_mask_center_tile := Vector2i.ZERO
 var _snow_trail_refreshed_age := -INF
 
@@ -4284,22 +4343,24 @@ const SNOW_TRAIL_REFRESH_INTERVAL_SECONDS := 0.25
 
 
 ## Rebuilds and pushes the GPU-facing trail mask, centred on wherever
-## tread_snow_at was last called (the player's own tile) -- but only when the
-## window actually needs to move or enough time has passed to catch newly
-## packed/refilled tread, not unconditionally every call (see this
-## constant's own doc comment).
+## tread_snow_at was last called (the player's own real position, not a
+## tile any more) -- but only when the player has crossed into a new tile
+## or enough time has passed to catch newly packed/refilled tread, not
+## unconditionally every call (see SNOW_TRAIL_REFRESH_INTERVAL_SECONDS's own
+## doc comment for why the trigger stays tile-grained).
 func _refresh_snow_trail_mask() -> void:
+	var current_tile := _world_tile_for_pixel(_snow_trail_last_position)
 	var due := _world_age_seconds - _snow_trail_refreshed_age >= SNOW_TRAIL_REFRESH_INTERVAL_SECONDS
-	if not due and _snow_trail_center_tile == _snow_trail_mask_center_tile:
+	if not due and current_tile == _snow_trail_mask_center_tile:
 		return
 	var window := SNOW_TRAIL_WINDOW_TILES
-	var half := window / 2
-	var origin := Vector2(_snow_trail_center_tile - Vector2i(half, half)) * TerrainRenderer.TILE_SIZE
+	var world_size := float(window) * TerrainRenderer.TILE_SIZE
+	var origin := _snow_trail_last_position - Vector2(world_size, world_size) * 0.5
 	_snow_shader.set_trail_mask(
-		_snow_trail.build_mask_texture(_snow_trail_center_tile, window),
-		origin, float(window) * TerrainRenderer.TILE_SIZE
+		_snow_trail.build_mask_texture(_snow_trail_last_position, window),
+		origin, world_size
 	)
-	_snow_trail_mask_center_tile = _snow_trail_center_tile
+	_snow_trail_mask_center_tile = current_tile
 	_snow_trail_refreshed_age = _world_age_seconds
 
 

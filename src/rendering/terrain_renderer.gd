@@ -108,6 +108,21 @@ const GRASS_FRAME_DURATION_SECONDS := 0.28
 const EARTH_TILE_ID := "earth"
 const EARTH_COLOR := Color(0.35, 0.25, 0.15)
 
+## The trail tier (docs/concept/infrastructure.md's "path -> trail -> road",
+## PathScarring.TRAIL_THRESHOLD/is_trail): sustained, heavier use of an
+## already-worn path. Deliberately flat and hard-edged rather than
+## border-blended the way EARTH_TILE_ID is -- "man-made, flat-edged, never
+## organically blended into the ground" is this file's own existing rule for
+## every OTHER modification (structures, building pieces), and a trail
+## walked to the ground reads as more deliberately worn than the softer path
+## tier beneath it, not less.
+##
+## Darker and less saturated than EARTH_COLOR, not a different hue --
+## "walked to the ground" is a more extreme version of "worn to dirt," the
+## same material further compacted, not a different one.
+const TRAIL_TILE_ID := "trail"
+const TRAIL_COLOR := Color(0.22, 0.16, 0.1)
+
 ## Cardinal directions a blend can be oriented toward -- up/down/left/right,
 ## in this fixed order so mask/atlas indexing is stable.
 const _DIRECTIONS: Array[Vector2i] = [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]
@@ -153,7 +168,7 @@ const ATLAS_COLUMNS := 64
 ## still being decorrelated between neighbouring tiles.
 const _VARIANT_SALT := 90210
 
-const ATLAS_VERSION := "art_resolution_v23_pitched_roof_variants"
+const ATLAS_VERSION := "art_resolution_v24_trail_tile"
 
 ## Overridable so tests never touch the real user:// cache (see
 ## TerrainAtlasCache) -- production code (EarthChunkManager) never sets
@@ -190,6 +205,8 @@ func atlas_coords_for_biome(biome_name: String, variant_index: int = 0) -> Vecto
 ## earth slot (fail-safe default, matching this codebase's `.get(x, default)`
 ## convention -- never crash on an unknown tile_id).
 func atlas_coords_for_modification(tile_id: String) -> Vector2i:
+	if tile_id == TRAIL_TILE_ID:
+		return _grid_coords(_trail_linear())
 	if ProceduralStructureSprite.STRUCTURE_IDS.has(tile_id):
 		return _grid_coords(_structure_linear(tile_id))
 	if BuildingPiece.has_piece(tile_id):
@@ -726,6 +743,16 @@ func _roof_variant_family_size() -> int:
 	return ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * ROOF_EDGE_MASK_COUNT
 
 
+## Linear atlas index of the single "trail" tile (see TRAIL_TILE_ID) --
+## appended after every other family rather than inserted mid-chain, so
+## adding it shifts no existing tile's index. Nothing PERSISTS a raw index
+## (Chunk.modifications stores the STRING id; atlas coordinates are always
+## recomputed fresh from it), so appending is safe across saves either way,
+## but appending is also simply less to touch.
+func _trail_linear() -> int:
+	return _roof_variant_base_linear() + _roof_variant_family_size()
+
+
 func _roof_variant_linear(material: String, band: int, mask: int) -> int:
 	var material_ordinal: int = maxi(ROOF_VARIANT_MATERIALS.find(material), 0)
 	return (
@@ -1027,6 +1054,13 @@ func _build_atlas_pixels(biome_count: int, rows: int) -> Image:
 				)
 				_blit_tile(image, roof_image, _roof_variant_linear(roof_material, band, edge_mask))
 
+	# The trail tile (see TRAIL_TILE_ID) -- flat and hard-edged like every
+	# other modification tile except EARTH_TILE_ID, appended last so it
+	# shifts no other family's index.
+	var trail_image := Image.create(ART_TILE_SIZE, ART_TILE_SIZE, false, Image.FORMAT_RGBA8)
+	trail_image.fill(TRAIL_COLOR)
+	_blit_tile(image, trail_image, _trail_linear())
+
 	return image
 
 
@@ -1050,7 +1084,7 @@ func build_tile_set() -> TileSet:
 		return _tile_set_cache[cached_key]
 
 	var biome_count := BiomeClassifier.KNOWN_BIOMES.size()
-	var total_cells := _roof_variant_base_linear() + _roof_variant_family_size()
+	var total_cells := _trail_linear() + 1
 	var rows := int(ceil(float(total_cells) / ATLAS_COLUMNS))
 
 	var image: Image = null

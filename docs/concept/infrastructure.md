@@ -51,15 +51,24 @@ decreasing with disuse — a real escalation, not three unrelated systems:
   uses — a worn path and a dug patch are visually "the ground got turned
   to dirt" either way, an accepted overlap).
 - **Trail** — sustained, heavier use of an already-worn path over a longer
-  window. Not yet built: needs its own wear threshold and its own visual
-  tier, deliberately deferred rather than guessed at now (see Status).
+  window. Built 2026-09-03 (`PathScarring.is_trail`/`trail_tiles`,
+  `TerrainRenderer.TRAIL_TILE_ID`, wired in `World._step_path_scarring`; see
+  Status). Found missing by playing: a path re-textured once at
+  `WORN_THRESHOLD` and then nothing further was perceptible however much
+  more it was walked — the wear number kept climbing underneath (`wear_at`
+  genuinely reaches `MAX_WEAR`, and the speed bonus with it), but nothing
+  rendered or named the difference between "crossed once" and "walked to
+  the ground." `TRAIL_THRESHOLD` is deliberately not a new,
+  separately-tuned number — it *is* `MAX_WEAR`, the ceiling this module
+  already enforced, seen as a tier rather than invented above or below it.
 - **Road** — the heaviest, most sustained tier — likely tied to settlement
   proximity and repeated inter-settlement travel once that exists. Not yet
   built.
 
 Each tier crossing (and the reverse — reclaimed by disuse) is a real,
-`/why`-inspectable event once emergence-substrate wiring reaches it (see
-Status for exactly how far that wiring currently goes).
+`/why`-inspectable event: `path_worn`/`path_reclaimed` for the first tier,
+now `trail_formed`/`trail_reclaimed` for the second (see Status). Road
+remains hypothetical until emergence-substrate wiring reaches it too.
 
 ## Crossings: ford → ferry → bridge
 
@@ -113,7 +122,21 @@ implemented either, but the two are designed to land together.
   tile that is faster.
 - ✅ **Path formation/reclamation is a real, causally-grounded event** — see
   `docs/progress.md`'s Emergence Phase 8 entry for exactly what's wired.
-- ⬜ Trail/road tiers (higher wear thresholds, their own rendering).
+- ✅ **Trail tier** — a second, deeper wear stage over Path, reaching the
+  same `MAX_WEAR` ceiling `PathScarring` already enforced
+  (`PathScarring.is_trail`/`trail_tiles`/`TRAIL_THRESHOLD`). Rendered as its
+  own flat, hard-edged atlas tile (`TerrainRenderer.TRAIL_TILE_ID`, darker
+  and more compacted-looking than ordinary trampled earth — deliberately
+  not border-blended, matching every other player-made modification tile),
+  and just as causally real as Path: `EarthChunkManager.
+  record_trail_formed_if_new`/`record_trail_reclaimed` fire real,
+  `/why`-inspectable events on the *same* path entity Path already uses,
+  not a new entity kind, and tapering from Trail back down to an ordinary
+  worn Path is a distinct transition from a full reclaim (it does not chain
+  into ruin formation the way disappearing entirely does). Wired into
+  `World._step_path_scarring` right alongside the pre-existing Path
+  paint/reclaim loops.
+- ⬜ Road tier (a further, higher-intensity threshold above Trail).
 - ⬜ Crossings (ford/ferry/bridge) — no "crossing point" concept exists yet.
 - ⬜ Traffic heatmaps, inter-settlement routes, market nodes.
 - ⬜ Infrastructure condition/maintenance/degradation feeding back into

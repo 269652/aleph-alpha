@@ -325,6 +325,7 @@ var _ground_tint := GroundTint.new()
 var _chunk_manager: EarthChunkManager
 var _path_scarring := PathScarring.new()
 var _scarred_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles we've painted as trampled earth
+var _trailed_tiles: Dictionary = {}  # Vector2i global tile -> true, tiles currently painted as the deeper Trail tier
 ## Sentinel far outside any reachable tile, so the first real tile always
 ## counts as "newly stepped on".
 var _last_scar_step_tile := Vector2i(-2147483648, -2147483648)
@@ -4206,6 +4207,33 @@ func _step_path_scarring(delta: float) -> void:
 				# change.
 				_chunk_manager.record_path_worn_if_new(tile)
 
+	# The trail tier (docs/concept/infrastructure.md's "path -> trail ->
+	# road", PathScarring.is_trail): a strictly deeper escalation of the
+	# same worn tile, painted over it once use reaches the ceiling. Runs
+	# after the loop above so a tile can never show as Trail before it has
+	# already been recorded and painted as an ordinary worn Path -- see
+	# PathScarring.trail_tiles being a subset of worn_tiles.
+	for tile in _path_scarring.trail_tiles():
+		if not _trailed_tiles.has(tile):
+			if _chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.TRAIL_TILE_ID):
+				_trailed_tiles[tile] = true
+				_chunk_manager.record_trail_formed_if_new(tile)
+
+	# Tapering back down from Trail to an ordinary worn Path -- distinct
+	# from full reclamation below: the ground is still a path, just no
+	# longer compacted to the ceiling, so it repaints as EARTH_TILE_ID
+	# rather than being destroyed. A tile that decays straight past Path to
+	# bare ground in one gap is left alone here (still worn is false) and
+	# falls through to the ordinary reclaim loop instead, whose widened
+	# _CURRENTLY_WORN_EVENTS guard already recognizes a last-seen
+	# trail_formed as a valid reclaim precedent.
+	for tile in _trailed_tiles.keys().duplicate():
+		if not _path_scarring.is_trail(tile):
+			_trailed_tiles.erase(tile)
+			if _path_scarring.is_worn(tile):
+				_chunk_manager.build_at_global(tile.x, tile.y, TerrainRenderer.EARTH_TILE_ID)
+				_chunk_manager.record_trail_reclaimed(tile)
+
 	for tile in _scarred_tiles.keys().duplicate():
 		if not _path_scarring.is_worn(tile):
 			_chunk_manager.destroy_at_global(tile.x, tile.y)
@@ -4816,8 +4844,9 @@ func _client_process(delta: float) -> void:
 	# here against `delta` put the snow on a different clock from the season, so
 	# a jump to summer left it lying in the sunshine.
 	_chunk_manager.step_snow(snowing, warmth)
-	# Walking packs the snow down, which is what leaves a trail.
-	_chunk_manager.tread_snow_at(local_player.position)
+	# Walking packs the snow down, which is what leaves a trail -- facing
+	# along, so the mark left behind actually points the way it was made.
+	_chunk_manager.tread_snow_at(local_player.position, local_player.facing_direction())
 	var raw_wind_strength := _weather_model.wind_strength_for(raw_weather)
 	_chunk_manager.set_wind_strength(raw_wind_strength)
 	# ...and the wind now has a DIRECTION the simulation reads, not just an

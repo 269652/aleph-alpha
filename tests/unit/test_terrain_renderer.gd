@@ -347,6 +347,8 @@ func test_build_tile_set_creates_one_atlas_tile_per_biome_variant_plus_the_build
 		# context within its building at paint time, so a house reads as a
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
+		# The trail tile (see TRAIL_TILE_ID): one flat slot, appended last.
+		+ 1
 	)
 	assert_eq(source.get_tiles_count(), expected)
 
@@ -374,6 +376,8 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_structur
 		# context within its building at paint time, so a house reads as a
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
+		# The trail tile (see TRAIL_TILE_ID): one flat slot, appended last.
+		+ 1
 	)
 	assert_eq(
 		source.get_tiles_count() - tile_count_without_structures_or_pieces - BuildingPiece.PIECE_IDS.size(),
@@ -505,6 +509,8 @@ func test_build_tile_set_total_tile_count_grows_by_exactly_one_tile_per_building
 		# context within its building at paint time, so a house reads as a
 		# pitched roof rather than one flat tile repeated across a rectangle.
 		+ TerrainRenderer.ROOF_VARIANT_MATERIALS.size() * RoofShape.TOTAL_SHADE_BANDS * TerrainRenderer.ROOF_EDGE_MASK_COUNT
+		# The trail tile (see TRAIL_TILE_ID): one flat slot, appended last.
+		+ 1
 	)
 	assert_eq(source.get_tiles_count() - tile_count_without_pieces, BuildingPiece.PIECE_IDS.size())
 
@@ -2615,3 +2621,48 @@ func test_the_diagonal_corner_is_found_with_and_without_an_unrelated_blend():
 		with_blend.is_empty(),
 		"the same diagonal corner must still be found when another edge happens to blend"
 	)
+
+
+# -- the trail tier (docs/concept/infrastructure.md's "path -> trail -> road") -
+#
+# A path re-textured once at PathScarring.WORN_THRESHOLD and nothing further
+# was ever visible, however much more it was walked -- the same wear number
+# reaching PathScarring.MAX_WEAR (the "trail" tier, see PathScarring.
+# TRAIL_THRESHOLD) needs its own real atlas slot to actually SHOW that
+# second stage, or the number changing underneath is invisible.
+
+
+func test_trail_has_its_own_atlas_slot_distinct_from_earth_and_every_biome():
+	var trail_coords := renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID)
+	assert_ne(trail_coords, renderer.atlas_coords_for_modification(TerrainRenderer.EARTH_TILE_ID))
+	for biome_name in BiomeClassifier.KNOWN_BIOMES:
+		for variant in TerrainRenderer.VARIANTS_PER_BIOME:
+			assert_ne(trail_coords, renderer.atlas_coords_for_biome(biome_name, variant))
+
+
+## A trail reads as MORE compacted, more deeply worn ground than a path --
+## not a re-skin of the exact same colour, or the two tiers would be
+## visually the same thing under two names.
+func test_trail_is_a_visibly_different_colour_from_plain_earth():
+	assert_ne(TerrainRenderer.TRAIL_COLOR, TerrainRenderer.EARTH_COLOR)
+
+
+## Real: darker/more compacted, not an arbitrary different hue -- matching
+## "walked to the ground" being a MORE extreme version of "worn to dirt",
+## not merely a different flavour of it.
+func test_trail_reads_as_darker_and_more_compacted_than_plain_earth():
+	assert_lt(TerrainRenderer.TRAIL_COLOR.v, TerrainRenderer.EARTH_COLOR.v)
+
+
+func test_the_trail_tile_set_slot_is_actually_painted_that_colour():
+	var tile_set := renderer.build_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	var coords := renderer.atlas_coords_for_modification(TerrainRenderer.TRAIL_TILE_ID)
+	var image := source.texture.get_image()
+	var art_size := TerrainRenderer.ART_TILE_SIZE
+	var sample := image.get_pixel(
+		coords.x * art_size + art_size / 2, coords.y * art_size + art_size / 2
+	)
+	assert_almost_eq(sample.r, TerrainRenderer.TRAIL_COLOR.r, 0.01)
+	assert_almost_eq(sample.g, TerrainRenderer.TRAIL_COLOR.g, 0.01)
+	assert_almost_eq(sample.b, TerrainRenderer.TRAIL_COLOR.b, 0.01)

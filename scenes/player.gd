@@ -1878,6 +1878,16 @@ func craft(recipe_id: String) -> bool:
 	return true
 
 
+## The direction actually walked, last, for anything outside this script
+## that needs it -- SnowTrail orients the footprint a step leaves by it (see
+## EarthChunkManager.tread_snow_at). A real accessor rather than a caller
+## reaching for the `_`-prefixed field directly, the same convention every
+## other externally-read Player state (wound_stacks, current_speed_
+## multiplier) already follows.
+func facing_direction() -> Vector2:
+	return _last_facing_direction
+
+
 ## Converts _last_facing_direction into the 4-way string WeaponSwing/
 ## CharacterView.play_attack_swing expect, mirroring CharacterView.set_facing's
 ## own dominant-axis logic.

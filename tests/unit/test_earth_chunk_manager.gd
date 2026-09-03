@@ -6408,7 +6408,7 @@ func test_treading_snow_reaches_the_shared_trail_mask():
 	manager.set_snow_depth(1.0)
 
 	var trodden_pixel := Vector2(_berlin_tile) * TerrainRenderer.TILE_SIZE
-	manager.tread_snow_at(trodden_pixel)
+	manager.tread_snow_at(trodden_pixel, Vector2.DOWN)
 	manager.step_snow(false, 0.0)
 
 	var material := snow_layer.material as ShaderMaterial
@@ -9770,3 +9770,59 @@ func test_where_a_villager_lives_agrees_with_who_the_settlement_claims():
 		if manager.settlement_id_for_npc("npc:%d" % seed_value) == settlement_id:
 			claiming += 1
 	assert_eq(claiming, claimed)
+
+
+# -- the trail tier (docs/concept/infrastructure.md's "path -> trail -> road") --
+
+## Reaching PathScarring.TRAIL_THRESHOLD (its own MAX_WEAR) is a SECOND real,
+## /why-inspectable transition on the SAME path entity a trail deepens --
+## not a new kind of thing, a deeper stage of the one that already exists.
+func test_recording_a_trail_records_a_real_event_on_the_same_path_entity():
+	manager.record_path_worn_if_new(Vector2i(20, 20))
+	manager.record_trail_formed_if_new(Vector2i(20, 20))
+	var formed: Array = manager.event_store().events_of_type("trail_formed")
+	assert_eq(formed.size(), 1)
+	assert_eq(formed[0].actors, ["path:20_20"])
+
+
+func test_recording_the_same_trail_twice_does_not_duplicate_it():
+	manager.record_path_worn_if_new(Vector2i(21, 21))
+	manager.record_trail_formed_if_new(Vector2i(21, 21))
+	manager.record_trail_formed_if_new(Vector2i(21, 21))
+	assert_eq(manager.event_store().events_of_type("trail_formed").size(), 1)
+
+
+## Tapering from Trail back to an ordinary worn Path is its own real
+## transition -- distinct from a path being fully reclaimed by nature
+## (record_path_reclaimed): the ground is still a path, just less
+## intensely used, so it does NOT trigger ruin formation the way a path
+## reclaimed down to bare grass does.
+func test_a_trail_tapering_back_to_a_path_records_a_real_event():
+	manager.record_path_worn_if_new(Vector2i(22, 22))
+	manager.record_trail_formed_if_new(Vector2i(22, 22))
+	manager.record_trail_reclaimed(Vector2i(22, 22))
+	var tapered: Array = manager.event_store().events_of_type("trail_reclaimed")
+	assert_eq(tapered.size(), 1)
+	assert_eq(tapered[0].actors, ["path:22_22"])
+	assert_eq(manager.event_store().events_of_type("ruin_formed").size(), 0)
+
+
+func test_reclaiming_a_trail_that_was_never_formed_records_nothing():
+	manager.record_trail_reclaimed(Vector2i(23, 23))
+	assert_eq(manager.event_store().events_of_type("trail_reclaimed").size(), 0)
+
+
+## A trail can form, taper, and form again over a real session.
+func test_a_tapered_trail_can_form_again():
+	manager.record_path_worn_if_new(Vector2i(24, 24))
+	manager.record_trail_formed_if_new(Vector2i(24, 24))
+	manager.record_trail_reclaimed(Vector2i(24, 24))
+	manager.record_trail_formed_if_new(Vector2i(24, 24))
+	assert_eq(manager.event_store().events_of_type("trail_formed").size(), 2)
+
+
+func test_a_trail_is_remembered():
+	manager.record_path_worn_if_new(Vector2i(25, 25))
+	manager.record_trail_formed_if_new(Vector2i(25, 25))
+	var memories: Array = manager.memory_store().memories_for("path:25_25")
+	assert_eq(memories.size(), 2, "both the path forming and its deepening into a trail are witnessed")
