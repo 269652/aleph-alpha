@@ -129,3 +129,73 @@ func test_a_single_footprint_is_already_visible():
 		trail.tread_at(Vector2i(0, 0)), SnowTrail.VISIBLE_TREAD,
 		"one step should already show"
 	)
+
+
+# -- the GPU trail mask -------------------------------------------------------
+#
+# SnowBombShader.set_trail_mask wants a real R8 Texture2D window in WORLD
+# pixels, not the tile->float dictionary above -- see docs/concept/
+# snow_cover.md's "Footprints" section. build_mask_texture is the bridge: a
+# small window centered on the player's own tile, read back as an Image so
+# these tests can assert real pixel values rather than trust the GPU.
+
+func test_mask_texture_is_the_requested_size():
+	var trail := SnowTrail.new()
+	var texture := trail.build_mask_texture(Vector2i(0, 0), 8)
+	assert_eq(texture.get_width(), 8)
+	assert_eq(texture.get_height(), 8)
+
+
+func test_an_untrodden_window_is_all_zero():
+	var trail := SnowTrail.new()
+	var image := trail.build_mask_texture(Vector2i(0, 0), 8).get_image()
+	for y in 8:
+		for x in 8:
+			assert_eq(image.get_pixel(x, y).r, 0.0, "untrodden ground should read as untrodden")
+
+
+## The window is centered ON the given tile -- so treading the centre tile
+## itself must land on the image's own centre pixel.
+func test_the_window_is_centred_on_the_given_tile():
+	var trail := SnowTrail.new()
+	trail.step_on(Vector2i(10, 10))
+	var image := trail.build_mask_texture(Vector2i(10, 10), 8).get_image()
+	assert_almost_eq(
+		image.get_pixel(4, 4).r, trail.tread_at(Vector2i(10, 10)), 1.0 / 255.0,
+		"the centre tile should land on the window's own centre pixel"
+	)
+
+
+## A trodden tile off-centre still lands at its own real offset, not just
+## the centre -- otherwise every footprint would draw in the same place.
+func test_a_trodden_tile_lands_at_its_real_offset():
+	var trail := SnowTrail.new()
+	trail.step_on(Vector2i(3, 5))  # centre (0,0) + offset (3,5)
+	var image := trail.build_mask_texture(Vector2i(0, 0), 16).get_image()
+	assert_almost_eq(
+		image.get_pixel(8 + 3, 8 + 5).r, trail.tread_at(Vector2i(3, 5)), 1.0 / 255.0
+	)
+
+
+## A tile outside the window must not crash and must not bleed onto a
+## neighbouring in-window pixel via wraparound indexing.
+func test_a_tile_outside_the_window_does_not_appear_or_crash():
+	var trail := SnowTrail.new()
+	trail.step_on(Vector2i(1000, 1000))
+	var image := trail.build_mask_texture(Vector2i(0, 0), 8).get_image()
+	for y in 8:
+		for x in 8:
+			assert_eq(image.get_pixel(x, y).r, 0.0, "a far-off tread should not appear in this window")
+
+
+## Real displacement values must survive being packed into an 8-bit channel
+## and read back, within one texel step -- not just "something nonzero".
+func test_mask_values_track_the_real_tread_value_not_just_presence():
+	var trail := SnowTrail.new()
+	for step in 2:  # 2 * TREAD_PER_STEP (0.34) = 0.68, short of MAX_TREAD on purpose
+		trail.step_on(Vector2i(0, 0))
+	var real_tread := trail.tread_at(Vector2i(0, 0))
+	assert_gt(real_tread, 0.0)
+	assert_lt(real_tread, 1.0, "pick a tread value that is not already saturated, or this proves nothing")
+	var image := trail.build_mask_texture(Vector2i(0, 0), 4).get_image()
+	assert_almost_eq(image.get_pixel(2, 2).r, real_tread, 1.0 / 255.0)

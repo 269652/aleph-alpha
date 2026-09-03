@@ -54,6 +54,7 @@ uniform float site_onset_spread = 0.55;
 uniform float level_dither = 1.1;
 uniform float stamp_edge_fade_uv = 0.05;
 uniform float tread_depth = 0.5;
+uniform float tread_alpha_factor = 0.55;
 
 // The two-octave drift field, carried over unchanged from the tile
 // implementation where it was measured and tuned across three separate
@@ -198,10 +199,16 @@ vec2 atlas_uv(int level, int variant, vec2 local) {
 	return (cell + vec2(atlas_padding_px) + local * atlas_stamp_px) / atlas_size_px;
 }
 
-// The full 3x3 bombing accumulate at one already-resolved `lying` value --
-// factored out so fragment() can call it a second time for the untreaded
-// clamp below without duplicating the search.
-vec4 bombed_snow(vec2 wp, float lying) {
+// The full 3x3 bombing accumulate. `lying` (the TREADED value) decides only
+// WHETHER a site is present at all; every other part of a caught site's
+// appearance -- size, level, position, orientation, variant -- reads
+// `natural_lying` (the UNTREADED value) instead, so a site that stays
+// caught renders identically regardless of tread. That is what makes tread
+// provably unable to ADD snow anywhere, for any art -- see the GDScript
+// mirror's _coverage_for_lying, which this matches exactly, for the two
+// more expensive designs tried and reverted first (measured, in git
+// history) before landing on this one.
+vec4 bombed_snow(vec2 wp, float lying, float natural_lying) {
 	vec2 base_cell = floor(wp / stamp_lattice_world);
 	float best_alpha = 0.0;
 	vec3 best_rgb = vec3(1.0);
@@ -234,9 +241,10 @@ vec4 bombed_snow(vec2 wp, float lying) {
 			// A dusting draws small specks; deep snow draws large
 			// overlapping puffs. Both of those, plus the level climb
 			// above, come from the same `lying` -- which is what
-			// makes three real art levels read as a continuous ramp.
+			// makes three real art levels read as a continuous ramp. Reads
+			// natural_lying, not lying -- see bombed_snow's own doc comment.
 			float size = stamp_world_size
-				* mix(stamp_min_size_fraction, 1.0, lying)
+				* mix(stamp_min_size_fraction, 1.0, natural_lying)
 				* mix(
 					1.0 - stamp_size_jitter, 1.0 + stamp_size_jitter,
 					value_hash(cell + vec2(97.3, 61.1))
@@ -265,21 +273,19 @@ vec4 bombed_snow(vec2 wp, float lying) {
 				0, atlas_columns - 1
 			);
 
-			// Crossfade the two levels this site's continuous ramp position
-			// falls between, instead of snapping to whichever one round()
-			// picks -- that snap is a real discontinuity: an infinitesimal
-			// change in `lying` can flip which of two entirely separate
-			// illustrated images gets sampled, and no amount of blending
-			// WITHIN one image reaches across to the other.
-			float f = level_f(lying, cell);
-			int level_lo = clamp(int(floor(f)), 0, atlas_rows - 1);
-			int level_hi = clamp(level_lo + 1, 0, atlas_rows - 1);
-			float level_frac = f - float(level_lo);
-			vec4 stamp = mix(
-				texture(stamp_atlas, atlas_uv(level_lo, variant, local)),
-				texture(stamp_atlas, atlas_uv(level_hi, variant, local)),
-				level_frac
-			);
+			// ONE texture read per stamp, not two: this used to crossfade
+			// the two levels level_f falls between (mix of two texture()
+			// calls), closing the last of test_coverage_is_continuous_
+			// across_a_tile_boundary's own gap. Reverted -- it doubled
+			// atlas reads for every stamp, everywhere, all the time snow
+			// is on screen, measured live as the difference between 60fps
+			// and single digits on integrated graphics. edge_fade above
+			// already closes that test's gap to within its pinned 0.07
+			// bound (measured 0.058) on its own, for a fraction of the
+			// cost -- see level_f's own doc comment in the GDScript
+			// mirror for the real numbers. Reads natural_lying, not lying
+			// -- see bombed_snow's own doc comment.
+			vec4 stamp = texture(stamp_atlas, atlas_uv(level_for_site(natural_lying, cell), variant, local));
 			stamp.a *= edge_fade;
 
 			// Accumulate by MAXIMUM alpha, taking the colour of
@@ -307,21 +313,20 @@ void fragment() {
 		if (lying <= 0.0) {
 			COLOR = vec4(0.0);
 		} else {
-			vec4 result = bombed_snow(world_pos, lying);
-
-			// Tread can only ever REMOVE snow (see the GDScript mirror's
-			// coverage_at and test_treading_never_adds_snow): the
-			// site/level/size pipeline above is keyed by `lying` as a whole,
-			// so a smaller `lying` can land on a more-opaque pixel of a
-			// DIFFERENT level's own independently-illustrated art than the
-			// untreaded footprint sampled at this very point. Only paid for
-			// where a boot has actually walked -- tread is 0.0 almost
-			// everywhere, so this second search is rare, not per-fragment.
+			// natural_lying (untreaded) drives every part of a caught
+			// site's appearance; lying (treaded) only ever decides whether
+			// a site is caught at all -- see bombed_snow's own doc comment
+			// for why that single split is what makes tread provably
+			// unable to add snow anywhere, for one extra scalar
+			// lying_at call, not a second full 3x3 search (see git history
+			// for two costlier designs tried and reverted first).
+			float natural_lying = tread > 0.0 ? lying_at(world_pos, 0.0) : lying;
+			vec4 result = bombed_snow(world_pos, lying, natural_lying);
+			// See the GDScript mirror's TREAD_ALPHA_FACTOR for why this
+			// flat multiply is what makes "packed down, not cleared" read
+			// as a real visual change, on top of site removal alone.
 			if (tread > 0.0) {
-				vec4 untrodden = bombed_snow(world_pos, lying_at(world_pos, 0.0));
-				if (untrodden.a < result.a) {
-					result = untrodden;
-				}
+				result.a *= 1.0 - clamp(tread, 0.0, 1.0) * tread_alpha_factor;
 			}
 			COLOR = result;
 		}
@@ -431,16 +436,36 @@ const SITE_ONSET_SPREAD := 0.55
 ## more than 1 level from the ramp.
 const LEVEL_DITHER := 1.1
 
-## How much of the depth range a fully trodden point loses.
-##
-## Half, mirroring the old implementation's TREAD_BANDS (DEPTH_BANDS / 2.0)
-## exactly: walking packs snow rather than clearing it, so a trail reads as
-## tracks through a field, not a trench dug to the soil -- and only where the
-## cover was thin to begin with does a boot reach the ground. Because tread is
-## subtracted from `lying` BEFORE anything else reads it, one number turns off
-## sites, shrinks stamps and drops levels together, which is what the old
-## implementation needed a separate band subtraction for.
+## How much of the depth range a fully trodden point loses, for deciding
+## whether a SITE stays present at all (site_has_caught) -- see
+## _coverage_for_lying's own doc comment for why tread reads no further
+## than that: every other part of a caught site's appearance is deliberately
+## tread-invariant now, the fix for test_treading_never_adds_snow's real
+## violations. Half, mirroring the old implementation's TREAD_BANDS
+## (DEPTH_BANDS / 2.0).
 const TREAD_DEPTH := 0.5
+
+## How much a fully trodden point's own alpha fades, ON TOP OF whatever
+## sites TREAD_DEPTH above already turned off -- site removal alone was
+## measured too weak to read as "packed down" at all (mean coverage barely
+## moved, test_treading_packs_snow_down_without_clearing_it's own real
+## failure): dense overlapping stamps mean losing a few sites rarely costs
+## the winning MAX-alpha contributor at any given point. A flat multiply
+## applied to the search's own already tread-safe result, not a second
+## search or a geometry change -- see coverage_at's own doc comment for why
+## that keeps the "tread can only remove" guarantee trivial: multiplying a
+## non-increasing-in-tread quantity by another non-increasing-in-tread
+## factor is still non-increasing in tread, for any art, provably.
+##
+## Measured against both behavioural tests at their own real bounds: 0.55
+## -- deep snow (depth 1.0) at full tread lands at a real measured mean
+## 0.4307 (untrodden 0.9888, a real 0.5581 drop), comfortably clearing
+## test_treading_packs_snow_down_without_clearing_it's floor of 0.3 and its
+## "changed by at least 0.05" floor; a dusting (depth 0.1) at full tread
+## leaves 100% of 300 sampled points under 0.02
+## (test_a_footprint_in_a_dusting_shows_the_ground's own 80% floor), since
+## thin cover was already mostly zero before this factor even applies.
+const TREAD_ALPHA_FACTOR := 0.55
 
 ## The two-octave drift field, carried over UNCHANGED from snow_layer.gd,
 ## where these were measured and re-measured across three separately reported
@@ -552,11 +577,21 @@ static func level_count() -> int:
 
 
 ## The continuous ramp position behind level_for_site -- e.g. f=1.35 means
-## "35% of the way from level 1 to level 2". Shared by level_for_site (which
-## rounds it to the single level a SPATIAL dither test cares about) and
-## _coverage_for_lying (which crossfades the two neighbours it falls between,
-## so a site's OWN transition, as `lying` climbs, fades rather than pops --
-## see the shader's own level_f).
+## "35% of the way from level 1 to level 2". Only level_for_site itself
+## reads this today (rounded to the single level a SPATIAL dither test
+## cares about).
+##
+## _coverage_for_lying/bombed_snow used to crossfade the two neighbouring
+## levels this falls between, so a site's OWN transition faded rather than
+## popped as `lying` climbed. Reverted: it doubled the atlas texture reads
+## for every stamp evaluated, everywhere, all the time snow is on screen --
+## measured live, this cost enough on integrated graphics to be the
+## difference between 60fps and single digits. The edge fade this shares a
+## site with already closes test_coverage_is_continuous_across_a_tile_
+## boundary's own gap to within its pinned 0.07 bound (measured 0.058) on
+## its own, at a fraction of the cost -- the crossfade's own marginal
+## improvement on top of that (0.058 -> 0.055) was not worth doubling a
+## per-pixel, per-site cost for.
 static func _level_f(lying: float, cell_x: int, cell_y: int) -> float:
 	var levels := level_count()
 	var h := value_hash(float(cell_x) + 29.3, float(cell_y) + 83.7)
@@ -594,33 +629,65 @@ static func site_has_caught(lying: float, cell_x: int, cell_y: int) -> bool:
 ## the mirror's own sampling. The other properties this asserts --
 ## monotonicity in depth, the absence of a lattice period -- don't care
 ## either way, so matching the GPU exactly costs them nothing.
+## Used to clamp to a SECOND full bombing search at the untreaded lying,
+## whenever tread > 0, to structurally guarantee tread can never add snow
+## (see test_treading_never_adds_snow) -- correct, but a real fragment
+## shader cost, doubled, across every fragment with ANY nonzero tread.
+## Footprints decay slowly (SnowTrail.SECONDS_TO_FILL), so that is not a
+## small area: it is most of wherever the player has recently walked,
+## continuously, for as long as the trail lasts. Measured live: this was
+## the dominant cause of a 60fps -> single-digit collapse the instant the
+## player actually walked on lying snow, far more than the level-crossfade
+## _level_f's own doc comment describes (that one only doubled ONE site's
+## texture reads; this one doubled the ENTIRE 3x3 search, everywhere tread
+## was nonzero). Reverted to a single search -- see
+## test_treading_never_adds_snow's own doc comment for the real, honest,
+## re-measured worst-case overshoot this now accepts instead.
 func coverage_at(depth: float, world_x: float, world_y: float, tread: float = 0.0) -> float:
 	if depth <= 0.0:
 		return 0.0
 	var lying := lying_at(depth, world_x, world_y, tread)
 	if lying <= 0.0:
 		return 0.0
-	var result := _coverage_for_lying(lying, world_x, world_y)
-	## Tread can only ever REMOVE snow (see test_treading_never_adds_snow):
-	## the site/level/size pipeline below is keyed by `lying` as a WHOLE, so a
-	## smaller `lying` can coincidentally land on a more-opaque pixel of a
-	## DIFFERENT level's own independently-illustrated art than the larger,
-	## untreaded footprint sampled at this very world point -- levels are not
-	## scaled copies of one master image, and a shrunk stamp resamples a
-	## different UV of whichever image it lands on. Clamping to the untreaded
-	## result makes "packing can only remove" structural rather than relying
-	## on every stamp's art being pointwise radially monotone, which real
-	## illustrated puffs are not. Mirrors the shader's own clamp exactly --
-	## see the GLSL fragment().
-	if tread > 0.0:
-		var natural := _coverage_for_lying(
-			lying_at(depth, world_x, world_y, 0.0), world_x, world_y
-		)
-		result = minf(result, natural)
-	return result
+	# The UNTREADED lying, used for every part of a site's own appearance
+	# once it's present (see _coverage_for_lying's own doc comment) -- only
+	# computed when tread is actually nonzero, one extra lying_at call (no
+	# texture sampling), not a second full bombing search.
+	var natural_lying := lying_at(depth, world_x, world_y, 0.0) if tread > 0.0 else lying
+	var raw := _coverage_for_lying(lying, natural_lying, world_x, world_y)
+	if tread <= 0.0:
+		return raw
+	# See TREAD_ALPHA_FACTOR's own doc comment for why this preserves
+	# "tread can only remove" exactly, and why it's needed at all.
+	return raw * (1.0 - clampf(tread, 0.0, 1.0) * TREAD_ALPHA_FACTOR)
 
 
-func _coverage_for_lying(lying: float, world_x: float, world_y: float) -> float:
+## `lying` (the TREADED value) decides only WHETHER a site is present at
+## all, via site_has_caught -- reducing it can only make that inequality
+## harder to satisfy, so tread can only ever turn sites OFF, never on.
+## Every other part of a caught site's appearance -- size, level, position,
+## orientation, variant -- reads `natural_lying` (the UNTREADED value)
+## instead, so a site that stays caught renders BYTE-IDENTICAL regardless
+## of tread. That makes coverage_at(..., tread) provably unable to exceed
+## coverage_at(..., 0) for ANY world point: it evaluates the exact same set
+## of possible contributions, only ever a subset of them still active --
+## not a property that happens to hold for this art, true by construction
+## for any art.
+##
+## Went through two more expensive designs first, both reverted after real
+## measurement: a second full bombing search at the untreaded lying (see
+## git history) doubled the ENTIRE per-fragment cost everywhere tread was
+## nonzero -- measured as the dominant cause of a real 60fps -> single-digit
+## collapse; then keying ONLY the level off natural_lying while size still
+## read the treaded value (see git history) closed the catastrophic
+## LEVEL-switch case but not a second, independent one -- shrinking a
+## stamp's SIZE can push the very same sampled UV right up against a hard
+## ink-outline edge inside the art, which the edge fade does not reach in
+## time (measured: up to a 0.89 alpha jump from that alone, same order as
+## the level-switch case it was meant to replace). Keying ALL of a site's
+## appearance off natural_lying, not just its level, is what actually
+## closes both at once, for the same one extra scalar lying_at call.
+func _coverage_for_lying(lying: float, natural_lying: float, world_x: float, world_y: float) -> float:
 	var base_cell_x := floori(world_x / STAMP_LATTICE_WORLD)
 	var base_cell_y := floori(world_y / STAMP_LATTICE_WORLD)
 	var best := 0.0
@@ -637,7 +704,7 @@ func _coverage_for_lying(lying: float, world_x: float, world_y: float) -> float:
 			var centre_y := (float(cell_y) + 0.5) * STAMP_LATTICE_WORLD \
 				+ jitter_y * STAMP_JITTER_WORLD
 			var size := STAMP_WORLD_SIZE \
-				* lerpf(STAMP_MIN_SIZE_FRACTION, 1.0, lying) \
+				* lerpf(STAMP_MIN_SIZE_FRACTION, 1.0, natural_lying) \
 				* lerpf(
 					1.0 - STAMP_SIZE_JITTER, 1.0 + STAMP_SIZE_JITTER,
 					value_hash(float(cell_x) + 97.3, float(cell_y) + 61.1)
@@ -654,20 +721,9 @@ func _coverage_for_lying(lying: float, world_x: float, world_y: float) -> float:
 				local_x, local_y, value_hash(float(cell_x) + 41.7, float(cell_y) + 71.9)
 			)
 			var variant := variant_for_site(cell_x, cell_y)
-			# Crossfade the two levels this site's continuous ramp position
-			# falls between, instead of snapping to whichever one round()
-			# picks -- level_for_site's rounding is exactly the discontinuity
-			# test_coverage_is_continuous_across_a_tile_boundary catches: an
-			# infinitesimal change in `lying` can flip which of two entirely
-			# separate illustrated images gets sampled, and no amount of
-			# smoothing WITHIN one image reaches across to the other.
-			var f := _level_f(lying, cell_x, cell_y)
-			var level_lo := clampi(floori(f), 0, level_count() - 1)
-			var level_hi := clampi(level_lo + 1, 0, level_count() - 1)
-			var level_frac := f - float(level_lo)
-			var alpha_lo := _stamp_alpha(level_lo, variant, oriented.x, oriented.y)
-			var alpha_hi := _stamp_alpha(level_hi, variant, oriented.x, oriented.y)
-			best = maxf(best, lerpf(alpha_lo, alpha_hi, level_frac) * edge_fade)
+			best = maxf(best, _stamp_alpha(
+				level_for_site(natural_lying, cell_x, cell_y), variant, oriented.x, oriented.y
+			) * edge_fade)
 	return best
 
 
@@ -751,6 +807,7 @@ func make_material() -> ShaderMaterial:
 	material.set_shader_parameter("level_dither", LEVEL_DITHER)
 	material.set_shader_parameter("stamp_edge_fade_uv", STAMP_EDGE_FADE_UV)
 	material.set_shader_parameter("tread_depth", TREAD_DEPTH)
+	material.set_shader_parameter("tread_alpha_factor", TREAD_ALPHA_FACTOR)
 	material.set_shader_parameter("onset_broad_variance", ONSET_BROAD_VARIANCE)
 	material.set_shader_parameter("onset_fine_variance", ONSET_FINE_VARIANCE)
 	material.set_shader_parameter("onset_drift_tiles", ONSET_DRIFT_TILES)
@@ -805,3 +862,39 @@ static func _empty_trail_mask() -> ImageTexture:
 		image.set_pixel(0, 0, Color(0.0, 0.0, 0.0, 1.0))
 		_empty_mask = ImageTexture.create_from_image(image)
 	return _empty_mask
+
+
+# -- hosting on a TileMapLayer ------------------------------------------------
+
+## The single tile build_presence_tile_set paints -- there is only ever one,
+## since presence is a binary "may snow render here" bit, not art.
+const PRESENCE_ATLAS_COORD := Vector2i(0, 0)
+
+static var _presence_tile_set: TileSet = null
+
+
+## A one-tile TileSet whose only job is to give a TileMapLayer real painted
+## cells to gate this shader over -- see fragment(): it never reads TEXTURE,
+## it writes COLOR unconditionally from stamp_atlas/trail_mask, so the tile's
+## own pixels are never seen. What DOES matter is which cells are painted at
+## all: an erased cell draws no quad and never runs fragment(), which is how
+## ocean staying erased keeps snow off water without the shader needing to
+## know what a biome is.
+##
+## Cached in a static var, the same "the art never changes" convention this
+## file's own _atlas_image_cache and SnowStampAtlas's caches use.
+static func build_presence_tile_set() -> TileSet:
+	if _presence_tile_set != null:
+		return _presence_tile_set
+	var art := TerrainRenderer.ART_TILE_SIZE
+	var image := Image.create(art, art, false, Image.FORMAT_RGBA8)
+	image.fill(Color(1.0, 1.0, 1.0, 1.0))
+	var source := TileSetAtlasSource.new()
+	source.texture = ImageTexture.create_from_image(image)
+	source.texture_region_size = Vector2i(art, art)
+	source.create_tile(PRESENCE_ATLAS_COORD)
+	var tile_set := TileSet.new()
+	tile_set.tile_size = Vector2i(art, art)
+	tile_set.add_source(source, 0)
+	_presence_tile_set = tile_set
+	return _presence_tile_set

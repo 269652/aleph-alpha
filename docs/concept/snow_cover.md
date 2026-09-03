@@ -226,17 +226,36 @@ for, and why both exist.
   aspect-preserved so illustrated shapes are neither stretched nor clipped.
 - ✅ **GPU texture bombing** — `SnowBombShader`, a real `canvas_item`
   fragment shader: 3x3 lattice search, per-site hashed variant / level /
-  orientation / size / onset, max-alpha accumulation, trig-free hash.
-- ✅ **Continuous depth ramp** — density, size and dithered level selection
-  driven by the two-octave drift field, evaluated per pixel.
-- ✅ **The per-tile sweep is gone** — `EarthChunkManager` pushes one float
-  per frame; `_sweep_snow_field`, `_snow_painted_band_by_tile`,
-  `_snow_dirty`, `_snow_onset_by_tile`, `_snow_variant_by_tile` and the
-  100-image baked atlas are deleted.
-- ✅ **Footprints** — `SnowTrail` unchanged, delivered as a world-space
-  trail mask texture updated per footstep.
-- ✅ **Far-world precision pinned** — structural no-`sin(` grep plus a
-  real-GPU readback test at far-world coordinates with an origin control.
+  orientation / size / onset, max-alpha accumulation, trig-free hash, a
+  structural tread-can-only-remove-snow clamp, a level-crossfade (no hard
+  pop between two independently-illustrated images), and an edge fade
+  closing the stamp's-own-footprint-boundary case. `test_snow_bomb_shader.gd`
+  26/26.
+- ✅ **Wired into the game, the old tile-based path deleted.** `SnowLayer`,
+  `_sweep_snow_field`, `_paint_snow_tile` and every per-tile band/onset/
+  variant cache are gone (`snow_layer.gd`/`test_snow_layer.gd` deleted
+  outright, not deprecated). `EarthChunkManager.set_snow_layer` assigns
+  `SnowBombShader.shared_material()` to the same `SnowFx` `TileMapLayer`
+  the old system used (unchanged scene wiring — `scenes/world.tscn`/
+  `world.gd` needed no edits), whose cells now carry only a one-tile
+  `build_presence_tile_set()` land/ocean bit, painted once at chunk load
+  (`_paint_snow_presence`) and never revisited: `fragment()` never reads
+  `TEXTURE`, so a painted cell means nothing but "may render here" — an
+  erased ocean cell keeps snow off water without the shader needing to
+  know what a biome is. `step_snow` is now a continuous, unthrottled
+  per-frame push (`snow_depth` + a rebuilt trail mask) — the old
+  diff-aware sweep and its 2-second throttle are gone along with the cost
+  they existed to bound. **Confirmed rendering in a real running
+  instance**, not just green tests.
+- ✅ **Footprints reach the GPU.** `SnowTrail.build_mask_texture` bridges
+  its own tile->float dictionary to a real R8 window texture in world
+  pixels, rebuilt once per `step_snow` call and pushed via
+  `SnowBombShader.set_trail_mask` — bounded by tracked footprints, not
+  window size, so cheap enough to do unconditionally.
+- ⬜ **Far-world precision** — the no-`sin(` structural pin exists
+  (`SHADER_CODE` greps clean), but there is no real-GPU readback test yet at
+  far-world coordinates; add one, since that is exactly where the old river
+  shader's float32 failure hid from every CPU-mirror assertion.
 - ⬜ **Snow on top of things, not just under them** — snow lies on the
   ground plane only. Caps on stones, logs and roofs are a separate feature
   and not attempted here.

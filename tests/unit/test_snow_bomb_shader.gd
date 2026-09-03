@@ -442,6 +442,7 @@ func test_every_mirrored_constant_reaches_the_shader():
 		"level_dither": SnowBombShader.LEVEL_DITHER,
 		"stamp_edge_fade_uv": SnowBombShader.STAMP_EDGE_FADE_UV,
 		"tread_depth": SnowBombShader.TREAD_DEPTH,
+		"tread_alpha_factor": SnowBombShader.TREAD_ALPHA_FACTOR,
 		"onset_broad_variance": SnowBombShader.ONSET_BROAD_VARIANCE,
 		"onset_fine_variance": SnowBombShader.ONSET_FINE_VARIANCE,
 		"onset_drift_tiles": SnowBombShader.ONSET_DRIFT_TILES,
@@ -472,3 +473,28 @@ func test_setting_the_depth_reaches_the_shared_material():
 ## on a TileMapLayer and then only ever pushes uniforms.
 func test_the_material_is_shared_across_callers():
 	assert_same(snow.shared_material(), snow.shared_material())
+
+
+# -- hosting on a TileMapLayer -------------------------------------------------
+#
+# fragment() never reads TEXTURE -- it writes COLOR unconditionally from its
+# own stamp_atlas/trail_mask samplers -- so the TileMapLayer this shader is
+# assigned to as a material needs no illustrated art of its own, only real
+# painted cells to mark "snow may render here" (see docs/concept/
+# snow_cover.md: this is the sole remaining reason the layer is a
+# TileMapLayer at all rather than one screen-sized quad -- carrying land
+# presence, not visuals). build_presence_tile_set is that minimal tileset.
+
+func test_presence_tile_set_has_exactly_one_tile():
+	var tile_set := SnowBombShader.build_presence_tile_set()
+	var source := tile_set.get_source(0) as TileSetAtlasSource
+	assert_eq(source.get_tiles_count(), 1)
+	assert_eq(source.get_tile_id(0), SnowBombShader.PRESENCE_ATLAS_COORD)
+
+
+## Must match TerrainRenderer.ART_TILE_SIZE, the same convention every other
+## painted layer's tileset uses -- a mismatched tile_size would misalign
+## presence cells against the terrain they are meant to gate snow over.
+func test_presence_tile_set_uses_the_terrain_art_tile_size():
+	var tile_set := SnowBombShader.build_presence_tile_set()
+	assert_eq(tile_set.tile_size, Vector2i.ONE * TerrainRenderer.ART_TILE_SIZE)

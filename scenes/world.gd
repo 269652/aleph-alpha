@@ -270,7 +270,8 @@ var _ground_tint := GroundTint.new()
 @onready var _water_fx: TileMapLayer = $WaterFx
 @onready var _hillshade_fx: TileMapLayer = $HillshadeFx
 ## Snow lies here rather than as a tint on the ground, so footprints can be
-## carved out of it (see SnowLayer).
+## carved out of it (see SnowBombShader) -- the cells carry only land
+## presence now, the actual coverage is read per pixel by the shader.
 @onready var _snow_fx: TileMapLayer = $SnowFx
 @onready var _entities: Node2D = $Entities
 ## Ground-flush decoration (flowers, worms, desert scrub, tundra lichen) --
