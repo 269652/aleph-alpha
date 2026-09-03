@@ -1401,6 +1401,13 @@ func _animation_step() -> void:
 		# time (see GAIT_STRIDE_PER_FRAME) -- legs cycle faster the faster
 		# the creature really moves, and freeze the moment it stops.
 		texture = frames[int(_gait_distance / GAIT_STRIDE_PER_FRAME) % frames.size()]
+	elif action == "idle":
+		# Per-individual timing (see ProceduralAnimalAnimation.idle_frame_index's
+		# own doc comment): without folding in wander_seed, a whole herd that
+		# spawned together would breathe in perfect lockstep, since every
+		# creature's own _elapsed_time starts at 0.0 and advances by the same
+		# per-frame delta absent an LOD stagger.
+		texture = frames[_animation.idle_frame_index(_elapsed_time, wander_seed, frames.size())]
 	else:
 		texture = frames[int(_elapsed_time / ANIMATION_FRAME_DURATION) % frames.size()]
 	_apply_action_scale(uses_illustrated, action)

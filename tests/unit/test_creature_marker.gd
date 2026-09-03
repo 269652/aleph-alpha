@@ -1690,6 +1690,76 @@ func test_animation_step_uses_the_walk_gait_while_moving():
 	assert_true(marker._animation_frames.has("walk"))
 
 
+# -- idle variety: a standing creature still visibly lives, and a herd does
+# not breathe in lockstep (see ProceduralAnimalAnimation.idle_frame_index)
+
+## Wires _animation_step's idle branch to idle_frame_index rather than the
+## elapsed_time-only formula every other action still uses -- the precise,
+## non-probabilistic half of the "idle timing differs per individual" proof
+## (see test_two_idling_creatures_of_the_same_look_can_show_different_idle_frames
+## below for the cross-individual half).
+## Samples several elapsed_time values rather than one: with only
+## IDLE_FRAME_COUNT (2) possible outcomes, a single sample has a real chance
+## of matching the OLD elapsed_time-only formula by pure coincidence even
+## when the wiring is still wrong -- several independent samples all landing
+## on idle_frame_index's prediction is not something a formula that ignores
+## wander_seed entirely could keep doing by luck.
+func test_animation_step_picks_the_idle_frame_from_idle_frame_index():
+	const ProceduralAnimalAnimation = preload("res://src/rendering/procedural_animal_animation.gd")
+	marker.info = CreatureInfo.new("herbivore")
+	marker._current_action = "walk"
+	marker._is_moving = false
+	var animation := ProceduralAnimalAnimation.new()
+	for elapsed_time in [0.1, 0.9, 2.3, 5.0, 7.5, 11.75]:
+		marker._elapsed_time = elapsed_time
+		marker._animation_step()
+		var frames: Array = marker._animation_frames["idle"]
+		var expected: int = animation.idle_frame_index(elapsed_time, marker.wander_seed, frames.size())
+		assert_eq(marker.texture, frames[expected], "elapsed_time %f" % elapsed_time)
+
+
+## The actual minimum bar (idle animation/vocalization variety): two
+## creatures of the SAME species and the SAME look, idling at the exact same
+## elapsed_time, must be ABLE to show different frames purely because their
+## wander_seed differs -- proving idle timing is genuinely per-individual,
+## not shared wall-clock state a whole herd reads identically. Seeds are
+## multiples of ProceduralAnimalAnimation.LOOK_VARIANTS so every candidate
+## shares marker's own look bucket (see ProceduralAnimalAnimation.
+## textures_for) -- any texture difference found here can only be the
+## per-individual TIMING, never a different look.
+func test_two_idling_creatures_of_the_same_look_can_show_different_idle_frames():
+	const ProceduralAnimalAnimation = preload("res://src/rendering/procedural_animal_animation.gd")
+	marker.info = CreatureInfo.new("herbivore")
+	marker.wander_seed = 0
+	marker._current_action = "walk"
+	marker._is_moving = false
+	marker._elapsed_time = 5.0
+	marker._animation_step()
+	var reference_texture: Texture2D = marker.texture
+
+	var other := CreatureMarker.new()
+	add_child(other)
+	other.info = CreatureInfo.new("herbivore")
+	other._current_action = "walk"
+	other._is_moving = false
+	other._elapsed_time = 5.0
+
+	var found_a_difference := false
+	for i in 60:
+		other.wander_seed = i * ProceduralAnimalAnimation.LOOK_VARIANTS
+		other._animation_step()
+		if other.texture != reference_texture:
+			found_a_difference = true
+			break
+
+	remove_child(other)
+	other.free()
+	assert_true(
+		found_a_difference,
+		"two same-look creatures idling at the same elapsed_time should be able to show different frames"
+	)
+
+
 # -- illustrated species (real art) vs. procedural (see IllustratedAnimal
 # Sprite) -- reported: "the procedural generated sprites are too bad...
 # let's switch to illustrated ones". A species with real art (horse/deer/
