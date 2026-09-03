@@ -1964,6 +1964,48 @@ Reported live, looking at a real grassland chunk at noon: *"the bare grass parts
 ✅ Ant mounds are no longer invisible -- see "Ant mounds, and the traffic on them" below, which closed this the same day.
 
 
+### Merging to main: one leak the branch had all along (2026-09-03)
+
+Merging the branch into `main` was clean, and CLAUDE.md's rule that a clean
+merge proves nothing earned its keep twice.
+
+🐛 **A semantic conflict git could not see.** Both branches independently
+fixed the same hole — `player_settled` emitted and claimed by no
+`DialogueTopic` — and put it in different places: `main` in `TOPIC_ARRIVAL`,
+the branch in `TOPIC_PLAYER_DEED`. Different lines in the same Dictionary, so
+git took both and the event ended up claimed twice. That is not cosmetic:
+`memory_topic_for` returns whichever comes first in declaration order, so the
+losing topic silently scores and renders a memory it will never be asked
+about. Resolved in main's favour (`player_settled` is shaped identically to
+`npc_settled`, so it is one more firsthand arrival, not a deed anyone
+gossips about). Caught by
+`test_every_memory_topic_claims_its_event_types_exclusively`, which already
+existed and is precisely what it is for.
+
+🐛 **Mound sprites were dropped with `queue_free`, and unloaded with `free`.**
+Two teardown paths for one kind of node, disagreeing. Nothing processes a
+frame between a chunk leaving decoration range and coming back — an
+evict/reload is two `update()` calls — so the queued sprites were still in the
+tree when the new ones were built, and the world briefly held two mounds per
+mound. `_drop_mound_sprites` now frees immediately, matching `_unload_chunk`'s
+treatment of the very same sprites.
+
+This one is worth being exact about: it was **the branch's own defect, present
+since the ant-mound commit**, not something the merge created — `test_a_spread
+_tree_survives_unloading_and_reloading_its_chunk` had been failing on the
+branch and passing on `main`, and an earlier note here lumped it in with the
+pre-existing seed/tree failures it sits beside. It was found only by running
+`origin/main` in a separate worktree and diffing the failure *sets* rather
+than comparing counts; the counts looked fine (14 on the branch, 13 on the
+merge) because `main` had added tests of its own.
+
+✅ **After the fix, the merge has exactly `origin/main`'s 11
+`test_earth_chunk_manager` failures — no regressions**, plus every suite the
+branch touches green against the merged tree, and the merged checkout booted
+and played: a villager in a village `main`'s worldgen placed offers
+"I'll bring you meat."
+
+
 ### A villager can ask you for what they are short of (2026-09-03)
 
 `docs/concept/quests.md` had been specified to the level of a field manual —

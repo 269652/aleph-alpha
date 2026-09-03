@@ -6648,7 +6648,7 @@ func step_ants(delta_seconds: float) -> void:
 ## thing that changes is whether the chunk is close enough to draw at all.
 func _sync_mound_sprites(chunk_coord: Vector2i) -> void:
 	if not _decorates(chunk_coord):
-		_drop_decoration(_mound_sprites, chunk_coord)
+		_drop_mound_sprites(chunk_coord)
 		return
 	var colony: AntColony = _ant_colonies.get(chunk_coord)
 	if colony == null:
@@ -6676,6 +6676,28 @@ func _sync_mound_sprites(chunk_coord: Vector2i) -> void:
 		# No wind material: a mound is bare soil, and soil does not sway.
 		_ground_decor_parent.add_child(sprite)
 		sprites[cell] = sprite
+
+
+## Frees a chunk's mound sprites THERE AND THEN, exactly as _unload_chunk
+## already frees the very same sprites -- deliberately not the shared
+## _drop_decoration, which defers with queue_free.
+##
+## The two teardown paths for one kind of node disagreed, and the difference
+## is observable: nothing processes a frame between a chunk leaving
+## decoration range and coming back (an evict/reload is two update() calls),
+## so the queued sprites were still in the tree when the new ones were built
+## and the world briefly held two mounds per mound. Deferring is right for
+## decoration that churns with the camera; a mound's lifetime is tied to its
+## colony, which _unload_chunk frees immediately, so these two must agree.
+##
+## Caught by test_a_spread_tree_survives_unloading_and_reloading_its_chunk,
+## which counts entities_parent's children across an evict/reload cycle --
+## an invariant a deferred free breaks -- and pinned directly by
+## test_dropping_a_chunks_mounds_frees_them_immediately.
+func _drop_mound_sprites(chunk_coord: Vector2i) -> void:
+	for sprite in _mound_sprites.get(chunk_coord, {}).values():
+		sprite.free()
+	_mound_sprites[chunk_coord] = {}
 
 
 ## A mound's art seed, from its GLOBAL tile -- so the same mound redraws the

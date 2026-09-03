@@ -191,3 +191,32 @@ func test_mounds_on_neighbouring_tiles_do_not_share_a_stamp():
 					signature += "1" if image.get_pixel(x, y).a > 0.0 else "0"
 			drawn[signature] = true
 	assert_gt(drawn.size(), 12, "neighbouring tiles are drawing the same mound")
+
+
+## Dropping a chunk's mounds must free them THERE AND THEN, the way
+## _unload_chunk already frees the very same sprites -- not defer to the end
+## of a frame.
+##
+## The two teardown paths disagreed: _unload_chunk called free() and the
+## decoration drop called queue_free(). Nothing processes a frame between a
+## chunk leaving decoration range and coming back, so the old sprites were
+## still in the tree when the new ones were made, and the world briefly held
+## two mounds per mound. Caught by
+## test_a_spread_tree_survives_unloading_and_reloading_its_chunk, which counts
+## entities_parent's children across an evict/reload cycle and is exactly the
+## invariant a deferred free breaks.
+func test_dropping_a_chunks_mounds_frees_them_immediately():
+	manager.update(_berlin_tile)
+	var with_mounds := entities_parent.get_child_count()
+	assert_gt(with_mounds, 0, "precondition: something was drawn")
+
+	# Out of decoration range and straight back, with no frame in between --
+	# exactly what an evict/reload does.
+	var far := Vector2i(500 * EarthChunkManager.CHUNK_SIZE, 500 * EarthChunkManager.CHUNK_SIZE)
+	manager.update(far)
+	manager.update(_berlin_tile)
+
+	assert_eq(
+		entities_parent.get_child_count(), with_mounds,
+		"the old mounds are still in the tree alongside the new ones"
+	)
