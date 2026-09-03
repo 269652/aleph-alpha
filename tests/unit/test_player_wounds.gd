@@ -105,3 +105,39 @@ func test_a_wound_bound_in_time_never_goes_septic():
 		player.step_wounds(1.0)
 		elapsed += 1.0
 	assert_eq(player.sickness_id, "")
+
+
+# -- and what death does to it ----------------------------------------------
+
+
+## Found by actually dying to a wolf: `_respawn` restored health, position and
+## the input latch, and nothing else -- so a player came back still bleeding,
+## still on the sepsis clock, still carrying whatever illness had been rolled.
+##
+## That is not survivable content, it is a soft lock: there is no bandage item
+## and no cure in the game yet, so anything the body carries across death it
+## carries forever. Death is documented as "a straight reset"
+## (Player.max_health's own doc comment) -- so the body really has to reset.
+func test_respawning_closes_your_wounds():
+	player.take_damage(WoundModel.MIN_DAMAGE_TO_WOUND)
+	player.step_wounds(WoundModel.SECONDS_UNTIL_SEPSIS * 0.5)
+	player.take_damage(player.max_health * 2.0)
+	assert_true(player.is_dead, "the test failed to kill the player")
+	player._respawn()
+	assert_eq(player.wound_stacks(), 0, "you came back still bleeding")
+	assert_eq(player.seconds_wounded, 0.0, "you came back on the sepsis clock")
+
+
+## Likewise the illness itself, and the cold that could still be running you
+## toward another one.
+func test_respawning_leaves_the_illness_behind():
+	player.sickness_id = WoundModel.SICKNESS_ID
+	player.sickness_severity = 0.7
+	player.sickness_diagnosed = true
+	player.cold_exposure = 1.0
+	player.take_damage(player.max_health * 2.0)
+	player._respawn()
+	assert_eq(player.sickness_id, "")
+	assert_eq(player.sickness_severity, 0.0)
+	assert_false(player.sickness_diagnosed)
+	assert_eq(player.cold_exposure, 0.0)

@@ -567,6 +567,13 @@ var _ground_cover_sims: Dictionary = {}  # Vector2i chunk_coord -> GroundCover
 var _sward_layers: Dictionary = {}  # species index -> MultiMeshInstance2D
 var _sward_generator := ProceduralSwardSprite.new()
 var _sward_refresh_accumulator := 0.0
+## Something ate a rosette since the last redraw (see crop_sward_at). Coalesces
+## a whole herd's mouthfuls into one whole-window rebuild on the next step.
+var _sward_dirty := false
+## How many times the sward layer has been rebuilt. A test seam, and a real
+## one: "a bite must not redraw the whole meadow" is a performance contract
+## that is invisible from the outside otherwise.
+var _sward_rebuild_count := 0
 
 var _scrub_sims: Dictionary = {}  # Vector2i chunk_coord -> DesertScrub
 var _scrub_sprites: Dictionary = {}  # Vector2i chunk_coord -> {local cell Vector2i -> Sprite2D}
@@ -4479,13 +4486,26 @@ const SWARD_WORLD_SIZE := 7.0
 ## redrawn here anyway.
 func step_ground_cover(delta_seconds: float) -> void:
 	_sward_refresh_accumulator += delta_seconds
-	if _sward_refresh_accumulator < GRASS_REFRESH_INTERVAL:
-		return
-	var elapsed := _sward_refresh_accumulator
-	_sward_refresh_accumulator = 0.0
-	for sim in _ground_cover_sims.values():
-		sim.advance(elapsed)
-	_sync_sward()
+	var due := _sward_refresh_accumulator >= GRASS_REFRESH_INTERVAL
+	if due:
+		var elapsed := _sward_refresh_accumulator
+		_sward_refresh_accumulator = 0.0
+		for sim in _ground_cover_sims.values():
+			sim.advance(elapsed)
+	# ONE rebuild per step at most, and only when something has actually
+	# changed.
+	#
+	# A bite the player just watched an animal take has to show on this frame
+	# rather than at the next throttled refresh -- the same reasoning
+	# graze_grass_at and take_worm_at give for their own immediate resyncs. But
+	# _sync_sward rebuilds EVERY visible rosette in the tile window, and a herd
+	# means several of those a second for one mouthful each. So a bite marks
+	# the layer dirty (crop_sward_at) and this redraws it once, however many
+	# animals bit in between (test_a_whole_herd_grazing_costs_one_redraw) --
+	# and a step that is both due AND dirty still rebuilds only once.
+	if due or _sward_dirty:
+		_sward_dirty = false
+		_sync_sward()
 
 
 ## Rebuilds every visible rosette into the four per-species MultiMeshes.
@@ -4496,9 +4516,14 @@ func step_ground_cover(delta_seconds: float) -> void:
 ## same one grass uses (DecorationLod.keeps_decoration_tile with
 ## GRASS_VIEW_BUFFER_TILES), so the two layers appear and disappear together
 ## rather than the sward popping in a beat behind the tussocks.
+func sward_rebuild_count() -> int:
+	return _sward_rebuild_count
+
+
 func _sync_sward() -> void:
 	if _ground_decor_parent == null:
 		return
+	_sward_rebuild_count += 1
 	var half_span := _visible_half_span_tiles()
 	var transforms_by_species: Dictionary = {}
 	var centre := _disturbance_center_tile
@@ -4793,10 +4818,10 @@ func crop_sward_at(pixel_position: Vector2) -> bool:
 	# -- so an overstocked meadow shows up in the ecosystem's own land-health
 	# accounting rather than only in the sward layer.
 	_ecosystem.record_vegetation_harvest(chunk_coord, sward.cover_at(cell, growth))
-	# The rosettes just went; redraw them now rather than at the next throttled
-	# refresh, the same reasoning graze_grass_at/take_worm_at give -- the player
-	# watched the animal eat them.
-	_sync_sward()
+	# The rosettes just went. Marked rather than redrawn here: the redraw is a
+	# whole-window rebuild, and a herd would ask for one per mouthful -- see
+	# step_ground_cover, which does it once on this same frame.
+	_sward_dirty = true
 	return true
 
 

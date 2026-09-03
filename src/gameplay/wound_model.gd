@@ -79,6 +79,17 @@ const MAX_INFECTION_EXPOSURE := 0.9
 ## left alone recovers rather than quietly dying off-screen.
 const BLEED_HEALTH_FLOOR := 1.0
 
+## How often an unbound wound rolls against its infection risk.
+##
+## Its own constant rather than ColdExposure's, which this borrowed when it was
+## written: the two triggers do not share a rule, and a shared reference would
+## have meant retuning hypothermia silently retuned sepsis. Short against
+## SECONDS_UNTIL_SEPSIS so the roll actually happens before the wound clots,
+## and a cadence rather than a per-frame probability for the same reason the
+## cold roll is one -- sixty rolls a second would make any nonzero chance a
+## certainty within moments.
+const ROLL_INTERVAL_SECONDS := 10.0
+
 ## The sickness an untreated wound causes. A player sickness id (see
 ## Player.sickness_id), not one of DiseaseModel's wildlife SIRS archetypes:
 ## sepsis has no reservoir and no transmission, it is your own wound doing it.

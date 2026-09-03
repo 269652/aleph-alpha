@@ -108,6 +108,18 @@ func toggle() -> void:
 		_input.release_focus()
 
 
+## Keeps the keyboard while the console is on screen.
+##
+## The console grabs focus when it opens, but anything that takes the window's
+## keyboard focus afterwards -- an alt-tab away and back is enough -- leaves it
+## VISIBLE and unfocused, and everything typed then falls through to the game
+## (see HotkeyRouting, and finding 4 of the 2026-09-02 playtest). This is the
+## cause; the routing guard is the safety net for the whole class.
+func _process(_delta: float) -> void:
+	if visible and _input != null and not _input.has_focus():
+		_input.grab_focus()
+
+
 func log_line(text: String) -> void:
 	_log_lines.append(text)
 	if _log_lines.size() > MAX_LOG_LINES:

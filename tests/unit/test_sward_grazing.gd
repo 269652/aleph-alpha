@@ -95,3 +95,51 @@ func test_an_eaten_patch_recovers():
 ## Nothing to crop where nothing grows -- ocean, rock, sand.
 func test_bare_ground_offers_no_bite():
 	assert_false(manager.crop_sward_at(Vector2(-9_000_000.0, -9_000_000.0)))
+
+
+# -- the redraw, and how often it happens -----------------------------------
+
+
+## A bite has to show on the frame the player watched it happen -- the same
+## reasoning graze_grass_at and take_worm_at give for their own immediate
+## resyncs. But `_sync_sward` rebuilds EVERY visible rosette in the tile
+## window, and a herd grazing means several of those a second for one bite
+## each.
+##
+## So the bite marks the layer dirty and the next step redraws it once,
+## however many animals bit in between: same frame, one rebuild.
+func test_a_bite_does_not_rebuild_the_whole_sward_by_itself():
+	var at := _a_sward_tile()
+	var before := manager.sward_rebuild_count()
+	manager.crop_sward_at(at)
+	manager.crop_sward_at(at)
+	manager.crop_sward_at(at)
+	assert_eq(manager.sward_rebuild_count(), before, "each mouthful redrew the whole meadow")
+
+
+## ...and the redraw really does happen, on the very next step, without
+## waiting for the throttle.
+func test_a_bite_is_redrawn_on_the_next_step():
+	var at := _a_sward_tile()
+	manager.crop_sward_at(at)
+	var before := manager.sward_rebuild_count()
+	manager.step_ground_cover(0.001)  # far inside the refresh throttle
+	assert_eq(manager.sward_rebuild_count(), before + 1)
+
+
+## A herd of animals grazing in one frame costs ONE rebuild between them.
+func test_a_whole_herd_grazing_costs_one_redraw():
+	var at := _a_sward_tile()
+	for animal in 12:
+		manager.crop_sward_at(at)
+	var before := manager.sward_rebuild_count()
+	manager.step_ground_cover(0.001)
+	assert_eq(manager.sward_rebuild_count(), before + 1)
+
+
+## Nothing grazed, nothing redrawn: an idle meadow does not churn the layer.
+func test_an_ungrazed_meadow_is_not_redrawn():
+	manager.step_ground_cover(0.001)
+	var before := manager.sward_rebuild_count()
+	manager.step_ground_cover(0.001)
+	assert_eq(manager.sward_rebuild_count(), before)

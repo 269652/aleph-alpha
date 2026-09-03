@@ -58,6 +58,7 @@ const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const RegionDifficulty = preload("res://src/world/region_difficulty.gd")
 const DebuffStack = preload("res://src/gameplay/debuff_stack.gd")
 const WoundModel = preload("res://src/gameplay/wound_model.gd")
+const MovementPenalty = preload("res://src/gameplay/movement_penalty.gd")
 const BloodTrail = preload("res://src/gameplay/blood_trail.gd")
 const SpellStatusEffects = preload("res://src/gameplay/spell_status_effects.gd")
 
@@ -1850,18 +1851,23 @@ func _advance(desired: Vector2, speed: float, delta: float) -> void:
 	# movement (wander/flee/seek/hunt/attack) already funnels through, via
 	# _advance_gated/_advance_avoided calling this -- so one multiplier here
 	# covers all of them.
+	var disease_slow := 1.0
 	if disease_id == DiseaseModel.HERD and disease_state == DiseaseModel.State.INFECTED:
-		speed *= _disease_model.movement_speed_multiplier(disease_severity)
-	# Real slope underfoot slows a creature exactly the way it slows the
-	# player (see _terrain_speed_multiplier above) -- one query for the tile
-	# this creature is CURRENTLY standing on, not a scan over any area, so
-	# this stays O(creatures) regardless of how many creatures are loaded.
-	speed *= _terrain_speed_multiplier(_current_tile())
-	# An open wound is a real performance cost long before it is fatal, which
-	# is why a hunted animal is followed rather than outrun (see WoundModel).
-	# Applied at the same single choke point the disease slow uses, so it
-	# covers every intent rather than only fleeing.
-	speed *= wound_speed_multiplier()
+		disease_slow = _disease_model.movement_speed_multiplier(disease_severity)
+	# Composed rather than multiplied straight, for the same reason the player's
+	# own chain is (see MovementPenalty): a sick animal on a slope with an open
+	# wound is slow, but it should not be the product of three slows -- a
+	# creature that cannot move is a creature that has stopped being an animal.
+	#
+	# Slope: one query for the tile this creature is CURRENTLY standing on, not
+	# a scan over any area, so this stays O(creatures) however many are loaded.
+	# Wound: a real performance cost long before it is fatal, which is why a
+	# hunted animal is followed rather than outrun (see WoundModel). Both land
+	# at the same single choke point the disease slow uses, so they cover every
+	# intent rather than only fleeing.
+	speed *= MovementPenalty.compose([
+		disease_slow, _terrain_speed_multiplier(_current_tile()), wound_speed_multiplier()
+	])
 	_facing_commit_remaining = maxf(0.0, _facing_commit_remaining - delta)
 	var position_before := position
 	if not _is_serpent():

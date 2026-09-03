@@ -46,7 +46,7 @@ The good news is the substrate to fix it was already there and idle. See
 
 ## Findings
 
-### 1. The speed product is a hidden pass/fail line, and the HUD does not say so 🚧
+### 1. The speed product is a hidden pass/fail line, and the HUD does not say so ✅ (both halves fixed 2026-09-03)
 
 `CreatureMarker.FLEE_SPEED` is **40.0**. `Player.BASE_SPEED` is **80.0**. So a
 fleeing animal moves at exactly **50% of the number the HUD prints**. Below
@@ -75,6 +75,16 @@ and named the test for it. **That test is still unwritten**, and the readout is
 still a bare percentage. This is the one part of the approach layer this pass
 did not close.
 
+**Fixed 2026-09-03** (`MovementPenalty`). Measured against the real constants,
+the compounding was worse than this session recorded: six ordinary conditions
+at once left **2.5%** of base speed, and a crouched stalk in rain on a hill —
+the ordinary case — **23%**. Penalties now compose rather than multiply: you
+never move faster than your worst constraint allows, and additional
+constraints matter but not at full multiplicative force. A single penalty is
+completely unchanged, so no mechanic's own tuning moved. The HUD half is fixed
+too, separately: `ConditionReadout` now names what is actively wrong with you
+(see `docs/concept/survival.md`).
+
 ### 2. In-world, the reason the chase fails is not always speed — it is trees ✅ (diagnosed)
 
 Twice I held a direction key for 8–9 seconds and the player moved roughly
@@ -98,7 +108,7 @@ The cheapest possible unblock for animal work remains a `/spawn` that places at
 the player's feet, and the `/tame`, `/breed`, `/kept` commands that still do
 not exist.
 
-### 4. The console loses keyboard focus, and the leaked keystrokes open windows 🐛
+### 4. The console loses keyboard focus, and the leaked keystrokes open windows ✅ (fixed 2026-09-03)
 
 Reproduced repeatedly. After the console has been open and anything else takes
 the window's keyboard focus (in this session, the screenshot tool), the
@@ -112,7 +122,14 @@ which a player will do. The fix is for `DevConsole` to re-grab focus while
 visible (a `_notification(NOTIFICATION_WM_WINDOW_FOCUS_IN)` re-grab, or a
 per-frame `if visible and not _input.has_focus(): _input.grab_focus()`).
 
-Not fixed in this pass — flagged, with the repro.
+**Fixed 2026-09-03**, on both levels the note above proposed and one it did
+not. `DevConsole` now re-grabs focus while visible (the cause). And
+`HotkeyRouting` makes the whole class impossible (the rule): `ConsoleFocus.
+is_open` already existed and `Player` already respected it for WASD, but
+`World._unhandled_input`'s window hotkeys never consulted it at all — a focused
+`LineEdit` swallows the keys, which is exactly why the bug was invisible until
+focus was lost. The console's own toggle and Escape still always get through,
+or the guard would be a soft lock rather than a fix.
 
 ### 5. Bait had no gesture: you cannot put food on the ground 🐛 (fixed)
 

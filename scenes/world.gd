@@ -70,6 +70,8 @@ const DragSlot = preload("res://src/ui/drag_slot.gd")
 const TimeLapse = preload("res://src/gameplay/time_lapse.gd")
 const FruitSpoilage = preload("res://src/gameplay/fruit_spoilage.gd")
 const EscapeAction = preload("res://src/ui/escape_action.gd")
+const HotkeyRouting = preload("res://src/ui/hotkey_routing.gd")
+const ConditionReadout = preload("res://src/ui/condition_readout.gd")
 const PlayerSave = preload("res://src/gameplay/player_save.gd")
 const WorldReset = preload("res://src/world/world_reset.gd")
 const WorldCoordinates = preload("res://src/world/world_coordinates.gd")
@@ -484,6 +486,7 @@ var _stamina_fill: ColorRect
 var _stamina_label: Label
 var _warmth_fill: ColorRect
 var _warmth_label: Label
+var _condition_label: Label
 var _xp_fill: ColorRect
 var _xp_label: Label
 ## Naturalist "land_sense" keystone reveal (docs/concept/progression.md
@@ -1537,6 +1540,16 @@ func _build_survival_bar() -> void:
 	_warmth_fill = warmth["fill"]
 	_warmth_label = warmth["label"]
 
+	# What is actively wrong with the player, under the reserve bars (see
+	# ConditionReadout). The bars say how much of something is LEFT; this says
+	# what it is doing to you -- bleeding, ill, chilled through -- none of which
+	# was on screen anywhere before, so a player could be walking toward sepsis
+	# or hypothermia with no indication at all.
+	_condition_label = Label.new()
+	_condition_label.add_theme_font_size_override("font_size", 12)
+	_condition_label.add_theme_color_override("font_color", Color(0.95, 0.55, 0.5))
+	container.add_child(_condition_label)
+
 	_wallet_label = Label.new()
 	_wallet_label.add_theme_font_size_override("font_size", 12)
 	container.add_child(_wallet_label)
@@ -2468,20 +2481,32 @@ func _update_creature_panels(local_player: Player, delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _world_ready:
 		return
-	if event.is_action_pressed(CONSOLE_TOGGLE_ACTION):
-		_dev_console.toggle()
-	elif event.is_action_pressed(INVENTORY_TOGGLE_ACTION):
-		_inventory_window.toggle()
-	elif event.is_action_pressed(CRAFTING_TOGGLE_ACTION):
-		_crafting_window.toggle()
-	elif event.is_action_pressed(SKILLS_TOGGLE_ACTION):
-		_skill_window.toggle()
-		var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
-		if lp != null:
-			_refresh_skill_window(lp)
-	elif event.is_action_pressed(SETTINGS_TOGGLE_ACTION):
-		_handle_escape()
-	else:
+	# Routed through HotkeyRouting rather than decided inline, the same way
+	# Escape already goes through EscapeAction -- which is what makes the rule
+	# "nothing typed at an open console is a gameplay hotkey" testable, and
+	# what closes finding 4 of the 2026-09-02 playtest: with the console open
+	# but its LineEdit unfocused, `/give lasso 1` opened the skill tree on the
+	# `l` and `/give carrot 20` opened crafting on the `c`.
+	var console_open: bool = _dev_console.visible
+	for action_name in HotkeyRouting.ACTION_SURFACES:
+		if not event.is_action_pressed(action_name):
+			continue
+		match HotkeyRouting.surface_for(action_name, console_open):
+			HotkeyRouting.SURFACE_CONSOLE:
+				_dev_console.toggle()
+			HotkeyRouting.SURFACE_INVENTORY:
+				_inventory_window.toggle()
+			HotkeyRouting.SURFACE_CRAFTING:
+				_crafting_window.toggle()
+			HotkeyRouting.SURFACE_SKILLS:
+				_skill_window.toggle()
+				var lp := _players.get_node_or_null(str(multiplayer.get_unique_id())) as Player
+				if lp != null:
+					_refresh_skill_window(lp)
+			HotkeyRouting.SURFACE_SETTINGS:
+				_handle_escape()
+		return
+	if HotkeyRouting.accepts_gameplay_hotkeys(console_open):
 		_handle_hotbar_hotkeys(event)
 
 
@@ -3569,6 +3594,11 @@ func _update_survival_bar(local_player: Player) -> void:
 	_warmth_fill.size.x = _health_bar.fill_width(s.warmth, 1.0, SURVIVAL_BAR_WIDTH)
 	var warmth_state := "Freezing" if s.is_freezing() else ("Cold" if s.is_cold() else "Warmth")
 	_warmth_label.text = meter_label_text(warmth_state, s.warmth)
+	# Empty when there is nothing worth saying: the line is for what needs
+	# attention, so an always-on line would mean nothing.
+	var condition := ConditionReadout.text_for(local_player)
+	_condition_label.text = condition
+	_condition_label.visible = not condition.is_empty()
 	_wallet_label.text = "Gold: %d" % local_player.wallet.balance
 
 

@@ -82,6 +82,13 @@ Status:
 
 - ✅ `fitness` → movement multiplier (`condition_penalty.gd`), composed into
   `Player.current_speed_multiplier`, tested.
+- ✅ Penalties **compose** rather than multiply (`movement_penalty.gd`) — see
+  "Penalties compose; they do not multiply" below. Applied on both the player
+  and creatures.
+- ✅ A wounded player is slowed by the same rule a wounded animal is
+  (`Player._wound_speed_multiplier` → `WoundModel.speed_multiplier`). Until
+  this, only the animal was: the player bled while walking at full pace.
+- ✅ The HUD says what is wrong with you (`condition_readout.gd`).
 - ⬜ The pillar's other three effect kinds (stamina regen, damage/accuracy,
   blurred vision). A damage hook exists (`Player._damage_buff_multiplier`) and
   would need only a magnitude decision; stamina regen would be invisible (see
@@ -122,6 +129,65 @@ Status:
   (`debuff_stack.gd` is built but not yet the survival backbone).
 - ✅ Prolonged-cold sickness trigger — `cold_exposure.gd`, see "The four
   triggers" below. Cold now has a memory as well as a cost.
+
+### Penalties compose; they do not multiply
+
+Added 2026-09-03, and it closes the first finding of the 2026-09-02 playtest:
+*"the speed product is a hidden pass/fail line, and the HUD does not say so."*
+
+Everything that slows the player used to be multiplied straight into one
+number — weather × slope × condition × crouch × water × spells — each a
+perfectly reasonable value on its own. Multiplied, they compound
+catastrophically. Measured against the real constants:
+
+| situation | old | composed |
+|---|---|---|
+| storm | 65% | 65% |
+| storm + steep slope | 20% | 34% |
+| crouched stalk, rain, on a hill | 23% | 37% |
+| storm + freezing + slope + starving + crouched + wading | **2.5%** | 20% |
+
+Two pixels a second is not a debuff, it is a stop. And 23% for a crouched stalk
+in the rain is the ordinary case: exactly the thing the whole approach pillar
+asks the player to do.
+
+`MovementPenalty.compose` states the rule instead: **you never move faster than
+your worst constraint allows, and additional constraints matter but not at full
+multiplicative force.** The result is interpolated between "the worst penalty
+alone" and "all of them multiplied", which gives the two bounds that make this
+a *smoothing* rather than a rebalance — a single penalty is completely
+unchanged, so every mechanic still bites exactly as hard as its own author
+tuned it; and the composed result is never below the old product, so this can
+only relieve compounding, never add to it.
+
+Real grounding: the metabolic cost of moving is dominated by its binding
+constraint. Wading while carrying an injury does not cost the *product* of the
+two — the deeper limit sets the pace and the other adds to it. Independent
+multiplicative penalties are a bookkeeping convenience, not a description of
+how bodies move.
+
+Creatures compose the same way, for the same reason: a sick animal on a slope
+with an open wound should be slow, not the product of three slows. A creature
+that cannot move has stopped being an animal.
+
+The `FLOOR` is a safety rail rather than a balance knob — it sits below the
+harshest single penalty in the game, so it can only ever bind once penalties
+have compounded, and a mechanic's own tuning is never quietly overridden.
+
+### The HUD says what is wrong with you
+
+The survival bars have always shown **reserves** — food, water, stamina,
+warmth — which say how much of something is left, not what it is doing to you.
+Nothing on screen said you were bleeding, ill, or chilled through, so after the
+wound and cold-exposure passes a player could be walking toward sepsis or
+hypothermia with no indication at all.
+
+`ConditionReadout` is one line under the bars, empty when there is nothing
+worth saying (a warning that is always on means nothing). It respects
+`Sickness`'s own contract: an **undiagnosed** illness reads only as "Unwell"
+and never names itself, because the HUD naming it would *be* the diagnosis and
+would leave the Herbalist loop with nothing to do. The order is fixed so the
+line does not reshuffle as conditions come and go.
 
 ### Sickness & medicine
 

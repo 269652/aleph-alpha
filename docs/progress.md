@@ -1752,6 +1752,37 @@ Reported live, looking at a real grassland chunk at noon: *"the bare grass parts
 ✅ Ant mounds are no longer invisible -- see "Ant mounds, and the traffic on them" below, which closed this the same day.
 
 
+### A smoothing pass over mechanics and gameplay (2026-09-03)
+
+Not new systems -- the edges between the ones that exist. Five of these were found by measuring the real constants, and two by playing.
+
+#### Penalties compose; they do not multiply
+
+✅ Everything that slowed the player was multiplied straight into one number -- weather × slope × condition × crouch × water × spells -- each a reasonable value alone. Measured against the real constants, six ordinary conditions at once left **2.5% of base speed** (two pixels a second), and a *crouched stalk in rain on a hill* -- the ordinary case the whole approach pillar asks the player to perform -- came out at **23%**. This is the first finding of the 2026-09-02 playtest, recorded then and not fixed: "the speed product is a hidden pass/fail line, and the HUD does not say so."
+
+`MovementPenalty.compose` states the rule instead: **you never move faster than your worst constraint allows, and additional constraints matter but not at full multiplicative force.** Interpolating between "the worst penalty alone" and "all of them multiplied" gives the two bounds that make this a smoothing rather than a rebalance -- a SINGLE penalty is completely unchanged, so every mechanic still bites exactly as hard as its own author tuned it, and the result is never below the old product, so it can only relieve compounding, never add to it. Storm + slope goes 20% → 34%; the crouched stalk 23% → 37%; the six-way worst case 2.5% → 20%. Creatures compose the same way: a sick animal on a slope with an open wound should be slow, not the product of three slows.
+
+✅ **A wounded player is slowed like a wounded animal.** The wound model's own claim is that a gash on the player and a gash on a deer are the same real thing; only the deer was slowed by one, and the player bled while walking at full pace.
+
+#### The HUD says what is wrong with you
+
+✅ The survival bars have always shown RESERVES -- how much of something is left, not what it is doing to you. Nothing on screen said you were bleeding, ill, or chilled through, so after the wound and cold passes a player could be walking toward sepsis or hypothermia with no indication at all. `ConditionReadout` is one line under the bars, empty when there is nothing worth saying. It respects `Sickness`'s own contract: an **undiagnosed** illness reads only as "Unwell" and never names itself, because a HUD that names it *is* the diagnosis and would leave the Herbalist loop with nothing to do.
+
+#### Two bugs found by playing
+
+🐛 **Dying left the body broken.** `_respawn` restored health, position and the input latch and nothing else -- so a player came back still bleeding, still on the sepsis clock, and still carrying whatever illness had been rolled. With no bandage item and no cure in the game yet, anything the body carries across death it carries **forever**: a soft lock, not survivable content. Death is documented as "a straight reset", so the body resets too. Hunger and thirst deliberately do not -- those are about supplies rather than the body, and coming back fed would make starving free.
+
+🐛 **Typing at the console opened gameplay windows.** Reproduced in the 2026-09-02 session and flagged with a repro: with the console OPEN but its `LineEdit` no longer holding focus -- an alt-tab away and back is enough -- `/give lasso 1` opened the skill tree on the `l` and `/give carrot 20` opened crafting on the `c`. `ConsoleFocus.is_open` already existed and `Player` already respected it for WASD, but `World._unhandled_input`'s window hotkeys never consulted it, because a focused LineEdit swallows the keys and hides the bug. Fixed on both levels: `DevConsole` re-grabs focus while visible (the cause), and `HotkeyRouting` makes the whole class impossible (the rule) -- the console is a modal text surface, so while it is open no keystroke is a gameplay hotkey, focused or not. The console's own toggle and Escape always get through, or the guard would be a soft lock. Routed as a table, the same way Escape already goes through `EscapeAction`, which is what makes it testable at all rather than an if/elif chain inside a scene.
+
+#### Ownership and cost
+
+✅ **A wound rolls on its own clock.** `Player.step_wounds` borrowed `ColdExposure.ROLL_INTERVAL_SECONDS` when it was written -- two triggers sharing a rule they do not share, so retuning hypothermia would silently have retuned sepsis.
+
+✅ **A mouthful of sward no longer redraws the whole meadow.** `crop_sward_at` called `_sync_sward` per bite, and that rebuilds every visible rosette in the tile window -- a herd meant several full rebuilds a second. The bite marks the layer dirty and the next step redraws it once, however many animals bit in between: same frame, one rebuild. A step that is both due and dirty rebuilds once, not twice.
+
+📝 **Correction:** an earlier note in this ledger said cold had "no teeth" beyond a HUD label. It did: `is_cold()` drains `fitness` and `ConditionPenalty` turns that into a live speed penalty. What cold lacked was MEMORY, which is what `ColdExposure` added -- not cost.
+
+
 ### Three loops that were open at one end (2026-09-03)
 
 Each of these had a system built correctly and a consumer missing, so the world simulated something the player could never act on or be affected by.

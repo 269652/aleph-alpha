@@ -36,6 +36,7 @@ const Sickness = preload("res://src/gameplay/sickness.gd")
 const ColdExposure = preload("res://src/gameplay/cold_exposure.gd")
 const WoundModel = preload("res://src/gameplay/wound_model.gd")
 const PathScarring = preload("res://src/world/path_scarring.gd")
+const MovementPenalty = preload("res://src/gameplay/movement_penalty.gd")
 const DiseaseModel = preload("res://src/gameplay/disease_model.gd")
 const Shop = preload("res://src/gameplay/shop.gd")
 const NpcGreeting = preload("res://src/world/npc_greeting.gd")
@@ -967,7 +968,7 @@ func step_wounds(delta: float) -> void:
 	if exposure <= 0.0 or sickness_id != "":
 		return
 	_wound_roll_accumulator += delta
-	if _wound_roll_accumulator < ColdExposure.ROLL_INTERVAL_SECONDS:
+	if _wound_roll_accumulator < WoundModel.ROLL_INTERVAL_SECONDS:
 		return
 	_wound_roll_accumulator = 0.0
 	_disease_roll_count += 1
@@ -1006,6 +1007,26 @@ func _respawn() -> void:
 	modulate = Color.WHITE
 	_respawn_accumulator = 0.0
 	position = respawn_position
+	# The BODY resets too, not just its health bar.
+	#
+	# Found by dying to a wolf in a real session: respawn restored health,
+	# position and the input latch and nothing else, so a player came back
+	# still bleeding, still on the sepsis clock, and still carrying whatever
+	# illness had been rolled. That is not survivable content, it is a soft
+	# lock -- there is no bandage item and no cure in the game yet, so anything
+	# the body carries across death it carries forever.
+	#
+	# Death here is documented as "a straight reset" (see max_health's own doc
+	# comment: no graveyard, no corpse recovery). This is what that has to mean.
+	# Hunger and thirst are deliberately NOT reset: those are about supplies
+	# rather than about the body, and coming back fed would make starving free.
+	bandage_wounds()
+	cold_exposure = 0.0
+	_cold_roll_accumulator = 0.0
+	sickness_id = ""
+	sickness_severity = 0.0
+	sickness_diagnosed = false
+	active_venom_debuffs = []
 	# Nothing pressed while dead should replay on the first live tick: the
 	# simulation steps that would have consumed those presses never ran (see
 	# _authority_step's early-out), so the latch would otherwise be holding
@@ -1529,6 +1550,17 @@ func _path_speed_multiplier() -> float:
 	return PathScarring.speed_multiplier(ground_wear)
 
 
+## What an open wound costs the player in speed -- the SAME rule a struck
+## animal is slowed by (CreatureMarker.wound_speed_multiplier), not a second
+## one.
+##
+## The wound model's own claim is that a gash on the player and a gash on a
+## deer are mechanically the same real thing; until this, only the deer was
+## slowed by one and the player bled while walking at full pace.
+func _wound_speed_multiplier() -> float:
+	return WoundModel.speed_multiplier(wound_stacks())
+
+
 func _spell_speed_multiplier() -> float:
 	if _debuff_stack.stacks_of(active_spell_debuffs, SpellStatusEffects.SLOW) > 0:
 		return SpellStatusEffects.SLOW_SPEED_MULTIPLIER
@@ -1887,15 +1919,20 @@ func _authority_step(delta: float) -> void:
 	# Overall condition (SurvivalMeters.fitness, driven by starving/
 	# dehydrated/cold) is a real movement debuff, not a dead meter -- see
 	# ConditionPenalty and docs/concept/survival.md's "Debuffs, not death".
-	current_speed_multiplier = (
-		water_result.speed_multiplier
-		* _weather_speed_multiplier()
-		* _terrain_speed_multiplier(tile)
-		* ConditionPenalty.speed_multiplier(survival.fitness)
-		* _spell_speed_multiplier()
-		* _crouch_speed_multiplier()
-		* _path_speed_multiplier()
-	)
+	# Composed rather than multiplied straight (see MovementPenalty): each of
+	# these is a reasonable number alone, and their PRODUCT is not -- six
+	# ordinary conditions at once used to leave the player at 2.5% of base
+	# speed, and a crouched stalk in rain on a hill at 23%.
+	current_speed_multiplier = MovementPenalty.compose([
+		water_result.speed_multiplier,
+		_weather_speed_multiplier(),
+		_terrain_speed_multiplier(tile),
+		ConditionPenalty.speed_multiplier(survival.fitness),
+		_spell_speed_multiplier(),
+		_crouch_speed_multiplier(),
+		_wound_speed_multiplier(),
+		_path_speed_multiplier(),
+	])
 
 	var input_direction := _read_local_input() if _controlled_locally() else _pending_input_direction
 	var desired_velocity := input_direction * current_speed() * current_speed_multiplier

@@ -138,3 +138,18 @@ func test_a_wound_clots_on_its_own_if_it_is_left_alone():
 	var active := stack.apply([], WoundModel.DEBUFF_ID, WoundModel.DURATION_SECONDS, WoundModel.MAX_STACKS)
 	active = stack.advance(active, WoundModel.DURATION_SECONDS + 1.0)
 	assert_eq(stack.stacks_of(active, WoundModel.DEBUFF_ID), 0)
+
+
+## A wound's infection roll runs on its OWN cadence, not the hypothermia
+## module's. `Player.step_wounds` borrowed `ColdExposure.ROLL_INTERVAL_SECONDS`
+## when it was written, which reads as the two triggers sharing a rule they do
+## not share: it is a coincidence of tuning, and the next person to retune
+## hypothermia would silently retune sepsis with it.
+func test_a_wound_rolls_on_its_own_clock():
+	assert_gt(WoundModel.ROLL_INTERVAL_SECONDS, 0.0)
+
+
+## And that clock has to be short against the wound's own sepsis window, or
+## the roll would barely happen before the wound clotted.
+func test_the_roll_is_frequent_against_the_sepsis_window():
+	assert_lt(WoundModel.ROLL_INTERVAL_SECONDS, WoundModel.SECONDS_UNTIL_SEPSIS * 0.25)
